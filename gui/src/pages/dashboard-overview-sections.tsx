@@ -436,7 +436,9 @@ function VisionAdvancedPopover({ t, open, triggerRef, onClose, maxValue, maxInva
 
 export function DashboardSidecarPanels({ d }: { d: Dash }) {
   const {
-    t, settings, settingsSaving, toggleCodexAutoStart,
+   t, settings, settingsSaving, toggleCodexAutoStart,
+    toggleManagementAuth,
+    toggleDisableOriginCheck,
     sidecar, sidecarSaving, sidecarModels, visionModels, models, saveSidecar,
     shadowCall, shadowCallSaving, shadowCallHelpTriggerRef, shadowCallHelpOpen, setShadowCallHelpOpen, saveShadowCall,
   } = d;
@@ -497,6 +499,42 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
             disabled={!settings || settingsSaving}
             aria-label={t("dash.codexAutoStart")}
             aria-pressed={settings?.codexAutoStart ?? true}
+         >
+           <span className="knob" />
+         </button>
+       </div>
+     </div>
+      <div className="panel">
+        <div className="spread">
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="font-semibold">{t("dash.managementAuthDisabled")}</div>
+            <div className="muted setting-hint">{t("dash.managementAuthDisabledHint")}</div>
+          </div>
+          <button
+            type="button"
+            className={`switch ${settings?.managementAuthDisabled ? "on" : ""}`}
+            onClick={toggleManagementAuth}
+            disabled={!settings || settingsSaving}
+            aria-label={t("dash.managementAuthDisabled")}
+            aria-pressed={!!settings?.managementAuthDisabled}
+          >
+            <span className="knob" />
+          </button>
+        </div>
+      </div>
+      <div className="panel">
+        <div className="spread">
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="font-semibold">{t("dash.disableOriginCheck")}</div>
+            <div className="muted setting-hint">{t("dash.disableOriginCheckHint")}</div>
+          </div>
+          <button
+            type="button"
+            className={`switch ${settings?.disableOriginCheck ? "on" : ""}`}
+            onClick={toggleDisableOriginCheck}
+            disabled={!settings || settingsSaving}
+            aria-label={t("dash.disableOriginCheck")}
+            aria-pressed={!!settings?.disableOriginCheck}
           >
             <span className="knob" />
           </button>

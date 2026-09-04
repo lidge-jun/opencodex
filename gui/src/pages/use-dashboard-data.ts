@@ -625,12 +625,58 @@ export function useDashboardData(apiBase: string) {
     } catch {
       setSettings(prev => prev ? { ...prev, codexAutoStart: !next } : prev);
       setError(true);
+   } finally {
+     settingsMutationInFlightRef.current = false;
+     setSettingsSaving(false);
+   }
+ };
+  const toggleManagementAuth = async () => {
+    if (!settings || settingsSaving) return;
+    const next = !settings.managementAuthDisabled;
+    setSettingsSaving(true);
+    settingsMutationInFlightRef.current = true;
+    setSettings({ ...settings, managementAuthDisabled: next });
+    try {
+      const res = await fetch(`${apiBase}/api/settings`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ managementAuthDisabled: next }),
+      });
+      const data = await requireJson<{ managementAuthDisabled?: boolean }>(res, "save failed");
+      settingsMutationEpochRef.current += 1;
+      setSettings(prev => prev ? { ...prev, managementAuthDisabled: data.managementAuthDisabled ?? next } : prev);
+    } catch {
+      setSettings(prev => prev ? { ...prev, managementAuthDisabled: !next } : prev);
+      setError(true);
     } finally {
       settingsMutationInFlightRef.current = false;
       setSettingsSaving(false);
     }
   };
 
+  const toggleDisableOriginCheck = async () => {
+    if (!settings || settingsSaving) return;
+    const next = !settings.disableOriginCheck;
+    setSettingsSaving(true);
+    settingsMutationInFlightRef.current = true;
+    setSettings({ ...settings, disableOriginCheck: next });
+    try {
+      const res = await fetch(apiBase + "/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ disableOriginCheck: next }),
+      });
+      const data = await requireJson<{ disableOriginCheck?: boolean }>(res, "save failed");
+      settingsMutationEpochRef.current += 1;
+      setSettings(prev => prev ? { ...prev, disableOriginCheck: data.disableOriginCheck ?? next } : prev);
+    } catch {
+      setSettings(prev => prev ? { ...prev, disableOriginCheck: !next } : prev);
+      setError(true);
+    } finally {
+      settingsMutationInFlightRef.current = false;
+      setSettingsSaving(false);
+    }
+  };
   // Clears the sync result/error in this hook. The dashboard toast owns its own dismissal
   // timer but must publish the dismissal here: syncResult/syncError live above the dashboard
   // tabs, so a component-local flag alone would let a stale result remount as a fresh toast
@@ -789,7 +835,9 @@ export function useDashboardData(apiBase: string) {
     effortCapHelpTriggerRef, updateTriggerRef, maHelpTriggerRef, shadowCallHelpTriggerRef,
     effortCapHelpDialogRef, updateDialogRef, maHelpDialogRef, shadowCallHelpDialogRef,
     filteredGroups, sidecarModels, visionModels,
-    saveSidecar, saveShadowCall, switchMaMode, toggleCodexAutoStart, runSync, clearSyncFeedback,
+   saveSidecar, saveShadowCall, switchMaMode, toggleCodexAutoStart, runSync, clearSyncFeedback,
+    toggleManagementAuth,
+    toggleDisableOriginCheck,
     fetchUpdateCheck, closeUpdateDialog, openUpdateDialog, changeUpdateChannel, runUpdate,
   };
 }

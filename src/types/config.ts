@@ -550,7 +550,13 @@ export interface OcxConfig {
    * model at the shared routing layer with routeReason "blocked-model-redirect".
    * Unset or omitted by default.
    */
-  blockedModelRedirects?: Record<string, string>;
+ blockedModelRedirects?: Record<string, string>;
+  /**
+   * Opt-in: disable admin-token auth on the management API (/api/*). Only takes effect
+   * on a loopback bind; a non-loopback hostname with this flag still requires a data-plane
+   * credential. Useful for local single-user deployments where the admin token is a nuisance.
+   */
+  managementAuthDisabled?: boolean;
   /**
    * 3-state multi-agent surface override:
    * - "v1": force ALL models to v1 surface (override upstream pins)
@@ -785,7 +791,12 @@ export interface OcxConfig {
   /** Background proactive token refresh ("Token Guardian"). Off by default; see OcxTokenGuardianConfig. */
   tokenGuardian?: OcxTokenGuardianConfig;
   /** Additional exact origins allowed for CORS (e.g. HTTPS or chrome-extension://<id>). Loopback origins are always allowed. */
-  corsAllowOrigins?: string[];
+ corsAllowOrigins?: string[];
+  /**
+   * Opt-in: disable all origin/CORS checks so an external reverse proxy can reach the
+   * dashboard and API without the loopback-origin gate 403-ing it. Use with care.
+   */
+  disableOriginCheck?: boolean;
 }
 
 export type OcxAccountPoolRotationStrategy = "quota" | "round-robin" | "fill-first";
