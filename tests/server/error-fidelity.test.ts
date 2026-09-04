@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { bridgeToResponsesSSE, formatErrorResponse } from "../../src/bridge";
-import { classifyError } from "../../src/lib/errors";
+import {
+  adapterFailureFromMessage,
+  classifyError,
+  httpStatusFromTerminalError,
+  isLocationUnsupportedMessage,
+} from "../../src/lib/errors";
 import { sanitizePassthroughHeaders } from "../../src/server";
 import type { AdapterEvent } from "../../src/types";
 
@@ -146,6 +151,49 @@ describe("error fidelity", () => {
 });
 
 describe("overload and transient-429 classification (F3)", () => {
+  test("location denials classify as permission_error / location_not_supported, not invalid_request (#3467)", async () => {
+    const message = "Antigravity location not supported: User location is not supported for the API use.";
+    expect(isLocationUnsupportedMessage(message)).toBe(true);
+    expect(isLocationUnsupportedMessage("Precondition check failed.")).toBe(false);
+
+    expect(classifyError(400, "upstream_error", message)).toMatchObject({
+      type: "permission_error",
+      code: "location_not_supported",
+    });
+    expect(classifyError(400, "location_not_supported", "denied")).toMatchObject({
+      type: "permission_error",
+      code: "location_not_supported",
+    });
+    // Raw upstream wording (no adapter normalization) classifies the same way.
+    expect(classifyError(400, "upstream_error", "USER LOCATION IS NOT SUPPORTED for the API use.")).toMatchObject({
+      code: "location_not_supported",
+    });
+
+    // The direct HTTP envelope keeps the upstream status.
+    const response = formatErrorResponse(400, "upstream_error", message);
+    expect(response.status).toBe(400);
+    expect((await response.json() as { error: unknown }).error).toMatchObject({
+      type: "permission_error",
+      code: "location_not_supported",
+    });
+
+    // Message-only adapter terminals and classified terminal envelopes agree on 403 (permission class).
+    const failure = adapterFailureFromMessage(message);
+    expect(failure.httpStatus).toBe(403);
+    expect(failure.error).toMatchObject({ type: "permission_error", code: "location_not_supported" });
+    expect(httpStatusFromTerminalError(failure.error)).toBe(403);
+  });
+
+  test("authentication and rate-limit signals outrank location wording", () => {
+    expect(classifyError(401, "upstream_error", "location is not supported (token expired)")).toMatchObject({
+      type: "authentication_error",
+    });
+    expect(classifyError(429, "upstream_error", "rate limit exceeded; location not supported")).toMatchObject({
+      type: "rate_limit_error",
+    });
+    expect(adapterFailureFromMessage("Antigravity authentication failed: location is not supported").httpStatus).toBe(401);
+  });
+
   test("503 / overloaded maps to the Codex-recognized server_is_overloaded", () => {
     expect(classifyError(503, "upstream_error", "The server is overloaded")).toMatchObject({
       type: "server_error",

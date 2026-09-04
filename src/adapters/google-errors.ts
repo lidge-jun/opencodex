@@ -1,4 +1,5 @@
 import { parseUpstreamJsonPayload, safeUpstreamErrorString, sanitizeUpstreamErrorText } from "./upstream-http-error";
+import { isLocationUnsupportedMessage } from "../lib/errors";
 
 /** Pull the human detail out of the Google API error envelope `{error:{message,status,code}}`. */
 function googleErrorDetail(payloadText: string): { message?: string; status?: string } {
@@ -67,6 +68,12 @@ function classifyGoogle(label: string, status: number | undefined, enumStatus: s
   }
   if (status === 403 || enumStatus === "PERMISSION_DENIED" || lower.includes("permission denied") || lower.includes("access denied")) {
     return `${label} access denied`;
+  }
+  // Google rejects unsupported geographic / datacenter locations with HTTP 400
+  // FAILED_PRECONDITION. The payload is not malformed, so it must not fall through to
+  // "invalid request" (#3467). Auth / quota / permission enums above keep precedence.
+  if (isLocationUnsupportedMessage(lower)) {
+    return `${label} location not supported`;
   }
   if (status === 503 || enumStatus === "UNAVAILABLE" || lower.includes("overloaded") || lower.includes("unavailable")) {
     return `${label} server overloaded`;

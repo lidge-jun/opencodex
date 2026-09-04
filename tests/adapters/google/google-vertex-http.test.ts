@@ -192,6 +192,19 @@ describe("vertex retry fetch", () => {
     expect(text).not.toContain("secret-token");
   });
 
+  test("Antigravity location denial surfaces as location-not-supported with the upstream 400 (#3467)", async () => {
+    const mock = mockFetch([new Response(
+      vertexError(400, "FAILED_PRECONDITION", "User location is not supported for the API use."),
+      { status: 400 },
+    )]);
+    const res = await fetchAntigravityWithRetry(request, { timeoutMs: 5_000 });
+    expect(res.status).toBe(400);
+    const text = await res.text();
+    expect(text).toContain("Antigravity location not supported");
+    expect(text).not.toContain("invalid request");
+    expect(mock.calls).toHaveLength(1);
+  });
+
   test("does not retry 401/403 (single attempt)", async () => {
     const mock401 = mockFetch([new Response(vertexError(401, "UNAUTHENTICATED", "bad token"), { status: 401 })]);
     const res401 = await fetchVertexWithRetry(request, { timeoutMs: 5_000 });
