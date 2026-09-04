@@ -14,6 +14,8 @@ Depends on verified evidence in `000_plan.md`; one work-phase, not separate back
 
 ## Value chain and activation matrix
 
+C review synthesis: accepted native Sol provenance finding. The native official correction is API-equivalent (`verified-derived`), while API Sol is verified. Propagate the override's status through `cost.ts` rather than hardcoding verified, reject unverified overrides, and assert native estimated=true/API estimated=false.
+
 B alias/base verification exposed a stale nonzero generated Sol tuple (5/30 versus the independently verified current 4/20). Add provider-exact official Sol corrections via existing `VERIFIED_PRICE_OVERRIDES` for canonical native/API providers; do not edit generated vendor data or reseller rows. Existing custom-overlay test inputs remain unchanged; update the default shipped-rate assertion to the official tuple.
 
 B review synthesis: accepted native Daybreak Blue mismatch (Medium). It aliases Sol and shares its native credit rates, so include it in the 2.5x native rule and test alias/base equality; API alias and compatibility export remain 2x. Unchanged legacy rules retain their original source/date rather than claiming fresh verification.

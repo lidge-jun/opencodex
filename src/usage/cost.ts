@@ -253,7 +253,7 @@ function resolveMatchedPriceExact(
   const verifiedOverride = overlays === EXPECTED_PRICE_OVERLAYS
     ? findVerifiedPriceOverride(provider, modelId)
     : undefined;
-  if (verifiedOverride && validCost4(verifiedOverride.cost4) && hasNonZeroCost(verifiedOverride.cost4)) {
+  if (verifiedOverride && verifiedOverride.status !== "unverified" && validCost4(verifiedOverride.cost4) && hasNonZeroCost(verifiedOverride.cost4)) {
     return {
       provider,
       modelId,
@@ -261,7 +261,7 @@ function resolveMatchedPriceExact(
       source: "expected",
       sourceRef: verifiedOverride.source,
       verifiedAt: verifiedOverride.verifiedAt,
-      status: "verified",
+      status: verifiedOverride.status,
     };
   }
   const metadataProvider = resolveMetadataProvider(provider);

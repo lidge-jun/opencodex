@@ -682,6 +682,10 @@ describe("priority (Fast) service tier multiplier", () => {
     const alias = estimateRequestCost({ provider: "openai", model: "gpt-daybreak-blue-latest", usageStatus: "reported", usage, serviceTier: "priority" });
     const sol = estimateRequestCost({ provider: "openai", model: "gpt-5.6-sol", usageStatus: "reported", usage, serviceTier: "priority" });
     expect(alias?.cost.total).toBeCloseTo(sol!.cost.total, 9);
+    expect(sol?.estimated).toBe(true);
+    const api = estimateRequestCost({ provider: "openai-apikey", model: "gpt-5.6-sol", usageStatus: "reported", usage, serviceTier: "priority" });
+    expect(api?.cost.total).toBeCloseTo(2.4, 9);
+    expect(api?.estimated).toBe(false);
   });
 
   test("P10. attempt cost with priority tier", () => {

@@ -249,7 +249,8 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
 export const VERIFIED_PRICE_OVERRIDES: readonly ExpectedPriceOverlay[] = [
   ...["openai", "openai-apikey"].map((provider): ExpectedPriceOverlay => ({
     provider, modelId: "gpt-5.6-sol", cost4: GPT56_SOL,
-    source: OPENAI_GPT56_PRICING, verifiedAt: "2026-09-05", status: "verified",
+    source: provider === "openai" ? `API-equivalent estimate: ${OPENAI_GPT56_PRICING}; native credits: ${CODEX_PRICING}` : OPENAI_GPT56_PRICING,
+    verifiedAt: "2026-09-05", status: provider === "openai" ? "verified-derived" : "verified",
   })),
   {
     provider: "xai",
