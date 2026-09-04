@@ -906,6 +906,25 @@ function toolOutputText(output: unknown): string {
   }).filter(Boolean).join("\n");
 }
 
+/** True when an output can be losslessly represented as user-message content. */
+function isRepairableToolOutput(output: unknown): output is string | Record<string, unknown>[] {
+  if (typeof output === "string") return true;
+  if (!Array.isArray(output)) return false;
+  return output.every(part => {
+    if (!isPlainObject(part)) return false;
+    if (["output_text", "text", "input_text"].includes(String(part.type))) {
+      return typeof part.text === "string";
+    }
+    if (part.type === "refusal") return typeof part.refusal === "string";
+    if (part.type === "encrypted_content") return typeof part.encrypted_content === "string";
+    if (part.type !== "input_image") return false;
+    const validSource = typeof part.image_url === "string" || typeof part.file_id === "string";
+    const validDetail = part.detail === undefined
+      || ["auto", "low", "high", "original"].includes(String(part.detail));
+    return validSource && validDetail;
+  });
+}
+
 /** Convert orphaned tool output to user-message content without discarding valid images. */
 function orphanedToolOutputContent(output: unknown, callId = ""): Record<string, unknown>[] {
   const marker = `[tool output for ${callId || "unknown call"}]`;
@@ -981,7 +1000,7 @@ function repairUnidentifiedToolOutputItems(body: unknown): unknown {
       || (typeof item.call_id === "string" && item.call_id.length > 0)) {
       return item;
     }
-    if (typeof item.output !== "string" && !Array.isArray(item.output)) return item;
+    if (!isRepairableToolOutput(item.output)) return item;
     changed = true;
     return {
       type: "message",
@@ -1112,11 +1131,12 @@ function repairOrphanedInputItems(body: unknown, dropReasoning: boolean, synthes
       flushPendingSyntheticOutputs();
       const callId = typeof item.call_id === "string" ? item.call_id : "";
       const paired = isFnOutput ? functionCallIds.has(callId) : customCallIds.has(callId);
-      const usableOutput = typeof item.output === "string" || Array.isArray(item.output);
+      const usableOutput = isRepairableToolOutput(item.output);
       // A known orphan call is still useful as a labeled user message even when its output is
       // incomplete. With no call id and no output, preserve the invalid item so validation fails
       // closed rather than pretending any tool result exists.
-      if (!paired && (callId.length > 0 || usableOutput)) {
+      const knownNullOutput = callId.length > 0 && item.output == null;
+      if (!paired && (knownNullOutput || usableOutput)) {
         changed = true;
         repaired.push({
           type: "message",

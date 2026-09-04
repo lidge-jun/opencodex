@@ -2340,21 +2340,24 @@ describe("OpenAI Responses passthrough sanitization", () => {
     ]);
   });
 
-  test("api-key mode leaves incomplete output without call_id fail-closed", () => {
+  test("api-key mode leaves invalid output without call_id fail-closed", () => {
     const adapter = createResponsesPassthroughAdapter({
       adapter: "openai-responses",
       baseUrl: "https://api.x.ai/v1",
       authMode: "key" as const,
       apiKey: "xai-test",
     });
-    const incompleteOutput = { type: "custom_tool_call_output" };
+    const invalidOutputs = [
+      { type: "custom_tool_call_output" },
+      { type: "function_call_output", output: [{ type: "bogus", value: "not a tool-output part" }] },
+    ];
 
     const body = JSON.parse(adapter.buildRequest({
       ...parsedBase,
-      _rawBody: { model: "grok-4.6", input: [incompleteOutput] },
+      _rawBody: { model: "grok-4.6", input: invalidOutputs },
     }, meta).body) as { input: Record<string, unknown>[] };
 
-    expect(body.input).toEqual([incompleteOutput]);
+    expect(body.input).toEqual(invalidOutputs);
   });
 
   test("forward unexpanded miss converts orphan tool outputs and drops reasoning", () => {
