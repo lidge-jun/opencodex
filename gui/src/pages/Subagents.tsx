@@ -8,7 +8,7 @@ import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
 import { useSubagentDelegation, type UltraModePatch, type UltraModeState } from "./use-subagent-delegation";
 
-type CachedSubagents = { available: string[]; chosen: string[] };
+type CachedSubagents = { available: string[]; chosen: string[]; fallback: string[]; pollMs: number; useSubagentModels: boolean };
 
 function seedSubagents(cacheKey: string): CachedSubagents | null {
   return readSessionListCache<CachedSubagents>(cacheKey);
@@ -19,6 +19,10 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   const cacheKey = `ocx.subagents.v1:${apiBase}`;
   const cached = seedSubagents(cacheKey);
   const [chosen, setChosen] = useState<string[]>(() => cached?.chosen ?? []);
+  const [fallback, setFallback] = useState<string[]>(() => cached?.fallback ?? []);
+  const [fallbackPollMs, setFallbackPollMs] = useState(() => cached?.pollMs ?? 60000);
+  const [useSubagentModels, setUseSubagentModels] = useState(() => cached?.useSubagentModels ?? false);
+  const [fallbackBusy, setFallbackBusy] = useState(false);
   const [status, setStatus] = useState("");
   const [ok, setOk] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -117,16 +121,26 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   const loadSubagents = useCallback(async (signal?: AbortSignal): Promise<CachedSubagents> => {
     // The resource layer's deadline abort must reach the wire — a signal dropped
     // here is a store that can only settle by race timeout.
-    const res = await fetch(`${apiBase}/api/subagent-models`, { signal });
-    const response = await readJsonOrThrow<{ available?: string[]; chosen?: string[] }>(res, t("sub.loadFail"));
-    if (!response) throw new Error(t("sub.loadFail"));
-    const available = response.available ?? [];
+    const [rosterRes, fallbackRes] = await Promise.all([
+      fetch(`${apiBase}/api/subagent-models`, { signal }),
+      fetch(`${apiBase}/api/subagent-model-fallback`, { signal }),
+    ]);
+    const response = await readJsonOrThrow<{ available?: string[]; chosen?: string[] }>(rosterRes, t("sub.loadFail"));
+    const fallbackResponse = await readJsonOrThrow<{ available?: string[]; models?: string[]; pollMs?: number; useSubagentModels?: boolean }>(fallbackRes, t("sub.loadFail"));
+    if (!response || !fallbackResponse) throw new Error(t("sub.loadFail"));
+    const available = response.available ?? fallbackResponse.available ?? [];
     const availableSet = new Set(available);
     const next = {
       available,
       chosen: (response.chosen ?? []).filter(model => availableSet.has(model)),
+      fallback: (fallbackResponse.models ?? []).filter(model => availableSet.has(model)),
+      pollMs: fallbackResponse.pollMs ?? 60000,
+      useSubagentModels: fallbackResponse.useSubagentModels === true,
     };
     setChosen(next.chosen);
+    setFallback(next.fallback);
+    setFallbackPollMs(next.pollMs);
+    setUseSubagentModels(next.useSubagentModels);
     writeSessionListCache(cacheKey, next);
     return next;
   }, [apiBase, cacheKey, t]);
@@ -174,7 +188,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
       const d = await readJsonOrThrow<{ applied?: string[] }>(r, t("sub.saveFailed"));
       const applied = d?.applied ?? chosen;
       if (d?.applied) setChosen(d.applied);
-      writeSessionListCache(cacheKey, { available, chosen: applied });
+      writeSessionListCache(cacheKey, { available, chosen: applied, fallback, pollMs: fallbackPollMs, useSubagentModels });
       setOk(true);
       setStatus(t("sub.saved", { n: applied.length, cmd: "ocx sync" }));
     } catch (error) {
@@ -183,6 +197,29 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
     } finally {
       saveInFlight.current = false;
       setBusy(false);
+    }
+  };
+
+  const saveFallback = async () => {
+    if (fallbackBusy) return;
+    setFallbackBusy(true);
+    try {
+      const r = await fetch(`${apiBase}/api/subagent-model-fallback`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ models: fallback, pollMs: fallbackPollMs, useSubagentModels }),
+      });
+      const d = await readJsonOrThrow<{ models?: string[]; pollMs?: number; useSubagentModels?: boolean }>(r, t("sub.fallbackSaveFailed"));
+      if (d?.models) setFallback(d.models);
+      if (d?.pollMs) setFallbackPollMs(d.pollMs);
+      if (d?.useSubagentModels !== undefined) setUseSubagentModels(d.useSubagentModels);
+      setOk(true);
+      setStatus(t("sub.fallbackSaved"));
+    } catch (error) {
+      setOk(false);
+      setStatus(error instanceof Error && error.message ? error.message : t("sub.networkError"));
+    } finally {
+      setFallbackBusy(false);
     }
   };
 
@@ -214,7 +251,15 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
         busy={busy}
         onToggle={toggle}
         onMove={move}
-        onSave={() => { void save(); }}
+          onSave={() => { void save(); }}
+          fallback={fallback}
+          fallbackPollMs={fallbackPollMs}
+          useSubagentModels={useSubagentModels}
+          fallbackBusy={fallbackBusy}
+          onFallbackChange={setFallback}
+          onFallbackPollMsChange={setFallbackPollMs}
+          onUseSubagentModelsChange={setUseSubagentModels}
+          onFallbackSave={() => { void saveFallback(); }}
         delegation={{
           model: delegation.model,
           effort: delegation.effort,

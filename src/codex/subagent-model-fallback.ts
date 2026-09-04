@@ -129,6 +129,7 @@ function normalizedChain(
   config: OcxConfig,
   extra: readonly string[] = [],
   trailing: readonly string[] = [],
+  includeConfiguredGlobal = true,
 ): string[] {
   const chain: string[] = [];
   const seen = new Set<string>();
@@ -142,7 +143,9 @@ function normalizedChain(
   };
   push(primary);
   for (const model of extra) push(model);
-  for (const model of config.subagentModelFallback ?? []) push(model);
+  if (includeConfiguredGlobal) {
+    for (const model of config.subagentModelFallback ?? []) push(model);
+  }
   for (const model of trailing) push(model);
   return chain;
 }
@@ -617,9 +620,17 @@ export function applySubagentModelFallback(
   resolvedFallbackChain?: readonly string[] | null,
 ): { from?: string; to?: string; skipped?: string[] } | null {
   if (!isThreadSpawnRequest(headers)) return null;
-  const fallbackChain = resolvedFallbackChain === undefined
+  const configuredFallbackChain = resolvedFallbackChain === undefined
     ? resolveSubagentFallbackChain(parsed, config)
     : resolvedFallbackChain;
+  // The explicit dashboard opt-in makes the featured roster the complete fallback
+  // list for spawned sub-agents. An empty/unset roster therefore means no fallback;
+  // do not silently retain the separately configured global chain.
+  const fallbackChain = config.subagentModelFallbackUseSubagentModels === true
+    ? config.subagentModels && config.subagentModels.length > 0
+      ? normalizedChain(parsed.modelId, config, [], config.subagentModels, false)
+      : null
+    : configuredFallbackChain;
   if (!fallbackChain) return null;
   const selection = selectAvailableSubagentModel(
     parsed.modelId,

@@ -99,6 +99,162 @@
   justify-content: flex-end;
 }
 
+.swi-fallback-editor {
+  align-items: stretch;
+}
+
+.swi-fallback-controls {
+  display: flex;
+  flex: 1 1 520px;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.swi-fallback-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.swi-fallback-empty {
+  padding: var(--space-2) var(--space-3);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.swi-fallback-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  min-height: 34px;
+  padding: 2px var(--space-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--raised);
+}
+
+.swi-fallback-index {
+  flex: 0 0 1.5rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.swi-fallback-model {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: var(--text-caption);
+}
+
+.swi-fallback-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+}
+
+.swi-fallback-action {
+  flex: 0 0 28px;
+}
+
+.swi-fallback-add .input {
+  width: 100%;
+}
+
+.swi-fallback-options {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding-top: var(--space-1);
+}
+
+.swi-fallback-poll,
+.swi-fallback-roster {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  margin-top: 0;
+}
+
+.swi-fallback-poll {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.swi-fallback-poll-input {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.swi-fallback-poll-input .input {
+  width: 7rem;
+}
+
+.swi-fallback-roster span:last-child {
+  line-height: 1.35;
+}
+
+.swi-fallback-save {
+  align-self: end;
+}
+
+@container subagents-workspace (max-width: 700px) {
+  .swi-fallback-editor {
+    flex-wrap: wrap;
+  }
+
+  .swi-fallback-editor > .setting-copy,
+  .swi-fallback-controls {
+    flex-basis: 100%;
+  }
+
+  .swi-fallback-options {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
+
+  .swi-fallback-poll {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .swi-fallback-roster {
+    grid-column: 1 / -1;
+    align-items: flex-start;
+  }
+
+  .swi-fallback-save {
+    grid-column: 2;
+    justify-self: end;
+  }
+}
+
+@container subagents-workspace (max-width: 480px) {
+  .swi-fallback-options {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .swi-fallback-roster,
+  .swi-fallback-save {
+    grid-column: auto;
+  }
+
+  .swi-fallback-save {
+    justify-self: start;
+  }
+}
+
 .swi-rail-icon {
   width: 15px;
   height: 15px;

@@ -1090,6 +1090,113 @@ test("the native-main drain sentinel covers the flagships without widening to gp
     expect((parsed._rawBody as { model?: string }).model).toBe("alibaba-token-plan/qwen3.8-max");
   });
 
+  test("native-only encrypted fallback uses the configured subagent roster", () => {
+    const parsed = {
+      modelId: "xai/grok-4.5",
+      options: {},
+      context: { messages: [] },
+      _rawBody: { model: "xai/grok-4.5" },
+    };
+    const result = applySubagentModelFallback(
+      parsed as never,
+      new Headers({ "x-openai-subagent": "collab_spawn" }),
+      cfg({
+        subagentModelFallback: undefined,
+        subagentModels: ["gpt-5.6-sol", "gpt-5.5"],
+        subagentModelFallbackUseSubagentModels: true,
+      }),
+      "pool-a",
+      Date.now(),
+      true,
+    );
+    expect(result?.to).toBe("gpt-5.6-sol");
+    expect(parsed.modelId).toBe("gpt-5.6-sol");
+  });
+
+  test("roster fallback switch replaces the configured chain for ordinary spawns", () => {
+    const parsed = {
+      modelId: "xai/grok-4.5",
+      options: {},
+      context: { messages: [] },
+      _rawBody: { model: "xai/grok-4.5" },
+    };
+    const config = cfg({
+      disabledModels: ["xai/grok-4.5"],
+      subagentModelFallback: ["alibaba-token-plan/qwen3.8-max"],
+      subagentModels: ["kimi/k3", "alibaba-token-plan/qwen3.8-max"],
+      subagentModelFallbackUseSubagentModels: true,
+    });
+    const result = applySubagentModelFallback(
+      parsed as never,
+      new Headers({ "x-openai-subagent": "collab_spawn" }),
+      config,
+    );
+    expect(result?.to).toBe("kimi/k3");
+    expect(parsed.modelId).toBe("kimi/k3");
+  });
+
+  test("an enabled roster switch does not retain a separate chain when the roster is empty", () => {
+    const parsed = {
+      modelId: "xai/grok-4.5",
+      options: {},
+      context: { messages: [] },
+      _rawBody: { model: "xai/grok-4.5" },
+    };
+    expect(applySubagentModelFallback(
+      parsed as never,
+      new Headers({ "x-openai-subagent": "collab_spawn" }),
+      cfg({
+        disabledModels: ["xai/grok-4.5"],
+        subagentModelFallback: ["alibaba-token-plan/qwen3.8-max"],
+        subagentModels: [],
+        subagentModelFallbackUseSubagentModels: true,
+      }),
+    )).toBeNull();
+    expect(parsed.modelId).toBe("xai/grok-4.5");
+  });
+
+  test("native-only encrypted fallback stays disabled when roster reuse is off", () => {
+    const parsed = {
+      modelId: "xai/grok-4.5",
+      options: {},
+      context: { messages: [] },
+      _rawBody: { model: "xai/grok-4.5" },
+    };
+    expect(applySubagentModelFallback(
+      parsed as never,
+      new Headers({ "x-openai-subagent": "collab_spawn" }),
+      cfg({
+        subagentModelFallback: undefined,
+        subagentModels: ["gpt-5.6-sol"],
+        subagentModelFallbackUseSubagentModels: false,
+      }),
+      "pool-a",
+      Date.now(),
+      true,
+    )).toBeNull();
+    expect(parsed.modelId).toBe("xai/grok-4.5");
+  });
+
+  test("native-only encrypted fallback stays disabled when the roster is unset", () => {
+    const parsed = {
+      modelId: "xai/grok-4.5",
+      options: {},
+      context: { messages: [] },
+      _rawBody: { model: "xai/grok-4.5" },
+    };
+    expect(applySubagentModelFallback(
+      parsed as never,
+      new Headers({ "x-openai-subagent": "collab_spawn" }),
+      cfg({
+        subagentModelFallback: undefined,
+        subagentModelFallbackUseSubagentModels: true,
+      }),
+      "pool-a",
+      Date.now(),
+      true,
+    )).toBeNull();
+  });
+
   test("applySubagentModelFallback is a no-op for main turns", () => {
     updateAccountQuota("pool-a", 95);
     const parsed = {

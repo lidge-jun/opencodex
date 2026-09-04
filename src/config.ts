@@ -1080,6 +1080,8 @@ const configSchema = z.object({
   injectionModel: z.string().optional().catch(undefined),
   injectionEffort: z.string().optional().catch(undefined),
   syncCodexSubagentDefaults: z.boolean().optional().catch(undefined),
+  // Invalid hand edits must leave the explicit roster-as-fallback opt-in disabled.
+  subagentModelFallbackUseSubagentModels: z.boolean().optional().catch(false),
   // Per-primary-model fallback chains. Values must be non-empty string arrays;
   // malformed entries degrade to undefined rather than rejecting the whole config.
   subagentModelFallbackByModel: z.record(

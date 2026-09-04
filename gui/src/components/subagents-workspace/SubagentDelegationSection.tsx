@@ -28,6 +28,15 @@ export interface SubagentDelegationSectionProps {
   onUltraModeSave: (patch: UltraModePatch) => void;
   ultraLoadFailed: boolean;
   onUltraModeRetry: () => void;
+  fallback: string[];
+  fallbackPollMs: number;
+  useSubagentModels: boolean;
+  fallbackBusy: boolean;
+  availableModels: string[];
+  onFallbackChange: (models: string[]) => void;
+  onFallbackPollMsChange: (pollMs: number) => void;
+  onUseSubagentModelsChange: (enabled: boolean) => void;
+  onFallbackSave: () => void;
 }
 
 export default function SubagentDelegationSection({
@@ -44,6 +53,7 @@ export default function SubagentDelegationSection({
   onUltraModeSave,
   ultraLoadFailed,
   onUltraModeRetry,
+  fallback, fallbackPollMs, useSubagentModels, fallbackBusy, availableModels, onFallbackChange, onFallbackPollMsChange, onUseSubagentModelsChange, onFallbackSave,
 }: SubagentDelegationSectionProps) {
   const t = useT();
   // A present empty/whitespace hint is an upstream override that suppresses the
@@ -94,6 +104,47 @@ export default function SubagentDelegationSection({
               align="right"
             />
           )}
+        </div>
+      </div>
+
+      <div className="swi-delegation-row swi-fallback-editor">
+        <div className="setting-copy">
+          <div className="font-semibold">{t("sub.fallbackLabel")}</div>
+          <div className="muted setting-hint">{t("sub.fallbackHint")}</div>
+        </div>
+        <div className="swi-fallback-controls">
+          <div className="swi-fallback-list">
+            {fallback.length === 0 && <div className="muted setting-hint swi-fallback-empty">{t("sub.fallbackAdd")}</div>}
+            {fallback.map((modelName, index) => (
+              <div key={modelName} className="swi-fallback-row">
+                <span className="swi-fallback-index">{index + 1}</span>
+                <span className="swi-fallback-model">{modelName}</span>
+                <div className="swi-fallback-actions">
+                  <button type="button" className="btn btn-ghost btn-icon swi-fallback-action" onClick={() => { const next = [...fallback]; if (index > 0) [next[index - 1], next[index]] = [next[index], next[index - 1]]; onFallbackChange(next); }} disabled={fallbackBusy || index === 0} aria-label={t("sub.moveUp", { m: modelName })}>↑</button>
+                  <button type="button" className="btn btn-ghost btn-icon swi-fallback-action" onClick={() => { const next = [...fallback]; if (index < next.length - 1) [next[index], next[index + 1]] = [next[index + 1], next[index]]; onFallbackChange(next); }} disabled={fallbackBusy || index === fallback.length - 1} aria-label={t("sub.moveDown", { m: modelName })}>↓</button>
+                  <button type="button" className="btn btn-ghost btn-icon swi-fallback-action" onClick={() => onFallbackChange(fallback.filter(item => item !== modelName))} disabled={fallbackBusy} aria-label={t("sub.removeAria", { m: modelName })}>×</button>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="swi-fallback-add">
+            <select className="input" value="" onChange={e => { if (e.target.value && !fallback.includes(e.target.value)) onFallbackChange([...fallback, e.target.value]); }} disabled={fallbackBusy}>
+              <option value="">{t("sub.fallbackAdd")}</option>
+              {availableModels.filter(modelName => !fallback.includes(modelName)).map(modelName => <option key={modelName} value={modelName}>{modelName}</option>)}
+            </select>
+          </div>
+          <div className="swi-fallback-options">
+            <label className="swi-fallback-poll setting-hint">{t("sub.fallbackPoll")}
+              <span className="swi-fallback-poll-input"><input className="input" type="number" min={5000} max={600000} step={1000} value={fallbackPollMs} onChange={e => onFallbackPollMsChange(Number(e.target.value) || 60000)} disabled={fallbackBusy} /> ms</span>
+            </label>
+            <label className="swi-fallback-roster setting-hint">
+              <button type="button" className={`switch ${useSubagentModels ? "on" : ""}`} onClick={() => onUseSubagentModelsChange(!useSubagentModels)} disabled={fallbackBusy} aria-label={t("sub.fallbackUseRoster")} aria-pressed={useSubagentModels}>
+                <span className="knob" />
+              </button>
+              <span>{t("sub.fallbackUseRoster")}</span>
+            </label>
+            <button type="button" className="btn btn-primary btn-sm swi-fallback-save" onClick={onFallbackSave} disabled={fallbackBusy}>{t("common.save")}</button>
+          </div>
         </div>
       </div>
 

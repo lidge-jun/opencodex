@@ -89,5 +89,22 @@ describe("/api/subagent-model-fallback atomic validation", () => {
     expect(await res.json()).toMatchObject({ ok: true, models: next });
     expect(config.subagentModelFallback).toEqual(next);
   });
+
+  test("persists the featured-roster fallback switch", async () => {
+    isolatedHome();
+    const config = makeConfig();
+    const res = await put(config, { useSubagentModels: true });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, useSubagentModels: true });
+    expect(config.subagentModelFallbackUseSubagentModels).toBe(true);
+  });
+
+  test("rejects a malformed featured-roster fallback switch", async () => {
+    isolatedHome();
+    const config = makeConfig({ subagentModelFallbackUseSubagentModels: true });
+    const res = await put(config, { useSubagentModels: "yes" });
+    expect(res.status).toBe(400);
+    expect(config.subagentModelFallbackUseSubagentModels).toBe(true);
+  });
 });
 import { ManagementRequest as Request } from "./helpers/management-auth";

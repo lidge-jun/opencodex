@@ -433,6 +433,8 @@ export interface OcxConfig {
    * turn to the next available entry before routing.
    */
   subagentModelFallback?: string[];
+  /** When enabled, spawned sub-agent fallback uses `subagentModels` as the complete ordered list. */
+  subagentModelFallbackUseSubagentModels?: boolean;
   /**
    * Per-primary-model fallback chains for spawned sub-agents, keyed by the
    * requested primary model id (bare native or "provider/model"). Entries for
