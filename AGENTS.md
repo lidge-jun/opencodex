@@ -12,8 +12,14 @@ Bun-native TypeScript with no separate server compile step.
 ## Repository layout
 
 - `src/` — proxy runtime: routing, provider adapters, config, management API.
-- `tests/` — flat Bun tests (`tests/*.test.ts`); shared fixtures in
-  `tests/helpers/`, broader scenarios in `tests/e2e-style/`.
+- `tests/` — Bun tests in domain directories mirroring `src/`
+  (`tests/<domain>/*.test.ts`; the map is `scripts/test-layout/layout.json` and
+  `tests/test-layout.test.ts` enforces it). Shared helpers in `tests/helpers/`,
+  fixtures in `tests/fixtures/`, broader scenarios in `tests/e2e-style/`.
+  Source-oracle tests resolve the repository through
+  `tests/helpers/repo-root.ts`, never `import.meta.dir + "/.."`. Domains
+  migrate one slice at a time with `scripts/test-layout/move.ts`
+  (`devlog/_plan/260905_test_modularization_and_windows/`).
 - `gui/` — React + Vite dashboard; packaged output is served from `gui/dist`.
 - `docs-site/` — public docs (Astro + Starlight), deployed to GitHub Pages.
 - `go/` — retired Go native-runtime experiment; kept only where the TypeScript
@@ -192,7 +198,7 @@ also if the hand-written pages name a command the registry does not have. That s
 hypothetical: it caught a documented `ocx request-history` that never existed.
 
 During implementation, use the smallest focused checks that directly cover the
-changed subsystem. Prefer `bun test tests/<name>.test.ts` for a known file, or
+changed subsystem. Prefer `bun test tests/<domain>/<name>.test.ts` for a known file, or
 `bun run test:changed` when the touch set is broader than one file. Do **not**
 run repository-wide `bun run test` or a bare `bun test` with no file arguments
 for a scoped change by default. `bun run test:changed` follows Bun's parsed module graph: it
