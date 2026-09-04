@@ -24,7 +24,7 @@ import {
   resetAnthropicRoutingForManualSelection,
   rotateAnthropicAccountOn429,
 } from "../../src/oauth/anthropic-routing";
-import { getAccountSet, saveCredential } from "../../src/oauth/store";
+import { getAccountSet, markAccountNeedsReauth, saveCredential } from "../../src/oauth/store";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const originalHome = process.env.OPENCODEX_HOME;
@@ -117,6 +117,28 @@ describe("Anthropic failover quorum cache", () => {
     // outlive the store's own hardening, which is the thing loadAuthStore re-applies per read.
     await seed(2);
     expect(typeof hasAnthropicFailoverQuorum()).toBe("boolean");
+  });
+
+  test("a stale quorum cannot dispatch on a reauth-flagged account", async () => {
+    // The one roster mutation this module cannot observe: a 401 elsewhere flags an account
+    // needsReauth, dropping the real quorum to one while the cached `true` survives the TTL.
+    //
+    // The window is left unplumbed deliberately, so this pins the reason: a stale `true` only
+    // lets the caller ASK. pickAlternateAnthropicAccount re-reads the roster, skips the flagged
+    // account and answers null, so the 429 surfaces exactly as it would have. If that ever
+    // stopped being true, the comment above the cache would be a lie and this fails.
+    const start = Date.now();
+    const ids = await seed(2);
+    expect(hasAnthropicFailoverQuorum(start)).toBe(true);
+
+    await markAccountNeedsReauth("anthropic", ids[1]!, true);
+    // Deliberately NOT invalidating: this is the stale-cache state under test.
+    expect(hasAnthropicFailoverQuorum(start + 1)).toBe(true);
+
+    // The rotator admits the request, then finds nothing usable and refuses.
+    expect(
+      rotateAnthropicAccountOn429({ providers: {} } as never, ids[0]!, null, null, start + 1),
+    ).toBeNull();
   });
 
   test("removing an account invalidates immediately, not after the TTL", async () => {
