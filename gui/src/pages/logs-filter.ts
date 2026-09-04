@@ -48,6 +48,7 @@ export interface FilterableLogEntry {
   };
 }
 
+/** Return whether any filter differs from the inert default state. */
 export function hasActiveLogFilters(filters: LogFilterState): boolean {
   return filters.surface !== "all"
     || filters.model.trim() !== ""
@@ -60,6 +61,7 @@ export function hasActiveLogFilters(filters: LogFilterState): boolean {
     || filters.conversationId.trim() !== "";
 }
 
+/** Safely retain only object-shaped failover attempts from untrusted log data. */
 function attempts(log: FilterableLogEntry): FilterableLogAttempt[] {
   if (!Array.isArray(log.attempts)) return [];
   return log.attempts.filter(
@@ -67,10 +69,14 @@ function attempts(log: FilterableLogEntry): FilterableLogAttempt[] {
   );
 }
 
+/** Canonicalize a filter value for case-insensitive matching and deduplication. */
 function normalized(value: unknown): string | undefined {
-  return typeof value === "string" ? value.toLowerCase() : undefined;
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed.toLowerCase() : undefined;
 }
 
+/** Resolve a relative time-window lower bound against an injected clock. */
 function timeThreshold(window: LogTimeWindow, now: number): number | undefined {
   if (window === "15m") return now - 15 * 60 * 1000;
   if (window === "1h") return now - 60 * 60 * 1000;
@@ -78,6 +84,7 @@ function timeThreshold(window: LogTimeWindow, now: number): number | undefined {
   return undefined;
 }
 
+/** Apply every active filter to a bounded request-log snapshot. */
 export function filterLogs<T extends FilterableLogEntry>(
   logs: readonly T[],
   filters: LogFilterState,
@@ -130,22 +137,33 @@ export function filterLogs<T extends FilterableLogEntry>(
   });
 }
 
+/** Keep one stable display spelling for each case-insensitive option value. */
+function addOption(options: Map<string, string>, value: unknown): void {
+  if (typeof value !== "string") return;
+  const display = value.trim();
+  const key = normalized(display);
+  if (!key) return;
+  const current = options.get(key);
+  if (current === undefined || display < current) options.set(key, display);
+}
+
+/** Extract deterministic, selectable model and provider options from log rows. */
 export function extractLogFilterOptions(logs: readonly FilterableLogEntry[]): {
   models: string[];
   providers: string[];
 } {
-  const models = new Set<string>();
-  const providers = new Set<string>();
+  const models = new Map<string, string>();
+  const providers = new Map<string, string>();
   for (const log of logs) {
     for (const value of [log.model, log.resolvedModel, ...attempts(log).map(attempt => attempt.model)]) {
-      if (typeof value === "string" && value.trim()) models.add(value);
+      addOption(models, value);
     }
     for (const value of [log.provider, ...attempts(log).map(attempt => attempt.provider)]) {
-      if (typeof value === "string" && value.trim()) providers.add(value);
+      addOption(providers, value);
     }
   }
   return {
-    models: [...models].sort(),
-    providers: [...providers].sort(),
+    models: [...models.values()].sort(),
+    providers: [...providers.values()].sort(),
   };
 }

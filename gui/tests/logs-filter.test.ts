@@ -47,9 +47,15 @@ describe("rich Logs filtering", () => {
   });
 
   test("matches requested, resolved, and attempted models by substring", () => {
+    const attemptOnly = [{
+      id: "attempt-only",
+      model: "requested-model",
+      attempts: [{ model: "fallback-only" }],
+    }];
     expect(filterLogs(logs, { ...DEFAULT_LOG_FILTER_STATE, model: "reliable" }, NOW).map(row => row.id)).toEqual(["claude"]);
     expect(filterLogs(logs, { ...DEFAULT_LOG_FILTER_STATE, model: "SONNET-4.6" }, NOW).map(row => row.id)).toEqual(["claude"]);
     expect(filterLogs(logs, { ...DEFAULT_LOG_FILTER_STATE, model: "terra" }, NOW).map(row => row.id)).toEqual(["codex"]);
+    expect(filterLogs(attemptOnly, { ...DEFAULT_LOG_FILTER_STATE, model: "fallback-only" }, NOW).map(row => row.id)).toEqual(["attempt-only"]);
   });
 
   test("matches the selected provider on the row or any attempt", () => {
@@ -98,6 +104,18 @@ describe("rich Logs filtering", () => {
       { model: "zeta", provider: "Zulu" },
       { model: "Alpha", provider: "alpha" },
     ])).toEqual({ models: ["Alpha", "zeta"], providers: ["Zulu", "alpha"] });
+  });
+
+  test("normalizes option whitespace and casing without making selections unusable", () => {
+    const rows = [
+      { id: "lower", model: "  gpt-5  ", provider: "  openai  " },
+      { id: "upper", model: "GPT-5", provider: "OpenAI" },
+    ];
+    const options = extractLogFilterOptions(rows);
+    expect(options).toEqual({ models: ["GPT-5"], providers: ["OpenAI"] });
+    expect(extractLogFilterOptions([...rows].reverse())).toEqual(options);
+    expect(filterLogs(rows, { ...DEFAULT_LOG_FILTER_STATE, model: options.models[0] }, NOW).map(row => row.id)).toEqual(["lower", "upper"]);
+    expect(filterLogs(rows, { ...DEFAULT_LOG_FILTER_STATE, provider: options.providers[0] }, NOW).map(row => row.id)).toEqual(["lower", "upper"]);
   });
 
   test("reports every non-default field as active", () => {
