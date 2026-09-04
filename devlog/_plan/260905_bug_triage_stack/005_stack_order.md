@@ -9,8 +9,8 @@ possible diff relative to its base.
 | 1 | 010 | `codex/3467-google-location-error` | `dev` | #3467 | agentHits |
 | 2 | 020 | `codex/3462-mihomo-ipv6-fakeip` | pos 1 head | #3462 | — |
 | 3 | 030 | `codex/3464-launchd-stable-launcher` | pos 2 head | Refs #3464 (does not close; running-process mismatch remains) | — |
-| 4 | 040 | `codex/3522-spill-write-health` | pos 3 head | (references #3522, does not close) | Ingwannu |
-| 5 | 050 | `codex/3406-codex-toggle-truth` | pos 4 head | #3406 | turin |
+| 4 | 040 | — (superseded: #3542 merged 7eddfb3eb) | — | refs #3522 | Ingwannu (in #3542) |
+| 5 | 050 | `codex/3406-codex-toggle-truth` | pos 3 head (#3554) | #3406 | turin |
 
 Per-PR contract (each PR):
 

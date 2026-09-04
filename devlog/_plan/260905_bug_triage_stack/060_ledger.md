@@ -7,5 +7,4 @@ Append-only. One row per external action or verification.
 | 2026-09-04T22:28Z | manifest | live scan | 12 open bug issues, exactly the snapshot set |
 
 | 2026-09-04T22:53Z | #3467 / PR #3547 | pushed fd1dbbedb (--no-verify), PR opened base dev | typecheck 0; focused 48 pass; privacy ok; CI trailing |
-| 2026-09-04T23:16Z | #3462 / PR #3551 | pushed 9611cdf4b (--no-verify), PR opened base #3547 head | typecheck 0; focused 71 pass; privacy ok; CI trailing |
-| 2026-09-04T23:36Z | #3464 / PR #3554 | pushed b4fbd293f (--no-verify), PR opened base #3551 head, Refs not Closes | typecheck 0; service.test.ts 199 pass; privacy ok; CI trailing |
+| 2026-09-04T23:46Z | #3522 / PR #3542 (merged 7eddfb3eb) | NOOP: parallel-session carry already on dev, CI 28/0 | wp5 closed without a new PR |

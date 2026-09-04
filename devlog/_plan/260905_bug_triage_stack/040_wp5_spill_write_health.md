@@ -160,3 +160,15 @@ Co-authored-by: Ingwannu <ingwannu@users.noreply.github.com>
 - PR tests were inspected, not executed. No files, Git state, or GitHub state were changed.
 
 
+
+## wp5 outcome — NOOP (superseded by merged #3542)
+
+At this cycle's P (2026-09-04T23:45Z) PR #3542 — the maintainer carry of #3525 opened by a
+parallel session — was already **MERGED** into `dev` (merge 7eddfb3eb 2026-09-04T23:07:34Z) with exact-head CI 28 pass /
+0 fail. It carries every hunk this doc planned (spill write health projection, privacy-safe
+error class, `/api/system/memory` fields, tests, docs) with the `Co-authored-by: Ingwannu`
+trailer. Opening a second PR would duplicate landed work, so wp5 closes as **NOOP**.
+
+#3522 stays open per the original author's plan (observability fix; the current-version
+persistence defect is still unreproduced).
+
