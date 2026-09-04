@@ -11,6 +11,7 @@
 import { mutatePersistedConfig } from "../config";
 import { routedProviderConfig } from "../router";
 import type { OcxConfig, OcxProviderConfig, RateLimitRetryPolicy, TransientRetryPolicy } from "../types";
+import { OPENCODE_GO_SESSION_HEADER } from "./opencode-go-transport";
 import { resolveProviderTransport, type OcxProviderTransport } from "./xai-transport";
 import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 
@@ -273,9 +274,8 @@ interface RotateProviderTransportOptions {
 /**
  * Rotate a failed key and re-apply provider-specific transport metadata to the replacement.
  *
- * Put the authoritative committed row over request-only fields and registry backfills, then
- * route it again so concurrent provider edits take effect without losing either kind of runtime
- * metadata.
+ * Route the authoritative committed row again so concurrent provider edits take effect, then
+ * restore only transport-only state that can never come from persisted configuration.
  */
 export function rotateProviderTransportOn429(
   config: OcxConfig,
@@ -290,13 +290,23 @@ export function rotateProviderTransportOn429(
     options.now,
     options.attemptedKey,
   );
-  return rotated
-    ? resolveProviderTransport(
-        providerName,
-        routedProviderConfig(providerName, { ...routedProvider, ...rotated }),
-        options.promptCacheKey,
-      )
-    : null;
+  if (!rotated) return null;
+
+  const committedRoute = routedProviderConfig(providerName, rotated);
+  const routedSession = routedProvider.headers?.[OPENCODE_GO_SESSION_HEADER];
+  const retryProvider: OcxProviderTransport = {
+    ...committedRoute,
+    ...(routedProvider.fetch !== undefined ? { fetch: routedProvider.fetch } : {}),
+    ...(routedSession !== undefined
+      ? {
+          headers: {
+            ...(committedRoute.headers ?? {}),
+            [OPENCODE_GO_SESSION_HEADER]: routedSession,
+          },
+        }
+      : {}),
+  };
+  return resolveProviderTransport(providerName, retryProvider, options.promptCacheKey);
 }
 
 /** Clear cooldown state for a provider (e.g. after manual key management). */

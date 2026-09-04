@@ -250,13 +250,14 @@ describe("rotateProviderTransportOn429", () => {
     });
     expect(rotated?.apiKey).toBe("key-beta-444555666777");
     expect(rotated?.promptCacheKey).toBe(true);
+    expect(rotated?.modelContextWindows).toBeDefined();
     const retryBody = JSON.parse(createOpenAIChatAdapter(rotated!).buildRequest(parsed).body);
     expect(retryBody.prompt_cache_key).toBe(promptCacheKey);
   });
 
-  test("inherits routed-only backfills while persisted fields stay authoritative", () => {
-    // Rotation must keep fields absent from the persisted snapshot while honoring fields
-    // that are present there; registered providers are canonicalized by routedProviderConfig.
+  test("drops stale routed configuration while persisted fields stay authoritative", () => {
+    // Request-time configuration cannot revive fields absent from the committed snapshot.
+    // Registry providers still receive their canonical backfills from routedProviderConfig.
     const config = makeConfig({ apiKey: "key-alpha-000111222333", apiKeyPool: pool3() });
     const routedProvider = {
       ...config.providers.p,
@@ -274,13 +275,35 @@ describe("rotateProviderTransportOn429", () => {
 
     expect(rotated?.apiKey).toBe("key-beta-444555666777");
     expect(rotated?.baseUrl).toBe("https://api.example.com/v1");
-    expect(rotated?.promptCacheKey).toBe(true);
-    expect(rotated?.parallelToolCalls).toBe(false);
-    expect(rotated?.modelContextWindows).toEqual({ "some-model": 262_144 });
-    expect(rotated?.noTemperatureModels).toEqual(["some-model"]);
+    expect(rotated?.promptCacheKey).toBeUndefined();
+    expect(rotated?.parallelToolCalls).toBeUndefined();
+    expect(rotated?.modelContextWindows).toBeUndefined();
+    expect(rotated?.noTemperatureModels).toBeUndefined();
     // The pool swap still lands in the persisted config.
     expect(config.providers.p.apiKey).toBe("key-beta-444555666777");
     expect(config.providers.p.promptCacheKey).toBeUndefined();
+  });
+
+  test("does not resurrect an optional provider field removed before rotation", () => {
+    const config = makeConfig({
+      apiKey: "key-alpha-000111222333",
+      apiKeyPool: pool3(),
+      headers: { "x-user-header": "stale" },
+    });
+    const routedProvider = { ...config.providers.p };
+    const edit = mutatePersistedConfig(fresh => {
+      delete fresh.providers.p.headers;
+      return { changed: true, value: undefined };
+    });
+    expect(edit.status).toBe("committed");
+
+    const rotated = rotateProviderTransportOn429(config, "p", routedProvider, {
+      now: 1_000_000,
+      attemptedKey: "key-alpha-000111222333",
+    });
+
+    expect(rotated?.apiKey).toBe("key-beta-444555666777");
+    expect(rotated?.headers).toBeUndefined();
   });
 
   test("re-applies xAI cache affinity without OAuth CLI headers after key rotation", () => {
