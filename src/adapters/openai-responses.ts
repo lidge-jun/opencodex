@@ -921,6 +921,8 @@ function orphanedToolOutputContent(output: unknown, callId = ""): Record<string,
     if (!isPlainObject(part)) continue;
     if (part.type === "input_image") {
       content.push(part);
+    } else if (part.type === "encrypted_content" && typeof part.encrypted_content === "string") {
+      content.push({ type: "input_text", text: "[encrypted content omitted]" });
     } else if (typeof part.text === "string") {
       content.push({ type: "input_text", text: part.text });
     } else if (part.type === "refusal" && typeof part.refusal === "string") {

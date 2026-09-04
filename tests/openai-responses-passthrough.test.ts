@@ -2323,7 +2323,11 @@ describe("OpenAI Responses passthrough sanitization", () => {
         model: "grok-4.6",
         input: [{
           type: "function_call_output",
-          output: [{ type: "input_text", text: "screenshot" }, image],
+          output: [
+            { type: "input_text", text: "screenshot" },
+            image,
+            { type: "encrypted_content", encrypted_content: "opaque-tool-state" },
+          ],
         }],
       },
     }, meta).body) as { input: Array<{ content: Record<string, unknown>[] }> };
@@ -2332,6 +2336,7 @@ describe("OpenAI Responses passthrough sanitization", () => {
       { type: "input_text", text: "[tool output for unknown call]" },
       { type: "input_text", text: "screenshot" },
       image,
+      { type: "input_text", text: "[encrypted content omitted]" },
     ]);
   });
 
