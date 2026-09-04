@@ -620,6 +620,10 @@ export function clearAnthropicSessionAffinityForAccount(accountId: string): void
   for (const [key, entry] of sessionAffinity) {
     if (entry.accountId === accountId) sessionAffinity.delete(key);
   }
+  // The roster just lost or changed a member. This is the account-removal path, so the next
+  // activation question must re-read rather than answer from a count taken while the account
+  // was still present -- otherwise a delete leaves a stale quorum for the length of the TTL.
+  quorumCache = null;
 }
 
 /**
@@ -684,6 +688,9 @@ export function promoteAnthropicActiveAccount(accountId: string): void {
 export function resetAnthropicRoutingForManualSelection(accountId: string): void {
   sessionAffinity.clear();
   seedPoolRotationAccount(POOL_KEY_ANTHROPIC, accountId);
+  // A manual account selection is an operator statement about the roster; do not answer the
+  // next activation question from a count read before it.
+  quorumCache = null;
 }
 
 /**

@@ -18,8 +18,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   clearAnthropicAccountPoolState,
+  clearAnthropicSessionAffinityForAccount,
   forgetAnthropicFailoverQuorum,
   hasAnthropicFailoverQuorum,
+  resetAnthropicRoutingForManualSelection,
   rotateAnthropicAccountOn429,
 } from "../src/oauth/anthropic-routing";
 import { getAccountSet, saveCredential } from "../src/oauth/store";
@@ -115,5 +117,30 @@ describe("Anthropic failover quorum cache", () => {
     // outlive the store's own hardening, which is the thing loadAuthStore re-applies per read.
     await seed(2);
     expect(typeof hasAnthropicFailoverQuorum()).toBe("boolean");
+  });
+
+  test("removing an account invalidates immediately, not after the TTL", async () => {
+    // The management DELETE route calls clearAnthropicSessionAffinityForAccount for Anthropic.
+    // Without invalidation there, deleting the second account would leave quorum true for up to
+    // 2s -- long enough for a request to record an id whose credential is already gone.
+    const start = Date.now();
+    const ids = await seed(2);
+    expect(hasAnthropicFailoverQuorum(start)).toBe(true);
+    clearAnthropicSessionAffinityForAccount(ids[1]!);
+    markStoreUnread();
+    hasAnthropicFailoverQuorum(start + 1);
+    expect(storeWasRead()).toBe(true);
+  });
+
+  test("a manual account selection invalidates immediately", async () => {
+    // An operator picking an account is a statement about the roster, so the next activation
+    // question must not be answered from a count read before it.
+    const start = Date.now();
+    const ids = await seed(2);
+    expect(hasAnthropicFailoverQuorum(start)).toBe(true);
+    resetAnthropicRoutingForManualSelection(ids[0]!);
+    markStoreUnread();
+    hasAnthropicFailoverQuorum(start + 1);
+    expect(storeWasRead()).toBe(true);
   });
 });
