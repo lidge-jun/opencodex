@@ -1,6 +1,15 @@
 # 090 — Outcome
 
-Shipped as `fix(oauth): always fail over to another credential on 429`.
+Shipped in three pull requests:
+
+| PR | Merge | What |
+|---|---|---|
+| [#3495](https://github.com/lidge-jun/opencodex/pull/3495) | `56a084aa9` | the failover fix itself |
+| [#3499](https://github.com/lidge-jun/opencodex/pull/3499) | `26a2e512a` | GUI copy the fix invalidated |
+| [#3503](https://github.com/lidge-jun/opencodex/pull/3503) | `6edc56328` | a per-request store read #3495 introduced |
+
+The second and third were not planned. Both were found by auditing the merged result against
+the tree rather than against the plan, and both are recorded in `091`.
 
 ## What changed
 
@@ -33,9 +42,12 @@ with one: the proposed sidecar Anthropic arm sat behind an early `return null` a
 been dead code that a naive string test still passed. Round 3 passed. Every finding was folded
 in; none was rebutted.
 
-## Known follow-up
+## Follow-ups — both closed
 
 `gui/src/i18n/en.ts:1818` `anthropicPool.disabledDesc` ("Uses only the active Claude account")
-is now stale — with the pool off a 429 does move. `gui/` was kept out deliberately: an
-`AGENTS.md` screenshot gate plus a ten-locale copy pass does not belong in a routing fix. Owed
-as its own change.
+went stale the moment #3495 landed: with the pool off a 429 now does move. Deferring it out of
+the routing PR was right — an `AGENTS.md` screenshot gate plus a ten-locale copy pass does not
+belong there — but leaving it deferred was not, because the toggle would have sent an operator
+to the EXPERIMENTAL pool to buy failover they already had unconditionally. Closed by #3499.
+
+The per-request auth-store read is the more serious of the two and is written up in `091`.
