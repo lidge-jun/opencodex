@@ -115,7 +115,7 @@ describe("normalizeCostTokens", () => {
 describe("resolveMatchedPrice", () => {
   test("gpt-5.6 family four-tuples match the post-cut official rates (#907)", () => {
     const expectations: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> = {
-      "gpt-5.6-sol": { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+      "gpt-5.6-sol": { input: 4, output: 20, cacheRead: 0.4, cacheWrite: 5 },
       "gpt-5.6-terra": { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 2.5 },
       "gpt-5.6-luna": { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 },
     };

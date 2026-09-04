@@ -14,6 +14,8 @@ Depends on verified evidence in `000_plan.md`; one work-phase, not separate back
 
 ## Value chain and activation matrix
 
+B alias/base verification exposed a stale nonzero generated Sol tuple (5/30 versus the independently verified current 4/20). Add provider-exact official Sol corrections via existing `VERIFIED_PRICE_OVERRIDES` for canonical native/API providers; do not edit generated vendor data or reseller rows. Existing custom-overlay test inputs remain unchanged; update the default shipped-rate assertion to the official tuple.
+
 B review synthesis: accepted native Daybreak Blue mismatch (Medium). It aliases Sol and shares its native credit rates, so include it in the 2.5x native rule and test alias/base equality; API alias and compatibility export remain 2x. Unchanged legacy rules retain their original source/date rather than claiming fresh verification.
 
 B propagation amendment: trusted API reconstruction discards prior Fast hints. Reapply only Fast capability/description after reconstruction from the already-captured provider authority, not the mutable registry and not all user hints (which would override trusted modality/effort policy). This covers reconstructed missing rows and explicit false overrides. Add positive/negative emitted-row assertions; no new service-tier permission.

@@ -247,6 +247,10 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
  * therefore cannot reprice routed resellers that reuse the same model slug.
  */
 export const VERIFIED_PRICE_OVERRIDES: readonly ExpectedPriceOverlay[] = [
+  ...["openai", "openai-apikey"].map((provider): ExpectedPriceOverlay => ({
+    provider, modelId: "gpt-5.6-sol", cost4: GPT56_SOL,
+    source: OPENAI_GPT56_PRICING, verifiedAt: "2026-09-05", status: "verified",
+  })),
   {
     provider: "xai",
     modelId: "grok-4.6",
