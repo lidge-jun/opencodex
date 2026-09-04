@@ -10,8 +10,13 @@ The `cursorEffortRows` entry at `configuration.md:51` is the template. The new s
 beside it and states what a reader needs to decide whether to turn it on:
 
 - `fastRows` is an optional boolean, default `false`.
-- When on, external model lists add `<base-id>--fast` for every model whose Fast policy is
-  eligible, and selecting one routes the base model with the `priority` service tier.
+- When on, the raw OpenAI-style `/v1/models` list and Claude Code discovery add
+  `<base-id>--fast` for every model whose Fast policy is eligible, and selecting one
+  routes the base model with the `priority` service tier.
+- Name the surfaces exactly, and say plainly that `ocx export` and the OpenCode
+  integration emit base ids only, because those identities are written into config files
+  that outlive the flag. A reader who turns this on and then exports must not be surprised
+  by a missing row.
 - The base row stays listed; the fast row is additive.
 - An exact configured model id always beats the suffix.
 - `fastMode: false` still suppresses Fast, and a model that does not support Fast never
@@ -51,4 +56,3 @@ CI conclusion for that exact head, and the residuals still open. The unit then m
 visible in public git history.
 
 An empty `gh pr checks --required` is not green evidence — read the full rollup.
-

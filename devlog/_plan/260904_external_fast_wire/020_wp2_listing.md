@@ -1,17 +1,35 @@
 # 020 — wp2 / PR2: publish the row on external listings
 
+Stacked on PR1. Scope IN: `src/server/index.ts` (`/v1/models` and the Claude Code discovery
+call only), `src/claude/model-info.ts`, `tests/fast-row-listing.test.ts` (new). Scope OUT:
+ingress parsing (wp3); the dashboard `/api/models` `namespaced` ids; Desktop 3P hashed
+aliases are covered but never rewritten; the Cursor integration status panel.
 
-## Amendments from audit round 1
+## Which surfaces publish, and which deliberately do not
 
-### A1 — native eligibility is policy-derived, not metadata-derived (B2)
+`/api/models` `namespaced` ids are `disabledModels` keys and the identities `ocx export`
+and the OpenCode integration write into user config files (`src/cli/opencode.ts:368`,
+`src/cli/export-command.ts:78`). A synthetic id landing in a persisted config outlives the
+flag that produced it, so those surfaces keep emitting base ids only. That is a real
+limitation, not an oversight, and wp4 documents it as one.
 
-`nativeFastEligible()` as first written read only upstream `additional_speed_tiers`, which
-ignores an operator's `supportsServiceTier: false` and the final wire resolution. Both
-conditions are now required:
+The surfaces that DO publish are the two a client uses to pick a model for a live request:
+the raw OpenAI-style `/v1/models` list, and Claude Code discovery.
+
+## Eligibility at listing time
+
+Routed models have everything in scope already: `m.provider` names the provider and
+`config.providers[m.provider]` is available at `src/server/index.ts:1605`. So the row mapper
+calls `fastRowEligible(provider, m.id, m.provider)` — the same `fastPolicyForModel` the
+catalog uses, pure and synchronous (`service-tier.ts:181`), adding no await to a branch that
+must not gain one.
+
+Natives need both halves of the evidence. Upstream asserts Fast per model, and the operator
+can still withdraw it:
 
 ```ts
-// Direct import: UPSTREAM_NATIVE_ENTRIES lives in src/codex/catalog/metadata.ts and is NOT
-// re-exported by the catalog facade (audit note 5).
+// src/server/index.ts. UPSTREAM_NATIVE_ENTRIES lives in src/codex/catalog/metadata.ts and
+// is NOT re-exported by the catalog facade, so import it directly.
 import { UPSTREAM_NATIVE_ENTRIES } from "../codex/catalog/metadata";
 
 const nativeFastEligible = (metadataId: string): boolean => {
@@ -19,82 +37,18 @@ const nativeFastEligible = (metadataId: string): boolean => {
   const upstreamSaysFast = Array.isArray(entry?.additional_speed_tiers)
     && entry.additional_speed_tiers.includes("fast");
   if (!upstreamSaysFast) return false;
-  // Upstream evidence alone never publishes: an operator capability override or a wire
-  // resolution can still make the route ineligible, and decideTier would drop the tier.
+  // Upstream evidence alone never publishes: an operator capability override or the final
+  // wire resolution can still make the route ineligible, and decideTier would then drop
+  // the tier the row advertised.
   const provider = config.providers[OPENAI_CODEX_PROVIDER_ID];
   return provider !== undefined
     && fastRowEligible(provider, metadataId, OPENAI_CODEX_PROVIDER_ID);
 };
 ```
 
-### A2 — both Claude discovery loops, not just the routed one (B3)
-
-`buildAnthropicModelInfos` builds natives at `model-info.ts:143` and routed models at
-`:155`. The original draft patched only the routed loop, which would have left
-`gpt-5.6-sol` — the flagship Fast model — without a row on Claude discovery, contradicting
-this unit's goal. The native loop gains the same additive block, sharing one predicate:
-
-```diff
-   for (const slug of nativeSlugs) {
-     const id = idStyle === "readable" ? claudeCodeNativeAlias(slug) : aliasForRoute("native", slug);
-     ...
-     out.push(info);
-     push1mVariant(info, nativeWindow, nativeMaxInput);
-+    if (fastRows?.("native", slug) === true) pushFastVariant(info);
-   }
-```
-
-`pushFastVariant` is a local helper alongside `push1mVariant`, used by both loops, so the
-two surfaces cannot drift. It applies to both id styles: an ADDED row strands no saved
-selection, which is why the `fastMode` rewrite's Desktop 3P exclusion does not apply here.
-
-### A3 — Cursor management status field dropped (B7)
-
-The proposed `fastRow` field referenced an eligibility value the mapper cannot derive: it
-retains only the public id, not a `{provider, modelId}` pair
-(`cursor-integration-routes.ts:69`). It is a Cursor-integration status panel, not a
-client-facing selector, so it leaves this unit entirely.
-`src/server/management/cursor-integration-routes.ts` is removed from scope, and the
-"Management route" section above is superseded.
-
-### A4 — additional tests
-
-7. A native model WITH upstream `additional_speed_tiers` but an operator
-   `supportsServiceTier: false` gets NO row. This is the A1 guard, and it fails against
-   the pre-audit design.
-8. Claude discovery publishes a fast row for a native slug in BOTH id styles.
-
-Stacked on PR1. Scope IN: `src/server/index.ts` (`/v1/models` and Claude Code discovery
-branches only), `src/claude/model-info.ts`, `src/server/management/cursor-integration-routes.ts`,
-`tests/fast-row-listing.test.ts` (new). Scope OUT: ingress parsing (wp3), the dashboard
-`namespaced` ids (they are `disabledModels` keys), Desktop 3P hashed aliases.
-
-## Where the eligibility comes from at listing time
-
-The routed branch already has everything needed: `m.provider` names the provider and
-`config.providers[m.provider]` is in scope at `src/server/index.ts:1605`. So the row mapper
-can call `fastRowEligible(provider, m.id, m.provider)` directly — the same
-`fastPolicyForModel` the catalog uses, which is pure and synchronous
-(`service-tier.ts:181`), so it adds no await to a branch that must not gain one.
-
-Natives are the case that needs a decision. A native slug like `gpt-5.6-sol` has no
-`config.providers` entry of its own; its Fast support is asserted upstream, and
-`UPSTREAM_NATIVE_ENTRIES` carries `additional_speed_tiers: ["fast"]` for exactly the
-models that have it (`src/codex/data/upstream-models.json`). wp2 reads that snapshot
-rather than inventing a second source:
-
-```ts
-// src/server/index.ts, near nativeModelRow (1532)
-const nativeFastEligible = (metadataId: string): boolean => {
-  const entry = UPSTREAM_NATIVE_ENTRIES.get(metadataId);
-  return Array.isArray(entry?.additional_speed_tiers)
-    && entry.additional_speed_tiers.includes("fast");
-};
-```
-
-This is the same evidence the Codex picker's own toggle is built from
-(`src/codex/catalog/effort.ts:167` writes that field; upstream asserts it), so the external
-row and the in-app toggle cannot disagree about which natives have Fast.
+Reading the same `additional_speed_tiers` the Codex picker's toggle is built from
+(`src/codex/catalog/effort.ts:167` writes it; upstream asserts it) is what keeps the
+external row and the in-app toggle from disagreeing about which natives have Fast.
 
 ## `/v1/models`
 
@@ -115,19 +69,18 @@ then composes the two expansions:
 ```diff
          const expandedNativeModelRow = (id: string, metadataId = id) => {
            const reasoningEfforts = nativeReasoningEfforts(metadataId);
--          return expandCursorEffortRow(nativeModelRow(id, metadataId), reasoningEfforts, config, {
+           return expandCursorEffortRow(nativeModelRow(id, metadataId), reasoningEfforts, config, {
 -            knownIds: effortRowKnownIds,
--            table: cursorEffortTable,
--            supportsReasoning: reasoningEfforts.length > 0,
--          });
-+          return expandCursorEffortRow(nativeModelRow(id, metadataId), reasoningEfforts, config, {
 +            knownIds: syntheticKnownIds,
-+            table: cursorEffortTable,
-+            supportsReasoning: reasoningEfforts.length > 0,
+             table: cursorEffortTable,
+             supportsReasoning: reasoningEfforts.length > 0,
+-          });
 +          }).flatMap(row => expandFastRow(
 +            row,
-+            // Only the base row earns a fast sibling: `x--high--fast` would be a second
-+            // grammar stacked on the first, and nothing parses it.
++            // Only the base row earns a fast sibling. An effort row already spent the
++            // grammar, and wp1's parser requires the stripped base to be a KNOWN model -
++            // "<base>--<effort>" is synthetic, so "<base>--<effort>--fast" would publish a
++            // row that no ingress can resolve.
 +            row.id === id && nativeFastEligible(metadataId),
 +            config,
 +            syntheticKnownIds,
@@ -135,23 +88,15 @@ then composes the two expansions:
          };
 ```
 
-The `row.id === id` guard is load-bearing. Without it every `<base>--<effort>` row would
-also sprout `--fast`, and wp3's parser splits on one marker, so those ids would resolve to
-a base of `<base>--<effort>` — a model that does not exist. Composition of the two
-dimensions is deliberately not supported in this unit; it is recorded as a residual.
-
-The routed branch takes the same shape, with policy-derived eligibility:
+The routed branch takes the same shape with policy-derived eligibility:
 
 ```diff
--          return expandCursorEffortRow(row, m.reasoningEfforts, config, {
+           return expandCursorEffortRow(row, m.reasoningEfforts, config, {
 -            knownIds: effortRowKnownIds,
--            table: cursorEffortTable,
--            supportsReasoning: (m.reasoningEfforts ?? []).length > 0,
--          });
-+          return expandCursorEffortRow(row, m.reasoningEfforts, config, {
 +            knownIds: syntheticKnownIds,
-+            table: cursorEffortTable,
-+            supportsReasoning: (m.reasoningEfforts ?? []).length > 0,
+             table: cursorEffortTable,
+             supportsReasoning: (m.reasoningEfforts ?? []).length > 0,
+-          });
 +          }).flatMap(expanded => expandFastRow(
 +            expanded,
 +            expanded.id === row.id
@@ -162,16 +107,19 @@ The routed branch takes the same shape, with policy-derived eligibility:
 +          ));
 ```
 
-`m.id` (not `publicId`) is the model identity the policy is resolved against, while the
-row id that gets the suffix is the public one — a routed slug, or an operator alias when
-one exists. An alias is an explicit operator decision, and it keeps its own `--fast`
-sibling rather than being bypassed.
+`m.id` (not `publicId`) is the identity the policy resolves against, while the id that
+receives the suffix is the public one — a routed slug, or an operator alias when one
+exists. An alias is an explicit operator decision and keeps its own `--fast` sibling rather
+than being bypassed.
 
 ## Claude Code discovery
 
-`buildAnthropicModelInfos` already takes `fastMode` (`src/claude/model-info.ts:113`) and
-already knows how to publish a dimension as an extra row rather than a replacement:
-`push1mVariant`. The fast row follows `push1mVariant`, not the `fastMode` rewrite.
+`buildAnthropicModelInfos` builds natives at `model-info.ts:143` and routed models at
+`:155`. **Both loops publish**, or the flagship Fast model — native `gpt-5.6-sol` — would
+be missing from the surface this unit exists to serve.
+
+The signature gains a predicate rather than a config object, because `model-info.ts` is a
+translation module and must not start resolving provider policy itself:
 
 ```diff
  export function buildAnthropicModelInfos(
@@ -181,60 +129,73 @@ already knows how to publish a dimension as an extra row rather than a replaceme
  ): AnthropicModelInfo[] {
 ```
 
-A predicate rather than a config object: `model-info.ts` is a translation module and must
-not start resolving provider policy itself. The caller in `src/server/index.ts:1454`
-supplies it, already bound to `config`.
+The caller at `src/server/index.ts:1454` binds it to `config` and routes the `native`
+pseudo-provider explicitly, since `config.providers.native` does not exist:
+
+```ts
+(provider, modelId) => provider === "native"
+  ? nativeFastEligible(modelId)
+  : (config.providers[provider] !== undefined
+    && fastRowEligible(config.providers[provider], modelId, provider)),
+```
+
+One helper serves both loops, alongside the existing `push1mVariant`:
+
+```ts
+const pushFastVariant = (base: AnthropicModelInfo) => {
+  const fastId = `${id}--fast`;
+  if (seen.has(fastId)) return;
+  seen.add(fastId);
+  out.push({ ...base, id: fastId, display_name: `${base.display_name} · Fast` });
+};
+```
 
 ```diff
-     const info = modelInfo(id, `${listedModelId} (${m.provider})`, ladder, imageInput, routedMaxInput ?? m.contextWindow);
+   for (const slug of nativeSlugs) {
+     ...
+     out.push(info);
+     push1mVariant(info, nativeWindow, nativeMaxInput);
++    if (fastRows?.("native", slug) === true) pushFastVariant(info);
+   }
+```
+
+```diff
+     const info = modelInfo(id, ..., routedMaxInput ?? m.contextWindow);
      out.push(info);
 +    // An additive sibling, deliberately unlike the fastMode rewrite above: fastMode is a
 +    // global switch with no per-request choice, so it replaces; a selector must leave the
-+    // default pickable next to it.
-+    if (fastRows?.(m.provider, m.id) === true) {
-+      const fastId = `${id}--fast`;
-+      if (!seen.has(fastId)) {
-+        seen.add(fastId);
-+        out.push({ ...info, id: fastId, display_name: `${listedModelId} (${m.provider}, Fast)` });
-+      }
-+    }
++    // default pickable beside it.
++    if (fastRows?.(m.provider, m.id) === true) pushFastVariant(info);
 ```
 
-Both id styles are covered here, unlike `fastMode`. The reason `fastMode` excludes Desktop
-3P is that it *rewrites* the hashed id and would strand a saved selection
-(`model-info.ts:157`); an added row strands nothing, because the original id keeps
-existing.
-
-## Management route
-
-`cursor-integration-routes.ts:90` reports what the Cursor integration published. It gains
-a sibling field rather than mixing grammars into `effortRows`:
-
-```diff
-       effortRows: expandCursorEffortRow({ id }, reasoningEfforts, config, {...}).slice(1).map(row => row.id),
-+      fastRow: fastRowsEnabled && eligible ? fastRowId(id) : undefined,
-```
+Both id styles are covered, unlike `fastMode`. `fastMode` excludes Desktop 3P because it
+*rewrites* a hashed id and would strand a saved selection (`model-info.ts:157`); an added
+row strands nothing, because the original id keeps existing.
 
 ## Tests — `tests/fast-row-listing.test.ts`
 
-1. Flag off: a listing containing an eligible model has no `--fast` id anywhere. Run this
-   against both the `/v1/models` shape and `buildAnthropicModelInfos`.
+1. Flag off: a listing containing an eligible model has no `--fast` id, on both the
+   `/v1/models` shape and `buildAnthropicModelInfos`.
 2. Flag on: the eligible model gains exactly one `--fast` row AND keeps its base row.
-3. Flag on, ineligible/unclassified model: no `--fast` row.
+3. Flag on, ineligible or unclassified model: no `--fast` row.
 4. Effort rows and fast rows both on: `<base>--high` exists, `<base>--fast` exists,
-   `<base>--high--fast` does NOT. This is the guard for the `row.id === id` condition.
-5. Claude Code discovery: the fast id appears alongside the base id and the row count is
-   base + 1.
-6. A native without `additional_speed_tiers` gets no row, one with it does.
+   `<base>--high--fast` does NOT. Guards the `row.id === id` condition.
+5. Claude discovery, ROUTED model: the fast row appears beside the base id in both id
+   styles, and the row count is base + 1.
+6. Claude discovery, NATIVE slug: same. This is the audit-round-2 regression — the
+   routed-only draft failed it.
+7. A native WITHOUT upstream `additional_speed_tiers` gets no row; one WITH it does.
+8. A native WITH upstream evidence but operator `supportsServiceTier: false` gets NO row.
+   The metadata-only draft failed this one.
 
 ## Verification
 
-`bun test tests/fast-row-listing.test.ts tests/fast-row.test.ts`, plus the existing
-`tests/cursor-fast-listing.test.ts` to prove the neighbouring grammar is unchanged.
-`bun run typecheck`. No full suite.
+`bun test tests/fast-row-listing.test.ts tests/fast-row.test.ts tests/cursor-fast-listing.test.ts`
+(the last proves the neighbouring grammar is unchanged), `bun run typecheck`. No full suite.
 
 ## Residual
 
-R1 — effort and fast do not compose (`<base>--high--fast` is not published). Fixing it
-means a combined codec and a two-marker parser; deferred until someone asks for a specific
-effort at Fast, since the base row's default effort already reaches Fast.
+R1 — effort and fast do not compose (`<base>--high--fast` is not published). Fixing it needs
+a combined codec and a two-marker parser; deferred until someone asks for a specific effort
+at Fast, since the base row's default effort already reaches Fast.
+

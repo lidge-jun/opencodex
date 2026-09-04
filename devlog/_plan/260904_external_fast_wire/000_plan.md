@@ -31,9 +31,17 @@ client choose per request.
 
 ## What we build
 
-An opt-in synthetic row `<base-id>--fast`, published on external listings for exactly the
-models whose resolved FastPolicy reports `eligible`, and parsed back on every ingress to
-the base model with canonical `priority` applied through the existing FastWire path.
+An opt-in synthetic row `<base-id>--fast`, published on the two client-facing discovery
+surfaces — the raw OpenAI-style `/v1/models` list and Claude Code discovery — for exactly
+the models whose resolved FastPolicy reports `eligible`, and parsed back on all five
+request ingresses (`/v1/responses`, `/v1/responses/compact`, `/v1/chat/completions`,
+`/v1/messages`, `/v1/messages/count_tokens`) to the base model with canonical `priority`
+applied through the existing FastWire path.
+
+Deliberately NOT published: the dashboard `/api/models` `namespaced` ids. Those are
+`disabledModels` keys and the identities `ocx export` and the OpenCode integration write
+into user config files, so a synthetic id landing there would outlive the flag that
+produced it. Those clients keep emitting base ids; wp4 documents the limitation.
 
 ## The separator decision (load-bearing)
 

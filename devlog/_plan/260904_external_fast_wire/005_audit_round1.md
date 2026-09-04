@@ -4,6 +4,21 @@ Adversarial plan audit of `000/010/020/030/040` returned **FAIL** with 8 blocker
 accepted; 6 change the design, 2 change scope. This doc records the decision per blocker so
 a later reader sees why the plan moved, and the decade docs are amended in place.
 
+## Round 2 outcome
+
+The amended docs were re-audited and FAILED again: appending amendment sections had left
+each doc carrying two contradictory instructions per call site, and the `hasCompositeRowMarkers`
+helper introduced for B5 was itself defective — asymmetric (it caught `x--high--fast` but
+not `x--fast--high`) and blind to a real base named `a--high`, whose legitimately published
+`a--high--fast` row it would have suppressed.
+
+Both findings are accepted. `010`, `020`, and `030` were REWRITTEN canonically rather than
+amended, so each call site has exactly one executable instruction, and the composite guard
+was deleted in favour of requiring the stripped base to be a known routable model — the
+arbitration the collision inventory already performs. The per-blocker disposition below
+records the original round-1 reasoning; where round 2 changed the mechanism, the decade doc
+is authoritative.
+
 ## B1 — Claude alias collision (design change)
 
 A Claude alias is `claude-ocx-<provider>--<model>` (`src/claude/alias.ts:89`) — it already uses
@@ -99,4 +114,3 @@ scope line. Added.
 - `parseEffortRowId("x--fast")` returning null was independently confirmed:
   `isDeclaredReasoningEffort("fast")` is false (`src/reasoning-effort.ts:39`). The two
   grammars do not interfere, as claimed.
-
