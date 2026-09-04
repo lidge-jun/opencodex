@@ -23,9 +23,9 @@ import {
   hasAnthropicFailoverQuorum,
   resetAnthropicRoutingForManualSelection,
   rotateAnthropicAccountOn429,
-} from "../../../src/oauth/anthropic-routing";
-import { getAccountSet, saveCredential } from "../../../src/oauth/store";
-import { removeTreeWithRetry } from "../../helpers/remove-tree";
+} from "../../src/oauth/anthropic-routing";
+import { getAccountSet, saveCredential } from "../../src/oauth/store";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const originalHome = process.env.OPENCODEX_HOME;
 let home: string;
