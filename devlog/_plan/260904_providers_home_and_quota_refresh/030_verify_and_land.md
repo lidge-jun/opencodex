@@ -26,6 +26,24 @@ no bare `bun test`, no `bun run test`.
    `prepare:package`) and no bare `build`. Running the GUI build plus the
    docs-site build covers both changed surfaces.
 
+## Locale parity is part of "docs updated"
+
+Updating the English source and one translation is not the whole job. This unit
+documented the refresh-all control in `guides/web-dashboard.md` (en) and its
+Korean locale, and left `zh-cn` and `ru` describing only the per-account probe
+behavior — so a reader of either locale saw a dashboard control the docs did not
+mention. Caught after the first merge, fixed in #3472.
+
+The rule that fell out of it: when a docs change edits a row that exists in
+multiple locales, check every locale that CARRIES that row, and say explicitly
+which locales do not carry it. Here `ja`, `fr`, `tr`, and `zh-tw` have no
+equivalent sentence at all, so they are not contradicted and were deliberately
+left alone — half-translating a row those files never carried would be a larger
+change than the gap it closes.
+
+A grep for the sentence being changed, across
+`docs-site/src/content/docs/*/guides/`, is the cheap version of this check.
+
 ## Live proof required
 
 - Logo click at `#providers` lands on `#dashboard` (URL + screenshot).
