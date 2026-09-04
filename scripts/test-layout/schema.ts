@@ -170,11 +170,18 @@ function maskKeepStrings(source: string, tokens = tokenize(source)): string {
 export function rewriteMetaDirEscapes(source: string, depth: number): { source: string; rewrites: number } {
   const tokens = tokenize(source);
   const code = maskNonCode(source, tokens);
-  if (new RegExp(`\\b(?:const|let|var|function)\\s+(?:${HELPER_NAMES.join("|")})\\b`).test(code)) {
-    return { source, rewrites: 0 };
-  }
   const view = maskKeepStrings(source, tokens);
+  // `const repoRoot = join(import.meta.dir, "..")` is the commonest escape of all: rebind the
+  // local through an aliased import instead of refusing the file. Any other local named like a
+  // helper (or a function) still stops the rewrite so nothing gets shadowed.
+  const localRoot = /\bconst\s+repoRoot\s*=\s*(?:(?:join|resolve)\(\s*import\.meta\.dir\s*,\s*"\.\."\s*\)|fileURLToPath\(\s*new\s+URL\(\s*"\.\.\/"\s*,\s*import\.meta\.url\s*\)\s*\)|resolve\(\s*dirname\(\s*fileURLToPath\(\s*import\.meta\.url\s*\)\s*\)\s*,\s*"\.\."\s*\))\s*;/;
+  const rebindsRoot = localRoot.test(view);
+  const otherLocals = new RegExp(`\\b(?:const|let|var|function)\\s+(?:${HELPER_NAMES.filter(n => !(rebindsRoot && n === "repoRoot")).join("|")})\\b`);
+  if (otherLocals.test(code)) return { source, rewrites: 0 };
   const rules: Array<[RegExp, (m: RegExpMatchArray) => string]> = [
+    [new RegExp(localRoot.source, "g"), () => "const repoRoot = resolveRepoRoot();"],
+    // `const root = new URL("../../", import.meta.url)` -> a file URL of the repository root.
+    [/\bconst\s+root\s*=\s*new\s+URL\(\s*"(?:\.\.\/)+"\s*,\s*import\.meta\.url\s*\)\s*;/g, () => 'const root = pathToFileURL(repoRoot() + "/");'],
     [/\b(?:join|resolve)\(\s*import\.meta\.dir\s*,\s*"\.\."\s*\)/g, () => "repoRoot()"],
     [/\b(?:join|resolve)\(\s*import\.meta\.dir\s*,\s*"\.\."\s*,\s*/g, () => "repoPath("],
     [/\b(?:join|resolve)\(\s*import\.meta\.dir\s*,\s*"\.\.\/([^"]+)"/g, m => `repoPath("${m[1]}"`],
@@ -199,7 +206,11 @@ export function rewriteMetaDirEscapes(source: string, depth: number): { source: 
   }
   out += source.slice(cursor);
   const codeOut = maskNonCode(out);
-  const used = HELPER_NAMES.filter(name => new RegExp(`\\b${name}\\(`).test(codeOut));
+  const used = HELPER_NAMES.filter(name => new RegExp(`\\b${name}\\(`).test(codeOut)).map(name => (name === "repoRoot" && rebindsRoot ? "repoRoot as resolveRepoRoot" : name));
+  if (rebindsRoot && !used.includes("repoRoot as resolveRepoRoot")) used.push("repoRoot as resolveRepoRoot");
+  if (/\bpathToFileURL\(repoRoot\(\)/.test(codeOut) && !/\bimport\s*\{[^}]*\bpathToFileURL\b[^}]*\}\s*from\s*["']node:url["']/.test(view)) {
+    out = insertAfterImports(out, 'import { pathToFileURL } from "node:url";');
+  }
   const existing = /^import\s*\{([^}]*)\}\s*from\s*(["'])([^"']*helpers\/repo-root)\2;?/m.exec(maskKeepStrings(out));
   if (existing) {
     // Augment a partial import rather than adding a second one.
