@@ -15,6 +15,7 @@ import {
   ensureStrictCatalogFields,
   findNativeTemplate,
   findSupportedNativeTemplate,
+  normalizeServiceTiers,
 } from "../../src/codex/catalog/parsing";
 import { withStubbedProviderFetch } from "../helpers/catalog-provider-fetch";
 import {
@@ -1186,6 +1187,27 @@ describe("combo catalog capability intersection", () => {
       reasoningEfforts: ["low", "medium", "high", "xhigh"],
       defaultReasoningEffort: "medium",
     });
+  });
+
+  test("Astra native alias carries opt-in and cap through its max-input fallback", async () => {
+    for (const [wide, cap, expected] of [[false, undefined, 272_000], [true, undefined, 872_000], [true, 500_000, 500_000]] as const) {
+      const config: OcxConfig = {
+        port: 10100, defaultProvider: "unknown",
+        providers: { unknown: { adapter: "openai-chat", baseUrl: "https://unknown.example/v1", liveModels: false, models: ["unknown-model"] } },
+        ...(wide ? { providerContextCaps: { openai: cap ?? 922_000 } } : {}),
+        combos: { astra: { alias: "gpt-6-astra", nativeAlias: true, targets: [{ provider: "unknown", model: "unknown-model" }] } },
+      };
+      const rows = await gatherRoutedModels(config);
+      expect(rows.find(row => row.provider === "combo" && row.id === "astra")).toMatchObject({
+        contextWindow: expected, maxInputTokens: expected, autoCompactTokenLimit: expected * 0.9,
+      });
+      config.providers.unknown!.modelContextWindows = { "unknown-model": 100_000 };
+      config.providers.unknown!.modelMaxInputTokens = { "unknown-model": 80_000 };
+      const explicit = await gatherRoutedModels(config);
+      expect(explicit.find(row => row.provider === "combo" && row.id === "astra")).toMatchObject({
+        contextWindow: 100_000, maxInputTokens: 80_000, autoCompactTokenLimit: 80_000,
+      });
+    }
   });
 
   test("a bare native disable does not starve a combo targeting that native model", async () => {
@@ -3627,9 +3649,24 @@ describe("Codex catalog routed normalization", () => {
 
     const entries = buildCatalogEntries(nativeTemplate(), [], models);
     const astra = entries.find(entry => entry.slug === `openai/${NATIVE_GPT6_ASTRA_MODEL}`);
-    expect(astra).toMatchObject({ display_name: "GPT-6-Astra" });
+    expect(astra).toMatchObject({
+      display_name: "GPT-6-Astra", multi_agent_reasoning_effort: "xhigh",
+      service_tiers: [{ id: "priority", name: "Fast", description: "2x speed, increased usage" }],
+    });
     expect(astra?.base_instructions).toContain("powered by the gpt-6-astra");
     expect(astra?.base_instructions).not.toContain("daybreak");
+  });
+
+  test("Astra refresh repairs only built-in speed text and does not leak native effort", () => {
+    const pinned = upstreamNativeEntry(NATIVE_GPT6_ASTRA_MODEL)!;
+    expect(pinned.service_tiers).toEqual([{ id: "priority", name: "Fast", description: "2x speed, increased usage" }]);
+    const stale = { ...pinned, service_tiers: [{ id: "priority", name: "Fast", description: "1.5x speed, increased usage" }], user_field: "preserve" };
+    expect(normalizeServiceTiers(stale)).toMatchObject({ service_tiers: pinned.service_tiers, user_field: "preserve" });
+    const custom = { ...pinned, service_tiers: [{ id: "priority", name: "Fast", description: "custom speed" }] };
+    expect(normalizeServiceTiers(custom).service_tiers).toEqual(custom.service_tiers);
+    const routed = normalizeRoutedCatalogEntry({ ...pinned, slug: "other/model" });
+    expect(routed.multi_agent_reasoning_effort).toBeUndefined();
+    expect(pinned.multi_agent_reasoning_effort).toBe("xhigh");
   });
 
   test("Daybreak metadata inheritance rejects noncanonical providers", async () => {
@@ -6133,9 +6170,30 @@ describe("OpenAI API trusted catalog augmentation", () => {
     "gpt-5.5", "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
     "gpt-5.6-sol-pro", "gpt-5.6-terra-pro", "gpt-5.6-luna-pro",
     "daybreak-red-latest", "daybreak-blue-latest",
+    "gpt-6-astra",
   ];
 
-  test("rebuilds the exact eight rows after partial/conflicting successful discovery", () => {
+  test("Astra API registry metadata reaches the emitted catalog independently of native limits", async () => {
+    const models = await gatherRoutedModels(openAiApiCatalogConfig({ liveModels: false }));
+    expect(models.find(row => row.provider === "openai-apikey" && row.id === "gpt-6-astra")).toMatchObject({
+      contextWindow: 1_050_000, maxInputTokens: 922_000, maxOutputTokens: 128_000,
+      inputModalities: ["text", "image"], reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+    });
+    const entries = buildCatalogEntries(nativeTemplate(), [], models);
+    expect(entries.find(row => row.slug === "openai-apikey/gpt-6-astra")).toMatchObject({
+      context_window: 1_050_000, auto_compact_token_limit: 922_000,
+      additional_speed_tiers: ["fast"],
+      // Routed catalogs advertise OCX's synthetic Ultra; the API wire ladder above stops at max.
+      supported_reasoning_levels: ["low", "medium", "high", "xhigh", "max", "ultra"].map(effort => expect.objectContaining({ effort })),
+    });
+    const capped = augmentRoutedModelsWithRegistryOpenAiApiRows([], openAiApiCatalogConfig({ modelMaxOutputTokens: { "gpt-6-astra": 16_000 } }));
+    expect(capped.find(row => row.id === "gpt-6-astra")?.maxOutputTokens).toBe(16_000);
+    const blocked = await gatherRoutedModels(openAiApiCatalogConfig({ liveModels: false, modelSupportsServiceTier: { "gpt-6-astra": false } }));
+    expect(blocked.find(row => row.id === "gpt-6-astra")?.supportsServiceTier).toBe(false);
+    expect(buildCatalogEntries(nativeTemplate(), [], blocked).find(row => row.slug === "openai-apikey/gpt-6-astra")?.service_tiers).toBeUndefined();
+  });
+
+  test("rebuilds the exact registry rows after partial/conflicting successful discovery", () => {
     const rows = augmentRoutedModelsWithRegistryOpenAiApiRows([
       { provider: "openai-apikey", id: "gpt-5.6-sol", contextWindow: 1, maxInputTokens: 1, inputModalities: ["text"], reasoningEfforts: ["low"], owned_by: "live" },
       { provider: "openai-apikey", id: "unrelated-live-model", contextWindow: 999 },

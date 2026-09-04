@@ -115,7 +115,7 @@ describe("normalizeCostTokens", () => {
 describe("resolveMatchedPrice", () => {
   test("gpt-5.6 family four-tuples match the post-cut official rates (#907)", () => {
     const expectations: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> = {
-      "gpt-5.6-sol": { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+      "gpt-5.6-sol": { input: 4, output: 20, cacheRead: 0.4, cacheWrite: 5 },
       "gpt-5.6-terra": { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 2.5 },
       "gpt-5.6-luna": { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 },
     };
@@ -298,8 +298,8 @@ describe("resolveMatchedPrice", () => {
     expect(resolveMatchedPrice("openrouter", "anthropic-claude-3.5-sonnet")).toBeNull();
   });
 
-  test("16. shipped overlay membership: 68 keys, including canonical Fable 5.1, Opus 5 and compatibility prices", () => {
-    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(68);
+  test("16. shipped overlay membership: 70 keys, including canonical Fable 5.1, Opus 5 and compatibility prices", () => {
+    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(70);
     expect(EXPECTED_PRICE_OVERLAYS.some(row => row.status === "unverified")).toBe(false);
     const keys = new Set(EXPECTED_PRICE_OVERLAYS.map(row => `${row.provider}/${row.modelId}`));
     for (const expected of [
@@ -485,6 +485,63 @@ describe("estimateRequestCost", () => {
   });
 });
 
+describe("Astra provider-specific pricing", () => {
+  const model = "gpt-6-astra";
+  const usage = { inputTokens: 300_000, outputTokens: 10_000, cachedInputTokens: 200_000, cacheCreationInputTokens: 20_000 };
+
+  test("native is a flat API-equivalent estimate with native Fast 2.5x", () => {
+    for (const provider of ["openai", "openai-main"]) {
+      const base = estimateRequestCost({ provider, model, usage, usageStatus: "reported" })!;
+      expect(base).not.toBeNull();
+      expect(base.cost.total).toBeCloseTo(1.75, 9);
+      expect(base.estimated).toBe(true);
+      expect(base.contextTier).toBeUndefined();
+      const fast = estimateRequestCost({ provider, model, usage, usageStatus: "reported", serviceTier: { responseServiceTier: "fast" } })!;
+      expect(fast.cost.total).toBeCloseTo(4.375, 9);
+      expect(fast.priorityMultiplier).toBe(2.5);
+    }
+  });
+
+  test("API boundary uses raw input, includes cache, and stacks Fast", () => {
+    const estimate = (inputTokens: number, serviceTier?: string) => estimateRequestCost({
+      provider: "openai-apikey", model, usage: { ...usage, inputTokens }, usageStatus: "reported", serviceTier,
+    })!;
+    expect(estimate(272_000).cost.total).toBeCloseTo(1.47, 9);
+    expect(estimate(272_000).contextTier).toBeUndefined();
+    expect(estimate(272_001).cost.total).toBeCloseTo(2.69002, 9);
+    expect(estimate(300_000).cost.total).toBeCloseTo(3.25, 9);
+    const fast = estimate(300_000, "priority");
+    expect(fast.contextTier).toBe("long");
+    expect(fast.priorityMultiplier).toBe(2);
+    expect(fast.cost.total).toBeCloseTo(6.5, 9);
+    expect(estimate(300_000, "fast").cost).toEqual(fast.cost);
+  });
+
+  test("request, attempt and combo agree; explicit downgrade wins", () => {
+    const tier = { responseServiceTier: "priority" };
+    const attempt = { ordinal: 1, provider: "openai-apikey", model, usage, usageStatus: "reported" as const };
+    expect(estimateAttemptCost(attempt, undefined, tier)?.cost.total).toBeCloseTo(6.5, 9);
+    expect(estimateComboCost([attempt, { ...attempt, ordinal: 2 }], undefined, tier)?.cost.total).toBeCloseTo(13, 9);
+    expect(estimateRequestCost({ ...attempt, serviceTier: { responseServiceTier: "default", requestedServiceTier: "fast" } })?.cost.total).toBeCloseTo(3.25, 9);
+  });
+
+  test("API virtual variants stack Fast without leaking rules to native or resellers", () => {
+    for (const [model, short, long] of [["gpt-5.6-sol-pro", 2.0, 5.4], ["gpt-5.6-terra-pro", 1.04, 2.76], ["gpt-5.6-luna-pro", 0.104, 0.276]] as const) {
+      for (const [inputTokens, expected] of [[200_000, short], [300_000, long]]) {
+        const attempt = { ordinal: 1, provider: "openai-apikey", model, usage: { inputTokens, outputTokens: 10_000 }, usageStatus: "reported" as const };
+        const serviceTier = { responseServiceTier: "priority" };
+        expect(estimateRequestCost({ ...attempt, serviceTier })?.cost.total).toBeCloseTo(expected, 9);
+        expect(estimateAttemptCost(attempt, undefined, serviceTier)?.cost.total).toBeCloseTo(expected, 9);
+        expect(estimateComboCost([attempt], undefined, serviceTier)?.cost.total).toBeCloseTo(expected, 9);
+      }
+      expect(findPriorityPricingRule("openai", model)).toBeUndefined();
+      expect(findPriorityPricingRule("cursor", model)).toBeUndefined();
+    }
+    expect(findPriorityPricingRule("cursor", model)).toBeUndefined();
+    expect(CONTEXT_TIERS.some(row => row.provider === "cursor" && row.modelId === model)).toBe(false);
+  });
+});
+
 describe("tokensPerSecond", () => {
   test("12. edges", () => {
     expect(tokensPerSecond(100, 2000)).toBe(50);
@@ -506,39 +563,39 @@ describe("priority (Fast) service tier multiplier", () => {
   // multiplier, and a 1M-token prompt would silently also trip the context tier (#908).
   const usage = { inputTokens: 200_000, outputTokens: 20_000 };
 
-  test("P1. priority tier applies 2x multiplier for gpt-5.6-sol", () => {
+  test("P1. priority tier applies 2.5x multiplier for gpt-5.6-sol", () => {
     const base = estimateRequestCost({ provider: "openai", model: "gpt-5.6-sol", usageStatus: "reported", usage }, overlays);
     const fast = estimateRequestCost({ provider: "openai", model: "gpt-5.6-sol", usageStatus: "reported", usage, serviceTier: "priority" }, overlays);
     expect(base).not.toBeNull();
     expect(fast).not.toBeNull();
     // base: 5*0.2 + 30*0.02 = 1.6
     expect(base!.cost.total).toBeCloseTo(1.6, 9);
-    // fast: 2x => 3.2
-    expect(fast!.cost.total).toBeCloseTo(3.2, 9);
-    expect(fast!.priorityMultiplier).toBe(2);
+    // fast: 2.5x => 4.0
+    expect(fast!.cost.total).toBeCloseTo(4.0, 9);
+    expect(fast!.priorityMultiplier).toBe(2.5);
     expect(base!.priorityMultiplier).toBeUndefined();
   });
 
-  test("P1b. Fast mode applies the current 2x price for gpt-5.6-luna (#907)", () => {
+  test("P1b. Fast mode applies the current 2.5x price for gpt-5.6-luna (#907)", () => {
     const base = estimateRequestCost({ provider: "openai", model: "gpt-5.6-luna", usageStatus: "reported", usage });
     const fast = estimateRequestCost({ provider: "openai", model: "gpt-5.6-luna", usageStatus: "reported", usage, serviceTier: "priority" });
     expect(base).not.toBeNull();
     expect(fast).not.toBeNull();
-    // Post-cut standard: 200K×$0.20/M + 20K×$1.20/M = $0.064. Fast (2x): $0.128.
+    // Post-cut standard: 200K×$0.20/M + 20K×$1.20/M = $0.064. Fast (2.5x): $0.16.
     expect(base!.cost.total).toBeCloseTo(0.064, 9);
-    expect(fast!.cost.total).toBeCloseTo(0.128, 9);
-    expect(fast!.priorityMultiplier).toBe(2);
+    expect(fast!.cost.total).toBeCloseTo(0.16, 9);
+    expect(fast!.priorityMultiplier).toBe(2.5);
   });
 
-  test("P1c. Fast mode applies the current 2x price for gpt-5.6-terra (#907)", () => {
+  test("P1c. Fast mode applies the current 2.5x price for gpt-5.6-terra (#907)", () => {
     const base = estimateRequestCost({ provider: "openai", model: "gpt-5.6-terra", usageStatus: "reported", usage });
     const fast = estimateRequestCost({ provider: "openai", model: "gpt-5.6-terra", usageStatus: "reported", usage, serviceTier: "priority" });
     expect(base).not.toBeNull();
     expect(fast).not.toBeNull();
-    // Post-cut standard: 200K×$2/M + 20K×$12/M = $0.64. Fast (2x): $1.28.
+    // Post-cut standard: 200K×$2/M + 20K×$12/M = $0.64. Fast (2.5x): $1.6.
     expect(base!.cost.total).toBeCloseTo(0.64, 9);
-    expect(fast!.cost.total).toBeCloseTo(1.28, 9);
-    expect(fast!.priorityMultiplier).toBe(2);
+    expect(fast!.cost.total).toBeCloseTo(1.6, 9);
+    expect(fast!.priorityMultiplier).toBe(2.5);
   });
 
   test("P2. priority tier applies 2.5x multiplier for gpt-5.5", () => {
@@ -580,8 +637,8 @@ describe("priority (Fast) service tier multiplier", () => {
       { ordinal: 1, provider: "openai", model: "gpt-5.6-sol", usageStatus: "reported", usage },
     ], overlays, "priority");
     expect(combo).not.toBeNull();
-    expect(combo!.cost.total).toBeCloseTo(3.2, 9);
-    expect(combo!.priorityMultiplier).toBe(2);
+    expect(combo!.cost.total).toBeCloseTo(4.0, 9);
+    expect(combo!.priorityMultiplier).toBe(2.5);
   });
 
   test("P7. effectiveServiceTier priority: response > requested > configured", () => {
@@ -607,7 +664,7 @@ describe("priority (Fast) service tier multiplier", () => {
   });
 
   test("P9. PRIORITY_MULTIPLIERS table has expected entries", () => {
-    expect(Object.keys(PRIORITY_MULTIPLIERS)).toHaveLength(8);
+    expect(Object.keys(PRIORITY_MULTIPLIERS)).toHaveLength(9);
     expect(PRIORITY_MULTIPLIERS["gpt-5.6-sol"]).toBe(2);
     expect(PRIORITY_MULTIPLIERS["gpt-daybreak-blue-latest"]).toBe(2);
     expect(PRIORITY_MULTIPLIERS["daybreak-blue-latest"]).toBe(2);
@@ -618,18 +675,25 @@ describe("priority (Fast) service tier multiplier", () => {
   });
 
   test("P9b. Daybreak priority rules stay inside their routable provider namespace", () => {
-    expect(findPriorityPricingRule("openai", "gpt-daybreak-blue-latest")?.multiplier).toBe(2);
+    expect(findPriorityPricingRule("openai", "gpt-daybreak-blue-latest")?.multiplier).toBe(2.5);
     expect(findPriorityPricingRule("openai-apikey", "daybreak-blue-latest")?.multiplier).toBe(2);
     expect(findPriorityPricingRule("openai-apikey", "gpt-daybreak-blue-latest")).toBeUndefined();
     expect(findPriorityPricingRule("openai", "daybreak-blue-latest")).toBeUndefined();
+    const alias = estimateRequestCost({ provider: "openai", model: "gpt-daybreak-blue-latest", usageStatus: "reported", usage, serviceTier: "priority" });
+    const sol = estimateRequestCost({ provider: "openai", model: "gpt-5.6-sol", usageStatus: "reported", usage, serviceTier: "priority" });
+    expect(alias?.cost.total).toBeCloseTo(sol!.cost.total, 9);
+    expect(sol?.estimated).toBe(true);
+    const api = estimateRequestCost({ provider: "openai-apikey", model: "gpt-5.6-sol", usageStatus: "reported", usage, serviceTier: "priority" });
+    expect(api?.cost.total).toBeCloseTo(2.4, 9);
+    expect(api?.estimated).toBe(false);
   });
 
   test("P10. attempt cost with priority tier", () => {
     const base = estimateAttemptCost({ ordinal: 1, provider: "openai", model: "gpt-5.6-sol", usageStatus: "reported", usage }, overlays);
     const fast = estimateAttemptCost({ ordinal: 1, provider: "openai", model: "gpt-5.6-sol", usageStatus: "reported", usage }, overlays, "priority");
     expect(base!.cost.total).toBeCloseTo(1.6, 9);
-    expect(fast!.cost.total).toBeCloseTo(3.2, 9);
-    expect(fast!.priorityMultiplier).toBe(2);
+    expect(fast!.cost.total).toBeCloseTo(4.0, 9);
+    expect(fast!.priorityMultiplier).toBe(2.5);
   });
 });
 
@@ -917,8 +981,8 @@ describe("long-context pricing tiers (#908)", () => {
     // so the request really was Fast and the context tier must not apply.
     const confirmed = sol(usage, { responseServiceTier: "priority" });
     expect(confirmed!.contextTier).toBeUndefined();
-    expect(confirmed!.priorityMultiplier).toBe(2);
-    expect(confirmed!.cost.total).toBeCloseTo(4.2, 9);
+    expect(confirmed!.priorityMultiplier).toBe(2.5);
+    expect(confirmed!.cost.total).toBeCloseTo(5.25, 9);
 
     // Requested/configured only, with no response confirmation: a >272k request
     // cannot have been served as Fast, so it was downgraded and bills long.

@@ -35,7 +35,7 @@ bun run privacy:scan              # CI で使う資格情報/個人情報検査
 bun run prepare:package           # パッケージランチャー/asset 更新
 ```
 
-ほとんどのテストは `tests/*.test.ts` に並んで配置された Bun テストです。共有 fixture は
+テストは `src/` を写したドメインディレクトリ（`tests/<domain>/`）に置かれた Bun テストで、対応表は `scripts/test-layout/layout.json` です。共有 fixture は
 `tests/helpers/`、範囲の広いネイティブ等価性シナリオは `tests/e2e-style/` にあります。変更した
 サブシステムの既存テストの近くに集中した回帰テストを追加してください。共有ルーティング、アダプター、設定、サーバー
 動作を触った場合は全体スイートも実行します。

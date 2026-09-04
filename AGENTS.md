@@ -12,18 +12,20 @@ Bun-native TypeScript with no separate server compile step.
 ## Repository layout
 
 - `src/` — proxy runtime: routing, provider adapters, config, management API.
-- `tests/` — Bun tests, migrating from one flat directory into domain
-  directories that mirror `src/` (`tests/<domain>/*.test.ts`). The map is
-  `scripts/test-layout/layout.json`; a domain's files move together with
-  `scripts/test-layout/move.ts` and `layout.migrated` records which domains
-  have moved, so until a domain is listed there its files are still at the
-  root. `tests/ci-workflows/test-layout.test.ts` enforces the map. Shared helpers in
-  `tests/helpers/`, fixtures in `tests/fixtures/`, broader scenarios in
-  `tests/e2e-style/`. Source-oracle tests resolve the repository through
-  `tests/helpers/repo-root.ts`, never `import.meta.dir + "/.."`. A new test
-  file needs an entry in both `layout.json` `explicit` and
-  `tests/fixtures/test-layout-expected.json` (the tooling test says which).
-  Design and slice order: `devlog/_plan/260905_test_modularization_and_windows/`.
+- `tests/` — Bun tests in domain directories that mirror `src/`
+  (`tests/<domain>/*.test.ts`; `providers/` and `adapters/` have one more
+  level for the larger vendors). The map is `scripts/test-layout/layout.json`
+  and `tests/test-layout.test.ts` enforces it: every file resolves to a
+  domain and sits in it, and only the two layout guards live at the root.
+  Shared helpers in `tests/helpers/`, fixtures in `tests/fixtures/`, broader
+  scenarios in `tests/e2e-style/`. Source-oracle tests resolve the repository
+  through `tests/helpers/repo-root.ts` (`repoRoot()`, `repoPath()`,
+  `helperPath()`, `fixturePath()`), never `import.meta.dir + "/.."`. A new
+  test file lands in its domain directory and needs an entry in both
+  `layout.json` `explicit` and `tests/fixtures/test-layout-expected.json`
+  (`tests/test-layout-tooling.test.ts` names the missing one); the regex
+  seeds in `layout.json` place a conventionally named file until then.
+  History: `devlog/_fin/260905_test_modularization_and_windows/`.
 - `gui/` — React + Vite dashboard; packaged output is served from `gui/dist`.
 - `docs-site/` — public docs (Astro + Starlight), deployed to GitHub Pages.
 - `go/` — retired Go native-runtime experiment; kept only where the TypeScript
@@ -202,8 +204,8 @@ also if the hand-written pages name a command the registry does not have. That s
 hypothetical: it caught a documented `ocx request-history` that never existed.
 
 During implementation, use the smallest focused checks that directly cover the
-changed subsystem. Prefer `bun test tests/<name>.test.ts` (or
-`tests/<domain>/<name>.test.ts` once its domain has migrated) for a known file, or
+changed subsystem. Prefer `bun test tests/<domain>/<name>.test.ts` for a known
+file, `bun test tests/<domain>` for one subsystem, or
 `bun run test:changed` when the touch set is broader than one file. Do **not**
 run repository-wide `bun run test` or a bare `bun test` with no file arguments
 for a scoped change by default. `bun run test:changed` follows Bun's parsed module graph: it

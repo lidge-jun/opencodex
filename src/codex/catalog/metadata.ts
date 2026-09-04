@@ -70,10 +70,7 @@ export {
 export const DOCUMENTED_NATIVE_OPENAI_ADDITIONS = [
   "gpt-5.3-codex-spark",
   "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
-  // Preemptive leak-based registration: no shipped codex-rs catalog carries it, so without this
-  // entry an install WITH a live catalog would drop the row that native-models.ts deliberately
-  // ungated. Listing it here keeps the bare slug reachable so a request actually dispatches and
-  // reports the upstream status.
+  // The shipped pin also backfills older installed Codex catalogs that predate Astra.
   NATIVE_GPT6_ASTRA_MODEL,
 ];
 

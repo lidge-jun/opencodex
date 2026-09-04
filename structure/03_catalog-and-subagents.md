@@ -109,6 +109,20 @@ a label edit refresh Codex output.
 
 ## Native passthrough
 
+Astra has its own pinned native row: 272,000 default context, 872,000 opt-in ceiling,
+low-through-ultra effort, low default, and native multi-agent effort `xhigh`. The native-alias
+fallback passes the same configured limits to context, max input and compaction. Unrelated routed
+templates clear the native multi-agent effort; canonical Astra-forward custom rows retain it and
+the pinned Fast speed description. Sync repairs only the exact old built-in Astra Fast description,
+preserving custom descriptions and other stored row fields.
+
+The API registry separately owns Astra's 1,050,000 context / 922,000 input / 128,000 output and
+five API effort levels. Trusted discovery snapshots carry the output ceiling as well as input
+and context, so reconstruction cannot drop it. User output limits may only lower that ceiling.
+Pricing remains provider-scoped: native Astra dollars are explicitly derived estimates, native
+Fast uses 2.5x, API Fast uses 2x and stacks with its published >272k band. No API long-context
+band is inferred for native Astra. See the public provider reference for the dated source table.
+
 Native bare OpenAI entries form one `openai` group. The provider's Pool(default)/Direct option
 changes account selection without changing those ids; `openai-apikey/<model>` creates the separate
 API-key identity. The API GPT-5.6 rows use 1,050,000 context / 922,000 max input; their `*-pro` virtual rows
