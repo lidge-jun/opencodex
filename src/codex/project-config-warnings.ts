@@ -62,7 +62,7 @@ export function parseTomlDocument(content: string): TomlDocument {
   let current = root;
 
   for (const line of content.split("\n")) {
-    const table = line.match(/^\s*\[([^\]]+)\]\s*$/);
+    const table = line.match(/^\s*\[([^\]]+)\]\s*(?:#.*)?$/);
     if (table) {
       const name = table[1]!.trim();
       const section = sections.get(name) ?? {};

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { resolveCodexHomeDir } from "./home";
 import { parseTomlDocument } from "./project-config-warnings";
@@ -17,6 +17,10 @@ export interface LegacyCodexConfigKeyDiagnostic {
   readonly detail: string;
 }
 
+export type LegacyCodexConfigKeyDiagnosticsResult =
+  | { readonly status: "available"; readonly path: string; readonly diagnostics: readonly LegacyCodexConfigKeyDiagnostic[] }
+  | { readonly status: "unavailable"; readonly path: string; readonly reason: "read_failed" | "not_a_file" };
+
 function resolveCodexConfigPath(codexConfigPath?: string): string {
   if (codexConfigPath) return codexConfigPath;
   return join(resolveCodexHomeDir(), "config.toml");
@@ -24,14 +28,15 @@ function resolveCodexConfigPath(codexConfigPath?: string): string {
 
 export function collectLegacyCodexConfigKeyDiagnostics(
   options: { codexConfigPath?: string } = {},
-): LegacyCodexConfigKeyDiagnostic[] {
+): LegacyCodexConfigKeyDiagnosticsResult {
   const path = resolveCodexConfigPath(options.codexConfigPath);
-  if (!existsSync(path)) return [];
+  if (!existsSync(path)) return { status: "available", path, diagnostics: [] };
   let content: string;
   try {
+    if (!statSync(path).isFile()) return { status: "unavailable", path, reason: "not_a_file" };
     content = readFileSync(path, "utf-8");
   } catch { // no-excuse-ok: catch -- optional doctor diagnostics must not fail on an unreadable file.
-    return [];
+    return { status: "unavailable", path, reason: "read_failed" };
   }
   const { root } = parseTomlDocument(content);
   const found: LegacyCodexConfigKeyDiagnostic[] = [];
@@ -45,11 +50,17 @@ export function collectLegacyCodexConfigKeyDiagnostics(
       });
     }
   }
-  return found;
+  return { status: "available", path, diagnostics: found };
 }
 
 export function formatLegacyCodexConfigKeyDiagnosticsForDoctor(
-  diagnostics: LegacyCodexConfigKeyDiagnostic[],
+  result: LegacyCodexConfigKeyDiagnosticsResult,
 ): string[] {
-  return diagnostics.map(d => "[WARN] " + d.detail);
+  if (result.status === "unavailable") {
+    return [`  --     Codex config at ${result.path} could not be read (${result.reason}); legacy-key check skipped`];
+  }
+  if (result.diagnostics.length === 0) {
+    return ["  ok     no unsupported legacy top-level keys in the Codex config"];
+  }
+  return result.diagnostics.map(diagnostic => `[WARN] ${diagnostic.detail}`);
 }

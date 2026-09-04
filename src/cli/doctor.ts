@@ -1275,13 +1275,9 @@ export async function runDoctor(args: string[] = []): Promise<void> {
   }
 
   console.log("\nCodex config compatibility");
-  const legacyKeyDiagnostics = collectLegacyCodexConfigKeyDiagnostics();
-  if (legacyKeyDiagnostics.length === 0) {
-    console.log("  ok     no unsupported legacy top-level keys in the Codex config");
-  } else {
-    for (const line of formatLegacyCodexConfigKeyDiagnosticsForDoctor(legacyKeyDiagnostics)) {
-      console.log(line);
-    }
+  const legacyKeyResult = collectLegacyCodexConfigKeyDiagnostics();
+  for (const line of formatLegacyCodexConfigKeyDiagnosticsForDoctor(legacyKeyResult)) {
+    console.log(line);
   }
 
   console.log("\nCodex agent role files");
