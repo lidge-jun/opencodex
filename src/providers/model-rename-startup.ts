@@ -27,7 +27,10 @@ export function runModelRenameStartupMigration(
   deps: ModelRenameStartupDeps = { project: projectModelRenames },
 ): OcxConfig {
   const projection = deps.project(structuredClone(config));
-  if (!projection.changed) return config;
+  if (!projection.changed) {
+    for (const warning of projection.warnings) console.warn(`[model-rename-migration] ${warning}`);
+    return config;
+  }
   if (deps.save) {
     deps.save(projection.config);
     adoptConfig(config, projection.config);

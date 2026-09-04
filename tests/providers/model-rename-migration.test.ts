@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -144,6 +144,24 @@ describe("registry model rename migration (#1610)", () => {
     });
 
     expect(returned).toBe(clean);
+  });
+
+  test("startup no-op still reports projection warnings", () => {
+    const clean = projectModelRenames(staleConfig(), [RENAME]).config;
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const returned = runModelRenameStartupMigration(clean, {
+        project: config => ({ config, changed: false, warnings: ["rename target is unavailable"] }),
+        save: () => { throw new Error("no-op must not save"); },
+      });
+
+      expect(returned).toBe(clean);
+      expect(warning).toHaveBeenCalledWith(
+        "[model-rename-migration] rename target is unavailable",
+      );
+    } finally {
+      warning.mockRestore();
+    }
   });
 
   test("startup persistence failure leaves live model-rename input unchanged", () => {
