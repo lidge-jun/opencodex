@@ -129,6 +129,14 @@ semantic no-progress budget.
 - 장점, 단점 및 영향: Decorated top-level patches regain compatibility while strings, comments, generated source, raw `exec` text, incomplete envelopes, and patch-file content remain untouched. Nested malformed helper source must be corrected by the provider instead of being guessed at the response boundary.
 
 [Decision Log]
+- 목적과 의도: Stop wasting a turn when a routed model submits one complete patch envelope as the entire code-mode `exec` body.
+- 기존 구현 및 제약 조건: The decision above rejected "wrap a raw `exec` patch body as a helper call" because a text rewrite could reinterpret data as code. Rollout evidence then showed about 55 such bodies across four models, each a guaranteed isolate throw. Measurement added the missing fact: a complete envelope is never valid JavaScript, since `*** Begin Patch` fails to parse at the leading `**`.
+- 검토한 주요 대안: Keep failing closed; rewrite decorated delimiters inside `exec` JavaScript; parse `exec` bodies as JavaScript; or retarget only a body that is itself one complete operation-bearing envelope.
+- 선택한 방식: Retarget only that complete-envelope shape to the existing apply_patch helper, through one shared resolver used by all four restore paths. Delimiter-repair functions stay unchanged and every other `exec` body, including JavaScript that mentions an envelope, stays byte-identical. Streaming holds a buffer that could still become an envelope so the live preview is never rewound.
+- 다른 대안 대신 이 방식을 선택한 이유: This narrows the earlier rejection rather than reversing it. The rejection protected bodies with a competing executable reading; a complete envelope has none, so it is the same one-faithful-reading rule the delimiter repair already follows. Rewriting inside JavaScript remains rejected: there the marker is a delimiter or a string or a comment, and no lexical or parse-based rule separates them safely.
+- 장점, 단점 및 영향: A previously wasted turn now performs the edit the model intended. This does convert a hard failure into a real filesystem write, so the predicate stays anchored and operation-bearing; prefixed, suffixed, incomplete, namespaced, and JavaScript bodies still fail closed. The write itself is the same `apply_patch` capability code mode already grants, reached by payload shape instead of tool name.
+
+[Decision Log]
 - 목적과 의도: Keep Codex client-side deferred tool discovery usable through third-party Responses-compatible gateways that implement public function tools but reject the private `tool_search` declaration.
 - 기존 구현 및 제약 조건: The chat translation path already exposed search as a function and bridged its call back to `tool_search_call`; passthrough only promoted definitions returned by an earlier search, so it could not initiate discovery on a strict third-party Responses endpoint.
 - 검토한 주요 대안: Require every gateway to implement Codex-private tool types; route affected models through `openai-chat`; lower the declaration only; lower the noncanonical request and restore both JSON and SSE response lifecycles.
@@ -354,8 +362,8 @@ Native passthrough SSE has TWO shapes, selected per request in
   including the #44 late-terminal semantics.
 
 The two-shape contract is mirror-commented in `src/server/index.ts`; the real
-`core.ts` gate is source-invariant-tested by `tests/passthrough-abort.test.ts`,
-and the platform matrix lives in `tests/bun-stream-caps.test.ts`. Keep all three
+`core.ts` gate is source-invariant-tested by `tests/responses/passthrough-abort.test.ts`,
+and the platform matrix lives in `tests/lib/bun-stream-caps.test.ts`. Keep all three
 in lockstep with any passthrough-policy change.
 
 Canonical ChatGPT forward streaming has one transport-specific exception. A
@@ -582,7 +590,7 @@ sentinel, and live probes (2026-08-07) confirm the stream closes on the terminal
 terminal-output boundary (`src/server/relay.ts`) cuts the stream at that event and synthesizes
 `[DONE]` itself, so DeepSeek streams live again; the registry knob remains as a one-line
 rollback for upstreams that regress, kept suite-reachable by a synthetic-registry fixture in
-`tests/deepseek-inbound-wire.test.ts`.
+`tests/providers/deepseek-inbound-wire.test.ts`.
 Synthesized output is capped at 10,000 items across HTTP and WebSocket reframing. HTTP frames are
 encoded incrementally, so bounded upstream JSON cannot expand into an unbounded event array or SSE string.
 

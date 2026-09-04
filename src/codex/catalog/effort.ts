@@ -158,11 +158,14 @@ export function applyCatalogModelMetadata(entry: RawEntry, model?: CatalogModel)
     entry.supports_reasoning_summaries = model.supportsReasoningSummaries;
   }
   if (model.supportsServiceTier === true) {
+    const nativeFast = model.codexForwardNativeCapabilityAlias && Array.isArray(entry.service_tiers)
+      ? entry.service_tiers.find(tier => tier?.id === "priority")
+      : undefined;
     entry.default_service_tier = null;
     entry.service_tiers = [{
       id: "priority",
       name: "Fast",
-      description: model.fastTierDescription ?? "1.5x speed, increased usage",
+      description: model.fastTierDescription ?? nativeFast?.description ?? "1.5x speed, increased usage",
     }];
     entry.additional_speed_tiers = ["fast"];
   }

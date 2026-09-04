@@ -26,7 +26,7 @@ import { isIntegrationClientId, type IntegrationClientId } from "./registry";
  *
  * This union is re-declared, not imported, in two other places -- the management
  * route envelope and the GUI adapter -- because neither imports across that
- * boundary. `tests/integrations-journal.test.ts` asserts the three agree, since
+ * boundary. `tests/clients/integrations-journal.test.ts` asserts the three agree, since
  * nothing else can: a kind persisted here and missing there renders as a raw
  * key with no type error anywhere.
  */

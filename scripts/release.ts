@@ -536,13 +536,13 @@ console.log("→ test suite");
 // without executing them; a `bash` step would miss that shim, escape into the
 // real suite, and fail the helper tests with exit 127.
 const ISOLATED_TEST_FILES = [
-  "./tests/api-storage-policy-already-running.test.ts",
-  "./tests/api-storage-policy-mutation-busy.test.ts",
-  "./tests/api-storage-policy-put-race.test.ts",
-  "./tests/api-storage-policy-run.test.ts",
-  "./tests/api-storage-policy.test.ts",
-  "./tests/api-storage.test.ts",
-  "./tests/api-usage.test.ts",
+  "./tests/storage/api-storage-policy-already-running.test.ts",
+  "./tests/storage/api-storage-policy-mutation-busy.test.ts",
+  "./tests/storage/api-storage-policy-put-race.test.ts",
+  "./tests/storage/api-storage-policy-run.test.ts",
+  "./tests/storage/api-storage-policy.test.ts",
+  "./tests/storage/api-storage.test.ts",
+  "./tests/server/api-usage.test.ts",
 ];
 await runLoud([
   "bun", "test", "--isolate", "tests",

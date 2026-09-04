@@ -241,7 +241,7 @@ export function visionTimeoutPatch(timeoutMs: number): SidecarPatch {
 
 /**
  * Dashboard names for the runtime timeout contract in `src/vision/timeout-bounds.ts`.
- * Pinned by `tests/vision-sidecar-timeout-bounds.test.ts`.
+ * Pinned by `tests/gui/vision-sidecar-timeout-bounds.test.ts`.
  */
 export const VISION_TIMEOUT_MS_DEFAULT = DEFAULT_VISION_TIMEOUT_MS;
 export const VISION_TIMEOUT_MS_MAX = MAX_VISION_TIMEOUT_MS;

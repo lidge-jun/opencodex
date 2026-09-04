@@ -696,7 +696,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     }
     // Reject ONLY a model we can prove is blind. An id nothing knows about stays
     // allowed: the operator may be ahead of our catalog, and the runtime never
-    // required catalog membership (`tests/vision-reasoning-contract.test.ts`
+    // required catalog membership (`tests/vision/vision-reasoning-contract.test.ts`
     // pins `custom-vision` → 200). The catalog is read ONCE and reused for the
     // rejection body, so a 400 cannot cost two provider fetches.
     if (body.vision && typeof body.vision.model === "string" && body.vision.model !== "") {

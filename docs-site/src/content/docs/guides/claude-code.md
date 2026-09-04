@@ -13,7 +13,10 @@ You can log in multiple Claude accounts via the Providers dashboard (`ocx login 
 add-account). By default every request uses the **active** account only.
 
 An **experimental, opt-in** Claude account pool (`anthropicAccountPool.enabled`) adds sticky
-session affinity and 429 cooldown failover across those OAuth accounts. For **new** sessions,
+session affinity and usage-aware new-session selection across those OAuth accounts. It does
+**not** gate 429 failover: with two or more usable accounts stored, a rate-limited request moves
+to another account whether the pool is on or off, and that cannot be switched off. For **new**
+sessions,
 `anthropicAccountPool.strategy` selects among eligible accounts: `quota` (default) picks the
 lowest known usage in the window set by `quotaWindow` (`five-hour` by default, or `weekly` /
 `max-utilization`) when above `autoSwitchThreshold`; `round-robin` spreads evenly

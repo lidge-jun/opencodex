@@ -26,8 +26,8 @@
 ### Task 1: Add adversarial RED coverage
 
 **Files:**
-- Create: `tests/lab-public-deep-review-regressions.test.ts`
-- Modify: `tests/ci-workflows.test.ts`
+- Create: `tests/lab/lab-public-deep-review-regressions.test.ts`
+- Modify: `tests/ci-workflows/ci-workflows.test.ts`
 
 **Interfaces:**
 - Consumes: current CL-10 public module APIs.
@@ -135,7 +135,7 @@
 - Modify: `src/lab/public/operator.ts`
 - Modify: `src/cli/lab.ts`
 - Modify: `src/server/management/lab-routes.ts`
-- Modify: `tests/lab-public-surfaces.test.ts`
+- Modify: `tests/lab/lab-public-surfaces.test.ts`
 
 **Interfaces:**
 - Produces: preview/export results that expose exclusion indices/reasons and `stored.created` only, never local event IDs or filesystem paths.
@@ -175,7 +175,7 @@
 ### Task 12: Move catalog timeout to the flaky test only
 
 **Files:**
-- Modify: `tests/codex-catalog-sync-hardening.test.ts`
+- Modify: `tests/codex-integration/codex-catalog-sync-hardening.test.ts`
 - Modify: `scripts/ci/run-bun-test-batches.sh`
 
 **Interfaces:**

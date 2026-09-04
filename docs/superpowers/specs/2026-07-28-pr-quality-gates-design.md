@@ -139,7 +139,7 @@ Unchanged from #631: `contents: write` + `pull-requests: write` for draft GraphQ
 | --- | --- |
 | `.github/scripts/pr-quality.test.cjs` | Pure rules: #644-like compare fixture fails ancestry; behind_main>0 passes; maintainer skip N/A at pure layer; empty / comment-only / escaped `\n` / thin / good structured / good unstructured bodies |
 | `enforce-pr-target.test.cjs` / harness | Workflow wires `synchronize`; calls quality module; `setFailed` when ancestry or description fails; soft-fail draft still; no checkout |
-| `tests/ci-workflows.test.ts` | Permissions + trigger types stay in sync |
+| `tests/ci-workflows/ci-workflows.test.ts` | Permissions + trigger types stay in sync |
 
 Offline fixtures only — no live GitHub in unit tests.
 

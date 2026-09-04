@@ -13,7 +13,7 @@ bun run dev:proxy    # 开发模式代理 API
 bun run dev:gui      # 仪表盘 dev 服务器（另一个终端）
 bun run typecheck    # bun x tsc --noEmit
 bun run test:changed              # routine import-graph test selection
-bun test tests/router.test.ts     # routine focused test
+bun test tests/routing/router.test.ts     # routine focused test
 bun run test                      # complete suite (PR-ready / explicit ask)
 ```
 
@@ -28,13 +28,13 @@ bun run test                      # complete suite (PR-ready / explicit ask)
 ```bash
 bun run typecheck                 # 严格 TypeScript 检查
 bun run test                      # 完整 tests/ suite
-bun test tests/router.test.ts     # 聚焦单个测试文件
+bun test tests/routing/router.test.ts     # 聚焦单个测试文件
 bun run build:gui                 # Vite GUI 构建 + package 准备
 bun run privacy:scan              # CI 使用的 credential/privacy 扫描
 bun run prepare:package           # 刷新 package launcher/asset
 ```
 
-大多数测试是平铺在 `tests/*.test.ts` 下的 Bun test。`tests/helpers/` 存放共享 fixture，
+测试是按 `src/` 划分的领域目录（`tests/<domain>/`）下的 Bun test，映射表在 `scripts/test-layout/layout.json`。`tests/helpers/` 存放共享 fixture，
 `tests/e2e-style/` 存放范围更广的原生一致性场景。请在对应 subsystem 的现有测试附近加入聚焦的
 回归测试；若改动涉及共享 routing、adapter、config 或 server 行为，还应运行完整 suite。
 

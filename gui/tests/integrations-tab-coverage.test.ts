@@ -6,7 +6,7 @@ import { INTEGRATION_TAB_HASHES } from "../src/app-routing";
 /*
  * The gap this closes.
  *
- * tests/integrations-invariants.test.ts compares five client lists, and the
+ * tests/gui/integrations-invariants.test.ts compares five client lists, and the
  * per-page label maps are Record<FileIntegrationClientId, TKey> so the compiler
  * forces those. TABS and FILE_CLIENTS are neither: they are a plain array and a
  * plain Set, so a client added everywhere else still gets no tab and nothing

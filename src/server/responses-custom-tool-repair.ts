@@ -1,6 +1,7 @@
 import type { TranslatorBudget } from "../lib/translator-budget";
-import { normalizeApplyPatchDelimiters } from "../responses/apply-patch-envelope";
-import { compileCodeModeHelperInput } from "../responses/code-mode-helper-compat";
+import { mayBecomePatchEnvelope, normalizeApplyPatchDelimiters } from "../responses/apply-patch-envelope";
+import { compileCodeModeHelperInput, resolveCodeModeHelperName } from "../responses/code-mode-helper-compat";
+import { declaresCodeModeExec } from "../types/tools";
 import {
   customToolItemId,
   restoreRoutedCustomCalls,
@@ -316,6 +317,16 @@ export function createRoutedCustomToolRestoreBlockRewrite(
       if (FREEFORM_WRAP_PREFIX.startsWith(open.argumentsText)) return [];
       const fullInput = partialCustomToolInput(open.argumentsText);
       if (fullInput === null) return [];
+      // Hold a buffer that could still become a complete patch envelope. The done event
+      // recompiles such a body into an apply_patch helper call, so streaming the envelope
+      // bytes first and replacing them at completion is the rewind this path forbids.
+      // Mirrors the same hold in `src/bridge.ts`.
+      if (
+        declaresCodeModeExec(declaredNames)
+        && itemNames.get(upstreamItemId)?.namespace === undefined
+        && itemNames.get(upstreamItemId)?.name === "exec"
+        && mayBecomePatchEnvelope(fullInput)
+      ) return [];
       if (!fullInput.startsWith(open.emittedInput) || fullInput.length === open.emittedInput.length) return [];
       const inputDelta = fullInput.slice(open.emittedInput.length);
       open.emittedInput = fullInput;
@@ -340,12 +351,17 @@ export function createRoutedCustomToolRestoreBlockRewrite(
         : openCalls.get(upstreamItemId)?.argumentsText ?? "";
       const { arguments: _arguments, ...rest } = parsed;
       const itemName = itemNames.get(upstreamItemId);
+      // Name-based alias first; otherwise a raw patch envelope submitted as the `exec` body
+      // resolves to the same apply_patch helper (devlog/_plan/260905_apply_patch_envelope_gap).
+      const helper = itemName?.aliased
+        ? itemName.name
+        : resolveCodeModeHelperName(undefined, itemName?.name ?? "", source, itemName?.namespace, declaredNames);
       const next = {
         ...rest,
         type: nextType,
         item_id: customToolItemId(upstreamItemId),
-        input: itemName?.aliased
-          ? compileCodeModeHelperInput(source, itemName.name)
+        input: helper
+          ? compileCodeModeHelperInput(source, helper)
           : unwrapRoutedCustomToolArguments(source, itemName?.name ?? "", itemName?.namespace),
       };
       return [replaceSseDataPayload(replaceSseEventName(block, nextType), JSON.stringify(next))];

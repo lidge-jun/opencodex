@@ -6,7 +6,7 @@
 
 **Architecture:** Pure validators live in `.github/scripts/pr-quality.cjs` (reusing `issue-quality` helpers for placeholders / structured sections). The workflow checks out **trusted** scripts from the repository default branch (sparse, no PR head), then the existing `github-script` step requires that module, evaluates base + ancestry + description, and drafts/`setFailed`s when any gate fails.
 
-**Tech Stack:** Node CommonJS (Actions scripts), `node:test` for script unit tests, Bun/`tests/ci-workflows.test.ts` + `enforce-pr-target-harness.ts` for workflow behavioral coverage, Astro docs-site for contributing copy.
+**Tech Stack:** Node CommonJS (Actions scripts), `node:test` for script unit tests, Bun/`tests/ci-workflows/ci-workflows.test.ts` + `enforce-pr-target-harness.ts` for workflow behavioral coverage, Astro docs-site for contributing copy.
 
 **Spec:** `docs/superpowers/specs/2026-07-28-pr-quality-gates-design.md`
 
@@ -33,7 +33,7 @@
 | `.github/workflows/enforce-pr-target.yml` | Checkout + require + multi-gate orchestration |
 | `.github/scripts/enforce-pr-target.test.cjs` | Static workflow assertions (checkout safety, synchronize, paths) |
 | `tests/helpers/enforce-pr-target-harness.ts` | Allow `require` of scripts; mock compare + permission; PR `body` |
-| `tests/ci-workflows.test.ts` | Structural allowlist + behavioral scenarios |
+| `tests/ci-workflows/ci-workflows.test.ts` | Structural allowlist + behavioral scenarios |
 | `.github/workflows/issue-quality-tests.yml` | Path filters for new script/tests |
 | `docs-site/src/content/docs/contributing.md` | User-facing branch + description rules |
 | `AGENTS.md` / `MAINTAINERS.md` | One-line CI policy note |
@@ -490,7 +490,7 @@ git commit -m "feat(ci): enforce PR ancestry and description in target gate"
 
 **Files:**
 - Modify: `tests/helpers/enforce-pr-target-harness.ts`
-- Modify: `tests/ci-workflows.test.ts`
+- Modify: `tests/ci-workflows/ci-workflows.test.ts`
 
 **Interfaces:**
 - Consumes: workflow script that `require`s `pr-quality.cjs` and calls compare/permission APIs
@@ -529,7 +529,7 @@ function scopedRequire(id: string) {
 
 5. Record `repos.getCollaboratorPermissionLevel` and `repos.compareCommitsWithBasehead` on the fake github client.
 
-- [ ] **Step 2: Update structural allowlist in `tests/ci-workflows.test.ts`**
+- [ ] **Step 2: Update structural allowlist in `tests/ci-workflows/ci-workflows.test.ts`**
 
 - Steps length **2**: checkout then github-script
 - Pin checkout SHA `11bd71901bbe5b1630ceea73d27597364c9af683`, default_branch ref, `persist-credentials: false`, sparse `.github/scripts`, no PR head ref
@@ -550,7 +550,7 @@ function scopedRequire(id: string) {
 
 ```bash
 node --test .github/scripts/pr-quality.test.cjs .github/scripts/enforce-pr-target.test.cjs
-bun test tests/ci-workflows.test.ts
+bun test tests/ci-workflows/ci-workflows.test.ts
 ```
 
 Expected: PASS.
@@ -558,7 +558,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add tests/helpers/enforce-pr-target-harness.ts tests/ci-workflows.test.ts
+git add tests/helpers/enforce-pr-target-harness.ts tests/ci-workflows/ci-workflows.test.ts
 git commit -m "test(ci): cover PR ancestry and description enforcement paths"
 ```
 
@@ -601,7 +601,7 @@ git commit -m "docs: document PR ancestry and description quality gates"
 
 ```bash
 node --test .github/scripts/pr-quality.test.cjs .github/scripts/enforce-pr-target.test.cjs
-bun test tests/ci-workflows.test.ts
+bun test tests/ci-workflows/ci-workflows.test.ts
 bun run typecheck
 bun run privacy:scan
 ```

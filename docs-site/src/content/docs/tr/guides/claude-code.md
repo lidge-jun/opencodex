@@ -16,7 +16,7 @@ fazla Claude hesabına giriş yapabilirsiniz. Varsayılan olarak her istek yaln�
 
 **Deneysel, isteğe bağlı** bir Claude hesap havuzu
 (`anthropicAccountPool.enabled`), bu OAuth hesapları arasında yapışkan oturum
-bağlılığı ve 429 bekleme süresi (cooldown) yük devretmesi ekler. Yalnızca
+bağlılığı ve kullanıma dayalı yeni oturum seçimi ekler. 429 yük devretmesini **kontrol etmez**: iki veya daha fazla kullanılabilir hesap saklandığında, hız sınırına takılan istek bu anahtar açık da kapalı da olsa başka bir hesaba geçer ve bu kapatılamaz. Yalnızca
 **yeni** oturumlar için `anthropicAccountPool.strategy` uygun hesaplar arasından
 seçim yapar: `quota` (varsayılan), `autoSwitchThreshold` üzerinde olduğunda
 `anthropicAccountPool.quotaWindow` ile yapılandırılan penceredeki bilinen en düşük kullanımı

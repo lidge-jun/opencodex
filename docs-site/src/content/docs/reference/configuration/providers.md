@@ -61,6 +61,45 @@ metadata, and Pro virtual ids rewrite to the base wire model with `reasoning.mod
 shipped v1 config, opencodex creates `config.json.pre-openai-tiers-v2.bak` without replacing a
 differing backup and rewrites known legacy namespaced selected ids to bare ids.
 
+### GPT-6 Astra
+
+`gpt-6-astra` uses the Codex-login route; `openai-apikey/gpt-6-astra` uses your API key.
+Availability still depends on the upstream account. Native Astra keeps the shipped Codex defaults:
+272,000 context, `low` reasoning, and the `low`/`medium`/`high`/`xhigh`/`max`/`ultra` ladder.
+Its Fast catalog description is **2x speed**; that is not the billing multiplier.
+
+Set `providerContextCaps.openai` to `922000` to opt the native group into long context; Astra
+stops at its own **872,000** ceiling. Per-model `providers.openai.modelContextWindows`
+and `modelAutoCompactTokenLimits` can narrow its window and soft compaction budget. For example,
+`modelAutoCompactTokenLimits: { "gpt-6-astra": 700000 }` lowers the long-window default of 784,800.
+An explicit smaller provider cap or target limit still wins, including native-alias combos.
+
+The API row has 1,050,000 context, 922,000 maximum input, 128,000 maximum output, text/image input,
+and API reasoning efforts through `max`. OpenCodex's routed synthetic Ultra control retains its
+existing wire-effort mapping; it is not an additional API effort. There is no Astra `-pro` alias.
+Use the existing `fastMode` setting, or Codex's `service_tier = "fast"` with
+`[features].fast_mode = true`; API `fast` and `priority` are accepted Fast spellings.
+
+Pricing checked September 5, 2026:
+
+| Astra API (USD per million tokens) | Input | Cached input | Cache write | Output |
+| --- | ---: | ---: | ---: | ---: |
+| Standard, up to 272k input | 10 | 1 | 12.5 | 50 |
+| Standard, above 272k input | 20 | 2 | 25 | 75 |
+| Fast, up to 272k input | 20 | 2 | 25 | 100 |
+| Fast, above 272k input | 40 | 4 | 50 | 150 |
+
+The [API price table](https://developers.openai.com/api/docs/pricing) reprices the **whole request**
+above 272k, counting cached tokens toward the threshold. Fast and long-context rates combine;
+this also applies to the published GPT-5.6 API rows and their Pro virtual selections.
+
+[Codex/ChatGPT pricing](https://learn.chatgpt.com/docs/pricing) is separate: Astra and GPT-5.6
+Fast consume **2.5x** Standard credits, versus **2x** for the API. The inspected native rate card
+does not publish a separate 272k band; that does **not** mean tokens after 272k are free.
+OpenCodex does not import the API's long-context surcharge into native Astra. Its native dollar
+display is an **API-equivalent estimate**, including an estimated cache-write rate, not a credit
+conversion or invoice. Credit purchase prices depend on the plan or agreement.
+
 ## Provider entries (`OcxProviderConfig`)
 
 | Field | Type | Meaning |
@@ -352,7 +391,7 @@ rotation may trigger provider restrictions.
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `anthropicAccountPool.enabled?` | `boolean` | `false` | Enable sticky affinity and 429 cooldown failover. |
+| `anthropicAccountPool.enabled?` | `boolean` | `false` | Enable sticky session affinity and quota-ranked new-session selection. **429 failover is not gated here**: it activates whenever two or more usable accounts are stored, exactly like every other multi-credential provider, and cannot be switched off. |
 | `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | For new sessions, when the active account reaches this threshold, choose the lowest known cached usage in the configured window; the account chosen does not itself have to be at or above the threshold. `0` disables **proactive** usage-based switching only — new-session selection and routing recovery after an eligible 429 still consult `quotaWindow`. |
 | `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | New-session strategy; `quota` ranks accounts by the window set by `quotaWindow`, and `fill-first` evaluates its drain threshold in that same window. |
 | `anthropicAccountPool.quotaWindow?` | `"five-hour" \| "weekly" \| "max-utilization"` | `"five-hour"` | The cached provider-reported utilization bar used for usage-aware account selection. `five-hour` keeps the original behavior. `weekly` scores the weekly bar and skips accounts whose 5-hour bar is exhausted while another eligible account remains, but falls back to exhausted candidates when none do. `max-utilization` scores the highest known bar, so it can use 5-hour usage before weekly usage is available; if neither is known, the account follows unknown-usage ordering. Known usage ranks before unknown usage under the opt-in `weekly` and `max-utilization` windows only; an omitted or explicit `five-hour` preserves the legacy ordering. If every eligible account is unknown, selection still returns one in eligible order. After the documented lower-5-hour tie-break, exact ties preserve eligible order. A healthy affinity-bound session is not proactively rebalanced. For new-session assignment and routing recovery after an eligible 429 replacement, `quota` ranks eligible candidates directly with this window; `fill-first` advances in stable order using this window's threshold and exhaustion rules; `round-robin` ignores it. Cooldown, failover limits, and reauthentication eligibility remain separate local state. Per-account weekly bars are only known once the dashboard Providers page has polled them. |
@@ -374,19 +413,25 @@ Rotates to another logged-in account of the same provider when one is rate-limit
 providers that have no pool of their own — xAI, Cursor, Kimi, GitHub Copilot, Google Antigravity,
 and Nous.
 
-**Logging in a second account is what turns this on.** With no configuration, rotation activates
-for any of those providers holding 2 or more accounts that are not flagged for reauthentication —
-the same rule `apiKeyPool` already applies to a 2+ key pool. A provider with one stored account
-behaves exactly as before.
+**Logging in a second account is what turns this on, and nothing turns it off.** Rotation
+activates for any of those providers holding 2 or more accounts that are not flagged for
+reauthentication — the same rule `apiKeyPool` already applies to a 2+ key pool. A provider with
+one stored account behaves exactly as before.
+
+Rotation here runs only *after* upstream has already refused the request, so the only choice a
+disable switch could offer is between retrying on a second account you deliberately logged in and
+returning a 429 while that account sits idle. Refusing rotation is expressed by not storing a
+second account.
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `oauthAccountFailover.enabled?` | `boolean` | presence-driven | Global override. `false` forces single-account behaviour everywhere; `true` forces rotation on. |
-| `providers.<name>.oauthAccountFailover.enabled?` | `boolean` | inherits | Per-provider override; beats the global setting and beats account presence. |
+| `oauthAccountFailover.enabled?` | `boolean` | presence-driven | Global override for the **pre-dispatch account preference** only. `false` stops a healthy request being steered toward the account with more known headroom. It does **not** disable 429 rotation. |
+| `providers.<name>.oauthAccountFailover.enabled?` | `boolean` | inherits | Per-provider override for the same preference; beats the global setting. Only `false` is meaningful — `true` adds nothing over account presence. |
 | `providers.<name>.oauthAccountFailover.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | — | Declared pool strategy for a generic OAuth provider (#695). Persisted through `ocx account strategy <provider> <name>` or `PUT /api/oauth/accounts/pool`; the generic selector does not act on it yet, so omitted and set behave the same today. |
 | `providers.<name>.oauthAccountFailover.autoSwitchThreshold?` | `number` | — | Declared 0–100 usage percent for a proactive switch on a generic OAuth provider (#695). Set with `ocx account auto-switch <provider> threshold <n>`; inert until the selector consumes it. |
 
-To keep strict single-account behaviour for one provider whose terms you would rather not test:
+To decline proactive account steering for one provider whose terms you would rather not test,
+while still recovering from a rate limit:
 
 ```json
 {
@@ -404,7 +449,8 @@ Generic OAuth providers (Google Antigravity, xAI, Cursor, Kimi, GitHub Copilot, 
 other OAuth provider outside the Codex and Anthropic pools) also accept `strategy` and
 `autoSwitchThreshold` on the same key, through `GET`/`PUT /api/oauth/accounts/pool?provider=<name>`
 and the `ocx account strategy` / `ocx account auto-switch` verbs. The response carries
-`"inert": true` while the generic selector ignores those two fields; `stickyLimit` and
+`"inert": true` for those two fields only — `enabled` is live and governs the pre-dispatch
+preference. `stickyLimit` and
 `quotaWindow` are not part of the generic contract. Codex (`/api/codex-auth`) and Anthropic
 (`anthropicAccountPool`) keep their own contracts unchanged.
 
