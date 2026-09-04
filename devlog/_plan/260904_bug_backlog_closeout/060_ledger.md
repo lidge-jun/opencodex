@@ -15,14 +15,15 @@ Columns: item, work-phase, outcome, evidence (merge sha / issue state / posted U
 | 3420 | ildunari | wp2 | MERGED | dev fc70555f3692400a6054d1d1aebf9e30bbd08868, 2026-09-04T06:53:36Z |
 | 3405 | adtumk | wp2 | MERGED | dev 20011a1c482c1e4051c2ec1c52d0ee9ca9164d6c, 2026-09-04T06:54:29Z |
 | 3401 | agentHits | wp2 | MERGED | dev 0f2e1209937ffae9d0c6c30837ce770b3c7cd73c, 2026-09-04T06:52:48Z |
-| 3403 | ianlyoo | wp3 | pending | must reach MERGED or CLOSED |
-| 3432 | luvs01 | wp3 | pending | |
-| 3407 | turin-dev | wp3 | pending | |
-| 3394 | kremnyi | wp3 | pending | |
-| 3388 | zleo-ai | wp3 | pending | |
-| 3348 | RHODIZSECURITY | wp3 | pending | supersede; needs Co-authored-by |
-| 3332 | full999 | wp3 | pending | |
-| 3325 | luvs01 | wp3 | pending | needs maintainer sponsorship |
+| 3403 | ianlyoo | wp3 | FIX PUSHED to author branch | e7fe8dc6e with Co-authored-by; awaiting author ack + CI |
+| 3432 | luvs01 | wp3 | REVIEW POSTED | whitespace-normalized `file:` scheme still evades FILE_URI_RE |
+| 3407 | turin-dev | wp3 | REVIEW POSTED | GET reads stale startup config; toggle snaps back |
+| 3394 | kremnyi | wp3 | REVIEW POSTED | enforce-target red is a cancelled run, not a failure |
+| 3388 | zleo-ai | wp3 | REVIEW POSTED | sound; needs rebase + hosted CI attribution |
+| 3348 | RHODIZSECURITY | wp3 | AUTHOR CHOICE OFFERED | split-it-yourself or carried with Co-authored-by |
+| 3332 | full999 | wp3 | REVIEW POSTED | vendor maxTokens -> maxInputTokens shrinks a 1M window |
+| 3325 | luvs01 | wp3 | SPONSORED | maintainer security review done; `maintainer-sponsored` applied |
+| 3439 | lidge-jun | wp2 | MERGED | dev 8401b68db; repairs the two post-merge regressions |
 
 ## Bug issues
 
@@ -33,10 +34,11 @@ Columns: item, work-phase, outcome, evidence (merge sha / issue state / posted U
 | 3378 | wp2 | CLOSED completed | closed after 20011a1c; absorbed #3344/#3362 already closed |
 | 3402 | wp3 | pending | closes on #3403 merge |
 | 3406 | wp3 | pending | tied to #3407 |
-| 3425 | wp4 | pending | |
-| 3352 | wp4 | pending | security-review class |
-| 3433 | wp5 | pending | provenance decision required |
-| 3424 | wp5 | pending | |
+| 3425 | wp4 | DIAGNOSED, posted | routing.ts:2195 generation drop + :2455 5-min reset; one question asked |
+| 3352 | wp4 | NEEDS-HUMAN | security-review class; hit live by this session's own subagent dispatch |
+| 3433 | wp5 | NEEDS-HUMAN, posted | confirmed asymmetry; blanket synthesis rejected, provenance decision required |
+| 3424 | wp5 | NEEDS-INFO, posted | opencode-go is adapter openai-chat; re-test asked, #3394 is the precedent |
+| 3441 | wp2 | FILED | new: intermittent Windows npm-global cancellation |
 | 3320 | wp6 | NEEDS-INFO, posted | comment 5537325501: SID form is already accepted, so the suspect is identity resolution |
 | 3279 | wp6 | NEEDS-INFO, posted | comment 5537346000: named 3 captures; origin mismatch is the lead hypothesis |
 | 3255 | wp6 | RECLASSIFIED enhancement | comment 5537334610; label bug -> enhancement applied |
@@ -131,3 +133,28 @@ and fails a scoped trigger regardless of correctness. Asked for an unpatched sta
 named captures with the origin-binding mismatch called out as the lead hypothesis, including
 the note that if that is the cause, the real defect is reporting a session problem as
 "cannot connect to proxy".
+
+## wp4 / wp5: two diagnoses that deliberately did not become patches
+
+Both units ended with evidence rather than code, and that is the honest outcome rather than
+a shortfall.
+
+**#3425.** The planned fix was rejected by its own test suite: `tests/codex-routing.test.ts:325`
+already proves a known-100% account switches away, so tightening the unknown-usage branch
+would be a no-op that also breaks the never-primed case the code comments protect. The real
+suspects are `routing.ts:2195`, which drops an outcome WHOLE on a stale writer generation so
+`consecutiveFailures` never increments, and `:2455`, which resets the streak after five
+minutes and makes the threshold unreachable for hand-retried traffic. A characterization test
+now pins the first one. Which fired in the reported run depends on whether a config reload
+occurred, which only the reporter knows, so that question was asked instead of guessed.
+
+**#3433.** The Chat bridge really has no `session_id` synthesis while the Claude bridge does.
+But Claude gates its synthesis on `cacheKeySource === "metadata"` precisely because a shared
+cohort key's backend semantics are unproven, and the Chat path has no equivalent provenance.
+Mirroring it unconditionally would bind unrelated callers onto one upstream session -- a worse
+bug, and one that would fail in the same intermittent way. Posted with the suggestion that
+Hermes send `session_id` directly, since it is already in `FORWARD_HEADERS` and would confirm
+the diagnosis with no proxy change.
+
+The shared lesson: a plausible fix that the existing tests already contradict is worse than a
+diagnosis, because it looks like progress.

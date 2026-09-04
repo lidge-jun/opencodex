@@ -64,7 +64,48 @@ credential-scoped caching. Requires explicit security review, including proof th
 and account ids are never logged and never shared across account cache entries.
 
 ## Accept criteria
+
+## wp4 P-phase stale check (verified directly against dev, 260904)
+
+Subagent dispatch failed twice with `401 No eligible Codex account supports this model` --
+which is issue #3352 firing on this session's own tooling -- so this pass was read directly.
+
+CONFIRMED, with one correction that changes the fix:
+
+- `hasCodexQuotaHeadroom` returns true on unknown usage at `src/codex/routing.ts:1215`, and
+  `applyQuotaAutoSwitch` keeps the active account on unknown usage at `:1655`. The comment
+  above it (`:1196-1200`) says this is deliberate: unknown usage must not drain a tier that
+  was never primed, and a genuinely exhausted account is expected to 429 into cooldown.
+- `tests/codex-routing.test.ts:325` "known 100% weekly usage is exhausted, not unknown, and
+  switches accounts" ALREADY passes, and `:308` pins `isCodexQuotaExhausted` on an explicit
+  100% window. So a KNOWN 100% account already switches. The reported bug is therefore NOT
+  a selection-logic defect, and the fix proposed in the original research -- consult
+  `isCodexQuotaExhausted` before the unknown branch -- would be a no-op for a known snapshot
+  and would break exactly the never-primed case the comment protects. Rejected.
+
+THE ACTUAL SUSPECT is `src/codex/routing.ts:2195`, the first line of
+`recordCodexUpstreamOutcome` after the host-level branch:
+
+```ts
+if (writerGeneration < lastReconciledGeneration && !liveHealthAccountIds.has(accountId)) return;
+```
+
+When a writer's captured generation is older than the last reconcile AND the account is not in
+`liveHealthAccountIds`, the outcome is dropped WHOLE -- no `consecutiveFailures` bump, no
+`lastFailureAt`, no soft-avoid. The transient path at `:2459-2470` never runs, so the
+`upstreamFailoverThreshold` of 3 is never reached no matter how many 502s arrive. That matches
+the report exactly: 118 failures, `sendCount` all 1, `recoveryKinds` empty, and rotation only
+after a MANUAL pause (which goes through a different path).
+
+A second, independent amplifier is at `:2455`: `stale` resets the streak to 1 when the previous
+failure is older than `CODEX_FAILURE_WINDOW_MS` (5 minutes, `:116`). A user whose failing turns
+are spaced more than 5 minutes apart never accumulates 3 in a window, so the threshold is
+unreachable by construction for slow, interactive traffic -- which is what an operator hitting
+502s and retrying by hand looks like.
+
+wp4's B phase must therefore start by proving WHICH of these two fired, not by patching quota
+selection. The evidence needed is whether the reported run had a config reload (which bumps the
+generation) between the account being registered and the failures being recorded.
 - a PR per issue against dev, template-complete, with `Closes #3425` / `Closes #3352`
 - entitlement change proves unknown-admitted vs confirmed-denied in a focused test
 - no credential or token value is added to any log line (privacy:scan stays green in CI)
-

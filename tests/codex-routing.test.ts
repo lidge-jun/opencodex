@@ -524,6 +524,37 @@ describe("codex routing", () => {
     expect(resolveCodexAccountForThread("next", config)).toBe("a");
   });
 
+  test("a stale writer generation drops the failure entirely, so the streak never trips (#3425)", () => {
+    // #3425: 118 consecutive 502s to one account with sendCount 1 and no recoveryKinds, and
+    // rotation only after a MANUAL pause. The quota selector is not the cause -- a known 100%
+    // account already switches (see the exhaustion tests above). This is the path that can
+    // swallow the evidence instead: recordCodexUpstreamOutcome returns before any health write
+    // when the writer's captured generation predates the last reconcile and the account is not
+    // in the live set. consecutiveFailures never increments, so upstreamFailoverThreshold is
+    // unreachable no matter how many failures arrive.
+    const config = makeConfig();
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    expect(resolveCodexAccountForThread("stale-writer", config)).toBe("a");
+
+    // Far more failures than the threshold of 3, every one carrying a stale generation.
+    for (let i = 0; i < 10; i += 1) {
+      recordCodexUpstreamOutcome(config, "a", 502, { writerGeneration: -1 });
+    }
+
+    // Characterization, not an endorsement: nothing was recorded, so the account keeps
+    // serving. A fix for #3425 should turn these two assertions around.
+    expect(getCodexUpstreamHealth("a")).toBeNull();
+    expect(resolveCodexAccountForThread("stale-writer-next", config)).toBe("a");
+
+    // The same failures WITHOUT the stale generation do trip the streak, which is what
+    // isolates the guard as the difference rather than the 502 classification.
+    recordCodexUpstreamOutcome(config, "a", 502);
+    recordCodexUpstreamOutcome(config, "a", 502);
+    recordCodexUpstreamOutcome(config, "a", 502);
+    expect(resolveCodexAccountForThread("healthy-writer-next", config)).toBe("b");
+  });
+
   test("401 credential outcome quarantines the account for future threads", () => {
     const config = makeConfig();
     updateAccountQuota("a", 10);
