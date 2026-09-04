@@ -108,6 +108,8 @@ export const ja: Record<TKey, string> = {
   "auth.adminTokenFieldLabel": "管理者トークン",
   "auth.adminTokenRejected": "管理者トークンが拒否されました。確認してもう一度お試しください。",
   "auth.adminTokenUnavailable": "管理者トークンを確認できませんでした。もう一度お試しください。",
+  "auth.adminTokenHelp": "これは OpenCodex 管理 API の管理者トークンで、プロバイダーの API キーではありません。プロキシは初回起動時に ~/.opencodex/admin-api-token（または $OPENCODEX_HOME/admin-api-token）へ書き込み、OPENCODEX_ADMIN_AUTH_TOKEN を設定するとそちらが優先されます。",
+  "auth.adminTokenDocsLink": "確認方法",
   "app.logoAria": "opencodex ロゴ",
   "app.claudeOn": "Claude オン",
   "app.claudeOff": "Claude オフ",

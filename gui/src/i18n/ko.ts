@@ -106,6 +106,8 @@ export const ko: Record<TKey, string> = {
   "auth.adminTokenFieldLabel": "관리자 토큰",
   "auth.adminTokenRejected": "관리자 토큰이 거부되었습니다. 확인한 후 다시 시도하세요.",
   "auth.adminTokenUnavailable": "관리자 토큰을 확인할 수 없습니다. 다시 시도하세요.",
+  "auth.adminTokenHelp": "이 값은 OpenCodex 관리 API의 관리자 토큰이며 공급자 API 키가 아닙니다. 프록시가 처음 실행될 때 ~/.opencodex/admin-api-token(또는 $OPENCODEX_HOME/admin-api-token)에 기록하고, OPENCODEX_ADMIN_AUTH_TOKEN을 설정하면 그 값이 우선합니다.",
+  "auth.adminTokenDocsLink": "찾는 방법",
   "theme.label": "테마",
   "theme.light": "라이트",
   "theme.dark": "다크",

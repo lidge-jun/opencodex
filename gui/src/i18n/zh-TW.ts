@@ -1941,6 +1941,8 @@ export const zhTW: Record<TKey, string> = {
   "auth.adminTokenFieldLabel": "管理員金鑰",
   "auth.adminTokenRejected": "該管理員金鑰被拒絕。請檢查後再試一次。",
   "auth.adminTokenUnavailable": "無法驗證管理員金鑰。請再試一次。",
+  "auth.adminTokenHelp": "這是 OpenCodex 管理 API 的管理員金鑰，不是服務商 API 金鑰。代理首次啟動時會寫入 ~/.opencodex/admin-api-token（或 $OPENCODEX_HOME/admin-api-token），設定 OPENCODEX_ADMIN_AUTH_TOKEN 可覆寫該值。",
+  "auth.adminTokenDocsLink": "如何尋找",
   "lang.nativeName": "繁體中文",
   "provider.name.commandCodeAuth": "Command Code - Auth",
   "provider.name.commandCodeApi": "Command Code - API",
