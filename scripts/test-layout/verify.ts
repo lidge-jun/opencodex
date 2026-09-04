@@ -39,10 +39,11 @@ export interface VerifyReport {
  * gitignored and skipped by rg's own ignore handling.
  */
 export const SWEEP_ROOTS = [
-  "tests", "scripts", ".github", "src", "gui/src", "bin", "docs-site", "structure", "devlog", "skills",
+  "tests", "scripts", ".github", "src", "gui/src", "gui/tests", "bin", "docs", "docs-site", "structure", "devlog", "skills",
   "AGENTS.md", "AGENTS_INSTALL.md", "MAINTAINERS.md", "CONTRIBUTING.md", "README.md", "CREDITS.md",
   "bunfig.toml", "package.json", ".gitignore", ".npmignore",
 ];
+// dist/ is a build output (gitignored) and is rebuilt from src; it is deliberately not swept.
 
 function rgLiteral(root: string, literal: string): string[] {
   const roots = SWEEP_ROOTS.filter(p => existsSync(join(root, p)));
@@ -101,7 +102,7 @@ export function runVerify(options: VerifyOptions): VerifyReport {
     }
     for (const line of resolutionErrors) log(`RESOLVE ${line}`);
     if (typecheckExit !== 0 && resolutionErrors.length === 0) {
-      log("typecheck reported pre-existing (non-resolution) errors; not counted against the move");
+      log("typecheck exited non-zero without module-resolution errors; those errors are not attributed to the move and do not fail verify (tests are outside the strict root tsconfig). Compare against the same command on origin/dev if in doubt.");
     }
     log(`typecheck exit ${typecheckExit}, ${resolutionErrors.length} module-resolution error(s)`);
   }
@@ -129,4 +130,3 @@ if (import.meta.main) {
   const report = runVerify({ root: repoRootFromHere(), domains, skipTests });
   process.exit(report.ok ? 0 : 1);
 }
-

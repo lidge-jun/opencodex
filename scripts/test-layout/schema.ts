@@ -198,10 +198,17 @@ export function rewriteMetaDirEscapes(source: string, depth: number): { source: 
     applied += 1;
   }
   out += source.slice(cursor);
-  if (!/helpers\/repo-root["']/.test(maskKeepStrings(out))) {
+  const codeOut = maskNonCode(out);
+  const used = HELPER_NAMES.filter(name => new RegExp(`\\b${name}\\(`).test(codeOut));
+  const existing = /^import\s*\{([^}]*)\}\s*from\s*(["'])([^"']*helpers\/repo-root)\2;?/m.exec(maskKeepStrings(out));
+  if (existing) {
+    // Augment a partial import rather than adding a second one.
+    const names = new Set(existing[1]!.split(",").map(s => s.trim()).filter(Boolean));
+    for (const name of used) names.add(name);
+    const line = `import { ${[...names].sort().join(", ")} } from ${existing[2]}${existing[3]}${existing[2]};`;
+    out = out.slice(0, existing.index) + line + out.slice(existing.index + existing[0].length);
+  } else {
     const { toTests } = anchors(depth);
-    const codeOut = maskNonCode(out);
-    const used = HELPER_NAMES.filter(name => new RegExp(`\\b${name}\\(`).test(codeOut));
     out = insertAfterImports(out, `import { ${used.join(", ")} } from "${toTests}/helpers/repo-root";`);
   }
   return { source: out, rewrites: applied };
@@ -219,8 +226,12 @@ export function insertAfterImports(source: string, line: string): string {
     if (stmtStart === -1) continue;
     const between = masked.slice(stmtStart, site.token.start);
     if (between.includes(";")) continue; // the keyword belongs to an earlier statement
+    // The statement ends at the first ";" or line break after the specifier, whichever is
+    // first: a semicolonless import must not swallow the next statement.
     const semi = masked.indexOf(";", site.token.end);
-    const eol = masked.indexOf("\n", semi === -1 ? site.token.end : semi);
+    const nl = masked.indexOf("\n", site.token.end);
+    const stop = semi !== -1 && (nl === -1 || semi < nl) ? semi : site.token.end;
+    const eol = masked.indexOf("\n", stop);
     insertAt = Math.max(insertAt, eol === -1 ? source.length : eol + 1);
   }
   return source.slice(0, insertAt) + line + "\n" + source.slice(insertAt);
@@ -280,4 +291,3 @@ export function scanEscapes(source: string): EscapeHit[] {
 export function layoutDir(): string {
   return dirname(LAYOUT_PATH);
 }
-

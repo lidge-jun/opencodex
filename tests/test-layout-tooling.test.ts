@@ -146,6 +146,19 @@ describe("scanEscapes", () => {
     expect(scanEscapes(out.source)).toEqual([]);
   });
 
+  test("a partial repo-root import is augmented and a semicolonless import does not swallow the next statement", () => {
+    const partial = 'import { repoPath } from "../helpers/repo-root";\nconst a = repoPath("x");\nconst c = copyFileSync(join(import.meta.dir, "helpers", "child.ts"), out);\n';
+    const out = rewriteMetaDirEscapes(partial, 1);
+    expect(out.source.split("\n")[0]).toBe('import { helperPath, repoPath } from "../helpers/repo-root";');
+    expect(out.source.match(/helpers\/repo-root/g)).toHaveLength(1);
+
+    const semicolonless = 'import { join } from "node:path"\nfunction f() {\n  return 1;\n}\nconst r = join(import.meta.dir, "..");\n';
+    const lines = rewriteMetaDirEscapes(semicolonless, 1).source.split("\n");
+    expect(lines[0]).toBe('import { join } from "node:path"');
+    expect(lines[1]).toBe('import { repoRoot } from "../helpers/repo-root";');
+    expect(lines[2]).toBe("function f() {");
+  });
+
   test("file-local uses pass, escapes fail, the marker suppresses and is reported", () => {
     const local = 'const dir = join(import.meta.dir, ".tmp-x");';
     const escape = 'const src = join(import.meta.dir, "..", "src");';
