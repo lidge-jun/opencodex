@@ -1,5 +1,7 @@
 # Astra parity implementation
 
+Completed implementation record; verification and delivery link are in `000_plan.md`.
+
 Depends on verified evidence in `000_plan.md`; one work-phase, not separate backend/test/docs cycles.
 
 ## File-change map

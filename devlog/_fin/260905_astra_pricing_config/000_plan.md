@@ -1,5 +1,22 @@
 # Astra pricing and configuration parity
 
+## Verified implementation outcome
+
+Implementation and independent review are complete. Landing and exact-head CI evidence are
+recorded on [PR #3537](https://github.com/lidge-jun/opencodex/pull/3537); this record does not
+claim that a release or live-service deployment occurred.
+
+At `470269c5164ad4dd5f5b018e1735f29c99e5e6cb`:
+
+- Focused seven-file checks: 510 pass, 0 fail; the session's source-bound test receipt records the command.
+- macmini-cf full `bun run test`, Bun 1.4.0 / Node 22.22.0: 17,998 pass, 14 skip, 0 fail, exit 0 (parallel suite plus six process-isolated groups). The initial run exposed stale Fast/list assertions and missing Node in SSH PATH; both causes were corrected before this clean run.
+- Typecheck and privacy scan pass; documentation build emits 425 pages.
+- Independent plan review, implementation review and final test interdiff review: PASS after folding their findings into `010_parity.md`.
+- Data QA: native context 272k/500k/872k, API context/input/output 1050k/922k/128k, Fast advertised, malformed/absent usage unpriced, repeat catalog stable. For a 300k-input cache-heavy fixture, native Standard/Fast estimates are 1.75/4.375; API Standard/Fast are 3.25/6.5. No live inference or service/config mutation was needed.
+- All three subagents were spawned without model or reasoning overrides, as requested.
+
+The separate native and API billing hypotheses did not collapse into one rate card: no inspected native source established a 272k surcharge, while API sources explicitly priced that band. Future published native long-context/cache-write pricing would justify revisiting the derived estimate.
+
 ## Loop specification
 
 - Class/archetype: C3, one cohesive spec-satisfaction PABCD work-phase (`astra`).
