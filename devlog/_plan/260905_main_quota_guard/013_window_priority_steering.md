@@ -7,3 +7,5 @@ Acceptance changes (not reduced verification): choose the observed short/5h tupl
 Implementation: only the main-owned policy helper and policy tests change; identity, destination, maintenance and no-suite rules remain unchanged. UI copy in wp2 must say 5h first, weekly otherwise; monthly-only accounts retain their governing window. Add short98/weekly100 -> ready, short99/weekly20 -> blocked, expired short/weekly99 -> unknown, weekly98/monthly100 -> ready, and monthly-only99 -> blocked.
 
 All reviewers/workers receive this steering; their existing identity/tertiary/TTL findings remain applicable when the selected account has no short window.
+
+Second owner clarification: a fresh 0% reset must automatically release the block. The opt-in remains enabled and rearms at99. Explicit regression sequence for both short and weekly:99 blocked ->0 ready with enabled=true ->99 blocked again. No manual clear or toggle cycle is required.

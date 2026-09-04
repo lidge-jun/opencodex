@@ -71,10 +71,13 @@ describe("identity-bound main-account hard-lock policy", () => {
     expect(isMainAccountHardLocked(enabled, now + 24 * 60 * 60_000)).toBe(true);
   });
 
-  test("a fresh lower reading clears this policy", () => {
-    observe({ weeklyPercent: 99 });
-    observe({ weeklyPercent: 0 });
-    expect(getMainAccountHardLockStatus(enabled, now).state).toBe("ready");
+  test.each(["shortPercent", "weeklyPercent"] as const)("%s resets to zero, unlocks, and rearms at 99 without disabling", field => {
+    observe({ [field]: 99 });
+    expect(isMainAccountHardLocked(enabled, now)).toBe(true);
+    observe({ [field]: 0 });
+    expect(getMainAccountHardLockStatus(enabled, now)).toEqual({ enabled: true, state: "ready" });
+    observe({ [field]: 99 });
+    expect(getMainAccountHardLockStatus(enabled, now).state).toBe("blocked");
   });
 
   test("5h usage wins over a higher weekly window", () => {
