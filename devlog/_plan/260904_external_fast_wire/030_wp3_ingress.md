@@ -237,8 +237,11 @@ concerns, and the audit caught them being conflated:
 **Identity** is corrected before routing, or the synthetic id fails to route at all:
 
 ```diff
-+  // Fast-only: compact never parsed an effort row either.
-+  const compactFastRow = parseFastOnlyRowId(config, () => raw.model);
++  // Fast-only: compact never parsed an effort row either. Capture the narrowed value
++  // first: `raw.model` is `unknown` until the guard above, a dotted-property narrowing is
++  // not retained inside a callback, and the property is reassigned on the next line.
++  const compactSelector = raw.model;
++  const compactFastRow = parseFastOnlyRowId(config, () => compactSelector);
 +  if (compactFastRow) raw.model = compactFastRow.baseId;
    route = routeCompactionModel(config, raw.model, evidenceFromBody(raw));
 ```

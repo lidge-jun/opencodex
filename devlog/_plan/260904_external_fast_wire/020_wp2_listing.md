@@ -129,15 +129,26 @@ translation module and must not start resolving provider policy itself:
  ): AnthropicModelInfo[] {
 ```
 
+`buildAnthropicModelInfos` treats the predicate's PRESENCE as the gate — both loops call
+`fastRows?.(...)` — so the caller must pass `undefined` when the flag is off. The predicate
+itself answers eligibility, not enablement; conflating the two would publish rows on a
+default install.
+
 The caller at `src/server/index.ts:1454` binds it to `config` and routes the `native`
 pseudo-provider explicitly, since `config.providers.native` does not exist:
 
 ```ts
-(provider, modelId) => provider === "native"
-  ? nativeFastEligible(modelId)
-  : (config.providers[provider] !== undefined
-    && fastRowEligible(config.providers[provider], modelId, provider)),
+config.fastRows === true
+  ? (provider: string, modelId: string) => provider === "native"
+    ? nativeFastEligible(modelId)
+    : (config.providers[provider] !== undefined
+      && fastRowEligible(config.providers[provider], modelId, provider))
+  : undefined,
 ```
+
+`nativeFastEligible` must be declared BEFORE this call. The raw OpenAI mapper that also
+uses it sits further down the handler, so a `const` defined there would leave this call in
+its temporal dead zone.
 
 One helper serves both loops, alongside the existing `push1mVariant`:
 
