@@ -76,7 +76,10 @@ describe("scanEscapes", () => {
     expect(scanEscapes(local)).toEqual([]);
     expect(scanEscapes(escape)).toEqual([{ line: 1, text: escape, suppressed: false }]);
     expect(scanEscapes(marked)).toEqual([{ line: 1, text: marked, suppressed: true }]);
-    expect(scanEscapes("const u = new URL(\"../package.json\", import.meta.url);")).toHaveLength(1);
+    // A rewritten URL specifier is what a correct move looks like; a bare "../" root URL is not.
+    expect(scanEscapes('const u = new URL("../../package.json", import.meta.url);')).toEqual([]);
+    expect(scanEscapes('const root = fileURLToPath(new URL("../", import.meta.url));')).toHaveLength(1);
+    expect(scanEscapes('const c = join(import.meta.dir, "helpers", "child.ts");')).toHaveLength(1);
     expect(scanEscapes("const self = import.meta.path;")).toEqual([]);
   });
 });
@@ -204,7 +207,9 @@ describe("move end to end", () => {
       expect(loadLayout(layoutPath).migrated).toEqual(["providers", "server"]);
       expect(readFileSync(join(root, "src", "thing.ts"), "utf8")).toBe("export const thing = 2;\n");
       const status = Bun.spawnSync(["git", "status", "--porcelain"], { cwd: root }).stdout.toString();
-      expect(status).toContain("R  tests/server-a.test.ts -> tests/server/server-a.test.ts");
+      // Renamed in the index, then rewritten in the worktree: git reports "RM".
+      expect(status).toContain("RM tests/server-a.test.ts -> tests/server/server-a.test.ts");
+      expect(status).toContain("RM tests/cursor-b.test.ts -> tests/providers/cursor/cursor-b.test.ts");
     } finally {
       cleanup();
     }

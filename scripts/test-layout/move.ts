@@ -92,6 +92,9 @@ export function runMove(options: MoveOptions): MoveReport {
   }
   const serial = new Set(serialLaneFiles(root));
   const touchesSerial = moves.some(move => serial.has(basename(move.from)));
+  // scripts/test.ts names serial-lane files relative to tests/, so the literal sweep above
+  // (which looks for "tests/<basename>") does not find it; add it explicitly.
+  if (touchesSerial && !literalTargets.has(SERIAL_LANE_SOURCE)) literalTargets.set(SERIAL_LANE_SOURCE, []);
   const writeSet = new Set<string>([
     ...moves.map(move => move.from),
     ...literalTargets.keys(),
@@ -139,10 +142,10 @@ export function runMove(options: MoveOptions): MoveReport {
     for (const [from, to] of byFrom) {
       text = text.split(from).join(to);
       // "./tests/x" forms are covered by the plain split; the serial-lane table stores paths
-      // relative to tests/, so rewrite those too.
-      if (file === SERIAL_LANE_SOURCE) {
+      // relative to tests/ as quoted strings, so rewrite those too.
+      if (file === SERIAL_LANE_SOURCE && serial.has(basename(from))) {
         const rel = from.slice("tests/".length);
-        text = text.replace(new RegExp(`"${rel.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}"`, "g"), `"${to.slice("tests/".length)}"`);
+        text = text.split(`"${rel}"`).join(`"${to.slice("tests/".length)}"`);
       }
     }
     if (text !== original) {

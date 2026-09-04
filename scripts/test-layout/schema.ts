@@ -149,7 +149,17 @@ export function rewriteSource(source: string, depth: number): string {
 
 export const LOCAL_MARKER = "// layout: local";
 
-const ESCAPE_LITERAL = /["'`](?:\.\.\/|\.\.["'`]|helpers\/|fixtures\/|src\/|gui\/|scripts\/|tests\/)/;
+/**
+ * A path built from import.meta.dir that reaches outside the file's own directory:
+ *   join(import.meta.dir, "..", ...)        join(import.meta.dir, "../src", ...)
+ *   join(import.meta.dir, "helpers", ...)   resolve(import.meta.dir, "..")
+ * The rewriter cannot express these (it only rewrites module specifiers and URL strings),
+ * so they need a human. `new URL("../x", import.meta.url)` is NOT an escape: the rewriter
+ * already re-anchored that string, and the leading "../" is what a correct rewrite looks like.
+ */
+const DIR_ESCAPE = /import\.meta\.dir\s*,\s*["'`](?:\.\.(?:["'`\/])|helpers\b|fixtures\b|src\/|gui\/|scripts\/|tests\/)/;
+/** `fileURLToPath(new URL("../", import.meta.url))` and friends: a URL used as a directory root. */
+const URL_ROOT_ESCAPE = /new\s+URL\s*\(\s*["'`](?:\.\.\/)+["'`]\s*,\s*import\.meta\.url/;
 
 export interface EscapeHit {
   line: number;
@@ -166,7 +176,7 @@ export function scanEscapes(source: string): EscapeHit[] {
   const hits: EscapeHit[] = [];
   source.split("\n").forEach((text, index) => {
     if (!/import\.meta\.(dir|url)/.test(text)) return;
-    if (!ESCAPE_LITERAL.test(text)) return;
+    if (!DIR_ESCAPE.test(text) && !URL_ROOT_ESCAPE.test(text)) return;
     hits.push({ line: index + 1, text, suppressed: text.includes(LOCAL_MARKER) });
   });
   return hits;
