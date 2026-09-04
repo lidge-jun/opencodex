@@ -29,7 +29,7 @@ runs helper features around provider requests.
 | `codexDesktopAuthless?` | `boolean` | `false` | Opt-in authless Codex Desktop routing on a loopback bind: inject the dedicated `opencodex` provider with `requires_openai_auth = false` so Desktop opens without a ChatGPT login. Ignored on non-loopback binds. `ocx system settings --desktop-authless on`. See [Codex integration](/guides/codex-integration/#authless-codex-desktop-opt-in). |
 | `resetCreditAutoRedeem?` | `{ enabled?: boolean; leadTimeMinutes?: number }` | off | Opt-in: redeem the main Codex account's soonest-expiring reset credit `leadTimeMinutes` (1–60, default 10) before it expires. Every attempt re-reads the upstream credit list first and skips when the credit is gone (for example, redeemed by hand); the `redeem_request_id` is journaled in `$OPENCODEX_HOME/reset-credit-auto-redeem.json` before the call so a crash replays the same idempotent request instead of spending a second credit. Logs carry a hashed account key only. |
 | `syncResumeHistory?` | `boolean` | `true` | Reversible Codex App history compatibility. Original metadata is backed up and restored by `ocx stop` / `ocx restore`. |
-| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | off | Redirect recognized Codex helper/shadow calls to a chosen model while preserving the request's configured reasoning effort. The default source prefix is `gpt-5.6-luna`; older clients through 0.144.x used `gpt-5.4-mini`, which `sourceModels` can restore. |
+| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; modelMap?: Record<string, string>; sourceModels?: string[] }` | off | Redirect recognized Codex helper/shadow calls to chosen models while preserving the request's configured reasoning effort. `modelMap` maps each source prefix to its own replacement; `model` is the shared fallback for sources absent from the map, and a source absent from both is left native. The default source prefixes are `gpt-5.4-mini` and `gpt-5.6-luna`; `sourceModels` can override the set. |
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | on when usable | Web-search sidecar options. |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | on when usable | Image-description sidecar options. |
 | `images?` | `OcxImagesConfig` | automatic OpenAI selection | Standalone Images relay options for Codex `image_gen`. |
@@ -204,10 +204,19 @@ a matching request.
   "shadowCallIntercept": {
     "enabled": true,
     "model": "gpt-5.5",
-    "sourceModels": ["gpt-5.6-luna"]
+    "modelMap": {
+      "gpt-5.6-luna": "deepseek-chat",
+      "gpt-5.4-mini": "glm-4.5-air"
+    },
+    "sourceModels": ["gpt-5.4-mini", "gpt-5.6-luna"]
   }
 }
 ```
+
+`modelMap` gives each source model its own replacement (for example luna and 5.4-mini to two
+different third-party models). `model` then only applies to sources with no `modelMap` entry: keep it
+when you want a shared fallback (for example for helper ids newly introduced by a client update),
+and leave it unset when the map covers every source you intercept.
 
 ## Sidecars
 
