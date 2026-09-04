@@ -19,16 +19,23 @@ import type { OcxContentPart, OcxParsedRequest, OcxProviderConfig } from "../../
 /**
  * Multiplier applied to the ceiling before refusing.
  *
- * 2.5, not something tighter, because `estimateTokens` can overshoot by 1.6x on its own.
- * `cjkRatio` samples every `stride`-th character, so a payload of fixed-width records whose
- * length aligns with the stride samples as 100% CJK while being ~1.6% CJK, firing the
- * 2.5-chars/token clamp instead of the 4.0 default. Measured on Bun 1.3.14: 126,046 chars,
- * true CJK ratio 0.0161, sampled ratio 1.0, estimate inflated 1.6x. Since 4.0 / 2.5 = 1.6
- * is that branch maximum divergence, a threshold at or under 1.6 would convert the
- * estimator error bar into false 413s.
+ * 2.5, not something tighter, because the estimate is a heuristic and the cost of being wrong
+ * is asymmetric: a false refusal fails a turn the provider would have answered, while an
+ * over-admission merely pays for one round trip the provider then rejects itself.
  *
- * 2.5 sits above it with room for the ~10% model-family ratio spread, and still refuses the
- * #1412 shape (10x) four times over.
+ * The original margin was sized against a sampling artifact — `cjkRatio` read every stride-th
+ * character, so a payload of fixed-width records could sample as 100% CJK while being 1.6% CJK
+ * and inflate the estimate by 4.0/2.5 = 1.6x. That sampler is gone: CJK characters are now
+ * counted exactly, so that particular 1.6x divergence cannot occur and the headroom it bought is
+ * no longer spent on it.
+ *
+ * The margin is still 2.5 because the estimator it guards got LARGER, not smaller. Counting the
+ * two scripts separately raises a pure-Latin estimate by 1.25x and a Korean one by up to 1.67x
+ * against the previous model, which consumes real headroom: measured against the old estimator's
+ * scale, 2.5 now behaves like roughly 2.0x for Latin and 1.5x for Korean-dominant input. That is
+ * the intended direction — the estimates are closer to what providers actually charge, so the
+ * same multiplier is a tighter and more honest bound — and it still refuses the #1412 shape
+ * (10x compounding) several times over.
  */
 export const ADMISSION_TOLERANCE = 2.5;
 
