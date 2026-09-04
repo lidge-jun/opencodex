@@ -5,6 +5,7 @@ import { resolveKiroApiRegion, resolveKiroRequestProfile } from "../oauth/kiro";
 import { KIRO_MODEL_CONTEXT_WINDOWS, normalizeKiroModelId } from "../providers/kiro-models";
 import { modelRecordValue } from "../reasoning-effort";
 import { parseKiroEvent } from "./kiro-events";
+import { calibrateKiroEstimate, recordKiroCalibration } from "./kiro-calibration";
 import {
   classifyKiroEventError,
   classifyKiroHttpError,
@@ -1505,6 +1506,15 @@ async function* parseKiroAttemptEvents(
         ...(contextWindowState.value ? { upstreamContextWindow: contextWindowState.value } : {}),
       });
     }
+    // Upstream just told us what this exact payload cost. Keep it: the ratio between that and our
+    // pre-request estimate is this conversation's own measured error, and it is the only feedback
+    // the estimator ever receives. Recorded here rather than at the terminal returns above because
+    // this is the path where a turn completed normally — a stream that failed mid-flight proves
+    // nothing about how densely its payload tokenized.
+    const chargedFloor = contextUsageTotalFloor();
+    if (chargedFloor !== undefined && contextInputEstimate !== undefined) {
+      recordKiroCalibration(returnedConversationId, contextInputEstimate, chargedFloor);
+    }
     // Native stop metadata proves that this inference ended, but it does not prove that ordinary
     // text is a final answer. Kiro has emitted END_TURN for progress prose, so tool-enabled turns
     // still require the private completion call to distinguish commentary from completion (#531).
@@ -1964,7 +1974,10 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
     if (profileArn) headers["x-amzn-kiro-profile-arn"] = profileArn;
     const built = buildKiroPayload(parsed, profileArn, forcedCompletionMode, wireClient);
     await normalizeKiroImages(built.payload);
-    const contextInputEstimate = estimateKiroPayloadInputTokens(built.payload, parsed.modelId);
+    // Apply what earlier turns of THIS conversation measured. An unseen conversation is
+    // unchanged, so a first turn behaves exactly as it would without calibration.
+    const rawContextInputEstimate = estimateKiroPayloadInputTokens(built.payload, parsed.modelId);
+    const contextInputEstimate = calibrateKiroEstimate(built.conversationId, rawContextInputEstimate);
     const body = JSON.stringify(built.payload);
     debugProviderDiagnostic("kiro", "request", {
       region,
