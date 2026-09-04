@@ -199,6 +199,8 @@ test("event privacy admission rejects raw filesystem path bypass forms", () => {
     "file://server/share/secret",
     String.raw`file:\\server\share\secret`,
     String.raw`file:\C:\secret\data`,
+    String.raw`file:C:\private\secret`,
+    "file:etc/passwd",
   ]) {
     try {
       enforceEventStructureLimits({ detail });
