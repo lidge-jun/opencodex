@@ -19,6 +19,7 @@ import {
 import { claimOwnedServiceHome, withOwnedServiceHomePreload } from "../helpers/owned-service-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoRoot as resolveRepoRoot } from "../helpers/repo-root";
+import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 const repoRoot = resolveRepoRoot();
 const sandboxes: Sandbox[] = [];
@@ -30,6 +31,10 @@ interface Sandbox {
   readonly env: Record<string, string>;
   readonly serviceManagerEnv: Record<string, string>;
   readonly preloadPath?: string;
+  /** Every child spawned against this sandbox, so teardown can reap before deleting the root. */
+  readonly children: Set<ReturnType<typeof Bun.spawn>>;
+  /** Release markers a lock holder polls for; written (tolerantly) on teardown. */
+  readonly releaseMarkers: Set<string>;
 }
 
 function nativeEntry(slug: string, visibility = "list"): Record<string, unknown> {
@@ -88,9 +93,30 @@ function makeSandbox(prefix: string): Sandbox {
     },
     serviceManagerEnv: serviceHome.env,
     preloadPath: serviceHome.preloadPath,
+    children: new Set(),
+    releaseMarkers: new Set(),
   };
   sandboxes.push(sandbox);
   return sandbox;
+}
+
+/**
+ * Idempotent teardown, safe from a test's `finally` AND from `afterEach` in either
+ * order. Order matters: release holders, kill anything still running, then AWAIT
+ * every exit so no child holds a handle inside the sandbox when the root is removed.
+ * Run 33920624827 (windows 2/4) showed the alternative: a per-test timeout left two
+ * children dangling and the `finally` then wrote a release marker into a root
+ * `afterEach` had already deleted (ENOENT).
+ */
+async function teardownSandbox(sandbox: Sandbox): Promise<void> {
+  for (const marker of sandbox.releaseMarkers) {
+    try { writeFileSync(marker, "release"); } catch { /* root may already be gone */ }
+  }
+  for (const child of sandbox.children) {
+    if (child.exitCode === null) child.kill();
+  }
+  await Promise.all([...sandbox.children].map(child => child.exited));
+  sandbox.children.clear();
 }
 
 function sandboxChildEnv(sandbox: Sandbox): Record<string, string> {
@@ -119,6 +145,7 @@ async function runChild(
     stdout: "pipe",
     stderr: "pipe",
   });
+  sandbox.children.add(child);
   const [exitCode, stdout, stderr] = await Promise.all([
     child.exited,
     new Response(child.stdout).text(),
@@ -150,8 +177,13 @@ async function holdCatalogLock(sandbox: Sandbox): Promise<{
     stdout: "pipe",
     stderr: "pipe",
   });
+  sandbox.children.add(child);
+  sandbox.releaseMarkers.add(release);
   await waitForPath(ready, 12_000);
-  return { release: () => writeFileSync(release, "release"), child };
+  return {
+    release: () => { try { writeFileSync(release, "release"); } catch { /* teardown may have released already */ } },
+    child,
+  };
 }
 
 function seedCatalog(sandbox: Sandbox, bytes = catalogBytes()): string {
@@ -161,9 +193,10 @@ function seedCatalog(sandbox: Sandbox, bytes = catalogBytes()): string {
   return path;
 }
 
-afterEach(() => {
+afterEach(async () => {
   const identity = resolveEffectiveUserIdentity();
   for (const sandbox of sandboxes.splice(0)) {
+    await teardownSandbox(sandbox);
     const database = resolveCodexCatalogSerializationDatabasePath(identity, sandbox.codexHome);
     for (const suffix of ["", "-journal", "-wal", "-shm"]) rmSync(`${database}${suffix}`, { force: true });
     removeTreeWithRetry(sandbox.root);
@@ -216,7 +249,11 @@ test("startup and CLI sync-cache cannot write models_cache while another process
     holder.release();
     expect(await holder.child.exited).toBe(0);
   }
-}, 15_000);
+// Three real Bun children (the lock holder alive throughout; the startup probe and
+// the CLI sync-cache in series), two of them importing the server/CLI graphs at
+// 8-11 s each on windows-latest (see waitForPath). 15 s timed out on CI run
+// 33920624827; the local timing (~450 ms) is not what this number is for.
+}, SPAWN_BUDGET_MS);
 
 test("native restore cannot read-transform-write the catalog while another process owns K", async () => {
   const sandbox = makeSandbox("ocx-retained-restore-");
