@@ -61,7 +61,24 @@ between parallel suites; recorded rather than silently discarded.
 - **R2 — export surfaces emit base ids only.** `/api/models` `namespaced` ids feed
   `ocx export` and the OpenCode integration, and those identities are written into user
   config files that outlive the flag. Documented as a limitation rather than widened.
-- **R3 — remote CI is unverified.** The branch is pushed but no PR has been opened, so
-  criterion c-7 is open. The stacked-PR split described in `040` was not exercised: the
-  work landed as one dependency-ordered branch.
+- **R3 — the work landed as one branch, not a stack.** `040` described a four-PR stack. The
+  phases are dependency-ordered and each has its own commit, but they were opened as a
+  single PR: the later phases have no reviewable meaning without the grammar, and splitting
+  after the fact would have produced three PRs nobody could run.
 
+## Landing
+
+PR [#3457](https://github.com/lidge-jun/opencodex/pull/3457), targeting `dev`.
+
+Head `295892784b59bc0280fb78197d2e4094f59c8fe8`: **22 checks pass, 1 skipping, 0 fail** —
+`gates`, `test 1..4/4`, `macos`, `keyring ubuntu|windows|macos`,
+`npm-global macos|ubuntu|windows`, `api usage`, `storage policy`, `enforce-target`,
+`hygiene`, `react-doctor`, `changes`, `label`, `resolve-pr`, `select windows runner`.
+The Windows shard reports `skipping` by its own matrix rule. CodeRabbit's review was still
+in progress at close; it is a review bot, not a CI gate.
+
+`enforce-target` passing is the check worth naming: it is what confirms the PR targets
+`dev` with a description the repository's own gate accepts.
+
+Not merged. Merging is the maintainer's call, and the operator authorized pushing, not
+landing.
