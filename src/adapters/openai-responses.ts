@@ -919,7 +919,11 @@ function isRepairableToolOutput(output: unknown): output is string | Record<stri
     if (part.type === "refusal") return typeof part.refusal === "string";
     if (part.type === "encrypted_content") return typeof part.encrypted_content === "string";
     if (part.type !== "input_image") return false;
-    const validSource = typeof part.image_url === "string" || typeof part.file_id === "string";
+    const hasImageUrl = typeof part.image_url === "string";
+    const hasFileId = typeof part.file_id === "string";
+    const validSource = (hasImageUrl || hasFileId)
+      && (part.image_url === undefined || hasImageUrl)
+      && (part.file_id === undefined || hasFileId);
     const validDetail = part.detail === undefined
       || (typeof part.detail === "string"
         && ["auto", "low", "high", "original"].includes(part.detail));

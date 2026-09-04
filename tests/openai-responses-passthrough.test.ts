@@ -2356,6 +2356,10 @@ describe("OpenAI Responses passthrough sanitization", () => {
       },
       {
         type: "function_call_output",
+        output: [{ type: "input_image", image_url: 42, file_id: "file_1" }],
+      },
+      {
+        type: "function_call_output",
         output: [{ type: { toString: null, valueOf: null }, text: "must not coerce" }],
       },
     ];
