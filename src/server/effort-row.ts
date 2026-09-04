@@ -29,8 +29,8 @@ export interface EffortRowOptions {
   supportsReasoning?: boolean;
 }
 
-function isKnownId(knownIds: EffortRowKnownIds | undefined, id: string): boolean {
-  return typeof knownIds === "function" ? knownIds(id) : knownIds?.has(id) === true;
+export function isKnownId(knownIds: EffortRowKnownIds | undefined, id: string): boolean {
+return typeof knownIds === "function" ? knownIds(id) : knownIds?.has(id) === true;
 }
 
 export function effortRowId(baseId: string, effort: string): string {

@@ -1050,6 +1050,9 @@ const configSchema = z.object({
   defaultModelAliases: z.boolean().optional(),
   // Malformed hand edits disable this opt-in projection without rejecting providers.
   cursorEffortRows: z.boolean().optional().catch(false),
+  // Same opt-in discipline: a malformed hand edit degrades to off rather than rejecting
+  // every provider.
+  fastRows: z.boolean().optional().catch(false),
   // Future versions remain opaque through passthrough-compatible whole-config saves.
   // Only version 1 grants deletion authority in the rebase path.
   configRebaseProvenance: z.unknown().optional(),

@@ -375,6 +375,13 @@ export interface OcxConfig {
    * from Cursor's built-in effort table. Omitted/false preserves discovery output.
    */
   cursorEffortRows?: boolean;
+  /**
+   * Opt-in synthetic Fast selectors. When true, the raw OpenAI-style `/v1/models` list and
+   * Claude Code discovery add a `<base-id>--fast` row for every model whose resolved Fast
+   * policy is eligible, and selecting one routes the base model with the canonical
+   * `priority` service tier. Omitted/false preserves discovery output exactly.
+   */
+  fastRows?: boolean;
   /** Explicit top-level deletion intent used by stale whole-config rebases. */
   configRebaseProvenance?: OcxConfigRebaseProvenance | Record<string, unknown>;
   /** OpenAI provider-contract migration marker (v2 = single `openai` provider with account mode). */
