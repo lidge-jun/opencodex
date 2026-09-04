@@ -77,6 +77,18 @@ describe("rich Logs filtering", () => {
     }, NOW).map(row => row.id)).toEqual(["helper"]);
   });
 
+  test("accepts only finite integer HTTP statuses in status buckets", () => {
+    const rows = [
+      { id: "success", status: 200 },
+      { id: "error", status: 599 },
+      { id: "nan", status: Number.NaN },
+      { id: "fractional", status: 200.5 },
+      { id: "out-of-range", status: 600 },
+    ];
+    expect(filterLogs(rows, { ...DEFAULT_LOG_FILTER_STATE, status: "success" }, NOW).map(row => row.id)).toEqual(["success"]);
+    expect(filterLogs(rows, { ...DEFAULT_LOG_FILTER_STATE, status: "errors" }, NOW).map(row => row.id)).toEqual(["error"]);
+  });
+
   test("uses deterministic time windows and rejects rows without a usable timestamp", () => {
     const rows = [...logs, { id: "missing-time", status: 200 }];
     expect(filterLogs(rows, { ...DEFAULT_LOG_FILTER_STATE, timeWindow: "15m" }, NOW).map(row => row.id)).toEqual(["claude"]);

@@ -105,9 +105,15 @@ export function filterLogs<T extends FilterableLogEntry>(
     )) return false;
 
     if (filters.status === "success"
-      && (typeof log.status !== "number" || log.status < 200 || log.status >= 300)) return false;
+      && (typeof log.status !== "number"
+        || !Number.isInteger(log.status)
+        || log.status < 200
+        || log.status >= 300)) return false;
     if (filters.status === "errors"
-      && (typeof log.status !== "number" || log.status < 400)) return false;
+      && (typeof log.status !== "number"
+        || !Number.isInteger(log.status)
+        || log.status < 400
+        || log.status > 599)) return false;
 
     const logAttempts = attempts(log);
     if (modelQuery && ![
