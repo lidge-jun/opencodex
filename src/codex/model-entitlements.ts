@@ -149,6 +149,13 @@ export function compareClientVersionsForTests(left: string, right: string): numb
 }
 
 /** Numeric-segment comparison. Only used to pick the highest floor in a known-good set. */
+// Prerelease and build suffixes are deliberately NOT ordered. Splitting on [.+-] turns the
+// suffix into a non-finite segment that reads as 0, so `0.144.0-rc.1` sorts at or above
+// `0.144.0` rather than below it, the inverse of semver. That is tolerable because every
+// version this ranks against is a release version: the gated floor, the measured minimum, and
+// the snapshot's `minimal_client_version` rows. A prerelease runtime is therefore passed
+// through exactly as it was before the floor bound tier 2, so this is not a new hazard. Order
+// the suffix properly before reusing this anywhere a prerelease has to sort below its release.
 function compareClientVersions(left: string, right: string): number {
   const l = left.split(/[.+-]/).map(Number);
   const r = right.split(/[.+-]/).map(Number);
@@ -165,10 +172,10 @@ function compareClientVersions(left: string, right: string): number {
  *
  * 1. the inbound request's own `client_version` — the only value certainly describing the
  *    client being answered;
- * 2. the selected Codex runtime version, for callers with no request of their own — but never
- *    below the floor in tier 3. Retained sync refreshes runtime evidence before discovery,
- *    which is what makes this usable here; the persisted file itself carries no freshness
- *    guarantee.
+* 2. the selected Codex runtime version, for callers with no request of their own — but never
+ *    below `GATED_MODEL_CLIENT_VERSION_FLOOR`. Retained sync refreshes runtime evidence before
+ *    discovery, which is what makes this usable here; the persisted file itself carries no
+ *    freshness guarantee.
  * 3. the floor this build's own bundled roster records for the models being gated
  *    (`GATED_MODEL_CLIENT_VERSION_FLOOR`).
  *
@@ -611,6 +618,13 @@ async function fetchAccountModels(
       return unconfirmedAccountModels(credential, clientVersion, now, { kind: "parsed-empty" });
     }
     const hasUnknownGatedAbsence = [...ACCOUNT_GATED_NATIVE_MODEL_MINIMUM_CLIENT_VERSIONS]
+      // Reachable only through tier 1, an inbound client_version below the floor. Every other
+      // resolution is now structurally >= every recorded minimum, because the floor is the max
+      // of the derived value and the same measured constant these minimums hold. So this is the
+      // escape hatch for a self-declared old client, not live protection on the background path:
+      // there, an absence really was asked for at an adequate version and is a denial. If
+      // upstream ever raises its true requirement above the measured constant, that constant is
+      // the only thing standing between an entitled account and a five-minute cached denial.
       .some(([modelId, minimum]) => (
         !models.has(modelId) && compareClientVersions(clientVersion, minimum) < 0
       ));

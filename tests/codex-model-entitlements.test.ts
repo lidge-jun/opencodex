@@ -1102,8 +1102,11 @@ describe("entitlement client version (#2886)", () => {
         const version = url.searchParams.get("client_version") ?? "";
         seen.push(version);
         // Mirrors the measured upstream behaviour: the gated rows appear only at >= 0.144.0.
-        const minor = Number(version.split(".")[1] ?? "0");
-        return minor >= 144 ? roster("gpt-5.5", SOL, TERRA, LUNA) : roster("gpt-5.5");
+        // Gated against the floor itself rather than a hardcoded minor, so raising the floor
+        // moves the fixture with it instead of silently mis-gating.
+        return compareClientVersionsForTests(version, GATED_MODEL_CLIENT_VERSION_FLOOR) >= 0
+          ? roster("gpt-5.5", SOL, TERRA, LUNA)
+          : roster("gpt-5.5");
       }) as typeof fetch,
       now: 1_000,
       clientVersion: null,
