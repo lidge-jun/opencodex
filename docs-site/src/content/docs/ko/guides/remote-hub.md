@@ -86,9 +86,20 @@ ocx connect rotate --admin-token-stdin
 
 ## Docker
 
-opencodex는 공식 컨테이너 이미지를 배포하지 않습니다. 운영자가 직접 만든 이미지는 Bun 이미지를 digest로 고정하고, `/home/bun/.opencodex`를 영구 볼륨으로, `/run/secrets/ocx_api_token`을 Docker secret으로 마운트하세요. 공개 포트는 `10100`만 두고 컨테이너 안의 `127.0.0.1:10101`은 절대 publish하지 마세요. 토큰을 `ARG`, `ENV`, `COPY`, Compose YAML, 이미지 기록, 명령행에 넣지 마세요. Docker socket, 홈 디렉터리, SSH agent, 프로바이더 키도 마운트하지 마세요.
+opencodex는 공식 컨테이너 이미지를 배포하지 않지만, 저장소 루트의 `Dockerfile`과 `compose.yaml`로 digest가 고정된 소스 이미지를 직접 빌드할 수 있습니다. 최초 실행 전에 데이터 키를 stdin으로 초기화하세요. 키는 출력되지 않으며 `ocx-state` 볼륨의 owner-only `service-api-token`에 저장됩니다.
+
+```bash
+git clone https://github.com/lidge-jun/opencodex.git
+cd opencodex
+openssl rand -hex 32 | docker compose run --rm -T hub bun run docker/bootstrap-token.ts
+docker compose up -d
+```
+
+이미지는 non-root `bun` 사용자로 실행되고 루트 파일 시스템은 read-only이며 공개 포트는 `10100` 하나뿐입니다. 토큰을 `ARG`, `ENV`, `COPY`, Compose YAML, 이미지 기록, 명령행에 넣지 마세요. Docker socket, 호스트 홈, Codex 홈, SSH agent, 프로바이더 키도 마운트하지 마세요. 컨테이너 안의 `127.0.0.1:10101` 관리 포트는 같은 네트워크 네임스페이스의 TLS/tailnet 프런트엔드로만 연결하고 직접 publish하지 마세요.
 
 컨테이너 healthcheck의 `/healthz`가 통과한 뒤 `/readyz`, 인증된 `/v1/catalog`, 실제 모델 응답을 별도로 확인하세요.
+
+`docker compose down`은 `ocx-state` 볼륨을 보존합니다. `docker compose down --volumes`는 설정, OAuth 인증 정보, 사용량 기록, 데이터 키를 함께 삭제하므로 파괴적 작업으로 취급하세요.
 
 ## 롤백과 문제 해결
 
