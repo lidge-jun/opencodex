@@ -61,3 +61,13 @@ The dialog now carries a help paragraph plus a link to a new
 (`target="_blank"`, `rel="noreferrer"`, accent colour) per
 `gui/src/pages/dashboard-dialogs.tsx`. Copy landed in all nine locales;
 `gui/tests/i18n-locales.test.ts` enforces key parity.
+
+## Landed
+
+- #3483: PR [#3491](https://github.com/lidge-jun/opencodex/pull/3491), `85e42117c`.
+- #3353: PR [#3493](https://github.com/lidge-jun/opencodex/pull/3493), `8b961b198`.
+
+Both issues are closed with landing comments naming the mechanism rather than
+just the fix, because in both cases the mechanism is the non-obvious part: a
+cascade origin rule for one, and a prompt that could not have helped for the
+other.
