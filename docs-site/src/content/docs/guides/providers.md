@@ -467,7 +467,8 @@ Elsewhere it asks you to paste the key. Meta ships no native Windows CLI, and on
 CLI exists but where it stores its credential has not been verified, so OpenCodex refuses
 to guess at a credential store and points you at [dev.meta.ai](https://dev.meta.ai)
 instead, where the same key is visible. A pasted key faces the same format check and the
-same live validation against the Model API as an imported one.
+same live validation against the Model API as an imported one. See
+[Platform support](/reference/platform-support/) for the full per-platform picture.
 
 **Read this before enabling it.** Meta scopes that credential to the Muse Code CLI, so
 using it here is an *unsupported* path. Meta does not authorize subscription coverage
