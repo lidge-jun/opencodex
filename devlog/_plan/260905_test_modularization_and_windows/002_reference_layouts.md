@@ -362,7 +362,10 @@ tests/
 
 Rough first-wave buckets (enough to un-flatten the 1045): `codex` ~118, `cursor` ~63, `lab` ~52, `providers` ~120 (merge anthropic/google/openai/grok/ollama/kiro/provider/xai/alibaba/...), `responses` ~38, `cli` ~40, `claude` ~29, `oauth` ~24, `server` ~40, `native` ~20, `windows` ~15, remainder split across the smaller dirs. Exact assignment belongs in `001_test_inventory.md` / wp3; this file locks the *shape*.
 
-**Leave at `tests/` root:** only `preload.ts`. Hermes's 164 leftover root files are the warning.
+**Leave at `tests/` root:** the explicit allowlist in `layout.json` `keepAtRoot`
+(`preload.ts`, `fake-codex-server.ts`, `tsconfig.doctor-service-memory-contract.json`,
+and the two layout guards; see 030 §1). Hermes's 164 leftover root files are the
+warning: nothing else stays.
 
 ### D.3 Helper / fixture placement
 
@@ -392,6 +395,8 @@ Bun has no `#[cfg]` and no pytest markers. Invent a **grep-able, CI-selectable**
 **Helper** (`tests/helpers/platform.ts`; names must appear as whole words so a future `list_os_marked_tests` equivalent can grep):
 
 ```ts
+import { test } from "bun:test";
+
 export const windowsOnly = test.skipIf(process.platform !== "win32");
 export const posixOnly   = test.skipIf(process.platform === "win32");
 export const darwinOnly  = test.skipIf(process.platform !== "darwin");
@@ -433,7 +438,7 @@ Sharding:
 | Split algorithm | nextest `hash:N/4` on test *names* | LPT on file *durations*, 12 slices | Bun sorted round-robin on file *paths*, 4 shards (`run-bun-test-batches.sh`) | **Keep round-robin** initially — path sort still works on nested paths |
 | Archive / compile once | `nextest archive` then shard | each slice installs deps | each shard `bun install`s | unchanged |
 | Heavy isolates | nextest test-groups `max-threads=1` | stress dir excluded; `integration` marker deselected | dedicated jobs + `SERIAL_FULL_SUITE_FILES` | keep; globs not parent dirs |
-| OS lane | full suite on 5 platforms, cfg-out | tiny marked set on macOS/Windows | Windows dispatch 4 shards; macOS full unsharded | add optional `bun test tests/windows`; shard macOS the same 4-way (`bun test --shard=N/4 tests`) |
+| OS lane | full suite on 5 platforms, cfg-out | tiny marked set on macOS/Windows | Windows dispatch 4 shards; macOS full unsharded | add optional `bun test tests/windows`; shard macOS (2-way per the measurements in 003 §6; the 4-way idea here is superseded) |
 | Empty-selection guard | N/A (cfg-out) | pytest exit 5 fails the job | none | required for any OS-only job |
 | Duration feedback | none (hash) | `test_durations.json` cache | none | optional later; Hermes LPT is the upgrade if shard wall-times diverge after the move |
 
@@ -441,7 +446,7 @@ Practical CI recipe that does not require new Bun features:
 
 1. **Do not shard by directory in v1.** Directory shards unbalance (`codex` 118 vs `tray` 1) and couple CI to the taxonomy. Keep file-level `--shard` / `run-bun-test-batches.sh` so a move is a path change, not a matrix change.
 2. **Do** use directories for *human and focused CI*: a codex-only PR can run `bun test tests/codex` locally; a workflow `paths:` filter can still run the full suite (OpenCodex already has a `changes` job).
-3. **macOS shards** (plan wp4): `bun test --isolate --timeout 60000 tests --shard=${{ matrix.shard }}/4` — same flag Windows already uses. Nested dirs are invisible to `--shard` because it hashes/round-robins the discovered file list.
+3. **macOS shards** (plan wp4): `bun test --isolate --timeout 60000 tests --shard=${{ matrix.shard }}/2` — same flag Windows already uses; 2-way, not 4-way, because 003 §6 measured 4-way as only ~3 more minutes for two extra 10x-billed jobs. Nested dirs are invisible to `--shard` because it hashes/round-robins the discovered file list.
 4. **Windows host tests**: either stay inside the dispatch 4-shard full suite (skipped on Linux via `windowsOnly`) or gain a small unsliced job on `tests/windows/` modeled on Hermes `tests-os.yml`.
 5. **Batch script `is_general_test_file`**: today it accepts any `*.test.ts` under the tree and special-cases three `tests/api-storage*` / `api-usage` prefixes. After the move, keep the special-case as a glob (`**/api-usage.test.ts`) so the dedicated jobs still peel those files out of general shards.
 
@@ -449,7 +454,7 @@ Practical CI recipe that does not require new Bun features:
 
 - One PR per domain directory (`000_plan.md`), `git mv`, update path literals in the same PR.
 - First PRs: the already-nested `images/` + `videos/` are proof that Bun + the batch script tolerate nesting; next, `windows/` (15 files, platform helper lands here), then `codex/` (largest, most SERIAL/CI path risk).
-- Do not leave a Hermes-style leftover root. Hygiene test: `tests/*.test.ts` count == 0 after the last PR (only `preload.ts` at root).
+- Do not leave a Hermes-style leftover root. Hygiene test: every root `*.test.ts` after the last PR is on `keepAtRoot` (`tests/test-layout.test.ts`).
 - Do not add pytest-style `conftest.py` per directory; Bun has no collection hooks. Domain setup goes in helpers imported by the tests that need it.
 - Do not copy nextest test-groups into Bun — `SERIAL_FULL_SUITE_FILES` + dedicated CI jobs already are that mechanism.
 

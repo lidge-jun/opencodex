@@ -16,14 +16,16 @@ already bound to it; nothing else in the unit touches Windows product code.
 
 ## Objective
 
-1. `tests/` holds 1053 flat files. Reorganize toward the layouts used by
+1. `tests/` holds 1045 flat `*.test.ts` files (1061 recursively, per 001; the
+   1053 in the original brief was a stale count). Reorganize toward the layouts used by
    Codex CLI (`codex-rs/<crate>/tests/`) and Hermes (`tests/<domain>/`),
    without deleting or weakening any test, while `scripts/test.ts`,
    `scripts/ci/run-bun-test-batches.sh`, `ci.yml`, and the `test:changed`
    module-graph selection keep working.
 2. Linux stays sharded and grows where it shortens the critical path; macOS
-   gains shards. `platform-windows` stays `workflow_dispatch`-only and is not
-   edited here.
+   gains shards. `platform-windows` stays `workflow_dispatch`-only; the only
+   edit it receives is the `lane` dispatch-input condition in PR 7 (040 §4)
+   so a `macos-control` dispatch can skip it. No Windows job body changes.
 3. A GitHub issue (feature template) describes the modularization proposal so
    the work is public and trackable, and links the PRs.
 
