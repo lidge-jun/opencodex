@@ -210,7 +210,7 @@ docker compose exec hub bun -e \
   "const r=await fetch('http://127.0.0.1:10100/readyz');console.log(r.status,await r.text());if(!r.ok)process.exit(1)"
 
 docker compose exec hub bun -e \
-  "const t=(await Bun.file('/run/secrets/ocx_api_token').text()).trim();const r=await fetch('http://127.0.0.1:10100/v1/catalog',{headers:{'x-opencodex-api-key':t}});console.log(r.status);if(!r.ok)process.exit(1)"
+  "const t=(await Bun.file('/home/bun/.opencodex/service-api-token').text()).trim();const r=await fetch('http://127.0.0.1:10100/v1/catalog',{headers:{'x-opencodex-api-key':t}});console.log(r.status);if(!r.ok)process.exit(1)"
 ```
 
 Then send one real authenticated routed response with a configured model. If the secret is absent or
