@@ -424,11 +424,13 @@ export interface OcxProviderConfig {
    */
   authMode?: "key" | "forward" | "oauth" | "local";
   /**
-   * Per-provider override for generic OAuth multi-account 429 failover (#2568).
+   * Per-provider override for the generic OAuth PROACTIVE account preference (#2568, #695).
    *
-   * Rotation is presence-driven by default — 2+ logged-in accounts activate it — so this exists
-   * for the operator who accepts rotation on one provider and refuses it on another. An explicit
-   * boolean here beats the global `oauthAccountFailover` and beats presence.
+   * Reactive 429 rotation is presence-driven and cannot be refused here — 2+ logged-in accounts
+   * activate it, and a 429 with an idle second account is a defect rather than a preference.
+   * What an explicit `false` still refuses is the pre-dispatch preference that steers a HEALTHY
+   * request toward the account with more known headroom. It beats the global
+   * `oauthAccountFailover`; only `false` is meaningful, since `true` adds nothing over presence.
    */
   oauthAccountFailover?: {
     enabled?: boolean;

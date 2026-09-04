@@ -148,18 +148,21 @@ export function hasFailoverAccountQuorum(providerName: string, now = Date.now())
 }
 
 /**
- * Whether generic rotation is active for this provider.
+ * Whether REACTIVE 429 rotation is active for this provider.
  *
- * Precedence, most specific first:
+ * Presence is the only rule: two or more eligible stored accounts. The
+ * `oauthAccountFailover.enabled` booleans no longer suppress it.
  *
- *   1. `providers.<name>.oauthAccountFailover.enabled` — an operator may accept rotation on one
- *      provider and refuse it on another, because provider terms differ.
- *   2. `oauthAccountFailover.enabled` — the global switch. Anyone who already wrote `false` keeps
- *      strict single-account behaviour across this change.
- *   3. Presence: 2 or more eligible stored accounts (#2568d, owner decision).
+ * That is a deliberate narrowing of #2568d. Rotation here runs only after upstream has already
+ * refused the request, so the choice the old knob offered was between "retry on the second
+ * account you deliberately logged in" and "return a 429 while that account sits idle". The
+ * second is a defect, not a preference — and an operator who does not want rotation expresses
+ * that by not storing a second account, exactly as they do for `apiKeyPool`.
  *
- * Only an explicit boolean overrides presence. A malformed value falls through instead of
- * throwing, because a typo in a knob must not take a provider out of service.
+ * The knob is not gone. It still governs {@link isProactivePreferenceEnabled}, which decides
+ * whether a HEALTHY request may be steered to a different account before dispatch — a real
+ * behavioural choice that remains refusable — and it still carries `strategy` and
+ * `autoSwitchThreshold`.
  */
 export function isGenericOAuthFailoverEnabled(
   config: OcxConfig,
@@ -168,10 +171,23 @@ export function isGenericOAuthFailoverEnabled(
 ): boolean {
   const provider = config.providers?.[providerName];
   if (!provider || !isGenericFailoverProvider(providerName, provider)) return false;
-  const perProvider = provider.oauthAccountFailover?.enabled;
-  if (typeof perProvider === "boolean") return perProvider;
-  const global = config.oauthAccountFailover?.enabled;
-  if (typeof global === "boolean") return global;
+  return hasFailoverAccountQuorum(providerName, now);
+}
+
+/**
+ * Whether the pre-dispatch account PREFERENCE may run for this provider.
+ *
+ * Unlike reactive rotation, this moves a request that upstream has not refused, so it stays
+ * refusable: an explicit `false` — per provider first, then global — turns it off. `true` adds
+ * nothing over presence, so only `false` is honoured; that keeps the predicate identical to the
+ * old behaviour for every operator who never wrote the key, and a malformed value falls through
+ * rather than taking a provider out of service.
+ */
+function isProactivePreferenceEnabled(config: OcxConfig, providerName: string, now: number): boolean {
+  const provider = config.providers?.[providerName];
+  if (!provider || !isGenericFailoverProvider(providerName, provider)) return false;
+  if (provider.oauthAccountFailover?.enabled === false) return false;
+  if (config.oauthAccountFailover?.enabled === false) return false;
   return hasFailoverAccountQuorum(providerName, now);
 }
 
@@ -265,7 +281,9 @@ export function preferredInitialAccount(
   providerName: string,
   now = Date.now(),
 ): string | null {
-  if (!isGenericOAuthFailoverEnabled(config, providerName)) return null;
+  // The PROACTIVE predicate, not the reactive one: this steers a request upstream has not
+  // refused, so `oauthAccountFailover.enabled: false` must still be able to refuse it.
+  if (!isProactivePreferenceEnabled(config, providerName, now)) return null;
   // This runs on the initial resolution of EVERY request, and `loadAuthStore` has no
   // cache: each call chmods the config dir, chmods the secret, reads the whole file and
   // normalizes it (store.ts:136-151). So the store is consulted at most ONCE here, behind

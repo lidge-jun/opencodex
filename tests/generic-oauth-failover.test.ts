@@ -9,9 +9,11 @@ import {
   hasFailoverAccountQuorum,
   isGenericFailoverProvider,
   isGenericOAuthFailoverEnabled,
+  preferredInitialAccount,
   rotateGenericOAuthAccountOn429,
 } from "../src/oauth/generic-account-failover";
 import { getAccountSet, markAccountNeedsReauth, saveCredential } from "../src/oauth/store";
+import { clearAccountQuotaCache, setCachedProviderAccountQuotaForTests } from "../src/providers/quota";
 import { resolveCopilotApiBaseUrl } from "../src/oauth/github-copilot";
 import { resolveProviderTransport } from "../src/providers/xai-transport";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
@@ -28,6 +30,7 @@ beforeEach(() => {
 
 afterEach(() => {
   clearGenericFailoverHealth();
+  clearAccountQuotaCache("xai");
   if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = originalHome;
   removeTreeWithRetry(home);
@@ -77,9 +80,15 @@ describe("#2568 generic OAuth account failover", () => {
     expect(eligibleFailoverAccounts("xai")).toEqual([second!]);
   });
 
-  test("an explicit knob still wins over presence, in both directions", async () => {
+  test("an explicit knob no longer disables REACTIVE rotation", async () => {
+    // This assertion is deliberately the reverse of what it was under #2568d. The knob used to
+    // suppress rotation entirely; it now governs only the proactive pre-dispatch preference.
+    // The choice it offered here was between retrying on the second account the operator
+    // deliberately logged in and returning a 429 while that account sat idle -- and the second
+    // is a defect, not a preference. Refusing rotation is expressed by not storing a second
+    // account, exactly as it is for an apiKeyPool.
     const ids = await seed(2);
-    expect(rotateGenericOAuthAccountOn429(config(false), "xai", ids[0]!, null)).toBeNull();
+    expect(rotateGenericOAuthAccountOn429(config(false), "xai", ids[0]!, null)).toBe(ids[1]);
     clearGenericFailoverHealth();
     expect(rotateGenericOAuthAccountOn429(config(true), "xai", ids[0]!, null)).toBe(ids[1]);
   });
@@ -104,13 +113,27 @@ describe("#2568 generic OAuth account failover", () => {
     expect(rotateGenericOAuthAccountOn429(config(), "xai", "not-a-real-account", null)).toBe(ids[0]);
   });
 
-  test("a per-provider override beats the global switch", async () => {
-    // Provider terms differ, so an operator may accept rotation on one provider and refuse it on
-    // another. The narrower setting is the one that means something.
+  test("neither switch can turn REACTIVE rotation off, in either direction", async () => {
+    // Also reversed from #2568d. Reactive rotation is presence-only now, so a per-provider
+    // false, a global false, and any combination of the two all still rotate. What the override
+    // still buys is the PROACTIVE preference, covered by its own test below.
     const ids = await seed(2);
-    expect(isGenericOAuthFailoverEnabled(config(true, false), "xai")).toBe(false);
+    expect(isGenericOAuthFailoverEnabled(config(true, false), "xai")).toBe(true);
     expect(isGenericOAuthFailoverEnabled(config(false, true), "xai")).toBe(true);
-    expect(rotateGenericOAuthAccountOn429(config(true, false), "xai", ids[0]!, null)).toBeNull();
+    expect(isGenericOAuthFailoverEnabled(config(false, false), "xai")).toBe(true);
+    expect(rotateGenericOAuthAccountOn429(config(true, false), "xai", ids[0]!, null)).toBe(ids[1]);
+  });
+
+  test("the knob still refuses the PROACTIVE pre-dispatch preference", async () => {
+    // The half of the old contract that survives: steering a request upstream has NOT refused
+    // is a real behavioural choice, so an explicit false must still be able to decline it.
+    // Without headroom evidence the preference is a no-op anyway, so this pins the refusal
+    // rather than the ranking.
+    const ids = await seed(2);
+    setCachedProviderAccountQuotaForTests("xai", ids[0]!, { fiveHourPercent: 99 });
+    setCachedProviderAccountQuotaForTests("xai", ids[1]!, { fiveHourPercent: 1 });
+    expect(preferredInitialAccount(config(false), "xai")).toBeNull();
+    expect(preferredInitialAccount(config(true, false), "xai")).toBeNull();
   });
 
   test("a second account flagged for reauth is not a quorum", async () => {
@@ -229,9 +252,28 @@ describe("sidecar on429 wiring", () => {
     // The OAuth branch is gated on all three of: an account this request actually used, the
     // per-request bound, and the activation predicate. Dropping the bound lets a short
     // Retry-After spin; dropping the account binding lets a rotation cool an innocent account.
-    expect(body).toContain("!genericFailoverAccountId");
-    expect(body).toContain("genericFailovers >= GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST");
-    expect(body).toContain("!isGenericOAuthFailoverEnabled(config, route.providerName)");
+    // The gate is a POSITIVE else-if, not an early return: an early bare return here made the
+    // Anthropic arm below unreachable, because Anthropic never has a genericFailoverAccountId.
+    expect(body).toContain("genericFailoverAccountId");
+    expect(body).toContain("genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST");
+    expect(body).toContain("isGenericOAuthFailoverEnabled(config, route.providerName)");
+
+    // Anthropic's pool is excluded from generic failover, so it needs its own arm here or a 429
+    // inside a web-search/image turn is terminal while the same 429 on the main path rotates.
+    const anthropic = body.indexOf("rotateAnthropicAccountOn429(");
+    expect(anthropic).toBeGreaterThan(oauth);
+
+    // REACHABILITY, not mention. The first draft of this arm sat behind an unconditional early
+    // return and was dead code that a grep for "anthropic" would have happily passed. Every gate
+    // ahead of it must therefore be a positive `else if`; a plain `else` block would swallow the
+    // request and never fall through, which is precisely how the dead version was shaped.
+    // (A `return null` INSIDE an arm is fine — that is a rotation that genuinely found no
+    // candidate. What must not exist is a gate that returns before the arm is considered.)
+    const chainStart = body.indexOf("if (rotated) {");
+    expect(chainStart).toBeGreaterThan(-1);
+    expect(body.slice(chainStart, anthropic)).not.toContain("} else {");
+    // ...and the chain still ends in a terminal else, so an unrotatable 429 is not swallowed.
+    expect(body.slice(anthropic)).toContain("} else {");
 
     // The FULL snapshot, not a bare bearer, and applied through the shared helper rather than
     // inline. Inlining is what produced the original defect: three sites each swapped `apiKey`
@@ -247,7 +289,11 @@ describe("sidecar on429 wiring", () => {
     // bearer by hand would reintroduce the mixed-identity bug this helper exists to prevent.
     const snapshotUses = coreSource.match(/failoverAccountSnapshot\(/g) ?? [];
     const helperUses = coreSource.match(/applyFailoverSnapshot\(snapshot\)/g) ?? [];
-    expect(snapshotUses.length).toBe(3);
+    // Four since the continuation loop gained its own generic-OAuth arm: the streaming loop grew
+    // one with #2568 and the continuation loop did not, so an xAI/Cursor continuation 429 stayed
+    // terminal. Bumping this count is the deliberate act of admitting a fourth rotation site --
+    // which is exactly why the guard is a count and not a floor.
+    expect(snapshotUses.length).toBe(4);
     expect(helperUses.length).toBe(snapshotUses.length);
     // The bearer is written in exactly one place — inside the helper. Any other occurrence is a
     // rotation site that skipped the pairing rules.

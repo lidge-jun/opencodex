@@ -236,6 +236,36 @@ export function getEligibleAnthropicAccounts(now = Date.now()): string[] {
     .map(account => account.id);
 }
 
+/**
+ * Whether a 429 has somewhere to go: two or more accounts that could serve traffic if asked.
+ *
+ * Reactive failover is a safety net, not a routing policy. It runs only AFTER upstream refused,
+ * it cannot spread load across a healthy session, and it cannot fire at all unless the operator
+ * deliberately logged in twice. So it activates on presence, exactly like an `apiKeyPool` of two
+ * keys does in `providers/key-failover.ts` -- and unlike the PROACTIVE pool (affinity,
+ * quota-ranked new-session picks, `autoSwitchThreshold`, `strategy`), which changes which
+ * account serves a healthy request and therefore stays behind `anthropicAccountPool.enabled`.
+ *
+ * Cooldowns are deliberately ignored here. They are transient and per-request, while this
+ * answers the durable question "did the operator store a second account". Counting a cooled
+ * account as absent would switch the feature off for the length of the cooldown -- precisely
+ * when it is needed.
+ *
+ * `isPoolCredentialUsable` is still applied, so the fail-closed background `local-cli` rule
+ * holds: an expired background slot is not a quorum and cannot be adopted.
+ */
+export function hasAnthropicFailoverQuorum(now = Date.now()): boolean {
+  const set = getAccountSet(PROVIDER);
+  if (!set) return false;
+  let usable = 0;
+  for (const account of set.accounts) {
+    if (account.needsReauth === true) continue;
+    if (!isPoolCredentialUsable(account.id, now)) continue;
+    if (++usable >= 2) return true;
+  }
+  return false;
+}
+
 /** Earliest remaining cooldown among cooled Anthropic accounts, for client Retry-After. */
 export function getAnthropicPoolRetryAfterSeconds(now = Date.now()): number | null {
   const set = getAccountSet(PROVIDER);
@@ -573,7 +603,13 @@ export function rotateAnthropicAccountOn429(
   sessionKey?: string | null,
   now = Date.now(),
 ): string | null {
-  if (!isAnthropicAccountPoolEnabled(config)) return null;
+  // Reactive 429 failover is NOT gated on the pool flag. That flag buys PROACTIVE routing --
+  // session affinity, quota-ranked new-session selection, autoSwitchThreshold, strategy -- all
+  // of which move a HEALTHY request and stay opt-in. Rotating away from an account upstream has
+  // just rate-limited is a different thing: it only ever runs after a refusal, and stranding a
+  // 429 while a second logged-in account sits idle is a defect, not a configuration choice.
+  // Presence is the activation rule, the same one an apiKeyPool of two keys already uses.
+  if (!isAnthropicAccountPoolEnabled(config) && !hasAnthropicFailoverQuorum(now)) return null;
 
   const parsedRetry = parseRetryAfterMs(retryAfterHeader, now);
   const cooldownMs = parsedRetry ?? DEFAULT_COOLDOWN_MS;

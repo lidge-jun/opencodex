@@ -2141,6 +2141,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         undefined,
         guiSessionCandidate ?? undefined,
         config.runtimeRole ?? "standalone",
+        isApiAuthRequired(config),
       );
       if (guiFile) return guiFile;
       if (url.pathname === "/" && req.method === "GET") {
