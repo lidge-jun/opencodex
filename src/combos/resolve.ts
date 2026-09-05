@@ -1,6 +1,7 @@
 import type { OcxComboTarget, OcxConfig } from "../types";
 import { getCachedProviderQuota } from "../providers/quota-routing-cache";
 import type { ProviderQuota } from "../providers/quota-types";
+import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { sleepWithAbort } from "../lib/upstream-retry";
 import {
   coolComboTarget,
@@ -60,9 +61,13 @@ export class NoAvailableComboTargetsError extends Error {
   }
 }
 
-function targetProviderIsUsable(config: OcxConfig, target: OcxComboTarget): boolean {
-  return Object.hasOwn(config.providers, target.provider)
-    && config.providers[target.provider]?.disabled !== true;
+function targetProviderIsUsable(config: OcxConfig, target: OcxComboTarget, now: number): boolean {
+  if (!Object.hasOwn(config.providers, target.provider)) return false;
+  const provider = config.providers[target.provider];
+  if (!provider || provider.disabled === true) return false;
+  // Native account selection owns model-scoped quota; a provider summary cannot veto it.
+  return isCanonicalOpenAiForwardProvider(provider)
+    || !cachedProviderQuotaIsExhausted(getCachedProviderQuota(target.provider, now), now);
 }
 
 function quotaWindowExhausted(percent: number | undefined, resetAt: number | undefined, now: number): boolean {
@@ -159,8 +164,7 @@ export function pickComboTarget(
   const excluded = new Set(options.exclude ?? []);
   const now = options.now ?? Date.now();
   const eligible = (target: Required<OcxComboTarget>): boolean =>
-    targetProviderIsUsable(config, target)
-    && !cachedProviderQuotaIsExhausted(getCachedProviderQuota(target.provider, now), now)
+    targetProviderIsUsable(config, target, now)
     && !isComboTargetInCooldown(comboId, target, now)
     && !excluded.has(targetKey(target))
     && (options.eligible?.(target) ?? true);
@@ -338,8 +342,7 @@ export async function pickComboTargetWithWait(
   const combo = getCombo(config, comboId);
   if (!combo) throw new UnknownComboError(comboId);
   const waitingTargets = combo.targets.filter(target =>
-    targetProviderIsUsable(config, target)
-    && !cachedProviderQuotaIsExhausted(getCachedProviderQuota(target.provider, now), now)
+    targetProviderIsUsable(config, target, now)
     && !excluded.has(targetKey(target))
     && isComboTargetInCooldown(comboId, target, now)
     && (customEligible?.(target) ?? true),
