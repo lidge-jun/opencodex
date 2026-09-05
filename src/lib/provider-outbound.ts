@@ -45,7 +45,7 @@ function configuredProxyFor(): boolean {
  * Registry-owned fake-IP transparency exception (Clash/Surge/Mihomo TUN mode).
  *
  * Under TUN mode the packet path intercepts the fake-IP destination itself, so a
- * canonical registry destination whose local DNS answer is ONLY Clash fake-IP
+ * canonical registry destination whose local DNS answers include Clash fake-IP
  * space (198.18.0.0/15) is reachable by pin-connecting through the TUN — no
  * outbound HTTP(S) proxy env is required. The exception is deliberately narrow:
  *
@@ -59,11 +59,10 @@ function configuredProxyFor(): boolean {
  *   its credential to the registry URL anyway, so the proof must be on the URL
  *   actually fetched. The check is injected so the transport core stays
  *   decoupled from the registry module;
- * - pure-answer-only: `resolvePublicAddresses` admits the exception only when
- *   EVERY answer is benchmark space; any loopback/RFC1918/link-local/metadata
- *   companion (or a public+benchmark mix resolving through a rebind) still
- *   rejects, and `privateNetwork` stays false so proxy/NO_PROXY semantics and
- *   the private-network gate are unchanged for every other destination.
+ * - per-answer validation: benchmark and public answers may coexist. The exception
+ *   does not admit loopback/RFC1918/link-local/metadata companions; those still
+ *   follow the resolver's private-network policy. Benchmark admission leaves
+ *   `privateNetwork` false; proxy/NO_PROXY semantics are unchanged.
  *
  * Image/Lab fetch never passes the underlying flag and is unaffected.
  */
