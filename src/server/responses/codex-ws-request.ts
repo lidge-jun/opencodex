@@ -32,6 +32,13 @@ function applyLiteMetadata(body: Record<string, unknown>, headers: Headers): boo
     body.client_metadata = { ...(metadata as Record<string, string> | undefined),
       [CODEX_RESPONSES_LITE_METADATA_KEY]: lite };
   }
+  for (const name of ["x-codex-turn-state", "x-codex-turn-metadata"]) {
+    const value = headers.get(name);
+    const current = body.client_metadata as Record<string, string> | undefined;
+    if (value !== null && !Object.hasOwn(current ?? {}, name)) {
+      body.client_metadata = { ...current, [name]: value };
+    }
+  }
   return true;
 }
 

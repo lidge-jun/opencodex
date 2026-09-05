@@ -1,5 +1,8 @@
 # 450 — S14 L1 — CLI status probe extraction
 
+> Historical record imported from `9c0952e482b1586c0dc62d5c536698fe5578cf28`. Delivered history; later final delivery and successful post-merge follow-up below govern.
+> Operational instructions and verification recipes below are superseded by800_closeout.md,801_closeout_regression_matrix.md,810_first_rebase_regression.md and820_second_regression_delivery.md. Peer coordination is closed. Historical checks certify only their recorded heads; this document authorizes no new debt implementation or execution.
+
 ## Loop spec
 
 - Archetype: pure-move, C3 CLI/module refactor; main owns the goal and persisted PABCD.
@@ -423,3 +426,43 @@ The status source/test blobs and reviewed source boundaries remain unchanged.
 Re-review the repaired documents and verify the new resulting HEAD. The
 preceding8bc CI belongs to that prior HEAD, even if it passes; it cannot be
 presented as the new commit's exact-head proof.
+
+## Verified delivery record
+
+Final layer HEAD: df92323d3406535c7eacd0bfa2d5bae6adb610e1. Final hosted
+CI33963307005 passed18jobs with two configured dispatch-only skips. Fresh
+isolated remote verification passed build preparation, typecheck,50focused
+tests, privacy, and the full suite:18842pass/16skip/0fail. This includes the
+main18681pass batch and six disjoint serial lanes totaling161pass. Both
+named refusal/snapshot negative controls failed with exit1, then restored
+to27pass/0fail each; final remote HEAD remained clean. The bound receipt and
+full/mutation logs are retained in the session evidence directory.
+
+Independent C review validated source identity, all15owners/11exports,
+51bindings,366/346module closures, test activation and execution accounting.
+The three retained shared-document findings were repaired and resolved.
+An older duplicate label cancellation had a newer same-head successful
+replacement; no cancelled test was counted as passing.
+
+PR #3633 was admin-merged with expected-head matching as
+09335d7d451335a74ad1c02e88ee37ef89f5a007. Its actual tree
+7ffe001817a487a47f5836eedfe1645574111393 equals the tested PR merge tree.
+Freshly fetched dev contains both the layer and its merge; no open direct
+child PR required preservation. The approval bypass is recorded in PR
+comment5551535773; optional CodeRabbit was pending at that snapshot, not
+counted as PASS. Independent review and executable gates had passed.
+
+Delivery is verified, while post-merge dev CI33964069626 is monitored
+separately and is not yet claimed successful in this record. Any failure
+remains work under the active goal; the next unit must check its base before
+implementation. No local suite, release or live-service change occurred.
+
+Residual: status.ts is384lines and the new leaf168, but collectStatus at
+status.ts:170 remains an unchanged215-line function. This is file-boundary
+completion, not elimination of that function debt or completion of all68
+rows. Changed public bindings, a new return cycle, or a negative control
+that does not fail would invalidate this direction; none was observed.
+
+Post-merge follow-up: CI33964069626 completed SUCCESS on
+09335d7d451335a74ad1c02e88ee37ef89f5a007. The separately monitored base check
+is now closed; no additional source change or rerun was needed.

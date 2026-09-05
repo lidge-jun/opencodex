@@ -565,3 +565,18 @@ describe("bounded parallel first pass (WP170)", () => {
     expect(dropped.sort()).toEqual([1, 2]);
   });
 });
+
+test("image codec seam preserves hook identity and owns normalization state", async () => {
+  const {
+    resetNormalizeStateForTests: resetCodecState,
+    getNormalizeStatsForTests: getCodecStats,
+  } = await import("../../../src/adapters/anthropic-image-codec");
+  const { readFileSync } = await import("node:fs");
+  const { repoPath } = await import("../../helpers/repo-root");
+
+  expect(resetNormalizeStateForTests).toBe(resetCodecState);
+  expect(getNormalizeStatsForTests).toBe(getCodecStats);
+  const source = readFileSync(repoPath("src/adapters/anthropic-image-normalize.ts"), "utf8");
+  expect(source).not.toMatch(/^(?:const|let|var)\b[^\n]*\bnew Map</m);
+  expect(source).not.toMatch(/^let encodeCalls\b/m);
+});

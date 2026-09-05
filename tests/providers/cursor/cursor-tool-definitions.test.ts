@@ -580,3 +580,17 @@ describe("Cursor code mode tool guidance", () => {
     expect(note).not.toContain("V8 isolate");
   });
 });
+
+test("tool-definitions preserves leaf identities and naming stays the dependency root", async () => {
+  const { cursorToolWireName: leafWireName } = await import("../../../src/adapters/cursor/tool-naming");
+  const { cursorToolInputSchema: leafInputSchema } = await import("../../../src/adapters/cursor/tool-schemas");
+  const { buildCursorToolGuidanceSystemNote: leafGuidance } = await import("../../../src/adapters/cursor/tool-guidance");
+  const { readFileSync } = await import("node:fs");
+  const { repoPath } = await import("../../helpers/repo-root");
+
+  expect(cursorToolWireName).toBe(leafWireName);
+  expect(cursorToolInputSchema).toBe(leafInputSchema);
+  expect(buildCursorToolGuidanceSystemNote).toBe(leafGuidance);
+  // Quote-agnostic: the naming leaf is the DAG root and must not import any sibling tool-* leaf.
+  expect(readFileSync(repoPath("src/adapters/cursor/tool-naming.ts"), "utf8")).not.toMatch(/from\s+["']\.\/tool-/);
+});

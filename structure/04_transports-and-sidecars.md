@@ -428,6 +428,22 @@ so HTTP fallback cannot duplicate that inference. A standalone no-response
 exchange has a 30-second prelude deadline in addition to the upgrade deadline.
 These are transport-fidelity guarantees, not a provider-billing guarantee.
 
+Eligible complete-input creates can retain a canonical upstream socket within
+one selected account, credential, thread and turn. Model/tier and immutable
+handshake headers must also match. Turn-state and turn-metadata headers are
+projected into their same-name per-frame metadata slots; explicit body values win.
+The pool retains at most 32 sockets, expires idle sockets after 30 seconds, and
+retires a socket after five minutes or 32 successful exchanges (after active work
+finishes). Cancellation, errors, idle unsolicited frames and shutdown dispose it.
+A busy key uses a separate one-shot connection rather than interleaving requests.
+
+This is connection reuse, not native incremental-input synthesis: complete HTTP
+inputs are never trimmed and no previous response id is invented. Explicit
+continuation IDs, named lanes, warmup and background requests remain outside this
+pool. A fresh credential-dispatch guard runs before every warm send. Per-exchange
+listeners, response/item correlation and metadata ownership detach before release.
+No pool timer or shutdown registration exists before eligible traffic activates it.
+
 Translated response request-log tracking and the heartbeat relay also reuse
 `createSseInspector`. This keeps every client-facing SSE observation path on
 the same byte-bounded, discard-and-resynchronize frame policy and ensures the

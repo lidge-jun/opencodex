@@ -1,12 +1,19 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import * as childProcess from "node:child_process";
 import * as fs from "node:fs";
+import { repoPath } from "../helpers/repo-root";
 import type { OcxConfig } from "../../src/types";
 import {
   cleanStaleSystemEnv,
+  getShellEnvFilePath,
   injectSystemEnv,
+  installShellHook,
   revertSystemEnv,
 } from "../../src/server/system-env";
+import {
+  getShellEnvFilePath as shellEnvFilePath,
+  installShellHook as shellInstallHook,
+} from "../../src/server/system-env-shell";
 
 const originalFetch = globalThis.fetch;
 const originalPlatform = process.platform;
@@ -473,4 +480,13 @@ describe("systemEnv lever keys (devlog 136 B6)", () => {
     const shellWrite = writes.find(w => w.path.includes("claude-env.sh"));
     expect(shellWrite!.data).toContain('[ -z "${ANTHROPIC_DEFAULT_OPUS_MODEL+x}" ] && export ANTHROPIC_DEFAULT_OPUS_MODEL=');
   });
+});
+
+test("system-env preserves the shell seam without a back-import", () => {
+  readSpy.mockRestore();
+  expect(installShellHook).toBe(shellInstallHook);
+  expect(getShellEnvFilePath).toBe(shellEnvFilePath);
+  const shellSource = fs.readFileSync(repoPath("src/server/system-env-shell.ts"), "utf8");
+  expect(shellSource.split("\n").some(line => /from\s+["']\.\/system-env["']/.test(line))).toBe(false);
+  expect(fs.readFileSync(repoPath("src/server/system-env.ts"), "utf8")).toContain("catalog_busy");
 });

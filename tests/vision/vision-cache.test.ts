@@ -391,3 +391,16 @@ describe("vision description cache and per-turn cap", () => {
     expect(visionDescriptionRetainedStoreSnapshot().bytes).toBe(before.bytes - released);
   });
 });
+
+test("vision planning and image-rewrite seams preserve boundary identity and dependency direction", async () => {
+  const boundary = await import("../../src/vision");
+  const planning = await import("../../src/vision/plan");
+  const rewrite = await import("../../src/vision/image-rewrite");
+  const { readFileSync } = await import("node:fs");
+  const { repoPath } = await import("../helpers/repo-root");
+
+  expect(boundary.resolveMaxDescriptionsPerTurn).toBe(planning.resolveMaxDescriptionsPerTurn);
+  expect(boundary.stripImagesInPlace).toBe(rewrite.stripImagesInPlace);
+  expect(readFileSync(repoPath("src/vision/image-rewrite.ts"), "utf8")).not.toMatch(/from\s+["']\.\/(plan|index)["']/);
+  expect(readFileSync(repoPath("src/vision/plan.ts"), "utf8")).not.toMatch(/from\s+["']\.\/index["']/);
+});

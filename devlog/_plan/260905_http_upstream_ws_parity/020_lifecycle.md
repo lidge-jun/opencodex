@@ -2,11 +2,22 @@
 
 Depends on: protocol cycle and its verified request/metadata owner. P must re-read this document and current source after that PR lands.
 
+## Landed-source refresh and loop specification
+
+Protocol PR3643 is landed; this phase starts from published `bf58ef1824e7b827b2a6bc1a5effb5d36ce80180`. Class C4, spec-satisfaction loop. Goal: eligible full HTTP requests reuse a canonical upstream socket without mixing exchanges. No-code/configuration cannot provide reuse because the existing transport unconditionally closes every terminal; unrelated provider pools speak different protocols. Reuse the existing exchange implementation, not a second relay. Keep frontend transport, native identity, full histories, admission/pacing, and installation unchanged.
+
+Resource scope: main implementation/audits under the user's no-other-task-communication instruction; no model override, new dependency, provider call or local full suite. Use disposable remote focused tests, typecheck and real loopback HTTP/WS QA plus full current-head CI. Initial wall-clock audit horizon is six hours from the explicit follow-up request. Evidence lives in this unit and the bound goalplan. A main audit is labelled as such; automatic PR review is a separate source. Prior immediate-admin permission closed PR3643 without waiting; it is not a green CI result for this new change.
+
+Source refresh adds a load-bearing requirement: `beforeDispatch` now guards credentials both before dialing and immediately before each frame. Reuse must call the fresh request's guard, including on a warm socket, and a refusal cannot enter HTTP fallback. Existing exports and Response markers remain compatible. The verified protocol command selects WS, account-attribution, metadata-integrity, reframing, cancellation and core/Lab tests; new lifecycle coverage gets an explicitly registered test file. Positive/negative activation evidence below, not a count alone, closes this phase.
+
 ## File-change map
 
 | Operation | Path | Exact change |
 | --- | --- | --- |
 | NEW | `src/server/responses/codex-ws-session.ts` | Own one WS connection, exclusive in-flight exchange, per-exchange listeners, bounded queue, and terminal/cancel cleanup. Extract the existing one-shot state machine rather than duplicating it. |
+| NEW | `src/server/responses/codex-ws-exchange.ts` | Extract the existing single-request relay/metadata/fallback state machine; both retained and one-shot sessions call this exact owner. |
+| NEW | `src/server/responses/codex-ws-wire.ts` | Own unchanged frame limits, event normalization and Response markers; facade re-exports preserve existing callers without a circular import. |
+| NEW | `src/server/responses/codex-ws-correlation.ts` | Per-exchange response/item correlation for retained sessions; a first incompatible exchange remains one-shot, reused incompatible traffic fails closed. |
 | NEW | `src/server/responses/codex-ws-pool.ts` | Own bounded idle sessions, canonical eligibility/keying, idle/max-age expiry, admission fallback and shutdown registration. No configuration/auth-store imports. |
 | MODIFY | `src/server/responses/codex-ws-request.ts` | Project genuine turn-state/turn-metadata headers into absent per-frame metadata slots before final serialization and byte-cap checks; identity consumes that exact prepared frame. |
 | MODIFY | `src/server/responses/ws-upstream.ts` | Keep the existing public entrypoint as compatibility facade; acquire an eligible idle canonical session or use the existing one-shot behavior, then send the prepared full frame. |
@@ -36,6 +47,30 @@ Keep the actual declaration shaped to existing Bun/Web types; no dependency or f
 
 ## Identity and eligibility contract
 
+### Source comparison amendment (2026-09-05)
+
+Reference checkout: `openai/codex` at `d2d5b70241fb448044c1c088a977cc720d70443a`.
+`core/src/client.rs:1358` checks unchanged request properties and an exact input
+prefix before deriving an incremental payload; `:1893` pairs that payload with
+the actual previous response id. `codex-api/src/endpoint/responses_websocket.rs:299`
+holds an exclusive stream lock and `:826` finishes the serial read on completion.
+This patch implements socket reuse, not that input-delta algorithm.
+
+The [official WebSocket guide](https://developers.openai.com/api/docs/guides/websocket-mode)
+describes connection-local continuation caches, optional named lanes, and full-input
+recovery after cache loss. It documents the public API, not a guarantee for the
+ChatGPT backend's private beta protocol. Our conservative subset is serial,
+default-lane, complete-input creates. Non-null `previous_response_id`, explicit
+`stream_id`, `generate`, or active background mode do not enter this pool. Their
+existing one-shot behavior is unchanged; this is not new continuation support.
+No steering or cross-lane fork is emitted. A named-lane frame cannot qualify a
+connection for reuse. Earlier five-minute/32-exchange retirement is a local resource
+policy, not an OpenAI limit, and never discards a continuation id invented by us.
+
+Remaining validation before readiness: real backend compatibility is not proven
+by public docs or mocks; rotating immutable handshake headers may prevent reuse.
+No billing/quota causation claim follows from this work.
+
 Reuse is canonical-URL-only and requires usable selected outbound auth/account identity plus explicit thread and turn identities. Missing either identity stays one-shot, so unrelated native turns cannot share a session. A mere model slug or account log label is not a reuse key.
 
 Compute an in-memory nonlogged digest of the selected credential/account, conversation/turn scope, actual model/tier, and immutable handshake policy. No raw credential, account id or prompt is emitted in logs, receipt data, exported diagnostics, or persisted cache. Different credentials, account, model/tier, originator/beta/attestation policy, or incompatible handshake headers must never reuse a socket.
@@ -58,10 +93,12 @@ The initial implementation sends each complete HTTP request as a complete `respo
 
 - Hard cap: 32 retained canonical sessions; at most one active exchange per retained session. On a busy key, use a separately owned one-shot connection, not an unbounded waiter queue or concurrent send on that socket. Global turn admission remains authoritative.
 - Idle TTL: 30 seconds. Maximum connection age: 5 minutes. Named constants live in the pool owner; fake-clock tests cross exact boundaries.
+- Maximum successful exchanges per retained socket: 32, bounding remembered response ids. Expired or superseded active exchanges may finish but are retired at release; age expiry does not kill an in-flight generation merely to free capacity. Correlation ids are bounded to 4096 bytes and item tracking to 10000 items; no prompt/output history is retained.
 - No timer before first activation. Expiry uses bounded owned timers with `unref` where available; every timer/listener is cleared on disposal. Register one shutdown hook on activation and detach when the pool is fully disposed.
 - Evict oldest idle entries before retaining a new one. Never evict/steal a live exchange merely to make room; use the existing one-shot bounded path.
 - Successful terminal closes the exchange stream and releases a reusable socket only after its bounded terminal frame is enqueued. Failed/incomplete/error outcomes are conservatively disposed, not reused.
 - Request abort removes that exchange's listener, errors its body exactly once, closes its socket, and releases its ownership. A completed request's later abort must not close a session leased to a successor request.
+- Per-exchange listeners and quota callbacks detach before release. Session-level listeners handle idle unsolicited data and physical closure only. Explicit pool shutdown settles active requests without HTTP fallback; unexpected pre-send upgrade failure retains the original fallback. Optional socket ref/unref hints do not replace deterministic cleanup.
 - Closing/error sockets are removed immediately. Reconnect/retry is allowed only before a frame was accepted for send; once inference may have started, do not fall back to HTTP and double-generate. Keep existing send-throw/upgrade failure semantics only when the no-send condition is proven.
 - Per-frame and per-exchange queue limits remain the existing limits. Connection reuse does not retain completed queues or prior output.
 - Shutdown closes idle and active pool-owned sockets, settles all requests, and unregisters timers. It cannot import Lab, block synchronous startup, or make unrelated providers start a timer.
@@ -97,4 +134,28 @@ Security analysis and negative-case reasoning are maintained in ignored scratch.
 
 ## Delivery
 
-Run the focused transport and integration suite, typecheck, privacy/secret checks, docs build, independent adversarial review, and the coordinator-approved full check. The PR remains pending until exact-head required checks and required review are satisfied. Land after protocol, prove ancestry, then close the unit and final goal. No production service restart or link occurs.
+Run the focused transport and integration suite, typecheck, privacy/secret checks,
+and exact-head CI. Main audits obey the user's no-other-task-communication boundary;
+do not represent them as independent security review. Publish with `--no-verify`
+as a draft PR targeting dev while verification or review remains outstanding.
+The subsequent owner instruction authorizes real selected-account verification
+and merging after the remaining checks. Preserve the earlier PR-only publication
+record as history, not a current merge prohibition. Start live checks with at most
+24 creates, 512 requested output tokens each, concurrency at most two, and a
+60-minute diagnostic horizon. Use a separate local process and read-only selected
+credentials; no refresh, persisted credentials, secret logs or live proxy changes.
+Keep required CI/review evidence truthful and prove fetched merge ancestry.
+No production service restart or link occurs.
+
+The independent A-B-A review trace was disproven in an ignored exact-head probe:
+return-null cannot fall through to entry replacement. Add permanent facade
+coverage to guard that intended retirement behavior; do not change correct pool
+ownership merely to satisfy the proposed explanation.
+
+Live backend validation also exposed pretty-printed error frames: the existing
+relay prefixed only the first physical JSON line with SSE `data:`, so ordinary
+SSE readers could not parse the error. Normalize physical CR/LF JSON formatting
+inside the existing wire owner before SSE framing, preserving the parsed fields
+and all size limits. Cover both errors and completed responses; compact native
+frames remain byte-preserved. This is an observed wire fix, not an inferred
+quota-accounting change.

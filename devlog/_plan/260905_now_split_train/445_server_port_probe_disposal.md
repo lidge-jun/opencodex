@@ -1,5 +1,10 @@
 # 445 — Runtime verification prerequisite
 
+> Preserved published history from pinned devbf58ef182. Continuation and
+> coordination below are retired;800/810/820 govern the cutoff. This record
+> authorizes no new execution and does not change the scratch-only disclosure
+> boundary. Later delivery evidence remains in450 and the private receipts.
+
 ## Scope and workflow
 
 C3 independent runtime-maintenance prerequisite for the modularization train.
@@ -36,17 +41,15 @@ Independent review, exact-head remote gates and hosted CI must pass. A prior
 head's results do not establish a later head. Detailed verification records
 are kept with private receipt evidence; no completion is inferred from a plan.
 
-## Continuation and coordination
+## Historical continuation and coordination — do not execute
 
 This work does not close a modularization ledger row. D resumes suspended
 WP450 for its own P/A, restack and fresh verification; do not count it done.
 PR #3633 remains independent until that controlled restack is performed.
 
-The user requires conversational one-at-a-time non-Windows CI coordination.
-Windows-owner work remains excluded. Changes that start CI, including pushes,
-retargeting and landing, require the scheduled slot. Code/static review may
-continue while waiting. Scope authority is already granted; a queue wait is
-not a request for more user permission.
+The user then required conversational one-at-a-time non-Windows CI scheduling,
+excluding Windows-owner work. That policy is now retired. No scheduled slot,
+peer communication or resumed WP445/WP450 work is authorized by this history.
 
 ## Review disposition
 

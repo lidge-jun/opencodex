@@ -493,3 +493,14 @@ describe("Codex Log Guard inspection", () => {
     expect(after.schema.state).not.toBe("compatible");
   });
 });
+
+test("inspect-schema preserves the public predicate identity without a back-edge", async () => {
+  const { hasCurrentLogsSchema } = await import("../../src/codex/log-guard/inspect");
+  const { hasCurrentLogsSchema: schemaPredicate } = await import("../../src/codex/log-guard/inspect-schema");
+  const { readFileSync } = await import("node:fs");
+  const { repoPath } = await import("../helpers/repo-root");
+
+  expect(hasCurrentLogsSchema).toBe(schemaPredicate);
+  const source = readFileSync(repoPath("src/codex/log-guard/inspect-schema.ts"), "utf8");
+  expect(source.split("\n").some(line => /from\s+["']\.\/inspect["']/.test(line))).toBe(false);
+});

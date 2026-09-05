@@ -1,4 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { lookupLocalJsonPointer } from "../../../src/adapters/xai-tool-schema";
+import {
+  lookupLocalJsonPointer as lookupLocalJsonPointerFromAnalysis,
+  xaiSchemasArePairwiseDisjoint,
+} from "../../../src/adapters/xai-schema-analysis";
+import { repoPath } from "../../helpers/repo-root";
 import {
   createOpenAIChatAdapter as createOpenAIChatAdapterProduction,
 } from "../../../src/adapters/openai-chat";
@@ -399,4 +406,11 @@ describe("xAI Grok CLI tool schema normalization", () => {
 
     expect(body.tools).toBeUndefined();
   });
+});
+
+test("schema-analysis leaf preserves pointer identity, disjointness, and import isolation", () => {
+  expect(lookupLocalJsonPointer).toBe(lookupLocalJsonPointerFromAnalysis);
+  expect(xaiSchemasArePairwiseDisjoint([{ type: "string" }, { const: "view" }])).toBe(false);
+  expect(xaiSchemasArePairwiseDisjoint([{ type: "string" }, { type: "number" }])).toBe(true);
+  expect(readFileSync(repoPath("src", "adapters", "xai-schema-analysis.ts"), "utf8")).not.toMatch(/^import\s/m);
 });

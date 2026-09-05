@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { buildResponseJSON } from "../../src/bridge";
 import { parseRequest } from "../../src/responses/parser";
+import { buildTools } from "../../src/responses/parser-tools";
+import { parseTextFormat } from "../../src/responses/parser-text-format";
 import { buildToolBridgeMaps } from "../../src/server/responses";
+import { repoPath } from "../helpers/repo-root";
 
 describe("Responses parser", () => {
   test("normalizes function tool schemas to an object root without corrupting valid schemas (#745)", () => {
@@ -930,4 +934,13 @@ describe("unpaired tool result boundary (#3259)", () => {
       type: "brand_new_item_2027", foo: 1,
     }))).not.toThrow();
   });
+});
+
+test("parser leaf seams preserve tool and format contracts without importing the request parser", () => {
+  const tools = buildTools([{ type: "function", name: "missing_parameters" }]);
+  expect(tools?.[0]?.name).toBe("missing_parameters");
+  expect(parseTextFormat(undefined)).toBeUndefined();
+  for (const leaf of ["parser-content.ts", "parser-tools.ts", "parser-text-format.ts"]) {
+    expect(readFileSync(repoPath("src", "responses", leaf), "utf8")).not.toMatch(/from\s+["\x27]\.\/parser["\x27]/);
+  }
 });

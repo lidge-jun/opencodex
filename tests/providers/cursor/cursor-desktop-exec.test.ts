@@ -7,8 +7,14 @@ import {
   RecordScreenArgsSchema,
 } from "../../../src/adapters/cursor/gen/agent_pb";
 import { handleCursorNativeExec } from "../../../src/adapters/cursor/native-exec";
-import { desktopDepsFromConfig } from "../../../src/adapters/cursor/native-exec-desktop";
+import {
+  desktopDepsFromConfig,
+  type DesktopExecutorConfig as DesktopExecutorConfigViaImplementation,
+} from "../../../src/adapters/cursor/native-exec-desktop";
+import type { DesktopExecutorConfig } from "../../../src/adapters/cursor/desktop-executor-contract";
 import { shellInvocation } from "../../../src/lib/win-exec";
+import { readFileSync } from "node:fs";
+import { repoPath } from "../../helpers/repo-root";
 
 function execMessage(message: Parameters<typeof create<typeof ExecServerMessageSchema>>[1]["message"]) {
   return create(ExecServerMessageSchema, { id: 3, execId: "exec-test", message });
@@ -27,6 +33,22 @@ function echoJson(json: string, platform: NodeJS.Platform = process.platform): s
 }
 
 describe("Cursor desktop executor hooks", () => {
+  test("DesktopExecutorConfig is one contract reachable from both paths, and provider types no longer import the implementation", () => {
+    // Type-level parity: the historical export and the contract leaf must be the same shape.
+    const viaContract: DesktopExecutorConfig = { computerUseCommand: "x", timeoutMs: 1 };
+    const viaImplementation: DesktopExecutorConfigViaImplementation = viaContract;
+    expect(desktopDepsFromConfig(viaImplementation)).toHaveProperty("computerUse");
+
+    // Graph guard: the contract is dependency-free and src/types/provider.ts points at it,
+    // not at native-exec-desktop.ts (that edge closed a type cycle through tool-definitions).
+    const contract = readFileSync(repoPath("src", "adapters", "cursor", "desktop-executor-contract.ts"), "utf8");
+    expect(contract).not.toMatch(/^\s*import\s/m);
+    expect(contract).toMatch(/^export interface DesktopExecutorConfig \{/m);
+    const provider = readFileSync(repoPath("src", "types", "provider.ts"), "utf8");
+    expect(provider).toContain('import("../adapters/cursor/desktop-executor-contract").DesktopExecutorConfig');
+    expect(provider).not.toContain("native-exec-desktop");
+  });
+
   test("desktopDepsFromConfig returns empty deps when nothing configured", () => {
     expect(desktopDepsFromConfig(undefined)).toEqual({});
     expect(desktopDepsFromConfig({})).toEqual({});

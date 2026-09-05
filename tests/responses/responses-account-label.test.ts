@@ -143,6 +143,9 @@ describe("Responses account usage attribution", () => {
           addEventListener(type: string, listener: (event: unknown) => void) {
             this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
           }
+          removeEventListener(type: string, listener: (event: unknown) => void) {
+            this.listeners.set(type, (this.listeners.get(type) ?? []).filter(value => value !== listener));
+          }
           emit(type: string, event: unknown) {
             for (const listener of this.listeners.get(type) ?? []) listener(event);
           }

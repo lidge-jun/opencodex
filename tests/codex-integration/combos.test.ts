@@ -64,6 +64,9 @@ import {
 } from "../../src/providers/quota-routing-cache";
 import { catalogConvergenceFactory } from "../helpers/catalog-convergence";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import * as publicCombos from "../../src/combos";
+import * as comboIdentifiers from "../../src/combos/identifiers";
+import { repoPath } from "../helpers/repo-root";
 
 const VALID_COMBO = { targets: [{ provider: "a", model: "m1" }] };
 
@@ -1525,4 +1528,26 @@ describe("combo generation reconciliation", () => {
     noteComboSuccess("free", originalCombo, removedPick.target, 0);
     expect(pickComboTarget(original, "free")?.target.provider).toBe("b");
   });
+});
+
+test("combo identifiers leaf preserves public export identity without facade imports", () => {
+  const names = [
+    "COMBO_NAMESPACE",
+    "preservesPhysicalComboProvider",
+    "isNativeAliasCombo",
+    "targetKey",
+    "parseComboModelId",
+    "comboModelId",
+    "comboPublicModelId",
+    "comboDisabledModelId",
+    "comboDisabledModelSelectors",
+    "resolveComboId",
+    "isValidComboId",
+  ] as const;
+  for (const name of names) {
+    expect(publicCombos[name]).toBe(comboIdentifiers[name]);
+  }
+  const source = readFileSync(repoPath("src", "combos", "identifiers.ts"), "utf8");
+  expect(source.split(/\r?\n/).some(line => /from\s+["']\.\/(types|index)["']/.test(line)))
+    .toBe(false);
 });

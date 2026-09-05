@@ -188,6 +188,10 @@ class FakeWebSocket {
     for (const listener of this.listeners.get(type) ?? []) listener(event);
   }
 
+  removeEventListener(type: string, listener: Listener) {
+    this.listeners.set(type, (this.listeners.get(type) ?? []).filter(value => value !== listener));
+  }
+
   send(data: string) {
     this.sent.push(data);
   }
@@ -579,6 +583,24 @@ describe("codexWsUpstreamFetch", () => {
     expect(text).toContain("event: error");
     expect(text).toContain("upstream refused the turn");
     expect(FakeWebSocket.instances[0].closed).toBe(true);
+  });
+
+  test.each(["error", "response.completed"])("multiline upstream %s JSON remains one valid SSE data value", async type => {
+    const payload = type === "error"
+      ? { type, status: 400, error: { type: "invalid_request_error", message: "fixture refusal" } }
+      : { type, response: { id: "pretty-response", status: "completed", output: [] } };
+    installFake(ws => {
+      ws.emit("open", {});
+      ws.emit("message", { data: JSON.stringify(payload, null, 2) });
+    });
+    const response = await codexWsUpstreamFetch(CODEX_URL, streamingInit(), (async () => {
+      throw new Error("a sent multiline response cannot fall back");
+    }) as typeof fetch);
+    const text = await response.text();
+    const data = text.split("\n").filter(line => line.startsWith("data: "));
+    expect(data).toHaveLength(1);
+    expect(JSON.parse(data[0]!.slice(6))).toEqual(payload);
+    expect(FakeWebSocket.instances[0]!.closed).toBe(true);
   });
 
   test("normalizes the Responses WebSocket response.done terminal to SSE", async () => {

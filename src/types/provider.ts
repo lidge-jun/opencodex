@@ -725,7 +725,7 @@ export interface OcxProviderConfig {
    * headless and cannot control a screen itself; provide commands here only when running on a host
    * that can. With no executor, these tools honestly report "not supported".
    */
-  desktopExecutor?: import("../adapters/cursor/native-exec-desktop").DesktopExecutorConfig;
+  desktopExecutor?: import("../adapters/cursor/desktop-executor-contract").DesktopExecutorConfig;
   /**
    * Cursor adapter only: unsafe opt-in escape hatch for Cursor server-driven built-in local
    * read/write/delete/ls/grep/shell/fetch execution. Prefer `nativeLocalExec: "on"` for new

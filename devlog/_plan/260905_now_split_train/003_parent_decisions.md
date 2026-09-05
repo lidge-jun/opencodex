@@ -228,7 +228,8 @@ Fetch dev and prove the merge is its ancestor. Record these results per layer.
 Existing open criterion c-4 was amended to this requirement with its original
 definition preserved in the steering ledger; no criterion was marked met.
 
-The coordinator still schedules one non-Windows CI at a time. Retargeting and
-merging may start new CI, so those actions consume the assigned slot too.
-Windows-owner work remains excluded. Each peer retains its task scope; the
-admin instruction removes redundant permission questions, not failure gates.
+Historical scheduling policy, now retired: a coordinator assigned non-Windows
+CI slots while excluding Windows-owned work. The user's later instruction
+closed peer communication and slot coordination.800/810/820 now govern this
+task's independent final-head-only verification and admin delivery; no peer
+report, pause, cancellation or handoff is authorized by this old policy.

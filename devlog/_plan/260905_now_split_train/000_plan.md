@@ -1,5 +1,11 @@
 # 260905 — RESOLVABLE_NOW split train (stacked PRs)
 
+> Historical full-debt objective. The user's later cutoff is governed by800,
+> 801,810 and820: consolidate the existing14 split PRs, run two full regression
+> cycles, and deliver only the final head. All further implementation is
+> deferred; the original68-row objective is not claimed complete. Peer
+> coordination is closed. Older recipes below are not current execution authority.
+
 Date: 2026-09-05. Worktree a2c0, docs branch `codex/260905-modular-debt-ledger-docs`
 at 4cc219549 (source basis 980a9fbed; origin/dev tip at unit open 583d6a91b,
 6 commits ahead, only one of which touches a NOW file — see 001). Session

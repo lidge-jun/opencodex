@@ -8,6 +8,11 @@
  * what we emit, not what a JS parser makes of it.
  */
 import { describe, expect, test } from "bun:test";
+import { readFileSync, readdirSync } from "node:fs";
+import { repoPath } from "../helpers/repo-root";
+import * as encoding from "../../src/codex/prompt-layers/encoding";
+import * as revision from "../../src/codex/prompt-layers/revision";
+import * as tomlRead from "../../src/codex/prompt-layers/toml-read";
 import {
   LAYER_INVENTORY,
   TOGGLE_IDS,
@@ -15,6 +20,7 @@ import {
   decodeBasicString,
   encodeBasicString,
   findInvalidCharacter,
+  inspectOwnership,
   isToggleId,
   normalizeBody,
 } from "../../src/codex/prompt-layers";
@@ -205,4 +211,22 @@ describe("revision", () => {
     expect(computeRevision(null, "{}")).not.toBe(computeRevision("\u0000absent", "{}"));
     expect(computeRevision("a", null)).not.toBe(computeRevision("a", "\u0000absent"));
   });
+});
+
+test("prompt-layers leaf seams preserve facade identity without back-imports", () => {
+  expect(computeRevision).toBe(revision.computeRevision);
+  expect(encodeBasicString).toBe(encoding.encodeBasicString);
+  expect(decodeBasicString).toBe(encoding.decodeBasicString);
+  expect(inspectOwnership).toBe(tomlRead.inspectOwnership);
+
+  const body = 'line one\n"quoted" \\ path 😀';
+  expect(encoding.decodeBasicString(encoding.encodeBasicString(body))).toBe(body);
+
+  const leaves = readdirSync(repoPath("src", "codex", "prompt-layers"))
+    .filter(name => name.endsWith(".ts"));
+  expect(leaves.length).toBeGreaterThan(0);
+  for (const leaf of leaves) {
+    const source = readFileSync(repoPath("src", "codex", "prompt-layers", leaf), "utf8");
+    expect(source).not.toMatch(/from\s+["']\.\.\/prompt-layers["']/);
+  }
 });

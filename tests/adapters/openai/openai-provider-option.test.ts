@@ -1,4 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { repoPath } from "../../helpers/repo-root";
+import {
+  isCanonicalOpenAiForwardProvider as destinationIsCanonicalOpenAiForwardProvider,
+  OPENAI_CODEX_PROVIDER_ID as DESTINATION_OPENAI_CODEX_PROVIDER_ID,
+} from "../../../src/providers/openai-tiers-destination";
 import { getDefaultConfig } from "../../../src/config";
 import { deriveInitProviders, deriveProviderPresets, listRegistryEntries, providerConfigSeed } from "../../../src/providers/derive";
 import { getProviderRegistryEntry, providerCodexAccountMode } from "../../../src/providers/registry";
@@ -99,4 +105,11 @@ describe("OpenAI single-provider option foundation", () => {
     expect(providerConfigSeed(registry)).toMatchObject({ codexAccountMode: "pool" });
     expect(getDefaultConfig().providers.openai).toMatchObject({ codexAccountMode: "pool" });
   });
+});
+
+test("destination leaf preserves facade bindings without importing the facade", () => {
+  expect(destinationIsCanonicalOpenAiForwardProvider).toBe(isCanonicalOpenAiForwardProvider);
+  expect(DESTINATION_OPENAI_CODEX_PROVIDER_ID).toBe(OPENAI_CODEX_PROVIDER_ID);
+  const source = readFileSync(repoPath("src/providers/openai-tiers-destination.ts"), "utf8");
+  expect(source).not.toMatch(/(?:from\s*|import\s*(?:\(\s*)?)["']\.\/openai-tiers(?:\.ts)?["']/);
 });

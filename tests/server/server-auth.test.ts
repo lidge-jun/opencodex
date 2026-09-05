@@ -55,6 +55,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
 const originalGlobalFetch = globalThis.fetch;
+const originalGlobalWebSocket = globalThis.WebSocket;
 // A per-run directory, not a fixed path. This used to be
 // join(import.meta.dir, ".tmp-server-auth-test"), the exact same literal that
 // management-provider-validation.test.ts also declared, and both files delete and
@@ -122,10 +123,24 @@ function poolProviders(): OcxConfig["providers"] {
 }
 
 function redirectCanonicalCodexTo(baseUrl: string): void {
+  const prefix = "/backend-api/codex";
+  const currentWebSocket = globalThis.WebSocket;
+  // These fixtures serve HTTP/SSE only. Refuse the native upstream upgrade
+  // deterministically so its existing SSE fallback stays on the mocked fetch;
+  // downstream loopback WebSockets and other destinations remain real.
+  globalThis.WebSocket = new Proxy(currentWebSocket, {
+    construct(target, args, newTarget) {
+      const url = new URL(String(args[0]));
+      if (url.protocol === "wss:" && url.hostname === "chatgpt.com"
+        && (url.pathname === prefix || url.pathname.startsWith(`${prefix}/`))) {
+        throw new Error("HTTP-only Codex fixture rejects native upstream WebSocket");
+      }
+      return Reflect.construct(target, args, newTarget);
+    },
+  });
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
     const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     const url = new URL(requestUrl);
-    const prefix = "/backend-api/codex";
     if (url.hostname === "chatgpt.com" && url.pathname.startsWith(prefix)) {
       const target = new URL(`${url.pathname.slice(prefix.length)}${url.search}`, baseUrl);
       return originalGlobalFetch(target, init);
@@ -152,6 +167,7 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = originalGlobalFetch;
+  globalThis.WebSocket = originalGlobalWebSocket;
   if (previousApiToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
   else process.env.OPENCODEX_API_AUTH_TOKEN = previousApiToken;
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
@@ -536,6 +552,32 @@ describe("Responses request identity handoff", () => {
 });
 
 describe("server local API auth", () => {
+  test("canonical HTTP fixture refuses only its native upstream WebSocket", () => {
+    const delegated: unknown[][] = [];
+    globalThis.WebSocket = new Proxy(originalGlobalWebSocket, {
+      construct(_target, args) {
+        delegated.push(args);
+        return {};
+      },
+    });
+    redirectCanonicalCodexTo("http://127.0.0.1:1");
+
+    for (const path of ["/backend-api/codex", "/backend-api/codex/responses"]) {
+      expect(() => new WebSocket(`wss://chatgpt.com${path}`))
+        .toThrow("HTTP-only Codex fixture rejects native upstream WebSocket");
+    }
+    const protocols = ["fixture"];
+    const urls = [
+      "ws://127.0.0.1:1/v1/responses",
+      "ws://chatgpt.com/backend-api/codex/responses",
+      "wss://chatgpt.com/backend-api/codex-other",
+      "wss://other.example/backend-api/codex/responses",
+    ];
+    for (const url of urls) new WebSocket(url, protocols);
+    expect(delegated).toEqual(urls.map(url => [url, protocols]));
+    expect(WebSocket.OPEN).toBe(originalGlobalWebSocket.OPEN);
+  });
+
   test("responses timeout helper disables Bun request timeout when available", () => {
     const req = new Request("http://localhost/v1/responses", { method: "POST" });
     const calls: Array<[Request, number]> = [];

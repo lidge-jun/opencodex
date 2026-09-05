@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { foldForMatching } from "../../src/lib/redact-folding";
+import { repoPath } from "../helpers/repo-root";
 import {
   REDACTED_SECRET,
   redactHeaders,
@@ -537,4 +540,13 @@ describe("redactUrlForLog", () => {
   test("best-effort redacts invalid URL strings", () => {
     expect(redactUrlForLog("not a url?refreshToken=refresh-secret")).toBe("not a url");
   });
+});
+
+test("redact-folding folds colon confusables with aligned offsets and stays a zero-import leaf", () => {
+  const { folded, map } = foldForMatching("\u205A");
+  expect(folded).toBe(":");
+  expect(map).toHaveLength(2);
+  expect(map).toEqual([0, 1]);
+  const source = readFileSync(repoPath("src/lib/redact-folding.ts"), "utf8");
+  expect(source).not.toMatch(/^import /m);
 });

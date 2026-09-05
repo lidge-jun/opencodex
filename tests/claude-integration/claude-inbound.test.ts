@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { AnthropicRequestError as LeafAnthropicRequestError } from "../../src/claude/inbound-records";
+import { repoPath } from "../helpers/repo-root";
 import { AnthropicRequestError, anthropicToResponsesBody, anthropicToResponsesTranslation, effortForThinkingBudget, extractOcxEffortDirective, resolveInboundModel } from "../../src/claude/inbound";
 import { parseRequest } from "../../src/responses/parser";
 import { responsesRequestSchema } from "../../src/responses/schema";
@@ -629,4 +632,15 @@ describe("ocx-route directive (devlog 072)", () => {
     expect(extractOcxRouteDirective(null)).toBeNull();
     expect(extractOcxEffortDirective(null)).toBeNull();
   });
+});
+
+test("inbound leaves preserve the tool_choice error identity and avoid facade back-edges", () => {
+  const base = { model: "m", max_tokens: 10, messages: [{ role: "user", content: "hi" }] };
+  expect(() => anthropicToResponsesBody({ ...base, tool_choice: { type: "tool" } }))
+    .toThrow(AnthropicRequestError);
+  expect(AnthropicRequestError).toBe(LeafAnthropicRequestError);
+  for (const leaf of ["inbound-records.ts", "inbound-model-options.ts", "inbound-content-options.ts"]) {
+    expect(readFileSync(repoPath("src", "claude", leaf), "utf8"))
+      .not.toMatch(/from\s+["']\.\/inbound["']/);
+  }
 });

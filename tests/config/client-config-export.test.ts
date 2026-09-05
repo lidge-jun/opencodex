@@ -24,6 +24,13 @@ import {
 import { buildOpencodeProviderBlockFromCatalog, opencodeGlobalConfigPath } from "../../src/cli/opencode";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import * as facade from "../../src/clients/config-export";
+import { OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG as leafDefaultConfig } from "../../src/clients/config-export/constants";
+import { normalizeExportModels as leafNormalizeExportModels } from "../../src/clients/config-export/model-metadata";
+import * as omp from "../../src/clients/config-export/omp";
+import * as dsh from "../../src/clients/config-export/dsh";
+import * as mcode from "../../src/clients/config-export/mcode";
+import * as zcode from "../../src/clients/config-export/zcode";
 
 /**
  * Fixture covering the four rows that exercise every emission branch: native,
@@ -81,6 +88,51 @@ function piConfig(context: ExportContext = ctx()): PiGeneratedConfig {
 function dshConfig(context: ExportContext = ctx()): DshGeneratedConfig {
   return buildClientConfig("dsh", context) as DshGeneratedConfig;
 }
+
+describe("split config-export public facade", () => {
+  test("keeps canonical singleton and registry function identities", () => {
+    expect(facade.OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG).toBe(leafDefaultConfig);
+    expect(facade.normalizeExportModels).toBe(leafNormalizeExportModels);
+    const leaves = [
+      ["omp", omp.buildOmpClientConfig, omp.summarizeOmp, omp.buildOmpContribution],
+      ["dsh", dsh.buildDshClientConfig, dsh.summarizeDsh, dsh.buildDshContribution],
+      ["mcode", mcode.buildMcodeClientConfig, mcode.summarizeMcode, mcode.buildMcodeContribution],
+      ["zcode", zcode.buildZcodeClientConfig, zcode.summarizeZcode, zcode.buildZcodeContribution],
+    ] as const;
+    for (const [id, build, summarize, contribute] of leaves) {
+      expect(EXPORT_CLIENTS[id].build).toBe(build);
+      expect(EXPORT_CLIENTS[id].summarize).toBe(summarize);
+      expect(EXPORT_CLIENTS[id].buildContribution).toBe(contribute);
+    }
+  });
+
+  test("preserves each moved format's serialized fields, order and owned fragment", () => {
+    const context = ctx({ models: [{
+      namespaced: "test/known", provider: "test", id: "known", contextWindow: 8192,
+      inputModalities: ["text", "image"], reasoningEfforts: ["none", "high"],
+    }] });
+    const cases = [
+      ["omp", ["providers", "opencodex"], '{"providers":{"opencodex":{"baseUrl":"http://127.0.0.1:10100/v1","api":"openai-completions","apiKey":"opencodex-loopback","models":[{"id":"test/known","name":"known (test)","input":["text","image"],"contextWindow":8192,"maxTokens":8192,"reasoning":true,"thinking":{"mode":"effort","efforts":["high"]}}]}}}'],
+      ["dsh", ["llm-pi-ai", "providers", "opencodex"], '{"llm-pi-ai":{"providers":{"opencodex":{"displayName":"OpenCodex","api":"openai-responses","baseURL":"http://127.0.0.1:10100/v1","headers":{"Authorization":"Bearer ocx_data_dsh"},"models":[{"id":"test/known","name":"known (test)","input":["text","image"],"contextWindow":8192,"reasoningEfforts":{"high":"high"}}]}}}}'],
+      ["mcode", ["custom_provider", "opencodex"], '{"custom_provider":{"opencodex":{"name":"OpenCodex","kind":"custom","enabled":true,"api":"anthropic-messages","options":{"apiKey":"opencodex-loopback","baseURL":"http://127.0.0.1:10100","authMode":"api-key"},"models":{"test/known":{"limit":{"context":8192},"thinking":{"effortOptions":["high"]}}}}}}'],
+      ["zcode", ["provider", "opencodex"], '{"provider":{"opencodex":{"name":"OpenCodex","kind":"openai-compatible","enabled":true,"source":"custom","options":{"apiKey":"opencodex-loopback","baseURL":"http://127.0.0.1:10100/v1","apiKeyRequired":true},"models":{"test/known":{"name":"known (test)","modalities":{"input":["text","image"],"output":["text"]},"limit":{"context":8192}}}}}}'],
+    ] as const;
+    for (const [id, path, expectedBytes] of cases) {
+      const built = buildClientConfigText(id, context);
+      expect(JSON.stringify(built.document)).toBe(expectedBytes);
+      expect(EXPORT_CLIENTS[id].summarize(built.document)).toEqual({ modelCount: 1, modelsWithoutLimits: 0 });
+      const expectedDocument = JSON.parse(expectedBytes);
+      const expectedValue = path.reduce((value, key) => value[key], expectedDocument);
+      expect(facade.buildClientContribution(id, context)).toEqual({
+        clientId: id, fragments: [{ path, value: expectedValue }],
+      });
+      if (id === "zcode") {
+        expect(built.format).toBe("json");
+        expect(built.text).toBe(JSON.stringify(expectedDocument, null, 2) + "\n");
+      }
+    }
+  });
+});
 
 
 describe("relocated OpenCode serializer (accept criterion 1)", () => {
