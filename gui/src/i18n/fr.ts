@@ -300,7 +300,7 @@ export const fr: Record<TKey, string> = {
   "dash.codexRestartTimeout": "Le proxy n’a pas répondu à temps. Il est peut-être encore en train d’arrêter les serveurs d’application.",
   "models.staleBanner": "Codex affiche une liste de modèles plus ancienne que ce catalogue. Redémarrez Codex pour la recharger.",
   "dash.codexDesktopAuthless": "Ouvrir Codex sans se connecter",
-  "dash.codexDesktopAuthlessHint": "Par défaut pour les connexions locales autonomes. L’accès au fournisseur exige toujours des identifiants : Pool utilise les comptes enregistrés, Direct le compte appelant/principal. Aucun droit de compte supplémentaire n’est accordé. Redémarrez Codex après modification. Certaines fonctions liées au compte peuvent être indisponibles.",
+  "dash.codexDesktopAuthlessHint": "Par défaut pour les connexions locales autonomes. L’accès au fournisseur exige toujours des identifiants : le mode Groupe utilise les comptes enregistrés, tandis que le mode Direct utilise le compte appelant/principal. Aucun droit de compte supplémentaire n’est accordé. Redémarrez Codex après modification. Certaines fonctions liées au compte peuvent être indisponibles.",
   "dash.codexAutoStart": "Démarrer opencodex avec Codex",
   "dash.codexAutoStartHint": "Permet à un mécanisme de lancement installé d’exécuter ocx ensure. Ce réglage n’installe pas de protection au redémarrage ; consultez Sécurité du démarrage pour connaître l’état effectif.",
   "dash.searchModel": "Modèle auxiliaire de recherche",

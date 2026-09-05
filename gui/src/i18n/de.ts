@@ -707,7 +707,7 @@ export const de: Record<TKey, string> = {
   "logs.filter.time.all": "Alle Zeiten",
   "logs.filter.time.15m": "Letzte 15 Min.",
   "logs.filter.time.1h": "Letzte Stunde",
-  "logs.filter.time.24h": "Letzter Tag",
+  "logs.filter.time.24h": "Letzte 24 Std.",
   "logs.filter.speed.label": "Geschwindigkeit",
   "logs.filter.speed.all": "Alle Geschwindigkeiten",
   "logs.filter.speed.slow": "< 15 Tok/s",
