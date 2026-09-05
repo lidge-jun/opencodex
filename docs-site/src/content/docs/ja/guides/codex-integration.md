@@ -9,7 +9,11 @@ opencodex は、Codex が読み取る 2 つの内容 (構成 (`$CODEX_HOME/confi
 
 ## 設定の注入
 
-`ocx init`、`ocx start`、および `ocx sync` はインジェクターを呼び出します。デフォルトのループバック バインドでは、Codex の組み込み `openai` プロバイダー ID を保持し、そのプロバイダーを opencodex にポイントします。
+アドミッショントークンを必要としない単独のループバック接続先では、既定で別途ログインせずに Codex を開きます。クライアント接続やトークン認証が必要な接続先では、URL がループバックでも `requires_openai_auth = true` と `OPENCODEX_API_AUTH_TOKEN` を維持します。Dashboard → Overview で切り替えられます。OpenCodex に保存されたアカウントとプロバイダーを使用し、変更後は Codex の再起動が必要です。
+
+この設定は Codex Desktop の個別ログインのみを省略し、認証情報の作成・選択やアカウント権限の付与は行いません。Pool は設定済みの Codex アカウントを選択し、Direct は引き続き呼び出し元またはメインアカウントの認証情報を必要とします。Luna Reserve にも認証情報とプロバイダーの許可が必要です。
+
+`ocx init`、`ocx start`、および `ocx sync` はインジェクターを呼び出します。`codexDesktopAuthless: false` のループバック バインドでは、Codex の組み込み `openai` プロバイダー ID を保持し、そのプロバイダーを opencodex にポイントします。
 
 ```toml
 # root keys, before the first table
@@ -84,7 +88,7 @@ model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
 # appended at the end of the file
 # Auto-injected by opencodex
 [model_providers.opencodex]
-name = "OpenCodex Proxy"
+name = "OpenCodex"
 base_url = "http://your-host:10100/v1"
 wire_api = "responses"
 requires_openai_auth = true
@@ -117,7 +121,7 @@ Windows では、ChatGPT/Codex アプリが `%USERPROFILE%\\.codex` を読み取
 
 ## スレッドのアイデンティティと履歴
 
-デフォルトのループバック形式では、Codex のネイティブ `openai` プロバイダーでタグ付けされた新しいスレッドが維持されるため、通常の再開履歴には再マッピングが必要ありません。同期と復元は、一致するバックアップマニフェストだけを適用し、各スレッドの元のプロバイダー、ソース、イベントマーカーを正確に復元します。マニフェストのない `opencodex` 行は変更されません。従来の再ラベル付けを明示的に強制する場合にだけ `ocx recover-history --legacy-openai --yes` を使用してください。このコマンドは意図的に広範囲です。ユーザーメッセージを持ち、現在 `opencodex` とタグ付けされているすべてのスレッドを `openai` に変更し、`exec` を `cli` に正規化してイベントマーカーを設定します。正当な専用プロバイダー履歴も対象です。状態をバックアップし、この全範囲を意図する場合にのみ使用してください。非ループバック専用プロバイダー モードでは、アクティブな間は `opencodex` プロバイダーの下で履歴がミラーリングされ、終了時にバックアップされたメタデータが復元されます。履歴を変更しないように `syncResumeHistory: false` を設定します。
+`codexDesktopAuthless: false` のループバック形式では、Codex のネイティブ `openai` プロバイダーでタグ付けされた新しいスレッドが維持されるため、通常の再開履歴には再マッピングが必要ありません。同期と復元は、一致するバックアップマニフェストだけを適用し、各スレッドの元のプロバイダー、ソース、イベントマーカーを正確に復元します。マニフェストのない `opencodex` 行は変更されません。従来の再ラベル付けを明示的に強制する場合にだけ `ocx recover-history --legacy-openai --yes` を使用してください。このコマンドは意図的に広範囲です。ユーザーメッセージを持ち、現在 `opencodex` とタグ付けされているすべてのスレッドを `openai` に変更し、`exec` を `cli` に正規化してイベントマーカーを設定します。正当な専用プロバイダー履歴も対象です。状態をバックアップし、この全範囲を意図する場合にのみ使用してください。非ループバック専用プロバイダー モードでは、アクティブな間は `opencodex` プロバイダーの下で履歴がミラーリングされ、終了時にバックアップされたメタデータが復元されます。履歴を変更しないように `syncResumeHistory: false` を設定します。
 
 ## モデルカタログの同期
 

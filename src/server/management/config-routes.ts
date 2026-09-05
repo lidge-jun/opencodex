@@ -54,6 +54,7 @@ import {
   codexAccountPickerEnabled,
   initializeDefaultCodexAccountNamespaces,
 } from "../../codex/account-namespaces";
+import { codexDesktopAuthlessEnabled } from "../../codex/loopback-target";
 import { catalogRefreshIsPending } from "../../codex/catalog-refresh-status";
 import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
 import { resolveCodexHomeDir } from "../../codex/home";
@@ -328,8 +329,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       // Absent means the historical auto-open, so the GUI can render the toggle
       // without having to know that `undefined` and `true` mean the same thing.
       oauthOpenBrowser: config.oauthOpenBrowser !== false,
-      // Absent means off (today's Design B injection), so the GUI/CLI render a plain switch.
-      codexDesktopAuthless: config.codexDesktopAuthless === true,
+      // Expose the default-on preference; non-loopback admission stays independent.
+      codexDesktopAuthless: codexDesktopAuthlessEnabled(config),
       startupHealth: await readStartupHealth(config),
       codexRuntime: {
         path: displayCodexRuntimePath(resolved.runtime.command),
@@ -513,7 +514,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     };
     const pickerWasEnabled = codexAccountPickerEnabled(config);
     let pickerIsEnabled = pickerWasEnabled;
-    const authlessWasEnabled = config.codexDesktopAuthless === true;
+    const authlessWasEnabled = codexDesktopAuthlessEnabled(config);
     try {
       if (typeof body.codexAutoStart === "boolean") {
         config.codexAutoStart = body.codexAutoStart;
@@ -546,8 +547,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       else if (body.ultraFastTier === false) deleteConfigTopLevelKey(config, "ultraFastTier");
       if (body.codexMainAccountHardLock === true) config.codexMainAccountHardLock = true;
       else if (body.codexMainAccountHardLock === false) deleteConfigTopLevelKey(config, "codexMainAccountHardLock");
-      if (body.codexDesktopAuthless === true) config.codexDesktopAuthless = true;
-      else if (body.codexDesktopAuthless === false) deleteConfigTopLevelKey(config, "codexDesktopAuthless");
+      if (typeof body.codexDesktopAuthless === "boolean") config.codexDesktopAuthless = body.codexDesktopAuthless;
       if (quotaAutoRefreshChange) {
         const { id, window, enabled } = quotaAutoRefreshChange;
         const setting = { ...(config.codexQuotaAutoRefresh?.[id] ?? {}) };
@@ -599,9 +599,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       configureAppOwnedMemoryBudget(resolveAppOwnedMemoryBudgetBytes(body.appOwnedMemoryBudgetMb));
       enforceAppOwnedMemoryBudget();
     }
-    // The authless switch changes the injected config.toml shape, so converge now rather than
-    // waiting for the next start; the injector re-reads config and rewrites the form.
-    const authlessIsEnabled = config.codexDesktopAuthless === true;
+    // Refresh catalog projections after the preference changes. The dashboard follows with
+    // /api/sync to apply the routing form; CLI callers can run ocx sync or restart.
+    const authlessIsEnabled = codexDesktopAuthlessEnabled(config);
     const catalogRefresh = pickerWasEnabled !== pickerIsEnabled || authlessWasEnabled !== authlessIsEnabled
       ? await convergeCodexCatalog()
       : undefined;

@@ -295,6 +295,8 @@ export const en = {
   "dash.codexRestartMalformed": "The proxy returned an unexpected response.",
   "dash.codexRestartTimeout": "The proxy did not answer in time. It may still be stopping app-servers.",
   "models.staleBanner": "Codex is showing an older model list than this catalog. Restart Codex to reload it.",
+  "dash.codexDesktopAuthless": "Open Codex without signing in",
+  "dash.codexDesktopAuthlessHint": "Default for standalone local connections. Provider access still requires credentials: Pool uses saved accounts; Direct uses the caller/main account. This does not grant account permissions. Restart Codex after changing it. Account-gated Codex features may be unavailable.",
   "dash.codexAutoStart": "Start opencodex with Codex",
   "dash.codexAutoStartHint": "Allows an installed launcher shim to run ocx ensure. This setting does not install restart protection; check Startup safety for the effective state.",
   "dash.searchModel": "Search sidecar model",

@@ -30,19 +30,20 @@ describe("Codex config injection", () => {
     );
   });
 
-  describe("authless Codex Desktop opt-in (#1107)", () => {
-    test("default target on loopback stays Design B and byte-identical", () => {
-      const target = standaloneCodexRoutingTarget(10100, {});
+  describe("authless Codex Desktop default (#1107)", () => {
+    test("explicit opt-out on loopback stays Design B", () => {
+      const target = standaloneCodexRoutingTarget(10100, { codexDesktopAuthless: false });
       expect(target.desktopAuthless).toBeUndefined();
       expect(buildProfileFile(target, null)).toBe(buildProfileFile(10100, null));
       expect(buildProviderTableBlock(target)).toContain("requires_openai_auth = true");
     });
 
-    test("loopback opt-in emits the provider table with requires_openai_auth = false and no env_key", () => {
-      const target = standaloneCodexRoutingTarget(10100, { codexDesktopAuthless: true });
+    test("loopback default emits the provider table with requires_openai_auth = false and no env_key", () => {
+      const target = standaloneCodexRoutingTarget(10100, {});
       expect(target).toMatchObject({ requiresAdmissionToken: false, desktopAuthless: true });
       const block = buildProviderTableBlock(target);
       expect(block).toContain("[model_providers.opencodex]");
+      expect(block).toContain('name = "OpenCodex"');
       expect(block).toContain('base_url = "http://127.0.0.1:10100/v1"');
       expect(block).toContain("requires_openai_auth = false");
       expect(block).not.toContain("env_key");
@@ -84,6 +85,17 @@ describe("Codex config injection", () => {
     expect(() => buildProviderTableBlock({ ...target, baseUrl: "https://hub.example.test/not-v1" })).toThrow(
       "canonical HTTP(S) /v1 URL",
     );
+  });
+
+  test("rejects authless admission-token targets before generating either config form", () => {
+    const target = {
+      baseUrl: "http://127.0.0.1:10100/v1",
+      requiresAdmissionToken: true,
+      desktopAuthless: true,
+      tokenEnv: "OPENCODEX_API_AUTH_TOKEN" as const,
+    };
+    expect(() => buildProviderTableBlock(target)).toThrow("cannot require an admission token");
+    expect(() => buildProfileFile(target, null)).toThrow("cannot require an admission token");
   });
 
   test("omits provider-level Responses WebSocket support by default", () => {

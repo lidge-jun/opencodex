@@ -22,8 +22,9 @@ configs migrate to marker 2 and preserve `config.json.pre-openai-tiers-v2.bak` f
 
 ## Config injection
 
-`ocx init`, `ocx start`, and `ocx sync` call the injector. On the default loopback bind, it keeps
-Codex's built-in `openai` provider id and points that provider at opencodex:
+`ocx init`, `ocx start`, and `ocx sync` call the injector. For standalone loopback targets that require no admission token, it defaults to the
+[authless dedicated provider](#authless-codex-desktop). If `codexDesktopAuthless` is explicitly
+`false`, it keeps Codex's built-in `openai` provider id and points that provider at opencodex:
 
 ```toml
 # root keys, before the first table
@@ -154,7 +155,7 @@ model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
 # appended at the end of the file
 # Auto-injected by opencodex
 [model_providers.opencodex]
-name = "OpenCodex Proxy"
+name = "OpenCodex"
 base_url = "http://your-host:10100/v1"
 wire_api = "responses"
 requires_openai_auth = true
@@ -207,21 +208,30 @@ warn about this exact mismatch and print redacted target paths. If a background 
 from that Orca shell, uninstall it from the original shell first, then set `CODEX_HOME` to the app
 home, unset `ORCA_CODEX_HOME`, rerun sync/restore, and install the service again.
 
-In dedicated-provider mode, `requires_openai_auth = true` keeps Codex App/TUI account-gated surfaces
+In non-loopback dedicated-provider mode, `requires_openai_auth = true` keeps Codex App/TUI account-gated surfaces
 aligned with native Codex. opencodex also serves `/v1/responses` over WebSocket. The dedicated
 provider advertises `supports_websockets = true` only when `"websockets": true`; on loopback Codex's
 built-in provider may try WebSocket first, and a disabled proxy returns `426` so Codex falls back to
 HTTP/SSE.
 
-### Authless Codex Desktop (opt-in)
+### Authless Codex Desktop
 
-Codex Desktop shows its ChatGPT login screen whenever the active provider requires OpenAI auth. If
-your OpenCodex setup never uses ChatGPT credentials (routed providers only, or a blocked
-`chatgpt.com`), you can opt out of that gate:
+Codex Desktop starts without a separate ChatGPT login by default for standalone loopback targets
+that require no admission token. Client connections and other admission-authenticated targets
+keep `requires_openai_auth = true` and `OPENCODEX_API_AUTH_TOKEN`, even when their URL is loopback.
+OpenCodex still authenticates requests with the accounts and providers saved in OpenCodex;
+ChatGPT accounts in Pool mode remain available. Direct mode still requires caller/main credentials.
+The switch does not create or select credentials or grant account permissions. Luna Reserve still
+requires the appropriate credentials and a current upstream permission.
+
+Toggle **Open Codex without signing in** in **Dashboard → Overview**. Saving synchronizes the
+Codex configuration; restart Codex to apply the change. If synchronization is pending, the dashboard
+shows a retry hint. Existing configurations with an explicit `false` keep the login requirement;
+a missing key adopts the new enabled default on the next sync or start. The CLI remains available:
 
 ```bash
-ocx system settings --desktop-authless on    # or "codexDesktopAuthless": true in config.json
-ocx sync                                     # rewrites ~/.codex/config.toml; restart Desktop
+ocx system settings --desktop-authless off   # restore the native login requirement
+ocx sync                                    # then restart Codex Desktop
 ```
 
 With the switch on, a loopback bind injects the dedicated provider form instead of the root
@@ -231,7 +241,7 @@ With the switch on, a loopback bind injects the dedicated provider form instead 
 model_provider = "opencodex"
 
 [model_providers.opencodex]
-name = "OpenCodex Proxy"
+name = "OpenCodex"
 base_url = "http://127.0.0.1:10100/v1"
 wire_api = "responses"
 requires_openai_auth = false
@@ -239,7 +249,7 @@ requires_openai_auth = false
 
 Desktop then starts without a login and routes every turn through the proxy. The setting survives
 `ocx start`, restart, `ocx sync`, and `ocx ensure`; turning it off (`--desktop-authless off`) makes the
-next sync restore the default loopback form, and `ocx restore` strips it like any other injected
+next sync restore the native-provider loopback form, and `ocx restore` strips it like any other injected
 routing. What to expect while it is on:
 
 - ChatGPT-gated Desktop chrome (account, usage, Fast mode) stays dark: Codex derives those surfaces
@@ -257,7 +267,7 @@ without authentication.
 
 ## Thread identity and history
 
-The default loopback form keeps new threads tagged with Codex's native `openai` provider, so normal
+With `codexDesktopAuthless: false`, the loopback form keeps new threads tagged with Codex's native `openai` provider, so normal
 resume history needs no remapping. Sync and restore apply only a matching backup manifest and
 restore each thread's exact original provider, source, and event marker. A bare `opencodex` row with
 no manifest is left unchanged; use `ocx recover-history --legacy-openai --yes` only when you explicitly

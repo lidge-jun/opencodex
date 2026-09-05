@@ -18,7 +18,11 @@ korur.
 
 ## Yapılandırma enjeksiyonu
 
-`ocx init`, `ocx start` ve `ocx sync` enjektörü çağırır. Varsayılan geri döngü
+Yalnızca erişim belirteci gerektirmeyen bağımsız loopback hedefleri varsayılan olarak Codex’i ayrı oturum açmadan başlatır. İstemci bağlantıları ve belirteçle doğrulanan hedefler, URL loopback olsa bile `requires_openai_auth = true` ve `OPENCODEX_API_AUTH_TOKEN` kullanmayı sürdürür. Dashboard → Overview ayarı OpenCodex’te kayıtlı hesapları ve sağlayıcıları kullanır. Değişiklikten sonra Codex’i yeniden başlatın.
+
+Bu ayar yalnızca Codex Desktop’ın ayrı oturum açma adımını kaldırır; kimlik bilgisi oluşturmaz veya seçmez ve hesap erişimi vermez. Pool yapılandırılmış Codex hesaplarını seçer; Direct hâlâ çağıranın/ana hesabın kimlik bilgilerini gerektirir. Luna Reserve de kimlik bilgilerine ve sağlayıcının iznine bağlıdır.
+
+`ocx init`, `ocx start` ve `ocx sync` enjektörü çağırır. `codexDesktopAuthless: false` olan geri döngü
 (loopback) bağlantısında, Codex'in yerleşik `openai` sağlayıcı kimliğini korur
 ve bu sağlayıcıyı opencodex'e yönlendirir:
 
@@ -136,7 +140,7 @@ model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
 # dosyanın sonuna eklenir
 # Auto-injected by opencodex
 [model_providers.opencodex]
-name = "OpenCodex Proxy"
+name = "OpenCodex"
 base_url = "http://your-host:10100/v1"
 wire_api = "responses"
 requires_openai_auth = true
@@ -206,7 +210,7 @@ sağlayıcısı önce WebSocket'i deneyebilir ve devre dışı bırakılmış bi
 
 ## İş parçacığı kimliği ve geçmişi
 
-Varsayılan geri döngü formu yeni iş parçacıklarının Codex'in yerel `openai`
+`codexDesktopAuthless: false` olan geri döngü formu yeni iş parçacıklarının Codex'in yerel `openai`
 sağlayıcısıyla etiketlenmesini sağlar, böylece normal devam etme geçmişinin
 yeniden eşlenmesi gerekmez. Sync ve restore yalnızca eşleşen bir yedek manifestini
 uygular ve her iş parçacığının özgün provider, source ve event marker değerlerini

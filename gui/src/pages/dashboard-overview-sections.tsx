@@ -161,7 +161,7 @@ export function DashboardInjectionPanel({ d }: { apiBase: string; d: Dash }) {
 
 export function DashboardMaintenancePanel({ d }: { d: Dash }) {
   const {
-    t, runSync, syncing, updateTriggerRef, openUpdateDialog, updateLoading, updateOpen,
+    t, runSync, syncing, settingsSaving, updateTriggerRef, openUpdateDialog, updateLoading, updateOpen,
     syncResult, syncError, updateJob, reconnecting, clearSyncFeedback,
   } = d;
   const syncHoldsWarning = !!syncResult && (
@@ -209,7 +209,7 @@ export function DashboardMaintenancePanel({ d }: { d: Dash }) {
             <div className="muted text-control dash-sync-hint">{t("dash.syncModelsHint")}</div>
           </div>
           <div className="maintenance-actions">
-            <button type="button" className="btn btn-ghost btn-sm" onClick={handleRunSync} disabled={syncing}>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={handleRunSync} disabled={syncing || settingsSaving}>
               <IconRefresh className={syncing ? "spin-icon" : undefined} /> {syncing ? t("dash.syncing") : t("dash.syncRun")}
             </button>
             <button
@@ -436,7 +436,7 @@ function VisionAdvancedPopover({ t, open, triggerRef, onClose, maxValue, maxInva
 
 export function DashboardSidecarPanels({ d }: { d: Dash }) {
   const {
-    t, settings, settingsSaving, toggleCodexAutoStart,
+    t, settings, settingsSaving, syncing, toggleCodexAutoStart, toggleCodexDesktopAuthless,
     sidecar, sidecarSaving, sidecarModels, visionModels, models, saveSidecar,
     shadowCall, shadowCallSaving, shadowCallHelpTriggerRef, shadowCallHelpOpen, setShadowCallHelpOpen, saveShadowCall,
   } = d;
@@ -494,9 +494,29 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
             type="button"
             className={`switch ${settings?.codexAutoStart ?? true ? "on" : ""}`}
             onClick={toggleCodexAutoStart}
-            disabled={!settings || settingsSaving}
+            disabled={!settings || settingsSaving || syncing}
             aria-label={t("dash.codexAutoStart")}
             aria-pressed={settings?.codexAutoStart ?? true}
+          >
+            <span className="knob" />
+          </button>
+        </div>
+      </div>
+
+      <div className="panel">
+        <div className="spread">
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="font-semibold">{t("dash.codexDesktopAuthless")}</div>
+            <div className="muted setting-hint">{t("dash.codexDesktopAuthlessHint")}</div>
+            {settings?.catalogRefreshPending && <div className="muted setting-hint" role="status">{t("codexAuth.catalogRefreshPending")}</div>}
+          </div>
+          <button
+            type="button"
+            className={`switch ${settings?.codexDesktopAuthless ?? true ? "on" : ""}`}
+            onClick={toggleCodexDesktopAuthless}
+            disabled={!settings || settingsSaving || syncing}
+            aria-label={t("dash.codexDesktopAuthless")}
+            aria-pressed={settings?.codexDesktopAuthless ?? true}
           >
             <span className="knob" />
           </button>
