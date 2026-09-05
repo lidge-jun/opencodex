@@ -224,6 +224,7 @@ export const ru: Record<TKey, string> = {
   "dash.providers": "Провайдеры",
   "dash.tokens30d": "Токены (30 дн.)",
   "dash.coverage": "{pct} покрытия",
+  "dash.configDiverged": "config.json изменился на диске после загрузки прокси — автоперезагрузки нет; перезапустите для применения",
   "dash.mem.title": "Наблюдение за памятью",
   "dash.mem.hint": "Диагностика среды выполнения только для чтения. Наблюдаемая память — max(RSS, external, ArrayBuffers), чтобы trimming рабочего набора Windows не скрывал удержанную память.",
   "dash.mem.rss": "Резидентная память (RSS)",

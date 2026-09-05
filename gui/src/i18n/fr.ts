@@ -217,6 +217,7 @@ export const fr: Record<TKey, string> = {
   "dash.providers": "Fournisseurs",
   "dash.tokens30d": "Jetons (30 j)",
   "dash.coverage": "Couverture : {pct}",
+  "dash.configDiverged": "config.json a changé sur le disque après le chargement du proxy — pas de rechargement automatique ; redémarrez pour appliquer",
   "dash.mem.title": "Observabilité de la mémoire",
   "dash.mem.hint": "Diagnostics d’exécution en lecture seule. La mémoire observée correspond à max(RSS, external, ArrayBuffers), afin que la réduction de l’ensemble de travail Windows ne masque pas la rétention allouée.",
   "dash.mem.rss": "Ensemble résident (RSS)",

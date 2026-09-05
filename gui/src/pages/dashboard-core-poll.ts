@@ -76,6 +76,16 @@ export type DashboardSettingsPoll = {
   startupHealthSeed: SettingsData["startupHealth"] | null | undefined;
 };
 
+export type DashboardConfigStatusPoll = {
+  /** Null when the endpoint is unavailable (older server) or the fetch failed. */
+  configDivergence: {
+    available: boolean;
+    residentVersion: string | null;
+    diskVersion: string | null;
+    diverged: boolean;
+  } | null;
+};
+
 export type DashboardMaModePoll = {
   maMode: "v1" | "default" | "v2";
 };
@@ -245,6 +255,51 @@ export async function fetchDashboardMaMode(
   } catch (error) {
     if (isAbortError(error, signal)) throw error;
     return { maMode: "default" };
+  }
+}
+
+/**
+ * Resident-vs-disk config divergence from the running proxy. Older servers without
+ * /api/config/status report null; the dashboard must keep showing the normal state.
+ */
+export async function fetchDashboardConfigStatus(
+  apiBase: string,
+  signal: AbortSignal,
+): Promise<DashboardConfigStatusPoll> {
+  try {
+    const response = await fetch(`${apiBase}/api/config/status`, { signal, cache: "no-store" });
+    if (!response.ok) return { configDivergence: null };
+    const data = await response.json() as {
+      residentVersion?: unknown;
+      diskVersion?: unknown;
+      diverged?: unknown;
+    };
+    // A status payload must actually carry both version fields; a malformed
+    // { diverged: true } body must not be mistaken for an available status. The
+    // CLI normalizer enforces the same presence rule (cli/status.ts).
+    if (
+      !Object.prototype.hasOwnProperty.call(data, "residentVersion")
+      || !Object.prototype.hasOwnProperty.call(data, "diskVersion")
+    ) return { configDivergence: null };
+    const residentVersion = data.residentVersion as string | null | undefined;
+    const diskVersion = data.diskVersion as string | null | undefined;
+    const diverged = data.diverged;
+    if (
+      !(residentVersion === null || typeof residentVersion === "string")
+      || !(diskVersion === null || typeof diskVersion === "string")
+      || typeof diverged !== "boolean"
+    ) return { configDivergence: null };
+    return {
+      configDivergence: {
+        available: true,
+        residentVersion,
+        diskVersion,
+        diverged,
+      },
+    };
+  } catch (error) {
+    if (isAbortError(error, signal)) throw error;
+    return { configDivergence: null };
   }
 }
 

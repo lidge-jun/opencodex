@@ -224,6 +224,7 @@ export const ja: Record<TKey, string> = {
   "dash.providers": "プロバイダー",
   "dash.tokens30d": "トークン (30日)",
   "dash.coverage": "{pct} カバレッジ",
+  "dash.configDiverged": "config.json がプロキシ読み込み後に変更されました — 自動再読み込みはされません。再起動して適用",
   "dash.mem.title": "メモリ可観測性",
   "dash.mem.hint": "読み取り専用のランタイム診断。観測メモリは max(RSS, external, ArrayBuffers) で、Windows の working set trimming がコミット済み保持を隠さないようにします。",
   "dash.mem.rss": "常駐メモリ (RSS)",

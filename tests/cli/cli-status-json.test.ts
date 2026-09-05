@@ -6,7 +6,15 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isConnectionRefused, isUncleanExitEvidence, proxyHealthFailureReason, resolveStatusPid, selectListenTarget } from "../../src/cli/status";
+import {
+  configDivergenceActionLine,
+  isConnectionRefused,
+  isUncleanExitEvidence,
+  normalizeConfigDivergence,
+  proxyHealthFailureReason,
+  resolveStatusPid,
+  selectListenTarget,
+} from "../../src/cli/status";
 import * as statusFacade from "../../src/cli/status";
 import * as statusProbes from "../../src/cli/status-probes";
 import { findDeadPid } from "../helpers/dead-pid";
@@ -30,6 +38,16 @@ describe("CLI status JSON", () => {
     expect(statusFacade.isUncleanExitEvidence).toBe(statusProbes.isUncleanExitEvidence);
     expect(statusFacade.probeUncleanExitState).toBe(statusProbes.probeUncleanExitState);
     expect(statusFacade).not.toHaveProperty("checkProxyHealth");
+  });
+
+  test("divergent foreground proxy without an installed service recommends ocx restart", () => {
+    // 'ocx service restart' maps to repairService(), which requires an installed
+    // background service; a foreground proxy must be told to use 'ocx restart'.
+    expect(configDivergenceActionLine(false)).toContain("'ocx restart'");
+    expect(configDivergenceActionLine(false)).not.toContain("ocx service restart");
+    // The installed-service path may still mention the service restart.
+    expect(configDivergenceActionLine(true)).toContain("'ocx restart'");
+    expect(configDivergenceActionLine(true)).toContain("'ocx service restart'");
   });
 
   test("status --json prints valid read-only diagnostics without secrets", () => {
@@ -87,6 +105,12 @@ describe("CLI status JSON", () => {
           credentialFile?: unknown;
           catalog?: unknown;
         };
+        configDivergence?: {
+          available?: unknown;
+          residentVersion?: unknown;
+          diskVersion?: unknown;
+          diverged?: unknown;
+        };
         service?: { summary?: unknown };
         codexShim?: { summary?: unknown };
         codexRuntime?: {
@@ -132,6 +156,14 @@ describe("CLI status JSON", () => {
       expect(parsed.defaultProvider).toBe("openai");
       expect(parsed.config?.source).toBe("file");
       expect(parsed.config?.error).toBeNull();
+      // No live proxy: the CLI JSON must still carry the configDivergence contract
+      // and report it as unavailable rather than omitting or fabricating a claim.
+      expect(parsed.configDivergence).toEqual({
+        available: false,
+        residentVersion: null,
+        diskVersion: null,
+        diverged: false,
+      });
       expect(typeof parsed.service?.summary).toBe("string");
       expect(typeof parsed.codexShim?.summary).toBe("string");
       expect(typeof parsed.codexRuntime?.path).toBe("string");
@@ -384,6 +416,50 @@ describe("CLI status JSON", () => {
     expect(target.port).toBe(10100);
     expect(target.healthUrl).toBe("http://127.0.0.1:10100/healthz");
     expect(target.dashboardUrl).toBe("http://localhost:10100/");
+  });
+
+  test("normalizeConfigDivergence maps a missing/404/empty body to unavailable", () => {
+    const unavailable = {
+      available: false,
+      residentVersion: null,
+      diskVersion: null,
+      diverged: false,
+    };
+    // A 404 from an older server yields a non-ok response (body never parsed); an
+    // empty object body is the malformed-success case. Both must collapse the same way.
+    expect(normalizeConfigDivergence(undefined)).toEqual(unavailable);
+    expect(normalizeConfigDivergence(null)).toEqual(unavailable);
+    expect(normalizeConfigDivergence({})).toEqual(unavailable);
+    expect(normalizeConfigDivergence("nope")).toEqual(unavailable);
+    // Malformed field types must not be trusted as available data.
+    expect(normalizeConfigDivergence({ residentVersion: "a", diskVersion: "b", diverged: "yes" })).toEqual(unavailable);
+    // A response omitting either version field must never fabricate an available
+    // "started with defaults" state (e.g. diskVersion-only input).
+    expect(normalizeConfigDivergence({ diskVersion: "sha-b", diverged: true })).toEqual(unavailable);
+    expect(normalizeConfigDivergence({ residentVersion: "sha-a", diverged: true })).toEqual(unavailable);
+  });
+
+  test("normalizeConfigDivergence keeps a valid proxy answer available", () => {
+    expect(normalizeConfigDivergence({
+      residentVersion: "sha-a",
+      diskVersion: "sha-b",
+      diverged: true,
+    })).toEqual({
+      available: true,
+      residentVersion: "sha-a",
+      diskVersion: "sha-b",
+      diverged: true,
+    });
+    expect(normalizeConfigDivergence({
+      residentVersion: null,
+      diskVersion: null,
+      diverged: false,
+    })).toEqual({
+      available: true,
+      residentVersion: null,
+      diskVersion: null,
+      diverged: false,
+    });
   });
 });
 

@@ -2,13 +2,21 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
+import { reconcileFreshPoolAccountPlans, type FreshPoolPlanUpdate } from "../../src/codex/auth-api";
 import { getMainAccountPlan, setMainAccountPlan } from "../../src/codex/main-account";
 import { extractChatgptPlanType } from "../../src/codex/plan";
 import {
   reconcileCodexPlansFromTokens,
   resetJwtPlanNotesForTests,
 } from "../../src/codex/plan-from-token";
-import { loadConfig, saveConfig } from "../../src/config";
+import { resetPreservedDiskOnlyProvidersForTests } from "../../src/usage/user-cost-overlays";
+import {
+  armClaudeCodeBaseline,
+  loadConfig,
+  readConfigDivergenceStatus,
+  saveConfig,
+  setResidentConfigSha256ForTests,
+} from "../../src/config";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -34,6 +42,8 @@ beforeEach(() => {
   mkdirSync(TEST_CODEX_HOME, { recursive: true });
   process.env.OPENCODEX_HOME = TEST_DIR;
   process.env.CODEX_HOME = TEST_CODEX_HOME;
+  setResidentConfigSha256ForTests(null);
+  resetPreservedDiskOnlyProvidersForTests();
   setMainAccountPlan(null);
   resetJwtPlanNotesForTests();
 });
@@ -90,6 +100,67 @@ describe("reconcileCodexPlansFromTokens", () => {
     expect(loadConfig().codexAccounts?.[0]?.plan).toBe("pro");
   });
 
+  test("re-anchors the resident divergence identity after adopting a JWT plan write", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      providers: {},
+      defaultProvider: "openai",
+      codexAccounts: [{ id: "pool-jwt-plan", email: "pool@example.test", plan: "free", isMain: false }],
+    };
+    saveConfig(config);
+    saveCodexAccountCredential("pool-jwt-plan", {
+      accessToken: chatgptPlanJwt("pro", "acct-pool-jwt-plan"),
+      refreshToken: "refresh-pool-jwt-plan",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "acct-pool-jwt-plan",
+    });
+
+    // The server armed its resident identity at admission and reuses the same
+    // long-lived object for runtime reconciliation.
+    const armed = loadConfig({ captureResident: true });
+    armClaudeCodeBaseline(armed);
+    expect(readConfigDivergenceStatus().diverged).toBe(false);
+
+    reconcileCodexPlansFromTokens(armed);
+
+    expect(armed.codexAccounts?.[0]?.plan).toBe("pro");
+    const status = readConfigDivergenceStatus();
+    // The plan write was adopted into the served snapshot, so the identity must
+    // follow it instead of reporting a persistent false-positive divergence.
+    expect(status.diverged).toBe(false);
+    expect(status.residentVersion).toBe(status.diskVersion);
+  });
+
+  test("a no-op JWT plan write keeps the resident identity in sync on noncanonical bytes", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      providers: {},
+      defaultProvider: "openai",
+      codexAccounts: [{
+        id: "pool-jwt-noop", email: "noop@example.test", plan: "pro",
+        planSource: "jwt", planCredentialGeneration: 1, isMain: false,
+      }],
+    };
+    saveCodexAccountCredential("pool-jwt-noop", {
+      accessToken: chatgptPlanJwt("pro", "acct-pool-jwt-noop"),
+      refreshToken: "refresh-pool-jwt-noop",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "acct-pool-jwt-noop",
+    });
+    // Noncanonical raw bytes: pretty-printed with a trailing newline. A re-anchor
+    // to the normalized projection would fabricate a divergence for a no-op write.
+    writeFileSync(join(TEST_DIR, "config.json"), JSON.stringify(config, null, 2) + "\n");
+    const armed = loadConfig({ captureResident: true });
+    armClaudeCodeBaseline(armed);
+    expect(readConfigDivergenceStatus().diverged).toBe(false);
+
+    reconcileCodexPlansFromTokens(armed);
+
+    const status = readConfigDivergenceStatus();
+    expect(status.diverged).toBe(false);
+    expect(status.residentVersion).toBe(status.diskVersion);
+  });
+
   test("leaves a non-JWT pool credential's stored plan alone", () => {
     const config: OcxConfig = {
       port: 10100,
@@ -127,6 +198,75 @@ describe("getMainAccountPlan JWT fallback", () => {
 });
 
 describe("WHAM-wins plan provenance gate (release-audit fix)", () => {
+  test("WHAM plan adoption re-anchors the resident config identity", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      providers: {},
+      defaultProvider: "openai",
+      codexAccounts: [{
+        id: "pool-wham-reanchor", email: "reanchor@example.test", plan: "pro",
+        planSource: "wham", planCredentialGeneration: 1, isMain: false,
+      }],
+    };
+    saveConfig(config);
+    const armed = loadConfig({ captureResident: true });
+    armClaudeCodeBaseline(armed);
+    expect(readConfigDivergenceStatus().diverged).toBe(false);
+    saveCodexAccountCredential("pool-wham-reanchor", {
+      accessToken: chatgptPlanJwt("plus", "acct-pool-wham-reanchor"),
+      refreshToken: "refresh-pool-wham-reanchor",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "acct-pool-wham-reanchor",
+    });
+    // A WHAM refresh persists plan=plus and adopts it into the long-lived config;
+    // without re-anchoring, status would keep claiming a divergence.
+    const updates: FreshPoolPlanUpdate[] = [{
+      accountId: "pool-wham-reanchor", plan: "plus", credentialGeneration: 1,
+    }];
+    reconcileFreshPoolAccountPlans(armed, updates);
+    expect(armed.codexAccounts?.[0]?.plan).toBe("plus");
+    const status = readConfigDivergenceStatus();
+    expect(status.diverged).toBe(false);
+    expect(status.residentVersion).toBe(status.diskVersion);
+  });
+
+  test("a no-op WHAM refresh keeps the resident identity in sync on noncanonical bytes", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      providers: {},
+      defaultProvider: "openai",
+      codexAccounts: [{
+        id: "pool-wham-noop", email: "noop@example.test", plan: "pro",
+        planSource: "wham", planCredentialGeneration: 1, isMain: false,
+      }],
+    };
+    // Noncanonical raw bytes: pretty-printed with a trailing newline. A re-anchor
+    // to the normalized projection would fabricate a divergence for a no-op write.
+    writeFileSync(join(TEST_DIR, "config.json"), JSON.stringify(config, null, 2) + "\n");
+    // beforeEach removed TEST_DIR, so seed the generation-1 credential the WHAM
+    // freshness gate requires (matching the committed WHAM fixture setup).
+    saveCodexAccountCredential("pool-wham-noop", {
+      accessToken: chatgptPlanJwt("pro", "acct-pool-wham-noop"),
+      refreshToken: "refresh-pool-wham-noop",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "acct-pool-wham-noop",
+    });
+    const armed = loadConfig({ captureResident: true });
+    armClaudeCodeBaseline(armed);
+    expect(readConfigDivergenceStatus().diverged).toBe(false);
+
+    // Plan and provenance already match: the WHAM refresh must stay write-free and
+    // must NOT re-anchor the resident digest to the normalized projection.
+    const updates: FreshPoolPlanUpdate[] = [{
+      accountId: "pool-wham-noop", plan: "pro", credentialGeneration: 1,
+    }];
+    reconcileFreshPoolAccountPlans(armed, updates);
+
+    const status = readConfigDivergenceStatus();
+    expect(status.diverged).toBe(false);
+    expect(status.residentVersion).toBe(status.diskVersion);
+  });
+
   test("a same-generation JWT cannot overwrite a WHAM-sourced plan", () => {
     const config: OcxConfig = {
       port: 10100,
@@ -198,8 +338,6 @@ describe("WHAM-wins plan provenance gate (release-audit fix)", () => {
     expect(loadConfig().codexAccounts?.[0]?.plan).toBe("pro");
   });
 });
-
-
 describe("rotated-JWT plan reconciliation across propagated aliases (#2892 gap 3)", () => {
   test("a plan-changing rotated JWT reconciles the alias, not just the refresh owner", async () => {
     const { getValidCodexToken, readCodexAccountRecord } = await import("../../src/codex/account-store");

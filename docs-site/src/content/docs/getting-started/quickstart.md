@@ -57,6 +57,10 @@ ocx status
 ocx gui       # open the dashboard on the live port
 ```
 
+If you edit `config.json` while the proxy is running, `ocx status` and the dashboard warn that the
+file no longer matches the loaded configuration. The proxy does not auto-reload it — restart to apply
+the file (see [Web Dashboard](/guides/web-dashboard/#config-changes-while-the-proxy-is-running)).
+
 ## 3. Use Codex
 
 Codex now talks to opencodex transparently:

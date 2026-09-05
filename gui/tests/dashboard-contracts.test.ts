@@ -1,6 +1,10 @@
 import { expect, test } from "bun:test";
+import { createElement, type ComponentProps } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { en } from "../src/i18n/en";
+import { I18nContext, type I18nContextValue } from "../src/i18n/shared";
 import { normalizeInjectionSelection } from "../src/pages/dashboard-core-poll";
+import { DashboardOverviewHead } from "../src/pages/dashboard-overview-head";
 import { PROJECT_CONFIG_DIAGNOSTICS_POLL_MS, beginPollEpoch, beginPollEpochs } from "../src/startup-health-ui";
 
 test("project-config diagnostics poll cadence is owned by the shared constant", () => {
@@ -179,6 +183,105 @@ test("fetchStartupHealth does not map abort into a sticky error status", async (
     globalThis.fetch = originalFetch;
   }
 });
+
+test("dashboard config-divergence status is fetched from /api/config/status and wired into the hook", async () => {
+  const core = await Bun.file(new URL("../src/pages/dashboard-core-poll.ts", import.meta.url)).text();
+  const hook = await Bun.file(new URL("../src/pages/use-dashboard-data.ts", import.meta.url)).text();
+  const head = await Bun.file(new URL("../src/pages/dashboard-overview-head.tsx", import.meta.url)).text();
+  expect(core).toContain("/api/config/status");
+  expect(core).toContain("export async function fetchDashboardConfigStatus");
+  expect(hook).toContain("fetchDashboardConfigStatus(apiBase, signal)");
+  expect(hook).toContain("configStatusPoll");
+  expect(hook).toContain("configDivergence,");
+  expect(head).toContain("configDivergence?.available === true");
+  expect(head).toContain("dash.configDiverged");
+});
+
+test("fetchDashboardConfigStatus normalizes diverged and tolerates old servers", async () => {
+  const { fetchDashboardConfigStatus } = await import("../src/pages/dashboard-core-poll");
+  const originalFetch = globalThis.fetch;
+  try {
+    let capturedInit: RequestInit | undefined;
+    globalThis.fetch = (async (_input, init) => {
+      capturedInit = init;
+      return Response.json({ residentVersion: "a", diskVersion: "b", diverged: true });
+    }) as typeof fetch;
+    await expect(fetchDashboardConfigStatus("http://test", new AbortController().signal)).resolves.toEqual({
+      configDivergence: { available: true, residentVersion: "a", diskVersion: "b", diverged: true },
+    });
+    // The dashboard must not reuse a stale cached /api/config/status answer.
+    expect(capturedInit?.cache).toBe("no-store");
+    globalThis.fetch = (async () => new Response("nope", { status: 404 })) as typeof fetch;
+    await expect(fetchDashboardConfigStatus("http://test", new AbortController().signal)).resolves.toEqual({ configDivergence: null });
+
+    // Malformed successful payloads must not be trusted as available data.
+    globalThis.fetch = (async () => Response.json({})) as typeof fetch;
+    await expect(fetchDashboardConfigStatus("http://test", new AbortController().signal)).resolves.toEqual({ configDivergence: null });
+    // A diverged-only payload is still malformed: the version fields must be present.
+    globalThis.fetch = (async () => Response.json({ diverged: true })) as typeof fetch;
+    await expect(fetchDashboardConfigStatus("http://test", new AbortController().signal)).resolves.toEqual({ configDivergence: null });
+    // One-missing payloads are malformed too (CLI normalizer presence rule).
+    globalThis.fetch = (async () => Response.json({ residentVersion: "a", diverged: true })) as typeof fetch;
+    await expect(fetchDashboardConfigStatus("http://test", new AbortController().signal)).resolves.toEqual({ configDivergence: null });
+    globalThis.fetch = (async () => Response.json({ diskVersion: "b", diverged: true })) as typeof fetch;
+    await expect(fetchDashboardConfigStatus("http://test", new AbortController().signal)).resolves.toEqual({ configDivergence: null });
+    globalThis.fetch = (async () => Response.json({ residentVersion: "a", diskVersion: "b", diverged: "yes" })) as typeof fetch;
+    await expect(fetchDashboardConfigStatus("http://test", new AbortController().signal)).resolves.toEqual({ configDivergence: null });
+    // Explicit nulls on BOTH present fields remain a valid available status.
+    globalThis.fetch = (async () => Response.json({ residentVersion: null, diskVersion: null, diverged: false })) as typeof fetch;
+    await expect(fetchDashboardConfigStatus("http://test", new AbortController().signal)).resolves.toEqual({
+      configDivergence: { available: true, residentVersion: null, diskVersion: null, diverged: false },
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("dashboard config-divergence alert renders from a fake /api/config/status response", async () => {
+  const { fetchDashboardConfigStatus } = await import("../src/pages/dashboard-core-poll");
+  const originalFetch = globalThis.fetch;
+  const t: I18nContextValue["t"] = key => key;
+  const i18n: I18nContextValue = { locale: "en", setLocale: () => {}, t };
+  const baseProps = {
+    locale: "en",
+    health: { status: "ok", version: "9.9.9", uptime: 60 },
+    providers: [],
+    usage30d: null,
+    usageLoading: false,
+    healthLoading: false,
+    startupHealth: "protected",
+    projectConfigWarnings: [],
+    maMode: "v1",
+    maBusy: false,
+    maHelpTriggerRef: { current: null },
+    maHelpOpen: false,
+    setMaHelpOpen: () => {},
+    switchMaMode: async () => {},
+    maError: null,
+  } satisfies ComponentProps<typeof DashboardOverviewHead>;
+  try {
+    globalThis.fetch = (async () => Response.json({ residentVersion: "a", diskVersion: "b", diverged: true })) as typeof fetch;
+    const { configDivergence } = await fetchDashboardConfigStatus("http://test", new AbortController().signal);
+    const html = renderToStaticMarkup(
+      createElement(I18nContext.Provider, { value: i18n },
+        createElement(DashboardOverviewHead, { ...baseProps, configDivergence })),
+    );
+    expect(html).toContain("dash.configDiverged");
+    expect(html).toContain("role=\"alert\"");
+
+    // A settled (non-diverged) answer must not render the alert.
+    globalThis.fetch = (async () => Response.json({ residentVersion: "a", diskVersion: "a", diverged: false })) as typeof fetch;
+    const settled = await fetchDashboardConfigStatus("http://test", new AbortController().signal);
+    const settledHtml = renderToStaticMarkup(
+      createElement(I18nContext.Provider, { value: i18n },
+        createElement(DashboardOverviewHead, { ...baseProps, configDivergence: settled.configDivergence })),
+    );
+    expect(settledHtml).not.toContain("dash.configDiverged");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 
 // The chip used to sit on the server's conservative placeholder until the next 30s tick, which is
 // why an unrelated action (refresh quota, tab hop) looked like the thing that fixed it. The probe

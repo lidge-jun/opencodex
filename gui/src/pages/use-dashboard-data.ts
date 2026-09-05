@@ -18,10 +18,12 @@ import {
   fetchDashboardSettings,
   fetchDashboardSidecars,
   fetchDashboardUsage,
+  fetchDashboardConfigStatus,
   fetchProjectConfigDiagnostics,
   fetchStartupHealth,
   normalizeInjectionSelection,
   type DashboardEpochRefs,
+  type DashboardConfigStatusPoll,
 } from "./dashboard-core-poll";
 import { usageSummary30dResourceKey } from "../usage-summary-resource";
 import {
@@ -124,6 +126,7 @@ export function useDashboardData(apiBase: string) {
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [maMode, setMaMode] = useState<MaMode>(() => cachedMaMode ?? "default");
+  const [configDivergence, setConfigDivergence] = useState<DashboardConfigStatusPoll["configDivergence"]>(null);
  const [maBusy, setMaBusy] = useState(false);
   const [maError, setMaError] = useState<string | null>(null);
  const [maHelpOpen, setMaHelpOpen] = useState(false);
@@ -234,6 +237,13 @@ export function useDashboardData(apiBase: string) {
     { pollMs: 5000 },
   );
 
+  const configStatusPoll = useKeyedClientResource(
+    `dashboard-config-status:${apiBase}`,
+    [apiBase],
+    (signal) => fetchDashboardConfigStatus(apiBase, signal),
+    { pollMs: 15000 },
+  );
+
   const sidecarPoll = useKeyedClientResource(
     `dashboard-sidecars:${apiBase}`,
     [apiBase],
@@ -323,6 +333,11 @@ export function useDashboardData(apiBase: string) {
     setMaMode(maModePoll.data.maMode);
     writeSessionListCache(`${MA_MODE_CACHE_PREFIX}${apiBase}`, maModePoll.data.maMode);
   }, [maModePoll.data, apiBase]);
+
+  useEffect(() => {
+    if (configStatusPoll.data === undefined) return;
+    setConfigDivergence(configStatusPoll.data.configDivergence);
+  }, [configStatusPoll.data]);
 
   // Derived — avoids setState-on-prop-change for the resolved flag. Cache / poll / optimistic
   // save (which writes the same cache key) all count as resolved for MA UI.
@@ -774,6 +789,7 @@ export function useDashboardData(apiBase: string) {
     modelQuery, setModelQuery,
     expandedProviders, setExpandedProviders,
     health, startupHealth, providers, models, settings, sidecar, shadowCall, usage30d,
+    configDivergence,
     usageLoading: usagePoll.loading && !usage30d,
     healthLoading: overviewPoll.loading && !health,
     sidecarSaving, shadowCallSaving, modelsLoading, settingsSaving, syncing,

@@ -215,6 +215,7 @@ export const de: Record<TKey, string> = {
   "dash.providers": "Anbieter",
   "dash.tokens30d": "Tokens (30d)",
   "dash.coverage": "{pct} Abdeckung",
+  "dash.configDiverged": "config.json wurde nach dem Laden durch den Proxy extern geändert — kein automatisches Neuladen; Neustart zum Anwenden",
   "dash.mem.title": "Speicherbeobachtung",
   "dash.mem.hint": "Schreibgeschützte Laufzeitdiagnose. Beobachteter Speicher ist max(RSS, external, ArrayBuffers), damit Windows-Working-Set-Trimming gebundenen Speicher nicht versteckt.",
   "dash.mem.rss": "Resident Set (RSS)",

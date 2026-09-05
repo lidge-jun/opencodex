@@ -2,6 +2,7 @@ import {
   ConfigMutationLockError,
   loadConfig,
   mutatePersistedConfig,
+  refreshResidentConfigIdentity,
 } from "../config";
 import type { CodexAccount, OcxConfig } from "../types";
 import { isSelectableCodexPoolAccount, isValidCodexAccountId } from "./account-id";
@@ -90,6 +91,7 @@ function persistJwtPlanUpdates(runtimeConfig: OcxConfig, updates: FreshPoolPlanU
     throw error;
   }
   if (outcome.status === "unavailable") return;
+  let adoptedAny = false;
   for (const update of outcome.value) {
     if (!isCodexAccountGenerationLive(update.accountId, update.credentialGeneration)) continue;
     const liveAccount = configuredPoolAccount(runtimeConfig, update.accountId);
@@ -98,8 +100,14 @@ function persistJwtPlanUpdates(runtimeConfig: OcxConfig, updates: FreshPoolPlanU
       liveAccount.planSource = "jwt";
       liveAccount.planCredentialGeneration = update.credentialGeneration;
       appliedJwtPlans.set(update.accountId, update.plan);
+      adoptedAny = true;
     }
   }
+  // The long-lived runtime config now serves the persisted plan, so the resident
+  // divergence identity must follow it (the disk-first mutation skipped the refresh).
+  // Only a committed write may re-anchor: an unchanged refresh must not replace the
+  // raw-byte digest with the normalized projection (would fabricate divergence).
+  if (adoptedAny && outcome.status === "committed") refreshResidentConfigIdentity(runtimeConfig);
 }
 
 /**

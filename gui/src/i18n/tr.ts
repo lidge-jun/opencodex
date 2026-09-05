@@ -225,6 +225,7 @@ export const tr: Record<TKey, string> = {
   "dash.providers": "Sağlayıcılar",
   "dash.tokens30d": "Jetonlar (30 gün)",
   "dash.coverage": "%{pct} kapsam",
+  "dash.configDiverged": "config.json, proxy yüklendikten sonra diskte değişti — otomatik yeniden yükleme yok; uygulamak için yeniden başlatın",
   "dash.mem.title": "Bellek izlenebilirliği",
   "dash.mem.hint": "Salt okunur çalışma zamanı tanılamaları. Gözlemlenen bellek max(RSS, harici, ArrayBuffers) değeridir.",
   "dash.mem.rss": "Yerleşik küme (RSS)",

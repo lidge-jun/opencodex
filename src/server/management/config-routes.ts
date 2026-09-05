@@ -12,6 +12,7 @@ import {
   providerBaseUrlConfigError,
   providerHeadersConfigError,
   saveConfigPreservingClaudeCode,
+  readConfigDivergenceStatus,
 } from "../../config";
 import {
   clearLoginState,
@@ -263,6 +264,10 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
   const readStartupHealth = deps.getCachedStartupHealth ?? getCachedStartupHealth;
   if (url.pathname === "/api/config" && req.method === "GET") {
     return jsonResponse(withProviderServiceTierDTO(safeConfigDTO(config), config));
+  }
+
+  if (url.pathname === "/api/config/status" && req.method === "GET") {
+    return jsonResponse(readConfigDivergenceStatus());
   }
 
   if (url.pathname === "/api/config" && req.method === "PUT") {

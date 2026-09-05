@@ -655,7 +655,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   // even if OPENCODEX_HOME changes underneath a long-lived process.
   const startupConfigDir = getConfigDir();
   const config = migrateStartupSubagentModels(
-    runModelRenameStartupMigration(runAlibabaRegionStartupMigration(runOpenAiTierStartupMigration(loadConfig()))),
+    runModelRenameStartupMigration(runAlibabaRegionStartupMigration(runOpenAiTierStartupMigration(loadConfig({ captureResident: true })))),
   );
   warnAgentTaskRecoveryStartup(config);
   setLiveStateStoreConfig(config);

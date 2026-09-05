@@ -2,6 +2,7 @@ import {
   ConfigMutationLockError,
   loadConfig,
   mutatePersistedConfig,
+  refreshResidentConfigIdentity,
   saveConfigPreservingClaudeCode,
   withConfigMutationLockSync,
 } from "../config";
@@ -1064,7 +1065,7 @@ export interface CodexAuthAccountDto {
   mainAccountHardLock?: MainAccountHardLockStatus;
 }
 
-interface FreshPoolPlanUpdate {
+export interface FreshPoolPlanUpdate {
   accountId: string;
   plan: string;
   credentialGeneration: number;
@@ -1076,7 +1077,7 @@ interface FreshPoolPlanUpdate {
  * WHAM requests were in flight. Missing or malformed files fail closed: a read path must not
  * recreate a deleted config from the server's older in-memory snapshot.
  */
-function reconcileFreshPoolAccountPlans(runtimeConfig: OcxConfig, updates: FreshPoolPlanUpdate[]): void {
+export function reconcileFreshPoolAccountPlans(runtimeConfig: OcxConfig, updates: FreshPoolPlanUpdate[]): void {
   if (updates.length === 0) return;
   let outcome: ReturnType<typeof mutatePersistedConfig<FreshPoolPlanUpdate[]>>;
   try {
@@ -1112,6 +1113,7 @@ function reconcileFreshPoolAccountPlans(runtimeConfig: OcxConfig, updates: Fresh
     throw error;
   }
   if (outcome.status === "unavailable") return;
+  let adoptedAny = false;
   for (const update of outcome.value) {
     // A replacement immediately after the durable commit is allowed to supersede the result, but
     // the long-lived object must never be updated from that stale generation.
@@ -1121,8 +1123,14 @@ function reconcileFreshPoolAccountPlans(runtimeConfig: OcxConfig, updates: Fresh
       liveAccount.plan = update.plan;
       liveAccount.planSource = "wham";
       liveAccount.planCredentialGeneration = update.credentialGeneration;
+      adoptedAny = true;
     }
   }
+  // The long-lived runtime config now serves the persisted plan, so the resident
+  // divergence identity must follow it (the disk-first mutation skipped the refresh).
+  // Only a committed write may re-anchor: an unchanged refresh must not replace the
+  // raw-byte digest with the normalized projection (would fabricate divergence).
+  if (adoptedAny && outcome.status === "committed") refreshResidentConfigIdentity(runtimeConfig);
 }
 
 

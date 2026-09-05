@@ -120,6 +120,7 @@ export const zhTW: Record<TKey, string> = {
   "dash.providers": "供應商",
   "dash.tokens30d": "Token (30 天)",
   "dash.coverage": "覆蓋率 {pct}",
+  "dash.configDiverged": "config.json 在代理載入後被修改 — 不會自動重載；請重啟後生效",
   "dash.mem.title": "記憶體可觀測性",
   "dash.mem.hint": "只讀執行時診斷。觀測記憶體為 max(RSS, external, ArrayBuffers)，避免 Windows working set trimming 隱藏已提交的保留記憶體。",
   "dash.mem.rss": "常駐記憶體 (RSS)",

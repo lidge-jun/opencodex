@@ -1,6 +1,8 @@
 import { durableBunRuntime } from "../lib/bun-runtime";
 import { codexAutoStartEnabled, getConfigPath, readConfigDiagnostics } from "../config";
-import { getPidPath, readPid, readRuntimePort, type RuntimePortState } from "../config/process-state";
+import { getPidPath, readPid, readPidFileValue, readRuntimePort, type RuntimePortState } from "../config/process-state";
+import { LOCAL_MANAGEMENT_READ_PATHS } from "../lib/local-management-capability";
+import { fetchBoundLocalManagementRead } from "../server/local-management-read-client";
 import { diagnoseCodexBundledPlugins, type CodexPluginsDiagnostic } from "../codex/plugins-doctor";
 import { findLiveProxy, probeHostname } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
@@ -68,6 +70,7 @@ export type CliStatusJson = {
     catalogAgeSeconds?: number;
     credentialFile: "owned" | "missing" | "changed" | "unsafe";
   };
+  configDivergence: CliConfigDivergence;
   service: { summary: string };
   codexShim: { summary: string };
   codexPlugins: CodexPluginsDiagnostic;
@@ -96,6 +99,53 @@ export type CliStatusJson = {
    */
   versionSkew: VersionSkew;
 };
+
+export type CliConfigDivergence = {
+  /** True when the running proxy answered; false when it is down or unreadable. */
+  available: boolean;
+  residentVersion: string | null;
+  diskVersion: string | null;
+  diverged: boolean;
+};
+
+/**
+ * Normalize the proxy's /api/config/status body into the CLI JSON contract. A
+ * missing/down proxy, a 404 from an older server, or a malformed body all collapse
+ * to available:false so the CLI never fabricates a divergence claim.
+ */
+export function normalizeConfigDivergence(body: unknown): CliConfigDivergence {
+  const unavailable: CliConfigDivergence = {
+    available: false,
+    residentVersion: null,
+    diskVersion: null,
+    diverged: false,
+  };
+  if (!body || typeof body !== "object") return unavailable;
+  const record = body as { residentVersion?: unknown; diskVersion?: unknown; diverged?: unknown };
+  const residentVersion = record.residentVersion;
+  const diskVersion = record.diskVersion;
+  const diverged = record.diverged;
+  if (
+    !Object.prototype.hasOwnProperty.call(record, "residentVersion")
+    || !Object.prototype.hasOwnProperty.call(record, "diskVersion")
+    || !(residentVersion === null || typeof residentVersion === "string")
+    || !(diskVersion === null || typeof diskVersion === "string")
+    || typeof diverged !== "boolean"
+  ) return unavailable;
+  return { available: true, residentVersion, diskVersion, diverged };
+}
+
+/**
+ * Human-readable restart guidance for a divergent resident config. A foreground
+ * proxy (started with 'ocx start') is restarted with 'ocx restart'; the
+ * background-service path ('ocx service restart') only applies when an installed
+ * service is actually present.
+ */
+export function configDivergenceActionLine(serviceInstalled: boolean): string {
+  return serviceInstalled
+    ? "      Action: restart the running proxy with 'ocx restart', or refresh the installed service with 'ocx service restart'."
+    : "      Action: restart the running proxy with 'ocx restart'.";
+}
 
 export type CliStatusView = {
   json: CliStatusJson;
@@ -212,6 +262,24 @@ export async function collectStatus(): Promise<CliStatusView> {
     port: config.port,
     hostname: config.hostname,
   });
+  // The resident config identity lives only in the proxy process. Ask it directly via
+  // the loopback management-read capability; a down/unreadable proxy means "unknown",
+  // never a fabricated divergence claim.
+  const configDivergence = await (async () => {
+    const unavailable = normalizeConfigDivergence(null);
+    if (!live) return unavailable;
+    try {
+      const read = await fetchBoundLocalManagementRead(
+        live,
+        LOCAL_MANAGEMENT_READ_PATHS.configStatus,
+        { timeoutMs: 4_000 },
+      );
+      if (read.kind !== "response" || !read.response.ok) return unavailable;
+      return normalizeConfigDivergence(await read.response.json());
+    } catch {
+      return unavailable;
+    }
+  })();
   const bunRuntime = durableBunRuntime();
   const service = diagnoseService();
   // A service can be registered and still not serve: the manager reports the job
@@ -369,6 +437,7 @@ export async function collectStatus(): Promise<CliStatusView> {
         ...(clientConnection.catalogAgeSeconds !== undefined ? { catalogAgeSeconds: clientConnection.catalogAgeSeconds } : {}),
         credentialFile: clientConnection.token,
       },
+      configDivergence,
       service: { summary: serviceSummary },
       codexShim: { summary: codexShimSummary },
       codexPlugins,

@@ -219,6 +219,7 @@ export const zh: Record<TKey, string> = {
   "dash.providers": "提供方",
   "dash.tokens30d": "Token (30 天)",
   "dash.coverage": "覆盖率 {pct}",
+  "dash.configDiverged": "config.json 在代理加载后被修改 — 不会自动重载；请重启后生效",
   "dash.mem.title": "内存可观测性",
   "dash.mem.hint": "只读运行时诊断。观测内存为 max(RSS, external, ArrayBuffers)，避免 Windows working set trimming 隐藏已提交的保留内存。",
   "dash.mem.rss": "常驻内存 (RSS)",

@@ -13,6 +13,7 @@ import {
   mutatePersistedConfig,
   providerBaseUrlConfigError,
   providerHeadersConfigError,
+  refreshResidentConfigIdentity,
   saveConfigPreservingClaudeCode,
   subagentDefaultSyncEffective,
 } from "../../config";
@@ -123,6 +124,10 @@ function persistDesktopProfileField(
   // `unavailable` outcome must not leave the snapshot claiming a saved profile.
   if (outcome.status === "unavailable") return { ok: false, reason: outcome.reason };
   config.claudeCode = { ...(config.claudeCode ?? {}), desktopProfile };
+  // The long-lived server snapshot now serves the persisted value, so the resident
+  // divergence identity must follow it (the disk-first mutation itself skipped the
+  // refresh because it could not know whether the caller would adopt the write).
+  refreshResidentConfigIdentity(config);
   return { ok: true };
 }
 

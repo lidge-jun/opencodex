@@ -2162,17 +2162,34 @@ function warnInheritedFastWireConflicts(configPath: string, config: OcxConfig): 
  * until a valid config or a genuinely missing file is observed. A partially-
  * invalid config is merged with defaults so providers and pool accounts survive.
  */
-export function loadConfig(): OcxConfig {
+export function loadConfig(options?: { captureResident?: boolean }): OcxConfig {
   const dir = getConfigDir();
   const configPath = getConfigPath();
   hardenConfigDir();
   hardenExistingSecret(configPath);
   hardenExistingSecret(join(dir, "auth.json"));
   if (!existsSync(configPath)) {
+  // No file means the process is serving defaults, not the previously loaded bytes;
+  // a reload after deletion must not retain the old resident identity.
+  if (options?.captureResident) {
+    residentConfigSha256 = null;
+    residentConfigSource = "default";
+  }
     return withRefreshedCostOverlays(getDefaultConfig());
   }
   try {
-    const raw = readFileSync(configPath, "utf-8").replace(/^\uFEFF/, "");
+    // Keep the pre-strip bytes: the resident identity must hash exactly what the
+    // process parsed, including a leading BOM, so it matches the admission digest.
+    // Hash the RAW bytes (not the decoded string): decoding can map malformed
+    // UTF-8 sequences onto replacement characters, which would make the digest
+    // disagree with the file's true byte SHA-256 and misreport divergence.
+    const fileBytes = readFileSync(configPath);
+    if (options?.captureResident) {
+      residentConfigSha256 = createHash("sha256").update(fileBytes).digest("hex");
+      residentConfigSource = "file";
+    }
+    const rawWithBom = fileBytes.toString("utf-8");
+    const raw = rawWithBom.replace(/^\uFEFF/, "");
     const parsed = JSON.parse(raw);
     sanitizeAliasesForLoad(parsed);
     sanitizeModelDisplayNamesForLoad(parsed);
@@ -2252,9 +2269,21 @@ export function loadConfig(): OcxConfig {
     }
     // Merge couldn't fix it — truly broken config
     warnAndBackupInvalidConfig(configPath, result.error);
+    if (options?.captureResident) {
+      residentConfigSha256 = null;
+      // The process serves getDefaultConfig(), not this file. Record a
+      // defaults-backed resident so a later repair is reported as divergent.
+      residentConfigSource = "default";
+    }
     return getDefaultConfig();
   } catch (error) {
     warnAndBackupInvalidConfig(configPath, error);
+    if (options?.captureResident) {
+      residentConfigSha256 = null;
+      // The process serves getDefaultConfig(), not this file. Record a
+      // defaults-backed resident so a later repair is reported as divergent.
+      residentConfigSource = "default";
+    }
     return getDefaultConfig();
   }
 }
@@ -2847,9 +2876,77 @@ export function readConfigAdmissionSnapshot(): ConfigAdmissionSnapshot {
   };
 }
 
+export interface ConfigDivergenceStatus {
+  /** SHA-256 of the config bytes the running process last loaded or wrote. */
+  residentVersion: string | null;
+  /** SHA-256 of the current config.json bytes on disk (null when unreadable). */
+  diskVersion: string | null;
+  /** True when a restart would serve something different: bytes changed, a file-backed
+   *  resident lost its file, or a defaults-backed resident gained a config.json. */
+  diverged: boolean;
+}
+
+/**
+ * Compare the running process's resident config identity to the current file. A CLI
+ * process without an armed live config reports `residentVersion: null` and never claims
+ * divergence; only the proxy process can answer this truthfully.
+ */
+export function readConfigDivergenceStatus(): ConfigDivergenceStatus {
+  const admission = readConfigAdmissionSnapshot();
+  const diskVersion = admission.kind === "read" ? admission.contentSha256 : null;
+  const diskFile = admission.kind === "read";
+  let diverged = false;
+  if (residentConfigSource === "file" && residentConfigSha256 !== null) {
+    // A file-backed resident diverges when the file vanished/unreadable or its
+    // bytes differ: a restart would serve something else.
+    diverged = !diskFile || diskVersion !== residentConfigSha256;
+  } else if (residentConfigSource === "default") {
+    // A defaults-backed resident diverges when a config.json now exists.
+    diverged = diskFile;
+  }
+  return {
+    residentVersion: residentConfigSha256,
+    diskVersion,
+    diverged,
+  };
+}
+
 const CONFIG_MUTATION_DB_FILENAME = "config-mutation.sqlite";
 const CONFIG_MUTATION_DB_SIDECARS = ["-journal", "-wal", "-shm"] as const;
 let warnedConfigMutationDirectoryAcl = false;
+// SHA-256 of the config bytes the running process last loaded or wrote (armed at server
+// start, refreshed on every changed in-process save). Compared to the current file digest
+// by `ocx status` / the dashboard to warn when config.json changed without a reload.
+// Only the server admission load (loadConfig({ captureResident: true })) arms this
+// identity; incidental loads during runtime must not wipe it.
+let residentConfigSha256: string | null = null;
+/** Whether the resident identity came from a real config.json or from serving defaults. */
+let residentConfigSource: "file" | "default" | null = null;
+
+/** Test-only seam: reset the resident identity so isolated test files cannot leak state. */
+export function setResidentConfigSha256ForTests(value: string | null): void {
+  residentConfigSha256 = value;
+  residentConfigSource = value === null ? null : "file";
+}
+
+/**
+ * Re-anchor the resident identity to the exact serialized served snapshot.
+ *
+ * Disk-first mutations (\`mutatePersistedConfig\`) deliberately skip the resident
+ * refresh because the server has not adopted their document yet. Adopters that
+ * then mirror the committed change into the long-lived config must call this so
+ * \`ocx status\` / the dashboard stop claiming divergence once disk matches what
+ * the running process actually serves. No-op when no identity is armed (CLI
+ * processes cannot truthfully claim divergence).
+ */
+export function refreshResidentConfigIdentity(config: OcxConfig): void {
+  if (residentConfigSha256 === null) return;
+  residentConfigSource = "file";
+  // Hash the projected provenance form (sorted deletion keys), matching the
+  // exact bytes persistConfigUnlocked commits, so an adopter's refresh cannot
+  // diverge merely because the runtime object kept an unsorted array order.
+  residentConfigSha256 = createHash("sha256").update(JSON.stringify(projectConfigRebaseProvenance(config), null, 2) + "\n").digest("hex");
+}
 
 export class ConfigMutationLockError extends Error {
   readonly code = "CONFIG_MUTATION_LOCK_UNAVAILABLE";
@@ -3075,7 +3172,25 @@ export const withExpectedConfigGenerationSync: WithExpectedConfigGenerationSync 
  * cost-overlay registry from the persisted config so runtime estimates follow
  * every save path.
  */
-function persistConfigUnlocked(config: OcxConfig): boolean {
+export type PersistConfigUnlockedOptions = {
+  /**
+   * The served snapshot whose serialization owns the resident divergence digest.
+   * Defaults to `config`; pass the pre-binding live projection when the persisted
+   * document deliberately carries a different desired next-start binding.
+   */
+  servedSnapshot?: OcxConfig;
+  /**
+   * Set false for disk-first writers whose result the live server has not adopted
+   * (for example mutatePersistedConfig): the resident identity must stay bound to
+   * what the running process actually serves.
+   */
+  refreshResident?: boolean;
+};
+
+function persistConfigUnlocked(
+  config: OcxConfig,
+  options: PersistConfigUnlockedOptions = {},
+): boolean {
   const configPath = getConfigPath();
   const rawBeforeWrite = readRawConfigJson();
   const clientPersistenceError = failClosedClientPersistenceError(rawBeforeWrite, config);
@@ -3096,15 +3211,39 @@ function persistConfigUnlocked(config: OcxConfig): boolean {
   } catch (error) {
     if (!isMissingPathError(error)) throw error;
   }
+  // Served snapshot first so the unchanged branch can compare it against the
+  // persisted bytes too (see the re-anchor guard below).
+  const servedSnapshot = options.servedSnapshot ?? config;
   // Keep the runtime overlay registry in sync with EVERY persist path,
   // including byte-identical saves: a cooperating CLI process may have written
   // the same bytes (e.g. before a proxy notification), and Logs/Usage must
   // adopt the overlay without waiting for a changed save or restart.
   if (unchanged) {
+    // A cooperating writer can canonicalize the served document to the exact bytes
+    // this save would produce. When the served snapshot itself serializes to those
+    // bytes, the stale resident digest can be re-anchored; when disk-only preserved
+    // rows or a next-start binding make the served serialization differ from the
+    // file, divergence must stay visible.
+    const servedBytes = JSON.stringify(projectConfigRebaseProvenance(servedSnapshot), null, 2) + "\n";
+    if (servedBytes === bytes && options.refreshResident !== false) {
+      residentConfigSource = "file";
+      residentConfigSha256 = createHash("sha256").update(servedBytes).digest("hex");
+    }
     refreshUserCostOverlays(persisted);
     return false;
   }
   atomicWriteFile(configPath, bytes);
+  // Keep the resident identity bound to the SERVED document, not the merged bytes:
+  // withPreservedDiskOnlyProviders() folds hand-added disk rows into the file, but
+  // those rows are still unrouted until the process reloads. Hashing the pre-merge
+  // config keeps diverged=true for exactly that gap (and matches the file hash when
+  // there is nothing disk-only to preserve).
+  if (options.refreshResident !== false) {
+    residentConfigSource = "file";
+    // Same projection as the committed bytes: unsorted deletedTopLevelKeys in the
+    // runtime object must not produce a resident digest different from the file.
+    residentConfigSha256 = createHash("sha256").update(JSON.stringify(projectConfigRebaseProvenance(servedSnapshot), null, 2) + "\n").digest("hex");
+  }
   // For changed saves, refresh only AFTER the write succeeded so a failed
   // write cannot leave estimates reflecting configuration never persisted.
   refreshUserCostOverlays(persisted);
@@ -3209,7 +3348,9 @@ export function mutatePersistedConfig<T>(
         commitBase.diagnostics.config,
         projectConfigRebaseProvenance(confirmedConfig),
       );
-      if (persistConfigUnlocked(projected)) bumpGenerationForCooperatingConfigWrite();
+      // Disk-first mutation: the live server has not adopted this snapshot, so the
+      // resident divergence identity must stay bound to the served config.
+      if (persistConfigUnlocked(projected, { refreshResident: false })) bumpGenerationForCooperatingConfigWrite();
       return { status: "committed", value: confirmed.value };
     }
     return { status: "unavailable", reason: "conflict" };
@@ -3294,6 +3435,10 @@ const persistedLiveServerBinding = new WeakMap<OcxConfig, PersistedServerBinding
 export function armClaudeCodeBaseline(config: OcxConfig): void {
   liveConfigBaseline.set(config, structuredClone(config));
   claudeCodeBaseline.set(config, structuredClone(config.claudeCode));
+  // The resident digest is captured by loadConfig() from the exact bytes it parsed.
+  // Do NOT re-read config.json here: a file edit between that read and arming
+  // would otherwise be recorded as the resident identity while the live config
+  // still reflects the earlier bytes, producing a false divergence at startup.
 }
 
 /**
@@ -3636,7 +3781,10 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
       const persistedConfig: OcxConfig = { ...projectedConfig, port: persistedBinding.port };
       if (persistedBinding.hostname === undefined) delete persistedConfig.hostname;
       else persistedConfig.hostname = persistedBinding.hostname;
-      if (persistConfigUnlocked(persistedConfig)) bumpGenerationForCooperatingConfigWrite();
+      // The file carries the operator's desired next-start binding, but the running
+      // process still serves the live projection with its ACTUAL binding; the resident
+      // digest must follow the served snapshot so a binding difference stays divergent.
+      if (persistConfigUnlocked(persistedConfig, { servedSnapshot: projectedConfig })) bumpGenerationForCooperatingConfigWrite();
       persistedLiveServerBinding.set(config, persistedBinding);
     } else {
       if (persistConfigUnlocked(projectedConfig)) bumpGenerationForCooperatingConfigWrite();
