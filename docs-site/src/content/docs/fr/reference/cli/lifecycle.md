@@ -152,6 +152,12 @@ Invalide le cache local du sélecteur de modèles de Codex afin qu’il soit rec
 
 Exécute opencodex comme service d’arrière-plan géré à l’ouverture de session — **launchd** sous macOS, **unité utilisateur systemd** sous Linux et **Task Scheduler** sous Windows — qui démarre automatiquement à la connexion et redémarre après un plantage. Les services définissent `OCX_SERVICE=1` afin qu’un redémarrage ne réécrive pas inutilement la configuration Codex.
 
+Les installations via le Planificateur de tâches Windows utilisent une priorité de processus normale (`Priority=4`).
+L’ancienne priorité d’arrière-plan (`7`, également la valeur par défaut si le paramètre est omis) peut retarder les réponses
+aux contrôles de santé en cas de contention CPU : la zone de notification affiche alors Offline même si le processus fonctionne.
+Après la mise à jour, exécutez `ocx service repair` pour migrer cette priorité enregistrée et redémarrer le service.
+Une confirmation UAC peut être nécessaire. Une priorité déjà normale ou haute ne déclenche pas, à elle seule, de réenregistrement.
+
 | Sous-commande | Action |
 | --- | --- |
 | aucune | Installe et démarre le service s’il est absent ; sinon, actualise et redémarre le service existant. Une définition Task Scheduler Windows saine est réutilisée ; une définition obsolète peut être réenregistrée et nécessiter une élévation. |
