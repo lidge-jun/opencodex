@@ -1258,6 +1258,7 @@ function applyOAuthPresetCatalog(
   // with live discovery do not expose an enumerable account catalog here, so their saved
   // default remains operator-owned.
   if (
+    provider.liveModels !== true &&
     provider.defaultModel
     && preset.defaultModel
     && preset.models
