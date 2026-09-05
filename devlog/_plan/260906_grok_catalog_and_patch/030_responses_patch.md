@@ -11,3 +11,11 @@ Verifier: pure standalone synthetic SSE-block imports, compare outputs at each l
 ## Audit amendment
 
 Executable repair is limited to authorized code-mode exec and recognized helper aliases; unrelated same-name native custom tools keep raw input byte-for-byte. Explicit negative: render_diagram input JSON string {"input":"literal"} is not unwrapped. Separate scenarios cover missing input.done, terminal-only completion, failed/incomplete after held deltas, and disposal. Authoritative completion wins over previews. Failure never synthesizes successful completion. All retained buffers release. One simulated execution means choose the client-consumed completed item once, not execute every redundant lifecycle representation.
+
+## P revalidation
+
+Consume 020 ff388977a with isolated route/writer proof and remote75+19 tests. 030 remains scoped to the two patch lifecycle gaps. Append040 for independently confirmed ordinary function and dotted-namespace parity gaps; all terminal CI/merge obligations move there unchanged. Main owns production030; a disjoint worker may add tests only in tests/responses/responses-custom-tool-repair.test.ts. Native code-mode exec previews may be held until final when they could be complete raw/wrapped envelopes; unrelated native custom JSON bodies remain raw.
+
+## Implementation audit synthesis
+
+A fragmented pretty JSON wrapper beginning with brace-newline escaped the compact-prefix guard, so preview bytes could contradict compiled completion. The completion parser accepts arbitrary whitespace, escaped property names and property order; native exec now conservatively holds all object-leading inputs to completion. Ordinary JavaScript stays byte-exact, though a block-leading program waits for completion. Added per-character pretty-wrapper and escaped-key regressions.

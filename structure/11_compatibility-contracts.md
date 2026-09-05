@@ -67,3 +67,11 @@ them independently.
 - 선택한 방식: Add a passive versioned schema and one exact `openai`/canonical Codex URL/forward/`gpt-5.6-sol` manifest whose claims reference assertion-level fixtures executed against the production adapter.
 - 다른 대안 대신 이 방식을 선택한 이유: Registry flags do not capture transformations such as local continuation expansion or orphan-output degradation. A broad first matrix would turn unverified assumptions into public promises.
 - 장점, 단점 및 영향: The first contract is small but trustworthy and can feed future CLI/GUI surfaces. Coverage expands only as fixtures are added; no request behavior changes in this slice.
+
+## Routed code-mode patch completion
+
+Native Responses custom exec and function helper aliases apply the same complete-envelope
+resolver at input.done, output_item.done and terminal snapshots. Potential raw/wrapped patch
+previews are withheld before compilation; ordinary native custom payloads retain their raw
+grammar. A string merely containing patch markers remains executable caller input and is
+never rewritten. Completion and disposal release retained preview buffers.

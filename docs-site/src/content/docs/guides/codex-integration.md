@@ -324,6 +324,12 @@ encodes that declaration and its history as an upstream function tool, then rest
 function-call lifecycle to `custom_tool_call` before Codex sees it. Native OpenAI forward routing
 and the supported `apply_patch` custom tool stay unchanged.
 
+If a routed model sends a complete patch as the entire code-mode `exec` input, opencodex
+converts it to the nested `tools.apply_patch` call before the tool-completion events reach
+Codex. Native custom calls and converted function calls use the same completion rule;
+patch previews are held while their executable form is unresolved. JavaScript that merely
+contains patch text and unrelated native custom payloads stay unchanged.
+
 The selected provider must support function/tool calling. A text-only provider without tool-call
 support cannot use `exec`, Browser, or Computer Use. Native OpenAI rows keep their upstream tool
 mode unchanged.
