@@ -2175,6 +2175,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     liveModels: true,
     preserveCustomDestination: true,
     defaultModel: "deepseek/deepseek-v4-flash",
+    promptCacheKey: true,
     // The default is also the cold-start seed: live discovery failure must not empty the catalog
     // for a freshly configured provider with no stale cache (issue #308 pattern).
     models: ["deepseek/deepseek-v4-flash"],
