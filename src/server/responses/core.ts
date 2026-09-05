@@ -339,8 +339,6 @@ import {
   maskLocalCompactionArtifacts,
   prepareGuardrailsTurn,
   rescanGuardrailsResponsesBody,
-  restoreGuardrailsMessages,
-  restoreGuardrailsResponsesBody,
   restoreGuardrailsResponsesParsedRequest,
   type GuardrailsTurn,
 } from "../../guardrails/turn";
@@ -370,6 +368,7 @@ import {
   decideAndRecordGuardrailsLateFailure,
   type GuardrailsLateFailureDecision,
 } from "../../guardrails/late-failure";
+import { prepareGuardrailsLoopMessages } from "../../guardrails/loop-messages";
 import {
   createResponsesItemIdPayloadRewrite,
   hasResponsesItemIdRepair,
@@ -6087,71 +6086,31 @@ async function handleResponsesInner(
       );
     }
   }
-  const prepareGuardrailsLoopMessages = (
+  const prepareLoopMessages = (
     surface: "Media" | "Web-search",
     messages: OcxMessage[],
     addedFromIndex: number,
   ): void | { code: string; errorType: string; message: string; status: number } => {
-    const turn = options.guardrailsTurn;
-    if (!turn || options.guardrailsPassthroughFailure) return;
-    const nextMessages = structuredClone(messages.slice(addedFromIndex));
-    const passthroughMessages = structuredClone(nextMessages);
-    let nextTurn = turn;
-    const findingCountBeforeLoop = turn.findings.length;
-    const guardrailsStartedAt = performance.now();
-    try {
-      for (const message of nextMessages) {
-        if (message.role !== "toolResult") continue;
-        if (typeof message.content === "string") {
-          const extended = extendGuardrailsTurnText(message.content, nextTurn);
-          message.content = extended.text;
-          nextTurn = extended.turn;
-          continue;
-        }
-        for (const part of message.content) {
-          if (part.type !== "text") continue;
-          const extended = extendGuardrailsTurnText(part.text, nextTurn);
-          part.text = extended.text;
-          nextTurn = extended.turn;
-        }
-      }
-    } catch (error) {
-      const decision = decideAndRecordGuardrailsLateFailure({
-        error,
-        inboundProtocol: inboundWire,
-        latencyMs: performance.now() - guardrailsStartedAt,
-        turn: nextTurn,
-      });
-      if (decision.kind === "passthrough") {
-        console.warn(`[opencodex] Guardrails ${surface.toLowerCase()} rescan failed in passthrough mode`);
-        const restoredPrefix = restoreGuardrailsMessages(
-          messages.slice(0, addedFromIndex),
-          nextTurn,
-        );
-        messages.splice(0, messages.length, ...restoredPrefix, ...passthroughMessages);
-        parsed._rawBody = restoreGuardrailsResponsesBody(parsed._rawBody, nextTurn);
-        options.guardrailsTurn = undefined;
-        options.guardrailsPassthroughFailure = true;
-        markBodyNonPersistable(parsed._rawBody);
-        return;
-      }
-      return {
-        status: decision.status,
-        code: decision.code,
-        errorType: "invalid_request_error",
-        message: decision.status === 413
-          ? `${surface} tool results exceed the Guardrails processing limit`
-          : `Guardrails could not safely process ${surface.toLowerCase()} tool results`,
-      };
+    const result = prepareGuardrailsLoopMessages({
+      addedFromIndex,
+      inboundProtocol: inboundWire,
+      messages,
+      passthroughFailure: options.guardrailsPassthroughFailure === true,
+      rawBody: parsed._rawBody,
+      surface,
+      telemetrySurface: lateGuardrailsTelemetrySurface,
+      turn: options.guardrailsTurn,
+    });
+    if (result.kind === "protected") {
+      options.guardrailsTurn = result.turn;
+    } else if (result.kind === "passthrough") {
+      parsed._rawBody = result.rawBody;
+      options.guardrailsTurn = undefined;
+      options.guardrailsPassthroughFailure = true;
+      markBodyNonPersistable(parsed._rawBody);
+    } else if (result.kind === "blocked") {
+      return result.failure;
     }
-    messages.splice(addedFromIndex, messages.length - addedFromIndex, ...nextMessages);
-    options.guardrailsTurn = nextTurn;
-    recordGuardrailsTurnDelta(
-      lateGuardrailsTelemetrySurface,
-      nextTurn,
-      findingCountBeforeLoop,
-      performance.now() - guardrailsStartedAt,
-    );
   };
 
   // Image / web-search sidecars: plan once, then dispatch with runTurn-aware priority.
@@ -6324,7 +6283,7 @@ async function handleResponsesInner(
       waitForRequestSlot: imageProviderFetch.waitForPacing,
       fetchImpl: imageProviderFetch.unpacedFetch ?? imageProviderFetch,
       beforeIterationBuild: (messages, addedFromIndex) =>
-        prepareGuardrailsLoopMessages("Media", messages, addedFromIndex),
+        prepareLoopMessages("Media", messages, addedFromIndex),
       onRequestBuilt: request => {
         recordAdapterReasoning(logCtx, request);
         recordAdapterTier(logCtx, request);
@@ -6406,7 +6365,7 @@ async function handleResponsesInner(
       abortSignal: options.abortSignal,
       ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
       beforeIterationBuild: (messages, addedFromIndex) =>
-        prepareGuardrailsLoopMessages("Web-search", messages, addedFromIndex),
+        prepareLoopMessages("Web-search", messages, addedFromIndex),
       onRequestBuilt: request => {
         recordAdapterReasoning(logCtx, request);
         recordAdapterTier(logCtx, request);

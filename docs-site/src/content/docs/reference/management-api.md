@@ -155,10 +155,11 @@ scope contains no enabled configured provider and does not select `anthropic-nat
 `trafficProtection` is `no-provider-coverage`; the dashboard renders this as **No providers
 protected**, not as ordinary reduced coverage.
 
-Guardrails GET responses include an `ETag` based on the current Guardrails revision. Mutation clients
-must return it in `If-Match`. A missing precondition receives `428 guardrails_revision_required`;
-a stale value receives `412 guardrails_revision_conflict` plus the current revision. The dashboard
-refetches instead of overwriting a newer configuration.
+The revision-bearing `GET /api/guardrails`, `GET /api/guardrails/settings`, and
+`GET /api/guardrails/rules` responses include an `ETag` based on the current Guardrails revision.
+Mutation clients must return it in `If-Match`. A missing precondition receives
+`428 guardrails_revision_required`; a stale value receives `412 guardrails_revision_conflict` plus
+the current revision. The dashboard refetches instead of overwriting a newer configuration.
 
 Custom rules are declarative and bounded: `ruleId`, display metadata, data type, RE2 pattern,
 placeholder type/capture groups, and optional listed validators. The service validates the complete

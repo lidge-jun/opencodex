@@ -5,7 +5,10 @@ import {
   createGuardrailsContinuationScope,
   retainGuardrailsContinuation,
 } from "../../src/guardrails/continuations";
-import { expandPreviousResponseInput } from "../../src/responses/state";
+import {
+  clearResponseStateForTests,
+  expandPreviousResponseInput,
+} from "../../src/responses/state";
 import { warnAgentTaskRecoveryStartup } from "../../src/server";
 import { handleResponses } from "../../src/server/responses/core";
 import { resetAgentTaskRecoveryState } from "../../src/server/responses/agent-task-recovery";
@@ -30,12 +33,14 @@ describe("agent task recovery (opt-in, default off)", () => {
   beforeEach(() => {
     resetAgentTaskRecoveryState();
     clearGuardrailsContinuationsForTests();
+    clearResponseStateForTests();
   });
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
     resetAgentTaskRecoveryState();
     clearGuardrailsContinuationsForTests();
+    clearResponseStateForTests();
   });
 
   test("keeps the disabled fail-fast response byte-identical to the absent feature", async () => {

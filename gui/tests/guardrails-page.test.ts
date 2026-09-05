@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-const LOCALES = ["en", "de", "ja", "ko", "ru", "zh", "zh-TW", "tr"] as const;
+const LOCALES = ["en", "de", "fr", "ja", "ko", "ru", "zh", "zh-TW", "tr"] as const;
 
 async function read(path: string): Promise<string> {
   return Bun.file(new URL(path, import.meta.url)).text();
@@ -23,7 +23,7 @@ test("Guardrails is a direct, bookmarkable dashboard route", async () => {
 
   const app = await read("../src/App.tsx");
   expect(app).toContain('id: "guardrails"');
-  expect(app).toContain('<Guardrails apiBase={API_BASE} />');
+  expect(app).toContain('<Guardrails apiBase={sharedBase} />');
 });
 
 test("Guardrails page uses the management API and shared UI primitives", async () => {

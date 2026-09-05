@@ -179,6 +179,11 @@ output stays masked, including function-call arguments, custom-tool input, Anthr
 input, shell/computer actions, and tool-search payloads. This is deliberate: an upstream model must
 not be able to turn a placeholder into a locally executable copy of the original secret.
 
+Response restoration is fail-safe and bounded. If a successful response cannot be classified as
+JSON or SSE, contains malformed JSON/UTF-8, or exceeds the 32 MiB JSON output limit, opencodex
+returns it with placeholders still masked and records a metadata-only demask warning. It never
+partially restores an oversized or malformed response.
+
 If a placeholder remains inside a tool call, pass only that placeholder or obtain the value through
 an independently authorized secret mechanism. Guardrails does not offer an “unmask tool arguments”
 option.

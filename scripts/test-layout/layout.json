@@ -57,6 +57,11 @@
         ]
       }
     },
+    "guardrails": {
+      "match": [
+        "^(?:guardrails)-"
+      ]
+    },
     "responses": {
       "match": [
         "^(?:apply|chat|citation|continuation|eventstream|legacy|namespace|passthrough|responses|sse|thought|ws)-"

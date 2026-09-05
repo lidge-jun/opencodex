@@ -4,6 +4,7 @@ import {
 } from "../src/guardrails/registry";
 import {
   GuardrailsScanCapacityError,
+  MAX_GUARDRAILS_REGEX_INPUT_BYTES,
   createGuardrailsScanBudget,
   scanGuardrailsText,
   type GuardrailsScanBudget,
@@ -101,11 +102,37 @@ function scanNoFindings(
   assert(findings.length === 0, `benchmark fixture unexpectedly produced ${findings.length} finding(s)`);
 }
 
-function scanLargeTurn(registry: GuardrailsRegistry, leaf: string): void {
+function scanLargeTurn(
+  registry: GuardrailsRegistry,
+  leaf: string,
+  leaves = LARGE_TURN_BYTES / LARGE_LEAF_BYTES,
+): void {
   const budget = createGuardrailsScanBudget();
-  for (let index = 0; index < LARGE_TURN_BYTES / LARGE_LEAF_BYTES; index += 1) {
+  for (let index = 0; index < leaves; index += 1) {
     scanNoFindings(registry, leaf, budget);
   }
+}
+
+function executableRuleCount(registry: GuardrailsRegistry, text: string): number {
+  if (!registry.keywordPrefilterEnabled) return registry.rules.length;
+  const folded = text.toLowerCase();
+  return registry.rules.reduce(
+    (count, rule) => count + (
+      rule.prefilterKeywords.length === 0
+      || rule.prefilterKeywords.some(keyword => folded.includes(keyword))
+        ? 1
+        : 0
+    ),
+    0,
+  );
+}
+
+function admittedLargeTurnLeaves(registry: GuardrailsRegistry, leaf: string): number {
+  const inputBytes = Buffer.byteLength(leaf, "utf8");
+  const rules = executableRuleCount(registry, leaf);
+  assert(rules > 0, "prefiltered benchmark must execute at least one rule");
+  const capacityLeaves = Math.floor(MAX_GUARDRAILS_REGEX_INPUT_BYTES / (inputBytes * rules));
+  return Math.min(LARGE_TURN_BYTES / LARGE_LEAF_BYTES, capacityLeaves);
 }
 
 function measureExpectedCapacityRejection(registry: GuardrailsRegistry, leaf: string): number {
@@ -166,7 +193,10 @@ function main(): void {
   try {
     assert(filteredOld.registry.rules.length === 371, "old prefiltered registry must contain 371 rules");
     assert(filtered.registry.rules.length === 371, "new prefiltered registry must contain 371 rules");
-    prefilteredLargeTurn = measure(1, () => scanLargeTurn(filtered.registry, largeLeaf));
+    const prefilteredLeaves = admittedLargeTurnLeaves(filtered.registry, largeLeaf);
+    assert(prefilteredLeaves > 0, "prefiltered benchmark must admit at least one maximum-size leaf");
+    prefilteredLargeTurn = measure(1, () =>
+      scanLargeTurn(filtered.registry, largeLeaf, prefilteredLeaves));
     const budget = explicitWorstBudget();
     const measuredWorstMs = Math.max(noPrefilterMaxLeaf.maxMs, prefilteredLargeTurn.maxMs);
     if (budget !== undefined) {
@@ -183,9 +213,12 @@ function main(): void {
       },
       fixtures: {
         typicalBytes: Buffer.byteLength(typicalText, "utf8"),
-        largeTurnBytes: LARGE_TURN_BYTES,
+        requestedLargeTurnBytes: LARGE_TURN_BYTES,
         largeLeafBytes: LARGE_LEAF_BYTES,
-        largeTurnLeaves: LARGE_TURN_BYTES / LARGE_LEAF_BYTES,
+        requestedLargeTurnLeaves: LARGE_TURN_BYTES / LARGE_LEAF_BYTES,
+        prefilteredLargeTurnBytes: prefilteredLeaves * LARGE_LEAF_BYTES,
+        prefilteredLargeTurnLeaves: prefilteredLeaves,
+        prefilteredExecutableRules: executableRuleCount(filtered.registry, largeLeaf),
         builtinRules: builtinRuleCount,
         maximumCustomRules: MAX_CUSTOM_RULES,
         worstEffectiveRules: worstRuleCount,

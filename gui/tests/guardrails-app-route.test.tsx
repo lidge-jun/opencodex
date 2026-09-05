@@ -42,7 +42,7 @@ beforeEach(() => {
     localStorage: { configurable: true, value: testWindow.localStorage },
     sessionStorage: { configurable: true, value: testWindow.sessionStorage },
     HTMLElement: { configurable: true, value: testWindow.HTMLElement },
-    __APP_VERSION__: { configurable: true, value: "2.37.0-test" },
+    __APP_VERSION__: { configurable: true, value: "2.43.0-test" },
   });
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
     .IS_REACT_ACT_ENVIRONMENT = true;
@@ -50,7 +50,7 @@ beforeEach(() => {
   const mockFetch = (async (input: RequestInfo | URL) => {
     const url = new URL(String(input instanceof Request ? input.url : input), "http://localhost");
     if (url.pathname === "/healthz") {
-      return json({ status: "ok", version: "2.37.0-test", uptime: 1 });
+      return json({ status: "ok", version: "2.43.0-test", uptime: 1 });
     }
     if (url.pathname === "/api/guardrails/rules") {
       return json({

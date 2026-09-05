@@ -120,6 +120,10 @@ reply are restored only for the original client and only in non-executable assis
 Function/tool arguments, Anthropic `tool_use` input, and shell/computer/tool-search actions remain
 masked even in the client-facing response.
 
+Response restoration is bounded and fail-safe. Successful responses that cannot be classified as
+JSON or SSE, malformed JSON/UTF-8, and JSON bodies above 32 MiB are returned with placeholders still
+masked and produce a metadata-only demask warning; opencodex never partially restores such output.
+
 Images, binary data, and unsupported opaque values are left unchanged. Guardrails is a transport
 privacy control, not a general DLP system: it cannot prevent a model from independently inferring or
 rephrasing information that was otherwise available to it.
