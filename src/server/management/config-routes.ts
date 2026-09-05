@@ -12,6 +12,7 @@ import {
   providerBaseUrlConfigError,
   providerHeadersConfigError,
   saveConfigPreservingClaudeCode,
+  readConfigMutationAudit,
 } from "../../config";
 import {
   clearLoginState,
@@ -267,6 +268,31 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
 
   if (url.pathname === "/api/config" && req.method === "PUT") {
     return jsonResponse({ error: "Full config PUT is disabled. Use /api/providers POST for provider changes." }, 405);
+  }
+
+  if (url.pathname === "/api/config/mutations" && req.method === "GET") {
+    // Mutation history echoes caller-chosen provider/model names and field values.
+    // Only authenticated human-facing management principals may read it; direct
+    // dispatch (undefined principal) and process-scoped capabilities are rejected.
+    if (ctx.principal !== "admin-token" && ctx.principal !== "gui-session") {
+      return jsonResponse(
+        { error: ctx.principal === undefined ? "admin token required" : "not authorized to read config mutation history" },
+        ctx.principal === undefined ? 401 : 403,
+        req,
+        config,
+      );
+    }
+    // The documented default is 100. A missing or blank limit must not collapse to
+    // Number("") === 0 (which would silently return an empty trail); non-positive or
+    // unparseable values also fall back to the default.
+    const rawLimit = url.searchParams.get("limit");
+    const requested = rawLimit === null || rawLimit.trim() === "" ? 100 : Number(rawLimit);
+    const effectiveLimit = Number.isInteger(requested) && requested > 0 ? requested : 100;
+    const { rows, maxRows } = readConfigMutationAudit(effectiveLimit);
+    const response = jsonResponse({ mutations: rows, retention: { maxRows } });
+    const headers = new Headers(response.headers);
+    headers.set("Cache-Control", "no-store");
+    return new Response(response.body, { status: response.status, headers });
   }
 
   if (url.pathname === "/api/settings" && req.method === "GET") {
@@ -560,7 +586,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         else deleteConfigTopLevelKey(config, "codexQuotaAutoRefresh");
       }
       pickerIsEnabled = codexAccountPickerEnabled(config);
-      (deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode)(config);
+      (deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode)(config, { surface: "api", detail: "PUT /api/settings" });
     } catch (error) {
       if (previousSettings.hasCodexAutoStart) config.codexAutoStart = previousSettings.codexAutoStart;
       else deleteConfigTopLevelKey(config, "codexAutoStart");
@@ -933,7 +959,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         else config.visionSidecar.reasoning = normalizedVisionReasoning;
       }
     }
-    saveConfigPreservingClaudeCode(config);
+    saveConfigPreservingClaudeCode(config, { surface: "api", detail: "PUT /api/sidecar-settings" });
     const ws = config.webSearchSidecar ?? {};
     const vision = await sidecarVisionResponseSettings(config);
     const savedWebSearchCandidates = await webSearchCandidateRows(config);
@@ -987,7 +1013,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       if (body.model === "") delete config.shadowCallIntercept.model;
       else config.shadowCallIntercept.model = body.model;
     }
-    saveConfigPreservingClaudeCode(config);
+    saveConfigPreservingClaudeCode(config, { surface: "api", detail: "PUT /api/shadow-call-settings" });
     const sci = config.shadowCallIntercept;
     return jsonResponse({
       ok: true,

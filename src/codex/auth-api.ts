@@ -4,6 +4,7 @@ import {
   mutatePersistedConfig,
   saveConfigPreservingClaudeCode,
   withConfigMutationLockSync,
+  type ConfigMutationSource,
 } from "../config";
 import { codexAccountLogLabel, withCodexAccountLogLabel } from "./account-label";
 import {
@@ -609,8 +610,8 @@ function getRuntimeConfig(config: OcxConfig): OcxConfig {
   return isRuntimeConfig(config) ? config : loadConfig();
 }
 
-function saveRuntimeConfig(sourceConfig: OcxConfig, nextConfig: OcxConfig): void {
-  saveConfigPreservingClaudeCode(nextConfig);
+function saveRuntimeConfig(sourceConfig: OcxConfig, nextConfig: OcxConfig, source: ConfigMutationSource): void {
+  saveConfigPreservingClaudeCode(nextConfig, source);
   if (sourceConfig === nextConfig || !isRuntimeConfig(sourceConfig)) return;
   for (const key of Object.keys(sourceConfig) as Array<keyof OcxConfig>) {
     delete sourceConfig[key];
@@ -663,7 +664,7 @@ function persistNewCodexAccount(
       const namespaceAdded = tracksPickerNamespaces
         && appendDefaultCodexAccountNamespace(runtimeConfig, addedAccount);
       pickerVisibilityChanged = namespaceAdded || retainedPickerBindingRestored;
-      saveRuntimeConfig(sourceConfig, runtimeConfig);
+      saveRuntimeConfig(sourceConfig, runtimeConfig, { surface: "internal", detail: "codex-auth: persist new codex account" });
     } catch (error) {
       for (const key of Object.keys(runtimeConfig) as Array<keyof OcxConfig>) {
         delete runtimeConfig[key];
@@ -1104,7 +1105,7 @@ function reconcileFreshPoolAccountPlans(runtimeConfig: OcxConfig, updates: Fresh
         }
       }
       return { changed, value: accepted };
-    });
+    }, { surface: "internal", detail: "wham: reconcile fresh pool plan observation" });
   } catch (error) {
     // Plan persistence is derived metadata on a read route. Contention must fail closed without
     // turning account listing into a 500; a later refresh can retry against the latest files.
@@ -1919,8 +1920,11 @@ export async function handleCodexAuthAPI(
     if (!isValidCodexAccountId(id) && !isLegacyPoolAccount) {
       return jsonResponse({ error: "Invalid account id format" }, 400);
     }
-    const pickerVisibilityChanged = deleteCodexAccount(runtimeConfig, id);
-    saveRuntimeConfig(config, runtimeConfig);
+    const pickerVisibilityChanged = deleteCodexAccount(runtimeConfig, id, {
+      surface: "api",
+      detail: "DELETE /api/codex-auth/accounts",
+    });
+    saveRuntimeConfig(config, runtimeConfig, { surface: "api", detail: "DELETE /api/codex-auth/accounts" });
     reconcileLiveStateStores();
     const catalogRefresh = await convergeAccountNamespaceCatalog(
       runtimeConfig,
@@ -1944,7 +1948,7 @@ export async function handleCodexAuthAPI(
     if (!account) return jsonResponse({ error: "Account not found" }, 404);
     if (alias) account.alias = alias;
     else delete account.alias;
-    saveRuntimeConfig(config, runtimeConfig);
+    saveRuntimeConfig(config, runtimeConfig, { surface: "api", detail: "PUT /api/codex-auth/accounts/alias" });
     return jsonResponse({ ok: true, id, alias: alias || null });
   }
 
@@ -1966,7 +1970,7 @@ export async function handleCodexAuthAPI(
       clearThreadAccountMapForAccount(id);
       selectFallbackAfterPause(runtimeConfig, id);
     }
-    saveRuntimeConfig(config, runtimeConfig);
+    saveRuntimeConfig(config, runtimeConfig, { surface: "api", detail: "PUT /api/codex-auth/accounts/pause" });
     return jsonResponse({
       ok: true,
       id,
@@ -2014,7 +2018,7 @@ export async function handleCodexAuthAPI(
     // account switch — would outrank the order forever: it blocks preemption and caps
     // every eligibility list at its own tier until that account drains or is paused.
     clearCodexAccountPin(runtimeConfig);
-    saveRuntimeConfig(config, runtimeConfig);
+    saveRuntimeConfig(config, runtimeConfig, { surface: "api", detail: "PUT /api/codex-auth/accounts/priority" });
     return jsonResponse({
       ok: true,
       id,
@@ -2027,7 +2031,7 @@ export async function handleCodexAuthAPI(
     const runtimeConfig = getRuntimeConfig(config);
     const result = await pauseExhaustedCodexAccounts(
       runtimeConfig,
-      () => saveRuntimeConfig(config, runtimeConfig),
+      () => saveRuntimeConfig(config, runtimeConfig, { surface: "api", detail: "PUT /api/codex-auth/accounts/pause-exhausted" }),
     );
     const { pausedAccountIds, checkedAccountCount, failedAccountCount } = result;
     if (checkedAccountCount === 0 && failedAccountCount > 0) {
@@ -2095,7 +2099,7 @@ export async function handleCodexAuthAPI(
     if (body.accountId == null) clearCodexAccountPin(runtimeConfig);
     else setCodexAccountPin(runtimeConfig, targetAccountId);
     resetCodexRoutingForManualSelection(targetAccountId);
-    saveRuntimeConfig(config, runtimeConfig);
+    saveRuntimeConfig(config, runtimeConfig, { surface: "api", detail: "PUT /api/codex-auth/active" });
     return jsonResponse({ ok: true, activeCodexAccountId: body.accountId, appliesImmediately: true });
   }
 
@@ -2125,7 +2129,7 @@ export async function handleCodexAuthAPI(
     }
     const runtimeConfig = getRuntimeConfig(config);
     runtimeConfig.autoSwitchThreshold = body.threshold;
-    saveRuntimeConfig(config, runtimeConfig);
+    saveRuntimeConfig(config, runtimeConfig, { surface: "api", detail: "PUT /api/codex-auth/auto-switch" });
     return jsonResponse({ ok: true });
   }
 
@@ -2161,7 +2165,7 @@ export async function handleCodexAuthAPI(
     }
     if (nextStrategy !== undefined) runtimeConfig.accountPoolStrategy = nextStrategy;
     if (nextSticky !== undefined) runtimeConfig.accountPoolStickyLimit = nextSticky;
-    saveRuntimeConfig(config, runtimeConfig);
+    saveRuntimeConfig(config, runtimeConfig, { surface: "api", detail: `${req.method} /api/codex-auth/pool-strategy` });
     return jsonResponse({
       ok: true,
       accountPoolStrategy: normalizeAccountPoolStrategy(runtimeConfig.accountPoolStrategy),
@@ -2177,7 +2181,7 @@ export async function handleCodexAuthAPI(
     }
     const runtimeConfig = getRuntimeConfig(config);
     runtimeConfig.upstreamFailoverThreshold = body.threshold;
-    saveRuntimeConfig(config, runtimeConfig);
+    saveRuntimeConfig(config, runtimeConfig, { surface: "api", detail: "PUT /api/codex-auth/failover" });
     return jsonResponse({ ok: true });
   }
 
@@ -2583,7 +2587,7 @@ export async function handleCodexAuthAPI(
                     isMain: false,
                   }, accounts);
                   latestConfig.codexAccounts = accounts;
-                  saveRuntimeConfig(config, latestConfig);
+                  saveRuntimeConfig(config, latestConfig, { surface: "internal", detail: "codex-auth: refresh account metadata after login/reauth" });
                 } else {
                   const addedAccount = withCodexAccountLogLabel({ id: accountId, email, plan, isMain: false }, accounts);
                   newAccountPersistence = persistNewCodexAccount(

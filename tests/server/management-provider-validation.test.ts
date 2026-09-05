@@ -678,6 +678,81 @@ describe("provider management validation", () => {
     expect(secretNameError).toContain("[REDACTED]");
   });
 
+  test("provider management validates transientRetryOn5xx bounds and unknown keys", () => {
+    const base = { adapter: "openai-chat", baseUrl: "https://api.openai.com/v1" };
+    expect(providerManagementConfigError("custom", {
+      ...base,
+      transientRetryOn5xx: { enabled: true, attempts: 5 },
+    })).toBeNull();
+    expect(providerManagementConfigError("custom", {
+      ...base,
+      transientRetryOn5xx: { attempts: 0 },
+    })).toContain("transientRetryOn5xx.attempts is invalid");
+    expect(providerManagementConfigError("custom", {
+      ...base,
+      transientRetryOn5xx: { attempts: 11 },
+    })).toContain("transientRetryOn5xx.attempts is invalid");
+    expect(providerManagementConfigError("custom", {
+      ...base,
+      transientRetryOn5xx: { enabled: "yes" },
+    })).toContain("transientRetryOn5xx.enabled is invalid");
+    expect(providerManagementConfigError("custom", {
+      ...base,
+      transientRetryOn5xx: { attempt: 3 },
+    })).toContain("transientRetryOn5xx has unrecognized field");
+    expect(providerManagementConfigError("custom", {
+      ...base,
+      transientRetryOn5xx: "enabled",
+    })).toContain("transientRetryOn5xx is invalid");
+    // A secret-shaped unknown field name must be redacted in the error, never echoed.
+    const secretError = providerManagementConfigError("custom", {
+      ...base,
+      transientRetryOn5xx: { "sk-super-secret-9876": true },
+    })!;
+    expect(secretError).toContain("transientRetryOn5xx has unrecognized field");
+    expect(secretError).not.toContain("sk-super-secret-9876");
+    expect(secretError).toContain("[REDACTED]");
+    // A secret-shaped PROVIDER name must not be echoed by this error path either.
+    const secretNameError = providerManagementConfigError("sk-super-secret-9876", {
+      ...base,
+      transientRetryOn5xx: { attempts: 0 },
+    })!;
+    expect(secretNameError).toContain("transientRetryOn5xx.attempts is invalid");
+    expect(secretNameError).not.toContain("sk-super-secret-9876");
+    expect(secretNameError).toContain("[REDACTED]");
+  });
+
+  test("provider POST rejects invalid transientRetryOn5xx attempts without persisting", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig(config("127.0.0.1"));
+
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "relay",
+          provider: {
+            adapter: "openai-chat",
+            baseUrl: "https://relay.example/v1",
+            transientRetryOn5xx: { enabled: true, attempts: 11 },
+          },
+        }),
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({
+        error: expect.stringContaining("transientRetryOn5xx.attempts is invalid"),
+      });
+      // The invalid provider must not reach disk or the live config.
+      expect(loadConfig().providers.relay).toBeUndefined();
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("provider management redacts provider names from auto-compaction validation errors", () => {
     const secretName = "sk-super-secret-9876";
     const error = providerManagementConfigError(secretName, {

@@ -5,7 +5,7 @@ export const REDACTED_SECRET = "[REDACTED]";
  * credentials over an unsafe channel (e.g. plaintext non-loopback HTTP) rather than
  * re-deriving a narrower local list.
  */
-export const SENSITIVE_KEY_PATTERN = /^(?:authorization|proxy-authorization|cookie|set-cookie|set-cookie2|api[-_]?key|x-api-key|x-goog-api-key|x-amz-security-token|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|client[-_]?secret|password|profile[-_]?arn|exa[-_]?api[-_]?key)$/i;
+export const SENSITIVE_KEY_PATTERN = /^(?:authorization|proxy-authorization|cookie|set-cookie|set-cookie2|api[-_]?key|api[-_]?key[-_]?pool|x-api-key|x-goog-api-key|x-amz-security-token|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|client[-_]?secret|oauth[-_]?client[-_]?secret|password|profile[-_]?arn|exa[-_]?api[-_]?key)$/i;
 
 /**
  * Colon-labelled credential headers echoed back inside an error body
@@ -465,7 +465,9 @@ export function redactSecrets(value: unknown): unknown {
   if (value instanceof Date) return value;
   if (!isPlainObject(value)) return value;
 
-  const result: Record<string, unknown> = {};
+  // Null-prototype record: an own JSON key named "__proto__" must survive the
+  // copy instead of mutating the result's prototype.
+  const result: Record<string, unknown> = Object.create(null);
   for (const [key, entryValue] of Object.entries(value)) {
     result[key] = isSensitiveKey(key) ? REDACTED_SECRET : redactSecrets(entryValue);
   }

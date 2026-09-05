@@ -6,6 +6,7 @@ import {
   saveConfigPreservingClaudeCode,
   withConfigMutationLockSync,
 } from "../config";
+import type { ConfigMutationSource } from "../config-mutation-audit";
 import { removeCodexAccountCredential } from "./account-store";
 import { clearAccountNeedsReauth } from "./account-runtime-state";
 import { getMainChatgptAccountId } from "./auth-collision";
@@ -127,7 +128,11 @@ function restorePersistedConfig(configPath: string, previousBytes: string): void
  *
  * Returns true when a picker-visible row disappeared and the catalog must converge.
  */
-export function deleteCodexAccount(runtimeConfig: OcxConfig, accountId: string): boolean {
+export function deleteCodexAccount(
+  runtimeConfig: OcxConfig,
+  accountId: string,
+  source: ConfigMutationSource = { surface: "internal", detail: "account lifecycle: remove account" },
+): boolean {
   let cleanupFailed = false;
   const pickerVisibilityChanged = withConfigMutationLockSync(() => {
     const previousConfig = structuredClone(runtimeConfig);
@@ -158,7 +163,7 @@ export function deleteCodexAccount(runtimeConfig: OcxConfig, accountId: string):
       try {
         // Persist first for durable configs. Destructive cleanup below must never run for a
         // deletion that failed to commit. Transient configs intentionally skip this write.
-        saveConfigPreservingClaudeCode(runtimeConfig);
+        saveConfigPreservingClaudeCode(runtimeConfig, source);
       } catch (error) {
         restoreRuntimeConfig(runtimeConfig, previousConfig);
         try {

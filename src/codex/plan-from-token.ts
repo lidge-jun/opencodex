@@ -84,7 +84,7 @@ function persistJwtPlanUpdates(runtimeConfig: OcxConfig, updates: FreshPoolPlanU
         }
       }
       return { changed, value: accepted };
-    });
+    }, { surface: "internal", detail: "wham: jwt plan updates" });
   } catch (error) {
     if (error instanceof ConfigMutationLockError) return;
     throw error;

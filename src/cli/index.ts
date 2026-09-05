@@ -215,7 +215,7 @@ async function chooseListenPort(
     }
     if (shouldPersistSelectedPort(config.port, selected, preferred, options)) {
       config.port = selected;
-      saveConfig(config);
+      saveConfig(config, { surface: "cli", detail: "ocx start (port selection)" });
     }
     return selected;
   } catch (err) {

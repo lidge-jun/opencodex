@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as configModule from "../../src/config";
-import { getConfigPath, loadConfig, saveConfig } from "../../src/config";
+import { getConfigPath, loadConfig, readConfigMutationAudit, saveConfig } from "../../src/config";
 import * as destinationPolicy from "../../src/lib/destination-policy";
 import { safeConfigDTO } from "../../src/server/auth-cors";
 import { handleManagementAPI } from "../../src/server/management-api";
@@ -359,5 +359,24 @@ describe("atomic provider editor batch", () => {
     expect(await response?.json()).toEqual({
       error: "Full config PUT is disabled. Use /api/providers POST for provider changes.",
     });
+  });
+
+  test("PUT /api/providers records the API source in the config mutation audit", async () => {
+    const liveConfig = seededConfig();
+    saveConfig(liveConfig);
+    const baseline = editorBaseline(liveConfig);
+    const next: EditorConfig = structuredClone(baseline);
+    next.providers.alpha!.defaultModel = "alpha-new-audit";
+
+    const destinationSpy = spyOn(destinationPolicy, "providerDestinationResolvedError").mockResolvedValue(null);
+    let response: Response | null;
+    try {
+      response = await putBatch(liveConfig, { baseline, next });
+    } finally {
+      destinationSpy.mockRestore();
+    }
+    expect(response?.status).toBe(200);
+    const { rows } = readConfigMutationAudit();
+    expect(rows[0]).toMatchObject({ surface: "api", detail: "PUT /api/providers" });
   });
 });

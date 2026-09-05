@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { loadConfig, saveConfigPreservingClaudeCode } from "../config";
+import { loadConfig, saveConfigPreservingClaudeCode, type ConfigMutationSource } from "../config";
 import { setIntegrationEnabled } from "../codex/desired-state";
 import {
   DESKTOP_FAMILIES,
@@ -45,15 +45,17 @@ export async function applyProfile(
   profile: DesktopProfile,
   mode: Desktop3pConfigMode,
   deps: ApplyProfileDeps = {},
+  source?: ConfigMutationSource,
 ): Promise<{ ok: boolean; path: string; reason?: string; warning?: string }> {
   // Explicit apply is an enable action. Persist intent before any Desktop write
   // so a process crash cannot leave a gateway profile that startup immediately removes.
-  const desired = setIntegrationEnabled("claude-desktop", true);
+  const applySource = source ?? { surface: "cli", detail: "ocx claude desktop apply" };
+  const desired = setIntegrationEnabled("claude-desktop", true, applySource);
   if (!desired.ok) return { ok: false, path: "", reason: desired.message };
   const config = loadConfig();
   const state = await buildClaudeDesktopState(config, profile);
   config.claudeCode = { ...(config.claudeCode ?? {}), desktopProfile: state.profile };
-  saveConfigPreservingClaudeCode(config);
+  saveConfigPreservingClaudeCode(config, applySource);
   const live = await (deps.findLiveProxyImpl ?? findLiveProxy)();
   if (live) {
     // #859: the Desktop alias reverse-map is process-local. Applying through the
@@ -195,7 +197,7 @@ export async function handleClaudeDesktopCommand(argv: string[], deps: ApplyProf
       if (!state.models.some(model => model.route === route && model.available)) throw new Error(`현재 사용할 수 없는 모델입니다: ${route}`);
       const profile = moveDesktopRoute(state.profile, route, familyRaw, flags.includes("--default"));
       config.claudeCode = { ...(config.claudeCode ?? {}), desktopProfile: profile };
-      saveConfigPreservingClaudeCode(config);
+      saveConfigPreservingClaudeCode(config, { surface: "cli", detail: "ocx claude desktop move" });
       console.log(`${route} 모델을 ${familyRaw} 그룹으로 옮겼습니다.`);
       return 0;
     }
@@ -206,7 +208,7 @@ export async function handleClaudeDesktopCommand(argv: string[], deps: ApplyProf
       if (route && !state.models.some(model => model.route === route && model.available)) throw new Error(`현재 사용할 수 없는 모델입니다: ${route}`);
       const profile = setDesktopFamilyDefault(state.profile, familyRaw, route);
       config.claudeCode = { ...(config.claudeCode ?? {}), desktopProfile: profile };
-      saveConfigPreservingClaudeCode(config);
+      saveConfigPreservingClaudeCode(config, { surface: "cli", detail: "ocx claude desktop default" });
       console.log(`${familyRaw} 기본 모델을 ${route ?? "없음"}으로 지정했습니다.`);
       return 0;
     }
@@ -225,9 +227,14 @@ export async function handleClaudeDesktopCommand(argv: string[], deps: ApplyProf
       const profile = parseDesktopProfile(JSON.parse(readFileSync(resolve(source), "utf8")));
       const reconciled = (await buildClaudeDesktopState(config, profile)).profile;
       config.claudeCode = { ...(config.claudeCode ?? {}), desktopProfile: reconciled };
-      saveConfigPreservingClaudeCode(config);
+      saveConfigPreservingClaudeCode(config, { surface: "cli", detail: "ocx claude desktop import" });
       if (flags.includes("--apply")) {
-        const result = await applyProfile(reconciled, "static", deps);
+        const result = await applyProfile(
+          reconciled,
+          "static",
+          deps,
+          { surface: "cli", detail: "ocx claude desktop import" },
+        );
         if (!result.ok) { console.error(`프로필은 저장했지만 Desktop 적용에 실패했습니다: ${result.reason ?? "unknown error"}`); return 1; }
         if (result.warning) console.warn(`⚠️  ${result.warning}`);
       }

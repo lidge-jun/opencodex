@@ -407,7 +407,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       }
       if (Object.keys(next).length > 0) prov.oauthAccountFailover = next;
       else delete prov.oauthAccountFailover;
-      saveConfigPreservingClaudeCode(config);
+      saveConfigPreservingClaudeCode(config, { surface: "api", detail: `${req.method} /api/oauth/accounts/pool` });
       return jsonResponse({ ok: true, ...genericPoolSettingsDto(provider, prov) });
     }
     let enabled = config.anthropicAccountPool?.enabled === true;
@@ -458,7 +458,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       ...(stickyLimit !== undefined ? { stickyLimit } : {}),
       ...(quotaWindow !== undefined ? { quotaWindow } : {}),
     };
-    saveConfigPreservingClaudeCode(config);
+    saveConfigPreservingClaudeCode(config, { surface: "api", detail: `${req.method} /api/oauth/accounts/pool` });
     reconcileLiveStateStores();
     return jsonResponse({
       ok: true,
@@ -638,8 +638,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (body.action !== "store" && body.action !== "restore") return jsonResponse({ error: "action must be store or restore" }, 400);
     const { storeProviderKeyInKeychain, restoreProviderKeyFromKeychain, providerKeyStoreKind } = await import("../../providers/key-store");
     const result = body.action === "store"
-      ? storeProviderKeyInKeychain(config, name)
-      : restoreProviderKeyFromKeychain(config, name);
+      ? storeProviderKeyInKeychain(config, name, { surface: "api", detail: "POST /api/providers/keychain (store)" })
+      : restoreProviderKeyFromKeychain(config, name, { surface: "api", detail: "POST /api/providers/keychain (restore)" });
     if (!result.ok) return jsonResponse({ error: result.error }, result.status);
     const { clearProviderQuotaCache } = await import("../../providers/quota");
     clearProviderQuotaCache();
@@ -695,7 +695,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   // ---------------------------------------------------------------------------
   if (url.pathname === "/api/keys" && req.method === "GET") {
     if (removeExpiredApiKeyRotations(config)) {
-      saveConfigPreservingClaudeCode(config);
+      saveConfigPreservingClaudeCode(config, { surface: "api", detail: "GET /api/keys (expired rotation cleanup)" });
       reconcileLiveStateStores();
     }
     const keys = config.apiKeys ?? [];
@@ -739,7 +739,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if ("error" in result) {
       return jsonResponse({ error: result.error === "not-found" ? "key not found" : "rotation already pending" }, result.error === "not-found" ? 404 : 409, req, config);
     }
-    saveConfigPreservingClaudeCode(config);
+    saveConfigPreservingClaudeCode(config, { surface: "api", detail: "POST /api/keys/rotate" });
     reconcileLiveStateStores();
     return jsonResponse(result, 201, req, config);
   }
@@ -752,10 +752,10 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     }
     const result = commitApiKeyRotation(config, body.id, body.rotationId);
     if ("error" in result) {
-      if (result.error === "expired") saveConfigPreservingClaudeCode(config);
+      if (result.error === "expired") saveConfigPreservingClaudeCode(config, { surface: "api", detail: "POST /api/keys/rotate/commit (expired rotation cleanup)" });
       return jsonResponse({ error: result.error === "not-found" ? "key rotation not found" : `rotation ${result.error}` }, result.error === "not-found" ? 404 : 409, req, config);
     }
-    saveConfigPreservingClaudeCode(config);
+    saveConfigPreservingClaudeCode(config, { surface: "api", detail: "POST /api/keys/rotate/commit" });
     reconcileLiveStateStores();
     return jsonResponse({ ok: true }, 200, req, config);
   }
@@ -769,7 +769,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (!abortApiKeyRotation(config, body.id, body.rotationId)) {
       return jsonResponse({ error: "key rotation not found or mismatched" }, 409, req, config);
     }
-    saveConfigPreservingClaudeCode(config);
+    saveConfigPreservingClaudeCode(config, { surface: "api", detail: "DELETE /api/keys/rotate" });
     reconcileLiveStateStores();
     return jsonResponse({ ok: true }, 200, req, config);
   }
@@ -788,7 +788,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const key = "ocx_data_" + randomBytes(20).toString("hex");
     const entry = { id: randomUUID(), name, key, createdAt: new Date().toISOString() };
     config.apiKeys = [...(config.apiKeys ?? []), entry];
-    saveConfigPreservingClaudeCode(config);
+    saveConfigPreservingClaudeCode(config, { surface: "api", detail: "POST /api/keys" });
     reconcileLiveStateStores();
     return jsonResponse({ id: entry.id, name: entry.name, key: entry.key, createdAt: entry.createdAt }, 201, req, config);
   }
@@ -802,7 +802,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const entry = (config.apiKeys ?? []).find(k => k.id === body.id);
     if (!entry) return jsonResponse({ error: "key not found" }, 404, req, config);
     entry.name = nameField.value;
-    saveConfigPreservingClaudeCode(config);
+    saveConfigPreservingClaudeCode(config, { surface: "api", detail: "PATCH /api/keys" });
     reconcileLiveStateStores();
     // Never echo key material from a rename.
     return jsonResponse({ id: entry.id, name: entry.name, createdAt: entry.createdAt }, 200, req, config);
@@ -816,7 +816,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     config.apiKeys = (config.apiKeys ?? []).filter(k => k.id !== body.id);
     // A stale id must not read as a successful revocation.
     if (config.apiKeys.length === before) return jsonResponse({ error: "key not found" }, 404, req, config);
-    saveConfigPreservingClaudeCode(config);
+    saveConfigPreservingClaudeCode(config, { surface: "api", detail: "DELETE /api/keys" });
     reconcileLiveStateStores();
     return jsonResponse({ success: true }, 200, req, config);
   }

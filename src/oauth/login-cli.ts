@@ -161,7 +161,7 @@ export async function commitKeyLoginProvider(
   const mergedProvider = mergeKeyLoginProviderRow(provider, config.providers[name]);
   initializeProviderModelSelection(name, mergedProvider, config.providers[name], config);
   config.providers[name] = mergedProvider;
-  saveConfig(config);
+  saveConfig(config, { surface: "cli", detail: "ocx key login" });
   // Evaluate the reload BEFORE the optional call: `onLiveReload?.(await ...)` short-circuits
   // the whole argument list when no callback is supplied, so the reload would never fire for
   // callers that do not care about the outcome.

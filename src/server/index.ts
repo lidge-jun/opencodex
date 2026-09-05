@@ -674,7 +674,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   // choosing Subscription DELETED the key, so a pre-upgrade block with no authMode is
   // indistinguishable from "never chose". Pin those to subscription once so an upgrade
   // never silently moves a deliberate subscriber onto proxy.
-  if (runClaudeAuthModeMigration(config)) saveConfig(config);
+  if (runClaudeAuthModeMigration(config)) saveConfig(config, { surface: "internal", detail: "startup: migrate claude auth mode" });
   // Sidecar model migration (KST 2026-07-10 06:00 = UTC 2026-07-09 21:00): auto-migrate the old
   // gpt-5.4-mini default to gpt-5.6-luna for both search and vision sidecars. Only touches configs
   // still on the old default — explicit user choices are preserved.
@@ -690,7 +690,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         config.visionSidecar = { ...config.visionSidecar, model: "gpt-5.6-luna" };
         migrated = true;
       }
-      if (migrated) saveConfig(config);
+      if (migrated) saveConfig(config, { surface: "internal", detail: "startup: migrate sidecar defaults" });
     }
   }
   // Resolve unattended service-home authority before any Codex lock, cache, owner,

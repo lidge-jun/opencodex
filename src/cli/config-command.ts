@@ -168,7 +168,7 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
         }
         Object.assign(fresh, config);
         return { changed: JSON.stringify(fresh) !== before, value: undefined };
-      });
+      }, { surface: "cli", detail: `ocx config ${action}` });
       if (outcome.status === "unavailable") {
         throw new Error(outcome.reason === "conflict"
           ? "config changed while applying this update; retry"
@@ -206,7 +206,7 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
       if (!path) throw new CliUsageError("import path is required", USAGE);
       if (!yes) throw new CliUsageError("import requires --yes", USAGE);
       rejectArgs(args, USAGE);
-      saveConfig(validate(loadInput(path)));
+      saveConfig(validate(loadInput(path)), { surface: "cli", detail: "ocx config import" });
       printData({ ok: true, source: path }, wantsJson, [`Imported config from ${path}. Restart or run ocx sync if needed.`]);
       return;
     }

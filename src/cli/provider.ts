@@ -61,7 +61,7 @@ function maskSecret(value: string): string {
 // Validation helper (F1 fix: validate before saveConfig)
 // ---------------------------------------------------------------------------
 
-function validateAndSave(config: ReturnType<typeof loadConfig>): void {
+function validateAndSave(config: ReturnType<typeof loadConfig>, detail = "ocx provider set"): void {
   if (!config.providers || Object.keys(config.providers).length === 0) {
     console.error("Error: config would have no providers. Aborting.");
     process.exit(1);
@@ -70,7 +70,7 @@ function validateAndSave(config: ReturnType<typeof loadConfig>): void {
     console.error(`Error: defaultProvider "${config.defaultProvider}" does not exist in providers. Aborting.`);
     process.exit(1);
   }
-  saveConfig(config);
+  saveConfig(config, { surface: "cli", detail });
 }
 
 // ---------------------------------------------------------------------------
@@ -225,7 +225,7 @@ async function handleAdd(args: string[]): Promise<void> {
   if (allowPrivateNetwork) provConfig.allowPrivateNetwork = true;
   if (setDefault) config.defaultProvider = name;
 
-  validateAndSave(config);
+  validateAndSave(config, "ocx provider add");
 
   if (wantsJson) {
     console.log(JSON.stringify({
@@ -317,7 +317,7 @@ function handleRemove(args: string[]): void {
 
   delete config.providers[name];
   const droppedCustomModels = dropProviderCustomModels(config, name);
-  validateAndSave(config);
+  validateAndSave(config, "ocx provider remove");
 
 
   if (wantsJson) {
@@ -411,7 +411,7 @@ function handleSetDefault(args: string[]): void {
   }
 
   config.defaultProvider = name;
-  validateAndSave(config);
+  validateAndSave(config, "ocx provider set-default");
 
 
   if (wantsJson) {

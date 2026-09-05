@@ -1365,7 +1365,7 @@ export function reconcileOAuthProviders(config: OcxConfig, persist = true): bool
     const next = projectOAuthProviderReconciliation(fresh);
     if (next.changed) adoptOAuthReconciliation(fresh, next);
     return { changed: next.changed, value: next };
-  });
+  }, { surface: "internal", detail: "oauth: reconcile provider presets" });
   if (outcome.status === "unavailable") {
     console.warn(
       `[opencodex] OAuth provider reconciliation could not be persisted (${outcome.reason}); `

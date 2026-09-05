@@ -1,6 +1,8 @@
-import { createHash } from "node:crypto";
-import { chmodSync, constants as fsConstants, copyFileSync, existsSync, linkSync, mkdirSync, readFileSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
+import { chmodSync, closeSync, constants as fsConstants, copyFileSync, existsSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
 import * as z from "zod/v4";
 import { isValidProviderName, hasOwnProvider } from "./config/provider-name";
@@ -20,6 +22,20 @@ import {
   reasoningSummaryDeliveryRecordConfigError,
   upstreamHttpVersionConfigError,
 } from "./config/provider-validation";
+import {
+  buildConfigMutationSnapshot as buildAuditSnapshot,
+  CONFIG_MUTATION_DB_FILENAME,
+  deletePendingConfigMutationAudit,
+  deletePendingConfigMutationAuditAtPath,
+  ensureConfigMutationAuditTable,
+  listPendingConfigMutationAuditPaths,
+  readConfigMutationAudit as readAuditRows,
+  reconcilePendingConfigMutationAudit,
+  recordPendingConfigMutationAuditNow,
+  writePendingConfigMutationAudit,
+  type ConfigMutationAuditRow,
+  type ConfigMutationSource,
+} from "./config-mutation-audit";
 import {
   bumpConfigGenerationAtPath,
   bumpCurrentConfigGeneration,
@@ -61,7 +77,11 @@ import {
 import { recordOwnedConfigPath } from "./lib/config-ownership";
 import { assertNotRealHomeUnderTest } from "./lib/test-home-guard";
 import { providerDestinationConfigError } from "./lib/destination-policy";
-import { redactSecretString } from "./lib/redact";
+import { REDACTED_SECRET, redactSecretString, redactSecrets } from "./lib/redact";
+import {
+  resolveTrustedWindowsPowerShellExe,
+  resolveTrustedWindowsSystemDirectory,
+} from "./lib/windows-elevation";
 import { openRouterRoutingConfigError } from "./providers/openrouter-routing";
 import { MODEL_ALIAS_PATTERN } from "./providers/default-aliases";
 import { MODEL_DISCOVERY_MAX_MODELS } from "./providers/model-discovery-limits";
@@ -1679,6 +1699,28 @@ function sanitizeRetryOn429ForLoad(parsed: unknown): void {
 }
 
 /**
+ * Management write-boundary validation for transientRetryOn5xx, mirroring
+ * retryOn429PolicyConfigError: the shared policy schema is strict (1-10
+ * attempts), and a malformed write must be rejected before it can reach disk and
+ * then fail the next load. Never echoes values; secret-shaped unknown field names
+ * are redacted.
+ */
+export function transientRetryOn5xxPolicyConfigError(policy: unknown): string | null {
+  if (policy === undefined) return null;
+  const result = transientRetryOn5xxPolicySchema.safeParse(policy);
+  if (result.success) return null;
+  const first = result.error.issues[0];
+  if (!first) return "transientRetryOn5xx is invalid";
+  if (first.code === "unrecognized_keys") {
+    const names = first.keys.map(key => JSON.stringify(redactSecretString(key))).join(", ");
+    return "transientRetryOn5xx has unrecognized field" + (first.keys.length > 1 ? "s" : "") + ": " + names;
+  }
+  if (first.path.length === 0) return "transientRetryOn5xx is invalid (" + first.message + ")";
+  const field = String(first.path[first.path.length - 1]);
+  return "transientRetryOn5xx." + field + " is invalid (" + first.message + ")";
+}
+
+/**
  * Management write-boundary validation for `retryOn429` (fail closed). Unlike the
  * lenient load-time sanitizer, invalid values and unknown keys are rejected outright so
  * a POST/PATCH cannot persist a policy the proxy would then silently degrade. Reuses the
@@ -2847,7 +2889,6 @@ export function readConfigAdmissionSnapshot(): ConfigAdmissionSnapshot {
   };
 }
 
-const CONFIG_MUTATION_DB_FILENAME = "config-mutation.sqlite";
 const CONFIG_MUTATION_DB_SIDECARS = ["-journal", "-wal", "-shm"] as const;
 let warnedConfigMutationDirectoryAcl = false;
 
@@ -2919,6 +2960,42 @@ export function prepareConfigMutationDatabasePathForWrite(): string {
 
 let configMutationLockDepth = 0;
 let configMutationDatabase: Database | null = null;
+/** Mutation ids whose markers are deleted after the surrounding transaction commits. */
+let pendingConfigMutationAuditCleanup: Set<string> | null = null;
+/** Test-only seam: fail the config.json atomic write AFTER the pending marker is persisted. */
+let failConfigAtomicWriteForTests: (() => Error) | null = null;
+/** Test-only seam: fail the config.json atomic write AFTER the rename lands, before the audit commit. */
+let failAfterConfigAtomicWriteForTests: (() => Error) | null = null;
+/** Test-only seam: make recovery marker deletion fail after the recovery transaction commits. */
+let failRecoveryMarkerUnlinkForTests: (() => Error) | null = null;
+
+/**
+ * Test-only one-shot seam: make the next changed config.json persist throw after
+ * writing its pending audit marker but before the config rename lands. Mirrors a
+ * crash/power loss between the marker write and the atomic config write.
+ */
+export function setConfigAtomicWriteFailureForTests(factory: (() => Error) | null): void {
+  failConfigAtomicWriteForTests = factory;
+}
+
+/**
+ * Test-only one-shot seam: make the next changed config.json persist throw AFTER
+ * the rename lands but before the audit row commits. Mirrors a crash between the
+ * rename and the commit, the exact state recovery replays.
+ */
+export function setConfigPostWriteFailureForTests(factory: (() => Error) | null): void {
+  failAfterConfigAtomicWriteForTests = factory;
+}
+
+/**
+ * Test-only one-shot seam: make the next recovery-marker deletion throw AFTER
+ * the recovery transaction commits. Mirrors a transient handle hold on the
+ * marker path; the committed audit row must survive and the leftover marker
+ * must be re-decided on the next recovery without failing the save.
+ */
+export function setConfigRecoveryMarkerUnlinkFailureForTests(factory: (() => Error) | null): void {
+  failRecoveryMarkerUnlinkForTests = factory;
+}
 
 /**
  * Serialize synchronous config and Codex credential-generation commits across processes with an
@@ -2946,6 +3023,38 @@ export function withConfigMutationLockSync<T>(fn: () => T): T {
     database.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
     transactionOpen = true;
     initializeConfigGeneration(database);
+    ensureConfigMutationAuditTable(database);
+    // Replay any interrupted write (config renamed but audit row not committed)
+    // in its OWN transaction before this mutation starts. A recovered marker's
+    // row commits here, and the marker is removed, so a later failure in the new
+    // mutation can neither roll the recovered row back nor let a new marker
+    // overwrite the one whose replay has not yet committed.
+    const pendingPaths = listPendingConfigMutationAuditPaths(getConfigDir());
+    if (pendingPaths.length > 0) {
+      for (const markerPath of pendingPaths) {
+        reconcilePendingConfigMutationAudit(database, markerPath, getConfigPath());
+      }
+      database.exec("COMMIT");
+      transactionOpen = false;
+      // Every pending marker is decided here: valid ones were replayed or dropped,
+      // and a parseable-but-invalid one cannot be trusted, so it is removed too.
+      for (const markerPath of pendingPaths) {
+        try {
+          const failure = failRecoveryMarkerUnlinkForTests;
+          if (failure) {
+            failRecoveryMarkerUnlinkForTests = null;
+            throw failure();
+          }
+          deletePendingConfigMutationAuditAtPath(markerPath);
+        } catch {
+          // Best-effort after the recovery COMMIT: the row is durable and a leftover
+          // marker is re-decided (replayed or dropped) on the next recovery, so a
+          // transient unlink failure must not fail an already-committed mutation.
+        }
+      }
+      database.exec("BEGIN IMMEDIATE");
+      transactionOpen = true;
+    }
   } catch (cause) {
     if (transactionOpen) {
       try { database?.exec("ROLLBACK"); } catch { /* close below still releases the OS lock */ }
@@ -2966,19 +3075,35 @@ export function withConfigMutationLockSync<T>(fn: () => T): T {
     const value = fn();
     database.exec("COMMIT");
     transactionOpen = false;
+    if (pendingConfigMutationAuditCleanup && pendingConfigMutationAuditCleanup.size > 0) {
+      const mutationIds = [...pendingConfigMutationAuditCleanup];
+      pendingConfigMutationAuditCleanup = null;
+      for (const mutationId of mutationIds) {
+        try {
+          deletePendingConfigMutationAudit(getConfigDir(), mutationId);
+        } catch {
+          // Best-effort after the COMMIT: the audit row is durable. A leftover marker
+          // is harmless and the next recovery reconciles it, so an unlink failure
+          // (e.g. a transient handle hold) must not surface as a failed write.
+        }
+      }
+    }
     return value;
   } catch (error) {
     if (transactionOpen) {
       try { database.exec("ROLLBACK"); } catch { /* close below still releases the OS lock */ }
       transactionOpen = false;
     }
+    pendingConfigMutationAuditCleanup = null;
     throw error;
   } finally {
     configMutationLockDepth = 0;
     configMutationDatabase = null;
+    pendingConfigMutationAuditCleanup = null;
     try { database.close(); } catch { /* the OS lock is released with the handle */ }
   }
 }
+
 
 function bumpGenerationForCooperatingConfigWrite(): void {
   if (!configMutationDatabase) {
@@ -2998,6 +3123,19 @@ export const readConfigGeneration: ReadConfigGeneration = () => {
 export function observeConfigGeneration(): ConfigGenerationObservation {
   return observeConfigGenerationAtPath(join(getConfigDir(), CONFIG_MUTATION_DB_FILENAME));
 }
+
+/** Read the bounded config mutation audit trail, newest first (default 100, cap 1000). */
+export function readConfigMutationAudit(
+  limit = 100,
+): { rows: ConfigMutationAuditRow[]; maxRows: number } {
+  return readAuditRows(getConfigDir(), getConfigPath(), limit);
+}
+
+export {
+  buildConfigMutationSnapshot,
+  setConfigAuditMaxRowsForTests,
+} from "./config-mutation-audit";
+export type { ConfigMutationAuditRow, ConfigMutationSource };
 
 /**
  * Read the generation from the transaction that is open RIGHT NOW.
@@ -3071,11 +3209,14 @@ export const withExpectedConfigGenerationSync: WithExpectedConfigGenerationSync 
 
 /**
  * Atomic config.json write WITHOUT the mutation lock; callers must hold
- * `withConfigMutationLockSync`. Returns true when bytes changed. Refreshes the
- * cost-overlay registry from the persisted config so runtime estimates follow
- * every save path.
+ * `withConfigMutationLockSync`. Returns the exact persisted document when bytes
+ * changed and null when the save was byte-identical. Refreshes the cost-overlay
+ * registry from the persisted config so runtime estimates follow every save path.
  */
-function persistConfigUnlocked(config: OcxConfig): boolean {
+function persistConfigUnlocked(
+  config: OcxConfig,
+  audit?: { before: unknown; source: ConfigMutationSource },
+): OcxConfig | null {
   const configPath = getConfigPath();
   const rawBeforeWrite = readRawConfigJson();
   const clientPersistenceError = failClosedClientPersistenceError(rawBeforeWrite, config);
@@ -3102,25 +3243,65 @@ function persistConfigUnlocked(config: OcxConfig): boolean {
   // adopt the overlay without waiting for a changed save or restart.
   if (unchanged) {
     refreshUserCostOverlays(persisted);
-    return false;
+    return null;
+  }
+  const auditMutationId = audit ? randomUUID() : null;
+  if (audit) {
+    // Write-ahead marker: persisted BEFORE the rename so a crash between the rename
+    // and the audit-row commit is recovered (replayed or dropped) on the next access.
+    // Each marker is named by its mutation id, so recovery can only ever delete the
+    // exact marker it reconciled.
+    const snapshot = buildAuditSnapshot(audit.before, persisted);
+    writePendingConfigMutationAudit({
+      mutationId: auditMutationId!,
+      createdAt: Date.now(),
+      surface: audit.source.surface,
+      detail: audit.source.detail,
+      fields: snapshot.fields,
+      before: snapshot.before,
+      after: snapshot.after,
+      afterSha256: createHash("sha256").update(bytes).digest("hex"),
+    }, getConfigDir(), atomicWriteFile);
+  }
+  const failWrite = failConfigAtomicWriteForTests;
+  if (failWrite) {
+    failConfigAtomicWriteForTests = null;
+    throw failWrite();
   }
   atomicWriteFile(configPath, bytes);
+  const failAfterWrite = failAfterConfigAtomicWriteForTests;
+  if (failAfterWrite) {
+    failAfterConfigAtomicWriteForTests = null;
+    throw failAfterWrite();
+  }
   // For changed saves, refresh only AFTER the write succeeded so a failed
   // write cannot leave estimates reflecting configuration never persisted.
   refreshUserCostOverlays(persisted);
-  return true;
+  if (audit && configMutationDatabase) {
+    const recorded = recordPendingConfigMutationAuditNow(configMutationDatabase, getConfigDir(), auditMutationId!);
+    if (recorded && auditMutationId) {
+      if (!pendingConfigMutationAuditCleanup) pendingConfigMutationAuditCleanup = new Set();
+      pendingConfigMutationAuditCleanup.add(auditMutationId);
+    }
+  }
+  return persisted;
 }
 
 /** Persist `config` to config.json under the config-mutation lock. */
-export function saveConfig(config: OcxConfig): void {
+export function saveConfig(
+  config: OcxConfig,
+  source: ConfigMutationSource = { surface: "internal", detail: "saveConfig" },
+): void {
   // Keep the real-home assertion ahead of even lock-directory preparation.
   assertNotRealHomeUnderTest(getConfigDir());
   withConfigMutationLockSync(() => {
+    const beforeRaw = readRawConfigJson();
     const withProvenance = projectCustomModelCatalogMigration(
-      readRawConfigJson(),
+      beforeRaw,
       projectConfigRebaseProvenance(config),
     );
-    if (persistConfigUnlocked(withProvenance)) bumpGenerationForCooperatingConfigWrite();
+    const persisted = persistConfigUnlocked(withProvenance, { before: beforeRaw, source });
+    if (persisted) bumpGenerationForCooperatingConfigWrite();
     adoptCustomModelCatalogMigration(config, withProvenance);
     if (withProvenance.configRebaseProvenance === undefined) delete config.configRebaseProvenance;
     else config.configRebaseProvenance = structuredClone(withProvenance.configRebaseProvenance);
@@ -3159,6 +3340,7 @@ function unavailableConfigMutationReason(snapshot: ConfigFileSnapshot): "missing
  */
 export function mutatePersistedConfig<T>(
   mutate: (config: OcxConfig) => PersistedConfigMutation<T>,
+  source: ConfigMutationSource = { surface: "internal", detail: "mutatePersistedConfig" },
 ): PersistedConfigMutationOutcome<T> {
   // Avoid creating/opening the coordinator database for a read-path update that already knows
   // there is no valid config. The same check runs again under the transaction for authority.
@@ -3209,7 +3391,14 @@ export function mutatePersistedConfig<T>(
         commitBase.diagnostics.config,
         projectConfigRebaseProvenance(confirmedConfig),
       );
-      if (persistConfigUnlocked(projected)) bumpGenerationForCooperatingConfigWrite();
+      const persisted = persistConfigUnlocked(projected, {
+        // The exact persisted document, matching saveConfig and
+        // saveConfigPreservingClaudeCode. The parsed config carries schema
+        // defaults and degraded fields that were never on disk.
+        before: readRawConfigJson(),
+        source,
+      });
+      if (persisted) bumpGenerationForCooperatingConfigWrite();
       return { status: "committed", value: confirmed.value };
     }
     return { status: "unavailable", reason: "conflict" };
@@ -3569,7 +3758,10 @@ function readPersistedServerBinding(
  * Custom-model rows are merged by their stable `id`, preserving independent
  * edits and deletions across stale whole-config saves.
  */
-export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
+export function saveConfigPreservingClaudeCode(
+  config: OcxConfig,
+  source: ConfigMutationSource = { surface: "internal", detail: "saveConfigPreservingClaudeCode" },
+): void {
   withConfigMutationLockSync(() => {
     const bindingBaseline = persistedLiveServerBinding.get(config);
     // One authoritative pre-write read feeds both the live-config reconciliation and
@@ -3636,10 +3828,12 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
       const persistedConfig: OcxConfig = { ...projectedConfig, port: persistedBinding.port };
       if (persistedBinding.hostname === undefined) delete persistedConfig.hostname;
       else persistedConfig.hostname = persistedBinding.hostname;
-      if (persistConfigUnlocked(persistedConfig)) bumpGenerationForCooperatingConfigWrite();
+      const persisted = persistConfigUnlocked(persistedConfig, { before: onDisk, source });
+      if (persisted) bumpGenerationForCooperatingConfigWrite();
       persistedLiveServerBinding.set(config, persistedBinding);
     } else {
-      if (persistConfigUnlocked(projectedConfig)) bumpGenerationForCooperatingConfigWrite();
+      const persisted = persistConfigUnlocked(projectedConfig, { before: onDisk, source });
+      if (persisted) bumpGenerationForCooperatingConfigWrite();
     }
     adoptCustomModelCatalogMigration(config, projectedConfig);
     if (claudeCodeBaseline.has(config)) {

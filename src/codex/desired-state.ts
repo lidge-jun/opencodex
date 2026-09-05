@@ -21,6 +21,7 @@
  * Design record: devlog/_fin/260803_codex_desktop_toggle/030_desired_state.md.
  */
 import { deleteConfigTopLevelKey, loadConfig, mutatePersistedConfig } from "../config";
+import type { ConfigMutationSource } from "../config";
 import type { OcxClientIntegrationsConfig, OcxConfig } from "../types";
 import { runStartupReadinessSync, type ReadinessGate, type SyncOutcomeLike } from "../server/readiness";
 
@@ -116,6 +117,7 @@ export function codexIntegrationEnabledNow(): boolean {
 export function setIntegrationEnabled(
   client: DurableIntentClientId,
   enabled: boolean,
+  source: ConfigMutationSource = { surface: "internal", detail: "desired-state: setIntegrationEnabled" },
 ): CodexDesiredStateResult {
   const outcome = mutatePersistedConfig(config => {
     const current = integrationEnabled(config, client);
@@ -134,7 +136,7 @@ export function setIntegrationEnabled(
     if (Object.keys(integrations).length === 0) deleteConfigTopLevelKey(config, "clientIntegrations");
     else config.clientIntegrations = integrations;
     return { changed: true, value: enabled };
-  });
+  }, source);
 
   if (outcome.status !== "unavailable") {
     return { ok: true, status: outcome.status, enabled };
@@ -156,12 +158,18 @@ export function setIntegrationEnabled(
   };
 }
 
-export function setCodexIntegrationEnabled(enabled: boolean): CodexDesiredStateResult {
-  return setIntegrationEnabled("codex", enabled);
+export function setCodexIntegrationEnabled(
+  enabled: boolean,
+  source?: ConfigMutationSource,
+): CodexDesiredStateResult {
+  return setIntegrationEnabled("codex", enabled, source);
 }
 
-export function setGrokIntegrationEnabled(enabled: boolean): CodexDesiredStateResult {
-  return setIntegrationEnabled("grok", enabled);
+export function setGrokIntegrationEnabled(
+  enabled: boolean,
+  source?: ConfigMutationSource,
+): CodexDesiredStateResult {
+  return setIntegrationEnabled("grok", enabled, source);
 }
 
 /** Whether Claude Desktop's managed gateway profile is wanted. */
@@ -174,8 +182,11 @@ export function claudeDesktopIntegrationEnabledNow(): boolean {
   return claudeDesktopIntegrationEnabled(loadConfig());
 }
 
-export function setClaudeDesktopIntegrationEnabled(enabled: boolean): CodexDesiredStateResult {
-  return setIntegrationEnabled("claude-desktop", enabled);
+export function setClaudeDesktopIntegrationEnabled(
+  enabled: boolean,
+  source?: ConfigMutationSource,
+): CodexDesiredStateResult {
+  return setIntegrationEnabled("claude-desktop", enabled, source);
 }
 
 /**

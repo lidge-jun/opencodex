@@ -455,3 +455,37 @@ the residual directory for manual review; there is no recursive-delete fallback.
 ## Remote client key files
 
 Client connection metadata stores a stable `apiKeyId` and a non-secret rotation `pendingOperation`. The current data secret remains only in `service-api-token`; a bounded rotation temporarily keeps the old secret in owner-only `service-api-token.prev`. Commit or recovery clears the marker before orphan cleanup. `ocx disconnect` is local-only and leaves remote revocation to the hub's **Integrations → API Keys** page. Hub and local usage stores are not mirrored.
+## Config mutation audit
+
+Every changed persisted config write is recorded in `config-mutation.sqlite` beside `config.json`
+(`config_mutation_audit` table, newest-first, default read 100 rows / cap 1000, retention 5000 rows).
+The row records the mutation surface (CLI / management API / internal), the route or command detail,
+the changed field paths (redacted, capped at 64), and bounded redacted before/after snapshots
+(4096 chars per entry). Raw credentials and request content are never stored; the pending
+`config-mutation-pending-<id>.json` markers (one per write) carry the same redacted snapshots plus
+the SHA-256 of the exact bytes the write produced; each marker is named by a unique mutation id so
+recovery can only ever delete the exact marker it reconciled.
+
+[Decision Log]
+- 목적과 의도: Record who changed config.json, through which surface, and what the redacted before/after
+  looked like, without ever persisting admission secrets or request payloads.
+- 기존 구현 및 제약 조건: config.json was byte-atomic with a generation counter, but there was no
+  durable attribution trail; the pre-existing SQLite coordinator and mutation lock were already used
+  by Codex credential-generation commits.
+- 검토한 주요 대안: In-process ring buffer (lost on restart), plain append log (no ordering or
+  crash-recovery guarantee), or a write-ahead marker plus a SQLite audit table inside the existing
+  config mutation transaction.
+- 선택한 방식: SQLite `config_mutation_audit` table sharing the config mutation lock, with an atomic
+  per-mutation `config-mutation-pending-<id>.json` write-ahead markers written before the config
+  rename and removed after the audit row commits; an ordinary process crash between rename and
+  commit replays (deduped) or drops each marker on the next read or write. The marker directory
+  fsync is a best-effort ordering aid and is not a power-loss durability guarantee.
+- 다른 대안 대신 이 방식을 선택한 이유: The marker makes the audit row survive the same process-crash
+  window the atomic rename protects. The config rename and the audit commit are coordinated under the
+  shared mutation lock as one logical mutation, not a single transaction: a crash between the two
+  separate operations is recovered by the write-ahead marker (replay or drop), and a write that never
+  reached the rename cannot leave an audit row behind.
+- 장점, 단점 및 영향: Recovery is deterministic (replay or drop, never a phantom row), retention is
+  bounded, and the management read never creates or hardens the coordinator directory; the audit
+  subsystem lives in `src/config-mutation-audit.ts` and must not import back into config/routing/
+  server code (enforced by a module-boundary regression).

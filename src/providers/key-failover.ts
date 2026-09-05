@@ -233,7 +233,7 @@ function rotateKeyAfterFailure(
       };
     }
     return { changed: false, value: { exhaustedCount: pool.length, failedId: failedEntry?.id } };
-  });
+  }, { surface: "internal", detail: "key-failover: rotate active provider key" });
   if (outcome.status === "unavailable" || outcome.value === null) return null;
   if (outcome.value.failedId) {
     // A 401 is a verdict about the credential itself, not a timing signal: the key is rejected

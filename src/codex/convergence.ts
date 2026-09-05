@@ -671,7 +671,7 @@ export async function convergeCodexCatalog(
     const mutable = snapshot.config as OcxConfig;
     mutable.modelDiscovery = state.discoveryConfig.modelDiscovery;
     mutable.disabledModels = state.discoveryConfig.disabledModels;
-    saveConfigPreservingClaudeCode(mutable);
+    saveConfigPreservingClaudeCode(mutable, { surface: "internal", detail: "catalog: persist converged discovery config" });
   }
   return {
     changed: committed.kind === "committed" ? committed.changed : false,

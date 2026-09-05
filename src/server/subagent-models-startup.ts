@@ -7,10 +7,13 @@ export function migrateStartupSubagentModels(config: OcxConfig): OcxConfig {
   const projection = { ...config };
   if (!migrateSubagentModels(projection)) return config;
   try {
-    const outcome = mutatePersistedConfig(fresh => ({
-      changed: migrateSubagentModels(fresh),
-      value: fresh,
-    }));
+    const outcome = mutatePersistedConfig(
+      fresh => ({
+        changed: migrateSubagentModels(fresh),
+        value: fresh,
+      }),
+      { surface: "internal", detail: "startup: seed default subagent models" },
+    );
     if (outcome.status === "unavailable") {
       console.warn(`[subagent-models-migration] Persistence unavailable (${outcome.reason}); using the upgraded roster in memory only.`);
     } else {

@@ -94,7 +94,7 @@ export function addProviderApiKey(config: OcxConfig, name: string, key: string, 
     pool.push({ id, key: trimmed, ...(label?.trim() ? { label: label.trim() } : {}), addedAt: Date.now() });
   }
   provider.apiKey = trimmed;
-  saveConfigPreservingClaudeCode(config);
+  saveConfigPreservingClaudeCode(config, { surface: "api", detail: "api-keys: add provider key" });
   return { id };
 }
 
@@ -105,7 +105,7 @@ export function setActiveProviderApiKey(config: OcxConfig, name: string, id: str
   const entry = ensurePool(provider).find(e => e.id === id);
   if (!entry) return false;
   provider.apiKey = entry.key;
-  saveConfigPreservingClaudeCode(config);
+  saveConfigPreservingClaudeCode(config, { surface: "api", detail: "api-keys: set active provider key" });
   return true;
 }
 
@@ -117,7 +117,7 @@ export function setProviderApiKeyLabel(config: OcxConfig, name: string, id: stri
   if (!entry) return false;
   if (label) entry.label = label;
   else delete entry.label;
-  saveConfigPreservingClaudeCode(config);
+  saveConfigPreservingClaudeCode(config, { surface: "api", detail: "api-keys: set provider key label" });
   return true;
 }
 
@@ -135,6 +135,6 @@ export function removeProviderApiKey(config: OcxConfig, name: string, id: string
     else delete provider.apiKey;
   }
   if (provider.apiKeyPool.length === 0) delete provider.apiKeyPool;
-  saveConfigPreservingClaudeCode(config);
+  saveConfigPreservingClaudeCode(config, { surface: "api", detail: "api-keys: remove provider key" });
   return true;
 }

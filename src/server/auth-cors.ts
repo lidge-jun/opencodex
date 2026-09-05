@@ -9,6 +9,7 @@ import {
   requestPacingConfigError,
   retryOn429PolicyConfigError,
   sanitizeModelCostsForDisplay,
+  transientRetryOn5xxPolicyConfigError,
 } from "../config";
 import {
   apiKeyTransportConfigError,
@@ -638,6 +639,10 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
     // The provider name is caller-controlled and can be token-shaped; redact and JSON-escape
     // it before it reaches the management API response.
     return `provider ${JSON.stringify(redactSecretString(name))} ${retryOn429Error}`;
+  }
+  const transientRetryOn5xxError = transientRetryOn5xxPolicyConfigError(raw.transientRetryOn5xx);
+  if (transientRetryOn5xxError) {
+    return `provider ${JSON.stringify(redactSecretString(name))} ${transientRetryOn5xxError}`;
   }
   const requestPacingError = requestPacingConfigError(raw.requestPacing);
   if (requestPacingError) {

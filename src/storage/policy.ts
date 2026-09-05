@@ -266,7 +266,7 @@ export function writeStorageCleanupPolicyToConfig(policy: StorageCleanupPolicy):
   const normalized = normalizeStorageCleanupPolicy(policy);
   const config = loadConfig();
   config.storageCleanupPolicy = normalized;
-  saveConfigPreservingClaudeCode(config);
+  saveConfigPreservingClaudeCode(config, { surface: "api", detail: "storage-policy: write cleanup policy" });
   livePolicySink?.(normalized);
   return normalized;
 }
@@ -462,14 +462,17 @@ function commitPolicyRunMetadataToConfig(
     };
   };
   try {
-    const outcome = mutatePersistedConfig(config => {
-      const next = applyPolicyRunMetadata(
-        normalizeStorageCleanupPolicy(config.storageCleanupPolicy),
-        patch,
-      );
-      config.storageCleanupPolicy = next;
-      return { changed: true, value: next };
-    });
+    const outcome = mutatePersistedConfig(
+      config => {
+        const next = applyPolicyRunMetadata(
+          normalizeStorageCleanupPolicy(config.storageCleanupPolicy),
+          patch,
+        );
+        config.storageCleanupPolicy = next;
+        return { changed: true, value: next };
+      },
+      { surface: "internal", detail: "storage-policy: commit run metadata" },
+    );
     if (outcome.status === "unavailable") return unavailable(outcome.reason);
     livePolicySink?.(outcome.value);
     return { policy: outcome.value };

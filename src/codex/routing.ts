@@ -1531,10 +1531,16 @@ function releaseCodexAccountPinFor(config: OcxConfig, accountId: string): boolea
 /** Persist operator (or quota-strategy) active selection to config + disk. */
 function setActiveCodexAccount(config: OcxConfig, accountId: string): void {
   runtimeActiveCodexAccountId = undefined;
+  const activeAccountChanged = config.activeCodexAccountId !== accountId;
   const releasedPin = releaseCodexAccountPinFor(config, accountId);
-  if (config.activeCodexAccountId === accountId && !releasedPin) return;
+  if (!activeAccountChanged && !releasedPin) return;
   config.activeCodexAccountId = accountId;
-  saveConfigPreservingClaudeCode(config);
+  const detail = activeAccountChanged
+    ? releasedPin
+      ? "routing: active codex account selection and pin clear"
+      : "routing: active codex account selection"
+    : "routing: clear codex account pin";
+  saveConfigPreservingClaudeCode(config, { surface: "internal", detail });
 }
 
 /** Quota strategy persists; RR/fill-first keep a process-local cursor only. */
@@ -1626,7 +1632,7 @@ function pickPriorityPreemption(
  * on its own. Clearing the pin also removes the condition, so this writes at
  * most once per pin.
  */
-function releaseDrainedCodexAccountPin(
+export function releaseDrainedCodexAccountPin(
   config: OcxConfig,
   selectionOptions?: Pick<
     CodexAccountUsabilityOptions,
@@ -1639,7 +1645,7 @@ function releaseDrainedCodexAccountPin(
   const knownUnavailable = isAccountNeedsReauth(pinned) || isCodexAccountPaused(config, pinned);
   if (knownUnavailable) {
     clearCodexAccountPin(config);
-    saveConfigPreservingClaudeCode(config);
+    saveConfigPreservingClaudeCode(config, { surface: "internal", detail: "routing: clear unavailable codex account pin" });
     return;
   }
   // Temporary drain deliberately forbids every native-main read. A pin on main
@@ -1650,7 +1656,7 @@ function releaseDrainedCodexAccountPin(
     || !hasCodexQuotaHeadroom(config, pinned, selectionOptions, now);
   if (!drained) return;
   clearCodexAccountPin(config);
-  saveConfigPreservingClaudeCode(config);
+  saveConfigPreservingClaudeCode(config, { surface: "internal", detail: "routing: clear drained codex account pin" });
 }
 
 function applyQuotaAutoSwitch(

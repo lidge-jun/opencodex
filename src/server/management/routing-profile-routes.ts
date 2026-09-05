@@ -318,7 +318,7 @@ export async function handleRoutingProfileRoutes(ctx: ManagementContext): Promis
       shouldSyncClaudeAgentDefs = migrateProfileModelReferences(config, oldPublicModel, newPublicModel);
     }
     const save = deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode;
-    save(config);
+    save(config, { surface: "api", detail: "PUT /api/routing-profiles" });
     reconcileLiveStateStores();
     const catalogRefresh = await convergeCodexCatalog();
     if (shouldSyncClaudeAgentDefs) await syncClaudeAgentDefsBestEffort();
@@ -346,7 +346,7 @@ export async function handleRoutingProfileRoutes(ctx: ManagementContext): Promis
     if (Object.keys(nextProfiles).length > 0) config.routingProfiles = nextProfiles;
     else deleteConfigTopLevelKey(config, "routingProfiles");
     const saveConfigPreservingClaudeCodeSafe = deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode;
-    saveConfigPreservingClaudeCodeSafe(config);
+    saveConfigPreservingClaudeCodeSafe(config, { surface: "api", detail: "DELETE /api/routing-profiles" });
     reconcileLiveStateStores();
     const catalogRefresh = await convergeCodexCatalog();
     return jsonResponse({ success: true, id, catalogRefresh }, 200, req, config);

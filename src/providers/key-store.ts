@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import { resolveEnvValue, saveConfigPreservingClaudeCode } from "../config";
+import { resolveEnvValue, saveConfigPreservingClaudeCode, type ConfigMutationSource } from "../config";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import type { ProviderRegistryEntry } from "./registry";
 
@@ -129,7 +129,7 @@ function writeVerified(account: string, secret: string): void {
  * config with references. All keychain writes are verified before config changes; on any
  * failure the entries written so far are deleted and config is left untouched.
  */
-export function storeProviderKeyInKeychain(config: OcxConfig, name: string): { ok: true; moved: number } | { ok: false; error: string; status: number } {
+export function storeProviderKeyInKeychain(config: OcxConfig, name: string, source: ConfigMutationSource = { surface: "internal", detail: "key-store: store provider keys in OS keychain" }): { ok: true; moved: number } | { ok: false; error: string; status: number } {
   const provider = config.providers[name];
   if (!provider) return { ok: false, error: "unknown provider", status: 404 };
   if (provider.authMode === "oauth" || provider.authMode === "forward") {
@@ -174,12 +174,12 @@ export function storeProviderKeyInKeychain(config: OcxConfig, name: string): { o
   for (const apply of planned) apply();
   resolvedCache.clear();
   warnedAccounts.clear();
-  saveConfigPreservingClaudeCode(config);
+  saveConfigPreservingClaudeCode(config, source);
   return { ok: true, moved: written.length };
 }
 
 /** Reverse of `storeProviderKeyInKeychain`: read every reference back, write plaintext, delete items. */
-export function restoreProviderKeyFromKeychain(config: OcxConfig, name: string): { ok: true; restored: number } | { ok: false; error: string; status: number } {
+export function restoreProviderKeyFromKeychain(config: OcxConfig, name: string, source: ConfigMutationSource = { surface: "internal", detail: "key-store: restore provider keys from OS keychain" }): { ok: true; restored: number } | { ok: false; error: string; status: number } {
   const provider = config.providers[name];
   if (!provider) return { ok: false, error: "unknown provider", status: 404 };
   const pool = provider.apiKeyPool ?? [];
@@ -202,6 +202,6 @@ export function restoreProviderKeyFromKeychain(config: OcxConfig, name: string):
   }
   resolvedCache.clear();
   warnedAccounts.clear();
-  saveConfigPreservingClaudeCode(config);
+  saveConfigPreservingClaudeCode(config, source);
   return { ok: true, restored: resolved.size };
 }

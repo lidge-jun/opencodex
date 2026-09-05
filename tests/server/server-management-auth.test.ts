@@ -661,6 +661,20 @@ describe("management and data-plane credential separation", () => {
       errorSpy.mockRestore();
     }
   });
+  test("GET /api/config/mutations requires the management token", async () => {
+    saveConfig(remoteConfig());
+    const server = startServer(0);
+    try {
+      const anonymous = await fetch(new URL("/api/config/mutations", server.url));
+      expect(anonymous.status).toBe(401);
+      const authorized = await fetch(new URL("/api/config/mutations", server.url), {
+        headers: { "x-opencodex-api-key": "admin-secret" },
+      });
+      expect(authorized.status).toBe(200);
+    } finally {
+      await server.stop(true);
+    }
+  });
   test("a management token that matches the data environment token closes only the management plane", async () => {
     process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "data-secret";
     saveConfig(remoteConfig());

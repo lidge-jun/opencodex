@@ -256,7 +256,7 @@ async function handleCustomAdd(args: string[]): Promise<void> {
     addedAt: new Date().toISOString(),
   };
   config.customModels = [...existing, entry];
-  saveConfig(config);
+  saveConfig(config, { surface: "cli", detail: "ocx models add" });
   await syncCustomModelsIfLive();
   console.log(`Added custom model ${slug} (${entry.id}).`);
 }
@@ -325,7 +325,7 @@ async function handleCustomRemove(args: string[]): Promise<void> {
 
   const next = existing.filter((_, modelIndex) => modelIndex !== index);
   config.customModels = next.length > 0 ? next : undefined;
-  saveConfig(config);
+  saveConfig(config, { surface: "cli", detail: "ocx models remove" });
   await syncCustomModelsIfLive();
   console.log(`Removed custom model ${routedSlug(model.provider, model.modelId)}.`);
 }

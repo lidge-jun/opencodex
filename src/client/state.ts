@@ -139,7 +139,7 @@ export function commitClientConnection(
       config.client = structuredClone(state);
     }
     return { changed: !unchanged, value: undefined };
-  });
+  }, { surface: "cli", detail: "ocx connect: commit client connection" });
   if (outcome.status === "committed" || outcome.status === "unchanged") return outcome.status;
   if (outcome.status === "unavailable" && outcome.reason === "missing") {
     // First ocx run on a fresh machine: ocx connect is the expected first command in
@@ -150,7 +150,7 @@ export function commitClientConnection(
     const seeded = getDefaultConfig();
     seeded.runtimeRole = "client";
     seeded.client = structuredClone(state);
-    saveConfig(seeded);
+    saveConfig(seeded, { surface: "cli", detail: "ocx connect: commit client connection" });
     return "committed";
   }
   throw new Error(`client state commit unavailable: ${"reason" in outcome ? outcome.reason : "unknown"}`);
@@ -169,7 +169,7 @@ export function clearClientConnection(
     deleteConfigTopLevelKey(config, "client");
     deleteConfigTopLevelKey(config, "runtimeRole");
     return { changed: true, value: "committed" as const };
-  });
+  }, { surface: "cli", detail: "ocx disconnect: clear client connection" });
   if (outcome.status === "unavailable") return "conflict";
   return outcome.value;
 }

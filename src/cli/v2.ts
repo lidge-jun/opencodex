@@ -205,7 +205,7 @@ export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () 
     }
     if (modeArg === "default") deleteConfigTopLevelKey(cfg, "multiAgentMode");
     else cfg.multiAgentMode = modeArg as "v1" | "v2";
-    saveConfig(cfg);
+    saveConfig(cfg, { surface: "cli", detail: "ocx v2 mode" });
     try {
       const sync = deps.sync ?? (await import("../codex/sync")).syncModelsToCodex;
       await sync(findPort ? await findPort() : undefined);
@@ -235,7 +235,7 @@ export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () 
     }
     if (next) cfg.keepNativeChatGptOnV1 = true;
     else deleteConfigTopLevelKey(cfg, "keepNativeChatGptOnV1");
-    saveConfig(cfg);
+    saveConfig(cfg, { surface: "cli", detail: "ocx v2 keep-native-v1" });
     try {
       const sync = deps.sync ?? (await import("../codex/sync")).syncModelsToCodex;
       await sync(findPort ? await findPort() : undefined);
