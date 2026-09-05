@@ -194,3 +194,5 @@ Shared response-log retention and native SSE inspection pacing follow the [bound
 Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](transports/streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
 
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](gui-and-management-api.md#fast-selector-rows-setting).
+
+The optional [ongoing priority failback](providers/openai-tiers.md#ongoing-priority-failback) is distinct from default cache affinity and changes no credential-eligibility boundary.

@@ -455,3 +455,5 @@ Renamed fixed-key providers receive [missing reasoning metadata](../catalog.md#r
 Shared response-log retention and native SSE inspection pacing follow the [bounded inspection contract](../transports/byte-accounting.md#response-log-inspection); other subsystem behavior remains unchanged.
 
 Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](../transports/streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
+
+The existing `codex-routing`, `codex-auth-context` and `codex-quota-prime` tests cover [priority failback](../providers/openai-tiers.md#ongoing-priority-failback), including cache-default retention, stale evidence, main fencing and failed-attempt cadence.

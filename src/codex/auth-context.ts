@@ -1,3 +1,4 @@
+import { codexAccountPriorityFailbackEnabled } from "./account-priority";
 import type { PoolQuotaWriter } from "./quota-types";
 import { createHash, timingSafeEqual } from "node:crypto";
 import {
@@ -1202,13 +1203,17 @@ export async function resolveCodexAuthContext(
   // unprimed (dashboard never opened, or startup prime was blocked). Kick a
   // best-effort prime so the NEXT routing decision has real scores. This never
   // blocks the current request, and the helper's single-flight guard collapses
-  // repeated triggers into one pass.
-  if (fixedAccountId === undefined && !nativeMainReadsForbidden && !getAccountQuota(accountId)) {
+  // repeated triggers into one pass. Opt-in priority failback also refreshes inactive
+  // accounts; that path has a five-minute attempt limit inside the prime helper.
+  const priorityFailback = codexAccountPriorityFailbackEnabled(config);
+  if (fixedAccountId === undefined && !nativeMainReadsForbidden
+    && (!getAccountQuota(accountId) || priorityFailback)) {
+    const reason = priorityFailback ? "priority-failback" : "pre-route";
     if (options.primeCodexPoolQuotas) {
-      void options.primeCodexPoolQuotas(config, "pre-route").catch(() => {});
+      void options.primeCodexPoolQuotas(config, reason).catch(() => {});
     } else {
       import("./auth-api")
-        .then(({ primeCodexPoolQuotas }) => primeCodexPoolQuotas(config, "pre-route"))
+        .then(({ primeCodexPoolQuotas }) => primeCodexPoolQuotas(config, reason))
         .catch(() => {});
     }
   }

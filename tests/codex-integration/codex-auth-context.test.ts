@@ -243,6 +243,21 @@ describe("Codex auth context", () => {
     expect(() => materializeCodexUpstreamAuth(new Headers(), ctx)).toThrow("validation is pending");
     expect(() => applyCodexAuthContextToProvider(cfg.providers.chatgpt!, ctx, "pool")).toThrow("validation is pending");
   });
+  test.each([true, false])("priority failback primes even a known active quota only when enabled (%s)", async enabled => {
+    const cfg = config();
+    cfg.codexAccountPriorityFailback = enabled;
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pool_token", refreshToken: "pool_refresh",
+      expiresAt: Date.now() + 3_600_000, chatgptAccountId: "pool_acc",
+    });
+    setAccountQuotaFromParsed("pool-a", { weeklyPercent: 10 });
+    const reasons: string[] = [];
+    await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", {
+      primeCodexPoolQuotas: async (_config, reason) => { reasons.push(reason); },
+    })).resolves.toMatchObject({ kind: "pool", accountId: "pool-a" });
+    expect(reasons).toEqual(enabled ? ["priority-failback"] : []);
+  });
+
   test("main-profile drain routes a non-main pool account without native reads or quota priming", async () => {
     saveCodexAccountCredential("pool-a", {
       accessToken: "pool_token",
