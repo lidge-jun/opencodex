@@ -1602,7 +1602,11 @@ export async function consumeComboFailure(
   // display-safe body carries a recognized quota message.
   let quotaConfirmedByBody = false;
   try {
-    const body = await readBoundedResponseBody(response, { signal });
+    const body = await readBoundedResponseBody(response, {
+      signal,
+      // Match shouldRetryCodexPoolAccountQuota before treating a 5xx body as quota evidence.
+      fatalUtf8: response.status >= 500 && response.status < 600,
+    });
     usage = usageFromComboFailureText(body.text);
     if (
       response.status >= 500 && response.status < 600

@@ -640,6 +640,30 @@ describe("combo target cooldowns", () => {
     }
   });
 
+  test.each(["deleted", "renamed"] as const)("returns null when the combo is %s during cooldown wait", async change => {
+    const config = baseConfig({ combos: { free: VALID_COMBO } });
+    const now = 1_000_000;
+    coolComboTarget("free", target, { now, cooldownMs: 3_000 });
+    const sleeps: number[] = [];
+    const pick = await pickComboTargetWithWait(config, "free", {
+      now,
+      waitForCooldownMs: 5_000,
+      sleep: async ms => {
+        sleeps.push(ms);
+        config.combos = change === "renamed" ? { renamed: config.combos!.free! } : {};
+      },
+    });
+    expect(sleeps).toEqual([3_000]);
+    expect(pick).toBeNull();
+    if (change === "renamed") expect(getCombo(config, "renamed")).toBeDefined();
+  });
+
+  test("still rejects a combo that is missing before cooldown selection", async () => {
+    await expect(pickComboTargetWithWait(baseConfig(), "missing", {
+      waitForCooldownMs: 5_000,
+    })).rejects.toBeInstanceOf(UnknownComboError);
+  });
+
   test("returns null when real sleepWithAbort rejects after an abort", async () => {
     const config = baseConfig({
       combos: {

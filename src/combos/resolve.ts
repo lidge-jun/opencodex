@@ -361,6 +361,8 @@ export async function pickComboTargetWithWait(
     throw error;
   }
   if (options.abortSignal?.aborted) return null;
+  // Management updates can delete or rename the combo while this request sleeps.
+  if (!getCombo(config, comboId)) return null;
   return pickComboTarget(config, comboId, {
     exclude: excluded,
     now: now + delay,

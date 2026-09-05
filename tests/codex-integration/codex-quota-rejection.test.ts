@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { classifyCodexPreStreamRejection } from "../../src/codex/quota-rejection";
 import { BOUNDED_BODY_MAX_BYTES } from "../../src/lib/bounded-body";
-import { shouldRetryCodexPoolAccountQuota } from "../../src/server/responses/core";
+import { consumeComboFailure, shouldRetryCodexPoolAccountQuota } from "../../src/server/responses/core";
 
 function jsonRejection(status: number, error: Record<string, unknown>): Response {
   return Response.json({ error }, { status });
@@ -125,6 +125,34 @@ describe("Codex pre-stream quota rejection classification", () => {
     [502, "x".repeat(BOUNDED_BODY_MAX_BYTES + 1)],
   ])("keeps unrelated or oversized HTTP %i failures transient", async (status, body) => {
     await expect(shouldRetryCodexPoolAccountQuota(new Response(body, { status }))).resolves.toBe(false);
+  });
+
+  test.each([
+    ["malformed UTF-8", [0xff], false],
+    ["valid UTF-8 replacement character", [0xef, 0xbf, 0xbd], true],
+  ] as const)("combo and account quota evidence agree for %s", async (_label, marker, quotaExpected) => {
+    const encoder = new TextEncoder();
+    const bytes = new Uint8Array([
+      ...encoder.encode('{"error":{"message":"The usage limit has been reached '),
+      ...marker,
+      ...encoder.encode('"}}'),
+    ]);
+    const resetAt = "2026-09-05T12:00:00Z";
+    const response = new Response(bytes, {
+      status: 503,
+      headers: { "content-type": "application/json", "x-codex-primary-reset-at": resetAt },
+    });
+    await expect(shouldRetryCodexPoolAccountQuota(response)).resolves.toBe(quotaExpected);
+    const failure = await consumeComboFailure(response);
+    expect(failure.response.status).toBe(503);
+    if (quotaExpected) {
+      expect(failure.resetAt).toEqual([resetAt]);
+      expect(failure.classificationText).toContain("The usage limit has been reached");
+    } else {
+      expect(failure.resetAt).toBeUndefined();
+      expect(failure.classificationText).toBe("Provider error 503");
+    }
+    expect(response.bodyUsed).toBe(true);
   });
 
   test("fails closed for malformed UTF-8 and an already-aborted read", async () => {
