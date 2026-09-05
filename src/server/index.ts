@@ -142,7 +142,7 @@ import {
 } from "./relay";
 export {
   consumeForInspection,
-  passthroughHeaderOptions,
+  codexSafetyBufferingFilterOptions,
   relaySseWithFailedTail,
   relaySseWithHeartbeat,
   relayWithAbort,

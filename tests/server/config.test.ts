@@ -539,14 +539,14 @@ describe("opencodex config defaults", () => {
 
   test("codex safety-buffering header drop is an explicit top-level opt-in", () => {
     const defaults = getDefaultConfig();
-    expect(defaults.dropCodexSafetyBufferingHeaders).toBe(false);
-    expect(validateConfigCandidate({ ...defaults, dropCodexSafetyBufferingHeaders: true })).toMatchObject({
+    expect(defaults.dropCodexSafetyBuffering).toBe(false);
+    expect(validateConfigCandidate({ ...defaults, dropCodexSafetyBuffering: true })).toMatchObject({
       ok: true,
-      config: { dropCodexSafetyBufferingHeaders: true },
+      config: { dropCodexSafetyBuffering: true },
     });
-    expect(validateConfigCandidate({ ...defaults, dropCodexSafetyBufferingHeaders: "yes" })).toMatchObject({
+    expect(validateConfigCandidate({ ...defaults, dropCodexSafetyBuffering: "yes" })).toMatchObject({
       ok: false,
-      error: expect.stringContaining("dropCodexSafetyBufferingHeaders"),
+      error: expect.stringContaining("dropCodexSafetyBuffering"),
     });
   });
 

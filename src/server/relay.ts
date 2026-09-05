@@ -162,7 +162,10 @@ export type SseTerminalOutputBoundary = {
  * terminal, and drops every later block/byte. A premature [DONE] is held until
  * a terminal arrives so clean EOF can synthesize one terminal and one sentinel.
  */
-export function createSseTerminalOutputBoundary(): SseTerminalOutputBoundary {
+export function createSseTerminalOutputBoundary(
+  options?: CodexSafetyBufferingFilterOptions,
+): SseTerminalOutputBoundary {
+  const dropSafetyBuffering = options?.dropCodexSafetyBuffering === true;
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
   const framer = new BoundedSseFrameBuffer(MAX_INSPECTION_SSE_FRAME_BYTES);
@@ -181,6 +184,10 @@ export function createSseTerminalOutputBoundary(): SseTerminalOutputBoundary {
       const payload = sseDataPayload(decoder.decode(frame.block));
       const isDone = payload === "[DONE]";
       const parsed = payload === null ? undefined : parseSsePayload(payload);
+      const safetyBuffering = dropSafetyBuffering && parsed !== undefined
+        ? codexSafetyBufferingBlockAction(parsed)
+        : "keep";
+      if (safetyBuffering === "drop") continue;
       const policyError = parsed !== undefined && isPolicyRewriteType(parsed)
         ? cyberPolicyTerminalError(parsed)
         : undefined;
@@ -189,7 +196,9 @@ export function createSseTerminalOutputBoundary(): SseTerminalOutputBoundary {
           decoder.decode(frame.block),
           policyFailurePayload(policyError, parsed),
         ))
-        : frame.block;
+        : safetyBuffering === "strip"
+          ? encoder.encode(stripCodexSafetyBufferingField(decoder.decode(frame.block), parsed))
+          : frame.block;
       if (isDone) {
         done = true;
         if (responsesTerminal) {
@@ -260,10 +269,11 @@ export function relaySseWithFailedTail(
   body: ReadableStream<Uint8Array>,
   upstream: AbortController,
   onClientGone?: (reason?: unknown) => void,
+  boundaryOptions?: CodexSafetyBufferingFilterOptions,
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   const encoder = new TextEncoder();
-  const terminalBoundary = createSseTerminalOutputBoundary();
+  const terminalBoundary = createSseTerminalOutputBoundary(boundaryOptions);
   let closed = false;
   const relayChunk = (
     controller: ReadableStreamDefaultController<Uint8Array>,
@@ -436,6 +446,29 @@ function parseSsePayload(payload: string): unknown | undefined {
 function isPolicyRewriteType(parsed: unknown): boolean {
   const type = asJsonRecord(parsed)?.type;
   return type === "response.failed" || type === "response.incomplete" || type === "error";
+}
+
+/**
+ * Codex emits its safety-buffering hint in the SSE body as well as in headers:
+ * a `response.metadata` event whose `metadata.type` is `safety_buffering`, or a
+ * `safety_buffering` field on another event. The metadata event is dropped whole;
+ * the field is stripped so the carrying event is otherwise relayed unchanged.
+ */
+function codexSafetyBufferingBlockAction(parsed: unknown): "keep" | "drop" | "strip" {
+  const root = asJsonRecord(parsed);
+  if (!root) return "keep";
+  if (root.type === "response.metadata") {
+    const metadata = asJsonRecord(root.metadata);
+    if (metadata?.type === "safety_buffering") return "drop";
+  }
+  return Object.hasOwn(root, "safety_buffering") ? "strip" : "keep";
+}
+
+function stripCodexSafetyBufferingField(block: string, parsed: unknown): string {
+  const root = asJsonRecord(parsed);
+  if (!root) return block;
+  const { safety_buffering: _safetyBuffering, ...rest } = root;
+  return replaceSseDataPayload(block, JSON.stringify(rest));
 }
 
 function rewritePolicyTerminalBlock(block: string, payload: string): string {
@@ -1429,24 +1462,24 @@ export const CODEX_SAFETY_BUFFERING_HEADERS = [
 
 const CODEX_SAFETY_BUFFERING_HEADER_SET: ReadonlySet<string> = new Set(CODEX_SAFETY_BUFFERING_HEADERS);
 
-export interface PassthroughHeaderOptions {
+export interface CodexSafetyBufferingFilterOptions {
   /**
-   * Also drop the `x-codex-safety-buffering-*` hints. The Codex TUI renders them as a
-   * "retry with a faster model" prompt whose default action switches the session's model,
-   * which is unwanted for unattended sessions. Off unless the operator opts in.
+   * Drop Codex safety-buffering hints: the `x-codex-safety-buffering-*` response
+   * headers and the `safety_buffering` SSE metadata event / field. Absent and
+   * `false` relay everything unchanged.
    */
-  dropCodexSafetyBufferingHeaders?: boolean;
+  dropCodexSafetyBuffering?: boolean;
 }
 
 /** Resolve the passthrough header policy from the loaded config (absent means "forward everything"). */
-export function passthroughHeaderOptions(
-  config: { dropCodexSafetyBufferingHeaders?: boolean },
-): PassthroughHeaderOptions {
-  return { dropCodexSafetyBufferingHeaders: config.dropCodexSafetyBufferingHeaders === true };
+export function codexSafetyBufferingFilterOptions(
+  config: { dropCodexSafetyBuffering?: boolean },
+): CodexSafetyBufferingFilterOptions {
+  return { dropCodexSafetyBuffering: config.dropCodexSafetyBuffering === true };
 }
 
-export function sanitizePassthroughHeaders(upstream: Headers, options?: PassthroughHeaderOptions): Headers {
-  const dropSafetyBuffering = options?.dropCodexSafetyBufferingHeaders === true;
+export function sanitizePassthroughHeaders(upstream: Headers, options?: CodexSafetyBufferingFilterOptions): Headers {
+  const dropSafetyBuffering = options?.dropCodexSafetyBuffering === true;
   const DROP = new Set([
     "content-encoding",
     "content-length",

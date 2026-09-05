@@ -1126,7 +1126,7 @@ const configSchema = z.object({
   // A retry can be billable, so absence and malformed hand edits both stay off.
   emptyCompletionRetry: z.boolean().optional().catch(false),
   // Header suppression changes what Codex sees, so absence and malformed edits stay off.
-  dropCodexSafetyBufferingHeaders: z.boolean().optional().catch(false),
+  dropCodexSafetyBuffering: z.boolean().optional().catch(false),
   // A malformed hand edit must not silently stop opening the browser: fall back
   // to undefined, which resolves to the historical auto-open behavior.
   oauthOpenBrowser: z.boolean().optional().catch(undefined),
@@ -2615,12 +2615,12 @@ function emptyCompletionRetryError(value: unknown): string | null {
   return "schema_invalid: emptyCompletionRetry: must be a boolean or omitted";
 }
 
-function dropCodexSafetyBufferingHeadersError(value: unknown): string | null {
+function dropCodexSafetyBufferingError(value: unknown): string | null {
   const raw = rawConfigRecord(value);
-  if (!raw || !Object.hasOwn(raw, "dropCodexSafetyBufferingHeaders")) return null;
-  const enabled = raw.dropCodexSafetyBufferingHeaders;
+  if (!raw || !Object.hasOwn(raw, "dropCodexSafetyBuffering")) return null;
+  const enabled = raw.dropCodexSafetyBuffering;
   if (enabled === undefined || typeof enabled === "boolean") return null;
-  return "schema_invalid: dropCodexSafetyBufferingHeaders: must be a boolean or omitted";
+  return "schema_invalid: dropCodexSafetyBuffering: must be a boolean or omitted";
 }
 
 function oauthOpenBrowserError(value: unknown): string | null {
@@ -2728,7 +2728,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? codexQuotaAutoRefreshError(value)
     ?? codexAccountPickerEnabledError(value)
     ?? emptyCompletionRetryError(value)
-    ?? dropCodexSafetyBufferingHeadersError(value)
+    ?? dropCodexSafetyBufferingError(value)
     ?? oauthOpenBrowserError(value)
     ?? runtimeRoleError(value)
     ?? remoteGuiConfigError(value)
@@ -3695,7 +3695,7 @@ export function getDefaultConfig(): OcxConfig {
   return {
     port: 10100,
     emptyCompletionRetry: false,
-    dropCodexSafetyBufferingHeaders: false,
+    dropCodexSafetyBuffering: false,
     managementUsageMaxReadBytes: 64 * 1024 * 1024,
     appOwnedMemoryBudgetMb: DEFAULT_APP_OWNED_MEMORY_BUDGET_BYTES / (1024 * 1024),
     // Fresh/re-initialized configs are already written in the current three-tier

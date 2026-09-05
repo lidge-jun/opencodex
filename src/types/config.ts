@@ -336,13 +336,15 @@ export interface OcxConfig {
   /** Opt in to one identical-turn retry when a Responses completion has no text or tool call. */
   emptyCompletionRetry?: boolean;
   /**
-   * Drop the `x-codex-safety-buffering-*` response headers from a Codex Responses
-   * passthrough. The Codex TUI turns those hints into a "retry with a faster model"
-   * prompt whose default action switches the session to a weaker model, so an
-   * unattended session can lose its model to a stray keystroke. Absent and `false`
-   * both relay the headers unchanged.
+   * Drop the Codex safety-buffering hints from a Codex Responses passthrough: the
+   * `x-codex-safety-buffering-*` response headers, `response.metadata` SSE events of
+   * type `safety_buffering`, and the `safety_buffering` field on other SSE events.
+   * The Codex TUI turns those hints into a "retry with a faster model" prompt whose
+   * default action switches the session to a weaker model, so an unattended session
+   * can lose its model to a stray keystroke. Absent and `false` relay everything
+   * unchanged.
    */
-  dropCodexSafetyBufferingHeaders?: boolean;
+  dropCodexSafetyBuffering?: boolean;
   /**
    * Whether a login may open a browser on the machine running the proxy.
    *
