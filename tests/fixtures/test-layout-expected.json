@@ -884,6 +884,7 @@
   "server-rate-limit-retry-e2e.test.ts": "server",
   "server-request-body-size.test.ts": "server",
   "server-search.test.ts": "server",
+  "server-startup-reconcile-resilience.test.ts": "server",
   "server-stop-config-hardening.test.ts": "server",
   "server-xai-chat-reasoning-streaming.test.ts": "server",
   "server-xai-header-parity.test.ts": "server",
