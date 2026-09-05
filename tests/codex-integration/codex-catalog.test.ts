@@ -3032,6 +3032,81 @@ function mergeObservedForTest(
 }
 
 describe("Codex catalog routed normalization", () => {
+  test("reapplies native display names after repeated catalog merges without changing model metadata", () => {
+    const input = {
+      catalogModels: [{ ...nativeTemplate(), slug: "gpt-5.6-sol" }],
+      routedEntries: [],
+    };
+    const original = mergeObservedForTest(input);
+    const labels = { "gpt-5.6-sol": "GPT 5.6 Sol" };
+    const renamed = mergeObservedForTest({ ...input, nativeDisplayNames: labels });
+    const row = renamed.find(entry => entry.slug === "gpt-5.6-sol")!;
+    expect(row.display_name).toBe("GPT 5.6 Sol");
+    expect({ ...row, display_name: undefined, opencodex_native_display_name: undefined }).toEqual({
+      ...original.find(entry => entry.slug === "gpt-5.6-sol"), display_name: undefined,
+    });
+    const regenerated = mergeObservedForTest({
+      ...input, catalogModels: renamed, nativeDisplayNames: labels,
+    });
+    expect(regenerated.find(entry => entry.slug === "gpt-5.6-sol")?.display_name).toBe("GPT 5.6 Sol");
+    const changed = mergeObservedForTest({
+      ...input, catalogModels: regenerated,
+      nativeDisplayNames: { "gpt-5.6-sol": "  Sol 5.6  " },
+    });
+    expect(changed.find(entry => entry.slug === "gpt-5.6-sol")?.display_name).toBe("Sol 5.6");
+    expect(JSON.stringify(regenerated)).toBe(JSON.stringify(renamed));
+    for (const nativeDisplayNames of [undefined, {}, { "gpt-5.6-sol": "   " }]) {
+      const restored = mergeObservedForTest({ ...input, catalogModels: changed, nativeDisplayNames });
+      expect(restored).toEqual(original);
+    }
+  });
+
+  test("native display names preserve external label changes when clearing the overlay", () => {
+    const renamed = mergeObservedForTest({
+      catalogModels: [{ ...nativeTemplate(), slug: "gpt-5.6-sol" }], routedEntries: [],
+      nativeDisplayNames: { "gpt-5.6-sol": "Custom Sol" },
+    });
+    renamed.find(entry => entry.slug === "gpt-5.6-sol")!.display_name = "Updated upstream Sol";
+    const restored = mergeObservedForTest({ catalogModels: renamed, routedEntries: [] });
+    const row = restored.find(entry => entry.slug === "gpt-5.6-sol")!;
+    expect(row.display_name).toBe("Updated upstream Sol");
+    expect(row.opencodex_native_display_name).toBeUndefined();
+  });
+
+  test("native display names preserve pinned metadata upgrades and restore pinned names", () => {
+    for (const slug of ["gpt-5.6-sol", "gpt-6-astra"]) {
+      const input = { catalogModels: [{ ...nativeTemplate(), slug, display_name: slug }], routedEntries: [] };
+      const original = mergeObservedForTest(input);
+      const renamed = mergeObservedForTest({ ...input, nativeDisplayNames: { [slug]: "Custom name" } });
+      expect(renamed.find(entry => entry.slug === slug)?.display_name).toBe("Custom name");
+      expect(mergeObservedForTest({ catalogModels: renamed, routedEntries: [] })).toEqual(original);
+    }
+  });
+
+  test("native display names do not leak overlay markers through catalog templates", () => {
+    const template = {
+      ...nativeTemplate(),
+      opencodex_native_display_name: { slug: "gpt-5.6-sol", original: "Sol", applied: "Custom" },
+    };
+    const entries = buildCatalogEntries(template, ["gpt-5.5"], [{ provider: "local", id: "qwen3-coder" }]);
+    expect(entries.length).toBeGreaterThanOrEqual(2);
+    for (const entry of entries) expect(entry.opencodex_native_display_name).toBeUndefined();
+    expect(template.opencodex_native_display_name).toBeDefined();
+  });
+
+  test("native display names do not relabel a routed combo occupying a native slug", () => {
+    const routed = {
+      ...nativeTemplate(), slug: "gpt-5.6-sol", display_name: "My combo",
+      owned_by: "combo", description: "Routed via opencodex → combo (combo).",
+      opencodex_catalog_kind: CODEX_NATIVE_ALIAS_CATALOG_KIND,
+    };
+    const rows = mergeObservedForTest({
+      catalogModels: [], routedEntries: [routed],
+      nativeDisplayNames: { "gpt-5.6-sol": "GPT 5.6 Sol" },
+    });
+    expect(rows.find(entry => entry.slug === "gpt-5.6-sol")?.display_name).toBe("My combo");
+  });
+
   test("does not reuse a routed native alias as the native catalog template", () => {
     const routedAlias = {
       ...nativeTemplate(),

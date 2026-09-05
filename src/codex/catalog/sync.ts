@@ -319,6 +319,7 @@ export function deriveEntry(
   }
   if (template || codexForwardNativeCapabilityAlias) {
     const e = JSON.parse(JSON.stringify(codexForwardNativeCapabilityAlias ?? template)) as RawEntry;
+    delete e.opencodex_native_display_name;
     e.slug = slug;
     e.display_name = routedDisplayName(slug, model);
     e.description = desc;
@@ -726,6 +727,20 @@ function recoverableNativeSlug(entry: RawEntry): string | null {
     : null;
 }
 
+/** Undo our display overlay before native metadata normalization and template reuse. */
+function restoreNativeDisplayName(entry: RawEntry): RawEntry {
+  const saved = entry.opencodex_native_display_name;
+  delete entry.opencodex_native_display_name;
+  if (saved && typeof saved === "object" && !Array.isArray(saved)) {
+    const label = saved as Record<string, unknown>;
+    if (recoverableNativeSlug(entry) === label.slug
+      && typeof label.original === "string" && entry.display_name === label.applied) {
+      entry.display_name = label.original;
+    }
+  }
+  return entry;
+}
+
 /** Append missing supported native rows from trusted catalog sources only. */
 export function mergeCatalogModelsWithNativeRecovery(
   primaryCatalogModels: readonly RawEntry[],
@@ -787,6 +802,8 @@ export interface ObservedCatalogMergeInput {
   readonly suppressedBareNativeSlugs?: ReadonlySet<string>;
   readonly policy: ObservedCatalogMergePolicy;
   readonly openaiContextCap?: NativeContextLimitsInput;
+  /** Exact display-only labels for bare native OpenAI models. */
+  readonly nativeDisplayNames?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -818,12 +835,14 @@ export function mergeCatalogEntriesFromObservedState({
   suppressedBareNativeSlugs = new Set(),
   policy,
   openaiContextCap,
+  nativeDisplayNames,
 }: ObservedCatalogMergeInput): RawEntry[] {
   // Raw catalog rows contain nested arrays/objects that normalization mutates. Detach every row at
   // the observed-core boundary so callers can safely retain evidence objects or repeat the merge.
-  const detachedCatalogModels = catalogModels.map(entry => structuredClone(entry) as RawEntry);
+  const detachedCatalogModels = catalogModels
+    .map(entry => restoreNativeDisplayName(structuredClone(entry) as RawEntry));
   const detachedBaselineCatalogModels = baselineCatalogModels
-    .map(entry => structuredClone(entry) as RawEntry);
+    .map(entry => restoreNativeDisplayName(structuredClone(entry) as RawEntry));
   const detachedRoutedEntries = routedEntries.map(entry => structuredClone(entry) as RawEntry);
   const detachedAccountBoundEntries = accountBoundEntries
     .map(entry => structuredClone(entry) as RawEntry);
@@ -1139,6 +1158,17 @@ export function mergeCatalogEntriesFromObservedState({
     { keepNativeChatGptOnV1 },
   );
   for (const entry of versionedEntries) {
+    // Templates and account clones must not inherit the native row's overlay marker.
+    delete entry.opencodex_native_display_name;
+    const slug = recoverableNativeSlug(entry);
+    if (slug !== null) {
+      const label = nativeDisplayNames && Object.hasOwn(nativeDisplayNames, slug)
+        ? nativeDisplayNames[slug]?.trim() : undefined;
+      if (label && label !== entry.display_name) {
+        entry.opencodex_native_display_name = { slug, original: entry.display_name, applied: label };
+        entry.display_name = label;
+      }
+    }
     const kind = entry.opencodex_catalog_kind;
     if (trustedAccountBoundNativeCatalogSlug(entry) === undefined
       && kind !== CODEX_CUSTOM_MODEL_CATALOG_KIND
@@ -1729,6 +1759,7 @@ function writeRetainedCatalogSync({
     accountBoundEntries,
     suppressedBareNativeSlugs,
     openaiContextCap,
+    nativeDisplayNames: config.providers[OPENAI_CODEX_PROVIDER_ID]?.modelDisplayNames,
     policy: {
       ...CANONICAL_NATIVE_CATALOG_CONTENT_POLICY,
       nativeBackfillSlugs: [...availableBareNativeSlugs, ...observedNativeSlugs],

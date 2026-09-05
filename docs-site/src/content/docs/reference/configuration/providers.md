@@ -206,6 +206,13 @@ all other provider settings. The example includes the surrounding required field
 }
 ```
 
+Supported bare native GPT rows in the local Codex catalog also accept exact labels in
+`providers.openai.modelDisplayNames`, for example `"gpt-6-astra": "GPT 6 Astra"`.
+Both startup synchronization and local catalog convergence reapply these labels. Removing a
+label restores the original native name. Model IDs, capabilities, ordering, routed combo aliases,
+and account-qualified rows remain unchanged. This local catalog override does not relabel the
+HTTP model listings or virtual `*-pro` rows.
+
 The effective label order is operator `modelDisplayNames`, then provider catalog metadata, then the
 normal `provider/model` fallback. The routed selector remains `xai/grok-4.6`, while the upstream
 wire model remains `grok-4.6`. Labels are display only. They do not change authentication, adapter

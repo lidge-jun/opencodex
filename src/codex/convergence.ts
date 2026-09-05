@@ -362,6 +362,7 @@ function prepareCatalog(
     accountBoundEntries,
     suppressedBareNativeSlugs,
     openaiContextCap,
+    nativeDisplayNames: config.providers[OPENAI_CODEX_PROVIDER_ID]?.modelDisplayNames,
     policy: {
       ...CANONICAL_NATIVE_CATALOG_CONTENT_POLICY,
       nativeBackfillSlugs: [...availableBareNativeSlugs, ...observedNativeSlugs],
