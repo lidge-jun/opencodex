@@ -15,7 +15,7 @@ import {
   saveCredential,
 } from "../../src/oauth/store";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { watchdogMs } from "../helpers/ci-watchdog";
+import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 const repoRoot = dirname(fileURLToPath(new URL("../../package.json", import.meta.url)));
 const origHome = process.env.HOME;
@@ -94,7 +94,7 @@ describe("slow multi-process OAuth refresh lock", () => {
     });
 
     // Spawned child reaching its ready marker: 8-19 s on windows-latest (run 33930757649).
-    const deadline = Date.now() + watchdogMs(15_000);
+    const deadline = Date.now() + INTERNAL_DEADLINE_MS;
     while (!existsSync(readyPath) && Date.now() < deadline) {
       await Bun.sleep(25);
     }
@@ -129,5 +129,5 @@ describe("slow multi-process OAuth refresh lock", () => {
     expect(writerExit).toBe(0);
     const writerOut = await new Response(writer.stdout).text();
     expect(writerOut).toContain("writer-done");
-  }, 30_000);
+  }, SPAWN_BUDGET_MS);
 });

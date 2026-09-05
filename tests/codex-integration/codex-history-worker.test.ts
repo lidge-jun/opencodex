@@ -13,7 +13,7 @@ import {
 } from "../../src/codex/history-worker";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoRoot as resolveRepoRoot } from "../helpers/repo-root";
-import { watchdogMs } from "../helpers/ci-watchdog";
+import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 // A held write lock otherwise costs the full production 5s busy timeout per
 // attempt, tripping bun's 5s default per-test timeout.
@@ -345,7 +345,7 @@ test("a second holder of H makes the unit report blocked rather than wait", asyn
 
   try {
     // The holder is a spawned child; 8-19 s to boot on windows-latest (run 33930757649).
-    const deadline = Date.now() + watchdogMs(10_000);
+    const deadline = Date.now() + INTERNAL_DEADLINE_MS;
     while (!existsSync(ready)) {
       if (Date.now() > deadline) throw new Error("holder never acquired H");
       await Bun.sleep(5);
@@ -368,7 +368,7 @@ test("a second holder of H makes the unit report blocked rather than wait", asyn
     writeFileSync(release, "release");
     expect(await holder.exited).toBe(0);
   }
-}, 30_000);
+}, SPAWN_BUDGET_MS);
 
 /**
  * The reason the parent can tell a false "app holds the DB" from a real one:

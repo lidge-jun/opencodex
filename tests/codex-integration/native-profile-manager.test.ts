@@ -17,7 +17,7 @@ import { NativeProfileError, type NativeProfileKey, type NativeProfileKeyProvide
 import { codexCredentialMutationEpoch } from "../../src/codex/credential-mutation-epoch";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { helperPath, repoRoot } from "../helpers/repo-root";
-import { watchdogMs } from "../helpers/ci-watchdog";
+import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 const roots: string[] = [];
 
@@ -139,7 +139,7 @@ async function leavePendingJournal(f: Awaited<ReturnType<typeof enrolledFixture>
  * a real crash is not mistaken for a slow start.
  */
 // Gates on a spawned child reaching its marker: 8-19 s on windows-latest (run 33930757649).
-async function waitForPath(path: string, child?: ReturnType<typeof Bun.spawn>, waitMs = watchdogMs(5_000)): Promise<void> {
+async function waitForPath(path: string, child?: ReturnType<typeof Bun.spawn>, waitMs = INTERNAL_DEADLINE_MS): Promise<void> {
   const deadline = Date.now() + waitMs;
   while (!existsSync(path) && Date.now() < deadline) await Bun.sleep(10);
   if (existsSync(path)) return;
@@ -198,12 +198,12 @@ describe("native main profile transactions", () => {
     const f = fixture();
     const readyPath = join(f.root, "crash-ready");
     const child = spawnLockHolder(f, readyPath, join(f.root, "unused-release"), { crash: true });
-    await waitForPath(readyPath, child, watchdogMs(12_000));
+    await waitForPath(readyPath, child, INTERNAL_DEADLINE_MS);
     expect(await child.exited).toBe(87);
 
     const successor = new NativeProfileManager({ ...f.options, lockWaitMs: 250 });
     expect((await successor.recover(false)).recovered).toBe(false);
-  }, 15_000);
+  }, SPAWN_BUDGET_MS);
 
   test("a losing same-process contender cannot release another transaction's POSIX lock", async () => {
     if (process.platform === "win32") return;
@@ -254,7 +254,7 @@ describe("native main profile transactions", () => {
         ...(acquiredProbe ? [acquiredProbe.exited] : []),
       ]);
     }
-  }, 15_000);
+  }, SPAWN_BUDGET_MS);
 
   test("two processes exclude each other and predecessor release cannot delete a successor lock", async () => {
     const f = fixture();
@@ -293,7 +293,7 @@ describe("native main profile transactions", () => {
       await first.exited;
       if (second) await second.exited;
     }
-  }, 15_000);
+  }, SPAWN_BUDGET_MS);
 
   test("the same canonical CODEX_HOME serializes different OpenCodex config roots", async () => {
     const f = fixture();
@@ -320,7 +320,7 @@ describe("native main profile transactions", () => {
       writeFileSync(release, "release");
       await first.exited;
     }
-  }, 15_000);
+  }, SPAWN_BUDGET_MS);
 
   test("shares one vault while preventing another OPENCODEX_HOME from finishing or cancelling a stage", async () => {
     const f = fixture();

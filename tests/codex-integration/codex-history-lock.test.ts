@@ -11,7 +11,7 @@ import {
 } from "../../src/codex/history-lock";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoRoot as resolveRepoRoot } from "../helpers/repo-root";
-import { watchdogMs } from "../helpers/ci-watchdog";
+import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 const repoRoot = resolveRepoRoot();
 const sandboxes: string[] = [];
@@ -59,7 +59,7 @@ afterEach(() => {
 
 // Same shape as codex-write-lock: gates on a spawned child reaching its marker, which
 // costs 8-19 s on windows-latest (run 33930757649). Local stays at 10 s.
-async function waitForPath(path: string, timeoutMs = watchdogMs(10_000)): Promise<void> {
+async function waitForPath(path: string, timeoutMs = INTERNAL_DEADLINE_MS): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!existsSync(path)) {
     if (Date.now() > deadline) throw new Error(`timed out waiting for ${path}`);
@@ -110,7 +110,7 @@ test("H excludes a second process across the whole history unit", async () => {
   // Once the holder is gone the lock is available again.
   const after = withHistoryWriteSerialization(sandbox.codexHome, sandbox.stateDb, () => "ok");
   expect(after).toEqual({ kind: "completed", value: "ok" });
-}, 30_000);
+}, SPAWN_BUDGET_MS);
 
 test("a permit is refused once its acquisition released, and for a foreign state database", () => {
   const sandbox = makeSandbox("ocx-history-permit-");

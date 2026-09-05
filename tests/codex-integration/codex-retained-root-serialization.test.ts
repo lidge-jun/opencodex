@@ -20,7 +20,7 @@ import { claimOwnedServiceHome, withOwnedServiceHomePreload } from "../helpers/o
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoRoot as resolveRepoRoot } from "../helpers/repo-root";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
-import { watchdogMs } from "../helpers/ci-watchdog";
+import { INTERNAL_DEADLINE_MS } from "../helpers/test-budget";
 
 const repoRoot = resolveRepoRoot();
 const sandboxes: Sandbox[] = [];
@@ -201,7 +201,7 @@ async function holdCatalogLock(sandbox: Sandbox): Promise<{
   });
   sandbox.children.add(child);
   sandbox.releaseMarkers.add(release);
-  await waitForPath(ready, watchdogMs(12_000));
+  await waitForPath(ready, INTERNAL_DEADLINE_MS);
   return {
     release: () => { try { writeFileSync(release, "release"); } catch { /* teardown may have released already */ } },
     child,
@@ -371,7 +371,7 @@ for (const publisher of ["convergence", "retained"] as const) {
       `], sandbox.preloadPath)], { cwd: repoRoot, env: sandboxChildEnv(sandbox), stdout: "pipe", stderr: "pipe" });
       sandbox.children.add(sync);
 
-      await raceBarrier(sync, waitForPath(requested, watchdogMs(16_000)));
+      await raceBarrier(sync, waitForPath(requested, INTERNAL_DEADLINE_MS));
       const published = await runPublisher(sandbox, publisher, config);
       if (published.exitCode !== 0) {
         throw new Error(`${publisher} publisher failed\nstdout=${published.stdout}\nstderr=${published.stderr}`);
@@ -448,7 +448,7 @@ test("a persisted runtime selection moved by another process during the await bl
   `], sandbox.preloadPath)], { cwd: repoRoot, env: sandboxChildEnv(sandbox), stdout: "pipe", stderr: "pipe" });
   sandbox.children.add(sync);
 
-  await raceBarrier(sync, waitForPath(requested, watchdogMs(16_000)));
+  await raceBarrier(sync, waitForPath(requested, INTERNAL_DEADLINE_MS));
 
   // Another process selects a different Codex runtime. No catalog byte changes.
   writeFileSync(runtimeStatePath, `${JSON.stringify({
@@ -512,7 +512,8 @@ test("two processes at the post-approval management seam serialize instead of in
     // looked exactly like a production defect until the encoder said so.
     globalThis.fetch = async () => {
       writeFileSync(${JSON.stringify(barrier)} + "-" + ${JSON.stringify(marker)}, "here");
-      const deadline = Date.now() + 8000;
+      // Two children rendezvous on markers; either may take 8-19 s to boot on windows-latest.
+      const deadline = Date.now() + ${INTERNAL_DEADLINE_MS};
       while (Date.now() < deadline) {
         if (existsSync(${JSON.stringify(barrier)} + "-a") && existsSync(${JSON.stringify(barrier)} + "-b")) break;
         await Bun.sleep(5);
@@ -552,7 +553,8 @@ test("two processes at the post-approval management seam serialize instead of in
   // On macOS CI both children can still lose the config lock before approval even
   // after the warm-up — that proves nothing about catalog serialization. Retry
   // vacuous runs until at least one process reaches the post-approval seam.
-  const attemptDeadline = Date.now() + 20_000;
+  // Each attempt boots two real children; bound the retry loop by the spawn budget, not a literal.
+  const attemptDeadline = Date.now() + SPAWN_BUDGET_MS;
   let results: Array<{ exitCode: number; stdout: string; stderr: string }> | undefined;
   while (Date.now() < attemptDeadline) {
     for (const marker of ["a", "b"] as const) {

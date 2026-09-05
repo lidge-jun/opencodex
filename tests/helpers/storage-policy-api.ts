@@ -24,6 +24,7 @@ import {
 import { stopStorageCleanupScheduler } from "../../src/storage/policy-scheduler";
 import { drainStorageWorkers } from "../../src/storage/worker-lifecycle";
 import { removeTreeWithRetry } from "./remove-tree";
+import { INTERNAL_DEADLINE_MS } from "./test-budget";
 
 export function baseConfig(): OcxConfig {
   return {
@@ -58,7 +59,9 @@ export function seedArchived(codexHome: string): void {
 export async function waitForJobIdle(
   serverUrl: URL,
   startedAt: number,
-  timeoutMs = 15_000,
+  // Polls a live server for a worker-backed job to settle; the worker's OS-thread join is
+  // the slow half on Windows. Named so every caller inherits the same bound.
+  timeoutMs = INTERNAL_DEADLINE_MS,
 ): Promise<{
   enabled: boolean;
   lastRun?: { removed: number };

@@ -54,7 +54,7 @@ import {
 import { startServer } from "../../src/server";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { helperPath, repoRoot } from "../helpers/repo-root";
-import { watchdogMs } from "../helpers/ci-watchdog";
+import { INTERNAL_DEADLINE_MS } from "../helpers/test-budget";
 
 const roots: string[] = [];
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
@@ -228,7 +228,7 @@ async function fixture(
 }
 
 // Gates on a spawned child reaching its marker: 8-19 s on windows-latest (run 33930757649).
-async function waitForPath(path: string, timeoutMs = watchdogMs(10_000)): Promise<void> {
+async function waitForPath(path: string, timeoutMs = INTERNAL_DEADLINE_MS): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!existsSync(path) && Date.now() < deadline) await Bun.sleep(10);
   if (!existsSync(path)) throw new Error(`Timed out waiting for ${path}`);
@@ -242,8 +242,8 @@ async function waitForPath(path: string, timeoutMs = watchdogMs(10_000)): Promis
  */
 // A spawned proxy child needs 10-18 s to reach its port file on a loaded windows-latest shard
 // (runs 33601508392 and 33610501053), and run 33930757649 showed 19 s boots elsewhere in the
-// suite; watchdogMs lifts this to the platform floor on CI while local stays at 18 s.
-async function waitForPort(path: string, timeoutMs = watchdogMs(18_000)): Promise<number> {
+// suite. INTERNAL_DEADLINE_MS is the named in-test bound; callers carry a larger case budget.
+async function waitForPort(path: string, timeoutMs = INTERNAL_DEADLINE_MS): Promise<number> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     if (existsSync(path)) {

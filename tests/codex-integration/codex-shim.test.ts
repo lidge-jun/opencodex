@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { autoRestoreCodexShim, buildUnixCodexShim, buildWindowsCodexShim, buildWindowsPowerShellCodexShim, diagnoseCodexShim, findCodexOnPath, inspectCodexShimBackingForCommand, installCodexShim, isLocalAbsoluteInspectionPath, isVersionManagerOwnedCodexPath, isWindowsInteropDir, lastCodexDiscoveryError, setCodexShimFreshWriteHookForTests, setCodexShimGuardedWriteHookForTests, setCodexShimProbeHookForTests, setCodexShimProbeObservationMsForTests, setCodexShimProbeShellForTests, setCodexShimRollbackRestoreHookForTests, uninstallCodexShim } from "../../src/codex/shim";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath, repoRoot } from "../helpers/repo-root";
+import { INTERNAL_DEADLINE_MS } from "../helpers/test-budget";
 
 const SHIM_MARKER = "opencodex codex autostart shim";
 const UNIX_SHIM_REVISION_MARKER = "opencodex unix codex shim revision 2";
@@ -1701,7 +1702,8 @@ exit 127
         stdout: "pipe",
         stderr: "pipe",
       });
-      const deadline = Date.now() + 5_000;
+      // Spawned holder child writing its ready marker: 8-19 s on windows-latest.
+      const deadline = Date.now() + INTERNAL_DEADLINE_MS;
       while (!existsSync(readyPath) && Date.now() < deadline) await Bun.sleep(5);
       expect(existsSync(readyPath)).toBe(true);
 

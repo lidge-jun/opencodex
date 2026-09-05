@@ -162,3 +162,106 @@ Verifier: macOS focused run of every touched file, `typecheck`, then two
 consecutive CI dispatches. The ablation rule from `test-budget.ts` applies per
 file: at least one case per touched file is driven red by disabling the thing
 it waits for, so a budget cannot hide a vacuous wait.
+
+---
+
+## Review of 3b431b413: FAIL (6 blockers) — the composition invariant
+
+The implementation reviewer found the shape of the first attempt wrong, and the
+argument is structural, not a nit.
+
+`watchdogMs()` returns **45 s on Windows CI**. I applied it to INTERNAL waits
+inside tests whose OWN budgets are 15, 20 or 30 s. So on the platform this fix
+targets, the internal deadline is now LONGER than the test — Bun's per-test
+timeout fires first, and the wait's diagnostic ("timed out waiting for
+`<marker>`") never prints. That is the exact inversion `test-budget.ts:64`
+warns about: "keep these at least a few times under the surrounding budget".
+It also destroys the one thing the diagnostic was for — naming WHICH child was
+slow — and replaces it with a bare timeout, which is where this unit started.
+
+| file | internal wait now | enclosing budget | result on Windows CI |
+|---|---|---|---|
+| `native-profile-manager` | 45 s | **15 s** ×4 cases | bare timeout, no diagnostic |
+| `codex-history-lock` | 45 s | 30 s | bare timeout |
+| `codex-write-lock` | 45 s | 30 s ×4 | bare timeout |
+| `oauth-refresh-lock-multiprocess` | 45 s | 30 s | bare timeout |
+| `codex-history-worker` | 45 s | 30 s | bare timeout |
+| `codex-retained-root`, `codex-inject-write-lock` | 45 s | 45 s | tie — diagnostic races Bun |
+
+### Corrected shape
+
+Two knobs, moved together, the way `test-budget.ts` and `ci-watchdog.ts` say:
+
+1. **Internal waits that gate on a spawned child or a live server use
+   `INTERNAL_DEADLINE_MS` (15 s)** — the repository's named constant for
+   exactly this ("a deadline inside a test, for an await that would otherwise
+   hang forever"). It is already what `windows-tray`, `cli-models` and
+   `oauth-store-multi` use. Not `watchdogMs`, which is for the OUTER
+   watchdog and is sized to sit under the lane's 60 s.
+2. **Every enclosing case whose body spawns a child or binds a server gets
+   `SPAWN_BUDGET_MS` (45 s) or `SERVER_BUDGET_MS` (30 s)** — a few times the
+   internal deadline, as the invariant requires, and under the 60 s lane ceiling.
+
+On the failing runs the child took 8-19 s: 15 s internal still loses on the
+slow tail. That is acceptable ONLY because the diagnostic then fires and names
+the marker, which is the signal we want — and it is why (2) matters: the case
+must outlive the diagnostic so the diagnostic is what gets reported. If 15 s
+proves too tight in practice, the right move is to raise `INTERNAL_DEADLINE_MS`
+once, in the helper, with the run number — not to reach for `watchdogMs`.
+
+### The other five blockers, dispositions
+
+- **b2** `retained-root:515` (8 s two-child barrier) and `:555` (20 s child
+  deadline) were in my own class-A inventory and not changed. Change both.
+- **b3** Ten more A/B sites the reviewer's re-run of the grep found that mine
+  missed (`codex-shim:1704`, `codex-prompt-route:73`, `codex-prompt-text-probe:34`,
+  `native-profile-drain-server:189`, `server-live:1221,1309`,
+  `helpers/storage-policy-api:61`, `storage-mutation-race:127`,
+  `api-storage-policy-put-race:55`, `helpers/windows-power-shell-fixture:22`).
+  My inventory regex excluded helper files and missed `deadline = Date.now() +
+  N` where N was a variable. Read each; budget the ones that gate externally.
+- **b4** `storage-policy-job-responsive:143` — the loop falls through on
+  expiry with no throw and no final assertion, so it is vacuous today
+  regardless of the bound. Add `expect(status).toBe("idle")` after the loop.
+  This is a real find independent of Windows.
+- **b5** `composed-acceptance` — `SERVER_BUDGET_MS * 2` was arithmetic, and my
+  "two serialized legs" model is wrong: `fx.start()` completes BEFORE the held
+  request begins, and the held request and the OFF round-trip overlap. Name
+  it: `HELD_REQUEST_BUDGET_MS = SERVER_BUDGET_MS` with a comment that the bound
+  covers "a gather held open until `release()` plus one overlapping mutation",
+  and derive nothing from `* 2`. Since the case budget is 150 s on CI and the
+  request was aborted at 30 s while the case sat at 57 s total, the real
+  question is whether 30 s is enough for a gather under startup load; the
+  siblings say yes at 47-58 s total. Keep 30 s named, do not double it.
+- **b6** Ablation evidence — blocked by another session holding the user
+  test lock at the time; must be run before this lands. Two files selected:
+  `codex-history-lock` (disable the holder's `writeFileSync(ready)` → the
+  helper's "timed out waiting for" must print, not Bun's timeout) and
+  `storage-policy-job-responsive` (after b4, block the job → the new
+  `expect` must fail).
+
+### Reading of what I did wrong
+
+I reached for the helper whose name matched ("watchdog") without reading the
+two paragraphs above it that say what it is for and what it must stay under.
+The reviewer read them. Same failure as `007` in a smaller key: pattern-matched
+the fix instead of measuring it against the constraint.
+
+### Blocker-3 sites, read and dispositioned
+
+| site | what the loop gates on | disposition |
+|---|---|---|
+| `codex-shim:1704` | spawned holder child's ready marker | **A → INTERNAL_DEADLINE_MS** |
+| `codex-prompt-route:73` | `waitUntil` used only for spawned probe child pid/start markers (5 callers) | **A → INTERNAL_DEADLINE_MS** |
+| `codex-prompt-text-probe:34` | same shape, child pid marker / child exit | **A → INTERNAL_DEADLINE_MS** |
+| `helpers/storage-policy-api:61` `waitForJobIdle` | live server, worker-backed job settling | **B → INTERNAL_DEADLINE_MS** (helper default; every caller inherits) |
+| `storage-mutation-race:127` `waitForPolicyJob` | same as above, local copy | **B → INTERNAL_DEADLINE_MS** |
+| `native-profile-drain-server:189` | in-process `Bun.serve` counters (`upstreamCloses`), no child | **C — leave** |
+| `server-live:1221` | in-process WS frame arrival on a loopback server already up | **C — leave** (2 s asserts latency of an established socket) |
+| `server-live:1309` | frame-log file written by the same process | **C — leave** |
+| `api-storage-policy-put-race:55` | `sawRunning` peek loop — the assertion is that the job is STILL running during the edit window; a longer bound would wait for it to finish and invert the test | **C — leave, deliberately** |
+| `helpers/windows-power-shell-fixture:22` `probeWindowsPowerShellFixture` | spawns a real PowerShell — but it is a PREFLIGHT whose `ok:false` result skips the dependent cases with a reason; 5 s is the "is PowerShell usable at all" bound and lengthening it only delays a skip | **C — leave** |
+
+Five budgeted, five left with a reason each. The inventory regex missed
+`tests/helpers/*.ts` and `deadline = Date.now() + <identifier>`; both are
+now in the grep.

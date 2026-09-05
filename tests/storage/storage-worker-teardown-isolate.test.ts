@@ -36,7 +36,7 @@ import {
 } from "../../src/storage/worker-lifecycle";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { watchdogMs } from "../helpers/ci-watchdog";
+import { INTERNAL_DEADLINE_MS } from "../helpers/test-budget";
 
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 let testDir = "";
@@ -94,7 +94,7 @@ afterAll(async () => {
 });
 
 // Worker spawn on a loaded windows-latest shard; bound follows the platform floor.
-async function waitForLiveWorker(timeoutMs = watchdogMs(10_000)): Promise<void> {
+async function waitForLiveWorker(timeoutMs = INTERNAL_DEADLINE_MS): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (liveStorageWorkerCount() > 0) return;

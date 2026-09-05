@@ -20,6 +20,7 @@ import {
 import type { ManagementPrincipal } from "../../src/server/management-auth";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { INTERNAL_DEADLINE_MS } from "../helpers/test-budget";
 
 const MARKER = "# Auto-injected by opencodex";
 const config = { port: 10100, defaultProvider: "openai", providers: {} } as OcxConfig;
@@ -71,7 +72,10 @@ function read(path: string): string | null {
 }
 
 async function waitUntil(predicate: () => boolean, detail: string): Promise<void> {
-  const deadline = Date.now() + 5_000;
+  // Every caller gates on a spawned probe child writing a pid/start marker: 8-19 s to boot
+  // on windows-latest (run 33930757649). The diagnostic below names the marker, so the
+  // bound must stay under the enclosing case budget for it to be what gets reported.
+  const deadline = Date.now() + INTERNAL_DEADLINE_MS;
   while (!predicate()) {
     if (Date.now() >= deadline) throw new Error(`timed out waiting for ${detail}`);
     await Bun.sleep(10);

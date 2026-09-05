@@ -41,8 +41,18 @@ import {
   resolveEffectiveUserIdentity,
 } from "../../src/codex/user-identity";
 import { claimOwnedServiceHome, withOwnedServiceHomePreload } from "../helpers/owned-service-home";
-import { SERVER_BUDGET_MS } from "../helpers/test-budget";
+import { INTERNAL_DEADLINE_MS, SERVER_BUDGET_MS } from "../helpers/test-budget";
 import { repoRoot as resolveRepoRoot } from "../helpers/repo-root";
+
+/**
+ * Bound for a request the fixture deliberately HOLDS open: the provider's /models response
+ * blocks until the test calls release(), so this request's ceiling is "a gather held
+ * across one overlapping mutation", not a single round-trip. On run 33930757649 the plain
+ * SERVER_BUDGET_MS abort fired at 30 s while the case sat at 57.7 s total and its siblings
+ * passed at 47.9 s and 57.8 s — the case was inside its band, the per-request bound was
+ * not. Named rather than multiplied so the next reader sees WHAT is being bounded.
+ */
+const HELD_REQUEST_BUDGET_MS = SERVER_BUDGET_MS + INTERNAL_DEADLINE_MS;
 
 const repoRoot = resolveRepoRoot();
 const cliPath = resolve(repoRoot, "src/cli/index.ts");
@@ -490,12 +500,8 @@ describe("WP13 composed toggle acceptance", () => {
         } }, defaultProvider: "fixture", clientIntegrations: { codex: true } });
         hold = true;
         // This request is intentionally held open while a second real HTTP
-        // mutation crosses the Windows process-backed identity path. Its ceiling is
-        // therefore "a startup plus a held gather plus the OFF round-trip", not "a
-        // request": on run 33930757649 the 30 s SERVER_BUDGET_MS abort fired while the
-        // case as a whole was inside its normal band (57.7 s; siblings passed at 47.9 s
-        // and 57.8 s). Two server budgets is the honest bound for two serialized legs.
-        const stale = fx.request(server.runtime, "/api/sync", { method: "POST" }, SERVER_BUDGET_MS * 2);
+        // mutation crosses the Windows process-backed identity path; see HELD_REQUEST_BUDGET_MS.
+        const stale = fx.request(server.runtime, "/api/sync", { method: "POST" }, HELD_REQUEST_BUDGET_MS);
         await Promise.race([
           enteredGather,
           stale.then(result => Promise.reject(new Error(
