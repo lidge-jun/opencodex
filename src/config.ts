@@ -8,6 +8,7 @@ import { DEFAULT_SUBAGENT_MODELS, SUBAGENT_MODELS_VERSION } from "./config/subag
 export { DEFAULT_SUBAGENT_MODELS } from "./config/subagent-models";
 import {
   apiKeyTransportConfigError,
+  autoReviewModelConfigError,
   booleanRecordConfigError,
   modelAdapterRecordConfigError,
   modelDisplayNamesConfigError,
@@ -18,6 +19,7 @@ import {
   providerBaseUrlConfigError,
   providerHeadersConfigError,
   reasoningSummaryDeliveryRecordConfigError,
+  sanitizeAutoReviewOverridesForLoad,
   upstreamHttpVersionConfigError,
 } from "./config/provider-validation";
 import {
@@ -540,6 +542,11 @@ const providerConfigSchema = z.object({
   statelessResponses: z.boolean().optional(),
   requiresAdjacentResponsesToolResults: z.boolean().optional(),
   annotateEmptyToolOutputs: z.boolean().optional(),
+  autoReviewModel: z.string().trim().min(1).refine(value => !/\s/.test(value), "must not contain whitespace").optional(),
+  autoReviewModelOverrides: z.record(
+    z.string().min(1).refine(key => !/\s/.test(key), "keys must not contain whitespace"),
+    z.string().trim().min(1).refine(value => !/\s/.test(value), "must not contain whitespace"),
+  ).optional(),
   fastWire: fastWireSchema.nullable().optional(),
   supportsServiceTier: z.boolean().optional(),
   modelSupportsServiceTier: z.record(z.string().min(1), z.boolean()).optional(),
@@ -587,17 +594,22 @@ const providerConfigSchema = z.object({
 
 export { isValidProviderName, hasOwnProvider } from "./config/provider-name";
 export {
+  autoReviewModelConfigError,
   apiKeyTransportConfigError,
   booleanRecordConfigError,
   modelAdapterRecordConfigError,
   modelDisplayNamesConfigError,
   nonBlankStringArrayConfigError,
+  normalizeAutoReviewModelField,
+  normalizeAutoReviewModelFields,
+  normalizeAutoReviewModelOverridesField,
   normalizeNonBlankStringArray,
   positiveIntegerConfigError,
   positiveIntegerRecordConfigError,
   providerBaseUrlConfigError,
   providerHeadersConfigError,
   reasoningSummaryDeliveryRecordConfigError,
+  sanitizeAutoReviewOverridesForLoad,
   upstreamHttpVersionConfigError,
 } from "./config/provider-validation";
 
@@ -1375,6 +1387,18 @@ const configSchema = z.object({
         code: "custom",
         path: ["providers", redactSecretString(name), "modelAdapters"],
         message: modelAdaptersError,
+      });
+    }
+    const autoReviewError = autoReviewModelConfigError(
+      name,
+      (provider as { autoReviewModel?: unknown }).autoReviewModel,
+      (provider as { autoReviewModelOverrides?: unknown }).autoReviewModelOverrides,
+    );
+    if (autoReviewError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "autoReviewModel"],
+        message: autoReviewError,
       });
     }
     const preferHostedToolsError = modelPreferHostedToolsConfigError(
@@ -2178,6 +2202,7 @@ export function loadConfig(): OcxConfig {
     sanitizeModelDisplayNamesForLoad(parsed);
     sanitizeRetryOn429ForLoad(parsed);
     sanitizeModelCostsForLoad(parsed);
+    sanitizeAutoReviewOverridesForLoad(parsed);
     const result = configSchema.safeParse(parsed);
     if (result.success) {
       const config = normalizeApiKeyIds(result.data as OcxConfig);

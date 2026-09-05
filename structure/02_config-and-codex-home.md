@@ -455,3 +455,35 @@ the residual directory for manual review; there is no recursive-delete fallback.
 ## Remote client key files
 
 Client connection metadata stores a stable `apiKeyId` and a non-secret rotation `pendingOperation`. The current data secret remains only in `service-api-token`; a bounded rotation temporarily keeps the old secret in owner-only `service-api-token.prev`. Commit or recovery clears the marker before orphan cleanup. `ocx disconnect` is local-only and leaves remote revocation to the hub's **Integrations → API Keys** page. Hub and local usage stores are not mirrored.
+
+## Auto-review (approval) model override
+
+Codex picks its auto-review subagent from the session model's catalog row field
+`auto_review_model_override`; when absent it uses the session model itself. Providers may opt in
+per provider or per model:
+
+- `providers.<name>.autoReviewModel`: provider-wide default approval model for every routed row.
+- `providers.<name>.autoReviewModelOverrides`: object mapping a session model id to its approval
+  model; the per-model value wins.
+
+A root Codex auto_review_model (config.toml, issue #1225) stays supported as the global
+fallback: sync stamps it onto native rows and onto routed rows that carry no provider-level
+override. Provider-level per-row values outrank that root selector on their own routed rows,
+and removing the root selector never wipes provider-derived stamps. The provider fields are
+therefore the per-provider scoped choice, while the root selector covers everything else.
+
+Targets are either a bare model id (resolved to `<provider>/<id>` in the catalog) or a
+`provider/model` catalog slug of any configured provider. The override is stamped onto the
+routed catalog row during sync as `auto_review_model_override`; unknown bare targets are skipped
+with a warning rather than emitted. A bare target resolves only when the id is also listed in
+the provider's configured `models` or a matching registry entry; on pure live-discovery
+providers without a static `models` list, add the sibling target id to `models` first (the
+row's own model id always resolves). A final sync pass drops overrides that do not name an
+emitted catalog model (fail closed). Malformed hand-edited values are sanitized at load instead
+of retiring the config; the strict management boundary still rejects them.
+
+Canonical OpenAI providers (whose native/account rows are not routed) and combo aliases are
+excluded from the override; those sessions keep Codex's session-model behavior. The management
+API preserves the fields on unrelated provider saves and exposes PATCH/null clearing, but the v1
+GUI does not yet render editors — configure through the config file or `ocx config set`. The
+feature is opt-in — no vendor defaults.

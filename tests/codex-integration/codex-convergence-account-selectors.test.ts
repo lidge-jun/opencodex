@@ -706,6 +706,58 @@ test("retained and convergence writers resolve, clear, reject, and recover auto-
   }
 });
 
+test("retained and convergence writers keep provider auto-review stamps and use the root selector only as fallback", async () => {
+  primeCodexRuntimeFixture();
+
+  const providerAutoReviewConfig = (): OcxConfig => {
+    const nextConfig = config(false);
+    nextConfig.providers.static = {
+      adapter: "openai-chat",
+      baseUrl: "https://static.example.test/v1",
+      liveModels: false,
+      models: ["deepseek-v4-flash", "deepseek-v4-pro"],
+      autoReviewModel: "deepseek-v4-flash",
+    };
+    return nextConfig;
+  };
+
+  for (const writer of ["retained", "convergence"] as const) {
+    const write = async (nextConfig: OcxConfig): Promise<RawCatalog> => {
+      if (writer === "retained") {
+        const result = await syncCatalogModels(nextConfig);
+        expect(result.catalogWritten).toBe(true);
+      } else {
+        const disposition = await convergeCatalogDisposition(nextConfig);
+        expect(disposition).toMatchObject({ status: "committed" });
+      }
+      return JSON.parse(readFileSync(catalogPath, "utf8")) as RawCatalog;
+    };
+
+    // No root selector: provider-level stamps survive sync untouched.
+    writeAutoReviewModel();
+    writeCatalog(autoReviewSeed(null));
+    let catalog = await write(providerAutoReviewConfig());
+    expect(catalog.models?.find(entry => entry.slug === "static/deepseek-v4-flash"))
+      .toHaveProperty("auto_review_model_override", "static/deepseek-v4-flash");
+    expect(catalog.models?.find(entry => entry.slug === "static/deepseek-v4-pro"))
+      .toHaveProperty("auto_review_model_override", "static/deepseek-v4-flash");
+    expect(catalog.models?.find(entry => entry.slug === "gpt-5.4"))
+      .toHaveProperty("auto_review_model_override", "native-upstream");
+
+    // Root selector present: routed provider stamps keep winning; the root value
+    // becomes the fallback applied to native rows without a provider stamp.
+    writeAutoReviewModel("static/deepseek-v4-pro");
+    writeCatalog(autoReviewSeed(null));
+    catalog = await write(providerAutoReviewConfig());
+    expect(catalog.models?.find(entry => entry.slug === "static/deepseek-v4-flash"))
+      .toHaveProperty("auto_review_model_override", "static/deepseek-v4-flash");
+    expect(catalog.models?.find(entry => entry.slug === "static/deepseek-v4-pro"))
+      .toHaveProperty("auto_review_model_override", "static/deepseek-v4-flash");
+    expect(catalog.models?.find(entry => entry.slug === "gpt-5.4"))
+      .toHaveProperty("auto_review_model_override", "static/deepseek-v4-pro");
+  }
+});
+
 test("degraded preservation still honors explicit routed visibility policy", async () => {
   writeCatalog([
     nativeEntry(),

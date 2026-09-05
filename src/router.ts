@@ -18,7 +18,11 @@ import {
   providerCodexAccountMode,
   registryModelServiceTierCapabilityApplies,
 } from "./providers/registry";
-import { applyDirectReasoningEffortContracts, hasLegacyClinePassReasoningEfforts } from "./providers/derive";
+import {
+  applyDirectReasoningEffortContracts,
+  hasLegacyClinePassReasoningEfforts,
+  mergeAutoReviewModelOverrides,
+} from "./providers/derive";
 import { cloneFastWire } from "./providers/fastwire";
 import {
   providerMatchesRegistryTransportWithStaticGuards,
@@ -381,6 +385,17 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     ...(provider.annotateEmptyToolOutputs === undefined
       && registryEntry.annotateEmptyToolOutputs !== undefined
       ? { annotateEmptyToolOutputs: registryEntry.annotateEmptyToolOutputs }
+      : {}),
+    ...(provider.autoReviewModel === undefined && registryEntry.autoReviewModel !== undefined
+      ? { autoReviewModel: registryEntry.autoReviewModel }
+      : {}),
+    ...(provider.autoReviewModelOverrides !== undefined || registryEntry.autoReviewModelOverrides !== undefined
+      ? {
+        autoReviewModelOverrides: mergeAutoReviewModelOverrides(
+          registryEntry.autoReviewModelOverrides,
+          provider.autoReviewModelOverrides,
+        ),
+      }
       : {}),
     ...(provider.fastWire === undefined && registryEntry.fastWire !== undefined
       ? {

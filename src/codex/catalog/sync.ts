@@ -371,6 +371,12 @@ export function deriveEntry(
       if (model) applyCatalogMetadata(e, model.provider, model.id, model.contextCap);
       applyCatalogModelMetadata(e, model);
       if (model?.catalogKind) e.opencodex_catalog_kind = model.catalogKind;
+      // Codex auto-review (approvals) override: the provider-fetch layer already
+      // normalized the target to a catalog slug; stamp it verbatim. Rows without
+      // an override keep the template's null.
+      if (model?.autoReviewModelOverride) {
+        e.auto_review_model_override = model.autoReviewModelOverride;
+      }
     } else {
       applyNativeOpenAiContextOverride(e, contextCap);
       if (isGpt56NativeSlug(slug)) ensureGpt56ReasoningLevels(e);
@@ -418,6 +424,9 @@ export function deriveEntry(
   if (model && isRouted) applyCatalogMetadata(entry, model.provider, model.id, model.contextCap);
   applyCatalogModelMetadata(entry, model);
   if (model?.catalogKind) entry.opencodex_catalog_kind = model.catalogKind;
+  if (model?.autoReviewModelOverride) {
+    entry.auto_review_model_override = model.autoReviewModelOverride;
+  }
   if (!isRouted) applyNativeOpenAiContextOverride(entry, contextCap);
   return ensureStrictCatalogFields(normalizeServiceTiers(entry), {
     preserveExactInputModalities: preserveExact,
@@ -690,6 +699,7 @@ export function buildCatalogEntriesFromObservedState({
 
 export function resetCatalogRuntimeStateForTests(): void {
   resetBundledCatalogCacheForTests();
+  lastAppliedRootAutoReviewModel = null;
   lastDropWarnSignature.clear();
   openAiApiCollisionWarnings.clear();
   comboCatalogWarningSignatures.clear();
@@ -1453,6 +1463,23 @@ export function isValidAutoReviewModel(value: unknown): value is string {
 
 export type AutoReviewModelOverrideResult = "absent" | "applied" | "invalid" | "unresolved";
 
+// Root-selector provenance across regenerate/apply cycles. When a root
+// auto_review_model was previously stamped by this module and is later removed,
+// native rows that still carry that exact selector are stale copies and must be
+// cleared even when routed provider stamps now differ (so the old single-value
+// heuristic cannot infer them).
+let lastAppliedRootAutoReviewModel: string | null = null;
+export interface AutoReviewModelOverrideOptions {
+  /**
+   * Preserve provider-derived per-row overrides on routed entries. Routed rows
+   * regenerated from provider config carry their stamp before this pass runs;
+   * with this flag the root selector (or its absence) cannot wipe those values.
+   * Without the flag the historical behavior is kept: absent/invalid root state
+   * clears every routed row so stale root-selector residue cannot persist.
+   */
+  retainRoutedOverrides?: boolean;
+}
+
 function isRoutedCatalogEntry(entry: RawEntry): boolean {
   const slug = typeof entry.slug === "string" ? entry.slug : "";
   return slug.includes("/")
@@ -1462,6 +1489,8 @@ function isRoutedCatalogEntry(entry: RawEntry): boolean {
 function clearAutoReviewModelOverride(
   models: readonly RawEntry[],
   sourceModels: readonly RawEntry[] = [],
+  retainRoutedOverrides = false,
+  previousRootSelector: string | null = null,
 ): void {
   const observedModels = [...models, ...sourceModels];
   const configuredValues = new Set(observedModels.flatMap(entry => {
@@ -1485,9 +1514,25 @@ function clearAutoReviewModelOverride(
   for (const entry of models) {
     if (!entry || typeof entry !== "object") continue;
     const current = entry.auto_review_model_override;
-    if (isRoutedCatalogEntry(entry)
-      || (globalStamp && typeof current === "string" && configuredValues.has(current))) {
+    const rootMarker = entry.opencodex_auto_review_root;
+    const staleRootCopy = typeof rootMarker === "string"
+      && typeof current === "string"
+      && current === rootMarker;
+    if (rootMarker !== undefined) delete entry.opencodex_auto_review_root;
+    if (isRoutedCatalogEntry(entry)) {
+      // A freshly derived provider stamp (nonblank valid string) is kept when
+      // retaining is requested; everything else on routed rows is cleared so
+      // stale root-selector residue cannot persist across regenerations.
+      if (retainRoutedOverrides && typeof current === "string" && isValidAutoReviewModel(current) && !staleRootCopy) continue;
       entry.auto_review_model_override = null;
+      continue;
+    }
+    if (typeof current === "string") {
+      const matchesPreviousRoot = previousRootSelector !== null && previousRootSelector !== ""
+        && current === previousRootSelector;
+      const matchesHeuristic = previousRootSelector === null
+        && globalStamp && configuredValues.has(current);
+      if (staleRootCopy || matchesPreviousRoot || matchesHeuristic) entry.auto_review_model_override = null;
     }
   }
 }
@@ -1509,17 +1554,20 @@ function preserveNativeAutoReviewModelOverrides(
   models: readonly RawEntry[],
   sourceModels: readonly RawEntry[],
 ): void {
-  const existing = new Map<string, string | null>();
+  const existing = new Map<string, { value: string | null; rootMarker: unknown }>();
   for (const entry of sourceModels) {
     const slug = typeof entry.slug === "string" ? entry.slug : undefined;
     const value = entry.auto_review_model_override;
     if (!slug || isRoutedCatalogEntry(entry)) continue;
-    if (typeof value === "string" || value === null) existing.set(slug, value);
+    if (typeof value === "string" || value === null) existing.set(slug, { value, rootMarker: entry.opencodex_auto_review_root });
   }
   for (const entry of models) {
     const slug = typeof entry.slug === "string" ? entry.slug : undefined;
     if (!slug || isRoutedCatalogEntry(entry) || !existing.has(slug)) continue;
-    entry.auto_review_model_override = existing.get(slug) ?? null;
+    const saved = existing.get(slug)!;
+    entry.auto_review_model_override = saved.value ?? null;
+    if (saved.rootMarker !== undefined) entry.opencodex_auto_review_root = saved.rootMarker;
+    else delete entry.opencodex_auto_review_root;
   }
 }
 
@@ -1527,42 +1575,70 @@ export function applyAutoReviewModelOverride(
   models: RawEntry[] | undefined,
   autoReviewModel: string | null | undefined,
   sourceModels: readonly RawEntry[] = [],
+  options: AutoReviewModelOverrideOptions = {},
 ): AutoReviewModelOverrideResult {
   if (!models || !Array.isArray(models)) return "absent";
+  const retainRouted = options.retainRoutedOverrides === true;
   if (autoReviewModel === null || autoReviewModel === undefined) {
-    clearAutoReviewModelOverride(models, sourceModels);
+    clearAutoReviewModelOverride(models, sourceModels, retainRouted, lastAppliedRootAutoReviewModel);
+    lastAppliedRootAutoReviewModel = null;
     return "absent";
   }
   const trimmed = autoReviewModel.trim();
   if (!trimmed) {
-    clearAutoReviewModelOverride(models, sourceModels);
+    clearAutoReviewModelOverride(models, sourceModels, retainRouted, lastAppliedRootAutoReviewModel);
+    lastAppliedRootAutoReviewModel = null;
     return "absent";
   }
   if (!isValidAutoReviewModel(trimmed)) {
-    clearAutoReviewModelOverride(models, sourceModels);
+    clearAutoReviewModelOverride(models, sourceModels, retainRouted, lastAppliedRootAutoReviewModel);
+    lastAppliedRootAutoReviewModel = null;
     warnAutoReviewModelDiagnostic("invalid", trimmed);
     return "invalid";
   }
-  if (!configuredCatalogEntry(models, trimmed)) {
-    clearAutoReviewModelOverride(models, sourceModels);
+  const matchedConfigured = configuredCatalogEntry(models, trimmed);
+  if (!matchedConfigured) {
+    clearAutoReviewModelOverride(models, sourceModels, retainRouted, lastAppliedRootAutoReviewModel);
+    lastAppliedRootAutoReviewModel = null;
     warnAutoReviewModelDiagnostic("unresolved", trimmed);
     return "unresolved";
   }
+  // Stamp the matched catalog row’s actual slug: final validation compares exact slugs, so a
+  // case-equivalent or otherwise equivalent selector must not be written in raw form only to
+  // be dropped by validateAutoReviewOverridesAgainstCatalog.
+  const canonicalRoot = typeof matchedConfigured.slug === "string" ? matchedConfigured.slug : trimmed;
   for (const entry of models) {
-    if (entry && typeof entry === "object") {
-      entry.auto_review_model_override = trimmed;
+    if (!entry || typeof entry !== "object") continue;
+    // Provider-level per-row stamps win for their routed rows; the root selector
+    // is the fallback for native rows and routed rows without a provider stamp.
+    if (retainRouted && isRoutedCatalogEntry(entry)) {
+      const current = entry.auto_review_model_override;
+      if (typeof current === "string" && isValidAutoReviewModel(current)) continue;
     }
+    entry.auto_review_model_override = canonicalRoot;
+    entry.opencodex_auto_review_root = canonicalRoot;
   }
+  lastAppliedRootAutoReviewModel = canonicalRoot;
   return "applied";
 }
 
-/** Apply the root Codex auto-review selector after the final catalog merge. */
+/**
+ * Apply the root Codex auto-review selector after the final catalog merge.
+ * Provider-level per-row stamps on routed entries survive by default: they are
+ * the operator's provider-scoped choice and outrank the root fallback selector.
+ * Native rows keep upstream-retained values while no root selector exists, and
+ * receive the root selector (like unstamped routed rows) when one is set.
+ */
 export function finalizeAutoReviewModelOverride(
   models: RawEntry[] | undefined,
   sourceModels: readonly RawEntry[] = [],
+  options: AutoReviewModelOverrideOptions = {},
 ): AutoReviewModelOverrideResult {
   if (models && sourceModels.length > 0) preserveNativeAutoReviewModelOverrides(models, sourceModels);
-  return applyAutoReviewModelOverride(models, readConfiguredAutoReviewModel(), sourceModels);
+  return applyAutoReviewModelOverride(models, readConfiguredAutoReviewModel(), sourceModels, {
+    retainRoutedOverrides: true,
+    ...options,
+  });
 }
 
 function writeRetainedCatalogSync({
@@ -1792,6 +1868,7 @@ function writeRetainedCatalogSync({
   });
   clampCatalogModelsToCodexSupport(catalog.models);
   finalizeAutoReviewModelOverride(catalog.models, catalogModelsForMerge);
+  validateAutoReviewOverridesAgainstCatalog(catalog.models as RawEntry[]);
 
   const added = goEntries.length + accountBoundEntries.length;
   const content = `${JSON.stringify(catalog, null, 2)}\n`;
@@ -2081,4 +2158,59 @@ export function invalidateCodexModelsCache(options?: CodexCatalogSyncOptions): b
     permit => invalidateCodexModelsCacheWithPermit(permit, owningCodexHome, options),
   );
   return outcome.kind === "completed" && outcome.value;
+}
+
+/**
+ * Final fail-closed pass over the assembled catalog: every stamped
+ * auto_review_model_override must name a model that is actually emitted.
+ * Typo'd, disabled, or allowlisted-away targets are replaced with null (one
+ * redacted warning per target) so every routed row keeps the same field shape
+ * as template-cloned entries instead of reaching Codex.
+ */
+export function validateAutoReviewOverridesAgainstCatalog(entries: readonly RawEntry[]): void {
+  // Only nonblank string slugs are emitted catalog selectors; a missing or
+  // malformed slug must never become a matchable "undefined"/"null" string.
+  const slugs = new Set(entries.flatMap(entry =>
+    typeof entry.slug === "string" && entry.slug.trim() !== "" ? [entry.slug] : [],
+  ));
+  const warned = new Set<string>();
+  for (const entry of entries) {
+    const override = entry.auto_review_model_override;
+    // Wrong-shaped values must never persist: JSON.stringify would otherwise
+    // keep a numeric or object override unchanged. null/undefined already
+    // serialize as the canonical empty shape, so normalize everything else
+    // before the native-row preservation branch below (native rows must not
+    // bypass this fail-closed normalization).
+    if (override !== undefined && override !== null && typeof override !== "string") {
+      entry.auto_review_model_override = null;
+    }
+    const current = entry.auto_review_model_override;
+    // Native rows with a valid slug carry upstream-retained values (for example
+    // a Codex-side "native-upstream" selector) that opencodex must preserve
+    // verbatim. Preserve only a valid nonblank native string; blank strings and
+    // residual wrong shapes are normalized to the canonical empty shape instead
+    // of reaching Codex, without requiring the value to resolve to an emitted
+    // routed slug. Routed rows and malformed catalog rows with missing/invalid
+    // slugs still fall through to the fail-closed pass below.
+    if (!isRoutedCatalogEntry(entry) && typeof entry.slug === "string" && entry.slug.trim() !== "") {
+      if (typeof current === "string" && current.trim() !== "") continue;
+      // undefined and null are both canonical empty shapes (undefined is
+      // omitted by JSON.stringify, null is explicit); only residual blank
+      // strings and wrong-shaped values are normalized so native rows cannot
+      // bypass the fail-closed pass.
+      if (current !== undefined && current !== null) entry.auto_review_model_override = null;
+      continue;
+    }
+    if (typeof current !== "string") continue;
+    if (!slugs.has(current)) {
+      if (!warned.has(current)) {
+        warned.add(current);
+        console.warn(
+          "[opencodex] autoReviewModel override " + JSON.stringify(redactSecretString(current))
+          + " does not match any catalog model; skipped.",
+        );
+      }
+      entry.auto_review_model_override = null;
+    }
+  }
 }

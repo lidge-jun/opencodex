@@ -170,6 +170,37 @@ describe("atomic provider editor batch", () => {
     });
   });
 
+  test("provider editor PUT persists normalized trimmed auto-review fields", async () => {
+    const liveConfig = seededConfig();
+    saveConfig(liveConfig);
+    const baseline = editorBaseline(liveConfig);
+    const next: EditorConfig = structuredClone(baseline);
+    next.providers.alpha = {
+      ...baseline.providers.alpha,
+      autoReviewModel: "  alpha-approver  ",
+      autoReviewModelOverrides: { " alpha-worker ": "  alpha-reviewer  " },
+    };
+
+    const destinationSpy = spyOn(destinationPolicy, "providerDestinationResolvedError").mockResolvedValue(null);
+    let response: Response | null;
+    try {
+      response = await putBatch(liveConfig, { baseline, next });
+    } finally {
+      destinationSpy.mockRestore();
+    }
+    expect(response?.status).toBe(200);
+    const persisted = loadConfig();
+    expect(persisted.providers.alpha).toMatchObject({
+      autoReviewModel: "alpha-approver",
+      autoReviewModelOverrides: { "alpha-worker": "alpha-reviewer" },
+    });
+    const onDisk = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+    expect(onDisk.providers.alpha).toMatchObject({
+      autoReviewModel: "alpha-approver",
+      autoReviewModelOverrides: { "alpha-worker": "alpha-reviewer" },
+    });
+  });
+
   test("updates several providers in one commit and preserves credentials and private fields", async () => {
     const liveConfig = seededConfig();
     saveConfig(liveConfig);
@@ -359,5 +390,43 @@ describe("atomic provider editor batch", () => {
     expect(await response?.json()).toEqual({
       error: "Full config PUT is disabled. Use /api/providers POST for provider changes.",
     });
+  });
+
+  test("provider POST does not overwrite auto-review values changed during DNS validation", async () => {
+    const liveConfig = seededConfig();
+    liveConfig.providers.alpha.autoReviewModel = "old-reviewer";
+    saveConfig(liveConfig);
+
+    const destinationSpy = spyOn(destinationPolicy, "providerDestinationResolvedError").mockImplementation(async () => {
+      // A concurrent PATCH replaces the provider row object rather than mutating it in
+      // place, so the pre-await snapshot used for carry-over must not be the write source.
+      liveConfig.providers.alpha = {
+        ...liveConfig.providers.alpha,
+        autoReviewModel: "concurrent-reviewer",
+        modelDisplayNames: { "alpha-old": "Concurrent label" },
+      };
+      return null;
+    });
+    let response: Response | null;
+    try {
+      const request = new Request("http://127.0.0.1/api/providers", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "alpha",
+          provider: { adapter: "openai-chat", baseUrl: "https://alpha.example.test/v1", defaultModel: "alpha-old" },
+        }),
+      });
+      response = await handleManagementAPI(request, new URL(request.url), liveConfig, {
+        createManagementConvergeCodex: catalogConvergenceFactory(() => {}),
+      });
+    } finally {
+      destinationSpy.mockRestore();
+    }
+    expect(response?.status).toBe(200);
+    expect(liveConfig.providers.alpha.autoReviewModel).toBe("concurrent-reviewer");
+    expect(loadConfig().providers.alpha.autoReviewModel).toBe("concurrent-reviewer");
+    expect(liveConfig.providers.alpha.modelDisplayNames?.["alpha-old"]).toBe("Concurrent label");
+    expect(loadConfig().providers.alpha.modelDisplayNames?.["alpha-old"]).toBe("Concurrent label");
   });
 });

@@ -218,6 +218,10 @@ export interface ProviderRegistryEntry {
    * to stay contiguous. This is seeded/backfilled like other fixed wire capabilities.
    */
   requiresAdjacentResponsesToolResults?: boolean;
+  /** Optional registry default for the Codex auto-review model (provider-wide). */
+  autoReviewModel?: string;
+  /** Optional registry per-model auto-review defaults (model id -> approval model id). */
+  autoReviewModelOverrides?: Record<string, string>;
   /**
    * When enabled, tool results that are present but empty are annotated on the wire.
    * Seeded/backfilled like other fixed wire capabilities.

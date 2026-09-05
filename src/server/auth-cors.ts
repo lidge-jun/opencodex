@@ -863,6 +863,8 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   escapeBuiltinToolNames: "editor",
   anthropicEofTolerance: "editor",
   noVisionModels: "editor",
+  autoReviewModel: "editor",
+  autoReviewModelOverrides: "editor",
   googleMode: "editor",
   project: "editor",
   location: "editor",
@@ -1006,6 +1008,15 @@ export function safeConfigDTO(config: OcxConfig): unknown {
     }
     const selection = initialModelSelection(provider);
     if (selection) dto.initialModelSelection = selection;
+    if (typeof dto.autoReviewModel === "string") dto.autoReviewModel = redactSecretString(dto.autoReviewModel);
+    if (dto.autoReviewModelOverrides !== undefined && typeof dto.autoReviewModelOverrides === "object") {
+      dto.autoReviewModelOverrides = Object.fromEntries(
+        Object.entries(dto.autoReviewModelOverrides as Record<string, unknown>).map(([key, value]) => [
+          redactSecretString(key),
+          redactSecretString(typeof value === "string" ? value : String(value)),
+        ]),
+      );
+    }
     providers[name] = dto;
   }
   return {

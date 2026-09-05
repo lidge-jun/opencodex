@@ -118,6 +118,147 @@ export function normalizeNonBlankStringArray(value: readonly string[]): string[]
   return [...new Set(value.map(entry => entry.trim()))];
 }
 
+/**
+ * Validate the Codex auto-review model override shape at the management write
+ * boundary. Returns an error string, or null when the fields may be persisted.
+ */
+export function autoReviewModelConfigError(name: string, model: unknown, overrides: unknown): string | null {
+  if (name === "openai" && (model !== undefined || overrides !== undefined)) {
+    return "provider openai must not include autoReviewModel or autoReviewModelOverrides";
+  }
+  if (model !== undefined) {
+    const trimmed = typeof model === "string" ? model.trim() : "";
+    if (trimmed === "" || /\s/.test(trimmed)) {
+      return "autoReviewModel must be a nonblank model id without whitespace";
+    }
+  }
+  if (overrides === undefined) return null;
+  if (!overrides || typeof overrides !== "object" || Array.isArray(overrides)) {
+    return "autoReviewModelOverrides must be an object mapping model ids to approval model ids";
+  }
+  for (const [key, value] of Object.entries(overrides as Record<string, unknown>)) {
+    const trimmedKey = key.trim();
+    if (trimmedKey === "" || /\s/.test(trimmedKey)) {
+      return "autoReviewModelOverrides keys must be nonblank model ids without whitespace";
+    }
+    const trimmedValue = typeof value === "string" ? value.trim() : "";
+    if (trimmedValue === "" || /\s/.test(trimmedValue)) {
+      return "autoReviewModelOverrides values must be nonblank model ids without whitespace";
+    }
+  }
+  return null;
+}
+
+/** Normalize one autoReviewModel field with PATCH-style null-to-clear semantics. */
+export function normalizeAutoReviewModelField(value: unknown):
+  | { value: string }
+  | { clear: true }
+  | { error: string } {
+  if (value === null) return { clear: true };
+  if (typeof value !== "string" || value.trim() === "" || /\s/.test(value.trim())) {
+    return { error: "autoReviewModel must be a nonblank model id without whitespace, or null to clear" };
+  }
+  return { value: value.trim() };
+}
+
+/** Normalize one autoReviewModelOverrides field with PATCH-style null-to-clear semantics. */
+export function normalizeAutoReviewModelOverridesField(value: unknown):
+  | { value: Record<string, string> }
+  | { clear: true }
+  | { error: string } {
+  if (value === null) return { clear: true };
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { error: "autoReviewModelOverrides must be an object mapping model ids to approval model ids, or null to clear" };
+  }
+  const cleaned: Record<string, string> = {};
+  const canonicalSeen = new Set<string>();
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    const trimmedKey = key.trim();
+    const trimmedEntry = typeof entry === "string" ? entry.trim() : "";
+    if (trimmedKey === "" || /\s/.test(trimmedKey) || trimmedEntry === "" || /\s/.test(trimmedEntry)) {
+      return { error: "autoReviewModelOverrides entries must be nonblank model ids without whitespace" };
+    }
+    const canonicalKey = trimmedKey.toLowerCase();
+    if (canonicalSeen.has(canonicalKey)) {
+      return { error: "autoReviewModelOverrides keys must be unique after trimming and case folding" };
+    }
+    canonicalSeen.add(canonicalKey);
+    cleaned[trimmedKey] = trimmedEntry;
+  }
+  return { value: cleaned };
+}
+
+/**
+ * Trim auto-review fields in place on a provider object that already passed
+ * boundary validation (POST path). Returns an error string only when the
+ * caller skipped validation; provider-routes always validates first.
+ */
+export function normalizeAutoReviewModelFields(name: string, provider: {
+  autoReviewModel?: unknown;
+  autoReviewModelOverrides?: unknown;
+}): string | null {
+  const error = autoReviewModelConfigError(name, provider.autoReviewModel, provider.autoReviewModelOverrides);
+  if (error) return error;
+  if (typeof provider.autoReviewModel === "string") {
+    provider.autoReviewModel = provider.autoReviewModel.trim();
+  }
+  if (provider.autoReviewModelOverrides !== undefined) {
+    const normalized = normalizeAutoReviewModelOverridesField(provider.autoReviewModelOverrides);
+    if ("error" in normalized) return normalized.error;
+    if ("value" in normalized) provider.autoReviewModelOverrides = normalized.value;
+  }
+  return null;
+}
+
+/**
+ * Load-time sanitizer for hand-edited configs: malformed auto-review fields are
+ * trimmed and dropped instead of retiring the whole config. The strict
+ * management write boundary still rejects bad input before it reaches disk.
+ */
+export function sanitizeAutoReviewOverridesForLoad(parsed: unknown): void {
+  if (!parsed || typeof parsed !== "object") return;
+  const root = parsed as Record<string, unknown>;
+  const providers = root.providers;
+  if (!providers || typeof providers !== "object" || Array.isArray(providers)) return;
+  for (const [name, provider] of Object.entries(providers as Record<string, unknown>)) {
+    if (!provider || typeof provider !== "object" || Array.isArray(provider)) continue;
+    const row = provider as Record<string, unknown>;
+    if (name === "openai") {
+      delete row.autoReviewModel;
+      delete row.autoReviewModelOverrides;
+      continue;
+    }
+    if (row.autoReviewModel !== undefined) {
+      const value = typeof row.autoReviewModel === "string" ? row.autoReviewModel.trim() : "";
+      row.autoReviewModel = value !== "" && !/\s/.test(value) ? value : undefined;
+    }
+    if (row.autoReviewModelOverrides !== undefined) {
+      const overrides = row.autoReviewModelOverrides;
+      if (!overrides || typeof overrides !== "object" || Array.isArray(overrides)) {
+        row.autoReviewModelOverrides = undefined;
+        continue;
+      }
+      const cleaned: Record<string, string> = {};
+      const canonicalSeen = new Set<string>();
+      let collision = false;
+      for (const [key, value] of Object.entries(overrides as Record<string, unknown>)) {
+        const trimmedKey = key.trim();
+        if (trimmedKey === "" || /\s/.test(trimmedKey)) continue;
+        const trimmedValue = typeof value === "string" ? value.trim() : "";
+        if (trimmedValue === "" || /\s/.test(trimmedValue)) continue;
+        const canonicalKey = trimmedKey.toLowerCase();
+        if (canonicalSeen.has(canonicalKey)) {
+          collision = true;
+          break;
+        }
+        canonicalSeen.add(canonicalKey);
+        cleaned[trimmedKey] = trimmedValue;
+      }
+      row.autoReviewModelOverrides = collision || Object.keys(cleaned).length === 0 ? undefined : cleaned;
+    }
+  }
+}
+
 export function booleanRecordConfigError(value: unknown, field: string): string | null {
   if (value === undefined) return null;
   if (!value || typeof value !== "object" || Array.isArray(value)) return `${field} must be a plain object`;

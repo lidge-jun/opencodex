@@ -260,6 +260,10 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     ...(entry.annotateEmptyToolOutputs !== undefined
       ? { annotateEmptyToolOutputs: entry.annotateEmptyToolOutputs }
       : {}),
+    ...(entry.autoReviewModel !== undefined ? { autoReviewModel: entry.autoReviewModel } : {}),
+    ...(entry.autoReviewModelOverrides !== undefined
+      ? { autoReviewModelOverrides: { ...entry.autoReviewModelOverrides } }
+      : {}),
     ...(entry.autoToolChoiceOnlyModels ? { autoToolChoiceOnlyModels: [...entry.autoToolChoiceOnlyModels] } : {}),
     ...(entry.preserveReasoningContentModels ? { preserveReasoningContentModels: [...entry.preserveReasoningContentModels] } : {}),
     ...(entry.requiresReasoningPlaceholderModels ? { requiresReasoningPlaceholderModels: [...entry.requiresReasoningPlaceholderModels] } : {}),
@@ -449,6 +453,32 @@ export function hasLegacyClinePassReasoningEfforts(name: string, prov: OcxProvid
     && prov.reasoningEfforts[0] === "low";
 }
 
+/**
+ * Merge auto-review override maps with provider precedence that is case-insensitive.
+ *
+ * The per-model resolver case-folds lookup keys, so an inherited registry entry such as
+ * "DEEPSEEK-V4-FLASH" would otherwise stay beside a provider override "deepseek-v4-flash"
+ * and win (or lose) depending on the routed model's casing. A provider entry replaces any
+ * inherited entry whose key matches after case folding, while disjoint entries are retained.
+ */
+export function mergeAutoReviewModelOverrides(
+  inherited: Record<string, string> | undefined,
+  provider: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  if (inherited === undefined && provider === undefined) return undefined;
+  const merged: Record<string, string> = { ...(inherited ?? {}) };
+  const foldedToKey = new Map<string, string>();
+  for (const key of Object.keys(merged)) foldedToKey.set(key.toLowerCase(), key);
+  for (const [key, value] of Object.entries(provider ?? {})) {
+    const folded = key.toLowerCase();
+    const inheritedKey = foldedToKey.get(folded);
+    if (inheritedKey !== undefined && inheritedKey !== key) delete merged[inheritedKey];
+    merged[key] = value;
+    foldedToKey.set(folded, key);
+  }
+  return merged;
+}
+
 export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig): void {
   const entry = PROVIDER_REGISTRY.find(row => row.id === name);
   if (!entry || !providerMatchesRegistryTransportWithStaticGuards(name, prov)) {
@@ -523,6 +553,15 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   }
   if (prov.annotateEmptyToolOutputs === undefined && seed.annotateEmptyToolOutputs !== undefined) {
     prov.annotateEmptyToolOutputs = seed.annotateEmptyToolOutputs;
+  }
+  if (prov.autoReviewModel === undefined && seed.autoReviewModel !== undefined) {
+    prov.autoReviewModel = seed.autoReviewModel;
+  }
+  if (seed.autoReviewModelOverrides !== undefined || prov.autoReviewModelOverrides !== undefined) {
+    prov.autoReviewModelOverrides = mergeAutoReviewModelOverrides(
+      seed.autoReviewModelOverrides,
+      prov.autoReviewModelOverrides,
+    );
   }
   // Registry-only metadata (never seeded into saved config): backfill straight from
   // the entry so an explicit user value stays distinguishable from the default.
@@ -624,6 +663,48 @@ function dedupePresets(presets: DerivedProviderPreset[]): DerivedProviderPreset[
 
 function customPreset(): DerivedProviderPreset {
   return { id: "custom", label: "Custom provider", adapter: "openai-chat", baseUrl: "", auth: "key" };
+}
+
+/**
+ * Resolve the Codex auto-review (approvals) model for one routed model id.
+ * Per-model overrides win over the provider-wide default; both are opt-in and
+ * trimmed. Returns the configured target (bare id or `provider/model` slug) or
+ * null when the operator left the session-model behavior untouched.
+ */
+export function resolveAutoReviewModel(
+  provider: OcxProviderConfig | undefined,
+  modelId: string,
+): string | null {
+  if (!provider) return null;
+  const perModel = autoReviewOverrideForModel(provider.autoReviewModelOverrides, modelId);
+  if (typeof perModel === "string" && perModel.trim() !== "") return perModel.trim();
+  if (typeof provider.autoReviewModel === "string" && provider.autoReviewModel.trim() !== "") {
+    return provider.autoReviewModel.trim();
+  }
+  return null;
+}
+
+/** Per-model override lookup: exact model, exact :family, folded model, folded :family. */
+function autoReviewOverrideForModel(
+  overrides: Record<string, string> | undefined,
+  modelId: string,
+): string | undefined {
+  if (!overrides) return undefined;
+  if (Object.prototype.hasOwnProperty.call(overrides, modelId)) return overrides[modelId];
+  const colon = modelId.indexOf(":");
+  const folded = modelId.toLowerCase();
+  for (const [key, value] of Object.entries(overrides)) {
+    if (key.toLowerCase() === folded) return value;
+  }
+  // The case-insensitive family lookup must run AFTER the folded full-model
+  // loop: a model-specific override for a colon-suffixed id wins over the
+  // family default even when both keys differ only in casing.
+  if (colon > 0) {
+    const family = modelId.slice(0, colon);
+    const familyMatch = Object.entries(overrides).find(([key]) => key.toLowerCase() === family.toLowerCase());
+    if (familyMatch) return familyMatch[1];
+  }
+  return undefined;
 }
 
 function formatInitLabel(entry: ProviderRegistryEntry): string {

@@ -241,8 +241,22 @@ export interface OcxProviderConfig {
    * Seeded true for DeepSeek; absent keeps legacy behavior for every other provider.
    * Only the OpenAI-family adapters (openai-chat / openai-responses) read this option;
    * other adapters ignore it.
-   */
+  */
   annotateEmptyToolOutputs?: boolean;
+  /**
+   * Provider-wide default for the Codex auto-review (approvals) subagent model.
+   * Stamped as `auto_review_model_override` on every routed catalog row of this
+   * provider; absent keeps Codex's session-model behavior. A target is a bare
+   * model id (resolved within this provider) or a `provider/model` catalog slug.
+   * Opt-in; no vendor defaults.
+   */
+  autoReviewModel?: string;
+  /**
+   * Per-model auto-review overrides (model id -> approval model id). Wins over
+   * `autoReviewModel`; same target grammar. Absent/undefined keeps session-model
+   * behavior for that model.
+   */
+  autoReviewModelOverrides?: Record<string, string>;
   /**
    * Provider fallback for canonical Fast capability over an OpenAI `service_tier` wire.
    * This pure tri-state feeds catalog publication, routing eligibility, compatibility

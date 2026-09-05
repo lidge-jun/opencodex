@@ -35,7 +35,7 @@ import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
 import { isModelVisionSidecarConsumer } from "../../vision/eligibility";
 import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, resolveMetadataProvider, type ModelMetadata } from "../../generated/model-metadata";
-import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
+import { enrichProviderFromRegistry, resolveAutoReviewModel, shouldCaseFoldMetadataModelId } from "../../providers/derive";
 import {
   captureFastPolicyAuthority,
   fastPolicyForModel,
@@ -47,7 +47,7 @@ import { parseAntigravityAvailableModels, registerAntigravityDiscoveredWireModel
 import { applyProviderContextCap, providerContextCap, resolveUnknownRoutedContextWindow } from "../../providers/context-cap";
 import { clampAutoCompactTokenLimit } from "../../providers/auto-compact-budget";
 import { effectiveModelAliases } from "../../providers/default-aliases";
-import { routedSlug, slugEquals, slugEquivalenceKey, slugsEquivalent } from "../../providers/slug-codec";
+import { encodeRoutedModelId, routedSlug, slugEquals, slugEquivalenceKey, slugsEquivalent } from "../../providers/slug-codec";
 import { CODEX_GPT5_IDENTITY_LINE } from "../../adapters/identity";
 import { filterCursorConfiguredModelsByLiveDiscovery } from "../../adapters/cursor/discovery";
 import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
@@ -176,6 +176,13 @@ interface CapturedProviderGather {
    * synthesized for combo derivation instead (#1305).
    */
   readonly retainConfiguredModelIds?: ReadonlySet<string>;
+  /**
+   * Model ids captured from the enriched provider before any outbound await.
+   * Auto-review membership must never read the registry after capture: a
+   * custom-destination flight can otherwise observe a registry state it was
+   * not admitted under (tests/codex-gather-authority.test.ts).
+   */
+  readonly knownModelIds: ReadonlyArray<string>;
 }
 
 interface GatherFlightCapture {
@@ -424,6 +431,19 @@ function captureProviderGather(
   enrichProviderFromRegistry(name, enriched);
   const registryTransportMatch = providerMatchesRegistryTransport(name, enriched);
   const provider = recursivelyFreeze(enriched);
+  // Mirror the exact static seed used later by fetchProviderModelsWithAuth: the
+  // Vertex default and retainModels participate in catalog emission even when they are
+  // absent from provider.models, so membership for bare auto-review targets must
+  // include them too (a retain-only model cannot otherwise be named as an approver).
+  const seedVertexDefault = provider.adapter === "google"
+    && provider.googleMode === "vertex"
+    && (provider.models?.length ?? 0) === 0
+    && Boolean(provider.defaultModel);
+  const knownModelIds = Object.freeze([...new Set([
+    ...(seedVertexDefault && provider.defaultModel ? [provider.defaultModel] : []),
+    ...(provider.models ?? []),
+    ...(provider.retainModels ?? []),
+  ])]);
   const fastPolicyAuthority = captureFastPolicyAuthority(
     name,
     provider,
@@ -464,6 +484,7 @@ function captureProviderGather(
   return Object.freeze({
     name,
     provider,
+    knownModelIds,
     discovery,
     policy,
     request,
@@ -759,12 +780,68 @@ function configuredVerbositySupport(name: string, prov: OcxProviderConfig | unde
   return prov.supportsVerbosity;
 }
 
+const warnedAutoReviewTargets = new Set<string>();
+
+/**
+ * Resolve and normalize the Codex auto-review override for one routed row.
+ * A target that matches a known native id of the provider is encoded into the
+ * provider's one-slash catalog slug; a namespaced (cross-provider) target is kept
+ * verbatim and checked against the assembled catalog at sync time; unknown bare
+ * targets are skipped (fail closed) with a deduped, redacted warning.
+ */
+function resolveAutoReviewOverrideForRow(
+  providerName: string,
+  provider: OcxProviderConfig | undefined,
+  modelId: string,
+  knownModelIds?: ReadonlyArray<string>,
+): string | undefined {
+  const target = resolveAutoReviewModel(provider, modelId);
+  if (target === null) return undefined;
+  // Membership is case-folded to match the per-model lookup in
+  // resolveAutoReviewModel (exact -> :family -> case-fold). The canonical id from
+  // the provider's own list is what gets slug-encoded, so casing drift in a
+  // configured target cannot leak into catalog slugs. The CURRENT row id wins
+  // when provider or captured entries differ only by case: the emitted slug
+  // must match the catalog row's own id casing or final catalog validation
+  // drops the override. The captured snapshot (never the registry) supplies
+  // registry-seeded membership for rows assembled after asynchronous discovery.
+  const foldedKnown = new Map<string, string>();
+  for (const id of [
+    modelId,
+    ...(provider?.models ?? []),
+    ...(knownModelIds ?? []),
+  ]) {
+    if (!foldedKnown.has(id.toLowerCase())) foldedKnown.set(id.toLowerCase(), id);
+  }
+  const canonical = foldedKnown.get(target.toLowerCase());
+  if (target.includes("/") && canonical === undefined) {
+    // Cross-provider catalog slug: kept verbatim; final existence is checked
+    // against the assembled catalog at sync time.
+    return target;
+  }
+  if (canonical === undefined) {
+    const key = providerName + "/" + target;
+    if (!warnedAutoReviewTargets.has(key)) {
+      warnedAutoReviewTargets.add(key);
+      console.warn(
+        "[opencodex] autoReviewModel target " + JSON.stringify(redactSecretString(target))
+        + " for " + JSON.stringify(redactSecretString(providerName)) + "/"
+        + JSON.stringify(redactSecretString(modelId))
+        + " is not a known model of that provider; catalog override skipped.",
+      );
+    }
+    return undefined;
+  }
+  return routedSlug(providerName, encodeRoutedModelId(canonical));
+}
+
 export function applyProviderConfigHints(
   name: string,
   prov: OcxProviderConfig,
   model: CatalogModel,
   providerCap?: number,
   metadataModelIdCaseFold?: boolean,
+  knownModelIds?: ReadonlyArray<string>,
   effectiveAlias?: string | null,
 ): CatalogModel {
   const displayName = configuredModelDisplayName(prov, model.id);
@@ -780,6 +857,7 @@ export function applyProviderConfigHints(
   const configuredMaxInput = configuredMaxInputTokens(prov, model.id);
   const maxOutputTokens = routedMaxOutputTokens(name, prov, model, model.id, metadataModelIdCaseFold);
   const configuredAutoCompact = configuredAutoCompactTokenLimit(prov, model.id);
+  const autoReviewOverride = resolveAutoReviewOverrideForRow(name, prov, model.id, knownModelIds);
   let inputModalities = configuredInputModalities(prov, model.id);
   // The shared vision-sidecar consumer predicate keeps catalog advertisement and request-time
   // planning aligned. The catalog must still advertise image input — the Codex app
@@ -816,6 +894,9 @@ export function applyProviderConfigHints(
     ...(displayName !== undefined ? { displayName } : {}),
     ...(providerAlias !== undefined ? { providerAlias } : {}),
     ...(hintedWindow !== undefined ? { contextWindow: hintedWindow } : {}),
+    // Always set the key so a re-hint clears a stale override after the operator
+    // removes the config; JSON serialization drops the undefined value.
+    autoReviewModelOverride: autoReviewOverride,
     ...(inputModalities ? { inputModalities } : {}),
     ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
     ...(configuredMaxInput !== undefined
@@ -874,9 +955,10 @@ export function catalogHintsFromProviderConfig(
   id: string,
   contextCap?: number,
   metadataModelIdCaseFold?: boolean,
+  knownModelIds?: ReadonlyArray<string>,
   effectiveAlias?: string | null,
 ): Partial<CatalogModel> {
-  const hinted = applyProviderConfigHints(name, prov, { id, provider: name }, contextCap, metadataModelIdCaseFold, effectiveAlias);
+  const hinted = applyProviderConfigHints(name, prov, { id, provider: name }, contextCap, metadataModelIdCaseFold, knownModelIds, effectiveAlias);
   const { provider: _provider, id: _id, ...hints } = hinted;
   return hints;
 }
@@ -887,9 +969,10 @@ export function applyConfigHintsToCachedModels(
   models: CatalogModel[],
   contextCap?: number,
   metadataModelIdCaseFold?: boolean,
+  knownModelIds?: ReadonlyArray<string>,
   effectiveAlias?: string | null,
 ): CatalogModel[] {
-  return models.map(model => applyProviderConfigHints(name, prov, model, contextCap, metadataModelIdCaseFold, effectiveAlias));
+  return models.map(model => applyProviderConfigHints(name, prov, model, contextCap, metadataModelIdCaseFold, knownModelIds, effectiveAlias));
 }
 
 
@@ -1517,7 +1600,7 @@ async function fetchProviderModelsWithAuth(
   const configured: CatalogModel[] = configuredIds.map(id => ({
     id,
     provider: name,
-    ...catalogHintsFromProviderConfig(name, prov, id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias),
+    ...catalogHintsFromProviderConfig(name, prov, id, contextCap, metadataModelIdCaseFold, captured.knownModelIds, captured.effectiveAlias),
   }));
   const withConfiguredRetention = (
     models: CatalogModel[],
@@ -1530,6 +1613,7 @@ async function fetchProviderModelsWithAuth(
       configured,
       retainConfiguredModelIds: captured.retainConfiguredModelIds,
       contextCap,
+      knownModelIds: captured.knownModelIds,
       seedVertexDefault,
       retainComboTargets: options?.retainComboTargets,
       metadataModelIdCaseFold,
@@ -1571,7 +1655,7 @@ async function fetchProviderModelsWithAuth(
     : [{
       id: prov.defaultModel,
       provider: name,
-      ...catalogHintsFromProviderConfig(name, prov, prov.defaultModel, contextCap, metadataModelIdCaseFold, captured.effectiveAlias),
+      ...catalogHintsFromProviderConfig(name, prov, prov.defaultModel, contextCap, metadataModelIdCaseFold, captured.knownModelIds, captured.effectiveAlias),
     }];
   const vertexDefaultSeed = seedVertexDefault ? configured[0] : undefined;
   const withVertexDefaultSeed = (models: CatalogModel[]): CatalogModel[] => (
@@ -1588,7 +1672,7 @@ async function fetchProviderModelsWithAuth(
     const cachedCursor = getFreshCached(name, ttlMs);
     if (cachedCursor) {
       return observed(
-        withConfiguredRetention(applyConfigHintsToCachedModels(name, prov, cachedCursor, undefined, metadataModelIdCaseFold, captured.effectiveAlias)),
+        withConfiguredRetention(applyConfigHintsToCachedModels(name, prov, cachedCursor, undefined, metadataModelIdCaseFold, captured.knownModelIds, captured.effectiveAlias)),
         "authoritative",
       );
     }
@@ -1596,7 +1680,7 @@ async function fetchProviderModelsWithAuth(
       const cooling = getStaleCached(name);
       return observed(
         withConfiguredRetention(
-          cooling ? applyConfigHintsToCachedModels(name, prov, cooling, undefined, metadataModelIdCaseFold, captured.effectiveAlias) : configured,
+          cooling ? applyConfigHintsToCachedModels(name, prov, cooling, undefined, metadataModelIdCaseFold, captured.knownModelIds, captured.effectiveAlias) : configured,
         ),
         "degraded",
       );
@@ -1637,7 +1721,7 @@ async function fetchProviderModelsWithAuth(
     const staleCursor = getStaleCached(name);
     return observed(
       withConfiguredRetention(
-        staleCursor ? applyConfigHintsToCachedModels(name, prov, staleCursor, undefined, metadataModelIdCaseFold, captured.effectiveAlias) : configured,
+        staleCursor ? applyConfigHintsToCachedModels(name, prov, staleCursor, undefined, metadataModelIdCaseFold, captured.knownModelIds, captured.effectiveAlias) : configured,
       ),
       "degraded",
     );
@@ -1655,7 +1739,7 @@ async function fetchProviderModelsWithAuth(
   if (fresh) {
     return observed(
       withConfiguredRetention(
-        withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, fresh, contextCap, metadataModelIdCaseFold, captured.effectiveAlias)),
+        withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, fresh, contextCap, metadataModelIdCaseFold, captured.knownModelIds, captured.effectiveAlias)),
       ),
       "authoritative",
     ); // dedups Codex's frequent /v1/models polling within the TTL
@@ -1667,7 +1751,7 @@ async function fetchProviderModelsWithAuth(
     return observed(
       withConfiguredRetention(
         stale
-          ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias))
+          ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.knownModelIds, captured.effectiveAlias))
           : failedDiscoveryConfigured,
       ),
       "degraded",
@@ -1707,7 +1791,7 @@ async function fetchProviderModelsWithAuth(
     return {
       models: withConfiguredRetention(
         stale
-          ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias))
+          ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.knownModelIds, captured.effectiveAlias))
           : failedDiscoveryConfigured,
       ),
       fallback: stale ? "stale" : "configured",
@@ -1792,7 +1876,7 @@ async function fetchProviderModelsWithAuth(
         reasoningEfforts: [],
         ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
         ...(model.inputModalities ? { inputModalities: model.inputModalities } : {}),
-      }, contextCap, metadataModelIdCaseFold, captured.effectiveAlias));
+      }, contextCap, metadataModelIdCaseFold, captured.knownModelIds, captured.effectiveAlias));
       const forCache = withConfiguredRetention(live, { retainComboTargets: false });
       if (!setCached(name, forCache, Date.now(), cacheGeneration)) {
         return observed(withConfiguredRetention(configured), "degraded");
@@ -1855,7 +1939,7 @@ async function fetchProviderModelsWithAuth(
         provider: name,
         ...(ownedBy ? { owned_by: ownedBy } : {}),
         ...discoveredHints,
-      }, contextCap, metadataModelIdCaseFold, captured.effectiveAlias);
+      }, contextCap, metadataModelIdCaseFold, captured.knownModelIds, captured.effectiveAlias);
     })
       .filter(m => shouldExposeProviderModel(name, m.id));
     // Capture the count BEFORE the alias/configured augmentation below pushes extra rows into
@@ -1950,6 +2034,7 @@ export function mergeConfiguredModelsIntoLiveCatalog(opts: {
   configured: readonly CatalogModel[];
   retainConfiguredModelIds?: ReadonlySet<string>;
   contextCap?: number;
+  knownModelIds?: ReadonlyArray<string>;
   seedVertexDefault?: boolean;
   retainComboTargets?: boolean;
   metadataModelIdCaseFold?: boolean;
@@ -1960,6 +2045,7 @@ export function mergeConfiguredModelsIntoLiveCatalog(opts: {
     configured,
     retainConfiguredModelIds,
     contextCap,
+    knownModelIds,
     seedVertexDefault,
     retainComboTargets = true,
     metadataModelIdCaseFold,
@@ -1971,7 +2057,7 @@ export function mergeConfiguredModelsIntoLiveCatalog(opts: {
     if (present.has(candidate.id)) continue;
     const dated = out.find(live => isDatedVariantId(live.id, candidate.id));
     if (dated) {
-      out.push(applyProviderConfigHints(name, prov, { ...dated, id: candidate.id }, contextCap, metadataModelIdCaseFold));
+      out.push(applyProviderConfigHints(name, prov, { ...dated, id: candidate.id }, contextCap, metadataModelIdCaseFold, knownModelIds));
       present.add(candidate.id);
       continue;
     }
@@ -2144,6 +2230,8 @@ async function gatherRoutedModelsUncached(
   // vision-sidecar model advertised text-only, blocking image attachments app-side).
   // Enrich a CLONE: hydrated defaults must never leak into the persisted config.
   const activeProviders = capture.providers;
+  // Configured custom rows join the per-provider membership used for bare-target auto-review resolution.
+  const knownModelIdsByName = new Map(activeProviders.map(provider => [provider.name, [...(provider.knownModelIds ?? []), ...(config.customModels ?? []).filter(cm => cm.provider === provider.name).map(cm => cm.modelId)]]));
   const providerResults = await Promise.all(
     activeProviders.map(provider => fetchProviderModelsWithAuth(
       provider,
@@ -2179,6 +2267,7 @@ async function gatherRoutedModelsUncached(
     config.providers,
     config,
     metadataModelIdCaseFoldByProvider,
+    knownModelIdsByName,
   )
     // Drop image/video generation models (e.g. Grok image/video) by default. Cursor's static catalog
     // intentionally mirrors Cursor's public model table, including Gemini image preview, so the
@@ -2373,6 +2462,12 @@ async function gatherRoutedModelsUncached(
     const supportsServiceTier = fastPolicy
       ? serviceTierSupportFromPolicy(fastPolicy)
       : undefined;
+    const autoReviewOverride = resolveAutoReviewOverrideForRow(
+      cm.provider,
+      effectiveProvider,
+      cm.modelId,
+      knownModelIdsByName.get(cm.provider),
+    );
     const base: CatalogModel = {
       id: cm.modelId,
       provider: cm.provider,
@@ -2459,7 +2554,11 @@ async function gatherRoutedModelsUncached(
       ...(base.supportsReasoningSummaries === undefined && replaced.supportsReasoningSummaries !== undefined ? { supportsReasoningSummaries: replaced.supportsReasoningSummaries } : {}),
       ...(base.codexToolMode === undefined && replaced.codexToolMode !== undefined ? { codexToolMode: replaced.codexToolMode } : {}),
       ...(base.capabilities === undefined && replaced.capabilities !== undefined ? { capabilities: replaced.capabilities } : {}),
+      ...(base.autoReviewModelOverride === undefined && replaced.autoReviewModelOverride !== undefined
+        ? { autoReviewModelOverride: replaced.autoReviewModelOverride }
+        : {}),
     } : base;
+    if (autoReviewOverride !== undefined) merged.autoReviewModelOverride = autoReviewOverride;
     // Vision-sidecar coverage only: when the enriched provider's shared predicate matches
     // noVisionModels or text-without-image modelInputModalities, advertise image input so the
     // Codex app lets images reach the sidecar (#349/#344). Deliberately NOT the full
@@ -2588,6 +2687,7 @@ function augmentRoutedModelsWithCapturedOpenAiApiRows(
         : existingById.get(id) ?? { provider: OPENAI_API_PROVIDER_ID, id },
       policy.virtualModels?.[id]?.wireModelId ?? id,
     );
+    const autoReviewOverride = resolveAutoReviewOverrideForRow(OPENAI_API_PROVIDER_ID, configured, id, policy.models);
     return {
       provider: OPENAI_API_PROVIDER_ID,
       id,
@@ -2596,6 +2696,7 @@ function augmentRoutedModelsWithCapturedOpenAiApiRows(
       ...(maxInputTokens ? { maxInputTokens } : {}),
       ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
       ...(autoCompactTokenLimit !== undefined ? { autoCompactTokenLimit } : {}),
+      ...(autoReviewOverride !== undefined ? { autoReviewModelOverride: autoReviewOverride } : {}),
       ...(policy.modelInputModalities?.[id] ? { inputModalities: [...policy.modelInputModalities[id]!] } : {}),
       ...(policy.modelReasoningEfforts?.[id] ? { reasoningEfforts: [...policy.modelReasoningEfforts[id]!] } : {}),
     };
@@ -2625,6 +2726,7 @@ export function augmentRoutedModelsWithMetadata(
   providers?: Record<string, OcxProviderConfig>,
   caps?: Pick<OcxConfig, "providerContextCaps">,
   metadataModelIdCaseFoldByProvider?: ReadonlyMap<string, boolean>,
+  knownModelIdsByProvider?: ReadonlyMap<string, ReadonlyArray<string>>,
 ): CatalogModel[] {
   const out = [...models];
   const seen = new Set(out.map(m => `${m.provider}/${m.id}`));
@@ -2655,6 +2757,7 @@ export function augmentRoutedModelsWithMetadata(
             model,
             contextCap,
             metadataModelIdCaseFoldByProvider?.get(provider),
+            knownModelIdsByProvider?.get(provider),
           )
           : {}),
       });

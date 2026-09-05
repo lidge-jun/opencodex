@@ -46,6 +46,7 @@ import {
   finalizeAutoReviewModelOverride,
   mergeCatalogEntriesFromObservedState,
   mergeCatalogModelsWithNativeRecovery,
+  validateAutoReviewOverridesAgainstCatalog,
   orderForSubagents,
   } from "./catalog/sync";
   import { multiAgentV2EnabledFromConfigText } from "./features";
@@ -378,6 +379,8 @@ function prepareCatalog(
   );
   finalizeAutoReviewModelOverride(mergedModels, catalogModels);
   catalog.models = mergedModels;
+  // Fail-closed final pass: an override must name a model actually emitted.
+  validateAutoReviewOverridesAgainstCatalog(catalog.models as RawEntry[]);
   return catalog;
 }
 

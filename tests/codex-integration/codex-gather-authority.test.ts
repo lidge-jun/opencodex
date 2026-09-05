@@ -128,6 +128,8 @@ describe("catalog gather discovery-policy authority", () => {
           baseUrl: "https://custom-openai.example/v1",
           authMode: "key",
           apiKey: "custom-openai-secret",
+          models: ["custom-only"],
+          autoReviewModel: "custom-only",
         },
       },
     });
@@ -155,8 +157,10 @@ describe("catalog gather discovery-policy authority", () => {
     try {
       responseGate.resolve();
       const models = await pending;
-      expect(models.filter(model => model.provider === "openai-apikey").map(model => model.id))
+      const rows = models.filter(model => model.provider === "openai-apikey");
+      expect(rows.map(model => model.id))
         .toEqual(["custom-only"]);
+      expect(rows[0]?.autoReviewModelOverride).toBe("openai-apikey/custom-only");
     } finally {
       PROVIDER_REGISTRY.find = originalFind;
       responseGate.resolve();

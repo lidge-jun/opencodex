@@ -3703,6 +3703,127 @@ describe("Codex catalog routed normalization", () => {
     expect(pinned.multi_agent_reasoning_effort).toBe("xhigh");
   });
 
+  test("trusted openai-api rebuild keeps the configured auto-review override", () => {
+    const apiRows = augmentRoutedModelsWithRegistryOpenAiApiRows([], openAiApiCatalogConfig({
+      models: ["daybreak-blue-latest"],
+      autoReviewModel: "daybreak-blue-latest",
+    }));
+    const row = apiRows.find(candidate => candidate.provider === "openai-apikey" && candidate.id === "daybreak-blue-latest");
+    expect(row?.autoReviewModelOverride).toBe("openai-apikey/daybreak-blue-latest");
+  });
+
+  test("trusted openai-api rebuild drops the auto-review override when the provider setting is removed", () => {
+    const withOverride = augmentRoutedModelsWithRegistryOpenAiApiRows([], openAiApiCatalogConfig({
+      models: ["daybreak-blue-latest"],
+      autoReviewModel: "daybreak-blue-latest",
+    }));
+    const rowWith = withOverride.find(candidate => candidate.provider === "openai-apikey" && candidate.id === "daybreak-blue-latest");
+    expect(rowWith?.autoReviewModelOverride).toBe("openai-apikey/daybreak-blue-latest");
+
+    // A rebuild without the provider setting must not retain the stale override.
+    const withoutOverride = augmentRoutedModelsWithRegistryOpenAiApiRows(withOverride, openAiApiCatalogConfig({
+      models: ["daybreak-blue-latest"],
+    }));
+    const rowWithout = withoutOverride.find(candidate => candidate.provider === "openai-apikey" && candidate.id === "daybreak-blue-latest");
+    expect(rowWithout?.autoReviewModelOverride).toBeUndefined();
+  });
+
+  test("gatherRoutedModels custom-model rebuild drops the auto-review override when the provider setting is removed", async () => {
+    resetCatalogRuntimeStateForTests();
+    try {
+      const base = {
+        port: 10100,
+        defaultProvider: "openai",
+        providers: {
+          openai: {
+            adapter: "openai-responses",
+            baseUrl: "https://example.invalid/v1",
+            authMode: "key",
+            liveModels: false,
+            autoReviewModel: "custom-approver",
+          },
+        },
+        customModels: [{ id: "custom-approver", provider: "openai", modelId: "custom-approver" }],
+      } as Parameters<typeof gatherRoutedModelsDirect>[0];
+      const withOverride = await gatherRoutedModelsDirect(base);
+      const rowWith = withOverride.find(model => model.provider === "openai" && model.id === "custom-approver");
+      expect(rowWith?.autoReviewModelOverride).toBe("openai/custom-approver");
+
+      const without = {
+        ...base,
+        providers: {
+          openai: {
+            ...base.providers.openai,
+            autoReviewModel: undefined,
+          },
+        },
+      };
+      const rebuilt = await gatherRoutedModelsDirect(without);
+      const rowWithout = rebuilt.find(model => model.provider === "openai" && model.id === "custom-approver");
+      expect(rowWithout?.autoReviewModelOverride).toBeUndefined();
+    } finally {
+      resetCatalogRuntimeStateForTests();
+    }
+  });
+
+  test("gatherRoutedModels resolves a bare auto-review target to a sibling custom row", async () => {
+    resetCatalogRuntimeStateForTests();
+    try {
+      const base = {
+        port: 10100,
+        defaultProvider: "openai",
+        providers: {
+          openai: {
+            adapter: "openai-responses",
+            baseUrl: "https://example.invalid/v1",
+            authMode: "key",
+            liveModels: false,
+            autoReviewModelOverrides: { worker: "reviewer" },
+          },
+        },
+        customModels: [
+          { id: "worker", provider: "openai", modelId: "worker" },
+          { id: "reviewer", provider: "openai", modelId: "reviewer" },
+        ],
+      } as Parameters<typeof gatherRoutedModelsDirect>[0];
+      const models = await gatherRoutedModelsDirect(base);
+      const worker = models.find(model => model.provider === "openai" && model.id === "worker");
+      expect(worker?.autoReviewModelOverride).toBe("openai/reviewer");
+      const reviewer = models.find(model => model.provider === "openai" && model.id === "reviewer");
+      expect(reviewer?.autoReviewModelOverride).toBeUndefined();
+    } finally {
+      resetCatalogRuntimeStateForTests();
+    }
+  });
+
+  test("gatherRoutedModels resolves a bare auto-review target to a retain-only model", async () => {
+    resetCatalogRuntimeStateForTests();
+    try {
+      const base = {
+        port: 10100,
+        defaultProvider: "openai",
+        providers: {
+          openai: {
+            adapter: "openai-responses",
+            baseUrl: "https://example.invalid/v1",
+            authMode: "key",
+            liveModels: false,
+            models: ["worker"],
+            retainModels: ["reviewer"],
+            autoReviewModelOverrides: { worker: "reviewer" },
+          },
+        },
+      } as Parameters<typeof gatherRoutedModelsDirect>[0];
+      const models = await gatherRoutedModelsDirect(base);
+      const reviewer = models.find(model => model.provider === "openai" && model.id === "reviewer");
+      expect(reviewer).toBeDefined();
+      const worker = models.find(model => model.provider === "openai" && model.id === "worker");
+      expect(worker?.autoReviewModelOverride).toBe("openai/reviewer");
+    } finally {
+      resetCatalogRuntimeStateForTests();
+    }
+  });
+
   test("Daybreak metadata inheritance rejects noncanonical providers", async () => {
     const models = await gatherRoutedModels({
       port: 10100,

@@ -142,6 +142,8 @@ export interface CatalogModel {
    * "shell" leaves tool_mode unset so Codex declares top-level shell tools (exec_command).
    */
   codexToolMode?: "code_mode_only" | "shell";
+  /** Codex auto-review (approvals) model override for this routed row. */
+  autoReviewModelOverride?: string;
   /** Normalized upstream capability names retained for management/API consumers (#485 follow-up). */
   capabilities?: string[];
   /** OpenCodex-only catalog ownership marker; Codex ignores the serialized extension field. */

@@ -1034,6 +1034,208 @@ describe("provider management validation", () => {
     }
   });
 
+  test("provider POST normalizes auto-review fields before persisting config.json", async () => {
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig(config("127.0.0.1"));
+
+    const server = startServer(0);
+    try {
+      const create = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "auto-review",
+          provider: {
+            adapter: "openai-chat",
+            baseUrl: "https://api.example.test/v1",
+            autoReviewModel: "  deepseek-v4-flash  ",
+            autoReviewModelOverrides: {
+              " deepseek-v4-flash-vision-exp ": "  deepseek-v4-pro  ",
+            },
+          },
+        }),
+      });
+      expect(create.status).toBe(200);
+      const persisted = JSON.parse(readFileSync(join(TEST_DIR, "config.json"), "utf8")) as OcxConfig;
+      expect(persisted.providers["auto-review"]?.autoReviewModel).toBe("deepseek-v4-flash");
+      expect(persisted.providers["auto-review"]?.autoReviewModelOverrides).toEqual({
+        "deepseek-v4-flash-vision-exp": "deepseek-v4-pro",
+      });
+      const listed = await fetch(new URL("/api/providers", server.url)).then(response => response.json()) as Array<{
+        name: string;
+        autoReviewModel?: string;
+        autoReviewModelOverrides?: Record<string, string>;
+      }>;
+      const row = listed.find(provider => provider.name === "auto-review");
+      expect(row?.autoReviewModel).toBe("deepseek-v4-flash");
+      expect(row?.autoReviewModelOverrides).toEqual({
+        "deepseek-v4-flash-vision-exp": "deepseek-v4-pro",
+      });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("provider GET redacts credential-shaped auto-review values", async () => {
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig(config("127.0.0.1"));
+
+    const server = startServer(0);
+    try {
+      const tokenModel = "sk-" + "live-" + "a".repeat(30);
+      const tokenOverride = "sk-" + "live-" + "b".repeat(30);
+      const create = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "auto-review",
+          provider: {
+            adapter: "openai-chat",
+            baseUrl: "https://api.example.test/v1",
+            autoReviewModel: tokenModel,
+            autoReviewModelOverrides: { "deepseek-v4-flash": tokenOverride },
+          },
+        }),
+      });
+      expect(create.status).toBe(200);
+
+      const listed = await fetch(new URL("/api/providers", server.url)).then(response => response.json()) as Array<{
+        name: string;
+        autoReviewModel?: string;
+        autoReviewModelOverrides?: Record<string, string>;
+      }>;
+      const row = listed.find(provider => provider.name === "auto-review");
+      expect(row?.autoReviewModel).not.toContain(tokenModel);
+      expect(row?.autoReviewModel).toContain("[REDACTED]");
+      expect(row?.autoReviewModelOverrides?.["deepseek-v4-flash"]).not.toContain(tokenOverride);
+      expect(row?.autoReviewModelOverrides?.["deepseek-v4-flash"]).toContain("[REDACTED]");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+
+  test("GET /api/config redacts credential-shaped auto-review values", async () => {
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig(config("127.0.0.1"));
+
+    const server = startServer(0);
+    try {
+      const tokenModel = "sk-" + "live-" + "c".repeat(30);
+      const tokenOverride = "sk-" + "live-" + "d".repeat(30);
+      const create = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "auto-review",
+          provider: {
+            adapter: "openai-chat",
+            baseUrl: "https://api.example.test/v1",
+            autoReviewModel: tokenModel,
+            autoReviewModelOverrides: { "deepseek-v4-flash": tokenOverride },
+          },
+        }),
+      });
+      expect(create.status).toBe(200);
+
+      const dto = await fetch(new URL("/api/config", server.url)).then(response => response.json()) as {
+        providers: Record<string, {
+          autoReviewModel?: string;
+          autoReviewModelOverrides?: Record<string, string>;
+        }>;
+      };
+      const row = dto.providers["auto-review"];
+      expect(row?.autoReviewModel).toBeDefined();
+      expect(row?.autoReviewModel).not.toContain(tokenModel);
+      expect(row?.autoReviewModel).toContain("[REDACTED]");
+      expect(row?.autoReviewModelOverrides?.["deepseek-v4-flash"]).toBeDefined();
+      expect(row?.autoReviewModelOverrides?.["deepseek-v4-flash"]).not.toContain(tokenOverride);
+      expect(row?.autoReviewModelOverrides?.["deepseek-v4-flash"]).toContain("[REDACTED]");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("provider POST redacts token-shaped names in auto-review errors", async () => {
+
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig(config("127.0.0.1"));
+
+    const server = startServer(0);
+    try {
+      const tokenName = "sk-" + "live-" + "a".repeat(30);
+      const response = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: tokenName,
+          provider: {
+            adapter: "openai-chat",
+            baseUrl: "https://api.example.test/v1",
+            autoReviewModel: "  ",
+          },
+        }),
+      });
+      expect(response.status).toBe(400);
+      const body = (await response.json()) as { error: string };
+      expect(body.error).toContain("autoReviewModel");
+      expect(body.error).not.toContain(tokenName);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("canonical openai rejects auto-review fields without persisting", async () => {
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig({
+      ...config("127.0.0.1"),
+      providers: poolProviders(),
+    });
+
+    const server = startServer(0);
+    try {
+      const before = JSON.stringify(loadConfig().providers.openai);
+      const post = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "openai",
+          provider: {
+            adapter: "openai-responses",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            authMode: "forward",
+            codexAccountMode: "pool",
+            autoReviewModel: "deepseek-v4-flash",
+            autoReviewModelOverrides: { "deepseek-v4-flash-vision-exp": "deepseek-v4-pro" },
+          },
+        }),
+      });
+      expect(post.status).toBe(400);
+      expect(await post.json()).toMatchObject({ error: expect.stringContaining("autoReviewModel") });
+
+      const patch = await fetch(new URL("/api/providers?name=openai", server.url), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ autoReviewModel: "deepseek-v4-flash" }),
+      });
+      expect(patch.status).toBe(400);
+      expect(await patch.json()).toMatchObject({ error: expect.stringContaining("autoReviewModel") });
+      expect(JSON.stringify(loadConfig().providers.openai)).toBe(before);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   // #1409: the add/edit form's payload type has no member for contextWindow or
   test("canonical OpenAI can set, clear, and persist annotateEmptyToolOutputs via PATCH", async () => {
     // The canonical seed comparison rejects any provider that diverges from the built-in
@@ -1114,6 +1316,54 @@ describe("provider management validation", () => {
     } finally {
       resolvedError.mockRestore();
       await server.stop(true);
+    }
+  });
+
+  test("an unrelated canonical openai POST clears legacy auto-review fields", async () => {
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig({
+      port: 0,
+      openaiProviderTierVersion: 2,
+      defaultProvider: "openai",
+      providers: { openai: { ...canonicalDirect } },
+    } as OcxConfig);
+    // A legacy row that predates the prohibition can still be carried by a live
+    // process that started before the validation landed; an unrelated full edit
+    // must not resurrect either field into the persisted document.
+    const liveConfig = {
+      port: 0,
+      openaiProviderTierVersion: 2,
+      defaultProvider: "openai",
+      providers: {
+        openai: {
+          ...canonicalDirect,
+          autoReviewModel: "deepseek-v4-flash",
+          autoReviewModelOverrides: { "deepseek-v4-flash-vision-exp": "deepseek-v4-pro" },
+        },
+      },
+    } as OcxConfig;
+    const resolvedError = spyOn(destinationPolicy, "providerDestinationResolvedError").mockResolvedValue(null);
+    try {
+      const request = new Request("http://127.0.0.1/api/providers", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "openai", provider: canonicalDirect }),
+      });
+      const response = await handleManagementAPI(request, new URL(request.url), liveConfig, {
+        createManagementConvergeCodex: catalogConvergenceFactory(),
+      });
+      expect(response?.status).toBe(200);
+      const persisted = JSON.parse(readFileSync(join(TEST_DIR, "config.json"), "utf8")) as {
+        providers?: { openai?: Record<string, unknown> };
+      };
+      expect(persisted.providers?.openai?.autoReviewModel).toBeUndefined();
+      expect(persisted.providers?.openai?.autoReviewModelOverrides).toBeUndefined();
+      expect(liveConfig.providers.openai?.autoReviewModel).toBeUndefined();
+      expect(liveConfig.providers.openai?.autoReviewModelOverrides).toBeUndefined();
+    } finally {
+      resolvedError.mockRestore();
     }
   });
 
@@ -1407,6 +1657,49 @@ describe("provider management validation", () => {
       });
       expect(reenable.status).toBe(200);
       expect(loadConfig().providers.deepseek?.annotateEmptyToolOutputs).toBe(true);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("provider POST overwrite preserves auto-review fields when the payload omits them", async () => {
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig(config("127.0.0.1"));
+
+    const server = startServer(0);
+    try {
+      const create = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "relay",
+          provider: {
+            adapter: "openai-chat",
+            baseUrl: "https://relay.example/v1",
+            autoReviewModel: "approver-a",
+            autoReviewModelOverrides: { "coder-1": "approver-b" },
+          },
+        }),
+      });
+      expect(create.status).toBe(200);
+      expect(loadConfig().providers.relay?.autoReviewModel).toBe("approver-a");
+      expect(loadConfig().providers.relay?.autoReviewModelOverrides).toEqual({ "coder-1": "approver-b" });
+
+      // An unrelated overwrite that omits both fields must preserve the operator's
+      // auto-review configuration instead of erasing it.
+      const overwrite = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "relay",
+          provider: { adapter: "openai-chat", baseUrl: "https://relay.example/v1" },
+        }),
+      });
+      expect(overwrite.status).toBe(200);
+      expect(loadConfig().providers.relay?.autoReviewModel).toBe("approver-a");
+      expect(loadConfig().providers.relay?.autoReviewModelOverrides).toEqual({ "coder-1": "approver-b" });
     } finally {
       await server.stop(true);
     }

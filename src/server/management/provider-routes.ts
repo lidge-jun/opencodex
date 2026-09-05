@@ -7,6 +7,7 @@ import { clearGatherRoutedModelsInflight } from "../../codex/catalog/provider-fe
 import {
   DEFAULT_SUBAGENT_MODELS,
   adoptPersistedProviderIntoLiveConfig,
+  autoReviewModelConfigError,
   codexAutoStartEnabled,
   hasOwnProvider,
   isValidProviderName,
@@ -14,6 +15,9 @@ import {
   multiAgentGuidanceEnabled,
   mutatePersistedConfig,
   nonBlankStringArrayConfigError,
+  normalizeAutoReviewModelField,
+  normalizeAutoReviewModelFields,
+  normalizeAutoReviewModelOverridesField,
   normalizeNonBlankStringArray,
   providerBaseUrlConfigError,
   providerHeadersConfigError,
@@ -34,6 +38,7 @@ import {
   upsertOAuthProvider,
 } from "../../oauth";
 import { replaceProviderAccountSet } from "../../oauth/store";
+import { redactSecretString } from "../../lib/redact";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { ProviderOutboundPolicyError, providerOutboundGet, providerOutboundPost, providerRedirectError } from "../../lib/provider-outbound";
@@ -101,7 +106,6 @@ import {
   LOCAL_PROVIDER_RELOAD_PATH,
 } from "../../lib/local-provider-reload-contract";
 import { refreshUserCostOverlays } from "../../usage/user-cost-overlays";
-import { redactSecretString } from "../../lib/redact";
 import {
   XAI_RESPONSES_OPT_IN_MODELS,
   xaiResponsesOptInState,
@@ -122,7 +126,6 @@ type ProviderPatchApplication =
       enablingOpenAi: boolean;
       headersTouched: boolean;
     };
-
 const PROVIDER_ALIAS_OVERLAY_FIELDS = ["alias", "modelAliases", "defaultAliases"] as const;
 type ProviderAliasOverlayField = typeof PROVIDER_ALIAS_OVERLAY_FIELDS[number];
 
@@ -251,6 +254,10 @@ function providerEditorCandidate(
       ?? providerEmptyToolOutputConfigError(name, transportCandidate)
       ?? providerServiceTierConfigError(name, transportCandidate);
     if (providerError) return { ok: false, status: 400, error: providerError, code: "invalid_provider" };
+    const normalizationError = normalizeAutoReviewModelFields(name, merged);
+    if (normalizationError) {
+      return { ok: false, status: 400, error: normalizationError, code: "invalid_provider" };
+    }
     providers[name] = merged;
   }
 
@@ -273,7 +280,7 @@ function providerEditorCandidate(
   if (!validated.ok) {
     return { ok: false, status: 400, error: validated.error, code: "invalid_provider_editor_config" };
   }
-  return { ok: true, config: candidate, removedProviders };
+  return { ok: true, config: validated.config, removedProviders };
 }
 
 function adoptProviderEditorCandidate(live: OcxConfig, persisted: OcxConfig): void {
@@ -292,6 +299,16 @@ function adoptProviderEditorCandidate(live: OcxConfig, persisted: OcxConfig): vo
   else live.disabledModels = [...persisted.disabledModels];
   if (persisted.modelDiscovery === undefined) delete live.modelDiscovery;
   else live.modelDiscovery = structuredClone(persisted.modelDiscovery);
+}
+
+/** Redacted auto-review boundary error for provider writes. */
+function providerAutoReviewConfigError(name: string, provider: unknown): string | null {
+  if (!provider || typeof provider !== "object") return null;
+  const raw = provider as Record<string, unknown>;
+  const error = autoReviewModelConfigError(name, raw.autoReviewModel, raw.autoReviewModelOverrides);
+  if (!error) return null;
+  if (name === "openai") return error;
+  return "provider " + JSON.stringify(redactSecretString(name)) + " " + error;
 }
 
 /**
@@ -335,6 +352,31 @@ function applyProviderPatchFields(
     if (dm) next.defaultModel = dm;
     else delete next.defaultModel;
     touched = true;
+  }
+  if (name === "openai" && (Object.hasOwn(rawBody, "autoReviewModel") || Object.hasOwn(rawBody, "autoReviewModelOverrides"))) {
+    return { error: "provider openai must not include autoReviewModel or autoReviewModelOverrides" };
+  }
+  if (Object.hasOwn(rawBody, "autoReviewModel")) {
+    const normalized = normalizeAutoReviewModelField(rawBody.autoReviewModel);
+    if ("error" in normalized) return { error: normalized.error };
+    if ("clear" in normalized) {
+      delete next.autoReviewModel;
+      touched = true;
+    } else {
+      next.autoReviewModel = normalized.value;
+      touched = true;
+    }
+  }
+  if (Object.hasOwn(rawBody, "autoReviewModelOverrides")) {
+    const normalized = normalizeAutoReviewModelOverridesField(rawBody.autoReviewModelOverrides);
+    if ("error" in normalized) return { error: normalized.error };
+    if ("clear" in normalized) {
+      delete next.autoReviewModelOverrides;
+      touched = true;
+    } else {
+      next.autoReviewModelOverrides = normalized.value;
+      touched = true;
+    }
   }
   if (Object.hasOwn(rawBody, "authMode")) {
     if (typeof rawBody.authMode !== "string") return { error: "authMode must be a string" };
@@ -686,6 +728,13 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       contextWindow: p.contextWindow,
       modelContextWindows: p.modelContextWindows,
       modelAutoCompactTokenLimits: p.modelAutoCompactTokenLimits,
+      autoReviewModel: p.autoReviewModel === undefined ? undefined : redactSecretString(p.autoReviewModel),
+      autoReviewModelOverrides: p.autoReviewModelOverrides === undefined
+        ? undefined
+        : Object.fromEntries(Object.entries(p.autoReviewModelOverrides).map(([key, value]) => [
+            redactSecretString(key),
+            redactSecretString(value),
+          ])),
       modelSupportsServiceTier: p.modelSupportsServiceTier,
       noStructuredOutputModels: p.noStructuredOutputModels,
       retainModels: p.retainModels,
@@ -891,6 +940,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const aliasOwnershipError = providerAliasOverlayOwnershipError(body.provider, existing);
     if (aliasOwnershipError) return jsonResponse({ error: aliasOwnershipError }, 400);
     const transportCandidate = providerTransportValidationCandidate(body.provider);
+    // The auto-review boundary runs before the canonical-seed comparison so the
+    // specific rejection (and its redacted name) wins over the generic seed error.
+    const autoReviewError = providerAutoReviewConfigError(name, body.provider);
+    if (autoReviewError) return jsonResponse({ error: autoReviewError }, 400);
     const providerError = providerManagementConfigError(name, transportCandidate)
       ?? providerEmptyToolOutputConfigError(name, transportCandidate);
     if (providerError) return jsonResponse({ error: providerError }, 400);
@@ -942,6 +995,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const submittedModelDisplayNames = Object.hasOwn(prov, "modelDisplayNames");
     const submittedRequestPacing = Object.hasOwn(prov, "requestPacing");
     const submittedUpstreamWebsocket = Object.hasOwn(prov, "upstreamWebsocket");
+    const submittedAutoReviewModel = Object.hasOwn(prov, "autoReviewModel");
+    const submittedAutoReviewModelOverrides = Object.hasOwn(prov, "autoReviewModelOverrides");
     // Same trap, one more field: DeepSeek carries a registry default of `true` for
     // annotateEmptyToolOutputs, so enrichment cannot distinguish "the client omitted it"
     // from "the registry supplied it" either. Without this sample, an unrelated edit that
@@ -949,63 +1004,83 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const submittedAnnotateEmptyToolOutputs = Object.hasOwn(prov, "annotateEmptyToolOutputs");
     enrichProviderFromCatalog(name, prov);
     const { saveConfigPreservingClaudeCode: save } = await import("../../config");
+    // DNS validation and the lazy import above await. Re-read the LIVE row only now: a
+    // concurrent PATCH that completed during those waits replaces the provider row object,
+    // so the pre-await `existing` snapshot must stay an admission/ownership input and never
+    // become the write source for carried-over fields (review finding, auto-review
+    // interleaving; same rule applies to windows, labels, pacing, and transport toggles).
+    const liveExisting = config.providers[name];
     // Overwriting an existing provider must not drop its multi-key pool: carry it over, then
     // let the (possibly new) apiKey join the pool as the active entry.
-    const existingPool = config.providers[name]?.apiKeyPool;
+    const existingPool = liveExisting?.apiKeyPool;
     if (existingPool && !prov.apiKeyPool) prov.apiKeyPool = existingPool;
     // The same rule applies to user-configured price overlays: the dashboard's
     // add/edit form does not send modelCosts, so an overwrite must not silently
     // erase hand-edited per-model prices from Logs/Usage estimates.
-    const existingCosts = config.providers[name]?.modelCosts;
+    const existingCosts = liveExisting?.modelCosts;
     if (existingCosts && !prov.modelCosts) prov.modelCosts = existingCosts;
     // And to the per-provider account-failover opt-out (#2568d). `ProviderPayload` has no
     // member for it either, so an add/edit save structurally cannot carry it — and dropping it
     // silently ENABLES rotation, because activation is presence-driven once the knob is gone.
     // An overwrite must not spend a second subscription account's quota as a side effect.
-    const existingFailover = config.providers[name]?.oauthAccountFailover;
+    const existingFailover = liveExisting?.oauthAccountFailover;
     if (existingFailover && !prov.oauthAccountFailover) prov.oauthAccountFailover = existingFailover;
     // ...and to hand-edited context windows. `ProviderPayload` (gui/src/provider-payload.ts)
     // has no member for either field, so the add/edit form structurally cannot send them:
     // absence in the request means "not carried", never "the user deleted it". Deletion goes
     // through PATCH with an explicit null (#1409).
-    if (!submittedModelDisplayNames && existing?.modelDisplayNames) {
-      prov.modelDisplayNames = { ...existing.modelDisplayNames };
+    if (!submittedModelDisplayNames && liveExisting?.modelDisplayNames) {
+      prov.modelDisplayNames = { ...liveExisting.modelDisplayNames };
     }
-    if (!submittedRequestPacing && existing?.requestPacing) {
-      prov.requestPacing = structuredClone(existing.requestPacing);
+    if (!submittedRequestPacing && liveExisting?.requestPacing) {
+      prov.requestPacing = structuredClone(liveExisting.requestPacing);
     }
-    if (!submittedContextWindow && existing?.contextWindow !== undefined) {
-      prov.contextWindow = existing.contextWindow;
+    if (!submittedContextWindow && liveExisting?.contextWindow !== undefined) {
+      prov.contextWindow = liveExisting.contextWindow;
     }
     // `!== undefined` rather than a truthiness test: the whole point of this field is that
     // an explicit `false` must survive, and `false` is falsy.
-    if (!submittedAnnotateEmptyToolOutputs && existing?.annotateEmptyToolOutputs !== undefined) {
-      prov.annotateEmptyToolOutputs = existing.annotateEmptyToolOutputs;
+    if (!submittedAnnotateEmptyToolOutputs && liveExisting?.annotateEmptyToolOutputs !== undefined) {
+      prov.annotateEmptyToolOutputs = liveExisting.annotateEmptyToolOutputs;
     }
     // The provider add/edit form may omit this transport option. Preserve the stored value
     // during a full overwrite; PATCH remains the explicit mutation path, and `!== undefined`
     // keeps an operator's explicit false from being treated as absent.
-    if (!submittedUpstreamWebsocket && existing?.upstreamWebsocket !== undefined) {
-      prov.upstreamWebsocket = existing.upstreamWebsocket;
+    if (!submittedUpstreamWebsocket && liveExisting?.upstreamWebsocket !== undefined) {
+      prov.upstreamWebsocket = liveExisting.upstreamWebsocket;
     }
-    if (existing?.modelContextWindows) {
+    if (liveExisting?.modelContextWindows) {
       // When the client did send a map, its keys win and the user's other keys survive. When
       // it did not, the stored value is the user's map alone: merging the registry seed in
       // would persist seed keys into user config as a side effect of an unrelated save, and
       // router.ts already fills registry values beneath user entries at resolve time.
       prov.modelContextWindows = submittedModelContextWindows
-        ? { ...existing.modelContextWindows, ...(prov.modelContextWindows ?? {}) }
-        : { ...existing.modelContextWindows };
+        ? { ...liveExisting.modelContextWindows, ...(prov.modelContextWindows ?? {}) }
+        : { ...liveExisting.modelContextWindows };
     }
-    if (existing?.modelAutoCompactTokenLimits) {
+    if (liveExisting?.modelAutoCompactTokenLimits) {
       prov.modelAutoCompactTokenLimits = submittedModelAutoCompactTokenLimits
-        ? { ...existing.modelAutoCompactTokenLimits, ...(prov.modelAutoCompactTokenLimits ?? {}) }
-        : { ...existing.modelAutoCompactTokenLimits };
+        ? { ...liveExisting.modelAutoCompactTokenLimits, ...(prov.modelAutoCompactTokenLimits ?? {}) }
+        : { ...liveExisting.modelAutoCompactTokenLimits };
     }
-    // DNS validation above awaits. Re-read the live row so a dedicated alias write that
-    // completed during that wait remains authoritative instead of being overwritten by the
-    // older ownership snapshot used to admit this POST.
-    restorePersistedAliasOverlays(prov, config.providers[name]);
+    restorePersistedAliasOverlays(prov, liveExisting);
+    // The GUI form cannot send the auto-review overrides, so an unrelated resave
+    // must not erase hand-configured values; clearing goes through PATCH with null.
+    // Canonical openai is the exception: those fields are prohibited there, and a
+    // legacy row that predates the prohibition is cleaned up by an unrelated full
+    // edit instead of being resurrected from the live provider.
+    if (!submittedAutoReviewModel && name !== "openai" && liveExisting?.autoReviewModel !== undefined) {
+      prov.autoReviewModel = liveExisting.autoReviewModel;
+    }
+    if (!submittedAutoReviewModelOverrides && name !== "openai" && liveExisting?.autoReviewModelOverrides !== undefined) {
+      prov.autoReviewModelOverrides = { ...liveExisting.autoReviewModelOverrides };
+    }
+    // POST passed boundary validation above; trim the submitted values so the persisted
+    // config.json holds canonical ids (same normalizer as PATCH).
+    const normalizationError = normalizeAutoReviewModelFields(name, prov);
+    if (normalizationError) {
+      return jsonResponse({ error: normalizationError, code: "invalid_provider" }, 400);
+    }
     initializeProviderModelSelection(name, prov, config.providers[name], config);
     config.providers[name] = stripRegistryOnlyStaticHeaders(name, prov);
     if (body.setDefault === true) config.defaultProvider = name;
