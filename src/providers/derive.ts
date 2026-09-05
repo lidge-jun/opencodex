@@ -606,7 +606,7 @@ function entryToPreset(entry: ProviderRegistryEntry): DerivedProviderPreset {
     ...(entry.dashboardUrl ? { dashboardUrl: entry.dashboardUrl } : {}),
     ...(entry.note ? { note: entry.note } : {}),
     ...(entry.keyOptional ? { keyOptional: true } : {}),
-    ...(entry.freeTier ? { freeTier: true } : {}),
+    ...(entry.freeTier !== undefined ? { freeTier: entry.freeTier } : {}),
     ...(entry.baseUrlChoices ? { baseUrlChoices: entry.baseUrlChoices.map(c => ({ ...c })) } : {}),
   };
 }

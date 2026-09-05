@@ -39,10 +39,23 @@ export function AddProviderFormPane({
   onBack: () => void;
 }) {
   const t = useT();
+  const isAzureOpenAi = preset.adapter === "azure-openai";
+  const isFreeKeyless = preset.keyOptional === true && preset.freeTier !== false;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      {!isReservedForward && !isCustom && !isLocal && !preset.keyOptional && preset.note && (
+      {!isReservedForward && !isCustom && !isLocal && isAzureOpenAi ? (
+        <details className="setup-guide">
+          <summary>{t("modal.azureEntraSetupGuide")}</summary>
+          <div className="text-label leading-relaxed" style={{ margin: "8px 0 0", color: "var(--muted)" }}>
+            <p style={{ margin: 0 }}>{t("modal.azureEntraIntro")}</p>
+            <ol style={{ margin: "8px 0 0", paddingLeft: 18 }}>
+              <li>{t("modal.azureEntraResource")}</li>
+              <li>{t("modal.azureEntraCredential")}</li>
+            </ol>
+          </div>
+        </details>
+      ) : !isReservedForward && !isCustom && !isLocal && !preset.keyOptional && preset.note && (
         <details className="setup-guide">
           <summary>{t("modal.setupGuide")}</summary>
           <ol className="text-label leading-relaxed" style={{ margin: "8px 0 0", paddingLeft: 18, color: "var(--muted)" }}>
@@ -129,7 +142,7 @@ export function AddProviderFormPane({
         <div className="text-label leading-relaxed" style={{ color: "var(--amber)", background: "var(--amber-soft)", border: "1px solid var(--amber)", borderRadius: "var(--radius-sm)", padding: "8px 10px" }}>
           {t("modal.localHint")}
         </div>
-      ) : preset.keyOptional ? (
+      ) : isFreeKeyless ? (
         <div className="text-label leading-relaxed" style={{ color: "var(--green)", background: "var(--green-soft)", border: "1px solid var(--green)", borderRadius: "var(--radius-sm)", padding: "10px 12px" }}>
           <strong>{t("modal.freeTierTitle")}</strong> — {preset.note ?? t("modal.freeTierDefault")}
         </div>

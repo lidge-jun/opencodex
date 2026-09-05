@@ -162,12 +162,14 @@ export function isAccountProvider(name: string, p: WorkspaceProvider): boolean {
 }
 
 /**
- * Free pricing (badge / filter / sort): `freeTier`, keyless free (`keyOptional`),
- * local runtimes, or loopback. Forward passthrough is NOT free — those are
- * account providers. Does **not** imply ready-without-key — use
- * `binProviderStatus` for readiness.
+ * Free pricing (badge / filter / sort): explicit `freeTier:true`, legacy keyless
+ * free (`keyOptional` when `freeTier` is omitted), local runtimes, or loopback.
+ * Explicit `freeTier:false` overrides those legacy inferences. Forward passthrough
+ * is NOT free — those are account providers. Does **not** imply ready-without-key —
+ * use `binProviderStatus` for readiness.
  */
 export function isFreeProvider(p: WorkspaceProvider): boolean {
+  if (p.freeTier === false) return false;
   return p.freeTier === true
     || p.keyOptional === true
     || p.authMode === "local"

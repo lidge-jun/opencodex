@@ -105,11 +105,11 @@ export default function ProviderCatalog({
       : p.auth === "oauth" ? <span className="badge badge-accent">{t("modal.badge.oauth")}</span>
       : p.auth === "forward" ? <span className="badge badge-green">{t("modal.badge.codexLogin")}</span>
       : p.auth === "local" ? <span className="badge badge-amber">{t("modal.badge.local")}</span>
-      : p.keyOptional ? null // keyless free: the Free badge alone says it all
+      : p.keyOptional && p.freeTier !== false ? null // keyless free: the Free badge alone says it all
       : <span className="badge badge-muted">{t("modal.badge.apiKey")}</span>;
     // Free pricing is orthogonal to auth: NVIDIA (freeTier + key required) shows BOTH
     // the Free badge and the API-key badge — free pricing never hides a key requirement.
-    const free = (p.freeTier || p.keyOptional) && p.auth === "key"
+    const free = (p.freeTier === true || (p.freeTier !== false && p.keyOptional)) && p.auth === "key"
       ? <span className="badge badge-green">{t("modal.badge.free")}</span>
       : null;
     return <>{free}{auth}</>;

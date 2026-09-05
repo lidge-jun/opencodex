@@ -213,10 +213,12 @@ discovery에 모두 적용됩니다.
 ## `azure-openai` (별칭: `azure`)
 
 **대상:** **Azure OpenAI**. `openai-responses`를 감싸므로 마찬가지로 `passthrough: true`입니다.
-**인증:** `api-key` 헤더의 `key`(Bearer 아님).
+**인증:** `apiKey`가 설정되면 `api-key` 헤더의 `key`를 사용합니다. 설정되지 않으면
+`DefaultAzureCredential`을 통해 Microsoft Entra ID를 사용하고 `Authorization: Bearer`를 보냅니다.
 
-- 요청 구성은 Responses passthrough에 맡깁니다. `baseUrl`에 해석되지 않은 템플릿 placeholder가
-  없는지 검증하고 `Authorization`을 `api-key`로 바꿉니다. 설정 URL이 Azure v1 Responses API를
+- 요청 구성은 Responses passthrough에 맡기고 `baseUrl`에 해석되지 않은 템플릿 placeholder가
+  없는지 검증합니다. API 키 요청은 `api-key`를 사용하고, 키가 없으면 `DefaultAzureCredential`로
+  Entra 토큰을 가져와 `Authorization: Bearer`를 사용합니다. 설정 URL이 Azure v1 Responses API를
   직접 가리키므로 `api-version`은 덧붙이지 않습니다.
 
 ## 이미지 유틸리티 (`image.ts`)

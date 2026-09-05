@@ -39,4 +39,27 @@ describe("model discovery management API", () => {
     expect(live.modelDiscovery.recentArrivals?.vendor).toEqual([]);
     expect(live.disabledModels).toEqual(["vendor/new"]);
   });
+
+  test("Azure Entra connectivity checks reject HTTP discovery before credential resolution", async () => {
+    const live = {
+      ...config(),
+      providers: {
+        "azure-openai": {
+          adapter: "azure-openai",
+          authMode: "key",
+          baseUrl: "http://azure.example.test/v1",
+          liveModels: true,
+          models: ["gpt-5"],
+        },
+      },
+    } as OcxConfig;
+    const result = await call(live, "/api/providers/test?name=azure-openai", "POST");
+
+    expect(result.response.status).toBe(200);
+    expect(result.json).toMatchObject({
+      ok: false,
+      latencyMs: 0,
+      error: "Azure Entra model discovery requires an HTTPS endpoint",
+    });
+  });
 });

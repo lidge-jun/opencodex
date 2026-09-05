@@ -41,6 +41,7 @@ import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUr
 import { loginCommandCode, refreshCommandCodeToken } from "./command-code";
 import { loginMetaMuse, refreshMetaMuseToken } from "./meta-muse";
 import { ANTIGRAVITY_REQUEST_UA } from "../adapters/google-antigravity-wire";
+import { getAzureOpenAiAccessToken } from "../adapters/azure-auth";
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
 import { apiKeyPoolEntryId, sanitizeApiKeyValue } from "../providers/api-keys";
 import { effectiveGoogleMode, getProviderRegistryEntry, mergeRegistryStaticHeaders, providerMatchesRegistryTransport } from "../providers/registry";
@@ -1065,7 +1066,24 @@ export async function resolveModelsAuthToken(name: string, prov: OcxProviderConf
       return undefined;
     }
   }
-  return resolveProviderApiKey(prov.apiKey);
+  const apiKey = resolveProviderApiKey(prov.apiKey);
+  if (
+    (prov.adapter === "azure-openai" || prov.adapter === "azure")
+    && (!apiKey || apiKey.trim() === "")
+  ) {
+    const discoveryUrl = buildModelsRequest(prov, undefined, name).url;
+    if (new URL(discoveryUrl).protocol !== "https:") {
+      logOAuthEvent("Azure Entra model-discovery skipped for non-HTTPS endpoint", { provider: "azure-openai" });
+      return undefined;
+    }
+    try {
+      return await getAzureOpenAiAccessToken();
+    } catch {
+      logOAuthEvent("Azure Entra model-discovery authentication failed", { provider: "azure-openai" });
+      return undefined;
+    }
+  }
+  return apiKey;
 }
 
 function modelDiscoveryTransportSeed(providerName: string, prov: OcxProviderConfig): OcxProviderConfig {
