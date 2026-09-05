@@ -95,7 +95,7 @@ cross-route credential fallback не существует. Строки API GPT-
 | `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Header-style для ключа Anthropic. По умолчанию нативный `x-api-key`; допустим только для key-auth-провайдеров `anthropic`. |
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | Пул из нескольких ключей. `apiKey` зеркалит активную запись; каждый элемент содержит `id`, `key`, необязательный `label` и необязательное числовое `addedAt`. |
 | `defaultModel?` | `string` | Модель, используемая когда этот провайдер выбран без явной модели. |
-| `models?` | `string[]` | Seed/fallback-список моделей. При `liveModels: false` это и есть единственный список обнаруженных моделей. |
+| `models?` | `string[]` | Seed/fallback-список. При `liveModels: false` маршрутизируемые модели берутся из `models` и `retainModels`; если `models` пуст, также включается `defaultModel`. |
 | `liveModels?` | `boolean` | Получать live-каталог на start/sync (по умолчанию `true`). Custom-провайдеры используют `${baseUrl}/models`; built-in могут использовать registry URL и дополнительно фильтровать результат. |
 | `selectedModels?` | `string[]` | Allowlist каталога после discovery. Непустой список показывает только эти id; пустой или отсутствующий показывает всё, что было обнаружено. |
 | `modelDisplayNames?` | `Record<string, string>` | Постоянные display-only имена с точным нативным id модели этого провайдера в качестве ключа. Ключи чувствительны к регистру. Имена имеют приоритет над metadata каталога провайдера и не меняют аутентификацию, adapter, routing, billing или upstream-запросы. Карта содержит не более 2 000 записей, как и discovery. |
@@ -440,8 +440,8 @@ Chat-запросов не добавляют поле `provider`, а Vercel AI 
 
 ## Статические allowlist'ы моделей
 
-Задайте `liveModels: false`, чтобы показывать только `models`. Если `models` пуст или отсутствует,
-провайдер не будет показывать ни одной маршрутизируемой модели. Live-discovery отвергает ответы
+Задайте `liveModels: false`, чтобы показывать только настроенные модели из `models` и `retainModels`. Если `models` пуст или отсутствует,
+также включается настроенный `defaultModel`. Если ни одно из этих полей не содержит идентификатор, провайдер не показывает маршрутизируемых моделей. Live-discovery отвергает ответы
 размером более 4 MiB или более 2000 сырых model-row до кэширования; built-in preset'ы могут
 использовать меньшие лимиты и фильтровать список до chat-совместимых строк. Oversized или
 malformed-результаты откатываются к stale/configured fallback. Валидный результат с нулём

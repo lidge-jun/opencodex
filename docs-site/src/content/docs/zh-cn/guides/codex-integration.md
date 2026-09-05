@@ -260,8 +260,8 @@ provider 形式一样，从 `OPENCODEX_API_AUTH_TOKEN` 传入 `x-opencodex-api-k
    所有发现到的模型。一个不在 allowlist 里的 id 永远不会进入 catalog。
 2. **`disabledModels`**（顶层） - 会同时隐藏 catalog 和 `/v1/models` 中的模型，并把裸原生 GPT slug
    切成 `visibility: "hide"`。
-3. **`liveModels: false` 且 `models` 为空** - 当 live discovery 关闭而 `models` 为空或省略时，opencodex
-   不会为那个 provider 暴露任何路由模型。
+3. **`liveModels: false`** - 关闭 live discovery 后，路由模型来自 `models` 和 `retainModels`。
+   当 `models` 为空或省略时，还会包含已配置的 `defaultModel`；这些字段都没有提供 id 时，opencodex 才不暴露路由模型。
 4. **Cursor `GetUsableModels`** - Cursor adapter 通过它的 protobuf `GetUsableModels` RPC 发现模型，而不是
    `/models`，所以 Cursor 侧的变动会独立于其他 provider 改变哪些 id 可见。
 5. **缓存和 `ocx sync`** - live catalog 的缓存时间大约是五分钟（`modelCacheTtlMs`，默认 `300000`）。

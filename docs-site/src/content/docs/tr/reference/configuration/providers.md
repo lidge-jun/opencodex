@@ -101,7 +101,7 @@ alanlı seçilmiş kimlikleri yalın kimliklere yeniden yazar.
 | `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Anthropic anahtar başlığı stili. Varsayılan olarak yerel `x-api-key`; yalnızca anahtar kimlik doğrulamalı `anthropic` sağlayıcıları için geçerlidir. |
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | Çoklu anahtar havuzu. `apiKey` aktif girdiyi yansıtır; her öğe `id`, `key`, isteğe bağlı `label` ve isteğe bağlı sayısal `addedAt` değerine sahiptir. |
 | `defaultModel?` | `string` | Bu sağlayıcı açık bir model olmadan seçildiğinde kullanılan model. |
-| `models?` | `string[]` | Tohum/geri dönüş model listesi. `liveModels: false` olduğunda bunlar keşfedilen tek modellerdir. |
+| `models?` | `string[]` | Tohum/geri dönüş listesi. `liveModels: false` iken yönlendirilen modeller `models` ve `retainModels` alanlarından gelir; `models` boşsa `defaultModel` da eklenir. |
 | `liveModels?` | `boolean` | Başlatmada/senkronizasyonda canlı kataloğu getirin (varsayılan `true`). Özel sağlayıcılar `${baseUrl}/models` kullanır; yerleşikler bir kayıt defteri URL'si ve filtresi kullanabilir. |
 | `selectedModels?` | `string[]` | Keşiften sonra katalog izin listesi. Boş olmaması yalnızca bu kimlikleri gösterir; boş veya atlanmış olması keşfedilen tüm modelleri gösterir. |
 | `contextWindow?` | `number` | Yukarı akış meta verileri olmadığında sağlayıcı genelinde bağlam geri dönüşü; aksi takdirde daha küçük canlı meta verileri koruyan bir sınır. Modeller kontrol paneli bunu `providerContextCaps` alanından ayrı olarak gösterir. |
@@ -477,8 +477,8 @@ uygulamadan önce yerel `zai/glm-5.2` kimliğini geri yükler. Aynı eşleme yer
 
 ## Statik model izin listeleri
 
-Yalnızca `models`'ı göstermek için `liveModels: false` ayarlayın. `models` boşsa
-veya atlanırsa sağlayıcı yönlendirilen hiçbir modeli göstermez. Canlı keşif,
+Yalnızca yapılandırılmış modelleri göstermek için `liveModels: false` ayarlayın. Yönlendirilen modeller `models` ve `retainModels` alanlarından gelir;
+`models` boşsa veya atlanırsa yapılandırılmış `defaultModel` da eklenir. Bu alanların hiçbiri bir kimlik sağlamıyorsa yönlendirilmiş model gösterilmez. Canlı keşif,
 önbelleğe almadan önce 4 MiB'den veya 2.000 ham model satırından fazlasını
 reddeder; yerleşik önayarlar daha düşük sınırlar kullanabilir ve sohbete uygun
 satırlara filtre uygulayabilir. Büyük boyutlu veya hatalı biçimlendirilmiş

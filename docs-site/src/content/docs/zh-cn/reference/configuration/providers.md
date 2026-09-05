@@ -82,7 +82,7 @@ selector，而不是分配一个新名称。
 | `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Anthropic key 头部样式。默认使用原生 `x-api-key`；仅对 key-auth `anthropic` 提供者有效。 |
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | 多 key 池。`apiKey` 会镜像当前激活条目；每个条目都有 `id`、`key`、可选 `label`，以及可选的数值 `addedAt`。 |
 | `defaultModel?` | `string` | 当选择该提供者但未显式指定模型时使用的模型。 |
-| `models?` | `string[]` | 种子/回退模型列表。配合 `liveModels: false` 时，这些就是唯一发现到的模型。 |
+| `models?` | `string[]` | 种子/回退模型列表。配合 `liveModels: false` 时，路由模型来自 `models` 和 `retainModels`；`models` 为空时还会包含 `defaultModel`。 |
 | `liveModels?` | `boolean` | 启动/同步时获取实时目录（默认 `true`）。自定义提供者使用 `${baseUrl}/models`；内置项可能使用注册表 URL 并进行过滤。 |
 | `selectedModels?` | `string[]` | 发现之后的目录允许列表。非空时只暴露这些 id；为空或省略时则暴露全部发现到的模型。 |
 | `modelDisplayNames?` | `Record<string, string>` | 持久的仅显示名称，以此提供者的精确原生模型 id 为键。键区分大小写。名称优先于提供者目录元数据，并且不会改变身份验证、适配器、路由、计费或上游请求。该映射最多可包含 2,000 个条目，与发现上限相同。 |
@@ -358,7 +358,7 @@ Vercel AI Gateway 可以在多个底层推理提供者之间路由一个模型�
 
 ## 静态模型允许列表
 
-将 `liveModels: false` 设为只暴露 `models`。如果 `models` 为空或省略，该提供者将不暴露任何路由模型。实时发现会在缓存前拒绝超过 4 MiB 或 2,000 条原始模型行；内置预设可能使用更低的限制，并过滤为可聊天的行。过大或格式错误的结果会走陈旧/配置回退。合法的、零可用结果的发现仍然具有权威性，不会被静默替换或截断。
+将 `liveModels: false` 设为只暴露已配置模型。路由模型来自 `models` 和 `retainModels`；如果 `models` 为空或省略，还会包含已配置的 `defaultModel`。这些字段都没有提供 id 时才不暴露路由模型。实时发现会在缓存前拒绝超过 4 MiB 或 2,000 条原始模型行；内置预设可能使用更低的限制，并过滤为可聊天的行。过大或格式错误的结果会走陈旧/配置回退。合法的、零可用结果的发现仍然具有权威性，不会被静默替换或截断。
 
 当需要继续运行发现，但只有选定 id 应该出现在 Codex 和 `/v1/models` 中时，请使用 `selectedModels`。仪表板会保留完整的已发现列表，以便之后调整允许列表。
 

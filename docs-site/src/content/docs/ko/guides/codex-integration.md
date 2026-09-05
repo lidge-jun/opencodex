@@ -197,7 +197,7 @@ Codex에서 model이 빠졌거나 catalog 순서/가시성이 이상해 보이�
 
 1. provider의 **`selectedModels`** - 비어 있지 않은 allowlist는 해당 id만 Codex에 노출합니다. 비어 있거나 생략하면 발견된 model이 모두 노출됩니다. allowlist에 없는 id는 catalog에 절대 들어가지 않습니다.
 2. **`disabledModels`**(top level) - catalog와 `/v1/models`에서 model을 숨기고, bare native GPT slug는 `visibility: "hide"`로 바꿉니다.
-3. **`liveModels: false`와 비어 있는 `models`** - live discovery가 꺼져 있고 `models`가 비어 있거나 생략되면, opencodex는 그 provider에 대해 routed model을 하나도 노출하지 않습니다.
+3. **`liveModels: false`** - live discovery가 꺼져 있으면 routed model은 `models`와 `retainModels`에서 가져옵니다. `models`가 비어 있거나 생략되면 구성된 `defaultModel`도 포함되며, 어느 필드에도 ID가 없을 때만 routed model을 노출하지 않습니다.
 4. **Cursor `GetUsableModels`** - Cursor adapter는 `/models`가 아니라 protobuf `GetUsableModels` RPC로 model을 찾습니다. 그래서 Cursor 쪽 변경이 다른 provider와 무관하게 어떤 id가 보이는지 바꿀 수 있습니다.
 5. **캐시와 `ocx sync`** - live catalog는 약 5분(`modelCacheTtlMs`, 기본값 `300000`) 동안 캐시됩니다. `ocx sync`를 실행하면 새로 가져와서 catalog를 즉시 다시 쓸 수 있습니다.
 6. **실행 중인 Codex `app-server`** - 오래 살아 있는 Codex `app-server`(Desktop / CLI background host)가 이전 목록을 메모리에 쥐고 있으면 디스크 catalog를 다시 쓰는 것만으로는 부족합니다. `ocx sync`와 `ocx sync-cache`는 그런 process를 감지하면 경고합니다. `ocx sync --restart-codex`로 다시 시작하거나(아니면 일치하는 `app-server` process를 직접 중지한 뒤), Codex가 다시 만들게 해서 새 목록이 보이게 하세요.

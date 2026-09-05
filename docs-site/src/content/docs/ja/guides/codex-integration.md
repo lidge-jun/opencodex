@@ -197,8 +197,9 @@ ocx sync-cache
 空または省略すると、検出されたすべてのモデルが公開されます。ホワイトリストにない ID はカタログに到達しません。
 2. **`disabledModels`** (トップレベル) — カタログと `/v1/models` の両方からモデルを非表示にし、反転します
 裸のネイティブ GPT スラッグを `visibility: "hide"` にします。
-3. **`liveModels: false` と空の `models`** — ライブ検出がオフで、`models` が空の場合、または
-省略すると、opencodex はそのプロバイダーのルーティング モデルを公開しません。
+3. **`liveModels: false`** — ライブ検出がオフの場合、ルーティングモデルは `models` と
+`retainModels` から取得されます。`models` が空または省略されている場合は構成済みの `defaultModel` も含まれ、
+いずれのフィールドにも ID がない場合のみルーティングモデルを公開しません。
 4. **Cursor `GetUsableModels`** — Cursor アダプターはその protobuf を通じてモデルを検出します。
 `/models` ではなく `GetUsableModels` RPC であるため、カーソル側の変更により、他のプロバイダーとは独立して表示される ID が変更される可能性があります。
 5. **キャッシュと `ocx sync`** - ライブ カタログは約 5 分間キャッシュされます (`modelCacheTtlMs`、

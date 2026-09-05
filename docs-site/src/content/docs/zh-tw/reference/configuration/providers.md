@@ -64,7 +64,7 @@ ocx models provider openrouter on
 | `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Anthropic 金鑰標頭風格。預設為原生 `x-api-key`；僅對 key-auth `anthropic` 供應商有效。 |
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | 多金鑰池。`apiKey` 反映現用項目；每個項目有 `id`、`key`、可選 `label` 與可選數值 `addedAt`。 |
 | `defaultModel?` | `string` | 在未指定明確模型時選擇此供應商所使用的模型。 |
-| `models?` | `string[]` | 播種／後備模型清單。在 `liveModels: false` 時，這些是唯一探索的模型。 |
+| `models?` | `string[]` | 播種／後備模型清單。`liveModels: false` 時，路由模型來自 `models` 和 `retainModels`；`models` 為空時還會包含 `defaultModel`。 |
 | `liveModels?` | `boolean` | 在啟動／同步時擷取即時目錄（預設 `true`）。自訂供應商使用 `${baseUrl}/models`；內建可能使用 registry URL 並過濾。 |
 | `selectedModels?` | `string[]` | 探索後的目錄允許清單。非空時僅暴露那些 id；空或省略時暴露所有探索的模型。 |
 | `contextWindow?` | `number` | 供應商範圍的 Codex 可見 context 上限。較小的即時中繼資料被保留。 |
@@ -325,7 +325,7 @@ Vercel AI Gateway 可在多個底層推論供應商之間路由一個模型。`v
 
 ## 靜態模型允許清單
 
-設定 `liveModels: false` 以僅暴露 `models`。若 `models` 為空或省略，供應商暴露無路由模型。即時探索在快取前拒絕超過 4 MiB 或 2,000 個原始模型列；內建預設可能使用較低限制並過濾到 chat 合格列。過大或格式錯誤的結果遵循過時／設定的後備。有效的零合格結果恆為權威，且不被靜默取代或截斷。
+設定 `liveModels: false` 以僅暴露已設定模型。路由模型來自 `models` 和 `retainModels`；若 `models` 為空或省略，還會包含已設定的 `defaultModel`。這些欄位皆未提供 id 時才不暴露路由模型。即時探索在快取前拒絕超過 4 MiB 或 2,000 個原始模型列；內建預設可能使用較低限制並過濾到 chat 合格列。過大或格式錯誤的結果遵循過時／設定的後備。有效的零合格結果恆為權威，且不被靜默取代或截斷。
 
 當探索應仍然執行但只有 selected id 應出現在 Codex 與 `/v1/models` 時，請使用 `selectedModels`。儀表板保留完整的探索清單供日後允許清單變更。
 
