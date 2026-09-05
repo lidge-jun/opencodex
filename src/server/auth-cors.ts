@@ -574,6 +574,17 @@ function nativeContextOverlayError(raw: Record<string, unknown>): string | null 
  * string, or null when the provider may be persisted. Caller-controlled names/fields are
  * redacted and JSON-escaped so secrets never reach the response.
  */
+function requestTransformsConfigError(value: unknown, field = "requestTransforms"): string | null {
+  if (value === undefined) return null;
+  if (!Array.isArray(value)) return `${field} must be an array`;
+  for (const [index, entry] of value.entries()) {
+    if (typeof entry !== "string" || !entry.trim()) {
+      return `${field}.${index} must be a nonblank string`;
+    }
+  }
+  return null;
+}
+
 export function providerManagementConfigError(name: unknown, provider: unknown): string | null {
   if (typeof name !== "string" || !provider || typeof provider !== "object" || Array.isArray(provider)) {
     return "provider must be a plain object";
@@ -614,6 +625,7 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
     // validation and then rejected by the seed comparison, so canonical OpenAI could never
     // set OR clear it — the value was admitted and then refused in the same request.
     delete canonicalCandidate.annotateEmptyToolOutputs;
+    delete canonicalCandidate.requestTransforms;
     const canonical = seed && sameCanonicalProviderSeed(canonicalCandidate, seed);
     if (!canonical) {
       return `provider ${name} must equal the canonical built-in provider seed`;
@@ -696,6 +708,8 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
   if (structuredOutputOptOutError) return `provider ${name} ${structuredOutputOptOutError}`;
   const retainModelsError = nonBlankStringArrayConfigError(raw.retainModels, "retainModels");
   if (retainModelsError) return `provider ${name} ${retainModelsError}`;
+  const requestTransformsError = requestTransformsConfigError(raw.requestTransforms);
+  if (requestTransformsError) return `provider ${name} ${requestTransformsError}`;
   const toolReasoningOptOutError = nonBlankStringArrayConfigError(
     raw.omitReasoningEffortWithToolsModels,
     "omitReasoningEffortWithToolsModels",
@@ -840,6 +854,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   noTopPModels: "editor",
   noPenaltyModels: "editor",
   noStructuredOutputModels: "editor",
+  requestTransforms: "editor",
   omitReasoningEffortWithToolsModels: "editor",
   parallelToolCalls: "editor",
   pinParallelToolCallsFalse: "editor",

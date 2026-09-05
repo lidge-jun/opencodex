@@ -574,6 +574,9 @@ const providerConfigSchema = z.object({
   }).strict().optional(),
   responsesSnapshotRepair: z.boolean().optional(),
   xaiResponsesXSearch: z.boolean().optional(),
+  requestTransforms: z.array(z.string().min(1))
+    .transform(normalizeNonBlankStringArray)
+    .optional(),
 }).passthrough();
 
 export { isValidProviderName, hasOwnProvider } from "./config/provider-name";
@@ -1061,6 +1064,9 @@ const configSchema = z.object({
   configRebaseProvenance: z.unknown().optional(),
   // A retry can be billable, so absence and malformed hand edits both stay off.
   emptyCompletionRetry: z.boolean().optional().catch(false),
+  requestTransforms: z.array(z.string().min(1))
+    .transform(normalizeNonBlankStringArray)
+    .optional(),
   // A malformed hand edit must not silently stop opening the browser: fall back
   // to undefined, which resolves to the historical auto-open behavior.
   oauthOpenBrowser: z.boolean().optional().catch(undefined),

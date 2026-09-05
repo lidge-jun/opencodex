@@ -1,4 +1,5 @@
 import type { Server } from "bun";
+import { applyRequestTransforms } from "../../transforms";
 import { randomUUID } from "node:crypto";
 import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse, type ResponsesTerminalStatus } from "../../bridge";
 import { formatPassthroughUpstreamError } from "./passthrough-error";
@@ -3252,6 +3253,14 @@ async function handleResponsesInner(
     inboundWire,
     inboundTransport: options.inboundTransport,
   });
+  parsed = await applyRequestTransforms({
+    parsed,
+    providerName: route.providerName,
+    modelId: route.modelId,
+    providerConfig: route.provider,
+    config,
+  });
+  toolBridgeMaps = buildToolBridgeMaps(parsed, translatorBudget);
   // Attribute local auth/cooldown failures to the public selector too; exact auth may fail before
   // the normal post-resolution provider label is assigned.
   if (route.codexAccountNamespace) {

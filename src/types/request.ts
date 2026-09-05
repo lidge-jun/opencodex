@@ -51,6 +51,11 @@ export interface OcxParsedRequest {
   options: OcxRequestOptions;
   _rawBody?: unknown;
   /**
+   * True when requestTransforms have already been evaluated for this request turn.
+   * Prevents duplicate execution across internal retries, continuations, or replays.
+   */
+  _requestTransformsApplied?: boolean;
+  /**
    * Boundary between replayed history and this turn's newly appended input. Usually the
    * items the proxy restored from local previous_response_id state; also set when the
    * CLIENT already carried that history verbatim and the proxy skipped the prepend.
