@@ -17,6 +17,7 @@ import {
   parseXaiCreditsResponse,
   QUOTA_RESPONSE_MAX_BYTES,
   readProviderQuotaJsonForTests,
+  setAntigravityAccountQuotaTransportForTests,
   setProviderQuotaBeforePublishForTests,
 } from "../../src/providers/quota";
 import type { OcxConfig } from "../../src/types";
@@ -93,6 +94,7 @@ afterEach(() => {
   clearAccountQuota();
   clearProviderQuotaCache();
   setProviderQuotaBeforePublishForTests(null);
+  setAntigravityAccountQuotaTransportForTests(null);
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
@@ -2812,12 +2814,13 @@ describe("fetchProviderQuotaReports", () => {
     });
 
     const seen: Array<{ url: string; auth?: string; body?: string }> = [];
-    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      const headers = init?.headers as Record<string, string> | undefined;
-      seen.push({ url, auth: headers?.Authorization, body: typeof init?.body === "string" ? init.body : undefined });
-
-      if (url.endsWith("retrieveUserQuotaSummary")) {
+    globalThis.fetch = (async () => { throw new Error("plain fetch must not be used for account bearers"); }) as typeof fetch;
+    setAntigravityAccountQuotaTransportForTests({
+      resolveAddresses: async () => ({ hostname: "daily-cloudcode-pa.googleapis.com", addresses: [{ address: "142.250.0.1", family: 4 }], privateNetwork: false }),
+      pinnedPost: async (url, _pinned, body, _signal, requestOptions) => {
+        const auth = new Headers(requestOptions?.headers).get("authorization") ?? undefined;
+        seen.push({ url, auth, body: typeof body === "string" ? body : undefined });
+        if (!url.endsWith("retrieveUserQuotaSummary")) return new Response("not found", { status: 404 });
         return new Response(JSON.stringify({
           groups: [
             {
@@ -2862,9 +2865,8 @@ describe("fetchProviderQuotaReports", () => {
             },
           ],
         }), { status: 200, headers: { "content-type": "application/json" } });
-      }
-      return new Response("not found", { status: 404 });
-    }) as typeof fetch;
+      },
+    });
 
     const config = {
       defaultProvider: "google-antigravity",
@@ -2901,9 +2903,11 @@ describe("fetchProviderQuotaReports", () => {
       projectId: "agy-nested-project",
     });
 
-    globalThis.fetch = (async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.endsWith("retrieveUserQuotaSummary")) {
+    globalThis.fetch = (async () => { throw new Error("plain fetch must not be used for account bearers"); }) as typeof fetch;
+    setAntigravityAccountQuotaTransportForTests({
+      resolveAddresses: async () => ({ hostname: "daily-cloudcode-pa.googleapis.com", addresses: [{ address: "142.250.0.1", family: 4 }], privateNetwork: false }),
+      pinnedPost: async (url) => {
+        if (!url.endsWith("retrieveUserQuotaSummary")) return new Response("not found", { status: 404 });
         return new Response(JSON.stringify({
           groups: [
             {
@@ -2951,9 +2955,8 @@ describe("fetchProviderQuotaReports", () => {
             },
           ],
         }), { status: 200, headers: { "content-type": "application/json" } });
-      }
-      return new Response("not found", { status: 404 });
-    }) as typeof fetch;
+      },
+    });
 
     const config = {
       defaultProvider: "google-antigravity",
@@ -2975,6 +2978,96 @@ describe("fetchProviderQuotaReports", () => {
       { label: "Cla", percent: 10, resetAt: Date.parse("2026-09-04T09:00:00Z") },
       { label: "Cla (Weekly)", percent: 15, resetAt: Date.parse("2026-09-11T09:00:00Z") },
     ]);
+  });
+
+  // The provider-level Antigravity probe carries the stored account bearer. A configured
+  // `baseUrl` is a routing choice for model requests, not a second source of Google's
+  // accounting, so the summary probe stays pinned to Google's own host — the same guarantee
+  // `fetchAntigravityUsageQuota` already makes for the per-account path.
+  test("Google Antigravity does not send the account bearer to a configured baseUrl", async () => {
+    await saveCredential("google-antigravity", {
+      access: "agy-pinned-access",
+      refresh: "agy-pinned-refresh",
+      expires: Date.now() + 3600_000,
+      projectId: "agy-pinned-project",
+    });
+
+    const plainFetchUrls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      plainFetchUrls.push(String(input));
+      throw new Error("plain fetch must not be used for account bearers");
+    }) as typeof fetch;
+
+    const seen: Array<{ url: string; auth?: string; hostname: string }> = [];
+    setAntigravityAccountQuotaTransportForTests({
+      resolveAddresses: async (url: string) => {
+        seen.push({ url, hostname: new URL(url).hostname });
+        return { hostname: new URL(url).hostname, addresses: [{ address: "142.250.0.1", family: 4 }], privateNetwork: false };
+      },
+      pinnedPost: async (url, _pinned, _body, _signal, requestOptions) => {
+        seen.push({ url, auth: new Headers(requestOptions?.headers).get("authorization") ?? undefined, hostname: new URL(url).hostname });
+        if (!url.endsWith("retrieveUserQuotaSummary")) return new Response("not found", { status: 404 });
+        return new Response(JSON.stringify({
+          groups: [{
+            displayName: "Gemini Models",
+            buckets: [{ bucketId: "gemini-5h", window: "5h", resetTime: "2026-09-04T08:00:00Z", remainingFraction: 0.6 }],
+          }],
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      },
+    });
+
+    const result = await fetchProviderQuotaReports({
+      defaultProvider: "google-antigravity",
+      providers: {
+        "google-antigravity": {
+          adapter: "google",
+          authMode: "oauth",
+          baseUrl: "http://127.0.0.1:1/",
+        },
+      },
+    } as unknown as OcxConfig, true);
+
+    expect(result.reports).toHaveLength(1);
+    expect(result.reports[0]!.source).toBe("google-antigravity:retrieveUserQuotaSummary");
+    // Every bearer-carrying request went to Google's own host, not the configured loopback base.
+    expect(seen.map(entry => entry.hostname)).toEqual(["daily-cloudcode-pa.googleapis.com", "daily-cloudcode-pa.googleapis.com"]);
+    expect(seen.find(entry => entry.auth)?.url).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary");
+    expect(seen.find(entry => entry.auth)?.auth).toBe("Bearer agy-pinned-access");
+    expect(plainFetchUrls).toEqual([]);
+  });
+
+  test("Google Antigravity refuses a redirected summary response", async () => {
+    await saveCredential("google-antigravity", {
+      access: "agy-redirect-access",
+      refresh: "agy-redirect-refresh",
+      expires: Date.now() + 3600_000,
+      projectId: "agy-redirect-project",
+    });
+    globalThis.fetch = (async () => { throw new Error("plain fetch must not be used for account bearers"); }) as typeof fetch;
+
+    const posted: string[] = [];
+    setAntigravityAccountQuotaTransportForTests({
+      resolveAddresses: async () => ({ hostname: "daily-cloudcode-pa.googleapis.com", addresses: [{ address: "142.250.0.1", family: 4 }], privateNetwork: false }),
+      pinnedPost: async (url) => {
+        posted.push(url);
+        return new Response(null, { status: 302, headers: { location: "http://127.0.0.1/" } });
+      },
+    });
+
+    const result = await fetchProviderQuotaReports({
+      defaultProvider: "google-antigravity",
+      providers: {
+        "google-antigravity": {
+          adapter: "google",
+          authMode: "oauth",
+          baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+        },
+      },
+    } as unknown as OcxConfig, true);
+
+    expect(result.reports).toEqual([]);
+    // The redirect short-circuits the summary probe; the redirect target is never fetched.
+    expect(posted).toEqual(["https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"]);
   });
 
   test("Ollama Cloud maps 5-hour session and weekly windows from /api/usage (legacy plan)", async () => {

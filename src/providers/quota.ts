@@ -2546,9 +2546,13 @@ async function fetchAntigravityQuota(provider: string, config: OcxProviderConfig
   }
   const baseUrl = (config.baseUrl || ANTIGRAVITY_ACCOUNT_QUOTA_BASE).replace(/\/+$/, "");
 
+  // The summary probe is pinned to Google's own host through the provider-outbound
+  // transport, mirroring `fetchAntigravityUsageQuota` above: a configured `baseUrl` is a
+  // routing choice for requests, not a second source of Google's accounting, and this
+  // request carries the account bearer.
+  const summaryUrl = `${ANTIGRAVITY_ACCOUNT_QUOTA_BASE}/v1internal:retrieveUserQuotaSummary`;
   try {
-    const summaryResponse = await fetch(`${baseUrl}/v1internal:retrieveUserQuotaSummary`, {
-      method: "POST",
+    const summaryResponse = await providerOutboundPost("google-antigravity", { baseUrl: ANTIGRAVITY_ACCOUNT_QUOTA_BASE }, summaryUrl, {
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
@@ -2557,7 +2561,8 @@ async function fetchAntigravityQuota(provider: string, config: OcxProviderConfig
       },
       body: JSON.stringify({ project: credential.projectId }),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
+    }, antigravityOutboundDependencies);
+    if (await providerRedirectError(summaryResponse, summaryUrl)) return null;
     if (summaryResponse.status === 401 || summaryResponse.status === 403) return null;
     if (summaryResponse.ok) {
       const quota = parseAntigravityQuotaSummary(asRecord(await readQuotaJson(summaryResponse)));
