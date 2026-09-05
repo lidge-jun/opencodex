@@ -679,10 +679,39 @@ function routeModelInternal(
   //    no such provider exists.
   if (slash > 0) {
     const requestedProvider = modelId.slice(0, slash);
-    const provName = hasOwnProvider(config.providers, requestedProvider)
-      ? requestedProvider
-      : Object.entries(config.providers).find(([, provider]) =>
-        typeof provider.alias === "string" && provider.alias.toLowerCase() === requestedProvider.toLowerCase())?.[0];
+    const requestedLower = requestedProvider.toLowerCase();
+    let provName: string | undefined;
+
+    if (hasOwnProvider(config.providers, requestedProvider)) {
+      provName = requestedProvider;
+    } else {
+      // Pass 1: explicit configured provider aliases (operator override always wins)
+      const configuredMatches = Object.entries(config.providers).filter(([, provider]) =>
+        typeof provider.alias === "string" && provider.alias.trim().toLowerCase() === requestedLower,
+      );
+      if (configuredMatches.length === 1) {
+        provName = configuredMatches[0]![0];
+      } else if (configuredMatches.length > 1) {
+        throw new Error("provider alias '" + requestedProvider + "' is ambiguous: " + configuredMatches.map(([n]) => n).sort().join(", "));
+      } else {
+        // Pass 2: built-in registry aliases, only for providers that do NOT have an explicit alias override
+        // and whose registry alias has not been claimed by another configured provider (#3531 review)
+        const registryMatches = Object.entries(config.providers).filter(([name, provider]) => {
+          if (provider.alias !== undefined) return false;
+          const regAlias = PROVIDER_REGISTRY.find(e => e.id === name)?.alias;
+          if (!regAlias || regAlias.toLowerCase() !== requestedLower) return false;
+          const claimedByOther = Object.entries(config.providers).some(([otherName, p]) =>
+            otherName !== name && typeof p.alias === "string" && p.alias.trim().toLowerCase() === requestedLower
+          );
+          return !claimedByOther;
+        });
+        if (registryMatches.length === 1) {
+          provName = registryMatches[0]![0];
+        } else if (registryMatches.length > 1) {
+          throw new Error("provider alias '" + requestedProvider + "' is ambiguous across registry fallbacks: " + registryMatches.map(([n]) => n).sort().join(", "));
+        }
+      }
+    }
     if (!provName) {
       // A genuine slash-containing native model id still falls through unchanged.
     } else {

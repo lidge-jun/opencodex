@@ -1,3 +1,4 @@
+import { effectiveProviderAlias, effectiveProviderAliasDecision } from "../../providers/default-aliases";
 import { execFileSync } from "node:child_process";
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
@@ -164,6 +165,7 @@ interface CapturedProviderGather {
   readonly request: CapturedModelsRequest;
   readonly fastPolicyAuthority: FastPolicyAuthority;
   readonly metadataModelIdCaseFold: boolean;
+  readonly effectiveAlias?: string | null;
   readonly observedAuth?: ModelsAuthResolution;
   /**
    * Configured model ids this provider must keep even when live discovery omits
@@ -414,6 +416,7 @@ function captureProviderGather(
   configured: OcxProviderConfig,
   authResolver: ModelsAuthResolver,
   retainConfiguredModelIds?: ReadonlySet<string>,
+  config?: Pick<OcxConfig, "providers">,
 ): CapturedProviderGather {
   const enriched = detachedClone(withCanonicalOpenAiForwardAuthDefault(name, configured));
   enrichProviderFromRegistry(name, enriched);
@@ -455,6 +458,7 @@ function captureProviderGather(
     maxModels: discovery.maxModels,
     trustedOpenAiApi,
   });
+  const effectiveAlias = effectiveProviderAliasDecision(name, configured, config);
   return Object.freeze({
     name,
     provider,
@@ -463,6 +467,7 @@ function captureProviderGather(
     request,
     fastPolicyAuthority,
     metadataModelIdCaseFold,
+    effectiveAlias,
     ...(observedAuth ? { observedAuth: Object.freeze({ ...observedAuth }) } : {}),
     ...(retainConfiguredModelIds && retainConfiguredModelIds.size > 0
       ? { retainConfiguredModelIds }
@@ -504,6 +509,7 @@ function captureGatherFlight(
       provider,
       authResolver,
       comboTargetsByProvider.get(name),
+      config,
     ));
   const discoveryPolicySnapshots = Object.freeze(providers.map(provider => provider.policy));
   return Object.freeze({
@@ -729,8 +735,10 @@ export function applyProviderConfigHints(
   model: CatalogModel,
   providerCap?: number,
   metadataModelIdCaseFold?: boolean,
+  effectiveAlias?: string | null,
 ): CatalogModel {
   const displayName = configuredModelDisplayName(prov, model.id);
+  const providerAlias = typeof effectiveAlias === "string" || effectiveAlias === null ? effectiveAlias : effectiveProviderAliasDecision(name, prov);
   const configuredCap = configuredContextWindow(prov, model.id);
   const configuredMaxInput = configuredMaxInputTokens(prov, model.id);
   const maxOutputTokens = routedMaxOutputTokens(name, prov, model, model.id, metadataModelIdCaseFold);
@@ -756,6 +764,7 @@ export function applyProviderConfigHints(
   const {
     supportsServiceTier: _staleServiceTier,
     fastTierDescription: _staleFastTierDescription,
+    providerAlias: _staleProviderAlias,
     ...modelWithoutServiceTier
   } = model;
   // 已发现窗口只允许被配置值压低；缺窗口时，已开的 Context cap 就是实际窗口。
@@ -768,6 +777,7 @@ export function applyProviderConfigHints(
   const hinted = {
     ...modelWithoutServiceTier,
     ...(displayName !== undefined ? { displayName } : {}),
+    ...(providerAlias !== undefined ? { providerAlias } : {}),
     ...(hintedWindow !== undefined ? { contextWindow: hintedWindow } : {}),
     ...(inputModalities ? { inputModalities } : {}),
     ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
@@ -827,8 +837,9 @@ export function catalogHintsFromProviderConfig(
   id: string,
   contextCap?: number,
   metadataModelIdCaseFold?: boolean,
+  effectiveAlias?: string | null,
 ): Partial<CatalogModel> {
-  const hinted = applyProviderConfigHints(name, prov, { id, provider: name }, contextCap, metadataModelIdCaseFold);
+  const hinted = applyProviderConfigHints(name, prov, { id, provider: name }, contextCap, metadataModelIdCaseFold, effectiveAlias);
   const { provider: _provider, id: _id, ...hints } = hinted;
   return hints;
 }
@@ -839,8 +850,9 @@ export function applyConfigHintsToCachedModels(
   models: CatalogModel[],
   contextCap?: number,
   metadataModelIdCaseFold?: boolean,
+  effectiveAlias?: string | null,
 ): CatalogModel[] {
-  return models.map(model => applyProviderConfigHints(name, prov, model, contextCap, metadataModelIdCaseFold));
+  return models.map(model => applyProviderConfigHints(name, prov, model, contextCap, metadataModelIdCaseFold, effectiveAlias));
 }
 
 
@@ -1468,7 +1480,7 @@ async function fetchProviderModelsWithAuth(
   const configured: CatalogModel[] = configuredIds.map(id => ({
     id,
     provider: name,
-    ...catalogHintsFromProviderConfig(name, prov, id, contextCap, metadataModelIdCaseFold),
+    ...catalogHintsFromProviderConfig(name, prov, id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias),
   }));
   const withConfiguredRetention = (
     models: CatalogModel[],
@@ -1522,7 +1534,7 @@ async function fetchProviderModelsWithAuth(
     : [{
       id: prov.defaultModel,
       provider: name,
-      ...catalogHintsFromProviderConfig(name, prov, prov.defaultModel, contextCap, metadataModelIdCaseFold),
+      ...catalogHintsFromProviderConfig(name, prov, prov.defaultModel, contextCap, metadataModelIdCaseFold, captured.effectiveAlias),
     }];
   const vertexDefaultSeed = seedVertexDefault ? configured[0] : undefined;
   const withVertexDefaultSeed = (models: CatalogModel[]): CatalogModel[] => (
@@ -1539,7 +1551,7 @@ async function fetchProviderModelsWithAuth(
     const cachedCursor = getFreshCached(name, ttlMs);
     if (cachedCursor) {
       return observed(
-        withConfiguredRetention(applyConfigHintsToCachedModels(name, prov, cachedCursor, undefined, metadataModelIdCaseFold)),
+        withConfiguredRetention(applyConfigHintsToCachedModels(name, prov, cachedCursor, undefined, metadataModelIdCaseFold, captured.effectiveAlias)),
         "authoritative",
       );
     }
@@ -1547,7 +1559,7 @@ async function fetchProviderModelsWithAuth(
       const cooling = getStaleCached(name);
       return observed(
         withConfiguredRetention(
-          cooling ? applyConfigHintsToCachedModels(name, prov, cooling, undefined, metadataModelIdCaseFold) : configured,
+          cooling ? applyConfigHintsToCachedModels(name, prov, cooling, undefined, metadataModelIdCaseFold, captured.effectiveAlias) : configured,
         ),
         "degraded",
       );
@@ -1588,7 +1600,7 @@ async function fetchProviderModelsWithAuth(
     const staleCursor = getStaleCached(name);
     return observed(
       withConfiguredRetention(
-        staleCursor ? applyConfigHintsToCachedModels(name, prov, staleCursor, undefined, metadataModelIdCaseFold) : configured,
+        staleCursor ? applyConfigHintsToCachedModels(name, prov, staleCursor, undefined, metadataModelIdCaseFold, captured.effectiveAlias) : configured,
       ),
       "degraded",
     );
@@ -1606,7 +1618,7 @@ async function fetchProviderModelsWithAuth(
   if (fresh) {
     return observed(
       withConfiguredRetention(
-        withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, fresh, contextCap, metadataModelIdCaseFold)),
+        withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, fresh, contextCap, metadataModelIdCaseFold, captured.effectiveAlias)),
       ),
       "authoritative",
     ); // dedups Codex's frequent /v1/models polling within the TTL
@@ -1618,7 +1630,7 @@ async function fetchProviderModelsWithAuth(
     return observed(
       withConfiguredRetention(
         stale
-          ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold))
+          ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias))
           : failedDiscoveryConfigured,
       ),
       "degraded",
@@ -1658,7 +1670,7 @@ async function fetchProviderModelsWithAuth(
     return {
       models: withConfiguredRetention(
         stale
-          ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold))
+          ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias))
           : failedDiscoveryConfigured,
       ),
       fallback: stale ? "stale" : "configured",
@@ -1735,7 +1747,7 @@ async function fetchProviderModelsWithAuth(
         reasoningEfforts: [],
         ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
         ...(model.inputModalities ? { inputModalities: model.inputModalities } : {}),
-      }, contextCap, metadataModelIdCaseFold));
+      }, contextCap, metadataModelIdCaseFold, captured.effectiveAlias));
       const forCache = withConfiguredRetention(live, { retainComboTargets: false });
       if (!setCached(name, forCache, Date.now(), cacheGeneration)) {
         return observed(withConfiguredRetention(configured), "degraded");
@@ -1798,7 +1810,7 @@ async function fetchProviderModelsWithAuth(
         provider: name,
         ...(ownedBy ? { owned_by: ownedBy } : {}),
         ...discoveredHints,
-      }, contextCap, metadataModelIdCaseFold);
+      }, contextCap, metadataModelIdCaseFold, captured.effectiveAlias);
     })
       .filter(m => shouldExposeProviderModel(name, m.id));
     // Capture the count BEFORE the alias/configured augmentation below pushes extra rows into
