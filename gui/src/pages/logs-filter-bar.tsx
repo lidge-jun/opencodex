@@ -2,6 +2,7 @@ import type { TFn } from "../i18n/shared";
 import { IconX } from "../icons";
 import { formatProviderDisplayName } from "../provider-icons";
 import type { LogFilterState, LogStatusFilter, LogTimeWindow } from "./logs-filter";
+import { logsSurfaceKeyDown } from "./logs-surface-keydown";
 
 interface LogsFilterBarProps {
   filters: LogFilterState;
@@ -45,9 +46,12 @@ export function LogsFilterBar({
               type="button"
               role="radio"
               aria-checked={filters.surface === surface}
+              id={`logs-surface-${surface}`}
+              tabIndex={filters.surface === surface ? 0 : -1}
               className={`btn btn-sm${filters.surface === surface ? " btn-primary" : " btn-ghost"}`}
               style={{ background: filters.surface === surface ? undefined : "transparent", color: filters.surface === surface ? undefined : "var(--muted)" }}
               onClick={() => onFilterChange({ ...filters, surface })}
+              onKeyDown={event => logsSurfaceKeyDown(event, surface, nextSurface => onFilterChange({ ...filters, surface: nextSurface }))}
             >
               {t(`logs.filter.surface.${surface}`)}
             </button>

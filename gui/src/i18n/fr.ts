@@ -683,7 +683,7 @@ export const fr: Record<TKey, string> = {
   "logs.filter.speed.medium": "15–< 50 jetons/s",
   "logs.filter.speed.fast": "≥ 50 jetons/s",
   "logs.filter.reset": "Réinitialiser les filtres",
-  "logs.filter.showingCount": "{count} sur {total} affichées",
+  "logs.filter.showingCount": "Affichage de {count} sur {total}",
   "logs.noMatchingRequests": "Aucune requête correspondante.",
   "logs.filter.surface.all": "Toutes",
   "logs.filter.surface.claude": "Claude",

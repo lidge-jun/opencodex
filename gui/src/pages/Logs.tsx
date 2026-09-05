@@ -257,6 +257,10 @@ function formatTokPerSecond(result: TokPerSecondResult | undefined, localeTag?: 
 }
 
 const LOGS_POLL_INTERVAL_MS = 2000;
+// Relative time filters must advance even when the polled snapshot is unchanged. Keep the
+// refresh independent from the network poll so an active 15m/1h/24h window expires rows while
+// the proxy is idle.
+const LOGS_FILTER_CLOCK_INTERVAL_MS = 30_000;
 const LOGS_POLL_BACKOFF_MAX_EXPONENT = 4;
 /** Consecutive failed polls before a stale table is called out. */
 const STALE_POLL_FAILURE_LIMIT = 3;
@@ -376,6 +380,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   );
   const [detail, setDetail] = useState<LogEntry | null>(null);
   const [filters, setFilters] = useState<LogFilterState>(DEFAULT_LOG_FILTER_STATE);
+  const [filterClockNow, setFilterClockNow] = useState(() => Date.now());
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const logRetryRef = useRef<{ key: string; failures: number; nextAttemptAt: number; error: unknown }>(
     { key: resourceKey, failures: 0, nextAttemptAt: 0, error: null },
@@ -500,6 +505,13 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   const conversationQuery = filters.conversationId.trim();
 
   useEffect(() => {
+    if (filters.timeWindow === "all" || tab !== "logs") return;
+    setFilterClockNow(Date.now());
+    const timer = window.setInterval(() => setFilterClockNow(Date.now()), LOGS_FILTER_CLOCK_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [filters.timeWindow, tab]);
+
+  useEffect(() => {
     let cancelled = false;
     if (!conversationQuery) {
       setFilters(prev => prev.conversationQueryHash === undefined ? prev : { ...prev, conversationQueryHash: undefined });
@@ -512,8 +524,24 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   }, [conversationQuery]);
 
   const filterOptions = useMemo(() => extractLogFilterOptions(logs), [logs]);
+  // A selected option can disappear when the bounded log snapshot rolls over. Native
+  // <select> controls render such a value as an unlabeled/blank selection while the
+  // filter still excludes every row. Clear only the vanished model/provider identity;
+  // all other filters remain intact and the control returns to its explicit "All" option.
+  useEffect(() => {
+    const model = filters.model.trim().toLowerCase();
+    const provider = filters.provider.trim().toLowerCase();
+    const modelStillPresent = !model || filterOptions.models.some(option => option.trim().toLowerCase() === model);
+    const providerStillPresent = !provider || filterOptions.providers.some(option => option.trim().toLowerCase() === provider);
+    if (modelStillPresent && providerStillPresent) return;
+    setFilters(previous => ({
+      ...previous,
+      ...(modelStillPresent ? {} : { model: "" }),
+      ...(providerStillPresent ? {} : { provider: "" }),
+    }));
+  }, [filterOptions, filters.model, filters.provider]);
   const activeFilters = hasActiveLogFilters(filters);
-  const filteredLogs = useMemo(() => filterLogs(logs, filters), [logs, filters]);
+  const filteredLogs = useMemo(() => filterLogs(logs, filters, filterClockNow), [logs, filters, filterClockNow]);
   const conversationTotals = conversationQuery ? summarizeFilteredLogs(filteredLogs) : null;
 
   // TanStack Virtual returns unstable function identities; React Compiler skips this call.

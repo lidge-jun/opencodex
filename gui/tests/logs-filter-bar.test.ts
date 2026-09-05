@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
 import { DEFAULT_LOG_FILTER_STATE, type LogFilterState } from "../src/pages/logs-filter";
 import { LogsFilterBar } from "../src/pages/logs-filter-bar";
+import { logsSurfaceKeyDown } from "../src/pages/logs-surface-keydown";
 
 test("Logs mounts the shared rich-filter predicate and filter bar", async () => {
   const source = await Bun.file(new URL("../src/pages/Logs.tsx", import.meta.url)).text();
@@ -13,6 +14,13 @@ test("Logs mounts the shared rich-filter predicate and filter bar", async () => 
   expect(source).toContain("extractLogFilterOptions(logs)");
   expect(source).not.toContain("logMatchesSurface(log, surfaceFilter)");
   expect(source).not.toContain("logMatchesModelQuery(log, modelFilter)");
+});
+
+test("relative time filters refresh their clock when the log snapshot is unchanged", async () => {
+  const source = await Bun.file(new URL("../src/pages/Logs.tsx", import.meta.url)).text();
+  expect(source).toContain("const [filterClockNow, setFilterClockNow] = useState(() => Date.now());");
+  expect(source).toContain("window.setInterval(() => setFilterClockNow(Date.now()), LOGS_FILTER_CLOCK_INTERVAL_MS)");
+  expect(source).toContain("filterLogs(logs, filters, filterClockNow)");
 });
 
 test("LogsFilterBar exposes every engine filter field and reset affordance", async () => {
@@ -25,6 +33,29 @@ test("LogsFilterBar exposes every engine filter field and reset affordance", asy
     expect(source).toContain(key);
   }
   expect(source).toContain('t("logs.filter.reset")');
+});
+
+test("surface radios support wrapping arrows and Home/End with roving focus", () => {
+  const previousDocument = globalThis.document;
+  const win = new Window();
+  Object.defineProperty(globalThis, "document", { configurable: true, value: win.document });
+  for (const surface of ["all", "claude", "codex", "grok"]) {
+    const button = win.document.createElement("button");
+    button.id = `logs-surface-${surface}`;
+    win.document.body.append(button);
+  }
+  const selected: string[] = [];
+  const key = (value: string) => ({ key: value, preventDefault() {}, } as never);
+  logsSurfaceKeyDown(key("ArrowRight"), "grok", surface => selected.push(surface));
+  expect(selected).toEqual(["all"]);
+  expect(win.document.activeElement?.id).toBe("logs-surface-all");
+  logsSurfaceKeyDown(key("Home"), "codex", surface => selected.push(surface));
+  expect(selected).toEqual(["all", "all"]);
+  expect(win.document.activeElement?.id).toBe("logs-surface-all");
+  logsSurfaceKeyDown(key("Enter"), "all", surface => selected.push(surface));
+  expect(selected).toHaveLength(2);
+  Object.defineProperty(globalThis, "document", { configurable: true, value: previousDocument });
+  win.close();
 });
 
 test("LogsFilterBar renders labeled controls, count, and reset interaction", async () => {
