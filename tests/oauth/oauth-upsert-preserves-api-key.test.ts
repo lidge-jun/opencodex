@@ -3,6 +3,8 @@ import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { upsertOAuthProvider } from "../../src/oauth";
+import { migrateXaiResponsesDefault } from "../../src/providers/xai-responses-opt-in";
+import { resolveWireProtocolOverride } from "../../src/server/adapter-resolve";
 import {
   apiKeyPoolEntryId,
   listProviderApiKeys,
@@ -36,6 +38,26 @@ function configWithKey(provider: string, adapter: string, baseUrl: string): OcxC
 }
 
 describe("upsertOAuthProvider credential preservation", () => {
+  test.each([undefined, 1, 2])("Grok login preserves wire choice and migration version %j", version => {
+    const config = configWithKey("xai", "openai-chat", "https://api.x.ai/v1");
+    const before = config.providers.xai!;
+    before.authMode = "oauth";
+    before.xaiResponsesDefaultVersion = version;
+    before.modelAdapters = { "grok-4.6": "openai-chat", "grok-4.5": "openai-chat", other: "openai-responses" };
+    upsertOAuthProvider(config, "xai");
+    expect(config.providers.xai!.modelAdapters).toEqual(before.modelAdapters);
+    expect(config.providers.xai!.modelAdapters).not.toBe(before.modelAdapters);
+    expect(config.providers.xai!.xaiResponsesDefaultVersion).toBe(version);
+    expect(migrateXaiResponsesDefault(config)).toBe(version === undefined);
+    const expected = version === undefined ? "openai-responses" : "openai-chat";
+    for (const model of ["grok-4.5", "grok-4.6"]) {
+      expect(resolveWireProtocolOverride("xai", model, config.providers.xai!).adapter).toBe(expected);
+    }
+    expect(config.providers.xai!.modelAdapters!.other).toBe("openai-responses");
+    upsertOAuthProvider(config, "xai");
+    expect(migrateXaiResponsesDefault(config)).toBe(false);
+  });
+
   test("keeps a stored API key and the explicit key billing mode for xai", () => {
     const config = configWithKey("xai", "openai-chat", "https://api.x.ai/v1");
     upsertOAuthProvider(config, "xai");

@@ -84,7 +84,7 @@ describe("native routed code-mode result visibility", () => {
     [{ type: "input_text", text: empty }, { type: "input_image", image_url: "https://example.test/image.png" }],
     [{ type: "input_file", file_id: "file_probe" }],
     null,
-  ])("preserves populated, multimodal and incomplete results %#", output => {
+  ].map(output => ({ output })))("preserves populated, multimodal and incomplete results %#", ({ output }) => {
     const body = raw(output);
     const normalized = normalizeResponsesCodeMode(body, parseRequest(body), routed) as typeof body;
     expect(normalized.input[1]).toBe(body.input[1]);

@@ -1446,6 +1446,13 @@ export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
   if (existing?.commandCodeVersion !== undefined) {
     next.commandCodeVersion = existing.commandCodeVersion;
   }
+  // Reauth/add-account refreshes credentials, not the operator's post-upgrade wire choice.
+  if (provider === "xai") {
+    if (existing?.modelAdapters !== undefined) next.modelAdapters = { ...existing.modelAdapters };
+    if (existing?.xaiResponsesDefaultVersion !== undefined) {
+      next.xaiResponsesDefaultVersion = existing.xaiResponsesDefaultVersion;
+    }
+  }
   // User-configured price overlays are operator data, not preset state; a
   // re-login, add-account, or reauth must not silently drop them from the
   // Logs/Usage estimates.
