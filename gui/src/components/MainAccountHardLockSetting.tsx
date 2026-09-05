@@ -123,11 +123,15 @@ function HardLockSetting({ apiBase, onSaved }: Props) {
 
   useEffect(() => {
     if (confirming || saving || !restoreFocusRef.current) return;
-    restoreFocusRef.current = false;
-    // On an unconfirmed save the switch is disabled until the authoritative read lands.
-    if (toggleRef.current && !toggleRef.current.disabled) toggleRef.current.focus();
-    else sectionRef.current?.focus();
-  }, [confirming, saving]);
+    if (toggleRef.current && !toggleRef.current.disabled) {
+      toggleRef.current.focus();
+      restoreFocusRef.current = false;
+    } else {
+      // Keep the intent through failed/pending authoritative reads: the section is
+      // focusable while the switch is disabled, and a successful GET completes restoration.
+      sectionRef.current?.focus();
+    }
+  }, [confirming, saving, loadError, snapshot]);
 
   const refreshMain = async () => {
     let confirmed = false;
@@ -198,7 +202,13 @@ function HardLockSetting({ apiBase, onSaved }: Props) {
   return (
     <section ref={sectionRef} id="codex-main-hard-lock-setting" tabIndex={-1}
       className="card card-row codex-main-hard-lock-setting" aria-labelledby={`${id}-title`}
-      aria-busy={saving || (!snapshot && !loadError) || undefined}>
+      aria-busy={saving || (!snapshot && !loadError) || undefined}
+      onBlurCapture={event => {
+        // A deliberate departure cancels restoration; disabled controls can blur to null.
+        if (event.relatedTarget !== null && !event.currentTarget.contains(event.relatedTarget)) {
+          restoreFocusRef.current = false;
+        }
+      }}>
       <div className="codex-main-hard-lock-copy">
         <strong id={`${id}-title`}>{t("codexAuth.mainHardLockTitle")}</strong>
         <div id={`${id}-desc`} className="card-sub">{t("codexAuth.mainHardLockDesc")}</div>
@@ -208,8 +218,9 @@ function HardLockSetting({ apiBase, onSaved }: Props) {
         aria-label={t("codexAuth.mainHardLockTitle")} aria-describedby={`${id}-desc`}
         onClick={() => {
           if (busyRef.current || enabled === undefined || loadError) return;
+          restoreFocusRef.current = true;
           if (enabled) void save(false);
-          else { restoreFocusRef.current = true; setConfirming(true); }
+          else setConfirming(true);
         }}><span className="toggle-knob" /></button>
       <div className="codex-main-hard-lock-feedback">
         {(saveError || loadError) && <p role="alert">{t(saveError ? "codexAuth.mainHardLockSaveFailed" : "codexAuth.mainHardLockLoadFailed")}{" "}

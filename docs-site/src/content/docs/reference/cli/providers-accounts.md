@@ -104,8 +104,9 @@ The policy uses the **5h window when present**, otherwise the weekly window. Mon
 accounts use their monthly window. It does not take the highest percentage across windows.
 A fresh **0%** observation automatically releases the block while the switch stays on; the next
 99% observation blocks again. Unknown usage does not fabricate a zero, and a missing reading does
-not erase an already measured blocking tuple. Other pause, reauthentication, and upstream limits
-remain independent.
+not erase an already measured blocking tuple. A predicted reset time alone does not unlock it.
+While blocked, the existing once-per-minute background cycle checks fresh owned usage; failed or
+invalid readings retain the block. Other pause, reauthentication, and upstream limits remain independent.
 
 The persisted option is `"codexMainAccountHardLock": true` in OpenCodex's `config.json`; it is off
 by default. This protects new requests using the identified main account, not the last 1% itself:

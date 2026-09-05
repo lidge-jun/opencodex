@@ -174,9 +174,23 @@ describe("main account protection setting", () => {
   });
 
   test("a failed PUT never exposes private server detail and preserves a retry path", async () => {
-    const host = await mount((async (_input, init) => init?.method === "PUT"
-      ? response({ error: "private account detail" }, 500) : response(settings(true))) as typeof fetch);
+    const reload = deferred<Response>();
+    let reads = 0;
+    let retry = false;
+    const host = await mount((async (_input, init) => {
+      if (init?.method === "PUT") return response({ error: "private account detail" }, 500);
+      return ++reads === 1 || retry ? response(settings(true)) : reload.promise;
+    }) as typeof fetch);
+    toggle(host).focus();
     await click(toggle(host));
+    expect(toggle(host).disabled).toBe(true);
+    expect(testWindow.document.activeElement?.id).toBe("codex-main-hard-lock-setting");
+    await act(async () => { reload.resolve(response({}, 503)); await flush(); });
+    expect(toggle(host).disabled).toBe(true);
+    expect(testWindow.document.activeElement?.id).toBe("codex-main-hard-lock-setting");
+    retry = true;
+    await click(button(host, '.codex-main-hard-lock-feedback button'));
+    expect(testWindow.document.activeElement).toBe(toggle(host));
     expect(toggle(host).getAttribute("aria-pressed")).toBe("true");
     expect(toggle(host).disabled).toBe(false);
     expect(host.textContent).toContain("Could not confirm the save");
@@ -234,11 +248,15 @@ describe("main account protection setting", () => {
       return ++reads === 1 ? response(settings(true)) : stale.promise;
     }) as typeof fetch);
     await act(async () => { poll?.(); await flush(); });
+    toggle(host).focus();
     await click(toggle(host));
+    // Disabled native controls can lose focus; require restoration, not accidental retention.
+    host.querySelector<HTMLElement>("#codex-main-hard-lock-setting")!.focus();
     if (timing === "during") await act(async () => { stale.resolve(response(settings(true))); await flush(); });
     await act(async () => { put.resolve(response({ ok: true, ...settings(false) })); await flush(); });
     if (timing === "after") await act(async () => { stale.resolve(response(settings(true))); await flush(); });
     expect(toggle(host).getAttribute("aria-pressed")).toBe("false");
+    expect(testWindow.document.activeElement).toBe(toggle(host));
   });
 });
 
