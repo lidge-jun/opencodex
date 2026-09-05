@@ -114,6 +114,34 @@ describe("usage log", () => {
     expect(readUsageEntries()[0]?.attempts?.[0]?.recoveryKinds).toEqual(["rate-limit-429"]);
   });
 
+  test("persists the key-401 recovery kind on attempts", () => {
+    // ATTEMPT_RECOVERY_KINDS is the deserialization filter: a kind added to the type but not to
+    // the set writes fine and vanishes on read-back, so this must round-trip through the file
+    // rather than merely typecheck.
+    const entry: PersistedUsageEntry = {
+      requestId: "ocx-key-401-kind",
+      timestamp: 1,
+      provider: "blsc",
+      model: "blsc/DeepSeek-V4-Flash",
+      status: 200,
+      durationMs: 4,
+      usageStatus: "reported",
+      attempts: [{
+        ordinal: 1,
+        provider: "blsc",
+        model: "blsc/DeepSeek-V4-Flash",
+        adapter: "openai-chat",
+        status: 200,
+        durationMs: 4,
+        sendCount: 2,
+        recoveryKinds: ["key-401"],
+        usageStatus: "reported",
+      }],
+    };
+    appendUsageEntry(entry);
+    expect(readUsageEntries()[0]?.attempts?.[0]?.recoveryKinds).toEqual(["key-401"]);
+  });
+
   test("persists the empty-completion recovery kind on attempts", () => {
     const entry: PersistedUsageEntry = {
       requestId: "ocx-empty-completion-kind",

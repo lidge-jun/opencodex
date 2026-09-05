@@ -238,6 +238,7 @@ import {
   rateLimitRetryDelayMs,
   rateLimitRetryPolicyFor,
   rotateProviderTransportOn429,
+  rotateProviderTransportOn401,
   transientRetryPolicyFor,
 } from "../../providers/key-failover";
 import { shouldAttemptImageTierRetry } from "../image-retry";
@@ -6152,6 +6153,37 @@ async function handleResponsesInner(
         if ("failed" in result) return result.failed;
         upstreamResponse = result;
         continue recovery;
+      }
+
+      // Static API-key pools can recover a credential-scoped 401 without abandoning the
+      // provider: one revoked or mistyped key says nothing about its siblings. OAuth providers
+      // refresh above and never enter here — `hasKeyPoolFailover` rejects oauth/forward modes.
+      // Runs after the OAuth replay so a refreshable token is never treated as a dead key.
+      while (upstreamResponse.status === 401 && hasKeyPoolFailover(route.provider)) {
+        const rotated = rotateProviderTransportOn401(config, route.providerName, route.provider, {
+          now: Date.now(),
+          attemptedKey: route.provider.apiKey,
+          promptCacheKey: parsed.options.promptCacheKey,
+        });
+        if (!rotated) break;
+        // Release the failed response's socket before retrying; unread bodies otherwise linger
+        // until runtime cleanup (one per rotated key).
+        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+        route.provider = rotated;
+        invalidateSameTargetRequest();
+        activeAdapter = resolveAdapter(
+          resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
+          config.cacheRetention,
+        );
+        bindRouteReasoningReplayScope({
+          parsed,
+          providerName: route.providerName,
+          provider: route.provider,
+          adapterName: activeAdapter.name,
+        });
+        const result = await rebuildAndRefetch("key-401");
+        if ("failed" in result) return result.failed;
+        upstreamResponse = result;
       }
 
       // Same-target 429 wait-and-retry (opt-in `retryOn429`, issue #487). Codex never retries
