@@ -23,7 +23,7 @@ priorités `i * N + j`, où `j` est la position du sélecteur en base zéro ; un
 sont déplacées hors de ces groupes de sélecteurs. Codex continue de n’annoncer que les cinq premières
 lignes visibles dans le sélecteur.
 
-Les priorités sans sélecteur pertinentes sont :
+Sans ordre global du sélecteur, les priorités sans sélecteur pertinentes sont :
 
 | Entrée du catalogue | Priorité | Source |
 | --- | --- : | --- |
@@ -134,8 +134,29 @@ au-delà de ce bloc mis en avant :
 Les lignes routées indiquées apparaissent dans l’ordre configuré. Une ligne absente du tableau conserve sa
 priorité normale et reste donc devant la bande d’affichage de `modelPickerOrder` ; indiquez toutes les
 lignes routées dont vous souhaitez contrôler l’ordre relatif. Une ligne également présente dans
-`subagentModels` conserve sa priorité de mise en avant. `modelPickerOrder` ne réorganise ni les lignes
-natives non qualifiées ni celles qualifiées par un compte ; utilisez `subagentModels` pour celles-ci.
+`subagentModels` conserve sa priorité de mise en avant. Une liste contenant uniquement des identifiants
+routés conserve la position normale des lignes natives.
+
+Pour ordonner tout le sélecteur, incluez un identifiant natif non qualifié :
+
+```json
+{
+  "modelPickerOrder": ["gpt-5.6-sol", "opencode-go/glm-5.3"]
+}
+```
+
+Les lignes indiquées apparaissent d’abord dans l’ordre du tableau, puis les lignes absentes
+selon leur priorité naturelle. La correspondance est exacte : `gpt-5.6-sol` et
+`openai/gpt-5.6-sol` désignent deux lignes distinctes. Pour une ligne qualifiée par un compte,
+indiquez son identifiant complet, sélecteur inclus.
+
+### Migration : identifiants natifs dans les listes existantes
+
+Auparavant, les identifiants natifs dans `modelPickerOrder` étaient ignorés. Une liste
+existante contenant un identifiant natif non qualifié ordonne désormais tout le sélecteur,
+y compris les lignes mises en avant. Supprimez ces identifiants pour conserver l’ancien
+comportement limité aux lignes routées. Les listes absentes, vides ou uniquement routées
+conservent leur comportement ; les priorités des candidats sous-agents ne changent pas.
 
 `modelPickerOrder` ne modifie jamais l’ensemble des candidats de `spawn_agent`. Il change uniquement la
 priorité visible par Codex dans le sélecteur, tandis qu’OpenCodex conserve la priorité naturelle de chaque
