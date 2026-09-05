@@ -672,7 +672,13 @@ export function rotateAnthropicAccountOn429(
   // from a count read taken before the failure.
   quorumCache = null;
 
-  const next = pickAlternateAnthropicAccount(config, failedAccountId, now);
+  // The pool's strategy is a PROACTIVE policy. When the pool is disabled, reactive
+  // presence-only recovery must not silently reactivate round-robin/fill-first merely
+  // because those dormant values remain in config. The quota picker is the neutral
+  // recovery policy already used by the default strategy.
+  const next = isAnthropicAccountPoolEnabled(config)
+    ? pickAlternateAnthropicAccount(config, failedAccountId, now)
+    : pickLowestUsage(config, failedAccountId, now);
   if (!next) {
     console.warn("[anthropic-pool] all eligible Anthropic OAuth accounts are in cooldown; returning 429");
     return null;

@@ -791,7 +791,7 @@ export interface OcxConfig {
    * What `enabled: false` still refuses is the PRE-DISPATCH preference: steering a request
    * upstream has not refused toward the account with more known headroom. That moves a healthy
    * request, so it stays a real choice. `providers.<name>.oauthAccountFailover` overrides this
-   * per provider, and only `false` is meaningful — `true` adds nothing over presence.
+   * per provider in either direction; reactive 429 rotation remains presence-driven.
    */
   oauthAccountFailover?: {
     enabled?: boolean;

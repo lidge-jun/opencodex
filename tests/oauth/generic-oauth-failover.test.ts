@@ -12,7 +12,7 @@ import {
   preferredInitialAccount,
   rotateGenericOAuthAccountOn429,
 } from "../../src/oauth/generic-account-failover";
-import { getAccountSet, markAccountNeedsReauth, saveCredential } from "../../src/oauth/store";
+import { getAccountSet, markAccountNeedsReauth, saveCredential, setActiveAccount } from "../../src/oauth/store";
 import { clearAccountQuotaCache, setCachedProviderAccountQuotaForTests } from "../../src/providers/quota";
 import { resolveCopilotApiBaseUrl } from "../../src/oauth/github-copilot";
 import { resolveProviderTransport } from "../../src/providers/xai-transport";
@@ -135,6 +135,20 @@ describe("#2568 generic OAuth account failover", () => {
     setCachedProviderAccountQuotaForTests("xai", ids[1]!, { fiveHourPercent: 1 });
     expect(preferredInitialAccount(config(false), "xai")).toBeNull();
     expect(preferredInitialAccount(config(true, false), "xai")).toBeNull();
+  });
+
+  test("a provider-level true overrides a global proactive opt-out", async () => {
+    // The documented precedence is narrow-over-broad in BOTH directions. A per-provider false
+    // refuses the preference under a global true (pinned above); the mirror case is an operator
+    // who declines steering globally and opts one provider back in. Honouring only `false`
+    // silently drops that opt-in.
+    const ids = await seed(2);
+    await setActiveAccount("xai", ids[0]!);
+    clearGenericFailoverHealth("xai");
+    setCachedProviderAccountQuotaForTests("xai", ids[0]!, { fiveHourPercent: 99 });
+    setCachedProviderAccountQuotaForTests("xai", ids[1]!, { fiveHourPercent: 1 });
+
+    expect(preferredInitialAccount(config(false, true), "xai")).toBe(ids[1]);
   });
 
   test("a second account flagged for reauth is not a quorum", async () => {
