@@ -138,7 +138,7 @@ async function handleLabRoutesOnDemand(ctx: ManagementContext): Promise<Response
  * its config resolution on all of them.
  */
 async function handleQuotaResetRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
-  if (ctx.url.pathname !== "/api/quota-resets") return null;
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/quota-resets")) return null;
   const { handleQuotaResetRoutes } = await import("./management/quota-reset-routes");
   return handleQuotaResetRoutes(ctx);
 }
