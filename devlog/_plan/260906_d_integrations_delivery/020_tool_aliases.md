@@ -43,8 +43,14 @@ The exact original patch is the complete diff `git show c8240c51d664f7cfb790b6d6
 Current anchors: `src/adapters/openai-chat.ts:1661` pending interface, `:1856` identity lookup, `:1873` budget opening, `:1912` argument-byte accounting, `:1679` budget closing. Replace the lookup block with:
 
 ```ts
-const indexKey = typeof rawIndex === "number"
-  && Number.isInteger(rawIndex) && rawIndex >= 0 ? `i:${rawIndex}` : undefined;
+if (typeof rawIndex === "number"
+    && (!Number.isInteger(rawIndex) || rawIndex < 0)) {
+  return yield* terminateWithError({
+    ...invalidToolCallsEvent(rawToolCalls, "stream", pendingUsage),
+    message: "upstream response contained invalid tool calls (invalid numeric index)",
+  });
+}
+const indexKey = typeof rawIndex === "number" ? `i:${rawIndex}` : undefined;
 const key = indexKey ?? (idDelta
   ? `id:${idDelta}`
   : pendingToolCalls[pendingToolCalls.length - 1]?.key);
