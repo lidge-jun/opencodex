@@ -54,6 +54,7 @@ import {
 import { startServer } from "../../src/server";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { helperPath, repoRoot } from "../helpers/repo-root";
+import { watchdogMs } from "../helpers/ci-watchdog";
 
 const roots: string[] = [];
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
@@ -226,7 +227,8 @@ async function fixture(
   return { root, codexHome, configDir, key, manager, target, sourceProfileId: sourceRecord.id, targetProfileId: targetRecord.id };
 }
 
-async function waitForPath(path: string, timeoutMs = 10_000): Promise<void> {
+// Gates on a spawned child reaching its marker: 8-19 s on windows-latest (run 33930757649).
+async function waitForPath(path: string, timeoutMs = watchdogMs(10_000)): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!existsSync(path) && Date.now() < deadline) await Bun.sleep(10);
   if (!existsSync(path)) throw new Error(`Timed out waiting for ${path}`);
@@ -239,8 +241,9 @@ async function waitForPath(path: string, timeoutMs = 10_000): Promise<void> {
  * Wait for a port that is actually a port.
  */
 // A spawned proxy child needs 10-18 s to reach its port file on a loaded windows-latest shard
-// (runs 33601508392 and 33610501053); every caller here has a 20 s+ budget.
-async function waitForPort(path: string, timeoutMs = 18_000): Promise<number> {
+// (runs 33601508392 and 33610501053), and run 33930757649 showed 19 s boots elsewhere in the
+// suite; watchdogMs lifts this to the platform floor on CI while local stays at 18 s.
+async function waitForPort(path: string, timeoutMs = watchdogMs(18_000)): Promise<number> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     if (existsSync(path)) {

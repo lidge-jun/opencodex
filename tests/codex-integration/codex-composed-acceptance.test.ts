@@ -490,8 +490,12 @@ describe("WP13 composed toggle acceptance", () => {
         } }, defaultProvider: "fixture", clientIntegrations: { codex: true } });
         hold = true;
         // This request is intentionally held open while a second real HTTP
-        // mutation crosses the Windows process-backed identity path.
-        const stale = fx.request(server.runtime, "/api/sync", { method: "POST" }, SERVER_BUDGET_MS);
+        // mutation crosses the Windows process-backed identity path. Its ceiling is
+        // therefore "a startup plus a held gather plus the OFF round-trip", not "a
+        // request": on run 33930757649 the 30 s SERVER_BUDGET_MS abort fired while the
+        // case as a whole was inside its normal band (57.7 s; siblings passed at 47.9 s
+        // and 57.8 s). Two server budgets is the honest bound for two serialized legs.
+        const stale = fx.request(server.runtime, "/api/sync", { method: "POST" }, SERVER_BUDGET_MS * 2);
         await Promise.race([
           enteredGather,
           stale.then(result => Promise.reject(new Error(

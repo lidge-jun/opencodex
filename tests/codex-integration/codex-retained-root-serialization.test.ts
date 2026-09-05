@@ -20,6 +20,7 @@ import { claimOwnedServiceHome, withOwnedServiceHomePreload } from "../helpers/o
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoRoot as resolveRepoRoot } from "../helpers/repo-root";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
+import { watchdogMs } from "../helpers/ci-watchdog";
 
 const repoRoot = resolveRepoRoot();
 const sandboxes: Sandbox[] = [];
@@ -200,7 +201,7 @@ async function holdCatalogLock(sandbox: Sandbox): Promise<{
   });
   sandbox.children.add(child);
   sandbox.releaseMarkers.add(release);
-  await waitForPath(ready, 12_000);
+  await waitForPath(ready, watchdogMs(12_000));
   return {
     release: () => { try { writeFileSync(release, "release"); } catch { /* teardown may have released already */ } },
     child,
@@ -370,7 +371,7 @@ for (const publisher of ["convergence", "retained"] as const) {
       `], sandbox.preloadPath)], { cwd: repoRoot, env: sandboxChildEnv(sandbox), stdout: "pipe", stderr: "pipe" });
       sandbox.children.add(sync);
 
-      await raceBarrier(sync, waitForPath(requested, 16_000));
+      await raceBarrier(sync, waitForPath(requested, watchdogMs(16_000)));
       const published = await runPublisher(sandbox, publisher, config);
       if (published.exitCode !== 0) {
         throw new Error(`${publisher} publisher failed\nstdout=${published.stdout}\nstderr=${published.stderr}`);
@@ -447,7 +448,7 @@ test("a persisted runtime selection moved by another process during the await bl
   `], sandbox.preloadPath)], { cwd: repoRoot, env: sandboxChildEnv(sandbox), stdout: "pipe", stderr: "pipe" });
   sandbox.children.add(sync);
 
-  await raceBarrier(sync, waitForPath(requested, 16_000));
+  await raceBarrier(sync, waitForPath(requested, watchdogMs(16_000)));
 
   // Another process selects a different Codex runtime. No catalog byte changes.
   writeFileSync(runtimeStatePath, `${JSON.stringify({

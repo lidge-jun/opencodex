@@ -20,6 +20,7 @@ import {
 import { stopStorageCleanupScheduler } from "../../src/storage/policy-scheduler";
 import { drainStorageWorkers } from "../../src/storage/worker-lifecycle";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { watchdogMs } from "../helpers/ci-watchdog";
 
 let testDir = "";
 let previousHome: string | undefined;
@@ -137,7 +138,9 @@ describe("storage cleanup policy job responsiveness", () => {
         expect(sample).toBeLessThan(maxHealthMs);
       }
 
-      const deadline = Date.now() + 10_000;
+      // Polls a live server whose worker is deliberately blocked; a round-trip on a loaded
+      // windows-latest shard sits inside the platform floor, not a 10 s literal.
+      const deadline = Date.now() + watchdogMs(10_000);
       while (Date.now() < deadline) {
         const got = await fetch(new URL("/api/storage/cleanup-policy", server.url));
         const body = await got.json() as { job: { status: string; startedAt?: number } };

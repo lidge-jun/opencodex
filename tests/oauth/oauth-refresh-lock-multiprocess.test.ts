@@ -15,6 +15,7 @@ import {
   saveCredential,
 } from "../../src/oauth/store";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { watchdogMs } from "../helpers/ci-watchdog";
 
 const repoRoot = dirname(fileURLToPath(new URL("../../package.json", import.meta.url)));
 const origHome = process.env.HOME;
@@ -92,7 +93,8 @@ describe("slow multi-process OAuth refresh lock", () => {
       stderr: "pipe",
     });
 
-    const deadline = Date.now() + 15_000;
+    // Spawned child reaching its ready marker: 8-19 s on windows-latest (run 33930757649).
+    const deadline = Date.now() + watchdogMs(15_000);
     while (!existsSync(readyPath) && Date.now() < deadline) {
       await Bun.sleep(25);
     }

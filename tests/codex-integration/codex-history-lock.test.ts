@@ -11,6 +11,7 @@ import {
 } from "../../src/codex/history-lock";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoRoot as resolveRepoRoot } from "../helpers/repo-root";
+import { watchdogMs } from "../helpers/ci-watchdog";
 
 const repoRoot = resolveRepoRoot();
 const sandboxes: string[] = [];
@@ -56,7 +57,9 @@ afterEach(() => {
   for (const root of sandboxes.splice(0)) removeTreeWithRetry(root);
 });
 
-async function waitForPath(path: string, timeoutMs = 10_000): Promise<void> {
+// Same shape as codex-write-lock: gates on a spawned child reaching its marker, which
+// costs 8-19 s on windows-latest (run 33930757649). Local stays at 10 s.
+async function waitForPath(path: string, timeoutMs = watchdogMs(10_000)): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!existsSync(path)) {
     if (Date.now() > deadline) throw new Error(`timed out waiting for ${path}`);

@@ -34,6 +34,7 @@ import {
 } from "../../src/storage/worker-lifecycle";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { watchdogMs } from "../helpers/ci-watchdog";
 
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 let testDir = "";
@@ -67,7 +68,9 @@ afterEach(async () => {
   testDir = "";
 });
 
-async function waitForIdle(timeoutMs = 20_000): Promise<void> {
+// Worker-thread lifecycle: Windows OS-thread join is the slow half (see
+// src/storage/worker-lifecycle.ts), so the bound follows the platform floor.
+async function waitForIdle(timeoutMs = watchdogMs(20_000)): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (getStorageCleanupPolicyJobState().status === "idle") return;
@@ -77,7 +80,7 @@ async function waitForIdle(timeoutMs = 20_000): Promise<void> {
 }
 
 /** Guards against a vacuous pass: assert we really did spawn a worker. */
-async function waitForLiveWorker(timeoutMs = 10_000): Promise<void> {
+async function waitForLiveWorker(timeoutMs = watchdogMs(10_000)): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (liveStorageWorkerCount() > 0) return;

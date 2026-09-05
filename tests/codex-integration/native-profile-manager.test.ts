@@ -17,6 +17,7 @@ import { NativeProfileError, type NativeProfileKey, type NativeProfileKeyProvide
 import { codexCredentialMutationEpoch } from "../../src/codex/credential-mutation-epoch";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { helperPath, repoRoot } from "../helpers/repo-root";
+import { watchdogMs } from "../helpers/ci-watchdog";
 
 const roots: string[] = [];
 
@@ -137,7 +138,8 @@ async function leavePendingJournal(f: Awaited<ReturnType<typeof enrolledFixture>
  * sized inside its 15 s test budget. On timeout the child's stderr is part of the error so
  * a real crash is not mistaken for a slow start.
  */
-async function waitForPath(path: string, child?: ReturnType<typeof Bun.spawn>, waitMs = 5_000): Promise<void> {
+// Gates on a spawned child reaching its marker: 8-19 s on windows-latest (run 33930757649).
+async function waitForPath(path: string, child?: ReturnType<typeof Bun.spawn>, waitMs = watchdogMs(5_000)): Promise<void> {
   const deadline = Date.now() + waitMs;
   while (!existsSync(path) && Date.now() < deadline) await Bun.sleep(10);
   if (existsSync(path)) return;
@@ -196,7 +198,7 @@ describe("native main profile transactions", () => {
     const f = fixture();
     const readyPath = join(f.root, "crash-ready");
     const child = spawnLockHolder(f, readyPath, join(f.root, "unused-release"), { crash: true });
-    await waitForPath(readyPath, child, 12_000);
+    await waitForPath(readyPath, child, watchdogMs(12_000));
     expect(await child.exited).toBe(87);
 
     const successor = new NativeProfileManager({ ...f.options, lockWaitMs: 250 });

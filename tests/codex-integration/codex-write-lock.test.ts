@@ -25,6 +25,7 @@ import {
 import type { AdmissionSnapshot } from "../../src/codex/convergence-types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { helperPath } from "../helpers/repo-root";
+import { watchdogMs } from "../helpers/ci-watchdog";
 
 let root = "";
 let codexHome = "";
@@ -311,7 +312,10 @@ describe("two real processes contend for one lock", () => {
     return JSON.parse(line) as { status: string; reason?: string; value?: string; lockId?: string };
   }
 
-  async function waitFor(path: string, timeoutMs = 10_000): Promise<void> {
+  // A spawned holder child boots in 8-19 s on a loaded windows-latest shard; the 10 s
+  // literal expired first on run 33930757649 ("case 0", 10.67 s). watchdogMs keeps the
+  // local number and applies the CI/platform floor.
+  async function waitFor(path: string, timeoutMs = watchdogMs(10_000)): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       if (Bun.file(path).size > 0) return;

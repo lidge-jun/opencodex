@@ -40,6 +40,7 @@ import {
   type IsolatedCodexHome,
 } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { watchdogMs } from "../helpers/ci-watchdog";
 
 type StartedServer = ReturnType<typeof startServer>;
 type IntervalTimer = ReturnType<typeof setInterval>;
@@ -240,7 +241,8 @@ function seedArchived(codexHome: string): void {
   db.close();
 }
 
-async function waitForLiveStorageWorker(timeoutMs = 10_000): Promise<void> {
+// Worker spawn behind a live server on a loaded windows-latest shard; platform floor.
+async function waitForLiveStorageWorker(timeoutMs = watchdogMs(10_000)): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (liveStorageWorkerCount() > 0) return;

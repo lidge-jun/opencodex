@@ -13,6 +13,7 @@ import {
 } from "../../src/codex/history-worker";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoRoot as resolveRepoRoot } from "../helpers/repo-root";
+import { watchdogMs } from "../helpers/ci-watchdog";
 
 // A held write lock otherwise costs the full production 5s busy timeout per
 // attempt, tripping bun's 5s default per-test timeout.
@@ -343,7 +344,8 @@ test("a second holder of H makes the unit report blocked rather than wait", asyn
   `], { cwd: repoRoot, env: fixture.env, stdout: "pipe", stderr: "pipe" });
 
   try {
-    const deadline = Date.now() + 10_000;
+    // The holder is a spawned child; 8-19 s to boot on windows-latest (run 33930757649).
+    const deadline = Date.now() + watchdogMs(10_000);
     while (!existsSync(ready)) {
       if (Date.now() > deadline) throw new Error("holder never acquired H");
       await Bun.sleep(5);

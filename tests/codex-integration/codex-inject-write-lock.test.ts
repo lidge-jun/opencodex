@@ -24,6 +24,7 @@ import {
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoRoot as resolveRepoRoot } from "../helpers/repo-root";
+import { watchdogMs } from "../helpers/ci-watchdog";
 
 const repoRoot = resolveRepoRoot();
 const CHILD = join(repoRoot, "tests", "helpers", "codex-inject-race-child.ts");
@@ -340,7 +341,9 @@ describe("the lock is on the production path", () => {
     let cleanupFailed = false;
     let cleanupError: unknown;
     try {
-      const deadline = Date.now() + 10_000;
+      // Each poll iteration spawns a real child; the hold marker comes from another one.
+      // 8-19 s per boot on windows-latest (run 33930757649).
+      const deadline = Date.now() + watchdogMs(10_000);
       while (!existsSync(holdMarker) && Date.now() < deadline) {
         requireChildSuccess(runChild(["--eval", "Bun.sleepSync(20)"], process.env), "hold-marker wait child");
       }
