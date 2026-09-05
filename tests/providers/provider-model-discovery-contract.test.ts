@@ -9,6 +9,7 @@ import { KEY_LOGIN_PROVIDERS, validateApiKey } from "../../src/oauth/key-provide
 import { deriveKeyLoginMap, providerConfigSeed } from "../../src/providers/derive";
 import {
   extractProviderModelItems,
+  isRegistryModelDiscoveryUrl,
   providerModelDiscoverySpecError,
   readBoundedDiscoveryJson,
   resolveProviderModelDiscovery,
@@ -541,6 +542,65 @@ describe("registry-owned provider model discovery", () => {
     ]);
     expect(gateway.modelDiscovery).toBeUndefined();
     expect(gateway.liveModels).toBeUndefined();
+  });
+
+  // CodeRabbit round 2 on PR #3489 (parity): `resolveProviderModelDiscoveryUrl`
+  // and `isRegistryModelDiscoveryUrl` resolve `url`/`path`/fixed-query
+  // independently, so drift between them would silently drop the TUN fake-IP
+  // exception for a canonical entry (blocked catalog) without any test naming
+  // the pair. Loop every registry entry that declares `modelDiscovery`:
+  // resolving its canonical discovery URL must always satisfy the proof.
+  test("every canonical registry discovery URL satisfies the canonical proof", () => {
+    const entries = PROVIDER_REGISTRY.filter(entry => entry.modelDiscovery);
+    expect(entries.length).toBeGreaterThan(0);
+    for (const entry of entries) {
+      const seed = providerConfigSeed(entry);
+      const resolved = resolveProviderModelDiscoveryUrl(
+        entry.id,
+        seed,
+        entry.baseUrl,
+        `${entry.baseUrl.replace(/\/+$/, "")}/models`,
+      );
+      expect(isRegistryModelDiscoveryUrl(entry.id, resolved)).toBe(true);
+    }
+  });
+
+  // The resolver accepts an effective (possibly custom) baseUrl while the proof
+  // must stay registry-owned: a custom destination that merely resembles the
+  // registry shape must NOT gain the benchmark-address exception. Nebius opts
+  // into `preserveCustomDestination`, so a same-named custom row keeps its own
+  // destination entirely (no registry query/filter), while the renamed-preset
+  // fallback recovers the registry policy only for the exact canonical
+  // destination. Either way the proof is name+URL bound: the attacker-shaped
+  // URL and the renamed row both fail it.
+  test("a custom-destination discovery URL is not registry-canonical", () => {
+    const custom = resolveProviderModelDiscoveryUrl(
+      "nebius",
+      {
+        adapter: "openai-chat",
+        baseUrl: "https://attacker.example/v1",
+        authMode: "key",
+      },
+      "https://attacker.example/v1",
+      "https://attacker.example/v1/models",
+    );
+    expect(custom).toBe("https://attacker.example/v1/models");
+    expect(isRegistryModelDiscoveryUrl("nebius", custom)).toBe(false);
+    expect(isRegistryModelDiscoveryUrl("nebius", "https://attacker.example/v1/models?verbose=true")).toBe(false);
+
+    // The renamed-preset fallback recovers the registry URL for the exact
+    // canonical destination — but the proof stays name-bound, so a renamed row
+    // fetching even the canonical string gains no exception.
+    const renamed = { adapter: "openai-chat", baseUrl: "https://api.tokenfactory.nebius.com/v1", authMode: "key" };
+    const renamedUrl = resolveProviderModelDiscoveryUrl(
+      "nebius-team",
+      renamed,
+      "https://api.tokenfactory.nebius.com/v1",
+      "https://api.tokenfactory.nebius.com/v1/models",
+    );
+    expect(renamedUrl).toBe("https://api.tokenfactory.nebius.com/v1/models?verbose=true");
+    expect(isRegistryModelDiscoveryUrl("nebius-team", renamedUrl)).toBe(false);
+    expect(isRegistryModelDiscoveryUrl("nebius", renamedUrl)).toBe(true);
   });
 });
 

@@ -69,6 +69,7 @@ import {
 import { redactSecretString } from "../../lib/redact";
 import {
   extractProviderModelItems,
+  isRegistryModelDiscoveryUrl,
   readBoundedDiscoveryJson,
   resolveProviderModelDiscovery,
   type ModelDiscoveryResponseFailure,
@@ -1713,16 +1714,24 @@ async function fetchProviderModelsWithAuth(
     };
   };
   try {
+    // Canonical-URL TUN transparency for Clash/Surge/Mihomo fake-IP DNS:
+    // `isRegistryModelDiscoveryUrl` proves the FINAL request URL is the
+    // registry's own fixed discovery URL, so a purely-benchmark DNS answer may
+    // be pin-connected through the intercepting TUN without proxy env. The
+    // proof is on the URL — not the provider name — because an OAuth/forward
+    // name matches any baseUrl by design. Retargeted or renamed custom rows
+    // fetch a different URL and keep the rejection.
+    const outboundDependencies = { isCanonicalUrl: isRegistryModelDiscoveryUrl };
     const res = request.method === "POST"
       ? await providerOutboundPost(name, prov, url, {
         headers,
         body: JSON.stringify({ project }),
         signal: AbortSignal.timeout(8000),
-      })
+      }, outboundDependencies)
       : await providerOutboundGet(name, prov, url, {
         headers,
         signal: AbortSignal.timeout(8000),
-      });
+      }, outboundDependencies);
     const redirectError = await providerRedirectError(res, url);
     if (redirectError) {
       const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "http", httpStatus: res.status });
