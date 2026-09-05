@@ -799,6 +799,7 @@ export interface ObservedCatalogMergeInput {
   readonly baseline: ReadonlyMap<string, number>;
   readonly featured: readonly string[];
   readonly modelPickerOrder?: readonly string[];
+  readonly accountSelectors?: readonly string[];
   readonly wsEnabled: boolean;
   readonly template: RawEntry | null;
   readonly disabledModels: ReadonlySet<string>;
@@ -832,6 +833,7 @@ export function mergeCatalogEntriesFromObservedState({
   baseline,
   featured,
   modelPickerOrder = [],
+  accountSelectors = [],
   wsEnabled,
   template,
   disabledModels,
@@ -1077,6 +1079,31 @@ export function mergeCatalogEntriesFromObservedState({
     // remain outside provider ownership and survive unless a fresh row replaces their exact slug.
     return !isOcxAuthoredRoutedEntry(entry);
   });
+  // Retained rows bypass the builder: undo a prior display override before applying the
+  // current routed-only order. Fresh rows already carry the current order and must stay intact.
+  if (!modelPickerOrder.some(slug => !slug.includes("/"))) {
+    const pickerRank = new Map(modelPickerOrder.map((slug, index) => [slug, index]));
+    const priorityStride = Math.max(accountSelectors.length, 1);
+    for (const entry of preservedRoutedEntries) {
+      const natural = entry[SPAWN_PRIORITY_FIELD];
+      if (typeof natural === "number") {
+        entry.priority = natural;
+        delete entry[SPAWN_PRIORITY_FIELD];
+      }
+      const slug = String(entry.slug);
+      if (!isOcxAuthoredRoutedEntry(entry) || isNativeAliasCatalogEntry(entry)) continue;
+      const featuredRank = rank.get(slug);
+      if (featuredRank !== undefined) {
+        entry.priority = featuredRank * priorityStride;
+        continue;
+      }
+      const pickerIndex = pickerRank.get(slug);
+      if (pickerIndex !== undefined) {
+        entry[SPAWN_PRIORITY_FIELD] = typeof entry.priority === "number" ? entry.priority : 5;
+        entry.priority = PICKER_ORDER_PRIORITY_BASE + pickerIndex * priorityStride;
+      }
+    }
+  }
   let finalRoutedEntries = [...admittedRoutedEntries, ...preservedRoutedEntries];
   finalRoutedEntries = finalRoutedEntries.filter(entry => {
     const slug = typeof entry.slug === "string" ? entry.slug : "";
@@ -1781,6 +1808,7 @@ function writeRetainedCatalogSync({
     : [];
   catalog.models = mergeCatalogEntriesFromObservedState({
     modelPickerOrder,
+    accountSelectors,
     catalogModels: catalogModelsForMerge,
     baselineCatalogModels: baselineCatalog?.models ?? [],
     routedEntries: goEntries,
