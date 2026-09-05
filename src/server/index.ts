@@ -33,8 +33,12 @@ import {
   type NativeCodexOwnership,
   type OwnershipInspection,
 } from "../integrations/native/ownership-preflight";
-import { createResetCreditWhamClient, registerCodexCooldownRecoveryProbeWorker } from "../codex/auth-api";
+import {
+  createResetCreditWhamClient,
+  registerCodexCooldownRecoveryProbeWorker,
+} from "../codex/auth-api";
 import { activateResetCreditAutoRedeem } from "../codex/reset-credit-auto-redeem";
+import { registerCodexQuotaAutoRefreshWorker } from "../codex/quota-auto-refresh";
 import {
   reconcileLiveStateStores,
   setLiveStateStoreConfig,
@@ -586,6 +590,8 @@ export interface StartServerDeps {
   readinessGate?: ReadinessGate;
   /** Test-only package-tree observation; production captures package.json identity at boot. */
   packageTreeIntegrity?: PackageTreeIntegrityGuard;
+  /** Test-only seam for observing quota-worker registration ownership. */
+  registerCodexQuotaAutoRefreshWorker?: typeof registerCodexQuotaAutoRefreshWorker;
 }
 
 function inspectStartupOwnership(
@@ -1027,8 +1033,11 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     return "public";
   }
   let backgroundLifecycle: ReturnType<typeof acquireServerBackgroundLifecycle> | null = null;
+  let unregisterQuotaAutoRefresh: (() => void) | null = null;
   try {
     backgroundLifecycle = acquireServerBackgroundLifecycle(applyPolicy);
+    unregisterQuotaAutoRefresh = (deps.registerCodexQuotaAutoRefreshWorker
+      ?? registerCodexQuotaAutoRefreshWorker)(config);
     // External `ocx config set` / direct config.json edits run in other
     // processes; poll the file so Logs/Usage display prices follow them live.
     // Started inside the guarded startup transaction so the catch below can
@@ -2408,6 +2417,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
       }
     }
   } catch (error) {
+    unregisterQuotaAutoRefresh?.();
     userCostOverlayReconciler?.stop();
     backgroundLifecycle?.releaseAfterFailedStart();
     void nativeMainLifecycle.release();
@@ -2433,7 +2443,11 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             ? [() => managementIngressRef.stop(closeActiveConnections)]
             : []),
           async () => {
-            userCostOverlayReconciler?.stop();
+            try {
+              userCostOverlayReconciler?.stop();
+            } finally {
+              unregisterQuotaAutoRefresh?.();
+            }
           },
         ],
         async () => {

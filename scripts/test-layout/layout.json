@@ -437,6 +437,7 @@
     "codex-prompt-route.test.ts": "codex-integration",
     "codex-prompt-text-probe.test.ts": "codex-integration",
     "codex-quota-parser-parity.test.ts": "codex-integration",
+    "codex-quota-auto-refresh.test.ts": "codex-integration",
     "codex-quota-prime.test.ts": "codex-integration",
     "codex-quota-rejection.test.ts": "codex-integration",
     "codex-refresh.test.ts": "codex-integration",

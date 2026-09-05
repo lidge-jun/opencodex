@@ -841,6 +841,34 @@ const codexAccountPrioritiesSchema = z.custom<Record<string, unknown>>(
   }
 }).pipe(z.record(z.string(), z.number().int()));
 
+const codexQuotaAutoRefreshEntrySchema = z.object({
+  fiveHour: z.boolean().optional(),
+  weekly: z.boolean().optional(),
+  lastFiveHourResetAt: z.number().finite().nonnegative().optional(),
+  lastWeeklyResetAt: z.number().finite().nonnegative().optional(),
+}).strict();
+const CODEX_QUOTA_AUTO_REFRESH_KEY_ERROR =
+  "quota auto-refresh keys must be a Codex pool-account id or the main Codex account and cannot be reserved JavaScript object keys";
+
+const codexQuotaAutoRefreshSchema = z.custom<Record<string, unknown>>(
+  (value): value is Record<string, unknown> => !!value
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null),
+  { error: "codexQuotaAutoRefresh must be a plain object" },
+).superRefine((settings, ctx) => {
+  // Inspect own entries before z.record parses them; Zod omits __proto__ record keys.
+  for (const [accountId, setting] of Object.entries(settings)) {
+    if (!isCodexAccountPriorityKey(accountId)) {
+      ctx.addIssue({ code: "custom", path: [accountId], message: CODEX_QUOTA_AUTO_REFRESH_KEY_ERROR });
+    }
+    const parsed = codexQuotaAutoRefreshEntrySchema.safeParse(setting);
+    if (!parsed.success) {
+      ctx.addIssue({ code: "custom", path: [accountId], message: "invalid quota auto-refresh setting" });
+    }
+  }
+}).pipe(z.record(z.string(), codexQuotaAutoRefreshEntrySchema));
+
 /**
  * Deliberately permissive. A user's config is not ours to invalidate: a strict
  * entry fails the whole parse, and loadConfig's fallback then backs the file up
@@ -1090,6 +1118,7 @@ const configSchema = z.object({
   codexShimAutoRestore: z.boolean().optional(),
   codexDesktopAuthless: z.boolean().optional().catch(undefined),
   pausedCodexAccountIds: z.array(z.string().regex(/^[a-zA-Z0-9._-]{1,64}$/)).optional(),
+  codexQuotaAutoRefresh: codexQuotaAutoRefreshSchema.optional().catch(undefined),
   codexAccountNamespaces: codexAccountNamespacesSchema.optional(),
   // Selection order is a preference, not a safety control like pause: a malformed
   // map degrades to "no ordering" rather than failing the parse, so a hand-edited
@@ -1730,6 +1759,17 @@ function warnDegradedCodexAccountPriorities(rawParsed: unknown, validated: OcxCo
   }
 }
 
+function degradedCodexQuotaAutoRefreshWarning(rawParsed: unknown, validated: OcxConfig): string | null {
+  const raw = rawConfigRecord(rawParsed)?.codexQuotaAutoRefresh;
+  if (raw === undefined || validated.codexQuotaAutoRefresh !== undefined) return null;
+  return "codexQuotaAutoRefresh is invalid — automatic quota-window activation is disabled";
+}
+
+function warnDegradedCodexQuotaAutoRefresh(rawParsed: unknown, validated: OcxConfig): void {
+  const warning = degradedCodexQuotaAutoRefreshWarning(rawParsed, validated);
+  if (warning) console.warn(`⚠️  config.json ${warning}`);
+}
+
 /**
  * The apiKeys schema salvages entry by entry rather than failing the parse, so a
  * dropped key is otherwise invisible — and it will not be re-saved by the next
@@ -2097,6 +2137,7 @@ export function loadConfig(): OcxConfig {
       warnDegradedHostname(parsed, config);
       warnDegradedApiKeys(parsed, config);
       warnDegradedCodexAccountPriorities(parsed, config);
+      warnDegradedCodexQuotaAutoRefresh(parsed, config);
       warnDegradedClaudeSubagentEffort(parsed);
       warnDegradedNativeSubagentConfig(parsed, config);
       warnDegradedCodexAccountPicker(parsed);
@@ -2123,6 +2164,7 @@ export function loadConfig(): OcxConfig {
       warnDegradedHostname(parsed, config);
       warnDegradedApiKeys(parsed, config);
       warnDegradedCodexAccountPriorities(parsed, config);
+      warnDegradedCodexQuotaAutoRefresh(parsed, config);
       warnDegradedClaudeSubagentEffort(parsed);
       warnDegradedNativeSubagentConfig(parsed, config);
       warnDegradedCodexAccountPicker(parsed);
@@ -2145,6 +2187,7 @@ export function loadConfig(): OcxConfig {
         warnDegradedHostname(parsed, config);
         warnDegradedApiKeys(parsed, config);
         warnDegradedCodexAccountPriorities(parsed, config);
+        warnDegradedCodexQuotaAutoRefresh(parsed, config);
         warnDegradedClaudeSubagentEffort(parsed);
         warnDegradedNativeSubagentConfig(parsed, config);
         warnDegradedCodexAccountPicker(parsed);
@@ -2274,6 +2317,8 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   const warnings = configPlaceholderWarnings(normalized);
   warnings.push(...inheritedFastWireConflictProviderNames(normalized).map(inheritedFastWireConflictWarning));
   warnings.push(...degradedCodexAccountPriorityWarnings(rawParsed, normalized));
+  const quotaAutoRefreshWarning = degradedCodexQuotaAutoRefreshWarning(rawParsed, normalized);
+  if (quotaAutoRefreshWarning) warnings.push(quotaAutoRefreshWarning);
   if (rawEffort !== undefined && !isClaudeSubagentEffort(rawEffort)) {
     warnings.push(`claudeCode.subagentEffort ignored: expected one of ${CLAUDE_SUBAGENT_EFFORTS.join(", ")}`);
   }
@@ -2456,6 +2501,21 @@ function codexAccountPrioritiesError(value: unknown): string | null {
   return null;
 }
 
+function codexQuotaAutoRefreshError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || raw.codexQuotaAutoRefresh === undefined) return null;
+  const parsed = codexQuotaAutoRefreshSchema.safeParse(raw.codexQuotaAutoRefresh);
+  if (parsed.success) return null;
+  const details = parsed.error.issues.map(issue => {
+    const path = issue.path.join(".");
+    const message = path === ""
+      ? issue.message.replace(/^codexQuotaAutoRefresh\s*/, "")
+      : issue.message;
+    return `codexQuotaAutoRefresh${path ? `.${path}` : ""}: ${message}`;
+  });
+  return `schema_invalid: ${details.join("; ")}`;
+}
+
 function googleAntigravityStaticCatalogVersionError(value: unknown): string | null {
   const raw = rawConfigRecord(value);
   if (!raw || !Object.hasOwn(raw, "googleAntigravityStaticCatalogVersion")) return null;
@@ -2590,6 +2650,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? agentTaskRecoveryError(value)
     ?? googleAntigravityStaticCatalogVersionError(value)
     ?? codexAccountPrioritiesError(value)
+    ?? codexQuotaAutoRefreshError(value)
     ?? codexAccountPickerEnabledError(value)
     ?? emptyCompletionRetryError(value)
     ?? oauthOpenBrowserError(value)

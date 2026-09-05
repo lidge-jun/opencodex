@@ -72,6 +72,14 @@ requests keep their captured credential. An all-paused pool fails closed.
 The dashboard's bulk pause action refreshes all account quotas and mutates only accounts whose
 plan-relevant window is freshly confirmed at exactly 100%; unknown and failed refreshes are skipped.
 
+`codexQuotaAutoRefresh` is a separate default-off spending intent. For each explicitly enabled
+account/window, the one-minute state sweep compares the cached upstream reset timestamp, sends the
+existing minimal non-stored warmup through that exact account once the timestamp is due, then
+field-patches the completed timestamp; the next normal quota poll reports the activated window.
+Paused or reauthentication-required
+accounts are skipped, simultaneous 5-hour/weekly resets share one warmup, transient failures retry
+after five minutes, and account deletion removes its setting and completion markers.
+
 `codexAccountPriorities` is a persisted Pool *ordering* boundary and never an eligibility one. It maps
 an account id to an integer from -100 to 100, higher used earlier, with absence meaning 0. Selection
 narrows the already-eligible list to the highest tier that still holds an account with quota headroom

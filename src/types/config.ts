@@ -693,6 +693,14 @@ export interface OcxConfig {
   codexAccounts?: CodexAccount[];
   /** Account ids administratively excluded from future pool selection until resumed. */
   pausedCodexAccountIds?: string[];
+  /** Opt-in per-account activation of newly reset Codex quota windows. */
+  codexQuotaAutoRefresh?: Record<string, {
+    fiveHour?: boolean;
+    weekly?: boolean;
+    /** Upstream reset timestamps already activated, retained across restarts. */
+    lastFiveHourResetAt?: number;
+    lastWeeklyResetAt?: number;
+  }>;
   /**
    * Selection order per account id, higher used earlier; absent = 0. Keyed by id
    * rather than stored on `codexAccounts` rows so the Desktop login (`__main__`),

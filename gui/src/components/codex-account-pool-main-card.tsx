@@ -7,6 +7,7 @@ import type { CodexAccountEntry } from "./codex-account-pool-types";
 import type { CodexAccountModeState } from "../codex-multi-state";
 import type { TFn } from "../i18n/shared";
 import type { NoticeTone } from "../ui";
+import { CodexQuotaAutoRefreshControls } from "./codex-account-pool-cards";
 import {
   doctorCopyButtonLabel,
   formatOAuthHealthLabel,
@@ -35,6 +36,8 @@ export function CodexAccountPoolMainCard({
   onOpenReset,
   onCopyDoctor,
   doctorCopyOutcomeFor,
+  quotaAutoRefreshBusy,
+  onToggleQuotaAutoRefresh,
 }: {
   t: TFn;
   main: CodexAccountEntry | undefined;
@@ -59,6 +62,8 @@ export function CodexAccountPoolMainCard({
   onOpenReset: (account: CodexAccountEntry) => void;
   onCopyDoctor?: (accountId: string) => void;
   doctorCopyOutcomeFor?: (accountId: string) => "copied" | "unavailable" | null;
+  quotaAutoRefreshBusy: string | null;
+  onToggleQuotaAutoRefresh: (account: CodexAccountEntry, window: "fiveHour" | "weekly") => void;
 }) {
   const mainFallbackLabel = t("codexAuth.codexApp");
   const mainId = main?.id ?? "__main__";
@@ -71,6 +76,12 @@ export function CodexAccountPoolMainCard({
     priority: main?.priority ?? 0,
     hasCredential: true,
     quota: main?.quota ?? null,
+    quotaAutoRefresh: main?.quotaAutoRefresh ?? {
+      fiveHourAvailable: false,
+      weeklyAvailable: false,
+      fiveHourEnabled: false,
+      weeklyEnabled: false,
+    },
   };
   const showReauth = Boolean(main?.needsReauth) || oauthHealthShowsReauth(main?.health?.status);
   const inCooldown = oauthHealthIsCooldown(main?.health?.status);
@@ -163,15 +174,22 @@ export function CodexAccountPoolMainCard({
       )}
       {showReauth
         ? <div className="card-sub faint">{t("codexAuth.mainTokenExpired")}</div>
-        : !inCooldown && (
-          <QuotaBars
-            quota={main?.quota ?? null}
-            plan={main?.plan}
-            threshold={threshold}
-            t={t}
-            pending={main != null && main.quota == null}
-          />
-        )}
+        : !inCooldown && <>
+            <QuotaBars
+              quota={main?.quota ?? null}
+              plan={main?.plan}
+              threshold={threshold}
+              t={t}
+              pending={main != null && main.quota == null}
+            />
+            {main && (
+              <CodexQuotaAutoRefreshControls
+                account={main}
+                busy={quotaAutoRefreshBusy}
+                onToggle={onToggleQuotaAutoRefresh}
+              />
+            )}
+          </>}
     </div>
   );
 }
