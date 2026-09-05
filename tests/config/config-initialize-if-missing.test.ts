@@ -102,6 +102,8 @@ test("rejects a post-link target identity swap", () => {
     renameSync(replacement, getConfigPath());
   });
   expect(() => initializePersistedConfigIfMissing(config(20000))).toThrow(/published target identity changed/);
+  expect(readFileSync(getConfigPath(), "utf8")).toBe("other-bytes");
+  expect(readdirSync(root).filter(name => name.endsWith(".tmp"))).toEqual([]);
 });
 
 test("classifies unavailable hard-link publication", () => {
@@ -114,4 +116,18 @@ test("classifies unavailable hard-link publication", () => {
     unlink: unlinkSync,
   };
   expect(() => initializePersistedConfigIfMissing(config(), io)).toThrow(/hard-link support/);
+});
+
+test("does not remove a concurrent target during cleanup rollback", () => {
+  let temp = "";
+  const io = {
+    createExclusive: (path: string) => { temp = path; writeFileSync(path, "", { flag: "wx" }); },
+    write: (path: string, bytes: string) => writeFileSync(path, bytes),
+    harden: () => {},
+    publishNoReplace: (_temp: string, target: string) => writeFileSync(target, "winner"),
+    truncate: () => {},
+    unlink: (path: string) => { if (path === temp) throw new Error("temp unlink blocked"); unlinkSync(path); },
+  };
+  expect(() => initializePersistedConfigIfMissing(config(), io)).toThrow();
+  expect(readFileSync(getConfigPath(), "utf8")).toBe("winner");
 });
