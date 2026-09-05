@@ -100,10 +100,11 @@ collision-safe public function tool. Matching request history and JSON/SSE funct
 translated back to the private `tool_search` lifecycle for the client. Canonical OpenAI forward
 keeps the native private type unchanged.
 
-For OpenCode Go at `https://opencode.ai/zen/go/v1`, plaintext Codex `agent_message`
-items become public user messages, preserving content parts and readable author/recipient
+For OpenCode Go at `https://opencode.ai/zen/go/v1`, requests with `authMode` other
+than `"forward"` convert plaintext Codex `agent_message` items into public user messages, preserving content parts and readable author/recipient
 metadata. This conversion leaves encrypted or unknown content unchanged and does not apply
-to other destinations. See [Go agent messages](/reference/configuration/providers/#opencode-go-session-and-agent-messages)
+to other destinations. Providers using `authMode: "forward"` retain these items unchanged.
+See [Go agent messages](/reference/configuration/providers/#opencode-go-session-and-agent-messages)
 for the separate opt-in encrypted-task recovery behavior.
 
 The canonical ChatGPT Codex forward destination also normalizes two public Responses shapes that

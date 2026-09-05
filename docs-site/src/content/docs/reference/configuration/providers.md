@@ -815,7 +815,8 @@ ids with context `922000` and max input `922000`; OpenRouter seeds `openai/gpt-5
 
 With the [`openai-responses` adapter](/reference/adapters/#openai-responses) and
 base URL `https://opencode.ai/zen/go/v1`, plaintext Codex `agent_message` items
-become user messages. This conversion is scoped to that destination, including
+become user messages when `authMode` is not `"forward"` (for example, `"key"`).
+Providers using `authMode: "forward"` retain these items unchanged. This conversion is scoped to that destination, including
 renamed provider entries; other Responses destinations keep their input unchanged.
 Author and recipient remain explicit text metadata, and the content parts are preserved.
 Encrypted and unknown content is not normalized; native encrypted tasks still require the
