@@ -98,7 +98,8 @@ and ported under `go/`. That policy is withdrawn as of 2026-07-30.
 The dual-track cost outran its return: the carry backlog never cleared (17
 commits and 9 open `needs-go-port` issues at the time of the decision, against
 594 commits of divergence), and dogfooding the Go runtime kept producing new
-defects. Bun-native TypeScript on `dev` is the single runtime line again.
+defects. Bun-native TypeScript on `dev` was the single runtime line again —
+until ADR-0008 reopened Go work as a sidecar takeover.
 
 - The branch has been deleted from this repository. Its full history is
   published at
@@ -108,9 +109,12 @@ defects. Bun-native TypeScript on `dev` is the single runtime line again.
   issues (#661, #663, #666, #670, #674, #678, #680, #685, #703) were closed as
   not planned, and the `needs-go-port` label no longer exists on the
   repository.
-- Future native work is expected to be an incremental module landing on `dev`
-  (Rust via N-API is the current candidate), not a second integration branch.
-  Reopening a parallel runtime line is an owner decision.
+- Future native work is expected to be an incremental module landing on `dev`,
+  not a second integration branch. At the time of retirement the candidate was
+  Rust via N-API; ADR-0008 supersedes that with a Go runtime reopened as an
+  incremental sidecar takeover — a fresh `go/` codebase, not a fork of this
+  archive and not a parallel line. Reopening a parallel runtime line remains an
+  owner decision. See `docs/adr/0008-go-runtime-incremental-takeover.md`.
 
 ## Maintainer changes
 

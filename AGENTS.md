@@ -16,8 +16,10 @@ Bun-native TypeScript with no separate server compile step.
   `tests/helpers/`, broader scenarios in `tests/e2e-style/`.
 - `gui/` — React + Vite dashboard; packaged output is served from `gui/dist`.
 - `docs-site/` — public docs (Astro + Starlight), deployed to GitHub Pages.
-- `go/` — retired Go native-runtime experiment; kept only where the TypeScript
-  runtime still references it. New work does not go here.
+- `go/` — the Go runtime under incremental takeover (see
+  `docs/adr/0008-go-runtime-incremental-takeover.md`). The retired `dev2-go`
+  port is archived at `lidge-jun/opencodex-go-archive` (tag `archive/dev2-go`)
+  and is reference material only, not a fork.
 - `structure/` — maintainer invariants and architecture notes; read before
   changing shared subsystems.
 - `scripts/` — release and maintenance tooling; `scripts/release.ts` is the
@@ -241,6 +243,20 @@ They are not regressions; do not re-investigate them:
 
 Everything else passes (15480 pass / 16 skip / 5 fail as of 2.35.0).
 
+## Agent skills
+
+### Issue tracker
+
+Issues live in this repo's GitHub Issues; agent-created issues must use the `.github/ISSUE_TEMPLATE/` forms (the `enforce-issue-quality` gate closes freeform issues). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five-label vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: root `CONTEXT.md` (when present) plus root `docs/adr/`. See `docs/agents/domain.md`.
+
 ## Issues and pull requests (agents)
 
 Agent-created issues and PRs must use the repository templates. The gates
@@ -282,9 +298,12 @@ than nudged.
   from `dev` (releases, docs deploys). Do not open feature PRs against `main`.
 - `preview` — prerelease train (`x.y.z-preview.*` versions).
 
-Bun-native TypeScript on `dev` is the only runtime line. If native code
-returns, the expectation is an incremental module (for example Rust via N-API)
-landing on `dev`, not a second full-runtime branch.
+Bun-native TypeScript on `dev` is the only runtime line today; it is being
+migrated to Go as an incremental sidecar takeover, per
+`docs/adr/0008-go-runtime-incremental-takeover.md`. The Go sidecar takes over
+routes one at a time behind the TypeScript front door, ending in a single
+static Go binary. The retired `dev2-go` parallel line stays retired — no
+second full-runtime branch is being reopened.
 
 Stacked child pull requests that target another **open** PR's head branch are
 an intentional review workflow, not an alternate integration line. The

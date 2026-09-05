@@ -120,10 +120,11 @@ exists so the repository-shape source of truth does not omit the shape of its ow
   by maintainer-controlled promotion; `preview` carries the `x.y.z-preview.*` train. One documented
   exception: a stacked child PR may target another **open** PR's head branch as a review workflow, and
   is retargeted to `dev` once the parent lands or closes.
-- Bun-native TypeScript on `dev` is the only runtime line. The former Go native-runtime experiment is
-  retired and archived, and no `go/` tree is tracked in this repository; a local `go/` directory is
-  untracked leftovers. If native code returns, the expectation is an incremental module landing on
-  `dev`, not a second full-runtime branch.
+- Bun-native TypeScript on `dev` is the only runtime line today; it is being migrated to Go as an
+  incremental sidecar takeover per ADR-0008, ending in a single static Go binary. The former Go
+  native-runtime experiment (`dev2-go`) is retired and archived at `lidge-jun/opencodex-go-archive`;
+  a fresh `go/` tree is the target of new Go work, and the archive is reference material only, not a
+  fork. No second full-runtime branch is being reopened.
 - `devlog/` is a tracked directory in this repository — no submodule, no private mirror. Open units
   live in `devlog/_plan/`, closed units in `devlog/_fin/`, and external parity references in
   `devlog/_chase/` (the reference clones themselves are gitignored).
