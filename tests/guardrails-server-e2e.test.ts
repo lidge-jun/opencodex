@@ -148,6 +148,102 @@ test("Guardrails detect mode leaves a real Responses request and response unchan
   }
 });
 
+test("Guardrails compact detect, block, and passthrough policies hold at the proxy wire boundary", async () => {
+  const secret = "sk_live_abcdefghijklmnopqrstuvwx";
+  const oversizedInput = `${secret} ${"x".repeat(128 * 1024)}`;
+  const upstreamBodies: string[] = [];
+  let proxy: ReturnType<typeof startServer> | null = null;
+  const upstream = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      upstreamBodies.push(await request.text());
+      return Response.json({
+        id: "resp-guardrails-compact-wire",
+        object: "response",
+        status: "completed",
+        output: [{
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "compact summary" }],
+        }],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      });
+    },
+  });
+  const startProxy = (
+    mode: NonNullable<OcxConfig["guardrails"]>["mode"],
+    failurePolicy: NonNullable<OcxConfig["guardrails"]>["failurePolicy"],
+  ) => {
+    saveConfig({
+      port: 0,
+      defaultProvider: "mock",
+      providers: {
+        mock: {
+          adapter: "openai-responses",
+          authMode: "key",
+          apiKey: "test-only-key",
+          baseUrl: upstream.url.toString().replace(/\/$/, ""),
+          responsesPath: "/responses",
+          allowPrivateNetwork: true,
+        },
+      },
+      guardrails: { enabled: true, mode, failurePolicy },
+    } as OcxConfig);
+    return startServer(0);
+  };
+  const compact = (input: string) => fetch(new URL("/v1/responses/compact", proxy!.url), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model: "mock/test-model",
+      input: [{
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: input }],
+      }],
+    }),
+  });
+
+  try {
+    proxy = startProxy("detect", "block");
+    const detected = await compact(secret);
+    expect(detected.status).toBe(200);
+    await detected.body?.cancel();
+    expect(upstreamBodies).toHaveLength(1);
+    expect(upstreamBodies[0]).toContain(secret);
+    expect(upstreamBodies[0]).not.toContain("<STRIPE_ACCESS_TOKEN_1>");
+    await proxy.stop(true);
+    proxy = null;
+
+    proxy = startProxy("enforce", "block");
+    const blocked = await compact(oversizedInput);
+    expect(blocked.status).toBe(413);
+    await blocked.body?.cancel();
+    expect(upstreamBodies).toHaveLength(1);
+    await proxy.stop(true);
+    proxy = null;
+
+    proxy = startProxy("enforce", "passthrough");
+    const passedThrough = await compact(oversizedInput);
+    expect(passedThrough.status).toBe(200);
+    await passedThrough.body?.cancel();
+    expect(upstreamBodies).toHaveLength(2);
+    const passedThroughWire = JSON.parse(upstreamBodies[1]!) as {
+      input?: Array<{ content?: Array<{ text?: unknown }> }>;
+    };
+    const passedThroughTexts = passedThroughWire.input
+      ?.flatMap(item => item.content ?? [])
+      .map(item => item.text)
+      .filter((text): text is string => typeof text === "string") ?? [];
+    expect(passedThroughTexts).toContain(oversizedInput);
+    expect(upstreamBodies[1]).not.toContain("<STRIPE_ACCESS_TOKEN_1>");
+  } finally {
+    await proxy?.stop(true);
+    upstream.stop(true);
+  }
+});
+
 test("Guardrails masks and demasks a real client-facing Responses WebSocket turn", async () => {
   const secret = "sk_live_abcdefghijklmnopqrstuvwx";
   let upstreamBody = "";

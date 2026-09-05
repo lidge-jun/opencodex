@@ -44,6 +44,8 @@ let releaseActivity: (() => void) | null = null;
 const mutations: Array<{ body: unknown; ifMatch: string | null }> = [];
 const activityRequests: string[] = [];
 const importRequests: Array<{ body: Record<string, unknown>; ifMatch: string | null }> = [];
+const testerRequests: unknown[] = [];
+const persistenceRequests: Array<{ method: string; pathname: string }> = [];
 let overviewRequests = 0;
 let rulesRequests = 0;
 let exportRequests = 0;
@@ -225,6 +227,9 @@ function installFetch() {
     value: async (input: string | URL | Request, init?: RequestInit) => {
       const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
       const method = init?.method ?? "GET";
+      if (method !== "GET" && url.pathname !== "/api/guardrails/test") {
+        persistenceRequests.push({ method, pathname: url.pathname });
+      }
       if (url.pathname === "/api/guardrails" && method === "GET") {
         overviewRequests += 1;
         if (holdOverview) {
@@ -294,6 +299,7 @@ function installFetch() {
         });
       }
       if (url.pathname === "/api/guardrails/test" && method === "POST") {
+        testerRequests.push(JSON.parse(String(init?.body)) as unknown);
         return json({
           mode: "effective",
           simulation: true,
@@ -375,6 +381,8 @@ beforeEach(() => {
   mutations.splice(0, mutations.length);
   activityRequests.splice(0, activityRequests.length);
   importRequests.splice(0, importRequests.length);
+  testerRequests.splice(0, testerRequests.length);
+  persistenceRequests.splice(0, persistenceRequests.length);
   overviewRequests = 0;
   rulesRequests = 0;
   exportRequests = 0;
@@ -631,6 +639,72 @@ test("Tester reports scan traffic status when Overview is unavailable", async ()
 
   expect(panel.textContent).toContain("Real traffic is detect-only and is not masked");
   expect(panel.textContent).not.toContain("protection status is still unknown");
+});
+
+test("Rules sends an unsaved draft to Tester without a persistence mutation", async () => {
+  await mount();
+  await openTab("rules");
+  const rulesPanel = host.querySelector("#guardrails-panel-rules")!;
+  const inputFor = (labelText: string) => [...rulesPanel.querySelectorAll<HTMLLabelElement>("label")]
+    .find(label => label.textContent?.includes(labelText))
+    ?.querySelector<HTMLInputElement>("input");
+  const setValue = (input: HTMLInputElement | undefined, value: string) => {
+    Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!
+      .set!.call(input, value);
+    input!.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+  };
+
+  await act(async () => {
+    setValue(inputFor("Rule ID"), "custom.workspace-draft");
+    setValue(inputFor("Rule name"), "Workspace draft");
+    setValue(inputFor("Display name"), "Workspace draft");
+    setValue(inputFor("RE2 pattern"), "workspace_[a-z]+");
+    setValue(inputFor("Placeholder type"), "WORKSPACE_SECRET");
+  });
+  await act(async () => {
+    [...rulesPanel.querySelectorAll<HTMLButtonElement>("button")]
+      .find(button => button.textContent?.includes("Scan")
+        && button.textContent.includes("Draft"))!
+      .click();
+    await new Promise(resolve => setTimeout(resolve, 15));
+  });
+
+  const testerPanel = host.querySelector("#guardrails-panel-tester")!;
+  expect(host.querySelector("#guardrails-tab-tester")?.getAttribute("aria-selected")).toBe("true");
+  expect(testerPanel.textContent).toContain("Draft settings: Workspace draft");
+  const textarea = testerPanel.querySelector<HTMLTextAreaElement>("textarea")!;
+  const textareaSetter = Object.getOwnPropertyDescriptor(
+    testWindow.HTMLTextAreaElement.prototype,
+    "value",
+  )!.set!;
+  await act(async () => {
+    textareaSetter.call(textarea, "workspace_secret");
+    textarea.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+  });
+  await act(async () => {
+    namedButton("Scan", testerPanel).click();
+    await new Promise(resolve => setTimeout(resolve, 15));
+  });
+
+  expect(mutations).toHaveLength(0);
+  expect(persistenceRequests).toHaveLength(0);
+  expect(testerRequests).toEqual([{
+    text: "workspace_secret",
+    draftRule: {
+      ruleId: "custom.workspace-draft",
+      name: "Workspace draft",
+      dataType: 6,
+      group: "CUSTOM",
+      groupPriority: 0,
+      displayName: "Workspace draft",
+      description: "",
+      regex: "workspace_[a-z]+",
+      keywords: [],
+      banlist: [],
+      validators: [],
+      masking: { captureGroups: [], placeholderType: "WORKSPACE_SECRET" },
+    },
+  }]);
 });
 
 test("Activity refresh keeps stale rows visible while loading", async () => {

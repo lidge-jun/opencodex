@@ -152,7 +152,7 @@ never sends a partially masked body.
 | Field | Meaning and default |
 | --- | --- |
 | `enabled` | Explicit opt-in. Only `true` activates the scanner; absence and `false` leave existing traffic unchanged. |
-| `mode` | `enforce` (default) replaces detected values on the provider-facing request and restores issued placeholders in eligible response prose. `detect` scans the request but sends the original request and response unchanged; it does not protect upstream data or persist the request for Responses replay. |
+| `mode` | `enforce` (default) replaces detected values on the provider-facing request and restores issued placeholders in eligible response prose. `detect` scans the request but preserves the baseline provider wire payload produced by normal protocol translation and leaves the provider response unchanged; it does not protect upstream data or persist the request for Responses replay. |
 | `failurePolicy` | `block` (default) rejects a request when the scanner cannot process it safely, including a traversal limit. `passthrough` may send that request unchanged instead and records a high-severity metadata event. It is an explicit fail-open policy, not a rule-match policy. |
 | `providerScope` | Optional closed object. Omitted or `{ "mode": "all" }` protects every current and future provider. `{ "mode": "selected", "providerIds": ["openai", "anthropic-native"] }` protects only those canonical provider IDs. Selected mode requires a non-empty, unique list of valid IDs. `anthropic-native` is reserved for the built-in native Anthropic path and cannot name a configured provider. |
 | `enabledDataTypes` | Optional non-empty subset of the numeric categories below; omitted means all six. |

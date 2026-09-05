@@ -56,12 +56,15 @@ Mode and failure policy are separate controls:
 | --- | --- |
 | `enforce` | Masks detected values before upstream I/O and restores issued placeholders only in non-executable assistant text. |
 | `detect` | Counts request findings but preserves the baseline wire payload produced by the normal opencodex protocol translation and leaves the provider response unchanged. It does **not** protect data sent to the provider and does not persist the request for Responses continuation replay. |
-| `block` | Default failure policy. A scanner, registry, traversal, or capacity failure stops the request before upstream I/O. |
+| `block` | Default failure policy. A request-side scanner, registry, traversal, or capacity failure stops the request before upstream I/O. |
 | `passthrough` | Explicit fail-open policy. A Guardrails processing failure may send the original, unmasked request upstream. The dashboard keeps a permanent warning while this policy is selected and records a high-severity metadata event when it is used. |
 
 The selected failure policy applies consistently to Responses, Chat Completions, native and routed
-Messages, and `messages/count_tokens`. Block failures stop before upstream I/O; passthrough
-failures forward the admitted original request rather than a partially transformed body.
+Messages, and `messages/count_tokens`. Request-side block failures stop before upstream I/O;
+request-side passthrough failures forward the admitted original request rather than a partially
+transformed body. Response-side demasking happens after upstream I/O and always fails safely:
+if restoration cannot complete within its bounds, the client receives the still-masked response
+with a metadata-only warning, regardless of the selected failure policy.
 
 Switching Guardrails off, selecting detect-only mode, or enabling passthrough requires a consequence
 confirmation in the dashboard.
