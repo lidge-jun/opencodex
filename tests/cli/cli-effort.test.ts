@@ -14,6 +14,8 @@ let logOrig = console.log;
 let errorOrig = console.error;
 
 beforeEach(() => {
+  logOrig = console.log;
+  errorOrig = console.error;
   tempHome = mkdtempSync(join(tmpdir(), "ocx-effort-test-"));
   process.env.OPENCODEX_HOME = tempHome;
   const initialConfig: OcxConfig = {
@@ -61,8 +63,6 @@ function fakeDeps(args: string[] = []): {
 } {
   const logs: string[] = [];
   const errors: string[] = [];
-  logOrig = console.log;
-  errorOrig = console.error;
   console.log = (...a: unknown[]) => logs.push(a.map(String).join(" "));
   console.error = (...a: unknown[]) => errors.push(a.map(String).join(" "));
 
@@ -142,10 +142,11 @@ describe("ocx effort offline config operations", () => {
     expect(updated.subagentEffortCap).toBe("medium");
   });
 
-  test("ocx effort clear unsets both caps", async () => {
+  test("ocx effort clear unsets both caps but preserves injection effort", async () => {
     const conf = readTestConfig();
     conf.effortCap = "high";
     conf.subagentEffortCap = "low";
+    conf.injectionEffort = "max";
     writeFileSync(join(tempHome!, "config.json"), JSON.stringify(conf, null, 2), "utf8");
 
     const { deps } = fakeDeps(["clear"]);
@@ -154,6 +155,23 @@ describe("ocx effort offline config operations", () => {
     const updated = readTestConfig();
     expect(updated.effortCap).toBeUndefined();
     expect(updated.subagentEffortCap).toBeUndefined();
+    expect(updated.injectionEffort).toBe("max");
+  });
+
+  test("ocx effort set --injection - clears injection without changing caps", async () => {
+    const conf = readTestConfig();
+    conf.effortCap = "high";
+    conf.subagentEffortCap = "low";
+    conf.injectionEffort = "max";
+    writeFileSync(join(tempHome!, "config.json"), JSON.stringify(conf, null, 2), "utf8");
+
+    const { deps } = fakeDeps(["set", "--injection", "-"]);
+    const code = await handleEffortCommand(["set", "--injection", "-"], deps);
+    expect(code).toBe(0);
+    const updated = readTestConfig();
+    expect(updated.effortCap).toBe("high");
+    expect(updated.subagentEffortCap).toBe("low");
+    expect(updated.injectionEffort).toBeUndefined();
   });
 
   test("ocx effort rejects unknown effort level with usage error 2", async () => {
@@ -192,6 +210,23 @@ describe("ocx effort offline config operations", () => {
 });
 
 describe("ocx effort online live-proxy integration & negative regressions", () => {
+  test("live status read failures never substitute offline config", async () => {
+    const { logs, errors } = fakeDeps(["status", "--json"]);
+    const configBefore = readTestConfig();
+    const code = await handleEffortCommand(["status", "--json"], {
+      baseUrl: "http://127.0.0.1:10100",
+      findLiveProxy: async () => null,
+      fetchImpl: async () => new Response(JSON.stringify({ error: "permission_denied" }), {
+        status: 403,
+        headers: { "Content-Type": "application/json" },
+      }),
+    });
+    expect(code).not.toBe(0);
+    expect(logs).toEqual([]);
+    expect(errors.join("\n")).toContain("permission_denied");
+    expect(readTestConfig()).toEqual(configBefore);
+  });
+
   test("ocx effort uses live management API when proxy is active", async () => {
     const requests: Array<{ path: string; method?: string; body?: unknown }> = [];
     const runtimeDeps = {

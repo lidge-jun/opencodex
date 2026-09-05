@@ -236,9 +236,9 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "With no arguments or `status`, displays effective effort caps, injection effort, and supported rungs.",
       "`ocx effort <level>` (or `set --main <level>`) sets the global/main-agent reasoning ceiling.",
       "`--subagent <level>` sets the hard ceiling for delegated sub-agent turns.",
-      "`ocx effort clear` (or `set --main - --subagent -`) removes reasoning caps.",
-        "`ocx effort model <provider/model|model>` inspects a model's configured ladder, disabled status, and wire mappings.",
-        "Works both online (via live proxy API) and offline (modifies persisted config safely with atomic writes).",
+      "`ocx effort clear` (or `set --main - --subagent -`) removes main and subagent caps but preserves injection effort; use `ocx effort set --injection -` to clear it.",
+      "`ocx effort model <provider/model|model>` inspects a model's configured ladder, disabled status, and wire mappings.",
+      "Works both online (via live proxy API) and offline (modifies persisted config safely with atomic writes).",
     ],
   },
   {
