@@ -59,7 +59,9 @@ export async function refreshOwnedIntegration(
   const bound = { ...rest, models, store };
   const result = await runIntegrationMutationFlight(
     input.clientId,
-    "refresh",
+    // Separate catalog snapshots must not inherit another refresh's success.
+    // The shared flight owner returns busy for overlapping operations instead.
+    `refresh:${crypto.randomUUID()}`,
     input.io?.now ?? Date.now,
     () => refreshIntegrationCoordinated(bound, options),
   );

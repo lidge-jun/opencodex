@@ -674,3 +674,38 @@ describe("Pi and Aside provider selection", () => {
     expect(await ids()).toEqual(["xai/grok-4.3", "xai/grok-4.5", "xai/grok-4.6"]);
   });
 });
+
+describe("visibility changes refresh connected client catalogs", () => {
+  test.each([
+    ["/api/selected-models", { provider: "a", models: ["m1"] }, ["a/m1"]],
+    ["/api/disabled-models", { models: ["a/m2"] }, ["a/m1"]],
+    ["/api/model-visibility", { scope: "models", provider: "a", targets: [{ id: "m2" }], enabled: false }, ["a/m1"]],
+    ["/api/model-presets", { provider: "a", mode: "all" }, ["a/m1", "a/m2"]],
+  ] as const)("%s refreshes from the persisted selection and reports refused clients", async (path, body, expected) => {
+    const config = baseConfig({ fastRows: false });
+    let saved = false;
+    let refreshCalls = 0;
+    const url = new URL(`http://127.0.0.1:10100${path}`);
+    const response = await handleManagementAPI(new Request(url, {
+      method: "PUT", headers: { Host: url.host, "content-type": "application/json" }, body: JSON.stringify(body),
+    }), url, config, {
+      saveConfigPreservingClaudeCode: () => { saved = true; },
+      createManagementConvergeCodex: catalogConvergenceFactory(),
+      refreshOwnedCatalogIntegrations: async input => {
+        expect(saved).toBe(true);
+        expect(input.config).toBe(config);
+        expect(input.port).toBe(10100);
+        const models = typeof input.models === "function" ? await input.models() : input.models;
+        expect(models.filter(row => row.provider === "a").map(row => row.namespaced)).toEqual([...expected]);
+        refreshCalls += 1;
+        return [{ client: "pi", ok: false, reason: "integration_mutation_busy" }, { client: "aside", ok: true, changed: true }];
+      },
+    });
+    expect(response?.status).toBe(200);
+    expect(refreshCalls).toBe(1);
+    expect(await response!.json()).toMatchObject({
+      ok: true,
+      clientIntegrations: [{ client: "pi", ok: false, reason: "integration_mutation_busy" }, { client: "aside", ok: true, changed: true }],
+    });
+  });
+});

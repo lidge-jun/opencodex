@@ -183,6 +183,17 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
   // bypass this seam with a dynamic config import — doing so replaced a user's
   // ~/.opencodex/config.json with the `existing-uuid` test fixture.
   const persistConfig = deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode;
+  const convergeVisibleCatalogs = async () => {
+    const catalogRefresh = await convergeCodexCatalog();
+    const refresh = deps.refreshOwnedCatalogIntegrations
+      ?? (await import("../../integrations/catalog-refresh")).refreshOwnedCatalogIntegrations;
+    const clientIntegrations = await refresh({
+      config,
+      port: Number(url.port) || config.port,
+      models: () => loadExportModels(config),
+    });
+    return { catalogRefresh, clientIntegrations };
+  };
 
   if (url.pathname === "/api/model-discovery" && req.method === "GET") {
     const providers = Object.fromEntries(Object.entries(config.providers).map(([name, provider]) => [
@@ -518,8 +529,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     const disabled = Array.isArray(body.models) ? body.models.filter((m): m is string => typeof m === "string") : [];
     config.disabledModels = disabled;
     persistConfig(config);
-    const catalogRefresh = await convergeCodexCatalog();
-    return jsonResponse({ ok: true, disabled, catalogRefresh });
+    return jsonResponse({ ok: true, disabled, ...await convergeVisibleCatalogs() });
   }
 
   // One user-facing visibility switch spans two persisted filters: a provider allowlist and the
@@ -644,8 +654,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
 
     config.disabledModels = disabled;
     persistConfig(config);
-    const catalogRefresh = await convergeCodexCatalog();
-    return jsonResponse({ ok: true, scope, provider, enabled: body.enabled, disabled, catalogRefresh });
+    return jsonResponse({ ok: true, scope, provider, enabled: body.enabled, disabled, ...await convergeVisibleCatalogs() });
   }
 
   if (url.pathname === "/api/custom-models" && req.method === "GET") {
@@ -855,7 +864,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
       delete target.selectedModels;
       delete target.modelPreset;
       persistConfig(config);
-      return jsonResponse({ ok: true, provider, mode, selected: [], catalogRefresh: await convergeCodexCatalog() });
+      return jsonResponse({ ok: true, provider, mode, selected: [], ...await convergeVisibleCatalogs() });
     }
     if (mode === "custom") {
       // Keep whatever is selected; only the marker changes, so a user can pin their edits
@@ -900,7 +909,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
       mode: "preset",
       appliedVersion: preset.version,
       selected: presetIds,
-      catalogRefresh: await convergeCodexCatalog(),
+      ...await convergeVisibleCatalogs(),
     });
   }
   if (url.pathname === "/api/selected-models" && req.method === "PUT") {
@@ -924,8 +933,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     // re-materialize over it afterwards.
     markModelPresetDiverged(config.providers[provider]);
     persistConfig(config);
-    const catalogRefresh = await convergeCodexCatalog();
-    return jsonResponse({ ok: true, provider, selected: models, catalogRefresh });
+    return jsonResponse({ ok: true, provider, selected: models, ...await convergeVisibleCatalogs() });
   }
   return null;
 }

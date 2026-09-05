@@ -5,7 +5,8 @@ import { dirname, join } from "node:path";
 import type { ExportModel } from "../../src/clients/config-export";
 import { claudeDesktopIntegrationEnabled, grokIntegrationEnabled } from "../../src/codex/desired-state";
 import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
-import { IntegrationMutationBusyError, runIntegrationMutationFlight } from "../../src/integrations/mutation-flight";
+import { IntegrationMutationBusyError, runIntegrationMutationFlight, setIntegrationMutationFlightTestHook } from "../../src/integrations/mutation-flight";
+import { refreshOwnedCatalogIntegrations } from "../../src/integrations/catalog-refresh";
 import { refreshOwnedIntegration } from "../../src/integrations/owned-refresh";
 import { createIntegrationStateStore, type IntegrationStateStore } from "../../src/integrations/store";
 import type { IntegrationWriterLockSeams } from "../../src/integrations/writer-lock";
@@ -59,11 +60,10 @@ describe("ocx sync fans out to enabled native clients and owned file integration
 
     expect(fn).toContain("grokIntegrationEnabled(config)");
     expect(fn).toContain("claudeDesktopIntegrationEnabled(config)");
-    expect(fn).toContain('clientId: "mcode"');
-    expect(fn).toContain("refreshOwnedIntegration");
-    // One catch per client: a broken client file is a warning, not a 500 on a command whose
-    // main job (the Codex catalog) succeeded.
-    expect(fn.match(/catch \(error\)/g)?.length).toBe(3);
+    expect(fn).toContain('["mcode", "pi", "aside"]');
+    expect(fn).toContain("refreshOwnedCatalogIntegrations");
+    // Native clients keep their catches; the owned catalog helper isolates file clients.
+    expect(fn.match(/catch \(error\)/g)?.length).toBe(2);
     // The Desktop write gets the native context limits, same as every other Desktop
     // call site. 8b672205e threaded `nativeContextLimits` through those writers and
     // left this assertion naming the retired `providerContextCap` spelling, so the
@@ -302,17 +302,220 @@ describe("ocx sync refreshes an already-owned MCode integration", () => {
   });
 });
 
-test("the direct ocx sync command refreshes MCode instead of relying on /api/sync", async () => {
+describe("owned Pi/Aside catalogs follow filtered model selections", () => {
+  const clients = ["pi", "aside"] as const;
+  const env: NodeJS.ProcessEnv = {};
+  const config = {
+    port: 10100,
+    hostname: "127.0.0.1",
+    defaultProvider: "mock",
+    providers: { mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1/v1" } },
+  } as OcxConfig;
+  const oldModels: ExportModel[] = [
+    { namespaced: "mock/visible", provider: "mock", id: "visible", contextWindow: 128_000 },
+    { namespaced: "mock/hidden", provider: "mock", id: "hidden", contextWindow: 64_000 },
+  ];
+  const filteredModels = oldModels.slice(0, 1);
+  const sibling = { baseUrl: "http://user.invalid/v1", models: [{ id: "personal" }] };
+  let root: string;
+  let home: string;
+  let store: IntegrationStateStore;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "ocx-owned-catalog-refresh-"));
+    home = join(root, "home");
+    store = createIntegrationStateStore(join(root, "state", "integrations"));
+    mkdirSync(join(home, ".aside"), { recursive: true });
+    writeFileSync(join(home, ".aside", "accounts.json"), JSON.stringify({ currentAccountId: 0 }));
+    for (const client of clients) {
+      mkdirSync(INTEGRATION_CLIENTS[client].detectDir(env, home), { recursive: true });
+      mkdirSync(dirname(INTEGRATION_CLIENTS[client].configPath(env, home)), { recursive: true });
+      writeFileSync(INTEGRATION_CLIENTS[client].configPath(env, home), JSON.stringify({
+        theme: "dark", providers: { personal: sibling },
+      }));
+    }
+  });
+
+  afterEach(() => {
+    removeTreeWithRetry(root);
+  });
+
+  function input(models: readonly ExportModel[] | (() => Promise<readonly ExportModel[]>)) {
+    return { models, config, port: 10100, env, home, store };
+  }
+
+  function document(client: typeof clients[number]) {
+    return JSON.parse(readFileSync(INTEGRATION_CLIENTS[client].configPath(env, home), "utf8")) as {
+      theme: string;
+      providers: {
+        personal: typeof sibling;
+        opencodex?: { baseUrl: string; api: string; apiKey: string; models: Array<{ id: string }> };
+      };
+    };
+  }
+
+  test("refreshes both owned catalogs from one lazy load and preserves unrelated settings", async () => {
+    for (const clientId of clients) {
+      expect(applyIntegration({ ...input(oldModels), clientId }).ok).toBe(true);
+      expect(document(clientId).providers.opencodex?.models.map(model => model.id))
+        .toEqual(["mock/hidden", "mock/visible"]);
+    }
+    let loads = 0;
+    const outcomes = await refreshOwnedCatalogIntegrations(input(async () => {
+      loads += 1;
+      return filteredModels;
+    }));
+    expect(outcomes).toEqual(clients.map(client => ({ client, ok: true, changed: true })));
+    expect(loads).toBe(1);
+    for (const client of clients) {
+      expect(document(client)).toMatchObject({ theme: "dark", providers: { personal: sibling } });
+      expect(document(client).providers.opencodex).toMatchObject({
+        baseUrl: "http://127.0.0.1:10100/v1", api: "openai-completions", apiKey: "opencodex-loopback",
+      });
+      expect(document(client).providers.opencodex?.models.map(model => model.id)).toEqual(["mock/visible"]);
+      expect(store.listOperations(client).map(row => row.kind)).toEqual(["refresh", "apply"]);
+    }
+  });
+
+  test("never loads or writes unowned manual catalogs", async () => {
+    const before = JSON.stringify({ providers: { personal: sibling, opencodex: { models: [{ id: "manual" }] } } });
+    for (const client of clients) writeFileSync(INTEGRATION_CLIENTS[client].configPath(env, home), before);
+    let loads = 0;
+    const outcomes = await refreshOwnedCatalogIntegrations(input(async () => {
+      loads += 1;
+      return filteredModels;
+    }));
+    expect(outcomes).toEqual([]);
+    expect(loads).toBe(0);
+    for (const client of clients) {
+      expect(readFileSync(INTEGRATION_CLIENTS[client].configPath(env, home), "utf8")).toBe(before);
+    }
+    expect(store.readRecords()).toEqual({});
+    expect(store.listOperations()).toEqual([]);
+    expect(existsSync(store.root)).toBe(false);
+  });
+
+  test.each(clients)("does not reconnect a removed %s block", async clientId => {
+    expect(applyIntegration({ ...input(oldModels), clientId }).ok).toBe(true);
+    const recordBefore = store.readRecords()[clientId];
+    const before = JSON.stringify({ theme: "dark", providers: { personal: sibling } });
+    const path = INTEGRATION_CLIENTS[clientId].configPath(env, home);
+    writeFileSync(path, before);
+    expect(await refreshOwnedCatalogIntegrations(input(filteredModels))).toEqual([{
+      client: clientId, ok: true, changed: false,
+      reason: "managed block is absent; refresh did not reconnect it",
+    }]);
+    expect(readFileSync(path, "utf8")).toBe(before);
+    expect(store.readRecords()[clientId]).toEqual(recordBefore);
+    expect(store.listOperations(clientId).map(row => row.kind)).toEqual(["apply"]);
+  });
+
+  test.each(clients)("does not recreate an uninstalled %s client", async clientId => {
+    expect(applyIntegration({ ...input(oldModels), clientId }).ok).toBe(true);
+    const recordBefore = store.readRecords()[clientId];
+    const detectDir = INTEGRATION_CLIENTS[clientId].detectDir(env, home);
+    removeTreeWithRetry(detectDir);
+    const outcomes = await refreshOwnedCatalogIntegrations(input(filteredModels));
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]).toMatchObject({ client: clientId, ok: false });
+    expect(outcomes[0]?.reason).toContain(`${clientId} is not installed`);
+    expect(existsSync(detectDir)).toBe(false);
+    expect(store.readRecords()[clientId]).toEqual(recordBefore);
+    expect(store.listOperations(clientId).map(row => row.kind)).toEqual(["apply"]);
+  });
+
+  test.each(clients)("preserves a drifted %s provider and its ownership record", async clientId => {
+    expect(applyIntegration({ ...input(oldModels), clientId }).ok).toBe(true);
+    const recordBefore = store.readRecords()[clientId];
+    const edited = document(clientId);
+    edited.providers.opencodex!.baseUrl = "http://user-edited.invalid/v1";
+    const before = JSON.stringify(edited);
+    const path = INTEGRATION_CLIENTS[clientId].configPath(env, home);
+    writeFileSync(path, before);
+    const outcomes = await refreshOwnedCatalogIntegrations(input(filteredModels));
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]).toMatchObject({ client: clientId, ok: false });
+    expect(outcomes[0]?.reason).toContain("changed after opencodex wrote it");
+    expect(readFileSync(path, "utf8")).toBe(before);
+    expect(store.readRecords()[clientId]).toEqual(recordBefore);
+    expect(store.listOperations(clientId).map(row => row.kind)).toEqual(["apply"]);
+  });
+
+  test("a thrown Pi filesystem error does not prevent the owned Aside refresh", async () => {
+    for (const clientId of clients) expect(applyIntegration({ ...input(oldModels), clientId }).ok).toBe(true);
+    const path = INTEGRATION_CLIENTS.pi.configPath(env, home);
+    const before = readFileSync(path, "utf8");
+    const recordBefore = store.readRecords().pi;
+    const io = store.io();
+    const outcomes = await refreshOwnedCatalogIntegrations({
+      ...input(filteredModels),
+      io: { ...io, statKind: candidate => {
+        if (candidate === path) throw new Error("synthetic Pi stat failure");
+        return io.statKind(candidate);
+      } },
+    });
+    expect(outcomes).toEqual([
+      { client: "pi", ok: false, reason: "synthetic Pi stat failure" },
+      { client: "aside", ok: true, changed: true },
+    ]);
+    expect(readFileSync(path, "utf8")).toBe(before);
+    expect(store.readRecords().pi).toEqual(recordBefore);
+    expect(store.listOperations("pi").map(row => row.kind)).toEqual(["apply"]);
+    expect(document("aside").providers.opencodex?.models.map(model => model.id)).toEqual(["mock/visible"]);
+    expect(store.listOperations("aside").map(row => row.kind)).toEqual(["refresh", "apply"]);
+  });
+
+  test.each(clients)("overlapping %s selections report busy and a later retry applies the new roster", async clientId => {
+    expect(applyIntegration({ ...input(oldModels), clientId }).ok).toBe(true);
+    const nextModels = oldModels.slice(1);
+    let release!: () => void;
+    let observeFirst!: () => void;
+    let observeSecond!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { observeFirst = resolve; });
+    const contended = new Promise<void>(resolve => { observeSecond = resolve; });
+    setIntegrationMutationFlightTestHook(async operation => {
+      observeFirst();
+      await gate;
+      return operation();
+    });
+    const first = refreshOwnedCatalogIntegrations(input(filteredModels), [clientId]);
+    let second: ReturnType<typeof refreshOwnedCatalogIntegrations> | undefined;
+    try {
+      await started;
+      second = refreshOwnedCatalogIntegrations({
+        ...input(nextModels),
+        io: { ...store.io(), now: () => { observeSecond(); return Date.now(); } },
+      }, [clientId]);
+      await contended;
+      release();
+      expect(await first).toEqual([{ client: clientId, ok: true, changed: true }]);
+      expect(await second).toEqual([{ client: clientId, ok: false, reason: "integration_mutation_busy" }]);
+      expect(document(clientId).providers.opencodex?.models.map(model => model.id)).toEqual(["mock/visible"]);
+      expect(store.listOperations(clientId).map(row => row.kind)).toEqual(["refresh", "apply"]);
+    } finally {
+      release();
+      await Promise.allSettled([first, ...(second ? [second] : [])]);
+      setIntegrationMutationFlightTestHook(null);
+    }
+    expect(await refreshOwnedCatalogIntegrations(input(nextModels), [clientId]))
+      .toEqual([{ client: clientId, ok: true, changed: true }]);
+    expect(document(clientId).providers.opencodex?.models.map(model => model.id)).toEqual(["mock/hidden"]);
+    expect(store.listOperations(clientId).map(row => row.kind)).toEqual(["refresh", "refresh", "apply"]);
+  });
+});
+
+test("the direct ocx sync command refreshes MCode, Pi and Aside instead of relying on /api/sync", async () => {
   const src = await Bun.file(new URL("../../src/cli/dispatch.ts", import.meta.url)).text();
   const start = src.indexOf("sync: async deps =>");
   const command = src.slice(start, src.indexOf("v2: async deps =>", start));
-  expect(command).toContain("refreshOwnedIntegration");
-  expect(command).toContain('clientId: "mcode"');
-  expect(command.indexOf("syncModelsToCodex")).toBeLessThan(command.indexOf("refreshOwnedIntegration"));
+  expect(command).toContain("refreshOwnedCatalogIntegrations");
+  expect(command).toContain('["mcode", "pi", "aside"]');
+  expect(command.indexOf("syncModelsToCodex")).toBeLessThan(command.indexOf("refreshOwnedCatalogIntegrations"));
   expect(command).toContain('synced.status !== "refused"');
 });
 
-test("refresh joins refresh but cannot swallow an explicit apply or disable", async () => {
+test("identical explicit mutation keys join but cannot swallow a different apply or disable", async () => {
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   let refreshRuns = 0;

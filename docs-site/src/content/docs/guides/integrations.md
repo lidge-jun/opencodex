@@ -218,9 +218,12 @@ ocx integration client enable --client mcode
 ocx mcode
 ```
 
-Once connected, `ocx sync` also refreshes the owned MCode block with current context
-windows and reasoning-effort ladders. It leaves missing, foreign-edited, unsafe, and
-never-owned blocks untouched; re-enable explicitly when you intend to reconnect one.
+Once connected, `ocx sync` refreshes owned MCode, Pi, and Aside catalogs with the current
+model selection, context windows, and reasoning-effort ladders. Changes to model visibility,
+provider selection, or presets also refresh connected Pi and Aside catalogs. Missing,
+foreign-edited, unsafe, and never-owned blocks stay untouched; reconnect them explicitly.
+A refused or overlapping refresh is reported separately for each client. Start a new Pi
+session or fully quit and reopen Aside to load the updated file.
 
 The separate MiniMax platform CLI (`mmx`) is not a file-toggle integration. Its text
 commands use MiniMax's Anthropic-compatible endpoint, so OpenCodex provides a

@@ -1,3 +1,4 @@
+import type { IntegrationClientId } from "../../integrations/registry";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../../codex/catalog";
@@ -151,7 +152,7 @@ async function sidecarVisionResponseSettings(config: OcxConfig): Promise<{
 
 /** One client's outcome from a fan-out sync. Absent from the list means "left alone". */
 interface ClientIntegrationSyncOutcome {
-  readonly client: "grok" | "claude-desktop" | "mcode";
+  readonly client: "grok" | "claude-desktop" | IntegrationClientId;
   readonly ok: boolean;
   readonly changed?: boolean;
   readonly reason?: string;
@@ -215,30 +216,15 @@ async function syncEnabledClientIntegrations(
     }
   }
 
-  try {
-    const { refreshOwnedIntegration } = await import("../../integrations/owned-refresh");
-    const result = await refreshOwnedIntegration({
-      clientId: "mcode",
-      models: async () => {
-        const { loadExportModels } = await import("./model-rows");
-        return loadExportModels(config);
-      },
-      config,
-      port,
-    });
-    if (result) {
-      out.push(result.ok
-        ? {
-            client: "mcode",
-            ok: true,
-            changed: result.changed === true,
-            ...(result.reason ? { reason: result.reason } : {}),
-          }
-        : { client: "mcode", ok: false, reason: result.reason });
-    }
-  } catch (error) {
-    out.push({ client: "mcode", ok: false, reason: error instanceof Error ? error.message : String(error) });
-  }
+  const { refreshOwnedCatalogIntegrations } = await import("../../integrations/catalog-refresh");
+  out.push(...await refreshOwnedCatalogIntegrations({
+    models: async () => {
+      const { loadExportModels } = await import("./model-rows");
+      return loadExportModels(config);
+    },
+    config,
+    port,
+  }, ["mcode", "pi", "aside"]));
 
   return out;
 }

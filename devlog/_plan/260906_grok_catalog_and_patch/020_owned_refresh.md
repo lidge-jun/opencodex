@@ -15,3 +15,13 @@ Verification: standalone isolated writer probe using synthetic models and temp h
 The existing constant refresh mutation-flight key incorrectly joins different model selections. MODIFY src/integrations/owned-refresh.ts to use a unique per-refresh operation key (crypto.randomUUID), making overlapping refreshes explicitly busy rather than reporting another desired catalog as success. Implicit refresh never joins an explicit HTTP mutation. Add controlled overlap with distinct old/new rosters: second call reports integration_mutation_busy; first result describes only its own write. Subsequent retry applies the new roster. Return per-client failures; never retry stale snapshots automatically.
 
 Add a ManagementApiDeps refreshOwnedCatalogIntegrations seam for route verification, defaulting to the real helper. Creation: exported helper/deps type; consumption: model routes and explicit sync. No serialization/deserialization: runtime-only dependency injection. Tests use fake IO/store or temporary home, never actual user-owned files.
+
+## P revalidation and implementation interface
+
+010 b8010aebd passes the four standalone visibility probes and source review; all original hosted-CI/merge criteria are retained under the terminal stack cycle, not marked complete. Helper signature: refreshOwnedCatalogIntegrations(input: Omit<OwnedIntegrationRefreshInput, "clientId">, clientIds: readonly IntegrationClientId[] = ["pi", "aside"]): Promise<OwnedIntegrationRefreshOutcome[]>. Memoize the lazy model load per fan-out; no owned record means no catalog load. Catch and redact each failure. Explicit sync passes [mcode,pi,aside]. Visibility routes attach both catalogRefresh and clientIntegrations; native Codex failure does not undo an already persisted selection.
+
+Delegate tests only to one worker: tests/clients/sync-client-integrations.test.ts owns helper refresh+overlap coverage; main owns implementation and route regression tests. The worker has no production writes, suite execution, FSM or git mutations.
+
+## Implementation audit synthesis
+
+Averroes found an indirect source-oracle dependency: codex-convergence-contract.test.ts counts direct convergence calls and two preset calls. The shared visibility helper changes direct count but preserves fourteen logical paths. Update the inventory to subtract the helper definition and add its five callers, assert exactly one Codex convergence inside the helper, and preserve the marker-only custom preset negative. Run that affected file remotely in addition to the writer/route tests. No runtime blockers in the ownership audit.

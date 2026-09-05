@@ -387,25 +387,26 @@ const commandRunners: Record<string, CommandRunner> = {
       if (restartDesktopApp) await handleDesktopAppRestart(console);
     }
     // `ocx sync` is a direct CLI path; it does not call the management
-    // `/api/sync` route. Refresh the already-connected MCode block here too,
+    // `/api/sync` route. Refresh already-connected file integrations here too,
     // after Codex has published the catalog that supplies its capabilities.
     if (synced.status !== "refused" && live) {
       try {
         const config = deps.loadConfig();
-        const { refreshOwnedIntegration } = await import("../integrations/owned-refresh");
-        const result = await refreshOwnedIntegration({
-          clientId: "mcode",
+        const { refreshOwnedCatalogIntegrations } = await import("../integrations/catalog-refresh");
+        const results = await refreshOwnedCatalogIntegrations({
           models: async () => {
             const { loadExportModels } = await import("../server/management/model-rows");
             return loadExportModels(config);
           },
           config,
           port: live.port,
-        });
-        if (result?.changed) console.log("MCode integration refreshed from the current catalog.");
-        else if (result?.reason) console.warn(`MCode integration was not refreshed: ${result.reason}`);
+        }, ["mcode", "pi", "aside"]);
+        for (const result of results) {
+          if (result.changed) console.log(`${result.client} integration refreshed from the current catalog.`);
+          else if (result.reason) console.warn(`${result.client} integration was not refreshed: ${result.reason}`);
+        }
       } catch (error) {
-        console.warn(`MCode integration was not refreshed: ${error instanceof Error ? error.message : String(error)}`);
+        console.warn(`Client integrations were not refreshed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
     return code;

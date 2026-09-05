@@ -47,6 +47,15 @@ serialization: provider selections, disabled models, and pending initial selecti
 the client roster. The full management list remains available for selection. Native rows retain
 their existing visibility rules.
 
+## Owned catalog convergence
+
+Visibility, selected-model and preset writes refresh already-owned Pi/Aside contributions after
+persisting the selection. Explicit sync refreshes MCode, Pi and Aside. The shared catalog-refresh
+fan-out loads the filtered roster lazily once, leaves unowned clients alone, and reports each
+refusal independently. Existing coordinated writers retain all no-clobber and ownership checks.
+Implicit refresh operations use distinct flight keys: overlapping desired catalogs return busy
+rather than joining a write of a different catalog and reporting false success.
+
 ## Fast model selectors
 
 The serving proxy resolves `fastRowAvailable` on every management model row, including its
