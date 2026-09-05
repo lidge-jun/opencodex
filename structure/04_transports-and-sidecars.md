@@ -33,19 +33,21 @@ enumeration twice made a measured 12.3-second fallback cost roughly 25 seconds b
 - 다른 대안 대신 이 방식을 선택한 이유: Removing or weakening revalidation widens the install race, while a global/TTL cache can outlive startup and stale absence can authorize the wrong home. Exact targeted-result identity lets the ordinary no-task locale fallback coalesce without hiding changed evidence.
 - 장점, 단점 및 영향: The reported stable zh-CN absence path performs two cheap targeted queries and one full listing. A task that appears is detected by the second targeted query; changed or failed evidence triggers a fresh fail-closed decision, so unusual churn may still pay for two listings rather than guess.
 
-## Linux stable service launcher
+## Stable service launcher (launchd and systemd)
 
-Systemd installation resolves the first absolute `ocx` PATH candidate that is both a regular file
+Launchd and systemd installation resolve the first absolute `ocx` PATH candidate that is both a regular file
 and executable, keeps that path lexical so a version-manager shim remains an indirection, and
-records the same single resolution in the unit and service state. Unit construction never performs
-PATH discovery itself: callers provide either the resolved launcher or an explicit direct Bun/CLI
+records the same single resolution in the service definition and service state. Definition
+construction (`buildPlist`, `buildUnit`) never performs PATH discovery itself: callers provide either the resolved launcher or an explicit direct Bun/CLI
 fallback, keeping diagnostics and tests independent of the host PATH.
 
 Launcher mode omits the package-local Bun provenance pair because an upgrade may delete that
 versioned tree. The only runtime path carried through the launcher is a pre-Bun, proof-bound
 `OPENCODEX_BUN_PATH` whose durable runtime source is `override`; bundled and process fallbacks are
 rediscovered by the current launcher. The API-auth token remains file-backed and is loaded only by
-the service shell at start.
+the service shell at start. On macOS, `start` and detailed `status` compare the live launchd job
+against `expectedLaunchdCommand`, which follows the recorded `launcherPath` rather than re-walking
+PATH, so a launcher-backed job is never misreported as an older plist (#3464).
 
 [Decision Log]
 - 목적과 의도: Keep systemd services upgrade-stable without losing an explicitly trusted Bun override or accepting a non-executable PATH placeholder.
