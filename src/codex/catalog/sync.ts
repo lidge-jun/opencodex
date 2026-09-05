@@ -268,7 +268,13 @@ function isExactComboCatalogEntry(
  * ids differ by a single dash (`command-code` vs `commandcode`), so relabel them to the
  * lowercase-dash style the opencode presets use: `commandcode-auth/x` and `commandcode-api/x`.
  * The model-id portion also carries a redundant `<vendor>-` prefix (`deepseek-deepseek-v4-flash`)
- * that is dropped for display. All other providers keep the raw slug exactly as before.
+ * that is dropped for display. Google Antigravity is relabeled to the compact `agy/` prefix for
+ * the same reason: `google-antigravity/` alone consumes most of the picker row. That prefix comes
+ * from the row's own `providerAlias`, decided once per gather flight; `null` means a cross-provider
+ * collision suppressed it and the canonical slug stands. This is the raw-slug path only -- a
+ * configured `modelAliases` entry is labeled by the effective-alias path in
+ * catalog/provider-fetch.ts (#2960) and keeps the canonical provider name. All other providers
+ * keep the raw slug exactly as before.
  */
 function routedDisplayName(slug: string, model?: CatalogModel, config?: Pick<OcxConfig, "providers">): string {
   const slash = slug.indexOf("/");
