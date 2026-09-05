@@ -68,6 +68,13 @@ missing credential — the proxy did not recognise the request as loopback. Open
 the address the proxy prints on startup (usually `http://127.0.0.1:<port>`), and prefer that exact
 host and port over a LAN IP or an alias.
 
+## Dashboard layout
+
+Overview uses matching status cards and full-width settings rows. On wide screens, labels share
+one column and model/effort controls share another. On narrower screens, controls move below their
+labels in the same reading order. Long version labels are shortened visually; hover the version
+badge or the Version card to read the full value.
+
 ## What you can do
 
 | Area | What it does |
