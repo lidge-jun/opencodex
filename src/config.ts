@@ -3030,6 +3030,14 @@ export class PersistedConfigInitializationRollbackError extends Error {
   }
 }
 
+export class PersistedConfigInitializationHardLinkUnavailableError extends Error {
+  readonly code = "CONFIG_INITIALIZATION_HARDLINK_UNAVAILABLE";
+  constructor(options?: ErrorOptions) {
+    super("Initial config publication requires hard-link support; no-replace semantics unavailable", options);
+    this.name = "PersistedConfigInitializationHardLinkUnavailableError";
+  }
+}
+
 export interface PersistedConfigInitializationIO {
   createExclusive(path: string): void;
   write(path: string, bytes: string): void;
@@ -3041,9 +3049,13 @@ export interface PersistedConfigInitializationIO {
 }
 
 let persistedConfigInitializationBeforePublishForTests: (() => void) | null = null;
+let persistedConfigInitializationAfterPublishForTests: (() => void) | null = null;
 
 export function setPersistedConfigInitializationBeforePublishForTests(hook: (() => void) | null): void {
   persistedConfigInitializationBeforePublishForTests = hook;
+}
+export function setPersistedConfigInitializationAfterPublishForTests(hook: (() => void) | null): void {
+  persistedConfigInitializationAfterPublishForTests = hook;
 }
 
 function publishInitialConfigNoReplace(config: OcxConfig, io: PersistedConfigInitializationIO): boolean {
@@ -3087,6 +3099,11 @@ function publishInitialConfigNoReplace(config: OcxConfig, io: PersistedConfigIni
     hook?.();
     try { io.publishNoReplace(temp, target); }
     catch (cause) {
+      const code = cause && typeof cause === "object" && "code" in cause
+        ? String((cause as { code?: unknown }).code) : "";
+      if (code === "EOPNOTSUPP" || code === "EXDEV" || code === "EPERM") {
+        throw new PersistedConfigInitializationHardLinkUnavailableError({ cause });
+      }
       if (!isAlreadyExistsError(cause)) throw cause;
       scrubUnpublishedTemp(cause);
       return false;
@@ -3140,9 +3157,29 @@ function defaultPersistedConfigInitializationIO(configPath: string): PersistedCo
           closeSync(descriptor); descriptor = undefined;
           throw new Error("atomic initialization temporary file identity changed before publication");
         }
-        closeSync(descriptor); descriptor = undefined;
       }
-      linkSync(temp, target);
+      try {
+        linkSync(temp, target);
+        persistedConfigInitializationAfterPublishForTests?.();
+        persistedConfigInitializationAfterPublishForTests = null;
+        if (descriptor !== undefined) {
+          const published = lstatSync(target);
+          const opened = fstatSync(descriptor);
+          if (opened.dev !== published.dev || opened.ino !== published.ino) {
+            try { unlinkSync(target); } catch { /* preserve the original identity failure */ }
+            throw new Error("atomic initialization published target identity changed");
+          }
+        }
+      } catch (cause) {
+        const code = cause && typeof cause === "object" && "code" in cause
+          ? String((cause as { code?: unknown }).code) : "";
+        if (code === "EOPNOTSUPP" || code === "EXDEV" || code === "EPERM") {
+          throw new PersistedConfigInitializationHardLinkUnavailableError({ cause });
+        }
+        throw cause;
+      } finally {
+        if (descriptor !== undefined) { closeSync(descriptor); descriptor = undefined; }
+      }
     },
     truncate: target => truncateSync(target, 0),
     unlink: unlinkSync,

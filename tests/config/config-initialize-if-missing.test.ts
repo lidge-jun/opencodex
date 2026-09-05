@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, unlinkSync, writeFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import {
   AtomicWriteSecretResidualError,
@@ -7,6 +7,7 @@ import {
   initializePersistedConfigIfMissing,
   loadConfig,
   setPersistedConfigInitializationBeforePublishForTests,
+  setPersistedConfigInitializationAfterPublishForTests,
 } from "../../src/config";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -23,6 +24,7 @@ beforeEach(() => {
 
 afterEach(() => {
   setPersistedConfigInitializationBeforePublishForTests(null);
+  setPersistedConfigInitializationAfterPublishForTests(null);
   if (previous === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previous;
   removeTreeWithRetry(root);
@@ -91,4 +93,25 @@ test("reports secret residual when staged bytes cannot be scrubbed or removed", 
     unlink: (() => { throw new Error("unlink blocked"); }) as (path: string) => void,
   };
   expect(() => initializePersistedConfigIfMissing(config(), io)).toThrow(AtomicWriteSecretResidualError);
+});
+
+test("rejects a post-link target identity swap", () => {
+  setPersistedConfigInitializationAfterPublishForTests(() => {
+    const replacement = join(root, "replacement");
+    writeFileSync(replacement, "other-bytes");
+    renameSync(replacement, getConfigPath());
+  });
+  expect(() => initializePersistedConfigIfMissing(config(20000))).toThrow(/published target identity changed/);
+});
+
+test("classifies unavailable hard-link publication", () => {
+  const io = {
+    createExclusive: (path: string) => writeFileSync(path, "", { flag: "wx" }),
+    write: (path: string, bytes: string) => writeFileSync(path, bytes),
+    harden: () => {},
+    publishNoReplace: () => { throw Object.assign(new Error("unsupported"), { code: "EOPNOTSUPP" }); },
+    truncate: (path: string) => writeFileSync(path, ""),
+    unlink: unlinkSync,
+  };
+  expect(() => initializePersistedConfigIfMissing(config(), io)).toThrow(/hard-link support/);
 });
