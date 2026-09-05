@@ -1005,6 +1005,7 @@
     "responses-context-overflow.test.ts": "responses",
     "responses-custom-tool-guidance.test.ts": "responses",
     "responses-custom-tool-repair.test.ts": "responses",
+    "responses-function-tool-repair.test.ts": "responses",
     "responses-fetch-helpers-boundary.test.ts": "responses",
     "responses-field-backfill.test.ts": "responses",
     "responses-forward-dangling-call.test.ts": "responses",

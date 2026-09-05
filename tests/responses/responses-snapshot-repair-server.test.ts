@@ -190,3 +190,34 @@ describe("responsesSnapshotRepair through /v1/responses", () => {
     }
   });
 });
+
+test("sparse JSON completion inference precedes function repair in client output and replay", async () => {
+  const expected = '{"cell_id":"4","yield_time_ms":120000}';
+  const item = { type: "function_call", id: "fc_sparse_wait", call_id: "call_sparse_wait", name: "wait", arguments: '{"cell_id":4,"yield_time_ms":120000.0}' };
+  let responseId = `resp_sparse_${crypto.randomUUID()}`;
+  let capturedInput: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (_input, init) => {
+    capturedInput = JSON.parse(String(init?.body)).input;
+    return Response.json({ id: responseId, output: [item] });
+  }) as typeof fetch;
+  const config = {
+    port: 0, defaultProvider: "sparse",
+    providers: { sparse: { adapter: "openai-responses", baseUrl: "https://sparse-function.invalid/v1", authMode: "key", apiKey: "fixture", responsesSnapshotRepair: true } },
+  } as OcxConfig;
+  const request = (extra: object = {}) => new Request("http://localhost/v1/responses", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model: "sparse/probe", stream: false, input: "synthetic",
+      tools: [{ type: "function", name: "wait", parameters: { type: "object", properties: { cell_id: { type: "string" }, yield_time_ms: { type: "integer" } } } }],
+      ...extra,
+    }),
+  });
+  const first = await handleResponses(request(), config, { model: "", provider: "" });
+  expect(first.status).toBe(200);
+  expect(await first.json()).toMatchObject({ status: "completed", output: [{ status: "completed", arguments: expected }] });
+  const previous = responseId;
+  responseId = `resp_sparse_followup_${crypto.randomUUID()}`;
+  const second = await handleResponses(request({ previous_response_id: previous, input: [{ type: "function_call_output", call_id: item.call_id, output: "done" }] }), config, { model: "", provider: "" });
+  await second.text();
+  expect(capturedInput.find(value => value.type === "function_call" && value.call_id === item.call_id)?.arguments).toBe(expected);
+});

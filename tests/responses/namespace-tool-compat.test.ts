@@ -67,6 +67,7 @@ describe("Responses namespace tool compatibility", () => {
     ]);
     expect([...rewritten.aliases]).toEqual([
       ["collaboration__spawn_agent", { namespace: "collaboration", name: "spawn_agent", kind: "function" }],
+      ["collaboration.spawn_agent", { namespace: "collaboration", name: "spawn_agent", kind: "function" }],
     ]);
   });
 
@@ -124,6 +125,7 @@ describe("Responses namespace tool compatibility", () => {
     });
     expect([...allowed.aliases]).toEqual([
       ["collaboration__safe", { namespace: "collaboration", name: "safe", kind: "function" }],
+      ["collaboration.safe", { namespace: "collaboration", name: "safe", kind: "function" }],
     ]);
     expect(restoreRoutedNamespaceCalls({
       type: "function_call",
@@ -237,7 +239,7 @@ describe("Responses namespace tool compatibility", () => {
           ],
         },
       });
-      expect([...aliases.keys()]).toEqual([wireName]);
+      expect([...aliases.keys()]).toEqual([wireName, "collaboration.safe"]);
     });
   });
 
@@ -253,7 +255,7 @@ describe("Responses namespace tool compatibility", () => {
       const { aliases } = rewriteRoutedNamespaceToolsForUpstream(
         choice === undefined ? { tools } : { tools, tool_choice: choice },
       );
-      expect(aliases.size).toBe(2);
+      expect(aliases.size).toBe(4);
     }
     // A top-level selector for another tool kind states a restriction that no
     // namespace call satisfies, so it authorizes nothing.
@@ -482,6 +484,7 @@ describe("Responses namespace tool compatibility", () => {
   test("restores only aliases authorized by this request in JSON and SSE payloads", () => {
     const aliases = new Map([
       ["collaboration__spawn_agent", { namespace: "collaboration", name: "spawn_agent", kind: "function" }],
+      ["collaboration.spawn_agent", { namespace: "collaboration", name: "spawn_agent", kind: "function" }],
     ]);
     const payload = {
       type: "response.completed",
@@ -515,5 +518,37 @@ describe("Responses namespace tool compatibility", () => {
       ] },
     });
     expect(restoreRoutedNamespaceCallsInJson("not-json", aliases)).toBe("not-json");
+  });
+});
+
+describe("dotted namespace restoration uses the declaration collision boundary", () => {
+  const ping = { type: "namespace", name: "mcp", tools: [{ type: "function", name: "ping", parameters: {} }] };
+  test("restores the dotted spelling after canonical tool-choice authorization", () => {
+    const { aliases } = rewriteRoutedNamespaceToolsForUpstream({ tools: [ping], tool_choice: { type: "function", namespace: "mcp", name: "ping" } });
+    expect(restoreRoutedNamespaceCalls({ type: "function_call", name: "mcp.ping", arguments: "{}" }, aliases).value)
+      .toEqual({ type: "function_call", name: "ping", namespace: "mcp", arguments: "{}" });
+    const conflicting = { type: "function_call", name: "mcp.ping", namespace: "other", arguments: "{}" };
+    expect(restoreRoutedNamespaceCalls(conflicting, aliases).value).toEqual(conflicting);
+  });
+  test.each([
+    { type: "function", name: "mcp.ping", parameters: {} },
+    { type: "namespace", name: "functions", tools: [{ type: "function", name: "mcp.ping", parameters: {} }] },
+  ])("a bare canonical declaration prevents dotted shadowing in either order", collision => {
+    for (const tools of [[ping, collision], [collision, ping]]) {
+      const { aliases } = rewriteRoutedNamespaceToolsForUpstream({ tools, tool_choice: { type: "function", namespace: "mcp", name: "ping" } });
+      expect(aliases.has("mcp.ping")).toBe(false);
+      expect(aliases.has("mcp__ping")).toBe(true);
+    }
+  });
+  test("different dotted coordinates remain ambiguous and canonical forms remain distinct", () => {
+    for (const tools of [
+      [{ type: "namespace", name: "a.b", tools: [{ type: "function", name: "c" }] }, { type: "namespace", name: "a", tools: [{ type: "function", name: "b.c" }] }],
+      [{ type: "namespace", name: "a", tools: [{ type: "function", name: "b.c" }] }, { type: "namespace", name: "a.b", tools: [{ type: "function", name: "c" }] }],
+    ]) {
+      const { aliases } = rewriteRoutedNamespaceToolsForUpstream({ tools });
+      expect(aliases.has("a.b.c")).toBe(false);
+      expect(aliases.has("a.b__c")).toBe(true);
+      expect(aliases.has("a__b.c")).toBe(true);
+    }
   });
 });

@@ -330,6 +330,12 @@ Codex. Native custom calls and converted function calls use the same completion 
 patch previews are held while their executable form is unresolved. JavaScript that merely
 contains patch text and unrelated native custom payloads stay unchanged.
 
+Ordinary routed Responses function calls also use the original declared parameter schema at
+completion: integral floats in integer fields and integral numbers in string-only fields are
+normalized, while fractions and numeric unions stay unchanged. An explicitly empty completed
+argument string becomes `{}`. Final events and locally stored continuation history agree.
+Unambiguous dotted namespace spellings are restored to the declared namespace and tool name.
+
 The selected provider must support function/tool calling. A text-only provider without tool-call
 support cannot use `exec`, Browser, or Computer Use. Native OpenAI rows keep their upstream tool
 mode unchanged.
