@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { sanitizePassthroughHeaders } from "../../src/server";
+import { passthroughHeaderOptions, sanitizePassthroughHeaders } from "../../src/server";
 
 describe("passthrough header sanitization (RC5 / F4)", () => {
   test("content-type: text/event-stream survives sanitization", () => {
@@ -41,5 +41,40 @@ describe("passthrough header sanitization (RC5 / F4)", () => {
     expect(sanitized.has("set-cookie")).toBe(false);
     expect(sanitized.has("set-cookie2")).toBe(false);
     expect(sanitized.get("content-type")).toBe("text/event-stream");
+  });
+});
+
+describe("codex safety-buffering hint headers", () => {
+  const upstream = () => new Headers({
+    "content-type": "text/event-stream",
+    "x-codex-safety-buffering-enabled": "true",
+    "X-Codex-Safety-Buffering-Faster-Model": "gpt-5.6-luna",
+    "x-codex-primary-used-percent": "12",
+    "openai-model": "gpt-6-astra",
+  });
+
+  test("forwarded verbatim by default and when the option is off", () => {
+    for (const options of [undefined, {}, { dropCodexSafetyBufferingHeaders: false }]) {
+      const sanitized = sanitizePassthroughHeaders(upstream(), options);
+      expect(sanitized.get("x-codex-safety-buffering-enabled")).toBe("true");
+      expect(sanitized.get("x-codex-safety-buffering-faster-model")).toBe("gpt-5.6-luna");
+    }
+  });
+
+  test("dropped case-insensitively when opted in, other x-codex headers survive", () => {
+    const sanitized = sanitizePassthroughHeaders(upstream(), { dropCodexSafetyBufferingHeaders: true });
+    expect(sanitized.has("x-codex-safety-buffering-enabled")).toBe(false);
+    expect(sanitized.has("x-codex-safety-buffering-faster-model")).toBe(false);
+    expect(sanitized.get("x-codex-primary-used-percent")).toBe("12");
+    expect(sanitized.get("openai-model")).toBe("gpt-6-astra");
+    expect(sanitized.get("content-type")).toBe("text/event-stream");
+  });
+
+  test("passthroughHeaderOptions only enables the drop on an explicit true", () => {
+    expect(passthroughHeaderOptions({})).toEqual({ dropCodexSafetyBufferingHeaders: false });
+    expect(passthroughHeaderOptions({ dropCodexSafetyBufferingHeaders: false }))
+      .toEqual({ dropCodexSafetyBufferingHeaders: false });
+    expect(passthroughHeaderOptions({ dropCodexSafetyBufferingHeaders: true }))
+      .toEqual({ dropCodexSafetyBufferingHeaders: true });
   });
 });

@@ -1422,7 +1422,31 @@ export function consumeForResponseLogMetadata(
  * body makes the caller (Codex) double-decode / truncate → "stream error" on every gpt passthrough.
  * Drop encoding + hop-by-hop headers; relay everything else (content-type, etc.) verbatim.
  */
-export function sanitizePassthroughHeaders(upstream: Headers): Headers {
+export const CODEX_SAFETY_BUFFERING_HEADERS = [
+  "x-codex-safety-buffering-enabled",
+  "x-codex-safety-buffering-faster-model",
+] as const;
+
+const CODEX_SAFETY_BUFFERING_HEADER_SET: ReadonlySet<string> = new Set(CODEX_SAFETY_BUFFERING_HEADERS);
+
+export interface PassthroughHeaderOptions {
+  /**
+   * Also drop the `x-codex-safety-buffering-*` hints. The Codex TUI renders them as a
+   * "retry with a faster model" prompt whose default action switches the session's model,
+   * which is unwanted for unattended sessions. Off unless the operator opts in.
+   */
+  dropCodexSafetyBufferingHeaders?: boolean;
+}
+
+/** Resolve the passthrough header policy from the loaded config (absent means "forward everything"). */
+export function passthroughHeaderOptions(
+  config: { dropCodexSafetyBufferingHeaders?: boolean },
+): PassthroughHeaderOptions {
+  return { dropCodexSafetyBufferingHeaders: config.dropCodexSafetyBufferingHeaders === true };
+}
+
+export function sanitizePassthroughHeaders(upstream: Headers, options?: PassthroughHeaderOptions): Headers {
+  const dropSafetyBuffering = options?.dropCodexSafetyBufferingHeaders === true;
   const DROP = new Set([
     "content-encoding",
     "content-length",
@@ -1439,7 +1463,10 @@ export function sanitizePassthroughHeaders(upstream: Headers): Headers {
   ]);
   const out = new Headers();
   upstream.forEach((value, key) => {
-    if (!DROP.has(key.toLowerCase())) out.set(key, value);
+    const lower = key.toLowerCase();
+    if (DROP.has(lower)) return;
+    if (dropSafetyBuffering && CODEX_SAFETY_BUFFERING_HEADER_SET.has(lower)) return;
+    out.set(key, value);
   });
   return out;
 }

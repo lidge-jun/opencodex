@@ -304,6 +304,7 @@ import {
   markEagerRelaySseResponse,
   markNativePassthroughSseResponse,
   relaySseWithFailedTail,
+  passthroughHeaderOptions,
   relayWithAbort,
   sanitizePassthroughHeaders,
 } from "../relay";
@@ -4732,7 +4733,7 @@ async function handleResponsesInner(
     }
     break;
     }
-    const headers = sanitizePassthroughHeaders(upstreamResponse.headers);
+    const headers = sanitizePassthroughHeaders(upstreamResponse.headers, passthroughHeaderOptions(config));
     const resolvedModel = headers.get("openai-model")?.trim();
     if (resolvedModel && !logCtx.preserveResolvedModelFromRoute) logCtx.resolvedModel = resolvedModel;
     if (isUsageDebugEnabled()) {
@@ -4824,7 +4825,7 @@ async function handleResponsesInner(
       return new Response(upstreamResponse.body, {
         status: upstreamResponse.status,
         statusText: upstreamResponse.statusText,
-        headers: sanitizePassthroughHeaders(upstreamResponse.headers),
+        headers: sanitizePassthroughHeaders(upstreamResponse.headers, passthroughHeaderOptions(config)),
       });
     }
     if (!upstreamResponse.ok) {
@@ -5238,7 +5239,7 @@ async function handleResponsesInner(
             }
             throw error;
           }
-          const sseHeaders = sanitizePassthroughHeaders(headers);
+          const sseHeaders = sanitizePassthroughHeaders(headers, passthroughHeaderOptions(config));
           sseHeaders.set("content-type", "text/event-stream");
           sseHeaders.set("cache-control", "no-store");
           return new Response(stream, {

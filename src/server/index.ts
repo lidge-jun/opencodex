@@ -142,6 +142,7 @@ import {
 } from "./relay";
 export {
   consumeForInspection,
+  passthroughHeaderOptions,
   relaySseWithFailedTail,
   relaySseWithHeartbeat,
   relayWithAbort,
