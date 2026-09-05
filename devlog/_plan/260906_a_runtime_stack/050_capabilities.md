@@ -2,7 +2,7 @@
 
 ## Implementation-cycle completion versus landing
 
-This decade cycle ends with a reviewed prepared draft PR, exact-carried-head focused remote activation evidence and remote typecheck, with full CI dispatched. That cycle D does not claim the bug shipped, full CI passed, or an issue resolved. `060_landing.md` retains the mandatory full current-head cross-platform/type/privacy/docs evidence, review, dev ancestry and immediate source-PR/fully-resolved-issue closure gates. Later P consumes the verified prepared stack parent; it need not have landed yet. Only final landing yields feature DONE.
+This decade cycle ends with a reviewed prepared draft PR, exact-carried-head focused remote activation evidence and remote typecheck, with full CI dispatched. That cycle D does not claim the bug shipped, full CI passed, or an issue resolved. `080_landing.md` retains the mandatory full current-head cross-platform/type/privacy/docs evidence, review, dev ancestry and immediate source-PR/fully-resolved-issue closure gates. Later P consumes the verified prepared stack parent; it need not have landed yet. Only final landing yields feature DONE.
 
 
 ## Candidate implementation contract
@@ -14,7 +14,7 @@ Status: candidate planning, not implementation or merge approval. Revalidate at 
 - Goal: runtime selection and ordinary management dry-run agree on effective transport capabilities and exclude unresolved, missing, or disabled providers before scoring.
 - Non-goals: new provider metadata, registry precedence redesign, catalog UI, OAuth refresh, request transport changes, Lab activation changes, release operations, or changing caller-supplied synthetic dry-run evidence semantics.
 - Verifier: remote focused routing/API regressions plus exact-head full Cross-platform CI and a remote documentation build. No local tests, typecheck, builds, or verifier execution in this planning assignment.
-- Stop: independently working reviewed draft with original authorship and exact-head remote focused/type evidence. Full current-head gates/dev ancestry remain required by 060.
+- Stop: independently working reviewed draft with original authorship and exact-head remote focused/type evidence. Full current-head gates/dev ancestry remain required by 080.
 - Memory artifact: this document and the main-owned roadmap/evidence ledger.
 - Outcomes: DONE only after verified dev integration; NOOP only if current dev independently contains all behavior and regressions; BLOCKED for unavailable external CI/credentials; NEEDS_HUMAN/UNSAFE for a policy decision outside authorization; a resource checkpoint is reassessment, never fabricated completion.
 - Delegation: inherited parallel read-only reviewers are authorized. Main reclaims a packet after two distinct failed workers; further write delegation requires a P amendment with exact ownership.

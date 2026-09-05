@@ -52,6 +52,14 @@ ayrıdır.
 
 ## Kaydedilmiş bir profilde deneme çalıştırması (dry-run) yapma
 
+Aday yetenekleri, kayıt defteri kuralları uygulandıktan sonraki etkin sağlayıcı
+yapılandırmasını kullanır. Yerellik gereksinimleri (`localOnly` ve `remoteAllowed`)
+bu nedenle etkin üst sunucu adresine göre değerlendirilir. Adres sınıflandırılamıyorsa,
+adayın uygunluğunu profilin `unknownEvidence.capability` ayarı belirler.
+Çözümlenemeyen geçersiz sağlayıcı yapılandırmaları, bilinmeyen yeteneklere izin
+verilse bile `route-unavailable` ile her zaman dışlanır.
+Eksik veya devre dışı sağlayıcılar da puanlama öncesinde `route-unavailable` ile dışlanır.
+
 Kaydedilmiş bir profili seçin ve bağlam penceresi boyutu, araç kullanımı, görsel
 girişi veya yapılandırılmış çıktı gibi istek kanıtları eklemek için **Deneme
 çalıştırması değerlendirmesi (Dry-run evaluation)**'ı kullanın. Deneme
@@ -99,5 +107,3 @@ Düzenleyici şu uç noktaları kullanır:
   }
 }
 ```
-
-

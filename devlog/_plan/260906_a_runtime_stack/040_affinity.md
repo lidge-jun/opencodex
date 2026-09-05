@@ -6,7 +6,7 @@ This first-cycle artifact is docs only; re-read current source at this layer's P
 
 ## Implementation-cycle completion versus landing
 
-This decade cycle ends with a reviewed prepared draft PR, exact-carried-head focused remote activation evidence and remote typecheck, with full CI dispatched. That cycle D does not claim the bug shipped, full CI passed, or an issue resolved. `060_landing.md` retains the mandatory full current-head cross-platform/type/privacy/docs evidence, review, dev ancestry and immediate source-PR/fully-resolved-issue closure gates. Later P consumes the verified prepared stack parent; it need not have landed yet. Only final landing yields feature DONE.
+This decade cycle ends with a reviewed prepared draft PR, exact-carried-head focused remote activation evidence and remote typecheck, with full CI dispatched. That cycle D does not claim the bug shipped, full CI passed, or an issue resolved. `080_landing.md` retains the mandatory full current-head cross-platform/type/privacy/docs evidence, review, dev ancestry and immediate source-PR/fully-resolved-issue closure gates. Later P consumes the verified prepared stack parent; it need not have landed yet. Only final landing yields feature DONE.
 
 
 ## Loop specification and scope
@@ -21,7 +21,7 @@ This decade cycle ends with a reviewed prepared draft PR, exact-carried-head foc
   default trust for unclassified cache keys, or extra OAuth cache-key forwarding.
 - Verifier: remote identity/forwarding/reparse regressions, full current-head CI,
   privacy/type gates and independent boundary review. No local verifier runs.
-- Stop: reviewed prepared draft atop recovery, with exact-head remote focused/type evidence. Full current-head gates and dev ancestry remain required in 060.
+- Stop: reviewed prepared draft atop recovery, with exact-head remote focused/type evidence. Full current-head gates and dev ancestry remain required in 080.
 - Memory artifact: this file plus main-owned roadmap/ledger. Main alone owns
   FSM, goal, implementation, Git and stack integration.
 - Resources: existing gh credentials and later own-branch writes only. Inherited

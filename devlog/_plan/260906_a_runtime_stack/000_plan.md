@@ -17,13 +17,14 @@
 
 | Cycle | Artifact | Consumes | Delivers |
 |---|---|---|---|
-| roadmap | 000 + 010..060 | live dev and public contributor changes | audited full integration plan; docs only |
+| roadmap | 000 + 010..080 | live dev and public contributor changes | audited full integration plan; docs only |
 | sse | 010_sse.md | existing SSE relay boundary | failure notification independent of tee cancellation |
 | ws | 020_ws.md | prior transport baseline | WS outbound policy and pool identity |
 | recovery | 030_recovery.md | validated transport stack | MESSAGE recovery + reparse/cache semantics |
 | affinity | 040_affinity.md | recovery/reparse fields | stable Command Code conversation identity |
 | capabilities | 050_capabilities.md | final effective dispatch behavior | policy selection congruent with dispatch |
-| landing | 060_landing.md | independently verified stack layers | current dev inclusion and closeout |
+| windows-fixtures | 070_windows_fixtures.md | current Windows failure evidence | deterministic verifier repair below A stack |
+| landing | 080_landing.md | independently verified stack layers and verifier repair | current dev inclusion and closeout |
 
 The owner explicitly requested a stack. Independent transport fixes are retained as separate cumulative layers to expose interaction at each head; this publication order is not a claim of a hard dependency between SSE and WS. The actual code dependency is recovery before affinity. Each layer has its own PR diff, regression proof and CI. Bottom-up merge only; retarget before deleting parent branches. Keep stacks short by landing verified lower layers while subsequent cycles continue when possible.
 

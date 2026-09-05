@@ -6,7 +6,7 @@ land; no implementation or verification pass is claimed here.
 
 ## Implementation-cycle completion versus landing
 
-This decade cycle ends with a reviewed prepared draft PR, exact-carried-head focused remote activation evidence and remote typecheck, with full CI dispatched. That cycle D does not claim the bug shipped, full CI passed, or an issue resolved. `060_landing.md` retains the mandatory full current-head cross-platform/type/privacy/docs evidence, review, dev ancestry and immediate source-PR/fully-resolved-issue closure gates. Later P consumes the verified prepared stack parent; it need not have landed yet. Only final landing yields feature DONE.
+This decade cycle ends with a reviewed prepared draft PR, exact-carried-head focused remote activation evidence and remote typecheck, with full CI dispatched. That cycle D does not claim the bug shipped, full CI passed, or an issue resolved. `080_landing.md` retains the mandatory full current-head cross-platform/type/privacy/docs evidence, review, dev ancestry and immediate source-PR/fully-resolved-issue closure gates. Later P consumes the verified prepared stack parent; it need not have landed yet. Only final landing yields feature DONE.
 
 
 ## Loop specification and scope
@@ -23,7 +23,7 @@ This decade cycle ends with a reviewed prepared draft PR, exact-carried-head foc
 - Verifier: exact-layer remote focused regressions, full Cross-platform CI,
   privacy and type gates, and independent recovery-boundary review. Commands
   below are planned for remote execution only; none ran during planning.
-- Stop condition: reviewed prepared draft and exact-head remote focused/type evidence; full CI/dev inclusion are required by 060 before feature completion. Partial #3661 stays open.
+- Stop condition: reviewed prepared draft and exact-head remote focused/type evidence; full CI/dev inclusion are required by 080 before feature completion. Partial #3661 stays open.
 - Memory artifact: this file and main-owned `000` roadmap/evidence ledger.
 - Outcomes: DONE only with the evidence above; NOOP only if current dev already
   contains equivalent behavior and regressions; BLOCKED for external CI/review
