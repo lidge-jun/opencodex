@@ -542,8 +542,9 @@ test("Logs: an intercepted helper row is badged and filterable", async () => {
   await flushMicrotasks();
 
   // The badge names the ORIGINAL helper model, which is the attribution that was being lost.
-  expect(container.textContent).toContain("I · gpt-5.6-luna");
-  expect(container.textContent).toContain("gpt-test");
+  const tableText = () => container.querySelector(".logs-table tbody")?.textContent ?? "";
+  expect(tableText()).toContain("I · gpt-5.6-luna");
+  expect(tableText()).toContain("gpt-test");
 
   const toggle = [...container.querySelectorAll("input[type=checkbox]")].find(
     input => input.closest("label")?.textContent?.includes("Intercepted helpers only"),
@@ -557,8 +558,8 @@ test("Logs: an intercepted helper row is badged and filterable", async () => {
   });
 
   // Filtered: the marked row stays, the ordinary one goes.
-  expect(container.textContent).toContain("I · gpt-5.6-luna");
-  expect(container.textContent).not.toContain("gpt-test");
+  expect(tableText()).toContain("I · gpt-5.6-luna");
+  expect(tableText()).not.toContain("gpt-test");
 
   await act(async () => { toggle!.click(); });
   await act(async () => {
@@ -566,7 +567,7 @@ test("Logs: an intercepted helper row is badged and filterable", async () => {
     await Promise.resolve();
   });
 
-  expect(container.textContent).toContain("gpt-test");
+  expect(tableText()).toContain("gpt-test");
 
   await act(async () => { root.unmount(); });
 });

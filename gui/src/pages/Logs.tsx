@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useI18n, LOCALES, type TFn } from "../i18n/shared";
 import { formatProviderDisplayName } from "../provider-icons";
 import { formatTokens } from "../format-tokens";
-import { hashLogConversationQuery, matchesLogConversationId } from "../log-conversation-id";
+import { hashLogConversationQuery } from "../log-conversation-id";
 import { statusCodeInfo } from "../status-codes";
 import { IconX } from "../icons";
 import { modelLabel } from "../model-display";
@@ -12,6 +12,8 @@ import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
 import { EmptyState, Notice } from "../ui";
 import Debug from "./Debug";
+import { LogsFilterBar } from "./logs-filter-bar";
+import { DEFAULT_LOG_FILTER_STATE, extractLogFilterOptions, filterLogs, hasActiveLogFilters, type LogFilterState } from "./logs-filter";
 
 import type { LogsTab } from "./logs-tab-keydown";
 import { logsTabKeyDown, readTabFromHash, selectLogsTab } from "./logs-tab-keydown";
@@ -19,9 +21,7 @@ import { modelTitle, type ModelTitleTierOutcome } from "./logs-model-title";
 import { speedLabel } from "./logs-speed-label";
 import { formatEstimatedUsd, formatEstimatedUsdValue, summarizeEstimatedCosts } from "./logs-cost-format";
 import { cacheSplit, isCursorUsageProvider, tokensTitle } from "./logs-token-title";
-import type { LogSurface, LogSurfaceFilter } from "./logs-surface-filter";
-import { logMatchesSurface } from "./logs-surface-filter";
-import { logMatchesModelQuery } from "./logs-model-filter";
+import type { LogSurface } from "./logs-surface-filter";
 import {
   sanitizeLogEntryRouteDecision,
   validCachedRouteDecision,
@@ -30,6 +30,8 @@ import {
 function logsCacheKey(apiBase: string): string {
   return `ocx.logs.list.v1:${apiBase}`;
 }
+
+const EMPTY_LOGS: LogEntry[] = [];
 
 interface UsageBreakdown {
   inputTokens: number;
@@ -373,11 +375,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
     { error: null, count: 0 },
   );
   const [detail, setDetail] = useState<LogEntry | null>(null);
-  const [surfaceFilter, setSurfaceFilter] = useState<LogSurfaceFilter>("all");
-  const [interceptedHelpersOnly, setInterceptedHelpersOnly] = useState(false);
-  const [conversationFilter, setConversationFilter] = useState("");
-  const [modelFilter, setModelFilter] = useState("");
-  const [conversationQueryHash, setConversationQueryHash] = useState<string | undefined>();
+  const [filters, setFilters] = useState<LogFilterState>(DEFAULT_LOG_FILTER_STATE);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const logRetryRef = useRef<{ key: string; failures: number; nextAttemptAt: number; error: unknown }>(
     { key: resourceKey, failures: 0, nextAttemptAt: 0, error: null },
@@ -472,7 +470,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
     },
   );
   const logsState = logsResource.state;
-  const logs = logsState.data ?? cachedLogs ?? [];
+  const logs = logsState.data ?? cachedLogs ?? EMPTY_LOGS;
   const fetchLogs = logsResource.refresh;
   const retryLogs = useCallback(() => {
     logRetryRef.current = { key: resourceKey, failures: 0, nextAttemptAt: 0, error: null };
@@ -499,26 +497,23 @@ export default function Logs({ apiBase }: { apiBase: string }) {
     || (!autoRefresh && settledFailure);
 
   const detailInfo = detail ? statusCodeInfo(detail.status, locale) : null;
-  const conversationQuery = conversationFilter.trim();
+  const conversationQuery = filters.conversationId.trim();
 
   useEffect(() => {
     let cancelled = false;
     if (!conversationQuery) {
-      setConversationQueryHash(undefined);
+      setFilters(prev => prev.conversationQueryHash === undefined ? prev : { ...prev, conversationQueryHash: undefined });
       return;
     }
     void hashLogConversationQuery(conversationQuery).then(hash => {
-      if (!cancelled) setConversationQueryHash(hash);
+      if (!cancelled) setFilters(prev => prev.conversationQueryHash === hash ? prev : { ...prev, conversationQueryHash: hash });
     });
     return () => { cancelled = true; };
   }, [conversationQuery]);
 
-  const filteredLogs = logs.filter(log => (
-    logMatchesSurface(log, surfaceFilter)
-    && (!interceptedHelpersOnly || Boolean(log.shadowCallRewrittenFrom))
-    && logMatchesModelQuery(log, modelFilter)
-    && (!conversationQuery || matchesLogConversationId(log.conversationId, conversationQuery, conversationQueryHash))
-  ));
+  const filterOptions = useMemo(() => extractLogFilterOptions(logs), [logs]);
+  const activeFilters = hasActiveLogFilters(filters);
+  const filteredLogs = useMemo(() => filterLogs(logs, filters), [logs, filters]);
   const conversationTotals = conversationQuery ? summarizeFilteredLogs(filteredLogs) : null;
 
   // TanStack Virtual returns unstable function identities; React Compiler skips this call.
@@ -597,65 +592,16 @@ export default function Logs({ apiBase }: { apiBase: string }) {
         hidden={tab !== "logs"}
       >
 
-      <div className="logs-toolbar">
-        <span className="muted text-control">{t("logs.filter.surface.label")}</span>
-        <div className="segmented logs-segmented" role="radiogroup" aria-label={t("logs.filter.surface.label")}>
-          {(["all", "claude", "codex", "grok"] as const).map(surface => (
-            <button
-              key={surface}
-              type="button"
-              role="radio"
-              aria-checked={surfaceFilter === surface}
-              className={`btn btn-sm${surfaceFilter === surface ? " btn-primary" : " btn-ghost"}`}
-              style={{ background: surfaceFilter === surface ? undefined : "transparent", color: surfaceFilter === surface ? undefined : "var(--muted)" }}
-              onClick={() => setSurfaceFilter(surface)}
-            >
-              {t(`logs.filter.surface.${surface}`)}
-            </button>
-          ))}
-        </div>
-        {/*
-          "Intercepted", not "helper". The marker only exists when Shadow Call Intercept
-          rewrote the request, so a helper request that was not intercepted looks exactly like
-          ordinary traffic here. A broader label would promise a classification this data
-          cannot support.
-        */}
-        <label className="muted text-control logs-filter-field">
-          <input
-            type="checkbox"
-            checked={interceptedHelpersOnly}
-            onChange={event => setInterceptedHelpersOnly(event.target.checked)}
-          />
-          {t("logs.filter.interceptedHelpersOnly")}
-        </label>
-        <label className="muted text-control logs-filter-field">
-          {t("logs.filter.conversation.label")}
-          <input
-            type="search"
-            className="input mono"
-            value={conversationFilter}
-            onChange={e => setConversationFilter(e.target.value)}
-            placeholder={t("logs.filter.conversation.placeholder")}
-            aria-label={t("logs.filter.conversation.label")}
-          />
-        </label>
-        <label className="muted text-control logs-filter-field">
-          {t("logs.filter.model.label")}
-          <input
-            type="search"
-            className="input mono"
-            value={modelFilter}
-            onChange={e => setModelFilter(e.target.value)}
-            placeholder={t("logs.filter.model.placeholder")}
-            aria-label={t("logs.filter.model.label")}
-          />
-        </label>
-        {conversationQuery && (
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setConversationFilter("")}>
-            {t("logs.filter.conversation.clear")}
-          </button>
-        )}
-      </div>
+      <LogsFilterBar
+        filters={filters}
+        options={filterOptions}
+        hasActiveFilters={activeFilters}
+        filteredCount={filteredLogs.length}
+        totalCount={logs.length}
+        t={t}
+        onFilterChange={setFilters}
+        onResetFilters={() => setFilters(DEFAULT_LOG_FILTER_STATE)}
+      />
 
       {conversationTotals && (
         <div className="logs-conversation-totals">
@@ -714,7 +660,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
       {logsState.kind === "failed-cold" ? null : logsState.showSkeleton && logs.length === 0 ? (
         <DataSurfaceSkeleton label={t("common.loading")} rows={6} />
       ) : filteredLogs.length === 0 ? (
-        <EmptyState title={t("logs.noRequests")} />
+        <EmptyState title={logs.length > 0 && activeFilters ? t("logs.noMatchingRequests") : t("logs.noRequests")} />
       ) : (
         <>
         <div ref={scrollContainerRef} className="tbl-wrap logs-table-wrap">
@@ -864,7 +810,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
           t={t}
           onClose={() => setDetail(null)}
           onFilterConversation={id => {
-            setConversationFilter(id);
+            setFilters(prev => ({ ...prev, conversationId: id }));
             setDetail(null);
           }}
         />
