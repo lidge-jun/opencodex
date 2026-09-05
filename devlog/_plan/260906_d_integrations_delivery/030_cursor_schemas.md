@@ -59,6 +59,7 @@ export const CURSOR_FREEFORM_INPUT_SCHEMA = {
   type: "object",
   properties: { input: { type: "string" } },
   required: ["input"],
+  additionalProperties: false,
 } as const;
 ```
 
@@ -93,7 +94,7 @@ Before: bare exec advertisement lacks four fields; normal/freeform schema lookup
 | exec_command declared cmd-only, same fields | cmd remains cmd, other values survive; no added command key. |
 | Existing canonical command and an alias simultaneously | Existing normalizeArgKeys canonical precedence remains covered by adjacent tests. |
 
-Use literal expected contracts and decoded protobuf values, not only equality against the newly added constant (both could be wrong together). Strengthen the ported freeform test with literal `{type:"object", properties:{input:{type:"string"}}, required:["input"]}`. Verify both ordinary shell directions already at current test lines 131 and 159. Existing code-mode/structured-edit tests later in the file protect unchanged routing and tool-choice behavior.
+Use literal expected contracts and decoded protobuf values, not only equality against the newly added constant (both could be wrong together). Strengthen the ported freeform test with literal `{type:"object", properties:{input:{type:"string"}}, required:["input"], additionalProperties:false}`. Verify both ordinary shell directions already at current test lines 131 and 159. Existing code-mode/structured-edit tests later in the file protect unchanged routing and tool-choice behavior.
 
 Optional additional hosted mutation experiment (not a completion prerequisite): with final tests and baseline schema code, observe missing-property/freeform assertions fail; restore final schema code and obtain green. Separately remove only the reserved-name guard in an isolated runner checkout to prove both rejection tests fail, then restore and rerun. Do not claim RED before these logs exist.
 
@@ -144,3 +145,7 @@ Inspect directly affected translated adapter sections at P; add exact locale pat
 ## Roadmap lock clarification
 
 The implementation cycle certifies its published current-head candidate. Every dev-ancestry and original-closeout obligation remains mandatory in the separate landing work-phase, allowing the owner-requested stack to exist without treating publication as dev integration. Eligible lower layers may land early and are closed immediately after ancestry proof.
+
+## External review amendment: closed freeform object
+
+The advertised freeform schema must include additionalProperties:false, matching the existing custom-tool compatibility envelope. Include this literal property in schema and protobuf assertions; preserve ordinary named function schemas and reserved-name guards.

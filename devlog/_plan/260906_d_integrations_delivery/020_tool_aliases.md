@@ -5,7 +5,7 @@
 - Class: C2 adapter repair; spec-satisfaction loop, one implementation PABCD cycle.
 - Trigger: an upstream Chat stream introduces a call by ID, associates an index later, then sends index-only fragments.
 - Goal: one complete call retains its original ID/name and argument budget ownership.
-- Non-goals: guessing associations between unindexed calls, changing malformed-field tolerance, changing budget limits, transport/core changes, unrelated adapter refactors.
+- Non-goals: guessing associations between unindexed calls, changing other malformed-field tolerance, changing budget limits, transport/core changes, unrelated adapter refactors.
 - Verifier: exact-head hosted CI executes the focused cases below plus repository typecheck/full-suite gates. NO local tests, suites, typecheck, or test:changed; commands below are runner-only specifications.
 - Stop: all acceptance rows and required hosted jobs pass on the delivered head, review findings resolved, and main proves delivery to dev. A docs-only result does not satisfy implementation criteria.
 - Memory artifact: this decade document and main-owned 000/CI evidence ledger in the same unit.
@@ -43,7 +43,8 @@ The exact original patch is the complete diff `git show c8240c51d664f7cfb790b6d6
 Current anchors: `src/adapters/openai-chat.ts:1661` pending interface, `:1856` identity lookup, `:1873` budget opening, `:1912` argument-byte accounting, `:1679` budget closing. Replace the lookup block with:
 
 ```ts
-const indexKey = typeof rawIndex === "number" ? `i:${rawIndex}` : undefined;
+const indexKey = typeof rawIndex === "number"
+  && Number.isInteger(rawIndex) && rawIndex >= 0 ? `i:${rawIndex}` : undefined;
 const key = indexKey ?? (idDelta
   ? `id:${idDelta}`
   : pendingToolCalls[pendingToolCalls.length - 1]?.key);
@@ -111,3 +112,7 @@ This layer follows 010 in the D stack as an integration sequence, not a runtime 
 ## Roadmap lock clarification
 
 The implementation cycle certifies its published current-head candidate. Every dev-ancestry and original-closeout obligation remains mandatory in the separate landing work-phase, allowing the owner-requested stack to exist without treating publication as dev integration. Eligible lower layers may land early and are closed immediately after ancestry proof.
+
+## External review amendment: numeric index contract
+
+Only non-negative integer indexes may become an alias. Immediately after reading rawIndex, if it is numeric but not an integer or is negative, terminate through the existing invalidToolCallsEvent/terminateWithError path; do not treat an invalid numeric index as absent and append its data to the last pending call. Other tolerated placeholder fields retain their existing rules. Add reachable negative/fractional numeric-index regressions with two distinct pending calls: one error, no done, no fragment reassignment, and all budget reservations released. Preserve all original positive and collision cases. This is an explicit source-patch amendment, not a claim the original commit already implements validation.

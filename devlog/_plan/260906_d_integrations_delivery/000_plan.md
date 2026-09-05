@@ -20,7 +20,7 @@ Worktree is adopted in place. Initial dev is 81871b3fa7034250b8d5ba2cbbfde44e40f
 
 ## Structure and sequence
 
-1. roadmap: docs-only complete PABCD; lock 010–050 designs.
+1. roadmap: docs-only complete PABCD; lock 010–040 designs and the scratch-backed 050 work item.
 2. toml / 010: config parse admission foundation; carry #3669.
 3. toolalias / 020: stream argument identity; carry #3673.
 4. cursor / 030: executable schema projection on current adapter layout; carry #3628.
