@@ -23,6 +23,19 @@ describe("discovered model display name validation", () => {
   });
 });
 
+describe("discovered model display name responsive styles", () => {
+  test("keeps the narrow action order aligned with keyboard navigation", async () => {
+    const styles = await Bun.file(new URL("../src/styles.css", import.meta.url)).text();
+
+    expect(styles).toContain(
+      ".model-display-name-dialog .modal-actions { align-items: stretch; flex-direction: column; }",
+    );
+    expect(styles).not.toContain(
+      ".model-display-name-dialog .modal-actions { align-items: stretch; flex-direction: column-reverse; }",
+    );
+  });
+});
+
 describe("Models dashboard discovered display name integration", () => {
   const globals = [
     "document", "window", "navigator", "localStorage", "sessionStorage",

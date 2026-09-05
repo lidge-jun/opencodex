@@ -2682,7 +2682,7 @@ button.prov-account-row.active { cursor: default; }
   .models-model-friendly { max-width: 58vw; }
   .model-display-name-current { grid-template-columns: 1fr; }
   .model-display-name-current > .text-label { grid-column: auto; }
-  .model-display-name-dialog .modal-actions { align-items: stretch; flex-direction: column-reverse; }
+  .model-display-name-dialog .modal-actions { align-items: stretch; flex-direction: column; }
   .model-display-name-dialog .modal-actions .btn { width: 100%; }
 }
 .model-tip {
