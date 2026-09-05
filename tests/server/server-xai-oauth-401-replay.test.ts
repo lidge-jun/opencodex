@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync} from "node:fs";
+import { mkdtempSync, readFileSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { XAI_OAUTH_DISCOVERY_URL } from "../../src/oauth/xai";
 import { saveCredential } from "../../src/oauth/store";
 import { XAI_GROK_CLI_BASE_URL } from "../../src/providers/xai-transport";
+import { readUsageEntries, usageLogPath } from "../../src/usage/log";
 import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -209,6 +210,14 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
       expect(json.output?.find(item => item.type === "message")?.content?.[0]?.text).toBe("ok after refresh");
       expect(observed.counts.refresh).toBe(1);
       expect(observed.chatAuth).toEqual(["Bearer rejected-access", "Bearer fresh-access"]);
+      const attempt = readUsageEntries().at(-1)?.attempts?.[0];
+      expect(attempt?.credentialSource).toBe("grok-oauth");
+      expect(attempt?.sendCount).toBe(2);
+      expect(attempt?.totalTokens).toBe(5);
+      const persisted = readFileSync(usageLogPath(), "utf8");
+      expect(persisted).not.toContain("rejected-access");
+      expect(persisted).not.toContain("fresh-access");
+      expect(persisted).not.toContain("xai-test-account");
     } finally {
       await server.stop(true);
     }
@@ -226,6 +235,36 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
       expect(json.error?.message).toBe("rejected");
       expect(observed.counts.refresh).toBe(1);
       expect(observed.chatAuth).toEqual(["Bearer rejected-access", "Bearer fresh-access"]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("native Chat records canonical API-key provenance", async () => {
+    saveConfig(xaiConfig("key"));
+    globalThis.fetch = (async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      expect(url).toBe("https://api.x.ai/v1/chat/completions");
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer xai-api-key");
+      return Response.json({
+        id: "chat-native-xai", object: "chat.completion", model: "grok-4.5",
+        choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+      });
+    }) as typeof fetch;
+    const server = startServer(0);
+    try {
+      const response = await originalFetch(new URL("/v1/chat/completions", server.url), {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "xai/grok-4.5", messages: [{ role: "user", content: "hello" }], stream: false }),
+      });
+      expect(response.status).toBe(200);
+      await response.json();
+      const entry = readUsageEntries().at(-1);
+      expect(entry?.inboundProtocol).toBe("chat");
+      expect(entry?.attempts?.[0]?.credentialSource).toBe("xai-api-key");
+      expect(entry?.attempts?.[0]?.totalTokens).toBe(5);
+      expect(entry?.attempts?.[0]?.sendCount).toBe(1);
     } finally {
       await server.stop(true);
     }
@@ -257,6 +296,7 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
       expect(response.status).toBe(401);
       expect(chatCalls).toBe(1);
       expect(refreshCalls).toBe(0);
+      expect(readUsageEntries().at(-1)?.attempts?.[0]?.credentialSource).toBe("xai-api-key");
     } finally {
       await server.stop(true);
     }

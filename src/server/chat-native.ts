@@ -46,6 +46,7 @@ import {
   beginRequestAttempt,
   noteAttemptSend,
   recordFirstOutput,
+  recordAttemptCredentialSource,
   sealRequestAttemptIdentity,
   type RequestLogContext,
 } from "./request-log";
@@ -183,14 +184,17 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
     translatorBudget.chargeRetained(bytes, { kind: "request_copies" });
     retainedRequestBytes = bytes;
   };
-  const buildActiveRequest = () => buildOpenAIChatPassthroughRequest(
-    activeProvider,
-    options.chatBody,
-    route.modelId,
-    requestedStream,
-    fastPolicyForModel(activeProvider, route.modelId, route.providerName, "chat"),
-    config.fastMode,
-  );
+  const buildActiveRequest = () => {
+    recordAttemptCredentialSource(attempt, route.providerName, activeProvider);
+    return buildOpenAIChatPassthroughRequest(
+      activeProvider,
+      options.chatBody,
+      route.modelId,
+      requestedStream,
+      fastPolicyForModel(activeProvider, route.modelId, route.providerName, "chat"),
+      config.fastMode,
+    );
+  };
   try {
     activeRequest = buildActiveRequest();
     retainRequest(activeRequest);

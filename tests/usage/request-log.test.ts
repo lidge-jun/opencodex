@@ -22,6 +22,7 @@ import {
   recordFirstOutput,
   requestLogEntryFromPersistedUsage,
   sealRequestAttemptIdentity,
+  recordAttemptCredentialSource,
   type RequestLogContext,
 } from "../../src/server/request-log";
 import { handleResponses } from "../../src/server/responses";
@@ -56,6 +57,48 @@ function log(overrides: Partial<RequestLogEntry>): RequestLogEntry {
 }
 
 describe("request log metadata", () => {
+  test("upstream credential attribution requires the resolved canonical xAI transport", () => {
+    const attempt = beginRequestAttempt(1, "xai", "grok-test", "openai-chat");
+    const oauth = { adapter: "openai-chat", authMode: "oauth" as const, baseUrl: "https://cli-chat-proxy.grok.com/v1" };
+    recordAttemptCredentialSource(attempt, "xai", oauth);
+    expect(attempt.credentialSource).toBe("grok-oauth");
+    for (const baseUrl of ["https://api.x.ai/v1", "https://proxy.example/v1", "http://cli-chat-proxy.grok.com/v1",
+      "https://cli-chat-proxy.grok.com:8443/v1", Object.assign(new URL(oauth.baseUrl), { username: "test" }).href,
+      "https://cli-chat-proxy.grok.com/v1?credential=canary", "https://cli-chat-proxy.grok.com/v2", "invalid"]) {
+      recordAttemptCredentialSource(attempt, "xai", { ...oauth, baseUrl });
+      expect(attempt.credentialSource).toBeUndefined();
+    }
+    recordAttemptCredentialSource(attempt, "xai", oauth);
+    recordAttemptCredentialSource(attempt, "custom", oauth);
+    expect(attempt.credentialSource).toBeUndefined();
+    recordAttemptCredentialSource(attempt, "xai", { ...oauth, authMode: "key", baseUrl: "https://api.x.ai/v1" });
+    expect(attempt.credentialSource).toBe("xai-api-key");
+    recordAttemptCredentialSource(attempt, "xai", { ...oauth, authMode: "key" });
+    expect(attempt.credentialSource).toBeUndefined();
+  });
+
+  test("combo logging keeps credential provenance on physical attempts only", () => {
+    const a = beginRequestAttempt(1, "xai", "grok-test", "openai-chat");
+    const b = beginRequestAttempt(2, "openai", "gpt-test", "openai-responses");
+    recordAttemptCredentialSource(a, "xai", {
+      adapter: "openai-chat", authMode: "oauth", baseUrl: "https://cli-chat-proxy.grok.com/v1",
+    });
+    noteAttemptSend(a, undefined);
+    finishRequestAttempt(a, 503, 1, { inputTokens: 4, outputTokens: 1 });
+    noteAttemptSend(b, undefined);
+    const entries: RequestLogEntry[] = [];
+    addFinalRequestLog("mixed-combo", Date.now(), {
+      provider: "openai", model: "gpt-test", requestedModel: "combo/test", comboId: "test",
+      providerAdapter: "openai-responses", attempts: [a, b], activeAttempt: b,
+      usage: { inputTokens: 10, outputTokens: 2 },
+    }, 200, undefined, entry => entries.push(entry));
+    expect(entries[0]?.totalTokens).toBe(17);
+    expect(entries[0]?.attempts?.[0]?.credentialSource).toBe("grok-oauth");
+    expect(entries[0]?.attempts?.[0]?.totalTokens).toBe(5);
+    expect(entries[0]?.attempts?.[1]?.credentialSource).toBeUndefined();
+    expect(entries[0]).not.toHaveProperty("credentialSource");
+  });
+
   test("creates one ordinary attempt after the final adapter is resolved", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async () => Response.json({

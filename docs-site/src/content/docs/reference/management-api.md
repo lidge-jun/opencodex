@@ -145,6 +145,14 @@ See [Combos](/guides/combos/) for target strategies, cooldowns, aliases, and rou
 | `POST /api/storage/cleanup-policy/run` | Start a manual cleanup-policy run | 409 `already_running`; 500 `cleanup_failed` |
 | `GET /api/storage/cleanup-policy/test-stream` | Test-only policy stream hook | 404 `not_found` when unavailable |
 
+New xAI attempts in `usage.jsonl` include a request-time `credentialSource`: `grok-oauth`
+for the resolved Grok CLI OAuth transport, or `xai-api-key` for the public xAI API key
+transport. This fixed label contains no credential or account identifier. It belongs to
+each item in `attempts`, so a combo's aggregate token total must not be attributed to its
+final provider. Custom destinations and historic rows omit the field; consumers must not
+infer subscription usage from the current configuration, model name, or inbound API key.
+The log reports usage, not subscription invoice amounts.
+
 `GET /api/usage` reads `~/.opencodex/usage.jsonl` from the beginning through the current ledger
 snapshot on a cold start. It processes fixed 1 MiB chunks and retains compact aggregate state rather
 than every normalized request row. Later refreshes validate the previous line boundary and fold only
