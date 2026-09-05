@@ -284,6 +284,7 @@ import {
   recordAttemptRequestedEffort,
   requestLogSpeedLabel,
   sealRequestAttemptIdentity,
+  recordAttemptCredentialSource,
   usageFromResponsesPayload,
   type RequestLogContext,
 } from "../request-log";
@@ -3701,6 +3702,7 @@ async function handleResponsesInner(
     (logCtx.attempts ??= []).push(attempt);
   }
   sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, adapter.name, logCtx.accountLogLabel);
+  recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, adapterProvider);
   let runTurnAdapter = adapter;
   if (adapter.runTurn) {
     recordAdapterTierMetadata(logCtx, adapter.tierLogForRunTurn?.(parsed));

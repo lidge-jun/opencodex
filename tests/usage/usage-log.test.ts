@@ -39,6 +39,28 @@ afterEach(() => {
 });
 
 describe("usage log", () => {
+  test("round trips only recognized per-attempt xAI credential sources", () => {
+    const attempt = {
+      ordinal: 1, provider: "xai", model: "grok-test", adapter: "openai-chat", status: 200,
+      durationMs: 1, sendCount: 1, recoveryKinds: [], usageStatus: "reported" as const,
+      usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 }, totalTokens: 5,
+    };
+    appendUsageEntry({
+      requestId: "credential-source", timestamp: Date.now(), provider: "combo", model: "combo/test",
+      status: 200, durationMs: 1, usageStatus: "reported", attempts: [
+        { ...attempt, credentialSource: "grok-oauth" },
+        { ...attempt, ordinal: 2, credentialSource: "xai-api-key" },
+        { ...attempt, ordinal: 3, credentialSource: "secret-canary" as never },
+        { ...attempt, ordinal: 4, provider: "custom", credentialSource: "grok-oauth" },
+        { ...attempt, ordinal: 5 },
+      ],
+    });
+    resetUsageReadCacheForTests();
+    const sources = readUsageEntries()[0]?.attempts?.map(row => row.credentialSource);
+    expect(sources).toEqual(["grok-oauth", "xai-api-key", undefined, undefined, undefined]);
+    expect(readFileSync(usageLogPath(), "utf8")).not.toContain("secret-canary");
+  });
+
   test("preserves explicitly empty attempts through normalization", () => {
     const normalized = normalizeUsageEntryForTest({
       requestId: "ocx-empty-attempts",
