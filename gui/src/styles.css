@@ -2628,6 +2628,52 @@ button.prov-account-row.active { cursor: default; }
 
 /* ---- model row hover tooltip ---- */
 .model-row-wrap { position: relative; }
+.models-model-identity {
+  display: inline-flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+}
+.models-model-friendly {
+  max-width: min(42vw, 420px);
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.models-display-name-trigger { flex-shrink: 0; }
+.model-display-name-dialog { max-width: 460px; }
+.model-display-name-identity,
+.model-display-name-current {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 16px;
+}
+.model-display-name-identity code {
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+.model-display-name-current {
+  grid-template-columns: 1fr auto;
+  align-items: center;
+}
+.model-display-name-current > .text-label { grid-column: 1 / -1; }
+.model-display-name-current strong { min-width: 0; overflow-wrap: anywhere; }
+.model-display-name-dialog > .input { margin-bottom: 6px; }
+.model-display-name-error {
+  margin-top: 8px;
+  color: var(--red);
+  font-size: var(--text-label);
+  line-height: var(--leading-body);
+}
+@media (max-width: 560px) {
+  .models-model-friendly { max-width: 58vw; }
+  .model-display-name-current { grid-template-columns: 1fr; }
+  .model-display-name-current > .text-label { grid-column: auto; }
+  .model-display-name-dialog .modal-actions { align-items: stretch; flex-direction: column-reverse; }
+  .model-display-name-dialog .modal-actions .btn { width: 100%; }
+}
 .model-tip {
   z-index: 10;
   background: var(--surface);
