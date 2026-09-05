@@ -459,6 +459,76 @@ describe("registry-owned provider model discovery", () => {
     });
   });
 
+  test("a declared envelopeKey/idKey spec reads non-OpenAI rows (zhipu-bigmodel-responses)", () => {
+    const discovery = resolveProviderModelDiscovery("zhipu-bigmodel-responses", {
+      adapter: "openai-responses",
+      baseUrl: "https://open.bigmodel.cn/api/v1",
+    });
+    // The real /api/v1/models shape: rows under `models`, ids under `slug`. The extracted
+    // id must be materialized as `id` for the downstream catalog mapping.
+    const live = extractProviderModelItems({
+      models: [
+        { slug: "glm-5.3", context_window: 1048576 },
+        { slug: "glm-5-turbo", context_window: 1048576 },
+      ],
+    }, discovery);
+    expect(live).toEqual({
+      ok: true,
+      rawCount: 2,
+      items: [
+        { slug: "glm-5.3", context_window: 1048576, id: "glm-5.3" },
+        { slug: "glm-5-turbo", context_window: 1048576, id: "glm-5-turbo" },
+      ],
+    });
+
+    // Without the declaration the same body stays invalid: a stray `models` key on an
+    // openai-chat response must never pose as a catalog (#617).
+    const undeclared = resolveProviderModelDiscovery("unknown-provider", {
+      adapter: "openai-chat",
+      baseUrl: "https://example.test/v1",
+    });
+    expect(extractProviderModelItems({ models: [{ slug: "glm-5.3" }] }, undeclared))
+      .toEqual({ ok: false, reason: "invalid_shape" });
+  });
+
+  test("spec validation rejects idKey without envelopeKey and malformed keys", () => {
+    expect(providerModelDiscoverySpecError({ idKey: "slug" }))
+      .toBe("idKey requires envelopeKey");
+    expect(providerModelDiscoverySpecError({ envelopeKey: "not a key" }))
+      .toBe("envelopeKey must be an identifier-shaped key of 1-32 characters");
+    expect(providerModelDiscoverySpecError({ envelopeKey: "models", idKey: "slug" }))
+      .toBeNull();
+  });
+
+  test("a registry-id name on another entry's transport recovers that entry's discovery policy", () => {
+    // A saved row may keep the `zai` id while pointing at BigModel's Responses endpoint.
+    // The name match must not win over the transport: the destination entry's policy applies.
+    const discovery = resolveProviderModelDiscovery("zai", {
+      adapter: "openai-responses",
+      baseUrl: "https://open.bigmodel.cn/api/v1",
+      authMode: "key",
+    });
+    expect(discovery.spec).toEqual({ path: "models", envelopeKey: "models", idKey: "slug" });
+
+    // A custom endpoint still recovers nothing: the destination helper only matches
+    // exact fixed-key registry transports.
+    const custom = resolveProviderModelDiscovery("zai", {
+      adapter: "openai-responses",
+      baseUrl: "https://example.test/api/v1",
+      authMode: "key",
+    });
+    expect(custom.spec).toBeUndefined();
+    // The entry opts into preserveCustomDestination, so a same-named row on a custom
+    // destination is an exact-transport mismatch: it recovers no discovery policy at all
+    // instead of resolving the slug envelope against its own custom URL.
+    const sameNamedCustom = resolveProviderModelDiscovery("zhipu-bigmodel-responses", {
+      adapter: "openai-responses",
+      baseUrl: "https://custom.example/api/v1",
+      authMode: "key",
+    });
+    expect(sameNamedCustom.spec).toBeUndefined();
+  });
+
   test("rejects control characters and outer whitespace in provider-native model ids", () => {
     const discovery = resolveProviderModelDiscovery("unknown-provider", {
       adapter: "openai-chat",

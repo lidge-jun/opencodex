@@ -96,6 +96,15 @@ interface ProviderModelDiscoverySharedSpec {
    * Empty/invalid remainders skip that row only.
    */
   stripIdPrefix?: string;
+  /**
+   * Opt-in nonstandard envelope for providers whose models API is not OpenAI-shaped:
+   * model rows live under this top-level key instead of `data`. Registry-only
+   * declaration — an undeclared provider keeps the default `data` envelope, so a
+   * stray `models` key on an openai-chat response still cannot pose as a catalog (#617).
+   */
+  envelopeKey?: string;
+  /** Row key carrying the model id when `envelopeKey` is declared; defaults to `id`. */
+  idKey?: string;
 }
 
 type ProviderModelDiscoveryLocation =
@@ -2542,6 +2551,49 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // No liveModels: the same reasoning as the pay-as-you-go row — an unverified live claim
     // yields an empty picker at runtime.
     note: "Domestic BigModel Coding Plan endpoint (open.bigmodel.cn)",
+  },
+
+  // BigModel's Coding Plan also serves the OpenAI Responses wire at /api/v1 — the same
+  // subscription product as the Chat Completions row above on a separate endpoint, so it
+  // gets its own row rather than a baseUrl override. Its models API is NOT OpenAI-shaped:
+  // rows arrive as `{models: [{slug, ...}]}` with the id under `slug` plus rich per-model
+  // metadata (context_window, supported_reasoning_levels), so the entry declares the
+  // envelope explicitly. An undeclared provider keeps the default `{data:[{id}]}` shape —
+  // a stray `models` key on an openai-chat response still cannot pose as a catalog (#617).
+  // Evidence (verified live 2026-09-05): POST /api/v1/responses answers the standard
+  // Responses object; GET /api/v1/models lists glm-5.3 / glm-5.3-flash / glm-5-turbo with
+  // context_window 1048576 and reasoning levels low/high/max, matching the 5.3 ladder.
+  {
+    id: "zhipu-bigmodel-responses",
+    label: "Zhipu AI — BigModel Coding Plan (Responses)",
+    baseUrl: "https://open.bigmodel.cn/api/v1",
+    adapter: "openai-responses",
+    authKind: "key",
+    dashboardUrl: "https://bigmodel.cn/console/usercenter/apikeys",
+    defaultModel: "glm-5.3",
+    models: ["glm-5.3", "glm-5.3-flash", "glm-5-turbo"],
+    liveModels: true,
+    // A user may already own a custom provider named "zhipu-bigmodel-responses" pointing
+    // elsewhere; without this, registry transport canonicalization would retarget it and
+    // send their saved key to BigModel. It also forces the exact-transport match, so a
+    // same-named custom row recovers no discovery policy instead of the slug envelope.
+    jawcodeBundle: "zai",
+    preserveCustomDestination: true,
+    // Live rows (2026-09-05): 5.3 and 5.3-flash expose low/high/max with a max default;
+    // 5-turbo fixes its reasoning at max internally and lists NO selectable levels, so an
+    // explicit [] keeps the undefined entry from falling back to the full routed ladder.
+    modelContextWindows: { "glm-5.3": 1_048_576, "glm-5.3-flash": 1_048_576, "glm-5-turbo": 204_800 },
+    modelReasoningEfforts: {
+      "glm-5.3": ZAI_GLM_53_REASONING_EFFORTS,
+      "glm-5.3-flash": ZAI_GLM_53_REASONING_EFFORTS,
+      "glm-5-turbo": [],
+    },
+    modelSupportsReasoningSummaries: { "glm-5.3": true, "glm-5.3-flash": true, "glm-5-turbo": true },
+    // The Responses adapter replays reasoning via this provider-level flag, not the
+    // per-model preserveReasoningContentModels list (a Chat-path field).
+    preserveResponsesReasoningContent: true,
+    modelDiscovery: { path: "models", envelopeKey: "models", idKey: "slug" },
+    note: "Domestic BigModel Coding Plan on the OpenAI Responses wire (open.bigmodel.cn/api/v1)",
   },
   { id: "nanogpt", label: "NanoGPT", baseUrl: "https://nano-gpt.com/api/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://nano-gpt.com/api" },
   { id: "synthetic", label: "Synthetic", baseUrl: "https://api.synthetic.new/openai/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://synthetic.new" },

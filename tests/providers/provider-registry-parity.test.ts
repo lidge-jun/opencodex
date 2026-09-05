@@ -33,7 +33,7 @@ function nativeTemplate(): Record<string, unknown> {
 const EXPECTED_KEY_PROVIDER_IDS = [
   "anthropic-apikey", "openai-apikey", "meta-model", "umans", "opencode-go", "neuralwatt", "openrouter", "cline-pass", "cline", "orcarouter", "bizrouter", "groq", "google", "google-vertex", "azure-openai",
   "deepseek", "cerebras", "chutes", "deepinfra", "hyperbolic", "nscale", "vultr", "baseten", "commandcode", "sambanova", "nebius", "digitalocean", "scaleway", "featherless", "novita", "together", "fireworks", "firepass", "moonshot",
-  "huggingface", "nvidia", "venice", "zai", "zhipu-bigmodel", "zhipu-bigmodel-coding", "nanogpt", "synthetic", "siliconflow", "qwen-cloud", "tencent-coding-plan",
+  "huggingface", "nvidia", "venice", "zai", "zhipu-bigmodel", "zhipu-bigmodel-coding", "zhipu-bigmodel-responses", "nanogpt", "synthetic", "siliconflow", "qwen-cloud", "tencent-coding-plan",
   "volcengine", "volcengine-coding-plan", "volcengine-agent-plan", "qianfan", "alibaba", "alibaba-token-plan", "alibaba-token-plan-intl", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
   "minimax", "minimax-cn", "kimi-code", "opencode-zen", "vercel-ai-gateway",
   "opencode-free", "xiaomi", "xiaomi-mimo", "kilo", "mimo-free", "mimo", "cloudflare-ai-gateway", "cloudflare-workers-ai", "gitlab-duo",
@@ -401,6 +401,15 @@ describe("provider registry parity", () => {
     // place rather than catching it, because it was written from the incomplete
     // state instead of from the family definition.
     expect(zai?.modelDefaultReasoningEfforts).toEqual({ "glm-5.3": "max", "glm-5.3[1m]": "max", "glm-5.3-flash": "max" });
+    // The BigModel Responses row's glm-5-turbo contract comes from the live endpoint
+    // (2026-09-05): NO selectable reasoning levels (an explicit [] — an undefined entry
+    // would fall back to the full routed ladder), a 200K window, summaries on, and the
+    // provider-level Responses replay flag rather than the Chat-path per-model list.
+    const responses = PROVIDER_REGISTRY.find(entry => entry.id === "zhipu-bigmodel-responses");
+    expect(responses?.modelReasoningEfforts?.["glm-5-turbo"]).toEqual([]);
+    expect(responses?.modelContextWindows?.["glm-5-turbo"]).toBe(204_800);
+    expect(responses?.preserveResponsesReasoningContent).toBe(true);
+    expect(responses?.preserveReasoningContentModels).toBeUndefined();
     expect(zai?.modelMaxOutputTokens).toEqual({ "glm-5.3": 131_072, "glm-5.3[1m]": 131_072, "glm-5.3-flash": 131_072 });
     // Every 5.3 row carries the same three-tier ladder. Asserted per member rather
     // than as one object literal so adding a member cannot quietly skip it.
@@ -948,6 +957,7 @@ describe("provider registry parity", () => {
       "minimax-cn": "minimax",
       "zhipu-bigmodel": "zai",
       "zhipu-bigmodel-coding": "zai",
+      "zhipu-bigmodel-responses": "zai",
     });
     expect(resolveMetadataProvider("gemini")).toBe("google");
     expect(resolveMetadataProvider("minimax-cn")).toBe("minimax");
