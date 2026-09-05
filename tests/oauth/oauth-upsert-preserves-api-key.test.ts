@@ -344,7 +344,67 @@ describe("upsertOAuthProvider credential preservation", () => {
     expect(provider.authMode).toBe("oauth");
     expect(provider.apiKey).toBeUndefined();
     expect(provider.apiKeyPool).toBeUndefined();
-    expect(provider.note).toBeUndefined();
+    expect(provider.note).toBe("stale-note");
+  });
+
+  test.each(["login", "add-account", "reauthentication"])(
+    "preserves operator policy and unknown fields during %s-shaped upsert",
+    operation => {
+      const config = configWithKey("xai", "openai-chat", "https://api.x.ai/v1");
+      const existing = config.providers.xai! as OcxConfig["providers"][string] & Record<string, unknown>;
+      existing.disabled = true;
+      existing.requestPacing = { enabled: true, minIntervalMs: 250 };
+      existing.retryOn429 = { attempts: 4, intervalMs: 900 };
+      existing.refreshPolicy = "lazy-only";
+      existing.selectedModels = ["grok-4"];
+      existing.note = `operator-${operation}`;
+      existing.modelCosts = { "grok-4": { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 } };
+      existing.oauthAccountFailover = { enabled: false };
+      existing.forwardCompatibleFlag = { enabled: true };
+
+      upsertOAuthProvider(config, "xai");
+
+      const provider = config.providers.xai! as typeof existing;
+      expect(provider.disabled).toBe(true);
+      expect(provider.requestPacing).toEqual({ enabled: true, minIntervalMs: 250 });
+      expect(provider.retryOn429).toEqual({ attempts: 4, intervalMs: 900 });
+      expect(provider.refreshPolicy).toBe("lazy-only");
+      expect(provider.selectedModels).toEqual(["grok-4"]);
+      expect(provider.note).toBe(`operator-${operation}`);
+      expect(provider.modelCosts).toEqual({ "grok-4": { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 } });
+      expect(provider.oauthAccountFailover).toEqual({ enabled: false });
+      expect(provider.forwardCompatibleFlag).toEqual({ enabled: true });
+      expect(provider.apiKey).toBe("stored-key-sentinel");
+    },
+  );
+
+  test("removes incompatible API-key and Azure credentials while preserving unknown fields", () => {
+    const config = {
+      port: 10100,
+      defaultProvider: "anthropic",
+      providers: {
+        anthropic: {
+          adapter: "anthropic",
+          baseUrl: "https://api.anthropic.com",
+          authMode: "key",
+          apiKey: "stale-key",
+          apiKeyPool: [{ id: "stale", key: "stale-key" }],
+          azureCredential: { token: "stale" },
+          disabled: true,
+          forwardCompatibleFlag: "retain-me",
+        },
+      },
+    } as unknown as OcxConfig;
+
+    upsertOAuthProvider(config, "anthropic");
+
+    const provider = config.providers.anthropic! as OcxConfig["providers"][string] & Record<string, unknown>;
+    expect(provider.apiKey).toBeUndefined();
+    expect(provider.apiKeyPool).toBeUndefined();
+    expect(provider.azureCredential).toBeUndefined();
+    expect(provider.disabled).toBe(true);
+    expect(provider.forwardCompatibleFlag).toBe("retain-me");
+    expect(provider.authMode).toBe("oauth");
   });
 
   test("a fresh login on an unconfigured provider gets the untouched preset", () => {
@@ -354,5 +414,28 @@ describe("upsertOAuthProvider credential preservation", () => {
     expect(provider.authMode).toBe("oauth");
     expect(provider.apiKey).toBeUndefined();
     expect(provider.apiKeyPool).toBeUndefined();
+  });
+
+  test("promotes the legacy Command Code static catalog during OAuth upsert", () => {
+    const config = {
+      port: 10100,
+      defaultProvider: "command-code",
+      providers: {
+        "command-code": {
+          adapter: "command-code",
+          baseUrl: "https://api.commandcode.ai",
+          authMode: "oauth",
+          liveModels: false,
+          defaultModel: "deepseek-v4-flash",
+          models: ["deepseek-v4-flash", "kimi-k3", "glm-5.2"],
+          note: "operator-note",
+        },
+      },
+    } as unknown as OcxConfig;
+
+    upsertOAuthProvider(config, "command-code");
+
+    expect(config.providers["command-code"]!.liveModels).toBe(true);
+    expect(config.providers["command-code"]!.note).toBe("operator-note");
   });
 });

@@ -1407,24 +1407,18 @@ function preservableApiKeyPool(value: unknown): NonNullable<OcxProviderConfig["a
   return pool.length > 0 ? pool : undefined;
 }
 
-/**
- * Add/refresh an OAuth provider's config entry on a config object (does not persist).
- *
- * Providers whose registry entry sets `allowKeyAuthOverride` (xai, github-copilot) can be
- * billed through a stored API key instead of the OAuth login (router.ts honors
- * `authMode: "key"` for them). A blind preset overwrite here deletes `apiKey`/`apiKeyPool`
- * on every OAuth login, silently destroying the stored key and forcing a re-paste — and it
- * flips billing back to the subscription without the user asking. Carry the key fields over
- * and keep key billing while usable key material remains and the user was not explicitly on
- * oauth. If the final key was removed and only the old key mode remains, let the OAuth
- * preset restore `authMode: "oauth"` so the newly saved OAuth credential can be used.
- *
- * After preservation, `apiKey` always has exactly one matching pool entry (inserting via the
- * same content-derived id as the API-key manager when the active key was missing from the
- * pool). Key mode reflects stored user intent (explicit `"key"` or omitted mode with safe
- * key material) — never whether the login CLI process can resolve an env reference. Env-backed
- * availability is decided at proxy routing time in `router.ts`.
- */
+const OAUTH_LOGIN_OWNED_PROVIDER_FIELDS = [
+  "adapter",
+  "baseUrl",
+  "authMode",
+  "headers",
+  "apiKeyTransport",
+  "responsesPath",
+  "googleMode",
+  "keyOptional",
+] as const satisfies readonly (keyof OcxProviderConfig)[];
+
+/** Add/refresh only an OAuth provider's login-owned config fields (does not persist). */
 export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
   if (provider === "chatgpt") return;
   const def = OAUTH_PROVIDERS[provider];
@@ -1433,32 +1427,21 @@ export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
   const namespaceCollision = codexAccountNamespaceProviderCollisionError(config.codexAccountNamespaces, provider);
   if (namespaceCollision) throw new Error(namespaceCollision);
   const existing = config.providers[provider];
-  const next: OcxProviderConfig = { ...def.providerConfig };
-  // `liveModels` is a user-facing provider toggle. Preserve either explicit setting across login;
-  // Antigravity's CCA discovery now uses its real RPC, so legacy `true` remains a valid choice.
-  if (typeof existing?.liveModels === "boolean" && !isLegacyCommandCodeStaticCatalog(existing)) {
-    next.liveModels = existing.liveModels;
+  const next: OcxProviderConfig = structuredClone(existing ?? def.providerConfig);
+  for (const field of OAUTH_LOGIN_OWNED_PROVIDER_FIELDS) {
+    const value = def.providerConfig[field];
+    if (value === undefined) delete next[field];
+    else next[field] = structuredClone(value) as never;
   }
-  // The Command Code protocol-version pin is an operator compatibility control. A re-login,
-  // add-account, or reauth rebuilds the row from the preset, which has no version; carry the
-  // existing pin so authentication changes do not silently revert the documented control.
-  if (existing?.commandCodeVersion !== undefined) {
-    next.commandCodeVersion = existing.commandCodeVersion;
+  // The original Command Code seed was an implementation-owned static catalog, not an
+  // operator opt-out. Promote that exact legacy shape when OAuth login refreshes the row.
+  if (provider === "command-code" && existing && isLegacyCommandCodeStaticCatalog(existing)) {
+    next.liveModels = def.providerConfig.liveModels;
   }
-  // User-configured price overlays are operator data, not preset state; a
-  // re-login, add-account, or reauth must not silently drop them from the
-  // Logs/Usage estimates.
-  if (existing?.modelCosts !== undefined) {
-    next.modelCosts = existing.modelCosts;
-  }
-  // The per-provider account-failover opt-out is operator intent about SPENDING, and the login
-  // path is exactly where losing it does damage: adding a second account both rebuilds this row
-  // from the preset and creates the 2-account quorum that turns presence-driven rotation on
-  // (#2568d). Dropping the opt-out here would enable the thing the operator switched off, at the
-  // moment they were doing something unrelated.
-  if (existing?.oauthAccountFailover !== undefined) {
-    next.oauthAccountFailover = existing.oauthAccountFailover;
-  }
+  // OAuth-only providers must never retain credentials for a different auth mechanism.
+  delete next.apiKey;
+  delete next.apiKeyPool;
+  delete (next as unknown as Record<string, unknown>).azureCredential;
   if (existing && getProviderRegistryEntry(provider)?.allowKeyAuthOverride === true) {
     // Shared sanitizeApiKeyValue trim / no-CRLF checks from api-key pool writes.
     let storedApiKey = sanitizeApiKeyValue(existing.apiKey);
