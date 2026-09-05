@@ -8,7 +8,12 @@ import type { SidecarOutcomeRecorder } from "../web-search/executor";
 import { enforceAppOwnedMemoryBudget } from "../lib/app-owned-memory";
 import type { TranslatorBudget } from "../lib/translator-budget";
 import type { VisionPlan } from "./plan";
-import { carriesImages, descriptionEncoder, syncRawBodyImageDescriptions } from "./image-rewrite";
+import {
+  IMAGE_OMITTED_TEXT,
+  carriesImages,
+  descriptionEncoder,
+  syncRawBodyImageDescriptions,
+} from "./image-rewrite";
 import { MAX_GUARDRAILS_SCANNABLE_LEAF_BYTES } from "../guardrails/scanner";
 
 export { describeImage } from "./describe";

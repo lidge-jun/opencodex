@@ -9,7 +9,7 @@ export function carriesImages(role: string): boolean {
 }
 
 
-const IMAGE_OMITTED_TEXT = "[image omitted: this model is text-only and the vision sidecar is unavailable (no ChatGPT login)]";
+export const IMAGE_OMITTED_TEXT = "[image omitted: this model is text-only and the vision sidecar is unavailable (no ChatGPT login)]";
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
