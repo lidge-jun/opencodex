@@ -757,7 +757,7 @@ function demaskKnownResponsePayload(
       next = { ...next, output };
     }
   }
-  const content = value.role === "assistant"
+  const content = value.type === "message" && value.role === "assistant"
     ? demaskContentParts(value.content, state, traversal)
     : value.content;
   if (content !== value.content) next = { ...next, content };

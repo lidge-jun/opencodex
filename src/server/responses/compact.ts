@@ -671,6 +671,7 @@ export async function handleResponsesCompact(
     }
   };
   if (!guardrailsBypassed && guardrailsSnapshot && !guardrailsTurn) {
+    const unmaskedBody = structuredClone(body);
     const guardrailsStartedAt = performance.now();
     try {
     const prepared = await prepareGuardrailsTurn(
@@ -724,6 +725,9 @@ export async function handleResponsesCompact(
       latencyMs: performance.now() - guardrailsStartedAt,
       severity: "high",
     });
+    body = unmaskedBody;
+    raw = body as { model?: unknown; input?: unknown };
+    guardrailsTurn = undefined;
     guardrailsBypassed = true;
     }
   }
@@ -1282,6 +1286,12 @@ export async function handleResponsesCompact(
             fallbackOptions,
           );
           if (fallback.ok || fallback.status === 499) return fallback;
+          if (fallback.status === 409) {
+            const payload = await fallback.clone().json().catch(() => undefined) as
+              | { error?: { code?: unknown } }
+              | undefined;
+            if (payload?.error?.code === "guardrails_policy_changed") return fallback;
+          }
           await fallback.body?.cancel().catch(() => undefined);
         } catch {
           // The previous-model rejection is the authoritative failure when the

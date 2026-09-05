@@ -335,6 +335,129 @@ test("compact quota fallback blocks an excluded-to-protected provider transition
   expect(blockedBody.error?.code).toBe("guardrails_policy_changed");
 });
 
+test("compact late scan failure blocks atomically or restores the complete original body", async () => {
+  const secret = "sk_live_abcdefghijklmnopqrstuvwx";
+  const oversizedSummary = `summary ${"x".repeat(128 * 1024 + 1)}`;
+  const encodedSummary = encodeCompactionSummary(oversizedSummary);
+  for (const failurePolicy of ["block", "passthrough"] as const) {
+    const upstreamBodies: string[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      upstreamBodies.push(String(init?.body ?? ""));
+      return Response.json({
+        id: `compact-${failurePolicy}`,
+        status: "completed",
+        output: [{ type: "compaction", encrypted_content: "provider-ciphertext" }],
+      });
+    }) as typeof fetch;
+    const candidate = config();
+    candidate.guardrails!.failurePolicy = failurePolicy;
+    const response = await handleResponsesCompact(
+      new Request("http://localhost/v1/responses/compact", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "openai-apikey/gpt-5.5",
+          input: [
+            { type: "message", role: "user", content: secret },
+            { type: "compaction", encrypted_content: encodedSummary },
+          ],
+        }),
+      }),
+      candidate,
+      { model: "", provider: "", admissionKind: "loopback" },
+    );
+    await response.text();
+
+    if (failurePolicy === "block") {
+      expect(response.status).toBe(413);
+      expect(upstreamBodies).toHaveLength(0);
+    } else {
+      expect(response.status).toBe(200);
+      expect(upstreamBodies).toHaveLength(1);
+      expect(upstreamBodies[0]).toContain(secret);
+      expect(upstreamBodies[0]).toContain(encodedSummary);
+      expect(upstreamBodies[0]).not.toContain("<STRIPE_ACCESS_TOKEN_1>");
+    }
+  }
+});
+
+test("compact quota handoff returns Guardrails provider-scope 409 instead of the first quota error", async () => {
+  const calls: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    calls.push(url);
+    if (url.includes("api.openai.com")) {
+      return Response.json(
+        { error: { message: "quota exhausted", type: "rate_limit_error" } },
+        { status: 429 },
+      );
+    }
+    return Response.json({
+      id: "routed-handoff-seed",
+      status: "completed",
+      output: [{
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "handoff summary" }],
+      }],
+      usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+    });
+  }) as typeof fetch;
+  const candidate = config();
+  candidate.providers = {
+    "openai-apikey": candidate.providers["openai-apikey"]!,
+    protected: {
+      adapter: "openai-responses",
+      authMode: "key",
+      apiKey: "test-key",
+      baseUrl: "https://protected.example/v1",
+      models: ["gpt-5.5"],
+    },
+  };
+  candidate.guardrails!.providerScope = {
+    mode: "selected",
+    providerIds: ["protected"],
+  };
+  const headers = {
+    "content-type": "application/json",
+    "x-codex-parent-thread-id": "guardrails-scope-handoff",
+  };
+  const seed = await handleResponsesCompact(
+    new Request("http://localhost/v1/responses/compact", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model: "protected/gpt-5.5",
+        input: [{ type: "message", role: "user", content: "seed handoff" }],
+      }),
+    }),
+    candidate,
+    { model: "", provider: "", admissionKind: "loopback" },
+  );
+  expect(seed.status).toBe(200);
+  await seed.text();
+  calls.length = 0;
+
+  const response = await handleResponsesCompact(
+    new Request("http://localhost/v1/responses/compact", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model: "openai-apikey/gpt-5.5",
+        input: [{ type: "message", role: "user", content: "automatic compact" }],
+      }),
+    }),
+    candidate,
+    { model: "", provider: "", admissionKind: "loopback" },
+  );
+  const payload = await response.json() as { error?: { code?: string } };
+
+  expect(response.status).toBe(409);
+  expect(payload.error?.code).toBe("guardrails_policy_changed");
+  expect(calls).toHaveLength(1);
+  expect(calls[0]).toContain("api.openai.com");
+});
+
 test("disabled Guardrails preserve native and routed compact behavior", async () => {
   for (const route of [
     { baseUrl: "https://api.openai.com/v1", providerName: "openai-apikey" },

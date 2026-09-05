@@ -177,13 +177,16 @@ function isTerminalPayload(payload: JsonRecord): boolean {
     || payload.type === "message_stop";
 }
 
-function isBoundaryPayload(payload: JsonRecord): boolean {
-  if (typeof payload.type === "string") {
-    if (payload.type.endsWith(".done") || payload.type === "content_block_stop") return true;
+function finishedProtocolStreamKeys(payload: JsonRecord): Set<string> | undefined {
+  if (payload.type === "response.output_text.done" || payload.type === "response.refusal.done") {
+    const deltaType = payload.type.replace(/\.done$/, ".delta");
+    const identity = `${String(payload.item_id ?? "")}:${String(payload.output_index ?? "")}:${String(payload.content_index ?? "")}`;
+    return new Set([streamKey(deltaType, identity, "delta")]);
   }
-  if (!Array.isArray(payload.choices)) return false;
-  return payload.choices.some(choice =>
-    isRecord(choice) && choice.finish_reason !== undefined && choice.finish_reason !== null);
+  if (payload.type === "content_block_stop") {
+    return new Set([streamKey("anthropic:text", payload.index, "text")]);
+  }
+  return undefined;
 }
 
 function finishedChatStreamKeys(payload: JsonRecord): Set<string> | undefined {
@@ -252,9 +255,11 @@ export function guardrailsSseDemaskRewrite(
     if (deltas.length === 0) {
       const rewritten = rewritePayload(rawPayload);
       const current = rewritten === rawPayload ? block : replaceSseDataPayload(block, rewritten);
+      const finishedProtocolKeys = finishedProtocolStreamKeys(parsed);
+      if (finishedProtocolKeys) return [...flush(finishedProtocolKeys), current];
       const finishedKeys = finishedChatStreamKeys(parsed);
       if (finishedKeys) return [...flush(finishedKeys), current];
-      return isBoundaryPayload(parsed) ? [...flush(), current] : [current];
+      return [current];
     }
     const stagedPending = new Map(pending);
     let stagedPendingBytes = pendingBytes;

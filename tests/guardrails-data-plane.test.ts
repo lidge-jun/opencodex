@@ -1082,6 +1082,45 @@ test("Guardrails demasks terminal Responses SSE prose but preserves executable p
     .toBe(`{"token":"${PLACEHOLDER}"}`);
 });
 
+test("one Responses done event does not flush another stream's pending placeholder", async () => {
+  const secret = "sk_live_abcdefghijklmnopqrstuvwx";
+  const prepared = await prepareGuardrailsTurn(config(), "responses", { input: secret });
+  const rewrite = guardrailsSseDemaskRewrite(
+    prepared.turn!.state,
+    payload => demaskGuardrailsJsonPayload(payload, prepared.turn!),
+  );
+  const firstA = rewrite(
+    'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","item_id":"a","output_index":0,"content_index":0,"delta":"<STRIPE_ACCESS"}\n\n',
+  );
+  const firstB = rewrite(
+    'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","item_id":"b","output_index":1,"content_index":0,"delta":"<STRIPE_ACCESS"}\n\n',
+  );
+  const doneA = rewrite(
+    'event: response.output_text.done\ndata: {"type":"response.output_text.done","item_id":"a","output_index":0,"content_index":0,"text":"<STRIPE_ACCESS_TOKEN_1>"}\n\n',
+  );
+  const secondB = rewrite(
+    'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","item_id":"b","output_index":1,"content_index":0,"delta":"_TOKEN_1>"}\n\n',
+  );
+  const terminal = rewrite(
+    'event: response.completed\ndata: {"type":"response.completed","response":{"id":"r","status":"completed","output":[]}}\n\n',
+  );
+  const output = [...firstA, ...firstB, ...doneA, ...secondB, ...terminal].join("");
+  const bText = [...output.matchAll(/^data: (\{.*\})$/gm)]
+    .map(match => JSON.parse(match[1]!) as {
+      delta?: string;
+      item_id?: string;
+      type?: string;
+    })
+    .filter(payload => payload.type === "response.output_text.delta" && payload.item_id === "b")
+    .map(payload => payload.delta ?? "")
+    .join("");
+
+  expect(output).toContain('"item_id":"a"');
+  expect(output).toContain(secret);
+  expect(bText).toBe(secret);
+  expect(output).not.toContain('"item_id":"b","output_index":1,"content_index":0,"delta":"<STRIPE_ACCESS"');
+});
+
 test("Guardrails pending Chat content and refusal flush without cross-field duplication", async () => {
   const prepared = await prepareGuardrailsTurn(
     config(),
@@ -1258,6 +1297,18 @@ test("Guardrails never restores role-less generic top-level content", async () =
   expect(demaskGuardrailsJsonPayload(payload, prepared.turn!)).toBe(payload);
 });
 
+test("Guardrails never restores unknown top-level content that claims an assistant role", async () => {
+  const secret = "sk_live_abcdefghijklmnopqrstuvwx";
+  const prepared = await prepareGuardrailsTurn(config(), "responses", { input: secret });
+  const payload = JSON.stringify({
+    type: "tool_result",
+    role: "assistant",
+    content: [{ type: "text", text: "hidden <STRIPE_ACCESS_TOKEN_1>" }],
+  });
+
+  expect(demaskGuardrailsJsonPayload(payload, prepared.turn!)).toBe(payload);
+});
+
 test("Guardrails fail-open rollback restores only admitted request fields", async () => {
   const secret = "sk_live_abcdefghijklmnopqrstuvwx";
   const literal = "<STRIPE_ACCESS_TOKEN_1>";
@@ -1407,6 +1458,7 @@ test("Guardrails counts but does not restore Chat and Anthropic tool inputs", as
     }],
   }), prepared.turn!, count => { skipped += count; });
   const anthropic = demaskGuardrailsJsonPayload(JSON.stringify({
+    type: "message",
     role: "assistant",
     content: [
       { type: "text", text: "visible <STRIPE_ACCESS_TOKEN_1>" },
