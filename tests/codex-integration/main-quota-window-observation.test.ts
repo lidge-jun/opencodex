@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { MAIN_CODEX_ACCOUNT_ID as MAIN } from "../../src/codex/account-id";
 import { getMainAccountHardLockStatus } from "../../src/codex/main-account-hard-lock";
 import { fetchMainAccountInfo } from "../../src/codex/auth-api";
+import * as authCollision from "../../src/codex/auth-collision";
 import { setMainAccountPlan } from "../../src/codex/main-account";
 import { resetLifecycleDrainStateForTests } from "../../src/server/lifecycle";
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
@@ -66,7 +67,9 @@ function writerFor() {
 
 describe("declared short-window producer evidence", () => {
   for (const slot of ["primary", "secondary", "tertiary"] as const) {
-    test(`owned WHAM ${slot} negative cannot release short99, but genuine zero can`, async () => {
+    const invalidValues = [-1, "-1", -0.01, " -0.01 ", 101, "101", 100.01, "100.01",
+      Infinity, -Infinity, "Infinity", "-Infinity", "NaN", "1e400", "-1e400"];
+    test.each(invalidValues)(`owned WHAM ${slot} invalid %s stays unknown or retains short99 until valid zero`, async value => {
       const aclOk = { success: true, exitCode: 0, timedOut: false, stdout: "" };
       setIcaclsRunnerForTests(() => aclOk);
       setAsyncIcaclsRunnerForTests(async () => aclOk);
@@ -74,52 +77,171 @@ describe("declared short-window producer evidence", () => {
         access_token: "fixture-main-token", account_id: "fixture-main-a",
       } }));
       let calls = 0;
+      let invalid = true;
+      let percent = 0;
       globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0]) => {
         expect(String(input)).toBe("https://chatgpt.com/backend-api/wham/usage");
         calls += 1;
-        return Response.json({ plan_type: "plus", rate_limit: {
-          primary_window: { used_percent: calls === 1 ? 99 : calls === 2 && slot === "primary" ? -1 : 0,
+        const data = { plan_type: "plus", rate_limit: {
+          primary_window: { used_percent: percent,
             limit_window_seconds: 18_000, reset_at: 1 },
-          secondary_window: { used_percent: calls === 2 && slot === "secondary" ? "-1" : 0,
-            limit_window_seconds: 604_800 },
-          tertiary_window: { used_percent: calls === 2 && slot === "tertiary" ? -1 : 0 },
-        } });
+          secondary_window: { used_percent: 0, limit_window_seconds: 604_800 },
+          tertiary_window: { used_percent: 0 },
+        } };
+        // Raw JSON overflow reaches resp.json as a nonfinite number, not JSON.stringify's null.
+        const body = JSON.stringify(data, (key, item: unknown) => key === `${slot}_window` && invalid
+          ? { ...(item as object), used_percent: typeof value === "number" && !Number.isFinite(value) ? "raw-overflow" : value }
+          : item).replace('"raw-overflow"', value === -Infinity ? "-1e400" : "1e400");
+        return new Response(body, { headers: { "Content-Type": "application/json" } });
       }, { preconnect: previousFetch.preconnect });
       const enabled = { codexMainAccountHardLock: true };
       await fetchMainAccountInfo(true);
+      expect(getMainAccountHardLockStatus(enabled).state).toBe("unknown");
+      invalid = false;
+      percent = 99;
+      await fetchMainAccountInfo(true);
       const retained = getMainPolicyQuota();
       expect(getMainAccountHardLockStatus(enabled)).toEqual({ enabled: true, state: "blocked" });
+      invalid = true;
+      percent = 0;
       await fetchMainAccountInfo(true);
-      expect(getAccountQuota(MAIN)?.shortPercent).toBe(0);
+      if (slot === "primary" && Number.isFinite(Number(value))) {
+        expect(getAccountQuota(MAIN)?.shortPercent).toBe(Number(value) < 0 ? 0 : 100);
+      }
       expect(getMainPolicyQuota()).toEqual(retained);
       expect(getMainAccountHardLockStatus(enabled).state).toBe("blocked");
+      invalid = false;
       await fetchMainAccountInfo(true);
-      expect(calls).toBe(3);
       expect(getMainAccountHardLockStatus(enabled)).toEqual({ enabled: true, state: "ready" });
+      percent = 99;
+      await fetchMainAccountInfo(true);
+      expect(calls).toBe(5);
+      expect(getMainAccountHardLockStatus(enabled).state).toBe("blocked");
     });
 
-    test(`header ${slot} negative cannot release short99, but genuine zero can`, () => {
+    test.each(invalidValues)(`header ${slot} invalid %s stays unknown or retains short99 until valid zero`, value => {
       const writer = writerFor();
       const enabled = { codexMainAccountHardLock: true };
       const headers = new Headers({
-        "x-codex-primary-used-percent": "99", "x-codex-primary-window-minutes": "300",
+        "x-codex-primary-used-percent": "0", "x-codex-primary-window-minutes": "300",
         "x-codex-primary-reset-at": "1", "x-codex-secondary-used-percent": "0",
         "x-codex-tertiary-used-percent": "0",
       });
+      headers.set(`x-codex-${slot}-used-percent`, String(value));
+      applyAccountQuotaFromUpstreamHeaders(MAIN, headers, undefined, writer);
+      expect(getMainAccountHardLockStatus(enabled).state).toBe("unknown");
+      headers.set(`x-codex-${slot}-used-percent`, "0");
+      headers.set("x-codex-primary-used-percent", "99");
       applyAccountQuotaFromUpstreamHeaders(MAIN, headers, undefined, writer);
       const retained = getMainPolicyQuota();
       expect(getMainAccountHardLockStatus(enabled)).toEqual({ enabled: true, state: "blocked" });
       headers.set("x-codex-primary-used-percent", "0");
-      headers.set(`x-codex-${slot}-used-percent`, "-1");
+      headers.set(`x-codex-${slot}-used-percent`, String(value));
       applyAccountQuotaFromUpstreamHeaders(MAIN, headers, undefined, writer);
-      expect(getAccountQuota(MAIN)?.shortPercent).toBe(0);
+      if (slot === "primary" && Number.isFinite(Number(value))) {
+        expect(getAccountQuota(MAIN)?.shortPercent).toBe(Number(value) < 0 ? 0 : 100);
+      }
       expect(getMainPolicyQuota()).toEqual(retained);
       expect(getMainAccountHardLockStatus(enabled).state).toBe("blocked");
       headers.set(`x-codex-${slot}-used-percent`, "0");
       applyAccountQuotaFromUpstreamHeaders(MAIN, headers, undefined, writer);
       expect(getMainAccountHardLockStatus(enabled)).toEqual({ enabled: true, state: "ready" });
+      headers.set("x-codex-primary-used-percent", "99");
+      applyAccountQuotaFromUpstreamHeaders(MAIN, headers, undefined, writer);
+      expect(getMainAccountHardLockStatus(enabled).state).toBe("blocked");
     });
   }
+
+  for (const transport of ["wham", "headers"] as const) {
+    for (const shape of ["supplementary", "primary", "missing-primary", "go", "free"] as const) {
+      test(`${transport} ${shape} monthly requires governing evidence, preserving legacy bars`, async () => {
+        const aclOk = { success: true, exitCode: 0, timedOut: false, stdout: "" };
+        setIcaclsRunnerForTests(() => aclOk);
+        setAsyncIcaclsRunnerForTests(async () => aclOk);
+        writeFileSync(join(testDir, "auth.json"), JSON.stringify({ tokens: {
+          access_token: "fixture-main-token", account_id: "fixture-main-a",
+        } }));
+        const writer = writerFor();
+        const enabled = { codexMainAccountHardLock: true };
+        const plan = shape === "go" || shape === "free" ? shape : "plus";
+        // Even a cached plan must not cause headers to perform a physical auth lookup.
+        setMainAccountPlan(plan);
+        const accepted = shape === "primary" || (transport === "wham" && (shape === "go" || shape === "free"));
+        let percent = 99;
+        const publish = async () => {
+          if (transport === "headers") {
+            const headers = new Headers({ "x-codex-tertiary-used-percent": String(percent),
+              "x-codex-tertiary-reset-at": "2000000000" });
+            if (shape === "primary" || shape === "missing-primary") {
+              headers.set("x-codex-primary-window-minutes", "43200");
+              if (shape === "primary") headers.set("x-codex-primary-used-percent", String(percent));
+            }
+            const physicalRead = spyOn(authCollision, "readCodexTokensResult").mockImplementation(() => {
+              throw new Error("Header observation must not read native credentials");
+            });
+            try {
+              applyAccountQuotaFromUpstreamHeaders(MAIN, headers, undefined, writer);
+              expect(physicalRead).not.toHaveBeenCalled();
+            } finally { physicalRead.mockRestore(); }
+          } else await fetchMainAccountInfo(true);
+        };
+        const calls: string[] = [];
+        globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0]) => {
+          calls.push(String(input));
+          return Response.json({ plan_type: plan, rate_limit: {
+            tertiary_window: { used_percent: percent, reset_at: 2_000_000_000 },
+            ...(shape === "primary" || shape === "missing-primary" ? { primary_window: {
+              limit_window_seconds: 2_592_000, ...(shape === "primary" ? { used_percent: percent } : {}),
+            } } : {}),
+          } });
+        }, { preconnect: previousFetch.preconnect });
+        await publish();
+        expect(getAccountQuota(MAIN)?.monthlyPercent).toBe(99);
+        expect(getMainAccountHardLockStatus(enabled).state).toBe(accepted ? "blocked" : "unknown");
+        if (!accepted) {
+          expect(getMainPolicyQuota()).toBeNull();
+          // Filtered-empty input must neither replace an existing block nor alter its timestamp.
+          setAccountQuotaFromParsed(MAIN, { monthlyPercent: 99, monthlyIsPrimaryWindow: true }, undefined,
+            captureMainQuotaWriter("fixture-main-a"));
+        }
+        const retained = getMainPolicyQuota();
+        percent = 0;
+        await publish();
+        expect(getAccountQuota(MAIN)?.monthlyPercent).toBe(0);
+        expect(getMainAccountHardLockStatus(enabled).state).toBe(accepted ? "ready" : "blocked");
+        if (!accepted) expect(getMainPolicyQuota()).toEqual(retained);
+        percent = 99;
+        await publish();
+        expect(getMainAccountHardLockStatus(enabled).state).toBe("blocked");
+        expect(calls).toEqual(transport === "headers" ? [] : Array(3).fill("https://chatgpt.com/backend-api/wham/usage"));
+      });
+    }
+  }
+
+  test.each([0, "0", 98.99, "98.99", 99, "99", 100, "100"])("owned WHAM and headers accept valid boundary %s", async value => {
+    const aclOk = { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    setIcaclsRunnerForTests(() => aclOk);
+    setAsyncIcaclsRunnerForTests(async () => aclOk);
+    writeFileSync(join(testDir, "auth.json"), JSON.stringify({ tokens: {
+      access_token: "fixture-main-token", account_id: "fixture-main-a",
+    } }));
+    let calls = 0;
+    globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0]) => {
+      expect(String(input)).toBe("https://chatgpt.com/backend-api/wham/usage");
+      calls += 1;
+      return Response.json({ plan_type: "plus", rate_limit: { primary_window: { used_percent: value } } });
+    }, { preconnect: previousFetch.preconnect });
+    await fetchMainAccountInfo(true);
+    const cfg = { codexMainAccountHardLock: true };
+    expect(getMainPolicyQuota()?.weeklyPercent).toBe(Number(value));
+    expect(getMainAccountHardLockStatus(cfg).state).toBe(Number(value) < 99 ? "ready" : "blocked");
+    clearAccountQuota();
+    applyAccountQuotaFromUpstreamHeaders(MAIN, new Headers({ "x-codex-primary-used-percent": String(value) }),
+      undefined, writerFor());
+    expect(getMainPolicyQuota()?.weeklyPercent).toBe(Number(value));
+    expect(getMainAccountHardLockStatus(cfg).state).toBe(Number(value) < 99 ? "ready" : "blocked");
+    expect(calls).toBe(1);
+  });
 
   const cases = [
     { name: "missing usage with weekly99", usage: undefined, weekly: true },

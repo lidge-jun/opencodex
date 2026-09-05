@@ -203,7 +203,9 @@ describe("main policy quota writes", () => {
       "x-codex-tertiary-used-percent": "5",
     }), undefined, writer);
     expect(getAccountQuota(MAIN)?.weeklyPercent).toBeUndefined();
-    expect(getMainPolicyQuota()).toMatchObject({ weeklyPercent: 99, monthlyPercent: 5 });
+    expect(getAccountQuota(MAIN)?.monthlyPercent).toBe(5);
+    expect(getMainPolicyQuota()).toMatchObject({ weeklyPercent: 99 });
+    expect(getMainPolicyQuota()?.monthlyPercent).toBeUndefined();
     expect(getMainPolicyQuota()?.monthlyIsPrimaryWindow).toBeUndefined();
     expect(getMainAccountHardLockStatus(enabled).state).toBe("blocked");
 

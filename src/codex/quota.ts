@@ -202,9 +202,14 @@ export function normalizeUsagePercent(value: unknown): number | undefined {
   return Math.max(0, Math.min(100, numeric));
 }
 
-/** Validate policy evidence before legacy normalization can turn a negative into zero. */
-function isNegativeUsagePercent(value: unknown): boolean {
-  return (typeof value === "number" || typeof value === "string") && Number(value) < 0;
+/** Reject numeric policy evidence before legacy clamping can fabricate a valid reading. */
+function isInvalidPolicyUsagePercent(value: unknown): boolean {
+  if (typeof value === "number") return !Number.isFinite(value) || value < 0 || value > 100;
+  if (typeof value !== "string" || value.trim() === "") return false;
+  const numeric = Number(value);
+  // Non-numeric metadata stays unknown; explicit nonfinite spellings are invalid evidence.
+  if (Number.isNaN(numeric)) return /^[+-]?(?:nan|infinity)$/i.test(value.trim());
+  return !Number.isFinite(numeric) || numeric < 0 || numeric > 100;
 }
 
 function normalizeResetAt(value: unknown): number | undefined {
@@ -535,7 +540,7 @@ export function applyAccountQuotaFromUpstreamHeaders(
   if (!quota) return;
   const policyQuota = [
     "x-codex-primary-used-percent", "x-codex-secondary-used-percent", "x-codex-tertiary-used-percent",
-  ].some(name => isNegativeUsagePercent(headers.get(name))) ? null : quota;
+  ].some(name => isInvalidPolicyUsagePercent(headers.get(name))) ? null : filterMainPolicyMonthlyQuota(quota);
   setAccountQuotaFromParsed(accountId, quota, writerGeneration, mainWriter, policyQuota);
 }
 
@@ -744,11 +749,25 @@ export function reconcileCodexQuotaAccounts(context: GenerationContext): number 
   return removed;
 }
 
-/** Ordinary main policy rejects the entire message if any normal window is negative. */
+/** Supplementary monthly bars are not governing policy evidence without plan/primary proof. */
+function filterMainPolicyMonthlyQuota(
+  quota: Omit<StoredAccountQuota, "updatedAt"> | null,
+  monthlyOnlyPlan = false,
+): Omit<StoredAccountQuota, "updatedAt"> | null {
+  if (!quota || monthlyOnlyPlan || quota.monthlyIsPrimaryWindow === true) return quota;
+  const filtered = { ...quota };
+  delete filtered.monthlyPercent;
+  delete filtered.monthlyResetAt;
+  delete filtered.monthlyIsPrimaryWindow;
+  // Null retains the matching prior observation; an empty object would merge away evidence.
+  return hasKnownQuotaValue(filtered) || filtered.resetCredits !== undefined ? filtered : null;
+}
+
+/** Ordinary main policy rejects an entire message containing any invalid numeric window. */
 export function parseMainPolicyUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuota, "updatedAt"> | null {
   const windows = [data.rate_limit?.primary_window, data.rate_limit?.secondary_window, data.rate_limit?.tertiary_window];
-  if (windows.some(window => isNegativeUsagePercent(window?.used_percent))) return null;
-  return parseUsageQuota(data);
+  if (windows.some(window => isInvalidPolicyUsagePercent(window?.used_percent))) return null;
+  return filterMainPolicyMonthlyQuota(parseUsageQuota(data), isThirtyDayOnlyCodexPlan(data.plan_type));
 }
 
 export function parseUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuota, "updatedAt"> | null {

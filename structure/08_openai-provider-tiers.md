@@ -88,7 +88,9 @@ substitution do not override it. It neither pauses the account nor clears upstre
 state, and management quota refresh remains available. Only a fresh valid reading below 99%, including
 0%, releases a measured block; passing a reset timestamp alone does not. While blocked, the existing
 once-per-minute background sweep refreshes owned main usage, with bounded/coalesced reads and no
-inference or reset-credit consumption. Failed, missing or negative readings do not release the block.
+inference or reset-credit consumption. Failed, missing, non-finite or out-of-range readings do not
+release the block. Policy validation precedes legacy clamping. Supplementary monthly data cannot
+become the fallback governing window without a monthly-only plan or explicit primary-monthly evidence.
 Previously unobserved usage is unknown, not fabricated headroom.
 
 The policy reads a separately retained identity-tagged quota snapshot, so the legacy rotation

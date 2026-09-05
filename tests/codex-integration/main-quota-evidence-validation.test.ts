@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MAIN_CODEX_ACCOUNT_ID as MAIN } from "../../src/codex/account-id";
+import { getMainAccountHardLockStatus } from "../../src/codex/main-account-hard-lock";
 import { captureMainQuotaWriter, clearMainAccountInfoCache, observeMainQuotaIdentity } from "../../src/codex/main-account-cache";
 import {
   clearAccountQuota, getAccountQuota, getMainPolicyQuota, parseMainPolicyUsageQuota,
@@ -38,19 +39,49 @@ function writerFor(accountId = "fixture-main-a") {
 
 describe("raw policy evidence validation", () => {
   for (const slot of ["primary_window", "secondary_window", "tertiary_window"] as const) {
-    test.each([-1, "-1", " -0.01 ", Number.NEGATIVE_INFINITY])(`${slot} rejects negative %s before clamping`, value => {
-      // JSON input can carry strings despite WHAM's nominal number type.
-      const data = JSON.parse(JSON.stringify({ rate_limit: {
+    test.each([
+      -1, "-1", " -0.01 ", 101, "101", 100.01, " 100.01 ",
+      Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY,
+      "NaN", "Infinity", "-Infinity", "1e400", "-1e400",
+    ])(`${slot} rejects invalid numeric %s before clamping`, value => {
+      // Simulate deserialized external data, including numbers JSON serialization would erase.
+      const data = { rate_limit: {
         primary_window: { used_percent: 99 }, [slot]: { used_percent: value },
-      } })) as WhamUsageResponse;
-      // Infinity is not JSON-representable; exercise the typed boundary directly too.
-      if (value === Number.NEGATIVE_INFINITY) data.rate_limit![slot] = { used_percent: value };
+      } } as WhamUsageResponse;
       expect(parseMainPolicyUsageQuota(data)).toBeNull();
-      if (slot === "primary_window" && value !== Number.NEGATIVE_INFINITY) {
-        expect(parseUsageQuota(data)?.weeklyPercent).toBe(0);
+      if (slot === "primary_window" && Number.isFinite(Number(value))) {
+        expect(parseUsageQuota(data)?.weeklyPercent).toBe(Number(value) < 0 ? 0 : 100);
       }
+      const writer = writerFor();
+      const publish = (input: WhamUsageResponse) => setAccountQuotaFromParsed(
+        MAIN, parseUsageQuota(input), undefined, writer, parseMainPolicyUsageQuota(input),
+      );
+      const cfg = { codexMainAccountHardLock: true };
+      publish(data);
+      expect(getMainAccountHardLockStatus(cfg).state).toBe("unknown");
+      publish({ rate_limit: { primary_window: { used_percent: 99 } } });
+      const retained = getMainPolicyQuota();
+      publish(data);
+      expect(getMainPolicyQuota()).toEqual(retained);
+      publish({ rate_limit: { primary_window: { used_percent: 0 } } });
+      expect(getMainAccountHardLockStatus(cfg).state).toBe("ready");
+      publish({ rate_limit: { primary_window: { used_percent: 99 } } });
+      expect(getMainAccountHardLockStatus(cfg).state).toBe("blocked");
     });
   }
+
+  test.each([0, "0", -0, "-0", 98.99, "98.99", 99, "99", 100, "100"])("valid boundary %s remains policy evidence", value => {
+    const data = { rate_limit: { primary_window: { used_percent: value } } } as WhamUsageResponse;
+    expect(parseMainPolicyUsageQuota(data)).toEqual({ weeklyPercent: Number(value) === 0 ? 0 : Number(value) });
+  });
+
+  test.each([undefined, null, "", " ", "unreadable", "99oops"])("non-numeric %s preserves unknown short shape", value => {
+    const data = { rate_limit: {
+      primary_window: { used_percent: value, limit_window_seconds: 18_000 },
+      secondary_window: { used_percent: 99 }, tertiary_window: { used_percent: 99 },
+    } } as WhamUsageResponse;
+    expect(parseMainPolicyUsageQuota(data)).toEqual({ shortWindowSeconds: 18_000, weeklyPercent: 99 });
+  });
 
   test("unknown short shape and genuine zero preserve the canonical parser contract", () => {
     const data: WhamUsageResponse = { rate_limit: {
@@ -74,6 +105,27 @@ describe("raw policy evidence validation", () => {
     expect(quota?.shortPercent).toBeUndefined();
     expect(quota?.weeklyPercent).toBeUndefined();
     expect(quota?.monthlyPercent).toBeUndefined();
+  });
+
+  test.each([undefined, "plus", "team"])("%s supplementary monthly cannot supply policy or erase retained evidence", plan => {
+    const data: WhamUsageResponse = { plan_type: plan, rate_limit: {
+      tertiary_window: { used_percent: 99, reset_at: 2_000_000_000 },
+    } };
+    expect(parseUsageQuota(data)).toEqual({ monthlyPercent: 99, monthlyResetAt: 2_000_000_000 });
+    expect(parseMainPolicyUsageQuota(data)).toBeNull();
+    // Monthly duration without a primary reading does not bless the tertiary fallback.
+    data.rate_limit!.primary_window = { limit_window_seconds: 2_592_000 };
+    expect(parseMainPolicyUsageQuota(data)).toBeNull();
+    data.rate_limit!.primary_window = { used_percent: 0, limit_window_seconds: 18_000 };
+    expect(parseMainPolicyUsageQuota(data)).toEqual({ shortPercent: 0, shortWindowSeconds: 18_000 });
+  });
+
+  test.each(["go", "free", " Go ", "FREE"])("%s monthly-only plan retains monthly evidence without fabricating primary provenance", plan => {
+    const quota = parseMainPolicyUsageQuota({ plan_type: plan, rate_limit: {
+      tertiary_window: { used_percent: 99, reset_at: 2_000_000_000 },
+    } });
+    expect(quota).toEqual({ monthlyPercent: 99, monthlyResetAt: 2_000_000_000 });
+    expect(quota?.monthlyIsPrimaryWindow).toBeUndefined();
   });
 
   test("null policy evidence preserves only the matching owner and untagged writes invalidate", () => {
