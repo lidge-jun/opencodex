@@ -67,6 +67,7 @@ import { evidenceFromBody } from "../../routing/request-evidence";
 import { resolvePassiveRouteSubjectId } from "../passive-route-linker";
 import {
   advanceComboAfterFailure,
+  comboCooldownRetryAfterSeconds,
   comboDefaultEffort,
   comboFailureCooldownScope,
   comboFailureDecision,
@@ -75,11 +76,11 @@ import {
   concreteComboRequestBody,
   getCombo,
   isComboTargetInCooldown,
-  comboCooldownRetryAfterSeconds,
   NoAvailableComboTargetsError,
   noteComboSuccess,
   parseRetryAfterMs,
   pickComboTarget,
+  pickComboTargetWithWait,
   targetKey,
 } from "../../combos";
 import { isInjectionDebugEnabled } from "../../lib/debug-settings";
@@ -1477,6 +1478,8 @@ export interface ConsumedComboFailure {
   upstreamCode?: string;
   /** Valid numeric/date value used only for cooldown calculation. */
   retryAfter?: string;
+  /** Upstream Codex quota-window reset timestamps used for combo cooldowns. */
+  resetAt?: string[];
   /** Reserved for 040 usage attribution without adding another body read. */
   usage?: OcxUsage;
 }
@@ -1593,9 +1596,22 @@ export async function consumeComboFailure(
   let upstreamCode: string | undefined;
   let upstreamMessage: string | undefined;
   let upstreamType: string | undefined;
+  // Whether the body itself confirms a quota/rate-limit refusal, computed on the SAME read as
+  // the classification below. `shouldRetryCodexPoolAccountQuota` cannot be called here without
+  // a second body read, so this mirrors its normalization: raw 402/429, or a 5xx whose intact,
+  // display-safe body carries a recognized quota message.
+  let quotaConfirmedByBody = false;
   try {
     const body = await readBoundedResponseBody(response, { signal });
     usage = usageFromComboFailureText(body.text);
+    if (
+      response.status >= 500 && response.status < 600
+      && body.displaySafe && !body.truncated
+    ) {
+      const quotaMessage = codexQuotaFailureMessage(body.text);
+      quotaConfirmedByBody = quotaMessage !== undefined
+        && isRateLimitOrQuotaFailureMessage(quotaMessage);
+    }
     if (body.displaySafe) {
       const normalized = normalizeUpstreamErrorText(body.text, fallback);
       classificationText = normalized.safeText;
@@ -1616,18 +1632,24 @@ export async function consumeComboFailure(
       ? fallback
       : `${fallback}: ${classificationText}`;
   const upstreamRetryAfter = response.headers.get("retry-after");
+  // Past HTTP dates are an immediate retry directive, just like the numeric value zero.
+  // Normalize before the client helper discards them and substitutes a default delay.
+  const effectiveRetryAfter = parseRetryAfterMs(upstreamRetryAfter, now) === undefined
+    && parseRetryAfterMs(upstreamRetryAfter, now, { preserveImmediate: true }) !== undefined
+    ? "0"
+    : upstreamRetryAfter;
   // Client response may get the synthetic "2" fallback; cooldown metadata must not —
   // otherwise coolComboTarget treats it as a 2s cooldown instead of the 60s default.
   const clientRetryAfter = resolveClientRetryAfter({
     status: response.status,
     message,
-    upstreamRetryAfter,
+    upstreamRetryAfter: effectiveRetryAfter,
     now,
   });
   const cooldownRetryAfter = resolveClientRetryAfter({
     status: response.status,
     message,
-    upstreamRetryAfter,
+    upstreamRetryAfter: effectiveRetryAfter,
     now,
     includeDefault: false,
   });
@@ -1644,6 +1666,14 @@ export async function consumeComboFailure(
     classificationText,
     ...(normalizedUpstreamCode !== undefined ? { upstreamCode: normalizedUpstreamCode } : {}),
     ...(!cyberFailure && cooldownRetryAfter !== undefined ? { retryAfter: cooldownRetryAfter } : {}),
+    // The EFFECTIVE classification decides, not the raw status. An upstream that wraps a quota
+    // refusal in a 5xx still carries `x-codex-*-reset-at`, and gating on 402/429 alone threw
+    // those away, so the combo target came back up immediately instead of waiting for the
+    // window it was told about. `cyberFailure` stays excluded: a policy block is not a quota.
+    ...(!cyberFailure
+      && (response.status === 429 || response.status === 402 || quotaConfirmedByBody)
+      ? { resetAt: codexQuotaOutcomeMeta(response).resetAt }
+      : {}),
     ...(usage ? { usage } : {}),
   };
 }
@@ -2320,6 +2350,15 @@ export async function handleComboResponses(
     comboPayloadReadable || !unreadableEncryptedAgentTask || canDecryptUnreadableAgentTask(target);
   const initialNow = Date.now();
   let pick: ReturnType<typeof pickComboTarget> = null;
+  const pickWithWait = (pickOptions: {
+    exclude?: Iterable<string>;
+    eligible?: (target: NonNullable<typeof combo>["targets"][number]) => boolean;
+    now?: number;
+  }) => pickComboTargetWithWait(config, comboId, {
+    ...pickOptions,
+    waitForCooldownMs: combo.waitForCooldownMs,
+    abortSignal: options.abortSignal,
+  });
 
   if (unreadableEncryptedAgentTask && !combo.targets.some(canDecryptUnreadableAgentTask)) {
     const recovery = agentTaskRecoveryConfig(config);
@@ -2337,9 +2376,7 @@ export async function handleComboResponses(
       );
       return unreadableEncryptedAgentTaskResponse();
     }
-    pick = pickComboTarget(config, comboId, {
-      eligible: target => !isComboTargetInCooldown(comboId, target, initialNow),
-    });
+    pick = await pickWithWait({ now: initialNow });
     if (!pick) {
       discardEncryptedAgentTaskRecovery(
         req,
@@ -2347,7 +2384,9 @@ export async function handleComboResponses(
         config,
         { parentThreadId: inboundClientThreadId },
       );
-      return comboUnavailable(comboId);
+      return options.abortSignal?.aborted
+        ? clientCancelledResponse()
+        : comboUnavailable(comboId);
     }
     let recovered = false;
     try {
@@ -2377,14 +2416,16 @@ export async function handleComboResponses(
     comboPayloadReadable = true;
     comboReplaySnapshot.recoveredPlaintext = true;
   } else {
-    pick = pickComboTarget(config, comboId, {
-      eligible: target => payloadEligible(target)
-        && !isComboTargetInCooldown(comboId, target, initialNow),
+    pick = await pickWithWait({
+      eligible: payloadEligible,
+      now: initialNow,
     });
   }
 
   if (!pick) {
-    return comboUnavailable(comboId);
+    return options.abortSignal?.aborted
+      ? clientCancelledResponse()
+      : comboUnavailable(comboId);
   }
   // One immutable combo selection trace, before any child dispatch; child
   // adoption below must never replace it with a concrete child route trace.
@@ -2588,9 +2629,12 @@ export async function handleComboResponses(
     console.warn(
       `[combo] ${comboId}: ${targetKey(pick.target)} failed with ${failure.response.status} after ${Date.now() - started}ms`,
     );
+    const failureNow = Date.now();
     const nextPick = advanceComboAfterFailure(config, pick, {
       retryAfter: failure.retryAfter,
-      now: Date.now(),
+      resetAt: failure.resetAt,
+      cooldownMs: combo.cooldownMs,
+      now: failureNow,
       cooldownScope: comboFailureCooldownScope(failure.response.status, failure.classificationText, {
         code: failure.upstreamCode,
       }),
@@ -2599,8 +2643,19 @@ export async function handleComboResponses(
       code: failure.upstreamCode,
       message: failure.classificationText,
     });
-    if (!nextPick) adoptFailedChildLog(childLog);
-    pick = nextPick;
+    if (nextPick) {
+      pick = nextPick;
+    } else {
+      pick = await pickWithWait({
+        exclude: pick.attempted,
+        eligible: payloadEligible,
+        now: failureNow,
+      });
+    }
+    if (!pick) {
+      if (options.abortSignal?.aborted) return clientCancelledResponse();
+      adoptFailedChildLog(childLog);
+    }
   }
   if (
     lastFailure?.status === 413

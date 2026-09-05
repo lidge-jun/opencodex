@@ -11,6 +11,7 @@ import type {
 } from "../types";
 
 export const COMBO_NAMESPACE = "combo";
+export const COMBO_DEFAULT_WAIT_FOR_COOLDOWN_MS = 0;
 
 export function preservesPhysicalComboProvider(
   config: Pick<OcxConfig, "providers" | "combos">,
@@ -37,6 +38,8 @@ export interface ComboValidationIssue {
 export interface NormalizedComboConfig {
   strategy: OcxComboStrategy;
   stickyLimit: number;
+  cooldownMs?: number;
+  waitForCooldownMs: number;
   defaultEffort: OcxComboDefaultEffort | null;
   /** Picker-ladder derivation policy; `strict` preserves the legacy intersection rule. */
   reasoningEffortMode: OcxComboReasoningEffortMode;
@@ -230,6 +233,18 @@ export function comboConfigIssues(
       || body.stickyLimit > 100)) {
     issues.push({ path: ["stickyLimit"], message: "stickyLimit must be an integer from 1 to 100" });
   }
+  if (body.cooldownMs !== undefined
+    && (typeof body.cooldownMs !== "number" || !Number.isInteger(body.cooldownMs)
+      || body.cooldownMs < 1
+      || body.cooldownMs > 600_000)) {
+    issues.push({ path: ["cooldownMs"], message: "cooldownMs must be an integer from 1 to 600000" });
+  }
+  if (body.waitForCooldownMs !== undefined
+    && (typeof body.waitForCooldownMs !== "number" || !Number.isInteger(body.waitForCooldownMs)
+      || body.waitForCooldownMs < 0
+      || body.waitForCooldownMs > 600_000)) {
+    issues.push({ path: ["waitForCooldownMs"], message: "waitForCooldownMs must be an integer from 0 to 600000" });
+  }
   if (body.defaultEffort !== undefined
     && body.defaultEffort !== null
     && (typeof body.defaultEffort !== "string" || !isCodexReasoningEffort(body.defaultEffort))) {
@@ -367,6 +382,8 @@ export function normalizeComboConfig(raw: OcxComboConfig): NormalizedComboConfig
   return {
     strategy: raw.strategy ?? "failover",
     stickyLimit: raw.stickyLimit ?? 1,
+    cooldownMs: raw.cooldownMs,
+    waitForCooldownMs: raw.waitForCooldownMs ?? COMBO_DEFAULT_WAIT_FOR_COOLDOWN_MS,
     defaultEffort: raw.defaultEffort ?? null,
     reasoningEffortMode: raw.reasoningEffortMode === "adaptive" ? "adaptive" : "strict",
     imageInput: raw.imageInput === "disabled" ? "disabled" : "auto",

@@ -1,4 +1,5 @@
 export {
+  COMBO_DEFAULT_WAIT_FOR_COOLDOWN_MS,
   COMBO_NAMESPACE,
   comboAliasIssues,
   comboConfigError,
@@ -25,6 +26,7 @@ export {
   noteComboFailure,
   noteComboSuccess,
   pickComboTarget,
+  pickComboTargetWithWait,
   tryPickComboModel,
   UnknownComboError,
   type ComboPick,
@@ -34,6 +36,8 @@ export {
   comboCooldownRetryAfterSeconds,
   COMBO_REQUEST_RATE_COOLDOWN_MS,
   coolComboTarget,
+  earliestComboCooldown,
+  earliestComboCooldownExpiry,
   isComboTargetInCooldown,
   isTransientRequestRateLimit,
   parseRetryAfterMs,

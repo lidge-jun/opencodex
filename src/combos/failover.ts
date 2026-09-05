@@ -1,3 +1,4 @@
+import { parseResetCooldownMs } from "../codex/routing";
 import { classifyError, isCyberPolicyCode } from "../lib/errors";
 import type { OcxComboTarget } from "../types";
 import { targetKey } from "./types";
@@ -197,6 +198,7 @@ export function coolComboTarget(
   target: Pick<OcxComboTarget, "provider" | "model">,
   options?: {
     retryAfter?: string | null;
+    resetAt?: unknown | unknown[];
     now?: number;
     cooldownMs?: number;
     writerGeneration?: number;
@@ -209,8 +211,12 @@ export function coolComboTarget(
   const writerGeneration = options?.writerGeneration ?? captureConfigGeneration();
   const ownerKey = `${comboId}::${targetKey(target)}`;
   if (writerGeneration < lastReconciledGeneration && !liveComboTargets.has(ownerKey)) return;
-  const cooldownMs = options?.cooldownMs
-    ?? parseRetryAfterMs(options?.retryAfter, now)
+  // A server-provided Retry-After is authoritative, including an immediate `0` directive.
+  // A quota reset is the next-most-specific signal (#3256); configured and default cooldowns
+  // are only fallbacks when upstream supplied neither usable value.
+  const cooldownMs = parseRetryAfterMs(options?.retryAfter, now, { preserveImmediate: true })
+    ?? parseResetCooldownMs(options?.resetAt, now)
+    ?? options?.cooldownMs
     ?? (isTransientRequestRateLimit({
       status: options?.status,
       code: options?.code,
@@ -220,6 +226,32 @@ export function coolComboTarget(
     cooldownUntil: now + Math.min(Math.max(cooldownMs, 1), MAX_COOLDOWN_MS),
   });
   sweepExpiredOnWrite(now);
+}
+
+export function earliestComboCooldown(
+  comboId: string,
+  targets: Iterable<Pick<OcxComboTarget, "provider" | "model">>,
+  now = Date.now(),
+): { expiry: number; target: Pick<OcxComboTarget, "provider" | "model"> } | undefined {
+  let earliest: { expiry: number; target: Pick<OcxComboTarget, "provider" | "model"> } | undefined;
+  for (const target of targets) {
+    const key = cooldownMapKey(comboId, target);
+    const entry = targetCooldowns.get(key);
+    if (!entry || entry.cooldownUntil <= now) continue;
+    if (earliest === undefined || entry.cooldownUntil < earliest.expiry) {
+      earliest = { expiry: entry.cooldownUntil, target };
+    }
+  }
+  return earliest;
+}
+
+/** Public convenience wrapper returning only the earliest cooldown expiry. */
+export function earliestComboCooldownExpiry(
+  comboId: string,
+  targets: Iterable<Pick<OcxComboTarget, "provider" | "model">>,
+  now = Date.now(),
+): number | undefined {
+  return earliestComboCooldown(comboId, targets, now)?.expiry;
 }
 
 export function reconcileComboTargetCooldowns(context: GenerationContext): number {
