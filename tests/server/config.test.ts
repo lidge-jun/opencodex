@@ -37,6 +37,8 @@ import { setTrustedWindowsSystemDirectoryResolverForTests } from "../../src/lib/
 import { AtomicWriteResidualTempError, atomicWriteFile, atomicWriteFileAsync, hardenConfigDir, hardenExistingSecret, renameAtomicFile, saveConfig } from "../../src/config";
 import { nextAtomicTempSequence } from "../../src/config/atomic-write";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
+import { DEFAULT_SUBAGENT_MODELS, migrateSubagentModels } from "../../src/config/subagent-models";
+import { migrateStartupSubagentModels } from "../../src/server/subagent-models-startup";
 import { providerManagementConfigError } from "../../src/server/auth-cors";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 let testDir = "";
@@ -74,6 +76,105 @@ afterEach(() => {
 function backupNames(): string[] {
   return readdirSync(testDir).filter(name => name.startsWith("config.json.invalid-"));
 }
+
+describe("Astra-first subagent upgrade", () => {
+  const defaults = ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"];
+
+  test("fresh defaults put Astra first and 5.5 last, already marked", () => {
+    const config = getDefaultConfig();
+    expect(DEFAULT_SUBAGENT_MODELS).toEqual(defaults);
+    expect(config.subagentModels).toEqual(defaults);
+    expect(config.subagentModelsVersion).toBe(1);
+    expect(migrateSubagentModels(config)).toBe(false);
+    config.subagentModels!.pop();
+    expect(DEFAULT_SUBAGENT_MODELS).toEqual(defaults);
+  });
+
+  test.each([
+    [["gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.4-mini"], defaults],
+    [["one", "two", "three", "four", "five"], ["gpt-6-astra", "one", "two", "three", "four"]],
+    [["one", "two", "three", "four", "gpt-5.5"], ["gpt-6-astra", "one", "two", "three", "four"]],
+    [["one", "gpt-6-astra", "gpt-6-astra", "gpt-5.5", "two"], ["gpt-6-astra", "one", "two", "gpt-5.5"]],
+    [["pool/gpt-6-astra", "gpt-5.5"], ["gpt-6-astra", "pool/gpt-6-astra", "gpt-5.5"]],
+    [[], ["gpt-6-astra"]],
+  ])("upgrades legacy roster %j once", (before, expected) => {
+    const config = getDefaultConfig();
+    delete config.subagentModelsVersion;
+    config.subagentModels = [...before];
+    expect(migrateSubagentModels(config)).toBe(true);
+    expect(config.subagentModels).toEqual(expected);
+    expect(config.subagentModelsVersion).toBe(1);
+    expect(migrateSubagentModels(config)).toBe(false);
+    expect(config.subagentModels).toEqual(expected);
+  });
+
+  test("unset legacy roster uses the new defaults", () => {
+    const config = getDefaultConfig();
+    delete config.subagentModels;
+    delete config.subagentModelsVersion;
+    expect(migrateSubagentModels(config)).toBe(true);
+    expect(config.subagentModels).toEqual(defaults);
+  });
+
+  test.each([1, 2])("version %i preserves later user choices across save/load", version => {
+    for (const chosen of [[], ["gpt-5.5", "custom/model"]]) {
+      saveConfig({ ...getDefaultConfig(), subagentModels: chosen, subagentModelsVersion: version });
+      const config = loadConfig();
+      migrateStartupSubagentModels(config);
+      expect(config.subagentModels).toEqual(chosen);
+      expect(loadConfig().subagentModels).toEqual(chosen);
+      expect(loadConfig().subagentModelsVersion).toBe(version);
+    }
+  });
+
+  test.each([null, "bad", ["one", 2], [""]])("invalid roster %j does not discard providers", roster => {
+    writeConfig({ ...getDefaultConfig(), subagentModels: roster, subagentModelsVersion: "invalid" });
+    const config = loadConfig();
+    expect(config.providers.openai).toEqual(getDefaultConfig().providers.openai);
+    expect(config.subagentModels).toBeUndefined();
+    expect(migrateSubagentModels(config)).toBe(true);
+    expect(config.subagentModels).toEqual(defaults);
+    expect(backupNames()).toEqual([]);
+  });
+
+  test.each([undefined, 1])("repair does not invent migration version %j", version => {
+    writeConfig({ subagentModels: ["one", "two"], subagentModelsVersion: version });
+    for (const config of [loadConfig(), readConfigDiagnostics().config]) {
+      expect(config.subagentModelsVersion).toBe(version);
+      expect(migrateSubagentModels(config)).toBe(version === undefined);
+      expect(config.subagentModels).toEqual(version === undefined ? ["gpt-6-astra", "one", "two"] : ["one", "two"]);
+    }
+  });
+
+  test("startup upgrades the newest disk roster and preserves unrelated disk edits", () => {
+    const legacy = { ...getDefaultConfig(), subagentModelsVersion: undefined, subagentModels: ["old"] };
+    saveConfig(legacy);
+    const stale = loadConfig();
+    saveConfig({ ...legacy, subagentModels: ["new", "gpt-5.5"], port: 23456 });
+    migrateStartupSubagentModels(stale);
+    expect(stale.subagentModels).toEqual(["gpt-6-astra", "new", "gpt-5.5"]);
+    expect(loadConfig().subagentModels).toEqual(stale.subagentModels);
+    expect(loadConfig().subagentModelsVersion).toBe(1);
+    expect(loadConfig().port).toBe(23456);
+    // Another process loaded before the first upgrade; it must not shift again.
+    migrateStartupSubagentModels(legacy);
+    expect(legacy.subagentModels).toEqual(stale.subagentModels);
+  });
+
+  test("unavailable persistence leaves malformed disk bytes untouched", () => {
+    const legacy = { ...getDefaultConfig(), subagentModelsVersion: undefined, subagentModels: ["one"] };
+    writeConfig("{ invalid");
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(() => migrateStartupSubagentModels(legacy)).not.toThrow();
+      expect(legacy.subagentModels).toEqual(["gpt-6-astra", "one"]);
+      expect(readFileSync(getConfigPath(), "utf8")).toBe("{ invalid");
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
 
 function writeConfig(content: unknown): void {
   writeFileSync(

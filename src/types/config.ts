@@ -413,6 +413,8 @@ export interface OcxConfig {
    * into a selector-qualified group; Codex still advertises only the first 5 visible rows.
    */
   subagentModels?: string[];
+  /** One-time featured-roster upgrade marker; later user ordering is preserved. */
+  subagentModelsVersion?: number;
   /**
    * Optional full picker ordering for the Codex model catalog, independent of the
    * 5-slot `subagentModels` spawn_agent cap. DISPLAY-ONLY: it controls the visual order of

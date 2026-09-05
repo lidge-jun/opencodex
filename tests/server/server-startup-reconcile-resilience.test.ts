@@ -48,6 +48,21 @@ function canBindLoopback(): boolean {
 
 const CAN_BIND = canBindLoopback();
 
+test.skipIf(!CAN_BIND)("startServer persists the Astra-first legacy roster upgrade", async () => {
+  saveConfig({
+    ...staleConfig(),
+    subagentModels: ["gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.4-mini"],
+  });
+  const server = startServer(0);
+  try {
+    const saved = loadConfig();
+    expect(saved.subagentModels).toEqual(["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"]);
+    expect(saved.subagentModelsVersion).toBe(1);
+  } finally {
+    await server.stop(true);
+  }
+});
+
 let testDir = "";
 let previousHome: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;

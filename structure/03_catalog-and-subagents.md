@@ -356,8 +356,14 @@ through `ocx agent subagents set` or the opencodex configuration.
 
 When account selectors are active, one featured bare native id expands into a complete selector row
 group. Catalog priorities use the selector count as a stride so each group stays together without
-widening Codex's five-row advertisement window. Startup seeds bare native GPT defaults only when
-`subagentModels` is unset; an explicit empty list persists.
+widening Codex's five-row advertisement window. Fresh defaults are Astra, Sol, Terra, Luna, 5.5.
+Startup upgrades unmarked rosters once: prepend `gpt-6-astra`, retain the first four unique
+non-Astra choices, then move retained bare `gpt-5.5` last. The old fifth choice is dropped;
+an unmarked empty list becomes Astra only, and an unset list receives the fresh defaults.
+`subagentModelsVersion: 1` records completion, so later user edits (including an empty list or
+removing Astra) persist. The migration rebases on the latest disk config under the existing
+mutation lock; failed persistence degrades to an in-memory roster for that run without a stale
+whole-config overwrite. Existing disabled-model visibility rules remain unchanged.
 
 Quota-aware fallback walks a configured chain when the featured model is exhausted, probing
 availability on a bounded interval (default 60 s, `src/codex/subagent-model-fallback.ts`). It rewrites

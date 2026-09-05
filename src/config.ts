@@ -4,6 +4,8 @@ import { dirname, join } from "node:path";
 import { Database } from "bun:sqlite";
 import * as z from "zod/v4";
 import { isValidProviderName, hasOwnProvider } from "./config/provider-name";
+import { DEFAULT_SUBAGENT_MODELS, SUBAGENT_MODELS_VERSION } from "./config/subagent-models";
+export { DEFAULT_SUBAGENT_MODELS } from "./config/subagent-models";
 import {
   apiKeyTransportConfigError,
   booleanRecordConfigError,
@@ -1122,6 +1124,8 @@ const configSchema = z.object({
   openaiProviderTierVersion: z.union([z.literal(1), z.literal(2)]).optional(),
   // Invalid hand edits must not discard an otherwise usable config.
   googleAntigravityStaticCatalogVersion: z.union([z.literal(1), z.literal(2)]).optional().catch(undefined),
+  subagentModelsVersion: z.number().int().positive().optional().catch(undefined),
+  subagentModels: z.array(z.string().min(1)).optional().catch(undefined),
   clientIntegrations: clientIntegrationsSchema.optional().catch(undefined),
   providerContextCaps: z.record(z.string(), z.number().int().positive()).optional(),
   contextCapValue: z.number().int().positive().optional(),
@@ -1577,17 +1581,6 @@ const configSchema = z.object({
     }
   }
 });
-
-/**
- * Default featured subagent models (native GPT) seeded on a fresh install and when `subagentModels`
- * is unset. Codex's spawn_agent advertises the first 5 featured catalog entries, so this seed is a
- * deliberate 5-list: frontier gpt-5.5 first, the gpt-5.6 preview trio, and gpt-5.4-mini as the cheap
- * tier. gpt-5.4 / gpt-5.3-codex-spark stay selectable in the GUI's available list. The user can
- * remove any in the GUI — once they set the list (even to []), it is respected, so removals persist
- * (start-up only seeds the UNSET case). Kept to ids ChatGPT accepts; the start-up seed prefers the
- * live catalog's native slugs.
- */
-export const DEFAULT_SUBAGENT_MODELS = ["gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.4-mini"];
 
 export function hardenExistingSecret(path: string): void {
   if (existsSync(path)) {
@@ -2201,7 +2194,7 @@ export function loadConfig(): OcxConfig {
     // discarding it entirely, so pool accounts and providers survive a missing
     // field like defaultProvider.
     const defaults = getDefaultConfig();
-    const merged = { ...defaults, ...parsed };
+    const merged = { ...defaults, ...parsed, subagentModelsVersion: parsed.subagentModelsVersion };
     // Ensure providers from both sides survive
     if (parsed.providers && defaults.providers) {
       merged.providers = { ...defaults.providers, ...parsed.providers };
@@ -2412,7 +2405,7 @@ function mergeConfigDefaults(parsed: unknown): unknown {
   if (!parsed || typeof parsed !== "object") return parsed;
   const defaults = getDefaultConfig();
   const raw = parsed as Record<string, unknown>;
-  const merged: Record<string, unknown> = { ...defaults, ...raw };
+  const merged: Record<string, unknown> = { ...defaults, ...raw, subagentModelsVersion: raw.subagentModelsVersion };
   if (raw.providers && typeof raw.providers === "object" && defaults.providers) {
     merged.providers = { ...defaults.providers, ...(raw.providers as Record<string, unknown>) };
   }
@@ -3700,6 +3693,7 @@ export function getDefaultConfig(): OcxConfig {
     },
     defaultProvider: "openai",
     subagentModels: [...DEFAULT_SUBAGENT_MODELS],
+    subagentModelsVersion: SUBAGENT_MODELS_VERSION,
     multiAgentGuidanceEnabled: true,
     websockets: false,
     codexAutoStart: true,

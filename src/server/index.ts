@@ -12,7 +12,6 @@ import {
 } from "./ws-bridge";
 import type { Server, ServerWebSocket } from "bun";
 import {
-  DEFAULT_SUBAGENT_MODELS,
   applyProxyEnv,
   armClaudeCodeBaseline,
   loadConfig,
@@ -22,6 +21,7 @@ import {
 } from "../config";
 import { grokDefaultReasoningEffort } from "../grok/effort";
 import { flushConfigDirHardening } from "../config/paths";
+import { migrateStartupSubagentModels } from "./subagent-models-startup";
 import { reconcileOAuthProviders } from "../oauth";
 import { withCatalogWriteSerialization } from "../codex/catalog-write-serialization";
 import { invalidateCodexModelsCacheWithPermit } from "../codex/catalog/sync";
@@ -668,12 +668,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   // adding/dropping models reaches existing configs on start — not just fresh installs.
   reconcileOAuthProviders(config);
   reconcileLiveStateStores();
-  // Seed default featured subagent models on first run only (UNSET → defaults). A user-set list,
-  // even [], is left alone so GUI removals persist.
-  if (config.subagentModels === undefined) {
-    config.subagentModels = [...DEFAULT_SUBAGENT_MODELS];
-    saveConfig(config);
-  }
+  migrateStartupSubagentModels(config);
   // authMode migration (devlog 260726_claude_auth_auto/015): before "auto" existed,
   // choosing Subscription DELETED the key, so a pre-upgrade block with no authMode is
   // indistinguishable from "never chose". Pin those to subscription once so an upgrade

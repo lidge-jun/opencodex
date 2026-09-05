@@ -8,11 +8,25 @@ routes, and limits delegated work.
 
 ## Agent fields
 
+### Astra roster upgrade
+
+On the first start after upgrading, existing `subagentModels` lists receive
+`gpt-6-astra` first. The first four unique non-Astra choices are retained and the
+old fifth choice is dropped. If `gpt-5.5` is retained, it moves to the end.
+The previous default list therefore becomes Astra, Sol, Terra, Luna, 5.5.
+An unset list receives those same defaults; an explicit empty legacy list becomes
+`["gpt-6-astra"]`. Existing Astra entries are not duplicated.
+
+The internal `subagentModelsVersion: 1` marker makes this a one-time upgrade.
+Afterwards you can reorder, remove Astra, or save an empty list without startup
+changing your choices again. Disabled models remain disabled. Astra availability
+still depends on upstream support for your account.
+
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | `v1` stamps every catalog model as v1; `v2` stamps every model as v2. `default` restores upstream pins (Sol/Terra v2, Luna v1) and otherwise follows the native `multi_agent_v2` flag. Applies to new sessions. |
 | `keepNativeChatGptOnV1?` | `boolean` | `false` | When `multiAgentMode` is `"v2"`, disable the global V2 override, stamp ChatGPT-native rows as v1, and keep routed rows on v2. Codex resolves the global override before catalog pins, so both parts are required for a ChatGPT parent to spawn routed children without backend-encrypted tasks ([#92](https://github.com/lidge-jun/opencodex/issues/92)). Ignored in `v1` and `default`. |
-| `subagentModels?` | `string[]` | `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.4-mini` | Up to five bare native, account-qualified `<selector>/<native-openai-model>`, or routed `provider/model` ids featured first in the sub-agent picker. The dashboard offers only bare native and routed ids and omits exact account-qualified choices when it saves; use `ocx agent subagents set` or edit the configuration for exact choices. An explicit empty list is preserved. |
+| `subagentModels?` | `string[]` | `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5` | Up to five bare native, account-qualified `<selector>/<native-openai-model>`, or routed `provider/model` ids featured first in the sub-agent picker. The dashboard offers only bare native and routed ids and omits exact account-qualified choices when it saves; use `ocx agent subagents set` or edit the configuration for exact choices. After the [one-time Astra upgrade](#astra-roster-upgrade), an explicit empty list is preserved. |
 | `injectionModel?` | `string` | — | Preferred native or routed sub-agent model used in proxy-authored v2 delegation guidance. |
 | `injectionEffort?` | `string` | — | Preferred effort (`low` through `ultra`), meaningful only with `injectionModel`. |
 | `injectionPrompt?` | `string` | — | Replaces the built-in v2 guidance body. Supports `{{model}}`, `{{effort}}`, `{{roster}}`, and `{{fallback}}`. A configured `injectionModel` is sufficient to render the custom prompt. |
