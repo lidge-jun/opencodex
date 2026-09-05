@@ -118,9 +118,11 @@ için hala okunur, ancak `ocx doctor` bunu bayraklar.
 opencodex devre dışı bırakılmış, yönlendirilemez, sağlıksız, soğumada olan veya
 kota eşiği adaylarını atlar. Kullanılabilirlik anlık görüntüsü
 `subagentModelFallbackPollMs` boyunca önbelleğe alınır. Şifrelenmiş çocuk
-görevleri zinciri kurallı yerel ChatGPT hedefleriyle kısıtlayabilir; hiçbiri
-şifrelenmiş yükü okuyamazsa istek okunamayan şifreli metni başka bir yere
-yönlendirmek yerine başarısız olur.
+görevlerinde zincir, kurallı yerel ChatGPT hedefleriyle ve
+`allowEncryptedV2AgentTasks: true` kullanılarak açıkça güvenilen doğrudan anahtar
+kimlik doğrulamalı Responses rotalarıyla sınırlıdır. Hiçbiri şifrelenmiş yükü
+işleyemezse istek, okunamayan şifreli metni başka bir yere yönlendirmek yerine
+başarısız olur. Kombolar yalnızca kurallı yerel hedefleri kullanmaya devam eder.
 
 ```json
 {
@@ -246,5 +248,4 @@ ile `xhigh` arasını sunar.
 
 v1, varsayılan ve v2 davranışının yeni başlayanlara yönelik açıklaması için [Alt
 ajan yüzeyleri](/tr/guides/sub-agent-surface/) sayfasına bakın.
-
 

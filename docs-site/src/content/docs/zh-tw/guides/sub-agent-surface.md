@@ -6,7 +6,7 @@ description: 全域控制 Codex 在所有模型上生成和管理子代理的方
 opencodex 允許你為目錄中的所有模型選擇多代理協作介面。儀表板和 Models 頁面中的 **Sub-agent** 開關會全域控制這一設定。
 
 :::note
-在 v2 介面（`multi_agent_v2`）上，子代理**預設**繼承父會話的模型：`fork_turns` 預設為 `all`，而全量歷史 fork 會拒絕覆蓋。自 v2.7.2 起，opencodex 注入的指引會教模型如何打破繼承 —— 將 `fork_turns` 設為 `"none"`（或如 `"3"` 的部分 fork）的 `spawn_agent` 呼叫可以傳入 `model` / `reasoning_effort` 引數；即使公開的工具 schema 中看不到這些引數，Codex 執行環境也會解析並應用。已知傳輸限制：當**原生**父代理 spawn 一個路由到**非原生** provider 的子代理時，Codex 用戶端可能只以後端加密的 `encrypted_content` 傳送 `NEW_TASK` 載荷（[#92](https://github.com/lidge-jun/opencodex/issues/92)）。opencodex 不會把這種無法讀取的任務轉發給外部 provider：直接路由會回傳 HTTP 400 和錯誤碼 `unreadable_encrypted_agent_task`；組合路由則會跳過無法解密的目標，並在存在可用目標時選擇規範的原生 ChatGPT 目標。恢復方法：異構 provider 委派改用 v1、選擇原生 ChatGPT 子代理，或將任務重新作為明文 v2 `agent_message` 內容傳送。另有預設停用的實驗性 `agentTaskRecovery`；它會增加 ChatGPT 配額用量與延遲，且依賴非公開後端行為。
+在 v2 介面（`multi_agent_v2`）上，子代理**預設**繼承父會話的模型：`fork_turns` 預設為 `all`，而全量歷史 fork 會拒絕覆蓋。自 v2.7.2 起，opencodex 注入的指引會教模型如何打破繼承 —— 將 `fork_turns` 設為 `"none"`（或如 `"3"` 的部分 fork）的 `spawn_agent` 呼叫可以傳入 `model` / `reasoning_effort` 引數；即使公開的工具 schema 中看不到這些引數，Codex 執行環境也會解析並應用。已知傳輸限制：當**原生**父代理 spawn 一個路由到**非原生** provider 的子代理時，Codex 用戶端可能只以後端加密的 `encrypted_content` 傳送 `NEW_TASK` 載荷（[#92](https://github.com/lidge-jun/opencodex/issues/92)）。opencodex 不會把這種無法讀取的任務轉發給任意外部 provider：直接路由通常回傳 HTTP 400 和錯誤碼 `unreadable_encrypted_agent_task`，但以 `allowEncryptedV2AgentTasks: true` 明確信任的直接金鑰驗證 Responses 路由可以原樣接收；組合路由仍會跳過無法解密的目標，並在存在可用目標時選擇規範的原生 ChatGPT 目標。恢復方法：異構 provider 委派改用 v1、選擇原生 ChatGPT 子代理、使用明確信任的 Responses relay，或將任務重新作為明文 v2 `agent_message` 內容傳送。另有預設停用的實驗性 `agentTaskRecovery`；它會增加 ChatGPT 配額用量與延遲，且依賴非公開後端行為。
 :::
 
 ## What sub-agents are
@@ -21,7 +21,7 @@ opencodex 允許你為目錄中的所有模型選擇多代理協作介面。儀�
 | --- | --- | --- |
 | **v1** | `multi_agent_v1` | 使用經典的名稱空間代理工具，以及 `send_input` / `close_agent` / `resume_agent`。`spawn_agent` 的模型覆蓋可以在其他模型上生成子代理。 |
 | **base**（預設） | 上游固定值 | 恢復上游模型的固定值：gpt-5.6-sol 和 gpt-5.6-terra 使用 v2，gpt-5.6-luna 使用 v1；未固定的模型遵循 Codex 的 `multi_agent_v2` 功能開關。生成行為取決於該模型最終使用的介面。 |
-| **v2** | `multi_agent_v2` | 使用扁平的 `spawn_agent` 工具、併發會話，以及 `send_message` / `followup_task` / `wait_agent` / `interrupt_agent`。全量歷史 fork 時子代理繼承父模型；`fork_turns: "none"`（或部分 fork）時接受 `model` / `reasoning_effort` 覆蓋。如果原生→路由子代理只收到後端加密的任務內容，外部路由會回傳 `unreadable_encrypted_agent_task`；混合組合會優先選擇可解密的原生目標（[#92](https://github.com/lidge-jun/opencodex/issues/92)）。 |
+| **v2** | `multi_agent_v2` | 使用扁平的 `spawn_agent` 工具、併發會話，以及 `send_message` / `followup_task` / `wait_agent` / `interrupt_agent`。全量歷史 fork 時子代理繼承父模型；`fork_turns: "none"`（或部分 fork）時接受 `model` / `reasoning_effort` 覆蓋。如果原生→路由子代理只收到後端加密的任務內容，未明確信任的外部路由會回傳 `unreadable_encrypted_agent_task`；明確信任的直接金鑰驗證 Responses 路由可以原樣接收，而混合組合仍優先選擇可解密的原生目標（[#92](https://github.com/lidge-jun/opencodex/issues/92)）。 |
 
 ## 運作原理
 
@@ -87,8 +87,9 @@ opencodex 仍可為了向後相容從 TOML 讀取舊版 `model_fallback` 列，�
 停用 provider 支撐、標記為不健康、在冷卻中、缺少可用 Pool 化 Codex 帳號，或超過設定配額閾值的
 候選。可用性探測會快取 `subagentModelFallbackPollMs`（預設 60 秒）。
 
-Fallback 不能讓不相容的加密任務變成可讀。當子任務是為 ChatGPT 加密時，即使外部模型在鏈中出現得
-更早，選擇也會限制在規範的原生 ChatGPT 目標。
+Fallback 不能讓不相容的加密任務變成可讀。當子任務是為 ChatGPT 加密時，即使其他外部模型在鏈中
+出現得更早，選擇也只會包含規範的原生 ChatGPT 目標，以及透過
+`allowEncryptedV2AgentTasks: true` 明確信任的直接金鑰驗證 Responses 路由。組合仍只使用規範的原生目標。
 
 ## 加密的 v2 任務傳輸
 
@@ -99,7 +100,7 @@ Codex 可能只以後端加密的 `encrypted_content` 傳送 v2 原生→路由�
 opencodex 會安全失敗，而不是轉發空或無法讀取的任務：
 
 - 直接的非原生路由回傳 HTTP 400，帶有 `error.code = "unreadable_encrypted_agent_task"`，且不會回顯
-  密文。
+  密文；但其金鑰驗證 Responses provider 透過 `allowEncryptedV2AgentTasks: true` 明確選擇加入時除外。
 - 組合只會為該任務考慮規範的原生 ChatGPT 目標，包括重試。若沒有可用目標，回傳相同的 400。
 - 可讀取的明文任務保持正常的路由與 fallback 行為。
 
@@ -117,7 +118,7 @@ opencodex 會安全失敗，而不是轉發空或無法讀取的任務：
 - **Dashboard** → 第一個狀態單元：選擇 **v1**、**base** 或 **v2**。
 - **Models** 頁面 → 使用頂部的分段控制元件。
 - 兩個頁面都有 **?** 按鈕，可開啟幫助彈窗並返回本文。
-- **Dashboard** → **子代理委託**：選擇首選模型和可選的推理強度。在 v2 上，注入的指引會要求以 `fork_turns: "none"` 生成，使模型覆蓋得以應用。如果原生→路由子代理只收到加密任務內容，請使用原生目標或 v1；僅外部目標的傳輸現在會明確回傳 `unreadable_encrypted_agent_task`（[#92](https://github.com/lidge-jun/opencodex/issues/92)）。
+- **Dashboard** → **子代理委託**：選擇首選模型和可選的推理強度。在 v2 上，注入的指引會要求以 `fork_turns: "none"` 生成，使模型覆蓋得以應用。如果原生→路由子代理只收到加密任務內容，請使用原生目標、v1，或明確信任的直接金鑰驗證 Responses relay；其他僅外部目標的傳輸會明確回傳 `unreadable_encrypted_agent_task`（[#92](https://github.com/lidge-jun/opencodex/issues/92)）。
 
 ### CLI
 

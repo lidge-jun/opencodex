@@ -47,7 +47,7 @@ V1 指引僅在 `max` 或 `ultra` 時為主動文字。V2 僅在存在偏好模�
 2. 來自 `$CODEX_HOME/agents/*.toml` 的角色級 `model_fallback`；然後
 3. 全域 `subagentModelFallback` 項目。
 
-opencodex 會跳過已停用、不可路由、不健康、冷卻中或達到配額閾值的候選項。可用性快取保存 `subagentModelFallbackPollMs`。加密的子任務可將鏈限制為規範的原生 ChatGPT 目標；若無任何目標可讀取加密 payload，請求會失敗，而不會將無法讀取的密文路由到別處。
+opencodex 會跳過已停用、不可路由、不健康、冷卻中或達到配額閾值的候選項。可用性快取保存 `subagentModelFallbackPollMs`。對於加密的子任務，候選鏈僅包含規範的原生 ChatGPT 目標，以及透過 `allowEncryptedV2AgentTasks: true` 明確信任的直接金鑰驗證 Responses 路由。若無任何目標可處理加密 payload，請求會失敗，而不會將無法讀取的密文路由到別處。組合仍只使用規範的原生目標。
 
 ```json
 {

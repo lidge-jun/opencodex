@@ -201,6 +201,34 @@ describe("combo path encrypted agent task recovery", () => {
     expect(forwardedBodies[0]).not.toContain("capture_assignment");
   });
 
+  test("keeps fallback combo aliases out of direct encrypted dispatch", async () => {
+    const config = comboConfig([
+      { provider: "relay", model: "relay-model" },
+      { provider: "openai", model: "gpt-5.5" },
+    ]);
+    delete config.agentTaskRecovery;
+    config.subagentModelFallback = ["combo/routed"];
+    config.providers.relay = {
+      adapter: "openai-responses",
+      baseUrl: "https://relay.example.test/v1",
+      authMode: "key",
+      apiKey: "test-relay-key",
+      allowEncryptedV2AgentTasks: true,
+    };
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      return providerResponse();
+    }) as typeof fetch;
+
+    const response = await post(config, "xai/grok-4.5", encryptedInput(), codexHeaders());
+    const payload = await response.json() as { error?: { code?: string } };
+
+    expect(response.status).toBe(400);
+    expect(payload.error?.code).toBe("unreadable_encrypted_agent_task");
+    expect(fetchCalls).toBe(0);
+  });
+
   test("keeps the canonical target bypass in a mixed combo without running recovery", async () => {
     const forwardedBodies: string[] = [];
     globalThis.fetch = (async (_input, init) => {

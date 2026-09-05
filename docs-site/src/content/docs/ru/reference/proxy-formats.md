@@ -290,7 +290,7 @@ Direct, поэтому remote proxy key здесь обязан идти чер�
 | 401 | `authentication_error` | Отсутствует обязательный credential для proxy-admission или он неверен |
 | 403 | `origin_rejected` | Data-plane запрос или WebSocket-upgrade Responses/OpenAI пришёл с запрещённого origin |
 | 503 | `combo_unavailable` | Все цели выбранной combo недоступны, в cooldown, отключены или иным образом не подходят |
-| 400 | `unreadable_encrypted_agent_task` | У шифрованной задачи воркера v2 нет подходящей нативной цели ChatGPT, способной её прочитать |
+| 400 | `unreadable_encrypted_agent_task` | У шифрованной задачи воркера v2 нет ни подходящей канонической цели ChatGPT, ни явно доверенной цели Responses, способной её обработать |
 | 426 | `upgrade_required` | Транспорт Responses WebSocket выключен или upgrade не удался; используйте HTTP |
 
 Сбои, пришедшие с Anthropic-side, отрисовываются в error envelope Anthropic, поэтому отклонение

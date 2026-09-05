@@ -72,7 +72,7 @@ v1에서는 opencodex가 `max` 또는 `ultra` 추론 강도에서만 업스트�
 
 중복 모델 id는 첫 번째 출현을 유지한 채 제거합니다. 선택 과정에서 opencodex는 비활성화된 후보, 라우팅 불가 후보, 비활성화된 프로바이더가 받쳐주는 후보, unhealthy로 표시된 후보, cooldown 중인 후보, 사용할 수 있는 pooled Codex 계정이 없는 후보, 또는 설정된 quota 임계치를 넘는 후보를 건너뜁니다. 가용성 프로브는 기본값 60초인 `subagentModelFallbackPollMs` 동안 캐시됩니다.
 
-폴백이 호환되지 않는 암호화 작업을 읽을 수 있게 만들어 주지는 않습니다. 자식 작업이 ChatGPT용으로 암호화되어 있으면, 체인 앞쪽에 외부 모델이 있더라도 선택은 정규 네이티브 ChatGPT 대상만 허용됩니다.
+폴백이 호환되지 않는 암호화 작업을 읽을 수 있게 만들어 주지는 않습니다. 자식 작업이 ChatGPT용으로 암호화되어 있으면, 체인 앞쪽에 다른 외부 모델이 있더라도 정규 네이티브 ChatGPT 대상과 `allowEncryptedV2AgentTasks: true`로 명시적으로 신뢰한 직접 키 인증 Responses 라우트만 선택합니다. 콤보는 계속 정규 네이티브 대상만 사용합니다.
 
 ## 암호화된 v2 작업 전달
 
@@ -80,7 +80,7 @@ Codex는 v2 네이티브→라우팅 자식 작업을 백엔드 암호화된 `en
 
 opencodex는 읽을 수 없거나 빈 작업을 그대로 넘기지 않고 안전하게 실패합니다.
 
-- 비네이티브 직접 라우팅은 HTTP 400과 `error.code = "unreadable_encrypted_agent_task"`를 반환하며, 암호문을 에코하지 않습니다.
+- 비네이티브 직접 라우팅은 키 인증 Responses 프로바이더가 `allowEncryptedV2AgentTasks: true`로 명시적으로 허용한 경우가 아니면 HTTP 400과 `error.code = "unreadable_encrypted_agent_task"`를 반환하며, 암호문을 에코하지 않습니다.
 - 콤보는 해당 작업에 대해 재시도를 포함해 정규 네이티브 ChatGPT 대상만 고려합니다. 사용할 수 있는 대상이 없으면 같은 400 오류를 반환합니다.
 - 읽을 수 있는 평문 작업은 정상 라우트와 폴백 동작을 그대로 유지합니다.
 

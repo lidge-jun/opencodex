@@ -221,7 +221,7 @@ Responses-family および Chat リクエストは、プロバイダーまたは
 | 401 | `authentication_error` |必要なプロキシ アドミッション資格情報が見つからないか無効です。
 | 403 | `origin_rejected` | Responses/OpenAI データプレーン リクエストまたは WebSocket アップグレードが、許可されていないオリジンから送信されました。
 | 503 | `combo_unavailable` |選択したコンボ内のすべてのターゲットは使用不可、クールダウン中、無効、またはその他の理由で不適格です。
-| 400 | `unreadable_encrypted_agent_task` |暗号化された v2 ワーカー タスクには、それを使用できる適格なネイティブ ChatGPT ターゲットがありません。
+| 400 | `unreadable_encrypted_agent_task` | 暗号化された v2 ワーカー タスクには、それを処理できる正規の ChatGPT ターゲットも明示的に信頼された Responses ターゲットもありません。 |
 | 426 | `upgrade_required` |応答 WebSocket トランスポートが無効になっているか、アップグレードが失敗しました。 HTTP を使用する |
 
 Anthropic オリジンの失敗は Anthropic のエラー エンベロープでレンダリングされるため、オリジンの拒否は OpenAI スタイルの `origin_rejected` 本体ではなく、その方言上の 403 `permission_error` になります。

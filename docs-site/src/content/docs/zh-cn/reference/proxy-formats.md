@@ -242,7 +242,7 @@ Responses 家族和 Chat 请求会把 `Authorization` 留给提供方或 Codex D
 | 401 | `authentication_error` | 所需的代理准入凭证缺失或无效 |
 | 403 | `origin_rejected` | 一条 Responses/OpenAI 数据平面请求或 WebSocket 升级来自不允许的 origin |
 | 503 | `combo_unavailable` | 所选 combo 中的所有目标都不可用、处于冷却、已禁用或以其他方式不具备资格 |
-| 400 | `unreadable_encrypted_agent_task` | 一个加密的 v2 worker task 没有任何可消费它的合格原生 ChatGPT 目标 |
+| 400 | `unreadable_encrypted_agent_task` | 一个加密的 v2 worker task 没有任何可处理它的合格规范 ChatGPT 目标或明确信任的 Responses 目标 |
 | 426 | `upgrade_required` | Responses WebSocket 传输被禁用，或升级失败；请改用 HTTP |
 
 Anthropic 来源的失败会以 Anthropic 的错误封装呈现，因此该方言中的 origin 拒绝会是

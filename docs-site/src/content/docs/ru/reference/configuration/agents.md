@@ -80,9 +80,11 @@ user-owned target field'ы считаются конфликтом и сохра
 
 opencodex пропускает кандидатов, которые отключены, не маршрутизируются, unhealthy, находятся в
 cooldown либо уже достигли порога quota. Availability-снимок кэшируется на
-`subagentModelFallbackPollMs`. Шифрованные child-task'и могут ограничить цепочку каноническими
-native ChatGPT-target'ами; если ни одна из них не может прочитать encrypted payload, запрос
-завершается ошибкой вместо отправки нечитаемого ciphertext наружу.
+`subagentModelFallbackPollMs`. Для шифрованных child-task'ов цепочка ограничена каноническими
+native ChatGPT-target'ами и прямыми key-auth Responses-маршрутами, явно доверенными через
+`allowEncryptedV2AgentTasks: true`. Если ни один из них не может обработать encrypted payload,
+запрос завершается ошибкой вместо отправки нечитаемого ciphertext наружу. Combo по-прежнему
+использует только канонические native-цели.
 
 ```json
 {

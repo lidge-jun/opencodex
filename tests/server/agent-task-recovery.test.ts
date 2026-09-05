@@ -182,6 +182,58 @@ describe("agent task recovery (opt-in, default off)", () => {
     }
   });
 
+  test("encrypted fallback selection preserves an eligible trusted relay primary", async () => {
+    const config = routedConfig();
+    config.subagentModelFallback = ["gpt-5.5"];
+    config.providers.relay = {
+      adapter: "openai-responses",
+      baseUrl: "https://relay.example.test/v1",
+      authMode: "key",
+      apiKey: "test-relay-key",
+      allowEncryptedV2AgentTasks: true,
+    };
+    const input = encryptedInput();
+    const fetchedUrls: string[] = [];
+    let forwardedInput: unknown;
+    globalThis.fetch = (async (url, init) => {
+      fetchedUrls.push(String(url));
+      forwardedInput = (JSON.parse(String(init?.body)) as { input?: unknown }).input;
+      return providerResponse();
+    }) as typeof fetch;
+
+    const response = await post(config, "relay/gpt-5.6-luna", input, codexHeaders());
+
+    expect(response.status).toBe(200);
+    expect(fetchedUrls).toEqual(["https://relay.example.test/v1/responses"]);
+    expect(forwardedInput).toEqual(input);
+  });
+
+  test("encrypted fallback selection can choose an eligible trusted relay candidate", async () => {
+    const config = routedConfig();
+    config.subagentModelFallback = ["relay/gpt-5.5"];
+    config.providers.relay = {
+      adapter: "openai-responses",
+      baseUrl: "https://relay.example.test/v1",
+      authMode: "key",
+      apiKey: "test-relay-key",
+      allowEncryptedV2AgentTasks: true,
+    };
+    const input = encryptedInput();
+    const fetchedUrls: string[] = [];
+    let forwardedInput: unknown;
+    globalThis.fetch = (async (url, init) => {
+      fetchedUrls.push(String(url));
+      forwardedInput = (JSON.parse(String(init?.body)) as { input?: unknown }).input;
+      return providerResponse();
+    }) as typeof fetch;
+
+    const response = await post(config, "xai/grok-4.5", input, codexHeaders());
+
+    expect(response.status).toBe(200);
+    expect(fetchedUrls).toEqual(["https://relay.example.test/v1/responses"]);
+    expect(forwardedInput).toEqual(input);
+  });
+
   test.each([
     ["OAuth authentication", { adapter: "openai-responses" as const, authMode: "oauth" as const }],
     ["a Chat Completions adapter", { adapter: "openai-chat" as const }],

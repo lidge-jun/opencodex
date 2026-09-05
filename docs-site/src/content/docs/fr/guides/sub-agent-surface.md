@@ -116,8 +116,9 @@ pendant un temps de recharge, il manque un compte Codex poolé utilisable ou au-
 Les sondes de disponibilité sont mises en cache pendant `subagentModelFallbackPollMs` (60 secondes par défaut).
 
 La solution de secours ne rend pas lisibles les tâches chiffrées incompatibles. Lorsque la tâche enfant est chiffrée pour
-ChatGPT, la sélection est restreinte aux cibles ChatGPT natives canoniques même si un modèle externe
-apparaît plus tôt dans la chaîne.
+ChatGPT, la sélection est restreinte aux cibles ChatGPT natives canoniques et aux routes Responses directes avec authentification
+par clé explicitement approuvées via `allowEncryptedV2AgentTasks: true`, même si un autre modèle externe apparaît plus tôt dans
+la chaîne. Les combos restent limités aux cibles natives canoniques.
 
 ## Livraison de tâches v2 cryptées
 
@@ -128,7 +129,8 @@ limitation connue [#92](https://github.com/lidge-jun/opencodex/issues/92).
 opencodex échoue en toute sécurité au lieu de transférer une tâche vide ou illisible :
 
 - Une route directe non native renvoie HTTP 400 avec
-  `error.code = "unreadable_encrypted_agent_task"` et ne fait pas écho au texte chiffré.
+  `error.code = "unreadable_encrypted_agent_task"` et ne fait pas écho au texte chiffré, sauf si
+  son fournisseur Responses à authentification par clé active explicitement `allowEncryptedV2AgentTasks: true`.
 - Un combo considère uniquement les cibles ChatGPT natives canoniques pour cette tâche, y compris les tentatives. Si aucun
   est disponible, il renvoie la même erreur 400.
 - Une tâche lisible en texte clair conserve la route normale et le comportement de repli.
