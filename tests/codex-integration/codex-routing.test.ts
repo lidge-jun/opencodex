@@ -2952,6 +2952,72 @@ describe("codex account selection order", () => {
     expect(resolveCodexAccountForThread(null, config)).toBe("b");
   });
 
+  test("opt-in moves the same task back after a five-hour quota recovery", () => {
+    const config = orderedConfig({ codexAccountPriorityFailback: true, autoSwitchThreshold: 100 });
+    const now = Date.now();
+    updateAccountQuota("a", 4);
+    updateAccountQuota("b", 2);
+    expect(resolveCodexAccountForThread("ongoing", config, now)).toBe("a");
+    setAccountQuotaFromParsed("a", { weeklyPercent: 4, shortPercent: 100, shortResetAt: now / 1000 + 18000 });
+    expect(resolveCodexAccountForThread("ongoing", config, now + 1)).toBe("b");
+    setAccountQuotaFromParsed("a", { weeklyPercent: 4, shortPercent: 0, shortResetAt: now / 1000 + 36000 });
+    expect(previewCodexAccountForRequest("ongoing", config, now + 2)).toBe("a");
+    // Preview does not change the task or the active account.
+    expect(getEffectiveActiveCodexAccountId(config)).toBe("b");
+    expect(resolveCodexAccountForThread("ongoing", config, now + 2)).toBe("a");
+    expect(resolveCodexAccountForThread("ongoing", config, now + 3)).toBe("a");
+  });
+
+  test.each([undefined, false])("recovered priority does not move bound tasks by default (%s)", enabled => {
+    const config = orderedConfig({ codexAccountPriorityFailback: enabled });
+    updateAccountQuota("a", 100);
+    updateAccountQuota("b", 2);
+    expect(resolveCodexAccountForThread("sticky", config)).toBe("b");
+    updateAccountQuota("a", 0);
+    expect(previewCodexAccountForRequest("sticky", config)).toBe("b");
+    expect(resolveCodexAccountForThread("sticky", config)).toBe("b");
+  });
+
+  test("live failback in an independent quota scope leaves shared selection untouched", () => {
+    const config = orderedConfig({ codexAccountPriorityFailback: true });
+    updateAccountQuota("a", 100);
+    updateAccountQuota("b", 2);
+    expect(resolveCodexAccountForThread("scoped-failback", config, Date.now(), "spark")).toBe("b");
+    updateAccountQuota("a", 10);
+    expect(previewCodexAccountForRequest("scoped-failback", config, Date.now(), "spark")).toBe("a");
+    expect(resolveCodexAccountForThread("scoped-failback", config, Date.now(), "spark")).toBe("a");
+    expect(config.activeCodexAccountId).toBe("b");
+    expect(getEffectiveActiveCodexAccountId(config)).toBe("b");
+  });
+
+  test("live failback respects pins, model eligibility, cooldown and unknown quota", () => {
+    const config = orderedConfig({ codexAccountPriorityFailback: true });
+    const now = Date.now();
+    updateAccountQuota("a", 100);
+    updateAccountQuota("b", 2);
+    expect(resolveCodexAccountForThread("protected", config, now)).toBe("b");
+    clearAccountQuota();
+    updateAccountQuota("b", 2);
+    expect(resolveCodexAccountForThread("protected", config, now + 1)).toBe("b");
+    updateAccountQuota("a", 0);
+    config.activeCodexAccountPinned = "b";
+    expect(resolveCodexAccountForThread("protected", config, now + 2)).toBe("b");
+    delete config.activeCodexAccountPinned;
+    expect(resolveCodexAccountForThreadDetailed("protected", config, now + 3, "shared",
+      { modelEligibleAccountIds: new Set(["b"]) })).toEqual({ status: "selected", accountId: "b" });
+    recordCodexUpstreamOutcome(config, "a", 429, { retryAfter: "600", now: now + 4, fixedAccount: true });
+    expect(resolveCodexAccountForThread("protected", config, now + 5)).toBe("b");
+  });
+
+  test.each(["round-robin", "fill-first"] as const)("live failback leaves %s affinity unchanged", strategy => {
+    const config = orderedConfig({ codexAccountPriorityFailback: true, accountPoolStrategy: strategy });
+    updateAccountQuota("a", 100);
+    updateAccountQuota("b", 2);
+    expect(resolveCodexAccountForThread("rotation", config)).toBe("b");
+    updateAccountQuota("a", 0);
+    expect(resolveCodexAccountForThread("rotation", config)).toBe("b");
+  });
+
   test("returns to the higher tier as soon as its quota window resets", () => {
     const config = orderedConfig();
     updateAccountQuota("a", 90);

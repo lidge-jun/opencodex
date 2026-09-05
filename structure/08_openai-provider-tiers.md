@@ -154,7 +154,7 @@ and lets the configured strategy pick within that tier. A tier drains only when 
 the auto-switch threshold, cooling down, soft-avoided, paused, or needs reauth; unknown quota never
 drains a tier, and every tier drained leaves the eligible list untouched. Ordering never admits an
 account that pause, cooldown, health, or reauth already excluded, and never overrides those
-exclusions. It adds no new rebind cause for a bound thread, which still moves only for the reasons it
+exclusions. By default it adds no new rebind cause for a bound thread, which still moves only for the reasons it
 already had: a quota-strategy threshold re-evaluation, a failover streak, an account that stopped
 being selectable, or affinity expiry. The stable `__main__` alias carries an order on equal terms with
 added accounts, which is what lets the Desktop login be ordered last. An absent or empty map
@@ -164,6 +164,15 @@ Preemption moves unbound requests back up when a higher tier regains headroom, a
 runtime cursor only. Under an independent quota scope it must never touch the shared active cursor,
 because the scopes track separate native quota groups and a scoped request has no standing to move
 the account every other scope resolves from.
+
+With `codexAccountPriorityFailback: true`, quota-strategy bound requests may also move to a
+strictly higher priority with observed headroom below the auto-switch threshold. Preview and
+resolution use the same eligibility and pin checks; independent quota scopes and model detours
+retain their existing state boundaries. A request starts a best-effort quota prime at most once
+every five minutes (including failed passes), even when its active account has known quota.
+No idle timer, synthetic model call, or new credential path is introduced. After publication,
+the next request can rebind; already captured credentials and in-flight streams are unchanged.
+The default remains off, and a disabled auto-switch threshold also disables live failback.
 
 A manual activation pins its account and lowers the tier ceiling to that account's own tier. The pin
 is released by drain, exclusion, deletion, an explicit failover/promotion away, and any write to
