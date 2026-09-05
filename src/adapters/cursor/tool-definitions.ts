@@ -426,7 +426,12 @@ export function responsesToolNameFromCursorWire(name: string, cursorToolNameMap?
 
 /** Schema advertised to Cursor for this tool (may use Cursor-preferred field names like `cmd`). */
 export function cursorToolInputSchema(tool: OcxTool): unknown {
-  if (tool.freeform) return CURSOR_FREEFORM_INPUT_SCHEMA;
+  if (tool.freeform) {
+    if (isBareCodexShellBridgeTool(tool)) {
+      throw new Error(`freeform Cursor tools cannot use reserved shell bridge name ${tool.name}; use a namespace`);
+    }
+    return CURSOR_FREEFORM_INPUT_SCHEMA;
+  }
   return isBareCodexExecCommandTool(tool) ? CURSOR_EXEC_COMMAND_INPUT_SCHEMA : (tool.parameters ?? {});
 }
 
@@ -436,7 +441,12 @@ export function cursorToolInputSchema(tool: OcxTool): unknown {
  * treating `cmd` as canonical prevents the `cmd` → `command` rewrite Codex requires (#399).
  */
 export function cursorToolArgNormalizeSchema(tool: OcxTool): unknown {
-  if (tool.freeform) return CURSOR_FREEFORM_INPUT_SCHEMA;
+  if (tool.freeform) {
+    if (isBareCodexShellBridgeTool(tool)) {
+      throw new Error(`freeform Cursor tools cannot use reserved shell bridge name ${tool.name}; use a namespace`);
+    }
+    return CURSOR_FREEFORM_INPUT_SCHEMA;
+  }
   if (isBareCodexShellBridgeTool(tool)) {
     return shellBridgeArgNormalizeSchema(tool);
   }

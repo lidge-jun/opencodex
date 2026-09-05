@@ -162,6 +162,40 @@ describe("Cursor tool definitions", () => {
     expect(cursorToolArgNormalizeSchema(codeModeExec)).toEqual(CURSOR_FREEFORM_INPUT_SCHEMA);
   });
 
+  test("rejects freeform tools that reuse bare shell bridge names", () => {
+    for (const name of ["exec_command", "shell_command"]) {
+      const tool: OcxTool = { name, description: "Custom", parameters: {}, freeform: true };
+
+      expect(() => cursorToolInputSchema(tool)).toThrow(`freeform Cursor tools cannot use reserved shell bridge name ${name}`);
+      expect(() => cursorToolArgNormalizeSchema(tool)).toThrow(`freeform Cursor tools cannot use reserved shell bridge name ${name}`);
+      expect(() => buildCursorToolDefinitions([tool])).toThrow(`freeform Cursor tools cannot use reserved shell bridge name ${name}`);
+    }
+  });
+
+  test("preserves namespaced shell names and ordinary freeform/non-freeform contracts", () => {
+    const namespacedFreeform: OcxTool = {
+      name: "exec_command",
+      namespace: "mcp__custom",
+      description: "Custom",
+      parameters: {},
+      freeform: true,
+    };
+    expect(cursorToolInputSchema(namespacedFreeform)).toEqual(CURSOR_FREEFORM_INPUT_SCHEMA);
+    expect(cursorToolArgNormalizeSchema(namespacedFreeform)).toEqual(CURSOR_FREEFORM_INPUT_SCHEMA);
+
+    const ordinaryFreeform: OcxTool = { name: "apply_patch", description: "Patch", parameters: {}, freeform: true };
+    expect(cursorToolInputSchema(ordinaryFreeform)).toEqual(CURSOR_FREEFORM_INPUT_SCHEMA);
+    expect(cursorToolArgNormalizeSchema(ordinaryFreeform)).toEqual(CURSOR_FREEFORM_INPUT_SCHEMA);
+
+    const ordinaryFunction: OcxTool = {
+      name: "exec_command",
+      description: "Run",
+      parameters: { type: "object", properties: { cmd: { type: "string" } }, required: ["cmd"] },
+    };
+    expect(cursorToolInputSchema(ordinaryFunction)).toEqual(CURSOR_EXEC_COMMAND_INPUT_SCHEMA);
+    expect(cursorToolArgNormalizeSchema(ordinaryFunction)).toEqual(ordinaryFunction.parameters);
+  });
+
   test("normalizes advertised shell_command cmd args to Responses command before Codex sees them", () => {
     // Live #399 failure: Cursor advertisement requires `cmd`, models send `cmd`, but Codex
     // shell_command validates `command` → "missing field `command`". Normalization must use the
