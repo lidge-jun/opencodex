@@ -1506,6 +1506,39 @@ shares the 12-image active cap. Bounded source labels are emitted in active user
 root pruning cannot erase attachment provenance; the same text participates in token estimation.
 Native Composer/MCP behavior and text-only historical replay remain unchanged.
 
+## Chat streamed tool-call identity
+
+`src/adapters/openai-chat.ts` retains a call's first observed non-negative safe integer
+index as an alias when the call started by ID. Every present, non-null index must
+be a number in that range: strings (including numeric and empty strings), booleans,
+objects, arrays, negative numbers, fractions and unsafe integers terminate the stream
+before any key, alias, ID or last-call matching. `Number.MAX_SAFE_INTEGER` is accepted;
+larger integers are rejected because distinct wire literals can parse to the same number.
+The invalid-index error releases all pending call reservations without emitting
+those calls or a successful completion; invalid indexes are never treated as absent.
+Only missing and null indexes are absent-index placeholders. Repeated ID, name and
+argument string-field tolerance retains its existing rules.
+
+For valid indexes, lookup preserves direct-key precedence, then index alias, then
+ID fallback. The initial key continues to own all translator budget reservations
+and release; learning an alias creates no additional owner. Unassociated index-only
+fragments are not guessed onto pending ID-only calls.
+`tests/adapters/openai/openai-chat-parallel-stream.test.ts` covers late aliases,
+parallel/colliding identities, distinct unsafe raw JSON index literals, the maximum
+safe-integer boundary, invalid index types, missing/null continuations and UTF-8
+byte-limit boundaries.
+
+## Cursor executable tool schema ownership
+
+`src/adapters/cursor/tool-schemas.ts` owns advertised and argument-normalization
+schemas; `tool-definitions.ts` remains the public facade and protobuf encoder.
+Advertisement and normalization intentionally differ for shell bridges: Cursor may
+emit `cmd`, while the declared Responses contract decides whether it becomes
+`command`. Both paths preserve execution-control fields. Freeform tools use one
+required string `input`; bare shell bridge names are rejected on the freeform path.
+Namespaced tools do not acquire bare-shell behavior. Regression coverage lives in
+`tests/providers/cursor/cursor-tool-definitions.test.ts`.
+
 ## Sidecars
 
 Web search and vision sidecars run only when the main request needs that capability and a usable

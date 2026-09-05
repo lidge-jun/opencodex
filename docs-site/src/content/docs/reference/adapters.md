@@ -49,6 +49,15 @@ provider — xAI, Kimi, DeepSeek, GLM, Groq, OpenRouter, Ollama (local), and mor
   tiers, accepts reasoning deltas from either `delta.reasoning_content` or `delta.reasoning`, requests
   streamed usage with `stream_options.include_usage`, and reads usage from non-stream response envelopes.
 
+Streaming tool calls retain their identity when a provider first sends an ID,
+then associates that ID with an index, and later sends index-only argument
+fragments. Those fragments assemble into one call with the original name and
+complete arguments; parallel calls retain separate identities.
+When present, streamed tool-call indexes must be non-negative safe integers. Non-numeric
+values and negative, fractional, or unsafe numbers terminate the stream with an upstream
+error before identity matching. Missing and null indexes remain absent-index placeholders;
+numeric strings are not coerced.
+
 ## `ollama-native`
 
 **Targets:** Ollama's own **Chat API** (`POST /api/chat`) rather than its OpenAI-compatible
@@ -355,6 +364,12 @@ compatibility pair: `agent.v1.AgentService/RunSSE` for server output and
   and `desktopExecutor` integrations have separate opt-ins; `nativeLocalExec: "on"` enables the
   broader built-in executor and bypasses Codex approval/sandbox semantics, and legacy
   `unsafeAllowNativeLocalExec: true` remains equivalent only when `nativeLocalExec` is unset.
+
+Codex-compatible shell schemas retain sandbox permissions, justification, reusable
+prefix rules and login mode. Freeform tools expose one required string `input`;
+bare `exec_command` and `shell_command` names are reserved for non-freeform shell
+bridges. Namespace a custom freeform tool that uses either name. These schema
+declarations do not grant approval or change execution policy.
 
 ## `azure-openai` (alias: `azure`)
 
