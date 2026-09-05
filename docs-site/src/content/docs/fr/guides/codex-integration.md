@@ -17,9 +17,9 @@ Ces routes ne se rabattent jamais l'une sur l'autre. Les configurations v1 distr
 
 Par défaut, seuls les points de terminaison loopback autonomes sans jeton d’admission ouvrent Codex sans connexion séparée. Les connexions clientes et les cibles authentifiées par jeton conservent `requires_openai_auth = true` et `OPENCODEX_API_AUTH_TOKEN`, même avec une URL loopback. Le réglage dans Dashboard → Overview utilise les comptes et fournisseurs enregistrés dans OpenCodex. Redémarrez Codex après modification.
 
-Ce réglage supprime uniquement la connexion séparée à Codex Desktop : il ne crée ni ne sélectionne d’identifiants et n’accorde aucun accès supplémentaire. Pool sélectionne les comptes Codex configurés ; Direct exige toujours les identifiants du compte appelant/principal. Luna Reserve reste soumis aux identifiants et aux autorisations du fournisseur.
+Ce réglage supprime uniquement la connexion séparée à Codex Desktop : il ne crée ni ne sélectionne d’identifiants et n’accorde aucun accès supplémentaire. Pool sélectionne les comptes Codex configurés ; Direct exige toujours les identifiants du compte appelant/principal. Luna Reserve exige aussi le mode local `codexDesktopAuthless` effectif, des identifiants et une autorisation actuelle du fournisseur liée à ces identifiants. La présence dans le catalogue ne suffit pas à autoriser une requête.
 
-`ocx init`, `ocx start` et `ocx sync` appellent l'injecteur. Avec `codexDesktopAuthless: false`, sur la liaison de bouclage, il conserve
+`ocx init`, `ocx start` et `ocx sync` appellent l’injecteur lorsque l’intégration Codex est activée. Sinon, l’injection est ignorée ; une synchronisation du catalogue seul ne modifie pas la configuration Codex. Avec `codexDesktopAuthless: false`, sur la liaison de bouclage, il conserve
 l'identifiant du fournisseur `openai` intégré à Codex et fait pointer ce fournisseur vers opencodex :
 
 ```toml

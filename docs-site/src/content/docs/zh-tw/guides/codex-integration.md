@@ -15,9 +15,9 @@ bearer。這些路徑不會彼此 fallback。shipped v1 設定會遷移到 marke
 
 只有不需要准入權杖的獨立執行 loopback 目標，才預設無需另外登入即可開啟 Codex。用戶端連線及需要准入權杖驗證的目標，即使 URL 指向 loopback，也仍使用 `requires_openai_auth = true` 與 `OPENCODEX_API_AUTH_TOKEN`。可在 Dashboard → Overview 中切換，使用儲存在 OpenCodex 中的帳戶和供應商。變更後請重新啟動 Codex。
 
-此設定僅移除 Codex Desktop 的單獨登入要求，不會建立或選擇憑證，也不會授予帳戶存取權。Pool 選擇已設定的 Codex 帳戶；Direct 仍需要呼叫端或主帳戶的憑證。Luna Reserve 仍受憑證與供應商授權限制。
+此設定僅移除 Codex Desktop 的單獨登入要求，不會建立或選擇憑證，也不會授予帳戶存取權。Pool 選擇已設定的 Codex 帳戶；Direct 仍需要呼叫端或主帳戶的憑證。Luna Reserve 還需要實際啟用本機 `codexDesktopAuthless` 模式、有效憑證及與這些憑證綁定的目前供應商授權。模型出現在目錄中不代表請求已獲授權。
 
-`ocx init`、`ocx start` 與 `ocx sync` 都會呼叫注入器。在 `codexDesktopAuthless: false` 的 loopback 繫結下，它會保留 Codex
+`ocx init`、`ocx start` 與 `ocx sync` 在 Codex 整合啟用時呼叫注入器。整合停用時會跳過注入；僅同步目錄不會變更 Codex 設定。在 `codexDesktopAuthless: false` 的 loopback 繫結下，它會保留 Codex
 內建的 `openai` provider id，並將該 provider 指向 opencodex：
 
 ```toml
