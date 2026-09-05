@@ -3069,6 +3069,7 @@ function publishInitialConfigNoReplace(config: OcxConfig, io: PersistedConfigIni
   let staged = false;
   let hardened = false;
   let published = false;
+  let publicationAttempted = false;
   let cleanupAttempted = false;
 
   const scrubUnpublishedTemp = (cause?: unknown): void => {
@@ -3097,6 +3098,7 @@ function publishInitialConfigNoReplace(config: OcxConfig, io: PersistedConfigIni
     const hook = persistedConfigInitializationBeforePublishForTests;
     persistedConfigInitializationBeforePublishForTests = null;
     hook?.();
+    publicationAttempted = true;
     try { io.publishNoReplace(temp, target); }
     catch (cause) {
       const code = cause && typeof cause === "object" && "code" in cause
@@ -3117,8 +3119,16 @@ function publishInitialConfigNoReplace(config: OcxConfig, io: PersistedConfigIni
         catch (secondError) {
           if (isMissingPathError(secondError)) forgetEphemeralSecretPath(temp);
           else {
-            try { io.unlink(target); }
-            catch (cause) { throw new PersistedConfigInitializationRollbackError({ cause }); }
+            let samePublishedInode = false;
+            try {
+              const stagedStat = lstatSync(temp);
+              const targetStat = lstatSync(target);
+              samePublishedInode = stagedStat.dev === targetStat.dev && stagedStat.ino === targetStat.ino;
+            } catch { /* leave target untouched when identity cannot be proven */ }
+            if (samePublishedInode) {
+              try { io.unlink(target); }
+              catch (cause) { throw new PersistedConfigInitializationRollbackError({ cause }); }
+            }
             published = false;
             scrubUnpublishedTemp(secondError);
             throw new PersistedConfigInitializationCleanupError({ cause: secondError });
@@ -3129,7 +3139,7 @@ function publishInitialConfigNoReplace(config: OcxConfig, io: PersistedConfigIni
     refreshUserCostOverlays(persisted);
     return true;
   } catch (cause) {
-    if (staged && !published && !cleanupAttempted) scrubUnpublishedTemp(cause);
+    if (staged && (!published || publicationAttempted) && !cleanupAttempted) scrubUnpublishedTemp(cause);
     throw cause;
   }
 }
@@ -3166,7 +3176,6 @@ function defaultPersistedConfigInitializationIO(configPath: string): PersistedCo
           const published = lstatSync(target);
           const opened = fstatSync(descriptor);
           if (opened.dev !== published.dev || opened.ino !== published.ino) {
-            try { unlinkSync(target); } catch { /* preserve the original identity failure */ }
             throw new Error("atomic initialization published target identity changed");
           }
         }
