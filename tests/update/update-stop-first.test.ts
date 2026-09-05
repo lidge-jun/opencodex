@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -45,8 +45,9 @@ const PROXY_READY_TIMEOUT_MS = 90_000;
 /** Spawn + readiness + teardown spawn, plus headroom for fixture IO on a loaded runner. */
 const RECOVERY_CASE_TIMEOUT_MS = UPDATE_SPAWN_TIMEOUT_MS + PROXY_READY_TIMEOUT_MS + UPDATE_SPAWN_TIMEOUT_MS + 15_000;
 
-async function waitForProxy(port: number): Promise<boolean> {
+async function waitForProxy(port: number, onFailure: (lastProbe: string) => void): Promise<boolean> {
   const deadline = Date.now() + PROXY_READY_TIMEOUT_MS;
+  let lastProbe = "not attempted";
   while (Date.now() < deadline) {
     try {
       const response = await fetch(`http://127.0.0.1:${port}/healthz`, {
@@ -55,12 +56,88 @@ async function waitForProxy(port: number): Promise<boolean> {
         // as "not ready" for a proxy that is merely slow to accept.
         signal: AbortSignal.timeout(2_000),
       });
+      lastProbe = `HTTP ${response.status}`;
       if (response.ok) return true;
-    } catch { /* detached proxy is still starting */ }
+    } catch (error) {
+      // Error messages can contain URLs/credentials. Report only fixed error categories.
+      lastProbe = diagnosticCategories(error instanceof Error ? `${error.name} ${error.message}` : "");
+    }
     // The detached process exposes readiness only over HTTP; fake timers cannot advance it.
     await Bun.sleep(100);
   }
+  onFailure(lastProbe);
   return false;
+}
+
+function diagnosticCategories(text: string): string {
+  const matches = text.match(/\b(?:ENOENT|EACCES|EPERM|EADDRINUSE|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ERR_MODULE_NOT_FOUND|AbortError|TimeoutError|TypeError|SyntaxError|ReferenceError|RangeError|Cannot find package|Cannot find module|Failed to resolve|ConnectionRefused|FailedToOpenSocket)\b/g);
+  return [...new Set(matches ?? [])].join(", ") || "unclassified (text redacted)";
+}
+
+// Read at most 8 KiB even if a broken child logs continuously. Never emit raw output:
+// arbitrary startup messages may include tokens, account identifiers, or request bodies.
+function recoveryDiagnosticFile(path: string, status = false): string {
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, "r");
+    const size = fstatSync(fd).size;
+    const bytes = Buffer.alloc(Math.min(size, 8192));
+    const count = readSync(fd, bytes, 0, bytes.length, Math.max(0, size - bytes.length));
+    const text = bytes.subarray(0, count).toString("utf8");
+    if (status) {
+      // This file contains fixture-generated records only. Still allowlist every field.
+      return text.split("\n").filter(line => /^(?:launcher-start pid=\d+|launcher-exit code=\d+|runtime-exit code=(?:null|\d+) signal=(?:null|SIG[A-Z0-9]+)|runtime-spawn-error)$/.test(line)).slice(-6).join("; ") || "no exit record";
+    }
+    const frames = [...text.matchAll(/\b(src\/[\w./-]+\.(?:ts|mjs))(?::(\d+)(?::(\d+))?)?/g)]
+      .filter(match => !match[1]!.includes("..") && existsSync(join(repoRoot, match[1]!)))
+      .slice(-6).map(match => `${match[1]}${match[2] ? `:${match[2]}` : ""}${match[3] ? `:${match[3]}` : ""}`);
+    return `bytes=${size}; ${diagnosticCategories(text)}; frames=${frames.join(", ") || "none"}`.slice(0, 1200);
+  } catch {
+    return "unavailable";
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+function instrumentRecoveryLauncher(source: string, directory: string): string {
+  // Fail closed on launcher drift: never silently run an uninstrumented fixture or
+  // alter another spawn. Production bin/ocx.mjs and all real lifecycle code stay intact.
+  const replaceOnce = (needle: string, replacement: string) => {
+    if (source.split(needle).length !== 2) throw new Error("recovery diagnostic fixture: launcher seam changed");
+    source = source.replace(needle, () => replacement);
+  };
+  replaceOnce('import { spawn, spawnSync } from "node:child_process";', `
+import { spawn as fixtureSpawn, spawnSync } from "node:child_process";
+import { openSync as fixtureOpen, closeSync as fixtureClose, appendFileSync as fixtureAppend } from "node:fs";
+const fixtureDiagnosticDir = ${JSON.stringify(directory)};
+function fixtureStatus(record) {
+  if (process.argv[2] !== "start") return;
+  try {
+    fixtureAppend(fixtureDiagnosticDir + "/status", record + "\\n", { mode: 0o600 });
+  } catch { /* diagnostics must not interrupt the real exit/signal handler or teardown */ }
+}
+function spawn(bin, args, options) {
+  if (!options?.detached || args[1] !== "start") return fixtureSpawn(bin, args, options);
+  const stdout = fixtureOpen(fixtureDiagnosticDir + "/stdout", "a", 0o600);
+  let stderr;
+  try {
+    stderr = fixtureOpen(fixtureDiagnosticDir + "/stderr", "a", 0o600);
+    return fixtureSpawn(bin, args, { ...options, stdio: ["ignore", stdout, stderr] });
+  } finally {
+    fixtureClose(stdout);
+    if (stderr !== undefined) fixtureClose(stderr);
+  }
+}
+fixtureStatus("launcher-start pid=" + process.pid);
+process.on("exit", code => fixtureStatus("launcher-exit code=" + code));
+`);
+  // The updater exits before its detached child, so observe the Bun child from the
+  // recovery launcher itself, BEFORE the existing handler mirrors its exit/signal.
+  replaceOnce('child.on("exit", (code, signal) => {', `child.on("exit", (code, signal) => {
+  fixtureStatus("runtime-exit code=" + code + " signal=" + signal);`);
+  replaceOnce('child.on("error", err => {', `child.on("error", err => {
+  fixtureStatus("runtime-spawn-error");`);
+  return source;
 }
 const updateSource = readFileSync(join(repoRoot, "src", "update", "index.ts"), "utf8");
 const launcherSource = readFileSync(join(repoRoot, "bin", "ocx.mjs"), "utf8");
@@ -184,6 +261,7 @@ describe("update stops the running proxy before replacing files", () => {
       const fakeBin = join(root, "fake-bin");
       const fakeNpm = join(fakeBin, "npm");
       const cache = join(root, "npm-cache");
+      const diagnostics = join(root, "recovery-diagnostics");
       const bundledBun = join(repoRoot, "node_modules", "bun");
       const env = {
         ...process.env,
@@ -203,7 +281,11 @@ describe("update stops the running proxy before replacing files", () => {
         mkdirSync(opencodexHome, { recursive: true });
         mkdirSync(fakeBin, { recursive: true });
         mkdirSync(cache, { recursive: true });
-        copyFileSync(join(repoRoot, "bin", "ocx.mjs"), launcher);
+        mkdirSync(diagnostics, { mode: 0o700 });
+        for (const name of ["stdout", "stderr", "status"]) {
+          writeFileSync(join(diagnostics, name), "", { mode: 0o600, flag: "wx" });
+        }
+        writeFileSync(launcher, instrumentRecoveryLauncher(launcherSource, diagnostics));
         chmodSync(launcher, 0o755);
         symlinkSync(join(repoRoot, "src"), join(packageRoot, "src"), "dir");
         symlinkSync(bundledBun, join(packageRoot, "node_modules", "bun"), "dir");
@@ -237,7 +319,16 @@ esac
         expect(output).toContain("Stopping the running proxy before updating");
         expect(output).toContain("restarting the previous version directly");
         expect(output).toContain(`Attempting to restart the proxy on port ${port}.`);
-        expect(await waitForProxy(port)).toBe(true);
+        expect(await waitForProxy(port, lastProbe => {
+          console.error(new Error([
+            "Recovery readiness failed (raw child output redacted).",
+            `lastProbe=${lastProbe}`,
+            `runtimeFiles=${JSON.stringify(Object.fromEntries(["ocx.pid", "runtime-port.json"].map(name => [name, existsSync(join(opencodexHome, name))])))}`,
+            `status=${recoveryDiagnosticFile(join(diagnostics, "status"), true)}`,
+            `stdout=${recoveryDiagnosticFile(join(diagnostics, "stdout"))}`,
+            `stderr=${recoveryDiagnosticFile(join(diagnostics, "stderr"))}`,
+          ].join("\n").slice(0, 4096)));
+        })).toBe(true);
         const runtime = JSON.parse(readFileSync(join(opencodexHome, "runtime-port.json"), "utf8"));
         expect(runtime.pid).toBeGreaterThan(0);
         recoveredPid = runtime.pid;
