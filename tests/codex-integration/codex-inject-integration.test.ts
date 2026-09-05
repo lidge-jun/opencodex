@@ -18,7 +18,7 @@ setDefaultTimeout(SPAWN_BUDGET_MS);
 
 // Full injectCodexConfig runs in a subprocess with isolated CODEX_HOME/OPENCODEX_HOME so
 // module-level path constants bind to the temp dirs (same pattern as codex-journal.test.ts).
-function runInject(codexHome: string, ocxHome: string, configJson = "{}"): { stdout: string; status: number } {
+function runInject(codexHome: string, ocxHome: string, configJson = '{"codexDesktopAuthless":false}'): { stdout: string; status: number } {
   const script = `
     const { injectCodexConfig } = require("./src/codex/inject");
     injectCodexConfig(10100, JSON.parse(process.env.TEST_OCX_CONFIG)).then(r => {
@@ -836,10 +836,10 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toBe(original);
   });
 
-  test("authless Desktop opt-in (#1107): loopback injects the table with requires_openai_auth = false, idempotently", () => {
+  test("authless Desktop default (#1107): loopback injects the table with requires_openai_auth = false, idempotently", () => {
     writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
 
-    const r = runInject(codexHome, ocxHome, JSON.stringify({ codexDesktopAuthless: true }));
+    const r = runInject(codexHome, ocxHome, "{}");
     expect(r.status).toBe(0);
     const payload = JSON.parse(r.stdout);
     expect(payload.success).toBe(true);
@@ -853,7 +853,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(first).not.toContain("env_key");
     expect(first).not.toContain("openai_base_url");
 
-    expect(runInject(codexHome, ocxHome, JSON.stringify({ codexDesktopAuthless: true })).status).toBe(0);
+    expect(runInject(codexHome, ocxHome, "{}").status).toBe(0);
     expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toBe(first);
     expect(readFileSync(join(codexHome, "opencodex.config.toml"), "utf8")).toContain("requires_openai_auth = false");
   });

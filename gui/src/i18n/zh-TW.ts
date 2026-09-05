@@ -184,6 +184,8 @@ export const zhTW: Record<TKey, string> = {
   "dash.codexRestartMalformed": "代理回傳了非預期的回應。",
   "dash.codexRestartTimeout": "代理未在時限內回應，可能仍在停止 app-server。",
   "models.staleBanner": "Codex 顯示的模型清單比目前的目錄舊。重新啟動 Codex 即可重新讀取。",
+  "dash.codexDesktopAuthless": "無需登入即可開啟 Codex",
+  "dash.codexDesktopAuthlessHint": "本機連線預設啟用。使用儲存在 OpenCodex 中的帳戶和供應商。變更後請重新啟動 Codex。Codex 中的 ChatGPT 帳戶功能可能無法使用。",
   "dash.codexAutoStart": "隨 Codex 啟動 opencodex",
   "dash.codexAutoStartHint": "允許已安裝的 launcher shim 執行 ocx ensure。此設定不會安裝重新啟動保護；請在啟動安全中檢查實際狀態。",
   "dash.searchModel": "搜尋附屬模型",

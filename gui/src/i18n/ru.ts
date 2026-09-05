@@ -292,6 +292,8 @@ export const ru: Record<TKey, string> = {
   "dash.codexRestartMalformed": "Прокси вернул неожиданный ответ.",
   "dash.codexRestartTimeout": "Прокси не ответил вовремя. Возможно, он всё ещё останавливает app-server'ы.",
   "models.staleBanner": "Codex показывает список моделей старее этого каталога. Перезапустите Codex, чтобы перечитать его.",
+  "dash.codexDesktopAuthless": "Открывать Codex без входа",
+  "dash.codexDesktopAuthlessHint": "Включено по умолчанию для локальных подключений. Использует аккаунты и провайдеров, сохранённых в OpenCodex. После изменения перезапустите Codex. Функции аккаунта ChatGPT в Codex могут быть недоступны.",
   "dash.codexAutoStart": "Запускать opencodex вместе с Codex",
   "dash.codexAutoStartHint": "Разрешает установленному launcher shim выполнять ocx ensure. Эта настройка не устанавливает защиту перезапуска; проверьте фактическое состояние в разделе безопасности запуска.",
   "dash.searchModel": "Модель сайдкара поиска",

@@ -14,7 +14,9 @@ proxy 提供一条裸 `openai` Codex 登录路由，支持 Pool（默认）和 D
 
 ## Config 注入
 
-`ocx init`、`ocx start` 和 `ocx sync` 都会调用注入器。在默认的 loopback 绑定下，它会保留
+本地连接默认无需单独登录即可打开 Codex。可在 Dashboard → Overview 中切换，使用保存在 OpenCodex 中的账户和提供商。更改后请重启 Codex。
+
+`ocx init`、`ocx start` 和 `ocx sync` 都会调用注入器。在 `codexDesktopAuthless: false` 的 loopback 绑定下，它会保留
 Codex 内置的 `openai` provider id，并将该 provider 指向 opencodex：
 
 ```toml
@@ -112,7 +114,7 @@ model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
 # appended at the end of the file
 # Auto-injected by opencodex
 [model_providers.opencodex]
-name = "OpenCodex Proxy"
+name = "OpenCodex"
 base_url = "http://your-host:10100/v1"
 wire_api = "responses"
 requires_openai_auth = true
@@ -159,7 +161,7 @@ opencodex 也会通过 WebSocket 提供 `/v1/responses`。专用 provider 只有
 
 ## 线程标识与历史记录
 
-默认的 loopback 形式会让新线程继续标记为 Codex 原生的 `openai` provider，因此正常的 resume history 不需要
+`codexDesktopAuthless: false` 的 loopback 形式会让新线程继续标记为 Codex 原生的 `openai` provider，因此正常的 resume history 不需要
 重映射。sync 和 restore 只应用与当前状态数据库匹配的备份 manifest，并精确恢复每个线程原来的 provider、
 source 和 event marker。没有 manifest 的 `opencodex` 行会保持不变；只有明确要强制执行旧式重标记时，才使用
 `ocx recover-history --legacy-openai --yes`。此命令的作用范围有意设置得很广：它会把所有包含用户消息且当前标记为

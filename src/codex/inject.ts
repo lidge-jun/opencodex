@@ -77,7 +77,7 @@ import {
   type ManagedSubagentDefaults,
 } from "./subagent-defaults";
 import type { OcxConfig } from "../types";
-import { isLoopbackHostname, shouldInjectApiAuthHeader } from "./loopback-target";
+import { codexDesktopAuthlessEnabled, isLoopbackHostname, shouldInjectApiAuthHeader } from "./loopback-target";
 
 export { isLoopbackHostname, shouldInjectApiAuthHeader } from "./loopback-target";
 
@@ -184,7 +184,7 @@ function validateCodexRoutingTarget(target: CodexRoutingTarget): CodexRoutingTar
   return { ...target, baseUrl: `${parsed.origin}/v1` };
 }
 
-/** Provider-table form is used for non-loopback admission and for the authless Desktop opt-in. */
+/** Provider-table form is used for non-loopback admission and for the authless Desktop mode. */
 function usesProviderTable(target: CodexRoutingTarget): boolean {
   return target.requiresAdmissionToken || target.desktopAuthless === true;
 }
@@ -201,7 +201,7 @@ export function standaloneCodexRoutingTarget(
     baseUrl: `http://${providerBaseHost(hostname)}:${effectivePort}/v1`,
     requiresAdmissionToken,
     tokenEnv: "OPENCODEX_API_AUTH_TOKEN",
-    ...(config?.codexDesktopAuthless === true && !requiresAdmissionToken
+    ...(codexDesktopAuthlessEnabled(config) && !requiresAdmissionToken
       ? { desktopAuthless: true }
       : {}),
   };
@@ -287,10 +287,10 @@ function buildProviderTableBlockForTarget(
     "",
     OCX_SECTION_MARKER,
     "[model_providers.opencodex]",
-    'name = "OpenCodex Proxy"',
+    'name = "OpenCodex"',
     `base_url = ${tomlString(target.baseUrl)}`,
     'wire_api = "responses"',
-    // false only in the authless Desktop opt-in (#1107); true keeps the App/TUI account gate.
+    // false only in the authless Desktop mode (#1107); true keeps the App/TUI account gate.
     `requires_openai_auth = ${target.desktopAuthless === true ? "false" : "true"}`,
   ];
   if (target.requiresAdmissionToken) {
@@ -820,7 +820,7 @@ function buildProfileFileForTarget(
   const host = new URL(origin).host;
   // Design B (loopback): the reference/fallback file documents the root override form.
   // Non-loopback keeps the legacy provider-table shape (built-in provider cannot carry
-  // the x-opencodex-api-key env header); the authless Desktop opt-in shares that shape.
+  // the x-opencodex-api-key env header); the authless Desktop mode shares that shape.
   if (!usesProviderTable(target)) {
     const lines = [
       "# OpenCodex proxy fallback config (Design B)",
@@ -969,7 +969,7 @@ export async function injectCodexConfig(
   content = stripInjectedOpenaiBaseUrl(content);
   // #1798: after a Codex app rewrite the markers are gone but the values we recorded writing
   // are still ours. Consume them by value here, BEFORE the routing form is chosen, so a
-  // Design B -> provider-table transition (hostname change, authless opt-in) cannot leave our
+  // Design B -> provider-table transition (hostname change, authless mode) cannot leave our
   // own root URLs behind as if they were the user's, and so re-inject never journals them as
   // not-ours (which would make them unrestorable).
   content = stripJournaledOpenaiBaseUrl(
@@ -994,14 +994,17 @@ export async function injectCodexConfig(
     ? setRootModelCatalogPath(content, catalogPath)
     : stripOpencodexCatalogPath(content);
 
-  // Provider-table form: non-loopback admission (legacy) or the authless Desktop opt-in (#1107).
-  const legacyMode = usesProviderTable(routingTarget);
+  // Provider-table form: non-loopback admission (legacy) or the authless Desktop mode (#1107).
+  // A default-on authless provider must not bypass a user-owned native gateway.
+  const userOwnsNativeGateway = routingTarget.desktopAuthless === true
+    && setRootOpenaiBaseUrlForTarget(content, routingTarget).keptUserBaseUrl;
+  const legacyMode = usesProviderTable(routingTarget) && !userOwnsNativeGateway;
   let keptUserBaseUrl = false;
   let keptUserRealtimeWsBaseUrl = false;
   if (legacyMode) {
     // Legacy (non-loopback) injection: the built-in openai provider cannot carry the
     // x-opencodex-api-key env header, so keep the opencodex provider table + root re-tag.
-    // The authless opt-in needs the same table because only a dedicated provider can carry
+    // The authless mode needs the same table because only a dedicated provider can carry
     // requires_openai_auth = false.
     // 1) Root key BEFORE the first table header (must be a global, not nested under a table).
     content = setRootModelProvider(content);

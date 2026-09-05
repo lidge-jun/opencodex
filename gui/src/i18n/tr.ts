@@ -293,6 +293,8 @@ export const tr: Record<TKey, string> = {
   "dash.codexRestartMalformed": "Proxy beklenmeyen bir yanıt döndürdü.",
   "dash.codexRestartTimeout": "Proxy zamanında yanıt vermedi. App-server'ları durdurmaya devam ediyor olabilir.",
   "models.staleBanner": "Codex, bu katalogdan daha eski bir model listesi gösteriyor. Yeniden okumak için Codex'i yeniden başlatın.",
+  "dash.codexDesktopAuthless": "Codex’i oturum açmadan başlat",
+  "dash.codexDesktopAuthlessHint": "Yerel bağlantılarda varsayılan olarak etkindir. OpenCodex’te kayıtlı hesapları ve sağlayıcıları kullanır. Değişiklikten sonra Codex’i yeniden başlatın. Codex’teki ChatGPT hesap özellikleri kullanılamayabilir.",
   "dash.codexAutoStart": "opencodex'i Codex ile başlat",
   "dash.codexAutoStartHint": "Yüklü bir shim'in ocx ensure çalıştırmasına izin verir. Arka plan servisi veya yeniden başlatma koruması kurmaz; sistem durumu için Başlatma Güvenliği'ne bakın.",
   "dash.searchModel": "Arama yan araç modeli",

@@ -24,7 +24,7 @@ function delta(counters: Counters, before: ReturnType<typeof snapshot>) {
 describe("Reserve eligibility trusts receiving-listener admission", () => {
   test("default/off/client/missing admission stay off; credential source cannot become loopback", () => {
     const loopback = { source: "loopback" } as const;
-    expect(isCodexReserveRequestEligible({}, loopback)).toBe(false);
+    expect(isCodexReserveRequestEligible({}, loopback)).toBe(true);
     expect(isCodexReserveRequestEligible({ codexDesktopAuthless: false }, loopback)).toBe(false);
     expect(isCodexReserveRequestEligible({ codexDesktopAuthless: true, runtimeRole: "client" }, loopback)).toBe(false);
     expect(isCodexReserveRequestEligible({ codexDesktopAuthless: true }, undefined)).toBe(false);

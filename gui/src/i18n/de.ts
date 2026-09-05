@@ -283,6 +283,8 @@ export const de: Record<TKey, string> = {
   "dash.codexRestartMalformed": "Der Proxy hat eine unerwartete Antwort gesendet.",
   "dash.codexRestartTimeout": "Der Proxy hat nicht rechtzeitig geantwortet. Möglicherweise stoppt er noch App-Server.",
   "models.staleBanner": "Codex zeigt eine ältere Modellliste als dieser Katalog. Starte Codex neu, um sie neu zu laden.",
+  "dash.codexDesktopAuthless": "Codex ohne Anmeldung öffnen",
+  "dash.codexDesktopAuthlessHint": "Für lokale Verbindungen standardmäßig aktiviert. Nutzt die in OpenCodex gespeicherten Konten und Anbieter. Codex nach einer Änderung neu starten. ChatGPT-Kontofunktionen in Codex sind möglicherweise nicht verfügbar.",
   "dash.codexAutoStart": "opencodex mit Codex starten",
   "dash.codexAutoStartHint": "Erlaubt einem installierten Launcher-Shim, ocx ensure auszuführen. Diese Einstellung installiert keinen Neustartschutz; prüfe den effektiven Zustand unter Startsicherheit.",
   "dash.searchModel": "Such-Sidecar-Modell",

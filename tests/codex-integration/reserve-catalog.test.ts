@@ -119,13 +119,13 @@ function merge(rows: RawEntry[], overrides: Partial<ObservedCatalogMergeInput> =
 
 describe("Reserve effective authless configuration", () => {
   test.each([undefined, "", "localhost", " LOCALHOST ", "localhost.", " LOCALHOST. ", "127.0.0.1", "::1", "[::1]"])(
-    "loopback %s admits only the explicit opt-in", hostname => {
+    "loopback %s defaults on and honors explicit opt-out", hostname => {
       expect(isLoopbackHostname(hostname)).toBe(true);
       expect(isServerLoopbackHostname(hostname)).toBe(true);
       expect(shouldInjectApiAuthHeader({ hostname })).toBe(false);
       expect(isEffectiveCodexDesktopAuthless(config({ hostname }))).toBe(true);
       expect(isEffectiveCodexDesktopAuthless(config({ hostname, codexDesktopAuthless: false }))).toBe(false);
-      expect(isEffectiveCodexDesktopAuthless(config({ hostname, codexDesktopAuthless: undefined }))).toBe(false);
+      expect(isEffectiveCodexDesktopAuthless(config({ hostname, codexDesktopAuthless: undefined }))).toBe(true);
     },
   );
   test.each(["localhost..", "0.0.0.0", "::", "[::]", "192.0.2.10", "proxy.example"])(
