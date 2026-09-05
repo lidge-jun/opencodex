@@ -787,7 +787,14 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
   if (url.pathname === "/api/selected-models" && req.method === "GET") {
     const models = await fetchAllModels(config);
     const available: Record<string, string[]> = {};
-    for (const m of models) (available[m.provider] ??= []).push(m.id);
+    const disabled: Record<string, string[]> = {};
+    const disabledSlugs = config.disabledModels ?? [];
+    for (const m of models) {
+      (available[m.provider] ??= []).push(m.id);
+      if (disabledSlugs.some(slug => slugEquals(slug, m.provider, m.id))) {
+        (disabled[m.provider] ??= []).push(m.id);
+      }
+    }
     const selected: Record<string, string[]> = {};
     // Live-catalog provenance. The GUI cannot infer this by subtracting known custom ids: an id
     // that is both custom and discovered would make a real live catalog look custom-only.
@@ -797,7 +804,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
       const liveCount = getProviderLiveModelCount(name);
       if (liveCount !== undefined) liveModelCounts[name] = liveCount;
     }
-    return jsonResponse({ selected, available, liveModelCounts });
+    return jsonResponse({ selected, available, disabled, liveModelCounts });
   }
   if (url.pathname === "/api/model-presets" && req.method === "GET") {
     // Preview without applying: rules evaluated against the CURRENT catalog, so the count the

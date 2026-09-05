@@ -2315,6 +2315,8 @@ export const ja: Record<TKey, string> = {
   "models.customEdit": "Edit",
   "models.customDelete": "Delete",
   "models.customDeleteConfirm": "Delete the {name} model?",
+  "models.hide": "非表示",
+  "models.hideConfirm": "モデル {name} をカタログから非表示にしますか？",
   "models.customBadge": "Custom",
   "models.customSummary": "{count} custom",
   "models.customFieldModelId": "Model ID (endpoint slug)",

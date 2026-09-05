@@ -585,6 +585,8 @@ export const zh: Record<TKey, string> = {
   "models.customEdit": "编辑",
   "models.customDelete": "删除",
   "models.customDeleteConfirm": "要删除模型 {name} 吗？",
+  "models.hide": "隐藏",
+  "models.hideConfirm": "要从目录中隐藏模型 {name} 吗？",
   "models.customBadge": "自定义",
   "models.customSummary": "{count} 个自定义模型",
   "models.customFieldModelId": "模型 ID（端点标识）",

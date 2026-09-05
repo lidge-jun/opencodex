@@ -577,6 +577,8 @@ export const de: Record<TKey, string> = {
   "models.customEdit": "Bearbeiten",
   "models.customDelete": "Löschen",
   "models.customDeleteConfirm": "Modell {name} löschen?",
+  "models.hide": "Ausblenden",
+  "models.hideConfirm": "Modell {name} aus dem Katalog ausblenden?",
   "models.customBadge": "Benutzerdefiniert",
   "models.customSummary": "{count} benutzerdefiniert",
   "models.customFieldModelId": "Modell-ID (Endpunkt-Slug)",

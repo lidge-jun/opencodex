@@ -39,4 +39,12 @@ describe("model discovery management API", () => {
     expect(live.modelDiscovery.recentArrivals?.vendor).toEqual([]);
     expect(live.disabledModels).toEqual(["vendor/new"]);
   });
+
+  test("selected-models reports disabled discovered model ids by provider", async () => {
+    const live = config();
+    live.disabledModels = ["vendor/known", "other/ignored"];
+    const result = await call(live, "/api/selected-models");
+    expect(result.json.available).toEqual({ vendor: ["known"] });
+    expect(result.json.disabled).toEqual({ vendor: ["known"] });
+  });
 });

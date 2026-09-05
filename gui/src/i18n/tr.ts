@@ -593,6 +593,8 @@ export const tr: Record<TKey, string> = {
   "models.customEdit": "Düzenle",
   "models.customDelete": "Sil",
   "models.customDeleteConfirm": "{name} modeli silinsin mi?",
+  "models.hide": "Gizle",
+  "models.hideConfirm": "{name} modeli katalogda gizlensin mi?",
   "models.customBadge": "Özel",
   "models.customSummary": "{count} özel",
   "models.customFieldModelId": "Model ID",

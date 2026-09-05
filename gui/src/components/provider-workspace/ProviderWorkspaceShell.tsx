@@ -24,7 +24,7 @@ import {
 import { providerKind } from "../../provider-workspace/kind";
 import { readJsonIfOk, readJsonOrThrow } from "../../fetch-json";
 import { readSessionListCache, writeSessionListCache } from "../../session-list-cache";
-import { buildProviderModelUsage, buildProviderUsageTotals, countAvailableModels, parseAvailableModels, parseLiveModelCounts, parseSelectedModels, type ProviderAvailableModels, type ProviderLiveModelCounts, type ProviderModelCounts, type ProviderSelectedModels } from "../../provider-workspace/usage";
+import { buildProviderModelUsage, buildProviderUsageTotals, countAvailableModels, parseAvailableModels, parseDisabledModels, parseLiveModelCounts, parseSelectedModels, type ProviderAvailableModels, type ProviderDisabledModels, type ProviderLiveModelCounts, type ProviderModelCounts, type ProviderSelectedModels } from "../../provider-workspace/usage";
 import {
   freshQuotaReportRecord,
   freshQuotaReportsFromResponse,
@@ -47,6 +47,7 @@ export interface DetailSlotData {
   /** Did the last successful discovery return rows? Server-reported, never inferred. */
   hasLiveModels: boolean;
   selectedModels: string[];
+  disabledModels: string[];
   modelsLoading: boolean;
   modelsLoadFailed: boolean;
   onRetryModels?: () => void;
@@ -141,6 +142,7 @@ export default function ProviderWorkspaceShell({
   const [availableModels, setAvailableModels] = useState<ProviderAvailableModels>({});
   const [liveModelCounts, setLiveModelCounts] = useState<ProviderLiveModelCounts>({});
   const [selectedModels, setSelectedModels] = useState<ProviderSelectedModels>({});
+  const [disabledModels, setDisabledModels] = useState<ProviderDisabledModels>({});
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsLoadFailed, setModelsLoadFailed] = useState(false);
   const quotasCacheKey = `ocx.providers.quotas.v1:${apiBase}`;
@@ -189,6 +191,7 @@ export default function ProviderWorkspaceShell({
           setAvailableModels(parseAvailableModels(data));
           setLiveModelCounts(parseLiveModelCounts(data));
           setSelectedModels(parseSelectedModels(data));
+          setDisabledModels(parseDisabledModels(data));
           setModelsLoadFailed(false);
           succeeded = true;
         } catch {
@@ -559,6 +562,7 @@ export default function ProviderWorkspaceShell({
             availableModels: availableModels[selectedItem.name] ?? [],
             hasLiveModels: (liveModelCounts[selectedItem.name] ?? 0) > 0,
             selectedModels: selectedModels[selectedItem.name] ?? [],
+            disabledModels: disabledModels[selectedItem.name] ?? [],
             modelsLoading,
             modelsLoadFailed,
             onRetryModels: retryModels,

@@ -599,6 +599,18 @@ describe("combo catalog capability intersection", () => {
       .toEqual([]);
   });
 
+  test("filters dashboard-hidden provider models before catalog sync", () => {
+    const models = [
+      { provider: "vendor", id: "visible-model" },
+      { provider: "vendor", id: "hidden-model" },
+    ];
+
+    expect(filterCatalogVisibleModels(models, {
+      disabledModels: ["vendor/hidden-model"],
+      providers: { vendor: {} },
+    })).toEqual([{ provider: "vendor", id: "visible-model" }]);
+  });
+
   test("repairs a provider row after its shadowing combo alias is disabled", () => {
     const alias = "vendor/deepseek-v4-flash";
     const combo = deriveComboCatalogModel(
@@ -4058,6 +4070,36 @@ describe("Codex catalog routed normalization", () => {
     } finally {
       globalThis.fetch = originalFetch;
       clearModelCache("static-provider");
+    }
+  });
+
+  test("liveModels false uses the default model when no static list is configured", async () => {
+    const originalFetch = globalThis.fetch;
+    let fetchCalls = 0;
+    globalThis.fetch = (() => {
+      fetchCalls += 1;
+      throw new Error("fetch should not be called");
+    }) as typeof fetch;
+    try {
+      const models = await gatherRoutedModels({
+        providers: {
+          "static-default": {
+            baseUrl: "https://example.invalid/v1",
+            adapter: "openai-chat",
+            authMode: "key",
+            liveModels: false,
+            defaultModel: "only-model",
+          },
+        },
+      });
+
+      expect(fetchCalls).toBe(0);
+      expect(models.map(m => `${m.provider}/${m.id}`)).toEqual([
+        "static-default/only-model",
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+      clearModelCache("static-default");
     }
   });
 

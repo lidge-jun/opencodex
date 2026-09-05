@@ -456,6 +456,8 @@ export const zhTW: Record<TKey, string> = {
   "models.customEdit": "編輯",
   "models.customDelete": "刪除",
   "models.customDeleteConfirm": "要刪除模型 {name} 嗎？",
+  "models.hide": "隱藏",
+  "models.hideConfirm": "要從目錄中隱藏模型 {name} 嗎？",
   "models.customBadge": "自訂",
   "models.customSummary": "{count} 個自訂模型",
   "models.customFieldModelId": "模型 ID（端點標識）",

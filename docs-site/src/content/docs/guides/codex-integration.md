@@ -454,8 +454,9 @@ If a model is missing from Codex, or the catalog order/visibility looks wrong, c
    catalog.
 2. **`disabledModels`** (top level) — hides models from both the catalog and `/v1/models`, and flips
    bare native GPT slugs to `visibility: "hide"`.
-3. **`liveModels: false` with empty `models`** — when live discovery is off and `models` is empty or
-   omitted, opencodex exposes no routed models for that provider.
+3. **`liveModels: false`** — with live discovery off, routed models come from `models` and
+   `retainModels`. When `models` is empty or omitted, a configured `defaultModel` is included too;
+   if none of those fields supplies an id, opencodex exposes no routed models.
 4. **Cursor `GetUsableModels`** — the Cursor adapter discovers models through its protobuf
    `GetUsableModels` RPC, not `/models`, so a Cursor-side change can alter which ids are visible
    independently of other providers.

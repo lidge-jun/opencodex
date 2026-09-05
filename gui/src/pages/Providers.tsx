@@ -459,6 +459,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             availableModels={data.availableModels}
             hasLiveModels={data.hasLiveModels}
             selectedModels={data.selectedModels}
+            disabledModels={data.disabledModels}
             modelsLoading={data.modelsLoading}
             modelsLoadFailed={data.modelsLoadFailed}
             onRetryModels={data.onRetryModels}

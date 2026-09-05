@@ -32,6 +32,7 @@ export default function ProviderDetails({
   availableModels,
   hasLiveModels,
   selectedModels,
+  disabledModels,
   modelsLoading,
   modelsLoadFailed,
   onRetryModels,
@@ -65,6 +66,7 @@ export default function ProviderDetails({
   /** Server-reported live-catalog provenance; see filterModels(). */
   hasLiveModels: boolean;
   selectedModels: string[];
+  disabledModels: string[];
   modelsLoading?: boolean;
   modelsLoadFailed?: boolean;
   onRetryModels?: () => void;
@@ -293,6 +295,7 @@ export default function ProviderDetails({
             availableModels={availableModels}
             hasLiveModels={hasLiveModels}
             selectedModels={selectedModels}
+            disabledModels={disabledModels}
             modelsLoading={modelsLoading}
             modelsLoadFailed={modelsLoadFailed}
             needsReauth={

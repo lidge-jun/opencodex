@@ -602,6 +602,8 @@ export const en = {
   "models.customEdit": "Edit",
   "models.customDelete": "Delete",
   "models.customDeleteConfirm": "Delete the {name} model?",
+  "models.hide": "Hide",
+  "models.hideConfirm": "Hide the {name} model from the catalog?",
   "models.customBadge": "Custom",
   "models.customSummary": "{count} custom",
   "models.customFieldModelId": "Model ID (endpoint slug)",

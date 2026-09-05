@@ -136,7 +136,7 @@ predictions. Explicit provider/model price overrides still take precedence.
 | `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Anthropic key header style. Defaults to native `x-api-key`; valid only for key-auth `anthropic` providers. |
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | Multi-key pool. `apiKey` mirrors the active entry; each item has `id`, `key`, optional `label`, and optional numeric `addedAt`. |
 | `defaultModel?` | `string` | Model used when this provider is selected without an explicit model. |
-| `models?` | `string[]` | Seed/fallback model list. With `liveModels: false`, these are the only discovered models. |
+| `models?` | `string[]` | Seed/fallback model list. With `liveModels: false`, routed models come from `models` and `retainModels`; `defaultModel` is also included when `models` is empty. |
 | `liveModels?` | `boolean` | Fetch the live catalog on start/sync (default `true`). Custom providers use `${baseUrl}/models`; built-ins may use a registry URL and filter. |
 | `selectedModels?` | `string[]` | Catalog allowlist after discovery. Non-empty exposes only those ids; empty or omitted exposes all discovered models. |
 | `retainModels?` | `string[]` | Ids kept in the catalog even when live discovery omits them. They need not be repeated in `models`. Empty or omitted keeps today's behavior. |
@@ -738,8 +738,8 @@ container usually has no unlocked keychain session, so requests would fail close
 `${ENV_VAR}` reference in the service environment there instead. Env references are left untouched
 by `store`.
 
-Set `liveModels: false` to expose only `models`. If `models` is empty or omitted, the provider exposes
-no routed models. Live discovery rejects more than 4 MiB or 2,000 raw model rows before caching;
+Set `liveModels: false` to expose only configured models from `models` and `retainModels`. If `models`
+is empty or omitted, a configured `defaultModel` is included too. If none of those fields supplies an id, the provider exposes no routed models. Live discovery rejects more than 4 MiB or 2,000 raw model rows before caching;
 built-in presets may use lower limits and filter to chat-eligible rows. Oversized or malformed results
 follow stale/configured fallback. A valid zero-eligible result remains authoritative and is not
 silently replaced or truncated.

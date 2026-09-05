@@ -588,6 +588,8 @@ export const ko: Record<TKey, string> = {
   "models.customEdit": "편집",
   "models.customDelete": "삭제",
   "models.customDeleteConfirm": "{name} 모델을 삭제하시겠습니까?",
+  "models.hide": "숨기기",
+  "models.hideConfirm": "{name} 모델을 카탈로그에서 숨기시겠습니까?",
   "models.customBadge": "커스텀",
   "models.customSummary": "커스텀 {count}개",
   "models.customFieldModelId": "모델 ID (엔드포인트 슬러그)",

@@ -266,8 +266,8 @@ OpenCodex 直接注入路由，請先將 Codex 切回內建 `openai` provider，
    已發現模型。不在 allowlist 中的 id 永遠不會進入目錄。
 2. **`disabledModels`（頂層）**：會同時從目錄與 `/v1/models` 隱藏模型，並把裸原生 GPT slug 設為
    `visibility: "hide"`。
-3. **`liveModels: false` 且 `models` 為空**：當即時探索關閉，且 `models` 為空或省略時，opencodex
-   不會為該 provider 暴露任何路由模型。
+3. **`liveModels: false`**：關閉即時探索後，路由模型來自 `models` 和 `retainModels`。
+   當 `models` 為空或省略時，還會包含已設定的 `defaultModel`；這些欄位皆未提供 id 時，opencodex 才不暴露路由模型。
 4. **Cursor `GetUsableModels`**：Cursor adapter 透過 protobuf `GetUsableModels` RPC 探索模型，而不是
    `/models`，所以 Cursor 端變更可獨立改變可見 id。
 5. **cache 與 `ocx sync`**：即時目錄約快取五分鐘（`modelCacheTtlMs`，預設 `300000`）。執行

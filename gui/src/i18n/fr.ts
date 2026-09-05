@@ -587,6 +587,8 @@ export const fr: Record<TKey, string> = {
   "models.customEdit": "Modifier",
   "models.customDelete": "Supprimer",
   "models.customDeleteConfirm": "Supprimer le modèle {name} ?",
+  "models.hide": "Masquer",
+  "models.hideConfirm": "Masquer le modèle {name} du catalogue ?",
   "models.customBadge": "Personnalisé",
   "models.customSummary": "{count} personnalisés",
   "models.customFieldModelId": "ID du modèle (slug du point de terminaison)",
