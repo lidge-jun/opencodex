@@ -66,13 +66,14 @@ function classifyGoogle(label: string, status: number | undefined, enumStatus: s
   if (status === 401 || enumStatus === "UNAUTHENTICATED" || lower.includes("unauthenticated") || lower.includes("invalid authentication") || lower.includes("expired")) {
     return `${label} authentication failed`;
   }
-  if (status === 403 || enumStatus === "PERMISSION_DENIED" || lower.includes("permission denied") || lower.includes("access denied")) {
+  if (status === 403 || enumStatus === "PERMISSION_DENIED" || lower.includes("permission_denied") || lower.includes("permission denied") || lower.includes("access denied")) {
     return `${label} access denied`;
   }
   // Google rejects unsupported geographic / datacenter locations with HTTP 400
   // FAILED_PRECONDITION. The payload is not malformed, so it must not fall through to
-  // "invalid request" (#3467). Auth / quota / permission enums above keep precedence.
-  if (isLocationUnsupportedMessage(lower)) {
+  // "invalid request" (#3467). Only the observed 400/precondition envelope permits
+  // this inference; other explicit enums and server statuses remain authoritative.
+  if (status === 400 && (!enumStatus || enumStatus === "FAILED_PRECONDITION") && isLocationUnsupportedMessage(lower)) {
     return `${label} location not supported`;
   }
   if (status === 503 || enumStatus === "UNAVAILABLE" || lower.includes("overloaded") || lower.includes("unavailable")) {

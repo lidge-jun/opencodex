@@ -204,6 +204,38 @@ describe("overload and transient-429 classification (F3)", () => {
     });
   });
 
+  test("authoritative 5xx statuses outrank mixed location wording (#3467)", () => {
+    const message = "User location is not supported for the API use.";
+    for (const status of [500, 502, 503, 504]) {
+      expect(classifyError(status, "upstream_error", message)).toEqual({
+        message,
+        type: "server_error",
+        code: status === 503 ? "server_is_overloaded" : "upstream_server_error",
+      });
+    }
+    expect(classifyError(503, "server_error", `Server temporarily unavailable: ${message}`)).toMatchObject({
+      type: "server_error",
+      code: "server_is_overloaded",
+    });
+  });
+
+  test("explicit PERMISSION_DENIED wording keeps its reason beside location wording (#3467)", () => {
+    const message = "PERMISSION_DENIED: User location is not supported for the API use.";
+    expect(classifyError(400, "upstream_error", message)).toEqual({
+      message,
+      type: "permission_error",
+      code: "permission_denied",
+    });
+    expect(adapterFailureFromMessage(message)).toMatchObject({
+      httpStatus: 403,
+      error: { type: "permission_error", code: "permission_denied" },
+    });
+    expect(classifyError(400, "PERMISSION_DENIED", "location not supported")).toMatchObject({
+      type: "permission_error",
+      code: "permission_denied",
+    });
+  });
+
   test("transient 429 quota bucket stays retryable (rate_limit_exceeded), delay text preserved", () => {
     const r = classifyError(429, "upstream_error", "You have exceeded your quota for requests per min. Please try again in 5s");
     expect(r.code).toBe("rate_limit_exceeded");

@@ -138,4 +138,24 @@ describe("google location denial classification (#3467)", () => {
     });
     expect(safeAntigravityHttpErrorMessage(403, denied)).toContain("Antigravity access denied");
   });
+
+  test("server statuses and explicit non-location enums do not infer a location reason", () => {
+    const message = "User location is not supported for the API use.";
+    expect(safeAntigravityHttpErrorMessage(400, `PERMISSION_DENIED: ${message}`))
+      .toBe(`Antigravity access denied: PERMISSION_DENIED: ${message}`);
+    for (const status of [500, 502, 503, 504]) {
+      const body = JSON.stringify({ error: { code: status, status: "FAILED_PRECONDITION", message } });
+      expect(safeAntigravityHttpErrorMessage(status, body)).toBe(
+        `Antigravity ${status === 503 ? "server overloaded" : "upstream error"}: ${message}`,
+      );
+    }
+    for (const [status, prefix] of [
+      ["PERMISSION_DENIED", "access denied"],
+      ["INVALID_ARGUMENT", "invalid request"],
+      ["UNAVAILABLE", "server overloaded"],
+    ]) {
+      const body = JSON.stringify({ error: { code: 400, status, message } });
+      expect(safeAntigravityHttpErrorMessage(400, body)).toBe(`Antigravity ${prefix}: ${message}`);
+    }
+  });
 });

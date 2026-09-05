@@ -266,9 +266,13 @@ export function classifyError(status: number, type: string, message: string): Oc
   ) {
     return { message, type: "authentication_error", code: "invalid_api_key" };
   }
-  // Location denials outrank generic permission / subscription wording so the caller sees
-  // a stable `location_not_supported` code instead of `permission_denied`.
-  if (type === "location_not_supported" || isLocationUnsupportedMessage(text)) {
+  // An explicit permission enum must not acquire a more specific inferred reason.
+  if (type === "PERMISSION_DENIED" || text.includes("permission_denied")) {
+    return { message, type: "permission_error", code: "permission_denied" };
+  }
+  // Location denials outrank generic permission / subscription wording, but never an
+  // authoritative 5xx. Message-only adapter terminals arrive here with inferred 403.
+  if (status < 500 && (type === "location_not_supported" || isLocationUnsupportedMessage(text))) {
     return { message, type: "permission_error", code: "location_not_supported" };
   }
   // Subscription labels are valid only in a known permission context.
