@@ -651,7 +651,7 @@ export async function cmdOpencode(args: string[]): Promise<number> {
   const catalog = opencodeCatalogFromProxyRows(proxyModels, config);
   const blocks = buildOpencodeProviderBlocksFromCatalog(live.port, catalog, live.hostname, config);
   const baseUrl = blocks.v1.options.baseURL;
-  const modelCount = catalog.length;
+  const modelCount = Object.keys(blocks.v1.models).length;
   console.error(`✅ opencode wired to ${baseUrl} — ${modelCount} model(s) under provider \`${OPENCODE_PROVIDER_ID}\`.`);
   console.error("   Your existing opencode config files are left untouched; only the runtime provider blocks are injected.");
   const providerOverride = opencodeProviderOverridePath(process.cwd());
