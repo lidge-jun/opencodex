@@ -2238,6 +2238,17 @@ async function applyFinalRouteRequestNormalization(args: {
   }
 
   {
+    const { applyPinnedEffort } = await import("../effort-policy");
+    const pinned = applyPinnedEffort(parsed, route, config);
+    if (pinned) {
+      logCtx.requestedEffort = pinned.from ? `${pinned.from}->${pinned.to}` : pinned.to;
+      if (isInjectionDebugEnabled()) {
+        injectionDebugLog(`[opencodex] ${route.modelId}: pinned reasoning effort applied (${pinned.from ?? "none"} -> ${pinned.to})`);
+      }
+    }
+  }
+
+  {
     const { applyEffortCap, effortCapAppliesTo, supportedLadderFor } = await import("../effort-policy");
     const surface = collabSurface(parsed);
     if (effortCapAppliesTo(surface, req.headers, config, parsed._compactionRequest === true)) {

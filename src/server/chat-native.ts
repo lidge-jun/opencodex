@@ -6,6 +6,7 @@ import {
   collectChatCompletion,
   isChatCompletionsStreamError,
 } from "../chat/outbound";
+import { applyChatEffortCap, chatCollabSurface, effortCapAppliesTo, resolvePinnedEffort, supportedLadderFor } from "./effort-policy";
 import {
   classifyError,
   cyberPolicyErrorType,
@@ -144,9 +145,28 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
     return chatCompletionsErrorResponse(status, safeMessage, type, code);
   };
 
-  logCtx.requestedEffort = typeof options.chatBody.reasoning_effort === "string"
-    ? options.chatBody.reasoning_effort
-    : undefined;
+  const pinnedEffort = resolvePinnedEffort(route, requestedModel, config);
+  if (pinnedEffort) {
+    const from = typeof options.chatBody.reasoning_effort === "string" ? options.chatBody.reasoning_effort : undefined;
+    logCtx.requestedEffort = from ? `${from}->${pinnedEffort}` : pinnedEffort;
+    if (pinnedEffort === "none") {
+      delete options.chatBody.reasoning_effort;
+    } else {
+      options.chatBody.reasoning_effort = pinnedEffort;
+    }
+  } else {
+    logCtx.requestedEffort = typeof options.chatBody.reasoning_effort === "string"
+      ? options.chatBody.reasoning_effort
+      : undefined;
+  }
+
+  const surface = chatCollabSurface(options.chatBody);
+  if (effortCapAppliesTo(surface, req.headers, config)) {
+    const capped = applyChatEffortCap(options.chatBody, req.headers, config, supportedLadderFor(route));
+    if (capped) {
+      logCtx.requestedEffort = `${logCtx.requestedEffort ?? capped.from}->${capped.to}`;
+    }
+  }
   logCtx.requestedServiceTier = typeof options.chatBody.service_tier === "string"
     ? options.chatBody.service_tier
     : undefined;

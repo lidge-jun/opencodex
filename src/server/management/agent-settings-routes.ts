@@ -602,13 +602,14 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     return jsonResponse({
       effortCap: config.effortCap ?? null,
       subagentEffortCap: config.subagentEffortCap ?? null,
+      modelPinnedEfforts: config.modelPinnedEfforts ?? {},
       efforts: CODEX_REASONING_LEVELS.map(l => l.effort),
     });
   }
   if (url.pathname === "/api/effort-caps" && req.method === "PUT") {
-    let body: { effortCap?: unknown; subagentEffortCap?: unknown };
+    let body: { effortCap?: unknown; subagentEffortCap?: unknown; modelPinnedEfforts?: unknown };
     try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
-    const { isCodexReasoningEffort } = await import("../../reasoning-effort");
+    const { isCodexReasoningEffort, isDeclaredReasoningEffort } = await import("../../reasoning-effort");
     for (const key of ["effortCap", "subagentEffortCap"] as const) {
       if (!(key in body)) continue;
       const value = body[key];
@@ -618,8 +619,40 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       }
       config[key] = value;
     }
+    if ("modelPinnedEfforts" in body) {
+      const val = body.modelPinnedEfforts;
+      if (val === null || val === undefined) {
+        deleteConfigTopLevelKey(config, "modelPinnedEfforts");
+      } else if (typeof val === "object" && !Array.isArray(val)) {
+        const efforts: Record<string, string> = { ...(config.modelPinnedEfforts ?? {}) };
+        for (const [m, eff] of Object.entries(val as Record<string, unknown>)) {
+          if (!m.trim()) return jsonResponse({ error: "modelPinnedEfforts keys must be nonblank model ids" }, 400);
+          if (eff === null || eff === "" || eff === undefined) {
+            delete efforts[m.trim()];
+            continue;
+          }
+          if (typeof eff === "string" && isDeclaredReasoningEffort(eff)) {
+            efforts[m.trim()] = eff;
+          } else {
+            return jsonResponse({ error: `unknown reasoning effort "${String(eff)}" for model "${m}"` }, 400);
+          }
+        }
+        if (Object.keys(efforts).length > 0) {
+          config.modelPinnedEfforts = efforts;
+        } else {
+          deleteConfigTopLevelKey(config, "modelPinnedEfforts");
+        }
+      } else {
+        return jsonResponse({ error: "modelPinnedEfforts must be a plain object or null" }, 400);
+      }
+    }
     saveConfigPreservingClaudeCode(config);
-    return jsonResponse({ ok: true, effortCap: config.effortCap ?? null, subagentEffortCap: config.subagentEffortCap ?? null });
+    return jsonResponse({
+      ok: true,
+      effortCap: config.effortCap ?? null,
+      subagentEffortCap: config.subagentEffortCap ?? null,
+      ...(config.modelPinnedEfforts ? { modelPinnedEfforts: config.modelPinnedEfforts } : {}),
+    });
   }
 
   // Subagent model picker: which ≤5 routed models Codex's spawn_agent advertises (it shows the
