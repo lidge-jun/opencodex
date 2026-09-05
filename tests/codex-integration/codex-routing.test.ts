@@ -162,6 +162,35 @@ describe("codex routing", () => {
       .toBe(CODEX_UNKNOWN_USAGE_SCORE);
   });
 
+  test("a fresh full burst window with no reset timestamp still excludes the account (#3425)", () => {
+    // #3425: an exhausted account served 118 consecutive 502s over 23 minutes while a healthy
+    // account sat at 3%. The upstream reading said 100% but carried no shortResetAt, and 502 is
+    // classified transient, so nothing ever corrected the selection. A reading that cannot be
+    // aged by its RESET can still be aged by its OBSERVATION time, and a 100% window observed
+    // seconds ago is a measured refusal rather than an optimistic guess.
+    const now = 1_700_000_000_000;
+    expect(computeCodexUsageScore({ shortPercent: 100, updatedAt: now }, undefined, now)).toBe(100);
+    expect(computeCodexUsageScore({ shortPercent: 100, updatedAt: now - 60_000 }, undefined, now)).toBe(100);
+    // Still narrow in the other axis: a non-terminal fresh reading is unaffected.
+    expect(computeCodexUsageScore({ shortPercent: 99, updatedAt: now }, undefined, now))
+      .toBe(CODEX_UNKNOWN_USAGE_SCORE);
+  });
+
+  test("a stale full burst window with no reset timestamp stays unknown (#3029)", () => {
+    // The opposite-direction guard, and the reason the fix is freshness rather than an
+    // inversion of #3029. Disk hydration accepts a persisted reading for six hours, so an
+    // observation old enough to have outlived a five-hour window must fall back to unknown -
+    // otherwise a recovered account is excluded until someone reads the pool by hand.
+    const now = 1_700_000_000_000;
+    expect(computeCodexUsageScore({ shortPercent: 100, updatedAt: now - 6 * 60_000 }, undefined, now))
+      .toBe(CODEX_UNKNOWN_USAGE_SCORE);
+    expect(computeCodexUsageScore({ shortPercent: 100, updatedAt: now - 5 * 60 * 60_000 }, undefined, now))
+      .toBe(CODEX_UNKNOWN_USAGE_SCORE);
+    // A future-dated observation is not evidence of freshness either.
+    expect(computeCodexUsageScore({ shortPercent: 100, updatedAt: Number.NaN }, undefined, now))
+      .toBe(CODEX_UNKNOWN_USAGE_SCORE);
+  });
+
   test("a terminal burst window is read in either unit (#3029)", () => {
     // normalizeResetAt does not scale, and the GUI disambiguates by magnitude at read time,
     // so both seconds and milliseconds reach storage. A comparison written against one
@@ -210,6 +239,38 @@ describe("codex routing", () => {
     updateAccountQuota("b", 20);
     const recovered = makeConfig({ activeCodexAccountId: "a" });
     expect(resolveCodexAccountForThread("thread-terminal-recovered", recovered, now)).toBe("a");
+  });
+
+  test("a 502 storm does not pin the pool to an exhausted account (#3425)", () => {
+    // The reported wedge: A reads 100% with no reset timestamp, every request comes back 502,
+    // and 502 is transient so it produces no quota signal to correct the selection. The
+    // exclusion therefore has to come from the snapshot itself. B carries known headroom, so
+    // an unknown-scoring A would be kept and this assertion fails on the unfixed scorer.
+    const now = Date.now();
+    setAccountQuotaFromParsed("a", { shortPercent: 100 });
+    updateAccountQuota("b", 3);
+    const config = makeConfig({ activeCodexAccountId: "a" });
+    expect(resolveCodexAccountForThread("thread-storm-new", config, now)).toBe("b");
+
+    // A thread already bound to A must move too - this is the half the reporter saw as 118
+    // consecutive failures on one credential. Bind while A is cool so the rebind below is a
+    // real transition rather than a first selection that happened to pick B.
+    clearAccountQuota("a");
+    clearAccountQuota("b");
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    const bound = makeConfig({ activeCodexAccountId: "a" });
+    expect(resolveCodexAccountForThread("thread-storm-bound", bound, now)).toBe("a");
+    clearAccountQuota("a");
+    setAccountQuotaFromParsed("a", { shortPercent: 100 });
+    expect(resolveCodexAccountForThread("thread-storm-bound", bound, now)).toBe("b");
+  });
+
+  test("a bare 502 is still classified transient (#3425)", () => {
+    // The exclusion above comes from the snapshot, not from demoting 502 out of the transient
+    // set. A gateway blip genuinely is transient in the general case, and reclassifying every
+    // one would strand accounts on ordinary upstream noise.
+    expect(classifyCodexUpstreamOutcome(502)).toBe("transient");
   });
 
   test("the priority tier reads the request clock, not wall time (#3029)", () => {
