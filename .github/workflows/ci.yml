@@ -435,6 +435,21 @@ jobs:
       - name: Go test
         run: cd go && go test ./...
 
+      - name: Cross-compile every release target (CGO_ENABLED=0)
+        # Ticket #8 acceptance: the ocx-sidecar must build static on every
+        # release target (linux/darwin/windows x amd64/arm64), not only the
+        # native platform of this runner. A platform-specific dependency that
+        # leaks cgo (or a build tag mistake) would otherwise surface only at
+        # release time. The loop proves all six combinations produce a binary;
+        # artifacts land in /tmp and are discarded.
+        run: |
+          set -euo pipefail
+          cd go
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            os="${target%/*}"; arch="${target#*/}"
+            GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -o "/tmp/ocx-sidecar-$os-$arch" ./cmd/ocx-sidecar
+          done
+
       - name: Differential oracle
         run: bun test --timeout 60000 tests/go-sidecar-parity.test.ts
 
