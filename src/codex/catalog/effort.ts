@@ -35,7 +35,8 @@ import upstreamModelsSnapshot from "../data/upstream-models.json";
 import { generatedModelMetadata, readCatalog, readCodexCatalogPath } from "./parsing";
 import type { CatalogModel, RawEntry } from "./parsing";
 import { UPSTREAM_NATIVE_ENTRIES } from "./metadata";
-import { nativeOpenAiCapabilitySourceSlug, SELF_DESCRIBED_NATIVE_OPENAI_MODELS } from "./native-models";
+import { nativeOpenAiCapabilitySourceSlug, SELF_DESCRIBED_NATIVE_OPENAI_MODELS, NATIVE_RESERVE_MODEL } from "./native-models";
+import { isReserveCatalogProjection } from "./reserve";
 import { loadBundledCodexCatalog } from "./bundled";
 import type { BundledCatalogDeps, ReadonlyRawCatalog } from "./bundled";
 import { deriveEntry } from "./sync";
@@ -158,11 +159,14 @@ export function applyCatalogModelMetadata(entry: RawEntry, model?: CatalogModel)
     entry.supports_reasoning_summaries = model.supportsReasoningSummaries;
   }
   if (model.supportsServiceTier === true) {
+    const nativeFast = model.codexForwardNativeCapabilityAlias && Array.isArray(entry.service_tiers)
+      ? entry.service_tiers.find(tier => tier?.id === "priority")
+      : undefined;
     entry.default_service_tier = null;
     entry.service_tiers = [{
       id: "priority",
       name: "Fast",
-      description: model.fastTierDescription ?? "1.5x speed, increased usage",
+      description: model.fastTierDescription ?? nativeFast?.description ?? "1.5x speed, increased usage",
     }];
     entry.additional_speed_tiers = ["fast"];
   }
@@ -337,6 +341,10 @@ export function clampedDefaultEffort(original: string, surviving: readonly strin
   return (atOrBelow.at(-1) ?? ranked[0]!).effort;
 }
 
+function requiresExactReserveEfforts(entry: RawEntry): boolean {
+  return entry.slug === NATIVE_RESERVE_MODEL || isReserveCatalogProjection(entry);
+}
+
 export function clampEntryToCodexSupportedEfforts(
   entry: RawEntry,
   supported: ReadonlySet<string> | null,
@@ -347,6 +355,19 @@ export function clampEntryToCodexSupportedEfforts(
     : null;
   if (levels && levels.length > 0) {
     const kept = levels.filter(level => typeof level?.effort === "string" && supported.has(level.effort));
+    if (requiresExactReserveEfforts(entry)) {
+      entry.supported_reasoning_levels = kept;
+      if (kept.length === 0) {
+        // The list-level clamp removes this incompatible row; never invent another ladder.
+        delete entry.default_reasoning_level;
+      } else if (!kept.some(level => level.effort === entry.default_reasoning_level)) {
+        entry.default_reasoning_level = clampedDefaultEffort(
+          typeof entry.default_reasoning_level === "string" ? entry.default_reasoning_level : "",
+          kept.map(level => level.effort!),
+        );
+      }
+      return;
+    }
     entry.supported_reasoning_levels = kept.length > 0
       ? kept
       : CODEX_REASONING_LEVELS
@@ -377,7 +398,9 @@ export function clampCatalogModelsToObservedCodexSupport(
 
   const removed = new Set<string>();
   const affected: string[] = [];
-  for (const entry of models) {
+  for (let index = 0; index < models.length;) {
+    const entry = models[index]!;
+    const hadLadder = Array.isArray(entry.supported_reasoning_levels) && entry.supported_reasoning_levels.length > 0;
     const before = new Set(
       (Array.isArray(entry.supported_reasoning_levels) ? entry.supported_reasoning_levels : [])
         .flatMap(level => typeof (level as { effort?: string })?.effort === "string"
@@ -399,11 +422,14 @@ export function clampCatalogModelsToObservedCodexSupport(
       : null;
     const lost = [...before].filter(effort => !after.has(effort));
     const defaultClamped = Boolean(beforeDefault && beforeDefault !== afterDefault);
-    if (lost.length > 0 || defaultClamped) {
+    const omitted = requiresExactReserveEfforts(entry) && hadLadder && after.size === 0;
+    if (lost.length > 0 || defaultClamped || omitted) {
       for (const effort of lost) removed.add(effort);
       if (defaultClamped && beforeDefault) removed.add(beforeDefault);
       if (typeof entry.slug === "string") affected.push(entry.slug);
     }
+    if (omitted) models.splice(index, 1);
+    else index += 1;
   }
 
   return {

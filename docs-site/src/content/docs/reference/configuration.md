@@ -59,15 +59,17 @@ a known configured model id. Cursor may require a model-list refresh or restart 
 
 ### Fast rows
 
-`fastRows` is an optional boolean and defaults to `false`. When enabled, the raw OpenAI-style
-`/v1/models` list and Claude Code discovery add a `<base-id>--fast` selector for every model whose
+`fastRows` is an optional boolean and defaults to `true`. The raw OpenAI-style
+`/v1/models` list, Claude Code discovery, and client config exports (including pi, OpenCode,
+OMP, Hermes, OpenClaw, Kimi, Gajae, DSH, MCode, ZCode, Prime, and Aside) add a `<base-id>--fast` selector for every model whose
 resolved Fast policy is eligible. Selecting one routes the base model and requests the `priority`
 service tier — the same Fast the Codex app exposes through its picker toggle. The base row stays
 listed, so the row is an addition rather than a replacement.
 
-The flag exists because Fast was otherwise reachable only from Codex. Codex reads the tier from
-catalog metadata and renders a toggle; every other client selects a model by id alone, so a
-Claude Code or OpenAI-compatible client had no way to ask for it.
+Set `"fastRows": false` to hide generated Fast selectors. Malformed values also disable them.
+Refresh the client model list or regenerate/refresh an existing managed client configuration to
+receive the new entries. Connected clients use the serving proxy's availability metadata; older
+proxies without that metadata do not gain guessed Fast entries. Codex keeps its native Fast toggle.
 
 The suffix is `--fast`, with two hyphens, because a terminal `-fast` is already a real model id for
 several providers (`grok-4-fast`, `glm-5.3-fast`, and Cursor's own fast variants), and a single
@@ -85,8 +87,9 @@ the two surfaces cannot disagree about which natives have Fast.
 
 Scope: this covers the request-serving surfaces — `/v1/models`, Claude Code discovery, and the
 `/v1/responses`, `/v1/chat/completions`, `/v1/messages`, `/v1/messages/count_tokens`, and
-`/v1/responses/compact` endpoints. `ocx export` and the OpenCode integration emit base ids only,
-because those identities are written into config files that outlive the flag.
+`/v1/responses/compact` endpoints, plus `ocx export`, managed client integrations, and
+the OpenCode launcher. After disabling Fast rows, refresh saved client configs and select a base
+model instead of a previously saved Fast selector.
 
 Valid values in `config.json` override built-in defaults. Missing optional fields use the defaults
 documented on the domain pages. `OPENCODEX_HOME` takes precedence over the default configuration

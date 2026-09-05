@@ -149,3 +149,14 @@ export function agentTaskRecoveryWaiterCountForTests(): number {
 export function agentTaskRecoveryCacheSnapshotForTests(): { entries: number; bytes: number } {
   return { entries: RECOVERY_CACHE.size, bytes: recoveryCacheBytes };
 }
+
+/** Read an existing recovery without starting a request or extending its lifetime. */
+export function cachedAgentTaskRecovery(key: string): string | null {
+  const entry = RECOVERY_CACHE.get(key);
+  if (!entry) return null;
+  if (entry.expiresAt <= Date.now()) {
+    deleteRecoveryCacheEntry(key, entry);
+    return null;
+  }
+  return entry.assignment;
+}

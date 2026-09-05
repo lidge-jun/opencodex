@@ -88,6 +88,8 @@ export interface OpencodeRoutedModel {
 
 /** Row shape from authenticated GET /api/models on the running proxy. */
 export interface OpencodeProxyModelRow {
+  /** Hub-resolved availability, independent of the launcher's local Fast setting. */
+  fastRowAvailable?: boolean;
   provider?: string;
   id?: string;
   namespaced?: string;
@@ -389,6 +391,7 @@ export function opencodeCatalogFromProxyRows(
       id: row.id,
       contextWindow: row.contextWindow,
       displayName: row.displayNameSource === "fallback" ? undefined : row.displayName,
+      ...(typeof row.fastRowAvailable === "boolean" ? { fastRowAvailable: row.fastRowAvailable } : {}),
       ...(Array.isArray(row.reasoningEfforts) && row.reasoningEfforts.length > 0
         ? { reasoningEfforts: [...row.reasoningEfforts] }
         : {}),
@@ -648,7 +651,7 @@ export async function cmdOpencode(args: string[]): Promise<number> {
   const catalog = opencodeCatalogFromProxyRows(proxyModels, config);
   const blocks = buildOpencodeProviderBlocksFromCatalog(live.port, catalog, live.hostname, config);
   const baseUrl = blocks.v1.options.baseURL;
-  const modelCount = catalog.length;
+  const modelCount = Object.keys(blocks.v1.models).length;
   console.error(`✅ opencode wired to ${baseUrl} — ${modelCount} model(s) under provider \`${OPENCODE_PROVIDER_ID}\`.`);
   console.error("   Your existing opencode config files are left untouched; only the runtime provider blocks are injected.");
   const providerOverride = opencodeProviderOverridePath(process.cwd());

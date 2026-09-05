@@ -57,6 +57,8 @@ type MainAuthJsonCredential = {
 export interface NativeMainRefreshDependencies {
   refreshToken?: (refreshToken: string, options: { signal: AbortSignal }) => Promise<OAuthCredentials>;
   signal?: AbortSignal;
+  /** Metadata-only refresh must not retract a concurrent traffic reauth quarantine. */
+  preserveReauth?: boolean;
 }
 
 export class MainAuthJsonChangedDuringRefreshError extends Error {
@@ -283,7 +285,7 @@ async function resolveMainAccountToken(
           throw new MainAccountTokenRefreshError(reason, { cause });
         }
         const result = persistRefreshedMainAuthJson(locked, refreshed);
-        clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+        if (dependencies.preserveReauth !== true) clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
         return result;
       }),
       { waitMs: 30_000, signal },

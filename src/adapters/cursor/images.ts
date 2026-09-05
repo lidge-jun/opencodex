@@ -84,6 +84,8 @@ export interface ResolvedCursorImage {
   uuid: string;
   /** Codex/OpenAI image detail hint; affects JPEG soft-cap tier. */
   detail?: string;
+  /** Bounded client-supplied provenance for opted-in trailing tool-result images only. */
+  sourceLabel?: string;
 }
 
 export type PrepareCursorImageOutcome =
@@ -546,7 +548,7 @@ export function buildSelectedContext(
 
 /**
  * Resolve data: images for the active user/developer turn onto SelectedImage.
- * Tool-result image promotion is intentionally out of scope in this slice.
+ * Opted-in tool-result runs use prepareCursorRawMessages directly instead.
  */
 export async function resolveActiveCursorImages(
   messages: readonly OcxMessage[] | undefined,
@@ -645,7 +647,7 @@ async function prepareCursorContentParts(
  * Historical messages before this index are left untouched (no decode).
  */
 export function cursorVisionPrepareStartIndex(messages: readonly OcxMessage[]): number {
-  // Tool-result image preparation is out of scope in this slice.
+  // Default window excludes tool results; their preparation requires explicit opt-in.
   if (messages.at(-1)?.role === "toolResult") return messages.length;
   for (let i = messages.length - 1; i >= 0; i--) {
     const role = messages[i]?.role;
@@ -658,7 +660,8 @@ export function cursorVisionPrepareStartIndex(messages: readonly OcxMessage[]): 
  * Rewrite image data URLs in the active vision window (last user/developer turn) through
  * the JPEG soft-cap path before protobuf encode. Historical messages are left by
  * reference. Undecodable images become {@link CURSOR_VISION_IMAGE_OMITTED} text so
- * image-only turns stay userMessageAction.
+ * image-only turns stay userMessageAction. Opted-in trailing tool results use the
+ * same preparation path, with an aggregate image cap and ready-image source labels.
  */
 export interface PreparedCursorRawMessages {
   messages: readonly OcxMessage[] | undefined;
@@ -668,10 +671,26 @@ export interface PreparedCursorRawMessages {
 export async function prepareCursorRawMessages(
   messages: readonly OcxMessage[] | undefined,
   signal?: AbortSignal,
+  options?: { trailingToolImages?: boolean },
 ): Promise<PreparedCursorRawMessages> {
   if (!messages?.length) return { messages, images: [] };
   throwIfImagePhaseAborted(signal);
-  const prepareFrom = cursorVisionPrepareStartIndex(messages);
+  const trailingToolImages = options?.trailingToolImages === true && messages.at(-1)?.role === "toolResult";
+  let prepareFrom = cursorVisionPrepareStartIndex(messages);
+  if (trailingToolImages) {
+    let imageCount = 0;
+    // Count the entire contiguous run before any image URL is decoded or normalized.
+    while (prepareFrom > 0) {
+      throwIfImagePhaseAborted(signal);
+      const message = messages[prepareFrom - 1]!;
+      if (message.role !== "toolResult") break;
+      prepareFrom--;
+      imageCount += extractCursorImageParts(message.content).length;
+      if (imageCount > MAX_CURSOR_IMAGES) {
+        throw new CursorImageError(`Too many images in one request (max ${MAX_CURSOR_IMAGES}).`);
+      }
+    }
+  }
   const active = messages[prepareFrom];
   if (
     active
@@ -688,10 +707,21 @@ export async function prepareCursorRawMessages(
     const message = messages[i]!;
     if (
       i >= prepareFrom
-      && (message.role === "user" || message.role === "developer")
+      && (message.role === "user" || message.role === "developer"
+        || (trailingToolImages && message.role === "toolResult"))
     ) {
       const prepared = await prepareCursorContentParts(message.content, signal);
-      images.push(...prepared.images);
+      if (trailingToolImages && message.role === "toolResult") {
+        images.push(...prepared.images.map((image, index) => ({
+          ...image,
+          sourceLabel: `tool result ${i - prepareFrom + 1}, image ${index + 1}: ${JSON.stringify({
+            tool: message.toolName.slice(0, 128),
+            call_id: message.toolCallId.slice(0, 128),
+          })}`,
+        })));
+      } else {
+        images.push(...prepared.images);
+      }
       if (prepared.content !== message.content) {
         changed = true;
         out.push({ ...message, content: prepared.content } as OcxMessage);

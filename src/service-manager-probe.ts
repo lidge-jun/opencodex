@@ -619,7 +619,7 @@ function windowsTaskListContains(body: string, taskName: string): boolean {
  * denied", so a locked-down host answers the control and the real query
  * identically, and comparing them yields a false `absent` — the one direction
  * that lets an unattended write proceed into a home another process owns.
- * `tests/codex-service-manager-probe.test.ts` covers exactly that host.
+ * `tests/codex-integration/codex-service-manager-probe.test.ts` covers exactly that host.
  */
 const SCHTASKS_TASK_NOT_FOUND_EN = /cannot find the file specified/i;
 

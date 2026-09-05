@@ -20,7 +20,7 @@ const headStart = src.indexOf('className="pwi-auth-head"');
 const head = src.slice(headStart, src.indexOf('className="pwi-auth-body"', headStart));
 
 test("the section head carries the refresh control", () => {
-  expect(head).toContain("onRefreshQuota");
+  expect(head).toContain("canRefreshQuota");
   expect(head).toContain("refreshQuota()");
   expect(head).toContain("codexAuth.refreshQuota");
 });
@@ -38,10 +38,8 @@ test("the refresh result is announced exactly once", () => {
   expect(statuses).toBe(1);
 });
 
-test("the head control only renders for a logged-in OAuth provider", () => {
-  // An API-key provider has no per-account quota to re-read, and a logged-out one has
-  // no account at all.
-  expect(head).toContain("isOauth && loggedIn && onRefreshQuota");
+test("the head control supports logged-in OAuth and API-key rosters behind quota capability", () => {
+  expect(head).toContain("((isOauth && loggedIn) || isKeyAuth) && canRefreshQuota");
 });
 
 test("the head lays title and control on one wrapping row", () => {

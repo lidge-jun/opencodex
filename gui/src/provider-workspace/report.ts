@@ -197,6 +197,15 @@ export function accountQuotaFromReport(report?: ProviderQuotaReportView): Accoun
   return quotaFromUnknown(report?.quota, report?.updatedAt);
 }
 
+/** A pool total is never a substitute for the selected account's own reading. */
+export function currentAccountQuotaReport(report?: ProviderQuotaReportView): ProviderQuotaReportView | undefined {
+  if (!report) return undefined;
+  if (report.aggregation === undefined) return report;
+  const aggregation = capacityAggregationFromReport(report);
+  const quota = aggregation?.currentAccount?.quota ?? null;
+  return { ...report, aggregation: undefined, quota, updatedAt: quota?.updatedAt };
+}
+
 function capacityWindow(value: unknown): CapacityWindowView | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const row = value as Record<string, unknown>;

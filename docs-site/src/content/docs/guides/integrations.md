@@ -159,6 +159,11 @@ changed value and calling it success. You will see the file named and nothing on
 disk will have moved. Editing that file by hand still works; it is only our
 automatic rewrite that declines.
 
+TOML dates and times also refuse managed rewrites: the merge step would turn these
+typed values into quoted strings. This includes values inside arrays and inline
+tables. Quoted date strings remain supported; an unquoted date must be preserved
+by editing the configuration manually.
+
 **Pi, Kimi Code, Gajae Code, MiniMax Code, Prime Agent and the managed DSH integration only work against a loopback bind.**
 The first four have no config field for the `x-opencodex-api-key` header a non-loopback bind
 requires. DSH has a generic headers map, but rc.6 does not document that dedicated admission

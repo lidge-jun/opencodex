@@ -283,7 +283,7 @@ const DEFAULT_BODY = [
   "",
   "## Test plan",
   "",
-  "- [x] Run `bun test tests/ci-workflows.test.ts`",
+  "- [x] Run `bun test tests/ci-workflows/ci-workflows.test.ts`",
   "- [x] Confirm enforce-pr-target behaviour locally",
 ].join("\n");
 

@@ -61,6 +61,28 @@ export function fastRowEligible(
   return fastPolicyForModel(provider, modelId, providerName, inbound).eligibility === "eligible";
 }
 
+/** Shared discovery/export policy; native rows additionally need upstream tier evidence. */
+export function catalogFastRowEligible(
+  config: OcxConfig,
+  model: { provider: string; id: string; native?: boolean; supportsServiceTier?: boolean },
+): boolean {
+  if (config.fastRows === false) return false;
+  // Configured suffix-shaped IDs are real bases; live-only ones are deliberately
+  // refused by ingress. Discovery must not advertise a selector ingress cannot strip.
+  if (model.id.endsWith(FAST_ROW_SUFFIX)
+    && !fastRowBases(config)(model.native ? model.id : `${model.provider}/${model.id}`)) return false;
+  if (model.native) {
+    const id = model.id.slice(model.id.lastIndexOf("/") + 1);
+    const tiers = UPSTREAM_NATIVE_ENTRIES.get(id)?.additional_speed_tiers;
+    const provider = config.providers.openai;
+    return Array.isArray(tiers) && tiers.includes("fast") && provider !== undefined
+      && fastRowEligible(provider, id, "openai");
+  }
+  if (model.supportsServiceTier !== undefined) return model.supportsServiceTier === true;
+  const provider = config.providers[model.provider];
+  return provider !== undefined && fastRowEligible(provider, model.id, model.provider);
+}
+
 /**
  * Bases that may carry a fast row.
  *
@@ -180,7 +202,7 @@ export function parseFastRowId(
   knownIds?: EffortRowKnownIds,
   routableBases?: EffortRowKnownIds,
 ): ParsedFastRowId | null {
-  if (config.fastRows !== true) return null;
+  if (config.fastRows === false) return null;
   if (!id.endsWith(FAST_ROW_SUFFIX)) return null;
   // An exact configured/public id always beats the synthetic grammar, the same precedence
   // effort rows use. An operator who really named a model `x--fast` keeps it.
@@ -218,9 +240,8 @@ export function parseSyntheticRowId(
   // alias lookups even on the fastRows-off path this function exists to leave untouched.
   fastSelector?: () => string,
 ): ParsedSyntheticRow {
-  // Fast off: delegate to the SAME function shipped today, so an install that never enables
-  // this feature cannot observe any change, in behaviour or in cost.
-  if (config.fastRows !== true) {
+  // Explicit opt-out preserves the effort-only parser and avoids Fast inventory work.
+  if (config.fastRows === false) {
     return { fastRow: null, effortRow: parseRequestEffortRowId(id, config) };
   }
   const selector = fastSelector?.() ?? id;
@@ -252,7 +273,7 @@ export function parseFastOnlyRowId(
   config: OcxConfig,
   selector: () => string,
 ): ParsedFastRowId | null {
-  if (config.fastRows !== true) return null;
+  if (config.fastRows === false) return null;
   return parseSyntheticRowId("", config, selector).fastRow;
 }
 
@@ -268,7 +289,7 @@ export function expandFastRow<T extends { id: string }>(
   config: Pick<OcxConfig, "fastRows">,
   knownIds?: EffortRowKnownIds,
 ): T[] {
-  if (config.fastRows !== true || !eligible) return [row];
+  if (config.fastRows === false || !eligible) return [row];
   const id = fastRowId(row.id);
   return isKnownId(knownIds, id) ? [row] : [row, { ...row, id }];
 }

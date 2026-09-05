@@ -15,6 +15,7 @@ import {
   loadIntegrationState,
   toggleIntegration,
   deleteJournalEntry,
+  isMissingJournalEntry,
   type FileIntegrationClientId,
   type IntegrationJournalRow,
   type IntegrationStatus,
@@ -299,6 +300,14 @@ export default function FileIntegrationPage({
             try {
               await deleteJournalEntry(apiBase, deleting.opId);
             } catch (error) {
+              // The requested end state is already true when another tab
+              // removed this row. Reconcile the view instead of keeping a
+              // confirmation open whose only possible result is another 404.
+              if (isMissingJournalEntry(error)) {
+                setDeleting(null);
+                await historyResource.refresh();
+                return;
+              }
               // Localized before it reaches the dialog, which renders
               // `error.message` as-is; see the twin block in IntegrationsOverview.
               throw new Error(describeRefusal(t, error), { cause: error });

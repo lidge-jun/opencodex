@@ -1,8 +1,9 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import type { TFn } from "../i18n/shared";
 import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
 import { writeSessionListCache } from "../session-list-cache";
 import type { OAuthStatus, ProvidersConfig } from "./providers-shared";
+export type ProvidersConfigRefreshResult = "applied" | "failed" | "superseded";
 
 export function useProvidersFetch({
   apiBase,
@@ -25,14 +26,22 @@ export function useProvidersFetch({
   /** Session seed key for instant Providers shell paint (no secrets — hasApiKey flags only). */
   configCacheKey?: string;
 }) {
-  const fetchConfig = useCallback(async () => {
+  const configRequest = useRef(0);
+  useEffect(() => () => { configRequest.current += 1; }, [apiBase]);
+  const fetchConfig = useCallback(async (): Promise<ProvidersConfigRefreshResult> => {
+    const request = ++configRequest.current;
     try {
       const res = await fetch(`${apiBase}/api/config`);
       const data = await readJsonOrThrow<ProvidersConfig>(res);
+      if (request !== configRequest.current) return "superseded";
+      if (!data) throw new Error("config response missing");
       setConfig(data ?? null);
       if (configCacheKey && data) writeSessionListCache(configCacheKey, data);
+      return "applied";
     } catch {
+      if (request !== configRequest.current) return "superseded";
       notify(t("prov.loadConfigFail"), false);
+      return "failed";
     }
   }, [apiBase, configCacheKey, notify, setConfig, t]);
 

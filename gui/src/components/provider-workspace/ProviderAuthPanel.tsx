@@ -20,7 +20,7 @@ import CodexAccountPool from "../CodexAccountPool";
 import AnthropicAccountPoolSettings from "./AnthropicAccountPoolSettings";
 import { LoginHint as LoginHintView } from "../login-url-block";
 import { OpenBrowserPrefToggle } from "../open-browser-pref-toggle";
-import QuotaBars from "../QuotaBars";
+import ProviderAccountQuota from "./ProviderAccountQuota";
 import type { CodexAccountPoolController } from "../../hooks/useCodexAccountPool";
 import { Switch } from "../../ui";
 import type {
@@ -33,12 +33,11 @@ import type {
   ProviderUpdateResult,
 } from "./types";
 
-const QUOTA_ENRICH_RESERVE_MS = 4_000;
 const COCKPIT_IMPORT_MAX_BYTES = 256 * 1024;
 const EMPTY_OAUTH_ACCOUNTS: OAuthAccountRow[] = [];
 const EMPTY_API_KEYS: ApiKeyRow[] = [];
 
-function XaiResponsesOptInControl({
+function XaiChatOptInControl({
   initialState,
   onUpdateProvider,
 }: {
@@ -58,7 +57,7 @@ function XaiResponsesOptInControl({
 
   const toggle = async () => {
     if (!onUpdateProvider || saving) return;
-    const next = state !== true;
+    const next = state === false;
     setSaving(true);
     setError("");
     try {
@@ -78,19 +77,19 @@ function XaiResponsesOptInControl({
   return (
     <div className="pwi-auth-optin-row">
       <div className="pwi-auth-optin-copy">
-        <span className="pwi-auth-optin-label">{t("pws.xaiResponsesOptIn")}</span>
+        <span className="pwi-auth-optin-label">{t("pws.xaiChatOptIn")}</span>
         <span className="pwi-auth-row-secondary">
-          {t("pws.xaiResponsesOptInDesc")}
-          {mixed && <span className="pwi-auth-optin-mixed"> {t("pws.xaiResponsesOptInMixed")}</span>}
+          {t("pws.xaiChatOptInDesc")}
+          {mixed && <span className="pwi-auth-optin-mixed"> {t("pws.xaiChatOptInMixed")}</span>}
         </span>
         {error && <span className="pwi-auth-optin-error" role="alert">{error}</span>}
       </div>
       <Switch
-        on={state === true}
+        on={state === false}
         mixed={mixed}
         onClick={() => { void toggle(); }}
         disabled={!onUpdateProvider || saving}
-        label={t("pws.xaiResponsesOptIn")}
+        label={t("pws.xaiChatOptIn")}
       />
     </div>
   );
@@ -190,53 +189,38 @@ export default function ProviderAuthPanel({
   const [importBusy, setImportBusy] = useState(false);
   const [importStatus, setImportStatus] = useState<"idle" | "invalid" | "failed" | "complete">("idle");
   const [importResult, setImportResult] = useState<CockpitImportResult | null>(null);
-  const [reserveQuotaSlots, setReserveQuotaSlots] = useState(false);
   const importFileRef = useRef<HTMLInputElement>(null);
   const [manualCode, setManualCode] = useState("");
   const [manualCodeBusy, setManualCodeBusy] = useState(false);
   const [manualCodeMsg, setManualCodeMsg] = useState("");
   const [manualCodeOk, setManualCodeOk] = useState(true);
-  const [refreshingQuota, setRefreshingQuota] = useState(false);
-  const [quotaRefreshResult, setQuotaRefreshResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const connectionIdentity = JSON.stringify([apiBase, item.name, accounts.find(account => account.active)?.id, keys.find(key => key.active)?.id]);
+  const [quotaRefreshState, setQuotaRefreshState] = useState<{
+    identity: string; refreshing: boolean; result: { ok: boolean; text: string } | null;
+  }>({ identity: connectionIdentity, refreshing: false, result: null });
+  const refreshingQuota = quotaRefreshState.identity === connectionIdentity && quotaRefreshState.refreshing;
+  const quotaRefreshResult = quotaRefreshState.identity === connectionIdentity ? quotaRefreshState.result : null;
+  const quotaRefreshGeneration = useRef(0);
+  useEffect(() => {
+    quotaRefreshGeneration.current += 1;
+    return () => { quotaRefreshGeneration.current += 1; };
+  }, [connectionIdentity]);
 
   const onRefreshQuota = authHandlers?.onRefreshQuota;
   const refreshQuota = async () => {
     if (!onRefreshQuota || refreshingQuota) return;
-    setRefreshingQuota(true);
+    const generation = ++quotaRefreshGeneration.current;
     // Cleared on click so a previous "refreshed" cannot sit under a later failure.
-    setQuotaRefreshResult(null);
+    setQuotaRefreshState({ identity: connectionIdentity, refreshing: true, result: null });
     try {
       const ok = await onRefreshQuota(item.name);
-      setQuotaRefreshResult({ ok, text: t(ok ? "codexAuth.quotaRefreshed" : "codexAuth.quotaRefreshFailed") });
+      if (quotaRefreshGeneration.current === generation) setQuotaRefreshState({ identity: connectionIdentity, refreshing: false,
+        result: { ok, text: t(ok ? "pws.quotaCheckCompleted" : "codexAuth.quotaRefreshFailed") } });
     } catch {
-      setQuotaRefreshResult({ ok: false, text: t("codexAuth.quotaRefreshFailed") });
-    } finally {
-      setRefreshingQuota(false);
+      if (quotaRefreshGeneration.current === generation) setQuotaRefreshState({ identity: connectionIdentity, refreshing: false,
+        result: { ok: false, text: t("codexAuth.quotaRefreshFailed") } });
     }
   };
-
-  // Soft &quota=1 enrichment lands after the local account list. Reserve stacked
-  // bar height briefly so bars don't shove rows when WHAM returns.
-  //
-  // Deliberately a timed state machine, not a derived value: the reservation must EXPIRE
-  // after QUOTA_ENRICH_RESERVE_MS so a stalled enrichment cannot leave skeleton rows up
-  // forever. A plain `accounts.some(...)` boolean would drop that bound, so the rule is
-  // suppressed here rather than refactored away.
-  useEffect(() => {
-    if (accounts.length === 0) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect, react/react-compiler
-      setReserveQuotaSlots(false);
-      return;
-    }
-    const needsFill = accounts.some(a => a.quota == null && !a.quotaUnavailable);
-    if (!needsFill) {
-      setReserveQuotaSlots(false);
-      return;
-    }
-    setReserveQuotaSlots(true);
-    const timer = window.setTimeout(() => setReserveQuotaSlots(false), QUOTA_ENRICH_RESERVE_MS);
-    return () => window.clearTimeout(timer);
-  }, [accounts]);
 
   const surface = providerAuthSurface({ ...item, hasApiKey: item.hasApiKey || keys.length > 0 });
   const isOauth = surface === "oauth-accounts";
@@ -294,6 +278,9 @@ export default function ProviderAuthPanel({
   const loggedIn = accounts.length > 0 || oauth?.loggedIn === true;
   const activeReauthAccount = accounts.find(a => a.active && a.needsReauth);
   const activeNeedsReauth = Boolean(activeReauthAccount);
+  const quotaRows = isOauth ? accounts : keys;
+  const canRefreshQuota = Boolean(onRefreshQuota)
+    && !(quotaRows.length > 0 && quotaRows.every(row => row.quotaMode === "unsupported"));
 
   const submitKey = async () => {
     const key = newKey.trim();
@@ -368,7 +355,7 @@ export default function ProviderAuthPanel({
       */}
       <div className="pwi-auth-head">
         <h3 className="pwi-section-title">{isOauth ? t("pws.availableAccounts") : t("pws.apiKeys")}</h3>
-        {isOauth && loggedIn && onRefreshQuota && (
+        {((isOauth && loggedIn) || isKeyAuth) && canRefreshQuota && (
           <div className="pwi-auth-head-actions">
             {quotaRefreshResult && (
               <span role="status" className={quotaRefreshResult.ok ? "pws-status-ok" : "pws-status-warn"}>
@@ -390,8 +377,8 @@ export default function ProviderAuthPanel({
       </div>
       <div className="pwi-auth-body">
         {item.name === "xai" && (
-          <XaiResponsesOptInControl
-            initialState={item.xaiResponsesOptInState ?? false}
+          <XaiChatOptInControl
+            initialState={item.xaiResponsesOptInState ?? true}
             onUpdateProvider={onUpdateProvider}
           />
         )}
@@ -561,25 +548,10 @@ export default function ProviderAuthPanel({
                       <IconTrash style={{ width: 13, height: 13 }} aria-hidden="true" />
                     </button>
                     </div>
-                    {(account.quota != null || account.quotaUnavailable || (reserveQuotaSlots && account.quota == null)) && (
-                      <div className="pwi-auth-acct-quota">
-                        {account.quotaUnavailable ? (
-                          <p className="muted pwi-auth-acct-quota-stale">{t("pws.accountQuotaUnavailable")}</p>
-                        ) : (
-                          <QuotaBars
-                            quota={account.quota ?? null}
-                            plan={null}
-                            threshold={80}
-                            t={t}
-                            layout="stacked"
-                            pending={account.quota == null}
-                            {...(item.name === "meta-muse" && account.quota
-                              ? { observedAt: account.quota.updatedAt }
-                              : {})}
-                          />
-                        )}
-                      </div>
-                    )}
+                    <div className="pwi-auth-acct-quota">
+                      <ProviderAccountQuota quotaMode={account.quotaMode} quota={account.quota}
+                        quotaUnavailable={account.quotaUnavailable} quotaPending={account.quotaPending} />
+                    </div>
                   </li>
                   );
                 })}
@@ -594,7 +566,7 @@ export default function ProviderAuthPanel({
                   onClick={() => void authHandlers.onLogin(item.name, true)} disabled={busy || Boolean(switchingAccountId)}>
                   {t("pws.addAccount")}
                 </button>
-                {onRefreshQuota && (
+                {canRefreshQuota && (
                   <button
                     type="button"
                     className="btn btn-ghost btn-sm"
@@ -621,7 +593,8 @@ export default function ProviderAuthPanel({
             {keys.length > 0 && (
               <ul className="pwi-auth-list">
                 {keys.map(entry => (
-                  <li key={entry.id} className={`pwi-auth-row${entry.active ? " pwi-auth-row--active" : ""}`}>
+                  <li key={entry.id} className={`pwi-auth-acct${entry.active ? " pwi-auth-acct--active" : ""}`}>
+                    <div className={`pwi-auth-row${entry.active ? " pwi-auth-row--active" : ""}`}>
                     <button type="button" className="pwi-auth-row-main"
                       onClick={() => void authHandlers.onSwitchApiKey(item.name, entry)}
                       disabled={entry.active}>
@@ -642,6 +615,11 @@ export default function ProviderAuthPanel({
                       onClick={() => void authHandlers.onRemoveApiKey(item.name, entry)}>
                       <IconTrash style={{ width: 13, height: 13 }} aria-hidden="true" />
                     </button>
+                    </div>
+                    <div className="pwi-auth-acct-quota">
+                      <ProviderAccountQuota quotaMode={entry.quotaMode} quota={entry.quota}
+                        quotaUnavailable={entry.quotaUnavailable} quotaPending={entry.quotaPending} />
+                    </div>
                   </li>
                 ))}
               </ul>

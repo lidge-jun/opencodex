@@ -1,4 +1,5 @@
 import type { ResponsesTerminalStatus } from "../../bridge";
+import { ENCRYPTED_FUNCTION_OUTPUT_REJECTION, upstreamErrorMessageFromPayload } from "../../lib/errors";
 import type { RequestLogContext } from "../request-log";
 import { createSseInspector } from "../relay";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
@@ -30,23 +31,6 @@ const RETRYABLE_ZERO_OUTPUT_INCOMPLETE_REASONS = new Set([
   "upstream_stall_timeout",
 ]);
 
-// The ChatGPT backend reports an undecryptable replayed blob as a bare error SSE
-// event (not response.failed) before any output; with zero committed output that
-// event is exactly as replayable as a response.failed terminal.
-const ENCRYPTED_FUNCTION_OUTPUT_REJECTION_MESSAGE =
-  "Encrypted function output content could not be decrypted or decoded.";
-
-function errorEventMessage(payload: Record<string, unknown>): string | undefined {
-  const direct = payload.message;
-  if (typeof direct === "string") return direct;
-  const nested = payload.error;
-  if (nested !== null && typeof nested === "object" && !Array.isArray(nested)) {
-    const message = (nested as { message?: unknown }).message;
-    if (typeof message === "string") return message;
-  }
-  return undefined;
-}
-
 function retryableZeroOutputTerminal(payload: unknown): boolean {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
   const event = payload as {
@@ -55,7 +39,7 @@ function retryableZeroOutputTerminal(payload: unknown): boolean {
   };
   if (event.type === "response.failed") return true;
   if (event.type === "error") {
-    return errorEventMessage(event) === ENCRYPTED_FUNCTION_OUTPUT_REJECTION_MESSAGE;
+    return upstreamErrorMessageFromPayload(event) === ENCRYPTED_FUNCTION_OUTPUT_REJECTION;
   }
   if (event.type !== "response.incomplete") return false;
   const reason = event.response?.incomplete_details?.reason;
@@ -158,6 +142,7 @@ export type ComboStreamPreflightResult =
 export async function preflightComboStreamResponse(
   response: Response,
   logCtx: RequestLogContext,
+  retryableTerminal: (payload: unknown) => boolean = retryableZeroOutputTerminal,
 ): Promise<ComboStreamPreflightResult> {
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   if (!response.ok || !response.body || !contentType.includes("text/event-stream")) {
@@ -175,7 +160,7 @@ export async function preflightComboStreamResponse(
     onParsedPayload: payload => {
       if (comboStreamPayloadCommitsOutput(payload)) outputCommitted = true;
       if (!payload || typeof payload !== "object" || Array.isArray(payload)) return;
-      if (retryableZeroOutputTerminal(payload)) {
+      if (retryableTerminal(payload)) {
         retryableTerminalPayload = payload as Record<string, unknown>;
       }
     },

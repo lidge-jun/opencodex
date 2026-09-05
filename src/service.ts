@@ -205,9 +205,9 @@ export interface ServiceInstallState {
   bunPath?: string;
   cliPath?: string;
   /**
-   * Linux only. The stable `ocx` launcher the unit actually invokes, when one was found.
-   * Present means `bunPath`/`cliPath` are provenance for the install, NOT what systemd
-   * runs — so staleness must be judged against THIS path instead. A version-manager
+   * launchd and systemd. The stable `ocx` launcher the service definition actually invokes,
+   * when one was found. Present means `bunPath`/`cliPath` are provenance for the install,
+   * NOT what the service runs — so staleness must be judged against THIS path instead. A version-manager
    * upgrade replaces the directory those two point into while the launcher survives, and
    * checking the old pair would report a stale service that is in fact healthy.
    */
@@ -486,8 +486,21 @@ function writeServiceApiTokenFile(): string | null {
   return path;
 }
 
-export function buildPlist(proxyEnv: { name: string; value: string }[] = resolvedProxyEnv()): string {
-  const { bun, bunRuntimeSource, cli } = cliEntry();
+/**
+ * Render the launchd plist. Mirrors `buildUnit`: when `deps.launcher` names a stable `ocx`
+ * executable, the job execs that launcher instead of the package-local Bun + CLI pair, so a
+ * version-manager upgrade (mise, asdf, nvm) that replaces the package directory is picked up
+ * on the next launchd start instead of leaving the old build serving (#3464 — the macOS
+ * counterpart of #2898). Discovery belongs to `installLaunchd()`; the default here is the
+ * legacy pair so callers and tests stay hermetic.
+ */
+export function buildPlist(
+  proxyEnv: { name: string; value: string }[] = resolvedProxyEnv(),
+  deps: { launcher?: string | null; runtime?: DurableBunRuntime } = {},
+): string {
+  const runtime = deps.runtime ?? durableBunRuntime();
+  const { bun, bunRuntimeSource, cli } = cliEntry(runtime);
+  const launcher = deps.launcher ?? null;
   const log = logPath();
   const path = process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin";
   const codexHome = process.env.CODEX_HOME?.trim();
@@ -495,8 +508,16 @@ export function buildPlist(proxyEnv: { name: string; value: string }[] = resolve
   const opencodexHome = process.env.OPENCODEX_HOME?.trim();
   const envLines = [
     `    <key>OCX_SERVICE</key><string>1</string>`,
-    `    <key>${BUN_RUNTIME_SOURCE_ENV}</key><string>${bunRuntimeSource}</string>`,
-    `    <key>${BUN_RUNTIME_PATH_ENV}</key><string>${plistString(bun)}</string>`,
+    ...(launcher ? [] : [
+      `    <key>${BUN_RUNTIME_SOURCE_ENV}</key><string>${bunRuntimeSource}</string>`,
+      `    <key>${BUN_RUNTIME_PATH_ENV}</key><string>${plistString(bun)}</string>`,
+    ]),
+    // A launcher resolves the current package's bundled Bun after every upgrade. Preserve
+    // only a proof-bound shell override; baking a package-local path here would recreate
+    // the version-manager pin that launcher mode exists to remove (same rule as buildUnit).
+    launcher && runtime.source === "override"
+      ? `    <key>${runtime.overrideEnv}</key><string>${plistString(runtime.path)}</string>`
+      : null,
     `    <key>PATH</key><string>${plistString(path)}</string>`,
     codexHome ? `    <key>CODEX_HOME</key><string>${plistString(codexHome)}</string>` : null,
     codexSqliteHome ? `    <key>CODEX_SQLITE_HOME</key><string>${plistString(codexSqliteHome)}</string>` : null,
@@ -504,7 +525,9 @@ export function buildPlist(proxyEnv: { name: string; value: string }[] = resolve
     ...proxyEnv.map(({ name, value }) =>
       `    <key>${name}</key><string>${plistString(value)}</string>`),
   ].filter((line): line is string => Boolean(line)).join("\n");
-  const command = buildServiceShellCommand(bun, cli);
+  const command = launcher
+    ? buildServiceLauncherShellCommand(launcher)
+    : buildServiceShellCommand(bun, cli);
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -567,6 +590,23 @@ function buildServiceShellCommand(bun: string, cli: string, port = resolveServic
 function buildServiceLauncherShellCommand(launcher: string, port = resolveServiceListenPort()): string {
   const tokenFile = serviceApiTokenFilePath();
   return `if [ -f ${shellQuote(tokenFile)} ]; then OPENCODEX_API_AUTH_TOKEN="$(cat ${shellQuote(tokenFile)})"; export OPENCODEX_API_AUTH_TOKEN; fi; exec ${shellQuote(launcher)} start --port ${port}`;
+}
+
+/**
+ * The exec line the installed launchd plist is expected to carry, derived from the recorded
+ * install state rather than rediscovered: a launcher install runs the launcher, a legacy or
+ * stateless install runs the Bun + CLI pair. `start` and `status` compare the live job
+ * against this, so both must follow the launcher or a healthy launcher-backed job reads as
+ * "an OLDER plist" (#3464). PATH is deliberately NOT re-walked here.
+ */
+export function expectedLaunchdCommand(
+  port: number,
+  deps: { state?: ServiceInstallState | null; entry?: { bun: string; cli: string } } = {},
+): string {
+  const state = deps.state === undefined ? readServiceInstallState() : deps.state;
+  if (state?.launcherPath) return buildServiceLauncherShellCommand(state.launcherPath, port);
+  const entry = deps.entry ?? cliEntry();
+  return buildServiceShellCommand(entry.bun, entry.cli, port);
 }
 
 /**
@@ -1886,7 +1926,7 @@ export function buildWindowsTaskXml(
     <Enabled>true</Enabled>
     <Hidden>false</Hidden>
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
-    <Priority>7</Priority>
+    <Priority>4</Priority>
     <RestartOnFailure>
       <Interval>PT1M</Interval>
       <Count>3</Count>
@@ -2251,7 +2291,10 @@ function installLaunchd(): void {
   // Capture this BEFORE writing: the write below makes the plist exist unconditionally,
   // so a post-write existsSync would call every fresh install an "installed" service.
   const wasInstalled = existsSync(p);
-  writeServiceDefinitionFile(p, buildPlist(), "utf8");
+  // Resolve the launcher ONCE and hand the same value to the plist and to install state,
+  // so the staleness diagnostic judges exactly what launchd runs.
+  const launcher = stableLauncherEntry();
+  writeServiceDefinitionFile(p, buildPlist(resolvedProxyEnv(), { launcher }), "utf8");
   // Best-effort: an absent job is fine here, and a failed unload is caught by the
   // load verification below with a better message than a raw unload error.
   runLaunchctl(["unload", p]);
@@ -2268,7 +2311,7 @@ function installLaunchd(): void {
       + `then re-run '${wasInstalled ? "ocx service repair" : "ocx service install"}'.`,
     );
   }
-  writeServiceInstallState();
+  writeServiceInstallState("scheduler", launcher);
 }
 /**
  * Deps are named for the layer they replace, not for the process API: `launchctl`
@@ -2291,9 +2334,8 @@ export function startLaunchd(deps: {
   // already be bootstrapped from THIS plist, which is a no-op rather than an error.
   // `install` can assume a stale job (it just rewrote the plist); `start` cannot, and
   // throwing here would break `ocx service start` on every healthy service.
-  const entry = cliEntry();
   const live = (deps.matches ?? launchdJobMatchesPlist)(
-    buildServiceShellCommand(entry.bun, entry.cli),
+    expectedLaunchdCommand(installedServiceListenPort()),
   );
   if (live.loaded && live.matchesPlist) {
     console.log("ℹ️  service was already loaded from the current plist; nothing to do.");
@@ -2930,6 +2972,10 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
     const identityUpgradeNeeded = registrationHealthy
       && preferredSid !== undefined
       && !windowsTaskHasSessionRecoveryTriggers(triggers, preferredSid);
+    // Omitted Priority also defaults to 7; background priority can starve health probes under CPU load.
+    const priorityUpgradeNeeded = registrationHealthy && taskXmlOptionalValueEquals(
+      taskXmlSection(taskXmlWithoutCommentsAndCdata(registeredXml), "Settings"), "Priority", "7",
+    );
     const refreshableLegacy = windowsTaskRegistrationRefreshableLegacy(
       registeredXml,
       deps.schedulerWscript,
@@ -2956,7 +3002,7 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
     // Re-register only when the registered XML is actually stale, so the ordinary repair
     // stays free of `schtasks /create` and its UAC prompt.
     let startExpectedXml = registeredXml;
-    if (!registrationHealthy || identityUpgradeNeeded) {
+    if (!registrationHealthy || identityUpgradeNeeded || priorityUpgradeNeeded) {
       // The task was stopped above, so a failed replacement must not exit here: `/create /f`
       // can be rejected, elevation can be cancelled, and staging or verification can fail.
       // Any of those would leave a previously runnable proxy stopped and the user worse off
@@ -4234,14 +4280,11 @@ export async function serviceStatusReport(
   // Linux/Windows and make the stale-plist case untestable there.
   const stalePlist = deps.matchesPlist?.() ?? (process.platform === "darwin"
     ? (() => {
-        const entry = cliEntry();
         // Pass the INSTALLED port explicitly: the default third argument is
         // resolveServiceListenPort(), which reads OCX_BAKE_PORT/config.port, so after
         // a config edit the expected string would never match and every run would
         // print a false "OLDER plist".
-        return launchdJobMatchesPlist(
-          buildServiceShellCommand(entry.bun, entry.cli, installedServiceListenPort()),
-        );
+        return launchdJobMatchesPlist(expectedLaunchdCommand(installedServiceListenPort()));
       })()
     : null);
   const staleLine = stalePlist && stalePlist.loaded && !stalePlist.matchesPlist

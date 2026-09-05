@@ -642,6 +642,19 @@ function orphanToolResultText(msg: OcxToolResultMessage): string {
   return `[tool_result without adjacent tool_use: ${label}]\n${content}`;
 }
 
+function orphanToolResultContent(msg: OcxToolResultMessage): string | unknown[] {
+  if (typeof msg.content === "string" || !msg.content.some(p => p.type === "image")) {
+    return orphanToolResultText(msg);
+  }
+  const label = msg.toolName ? `${msg.toolName} (${msg.toolCallId})` : msg.toolCallId;
+  return [
+    { type: "text", text: `[tool_result without adjacent tool_use: ${label}]` },
+    ...msg.content
+      .map(toAnthropicContentPart)
+      .filter(p => !((p as { type?: string }).type === "text" && !(p as { text?: string }).text)),
+  ];
+}
+
 /**
  * AgentRouter answers 400 `content-blocked` when the first user message is not in English
  * (#2074), while the same request in English returns 200. The gateway is inspecting the opening
@@ -737,7 +750,7 @@ function messagesToAnthropicFormat(
         if (toolUseIds.length > 0) {
           const requiredIds = new Set(toolUseIds);
           const resultBlocks: Record<string, unknown>[] = [];
-          const orphanBlocks: Record<string, unknown>[] = [];
+          const orphanBlocks: unknown[] = [];
           const seen = new Set<string>();
           let j = i + 1;
           while (j < parsed.context.messages.length && parsed.context.messages[j].role === "toolResult") {
@@ -750,7 +763,8 @@ function messagesToAnthropicFormat(
               resultBlocks.push(toAnthropicToolResult(tr, wireResultId));
               seen.add(wireResultId);
             } else {
-              orphanBlocks.push({ type: "text", text: orphanToolResultText(tr) });
+              const orphan = orphanToolResultContent(tr);
+              orphanBlocks.push(...(typeof orphan === "string" ? [{ type: "text", text: orphan }] : orphan));
             }
             j++;
           }
@@ -771,8 +785,8 @@ function messagesToAnthropicFormat(
       }
       case "toolResult": {
         // A standalone Anthropic tool_result is invalid unless it immediately follows an
-        // assistant tool_use. Preserve the information as text instead of sending a 400-prone block.
-        messages.push({ role: "user", content: orphanToolResultText(msg as OcxToolResultMessage) });
+        // assistant tool_use. Preserve text and images as user content without fabricating a pairing.
+        messages.push({ role: "user", content: orphanToolResultContent(msg as OcxToolResultMessage) });
         break;
       }
     }

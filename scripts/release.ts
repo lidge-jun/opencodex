@@ -4,6 +4,7 @@
  *
  * Usage:
  *   bun scripts/release.ts <version> [--tag latest|preview] [--publish]
+ *   bun scripts/release.ts --bump patch|minor|major [--tag latest|preview] [--publish]
  *       Preflight (clean tree + dependency audit + typecheck + tests + privacy scan) → bump package.json → commit → push →
  *       wait for Cross-platform CI → dispatch the Release workflow → watch it.
  *       The version bump commit/push is real; the Release workflow publish step is dry-run by default.
@@ -13,6 +14,7 @@
  *
  * Example:  bun scripts/release.ts 0.1.0            # commit/push bump, workflow dry-run publish
  *           bun scripts/release.ts 0.1.0 --publish  # actually publish 0.1.0
+ *           bun scripts/release.ts --bump minor     # resolve the next version from tags + npm channels
  *
  * Requires: gh CLI (authed). Publishing is tokenless via Trusted Publishing (OIDC) — no NPM_TOKEN.
  *
@@ -24,6 +26,13 @@
  * behaves exactly as before.
  */
 import { commandInvocation } from "../src/lib/win-exec";
+import {
+  compareVersions as compareReleaseVersions,
+  nextPreviewRelease,
+  nextStableRelease,
+  parseVersion,
+  type ReleaseBumpKind,
+} from "./version-line";
 
 const args = process.argv.slice(2);
 interface GhRun {
@@ -298,61 +307,27 @@ async function githubReleaseExists(tagName: string): Promise<boolean> {
   process.exit(1);
 }
 
-/** Order two semver strings per the semver.org rules (numeric identifiers numerically,
- * numeric < alphanumeric prerelease, prerelease < release). Returns negative/0/positive. */
-export function compareReleaseVersions(left: string, right: string): number {
-  // SemVer 2.0.0: build metadata (+...) is valid and ignored for precedence, but
-  // anything else unparseable must fail CLOSED. Number() on a garbage core used to
-  // yield NaN, and NaN comparisons made the forward guard pass any candidate.
-  const SEMVER = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
-  const parse = (value: string) => {
-    const match = SEMVER.exec(value.trim());
-    if (!match) throw new Error(`unparseable release version: ${JSON.stringify(value)}`);
-    const nums = [Number(match[1]), Number(match[2]), Number(match[3])];
-    return { nums, pre: match[4] ? match[4].split(".") : null };
-  };
-  const a = parse(left);
-  const b = parse(right);
-  for (let i = 0; i < 3; i += 1) {
-    const delta = (a.nums[i] ?? 0) - (b.nums[i] ?? 0);
-    if (delta !== 0) return delta;
-  }
-  if (a.pre === null && b.pre === null) return 0;
-  if (a.pre === null) return 1;
-  if (b.pre === null) return -1;
-  const len = Math.max(a.pre.length, b.pre.length);
-  for (let i = 0; i < len; i += 1) {
-    const x = a.pre[i];
-    const y = b.pre[i];
-    if (x === undefined) return -1;
-    if (y === undefined) return 1;
-    const xn = /^\d+$/.test(x) ? Number(x) : null;
-    const yn = /^\d+$/.test(y) ? Number(y) : null;
-    if (xn !== null && yn !== null && xn !== yn) return xn - yn;
-    if (xn !== null && yn === null) return -1;
-    if (xn === null && yn !== null) return 1;
-    if (xn === null && yn === null && x !== y) return x < y ? -1 : 1;
-  }
-  return 0;
-}
+export { compareVersions as compareReleaseVersions } from "./version-line";
 
-/** The proposed version must move its npm channel FORWARD: an unused-but-obsolete
- * target (e.g. cut from a dev branch whose version line trails main) would otherwise
- * pass the unused-version check and publish a regression over the channel tip. */
-async function assertChannelVersionMovesForward(packageName: string, version: string, channel: string): Promise<void> {
+async function readNpmDistTags(packageName: string): Promise<Record<string, string>> {
   const result = await runQuiet(["npm", "view", packageName, "dist-tags", "--json"]);
   if (result.exitCode !== 0) {
     console.error(`✗ failed to read npm dist-tags for ${packageName}`);
     if (result.stderr) console.error(result.stderr);
     process.exit(1);
   }
-  let distTags: Record<string, string>;
   try {
-    distTags = JSON.parse(result.stdout) as Record<string, string>;
+    return JSON.parse(result.stdout) as Record<string, string>;
   } catch {
     console.error(`✗ npm dist-tags response for ${packageName} was not JSON`);
     process.exit(1);
   }
+}
+
+/** The proposed version must move its npm channel FORWARD: an unused-but-obsolete
+ * target (e.g. cut from a dev branch whose version line trails main) would otherwise
+ * pass the unused-version check and publish a regression over the channel tip. */
+function assertChannelVersionMovesForward(version: string, channel: string, distTags: Record<string, string>): void {
   const current = distTags[channel];
   if (!current) return; // channel not published yet — nothing to regress
   let forward: number;
@@ -484,11 +459,38 @@ if (args[0] === "watch") {
   process.exit(0);
 }
 
-const version = args[0];
-if (!version || !/^\d+\.\d+\.\d+(-[\w.]+)?$/.test(version)) {
-  console.error("Usage: bun scripts/release.ts <version> [--tag latest|preview] [--publish]\n       bun scripts/release.ts watch");
+const usage = "Usage: bun scripts/release.ts <version> [--tag latest|preview] [--publish]\n"
+  + "       bun scripts/release.ts --bump patch|minor|major [--tag latest|preview] [--publish]\n"
+  + "       bun scripts/release.ts watch";
+const explicitVersion = args[0] && !args[0].startsWith("--") ? args[0] : null;
+const bumpIndexes = args.flatMap((arg, index) => arg === "--bump" ? [index] : []);
+if (bumpIndexes.length > 1) {
+  console.error(`--bump may be supplied only once.\n${usage}`);
   process.exit(1);
 }
+const bumpIndex = bumpIndexes[0];
+const rawBumpKind = bumpIndex === undefined ? null : args[bumpIndex + 1] ?? null;
+if (rawBumpKind !== null && !["patch", "minor", "major"].includes(rawBumpKind)) {
+  console.error(`--bump must be one of patch|minor|major (got ${JSON.stringify(rawBumpKind)}).`);
+  process.exit(1);
+}
+if (bumpIndex !== undefined && rawBumpKind === null) {
+  console.error("--bump requires one of patch|minor|major.");
+  process.exit(1);
+}
+if (explicitVersion !== null && bumpIndex !== undefined) {
+  console.error(`An explicit version and --bump are mutually exclusive; supply exactly one.\n${usage}`);
+  process.exit(1);
+}
+if (explicitVersion === null && bumpIndex === undefined) {
+  console.error(`Exactly one of an explicit version or --bump is required.\n${usage}`);
+  process.exit(1);
+}
+if (explicitVersion !== null && !/^\d+\.\d+\.\d+(-[\w.]+)?$/.test(explicitVersion)) {
+  console.error(usage);
+  process.exit(1);
+}
+const bumpKind = rawBumpKind as ReleaseBumpKind | null;
 const dryRun = !args.includes("--publish");
 
 // 1. Preflight — must be on main or preview, and local verification must pass.
@@ -500,6 +502,47 @@ if (tag !== expectedTag) {
   console.error(`Release tag mismatch: ${branch} releases must use npm dist-tag '${expectedTag}' (got '${tag}').`);
   process.exit(1);
 }
+if (!allowedBranches.includes(branch)) { console.error(`✗ must be on ${allowedBranches.join(" or ")} (currently ${branch}).`); process.exit(1); }
+if ((await capture(["git", "status", "--porcelain"])).trim()) { console.error("✗ working tree not clean — commit or stash first."); process.exit(1); }
+const packageName = await readPackageName();
+const distTags = await readNpmDistTags(packageName);
+let version = explicitVersion;
+if (version === null) {
+  // Origin owns the release line; a local checkout may have stale or missing tags.
+  // capture fails closed before any version mutation if origin cannot be read.
+  const tags = (await capture(["git", "ls-remote", "--tags", "--refs", "origin", "refs/tags/v*"]))
+    .split(/\r?\n/)
+    .map(line => line.trim().split(/\s+/)[1] ?? "")
+    .filter(ref => ref.startsWith("refs/tags/v"))
+    .map(ref => ref.slice("refs/tags/".length));
+  const stableTags: string[] = [];
+  const previewTags: string[] = [];
+  for (const candidate of tags) {
+    const parsed = parseVersion(candidate);
+    if (!parsed) continue;
+    (parsed.prerelease === null ? stableTags : previewTags).push(candidate);
+  }
+  try {
+    version = tag === "preview"
+      ? nextPreviewRelease({
+          kind: bumpKind!,
+          stableTip: distTags.latest ?? null,
+          stableTags,
+          previewTip: distTags.preview ?? null,
+          previewTags,
+          stamp: new Date().toISOString().slice(0, 10).replaceAll("-", ""),
+        })
+      : nextStableRelease({
+          kind: bumpKind!,
+          stableTip: distTags.latest ?? null,
+          stableTags,
+          previewTags,
+        });
+  } catch (error) {
+    console.error(`✗ ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
+}
 if (branch === "preview" && !version.includes("-preview.")) {
   console.error(`Preview releases must use a preview prerelease version (got ${version}).`);
   process.exit(1);
@@ -508,12 +551,9 @@ if (branch === "main" && version.includes("-")) {
   console.error(`Main releases must use a stable semver version (got ${version}).`);
   process.exit(1);
 }
-if (!allowedBranches.includes(branch)) { console.error(`✗ must be on ${allowedBranches.join(" or ")} (currently ${branch}).`); process.exit(1); }
-if ((await capture(["git", "status", "--porcelain"])).trim()) { console.error("✗ working tree not clean — commit or stash first."); process.exit(1); }
-const packageName = await readPackageName();
 console.log(`→ release metadata preflight (${packageName}@${version})`);
 await assertUnusedReleaseVersion(packageName, version);
-await assertChannelVersionMovesForward(packageName, version, tag);
+assertChannelVersionMovesForward(version, tag, distTags);
 console.log("→ dependency audit");
 await runLoud(["bun", "run", "audit:high"]);
 console.log("→ typecheck");
@@ -536,13 +576,13 @@ console.log("→ test suite");
 // without executing them; a `bash` step would miss that shim, escape into the
 // real suite, and fail the helper tests with exit 127.
 const ISOLATED_TEST_FILES = [
-  "./tests/api-storage-policy-already-running.test.ts",
-  "./tests/api-storage-policy-mutation-busy.test.ts",
-  "./tests/api-storage-policy-put-race.test.ts",
-  "./tests/api-storage-policy-run.test.ts",
-  "./tests/api-storage-policy.test.ts",
-  "./tests/api-storage.test.ts",
-  "./tests/api-usage.test.ts",
+  "./tests/storage/api-storage-policy-already-running.test.ts",
+  "./tests/storage/api-storage-policy-mutation-busy.test.ts",
+  "./tests/storage/api-storage-policy-put-race.test.ts",
+  "./tests/storage/api-storage-policy-run.test.ts",
+  "./tests/storage/api-storage-policy.test.ts",
+  "./tests/storage/api-storage.test.ts",
+  "./tests/server/api-usage.test.ts",
 ];
 await runLoud([
   "bun", "test", "--isolate", "tests",

@@ -12,7 +12,6 @@ import {
 } from "./ws-bridge";
 import type { Server, ServerWebSocket } from "bun";
 import {
-  DEFAULT_SUBAGENT_MODELS,
   applyProxyEnv,
   armClaudeCodeBaseline,
   loadConfig,
@@ -22,6 +21,8 @@ import {
 } from "../config";
 import { grokDefaultReasoningEffort } from "../grok/effort";
 import { flushConfigDirHardening } from "../config/paths";
+import { migrateStartupSubagentModels } from "./subagent-models-startup";
+import { migrateStartupXaiResponses } from "./xai-responses-startup";
 import { reconcileOAuthProviders } from "../oauth";
 import { withCatalogWriteSerialization } from "../codex/catalog-write-serialization";
 import { invalidateCodexModelsCacheWithPermit } from "../codex/catalog/sync";
@@ -33,8 +34,12 @@ import {
   type NativeCodexOwnership,
   type OwnershipInspection,
 } from "../integrations/native/ownership-preflight";
-import { createResetCreditWhamClient, registerCodexCooldownRecoveryProbeWorker } from "../codex/auth-api";
+import {
+  createResetCreditWhamClient,
+  registerCodexCooldownRecoveryProbeWorker,
+} from "../codex/auth-api";
 import { activateResetCreditAutoRedeem } from "../codex/reset-credit-auto-redeem";
+import { registerCodexQuotaAutoRefreshWorker } from "../codex/quota-auto-refresh";
 import {
   reconcileLiveStateStores,
   setLiveStateStoreConfig,
@@ -230,9 +235,7 @@ import { recordCursorSeen } from "../integrations/cursor-seen";
 import { detectCursorInstalls } from "../integrations/cursor-detect";
 import { loadCursorEffortTable } from "../integrations/cursor-effort-table";
 import { expandCursorEffortRow, knownEffortRowIds } from "./effort-row";
-import { expandFastRow, fastRowEligible } from "./fast-row";
-// Direct import: the catalog facade does not re-export this table.
-import { UPSTREAM_NATIVE_ENTRIES } from "../codex/catalog/metadata";
+import { catalogFastRowEligible, expandFastRow } from "./fast-row";
 
 export const MAX_WS_FRAME_BYTES = 50 * 1024 * 1024;
 const WEBSOCKET_IDLE_TIMEOUT_SECONDS = 0;
@@ -512,7 +515,7 @@ function attachLiveSidebandUpstream(
 
 // Adapter resolution + wire-protocol override extracted to ./server/adapter-resolve.
 
-// Source invariant for tests/passthrough-abort.test.ts after the pure module split:
+// Source invariant for tests/responses/passthrough-abort.test.ts after the pure module split:
 // if (isEventStream && upstreamResponse.body) {
 // const repairConfig = route.provider.responsesItemIdRepair;
 // const needsClientRewrite = imageGenCallAliases.size > 0
@@ -586,6 +589,8 @@ export interface StartServerDeps {
   readinessGate?: ReadinessGate;
   /** Test-only package-tree observation; production captures package.json identity at boot. */
   packageTreeIntegrity?: PackageTreeIntegrityGuard;
+  /** Test-only seam for observing quota-worker registration ownership. */
+  registerCodexQuotaAutoRefreshWorker?: typeof registerCodexQuotaAutoRefreshWorker;
 }
 
 function inspectStartupOwnership(
@@ -648,7 +653,13 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   // Captured before loadConfig() starts the optional ACL flight so stop() drains the same dir
   // even if OPENCODEX_HOME changes underneath a long-lived process.
   const startupConfigDir = getConfigDir();
-  const config = runModelRenameStartupMigration(runAlibabaRegionStartupMigration(runOpenAiTierStartupMigration(loadConfig())));
+  const startupConfig = migrateStartupSubagentModels(
+    runModelRenameStartupMigration(runAlibabaRegionStartupMigration(runOpenAiTierStartupMigration(loadConfig()))),
+  );
+  // Reconcile disk-backed presets first: it replaces provider rows and must not undo
+  // an in-memory wire upgrade when that upgrade's persistence is temporarily unavailable.
+  reconcileOAuthProviders(startupConfig);
+  const config = migrateStartupXaiResponses(startupConfig);
   warnAgentTaskRecoveryStartup(config);
   setLiveStateStoreConfig(config);
   applyProxyEnv(config);
@@ -658,16 +669,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   let userCostOverlayReconciler: { stop(): void } | null = null;
   // Arm synchronously before listen. A pending journal therefore makes __main__ unusable
   // before any request can resolve its physical credential, while health/management/Pool stay live.
-  // Refresh OAuth provider presets (models/noReasoningModels) from the registry so a proxy update
-  // adding/dropping models reaches existing configs on start — not just fresh installs.
-  reconcileOAuthProviders(config);
   reconcileLiveStateStores();
-  // Seed default featured subagent models on first run only (UNSET → defaults). A user-set list,
-  // even [], is left alone so GUI removals persist.
-  if (config.subagentModels === undefined) {
-    config.subagentModels = [...DEFAULT_SUBAGENT_MODELS];
-    saveConfig(config);
-  }
   // authMode migration (devlog 260726_claude_auth_auto/015): before "auto" existed,
   // choosing Subscription DELETED the key, so a pre-upgrade block with no authMode is
   // indistinguishable from "never chose". Pin those to subscription once so an upgrade
@@ -1027,8 +1029,11 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     return "public";
   }
   let backgroundLifecycle: ReturnType<typeof acquireServerBackgroundLifecycle> | null = null;
+  let unregisterQuotaAutoRefresh: (() => void) | null = null;
   try {
     backgroundLifecycle = acquireServerBackgroundLifecycle(applyPolicy);
+    unregisterQuotaAutoRefresh = (deps.registerCodexQuotaAutoRefreshWorker
+      ?? registerCodexQuotaAutoRefreshWorker)(config);
     // External `ocx config set` / direct config.json edits run in other
     // processes; poll the file so Logs/Usage display prices follow them live.
     // Started inside the guarded startup transaction so the catch below can
@@ -1280,7 +1285,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           // Built directly rather than through formatErrorResponse: that helper derives
           // `code` from the status and message via classifyError, and these two need stable,
           // specific codes. `catalog_not_found` in particular is what lets a caller — and
-          // tests/api-key-attribution.test.ts — tell "this route exists and has no catalog"
+          // tests/server/api-key-attribution.test.ts — tell "this route exists and has no catalog"
           // apart from "this route is gone", which is the difference between admission proof
           // and a vacuous pass.
           return withCors(
@@ -1452,15 +1457,9 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
          * the raw OpenAI mapper further down does too; defining it there would leave this
          * use in its temporal dead zone.
          */
-        const nativeFastEligible = (metadataId: string): boolean => {
-          if (config.fastRows !== true) return false;
-          const upstream = UPSTREAM_NATIVE_ENTRIES.get(metadataId);
-          const speedTiers = upstream?.additional_speed_tiers;
-          if (!Array.isArray(speedTiers) || !speedTiers.includes("fast")) return false;
-          const nativeProvider = config.providers[OPENAI_CODEX_PROVIDER_ID];
-          return nativeProvider !== undefined
-            && fastRowEligible(nativeProvider, metadataId, OPENAI_CODEX_PROVIDER_ID);
-        };
+        const nativeFastEligible = (metadataId: string): boolean =>
+          catalogFastRowEligible(config, { provider: OPENAI_CODEX_PROVIDER_ID, id: metadataId, native: true });
+
         /**
          * Whether a routed catalog row may carry a Fast sibling.
          *
@@ -1474,12 +1473,9 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
          * both; defining it near the raw OpenAI mapper below would leave that use in its
          * temporal dead zone.
          */
-        const catalogRowFastEligible = (m: { provider: string; id: string; supportsServiceTier?: boolean }): boolean => {
-          if (config.fastRows !== true) return false;
-          if (m.supportsServiceTier !== undefined) return m.supportsServiceTier === true;
-          const rowProvider = config.providers[m.provider];
-          return rowProvider !== undefined && fastRowEligible(rowProvider, m.id, m.provider);
-        };
+        const catalogRowFastEligible = (m: { provider: string; id: string; supportsServiceTier?: boolean }): boolean =>
+          catalogFastRowEligible(config, m);
+
         if (wantsAnthropicList && !url.searchParams.has("client_version")) {
           if (config.claudeCode?.enabled === false) return jsonResponse({ data: [] }, 200, req, policy);
           // Build Desktop 3P registry so inbound alias resolution works for subsequent requests.
@@ -1509,9 +1505,8 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             activeDesktop3pAlias,
             nativeContextLimits(config),
             config.fastMode,
-            // Presence is the gate: undefined when the flag is off, so a default install
-            // publishes no Fast rows here.
-            config.fastRows === true
+            // Explicit opt-out omits the Fast predicate.
+            config.fastRows !== false
               ? (model: { provider: string; id: string; supportsServiceTier?: boolean }) =>
                 model.provider === "native"
                   ? nativeFastEligible(model.id)
@@ -1646,8 +1641,8 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         // The projection is opt-in. Keep the default path free of Cursor install detection,
         // and resolve the bundle table once for the whole list rather than once per row.
         const effortRowsEnabled = config.cursorEffortRows === true;
-        // Same opt-in discipline: with the flag off, no policy resolution and no extra rows.
-        const fastRowsEnabled = config.fastRows === true;
+        // Explicit opt-out skips policy resolution and additional rows.
+        const fastRowsEnabled = config.fastRows !== false;
         // One inventory serves both grammars; building it twice would double the work on a
         // hot path for no benefit.
         const effortRowKnownIds = effortRowsEnabled || fastRowsEnabled
@@ -1838,7 +1833,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           ...admissionFields(admission),
         };
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
-          const response = await handleSearch(req, config, logCtx, turnAdmissionLease);
+          const response = await handleSearch(req, config, logCtx, turnAdmissionLease, admission);
           addFinalRequestLog(requestId, start, logCtx, response.status,
             response.status === 499 ? { closeReason: "client_cancel" } : undefined);
           return withCors(response, req, policy);
@@ -1940,7 +1935,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         // pre-translation stream + native passthrough callbacks) — do not re-wrap the
         // translated Anthropic stream here.
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => withCors(
-          await handleClaudeMessages(req, config, logCtx, { requestId, start, turnAdmissionLease }, policy),
+          await handleClaudeMessages(req, config, logCtx, { requestId, start, turnAdmissionLease, admission }, policy),
           req,
           policy,
         ));
@@ -2408,6 +2403,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
       }
     }
   } catch (error) {
+    unregisterQuotaAutoRefresh?.();
     userCostOverlayReconciler?.stop();
     backgroundLifecycle?.releaseAfterFailedStart();
     void nativeMainLifecycle.release();
@@ -2433,7 +2429,11 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             ? [() => managementIngressRef.stop(closeActiveConnections)]
             : []),
           async () => {
-            userCostOverlayReconciler?.stop();
+            try {
+              userCostOverlayReconciler?.stop();
+            } finally {
+              unregisterQuotaAutoRefresh?.();
+            }
           },
         ],
         async () => {

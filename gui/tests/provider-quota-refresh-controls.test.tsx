@@ -85,10 +85,10 @@ test("the usage tab reports the real outcome, not the click", async () => {
   // Still in flight: the copy says so and the control cannot be double-fired.
   expect(host.textContent).toContain("Refreshing...");
   expect(findButton("Refreshing...")?.disabled).toBe(true);
-  expect(host.textContent).not.toContain("Quotas refreshed");
+  expect(host.textContent).not.toContain("Quota check completed");
 
   await act(async () => { settle(true); await Promise.resolve(); });
-  expect(host.textContent).toContain("Quotas refreshed");
+  expect(host.textContent).toContain("Quota check completed");
 });
 
 test("a failed read is reported as a failure", async () => {
@@ -99,13 +99,13 @@ test("a failed read is reported as a failure", async () => {
   await act(async () => { settle(false); await Promise.resolve(); });
 
   expect(host.textContent).toContain("Failed to refresh quotas");
-  expect(host.textContent).not.toContain("Quotas refreshed");
+  expect(host.textContent).not.toContain("Quota check completed");
 });
 
 test("the usage control is offered even when there is no quota to show", async () => {
   // "Nothing here" is exactly when an operator wants to retry.
   await render(<ProviderUsage item={usageItem} onRefreshQuota={async () => true} />);
-  expect(host.textContent).toContain("Rate limits");
+  expect(host.textContent).toContain("Current account usage");
   expect(findButton("Refresh quotas")).not.toBeNull();
 });
 
@@ -161,7 +161,7 @@ test("the accounts surface offers the same control for a non-Codex provider", as
   expect(findButton("Refreshing...")?.disabled).toBe(true);
 
   await act(async () => { settle(true); await Promise.resolve(); });
-  expect(host.textContent).toContain("Quotas refreshed");
+  expect(host.textContent).toContain("Quota check completed");
 });
 
 test("the accounts surface omits the control when the page cannot force a read", async () => {
@@ -169,4 +169,52 @@ test("the accounts surface omits the control when the page cannot force a read",
     <ProviderAuthPanel item={oauthItem} apiBase="" accounts={[account]} authHandlers={authHandlers()} />,
   );
   expect(findButton("Refresh quotas")).toBeNull();
+});
+
+test("API-key rows use independent shared credit readings and the same awaited refresh control", async () => {
+  const { handler, settle } = deferredHandler();
+  const credits = (remaining: number) => ({ updatedAt: Date.now() - 60_000,
+    creditsUsd: { used: 50 - remaining, limit: 50, remaining, percent: (50 - remaining) * 2 },
+  });
+  await render(<ProviderAuthPanel item={{ ...oauthItem, name: "key-provider", authMode: "key", hasApiKey: true }} apiBase=""
+    keys={[
+      { id: "first", masked: "first-masked", active: true, quotaMode: "probe", quota: credits(37.5) },
+      { id: "second", masked: "second-masked", active: false, quotaMode: "probe", quota: credits(12.5), quotaUnavailable: true },
+    ]} authHandlers={authHandlers({ onRefreshQuota: handler })} />);
+  const rows = Array.from(host.querySelectorAll(".pwi-auth-acct"));
+  expect(rows).toHaveLength(2);
+  expect(rows[0].textContent).toContain("US$37.50");
+  expect(rows[0].textContent).not.toContain("US$12.50");
+  expect(rows[1].textContent).toContain("US$12.50");
+  expect(rows[1].querySelector('[data-quota-state="unavailable"]')).not.toBeNull();
+  await act(async () => { findButton("Refresh quotas")!.click(); });
+  expect(findButton("Refreshing...")?.disabled).toBe(true);
+  expect(host.textContent).not.toContain("Quota check completed");
+  await act(async () => { settle(false); });
+  expect(host.textContent).toContain("Failed to refresh quotas");
+});
+
+test("unsupported credentials omit refresh; passive absence is unobserved and only explicit probes are pending", async () => {
+  await render(<ProviderAuthPanel item={{ ...oauthItem, authMode: "key", hasApiKey: true }} apiBase=""
+    keys={[{ id: "unsupported", masked: "masked", active: true, quotaMode: "unsupported" }]}
+    authHandlers={authHandlers({ onRefreshQuota: async () => true })} />);
+  expect(findButton("Refresh quotas")).toBeNull();
+  expect(host.querySelector('[data-quota-state="unsupported"]')).not.toBeNull();
+  await render(<ProviderAuthPanel item={oauthItem} apiBase="" accounts={[
+    { id: "passive", active: true, quotaMode: "passive" },
+    { id: "probe", active: false, quotaMode: "probe", quotaPending: true },
+  ]} authHandlers={authHandlers()} />);
+  expect(host.querySelectorAll('[data-quota-state="unobserved"]')).toHaveLength(1);
+  expect(host.querySelectorAll('[data-quota-state="pending"]')).toHaveLength(1);
+});
+
+test("changing active account discards the previous refresh feedback", async () => {
+  const { handler, settle } = deferredHandler();
+  const handlers = authHandlers({ onRefreshQuota: handler });
+  await render(<ProviderAuthPanel item={oauthItem} apiBase="" accounts={[{ id: "first", active: true, quotaMode: "passive" }]} authHandlers={handlers} />);
+  await act(async () => { findButton("Refresh quotas")!.click(); });
+  await render(<ProviderAuthPanel item={oauthItem} apiBase="" accounts={[{ id: "second", active: true, quotaMode: "passive" }]} authHandlers={handlers} />);
+  await act(async () => { settle(true); });
+  expect(host.textContent).not.toContain("Quota check completed");
+  expect(findButton("Refresh quotas")?.disabled).toBe(false);
 });

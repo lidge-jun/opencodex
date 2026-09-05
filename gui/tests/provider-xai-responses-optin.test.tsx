@@ -102,29 +102,67 @@ test("OAuth xAI renders one mixed switch and applies the PATCH echoed effective 
   const patches: Array<{ name: string; patch: ProviderUpdatePatch }> = [];
   await mount(xaiItem("oauth", "mixed"), async (name, patch) => {
     patches.push({ name, patch });
-    return { ok: true, xaiResponsesOptInState: true };
+    return { ok: true, xaiResponsesOptInState: false };
   });
 
   expect(container.textContent).toContain("Available accounts");
-  expect(container.textContent).toContain("Use Responses API for Grok 4.5 and 4.6");
-  expect(container.textContent).toContain("Partially enabled.");
+  expect(container.textContent).toContain("Use Chat Completions for Grok 4.5 and 4.6");
+  expect(container.textContent).toContain("Only one model uses Chat.");
   expect(optInSwitch().getAttribute("aria-pressed")).toBe("mixed");
   expect(optInSwitch().classList.contains("mixed")).toBe(true);
 
   await act(async () => { optInSwitch().click(); });
 
-  expect(patches).toEqual([{ name: "xai", patch: { xaiResponsesOptIn: true } }]);
+  expect(patches).toEqual([{ name: "xai", patch: { xaiResponsesOptIn: false } }]);
   expect(optInSwitch().getAttribute("aria-pressed")).toBe("true");
   expect(optInSwitch().classList.contains("mixed")).toBe(false);
 });
 
-test("API-key xAI renders the same single Responses opt-in switch", async () => {
+test("API-key xAI shows the effective Chat default as checked", async () => {
   await mount(xaiItem("key", false), async () => ({
     ok: true,
     xaiResponsesOptInState: true,
   }));
 
   expect(container.textContent).toContain("API Keys");
-  expect(container.textContent).toContain("Use Responses API for Grok 4.5 and 4.6");
+  expect(container.textContent).toContain("Use Chat Completions for Grok 4.5 and 4.6");
+  expect(optInSwitch().getAttribute("aria-pressed")).toBe("true");
+});
+
+test("OAuth default is unchecked and Chat can be enabled and disabled", async () => {
+  const patches: ProviderUpdatePatch[] = [];
+  await mount(xaiItem("oauth", true), async (_name, patch) => {
+    patches.push(patch);
+    return { ok: true, xaiResponsesOptInState: patch.xaiResponsesOptIn };
+  });
   expect(optInSwitch().getAttribute("aria-pressed")).toBe("false");
+  await act(async () => { optInSwitch().click(); });
+  expect(optInSwitch().getAttribute("aria-pressed")).toBe("true");
+  await act(async () => { optInSwitch().click(); });
+  expect(optInSwitch().getAttribute("aria-pressed")).toBe("false");
+  expect(patches).toEqual([{ xaiResponsesOptIn: false }, { xaiResponsesOptIn: true }]);
+});
+
+test("failed Chat selection keeps the previous wire and displays the error", async () => {
+  await mount(xaiItem("oauth", true), async () => ({ ok: false, error: "Save rejected" }));
+  await act(async () => { optInSwitch().click(); });
+  expect(optInSwitch().getAttribute("aria-pressed")).toBe("false");
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe("Save rejected");
+  expect(optInSwitch().disabled).toBe(false);
+});
+
+test("pending selection disables repeat writes and uses the server echo", async () => {
+  let settle!: (value: ProviderUpdateResult) => void;
+  let calls = 0;
+  await mount(xaiItem("oauth", true), () => {
+    calls++;
+    return new Promise(resolve => { settle = resolve; });
+  });
+  await act(async () => { optInSwitch().click(); });
+  expect(optInSwitch().disabled).toBe(true);
+  await act(async () => { optInSwitch().click(); });
+  expect(calls).toBe(1);
+  await act(async () => { settle({ ok: true, xaiResponsesOptInState: "mixed" }); });
+  expect(optInSwitch().getAttribute("aria-pressed")).toBe("mixed");
+  expect(optInSwitch().disabled).toBe(false);
 });

@@ -4,48 +4,26 @@
  */
 import { Fragment, useMemo, useState } from "react";
 import { useT, useI18n } from "../../i18n/shared";
-import { IconRefresh } from "../../icons";
-import QuotaBars from "../QuotaBars";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
-import { formatRelativeTime, relativeTimeLabelsFromT, formatRequestCount, formatTokenCount, formatCostUsd } from "../../provider-workspace/usage";
-import { accountQuotaFromReport, formatQuotaSourceLabel, observedAtFromReport, type ProviderQuotaReportView } from "../../provider-workspace/report";
-import type { ProviderUsageTotals, ProviderModelUsageRow } from "./types";
+import { formatRequestCount, formatTokenCount, formatCostUsd } from "../../provider-workspace/usage";
+import type { ProviderQuotaReportView } from "../../provider-workspace/report";
+import type { AccountQuotaReading, ProviderUsageTotals, ProviderModelUsageRow } from "./types";
+import ProviderCurrentQuota from "./ProviderCurrentQuota";
 
-export default function ProviderUsage({ item, usageTotals, quotaReport, modelUsage, onRefreshQuota }: {
+export default function ProviderUsage({ item, usageTotals, quotaReport, currentQuotaReading, quotaIdentity, modelUsage, onRefreshQuota }: {
   item: WorkspaceItem;
   usageTotals?: ProviderUsageTotals;
   quotaReport?: ProviderQuotaReportView;
+  currentQuotaReading?: AccountQuotaReading;
+  quotaIdentity?: string;
   modelUsage?: ProviderModelUsageRow[];
   /** Force a fresh quota read; omitted when the page cannot drive one. */
   onRefreshQuota?: () => Promise<boolean>;
 }) {
   const t = useT();
   const { locale } = useI18n();
-  const timeLabels = relativeTimeLabelsFromT(t);
   const hasUsage = usageTotals?.requests !== undefined;
-  const quota = accountQuotaFromReport(quotaReport);
-  // Passive providers only. An age line beside a probed number would be noise; beside an
-  // observation it is the difference between a live reading and a remembered one.
-  const observedAt = observedAtFromReport(quotaReport);
   const [expandedModel, setExpandedModel] = useState<string | null>(null);
-  const [refreshingQuota, setRefreshingQuota] = useState(false);
-  const [refreshResult, setRefreshResult] = useState<{ ok: boolean; text: string } | null>(null);
-  void item;
-
-  const refreshQuota = async () => {
-    if (!onRefreshQuota || refreshingQuota) return;
-    setRefreshingQuota(true);
-    // Cleared on click so a previous "refreshed" cannot sit under a later failure.
-    setRefreshResult(null);
-    try {
-      const ok = await onRefreshQuota();
-      setRefreshResult({ ok, text: t(ok ? "codexAuth.quotaRefreshed" : "codexAuth.quotaRefreshFailed") });
-    } catch {
-      setRefreshResult({ ok: false, text: t("codexAuth.quotaRefreshFailed") });
-    } finally {
-      setRefreshingQuota(false);
-    }
-  };
 
   const sortedModels = useMemo(() => {
     if (!modelUsage?.length) return [];
@@ -122,6 +100,9 @@ export default function ProviderUsage({ item, usageTotals, quotaReport, modelUsa
                           >
                             {row.model}
                           </button>
+                          {row.hasUnresolvedRequestedModel && (
+                            <div className="muted pws-model-attribution">{t("pws.unresolvedRequestedModel")}</div>
+                          )}
                         </td>
                         <td className="num mono">{formatCostUsd(row.estimatedCostUsd, locale)}</td>
                         <td className="num mono">{formatTokenCount(row.totalTokens, locale)}</td>
@@ -157,58 +138,7 @@ export default function ProviderUsage({ item, usageTotals, quotaReport, modelUsa
         </div>
       )}
 
-      <div className="pws-usage-block">
-        <div className="pws-usage-block-head">
-          <h3 className="pws-section-title">{t("pws.rateLimits")}</h3>
-          {onRefreshQuota && (
-            // Rendered even when there is no quota to show: "nothing here" is exactly when
-            // an operator wants to retry.
-            <div className="pws-quota-refresh">
-              {refreshResult && (
-                <span role="status" className={refreshResult.ok ? "pws-status-ok" : "pws-status-warn"}>
-                  {refreshResult.text}
-                </span>
-              )}
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                disabled={refreshingQuota}
-                onClick={() => { void refreshQuota(); }}
-              >
-                <IconRefresh width={14} height={14} aria-hidden="true" />
-                {" "}
-                {refreshingQuota ? t("codexAuth.refreshingQuota") : t("codexAuth.refreshQuota")}
-              </button>
-            </div>
-          )}
-        </div>
-        {quota ? (
-          <>
-            <QuotaBars
-              quota={quota}
-              plan={null}
-              threshold={80}
-              t={t}
-              layout="stacked"
-              {...(observedAt !== undefined ? { observedAt } : {})}
-            />
-            <dl className="pws-kv pws-usage-meta">
-              {quotaReport?.source?.trim() && (
-                <div className="pws-kv-row">
-                  <dt>{t("pws.stats.source")}</dt>
-                  <dd>{formatQuotaSourceLabel(quotaReport.source)}</dd>
-                </div>
-              )}
-              <div className="pws-kv-row">
-                <dt>{t("pws.stats.quotaUpdated")}</dt>
-                <dd>{formatRelativeTime(quotaReport?.updatedAt, timeLabels)}</dd>
-              </div>
-            </dl>
-          </>
-        ) : (
-          <p className="muted">{t("pws.quotaUnavailable")}</p>
-        )}
-      </div>
+      <ProviderCurrentQuota key={`${item.name}:${quotaIdentity ?? ""}`} report={quotaReport} reading={currentQuotaReading} onRefreshQuota={onRefreshQuota} />
     </div>
   );
 }

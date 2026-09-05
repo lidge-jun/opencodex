@@ -59,6 +59,8 @@ export type SubagentPoolAccountPreview = (
 export type SubagentModelEligibleAccountIds = (
   modelId: string | undefined,
 ) => ReadonlySet<string> | undefined;
+/** Additional resolved routes that a restricted fallback caller has independently approved. */
+export type SubagentFallbackRouteEligibility = (route: RouteResult) => boolean;
 let subagentQuotaPrimeForTests: SubagentQuotaPrimeFn | null = null;
 let quotaPrimeInFlight: Promise<void> | null = null;
 
@@ -364,13 +366,21 @@ export function selectAvailableSubagentModel(
   poolAccountPreview?: SubagentPoolAccountPreview,
   modelEligibleAccountIdsForModel?: SubagentModelEligibleAccountIds,
   resolvedChain?: readonly string[],
+  restrictedRouteEligible?: SubagentFallbackRouteEligibility,
 ): { model: string; rewritten: boolean; skipped: string[] } {
   const chain = resolvedChain ?? normalizedChain(primary, config, extraFallback, trailingFallback);
   const skipped: string[] = [];
   for (const candidate of chain) {
     if (nativeFallbackOnly) {
       const route = tryRouteFallbackModel(config, candidate);
-      if (!route || !isCanonicalOpenAiForwardProvider(route.provider)) {
+      if (
+        !route
+        || route.combo !== undefined
+        || (
+          !isCanonicalOpenAiForwardProvider(route.provider)
+          && restrictedRouteEligible?.(route) !== true
+        )
+      ) {
         skipped.push(candidate);
         continue;
       }
@@ -615,6 +625,7 @@ export function applySubagentModelFallback(
   poolAccountPreview?: SubagentPoolAccountPreview,
   modelEligibleAccountIdsForModel?: SubagentModelEligibleAccountIds,
   resolvedFallbackChain?: readonly string[] | null,
+  restrictedRouteEligible?: SubagentFallbackRouteEligibility,
 ): { from?: string; to?: string; skipped?: string[] } | null {
   if (!isThreadSpawnRequest(headers)) return null;
   const fallbackChain = resolvedFallbackChain === undefined
@@ -633,6 +644,7 @@ export function applySubagentModelFallback(
     poolAccountPreview,
     modelEligibleAccountIdsForModel,
     fallbackChain,
+    restrictedRouteEligible,
   );
   if (!selection.rewritten) return selection.skipped.length > 0
     ? { from: parsed.modelId, to: parsed.modelId, skipped: selection.skipped }

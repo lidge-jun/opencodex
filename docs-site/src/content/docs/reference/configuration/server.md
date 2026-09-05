@@ -19,7 +19,7 @@ runs helper features around provider requests.
 | `oauthOpenBrowser?` | `boolean` | `true` | Whether a login may open a browser on the machine running the proxy. Absent and `true` both open, so an existing install is unchanged; only an explicit `false` declines. Decline when you need the authorization link in a different browser profile, or when the dashboard is not on the proxy's machine — the login still starts and the URL is still returned and displayed. `POST /api/oauth/login` and `POST /api/codex-auth/login` accept a per-request `openBrowser` boolean that overrides this, and the dashboard exposes the same choice beside the login button. Device-code flows never open a browser either way. |
 | `connectTimeoutMs?` | `number` | `200000` | Per-attempt DNS/TCP/TLS/final-header deadline; it ends before body generation. |
 | `shutdownTimeoutMs?` | `number` | `5000` | Graceful drain deadline before active turns are aborted. |
-| `websockets?` | `boolean` | `false` | Advertise and admit the client-facing Responses WebSocket path. False keeps clients on HTTP/SSE; it does not disable an eligible canonical ChatGPT upstream WS optimization. |
+| `websockets?` | `boolean` | `false` | Advertise and admit the client-facing Responses WebSocket path. False keeps clients on HTTP/SSE; it does not disable an eligible canonical ChatGPT upstream WS optimization. Complete-input requests may reuse an upstream connection within the same selected credential, account, thread and turn; changed handshake policy or missing identity keeps requests on separate connections. This does not trim HTTP input or create previous-response IDs. |
 | `corsAllowOrigins?` | `string[]` | `[]` | Additional exact origins allowed by CORS. Loopback origins are always allowed. Authority-based browser extension origins such as `chrome-extension://<extension-id>` are supported; `*` is not a wildcard. Firefox and Safari regenerate the extension UUID (per install / per browser launch), so update the entry when the origin changes. |
 | `apiKeys?` | `OcxApiKey[]` | `[]` | Generated `ocx_…` credentials accepted by management and data-plane auth on non-loopback binds. Dashboard-managed. |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | Opt-in archived-session cleanup policy. Never enabled implicitly. |
@@ -170,6 +170,94 @@ either `target.reduceToBytes` or `target.removeOldestPercent`. `mode` defaults t
 `permanent` only as an explicit destructive choice. The policy persists `lastRun` and `nextRun`.
 Configure it on the Storage page or with `GET`/`PUT /api/storage/cleanup-policy`; trigger a manual run
 with `POST /api/storage/cleanup-policy/run`.
+
+## Quota-reset notifications (`quotaResetNotify`)
+
+Off by default. When the section is absent, no detection runs, no timer starts, and no state
+file is written.
+
+Enable it to be told when a usage window resets — both the scheduled rollover you can predict
+and an out-of-band reset you cannot:
+
+```json
+{
+  "quotaResetNotify": {
+    "enabled": true,
+    "webhookUrl": "https://hooks.slack.com/services/...",
+    "kinds": ["scheduled", "surprise"],
+    "pollSeconds": 900
+  }
+}
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | Master switch. Also requires at least one sink, below. |
+| `kinds` | both | `scheduled` (the deadline passed) or `surprise` (quota returned early). |
+| `pollSeconds` | `900` | Idle poll interval; floor 600. `0` observes live traffic only. |
+| `webhookUrl` | — | `https` POST target for the event JSON. Treated as a secret. |
+| `allowPrivateNetwork` | `false` | Permit a loopback or private-network webhook target. |
+| `timeoutMs` | `5000` | Webhook timeout. |
+| `command` | — | Argv array run with the event JSON on stdin. |
+
+`enabled: true` with neither `webhookUrl` nor `command` resolves to off: an enabled subsystem
+with nowhere to deliver is a misconfiguration, not a half-on state.
+
+The floor is 600 seconds because a faster poll cannot see anything new: observation is bounded
+by the 10-minute per-account cache, so a shorter interval only adds load to a quota endpoint
+that rate-limits. A configured value is adopted on the next tick without a restart.
+
+Set `pollSeconds` to `0` only if you accept that a reset happening while the proxy is idle is
+noticed on the next request rather than when it happens. The poll exists because the overnight
+case is the one worth knowing about.
+
+### The delivered event
+
+```json
+{
+  "type": "quota_reset",
+  "kind": "surprise",
+  "scope": "codex",
+  "accountTag": "k3f9x2ab",
+  "window": "weekly",
+  "percentBefore": 96,
+  "percentAfter": 4,
+  "previousResetAt": 1772000000000,
+  "resetAt": 1772400000000,
+  "detectedAt": 1771900000000
+}
+```
+
+`accountTag` is a per-install salted hash, not an account identifier: it distinguishes your
+accounts from each other without telling the receiver who they are. No email, token, path, or
+URL is ever included.
+
+`detectedAt` is when the proxy NOTICED, not when the reset happened. Observation is bounded by
+the 5-minute provider cache and the 10-minute per-account cache, so the reset instant can only
+be bracketed between two observations.
+
+### Security notes
+
+`webhookUrl` is a credential — for Slack and Discord, holding the URL is sufficient to post —
+so it is redacted by `ocx config show` and excluded from `ocx config export`.
+
+A webhook target that resolves to a private or loopback address is refused unless you set
+`allowPrivateNetwork: true`. The proxy can reach hosts your browser cannot, including cloud
+metadata endpoints, so the default assumes an external receiver.
+
+`webhookUrl` must use `https`. The payload and the URL itself are both sensitive, and an
+`http` target would put them in cleartext; an `http` value is rejected when the config is
+written rather than downgraded silently.
+
+A redirect is refused rather than followed. The destination check above validates the URL you
+configured, so following a `3xx` would deliver the payload somewhere unvalidated — a public
+endpoint could bounce the POST to loopback or a metadata address. Configure the final URL
+directly; a redirected delivery reports `blocked-destination`.
+
+`command` is an argv array and is never passed through a shell, so its values cannot become a
+shell-injection surface. Delivery is attempted once; there is no retry.
+
+Read recent detections with `ocx provider resets` or `GET /api/quota-resets`.
 
 ## Claude Code (`claudeCode`)
 

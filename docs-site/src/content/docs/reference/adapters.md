@@ -95,10 +95,22 @@ body and response, with narrow compatibility rewrites for routed gateways.
 `forward` uses configured static headers without relaying caller authorization; `key` uses the
 configured provider key.
 
+Adapter selection does not select the upstream transport. Eligible requests can use the
+[upstream WebSocket proxy route](/reference/proxy-formats/#json-and-sse-output); invalid or unsupported
+WebSocket proxy settings fall back to HTTP/SSE. HTTP fetch-based Responses handling uses Bun's
+HTTP proxy rules and does not inherit the WSS-specific `ALL_PROXY` fallback.
+
 Noncanonical Responses gateways receive Codex's client-executed `tool_search` declaration as a
 collision-safe public function tool. Matching request history and JSON/SSE function calls are
 translated back to the private `tool_search` lifecycle for the client. Canonical OpenAI forward
 keeps the native private type unchanged.
+
+For OpenCode Go at `https://opencode.ai/zen/go/v1`, requests with `authMode` other
+than `"forward"` convert plaintext Codex `agent_message` items into public user messages, preserving content parts and readable author/recipient
+metadata. This conversion leaves encrypted or unknown content unchanged and does not apply
+to other destinations. Providers using `authMode: "forward"` retain these items unchanged.
+See [Go agent messages](/reference/configuration/providers/#opencode-go-session-and-agent-messages)
+for the separate opt-in encrypted-task recovery behavior.
 
 The canonical ChatGPT Codex forward destination also normalizes two public Responses shapes that
 its stricter backend rejects: fully textual `system` messages inside `input` are appended to the
@@ -111,6 +123,14 @@ For canonical forward continuations, client-only `prompt_cache_breakpoint` prope
 recursively within bounded traversal limits. When `store: false`, `item_reference` rows are also
 omitted because the destination cannot resolve an item it did not persist. Function/tool `call_id`
 pairs and `reasoning.effort` are preserved.
+
+[Luna Reserve compatibility](/reference/cli/providers-accounts/#luna-reserve-alongside-routed-models)
+uses this canonical ChatGPT-forward path, not key-auth or arbitrary Responses gateways. It retains
+the safe caller-header allowlist and destination-scoped request normalization described here.
+OpenCodex sends its Reserve capability header on the owned main-account usage lookup; that header
+is not itself permission. Eligible compatibility requests recheck credential-bound authorization
+at dispatch. Conversation and compaction are supported; vision helpers, web-search helpers, and
+standalone search relay are not.
 
 For `key` auth, [`retryOn429`](/reference/configuration/) applies here too: a pre-stream 429
 waits and replays the identical request on the same key before any other handling, exactly like
@@ -162,6 +182,13 @@ of the HTTP retry loop.
 `/v1beta/models/{model}:streamGenerateContent`; the other modes use their native Google endpoints.
 **Auth:** API key, Vertex ADC, or Google Antigravity OAuth, selected by `googleMode`.
 
+- **Location denials are permission errors, not invalid requests.** Google rejects unsupported
+  geographic or datacenter locations with HTTP 400 `FAILED_PRECONDITION: User location is not
+  supported for the API use.` The proxy reports this as `… location not supported: …` and
+  classifies it as `permission_error` with code `location_not_supported`, so a client does not
+  misread a network-location refusal as a malformed prompt. The direct HTTP response keeps the
+  upstream 400; message-only terminal paths infer 403 (permission class). The restriction itself
+  is Google's — the proxy does not route around it.
 - System prompt → `systemInstruction`; messages → `contents[]` (assistant → `model`); tools →
   `functionDeclarations`. Data-URL images → `inline_data`.
 - Tool-call ids are synthesized when Gemini omits them. Vertex and Antigravity preserve and replay

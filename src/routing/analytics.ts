@@ -116,6 +116,7 @@ interface Bucket extends AnalyticsBreakdownRow {
 
 const COOLDOWN_RECOVERY_KINDS = new Set([
   "rate-limit-429",
+  "key-401",
   "key-429",
   "oauth-401",
   "anthropic-oauth-429",

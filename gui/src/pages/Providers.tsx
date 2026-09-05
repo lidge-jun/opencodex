@@ -2,7 +2,7 @@ import { usageSummary30dResourceKey } from "../usage-summary-resource";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ProviderWorkspaceShell, { type AddProviderIntent } from "../components/provider-workspace/ProviderWorkspaceShell";
 import ProviderDetails from "../components/provider-workspace/ProviderDetails";
-import type { WorkspaceProvider } from "../provider-workspace/catalog";
+import { isAccountProvider, type WorkspaceProvider } from "../provider-workspace/catalog";
 import { ensureOpenAiProvider, openAiAccountProviderState, OpenAiEnableError } from "../provider-payload";
 import { oauthTosRisk } from "../oauth-tos-risk";
 import { ToastNotice, type NoticeTone } from "../ui";
@@ -20,6 +20,60 @@ import { useProvidersFetch } from "./use-providers-fetch";
 import { ProvidersPageModals } from "./providers-page-modals";
 import { buildAccountLoginStatus, buildAddModalAccountRows } from "./providers-page-utils";
 import type { CodexAccountMutationCompletion } from "../codex-account-mutation";
+import { useProviderModelsNotice } from "./use-provider-models-notice";
+import { navigateHash } from "../hash-routing";
+
+/** The page's real refresh tickets: only the captured report epoch and account read can settle them. */
+// oxlint-disable-next-line react/only-export-components -- keep the page-owned coordinator and its direct race tests in the authorized owner.
+export function useQuotaRefreshCoordinator(apiBase: string) {
+  const [quotaRefresh, setQuotaRefresh] = useState({ epoch: 0, force: false });
+  const epochRef = useRef(0);
+  const mountedRef = useRef(true);
+  const ticketsRef = useRef(new Map<number, {
+    resolve: (ok: boolean) => void;
+    accounts?: boolean;
+    report?: boolean;
+  }>());
+  const cancelTickets = useCallback(() => {
+    for (const ticket of ticketsRef.current.values()) ticket.resolve(false);
+    ticketsRef.current.clear();
+  }, []);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; cancelTickets(); };
+  }, [apiBase, cancelTickets]);
+  const invalidateProviderQuotas = useCallback((force = false) => {
+    cancelTickets();
+    const epoch = ++epochRef.current;
+    if (mountedRef.current) setQuotaRefresh({ epoch, force });
+    return epoch;
+  }, [cancelTickets]);
+  const finish = useCallback((epoch: number, part: "accounts" | "report", ok: boolean) => {
+    const ticket = ticketsRef.current.get(epoch);
+    if (!ticket || !mountedRef.current) return;
+    ticket[part] = ok;
+    if (ticket.accounts !== undefined && ticket.report !== undefined) {
+      ticketsRef.current.delete(epoch);
+      ticket.resolve(ticket.accounts && ticket.report);
+    }
+  }, []);
+  const settleQuotaRefresh = useCallback((ok: boolean, epoch: number) => finish(epoch, "report", ok), [finish]);
+  const beginQuotaRefresh = useCallback((readAccounts?: () => Promise<boolean>): Promise<boolean> => {
+    if (!mountedRef.current) return Promise.resolve(false);
+    const epoch = invalidateProviderQuotas(true);
+    const settled = new Promise<boolean>(resolve => {
+      ticketsRef.current.set(epoch, { resolve, accounts: readAccounts ? undefined : true });
+    });
+    if (readAccounts) {
+      void Promise.resolve().then(readAccounts).then(
+        ok => finish(epoch, "accounts", ok),
+        () => finish(epoch, "accounts", false),
+      );
+    }
+    return settled;
+  }, [finish, invalidateProviderQuotas]);
+  return { quotaRefresh, invalidateProviderQuotas, settleQuotaRefresh, beginQuotaRefresh };
+}
 
 export default function Providers({ apiBase }: { apiBase: string }) {
   const t = useT();
@@ -138,28 +192,19 @@ export default function Providers({ apiBase }: { apiBase: string }) {
    * A counter only moves when something actually invalidates the quotas, so account arrival
    * is silent while every real mutation path still forces a re-read.
    */
-  const [quotaRefresh, setQuotaRefresh] = useState({ epoch: 0, force: false });
-  const invalidateProviderQuotas = useCallback((force = false) => {
-    setQuotaRefresh(previous => ({ epoch: previous.epoch + 1, force }));
-  }, []);
-  /*
-   * Operator-initiated refresh needs an answer, and the bump above is not one: it is a
-   * setState, so awaiting it tells you only that React was told to re-render. The shell
-   * owns the actual `/api/provider-quotas` read, so the resolver is parked here and the
-   * shell settles it. Without this a refresh button would flip back to idle and report
-   * success while the old numbers were still on screen.
-   */
-  const quotaRefreshWaiters = useRef<Array<(ok: boolean) => void>>([]);
-  const settleQuotaRefresh = useCallback((ok: boolean) => {
-    const waiters = quotaRefreshWaiters.current;
-    quotaRefreshWaiters.current = [];
-    for (const resolve of waiters) resolve(ok);
-  }, []);
-  const { fetchConfig, fetchOauth, fetchProviderQuotas } = useProvidersFetch({
+  const { quotaRefresh, invalidateProviderQuotas, settleQuotaRefresh, beginQuotaRefresh } = useQuotaRefreshCoordinator(apiBase);
+  const { fetchConfig: refreshConfigResult, fetchOauth, fetchProviderQuotas } = useProvidersFetch({
     apiBase, t, setConfig, setOauthProviders, setOauthStatus, notify,
     invalidateProviderQuotas,
     configCacheKey,
   });
+  const fetchConfig = useCallback(async () => { await refreshConfigResult(); }, [refreshConfigResult]);
+  const modelsNotice = useProviderModelsNotice(apiBase, refreshConfigResult);
+  const openModelsNotice = modelsNotice.open;
+  const onProviderLoginSettled = useCallback((provider: string) => {
+    revealProviderAccounts(provider);
+    openModelsNotice(provider, false);
+  }, [revealProviderAccounts, openModelsNotice]);
 
   // WP3: one Codex account controller for the whole Providers page, shared by the
   // Overview tab and the Accounts tab so a mutation on either is instantly visible on
@@ -197,14 +242,17 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     fetchConfig, fetchOauth, fetchProviderQuotas, codexActiveNeedsReauth,
   });
   const {
-    accountSets, setAccountSets, accountLoadStates, switchingAccount, keyPools, fetchAccountSets,
+    accountSets, setAccountSets, accountLoadStates, switchingAccount, keyPools, fetchAccountSets, fetchKeyPools,
     switchAccount, switchApiKey, removeApiKey, addApiKeyValue, editCredentialAlias,
     removeAccount, activeAccountNeedsReauth,
   } = pools;
   const jsonEditor = useJsonConfigEditor({
     apiBase, config,
     notify,
-    fetchConfig, fetchProviderQuotas, onSaved: () => setModelsRefreshToken(n => n + 1),
+    fetchConfig, fetchProviderQuotas, onSaved: added => {
+      if (added.length) modelsNotice.open(added, true);
+      setModelsRefreshToken(n => n + 1);
+    },
     t: t as unknown as Parameters<typeof useJsonConfigEditor>[0]["t"],
   });
   const {
@@ -219,15 +267,20 @@ export default function Providers({ apiBase }: { apiBase: string }) {
    * Declared here because it needs `fetchAccountSets` from the account-pool hook above.
    * Per-account bars come from a different read (`&quota=1` inside `fetchAccountSets`),
    * so both must fire or the rows beside each account keep their old numbers. That read's
-   * enrichment is best-effort by design — the panel shows its own load state — so the
-   * REPORTED result is the provider-level read, which is what the button is about.
+   * forced enrichment must settle as well as the matching provider-report epoch.
    */
   const refreshProviderQuota = useCallback((provider: string): Promise<boolean> => {
-    const settled = new Promise<boolean>(resolve => { quotaRefreshWaiters.current.push(resolve); });
-    void fetchAccountSets([provider]);
-    void fetchProviderQuotas(true);
-    return settled;
-  }, [fetchAccountSets, fetchProviderQuotas]);
+    const configured = config?.providers[provider];
+    const mode = configured?.authMode;
+    const readAccounts = configured && isAccountProvider(provider, configured)
+      ? () => codexPool.load(true)
+      : mode === "oauth"
+        ? () => fetchAccountSets([provider], true)
+        : mode === "forward" || mode === "local"
+          ? undefined
+          : () => fetchKeyPools([provider], true);
+    return beginQuotaRefresh(readAccounts);
+  }, [config, codexPool, fetchAccountSets, fetchKeyPools, beginQuotaRefresh]);
 
   /**
    * Force a fresh read of EVERY provider's quota, for the overview where no provider
@@ -240,10 +293,8 @@ export default function Providers({ apiBase }: { apiBase: string }) {
    * server-side, so this is one request that answers exactly what the overview shows.
    */
   const refreshAllProviderQuotas = useCallback((): Promise<boolean> => {
-    const settled = new Promise<boolean>(resolve => { quotaRefreshWaiters.current.push(resolve); });
-    void fetchProviderQuotas(true);
-    return settled;
-  }, [fetchProviderQuotas]);
+    return beginQuotaRefresh();
+  }, [beginQuotaRefresh]);
 
   useEffect(() => {
     // Deferred by a microtask, not a timer. A timer had to be cancelled in cleanup, so navigating
@@ -266,7 +317,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     apiBase, t, aliveRef, accountSets, setAccountSets,
     setBusy, setStatus, setLoginInfo, setOauthStatus, notify,
     fetchConfig, fetchOauth, fetchAccountSets, fetchProviderQuotas, bumpModelsRefresh,
-    onLoginSettled: revealProviderAccounts,
+    onLoginSettled: onProviderLoginSettled,
   });
 
   const { removeProvider, confirmRemoveProvider, setProviderDisabled, setDefaultProvider, updateProvider } = useProvidersCrud({
@@ -390,6 +441,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         }}
         jsonSaving={jsonSaving}
         modelsRefreshToken={modelsRefreshToken}
+        onModelsSettled={modelsNotice.modelsSettled}
         activeAccountNeedsReauth={activeAccountNeedsReauth}
         quotaRefreshEpoch={quotaRefresh.epoch}
         quotaForceRefresh={quotaRefresh.force}
@@ -451,6 +503,25 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         apiBase={apiBase}
         config={config}
         adding={adding}
+        modelsNotice={modelsNotice.notice ? {
+          provider: modelsNotice.notice.context.provider,
+          initialRegistration: modelsNotice.notice.context.initialRegistration,
+          catalogRefreshPending: modelsNotice.notice.context.catalogRefreshPending,
+          loading: modelsNotice.notice.loading,
+          failed: modelsNotice.notice.failed,
+          providerKnown: modelsNotice.notice.context.providers.every(name => !!config.providers[name]),
+          selection: modelsNotice.notice.context.providers.length === 1
+            ? config.providers[modelsNotice.notice.context.provider]?.initialModelSelection
+            : modelsNotice.notice.context.providers.some(name => config.providers[name]?.initialModelSelection?.status === "pending")
+              ? { status: "pending" } : undefined,
+          onClose: modelsNotice.close,
+          onOpenModels: () => { modelsNotice.close(); navigateHash("models"); },
+          onRetry: () => {
+            const current = modelsNotice.notice!.context;
+            modelsNotice.open(current.providers, current.initialRegistration, current.catalogRefreshPending);
+            bumpModelsRefresh();
+          },
+        } : null}
         addIntent={addIntent}
         busy={busy}
         addModalAccountRows={addModalAccountRows}
@@ -472,7 +543,8 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         onAdded={(name) => {
           setAdding(false);
           setAddIntent(null);
-          notify(t("prov.added", { name, cmd: "ocx sync" }), true);
+          clearStatus();
+          modelsNotice.open(name, !config.providers[name]);
           fetchConfig();
           fetchOauth();
           fetchProviderQuotas(true);
@@ -487,6 +559,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         onCodexAdded={(completion) => {
           setCodexLoginOpen(false);
           notifyCodexCompletion(completion);
+          modelsNotice.open("openai", !config.providers.openai, completion.catalogRefreshPending);
           void fetchConfig();
           void fetchOauth();
           void fetchProviderQuotas(true);

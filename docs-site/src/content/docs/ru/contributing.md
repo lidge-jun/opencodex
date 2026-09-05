@@ -13,7 +13,7 @@ bun run dev:proxy    # прокси-API в режиме разработки
 bun run dev:gui      # dev-сервер дашборда (другой терминал)
 bun run typecheck    # bun x tsc --noEmit
 bun run test:changed              # routine import-graph test selection
-bun test tests/router.test.ts     # routine focused test
+bun test tests/routing/router.test.ts     # routine focused test
 bun run test                      # complete suite (PR-ready / explicit ask)
 ```
 
@@ -28,13 +28,13 @@ bun run test                      # complete suite (PR-ready / explicit ask)
 ```bash
 bun run typecheck                 # строгая проверка TypeScript
 bun run test                      # полный набор tests/
-bun test tests/router.test.ts     # отдельный тестовый файл
+bun test tests/routing/router.test.ts     # отдельный тестовый файл
 bun run build:gui                 # сборка GUI на Vite + подготовка пакета
 bun run privacy:scan              # проверка учётных данных/приватности, используемая в CI
 bun run prepare:package           # обновление лаунчеров/ресурсов пакета
 ```
 
-Большинство тестов — плоские Bun-тесты `tests/*.test.ts`. В `tests/helpers/` лежат общие fixtures,
+Bun-тесты лежат в доменных каталогах, повторяющих `src/` (`tests/<domain>/`); карта — `scripts/test-layout/layout.json`. В `tests/helpers/` лежат общие fixtures,
 а в `tests/e2e-style/` — более широкие сценарии нативного паритета. Добавляйте сфокусированный
 регрессионный тест рядом с существующими тестами изменяемой подсистемы; если затронуты общая
 маршрутизация, адаптеры, конфигурация или поведение сервера, запускайте полный набор.
@@ -74,11 +74,25 @@ GitHub Actions намеренно остаются компактными:
 
 Для релизов используйте helper:
 
+
+Перед запуском helper выберите версию релиза и запустите
+`.github/workflows/dev-version-bump.yml` из ветки по умолчанию с параметрами
+`intended-version=<version>` и `mode=pre-move`. Проверьте и влейте созданный PR
+в `dev`, затем перенесите изменения в `main` или `preview` и запустите helper.
+Если версия `dev` уже выше целевой, workflow вернёт `changed=false` и PR для
+смены версии не потребуется. Публикация по-прежнему требует успешного CI
+для точного коммита релиза.
+
 ```bash
 bun run release <version>           # коммитит/пушит bump версии; publish workflow по умолчанию dry-run
+bun run release --bump minor        # вычисляет следующую patch, minor или major версию по тегам и каналам npm
 bun run release <version> --publish # publish после осознанного CI-gated dry-run
 bun run release:watch               # наблюдение за последним запуском Release workflow
 ```
+
+`--bump patch|minor|major` можно использовать вместо явной версии. После появления preview-тега
+для более высокого core команда `--bump patch` откажется продолжать старую stable patch-линию;
+включите исправление в уже открытую preview-версию.
 
 ## Ветки
 

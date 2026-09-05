@@ -16,7 +16,7 @@ bun run dev:proxy    # proxy API in dev mode
 bun run dev:gui      # dashboard dev server (another terminal)
 bun run typecheck    # bun x tsc --noEmit
 bun run test:changed              # routine import-graph test selection
-bun test tests/router.test.ts     # routine focused test
+bun test tests/routing/router.test.ts     # routine focused test
 bun run test                      # complete suite (PR-ready / explicit ask)
 ```
 
@@ -32,7 +32,7 @@ scripts so local commands match CI:
 bun run typecheck                 # strict TypeScript check
 bun run test:changed              # import-graph tests against the resolved dev merge base
 bun run test                      # complete tests/ suite (PR-ready / explicit ask)
-bun test tests/router.test.ts     # focused test file
+bun test tests/routing/router.test.ts     # focused test file
 bun run build:gui                 # Vite GUI build + package preparation
 bun run privacy:scan              # credential/privacy scan used by CI
 bun run prepare:package           # refresh package launchers/assets
@@ -42,10 +42,14 @@ bun run prepare:package           # refresh package launchers/assets
 `origin/dev`, then local `dev`. It reports that ref and the exact `git merge-base HEAD <ref>`
 commit, then passes the merge-base SHA to Bun.
 
-Most tests are flat `tests/*.test.ts` Bun tests. `tests/helpers/` contains shared fixtures and
-`tests/e2e-style/` contains broader native-parity scenarios. Keep a focused regression near the
-existing tests for the subsystem you change; run the full suite for shared routing, adapters, config,
-or server behavior.
+Tests are Bun tests in domain directories that mirror `src/`: `tests/server/`, `tests/providers/`,
+`tests/adapters/openai/`, `tests/cli/` and so on. `scripts/test-layout/layout.json` is the map
+and `tests/test-layout.test.ts` enforces it, so a new test goes into its domain directory and gets
+an entry in the map (the tooling test tells you which one is missing). `tests/helpers/` holds
+shared fixtures and `tests/helpers/repo-root.ts` is how a test reaches repository files;
+`tests/e2e-style/` holds broader native-parity scenarios. Keep a focused regression near the
+existing tests for the subsystem you change (`bun test tests/<domain>` runs one subsystem); run
+the full suite for shared routing, adapters, config, or server behavior.
 
 The docs site you're reading lives in `docs-site/` (Astro + Starlight):
 
@@ -94,11 +98,24 @@ GitHub Actions intentionally stay small:
 
 Use the helper for releases:
 
+
+Before running the helper, choose the intended release version and dispatch
+`.github/workflows/dev-version-bump.yml` from the default branch with
+`intended-version=<version>` and `mode=pre-move`. Review and merge the PR it opens
+into `dev`, then promote to `main` or `preview` and run the helper. If `dev` already
+outranks the intended version, the workflow reports `changed=false` and no bump PR
+is needed. Publishing still requires successful CI on the exact release commit.
+
 ```bash
 bun run release <version>           # commits/pushes the bump; publish workflow is dry-run by default
+bun run release --bump minor        # derive the next patch, minor, or major version from tags and npm channels
 bun run release <version> --publish # publish after the CI-gated dry run is understood
 bun run release:watch               # watch the newest Release workflow run
 ```
+
+`--bump patch|minor|major` is an alternative to an explicit version. Once a preview tag opens a
+higher version core, `--bump patch` refuses to continue the older stable patch line; ship that fix
+in the open preview core instead.
 
 ## Branches
 
@@ -222,5 +239,5 @@ startup path must not import the manifest catalog or activate Compatibility Lab.
 ## Verify before you claim done
 
 Run the narrowest command that proves your change — `bun run typecheck` for types, a focused
-`bun test tests/<name>.test.ts` or runtime probe for behavior, then the broader gates appropriate to
+`bun test tests/<domain>/<name>.test.ts` or runtime probe for behavior, then the broader gates appropriate to
 the affected surface. opencodex favors small, verifiable commits over large batches.

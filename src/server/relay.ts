@@ -5,6 +5,7 @@ import {
   CYBER_POLICY_FALLBACK_MESSAGE,
   isCyberPolicyCode,
   isCyberPolicyMessage,
+  upstreamErrorMessageFromPayload,
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
 import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
@@ -147,11 +148,24 @@ export function failedTailFrame(encoder: TextEncoder, err: unknown): Uint8Array 
   return encoder.encode(`\n\nevent: response.failed\ndata: ${payload}\n\n${DONE_SSE_FRAME_TEXT}`);
 }
 
+export function upstreamErrorTailFrame(encoder: TextEncoder, message: string): Uint8Array {
+  const error = {
+    type: "upstream_error",
+    code: "upstream_server_error",
+    message: redactSecretString(message).slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS),
+  };
+  return encoder.encode(`event: response.failed\ndata: ${JSON.stringify({
+    type: "response.failed",
+    response: { status: "failed", error, last_error: error },
+  })}\n\n`);
+}
+
 export type SseTerminalOutputBoundary = {
   feed(chunk: Uint8Array): Uint8Array;
   finish(): Uint8Array;
   terminalSeen(): boolean;
   doneSeen(): boolean;
+  upstreamError(): string | undefined;
   dispose(): void;
 };
 
@@ -170,6 +184,7 @@ export function createSseTerminalOutputBoundary(): SseTerminalOutputBoundary {
   let done = false;
   let pendingDone: { block: Uint8Array; delimiter: Uint8Array } | null = null;
   let disposed = false;
+  let upstreamError: string | undefined;
 
   const processFrames = (
     frames: ReturnType<BoundedSseFrameBuffer["feed"]>,
@@ -181,6 +196,12 @@ export function createSseTerminalOutputBoundary(): SseTerminalOutputBoundary {
       const payload = sseDataPayload(decoder.decode(frame.block));
       const isDone = payload === "[DONE]";
       const parsed = payload === null ? undefined : parseSsePayload(payload);
+      // Observe on the client reader itself: a tee inspection branch may lag
+      // behind EOF, so its log context cannot determine the outgoing terminal.
+      if (parsed && typeof parsed === "object" && "type" in parsed && parsed.type === "error") {
+        const message = upstreamErrorMessageFromPayload(parsed);
+        if (message) upstreamError = redactSecretString(message).slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS);
+      }
       const policyError = parsed !== undefined && isPolicyRewriteType(parsed)
         ? cyberPolicyTerminalError(parsed)
         : undefined;
@@ -239,6 +260,7 @@ export function createSseTerminalOutputBoundary(): SseTerminalOutputBoundary {
     },
     terminalSeen: () => terminal,
     doneSeen: () => done,
+    upstreamError: () => upstreamError,
     dispose() {
       if (disposed) return;
       disposed = true;
@@ -265,24 +287,6 @@ export function relaySseWithFailedTail(
   const reader = body.getReader();
   const encoder = new TextEncoder();
   const terminalBoundary = createSseTerminalOutputBoundary();
-  const failedTailPayload = opts?.upstreamError === undefined
-    ? FAILED_TAIL_FALLBACK_PAYLOAD
-    : JSON.stringify({
-      type: "response.failed",
-      response: {
-        status: "failed",
-        error: {
-          type: "upstream_error",
-          code: "upstream_server_error",
-          message: opts.upstreamError,
-        },
-        last_error: {
-          type: "upstream_error",
-          code: "upstream_server_error",
-          message: opts.upstreamError,
-        },
-      },
-    });
   let closed = false;
   const relayChunk = (
     controller: ReadableStreamDefaultController<Uint8Array>,
@@ -325,11 +329,10 @@ export function relaySseWithFailedTail(
               // A clean upstream EOF is still a failed Responses turn when no
               // protocol terminal arrived. Make that state explicit so Codex
               // does not treat HTTP 200 + bare EOF as a retryable disconnect.
-              controller.enqueue(encoder.encode(
-                opts?.upstreamError === undefined
-                  ? `event: response.incomplete\ndata: ${ADAPTER_EOF_INCOMPLETE_PAYLOAD}\n\n`
-                  : `event: response.failed\ndata: ${failedTailPayload}\n\n`,
-              ));
+              const upstreamError = terminalBoundary.upstreamError() ?? opts?.upstreamError;
+              controller.enqueue(upstreamError === undefined
+                ? adapterEofIncompleteFrame(encoder)
+                : upstreamErrorTailFrame(encoder, upstreamError));
               controller.enqueue(doneFrame(encoder));
             }
             terminalBoundary.dispose();
@@ -1297,6 +1300,7 @@ function startBoundedInspectionPump(options: InspectionPumpOptions): void {
     try {
       for (;;) {
         const { done, value } = await reader.read();
+        if (clientGoneSignal?.aborted) markClientGone();
         if (drainStopped) {
           // stopDrain() cancelled the reader; the settled read is the wake-up.
           clientGoneWithoutTerminal = !inspector.terminalSeen();
@@ -1334,6 +1338,9 @@ function startBoundedInspectionPump(options: InspectionPumpOptions): void {
         }
       }
     } catch {
+      // Bun can settle a fetch body read before dispatching all abort listeners.
+      // Observe the signal itself before classifying that rejection as upstream.
+      if (clientGoneSignal?.aborted) markClientGone();
       // A read error can follow a final SSE block without its blank-line
       // delimiter. Flush that candidate before classifying the transport as a
       // synthetic reset; otherwise a real completed/failed/policy terminal is

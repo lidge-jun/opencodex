@@ -376,7 +376,8 @@ async function handleJournalDelete(ctx: ManagementContext): Promise<Response> {
      * to record.
      */
     const pruned = store.pruneSnapshots(operation.clientId);
-    if (!pruned.ok) store.markPruneFailure(operation.clientId, pruned.error);
+    if (pruned.ok) store.clearPruneFailure(operation.clientId);
+    else store.markPruneFailure(operation.clientId, pruned.error);
 
     return jsonResponse({
       ok: true,

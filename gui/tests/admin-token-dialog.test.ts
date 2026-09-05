@@ -179,3 +179,22 @@ test("notice display rules are scoped so a hidden notice cannot paint", async ()
     expect(selector).toContain(":not([hidden])");
   }
 });
+
+/* #3353 — a bare password box explained nothing. */
+test("the dialog explains the credential and links the setup guide", async () => {
+  const pending = promptForAdminToken(async () => "accepted");
+  const dialog = document.querySelector<HTMLDialogElement>("#opencodex-admin-token-dialog")!;
+
+  const link = dialog.querySelector<HTMLAnchorElement>('a[target="_blank"]')!;
+  expect(link).not.toBeNull();
+  expect(link.href).toBe("https://opencodex.me/guides/web-dashboard/#finding-the-admin-token");
+  expect(link.rel).toBe("noreferrer");
+  expect(link.textContent).toBe("How to find it");
+
+  const help = link.parentElement!;
+  expect(help.textContent).toContain("admin-api-token");
+  expect(help.textContent).toContain("OPENCODEX_ADMIN_AUTH_TOKEN");
+
+  dialog.dispatchEvent(new testWindow.Event("cancel", { cancelable: true }));
+  expect(await pending).toBeNull();
+});

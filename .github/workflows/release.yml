@@ -36,49 +36,6 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Move `dev` past the version that just published.
-  #
-  # This is a CALL, not a `release: published` listener. The release is created with
-  # `github.token`, and GitHub does not start workflow runs from events that token
-  # raises - so a listener cannot observe a release this repository publishes itself. In
-  # that form it ran ZERO times across v2.37.0, v2.38.0 and v2.39.0 while every one of
-  # those bumps was opened by hand (#3045, #3076, #3127).
-  #
-  # `needs: publish` means this is skipped unless the publish job succeeded, so a failed
-  # publish or a failed release creation never opens a bump pull request; the explicit
-  # condition only adds the dry-run case. The called workflow declares its own
-  # `contents: write` / `pull-requests: write` for its own job, so nothing here gains
-  # write access.
-  #
-  # Both channels call this, and the double-call is safe because `bump-dev-version.ts`
-  # compares against what `dev` already carries. In the usual train `dev` is already at
-  # the stable core when the preview publishes, so that call returns `changed=false`
-  # ("dev already carries 2.40.0, which is ahead of the published 2.40.0-preview.*") and
-  # every later step is gated on that output. The stable call returns `changed=true` and
-  # opens the one pull request. A preview publishing while `dev` is genuinely behind
-  # still bumps it, which is the point.
-  #
-  # It is declared FIRST in this file, ahead of the jobs it depends on, because
-  # tests/ci-workflows.test.ts splits the workflow on `- name:` and reads each `run:`
-  # block to the start of the next one when it checks that dispatch inputs never
-  # interpolate into shell source. A job declared between two steps lands inside that
-  # window and reads as shell. Job order in YAML carries no execution meaning - `needs`
-  # does - so declaring it before its own dependency costs nothing.
-  bump-dev-version:
-    needs: publish
-    if: ${{ inputs.dry-run != true }}
-    # A reusable-workflow CALL cannot grant the callee more than the calling job holds,
-    # and GitHub refuses the whole run at startup when the called workflow's own job
-    # declares permissions the caller did not pass down ("startup_failure", runs
-    # 33615174183 / 33615177849 — the first dispatches since #3129 wired this call).
-    # The callee's job declares exactly these two; nothing else in this file gains them.
-    permissions:
-      contents: write
-      pull-requests: write
-    uses: ./.github/workflows/dev-version-bump.yml
-    with:
-      released-version: v${{ inputs.version }}
-
   validate-dispatch:
     runs-on: ubuntu-latest
     permissions:
@@ -282,6 +239,15 @@ jobs:
             echo "Service lifecycle passed for ${GITHUB_SHA}: ${service_url}"
           fi
 
+      - name: Require dev to be ready for this release
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin +refs/heads/dev:refs/remotes/origin/dev
+          dev_version="$(git show origin/dev:package.json | bun -e 'console.log(JSON.parse(await Bun.stdin.text()).version)')"
+          bun scripts/version-line.ts assert-ahead "$dev_version" "$RELEASE_VERSION"
+
       # Tokenless publish via Trusted Publishing (OIDC) — NO NPM_TOKEN secret. npm auto-detects the
       # OIDC environment (`id-token: write` above) and generates provenance automatically, so neither a
       # token nor `--provenance` is needed. `npm publish` runs prepublishOnly first (typecheck + build
@@ -334,6 +300,19 @@ jobs:
               exit 1
             fi
           fi
+
+      - name: Refuse a release the current tag set already outranks
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          allow=""
+          existing_tag_sha="$(git rev-parse -q --verify "refs/tags/v${RELEASE_VERSION}^{commit}" || true)"
+          if [ "$DRY_RUN" = "true" ] && [ -n "$existing_tag_sha" ] && [ "$existing_tag_sha" = "$GITHUB_SHA" ]; then
+            allow="--allow-existing-tag-at-head"
+          fi
+          git tag --list 'v*' | bun scripts/version-line.ts assert-releasable "$RELEASE_VERSION" $allow
 
       - name: Build and validate release changelog
         env:

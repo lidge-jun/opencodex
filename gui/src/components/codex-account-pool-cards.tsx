@@ -195,15 +195,15 @@ export function CodexAccountPoolCards({
           )}
           {showReauth
             ? <div className="card-sub faint">{t("codexAuth.tokenExpired")}</div>
-            : !inCooldown && (
-              <QuotaBars
-                quota={a.quota}
-                plan={a.plan}
-                threshold={threshold}
-                t={t}
-                pending={a.quota == null}
-              />
-            )}
+            : !inCooldown && <>
+                <QuotaBars
+                  quota={a.quota}
+                  plan={a.plan}
+                  threshold={threshold}
+                  t={t}
+                  pending={a.quota == null}
+                />
+              </>}
         </div>
         );
       })}

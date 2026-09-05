@@ -73,13 +73,18 @@ function userContentToBlocks(content: unknown): Rec[] {
       continue;
     }
     if (!isRec(raw)) continue;
-    if ((raw.type === "text" || raw.type === "input_text") && typeof raw.text === "string") {
+    if ((raw.type === "text" || raw.type === "input_text" || raw.type === "output_text") && typeof raw.text === "string") {
       blocks.push({ type: "input_text", text: raw.text });
       continue;
     }
     const imageUrl = imageUrlFromPart(raw);
     if (imageUrl) {
-      blocks.push({ type: "input_image", image_url: imageUrl });
+      const detail = isRec(raw.image_url) ? raw.image_url.detail : raw.detail;
+      blocks.push({
+        type: "input_image",
+        image_url: imageUrl,
+        ...(detail === "auto" || detail === "low" || detail === "high" ? { detail } : {}),
+      });
       continue;
     }
     const videoUrl = videoUrlFromPart(raw);
@@ -275,7 +280,10 @@ export function chatCompletionsToResponsesBody(raw: unknown): Rec {
           : typeof msg.tool_use_id === "string" ? msg.tool_use_id
           : "";
         if (!callId) throw new ChatCompletionsRequestError("tool messages require tool_call_id");
-        const output = typeof msg.content === "string" ? msg.content : contentToText(msg.content);
+        const blocks = userContentToBlocks(msg.content);
+        const output = blocks.some(part => part.type === "input_image")
+          ? blocks.filter(part => part.type === "input_text" || part.type === "input_image")
+          : contentToText(msg.content);
         input.push({ type: "function_call_output", call_id: callId, output });
         break;
       }

@@ -47,7 +47,9 @@ is_general_test_file() {
   local path="$1"
 
   case "$path" in
-    tests/api-storage-policy*.test.ts|tests/api-storage.test.ts|tests/api-usage.test.ts)
+    # Dedicated CI jobs run these in their own Bun process (ci.yml storage-policy / api-usage).
+    # Match by basename at any depth so the exclusion survives the tests/ domain layout.
+    */api-storage-policy*.test.ts|*/api-storage.test.ts|*/api-usage.test.ts)
       return 1
       ;;
   esac

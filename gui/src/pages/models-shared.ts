@@ -30,6 +30,7 @@ export interface ModelRow {
   id: string;
   namespaced: string;
   disabled: boolean;
+  initialSelectionPending?: boolean;
   native?: boolean;
   custom?: boolean;
   customId?: string;
@@ -55,6 +56,7 @@ export interface ProviderContextCapsResponse {
   cap?: number;
   value?: number;
   caps?: Record<string, number>;
+  values?: Record<string, number>;
 }
 
 export interface V2Status {

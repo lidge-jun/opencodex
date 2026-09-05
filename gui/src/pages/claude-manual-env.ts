@@ -1,7 +1,7 @@
 /**
  * Pure manual-env builder for the Claude Code page (devlog
  * 260720_claude_authmode_persist/020): extracted from ClaudeCode.tsx so the
- * copy-paste shell block is directly unit-testable (tests/claude-manual-env.test.ts).
+ * copy-paste shell block is directly unit-testable (tests/gui/claude-manual-env.test.ts).
  */
 import { AUTO_COMPACT_WINDOW_DEFAULT } from "./claude-code-types";
 

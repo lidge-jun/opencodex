@@ -16,7 +16,7 @@ bun run dev:proxy    # proxy API in dev mode
 bun run dev:gui      # dashboard dev server (another terminal)
 bun run typecheck    # bun x tsc --noEmit
 bun run test:changed              # routine import-graph test selection
-bun test tests/router.test.ts     # routine focused test
+bun test tests/routing/router.test.ts     # routine focused test
 bun run test                      # complete suite (PR-ready / explicit ask)
 ```
 
@@ -32,13 +32,13 @@ distincte. Utilisez les scripts enregistrés afin que les commandes locales corr
 bun run typecheck                 # strict TypeScript check
 bun run test:changed              # import-graph tests against the resolved dev merge base
 bun run test                      # complete tests/ suite (PR-ready / explicit ask)
-bun test tests/router.test.ts     # focused test file
+bun test tests/routing/router.test.ts     # focused test file
 bun run build:gui                 # Vite GUI build + package preparation
 bun run privacy:scan              # credential/privacy scan used by CI
 bun run prepare:package           # refresh package launchers/assets
 ```
 
-La plupart des tests Bun sont des fichiers plats `tests/*.test.ts`. `tests/helpers/` contient les fixtures
+Les tests Bun vivent dans des répertoires par domaine calqués sur `src/` (`tests/<domain>/`), la carte étant `scripts/test-layout/layout.json`. `tests/helpers/` contient les fixtures
 partagées et `tests/e2e-style/` des scénarios plus larges de parité native. Placez une régression ciblée près
 des tests existants du sous-système modifié. Exécutez la suite complète pour le routage partagé, les adaptateurs,
 la configuration ou le comportement du serveur.
@@ -92,11 +92,25 @@ Les workflows GitHub Actions restent volontairement limités :
 
 Utilisez l'assistant pour les versions :
 
+
+Avant d’exécuter le helper, choisissez la version prévue et lancez
+`.github/workflows/dev-version-bump.yml` depuis la branche par défaut avec
+`intended-version=<version>` et `mode=pre-move`. Relisez et fusionnez la PR créée
+vers `dev`, puis promouvez vers `main` ou `preview` avant de lancer le helper.
+Si `dev` dépasse déjà la version prévue, le workflow renvoie `changed=false` et
+aucune PR de version n’est nécessaire. La publication exige toujours une CI
+réussie sur le commit exact de la release.
+
 ```bash
 bun run release <version>           # commits/pushes the bump; publish workflow is dry-run by default
+bun run release --bump minor        # calcule la prochaine version patch, minor ou major depuis les tags et canaux npm
 bun run release <version> --publish # publish after the CI-gated dry run is understood
 bun run release:watch               # watch the newest Release workflow run
 ```
+
+`--bump patch|minor|major` remplace une version explicite. Dès qu’un tag de préversion ouvre un
+core supérieur, `--bump patch` refuse de prolonger l’ancienne ligne stable ; publiez plutôt le
+correctif dans le core de préversion ouvert.
 
 ## Branches
 

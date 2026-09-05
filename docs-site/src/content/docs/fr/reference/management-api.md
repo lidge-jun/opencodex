@@ -86,6 +86,16 @@ résultats propres à chaque route, sans répéter ce tableau.
 Pour comprendre la liste de modèles et le comportement chiffré des tâches confiées aux agents d'exécution, voir
 [Surface des sous-agents](/fr/guides/sub-agent-surface/).
 
+### Journal de restauration des intégrations clientes
+
+| Méthode et chemin | Objectif | Erreurs notables |
+| --- | --- | --- |
+| `GET /api/client-integrations/journal?client=...` | Lister les opérations de restauration, éventuellement pour un seul client. Chaque ligne contient le champ `deletable` calculé par le serveur. | 400 client invalide |
+| `DELETE /api/client-integrations/journal?opId=...` | Retirer une ancienne opération et supprimer son instantané si possible. La réponse contient `snapshotRemoved` ; `false` conserve le nettoyage pour une nouvelle tentative de maintenance. | 400 `opId` absent ; 404 opération absente ou déjà retirée ; 409 opération la plus récente du client |
+
+La suppression ajoute une pierre tombale au lieu de réécrire le journal. Le serveur protège
+l'opération la plus récente de chaque client afin de conserver le point d'annulation actuel.
+
 ### Combinaisons
 
 | Méthode et chemin | Objectif | Erreurs notables |
@@ -162,10 +172,16 @@ d’abord et soumettez le résumé renvoyé. Préférez la quarantaine lorsqu’
 | `GET /api/models` | Renvoyer les lignes de modèles destinées au tableau de bord et à l'interface en ligne de commande | `catalog_busy` lorsque la collecte est saturée |
 | `GET /api/client-config?client=...` | Créez une configuration client en lecture seule pour toute intégration de fichiers prise en charge | 400 client non pris en charge ; 503 catalogue indisponible |
 | `PUT /api/disabled-models` | Remplacer la liste partagée des modèles désactivés | 400 invalide JSON |
-| `PUT /api/model-visibility` | Modifier atomiquement la visibilité au niveau du fournisseur ou du modèle | 400 fournisseur, portée, cible ou corps non valide |
+| `PUT /api/model-visibility` | Modifier atomiquement la visibilité au niveau du fournisseur ou du modèle | 400 fournisseur, portée, cible ou corps non valide; 409 `initial_model_selection_pending` (Actualisez la liste des modèles, puis réessayez.) |
 | `GET, POST /api/custom-models` | Répertoriez les modèles personnalisés ou ajoutez-en un | 400 champs invalides ; 404 fournisseur manquant ; 409 dupliquer le modèle |
 | `PUT, DELETE /api/custom-models/{id}` | Modifier ou supprimer un modèle personnalisé | 400 invalide id/fields ; 404 introuvable ; 409 modèle en double |
-| `GET, PUT /api/selected-models` | Lire les listes autorisées et la disponibilité des fournisseurs, ou remplacer une liste autorisée | 400 fournisseur ou corps manquant ; 404 fournisseur inconnu |
+| `GET, PUT /api/selected-models` | Lire les listes autorisées et la disponibilité des fournisseurs, ou remplacer une liste autorisée | 400 fournisseur ou corps manquant ; 404 fournisseur inconnu; PUT 409 `initial_model_selection_pending` |
+| `GET, PUT /api/model-presets` | Lire les préréglages ou choisir le mode preset/all/custom | 400 mode invalide ou préréglage indisponible; 404 fournisseur inconnu; PUT 409 `initial_model_selection_pending` |
+
+Un modèle manuel remplace la ligne du tableau de bord Models ayant le même fournisseur et identifiant de modèle. Pour OpenAI, la ligne manuelle conserve `openai/<model>` et ses contrôles de visibilité. Sa suppression restaure la ligne native sans qualificatif de compte. Les lignes natives qualifiées par compte restent distinctes. Les routes natives et les droits du compte ne changent pas. Une cible de visibilité OpenAI non native doit correspondre à un modèle manuel configuré.
+
+
+Tant qu’une liste initiale fiable n’est pas disponible, les requêtes PUT valides vers `/api/selected-models` et `/api/model-presets` renvoient HTTP 409 avec le code `initial_model_selection_pending`. Actualisez la découverte des modèles (par exemple, `GET /api/models`), puis réessayez après sa réussite.
 
 ### Comptes OAuth, clés de fournisseur et clés du plan de données
 
@@ -203,6 +219,18 @@ fournisseurs ne sont pas renvoyés aux clients du tableau de bord.
 | `GET /api/provider-quotas` | Lire les rapports de quotas des fournisseurs ; `refresh=1` force le rafraîchissement | — |
 | `GET, PUT /api/provider-context-caps` | Lire ou mettre à jour les plafonds de contexte globaux, communs à tous les fournisseurs ou propres à un fournisseur | 400 requête invalide ; 404 fournisseur inconnu |
 | `GET /api/provider-presets` | Renvoyer les préréglages de fournisseur de l'interface graphique dérivés du registre d'exécution | — |
+
+La réponse des plafonds de contexte comprend `caps` (limites actives) et `values` (dernières
+sélections, conservées après désactivation). Activer un fournisseur sans `value` restaure sa
+sélection, ou utilise la valeur globale `contextCapValue` lors de la première activation.
+Cela vaut aussi pour OpenAI : le commutateur ne sélectionne pas un mode spécial à 922k.
+Un plafond actif borne chaque fenêtre native ; les modèles prenant en charge un contexte long
+peuvent être étendus uniquement jusqu’à leur propre plafond pris en charge.
+`{ "value": 600000, "setAll": true }` modifie la valeur globale et uniquement les plafonds actifs ;
+les fournisseurs dont le plafond est désactivé conservent leur sélection pour une réactivation ultérieure.
+`{ "setAll": true }` sans `value` active tous les fournisseurs configurés à la valeur globale
+actuelle et remplace leurs sélections mémorisées. La désactivation conserve la sélection,
+même après rechargement, sans l’appliquer comme limite.
 
 `provider_has_dependent_combos` est une barrière de sécurité : supprimez ou modifiez les combinaisons dépendantes avant de
 supprimer leur fournisseur.

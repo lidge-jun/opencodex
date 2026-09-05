@@ -23,6 +23,7 @@ both `--adapter` and `--base-url`.
 | `set-default <name>` | `--json` | Select an existing provider as the default. |
 | `selected <name>` | `--set <ids>`, `--clear`, `--json` | Read or update the provider model allowlist. |
 | `quota` | `--refresh`, `--json` | Read provider quota reports. |
+| `resets` | `--limit <n>`, `--json` | List recently detected quota-window resets. |
 | `presets` | `--json` | List dashboard provider presets. |
 | `account-mode` | `pool`, `direct`, `--json` | Select pooled or direct Codex account routing. |
 
@@ -74,6 +75,16 @@ ocx login xai
 ocx login anthropic
 ```
 
+OAuth reauthentication preserves operator settings such as model selections, pricing overrides,
+and account failover preferences. Login-owned transport/authentication fields and registry-owned
+catalog metadata are refreshed. A live-discovery provider keeps its selected default model; a
+static provider can replace a default that no longer exists in its refreshed catalog.
+
+For Antigravity, an upstream `401` can refresh the rejected account’s OAuth credential and
+retry the request once. The retry uses that credential’s Cloud Code Assist project. If refresh
+fails or no usable project is available, the request returns an authentication error; use the
+reauthentication flow above. A second `401` does not start another refresh/retry cycle.
+
 A proxy that is already running picks up the new credential without a restart: the CLI asks it to
 reload that one provider from disk, and the request carries no credential of its own. If the
 running proxy cannot accept that request — most often because it started from a build that predates
@@ -91,6 +102,65 @@ live process keeps serving the previous one. The CLI says so and asks you to res
 Remove the stored OAuth credential for a provider.
 
 ## Accounts and key pools
+
+### Main-account 99% protection
+
+In **Codex settings → Multi-auth → Advanced settings**, **Block main account at 99%**
+is an independent opt-in beside Ultra Fast. Enabling it first shows the consequences; cancelling
+does not change the setting. The main-account card shows monitoring, unknown usage, or a current
+policy block even when Advanced settings is closed.
+
+The policy uses the **5h window when present**, otherwise the weekly window. Monthly-only
+accounts use their monthly window. It does not take the highest percentage across windows.
+A fresh **0%** observation automatically releases the block while the switch stays on; the next
+99% observation blocks again. Unknown usage does not fabricate a zero, and a missing reading does
+not erase an already measured blocking tuple. A predicted reset time alone does not unlock it.
+While blocked, the existing once-per-minute background cycle checks fresh owned usage; failed or
+invalid readings retain the block. Other pause, reauthentication, and upstream limits remain independent.
+
+The persisted option is `"codexMainAccountHardLock": true` in OpenCodex's `config.json`; it is off
+by default. This protects new requests using the identified main account, not the last 1% itself:
+already-running requests, unmatched caller-owned keyring credentials, and traffic outside the
+proxy can still spend quota. Added accounts and other providers remain available.
+
+While this policy blocks main, Luna Reserve on that account is blocked too. Staying below ordinary
+quota exhaustion may prevent Reserve activation. Disabling the switch restores normal local
+handling, not additional upstream entitlement. Use the account quota refresh action to obtain a
+fresh observation; no reset credit is consumed automatically.
+
+### Luna Reserve alongside routed models
+
+The optional [authless Desktop mode](/guides/codex-integration/#authless-codex-desktop-opt-in)
+keeps Desktop's native Reserve-only picker gate inactive. It also disables Desktop's automatic
+Reserve handling: Reserve is an explicit model choice, not an automatic fallback.
+
+Keep the built-in OpenAI provider enabled in ChatGPT-forward mode, enable the account model picker,
+and configure a public selector for the stored main account. With effective loopback authless mode
+enabled, `ocx sync` includes `<main-selector>/gpt-reserve` alongside routed provider models. A bare
+`gpt-reserve`, an added-account selector, and API-key model discovery are not added to the catalog.
+The authless setting is ignored for remote-client routing or a listener that needs an admission header.
+When public and local listeners run together, Reserve compatibility applies only to requests admitted
+by the local listener. An authenticated public request stays on the normal path even if it originates
+from the same machine; request headers cannot select the local policy.
+
+Enable authless Desktop mode with `ocx system settings --desktop-authless on`, run `ocx sync`,
+then fully quit and reopen Codex Desktop so it reloads the rewritten configuration and catalog.
+Follow the [canonical authless Desktop workflow](/guides/codex-integration/#authless-codex-desktop-opt-in).
+
+Each compatibility request checks a credential-bound server authorization, cached for at most
+60 seconds. OpenCodex sends the Reserve capability header on an owned main-account usage read and
+requires ordinary usage to be disallowed, the Luna Reserve banner, and exactly one allowed Reserve
+bucket. Missing, denied, stale or mismatched evidence refuses the request; it does not switch accounts
+or silently use ordinary Luna. Passive usage can revoke authorization but cannot create it.
+Global cooldown, pause, reauthentication and the 99% hard lock still apply. Disable the hard lock if
+you want to use Reserve on an exhausted main account; doing so does not grant server entitlement.
+This compatibility path supports conversation requests and compaction, not Reserve as a vision or
+web-search helper or a standalone search-relay model. Choose another model for those helpers.
+
+The picker prefers actual Reserve metadata. When none has been observed, it uses an explicitly marked
+Luna metadata adaptation, following Desktop's Reserve-or-Luna preset mapping. A visible entry is not
+proof of availability. Desktop source and fixture-backed paths were checked; a live Reserve-active
+account was not used to validate this compatibility path.
 
 ### `ocx account <subcommand>`
 
@@ -148,7 +218,8 @@ Human output uses `PROVIDER TYPE ID PLAN/LABEL PRIORITY STATUS`; a manually chos
 `selected`. `PRIORITY` is the signed Codex selection order (`0` when unset) and shows `-` for rows
 where ordering does not apply, such as OAuth accounts and API keys. By default, with two or more eligible stored Kiro accounts, a 429 rotates automatically to
 another account and prefers the one with the most known remaining allowance; rotation is
-presence-driven and can be turned off with `oauthAccountFailover.enabled: false`; `ocx account login kiro`
+presence-driven and cannot be turned off — `oauthAccountFailover.enabled: false` declines the
+pre-dispatch account preference, not 429 recovery; `ocx account login kiro`
 adds accounts to the pool one at a time. An empty result is still success. `--json`
 returns:
 

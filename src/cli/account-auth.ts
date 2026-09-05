@@ -1,4 +1,5 @@
 import { writeSync } from "node:fs";
+import { modelSelectionGuidance, modelSelectionNextSteps } from "./model-selection-guidance";
 import { warnIfCodexCatalogRefreshPending } from "./account-catalog-refresh";
 import { isCodexResetCreditOperationId } from "../codex/reset-credit-recovery";
 import {
@@ -137,7 +138,7 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<void> {
       }, deps);
     }
     if (noWait) {
-      if (wantsJson) printData(start, true);
+      printData({ ...start, modelSelection: modelSelectionNextSteps("openai", true) }, wantsJson, modelSelectionGuidance("openai", true));
       return;
     }
     if (!start.flowId) throw new CliUsageError("login did not return a flow id");
@@ -153,7 +154,7 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<void> {
         {}, deps,
       );
       if (state.status === "done") {
-        printData(state, wantsJson, [`Logged in${state.email ? ` as ${String(state.email)}` : ""}.`]);
+        printData({ ...state, modelSelection: modelSelectionNextSteps("openai") }, wantsJson, [`Logged in${state.email ? ` as ${String(state.email)}` : ""}.`, ...modelSelectionGuidance("openai")]);
         if (!wantsJson) warnIfCodexCatalogRefreshPending(state);
         return;
       }
@@ -184,7 +185,7 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     }, deps);
   }
   if (noWait) {
-    if (wantsJson) printData(start, true);
+    printData({ ...start, modelSelection: modelSelectionNextSteps(provider, true) }, wantsJson, modelSelectionGuidance(provider, true));
     return;
   }
   for (let attempt = 0; attempt < 100; attempt++) {
@@ -192,7 +193,7 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     const state = await runtimeRequest<Record<string, unknown>>(`/api/oauth/status?provider=${encodeURIComponent(provider)}`, {}, deps);
     if (state.error) throw new CliUsageError(String(state.error));
     if (state.loggedIn === true) {
-      printData(state, wantsJson, [`Logged in to ${provider}.`]);
+      printData({ ...state, modelSelection: modelSelectionNextSteps(provider) }, wantsJson, [`Logged in to ${provider}.`, ...modelSelectionGuidance(provider)]);
       return;
     }
   }

@@ -22,7 +22,7 @@ ssh <host> 'ls -l ~/bin/ocx-run' || {
 ## Why
 
 On 2026-08-14 two `bun test` runs sat on `lidge` for **3h12m**. Both had stopped
-producing output after ~4 minutes, both were wedged inside `tests/request-log.test.ts`,
+producing output after ~4 minutes, both were wedged inside `tests/usage/request-log.test.ts`,
 and neither would ever write its `.exit` file — so every poller read them as
 "still running". A second run had also been started against the same 16 CPUs, so
 even healthy work crawled. Three independent failures, three guards:

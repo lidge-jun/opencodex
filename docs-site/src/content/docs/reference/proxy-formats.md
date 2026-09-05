@@ -60,6 +60,13 @@ Responses shapes. Other Responses destinations preserve them.
 The same canonical boundary removes nested client-only `prompt_cache_breakpoint` markers and drops
 `item_reference` entries only on `store: false` continuations; tool call/result pairing is unchanged.
 
+Image file IDs are provider-scoped references, not portable image bytes. Responses passthrough
+retains them; translating adapters receive an `[image: file_id]` text marker for file-only image
+parts in messages or function/custom tool outputs. Use an image URL or base64 data URL when the
+translated model needs to see the image. Hosted `computer_call_output` items require a Responses
+passthrough route; translated routes return HTTP 400 instead of silently dropping the screenshot.
+For a screenshot observation without hosted computer-tool semantics, use a user `input_image`.
+
 ### JSON and SSE output
 
 With `stream: true`, the response is `text/event-stream`. The bridge emits Responses events such as
@@ -69,6 +76,17 @@ With `stream: true`, the response is `text/event-stream`. The bridge emits Respo
 
 With `stream: false` or no `stream`, the same adapter events are collected into one Responses JSON
 object. Both forms preserve the selected model, output items, terminal status, and usage.
+
+For native HTTP/SSE passthrough, a client cancellation without an observed upstream terminal is
+logged as `499` with `closeReason: "client_cancel"` and does not penalize the account pool.
+This applies to both tee inspection and eager relay, including Windows rewrite traffic,
+even when the upstream read rejects before the response-body cancellation hook runs.
+A terminal captured during the bounded post-disconnect drain retains its actual outcome.
+
+If native passthrough rewriting fails, including when it exceeds the translation
+buffer budget, the relay reports the failure without waiting for upstream inspection
+to finish. It cancels the upstream work and emits `response.failed` followed by
+`data: [DONE]`; a budget overflow uses the `translation_buffer_limit` error code.
 
 Client-facing Responses SSE frames are limited to 4 MiB per frame, measured in raw bytes before the
 SSE block delimiter. On HTTP, an unterminated upstream frame that exceeds the limit fails closed
@@ -99,6 +117,19 @@ identities use HTTP/SSE. The upstream WS adapter keeps the same downstream SSE c
 the raw JSON frame and its SSE envelope at 4 MiB, and closes the upstream when its 8 MiB byte queue
 would overflow. That overflow emits a terminal downstream `response.failed` event followed by
 `[DONE]`.
+
+The upstream WebSocket checks `NO_PROXY`/`no_proxy` first. Otherwise it uses the first non-empty
+`HTTPS_PROXY`, `https_proxy`, `ALL_PROXY`, or `all_proxy` value; `HTTP_PROXY` alone does not proxy a
+WSS connection. HTTP and HTTPS proxy URLs are passed to Bun. If the selected value is invalid or
+uses an unsupported protocol, opencodex skips the WebSocket attempt and uses HTTP/SSE instead of
+dialing the upstream directly.
+
+These rules belong to the upstream WebSocket transport, independently of the selected provider
+adapter. HTTP fetch-based Responses requests, including SSE fallback, use Bun's HTTP proxy rules
+and do not use `ALL_PROXY`. `config.proxy` fills missing `HTTP_PROXY`/`HTTPS_PROXY` values; the
+resulting scheme-specific value also takes precedence over an existing `ALL_PROXY` for WebSocket.
+For an HTTPS upstream that requires a proxy, set `HTTPS_PROXY` or `config.proxy`; `HTTP_PROXY`
+alone leaves both WSS and its HTTPS fallback without a scheme-matched proxy.
 
 Every terminal Responses usage object includes both detail objects, even when the provider did not
 report those details:
@@ -191,6 +222,14 @@ non-empty `messages` array. It translates system, user, assistant, and tool mess
 Responses items; translates function tools, tool choice, images, reasoning effort, and supported
 response formats; runs the normal Responses routing pipeline; then translates the result back.
 
+Image URLs and base64 data URLs use Chat `image_url` content parts. Translation preserves
+supported `detail` values (`auto`, `low`, `high`). On translated routes, OpenCodex also accepts
+image-bearing tool-result arrays as a compatibility extension: Responses routes retain structured
+output, while the `openai-chat` adapter sends tool images in a following user message because Chat
+tool content is text-only. Other downstream adapters own provider-specific placement. Plain text
+results remain strings. Native passthrough follows its upstream contract; image support still depends
+on the selected model and provider configuration.
+
 Reasoning is part of that translation. `reasoning_effort` (or `reasoning.effort`) becomes
 internal `reasoning.effort`. Because the Responses parser hides thinking unless
 `reasoning.summary` is set and is not `none`, Chat Completions requests that ask for an
@@ -221,6 +260,22 @@ returned as an error instead of silently changing its meaning.
 These endpoints speak the Anthropic Messages dialect used by Claude Code and compatible clients.
 Most requests are translated to Responses, routed normally, then translated back to Anthropic JSON
 or Anthropic SSE.
+
+Base64 and URL image sources are translated in user messages and nested tool results. File-backed
+images (`source.type: "file"`) require native Anthropic passthrough; translated routes return a
+fixed HTTP 400 error asking for base64 or URL input. OpenCodex does not resolve another provider's
+file storage or upload the referenced image on the caller's behalf.
+
+When replay history contains an image-bearing tool result without its adjacent call, the
+Anthropic and Command Code adapters retain the image in a provenance-labeled user carrier rather
+than embedding its bytes in prompt text. They do not invent a successful tool call. Results for
+valid pending calls still precede these carriers, preserving the upstream pairing contract.
+
+For Cursor external models, data-URL screenshots in the active trailing tool-result batch are
+attached to the continuation request. The existing 12-image active-attachment limit applies to
+the whole batch. Bounded source labels remain beside the attachments even if older history is
+pruned. Native Composer/MCP handling, historical-image recall, and remote-URL omission policy
+are unchanged; this does not promise every model can see every image source.
 
 Native Anthropic passthrough is eligible only when all of these are true:
 
@@ -352,7 +407,7 @@ Errors use the client dialect's envelope where needed, but these status/code mea
 | 401 | `authentication_error` | A required proxy admission credential is missing or invalid |
 | 403 | `origin_rejected` | A Responses/OpenAI data-plane request or WebSocket upgrade came from a disallowed origin |
 | 503 | `combo_unavailable` | Every target in the selected combo is unavailable, in cooldown, disabled, or otherwise ineligible |
-| 400 | `unreadable_encrypted_agent_task` | An encrypted v2 worker task has no eligible native ChatGPT target that can consume it |
+| 400 | `unreadable_encrypted_agent_task` | An encrypted v2 worker task has no eligible canonical ChatGPT target or direct key-auth Responses target explicitly trusted with `allowEncryptedV2AgentTasks: true` that can consume it |
 | 426 | `upgrade_required` | The Responses WebSocket transport is disabled or the upgrade failed; use HTTP |
 
 Anthropic-origin failures are rendered in Anthropic's error envelope, so the origin rejection is a

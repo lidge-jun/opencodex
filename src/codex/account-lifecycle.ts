@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import {
-  atomicWriteFile,
+  deleteConfigTopLevelKey,
   getConfigPath,
   saveConfigPreservingClaudeCode,
   withConfigMutationLockSync,
@@ -12,9 +12,10 @@ import { MAIN_CODEX_ACCOUNT_ID, setMainAccountPlan } from "./main-account";
 import { clearAccountQuota } from "./quota";
 import { clearCodexUpstreamHealthForAccount, clearThreadAccountMapForAccount } from "./routing";
 import { invalidateCodexWebSocketsForAccount } from "./websocket-registry";
-import { clearMainAccountCredentialPresence, clearMainAccountInfoCache } from "./main-account-cache";
+import { clearMainAccountCredentialPresence, clearMainAccountInfoCache, observeMainQuotaIdentity } from "./main-account-cache";
 import { forgetCodexAccountPause } from "./account-pause";
 import { clearCodexAccountPin, forgetCodexAccountPriority } from "./account-priority";
+import { forgetCodexQuotaAutoRefreshAccount } from "./quota-auto-refresh-state";
 import { codexAccountNamespaceEntries, codexAccountPickerEnabled } from "./account-namespaces";
 import type { OcxConfig } from "../types";
 
@@ -64,9 +65,13 @@ export function reconcileMainCodexAccountRuntimeState(): boolean {
   if (currentAccountId === null) return false;
   const previousAccountId = observedMainChatgptAccountId;
   observedMainChatgptAccountId = currentAccountId;
-  if (previousAccountId === undefined || previousAccountId === currentAccountId) return false;
+  if (previousAccountId === undefined || previousAccountId === currentAccountId) {
+    observeMainQuotaIdentity(currentAccountId);
+    return false;
+  }
 
   purgeMainCodexAccountRuntimeState();
+  observeMainQuotaIdentity(currentAccountId);
   return true;
 }
 
@@ -79,11 +84,15 @@ export function applyConfirmedMainCodexAccountTransition(
   toAccountId: string,
 ): boolean {
   if (!fromAccountId || !toAccountId || fromAccountId === toAccountId) {
-    if (toAccountId) observedMainChatgptAccountId = toAccountId;
+    if (toAccountId) {
+      observedMainChatgptAccountId = toAccountId;
+      observeMainQuotaIdentity(toAccountId);
+    }
     return false;
   }
   observedMainChatgptAccountId = toAccountId;
   purgeMainCodexAccountRuntimeState();
+  observeMainQuotaIdentity(toAccountId);
   return true;
 }
 
@@ -97,13 +106,10 @@ function restoreRuntimeConfig(target: OcxConfig, snapshot: OcxConfig): void {
   Object.assign(target, snapshot);
 }
 
-function restorePersistedConfig(configPath: string, previousBytes: string): void {
-  try {
-    if (readFileSync(configPath, "utf8") === previousBytes) return;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+function assertPersistedConfigUnchanged(configPath: string, previousBytes: Buffer): void {
+  if (!readFileSync(configPath).equals(previousBytes)) {
+    throw new CodexAccountDeleteRollbackError();
   }
-  atomicWriteFile(configPath, previousBytes);
 }
 
 /**
@@ -123,7 +129,7 @@ export function deleteCodexAccount(runtimeConfig: OcxConfig, accountId: string):
     const previousConfig = structuredClone(runtimeConfig);
     const configPath = getConfigPath();
     const hasPersistedConfig = existsSync(configPath);
-    const previousPersistedConfig = hasPersistedConfig ? readFileSync(configPath, "utf8") : undefined;
+    const previousPersistedConfig = hasPersistedConfig ? readFileSync(configPath) : undefined;
     const hadStoredAccount = (runtimeConfig.codexAccounts ?? [])
       .some(account => !account.isMain && account.id === accountId);
     const hadVisiblePickerBinding = hadStoredAccount
@@ -135,6 +141,12 @@ export function deleteCodexAccount(runtimeConfig: OcxConfig, accountId: string):
       .filter(account => account.isMain || account.id !== accountId);
     forgetCodexAccountPause(runtimeConfig, accountId);
     forgetCodexAccountPriority(runtimeConfig, accountId);
+    if (runtimeConfig.codexQuotaAutoRefresh?.[accountId]) {
+      const retained = { ...runtimeConfig.codexQuotaAutoRefresh };
+      delete retained[accountId];
+      if (Object.keys(retained).length > 0) runtimeConfig.codexQuotaAutoRefresh = retained;
+      else deleteConfigTopLevelKey(runtimeConfig, "codexQuotaAutoRefresh");
+    }
     clearCodexAccountPin(runtimeConfig, accountId);
     if (runtimeConfig.activeCodexAccountId === accountId) runtimeConfig.activeCodexAccountId = undefined;
 
@@ -146,7 +158,7 @@ export function deleteCodexAccount(runtimeConfig: OcxConfig, accountId: string):
       } catch (error) {
         restoreRuntimeConfig(runtimeConfig, previousConfig);
         try {
-          restorePersistedConfig(configPath, previousPersistedConfig);
+          assertPersistedConfigUnchanged(configPath, previousPersistedConfig);
         } catch {
           throw new CodexAccountDeleteRollbackError();
         }
@@ -167,6 +179,7 @@ export function deleteCodexAccount(runtimeConfig: OcxConfig, accountId: string):
     return hadVisiblePickerBinding;
   });
 
+  forgetCodexQuotaAutoRefreshAccount(accountId);
   if (cleanupFailed) throw new CodexAccountDeleteCleanupError();
   return pickerVisibilityChanged;
 }

@@ -71,6 +71,16 @@ Authorization: Bearer <admin-token>
 
 모델 목록과 암호화된 worker-task 동작의 개념은 [Sub-agent Surface](/guides/sub-agent-surface/)를 참고하십시오.
 
+### 클라이언트 연동 롤백 저널
+
+| 메서드 및 경로 | 목적 | 주요 오류 |
+| --- | --- | --- |
+| `GET /api/client-integrations/journal?client=...` | 롤백 작업을 조회합니다. 특정 클라이언트로 제한할 수 있으며 각 행에는 서버가 계산한 `deletable` 값이 포함됩니다. | 400 잘못된 클라이언트 |
+| `DELETE /api/client-integrations/journal?opId=...` | 이전 롤백 작업을 폐기하고 가능한 경우 스냅샷도 제거합니다. 성공 응답의 `snapshotRemoved`가 `false`면 유지보수 재시도를 위해 정리 작업이 보존됩니다. | 400 `opId` 누락, 404 없거나 이미 폐기된 작업, 409 해당 클라이언트의 최신 작업 |
+
+삭제는 저널을 다시 쓰지 않고 툼스톤을 추가합니다. 현재 실행 취소 지점을 유지하기 위해
+각 클라이언트의 최신 작업은 서버에서 삭제하지 못하게 보호합니다.
+
 ### 콤보
 
 | Method and path | 목적 | 주요 오류 |
@@ -137,10 +147,16 @@ Authorization: Bearer <admin-token>
 | `GET /api/models` | 대시보드/CLI model 행을 반환합니다 | 수집이 포화 상태이면 `catalog_busy` |
 | `GET /api/client-config?client=...` | 지원되는 파일 연동의 읽기 전용 client config를 만듭니다 | 400 지원되지 않는 client; 503 catalog 사용 불가 |
 | `PUT /api/disabled-models` | 공유 disabled-model 목록을 교체합니다 | 400 잘못된 JSON |
-| `PUT /api/model-visibility` | provider 또는 model 수준의 visibility를 원자적으로 변경합니다 | 400 잘못된 provider, scope, target, 또는 본문 |
+| `PUT /api/model-visibility` | provider 또는 model 수준의 visibility를 원자적으로 변경합니다 | 400 잘못된 provider, scope, target, 또는 본문; 409 `initial_model_selection_pending` (목록을 새로고침한 뒤 다시 시도하세요.) |
 | `GET, POST /api/custom-models` | custom model을 나열하거나 하나를 추가합니다 | 400 잘못된 필드; 404 provider 없음; 409 중복 model |
 | `PUT, DELETE /api/custom-models/{id}` | custom model 하나를 수정하거나 삭제합니다 | 400 잘못된 id/필드; 404 찾을 수 없음; 409 중복 model |
-| `GET, PUT /api/selected-models` | provider allowlist와 가용성을 읽거나 allowlist 하나를 교체합니다 | 400 provider/body 누락; 404 알 수 없는 provider |
+| `GET, PUT /api/selected-models` | provider allowlist와 가용성을 읽거나 allowlist 하나를 교체합니다 | 400 provider/body 누락; 404 알 수 없는 provider; PUT 409 `initial_model_selection_pending` |
+| `GET, PUT /api/model-presets` | 프리셋 정보를 읽거나 preset/all/custom 모드를 선택합니다 | 400 잘못된 mode 또는 지원하지 않는 프리셋; 404 알 수 없는 provider; PUT 409 `initial_model_selection_pending` |
+
+수동 모델은 Models 대시보드에서 provider와 model ID가 같은 행을 대체합니다. OpenAI 수동 행은 `openai/<model>`을 유지하며 표시 여부를 바꿀 수 있습니다. 수동 행을 삭제하면 계정 한정자가 없는 네이티브 행이 다시 나타납니다. 계정 한정자가 있는 네이티브 행은 별도로 유지됩니다. 네이티브 경로나 계정 권한은 바뀌지 않습니다. OpenAI의 비네이티브 표시 대상은 설정된 수동 모델과 일치해야 합니다.
+
+
+신뢰할 수 있는 초기 모델 목록을 확보하기 전에는 유효한 `PUT /api/selected-models`와 `PUT /api/model-presets` 요청도 HTTP 409와 `initial_model_selection_pending` 코드를 반환합니다. `GET /api/models` 등으로 모델 목록을 정상적으로 갱신한 뒤 재시도하세요.
 
 ### OAuth 계정, provider key, 데이터 평면 키
 
@@ -177,6 +193,15 @@ Authorization: Bearer <admin-token>
 | `GET /api/provider-quotas` | provider quota 보고서를 읽습니다. `refresh=1`은 새로 고침을 강제합니다 | — |
 | `GET, PUT /api/provider-context-caps` | 전역, 모든 provider, 또는 하나의 provider context cap을 읽거나 업데이트합니다 | 400 잘못된 요청; 404 알 수 없는 provider |
 | `GET /api/provider-presets` | 런타임 registry에서 파생된 GUI provider preset을 반환합니다 | — |
+
+컨텍스트 상한 응답에는 `caps`(활성 상한)와 `values`(꺼도 유지되는 마지막 선택값)가 포함됩니다.
+`value` 없이 공급자의 상한을 켜면 선택값을 복원하고, 처음 켤 때는 전역 `contextCapValue`를 씁니다.
+OpenAI도 같은 규칙을 따르며, 스위치를 켠다고 별도의 922k 모드가 선택되지는 않습니다.
+활성 상한은 모든 네이티브 윈도에 적용됩니다. 장문 컨텍스트를 지원하는 모델은 해당 모델의 지원 상한까지만
+확장할 수 있습니다. `{ "value": 600000, "setAll": true }`는 전역 값과 활성 상한만 갱신합니다.
+상한이 꺼진 공급자는 선택값을 유지하고, 나중에 켜면 그 값을 복원합니다.
+`value` 없이 `{ "setAll": true }`를 보내면 설정된 모든 공급자의 상한을 현재 전역 값으로 켜고,
+저장된 선택값도 바꿉니다. 상한을 꺼도 선택값은 다시 불러온 뒤까지 유지되지만 제한으로 적용되지는 않습니다.
 
 `provider_has_dependent_combos`는 안전 장치입니다. provider를 삭제하기 전에 종속된 combo를 제거하거나 수정하십시오.
 

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { saveConfigPreservingClaudeCode } from "../config";
 import { isCodexAccountGenerationLive, readCodexAccountRecord } from "./account-store";
 import { codexAccountLogLabel } from "./account-label";
+import { NATIVE_RESERVE_MODEL } from "./catalog/native-models";
 import { isCodexAccountPaused } from "./account-pause";
 import { clearCodexAccountPin, codexAccountPriorityLookup, pinnedCodexAccountId } from "./account-priority";
 import { isCodexAccountUsable, type CodexAccountUsabilityOptions } from "./account-usability";
@@ -114,6 +115,14 @@ const CODEX_MAX_RESET_DERIVED_COOLDOWN_MS = 15 * 60_000;
 /** Minimum gap between probe leases for one cooled-down account. */
 export const CODEX_QUOTA_PROBE_INTERVAL_MS = 5 * 60_000;
 export const CODEX_FAILURE_WINDOW_MS = 5 * 60_000;
+/**
+ * How recently a 100% burst reading must have been OBSERVED to exclude an account when it
+ * carries no reset timestamp (#3425). Deliberately far tighter than the 6h disk-hydration
+ * horizon in `quota.ts`: shorter than any plausible five-hour burst window, so a persisted
+ * reading can never strand a recovered account, and long enough that a snapshot taken at
+ * admission is still fresh when selection reads it.
+ */
+export const TERMINAL_SHORT_WINDOW_FRESHNESS_MS = 5 * 60_000;
 /** How long a transient failure keeps the account out of pool selection. */
 export const CODEX_TRANSIENT_SOFT_AVOID_MS = 30_000;
 const CODEX_TRANSIENT_SOFT_AVOID_ESCALATION_MS = [
@@ -165,7 +174,7 @@ export type CodexCooldownSource = "retry-after" | "reset-derived" | "default";
  * Add a new explicit group here only when its independent upstream quota is
  * confirmed, so shared limits never receive cross-model bypasses.
  */
-export type CodexQuotaScope = "shared" | "spark";
+export type CodexQuotaScope = "shared" | "spark" | "reserve";
 
 export type CodexQuotaRecoveryProbeClaim = {
   accountId: string;
@@ -200,6 +209,7 @@ function isModelDetourAffinityScope(scope: ThreadAffinityScope): scope is ModelD
 
 const NATIVE_MODEL_QUOTA_SCOPES: Readonly<Record<string, CodexQuotaScope>> = {
   "gpt-5.3-codex-spark": "spark",
+  [NATIVE_RESERVE_MODEL]: "reserve",
 };
 
 export function codexQuotaScopeForModel(modelId: string | undefined): CodexQuotaScope | undefined {
@@ -365,6 +375,7 @@ export function computeCodexUsageScore(quota: {
   monthlyPercent?: number;
   shortPercent?: number;
   shortResetAt?: number;
+  shortObservedAt?: number;
 } | null, plan?: unknown, now: number = Date.now()): number {
   if (!quota) return CODEX_UNKNOWN_USAGE_SCORE;
   const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
@@ -404,15 +415,24 @@ export function computeCodexUsageScore(quota: {
  * direction here is the one that keeps an account selectable: a wrongly-selected account
  * fails one request, while a wrongly-excluded one is invisible until someone reads the pool
  * by hand.
+ *
+ * A missing reset can instead be aged by shortObservedAt (#3425). General updatedAt is not
+ * sufficient: credit-only updates preserve the old short tuple but advance that timestamp.
+ * Old disk snapshots without short-window provenance remain unknown.
  */
 function isTerminalShortWindow(
-  quota: { shortPercent?: number; shortResetAt?: number },
+  quota: { shortPercent?: number; shortResetAt?: number; shortObservedAt?: number },
   now: number,
 ): boolean {
   if (typeof quota.shortPercent !== "number" || !Number.isFinite(quota.shortPercent)) return false;
   if (quota.shortPercent < CODEX_EXHAUSTED_USAGE_PERCENT) return false;
   const resetAt = quota.shortResetAt;
-  if (typeof resetAt !== "number" || !Number.isFinite(resetAt) || resetAt <= 0) return false;
+  if (typeof resetAt !== "number" || !Number.isFinite(resetAt) || resetAt <= 0) {
+    const observedAt = quota.shortObservedAt;
+    if (typeof observedAt !== "number" || !Number.isFinite(observedAt)) return false;
+    const age = now - observedAt;
+    return age >= 0 && age <= TERMINAL_SHORT_WINDOW_FRESHNESS_MS;
+  }
   // Both units reach storage: `normalizeResetAt` does not scale, and the GUI disambiguates
   // by magnitude at read time. A comparison written against one assumption is off by 1000x
   // against the other, and in the seconds-read-as-milliseconds direction every terminal
@@ -548,7 +568,7 @@ function canAcquireQuotaProbeLease(health: CodexUpstreamHealth | undefined, now:
 
 /**
  * Claim due reset-derived cooldown probes without consulting account selection.
- * Pool credentials only: the main account has no quota-refresh single-flight.
+ * Added Pool credentials only; owned main usage recovery is handled separately.
  */
 export function claimDueCodexQuotaRecoveryProbes(
   config: OcxConfig,
@@ -575,11 +595,10 @@ export function claimDueCodexQuotaRecoveryProbes(
       { scope: undefined, health: upstreamHealth.get(account.id) },
       ...[...(quotaScopedHealth.get(account.id) ?? [])].map(([scope, health]) => ({ scope, health })),
     ].filter((entry): entry is { scope?: CodexQuotaScope; health: CodexUpstreamHealth } =>
-      // `spark` is deliberately never claimed. `GET /backend-api/wham/usage` takes no scope
-      // parameter and returns generic weekly/monthly windows, so its result can never prove a
-      // spark recovery — a claim here would spend an upstream call to settle `false` every
-      // time, and (with one claim per account per pass) delay the shared scope that CAN recover.
-      entry.scope !== "spark"
+      // Generic WHAM evidence can recover only ordinary quota, never Spark or Reserve.
+      // Do not spend this account's one claim per pass on an independent scope and
+      // delay the shared scope that the response can actually recover.
+      (entry.scope === undefined || entry.scope === "shared")
       && entry.health?.cooldownSource === "reset-derived"
       && canAcquireQuotaProbeLease(entry.health, now))
       .sort((a, b) =>

@@ -1,4 +1,5 @@
 import type { OcxConfig } from "../types";
+import { resolvePendingInitialModelSelection } from "../providers/initial-model-selection-runtime";
 import { captureCatalogAdmissionSnapshot } from "./catalog-admission";
 import { convergeCodexCatalog } from "./convergence";
 import type {
@@ -152,6 +153,8 @@ export function createManagementConvergeCodex(
           catalogRefresh: unexpectedCatalogFailure(false),
         });
       }
+      // Registration choices are committed independently, before sealing catalog authority.
+      await resolvePendingInitialModelSelection(retainedConfig as OcxConfig);
       const snapshot = captureCatalogAdmissionSnapshot(retainedConfig);
       const result = await convergeCodexCatalog(snapshot, request, {
         onCommitBegin: () => { commitBegan = true; },

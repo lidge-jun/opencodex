@@ -154,6 +154,7 @@ import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostR
 import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
 import type { ManagementContext } from "./context";
 import { listManagementModelRows, loadExportModels } from "./model-rows";
+import { initialModelSelectionPending } from "../../providers/initial-model-selection";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import {
   hasModelPreset,
@@ -536,6 +537,9 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     }
 
     const providerConfig = hasOwnProvider(config.providers, provider) ? config.providers[provider] : undefined;
+    if (initialModelSelectionPending(providerConfig)) {
+      return jsonResponse({ error: "Initial model discovery is pending. Refresh the model list and retry.", code: "initial_model_selection_pending" }, 409);
+    }
     const isVirtualComboNamespace = provider === COMBO_NAMESPACE && !preservesPhysicalComboProvider(config);
     if (!providerConfig && provider !== "openai" && !isVirtualComboNamespace) {
       return jsonResponse({ error: "unknown model visibility provider" }, 400);
@@ -562,7 +566,10 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
       }
       const id = value.id.trim();
       const native = value.native === true;
-      if (!id || (provider === "openai") !== native || (native && !supportedNative.has(id))) {
+      const configuredOpenAiCustom = provider === "openai" && !native && providerConfig
+        && (config.customModels ?? []).some(model => model.provider === provider && model.modelId === id);
+      if (!id || (native && (provider !== "openai" || !supportedNative.has(id)))
+        || (provider === "openai" && !native && !configuredOpenAiCustom)) {
         return jsonResponse({ error: "invalid model visibility target" }, 400);
       }
       const key = `${native ? "native" : "routed"}:${id}`;
@@ -836,7 +843,13 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     if (mode !== "preset" && mode !== "all" && mode !== "custom") {
       return jsonResponse({ error: "mode must be preset, all, or custom" }, 400);
     }
+    if (mode === "preset" && !hasModelPreset(provider)) {
+      return jsonResponse({ error: `no model preset is shipped for provider '${provider}'` }, 400);
+    }
     const target = config.providers[provider];
+    if (initialModelSelectionPending(target)) {
+      return jsonResponse({ error: "Initial model discovery is pending. Refresh the model list and retry.", code: "initial_model_selection_pending" }, 409);
+    }
     if (mode === "all") {
       // Same effect as today's empty-list PUT: no allowlist, no marker to reconcile.
       delete target.selectedModels;
@@ -850,9 +863,6 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
       target.modelPreset = { ...(target.modelPreset ?? {}), mode: "custom" };
       persistConfig(config);
       return jsonResponse({ ok: true, provider, mode, selected: [...(target.selectedModels ?? [])] });
-    }
-    if (!hasModelPreset(provider)) {
-      return jsonResponse({ error: `no model preset is shipped for provider '${provider}'` }, 400);
     }
     const models = await fetchAllModels(config);
     const catalogIds = models.filter(m => m.provider === provider).map(m => m.id);
@@ -899,6 +909,9 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     const provider = typeof body.provider === "string" ? body.provider : "";
     if (!provider || !hasOwnProvider(config.providers, provider)) {
       return jsonResponse({ error: "unknown provider" }, provider ? 404 : 400);
+    }
+    if (initialModelSelectionPending(config.providers[provider])) {
+      return jsonResponse({ error: "Initial model discovery is pending. Refresh the model list and retry.", code: "initial_model_selection_pending" }, 409);
     }
     const models = Array.isArray(body.models)
       ? [...new Set(body.models.filter((m): m is string => typeof m === "string"))]

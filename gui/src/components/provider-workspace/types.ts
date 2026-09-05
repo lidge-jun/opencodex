@@ -29,6 +29,7 @@ export interface ProviderUsageTotals {
 export interface ProviderModelUsageRow {
   model: string;
   resolvedModel?: string;
+  hasUnresolvedRequestedModel?: true;
   requests: number;
   totalTokens: number;
   inputTokens: number;
@@ -40,7 +41,16 @@ export interface ProviderModelUsageRow {
 // Auth types consumed by ProviderAuthPanel (WP091).
 export type OAuthAccountHealthStatus = "healthy" | "cooldown" | "reauth_required" | "warning";
 
-export type OAuthAccountRow = {
+export type AccountQuotaMode = "probe" | "passive" | "unsupported";
+export interface AccountQuotaReading {
+  quotaMode?: AccountQuotaMode;
+  quota?: AccountQuota | null;
+  quotaUnavailable?: boolean;
+  /** Client-owned enrichment state, never inferred from missing quota data. */
+  quotaPending?: boolean;
+}
+
+export type OAuthAccountRow = AccountQuotaReading & {
   id: string;
   alias?: string;
   email?: string;
@@ -50,12 +60,9 @@ export type OAuthAccountRow = {
   healthLabel?: string;
   healthSummary?: string;
   healthAction?: string;
-  /** Per-account rate limits, for providers that report usage per credential (anthropic). */
-  quota?: AccountQuota | null;
-  quotaUnavailable?: boolean;
 };
 
-export type ApiKeyRow = {
+export type ApiKeyRow = AccountQuotaReading & {
   id: string;
   label?: string;
   masked: string;

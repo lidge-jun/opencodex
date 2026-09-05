@@ -13,7 +13,10 @@ You can log in multiple Claude accounts via the Providers dashboard (`ocx login 
 add-account). By default every request uses the **active** account only.
 
 An **experimental, opt-in** Claude account pool (`anthropicAccountPool.enabled`) adds sticky
-session affinity and 429 cooldown failover across those OAuth accounts. For **new** sessions,
+session affinity and usage-aware new-session selection across those OAuth accounts. It does
+**not** gate 429 failover: with two or more usable accounts stored, a rate-limited request moves
+to another account whether the pool is on or off, and that cannot be switched off. For **new**
+sessions,
 `anthropicAccountPool.strategy` selects among eligible accounts: `quota` (default) picks the
 lowest known usage in the window set by `quotaWindow` (`five-hour` by default, or `weekly` /
 `max-utilization`) when above `autoSwitchThreshold`; `round-robin` spreads evenly
@@ -68,6 +71,31 @@ silently disabled a healthy claude.ai subscription in favour of API billing. `oc
 ignores Anthropic credentials that only a project dotenv introduced. A value you exported in
 your shell still wins, in every auth mode. To use an API key deliberately, export it
 (`export ANTHROPIC_API_KEY=...`) rather than leaving it in a project file.
+
+### Native fallback when Claude routing is off
+
+`ocx claude` used to exit with an error when Claude routing was disabled. It now launches the
+native `claude` binary instead, so the command stays useful with routing off:
+
+| Where routing is off | What happens |
+| --- | --- |
+| `claudeCode.enabled: false` in config | Native launch, with a notice that routing is disabled |
+| The running proxy reports `enabled: false` from `GET /api/claude-code` | Native launch, with a notice to restart the service after re-enabling |
+| `claudeCode.enabled` absent or `true` | Routed through the proxy, unchanged |
+
+Only an explicit `false` triggers the fallback, so a proxy predating the field stays routed. A
+missing proxy is not a trigger either — with routing on, `ocx claude` still starts the proxy.
+
+A native session must not inherit proxy state, so the fallback removes values it can **prove**
+OpenCodex owns: `ANTHROPIC_BASE_URL` only when it points at this proxy's own loopback address
+and configured port *and* the paired admission token is one the proxy issued; the
+`CLAUDE_CODE_*` discovery and auto-context levers; and model slots that only resolve through the
+proxy (routed aliases and `provider/model` ids). Anything else is yours and is preserved — an
+unrelated `http://localhost:8080` gateway and your own `sk-ant-` credential both survive.
+
+If your saved `/model` picker default is a proxy-only model, the native session falls back to
+`claudeCode.model` when that is natively usable, and otherwise warns you to pass
+`--model <Anthropic model>`. An explicit `--model` argument always wins.
 
 ## Auth mode
 

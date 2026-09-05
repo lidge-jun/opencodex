@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useT } from "../i18n/shared";
 import CodexAccountPool from "../components/CodexAccountPool";
 import DefaultModeRequestUserInputSetting from "../components/DefaultModeRequestUserInputSetting";
 import UltraFastTierSetting from "../components/UltraFastTierSetting";
+import MainAccountHardLockSetting from "../components/MainAccountHardLockSetting";
+import { useCodexAccountPool } from "../hooks/useCodexAccountPool";
 import CodexAccountPickerSetting from "../components/CodexAccountPickerSetting";
 import { codexAccountModeState, type CodexAccountModeState } from "../codex-multi-state";
 import { navigateHash } from "../hash-routing";
@@ -105,7 +107,23 @@ type CachedMode = {
  * move either (devlog 004 §C: a dozen test files bind to it).
  */
 export default function CodexSetMultiauth({ apiBase }: { apiBase: string }) {
+  // The controller, not just the setting, owns proxy-specific state and callbacks.
+  return <CodexSetMultiauthForProxy key={apiBase} apiBase={apiBase} />;
+}
+
+function CodexSetMultiauthForProxy({ apiBase }: { apiBase: string }) {
   const t = useT();
+  const poolController = useCodexAccountPool(apiBase);
+  const { load: loadAccounts } = poolController;
+  const ownerMountedRef = useRef(false);
+  useLayoutEffect(() => {
+    ownerMountedRef.current = true;
+    // Retire captured callbacks at commit, before a replacement proxy can be displayed.
+    return () => { ownerMountedRef.current = false; };
+  }, []);
+  const onHardLockSaved = useCallback(() => ownerMountedRef.current
+    ? loadAccounts(false)
+    : Promise.resolve(false), [loadAccounts]);
   const configCacheKey = `ocx.codex-auth.config.v1:${apiBase}`;
   const cached = readSessionListCache<CachedMode>(configCacheKey);
   const [bannerState, setBannerState] = useState<OpenAiAccountBannerState>(() => cached?.bannerState ?? null);
@@ -192,12 +210,15 @@ export default function CodexSetMultiauth({ apiBase }: { apiBase: string }) {
     <>
       <CodexAccountPool
         apiBase={apiBase}
+        controller={poolController}
+        hasMainHardLockSetting
         accountModeState={accountModeState}
         banner={banner}
         advancedExtras={<>
           <CodexAccountPickerSetting apiBase={apiBase} />
           <DefaultModeRequestUserInputSetting apiBase={apiBase} />
           <UltraFastTierSetting apiBase={apiBase} />
+          <MainAccountHardLockSetting apiBase={apiBase} onSaved={onHardLockSaved} />
         </>}
       />
     </>

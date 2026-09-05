@@ -33,19 +33,21 @@ enumeration twice made a measured 12.3-second fallback cost roughly 25 seconds b
 - 다른 대안 대신 이 방식을 선택한 이유: Removing or weakening revalidation widens the install race, while a global/TTL cache can outlive startup and stale absence can authorize the wrong home. Exact targeted-result identity lets the ordinary no-task locale fallback coalesce without hiding changed evidence.
 - 장점, 단점 및 영향: The reported stable zh-CN absence path performs two cheap targeted queries and one full listing. A task that appears is detected by the second targeted query; changed or failed evidence triggers a fresh fail-closed decision, so unusual churn may still pay for two listings rather than guess.
 
-## Linux stable service launcher
+## Stable service launcher (launchd and systemd)
 
-Systemd installation resolves the first absolute `ocx` PATH candidate that is both a regular file
+Launchd and systemd installation resolve the first absolute `ocx` PATH candidate that is both a regular file
 and executable, keeps that path lexical so a version-manager shim remains an indirection, and
-records the same single resolution in the unit and service state. Unit construction never performs
-PATH discovery itself: callers provide either the resolved launcher or an explicit direct Bun/CLI
+records the same single resolution in the service definition and service state. Definition
+construction (`buildPlist`, `buildUnit`) never performs PATH discovery itself: callers provide either the resolved launcher or an explicit direct Bun/CLI
 fallback, keeping diagnostics and tests independent of the host PATH.
 
 Launcher mode omits the package-local Bun provenance pair because an upgrade may delete that
 versioned tree. The only runtime path carried through the launcher is a pre-Bun, proof-bound
 `OPENCODEX_BUN_PATH` whose durable runtime source is `override`; bundled and process fallbacks are
 rediscovered by the current launcher. The API-auth token remains file-backed and is loaded only by
-the service shell at start.
+the service shell at start. On macOS, `start` and detailed `status` compare the live launchd job
+against `expectedLaunchdCommand`, which follows the recorded `launcherPath` rather than re-walking
+PATH, so a launcher-backed job is never misreported as an older plist (#3464).
 
 [Decision Log]
 - 목적과 의도: Keep systemd services upgrade-stable without losing an explicitly trusted Bun override or accepting a non-executable PATH placeholder.
@@ -64,6 +66,17 @@ ALL_PROXY, and NO_PROXY semantics remain authoritative. The wrapper classifies s
 only a typed DNS-resolution failure degrades to proxy resolution; every literal, metadata, and
 resolved-address policy error still rejects. Proxy mode logs once that the proxy-selected peer
 cannot be pinned. Private destinations additionally require allowPrivateNetwork plus NO_PROXY.
+
+Two fake-IP DNS accommodations exist, both for resolved answers only (a literal address in the URL
+still rejects). The IANA benchmark range (198.18/15 and its IPv4-mapped IPv6 spellings) is admitted
+whenever any outbound proxy applies to the host, because the range itself marks the answer synthetic.
+Mihomo's default IPv6 fake-IP range (fdfe:dcba:9876::/48) is ULA and carries no such mark, so it is
+admitted only when the proxy variable that matches the URL scheme is set (HTTPS_PROXY for https:,
+HTTP_PROXY for http:; ALL_PROXY is not consulted because Bun fetch does not honour it), the host is
+not in NO_PROXY, and the request is then bound to that proxy through Bun's explicit `proxy` option
+rather than environment inference. Both gates live in the outbound wrapper, not in classification:
+`classifyIpv6` and config-time validation (`providerDestinationResolvedError`) never admit the
+ULA, so provider save-time checks are unaffected (#3462).
 
 Both paths reject redirects and expose only credential-stripped final-address guidance. This phase
 does not cover ordinary requests, streaming, retries, or per-hop redirect review on those paths.
@@ -127,6 +140,14 @@ semantic no-progress budget.
 - 선택한 방식: After unwrapping the request-authorized custom-tool function shape, normalize only exact decorated Begin/End lines when the entire `apply_patch` input is one structurally recognizable patch with a file operation. Keep `exec` and all other freeform bodies byte-identical.
 - 다른 대안 대신 이 방식을 선택한 이유: A top-level `apply_patch` call already carries explicit executable intent, so its unambiguous outer-line spelling can be repaired without inventing a call or parsing JavaScript. Every broader rewrite could reinterpret ordinary data as code.
 - 장점, 단점 및 영향: Decorated top-level patches regain compatibility while strings, comments, generated source, raw `exec` text, incomplete envelopes, and patch-file content remain untouched. Nested malformed helper source must be corrected by the provider instead of being guessed at the response boundary.
+
+[Decision Log]
+- 목적과 의도: Stop wasting a turn when a routed model submits one complete patch envelope as the entire code-mode `exec` body.
+- 기존 구현 및 제약 조건: The decision above rejected "wrap a raw `exec` patch body as a helper call" because a text rewrite could reinterpret data as code. Rollout evidence then showed about 55 such bodies across four models, each a guaranteed isolate throw. Measurement added the missing fact: a complete envelope is never valid JavaScript, since `*** Begin Patch` fails to parse at the leading `**`.
+- 검토한 주요 대안: Keep failing closed; rewrite decorated delimiters inside `exec` JavaScript; parse `exec` bodies as JavaScript; or retarget only a body that is itself one complete operation-bearing envelope.
+- 선택한 방식: Retarget only that complete-envelope shape to the existing apply_patch helper, through one shared resolver used by all four restore paths. Delimiter-repair functions stay unchanged and every other `exec` body, including JavaScript that mentions an envelope, stays byte-identical. Streaming holds a buffer that could still become an envelope so the live preview is never rewound.
+- 다른 대안 대신 이 방식을 선택한 이유: This narrows the earlier rejection rather than reversing it. The rejection protected bodies with a competing executable reading; a complete envelope has none, so it is the same one-faithful-reading rule the delimiter repair already follows. Rewriting inside JavaScript remains rejected: there the marker is a delimiter or a string or a comment, and no lexical or parse-based rule separates them safely.
+- 장점, 단점 및 영향: A previously wasted turn now performs the edit the model intended. This does convert a hard failure into a real filesystem write, so the predicate stays anchored and operation-bearing; prefixed, suffixed, incomplete, namespaced, and JavaScript bodies still fail closed. The write itself is the same `apply_patch` capability code mode already grants, reached by payload shape instead of tool name.
 
 [Decision Log]
 - 목적과 의도: Keep Codex client-side deferred tool discovery usable through third-party Responses-compatible gateways that implement public function tools but reject the private `tool_search` declaration.
@@ -276,19 +297,38 @@ different custom destination does not inherit its upstream assumptions. Object-f
 also narrow the decision by inbound protocol and authentication mode; an auth-scoped default must
 not leak from a subscription transport into an API-key or forwarded-credential route.
 
-xAI keeps `openai-chat` as both its provider-wide compatibility wire and the default for Grok 4.5
-and 4.6 subscription traffic. The official Grok CLI catalog declares those models as Responses
-backends, but the current gateway rejects opaque reasoning continuation and compaction state on
-later turns. Operators may still select `openai-responses` with an explicit model adapter override
-while that compatibility work continues. The OAuth route drops caller-owned `service_tier` even
-when an override selects Responses, and native Responses OAuth 401 replay remains available to
-explicit opt-ins. API-key requests, translated Chat/Anthropic callers, and other Grok models retain
-their existing wire and tier policy.
+xAI keeps `openai-chat` as its provider-wide compatibility wire, but Grok 4.5/4.6 subscription
+Responses requests default to native `openai-responses`. Existing namespace, hosted-search and
+reasoning-replay normalization remains in force. The reserved `xai` OAuth transport is name-pinned
+to the Grok CLI gateway even if its saved base URL differs; custom provider IDs do not inherit this
+default. API-key requests, translated Chat/Anthropic defaults and other Grok models retain their
+existing wire and tier policy. OAuth still drops caller-owned `service_tier` on either wire.
 
-The dashboard's xAI Responses opt-in switch is the GUI surface of this same `modelAdapters` lane,
-not a separate tier policy. One write sets or clears the Grok 4.5 and 4.6 entries together while
-preserving unrelated overrides; a pre-existing one-entry state is reported as mixed until the next
-switch write normalizes both.
+Native Responses participates in the same pre-stream OAuth HTTP-429 account rotation as the Chat
+bridge. It uses the existing account quorum, cooldown and three-rotation request cap, refreshes
+the complete credential/transport/replay identity, and attributes usage to the serving account.
+Single-account installs do not retry; a missing alternate credential preserves the original error.
+
+Startup removes legacy Grok 4.5/4.6 Chat overrides once and persists the provider-owned
+`xaiResponsesDefaultVersion` marker. Later explicit Chat choices survive restarts. The migration
+rebases under the config mutation lock; unavailable persistence warns and uses an isolated in-memory
+projection without overwriting invalid disk state. Read-only config loading does not migrate.
+
+The dashboard's Chat Completions switch and `ocx provider edit xai --xai-chat on|off` share the
+existing `modelAdapters` lane. On writes Chat for both models; off writes Responses. Unrelated
+overrides remain intact. The legacy PATCH field `xaiResponsesOptIn` retains its direction:
+true selects Responses, false now writes explicit Chat rather than deleting entries. Its derived
+`xaiResponsesOptInState` reflects effective Responses-inbound routing, including registry defaults;
+only genuinely different effective wires report mixed. A switch write also records the migration
+version (without lowering a future version), and provider-form overwrites retain omitted choices.
+
+Native routed Responses code-mode turns also receive the shared result-emission contract in both
+instructions and the lowered exec input description: a bare awaited helper return is discarded by
+the host, so visible results need `text(...)` or `notify(...)` in that first call. Paired exec outputs
+containing only an empty completion/failure wrapper use the shared explanatory annotation. The
+whole result is examined; populated text, image/file parts, unpaired results, shell-only catalogs,
+compaction and OpenAI-operated destinations are untouched. This does not rewrite valid JavaScript
+or reconstruct output that the code-mode host never emitted.
 
 [Decision Log]
 - 목적과 의도: Keep Codex hosted web search usable on xAI's public Responses endpoint without forwarding private OpenAI-only fields that xAI rejects.
@@ -353,9 +393,16 @@ Native passthrough SSE has TWO shapes, selected per request in
   inspection side-effect set (shared `createSseInspector` factory in `relay.ts`)
   including the #44 late-terminal semantics.
 
+Both shapes carry the inbound caller-abort signal separately from the turn/shutdown
+controller. A caller-driven read rejection is 499/client_cancel without pool penalty;
+a genuine upstream reset remains synthetic 502. An already received terminal, including
+one completed by the error-path parser flush, retains its real outcome. Eager relays
+remove the caller listener when done and close signal-cancelled downstream streams even
+when the response-body cancel hook has not run.
+
 The two-shape contract is mirror-commented in `src/server/index.ts`; the real
-`core.ts` gate is source-invariant-tested by `tests/passthrough-abort.test.ts`,
-and the platform matrix lives in `tests/bun-stream-caps.test.ts`. Keep all three
+`core.ts` gate is source-invariant-tested by `tests/responses/passthrough-abort.test.ts`,
+and the platform matrix lives in `tests/lib/bun-stream-caps.test.ts`. Keep all three
 in lockstep with any passthrough-policy change.
 
 Canonical ChatGPT forward streaming has one transport-specific exception. A
@@ -368,6 +415,39 @@ at 4 MiB and the WS producer queue at 8 MiB. Overflow closes the upstream and
 the downstream relay emits its terminal `response.failed` event plus `[DONE]`.
 Pre-open HTTP fallback remains unmarked and follows the ordinary configured
 stream path.
+
+At the canonical ChatGPT destination, HTTP Responses Lite intent is copied into
+the native per-frame WS metadata key, and the routing hint is derived from the
+final outgoing model/tier. No caller identity is synthesized. Noncanonical
+opt-in gateways keep their own metadata policy. Oversized/unsupported-runtime
+HTTP fallback preserves the original HTTP body and Lite header.
+
+Canonical WS quota and response metadata preceding the first Responses event
+are projected into bounded, allowlisted HTTP headers before the response is
+committed. Later quota observations update only the captured serving account;
+they cannot retroactively change HTTP headers already sent to the client.
+Control frames remain bounded, and provider credential/cookie headers are not
+forwarded. Once a WS create may have been sent, a missing prelude, overflow or
+disconnect settles as an errored SSE body rather than a retryable fetch failure,
+so HTTP fallback cannot duplicate that inference. A standalone no-response
+exchange has a 30-second prelude deadline in addition to the upgrade deadline.
+These are transport-fidelity guarantees, not a provider-billing guarantee.
+
+Eligible complete-input creates can retain a canonical upstream socket within
+one selected account, credential, thread and turn. Model/tier and immutable
+handshake headers and the selected outbound proxy must also match. Turn-state and turn-metadata headers are
+projected into their same-name per-frame metadata slots; explicit body values win.
+The pool retains at most 32 sockets, expires idle sockets after 30 seconds, and
+retires a socket after five minutes or 32 successful exchanges (after active work
+finishes). Cancellation, errors, idle unsolicited frames and shutdown dispose it.
+A busy key uses a separate one-shot connection rather than interleaving requests.
+
+This is connection reuse, not native incremental-input synthesis: complete HTTP
+inputs are never trimmed and no previous response id is invented. Explicit
+continuation IDs, named lanes, warmup and background requests remain outside this
+pool. A fresh credential-dispatch guard runs before every warm send. Per-exchange
+listeners, response/item correlation and metadata ownership detach before release.
+No pool timer or shutdown registration exists before eligible traffic activates it.
 
 Translated response request-log tracking and the heartbeat relay also reuse
 `createSseInspector`. This keeps every client-facing SSE observation path on
@@ -564,7 +644,11 @@ the upgrade with 426 so Codex falls back to HTTP cleanly.
 
 That setting controls the client-facing upgrade only. The transparent upstream
 ChatGPT WS optimization described above is selected independently and still
-returns the same downstream SSE contract.
+returns the same downstream SSE contract. Its WSS route checks NO_PROXY first, then selects the
+first non-empty HTTPS_PROXY, https_proxy, ALL_PROXY, or all_proxy value. HTTP_PROXY alone does not
+route WSS. Unsupported or malformed selected proxy values skip the WebSocket attempt and use the
+existing SSE path immediately; they never fall through to a lower-priority proxy or direct WebSocket
+egress. HTTP/SSE fallback retains Bun fetch's own proxy rules, which do not consult ALL_PROXY.
 
 The endpoint handles `response.create`, ignores `response.processed`, supports warmup
 `generate: false`, and feeds the same request pipeline as HTTP/SSE.
@@ -582,7 +666,7 @@ sentinel, and live probes (2026-08-07) confirm the stream closes on the terminal
 terminal-output boundary (`src/server/relay.ts`) cuts the stream at that event and synthesizes
 `[DONE]` itself, so DeepSeek streams live again; the registry knob remains as a one-line
 rollback for upstreams that regress, kept suite-reachable by a synthetic-registry fixture in
-`tests/deepseek-inbound-wire.test.ts`.
+`tests/providers/deepseek-inbound-wire.test.ts`.
 Synthesized output is capped at 10,000 items across HTTP and WebSocket reframing. HTTP frames are
 encoded incrementally, so bounded upstream JSON cannot expand into an unbounded event array or SSE string.
 
@@ -1014,9 +1098,11 @@ its own: it forwards what the request already carries — Codex's session key on
 (metadata.user_id hash, else the system+tools cohort hash) — and a request with no key stays
 keyless. An explicit provider-level `promptCacheKey: false` continues to opt out, and the flag is
 persisted through `providerConfigSeed`/`enrichProviderFromRegistry` for new configs; key-pool 429
-rotation keeps it — along with every other registry backfill — because the retry inherits the
-request's routed provider and swaps only the API key (`rotateProviderTransportOn429` in
-src/providers/key-failover.ts). If an opted-in upstream rejects the field, OpenCodex does not strip it and retry or mutate the
+rotation keeps it — along with every other registry backfill — because the retry starts from the
+fresh committed provider row and routes it again (`rotateProviderTransportOn429` in
+src/providers/key-failover.ts). Stale request-time config fields are deliberately discarded so a
+concurrent deletion stays authoritative; only runtime `fetch` state and generated OpenCode session
+affinity survive the rebuild. If an opted-in upstream rejects the field, OpenCodex does not strip it and retry or mutate the
 saved configuration. Other OpenAI-compatible providers remain deny-by-default because strict
 backends may reject the OpenAI-specific field.
 
@@ -1397,13 +1483,28 @@ surface is listed here so a maintainer can find the owner without grepping:
 | Adapter execution support | `src/adapters/run-turn-queue.ts`, `src/adapters/tool-catalog-nudge.ts`, `src/adapters/identity.ts`, `src/adapters/image.ts`, `src/adapters/upstream-http-error.ts` | Shared machinery: turn ordering, tool-catalog nudging, client fingerprinting, image conversion, upstream error normalization. |
 | Cursor (beyond the sections above) | `src/adapters/cursor/live-transport.ts`, `src/adapters/cursor/http1-bidi.ts`, `src/adapters/cursor/live-models.ts`, `src/adapters/cursor/transport-retry.ts`, `src/adapters/cursor/mcp-manager.ts`, `src/adapters/cursor/thread-continuity.ts`, `src/adapters/cursor/checkpoint-store.ts` | Thread continuity is the point: a retry must not start a new Cursor thread, and a validated checkpoint must not rebuild the full root history. HTTP/2 remains the default; an explicit `http1.1`/`h1` pin maps the bidi run onto Cursor's `RunSSE` receive stream plus sequenced `BidiAppend` sends, and applies to live discovery too. |
 | Claude Messages | `src/server/claude-messages.ts` | Routed translation, a native Anthropic passthrough branch, and `count_tokens`. |
-| Chat Completions inbound | `src/server/chat-completions.ts`, `src/chat/` | Inbound translation onto the same routing pipeline. |
+| Chat Completions inbound | `src/server/chat-completions.ts`, `src/chat/` | Inbound translation onto the same routing pipeline. The content mapper preserves image URLs and supported detail, including screenshot-bearing tool results; target adapters own image placement on their wire. Image-free tool results stay strings. |
 | Hosted search relay | `src/server/search.ts` | Direct relay; distinct from the web-search sidecar loop below. |
 | Image/video generation loop | `src/images/loop.ts`, `src/images/plan.ts`, `src/images/fulfill.ts`, `src/images/xai-client.ts`, `src/images/xai-video-client.ts`, `src/images/artifacts.ts` | A provider-returned image URL is downloaded into a local artifact once, then served locally; warnings stay URL-free because provider CDN URLs may embed credentials. |
 | GitHub Copilot | `src/providers/xai-transport.ts` (`resolveProviderTransport`), `src/providers/github-copilot-transport.ts` | `resolveProviderTransport` selects the Copilot transport when the routed provider name is `github-copilot`; the Copilot module then resolves its headers and base URL, and the registry seeds the provider row and model fallback. |
 | API-key pools | `src/providers/key-failover.ts` | A 429 rotates the active key and records a cooldown; `provider.apiKey` keeps mirroring the active entry so routing stays single-key. |
+| OAuth account failover | `src/oauth/generic-account-failover.ts`, `src/oauth/anthropic-routing.ts` | Reactive pre-output 429 recovery is presence-driven with 2+ eligible accounts. Pool and `oauthAccountFailover` flags govern proactive routing, not the reactive retry: a disabled Anthropic pool recovers through quota ordering rather than its dormant strategy, and a per-provider `enabled` beats the global default in either direction. |
 | Alibaba regions | `src/providers/alibaba-region-backup.ts`, `src/providers/alibaba-region-migration.ts`, `src/providers/alibaba-region-startup.ts` | Region migration backs up before rewriting and is idempotent across restarts. |
 | Discovery and quota | `src/providers/model-discovery.ts`, `src/providers/quota.ts` | Discovery rejects a response over 4 MiB or past 2,000 raw rows before caching it. |
+
+[Decision Log]
+- 목적과 의도: Keep reactive OAuth 429 recovery available without silently enabling proactive account-routing policy the operator switched off.
+- 기존 구현 및 제약 조건: #3495 made reactive recovery presence-driven, but a disabled Anthropic pool still consulted its dormant strategy on the reactive path, and a per-provider `oauthAccountFailover.enabled: true` could no longer beat a global `false`.
+- 검토한 주요 대안: Restore the old all-or-nothing enable flag; leave the merged behavior and document the gaps; or keep the reactive/proactive split and repair the exact policy boundaries.
+- 선택한 방식: Keep presence-driven reactive recovery, apply proactive precedence only before dispatch, and use quota ordering for disabled-pool Anthropic recovery.
+- 다른 대안 대신 이 방식을 선택한 이유: This preserves the merged product decision without letting disabled proactive settings influence a retry, and it restores the published narrow-over-broad precedence in both directions.
+- 장점, 단점 및 영향: 429 recovery stays automatic for operators with multiple eligible accounts; operators who require no automatic account switch must keep one eligible account, which the GUI and public docs state explicitly.
+
+Cursor external-model continuations attach data-URL screenshots from the contiguous active
+tool-result batch through the existing image preparation and selected-context owners. The batch
+shares the 12-image active cap. Bounded source labels are emitted in active user-action text so
+root pruning cannot erase attachment provenance; the same text participates in token estimation.
+Native Composer/MCP behavior and text-only historical replay remain unchanged.
 
 ## Sidecars
 

@@ -35,6 +35,7 @@ import { NATIVE_OPENAI_CONTEXT_OVERRIDES, SUPPORTED_NATIVE_OPENAI_SLUGS, UPSTREA
 import { clampAutoCompactTokenLimit } from "../../providers/auto-compact-budget";
 import { trustedAccountBoundNativeCatalogSlug } from "./account-models";
 import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
+import { NATIVE_GPT6_ASTRA_MODEL } from "./native-models";
 
 export function legacyCatalogBackupPath(): string {
   return join(getConfigDir(), "catalog-backup.json");
@@ -95,6 +96,8 @@ export const CODEX_PROVIDER_MODEL_CATALOG_KIND = "provider-model-v1";
 export interface CatalogModel {
   id: string;
   provider: string;
+  /** Canonical or configured short alias for the provider segment. */
+  providerAlias?: string | null;
   /** Public Codex-facing slug override (used by combo aliases). */
   alias?: string;
   /** Explicit combo takeover of a bare OpenAI-native catalog id. */
@@ -385,6 +388,16 @@ function retainOnlyUltraFastTier(entry: RawEntry): void {
 }
 
 export function normalizeServiceTiers(entry: RawEntry): RawEntry {
+  // Repair only the old built-in Astra speed copy on persisted native/account rows.
+  // A custom description (and every other field) remains user-owned.
+  const nativeSlug = trustedAccountBoundNativeCatalogSlug(entry) ?? entry.slug;
+  if (nativeSlug === NATIVE_GPT6_ASTRA_MODEL && Array.isArray(entry.service_tiers)) {
+    entry.service_tiers = entry.service_tiers.map(tier =>
+      tier && typeof tier === "object" && tier.id === "priority"
+        && tier.description === "1.5x speed, increased usage"
+        ? { ...tier, description: "2x speed, increased usage" } : tier,
+    );
+  }
   // Strip service tiers for models that do not actually support the Fast tier.
   if (typeof entry.slug === "string" && NO_FAST_TIER_NATIVE_SLUGS.has(entry.slug)) {
     delete entry.service_tier;
@@ -583,6 +596,8 @@ export function ensureStrictCatalogFields(
 export type MultiAgentMode = "v1" | "default" | "v2";
 
 export interface MultiAgentModeOptions {
+  /** Caller-owned source metadata already defines the default for these projected rows. */
+  preserveDefaultMultiAgentVersion?: (entry: RawEntry) => boolean;
   /**
    * When the catalog is in v2 mode, stamp ChatGPT-native rows as v1 instead.
    * Routed parents get v2 (plaintext child tasks). Native Sol/Terra stay on v1
@@ -658,6 +673,7 @@ export function applyMultiAgentMode(
     // Restore upstream defaults: clear any stale forced multi_agent_version and
     // re-apply upstream pins from the snapshot for native entries that have one.
     for (const entry of entries) {
+      if (options.preserveDefaultMultiAgentVersion?.(entry)) continue;
       const slug = typeof entry.slug === "string" ? entry.slug : "";
       const nativeAlias = entry.opencodex_catalog_kind === CODEX_NATIVE_ALIAS_CATALOG_KIND;
       const routedNativeSlug = slug.startsWith(`${OPENAI_CODEX_PROVIDER_ID}/`)
@@ -699,6 +715,7 @@ export function normalizeRoutedCatalogEntry(
   delete entry.tool_mode;
   applyRoutedCodexToolMode(entry, toolMode);
   delete entry.multi_agent_version;
+  delete entry.multi_agent_reasoning_effort;
   delete entry.use_responses_lite;
   delete entry.supports_websockets;
   /*

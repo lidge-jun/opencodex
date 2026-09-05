@@ -766,7 +766,42 @@ exec ${shQuote(realCodexPath)} "$@"
 `;
 }
 
-type UnixShimProbeResult = "cleanup" | "descendants" | "failed" | "recursive" | "timeout" | null;
+type UnixShimProbeCleanupPhase = "marker" | "reentry" | "group" | "stderr" | "group-id" | "termination" | "spawn" | "exception";
+interface UnixShimProbeCleanup {
+  kind: "cleanup";
+  phase: UnixShimProbeCleanupPhase;
+  code: string;
+  status: number | null;
+  signal: string;
+}
+type UnixShimProbeResult = UnixShimProbeCleanup | "descendants" | "failed" | "recursive" | "timeout" | null;
+
+const SHIM_PROBE_ERROR_CODES = new Set([
+  "EACCES", "EAGAIN", "EBADF", "ECANCELED", "EINTR", "EIO", "EMFILE", "ENFILE",
+  "ENOENT", "ENOEXEC", "ENOMEM", "ENOSPC", "EPERM", "EPIPE", "ESRCH", "ETIMEDOUT", "ETXTBSY",
+]);
+const SHIM_PROBE_SIGNALS = new Set([
+  "SIGABRT", "SIGBUS", "SIGHUP", "SIGILL", "SIGINT", "SIGKILL", "SIGPIPE", "SIGQUIT",
+  "SIGSEGV", "SIGTERM", "SIGTRAP", "SIGXCPU", "SIGXFSZ",
+]);
+
+/** Diagnostics cross a CLI boundary: never stringify arbitrary errors or metadata. */
+function shimProbeCleanup(
+  phase: UnixShimProbeCleanupPhase, error?: unknown, status?: unknown, signal?: unknown,
+): UnixShimProbeCleanup {
+  let code = error === undefined ? "none" : "unknown";
+  if (error !== null && typeof error === "object") {
+    try {
+      const value = Object.getOwnPropertyDescriptor(error, "code")?.value;
+      if (typeof value === "string" && SHIM_PROBE_ERROR_CODES.has(value)) code = value;
+    } catch { /* hostile accessors/proxies cannot turn diagnostics into an exception */ }
+  }
+  return {
+    kind: "cleanup", phase, code,
+    status: typeof status === "number" && Number.isInteger(status) && status >= 0 && status <= 255 ? status : null,
+    signal: typeof signal === "string" && SHIM_PROBE_SIGNALS.has(signal) ? signal : "none",
+  };
+}
 
 let codexShimProbeHookForTests: (() => void) | null = null;
 let codexShimProbeShellForTests: string | null = null;
@@ -842,6 +877,8 @@ function probeUnixShimInstall(wrapperPath: string): UnixShimProbeResult {
   delete env.OCX_SHIM_ACTIVE_DEPTH;
   delete env.OCX_SHIM_PROBE_ACTIVE;
   let groupId = 0;
+  let probeStatus: unknown;
+  let probeSignal: unknown;
   try {
     chmodSync(probeDir, 0o700);
     const result = spawnSync(process.execPath, [
@@ -863,26 +900,31 @@ function probeUnixShimInstall(wrapperPath: string): UnixShimProbeResult {
       timeout: CODEX_SHIM_INSTALL_PROBE_TIMEOUT_MS + CODEX_SHIM_INSTALL_PROBE_EXIT_TIMEOUT_MS,
       killSignal: "SIGKILL",
     });
+    probeStatus = result.status;
+    probeSignal = result.signal;
     const timedOut = (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT";
     const marker = readProbeMetadata(markerPath, 64);
     const reentryMarker = readProbeMetadata(reentryPath, 64);
     const groupText = readProbeMetadata(groupPath, 64);
     const launcherStderr = readProbeMetadata(stderrPath, MAX_DIAGNOSTIC_VALUE_BYTES);
     groupId = groupText === null ? 0 : Number.parseInt(groupText, 10);
-    if (marker === null || reentryMarker === null || groupText === null || launcherStderr === null
-      || !Number.isInteger(groupId) || groupId <= 0) return "cleanup";
+    if (marker === null) return shimProbeCleanup("marker", result.error, probeStatus, probeSignal);
+    if (reentryMarker === null) return shimProbeCleanup("reentry", result.error, probeStatus, probeSignal);
+    if (groupText === null) return shimProbeCleanup("group", result.error, probeStatus, probeSignal);
+    if (launcherStderr === null) return shimProbeCleanup("stderr", result.error, probeStatus, probeSignal);
+    if (!Number.isInteger(groupId) || groupId <= 0) return shimProbeCleanup("group-id", result.error, probeStatus, probeSignal);
     const groupSurvived = unixProcessGroupAlive(groupId);
     if (timedOut || marker || reentryMarker || groupSurvived) {
       try {
         terminateUnixProcessGroup(groupId);
-      } catch {
-        return "cleanup";
+      } catch (error) {
+        return shimProbeCleanup("termination", error, probeStatus, probeSignal);
       }
     }
-    if (result.error && !timedOut) return "cleanup";
+    if (result.error && !timedOut) return shimProbeCleanup("spawn", result.error, probeStatus, probeSignal);
     if (timedOut || marker === "timeout") return "timeout";
     if (marker === "recursive" || reentryMarker === "recursive") return "recursive";
-    if (reentryMarker !== "") return "cleanup";
+    if (reentryMarker !== "") return shimProbeCleanup("reentry", undefined, probeStatus, probeSignal);
     if (marker === "descendants") return "descendants";
     if (groupSurvived) return "descendants";
     if (result.status === CODEX_SHIM_REENTRY_EXIT_CODE && launcherStderr.includes(CODEX_SHIM_REENTRY_DIAGNOSTIC)) {
@@ -890,11 +932,11 @@ function probeUnixShimInstall(wrapperPath: string): UnixShimProbeResult {
     }
     if (result.status !== 0) return "failed";
     return null;
-  } catch {
+  } catch (error) {
     if (Number.isInteger(groupId) && groupId > 0) {
       try { terminateUnixProcessGroup(groupId); } catch { /* cleanup classification below */ }
     }
-    return "cleanup";
+    return shimProbeCleanup("exception", error, probeStatus, probeSignal);
   } finally {
     try { rmSync(probeDir, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
   }
@@ -2215,8 +2257,8 @@ function installCodexShimInternal(options: InstallCodexShimInternalOptions): { i
           ? `the saved launcher did not finish --version within ${CODEX_SHIM_INSTALL_PROBE_TIMEOUT_MS}ms`
           : unsafe === "descendants"
             ? "the saved launcher left background descendants running after --version"
-            : unsafe === "cleanup"
-              ? "the saved launcher's probe process group could not be terminated cleanly"
+            : unsafe !== null && typeof unsafe === "object"
+              ? `the saved launcher's probe process group could not be terminated cleanly [phase=${unsafe.phase}; code=${unsafe.code}; status=${unsafe.status ?? "none"}; signal=${unsafe.signal}]`
               : "the saved launcher failed its --version probe";
       return {
         installed: false,

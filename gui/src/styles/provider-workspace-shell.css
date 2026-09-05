@@ -1064,6 +1064,7 @@
 .pws-model-table .num { text-align: right; font-variant-numeric: tabular-nums; }
 .pws-model-table .mono { font-family: var(--font-mono, monospace); font-size: 0.78rem; }
 .pws-model-row:hover { background: var(--bg-subtle, rgba(128,128,128,0.05)); }
+.pws-model-attribution { font-family: var(--font-sans, sans-serif); font-size: 0.75rem; white-space: normal; word-break: keep-all; }
 .pws-share-bar { height: 6px; background: var(--border-faint, rgba(128,128,128,0.15)); border-radius: 3px; min-width: 60px; }
 .pws-share-bar-fill { height: 100%; background: var(--green, #22c55e); border-radius: 3px; }
 .pws-model-detail { background: var(--bg-subtle, rgba(128,128,128,0.05)); }

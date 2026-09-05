@@ -71,6 +71,16 @@ Session 簽發在需要 data-plane 認證時停用，這包含遠端綁定。遠
 
 關於模型名冊與加密 worker-task 行為背後的概念，請見[子代理介面](/zh-tw/guides/sub-agent-surface/)。
 
+### 用戶端整合復原日誌
+
+| 方法與路徑 | 用途 | 主要錯誤 |
+| --- | --- | --- |
+| `GET /api/client-integrations/journal?client=...` | 列出復原操作，也可限定為單一用戶端。每一項都包含由伺服器計算的 `deletable` 欄位。 | 400 用戶端無效 |
+| `DELETE /api/client-integrations/journal?opId=...` | 停用一筆較舊的復原操作，並在可能時刪除其快照。成功回應中的 `snapshotRemoved: false` 表示清理工作已保留，等待維護重試。 | 400 缺少 `opId`；404 操作不存在或已停用；409 該用戶端的最新操作 |
+
+刪除操作會附加墓碑記錄，而不會重寫日誌。伺服器會保護每個用戶端的最新操作，
+以保留目前的復原點。
+
 ### 組合
 
 | 方法與路徑 | 用途 | Notable errors |
@@ -134,10 +144,16 @@ Session 簽發在需要 data-plane 認證時停用，這包含遠端綁定。遠
 | `GET /api/models` | 回傳儀表板／CLI 模型列 | 收集飽和時 `catalog_busy` |
 | `GET /api/client-config?client=...` | 為 `opencode`、`pi`、`omp`、`hermes`、`openclaw`、`kimi`、`gajae` 或 `dsh` 建構唯讀客戶端設定 | 400 不支援客戶端；503 目錄不可用 |
 | `PUT /api/disabled-models` | 取代共享的 disabled-model 清單 | 400 無效 JSON |
-| `PUT /api/model-visibility` | 原子地變更供應商或模型層級可見性 | 400 無效供應商、scope、目標或 body |
+| `PUT /api/model-visibility` | 原子地變更供應商或模型層級可見性 | 400 無效供應商、scope、目標或 body; 409 `initial_model_selection_pending` (重新整理模型清單後再試。) |
 | `GET, POST /api/custom-models` | 列出自訂模型或新增一個 | 400 無效欄位；404 供應商缺失；409 重複模型 |
 | `PUT, DELETE /api/custom-models/{id}` | 編輯或刪除一個自訂模型 | 400 無效 id/欄位；404 未找到；409 重複模型 |
-| `GET, PUT /api/selected-models` | 讀取供應商允許清單與可用性，或取代一個允許清單 | 400 缺失供應商/body；404 未知供應商 |
+| `GET, PUT /api/selected-models` | 讀取供應商允許清單與可用性，或取代一個允許清單 | 400 缺失供應商/body；404 未知供應商; PUT 409 `initial_model_selection_pending` |
+| `GET, PUT /api/model-presets` | 讀取預設資訊或選擇 preset/all/custom 模式 | 400 模式無效或不支援該預設；404 未知供應商; PUT 409 `initial_model_selection_pending` |
+
+手動模型會取代 Models 儀表板中 provider 與 model ID 相同的列。OpenAI 手動列保留 `openai/<model>`，並支援可見性控制。刪除手動列後，不含帳戶限定符的原生列會恢復。含帳戶限定符的原生列仍獨立保留。原生路由與帳戶權限不變。非原生 OpenAI 可見性目標必須符合已設定的手動模型。
+
+
+尚未確認可靠的初始模型清單時，有效的 `PUT /api/selected-models` 和 `PUT /api/model-presets` 請求也會回傳 HTTP 409 和代碼 `initial_model_selection_pending`。請使用 `GET /api/models` 等方式更新模型清單，成功後再重試。
 
 ### OAuth 帳號、供應商金鑰與 data-plane 金鑰
 
@@ -174,6 +190,14 @@ Session 簽發在需要 data-plane 認證時停用，這包含遠端綁定。遠
 | `GET /api/provider-quotas` | 讀取供應商配額報告；`refresh=1` 強制重新整理 | — |
 | `GET, PUT /api/provider-context-caps` | 讀取或更新全域、所有供應商或單一供應商的 context 上限 | 400 無效請求；404 未知供應商 |
 | `GET /api/provider-presets` | 回傳從 runtime registry 衍生的 GUI 供應商預設 | — |
+
+上下文上限回應包含 `caps`（目前生效的上限）和 `values`（停用後仍保留的最後選擇值）。
+啟用供應商的上限時，若未指定 `value`，便會恢復其選擇值；首次啟用時使用全域 `contextCapValue`。
+OpenAI 也遵循此規則：開關不會選擇特殊的 922k 模式。生效中的上限會限制每個原生視窗；支援長上下文
+的模型只能擴展到該模型支援的上限。
+`{ "value": 600000, "setAll": true }` 會修改全域值，並且只更新已啟用的上限；上限已停用的供應商會
+保留自己的選擇值，供之後啟用時恢復。不帶 `value` 的 `{ "setAll": true }` 會以目前全域值啟用所有
+已設定供應商的上限，並取代儲存的選擇值。停用不會清除選擇值，重新載入後仍保留，但不會將其套用為限制。
 
 `provider_has_dependent_combos` 是安全屏障：在刪除其供應商前，先移除或編輯相依的組合。
 

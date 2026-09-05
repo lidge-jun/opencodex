@@ -130,3 +130,18 @@ test("a rejected fetch reports failure", async () => {
   await mount(1, true, settled);
   expect(settled).toEqual([false]);
 });
+
+test("the shell preserves boolean first argument and reports its captured epoch second", async () => {
+  const calls: Array<[boolean, number]> = [];
+  let done!: () => void;
+  const settled = new Promise<void>(resolve => { done = resolve; });
+  await act(async () => {
+    root = createRoot(host);
+    root.render(<LanguageProvider><ProviderWorkspaceShell providers={providers} apiBase="" defaultProvider="meta-muse"
+      selectedName={null} onSelect={() => {}} onAddProvider={() => {}}
+      quotaRefreshEpoch={17} quotaForceRefresh onQuotaRefreshSettled={(ok, epoch) => { calls.push([ok, epoch]); done(); }}
+    /></LanguageProvider>);
+  });
+  await act(async () => { await settled; });
+  expect(calls).toEqual([[true, 17]]);
+});

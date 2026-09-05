@@ -36,6 +36,20 @@ Status and mutation must use the same classifier. A special case added only to a
 would be misleading because refresh or disable could still reject the same file; a special case
 added only to a writer would let a mutation bypass the state users saw.
 
+TOML temporal scalars cannot survive the JSON-cloned merge representation with their types
+intact. The common parser refuses documents containing them before either status or mutation
+proceeds, including nested arrays and inline tables. Quoted date strings remain supported.
+
+## Fast model selectors
+
+The serving proxy resolves `fastRowAvailable` on every management model row, including its
+`fastRows` setting (default true), canonical eligibility, native upstream tier evidence, and
+exact-ID collisions checked before disabled rows are filtered. Management and CLI projections
+carry the boolean into the shared client serializers. Only true creates an additive `--fast`
+selector, preserving the underlying provider, model ID, modalities, limits, and effort metadata.
+False or missing metadata never causes local inference, so old or disabled remote hubs remain
+authoritative. Existing client configs receive the entries on export or managed refresh.
+
 ## Hermes Model Capabilities
 
 Hermes cannot infer custom-provider capabilities from its built-in registry. The OpenCodex

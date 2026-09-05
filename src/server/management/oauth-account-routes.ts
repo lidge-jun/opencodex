@@ -30,7 +30,7 @@ import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/ke
 import { deriveProviderPresets } from "../../providers/derive";
 import { providerCodexAccountMode } from "../../providers/registry";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
-import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderAccountQuotas, fetchProviderQuotaReports, hasPassiveAccountQuota, readPassiveProviderAccountQuotas, supportsPerAccountQuota } from "../../providers/quota";
+import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderAccountQuotas, fetchProviderApiKeyQuotas, fetchProviderQuotaReports, providerOAuthAccountQuotaMode, providerApiKeyQuotaMode, readPassiveProviderAccountQuotas } from "../../providers/quota";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { clearThreadAccountMap } from "../../codex/routing";
 import {
@@ -254,7 +254,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   if (url.pathname === "/api/oauth/accounts" && req.method === "GET") {
     const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
-    const status = getLoginStatus(provider);
+    const quotaMode = providerOAuthAccountQuotaMode(provider);
+    const quotaProvider = config.providers[provider];
     const { getAccountSet } = await import("../../oauth/store");
     const {
       oauthAccountHealthFields,
@@ -274,26 +275,26 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
               needsReauth: summary.needsReauth === true,
               reauthReason: summary.needsReauth === true ? "refresh_failed" : undefined,
             });
-          return { ...summary, ...oauthAccountHealthFields(provider, summary.id, health) };
+          return { ...summary, ...oauthAccountHealthFields(provider, summary.id, health), quotaMode };
         }),
       };
     };
     // Per-account rate limits: Anthropic reports usage per credential, so every logged-in
     // account can show its own 5h/weekly bars (not just the active one). Opt-in via ?quota=1
     // so the plain account list stays a cheap local read; ?refresh=1 bypasses the TTL.
-    const wantQuota = url.searchParams.get("quota") === "1" && supportsPerAccountQuota(provider);
+    const wantQuota = url.searchParams.get("quota") === "1" && quotaMode === "probe";
     // Meta publishes no quota endpoint: its usage is observed in-band on streaming turns
     // and read back from the cache here. `?refresh=1` is accepted and ignored on this
     // path rather than rejected -- the GUI sends it for every provider on a manual
     // refresh, and a 400 would report an error for what is simply a no-op.
-    const passiveQuota = url.searchParams.get("quota") === "1" && hasPassiveAccountQuota(provider);
+    const passiveQuota = url.searchParams.get("quota") === "1" && quotaMode === "passive";
     if (!wantQuota && !passiveQuota) return jsonResponse(projectAccounts());
     const forceRefresh = url.searchParams.get("refresh") === "1";
     // Probing may refresh the active credential and mark needsReauth — project health
     // from the post-probe store so the response is not stale.
     const rows = passiveQuota
       ? readPassiveProviderAccountQuotas(provider)
-      : await fetchProviderAccountQuotas(provider, forceRefresh);
+      : await fetchProviderAccountQuotas(provider, forceRefresh, quotaProvider);
     const byId = new Map(rows.map(row => [row.accountId, row]));
     const projected = projectAccounts();
     return jsonResponse({
@@ -301,10 +302,13 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       accounts: projected.accounts.map(account => {
         const row = byId.get(account.id);
         if (!row) return account;
+        if (config.providers[provider] !== quotaProvider || row.isCurrent?.() === false) {
+          return { ...account, quota: null, quotaUnavailable: true };
+        }
         return {
           ...account,
           quota: row.quota,
-          ...(row.unavailable ? { quotaUnavailable: true } : {}),
+          ...(quotaMode === "probe" ? { quotaUnavailable: row.unavailable === true } : {}),
         };
       }),
     });
@@ -333,8 +337,10 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   if (url.pathname === "/api/oauth/accounts/pool" && req.method === "GET") {
     const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
     if (provider !== "anthropic") {
-      // Generic OAuth pool-settings contract (#695 slice 1): persisted per provider, inert until
-      // the selector consumes it. Codex keeps /api/codex-auth; api-key providers have no pool.
+      // Generic OAuth pool-settings contract (#695 slice 1): persisted per provider. `strategy`
+      // and `autoSwitchThreshold` stay inert until the selector consumes them; `enabled` already
+      // governs the pre-dispatch account preference. Codex keeps /api/codex-auth; api-key
+      // providers have no pool.
       const { poolSettingsCapability, genericPoolSettingsDto } = await import("../../oauth/pool-settings-capability");
       const prov = config.providers[provider];
       if (!provider || !prov || poolSettingsCapability(provider, prov) !== "generic") {
@@ -570,7 +576,29 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const name = (url.searchParams.get("name") ?? "").trim();
     if (!name || !isValidProviderName(name) || !hasOwnProvider(config.providers, name)) return jsonResponse({ error: "unknown provider" }, 404);
     const { listProviderApiKeys } = await import("../../providers/api-keys");
-    return jsonResponse(listProviderApiKeys(config, name));
+    const projectKeys = () => {
+      const listed = listProviderApiKeys(config, name);
+      const provider = config.providers[name];
+      const quotaMode = provider ? providerApiKeyQuotaMode(name, provider) : "unsupported";
+      return { ...listed, keys: listed.keys.map(key => ({ ...key, quotaMode })) };
+    };
+    const initial = projectKeys();
+    if (url.searchParams.get("quota") !== "1" || !initial.keys.some(key => key.quotaMode === "probe")) {
+      return jsonResponse(initial);
+    }
+    const rows = await fetchProviderApiKeyQuotas(config, name, url.searchParams.get("refresh") === "1");
+    const byId = new Map(rows.map(row => [row.keyId, row]));
+    const current = projectKeys();
+    return jsonResponse({
+      activeId: current.activeId,
+      keys: current.keys.map(key => {
+        const row = byId.get(key.id);
+        if (!row || key.quotaMode !== "probe") return key;
+        if (!row.isCurrent()) return { ...key, quota: null, quotaUnavailable: true };
+        // Internal identity/epoch checks never enter the JSON DTO.
+        return { ...key, quota: row.quota, quotaUnavailable: row.unavailable === true };
+      }),
+    });
   }
   if (url.pathname === "/api/providers/keys" && req.method === "POST") {
     const body = await readManagementJsonBodyOr(req, {}) as { name?: string; key?: string; label?: string };

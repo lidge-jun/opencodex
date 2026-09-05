@@ -7,11 +7,14 @@ import { sidecarEnter } from "../lib/sidecar-tracker";
 import { applyUpstreamRecoveryInit, fetchWithResetRetry } from "../lib/upstream-retry";
 import { parseSidecarSSE } from "../web-search/parse";
 import type { SidecarOutcomeRecorder } from "../web-search/executor";
+import { NATIVE_RESERVE_MODEL } from "../codex/catalog/native-models";
 
 export interface VisionSettings {
   model: string;
   reasoning: VisionReasoningEffort;
   timeoutMs: number;
+  /** Effective Desktop authless compatibility does not grant auxiliary model use. */
+  reserveCompatibility?: boolean;
 }
 
 /** A description, or an `error` string when it couldn't run (caller injects a graceful marker). */
@@ -58,6 +61,9 @@ export async function describeImage(
   abortSignal?: AbortSignal,
   recordOutcome?: SidecarOutcomeRecorder,
 ): Promise<DescribeOutcome> {
+  if (settings.reserveCompatibility && settings.model === NATIVE_RESERVE_MODEL) {
+    return { text: "", error: "Luna Reserve compatibility is only available as a conversation model, not a vision helper. Choose another vision helper model." };
+  }
   const invalid = validateImageUrl(imageUrl);
   if (invalid) return { text: "", error: invalid };
 

@@ -1,14 +1,9 @@
+/** Reserve wire identity, not a globally available native catalog registration. */
+export const NATIVE_RESERVE_MODEL = "gpt-reserve";
+
 /** ChatGPT/Codex wire id observed for the account-native Daybreak Blue surface. */
 export const NATIVE_DAYBREAK_BLUE_MODEL = "gpt-daybreak-blue-latest";
 
-/**
- * Leaked Responses API identifier for the announced next-generation OpenAI model
- * (2026-09-03: OpenAI teased the launch on X; community probes report `gpt-6-astra` returning
- * the same 404 as other internal staging slugs where an arbitrary slug returns 400).
- * Registered preemptively so an entitled account can route it the moment it ships, before any
- * codex-rs catalog carries it. Unlike Daybreak it is NOT wire-normalized to a serving id —
- * the leaked slug IS the wire id.
- */
 /**
  * SHIPPED as of 2026-09-03: openai/codex `ed391d4dd` (#42607, bundled model catalog) and
  * `1f7b99922` (#42619, Amazon Bedrock catalogs). The registration is no longer speculative —

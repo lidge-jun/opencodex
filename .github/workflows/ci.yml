@@ -44,6 +44,12 @@ on:
       - ".github/workflows/enforce-pr-target.yml"
       - ".github/workflows/stale-needs-info.yml"
   workflow_dispatch:
+    inputs:
+      lane:
+        description: "all (default) or macos-control"
+        type: choice
+        default: all
+        options: [all, macos-control]
 
 permissions:
   contents: read
@@ -267,7 +273,7 @@ jobs:
           # between jobs, so leaving a usable token in .git/config is avoidable
           # residue. Matches the convention already used by the other workflows.
           persist-credentials: false
-          # tests/release-version-line.test.ts compares package.json against the
+          # tests/ci-workflows/release-version-line.test.ts compares package.json against the
           # newest release tag. actions/checkout fetches no tags by default, so
           # without this the check reads an empty tag set and passes on anything -
           # the exact regression it exists to catch would ride through CI green.
@@ -341,12 +347,12 @@ jobs:
       - name: Test storage policy API
         run: |
           bun test --isolate \
-            ./tests/api-storage-policy-already-running.test.ts \
-            ./tests/api-storage-policy-mutation-busy.test.ts \
-            ./tests/api-storage-policy-put-race.test.ts \
-            ./tests/api-storage-policy-run.test.ts \
-            ./tests/api-storage-policy.test.ts \
-            ./tests/api-storage.test.ts
+            ./tests/storage/api-storage-policy-already-running.test.ts \
+            ./tests/storage/api-storage-policy-mutation-busy.test.ts \
+            ./tests/storage/api-storage-policy-put-race.test.ts \
+            ./tests/storage/api-storage-policy-run.test.ts \
+            ./tests/storage/api-storage-policy.test.ts \
+            ./tests/storage/api-storage.test.ts
 
   # Bun 1.3.14 has shown a Linux isolate wedge around startServer() plus the user
   # cost overlay reconciler. Keep api-usage in one fresh process so a runtime
@@ -378,7 +384,7 @@ jobs:
           bun run build
 
       - name: Test api usage API
-        run: bun test --isolate ./tests/api-usage.test.ts
+        run: bun test --isolate ./tests/server/api-usage.test.ts
 
   # Everything that is not the suite: type safety, privacy, lint, build, smoke.
   # One runner, once per push. Splitting these across the shards would repeat a
@@ -425,7 +431,7 @@ jobs:
         run: bun run privacy:scan
 
       # The ocx skill ships a capability -> route map generated from src/cli/capabilities.ts.
-      # `bun run test` already covers this via tests/skill-ocx.test.ts; this step exists so the
+      # `bun run test` already covers this via tests/ci-workflows/skill-ocx.test.ts; this step exists so the
       # failure names the fix instead of surfacing as a byte-comparison diff in a test log.
       - name: Check the generated ocx skill surface is current
         run: bun run skill:surface:check
@@ -442,21 +448,108 @@ jobs:
       - name: CLI help smoke
         run: bun run src/cli/index.ts help
 
-  # macOS runs on every pull request, and runs the WHOLE suite unsharded.
-  #
-  # That is the point of it. The four Linux shards each cover a quarter of the
-  # files, which quietly assumes no test depends on a sibling file having run in
-  # the same process pool. This leg is the control that would notice if that
-  # assumption ever broke. It is also the cheapest leg on the board — 5m23s on
-  # the baseline run, faster than the ubuntu leg it sits beside — so there was
-  # never a latency argument for touching it.
-  #
-  # It does not repeat the gates: typecheck, privacy, lint, and build are
-  # platform-independent and already ran once above.
   platform-macos:
-    name: macos
+    name: macos ${{ matrix.shard }}/2
     needs: changes
     if: github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'
+    runs-on: macos-latest
+    # Two shards. Unsharded, this job was the critical path on every green dev
+    # push (mean 14.9 min against a 4.7 min Linux maximum; devlog
+    # 260905_test_modularization_and_windows/003). Two halves finish in ~7.7 and
+    # cost 0.6 extra macOS minutes of setup per run. The whole-pool control that
+    # the single job used to provide lives in macos-control below, on dispatch.
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          # No job here pushes, and the self-hosted box keeps its checkout
+          # between jobs, so leaving a usable token in .git/config is avoidable
+          # residue. Matches the convention already used by the other workflows.
+          persist-credentials: false
+          # tests/ci-workflows/release-version-line.test.ts compares package.json against the
+          # newest release tag. actions/checkout fetches no tags by default, so
+          # without this the check reads an empty tag set and passes on anything -
+          # the exact regression it exists to catch would ride through CI green.
+          #
+          # Tags only, not full history: `fetch-depth: 0` would clone every commit to
+          # answer a question about refs. A shallow fetch still brings each tag and its
+          # target commit, which is all the check reads - the tag list, and whether the
+          # newest tag names HEAD. That second read only happens on a release commit,
+          # where the tag points at HEAD and the commit is present by definition.
+          fetch-tags: true
+
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
+
+      - name: Install dependencies
+        run: |
+          bun install --frozen-lockfile
+          cd gui
+          bun install --frozen-lockfile
+
+      # Same reason as the shards: the suite serves gui/dist and reads it back.
+      - name: Build GUI
+        run: |
+          cd gui
+          bun run build
+
+      # Bun 1.3.14 segfaults while reclaiming a Worker at an `--isolate` file
+      # boundary: the header shows BALANCED `workers_spawned(N)
+      # workers_terminated(N)` and the process dies with exit 133 after the last
+      # assertion in the file already passed. It landed on
+      # `storage-worker-lifecycle` and `server-background-lifecycle` — the two
+      # files that tear down a still-busy policy Worker — and accounted for most
+      # of this leg's red runs on `dev` while every failing SHA passed on rerun.
+      #
+      # This is a runtime crash, not a test result, and the Linux shards already
+      # retry exactly this class through `scripts/ci/run-bun-test-batches.sh`
+      # (`is_bun_runtime_crash`). The unsharded macOS control had no equivalent,
+      # so the same crash that Linux absorbs failed the whole promotion here.
+      #
+    # Keep the signature list in sync with `is_bun_runtime_crash` in
+    # scripts/ci/run-bun-test-batches.sh. An assertion failure still fails on
+    # the first attempt — only the crash signature is retried, exactly once.
+      - name: Test
+        run: |
+          # GitHub Actions starts bash `run:` blocks with `-e`. Disable
+          # errexit so a Bun crash reaches PIPESTATUS and the bounded retry.
+          set +e
+          set -uo pipefail
+          suite_log="$(mktemp -t ocx-macos-suite.XXXXXX)"
+          for attempt in 1 2; do
+            # --timeout: Bun's default 5s per-test ceiling is the recurring flake
+            # class on this loaded shared runner (real retry windows + server
+            # round-trips exceed 5s under contention; a 10s-floor in-test
+            # watchdog fired at 10.16s there). 60s keeps hangs bounded (the 30m
+            # job timeout is the outer backstop) while removing the timing
+            # flakes — assertions are untouched. Pairs with the 30s CI floor in
+            # tests/helpers/ci-watchdog.ts.
+            bun test --isolate --timeout 60000 tests --shard=${{ matrix.shard }}/2 2>&1 | tee "$suite_log"
+            suite_status="${PIPESTATUS[0]}"
+            if [ "$suite_status" -eq 0 ]; then
+              exit 0
+            fi
+            if ! grep -Eqi 'oh no: Bun has crashed|Internal assertion failure|Segmentation fault at address|Illegal instruction|Bus error|Aborted \(core dumped\)' "$suite_log"; then
+              echo "::error::macOS suite failed on attempt ${attempt} (exit ${suite_status}); assertion failures are not retried."
+              exit "$suite_status"
+            fi
+            echo "::warning::Bun runtime crash in the macOS suite (exit ${suite_status}, attempt ${attempt})."
+          done
+          echo "::error::Bun runtime crash repeated on the macOS suite; failing after one retry."
+          exit 1
+
+      - name: CLI help smoke
+        run: bun run src/cli/index.ts help
+
+  macos-control:
+    name: macos control
+    needs: changes
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
     # The unsharded control for the sharded Linux lane: the only place the whole
     # suite runs in one pool, so it is the place that catches what sharding
@@ -471,7 +564,7 @@ jobs:
           # between jobs, so leaving a usable token in .git/config is avoidable
           # residue. Matches the convention already used by the other workflows.
           persist-credentials: false
-          # tests/release-version-line.test.ts compares package.json against the
+          # tests/ci-workflows/release-version-line.test.ts compares package.json against the
           # newest release tag. actions/checkout fetches no tags by default, so
           # without this the check reads an empty tag set and passes on anything -
           # the exact regression it exists to catch would ride through CI green.
@@ -563,10 +656,10 @@ jobs:
   # now means Linux + macOS + the gates; Windows re-enters the gate when the
   # tracked failures are fixed, not before.
   platform-windows:
-    name: windows ${{ matrix.shard }}/4
+    name: windows ${{ matrix.shard }}/6
     needs: select-windows-runner
     if: >-
-      github.event_name == 'workflow_dispatch'
+      github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')
     runs-on: ${{ fromJSON(needs.select-windows-runner.outputs.runner) }}
     # Sharded like the Linux legs. The single-leg run reached 30 minutes on a
     # green suite and was killed in cleanup; four shards put each leg inside the
@@ -580,11 +673,17 @@ jobs:
     # margin. 25 leaves the outer bound in place — a wedged shard still dies —
     # while making a completed shard the normal outcome. The crash-retry below can
     # double a shard's work, and this ceiling has to cover that second attempt too.
+    #
+    # Four shards then grew into the ceiling: across five runs of one branch, completed
+    # shards took 17-25 minutes and run 33934756997 cancelled a green 3/4 at 25m12s —
+    # the same truncation as above. The bound is kept; the work per shard is cut instead.
+    # Six shards put each leg at roughly two-thirds of the four-shard wall time, back
+    # inside the margin 25 was chosen to provide.
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6]
     steps:
       - name: Show selected runner
         shell: bash
@@ -616,7 +715,7 @@ jobs:
           # residue. Matches the convention already used by the other workflows.
           persist-credentials: false
           # Same reason as the Linux shards and the macOS control: this leg runs the
-          # whole suite, and tests/release-version-line.test.ts reads release tags.
+          # whole suite, and tests/ci-workflows/release-version-line.test.ts reads release tags.
           # Without tags the check sees an empty set and cannot fail.
           fetch-tags: true
 
@@ -652,18 +751,18 @@ jobs:
           set -uo pipefail
           suite_log="$(mktemp -t ocx-windows-suite.XXXXXX)"
           for attempt in 1 2; do
-            bun test --isolate --timeout 60000 tests --shard=${{ matrix.shard }}/4 2>&1 | tee "$suite_log"
+            bun test --isolate --timeout 60000 tests --shard=${{ matrix.shard }}/6 2>&1 | tee "$suite_log"
             suite_status="${PIPESTATUS[0]}"
             if [ "$suite_status" -eq 0 ]; then
               exit 0
             fi
             if ! grep -Eqi 'oh no: Bun has crashed|Internal assertion failure|Segmentation fault at address|Illegal instruction|Bus error|Aborted \(core dumped\)' "$suite_log"; then
-              echo "::error::Windows shard ${{ matrix.shard }}/4 failed on attempt ${attempt} (exit ${suite_status}); assertion failures are not retried."
+              echo "::error::Windows shard ${{ matrix.shard }}/6 failed on attempt ${attempt} (exit ${suite_status}); assertion failures are not retried."
               exit "$suite_status"
             fi
-            echo "::warning::Bun runtime crash in Windows shard ${{ matrix.shard }}/4 (exit ${suite_status}, attempt ${attempt})."
+            echo "::warning::Bun runtime crash in Windows shard ${{ matrix.shard }}/6 (exit ${suite_status}, attempt ${attempt})."
           done
-          echo "::error::Bun runtime crash repeated on Windows shard ${{ matrix.shard }}/4; failing after one retry."
+          echo "::error::Bun runtime crash repeated on Windows shard ${{ matrix.shard }}/6; failing after one retry."
           exit 1
 
       - name: CLI help smoke
@@ -811,7 +910,7 @@ jobs:
     # direct dependencies only, so a failing `select-windows-runner` would
     # otherwise reach this gate as nothing at all while its dependents report
     # `skipped` — which the gate is required to read as a deliberate skip.
-    needs: [changes, select-windows-runner, test, storage-policy, api-usage, gates, platform-macos, platform-windows, keyring-smoke, npm-global-smoke]
+    needs: [changes, select-windows-runner, test, storage-policy, api-usage, gates, platform-macos, macos-control, platform-windows, keyring-smoke, npm-global-smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

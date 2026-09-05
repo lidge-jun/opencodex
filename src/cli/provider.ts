@@ -18,6 +18,7 @@ import type { OcxProviderConfig } from "../types";
 import { findLiveProxy } from "../server/proxy-liveness";
 import { syncModelsToCodex } from "../codex/sync";
 import { codexAccountNamespaceProviderCollisionError } from "../codex/account-namespace-match";
+import { modelSelectionGuidance, modelSelectionNextSteps } from "./model-selection-guidance";
 
 // ---------------------------------------------------------------------------
 // Arg helpers
@@ -212,6 +213,8 @@ async function handleAdd(args: string[]): Promise<void> {
   }
 
   const existingProvider = config.providers[name];
+  const { initializeProviderModelSelection } = await import("../providers/initial-model-selection");
+  initializeProviderModelSelection(name, provConfig, existingProvider, config);
   config.providers[name] = provConfig;
   // A --force overwrite rotates the key/endpoint but must not drop a
   // user-configured price overlay (same rule as the /api/providers path and
@@ -227,6 +230,7 @@ async function handleAdd(args: string[]): Promise<void> {
   if (wantsJson) {
     console.log(JSON.stringify({
       action: "added",
+      modelSelection: modelSelectionNextSteps(name),
       provider: name,
       adapter: provConfig.adapter,
       baseUrl: provConfig.baseUrl,
@@ -255,6 +259,7 @@ async function handleAdd(args: string[]): Promise<void> {
 
   const registryLabel = registryEntry ? ` (${registryEntry.label})` : "";
   console.log(`✅ Provider "${name}"${registryLabel} added.`);
+  for (const line of modelSelectionGuidance(name)) console.log(line);
   if (setDefault) console.log(`   Set as default provider.`);
   if (registryEntry?.authKind === "oauth") {
     console.log(`   Authenticate with: ocx login ${name}`);
@@ -433,6 +438,7 @@ Subcommands:
   set-default <name>    Change the default provider
   selected <name>       Show or set the provider model allowlist
   quota                 Show provider quota reports
+  resets                Show recently detected quota resets
   presets               List GUI provider presets
   account-mode <mode>   Set OpenAI Codex pool/direct mode
 
@@ -442,6 +448,8 @@ Examples:
   ocx provider add my-ollama --adapter openai-chat --base-url http://localhost:11434/v1
   ocx provider show anthropic --json
   ocx provider set-default anthropic
+  ocx provider edit xai --xai-chat on   # opt Grok 4.5/4.6 into Chat Completions
+  ocx provider edit xai --xai-chat off  # use Responses again
   ocx provider remove my-ollama`;
 
 export async function handleProviderCommand(args: string[]): Promise<void> {

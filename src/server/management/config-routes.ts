@@ -41,6 +41,15 @@ import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../provid
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { clearThreadAccountMap } from "../../codex/routing";
 import { primeCodexPoolQuotas } from "../../codex/auth-api";
+import { isSelectableCodexPoolAccount } from "../../codex/account-id";
+import { isCodexAccountPriorityKey } from "../../codex/account-priority";
+import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/main-account";
+import { getAccountQuota } from "../../codex/quota";
+import {
+  codexQuotaAutoRefreshStatus,
+  runCodexQuotaAutoRefresh,
+} from "../../codex/quota-auto-refresh";
+import { getMainAccountHardLockStatus } from "../../codex/main-account-hard-lock";
 import {
   codexAccountPickerEnabled,
   initializeDefaultCodexAccountNamespaces,
@@ -105,6 +114,13 @@ import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostR
 import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
 import type { ManagementContext } from "./context";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
+
+function quotaAutoRefreshSettings(config: OcxConfig) {
+  return Object.fromEntries(Object.entries(config.codexQuotaAutoRefresh ?? {}).map(([id, setting]) => [
+    id,
+    { fiveHour: setting.fiveHour === true, weekly: setting.weekly === true },
+  ]));
+}
 
 async function sidecarVisionResponseSettings(config: OcxConfig): Promise<{
   model: string;
@@ -300,12 +316,15 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       streamMode: config.streamMode ?? "auto",
       appOwnedMemoryBudgetMb: config.appOwnedMemoryBudgetMb ?? 256,
       codexAccountPickerEnabled: codexAccountPickerEnabled(config),
+      codexQuotaAutoRefresh: quotaAutoRefreshSettings(config),
       // Absent means hidden, so the GUI renders the switch without having to know that
       // `undefined` and `false` mean the same thing.
       showCodexSparkQuota: config.showCodexSparkQuota === true,
       // Absent means off, same convention: the GUI renders a plain switch without
       // needing to know that `undefined` and `false` mean the same thing here.
       ultraFastTier: config.ultraFastTier === true,
+      codexMainAccountHardLock: config.codexMainAccountHardLock === true,
+      mainAccountHardLock: getMainAccountHardLockStatus(config),
       // Absent means the historical auto-open, so the GUI can render the toggle
       // without having to know that `undefined` and `true` mean the same thing.
       oauthOpenBrowser: config.oauthOpenBrowser !== false,
@@ -395,20 +414,24 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       streamMode?: unknown;
       appOwnedMemoryBudgetMb?: unknown;
       codexAccountPickerEnabled?: unknown;
+      codexQuotaAutoRefresh?: unknown;
       oauthOpenBrowser?: unknown;
       showCodexSparkQuota?: unknown;
       ultraFastTier?: unknown;
+      codexMainAccountHardLock?: unknown;
       codexDesktopAuthless?: unknown;
     };
     if (body.codexAutoStart === undefined
       && body.streamMode === undefined
       && body.appOwnedMemoryBudgetMb === undefined
       && body.codexAccountPickerEnabled === undefined
+      && body.codexQuotaAutoRefresh === undefined
       && body.oauthOpenBrowser === undefined
       && body.showCodexSparkQuota === undefined
       && body.ultraFastTier === undefined
+      && body.codexMainAccountHardLock === undefined
       && body.codexDesktopAuthless === undefined) {
-      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, oauthOpenBrowser, showCodexSparkQuota, ultraFastTier, or codexDesktopAuthless" }, 400);
+      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, showCodexSparkQuota, ultraFastTier, codexMainAccountHardLock, or codexDesktopAuthless" }, 400);
     }
     if (body.codexAutoStart !== undefined && typeof body.codexAutoStart !== "boolean") {
       return jsonResponse({ error: "codexAutoStart boolean is required" }, 400);
@@ -429,8 +452,32 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     if (body.ultraFastTier !== undefined && typeof body.ultraFastTier !== "boolean") {
       return jsonResponse({ error: "ultraFastTier boolean is required" }, 400);
     }
+    if (body.codexMainAccountHardLock !== undefined && typeof body.codexMainAccountHardLock !== "boolean") {
+      return jsonResponse({ error: "codexMainAccountHardLock boolean is required" }, 400);
+    }
     if (body.codexDesktopAuthless !== undefined && typeof body.codexDesktopAuthless !== "boolean") {
       return jsonResponse({ error: "codexDesktopAuthless boolean is required" }, 400);
+    }
+    let quotaAutoRefreshChange: { id: string; window: "fiveHour" | "weekly"; enabled: boolean } | undefined;
+    if (body.codexQuotaAutoRefresh !== undefined) {
+      if (!isPlainRecord(body.codexQuotaAutoRefresh)) {
+        return jsonResponse({ error: "codexQuotaAutoRefresh must be an object" }, 400);
+      }
+      const change = body.codexQuotaAutoRefresh;
+      const id = typeof change.id === "string" ? change.id.trim() : "";
+      if (!isCodexAccountPriorityKey(id)) return jsonResponse({ error: "Invalid account id format" }, 400);
+      if (change.window !== "fiveHour" && change.window !== "weekly") {
+        return jsonResponse({ error: "window must be fiveHour or weekly" }, 400);
+      }
+      if (typeof change.enabled !== "boolean") return jsonResponse({ error: "enabled must be a boolean" }, 400);
+      const exists = id === MAIN_CODEX_ACCOUNT_ID
+        || (config.codexAccounts ?? []).some(account => isSelectableCodexPoolAccount(account) && account.id === id);
+      if (!exists) return jsonResponse({ error: "Account not found" }, 404);
+      const status = codexQuotaAutoRefreshStatus(config, id, getAccountQuota(id));
+      if (change.enabled && !status[change.window === "fiveHour" ? "fiveHourAvailable" : "weeklyAvailable"]) {
+        return jsonResponse({ error: "Quota window is not available for this account" }, 409);
+      }
+      quotaAutoRefreshChange = { id, window: change.window, enabled: change.enabled };
     }
     if (body.appOwnedMemoryBudgetMb !== undefined && (
       typeof body.appOwnedMemoryBudgetMb !== "number"
@@ -451,12 +498,16 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       hasCodexAccountNamespaces: Object.hasOwn(config, "codexAccountNamespaces"),
       codexAccountPickerEnabled: config.codexAccountPickerEnabled,
       hasCodexAccountPickerEnabled: Object.hasOwn(config, "codexAccountPickerEnabled"),
+      codexQuotaAutoRefresh: config.codexQuotaAutoRefresh,
+      hasCodexQuotaAutoRefresh: Object.hasOwn(config, "codexQuotaAutoRefresh"),
       oauthOpenBrowser: config.oauthOpenBrowser,
       hasOauthOpenBrowser: Object.hasOwn(config, "oauthOpenBrowser"),
       showCodexSparkQuota: config.showCodexSparkQuota,
       hasShowCodexSparkQuota: Object.hasOwn(config, "showCodexSparkQuota"),
       ultraFastTier: config.ultraFastTier,
       hasUltraFastTier: Object.hasOwn(config, "ultraFastTier"),
+      codexMainAccountHardLock: config.codexMainAccountHardLock,
+      hasCodexMainAccountHardLock: Object.hasOwn(config, "codexMainAccountHardLock"),
       codexDesktopAuthless: config.codexDesktopAuthless,
       hasCodexDesktopAuthless: Object.hasOwn(config, "codexDesktopAuthless"),
     };
@@ -493,8 +544,21 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       // default, and a written `false` would survive as a decision nobody made.
       if (body.ultraFastTier === true) config.ultraFastTier = true;
       else if (body.ultraFastTier === false) deleteConfigTopLevelKey(config, "ultraFastTier");
+      if (body.codexMainAccountHardLock === true) config.codexMainAccountHardLock = true;
+      else if (body.codexMainAccountHardLock === false) deleteConfigTopLevelKey(config, "codexMainAccountHardLock");
       if (body.codexDesktopAuthless === true) config.codexDesktopAuthless = true;
       else if (body.codexDesktopAuthless === false) deleteConfigTopLevelKey(config, "codexDesktopAuthless");
+      if (quotaAutoRefreshChange) {
+        const { id, window, enabled } = quotaAutoRefreshChange;
+        const setting = { ...(config.codexQuotaAutoRefresh?.[id] ?? {}) };
+        if (enabled) setting[window] = true;
+        else delete setting[window];
+        const all = { ...(config.codexQuotaAutoRefresh ?? {}) };
+        if (Object.keys(setting).length > 0) all[id] = setting;
+        else delete all[id];
+        if (Object.keys(all).length > 0) config.codexQuotaAutoRefresh = all;
+        else deleteConfigTopLevelKey(config, "codexQuotaAutoRefresh");
+      }
       pickerIsEnabled = codexAccountPickerEnabled(config);
       (deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode)(config);
     } catch (error) {
@@ -511,6 +575,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       if (previousSettings.hasCodexAccountPickerEnabled) {
         config.codexAccountPickerEnabled = previousSettings.codexAccountPickerEnabled;
       } else deleteConfigTopLevelKey(config, "codexAccountPickerEnabled");
+      if (previousSettings.hasCodexQuotaAutoRefresh) {
+        config.codexQuotaAutoRefresh = previousSettings.codexQuotaAutoRefresh;
+      } else deleteConfigTopLevelKey(config, "codexQuotaAutoRefresh");
       if (previousSettings.hasOauthOpenBrowser) {
         config.oauthOpenBrowser = previousSettings.oauthOpenBrowser;
       } else deleteConfigTopLevelKey(config, "oauthOpenBrowser");
@@ -520,6 +587,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       if (previousSettings.hasUltraFastTier) {
         config.ultraFastTier = previousSettings.ultraFastTier;
       } else deleteConfigTopLevelKey(config, "ultraFastTier");
+      if (previousSettings.hasCodexMainAccountHardLock) {
+        config.codexMainAccountHardLock = previousSettings.codexMainAccountHardLock;
+      } else deleteConfigTopLevelKey(config, "codexMainAccountHardLock");
       if (previousSettings.hasCodexDesktopAuthless) {
         config.codexDesktopAuthless = previousSettings.codexDesktopAuthless;
       } else deleteConfigTopLevelKey(config, "codexDesktopAuthless");
@@ -539,16 +609,20 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       ? catalogRefreshIsPending(catalogRefresh)
       : false;
     invalidateStartupHealthCache();
+    if (quotaAutoRefreshChange) void runCodexQuotaAutoRefresh(config);
     return jsonResponse({
       ok: true,
       codexAutoStart: codexAutoStartEnabled(config),
       streamMode: config.streamMode ?? "auto",
       appOwnedMemoryBudgetMb: config.appOwnedMemoryBudgetMb ?? 256,
       codexAccountPickerEnabled: pickerIsEnabled,
+      codexQuotaAutoRefresh: quotaAutoRefreshSettings(config),
       oauthOpenBrowser: config.oauthOpenBrowser !== false,
       catalogRefreshPending,
       showCodexSparkQuota: config.showCodexSparkQuota === true,
       codexDesktopAuthless: authlessIsEnabled,
+      codexMainAccountHardLock: config.codexMainAccountHardLock === true,
+      mainAccountHardLock: getMainAccountHardLockStatus(config),
       startupHealth: await readStartupHealth(config),
     });
   }
@@ -696,7 +770,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     }
     // Reject ONLY a model we can prove is blind. An id nothing knows about stays
     // allowed: the operator may be ahead of our catalog, and the runtime never
-    // required catalog membership (`tests/vision-reasoning-contract.test.ts`
+    // required catalog membership (`tests/vision/vision-reasoning-contract.test.ts`
     // pins `custom-vision` → 200). The catalog is read ONCE and reused for the
     // rejection body, so a 400 cannot cost two provider fetches.
     if (body.vision && typeof body.vision.model === "string" && body.vision.model !== "") {
