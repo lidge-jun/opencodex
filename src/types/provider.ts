@@ -528,14 +528,18 @@ export interface OcxProviderConfig {
   responsesSnapshotRepair?: boolean;
   /**
    * Provider-wide mapping from Codex effort labels to upstream `reasoning_effort` values.
-   * Map a label to `REASONING_EFFORT_OMIT_SENTINEL` ("__omit__") to omit the reasoning field
-   * for that effort so the upstream model's own default applies.
+   * Map a label to the reserved value `"__omit__"` to send no reasoning field at all for that
+   * effort, so the upstream model's own default applies. The sentinel is
+   * `REASONING_EFFORT_OMIT_SENTINEL` in `src/reasoning-effort.ts`; it suppresses
+   * `reasoning_effort` on an OpenAI-compatible wire and Ollama's native `think` field on the
+   * Ollama native adapter (#2356).
    */
   reasoningEffortMap?: Record<string, string>;
   /**
    * Model-specific mapping from Codex effort labels to upstream `reasoning_effort` values.
-   * Map a label to `REASONING_EFFORT_OMIT_SENTINEL` ("__omit__") to omit the reasoning field
-   * for that effort so the upstream model's own default applies.
+   * Map a label to the reserved value `"__omit__"` to send no reasoning field at all for that
+   * effort, so the upstream model's own default applies. Same sentinel as
+   * `reasoningEffortMap`, resolved per model first.
    */
   modelReasoningEffortMap?: Record<string, Record<string, string>>;
   /** OpenAI-compatible gateway reasoning wire shape. Default sends `reasoning_effort`. */
