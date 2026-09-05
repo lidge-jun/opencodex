@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { createCommandCodeAdapter } from "../../src/adapters/command-code";
+import { commandCodeSessionId, createCommandCodeAdapter } from "../../src/adapters/command-code";
 import { loginCommandCode, parseCommandCodeCallback, shouldImportLocalCommandCodeAuth } from "../../src/oauth/command-code";
 import { buildModelsRequest, OAUTH_PROVIDERS } from "../../src/oauth";
 import {
@@ -795,5 +795,69 @@ describe("Command Code provider", () => {
   test("always requests streaming upstream so non-stream clients still get NDJSON", async () => {
     const built = await builtRequest({ ...parsed(), stream: false });
     expect(JSON.parse(built.body).params.stream).toBe(true);
+  });
+
+  test("derives an opaque stable session id from trusted conversation identity", async () => {
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/i;
+    const identities = {
+      thread: "thread-secret-value",
+      replay: "replay-secret-value",
+      cache: "cache-secret-value",
+    };
+    const thread = {
+      ...parsed(),
+      _clientThreadId: `  ${identities.thread}  `,
+      _reasoningReplayScope: { clientThreadId: identities.replay },
+      options: { ...parsed().options, promptCacheKey: identities.cache },
+    };
+    const sameThread = {
+      ...thread,
+      _reasoningReplayScope: { clientThreadId: "different-replay" },
+      options: { ...thread.options, promptCacheKey: "different-cache" },
+    };
+    const replay = {
+      ...parsed(),
+      _reasoningReplayScope: { clientThreadId: identities.replay },
+      options: { ...parsed().options, promptCacheKey: identities.cache },
+    };
+    const sameReplay = { ...replay, options: { ...replay.options, promptCacheKey: "different-cache" } };
+    const cache = {
+      ...parsed(),
+      options: { ...parsed().options, promptCacheKey: ` ${identities.cache} ` },
+      _promptCacheKeyIsSharedCohort: false,
+    };
+    const sameCache = {
+      ...cache,
+      options: { ...cache.options, promptCacheKey: identities.cache },
+    };
+
+    const threadId = commandCodeSessionId(thread);
+    expect(threadId).toBe(commandCodeSessionId(sameThread));
+    expect(threadId).not.toBe(commandCodeSessionId({ ...thread, _clientThreadId: "different-thread" }));
+    expect(commandCodeSessionId(replay)).toBe(commandCodeSessionId(sameReplay));
+    expect(commandCodeSessionId(cache)).toBe(commandCodeSessionId(sameCache));
+    expect(commandCodeSessionId(replay)).not.toBe(commandCodeSessionId(cache));
+    expect(threadId).toMatch(uuid);
+    expect(commandCodeSessionId(replay)).toMatch(uuid);
+    expect(commandCodeSessionId(cache)).toMatch(uuid);
+    for (const raw of Object.values(identities)) expect(threadId).not.toContain(raw);
+
+    const built = await builtRequest(thread);
+    expect(built.headers["x-session-id"]).toBe(threadId);
+  });
+
+  test("does not derive affinity from a shared cohort or prompt text", () => {
+    const shared = {
+      ...parsed(),
+      options: { ...parsed().options, promptCacheKey: "shared-cache-key" },
+      _promptCacheKeyIsSharedCohort: true,
+    };
+    expect(commandCodeSessionId(shared)).not.toBe(commandCodeSessionId(shared));
+    const unclassifiedCache = {
+      ...parsed(),
+      options: { ...parsed().options, promptCacheKey: "possibly-shared-cache-key" },
+    };
+    expect(commandCodeSessionId(unclassifiedCache)).not.toBe(commandCodeSessionId(unclassifiedCache));
+    expect(commandCodeSessionId(parsed())).not.toBe(commandCodeSessionId(parsed()));
   });
 });

@@ -2952,6 +2952,7 @@ async function handleResponsesInner(
   let toolBridgeMaps: ReturnType<typeof buildToolBridgeMaps>;
   try {
     parsed = parseRequest(body);
+    parsed._promptCacheKeyIsSharedCohort = options.promptCacheKeyIsSharedCohort;
     // Captured before any parser mutates it, so both grammars see the client's id.
     const { fastRow, effortRow } = parseSyntheticRowId(parsed.modelId, config);
     if (fastRow) {
@@ -3266,6 +3267,7 @@ async function handleResponsesInner(
             "_providerContinuationOwner",
             "_cursorConversationId",
             "_clientThreadId",
+            "_promptCacheKeyIsSharedCohort",
             "_cursorClientThreadId",
             "_reasoningReplayScope",
             "_cursorIsolateConversation",
