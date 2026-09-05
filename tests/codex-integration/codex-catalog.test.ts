@@ -36,11 +36,12 @@ import {
   setCached,
   type ProviderModelDiscoveryStatus,
 } from "../../src/codex/model-cache";
-import type { OcxConfig } from "../../src/types";
+import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { COMBO_NAMESPACE } from "../../src/combos";
 import type { NormalizedComboConfig } from "../../src/combos/types";
 import { enrichProviderFromRegistry, providerConfigSeed } from "../../src/providers/derive";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
+import { providerMatchesRegistryTransportWithStaticGuards } from "../../src/providers/static-model-discovery";
 import { enrichProviderFromCatalog } from "../../src/oauth/key-providers";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { OAUTH_PROVIDERS } from "../../src/oauth";
@@ -5326,21 +5327,56 @@ describe("Codex catalog routed normalization", () => {
     expect(slugs).toEqual(["opencode-go/glm-5.2"]);
   });
 
-  test("liveModels false with no models exposes no augmented provider rows", async () => {
+  test.each([
+    { label: "omitted", models: undefined },
+    { label: "empty", models: [] as string[] },
+  ])("static Go $label models expose only the inherited default, not the metadata roster", async ({ models: configuredModels }) => {
+    const provider: OcxProviderConfig = {
+      adapter: "openai-chat", baseUrl: "https://opencode-go.test/v1", apiKey: "sk-test",
+      liveModels: false,
+      ...(configuredModels === undefined ? {} : { models: configuredModels }),
+    };
+    // Go keeps the registry's historical name-based ownership even with this fixture URL.
+    // This was never a genuinely default-less provider after capture-time enrichment.
+    expect(providerMatchesRegistryTransportWithStaticGuards("opencode-go", provider)).toBe(true);
+    const enriched = structuredClone(provider);
+    enrichProviderFromRegistry("opencode-go", enriched);
+    expect(enriched.defaultModel).toBe("kimi-k2.7-code");
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      throw new Error("static inherited defaults must not request upstream models");
+    }) as typeof fetch;
     const outcomes: Array<{ provider: string; state: "authoritative" | "degraded" }> = [];
-    const models = await gatherRoutedModels({
-      providers: {
-        "opencode-go": {
-          adapter: "openai-chat",
-          baseUrl: "https://opencode-go.test/v1",
-          apiKey: "sk-test",
-          liveModels: false,
-        },
-      },
-    }, { providerModelOutcomes: outcomes });
-
-    expect(models).toEqual([]);
+    const models = await gatherRoutedModels({ providers: { "opencode-go": provider } }, { providerModelOutcomes: outcomes });
+    expect(models.map(model => `${model.provider}/${model.id}`)).toEqual(["opencode-go/kimi-k2.7-code"]);
     expect(outcomes).toEqual([{ provider: "opencode-go", state: "authoritative" }]);
+    expect(fetchCalls).toBe(0);
+  });
+
+  test.each([
+    { label: "omitted", models: undefined },
+    { label: "empty", models: [] as string[] },
+  ])("custom MiMo $label models remain empty without an effective default", async ({ models: configuredModels }) => {
+    const provider: OcxProviderConfig = {
+      adapter: "mimo-free", baseUrl: "https://mimo-custom.example.test/v1", authMode: "key",
+      liveModels: false,
+      ...(configuredModels === undefined ? {} : { models: configuredModels }),
+    };
+    expect(providerMatchesRegistryTransportWithStaticGuards("mimo-free", provider)).toBe(false);
+    const enriched = structuredClone(provider);
+    enrichProviderFromRegistry("mimo-free", enriched);
+    expect(enriched.defaultModel).toBeUndefined();
+    expect(enriched.models).toEqual(configuredModels);
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      throw new Error("empty custom static providers must not request upstream models");
+    }) as typeof fetch;
+    const outcomes: Array<{ provider: string; state: "authoritative" | "degraded" }> = [];
+    expect(await gatherRoutedModels({ providers: { "mimo-free": provider } }, { providerModelOutcomes: outcomes })).toEqual([]);
+    expect(outcomes).toEqual([{ provider: "mimo-free", state: "authoritative" }]);
+    expect(fetchCalls).toBe(0);
   });
 
   test("anthropic sonnet 4.6 keeps the upstream 1M context window", () => {
