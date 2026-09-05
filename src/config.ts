@@ -3044,7 +3044,6 @@ function publishInitialConfigNoReplace(config: OcxConfig, io: PersistedConfigIni
   const configPath = getConfigPath();
   const target = resolveWriteTarget(configPath);
   assertNotRealHomeUnderTest(dirname(target));
-  recordOwnedConfigPath(getConfigDir(), configPath);
   const persisted = projectConfigRebaseProvenance(config);
   const bytes = JSON.stringify(persisted, null, 2) + "\n";
   const temp = `${target}.ocx.${process.pid}.${nextAtomicTempSequence()}.tmp`;
@@ -3118,6 +3117,10 @@ function publishInitialConfigNoReplace(config: OcxConfig, io: PersistedConfigIni
         }
       }
     }
+    // Claim the config path only after no-replace publication and its identity
+    // checks have completed successfully. A losing initializer must not leave
+    // ownership metadata claiming a winner's file after an EEXIST collision.
+    recordOwnedConfigPath(getConfigDir(), configPath);
     refreshUserCostOverlays(persisted);
     return true;
   } catch (cause) {

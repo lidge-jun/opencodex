@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, unlinkSync, writeFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -9,6 +10,7 @@ import {
   setPersistedConfigInitializationBeforePublishForTests,
   setPersistedConfigInitializationAfterPublishForTests,
 } from "../../src/config";
+import { CONFIG_OWNER_FILE, CONFIG_UNINSTALL_MANIFEST } from "../../src/lib/config-ownership";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -51,10 +53,17 @@ test("preserves valid and malformed existing bytes", () => {
 
 test("a competing creator wins and losing staged bytes are scrubbed", () => {
   const winner = '{"port": 17000, "providers": {}, "defaultProvider": "openai"}\n';
+  // Seed valid ownership without the initial config path so this assertion can
+  // distinguish a losing claim from the manifest's default path set.
+  const ownerId = randomUUID();
+  writeFileSync(join(root, CONFIG_OWNER_FILE), `${JSON.stringify({ version: 1, ownerId, root })}\n`);
+  writeFileSync(join(root, CONFIG_UNINSTALL_MANIFEST), `${JSON.stringify({ version: 1, ownerId, root, paths: [] })}\n`);
   setPersistedConfigInitializationBeforePublishForTests(() => writeFileSync(getConfigPath(), winner));
   expect(initializePersistedConfigIfMissing(config(18000))).toBe("exists");
   expect(readFileSync(getConfigPath(), "utf8")).toBe(winner);
   expect(readdirSync(root).filter(name => name.includes(".ocx.") && name.endsWith(".tmp"))).toEqual([]);
+  const manifest = JSON.parse(readFileSync(join(root, CONFIG_UNINSTALL_MANIFEST), "utf8")) as { paths: string[] };
+  expect(manifest.paths).not.toContain("config.json");
 });
 
 test("rejects pathname replacement of the staged temporary file", () => {
