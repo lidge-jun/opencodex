@@ -28,6 +28,31 @@ ocx claude
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `DISABLE_COMPACT` | `maxContextTokens`가 설정된 경우 기존 컨텍스트 재정의 값 (조건부) |
 직접 내보낸 변수가 항상 우선해요. 추가 인자는 그대로 전달돼요: `ocx claude -p "hello"`.
 
+### Claude 라우팅이 꺼져 있을 때의 네이티브 폴백
+
+예전에는 Claude 라우팅이 꺼져 있으면 `ocx claude`가 오류를 내고 종료했어요. 이제는 네이티브
+`claude` 실행 파일을 대신 실행하므로, 라우팅을 꺼 둔 상태에서도 이 명령을 그대로 쓸 수 있어요.
+
+| 라우팅이 꺼진 위치 | 동작 |
+| --- | --- |
+| 설정의 `claudeCode.enabled: false` | 라우팅이 비활성화되었다는 안내와 함께 네이티브 실행 |
+| 실행 중인 프록시가 `GET /api/claude-code`에서 `enabled: false`를 보고 | 네이티브 실행 + 라우팅을 켠 뒤 서비스를 재시작하라는 안내 |
+| `claudeCode.enabled`가 없거나 `true` | 기존과 동일하게 프록시로 라우팅 |
+
+명시적인 `false`만 폴백을 유발하므로, 이 필드를 모르는 예전 프록시는 계속 라우팅돼요. 프록시가
+없는 것도 폴백 조건이 아니에요 — 라우팅이 켜져 있으면 `ocx claude`가 프록시를 그대로 띄워요.
+
+네이티브 세션이 프록시 상태를 물려받으면 안 되므로, 폴백은 OpenCodex 소유임을 **증명할 수 있는**
+값만 제거해요. `ANTHROPIC_BASE_URL`은 이 프록시의 루프백 주소와 설정된 포트를 정확히 가리키고
+짝이 되는 admission 토큰도 프록시가 발급한 것일 때만 제거하고, `CLAUDE_CODE_*` 검색·자동 컨텍스트
+레버와 프록시를 거쳐야만 해석되는 모델 슬롯(라우팅 별칭과 `provider/model` 형식)도 제거해요.
+그 밖의 값은 사용자 것이라 그대로 유지돼요 — 관련 없는 `http://localhost:8080` 게이트웨이와
+직접 설정한 `sk-ant-` 자격 증명은 둘 다 살아남아요.
+
+저장된 `/model` 선택기 기본값이 프록시 전용 모델이면, `claudeCode.model`이 네이티브에서 쓸 수
+있을 때 그 값으로 대체하고, 그렇지 않으면 `--model <Anthropic 모델>`을 넘기라고 경고해요.
+명시적인 `--model` 인자가 항상 우선해요.
+
 ## 인증 모드
 
 Claude Code가 게이트웨이와 통신하려면 `ANTHROPIC_AUTH_TOKEN`에 토큰이 필요해요. 그런데 이 변수를

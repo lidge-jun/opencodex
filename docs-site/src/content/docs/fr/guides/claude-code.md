@@ -67,6 +67,32 @@ ignore les identifiants Anthropic introduits uniquement par un fichier dotenv du
 dans votre shell reste toujours prioritaire, quel que soit le mode d'authentification. Pour utiliser volontairement une clé API,
 exportez-la (`export ANTHROPIC_API_KEY=...`) au lieu de la laisser dans un fichier de projet.
 
+### Lancement natif de repli quand le routage Claude est désactivé
+
+`ocx claude` échouait auparavant avec une erreur lorsque le routage Claude était désactivé. Il lance
+désormais le binaire natif `claude` à la place, de sorte que la commande reste utile routage coupé :
+
+| Où le routage est désactivé | Ce qui se passe |
+| --- | --- |
+| `claudeCode.enabled: false` dans la configuration | Lancement natif, avec un avis indiquant que le routage est désactivé |
+| Le proxy en cours renvoie `enabled: false` depuis `GET /api/claude-code` | Lancement natif, avec un avis de redémarrer le service après réactivation |
+| `claudeCode.enabled` absent ou `true` | Routage par le proxy, inchangé |
+
+Seul un `false` explicite déclenche le repli : un proxy antérieur à ce champ reste donc routé. Un proxy
+absent n'est pas non plus un déclencheur — routage activé, `ocx claude` démarre toujours le proxy.
+
+Une session native ne doit pas hériter de l'état du proxy. Le repli supprime donc uniquement les valeurs
+dont OpenCodex peut **prouver** la propriété : `ANTHROPIC_BASE_URL` seulement lorsqu'elle pointe vers
+l'adresse de bouclage et le port configuré de ce proxy *et* que le jeton d'admission associé a bien été
+émis par lui ; les leviers `CLAUDE_CODE_*` de découverte et d'auto-contexte ; et les emplacements de
+modèle qui ne se résolvent qu'à travers le proxy (alias routés et identifiants `provider/model`). Tout
+le reste vous appartient et est préservé — une passerelle `http://localhost:8080` sans rapport et vos
+propres identifiants `sk-ant-` survivent tous les deux.
+
+Si le modèle par défaut enregistré dans le sélecteur `/model` est réservé au proxy, la session native
+bascule sur `claudeCode.model` lorsque celui-ci est utilisable nativement, et vous avertit sinon de
+passer `--model <modèle Anthropic>`. Un argument `--model` explicite l'emporte toujours.
+
 ## Mode d'authentification
 
 Claude Code a besoin d'un jeton dans `ANTHROPIC_AUTH_TOKEN` pour communiquer avec une passerelle, mais définir cette

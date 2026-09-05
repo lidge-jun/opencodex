@@ -28,6 +28,29 @@ ocx claude
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `DISABLE_COMPACT` | 设置 `maxContextTokens` 时使用的旧版上下文覆盖项（条件注入） |
 你自行导出的变量始终优先。额外参数会直接透传：`ocx claude -p "hello"`。
 
+### Claude 路由关闭时的原生回退
+
+以前当 Claude 路由被关闭时，`ocx claude` 会直接报错退出。现在它会改为启动原生 `claude`
+可执行文件，因此在关闭路由的情况下该命令依然可用：
+
+| 路由关闭的位置 | 行为 |
+| --- | --- |
+| 配置中的 `claudeCode.enabled: false` | 原生启动，并提示路由已被禁用 |
+| 运行中的代理在 `GET /api/claude-code` 中返回 `enabled: false` | 原生启动，并提示重新启用后重启服务 |
+| `claudeCode.enabled` 缺失或为 `true` | 与以往一致，经代理路由 |
+
+只有显式的 `false` 才会触发回退，因此早于该字段的旧代理仍会保持路由。代理缺失同样不是触发条件
+——只要路由是开启的，`ocx claude` 仍会照常启动代理。
+
+原生会话不应继承代理状态，因此回退只移除能够**证明**属于 OpenCodex 的值：仅当
+`ANTHROPIC_BASE_URL` 指向本代理自身的回环地址与配置端口、且配对的 admission 令牌确实由代理签发
+时才移除；此外还会移除 `CLAUDE_CODE_*` 的发现与自动上下文开关，以及只能经由代理解析的模型槽位
+（路由别名与 `provider/model` 形式）。其余都属于你自己的配置并被保留——无关的
+`http://localhost:8080` 网关和你自己的 `sk-ant-` 凭据都会保留。
+
+如果保存的 `/model` 选择器默认值是仅限代理的模型，当 `claudeCode.model` 可在原生环境使用时会
+回退到它，否则会警告你传入 `--model <Anthropic 模型>`。显式的 `--model` 参数始终优先。
+
 ## 系统环境集成（macOS）
 
 当 `claudeCode.systemEnv` 设置为 `true`（默认：**关闭**）时，`ocx start` 会使用 `launchctl setenv`
