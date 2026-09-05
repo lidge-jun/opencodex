@@ -299,6 +299,10 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
         if (!current()) return;
         if (pending.signal.aborted) { failed = true; break; }
         try {
+          // Ordered field-patches to shared settings; stop unsent writes on proxy
+          // changes. Parallel dispatch would spend the rest of the batch before
+          // cancellation can take effect (covered by the deferred-write test).
+          // react-doctor-disable-next-line react-doctor/async-await-in-loop -- intentional sequential settings mutations
           const response = await fetch(`${apiBase}/api/settings`, {
             method: "PUT", headers: { "content-type": "application/json" }, signal: pending.signal,
             body: JSON.stringify({ codexQuotaAutoRefresh: { id: target.id, window: target.window, enabled: requested } }),

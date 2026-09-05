@@ -129,3 +129,22 @@ React state adjustment), advance its read revision, and guard errors like succes
 Add A/B/A pending+failed GET followed by OFF-batch coverage. Existing auto-switch
 controller tests also need accurate settings GET fixtures and selectors scoped to
 their own `.codex-auto-switch-card`; no assertions or behavior coverage removed.
+
+Hosted React Doctor reported only `async-await-in-loop` on the intentional settings
+write sequence. Classified false positive: unlike independent reads, writes must not
+dispatch the rest of a billable opt-in batch before cancellation. The deferred-write
+test proves that switching proxy prevents all unsent writes. Use the existing narrow
+documented suppression convention from `IntegrationsOverview.tsx:398`, not a global
+rule/config change or a parallel rewrite. No runtime behavior changes in this repair.
+
+Verified implementation: GUI full suite 1453 pass / 0 fail; focused 49 pass; import-
+connected root selection 110 pass / 0 fail; root typecheck, GUI lint/i18n/build,
+privacy scan and 425-page docs build passed. Root full suite was interrupted with
+exit 143 and is not claimed green; exact-head hosted runtime CI is the landing gate.
+Independent reviewer closed partial-OFF and A/B/A findings with PASS. Browser drove
+the actual pool component with synthetic data (no live credentials/upstream), including
+ON, keyboard OFF, partial failure/retry, mixed and empty states. CSS widths 320,
+390, 768, approximately 1024 and 1440 show no horizontal overflow or clipped setting
+copy. Light/dark screenshots checked; port 10191 and temporary browser tab torn down.
+Delivery PR: #3662; administrative approval bypass explicitly authorized by the owner
+and recorded on the PR. No service restart or release belongs to this unit.
