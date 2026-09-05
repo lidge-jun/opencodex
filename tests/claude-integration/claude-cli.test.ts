@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
-  buildClaudeEnv,
+  buildClaudeEnv as buildClaudeEnvWithIo,
   buildNativeClaudeEnv,
   claudeLaunchPlan,
   claudeLaunchPreflight,
@@ -40,6 +40,21 @@ const AUTH_PRESENT = {
     keychainProbe: () => "present" as const,
   },
 };
+
+/** Environment assembly tests must not probe the runner's files or macOS Keychain. */
+function buildClaudeEnv(
+  ...[config, target, base, windows = {}, deps = {}]: Parameters<typeof buildClaudeEnvWithIo>
+) {
+  return buildClaudeEnvWithIo(config, target, base, windows, {
+    ...deps,
+    authDetect: {
+      readClaudeJson: () => undefined,
+      credentialsFileExists: () => false,
+      keychainProbe: () => "absent" as const,
+      ...deps.authDetect,
+    },
+  });
+}
 
 describe("ocx claude proxy liveness", () => {
   test("retries the initial liveness probe before spawning a proxy", async () => {
@@ -191,7 +206,7 @@ describe("ocx claude env assembly", () => {
     const env = buildClaudeEnv(cfg(), {
       baseUrl: "https://hub.example.test",
       admissionToken: "ocx_data_connected",
-    }, {}, {}, { mode: "subscription", origin: "explicit" });
+    }, {}, {}, AUTH_PRESENT);
     expect(env.ANTHROPIC_BASE_URL).toBe("https://hub.example.test");
     expect(env.ANTHROPIC_AUTH_TOKEN).toBe("ocx_data_connected");
   });

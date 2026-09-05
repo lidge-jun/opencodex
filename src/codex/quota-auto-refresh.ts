@@ -5,22 +5,27 @@ import { normalizeResetAt } from "../providers/quota-wire";
 import { providerCodexAccountMode } from "../providers/registry";
 import type { OcxConfig } from "../types";
 import { isSelectableCodexPoolAccount } from "./account-id";
+import { reconcileMainCodexAccountRuntimeState } from "./account-lifecycle";
 import { isCodexAccountPaused } from "./account-pause";
 import { isAccountNeedsReauth } from "./account-runtime-state";
 import { getValidCodexToken } from "./account-store";
-import { getValidMainAccountToken, MAIN_CODEX_ACCOUNT_ID } from "./main-account";
+import { getMainAccountToken, getValidMainAccountToken, MAIN_CODEX_ACCOUNT_ID } from "./main-account";
+import { isMainAccountHardLocked } from "./main-account-hard-lock";
 import { tryAcquireNativeMainProfileClaim } from "./native-main-admission";
 import { withNativeMainSharedClaim } from "./native-main-claim";
 import { resolveNativeProfileContext } from "./native-profile-store";
 import { getAccountQuota, type StoredAccountQuota } from "./quota";
 import { warmCodexAccount } from "./warmup";
+import {
+  completedByAccount, retryAfterByAccount, resetCodexQuotaAutoRefreshStateForTests,
+  type CodexQuotaAutoRefreshWindows,
+} from "./quota-auto-refresh-state";
+export type { CodexQuotaAutoRefreshWindows } from "./quota-auto-refresh-state";
+export { forgetCodexQuotaAutoRefreshAccount } from "./quota-auto-refresh-state";
 
 export const FIVE_HOUR_WINDOW_SECONDS = 5 * 60 * 60;
 const RETRY_MS = 5 * 60_000;
 const CONCURRENCY = 4;
-
-/** Completed/due markers use epoch milliseconds; persisted legacy markers may use seconds. */
-export type CodexQuotaAutoRefreshWindows = { fiveHour?: number; weekly?: number };
 
 export interface CodexQuotaAutoRefreshStatus {
   fiveHourAvailable: boolean;
@@ -31,7 +36,8 @@ export interface CodexQuotaAutoRefreshStatus {
 
 export interface CodexQuotaAutoRefreshRunDeps {
   getQuota?: (accountId: string) => StoredAccountQuota | null;
-  warmAccount?: (config: OcxConfig, accountId: string) => Promise<void>;
+  /** Only false means skipped; existing void callbacks still report a successful warmup. */
+  warmAccount?: (config: OcxConfig, accountId: string) => Promise<void | false>;
   persistCompleted?: (
     config: OcxConfig,
     accountId: string,
@@ -40,8 +46,6 @@ export interface CodexQuotaAutoRefreshRunDeps {
 }
 
 let inFlight: Promise<void> | null = null;
-const completedByAccount = new Map<string, CodexQuotaAutoRefreshWindows>();
-const retryAfterByAccount = new Map<string, number>();
 
 export function codexQuotaAutoRefreshStatus(
   config: OcxConfig,
@@ -88,7 +92,13 @@ export function dueCodexQuotaAutoRefreshWindows(
   return due.fiveHour === undefined && due.weekly === undefined ? null : due;
 }
 
-async function warmAccount(config: OcxConfig, accountId: string): Promise<void> {
+function mainWarmupRestricted(config: OcxConfig): boolean {
+  return isMainAccountHardLocked(config)
+    || isCodexAccountPaused(config, MAIN_CODEX_ACCOUNT_ID)
+    || isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+}
+
+async function warmAccount(config: OcxConfig, accountId: string): Promise<void | false> {
   if (accountId !== MAIN_CODEX_ACCOUNT_ID) {
     await warmCodexAccount(await getValidCodexToken(accountId));
     return;
@@ -96,9 +106,16 @@ async function warmAccount(config: OcxConfig, accountId: string): Promise<void> 
   const lease = tryAcquireNativeMainProfileClaim();
   if (!lease) throw new Error("native main busy");
   try {
-    await withNativeMainSharedClaim(resolveNativeProfileContext(), async () => {
-      const token = await getValidMainAccountToken();
-      if (!token) throw new Error("main account unavailable");
+    reconcileMainCodexAccountRuntimeState();
+    if (mainWarmupRestricted(config)) return false;
+    // Refresh may need exclusive ownership. Finish it before the warmup's shared ownership.
+    const prepared = await getValidMainAccountToken({ preserveReauth: true });
+    if (!prepared) throw new Error("main account unavailable");
+    return await withNativeMainSharedClaim(resolveNativeProfileContext(), async (): Promise<void | false> => {
+      const token = getMainAccountToken();
+      if (!token || token.accessToken !== prepared.accessToken
+        || token.chatgptAccountId !== prepared.chatgptAccountId) return false;
+      if (mainWarmupRestricted(config)) return false;
       await warmCodexAccount(token);
     });
   } finally {
@@ -167,6 +184,7 @@ export async function runCodexQuotaAutoRefresh(
     const due = accountIds.flatMap(accountId => {
       if (isCodexAccountPaused(config, accountId)
         || isAccountNeedsReauth(accountId)
+        || (accountId === MAIN_CODEX_ACCOUNT_ID && isMainAccountHardLocked(config))
         || (retryAfterByAccount.get(accountId) ?? 0) > now) return [];
       const windows = dueCodexQuotaAutoRefreshWindows(config, accountId, quotaFor(accountId), now);
       return windows ? [{ accountId, windows }] : [];
@@ -174,7 +192,7 @@ export async function runCodexQuotaAutoRefresh(
     for (let index = 0; index < due.length; index += CONCURRENCY) {
       await Promise.all(due.slice(index, index + CONCURRENCY).map(async ({ accountId, windows }) => {
         try {
-          await warm(config, accountId);
+          if (await warm(config, accountId) === false) return;
           retryAfterByAccount.delete(accountId);
           const completed = { ...completedByAccount.get(accountId), ...windows };
           completedByAccount.set(accountId, completed);
@@ -195,13 +213,7 @@ export function registerCodexQuotaAutoRefreshWorker(config: OcxConfig): () => vo
   });
 }
 
-export function forgetCodexQuotaAutoRefreshAccount(accountId: string): void {
-  completedByAccount.delete(accountId);
-  retryAfterByAccount.delete(accountId);
-}
-
 export function resetCodexQuotaAutoRefreshForTests(): void {
   inFlight = null;
-  completedByAccount.clear();
-  retryAfterByAccount.clear();
+  resetCodexQuotaAutoRefreshStateForTests();
 }

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -92,6 +92,25 @@ describe("codex quota seam", () => {
     setAccountQuotaFromParsed(ACCOUNT, { resetCredits: 3 });
     await settle();
     expect(captured).toEqual([]);
+  });
+
+  test("credits-only refresh does not make later natural rolling decay look like a reset", async () => {
+    const start = Date.now();
+    let now = start;
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      setAccountQuotaFromParsed(ACCOUNT, { shortPercent: 96, shortResetAt: start + 5 * HOUR, shortWindowSeconds: 18_000 });
+      await flushQuotaObservationsForTests();
+      expect(captured).toEqual([]);
+      now = start + 59 * 60_000;
+      setAccountQuotaFromParsed(ACCOUNT, { resetCredits: 3 });
+      await flushQuotaObservationsForTests();
+      expect(captured).toEqual([]);
+      now = start + HOUR;
+      setAccountQuotaFromParsed(ACCOUNT, { shortPercent: 4, shortResetAt: start + 6 * HOUR, shortWindowSeconds: 18_000 });
+      await flushQuotaObservationsForTests();
+      expect(captured).toEqual([]);
+    } finally { clock.mockRestore(); }
   });
 
   test("a cleared row followed by a fresh low percent fires nothing", async () => {

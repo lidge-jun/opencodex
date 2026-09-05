@@ -210,6 +210,30 @@ describe("Codex quota window auto refresh", () => {
     });
   });
 
+  test("only false skips completion and backoff; existing void success still completes", async () => {
+    const cfg = config();
+    let attempts = 0;
+    let writes = 0;
+    const deps = {
+      getQuota: (id: string) => id === "pool-a" ? quota() : null,
+      warmAccount: async (): Promise<void | false> => {
+        attempts += 1;
+        if (attempts === 1) return false;
+      },
+      persistCompleted: (target: OcxConfig, id: string, completed: CodexQuotaAutoRefreshWindows) => {
+        writes += 1;
+        return recordMarkers(target, id, completed);
+      },
+    };
+    await runCodexQuotaAutoRefresh(cfg, NOW, deps);
+    expect(writes).toBe(0);
+    expect(cfg.codexQuotaAutoRefresh?.["pool-a"]?.lastWeeklyResetAt).toBeUndefined();
+    await runCodexQuotaAutoRefresh(cfg, NOW + 1, deps);
+    expect(attempts).toBe(2);
+    expect(writes).toBe(1);
+    expect(cfg.codexQuotaAutoRefresh?.["pool-a"]?.lastWeeklyResetAt).toBe(RESET_SECONDS);
+  });
+
   test("does not schedule pool-account warmups in Direct mode", async () => {
     const cfg = config();
     cfg.providers.openai.codexAccountMode = "direct";

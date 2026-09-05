@@ -79,6 +79,10 @@ field-patches the completed timestamp; the next normal quota poll reports the ac
 Paused or reauthentication-required
 accounts are skipped, simultaneous 5-hour/weekly resets share one warmup, transient failures retry
 after five minutes, and account deletion removes its setting and completion markers.
+Main-account hard-lock also gates these billable warmups. A policy/identity skip changes neither
+completion markers nor retry delay; quota reads remain available. Main refresh completes before
+shared credential ownership, then prepared credentials and restrictions are rechecked. Lifecycle
+cleanup uses the dependency-free quota-auto-refresh state leaf, avoiding a reconciliation cycle.
 
 `codexMainAccountHardLock` is a separate opt-in local admission policy, off by default.
 It blocks newly admitted identity-matched main-account requests at 99% of the 5h/short window

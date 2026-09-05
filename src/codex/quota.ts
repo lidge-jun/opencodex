@@ -321,7 +321,10 @@ export function setAccountQuotaFromParsed(
       : null;
   }
   schedulePersistAccountQuotas();
-  notifyCodexQuotaSnapshot(accountId, next);
+  // Credits carry the previous usage tuple; they must not refresh its observation clock.
+  if (!(quota.resetCredits !== undefined && !snapshotHasUsage(quota))) {
+    notifyCodexQuotaSnapshot(accountId, next);
+  }
 }
 
 /** One partial-window merge contract for legacy quota and identity-bound policy evidence. */

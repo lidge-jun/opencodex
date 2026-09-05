@@ -16,7 +16,7 @@ import { invalidateCodexWebSocketsForAccount } from "./websocket-registry";
 import { clearMainAccountCredentialPresence, clearMainAccountInfoCache, observeMainQuotaIdentity } from "./main-account-cache";
 import { forgetCodexAccountPause } from "./account-pause";
 import { clearCodexAccountPin, forgetCodexAccountPriority } from "./account-priority";
-import { forgetCodexQuotaAutoRefreshAccount } from "./quota-auto-refresh";
+import { forgetCodexQuotaAutoRefreshAccount } from "./quota-auto-refresh-state";
 import { codexAccountNamespaceEntries, codexAccountPickerEnabled } from "./account-namespaces";
 import type { OcxConfig } from "../types";
 
