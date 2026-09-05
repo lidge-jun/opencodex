@@ -311,6 +311,7 @@ import {
   markEagerRelaySseResponse,
   markNativePassthroughSseResponse,
   relaySseWithFailedTail,
+  codexSafetyBufferingFilterOptions,
   relayWithAbort,
   sanitizePassthroughHeaders,
 } from "../relay";
@@ -4816,7 +4817,7 @@ async function handleResponsesInner(
     }
     break;
     }
-    const headers = sanitizePassthroughHeaders(upstreamResponse.headers);
+    const headers = sanitizePassthroughHeaders(upstreamResponse.headers, codexSafetyBufferingFilterOptions(config));
     const resolvedModel = headers.get("openai-model")?.trim();
     if (resolvedModel && !logCtx.preserveResolvedModelFromRoute) logCtx.resolvedModel = resolvedModel;
     if (isUsageDebugEnabled()) {
@@ -4906,7 +4907,7 @@ async function handleResponsesInner(
       return new Response(upstreamResponse.body, {
         status: upstreamResponse.status,
         statusText: upstreamResponse.statusText,
-        headers: sanitizePassthroughHeaders(upstreamResponse.headers),
+        headers: sanitizePassthroughHeaders(upstreamResponse.headers, codexSafetyBufferingFilterOptions(config)),
       });
     }
     if (!upstreamResponse.ok) {
@@ -5109,6 +5110,7 @@ async function handleResponsesInner(
           onDone: () => unregisterTurn(turnAc),
         }, {
           clientGoneSignal: options.abortSignal,
+          terminalBoundary: codexSafetyBufferingFilterOptions(config),
           ...(inlineEagerRewrite ? { rewriteBudget: translatorBudget } : {}),
         });
         // When selected, this relay closes response.completed even if upstream
@@ -5192,7 +5194,8 @@ async function handleResponsesInner(
       const rewrittenBody = clientBlockRewrite !== undefined
         ? relaySseWithBlockRewrite(nativeBody, clientBlockRewrite, translatorBudget)
         : nativeBody;
-      const clientBody = relaySseWithFailedTail(rewrittenBody, upstream, reason => clientGone.abort(reason));
+      const clientBody = relaySseWithFailedTail(rewrittenBody, upstream, reason => clientGone.abort(reason),
+        codexSafetyBufferingFilterOptions(config));
       return markNativePassthroughSseResponse(new Response(clientBody, {
         status: upstreamResponse.status,
         headers,
@@ -5320,7 +5323,7 @@ async function handleResponsesInner(
             }
             throw error;
           }
-          const sseHeaders = sanitizePassthroughHeaders(headers);
+          const sseHeaders = sanitizePassthroughHeaders(headers, codexSafetyBufferingFilterOptions(config));
           sseHeaders.set("content-type", "text/event-stream");
           sseHeaders.set("cache-control", "no-store");
           return new Response(stream, {

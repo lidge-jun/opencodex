@@ -26,6 +26,7 @@
 
 import {
   adapterEofIncompleteFrame,
+  type CodexSafetyBufferingFilterOptions,
   createSseTerminalOutputBoundary,
   doneFrame,
   failedTailFrame,
@@ -83,6 +84,8 @@ export type EagerRelayOptions = {
   postCancelDrainBytes?: number;
   /** Injectable clock for tests. */
   now?: () => number;
+  /** Client output boundary filters (Codex safety-buffering hints). */
+  terminalBoundary?: CodexSafetyBufferingFilterOptions;
 };
 
 const DEFAULT_MAX_QUEUE_BYTES = 8 * 1024 * 1024;
@@ -111,7 +114,7 @@ export function relaySseEagerBounded(
   const terminalEncoder = new TextEncoder();
   const adapterEofFrame = adapterEofIncompleteFrame(terminalEncoder);
   const terminalSentinel = doneFrame(terminalEncoder);
-  const terminalBoundary = createSseTerminalOutputBoundary();
+  const terminalBoundary = createSseTerminalOutputBoundary(opts?.terminalBoundary);
   const activeRewrite: SseBlockRewrite | undefined = hooks.rewriteBlocks
     ?? (hooks.rewritePayload ? payloadRewriteAsBlockRewrite(hooks.rewritePayload) : undefined);
   const encodeFailedTail = (error: unknown): Uint8Array | null => {

@@ -537,6 +537,19 @@ describe("opencodex config defaults", () => {
     });
   });
 
+  test("codex safety-buffering header drop is an explicit top-level opt-in", () => {
+    const defaults = getDefaultConfig();
+    expect(defaults.dropCodexSafetyBuffering).toBe(false);
+    expect(validateConfigCandidate({ ...defaults, dropCodexSafetyBuffering: true })).toMatchObject({
+      ok: true,
+      config: { dropCodexSafetyBuffering: true },
+    });
+    expect(validateConfigCandidate({ ...defaults, dropCodexSafetyBuffering: "yes" })).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("dropCodexSafetyBuffering"),
+    });
+  });
+
   test("usage and MCP config overrides change the effective bound while defaults remain compatible", () => {
     const defaults = getDefaultConfig();
     expect(defaults.managementUsageMaxReadBytes).toBe(64 * 1024 * 1024);
