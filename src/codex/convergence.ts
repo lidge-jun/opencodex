@@ -47,6 +47,7 @@ import {
   mergeCatalogEntriesFromObservedState,
   mergeCatalogModelsWithNativeRecovery,
   orderForSubagents,
+  prepareReserveCatalogProjection,
   } from "./catalog/sync";
   import { multiAgentV2EnabledFromConfigText } from "./features";
   import { exactComboCatalogSlugs } from "./catalog/aggregation";
@@ -294,6 +295,9 @@ function prepareCatalog(
   const observedNativeSlugs: string[] = [];
   const disabledNative = disabledNativeSlugs(config);
   const openaiContextCap = nativeContextLimits(config);
+  const reserve = prepareReserveCatalogProjection(
+    config, catalog, active, observedAccountNativeEntries, accountSelectors, openaiContextCap,
+  );
   const nativeCatalogModels = mergeCatalogModelsWithNativeRecovery(
     active?.models ?? catalog.models ?? [],
     [catalog.models ?? [], ...nativeRecoverySources],
@@ -332,6 +336,7 @@ function prepareCatalog(
       openaiContextCap,
       accountNativeSlugs,
       accountNativeSlugsBySelector,
+      reserve,
     }).filter(entry => trustedAccountBoundNativeCatalogSlug(entry) !== undefined);
   const gatheredProviderNames = new Set(enabledProviders.map(([name]) => name));
   const selectedModelsByProvider = new Map<string, ReadonlySet<string>>(

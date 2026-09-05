@@ -306,6 +306,8 @@ export const ja: Record<TKey, string> = {
   "dash.codexRestartMalformed": "プロキシが予期しない応答を返しました。",
   "dash.codexRestartTimeout": "プロキシから時間内に応答がありませんでした。app-server の停止が続いている可能性があります。",
   "models.staleBanner": "Codex はこのカタログより古いモデル一覧を表示しています。Codex を再起動すると読み直されます。",
+  "dash.codexDesktopAuthless": "ログインせずに Codex を開く",
+  "dash.codexDesktopAuthlessHint": "ローカル接続では既定で有効です。OpenCodex に保存されたアカウントとプロバイダーを使用します。変更後は Codex を再起動してください。Codex 内の ChatGPT アカウント機能は利用できない場合があります。",
   "dash.codexAutoStart": "Codex と一緒に opencodex を起動",
   "dash.codexAutoStartHint": "インストール済み launcher shim に ocx ensure の実行を許可します。この設定だけでは再起動保護はインストールされません。起動安全性で実際の状態を確認してください。",
   "dash.searchModel": "検索サイドカーモデル",

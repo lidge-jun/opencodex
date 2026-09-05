@@ -15,7 +15,9 @@ opencodex заставляет Codex маршрутизировать запро
 
 ## Внедрение в конфигурацию
 
-`ocx init`, `ocx start` и `ocx sync` вызывают injector. На loopback-привязке по умолчанию он
+Локальные подключения по умолчанию открывают Codex без отдельного входа. Переключатель в Dashboard → Overview использует аккаунты и провайдеры, сохранённые в OpenCodex. После изменения перезапустите Codex.
+
+`ocx init`, `ocx start` и `ocx sync` вызывают injector. При `codexDesktopAuthless: false` на loopback-привязке он
 сохраняет встроенный id провайдера Codex `openai` и направляет его на opencodex:
 
 ```toml
@@ -124,7 +126,7 @@ model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
 # appended at the end of the file
 # Auto-injected by opencodex
 [model_providers.opencodex]
-name = "OpenCodex Proxy"
+name = "OpenCodex"
 base_url = "http://your-host:10100/v1"
 wire_api = "responses"
 requires_openai_auth = true
@@ -177,7 +179,7 @@ loopback встроенный провайдер Codex может сначала
 
 ## Идентичность тредов и история
 
-Форма loopback по умолчанию сохраняет новые треды помеченными нативным провайдером Codex
+Форма loopback при `codexDesktopAuthless: false` сохраняет новые треды помеченными нативным провайдером Codex
 `openai`, поэтому обычной resume-history не нужен никакой remap. Sync и restore применяют только
 соответствующий backup manifest и точно восстанавливают исходные provider, source и event marker.
 Строка `opencodex` без manifest остаётся неизменной; используйте

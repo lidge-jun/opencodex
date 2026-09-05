@@ -299,6 +299,8 @@ export const fr: Record<TKey, string> = {
   "dash.codexRestartMalformed": "Le proxy a renvoyé une réponse inattendue.",
   "dash.codexRestartTimeout": "Le proxy n’a pas répondu à temps. Il est peut-être encore en train d’arrêter les serveurs d’application.",
   "models.staleBanner": "Codex affiche une liste de modèles plus ancienne que ce catalogue. Redémarrez Codex pour la recharger.",
+  "dash.codexDesktopAuthless": "Ouvrir Codex sans connexion",
+  "dash.codexDesktopAuthlessHint": "Activé par défaut pour les connexions locales. Utilise les comptes et fournisseurs enregistrés dans OpenCodex. Redémarrez Codex après modification. Certaines fonctions du compte ChatGPT dans Codex peuvent être indisponibles.",
   "dash.codexAutoStart": "Démarrer opencodex avec Codex",
   "dash.codexAutoStartHint": "Permet à un mécanisme de lancement installé d’exécuter ocx ensure. Ce réglage n’installe pas de protection au redémarrage ; consultez Sécurité du démarrage pour connaître l’état effectif.",
   "dash.searchModel": "Modèle auxiliaire de recherche",

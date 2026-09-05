@@ -294,7 +294,7 @@ the secret itself.
 `src/codex/inject.ts` writes one of two forms. The choice is not cosmetic: it decides whether Codex
 keeps its native provider id, which decides whether existing thread history still resolves.
 
-**Loopback (default).** A single marker-owned root override, no provider table:
+**Loopback with `codexDesktopAuthless: false`.** A single marker-owned root override, no provider table:
 
 ```toml
 model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
@@ -309,6 +309,14 @@ explicitly runs legacy OpenAI recovery. A user-owned root `openai_base_url` is p
 overwritten, and that case also blocks managed sub-agent defaults rather than fighting the user for
 ownership.
 
+**Loopback (default).** `codexDesktopAuthless` defaults to enabled. The dedicated `opencodex`
+provider is displayed as **OpenCodex** and uses `requires_openai_auth = false` with no admission
+`env_key`. The dashboard exposes the preference under Overview; saving converges the catalog and
+injected configuration. Explicit `false` persists and restores the native-provider form above.
+The dashboard follows the settings save with a full sync; the settings API itself only refreshes
+catalog projections. Desktop needs a restart. Catalog eligibility and listener-scoped Reserve admission use the same
+preference default while retaining their remote-client and listener-authority checks.
+
 **API auth header (non-loopback).** The built-in `openai` provider cannot carry the
 `x-opencodex-api-key` env header, so this form re-tags the root provider and appends the table:
 
@@ -317,7 +325,7 @@ model_provider = "opencodex"
 model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
 
 [model_providers.opencodex]
-name = "OpenCodex Proxy"
+name = "OpenCodex"
 base_url = "http://<host>:<port>/v1"
 wire_api = "responses"
 requires_openai_auth = true

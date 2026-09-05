@@ -13,7 +13,9 @@ bearer。這些路徑不會彼此 fallback。shipped v1 設定會遷移到 marke
 
 ## 設定注入
 
-`ocx init`、`ocx start` 與 `ocx sync` 都會呼叫注入器。在預設 loopback 繫結下，它會保留 Codex
+本機連線預設無需另外登入即可開啟 Codex。可在 Dashboard → Overview 中切換，使用儲存在 OpenCodex 中的帳戶和供應商。變更後請重新啟動 Codex。
+
+`ocx init`、`ocx start` 與 `ocx sync` 都會呼叫注入器。在 `codexDesktopAuthless: false` 的 loopback 繫結下，它會保留 Codex
 內建的 `openai` provider id，並將該 provider 指向 opencodex：
 
 ```toml
@@ -109,7 +111,7 @@ model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
 # 追加到檔案末尾
 # Auto-injected by opencodex
 [model_providers.opencodex]
-name = "OpenCodex Proxy"
+name = "OpenCodex"
 base_url = "http://your-host:10100/v1"
 wire_api = "responses"
 requires_openai_auth = true
@@ -164,7 +166,7 @@ Codex 保持一致。opencodex 也透過 WebSocket 提供 `/v1/responses`。專�
 
 ## Thread identity 與歷史記錄
 
-預設 loopback 形式會讓新 thread 保持使用 Codex 原生的 `openai` provider 標記，因此一般 resume
+`codexDesktopAuthless: false` 的 loopback 形式會讓新 thread 保持使用 Codex 原生的 `openai` provider 標記，因此一般 resume
 history 不需要重新對映。sync 與 restore 只套用和目前狀態資料庫相符的備份 manifest，並精確恢復每個
 thread 原本的 provider、source 與 event marker。沒有 manifest 的 `opencodex` row 會保持不變；只有在明確
 要強制執行舊式重新標記時才使用 `ocx recover-history --legacy-openai --yes`。此命令的作用範圍刻意很廣：它會把所有

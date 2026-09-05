@@ -343,10 +343,10 @@ describe("PUT /api/settings", () => {
     expect(config.codexAccountNamespaces).toEqual({ main: "@main" });
   });
 
-  test("codexDesktopAuthless (#1107): absent reports false, enable persists and converges once, disable deletes the key", async () => {
+  test("codexDesktopAuthless (#1107): defaults on, enable is idempotent, and disable persists false", async () => {
     const config = baseConfig();
     const absent = await (await getSettings(config))!.json() as { codexDesktopAuthless?: boolean };
-    expect(absent.codexDesktopAuthless).toBe(false);
+    expect(absent.codexDesktopAuthless).toBe(true);
 
     let convergences = 0;
     let saved: OcxConfig | undefined;
@@ -357,14 +357,14 @@ describe("PUT /api/settings", () => {
     expect(on!.status).toBe(200);
     expect(await on!.json()).toMatchObject({ codexDesktopAuthless: true });
     expect(saved?.codexDesktopAuthless).toBe(true);
-    expect(convergences).toBe(1);
+    expect(convergences).toBe(0);
 
     const same = await putSettings(config, { codexDesktopAuthless: true }, {
       saveConfigPreservingClaudeCode: () => {},
       createManagementConvergeCodex: catalogConvergenceFactory(() => { convergences += 1; }),
     });
     expect(same!.status).toBe(200);
-    expect(convergences).toBe(1);
+    expect(convergences).toBe(0);
 
     const off = await putSettings(config, { codexDesktopAuthless: false }, {
       saveConfigPreservingClaudeCode: next => { saved = next; },
@@ -372,7 +372,15 @@ describe("PUT /api/settings", () => {
     });
     expect(off!.status).toBe(200);
     expect(await off!.json()).toMatchObject({ codexDesktopAuthless: false });
-    expect(Object.hasOwn(saved!, "codexDesktopAuthless")).toBe(false);
+    expect(saved?.codexDesktopAuthless).toBe(false);
+    expect(convergences).toBe(1);
+
+    expect(await (await getSettings(config))!.json()).toMatchObject({ codexDesktopAuthless: false });
+    const reenabled = await putSettings(config, { codexDesktopAuthless: true }, {
+      saveConfigPreservingClaudeCode: () => {},
+      createManagementConvergeCodex: catalogConvergenceFactory(() => { convergences += 1; }),
+    });
+    expect(await reenabled!.json()).toMatchObject({ codexDesktopAuthless: true });
     expect(convergences).toBe(2);
 
     const bad = await putSettings(config, { codexDesktopAuthless: "yes" });
@@ -499,6 +507,7 @@ describe("PUT /api/settings", () => {
     let refreshed = false;
     const request = putSettings(config, {
       codexAutoStart: false,
+      codexDesktopAuthless: false,
       streamMode: "legacy-tee",
       appOwnedMemoryBudgetMb: 128,
       codexAccountPickerEnabled: true,

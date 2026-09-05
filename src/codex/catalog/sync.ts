@@ -1655,6 +1655,48 @@ export function finalizeAutoReviewModelOverride(
   return applyAutoReviewModelOverride(models, readConfiguredAutoReviewModel(), sourceModels);
 }
 
+/** Shared metadata projection for retained sync and management catalog convergence. */
+export function prepareReserveCatalogProjection(
+  config: Readonly<OcxConfig>,
+  catalog: RawCatalog,
+  onDiskCatalog: RawCatalog | null,
+  cachedModels: readonly RawEntry[],
+  accountSelectors: readonly string[],
+  openaiContextCap: NativeContextLimitsInput,
+): ReserveCatalogProjection | undefined {
+  const accountTargets = new Map(codexAccountNamespaceEntries(config));
+  const reserveMainSelectors = accountSelectors.filter(selector =>
+    isMainCodexAccountTarget(accountTargets.get(selector) ?? ""));
+  // The active file can own a bare source even when the bundled catalog is the build base.
+  // A previously clamped qualified projection must not shorten a retained genuine ladder.
+  const reserveObservations = [
+    ...(onDiskCatalog?.models ?? []),
+    ...cachedModels,
+    ...(catalog.models ?? []),
+  ];
+  const retainedReserve = onDiskCatalog?.[RESERVE_SOURCE_CATALOG_FIELD];
+  const retainedReserveSource = retainedReserve && typeof retainedReserve === "object" && !Array.isArray(retainedReserve)
+    ? observedReserveCatalogSource([retainedReserve as RawEntry], [])
+    : null;
+  const observedReserveSource = observedReserveCatalogSource(
+    // Cache invalidation carries historical bare observations alongside emitted models.
+    // Only unmarked observations are fresh enough to supersede the retained source.
+    reserveObservations.filter(entry => entry.slug === NATIVE_RESERVE_MODEL
+      && entry.opencodex_account_observed_native === undefined), reserveMainSelectors,
+  ) ?? retainedReserveSource ?? observedReserveCatalogSource(reserveObservations, reserveMainSelectors);
+  // This root is read only by OCX. Upstream ModelsResponse ignores unknown root fields.
+  // Retain before final runtime clamping: an omitted row must not turn into Luna next sync.
+  if (observedReserveSource) catalog[RESERVE_SOURCE_CATALOG_FIELD] = structuredClone(observedReserveSource);
+  else delete catalog[RESERVE_SOURCE_CATALOG_FIELD];
+  const lunaSource = upstreamNativeEntry(RESERVE_LUNA_METADATA_SOURCE);
+  return createReserveCatalogProjection(
+    config,
+    reserveMainSelectors,
+    observedReserveSource,
+    lunaSource ? finishUpstreamNativeEntry(lunaSource, 9, openaiContextCap) : null,
+  );
+}
+
 function writeRetainedCatalogSync({
   config,
   goModels,
@@ -1737,35 +1779,8 @@ function writeRetainedCatalogSync({
       trustedAccountBoundNativeCatalogSlug(entry) !== undefined),
   ];
   const accountTargets = new Map(codexAccountNamespaceEntries(config));
-  const reserveMainSelectors = accountSelectors.filter(selector =>
-    isMainCodexAccountTarget(accountTargets.get(selector) ?? ""));
-  // The active file can own a bare source even when the bundled catalog is the build base.
-  // A previously clamped qualified projection must not shorten a retained genuine ladder.
-  const reserveObservations = [
-    ...(onDiskCatalog?.models ?? []),
-    ...(read.modelsCache?.models ?? []),
-    ...(catalog.models ?? []),
-  ];
-  const retainedReserve = onDiskCatalog?.[RESERVE_SOURCE_CATALOG_FIELD];
-  const retainedReserveSource = retainedReserve && typeof retainedReserve === "object" && !Array.isArray(retainedReserve)
-    ? observedReserveCatalogSource([retainedReserve as RawEntry], [])
-    : null;
-  const observedReserveSource = observedReserveCatalogSource(
-    // Cache invalidation carries historical bare observations alongside emitted models.
-    // Only unmarked observations are fresh enough to supersede the retained source.
-    reserveObservations.filter(entry => entry.slug === NATIVE_RESERVE_MODEL
-      && entry.opencodex_account_observed_native === undefined), reserveMainSelectors,
-  ) ?? retainedReserveSource ?? observedReserveCatalogSource(reserveObservations, reserveMainSelectors);
-  // This root is read only by OCX. Upstream ModelsResponse ignores unknown root fields.
-  // Retain before final runtime clamping: an omitted row must not turn into Luna next sync.
-  if (observedReserveSource) catalog[RESERVE_SOURCE_CATALOG_FIELD] = structuredClone(observedReserveSource);
-  else delete catalog[RESERVE_SOURCE_CATALOG_FIELD];
-  const lunaSource = upstreamNativeEntry(RESERVE_LUNA_METADATA_SOURCE);
-  const reserve = createReserveCatalogProjection(
-    config,
-    reserveMainSelectors,
-    observedReserveSource,
-    lunaSource ? finishUpstreamNativeEntry(lunaSource, 9, openaiContextCap) : null,
+  const reserve = prepareReserveCatalogProjection(
+    config, catalog, onDiskCatalog, read.modelsCache?.models ?? [], accountSelectors, openaiContextCap,
   );
   const accountNativeSlugsBySelector = accountSelectors.length > 0
     ? new Map([...accountBoundNativeOpenAiSlugsBySelector(config, observedAccountNativeEntries)].map(([selector, slugs]) => {

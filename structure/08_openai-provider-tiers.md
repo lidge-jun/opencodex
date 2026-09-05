@@ -97,7 +97,7 @@ never global/native/API-key or added-account discovery. Prefer observed Reserve 
 Luna-derived fallback is explicitly marked and never becomes an observed native source on resync.
 Loopback injection and catalog eligibility share the pure `loopback-target` predicates.
 Runtime eligibility is separate: only trusted receiving-listener admission with source loopback,
-the opt-in flag and non-client role activates compatibility. A secondary listener's existence does
+the enabled-by-default Desktop preference and non-client role activate compatibility. A secondary listener's existence does
 not affect public ingress. Admission flows through Responses, compact, WS handshake/turns,
 translated replay and helper planning; missing admission is not inferred from a URL or Host header.
 Claude's replay keeps its existing sidecar/routing overrides but passes the original live policy
@@ -118,7 +118,7 @@ transport guard rechecks actual headers after pacing, at every HTTP attempt and 
 expiry/revocation fails closed without renewal inside a send. Nested retry evidence preserves local
 policy errors instead of recording a network failure. A missing proof does not fall through to
 ordinary Luna or another account. Native vision/search helpers and standalone search refuse Reserve
-under this compatibility opt-in; ordinary helper/default behavior is unchanged.
+under this compatibility mode; ordinary helper/default behavior is unchanged.
 Upstream remains the entitlement authority.
 
 `codexMainAccountHardLock` is a separate opt-in local admission policy, off by default.

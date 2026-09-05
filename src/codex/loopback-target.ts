@@ -5,6 +5,11 @@ import { NATIVE_RESERVE_MODEL } from "./catalog/native-models";
 export const CODEX_RESERVE_HELPER_UNSUPPORTED_MESSAGE =
   "Luna Reserve compatibility is only available as a conversation model, not a vision helper. Choose another vision model.";
 
+/** The local Desktop login gate is disabled unless the operator explicitly opts out. */
+export function codexDesktopAuthlessEnabled(config?: Pick<OcxConfig, "codexDesktopAuthless">): boolean {
+  return config?.codexDesktopAuthless !== false;
+}
+
 /** Callers classify the concrete destination as canonical forward before using this predicate. */
 export function isCodexReserveHelperUnsupported(
   config: Pick<OcxConfig, "codexDesktopAuthless" | "runtimeRole">,
@@ -20,7 +25,7 @@ export function isCodexReserveRequestEligible(
   config: Pick<OcxConfig, "codexDesktopAuthless" | "runtimeRole">,
   admission: Pick<DataPlaneAdmission, "source"> | undefined,
 ): boolean {
-  return config.codexDesktopAuthless === true && config.runtimeRole !== "client"
+  return codexDesktopAuthlessEnabled(config) && config.runtimeRole !== "client"
     && admission?.source === "loopback";
 }
 
@@ -48,7 +53,7 @@ export function shouldInjectApiAuthHeader(
 export function isEffectiveCodexDesktopAuthless(
   config: Pick<OcxConfig, "runtimeRole" | "hostname" | "unauthenticatedLoopbackListener" | "codexDesktopAuthless"> | undefined,
 ): boolean {
-  return config?.codexDesktopAuthless === true
+  return config !== undefined && codexDesktopAuthlessEnabled(config)
     && config.runtimeRole !== "client"
     && !shouldInjectApiAuthHeader(config);
 }

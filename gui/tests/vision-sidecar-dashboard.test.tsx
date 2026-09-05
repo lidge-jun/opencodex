@@ -12,7 +12,7 @@ import { LanguageProvider } from "../src/i18n/provider";
 import { DashboardSidecarPanels } from "../src/pages/dashboard-overview-sections";
 import type { SidecarData, SidecarPatch } from "../src/pages/dashboard-shared";
 import { mergeSidecarSetting } from "../src/pages/dashboard-shared";
-import type { useDashboardData } from "../src/pages/use-dashboard-data";
+import { useDashboardData } from "../src/pages/use-dashboard-data";
 
 const globals = ["document", "window", "navigator", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let previousGlobals: Record<(typeof globals)[number], PropertyDescriptor | undefined>;
@@ -382,4 +382,68 @@ test("model and reasoning saves still omit enabled, limit, and timeout", async (
   expect(patches).toHaveLength(2);
   expect(patches[1]).toEqual({ vision: { reasoning: "high" } });
   assertVisionControlFieldsOmitted(patches[1]!);
+});
+
+test("Desktop login switch defaults on, honors opt-out, and disables while saving", async () => {
+  const { d } = harness();
+  let clicks = 0;
+  d.toggleCodexDesktopAuthless = async () => { clicks += 1; };
+  d.settings = { codexAutoStart: true, port: 10100, hostname: "127.0.0.1" };
+  await mount(d);
+  const toggle = () => host.querySelector<HTMLButtonElement>(`button[aria-label="${en["dash.codexDesktopAuthless"]}"]`)!;
+  expect(toggle().getAttribute("aria-pressed")).toBe("true");
+  await act(async () => { toggle().click(); });
+  expect(clicks).toBe(1);
+  d.settings.codexDesktopAuthless = false;
+  d.settings.catalogRefreshPending = true;
+  d.settingsSaving = true;
+  await mount(d);
+  expect(toggle().getAttribute("aria-pressed")).toBe("false");
+  expect(toggle().disabled).toBe(true);
+  expect(host.textContent).toContain(en["codexAuth.catalogRefreshPending"]);
+});
+
+
+test("Desktop login preference is persisted before full sync; sync failure keeps the saved preference", async () => {
+  const originalFetch = globalThis.fetch;
+  const writes: Array<{ path: string; body: unknown }> = [];
+  let latest: Dash | undefined;
+  let saved = true;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (init?.method === "PUT") {
+      const body = JSON.parse(String(init.body));
+      writes.push({ path, body });
+      saved = body.codexDesktopAuthless;
+      return Response.json({ codexDesktopAuthless: saved });
+    }
+    if (path.endsWith("/api/sync")) {
+      writes.push({ path, body: null });
+      return Response.json({ error: "sync unavailable" }, { status: 503 });
+    }
+    if (path.endsWith("/api/settings")) {
+      return Response.json({ codexAutoStart: true, codexDesktopAuthless: saved, port: 10100, hostname: "127.0.0.1" });
+    }
+    return Response.json({}, { status: 503 });
+  }) as typeof fetch;
+  function Harness() { latest = useDashboardData("/authless-test"); return null; }
+  try {
+    const { createRoot } = await import("react-dom/client");
+    await act(async () => {
+      root = createRoot(host);
+      root.render(<LanguageProvider><Harness /></LanguageProvider>);
+    });
+    expect(latest?.settings?.codexDesktopAuthless).toBe(true);
+    await act(async () => { await latest!.toggleCodexDesktopAuthless(); });
+    expect(writes).toEqual([
+      { path: "/authless-test/api/settings", body: { codexDesktopAuthless: false } },
+      { path: "/authless-test/api/sync", body: null },
+    ]);
+    expect(latest?.settings?.codexDesktopAuthless).toBe(false);
+    expect(latest?.syncError).toBe("sync unavailable");
+  } finally {
+    await act(async () => { root?.unmount(); });
+    root = null;
+    globalThis.fetch = originalFetch;
+  }
 });
