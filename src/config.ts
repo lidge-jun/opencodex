@@ -1169,6 +1169,12 @@ const configSchema = z.object({
     enabled: z.boolean().optional(),
     leadTimeMinutes: z.number().int().min(1).max(60).optional(),
   }).optional().catch(undefined),
+  // Opt-in usage.jsonl byte ceiling. A malformed hand edit disables only this
+  // circuit so it cannot trip the backup-and-defaults repair path.
+  usageLedgerRetention: z.object({
+    enabled: z.boolean().optional(),
+    maxBytes: z.number().int().min(1024 * 1024).optional(),
+  }).optional().catch(undefined),
   // Model ids excluded from the Grok Build managed block (dashboard switches).
   grokExcludedModels: z.array(z.string()).optional(),
   // Invalid values degrade to undefined ("auto") instead of failing the whole
