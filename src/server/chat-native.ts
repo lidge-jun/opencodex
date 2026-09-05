@@ -24,6 +24,7 @@ import {
   fetchWithTransientRetry,
   prepareSameTarget429Wait,
   type UpstreamSendRecovery,
+  wrapWithZeroOutputRefetch,
 } from "../lib/upstream-retry";
 import {
   isTranslatorBudgetExceededError,
@@ -378,7 +379,34 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   if (contentType.includes("text/event-stream") && response.body) {
     if (requestedStream) transferTurnToStream();
-    const stream = nativeChatSse(response.body, {
+    // Mid-stream socket reset before any byte is relayed is safe to replay once
+    // on a fresh connection (see wrapWithZeroOutputRefetch); the request body is
+    // a replayable string. The refetch thunk sends connection-reset recovery
+    // headers on its very first hop so it never reuses the pooled half-closed
+    // socket that caused the original read() rejection.
+    const resilientBody = wrapWithZeroOutputRefetch(
+      response.body,
+      recovery => {
+        noteAttemptSend(attempt, logCtx.usageLogInputTokens, recovery ?? "connection-reset");
+        return fetchWithHeaderTimeout(
+          activeRequest.url,
+          applyUpstreamRecoveryInit({
+            method: activeRequest.method,
+            headers: activeRequest.headers,
+            body: activeRequest.body,
+          }, recovery ?? "connection-reset"),
+          upstream.signal,
+          connectMs,
+          requestedStream,
+          providerFetch(activeProvider, undefined, {
+            providerName: route.providerName,
+            modelId: route.modelId,
+          }),
+        );
+      },
+      { abortSignal: upstream.signal, label: safeHostLabel(activeRequest.url) },
+    );
+    const stream = nativeChatSse(resilientBody, {
       requestedModel,
       translatorBudget,
       signal: upstream.signal,
