@@ -3,8 +3,7 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import {
   downloadClientCatalog,
   exchangeConnectPairingGrant,
@@ -14,8 +13,40 @@ import {
 } from "../../src/client/hub-client";
 import { handleConnectCommand } from "../../src/cli/connect";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { repoRoot as findRepoRoot } from "../helpers/repo-root";
+import { INTERNAL_DEADLINE_MS } from "../helpers/test-budget";
 
-const repoRoot = dirname(fileURLToPath(new URL("../../package.json", import.meta.url)));
+const repoRoot = findRepoRoot();
+
+class ClientStateProbeError extends Error {
+  constructor(
+    readonly pid: number,
+    readonly status: number | null,
+    readonly signal: NodeJS.Signals | null,
+    readonly timedOut: boolean,
+  ) {
+    // Do not include the child script, environment, stdout or stderr in failure output.
+    super(`Client state probe ${timedOut ? "timed out" : "failed"} (status=${status}, signal=${signal})`);
+    this.name = "ClientStateProbeError";
+  }
+}
+
+function readStateProbe(script: string, home: string, timeoutMs = INTERNAL_DEADLINE_MS) {
+  const child = spawnSync(process.execPath, ["--eval", script], {
+    cwd: repoRoot,
+    env: { ...process.env, OPENCODEX_HOME: home },
+    encoding: "utf8",
+    timeout: timeoutMs,
+    killSignal: "SIGKILL",
+  });
+  if (child.error || child.status !== 0 || child.signal !== null) {
+    throw new ClientStateProbeError(
+      child.pid, child.status, child.signal,
+      (child.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT",
+    );
+  }
+  return JSON.parse(child.stdout.trim().split("\n").at(-1) ?? "{}");
+}
 
 function readyBody(protocol = 1, minimumClientProtocol = 1) {
   return {
@@ -41,21 +72,49 @@ describe("remote hub client boundary", () => {
       console.log(JSON.stringify(readClientConnectionState()));
     `;
     const home = mkdtempSync(join(tmpdir(), "ocx-hub-role-"));
-    const readState = () => {
-      const child = spawnSync(process.execPath, ["--eval", readScript], {
-        cwd: repoRoot,
-        env: { ...process.env, OPENCODEX_HOME: home },
-        encoding: "utf8",
-      });
-      return JSON.parse(child.stdout.trim().split("\n").at(-1) ?? "{}");
-    };
-    writeFileSync(join(home, "config.json"), JSON.stringify({ port: 10190, runtimeRole: "hub" }));
-    expect(readState().kind).toBe("disconnected");
-    // Hub role WITH a client block stays mismatched (the honest conflict).
-    writeFileSync(join(home, "config.json"), JSON.stringify({ port: 10190, runtimeRole: "hub", client: { serverUrl: "https://hub.example.test" } }));
-    expect(readState().kind).toBe("mismatched");
-    removeTreeWithRetry(home);
-  });
+    try {
+      writeFileSync(join(home, "config.json"), JSON.stringify({ port: 10190, runtimeRole: "hub" }));
+      expect(readStateProbe(readScript, home).kind).toBe("disconnected");
+      // Hub role WITH a client block stays mismatched (the honest conflict).
+      writeFileSync(join(home, "config.json"), JSON.stringify({ port: 10190, runtimeRole: "hub", client: { serverUrl: "https://hub.example.test" } }));
+      expect(readStateProbe(readScript, home).kind).toBe("mismatched");
+    } finally {
+      removeTreeWithRetry(home);
+    }
+  }, 35_000); // Two 15s child deadlines plus setup and cleanup, below the CI 60s cap.
+
+  test("state probe kills a stalled child before parsing its output", () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-state-probe-stall-"));
+    const startedPath = join(home, "probe-started");
+    const script = `
+      const fs = require("node:fs");
+      fs.writeFileSync(require("node:path").join(process.env.OPENCODEX_HOME, "probe-started"), String(process.pid));
+      fs.writeSync(1, "not-json");
+      setInterval(() => {}, 1000);
+    `;
+    try {
+      const startedAt = performance.now();
+      let failure: unknown;
+      try { readStateProbe(script, home, 2_000); }
+      catch (error) { failure = error; }
+      expect(performance.now() - startedAt).toBeLessThan(10_000);
+      expect(failure).toBeInstanceOf(ClientStateProbeError);
+      if (!(failure instanceof ClientStateProbeError)) throw new Error("Expected bounded child failure");
+      expect(failure.timedOut).toBe(true);
+      expect(failure.status).toBeNull();
+      expect(failure.signal).toBe("SIGKILL");
+      expect(failure.message).not.toContain("not-json");
+      expect(Number(readFileSync(startedPath, "utf8"))).toBe(failure.pid);
+      // spawnSync must reap this exact child, not merely return while it remains alive.
+      let exitCode: string | undefined;
+      try { process.kill(failure.pid, 0); }
+      catch (error) { exitCode = (error as NodeJS.ErrnoException).code; }
+      expect(exitCode).toBe("ESRCH");
+    } finally {
+      removeTreeWithRetry(home);
+    }
+  }, 10_000);
+
   test("canonicalizes origin and terminal /v1 only", () => {
     expect(normalizeHubOrigin("https://hub.example.test/v1")).toBe("https://hub.example.test");
     expect(normalizeHubOrigin("https://hub.example.test/v1/")).toBe("https://hub.example.test");

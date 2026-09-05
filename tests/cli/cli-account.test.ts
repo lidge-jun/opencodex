@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cmdAccount, classifyAccount, formatAccountTable, type AccountDeps } from "../../src/cli/account";
 import type { AccountStdin } from "../../src/cli/account-api";
+import { projectCodexQuotaRefreshOutcome } from "../../src/codex/quota-refresh-outcome";
 import { printSubcommandUsage } from "../../src/cli/help";
 import {
   DEFAULT_ACCOUNT_PRIORITY,
@@ -584,6 +585,69 @@ afterEach(() => {
 });
 
 describe("ocx account CLI (issue #180 matrix)", () => {
+  test("main quota diagnostics survive opt-in JSON without copying upstream data", async () => {
+    codexAccounts = [{ id: "__main__", isMain: true, quota: null,
+      quotaRefresh: { status: "http_error", httpStatus: 503, message: RAW_SENTINEL } }];
+    const result = await run(["list", "openai", "--quota", "--refresh", "--json"]);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout).accounts[0].quotaRefresh).toEqual({ status: "http_error", httpStatus: 503 });
+    expect(result.output).not.toContain(RAW_SENTINEL);
+    const ordinary = await run(["list", "openai", "--json"]);
+    expect(JSON.parse(ordinary.stdout).accounts[0]).not.toHaveProperty("quotaRefresh");
+  });
+
+  test.each([
+    { status: "private-status-canary" },
+    { status: "http_error", httpStatus: "503" },
+    { status: "http_error", httpStatus: 999 },
+    { status: "http_error", httpStatus: 503.5 },
+    null,
+  ])("invalid quota diagnostic is omitted: %j", async quotaRefresh => {
+    codexAccounts = [{ id: "__main__", isMain: true, quota: null, quotaRefresh }];
+    const result = await run(["list", "openai", "--quota", "--json"]);
+    expect(JSON.parse(result.stdout).accounts[0]).not.toHaveProperty("quotaRefresh");
+    expect(result.output).not.toContain("canary");
+  });
+
+  test.each(["ok", "not_reported", "timeout", "network_error", "invalid_response", "internal_error"])(
+    "quota JSON reconstructs %s without extra fields", async status => {
+      codexAccounts = [{ id: "__main__", isMain: true, quota: null,
+        quotaRefresh: { status, httpStatus: 503, accountId: RAW_SENTINEL, nested: { token: RAW_SENTINEL } } }];
+      const result = await run(["list", "openai", "--quota", "--json"]);
+      expect(result.code).toBe(0);
+      expect(JSON.parse(result.stdout).accounts[0].quotaRefresh).toEqual({ status });
+      expect(result.output).not.toContain(RAW_SENTINEL);
+    },
+  );
+
+  test.each([
+    { value: undefined },
+    { value: null },
+    { value: [] },
+    { value: "private-diagnostic-canary" },
+    { value: 0 },
+    { value: true },
+    { value: {} },
+    { value: { status: "private-status-canary" } },
+    { value: { status: "http_error" } },
+    { value: { status: "http_error", httpStatus: NaN } },
+    { value: { status: "http_error", httpStatus: Infinity } },
+    { value: { status: "http_error", httpStatus: 99 } },
+    { value: { status: "http_error", httpStatus: 600 } },
+    { value: { status: "http_error", httpStatus: 403.5 } },
+    { value: { status: "http_error", httpStatus: "403" } },
+  ])("diagnostic projector rejects invalid values: %j", ({ value }) => {
+    expect(projectCodexQuotaRefreshOutcome(value)).toBeUndefined();
+  });
+
+  test.each([100, 599])("diagnostic projector bounds HTTP status %s and strips extra fields", httpStatus => {
+    const source = { status: "http_error", httpStatus, token: RAW_SENTINEL };
+    const projected = projectCodexQuotaRefreshOutcome(source);
+    expect(projected).toEqual({ status: "http_error", httpStatus });
+    expect(projected).not.toBe(source);
+    expect(JSON.stringify(projected)).not.toContain(RAW_SENTINEL);
+  });
+
   test("1: list renders all three account families, main alias, and padded columns", async () => {
     const result = await run(["list"]);
 
