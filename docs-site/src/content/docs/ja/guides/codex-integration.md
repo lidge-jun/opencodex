@@ -11,6 +11,8 @@ opencodex は、Codex が読み取る 2 つの内容 (構成 (`$CODEX_HOME/confi
 
 ローカル接続では既定で別途ログインせずに Codex を開きます。Dashboard → Overview で切り替えられます。OpenCodex に保存されたアカウントとプロバイダーを使用し、変更後は Codex の再起動が必要です。
 
+この設定は Codex Desktop の個別ログインのみを省略し、認証情報の作成・選択やアカウント権限の付与は行いません。Pool は設定済みの Codex アカウントを選択し、Direct は引き続き呼び出し元またはメインアカウントの認証情報を必要とします。Luna Reserve にも認証情報とプロバイダーの許可が必要です。
+
 `ocx init`、`ocx start`、および `ocx sync` はインジェクターを呼び出します。`codexDesktopAuthless: false` のループバック バインドでは、Codex の組み込み `openai` プロバイダー ID を保持し、そのプロバイダーを opencodex にポイントします。
 
 ```toml

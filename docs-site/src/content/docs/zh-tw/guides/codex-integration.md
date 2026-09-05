@@ -15,6 +15,8 @@ bearer。這些路徑不會彼此 fallback。shipped v1 設定會遷移到 marke
 
 本機連線預設無需另外登入即可開啟 Codex。可在 Dashboard → Overview 中切換，使用儲存在 OpenCodex 中的帳戶和供應商。變更後請重新啟動 Codex。
 
+此設定僅移除 Codex Desktop 的單獨登入要求，不會建立或選擇憑證，也不會授予帳戶存取權。Pool 選擇已設定的 Codex 帳戶；Direct 仍需要呼叫端或主帳戶的憑證。Luna Reserve 仍受憑證與供應商授權限制。
+
 `ocx init`、`ocx start` 與 `ocx sync` 都會呼叫注入器。在 `codexDesktopAuthless: false` 的 loopback 繫結下，它會保留 Codex
 內建的 `openai` provider id，並將該 provider 指向 opencodex：
 

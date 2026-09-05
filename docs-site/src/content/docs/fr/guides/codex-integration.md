@@ -17,6 +17,8 @@ Ces routes ne se rabattent jamais l'une sur l'autre. Les configurations v1 distr
 
 Les connexions locales ouvrent Codex sans connexion séparée par défaut. Le réglage dans Dashboard → Overview utilise les comptes et fournisseurs enregistrés dans OpenCodex. Redémarrez Codex après modification.
 
+Ce réglage supprime uniquement la connexion séparée à Codex Desktop : il ne crée ni ne sélectionne d’identifiants et n’accorde aucun accès supplémentaire. Pool sélectionne les comptes Codex configurés ; Direct exige toujours les identifiants du compte appelant/principal. Luna Reserve reste soumis aux identifiants et aux autorisations du fournisseur.
+
 `ocx init`, `ocx start` et `ocx sync` appellent l'injecteur. Avec `codexDesktopAuthless: false`, sur la liaison de bouclage, il conserve
 l'identifiant du fournisseur `openai` intégré à Codex et fait pointer ce fournisseur vers opencodex :
 

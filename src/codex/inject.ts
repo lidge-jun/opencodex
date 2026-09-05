@@ -194,6 +194,9 @@ function validateCodexRoutingTarget(target: CodexRoutingTarget): CodexRoutingTar
   ) {
     throw new TypeError("Codex routing target must be a canonical HTTP(S) /v1 URL without credentials, query, or fragment");
   }
+  if (target.desktopAuthless === true && target.requiresAdmissionToken) {
+    throw new TypeError("Authless Codex routing cannot require an admission token");
+  }
   return { ...target, baseUrl: `${parsed.origin}/v1` };
 }
 

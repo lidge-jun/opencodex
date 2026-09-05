@@ -16,6 +16,8 @@ proxy 提供一条裸 `openai` Codex 登录路由，支持 Pool（默认）和 D
 
 本地连接默认无需单独登录即可打开 Codex。可在 Dashboard → Overview 中切换，使用保存在 OpenCodex 中的账户和提供商。更改后请重启 Codex。
 
+此设置仅移除 Codex Desktop 的单独登录要求，不会创建或选择凭据，也不会授予账户访问权。Pool 选择已配置的 Codex 账户；Direct 仍需要调用方或主账户的凭据。Luna Reserve 仍受凭据和提供商授权限制。
+
 `ocx init`、`ocx start` 和 `ocx sync` 都会调用注入器。在 `codexDesktopAuthless: false` 的 loopback 绑定下，它会保留
 Codex 内置的 `openai` provider id，并将该 provider 指向 opencodex：
 

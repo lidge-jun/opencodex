@@ -87,6 +87,17 @@ describe("Codex config injection", () => {
     );
   });
 
+  test("rejects authless admission-token targets before generating either config form", () => {
+    const target = {
+      baseUrl: "http://127.0.0.1:10100/v1",
+      requiresAdmissionToken: true,
+      desktopAuthless: true,
+      tokenEnv: "OPENCODEX_API_AUTH_TOKEN" as const,
+    };
+    expect(() => buildProviderTableBlock(target)).toThrow("cannot require an admission token");
+    expect(() => buildProfileFile(target, null)).toThrow("cannot require an admission token");
+  });
+
   test("omits provider-level Responses WebSocket support by default", () => {
     const block = buildProviderTableBlock(10100);
 
