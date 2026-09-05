@@ -296,6 +296,10 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "POST", path: "/api/storage/codex-logs/repair", module: "server/management/storage-log-guard-routes", mutates: true },
   { method: "POST", path: "/api/storage/codex-logs/unprotect", module: "server/management/storage-log-guard-routes", mutates: true },
   // server/management/system-routes
+  // ADR-0008 seam: GET /api/system/health is answered by the Go ocx-sidecar when the optional
+  // sidecar is attached (spawned from OPENCODEX_GO_SIDECAR_BIN); system-routes stays the
+  // declared owner so this row reconciles for the default install, where the route is served
+  // in-process exactly as before.
   { method: "GET", path: "/api/system/health", module: "server/management/system-routes", mutates: false },
   { method: "GET", path: "/api/system/memory", module: "server/management/system-routes", mutates: false },
   { method: "GET", path: "/api/system/windows-replace-retries", module: "server/management/system-routes", mutates: false },

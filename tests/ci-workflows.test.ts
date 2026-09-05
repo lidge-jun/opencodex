@@ -436,6 +436,7 @@ describe("GitHub Actions hardening", () => {
       "assets/**",
       "bin/**",
       "bun.lock",
+      "go/**",
       "gui/**",
       "package.json",
       "scripts/**",
@@ -482,7 +483,7 @@ describe("GitHub Actions hardening", () => {
     expect(scopeIndex).toBeGreaterThan(filterIndex);
 
     const scopedCondition = "github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'";
-    for (const jobName of ["test", "storage-policy", "gates", "platform-macos", "keyring-smoke"]) {
+    for (const jobName of ["test", "storage-policy", "go", "gates", "platform-macos", "keyring-smoke"]) {
       const job = ci.jobs?.[jobName] as { needs?: string; if?: string } | undefined;
       expect(`${jobName}:${job?.needs}`).toBe(`${jobName}:changes`);
       expect(`${jobName}:${job?.if}`).toBe(`${jobName}:${scopedCondition}`);

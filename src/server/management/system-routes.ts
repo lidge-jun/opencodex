@@ -44,6 +44,7 @@ import type {
 } from "../../codex/app-server-restart-service";
 import type { ManagementContext } from "./context";
 import { acceptSystemRestart } from "./system-restart";
+import { tryGoSidecarHealthForward } from "../go-sidecar-slot";
 
 const ENDPOINT_SAMPLE_LIMIT = 60;
 
@@ -53,6 +54,14 @@ export async function handleSystemRoutes(ctx: ManagementContext): Promise<Respon
     // Authenticated management counterpart to /healthz. Remote Hub deliberately keeps the
     // unauthenticated liveness route off its management ingress, while the connected dashboard
     // still needs bounded process identity and PID replacement evidence (#3158).
+    //
+    // ADR-0008 seam: when the optional Go sidecar is attached, this exact route is answered by
+    // the Go binary (byte-identical shape, sidecar's own pid/uptime). The core route holds only
+    // a slot (go-sidecar-slot.ts); the optional module registers its forwarder at activation.
+    // The proxy falls back to the in-process handler below whenever the slot is empty or the
+    // sidecar is unreachable, so the route never goes dark on a supervision blip.
+    const goHealth = await tryGoSidecarHealthForward();
+    if (goHealth) return goHealth;
     return jsonResponse({
       status: "ok",
       service: "opencodex",

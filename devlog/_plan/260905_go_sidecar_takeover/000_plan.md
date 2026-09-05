@@ -1,8 +1,27 @@
 # Go sidecar takeover — first increment: fresh `go/` + one read-only route
 
 Date: 2026-09-05
-Status: planned
+Status: implemented on `dev-go` (first increment landed per ADR-0008)
 ADR: [`docs/adr/0008-go-runtime-incremental-takeover.md`](../../docs/adr/0008-go-runtime-incremental-takeover.md)
+
+## Delivery notes (dev-go)
+
+The open questions below were settled during implementation as follows:
+
+- **Nested `go/go.mod`** was used (module `github.com/lidge-jun/opencodex/go`), keeping the Go
+  tree self-contained under `go/`.
+- **Supervision primitive**: `src/providers/openai-sidecar.ts` turned out to be credential
+  selection, not process supervision, so the implementer built the small supervisor in
+  `src/server/go-sidecar.ts` (spawn → ready-line handshake → register → child-exit
+  deregistration), reusing `direct-local-http.ts` for the forwarded request and
+  `optional-shutdown-hooks.ts` for teardown.
+- Activation is env-gated (`OPENCODEX_GO_SIDECAR_BIN`), synchronous within the
+  `startServer` activation window, and default-OFF, so a default install is byte-identical to
+  a build without Go.
+- The differential oracle lives in `tests/go-sidecar-parity.test.ts`; Go toolchain gates and
+  the oracle run in CI under the `go` job plus setup-go on the suite lanes.
+- `.gitignore`/`tests/repo-hygiene.test.ts` were reconciled with ADR-0008: `go/` is tracked
+  source again, `go/bin/` build output stays ignored.
 
 ## Objective
 

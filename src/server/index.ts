@@ -52,6 +52,7 @@ import {
 } from "../lib/app-owned-memory-stores";
 import { acquireServerBackgroundLifecycle } from "./background-lifecycle";
 import { activateLab, labActivationRequired } from "../lib/lab-activation";
+import { activateGoSidecar } from "./go-sidecar";
 import { runOpenAiTierStartupMigration } from "../providers/openai-tier-startup";
 import { runAlibabaRegionStartupMigration } from "../providers/alibaba-region-startup";
 import { runModelRenameStartupMigration } from "../providers/model-rename-startup";
@@ -1017,6 +1018,10 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     return "public";
   }
   let backgroundLifecycle: ReturnType<typeof acquireServerBackgroundLifecycle> | null = null;
+  // Set only when the optional Go sidecar activated (ADR-0008); consumed by the server.stop
+  // override below, which is built before activation runs. Null default keeps a process that
+  // never opted in from carrying any Go-sidecar state.
+  let goSidecarStop: (() => void) | null = null;
   try {
     backgroundLifecycle = acquireServerBackgroundLifecycle(applyPolicy);
     // External `ocx config set` / direct config.json edits run in other
@@ -2349,6 +2354,11 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           async () => {
             userCostOverlayReconciler?.stop();
           },
+          async () => {
+            // The Go sidecar (ADR-0008) is a child of this process; stopping the server must
+            // stop it too, or an opted-in proxy leaves a health sidecar behind.
+            goSidecarStop?.();
+          },
         ],
         async () => {
           try {
@@ -2438,6 +2448,16 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
       accountId: MAIN_CODEX_ACCOUNT_ID,
       ...createResetCreditWhamClient(config, MAIN_CODEX_ACCOUNT_ID),
     });
+  }
+
+  // Optional Go sidecar (ADR-0008): spawn and supervise ocx-sidecar only when the operator
+  // names a binary via OPENCODEX_GO_SIDECAR_BIN. The call is synchronous (spawn plus the
+  // registration of an off-stack readiness wait), so the activation-window invariant that
+  // tests/core-lab-boundary.test.ts scans for still holds; a default install spawns nothing
+  // and every existing route behaves byte-identically.
+  const goSidecarHandle = activateGoSidecar(VERSION);
+  if (goSidecarHandle) {
+    goSidecarStop = goSidecarHandle.stop;
   }
 
   return server;

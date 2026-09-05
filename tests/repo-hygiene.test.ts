@@ -20,14 +20,14 @@ const FORBIDDEN_TRACKED_DIRS = [".codexclaw", ".omo", ".claude", "node_modules",
 const FORBIDDEN_TRACKED_FILENAMES = [".DS_Store", "Thumbs.db"];
 
 /**
- * The retired Go native-runtime experiment. Nothing in `src/`, the build, the
- * typecheck, or the test path reads from `go/`, so a tracked file there is always
- * an accident — and this specific one is a repeat offender: `git add -A` pulled
- * `go/internal/cli/config_parity.go` back into the index three times during the
- * #820 campaign, and the third one rode a merge into `dev`. `.gitignore` cannot
- * catch that on its own, because an already-tracked path ignores the rule.
+ * ADR-0008 reopened the Go runtime as an in-tree incremental takeover, so `go/`
+ * is now intentionally tracked source (the module plus the ocx-sidecar binary).
+ * What must stay OUT of the index is per-machine build output under `go/bin/` —
+ * a stray `go build -o bin` must never be committed. `.gitignore` carries that
+ * rule; the tests below assert it against the real index, because an
+ * already-tracked path ignores the ignore file.
  */
-const RETIRED_TRACKED_DIRS = ["go"];
+const GO_BUILD_OUTPUT_DIRS = ["go/bin"];
 
 function trackedFiles(): string[] {
   const result = Bun.spawnSync(["git", "ls-files"], { cwd: repoRoot });
@@ -74,9 +74,16 @@ describe("repository hygiene", () => {
     expect(offenders).toEqual([]);
   });
 
-  test("the retired Go runtime stays untracked", () => {
+  test("the ADR-0008 Go sidecar tree is tracked source", () => {
+    const goSources = trackedFiles().filter((path) => path.startsWith("go/"));
+
+    expect(goSources.some((path) => path === "go/go.mod")).toBe(true);
+    expect(goSources.some((path) => path.endsWith(".go"))).toBe(true);
+  });
+
+  test("Go build output stays untracked", () => {
     const offenders = trackedFiles().filter((path) =>
-      RETIRED_TRACKED_DIRS.some((dir) => path === dir || path.startsWith(`${dir}/`)),
+      GO_BUILD_OUTPUT_DIRS.some((dir) => path === dir || path.startsWith(`${dir}/`)),
     );
 
     expect(offenders).toEqual([]);
@@ -89,7 +96,7 @@ describe("repository hygiene", () => {
       expect(ignore).toContain(`${dir}/`);
     }
 
-    for (const dir of RETIRED_TRACKED_DIRS) {
+    for (const dir of GO_BUILD_OUTPUT_DIRS) {
       expect(ignore).toContain(`${dir}/`);
     }
   });

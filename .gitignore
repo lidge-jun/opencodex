@@ -59,9 +59,8 @@ devlog/**/security-advisory-draft*
 tests/.tmp-*
 .claude/
 
-# Retired Go native-runtime experiment. `go/` is not part of the build, the
-# typecheck, or the test path, and nothing in `src/` imports it. A single file
-# from it (go/internal/cli/config_parity.go) has now been committed by a broad
-# `git add` three separate times and reached `dev` once — see
-# tests/repo-hygiene.test.ts, which fails if any path here becomes tracked again.
-go/
+# Go sidecar line (ADR-0008). `go/` is a tracked in-tree Go module under
+# incremental takeover; only per-machine build output stays ignored so a stray
+# `go build -o bin` cannot be committed. Nothing in `src/` imports `go/` at
+# runtime — the TypeScript server spawns the built binary as a child process.
+go/bin/
