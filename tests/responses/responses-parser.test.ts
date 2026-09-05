@@ -934,6 +934,25 @@ describe("unpaired tool result boundary (#3259)", () => {
       type: "brand_new_item_2027", foo: 1,
     }))).not.toThrow();
   });
+
+  test("Codex automation/heartbeat function_call_output without call_id parses as a user message instead of an invalid toolResult", () => {
+    const parsed = parseRequest({
+      model: "test-model",
+      input: [
+        { type: "message", role: "user", content: [{ type: "input_text", text: "task" }] },
+        {
+          type: "function_call_output",
+          name: "automation_update",
+          namespace: "codex_app",
+          output: "<heartbeat><automation_id>shentai-meta</automation_id></heartbeat>",
+        },
+      ],
+    });
+    const toolResults = parsed.context.messages.filter(m => m.role === "toolResult");
+    expect(toolResults.length).toBe(0);
+    const userMsgs = parsed.context.messages.filter(m => m.role === "user");
+    expect(userMsgs.some(m => typeof m.content === "string" && m.content.includes("<heartbeat>"))).toBe(true);
+  });
 });
 
 test("parser leaf seams preserve tool and format contracts without importing the request parser", () => {

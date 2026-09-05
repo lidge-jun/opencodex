@@ -324,6 +324,10 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       const { resetAnthropicRoutingForManualSelection } = await import("../../oauth/anthropic-routing");
       resetAnthropicRoutingForManualSelection(body.accountId);
     }
+    if (provider === "google-antigravity") {
+      const { resetAntigravityRoutingForManualSelection } = await import("../../oauth/google-antigravity-routing");
+      resetAntigravityRoutingForManualSelection(body.accountId);
+    }
     const { clearModelCache } = await import("../../codex/model-cache");
     const { clearGatherRoutedModelsInflight } = await import("../../codex/catalog");
     clearModelCache(provider);
@@ -475,10 +479,15 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const body = await readManagementJsonBodyOr(req, {}) as { provider?: unknown; accountId?: unknown };
     const provider = typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "";
     const accountId = typeof body.accountId === "string" ? body.accountId.trim() : "";
-    if (provider !== "anthropic") return jsonResponse({ error: "clear-cooldown is only supported for anthropic" }, 400);
+    if (provider !== "anthropic" && provider !== "google-antigravity") return jsonResponse({ error: "clear-cooldown is only supported for anthropic and google-antigravity" }, 400);
     if (!accountId) return jsonResponse({ error: "missing accountId" }, 400);
-    const { clearAnthropicAccountCooldown } = await import("../../oauth/anthropic-routing");
-    const cleared = clearAnthropicAccountCooldown(accountId);
+    if (provider === "anthropic") {
+      const { clearAnthropicAccountCooldown } = await import("../../oauth/anthropic-routing");
+      const cleared = clearAnthropicAccountCooldown(accountId);
+      return jsonResponse({ ok: true, cleared });
+    }
+    const { clearAntigravityAccountCooldown } = await import("../../oauth/google-antigravity-routing");
+    const cleared = clearAntigravityAccountCooldown(accountId);
     return jsonResponse({ ok: true, cleared });
   }
 
@@ -557,6 +566,11 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       const { clearAnthropicAccountCooldown, clearAnthropicSessionAffinityForAccount } = await import("../../oauth/anthropic-routing");
       clearAnthropicAccountCooldown(id);
       clearAnthropicSessionAffinityForAccount(id);
+    }
+    if (provider === "google-antigravity") {
+      const { clearAntigravityAccountCooldown, clearAntigravitySessionAffinityForAccount } = await import("../../oauth/google-antigravity-routing");
+      clearAntigravityAccountCooldown(id);
+      clearAntigravitySessionAffinityForAccount(id);
     }
     if (!getAccountSet(provider)) clearLoginState(provider);
     const { clearModelCache } = await import("../../codex/model-cache");

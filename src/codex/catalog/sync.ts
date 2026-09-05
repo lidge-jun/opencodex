@@ -302,6 +302,9 @@ function routedDisplayName(slug: string, model?: CatalogModel, config?: Pick<Ocx
     if (m && modelId.startsWith(`${m[1]}-${m[1]}-`)) modelId = modelId.slice(m[1]!.length + 1);
     return `${provider === "command-code" ? "commandcode-auth" : "commandcode-api"}/${modelId}`;
   }
+  if (provider === "google-antigravity") {
+    return model;
+  }
   return slug;
 }
 

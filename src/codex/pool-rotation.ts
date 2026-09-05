@@ -3,6 +3,7 @@ import type { GenerationContext } from "../lib/state-store-sweeper";
 
 export const POOL_KEY_CODEX = "codex";
 export const POOL_KEY_ANTHROPIC = "anthropic";
+export const POOL_KEY_ANTIGRAVITY = "google-antigravity";
 
 interface SelectionState {
   activeKey?: string;
@@ -259,16 +260,22 @@ export function clearPoolRotationState(poolKey?: string): void {
 
 export function reconcilePoolRotationState(context: GenerationContext): number {
   if (context.generation <= lastReconciledGeneration) return 0;
+  const antigravityIds = new Set<string>();
   const anthropicIds = new Set<string>();
   for (const key of context.oauthAccountKeys) {
     const separator = key.indexOf("\0");
     if (separator > 0 && key.slice(0, separator) === "anthropic") {
       anthropicIds.add(key.slice(separator + 1));
     }
+    if (separator > 0 && key.slice(0, separator) === "google-antigravity") {
+      antigravityIds.add(key.slice(separator + 1));
+    }
   }
   let removed = 0;
   for (const [poolKey, state] of selectionState) {
-    const valid = poolKey === POOL_KEY_ANTHROPIC
+    const valid = poolKey === POOL_KEY_ANTIGRAVITY
+      ? antigravityIds
+      : poolKey === POOL_KEY_ANTHROPIC
       ? anthropicIds
       : poolKey === POOL_KEY_CODEX || poolKey.startsWith(`${POOL_KEY_CODEX}:`)
         ? context.codexAccountIds

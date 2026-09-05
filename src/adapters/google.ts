@@ -48,9 +48,9 @@ import { configuredReasoningEfforts, mapReasoningEffort } from "../reasoning-eff
 // providers are unaffected.
 const GOOGLE_BREVITY_INSTRUCTION = [
   "Output style for this session:",
-  "- While you are still working (between tool calls), keep any text you emit to a single short line; do not narrate at length.",
-  "- Do detailed reasoning internally, not as visible intermediate output.",
-  "- Prefer taking the next tool action over explaining; keep calling tools until the task is complete.",
+  "- While you are still working, emit one short visible progress line before each tool call so the user knows what you are doing.",
+  "- Keep private chain-of-thought internal; the visible line should only summarize the next action and current status.",
+  "- Prefer taking the next tool action over long narration; keep calling tools until the task is complete.",
   "- This applies only to intermediate progress text. Your final answer after the work is done is exempt: write it in full and at whatever length the task requires.",
   "- Formatting: The client environment renders standard Markdown and does not support LaTeX math delimiters ($...$, $$...$$, \\(...\\), \\[...\\]). Do not use LaTeX math delimiters or LaTeX markup (such as \\text{}, \\times, \\le, \\ge, etc.) for variables, formulas, dimensions, or units. Use clean plain text, Markdown, and Unicode symbols (e.g. 180°, 2560 × 1920 px, ≤, ≥, Δ, ±) instead.",
 ].join("\n");
