@@ -132,6 +132,17 @@ async function handleLabRoutesOnDemand(ctx: ManagementContext): Promise<Response
   return handleLabRoutes(ctx);
 }
 
+/**
+ * Lazy like the Lab and routing-profile handlers, and for the same recorded reason: this file is
+ * mounted for every dashboard request, so a static import would put the quota-reset store and
+ * its config resolution on all of them.
+ */
+async function handleQuotaResetRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (ctx.url.pathname !== "/api/quota-resets") return null;
+  const { handleQuotaResetRoutes } = await import("./management/quota-reset-routes");
+  return handleQuotaResetRoutes(ctx);
+}
+
 export async function handleManagementAPI(
   req: Request,
   url: URL,
@@ -229,6 +240,7 @@ export async function handleManagementAPI(
     ??     (await handleStorageLogGuardRoutes(ctx))
     ??     (await handleLogsUsageRoutes(ctx))
     ??     (await handleRequestHistoryRoutes(ctx))
+    ??     (await handleQuotaResetRoutesOnDemand(ctx))
     ??     (await handleRoutingAnalyticsRoutes(ctx))
     ??     (await handleRoutingProfileRoutesOnDemand(ctx))
     ??     (await handleProviderRoutes(ctx))
