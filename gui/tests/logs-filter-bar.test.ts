@@ -10,7 +10,7 @@ import { logsSurfaceKeyDown } from "../src/pages/logs-surface-keydown";
 test("Logs mounts the shared rich-filter predicate and filter bar", async () => {
   const source = await Bun.file(new URL("../src/pages/Logs.tsx", import.meta.url)).text();
   expect(source).toContain('import { LogsFilterBar } from "./logs-filter-bar";');
-  expect(source).toContain("filterLogs(logs, filters)");
+  expect(source).toContain("filterLogs(logs, filters, filterClockNow)");
   expect(source).toContain("extractLogFilterOptions(logs)");
   expect(source).not.toContain("logMatchesSurface(log, surfaceFilter)");
   expect(source).not.toContain("logMatchesModelQuery(log, modelFilter)");
