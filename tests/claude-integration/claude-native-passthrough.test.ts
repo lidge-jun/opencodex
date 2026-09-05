@@ -206,6 +206,47 @@ test("count_tokens passes through with native credentials", async () => {
   }
 });
 
+test("Fable 1M picker alias preserves native passthrough on both Messages endpoints", async () => {
+  const captured: Captured[] = [];
+  const upstream = mockAnthropicUpstream(captured);
+  saveConfig(cfg(upstream.url.toString().replace(/\/$/, "")));
+  const server = startServer(0);
+  const pickerModel = "claude-ocx-native--claude-fable-5-1";
+  try {
+    const messagesWithoutMarker = await fetch(new URL("/v1/messages", server.url), {
+      method: "POST",
+      headers: OAUTH_HEADERS,
+      body: JSON.stringify({ ...claudeBody(), model: pickerModel }),
+    });
+    expect(messagesWithoutMarker.status).toBe(200);
+    await messagesWithoutMarker.text();
+
+    const messagesWithMarker = await fetch(new URL("/v1/messages", server.url), {
+      method: "POST",
+      headers: OAUTH_HEADERS,
+      body: JSON.stringify({ ...claudeBody(), model: `${pickerModel}[1m]` }),
+    });
+    expect(messagesWithMarker.status).toBe(200);
+    await messagesWithMarker.text();
+
+    const countTokens = await fetch(new URL("/v1/messages/count_tokens", server.url), {
+      method: "POST",
+      headers: OAUTH_HEADERS,
+      body: JSON.stringify({ model: `${pickerModel}[1m]`, messages: [{ role: "user", content: "hi" }] }),
+    });
+    expect(countTokens.status).toBe(200);
+    expect(await countTokens.json()).toEqual({ input_tokens: 4242 });
+
+    expect(captured).toHaveLength(3);
+    expect(captured[0]!.body.model).toBe("claude-fable-5-1");
+    expect(captured[1]!.body.model).toBe("claude-fable-5-1");
+    expect(captured[2]!.body.model).toBe("claude-fable-5-1");
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
 test("exposed native passthrough requires dedicated admission and never forwards admission credentials", async () => {
   const admissionSecret = "sk-ant-api03-key";
   const providerBearer = "sk-ant-oat01-provider";
