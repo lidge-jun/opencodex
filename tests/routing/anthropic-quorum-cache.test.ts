@@ -25,7 +25,7 @@ import {
   resetAnthropicRoutingForManualSelection,
   rotateAnthropicAccountOn429,
 } from "../../src/oauth/anthropic-routing";
-import { getAccountSet, markAccountNeedsReauth, saveCredential } from "../../src/oauth/store";
+import { getAccountSet, markAccountNeedsReauth, removeAccount, saveCredential } from "../../src/oauth/store";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const originalHome = process.env.OPENCODEX_HOME;
@@ -158,15 +158,17 @@ describe("Anthropic failover quorum cache", () => {
   });
 
   test("removing an account invalidates immediately, not after the TTL", async () => {
-    // The management DELETE route calls clearAnthropicSessionAffinityForAccount for Anthropic.
-    // Without invalidation there, deleting the second account would leave quorum true for up to
-    // 2s -- long enough for a request to record an id whose credential is already gone.
+    // Mirror the real DELETE route (src/server/management/oauth-account-routes.ts): the
+    // credential is removed FIRST, and only then is routing state cleared. Clearing affinity
+    // alone leaves the roster at 2, so the predicate could never observe the transition this
+    // test is named for -- it could only assert that the store was re-read.
     const start = Date.now();
     const ids = await seed(2);
     expect(hasAnthropicFailoverQuorum(start)).toBe(true);
+    expect(await removeAccount("anthropic", ids[1]!)).toBe(true);
     clearAnthropicSessionAffinityForAccount(ids[1]!);
     markStoreUnread();
-    hasAnthropicFailoverQuorum(start + 1);
+    expect(hasAnthropicFailoverQuorum(start + 1)).toBe(false);
     expect(storeWasRead()).toBe(true);
   });
 
