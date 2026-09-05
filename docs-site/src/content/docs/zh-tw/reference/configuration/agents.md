@@ -44,10 +44,13 @@ V1 指引僅在 `max` 或 `ultra` 時為主動文字。V2 僅在存在偏好模�
 生成子任務的 fallback 順序為：
 
 1. 請求的主模型；
-2. 來自 `$CODEX_HOME/agents/*.toml` 的角色級 `model_fallback`；然後
-3. 全域 `subagentModelFallback` 項目。
+2. 以請求的主模型為索引的 `subagentModelFallbackByModel` 每模型項目；
+3. 全域 `subagentModelFallback` 項目；然後
+4. 為向後相容而讀取的 `$CODEX_HOME/agents/*.toml` 舊版角色級 `model_fallback`。
 
-opencodex 會跳過已停用、不可路由、不健康、冷卻中或達到配額閾值的候選項。可用性快取保存 `subagentModelFallbackPollMs`。加密的子任務可將鏈限制為規範的原生 ChatGPT 目標；若無任何目標可讀取加密 payload，請求會失敗，而不會將無法讀取的密文路由到別處。
+Codex 0.146+ 會將角色檔案中的 `model_fallback` 視為未知欄位並略過整個角色；`ocx doctor` 也會對此發出警告。因此新的角色級 fallback 應設定在 opencodex，而不是角色 TOML 中。
+
+opencodex 會跳過已停用、不可路由、不健康、冷卻中或達到配額閾值的候選項。可用性快取保存 `subagentModelFallbackPollMs`。對於加密的子任務，候選鏈僅包含規範的原生 ChatGPT 目標，以及透過 `allowEncryptedV2AgentTasks: true` 明確信任的直接金鑰驗證 Responses 路由。若無任何目標可處理加密 payload，請求會失敗，而不會將無法讀取的密文路由到別處。組合仍只使用規範的原生目標。
 
 ```json
 {

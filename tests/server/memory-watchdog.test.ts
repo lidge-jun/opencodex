@@ -193,6 +193,12 @@ describe("GET /api/system/memory", () => {
 	        count: number; residentCount: number; spillStubCount: number; tombstoneCount: number;
 	        totalBytes: number; spillPayloadBytes: number; largestBytes: number; oldestAgeMs: number;
 	        spillWrites: number; spillWriteFailures: number; spillReadFailures: number;
+	        spillWriteStatus: "initial" | "healthy" | "degraded";
+	        spillWriteConsecutiveFailures: number;
+	        spillLastWriteFailureCode: string | null;
+	        spillLastWriteFailureAt: number | null;
+	        spillLastWriteSuccessAt: number | null;
+	        replayScopeMismatchDrops: number;
 	      };
 	      appOwnedBytes: ReturnType<typeof appOwnedBytesSnapshot>;
 	      inspectionCounters: {
@@ -212,13 +218,27 @@ describe("GET /api/system/memory", () => {
 	    expect(body.observedBytes).toBeGreaterThan(0);
 	    expect(["rss", "external", "arrayBuffers"]).toContain(body.observedMetric);
 	    expect(body.jscHeap?.heapSize).toBeGreaterThan(0);
-    // responseState is a scalar-only continuation-store attribution block: every field is a
-    // finite number (no paths, tokens, or account identifiers), so it is safe on this surface.
+    // responseState is a scalar-only continuation-store attribution block: numbers plus fixed
+    // enum/null fields (no paths, messages, tokens, or account identifiers).
     // The exact count is pinned on purpose: a new field must be reviewed for privacy safety
-    // before it reaches this surface. 12 since #1597 added `replayScopeMismatchDrops`.
-    const responseStateValues = Object.values(body.responseState);
-    expect(responseStateValues).toHaveLength(12);
-    expect(responseStateValues.every(value => typeof value === "number" && Number.isFinite(value))).toBe(true);
+    // before it reaches this surface. 17 after #3522 added spill-write health diagnostics.
+    expect(Object.keys(body.responseState)).toHaveLength(17);
+    const {
+      spillWriteStatus,
+      spillLastWriteFailureCode,
+      spillLastWriteFailureAt,
+      spillLastWriteSuccessAt,
+      ...numericResponseState
+    } = body.responseState;
+    expect(Object.values(numericResponseState)
+      .every(value => typeof value === "number" && Number.isFinite(value))).toBe(true);
+    expect(["initial", "healthy", "degraded"]).toContain(spillWriteStatus);
+    expect(spillLastWriteFailureCode === null || [
+      "EACLRETRYEXHAUSTED", "ETIMEDOUT", "EACCES", "ENOSPC", "EFBIG",
+      "EIO", "ECAPACITY", "ELOOP", "EUNKNOWN",
+    ].includes(spillLastWriteFailureCode)).toBe(true);
+    expect(spillLastWriteFailureAt === null || Number.isFinite(spillLastWriteFailureAt)).toBe(true);
+    expect(spillLastWriteSuccessAt === null || Number.isFinite(spillLastWriteSuccessAt)).toBe(true);
     expect(body.responseState.count).toBeGreaterThanOrEqual(0);
     expect(body.appOwnedBytes).toEqual({
       budgetBytes: expect.any(Number),

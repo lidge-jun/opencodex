@@ -60,7 +60,20 @@ ocx connect rotate --admin-token-stdin
 
 ## Docker、回復與疑難排解
 
-opencodex 不發布官方 Docker 映像。請用 digest 固定 Bun 映像，把 `/home/bun/.opencodex` 掛載為持久 volume，並把金鑰掛載到 `/run/secrets/ocx_api_token`。只發布 `10100`，不要發布 `10101`。不要把金鑰放入 `ARG`、`ENV`、`COPY`、Compose、映像歷史或 argv。healthcheck 後仍須分別驗證 readiness、目錄與真實請求。
+opencodex 不發布官方 Docker 映像，但儲存庫提供維護的 `Dockerfile` 與 `compose.yaml`，可在本機建置以 digest 固定的 Bun 映像。第一次啟動前，透過 stdin 初始化一次資料金鑰；金鑰不會被輸出，並以僅擁有者可讀的權限保存在 `ocx-state` volume。
+
+主機需要安裝 Git 與 Bun。每次建置映像前，都應從 Git 追蹤的原始碼產生標準相容性清單，產生後到建置完成前不要修改原始碼。產生的 JSON 不加入 Git；`.git` 不進入 Docker 建置上下文。主機連接埠預設繫結至 `127.0.0.1`。遠端存取須明確使用 `OPENCODEX_BIND_ADDRESS=<LAN或Tailscale-IP> docker compose up -d`；`0.0.0.0` 會公開所有介面。請使用防火牆與經過身分驗證的 TLS/tailnet 前端保護存取。
+
+```bash
+git clone https://github.com/lidge-jun/opencodex.git
+cd opencodex
+bun scripts/generate-compatibility-version.ts
+docker compose build
+openssl rand -hex 32 | docker compose run --rm -T hub bun run docker/bootstrap-token.ts
+docker compose up -d
+```
+
+容器以非 root 的 `bun` 使用者執行，根檔案系統唯讀，且只發布 `10100`。不要發布 `10101`，也不要把金鑰放入 `ARG`、`ENV`、`COPY`、Compose、映像歷史或 argv。healthcheck 後仍須分別驗證 readiness、已驗證目錄與真實請求。`docker compose down` 會保留 volume；`docker compose down --volumes` 也會刪除設定、憑證與資料金鑰。
 
 - hub 無法連線：可以離線中斷，但遠端金鑰仍待撤銷。
 - 目錄過期：僅在暫時故障時保留已驗證的 LKG；驗證、結構、大小或協定錯誤不會切換到本機供應商。

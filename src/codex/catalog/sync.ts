@@ -1,3 +1,4 @@
+import { effectiveProviderAlias } from "../../providers/default-aliases";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
@@ -267,17 +268,30 @@ function isExactComboCatalogEntry(
  * ids differ by a single dash (`command-code` vs `commandcode`), so relabel them to the
  * lowercase-dash style the opencode presets use: `commandcode-auth/x` and `commandcode-api/x`.
  * The model-id portion also carries a redundant `<vendor>-` prefix (`deepseek-deepseek-v4-flash`)
- * that is dropped for display. All other providers keep the raw slug exactly as before.
+ * that is dropped for display. Google Antigravity is relabeled to the compact `agy/` prefix for
+ * the same reason: `google-antigravity/` alone consumes most of the picker row. That prefix comes
+ * from the row's own `providerAlias`, decided once per gather flight; `null` means a cross-provider
+ * collision suppressed it and the canonical slug stands. This is the raw-slug path only -- a
+ * configured `modelAliases` entry is labeled by the effective-alias path in
+ * catalog/provider-fetch.ts (#2960) and keeps the canonical provider name. All other providers
+ * keep the raw slug exactly as before.
  */
-function routedDisplayName(slug: string): string {
+function routedDisplayName(slug: string, model?: CatalogModel, config?: Pick<OcxConfig, "providers">): string {
   const slash = slug.indexOf("/");
   if (slash <= 0) return slug;
   const provider = slug.slice(0, slash);
-  let model = slug.slice(slash + 1);
+  let modelId = slug.slice(slash + 1);
+  if (provider === "google-antigravity") {
+    if (model?.providerAlias === null) return slug;
+    const alias = (typeof model?.providerAlias === "string" && model.providerAlias.trim().length > 0)
+      ? model.providerAlias.trim()
+      : effectiveProviderAlias(provider, undefined, config);
+    return alias ? `${alias}/${modelId}` : slug;
+  }
   if (provider === "command-code" || provider === "commandcode") {
-    const m = model.match(/^([a-z0-9]+)-([a-z0-9]+(?:-[a-z0-9]+)+)$/i);
-    if (m && model.startsWith(`${m[1]}-${m[1]}-`)) model = model.slice(m[1]!.length + 1);
-    return `${provider === "command-code" ? "commandcode-auth" : "commandcode-api"}/${model}`;
+    const m = modelId.match(/^([a-z0-9]+)-([a-z0-9]+(?:-[a-z0-9]+)+)$/i);
+    if (m && modelId.startsWith(`${m[1]}-${m[1]}-`)) modelId = modelId.slice(m[1]!.length + 1);
+    return `${provider === "command-code" ? "commandcode-auth" : "commandcode-api"}/${modelId}`;
   }
   return slug;
 }
@@ -306,7 +320,7 @@ export function deriveEntry(
   if (template || codexForwardNativeCapabilityAlias) {
     const e = JSON.parse(JSON.stringify(codexForwardNativeCapabilityAlias ?? template)) as RawEntry;
     e.slug = slug;
-    e.display_name = routedDisplayName(slug);
+    e.display_name = routedDisplayName(slug, model);
     e.description = desc;
     e.priority = priority;
     e.visibility = "list";
@@ -375,7 +389,7 @@ export function deriveEntry(
   // Cursor still omits hosted web-search metadata because runTurn bypasses that separate sidecar.
   const isCursorFallback = isRouted && model?.provider === "cursor";
   const entry: RawEntry = {
-    slug, display_name: routedDisplayName(slug), description: desc,
+    slug, display_name: routedDisplayName(slug, model), description: desc,
     shell_type: "unified_exec", visibility: "list", supported_in_api: true,
     priority, base_instructions: "You are a helpful coding assistant.",
     ...(isRouted

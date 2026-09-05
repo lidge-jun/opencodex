@@ -94,8 +94,8 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `xaiResponsesXSearch?` | `boolean` | デフォルトでは無効です。xAI Responses の宛先では、最終的なリクエスト正規化後もライブの `web_search` ツールが残っている場合にのみ、プロバイダーがホストする `x_search` 宣言を追加します。既存の宣言は重複させず、呼び出し元の `tool_choice` / `allowed_tools` セレクターの範囲を拡張することもありません。また、これは `search.xSearch` オプションを持つウェブ検索サイドカーとは別です。 |
 | `modelPreferHostedTools?` | `Record<string,string[]>` | hosted tool namespace を予約する非 forward Responses gateway 向けの完全一致モデル opt-in。現在は `["image_generation"]` のみを受け付けます。一致したモデルは `openai-responses` wire を使い、その hosted tool をサポートする必要があります。競合するクライアント `image_gen` 宣言を除去し、呼び出し元の tool choice を維持するため selector も書き換えます。OpenAI API の仮想 `-pro` モデルでは、まず選択した公開 ID に一致させ、解決後のベース wire-model ID をフォールバックとして使用します。`modelAdapters` は公開 ID、次にベース ID の順に解決し、後者の結果が最終 wire を決めます。未設定のモデルは通常の alias 動作を維持します。 |
 | `annotateEmptyToolOutputs?` | `boolean` | 存在するものの空であるツール結果を、モデルに届く前に短いマーカーへ置き換え、空白の結果が欠落した結果として解釈されないようにします。空文字列とテキストのみのパーツ配列に適用されます。画像、ファイル、暗号化されたパーツには一切手を加えません。組み込みレジストリでは `DeepSeek` のデフォルトが `true` で、それ以外は未設定です。プロバイダーを対象外にするには `false` を設定します。明示的な `false` は、後続の編集でこのフィールドが省略されても保持されます。`PATCH /api/providers?name=<provider>` は `true`、`false`、またはオーバーライドを消去してレジストリのデフォルト動作へ戻すための `null` を受け付けます。 |
-| `reasoningEffortMap?` | `Record<string, string>` |ラベルを推論するためのプロバイダー全体のワイヤ エイリアス。 |
-| `modelReasoningEffortMap?` | `Record<string, Record<string, string>>` |推論ラベルのモデルごとのワイヤ エイリアス。 |
+| `reasoningEffortMap?` | `Record<string, string>` | ラベルを推論するためのプロバイダー全体のワイヤ エイリアス。ラベルを `"__omit__"` にマッピングすると、アップストリームのリクエストから推論フィールドが完全に省略されます（例: ディープ モードに `reasoning_effort` の省略が必要な Ollama モデル向け）。 |
+| `modelReasoningEffortMap?` | `Record<string, Record<string, string>>` | 推論ラベルのモデルごとのワイヤ エイリアス。ラベルを `"__omit__"` にマッピングすると、アップストリームのリクエストから推論フィールドが完全に省略されます。 |
 | `reasoningWireFormat?` | `"gateway-object"` | `reasoning_effort` ではなく `reasoning: { enabled, effort }` を受け取る OpenAI 互換ゲートウェイ用です。ClinePass プリセットが自動設定します。 |
 | `noReasoningModels?` | `string[]` |推論/思考パラメーターを拒否するモデル。 |
 | `noTemperatureModels?` | `string[]` |発信者指定の`temperature`を拒否するモデル。 |

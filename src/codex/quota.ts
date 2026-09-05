@@ -22,6 +22,8 @@ export type StoredAccountQuota = {
    */
   shortPercent?: number;
   shortResetAt?: number;
+  /** Local observation time of shortPercent; unrelated quota/credit updates never refresh it. */
+  shortObservedAt?: number;
   shortWindowSeconds?: number;
   customWindows?: Array<{ label: string; percent: number; resetAt?: number }>;
   resetCredits?: number;
@@ -288,6 +290,7 @@ export function setAccountQuotaFromParsed(
     if (existing?.monthlyResetAt !== undefined) next.monthlyResetAt = existing.monthlyResetAt;
     if (existing?.monthlyIsPrimaryWindow === true) next.monthlyIsPrimaryWindow = true;
     if (existing?.shortPercent !== undefined) next.shortPercent = existing.shortPercent;
+    if (existing?.shortObservedAt !== undefined) next.shortObservedAt = existing.shortObservedAt;
     if (existing?.shortResetAt !== undefined) next.shortResetAt = existing.shortResetAt;
     if (existing?.shortWindowSeconds !== undefined) next.shortWindowSeconds = existing.shortWindowSeconds;
     if (existing?.customWindows !== undefined) next.customWindows = existing.customWindows;
@@ -323,13 +326,17 @@ export function setAccountQuotaFromParsed(
   }
 
   if (snapshotHasShort(quota)) {
-    if (quota.shortPercent !== undefined) next.shortPercent = quota.shortPercent;
+    if (quota.shortPercent !== undefined) {
+      next.shortPercent = quota.shortPercent;
+      if (Number.isFinite(quota.shortPercent)) next.shortObservedAt = next.updatedAt;
+    }
     if (quota.shortResetAt !== undefined) next.shortResetAt = quota.shortResetAt;
     if (quota.shortWindowSeconds !== undefined) next.shortWindowSeconds = quota.shortWindowSeconds;
   } else {
     // Header and reset-credit updates are partial snapshots. Preserve the last full WHAM
     // burst tuple when those updates do not carry enough window metadata to replace it.
     if (existing?.shortPercent !== undefined) next.shortPercent = existing.shortPercent;
+    if (existing?.shortObservedAt !== undefined) next.shortObservedAt = existing.shortObservedAt;
     if (existing?.shortResetAt !== undefined) next.shortResetAt = existing.shortResetAt;
     if (existing?.shortWindowSeconds !== undefined) next.shortWindowSeconds = existing.shortWindowSeconds;
   }
@@ -341,6 +348,68 @@ export function setAccountQuotaFromParsed(
 
   accountQuota.set(accountId, next);
   schedulePersistAccountQuotas();
+  notifyCodexQuotaSnapshot(accountId, next);
+}
+
+/**
+ * Hand a committed snapshot to the optional quota-reset observer.
+ *
+ * Lazy import on purpose. This file is statically reachable from
+ * src/server/responses/core.ts (via codex/auth-context.ts), and
+ * applyAccountQuotaFromUpstreamHeaders runs it once per pooled response. A static import
+ * would load the observer, its config resolution, and its sink registry into every install,
+ * including installs that never enable the feature — the same failure mode
+ * tests/core-lab-boundary.test.ts exists to prevent for src/lab/.
+ *
+ * The previous snapshot is deliberately NOT passed. The observer keeps its own persisted
+ * baseline (see swapLastObservedWindows), so every committed write must reach it — including
+ * the first one, which is what establishes that baseline. An earlier version of this
+ * function skipped the call when the in-map `existing` was undefined; that left the observer
+ * with no baseline to compare against, so the write AFTER a rollover was silently treated as
+ * the first observation and no reset ever fired.
+ *
+ * The snapshot is COPIED synchronously, before the import resolves. `next` is the live map
+ * value and the next write mutates it, so an observation that read it after awaiting could
+ * see a later snapshot than the one it was called for.
+ *
+ * Observations are SERIALIZED through a module-level promise chain, because the baseline
+ * swap must happen in call order. An earlier version awaited two imports and then swapped,
+ * and Bun does not resolve concurrent import() calls in call order: a burst of 21
+ * rising-usage writes (10% -> 90%, no reset at all) arrived reordered and fired a false
+ * "surprise" reset on every run. Worse, the false event CLAIMED the durable idempotence
+ * key, so the genuine reset on that window was then permanently suppressed.
+ *
+ * `pendingObservation` is reassigned SYNCHRONOUSLY here, so each link is queued in call
+ * order and only starts once the previous one has committed its baseline. A FIFO queue
+ * entered after the await would not have fixed it — the enqueue itself would race.
+ */
+let pendingObservation: Promise<void> = Promise.resolve();
+
+function notifyCodexQuotaSnapshot(accountId: string, next: StoredAccountQuota): void {
+  // Copy before the boundary: `next` is the live map value and the following write mutates
+  // it, so an observation that read it after awaiting could see a later snapshot than the
+  // one it was called for.
+  const snapshot = { ...next };
+  pendingObservation = pendingObservation
+    .then(async () => {
+      const observer = await import("../quota/reset-observer");
+      if (!observer.hasQuotaResetSink()) return;
+      const { codexWindowObservations } = await import("../quota/window-mapping");
+      observer.observeQuotaSnapshot({
+        scope: "codex",
+        accountKey: accountId,
+        windows: codexWindowObservations(snapshot),
+      });
+    })
+    .catch(() => {
+      // Detection is best-effort: a quota write must never fail because of it. Swallowing
+      // here also keeps the chain alive — a rejected link would poison every later one.
+    });
+}
+
+/** Await the observation chain. Tests only: production never needs to join it. */
+export function flushQuotaObservationsForTests(): Promise<void> {
+  return pendingObservation;
 }
 
 export function parseUpstreamQuotaHeaders(headers: Headers): Omit<StoredAccountQuota, "updatedAt"> | null {
@@ -449,6 +518,7 @@ export function updateAccountQuota(
     ...(existing?.weeklyResetAt !== undefined ? { weeklyResetAt: existing.weeklyResetAt } : {}),
     ...(existing?.monthlyResetAt !== undefined ? { monthlyResetAt: existing.monthlyResetAt } : {}),
     ...(existing?.shortPercent !== undefined ? { shortPercent: existing.shortPercent } : {}),
+    ...(existing?.shortObservedAt !== undefined ? { shortObservedAt: existing.shortObservedAt } : {}),
     ...(existing?.shortResetAt !== undefined ? { shortResetAt: existing.shortResetAt } : {}),
     ...(existing?.shortWindowSeconds !== undefined ? { shortWindowSeconds: existing.shortWindowSeconds } : {}),
     ...(existing?.customWindows !== undefined ? { customWindows: existing.customWindows } : {}),
@@ -474,6 +544,12 @@ export function updateAccountQuota(
 
   accountQuota.set(accountId, quota);
   schedulePersistAccountQuotas();
+  // Observed like the other committed write. This function has no in-repo caller today, but it
+  // is re-exported as public API through src/codex/auth-api.ts, so a future caller would
+  // otherwise bypass detection AND leave a stale baseline that corrupts the next real diff.
+  // The credits-only path at setAccountQuotaFromParsed deliberately does not notify; this one
+  // writes window percentages and deadlines, so it must.
+  notifyCodexQuotaSnapshot(accountId, quota);
 }
 
 function hydrateAccountQuotasFromDisk(): void {
@@ -523,13 +599,37 @@ export function listAccountQuotas(): IterableIterator<[string, StoredAccountQuot
   return accountQuota.entries();
 }
 
+/**
+ * Tell the observer to drop the baseline for a row that was deliberately cleared.
+ *
+ * Queued on the same chain as observations so it cannot overtake an in-flight one and be
+ * immediately re-established by it. Without this, reauth of a used account left the observer
+ * holding the pre-clear percentages and the first fresh write fired a false surprise reset
+ * (measured 91% -> 0%).
+ */
+function forgetCodexQuotaBaseline(accountId?: string): void {
+  pendingObservation = pendingObservation
+    .then(async () => {
+      const observer = await import("../quota/reset-observer");
+      observer.forgetQuotaBaseline({
+        scope: "codex",
+        ...(accountId !== undefined ? { accountKey: accountId } : {}),
+      });
+    })
+    .catch(() => {
+      // Best-effort; a failure can only cost a re-baseline.
+    });
+}
+
 export function clearAccountQuota(accountId?: string): void {
   if (accountId) {
     accountQuota.delete(accountId);
     schedulePersistAccountQuotas();
+    forgetCodexQuotaBaseline(accountId);
     return;
   }
   accountQuota.clear();
+  forgetCodexQuotaBaseline();
   diskHydrated = false;
   if (persistTimer) {
     clearTimeout(persistTimer);

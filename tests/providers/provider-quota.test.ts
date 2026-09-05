@@ -13,9 +13,11 @@ import { saveCredential } from "../../src/oauth/store";
 import {
   clearProviderQuotaCache,
   fetchProviderQuotaReports,
+  parseOllamaCloudQuota,
   parseXaiCreditsResponse,
   QUOTA_RESPONSE_MAX_BYTES,
   readProviderQuotaJsonForTests,
+  setAntigravityAccountQuotaTransportForTests,
   setProviderQuotaBeforePublishForTests,
 } from "../../src/providers/quota";
 import type { OcxConfig } from "../../src/types";
@@ -92,6 +94,7 @@ afterEach(() => {
   clearAccountQuota();
   clearProviderQuotaCache();
   setProviderQuotaBeforePublishForTests(null);
+  setAntigravityAccountQuotaTransportForTests(null);
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
@@ -199,6 +202,14 @@ describe("fetchProviderQuotaReports", () => {
     await saveCredential("cursor", { access: "cursor-access-secret", refresh: "cursor-refresh-secret", expires: Date.now() + 3600_000 });
     await saveCredential("google-antigravity", { access: "agy-access-secret", refresh: "agy-refresh-secret", expires: Date.now() + 3600_000, projectId: "agy-project-secret" });
     await saveCredential("kimi", { access: "kimi-access-secret", refresh: "kimi-refresh-secret", expires: Date.now() + 3600_000 });
+
+    // The Antigravity summary probe is pinned to Google's host through the provider-outbound
+    // transport and never touches globalThis.fetch; without this seam the test would make a
+    // real network request. A 404 here exercises the fetchAvailableModels fallback below.
+    setAntigravityAccountQuotaTransportForTests({
+      resolveAddresses: async () => ({ hostname: "daily-cloudcode-pa.googleapis.com", addresses: [{ address: "142.250.0.1", family: 4 }], privateNetwork: false }),
+      pinnedPost: async () => new Response("not found", { status: 404 }),
+    });
 
     const seen: { url: string; authorization?: string; body?: string }[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -2800,5 +2811,397 @@ describe("fetchProviderQuotaReports", () => {
     } as OcxConfig;
     const pruned = await fetchProviderQuotaReports(disabledConfig, true);
     expect(pruned.reports).toEqual([]);
+  });
+
+  test("Google Antigravity maps 5-hour and weekly quota from retrieveUserQuotaSummary", async () => {
+    await saveCredential("google-antigravity", {
+      access: "agy-summary-access",
+      refresh: "agy-summary-refresh",
+      expires: Date.now() + 3600_000,
+      projectId: "agy-summary-project",
+    });
+
+    const seen: Array<{ url: string; auth?: string; body?: string }> = [];
+    globalThis.fetch = (async () => { throw new Error("plain fetch must not be used for account bearers"); }) as typeof fetch;
+    setAntigravityAccountQuotaTransportForTests({
+      resolveAddresses: async () => ({ hostname: "daily-cloudcode-pa.googleapis.com", addresses: [{ address: "142.250.0.1", family: 4 }], privateNetwork: false }),
+      pinnedPost: async (url, _pinned, body, _signal, requestOptions) => {
+        const auth = new Headers(requestOptions?.headers).get("authorization") ?? undefined;
+        seen.push({ url, auth, body: typeof body === "string" ? body : undefined });
+        if (!url.endsWith("retrieveUserQuotaSummary")) return new Response("not found", { status: 404 });
+        return new Response(JSON.stringify({
+          groups: [
+            {
+              displayName: "Gemini Models",
+              description: "Models within this group: Gemini Flash, Gemini Pro",
+              buckets: [
+                {
+                  bucketId: "gemini-weekly",
+                  displayName: "Weekly Limit Remaining",
+                  window: "weekly",
+                  resetTime: "2026-09-11T02:25:41Z",
+                  remainingFraction: 0.88,
+                },
+                {
+                  bucketId: "gemini-5h",
+                  displayName: "Five Hour Limit Remaining",
+                  window: "5h",
+                  resetTime: "2026-09-04T12:25:41Z",
+                  remainingFraction: 0.75,
+                },
+              ],
+            },
+            {
+              displayName: "Claude and GPT models",
+              description: "Models within this group: Claude Opus, Claude Sonnet, GPT-OSS",
+              buckets: [
+                {
+                  bucketId: "3p-weekly",
+                  displayName: "Weekly Limit Remaining",
+                  window: "weekly",
+                  resetTime: "2026-09-04T10:57:22Z",
+                  remainingFraction: 0.95,
+                },
+                {
+                  bucketId: "3p-5h",
+                  displayName: "Five Hour Limit Remaining",
+                  window: "5h",
+                  resetTime: "2026-09-04T12:54:45Z",
+                  remainingFraction: 1.0,
+                },
+              ],
+            },
+          ],
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      },
+    });
+
+    const config = {
+      defaultProvider: "google-antigravity",
+      providers: {
+        "google-antigravity": {
+          adapter: "google",
+          authMode: "oauth",
+          baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+        },
+      },
+    } as unknown as OcxConfig;
+
+    const result = await fetchProviderQuotaReports(config, true);
+    expect(result.reports).toHaveLength(1);
+    const report = result.reports[0]!;
+    expect(report.provider).toBe("google-antigravity");
+    expect(report.source).toBe("google-antigravity:retrieveUserQuotaSummary");
+    expect(report.quota.customWindows).toEqual([
+      { label: "Gem", percent: 25, resetAt: Date.parse("2026-09-04T12:25:41Z") },
+      { label: "Gem (Weekly)", percent: 12, resetAt: Date.parse("2026-09-11T02:25:41Z") },
+      { label: "Cla", percent: 0, resetAt: Date.parse("2026-09-04T12:54:45Z") },
+      { label: "Cla (Weekly)", percent: 5, resetAt: Date.parse("2026-09-04T10:57:22Z") },
+    ]);
+    expect(seen[0]?.url).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary");
+    expect(seen[0]?.auth).toBe("Bearer agy-summary-access");
+    expect(seen[0]?.body).toBe(JSON.stringify({ project: "agy-summary-project" }));
+  });
+
+  test("Google Antigravity supports nested remaining object and deduplicates custom windows", async () => {
+    await saveCredential("google-antigravity", {
+      access: "agy-nested-access",
+      refresh: "agy-nested-refresh",
+      expires: Date.now() + 3600_000,
+      projectId: "agy-nested-project",
+    });
+
+    globalThis.fetch = (async () => { throw new Error("plain fetch must not be used for account bearers"); }) as typeof fetch;
+    setAntigravityAccountQuotaTransportForTests({
+      resolveAddresses: async () => ({ hostname: "daily-cloudcode-pa.googleapis.com", addresses: [{ address: "142.250.0.1", family: 4 }], privateNetwork: false }),
+      pinnedPost: async (url) => {
+        if (!url.endsWith("retrieveUserQuotaSummary")) return new Response("not found", { status: 404 });
+        return new Response(JSON.stringify({
+          groups: [
+            {
+              displayName: "Gemini Models",
+              buckets: [
+                {
+                  bucketId: "gemini-weekly",
+                  window: "weekly",
+                  resetTime: "2026-09-11T00:00:00Z",
+                  remaining: { remainingFraction: 0.70 },
+                },
+                {
+                  bucketId: "gemini-5h",
+                  window: "5h",
+                  resetTime: "2026-09-04T08:00:00Z",
+                  remaining: { remainingFraction: 0.60 },
+                },
+              ],
+            },
+            {
+              displayName: "Claude and GPT models",
+              buckets: [
+                {
+                  bucketId: "claude-3p-5h-1",
+                  displayName: "Claude 5 Hour Limit",
+                  window: "5h",
+                  resetTime: "2026-09-04T09:00:00Z",
+                  remaining: { remainingFraction: 0.90 },
+                },
+                {
+                  bucketId: "claude-3p-5h-duplicate",
+                  displayName: "GPT 5 Hour Limit",
+                  window: "5h",
+                  resetTime: "2026-09-04T09:30:00Z",
+                  remaining: { remainingFraction: 0.50 },
+                },
+                {
+                  bucketId: "claude-3p-weekly",
+                  displayName: "Claude Weekly Limit",
+                  window: "weekly",
+                  resetTime: "2026-09-11T09:00:00Z",
+                  remaining: { remainingFraction: 0.85 },
+                },
+              ],
+            },
+          ],
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      },
+    });
+
+    const config = {
+      defaultProvider: "google-antigravity",
+      providers: {
+        "google-antigravity": {
+          adapter: "google",
+          authMode: "oauth",
+          baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+        },
+      },
+    } as unknown as OcxConfig;
+
+    const result = await fetchProviderQuotaReports(config, true);
+    expect(result.reports).toHaveLength(1);
+    const report = result.reports[0]!;
+    expect(report.quota.customWindows).toEqual([
+      { label: "Gem", percent: 40, resetAt: Date.parse("2026-09-04T08:00:00Z") },
+      { label: "Gem (Weekly)", percent: 30, resetAt: Date.parse("2026-09-11T00:00:00Z") },
+      { label: "Cla", percent: 10, resetAt: Date.parse("2026-09-04T09:00:00Z") },
+      { label: "Cla (Weekly)", percent: 15, resetAt: Date.parse("2026-09-11T09:00:00Z") },
+    ]);
+  });
+
+  // The provider-level Antigravity probe carries the stored account bearer. A configured
+  // `baseUrl` is a routing choice for model requests, not a second source of Google's
+  // accounting, so the summary probe stays pinned to Google's own host — the same guarantee
+  // `fetchAntigravityUsageQuota` already makes for the per-account path.
+  test("Google Antigravity does not send the account bearer to a configured baseUrl", async () => {
+    await saveCredential("google-antigravity", {
+      access: "agy-pinned-access",
+      refresh: "agy-pinned-refresh",
+      expires: Date.now() + 3600_000,
+      projectId: "agy-pinned-project",
+    });
+
+    const plainFetchUrls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      plainFetchUrls.push(String(input));
+      throw new Error("plain fetch must not be used for account bearers");
+    }) as typeof fetch;
+
+    const seen: Array<{ url: string; auth?: string; hostname: string }> = [];
+    setAntigravityAccountQuotaTransportForTests({
+      resolveAddresses: async (url: string) => {
+        seen.push({ url, hostname: new URL(url).hostname });
+        return { hostname: new URL(url).hostname, addresses: [{ address: "142.250.0.1", family: 4 }], privateNetwork: false };
+      },
+      pinnedPost: async (url, _pinned, _body, _signal, requestOptions) => {
+        seen.push({ url, auth: new Headers(requestOptions?.headers).get("authorization") ?? undefined, hostname: new URL(url).hostname });
+        if (!url.endsWith("retrieveUserQuotaSummary")) return new Response("not found", { status: 404 });
+        return new Response(JSON.stringify({
+          groups: [{
+            displayName: "Gemini Models",
+            buckets: [{ bucketId: "gemini-5h", window: "5h", resetTime: "2026-09-04T08:00:00Z", remainingFraction: 0.6 }],
+          }],
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      },
+    });
+
+    const result = await fetchProviderQuotaReports({
+      defaultProvider: "google-antigravity",
+      providers: {
+        "google-antigravity": {
+          adapter: "google",
+          authMode: "oauth",
+          baseUrl: "http://127.0.0.1:1/",
+        },
+      },
+    } as unknown as OcxConfig, true);
+
+    expect(result.reports).toHaveLength(1);
+    expect(result.reports[0]!.source).toBe("google-antigravity:retrieveUserQuotaSummary");
+    // Every bearer-carrying request went to Google's own host, not the configured loopback base.
+    expect(seen.map(entry => entry.hostname)).toEqual(["daily-cloudcode-pa.googleapis.com", "daily-cloudcode-pa.googleapis.com"]);
+    expect(seen.find(entry => entry.auth)?.url).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary");
+    expect(seen.find(entry => entry.auth)?.auth).toBe("Bearer agy-pinned-access");
+    expect(plainFetchUrls).toEqual([]);
+  });
+
+  test("Google Antigravity refuses a redirected summary response", async () => {
+    await saveCredential("google-antigravity", {
+      access: "agy-redirect-access",
+      refresh: "agy-redirect-refresh",
+      expires: Date.now() + 3600_000,
+      projectId: "agy-redirect-project",
+    });
+    globalThis.fetch = (async () => { throw new Error("plain fetch must not be used for account bearers"); }) as typeof fetch;
+
+    const posted: string[] = [];
+    setAntigravityAccountQuotaTransportForTests({
+      resolveAddresses: async () => ({ hostname: "daily-cloudcode-pa.googleapis.com", addresses: [{ address: "142.250.0.1", family: 4 }], privateNetwork: false }),
+      pinnedPost: async (url) => {
+        posted.push(url);
+        return new Response(null, { status: 302, headers: { location: "http://127.0.0.1/" } });
+      },
+    });
+
+    const result = await fetchProviderQuotaReports({
+      defaultProvider: "google-antigravity",
+      providers: {
+        "google-antigravity": {
+          adapter: "google",
+          authMode: "oauth",
+          baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+        },
+      },
+    } as unknown as OcxConfig, true);
+
+    expect(result.reports).toEqual([]);
+    // The redirect short-circuits the summary probe; the redirect target is never fetched.
+    expect(posted).toEqual(["https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"]);
+  });
+
+  test("Ollama Cloud maps 5-hour session and weekly windows from /api/usage (legacy plan)", async () => {
+    const seen: Array<{ url: string; authorization?: string; redirect?: RequestRedirect }> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const headers = init?.headers as Record<string, string> | undefined;
+      seen.push({ url, authorization: headers?.Authorization, redirect: init?.redirect });
+      return new Response(JSON.stringify({
+        activity: { cost: "0.00000", period: { type: "last_4_weeks" }, models: [] },
+        limits: {
+          session: { usage: 0.091, models: [{ name: "glm-5.3-flash", request_count: 228 }] },
+          weekly: { usage: 0.592, models: [{ name: "glm-5.3", request_count: 2572 }] },
+        },
+      }), { status: 200 });
+    }) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports(
+      keyQuotaConfig("ollama-cloud", "https://ollama.com/v1"),
+      true,
+    );
+
+    expect(result.reports).toHaveLength(1);
+    expect(result.reports[0]?.source).toBe("ollama-cloud:usage");
+    expect(result.reports[0]?.quota).toMatchObject({
+      fiveHourPercent: 9.1,
+      weeklyPercent: 59.2,
+    });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.url).toBe("https://ollama.com/api/usage");
+    expect(seen[0]?.authorization).toBe("Bearer ollama-cloud-secret");
+    expect(seen[0]?.redirect).toBe("error");
+  });
+
+  test("Ollama Cloud maps monthly window from /api/usage (migrated plan)", async () => {
+    globalThis.fetch = (async () => {
+      return new Response(JSON.stringify({
+        activity: { cost: "1.68054", period: { type: "last_4_weeks" } },
+        limits: {
+          monthly: { usage: 0.004, models: [{ name: "glm-5.3-flash", request_count: 147 }] },
+        },
+      }), { status: 200 });
+    }) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports(
+      keyQuotaConfig("ollama-cloud", "https://ollama.com/v1"),
+      true,
+    );
+
+    expect(result.reports).toHaveLength(1);
+    expect(result.reports[0]?.source).toBe("ollama-cloud:usage");
+    expect(result.reports[0]?.quota).toMatchObject({
+      monthlyPercent: 0.4,
+    });
+    expect(result.reports[0]?.quota.fiveHourPercent).toBeUndefined();
+    expect(result.reports[0]?.quota.weeklyPercent).toBeUndefined();
+  });
+
+  test("Ollama Cloud maps combined windows when both legacy and migrated limits exist", async () => {
+    globalThis.fetch = (async () => {
+      return new Response(JSON.stringify({
+        limits: {
+          session: { usage: 0.1 },
+          weekly: { usage: 0.2 },
+          monthly: { usage: 0.3 },
+        },
+      }), { status: 200 });
+    }) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports(
+      keyQuotaConfig("ollama-cloud", "https://ollama.com/v1"),
+      true,
+    );
+
+    expect(result.reports).toHaveLength(1);
+    expect(result.reports[0]?.quota).toMatchObject({
+      fiveHourPercent: 10,
+      weeklyPercent: 20,
+      monthlyPercent: 30,
+    });
+  });
+
+  test("Ollama Cloud treats 404 as a no-report, not terminal", async () => {
+    globalThis.fetch = (async () => new Response("not found", { status: 404 })) as typeof fetch;
+    const config = keyQuotaConfig("ollama-cloud", "https://ollama.com/v1");
+
+    const result = await fetchProviderQuotaReports(config, true);
+    expect(result.reports).toEqual([]);
+  });
+
+  test("Ollama Cloud treats 401 as terminal failure (invalid key)", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({ error: "invalid credentials" }), { status: 401 })) as typeof fetch;
+    const config = keyQuotaConfig("ollama-cloud", "https://ollama.com/v1");
+
+    const result = await fetchProviderQuotaReports(config, true);
+    expect(result.reports).toEqual([]);
+  });
+
+  test("Ollama Cloud never sends the key to a non-canonical base URL", async () => {
+    const seen: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      seen.push(String(input));
+      return new Response("unexpected", { status: 500 });
+    }) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports(
+      keyQuotaConfig("ollama-cloud", "https://attacker.example/v1"),
+      true,
+    );
+
+    expect(result.reports).toEqual([]);
+    expect(seen).toEqual([]);
+  });
+
+  test("parseOllamaCloudQuota handles edge cases", () => {
+    expect(parseOllamaCloudQuota(null)).toBeNull();
+    expect(parseOllamaCloudQuota({})).toBeNull();
+    expect(parseOllamaCloudQuota({ limits: {} })).toBeNull();
+    expect(parseOllamaCloudQuota({ limits: { session: { usage: 0 } } })).toMatchObject({
+      fiveHourPercent: 0,
+    });
+    expect(parseOllamaCloudQuota({ limits: { session: { usage: 1 } } })).toMatchObject({
+      fiveHourPercent: 100,
+    });
+    expect(parseOllamaCloudQuota({ limits: { session: { usage: 1.25 } } })).toMatchObject({
+      fiveHourPercent: 100,
+    });
   });
 });

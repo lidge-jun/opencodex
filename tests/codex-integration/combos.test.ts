@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +6,8 @@ import {
   advanceComboAfterFailure,
   clearComboSelectionState,
   clearComboTargetCooldowns,
+  earliestComboCooldownExpiry,
+  pickComboTargetWithWait,
   comboAliasIssues,
   comboConfigError,
   comboConfigIssues,
@@ -168,6 +170,12 @@ async function responseJson(response: Response | null): Promise<Record<string, u
   expect(response).not.toBeNull();
   return response!.json() as Promise<Record<string, unknown>>;
 }
+
+beforeEach(() => {
+  clearComboSelectionState();
+  clearComboTargetCooldowns();
+  clearCachedProviderQuotas();
+});
 
 afterEach(() => {
   clearComboSelectionState();
@@ -423,6 +431,31 @@ describe("combo target cooldowns", () => {
     expect(isComboTargetInCooldown("other", target, 1_050)).toBe(false);
   });
 
+  test("gives immediate Retry-After directives precedence over configured cooldowns", () => {
+    const now = Date.parse("2026-07-18T00:00:00.000Z");
+    const pastDate = new Date(now - 1_000).toUTCString();
+    coolComboTarget("retry-zero", target, { now, retryAfter: "0", cooldownMs: 5_000 });
+    coolComboTarget("retry-past-date", target, { now, retryAfter: pastDate, cooldownMs: 5_000 });
+    expect(isComboTargetInCooldown("retry-zero", target, now)).toBe(true);
+    expect(isComboTargetInCooldown("retry-zero", target, now + 1)).toBe(false);
+    expect(isComboTargetInCooldown("retry-past-date", target, now)).toBe(true);
+    expect(isComboTargetInCooldown("retry-past-date", target, now + 1)).toBe(false);
+  });
+
+  test("uses reset-derived cooldown before combo cooldownMs and default cooldown", () => {
+    const now = 1_000_000;
+    const resetAt = Math.floor((now + 20_000) / 1_000);
+    coolComboTarget("reset-wins", target, { now, resetAt, cooldownMs: 5_000 });
+    coolComboTarget("configured-wins", target, { now, cooldownMs: 5_000 });
+    coolComboTarget("default-wins", target, { now });
+    expect(isComboTargetInCooldown("reset-wins", target, now + 5_000)).toBe(true);
+    expect(isComboTargetInCooldown("reset-wins", target, now + 20_000)).toBe(false);
+    expect(isComboTargetInCooldown("configured-wins", target, now + 5_000 - 1)).toBe(true);
+    expect(isComboTargetInCooldown("configured-wins", target, now + 5_000)).toBe(false);
+    expect(isComboTargetInCooldown("default-wins", target, now + 60_000 - 1)).toBe(true);
+    expect(isComboTargetInCooldown("default-wins", target, now + 60_000)).toBe(false);
+  });
+
   test("uses a short cooldown for request-rate 1302 without Retry-After", () => {
     coolComboTarget("free", target, {
       now: 1_000,
@@ -431,6 +464,30 @@ describe("combo target cooldowns", () => {
     });
     expect(isComboTargetInCooldown("free", target, 1_000 + COMBO_REQUEST_RATE_COOLDOWN_MS - 1)).toBe(true);
     expect(isComboTargetInCooldown("free", target, 1_000 + COMBO_REQUEST_RATE_COOLDOWN_MS)).toBe(false);
+
+    const config = baseConfig({ combos: { free: VALID_COMBO } });
+    const pick = pickComboTarget(config, "free", { now: 1_000 })!;
+    advanceComboAfterFailure(config, pick, {
+      now: 1_000,
+      status: 429,
+      code: "1302",
+      message: "Rate limit reached for requests",
+    });
+    expect(isComboTargetInCooldown("free", pick.target, 1_000 + COMBO_REQUEST_RATE_COOLDOWN_MS - 1)).toBe(true);
+    expect(isComboTargetInCooldown("free", pick.target, 1_000 + COMBO_REQUEST_RATE_COOLDOWN_MS)).toBe(false);
+
+    const configured = baseConfig({
+      combos: { free: { ...VALID_COMBO, cooldownMs: 7_000 } },
+    });
+    const configuredPick = pickComboTarget(configured, "free", { now: 1_000 })!;
+    advanceComboAfterFailure(configured, configuredPick, {
+      now: 1_000,
+      status: 429,
+      code: "1302",
+      message: "Rate limit reached for requests",
+    });
+    expect(isComboTargetInCooldown("free", configuredPick.target, 1_000 + 7_000 - 1)).toBe(true);
+    expect(isComboTargetInCooldown("free", configuredPick.target, 1_000 + 7_000)).toBe(false);
   });
 
   test("keeps the default cooldown for usage-window 1308", () => {
@@ -470,6 +527,228 @@ describe("combo target cooldowns", () => {
     });
     expect(response.status).toBe(503);
     expect(response.headers.get("Retry-After")).toBe("5");
+  });
+
+  test("applies Retry-After before reset-derived and combo cooldown values", () => {
+    const now = 1_000_000;
+    coolComboTarget("retry", target, {
+      now,
+      retryAfter: "10",
+      cooldownMs: 5_000,
+    });
+    expect(isComboTargetInCooldown("retry", target, now + 10_000 - 1)).toBe(true);
+    expect(isComboTargetInCooldown("retry", target, now + 10_000)).toBe(false);
+
+    const resetAt = Math.floor((now + 20_000) / 1_000);
+    coolComboTarget("reset", target, {
+      now,
+      resetAt,
+      cooldownMs: 5_000,
+    });
+    expect(isComboTargetInCooldown("reset", target, now + 20_000 - 1)).toBe(true);
+    expect(isComboTargetInCooldown("reset", target, now + 20_000)).toBe(false);
+
+    const config = baseConfig({
+      combos: { free: { ...VALID_COMBO, cooldownMs: 5_000 } },
+    });
+    const pick = pickComboTarget(config, "free", { now })!;
+    advanceComboAfterFailure(config, pick, {
+      now,
+      retryAfter: "10",
+      resetAt,
+    });
+    expect(isComboTargetInCooldown("free", pick.target, now + 10_000 - 1)).toBe(true);
+    expect(isComboTargetInCooldown("free", pick.target, now + 10_000)).toBe(false);
+  });
+
+  test("uses combo cooldownMs instead of the 60-second default", () => {
+    // The production path passes this normalized combo value to coolComboTarget after a failure.
+    const config = baseConfig({ combos: { free: { ...VALID_COMBO, cooldownMs: 5_000 } } });
+    expect(normalizeComboConfig(config.combos!.free!).cooldownMs).toBe(5_000);
+    expect(normalizeComboConfig(config.combos!.free!).waitForCooldownMs).toBe(0);
+
+    const now = 1_000_000;
+    coolComboTarget("short", target, { now, cooldownMs: 5_000 });
+    coolComboTarget("default", target, { now });
+    expect(isComboTargetInCooldown("short", target, now + 5_000 - 1)).toBe(true);
+    expect(isComboTargetInCooldown("short", target, now + 5_000)).toBe(false);
+    expect(isComboTargetInCooldown("default", target, now + 5_000)).toBe(true);
+    expect(isComboTargetInCooldown("default", target, now + 60_000 - 1)).toBe(true);
+    expect(isComboTargetInCooldown("default", target, now + 60_000)).toBe(false);
+  });
+
+  test("finds the earliest cooldown expiry and waits within the budget", async () => {
+    const config = baseConfig({
+      combos: {
+        free: {
+          targets: [
+            { provider: "a", model: "m1" },
+            { provider: "b", model: "m2" },
+          ],
+          waitForCooldownMs: 10_000,
+        },
+      },
+    });
+    const now = 1_000_000;
+    coolComboTarget("free", config.combos!.free!.targets[0]!, { now, cooldownMs: 3_000 });
+    coolComboTarget("free", config.combos!.free!.targets[1]!, { now, cooldownMs: 8_000 });
+    expect(earliestComboCooldownExpiry("free", config.combos!.free!.targets, now)).toBe(now + 3_000);
+
+    const sleeps: number[] = [];
+    const pick = await pickComboTargetWithWait(config, "free", {
+      now,
+      waitForCooldownMs: 10_000,
+      sleep: async ms => { sleeps.push(ms); },
+    });
+    expect(sleeps).toHaveLength(1);
+    expect(sleeps[0]).toBeCloseTo(3_000, -2);
+    expect(pick?.target.provider).toBe("a");
+    expect(earliestComboCooldownExpiry("free", config.combos!.free!.targets, now + 3_000)).toBe(now + 8_000);
+    expect(earliestComboCooldownExpiry("free", [{ provider: "c", model: "m3" }], now)).toBeUndefined();
+  });
+
+  test("logs and waits for the target with the earliest cooldown expiry", async () => {
+    const config = baseConfig({
+      combos: {
+        free: {
+          targets: [
+            { provider: "a", model: "m1" },
+            { provider: "b", model: "m2" },
+          ],
+          waitForCooldownMs: 10_000,
+        },
+      },
+    });
+    const now = 1_000_000;
+    coolComboTarget("free", config.combos!.free!.targets[0]!, { now, cooldownMs: 8_000 });
+    coolComboTarget("free", config.combos!.free!.targets[1]!, { now, cooldownMs: 3_000 });
+    const sleeps: number[] = [];
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const pick = await pickComboTargetWithWait(config, "free", {
+        now,
+        waitForCooldownMs: 10_000,
+        sleep: async ms => { sleeps.push(ms); },
+      });
+      expect(sleeps).toEqual([3_000]);
+      expect(pick?.target).toMatchObject({ provider: "b", model: "m2" });
+      expect(warning).toHaveBeenCalledWith(
+        "[combo] free: all targets cooling, waiting 3000ms for b/m2",
+      );
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
+  test("returns null when real sleepWithAbort rejects after an abort", async () => {
+    const config = baseConfig({
+      combos: {
+        free: {
+          targets: [{ provider: "a", model: "m1" }],
+          waitForCooldownMs: 100,
+        },
+      },
+    });
+    const now = Date.now();
+    coolComboTarget("free", target, { now, cooldownMs: 25 });
+    const abort = new AbortController();
+    const pending = pickComboTargetWithWait(config, "free", {
+      now,
+      waitForCooldownMs: 100,
+      abortSignal: abort.signal,
+    });
+    setTimeout(() => abort.abort(new Error("test abort")), 5);
+    expect(await pending).toBeNull();
+  });
+
+  test("fails closed without waiting and honors abort during injected sleep", async () => {
+    const config = baseConfig({
+      combos: {
+        free: {
+          targets: [{ provider: "a", model: "m1" }],
+          waitForCooldownMs: 10_000,
+        },
+      },
+    });
+    const now = 1_000_000;
+    coolComboTarget("free", target, { now, cooldownMs: 3_000 });
+    const noWait: number[] = [];
+    expect(await pickComboTargetWithWait(config, "free", {
+      now,
+      waitForCooldownMs: 0,
+      sleep: async ms => { noWait.push(ms); },
+    })).toBeNull();
+    expect(noWait).toEqual([]);
+
+    const abort = new AbortController();
+    let slept = false;
+    const pending = pickComboTargetWithWait(config, "free", {
+      now,
+      waitForCooldownMs: 10_000,
+      abortSignal: abort.signal,
+      sleep: async () => {
+        slept = true;
+        abort.abort();
+      },
+    });
+    expect(await pending).toBeNull();
+    expect(slept).toBe(true);
+  });
+
+  test("does not wait for cooling targets with exhausted provider quota", async () => {
+    const now = 50_000;
+    const config = baseConfig({
+      combos: {
+        free: {
+          targets: [{ provider: "a", model: "m1" }],
+          waitForCooldownMs: 5_000,
+        },
+      },
+    });
+    setCachedProviderQuotaForTests("a", {
+      monthlyPercent: 100,
+      monthlyResetAt: now + 14 * 24 * 60 * 60_000,
+      updatedAt: now,
+    });
+    coolComboTarget("free", target, { now, cooldownMs: 1_000 });
+    const sleeps: number[] = [];
+    expect(await pickComboTargetWithWait(config, "free", {
+      now,
+      waitForCooldownMs: 5_000,
+      sleep: async ms => { sleeps.push(ms); },
+    })).toBeNull();
+    expect(sleeps).toEqual([]);
+  });
+
+  test("fails closed without sleeping when cooldown expiry exceeds the wait budget", async () => {
+    const config = baseConfig({
+      combos: {
+        free: {
+          targets: [{ provider: "a", model: "m1" }],
+          waitForCooldownMs: 10_000,
+        },
+      },
+    });
+    const now = 1_000_000;
+    coolComboTarget("free", target, { now, cooldownMs: 10_000 });
+    const sleeps: number[] = [];
+    expect(await pickComboTargetWithWait(config, "free", {
+      now,
+      waitForCooldownMs: 1_000,
+      sleep: async ms => { sleeps.push(ms); },
+    })).toBeNull();
+    expect(sleeps).toEqual([]);
+  });
+
+  test("applies combo cooldownMs to a failure-derived cooldown", () => {
+    const config = baseConfig({
+      combos: { free: { ...VALID_COMBO, cooldownMs: 5_000 } },
+    });
+    const combo = getCombo(config, "free")!;
+    const pick = pickComboTarget(config, "free")!;
+    advanceComboAfterFailure(config, pick, { now: 1_000_000 });
+    expect(isComboTargetInCooldown("free", combo.targets[0]!, 1_000_000 + 5_000 - 1)).toBe(true);
+    expect(isComboTargetInCooldown("free", combo.targets[0]!, 1_000_000 + 5_000)).toBe(false);
   });
 });
 
@@ -511,15 +790,19 @@ describe("combo failure policy and advancement", () => {
     expect(comboFailureDecision(413, "request too large")).toBe("stop");
   });
 
-  test("provider-scoped free-tier and monthly quota failures hop without weakening generic 400 handling", () => {
+  test("free-tier and monthly quota failures hop with the right scope, without weakening generic 400 handling", () => {
     const orca = JSON.stringify({ error: {
       type: "invalid_request_error",
       code: "free_rate_limited",
       message: "This prompt is longer than the free tier allows for a single request.",
     }});
     expect(comboFailureDecision(400, orca, { code: "free_rate_limited" })).toBe("hop");
-    expect(comboFailureCooldownScope(400, orca, { code: "free_rate_limited" })).toBe("provider");
+    // `free_rate_limited` is a PER-REQUEST cap ("longer than the free tier allows for a single
+    // request"), so it must not cool the provider for every other combo: a shorter prompt would
+    // still have been served. It keeps its hop verdict but records no cooldown evidence.
+    expect(comboFailureCooldownScope(400, orca, { code: "free_rate_limited" })).toBe("none");
     expect(comboFailureDecision(400, "ordinary invalid request", { code: "invalid_request_error" })).toBe("stop");
+    // The account-window quota cap is genuine provider-wide evidence and keeps its scope.
     expect(comboFailureCooldownScope(429, "Monthly usage limit reached. Resets in 14 days.", {
       code: "GoUsageLimitError",
     })).toBe("provider");
@@ -976,6 +1259,27 @@ describe("combo validation and normalization", () => {
     }
   });
 
+  test("validates cooldown knobs and supplies sparse-safe defaults", () => {
+    const providers = baseConfig().providers;
+    const cooldownValues: unknown[] = [0, 1.5, 600_001, -1, "5000"];
+    for (const value of cooldownValues) {
+      expect(comboConfigIssues("free", { ...VALID_COMBO, cooldownMs: value }, providers)).toEqual(
+        expect.arrayContaining([expect.objectContaining({ path: ["cooldownMs"] })]),
+      );
+    }
+    const waitValues: unknown[] = [1.5, 600_001, -1, "5000"];
+    for (const value of waitValues) {
+      expect(comboConfigIssues("free", { ...VALID_COMBO, waitForCooldownMs: value }, providers)).toEqual(
+        expect.arrayContaining([expect.objectContaining({ path: ["waitForCooldownMs"] })]),
+      );
+    }
+    expect(comboConfigIssues("free", { ...VALID_COMBO, waitForCooldownMs: 0 }, providers))
+      .not.toEqual(expect.arrayContaining([expect.objectContaining({ path: ["waitForCooldownMs"] })]));
+    const normalized = normalizeComboConfig(VALID_COMBO);
+    expect(normalized.cooldownMs).toBeUndefined();
+    expect(normalized.waitForCooldownMs).toBe(0);
+  });
+
   test("normalizes valid values and returns defensive default efforts", () => {
     expect(normalizeComboConfig({
       defaultEffort: "high",
@@ -983,6 +1287,7 @@ describe("combo validation and normalization", () => {
     })).toEqual({
       strategy: "failover",
       stickyLimit: 1,
+      waitForCooldownMs: 0,
       defaultEffort: "high",
       reasoningEffortMode: "strict",
       imageInput: "auto",

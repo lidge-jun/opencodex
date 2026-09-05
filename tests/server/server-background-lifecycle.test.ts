@@ -15,7 +15,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
-import { startServer } from "../../src/server";
+import { startServer, type StartServerDeps } from "../../src/server";
+import { registerStateSweepAfterTick } from "../../src/lib/state-store-sweeper";
 import { getActiveMemoryWatchdog } from "../../src/server/memory-watchdog";
 import {
   getStorageCleanupPolicyJobState,
@@ -40,6 +41,7 @@ import {
   type IsolatedCodexHome,
 } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { INTERNAL_DEADLINE_MS } from "../helpers/test-budget";
 
 type StartedServer = ReturnType<typeof startServer>;
 type IntervalTimer = ReturnType<typeof setInterval>;
@@ -68,8 +70,8 @@ function baseConfig(storageCleanupPolicy?: OcxConfig["storageCleanupPolicy"]): O
   } as OcxConfig;
 }
 
-function trackedStart(port = 0): StartedServer {
-  const server = startServer(port);
+function trackedStart(port = 0, deps: StartServerDeps = {}): StartedServer {
+  const server = startServer(port, deps);
   servers.add(server);
   return server;
 }
@@ -88,6 +90,7 @@ function loopKindFromStack(stack: string): LoopKind | null {
 
 function installBackgroundTimerProbe(): {
   active(kind: LoopKind): number;
+  tick(kind: LoopKind): void;
   startupTimersStarted(): number;
   startupTimersCleared(): number;
   restore(): void;
@@ -97,6 +100,7 @@ function installBackgroundTimerProbe(): {
   const nativeSetTimeout = globalThis.setTimeout;
   const nativeClearTimeout = globalThis.clearTimeout;
   const intervalKinds = new Map<IntervalTimer, LoopKind>();
+  const intervalCallbacks = new Map<IntervalTimer, () => void>();
   const clearedIntervals = new Set<IntervalTimer>();
   const startupTimers = new Set<TimeoutTimer>();
   const clearedTimeouts = new Set<TimeoutTimer>();
@@ -106,7 +110,10 @@ function installBackgroundTimerProbe(): {
     value: ((...args: Parameters<typeof setInterval>) => {
       const timer = nativeSetInterval(...args);
       const kind = loopKindFromStack(new Error().stack ?? "");
-      if (kind) intervalKinds.set(timer, kind);
+      if (kind) {
+        intervalKinds.set(timer, kind);
+        intervalCallbacks.set(timer, args[0] as () => void);
+      }
       return timer;
     }) as typeof setInterval,
     writable: true,
@@ -145,6 +152,11 @@ function installBackgroundTimerProbe(): {
       return [...intervalKinds].filter(([timer, timerKind]) => (
         timerKind === kind && !clearedIntervals.has(timer)
       )).length;
+    },
+    tick(kind) {
+      for (const [timer, timerKind] of intervalKinds) {
+        if (timerKind === kind && !clearedIntervals.has(timer)) intervalCallbacks.get(timer)!();
+      }
     },
     startupTimersStarted() {
       return startupTimers.size;
@@ -240,7 +252,8 @@ function seedArchived(codexHome: string): void {
   db.close();
 }
 
-async function waitForLiveStorageWorker(timeoutMs = 10_000): Promise<void> {
+// Worker spawn behind a live server on a loaded windows-latest shard; platform floor.
+async function waitForLiveStorageWorker(timeoutMs = INTERNAL_DEADLINE_MS): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (liveStorageWorkerCount() > 0) return;
@@ -281,12 +294,23 @@ describe("server background lifecycle", () => {
   test("stopping the newer server preserves the older server's process-wide work", async () => {
     saveConfig(baseConfig());
     const probe = installBackgroundTimerProbe();
+    const callbacks: string[] = [];
+    const worker = (name: string) => () => registerStateSweepAfterTick({
+      name: "codex-quota-auto-refresh",
+      afterTick: () => { callbacks.push(name); },
+    });
     try {
-      const older = trackedStart();
-      const newer = trackedStart();
+      const older = trackedStart(0, { registerCodexQuotaAutoRefreshWorker: worker("older") });
+      const newer = trackedStart(0, { registerCodexQuotaAutoRefreshWorker: worker("newer") });
       expect(probe.startupTimersStarted()).toBe(1);
 
+      probe.tick("state-store-sweeper");
+      expect(callbacks).toEqual(["newer"]);
+
       await stopTracked(newer);
+
+      probe.tick("state-store-sweeper");
+      expect(callbacks).toEqual(["newer", "older"]);
 
       expect((await fetch(new URL("/healthz", older.url))).status).toBe(200);
       expectSharedLoopsActive(probe);
@@ -311,9 +335,19 @@ describe("server background lifecycle", () => {
   test("a newer bind failure preserves the older server's process-wide work", async () => {
     saveConfig(baseConfig());
     const probe = installBackgroundTimerProbe();
+    const callbacks: string[] = [];
+    const worker = (name: string) => () => registerStateSweepAfterTick({
+      name: "codex-quota-auto-refresh",
+      afterTick: () => { callbacks.push(name); },
+    });
     try {
-      const older = trackedStart();
-      expect(() => startServer(older.port)).toThrow();
+      const older = trackedStart(0, { registerCodexQuotaAutoRefreshWorker: worker("older") });
+      expect(() => startServer(older.port, {
+        registerCodexQuotaAutoRefreshWorker: worker("failed"),
+      })).toThrow();
+
+      probe.tick("state-store-sweeper");
+      expect(callbacks).toEqual(["older"]);
 
       expect((await fetch(new URL("/healthz", older.url))).status).toBe(200);
       expectSharedLoopsActive(probe);

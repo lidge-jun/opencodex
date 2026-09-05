@@ -80,6 +80,37 @@ kimlik doğrulama modunda her zaman geçerlidir. Bir API anahtarını kasıtlı 
 kullanmak için, onu bir proje dosyasında bırakmak yerine dışa aktarın (`export
 ANTHROPIC_API_KEY=...`).
 
+### Claude yönlendirmesi kapalıyken yerel geri dönüş
+
+`ocx claude` eskiden Claude yönlendirmesi kapalıyken hata vererek çıkardı.
+Artık bunun yerine yerel `claude` ikili dosyasını başlatır; böylece komut,
+yönlendirme kapalıyken de kullanışlı kalır:
+
+| Yönlendirmenin kapalı olduğu yer | Ne olur |
+| --- | --- |
+| Yapılandırmada `claudeCode.enabled: false` | Yönlendirmenin kapalı olduğunu bildiren bir uyarıyla yerel başlatma |
+| Çalışan vekil `GET /api/claude-code` üzerinden `enabled: false` bildiriyor | Yerel başlatma ve yeniden etkinleştirdikten sonra servisi yeniden başlatma önerisi |
+| `claudeCode.enabled` yok veya `true` | Değişmeden vekil üzerinden yönlendirme |
+
+Geri dönüşü yalnızca açık bir `false` tetikler; bu alandan önceki bir vekil
+yönlendirilmiş kalır. Vekilin bulunmaması da bir tetikleyici değildir —
+yönlendirme açıkken `ocx claude` vekili yine başlatır.
+
+Yerel bir oturum vekil durumunu devralmamalıdır; bu nedenle geri dönüş yalnızca
+OpenCodex'in sahipliğini **kanıtlayabildiği** değerleri kaldırır:
+`ANTHROPIC_BASE_URL` yalnızca bu vekilin kendi geri döngü adresini ve
+yapılandırılmış bağlantı noktasını gösteriyorsa *ve* eşlenmiş kabul belirteci
+vekilin verdiği bir belirteçse; `CLAUDE_CODE_*` keşif ve otomatik bağlam
+anahtarları; ve yalnızca vekil üzerinden çözülen model yuvaları (yönlendirme
+takma adları ve `provider/model` kimlikleri). Geri kalan her şey sizindir ve
+korunur — ilgisiz bir `http://localhost:8080` ağ geçidi ve kendi `sk-ant-`
+kimlik bilginiz birlikte hayatta kalır.
+
+Kaydedilmiş `/model` seçici varsayılanınız yalnızca vekile özgü bir modelse,
+yerel oturum `claudeCode.model` yerel olarak kullanılabildiğinde ona döner;
+aksi hâlde `--model <Anthropic modeli>` geçmeniz için uyarır. Açık bir
+`--model` argümanı her zaman kazanır.
+
 ## Kimlik doğrulama modu (Auth mode)
 
 Claude Code'un bir ağ geçidiyle konuşabilmesi için `ANTHROPIC_AUTH_TOKEN` içinde

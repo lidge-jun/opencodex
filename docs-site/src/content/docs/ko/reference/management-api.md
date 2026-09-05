@@ -71,6 +71,16 @@ Authorization: Bearer <admin-token>
 
 모델 목록과 암호화된 worker-task 동작의 개념은 [Sub-agent Surface](/guides/sub-agent-surface/)를 참고하십시오.
 
+### 클라이언트 연동 롤백 저널
+
+| 메서드 및 경로 | 목적 | 주요 오류 |
+| --- | --- | --- |
+| `GET /api/client-integrations/journal?client=...` | 롤백 작업을 조회합니다. 특정 클라이언트로 제한할 수 있으며 각 행에는 서버가 계산한 `deletable` 값이 포함됩니다. | 400 잘못된 클라이언트 |
+| `DELETE /api/client-integrations/journal?opId=...` | 이전 롤백 작업을 폐기하고 가능한 경우 스냅샷도 제거합니다. 성공 응답의 `snapshotRemoved`가 `false`면 유지보수 재시도를 위해 정리 작업이 보존됩니다. | 400 `opId` 누락, 404 없거나 이미 폐기된 작업, 409 해당 클라이언트의 최신 작업 |
+
+삭제는 저널을 다시 쓰지 않고 툼스톤을 추가합니다. 현재 실행 취소 지점을 유지하기 위해
+각 클라이언트의 최신 작업은 서버에서 삭제하지 못하게 보호합니다.
+
 ### 콤보
 
 | Method and path | 목적 | 주요 오류 |

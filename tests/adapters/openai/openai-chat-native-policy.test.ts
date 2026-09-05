@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { saveConfig } from "../../../src/config";
 import {
   buildOpenAIChatPassthroughRequest,
   createOpenAIChatAdapter,
@@ -285,6 +286,7 @@ describe("native Chat passthrough service-tier policy", () => {
     } as OcxConfig;
 
     try {
+      saveConfig(config);
       const response = await handleChatCompletions(
         new Request("http://localhost/v1/chat/completions", {
           method: "POST",

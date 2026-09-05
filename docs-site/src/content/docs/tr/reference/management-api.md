@@ -92,6 +92,16 @@ Model kadrosunun ve şifrelenmiş çalışan görevi davranışının arkasında
 kavramlar için [Alt Ajan Arayüzü](/tr/guides/sub-agent-surface/) sayfasına
 bakın.
 
+### İstemci entegrasyonu geri alma günlüğü
+
+| Yöntem ve yol | Amaç | Önemli hatalar |
+| --- | --- | --- |
+| `GET /api/client-integrations/journal?client=...` | Geri alma işlemlerini, isteğe bağlı olarak tek bir istemci için listeler. Her satır sunucunun hesapladığı `deletable` alanını içerir. | 400 geçersiz istemci |
+| `DELETE /api/client-integrations/journal?opId=...` | Eski bir geri alma işlemini kullanımdan kaldırır ve mümkünse anlık görüntüsünü siler. Başarılı yanıtta `snapshotRemoved: false`, temizliğin bakım yeniden denemesi için saklandığını belirtir. | 400 eksik `opId`; 404 bulunmayan veya zaten kaldırılmış işlem; 409 istemcinin en yeni işlemi |
+
+Silme, günlüğü yeniden yazmak yerine bir silme kaydı ekler. Geçerli geri alma noktasını korumak için
+her istemcinin en yeni işlemi sunucu tarafında korunur.
+
 ### Kombolar
 
 | Yöntem ve yol | Amaç | Dikkate değer hatalar |

@@ -340,6 +340,17 @@ describe("DELETE /api/client-integrations/journal", () => {
     }
   });
 
+  test("a successful delete-triggered prune clears an older failure marker", async () => {
+    const [older] = await twoOperations();
+    store.markPruneFailure("hermes", "an earlier cleanup failed");
+    expect(store.readMaintenance().pruneFailures.hermes).toBeDefined();
+
+    const response = await del(byId(older.opId));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ ok: true, snapshotRemoved: true });
+    expect(store.readMaintenance().pruneFailures.hermes).toBeUndefined();
+  });
+
   test("an unsupported method on the journal path still falls through", async () => {
     // Accepting DELETE must not turn the path into a catch-all: PATCH keeps
     // travelling the dispatch chain exactly as it did before.

@@ -114,6 +114,14 @@ const CODEX_MAX_RESET_DERIVED_COOLDOWN_MS = 15 * 60_000;
 /** Minimum gap between probe leases for one cooled-down account. */
 export const CODEX_QUOTA_PROBE_INTERVAL_MS = 5 * 60_000;
 export const CODEX_FAILURE_WINDOW_MS = 5 * 60_000;
+/**
+ * How recently a 100% burst reading must have been OBSERVED to exclude an account when it
+ * carries no reset timestamp (#3425). Deliberately far tighter than the 6h disk-hydration
+ * horizon in `quota.ts`: shorter than any plausible five-hour burst window, so a persisted
+ * reading can never strand a recovered account, and long enough that a snapshot taken at
+ * admission is still fresh when selection reads it.
+ */
+export const TERMINAL_SHORT_WINDOW_FRESHNESS_MS = 5 * 60_000;
 /** How long a transient failure keeps the account out of pool selection. */
 export const CODEX_TRANSIENT_SOFT_AVOID_MS = 30_000;
 const CODEX_TRANSIENT_SOFT_AVOID_ESCALATION_MS = [
@@ -365,6 +373,7 @@ export function computeCodexUsageScore(quota: {
   monthlyPercent?: number;
   shortPercent?: number;
   shortResetAt?: number;
+  shortObservedAt?: number;
 } | null, plan?: unknown, now: number = Date.now()): number {
   if (!quota) return CODEX_UNKNOWN_USAGE_SCORE;
   const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
@@ -404,15 +413,24 @@ export function computeCodexUsageScore(quota: {
  * direction here is the one that keeps an account selectable: a wrongly-selected account
  * fails one request, while a wrongly-excluded one is invisible until someone reads the pool
  * by hand.
+ *
+ * A missing reset can instead be aged by shortObservedAt (#3425). General updatedAt is not
+ * sufficient: credit-only updates preserve the old short tuple but advance that timestamp.
+ * Old disk snapshots without short-window provenance remain unknown.
  */
 function isTerminalShortWindow(
-  quota: { shortPercent?: number; shortResetAt?: number },
+  quota: { shortPercent?: number; shortResetAt?: number; shortObservedAt?: number },
   now: number,
 ): boolean {
   if (typeof quota.shortPercent !== "number" || !Number.isFinite(quota.shortPercent)) return false;
   if (quota.shortPercent < CODEX_EXHAUSTED_USAGE_PERCENT) return false;
   const resetAt = quota.shortResetAt;
-  if (typeof resetAt !== "number" || !Number.isFinite(resetAt) || resetAt <= 0) return false;
+  if (typeof resetAt !== "number" || !Number.isFinite(resetAt) || resetAt <= 0) {
+    const observedAt = quota.shortObservedAt;
+    if (typeof observedAt !== "number" || !Number.isFinite(observedAt)) return false;
+    const age = now - observedAt;
+    return age >= 0 && age <= TERMINAL_SHORT_WINDOW_FRESHNESS_MS;
+  }
   // Both units reach storage: `normalizeResetAt` does not scale, and the GUI disambiguates
   // by magnitude at read time. A comparison written against one assumption is off by 1000x
   // against the other, and in the seconds-read-as-milliseconds direction every terminal

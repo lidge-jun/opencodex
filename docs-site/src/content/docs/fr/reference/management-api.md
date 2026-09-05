@@ -86,6 +86,16 @@ résultats propres à chaque route, sans répéter ce tableau.
 Pour comprendre la liste de modèles et le comportement chiffré des tâches confiées aux agents d'exécution, voir
 [Surface des sous-agents](/fr/guides/sub-agent-surface/).
 
+### Journal de restauration des intégrations clientes
+
+| Méthode et chemin | Objectif | Erreurs notables |
+| --- | --- | --- |
+| `GET /api/client-integrations/journal?client=...` | Lister les opérations de restauration, éventuellement pour un seul client. Chaque ligne contient le champ `deletable` calculé par le serveur. | 400 client invalide |
+| `DELETE /api/client-integrations/journal?opId=...` | Retirer une ancienne opération et supprimer son instantané si possible. La réponse contient `snapshotRemoved` ; `false` conserve le nettoyage pour une nouvelle tentative de maintenance. | 400 `opId` absent ; 404 opération absente ou déjà retirée ; 409 opération la plus récente du client |
+
+La suppression ajoute une pierre tombale au lieu de réécrire le journal. Le serveur protège
+l'opération la plus récente de chaque client afin de conserver le point d'annulation actuel.
+
 ### Combinaisons
 
 | Méthode et chemin | Objectif | Erreurs notables |

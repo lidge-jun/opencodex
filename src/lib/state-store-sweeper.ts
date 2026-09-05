@@ -35,7 +35,13 @@ export interface StateStoreSweeperOptions {
 }
 
 const registrations = new Map<string, StateStoreRegistration>();
-const afterTickRegistrations = new Map<string, StateSweepAfterTickRegistration>();
+interface AfterTickRegistrationNode {
+  registration: StateSweepAfterTickRegistration;
+  previous: AfterTickRegistrationNode | null;
+  active: boolean;
+}
+
+const afterTickRegistrations = new Map<string, AfterTickRegistrationNode>();
 let configGeneration = 0;
 let attemptSequence = 0;
 let generationContextBuilder: (() => GenerationContext) | null = null;
@@ -56,11 +62,19 @@ export function registerStateStore(registration: StateStoreRegistration): () => 
 }
 
 export function registerStateSweepAfterTick(registration: StateSweepAfterTickRegistration): () => void {
-  afterTickRegistrations.set(registration.name, registration);
+  const node: AfterTickRegistrationNode = {
+    registration,
+    previous: afterTickRegistrations.get(registration.name) ?? null,
+    active: true,
+  };
+  afterTickRegistrations.set(registration.name, node);
   return () => {
-    if (afterTickRegistrations.get(registration.name) === registration) {
-      afterTickRegistrations.delete(registration.name);
-    }
+    node.active = false;
+    if (afterTickRegistrations.get(registration.name) !== node) return;
+    let previous = node.previous;
+    while (previous && !previous.active) previous = previous.previous;
+    if (previous) afterTickRegistrations.set(registration.name, previous);
+    else afterTickRegistrations.delete(registration.name);
   };
 }
 
@@ -106,7 +120,7 @@ export function sweepLiveness(): StateSweepResult {
 }
 
 function runAfterTickCallbacks(): void {
-  for (const registration of afterTickRegistrations.values()) {
+  for (const { registration } of afterTickRegistrations.values()) {
     try {
       registration.afterTick();
     } catch {

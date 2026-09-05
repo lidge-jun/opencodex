@@ -218,6 +218,7 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     baseUrl: entry.baseUrl,
     ...(entry.apiKeyTransport !== undefined ? { apiKeyTransport: entry.apiKeyTransport } : {}),
     ...(entry.responsesPath ? { responsesPath: entry.responsesPath } : {}),
+    ...(entry.alias ? { alias: entry.alias } : {}),
     // Preserve the registry auth kind verbatim (including "local") so fail-closed gates that
     // distinguish local runtimes from API-key providers keep working after the seed round-trip.
     authMode: entry.authKind,

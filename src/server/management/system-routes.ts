@@ -15,8 +15,9 @@
  * further: it is the proxy's previous_response_id continuation store, so a
  * growing responseState.totalBytes under rising observed memory points at
  * conversation retention rather than the runtime allocator. Spill counts,
- * payload-byte totals, tombstones, and failure counters remain finite scalars;
- * response ids, filenames, digests, paths, and payload content never leave the owner.
+ * payload-byte totals, tombstones, failure counters, fixed health/error enums,
+ * and event timestamps remain finite scalars; response ids, raw errors,
+ * filenames, digests, paths, and payload content never leave the owner.
  *
  * `activeTurnCount` / `isDraining` are scalar lifecycle counters for the
  * dashboard drain-and-restart confirm UX — never request bodies or IDs.

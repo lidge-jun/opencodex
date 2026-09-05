@@ -138,7 +138,14 @@ describe("cli wiring", () => {
     expect(promptIndex).toBeLessThan(serverIndex);
   });
 
-  test("interactiveGuardOk safely evaluates without throwing when cwd is unlinked", () => {
+  // POSIX-only by construction. Windows locks a process's current directory, so
+  // the state under test — a live process standing in a deleted directory —
+  // cannot exist there: the rmSync below can never succeed while this test holds
+  // the cwd, and removeTreeWithRetry burns all 50 attempts before rethrowing
+  // EBUSY. src/cli/index.ts:7 heals a cwd that throws; this case covers the
+  // POSIX variant where the directory is gone but the cwd handle survives.
+  test.skipIf(process.platform === "win32")(
+    "interactiveGuardOk safely evaluates without throwing when cwd is unlinked", () => {
     const origCwd = process.cwd();
     const tempDir = mkdtempSync(join(tmpdir(), "ocx-unlinked-cwd-"));
     process.chdir(tempDir);

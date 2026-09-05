@@ -4115,6 +4115,81 @@ describe("server local API auth", () => {
     }
   });
 
+  test("native passthrough caller abort logs cancellation without penalizing the pool", async () => {
+    const enc = new TextEncoder();
+    const harness = await startPoolRetryHarness(() => new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(enc.encode('data: {"type":"response.output_text.delta","delta":"hello"}\n\n'));
+        },
+      }),
+      { headers: { "content-type": "text/event-stream" } },
+    ), { secondAccount: false, streamMode: "legacy-tee" });
+    const caller = new AbortController();
+    try {
+      const response = await harness.request({ stream: true, signal: caller.signal });
+      expect(response.status).toBe(200);
+      const requestId = response.headers.get("x-opencodex-request-id");
+      const reader = response.body!.getReader();
+      expect((await reader.read()).done).toBe(false);
+      // Abort the HTTP request, without calling response.body.cancel(): the
+      // incoming request signal may reach upstream before the body cancel hook.
+      caller.abort();
+      await expect(reader.read()).rejects.toThrow();
+      const deadline = Date.now() + INTERNAL_DEADLINE_MS;
+      while (!getRequestLogEntries().some(entry => entry.requestId === requestId) && Date.now() < deadline) {
+        await Bun.sleep(5);
+      }
+      const logs = getRequestLogEntries().filter(entry => entry.requestId === requestId);
+      expect(logs).toHaveLength(1);
+      expect(logs[0]).toMatchObject({ status: 499, closeReason: "client_cancel" });
+      expect(logs[0]?.attempts?.[0]).toMatchObject({ status: 499 });
+      expect(logs[0]?.attempts?.[0]?.streamAborted).not.toBe(true);
+      expect(readUsageEntries().filter(entry => entry.requestId === requestId)).toMatchObject([
+        { status: 499, closeReason: "client_cancel" },
+      ]);
+      expect(getCodexUpstreamHealth("pool-a")?.consecutiveFailures ?? 0).toBe(0);
+      expect(harness.dispatches).toEqual(["acct-pool-a"]);
+    } finally {
+      caller.abort();
+      await stopPoolRetryHarness(harness);
+    }
+  }, { timeout: SERVER_BUDGET_MS });
+
+  test("native passthrough upstream reset still logs 502 and penalizes the pool", async () => {
+    const enc = new TextEncoder();
+    const source = Promise.withResolvers<ReadableStreamDefaultController<Uint8Array>>();
+    const harness = await startPoolRetryHarness(() => new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          source.resolve(controller);
+          controller.enqueue(enc.encode('data: {"type":"response.output_text.delta","delta":"hello"}\n\n'));
+        },
+      }),
+      { headers: { "content-type": "text/event-stream" } },
+    ), { secondAccount: false, streamMode: "legacy-tee" });
+    try {
+      const response = await harness.request({ stream: true });
+      const requestId = response.headers.get("x-opencodex-request-id");
+      const reader = response.body!.getReader();
+      expect((await reader.read()).done).toBe(false);
+      (await source.promise).error(new Error("fixture upstream connection reset"));
+      while (!(await reader.read()).done) { /* drain the synthetic failed terminal */ }
+      const deadline = Date.now() + INTERNAL_DEADLINE_MS;
+      while (!getRequestLogEntries().some(entry => entry.requestId === requestId) && Date.now() < deadline) {
+        await Bun.sleep(5);
+      }
+      const logs = getRequestLogEntries().filter(entry => entry.requestId === requestId);
+      expect(logs).toHaveLength(1);
+      expect(logs[0]).toMatchObject({ status: 502, closeReason: "terminal", terminalStatus: "failed" });
+      expect(logs[0]?.attempts?.[0]).toMatchObject({ status: 502, streamAborted: true });
+      expect(getCodexUpstreamHealth("pool-a")?.consecutiveFailures).toBe(1);
+      expect(harness.dispatches).toEqual(["acct-pool-a"]);
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  }, { timeout: SERVER_BUDGET_MS });
+
   test("non-forward generated stream does not mutate active pool health", async () => {
     if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });

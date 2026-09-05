@@ -1076,7 +1076,59 @@ describe("Responses previous_response_id state", () => {
       tombstoneCount: 0,
       spillWrites: 1,
       spillWriteFailures: 0,
+      spillWriteStatus: "healthy",
+      spillWriteConsecutiveFailures: 0,
     });
+  });
+
+  test("Windows spill reports exhausted ACL retry and recovers after a healthy runner", async () => {
+    forceWindowsAclLane();
+    let clock = 0;
+    setNowForTests(() => clock);
+    setResponseSpillNowForTests(() => clock);
+    setResponseSpillAsyncAclAttemptBudgetForTests(100);
+    const spillDir = responseSpillDirectory();
+    let failTemporaryPath = true;
+    setAsyncIcaclsRunnerForTests(async args => {
+      if (String(args[0]) === spillDir || !failTemporaryPath) {
+        return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+      }
+      clock += 100;
+      return { success: false, exitCode: null, timedOut: true, stdout: "private path omitted" };
+    });
+    setResponseStateByteCapForTests(1_024);
+
+    rememberLarge("resp_async_acl_exhausted", "x".repeat(8_000));
+    await flushPendingResponseSpillsForTests();
+
+    const metrics = responseStateMetrics();
+    expect(metrics).toMatchObject({
+      residentCount: 0,
+      spillStubCount: 0,
+      tombstoneCount: 1,
+      spillWriteFailures: 1,
+      spillWriteStatus: "degraded",
+      spillWriteConsecutiveFailures: 1,
+      spillLastWriteFailureCode: "EACLRETRYEXHAUSTED",
+      spillLastWriteSuccessAt: null,
+    });
+    expect(metrics.spillLastWriteFailureAt).toBeGreaterThanOrEqual(0);
+
+    failTemporaryPath = false;
+    rememberLarge("resp_async_acl_recovered", "r".repeat(8_000));
+    await flushPendingResponseSpillsForTests();
+
+    const recovered = responseStateMetrics();
+    expect(recovered).toMatchObject({
+      spillStubCount: 1,
+      spillWrites: 1,
+      spillWriteFailures: 1,
+      spillWriteStatus: "healthy",
+      spillWriteConsecutiveFailures: 0,
+      spillLastWriteFailureCode: "EACLRETRYEXHAUSTED",
+    });
+    expect(typeof recovered.spillLastWriteSuccessAt === "number"
+      && recovered.spillLastWriteSuccessAt >= (recovered.spillLastWriteFailureAt ?? 0)).toBe(true);
   });
 
   test("Windows async spill attempts share one bounded ACL budget across every harden", async () => {
@@ -2422,7 +2474,19 @@ describe("Responses previous_response_id state", () => {
     setResponseStateByteCapForTests(1_024);
     rememberLarge("resp_private_metric_id", "secret-content".repeat(1_000));
     const metrics = responseStateMetrics();
-    expect(Object.values(metrics).every(value => typeof value === "number" && Number.isFinite(value))).toBe(true);
+    const {
+      spillWriteStatus,
+      spillLastWriteFailureCode,
+      spillLastWriteFailureAt,
+      spillLastWriteSuccessAt,
+      ...numericMetrics
+    } = metrics;
+    expect(Object.values(numericMetrics)
+      .every(value => typeof value === "number" && Number.isFinite(value))).toBe(true);
+    expect(spillWriteStatus).toBe("healthy");
+    expect(spillLastWriteFailureCode).toBeNull();
+    expect(spillLastWriteFailureAt).toBeNull();
+    expect(typeof spillLastWriteSuccessAt === "number" && Number.isFinite(spillLastWriteSuccessAt)).toBe(true);
     const serialized = JSON.stringify(metrics);
     expect(serialized).not.toContain("resp_private_metric_id");
     expect(serialized).not.toContain("secret-content");
@@ -3178,9 +3242,63 @@ describe("Responses previous_response_id state", () => {
         oldestAgeMs: 0,
         spillWrites: 0,
         spillWriteFailures: 0,
+        spillWriteStatus: "initial",
+        spillWriteConsecutiveFailures: 0,
+        spillLastWriteFailureCode: null,
+        spillLastWriteFailureAt: null,
+        spillLastWriteSuccessAt: null,
         spillReadFailures: 0,
         replayScopeMismatchDrops: 0,
       });
+    });
+
+    test("a successful spill clears a repeated failure streak without erasing the last failure", () => {
+      const realNow = Date.now;
+      let clock = 1_000;
+      Date.now = () => clock;
+      try {
+        setResponseStateByteCapForTests(1_024);
+        setSpillIoForTest({
+          write: () => { throw Object.assign(new Error("denied"), { code: "EACCES" }); },
+        });
+        rememberLarge("resp_health_failure", "f".repeat(8_000));
+
+        expect(responseStateMetrics()).toMatchObject({
+          spillWriteFailures: 1,
+          spillWriteStatus: "degraded",
+          spillWriteConsecutiveFailures: 1,
+          spillLastWriteFailureCode: "EACCES",
+          spillLastWriteFailureAt: 1_000,
+          spillLastWriteSuccessAt: null,
+        });
+
+        clock = 1_500;
+        rememberLarge("resp_health_failure_again", "g".repeat(8_000));
+        expect(responseStateMetrics()).toMatchObject({
+          spillWriteFailures: 2,
+          spillWriteStatus: "degraded",
+          spillWriteConsecutiveFailures: 2,
+          spillLastWriteFailureCode: "EACCES",
+          spillLastWriteFailureAt: 1_500,
+          spillLastWriteSuccessAt: null,
+        });
+
+        clock = 2_000;
+        setSpillIoForTest(null);
+        rememberLarge("resp_health_recovered", "s".repeat(8_000));
+
+        expect(responseStateMetrics()).toMatchObject({
+          spillWrites: 1,
+          spillWriteFailures: 2,
+          spillWriteStatus: "healthy",
+          spillWriteConsecutiveFailures: 0,
+          spillLastWriteFailureCode: "EACCES",
+          spillLastWriteFailureAt: 1_500,
+          spillLastWriteSuccessAt: 2_000,
+        });
+      } finally {
+        Date.now = realNow;
+      }
     });
 
     test("largest entry over 200KB is reflected, and total is >= largest", () => {
@@ -3236,6 +3354,11 @@ describe("Responses previous_response_id state", () => {
         oldestAgeMs: 0,
         spillWrites: 0,
         spillWriteFailures: 0,
+        spillWriteStatus: "initial",
+        spillWriteConsecutiveFailures: 0,
+        spillLastWriteFailureCode: null,
+        spillLastWriteFailureAt: null,
+        spillLastWriteSuccessAt: null,
         spillReadFailures: 0,
         replayScopeMismatchDrops: 0,
       });

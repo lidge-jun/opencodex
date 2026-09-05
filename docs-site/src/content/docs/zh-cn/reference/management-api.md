@@ -71,6 +71,16 @@ Authorization: Bearer <admin-token>
 
 关于模型名录和加密工作任务行为的概念，请参见 [子代理界面](/guides/sub-agent-surface/)。
 
+### 客户端集成回滚日志
+
+| 方法和路径 | 用途 | 主要错误 |
+| --- | --- | --- |
+| `GET /api/client-integrations/journal?client=...` | 列出回滚操作，也可限定为单个客户端。每一项都包含由服务器计算的 `deletable` 字段。 | 400 客户端无效 |
+| `DELETE /api/client-integrations/journal?opId=...` | 停用一条较旧的回滚操作，并在可能时删除其快照。成功响应中的 `snapshotRemoved: false` 表示清理任务已保留，等待维护重试。 | 400 缺少 `opId`；404 操作不存在或已停用；409 该客户端的最新操作 |
+
+删除操作会追加墓碑记录，而不会重写日志。服务器会保护每个客户端的最新操作，
+以保留当前的撤销点。
+
 ### Combos
 
 | 方法和路径 | 用途 | 典型错误 |

@@ -178,15 +178,20 @@ export function isGenericOAuthFailoverEnabled(
  * Whether the pre-dispatch account PREFERENCE may run for this provider.
  *
  * Unlike reactive rotation, this moves a request that upstream has not refused, so it stays
- * refusable: an explicit `false` — per provider first, then global — turns it off. `true` adds
- * nothing over presence, so only `false` is honoured; that keeps the predicate identical to the
- * old behaviour for every operator who never wrote the key, and a malformed value falls through
- * rather than taking a provider out of service.
+ * refusable: an explicit provider value wins over the global default, and a global `false`
+ * turns it off only when the provider has no override. A malformed value falls through rather
+ * than taking a provider out of service.
  */
 function isProactivePreferenceEnabled(config: OcxConfig, providerName: string, now: number): boolean {
   const provider = config.providers?.[providerName];
   if (!provider || !isGenericFailoverProvider(providerName, provider)) return false;
-  if (provider.oauthAccountFailover?.enabled === false) return false;
+  const perProvider = provider.oauthAccountFailover?.enabled;
+  // Preserve the published narrow-over-broad precedence. A provider-specific true may
+  // opt this provider into proactive preference even when the global default is false;
+  // a provider-specific false refuses it even when the global setting is true.
+  if (typeof perProvider === "boolean") {
+    return perProvider && hasFailoverAccountQuorum(providerName, now);
+  }
   if (config.oauthAccountFailover?.enabled === false) return false;
   return hasFailoverAccountQuorum(providerName, now);
 }

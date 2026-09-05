@@ -175,6 +175,13 @@ export class IntegrationApiError extends Error {
   }
 }
 
+/** A concurrent tab already completed the requested journal deletion. */
+export function isMissingJournalEntry(error: unknown): boolean {
+  return error instanceof IntegrationApiError
+    && error.status === 404
+    && error.body.code === "integration_operation_not_found";
+}
+
 async function readErrorBody(response: Response): Promise<IntegrationErrorEnvelope> {
   try {
     const body = await response.json() as unknown;

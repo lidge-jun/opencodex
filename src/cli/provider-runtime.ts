@@ -19,6 +19,21 @@ interface ProviderQuotasDto {
   reports?: ProviderQuotaReportDto[];
 }
 
+interface QuotaResetEventDto {
+  kind?: string;
+  scope?: string;
+  window?: string;
+  percentBefore?: number;
+  percentAfter?: number;
+  resetAt?: number;
+  detectedAt?: number;
+}
+
+interface QuotaResetsDto {
+  enabled?: boolean;
+  events?: QuotaResetEventDto[];
+}
+
 const USAGE = `Usage:
   ocx provider edit <name> [--adapter <id>] [--base-url <url>] [--default-model <id|->]
       [--auth-mode <key|forward|oauth|local|->] [--note <text|->]
@@ -28,6 +43,7 @@ const USAGE = `Usage:
       [--allow-private-network <on|off>] [--json]
   ocx provider test <name> [--json]
   ocx provider quota [--refresh] [--json]
+  ocx provider resets [--limit <n>] [--json]
   ocx provider presets [--json]
   ocx provider account-mode <pool|direct> [--json]
   ocx provider selected <name> [--set <model,model...>] [--clear] [--json]
@@ -132,6 +148,48 @@ async function quota(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   printData(result, wantsJson, lines);
 }
 
+
+/**
+ * Recently detected quota resets, newest first.
+ *
+ * `accountTag` is deliberately NOT rendered: it is a salted hash that means nothing to a human
+ * reading a terminal, and printing it invites treating an opaque tag as an account identifier.
+ */
+function quotaResetLine(event: QuotaResetEventDto): string {
+  const when = typeof event.detectedAt === "number"
+    ? new Date(event.detectedAt).toISOString()
+    : "unknown time";
+  const movement = typeof event.percentBefore === "number" && typeof event.percentAfter === "number"
+    ? `${event.percentBefore}% -> ${event.percentAfter}%`
+    : "usage unknown";
+  const next = typeof event.resetAt === "number"
+    ? `, next ${new Date(event.resetAt).toISOString()}`
+    : "";
+  return `${when}  ${event.scope ?? "?"} ${event.window ?? "?"} ${event.kind ?? "?"}: ${movement}${next}`;
+}
+
+async function resets(argv: string[], deps: RuntimeApiDeps): Promise<void> {
+  const args = [...argv];
+  const wantsJson = takeFlag(args, "--json");
+  const limitRaw = takeOption(args, "--limit");
+  rejectArgs(args, USAGE);
+  if (limitRaw !== undefined && !/^\d+$/.test(limitRaw)) {
+    throw new CliUsageError("--limit must be a non-negative integer", USAGE);
+  }
+  const query = limitRaw === undefined ? "" : `?limit=${limitRaw}`;
+  const result = await runtimeRequest<QuotaResetsDto>(`/api/quota-resets${query}`, {}, deps);
+  const events = Array.isArray(result?.events) ? result.events : [];
+  // One line per event, NOT summaryLines: that helper is a depth-1 flattener and renders a
+  // non-scalar array as "N item(s)", which is what made `ocx provider quota` useless in #2565.
+  const lines = events.length > 0
+    ? events.map(quotaResetLine)
+    // An empty list is ambiguous, so say which kind of empty it is. Without this an operator
+    // cannot tell "nothing has reset yet" from "I never turned this on".
+    : [result?.enabled === true
+      ? "no resets detected yet"
+      : "quota-reset notifications are disabled (set quotaResetNotify.enabled)"];
+  printData(result, wantsJson, lines);
+}
 async function presets(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const wantsJson = takeFlag(args, "--json");
@@ -210,6 +268,7 @@ export async function handleProviderRuntimeCommand(sub: string, argv: string[], 
     update: edit,
     test: testProvider,
     quota,
+    resets,
     presets,
     "account-mode": accountMode,
     selected,

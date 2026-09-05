@@ -591,6 +591,13 @@ export interface OcxConfig {
     /** Maximum in-memory ciphertext-to-assignment entries. Default: 200. */
     cacheEntries?: number;
   };
+  /**
+   * Quota-reset detection and notification. Absent means off: no detection, no timer, no sink.
+   *
+   * Not in `getDefaultConfig()` on purpose — that function carries no optional-feature keys,
+   * so absence is the only default state this feature has.
+   */
+  quotaResetNotify?: OcxQuotaResetNotifyConfig;
   /** Provider-level Codex-visible context caps. Values only lower known model context windows. */
   providerContextCaps?: Record<string, number>;
   /** Global Codex-visible context cap value (tokens). Falls back to DEFAULT_PROVIDER_CONTEXT_CAP. */
@@ -693,6 +700,14 @@ export interface OcxConfig {
   codexAccounts?: CodexAccount[];
   /** Account ids administratively excluded from future pool selection until resumed. */
   pausedCodexAccountIds?: string[];
+  /** Opt-in per-account activation of newly reset Codex quota windows. */
+  codexQuotaAutoRefresh?: Record<string, {
+    fiveHour?: boolean;
+    weekly?: boolean;
+    /** Upstream reset timestamps already activated, retained across restarts. */
+    lastFiveHourResetAt?: number;
+    lastWeeklyResetAt?: number;
+  }>;
   /**
    * Selection order per account id, higher used earlier; absent = 0. Keyed by id
    * rather than stored on `codexAccounts` rows so the Desktop login (`__main__`),
@@ -791,7 +806,7 @@ export interface OcxConfig {
    * What `enabled: false` still refuses is the PRE-DISPATCH preference: steering a request
    * upstream has not refused toward the account with more known headroom. That moves a healthy
    * request, so it stays a real choice. `providers.<name>.oauthAccountFailover` overrides this
-   * per provider, and only `false` is meaningful — `true` adds nothing over presence.
+   * per provider in either direction; reactive 429 rotation remains presence-driven.
    */
   oauthAccountFailover?: {
     enabled?: boolean;
@@ -843,6 +858,14 @@ export interface OcxComboConfig {
   strategy?: OcxComboStrategy;
   /** Successful requests retained on one RR selection batch. Default 1; range 1..100. */
   stickyLimit?: number;
+  /**
+   * Optional per-target cooldown used only when the upstream response has no Retry-After or Codex reset signal.
+   * Unset uses the upstream fallback (5 s for request-rate 429 codes 1302/1305, otherwise 60 s);
+   * an explicit value overrides that fallback. Range 1..600000.
+   */
+  cooldownMs?: number;
+  /** Maximum wait for an eligible target cooldown to expire before failing closed. Default 0; range 0..600000, per selection attempt. */
+  waitForCooldownMs?: number;
   /** Used when the client omits reasoning.effort. null/omitted leaves the target default unchanged. */
   defaultEffort?: OcxComboDefaultEffort | null;
   /**
@@ -1085,6 +1108,51 @@ export interface OcxWebSearchSidecarConfig {
    * stays atomic. Tradeoff: text the model emits BEFORE deciding to search — which buffered mode
    * silently drops — becomes visible to the client and may partially repeat in the post-search
    * answer. Default: false (buffered, previous behavior).
-   */
+  */
   streamRoutedModelOutput?: boolean;
+}
+
+/**
+ * Quota-reset notification settings.
+ *
+ * Every field is optional and the whole section defaults to off. `enabled: true` alone is not
+ * sufficient: without a webhook or a command there is nowhere to deliver, and treating that as
+ * off is what keeps the "a default install runs no detection code" guarantee true rather than
+ * nearly true.
+ */
+export interface OcxQuotaResetNotifyConfig {
+  /** Master switch. Default false — nothing detects, nothing polls, nothing fires. */
+  enabled?: boolean;
+  /** Which reset kinds to deliver. Default: both. */
+  kinds?: Array<"scheduled" | "surprise">;
+  /**
+   * Idle poll interval in seconds. Default 900, floor 60, and 0 disables polling entirely.
+   *
+   * Polling exists because the interesting case is a reset that happens while no request is in
+   * flight: without a poll, a window that reset overnight is only noticed on the next request.
+   */
+  pollSeconds?: number;
+  /**
+   * POST the event as JSON here.
+   *
+   * Treated as a credential: for Slack and Discord the URL itself is the authorization, so it
+   * is redacted by `ocx config show` and excluded from `config export`.
+   */
+  webhookUrl?: string;
+  /**
+   * Permit a loopback or private-network webhook target. Default false.
+   *
+   * An operator-supplied URL is an SSRF surface, so the default refuses anything that resolves
+   * private. Self-hosted receivers are the legitimate case for opting in.
+   */
+  allowPrivateNetwork?: boolean;
+  /** Webhook timeout in milliseconds. Default 5000. */
+  timeoutMs?: number;
+  /**
+   * Run a local command with the event JSON on stdin.
+   *
+   * An argv array, never a shell string: the command is spawned directly, so an operator value
+   * cannot become a shell-injection surface.
+   */
+  command?: string[];
 }

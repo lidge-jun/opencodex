@@ -179,6 +179,21 @@ describe("cyber_policy error fidelity", () => {
     });
   });
 
+  test("drops Codex reset headers as well as Retry-After for a cyber-policy failure", async () => {
+    const upstream = new Response(JSON.stringify(CYBER_ERROR_BODY), {
+      status: 429,
+      headers: {
+        "retry-after": "120",
+        "x-codex-primary-reset-at": "2026-09-03T12:00:00Z",
+        "x-codex-secondary-reset-at": "2026-09-03T13:00:00Z",
+        "x-codex-tertiary-reset-at": "2026-09-03T14:00:00Z",
+      },
+    });
+    const failure = await consumeComboFailure(upstream);
+    expect(failure.retryAfter).toBeUndefined();
+    expect(failure.resetAt).toBeUndefined();
+  });
+
   test("ordinary Responses HTTP failure preserves structured cyber type and exact safe message", async () => {
     const upstream = Bun.serve({
       port: 0,

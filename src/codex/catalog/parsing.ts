@@ -96,6 +96,8 @@ export const CODEX_PROVIDER_MODEL_CATALOG_KIND = "provider-model-v1";
 export interface CatalogModel {
   id: string;
   provider: string;
+  /** Canonical or configured short alias for the provider segment. */
+  providerAlias?: string | null;
   /** Public Codex-facing slug override (used by combo aliases). */
   alias?: string;
   /** Explicit combo takeover of a bare OpenAI-native catalog id. */

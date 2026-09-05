@@ -656,7 +656,7 @@ jobs:
   # now means Linux + macOS + the gates; Windows re-enters the gate when the
   # tracked failures are fixed, not before.
   platform-windows:
-    name: windows ${{ matrix.shard }}/4
+    name: windows ${{ matrix.shard }}/6
     needs: select-windows-runner
     if: >-
       github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')
@@ -673,11 +673,17 @@ jobs:
     # margin. 25 leaves the outer bound in place — a wedged shard still dies —
     # while making a completed shard the normal outcome. The crash-retry below can
     # double a shard's work, and this ceiling has to cover that second attempt too.
+    #
+    # Four shards then grew into the ceiling: across five runs of one branch, completed
+    # shards took 17-25 minutes and run 33934756997 cancelled a green 3/4 at 25m12s —
+    # the same truncation as above. The bound is kept; the work per shard is cut instead.
+    # Six shards put each leg at roughly two-thirds of the four-shard wall time, back
+    # inside the margin 25 was chosen to provide.
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6]
     steps:
       - name: Show selected runner
         shell: bash
@@ -745,18 +751,18 @@ jobs:
           set -uo pipefail
           suite_log="$(mktemp -t ocx-windows-suite.XXXXXX)"
           for attempt in 1 2; do
-            bun test --isolate --timeout 60000 tests --shard=${{ matrix.shard }}/4 2>&1 | tee "$suite_log"
+            bun test --isolate --timeout 60000 tests --shard=${{ matrix.shard }}/6 2>&1 | tee "$suite_log"
             suite_status="${PIPESTATUS[0]}"
             if [ "$suite_status" -eq 0 ]; then
               exit 0
             fi
             if ! grep -Eqi 'oh no: Bun has crashed|Internal assertion failure|Segmentation fault at address|Illegal instruction|Bus error|Aborted \(core dumped\)' "$suite_log"; then
-              echo "::error::Windows shard ${{ matrix.shard }}/4 failed on attempt ${attempt} (exit ${suite_status}); assertion failures are not retried."
+              echo "::error::Windows shard ${{ matrix.shard }}/6 failed on attempt ${attempt} (exit ${suite_status}); assertion failures are not retried."
               exit "$suite_status"
             fi
-            echo "::warning::Bun runtime crash in Windows shard ${{ matrix.shard }}/4 (exit ${suite_status}, attempt ${attempt})."
+            echo "::warning::Bun runtime crash in Windows shard ${{ matrix.shard }}/6 (exit ${suite_status}, attempt ${attempt})."
           done
-          echo "::error::Bun runtime crash repeated on Windows shard ${{ matrix.shard }}/4; failing after one retry."
+          echo "::error::Bun runtime crash repeated on Windows shard ${{ matrix.shard }}/6; failing after one retry."
           exit 1
 
       - name: CLI help smoke

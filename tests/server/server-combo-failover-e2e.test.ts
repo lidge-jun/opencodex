@@ -37,6 +37,8 @@ import {
 } from "../../src/responses/state";
 import { clearCursorThreadContinuityForTests } from "../../src/adapters/cursor/thread-continuity";
 import { COMPACT_PROMPT, encodeCompactionSummary } from "../../src/responses/compaction";
+import { clearKeyCooldowns } from "../../src/providers/key-failover";
+import { consumeComboFailure } from "../../src/server/responses/core";
 
 // Full-suite Windows load: startServer + combo rename/delete management flows exceed the
 // default 5s per-test budget (same flake class as 810fa115 / claude-management-api).
@@ -138,6 +140,7 @@ beforeEach(() => {
   process.env.OPENCODEX_HOME = testDir;
   clearComboSelectionState();
   clearComboTargetCooldowns();
+  clearKeyCooldowns();
   clearCodexUpstreamHealth();
   customRunTurn = undefined;
   customFetchResponse = undefined;
@@ -169,6 +172,7 @@ afterEach(async () => {
     if (testDir) removeTreeWithRetry(testDir);
     clearComboSelectionState();
     clearComboTargetCooldowns();
+    clearKeyCooldowns();
     clearCodexUpstreamHealth();
     clearRequestLogsForTests();
   }
@@ -1355,6 +1359,7 @@ describe("server combo failover 030 activation matrix", () => {
     const config = comboConfig({
       a: provider("test-response", "https://test.invalid/v1", pool[0]!.key, { apiKeyPool: pool }),
     });
+    saveConfig(config);
     const response = await postLogged(config);
     expect(response.status).toBe(200);
     await response.text();
@@ -1600,6 +1605,152 @@ describe("server combo failover 030 activation matrix", () => {
     expect((await post(config)).status).toBe(200);
     expect(aHits).toBe(2);
     expect(bHits).toBe(2);
+  });
+
+  test("waits in the hop-level path when later targets are already cooling", async () => {
+    const t0 = Date.parse("2026-07-18T00:00:00.000Z");
+    Date.now = () => t0;
+    let aHits = 0;
+    let bHits = 0;
+    let cHits = 0;
+    const a = serve(() => {
+      aHits += 1;
+      return Response.json({ error: { message: "rate limited" } }, { status: 429 });
+    });
+    const b = serve(() => {
+      bHits += 1;
+      return bHits === 1
+        ? Response.json({ error: { message: "rate limited" } }, { status: 429 })
+        : chatSuccess("first cooled target recovered", "m2");
+    });
+    const c = serve(() => {
+      cHits += 1;
+      return Response.json({ error: { message: "rate limited" } }, { status: 429 });
+    });
+    const providers = {
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+      c: provider("openai-chat", baseUrl(c), "key-c"),
+    };
+    const cooldown = { cooldownMs: 200, waitForCooldownMs: 1_000 };
+
+    // The prior request only includes B and C, so it cools those targets while A remains
+    // eligible for the fresh request below.
+    const prior = await post(comboConfig(providers, [
+      { provider: "b", model: "m2" },
+      { provider: "c", model: "m3" },
+    ], cooldown));
+    expect(prior.status).toBe(429);
+    await prior.text();
+    expect([aHits, bHits, cHits]).toEqual([0, 1, 1]);
+
+    const warnings: unknown[][] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args); };
+    try {
+      const fresh = await post(comboConfig(providers, [
+        { provider: "a", model: "m1" },
+        { provider: "b", model: "m2" },
+        { provider: "c", model: "m3" },
+      ], cooldown));
+      expect(fresh.status).toBe(200);
+      expect(await fresh.text()).toContain("first cooled target recovered");
+    } finally {
+      console.warn = originalWarn;
+    }
+
+    expect([aHits, bHits, cHits]).toEqual([1, 2, 1]);
+    expect(warnings
+      .filter(args => String(args[0]).includes("all targets cooling, waiting"))
+      .map(args => args[0]))
+      .toEqual(["[combo] free: all targets cooling, waiting 200ms for b/m2"]);
+  });
+
+  test("returns immediate 503 when all targets cool and the wait budget is unset", async () => {
+    const t0 = Date.parse("2026-07-18T00:00:00.000Z");
+    Date.now = () => t0;
+    let aHits = 0;
+    let bHits = 0;
+    let cHits = 0;
+    const a = serve(() => {
+      aHits += 1;
+      return Response.json({ error: { message: "rate limited" } }, { status: 429 });
+    });
+    const b = serve(() => {
+      bHits += 1;
+      return Response.json({ error: { message: "rate limited" } }, { status: 429 });
+    });
+    const c = serve(() => {
+      cHits += 1;
+      return Response.json({ error: { message: "rate limited" } }, { status: 429 });
+    });
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+      c: provider("openai-chat", baseUrl(c), "key-c"),
+    }, [
+      { provider: "a", model: "m1" },
+      { provider: "b", model: "m2" },
+      { provider: "c", model: "m3" },
+    ], { cooldownMs: 200 });
+
+    const exhausted = await post(config);
+    expect(exhausted.status).toBe(429);
+    await exhausted.text();
+    expect([aHits, bHits, cHits]).toEqual([1, 1, 1]);
+
+    const unavailable = await post(config);
+    expect(unavailable.status).toBe(503);
+    expect(await unavailable.text()).toContain("No available targets for combo: free");
+    expect([aHits, bHits, cHits]).toEqual([1, 1, 1]);
+  });
+
+  test("a past Retry-After date remains immediate through response consumption", async () => {
+    const now = Date.parse("2026-07-18T00:00:00.000Z");
+    const failure = await consumeComboFailure(Response.json({ error: { message: "rate limited" } }, {
+      status: 429,
+      headers: { "retry-after": new Date(now - 1_000).toUTCString() },
+    }), undefined, now);
+    expect(failure.retryAfter).toBe("0");
+    expect(failure.response.headers.get("retry-after")).toBe("0");
+  });
+
+  test("body-confirmed quota inside a 5xx still cools the target for its reset window", async () => {
+    // consumeComboFailure used to forward x-codex-*-reset-at only when the RAW status was
+    // 402/429, so an upstream that wrapped a quota refusal in a 5xx lost the window it had
+    // just advertised: the target fell back to the configured cooldownMs and came back up
+    // long before the quota did. shouldRetryCodexPoolAccountQuota already treats a
+    // body-confirmed quota message inside a 5xx as quota, and this is the same normalization
+    // applied to the cooldown path. One target only, so nothing masks the cooldown by
+    // failing over.
+    const t0 = Date.parse("2026-07-18T00:00:00.000Z");
+    Date.now = () => t0;
+    const resetAt = Math.floor((t0 + 3 * 60 * 60_000) / 1000);
+    let hits = 0;
+    const a = serve(() => {
+      hits += 1;
+      return Response.json({ error: { message: "You exceeded your current quota" } }, {
+        status: 503,
+        headers: { "x-codex-primary-reset-at": String(resetAt) },
+      });
+    });
+    const config = comboConfig(
+      { a: provider("openai-chat", baseUrl(a), "key-a") },
+      [{ provider: "a", model: "m1" }],
+      { cooldownMs: 200 },
+    );
+
+    const response = await post(config);
+    expect(response.status).toBe(503);
+    await response.text();
+    expect(hits).toBe(1);
+
+    const target = { provider: "a", model: "m1" };
+    // The configured 200ms cooldown would have expired here; the advertised window has not.
+    expect(isComboTargetInCooldown("free", target, t0 + 60_000)).toBe(true);
+    expect(isComboTargetInCooldown("free", target, t0 + 9 * 60_000)).toBe(true);
+    // Reset metadata cannot extend the existing ten-minute combo cooldown ceiling.
+    expect(isComboTargetInCooldown("free", target, t0 + 10 * 60_000)).toBe(false);
   });
 
   test("disabled image input rejects the request before any combo target is called", async () => {

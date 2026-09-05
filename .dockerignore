@@ -1,0 +1,21 @@
+**
+
+!package.json
+!bun.lock
+!tsconfig.json
+
+!src/
+!src/**
+# Prepared on the host with the canonical Git-tracked-source generator.
+!src/generated/compatibility-version.json
+
+!docker/
+!docker/**
+
+!gui/
+!gui/**
+gui/node_modules/
+gui/dist/
+gui/.vite/
+
+**/*.log

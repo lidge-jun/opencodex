@@ -19,6 +19,7 @@ import {
   setPromptTextProbeCommandForTests,
 } from "../../src/codex/prompt-text-probe";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { INTERNAL_DEADLINE_MS } from "../helpers/test-budget";
 
 const lifecycleRoots: string[] = [];
 const VALID_PROBE_OUTPUT = JSON.stringify([{
@@ -32,7 +33,8 @@ function message(text: string): string {
 }
 
 async function waitUntil(predicate: () => boolean, detail: string): Promise<void> {
-  const deadline = Date.now() + 5_000;
+  // Gates on a spawned child writing its pid marker or exiting: 8-19 s on windows-latest.
+  const deadline = Date.now() + INTERNAL_DEADLINE_MS;
   while (!predicate()) {
     if (Date.now() >= deadline) throw new Error(`timed out waiting for ${detail}`);
     await Bun.sleep(10);
