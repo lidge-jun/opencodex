@@ -812,6 +812,25 @@ ids with context `922000` and max input `922000`; OpenRouter seeds `openai/gpt-5
 }
 ```
 
+## OpenCode Go reasoning efforts
+
+Go catalog rows preserve their configured reasoning efforts exactly, including during
+catalog sync. OpenCodex does not append synthetic `max` or `ultra` choices to these rows.
+Use `modelReasoningEfforts` and `modelDefaultReasoningEfforts` for each model's accepted
+upstream values. Key these per-provider maps by upstream model ID, not the routed
+`opencode-go/<model-id>` catalog slug. For example, a configured `["high", "max"]` list
+remains exactly those two choices; a configured `["high", "xhigh"]` list does not gain `max`.
+See the [OpenCode Go model list](https://opencode.ai/docs/go/#models) for the current roster.
+A configured subset can exclude the lower tiers. Other providers retain their existing behavior.
+
+For a native-first picker, include native ids in `modelPickerOrder` followed by the
+routed ids. This orders the complete picker while preserving OpenCodex's separate natural-priority
+guidance calculation. Native Codex's advertised five follow picker priority and may change;
+exact-name override eligibility is not limited to that advertisement. Routed-only orders keep
+their previous behavior. See the
+[ordering migration note](/guides/model-ordering/#migration-note-native-ids-in-existing-orders).
+`modelDisplayNames` on a provider controls readable labels without changing wire ids.
+
 ## OpenCode Go session and agent messages
 
 With the [`openai-responses` adapter](/reference/adapters/#openai-responses) and

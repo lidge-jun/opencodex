@@ -28,6 +28,8 @@ görünen ilk beş satırı tanıtır.
 
 İlgili seçicisiz öncelikler şunlardır:
 
+Aşağıdaki öncelik tabloları ve örnek, seçicinin tamamını sıralama modu kapalıyken geçerlidir.
+
 | Katalog girdisi | Öncelik | Kaynak |
 | --- | ---: | --- |
 | `subagentModels[i]` | `i` (`0` - `4`) | `src/codex/catalog/sync.ts` içindeki öne çıkan sıra haritası |
@@ -134,10 +136,48 @@ kimlik kullanın. Hesap seçicileriyle tek bir yalın yerel seçenek birden çok
 seçici nitelikli katalog satırına genişleyebilir, bu nedenle yapılandırılmış
 seçimler ve tanıtılan satırlar birebir olmak zorunda değildir.
 
-Şu anda `OcxConfig` içinde genel bir `modelOrder`, `providerOrder` veya öncelik
-haritası ayarı yoktur. Desteklenen sıralama alanı `subagentModels`'dır;
-`disabledModels` ve her sağlayıcının `selectedModels` alanı görünürlük
-alanlarıdır. Kalan seçici sırasını değiştirmek bir yapılandırma düzenlemesinden
-ziyade kod düzeyinde bir davranış değişikliği gerektirir.
+`modelPickerOrder` yalnızca seçicideki görüntüleme sırasını belirler. Liste yalnızca yönlendirilmiş
+`<provider>/<model>` kimlikleri içeriyorsa, listelenen ve öne çıkarılmamış satırlar ayrı bir
+görüntüleme aralığında (`1000 + i`) liste sırasıyla yer alır. Listelenmeyen yönlendirilmiş satırlar
+normal önceliklerini korur ve bu aralıktan önce kalır. `subagentModels` içindeki satırlar öne çıkan
+önceliklerini, yerel satırlar da normal konumlarını korur. Göreli sırasını belirlemek istediğiniz
+tüm yönlendirilmiş satırları listeleyin.
 
+Seçicinin tamamını sıralamak için `gpt-5.6-sol` gibi `/` içermeyen en az bir yalın katalog kimliği
+ekleyin. Boş veya yalnızca boşluk içeren girdiler bu modu etkinleştirmez.
 
+```json
+{
+  "modelPickerOrder": ["gpt-5.6-sol", "opencode-go/glm-5.3"]
+}
+```
+
+Listelenen satırlar önce dizi sırasıyla, listelenmeyenler ise ardından doğal öncelik sırasıyla gelir.
+Eşleştirme tam katalog kimliğini kullanır: `gpt-5.6-sol` ile `openai/gpt-5.6-sol` farklı satırlardır.
+Aynı yönlendirilmiş kimliğin ham ve kodlanmış yazımları da kabul edilir; tam eşleşme, eşdeğer
+eşleşmeden önceliklidir. Boş ve yalnızca boşluk içeren girdiler yok sayılır. Hesaba özel satırlar
+için seçiciyi içeren tam kimliği yazın.
+
+### Geçiş uyarısı: mevcut listelerdeki yerel kimlikler
+
+Önceden `modelPickerOrder` içindeki yalın yerel kimlikler yok sayılıyordu. Mevcut bir listede böyle
+bir kimlik bulunması artık öne çıkan satırlar dahil tüm seçicinin sıralanmasını etkinleştirir.
+Eski, yalnızca yönlendirilmiş satırlara uygulanan davranışı korumak için yalın kimlikleri kaldırın.
+Tanımlanmamış, boş, yalnızca boşluk girdileri içeren veya yalnızca yönlendirilmiş kimliklerden oluşan
+listeler önceki davranışlarını korur.
+
+`modelPickerOrder`, OpenCodex'in alt ajan rehberliği için doğal önceliğe göre en fazla beş tercih
+edilen adayı seçen hesaplamasını korur. Taşınan her satırın doğal önceliği, yerel `priority` değerinden
+ayrı saklanır; yalnızca seçici sırasını değiştirmek bu hesaplamanın sonucunu değiştirmemelidir.
+Tam model adıyla geçersiz kılma uygunluğunu da kısıtlamaz: tanıtılan liste bir izin listesi değildir.
+Mevcut kimlik doğrulama, model, effort ve arka uç kısıtlamaları geçerliliğini korur.
+
+Yerel Codex, `spawn_agent` içinde tanıtılacak beş modeli yerel `priority` sırasındaki uygun ve
+seçicide görünür modellerden seçer. Bu, V1 ve model geçersiz kılmalarının sunulduğu V2 için geçerlidir.
+Dolayısıyla OpenCodex'in tercih edilen adayları değişmese bile, tanıtılan beş model seçici sırasıyla
+birlikte değişebilir. V1'e OpenCodex tercih listesi enjekte edilmez. V2, istemci katalog durumu izin
+verdiğinde ek olarak doğal önceliğe dayalı OpenCodex rehberliği alabilir; bu rehberlik yerel aracın
+tanıttığı listeyi yeniden sıralamaz.
+
+`disabledModels` ve her sağlayıcının `selectedModels` alanı
+görünürlüğü denetler. Ayrı bir `modelOrder`, `providerOrder` veya öncelik haritası ayarı yoktur.

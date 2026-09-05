@@ -243,11 +243,23 @@ advertises) but `expose_spawn_agent_model_overrides` on V2 (default `true`; when
 is omitted *and* the `model`/`reasoning_effort` schema fields are removed). And V2's
 `hide_spawn_agent_metadata` defaults true, which removes `service_tier`.
 
-`modelPickerOrder` (#1649) deliberately does **not** feed this window: it rewrites only the
-Codex-visible `priority` while `SPAWN_PRIORITY_FIELD` preserves the natural priority the roster
-sorts by, so a display reorder can never change candidate membership. That divergence from
-upstream's own ordering is the feature's purpose, not a defect —
-`tests/codex-integration/codex-catalog-model-picker-order.test.ts` pins it.
+`modelPickerOrder` (#1649) separates **OpenCodex guidance** from native advertisement.
+`SPAWN_PRIORITY_FIELD` preserves the natural priority used by `effectiveSubagentRoster`, so
+OpenCodex's preferred/guidance candidate calculation stays independent of display order.
+Native Codex ignores that private field: its advertised five on V1 and exposed V2 follow the
+native `priority` and may change when the picker is reordered. Exact-name override lookup is
+not restricted to those five advertised rows. V1 receives no OpenCodex preferred-roster
+injection; V2 can additionally receive natural-priority guidance when its catalog state permits.
+The helper tests pin guidance behavior, not native tool-description equivalence.
+
+A nonblank bare id in `modelPickerOrder` opts into complete-picker display ordering. Exact
+ids take precedence over raw/encoded equivalents; routed-only and empty lists keep the legacy
+ordering behavior. This does not change the separate `opencodex_spawn_priority` contract.
+Retained rows recompute their natural ranks from the current featured roster and account-selector
+stride before display order is applied, so a discovery outage cannot preserve an obsolete
+featured or picker rank. Canonical `opencode-go` rows retain their configured reasoning ladder
+both when generated and when merged from retained catalog state; synthetic max/ultra choices
+are not added to that provider's declared ladder.
 
 Full derivation with per-line citations: `devlog/_plan/260816_codexrs_multiagent_v2_and_history_perf/013_five_cap_v1_vs_v2.md`.
 
