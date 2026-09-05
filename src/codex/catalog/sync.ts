@@ -520,7 +520,7 @@ export function buildCatalogEntriesFromObservedState({
   // before. The spawn_agent candidate window is derived separately from SPAWN_PRIORITY_FIELD, so
   // this display reorder cannot change which rows are spawn candidates.
   const pickerOrder = Array.isArray(modelPickerOrder)
-    ? modelPickerOrder.filter((id): id is string => typeof id === "string" && id.length > 0)
+    ? modelPickerOrder.filter((id): id is string => typeof id === "string" && id.trim().length > 0)
     : [];
   const pickerOrderRank = new Map(pickerOrder.map((slug, i) => [slug, i] as const));
   const pickerOrderActive = pickerOrder.length > 0;
@@ -790,7 +790,7 @@ function modelPickerRank(order: readonly string[]): (slug: string) => number | u
 
 /** A picker order containing native ids orders the whole list, without changing spawn ranks. */
 export function applyFullModelPickerOrder(entries: RawEntry[], order: readonly string[]): void {
-  const pickerOrder = order.filter(slug => slug.length > 0);
+  const pickerOrder = order.filter(slug => slug.trim().length > 0);
   if (!pickerOrder.some(slug => !slug.includes("/"))) return;
   const rankOf = modelPickerRank(pickerOrder);
   for (const entry of entries) {
@@ -1000,7 +1000,7 @@ export function mergeCatalogEntriesFromObservedState({
         finished.priority = nativePriority(slug, upstream.priority);
         return finished;
       }
-      const preserved = normalizeServiceTiers({ ...m, priority: nativePriority(slug, m.priority) });
+      const preserved = normalizeServiceTiers({ ...m, priority: nativePriority(slug, m[SPAWN_PRIORITY_FIELD] ?? m.priority) });
       // Recompute spawn rank from current featured models, not a prior picker override.
       delete preserved[SPAWN_PRIORITY_FIELD];
       // Older natives kept from disk still need the mock top tiers (max + ultra always
@@ -1087,30 +1087,30 @@ export function mergeCatalogEntriesFromObservedState({
     // remain outside provider ownership and survive unless a fresh row replaces their exact slug.
     return !isOcxAuthoredRoutedEntry(entry);
   });
-  // Retained rows bypass the builder: undo a prior display override before applying the
-  // current routed-only order. Fresh rows already carry the current order and must stay intact.
-  const pickerOrder = modelPickerOrder.filter(slug => slug.length > 0);
-  if (!pickerOrder.some(slug => !slug.includes("/"))) {
-    const rankOf = modelPickerRank(pickerOrder);
-    const priorityStride = Math.max(accountSelectors.length, 1);
-    for (const entry of preservedRoutedEntries) {
-      const natural = entry[SPAWN_PRIORITY_FIELD];
-      if (typeof natural === "number") {
-        entry.priority = natural;
-        delete entry[SPAWN_PRIORITY_FIELD];
-      }
-      const slug = String(entry.slug);
-      if (!isOcxAuthoredRoutedEntry(entry) || isNativeAliasCatalogEntry(entry)) continue;
-      const featuredRank = rank.get(slug);
-      if (featuredRank !== undefined) {
-        entry.priority = featuredRank * priorityStride;
-        continue;
-      }
-      const pickerIndex = rankOf(slug);
-      if (pickerIndex !== undefined) {
-        entry[SPAWN_PRIORITY_FIELD] = typeof entry.priority === "number" ? entry.priority : 5;
-        entry.priority = PICKER_ORDER_PRIORITY_BASE + pickerIndex * priorityStride;
-      }
+  // Retained rows bypass the builder. Recompute managed spawn ranks from current config
+  // before either display-order mode; a saved display override is not current roster authority.
+  const pickerOrder = modelPickerOrder.filter(slug => slug.trim().length > 0);
+  const fullPickerOrder = pickerOrder.some(slug => !slug.includes("/"));
+  const rankOf = modelPickerRank(pickerOrder);
+  const featuredRankOf = modelPickerRank(featured);
+  const priorityStride = Math.max(accountSelectors.length, 1);
+  for (const entry of preservedRoutedEntries) {
+    const natural = entry[SPAWN_PRIORITY_FIELD];
+    if (typeof natural === "number") {
+      entry.priority = natural;
+      delete entry[SPAWN_PRIORITY_FIELD];
+    }
+    const slug = String(entry.slug);
+    if (!isOcxAuthoredRoutedEntry(entry) || isNativeAliasCatalogEntry(entry)) continue;
+    const featuredRank = featuredRankOf(slug);
+    entry.priority = featuredRank !== undefined
+      ? featuredRank * priorityStride
+      : (accountSelectors.length > 0 ? 1_000 : 0) + 5;
+    if (featuredRank !== undefined || fullPickerOrder) continue;
+    const pickerIndex = rankOf(slug);
+    if (pickerIndex !== undefined) {
+      entry[SPAWN_PRIORITY_FIELD] = entry.priority;
+      entry.priority = PICKER_ORDER_PRIORITY_BASE + pickerIndex * priorityStride;
     }
   }
   let finalRoutedEntries = [...admittedRoutedEntries, ...preservedRoutedEntries];
