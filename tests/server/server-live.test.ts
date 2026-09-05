@@ -198,7 +198,7 @@ test("POST /v1/live rewrites ChatGPT multipart into backend realtime/calls JSON"
   }
 });
 
-test("POST /v1/live relays to an OpenAI API-key provider at /v1/live without AVAS", async () => {
+test.each(["/v1/live", "/backend-api/codex/live"])("POST %s relays to an OpenAI API-key provider at /v1/live without AVAS", async (path) => {
   const captured: CapturedRequest[] = [];
   const upstream = fakeLiveUpstream(captured, 201, "/v1/live/rtc_api");
   saveConfig({
@@ -217,7 +217,7 @@ test("POST /v1/live relays to an OpenAI API-key provider at /v1/live without AVA
   const server = startServer(0);
   try {
     const { body, contentType } = multipartLiveBody();
-    const response = await fetch(new URL("/v1/live", server.url), {
+    const response = await fetch(new URL(path, server.url), {
       method: "POST",
       headers: { "content-type": contentType },
       body,

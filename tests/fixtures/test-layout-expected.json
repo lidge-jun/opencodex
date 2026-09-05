@@ -330,6 +330,8 @@
   "consume-for-inspection-cancel.test.ts": "server",
   "container-bootstrap.test.ts": "service",
   "context-cap-unknown-window.test.ts": "providers",
+  "context-compat.test.ts": "codex-integration",
+  "context-history.test.ts": "server",
   "continuation-dedup.test.ts": "responses",
   "core-lab-boundary.test.ts": "lab",
   "cost-cap-unknown-evidence.test.ts": "usage",
