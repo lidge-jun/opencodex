@@ -500,7 +500,8 @@ describe("rate-limit reset credits", () => {
         "x-codex-secondary-reset-at": "1788000000",
       });
       applyAccountQuotaFromUpstreamHeaders("burst-A", headers);
-      expect(getAccountQuota("burst-A")).toEqual({
+      const stored = getAccountQuota("burst-A");
+      expect(stored).toEqual({
         shortPercent: 97,
         shortResetAt: 1787401330,
         shortObservedAt: expect.any(Number),
@@ -509,6 +510,7 @@ describe("rate-limit reset credits", () => {
         weeklyResetAt: 1788000000,
         updatedAt: expect.any(Number),
       });
+      expect(stored?.shortObservedAt).toBe(stored?.updatedAt);
     });
 
     it("an exhausted burst window does not poison the weekly reading", () => {

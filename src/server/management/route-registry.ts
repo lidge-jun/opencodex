@@ -1,7 +1,7 @@
 /**
  * Declared inventory of every reachable management route.
  *
- * DECLARED, not harvested. A grep cannot see this surface: 18 routes are registered
+ * DECLARED, not harvested. A grep cannot see this surface: 19 routes are registered
  * through a regex, an `endsWith`, a `pathname.slice`, a prefix decode, a path constant, or a
  * negated `pathname !== "…"` guard, and two of those are live routes whose only textual
  * trace is the negated form. For `GET /api/storage` an equality scan finds solely the dead
@@ -303,7 +303,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/system/memory", module: "server/management/system-routes", mutates: false },
   { method: "GET", path: "/api/system/windows-replace-retries", module: "server/management/system-routes", mutates: false },
   { method: "POST", path: "/api/system/restart", module: "server/management/system-routes", mutates: true },
-  // --- Routes an equality scan of their own file cannot see (18). ---
+  // --- Routes an equality scan of their own file cannot see (19). ---
   // Each carries `mechanism`; the reconciliation test counts these separately.
   { method: "GET", path: "/api/storage", module: "server/management/storage-log-guard-routes", mutates: false, mechanism: "negated-guard" },
   { method: "GET", path: "/api/routing-analytics", module: "server/management/routing-analytics-routes", mutates: false, mechanism: "negated-guard" },

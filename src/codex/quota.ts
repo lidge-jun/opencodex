@@ -332,7 +332,7 @@ function mergeAccountQuota(
   quota: Omit<StoredAccountQuota, "updatedAt">,
   existing: StoredAccountQuota | undefined,
   updatedAt: number,
-  requireMonthlyPrimaryForWeeklyReplacement = false,
+  policyEvidence = false,
 ): StoredAccountQuota {
   const next: StoredAccountQuota = { updatedAt };
   const creditsOnly = quota.resetCredits !== undefined && !snapshotHasUsage(quota);
@@ -356,7 +356,7 @@ function mergeAccountQuota(
     if (quota.weeklyPercent !== undefined) next.weeklyPercent = quota.weeklyPercent;
     if (quota.weeklyResetAt !== undefined) next.weeklyResetAt = quota.weeklyResetAt;
   } else if (snapshotHasMonthly(quota)
-    && (!requireMonthlyPrimaryForWeeklyReplacement || quota.monthlyIsPrimaryWindow === true)) {
+    && (!policyEvidence || quota.monthlyIsPrimaryWindow === true)) {
     // Legacy monthly-only clearing is unchanged (#382). Policy needs a governing
     // monthly-primary observation: a tertiary-only header cannot retract weekly99.
   } else if (existing?.weeklyPercent !== undefined) {
@@ -379,7 +379,7 @@ function mergeAccountQuota(
     if (existing.monthlyIsPrimaryWindow === true) next.monthlyIsPrimaryWindow = true;
   }
 
-  const preserveKnownShort = quota.shortPercent === undefined && finitePercent(existing?.shortPercent);
+  const preserveKnownShort = policyEvidence && quota.shortPercent === undefined && finitePercent(existing?.shortPercent);
   if (snapshotHasShort(quota) && !preserveKnownShort) {
     if (quota.shortPercent !== undefined) {
       next.shortPercent = quota.shortPercent;

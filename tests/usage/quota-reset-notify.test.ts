@@ -396,9 +396,9 @@ describe("GET /api/quota-resets", () => {
     } as OcxConfig;
   }
 
-  async function get(path: string): Promise<Response | null> {
+  async function get(path: string, method = "GET"): Promise<Response | null> {
     const req = new Request(`http://localhost${path}`, {
-      method: "GET",
+      method,
       headers: { host: "localhost" },
     });
     return handleManagementAPI(req, new URL(req.url), managementConfig(), {
@@ -438,11 +438,12 @@ describe("GET /api/quota-resets", () => {
     expect(response?.status).toBe(400);
   });
 
-  test("an unrelated management path is left to the rest of the chain", async () => {
-    // The handler is prefix-guarded, so it must return null rather than answering for
-    // everything: returning a response here would shadow every other route.
-    const response = await get("/api/quota-resets/extra");
-    expect(response?.status).not.toBe(200);
+  test.each([
+    ["/api/quota-resets/extra", "GET"],
+    ["/api/quota-resets-extra", "GET"],
+    ["/api/quota-resets", "POST"],
+  ])("%s %s is left to the rest of the chain", async (path, method) => {
+    expect(await get(path!, method)).toBeNull();
   });
 });
 

@@ -301,17 +301,17 @@ describe("declared short-window producer evidence", () => {
         expect(getMainPolicyQuota()).not.toHaveProperty("shortObservedAt");
         expect(matchesMainQuotaCredential(accessToken, "fixture-main-a")).toBe(true);
         expect(getMainAccountHardLockStatus({ codexMainAccountHardLock: true })).toEqual({ enabled: true, state: "unknown" });
-        // The paired case: unknown metadata must not erase a previously measured short99.
+        // Unknown metadata replaces the legacy tuple but must retain trusted policy short99.
         const firstShortObservedAt = observationTime;
         await fetchMainAccountInfo(true);
         expect(getMainPolicyQuota()?.shortObservedAt).toBe(firstShortObservedAt);
         observationTime += 60_000;
         await fetchMainAccountInfo(true);
         expect(calls).toBe(4);
-        for (const stored of [getAccountQuota(MAIN), getMainPolicyQuota()]) {
-          expect(stored).toMatchObject({ shortPercent: 99, shortWindowSeconds: 18_000,
-            shortResetAt: 3_000_000_000, shortObservedAt: firstShortObservedAt });
-        }
+        expect(getAccountQuota(MAIN)).toEqual({ weeklyPercent: 99, shortWindowSeconds: 3_600,
+          shortResetAt: 4_000_000_000, updatedAt: observationTime });
+        expect(getMainPolicyQuota()).toEqual({ weeklyPercent: 99, shortPercent: 99, shortWindowSeconds: 18_000,
+          shortResetAt: 3_000_000_000, shortObservedAt: firstShortObservedAt, updatedAt: observationTime });
         const enabled = { codexMainAccountHardLock: true };
         expect(getMainAccountHardLockStatus(enabled, 3_000_000_000_000 - 1).state).toBe("blocked");
         expect(getMainAccountHardLockStatus(enabled, 3_000_000_000_000)).toEqual({ enabled: true, state: "blocked" });
@@ -359,10 +359,10 @@ describe("declared short-window producer evidence", () => {
       observationTime += 60_000;
       headers.set("x-codex-primary-window-minutes", "60");
       applyAccountQuotaFromUpstreamHeaders(MAIN, headers, undefined, writer);
-      for (const stored of [getAccountQuota(MAIN), getMainPolicyQuota()]) {
-        expect(stored).toMatchObject({ shortPercent: 99, shortWindowSeconds: 18_000,
-          shortResetAt: 3_000_000_000, shortObservedAt: firstShortObservedAt });
-      }
+      expect(getAccountQuota(MAIN)).toEqual({ weeklyPercent: 99, shortWindowSeconds: 3_600,
+        shortResetAt: 4_000_000_000, updatedAt: observationTime });
+      expect(getMainPolicyQuota()).toEqual({ weeklyPercent: 99, shortPercent: 99, shortWindowSeconds: 18_000,
+        shortResetAt: 3_000_000_000, shortObservedAt: firstShortObservedAt, updatedAt: observationTime });
       const enabled = { codexMainAccountHardLock: true };
       expect(getMainAccountHardLockStatus(enabled, 3_000_000_000_000 - 1).state).toBe("blocked");
       expect(getMainAccountHardLockStatus(enabled, 3_000_000_000_000)).toEqual({ enabled: true, state: "blocked" });
