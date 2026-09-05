@@ -32,6 +32,7 @@ export function GuardrailsSettingsPanel({
   const selectedProviderIds = settings.providerScope.mode === "all"
     ? providerIds
     : settings.providerScope.providerIds;
+  const selectedProviderIdSet = new Set(selectedProviderIds);
   const providerFingerprint = selectedProviderIds.join(",");
   const [providerErrorFor, setProviderErrorFor] = useState<string | null>(null);
   const providerError = providerErrorFor === providerFingerprint;
@@ -114,7 +115,7 @@ export function GuardrailsSettingsPanel({
                 : "guardrails.providerScopeSelectedHint")}
             </p>
             {settings.providerOptions.map(provider => {
-              const checked = selectedProviderIds.includes(provider.id);
+              const checked = selectedProviderIdSet.has(provider.id);
               return (
                 <label key={provider.id}>
                   <input
@@ -136,9 +137,10 @@ export function GuardrailsSettingsPanel({
                         return;
                       }
                       const next = [...new Set([...selectedProviderIds, provider.id])].sort();
+                      const nextSet = new Set(next);
                       setProviderErrorFor(null);
                       onSettings({
-                        providerScope: providerIds.every(id => next.includes(id))
+                        providerScope: providerIds.every(id => nextSet.has(id))
                           ? { mode: "all" }
                           : { mode: "selected", providerIds: next },
                       });
