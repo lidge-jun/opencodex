@@ -481,6 +481,8 @@ describe("activation is the single switch", () => {
     // The end-to-end proof: config -> activation -> the production quota writer -> HTTP body.
     // Every earlier test exercises one link; this is the only one that shows the chain holds.
     const bodies: string[] = [];
+    const webhookUrl = "https://quota-webhook.example.test/hook";
+    const originalFetch = globalThis.fetch;
     const server = Bun.serve({
       port: 0,
       hostname: "127.0.0.1",
@@ -499,7 +501,7 @@ describe("activation is the single switch", () => {
       },
       quotaResetNotify: {
         enabled: true,
-        webhookUrl: `http://127.0.0.1:${server.port}/hook`,
+        webhookUrl,
         allowPrivateNetwork: true,
         // Passive-only: this asserts the live request path fires without any timer involved.
         pollSeconds: 0,
@@ -509,6 +511,13 @@ describe("activation is the single switch", () => {
     const previousHome = process.env["OPENCODEX_HOME"];
     process.env["OPENCODEX_HOME"] = home;
     try {
+      // Config must satisfy the production HTTPS rule. Only the transport for this exact
+      // synthetic URL is redirected to the local receiver; activation and payload delivery
+      // remain real, without adding TLS fixtures or weakening production validation.
+      globalThis.fetch = ((input, init) => originalFetch(
+        String(input) === webhookUrl ? `http://127.0.0.1:${server.port}/hook` : input,
+        init,
+      )) as typeof fetch;
       resetQuotaResetNotifyCacheForTests();
       resetQuotaResetStoreForTests();
       resetQuotaResetActivationForTests();
@@ -539,6 +548,7 @@ describe("activation is the single switch", () => {
       expect(payload["percentAfter"]).toBe(2);
       expect(bodies[0]).not.toContain("operator@example.com");
     } finally {
+      globalThis.fetch = originalFetch;
       setQuotaResetSink(null);
       resetQuotaResetActivationForTests();
       resetQuotaResetNotifyCacheForTests();
