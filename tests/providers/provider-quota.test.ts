@@ -203,6 +203,14 @@ describe("fetchProviderQuotaReports", () => {
     await saveCredential("google-antigravity", { access: "agy-access-secret", refresh: "agy-refresh-secret", expires: Date.now() + 3600_000, projectId: "agy-project-secret" });
     await saveCredential("kimi", { access: "kimi-access-secret", refresh: "kimi-refresh-secret", expires: Date.now() + 3600_000 });
 
+    // The Antigravity summary probe is pinned to Google's host through the provider-outbound
+    // transport and never touches globalThis.fetch; without this seam the test would make a
+    // real network request. A 404 here exercises the fetchAvailableModels fallback below.
+    setAntigravityAccountQuotaTransportForTests({
+      resolveAddresses: async () => ({ hostname: "daily-cloudcode-pa.googleapis.com", addresses: [{ address: "142.250.0.1", family: 4 }], privateNetwork: false }),
+      pinnedPost: async () => new Response("not found", { status: 404 }),
+    });
+
     const seen: { url: string; authorization?: string; body?: string }[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
