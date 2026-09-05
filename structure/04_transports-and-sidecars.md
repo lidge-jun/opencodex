@@ -317,6 +317,14 @@ true selects Responses, false now writes explicit Chat rather than deleting entr
 only genuinely different effective wires report mixed. A switch write also records the migration
 version (without lowering a future version), and provider-form overwrites retain omitted choices.
 
+Native routed Responses code-mode turns also receive the shared result-emission contract in both
+instructions and the lowered exec input description: a bare awaited helper return is discarded by
+the host, so visible results need `text(...)` or `notify(...)` in that first call. Paired exec outputs
+containing only an empty completion/failure wrapper use the shared explanatory annotation. The
+whole result is examined; populated text, image/file parts, unpaired results, shell-only catalogs,
+compaction and OpenAI-operated destinations are untouched. This does not rewrite valid JavaScript
+or reconstruct output that the code-mode host never emitted.
+
 [Decision Log]
 - 목적과 의도: Keep Codex hosted web search usable on xAI's public Responses endpoint without forwarding private OpenAI-only fields that xAI rejects.
 - 기존 구현 및 제약 조건: Codex emits `external_web_access`, `search_context_size`, `search_content_types`, and `user_location`; xAI documents a live-only `web_search` tool with domain filters and image flags, while Codex cached mode explicitly forbids external access.

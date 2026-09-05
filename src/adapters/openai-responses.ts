@@ -21,6 +21,7 @@ import { rewriteRoutedCustomToolsForUpstream } from "../responses/custom-tool-co
 import { rewriteRoutedToolSearchForUpstream } from "../responses/tool-search-compat";
 import { rewriteRoutedNamespaceToolsForUpstream } from "../responses/namespace-tool-compat";
 import { openaiResponsesUrl } from "./openai-responses-url";
+import { normalizeResponsesCodeMode } from "./responses-code-mode";
 import { injectXaiResponsesXSearch, normalizeXaiResponsesWebSearch } from "./xai-web-search";
 import { EMPTY_TOOL_OUTPUT_ANNOTATION, isWhitespaceOnlyTextPartArray } from "./empty-tool-output-annotation";
 import {
@@ -2447,6 +2448,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       // it as a summarizer turn (#422). The compaction body build removes the tool surface and must
       // therefore be the last routed transform that may depend on those declarations. Structural
       // sanitizers below can still run after it.
+      outBody = normalizeResponsesCodeMode(outBody, parsed, provider);
       if (parsed._compactionRequest === true && !isCanonicalOpenAiForwardProvider(provider)) {
         outBody = buildRoutedCompactionBody(outBody);
       }

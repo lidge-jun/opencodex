@@ -18,6 +18,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getConfigPath, loadConfig, saveConfig } from "../../src/config";
+import * as configStore from "../../src/config";
+import * as stateStores from "../../src/lib/state-store-registrations";
 import { OAUTH_PROVIDERS, reconcileOAuthProviders } from "../../src/oauth";
 import { runModelRenameStartupMigration } from "../../src/providers/model-rename-startup";
 import { startServer } from "../../src/server";
@@ -89,6 +91,41 @@ test.skipIf(!CAN_BIND)("startServer migrates old Grok Chat choices once and pres
       expect(resolveWireProtocolOverride("xai", model, optedIn.providers.xai!).adapter).toBe("openai-chat");
     }
   } finally { await restarted.stop(true); }
+});
+
+test.skipIf(!CAN_BIND)("preset reconciliation cannot undo an in-memory Grok migration after its write fails", async () => {
+  saveConfig({
+    ...staleConfig(), defaultProvider: "xai",
+    providers: { xai: {
+      ...structuredClone(OAUTH_PROVIDERS.xai.providerConfig), authMode: "oauth",
+      noVisionModels: ["stale-model"],
+      modelAdapters: { "grok-4.6": "openai-chat", "grok-4.5": "openai-chat" },
+    } },
+  });
+  const originalMutation = configStore.mutatePersistedConfig;
+  let rejectedMigration = false;
+  const mutation = spyOn(configStore, "mutatePersistedConfig").mockImplementation((mutate, ...rest) =>
+    originalMutation(fresh => {
+      const result = mutate(fresh);
+      if (!rejectedMigration && fresh.providers.xai?.xaiResponsesDefaultVersion === 1) {
+        rejectedMigration = true;
+        throw new Error("injected migration write failure");
+      }
+      return result;
+    }, ...rest));
+  const live = spyOn(stateStores, "setLiveStateStoreConfig");
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  let server: ReturnType<typeof startServer> | undefined;
+  try {
+    server = startServer(0);
+    expect(rejectedMigration).toBe(true);
+    const liveConfig = live.mock.calls[0]![0];
+    expect(liveConfig.providers.xai!.xaiResponsesDefaultVersion).toBe(1);
+    expect(resolveWireProtocolOverride("xai", "grok-4.6", liveConfig.providers.xai!).adapter).toBe("openai-responses");
+  } finally {
+    mutation.mockRestore(); live.mockRestore(); warn.mockRestore();
+    await server?.stop(true);
+  }
 });
 
 let testDir = "";

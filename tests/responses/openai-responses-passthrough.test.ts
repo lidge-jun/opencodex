@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
 import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction } from "../../src/adapters/openai-responses";
 import { openaiResponsesUrl } from "../../src/adapters/openai-responses-url";
+import { normalizeResponsesCodeMode } from "../../src/adapters/responses-code-mode";
+import { CODE_MODE_RESULT_ECHO_SENTENCE, EMPTY_EXEC_OUTPUT_MESSAGE, FAILED_EXEC_OUTPUT_MESSAGE } from "../../src/adapters/exec-tool-result-normalize";
 import { chatCompletionsToResponsesBody } from "../../src/chat/inbound";
 import { anthropicToResponsesBody } from "../../src/claude/inbound";
 import { parseRequest } from "../../src/responses/parser";
@@ -28,6 +30,100 @@ const provider = {
   baseUrl: "https://chatgpt.com/backend-api/codex",
   authMode: "forward" as const,
 };
+
+describe("native routed code-mode result visibility", () => {
+  const routed = { adapter: "openai-responses", baseUrl: "https://api.x.ai/v1", authMode: "key" as const };
+  const exec = { type: "custom", name: "exec", description: "Run JavaScript in a V8 isolate." };
+  const empty = "Script completed\nWall time 0.2 seconds\nOutput:\n";
+  const raw = (output: unknown = empty) => ({
+    model: "grok-4.6", instructions: "Keep this instruction.",
+    tools: [{ type: "namespace", name: "functions", tools: [exec] }],
+    input: [
+      { type: "custom_tool_call", name: "exec", call_id: "call_probe", input: 'await tools.exec_command({cmd: "printf marker"})' },
+      { type: "custom_tool_call_output", call_id: "call_probe", output },
+    ],
+  });
+
+  test("first native request carries the echo rule in instructions and the exact input schema", () => {
+    const body = { ...raw(), input: [{ role: "user", content: "Read a marker with the shell helper." }] };
+    const before = JSON.stringify(body);
+    const request = createResponsesPassthroughAdapter(routed).buildRequest(parseRequest(body));
+    const wire = JSON.parse(request.body);
+    expect(wire.instructions).toBe(`Keep this instruction.\n\n${CODE_MODE_RESULT_ECHO_SENTENCE}`);
+    expect(wire.tools.find((tool: { name: string }) => tool.name === "exec").parameters.properties.input.description)
+      .toContain(CODE_MODE_RESULT_ECHO_SENTENCE);
+    expect(JSON.stringify(body)).toBe(before);
+  });
+
+  test("the advertised first-call example emits a helper result exactly once", async () => {
+    const example = CODE_MODE_RESULT_ECHO_SENTENCE.match(/`(text\(JSON\.stringify\(await tools\.exec_command[^`]+)`/)?.[1];
+    if (!example) throw new Error("Missing executable result-emission example");
+    const output: unknown[] = [];
+    let calls = 0;
+    const tools = { exec_command: async () => { calls++; return { output: "marker", exit_code: 0 }; } };
+    const run = new Function("tools", "text", `return (async () => { ${example}; })();`);
+    await run(tools, (value: unknown) => output.push(value));
+    expect(calls).toBe(1);
+    expect(output).toEqual(['{"output":"marker","exit_code":0}']);
+  });
+
+  test.each([
+    [empty, EMPTY_EXEC_OUTPUT_MESSAGE],
+    [[{ type: "input_text", text: empty }], EMPTY_EXEC_OUTPUT_MESSAGE],
+    ["Script failed\nWall time 0.1 seconds\nOutput:\n", FAILED_EXEC_OUTPUT_MESSAGE],
+  ])("explains a wholly empty paired exec result %# without rewriting its program", (output, expected) => {
+    const body = raw(output);
+    const wire = JSON.parse(createResponsesPassthroughAdapter(routed).buildRequest(parseRequest(body)).body);
+    expect(wire.input[1].output).toBe(expected);
+    expect(JSON.parse(wire.input[0].arguments).input).toBe(body.input[0].input);
+  });
+
+  test.each([
+    "actual result",
+    [{ type: "input_text", text: empty }, { type: "input_text", text: "actual result" }],
+    [{ type: "input_text", text: empty }, { type: "input_image", image_url: "https://example.test/image.png" }],
+    [{ type: "input_file", file_id: "file_probe" }],
+    null,
+  ])("preserves populated, multimodal and incomplete results %#", output => {
+    const body = raw(output);
+    const normalized = normalizeResponsesCodeMode(body, parseRequest(body), routed) as typeof body;
+    expect(normalized.input[1]).toBe(body.input[1]);
+    expect(normalized.input[0]).toBe(body.input[0]);
+  });
+
+  test("does not duplicate instructions or explain an unpaired or unrelated result", () => {
+    const body = raw();
+    body.input[0].name = "other";
+    const parsed = parseRequest(body);
+    const first = normalizeResponsesCodeMode(body, parsed, routed) as typeof body;
+    const second = normalizeResponsesCodeMode(first, parsed, routed) as typeof body;
+    expect(first.input[1]).toBe(body.input[1]);
+    expect(second.instructions).toBe(first.instructions);
+  });
+
+  test("official OpenAI and non-code-mode catalogs remain untouched", () => {
+    const body = raw();
+    for (const native of [provider, { ...routed, baseUrl: "https://api.openai.com/v1" }]) {
+      expect(normalizeResponsesCodeMode(body, parseRequest(body), native)).toBe(body);
+      const wire = JSON.parse(createResponsesPassthroughAdapter(native).buildRequest(parseRequest(body)).body);
+      expect(wire.instructions).toBe(body.instructions);
+      expect(JSON.stringify(wire.tools)).not.toContain(CODE_MODE_RESULT_ECHO_SENTENCE);
+    }
+    for (const tools of [
+      [{ type: "function", name: "exec", parameters: { type: "object" } }],
+      [exec, { type: "function", name: "exec_command", parameters: { type: "object" } }],
+      [{ type: "namespace", name: "remote", tools: [exec] }],
+    ]) {
+      const alternate = { ...body, tools };
+      expect(normalizeResponsesCodeMode(alternate, parseRequest(alternate), routed)).toBe(alternate);
+    }
+    const excluded = { ...body, tool_choice: "none" };
+    expect(normalizeResponsesCodeMode(excluded, parseRequest(excluded), routed)).toBe(excluded);
+    const compact = parseRequest(body);
+    compact._compactionRequest = true;
+    expect(normalizeResponsesCodeMode(body, compact, routed)).toBe(body);
+  });
+});
 
 describe("external image wire matrix", () => {
   // Same decodable 1x1 PNG as anthropic-image-normalize.test.ts; no fetch is needed.
