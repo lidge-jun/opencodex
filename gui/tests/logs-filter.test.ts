@@ -46,16 +46,21 @@ describe("rich Logs filtering", () => {
     expect(filterLogs(logs, DEFAULT_LOG_FILTER_STATE, NOW)).toEqual(logs);
   });
 
-  test("matches requested, resolved, and attempted models by substring", () => {
+  test("matches complete requested, resolved, and attempted model identities", () => {
     const attemptOnly = [{
       id: "attempt-only",
       model: "requested-model",
       attempts: [{ model: "fallback-only" }],
     }];
-    expect(filterLogs(logs, { ...DEFAULT_LOG_FILTER_STATE, model: "reliable" }, NOW).map(row => row.id)).toEqual(["claude"]);
-    expect(filterLogs(logs, { ...DEFAULT_LOG_FILTER_STATE, model: "SONNET-4.6" }, NOW).map(row => row.id)).toEqual(["claude"]);
-    expect(filterLogs(logs, { ...DEFAULT_LOG_FILTER_STATE, model: "terra" }, NOW).map(row => row.id)).toEqual(["codex"]);
+    expect(filterLogs(logs, { ...DEFAULT_LOG_FILTER_STATE, model: "claude-sonnet-4.6" }, NOW).map(row => row.id)).toEqual(["claude"]);
+    expect(filterLogs(logs, { ...DEFAULT_LOG_FILTER_STATE, model: "GPT-5.6-TERRA" }, NOW).map(row => row.id)).toEqual(["codex"]);
+    expect(filterLogs(logs, { ...DEFAULT_LOG_FILTER_STATE, model: "reliable" }, NOW).map(row => row.id)).toEqual([]);
     expect(filterLogs(attemptOnly, { ...DEFAULT_LOG_FILTER_STATE, model: "fallback-only" }, NOW).map(row => row.id)).toEqual(["attempt-only"]);
+  });
+
+  test("does not treat a stale or partial model selection as a substring query", () => {
+    expect(filterLogs(logs, { ...DEFAULT_LOG_FILTER_STATE, model: "terra" }, NOW)).toEqual([]);
+    expect(filterLogs(logs, { ...DEFAULT_LOG_FILTER_STATE, model: "gpt-5.6-terra-old" }, NOW)).toEqual([]);
   });
 
   test("matches the selected provider on the row or any attempt", () => {
