@@ -1,6 +1,6 @@
 import { DefaultAzureCredential } from "@azure/identity";
 
-export const AZURE_OPENAI_SCOPE = "https://cognitiveservices.azure.com/.default";
+const AZURE_OPENAI_SCOPE = "https://cognitiveservices.azure.com/.default";
 
 let credential: DefaultAzureCredential | undefined;
 

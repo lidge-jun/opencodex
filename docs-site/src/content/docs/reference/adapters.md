@@ -343,9 +343,11 @@ compatibility pair: `agent.v1.AgentService/RunSSE` for server output and
 adapter uses Microsoft Entra ID through `DefaultAzureCredential` and sends `Authorization: Bearer`.
 
 - Delegates request building to the Responses passthrough and validates that `baseUrl` contains no
-  unresolved template placeholder. API-key requests use `api-key`; credentialless requests acquire
-  an Entra token with `DefaultAzureCredential` and use `Authorization: Bearer`. The configured URL
-  targets Azure's v1 Responses API directly, so the adapter does not append `api-version`.
+  unresolved template placeholder. API-key requests use `api-key`; keyless (Entra-authenticated)
+  requests acquire an Entra token with `DefaultAzureCredential` and use `Authorization: Bearer`.
+  Keyless authentication requires an HTTPS endpoint; HTTP endpoints are rejected before token
+  acquisition. The configured URL targets Azure's v1 Responses API directly, so the adapter does
+  not append `api-version`.
 
 ## Image utilities (`image.ts`)
 

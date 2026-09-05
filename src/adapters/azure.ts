@@ -32,7 +32,15 @@ export function createAzureAdapter(provider: OcxProviderConfig): ProviderAdapter
         headers["api-key"] = apiKey;
         delete headers["Authorization"];
       } else {
-        const accessToken = await getAzureOpenAiAccessToken();
+        if (new URL(request.url).protocol !== "https:") {
+          throw new Error("azure-openai keyless authentication requires HTTPS");
+        }
+        let accessToken: string | undefined;
+        try {
+          accessToken = await getAzureOpenAiAccessToken();
+        } catch {
+          throw new Error("azure-openai DefaultAzureCredential failed to acquire an access token");
+        }
         if (!accessToken) {
           throw new Error("azure-openai DefaultAzureCredential did not return an access token");
         }

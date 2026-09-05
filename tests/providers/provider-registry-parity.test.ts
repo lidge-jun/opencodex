@@ -571,13 +571,18 @@ describe("provider registry parity", () => {
     expect(moonshot?.preserveReasoningContentModels).toContain("kimi-k3");
   });
 
-  test("LiteLLM is the only registry seed with optional key authentication", () => {
+  test("registry seeds preserve optional key authentication without changing auth kind", () => {
+    const azure = PROVIDER_REGISTRY.find(entry => entry.id === "azure-openai");
     const litellm = PROVIDER_REGISTRY.find(entry => entry.id === "litellm");
     const optionalKeyProviders = PROVIDER_REGISTRY.filter(entry => entry.keyOptional).map(entry => entry.id);
 
+    expect(azure).toMatchObject({ authKind: "key", keyOptional: true, freeTier: false });
+    expect(providerConfigSeed(azure!).authMode).toBe("key");
+    expect(providerConfigSeed(azure!).keyOptional).toBe(true);
+    expect(providerConfigSeed(azure!).freeTier).toBe(false);
     expect(litellm?.authKind).toBe("key");
     expect(providerConfigSeed(litellm!).keyOptional).toBe(true);
-    expect(optionalKeyProviders).toEqual(["litellm", "opencode-free", "mimo-free"]);
+    expect(optionalKeyProviders).toEqual(["azure-openai", "litellm", "opencode-free", "mimo-free"]);
   });
 
   test("NVIDIA NIM is free-tier priced but still requires an API key", () => {
@@ -608,9 +613,11 @@ describe("provider registry parity", () => {
   test("freeTier propagates through config seed, enrich backfill, and presets without overwriting user config", async () => {
     const { enrichProviderFromRegistry } = await import("../../src/providers/derive");
     const nvidia = PROVIDER_REGISTRY.find(entry => entry.id === "nvidia")!;
+    const azure = PROVIDER_REGISTRY.find(entry => entry.id === "azure-openai")!;
 
     // Seed propagation.
     expect(providerConfigSeed(nvidia).freeTier).toBe(true);
+    expect(providerConfigSeed(azure).freeTier).toBe(false);
 
     // Enrich backfills only when the user config leaves freeTier unset.
     const unset: OcxProviderConfig = { adapter: nvidia.adapter, baseUrl: nvidia.baseUrl };
@@ -625,6 +632,11 @@ describe("provider registry parity", () => {
     // Preset propagation.
     const preset = deriveProviderPresets().find(p => p.id === "nvidia");
     expect(preset?.freeTier).toBe(true);
+    expect(deriveProviderPresets().find(p => p.id === "azure-openai")).toMatchObject({
+      auth: "key",
+      keyOptional: true,
+      freeTier: false,
+    });
 
     // Providers without the registry flag stay unset.
     const venice = PROVIDER_REGISTRY.find(entry => entry.id === "venice")!;

@@ -1071,9 +1071,15 @@ export async function resolveModelsAuthToken(name: string, prov: OcxProviderConf
     (prov.adapter === "azure-openai" || prov.adapter === "azure")
     && (!apiKey || apiKey.trim() === "")
   ) {
+    const discoveryUrl = buildModelsRequest(prov, undefined, name).url;
+    if (new URL(discoveryUrl).protocol !== "https:") {
+      logOAuthEvent("Azure Entra model-discovery skipped for non-HTTPS endpoint", { provider: "azure-openai" });
+      return undefined;
+    }
     try {
       return await getAzureOpenAiAccessToken();
     } catch {
+      logOAuthEvent("Azure Entra model-discovery authentication failed", { provider: "azure-openai" });
       return undefined;
     }
   }

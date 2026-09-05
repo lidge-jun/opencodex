@@ -185,9 +185,11 @@ describe("catalog: three-way tiers", () => {
     expect(isAccountProvider("openai", forwardProv({ baseUrl: "not a url" }))).toBe(false);
   });
 
-  test("free classification: freeTier, keyOptional, loopback; accounts wins over free", () => {
+  test("free classification: explicit false overrides legacy keyOptional; true/omitted remain free", () => {
     expect(isFreeProvider(prov({ freeTier: true }))).toBe(true);
     expect(isFreeProvider(prov({ keyOptional: true }))).toBe(true);
+    expect(isFreeProvider(prov({ keyOptional: true, freeTier: false }))).toBe(false);
+    expect(providerTier("azure-openai", prov({ keyOptional: true, freeTier: false }))).toBe("paid");
     expect(isFreeProvider(prov({ baseUrl: "http://[::1]:8080/v1" }))).toBe(true);
     expect(isFreeProvider(prov())).toBe(false);
     expect(providerTier("nvidia", prov({ freeTier: true }))).toBe("free");
@@ -504,7 +506,7 @@ describe("add-provider catalog presets (WP050a)", () => {
     expect(nvidia.keyOptional).toBeUndefined();
   });
 
-  test("the canonical openai forward preset classifies Accounts; custom rows default Paid; local classifies Free", () => {
+  test("preset pricing preserves explicit non-free and legacy optional-key classification", () => {
     const openai = preset({
       id: "openai",
       adapter: "openai-responses",
@@ -517,6 +519,7 @@ describe("add-provider catalog presets (WP050a)", () => {
     expect(presetTier(preset({ id: "my-custom" }))).toBe("paid");
     expect(presetTier(preset({ id: "ollama", auth: "local", baseUrl: "http://localhost:11434/v1" }))).toBe("free");
     expect(presetTier(preset({ id: "litellm", keyOptional: true }))).toBe("free");
+    expect(presetTier(preset({ id: "azure-openai", keyOptional: true, freeTier: false }))).toBe("paid");
     expect(presetTier(preset({ id: "xai", auth: "oauth" }))).toBe("paid");
   });
 

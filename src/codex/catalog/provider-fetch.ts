@@ -1549,6 +1549,16 @@ async function fetchProviderModelsWithAuth(
     clearProviderDiscoveryStatus(name);
     return observed(configured, "authoritative");
   }
+  const configuredApiKey = resolveProviderApiKey(prov.apiKey);
+  const azureKeyless = (
+    (prov.adapter === "azure-openai" || prov.adapter === "azure")
+    && (!configuredApiKey || configuredApiKey.trim() === "")
+  );
+  if (azureKeyless && new URL(request.url).protocol !== "https:") {
+    // Do not acquire an Entra token or send a credentialless request to an HTTP
+    // discovery endpoint. The configured catalog remains the safe fallback.
+    return observed(configured, "degraded");
+  }
   const auth: ModelsAuthResolution = captured.observedAuth ?? (resolveAuth.kind === "refreshing"
     ? prov.authMode === "oauth" && effectiveGoogleMode(name, prov) === "cloud-code-assist"
       ? await getValidAccessTokenSnapshot(name)
