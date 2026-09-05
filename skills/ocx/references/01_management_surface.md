@@ -72,6 +72,23 @@ JSON mode: `envelope`.
 
 - Reads local config; drives no management API route.
 
+### `ocx provider resets`
+
+Show recently detected quota resets.
+
+| Method | Route |
+|---|---|
+| GET | `/api/quota-resets` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--limit` | number | Maximum number of reset events to return. |
+| `--json` | boolean | Emit the reset-event payload as JSON. |
+
+JSON mode: `payload`.
+
+- An empty result distinguishes notifications being disabled from no reset having been detected yet.
+
 ### `ocx account list`
 
 Codex OAuth accounts with pool priority and pause state.
@@ -587,6 +604,6 @@ JSON mode: `payload`.
 
 ## Counts
 
-- declared capabilities: 32
+- declared capabilities: 33
 - of those, state-changing: 13
 - head-resolved invocations: 2

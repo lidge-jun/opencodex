@@ -481,14 +481,11 @@ describe("activation is the single switch", () => {
     // The end-to-end proof: config -> activation -> the production quota writer -> HTTP body.
     // Every earlier test exercises one link; this is the only one that shows the chain holds.
     const bodies: string[] = [];
-    const server = Bun.serve({
-      port: 0,
-      hostname: "127.0.0.1",
-      async fetch(req) {
-        bodies.push(await req.text());
-        return new Response("ok");
-      },
-    });
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+      bodies.push(String(init?.body ?? ""));
+      return new Response("ok");
+    }) as typeof globalThis.fetch;
 
     const home = mkdtempSync(join(tmpdir(), "ocx-live-"));
     writeFileSync(join(home, "config.json"), JSON.stringify({
@@ -499,7 +496,7 @@ describe("activation is the single switch", () => {
       },
       quotaResetNotify: {
         enabled: true,
-        webhookUrl: `http://127.0.0.1:${server.port}/hook`,
+        webhookUrl: "https://hooks.example.test/quota-reset",
         allowPrivateNetwork: true,
         // Passive-only: this asserts the live request path fires without any timer involved.
         pollSeconds: 0,
@@ -543,7 +540,7 @@ describe("activation is the single switch", () => {
       resetQuotaResetActivationForTests();
       resetQuotaResetNotifyCacheForTests();
       clearAccountQuota();
-      server.stop(true);
+      globalThis.fetch = realFetch;
       if (previousHome === undefined) delete process.env["OPENCODEX_HOME"];
       else process.env["OPENCODEX_HOME"] = previousHome;
     }

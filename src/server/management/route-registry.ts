@@ -81,6 +81,8 @@ export interface ManagementRoute {
 export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   // server/management-api
   { method: "POST", path: "/api/stop", module: "server/management-api", mutates: true },
+  // server/management/quota-reset-routes
+  { method: "GET", path: "/api/quota-resets", module: "server/management/quota-reset-routes", mutates: false },
   // codex/auth-api
   { method: "DELETE", path: "/api/codex-auth/accounts", module: "codex/auth-api", mutates: true },
   { method: "GET", path: "/api/codex-auth/accounts", module: "codex/auth-api", mutates: false },

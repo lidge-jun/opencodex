@@ -154,6 +154,18 @@ export const CAPABILITIES: readonly Capability[] = [
     details: ["Reads local config; drives no management API route."],
   },
   {
+    command: ["provider", "resets"],
+    summary: "Show recently detected quota resets.",
+    routes: [{ method: "GET", path: "/api/quota-resets" }],
+    flags: [
+      { name: "--limit", value: "number", summary: "Maximum number of reset events to return." },
+      { name: "--json", value: "boolean", summary: "Emit the reset-event payload as JSON." },
+    ],
+    mutates: false,
+    json: "payload",
+    details: ["An empty result distinguishes notifications being disabled from no reset having been detected yet."],
+  },
+  {
     command: ["provider", "keychain"],
     summary: "Move a provider's API key into the OS keychain, restore it, or report where it lives.",
     routes: [
