@@ -155,3 +155,8 @@ only explicit OFF clears those flags. The final readback verifies only the targe
 available windows for ON, but every window for OFF. Updated the mixed-state regression
 to preserve the unavailable opt-in and then prove explicit OFF clears it. This corrects
 the earlier stale-cleanup interpretation without changing the API or worker.
+
+C3 copy-only review closure: French now names each account's supported windows and
+uses the existing Mode Groupe label; traditional and simplified Chinese explicitly
+say each account's own supported windows. This avoids an intersection-of-all-accounts
+reading. No behavior or Korean layout changes; validate locale lint and GUI build.

@@ -4,7 +4,7 @@ import type { TKey } from "./en";
  * French i18n catalog. Must match the `TKey` set.
  */
 export const fr: Record<TKey, string> = {
-  "codexAuth.quotaAutoRefreshAllHint": "Active ou désactive ensemble les fenêtres de 5 heures et hebdomadaires prises en charge par tous les comptes actuels. En mode pool, une petite requête consommant du quota est envoyée après chaque réinitialisation.",
+  "codexAuth.quotaAutoRefreshAllHint": "Active ou désactive ensemble, pour tous les comptes actuels, les fenêtres de quota prises en charge par chaque compte : 5 heures et hebdomadaire. En mode Groupe, une petite requête consommant du quota est envoyée après chaque réinitialisation.",
   "codexAuth.quotaAutoRefreshMixed": "Certaines fenêtres sont activées.",
   "codexAuth.quotaAutoRefreshEmpty": "Aucune fenêtre de quota prise en charge. Actualisez les quotas des comptes.",
   "codexAuth.quotaAutoRefreshLoadFailed": "Impossible de charger les paramètres d’activation. Réessayez.",
