@@ -3,9 +3,9 @@
  * Shows summary cards, attention list, per-provider rate limits (QuotaBars stacked),
  * recently-used ranking, and Edit JSON entry.
  */
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useT, useI18n } from "../../i18n/shared";
-import { IconAlert, IconChevron } from "../../icons";
+import { IconAlert, IconChevron, IconRefresh } from "../../icons";
 import type { WorkspaceSections, WorkspaceItem } from "../../provider-workspace/catalog";
 import {
   accountQuotaFromReport,
@@ -35,6 +35,7 @@ export default function ProviderOverviewDashboard({
   quotasLoading = false,
   onSelectProvider,
   onEditConfig,
+  onRefreshAllQuotas,
 }: {
   sections: WorkspaceSections;
   quotaReports: Record<string, ProviderQuotaReportView>;
@@ -43,10 +44,45 @@ export default function ProviderOverviewDashboard({
   quotasLoading?: boolean;
   onSelectProvider: (name: string) => void;
   onEditConfig?: () => void;
+  /** Force a fresh read of every provider's quota; omitted when the page cannot drive one. */
+  onRefreshAllQuotas?: () => Promise<boolean>;
 }) {
   const t = useT();
   const { locale } = useI18n();
   const timeLabels = relativeTimeLabelsFromT(t);
+  const [refreshingQuotas, setRefreshingQuotas] = useState(false);
+  const [refreshResult, setRefreshResult] = useState<{ ok: boolean; text: string } | null>(null);
+
+  /*
+   * Same contract as the per-provider control in ProviderUsage: the reported result
+   * comes from the settled promise, not from the click. `fetchProviderQuotas(true)` is a
+   * synchronous state bump, so a button that resolved on its own would claim success
+   * while the stale numbers were still on screen. The disabled guard is not cosmetic
+   * either: a second forced read cancels the first effect, and a cancelled read never
+   * settles its waiters.
+   */
+  const refreshAllQuotas = async () => {
+    if (!onRefreshAllQuotas || refreshingQuotas) return;
+    setRefreshingQuotas(true);
+    // Cleared on click so a previous "refreshed" cannot sit under a later failure.
+    setRefreshResult(null);
+    try {
+      const ok = await onRefreshAllQuotas();
+      /*
+       * "Quota check complete", not "Quotas refreshed". The boolean reports whether the
+       * READ succeeded, and the server answers 200 even when an individual upstream probe
+       * failed: fetchProviderQuotaReports keeps that provider's last-good row rather than
+       * dropping it. Claiming every number is fresh would be exactly the lie this control
+       * was built to avoid. Each row carries its own age, which is where per-provider
+       * staleness is already visible.
+       */
+      setRefreshResult({ ok, text: t(ok ? "pws.quotaRefreshDone" : "codexAuth.quotaRefreshFailed") });
+    } catch {
+      setRefreshResult({ ok: false, text: t("codexAuth.quotaRefreshFailed") });
+    } finally {
+      setRefreshingQuotas(false);
+    }
+  };
 
   const allItems = useMemo(
     () => [...sections.ready, ...sections.needsSetup, ...sections.disabled],
@@ -99,11 +135,30 @@ export default function ProviderOverviewDashboard({
         <div className="pws-dashboard-header-text">
           <h2 className="pws-dashboard-title">{t("pws.dashboard.title")}</h2>
         </div>
-        {onEditConfig && (
-          <button type="button" className="btn btn-ghost btn-sm" onClick={onEditConfig}>
-            {t("prov.editJson")}
-          </button>
-        )}
+        <div className="pws-dashboard-header-actions">
+          {refreshResult && (
+            <span role="status" className={refreshResult.ok ? "pws-status-ok" : "pws-status-warn"}>
+              {refreshResult.text}
+            </span>
+          )}
+          {onRefreshAllQuotas && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              disabled={refreshingQuotas}
+              onClick={() => { void refreshAllQuotas(); }}
+            >
+              <IconRefresh width={14} height={14} aria-hidden="true" />
+              {" "}
+              {refreshingQuotas ? t("codexAuth.refreshingQuota") : t("pws.refreshAllQuotas")}
+            </button>
+          )}
+          {onEditConfig && (
+            <button type="button" className="btn btn-ghost btn-sm" onClick={onEditConfig}>
+              {t("prov.editJson")}
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="pws-dashboard-summary">

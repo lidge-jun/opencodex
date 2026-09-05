@@ -6,6 +6,21 @@ description: Entrées du fournisseur, authentification, points de terminaison, c
 Un fournisseur indique à opencodex où se trouve un modèle, quel adaptateur de protocole il utilise et comment les requêtes sont
 authentifiées.
 
+## Sélection des modèles à l’inscription
+
+Une nouvelle connexion sans OAuth attend une liste de modèles fiable avant de les exposer. Si l’onglet Models contient au moins 20 lignes distinctes, tous les interrupteurs de modèles sont initialement OFF ; le fournisseur reste ACTIVE. Les connexions utilisant effectivement OAuth ou la connexion ChatGPT conservent leurs valeurs par défaut.
+
+Cette règle ne s’applique qu’à l’inscription d’un nouveau fournisseur. Les mises à jour, reconnexions et remplacements de clé préservent les choix existants. Après l’initialisation, activez les modèles souhaités dans Models ou avec les commandes ci-dessous. La politique distincte concernant les nouveaux modèles reste inchangée. Remplacez `<model-id>` par un ID de la liste.
+
+```sh
+ocx models live --provider openrouter
+ocx models enable '<model-id>'
+ocx models disable '<model-id>'
+ocx models provider openrouter on
+```
+
+Après une inscription ou une connexion OAuth dans l’interface, une boîte de dialogue permet d’ouvrir Models. La CLI affiche les commandes de gestion des modèles, aussi présentes dans les étapes suivantes du JSON. `--no-wait` indique une connexion en attente, pas terminée. Lancez le proxy avec `ocx start` avant les commandes de modèles en direct.
+
 ## Champs de premier niveau liés aux fournisseurs
 
 | Champ | Type | Par défaut | Signification |
@@ -105,8 +120,8 @@ sauvegarde dont le contenu diffère, puis réécrit en identifiants sans préfix
 | `xaiResponsesXSearch?` | `boolean` | Désactivé par défaut. Sur une destination xAI Responses, ajoute la déclaration `x_search` hébergée par le fournisseur uniquement lorsqu’un outil `web_search` actif subsiste après la normalisation finale de la requête. Les déclarations existantes ne sont pas dupliquées, les sélecteurs `tool_choice`/`allowed_tools` de l’appelant ne sont jamais élargis, et cette option est distincte des options `search.xSearch` du service auxiliaire de recherche web. |
 | `modelPreferHostedTools?` | `Record<string,string[]>` | Activation explicite par modèle exact pour les passerelles Responses hors transfert qui réservent un espace de noms aux outils hébergés. Seul `["image_generation"]` est actuellement accepté ; le modèle correspondant doit utiliser le protocole `openai-responses` et prendre en charge cet outil hébergé. Le proxy supprime les déclarations clientes `image_gen` en conflit et réécrit leurs sélecteurs afin de préserver le choix d'outil de l'appelant. Pour les modèles virtuels `-pro` de l'API OpenAI, l'identifiant public sélectionné est comparé en premier et l'identifiant résolu du modèle de base sur le protocole sert de repli. `modelAdapters` résout d'abord l'identifiant public, puis celui de base ; la seconde résolution détermine le protocole final. Les autres modèles conservent le comportement normal des alias. |
 | `annotateEmptyToolOutputs?` | `boolean` | Remplace un résultat d’outil présent mais vide par un court marqueur avant qu’il n’atteigne le modèle, afin qu’un résultat vide ne soit pas interprété comme manquant. S’applique aux chaînes vides et aux tableaux de parties contenant uniquement du texte ; les parties d’image, de fichier et chiffrées ne sont jamais modifiées. La valeur par défaut issue du registre intégré est `true` pour DeepSeek ; dans les autres cas, elle n’est pas définie. Définissez `false` pour exclure un fournisseur : une valeur `false` explicite est conservée lors des modifications ultérieures qui omettent ce champ. `PATCH /api/providers?name=<provider>` accepte `true`, `false` ou `null` pour effacer le remplacement et revenir au comportement par défaut du registre. |
-| `reasoningEffortMap?` | `Record<string, string>` | Alias ​​de fil à l’échelle du fournisseur pour les étiquettes de raisonnement. |
-| `modelReasoningEffortMap?` | `Record<string, Record<string, string>>` | Alias ​​de fil par modèle pour les étiquettes de raisonnement. |
+| `reasoningEffortMap?` | `Record<string, string>` | Alias de fil à l'échelle du fournisseur pour les étiquettes de raisonnement. Mappez une étiquette à `"__omit__"` pour supprimer complètement le champ de raisonnement de la requête en amont (par exemple pour les modèles Ollama dont le gabarit de conversation exige l'omission de `reasoning_effort` pour activer le mode de raisonnement approfondi). |
+| `modelReasoningEffortMap?` | `Record<string, Record<string, string>>` | Alias de fil par modèle pour les étiquettes de raisonnement. Mappez une étiquette à `"__omit__"` pour supprimer complètement le champ de raisonnement de la requête en amont. |
 | `reasoningWireFormat?` | `"gateway-object"` | Pour les passerelles compatibles avec OpenAI qui acceptent `reasoning: { enabled, effort }` au lieu de `reasoning_effort`. Le préréglage ClinePass définit ce champ automatiquement. |
 | `noReasoningModels?` | `string[]` | Modèles qui rejettent les paramètres reasoning/thinking. |
 | `noTemperatureModels?` | `string[]` | Modèles qui rejettent `temperature` spécifié par l’appelant. |
@@ -158,6 +173,8 @@ les adresses IPv6 entre crochets et `*` ; par exemple, indiquez explicitement `
 restent bloquées. Les requêtes de diagnostic rejettent les redirections et signalent une cible dont les identifiants ont été retirés. L'examen des
 redirections des requêtes ordinaires vers les fournisseurs reste distinct de cette protection de diagnostic.
 
+Deux accommodements fake-IP DNS existent pour les utilisateurs de Clash / Surge / Mihomo, et tous deux ne s'appliquent qu'aux *réponses* DNS — une adresse littérale dans l'URL reste rejetée. La plage de benchmark IANA `198.18.0.0/15` (et ses écritures IPv6 IPv4-mapped) est acceptée dès qu'un proxy sortant s'applique à l'hôte. La plage IPv6 fake-IP par défaut de Mihomo `fdfe:dcba:9876::/48` est acceptée sous une condition plus stricte : la variable de proxy correspondant au schéma de l'URL (`HTTPS_PROXY` pour `https:`, `HTTP_PROXY` pour `http:` ; `ALL_PROXY` ne compte pas) doit être définie, l'hôte ne doit pas correspondre à `NO_PROXY`, et la requête est alors explicitement liée à ce proxy. Tout autre ULA, un préfixe adjacent ou une réponse fake-IP mélangée à une vraie réponse privée exige toujours `allowPrivateNetwork: true`. La validation à l'enregistrement du fournisseur n'applique jamais l'accommodement IPv6.
+
 ## Groupe de comptes Codex
 
 Utilisez **Codex Auth** dans le tableau de bord pour ajouter des comptes au groupe et actualiser les quotas. `config.json` stocke les
@@ -198,7 +215,7 @@ rotation automatique peut déclencher des restrictions du fournisseur.
 
 | Clé | Type | Par défaut | Description |
 | --- | --- | --- | --- |
-| `anthropicAccountPool.enabled?` | `boolean` | `false` | Active l'affinité persistante et le basculement après une temporisation 429. |
+| `anthropicAccountPool.enabled?` | `boolean` | `false` | Active l'affinité de session persistante et la sélection des nouvelles sessions basée sur l'usage. **Le basculement sur 429 n'est pas contrôlé ici** : il s'active dès que deux comptes utilisables sont enregistrés, comme pour tout autre fournisseur multi-identifiants, et ne peut pas être désactivé. |
 | `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | Pour les nouvelles sessions, lorsque le compte actif atteint ce seuil, choisir la plus faible utilisation connue et mise en cache dans la fenêtre configurée. `0` désactive la sélection selon le quota. |
 | `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Stratégie des nouvelles sessions ; `quota` classe les comptes selon la fenêtre définie par `quotaWindow`, par défaut les barres sur 5 heures, et `fill-first` évalue son seuil d'évacuation dans cette même fenêtre. |
 | `anthropicAccountPool.quotaWindow?` | `"five-hour" \| "weekly" \| "max-utilization"` | `"five-hour"` | Barre d'utilisation signalée par le fournisseur, mise en cache et utilisée pour la sélection selon l'utilisation. `five-hour` conserve le comportement actuel. `weekly` utilise la barre hebdomadaire et ignore les comptes dont la barre sur 5 heures est épuisée tant qu'un autre compte admissible reste disponible, mais y revient si aucun autre ne reste. `max-utilization` utilise la valeur connue la plus élevée et peut donc employer la barre sur 5 heures avant que la barre hebdomadaire soit disponible ; si aucune n'est connue, le compte suit l'ordre des utilisations inconnues. Les utilisations connues précèdent les inconnues, mais si tous les comptes admissibles sont inconnus, la sélection en renvoie tout de même un dans leur ordre admissible. Après le départage documenté par la plus faible utilisation sur 5 heures, une égalité exacte conserve cet ordre. Une session saine avec affinité n'est pas rééquilibrée de manière proactive. Pour l'affectation des nouvelles sessions et la reprise du routage après un remplacement admissible à la suite d'un 429, `quota` classe directement les candidats admissibles avec cette fenêtre ; `fill-first` avance dans un ordre stable selon le seuil et les règles d'épuisement de cette fenêtre ; `round-robin` l'ignore. Le délai de récupération, les limites de basculement et l'éligibilité de réauthentification restent des états locaux distincts. Les barres hebdomadaires ne sont connues qu'après leur interrogation dans la page Fournisseurs du tableau de bord. |

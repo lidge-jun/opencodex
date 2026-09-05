@@ -7,6 +7,7 @@
  */
 
 import type { WorkspaceSections } from "./catalog";
+import type { ProviderModelUsageRow } from "../components/provider-workspace/types";
 
 /**
  * Per-provider model count as returned by /api/selected-models.
@@ -78,6 +79,32 @@ export function countAvailableModels(data: unknown): ProviderModelCounts {
 export interface ProviderUsageTotals {
   requests?: number;
   totalTokens?: number;
+}
+
+/** Ledger provider IDs are data, including legacy names that match Object properties. */
+export function buildProviderUsageTotals(
+  providers: readonly (ProviderUsageTotals & { provider: string })[],
+): Record<string, ProviderUsageTotals> {
+  const totals: Record<string, ProviderUsageTotals> = Object.create(null);
+  for (const row of providers) totals[row.provider] = { requests: row.requests, totalTokens: row.totalTokens };
+  return totals;
+}
+
+/** Keep serving-provider attribution while computing shares within each provider. */
+export function buildProviderModelUsage(
+  models: readonly (ProviderModelUsageRow & { provider: string })[],
+  totals: Record<string, ProviderUsageTotals>,
+): Record<string, ProviderModelUsageRow[]> {
+  const result: Record<string, ProviderModelUsageRow[]> = Object.create(null);
+  for (const row of models) {
+    const providerTokens = totals[row.provider]?.totalTokens ?? 0;
+    const { provider, ...model } = row;
+    (result[provider] ??= []).push({
+      ...model,
+      shareRatio: providerTokens > 0 ? Math.min(1, Math.max(0, row.totalTokens / providerTokens)) : 0,
+    });
+  }
+  return result;
 }
 
 export interface MostUsedProvider extends ProviderUsageTotals {

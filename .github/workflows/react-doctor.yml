@@ -4,7 +4,7 @@
 # Gating and least-privilege: findings fail the job (`blocking: warning`).
 # Write-scoped outputs (sticky PR comments, inline review comments, commit
 # statuses) stay disabled so the workflow needs no write permissions. Do not
-# re-add write scopes without revisiting tests/ci-workflows.test.ts, which
+# re-add write scopes without revisiting tests/ci-workflows/ci-workflows.test.ts, which
 # pins this contract.
 #
 # Docs: https://www.react.doctor/docs/ci-and-prs/github-actions-setup

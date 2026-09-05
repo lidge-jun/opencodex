@@ -32,6 +32,17 @@ export function namespacedToolName(namespace: string | undefined, name: string):
 }
 
 /**
+ * Dotted alias of a namespaced tool's wire name. Some routed providers (observed: muse-spark
+ * via opencode-go) echo a namespaced tool call as "<namespace>.<name>" instead of the flattened
+ * "<namespace>__<name>" form. It names the same tool identity+�u���T never a new grant"��y��y� so the
+ * undeclared-tool guard and the tool bridge maps accept it wherever the wire name is accepted
+ * (mirroring the second entry of `toolChoiceAliases`). See #3402.
+ */
+export function dottedToolName(namespace: string | undefined, name: string): string {
+  return namespace ? `${namespace}.${name}` : name;
+}
+
+/**
  * Codex unified-exec name normalization.
  *
  * Codex's code-mode shell tool is declared as `exec` (a freeform custom tool whose own
@@ -73,9 +84,23 @@ export function normalizeDeclaredToolName(
     : name;
 }
 
+/**
+ * True when a declared catalog is the genuine Codex code-mode shape.
+ *
+ * `exec` is a name, not a guarantee. A catalog that lists `exec` NEXT TO a bare
+ * `exec_command` or `shell_command` is the flat-bridge shape: there `exec` may be an
+ * ordinary caller-defined tool, and nested `tools.*` helpers are not what it runs.
+ * `normalizeDeclaredToolName` already refuses to reinterpret helper names in that shape,
+ * and anything inferring code mode from the bare name owes the same check.
+ */
+export function declaresCodeModeExec(declared: ReadonlySet<string> | undefined): boolean {
+  if (!declared || !declared.has(CODE_MODE_EXEC_TOOL_NAME)) return false;
+  return !(LEGACY_SHELL_BRIDGE_TOOL_NAMES as readonly string[]).some(legacy => declared.has(legacy));
+}
+
 export function toolChoiceAliases(tool: Pick<OcxTool, "namespace" | "name">): string[] {
   const wireName = namespacedToolName(tool.namespace, tool.name);
-  return tool.namespace ? [wireName, `${tool.namespace}.${tool.name}`] : [wireName];
+  return tool.namespace ? [wireName, dottedToolName(tool.namespace, tool.name)] : [wireName];
 }
 
 function sameToolIdentity(

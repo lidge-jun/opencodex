@@ -221,7 +221,7 @@ Data-plane 金鑰不是管理憑證。管理 API 使用獨立的管理秘密；�
 | 401 | `authentication_error` | 必填的代理許可憑證缺失或無效 |
 | 403 | `origin_rejected` | Responses/OpenAI data-plane 請求或 WebSocket 升級來自不允許的來源 |
 | 503 | `combo_unavailable` | 所選組合中的每個目標都不可用、在冷卻中、停用或因其他原因不合格 |
-| 400 | `unreadable_encrypted_agent_task` | 加密的 v2 worker task 沒有可消耗它的合格原生 ChatGPT 目標 |
+| 400 | `unreadable_encrypted_agent_task` | 加密的 v2 worker task 沒有可處理它的合格規範 ChatGPT 目標或明確信任的 Responses 目標 |
 | 426 | `upgrade_required` | Responses WebSocket 傳輸被停用或升級失敗；請使用 HTTP |
 
 Anthropic 來源的失敗以 Anthropic 的錯誤封裝渲染，因此該方言上的來源拒絕是 403 `permission_error`，而非 OpenAI 風格的 `origin_rejected` body。

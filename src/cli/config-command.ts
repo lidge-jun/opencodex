@@ -15,7 +15,15 @@ const USAGE = `Usage:
   ocx config export <path|->
   ocx config import <path|-> --yes [--json]`;
 
-const SECRET_KEYS = /^(apiKey|key|accessToken|refreshToken|idToken|token|password|clientSecret)$/i;
+/**
+ * Keys whose VALUE is a credential and must never be printed or exported.
+ *
+ * `webhookUrl` is here because for Slack and Discord the URL itself is the authorization:
+ * anyone holding it can post to the channel. It looks like configuration rather than a secret,
+ * which is exactly why it needs to be named explicitly — none of the other patterns match it,
+ * so `ocx config show` printed it and `config export` wrote it to disk in the clear.
+ */
+const SECRET_KEYS = /^(apiKey|key|accessToken|refreshToken|idToken|token|password|clientSecret|webhookUrl)$/i;
 const BLOCKED_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
 
 function redact(value: unknown, key = ""): unknown {

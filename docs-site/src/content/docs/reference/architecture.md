@@ -145,6 +145,13 @@ upgrade and uses the WebSocket bridge.
 
 Independently of that client-facing setting, canonical ChatGPT forward requests with root-level
 `stream: true` may use Codex's upstream WebSocket transport on stable Bun 1.4.0 or newer.
+The canonical ChatGPT path preserves HTTP Responses Lite intent in WS frame metadata
+and derives its routing hint from the actual outgoing model and service tier.
+Initial upstream quota/model metadata becomes bounded HTTP response headers;
+later quota updates are attributed to the serving account, not retroactively
+added to headers already sent. A failure after a WS request was sent does not
+trigger an automatic HTTP resend. These mappings do not enable the client-facing
+WebSocket setting or change other providers' transport selection.
 Bundled Bun 1.3.14, prereleases, and unverifiable runtime identities use HTTP/SSE. Successful
 upstream WS responses keep the downstream SSE contract and bypass `tee()` through a bounded eager
 single-reader relay (4 MiB per raw/enveloped frame and an 8 MiB producer queue). Queue overflow

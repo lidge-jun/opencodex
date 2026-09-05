@@ -1,3 +1,42 @@
+
+import { PROVIDER_REGISTRY } from "./registry";
+
+export function effectiveProviderAlias(
+  providerName: string,
+  provider?: Pick<OcxProviderConfig, "alias">,
+  config?: Pick<OcxConfig, "providers">,
+): string | undefined {
+  if (provider && provider.alias !== undefined) {
+    const trimmed = provider.alias.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+  const regAlias = PROVIDER_REGISTRY.find(e => e.id === providerName)?.alias;
+  if (!regAlias) return undefined;
+  if (config?.providers) {
+    const lower = regAlias.toLowerCase();
+    const claimedByOther = Object.entries(config.providers).some(([name, p]) =>
+      name !== providerName && typeof p.alias === "string" && p.alias.trim().toLowerCase() === lower
+    );
+    if (claimedByOther) return undefined;
+  }
+  return regAlias;
+}
+
+export function effectiveProviderAliasDecision(
+  providerName: string,
+  provider?: Pick<OcxProviderConfig, "alias">,
+  config?: Pick<OcxConfig, "providers">,
+): string | null | undefined {
+  const active = effectiveProviderAlias(providerName, provider, config);
+  if (active !== undefined) return active;
+  const hasRegistryAlias = Boolean(PROVIDER_REGISTRY.find(e => e.id === providerName)?.alias);
+  const hasConfiguredAlias = provider?.alias !== undefined;
+  if (hasRegistryAlias || hasConfiguredAlias) {
+    return null;
+  }
+  return undefined;
+}
+
 import type { OcxConfig, OcxProviderConfig } from "../types";
 
 export const MODEL_ALIAS_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;

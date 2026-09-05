@@ -92,6 +92,16 @@ Model kadrosunun ve şifrelenmiş çalışan görevi davranışının arkasında
 kavramlar için [Alt Ajan Arayüzü](/tr/guides/sub-agent-surface/) sayfasına
 bakın.
 
+### İstemci entegrasyonu geri alma günlüğü
+
+| Yöntem ve yol | Amaç | Önemli hatalar |
+| --- | --- | --- |
+| `GET /api/client-integrations/journal?client=...` | Geri alma işlemlerini, isteğe bağlı olarak tek bir istemci için listeler. Her satır sunucunun hesapladığı `deletable` alanını içerir. | 400 geçersiz istemci |
+| `DELETE /api/client-integrations/journal?opId=...` | Eski bir geri alma işlemini kullanımdan kaldırır ve mümkünse anlık görüntüsünü siler. Başarılı yanıtta `snapshotRemoved: false`, temizliğin bakım yeniden denemesi için saklandığını belirtir. | 400 eksik `opId`; 404 bulunmayan veya zaten kaldırılmış işlem; 409 istemcinin en yeni işlemi |
+
+Silme, günlüğü yeniden yazmak yerine bir silme kaydı ekler. Geçerli geri alma noktasını korumak için
+her istemcinin en yeni işlemi sunucu tarafında korunur.
+
 ### Kombolar
 
 | Yöntem ve yol | Amaç | Dikkate değer hatalar |
@@ -177,7 +187,10 @@ gönderin. Kurtarma gerekebileceğinde karantinayı tercih edin.
 | `PUT /api/model-visibility` | Sağlayıcı veya model düzeyindeki görünürlüğü atomik olarak değiştirin | 400 geçersiz sağlayıcı, kapsam, hedef veya gövde |
 | `GET, POST /api/custom-models` | Özel modelleri listeleyin veya bir tane ekleyin | 400 geçersiz alanlar; 404 sağlayıcı eksik; 409 yinelenen model |
 | `PUT, DELETE /api/custom-models/{id}` | Bir özel modeli düzenleyin veya silin | 400 geçersiz kimlik/alanlar; 404 bulunamadı; 409 yinelenen model |
-| `GET, PUT /api/selected-models` | Sağlayıcı izin listelerini ve kullanılabilirliğini okuyun veya bir izin listesini değiştirin | 400 eksik sağlayıcı/gövde; 404 bilinmeyen sağlayıcı |
+| `GET, PUT /api/selected-models` | Sağlayıcı izin listelerini ve kullanılabilirliğini okuyun veya bir izin listesini değiştirin | 400 eksik sağlayıcı/gövde; 404 bilinmeyen sağlayıcı; PUT 409 `initial_model_selection_pending` |
+| `GET, PUT /api/model-presets` | Ön ayarları okuyun veya preset/all/custom modunu seçin | 400 geçersiz mod veya desteklenmeyen ön ayar; 404 bilinmeyen sağlayıcı; PUT 409 `initial_model_selection_pending` |
+
+Güvenilir ilk model listesi hazır olana kadar `/api/selected-models` ve `/api/model-presets` için geçerli PUT istekleri de HTTP 409 ve `initial_model_selection_pending` kodunu döndürür. Model keşfini örneğin `GET /api/models` ile yenileyin ve başarılı olduktan sonra yeniden deneyin.
 
 ### OAuth hesapları, sağlayıcı anahtarları ve veri düzlemi anahtarları
 
@@ -272,7 +285,7 @@ devreder. Rotaları şunlardır:
 | `PUT /api/codex-auth/failover` | Hesap yük devretme eşiğini ayarlayın | 400 geçersiz eşik |
 | `GET /api/codex-auth/quota` | Hesaba göre önbelleğe alınmış kota durumunu okuyun | — |
 | `GET /api/codex-auth/reset-credits` | Bir hesap için sıfırlama kredisi uygunluğunu inceleyin | 400 eksik hesap kimliği; yukarı akış durum doğrudan geçişi; 500 arama hatası |
-| `POST /api/codex-auth/reset-credits/consume` | Uygun bir sıfırlama kredisini tüketin | 400 eksik hesap kimliği; yukarı akış durum doğrudan geçişi; 503 `server_busy`; 500 tüketme hatası |
+| `POST /api/codex-auth/reset-credits/consume` | Uygun bir sıfırlama kredisini tüketin. İsteğe bağlı `operationId` (UUIDv4) kullanımı işlemi idempotent yapar: aynı kimlik ikinci bir kredi harcamak yerine tek bir kalıcı sonucu yeniden oynatır. | 400 eksik hesap kimliği veya geçersiz `operationId`; kimlik başka bir hesaba aitse 409 `identity_mismatch`; yukarı akış durum doğrudan geçişi; 503 `server_busy`, `capacity` veya `unavailable`; 500 tüketme hatası |
 | `POST /api/codex-auth/login` | Codex girişini veya yeniden kimlik doğrulamasını başlatın | 400 geçersiz istek; çakışma/meşgul giriş durumları |
 | `POST /api/codex-auth/login/code` | Bir Codex giriş akışı için manuel bir kod gönderin | 400 geçersiz akış/kod |
 | `POST /api/codex-auth/login/cancel` | Bir Codex giriş akışını iptal edin | — |
@@ -311,4 +324,3 @@ entegrasyonlar için en yararlıdır.
 ## Uzak oturumlar ve veri anahtarı döndürme
 
 `POST /api/keys/rotate {id}` on dakikalık geçişi başlatır ve yeni sırrı yalnızca bir kez döndürür. `POST /api/keys/rotate/commit {id,rotationId}` onaylar, `DELETE /api/keys/rotate {id,rotationId}` iptal eder. Yönetim kimlik doğrulaması gerekir; veri anahtarı bunları çağıramaz. `POST /api/session/logout` mevcut `gui-session`, eşleşen Origin ve CSRF ister. Admin token 403 alır ve onay oturumu oluşturamaz.
-

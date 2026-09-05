@@ -30,6 +30,7 @@ export interface ModelRow {
   id: string;
   namespaced: string;
   disabled: boolean;
+  initialSelectionPending?: boolean;
   native?: boolean;
   custom?: boolean;
   customId?: string;

@@ -29,6 +29,7 @@ export interface ProviderUsageTotals {
 export interface ProviderModelUsageRow {
   model: string;
   resolvedModel?: string;
+  hasUnresolvedRequestedModel?: true;
   requests: number;
   totalTokens: number;
   inputTokens: number;
@@ -40,7 +41,16 @@ export interface ProviderModelUsageRow {
 // Auth types consumed by ProviderAuthPanel (WP091).
 export type OAuthAccountHealthStatus = "healthy" | "cooldown" | "reauth_required" | "warning";
 
-export type OAuthAccountRow = {
+export type AccountQuotaMode = "probe" | "passive" | "unsupported";
+export interface AccountQuotaReading {
+  quotaMode?: AccountQuotaMode;
+  quota?: AccountQuota | null;
+  quotaUnavailable?: boolean;
+  /** Client-owned enrichment state, never inferred from missing quota data. */
+  quotaPending?: boolean;
+}
+
+export type OAuthAccountRow = AccountQuotaReading & {
   id: string;
   alias?: string;
   email?: string;
@@ -50,12 +60,9 @@ export type OAuthAccountRow = {
   healthLabel?: string;
   healthSummary?: string;
   healthAction?: string;
-  /** Per-account rate limits, for providers that report usage per credential (anthropic). */
-  quota?: AccountQuota | null;
-  quotaUnavailable?: boolean;
 };
 
-export type ApiKeyRow = {
+export type ApiKeyRow = AccountQuotaReading & {
   id: string;
   label?: string;
   masked: string;
@@ -83,6 +90,13 @@ export interface ProviderAuthHandlers {
   onSwitchApiKey: (provider: string, entry: ApiKeyRow) => void | Promise<void>;
   onRemoveApiKey: (provider: string, entry: ApiKeyRow) => void | Promise<void>;
   onEditAlias: (provider: string, type: "oauth" | "api-key", id: string, current?: string) => void | Promise<void>;
+  /**
+   * Force a fresh quota read for this provider, resolving with whether it succeeded.
+   *
+   * Optional: the Codex account pool owns its own refresh control, and a caller that
+   * cannot force a read simply renders no button rather than one that does nothing.
+   */
+  onRefreshQuota?: (provider: string) => Promise<boolean>;
 }
 
 export type ProviderUpdatePatch = {

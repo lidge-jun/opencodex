@@ -14,6 +14,7 @@ import {
 } from "../../lib/translator-budget";
 import { activePromptText, prepareCursorRunRequest } from "./protobuf-request";
 import { prepareCursorRawMessages, resolveActiveCursorImages } from "./images";
+import { isCursorExternalWireModel } from "./discovery";
 import { cursorRequestMessagesFromRaw } from "./request-builder";
 import {
   createCursorContextUsageTracker,
@@ -618,9 +619,13 @@ class LiveCursorTransport implements CursorTransport {
     // JPEG soft-cap rewrite for active-turn data: images before encode. Rebuild text
     // messages from the prepared raw channel so omission markers replace stale
     // pre-rewrite content that activePromptText and the tool filter would otherwise see.
-    const preparedRaw = await prepareCursorRawMessages(request.rawMessages, signal);
+    const externalToolImages = isCursorExternalWireModel(request.modelId)
+      && request.rawMessages?.at(-1)?.role === "toolResult";
+    const preparedRaw = await prepareCursorRawMessages(request.rawMessages, signal, {
+      trailingToolImages: externalToolImages,
+    });
     const preparedRawMessages = preparedRaw.messages;
-    const selectedImages = await resolveActiveCursorImages(
+    const selectedImages = externalToolImages ? preparedRaw.images : await resolveActiveCursorImages(
       preparedRawMessages,
       signal,
       preparedRaw.images,

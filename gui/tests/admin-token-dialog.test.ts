@@ -126,3 +126,75 @@ test("uses the active UI locale instead of re-detecting browser storage", async 
   dialog.dispatchEvent(new testWindow.Event("cancel", { cancelable: true }));
   expect(await pending).toBeNull();
 });
+
+/*
+ * #3483 — the dialog opened with an empty red bordered notice already painted.
+ *
+ * The DOM half: while there is no error the alert must be hidden AND carry no text, so
+ * "hidden" and "empty" cannot drift apart.
+ */
+test("the validation alert is hidden and empty until a token is actually rejected", async () => {
+  const pending = promptForAdminToken(async () => "rejected");
+  const dialog = document.querySelector<HTMLDialogElement>("#opencodex-admin-token-dialog")!;
+  const form = dialog.querySelector<HTMLFormElement>("form")!;
+  const alert = dialog.querySelector<HTMLElement>('[role="alert"]')!;
+
+  expect(alert.hidden).toBe(true);
+  expect(alert.textContent).toBe("");
+
+  const password = form.elements.namedItem("password") as HTMLInputElement;
+  password.value = "wrong-token";
+  form.dispatchEvent(new testWindow.Event("submit", { bubbles: true, cancelable: true }));
+  await Promise.resolve();
+  await Promise.resolve();
+
+  expect(alert.hidden).toBe(false);
+  expect(alert.textContent).toContain("rejected");
+
+  dialog.dispatchEvent(new testWindow.Event("cancel", { cancelable: true }));
+  expect(await pending).toBeNull();
+});
+
+/*
+ * The CSS half, and the one that actually reproduces the report.
+ *
+ * happy-dom applies no author stylesheet and does no layout, so `alert.hidden === true`
+ * passes even while a real browser paints the box: `[hidden] { display: none }` is a
+ * USER-AGENT rule and a bare `.notice { display: flex }` outranks it by origin. The
+ * stylesheet is the only place this contract can be checked — same oracle the combos
+ * workspace uses after the identical bug (gui/tests/combos-detail-tabs-dom.test.tsx).
+ */
+test("notice display rules are scoped so a hidden notice cannot paint", async () => {
+  const css = await Bun.file(new URL("../src/styles.css", import.meta.url)).text();
+
+  expect(css).toContain(".notice:not([hidden])");
+  expect(css).toContain(".notice-warn:not([hidden])");
+  expect(css).toContain(".notice.notice-warn.startup-runtime-notice:not([hidden])");
+
+  // No notice rule may set `display` without the :not([hidden]) guard.
+  for (const block of css.matchAll(/(^|\})\s*([^{}]*\.notice[^{}]*)\{([^}]*)\}/g)) {
+    const selector = block[2]!.trim();
+    const body = block[3]!;
+    if (!/(^|[\s,])display\s*:/.test(body)) continue;
+    expect(selector).toContain(":not([hidden])");
+  }
+});
+
+/* #3353 — a bare password box explained nothing. */
+test("the dialog explains the credential and links the setup guide", async () => {
+  const pending = promptForAdminToken(async () => "accepted");
+  const dialog = document.querySelector<HTMLDialogElement>("#opencodex-admin-token-dialog")!;
+
+  const link = dialog.querySelector<HTMLAnchorElement>('a[target="_blank"]')!;
+  expect(link).not.toBeNull();
+  expect(link.href).toBe("https://opencodex.me/guides/web-dashboard/#finding-the-admin-token");
+  expect(link.rel).toBe("noreferrer");
+  expect(link.textContent).toBe("How to find it");
+
+  const help = link.parentElement!;
+  expect(help.textContent).toContain("admin-api-token");
+  expect(help.textContent).toContain("OPENCODEX_ADMIN_AUTH_TOKEN");
+
+  dialog.dispatchEvent(new testWindow.Event("cancel", { cancelable: true }));
+  expect(await pending).toBeNull();
+});

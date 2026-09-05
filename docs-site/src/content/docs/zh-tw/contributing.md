@@ -13,7 +13,7 @@ bun run dev:proxy    # 開發模式代理 API
 bun run dev:gui      # 儀表板 dev 伺服器（另一個終端）
 bun run typecheck    # bun x tsc --noEmit
 bun run test:changed              # routine import-graph test selection
-bun test tests/router.test.ts     # routine focused test
+bun test tests/routing/router.test.ts     # routine focused test
 bun run test                      # complete suite (PR-ready / explicit ask)
 ```
 
@@ -28,13 +28,13 @@ bun run test                      # complete suite (PR-ready / explicit ask)
 ```bash
 bun run typecheck                 # 嚴格 TypeScript 檢查
 bun run test                      # 完整 tests/ suite
-bun test tests/router.test.ts     # 聚焦單個測試檔案
+bun test tests/routing/router.test.ts     # 聚焦單個測試檔案
 bun run build:gui                 # Vite GUI 建置 + package 準備
 bun run privacy:scan              # CI 使用的 credential/privacy 掃描
 bun run prepare:package           # 重新整理 package launcher/asset
 ```
 
-大多數測試是平鋪在 `tests/*.test.ts` 下的 Bun test。`tests/helpers/` 存放共享 fixture，
+測試是按 `src/` 劃分的領域目錄（`tests/<domain>/`）下的 Bun test，對應表在 `scripts/test-layout/layout.json`。`tests/helpers/` 存放共享 fixture，
 `tests/e2e-style/` 存放範圍更廣的原生一致性場景。請在對應 subsystem 的現有測試附近加入聚焦的
 迴歸測試；若改動涉及共享 routing、adapter、config 或 server 行為，還應執行完整 suite。
 
@@ -70,11 +70,22 @@ GitHub Actions 有意只保留必要步驟：
 
 釋出請使用 helper：
 
+
+執行 helper 前，先確定目標發佈版本，並從預設分支執行
+`.github/workflows/dev-version-bump.yml`，設定 `intended-version=<version>` 和
+`mode=pre-move`。審查產生的 PR 並合併到 `dev`，再提升到 `main` 或 `preview`，
+最後執行 helper。如果 `dev` 的版本已高於目標版本，工作流程會回傳
+`changed=false`，無需建立版本更新 PR。發佈仍要求對應發佈提交的 CI 全部通過。
+
 ```bash
 bun run release <version>           # commit/push 版本 bump；publish workflow 預設 dry-run
+bun run release --bump minor        # 依 tag 與 npm channel 推導下一個 patch、minor 或 major 版本
 bun run release <version> --publish # 確認 CI-gated dry-run 後真正 publish
 bun run release:watch               # 觀察最新的 Release workflow run
 ```
+
+可用 `--bump patch|minor|major` 取代明確版本。較高 core 的 preview tag 建立後，`--bump patch`
+會拒絕延續舊的 stable patch 版本線；請把修正納入已開啟的 preview core 中釋出。
 
 ## 分支
 

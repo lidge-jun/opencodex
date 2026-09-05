@@ -1,6 +1,7 @@
 import { baseProviderLabel } from "../providers/label";
 import { canonicalAntigravityUsageModel } from "../providers/antigravity-models";
 import { usageDisplayTotalTokens } from "./totals";
+import { isUnresolvedRequestedModel, usageModelPriceOptions } from "./model-identity";
 import { isCodexUsageAccountLogLabel, type PersistedUsageEntry, type UsageStatus } from "./log";
 import { type AttemptCostEstimate, type CostEstimate, estimateAttemptCost, estimateRequestCost, serviceTierContext, type ServiceTierContext } from "./cost";
 
@@ -59,6 +60,8 @@ export interface UsageDay {
 export interface UsageDayModel {
   model: string;
   provider: string;
+  /** Includes trace-proven unresolved requested selectors; absence is not confirmation. */
+  hasUnresolvedRequestedModel?: true;
   requests: number;
   attemptCount: number;
   totalTokens: number;
@@ -73,6 +76,8 @@ export interface UsageDayModel {
 export interface UsageModel {
   provider: string;
   model: string;
+  /** Includes trace-proven unresolved requested selectors; absence is not confirmation. */
+  hasUnresolvedRequestedModel?: true;
   resolvedModel?: string;
   requests: number;
   attemptCount: number;
@@ -208,7 +213,7 @@ export function computeEntryCost(entry: PersistedUsageEntry): EntryCostInfo {
   const tier = serviceTierContext(entry);
   if (entry.attempts?.length) {
     const attemptEstimates = entry.attempts.map(attempt =>
-      estimateAttemptCost(attempt, undefined, tier)
+      estimateAttemptCost({ ...attempt, ...usageModelPriceOptions(entry, attempt) }, undefined, tier)
     );
     let costTotal = 0;
     let isPriced = false;
@@ -221,6 +226,7 @@ export function computeEntryCost(entry: PersistedUsageEntry): EntryCostInfo {
     return { tier, estimate: null, attemptEstimates, costTotal, isPriced };
   }
   const estimate = estimateRequestCost({
+    ...usageModelPriceOptions(entry, entry),
     provider: entry.provider,
     model: entry.model,
     usage: entry.usage,
@@ -324,6 +330,7 @@ interface UsageAttribution {
   provider: string;
   model: string;
   resolvedModel?: string;
+  hasUnresolvedRequestedModel?: true;
   accountLogLabel?: string;
   usageStatus: UsageStatus;
   usage?: PersistedUsageEntry["usage"];
@@ -366,6 +373,7 @@ function usageAttributions(entry: PersistedUsageEntry): UsageAttribution[] {
       requestId: entry.requestId,
       provider: entry.provider,
       ...usageModelIdentity(entry.provider, entry.model, entry.resolvedModel),
+      ...(isUnresolvedRequestedModel(entry, entry) ? { hasUnresolvedRequestedModel: true as const } : {}),
       ...(entry.accountLogLabel ? { accountLogLabel: entry.accountLogLabel } : {}),
       usageStatus: entry.usageStatus,
       ...(entry.usage ? { usage: entry.usage } : {}),
@@ -376,6 +384,7 @@ function usageAttributions(entry: PersistedUsageEntry): UsageAttribution[] {
     requestId: entry.requestId,
     provider: attempt.provider,
     ...usageModelIdentity(attempt.provider, attempt.model),
+    ...(isUnresolvedRequestedModel(entry, attempt) ? { hasUnresolvedRequestedModel: true as const } : {}),
     ...(attempt.accountLogLabel ? { accountLogLabel: attempt.accountLogLabel } : {}),
     usageStatus: attempt.usageStatus,
     ...(attempt.usage ? { usage: attempt.usage } : {}),
@@ -517,6 +526,7 @@ interface UsageModelAccumulator {
   provider: string;
   model: string;
   resolvedModel?: string;
+  hasUnresolvedRequestedModel?: true;
   firstSeen: number;
   attemptCount: number;
   dayTotalTokens: number;
@@ -704,6 +714,7 @@ function cloneModelAccumulator(source: UsageModelAccumulator): UsageModelAccumul
 }
 
 function mergeModelAccumulator(target: UsageModelAccumulator, source: UsageModelAccumulator): void {
+  if (source.hasUnresolvedRequestedModel) target.hasUnresolvedRequestedModel = true;
   if (source.firstSeen < target.firstSeen) {
     target.firstSeen = source.firstSeen;
     target.resolvedModel = source.resolvedModel;
@@ -874,6 +885,7 @@ function buildDayModels(
   return retainedModelAccumulators(sorted, overlaps).map(model => ({
     model: model.model,
     provider: model.provider,
+    ...(model.hasUnresolvedRequestedModel ? { hasUnresolvedRequestedModel: true as const } : {}),
     requests: requestCountsFor(model).requests,
     attemptCount: model.attemptCount,
     totalTokens: model.dayTotalTokens,
@@ -900,6 +912,7 @@ function buildUsageModels(
     return {
       provider: model.provider,
       model: model.model,
+      ...(model.hasUnresolvedRequestedModel ? { hasUnresolvedRequestedModel: true as const } : {}),
       ...(model.resolvedModel ? { resolvedModel: model.resolvedModel } : {}),
       requests,
       attemptCount: model.attemptCount,
@@ -1115,6 +1128,7 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
     attribution: UsageAttribution,
     estimate: AttemptCostEstimate | CostEstimate | null,
   ): void {
+    if (attribution.hasUnresolvedRequestedModel) breakdown.hasUnresolvedRequestedModel = true;
     breakdown.attemptCount += 1;
     if (attribution.usage) {
       breakdown.inputTokens += attribution.usage.inputTokens;

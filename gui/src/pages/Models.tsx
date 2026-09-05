@@ -1207,10 +1207,11 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
      // An empty provider has nothing to send: keep both bulk buttons inert so we never PUT an
      // empty target list (the management API rejects it with 400).
      const hasRows = rows.length > 0;
+     const selectionPending = rows.some(model => model.initialSelectionPending);
      const allOn = !hasRows || rows.every(isVisible);
      const allOff = !hasRows || rows.every(m => !isVisible(m));
      const bulkToggle = (enable: boolean) => {
-       if (!hasRows) return;
+       if (!hasRows || selectionPending) return;
        void applyVisibility(
          "provider",
          provider,
@@ -1298,7 +1299,7 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
                            background: preset.mode === mode ? undefined : "transparent",
                            color: preset.mode === mode ? undefined : "var(--muted)",
                          }}
-                         disabled={busy || busyHere}
+                         disabled={busy || busyHere || selectionPending}
                          onClick={(e) => {
                            e.stopPropagation();
                            // Switching from a custom selection destroys it, so confirm first.
@@ -1339,8 +1340,8 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
                  </>
                );
              })()}
-             <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={busy || allOn} onClick={() => bulkToggle(true)}>{t("models.allOn")}</button>
-            <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={busy || allOff} onClick={() => bulkToggle(false)}>{t("models.allOff")}</button>
+             <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={busy || allOn || selectionPending} onClick={() => bulkToggle(true)}>{t("models.allOn")}</button>
+            <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={busy || allOff || selectionPending} onClick={() => bulkToggle(false)}>{t("models.allOff")}</button>
             <div className="models-cap-cluster">
               {/* The label names the FUNCTION. It used to be `models.capValue` -
                   "기본 128k" - which is a value masquerading as a name: even a
@@ -1459,7 +1460,8 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
                    }}
                  >
                    <div className="row models-model-row">
-                     <Switch on={!off} onClick={() => void applyVisibility("models", provider, [{ id: m.id, native: m.native === true }], off)} disabled={busy} label={m.native ? m.id : m.namespaced} />
+                     <Switch on={!off} onClick={() => void applyVisibility("models", provider, [{ id: m.id, native: m.native === true }], off)} disabled={busy || m.initialSelectionPending} label={m.native ? m.id : m.namespaced} />
+                     {m.initialSelectionPending && <span className="models-chip muted" role="status">{t("models.initialSelectionPending")}</span>}
                      {aliases.models[provider]?.[m.id] && <strong className="mono text-control">{aliases.models[provider][m.id].alias}</strong>}
                       <code className="mono text-control" style={{ color: off ? "var(--faint)" : "var(--text)", textDecoration: off ? "line-through" : "none" }}>{m.native ? modelLabel(m.id) : formatNamespacedModelId(m.namespaced, t)}</code>
                      {aliases.models[provider]?.[m.id]?.source === "builtin" && <span className="models-chip muted text-caption">{t("models.aliasAuto")}</span>}

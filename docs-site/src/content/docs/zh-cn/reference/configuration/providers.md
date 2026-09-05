@@ -5,6 +5,21 @@ description: 提供者条目、身份验证、端点、模型目录、配额、�
 
 提供者用于告诉 opencodex 模型位于哪里、使用哪种线协议适配器，以及请求如何进行身份验证。
 
+## 首次注册时的模型选择
+
+新的非 OAuth 连接会等待可靠的模型列表，再公开模型。如果 Models 标签页中去重后的模型行达到20个，所有模型开关初始为 OFF，但提供者本身保持 ACTIVE。实际认证方式为 OAuth 或 ChatGPT 登录的连接保留默认设置。
+
+仅在首次注册提供者时应用；更新、重新登录和更换密钥不会重置已有选择。初始化后，可在 Models 或使用以下 CLI 命令启用所需模型。后续新增模型的独立策略不变。请将 `<model-id>` 替换为列表中的 ID。
+
+```sh
+ocx models live --provider openrouter
+ocx models enable '<model-id>'
+ocx models disable '<model-id>'
+ocx models provider openrouter on
+```
+
+在界面中完成注册或 OAuth 登录后，提示框可打开 Models 页面。CLI 会输出模型管理命令，JSON 也包含后续步骤。`--no-wait` 表示登录仍在等待中，并非已完成。使用实时模型命令前，请先运行 `ocx start` 启动代理。
+
 ## 提供者相关顶级字段
 
 | 字段 | 类型 | 默认值 | 含义 |
@@ -94,8 +109,8 @@ selector，而不是分配一个新名称。
 | `xaiResponsesXSearch?` | `boolean` | 默认禁用。在 xAI Responses 目标上，仅当有效的 `web_search` 工具在最终请求规范化后仍保留时，才附加由提供方托管的 `x_search` 声明。不会重复已有声明，绝不会扩大调用方的 `tool_choice`/`allowed_tools` 选择范围，并且此项独立于网络搜索辅助服务的 `search.xSearch` 选项。 |
 | `modelPreferHostedTools?` | `Record<string,string[]>` | 非 forward Responses gateway 的精确模型 ID opt-in，用于上游预留 hosted tool namespace 的情况。目前只支持 `["image_generation"]`；匹配模型必须使用 `openai-responses` wire 且支持该 hosted 工具。它会移除冲突的客户端 `image_gen` 声明，并改写其 selector 以保持调用方的 tool choice。对于 OpenAI API 的虚拟 `-pro` 模型，先匹配所选公开 ID，未命中时才使用解析出的基础 wire-model ID 作为回退。`modelAdapters` 会先按公开 ID、再按基础 ID 解析；后一次结果决定最终 wire。未配置模型保持普通 alias 行为。 |
 | `annotateEmptyToolOutputs?` | `boolean` | 在工具结果到达模型之前，将存在但为空的结果替换为简短标记，以免空白结果被误认为缺失结果。适用于空白字符串和仅包含文本的部件数组；图像、文件和加密部件绝不会被修改。内置注册表中 `DeepSeek` 的默认值为 `true`，其他情况下不设置。设为 `false` 可让提供者退出此行为——后续编辑即使省略该字段，也会保留显式的 `false`。`PATCH /api/providers?name=<provider>` 接受 `true`、`false` 或 `null`；传入 `null` 可清除覆盖值并恢复注册表默认行为。 |
-| `reasoningEffortMap?` | `Record<string, string>` | 提供者级、用于推理标签的线协议别名。 |
-| `modelReasoningEffortMap?` | `Record<string, Record<string, string>>` | 按模型设置的推理标签线协议别名。 |
+| `reasoningEffortMap?` | `Record<string, string>` | 提供者级、用于推理标签的线协议别名。将标签映射为 `"__omit__"` 可在上游请求中完全省略推理字段（例如针对需要省略 `reasoning_effort` 才能触发深度思考模式的 Ollama 本地模型）。 |
+| `modelReasoningEffortMap?` | `Record<string, Record<string, string>>` | 按模型设置的推理标签线协议别名。将标签映射为 `"__omit__"` 可在上游请求中完全省略推理字段。 |
 | `reasoningWireFormat?` | `"gateway-object"` | 用于接受 `reasoning: { enabled, effort }` 而非 `reasoning_effort` 的 OpenAI 兼容 gateway。ClinePass preset 会自动设置。 |
 | `noReasoningModels?` | `string[]` | 会拒绝推理/思考参数的模型。 |
 | `noTemperatureModels?` | `string[]` | 会拒绝调用方指定 `temperature` 的模型。 |
@@ -134,6 +149,8 @@ API key 提供者可以持有字面量 key，或环境引用。OAuth 提供者�
 
 私有/本地目标需要 `allowPrivateNetwork: true`，并且在出站代理启用时，还需要匹配的 `NO_PROXY` 条目。回环地址会自动加入；每个 LAN 主机都必须显式列出，因为 CIDR 条目不会被解释。匹配器支持精确主机、域后缀、可选端口、带方括号的 IPv6 以及 `*`；例如，应显式列出 `192.168.1.50`。元数据和链路本地目标仍会被阻止。诊断请求会拒绝重定向，并报告一个已剥离凭据的目标。普通提供者请求的重定向审查仍然独立于这个诊断保护。
 
+面向 Clash / Surge / Mihomo 用户的 fake-IP DNS 例外有两种，且都只作用于 DNS *应答*——URL 中的字面地址仍会被拒绝。IANA 基准段 `198.18.0.0/15`（含 IPv4-mapped IPv6 写法）在该主机适用出站代理时被接受。Mihomo 默认的 IPv6 fake-IP 段 `fdfe:dcba:9876::/48` 采用更严格的门槛：必须设置与 URL 协议匹配的代理变量（`https:` 对应 `HTTPS_PROXY`，`http:` 对应 `HTTP_PROXY`，`ALL_PROXY` 不算），主机不能命中 `NO_PROXY`，随后请求会被显式绑定到该代理。其他 ULA、相邻前缀，或与真实私网应答混合的 fake-IP 应答仍需要 `allowPrivateNetwork: true`。提供方保存时的校验不应用该 IPv6 例外。
+
 ## Codex 账户池
 
 请在仪表盘 **Codex Auth** 页面添加 pool account 并刷新 quota。配置只保存非 secret account
@@ -163,7 +180,7 @@ affinity。这些策略不能规避 provider enforcement。
 
 | 键 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `anthropicAccountPool.enabled?` | `boolean` | `false` | 启用粘性亲和性和 429 冷却故障转移。 |
+| `anthropicAccountPool.enabled?` | `boolean` | `false` | 启用粘性会话亲和性与基于用量的新会话选择。**429 故障转移不由此开关控制**：只要存有两个及以上可用账号就会生效，与其他多凭据提供方一致，且无法关闭。 |
 | `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | 对于新会话，当活动账户达到此阈值时，选择配置窗口中已知缓存使用率最低的账户。`0` 会禁用配额选择。 |
 | `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | 新会话策略；`quota` 按 `quotaWindow` 指定的窗口（默认是 5 小时条形数据）对账户排序，`fill-first` 也在同一窗口中判定其耗尽阈值。 |
 | `anthropicAccountPool.quotaWindow?` | `"five-hour" \| "weekly" \| "max-utilization"` | `"five-hour"` | 基于用量选择账户时使用的、由提供商报告并缓存的用量条。`five-hour` 保持原有行为。`weekly` 使用每周用量条，并在仍有其他可用账户时跳过 5 小时用量已耗尽的账户；若没有其他账户，则回退使用这些账户。`max-utilization` 使用已知值中的最高值，因此每周用量尚不可用时仍可使用 5 小时用量；两者都未知时，账户遵循 unknown 用量排序。已知用量排在 unknown 之前，但如果所有可用账户都未知，仍会按可用顺序选择一个账户。在前述较低 5 小时用量的同分判定之后，完全相同时也保留可用顺序。不会主动重新平衡健康且已建立亲和性的会话。在新会话分配和符合条件的 429 替代后的路由恢复中，`quota` 直接按此窗口对可用候选账户排序；`fill-first` 按此窗口的阈值和耗尽规则以稳定顺序前进；`round-robin` 忽略此设置。冷却状态、故障转移上限和重新认证资格仍是独立的本地状态。各账户的每周用量只有在控制面板的提供商页面完成查询后才可用。 |

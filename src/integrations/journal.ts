@@ -26,7 +26,7 @@ import { isIntegrationClientId, type IntegrationClientId } from "./registry";
  *
  * This union is re-declared, not imported, in two other places -- the management
  * route envelope and the GUI adapter -- because neither imports across that
- * boundary. `tests/integrations-journal.test.ts` asserts the three agree, since
+ * boundary. `tests/clients/integrations-journal.test.ts` asserts the three agree, since
  * nothing else can: a kind persisted here and missing there renders as a raw
  * key with no type error anywhere.
  */
@@ -63,6 +63,44 @@ export interface JournalEntry {
 }
 
 export const SNAPSHOT_RETENTION = 10;
+
+/**
+ * A deletion, expressed as an APPEND.
+ *
+ * The alternative -- rewriting journal.jsonl without the row -- breaks all three
+ * things this file's header promises. `appendOperation` commits and nothing
+ * else, so a read-modify-write would race any concurrent append; a torn write
+ * would truncate the whole log rather than one trailing line, which
+ * `listOperations` is built to tolerate; and no lock covers this file, because
+ * append-only never needed one (writer-lock.ts guards `<configPath>.lock`,
+ * which is a client config, not this).
+ *
+ * "journal rows always survive" (pruneSnapshots below) is a promise about
+ * RETENTION, not about the user. An operator deleting their own row is not
+ * retention, and the physical line does in fact survive -- this record is laid
+ * over it.
+ */
+export interface JournalTombstone {
+  /** opId this row retires. */
+  tombstone: string;
+  at: string;
+  /** Management principal that asked. Never a token, never a path. */
+  by: string;
+}
+
+function isTombstone(value: unknown): value is JournalTombstone {
+  return typeof value === "object" && value !== null
+    && typeof (value as { tombstone?: unknown }).tombstone === "string";
+}
+
+/** Retire one operation. Append-only, exactly like `appendOperation`. */
+export function appendTombstone(
+  record: JournalTombstone,
+  dir: string = integrationsDir(),
+): void {
+  ensureDir(journalPath(dir));
+  appendFileSync(journalPath(dir), `${JSON.stringify(record)}\n`, { encoding: "utf8", mode: 0o600 });
+}
 
 /**
  * Does the file on disk still hold what this operation left behind?
@@ -159,16 +197,34 @@ export function listOperations(
     return [];
   }
   const rows: JournalEntry[] = [];
+  /*
+   * Collected in the SAME pass, before any filtering. A tombstone carries no
+   * clientId -- it names an opId -- so a pass that filtered by client first
+   * would drop the tombstone and resurrect the row on the per-client route
+   * while the global route hid it. The two routes read the same log and must
+   * agree.
+   */
+  const retired = new Set<string>();
   for (const line of raw.split("\n")) {
     if (!line.trim()) continue;
     try {
-      const parsed = JSON.parse(line) as JournalEntry;
-      if (!clientId || parsed.clientId === clientId) rows.push(parsed);
+      const parsed: unknown = JSON.parse(line);
+      if (isTombstone(parsed)) {
+        retired.add(parsed.tombstone);
+        continue;
+      }
+      const entry = parsed as JournalEntry;
+      if (!clientId || entry.clientId === clientId) rows.push(entry);
     } catch {
       // Torn line from an interrupted append; the rest of the log is still good.
     }
   }
-  return rows.reverse().slice(0, limit);
+  /*
+   * Filter AFTER the whole file is read, never during. A tombstone is always
+   * appended after the row it retires, so an in-loop check would miss every one.
+   */
+  const live = retired.size === 0 ? rows : rows.filter(row => !retired.has(row.opId));
+  return live.reverse().slice(0, limit);
 }
 
 export function findOperation(opId: string, dir: string = integrationsDir()): JournalEntry | null {
@@ -211,6 +267,11 @@ export function countSnapshots(
  * Keep the newest N snapshot files per client; journal rows always survive.
  * Structured rather than throwing or swallowing: a swallowed failure would let
  * credential-bearing snapshots pile up while every operation reported success.
+ *
+ * A user-deleted row no longer occupies a retention slot: `listOperations`
+ * hides retired rows, so the keep window below slides down by one for each
+ * deletion. The direction is safe -- an older backup is kept rather than
+ * collected -- but "ten backups per client" counts LIVE rows, not operations.
  */
 export function pruneSnapshots(
   clientId: IntegrationClientId,

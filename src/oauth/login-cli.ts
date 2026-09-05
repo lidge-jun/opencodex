@@ -1,4 +1,6 @@
 import * as readline from "node:readline";
+import { modelSelectionGuidance } from "../cli/model-selection-guidance";
+import { initializeProviderModelSelection } from "../providers/initial-model-selection";
 import { openUrl } from "../lib/open-url";
 import { loadConfig, saveConfig } from "../config";
 import { findLiveProxy } from "../server/proxy-liveness";
@@ -93,6 +95,7 @@ async function handleOAuthLogin(name: string): Promise<void> {
   }
   const reload = await notifyRunningProxyAfterOAuthLogin(name);
   console.log(`\n✅ Logged in to ${name}. Try: ocx sync`);
+  for (const line of modelSelectionGuidance(name)) console.log(line);
   warnIfLiveReloadSkipped(reload);
 }
 
@@ -156,6 +159,7 @@ export async function commitKeyLoginProvider(
   onLiveReload?: (result: LocalProviderReloadResult | null) => void,
 ): Promise<OcxProviderConfig> {
   const mergedProvider = mergeKeyLoginProviderRow(provider, config.providers[name]);
+  initializeProviderModelSelection(name, mergedProvider, config.providers[name], config);
   config.providers[name] = mergedProvider;
   saveConfig(config);
   // Evaluate the reload BEFORE the optional call: `onLiveReload?.(await ...)` short-circuits
@@ -211,6 +215,7 @@ async function handleKeyLogin(name: string): Promise<void> {
   let reload: LocalProviderReloadResult | null = null;
   await commitKeyLoginProvider(config, name, provider, result => { reload = result; });
   console.log(`✅ ${def.label} added. Try: ocx sync`);
+  for (const line of modelSelectionGuidance(name)) console.log(line);
   warnIfLiveReloadSkipped(reload);
 }
 

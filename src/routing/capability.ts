@@ -213,9 +213,18 @@ export function candidateCapabilityEvidence(
     || provider?.parallelToolCalls === true
     || undefined;
 
-  const reasoningEfforts = modelRecordValue(provider?.modelReasoningEfforts, modelId)
-    ?? modelRecordValue(registryEntry?.modelReasoningEfforts, modelId)
-    ?? (isNative ? nativeReasoningEfforts(modelId) : undefined);
+  // `noReasoningModels` is a POSITIVE statement that this model has no effort control, and
+  // every other consumer already reads it that way: configuredReasoningEfforts
+  // (reasoning-effort.ts), supportedLadderFor (server/effort-policy.ts) and the
+  // compatibility fingerprint (routing/compatibility/behavior.ts) all check it first.
+  // Routing evidence did not, which was harmless only while no registry ladder existed to
+  // contradict it — a provider-level ladder would otherwise report supported rungs for a
+  // model the operator explicitly disabled reasoning for.
+  const reasoningEfforts = modelInList(provider?.noReasoningModels, modelId)
+    ? []
+    : modelRecordValue(provider?.modelReasoningEfforts, modelId)
+      ?? modelRecordValue(registryEntry?.modelReasoningEfforts, modelId)
+      ?? (isNative ? nativeReasoningEfforts(modelId) : undefined);
 
   const tierSupport = provider
     ? serviceTierSupportForModel(provider, modelId, providerName)
@@ -236,7 +245,11 @@ export function candidateCapabilityEvidence(
     ...(typeof contextWindow === "number" ? { contextWindow } : {}),
     ...(typeof image === "boolean" ? { image } : {}),
     ...(typeof tools === "boolean" ? { tools } : {}),
-    ...(reasoningEfforts !== undefined && reasoningEfforts.length > 0 ? { reasoningEfforts } : {}),
+    // A DEFINED but empty ladder is known-negative evidence and must survive. Dropping it
+    // made the evaluator take its `!Array.isArray` branch and record "unknown", which is
+    // permissive — "we could not tell" rather than "this model has no effort control" — so
+    // an explicitly disabled model could still satisfy a reasoning-effort requirement.
+    ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
     ...(serviceTier !== "unknown" ? { serviceTier } : {}),
     ...localRemote,
     ...(typeof encryptedCodexTasks === "boolean" ? { encryptedCodexTasks } : {}),

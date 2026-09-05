@@ -1,0 +1,18 @@
+# wp1 implementation
+
+- MODIFY src/config.ts: fastRows optional/catch(false) -> default(true)/catch(false); seed getDefaultConfig true. MODIFY src/types/config.ts semantics.
+- MODIFY src/server/fast-row.ts and src/server/index.ts: off iff === false, on iff !== false, across listing and ingress. Preserve grammar collision/eligibility logic. Add reusable catalog Fast availability predicate if needed to share native-tier and resolved routed eligibility with exports.
+- MODIFY src/server/management/model-rows.ts: compute an optional boolean fastRowAvailable from live server config and row metadata, including native metadata slug; preserve it in toExportModel. No extra picker rows in management itself.
+- MODIFY src/clients/config-export/contracts.ts, src/cli/opencode.ts and src/cli/export-command.ts: carry fastRowAvailable through each typed projection, including false; remote rows own their hub switch state.
+- NEW src/clients/config-export/fast-models.ts (or shared metadata owner): expand eligible rows, preserve metadata, name Fast distinctly, reserve exact input IDs before synthesis, avoid repeated expansion, stable first-wins dedupe. Fallback to canonical local policy only if no resolved remote flag is supplied. Native fallback requires upstream advertised Fast.
+- MODIFY config-export.ts and its omp/dsh/mcode/zcode serializers: use shared projection; OpenCode direct provider blocks use it too. Preserve pure normalizeExportModels compatibility if useful.
+- MODIFY existing focused tests: omission/on/off/malformed config; parser/listing default; pi and every EXPORT_CLIENT_ID, OpenCode V1/V2 direct path, remote enabled/disabled with no local provider, duplicate/collision and metadata preservation. CI executes tests; no local suite or typecheck.
+- MODIFY docs-site/src/content/docs/reference/configuration.md and structure/09_client-integrations.md: default true, false opt-out, supported export paths, refresh previously written client configs.
+
+Activation scenarios: omitted flag publishes and parses Fast; explicit false preserves old rows; malformed flag disables without dropping providers; eligible provider publishes but ineligible does not; native needs upstream fast; real base--fast wins over synthesis; re-expansion adds no nested rows; remote false stays false even when local default on. CI plus independent static review is the acceptance gate.
+
+Delegation: export-path explorer/auditor reads clients and callers; implementation worker may own config-export subtree plus CLI projections and their existing tests. Parent owns config/server/model-rows/default tests/docs. Reviews are read-only and run no suites.
+
+## Audit amendment
+
+Reviewer Huygens GO-WITH-FIXES identified old hubs without metadata and disabled real-ID collisions. Accept both. Freeze contract: `fastRowAvailable?: boolean` is resolved by the hub on EVERY management row. Export projection emits Fast ONLY when this field is true; no serializer-side local policy fallback at all. Missing metadata from old hubs conservatively means unavailable. Parent owns hub availability, using full management row IDs plus knownEffortRowIds BEFORE filtering disabled rows. Worker owns export contracts/CLI transports and a pure generic expansion helper. It changes namespaced/displayName only, preserves provider/id/native, marks synthesized rows fastRowAvailable:false for idempotence, and reserves all supplied exact IDs. Direct OpenCode launcher consumes the same hub projection, so does not need local inference. Tests cover hub/local conflicting flags, missing metadata and disabled complete-ID collisions.

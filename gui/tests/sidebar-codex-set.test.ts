@@ -24,8 +24,14 @@ test("Codex Set is always present in the sidebar, never filtered by view mode", 
    */
   expect(src).toContain("NAV.map(");
 
-  // It stays in the nav table and remains routable for deep links.
-  expect(src).toContain('{ id: "codex-set", tkey: "nav.codexSet", Icon: IconKey }');
+  /*
+   * It stays in the nav table and remains routable for deep links. The icon
+   * component is deliberately not part of the assertion — for the same reason
+   * the destructuring above is not. Pinning `Icon: IconKey` made this test fail
+   * when the row was given its actual Codex mark, which is a change it was never
+   * written to catch. The entry's identity is its id and its label key.
+   */
+  expect(src).toContain('{ id: "codex-set", tkey: "nav.codexSet", Icon:');
   expect(src).toContain('{page === "codex-set" && <CodexSet apiBase={sharedBase} />}');
 });
 

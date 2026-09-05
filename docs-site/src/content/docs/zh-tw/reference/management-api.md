@@ -71,6 +71,16 @@ Session 簽發在需要 data-plane 認證時停用，這包含遠端綁定。遠
 
 關於模型名冊與加密 worker-task 行為背後的概念，請見[子代理介面](/zh-tw/guides/sub-agent-surface/)。
 
+### 用戶端整合復原日誌
+
+| 方法與路徑 | 用途 | 主要錯誤 |
+| --- | --- | --- |
+| `GET /api/client-integrations/journal?client=...` | 列出復原操作，也可限定為單一用戶端。每一項都包含由伺服器計算的 `deletable` 欄位。 | 400 用戶端無效 |
+| `DELETE /api/client-integrations/journal?opId=...` | 停用一筆較舊的復原操作，並在可能時刪除其快照。成功回應中的 `snapshotRemoved: false` 表示清理工作已保留，等待維護重試。 | 400 缺少 `opId`；404 操作不存在或已停用；409 該用戶端的最新操作 |
+
+刪除操作會附加墓碑記錄，而不會重寫日誌。伺服器會保護每個用戶端的最新操作，
+以保留目前的復原點。
+
 ### 組合
 
 | 方法與路徑 | 用途 | Notable errors |
@@ -137,7 +147,10 @@ Session 簽發在需要 data-plane 認證時停用，這包含遠端綁定。遠
 | `PUT /api/model-visibility` | 原子地變更供應商或模型層級可見性 | 400 無效供應商、scope、目標或 body |
 | `GET, POST /api/custom-models` | 列出自訂模型或新增一個 | 400 無效欄位；404 供應商缺失；409 重複模型 |
 | `PUT, DELETE /api/custom-models/{id}` | 編輯或刪除一個自訂模型 | 400 無效 id/欄位；404 未找到；409 重複模型 |
-| `GET, PUT /api/selected-models` | 讀取供應商允許清單與可用性，或取代一個允許清單 | 400 缺失供應商/body；404 未知供應商 |
+| `GET, PUT /api/selected-models` | 讀取供應商允許清單與可用性，或取代一個允許清單 | 400 缺失供應商/body；404 未知供應商; PUT 409 `initial_model_selection_pending` |
+| `GET, PUT /api/model-presets` | 讀取預設資訊或選擇 preset/all/custom 模式 | 400 模式無效或不支援該預設；404 未知供應商; PUT 409 `initial_model_selection_pending` |
+
+尚未確認可靠的初始模型清單時，有效的 `PUT /api/selected-models` 和 `PUT /api/model-presets` 請求也會回傳 HTTP 409 和代碼 `initial_model_selection_pending`。請使用 `GET /api/models` 等方式更新模型清單，成功後再重試。
 
 ### OAuth 帳號、供應商金鑰與 data-plane 金鑰
 
@@ -214,7 +227,7 @@ Session 簽發在需要 data-plane 認證時停用，這包含遠端綁定。遠
 | `PUT /api/codex-auth/failover` | 設定帳號容錯移轉閾值 | 400 無效閾值 |
 | `GET /api/codex-auth/quota` | 依帳號讀取快取配額狀態 | — |
 | `GET /api/codex-auth/reset-credits` | 檢查帳號的 reset-credit 資格 | 400 缺失帳號 id；上游狀態 passthrough；500 查詢失敗 |
-| `POST /api/codex-auth/reset-credits/consume` | 消耗一個合格的 reset credit | 400 缺失帳號 id；上游狀態 passthrough；503 `server_busy`；500 消耗失敗 |
+| `POST /api/codex-auth/reset-credits/consume` | 消耗一個合格的 reset credit。選用的 `operationId`（UUIDv4）可讓兌換具備冪等性：相同 id 會重播同一筆持久化結果，而不會再消耗一個 credit。 | 400 缺失帳號 id 或無效的 `operationId`；若該 id 屬於其他帳號則 409 `identity_mismatch`；上游狀態 passthrough；503 `server_busy`、`capacity` 或 `unavailable`；500 消耗失敗 |
 | `POST /api/codex-auth/login` | 啟動 Codex 登入或重新認證 | 400 無效請求；衝突／忙碌登入狀態 |
 | `POST /api/codex-auth/login/code` | 為 Codex 登入流程提交手動碼 | 400 無效流程／碼 |
 | `POST /api/codex-auth/login/cancel` | 取消 Codex 登入流程 | — |

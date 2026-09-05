@@ -126,7 +126,7 @@ OAuth 账号会显示为 `Account N`，而 plan/label 列会在 plan、屏蔽后
 不指定提供方时，会列出 Codex 池、OAuth 账号和已配置的 API 密钥池。除非提供
 `--all`，否则会跳过空的提供方。指定提供方时，只列出该凭据家族。人类可读输出
 使用 `PROVIDER TYPE ID PLAN/LABEL PRIORITY STATUS`；手动选中的 Codex 行会标记为 `selected`。
-当存有两个或更多符合条件的 Kiro 账号时，默认情况下 429 会自动轮换到另一个账号，并优先选择已知剩余额度最多的账号；轮换由账号存在与否驱动，可通过 `oauthAccountFailover.enabled: false` 关闭。`ocx account login kiro` 每次向池中添加一个账号。空结果仍然算成功。`--json` 返回：
+当存有两个或更多符合条件的 Kiro 账号时，默认情况下 429 会自动轮换到另一个账号，并优先选择已知剩余额度最多的账号；轮换由账号存在与否驱动，且无法关闭；`oauthAccountFailover.enabled: false` 拒绝的是发送前的账号优选，而非 429 恢复。`ocx account login kiro` 每次向池中添加一个账号。空结果仍然算成功。`--json` 返回：
 
 ```text
 { accounts: AccountRow[], notes: string[] }

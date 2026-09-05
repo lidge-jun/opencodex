@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { isatty } from "node:tty";
 import { spawnSync } from "node:child_process";
 import { getConfigDir } from "../config";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
@@ -86,11 +87,20 @@ function ghAvailable(): boolean {
 }
 
 /** Test seam: replace gh/interactiveConfirm so the full prompt flow is
- * drivable without a real gh login or a TTY conversation. */
-let depsForTests: { ghAvailable?: () => boolean; interactiveConfirm?: typeof interactiveConfirm } | null = null;
-export function setStarPromptDepsForTests(
-  deps: { ghAvailable?: () => boolean; interactiveConfirm?: typeof interactiveConfirm } | null,
-): void {
+ * drivable without a real gh login or a TTY conversation.
+ *
+ * `isTty` is part of the seam because the guard reads the file descriptors directly through
+ * `isatty` rather than `process.stdin.isTTY`: touching the stream properties would make Bun
+ * construct the stream, which dereferences the working directory and throws when that directory
+ * has been unlinked (#3400). A test therefore cannot fake a TTY by redefining those properties,
+ * so it overrides the decision here instead. */
+type StarPromptTestDeps = {
+  ghAvailable?: () => boolean;
+  interactiveConfirm?: typeof interactiveConfirm;
+  isTty?: () => boolean;
+};
+let depsForTests: StarPromptTestDeps | null = null;
+export function setStarPromptDepsForTests(deps: StarPromptTestDeps | null): void {
   depsForTests = deps;
 }
 
@@ -167,7 +177,13 @@ function printAgentDeferral(): void {
  */
 export async function maybeShowStarPrompt(): Promise<void> {
   try {
-    if (process.env.OCX_SERVICE || !process.stdin.isTTY || !process.stdout.isTTY) return;
+    let isTty = false;
+    try {
+      isTty = depsForTests?.isTty ? depsForTests.isTty() : isatty(0) && isatty(1);
+    } catch {
+      /* best-effort */
+    }
+    if (process.env.OCX_SERVICE || !isTty) return;
     const dir = getConfigDir();
     const marker = join(dir, MARKER);
     if (existsSync(marker)) return;

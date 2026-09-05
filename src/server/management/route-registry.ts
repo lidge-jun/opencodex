@@ -1,20 +1,20 @@
 /**
  * Declared inventory of every reachable management route.
  *
- * DECLARED, not harvested. A grep cannot see this surface: 18 routes are registered
+ * DECLARED, not harvested. A grep cannot see this surface: 19 routes are registered
  * through a regex, an `endsWith`, a `pathname.slice`, a prefix decode, a path constant, or a
  * negated `pathname !== "…"` guard, and two of those are live routes whose only textual
  * trace is the negated form. For `GET /api/storage` an equality scan finds solely the dead
  * shadowed copy in `logs-usage-routes.ts` and never the live one.
  *
  * This module is pure DATA and must stay that way. It is imported by
- * `src/server/management-api.ts`, which `tests/core-lab-boundary.test.ts` protects: a user
+ * `src/server/management-api.ts`, which `tests/lab/core-lab-boundary.test.ts` protects: a user
  * with one provider and no Lab must execute no Lab code. Route paths are strings, so
  * declaring `/api/lab/status` here creates no module edge. Never import a handler, and
  * never import anything from `src/lab/`. The `module` field names the owning file as text
  * for exactly this reason.
  *
- * Reconciliation lives in `tests/management-route-registry.test.ts`, which resolves
+ * Reconciliation lives in `tests/server/management-route-registry.test.ts`, which resolves
  * `(method, path)` pairs from source and fails loudly on a route whose method it cannot
  * determine. Adding a route without declaring it here fails that test.
  */
@@ -169,6 +169,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   // server/management/integration-routes
   { method: "GET", path: "/api/client-integrations", module: "server/management/integration-routes", mutates: false },
   { method: "GET", path: "/api/client-integrations/journal", module: "server/management/integration-routes", mutates: false },
+  { method: "DELETE", path: "/api/client-integrations/journal", module: "server/management/integration-routes", mutates: true, exempt: { reason: "deferred-verb", why: "Retiring one rollback row is a dashboard-local cleanup; the CLI verb that would drive it is owed by a later work-phase and is not implemented here.", owner: "260904_priority65_closeout WP7", ownerDoc: "devlog/_plan/260904_priority65_closeout/060_wp7_rollback_journal_crud.md" } },
   { method: "POST", path: "/api/client-integrations/restore", module: "server/management/integration-routes", mutates: true },
   // server/management/lab-automation-routes
   { method: "GET", path: "/api/lab/automation", module: "server/management/lab-automation-routes", mutates: false, exempt: { reason: "local-transport", why: "ocx lab reads the same rows from the local SQLite projection; src/cli/lab.ts imports ../lab/query directly and never fetches /api/lab." } },
@@ -275,6 +276,8 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "POST", path: "/api/providers/test", module: "server/management/provider-routes", mutates: true },
   { method: "PUT", path: "/api/providers", module: "server/management/provider-routes", mutates: true, exempt: { reason: "deferred-verb", why: "Issue #3280 scopes this atomic batch endpoint to the GUI JSON editor; a matching CLI verb is outside wp5 and remains owed.", owner: "wp5-followup", ownerDoc: "devlog/_plan/260903_bug_drawdown_bcda/050_phase5.md" } },
   { method: "PUT", path: "/api/provider-context-caps", module: "server/management/provider-routes", mutates: true },
+  // server/management/quota-reset-routes
+  { method: "GET", path: "/api/quota-resets", module: "server/management/quota-reset-routes", mutates: false, mechanism: "negated-guard" },
   // server/management/request-history-routes
   { method: "GET", path: "/api/request-history", module: "server/management/request-history-routes", mutates: false },
   // server/management/routing-analytics-routes
@@ -300,7 +303,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/system/memory", module: "server/management/system-routes", mutates: false },
   { method: "GET", path: "/api/system/windows-replace-retries", module: "server/management/system-routes", mutates: false },
   { method: "POST", path: "/api/system/restart", module: "server/management/system-routes", mutates: true },
-  // --- Routes an equality scan of their own file cannot see (18). ---
+  // --- Routes an equality scan of their own file cannot see (19). ---
   // Each carries `mechanism`; the reconciliation test counts these separately.
   { method: "GET", path: "/api/storage", module: "server/management/storage-log-guard-routes", mutates: false, mechanism: "negated-guard" },
   { method: "GET", path: "/api/routing-analytics", module: "server/management/routing-analytics-routes", mutates: false, mechanism: "negated-guard" },

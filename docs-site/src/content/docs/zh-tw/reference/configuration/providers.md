@@ -5,6 +5,21 @@ description: 供應商項目、認證、端點、模型目錄、配額、context
 
 供應商告訴 opencodex 模型在哪裡、它使用哪種 wire adapter，以及請求如何被認證。
 
+## 首次註冊時的模型選擇
+
+新的非 OAuth 連線會先等待可靠的模型清單，再公開模型。如果 Models 分頁中去重後的模型列達到20個，所有模型開關初始為 OFF，但供應商本身保持 ACTIVE。實際驗證方式為 OAuth 或 ChatGPT 登入的連線保留預設值。
+
+只在首次註冊供應商時套用；更新、重新登入與更換金鑰不會重設既有選擇。初始化後，可在 Models 或使用以下 CLI 指令啟用所需模型。後續新增模型的獨立政策不變。請將 `<model-id>` 換成清單中的 ID。
+
+```sh
+ocx models live --provider openrouter
+ocx models enable '<model-id>'
+ocx models disable '<model-id>'
+ocx models provider openrouter on
+```
+
+在介面中完成註冊或 OAuth 登入後，提示視窗可開啟 Models 頁面。CLI 會輸出模型管理指令，JSON 也包含後續步驟。`--no-wait` 表示登入仍在等待中，並非已完成。使用即時模型指令前，請先執行 `ocx start` 啟動代理。
+
 ## 供應商相關的頂層欄位
 
 | 欄位 | 型別 | 預設值 | 意義 |
@@ -73,8 +88,8 @@ description: 供應商項目、認證、端點、模型目錄、配額、context
 | xAI Responses 選用（儀表板） | 開關 | 僅用於 `xai`，以原子方式設定或清除 `grok-4.5` 與 `grok-4.6` 的 `modelAdapters` 項目。若只有一個項目，會顯示混合狀態，直到下次開關寫入統一兩者。其他覆寫與層級行為不變。 |
 | `annotateEmptyToolOutputs?` | `boolean` | 在工具結果送達模型前，將已存在但為空的結果替換成簡短標記，使空白結果不會被解讀為遺漏的結果。適用於空白字串及僅含文字部分的陣列；影像、檔案及加密部分絕不會被更動。DeepSeek 透過內建登錄檔預設為 `true`，其他情況則不設定。設為 `false` 可讓供應商停用此功能；後續編輯即使省略此欄位，也會保留明確設定的 `false`。`PATCH /api/providers?name=<provider>` 接受 `true`、`false` 或 `null`；`null` 會清除覆寫並恢復使用登錄檔的預設行為。 |
 | `xaiResponsesXSearch?` | `boolean` | 預設停用。在 xAI Responses 目的地上，僅當即時 `web_search` 工具通過最終請求正規化後仍保留時，才附加由供應商託管的 `x_search` 宣告。既有宣告不會重複，呼叫端的 `tool_choice`／`allowed_tools` 選擇器絕不會擴大，且此設定與網頁搜尋輔助服務的 `search.xSearch` 選項分開。 |
-| `reasoningEffortMap?` | `Record<string, string>` | 供應商範圍的 reasoning 標籤 wire 別名。 |
-| `modelReasoningEffortMap?` | `Record<string, Record<string, string>>` | Per-model 的 reasoning 標籤 wire 別名。 |
+| `reasoningEffortMap?` | `Record<string, string>` | 供應商範圍的 reasoning 標籤 wire 別名。將標籤對應為 `"__omit__"` 可在上游請求中完全省略推理欄位（例如針對需要省略 `reasoning_effort` 才能觸發深度思考模式的 Ollama 本地模型）。 |
+| `modelReasoningEffortMap?` | `Record<string, Record<string, string>>` | Per-model 的 reasoning 標籤 wire 別名。將標籤對應為 `"__omit__"` 可在上游請求中完全省略推理欄位。 |
 | `noReasoningModels?` | `string[]` | 拒絕 reasoning/thinking 參數的模型。 |
 | `noTemperatureModels?` | `string[]` | 拒絕呼叫者指定 `temperature` 的模型。 |
 | `noTopPModels?` | `string[]` | 拒絕呼叫者指定 `top_p` 的模型。 |
@@ -108,6 +123,8 @@ API-key 供應商可持有字面值金鑰或環境參考。OAuth 供應商使用
 
 私有／本機目的地需要 `allowPrivateNetwork: true`，且當對外代理活躍時需要相符的 `NO_PROXY` 項目。回送會自動加入；請明確列出每個 LAN 主機，因為 CIDR 項目不被解讀。比對器支援精確主機、網域後綴、可選連接埠、方括號 IPv6 與 `*`；例如，明確列出 `192.168.1.50`。中繼資料與 link-link 目標保持被封鎖。診斷請求拒絕重新導向並回報已剝離憑證的目標。普通供應商請求的重新導向審查與此診斷防護分開。
 
+針對 Clash / Surge / Mihomo 使用者的 fake-IP DNS 例外有兩種，且都只作用於 DNS *回應*——URL 中的字面位址仍會被拒絕。IANA 基準區段 `198.18.0.0/15`（含 IPv4-mapped IPv6 寫法）在該主機適用對外代理時被接受。Mihomo 預設的 IPv6 fake-IP 區段 `fdfe:dcba:9876::/48` 採更嚴格的門檻：必須設定與 URL 協定相符的代理變數（`https:` 對應 `HTTPS_PROXY`，`http:` 對應 `HTTP_PROXY`，`ALL_PROXY` 不算），主機不得命中 `NO_PROXY`，之後請求會被明確綁定到該代理。其他 ULA、相鄰前綴，或與真實私網回應混合的 fake-IP 回應仍需要 `allowPrivateNetwork: true`。提供者儲存時的驗證不套用此 IPv6 例外。
+
 ## Codex 帳號池
 
 在儀表板中使用 **Codex Auth** 新增池帳號並重新整理配額。`config.json` 儲存非秘密中繼資料；access 與 refresh token 使用強化的憑證存放。池路由將新／未綁定指派、基於用量的主動切換與失敗復原分開。綁定任務通常保留親和性，但 `quota` 可在其超過用量閾值後的下一個請求時重新綁定它，而暫停、冷卻、重新認證與失敗處理可獨立清除或移動路由。未綁定請求沒有即時帳號綁定；這可包含代理重啟或親和性重置後的既有可見任務。Pre-stream 的 429 或 402 在同一個請求中於一個合格的備用帳號上重試一次，即使基於用量的主動切換關閉。帳號變更保留並重播對話 context，但跨帳號的供應商端 prompt-cache 重用不保證，cache 可能需要重新暖機。
@@ -131,7 +148,7 @@ API-key 供應商可持有字面值金鑰或環境參考。OAuth 供應商使用
 
 | Key | 型別 | 預設值 | 說明 |
 | --- | --- | --- | --- |
-| `anthropicAccountPool.enabled?` | `boolean` | `false` | 啟用 sticky 親和性與 429 冷卻容錯移轉。 |
+| `anthropicAccountPool.enabled?` | `boolean` | `false` | 啟用 sticky 工作階段親和性與依用量的新工作階段選擇。**429 容錯移轉不由此開關控制**：只要儲存了兩個以上可用帳號就會生效，與其他多憑證供應商一致，且無法關閉。 |
 | `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | 對於新 session，當目前帳號達到此閾值時，選擇設定視窗中最低的已知快取用量。`0` 停用配額挑選。 |
 | `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | 新 session 策略；`quota` 依 `quotaWindow` 指定的視窗（預設為 5 小時列）為帳號排序，`fill-first` 也在同一視窗中判定其排空閾值。 |
 | `anthropicAccountPool.quotaWindow?` | `"five-hour" \| "weekly" \| "max-utilization"` | `"five-hour"` | 使用量型帳號選擇所採用、由供應商回報並快取的用量列。`five-hour` 保留原有行為。`weekly` 使用每週用量列，並在仍有其他可用帳號時略過 5 小時用量已用盡的帳號；若沒有其他帳號，則退回使用這些帳號。`max-utilization` 使用已知值中的最高值，因此每週用量尚未取得時仍可使用 5 小時用量；兩者都未知時，帳號遵循 unknown 用量排序。已知用量排在 unknown 之前，但若所有可用帳號都是 unknown，仍會依可用順序選出一個。完成前述較低 5 小時用量的同分判定後，完全相同時也保留可用順序。不會主動重新平衡健康且已有 affinity 的 session。在分配新 session 與符合條件的 429 替代後進行路由復原時，`quota` 直接依此視窗排序可用候選帳號；`fill-first` 依此視窗的門檻與用盡規則按穩定順序前進；`round-robin` 忽略此設定。冷卻狀態、容錯移轉上限與重新驗證資格仍是獨立的本機狀態。每個帳號的每週用量只有在 dashboard 的供應商頁面完成查詢後才可得知。 |

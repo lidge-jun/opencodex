@@ -14,16 +14,21 @@ import { readJsonIfOk } from "../fetch-json";
 import { CodexAccountPoolCards, CodexAccountPoolReauthBanner } from "./codex-account-pool-cards";
 import { CodexAccountSwitchModal } from "./codex-account-switch-modal";
 import { CodexAccountResetModal } from "./codex-account-reset-modal";
-import { CodexAccountPoolLoadStates, CodexAccountPoolMainCard, CodexAccountPoolPageHead } from "./codex-account-pool-main-card";
+import { CodexAccountPoolActions, CodexAccountPoolLoadStates, CodexAccountPoolMainCard, CodexAccountPoolPageHead } from "./codex-account-pool-main-card";
 import { redeemResetCredit } from "./codex-account-pool-handlers";
 import type { CodexAccountEntry } from "./codex-account-pool-types";
 import { accountNeedsReauth } from "../oauth-health-display";
 import { useCopyFeedback } from "./use-copy-feedback";
 import { DEFAULT_ACCOUNT_POOL_STRATEGY } from "../account-pool-strategy";
 import type { CodexAccountMutationCompletion } from "../codex-account-mutation";
+import { createBoundedFetch, type BoundedFetch } from "../bounded-fetch";
+import CodexQuotaAutoRefreshSetting from "./CodexQuotaAutoRefreshSetting";
+import { quotaActivationWindows, readQuotaActivationSettings, type QuotaAutoRefreshSettings } from "../codex-quota-activation";
 
 // Single definition lives with the controller that owns this data (WP3).
 export type { CodexAccountEntry } from "../hooks/useCodexAccountPool";
+import ProviderModelsNotice from "./ProviderModelsNotice";
+import { navigateHash } from "../hash-routing";
 
 const DOCTOR_CMD = "ocx doctor";
 
@@ -34,7 +39,7 @@ const DOCTOR_CMD = "ocx doctor";
  * (the Codex Auth page passes its mode banner); `embedded` (WP090) omits page
  * title chrome while retaining the shared account actions in the Providers workspace.
  */
-export default function CodexAccountPool({ apiBase, accountModeState = null, banner = null, embedded = false, onActiveNeedsReauthChange, controller: injectedController, advancedExtras = null }: {
+export default function CodexAccountPool({ apiBase, accountModeState = null, banner = null, embedded = false, onActiveNeedsReauthChange, controller: injectedController, advancedExtras = null, hasMainHardLockSetting = false }: {
   apiBase: string;
   accountModeState?: CodexAccountModeState | null;
   banner?: ReactNode;
@@ -42,6 +47,8 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   onActiveNeedsReauthChange?: (needs: boolean) => void;
   /** Whole boxes rendered inside Advanced settings. Never fold these internally. */
   advancedExtras?: ReactNode;
+  /** This surface supplies the protection setting in advancedExtras; manage opens it locally. */
+  hasMainHardLockSetting?: boolean;
   /**
    * WP3: when Providers owns the controller, every surface shares one instance so a
    * mutation on Overview is immediately visible on the Accounts tab. The standalone
@@ -66,12 +73,53 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   const { accounts, activeId, loadState, switchingId, pauseUpdatingId, priorityUpdatingId, pausingExhausted, activePinnedId, load } = controller;
   const [confirm, setConfirm] = useState<CodexAccountEntry | null>(null);
   const [showAdd, setShowAdd] = useState(false);
+  const [modelsNotice, setModelsNotice] = useState<{ catalogRefreshPending: boolean } | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const hardLockFocusPending = useRef(false);
+  const focusHardLockSetting = useCallback(() => {
+    const target = document.getElementById("codex-main-hard-lock-setting");
+    target?.focus();
+    target?.scrollIntoView({ block: "nearest" });
+  }, []);
+  useEffect(() => {
+    if (advancedOpen && hardLockFocusPending.current) {
+      hardLockFocusPending.current = false;
+      focusHardLockSetting();
+    }
+  }, [advancedOpen, focusHardLockSetting]);
+  const manageMainHardLock = () => {
+    if (advancedOpen) focusHardLockSetting();
+    else { hardLockFocusPending.current = true; setAdvancedOpen(true); }
+  };
   const [reauthId, setReauthId] = useState<string | null>(null);
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
   const [actionFeedbackTone, setActionFeedbackTone] = useState<NoticeTone | null>(null);
   const feedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [refreshingQuota, setRefreshingQuota] = useState(false);
+  const [quotaBusyScope, setQuotaBusyScope] = useState<string | null>(null);
+  const [quotaState, setQuotaState] = useState<{
+    apiBase: string; revision: number; settings: QuotaAutoRefreshSettings | null; error: boolean;
+  } | null>(null);
+  const quotaAutoRefreshMutationRevisionRef = useRef(0);
+  const quotaScopeRef = useRef<AbortController | null>(null);
+  const quotaMutationRef = useRef<BoundedFetch | null>(null);
+  const [quotaReadRevision, setQuotaReadRevision] = useState(0);
+  const [quotaOrigin, setQuotaOrigin] = useState(apiBase);
+  const [quotaFeedback, setQuotaFeedback] = useState<{ apiBase: string; message: string; failed: boolean } | null>(null);
+  const failedQuotaTarget = useRef<{ apiBase: string; enabled: boolean } | null>(null);
+  const quotaCurrent = quotaState?.apiBase === apiBase && quotaState.revision === quotaReadRevision ? quotaState : null;
+  const quotaAutoRefreshSettings = quotaCurrent?.settings ?? null;
+  const quotaLoadError = quotaCurrent?.error ?? false;
+  const quotaAutoRefreshBusy = quotaBusyScope === apiBase;
+  // Adjust the snapshot at the prop boundary, not in an effect: returning to a
+  // previously visited proxy must not revive its old settings before the new GET.
+  if (quotaOrigin !== apiBase) {
+    setQuotaOrigin(apiBase);
+    setQuotaReadRevision(value => value + 1);
+    setQuotaState(null);
+    setQuotaBusyScope(null);
+    setQuotaFeedback(null);
+  }
   // undefined until /api/settings answers: the switch must not render a guessed position and
   // then visibly correct itself a moment later.
   const [sparkVisible, setSparkVisible] = useState<boolean | undefined>(undefined);
@@ -157,6 +205,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
       completion.catalogRefreshPending ? "warn" : "ok",
     );
     closeAddModal();
+    setModelsNotice({ catalogRefreshPending: completion.catalogRefreshPending });
   }, [closeAddModal, controller, showActionFeedback, t]);
 
   const setActive = async (id: string | null) => {
@@ -232,20 +281,106 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     }
   };
 
+  const toggleQuotaAutoRefresh = async (enabled: boolean) => {
+    const scope = quotaScopeRef.current;
+    if (quotaMutationRef.current || !scope || scope.signal.aborted || quotaAutoRefreshSettings === null || loadState !== "ready") return;
+    const pending = createBoundedFetch(30_000);
+    quotaMutationRef.current = pending;
+    quotaAutoRefreshMutationRevisionRef.current += 1;
+    const current = () => quotaScopeRef.current === scope && !scope.signal.aborted;
+    const windows = quotaActivationWindows(accounts, quotaAutoRefreshSettings);
+    setQuotaBusyScope(apiBase);
+    setQuotaFeedback(null);
+    let failed = false;
+    try {
+      for (const target of windows) {
+        // Missing quota can be transient. ON must not revoke an existing opt-in;
+        // only an explicit OFF action clears flags for unavailable windows.
+        if (enabled && !target.available) continue;
+        const requested = enabled;
+        if (target.enabled === requested) continue;
+        if (!current()) return;
+        if (pending.signal.aborted) { failed = true; break; }
+        try {
+          // Ordered field-patches to shared settings; stop unsent writes on proxy
+          // changes. Parallel dispatch would spend the rest of the batch before
+          // cancellation can take effect (covered by the deferred-write test).
+          // react-doctor-disable-next-line react-doctor/async-await-in-loop -- intentional sequential settings mutations
+          const response = await fetch(`${apiBase}/api/settings`, {
+            method: "PUT", headers: { "content-type": "application/json" }, signal: pending.signal,
+            body: JSON.stringify({ codexQuotaAutoRefresh: { id: target.id, window: target.window, enabled: requested } }),
+          });
+          if (!response.ok) throw new Error("save");
+        } catch { failed = true; }
+      }
+      if (!current()) return;
+      // Granular writes can partially commit (including a lost response). Read back
+      // the authoritative map; never claim that a failed batch rolled back.
+      pending.clear();
+      const read = createBoundedFetch(15_000);
+      quotaMutationRef.current = read;
+      try {
+        const response = await fetch(`${apiBase}/api/settings`, { signal: read.signal });
+        if (!response.ok) throw new Error("read");
+        const saved = readQuotaActivationSettings(await response.json());
+        if (!current()) return;
+        failed ||= windows.some(target => (!enabled || target.available)
+          && (saved[target.id]?.[target.window] === true) !== enabled);
+        setQuotaState({ apiBase, revision: quotaReadRevision, settings: saved, error: false });
+      } catch {
+        if (!current()) return;
+        failed = true;
+        setQuotaState({ apiBase, revision: quotaReadRevision, settings: null, error: true });
+      } finally { read.clear(); }
+      if (!current()) return;
+      failedQuotaTarget.current = failed ? { apiBase, enabled } : null;
+      setQuotaFeedback({ apiBase, message: t(failed ? "codexAuth.quotaAutoRefreshPartial" : "codexAuth.quotaAutoRefreshUpdated"), failed });
+    } finally {
+      pending.clear();
+      if (current()) {
+        quotaMutationRef.current = null;
+        setQuotaBusyScope(null);
+      }
+    }
+  };
+
   useEffect(() => {
     // AbortController rather than a `cancelled` flag: the in-flight request is actually torn
     // down on unmount, and the state update lands in a .then() the linter can see is guarded.
     const abort = new AbortController();
-    fetch(`${apiBase}/api/settings`, { signal: abort.signal })
-      .then(response => (response.ok ? response.json() : null))
-      .then((payload: { showCodexSparkQuota?: unknown } | null) => {
-        if (abort.signal.aborted || typeof payload?.showCodexSparkQuota !== "boolean") return;
-        setSparkVisible(payload.showCodexSparkQuota);
+    const read = createBoundedFetch(15_000);
+    quotaScopeRef.current = abort;
+    const mutationRevision = quotaAutoRefreshMutationRevisionRef.current;
+    fetch(`${apiBase}/api/settings`, { signal: read.signal })
+      .then(response => { if (!response.ok) throw new Error("read"); return response.json(); })
+      .then((payload: {
+        showCodexSparkQuota?: unknown;
+        codexQuotaAutoRefresh?: QuotaAutoRefreshSettings;
+      } | null) => {
+        if (abort.signal.aborted) return;
+        if (!payload) throw new Error("read");
+        if (typeof payload.showCodexSparkQuota === "boolean") setSparkVisible(payload.showCodexSparkQuota);
+        if (quotaAutoRefreshMutationRevisionRef.current === mutationRevision) {
+          setQuotaState({ apiBase, revision: quotaReadRevision, settings: readQuotaActivationSettings(payload), error: false });
+          setQuotaBusyScope(null);
+        }
       })
-      // A settings read failure leaves the switch unrendered rather than guessing a position.
-      .catch(() => {});
-    return () => { abort.abort(); };
-  }, [apiBase]);
+      .catch(() => {
+        if (!abort.signal.aborted && quotaAutoRefreshMutationRevisionRef.current === mutationRevision) {
+          setQuotaState({ apiBase, revision: quotaReadRevision, settings: null, error: true });
+          setQuotaBusyScope(null);
+        }
+      })
+      .finally(() => read.clear());
+    return () => {
+      abort.abort();
+      read.controller.abort();
+      read.clear();
+      quotaMutationRef.current?.controller.abort();
+      quotaMutationRef.current?.clear();
+      quotaMutationRef.current = null;
+    };
+  }, [apiBase, quotaReadRevision]);
 
   const toggleSpark = async () => {
     if (sparkBusy || sparkVisible === undefined) return;
@@ -348,6 +483,22 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
 
       {banner}
 
+      {/*
+        Relocated out of the page head: with two accounts the head carried a title, a
+        status line, a toggle and two buttons on one row, and the actions sat above the
+        cards they act on. They belong next to the accounts.
+      */}
+      {!embedded && (
+        <CodexAccountPoolActions
+          t={t}
+          refreshingQuota={refreshingQuota}
+          pausingExhausted={pausingExhausted}
+          pauseBusy={pauseBusy}
+          onRefresh={() => { void refreshQuotas(); }}
+          onPauseExhausted={() => { void pauseExhausted(); }}
+        />
+      )}
+
       {/* Skeleton must sit where main/pool cards will be — never above the account-mode
           banner, or the strip collapses on ready and shoves the whole page up (CLS). */}
       <CodexAccountPoolLoadStates
@@ -377,6 +528,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
             onOpenReset={openResetPopup}
             onCopyDoctor={showDoctorCopy ? copyDoctor : undefined}
             doctorCopyOutcomeFor={showDoctorCopy ? doctorCopy.outcomeFor : undefined}
+            onManageMainHardLock={hasMainHardLockSetting ? manageMainHardLock : undefined}
           />
 
           <div className="section-sep">
@@ -429,6 +581,22 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
         open={advancedOpen}
         onToggle={() => setAdvancedOpen(open => !open)}
       >
+        <CodexQuotaAutoRefreshSetting
+          windows={quotaActivationWindows(accounts, quotaAutoRefreshSettings ?? {})}
+          ready={quotaAutoRefreshSettings !== null && loadState === "ready"}
+          busy={quotaAutoRefreshBusy}
+          loadError={quotaLoadError || loadState === "error"}
+          feedback={quotaFeedback?.apiBase === apiBase ? quotaFeedback : null}
+          onToggle={enabled => { void toggleQuotaAutoRefresh(enabled); }}
+          onRetry={() => {
+            if (quotaLoadError || quotaAutoRefreshSettings === null || loadState !== "ready") {
+              setQuotaReadRevision(value => value + 1);
+              void load();
+            } else if (failedQuotaTarget.current?.apiBase === apiBase) {
+              void toggleQuotaAutoRefresh(failedQuotaTarget.current.enabled);
+            }
+          }}
+        />
         {poolStrategy !== null && (
           <CodexAutoSwitchSetting
             threshold={autoSwitch.threshold}
@@ -486,6 +654,12 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
           onAdded={handleAccountAdded}
         />
       )}
+      {modelsNotice && <ProviderModelsNotice
+        provider="openai" loading={false} failed={false} providerKnown initialRegistration={false}
+        catalogRefreshPending={modelsNotice.catalogRefreshPending}
+        onClose={() => setModelsNotice(null)}
+        onOpenModels={() => { setModelsNotice(null); navigateHash("models"); }}
+      />}
     </div>
   );
 }

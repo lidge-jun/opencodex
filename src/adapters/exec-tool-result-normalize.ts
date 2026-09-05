@@ -113,7 +113,7 @@ export const EMPTY_EXEC_OUTPUT_MESSAGE =
  * that drifts apart is how a model gets told two different things about the same isolate.
  */
 export const CODE_MODE_RESULT_ECHO_SENTENCE =
-  "Nothing in the isolate is echoed automatically: a bare trailing `await tools.<name>(...)` or final expression value is DISCARDED, and the cell reports empty output. Pass anything you need to read to `text(...)` (or `notify(...)`) in the same cell — for example `text(JSON.stringify(await tools.exec_command({cmd: \"ls\"})))` — and treat an empty result as your own missing `text(...)` call rather than a failed command or lost context.";
+  "Nothing in the isolate is echoed automatically: a bare trailing `await tools.<name>(...)` or final expression value is DISCARDED, and the cell reports empty output. Pass anything you need to read to `text(...)` (or `notify(...)`) in the same cell — for example `text(JSON.stringify(await tools.exec_command({cmd: 'ls'})))` — and treat an empty result as your own missing `text(...)` call rather than a failed command or lost context.";
 
 /**
  * Codex exec / shell-bridge tool names (flat and MCP-prefixed display aliases). An empty result

@@ -11,7 +11,7 @@ description: Multi-agent surface, guidance при делегировании, pr
 | Поле | Тип | По умолчанию | Значение |
 | --- | --- | --- | --- |
 | `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | `v1` штампует все модели как v1; `v2` штампует все модели как v2. `default` восстанавливает upstream pin'ы (Sol/Terra — v2, Luna — v1) и для остальных следует native flag `multi_agent_v2`. Применяется к новым сессиям. |
-| `subagentModels?` | `string[]` | `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.4-mini` | До пяти bare native-id, account-qualified id `<selector>/<native-openai-model>` или routed-id `provider/model`, которые показываются первыми в picker'е подагентов. Страница Subagents предлагает только bare native- и routed-id и при сохранении исключает точные account-qualified варианты; для точного выбора используйте `ocx agent subagents set` или отредактируйте конфигурацию. Явный пустой список сохраняется. |
+| `subagentModels?` | `string[]` | `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5` | До пяти bare native-id, account-qualified id `<selector>/<native-openai-model>` или routed-id `provider/model`, которые показываются первыми в picker'е подагентов. Страница Subagents предлагает только bare native- и routed-id и при сохранении исключает точные account-qualified варианты; для точного выбора используйте `ocx agent subagents set` или отредактируйте конфигурацию. После [однократного обновления Astra](/reference/configuration/agents/#astra-roster-upgrade) явный пустой список сохраняется. |
 | `injectionModel?` | `string` | — | Предпочитаемая native- или routed-модель подагента, которую proxy использует в собственном guidance v2. |
 | `injectionEffort?` | `string` | — | Предпочитаемый effort (`low`–`ultra`), имеющий смысл только вместе с `injectionModel`. |
 | `injectionPrompt?` | `string` | — | Заменяет встроенное тело guidance для v2. Поддерживает `{{model}}`, `{{effort}}`, `{{roster}}` и `{{fallback}}`. Настроенного `injectionModel` достаточно, чтобы отобразить пользовательский prompt. |
@@ -80,9 +80,11 @@ user-owned target field'ы считаются конфликтом и сохра
 
 opencodex пропускает кандидатов, которые отключены, не маршрутизируются, unhealthy, находятся в
 cooldown либо уже достигли порога quota. Availability-снимок кэшируется на
-`subagentModelFallbackPollMs`. Шифрованные child-task'и могут ограничить цепочку каноническими
-native ChatGPT-target'ами; если ни одна из них не может прочитать encrypted payload, запрос
-завершается ошибкой вместо отправки нечитаемого ciphertext наружу.
+`subagentModelFallbackPollMs`. Для шифрованных child-task'ов цепочка ограничена каноническими
+native ChatGPT-target'ами и прямыми key-auth Responses-маршрутами, явно доверенными через
+`allowEncryptedV2AgentTasks: true`. Если ни один из них не может обработать encrypted payload,
+запрос завершается ошибкой вместо отправки нечитаемого ciphertext наружу. Combo по-прежнему
+использует только канонические native-цели.
 
 ```json
 {

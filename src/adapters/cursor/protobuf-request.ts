@@ -379,7 +379,7 @@ function rootPromptMessages(
       }
       // Assistant tool CALLS are NOT replayed as a separate visible "[Tool Call]" entry: a model
        // few-shot-mimics that marker and emits later tool calls as inert text (363-B guard in
-      // tests/cursor-tool-continuation.test.ts). The invocation is instead named INSIDE the paired
+      // tests/providers/cursor/cursor-tool-continuation.test.ts). The invocation is instead named INSIDE the paired
       // "[Tool Result]" envelope below, which carries the same information without a mimickable
       // call template (devlog 260829 002_audit_round2).
     } else if (message.role === "toolResult") {
@@ -954,7 +954,7 @@ function toolCallArgumentsText(args: Record<string, unknown>): string {
  *
  * Why not a separate "[Tool Call]" entry: a model few-shot-mimics that marker and starts emitting
  * later tool calls as inert text instead of real tool frames, which halts multi-tool continuations
- * (363-B guard, tests/cursor-tool-continuation.test.ts). Why it must exist at all: without any
+ * (363-B guard, tests/providers/cursor/cursor-tool-continuation.test.ts). Why it must exist at all: without any
  * record of the invocation, the replayed result is orphaned — its `call_id` refers to nothing the
  * model can see — and live cursor/grok-4.6 turns re-ran commands that had already succeeded while
  * narrating a phantom interrupt (devlog 260829 000_rca). A prose line inside the result satisfies
@@ -1388,11 +1388,21 @@ function buildPreparedCursorRunRequest(
   )
     ? "userMessageAction"
     : "resumeAction";
-  const actionText = externalToolContinuation
+  let actionText = externalToolContinuation
     ? (request.echoRetryContinuationText ?? CURSOR_EXTERNAL_TOOL_CONTINUATION_TEXT)
     : request.echoRetryContinuationText
       ? `${text}\n\n[correction] ${request.echoRetryContinuationText}`
       : text;
+  if (lastRawIsToolResult && isCursorExternalWireModel(request.modelId)) {
+    // Image preparation bounds these labels and keeps them in attachment order. The
+    // active action survives root pruning/checkpoint fallback, including echo retries.
+    const sources = selectedImages.flatMap((image, index) => image.sourceLabel
+      ? [`${index + 1}. ${image.sourceLabel}`]
+      : []);
+    if (sources.length > 0) {
+      actionText += `\n\n[Client-supplied tool screenshot sources (attachment order)]\n${sources.join("\n")}`;
+    }
+  }
   const action = create(ConversationActionSchema, {
     action: actionCase === "userMessageAction"
       ? {

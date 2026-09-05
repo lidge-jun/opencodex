@@ -36,6 +36,7 @@ function row(overrides: Partial<IntegrationJournalRow> & { opId: string }): Inte
     configPath: "/tmp/home/.hermes/config.yaml",
     snapshot: "stored",
     undoable: false,
+    deletable: false,
     ...overrides,
   };
 }
@@ -77,7 +78,11 @@ afterEach(async () => {
 
 async function mount(
   journal: IntegrationJournalRow[],
-  options: { showClient?: boolean; onRestore?: (value: IntegrationJournalRow) => void } = {},
+  options: {
+    showClient?: boolean;
+    onRestore?: (value: IntegrationJournalRow) => void;
+    onDelete?: (value: IntegrationJournalRow) => void;
+  } = {},
 ) {
   await act(async () => {
     root = createRoot(container);
@@ -87,6 +92,7 @@ async function mount(
           rows={journal}
           showClient={options.showClient}
           onRestore={options.onRestore ?? (() => {})}
+          onDelete={options.onDelete}
         />
       </LanguageProvider>,
     );
@@ -184,6 +190,92 @@ test("an expired snapshot offers no control anywhere in the list", async () => {
   const expired = visibleRows().find(node => (node.textContent ?? "").includes("Backup expired"));
   expect(expired).toBeDefined();
   expect(expired!.querySelector("button")).toBeNull();
+});
+
+test("the delete control appears only where the server allows it", async () => {
+  /*
+   * `deletable` is the server answer, not a GUI inference. The newest row is
+   * the undo entry point and keeps no delete affordance; an older row gets one.
+   * Recomputing the rule here would put a second copy of it in the client,
+   * which is exactly what the flag exists to prevent.
+   */
+  await mount([
+    row({ opId: "op-newest", undoable: true, deletable: false }),
+    row({ opId: "op-older", deletable: true }),
+  ], { onDelete: () => {} });
+  await act(async () => { disclosure()!.open = true; });
+
+  const [newest, older] = visibleRows();
+  expect(newest!.textContent).not.toContain("Delete");
+  expect(older!.textContent).toContain("Delete");
+});
+
+test("a deletable row passes ITS row to the handler, not the newest one", async () => {
+  // The same defect class the restore test guards: the fold maps a sliced copy,
+  // so a mis-bound handler deletes a different point in the user history than
+  // the one they chose, with a dialog that names the row they picked.
+  let deleted: IntegrationJournalRow | null = null;
+  const journal = [
+    row({ opId: "op-newest", undoable: true }),
+    ...rows(12).map(entry => ({ ...entry, deletable: true })),
+  ];
+  await mount(journal, { onDelete: value => { deleted = value; } });
+  await act(async () => { disclosure()!.open = true; });
+
+  const folded = visibleRows().filter(node => node.closest(".integration-history-older"));
+  const third = folded[2]!;
+  const deleteButton = (Array.from(third.querySelectorAll("button")) as unknown as HTMLButtonElement[])
+    .find(button => (button.textContent ?? "").trim() === "Delete")!;
+  await act(async () => { deleteButton.click(); });
+
+  expect(deleted).not.toBeNull();
+  expect(deleted!.opId).toBe(journal[3]!.opId);
+});
+
+test("an expired row is deletable, which is the pairing the feature adds", async () => {
+  /*
+   * Before this, an expired row rendered a badge and nothing else: it could not
+   * be restored and could not be removed. It is the state that motivated the
+   * whole change, so the badge and the button have to coexist.
+   */
+  await mount([
+    row({ opId: "op-newest", undoable: true }),
+    row({ opId: "op-gone", snapshot: "expired", deletable: true }),
+  ], { onDelete: () => {} });
+  await act(async () => { disclosure()!.open = true; });
+
+  const expired = visibleRows().find(node => (node.textContent ?? "").includes("Backup expired"))!;
+  expect(expired.textContent).toContain("Delete");
+  // The restore control is still absent: the bytes really are gone.
+  expect(expired.textContent).not.toContain("Restore point");
+});
+
+test("a surface that passes no handler renders no delete control at all", async () => {
+  // The prop is optional so a read-only surface cannot offer an action it has
+  // no way to complete.
+  await mount([
+    row({ opId: "op-newest", undoable: true }),
+    row({ opId: "op-older", deletable: true }),
+  ]);
+  await act(async () => { disclosure()!.open = true; });
+  expect(container.textContent).not.toContain("Delete");
+});
+
+test("each delete control names its own entry for a screen reader", async () => {
+  // Every row renders the same visible word, so the accessible name is the only
+  // thing that distinguishes them.
+  await mount([
+    row({ opId: "op-newest", undoable: true }),
+    row({ opId: "op-older", deletable: true, at: "2026-08-31T09:00:00.000Z" }),
+  ], { onDelete: () => {} });
+  await act(async () => { disclosure()!.open = true; });
+
+  const labels = (Array.from(container.querySelectorAll("button")) as unknown as HTMLButtonElement[])
+    .filter(button => (button.textContent ?? "").trim() === "Delete")
+    .map(button => button.getAttribute("aria-label") ?? "");
+  expect(labels).toHaveLength(1);
+  expect(labels[0]).toContain("Delete the rollback entry from");
+  expect(labels[0]!.length).toBeGreaterThan("Delete the rollback entry from".length);
 });
 
 test("restoring from inside the fold passes that row, not the newest one", async () => {

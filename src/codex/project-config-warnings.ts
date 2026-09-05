@@ -32,6 +32,8 @@ interface TomlDocument {
   sections: Map<string, Record<string, string>>;
 }
 
+type TomlMultilineDelimiter = '"""' | "'''";
+
 let diagnosticsCache: { at: number; warnings: ProjectCodexConfigWarning[] } | null = null;
 
 function hasInjectedOpenaiBaseUrl(content: string): boolean {
@@ -55,14 +57,102 @@ function parseTomlString(raw: string): string {
   return raw.slice(1, -1);
 }
 
+function multilineCloseIndex(
+  line: string,
+  delimiter: TomlMultilineDelimiter,
+  from: number,
+): number {
+  let index = line.indexOf(delimiter, from);
+  while (index >= 0 && delimiter === '"""') {
+    let backslashes = 0;
+    for (let cursor = index - 1; cursor >= 0 && line[cursor] === "\\"; cursor -= 1) {
+      backslashes += 1;
+    }
+    if (backslashes % 2 === 0) break;
+    index = line.indexOf(delimiter, index + delimiter.length);
+  }
+  return index;
+}
+
+/**
+ * Find a multiline TOML string that starts outside a comment or single-line string.
+ *
+ * This parser intentionally understands only the root/table subset needed by Codex
+ * diagnostics. It still has to skip multiline string bodies lexically: prose in
+ * `developer_instructions` can contain key-shaped examples or `[table]` snippets, and
+ * treating those examples as configuration changes the diagnostic's meaning.
+ */
+function multilineStateAfterLine(
+  line: string,
+  active: TomlMultilineDelimiter | null,
+): { active: TomlMultilineDelimiter | null; consumed: boolean } {
+  if (active) {
+    const close = multilineCloseIndex(line, active, 0);
+    if (close < 0) return { active, consumed: true };
+    const tail = multilineStateAfterLine(line.slice(close + active.length), null);
+    return {
+      active: tail.active,
+      consumed: true,
+    };
+  }
+
+  let quote: '"' | "'" | null = null;
+  let escaped = false;
+  let consumed = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index]!;
+    if (quote === '"') {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === quote) quote = null;
+      continue;
+    }
+    if (quote === "'") {
+      if (character === quote) quote = null;
+      continue;
+    }
+    if (character === "#") return { active: null, consumed };
+
+    const delimiter: TomlMultilineDelimiter | null = line.startsWith('"""', index)
+      ? '"""'
+      : line.startsWith("'''", index)
+        ? "'''"
+        : null;
+    if (delimiter) {
+      consumed = true;
+      const close = multilineCloseIndex(line, delimiter, index + delimiter.length);
+      if (close < 0) return { active: delimiter, consumed: true };
+      index = close + delimiter.length - 1;
+      continue;
+    }
+    if (character === '"' || character === "'") quote = character;
+  }
+  return { active: null, consumed };
+}
+
 /** Lightweight TOML parse for root keys and [section] tables (Codex config shape). */
 export function parseTomlDocument(content: string): TomlDocument {
   const root: Record<string, string> = {};
   const sections = new Map<string, Record<string, string>>();
   let current = root;
+  let multiline: TomlMultilineDelimiter | null = null;
 
   for (const line of content.split("\n")) {
-    const table = line.match(/^\s*\[([^\]]+)\]\s*$/);
+    const wasMultiline = multiline !== null;
+    const multilineState = multilineStateAfterLine(line, multiline);
+    multiline = multilineState.active;
+    if (multilineState.consumed) {
+      // The declaration itself is still configuration even though its multiline VALUE must
+      // not be scanned as keys/tables. A legacy root key using a multiline value therefore
+      // remains visible to strict-config diagnostics; only the body is opaque.
+      if (!wasMultiline) {
+        const declaration = line.match(/^\s*([A-Za-z0-9_.-]+)\s*=\s*(?:"""|''')/);
+        if (declaration) current[declaration[1]!] = "";
+      }
+      continue;
+    }
+
+    const table = line.match(/^\s*\[([^\]]+)\]\s*(?:#.*)?$/);
     if (table) {
       const name = table[1]!.trim();
       const section = sections.get(name) ?? {};

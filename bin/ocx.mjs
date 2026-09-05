@@ -33,6 +33,15 @@ import {
 } from "../src/update/codex-cli-update-launch-policy.mjs";
 
 const PKG = "@bitkyc08/opencodex";
+try {
+  process.cwd();
+} catch {
+  try {
+    process.chdir(homedir());
+  } catch {
+    /* best-effort */
+  }
+}
 const require = createRequire(import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
 const cliPath = join(here, "..", "src", "cli", "index.ts");
@@ -497,7 +506,7 @@ function bunBinDir() {
 const BUN_OVERRIDE_ENV = "OPENCODEX_BUN_PATH";
 // Mirrors BUN_RUNTIME_SOURCE_ENV in src/lib/bun-runtime.ts. This launcher is plain
 // Node and runs before any TypeScript is loaded, so the name is repeated rather than
-// imported; tests/ocx-launcher-source.test.ts pins the two together.
+// imported; tests/cli/ocx-launcher-source.test.ts pins the two together.
 const BUN_RUNTIME_SOURCE_ENV = "OCX_BUN_RUNTIME_SOURCE";
 const BUN_RUNTIME_PATH_ENV = "OCX_BUN_RUNTIME_PATH";
 

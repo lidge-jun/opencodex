@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { isatty } from "node:tty";
 import { createInterface } from "node:readline/promises";
 import { atomicWriteFile, getConfigDir } from "../config";
 import { hasStarPromptRun } from "../cli/star-prompt";
@@ -122,8 +123,13 @@ export function isSourceBuildVersion(v: string): boolean {
 }
 
 /** The interactive/TTY + install-method gate shared with the star prompt. */
-function interactiveGuardOk(): boolean {
-  return !(process.env.OCX_SERVICE || !process.stdin.isTTY || !process.stdout.isTTY);
+export function interactiveGuardOk(): boolean {
+  try {
+    return !(process.env.OCX_SERVICE || !isatty(0) || !isatty(1));
+  } catch {
+    /* best-effort */
+    return false;
+  }
 }
 
 /**

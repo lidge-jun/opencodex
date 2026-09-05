@@ -642,6 +642,19 @@ function orphanToolResultText(msg: OcxToolResultMessage): string {
   return `[tool_result without adjacent tool_use: ${label}]\n${content}`;
 }
 
+function orphanToolResultContent(msg: OcxToolResultMessage): string | unknown[] {
+  if (typeof msg.content === "string" || !msg.content.some(p => p.type === "image")) {
+    return orphanToolResultText(msg);
+  }
+  const label = msg.toolName ? `${msg.toolName} (${msg.toolCallId})` : msg.toolCallId;
+  return [
+    { type: "text", text: `[tool_result without adjacent tool_use: ${label}]` },
+    ...msg.content
+      .map(toAnthropicContentPart)
+      .filter(p => !((p as { type?: string }).type === "text" && !(p as { text?: string }).text)),
+  ];
+}
+
 /**
  * AgentRouter answers 400 `content-blocked` when the first user message is not in English
  * (#2074), while the same request in English returns 200. The gateway is inspecting the opening
@@ -737,7 +750,7 @@ function messagesToAnthropicFormat(
         if (toolUseIds.length > 0) {
           const requiredIds = new Set(toolUseIds);
           const resultBlocks: Record<string, unknown>[] = [];
-          const orphanBlocks: Record<string, unknown>[] = [];
+          const orphanBlocks: unknown[] = [];
           const seen = new Set<string>();
           let j = i + 1;
           while (j < parsed.context.messages.length && parsed.context.messages[j].role === "toolResult") {
@@ -750,7 +763,8 @@ function messagesToAnthropicFormat(
               resultBlocks.push(toAnthropicToolResult(tr, wireResultId));
               seen.add(wireResultId);
             } else {
-              orphanBlocks.push({ type: "text", text: orphanToolResultText(tr) });
+              const orphan = orphanToolResultContent(tr);
+              orphanBlocks.push(...(typeof orphan === "string" ? [{ type: "text", text: orphan }] : orphan));
             }
             j++;
           }
@@ -771,8 +785,8 @@ function messagesToAnthropicFormat(
       }
       case "toolResult": {
         // A standalone Anthropic tool_result is invalid unless it immediately follows an
-        // assistant tool_use. Preserve the information as text instead of sending a 400-prone block.
-        messages.push({ role: "user", content: orphanToolResultText(msg as OcxToolResultMessage) });
+        // assistant tool_use. Preserve text and images as user content without fabricating a pairing.
+        messages.push({ role: "user", content: orphanToolResultContent(msg as OcxToolResultMessage) });
         break;
       }
     }
@@ -895,11 +909,20 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       enforceAnthropicImageLimits(messages);
       const tools = toolsToAnthropicFormat(parsed, toolNames);
 
+      // Codex never sends `max_output_tokens`, so the omitted-limit default decides how
+      // long a Claude answer may run. Honor the provider's configured output budget
+      // (`modelMaxOutputTokens` / `defaultMaxOutputTokens`) before falling back to the
+      // conservative 8192, which truncates long answers with stop_reason=max_tokens.
+      const configuredMaxOut = modelRecordValue(provider.modelMaxOutputTokens, parsed.modelId)
+        ?? provider.defaultMaxOutputTokens;
+      const omittedMaxTokens = typeof configuredMaxOut === "number" && configuredMaxOut > 0
+        ? configuredMaxOut
+        : DEFAULT_MAX_TOKENS;
       const body: Record<string, unknown> = {
         model: parsed.modelId,
         messages,
         stream: parsed.stream,
-        max_tokens: parsed.options.maxOutputTokens ?? DEFAULT_MAX_TOKENS,
+        max_tokens: parsed.options.maxOutputTokens ?? omittedMaxTokens,
       };
       if (isOAuth) {
         // Claude OAuth (Pro/Max) requires the first system block to be the Claude Code identity.
@@ -942,13 +965,13 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           // so effort=max (budget=32k) still leaves OUTPUT_HEADROOM tokens for visible output.
           body.max_tokens = explicitMaxOut !== undefined
             ? explicitMaxOut
-            : Math.min(ADAPTIVE_THINKING_CEILING, Math.max(DEFAULT_MAX_TOKENS, floor));
+            : Math.max(omittedMaxTokens, Math.min(ADAPTIVE_THINKING_CEILING, Math.max(DEFAULT_MAX_TOKENS, floor)));
         } else {
           // Anthropic requires max_tokens > thinking.budget_tokens (max_tokens caps thinking +
           // visible output) and budget_tokens >= 1024. Codex sends the SAME value for both, which
           // 400s ("max_tokens must be greater than thinking.budget_tokens"). Size them so max_tokens
           // always exceeds the budget within a model-safe ceiling, reserving room for visible output.
-          const maxOut = parsed.options.maxOutputTokens ?? DEFAULT_MAX_TOKENS;
+          const maxOut = parsed.options.maxOutputTokens ?? omittedMaxTokens;
           const wantBudget = reasoningBudget(effectiveReasoning);
           const maxTokens = Math.min(REASONING_MAX_TOKENS_CEILING, Math.max(maxOut, wantBudget + OUTPUT_HEADROOM));
           const budget = Math.max(MIN_THINKING_BUDGET, Math.min(wantBudget, maxTokens - OUTPUT_FLOOR));

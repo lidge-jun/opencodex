@@ -55,7 +55,7 @@ function normalizeToolGroup(tools: unknown[]): ToolGroupRewrite {
     // `search_context_size` 400s, while `user_location`, `search_content_types`, `filters` and
     // `enable_image_search` are all accepted. Deleting the accepted ones was a silent capability
     // loss, and it contradicted the sibling layer, whose own probe note already records
-    // user_location/filters as accepted (tests/responses-routed-web-search-fields.test.ts).
+    // user_location/filters as accepted (tests/responses/responses-routed-web-search-fields.test.ts).
     delete next.external_web_access;
     delete next.search_context_size;
     if (enableImageSearch && !Object.hasOwn(next, "enable_image_search")) {

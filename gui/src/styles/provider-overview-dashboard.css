@@ -19,6 +19,17 @@
   gap: 12px;
 }
 
+/* Wraps rather than truncating: the refresh result is a full sentence in several
+   locales, and the header has to hold the title, that status, and two ghost buttons
+   without squeezing the title out. */
+.pws-dashboard-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .pws-dashboard-header-text {
   display: flex;
   flex-direction: column;

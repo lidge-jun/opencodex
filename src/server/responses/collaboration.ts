@@ -28,7 +28,7 @@ import {
 } from "../../combos";
 import { isInjectionDebugEnabled } from "../../lib/debug-settings";
 import { injectionDebugLog } from "../../lib/injection-debug-log";
-import { modelInList, namespacedToolName, toolChoiceToolPredicate } from "../../types";
+import { dottedToolName, modelInList, namespacedToolName, toolChoiceToolPredicate } from "../../types";
 import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig, OcxProviderContinuationState, OcxUsage } from "../../types";
 import {
   forceRefreshOAuthAccessSnapshot,
@@ -122,6 +122,34 @@ export function buildToolBridgeMaps(parsed: OcxParsedRequest, budget?: Translato
   const requestedTools = parsed.context.tools ?? [];
   const toolAllowed = toolChoiceToolPredicate(parsed.options.toolChoice, requestedTools);
   const authorizedTools = requestedTools.filter(toolAllowed);
+  // A dotted alias is only safe while it names ONE tool. Namespaces and names both come from
+  // the caller's tool catalog and may contain dots, so `{ns: "a", name: "b.c"}` and
+  // `{ns: "a.b", name: "c"}` flatten to the same "a.b.c". Registering both would let a dotted
+  // provider echo restore against whichever was inserted last, which is a dispatch decision made
+  // by declaration order. Resolve ownership across the whole catalog FIRST so the outcome does
+  // not depend on that order, then register only the aliases that stayed unambiguous.
+  const dottedAliasOwners = new Map<string, string | null>();
+  for (const t of authorizedTools) {
+    if (!t.namespace) continue;
+    const alias = dottedToolName(t.namespace, t.name);
+    const identity = JSON.stringify([t.namespace, t.name]);
+    const owner = dottedAliasOwners.get(alias);
+    if (owner === undefined) dottedAliasOwners.set(alias, identity);
+    else if (owner !== identity) dottedAliasOwners.set(alias, null);
+  }
+  // A dotted alias that shadows a canonical `ns__name` or a bare declaration is the same
+  // confusion wearing a different spelling, so those lose the alias too.
+  for (const t of authorizedTools) {
+    const canonical = namespacedToolName(t.namespace, t.name);
+    const owner = dottedAliasOwners.get(canonical);
+    if (owner !== undefined && owner !== JSON.stringify([t.namespace, t.name])) {
+      dottedAliasOwners.set(canonical, null);
+    }
+    const bare = dottedAliasOwners.get(t.name);
+    if (bare !== undefined && bare !== JSON.stringify([t.namespace, t.name])) {
+      dottedAliasOwners.set(t.name, null);
+    }
+  }
   for (const t of authorizedTools) {
     // Upstream output is untrusted: only restore calls for tools the caller authorized.
     const wireName = namespacedToolName(t.namespace, t.name);
@@ -133,6 +161,18 @@ export function buildToolBridgeMaps(parsed: OcxParsedRequest, budget?: Translato
     if (t.namespace) {
       budget?.chargeRetained(new TextEncoder().encode(JSON.stringify([wireName, t.namespace, t.name])).byteLength, { kind: "retained_collectors" });
       toolNsMap.set(wireName, { namespace: t.namespace, name: t.name, ...(t.freeform ? { freeform: true } : {}) });
+      // Dotted echo alias (`ns.name`, #3402): same tool identity as the flattened wire name,
+      // so a provider that echoes the dotted spelling still restores against this entry.
+      const dottedName = dottedToolName(t.namespace, t.name);
+      // Ambiguous aliases were resolved to null above; skipping them falls back to the
+      // unambiguous `ns__name` form, which every provider can still echo.
+      if (dottedAliasOwners.get(dottedName) !== null && dottedName !== wireName) {
+        budget?.chargeRetained(new TextEncoder().encode(dottedName).byteLength, { kind: "retained_collectors" });
+        declaredToolNames.add(dottedName);
+        budget?.chargeRetained(new TextEncoder().encode(JSON.stringify([dottedName, t.namespace, t.name])).byteLength, { kind: "retained_collectors" });
+        toolNsMap.set(dottedName, { namespace: t.namespace, name: t.name, ...(t.freeform ? { freeform: true } : {}) });
+        if (t.parameters && typeof t.parameters === "object") toolParameterSchemas.set(dottedName, t.parameters);
+      }
     }
     if (t.freeform) {
       budget?.chargeRetained(new TextEncoder().encode(t.name).byteLength, { kind: "retained_collectors" });

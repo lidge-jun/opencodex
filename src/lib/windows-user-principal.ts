@@ -23,6 +23,7 @@
 import { existsSync } from "node:fs";
 import { win32 as windowsPath } from "node:path";
 import { waitForSubprocessExit } from "./bounded-subprocess";
+import { decodeWindowsTextBytes } from "./windows-text";
 
 import {
   resolveTrustedWindowsPowerShellExe,
@@ -98,7 +99,12 @@ export interface WindowsPrincipalLookupResult {
   success: boolean;
   exitCode: number | null;
   timedOut: boolean;
-  stdout: string;
+  /**
+   * Raw child stdout. Bytes are allowed because `powershell.exe` writes the console
+   * output code page, not UTF-8, and the decode below is the thing under test: a seam
+   * that only carried a decoded string could never exercise it.
+   */
+  stdout: string | Uint8Array;
 }
 
 export type WindowsPrincipalRunner = (
@@ -138,7 +144,10 @@ function defaultWindowsPrincipalRunner(timeoutMs: number): WindowsPrincipalLooku
     success: result.success,
     exitCode: result.exitCode,
     timedOut: result.exitedDueToTimeout ?? false,
-    stdout: result.stdout ? result.stdout.toString() : "",
+    // Bytes, NOT .toString(): that is UTF-8, and Windows PowerShell 5.1 emits the
+    // console output code page. A non-ASCII account name decoded as UTF-8 becomes
+    // U+FFFD and is then frozen into the identity cache.
+    stdout: result.stdout ?? new Uint8Array(),
   };
 }
 
@@ -152,8 +161,9 @@ async function defaultAsyncWindowsPrincipalRunner(
     windowsHide: true,
   });
   const { exitCode, timedOut } = await waitForSubprocessExit(proc, timeoutMs);
-  const stdout = !timedOut && proc.stdout
-    ? await new Response(proc.stdout).text().catch(() => "")
+  // `.bytes()` rather than `.text()`, for the same reason as the sync runner above.
+  const stdout: string | Uint8Array = !timedOut && proc.stdout
+    ? await new Response(proc.stdout).bytes().catch(() => new Uint8Array())
     : "";
   return {
     success: !timedOut && exitCode === 0,
@@ -165,6 +175,24 @@ async function defaultAsyncWindowsPrincipalRunner(
 
 let principalRunner: WindowsPrincipalRunner = defaultWindowsPrincipalRunner;
 let asyncPrincipalRunner: AsyncWindowsPrincipalRunner = defaultAsyncWindowsPrincipalRunner;
+let principalLocaleForTests: string | undefined;
+
+/**
+ * Decode child stdout the way the rest of this repository already decodes Windows
+ * console output: UTF-16 with or without a BOM, then STRICT UTF-8, then the locale's
+ * legacy code page. Strict-UTF-8-first is what keeps an ordinary UTF-8 host unaffected.
+ *
+ * The SID on the first line is ASCII by construction and survives either way, which is
+ * why this corruption stayed silent: only the account name on the second line breaks.
+ */
+function decodePrincipalStdout(stdout: string | Uint8Array): string {
+  if (typeof stdout === "string") return stdout;
+  return decodeWindowsTextBytes(
+    stdout,
+    principalLocaleForTests ? { locale: principalLocaleForTests } : {},
+  );
+}
+
 export interface WindowsPrincipalIdentity {
   readonly sid: string;
   readonly name: string;
@@ -220,7 +248,7 @@ function identityFromResult(result: WindowsPrincipalLookupResult): WindowsPrinci
       ? "timed out"
       : `exited ${result.exitCode ?? "null"}`);
   }
-  const lines = result.stdout.trim().split(/\r?\n/);
+  const lines = decodePrincipalStdout(result.stdout).trim().split(/\r?\n/);
   const sid = lines[0]?.trim() ?? "";
   const name = lines[1]?.trim() ?? "";
   if (!SID_PATTERN.test(sid)) {
@@ -338,6 +366,26 @@ export function setAsyncWindowsPrincipalRunnerForTests(
     throw new Error("Cannot replace the Windows principal runner while a lookup is in flight.");
   }
   asyncPrincipalRunner = runner ?? defaultAsyncWindowsPrincipalRunner;
+  cachedIdentity = null;
+}
+
+/**
+ * Test seam: pin the locale that selects the legacy code page.
+ *
+ * Required rather than convenient. `decodeWindowsTextBytes` picks ONE legacy encoding
+ * from the ambient locale, so CP949, CP932 and CP936 fixtures cannot all decode
+ * correctly in a single process without being told which to expect. Production passes
+ * nothing and keeps the ambient locale.
+ *
+ * Clears the cache and refuses mid-flight for the same reasons the runner setters do:
+ * a successful identity is returned from cache BEFORE any decode, and the async path
+ * decodes after its runner resolves.
+ */
+export function setWindowsPrincipalLocaleForTests(locale: string | null): void {
+  if (asyncLookupInFlight) {
+    throw new Error("Cannot change the Windows principal locale while a lookup is in flight.");
+  }
+  principalLocaleForTests = locale ?? undefined;
   cachedIdentity = null;
 }
 

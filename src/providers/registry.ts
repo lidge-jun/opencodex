@@ -127,6 +127,7 @@ export interface ProviderRegistryEntry {
   adapter: string;
   baseUrl: string;
   apiKeyTransport?: OcxProviderConfig["apiKeyTransport"];
+  alias?: string;
   authKind: ProviderAuthKind;
   codexAccountMode?: CodexAccountMode;
   /** OAuth preset may explicitly honor a persisted API-key billing mode. */
@@ -349,6 +350,38 @@ export type ProviderConfigSeed = Pick<
 // always on, per the official models overview and pricing page (platform.claude.com).
 const ANTHROPIC_MODELS = ["claude-fable-5-1", "claude-fable-5", "claude-sonnet-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"];
 const ANTHROPIC_MODEL_CONTEXT_WINDOWS: Record<string, number> = { "claude-fable-5-1": 1_000_000, "claude-sonnet-5": 1_000_000, "claude-fable-5": 1_000_000, "claude-opus-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000, "claude-opus-4-6": 1_000_000, "claude-sonnet-4-6": 1_000_000, "claude-haiku-4-5": 200_000 };
+// Every current Claude family accepts at least 64k output tokens (Haiku 4.5 / Sonnet 4.x
+// through Opus 5 and Fable 5). Anthropic caps max_tokens per model server-side, so a
+// larger request never over-allocates; it only stops the 8192 truncation.
+const ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS = 64_000;
+/**
+ * The effort rungs opencodex exposes for native Anthropic models. Without this the
+ * providers advertised no ladder at all, so every client that keys its effort control off
+ * `reasoningEfforts` — Aside and the rest of the Pi-shaped exports — wrote these models
+ * with no control, while the SAME Claude models routed through `cursor` or
+ * `google-antigravity` had one.
+ *
+ * This is an opencodex ladder, not a claim that each model takes `output_config.effort`.
+ * The adapter serves two wire shapes (src/adapters/anthropic.ts): adaptive families
+ * (fable, sonnet >= 5, opus >= 4.7) send the effort directly, while opus 4.6, sonnet 4.6
+ * and haiku 4.5 take the legacy path where `reasoningBudget` TRANSLATES each rung into
+ * `thinking.budget_tokens`. Anthropic documents `low|medium|high|max` for the 4.6 models
+ * and no effort parameter at all for haiku 4.5; the budget translation is what makes five
+ * rungs meaningful there, and it clamps below `max_tokens` so none of them 400.
+ *
+ * Deliberately excluded, each because advertising it would offer a control that does not
+ * do what it says:
+ * - `minimal`: `adaptiveEffort` rewrites it to `low` (the adaptive wire 400s on it), so
+ *   it is not a distinct setting.
+ * - `none`: only sonnet >= 5 accepts an explicit thinking disable
+ *   (`EXPLICIT_THINKING_DISABLE_FAMILY_MINIMUMS`); Fable rejects one outright.
+ * - `ultra`: not an Anthropic concept, and it is degraded to `max` at the request
+ *   boundary anyway (src/responses/parser.ts).
+ */
+const ANTHROPIC_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+const ANTHROPIC_MODEL_REASONING_EFFORTS: Record<string, string[]> = Object.fromEntries(
+  ANTHROPIC_MODELS.map(id => [id, [...ANTHROPIC_REASONING_EFFORTS]]),
+);
 
 // 260814 GLM-5.3 is registered pre-emptively alongside 5.2 everywhere 5.2 appears. Z.AI's
 // devpack "How to Switch Models" page (docs.z.ai/devpack/latest-model) lists glm-5.3 and
@@ -600,7 +633,7 @@ const OPENCODE_FREE_DEEPSEEK_MODELS = ["deepseek-v4-flash-free"];
  * `mimo-v2.5-free` and `longcat-2.0-free` ACCEPT images and are deliberately
  * absent. Adding them would silently replace a working image with a caption,
  * which is worse than the loud 400 this list exists to prevent — see the negative
- * assertion in tests/provider-registry-parity.test.ts.
+ * assertion in tests/providers/provider-registry-parity.test.ts.
  *
  * Zen's roster is discovered live while this list is static, so it is a dated
  * exception list, not a capability model. Re-probe before extending it.
@@ -656,7 +689,7 @@ const DEEPSEEK_FLASH_REASONING_MAP: Record<string, string> = {
 /**
  * Flash-versus-Pro classification for DeepSeek V4 model ids, including prefixed
  * (`deepseek/deepseek-v4-pro`) and suffixed (`deepseek-v4-flash-free`) forms.
- * `tests/provider-registry-parity.test.ts` enumerates every id the registry
+ * `tests/providers/provider-registry-parity.test.ts` enumerates every id the registry
  * actually passes here, so a future id this substring test would misread cannot
  * land silently.
  */
@@ -1222,20 +1255,20 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // than the seeded ones do.
     supportsVerbosity: false,
     defaultModel: "grok-4.5",
-    // Keep 4.6/4.5 Responses callers on the compatibility Chat wire until xAI can replay
-    // opaque reasoning continuation and compaction state across later turns. Multi-agent has
-    // no Chat wire, so Responses callers use its only working wire under both auth modes.
+    // Grok 4.6/4.5 subscription Responses callers use the native wire with the existing
+    // namespace/web-search/replay normalization. Chat remains an explicit modelAdapters
+    // opt-in. Multi-agent has no Chat wire and uses Responses under both auth modes.
     // Caller-owned service tiers stay off the unclassified OAuth subscription route; key-auth
     // Fast remains proxy-owned and is still selected through keyAuthServiceTier above.
     modelWireDefaults: {
       "grok-4.6": {
-        wire: "openai-chat",
+        wire: "openai-responses",
         inbound: ["responses"],
         authModes: ["oauth"],
         forwardCallerServiceTier: false,
       },
       "grok-4.5": {
-        wire: "openai-chat",
+        wire: "openai-responses",
         inbound: ["responses"],
         authModes: ["oauth"],
         forwardCallerServiceTier: false,
@@ -1340,6 +1373,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     note: "Log in with your Claude account",
     models: [...ANTHROPIC_MODELS],
     modelContextWindows: { ...ANTHROPIC_MODEL_CONTEXT_WINDOWS },
+    modelReasoningEfforts: { ...ANTHROPIC_MODEL_REASONING_EFFORTS },
+    // Codex omits max_output_tokens; without a provider budget the Anthropic adapter
+    // falls back to 8192, which truncates long answers with stop_reason=max_tokens.
+    defaultMaxOutputTokens: ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
     defaultModel: "claude-sonnet-5",
   },
   {
@@ -1356,6 +1393,8 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     models: [...ANTHROPIC_MODELS],
     liveModels: true,
     modelContextWindows: { ...ANTHROPIC_MODEL_CONTEXT_WINDOWS },
+    modelReasoningEfforts: { ...ANTHROPIC_MODEL_REASONING_EFFORTS },
+    defaultMaxOutputTokens: ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
     defaultModel: "claude-sonnet-5",
   },
   {
@@ -1458,12 +1497,13 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     featured: true,
     dashboardUrl: "https://platform.openai.com/api-keys",
     defaultModel: "gpt-5.5",
-    models: ["gpt-5.5", ...OPENAI_GPT56_MODELS, ...OPENAI_GPT56_PRO_MODELS, ...OPENAI_DAYBREAK_MODELS],
+    models: ["gpt-5.5", ...OPENAI_GPT56_MODELS, ...OPENAI_GPT56_PRO_MODELS, ...OPENAI_DAYBREAK_MODELS, "gpt-6-astra"],
     liveModels: true,
-    modelContextWindows: { ...OPENAI_API_GPT56_CONTEXT_WINDOWS, ...OPENAI_DAYBREAK_CONTEXT_WINDOWS },
-    modelMaxInputTokens: { ...OPENAI_API_GPT56_MAX_INPUT_TOKENS, ...OPENAI_DAYBREAK_MAX_INPUT_TOKENS },
+    modelContextWindows: { ...OPENAI_API_GPT56_CONTEXT_WINDOWS, ...OPENAI_DAYBREAK_CONTEXT_WINDOWS, "gpt-6-astra": 1_050_000 },
+    modelMaxInputTokens: { ...OPENAI_API_GPT56_MAX_INPUT_TOKENS, ...OPENAI_DAYBREAK_MAX_INPUT_TOKENS, "gpt-6-astra": 922_000 },
+    modelMaxOutputTokens: { "gpt-6-astra": 128_000 },
     modelInputModalities: Object.fromEntries(
-      ["gpt-5.5", ...OPENAI_GPT56_MODELS, ...OPENAI_GPT56_PRO_MODELS, ...OPENAI_DAYBREAK_MODELS]
+      ["gpt-5.5", ...OPENAI_GPT56_MODELS, ...OPENAI_GPT56_PRO_MODELS, ...OPENAI_DAYBREAK_MODELS, "gpt-6-astra"]
         .map(id => [id, ["text", "image"]]),
     ),
     modelReasoningEfforts: {
@@ -1471,6 +1511,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
         [...OPENAI_GPT56_MODELS, ...OPENAI_GPT56_PRO_MODELS].map(id => [id, OPENAI_API_GPT56_REASONING_EFFORTS]),
       ),
       ...OPENAI_DAYBREAK_REASONING_EFFORTS,
+      "gpt-6-astra": ["low", "medium", "high", "xhigh", "max"],
     },
     virtualModels: OPENAI_API_GPT56_VIRTUAL_MODELS,
   },
@@ -1503,7 +1544,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelContextWindows: Object.fromEntries(META_MUSE_MODELS.map(id => [id, META_MUSE_CONTEXT_WINDOW])),
     // text+image only. Meta also documents video, audio (degraded on 1.3), and PDF, but
     // the catalog modality enum is text/image and over-advertising poisons the exported
-    // client config (see tests/catalog-input-modality-enum.test.ts).
+    // client config (see tests/codex-integration/catalog-input-modality-enum.test.ts).
     modelInputModalities: Object.fromEntries(META_MUSE_MODELS.map(id => [id, ["text", "image"] as ["text", "image"]])),
     modelReasoningEfforts: Object.fromEntries(META_MUSE_MODELS.map(id => [id, META_MUSE_REASONING_EFFORTS])),
     modelReasoningEffortMap: Object.fromEntries(META_MUSE_MODELS.map(id => [id, META_MUSE_REASONING_EFFORT_MAP])),
@@ -1519,7 +1560,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   - 목적과 의도: Let an operator who already signed the Muse Code CLI in reach Muse Spark with that credential, instead of provisioning a second key.
   - 기존 구현 및 제약 조건: The CLI stores a pointer at ~/.config/muse/auth.json and the secret in the macOS Keychain (ai.meta.dev.credentials/meta). Measured: the OAuth access_token 401s on /v1/models while the sibling api_key returns 200, so the usable artifact is a static key, not a refreshable token.
   - 검토한 주요 대안: spawn `muse login` and poll; reimplement Meta's device grant; treat it as a second key preset; ship nothing.
-  - 선택한 방식: an import-only, macOS-only OAuth provider that reads the existing credential, validates it once, and never spawns or reimplements anything.
+  - 선택한 방식: an OAuth provider that imports the existing credential on macOS and accepts a pasted key elsewhere, validates either once, and never spawns or reimplements anything.
   - 다른 대안 대신 이 방식을 선택한 이유: `muse login` has no non-interactive mode, so a spawned child could outlive cancellation, and polling for the pointer file is satisfied instantly by the one already on disk — reimporting the OLD account on a force-login. Reimplementing the grant would mean guessing a client id the vendor does not publish.
   - 장점, 단점 및 영향: no new credential to provision, and the id is distinct from meta-model so neither pool contaminates the other. Meta scopes this credential to its own CLI, so the provider carries a HIGH_RISK ToS warning, a CLI-side warning before any read, and a note that says plainly what is unsupported.
   */
@@ -1540,7 +1581,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelInputModalities: Object.fromEntries(META_MUSE_MODELS.map(id => [id, ["text", "image"] as ["text", "image"]])),
     modelReasoningEfforts: Object.fromEntries(META_MUSE_MODELS.map(id => [id, META_MUSE_REASONING_EFFORTS])),
     modelReasoningEffortMap: Object.fromEntries(META_MUSE_MODELS.map(id => [id, META_MUSE_REASONING_EFFORT_MAP])),
-    note: "Reuses the API key the Muse Code CLI stores after `muse login` (macOS only; requires the CLI installed and signed in). Meta scopes that credential to the Muse Code CLI, so this is an UNSUPPORTED use: Meta does not authorize subscription coverage outside its own CLI, how these calls settle is not observable from the API, and you should treat every call as billable against your account. The imported key is copied into OpenCodex's auth store. OpenCodex reads Meta's subscription windows from streaming responses and shows the last observed value with its age; there is no endpoint to query them on demand, so refreshing one requires another streaming turn, and translated (non-passthrough) turns report none. Rate limits apply per team, not per key. For a supported path use the meta-model provider with your own key (export it as META_MODEL_API_KEY).",
+    note: "Reuses the API key the Muse Code CLI stores after `muse login` (macOS only; requires the CLI installed and signed in). Meta ships no native Windows CLI and the Linux credential storage has not been measured, so on those platforms OpenCodex asks you to paste the Muse Code API key from https://dev.meta.ai instead of importing one; a pasted key faces the same format check and live validation as an imported one. Meta scopes that credential to the Muse Code CLI, so this is an UNSUPPORTED use: Meta does not authorize subscription coverage outside its own CLI, how these calls settle is not observable from the API, and you should treat every call as billable against your account. The key, imported or pasted, is copied into OpenCodex's auth store. OpenCodex reads Meta's subscription windows from streaming responses and shows the last observed value with its age; there is no endpoint to query them on demand, so refreshing one requires another streaming turn, and translated (non-passthrough) turns report none. Rate limits apply per team, not per key. For a supported path use the meta-model provider with your own key (export it as META_MODEL_API_KEY).",
   },
   {
     id: "umans",
@@ -1576,7 +1617,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // finish_reason or [DONE] (#2260). The adapter still rejects incomplete argument JSON.
     openaiChatEofTolerance: true,
     /* [Decision Log]
-    - 목적과 의도: Route the exact models OpenCode Go documents on the Responses endpoint — GPT 5.6 Luna, and Muse Spark 1.2 Contributor (#2617).
+    - 목적과 의도: Route the exact models OpenCode Go documents on the Responses endpoint — GPT 5.6 Luna, Grok 4.6, and Muse Spark Contributor (#2617).
     - 기존 구현 및 제약 조건: The provider is mixed-wire but its provider-wide `openai-chat` adapter sent Luna to `/chat/completions`; explicit user `modelAdapters` entries must remain authoritative.
     - 검토한 주요 대안: Change the whole provider to Responses; infer the wire from model-family names; add one registry-only exact-model default.
     - 선택한 방식: Declare only the named models as `openai-responses` through the existing registry default mechanism; the map stays an exact-model allowlist rather than a family or provider-wide rule.
@@ -1585,6 +1626,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     */
     modelWireDefaults: {
       "gpt-5.6-luna": "openai-responses",
+      "grok-4.6": "openai-responses",
       "muse-spark-1.3-contributor": "openai-responses",
       "muse-spark-1.2-contributor": "openai-responses",
     },
@@ -1614,6 +1656,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     },
     modelReasoningEfforts: {
       "gpt-5.6-luna": OPENAI_API_GPT56_REASONING_EFFORTS,
+      "grok-4.6": ["low", "medium", "high", "xhigh"],
       "glm-5.3": ZAI_GLM_53_REASONING_EFFORTS,
       "glm-5.3-flash": ZAI_GLM_53_REASONING_EFFORTS,
       "glm-5.2": ZAI_GLM_52_REASONING_EFFORTS,
@@ -1625,7 +1668,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       ...Object.fromEntries(OPENCODE_GO_THINKING_BUDGET_MODELS.map(id => [id, THINKING_BUDGET_EFFORTS])),
       ...Object.fromEntries(DEEPSEEK_THINKING_MODELS.map(id => [id, deepseekThinkingEffortsFor(id)])),
     },
-    modelDefaultReasoningEfforts: { "kimi-k3": "max" },
+    modelDefaultReasoningEfforts: { "grok-4.6": "high", "kimi-k3": "max" },
     // glm-5.2 uses identity labels now that `max` is a native Codex level (no alias map);
     // the thinking-toggle map is a REAL wire alias (effort -> enabled/disabled) and stays.
     modelReasoningEffortMap: {
@@ -1858,7 +1901,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   // 2026-07-10: defaultModel is frozen pending Vertex-specific Tier-2 evidence; Gemini API
   // evidence from ai.google.dev does not establish Vertex publisher availability.
   { id: "google-vertex", label: "Google Vertex AI", adapter: "google", baseUrl: "https://aiplatform.googleapis.com", authKind: "key", dashboardUrl: "https://console.cloud.google.com/vertex-ai", defaultModel: "gemini-3-pro", googleMode: "vertex", jawcodeBundle: "google", extraMetadataAliases: ["gemini-vertex"] },
-  { id: "google-antigravity", label: "Google Antigravity", adapter: "google", baseUrl: "https://daily-cloudcode-pa.googleapis.com", authKind: "oauth", allowBaseUrlOverride: true, dashboardUrl: "https://antigravity.google", models: ANTIGRAVITY_MODELS, liveModels: true, defaultModel: "gemini-3.8-flash", modelContextWindows: ANTIGRAVITY_MODEL_CONTEXT_WINDOWS, modelInputModalities: ANTIGRAVITY_MODEL_INPUT_MODALITIES, modelReasoningEfforts: ANTIGRAVITY_MODEL_EFFORTS, googleMode: "cloud-code-assist", jawcodeBundle: "google", extraMetadataAliases: ["antigravity", "gemini-antigravity"] },
+  { id: "google-antigravity", alias: "agy", label: "Google Antigravity", adapter: "google", baseUrl: "https://daily-cloudcode-pa.googleapis.com", authKind: "oauth", allowBaseUrlOverride: true, dashboardUrl: "https://antigravity.google", models: ANTIGRAVITY_MODELS, liveModels: true, defaultModel: "gemini-3.8-flash", modelContextWindows: ANTIGRAVITY_MODEL_CONTEXT_WINDOWS, modelInputModalities: ANTIGRAVITY_MODEL_INPUT_MODALITIES, modelReasoningEfforts: ANTIGRAVITY_MODEL_EFFORTS, googleMode: "cloud-code-assist", jawcodeBundle: "google", extraMetadataAliases: ["antigravity", "gemini-antigravity"] },
   { id: "azure-openai", label: "Azure OpenAI", adapter: "azure-openai", baseUrl: "https://{resource}.openai.azure.com/openai", authKind: "key", featured: true, dashboardUrl: "https://portal.azure.com" },
   { id: "ollama", label: "Ollama (local)", adapter: "openai-chat", baseUrl: "http://localhost:11434/v1", authKind: "local", allowPrivateNetworkByDefault: true, allowBaseUrlOverride: true, featured: true, note: "Local — key usually blank" },
   { id: "vllm", label: "vLLM (local)", adapter: "openai-chat", baseUrl: "http://localhost:8000/v1", authKind: "local", allowPrivateNetworkByDefault: true, allowBaseUrlOverride: true, featured: true, note: "Local — key usually blank" },

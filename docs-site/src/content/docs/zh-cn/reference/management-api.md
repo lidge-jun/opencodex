@@ -71,6 +71,16 @@ Authorization: Bearer <admin-token>
 
 关于模型名录和加密工作任务行为的概念，请参见 [子代理界面](/guides/sub-agent-surface/)。
 
+### 客户端集成回滚日志
+
+| 方法和路径 | 用途 | 主要错误 |
+| --- | --- | --- |
+| `GET /api/client-integrations/journal?client=...` | 列出回滚操作，也可限定为单个客户端。每一项都包含由服务器计算的 `deletable` 字段。 | 400 客户端无效 |
+| `DELETE /api/client-integrations/journal?opId=...` | 停用一条较旧的回滚操作，并在可能时删除其快照。成功响应中的 `snapshotRemoved: false` 表示清理任务已保留，等待维护重试。 | 400 缺少 `opId`；404 操作不存在或已停用；409 该客户端的最新操作 |
+
+删除操作会追加墓碑记录，而不会重写日志。服务器会保护每个客户端的最新操作，
+以保留当前的撤销点。
+
 ### Combos
 
 | 方法和路径 | 用途 | 典型错误 |
@@ -137,7 +147,10 @@ Authorization: Bearer <admin-token>
 | `PUT /api/model-visibility` | 原子性地更改 provider 级或 model 级可见性 | 400 provider、scope、target 或请求体无效 |
 | `GET, POST /api/custom-models` | 列出自定义模型或添加一个 | 400 字段无效；404 provider 缺失；409 模型重复 |
 | `PUT, DELETE /api/custom-models/{id}` | 编辑或删除一个自定义模型 | 400 id/字段无效；404 未找到；409 模型重复 |
-| `GET, PUT /api/selected-models` | 读取 provider 允许列表和可用性，或替换一个允许列表 | 400 缺少 provider/请求体；404 未知 provider |
+| `GET, PUT /api/selected-models` | 读取 provider 允许列表和可用性，或替换一个允许列表 | 400 缺少 provider/请求体；404 未知 provider; PUT 409 `initial_model_selection_pending` |
+| `GET, PUT /api/model-presets` | 读取预设信息或选择 preset/all/custom 模式 | 400 模式无效或不支持该预设；404 未知提供者; PUT 409 `initial_model_selection_pending` |
+
+可靠的初始模型列表尚未确认时，有效的 `PUT /api/selected-models` 和 `PUT /api/model-presets` 请求也会返回 HTTP 409 和代码 `initial_model_selection_pending`。请使用 `GET /api/models` 等方式刷新模型列表，成功后再重试。
 
 ### OAuth 账户、provider 密钥和数据平面密钥
 
@@ -221,7 +234,7 @@ Authorization: Bearer <admin-token>
 | `PUT /api/codex-auth/failover` | 设置账户故障转移阈值 | 400 阈值无效 |
 | `GET /api/codex-auth/quota` | 按账户读取缓存的配额状态 | — |
 | `GET /api/codex-auth/reset-credits` | 检查某个账户是否具备 reset-credit 资格 | 400 缺少账户 id；上游状态透传；500 查询失败 |
-| `POST /api/codex-auth/reset-credits/consume` | 消耗一个符合条件的 reset credit | 400 缺少账户 id；上游状态透传；503 `server_busy`；500 消耗失败 |
+| `POST /api/codex-auth/reset-credits/consume` | 消耗一个符合条件的 reset credit。可选的 `operationId`（UUIDv4）让兑换具备幂等性：相同 id 会重放同一条持久化结果，而不会再消耗一个 credit。 | 400 缺少账户 id 或无效的 `operationId`；若该 id 属于其他账户则 409 `identity_mismatch`；上游状态透传；503 `server_busy`、`capacity` 或 `unavailable`；500 消耗失败 |
 | `POST /api/codex-auth/login` | 启动 Codex 登录或重新认证 | 400 请求无效；登录状态冲突/忙碌 |
 | `POST /api/codex-auth/login/code` | 为 Codex 登录流程提交手动代码 | 400 流程/代码无效 |
 | `POST /api/codex-auth/login/cancel` | 取消一个 Codex 登录流程 | — |

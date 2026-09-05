@@ -1,7 +1,7 @@
 /**
  * Models tab workspace — mounted behaviour.
  *
- * The routing helpers are unit-tested at `tests/models-workspace-tabs.test.ts`. This file
+ * The routing helpers are unit-tested at `tests/gui/models-workspace-tabs.test.ts`. This file
  * exists because those assertions cannot see the failures that actually happened here:
  * a component-level early return that unmounted the whole tab tree while the catalog
  * loaded, and a disabled resource that swapped the combo editor for an empty state and

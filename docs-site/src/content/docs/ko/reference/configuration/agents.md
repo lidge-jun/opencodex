@@ -10,7 +10,7 @@ description: 멀티 에이전트 표면, 위임 안내, 선호 모델, 대체 �
 | 필드 | 형식 | 기본값 | 의미 |
 | --- | --- | --- | --- |
 | `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | `v1`은 카탈로그의 모든 모델에 v1을 표시하고, `v2`는 모든 모델에 v2를 표시합니다. `default`는 상위 고정값(Sol/Terra는 v2, Luna는 v1)을 복원하고, 그 외에는 네이티브 `multi_agent_v2` 플래그를 따릅니다. 새 세션에 적용됩니다. |
-| `subagentModels?` | `string[]` | `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.4-mini` | 최대 다섯 개의 bare native id, account-qualified `<selector>/<native-openai-model>` id 또는 routed `provider/model` id를 서브에이전트 선택기에서 우선 표시합니다. Subagents 페이지는 bare native와 routed id만 제공하며 저장할 때 exact account-qualified 선택을 제외합니다. exact 선택은 `ocx agent subagents set`을 사용하거나 설정을 직접 편집하세요. 명시적인 빈 목록도 그대로 보존됩니다. |
+| `subagentModels?` | `string[]` | `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5` | 최대 다섯 개의 bare native id, account-qualified `<selector>/<native-openai-model>` id 또는 routed `provider/model` id를 서브에이전트 선택기에서 우선 표시합니다. Subagents 페이지는 bare native와 routed id만 제공하며 저장할 때 exact account-qualified 선택을 제외합니다. exact 선택은 `ocx agent subagents set`을 사용하거나 설정을 직접 편집하세요. [Astra 최초 업그레이드](/reference/configuration/agents/#astra-roster-upgrade) 이후에는 빈 목록도 그대로 보존됩니다. |
 | `injectionModel?` | `string` | — | 프록시가 작성한 v2 위임 안내에서 사용하는 선호 네이티브 또는 라우팅된 서브에이전트 모델입니다. |
 | `injectionEffort?` | `string` | — | 선호 노력(`low`부터 `ultra`까지)입니다. `injectionModel`이 있을 때만 의미가 있습니다. |
 | `injectionPrompt?` | `string` | — | 내장 v2 안내 본문을 대체합니다. `{{model}}`, `{{effort}}`, `{{roster}}`, `{{fallback}}`를 지원합니다. `injectionModel`만 설정되어 있어도 사용자 정의 프롬프트가 발동합니다. |
@@ -53,7 +53,7 @@ V1 안내는 `max` 또는 `ultra`에서만 선제 텍스트로 제공됩니다. 
 거부하고 역할을 건너뜁니다 (#1190). TOML의 기존 `model_fallback` 줄은 하위 호환성을 위해
 계속 읽히지만 `ocx doctor`가 이를 표시합니다.
 
-opencodex는 비활성, 라우팅 불가, 비정상, 쿨다운 중, 또는 할당량 임계값에 걸린 후보를 건너뜁니다. 사용 가능성 스냅샷은 `subagentModelFallbackPollMs` 동안 캐시됩니다. 암호화된 하위 작업은 체인을 정규 네이티브 ChatGPT 대상으로만 제한할 수 있습니다. 어떤 대상도 암호화된 페이로드를 읽을 수 없으면, 읽을 수 없는 암호문을 다른 곳으로 라우팅하는 대신 요청이 실패합니다.
+opencodex는 비활성, 라우팅 불가, 비정상, 쿨다운 중, 또는 할당량 임계값에 걸린 후보를 건너뜁니다. 사용 가능성 스냅샷은 `subagentModelFallbackPollMs` 동안 캐시됩니다. 암호화된 하위 작업은 정규 네이티브 ChatGPT 대상과 `allowEncryptedV2AgentTasks: true`로 명시적으로 신뢰한 직접 키 인증 Responses 라우트만 후보로 사용합니다. 암호화된 페이로드를 처리할 수 있는 대상이 없으면 읽을 수 없는 암호문을 다른 곳으로 보내지 않고 요청이 실패합니다. 콤보는 계속 정규 네이티브 대상만 사용합니다.
 
 ```json
 {

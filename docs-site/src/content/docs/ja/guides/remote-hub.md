@@ -60,7 +60,22 @@ OAuth は `POST /api/oauth/login` で開始し、コールバックできない�
 
 ## Docker とトラブルシューティング
 
-公式 Docker イメージはありません。運用者が Bun イメージを digest 固定し、`/home/bun/.opencodex` をボリューム、`/run/secrets/ocx_api_token` を secret としてマウントしてください。公開するのは `10100` だけで、`10101` は公開しません。秘密値を `ARG`、`ENV`、`COPY`、Compose、イメージ履歴、argv に入れないでください。healthcheck 後にも readiness、認証済みカタログ、実リクエストを別途確認します。
+公式 Docker イメージはありませんが、リポジトリには digest 固定の Bun イメージをローカルビルドするための、管理された `Dockerfile` と `compose.yaml` があります。初回起動前にデータキーを stdin から一度だけ初期化します。キーは表示されず、`ocx-state` ボリューム内に所有者限定の権限で保存されます。
+
+ホストに Git と Bun が必要です。イメージをビルドするたびに、Git 管理下のソースから正規のマニフェストを生成し、生成後はビルドまでソースを変更しないでください。生成 JSON は Git に追加せず、`.git` は Docker コンテキストから除外します。ホスト側は既定で `127.0.0.1` にバインドします。リモート公開は `OPENCODEX_BIND_ADDRESS=<LANまたはTailscaleのIP> docker compose up -d` で明示的に指定し、`0.0.0.0` は全インターフェースを公開します。ファイアウォールと認証付き TLS/tailnet フロントエンドで保護してください。
+
+ビルドは古いマニフェストを拒否し、すべての SHA-256 をコンテキストとコピー後のファイルに照合します。欠落・不一致のファイル、余分なソース、シンボリックリンクは拒否されます。`package.json`、`bun.lock`、および `scripts/` から唯一取り込む `scripts/model-metadata.source.json` が必須です。
+
+```bash
+git clone https://github.com/lidge-jun/opencodex.git
+cd opencodex
+bun scripts/generate-compatibility-version.ts
+docker compose build
+openssl rand -hex 32 | docker compose run --rm -T hub bun run docker/bootstrap-token.ts
+docker compose up -d
+```
+
+コンテナは非 root の `bun` ユーザー、読み取り専用のルートファイルシステムで実行され、公開するのは `10100` だけです。`10101` は公開せず、秘密値を `ARG`、`ENV`、`COPY`、Compose、イメージ履歴、argv に入れないでください。healthcheck 後にも readiness、認証済みカタログ、実リクエストを別途確認します。`docker compose down` はボリュームを保持し、`docker compose down --volumes` は設定、認証情報、キーも削除します。
 
 - hub 停止時はオフライン切断できますが、キー失効は未完了のままです。
 - 一時障害時だけ検証済み LKG を維持し、認証・スキーマ・サイズ・プロトコル障害でローカルへフォールバックしません。

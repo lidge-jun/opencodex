@@ -7,11 +7,14 @@ import { applyUpstreamRecoveryInit, fetchWithResetRetry } from "../lib/upstream-
 import { withUpstreamHttpVersion } from "../lib/upstream-http-version";
 import { parseSidecarSSE, type WebSearchResult } from "./parse";
 import type { CodexUpstreamOutcome } from "../codex/routing";
+import { NATIVE_RESERVE_MODEL } from "../codex/catalog/native-models";
 
 export interface SidecarSettings {
   model: string;
   reasoning: string;
   timeoutMs: number;
+  /** Effective Desktop authless compatibility does not grant auxiliary model use. */
+  reserveCompatibility?: boolean;
   /**
    * True when the routed (downstream) model is text-only. The search model CAN see images, so it's
    * told to verbalize any relevant image results and include their URLs — otherwise a non-vision model
@@ -49,6 +52,9 @@ export async function runWebSearch(
   abortSignal?: AbortSignal,
   recordOutcome?: SidecarOutcomeRecorder,
 ): Promise<SidecarOutcome> {
+  if (settings.reserveCompatibility && settings.model === NATIVE_RESERVE_MODEL) {
+    return { text: "", sources: [], error: "Luna Reserve compatibility is only available as a conversation model, not a search helper. Choose another search helper model." };
+  }
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (forwardProvider.headers) Object.assign(headers, forwardProvider.headers);
   for (const h of FORWARD_HEADERS) {

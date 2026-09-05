@@ -13,6 +13,8 @@
 | `src/config/paths.ts` | Resolves `OPENCODEX_HOME`, `config.json`, and owner-only directory hardening. |
 | `src/config/atomic-write.ts` | Shared synchronous/asynchronous temp-harden-rename writer and residual-temp failure contract. |
 | `src/config/process-state.ts` | Owns `ocx.pid`, `runtime-port.json`, cheap liveness, full command-line identity verification, and snapshot-guarded cleanup. |
+| `src/server/ports.ts` | Owns bind availability and ephemeral-port selection. Temporary probes dispose accepted peers and wait for listener close before reporting success. |
+| `src/cli/status.ts` / `src/cli/status-probes.ts` | Status snapshot assembly and the shared read-only health/stale-process probes used by status and doctor. Probe evidence keeps recorded-port choice, before/after snapshots and per-call timer cleanup together. |
 | `src/router.ts` | Provider/model selection before adapter dispatch. |
 | `src/types.ts` | Shared config, parsed request, adapter, and event types. |
 | `src/reasoning-effort.ts` | Codex reasoning-level definitions (`low`/`medium`/`high`/`xhigh`), per-model effort mapping, and catalog effort sanitization. |
@@ -96,6 +98,11 @@ identity, and owner fingerprint are still present immediately before deletion. R
 tracked sibling before mutation and rolls back earlier siblings in reverse order on a later race.
 Failures warn without changing the requested command's exit behavior. The probe uses read-only config
 diagnostics only for a confirmed candidate and never reads adjacent auth state.
+
+Unix install-probe cleanup refusals retain their fail-closed behavior and report a bounded
+diagnostic suffix: a fixed probe phase, allowlisted native error/signal, and bounded exit status.
+Metadata contents, launcher paths and raw child errors never enter that suffix. Diagnostic
+classification does not grant process ownership or change rollback/termination policy.
 
 Codex CLI update inspection is split from mutation. `system codex-cli-update check` makes no
 package-registry request and reads bounded provenance evidence for the configured launcher candidate, npm ownership layout,

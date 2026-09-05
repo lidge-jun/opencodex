@@ -71,6 +71,16 @@ Authorization: Bearer <admin-token>
 
 モデルロスターと暗号化されたワーカータスクの動作の背後にある概念については、「[サブエージェントサーフェス](/guides/sub-agent-surface/)」を参照してください。
 
+### クライアント統合のロールバックジャーナル
+
+| メソッドとパス | 目的 | 主なエラー |
+| --- | --- | --- |
+| `GET /api/client-integrations/journal?client=...` | ロールバック操作を一覧表示します。任意でクライアントを指定でき、各行にはサーバー計算の `deletable` が含まれます。 | 400 無効なクライアント |
+| `DELETE /api/client-integrations/journal?opId=...` | 古いロールバック操作を廃止し、可能ならスナップショットも削除します。成功時の `snapshotRemoved` が `false` の場合、保守処理で再試行されます。 | 400 `opId` なし、404 存在しないか廃止済み、409 そのクライアントの最新操作 |
+
+削除時はジャーナルを書き換えず、トゥームストーンを追記します。現在の取り消し地点を
+残すため、各クライアントの最新操作はサーバー側で保護されます。
+
 ### コンボ
 
 |メソッドとパス |目的 |注目すべきエラー |
@@ -137,7 +147,10 @@ Authorization: Bearer <admin-token>
 | `PUT /api/model-visibility` |プロバイダーレベルまたはモデルレベルの可視性をアトミックに変更 | 400 プロバイダー、スコープ、ターゲット、または本文が無効です。
 | `GET, POST /api/custom-models` |カスタム モデルをリストするか追加する | 400 個の無効なフィールド。 404 プロバイダーがありません。 409 複製モデル |
 | `PUT, DELETE /api/custom-models/{id}` | 1 つのカスタム モデルを編集または削除する | 400 個の無効な ID/フィールド。 404 が見つかりません。 409 複製モデル |
-| `GET, PUT /api/selected-models` |プロバイダーのホワイトリストと可用性を読み取るか、1 つのホワイトリストを置き換えます。 400 のプロバイダー/本体が欠落しています。 404 不明なプロバイダ |
+| `GET, PUT /api/selected-models` | プロバイダーの許可リストと可用性を読む、または許可リストを置き換える | 400 プロバイダー/本文の不足; 404 不明なプロバイダー; PUT 409 `initial_model_selection_pending` |
+| `GET, PUT /api/model-presets` | プリセット情報を読む、または preset/all/custom モードを選ぶ | 400 不正なモードまたは未提供のプリセット; 404 不明なプロバイダー; PUT 409 `initial_model_selection_pending` |
+
+信頼できる初回モデル一覧が確定するまで、有効な `PUT /api/selected-models` と `PUT /api/model-presets` も HTTP 409 とコード `initial_model_selection_pending` を返します。`GET /api/models` などでモデル一覧を更新し、取得に成功してから再試行してください。
 
 ### OAuth アカウント、プロバイダー キー、およびデータプレーン キー
 
@@ -219,7 +232,7 @@ Authorization: Bearer <admin-token>
 | `PUT /api/codex-auth/failover` |アカウントのフェイルオーバーしきい値を設定する | 400 無効なしきい値 |
 | `GET /api/codex-auth/quota` |キャッシュされたクォータ状態をアカウントごとに読み取る | — |
 | `GET /api/codex-auth/reset-credits` |アカウントのリセット クレジット資格を検査する | 400 アカウント ID がありません。アップストリームステータスパススルー。 500 検索失敗 |
-| `POST /api/codex-auth/reset-credits/consume` |対象となるリセット クレジットを消費する | 400 アカウント ID がありません。アップストリームステータスパススルー。 503 `server_busy`; 500 消費失敗 |
+| `POST /api/codex-auth/reset-credits/consume` |対象となるリセット クレジットを消費する。任意の `operationId`（UUIDv4）を指定すると消費が冪等になります。同じ id は 2 つ目のクレジットを消費せず、保存済みの結果を 1 回再生します。 | 400 アカウント ID がありません、または `operationId` が不正です。id が別のアカウントに属する場合は 409 `identity_mismatch`。アップストリームステータスパススルー。 503 `server_busy`、`capacity`、`unavailable`; 500 消費失敗 |
 | `POST /api/codex-auth/login` | Codex のログインまたは再認証を開始する | 400 無効なリクエスト。競合/ビジー ログイン状態 |
 | `POST /api/codex-auth/login/code` | Codex ログイン フローの手動コードを送信する | 400 無効なフロー/コード |
 | `POST /api/codex-auth/login/cancel` | Codex ログイン フローをキャンセルする | — |

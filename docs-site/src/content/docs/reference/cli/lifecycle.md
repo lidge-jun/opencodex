@@ -242,18 +242,22 @@ interrupted package update removed either file, it logs one `installation is inc
 stops instead of retrying the same missing executable every five seconds. Reinstall opencodex, then
 run `ocx service repair` to refresh the task with the restored package paths.
 
-On Linux, the systemd unit invokes the first regular, executable `ocx` file found on `PATH` at
-install time rather than the Bun and CLI paths inside the installed package tree. Version managers such as
+On macOS and Linux, the launchd plist and the systemd unit invoke the first regular, executable
+`ocx` file found on `PATH` at install time rather than the Bun and CLI paths inside the installed
+package tree. Version managers such as
 **mise** and **asdf** install into a versioned directory and delete the old one on upgrade, which
-used to leave the unit pointing at files that no longer existed — systemd then restart-looped while
-still reporting the service as installed. A shim path survives the upgrade, so the unit keeps
-resolving. Source checkouts without an `ocx` launcher keep the previous direct Bun + CLI form. A
+used to leave the service definition pointing at files that no longer existed — systemd then
+restart-looped while still reporting the service as installed, and launchd kept the old build serving
+until it was restarted by hand. A shim path survives the upgrade, so the definition keeps resolving. Source checkouts without an `ocx` launcher keep the previous direct Bun + CLI form. A
 trusted `OPENCODEX_BUN_PATH` selected before Bun starts is preserved through the shim; package-local
 bundled Bun paths are deliberately rediscovered after upgrades instead of being pinned in the unit.
 
-Units installed before this change still carry the old versioned paths and cannot migrate
+Definitions installed before this change still carry the old versioned paths and cannot migrate
 themselves — once the old executable is deleted, no opencodex code runs to fix it. Run
-`ocx service repair` once after upgrading; subsequent version changes need no action.
+`ocx service repair` once after upgrading; after that, each service start follows the launcher.
+An already-running proxy is not replaced by an external upgrade: restart the service (or run
+`ocx service repair`) so the new build serves, and treat a CLI/proxy version mismatch warning as
+exactly that signal.
 
 | Subcommand | Action |
 | --- | --- |
@@ -366,6 +370,9 @@ service startup is bypassed. It refuses the change and rolls back when the launc
 cannot be validated and cleaned up safely. Therefore `codex-shim install` is not unconditional. If
 it is refused, reinstall Codex so the PATH entry is a concrete executable or launcher and retry;
 use `ocx service install` instead when a dynamic command-manager launcher cannot meet these checks.
+Cleanup refusals include a bounded diagnostic suffix identifying the probe phase, a recognized
+native error code or signal, and the exit status when known. It does not include launcher paths
+or raw child output, and does not relax the validation or rollback checks.
 During upgrades, an installed Unix shim that lacks the current validation guard is regenerated and
 probed. If its saved launcher is unsafe, OpenCodex removes the obsolete shim and restores the
 original launcher instead of leaving the unsafe wrapper installed.

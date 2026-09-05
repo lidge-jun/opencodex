@@ -44,7 +44,7 @@ beforeEach(() => {
   quotaCalls = [];
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
-    value: async (input: string, init?: RequestInit) => {
+    value: async (input: string) => {
       const url = String(input);
       const ok = (body: unknown) => ({
         ok: true,
@@ -69,7 +69,7 @@ beforeEach(() => {
         const provider = new URL(url, "http://localhost").searchParams.get("provider") ?? "x";
         const delay = (PROVIDERS.indexOf(provider) + 1) * 15;
         await new Promise(r => setTimeout(r, delay));
-        return ok({ activeAccountId: `${provider}-account-1`, accounts: [{ id: `${provider}-account-1` }] });
+        return ok({ activeAccountId: `${provider}-account-1`, accounts: [{ id: `${provider}-account-1`, quotaMode: "probe" }] });
       }
       if (url.includes("/api/providers/keys")) return ok({ keys: [] });
       if (url.includes("/api/config")) {
@@ -155,3 +155,69 @@ test("the cheap account read still precedes the quota enrichment for every provi
   expect(order.indexOf("enrich")).toBeGreaterThan(order.lastIndexOf("base") - 1);
   expect(order[0]).toBe("base");
 });
+
+for (const kind of ["oauth", "key", "codex"] as const) {
+  test(`the real Providers page refresh selects ${kind} and awaits account plus report`, async () => {
+    const name = kind === "codex" ? "openai" : `${kind}-fixture`;
+    const seen: string[] = [];
+    let finishReport!: (response: Response) => void;
+    let finishAccounts!: (response: Response) => void;
+    let reportStarted!: () => void;
+    const reportReady = new Promise<void>(resolve => { reportStarted = resolve; });
+    const accountBody = kind === "codex"
+      ? { accounts: [{ id: "main", email: "fixture@example.test", isMain: true, priority: 0, hasCredential: true, quota: null }] }
+      : kind === "oauth"
+        ? { activeAccountId: "account", accounts: [{ id: "account", active: true, quotaMode: "probe" }] }
+        : { keys: [{ id: "key", masked: "masked", active: true, quotaMode: "probe" }] };
+    Object.defineProperty(globalThis, "fetch", { configurable: true, value: async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), "http://localhost");
+      seen.push(url.pathname + url.search);
+      if (url.pathname === "/api/config") return Response.json({ port: 10100, defaultProvider: name, providers: {
+        [name]: kind === "codex"
+          ? { adapter: "openai-responses", authMode: "forward", codexAccountMode: "pool", baseUrl: "https://chatgpt.com/backend-api/codex" }
+          : { adapter: "openai-chat", authMode: kind, hasApiKey: kind === "key", baseUrl: "https://fixture.test/v1" },
+      } });
+      if (url.pathname === "/api/oauth/providers") return Response.json({ providers: kind === "oauth" ? [name] : [] });
+      if (url.pathname === "/api/oauth/status") return Response.json({ loggedIn: true });
+      if (url.pathname === "/api/provider-quotas") {
+        if (!url.searchParams.has("refresh")) return Response.json({ reports: [] });
+        const result = new Promise<Response>(resolve => { finishReport = resolve; });
+        reportStarted();
+        return result;
+      }
+      if (url.pathname === "/api/oauth/accounts" || url.pathname === "/api/providers/keys"
+        || (kind === "codex" && url.pathname === "/api/codex-auth/accounts")) {
+        return url.searchParams.has("refresh")
+          ? new Promise<Response>(resolve => { finishAccounts = resolve; }) : Response.json(accountBody);
+      }
+      if (url.pathname === "/api/codex-auth/accounts") return Response.json({ accounts: [] });
+      if (url.pathname === "/api/codex-auth/active") return Response.json({ activeCodexAccountId: null, autoSwitchThreshold: 80, accountPoolStrategy: "round-robin", accountPoolStickyLimit: 1 });
+      if (url.pathname === "/api/selected-models") return Response.json({ models: {} });
+      if (url.pathname === "/api/usage") return Response.json({ providers: [], models: [] });
+      if (url.pathname === "/api/provider-presets") return Response.json({ providers: [] });
+      return Response.json({});
+    } });
+    await mount();
+    const provider = container.querySelector<HTMLButtonElement>(".providers-workspace-rail-row");
+    expect(provider).not.toBeNull();
+    await act(async () => { provider!.click(); });
+    const refresh = Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+      .find(button => button.textContent?.includes("Refresh quotas"));
+    expect(refresh).toBeDefined();
+    seen.length = 0;
+    await act(async () => { refresh!.click(); });
+    await act(async () => { await reportReady; });
+    const expected = kind === "codex" ? "/api/codex-auth/accounts?refresh=1"
+      : kind === "oauth" ? `/api/oauth/accounts?provider=${name}&quota=1&refresh=1`
+        : `/api/providers/keys?name=${name}&quota=1&refresh=1`;
+    expect(seen).toContain(expected);
+    if (kind !== "oauth") expect(seen.some(path => path.startsWith("/api/oauth/accounts"))).toBe(false);
+    if (kind === "oauth") expect(seen.some(path => path.startsWith("/api/providers/keys"))).toBe(false);
+    expect(container.textContent).toContain("Refreshing...");
+    await act(async () => { finishReport(Response.json({ reports: [] })); });
+    expect(container.textContent).not.toContain("Quota check completed");
+    expect(container.textContent).toContain("Refreshing...");
+    await act(async () => { finishAccounts(Response.json(accountBody)); });
+    expect(container.textContent).toContain("Quota check completed");
+  });
+}

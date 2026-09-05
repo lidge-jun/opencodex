@@ -3,6 +3,13 @@
 /* ── ProviderAuthPanel ─────────────────────────────────────── */
 
 .pwi-auth-section { display: flex; flex-direction: column; gap: 12px; }
+/* Title left, operator refresh right. Wraps rather than truncating: the refresh
+   result is a full sentence in several locales. */
+.pwi-auth-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
+}
+.pwi-auth-head-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .pwi-auth-body { display: flex; flex-direction: column; gap: 10px; }
 
 .pwi-auth-status-row { display: flex; align-items: center; gap: 8px; }
@@ -24,7 +31,7 @@
 .pwi-auth-state--error { color: var(--red); background: var(--red-soft); justify-content: space-between; }
 .pwi-auth-state--empty { justify-content: center; }
 
-.pwi-auth-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.pwi-auth-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 
 .pwi-auth-optin-row {
   display: flex; align-items: center; justify-content: space-between; gap: 16px;

@@ -59,7 +59,7 @@ function wireImagePart(imageUrl: string): Record<string, unknown> {
  * (#1383). This builder keeps the pairing invariant:
  *
  * - a `toolResult` that matches a declared assistant call emits the native `tool-result`;
- * - a `toolResult` with no matching declared call degrades to a text carrier so the model
+ * - a `toolResult` with no matching declared call degrades to a user carrier so the model
  *   still sees the outcome without a 400-prone standalone `tool` message;
  * - every declared assistant call that never received a result gets an explicit error
  *   `tool-result`, so the upstream never sees an unpaired call.
@@ -108,6 +108,9 @@ function wireMessages(messages: OcxMessage[]): Array<Record<string, unknown>> {
       continue;
     }
     if (message.role === "toolResult") {
+      const images = typeof message.content === "string" ? [] : message.content
+        .filter(part => part.type === "image")
+        .map(part => wireImagePart((part as { imageUrl: string }).imageUrl));
       const callIndex = pendingCalls.findIndex(call => call.id === message.toolCallId);
       const paired = callIndex >= 0;
       if (paired) pendingCalls.splice(callIndex, 1);
@@ -116,11 +119,11 @@ function wireMessages(messages: OcxMessage[]): Array<Record<string, unknown>> {
         // message lands, or their synthesized results would follow the orphan carrier.
         closePendingCalls();
         // The upstream rejects a standalone tool message whose call was never declared by an
-        // assistant turn. Preserve the outcome as text so the model can still act on it.
+        // assistant turn. Preserve the outcome and images so the model can still act on it.
         const label = message.toolName ? `${message.toolName} (${message.toolCallId})` : message.toolCallId;
         const text = toolResultText(message.content);
         // The orphan result cannot ride a `tool` message; carry it in a user message instead.
-        out.push({ role: "user", content: [{ type: "text", text: `[tool result without adjacent tool call: ${label}]\n${text}` }] });
+        out.push({ role: "user", content: [{ type: "text", text: `[tool result without adjacent tool call: ${label}]\n${text}` }, ...images] });
         continue;
       }
       out.push({ role: "tool", content: [{
@@ -132,9 +135,8 @@ function wireMessages(messages: OcxMessage[]): Array<Record<string, unknown>> {
       // The proprietary wire's tool-result output is text-only; image parts returned by a
       // tool (e.g. Codex view_image) cannot live inside it. Carry them in a follow-up user
       // message using the same image encoding as the user branch so the bytes reach the model.
-      const images = typeof message.content === "string" ? [] : message.content.filter(part => part.type === "image");
       if (images.length > 0) {
-        pendingImageCarriers.push({ role: "user", content: images.map(part => wireImagePart((part as { imageUrl: string }).imageUrl)) });
+        pendingImageCarriers.push({ role: "user", content: images });
       }
       continue;
     }

@@ -328,6 +328,50 @@ test("all-stale response renders coverage only without a numeric fallback", asyn
   expect(text).toContain("Incomplete coverage: 2 account(s) excluded");
 });
 
+test("a fully included pool still surfaces the uncalibrated-plan notice", async () => {
+  // The #3155 reporter's own shape: every seat included, complete coverage, one seat counted
+  // at the baseline weight. The uncalibrated notice is the ONLY remaining uncertainty signal
+  // here, so it must render independently of the incomplete gate — folding it under the
+  // incomplete branch would pass every other fixture in this file and silently hide it.
+  quotaPayload = {
+    reports: [{
+      provider: "openai",
+      label: "OpenAI (Codex login)",
+      source: "chatgpt:wham",
+      updatedAt: Date.now(),
+      quota: { weeklyPercent: 44, updatedAt: Date.now() },
+      aggregation: {
+        kind: "capacity-weighted-v1",
+        scope: "routable-known",
+        presentation: "aggregate",
+        includedAccounts: 2,
+        excludedAccounts: 0,
+        unknownPlanAccounts: 1,
+        missingQuotaAccounts: 0,
+        pausedAccounts: 0,
+        reauthAccounts: 0,
+        staleQuotaAccounts: 0,
+        incomplete: false,
+        weekly: {
+          usedPercent: 44,
+          includedAccounts: 2,
+          excludedAccounts: 0,
+          incomplete: false,
+          updatedAt: Date.now(),
+        },
+        currentAccount: { isMain: false, quota: { weeklyPercent: 77, updatedAt: Date.now() } },
+      },
+    }],
+  };
+
+  await mountShell();
+
+  const text = host.textContent ?? "";
+  expect(text).toContain("1 account(s) on an uncalibrated plan are counted at the baseline seat weight");
+  expect(text).not.toContain("Incomplete coverage");
+  expect(text).toContain("44% used");
+});
+
 test("coverage-only API report remains visible in the rate-limit overview", async () => {
   quotaPayload = {
     reports: [{

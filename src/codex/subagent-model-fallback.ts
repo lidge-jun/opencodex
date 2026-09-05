@@ -38,7 +38,7 @@ import {
 import { routeModel, type RouteResult } from "../router";
 import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 import { codexAccountNamespaceForModel } from "./account-namespace-match";
-import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "./catalog/native-models";
+import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS, NATIVE_MAIN_DRAIN_SENTINEL_MODELS } from "./catalog/native-models";
 import { MAIN_CODEX_ACCOUNT_ID } from "./main-account";
 import {
   getUpstreamHostHealth,
@@ -59,6 +59,8 @@ export type SubagentPoolAccountPreview = (
 export type SubagentModelEligibleAccountIds = (
   modelId: string | undefined,
 ) => ReadonlySet<string> | undefined;
+/** Additional resolved routes that a restricted fallback caller has independently approved. */
+export type SubagentFallbackRouteEligibility = (route: RouteResult) => boolean;
 let subagentQuotaPrimeForTests: SubagentQuotaPrimeFn | null = null;
 let quotaPrimeInFlight: Promise<void> | null = null;
 
@@ -328,9 +330,17 @@ export function isSubagentModelUnavailable(
   // preserve the credential fence. If no non-main candidate can serve an unqualified
   // gated model, retain main only as a read-free sentinel: final auth owns the atomic
   // claim and returns maintenance instead of letting a routed fallback bypass it.
+  //
+  // The predicate is its OWN set, not the account-gated one. The sentinel protects the atomic
+  // main claim during a drain, which has nothing to do with entitlement; it read the gated set
+  // only because the two happened to hold the same slugs. Ungating the flagships (2026-09-04)
+  // would have flipped this false and let a drain silently rewrite the operator's configured
+  // subagent model instead of reporting maintenance -- a different model answering than was
+  // chosen. The set is explicit rather than every supported native, so gpt-5.5 and friends keep
+  // their existing fall-back-and-answer behaviour.
   const preserveDrainingMainCandidate = route.codexAccountId === undefined
     && candidateAccountUsabilityOptions?.nativeMainSelectionOnly === true
-    && ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(route.modelId);
+    && NATIVE_MAIN_DRAIN_SENTINEL_MODELS.has(route.modelId);
   if (!preserveDrainingMainCandidate) return true;
   const drainingMainUsabilityOptions: CodexAccountUsabilityOptions = {
     ...candidateAccountUsabilityOptions,
@@ -356,13 +366,21 @@ export function selectAvailableSubagentModel(
   poolAccountPreview?: SubagentPoolAccountPreview,
   modelEligibleAccountIdsForModel?: SubagentModelEligibleAccountIds,
   resolvedChain?: readonly string[],
+  restrictedRouteEligible?: SubagentFallbackRouteEligibility,
 ): { model: string; rewritten: boolean; skipped: string[] } {
   const chain = resolvedChain ?? normalizedChain(primary, config, extraFallback, trailingFallback);
   const skipped: string[] = [];
   for (const candidate of chain) {
     if (nativeFallbackOnly) {
       const route = tryRouteFallbackModel(config, candidate);
-      if (!route || !isCanonicalOpenAiForwardProvider(route.provider)) {
+      if (
+        !route
+        || route.combo !== undefined
+        || (
+          !isCanonicalOpenAiForwardProvider(route.provider)
+          && restrictedRouteEligible?.(route) !== true
+        )
+      ) {
         skipped.push(candidate);
         continue;
       }
@@ -607,6 +625,7 @@ export function applySubagentModelFallback(
   poolAccountPreview?: SubagentPoolAccountPreview,
   modelEligibleAccountIdsForModel?: SubagentModelEligibleAccountIds,
   resolvedFallbackChain?: readonly string[] | null,
+  restrictedRouteEligible?: SubagentFallbackRouteEligibility,
 ): { from?: string; to?: string; skipped?: string[] } | null {
   if (!isThreadSpawnRequest(headers)) return null;
   const fallbackChain = resolvedFallbackChain === undefined
@@ -625,6 +644,7 @@ export function applySubagentModelFallback(
     poolAccountPreview,
     modelEligibleAccountIdsForModel,
     fallbackChain,
+    restrictedRouteEligible,
   );
   if (!selection.rewritten) return selection.skipped.length > 0
     ? { from: parsed.modelId, to: parsed.modelId, skipped: selection.skipped }
