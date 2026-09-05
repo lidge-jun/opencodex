@@ -4,6 +4,11 @@ import type { TKey } from "./en";
  * Russian i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const ru: Record<TKey, string> = {
+  "codexAuth.quotaAutoRefreshAllHint": "Общее переключение поддерживаемых 5-часовых и недельных окон всех текущих аккаунтов. В режиме пула после сброса отправляется небольшой запрос, расходующий квоту.",
+  "codexAuth.quotaAutoRefreshMixed": "Включены некоторые окна.",
+  "codexAuth.quotaAutoRefreshEmpty": "Нет поддерживаемых окон квоты. Обновите квоты аккаунтов.",
+  "codexAuth.quotaAutoRefreshLoadFailed": "Не удалось загрузить настройки активации. Повторите попытку.",
+  "codexAuth.quotaAutoRefreshPartial": "Не удалось сохранить часть настроек. Повторите попытку для завершения того же изменения.",
   // sidebar / nav / common
   "nav.dashboard": "Дашборд",
   "uptime.day": "д",

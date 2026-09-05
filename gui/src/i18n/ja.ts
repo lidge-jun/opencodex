@@ -4,6 +4,11 @@ import type { TKey } from "./en";
  * Japanese i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const ja: Record<TKey, string> = {
+  "codexAuth.quotaAutoRefreshAllHint": "現在の全アカウントで、対応する5時間・週間枠をまとめて切り替えます。プールモードではリセット後に少量の利用枠を消費するリクエストを送信します。",
+  "codexAuth.quotaAutoRefreshMixed": "一部の枠が有効です。",
+  "codexAuth.quotaAutoRefreshEmpty": "対応する利用枠がありません。アカウントの利用枠を更新してください。",
+  "codexAuth.quotaAutoRefreshLoadFailed": "自動開始設定を取得できませんでした。再試行してください。",
+  "codexAuth.quotaAutoRefreshPartial": "一部の設定を保存できませんでした。再試行で同じ変更を完了します。",
   // sidebar / nav / common
   "nav.dashboard": "ダッシュボード",
   "uptime.day": "日",

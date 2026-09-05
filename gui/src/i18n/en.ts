@@ -6,6 +6,11 @@
  * `{var}` are plain interpolations.
  */
 export const en = {
+  "codexAuth.quotaAutoRefreshAllHint": "Controls the supported 5-hour and weekly windows for all current accounts together. In Pool mode, a small request is sent after each reset and uses quota.",
+  "codexAuth.quotaAutoRefreshMixed": "Some windows are enabled.",
+  "codexAuth.quotaAutoRefreshEmpty": "No supported quota windows. Refresh account quotas to check again.",
+  "codexAuth.quotaAutoRefreshLoadFailed": "Could not load activation settings. Retry to check their state.",
+  "codexAuth.quotaAutoRefreshPartial": "Some settings could not be saved. Retry to finish the same change.",
   // sidebar / nav / common
   "nav.dashboard": "Dashboard",
   "uptime.day": "d",

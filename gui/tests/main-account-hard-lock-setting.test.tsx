@@ -271,7 +271,6 @@ function MainCard({ state }: { state: MainAccountHardLockStatus["state"] }) {
   return <CodexAccountPoolMainCard t={useT()} main={mainAccount(state)} isMainActive={false}
     accountModeState="pool" threshold={80} switchActionLabel="Use main" onSwitch={() => {}}
     onTogglePause={() => {}} pauseUpdatingId={null} pauseBusy={false} onPriorityChange={() => {}}
-    quotaAutoRefreshBusy={null} onToggleQuotaAutoRefresh={() => {}}
     priorityUpdatingId={null} switchingId={null} onOpenReset={() => {}} />;
 }
 test.each([

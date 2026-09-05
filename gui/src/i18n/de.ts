@@ -5,6 +5,11 @@ import type { TKey } from "./en";
  * German i18n catalog, generated from en.ts. Must match the `TKey` set (compile-checked).
  */
 export const de: Record<TKey, string> = {
+  "codexAuth.quotaAutoRefreshAllHint": "Schaltet die unterstützten 5-Stunden- und Wochenfenster aller aktuellen Konten gemeinsam um. Im Pool-Modus wird nach jedem Reset eine kleine Anfrage gesendet, die Kontingent verbraucht.",
+  "codexAuth.quotaAutoRefreshMixed": "Einige Fenster sind aktiviert.",
+  "codexAuth.quotaAutoRefreshEmpty": "Keine unterstützten Kontingentfenster. Aktualisieren Sie die Kontingente der Konten.",
+  "codexAuth.quotaAutoRefreshLoadFailed": "Die Aktivierungseinstellungen konnten nicht geladen werden. Bitte erneut versuchen.",
+  "codexAuth.quotaAutoRefreshPartial": "Einige Einstellungen konnten nicht gespeichert werden. Erneut versuchen, um dieselbe Änderung abzuschließen.",
   "nav.dashboard": "Übersicht",
   "uptime.day": "T",
   "uptime.hour": "Std",

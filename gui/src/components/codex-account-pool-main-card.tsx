@@ -7,7 +7,6 @@ import type { CodexAccountEntry } from "./codex-account-pool-types";
 import type { CodexAccountModeState } from "../codex-multi-state";
 import type { TFn } from "../i18n/shared";
 import type { NoticeTone } from "../ui";
-import { CodexQuotaAutoRefreshControls } from "./codex-account-pool-cards";
 import { navigateHash } from "../hash-routing";
 import {
   doctorCopyButtonLabel,
@@ -37,8 +36,6 @@ export function CodexAccountPoolMainCard({
   onOpenReset,
   onCopyDoctor,
   doctorCopyOutcomeFor,
-  quotaAutoRefreshBusy,
-  onToggleQuotaAutoRefresh,
   onManageMainHardLock,
 }: {
   t: TFn;
@@ -64,8 +61,6 @@ export function CodexAccountPoolMainCard({
   onOpenReset: (account: CodexAccountEntry) => void;
   onCopyDoctor?: (accountId: string) => void;
   doctorCopyOutcomeFor?: (accountId: string) => "copied" | "unavailable" | null;
-  quotaAutoRefreshBusy: string | null;
-  onToggleQuotaAutoRefresh: (account: CodexAccountEntry, window: "fiveHour" | "weekly") => void;
   onManageMainHardLock?: () => void;
 }) {
   const mainFallbackLabel = t("codexAuth.codexApp");
@@ -196,13 +191,6 @@ export function CodexAccountPoolMainCard({
               t={t}
               pending={main != null && main.quota == null}
             />
-            {main && (
-              <CodexQuotaAutoRefreshControls
-                account={main}
-                busy={quotaAutoRefreshBusy}
-                onToggle={onToggleQuotaAutoRefresh}
-              />
-            )}
           </>}
     </div>
   );

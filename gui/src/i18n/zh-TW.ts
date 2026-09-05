@@ -2,6 +2,11 @@ import type { TKey } from "./en";
 
 /** Traditional Chinese (Taiwan) UI strings — keys must match `en.ts` 1:1. */
 export const zhTW: Record<TKey, string> = {
+  "codexAuth.quotaAutoRefreshAllHint": "統一切換目前所有帳戶支援的5小時與每週額度視窗。在帳戶池模式下，重設後會傳送消耗少量額度的請求。",
+  "codexAuth.quotaAutoRefreshMixed": "部分視窗已啟用。",
+  "codexAuth.quotaAutoRefreshEmpty": "沒有支援的額度視窗。請重新整理帳戶額度。",
+  "codexAuth.quotaAutoRefreshLoadFailed": "無法載入自動啟用設定。請重試。",
+  "codexAuth.quotaAutoRefreshPartial": "部分設定未能儲存。重試將完成同一項變更。",
   "nav.dashboard": "儀表板",
   "nav.startup": "啟動安全",
   "nav.providers": "供應商",

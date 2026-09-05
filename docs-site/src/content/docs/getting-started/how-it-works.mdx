@@ -40,8 +40,13 @@ account before the request is forwarded upstream. The rule is intentionally spli
 - **Quota and failure signals feed routing.** The dashboard can force a quota refresh with
   `GET /api/codex-auth/accounts?refresh=1`; successful upstream responses capture quota headers,
   429 puts an account in cooldown, and 401/403 marks it for reauthentication.
-- **Idle rolling windows can be activated on time.** Each account card offers default-off 5-hour
-  and weekly switches only for windows that account actually reports. At reset, opencodex reuses
+- **Idle rolling windows can be activated on time.** Under **Advanced settings**, one default-off
+  automatic activation control switches the supported 5-hour and weekly windows for all current
+  main and added accounts together. Mixed settings are shown explicitly; enabling applies only
+  to reported windows, and disabling also clears stale enabled windows. Changes use individual
+  settings writes: a partial failure is shown after reading back the saved state, and **Retry**
+  completes the original enable or disable action. Newly added accounts are not opted in automatically.
+  In Pool mode, at reset, opencodex reuses
   its minimal non-stored account warmup request through the exact account whose window is due,
   coalesces simultaneous windows into one request, and durably persists both reset timestamps to
   prevent duplicate work after restarts. Paused accounts and accounts

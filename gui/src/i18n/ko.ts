@@ -4,6 +4,11 @@ import type { TKey } from "./en";
  * Korean i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const ko: Record<TKey, string> = {
+  "codexAuth.quotaAutoRefreshAllHint": "현재 등록된 모든 계정의 5시간·주간 할당량을 한 번에 켜거나 끕니다. 지원하는 창에만 적용하며, 풀 모드에서 리셋 후 소량의 할당량을 쓰는 요청을 보냅니다.",
+  "codexAuth.quotaAutoRefreshMixed": "일부만 켜져 있습니다.",
+  "codexAuth.quotaAutoRefreshEmpty": "지원하는 할당량 창이 없습니다. 계정 할당량을 새로고침해 주세요.",
+  "codexAuth.quotaAutoRefreshLoadFailed": "자동 활성화 설정을 불러오지 못했습니다. 다시 시도해 주세요.",
+  "codexAuth.quotaAutoRefreshPartial": "일부 설정을 저장하지 못했습니다. 다시 시도하면 같은 작업을 마저 적용합니다.",
   // sidebar / nav / common
   "nav.dashboard": "대시보드",
   "uptime.day": "일",

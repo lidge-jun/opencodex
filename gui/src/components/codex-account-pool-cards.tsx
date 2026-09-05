@@ -39,8 +39,6 @@ export function CodexAccountPoolCards({
   onRemove,
   onCopyDoctor,
   doctorCopyOutcomeFor,
-  quotaAutoRefreshBusy,
-  onToggleQuotaAutoRefresh,
 }: {
   pool: CodexAccountEntry[];
   activeId: string | null;
@@ -68,8 +66,6 @@ export function CodexAccountPoolCards({
   onRemove: (id: string) => void;
   onCopyDoctor?: (accountId: string) => void;
   doctorCopyOutcomeFor?: (accountId: string) => "copied" | "unavailable" | null;
-  quotaAutoRefreshBusy: string | null;
-  onToggleQuotaAutoRefresh: (account: CodexAccountEntry, window: "fiveHour" | "weekly") => void;
 }) {
   const t = useT();
   const isNext = (account: CodexAccountEntry) => !account.paused && activeId === account.id;
@@ -207,55 +203,11 @@ export function CodexAccountPoolCards({
                   t={t}
                   pending={a.quota == null}
                 />
-                <CodexQuotaAutoRefreshControls
-                  account={a}
-                  busy={quotaAutoRefreshBusy}
-                  onToggle={onToggleQuotaAutoRefresh}
-                />
               </>}
         </div>
         );
       })}
     </>
-  );
-}
-
-export function CodexQuotaAutoRefreshControls({
-  account,
-  busy,
-  onToggle,
-}: {
-  account: CodexAccountEntry;
-  busy: string | null;
-  onToggle: (account: CodexAccountEntry, window: "fiveHour" | "weekly") => void;
-}) {
-  const t = useT();
-  const setting = account.quotaAutoRefresh;
-  if (!setting?.fiveHourAvailable && !setting?.weeklyAvailable) return null;
-  const control = (window: "fiveHour" | "weekly", enabled: boolean) => (
-    <span className="codex-quota-auto-refresh__window">
-      <span>{t(window === "fiveHour" ? "codexAuth.fiveHour" : "codexAuth.weekly")}</span>
-      <button
-        type="button"
-        className={`toggle ${enabled ? "on" : ""}`}
-        onClick={() => onToggle(account, window)}
-        disabled={busy !== null}
-        aria-pressed={enabled}
-        aria-label={`${t("codexAuth.quotaAutoRefresh")} — ${t(window === "fiveHour" ? "codexAuth.fiveHour" : "codexAuth.weekly")}`}
-        title={t("codexAuth.quotaAutoRefreshHint")}
-      >
-        <span className="toggle-knob" />
-      </button>
-    </span>
-  );
-  return (
-    <div className="codex-quota-auto-refresh">
-      <span className="codex-quota-auto-refresh__label" title={t("codexAuth.quotaAutoRefreshHint")}>
-        {t("codexAuth.quotaAutoRefresh")}
-      </span>
-      {setting.fiveHourAvailable && control("fiveHour", setting.fiveHourEnabled)}
-      {setting.weeklyAvailable && control("weekly", setting.weeklyEnabled)}
-    </div>
   );
 }
 

@@ -5,6 +5,11 @@ import type { TKey } from "./en";
  * Turkish i18n catalog. Must match the `TKey` set (compile-checked).
  */
 export const tr: Record<TKey, string> = {
+  "codexAuth.quotaAutoRefreshAllHint": "Mevcut tüm hesapların desteklenen 5 saatlik ve haftalık pencerelerini birlikte açıp kapatır. Havuz modunda her sıfırlamadan sonra az miktarda kota kullanan bir istek gönderilir.",
+  "codexAuth.quotaAutoRefreshMixed": "Bazı pencereler etkin.",
+  "codexAuth.quotaAutoRefreshEmpty": "Desteklenen kota penceresi yok. Hesap kotalarını yenileyin.",
+  "codexAuth.quotaAutoRefreshLoadFailed": "Etkinleştirme ayarları yüklenemedi. Yeniden deneyin.",
+  "codexAuth.quotaAutoRefreshPartial": "Bazı ayarlar kaydedilemedi. Aynı değişikliği tamamlamak için yeniden deneyin.",
   // sidebar / nav / common
   "nav.dashboard": "Gösterge Paneli",
   "uptime.day": " gün",

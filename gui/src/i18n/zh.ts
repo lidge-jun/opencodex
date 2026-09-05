@@ -4,6 +4,11 @@ import type { TKey } from "./en";
  * Chinese i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const zh: Record<TKey, string> = {
+  "codexAuth.quotaAutoRefreshAllHint": "统一开关当前所有账户支持的5小时和每周额度窗口。在账户池模式下，重置后会发送消耗少量额度的请求。",
+  "codexAuth.quotaAutoRefreshMixed": "部分窗口已启用。",
+  "codexAuth.quotaAutoRefreshEmpty": "没有支持的额度窗口。请刷新账户额度。",
+  "codexAuth.quotaAutoRefreshLoadFailed": "无法加载自动激活设置。请重试。",
+  "codexAuth.quotaAutoRefreshPartial": "部分设置未能保存。重试将完成同一项更改。",
   // sidebar / nav / common
   "nav.dashboard": "仪表盘",
   "uptime.day": "天",

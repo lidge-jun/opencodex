@@ -84,6 +84,12 @@ completion markers nor retry delay; quota reads remain available. Main refresh c
 shared credential ownership, then prepared credentials and restrictions are rechecked. Lifecycle
 cleanup uses the dependency-free quota-auto-refresh state leaf, avoiding a reconciliation cycle.
 
+The account-pool dashboard exposes one bulk control under Advanced settings, not per-card
+rows. It applies both reported 5-hour and weekly windows to every current main/added account;
+new accounts do not inherit opt-in. The existing granular settings API remains authoritative.
+UI writes are serialized, followed by a settings read; partial failures preserve the intended
+ON/OFF action for explicit retry. OFF also clears unavailable windows with stale enabled flags.
+
 Exact `gpt-reserve` has a separate process-local quota scope. Only global/default and shared
 ordinary scopes can receive a generic quota-recovery claim; ordinary success cannot clear Reserve.
 Effective Desktop authless compatibility adds only configured main-selector Reserve catalog rows,
