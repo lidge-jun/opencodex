@@ -511,15 +511,19 @@ describe("combo failure policy and advancement", () => {
     expect(comboFailureDecision(413, "request too large")).toBe("stop");
   });
 
-  test("provider-scoped free-tier and monthly quota failures hop without weakening generic 400 handling", () => {
+  test("free-tier and monthly quota failures hop with the right scope, without weakening generic 400 handling", () => {
     const orca = JSON.stringify({ error: {
       type: "invalid_request_error",
       code: "free_rate_limited",
       message: "This prompt is longer than the free tier allows for a single request.",
     }});
     expect(comboFailureDecision(400, orca, { code: "free_rate_limited" })).toBe("hop");
-    expect(comboFailureCooldownScope(400, orca, { code: "free_rate_limited" })).toBe("provider");
+    // `free_rate_limited` is a PER-REQUEST cap ("longer than the free tier allows for a single
+    // request"), so it must not cool the provider for every other combo: a shorter prompt would
+    // still have been served. It keeps its hop verdict but records no cooldown evidence.
+    expect(comboFailureCooldownScope(400, orca, { code: "free_rate_limited" })).toBe("none");
     expect(comboFailureDecision(400, "ordinary invalid request", { code: "invalid_request_error" })).toBe("stop");
+    // The account-window quota cap is genuine provider-wide evidence and keeps its scope.
     expect(comboFailureCooldownScope(429, "Monthly usage limit reached. Resets in 14 days.", {
       code: "GoUsageLimitError",
     })).toBe("provider");

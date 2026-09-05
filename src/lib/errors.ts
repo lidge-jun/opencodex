@@ -359,6 +359,11 @@ export function inferHttpStatusFromAdapterMessage(message: string): number {
   // the message matched "unavailable" and returned a retryable 503, so clients kept retrying
   // a rejection that can never succeed.
   if (lower.includes("failed_precondition") || lower.includes("failed precondition")) return 400;
+  // Bytes the upstream itself produced and then mangled are a provider protocol failure, not a
+  // malformed client request. This must sit ahead of the generic "malformed" -> 400 branch so a
+  // combo can fail over instead of returning a terminal 4xx the caller cannot act on. Scoped to
+  // the "malformed upstream" phrase our adapters emit; plain "malformed" keeps its 400 verdict.
+  if (lower.includes("malformed upstream")) return 502;
   if (
     lower.includes("unavailable") ||
     lower.includes("overloaded") ||

@@ -846,6 +846,7 @@
   "retry-after-429.test.ts": "server",
   "route-decision-trace.test.ts": "server",
   "route-explainability.test.ts": "cli",
+  "router-combo-failover-classification.test.ts": "routing",
   "router-discarded-baseurl-warning.test.ts": "routing",
   "router-template-baseurl.test.ts": "routing",
   "router.test.ts": "routing",
