@@ -312,12 +312,15 @@ başlığından Cursor OAuth/erişim belirteci.
 
 **Hedefler:** **Azure OpenAI**. `openai-responses`'ı sarar (bu nedenle
 `passthrough: true`).
-**Kimlik Doğrulama:** `api-key` başlığı aracılığıyla `key` (Bearer değil).
+**Kimlik Doğrulama:** `apiKey` ayarlanmışsa `api-key` başlığı aracılığıyla `key` kullanılır.
+Ayarlanmadığında adaptör `DefaultAzureCredential` üzerinden Microsoft Entra ID kullanır ve
+`Authorization: Bearer` gönderir.
 
-- İstek oluşturmayı Responses doğrudan geçişine devreder, `baseUrl`'in
-  çözümlenmemiş şablon yer tutucusu içermediğini doğrular ve `Authorization`'ı
-  `api-key` ile değiştirir. Yapılandırılan URL doğrudan Azure'un v1 Responses
-  API'sini hedefler, bu nedenle adaptör `api-version` eklemez.
+- İstek oluşturmayı Responses doğrudan geçişine devreder ve `baseUrl`'in
+  çözümlenmemiş şablon yer tutucusu içermediğini doğrular. API anahtarlı istekler
+  `api-key` kullanır; anahtarsız istekler `DefaultAzureCredential` ile Entra belirteci
+  alır ve `Authorization: Bearer` kullanır. Yapılandırılan URL doğrudan Azure'un v1
+  Responses API'sini hedefler, bu nedenle adaptör `api-version` eklemez.
 
 ## Görsel yardımcıları (`image.ts`)
 
@@ -328,4 +331,3 @@ Vizyon duyarlı adaptörler tarafından kullanılan paylaşılan yardımcılar:
 - `contentPartsToText(content)` — salt metin araç mesajları için içerik
   parçalarını metne düzleştirir (açıklanmayan bir görsel kısa bir `[image]`
   işaretçisi haline gelir, asla belirteç patlatan bir base64 bloğu olmaz).
-

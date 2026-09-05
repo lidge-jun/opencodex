@@ -178,9 +178,10 @@ model discovery の両方に適用されます。
 ## `azure-openai`（別名: `azure`）
 
 **対象:** **Azure OpenAI**。`openai-responses` を包むため、同じく `passthrough: true` です。
-**認証:** `api-key` ヘッダーの `key`（Bearer ではない）。
+**認証:** `apiKey` が設定されている場合は `api-key` ヘッダーの `key`。未設定の場合は
+`DefaultAzureCredential` 経由で Microsoft Entra ID を使い、`Authorization: Bearer` を送信します。
 
-- リクエスト構成は Responses passthrough に任せます。`baseUrl` に未解釈のテンプレート placeholder がないか検証し、`Authorization` を `api-key` に差し替えます。設定 URL が Azure v1 Responses API を直接指すため、`api-version` は追加しません。
+- リクエスト構成は Responses passthrough に任せ、`baseUrl` に未解釈のテンプレート placeholder がないか検証します。API キー使用時は `api-key` を使い、キーがない場合は `DefaultAzureCredential` で Entra トークンを取得して `Authorization: Bearer` を使います。設定 URL が Azure v1 Responses API を直接指すため、`api-version` は追加しません。
 
 ## 画像ユーティリティ（`image.ts`）
 

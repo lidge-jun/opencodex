@@ -197,11 +197,13 @@ Cursor 的 HTTP/1.1 兼容传输：通过 `agent.v1.AgentService/RunSSE` 接收 
 ## `azure-openai`（别名：`azure`）
 
 **目标：** **Azure OpenAI**。封装 `openai-responses`，因此同样是 `passthrough: true`。
-**认证：** 用 `api-key` header 进行 `key` 认证，而非 Bearer。
+**认证：** 配置 `apiKey` 时使用 `api-key` header 进行 `key` 认证。未配置时通过
+`DefaultAzureCredential` 使用 Microsoft Entra ID，并发送 `Authorization: Bearer`。
 
-- 把请求构建交给 Responses passthrough，验证 `baseUrl` 不含未解析的 template placeholder，
-  再用 `api-key` 替换 `Authorization`。配置的 URL 直接指向 Azure v1 Responses API，因此 adapter
-  不会追加 `api-version`。
+- 把请求构建交给 Responses passthrough，验证 `baseUrl` 不含未解析的 template placeholder。
+  API key 请求使用 `api-key`；未配置 key 时通过 `DefaultAzureCredential` 获取 Entra 令牌并使用
+  `Authorization: Bearer`。配置的 URL 直接指向 Azure v1 Responses API，因此 adapter 不会追加
+  `api-version`。
 
 ## 图像工具（`image.ts`）
 

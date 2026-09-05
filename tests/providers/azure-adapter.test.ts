@@ -1,12 +1,24 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import { existsSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createAzureAdapter as createAzureAdapterProduction } from "../../src/adapters/azure";
 import { getConfigPath, loadConfig, readConfigDiagnostics } from "../../src/config";
 import type { OcxParsedRequest, OcxProviderConfig } from "../../src/types";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+
+let requestedScope: string | undefined;
+mock.module("@azure/identity", () => ({
+  DefaultAzureCredential: class {
+    async getToken(scope: string) {
+      requestedScope = scope;
+      return { token: "entra-access-token", expiresOnTimestamp: Date.now() + 3_600_000 };
+    }
+  },
+}));
+
+const { createAzureAdapter: createAzureAdapterProduction } = await import("../../src/adapters/azure");
+const { resolveModelsAuthToken } = await import("../../src/oauth");
 
 const createAzureAdapter = (...args: Parameters<typeof createAzureAdapterProduction>) =>
   withTestTranslatorBudget(createAzureAdapterProduction(...args));
@@ -38,6 +50,16 @@ describe("Azure OpenAI adapter hardening", () => {
     expect(request.headers.Authorization).toBeUndefined();
   });
 
+  test("uses DefaultAzureCredential when no API key is configured", async () => {
+    requestedScope = undefined;
+
+    const request = await createAzureAdapter(provider({ apiKey: undefined })).buildRequest(parsed);
+
+    expect(request.headers.Authorization).toBe("Bearer entra-access-token");
+    expect(request.headers["api-key"]).toBeUndefined();
+    expect(requestedScope).toBe("https://cognitiveservices.azure.com/.default");
+  });
+
   test("lowers the private image_gen namespace on the inherited API-key path", async () => {
     const request = await createAzureAdapter(provider()).buildRequest({
       ...parsed,
@@ -65,10 +87,18 @@ describe("Azure OpenAI adapter hardening", () => {
     ]);
   });
 
-  test("rejects missing and blank API keys", async () => {
+  test("uses Entra ID when the API key is missing or blank", async () => {
     for (const apiKey of [undefined, "", "   "]) {
-      await expect(createAzureAdapter(provider({ apiKey })).buildRequest(parsed))
-        .rejects.toThrow("azure-openai requires a non-empty apiKey");
+      const request = await createAzureAdapter(provider({ apiKey })).buildRequest(parsed);
+      expect(request.headers.Authorization).toBe("Bearer entra-access-token");
+      expect(request.headers["api-key"]).toBeUndefined();
+    }
+  });
+
+  test("uses Entra ID for live model discovery when the API key is missing", async () => {
+    for (const apiKey of [undefined, "", "   "]) {
+      expect(await resolveModelsAuthToken("azure-openai", provider({ apiKey })))
+        .toBe("entra-access-token");
     }
   });
 

@@ -339,10 +339,12 @@ compatibility pair: `agent.v1.AgentService/RunSSE` for server output and
 ## `azure-openai` (alias: `azure`)
 
 **Targets:** **Azure OpenAI**. Wraps `openai-responses` (so also `passthrough: true`).
-**Auth:** `key` via the `api-key` header (not Bearer).
+**Auth:** `key` via the `api-key` header when `apiKey` is configured. When it is omitted, the
+adapter uses Microsoft Entra ID through `DefaultAzureCredential` and sends `Authorization: Bearer`.
 
-- Delegates request building to the Responses passthrough, validates that `baseUrl` contains no
-  unresolved template placeholder, and replaces `Authorization` with `api-key`. The configured URL
+- Delegates request building to the Responses passthrough and validates that `baseUrl` contains no
+  unresolved template placeholder. API-key requests use `api-key`; credentialless requests acquire
+  an Entra token with `DefaultAzureCredential` and use `Authorization: Bearer`. The configured URL
   targets Azure's v1 Responses API directly, so the adapter does not append `api-version`.
 
 ## Image utilities (`image.ts`)

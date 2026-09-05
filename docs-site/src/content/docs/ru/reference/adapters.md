@@ -229,12 +229,14 @@ authorization.
 
 **Назначение:** **Azure OpenAI**. Обёртка над `openai-responses` (поэтому тоже
 `passthrough: true`).
-**Аутентификация:** `key` через заголовок `api-key` (не Bearer).
+**Аутентификация:** `key` через заголовок `api-key`, если задан `apiKey`. Если поле не задано,
+адаптер использует Microsoft Entra ID через `DefaultAzureCredential` и отправляет `Authorization: Bearer`.
 
-- Делегирует построение запроса passthrough-адаптеру Responses, проверяет, что `baseUrl` не
-  содержит неразрешённых плейсхолдеров шаблона, и заменяет `Authorization` на `api-key`.
-  Настроенный URL указывает напрямую на Azure v1 Responses API, поэтому адаптер не добавляет
-  `api-version`.
+- Делегирует построение запроса passthrough-адаптеру Responses и проверяет, что `baseUrl` не
+  содержит неразрешённых плейсхолдеров шаблона. Запросы с API-ключом используют `api-key`, а
+  запросы без ключа получают токен Entra через `DefaultAzureCredential` и используют
+  `Authorization: Bearer`. Настроенный URL указывает напрямую на Azure v1 Responses API, поэтому
+  адаптер не добавляет `api-version`.
 
 ## Утилиты для изображений (`image.ts`)
 
