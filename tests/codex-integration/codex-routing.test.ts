@@ -169,10 +169,10 @@ describe("codex routing", () => {
     // aged by its RESET can still be aged by its OBSERVATION time, and a 100% window observed
     // seconds ago is a measured refusal rather than an optimistic guess.
     const now = 1_700_000_000_000;
-    expect(computeCodexUsageScore({ shortPercent: 100, updatedAt: now }, undefined, now)).toBe(100);
-    expect(computeCodexUsageScore({ shortPercent: 100, updatedAt: now - 60_000 }, undefined, now)).toBe(100);
+    expect(computeCodexUsageScore({ shortPercent: 100, shortObservedAt: now }, undefined, now)).toBe(100);
+    expect(computeCodexUsageScore({ shortPercent: 100, shortObservedAt: now - 60_000 }, undefined, now)).toBe(100);
     // Still narrow in the other axis: a non-terminal fresh reading is unaffected.
-    expect(computeCodexUsageScore({ shortPercent: 99, updatedAt: now }, undefined, now))
+    expect(computeCodexUsageScore({ shortPercent: 99, shortObservedAt: now }, undefined, now))
       .toBe(CODEX_UNKNOWN_USAGE_SCORE);
   });
 
@@ -182,13 +182,41 @@ describe("codex routing", () => {
     // observation old enough to have outlived a five-hour window must fall back to unknown -
     // otherwise a recovered account is excluded until someone reads the pool by hand.
     const now = 1_700_000_000_000;
-    expect(computeCodexUsageScore({ shortPercent: 100, updatedAt: now - 6 * 60_000 }, undefined, now))
+    expect(computeCodexUsageScore({ shortPercent: 100, shortObservedAt: now - 6 * 60_000 }, undefined, now))
       .toBe(CODEX_UNKNOWN_USAGE_SCORE);
-    expect(computeCodexUsageScore({ shortPercent: 100, updatedAt: now - 5 * 60 * 60_000 }, undefined, now))
+    expect(computeCodexUsageScore({ shortPercent: 100, shortObservedAt: now - 5 * 60 * 60_000 }, undefined, now))
       .toBe(CODEX_UNKNOWN_USAGE_SCORE);
     // A future-dated observation is not evidence of freshness either.
-    expect(computeCodexUsageScore({ shortPercent: 100, updatedAt: Number.NaN }, undefined, now))
+    expect(computeCodexUsageScore({ shortPercent: 100, shortObservedAt: now + 1 }, undefined, now))
       .toBe(CODEX_UNKNOWN_USAGE_SCORE);
+    expect(computeCodexUsageScore({ shortPercent: 100, shortObservedAt: Number.NaN }, undefined, now))
+      .toBe(CODEX_UNKNOWN_USAGE_SCORE);
+  });
+
+  test("partial updates preserve short-window observation age instead of renewing it", () => {
+    const originalNow = Date.now;
+    let now = 1_700_000_000_000;
+    Date.now = () => now;
+    try {
+      setAccountQuotaFromParsed("a", { shortPercent: 100 });
+      const observedAt = now;
+      expect(getAccountQuota("a")?.shortObservedAt).toBe(observedAt);
+      now += 6 * 60_000;
+      setAccountQuotaFromParsed("a", { resetCredits: 3 });
+      expect(getAccountQuota("a")?.updatedAt).toBe(now);
+      expect(getAccountQuota("a")?.shortObservedAt).toBe(observedAt);
+      expect(computeCodexUsageScore(getAccountQuota("a"), undefined, now)).toBe(CODEX_UNKNOWN_USAGE_SCORE);
+      updateAccountQuota("a", 25);
+      expect(getAccountQuota("a")?.shortObservedAt).toBe(observedAt);
+      setAccountQuotaFromParsed("a", { weeklyPercent: 30 });
+      expect(getAccountQuota("a")?.shortObservedAt).toBe(observedAt);
+      setAccountQuotaFromParsed("a", { shortPercent: 80 });
+      expect(getAccountQuota("a")?.shortObservedAt).toBe(now);
+      setAccountQuotaFromParsed("a", { shortResetAt: now + 60_000 });
+      expect(getAccountQuota("a")?.shortObservedAt).toBeUndefined();
+    } finally {
+      Date.now = originalNow;
+    }
   });
 
   test("a terminal burst window is read in either unit (#3029)", () => {
@@ -246,8 +274,8 @@ describe("codex routing", () => {
     // and 502 is transient so it produces no quota signal to correct the selection. The
     // exclusion therefore has to come from the snapshot itself. B carries known headroom, so
     // an unknown-scoring A would be kept and this assertion fails on the unfixed scorer.
-    const now = Date.now();
     setAccountQuotaFromParsed("a", { shortPercent: 100 });
+    const now = Date.now();
     updateAccountQuota("b", 3);
     const config = makeConfig({ activeCodexAccountId: "a" });
     expect(resolveCodexAccountForThread("thread-storm-new", config, now)).toBe("b");
@@ -263,7 +291,7 @@ describe("codex routing", () => {
     expect(resolveCodexAccountForThread("thread-storm-bound", bound, now)).toBe("a");
     clearAccountQuota("a");
     setAccountQuotaFromParsed("a", { shortPercent: 100 });
-    expect(resolveCodexAccountForThread("thread-storm-bound", bound, now)).toBe("b");
+    expect(resolveCodexAccountForThread("thread-storm-bound", bound, Date.now())).toBe("b");
   });
 
   test("a bare 502 is still classified transient (#3425)", () => {

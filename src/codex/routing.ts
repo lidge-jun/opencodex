@@ -373,7 +373,7 @@ export function computeCodexUsageScore(quota: {
   monthlyPercent?: number;
   shortPercent?: number;
   shortResetAt?: number;
-  updatedAt?: number;
+  shortObservedAt?: number;
 } | null, plan?: unknown, now: number = Date.now()): number {
   if (!quota) return CODEX_UNKNOWN_USAGE_SCORE;
   const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
@@ -414,26 +414,22 @@ export function computeCodexUsageScore(quota: {
  * fails one request, while a wrongly-excluded one is invisible until someone reads the pool
  * by hand.
  *
- * That last paragraph held only while observation time was unavailable here (#3425). A
- * reading with no reset timestamp cannot be aged BY ITS RESET, but it can be aged by WHEN IT
- * WAS OBSERVED, and `StoredAccountQuota.updatedAt` already carries that. A 100% window
- * observed seconds ago is a measured refusal, not an unaged guess: leaving it selectable is
- * what wedged a pool on 118 consecutive 502s over 23 minutes while another account sat at 3%,
- * because 502 is transient and produced no quota signal to correct the choice. Freshness keeps
- * both directions of #3029 safe - a stale reading still falls back to unknown, so a recovered
- * account is never stranded.
+ * A missing reset can instead be aged by shortObservedAt (#3425). General updatedAt is not
+ * sufficient: credit-only updates preserve the old short tuple but advance that timestamp.
+ * Old disk snapshots without short-window provenance remain unknown.
  */
 function isTerminalShortWindow(
-  quota: { shortPercent?: number; shortResetAt?: number; updatedAt?: number },
+  quota: { shortPercent?: number; shortResetAt?: number; shortObservedAt?: number },
   now: number,
 ): boolean {
   if (typeof quota.shortPercent !== "number" || !Number.isFinite(quota.shortPercent)) return false;
   if (quota.shortPercent < CODEX_EXHAUSTED_USAGE_PERCENT) return false;
   const resetAt = quota.shortResetAt;
   if (typeof resetAt !== "number" || !Number.isFinite(resetAt) || resetAt <= 0) {
-    const observedAt = quota.updatedAt;
+    const observedAt = quota.shortObservedAt;
     if (typeof observedAt !== "number" || !Number.isFinite(observedAt)) return false;
-    return now - observedAt <= TERMINAL_SHORT_WINDOW_FRESHNESS_MS;
+    const age = now - observedAt;
+    return age >= 0 && age <= TERMINAL_SHORT_WINDOW_FRESHNESS_MS;
   }
   // Both units reach storage: `normalizeResetAt` does not scale, and the GUI disambiguates
   // by magnitude at read time. A comparison written against one assumption is off by 1000x

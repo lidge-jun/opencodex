@@ -22,6 +22,8 @@ export type StoredAccountQuota = {
    */
   shortPercent?: number;
   shortResetAt?: number;
+  /** Local observation time of shortPercent; unrelated quota/credit updates never refresh it. */
+  shortObservedAt?: number;
   shortWindowSeconds?: number;
   customWindows?: Array<{ label: string; percent: number; resetAt?: number }>;
   resetCredits?: number;
@@ -288,6 +290,7 @@ export function setAccountQuotaFromParsed(
     if (existing?.monthlyResetAt !== undefined) next.monthlyResetAt = existing.monthlyResetAt;
     if (existing?.monthlyIsPrimaryWindow === true) next.monthlyIsPrimaryWindow = true;
     if (existing?.shortPercent !== undefined) next.shortPercent = existing.shortPercent;
+    if (existing?.shortObservedAt !== undefined) next.shortObservedAt = existing.shortObservedAt;
     if (existing?.shortResetAt !== undefined) next.shortResetAt = existing.shortResetAt;
     if (existing?.shortWindowSeconds !== undefined) next.shortWindowSeconds = existing.shortWindowSeconds;
     if (existing?.customWindows !== undefined) next.customWindows = existing.customWindows;
@@ -323,13 +326,17 @@ export function setAccountQuotaFromParsed(
   }
 
   if (snapshotHasShort(quota)) {
-    if (quota.shortPercent !== undefined) next.shortPercent = quota.shortPercent;
+    if (quota.shortPercent !== undefined) {
+      next.shortPercent = quota.shortPercent;
+      if (Number.isFinite(quota.shortPercent)) next.shortObservedAt = next.updatedAt;
+    }
     if (quota.shortResetAt !== undefined) next.shortResetAt = quota.shortResetAt;
     if (quota.shortWindowSeconds !== undefined) next.shortWindowSeconds = quota.shortWindowSeconds;
   } else {
     // Header and reset-credit updates are partial snapshots. Preserve the last full WHAM
     // burst tuple when those updates do not carry enough window metadata to replace it.
     if (existing?.shortPercent !== undefined) next.shortPercent = existing.shortPercent;
+    if (existing?.shortObservedAt !== undefined) next.shortObservedAt = existing.shortObservedAt;
     if (existing?.shortResetAt !== undefined) next.shortResetAt = existing.shortResetAt;
     if (existing?.shortWindowSeconds !== undefined) next.shortWindowSeconds = existing.shortWindowSeconds;
   }
@@ -511,6 +518,7 @@ export function updateAccountQuota(
     ...(existing?.weeklyResetAt !== undefined ? { weeklyResetAt: existing.weeklyResetAt } : {}),
     ...(existing?.monthlyResetAt !== undefined ? { monthlyResetAt: existing.monthlyResetAt } : {}),
     ...(existing?.shortPercent !== undefined ? { shortPercent: existing.shortPercent } : {}),
+    ...(existing?.shortObservedAt !== undefined ? { shortObservedAt: existing.shortObservedAt } : {}),
     ...(existing?.shortResetAt !== undefined ? { shortResetAt: existing.shortResetAt } : {}),
     ...(existing?.shortWindowSeconds !== undefined ? { shortWindowSeconds: existing.shortWindowSeconds } : {}),
     ...(existing?.customWindows !== undefined ? { customWindows: existing.customWindows } : {}),
