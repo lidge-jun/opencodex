@@ -315,6 +315,8 @@ export function deriveEntry(
   contextCap?: NativeContextLimitsInput,
 ): RawEntry {
   const preserveExact = isExactComboCatalogModel(model, exactComboSlugs);
+  // Go exposes model-specific upstream enums; synthetic tiers mislead subagent overrides.
+  const preserveExactReasoning = preserveExact || model?.provider === "opencode-go";
   const codexForwardNativeCapabilityAlias = model?.codexForwardNativeCapabilityAlias === true
     ? upstreamNativeEntry(model.id)
     : null;
@@ -359,7 +361,7 @@ export function deriveEntry(
         e,
         model?.reasoningEfforts,
         model?.defaultReasoningEffort,
-        preserveExact || codexForwardNativeCapabilityAlias !== null,
+        preserveExactReasoning || codexForwardNativeCapabilityAlias !== null,
       );
       // This exact provider/model pair is the ChatGPT/Codex forward surface. Keep the pinned
       // native tool/search/responses-lite contract while preserving the routed slug and wire id.
@@ -409,7 +411,7 @@ export function deriveEntry(
   };
   if (isRouted) {
     applyRoutedCodexToolMode(entry, model?.codexToolMode);
-    applyReasoningLevels(entry, model?.reasoningEfforts, model?.defaultReasoningEffort, preserveExact);
+    applyReasoningLevels(entry, model?.reasoningEfforts, model?.defaultReasoningEffort, preserveExactReasoning);
   }
   else {
     applyReasoningLevels(entry, isGpt56NativeSlug(slug) ? undefined : ["low", "medium", "high", "xhigh"]);
@@ -518,7 +520,7 @@ export function buildCatalogEntriesFromObservedState({
   // before. The spawn_agent candidate window is derived separately from SPAWN_PRIORITY_FIELD, so
   // this display reorder cannot change which rows are spawn candidates.
   const pickerOrder = Array.isArray(modelPickerOrder)
-    ? modelPickerOrder.filter((id): id is string => typeof id === "string" && id.length > 0)
+    ? modelPickerOrder.filter((id): id is string => typeof id === "string" && id.trim().length > 0)
     : [];
   const pickerOrderRank = new Map(pickerOrder.map((slug, i) => [slug, i] as const));
   const pickerOrderActive = pickerOrder.length > 0;
@@ -779,12 +781,33 @@ export const CANONICAL_NATIVE_CATALOG_CONTENT_POLICY: Readonly<
   unsupportedNativeEntries: "drop",
 });
 
+/** Preserve exact-id precedence while accepting the existing raw/encoded slug spellings. */
+function modelPickerRank(order: readonly string[]): (slug: string) => number | undefined {
+  const exact = new Map(order.map((slug, index) => [slug, index]));
+  const equivalent = new Map(order.map((slug, index) => [slugEquivalenceKey(slug), index]));
+  return slug => exact.get(slug) ?? equivalent.get(slugEquivalenceKey(slug));
+}
+
+/** A picker order containing native ids orders the whole list, without changing spawn ranks. */
+export function applyFullModelPickerOrder(entries: RawEntry[], order: readonly string[]): void {
+  const pickerOrder = order.filter(slug => slug.trim().length > 0);
+  if (!pickerOrder.some(slug => !slug.includes("/"))) return;
+  const rankOf = modelPickerRank(pickerOrder);
+  for (const entry of entries) {
+    const natural = entry[SPAWN_PRIORITY_FIELD] ?? entry.priority ?? 9;
+    entry[SPAWN_PRIORITY_FIELD] = natural;
+    entry.priority = rankOf(String(entry.slug)) ?? pickerOrder.length + Number(natural);
+  }
+}
+
 export interface ObservedCatalogMergeInput {
   readonly catalogModels: readonly RawEntry[];
   readonly baselineCatalogModels: readonly RawEntry[];
   readonly routedEntries: readonly RawEntry[];
   readonly baseline: ReadonlyMap<string, number>;
   readonly featured: readonly string[];
+  readonly modelPickerOrder?: readonly string[];
+  readonly accountSelectors?: readonly string[];
   readonly wsEnabled: boolean;
   readonly template: RawEntry | null;
   readonly disabledModels: ReadonlySet<string>;
@@ -817,6 +840,8 @@ export function mergeCatalogEntriesFromObservedState({
   routedEntries,
   baseline,
   featured,
+  modelPickerOrder = [],
+  accountSelectors = [],
   wsEnabled,
   template,
   disabledModels,
@@ -975,7 +1000,9 @@ export function mergeCatalogEntriesFromObservedState({
         finished.priority = nativePriority(slug, upstream.priority);
         return finished;
       }
-      const preserved = normalizeServiceTiers({ ...m, priority: nativePriority(slug, m.priority) });
+      const preserved = normalizeServiceTiers({ ...m, priority: nativePriority(slug, m[SPAWN_PRIORITY_FIELD] ?? m.priority) });
+      // Recompute spawn rank from current featured models, not a prior picker override.
+      delete preserved[SPAWN_PRIORITY_FIELD];
       // Older natives kept from disk still need the mock top tiers (max + ultra always
       // for subagent max spawns; wire-clamped to the model's real top rung).
       if (!isGpt56NativeSlug(slug) && slug !== NATIVE_RESERVE_MODEL) ensureUltraReasoningLevel(preserved);
@@ -1060,6 +1087,32 @@ export function mergeCatalogEntriesFromObservedState({
     // remain outside provider ownership and survive unless a fresh row replaces their exact slug.
     return !isOcxAuthoredRoutedEntry(entry);
   });
+  // Retained rows bypass the builder. Recompute managed spawn ranks from current config
+  // before either display-order mode; a saved display override is not current roster authority.
+  const pickerOrder = modelPickerOrder.filter(slug => slug.trim().length > 0);
+  const fullPickerOrder = pickerOrder.some(slug => !slug.includes("/"));
+  const rankOf = modelPickerRank(pickerOrder);
+  const featuredRankOf = modelPickerRank(featured);
+  const priorityStride = Math.max(accountSelectors.length, 1);
+  for (const entry of preservedRoutedEntries) {
+    const natural = entry[SPAWN_PRIORITY_FIELD];
+    if (typeof natural === "number") {
+      entry.priority = natural;
+      delete entry[SPAWN_PRIORITY_FIELD];
+    }
+    const slug = String(entry.slug);
+    if (!isOcxAuthoredRoutedEntry(entry) || isNativeAliasCatalogEntry(entry)) continue;
+    const featuredRank = featuredRankOf(slug);
+    entry.priority = featuredRank !== undefined
+      ? featuredRank * priorityStride
+      : (accountSelectors.length > 0 ? 1_000 : 0) + 5;
+    if (featuredRank !== undefined || fullPickerOrder) continue;
+    const pickerIndex = rankOf(slug);
+    if (pickerIndex !== undefined) {
+      entry[SPAWN_PRIORITY_FIELD] = entry.priority;
+      entry.priority = PICKER_ORDER_PRIORITY_BASE + pickerIndex * priorityStride;
+    }
+  }
   let finalRoutedEntries = [...admittedRoutedEntries, ...preservedRoutedEntries];
   finalRoutedEntries = finalRoutedEntries.filter(entry => {
     const slug = typeof entry.slug === "string" ? entry.slug : "";
@@ -1134,7 +1187,7 @@ export function mergeCatalogEntriesFromObservedState({
     // Mock-max universality (260709): preserved routed entries from disk may predate
     // the max rung — ensure it here so subagent max spawns validate on every
     // reasoning-capable entry. max only: 5.6 exact ladders (luna: no ultra) stay intact.
-    if (!exactCombo && !reserveProjection) {
+    if (!exactCombo && !reserveProjection && !String(e.slug ?? "").startsWith("opencode-go/")) {
       const levels = Array.isArray(e.supported_reasoning_levels)
         ? e.supported_reasoning_levels as Array<{ effort?: string }>
         : [];
@@ -1161,6 +1214,7 @@ export function mergeCatalogEntriesFromObservedState({
     multiAgentV2Enabled,
     { keepNativeChatGptOnV1, preserveDefaultMultiAgentVersion: isReserveCatalogProjection },
   );
+  applyFullModelPickerOrder(versionedEntries, modelPickerOrder);
   for (const entry of versionedEntries) {
     const kind = entry.opencodex_catalog_kind;
     if (trustedAccountBoundNativeCatalogSlug(entry) === undefined
@@ -1762,6 +1816,8 @@ function writeRetainedCatalogSync({
     }).filter(entry => trustedAccountBoundNativeCatalogSlug(entry) !== undefined)
     : [];
   catalog.models = mergeCatalogEntriesFromObservedState({
+    modelPickerOrder,
+    accountSelectors,
     catalogModels: catalogModelsForMerge,
     baselineCatalogModels: baselineCatalog?.models ?? [],
     routedEntries: goEntries,
