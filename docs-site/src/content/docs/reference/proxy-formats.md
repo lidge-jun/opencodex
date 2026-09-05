@@ -62,6 +62,12 @@ and custom-tool arguments, Anthropic `tool_use` input, shell/computer actions, a
 payloads deliberately remain placeholders; the proxy never turns model-controlled executable
 output into an original secret.
 
+For SSE and client-facing Responses WebSocket streams, any block that actually restores an issued
+placeholder starts a bounded terminal gate. OpenCodex retains masked and restored variants up to a
+combined 2 MiB / 4096 blocks, releases restored output only after the protocol's successful terminal
+event, and releases masked output on failure, malformed data, premature EOF, or capacity fallback.
+Blocks before the first restoration and streams without restored placeholders are relayed normally.
+
 Responses continuation mapping is in memory for at most one hour and requires the same non-empty
 continuation lane and admission identity with `previous_response_id`. The lane is derived from
 `x-codex-parent-thread-id`, `thread-id`, or `session_id`/`session-id`; a parent and a more specific

@@ -200,6 +200,15 @@ output stays masked, including function-call arguments, custom-tool input, Anthr
 input, shell/computer actions, and tool-search payloads. This is deliberate: an upstream model must
 not be able to turn a placeholder into a locally executable copy of the original secret.
 
+Streaming restoration is terminal-gated for HTTP/SSE and client-facing WebSocket responses. A
+stream passes through normally until Guardrails actually restores an issued placeholder. From that
+block onward, opencodex retains both the masked and restored forms within a combined 2 MiB / 4096
+block limit. It releases the restored form only after `response.completed` (Responses), `[DONE]`
+(Chat Completions), or `message_stop` (Anthropic Messages). A failed or incomplete terminal,
+malformed event, premature EOF, or staging-capacity failure releases the retained masked form and
+continues fail-closed. Streams that never restore a placeholder keep their normal incremental
+delivery.
+
 Response restoration is fail-safe and bounded. If a successful response cannot be classified as
 JSON or SSE, contains malformed JSON/UTF-8, or exceeds the 32 MiB JSON output limit, opencodex
 returns it with placeholders still masked and records a metadata-only demask warning. It never

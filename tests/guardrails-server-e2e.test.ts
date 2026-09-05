@@ -94,6 +94,68 @@ test("Guardrails masks upstream input and restores a real proxy JSON response", 
   }
 });
 
+test("Guardrails keeps a real client-facing SSE stream masked after a late failure", async () => {
+  const secret = "sk_live_abcdefghijklmnopqrstuvwx";
+  let upstreamBody = "";
+  let proxy: ReturnType<typeof startServer> | null = null;
+  const upstream = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      upstreamBody = await request.text();
+      return new Response([
+        "event: response.output_text.delta\n",
+        `data: ${JSON.stringify({
+          type: "response.output_text.delta",
+          item_id: "message-late-failure",
+          output_index: 0,
+          content_index: 0,
+          delta: "<STRIPE_ACCESS_TOKEN_1>",
+        })}\n\n`,
+        "event: response.failed\n",
+        `data: ${JSON.stringify({
+          type: "response.failed",
+          response: { id: "response-late-failure", status: "failed" },
+        })}\n\n`,
+      ].join(""), { headers: { "content-type": "text/event-stream" } });
+    },
+  });
+  try {
+    saveConfig({
+      port: 0,
+      defaultProvider: "mock",
+      providers: {
+        mock: {
+          adapter: "openai-responses",
+          authMode: "key",
+          apiKey: "test-only-key",
+          baseUrl: upstream.url.toString().replace(/\/$/, ""),
+          responsesPath: "/responses",
+          allowPrivateNetwork: true,
+        },
+      },
+      guardrails: { enabled: true, mode: "enforce", failurePolicy: "block" },
+    } as OcxConfig);
+    proxy = startServer(0);
+    const response = await fetch(new URL("/v1/responses", proxy.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "mock/test-model", input: secret, stream: true }),
+    });
+    const wire = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(upstreamBody).toContain("<STRIPE_ACCESS_TOKEN_1>");
+    expect(upstreamBody).not.toContain(secret);
+    expect(wire).toContain("<STRIPE_ACCESS_TOKEN_1>");
+    expect(wire).toContain("response.failed");
+    expect(wire).not.toContain(secret);
+  } finally {
+    await proxy?.stop(true);
+    upstream.stop(true);
+  }
+});
+
 test("Guardrails detect mode leaves a real Responses request and response unchanged", async () => {
   const secret = "sk_live_abcdefghijklmnopqrstuvwx";
   let upstreamBody = "";
@@ -368,7 +430,17 @@ test("Guardrails never restores secrets into a client-facing WebSocket failure e
         },
       };
       return new Response(
-        `event: response.failed\ndata: ${JSON.stringify(failed)}\n\n`,
+        [
+          "event: response.output_text.delta\n",
+          `data: ${JSON.stringify({
+            type: "response.output_text.delta",
+            item_id: "message-late-failure",
+            output_index: 0,
+            content_index: 0,
+            delta: "<STRIPE_ACCESS_TOKEN_1>",
+          })}\n\n`,
+          `event: response.failed\ndata: ${JSON.stringify(failed)}\n\n`,
+        ].join(""),
         { headers: { "content-type": "text/event-stream" } },
       );
     },

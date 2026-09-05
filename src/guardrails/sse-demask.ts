@@ -10,12 +10,18 @@ import {
   type GuardrailsDemaskSession,
 } from "./placeholders";
 import type { GuardrailsDemaskBudget, GuardrailsPlaceholderState } from "./types";
+import { isGuardrailsFailureEnvelope } from "./response-envelope";
 
 type JsonRecord = Record<string, unknown>;
 
 const MAX_PENDING_STREAM_FIELDS = 128;
 const MAX_PENDING_STREAM_TEXT_LENGTH = 255;
 const MAX_PENDING_STREAM_BYTES = 2 * 1024 * 1024;
+const MAX_DEFERRED_STREAM_BLOCKS = 4_096;
+const MAX_DEFERRED_STREAM_BYTES = 2 * 1024 * 1024;
+
+type StreamProtocol = "anthropic" | "chat" | "responses" | "unknown";
+type TerminalDecision = "failure" | "none" | "success";
 
 export class GuardrailsSseDemaskCapacityError extends Error {
   constructor() {
@@ -37,6 +43,29 @@ interface PendingDelta {
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function payloadProtocol(payload: JsonRecord): StreamProtocol {
+  if (typeof payload.type === "string") {
+    if (payload.type.startsWith("response.")) return "responses";
+    if (payload.type === "error") return "unknown";
+    if (payload.type.startsWith("content_block_") || payload.type.startsWith("message_")) {
+      return "anthropic";
+    }
+  }
+  return Array.isArray(payload.choices) ? "chat" : "unknown";
+}
+
+function terminalDecision(
+  rawPayload: string | null,
+  parsed: JsonRecord | undefined,
+  protocol: StreamProtocol,
+): TerminalDecision {
+  if (rawPayload?.trim() === "[DONE]") return protocol === "chat" ? "success" : "failure";
+  if (!parsed) return rawPayload === null ? "none" : "failure";
+  if (isGuardrailsFailureEnvelope(parsed)) return "failure";
+  if (parsed.type === "response.completed" || parsed.type === "message_stop") return "success";
+  return "none";
 }
 
 function streamKey(type: string, id: unknown, field: PendingDelta["field"]): string {
@@ -222,6 +251,11 @@ export function guardrailsSseDemaskRewrite(
   };
   let pendingBytes = 0;
   let disabled = false;
+  let deferredBytes = 0;
+  let deferredRaw: string[] = [];
+  let deferredRewritten: string[] = [];
+  let holdingRestoredOutput = false;
+  let protocol: StreamProtocol = "unknown";
 
   const pendingEntryBytes = (entry: PendingDelta): number =>
     Buffer.byteLength(entry.block, "utf8") + Buffer.byteLength(entry.text, "utf8");
@@ -235,6 +269,38 @@ export function guardrailsSseDemaskRewrite(
       pending.delete(key);
       pendingBytes = Math.max(0, pendingBytes - pendingEntryBytes(entry));
     }
+    return blocks;
+  };
+
+  const clearPending = (): void => {
+    pending.clear();
+    pendingBytes = 0;
+  };
+
+  const clearDeferred = (): void => {
+    deferredRaw = [];
+    deferredRewritten = [];
+    deferredBytes = 0;
+    holdingRestoredOutput = false;
+  };
+
+  const appendDeferred = (raw: string, rewritten: readonly string[]): boolean => {
+    const nextBlocks = deferredRaw.length + 1;
+    const nextBytes = deferredBytes
+      + Buffer.byteLength(raw, "utf8")
+      + rewritten.reduce((total, block) => total + Buffer.byteLength(block, "utf8"), 0);
+    if (nextBlocks > MAX_DEFERRED_STREAM_BLOCKS || nextBytes > MAX_DEFERRED_STREAM_BYTES) {
+      return false;
+    }
+    deferredRaw.push(raw);
+    deferredRewritten.push(...rewritten);
+    deferredBytes = nextBytes;
+    return true;
+  };
+
+  const releaseDeferred = (restored: boolean): string[] => {
+    const blocks = restored ? deferredRewritten : deferredRaw;
+    clearDeferred();
     return blocks;
   };
 
@@ -334,19 +400,76 @@ export function guardrailsSseDemaskRewrite(
     return finishedKeys ? [...flush(finishedKeys), current] : [current];
   };
   const rewrite: SseBlockRewrite = (block: string): readonly string[] => {
+    if (disabled) return [block];
+    const rawPayload = sseDataPayload(block);
+    let parsed: JsonRecord | undefined;
+    if (rawPayload !== null && rawPayload.trim() !== "[DONE]") {
+      try {
+        const value: unknown = JSON.parse(rawPayload);
+        if (isRecord(value)) parsed = value;
+      } catch {
+        // A malformed block becomes a fail-closed terminal while restored output is held.
+      }
+    }
+    const detectedProtocol = parsed ? payloadProtocol(parsed) : "unknown";
+    if (protocol === "unknown" && detectedProtocol !== "unknown") protocol = detectedProtocol;
+    const terminal = terminalDecision(rawPayload, parsed, protocol);
+    const wasDisabled = disabled;
+    let rewritten: readonly string[];
     try {
-      return processBlock(block);
+      rewritten = processBlock(block);
     } catch (error) {
       if (!(error instanceof GuardrailsDemaskCapacityError || isCapacityError?.(error) === true)) throw error;
       onWarning?.();
       disabled = true;
-      return [...flush(), block];
+      rewritten = [...flush(), block];
     }
+    if (!wasDisabled && disabled) {
+      if (!holdingRestoredOutput) return rewritten;
+      const masked = [...deferredRaw, block];
+      clearDeferred();
+      clearPending();
+      return masked;
+    }
+    if (holdingRestoredOutput) {
+      if (!appendDeferred(block, rewritten)) {
+        onWarning?.();
+        disabled = true;
+        const masked = [...deferredRaw, block];
+        clearDeferred();
+        clearPending();
+        return masked;
+      }
+      if (terminal === "success") return releaseDeferred(true);
+      if (terminal === "failure") {
+        disabled = true;
+        clearPending();
+        return releaseDeferred(false);
+      }
+      return [];
+    }
+    const changed = rewritten.length !== 1 || rewritten[0] !== block;
+    if (!changed || terminal === "success" || terminal === "failure") return rewritten;
+    if (!appendDeferred(block, rewritten)) {
+      onWarning?.();
+      disabled = true;
+      clearPending();
+      return [block];
+    }
+    holdingRestoredOutput = true;
+    return [];
   };
-  rewrite.flush = flush;
+  rewrite.flush = () => {
+    if (holdingRestoredOutput) {
+      const masked = releaseDeferred(false);
+      clearPending();
+      return masked;
+    }
+    return flush();
+  };
   rewrite.dispose = () => {
-    pending.clear();
-    pendingBytes = 0;
+    clearPending();
+    clearDeferred();
   };
   return rewrite;
 }

@@ -59,6 +59,7 @@ import type {
   GuardrailsPlaceholderState,
 } from "./types";
 import type { GuardrailsRuntimeSnapshot, GuardrailsRuntimeSnapshotLease } from "./runtime";
+import { isGuardrailsFailureEnvelope } from "./response-envelope";
 
 export type GuardrailsInboundProtocol = "anthropic" | "chat" | "responses";
 
@@ -734,17 +735,6 @@ function demaskSsePayload(
   }
 }
 
-function isNonSuccessfulResponseEnvelope(value: JsonRecord): boolean {
-  if (value.type === "error"
-    || value.type === "response.failed"
-    || value.type === "response.incomplete") return true;
-  if (value.error !== undefined && value.error !== null) return true;
-  if (value.last_error !== undefined && value.last_error !== null) return true;
-  const response = isRecord(value.response) ? value.response : undefined;
-  return [value.status, response?.status].some(status =>
-    status === "failed" || status === "incomplete" || status === "cancelled");
-}
-
 function demaskKnownResponsePayload(
   value: unknown,
   state: GuardrailsPlaceholderState,
@@ -752,7 +742,7 @@ function demaskKnownResponsePayload(
   depth = 0,
 ): unknown {
   if (!isRecord(value)) return value;
-  if (isNonSuccessfulResponseEnvelope(value)) return value;
+  if (isGuardrailsFailureEnvelope(value)) return value;
   if (depth > MAX_GUARDRAILS_OUTPUT_DEPTH) throw new GuardrailsOutputCapacityError();
   consumeDemaskNodes(traversal);
   let next = value;

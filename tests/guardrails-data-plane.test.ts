@@ -545,6 +545,8 @@ test("Guardrails sniffs mislabeled SSE and demasks split refusal deltas", async 
       'data: {"type":"response.refusal.delta","item_id":"refusal-1","delta":"_TOKEN_1>"}\n\n',
       "event: response.refusal.done\n",
       'data: {"type":"response.refusal.done","item_id":"refusal-1","refusal":"<STRIPE_ACCESS_TOKEN_1>"}\n\n',
+      "event: response.completed\n",
+      'data: {"type":"response.completed","response":{"id":"response-refusal","status":"completed","output":[]}}\n\n',
     ].join(""), { headers: { "content-type": "application/json" } }),
     prepared.turn,
     budget,
@@ -601,7 +603,7 @@ test("Guardrails classifies an open SSE stream without waiting for EOF or the pr
     start(controller) {
       sourceController = controller;
       controller.enqueue(encoder.encode(
-        'data: {"type":"response.output_text.delta","delta":"<STRIPE_ACCESS_TOKEN_1>"}\n\n',
+        'data: {"type":"response.output_text.delta","delta":"ordinary text"}\n\n',
       ));
     },
   });
@@ -619,7 +621,7 @@ test("Guardrails classifies an open SSE stream without waiting for EOF or the pr
   const first = await reader.read();
 
   expect(elapsedMs).toBeLessThan(500);
-  expect(new TextDecoder().decode(first.value)).toContain(secret);
+  expect(new TextDecoder().decode(first.value)).toContain("ordinary text");
   await reader.cancel();
   budget.dispose();
 });
@@ -644,7 +646,10 @@ test("Guardrails returns declared SSE headers before a delayed first event", asy
   );
   const elapsedMs = performance.now() - startedAt;
   sourceController.enqueue(encoder.encode(
-    'data: {"type":"response.output_text.delta","delta":"<STRIPE_ACCESS_TOKEN_1>"}\n\n',
+    [
+      'data: {"type":"response.output_text.delta","delta":"<STRIPE_ACCESS_TOKEN_1>"}\n\n',
+      'data: {"type":"response.completed","response":{"id":"response-delayed","status":"completed","output":[]}}\n\n',
+    ].join(""),
   ));
   sourceController.close();
 
@@ -784,7 +789,10 @@ test("Guardrails recognizes SSE control fields under a conflicting JSON MIME", a
     budget,
   );
   sourceController.enqueue(encoder.encode(
-    'data: {"type":"response.output_text.delta","delta":"<STRIPE_ACCESS_TOKEN_1>"}\n\n',
+    [
+      'data: {"type":"response.output_text.delta","delta":"<STRIPE_ACCESS_TOKEN_1>"}\n\n',
+      'data: {"type":"response.completed","response":{"id":"response-control-fields","status":"completed","output":[]}}\n\n',
+    ].join(""),
   ));
   sourceController.close();
 
@@ -873,6 +881,10 @@ test("Guardrails restores assistant text at every issued-placeholder SSE boundar
         output_index: 0,
         content_index: 0,
         delta: placeholder.slice(split),
+      })}\n\n`,
+      `data: ${JSON.stringify({
+        type: "response.completed",
+        response: { id: `response-${split}`, status: "completed", output: [] },
       })}\n\n`,
       "data: [DONE]\n\n",
     ];
@@ -971,16 +983,19 @@ test("Guardrails pending Chat choice flush never duplicates neighboring choices"
       { index: 1, delta: { content: "neighbor" } },
     ],
   })}\n\n`);
-  expect(first).toHaveLength(1);
+  expect(first).toEqual([]);
 
   const flushed = rewrite("data: [DONE]\n\n");
-  expect(flushed).toHaveLength(2);
-  const pendingPayload = JSON.parse(flushed[0]!.match(/^data: (.*)$/m)?.[1] ?? "{}") as {
-    choices: Array<{ index: number; delta: { content: string } }>;
-  };
-  expect(pendingPayload.choices).toEqual([
-    { index: 0, delta: { content: "<STRIPE_ACCESS" } },
-  ]);
+  expect(flushed).toHaveLength(3);
+  expect(flushed.join("").match(/neighbor/g)).toHaveLength(1);
+  const payloads = flushed.flatMap(frame => {
+    const payload = frame.match(/^data: (\{.*\})$/m)?.[1];
+    return payload ? [JSON.parse(payload) as {
+      choices?: Array<{ index?: number; delta?: { content?: string } }>;
+    }] : [];
+  });
+  expect(payloads.some(payload => payload.choices?.some(choice =>
+    choice.index === 0 && choice.delta?.content === "<STRIPE_ACCESS"))).toBe(true);
 });
 
 test("Guardrails Chat finish flushes only the completed choice", async () => {
@@ -992,16 +1007,14 @@ test("Guardrails Chat finish flushes only the completed choice", async () => {
   const rewrite = guardrailsSseDemaskRewrite(prepared.turn!.state, payload => payload);
   rewrite('data: {"choices":[{"index":0,"delta":{"content":"<STRIPE_ACCESS"}},{"index":1,"delta":{"content":"<STRIPE_ACCESS"}}]}');
 
-  const choiceOneFinished = rewrite(
+  expect(rewrite(
     'data: {"choices":[{"index":1,"delta":{},"finish_reason":"stop"}]}',
-  );
-  expect(choiceOneFinished).toHaveLength(2);
-  expect(choiceOneFinished.join("")).toContain('"index":1');
-  expect(choiceOneFinished.join("")).not.toContain('"index":0,"delta":{"content":"<STRIPE_ACCESS"}');
+  )).toEqual([]);
 
   const final = rewrite("data: [DONE]");
-  expect(final).toHaveLength(2);
-  expect(final[0]).toContain('"index":0');
+  expect(final).toHaveLength(5);
+  expect(final.join("")).toContain('"index":1');
+  expect(final.join("")).toContain('"index":0');
 });
 
 test("Guardrails demasks a placeholder split across Chat refusal deltas", async () => {
@@ -1014,6 +1027,7 @@ test("Guardrails demasks a placeholder split across Chat refusal deltas", async 
     'data: {"choices":[{"index":0,"delta":{"refusal":"<STRIPE_ACCESS"}}]}\n\n',
     'data: {"choices":[{"index":0,"delta":{"refusal":"_TOKEN_1>"}}]}\n\n',
     'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n',
+    "data: [DONE]\n\n",
   ].flatMap(frame => rewrite(frame)).join("");
   const refusal = [...output.matchAll(/^data: (\{.*\})$/gm)]
     .map(match => JSON.parse(match[1]!) as {
@@ -1069,6 +1083,7 @@ test("Guardrails demasks terminal Responses SSE prose but preserves executable p
   ];
   const output = frames
     .flatMap(frame => rewrite(`event: ${frame.type}\ndata: ${JSON.stringify(frame)}\n\n`))
+    .concat(rewrite('event: response.completed\ndata: {"type":"response.completed","response":{"id":"response-terminal-prose","status":"completed","output":[]}}\n\n'))
     .join("");
 
   expect(output).toContain(`done ${secret}`);
@@ -1120,6 +1135,125 @@ test("Guardrails leaves non-success SSE envelopes masked and byte-identical", as
 
   expect(output).toContain(PLACEHOLDER);
   expect(output).not.toContain(secret);
+});
+
+test("Guardrails keeps restored Responses deltas masked when a later terminal fails", async () => {
+  const secret = "sk_live_abcdefghijklmnopqrstuvwx";
+  const prepared = await prepareGuardrailsTurn(config(), "responses", { input: secret });
+  const rewrite = guardrailsSseDemaskRewrite(
+    prepared.turn!.state,
+    payload => demaskGuardrailsJsonPayload(payload, prepared.turn!),
+  );
+  const delta = `event: response.output_text.delta\ndata: ${JSON.stringify({
+    type: "response.output_text.delta",
+    item_id: "message-late-failure",
+    output_index: 0,
+    content_index: 0,
+    delta: PLACEHOLDER,
+  })}\n\n`;
+  const failed = `event: response.failed\ndata: ${JSON.stringify({
+    type: "response.failed",
+    response: { id: "response-late-failure", status: "failed" },
+  })}\n\n`;
+
+  expect(rewrite(delta)).toEqual([]);
+  const output = rewrite(failed).join("");
+
+  expect(output).toContain(PLACEHOLDER);
+  expect(output).toContain("response.failed");
+  expect(output).not.toContain(secret);
+});
+
+test("Guardrails releases restored Responses deltas only after a successful terminal", async () => {
+  const secret = "sk_live_abcdefghijklmnopqrstuvwx";
+  const prepared = await prepareGuardrailsTurn(config(), "responses", { input: secret });
+  const rewrite = guardrailsSseDemaskRewrite(
+    prepared.turn!.state,
+    payload => demaskGuardrailsJsonPayload(payload, prepared.turn!),
+  );
+  const delta = `event: response.output_text.delta\ndata: ${JSON.stringify({
+    type: "response.output_text.delta",
+    item_id: "message-success",
+    output_index: 0,
+    content_index: 0,
+    delta: PLACEHOLDER,
+  })}\n\n`;
+  const completed = `event: response.completed\ndata: ${JSON.stringify({
+    type: "response.completed",
+    response: { id: "response-success", status: "completed", output: [] },
+  })}\n\n`;
+
+  expect(rewrite(delta)).toEqual([]);
+  const output = rewrite(completed).join("");
+
+  expect(output).toContain(secret);
+  expect(output).toContain("response.completed");
+  expect(output).not.toContain(PLACEHOLDER);
+});
+
+test("Guardrails flushes held output masked on premature SSE EOF", async () => {
+  const secret = "sk_live_abcdefghijklmnopqrstuvwx";
+  const prepared = await prepareGuardrailsTurn(config(), "responses", { input: secret });
+  const rewrite = guardrailsSseDemaskRewrite(
+    prepared.turn!.state,
+    payload => demaskGuardrailsJsonPayload(payload, prepared.turn!),
+  );
+  const delta = `data: ${JSON.stringify({
+    type: "response.output_text.delta",
+    item_id: "message-eof",
+    output_index: 0,
+    content_index: 0,
+    delta: PLACEHOLDER,
+  })}`;
+
+  expect(rewrite(delta)).toEqual([]);
+  expect(rewrite.flush?.()).toEqual([delta]);
+  expect(rewrite.flush?.()).toEqual([]);
+});
+
+test("Guardrails flushes held output masked before malformed SSE data", async () => {
+  const secret = "sk_live_abcdefghijklmnopqrstuvwx";
+  const prepared = await prepareGuardrailsTurn(config(), "responses", { input: secret });
+  const rewrite = guardrailsSseDemaskRewrite(
+    prepared.turn!.state,
+    payload => demaskGuardrailsJsonPayload(payload, prepared.turn!),
+  );
+  const delta = `data: ${JSON.stringify({
+    type: "response.output_text.delta",
+    item_id: "message-malformed",
+    output_index: 0,
+    content_index: 0,
+    delta: PLACEHOLDER,
+  })}`;
+  const malformed = "data: {not-json}";
+
+  expect(rewrite(delta)).toEqual([]);
+  const output = rewrite(malformed).join("");
+  expect(output).toContain(PLACEHOLDER);
+  expect(output).toContain(malformed);
+  expect(output).not.toContain(secret);
+});
+
+test("Guardrails falls back to masked passthrough when terminal staging exceeds its byte cap", async () => {
+  const secret = "sk_live_abcdefghijklmnopqrstuvwx";
+  const prepared = await prepareGuardrailsTurn(config(), "responses", { input: secret });
+  let warnings = 0;
+  const rewrite = guardrailsSseDemaskRewrite(
+    prepared.turn!.state,
+    payload => demaskGuardrailsJsonPayload(payload, prepared.turn!),
+    () => { warnings += 1; },
+  );
+  const block = `data: ${JSON.stringify({
+    type: "response.output_text.delta",
+    item_id: "message-capacity",
+    output_index: 0,
+    content_index: 0,
+    delta: `${"x".repeat(1024 * 1024)}${PLACEHOLDER}`,
+  })}`;
+
+  expect(rewrite(block)).toEqual([block]);
+  expect(warnings).toBe(1);
+  expect(rewrite("data: [DONE]")).toEqual(["data: [DONE]"]);
 });
 
 test("one Responses done event does not flush another stream's pending placeholder", async () => {
@@ -1500,7 +1634,7 @@ test("Guardrails inspects executable siblings in a mixed Chat prose/tool SSE fra
       },
     }],
   })}\n\n`;
-  const output = rewrite(frame).join("");
+  const output = [...rewrite(frame), ...rewrite("data: [DONE]\n\n")].join("");
 
   expect(output).toContain(`visible ${secret}`);
   expect(output).toContain("<STRIPE_ACCESS_TOKEN_1>");

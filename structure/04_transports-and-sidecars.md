@@ -1495,6 +1495,21 @@ and originals remain process-memory-only.
 - 다른 대안 대신 이 방식을 선택한 이유: Canonical provider IDs are stable, excluded traffic avoids RE2 failure/cost, and no raw payload crosses into a route that requires protection.
 - 장점, 단점 및 영향: Direct provider control is precise and continuation-safe; mixed combos remain protected as one turn, and an excluded-to-protected late fallback returns 409 instead of retrying raw.
 
+## Guardrails terminal-gated stream restoration
+
+Guardrails may restore an issued placeholder only in eligible assistant prose. For HTTP/SSE and the
+client-facing Responses WebSocket bridge, the first block that changes from masked to restored starts
+a bounded terminal gate. The gate retains the original masked blocks alongside their rewritten forms
+and preserves event order. It releases rewritten blocks only after `response.completed`, Chat
+`[DONE]`, or Anthropic `message_stop`. A failed or incomplete terminal, malformed data, premature
+EOF, demask-capacity failure, or the combined 2 MiB / 4096-block staging limit releases the original
+masked blocks and disables further restoration for that stream. Blocks emitted before restoration
+remain live, so Guardrails does not turn ordinary streams into full-response buffering.
+
+JSON and streaming failure classification share `src/guardrails/response-envelope.ts`; transport
+code must not introduce a separate interpretation of failed, incomplete, cancelled, or errored
+provider envelopes.
+
 ## Transport inventory
 
 The sections above cover the transports with load-bearing invariants. The rest of the transport
