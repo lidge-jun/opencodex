@@ -784,6 +784,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   modelSupportsServiceTier: "editor",
   preserveResponsesReasoningContent: "editor",
   decodesNativeCompactionBlobs: "editor",
+  allowEncryptedV2AgentTasks: "editor",
   allowPrivateNetwork: "editor",
   upstreamHttpVersion: "editor",
   upstreamWebsocket: "editor",

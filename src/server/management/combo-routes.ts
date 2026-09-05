@@ -52,7 +52,7 @@ import {
   setDebugSettings,
   type DebugFlag,
 } from "../../lib/debug-settings";
-import type { OcxClaudeCodeConfig, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../../types";
+import type { OcxClaudeCodeConfig, OcxComboConfig, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../../types";
 import { drainAndShutdown } from "../lifecycle";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
@@ -66,6 +66,7 @@ import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, C
 import type { ManagementContext } from "./context";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import { shadowCallTargetError } from "./shadow-call-validation";
+import { COMBO_DEFAULT_WAIT_FOR_COOLDOWN_MS } from "../../combos";
 
 
 /**
@@ -75,15 +76,29 @@ import { shadowCallTargetError } from "./shadow-call-validation";
  * materialized in every user's config.json.
  */
 function sparseComboConfig<T extends {
+  cooldownMs?: number;
+  waitForCooldownMs?: number;
   imageInput?: "auto" | "disabled";
   reasoningEffortMode?: "strict" | "adaptive";
-}>(combo: T): Omit<T, "imageInput" | "reasoningEffortMode"> & {
+}>(combo: T): Omit<T, "cooldownMs" | "waitForCooldownMs" | "imageInput" | "reasoningEffortMode"> & {
+  cooldownMs?: number;
+  waitForCooldownMs?: number;
   imageInput?: "disabled";
   reasoningEffortMode?: "adaptive";
 } {
-  const { imageInput, reasoningEffortMode, ...rest } = combo;
+  const {
+    cooldownMs,
+    waitForCooldownMs,
+    imageInput,
+    reasoningEffortMode,
+    ...rest
+  } = combo;
   return {
     ...rest,
+    ...(cooldownMs !== undefined ? { cooldownMs } : {}),
+    ...(waitForCooldownMs !== undefined && waitForCooldownMs !== COMBO_DEFAULT_WAIT_FOR_COOLDOWN_MS
+      ? { waitForCooldownMs }
+      : {}),
     ...(imageInput === "disabled" ? { imageInput: "disabled" as const } : {}),
     ...(reasoningEffortMode === "adaptive" ? { reasoningEffortMode: "adaptive" as const } : {}),
   };
@@ -141,13 +156,28 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       comboPublicModelId,
       normalizeComboConfig,
     } = await import("../../combos");
-    const error = comboConfigError(id, body.combo, config.providers, {
+    const sourceId = renameFrom ?? id;
+    const previous = config.combos?.[sourceId];
+    if (!isPlainRecord(body.combo)) {
+      return jsonResponse({ error: "combo must be an object" }, 400);
+    }
+    const requestedCombo: Record<string, unknown> = body.combo;
+    const effectiveCombo = {
+      ...requestedCombo,
+      ...(!Object.hasOwn(requestedCombo, "cooldownMs") && previous?.cooldownMs !== undefined
+        ? { cooldownMs: previous.cooldownMs }
+        : {}),
+      ...(!Object.hasOwn(requestedCombo, "waitForCooldownMs") && previous?.waitForCooldownMs !== undefined
+        ? { waitForCooldownMs: previous.waitForCooldownMs }
+        : {}),
+    };
+    const error = comboConfigError(id, effectiveCombo, config.providers, {
       requireEnabledTarget: true,
       combos: config.combos,
-      excludeComboId: renameFrom ?? id,
+      excludeComboId: sourceId,
     });
     if (error) return jsonResponse({ error }, 400);
-    const normalized = normalizeComboConfig(body.combo as import("../../types").OcxComboConfig);
+    const normalized = normalizeComboConfig(effectiveCombo as unknown as OcxComboConfig);
     // Persist only non-default identity/capability fields so config stays sparse.
     // Capability defaults (`imageInput`, `reasoningEffortMode`) go through the same
     // helper the GET/PUT responses use, so the wire shape and the stored shape cannot drift.
@@ -157,14 +187,12 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       displayName: normalizedDisplayName,
       ...normalizedBase
     } = sparseComboConfig(normalized);
-    const stored: import("../../types").OcxComboConfig = {
+    const stored: OcxComboConfig = {
       ...normalizedBase,
       ...(normalizedAlias ? { alias: normalizedAlias } : {}),
       ...(normalizedNativeAlias ? { nativeAlias: true } : {}),
       ...(normalizedDisplayName ? { displayName: normalizedDisplayName } : {}),
     };
-    const sourceId = renameFrom ?? id;
-    const previous = config.combos?.[sourceId];
     const oldPublicModel = previous ? comboPublicModelId(sourceId, previous) : null;
     const newPublicModel = comboPublicModelId(id, normalized);
     const disabledIdentityChanged = previous !== undefined && (

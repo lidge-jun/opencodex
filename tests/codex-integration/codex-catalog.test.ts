@@ -2176,6 +2176,29 @@ describe("configured CatalogModel displayName -> catalog display_name", () => {
     expect(api?.slug).toBe("commandcode/deepseek-deepseek-v4-pro");
   });
 
+  test("Google Antigravity routed models relabel the picker row with compact agy prefix", () => {
+    const entries = buildCatalogEntries(nativeTemplate(), [], [
+      { provider: "google-antigravity", id: "gemini-3.8-flash", owned_by: "google-antigravity" },
+      { provider: "google-antigravity", id: "claude-sonnet-4-6", owned_by: "google-antigravity" },
+    ]);
+    const gemini = entries.find(e => e.slug === "google-antigravity/gemini-3.8-flash");
+    const claude = entries.find(e => e.slug === "google-antigravity/claude-sonnet-4-6");
+
+    // Display-only relabel: routing slugs stay untouched.
+    expect(gemini?.display_name).toBe("agy/gemini-3.8-flash");
+    expect(gemini?.slug).toBe("google-antigravity/gemini-3.8-flash");
+    expect(claude?.display_name).toBe("agy/claude-sonnet-4-6");
+    expect(claude?.slug).toBe("google-antigravity/claude-sonnet-4-6");
+  });
+
+  test("Google Antigravity respects custom providerAlias on catalog display", () => {
+    const entries = buildCatalogEntries(nativeTemplate(), [], [
+      { provider: "google-antigravity", id: "gemini-3.8-flash", providerAlias: "antigrav", owned_by: "google-antigravity" },
+    ]);
+    const gemini = entries.find(e => e.slug === "google-antigravity/gemini-3.8-flash");
+    expect(gemini?.display_name).toBe("antigrav/gemini-3.8-flash");
+  });
+
   test("empty/whitespace displayName is ignored and falls back to the slug", () => {
     const entries = buildCatalogEntries(nativeTemplate(), [], [
       { provider: "deepseek", id: "deepseek-v4", displayName: "   ", owned_by: "deepseek" },

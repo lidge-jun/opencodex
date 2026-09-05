@@ -289,7 +289,7 @@ data-plane key는 management credential이 아닙니다. management API는 별�
 | 401 | `authentication_error` | 필요한 프록시 admission credential이 없거나 유효하지 않습니다 |
 | 403 | `origin_rejected` | Responses/OpenAI data-plane 요청 또는 WebSocket 업그레이드가 허용되지 않은 origin에서 들어왔습니다 |
 | 503 | `combo_unavailable` | 선택한 combo의 모든 대상이 사용할 수 없거나, cooldown 중이거나, 비활성화되어 있거나, 다른 이유로 부적합합니다 |
-| 400 | `unreadable_encrypted_agent_task` | 암호화된 v2 worker task를 소비할 수 있는 적격 네이티브 ChatGPT 대상이 없습니다 |
+| 400 | `unreadable_encrypted_agent_task` | 암호화된 v2 worker task를 처리할 수 있는 정규 ChatGPT 대상이나 명시적으로 신뢰한 Responses 대상이 없습니다 |
 | 426 | `upgrade_required` | Responses WebSocket transport가 비활성화되어 있거나 업그레이드에 실패했습니다. HTTP를 사용하십시오 |
 
 Anthropic-origin 실패는 Anthropic의 error envelope로 렌더링됩니다. 따라서 해당 방언에서 origin 거부는

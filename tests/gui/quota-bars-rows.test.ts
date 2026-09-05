@@ -8,7 +8,7 @@ import {
   maxQuotaUtilisation,
   quotaBarTone,
 } from "../../gui/src/components/QuotaBars";
-import type { AccountQuota } from "../../gui/src/codex-quota-utils";
+import { quotaAutoRefreshAvailability, type AccountQuota } from "../../gui/src/codex-quota-utils";
 import type { TFn } from "../../gui/src/i18n";
 
 /** Key-echoing translator: rows carry their key so ordering is assertable. */
@@ -72,7 +72,14 @@ describe("buildQuotaRows (WP070)", () => {
   test("null and empty quotas produce no rows; 30-day plans strip to monthly", () => {
     expect(buildQuotaRows(null, null, t)).toEqual([]);
     expect(buildQuotaRows(quota({}), null, t)).toEqual([]);
-    const rows = buildQuotaRows(quota({ fiveHourPercent: 10, monthlyPercent: 60 }), "go", t);
+    const reported = quota({
+      shortPercent: 10,
+      shortResetAt: 1,
+      shortWindowSeconds: 5 * 60 * 60,
+      monthlyPercent: 60,
+    });
+    expect(quotaAutoRefreshAvailability(reported).fiveHourAvailable).toBe(true);
+    const rows = buildQuotaRows(reported, "go", t);
     expect(rows.map(r => r.limitLabel)).toEqual(["quota.monthlyLimit"]);
   });
 });

@@ -1,6 +1,21 @@
 import { describe, expect, test } from "bun:test";
-import { buildClaudeEnv, claudeNotFoundHint, ensureProxyForClaude, rootSkipPermissionsNotice, shouldAllowRootSkipPermissions } from "../../src/cli/claude";
+import {
+  buildClaudeEnv,
+  buildNativeClaudeEnv,
+  claudeLaunchPlan,
+  claudeLaunchPreflight,
+  claudeNotFoundHint,
+  ensureProxyForClaude,
+  isProxyOnlyModelId,
+  nativeModelOverride,
+  readPickerDefaultModel,
+  rootSkipPermissionsNotice,
+  shouldAllowRootSkipPermissions,
+} from "../../src/cli/claude";
 import { commandInvocation } from "../../src/lib/win-exec";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { LivenessIo, LiveProxy } from "../../src/server/proxy-liveness";
 import type { OcxConfig } from "../../src/types";
 
@@ -37,6 +52,122 @@ describe("ocx claude proxy liveness", () => {
 
     expect(await ensureProxyForClaude({ findLiveProxy })).toBe(10100);
     expect(seen).toEqual([3]);
+  });
+});
+
+describe("ocx claude native fallback", () => {
+  test("routes unless configured or live Claude routing is explicitly disabled", () => {
+    expect(claudeLaunchPlan(true, true)).toEqual({ kind: "routed" });
+    expect(claudeLaunchPlan(true, undefined)).toEqual({ kind: "routed" });
+    expect(claudeLaunchPlan(false, true)).toMatchObject({ kind: "native" });
+    expect(claudeLaunchPlan(true, false)).toMatchObject({ kind: "native" });
+  });
+
+  test("rejects an invalid connected client before configuration-disabled fallback", () => {
+    expect(claudeLaunchPreflight(false, { kind: "invalid", reason: "bad client state" }))
+      .toEqual({ kind: "error", message: "Client state is invalid: bad client state" });
+    expect(claudeLaunchPreflight(false, {
+      kind: "connected",
+      value: {
+        serverUrl: "https://hub.example.test",
+        apiKeyId: "remote",
+        tokenFingerprint: "expected",
+        selectedClients: ["claude"],
+      },
+    }, { kind: "present", token: "secret", fingerprint: "changed" }))
+      .toEqual({ kind: "error", message: "Connected service token ownership changed." });
+  });
+
+  test("removes proxy-owned state while preserving user credentials and native model ids", () => {
+    const config = cfg({
+      apiKeys: [{ id: "local", name: "local", key: "ocx_data_local_key", createdAt: "2026-01-01" }],
+      providers: { mock: { adapter: "openai-chat", baseUrl: "http://x/v1" } },
+    });
+    const env = buildNativeClaudeEnv(config, {
+      PATH: "/usr/bin",
+      ANTHROPIC_BASE_URL: "http://127.0.0.1:10100",
+      ANTHROPIC_AUTH_TOKEN: "ocx_data_local_key",
+      ANTHROPIC_API_KEY: "sk-ant-user-key",
+      ANTHROPIC_MODEL: "claude-ocx-mock--model",
+      ANTHROPIC_DEFAULT_OPUS_MODEL: "mock/model",
+      ANTHROPIC_DEFAULT_SONNET_MODEL: "sonnet",
+      CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1",
+      CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: "1",
+      CLAUDE_CODE_AUTO_COMPACT_WINDOW: "829800",
+    }, {
+      preBunAnthropicSlots: ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"],
+    });
+
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.ANTHROPIC_BASE_URL).toBeUndefined();
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+    expect(env.ANTHROPIC_API_KEY).toBe("sk-ant-user-key");
+    expect(env.ANTHROPIC_MODEL).toBeUndefined();
+    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBeUndefined();
+    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("sonnet");
+    expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBeUndefined();
+    expect(env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY).toBeUndefined();
+    expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined();
+  });
+
+  test("preserves an unrelated loopback gateway and its user credential", () => {
+    for (const baseUrl of ["http://localhost:8080", "http://127.0.0.1:10100"]) {
+      const env = buildNativeClaudeEnv(cfg({ port: 10100 }), {
+        ANTHROPIC_BASE_URL: baseUrl,
+        ANTHROPIC_API_KEY: "sk-ant-user-key",
+      }, {
+        preBunAnthropicSlots: ["ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY"],
+      });
+
+      expect(env.ANTHROPIC_BASE_URL).toBe(baseUrl);
+      expect(env.ANTHROPIC_API_KEY).toBe("sk-ant-user-key");
+    }
+  });
+
+  test("keeps unrelated slash model ids and recognizes configured provider routes", () => {
+    expect(isProxyOnlyModelId("mock/model", ["mock"])).toBe(true);
+    expect(isProxyOnlyModelId("claude-ocx2-abcd")).toBe(true);
+    expect(isProxyOnlyModelId("arn:aws:bedrock:region:acct:inference-profile/us.anthropic.model", ["mock"])).toBe(false);
+    expect(isProxyOnlyModelId("claude-opus-5")).toBe(false);
+  });
+
+  test("overrides a persisted proxy model only with a configured native model", () => {
+    expect(nativeModelOverride("claude-ocx2-abcd", "opus", [], ["mock"]))
+      .toMatchObject({ flag: ["--model", "opus"] });
+    expect(nativeModelOverride("claude-ocx2-abcd", "mock/model", [], ["mock"]).flag).toBeUndefined();
+    expect(nativeModelOverride("claude-ocx2-abcd", "opus", ["--model", "sonnet"], ["mock"]))
+      .toEqual({});
+  });
+
+  test("preserves the root opt-in on native fallback", () => {
+    const env = buildNativeClaudeEnv(cfg(), {}, { allowRootSkipPermissions: true });
+    expect(env.IS_SANDBOX).toBe("1");
+  });
+
+  // A corrupt settings.json used to be indistinguishable from an absent one, so the
+  // "saved model requires the proxy" warning vanished exactly when the file was broken.
+  test("an absent picker settings file is silent, a corrupt one warns and names the file", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-claude-picker-"));
+    const warnings: string[] = [];
+    const realWarn = console.warn;
+    console.warn = (...parts: unknown[]) => { warnings.push(parts.join(" ")); };
+    try {
+      expect(readPickerDefaultModel(dir)).toBeNull();
+      expect(warnings).toEqual([]);
+
+      writeFileSync(join(dir, "settings.json"), '{"model": "claude-ocx2-abcd"');
+      expect(readPickerDefaultModel(dir)).toBeNull();
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain(join(dir, "settings.json"));
+      expect(warnings[0]).not.toContain("claude-ocx2-abcd");
+
+      writeFileSync(join(dir, "settings.json"), '{"model": "claude-ocx2-abcd"}');
+      expect(readPickerDefaultModel(dir)).toBe("claude-ocx2-abcd");
+      expect(warnings).toHaveLength(1);
+    } finally {
+      console.warn = realWarn;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

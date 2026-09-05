@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { saveConfig } from "../../src/config";
+import { clearKeyCooldowns } from "../../src/providers/key-failover";
 import { handleResponses } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const config = {
   port: 0,
@@ -166,6 +172,10 @@ describe("server terminal guard integration", () => {
   });
 
   test("terminal-guard continuation retry budget stays per request across key failover", async () => {
+    const previousHome = process.env.OPENCODEX_HOME;
+    const home = mkdtempSync(join(tmpdir(), "ocx-terminal-guard-failover-"));
+    process.env.OPENCODEX_HOME = home;
+    clearKeyCooldowns("claude-se");
     const budgetConfig = {
       ...config,
       providers: {
@@ -193,21 +203,29 @@ describe("server terminal guard integration", () => {
       });
     }) as typeof fetch;
 
-    const response = await handleResponses(new Request("http://localhost/v1/responses", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        model: "se-claude-opus-4.8",
-        input: "请检查这个问题并修复代码",
-        stream: true,
-        tools: [{ type: "function", name: "exec_command", description: "run a command", parameters: { type: "object" } }],
-      }),
-    }), budgetConfig, { model: "", provider: "" });
+    try {
+      saveConfig(budgetConfig);
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "se-claude-opus-4.8",
+          input: "请检查这个问题并修复代码",
+          stream: true,
+          tools: [{ type: "function", name: "exec_command", description: "run a command", parameters: { type: "object" } }],
+        }),
+      }), budgetConfig, { model: "", provider: "" });
 
-    await response.text();
-    // initial turn + continuation retry (same key) + failover continuation (second key) = 4.
-    // A per-iteration budget would replay on the second key too (5+ sends).
-    expect(sends).toBe(4);
+      await response.text();
+      // initial turn + continuation retry (same key) + failover continuation (second key) = 4.
+      // A per-iteration budget would replay on the second key too (5+ sends).
+      expect(sends).toBe(4);
+    } finally {
+      clearKeyCooldowns("claude-se");
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      removeTreeWithRetry(home);
+    }
   });
 
   test("terminal-guard continuation shares the request-wide 429 budget with the main loop", async () => {

@@ -25,6 +25,7 @@ import {
 import type { AdmissionSnapshot } from "../../src/codex/convergence-types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { helperPath } from "../helpers/repo-root";
+import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 let root = "";
 let codexHome = "";
@@ -311,7 +312,11 @@ describe("two real processes contend for one lock", () => {
     return JSON.parse(line) as { status: string; reason?: string; value?: string; lockId?: string };
   }
 
-  async function waitFor(path: string, timeoutMs = 10_000): Promise<void> {
+  // A spawned holder child boots in 8-19 s on a loaded windows-latest shard; the 10 s
+  // literal expired first on run 33930757649 ("case 0", 10.67 s). INTERNAL_DEADLINE_MS is
+  // the named bound for an in-test wait and stays under the enclosing SPAWN_BUDGET_MS so
+  // this helper's "timed out waiting for" diagnostic is what gets reported, not Bun's.
+  async function waitFor(path: string, timeoutMs = INTERNAL_DEADLINE_MS): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       if (Bun.file(path).size > 0) return;
@@ -340,14 +345,14 @@ describe("two real processes contend for one lock", () => {
     // was contention rather than a permanent refusal wearing its label.
     const after = await withCodexWriteLock(options({ timeoutMs: 5_000 }), publishing("parent"));
     expect(after.status).toBe("acquired");
-  }, 30_000);
+  }, SPAWN_BUDGET_MS);
 
   test("both processes resolve the same lock id for one home", async () => {
     const first = await childResult(spawnChild({ timeoutMs: 5_000 }));
     expect(first.status).toBe("acquired");
     const local = canonicalizeCodexHome(codexHome);
     expect(local.ok && first.lockId).toBe(local.ok ? local.home.lockId : "x");
-  }, 30_000);
+  }, SPAWN_BUDGET_MS);
 
   /**
    * A waiting contender must actually wait rather than fail fast — and must
@@ -368,7 +373,7 @@ describe("two real processes contend for one lock", () => {
     expect(holderResult.status).toBe("acquired");
     expect(waited.status).toBe("acquired");
     expect(waited.status === "acquired" && waited.waitedMs).toBeGreaterThan(0);
-  }, 30_000);
+  }, SPAWN_BUDGET_MS);
 
   /**
    * C7/C18 — the namespace keys on the OS user, not on any home accessor.
@@ -451,6 +456,6 @@ describe("two real processes contend for one lock", () => {
       );
       expect(after.status).toBe("acquired");
       expect(after.lockId).toBe(held.lockId);
-    }, 30_000);
+    }, SPAWN_BUDGET_MS);
   }
 });

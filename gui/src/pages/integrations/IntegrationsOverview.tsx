@@ -29,6 +29,7 @@ import {
   loadIntegrationStates,
   toggleIntegration,
   deleteJournalEntry,
+  isMissingJournalEntry,
   type IntegrationJournalRow,
   type IntegrationStatus,
 } from "./integration-api";
@@ -672,6 +673,14 @@ export default function IntegrationsOverview({
             try {
               await deleteJournalEntry(apiBase, deleting.opId);
             } catch (error) {
+              // Another tab may have completed the same idempotent user action.
+              // Close the stale dialog and refresh instead of offering a retry
+              // that can only repeat the same 404.
+              if (isMissingJournalEntry(error)) {
+                setDeleting(null);
+                await historyResource.refresh();
+                return;
+              }
               /*
                * Rethrown as a localized message because ConsequenceDialog renders
                * `error.message` verbatim. The 409 and 404 here carry a `code` and

@@ -60,7 +60,20 @@ La rotation garde les deux clés valides sous le même `apiKeyId` pendant dix mi
 
 ## Docker, retour arrière et dépannage
 
-Il n’existe pas d’image Docker officielle. Épinglez l’image Bun par digest, conservez `/home/bun/.opencodex` dans un volume et montez le secret sur `/run/secrets/ocx_api_token`. Publiez seulement `10100`, jamais `10101`. Ne placez aucun secret dans `ARG`, `ENV`, `COPY`, Compose, l’historique d’image ou argv. Après le healthcheck, vérifiez séparément `/readyz`, le catalogue authentifié et une réponse réelle.
+Il n’existe pas d’image Docker officielle, mais le dépôt fournit un `Dockerfile` et un `compose.yaml` maintenus pour construire localement une image Bun épinglée par digest. Initialisez une seule fois la clé de données via stdin ; elle est enregistrée avec des permissions réservées au propriétaire dans le volume `ocx-state` et n’est jamais affichée.
+
+Installez Git et Bun sur l’hôte. Avant chaque construction, générez le manifeste canonique depuis les sources suivies par Git, sans modifier les sources entre la génération et la construction. Le JSON généré reste non suivi ; `.git` est exclu du contexte Docker. Le port hôte est lié à `127.0.0.1` par défaut. Pour un accès distant, utilisez explicitement `OPENCODEX_BIND_ADDRESS=<IP-LAN-ou-Tailscale> docker compose up -d` ; `0.0.0.0` expose toutes les interfaces. Protégez cet accès par un pare-feu et un frontal TLS/tailnet authentifié.
+
+```bash
+git clone https://github.com/lidge-jun/opencodex.git
+cd opencodex
+bun scripts/generate-compatibility-version.ts
+docker compose build
+openssl rand -hex 32 | docker compose run --rm -T hub bun run docker/bootstrap-token.ts
+docker compose up -d
+```
+
+Le conteneur s’exécute avec l’utilisateur non-root `bun`, un système de fichiers racine en lecture seule et uniquement le port `10100` publié. Ne publiez jamais `10101` et ne placez aucun secret dans `ARG`, `ENV`, `COPY`, Compose, l’historique d’image ou argv. Après le healthcheck, vérifiez séparément `/readyz`, le catalogue authentifié et une réponse réelle. `docker compose down` conserve le volume ; `docker compose down --volumes` supprime aussi la configuration, les identifiants et la clé.
 
 - Hub indisponible : `ocx disconnect` restaure localement, mais la révocation reste à faire.
 - Catalogue périmé : seul un dernier catalogue validé est conservé après une panne transitoire; aucune substitution locale après erreur d’authentification, schéma, taille ou protocole.

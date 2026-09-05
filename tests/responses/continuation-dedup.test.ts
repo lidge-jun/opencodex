@@ -310,8 +310,9 @@ describe("replay overlap: contracts held elsewhere", () => {
   });
 
   test("the skip counter is not published on the memory surface", () => {
-    // /api/system/memory pins exactly 12 privacy-reviewed scalar fields.
-    expect(Object.keys(responseStateMetrics())).toHaveLength(12);
+    // /api/system/memory pins exactly 17 privacy-reviewed scalar fields. The five
+    // spill-health additions are enums, counters, or timestamps — never error text.
+    expect(Object.keys(responseStateMetrics())).toHaveLength(17);
   });
 
   test("clearing state for tests resets the skip counter", () => {

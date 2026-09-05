@@ -433,6 +433,7 @@ Subcommands:
   set-default <name>    Change the default provider
   selected <name>       Show or set the provider model allowlist
   quota                 Show provider quota reports
+  resets                Show recently detected quota resets
   presets               List GUI provider presets
   account-mode <mode>   Set OpenAI Codex pool/direct mode
 

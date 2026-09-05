@@ -438,9 +438,30 @@ describe("google-antigravity per-account quota (#1082)", () => {
     });
   }
 
+  function antigravitySummaryBody(gemRemaining: number, claRemaining: number): string {
+    return JSON.stringify({
+      groups: [
+        {
+          displayName: "Gemini Models",
+          buckets: [
+            { bucketId: "gemini-weekly", window: "weekly", remainingFraction: gemRemaining, resetTime: "2026-09-09T12:00:00Z" },
+            { bucketId: "gemini-5h", window: "5h", remainingFraction: gemRemaining, resetTime: "2026-09-02T12:00:00Z" },
+          ],
+        },
+        {
+          displayName: "Claude and GPT models",
+          buckets: [
+            { bucketId: "3p-weekly", window: "weekly", remainingFraction: claRemaining, resetTime: "2026-09-09T18:00:00Z" },
+            { bucketId: "3p-5h", window: "5h", remainingFraction: claRemaining, resetTime: "2026-09-02T18:00:00Z" },
+          ],
+        },
+      ],
+    });
+  }
+
   afterEach(() => setAntigravityAccountQuotaTransportForTests(null));
 
-  test("probes each account with its own bearer and project id on the fixed Google host over the pinned transport", async () => {
+  test("probes each account with its own bearer and project id on the fixed Google host using retrieveUserQuotaSummary", async () => {
     const expires = Date.now() + 60 * 60_000;
     await saveCredential("google-antigravity", { access: "agy-first", refresh: "r1", expires, projectId: "proj-first", accountId: "agy-a", email: "a@example.com" });
     await saveCredential("google-antigravity", { access: "agy-second", refresh: "r2", expires, projectId: "proj-second", accountId: "agy-b", email: "b@example.com" });
@@ -453,6 +474,9 @@ describe("google-antigravity per-account quota (#1082)", () => {
         const auth = new Headers(requestOptions?.headers).get("authorization") ?? "";
         const project = String(JSON.parse(String(body)).project);
         seen.push({ url, auth, project, address: pinned.address });
+        if (url.endsWith("retrieveUserQuotaSummary")) {
+          return new Response(auth.endsWith("agy-first") ? antigravitySummaryBody(0.86, 0.38) : antigravitySummaryBody(0.97, 0.91), { status: 200, headers: { "content-type": "application/json" } });
+        }
         return new Response(auth.endsWith("agy-first") ? antigravityBody(0.86, 0.38) : antigravityBody(0.97, 0.91), { status: 200, headers: { "content-type": "application/json" } });
       },
     });
@@ -463,14 +487,43 @@ describe("google-antigravity per-account quota (#1082)", () => {
     const [idA, idB] = [idFor("a@example.com"), idFor("b@example.com")];
     expect(Object.keys(byId).sort()).toEqual([idA, idB].sort());
     const windows = (id: string) => byId[id]!.quota!.customWindows!.map(w => `${w.label}=${w.percent}`);
-    expect(windows(idA)).toEqual(["Gem=14", "Cla=62"]);
-    expect(windows(idB)).toEqual(["Gem=3", "Cla=9"]);
+    expect(windows(idA)).toEqual(["Gem=14", "Gem (Weekly)=14", "Cla=62", "Cla (Weekly)=62"]);
+    expect(windows(idB)).toEqual(["Gem=3", "Gem (Weekly)=3", "Cla=9", "Cla (Weekly)=9"]);
     expect(byId[idA]!.quota!.customWindows![0]!.resetAt).toBeDefined();
     expect(seen.map(s => `${s.auth}|${s.project}`).sort()).toEqual(["Bearer agy-first|proj-first", "Bearer agy-second|proj-second"]);
     for (const s of seen) {
-      expect(s.url).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels");
+      expect(s.url).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary");
       expect(s.address).toBe("142.250.0.1");
     }
+  });
+
+  test("falls back to fetchAvailableModels when retrieveUserQuotaSummary returns 404", async () => {
+    const expires = Date.now() + 60 * 60_000;
+    await saveCredential("google-antigravity", { access: "agy-first", refresh: "r1", expires, projectId: "proj-first", accountId: "agy-a", email: "a@example.com" });
+    await saveCredential("google-antigravity", { access: "agy-second", refresh: "r2", expires, projectId: "proj-second", accountId: "agy-b", email: "b@example.com" });
+    globalThis.fetch = (async () => { throw new Error("plain fetch must not be used for account bearers"); }) as typeof fetch;
+
+    const seen: Array<{ url: string; auth: string; project: string; address: string }> = [];
+    setAntigravityAccountQuotaTransportForTests({
+      resolveAddresses: async () => ({ hostname: "daily-cloudcode-pa.googleapis.com", addresses: [{ address: "142.250.0.1", family: 4 }], privateNetwork: false }),
+      pinnedPost: async (url, pinned, body, _signal, requestOptions) => {
+        const auth = new Headers(requestOptions?.headers).get("authorization") ?? "";
+        const project = String(JSON.parse(String(body)).project);
+        seen.push({ url, auth, project, address: pinned.address });
+        if (url.endsWith("retrieveUserQuotaSummary")) {
+          return new Response(null, { status: 404 });
+        }
+        return new Response(auth.endsWith("agy-first") ? antigravityBody(0.86, 0.38) : antigravityBody(0.97, 0.91), { status: 200, headers: { "content-type": "application/json" } });
+      },
+    });
+
+    const rows = await fetchProviderAccountQuotas("google-antigravity");
+    const byId = Object.fromEntries(rows.map(row => [row.accountId, row]));
+    const [idA, idB] = [idFor("a@example.com"), idFor("b@example.com")];
+    const windows = (id: string) => byId[id]!.quota!.customWindows!.map(w => `${w.label}=${w.percent}`);
+    expect(windows(idA)).toEqual(["Gem=14", "Cla=62"]);
+    expect(windows(idB)).toEqual(["Gem=3", "Cla=9"]);
+    expect(byId[idA]!.quota!.customWindows![0]!.resetAt).toBeDefined();
   });
 
   test("a rejected destination never receives a bearer; the row is unavailable, not 0%", async () => {
@@ -506,4 +559,3 @@ describe("google-antigravity per-account quota (#1082)", () => {
     }
   });
 });
-

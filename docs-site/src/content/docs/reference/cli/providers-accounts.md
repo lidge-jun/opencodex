@@ -23,6 +23,7 @@ both `--adapter` and `--base-url`.
 | `set-default <name>` | `--json` | Select an existing provider as the default. |
 | `selected <name>` | `--set <ids>`, `--clear`, `--json` | Read or update the provider model allowlist. |
 | `quota` | `--refresh`, `--json` | Read provider quota reports. |
+| `resets` | `--limit <n>`, `--json` | List recently detected quota-window resets. |
 | `presets` | `--json` | List dashboard provider presets. |
 | `account-mode` | `pool`, `direct`, `--json` | Select pooled or direct Codex account routing. |
 

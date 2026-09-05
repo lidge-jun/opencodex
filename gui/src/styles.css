@@ -1837,6 +1837,18 @@ dialog.modal-overlay::backdrop {
   gap: 8px;
   margin-bottom: 10px;
 }
+
+.codex-quota-auto-refresh {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  padding: 8px 16px 12px;
+  color: var(--muted);
+  font-size: var(--text-label);
+}
+.codex-quota-auto-refresh__label { margin-right: auto; }
+.codex-quota-auto-refresh__window { display: inline-flex; align-items: center; gap: 7px; }
 /* Account actions (pause / copy doctor / pause-exhausted): clearer hover than plain
    btn-ghost on card surface — same raised-hover + faint border as icon/list cues. */
 .codex-auth-action-btn:hover:not(:disabled) {

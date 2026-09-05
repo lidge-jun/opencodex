@@ -19,6 +19,8 @@ import {
 import { claimOwnedServiceHome, withOwnedServiceHomePreload } from "../helpers/owned-service-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoRoot as resolveRepoRoot } from "../helpers/repo-root";
+import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
+import { INTERNAL_DEADLINE_MS } from "../helpers/test-budget";
 
 const repoRoot = resolveRepoRoot();
 const sandboxes: Sandbox[] = [];
@@ -30,6 +32,10 @@ interface Sandbox {
   readonly env: Record<string, string>;
   readonly serviceManagerEnv: Record<string, string>;
   readonly preloadPath?: string;
+  /** Every child spawned against this sandbox, so teardown can reap before deleting the root. */
+  readonly children: Set<ReturnType<typeof Bun.spawn>>;
+  /** Release markers a lock holder polls for; written (tolerantly) on teardown. */
+  readonly releaseMarkers: Set<string>;
 }
 
 function nativeEntry(slug: string, visibility = "list"): Record<string, unknown> {
@@ -88,13 +94,55 @@ function makeSandbox(prefix: string): Sandbox {
     },
     serviceManagerEnv: serviceHome.env,
     preloadPath: serviceHome.preloadPath,
+    children: new Set(),
+    releaseMarkers: new Set(),
   };
   sandboxes.push(sandbox);
   return sandbox;
 }
 
+/**
+ * Idempotent teardown, safe from a test's `finally` AND from `afterEach` in either
+ * order. Order matters: release holders, kill anything still running, then AWAIT
+ * every exit so no child holds a handle inside the sandbox when the root is removed.
+ * Run 33920624827 (windows 2/4) showed the alternative: a per-test timeout left two
+ * children dangling and the `finally` then wrote a release marker into a root
+ * `afterEach` had already deleted (ENOENT).
+ */
+async function teardownSandbox(sandbox: Sandbox): Promise<void> {
+  for (const marker of sandbox.releaseMarkers) {
+    try { writeFileSync(marker, "release"); } catch { /* root may already be gone */ }
+  }
+  for (const child of sandbox.children) {
+    if (child.exitCode === null) child.kill();
+  }
+  await Promise.all([...sandbox.children].map(child => child.exited));
+  sandbox.children.clear();
+}
+
 function sandboxChildEnv(sandbox: Sandbox): Record<string, string> {
   return { ...sandbox.env, ...sandbox.serviceManagerEnv };
+}
+
+/**
+ * Wait for a child to reach its barrier, failing fast with its output if it exits
+ * first. The exit branch is a REJECTING promise, so while the race is pending an
+ * early exit fails the test with the child's output. The subtlety is what happens
+ * AFTER the barrier wins: that promise stays pending, and if a per-test timeout
+ * later fires, teardown kills the child (exit 143) and the promise rejects with
+ * nobody awaiting it — Bun reports it as an "unhandled error between tests" on
+ * top of the timeout that already explained the failure (run 33923803071). The
+ * no-op catch attached up front marks that late rejection handled without
+ * changing what the race sees.
+ */
+async function raceBarrier(child: ReturnType<typeof Bun.spawn>, barrier: Promise<void>): Promise<void> {
+  const exitedEarly = child.exited.then(async exitCode => {
+    const stdout = await new Response(child.stdout).text();
+    const stderr = await new Response(child.stderr).text();
+    throw new Error(`sync exited before provider barrier (${exitCode})\nstdout=${stdout}\nstderr=${stderr}`);
+  });
+  exitedEarly.catch(() => undefined);
+  await Promise.race([barrier, exitedEarly]);
 }
 
 // A `bun --eval` child on a loaded windows-latest shard takes 8-11 s just to boot and
@@ -119,6 +167,7 @@ async function runChild(
     stdout: "pipe",
     stderr: "pipe",
   });
+  sandbox.children.add(child);
   const [exitCode, stdout, stderr] = await Promise.all([
     child.exited,
     new Response(child.stdout).text(),
@@ -150,8 +199,13 @@ async function holdCatalogLock(sandbox: Sandbox): Promise<{
     stdout: "pipe",
     stderr: "pipe",
   });
-  await waitForPath(ready, 12_000);
-  return { release: () => writeFileSync(release, "release"), child };
+  sandbox.children.add(child);
+  sandbox.releaseMarkers.add(release);
+  await waitForPath(ready, INTERNAL_DEADLINE_MS);
+  return {
+    release: () => { try { writeFileSync(release, "release"); } catch { /* teardown may have released already */ } },
+    child,
+  };
 }
 
 function seedCatalog(sandbox: Sandbox, bytes = catalogBytes()): string {
@@ -161,9 +215,10 @@ function seedCatalog(sandbox: Sandbox, bytes = catalogBytes()): string {
   return path;
 }
 
-afterEach(() => {
+afterEach(async () => {
   const identity = resolveEffectiveUserIdentity();
   for (const sandbox of sandboxes.splice(0)) {
+    await teardownSandbox(sandbox);
     const database = resolveCodexCatalogSerializationDatabasePath(identity, sandbox.codexHome);
     for (const suffix of ["", "-journal", "-wal", "-shm"]) rmSync(`${database}${suffix}`, { force: true });
     removeTreeWithRetry(sandbox.root);
@@ -216,7 +271,11 @@ test("startup and CLI sync-cache cannot write models_cache while another process
     holder.release();
     expect(await holder.child.exited).toBe(0);
   }
-}, 15_000);
+// Three real Bun children (the lock holder alive throughout; the startup probe and
+// the CLI sync-cache in series), two of them importing the server/CLI graphs at
+// 8-11 s each on windows-latest (see waitForPath). 15 s timed out on CI run
+// 33920624827; the local timing (~450 ms) is not what this number is for.
+}, SPAWN_BUDGET_MS);
 
 test("native restore cannot read-transform-write the catalog while another process owns K", async () => {
   const sandbox = makeSandbox("ocx-retained-restore-");
@@ -310,15 +369,9 @@ for (const publisher of ["convergence", "retained"] as const) {
         const response = await handleManagementAPI(req, new URL(req.url), config);
         console.log(JSON.stringify({ status: response.status, body: await response.json() }));
       `], sandbox.preloadPath)], { cwd: repoRoot, env: sandboxChildEnv(sandbox), stdout: "pipe", stderr: "pipe" });
+      sandbox.children.add(sync);
 
-      await Promise.race([
-        waitForPath(requested, 16_000),
-        sync.exited.then(async exitCode => {
-          const stdout = await new Response(sync.stdout).text();
-          const stderr = await new Response(sync.stderr).text();
-          throw new Error(`sync exited before provider barrier (${exitCode})\nstdout=${stdout}\nstderr=${stderr}`);
-        }),
-      ]);
+      await raceBarrier(sync, waitForPath(requested, INTERNAL_DEADLINE_MS));
       const published = await runPublisher(sandbox, publisher, config);
       if (published.exitCode !== 0) {
         throw new Error(`${publisher} publisher failed\nstdout=${published.stdout}\nstderr=${published.stderr}`);
@@ -337,7 +390,7 @@ for (const publisher of ["convergence", "retained"] as const) {
     } finally {
       provider.stop(true);
     }
-  }, 20_000);
+  }, SPAWN_BUDGET_MS);
 }
 
 /**
@@ -393,15 +446,9 @@ test("a persisted runtime selection moved by another process during the await bl
     const { syncCatalogModels } = await import("./src/codex/catalog/sync.ts");
     console.log(JSON.stringify(await syncCatalogModels(config)));
   `], sandbox.preloadPath)], { cwd: repoRoot, env: sandboxChildEnv(sandbox), stdout: "pipe", stderr: "pipe" });
+  sandbox.children.add(sync);
 
-  await Promise.race([
-    waitForPath(requested, 16_000),
-    sync.exited.then(async exitCode => {
-      const stdout = await new Response(sync.stdout).text();
-      const stderr = await new Response(sync.stderr).text();
-      throw new Error(`sync exited before provider barrier (${exitCode})\nstdout=${stdout}\nstderr=${stderr}`);
-    }),
-  ]);
+  await raceBarrier(sync, waitForPath(requested, INTERNAL_DEADLINE_MS));
 
   // Another process selects a different Codex runtime. No catalog byte changes.
   writeFileSync(runtimeStatePath, `${JSON.stringify({
@@ -421,7 +468,7 @@ test("a persisted runtime selection moved by another process during the await bl
   expect({ exitCode, stderr }).toMatchObject({ exitCode: 0 });
   expect(JSON.parse(stdout.trim())).toMatchObject({ catalogWritten: false });
   expect(readFileSync(catalogPath, "utf8")).toBe(initial);
-}, 20_000);
+}, SPAWN_BUDGET_MS);
 
 /**
  * The post-approval seam, raced by two real processes through a real route.
@@ -454,6 +501,7 @@ test("two processes at the post-approval management seam serialize instead of in
     const { withConfigMutationLockSync } = await import("./src/config.ts");
     withConfigMutationLockSync(() => undefined);
   `], { cwd: repoRoot, env: sandbox.env, stdout: "pipe", stderr: "pipe" });
+  sandbox.children.add(warm);
   expect(await warm.exited).toBe(0);
 
   const routeScript = (marker: string) => `
@@ -464,7 +512,8 @@ test("two processes at the post-approval management seam serialize instead of in
     // looked exactly like a production defect until the encoder said so.
     globalThis.fetch = async () => {
       writeFileSync(${JSON.stringify(barrier)} + "-" + ${JSON.stringify(marker)}, "here");
-      const deadline = Date.now() + 8000;
+      // Two children rendezvous on markers; either may take 8-19 s to boot on windows-latest.
+      const deadline = Date.now() + ${INTERNAL_DEADLINE_MS};
       while (Date.now() < deadline) {
         if (existsSync(${JSON.stringify(barrier)} + "-a") && existsSync(${JSON.stringify(barrier)} + "-b")) break;
         await Bun.sleep(5);
@@ -504,7 +553,8 @@ test("two processes at the post-approval management seam serialize instead of in
   // On macOS CI both children can still lose the config lock before approval even
   // after the warm-up — that proves nothing about catalog serialization. Retry
   // vacuous runs until at least one process reaches the post-approval seam.
-  const attemptDeadline = Date.now() + 20_000;
+  // Each attempt boots two real children; bound the retry loop by the spawn budget, not a literal.
+  const attemptDeadline = Date.now() + SPAWN_BUDGET_MS;
   let results: Array<{ exitCode: number; stdout: string; stderr: string }> | undefined;
   while (Date.now() < attemptDeadline) {
     for (const marker of ["a", "b"] as const) {
@@ -516,6 +566,7 @@ test("two processes at the post-approval management seam serialize instead of in
       [process.execPath, ...withOwnedServiceHomePreload(["--eval", routeScript(marker)], sandbox.preloadPath)],
       { cwd: repoRoot, env: sandboxChildEnv(sandbox), stdout: "pipe", stderr: "pipe" },
     ));
+    for (const child of children) sandbox.children.add(child);
 
     results = await Promise.all(children.map(async child => {
       const [exitCode, stdout, stderr] = await Promise.all([
@@ -600,4 +651,4 @@ test("two processes at the post-approval management seam serialize instead of in
   const fromA = slugs.some(s => s.includes("seam-model-a"));
   const fromB = slugs.some(s => s.includes("seam-model-b"));
   expect(fromA && fromB).toBe(false);
-}, 30_000);
+}, SPAWN_BUDGET_MS);

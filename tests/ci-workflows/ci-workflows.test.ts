@@ -171,7 +171,10 @@ describe("GitHub Actions hardening", () => {
     const linuxShards = (ci.jobs?.test as { strategy?: { matrix?: { shard?: number[] } } })
       ?.strategy?.matrix?.shard ?? [];
     expect(linuxShards).toEqual([1, 2, 3, 4]);
-    expect(workflow).toContain(`--shard=\${{ matrix.shard }}/${linuxShards.length}`);
+    // The Linux shards pass their divisor through TEST_SHARD to the batch runner. Before
+    // Windows sharded differently, this assertion matched the Windows step's --shard
+    // literal by coincidence; pin the Linux env line so it observes the Linux job.
+    expect(workflow).toContain(`TEST_SHARD: \${{ matrix.shard }}/${linuxShards.length}`);
 
     // Every job that runs tests/ must fetch tags, because one of those tests reads
     // them. tests/ci-workflows/release-version-line.test.ts compares package.json against the
@@ -187,13 +190,20 @@ describe("GitHub Actions hardening", () => {
       expect(`${jobName}:${String(checkout?.with?.["fetch-tags"])}`).toBe(`${jobName}:true`);
     }
 
-    // Windows uses the same shard matrix after the single-leg isolate budget was
-    // replaced. Keep the two matrices equal so a future edit cannot reintroduce
-    // a partial Windows suite while Linux stays fully tiled.
+    // Windows shards more finely than Linux: the same suite takes 17-25 minutes per
+    // quarter on windows-latest, which is the leg's own 25-minute ceiling (run
+    // 33934756997 cancelled a green 3/4 at 25m12s). The invariant that matters is the
+    // one above — the matrix and the divisor tile the suite exactly — so pin the
+    // Windows matrix to its own divisor rather than to Linux's, and pin it to be
+    // contiguous from 1 so a dropped entry cannot leave a slice of the suite unrun.
     const windowsShards = (ci.jobs?.["platform-windows"] as {
       strategy?: { matrix?: { shard?: number[] } };
     })?.strategy?.matrix?.shard ?? [];
-    expect(windowsShards).toEqual(linuxShards);
+    expect(windowsShards).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(windowsShards).toEqual(windowsShards.map((_, i) => i + 1));
+    const windowsSteps = (ci.jobs?.["platform-windows"] as { steps?: Array<{ run?: string }> })?.steps ?? [];
+    expect(windowsSteps.some(step => step.run?.includes(`--shard=\${{ matrix.shard }}/${windowsShards.length}`))).toBe(true);
+    expect(ci.jobs?.["platform-windows"]?.name).toBe(`windows \${{ matrix.shard }}/${windowsShards.length}`);
 
     // The aggregate gate is the check a human trusts. Three ways to break it
     // silently: drop `if: always()` so it skips (and a skipped job reports

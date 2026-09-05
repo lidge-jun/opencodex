@@ -24,7 +24,7 @@ import {
 } from "../../src/oauth/anthropic-routing";
 import { clearPoolRotationState } from "../../src/codex/pool-rotation";
 import { getAccountSet, saveCredential, setActiveAccount } from "../../src/oauth/store";
-import { clearAccountQuotaCache } from "../../src/providers/quota";
+import { clearAccountQuotaCache, setCachedProviderAccountQuotaForTests } from "../../src/providers/quota";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -97,6 +97,24 @@ describe("Anthropic reactive 429 failover without the pool flag", () => {
     // rate-limited request on an account the operator deliberately logged in is not.
     const ids = await seedAccounts(2);
     expect(rotateAnthropicAccountOn429(poolDisabled(), ids[0]!, null)).toBe(ids[1]);
+  });
+
+  test("a disabled pool does not apply its dormant proactive strategy to reactive recovery", async () => {
+    // The pool flag buys PROACTIVE routing: affinity, quota ranking, and the declared strategy.
+    // Leaving `strategy: "round-robin"` in a config whose pool is off is not an opt-in to
+    // round-robin -- it is dormant configuration. Reactive recovery must therefore fall back to
+    // the neutral quota picker rather than reactivating the strategy the operator switched off.
+    const ids = await seedAccounts(3);
+    setCachedProviderAccountQuotaForTests("anthropic", ids[1]!, { fiveHourPercent: 90 });
+    setCachedProviderAccountQuotaForTests("anthropic", ids[2]!, { fiveHourPercent: 10 });
+    const disabledRoundRobin = {
+      ...poolAbsent(),
+      anthropicAccountPool: { enabled: false, strategy: "round-robin" },
+    } as OcxConfig;
+
+    // Round-robin would hand back ids[1] (the next account in order); quota ordering picks the
+    // account with the most headroom instead.
+    expect(rotateAnthropicAccountOn429(disabledRoundRobin, ids[0]!, null)).toBe(ids[2]);
   });
 
   test("a single account is still a strict no-op", async () => {

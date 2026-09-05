@@ -100,9 +100,11 @@ field and skip the role (#1190). A legacy `model_fallback` line in the TOML is s
 read for backwards compatibility, but `ocx doctor` flags it.
 
 opencodex skips disabled, unroutable, unhealthy, cooling-down, or quota-threshold candidates. The
-availability snapshot is cached for `subagentModelFallbackPollMs`. Encrypted child tasks can restrict
-the chain to canonical native ChatGPT targets; if none can read the encrypted payload, the request
-fails instead of routing unreadable ciphertext elsewhere.
+availability snapshot is cached for `subagentModelFallbackPollMs`. Encrypted child tasks restrict
+the chain to canonical native ChatGPT targets plus direct key-auth Responses routes explicitly
+trusted with `allowEncryptedV2AgentTasks: true`; if none can consume the encrypted payload, the
+request fails instead of routing unreadable ciphertext elsewhere. Combo routing remains
+canonical-native-only.
 
 ```json
 {

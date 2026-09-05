@@ -70,6 +70,10 @@ With `stream: true`, the response is `text/event-stream`. The bridge emits Respo
 With `stream: false` or no `stream`, the same adapter events are collected into one Responses JSON
 object. Both forms preserve the selected model, output items, terminal status, and usage.
 
+For native HTTP/SSE passthrough, a client cancellation without an observed upstream terminal is
+logged as `499` with `closeReason: "client_cancel"` and does not penalize the account pool.
+A terminal captured during the bounded post-disconnect drain retains its actual outcome.
+
 Client-facing Responses SSE frames are limited to 4 MiB per frame, measured in raw bytes before the
 SSE block delimiter. On HTTP, an unterminated upstream frame that exceeds the limit fails closed
 with a synthetic `response.failed` event followed by `data: [DONE]`. On the Responses WebSocket
@@ -352,7 +356,7 @@ Errors use the client dialect's envelope where needed, but these status/code mea
 | 401 | `authentication_error` | A required proxy admission credential is missing or invalid |
 | 403 | `origin_rejected` | A Responses/OpenAI data-plane request or WebSocket upgrade came from a disallowed origin |
 | 503 | `combo_unavailable` | Every target in the selected combo is unavailable, in cooldown, disabled, or otherwise ineligible |
-| 400 | `unreadable_encrypted_agent_task` | An encrypted v2 worker task has no eligible native ChatGPT target that can consume it |
+| 400 | `unreadable_encrypted_agent_task` | An encrypted v2 worker task has no eligible canonical ChatGPT target or direct key-auth Responses target explicitly trusted with `allowEncryptedV2AgentTasks: true` that can consume it |
 | 426 | `upgrade_required` | The Responses WebSocket transport is disabled or the upgrade failed; use HTTP |
 
 Anthropic-origin failures are rendered in Anthropic's error envelope, so the origin rejection is a

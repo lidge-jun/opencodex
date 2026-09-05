@@ -174,6 +174,16 @@ describe("google adapter — tool-call ids on the wire", () => {
     expect(instruction.parts[0].text).toContain("Valid tool names for this turn are exactly `exec_command`.");
   });
 
+  test("systemInstruction includes formatting guidance against unrendered LaTeX math", async () => {
+    const body = await geminiBody(parsedWith(
+      [{ role: "user", content: "inspect results" }],
+      [],
+    ));
+    const instruction = body.systemInstruction as { parts: Array<{ text: string }> };
+    expect(instruction.parts[0].text).toContain(String.raw`does not support LaTeX math delimiters ($...$, $$...$$, \(...\), \[...\])`);
+    expect(instruction.parts[0].text).toContain(String.raw`\text{}, \times, \le, \ge`);
+  });
+
   test("functionCall and functionResponse carry the matching tool-call id", async () => {
     const contents = await geminiContents(parsedWith([
       { role: "assistant", content: [{ type: "toolCall", id: "call_abc", name: "bash", arguments: { cmd: "ls" } }] },

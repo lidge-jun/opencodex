@@ -170,6 +170,77 @@ async function snapshotOnDiskMatches(path: string, payload: string, payloadBytes
   }
 }
 const spillCounters = { writes: 0, writeFailures: 0, readFailures: 0 };
+
+export type ResponseSpillWriteFailureCode =
+  | "EACLRETRYEXHAUSTED"
+  | "ETIMEDOUT"
+  | "EACCES"
+  | "ENOSPC"
+  | "EFBIG"
+  | "EIO"
+  | "ECAPACITY"
+  | "ELOOP"
+  | "EUNKNOWN";
+
+export type ResponseSpillWriteStatus = "initial" | "healthy" | "degraded";
+
+interface ResponseSpillWriteHealth {
+  consecutiveFailures: number;
+  lastFailureCode: ResponseSpillWriteFailureCode | null;
+  lastFailureAt: number | null;
+  lastSuccessAt: number | null;
+}
+
+const spillWriteHealth: ResponseSpillWriteHealth = {
+  consecutiveFailures: 0,
+  lastFailureCode: null,
+  lastFailureAt: null,
+  lastSuccessAt: null,
+};
+
+/**
+ * Collapse filesystem/runtime errors into a fixed privacy-safe diagnostic union.
+ * Messages and paths are deliberately ignored: this projection is returned by the
+ * authenticated memory endpoint, and a nested `cause` can contain a username or
+ * workspace path even when the public wrapper does not.
+ */
+function classifySpillWriteFailure(error: unknown): ResponseSpillWriteFailureCode {
+  let cursor = error;
+  for (let depth = 0; depth < 4 && cursor && typeof cursor === "object"; depth += 1) {
+    const record = cursor as { code?: unknown; cause?: unknown };
+    const code = typeof record.code === "string" ? record.code.toUpperCase() : "";
+    switch (code) {
+      case "EACLRETRYEXHAUSTED": return "EACLRETRYEXHAUSTED";
+      case "ETIMEDOUT": return "ETIMEDOUT";
+      case "EACCES":
+      case "EPERM": return "EACCES";
+      case "ENOSPC":
+      case "EDQUOT": return "ENOSPC";
+      case "EFBIG": return "EFBIG";
+      case "EIO": return "EIO";
+      case "ECAPACITY": return "ECAPACITY";
+      case "ELOOP": return "ELOOP";
+    }
+    cursor = record.cause;
+  }
+  return "EUNKNOWN";
+}
+
+function noteSpillWriteSuccess(): void {
+  spillCounters.writes += 1;
+  spillWriteHealth.consecutiveFailures = 0;
+  spillWriteHealth.lastSuccessAt = now();
+}
+
+function noteSpillWriteFailure(
+  error: unknown,
+  override?: ResponseSpillWriteFailureCode,
+): void {
+  spillCounters.writeFailures += 1;
+  spillWriteHealth.consecutiveFailures += 1;
+  spillWriteHealth.lastFailureCode = override ?? classifySpillWriteFailure(error);
+  spillWriteHealth.lastFailureAt = now();
+}
 /**
  * Admission-boundary observability (test-visible). directSpills: oversized
  * candidates routed straight to durable spill without a resident stay or
@@ -346,6 +417,7 @@ async function runPendingResponseSpill(job: PendingResponseSpill): Promise<void>
   job.running = true;
   const candidate = job.candidate;
   let ref: ResponseSpillRef | null = null;
+  let exhaustedAclRetry = false;
   try {
     const state = spillPayloadForResident(candidate);
     try {
@@ -357,11 +429,16 @@ async function runPendingResponseSpill(job: PendingResponseSpill): Promise<void>
       if (!isAclTimeout(error)) throw error;
       // The ACL helper permits exactly one caller-owned recovery budget. The resident generation
       // remains replayable during both attempts, so a transient timeout never becomes a tombstone.
-      ref = await writeResponseSpillDurablyAsync(job.id, state, {
-        aclBudgetMs: responseSpillAsyncAclAttemptBudgetMs(),
-        retryTimedOutOnce: true,
-        publicationControl: job.publicationControl,
-      });
+      try {
+        ref = await writeResponseSpillDurablyAsync(job.id, state, {
+          aclBudgetMs: responseSpillAsyncAclAttemptBudgetMs(),
+          retryTimedOutOnce: true,
+          publicationControl: job.publicationControl,
+        });
+      } catch (retryError) {
+        exhaustedAclRetry = isAclTimeout(retryError);
+        throw retryError;
+      }
     }
     if (ref.payloadBytes > responseSpillPayloadCap()) {
       deleteResponseSpill(ref);
@@ -376,14 +453,14 @@ async function runPendingResponseSpill(job: PendingResponseSpill): Promise<void>
     }
     if (swapResidentForSpill(job.id, candidate, ref)) {
       ref = null;
-      spillCounters.writes += 1;
+      noteSpillWriteSuccess();
       if (job.directAdmission) admissionCounters.directSpills += 1;
       deferSupersededSpill(job.supersededSpill);
     }
-  } catch {
+  } catch (error) {
     if (ref) deleteResponseSpill(ref);
     if (states.get(job.id) === candidate && !job.cancelled) {
-      spillCounters.writeFailures += 1;
+      noteSpillWriteFailure(error, exhaustedAclRetry ? "EACLRETRYEXHAUSTED" : undefined);
       replaceWithSpillFailure(job.id, candidate);
       deferSupersededSpill(job.supersededSpill);
     }
@@ -406,7 +483,7 @@ function queuePendingResponseSpill(
 ): void {
   const inheritedSpill = cancelPendingResponseSpill(id) ?? options.supersededSpill;
   if (pendingResponseSpillBytes + candidate.sizeBytes > MAX_PENDING_RESPONSE_SPILL_BYTES) {
-    spillCounters.writeFailures += 1;
+    noteSpillWriteFailure(null, "ECAPACITY");
     replaceWithSpillFailure(id, candidate);
     deferSupersededSpill(inheritedSpill);
     return;
@@ -424,7 +501,7 @@ function queuePendingResponseSpill(
   if (accountedResponseSpillBytes() + footprint + inheritedBytes > spillByteCap()) {
     enforceSpilledResponseBudget();
     if (accountedResponseSpillBytes() + footprint + inheritedBytes > spillByteCap()) {
-      spillCounters.writeFailures += 1;
+      noteSpillWriteFailure(null, "ECAPACITY");
       replaceWithSpillFailure(id, candidate);
       deferSupersededSpill(inheritedSpill);
       return;
@@ -560,7 +637,7 @@ function installShutdownFallbackSpill(
       enforceSpilledResponseBudget();
       if (accountedResponseSpillBytes() + supersededBytes > spillByteCap()) {
         if (states.get(job.id) === candidate) {
-          spillCounters.writeFailures += 1;
+          noteSpillWriteFailure(null, "ECAPACITY");
           replaceWithSpillFailure(job.id, candidate);
           deferSupersededSpill(job.supersededSpill);
         }
@@ -581,14 +658,14 @@ function installShutdownFallbackSpill(
     }
     if (swapResidentForSpill(job.id, candidate, ref)) {
       ref = null;
-      spillCounters.writes += 1;
+      noteSpillWriteSuccess();
       if (job.directAdmission) admissionCounters.directSpills += 1;
       deferSupersededSpill(job.supersededSpill);
     }
   } catch (error) {
     if (ref) deleteResponseSpill(ref);
     if (states.get(job.id) === candidate) {
-      spillCounters.writeFailures += 1;
+      noteSpillWriteFailure(error);
       replaceWithSpillFailure(job.id, candidate);
       deferSupersededSpill(job.supersededSpill);
     }
@@ -601,9 +678,10 @@ function installShutdownFallbackSpill(
 function terminalizeShutdownFallbackCandidate(
   job: PendingResponseSpill,
   candidate: ResidentResponseState,
+  failureCode: ResponseSpillWriteFailureCode = "ETIMEDOUT",
 ): void {
   if (states.get(job.id) !== candidate) return;
-  spillCounters.writeFailures += 1;
+  noteSpillWriteFailure(null, failureCode);
   replaceWithSpillFailure(job.id, candidate);
   deferSupersededSpill(job.supersededSpill);
 }
@@ -652,11 +730,11 @@ function stopAtShutdownTerminalizationPassLimit(
   failures.push(Object.assign(new Error("Response spill shutdown terminalization pass limit exceeded"), { code: "ELOOP" }));
   supersedeShutdownFallbackBatch(pending, failures);
   for (const { job, candidate } of pending) {
-    terminalizeShutdownFallbackCandidate(job, candidate);
+    terminalizeShutdownFallbackCandidate(job, candidate, "ELOOP");
   }
   for (const [id, state] of [...states]) {
     if (state.kind !== "resident") continue;
-    spillCounters.writeFailures += 1;
+    noteSpillWriteFailure(null, "ELOOP");
     replaceWithSpillFailure(id, state);
   }
   recomputeOldestResident();
@@ -986,7 +1064,7 @@ function replaceSpillEntryAtomically(
       deleteResponseSpill(ref);
       return;
     }
-    spillCounters.writes += 1;
+    noteSpillWriteSuccess();
     noteStubSwapForTest();
     // The old generation is NOT unlinked here (review C1-1): the new stub is
     // only durable once the debounced snapshot flushes — a crash before that
@@ -996,8 +1074,8 @@ function replaceSpillEntryAtomically(
     while (pendingSpillUnlinks.length > PENDING_SPILL_UNLINKS_MAX) {
       deleteResponseSpill(pendingSpillUnlinks.shift()!);
     }
-  } catch {
-    spillCounters.writeFailures += 1;
+  } catch (error) {
+    noteSpillWriteFailure(error);
     // deferSpillUnlink: the durable snapshot may still reference the old
     // generation; deleting it now would strand the old stub after a crash.
     replaceWithSpillFailure(id, expected, { deferSpillUnlink: true });
@@ -1087,7 +1165,7 @@ function admitOversizedCandidate(
       deleteResponseSpill(ref);
       return;
     }
-    spillCounters.writes += 1;
+    noteSpillWriteSuccess();
     admissionCounters.directSpills += 1;
     noteStubSwapForTest();
     if (expected?.kind === "spill") {
@@ -1099,8 +1177,8 @@ function admitOversizedCandidate(
         deleteResponseSpill(pendingSpillUnlinks.shift()!);
       }
     }
-  } catch {
-    spillCounters.writeFailures += 1;
+  } catch (error) {
+    noteSpillWriteFailure(error);
     replaceWithSpillFailure(id, expected, { deferSpillUnlink: true });
   }
 }
@@ -1812,9 +1890,9 @@ function pruneResponses(at = now()): void {
         ...(entry.providerOutputStart !== undefined ? { providerOutputStart: entry.providerOutputStart } : {}),
         ...(entry.providers ? { providers: entry.providers } : {}),
       });
-      if (swapResidentForSpill(oldestId, entry, ref)) spillCounters.writes += 1;
-    } catch {
-      spillCounters.writeFailures += 1;
+      if (swapResidentForSpill(oldestId, entry, ref)) noteSpillWriteSuccess();
+    } catch (error) {
+      noteSpillWriteFailure(error);
       replaceWithSpillFailure(oldestId, entry);
     }
   }
@@ -1929,9 +2007,9 @@ export function evictOldestResponseContinuationForBudget(): number {
       ...(entry.providerOutputStart !== undefined ? { providerOutputStart: entry.providerOutputStart } : {}),
       ...(entry.providers ? { providers: entry.providers } : {}),
     });
-    if (swapResidentForSpill(id, entry, ref)) spillCounters.writes += 1;
-  } catch {
-    spillCounters.writeFailures += 1;
+    if (swapResidentForSpill(id, entry, ref)) noteSpillWriteSuccess();
+  } catch (error) {
+    noteSpillWriteFailure(error);
     replaceWithSpillFailure(id, entry);
   }
   schedulePersist();
@@ -2107,6 +2185,11 @@ export interface ResponseStateMetrics {
   oldestAgeMs: number;
   spillWrites: number;
   spillWriteFailures: number;
+  spillWriteStatus: ResponseSpillWriteStatus;
+  spillWriteConsecutiveFailures: number;
+  spillLastWriteFailureCode: ResponseSpillWriteFailureCode | null;
+  spillLastWriteFailureAt: number | null;
+  spillLastWriteSuccessAt: number | null;
   spillReadFailures: number;
   replayScopeMismatchDrops: number;
 }
@@ -2150,6 +2233,15 @@ export function responseStateMetrics(): ResponseStateMetrics {
     oldestAgeMs: states.size > 0 ? at - oldestCreatedAt : 0,
     spillWrites: spillCounters.writes,
     spillWriteFailures: spillCounters.writeFailures,
+    spillWriteStatus: spillWriteHealth.consecutiveFailures > 0
+      ? "degraded"
+      : spillWriteHealth.lastSuccessAt !== null
+        ? "healthy"
+        : "initial",
+    spillWriteConsecutiveFailures: spillWriteHealth.consecutiveFailures,
+    spillLastWriteFailureCode: spillWriteHealth.lastFailureCode,
+    spillLastWriteFailureAt: spillWriteHealth.lastFailureAt,
+    spillLastWriteSuccessAt: spillWriteHealth.lastSuccessAt,
     spillReadFailures: spillCounters.readFailures,
     replayScopeMismatchDrops,
   };
@@ -2268,6 +2360,10 @@ export function clearResponseStateMemoryForTests(): void {
   spillCounters.writes = 0;
   spillCounters.writeFailures = 0;
   spillCounters.readFailures = 0;
+  spillWriteHealth.consecutiveFailures = 0;
+  spillWriteHealth.lastFailureCode = null;
+  spillWriteHealth.lastFailureAt = null;
+  spillWriteHealth.lastSuccessAt = null;
   replayScopeMismatchDrops = 0;
   replayOverlapSkips = 0;
   persistAttemptHookForTests = null;

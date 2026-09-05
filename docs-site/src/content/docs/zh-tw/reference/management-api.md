@@ -71,6 +71,16 @@ Session 簽發在需要 data-plane 認證時停用，這包含遠端綁定。遠
 
 關於模型名冊與加密 worker-task 行為背後的概念，請見[子代理介面](/zh-tw/guides/sub-agent-surface/)。
 
+### 用戶端整合復原日誌
+
+| 方法與路徑 | 用途 | 主要錯誤 |
+| --- | --- | --- |
+| `GET /api/client-integrations/journal?client=...` | 列出復原操作，也可限定為單一用戶端。每一項都包含由伺服器計算的 `deletable` 欄位。 | 400 用戶端無效 |
+| `DELETE /api/client-integrations/journal?opId=...` | 停用一筆較舊的復原操作，並在可能時刪除其快照。成功回應中的 `snapshotRemoved: false` 表示清理工作已保留，等待維護重試。 | 400 缺少 `opId`；404 操作不存在或已停用；409 該用戶端的最新操作 |
+
+刪除操作會附加墓碑記錄，而不會重寫日誌。伺服器會保護每個用戶端的最新操作，
+以保留目前的復原點。
+
 ### 組合
 
 | 方法與路徑 | 用途 | Notable errors |

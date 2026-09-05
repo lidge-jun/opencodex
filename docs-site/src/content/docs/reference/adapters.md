@@ -162,6 +162,13 @@ of the HTTP retry loop.
 `/v1beta/models/{model}:streamGenerateContent`; the other modes use their native Google endpoints.
 **Auth:** API key, Vertex ADC, or Google Antigravity OAuth, selected by `googleMode`.
 
+- **Location denials are permission errors, not invalid requests.** Google rejects unsupported
+  geographic or datacenter locations with HTTP 400 `FAILED_PRECONDITION: User location is not
+  supported for the API use.` The proxy reports this as `… location not supported: …` and
+  classifies it as `permission_error` with code `location_not_supported`, so a client does not
+  misread a network-location refusal as a malformed prompt. The direct HTTP response keeps the
+  upstream 400; message-only terminal paths infer 403 (permission class). The restriction itself
+  is Google's — the proxy does not route around it.
 - System prompt → `systemInstruction`; messages → `contents[]` (assistant → `model`); tools →
   `functionDeclarations`. Data-URL images → `inline_data`.
 - Tool-call ids are synthesized when Gemini omits them. Vertex and Antigravity preserve and replay

@@ -830,6 +830,36 @@ describe("provider registry parity", () => {
     }
   });
 
+  test("unknown Claude numeric variants inherit the nearest configured family context window", () => {
+    const anthropic = PROVIDER_REGISTRY.find(entry => entry.id === "anthropic");
+    const seed = providerConfigSeed(anthropic!);
+    const contextWindow = (id: string) => applyProviderConfigHints("anthropic", seed, {
+      id,
+      provider: "anthropic",
+    }).contextWindow;
+
+    expect(contextWindow("claude-fable-5-2")).toBe(1_000_000);
+    expect(contextWindow("Claude-fable-5-2")).toBe(1_000_000);
+    expect(contextWindow("claude-haiku-4-5-20251001")).toBe(200_000);
+    expect(contextWindow("CLAUDE-HAIKU-4-5-20251001")).toBe(200_000);
+    expect(contextWindow("claude-opus-4-1-20250805")).toBeUndefined();
+    expect(contextWindow("claude-3-7-sonnet-20250219")).toBeUndefined();
+  });
+
+  test("context-window family inheritance stays scoped to the Anthropic adapter", () => {
+    const minimax = PROVIDER_REGISTRY.find(entry => entry.id === "minimax");
+    const seed = {
+      ...providerConfigSeed(minimax!),
+      modelContextWindows: { "claude-fable-5": 1_000_000 },
+    };
+    const model = applyProviderConfigHints("minimax", seed, {
+      id: "claude-fable-5-2",
+      provider: "minimax",
+    });
+
+    expect(model.contextWindow).toBeUndefined();
+  });
+
   test("GUI preset projection preserves current featured set plus key catalog and custom", () => {
     const featured = deriveFeaturedProviderIds();
     expect(featured).toEqual([

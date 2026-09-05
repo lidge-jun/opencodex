@@ -1,14 +1,22 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync} from "node:fs";
+import { mkdtempSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
+import {
+  getConfigPath,
+  loadConfig,
+  mutatePersistedConfig,
+  saveConfig,
+} from "../../src/config";
 import {
   clearKeyCooldowns,
   getKeyCooldownUntil,
   hasKeyPoolFailover,
   rotateKeyOn429,
+  rotateKeyOn401,
   rotateProviderTransportOn429,
+  rotateProviderTransportOn401,
 } from "../../src/providers/key-failover";
 import { resolveOpenCodeGoTransport } from "../../src/providers/opencode-go-transport";
 import { deriveXaiConvId } from "../../src/providers/xai-transport";
@@ -19,7 +27,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 let home: string;
 
 function makeConfig(provider: Partial<OcxProviderConfig>): OcxConfig {
-  return {
+  const config = {
     port: 10199,
     defaultProvider: "p",
     providers: {
@@ -30,6 +38,8 @@ function makeConfig(provider: Partial<OcxProviderConfig>): OcxConfig {
       } as OcxProviderConfig,
     },
   } as OcxConfig;
+  saveConfig(config);
+  return config;
 }
 
 function pool3(): OcxProviderConfig["apiKeyPool"] {
@@ -100,10 +110,21 @@ describe("rotateKeyOn429", () => {
 
   test("returns null for oauth/forward providers and single-key pools", () => {
     const oauth = makeConfig({ authMode: "oauth", apiKey: "t", apiKeyPool: pool3() });
+    expect(rotateKeyOn401(oauth, "p")).toBeNull();
     expect(rotateKeyOn429(oauth, "p", null)).toBeNull();
     const single = makeConfig({ apiKey: "key-alpha-000111222333", apiKeyPool: [pool3()![0]] });
     expect(rotateKeyOn429(single, "p", null)).toBeNull();
     expect(rotateKeyOn429(makeConfig({}), "missing", null)).toBeNull();
+  });
+
+  test("unavailable persistence does not publish a tentative cooldown", () => {
+    const config = makeConfig({ apiKey: "key-alpha-000111222333", apiKeyPool: pool3() });
+    const now = 1_000_000;
+    unlinkSync(getConfigPath());
+
+    expect(rotateKeyOn429(config, "p", null, now, "key-alpha-000111222333")).toBeNull();
+    expect(getKeyCooldownUntil("p", "k1", now)).toBeNull();
+    expect(config.providers.p.apiKey).toBe("key-alpha-000111222333");
   });
 
   test("clearKeyCooldowns scoped to a provider", () => {
@@ -131,6 +152,40 @@ describe("rotateKeyOn429", () => {
     // A REAL beta failure afterwards still rotates to gamma.
     expect(rotateKeyOn429(config, "p", null, now, "key-beta-444555666777")?.apiKey).toBe("key-gamma-888999000111");
   });
+
+  test("two stale handlers adopt one committed rotation without rotating twice", () => {
+    const first = makeConfig({ apiKey: "key-alpha-000111222333", apiKeyPool: pool3() });
+    const second = loadConfig();
+    const now = 1_000_000;
+
+    expect(rotateKeyOn429(first, "p", null, now, "key-alpha-000111222333")?.apiKey)
+      .toBe("key-beta-444555666777");
+    expect(rotateKeyOn429(second, "p", null, now, "key-alpha-000111222333")?.apiKey)
+      .toBe("key-beta-444555666777");
+    expect(second.providers.p.apiKey).toBe("key-beta-444555666777");
+    expect(getKeyCooldownUntil("p", "k2", now)).toBeNull();
+  });
+
+  test("rebases over a concurrent pool edit without resurrecting a removed key", () => {
+    const stale = makeConfig({
+      apiKey: "key-alpha-000111222333",
+      apiKeyPool: pool3(),
+      note: "stale",
+    });
+    const added = { id: "k4", key: "key-delta-222333444555", addedAt: 4 };
+    const edit = mutatePersistedConfig(fresh => {
+      fresh.providers.p.apiKeyPool = [fresh.providers.p.apiKeyPool![0]!, fresh.providers.p.apiKeyPool![2]!, added];
+      fresh.providers.p.note = "concurrent";
+      return { changed: true, value: undefined };
+    });
+    expect(edit.status).toBe("committed");
+
+    const rotated = rotateKeyOn429(stale, "p", null, 1_000_000, "key-alpha-000111222333");
+    expect(rotated?.apiKey).toBe("key-gamma-888999000111");
+    expect(rotated?.apiKeyPool?.map(entry => entry.id)).toEqual(["k1", "k3", "k4"]);
+    expect(rotated?.note).toBe("concurrent");
+    expect(stale.providers.p).toEqual(loadConfig().providers.p);
+  });
 });
 
 describe("rotateProviderTransportOn429", () => {
@@ -146,6 +201,7 @@ describe("rotateProviderTransportOn429", () => {
       baseUrl: "https://opencode.ai/zen/go/v1",
     };
     delete config.providers.p;
+    writeFileSync(getConfigPath(), `${JSON.stringify(config, null, 2)}\n`);
 
     const initial = resolveOpenCodeGoTransport(
       config.providers["opencode-go"],
@@ -177,6 +233,7 @@ describe("rotateProviderTransportOn429", () => {
       baseUrl: "https://api.kimi.com/coding/v1",
     };
     delete config.providers.p;
+    writeFileSync(getConfigPath(), `${JSON.stringify(config, null, 2)}\n`);
     expect(config.providers["kimi-code"].promptCacheKey).toBeUndefined();
 
     const parsed: OcxParsedRequest = {
@@ -196,14 +253,14 @@ describe("rotateProviderTransportOn429", () => {
     });
     expect(rotated?.apiKey).toBe("key-beta-444555666777");
     expect(rotated?.promptCacheKey).toBe(true);
+    expect(rotated?.modelContextWindows).toBeDefined();
     const retryBody = JSON.parse(createOpenAIChatAdapter(rotated!).buildRequest(parsed).body);
     expect(retryBody.prompt_cache_key).toBe(promptCacheKey);
   });
 
-  test("inherits the routed provider's registry backfills; only the key changes", () => {
-    // The persisted config predates the registry scalar flags and merged metadata —
-    // routedProviderConfig backfilled them at request time. Rotation must not fall back
-    // to the bare persisted snapshot and silently drop them for the retried request.
+  test("drops stale routed configuration while persisted fields stay authoritative", () => {
+    // Request-time configuration cannot revive fields absent from the committed snapshot.
+    // Registry providers still receive their canonical backfills from routedProviderConfig.
     const config = makeConfig({ apiKey: "key-alpha-000111222333", apiKeyPool: pool3() });
     const routedProvider = {
       ...config.providers.p,
@@ -220,14 +277,36 @@ describe("rotateProviderTransportOn429", () => {
     });
 
     expect(rotated?.apiKey).toBe("key-beta-444555666777");
-    expect(rotated?.baseUrl).toBe("https://registry-pinned.example/v1");
-    expect(rotated?.promptCacheKey).toBe(true);
-    expect(rotated?.parallelToolCalls).toBe(false);
-    expect(rotated?.modelContextWindows).toEqual({ "some-model": 262_144 });
-    expect(rotated?.noTemperatureModels).toEqual(["some-model"]);
+    expect(rotated?.baseUrl).toBe("https://api.example.com/v1");
+    expect(rotated?.promptCacheKey).toBeUndefined();
+    expect(rotated?.parallelToolCalls).toBeUndefined();
+    expect(rotated?.modelContextWindows).toBeUndefined();
+    expect(rotated?.noTemperatureModels).toBeUndefined();
     // The pool swap still lands in the persisted config.
     expect(config.providers.p.apiKey).toBe("key-beta-444555666777");
     expect(config.providers.p.promptCacheKey).toBeUndefined();
+  });
+
+  test("does not resurrect an optional provider field removed before rotation", () => {
+    const config = makeConfig({
+      apiKey: "key-alpha-000111222333",
+      apiKeyPool: pool3(),
+      headers: { "x-user-header": "stale" },
+    });
+    const routedProvider = { ...config.providers.p };
+    const edit = mutatePersistedConfig(fresh => {
+      delete fresh.providers.p.headers;
+      return { changed: true, value: undefined };
+    });
+    expect(edit.status).toBe("committed");
+
+    const rotated = rotateProviderTransportOn429(config, "p", routedProvider, {
+      now: 1_000_000,
+      attemptedKey: "key-alpha-000111222333",
+    });
+
+    expect(rotated?.apiKey).toBe("key-beta-444555666777");
+    expect(rotated?.headers).toBeUndefined();
   });
 
   test("re-applies xAI cache affinity without OAuth CLI headers after key rotation", () => {
@@ -239,6 +318,8 @@ describe("rotateProviderTransportOn429", () => {
     });
     config.providers.xai = config.providers.p;
     delete config.providers.p;
+    config.defaultProvider = "xai";
+    writeFileSync(getConfigPath(), `${JSON.stringify(config, null, 2)}\n`);
 
     const rotated = rotateProviderTransportOn429(config, "xai", { ...config.providers.xai }, {
       now: 1_000_000,
@@ -254,5 +335,39 @@ describe("rotateProviderTransportOn429", () => {
     expect(rotated?.headers?.["x-grok-client-version"]).toBeUndefined();
     expect(rotated?.headers?.["x-xai-token-auth"]).toBeUndefined();
     expect(JSON.stringify(rotated?.headers)).not.toContain(promptCacheKey);
+  });
+});
+
+describe("rotateKeyOn401", () => {
+  test("rotates to the next key and holds the rejected key for the full cap, not the 429 default", () => {
+    const config = makeConfig({ apiKey: "key-alpha-000111222333", apiKeyPool: pool3() });
+    const now = 1_000_000;
+    const rotated = rotateKeyOn401(config, "p", now);
+    expect(rotated?.apiKey).toBe("key-beta-444555666777");
+    expect(config.providers.p.apiKey).toBe("key-beta-444555666777");
+    // A 401 is a verdict about the credential, so the cooldown is MAX_COOLDOWN_MS (10 min),
+    // not the 60s DEFAULT_COOLDOWN_MS a header-less 429 gets.
+    expect(getKeyCooldownUntil("p", "k1", now)).toBe(now + 10 * 60_000);
+    expect(getKeyCooldownUntil("p", "k1", now)).not.toBe(now + 60_000);
+  });
+
+  test("a rejected key is not retried once the 429 default window would have elapsed", () => {
+    const config = makeConfig({ apiKey: "key-alpha-000111222333", apiKeyPool: pool3() });
+    const now = 1_000_000;
+    rotateKeyOn401(config, "p", now);
+    rotateKeyOn401(config, "p", now);
+    // alpha and beta are both rejected; gamma is the only candidate left.
+    expect(rotateKeyOn401(config, "p", now)?.apiKey ?? config.providers.p.apiKey).toBe("key-gamma-888999000111");
+    // 61s later a 429 cooldown would have expired, but a 401 hold has not.
+    expect(getKeyCooldownUntil("p", "k1", now + 61_000)).toBe(now + 10 * 60_000);
+  });
+
+  test("rotateProviderTransportOn401 rebuilds the transport with the rotated key", () => {
+    const config = makeConfig({ apiKey: "key-alpha-000111222333", apiKeyPool: pool3() });
+    const now = 1_000_000;
+    const routed = { ...config.providers.p } as Parameters<typeof rotateProviderTransportOn401>[2];
+    const rotated = rotateProviderTransportOn401(config, "p", routed, { now });
+    expect(rotated?.apiKey).toBe("key-beta-444555666777");
+    expect(getKeyCooldownUntil("p", "k1", now)).toBe(now + 10 * 60_000);
   });
 });

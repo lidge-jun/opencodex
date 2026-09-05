@@ -148,6 +148,13 @@ describe("ocx models richer metadata", () => {
           noVisionModels: ["model-b"],
           reasoningEfforts: ["low", "medium", "high"],
         },
+        anthropic: {
+          adapter: "anthropic",
+          baseUrl: "https://api.anthropic.com",
+          models: ["claude-fable-5-2", "Claude-fable-5-3", "claude-fable-5-1", "unknown-model"],
+          contextWindow: 128000,
+          modelContextWindows: { "claude-fable-5": 1000000, "claude-fable-5-1": 800000 },
+        },
       },
       defaultProvider: "test",
     };
@@ -164,6 +171,16 @@ describe("ocx models richer metadata", () => {
       const modelB = parsed.models.find((m: { model: string }) => m.model === "model-b");
       expect(modelB.contextWindow).toBe(32000);
       expect(modelB.inputModalities).toEqual(["text"]);
+
+      const anthropicWindows = Object.fromEntries(parsed.models
+        .filter((m: { provider: string }) => m.provider === "anthropic")
+        .map((m: { model: string; contextWindow: number }) => [m.model, m.contextWindow]));
+      expect(anthropicWindows).toMatchObject({
+        "claude-fable-5-2": 1000000,
+        "Claude-fable-5-3": 1000000,
+        "claude-fable-5-1": 800000,
+        "unknown-model": 128000,
+      });
     } finally {
       removeTreeWithRetry(dir);
     }

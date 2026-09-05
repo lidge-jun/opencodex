@@ -1,11 +1,17 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   MODEL_RENAMES,
   projectModelRenames,
   type ModelRename,
 } from "../../src/providers/model-rename-migration";
+import { runModelRenameStartupMigration } from "../../src/providers/model-rename-startup";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
+import { getConfigPath, loadConfig, saveConfig, setPersistedConfigMutationBeforeCommitForTests } from "../../src/config";
 import type { OcxConfig } from "../../src/types";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const INTL_BASE_URL = "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1";
 
@@ -129,5 +135,144 @@ describe("registry model rename migration (#1610)", () => {
       // A rename whose source id is still seeded would fight the registry.
       expect(entry?.models).not.toContain(rename.from);
     }
+  });
+});
+
+describe("model rename startup persistence", () => {
+  const homes: string[] = [];
+  const originalHome = process.env.OPENCODEX_HOME;
+
+  function isolate(prefix: string): void {
+    const home = mkdtempSync(join(tmpdir(), prefix));
+    homes.push(home);
+    process.env.OPENCODEX_HOME = home;
+  }
+
+  /** A saved config the renames actually rewrite, valid enough for loadConfig to accept. */
+  function persistableStale(): OcxConfig {
+    return { port: 10100, defaultProvider: "alibaba-token-plan-intl", ...staleConfig() } as OcxConfig;
+  }
+
+  afterEach(() => {
+    setPersistedConfigMutationBeforeCommitForTests(null);
+    if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = originalHome;
+    for (const home of homes.splice(0)) removeTreeWithRetry(home);
+  });
+
+  test("startup no-op preserves the live config object identity", () => {
+    const clean = projectModelRenames(staleConfig(), [RENAME]).config;
+    const returned = runModelRenameStartupMigration(clean, {
+      project: config => projectModelRenames(config, [RENAME]),
+      save: () => { throw new Error("no-op must not save"); },
+    });
+
+    expect(returned).toBe(clean);
+  });
+
+  test("startup no-op still reports projection warnings", () => {
+    const clean = projectModelRenames(staleConfig(), [RENAME]).config;
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const returned = runModelRenameStartupMigration(clean, {
+        project: config => ({ config, changed: false, warnings: ["rename target is unavailable"] }),
+        save: () => { throw new Error("no-op must not save"); },
+      });
+
+      expect(returned).toBe(clean);
+      expect(warn).toHaveBeenCalledWith("[model-rename-migration] rename target is unavailable");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  // RED on dev: dev hands `projectModelRenames` the live object and saves the projection
+  // wholesale, so an operator edit written after loadConfig() is silently discarded.
+  test("rebases the startup rename over a concurrent provider edit", () => {
+    isolate("ocx-model-rename-race-");
+    const live = persistableStale();
+    saveConfig(live);
+    setPersistedConfigMutationBeforeCommitForTests(() => {
+      const concurrent = loadConfig();
+      concurrent.providers["alibaba-token-plan-intl"]!.note = "concurrent-operator-edit";
+      writeFileSync(getConfigPath(), JSON.stringify(concurrent, null, 2) + "\n");
+    });
+
+    const returned = runModelRenameStartupMigration(live);
+
+    expect(returned).toBe(live);
+    expect(live.providers["alibaba-token-plan-intl"]!.models).toContain("qwen3.8-max");
+    expect(live.providers["alibaba-token-plan-intl"]!.note).toBe("concurrent-operator-edit");
+    const persisted = loadConfig();
+    expect(persisted.providers["alibaba-token-plan-intl"]!.models).toContain("qwen3.8-max");
+    expect(persisted.providers["alibaba-token-plan-intl"]!.note).toBe("concurrent-operator-edit");
+  });
+
+  // #3524 threw here, on the unguarded startServer() call site at src/server/index.ts:651.
+  test("a config removed between load and migrate warns and degrades to an in-memory apply", () => {
+    isolate("ocx-model-rename-unavailable-");
+    const live = persistableStale();
+    saveConfig(live);
+    rmSync(getConfigPath());
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      let returned: OcxConfig | undefined;
+      expect(() => { returned = runModelRenameStartupMigration(live); }).not.toThrow();
+
+      expect(returned).toBe(live);
+      expect(live.providers["alibaba-token-plan-intl"]!.models).toContain("qwen3.8-max");
+      expect(warn.mock.calls.some(([first]) => typeof first === "string"
+        && first.includes("[model-rename-migration] persistence unavailable (missing)"))).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("a malformed config degrades without throwing", () => {
+    isolate("ocx-model-rename-invalid-");
+    const live = persistableStale();
+    saveConfig(live);
+    writeFileSync(getConfigPath(), "{ this is not json");
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(() => runModelRenameStartupMigration(live)).not.toThrow();
+      expect(live.providers["alibaba-token-plan-intl"]!.models).toContain("qwen3.8-max");
+      expect(warn.mock.calls.some(([first]) => typeof first === "string"
+        && first.includes("[model-rename-migration] persistence unavailable"))).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("a fresh install with nothing to rename neither writes nor warns about persistence", () => {
+    isolate("ocx-model-rename-fresh-");
+    const clean = projectModelRenames(persistableStale()).config;
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(runModelRenameStartupMigration(clean)).toBe(clean);
+      expect(warn.mock.calls.some(([first]) => typeof first === "string"
+        && first.includes("persistence unavailable"))).toBe(false);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("an untouched top-level branch keeps its live object identity across the migration", () => {
+    isolate("ocx-model-rename-identity-");
+    const live = persistableStale();
+    live.providers.untouched = {
+      adapter: "openai",
+      baseUrl: "http://127.0.0.1:9999/v1",
+      allowPrivateNetwork: true,
+      models: ["local-live"],
+    };
+    saveConfig(live);
+    const liveUntouched = live.providers.untouched;
+
+    runModelRenameStartupMigration(live);
+
+    // adoptConfig copies key by key, so a reference a caller still holds to an unchanged
+    // branch survives; a clear-and-reassign would silently detach it.
+    expect(live.providers.untouched).toBe(liveUntouched);
   });
 });

@@ -48,11 +48,13 @@ type JournalRow = {
   configPath: string;
   snapshot: "none" | "stored" | "expired";
   undoable: boolean;
+  deletable?: boolean;
 };
 
 let stateResponse: () => Response;
 let journalRows: JournalRow[];
 let putResponse: () => Response;
+let deleteResponse: () => Response;
 /**
  * The overview also reads Codex routing, API keys, Claude Code, Claude Desktop
  * and the Grok fence. Default answers keep every existing test's card grid
@@ -101,6 +103,7 @@ beforeEach(() => {
   apiBase = `http://ocx-test-${mountCount}.invalid`;
   stateResponse = () => json(status());
   putResponse = () => json({ ok: true, clientId: "hermes", changed: true, state: "absent", message: "disabled" });
+  deleteResponse = () => json({ ok: true, clientId: "hermes", opId: "op-old", snapshotRemoved: true });
   failExtraSources = false;
 
   const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -111,6 +114,7 @@ beforeEach(() => {
       method,
       body: init?.body ? JSON.parse(String(init.body)) : undefined,
     });
+    if (url.includes("/journal") && method === "DELETE") return deleteResponse();
     if (url.includes("/journal")) return json({ operations: journalRows });
     if (url.includes("/api/startup-health")) {
       return failExtraSources
@@ -449,6 +453,38 @@ test("an expired snapshot offers nothing, because the bytes are gone", async () 
   expect(container.innerHTML).toContain("Backup expired");
 });
 
+test("the client page reconciles a journal row another tab already deleted", async () => {
+  journalRows = [{
+    opId: "op-stale",
+    clientId: "hermes",
+    kind: "apply",
+    at: "2026-08-02T08:00:00.000Z",
+    configPath: "/tmp/home/.hermes/config.yaml",
+    snapshot: "expired",
+    undoable: false,
+    deletable: true,
+  }];
+  deleteResponse = () => {
+    journalRows = [];
+    return json({
+      error: "integration operation not found",
+      code: "integration_operation_not_found",
+      opId: "op-stale",
+    }, 404);
+  };
+  await mountClient();
+
+  await act(async () => { buttonByText("Delete")!.click(); });
+  expect(container.querySelector(".integration-consequence-dialog")).not.toBeNull();
+  await act(async () => { buttonByText("Delete entry")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 30)); });
+
+  expect(container.querySelector(".integration-consequence-dialog")).toBeNull();
+  expect(buttonByText("Delete")).toBeUndefined();
+  expect(requests.filter(request => request.method === "DELETE")).toHaveLength(1);
+  expect(requests.filter(request => request.method === "GET" && request.url.includes("/journal")).length).toBeGreaterThanOrEqual(2);
+});
+
 test("a residual write tells the user the file may be half-written and where the backup is", async () => {
   /*
    * `residual` means compensation itself failed. It is the single most
@@ -518,6 +554,39 @@ async function mountOverview(): Promise<void> {
   });
   await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 30)); });
 }
+
+test("the overview reconciles a journal row another tab already deleted", async () => {
+  stateResponse = () => json({ clients: [status()] });
+  journalRows = [{
+    opId: "op-stale-overview",
+    clientId: "hermes",
+    kind: "apply",
+    at: "2026-08-02T08:00:00.000Z",
+    configPath: "/tmp/home/.hermes/config.yaml",
+    snapshot: "expired",
+    undoable: false,
+    deletable: true,
+  }];
+  deleteResponse = () => {
+    journalRows = [];
+    return json({
+      error: "integration operation not found",
+      code: "integration_operation_not_found",
+      opId: "op-stale-overview",
+    }, 404);
+  };
+  await mountOverview();
+
+  await act(async () => { buttonByText("Delete")!.click(); });
+  expect(container.querySelector(".integration-consequence-dialog")).not.toBeNull();
+  await act(async () => { buttonByText("Delete entry")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 30)); });
+
+  expect(container.querySelector(".integration-consequence-dialog")).toBeNull();
+  expect(buttonByText("Delete")).toBeUndefined();
+  expect(requests.filter(request => request.method === "DELETE")).toHaveLength(1);
+  expect(requests.filter(request => request.method === "GET" && request.url.includes("/journal")).length).toBeGreaterThanOrEqual(2);
+});
 
 test("the overview does not claim nothing is installed while it is still loading", async () => {
   /*

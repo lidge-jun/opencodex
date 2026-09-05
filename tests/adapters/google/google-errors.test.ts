@@ -87,3 +87,75 @@ describe("google error classification & quota exhaustion", () => {
     expect(isQuotaExhaustedBody(jsonBody)).toBe(false);
   });
 });
+
+describe("google location denial classification (#3467)", () => {
+  const locationBody = JSON.stringify({
+    error: {
+      code: 400,
+      status: "FAILED_PRECONDITION",
+      message: "User location is not supported for the API use.",
+    },
+  });
+
+  test("HTTP 400 FAILED_PRECONDITION location denial is not an invalid request", () => {
+    expect(safeAntigravityHttpErrorMessage(400, locationBody))
+      .toBe("Antigravity location not supported: User location is not supported for the API use.");
+    expect(safeVertexHttpErrorMessage(400, locationBody)).toContain("Vertex AI location not supported");
+    expect(safeGoogleHttpErrorMessage("Gemini", 400, locationBody)).toContain("Gemini location not supported");
+  });
+
+  test("alternate location / region / country phrasings classify the same way", () => {
+    for (const message of [
+      "unsupported location for this API",
+      "The region is not supported",
+      "This model is not supported in your country",
+    ]) {
+      const body = JSON.stringify({ error: { code: 400, status: "FAILED_PRECONDITION", message } });
+      expect(safeAntigravityHttpErrorMessage(400, body)).toContain("Antigravity location not supported");
+    }
+  });
+
+  test("a generic FAILED_PRECONDITION without location wording stays an invalid request", () => {
+    const body = JSON.stringify({
+      error: { code: 400, status: "FAILED_PRECONDITION", message: "Precondition check failed." },
+    });
+    expect(safeAntigravityHttpErrorMessage(400, body)).toContain("Antigravity invalid request");
+  });
+
+  test("auth, quota and permission enums keep precedence over location wording", () => {
+    const unauth = JSON.stringify({
+      error: { code: 401, status: "UNAUTHENTICATED", message: "location is not supported (token expired)" },
+    });
+    expect(safeAntigravityHttpErrorMessage(401, unauth)).toContain("Antigravity authentication failed");
+
+    const exhausted = JSON.stringify({
+      error: { code: 429, status: "RESOURCE_EXHAUSTED", message: "Rate limit hit; location not supported" },
+    });
+    expect(safeAntigravityHttpErrorMessage(429, exhausted)).toContain("Antigravity rate limit exceeded");
+
+    const denied = JSON.stringify({
+      error: { code: 403, status: "PERMISSION_DENIED", message: "location is not supported for this project" },
+    });
+    expect(safeAntigravityHttpErrorMessage(403, denied)).toContain("Antigravity access denied");
+  });
+
+  test("server statuses and explicit non-location enums do not infer a location reason", () => {
+    const message = "User location is not supported for the API use.";
+    expect(safeAntigravityHttpErrorMessage(400, `PERMISSION_DENIED: ${message}`))
+      .toBe(`Antigravity access denied: PERMISSION_DENIED: ${message}`);
+    for (const status of [500, 502, 503, 504]) {
+      const body = JSON.stringify({ error: { code: status, status: "FAILED_PRECONDITION", message } });
+      expect(safeAntigravityHttpErrorMessage(status, body)).toBe(
+        `Antigravity ${status === 503 ? "server overloaded" : "upstream error"}: ${message}`,
+      );
+    }
+    for (const [status, prefix] of [
+      ["PERMISSION_DENIED", "access denied"],
+      ["INVALID_ARGUMENT", "invalid request"],
+      ["UNAVAILABLE", "server overloaded"],
+    ]) {
+      const body = JSON.stringify({ error: { code: 400, status, message } });
+      expect(safeAntigravityHttpErrorMessage(400, body)).toBe(`Antigravity ${prefix}: ${message}`);
+    }
+  });
+});

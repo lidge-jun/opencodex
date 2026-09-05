@@ -872,6 +872,52 @@ test("the native-main drain sentinel covers the flagships without widening to gp
     });
   });
 
+  test("restricted fallback can admit an independently trusted resolved route", () => {
+    resetSubagentModelFallbackStateForTests();
+    const config = cfg({
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+          codexAccountMode: "direct",
+        },
+        relay: {
+          adapter: "openai-responses",
+          baseUrl: "https://relay.example.test/v1",
+          authMode: "key",
+          apiKey: "test-relay-key",
+        },
+        xai: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.x.ai/v1",
+          authMode: "key",
+          apiKey: "test-xai-key",
+        },
+      },
+      subagentModelFallback: ["relay/gpt-5.5"],
+    });
+    const selected = selectAvailableSubagentModel(
+      "xai/grok-4.5",
+      config,
+      [],
+      null,
+      Date.now(),
+      true,
+      undefined,
+      [],
+      undefined,
+      undefined,
+      undefined,
+      route => route.providerName === "relay",
+    );
+    expect(selected).toEqual({
+      model: "relay/gpt-5.5",
+      rewritten: true,
+      skipped: ["xai/grok-4.5"],
+    });
+  });
+
   test("pool quota affects only candidates whose resolved route uses pool mode", () => {
     resetSubagentModelFallbackStateForTests();
     updateAccountQuota("pool-a", 95, undefined, 20);

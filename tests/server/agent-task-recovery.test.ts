@@ -146,6 +146,123 @@ describe("agent task recovery (opt-in, default off)", () => {
     expect(fetchedUrls[0]).toContain("chatgpt.com/backend-api/codex");
   });
 
+  test("trusted direct Responses routes bypass recovery and preserve encrypted tasks", async () => {
+    for (const adapterConfig of [
+      { adapter: "openai-responses" as const },
+      {
+        adapter: "openai-chat" as const,
+        modelAdapters: { "gpt-5.6-luna": "openai-responses" },
+      },
+    ]) {
+      const config = routedConfig();
+      config.providers.relay = {
+        ...adapterConfig,
+        baseUrl: "https://relay.example.test/v1",
+        authMode: "key",
+        apiKey: "test-relay-key",
+        allowEncryptedV2AgentTasks: true,
+      };
+      const input = encryptedInput();
+      const fetchedUrls: string[] = [];
+      let forwardedInput: unknown;
+      globalThis.fetch = (async (url, init) => {
+        fetchedUrls.push(String(url));
+        const body = JSON.parse(String(init?.body)) as { input?: unknown };
+        forwardedInput = body.input;
+        return providerResponse();
+      }) as typeof fetch;
+
+      const response = await post(config, "relay/gpt-5.6-luna", input, codexHeaders());
+
+      expect(response.status).toBe(200);
+      expect(fetchedUrls).toHaveLength(1);
+      expect(fetchedUrls[0]).toContain("relay.example.test");
+      expect(fetchedUrls[0]).not.toContain("chatgpt.com");
+      expect(forwardedInput).toEqual(input);
+    }
+  });
+
+  test("encrypted fallback selection preserves an eligible trusted relay primary", async () => {
+    const config = routedConfig();
+    config.subagentModelFallback = ["gpt-5.5"];
+    config.providers.relay = {
+      adapter: "openai-responses",
+      baseUrl: "https://relay.example.test/v1",
+      authMode: "key",
+      apiKey: "test-relay-key",
+      allowEncryptedV2AgentTasks: true,
+    };
+    const input = encryptedInput();
+    const fetchedUrls: string[] = [];
+    let forwardedInput: unknown;
+    globalThis.fetch = (async (url, init) => {
+      fetchedUrls.push(String(url));
+      forwardedInput = (JSON.parse(String(init?.body)) as { input?: unknown }).input;
+      return providerResponse();
+    }) as typeof fetch;
+
+    const response = await post(config, "relay/gpt-5.6-luna", input, codexHeaders());
+
+    expect(response.status).toBe(200);
+    expect(fetchedUrls).toEqual(["https://relay.example.test/v1/responses"]);
+    expect(forwardedInput).toEqual(input);
+  });
+
+  test("encrypted fallback selection can choose an eligible trusted relay candidate", async () => {
+    const config = routedConfig();
+    config.subagentModelFallback = ["relay/gpt-5.5"];
+    config.providers.relay = {
+      adapter: "openai-responses",
+      baseUrl: "https://relay.example.test/v1",
+      authMode: "key",
+      apiKey: "test-relay-key",
+      allowEncryptedV2AgentTasks: true,
+    };
+    const input = encryptedInput();
+    const fetchedUrls: string[] = [];
+    let forwardedInput: unknown;
+    globalThis.fetch = (async (url, init) => {
+      fetchedUrls.push(String(url));
+      forwardedInput = (JSON.parse(String(init?.body)) as { input?: unknown }).input;
+      return providerResponse();
+    }) as typeof fetch;
+
+    const response = await post(config, "xai/grok-4.5", input, codexHeaders());
+
+    expect(response.status).toBe(200);
+    expect(fetchedUrls).toEqual(["https://relay.example.test/v1/responses"]);
+    expect(forwardedInput).toEqual(input);
+  });
+
+  test.each([
+    ["OAuth authentication", { adapter: "openai-responses" as const, authMode: "oauth" as const }],
+    ["a Chat Completions adapter", { adapter: "openai-chat" as const }],
+    ["a model-level Chat override", {
+      adapter: "openai-responses" as const,
+      modelAdapters: { "gpt-5.6-luna": "openai-chat" },
+    }],
+  ])("trusted passthrough stays fail closed for %s", async (_case, providerConfig) => {
+    const config = routedConfig(null);
+    config.providers.relay = {
+      ...providerConfig,
+      baseUrl: "https://relay.example.test/v1",
+      apiKey: "test-relay-key",
+      allowEncryptedV2AgentTasks: true,
+    };
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      throw new Error("ineligible encrypted tasks must not reach an upstream");
+    }) as typeof fetch;
+
+    const response = await post(config, "relay/gpt-5.6-luna", encryptedInput(), codexHeaders());
+    const json = await response.json() as { error?: { code?: string } };
+
+    expect(response.status).toBe(400);
+    expect(json.error?.code).toBe("unreadable_encrypted_agent_task");
+    expect(fetchCalls).toBe(0);
+  });
+
   test("authenticated ChatGPT recovery accepts the decrypted payload without a duplicated routing envelope", async () => {
     const assignment = "Implement the focused regression test.";
     const fetchedUrls: string[] = [];

@@ -5,7 +5,7 @@ import { startVisibilityPoll } from "../visibility-poll";
 import { normalizeAccountPriority } from "../account-priority";
 import { useKeyedClientResource } from "../client-resource";
 import { extractAutoSwitchThresholdPayload } from "../codex-auto-switch";
-import type { AccountQuota } from "../codex-quota-utils";
+import { quotaAutoRefreshAvailability, type AccountQuota } from "../codex-quota-utils";
 import { accountNeedsReauth } from "../oauth-health-display";
 import {
   codexAccountMutationCompletion,
@@ -39,6 +39,12 @@ export interface CodexAccountEntry {
   priority: number;
   hasCredential: boolean;
   quota: AccountQuota | null;
+  quotaAutoRefresh: {
+    fiveHourAvailable: boolean;
+    weeklyAvailable: boolean;
+    fiveHourEnabled: boolean;
+    weeklyEnabled: boolean;
+  };
   needsReauth?: boolean;
   health?: { status: "healthy" | "cooldown" | "reauth_required" | "warning"; reason?: string; until?: string };
   healthLabel?: string;
@@ -231,10 +237,16 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
             // a payload without it from rendering a NaN order on every card.
             nextAccounts = ((payload.accounts ?? []) as CodexAccountEntry[]).map(account => {
               const logLabel = account.isMain ? "main" : account.logLabel;
+              const available = quotaAutoRefreshAvailability(account.quota);
               return {
                 ...account,
                 ...(logLabel ? { logLabel } : {}),
                 priority: normalizeAccountPriority(account.priority),
+                quotaAutoRefresh: account.quotaAutoRefresh ?? {
+                  ...available,
+                  fiveHourEnabled: false,
+                  weeklyEnabled: false,
+                },
               };
             });
             setAccounts(nextAccounts);
