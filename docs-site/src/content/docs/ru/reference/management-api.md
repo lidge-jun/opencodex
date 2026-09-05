@@ -87,6 +87,16 @@ GUI-сессия в стиле loopback не выпускается.
 О принципах model roster и поведении encrypted worker-task см.
 [Поверхность подагентов](/guides/sub-agent-surface/).
 
+### Журнал отката клиентских интеграций
+
+| Метод и путь | Назначение | Важные ошибки |
+| --- | --- | --- |
+| `GET /api/client-integrations/journal?client=...` | Получить операции отката, при необходимости только для одного клиента. Каждая запись содержит вычисленный сервером флаг `deletable`. | 400 неверный клиент |
+| `DELETE /api/client-integrations/journal?opId=...` | Исключить старую операцию отката и по возможности удалить её снимок. В успешном ответе `snapshotRemoved: false` означает, что очистка сохранена для повторной попытки обслуживания. | 400 нет `opId`; 404 операция отсутствует или уже исключена; 409 последняя операция клиента |
+
+Удаление добавляет отметку вместо перезаписи журнала. Сервер защищает последнюю операцию каждого
+клиента, чтобы сохранить текущую точку отмены.
+
 ### Combos
 
 | Метод и путь | Назначение | Особые ошибки |
@@ -159,7 +169,10 @@ Endpoint'ы storage cleanup могут перемещать или навсег�
 | `PUT /api/model-visibility` | Атомарно изменить видимость на уровне провайдера или модели | 400 invalid provider, scope, target or body |
 | `GET, POST /api/custom-models` | Показать список custom-моделей или добавить одну | 400 invalid fields; 404 provider missing; 409 duplicate model |
 | `PUT, DELETE /api/custom-models/{id}` | Изменить или удалить одну custom-модель | 400 invalid id/fields; 404 not found; 409 duplicate model |
-| `GET, PUT /api/selected-models` | Прочитать allowlist'ы и availability провайдеров либо заменить один allowlist | 400 missing provider/body; 404 unknown provider |
+| `GET, PUT /api/selected-models` | Прочитать allowlist'ы и availability провайдеров либо заменить один allowlist | 400 missing provider/body; 404 unknown provider; PUT 409 `initial_model_selection_pending` |
+| `GET, PUT /api/model-presets` | Прочитать пресеты или выбрать режим preset/all/custom | 400 неверный режим или неподдерживаемый пресет; 404 неизвестный провайдер; PUT 409 `initial_model_selection_pending` |
+
+Пока достоверный исходный список моделей не получен, корректные PUT-запросы к `/api/selected-models` и `/api/model-presets` возвращают HTTP 409 с кодом `initial_model_selection_pending`. Обновите список моделей, например через `GET /api/models`, и повторите запрос после успешного получения списка.
 
 ### OAuth-аккаунты, ключи провайдеров и ключи data plane
 
@@ -247,7 +260,7 @@ picker изменилась. `catalogRefreshPending: true` в успешном �
 | `PUT /api/codex-auth/failover` | Задать порог failover аккаунтов | 400 invalid threshold |
 | `GET /api/codex-auth/quota` | Прочитать кэшированное состояние квоты по аккаунтам | — |
 | `GET /api/codex-auth/reset-credits` | Проверить право аккаунта на reset credit | 400 missing account id; upstream status passthrough; 500 lookup failure |
-| `POST /api/codex-auth/reset-credits/consume` | Израсходовать доступный reset credit | 400 missing account id; upstream status passthrough; 503 `server_busy`; 500 consume failure |
+| `POST /api/codex-auth/reset-credits/consume` | Израсходовать доступный reset credit. Необязательный `operationId` (UUIDv4) делает списание идемпотентным: тот же id воспроизводит один сохранённый результат вместо расходования второго кредита. | 400 missing account id или некорректный `operationId`; 409 `identity_mismatch`, если id принадлежит другому аккаунту; upstream status passthrough; 503 `server_busy`, `capacity` или `unavailable`; 500 consume failure |
 | `POST /api/codex-auth/login` | Запустить login или reauthentication для Codex | 400 invalid request; conflict/busy login states |
 | `POST /api/codex-auth/login/code` | Отправить manual code для login-flow Codex | 400 invalid flow/code |
 | `POST /api/codex-auth/login/cancel` | Отменить login-flow Codex | — |

@@ -45,7 +45,7 @@ const CONSENT_WARNING = [
   "Meta scopes the Muse Code credential to the Muse Code CLI.",
   "Using it here is UNSUPPORTED: Meta does not authorize subscription coverage outside its own CLI,",
   "how these calls settle is not observable from the API, and you should treat every call as billable.",
-  "The imported key is copied into OpenCodex's auth store (~/.opencodex/auth.json, 0600).",
+  "The key you import or paste is copied into OpenCodex's auth store (~/.opencodex/auth.json, 0600).",
   "Supported alternative: the meta-model provider with your own key (META_MODEL_API_KEY).",
 ].join(" ");
 
@@ -114,6 +114,43 @@ async function defaultReadKeychain(signal?: AbortSignal): Promise<string | null>
 const INSTALL_HINT =
   "Install it from https://dev.meta.ai/install.sh, run `muse login`, then retry.";
 
+/**
+ * Where a user without the CLI gets a key by hand.
+ *
+ * The Muse Code API key is visible in Meta's own developer console, so a host with no
+ * CLI is not out of options ??it is out of an IMPORT path. That distinction is the whole
+ * reason this branch exists: refusing a platform because our importer cannot read its
+ * store, while the vendor hands the same key to the user in a browser, is a limitation
+ * of the importer being reported as a limitation of the platform.
+ */
+const MANUAL_KEY_URL = "https://dev.meta.ai";
+
+/**
+ * Accept a hand-entered Muse Code API key.
+ *
+ * Every guarantee the import path makes still holds here, because they are enforced
+ * BELOW this function rather than inside it: the same `LLM|` grammar check, the same
+ * live validation against the Model API, and the same consent warning, which has
+ * already fired before any of this runs. What is missing is only the pointer, so the
+ * credential carries no email and `source` is `manual` rather than `local-cli`.
+ */
+async function manualKeyCredential(
+  ctrl: OAuthController,
+  reason: string,
+): Promise<string | null> {
+  if (!ctrl.onManualCodeInput) return null;
+  // Resolve the login flow first so the GUI renders its paste field; otherwise
+  // onManualCodeInput blocks and the dashboard never sees a response (kiro.ts:405).
+  ctrl.onAuth?.({
+    url: MANUAL_KEY_URL,
+    instructions:
+      `${reason} Sign in at ${MANUAL_KEY_URL}, copy your Muse Code API key, and paste it below.`,
+  });
+  ctrl.onProgress?.(`Paste a Muse Code API key from ${MANUAL_KEY_URL} (it starts with "LLM|").`);
+  const pasted = (await ctrl.onManualCodeInput()).trim();
+  return pasted.length > 0 ? pasted : null;
+}
+
 function normalizedEmail(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim().toLowerCase();
@@ -133,11 +170,29 @@ export async function loginMetaMuse(
   ctrl.onProgress?.(CONSENT_WARNING);
 
   const platform = deps.platform ?? process.platform;
+  // Off darwin there is no store this importer can read: Meta ships no native Windows
+  // CLI, and the Linux credential shape has never been measured. That is a limitation
+  // of the IMPORT, not of the platform ??the same key is visible in Meta's console ??
+  // so these hosts get a paste field instead of a dead end. The pasted key then goes
+  // through the identical grammar check and live validation as an imported one.
   if (platform !== "darwin") {
-    throw new Error(
-      "Meta Muse Code login is macOS-only: the CLI stores its credential in the macOS Keychain, "
-        + "and no other platform's storage has been verified. Use the meta-model provider with your own key instead.",
-    );
+    // The two platforms are unavailable for DIFFERENT reasons, and saying so matters:
+    // Meta ships no Windows build at all, while the Linux CLI exists and only its
+    // credential storage is unmeasured. Collapsing them into "no CLI here" would tell
+    // a Linux user something false about their own machine.
+    const reason = platform === "win32"
+      ? "Meta ships no native Windows Muse Code CLI, so there is no credential to import."
+      : "The Muse Code CLI runs here, but where it stores its credential has not been measured, "
+        + "so importing one is refused rather than guessed.";
+    const pasted = await manualKeyCredential(ctrl, reason);
+    if (pasted === null) {
+      throw new Error(
+        `${reason} This client cannot prompt for a key, so run \`ocx login meta-muse\` from the CLI `
+          + `or the dashboard and paste yours from ${MANUAL_KEY_URL}, `
+          + "or use the meta-model provider with your own key (META_MODEL_API_KEY).",
+      );
+    }
+    return await validatedMetaMuseCredential(pasted, ctrl, deps, undefined, "manual");
   }
 
   const pointerRaw = await (deps.readPointer ?? defaultReadPointer)();
@@ -178,15 +233,48 @@ export async function loginMetaMuse(
   }
 
   // access_token is present but 401s against the Model API (003 §B) — never fall back to it.
-  const apiKey = sanitizeApiKeyValue(secret.api_key);
+  return await validatedMetaMuseCredential(
+    secret.api_key,
+    ctrl,
+    deps,
+    normalizedEmail(meta.user_email),
+    "local-cli",
+  );
+}
+
+/**
+ * The single gate every credential passes, imported or pasted.
+ *
+ * Both paths share it deliberately. A pasted key that skipped the grammar check or the
+ * live validation would be a weaker credential wearing the same provider id, and the
+ * difference would surface only as a 401 in the middle of a session.
+ */
+async function validatedMetaMuseCredential(
+  candidate: unknown,
+  ctrl: OAuthController,
+  deps: MuseImportDeps,
+  email: string | undefined,
+  source: "local-cli" | "manual",
+): Promise<OAuthCredentials> {
+  const retry = source === "manual"
+    ? `Copy it again from ${MANUAL_KEY_URL}.`
+    : "Run `muse login` again.";
+  const apiKey = sanitizeApiKeyValue(candidate);
   if (!apiKey) {
-    throw new Error("The Muse Code Keychain entry carries no usable API key. Run `muse login` again.");
+    // The macOS wording is preserved verbatim. Extraction is a refactor, and a refactor
+    // that quietly rewrites a user-facing error is a behavior change in disguise.
+    throw new Error(source === "manual"
+      ? `The pasted Muse Code credential carries no usable API key. ${retry}`
+      : "The Muse Code Keychain entry carries no usable API key. Run `muse login` again.");
   }
   if (!/^LLM\|\d+\|[A-Za-z0-9_-]{10,}$/.test(apiKey)) {
-    throw new Error("The Muse Code credential is not in the expected Meta API key format. Run `muse login` again.");
+    throw new Error(source === "manual"
+      ? `The pasted Muse Code credential is not in the expected Meta API key format. ${retry}`
+      : "The Muse Code credential is not in the expected Meta API key format. Run `muse login` again.");
   }
-
-  ctrl.onProgress?.("Validating the imported Meta credential…");
+  ctrl.onProgress?.(source === "manual"
+    ? "Validating the pasted Meta credential..."
+    : "Validating the imported Meta credential...");
   const fetchImpl = deps.fetchImpl ?? fetch;
   // ctrl.signal is OPTIONAL and the CLI controller supplies none: AbortSignal.any([undefined])
   // throws a TypeError, which would fail every CLI login right after the warning printed.
@@ -205,7 +293,7 @@ export async function loginMetaMuse(
   }
   if (!response.ok) {
     throw new Error(
-      `The Muse Code credential was rejected by the Meta Model API (HTTP ${response.status}). Run \`muse login\` again.`,
+      `The Muse Code credential was rejected by the Meta Model API (HTTP ${response.status}). ${retry}`,
     );
   }
 
@@ -216,8 +304,8 @@ export async function loginMetaMuse(
     expires: Number.MAX_SAFE_INTEGER,
     // `email`, not `accountId`: the account list masks email for display, and store.ts
     // already falls back to it for slot identity, so multi-account still works.
-    ...(normalizedEmail(meta.user_email) ? { email: normalizedEmail(meta.user_email) } : {}),
-    source: "local-cli",
+    ...(email ? { email } : {}),
+    source,
   };
 }
 
@@ -228,8 +316,22 @@ export async function loginMetaMuse(
  * the slot being refreshed, so if the user ran `muse login` with a DIFFERENT account in
  * between, a re-import would silently overwrite one stored identity with another. Only an
  * explicit login may import.
+ *
+ * It also does not assert a source. `merged()` in index.ts keeps the previous source for
+ * anything that is not `local-cli`, so returning `local-cli` here would relabel a
+ * hand-pasted key as an imported one on its first refresh and misreport where the
+ * credential came from.
  */
-export async function refreshMetaMuseToken(apiKey: string): Promise<OAuthCredentials> {
+export async function refreshMetaMuseToken(
+  apiKey: string,
+  _signal?: AbortSignal,
+  credential?: OAuthCredentials,
+): Promise<OAuthCredentials> {
   if (!apiKey) throw new Error("Meta Muse Code API key missing; run `ocx login meta-muse`");
-  return { access: apiKey, refresh: apiKey, expires: Number.MAX_SAFE_INTEGER, source: "local-cli" };
+  return {
+    access: apiKey,
+    refresh: apiKey,
+    expires: Number.MAX_SAFE_INTEGER,
+    source: credential?.source === "manual" ? "manual" : "local-cli",
+  };
 }

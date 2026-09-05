@@ -130,10 +130,11 @@ test("Models page combines final visibility, atomic actions, discovery status, a
   };
   let failNext = false;
   let failCatalog = false;
+  let initialSelectionPending = false;
   let modelFetches = 0;
   let resolveModels!: (response: Response) => void;
   const firstModels = new Promise<Response>(resolve => { resolveModels = resolve; });
-  const rows = () => ids.map(id => ({ provider, id, namespaced: `${provider}/${id}`, disabled: disabled.has(id) }));
+  const rows = () => ids.map(id => ({ provider, id, namespaced: `${provider}/${id}`, disabled: initialSelectionPending || disabled.has(id), ...(initialSelectionPending ? { initialSelectionPending: true } : {}) }));
   testWindow.sessionStorage.setItem("ocx.models.catalog.v1:http://localhost", JSON.stringify({
     models: rows(),
     providers: [{ name: provider, liveModels: true, models: ids }],
@@ -491,6 +492,12 @@ test("Models page combines final visibility, atomic actions, discovery status, a
     await act(async () => { poll(); await new Promise(resolve => testWindow.setTimeout(resolve, 0)); });
     expect(container.textContent).toContain("fallback-provider");
     expect(container.textContent).toContain("Failed to load models");
+    failCatalog = false;
+    initialSelectionPending = true;
+    await act(async () => { poll(); await new Promise(resolve => testWindow.setTimeout(resolve, 0)); });
+    expect(container.textContent).toContain("Initial discovery pending");
+    expect(switchFor("gemini-pro").disabled).toBe(true);
+    expect(buttonText("All on").disabled).toBe(true);
   } finally {
     if (root) {
       await act(async () => root?.unmount());

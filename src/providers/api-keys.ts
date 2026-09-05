@@ -4,13 +4,14 @@
  * `provider.apiKey` stays the single source of truth for routing — it always mirrors the
  * ACTIVE pool entry, so the router/adapters never learn about the pool. The pool itself
  * lives in `provider.apiKeyPool` in config.json (same file that already holds apiKey).
- * A provider with a legacy bare `apiKey` is seeded into a one-entry pool on first touch.
+ * A legacy bare `apiKey` is projected as one row on reads and seeded on first mutation.
  */
 import { createHash } from "node:crypto";
 import { saveConfigPreservingClaudeCode } from "../config";
 import type { OcxConfig, OcxProviderConfig } from "../types";
+import type { AccountQuotaFields } from "./quota-types";
 
-export interface ProviderApiKeyInfo {
+export interface ProviderApiKeyInfo extends AccountQuotaFields {
   id: string;
   label?: string;
   /** First/last 4 chars only; env references (`${VAR}`) are shown verbatim (not secrets). */
@@ -57,17 +58,14 @@ function ensurePool(provider: OcxProviderConfig): NonNullable<OcxProviderConfig[
   return provider.apiKeyPool;
 }
 
-function activeEntryId(provider: OcxProviderConfig): string | null {
-  const pool = provider.apiKeyPool ?? [];
-  if (pool.length === 0) return null;
-  return (pool.find(e => e.key === provider.apiKey) ?? pool[0]!).id;
-}
-
 export function listProviderApiKeys(config: OcxConfig, name: string): { activeId: string | null; keys: ProviderApiKeyInfo[] } {
   const provider = config.providers[name];
   if (!provider || !isKeyAuthProvider(provider)) return { activeId: null, keys: [] };
-  const pool = ensurePool(provider);
-  const activeId = activeEntryId(provider);
+  // A GET projects a legacy key without seeding/mutating live configuration.
+  const pool = provider.apiKeyPool?.length
+    ? provider.apiKeyPool
+    : provider.apiKey ? [{ id: apiKeyPoolEntryId(provider.apiKey), key: provider.apiKey }] : [];
+  const activeId = (pool.find(entry => entry.key === provider.apiKey) ?? pool[0])?.id ?? null;
   return {
     activeId,
     keys: pool.map(entry => ({

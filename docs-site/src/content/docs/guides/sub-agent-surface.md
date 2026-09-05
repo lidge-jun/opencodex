@@ -117,8 +117,9 @@ inside a cooldown, missing a usable pooled Codex account, or beyond the configur
 Availability probes are cached for `subagentModelFallbackPollMs` (60 seconds by default).
 
 Fallback does not make incompatible encrypted tasks readable. When the child task is encrypted for
-ChatGPT, selection is restricted to canonical native ChatGPT targets even if an external model
-appears earlier in the chain.
+ChatGPT, selection is restricted to canonical native ChatGPT targets and direct key-auth Responses
+routes explicitly trusted with `allowEncryptedV2AgentTasks: true`, even if another external model
+appears earlier in the chain. Combos remain canonical-native-only.
 
 ## Encrypted v2 task delivery
 
@@ -128,15 +129,18 @@ known [#92 limitation](https://github.com/lidge-jun/opencodex/issues/92).
 
 opencodex fails safely instead of forwarding an empty or unreadable task:
 
-- A direct non-native route returns HTTP 400 with
-  `error.code = "unreadable_encrypted_agent_task"` and does not echo the ciphertext.
+- An ineligible direct non-native route returns HTTP 400 with
+  `error.code = "unreadable_encrypted_agent_task"` and does not echo the ciphertext. An eligible
+  direct key-auth Responses provider that explicitly opts in with
+  `allowEncryptedV2AgentTasks: true` instead receives the opaque ciphertext and bypasses this error.
 - A combo considers only canonical native ChatGPT targets for that task, including retries. If none
   is available, it returns the same 400 error.
 - A readable plaintext task keeps the normal route and fallback behavior.
 
-Recovery options are to select a native ChatGPT child, add a native ChatGPT target to the combo, use
-v1 for heterogeneous-provider delegation, or resend the task as plaintext v2 `agent_message`
-content when you control the caller.
+Recovery options are to select a native ChatGPT child, explicitly trust a direct key-auth Responses
+relay that can consume the opaque payload, add a native ChatGPT target to the combo, use v1 for
+heterogeneous-provider delegation, or resend the task as plaintext v2 `agent_message` content when
+you control the caller.
 
 An experimental, disabled-by-default `agentTaskRecovery` option can recover this specific native-
 to-routed shape through a raw Responses passthrough to the fixed ChatGPT `/responses` endpoint using
@@ -182,8 +186,10 @@ ocx agent status
 ocx agent injection set --model anthropic/claude-sonnet-5 --effort xhigh
 ocx agent subagents set gpt-5.6-sol,anthropic/claude-sonnet-5
 ocx agent fallback set gpt-5.4-mini,xai/grok-4.5 --poll-ms 60000
-ocx agent effort set --subagent max
+ocx effort set --subagent max
 ```
+
+The top-level `ocx effort` command is the canonical entry point for effort inspection and caps (e.g. `ocx effort high`, `ocx effort status`, `ocx effort clear`), with `ocx agent effort` preserved as a backward-compatible path. Note that `ocx effort clear` removes active main-agent and sub-agent caps while leaving delegation `injectionEffort` untouched (use `ocx effort set --injection -` or `ocx agent injection set --effort -` to clear injection effort).
 
 Pass `-` to clear a nullable `ocx agent injection` value, or use the relevant `clear` action for a
 roster or fallback list. See the [CLI reference](/reference/cli/) for all command families.

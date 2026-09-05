@@ -3,40 +3,13 @@ import { join } from "node:path";
 import { atomicWriteFile, getConfigDir } from "../config";
 import { captureConfigGeneration, type GenerationContext } from "../lib/state-store-sweeper";
 import { isThirtyDayOnlyCodexPlan } from "./plan";
+import { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
+import { getObservedMainQuotaIdentityKey, isMainQuotaWriterLive, type MainQuotaWriter } from "./main-account-cache";
 
-export type StoredAccountQuota = {
-  weeklyPercent?: number;
-  monthlyPercent?: number;
-  weeklyResetAt?: number;
-  monthlyResetAt?: number;
-  /**
-   * A sub-day burst window, when upstream declares one (#1791).
-   *
-   * K12 and similar plans enforce a rolling 5-hour limit ALONGSIDE the weekly one.
-   * Not folding it into `weeklyPercent` stopped the mislabeling, but dropping it
-   * entirely hides a limit that genuinely blocks the account: a 429 at 100% here is
-   * real even while the weekly quota is untouched.
-   *
-   * `shortWindowSeconds` is retained because the duration is the only thing that makes
-   * this window self-describing; the slot it arrived in is not stable across plans.
-   */
-  shortPercent?: number;
-  shortResetAt?: number;
-  shortWindowSeconds?: number;
-  customWindows?: Array<{ label: string; percent: number; resetAt?: number }>;
-  resetCredits?: number;
-  /**
-   * True when `monthlyPercent` came from an explicitly-monthly PRIMARY window —
-   * i.e. it is the account's governing quota reading, not a supplementary
-   * tertiary window. Tertiary-only monthly data lands in the same field but says
-   * nothing about the weekly quota that actually gates a non-Go/Free account,
-   * so recovery must be able to tell the two apart (#967 audit).
-   */
-  monthlyIsPrimaryWindow?: boolean;
-  updatedAt: number;
-};
+import type { StoredAccountQuota, WhamUsageResponse, WhamUsageWindow } from "./quota-types";
+export type { StoredAccountQuota, WhamUsageResponse } from "./quota-types";
 
-/** Disk snapshot under OPENCODEX_HOME — usage percents only (no emails/tokens). */
+/** Disk snapshot under OPENCODEX_HOME — quota and policy identity only, never credential tags. */
 const QUOTA_CACHE_FILENAME = "codex-quota-cache.json";
 /** Keep last-known bars across restarts; WHAM still refreshes on TTL in live/prime paths. */
 const QUOTA_DISK_MAX_AGE_MS = 6 * 60 * 60_000;
@@ -45,40 +18,13 @@ const QUOTA_PERSIST_DEBOUNCE_MS = 250;
 type QuotaDiskFile = {
   version: 1;
   quotas: Record<string, StoredAccountQuota>;
+  mainPolicyQuota?: MainPolicyQuota;
 };
 
+type MainPolicyQuota = { identityKey: string; quota: StoredAccountQuota };
+let mainPolicyQuota: MainPolicyQuota | null = null;
 let diskHydrated = false;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
-
-export type WhamUsageResponse = {
-  email?: string | null;
-  plan_type?: unknown;
-  rate_limit?: {
-    // Live WHAM payloads send explicit nulls for absent windows (issue #315 repro).
-    primary_window?: WhamUsageWindow | null;
-    secondary_window?: WhamUsageWindow | null;
-    tertiary_window?: WhamUsageWindow | null;
-  };
-  rate_limit_reset_credits?: {
-    available_count: number;
-  } | null;
-  additional_rate_limits?: WhamAdditionalRateLimit[] | null;
-};
-
-type WhamAdditionalRateLimit = {
-  limit_name?: unknown;
-  metered_feature?: unknown;
-  rate_limit?: {
-    primary_window?: WhamUsageWindow | null;
-    secondary_window?: WhamUsageWindow | null;
-  } | null;
-};
-
-type WhamUsageWindow = {
-  used_percent?: number;
-  reset_at?: number;
-  limit_window_seconds?: number;
-};
 
 const MONTHLY_WINDOW_MIN_SECONDS = 28 * 24 * 60 * 60;
 /**
@@ -195,6 +141,16 @@ export function normalizeUsagePercent(value: unknown): number | undefined {
   return Math.max(0, Math.min(100, numeric));
 }
 
+/** Reject numeric policy evidence before legacy clamping can fabricate a valid reading. */
+function isInvalidPolicyUsagePercent(value: unknown): boolean {
+  if (typeof value === "number") return !Number.isFinite(value) || value < 0 || value > 100;
+  if (typeof value !== "string" || value.trim() === "") return false;
+  const numeric = Number(value);
+  // Non-numeric metadata stays unknown; explicit nonfinite spellings are invalid evidence.
+  if (Number.isNaN(numeric)) return /^[+-]?(?:nan|infinity)$/i.test(value.trim());
+  return !Number.isFinite(numeric) || numeric < 0 || numeric > 100;
+}
+
 function normalizeResetAt(value: unknown): number | undefined {
   const numeric = typeof value === "number"
     ? value
@@ -208,6 +164,8 @@ function normalizeResetAt(value: unknown): number | undefined {
 function hasKnownQuotaValue(quota: Omit<StoredAccountQuota, "updatedAt">): boolean {
   return [quota.weeklyPercent, quota.monthlyPercent, quota.shortPercent]
     .some(value => typeof value === "number" && Number.isFinite(value))
+    // Known short-window shape with unknown usage still selects that window for policy.
+    || snapshotHasShort(quota)
     || !!quota.customWindows?.some(window => Number.isFinite(window.percent));
 }
 
@@ -274,11 +232,48 @@ export function setAccountQuotaFromParsed(
   accountId: string,
   quota: Omit<StoredAccountQuota, "updatedAt"> | null,
   writerGeneration = captureConfigGeneration(),
+  mainWriter?: MainQuotaWriter,
+  policyQuota: Omit<StoredAccountQuota, "updatedAt"> | null = quota,
 ): void {
   if (!quota) return;
   if (!mayCommitAccountQuota(accountId, writerGeneration)) return;
-  const existing = accountQuota.get(accountId);
-  const next: StoredAccountQuota = { updatedAt: Date.now() };
+  const isMain = accountId === MAIN_CODEX_ACCOUNT_ID;
+  if (isMain && mainWriter && !isMainQuotaWriterLive(mainWriter)) return;
+  hydrateAccountQuotasFromDisk();
+  const legacyExisting = accountQuota.get(accountId);
+  const updatedAt = Date.now();
+  // Legacy rotation keeps its existing carry behavior, but never inherits policy-only
+  // evidence that outlived its disk TTL. Policy has a separate, identity-checked base.
+  const next = mergeAccountQuota(quota, legacyExisting, updatedAt);
+  accountQuota.set(accountId, next);
+  if (isMain) {
+    const policyExisting = mainWriter && mainPolicyQuota?.identityKey === mainWriter.identityKey
+      ? mainPolicyQuota.quota
+      : undefined;
+    mainPolicyQuota = mainWriter && (policyQuota || policyExisting)
+      ? {
+        identityKey: mainWriter.identityKey,
+        quota: policyQuota
+          ? structuredClone(mergeAccountQuota(policyQuota, policyExisting, updatedAt, true))
+          : policyExisting!,
+      }
+      : null;
+  }
+  schedulePersistAccountQuotas();
+  // Credits carry the previous usage tuple; they must not refresh its observation clock.
+  if (!(quota.resetCredits !== undefined && !snapshotHasUsage(quota))) {
+    notifyCodexQuotaSnapshot(accountId, next);
+  }
+}
+
+/** One partial-window merge contract for legacy quota and identity-bound policy evidence. */
+function mergeAccountQuota(
+  quota: Omit<StoredAccountQuota, "updatedAt">,
+  existing: StoredAccountQuota | undefined,
+  updatedAt: number,
+  policyEvidence = false,
+): StoredAccountQuota {
+  const next: StoredAccountQuota = { updatedAt };
   const creditsOnly = quota.resetCredits !== undefined && !snapshotHasUsage(quota);
 
   if (creditsOnly) {
@@ -288,20 +283,21 @@ export function setAccountQuotaFromParsed(
     if (existing?.monthlyResetAt !== undefined) next.monthlyResetAt = existing.monthlyResetAt;
     if (existing?.monthlyIsPrimaryWindow === true) next.monthlyIsPrimaryWindow = true;
     if (existing?.shortPercent !== undefined) next.shortPercent = existing.shortPercent;
+    if (existing?.shortObservedAt !== undefined) next.shortObservedAt = existing.shortObservedAt;
     if (existing?.shortResetAt !== undefined) next.shortResetAt = existing.shortResetAt;
     if (existing?.shortWindowSeconds !== undefined) next.shortWindowSeconds = existing.shortWindowSeconds;
     if (existing?.customWindows !== undefined) next.customWindows = existing.customWindows;
     next.resetCredits = quota.resetCredits;
-    accountQuota.set(accountId, next);
-    schedulePersistAccountQuotas();
-    return;
+    return next;
   }
 
   if (snapshotHasWeekly(quota)) {
     if (quota.weeklyPercent !== undefined) next.weeklyPercent = quota.weeklyPercent;
     if (quota.weeklyResetAt !== undefined) next.weeklyResetAt = quota.weeklyResetAt;
-  } else if (snapshotHasMonthly(quota) && !snapshotHasWeekly(quota)) {
-    // Monthly-only snapshots intentionally clear stale weekly values (issue #382).
+  } else if (snapshotHasMonthly(quota)
+    && (!policyEvidence || quota.monthlyIsPrimaryWindow === true)) {
+    // Legacy monthly-only clearing is unchanged (#382). Policy needs a governing
+    // monthly-primary observation: a tertiary-only header cannot retract weekly99.
   } else if (existing?.weeklyPercent !== undefined) {
     next.weeklyPercent = existing.weeklyPercent;
     if (existing.weeklyResetAt !== undefined) next.weeklyResetAt = existing.weeklyResetAt;
@@ -322,14 +318,19 @@ export function setAccountQuotaFromParsed(
     if (existing.monthlyIsPrimaryWindow === true) next.monthlyIsPrimaryWindow = true;
   }
 
-  if (snapshotHasShort(quota)) {
-    if (quota.shortPercent !== undefined) next.shortPercent = quota.shortPercent;
+  const preserveKnownShort = policyEvidence && quota.shortPercent === undefined && finitePercent(existing?.shortPercent);
+  if (snapshotHasShort(quota) && !preserveKnownShort) {
+    if (quota.shortPercent !== undefined) {
+      next.shortPercent = quota.shortPercent;
+      if (Number.isFinite(quota.shortPercent)) next.shortObservedAt = next.updatedAt;
+    }
     if (quota.shortResetAt !== undefined) next.shortResetAt = quota.shortResetAt;
     if (quota.shortWindowSeconds !== undefined) next.shortWindowSeconds = quota.shortWindowSeconds;
   } else {
-    // Header and reset-credit updates are partial snapshots. Preserve the last full WHAM
-    // burst tuple when those updates do not carry enough window metadata to replace it.
+    // Unknown usage is not a lower reading. Retain the entire known tuple: pairing
+    // its percentage with new metadata would silently extend or shorten its reset.
     if (existing?.shortPercent !== undefined) next.shortPercent = existing.shortPercent;
+    if (existing?.shortObservedAt !== undefined) next.shortObservedAt = existing.shortObservedAt;
     if (existing?.shortResetAt !== undefined) next.shortResetAt = existing.shortResetAt;
     if (existing?.shortWindowSeconds !== undefined) next.shortWindowSeconds = existing.shortWindowSeconds;
   }
@@ -339,8 +340,68 @@ export function setAccountQuotaFromParsed(
   if (quota.resetCredits !== undefined) next.resetCredits = quota.resetCredits;
   else if (existing?.resetCredits !== undefined) next.resetCredits = existing.resetCredits;
 
-  accountQuota.set(accountId, next);
-  schedulePersistAccountQuotas();
+  return next;
+}
+
+/**
+ * Hand a committed snapshot to the optional quota-reset observer.
+ *
+ * Lazy import on purpose. This file is statically reachable from
+ * src/server/responses/core.ts (via codex/auth-context.ts), and
+ * applyAccountQuotaFromUpstreamHeaders runs it once per pooled response. A static import
+ * would load the observer, its config resolution, and its sink registry into every install,
+ * including installs that never enable the feature — the same failure mode
+ * tests/core-lab-boundary.test.ts exists to prevent for src/lab/.
+ *
+ * The previous snapshot is deliberately NOT passed. The observer keeps its own persisted
+ * baseline (see swapLastObservedWindows), so every committed write must reach it — including
+ * the first one, which is what establishes that baseline. An earlier version of this
+ * function skipped the call when the in-map `existing` was undefined; that left the observer
+ * with no baseline to compare against, so the write AFTER a rollover was silently treated as
+ * the first observation and no reset ever fired.
+ *
+ * The snapshot is COPIED synchronously, before the import resolves. `next` is the live map
+ * value and the next write mutates it, so an observation that read it after awaiting could
+ * see a later snapshot than the one it was called for.
+ *
+ * Observations are SERIALIZED through a module-level promise chain, because the baseline
+ * swap must happen in call order. An earlier version awaited two imports and then swapped,
+ * and Bun does not resolve concurrent import() calls in call order: a burst of 21
+ * rising-usage writes (10% -> 90%, no reset at all) arrived reordered and fired a false
+ * "surprise" reset on every run. Worse, the false event CLAIMED the durable idempotence
+ * key, so the genuine reset on that window was then permanently suppressed.
+ *
+ * `pendingObservation` is reassigned SYNCHRONOUSLY here, so each link is queued in call
+ * order and only starts once the previous one has committed its baseline. A FIFO queue
+ * entered after the await would not have fixed it — the enqueue itself would race.
+ */
+let pendingObservation: Promise<void> = Promise.resolve();
+
+function notifyCodexQuotaSnapshot(accountId: string, next: StoredAccountQuota): void {
+  // Copy before the boundary: `next` is the live map value and the following write mutates
+  // it, so an observation that read it after awaiting could see a later snapshot than the
+  // one it was called for.
+  const snapshot = { ...next };
+  pendingObservation = pendingObservation
+    .then(async () => {
+      const observer = await import("../quota/reset-observer");
+      if (!observer.hasQuotaResetSink()) return;
+      const { codexWindowObservations } = await import("../quota/window-mapping");
+      observer.observeQuotaSnapshot({
+        scope: "codex",
+        accountKey: accountId,
+        windows: codexWindowObservations(snapshot),
+      });
+    })
+    .catch(() => {
+      // Detection is best-effort: a quota write must never fail because of it. Swallowing
+      // here also keeps the chain alive — a rejected link would poison every later one.
+    });
+}
+
+/** Await the observation chain. Tests only: production never needs to join it. */
+export function flushQuotaObservationsForTests(): Promise<void> {
+  return pendingObservation;
 }
 
 export function parseUpstreamQuotaHeaders(headers: Headers): Omit<StoredAccountQuota, "updatedAt"> | null {
@@ -366,7 +427,7 @@ export function parseUpstreamQuotaHeaders(headers: Headers): Omit<StoredAccountQ
   // it into weeklyPercent both discards the real weekly reading and leaves the account looking
   // exhausted long after the burst window resets. Duration decides, exactly as parseUsageQuota
   // already does for the WHAM payload — the two parsers must not disagree about the same data.
-  const primaryIsShort = primaryRaw !== null && isExplicitShortWindowMinutes(primaryWindowMinutes);
+  const primaryIsShort = isExplicitShortWindowMinutes(primaryWindowMinutes);
 
   if (primaryIsMonthly) {
     if (primaryPercent !== undefined) {
@@ -382,12 +443,10 @@ export function parseUpstreamQuotaHeaders(headers: Headers): Omit<StoredAccountQ
       if (secondaryResetAt !== undefined) quota.weeklyResetAt = secondaryResetAt;
     }
   } else if (primaryIsShort) {
-    if (primaryPercent !== undefined) {
-      quota.shortPercent = primaryPercent;
-      if (primaryResetAt !== undefined) quota.shortResetAt = primaryResetAt;
-      const minutes = windowMinutes_(primaryWindowMinutes);
-      if (minutes !== undefined) quota.shortWindowSeconds = Math.round(minutes * 60);
-    }
+    if (primaryPercent !== undefined) quota.shortPercent = primaryPercent;
+    if (primaryResetAt !== undefined) quota.shortResetAt = primaryResetAt;
+    const minutes = windowMinutes_(primaryWindowMinutes);
+    if (minutes !== undefined) quota.shortWindowSeconds = Math.round(minutes * 60);
     // The burst window vacates the primary slot, so the weekly reading is the secondary — which
     // is where it was all along. Without this the true weekly value is silently dropped.
     if (secondaryPercent !== undefined) {
@@ -417,10 +476,14 @@ export function applyAccountQuotaFromUpstreamHeaders(
   accountId: string,
   headers: Headers,
   writerGeneration = captureConfigGeneration(),
+  mainWriter?: MainQuotaWriter,
 ): void {
   const quota = parseUpstreamQuotaHeaders(headers);
   if (!quota) return;
-  setAccountQuotaFromParsed(accountId, quota, writerGeneration);
+  const policyQuota = [
+    "x-codex-primary-used-percent", "x-codex-secondary-used-percent", "x-codex-tertiary-used-percent",
+  ].some(name => isInvalidPolicyUsagePercent(headers.get(name))) ? null : filterMainPolicyMonthlyQuota(quota);
+  setAccountQuotaFromParsed(accountId, quota, writerGeneration, mainWriter, policyQuota);
 }
 
 export function updateAccountQuota(
@@ -433,10 +496,11 @@ export function updateAccountQuota(
   writerGeneration = captureConfigGeneration(),
 ): void {
   if (!mayCommitAccountQuota(accountId, writerGeneration)) return;
-  const existing = accountQuota.get(accountId);
   const nextWeekly = normalizeUsagePercent(weekly);
   const nextMonthly = normalizeUsagePercent(monthly);
   if (nextWeekly === undefined && nextMonthly === undefined && resetCredits === undefined) return;
+  hydrateAccountQuotasFromDisk();
+  const existing = accountQuota.get(accountId);
 
   const quota: StoredAccountQuota = {
     ...(existing?.weeklyPercent !== undefined ? { weeklyPercent: existing.weeklyPercent } : {}),
@@ -449,6 +513,7 @@ export function updateAccountQuota(
     ...(existing?.weeklyResetAt !== undefined ? { weeklyResetAt: existing.weeklyResetAt } : {}),
     ...(existing?.monthlyResetAt !== undefined ? { monthlyResetAt: existing.monthlyResetAt } : {}),
     ...(existing?.shortPercent !== undefined ? { shortPercent: existing.shortPercent } : {}),
+    ...(existing?.shortObservedAt !== undefined ? { shortObservedAt: existing.shortObservedAt } : {}),
     ...(existing?.shortResetAt !== undefined ? { shortResetAt: existing.shortResetAt } : {}),
     ...(existing?.shortWindowSeconds !== undefined ? { shortWindowSeconds: existing.shortWindowSeconds } : {}),
     ...(existing?.customWindows !== undefined ? { customWindows: existing.customWindows } : {}),
@@ -473,7 +538,40 @@ export function updateAccountQuota(
   if (resetCredits !== undefined) quota.resetCredits = resetCredits;
 
   accountQuota.set(accountId, quota);
+  // This legacy writer has no physical credential provenance.
+  if (accountId === MAIN_CODEX_ACCOUNT_ID) mainPolicyQuota = null;
   schedulePersistAccountQuotas();
+  // Observed like the other committed write. This function has no in-repo caller today, but it
+  // is re-exported as public API through src/codex/auth-api.ts, so a future caller would
+  // otherwise bypass detection AND leave a stale baseline that corrupts the next real diff.
+  // The credits-only path at setAccountQuotaFromParsed deliberately does not notify; this one
+  // writes window percentages and deadlines, so it must.
+  notifyCodexQuotaSnapshot(accountId, quota);
+}
+
+/** Bounded, known policy fields only: disk input cannot extend a DTO or retain credentials. */
+function readMainPolicyQuota(value: unknown): MainPolicyQuota | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const entry = value as Record<string, unknown>;
+  if (typeof entry.identityKey !== "string" || !/^[a-f0-9]{64}$/.test(entry.identityKey)) return null;
+  if (!entry.quota || typeof entry.quota !== "object" || Array.isArray(entry.quota)) return null;
+  const raw = entry.quota as Record<string, unknown>;
+  if (typeof raw.updatedAt !== "number" || !Number.isFinite(raw.updatedAt) || raw.updatedAt < 0) return null;
+  const quota: StoredAccountQuota = { updatedAt: raw.updatedAt };
+  for (const field of ["weeklyPercent", "monthlyPercent", "shortPercent"] as const) {
+    const number = raw[field];
+    if (typeof number === "number" && Number.isFinite(number) && number >= 0 && number <= 100) {
+      quota[field] = number;
+    }
+  }
+  for (const field of [
+    "weeklyResetAt", "monthlyResetAt", "shortResetAt", "shortObservedAt", "shortWindowSeconds", "resetCredits",
+  ] as const) {
+    const number = raw[field];
+    if (typeof number === "number" && Number.isFinite(number) && number >= 0) quota[field] = number;
+  }
+  if (quota.monthlyPercent !== undefined && raw.monthlyIsPrimaryWindow === true) quota.monthlyIsPrimaryWindow = true;
+  return { identityKey: entry.identityKey, quota };
 }
 
 function hydrateAccountQuotasFromDisk(): void {
@@ -485,6 +583,8 @@ function hydrateAccountQuotasFromDisk(): void {
     const raw = readFileSync(path, "utf8");
     const parsed = JSON.parse(raw) as QuotaDiskFile;
     if (!parsed || parsed.version !== 1 || !parsed.quotas || typeof parsed.quotas !== "object") return;
+    // Policy evidence deliberately outlives the legacy six-hour rotation-cache TTL.
+    mainPolicyQuota = readMainPolicyQuota(parsed.mainPolicyQuota);
     const now = Date.now();
     for (const [accountId, quota] of Object.entries(parsed.quotas)) {
       if (!quota || typeof quota !== "object" || typeof quota.updatedAt !== "number") continue;
@@ -505,7 +605,11 @@ function schedulePersistAccountQuotas(): void {
       for (const [accountId, quota] of accountQuota.entries()) {
         quotas[accountId] = quota;
       }
-      const body: QuotaDiskFile = { version: 1, quotas };
+      const body: QuotaDiskFile = {
+        version: 1,
+        quotas,
+        ...(mainPolicyQuota ? { mainPolicyQuota } : {}),
+      };
       atomicWriteFile(join(getConfigDir(), QUOTA_CACHE_FILENAME), `${JSON.stringify(body)}\n`);
     } catch {
       // Best-effort persistence only.
@@ -518,18 +622,52 @@ export function getAccountQuota(accountId: string): StoredAccountQuota | null {
   return accountQuota.get(accountId) ?? null;
 }
 
+/** No physical-auth reads; unrelated legacy quota consumers cannot mutate this evidence. */
+export function getMainPolicyQuota(): StoredAccountQuota | null {
+  hydrateAccountQuotasFromDisk();
+  if (!mainPolicyQuota || mainPolicyQuota.identityKey !== getObservedMainQuotaIdentityKey()) return null;
+  return structuredClone(mainPolicyQuota.quota);
+}
+
 export function listAccountQuotas(): IterableIterator<[string, StoredAccountQuota]> {
   hydrateAccountQuotasFromDisk();
   return accountQuota.entries();
 }
 
+/**
+ * Tell the observer to drop the baseline for a row that was deliberately cleared.
+ *
+ * Queued on the same chain as observations so it cannot overtake an in-flight one and be
+ * immediately re-established by it. Without this, reauth of a used account left the observer
+ * holding the pre-clear percentages and the first fresh write fired a false surprise reset
+ * (measured 91% -> 0%).
+ */
+function forgetCodexQuotaBaseline(accountId?: string): void {
+  pendingObservation = pendingObservation
+    .then(async () => {
+      const observer = await import("../quota/reset-observer");
+      observer.forgetQuotaBaseline({
+        scope: "codex",
+        ...(accountId !== undefined ? { accountKey: accountId } : {}),
+      });
+    })
+    .catch(() => {
+      // Best-effort; a failure can only cost a re-baseline.
+    });
+}
+
 export function clearAccountQuota(accountId?: string): void {
   if (accountId) {
+    hydrateAccountQuotasFromDisk();
     accountQuota.delete(accountId);
+    if (accountId === MAIN_CODEX_ACCOUNT_ID) mainPolicyQuota = null;
     schedulePersistAccountQuotas();
+    forgetCodexQuotaBaseline(accountId);
     return;
   }
   accountQuota.clear();
+  forgetCodexQuotaBaseline();
+  mainPolicyQuota = null;
   diskHydrated = false;
   if (persistTimer) {
     clearTimeout(persistTimer);
@@ -556,6 +694,27 @@ export function reconcileCodexQuotaAccounts(context: GenerationContext): number 
   lastReconciledGeneration = context.generation;
   if (removed > 0) schedulePersistAccountQuotas();
   return removed;
+}
+
+/** Supplementary monthly bars are not governing policy evidence without plan/primary proof. */
+function filterMainPolicyMonthlyQuota(
+  quota: Omit<StoredAccountQuota, "updatedAt"> | null,
+  monthlyOnlyPlan = false,
+): Omit<StoredAccountQuota, "updatedAt"> | null {
+  if (!quota || monthlyOnlyPlan || quota.monthlyIsPrimaryWindow === true) return quota;
+  const filtered = { ...quota };
+  delete filtered.monthlyPercent;
+  delete filtered.monthlyResetAt;
+  delete filtered.monthlyIsPrimaryWindow;
+  // Null retains the matching prior observation; an empty object would merge away evidence.
+  return hasKnownQuotaValue(filtered) || filtered.resetCredits !== undefined ? filtered : null;
+}
+
+/** Ordinary main policy rejects an entire message containing any invalid numeric window. */
+export function parseMainPolicyUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuota, "updatedAt"> | null {
+  const windows = [data.rate_limit?.primary_window, data.rate_limit?.secondary_window, data.rate_limit?.tertiary_window];
+  if (windows.some(window => isInvalidPolicyUsagePercent(window?.used_percent))) return null;
+  return filterMainPolicyMonthlyQuota(parseUsageQuota(data), isThirtyDayOnlyCodexPlan(data.plan_type));
 }
 
 export function parseUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuota, "updatedAt"> | null {
@@ -597,10 +756,10 @@ export function parseUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuot
   const primaryIsShort = isExplicitShortWindow(primaryWindow);
   const weeklyCandidatePercent = primaryIsShort ? undefined : primaryPercent;
   const weeklyCandidateResetAt = primaryIsShort ? undefined : primaryResetAt;
-  // Keep the burst reading instead of dropping it on the floor: it is a real limit, and
-  // the account is blocked when it fills even though the weekly window is fine (#1791).
-  if (primaryIsShort && primaryPercent !== undefined) {
-    quota.shortPercent = primaryPercent;
+  // Retain the declared burst tuple even when its usage is unknown. Its shape selects
+  // the short-window policy; a missing reading is not permission to fall back to weekly.
+  if (primaryIsShort) {
+    if (primaryPercent !== undefined) quota.shortPercent = primaryPercent;
     if (primaryResetAt !== undefined) quota.shortResetAt = primaryResetAt;
     const seconds = primaryWindow?.limit_window_seconds;
     if (typeof seconds === "number" && Number.isFinite(seconds)) quota.shortWindowSeconds = seconds;
@@ -623,11 +782,11 @@ export function parseUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuot
   if (!thirtyDayOnly && monthlyPercent !== undefined) {
     quota.monthlyPercent = monthlyPercent;
     if (monthlyResetAt !== undefined) quota.monthlyResetAt = monthlyResetAt;
-    // Record WHERE this reading came from. Only an explicitly-monthly primary window is the
-    // account's governing quota; a tertiary window lands in the same field but describes a
-    // different period, so recovery must not treat the two as interchangeable.
-    if (primaryIsMonthly && primaryPercent !== undefined) quota.monthlyIsPrimaryWindow = true;
   }
+  // Provenance depends on the observed window, not the plan name. Go/Free need it
+  // too so a real monthly-primary replacement can retire an earlier weekly policy tuple.
+  // A supplementary value (including fallback from an unreadable primary) is not proof.
+  if (primaryIsMonthly && primaryPercent !== undefined) quota.monthlyIsPrimaryWindow = true;
 
   const spark = data.additional_rate_limits?.find(additional => {
     const name = String(additional.limit_name ?? "").toLowerCase();

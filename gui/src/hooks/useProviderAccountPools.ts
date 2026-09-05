@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
-import type { AccountLoadState } from "../components/provider-workspace/types";
+import type { AccountLoadState, AccountQuotaReading } from "../components/provider-workspace/types";
+import { createBoundedFetch } from "../bounded-fetch";
 import { accountNeedsReauth } from "../oauth-health-display";
-import type { AccountQuota } from "../codex-quota-utils";
 import { oauthAccountDisplayLabel } from "../provider-workspace/auth";
 
 export interface Config {
@@ -11,7 +11,7 @@ export interface Config {
 }
 
 export interface OAuthStatus { loggedIn: boolean; email?: string; error?: string; done?: boolean; needsReauth?: boolean; activeAccountId?: string | null }
-export interface OAuthAccount {
+export interface OAuthAccount extends AccountQuotaReading {
   id: string;
   alias?: string;
   email?: string;
@@ -22,12 +22,36 @@ export interface OAuthAccount {
   healthLabel?: string;
   healthSummary?: string;
   healthAction?: string;
-  /** Per-account rate limits (providers that report usage per credential, e.g. anthropic). */
-  quota?: AccountQuota | null;
-  /** Set when the per-account probe could not reach upstream (expired login, 429, network). */
-  quotaUnavailable?: boolean;
 }
-export interface ApiKeyEntry { id: string; label?: string; masked: string; active: boolean }
+export interface ApiKeyEntry extends AccountQuotaReading { id: string; label?: string; masked: string; active: boolean }
+
+type QuotaRow = AccountQuotaReading & { id: string };
+const supportsQuotaRead = (row: AccountQuotaReading) => row.quotaMode === "probe" || row.quotaMode === "passive";
+
+function mergeQuotaRows<T extends QuotaRow>(rows: T[], previous: T[], enriched: boolean): T[] {
+  const prior = new Map(previous.map(row => [row.id, row]));
+  return rows.map(row => {
+    const supported = supportsQuotaRead(row);
+    // Legacy/unknown mode must not acquire synthetic flags that would override
+    // a provider report or imply that a quota probe is supported.
+    if (!supported && row.quotaMode !== "unsupported") return { ...row, quotaMode: undefined, quotaPending: undefined };
+    // Only surviving credential IDs can retain omitted data. Explicit null is an
+    // authoritative invalidation, including failed/expired credential readings.
+    const retain = supported && (!enriched || row.quotaUnavailable === true);
+    return {
+      ...row,
+      quota: row.quotaMode === "unsupported" ? null : row.quota !== undefined ? row.quota : retain ? prior.get(row.id)?.quota : undefined,
+      quotaPending: !enriched && row.quotaMode === "probe",
+      quotaUnavailable: enriched ? row.quotaUnavailable === true : false,
+    };
+  });
+}
+
+function unavailableQuotaRows<T extends QuotaRow>(rows: T[]): T[] {
+  return rows.map(row => supportsQuotaRead(row)
+    ? { ...row, quotaUnavailable: true, quotaPending: false }
+    : row);
+}
 
 /** Pure aggregate map used by Providers overview / rail attention state. */
 export function buildActiveAccountNeedsReauthMap(
@@ -67,13 +91,51 @@ export function useProviderAccountPools(deps: {
   const [addingKeyFor, setAddingKeyFor] = useState<string | null>(null);
   const [newKeyValue, setNewKeyValue] = useState("");
   const accountRequestGenerationRef = useRef<Record<string, number>>({});
+  const requestsRef = useRef(new Set<AbortController>());
+  const mountedRef = useRef(true);
+  const serverRef = useRef(apiBase);
+  useEffect(() => {
+    const generations = accountRequestGenerationRef.current;
+    const requests = requestsRef.current;
+    mountedRef.current = true;
+    const serverChanged = serverRef.current !== apiBase;
+    serverRef.current = apiBase;
+    if (serverChanged) void Promise.resolve().then(() => {
+      if (!mountedRef.current || serverRef.current !== apiBase) return;
+      setAccountSets({});
+      setKeyPools({});
+      setAccountLoadStates({});
+    });
+    return () => {
+      mountedRef.current = false;
+      for (const key of Object.keys(generations)) generations[key] += 1;
+      for (const controller of requests) controller.abort();
+      requests.clear();
+    };
+  }, [apiBase]);
   // Provider lists this instance has already fetched for. The deferred loads below are deliberately
   // uncancellable, and StrictMode double-invokes their effects, so dedupe by list identity here.
   const accountSetsKeyRef = useRef<string | null>(null);
   const keyPoolsKeyRef = useRef<string | null>(null);
   const switchingAccountRef = useRef<{ provider: string; accountId: string } | null>(null);
 
-  const fetchAccountSets = useCallback(async (providers: string[]) => {
+  const readRoster = useCallback(async <T,>(url: string): Promise<T> => {
+    const bounded = createBoundedFetch(20_000);
+    requestsRef.current.add(bounded.controller);
+    try {
+      const response = await fetch(url, { signal: bounded.signal });
+      if (!response.ok) throw new Error(String(response.status));
+      const data = await response.json() as T;
+      if (bounded.signal.aborted) throw new Error("Quota roster deadline exceeded");
+      return data;
+    } finally {
+      bounded.clear();
+      requestsRef.current.delete(bounded.controller);
+    }
+  }, []);
+
+  const fetchAccountSets = useCallback(async (providers: string[], refresh = false): Promise<boolean> => {
+    if (!aliveRef.current || !mountedRef.current || serverRef.current !== apiBase) return false;
     const uniqueProviders = [...new Set(providers)];
     setAccountLoadStates(current => {
       const next = { ...current };
@@ -81,54 +143,99 @@ export function useProviderAccountPools(deps: {
       return next;
     });
     const results = await Promise.all(uniqueProviders.map(async provider => {
-      const generation = (accountRequestGenerationRef.current[provider] ?? 0) + 1;
-      accountRequestGenerationRef.current[provider] = generation;
+      const key = `oauth:${provider}`;
+      const generation = (accountRequestGenerationRef.current[key] ?? 0) + 1;
+      accountRequestGenerationRef.current[key] = generation;
+      const currentRequest = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase && accountRequestGenerationRef.current[key] === generation;
+      const url = `${apiBase}/api/oauth/accounts?provider=${encodeURIComponent(provider)}`;
       try {
         // Cheap local read first so account switch / reauth / remove controls appear
         // even when Anthropic's usage endpoint is slow or timing out.
-        const res = await fetch(`${apiBase}/api/oauth/accounts?provider=${encodeURIComponent(provider)}`);
-        if (!res.ok) throw new Error(String(res.status));
-        const data = await res.json() as { activeAccountId?: string | null; accounts?: OAuthAccount[] };
-        if (!aliveRef.current || accountRequestGenerationRef.current[provider] !== generation) return true;
-        setAccountSets(current => ({ ...current, [provider]: { activeAccountId: data.activeAccountId ?? null, accounts: data.accounts ?? [] } }));
-        setAccountLoadStates(current => ({ ...current, [provider]: "ready" }));
+        const data = await readRoster<{ activeAccountId?: string | null; accounts?: OAuthAccount[] }>(url);
+        if (!Array.isArray(data.accounts)) throw new Error("Invalid account roster");
+        if (!currentRequest()) return false;
+        const rows = data.accounts;
+        setAccountSets(current => currentRequest() ? { ...current, [provider]: {
+          activeAccountId: data.activeAccountId ?? null,
+          accounts: mergeQuotaRows(rows, current[provider]?.accounts ?? [], false),
+        } } : current);
+        setAccountLoadStates(current => currentRequest() ? { ...current, [provider]: "ready" } : current);
+        if (!rows.some(supportsQuotaRead)) return true;
 
-        // Enrich with per-account rate limits asynchronously (Anthropic reports usage
-        // per credential). Failures leave the already-ready account rows untouched.
-        void (async () => {
+        const enrich = async (): Promise<boolean> => {
           try {
-            const quotaRes = await fetch(`${apiBase}/api/oauth/accounts?provider=${encodeURIComponent(provider)}&quota=1`);
-            if (!quotaRes.ok) return;
-            const quotaData = await quotaRes.json() as { activeAccountId?: string | null; accounts?: OAuthAccount[] };
-            if (!aliveRef.current || accountRequestGenerationRef.current[provider] !== generation) return;
-            setAccountSets(current => ({
+            const quotaData = await readRoster<{ activeAccountId?: string | null; accounts?: OAuthAccount[] }>(`${url}&quota=1${refresh ? "&refresh=1" : ""}`);
+            if (!Array.isArray(quotaData.accounts)) throw new Error("Invalid account quota roster");
+            if (!currentRequest()) return false;
+            const enriched = quotaData.accounts;
+            setAccountSets(current => currentRequest() ? {
               ...current,
               [provider]: {
                 activeAccountId: quotaData.activeAccountId ?? data.activeAccountId ?? null,
-                accounts: quotaData.accounts ?? data.accounts ?? [],
+                accounts: mergeQuotaRows(enriched, current[provider]?.accounts ?? [], true),
               },
-            }));
+            } : current);
+            return !enriched.some(row => row.quotaUnavailable === true);
           } catch {
-            /* keep local account rows without quota enrichment */
+            if (!currentRequest()) return false;
+            setAccountSets(current => currentRequest() && current[provider] ? {
+              ...current, [provider]: { ...current[provider], accounts: unavailableQuotaRows(current[provider].accounts) },
+            } : current);
+            return false;
           }
-        })();
+        };
+        if (refresh) return await enrich();
+        void enrich();
         return true;
       } catch {
-        if (!aliveRef.current || accountRequestGenerationRef.current[provider] !== generation) return true;
-        setAccountLoadStates(current => ({ ...current, [provider]: "error" }));
+        if (!currentRequest()) return false;
+        setAccountLoadStates(current => currentRequest() ? { ...current, [provider]: "error" } : current);
+        setAccountSets(current => currentRequest() && current[provider] ? {
+          ...current, [provider]: { ...current[provider], accounts: unavailableQuotaRows(current[provider].accounts) },
+        } : current);
         return false;
       }
     }));
     return results.every(Boolean);
-  }, [aliveRef, apiBase]);
+  }, [aliveRef, apiBase, readRoster]);
 
-  const fetchKeyPools = useCallback(async (providers: string[]) => {
-    const entries = await Promise.all(providers.map(async name => {
-      const data = await fetch(`${apiBase}/api/providers/keys?name=${encodeURIComponent(name)}`).then(async r => { if (!r.ok) throw new Error(String(r.status)); return r.json(); }).catch(() => null) as { keys?: ApiKeyEntry[] } | null;
-      return [name, data?.keys ?? []] as const;
+  const fetchKeyPools = useCallback(async (providers: string[], refresh = false): Promise<boolean> => {
+    if (!aliveRef.current || !mountedRef.current || serverRef.current !== apiBase) return false;
+    const results = await Promise.all([...new Set(providers)].map(async name => {
+      const key = `key:${name}`;
+      const generation = (accountRequestGenerationRef.current[key] ?? 0) + 1;
+      accountRequestGenerationRef.current[key] = generation;
+      const currentRequest = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase && accountRequestGenerationRef.current[key] === generation;
+      const url = `${apiBase}/api/providers/keys?name=${encodeURIComponent(name)}`;
+      const failed = () => {
+        if (currentRequest()) setKeyPools(current => currentRequest()
+          ? { ...current, [name]: unavailableQuotaRows(current[name] ?? []) } : current);
+        return false;
+      };
+      try {
+        const data = await readRoster<{ keys?: ApiKeyEntry[] }>(url);
+        if (!Array.isArray(data.keys)) throw new Error("Invalid key roster");
+        if (!currentRequest()) return false;
+        const rows = data.keys;
+        setKeyPools(current => currentRequest() ? { ...current, [name]: mergeQuotaRows(rows, current[name] ?? [], false) } : current);
+        if (!rows.some(supportsQuotaRead)) return true;
+        const enrich = async (): Promise<boolean> => {
+          try {
+            const data = await readRoster<{ keys?: ApiKeyEntry[] }>(`${url}&quota=1${refresh ? "&refresh=1" : ""}`);
+            if (!Array.isArray(data.keys)) throw new Error("Invalid key quota roster");
+            if (!currentRequest()) return false;
+            const enriched = data.keys;
+            setKeyPools(current => currentRequest() ? { ...current, [name]: mergeQuotaRows(enriched, current[name] ?? [], true) } : current);
+            return !enriched.some(row => row.quotaUnavailable === true);
+          } catch { return failed(); }
+        };
+        if (refresh) return await enrich();
+        void enrich();
+        return true;
+      } catch { return failed(); }
     }));
-    setKeyPools(Object.fromEntries(entries));
-  }, [apiBase]);
+    return results.every(Boolean);
+  }, [apiBase, aliveRef, readRoster]);
 
   const switchAccount = async (provider: string, account: OAuthAccount) => {
     if (account.active || account.needsReauth || switchingAccountRef.current) return;
@@ -249,11 +356,11 @@ export function useProviderAccountPools(deps: {
     // guaranteeing the request goes out.
     // Keyed on the provider list because this effect re-runs whenever that memo changes, and
     // StrictMode double-invokes it on mount; an uncancellable microtask would otherwise duplicate.
-    const key = oauthCardProviders.join(",");
+    const key = `${apiBase}:${oauthCardProviders.join(",")}`;
     if (accountSetsKeyRef.current === key) return;
     accountSetsKeyRef.current = key;
     void Promise.resolve().then(() => { void fetchAccountSets(oauthCardProviders); });
-  }, [fetchAccountSets, oauthCardProviders]);
+  }, [apiBase, fetchAccountSets, oauthCardProviders]);
 
   const keyCardProviders = useMemo(
     () => config ? Object.entries(config.providers).filter(([, p]) => p.hasApiKey && p.authMode !== "oauth" && p.authMode !== "forward").map(([n]) => n) : [],
@@ -261,11 +368,11 @@ export function useProviderAccountPools(deps: {
   );
   useEffect(() => {
     if (keyCardProviders.length === 0) return;
-    const key = keyCardProviders.join(",");
+    const key = `${apiBase}:${keyCardProviders.join(",")}`;
     if (keyPoolsKeyRef.current === key) return;
     keyPoolsKeyRef.current = key;
     void Promise.resolve().then(() => { void fetchKeyPools(keyCardProviders); });
-  }, [fetchKeyPools, keyCardProviders]);
+  }, [apiBase, fetchKeyPools, keyCardProviders]);
 
   const activeAccountNeedsReauth = useMemo(
     () => buildActiveAccountNeedsReauthMap(accountSets, codexActiveNeedsReauth),

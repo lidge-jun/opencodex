@@ -7,6 +7,7 @@ import type { CodexAccountEntry } from "./codex-account-pool-types";
 import type { CodexAccountModeState } from "../codex-multi-state";
 import type { TFn } from "../i18n/shared";
 import type { NoticeTone } from "../ui";
+import { navigateHash } from "../hash-routing";
 import {
   doctorCopyButtonLabel,
   formatOAuthHealthLabel,
@@ -35,6 +36,7 @@ export function CodexAccountPoolMainCard({
   onOpenReset,
   onCopyDoctor,
   doctorCopyOutcomeFor,
+  onManageMainHardLock,
 }: {
   t: TFn;
   main: CodexAccountEntry | undefined;
@@ -59,6 +61,7 @@ export function CodexAccountPoolMainCard({
   onOpenReset: (account: CodexAccountEntry) => void;
   onCopyDoctor?: (accountId: string) => void;
   doctorCopyOutcomeFor?: (accountId: string) => "copied" | "unavailable" | null;
+  onManageMainHardLock?: () => void;
 }) {
   const mainFallbackLabel = t("codexAuth.codexApp");
   const mainId = main?.id ?? "__main__";
@@ -71,18 +74,26 @@ export function CodexAccountPoolMainCard({
     priority: main?.priority ?? 0,
     hasCredential: true,
     quota: main?.quota ?? null,
+    quotaAutoRefresh: main?.quotaAutoRefresh ?? {
+      fiveHourAvailable: false,
+      weeklyAvailable: false,
+      fiveHourEnabled: false,
+      weeklyEnabled: false,
+    },
   };
   const showReauth = Boolean(main?.needsReauth) || oauthHealthShowsReauth(main?.health?.status);
   const inCooldown = oauthHealthIsCooldown(main?.health?.status);
+  const policy = main?.mainAccountHardLock;
+  const hardLocked = policy?.enabled === true && policy.state === "blocked";
   const healthLabel = formatOAuthHealthLabel(t, main?.health);
   const healthSummary = main
     ? formatOAuthHealthSummary(t, "codex", mainId, main.health)
     : null;
 
   return (
-    <div className={`card ${isMainActive ? "card-active" : ""}`} style={{ marginBottom: 12 }}>
+    <div className={`card ${isMainActive && !hardLocked ? "card-active" : ""}`} style={{ marginBottom: 12 }}>
       <div className="card-head">
-        <span className={`dot ${showReauth ? "dot-amber" : "dot-green"}`} />
+        <span className={`dot ${showReauth || hardLocked ? "dot-amber" : "dot-green"}`} />
         <strong>{t("codexAuth.mainAccount")}</strong>
         <span className="card-badges">
           {main?.plan && <span className="badge badge-green">{main.plan}</span>}
@@ -98,7 +109,7 @@ export function CodexAccountPoolMainCard({
             <span className={oauthHealthBadgeClass(main?.health?.status)}>{healthLabel}</span>
           )}
           {showReauth && !healthLabel && <span className="badge badge-amber">{t("codexAuth.needsReauth")}</span>}
-          {!main?.paused && (
+          {!main?.paused && !hardLocked && (
             <span className={`badge ${isMainActive ? "badge-primary" : "badge-muted"}`}>
               {isMainActive
                 ? t(accountModeState === "direct" ? "codexAuth.poolPrepared" : "codexAuth.nextSession")
@@ -106,7 +117,7 @@ export function CodexAccountPoolMainCard({
             </span>
           )}
         </span>
-        {!main?.paused && (!isMainActive || pinnedId !== "__main__") && !showReauth && !inCooldown && (
+        {!main?.paused && !hardLocked && (!isMainActive || pinnedId !== "__main__") && !showReauth && !inCooldown && (
           <button type="button" className="btn btn-ghost btn-sm codex-account-switch" onClick={() => onSwitch(mainSwitchEntry)}>
             {switchActionLabel}
           </button>
@@ -155,6 +166,15 @@ export function CodexAccountPoolMainCard({
           />
         )}
       </div>
+      {policy?.enabled && (
+        <div className={`codex-main-hard-lock-status${hardLocked ? " is-blocked" : ""}`}>
+          <p role="status">{t(hardLocked ? "codexAuth.mainHardLockBlocked"
+            : policy.state === "ready" ? "codexAuth.mainHardLockMonitoring" : "codexAuth.mainHardLockUnknown")}</p>
+          {onManageMainHardLock
+            ? <button type="button" className="link-btn" onClick={onManageMainHardLock}>{t("codexAuth.mainHardLockManage")}</button>
+            : <button type="button" className="link-btn" onClick={() => navigateHash("codex-set")}>{t("codexAuth.mainHardLockManage")}</button>}
+        </div>
+      )}
       {healthSummary && (
         <div className="card-sub faint">{healthSummary}</div>
       )}
@@ -163,15 +183,15 @@ export function CodexAccountPoolMainCard({
       )}
       {showReauth
         ? <div className="card-sub faint">{t("codexAuth.mainTokenExpired")}</div>
-        : !inCooldown && (
-          <QuotaBars
-            quota={main?.quota ?? null}
-            plan={main?.plan}
-            threshold={threshold}
-            t={t}
-            pending={main != null && main.quota == null}
-          />
-        )}
+        : !inCooldown && <>
+            <QuotaBars
+              quota={main?.quota ?? null}
+              plan={main?.plan}
+              threshold={threshold}
+              t={t}
+              pending={main != null && main.quota == null}
+            />
+          </>}
     </div>
   );
 }
@@ -234,23 +254,81 @@ export function CodexAccountPoolPageHead({
             </button>
           </span>
         )}
-        <button
-          type="button"
-          className="btn btn-sm btn-ghost codex-auth-action-btn"
-          onClick={onPauseExhausted}
-          disabled={refreshingQuota || pausingExhausted || !!pauseBusy}
-        >
-          <IconPause width={14} /> {pausingExhausted ? t("codexAuth.pausingExhausted") : t("codexAuth.pauseExhausted")}
-        </button>
-        <button
-          type="button"
-          className="btn btn-sm btn-ghost codex-auth-action-btn"
-          onClick={onRefresh}
-          disabled={refreshingQuota || pausingExhausted || !!pauseBusy}
-        >
-          <IconRefresh width={14} /> {refreshingQuota ? t("codexAuth.refreshingQuota") : t("codexAuth.refreshQuota")}
-        </button>
+        {/*
+          The two account-scoped actions used to live here, beside the page title. On the
+          standalone page that put four controls plus a heading on one row, and the actions
+          sat far above the account cards they act on. They render in
+          CodexAccountPoolActions below instead. The embedded surface keeps them inline,
+          because there is no title row there to crowd.
+        */}
+        {embedded && (
+          <CodexAccountPoolActionButtons
+            t={t}
+            refreshingQuota={refreshingQuota}
+            pausingExhausted={pausingExhausted}
+            pauseBusy={pauseBusy}
+            onRefresh={onRefresh}
+            onPauseExhausted={onPauseExhausted}
+          />
+        )}
       </div>
+    </div>
+  );
+}
+
+/** The pause/refresh pair, shared by the embedded head and the standalone action row. */
+export function CodexAccountPoolActionButtons({
+  t,
+  refreshingQuota,
+  pausingExhausted,
+  pauseBusy,
+  onRefresh,
+  onPauseExhausted,
+}: {
+  t: TFn;
+  refreshingQuota: boolean;
+  pausingExhausted: boolean;
+  pauseBusy?: boolean;
+  onRefresh: () => void;
+  onPauseExhausted: () => void;
+}) {
+  return (
+    <>
+      <button
+        type="button"
+        className="btn btn-sm btn-ghost codex-auth-action-btn"
+        onClick={onPauseExhausted}
+        disabled={refreshingQuota || pausingExhausted || !!pauseBusy}
+      >
+        <IconPause width={14} /> {pausingExhausted ? t("codexAuth.pausingExhausted") : t("codexAuth.pauseExhausted")}
+      </button>
+      <button
+        type="button"
+        className="btn btn-sm btn-ghost codex-auth-action-btn"
+        onClick={onRefresh}
+        disabled={refreshingQuota || pausingExhausted || !!pauseBusy}
+      >
+        <IconRefresh width={14} /> {refreshingQuota ? t("codexAuth.refreshingQuota") : t("codexAuth.refreshQuota")}
+      </button>
+    </>
+  );
+}
+
+/**
+ * Standalone-page action row: the pause/refresh pair, moved out of the page head and
+ * placed directly above the account cards they operate on.
+ */
+export function CodexAccountPoolActions(props: {
+  t: TFn;
+  refreshingQuota: boolean;
+  pausingExhausted: boolean;
+  pauseBusy?: boolean;
+  onRefresh: () => void;
+  onPauseExhausted: () => void;
+}) {
+  return (
+    <div className="codex-auth-actions-row">
+      <CodexAccountPoolActionButtons {...props} />
     </div>
   );
 }

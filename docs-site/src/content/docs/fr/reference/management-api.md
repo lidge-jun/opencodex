@@ -86,6 +86,16 @@ résultats propres à chaque route, sans répéter ce tableau.
 Pour comprendre la liste de modèles et le comportement chiffré des tâches confiées aux agents d'exécution, voir
 [Surface des sous-agents](/fr/guides/sub-agent-surface/).
 
+### Journal de restauration des intégrations clientes
+
+| Méthode et chemin | Objectif | Erreurs notables |
+| --- | --- | --- |
+| `GET /api/client-integrations/journal?client=...` | Lister les opérations de restauration, éventuellement pour un seul client. Chaque ligne contient le champ `deletable` calculé par le serveur. | 400 client invalide |
+| `DELETE /api/client-integrations/journal?opId=...` | Retirer une ancienne opération et supprimer son instantané si possible. La réponse contient `snapshotRemoved` ; `false` conserve le nettoyage pour une nouvelle tentative de maintenance. | 400 `opId` absent ; 404 opération absente ou déjà retirée ; 409 opération la plus récente du client |
+
+La suppression ajoute une pierre tombale au lieu de réécrire le journal. Le serveur protège
+l'opération la plus récente de chaque client afin de conserver le point d'annulation actuel.
+
 ### Combinaisons
 
 | Méthode et chemin | Objectif | Erreurs notables |
@@ -165,7 +175,10 @@ d’abord et soumettez le résumé renvoyé. Préférez la quarantaine lorsqu’
 | `PUT /api/model-visibility` | Modifier atomiquement la visibilité au niveau du fournisseur ou du modèle | 400 fournisseur, portée, cible ou corps non valide |
 | `GET, POST /api/custom-models` | Répertoriez les modèles personnalisés ou ajoutez-en un | 400 champs invalides ; 404 fournisseur manquant ; 409 dupliquer le modèle |
 | `PUT, DELETE /api/custom-models/{id}` | Modifier ou supprimer un modèle personnalisé | 400 invalide id/fields ; 404 introuvable ; 409 modèle en double |
-| `GET, PUT /api/selected-models` | Lire les listes autorisées et la disponibilité des fournisseurs, ou remplacer une liste autorisée | 400 fournisseur ou corps manquant ; 404 fournisseur inconnu |
+| `GET, PUT /api/selected-models` | Lire les listes autorisées et la disponibilité des fournisseurs, ou remplacer une liste autorisée | 400 fournisseur ou corps manquant ; 404 fournisseur inconnu; PUT 409 `initial_model_selection_pending` |
+| `GET, PUT /api/model-presets` | Lire les préréglages ou choisir le mode preset/all/custom | 400 mode invalide ou préréglage indisponible; 404 fournisseur inconnu; PUT 409 `initial_model_selection_pending` |
+
+Tant qu’une liste initiale fiable n’est pas disponible, les requêtes PUT valides vers `/api/selected-models` et `/api/model-presets` renvoient HTTP 409 avec le code `initial_model_selection_pending`. Actualisez la découverte des modèles (par exemple, `GET /api/models`), puis réessayez après sa réussite.
 
 ### Comptes OAuth, clés de fournisseur et clés du plan de données
 
@@ -258,7 +271,7 @@ Codex. Ses routes sont les suivantes :
 | `PUT /api/codex-auth/failover` | Définir le seuil de basculement du compte | 400 seuil invalide |
 | `GET /api/codex-auth/quota` | Lire l'état du quota mis en cache par compte | — |
 | `GET /api/codex-auth/reset-credits` | Inspecter l'éligibilité au crédit de réinitialisation pour un compte | 400 identifiant de compte manquant ; transmission du statut en amont ; 500 échec de recherche |
-| `POST /api/codex-auth/reset-credits/consume` | Consommer un crédit de réinitialisation éligible | 400 identifiant de compte manquant ; transmission du statut en amont ; 503 `server_busy` ; 500 consommer l'échec |
+| `POST /api/codex-auth/reset-credits/consume` | Consommer un crédit de réinitialisation éligible. L'`operationId` facultatif (UUIDv4) rend la consommation idempotente : le même id rejoue un unique résultat durable au lieu de consommer un second crédit. | 400 identifiant de compte manquant ou `operationId` invalide ; 409 `identity_mismatch` si l'id appartient à un autre compte ; transmission du statut en amont ; 503 `server_busy`, `capacity` ou `unavailable` ; 500 consommer l'échec |
 | `POST /api/codex-auth/login` | Démarrer une connexion ou une réauthentification Codex | 400 requête invalide ; état de connexion en conflit ou occupé |
 | `POST /api/codex-auth/login/code` | Soumettre manuellement un code pour un flux de connexion Codex | 400 flux ou code invalide |
 | `POST /api/codex-auth/login/cancel` | Annuler un flux de connexion Codex | — |

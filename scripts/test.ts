@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import {
   acquireTestRunLock,
   resolveWrappedTestRunLockPath,
@@ -322,16 +322,21 @@ export function resolveBunTestArgs(
   return args;
 }
 
+// Paths relative to tests/. An entry moves with its file (scripts/test-layout/move.ts rewrites
+// it); the lane label, the ignore glob, and the timeout table all key on the basename.
 export const SERIAL_FULL_SUITE_FILES = [
-  "codex-shim.test.ts",
-  "cursor-native-exec-shell.test.ts",
-  "issue-452-empty-503.test.ts",
-  "openai-provider-option-e2e.test.ts",
-  "release-helper.test.ts",
-  "update-stop-first.test.ts",
+  "codex-integration/codex-shim.test.ts",
+  "providers/cursor/cursor-native-exec-shell.test.ts",
+  "codex-integration/issue-452-empty-503.test.ts",
+  "adapters/openai/openai-provider-option-e2e.test.ts",
+  "ci-workflows/release-helper.test.ts",
+  "update/update-stop-first.test.ts",
 ] as const;
 
-const SERIAL_LANE_TIMEOUT_MS: Partial<Record<(typeof SERIAL_FULL_SUITE_FILES)[number], number>> = {
+type SerialLaneBasename = (typeof SERIAL_FULL_SUITE_FILES)[number] extends infer P
+  ? P extends `${string}/${infer B}` ? B : P
+  : never;
+const SERIAL_LANE_TIMEOUT_MS: Partial<Record<SerialLaneBasename, number>> = {
   // This file intentionally exercises 33 complete release-script subprocess trees.
   // It is ~90s on an idle machine and measured at ~170s under unrelated host load.
   "release-helper.test.ts": 5 * 60 * 1000,
@@ -360,15 +365,15 @@ export function resolveBunTestPlan(requested: string[], comparisonCommit?: strin
 
   const mainArgs = resolveBunTestArgs(requested, comparisonCommit);
   const rootIndex = mainArgs.lastIndexOf("./tests/");
-  const ignores = SERIAL_FULL_SUITE_FILES.flatMap(file => ["--path-ignore-patterns", `**/${file}`]);
+  const ignores = SERIAL_FULL_SUITE_FILES.flatMap(file => ["--path-ignore-patterns", `**/${basename(file)}`]);
   mainArgs.splice(rootIndex === -1 ? mainArgs.length : rootIndex, 0, ...ignores);
   const serialRequested = withoutParallelOverride(requested);
   return [
     { label: "parallel suite", args: mainArgs, timeoutMs: 15 * 60 * 1000 },
     ...SERIAL_FULL_SUITE_FILES.map(file => ({
-      label: file,
+      label: basename(file),
       args: resolveBunTestArgs(["--parallel=1", ...serialRequested, `./tests/${file}`]),
-      timeoutMs: SERIAL_LANE_TIMEOUT_MS[file] ?? 3 * 60 * 1000,
+      timeoutMs: SERIAL_LANE_TIMEOUT_MS[basename(file) as SerialLaneBasename] ?? 3 * 60 * 1000,
     })),
   ];
 }
@@ -455,7 +460,7 @@ async function runTestLane(
 
 /**
  * `gui` is not a workspace of the root package and declares React only in `gui/package.json`, so a
- * root `bun install` never creates `gui/node_modules`. Twenty-five files under `tests/` import
+ * root `bun install` never creates `gui/node_modules`. Twenty-six files under `tests/` import
  * modules from `gui/src`, which makes those tests fail on a fresh clone or worktree with
  * `Cannot find package 'react'` — reported as an "Unhandled error between tests" that names no
  * test, so the cause is not obvious from the output.

@@ -71,6 +71,16 @@ Authorization: Bearer <admin-token>
 
 모델 목록과 암호화된 worker-task 동작의 개념은 [Sub-agent Surface](/guides/sub-agent-surface/)를 참고하십시오.
 
+### 클라이언트 연동 롤백 저널
+
+| 메서드 및 경로 | 목적 | 주요 오류 |
+| --- | --- | --- |
+| `GET /api/client-integrations/journal?client=...` | 롤백 작업을 조회합니다. 특정 클라이언트로 제한할 수 있으며 각 행에는 서버가 계산한 `deletable` 값이 포함됩니다. | 400 잘못된 클라이언트 |
+| `DELETE /api/client-integrations/journal?opId=...` | 이전 롤백 작업을 폐기하고 가능한 경우 스냅샷도 제거합니다. 성공 응답의 `snapshotRemoved`가 `false`면 유지보수 재시도를 위해 정리 작업이 보존됩니다. | 400 `opId` 누락, 404 없거나 이미 폐기된 작업, 409 해당 클라이언트의 최신 작업 |
+
+삭제는 저널을 다시 쓰지 않고 툼스톤을 추가합니다. 현재 실행 취소 지점을 유지하기 위해
+각 클라이언트의 최신 작업은 서버에서 삭제하지 못하게 보호합니다.
+
 ### 콤보
 
 | Method and path | 목적 | 주요 오류 |
@@ -140,7 +150,10 @@ Authorization: Bearer <admin-token>
 | `PUT /api/model-visibility` | provider 또는 model 수준의 visibility를 원자적으로 변경합니다 | 400 잘못된 provider, scope, target, 또는 본문 |
 | `GET, POST /api/custom-models` | custom model을 나열하거나 하나를 추가합니다 | 400 잘못된 필드; 404 provider 없음; 409 중복 model |
 | `PUT, DELETE /api/custom-models/{id}` | custom model 하나를 수정하거나 삭제합니다 | 400 잘못된 id/필드; 404 찾을 수 없음; 409 중복 model |
-| `GET, PUT /api/selected-models` | provider allowlist와 가용성을 읽거나 allowlist 하나를 교체합니다 | 400 provider/body 누락; 404 알 수 없는 provider |
+| `GET, PUT /api/selected-models` | provider allowlist와 가용성을 읽거나 allowlist 하나를 교체합니다 | 400 provider/body 누락; 404 알 수 없는 provider; PUT 409 `initial_model_selection_pending` |
+| `GET, PUT /api/model-presets` | 프리셋 정보를 읽거나 preset/all/custom 모드를 선택합니다 | 400 잘못된 mode 또는 지원하지 않는 프리셋; 404 알 수 없는 provider; PUT 409 `initial_model_selection_pending` |
+
+신뢰할 수 있는 초기 모델 목록을 확보하기 전에는 유효한 `PUT /api/selected-models`와 `PUT /api/model-presets` 요청도 HTTP 409와 `initial_model_selection_pending` 코드를 반환합니다. `GET /api/models` 등으로 모델 목록을 정상적으로 갱신한 뒤 재시도하세요.
 
 ### OAuth 계정, provider key, 데이터 평면 키
 
@@ -222,7 +235,7 @@ Authorization: Bearer <admin-token>
 | `PUT /api/codex-auth/failover` | account failover threshold를 설정합니다 | 400 잘못된 threshold |
 | `GET /api/codex-auth/quota` | 계정별 캐시된 quota 상태를 읽습니다 | — |
 | `GET /api/codex-auth/reset-credits` | 계정의 reset-credit 자격을 확인합니다 | 400 누락된 account id; upstream 상태 전달; 500 조회 실패 |
-| `POST /api/codex-auth/reset-credits/consume` | 사용할 수 있는 reset credit을 소비합니다 | 400 누락된 account id; upstream 상태 전달; 503 `server_busy`; 500 소비 실패 |
+| `POST /api/codex-auth/reset-credits/consume` | 사용할 수 있는 reset credit을 소비합니다. 선택적 `operationId`(UUIDv4)를 보내면 소비가 멱등해집니다 — 같은 id는 크레딧을 다시 쓰지 않고 저장된 결과 하나를 재생합니다. | 400 누락된 account id 또는 잘못된 `operationId`; id가 다른 계정 소유이면 409 `identity_mismatch`; upstream 상태 전달; 503 `server_busy`/`capacity`/`unavailable`; 500 소비 실패 |
 | `POST /api/codex-auth/login` | Codex 로그인 또는 재인증을 시작합니다 | 400 잘못된 요청; 충돌/바쁨 로그인 상태 |
 | `POST /api/codex-auth/login/code` | Codex 로그인 흐름용 수동 코드를 제출합니다 | 400 잘못된 흐름/code |
 | `POST /api/codex-auth/login/cancel` | Codex 로그인 흐름을 취소합니다 | — |

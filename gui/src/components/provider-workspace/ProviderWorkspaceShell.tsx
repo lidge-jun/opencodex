@@ -6,6 +6,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useKeyedClientResource } from "../../client-resource";
+import { createBoundedFetch } from "../../bounded-fetch";
 import { usageSummary30dResourceKey } from "../../usage-summary-resource";
 import { useT } from "../../i18n/shared";
 import { IconFilter, IconSearch, IconBoxes, IconGlobe, IconLock, IconKey, IconTrash } from "../../icons";
@@ -23,8 +24,12 @@ import {
 import { providerKind } from "../../provider-workspace/kind";
 import { readJsonIfOk, readJsonOrThrow } from "../../fetch-json";
 import { readSessionListCache, writeSessionListCache } from "../../session-list-cache";
-import { countAvailableModels, parseAvailableModels, parseLiveModelCounts, parseSelectedModels, type ProviderAvailableModels, type ProviderLiveModelCounts, type ProviderModelCounts, type ProviderSelectedModels } from "../../provider-workspace/usage";
-import type { ProviderQuotaReportView } from "../../provider-workspace/report";
+import { buildProviderModelUsage, buildProviderUsageTotals, countAvailableModels, parseAvailableModels, parseLiveModelCounts, parseSelectedModels, type ProviderAvailableModels, type ProviderLiveModelCounts, type ProviderModelCounts, type ProviderSelectedModels } from "../../provider-workspace/usage";
+import {
+  freshQuotaReportRecord,
+  freshQuotaReportsFromResponse,
+  type ProviderQuotaReportView,
+} from "../../provider-workspace/report";
 import { formatProviderDisplayName } from "../../provider-icons";
 import { RailRow } from "./ProviderRail";
 import type { PricingFilter, ProviderModelUsageRow, ProviderUsageTotals, StatusFilter, TypeFilter } from "./types";
@@ -55,49 +60,11 @@ const SORT_DEFS: { id: ProviderSortMode; labelKey: "pws.sort.az" | "pws.sort.za"
   { id: "accounts-first", labelKey: "pws.sort.accountsFirst" },
 ];
 
-const QUOTA_REPORT_MAX_AGE_MS = 30 * 60_000;
-
-function freshQuotaReport(value: unknown, now: number): ProviderQuotaReportView | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const row = value as Record<string, unknown>;
-  if (typeof row.updatedAt !== "number" || !Number.isFinite(row.updatedAt)) return null;
-  if (now - row.updatedAt >= QUOTA_REPORT_MAX_AGE_MS) return null;
-  if (!("quota" in row)) return null;
-  if (row.label !== undefined && typeof row.label !== "string") return null;
-  if (row.source !== undefined && typeof row.source !== "string") return null;
-  return {
-    ...(typeof row.label === "string" ? { label: row.label } : {}),
-    ...(typeof row.source === "string" ? { source: row.source } : {}),
-    updatedAt: row.updatedAt,
-    quota: row.quota,
-    ...(row.aggregation !== undefined ? { aggregation: row.aggregation } : {}),
-  };
-}
-
-function freshQuotaReportRecord(value: unknown, now = Date.now()): Record<string, ProviderQuotaReportView> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const out: Record<string, ProviderQuotaReportView> = {};
-  for (const [provider, raw] of Object.entries(value)) {
-    const report = freshQuotaReport(raw, now);
-    if (provider.trim() && report) out[provider] = report;
-  }
-  return out;
-}
-
+// The freshness predicate itself lives in provider-workspace/report.ts so it can be unit
+// tested; this module exports only its component, so a predicate defined here would be
+// reachable only through a full DOM render.
 function readFreshQuotaReportCache(key: string): Record<string, ProviderQuotaReportView> | null {
   return freshQuotaReportRecord(readSessionListCache<unknown>(key));
-}
-
-function freshQuotaReportsFromResponse(value: unknown, now = Date.now()): Record<string, ProviderQuotaReportView> {
-  if (!Array.isArray(value)) return {};
-  const out: Record<string, ProviderQuotaReportView> = {};
-  for (const raw of value) {
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
-    const provider = (raw as Record<string, unknown>).provider;
-    const report = freshQuotaReport(raw, now);
-    if (typeof provider === "string" && provider.trim() && report) out[provider] = report;
-  }
-  return out;
 }
 
 export default function ProviderWorkspaceShell({
@@ -112,10 +79,13 @@ export default function ProviderWorkspaceShell({
   jsonEditor,
   jsonSaving = false,
   modelsRefreshToken = 0,
+  onModelsSettled,
   activeAccountNeedsReauth,
   /** Stable key of active OAuth account ids — refetch overview quotas after account switch. */
   quotaRefreshEpoch = 0,
   quotaForceRefresh = false,
+  onQuotaRefreshSettled,
+  onRefreshAllQuotas,
   detail,
 }: {
   providers: Record<string, WorkspaceProvider>;
@@ -131,6 +101,8 @@ export default function ProviderWorkspaceShell({
   jsonSaving?: boolean;
   /** Bump after login/config changes so /api/selected-models is refetched. */
   modelsRefreshToken?: number;
+  /** Registration feedback re-reads config only after this discovery actually settles. */
+  onModelsSettled?: (ok: boolean) => void;
   activeAccountNeedsReauth?: Record<string, boolean>;
   /**
    * Monotonic quota revision. It moves only when something actually invalidates the quota
@@ -138,8 +110,22 @@ export default function ProviderWorkspaceShell({
    * data arriving on a cold load no longer re-triggers the read once per provider.
    */
   quotaRefreshEpoch?: number;
+  /**
+   * Called when a FORCED quota read settles, with whether it succeeded.
+   *
+   * The shell owns the only `/api/provider-quotas` read, so it owns the only truthful
+   * completion signal. An operator-facing refresh button that resolved on its own would
+   * report success before the response landed — `fetchProviderQuotas(true)` is a
+   * synchronous state bump, not a request.
+   */
+  onQuotaRefreshSettled?: (ok: boolean, epoch: number) => void;
   /** True when the bump came from a mutation that needs the server to bypass its TTL. */
   quotaForceRefresh?: boolean;
+  /**
+   * Force a fresh read of every provider's quota from the aggregate overview.
+   * Omitted when the page cannot drive one, which is what hides the control.
+   */
+  onRefreshAllQuotas?: () => Promise<boolean>;
   /** Detail body for the selected provider (WP090); a placeholder renders when absent. */
   detail?: (item: WorkspaceItem, data: DetailSlotData) => ReactNode;
 }) {
@@ -158,7 +144,7 @@ export default function ProviderWorkspaceShell({
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsLoadFailed, setModelsLoadFailed] = useState(false);
   const quotasCacheKey = `ocx.providers.quotas.v1:${apiBase}`;
-  const usageCacheKey = `ocx.providers.usage.v1:${apiBase}`;
+  const usageCacheKey = `ocx.providers.usage.v2:${apiBase}`;
   const [usageTotals, setUsageTotals] = useState<Record<string, ProviderUsageTotals>>(() => (
     readSessionListCache<{ totals: Record<string, ProviderUsageTotals> }>(usageCacheKey)?.totals ?? {}
   ));
@@ -194,6 +180,7 @@ export default function ProviderWorkspaceShell({
     const timeout = window.setTimeout(() => {
       setModelsLoading(true);
       void (async () => {
+        let succeeded = false;
         try {
           const res = await fetch(`${apiBase}/api/selected-models`);
           const data = await readJsonOrThrow(res);
@@ -203,11 +190,12 @@ export default function ProviderWorkspaceShell({
           setLiveModelCounts(parseLiveModelCounts(data));
           setSelectedModels(parseSelectedModels(data));
           setModelsLoadFailed(false);
+          succeeded = true;
         } catch {
           if (cancelled) return;
           setModelsLoadFailed(true);
         } finally {
-          if (!cancelled) setModelsLoading(false);
+          if (!cancelled) { setModelsLoading(false); onModelsSettled?.(succeeded); }
         }
       })();
     }, 0);
@@ -215,26 +203,20 @@ export default function ProviderWorkspaceShell({
       cancelled = true;
       window.clearTimeout(timeout);
     };
-  }, [apiBase, modelsRefreshToken, modelsLoadEpoch]);
+  }, [apiBase, modelsRefreshToken, modelsLoadEpoch, onModelsSettled]);
 
   useEffect(() => {
     let cancelled = false;
     const timeout = window.setTimeout(() => {
-      const data = usageResource.data as { providers?: Array<{ provider: string; requests: number; totalTokens?: number }>; models?: Array<{ provider: string; model: string; resolvedModel?: string; requests: number; totalTokens: number; inputTokens: number; outputTokens: number; shareRatio: number; estimatedCostUsd?: number }> } | undefined;
+      const data = usageResource.data as { providers?: Array<{ provider: string; requests: number; totalTokens?: number }>; models?: Array<ProviderModelUsageRow & { provider: string }> } | undefined;
       if (cancelled) return;
       if (!data) {
         if (usageResource.loading) setUsageLoading(!readSessionListCache(usageCacheKey));
         return;
       }
-      const byProvider: Record<string, ProviderUsageTotals> = {};
-      for (const row of data.providers ?? []) byProvider[row.provider] = { requests: row.requests, totalTokens: row.totalTokens };
+      const byProvider = buildProviderUsageTotals(data.providers ?? []);
       setUsageTotals(byProvider);
-      const byProviderModels: Record<string, ProviderModelUsageRow[]> = {};
-      for (const m of data.models ?? []) {
-        const key = m.provider;
-        if (!byProviderModels[key]) byProviderModels[key] = [];
-        byProviderModels[key].push({ model: m.model, ...(m.resolvedModel ? { resolvedModel: m.resolvedModel } : {}), requests: m.requests, totalTokens: m.totalTokens, inputTokens: m.inputTokens, outputTokens: m.outputTokens, shareRatio: m.shareRatio, ...(m.estimatedCostUsd !== undefined ? { estimatedCostUsd: m.estimatedCostUsd } : {}) });
-      }
+      const byProviderModels = buildProviderModelUsage(data.models ?? [], byProvider);
       setUsageModels(byProviderModels);
       writeSessionListCache(usageCacheKey, { totals: byProvider, models: byProviderModels });
       setUsageLoading(false);
@@ -250,14 +232,25 @@ export default function ProviderWorkspaceShell({
       // A forced bump means a mutation just changed the answer, so the server's TTL has to
       // be bypassed. The old derived-key effect always read the cached view, which is why a
       // switch could leave the bars showing the previous account's quota.
-      void fetch(`${apiBase}/api/provider-quotas${quotaForceRefresh ? "?refresh=1" : ""}`)
-        .then(r => readJsonIfOk<{ reports?: Array<{ provider: string; label?: string; source?: string; updatedAt?: number; quota?: unknown; aggregation?: unknown }> }>(r))
+      const bounded = createBoundedFetch(20_000);
+      abortRead = () => { bounded.controller.abort(); bounded.clear(); };
+      void fetch(`${apiBase}/api/provider-quotas${quotaForceRefresh ? "?refresh=1" : ""}`, { signal: bounded.signal })
+        .then(r => readJsonIfOk<{ reports?: Array<{ provider: string; label?: string; source?: string; updatedAt?: number; quota?: unknown; observed?: boolean; aggregation?: unknown }> }>(r))
         .then((data) => {
-          if (cancelled || !data) return;
+          if (cancelled) return;
+          // `readJsonIfOk` resolves undefined on a non-OK response rather than rejecting.
+          // That is a FAILED refresh, and it must be reported: returning silently here
+          // would leave an operator's button spinning until the component unmounted.
+          if (!data) {
+            if (quotaForceRefresh) onQuotaRefreshSettled?.(false, quotaRefreshEpoch);
+            return;
+          }
           // A successful endpoint response is authoritative, including an empty report list.
           const next = freshQuotaReportsFromResponse(data.reports);
           setQuotaReports(next);
           writeSessionListCache(quotasCacheKey, next);
+          // Report only for a forced read: an ordinary revalidation has no operator waiting on it.
+          if (quotaForceRefresh) onQuotaRefreshSettled?.(true, quotaRefreshEpoch);
         })
         .catch(() => {
           if (cancelled) return;
@@ -267,15 +260,18 @@ export default function ProviderWorkspaceShell({
             writeSessionListCache(quotasCacheKey, next);
             return next;
           });
+          if (quotaForceRefresh) onQuotaRefreshSettled?.(false, quotaRefreshEpoch);
         })
-        .finally(() => { if (!cancelled) setQuotasLoading(false); });
+        .finally(() => { bounded.clear(); if (!cancelled) setQuotasLoading(false); });
     }, 0);
+    let abortRead: (() => void) | undefined;
     return () => {
       cancelled = true;
       window.clearTimeout(timeout);
+      abortRead?.();
     };
     // Keyed on the explicit revision: account arrival is silent, real mutations re-read.
-  }, [apiBase, quotaRefreshEpoch, quotaForceRefresh, quotasCacheKey]);
+  }, [apiBase, quotaRefreshEpoch, quotaForceRefresh, quotasCacheKey, onQuotaRefreshSettled]);
 
   useEffect(() => {
     if (!filterOpen) return;
@@ -584,6 +580,7 @@ export default function ProviderWorkspaceShell({
             quotasLoading={quotasLoading}
             onSelectProvider={(name) => onSelect(name)}
             onEditConfig={onEditConfig}
+            {...(onRefreshAllQuotas ? { onRefreshAllQuotas } : {})}
           />
         )}
         </main>

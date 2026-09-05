@@ -1,0 +1,406 @@
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import * as oauthModule from "../../src/oauth";
+
+mock.module("../../src/oauth", () => ({ ...oauthModule, getValidAccessToken: async () => "vision-cache-token" }));
+
+import { parseRequest } from "../../src/responses/parser";
+import type { OcxConfig, OcxContentPart, OcxProviderConfig } from "../../src/types";
+import {
+  describeImagesInPlace,
+  evictOldestVisionDescriptionForBudget,
+  resetVisionDescriptionCache,
+  resolveMaxDescriptionsPerTurn,
+  resolveVisionTimeoutMs,
+  DEFAULT_VISION_TIMEOUT_MS,
+  MAX_VISION_TIMEOUT_MS,
+  MIN_VISION_TIMEOUT_MS,
+  setVisionDescriptionCache,
+  setVisionDescriptionCacheLimitsForTests,
+  shouldResolveOpenAiVisionSidecar,
+  visionDescriptionRetainedStoreSnapshot,
+  type VisionPlan,
+} from "../../src/vision";
+
+const DATA_A = "data:image/png;base64,YQ==";
+const DATA_B = "data:image/png;base64,Yg==";
+const DATA_C = "data:image/png;base64,Yw==";
+const openaiProvider: OcxProviderConfig = {
+  adapter: "openai-responses",
+  authMode: "forward",
+  baseUrl: "https://openai-vision.test/v1",
+};
+const anthropicProvider: OcxProviderConfig = {
+  adapter: "anthropic",
+  authMode: "oauth",
+  baseUrl: "https://anthropic-vision.test",
+};
+
+const textOnlyProvider: OcxProviderConfig = {
+  adapter: "openai-chat",
+  baseUrl: "https://routed.test/v1",
+  apiKey: "routed",
+  noVisionModels: ["text-model"],
+};
+
+function plan(overrides: Partial<VisionPlan> = {}): VisionPlan {
+  return {
+    backend: "openai",
+    forwardSidecar: {
+      providerName: "openai",
+      provider: openaiProvider,
+      accountMode: "direct",
+      authContext: { kind: "main", accountId: null },
+      headers: new Headers({ Authorization: "Bearer test" }),
+    },
+    settings: { model: "vision-model-a", timeoutMs: 5000 },
+    maxDescriptionsPerTurn: 8,
+    ...overrides,
+  };
+}
+
+test("vision sidecar auth stays lazy for no-image and disabled branches", () => {
+  const cfg: OcxConfig = { port: 10100, defaultProvider: "routed", providers: { routed: textOnlyProvider } };
+  const noImage = parseRequest({ model: "routed/text-model", input: "text only" });
+  const withImage = parseRequest({
+    model: "routed/text-model",
+    input: [{ type: "message", role: "user", content: [{ type: "input_image", image_url: DATA_A }] }],
+  });
+  expect(shouldResolveOpenAiVisionSidecar(cfg, textOnlyProvider, "text-model", noImage)).toBe(false);
+  expect(shouldResolveOpenAiVisionSidecar(
+    { ...cfg, visionSidecar: { enabled: false } },
+    textOnlyProvider,
+    "text-model",
+    withImage,
+  )).toBe(false);
+  expect(shouldResolveOpenAiVisionSidecar(cfg, textOnlyProvider, "text-model", withImage)).toBe(true);
+});
+
+function parsed(parts: Array<Record<string, unknown>>) {
+  return parseRequest({
+    model: "routed/blind",
+    input: [{ type: "message", role: "user", content: parts }],
+  });
+}
+
+function parsedMessages(messages: Array<Array<Record<string, unknown>>>) {
+  return parseRequest({
+    model: "routed/blind",
+    input: messages.map(content => ({ type: "message", role: "user", content })),
+  });
+}
+
+function openaiSse(text: string): Response {
+  return new Response(`data: ${JSON.stringify({ type: "response.output_text.delta", delta: text })}\n\ndata: [DONE]\n\n`, {
+    headers: { "content-type": "text/event-stream" },
+  });
+}
+
+function anthropicSse(text: string): Response {
+  return new Response(`data: ${JSON.stringify({
+    type: "content_block_delta",
+    delta: { type: "text_delta", text },
+  })}\n\n`, { headers: { "content-type": "text/event-stream" } });
+}
+
+function imageCaption(body: Record<string, unknown>): string {
+  const input = body.input as Array<{ content: Array<{ image_url?: string }> }> | undefined;
+  const imageUrl = input?.[0]?.content.find(part => part.image_url)?.image_url ?? "";
+  if (imageUrl === DATA_A) return "caption-a";
+  if (imageUrl === DATA_B) return "caption-b";
+  if (imageUrl === DATA_C) return "caption-c";
+  return "caption-unknown";
+}
+
+function textParts(request: ReturnType<typeof parsed>, messageIndex = 0): string[] {
+  const content = request.context.messages.filter(message => message.role === "user")[messageIndex]?.content;
+  return (content as OcxContentPart[]).filter(part => part.type === "text").map(part => part.text);
+}
+
+describe("vision description cache and per-turn cap", () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    setVisionDescriptionCache();
+    resetVisionDescriptionCache();
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    setVisionDescriptionCacheLimitsForTests();
+    setVisionDescriptionCache();
+  });
+
+  test("normalizes maxDescriptionsPerTurn while preserving an explicit zero", () => {
+    expect(resolveMaxDescriptionsPerTurn(0)).toBe(0);
+    expect(resolveMaxDescriptionsPerTurn(3)).toBe(3);
+    expect(resolveMaxDescriptionsPerTurn(-1)).toBe(8);
+    expect(resolveMaxDescriptionsPerTurn(1.5)).toBe(8);
+    expect(resolveMaxDescriptionsPerTurn(Number.NaN)).toBe(8);
+  });
+
+  test.each(["function_call_output", "custom_tool_call_output"])("%s empty URLs cannot consume another image's caption", async type => {
+    const request = parseRequest({
+      model: "routed/blind",
+      input: [{ type, call_id: "call_images", output: [
+        { type: "input_image", image_url: "", file_id: "file-marker" },
+        { type: "input_image", image_url: "" },
+        { type: "input_image", image_url: DATA_B },
+        { type: "input_image", image_url: DATA_C },
+      ] }],
+    });
+    const seen: string[] = [];
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      const caption = imageCaption(JSON.parse(String(init?.body)));
+      seen.push(caption);
+      return openaiSse(caption);
+    }) as typeof fetch;
+    await describeImagesInPlace(request, plan(), new Headers({ authorization: "Bearer test" }));
+    expect(seen).toEqual(["caption-b", "caption-c"]);
+    const raw = request._rawBody as { input: Array<{ output: Array<{ type: string; text: string }> }> };
+    const output = raw.input[0]!.output;
+    expect(output[0]).toEqual({ type: "input_text", text: "[image: file-marker]" });
+    expect(output[1]!.text).toContain("image omitted");
+    expect(output[2]!.text).toContain("caption-b");
+    expect(output[3]!.text).toContain("caption-c");
+    expect(output[0]!.text).not.toContain("caption-");
+    expect(output[1]!.text).not.toContain("caption-");
+    const result = request.context.messages[0]!;
+    expect(result.role).toBe("toolResult");
+    expect(result.content).toEqual([
+      { type: "text", text: "[image: file-marker]" },
+      { type: "text", text: output[2]!.text },
+      { type: "text", text: output[3]!.text },
+    ]);
+  });
+
+  test("normalizes vision timeoutMs to the runtime bounds", () => {
+    expect(resolveVisionTimeoutMs(undefined)).toBe(DEFAULT_VISION_TIMEOUT_MS);
+    expect(resolveVisionTimeoutMs(12_000)).toBe(12_000);
+    expect(resolveVisionTimeoutMs(MIN_VISION_TIMEOUT_MS)).toBe(MIN_VISION_TIMEOUT_MS);
+    expect(resolveVisionTimeoutMs(MAX_VISION_TIMEOUT_MS)).toBe(MAX_VISION_TIMEOUT_MS);
+    expect(resolveVisionTimeoutMs(0)).toBe(DEFAULT_VISION_TIMEOUT_MS);
+    expect(resolveVisionTimeoutMs(-1)).toBe(DEFAULT_VISION_TIMEOUT_MS);
+    expect(resolveVisionTimeoutMs(1.5)).toBe(DEFAULT_VISION_TIMEOUT_MS);
+    expect(resolveVisionTimeoutMs(MAX_VISION_TIMEOUT_MS + 1)).toBe(DEFAULT_VISION_TIMEOUT_MS);
+  });
+
+  test("maxDescriptionsPerTurn=0 emits a cap marker without calling an executor", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => { calls += 1; return openaiSse("unexpected"); }) as typeof fetch;
+    const request = parsed([
+      { type: "input_text", text: "look" },
+      { type: "input_image", image_url: DATA_A },
+    ]);
+
+    await describeImagesInPlace(request, plan({ maxDescriptionsPerTurn: 0 }), new Headers({ authorization: "Bearer test" }));
+
+    expect(calls).toBe(0);
+    expect(textParts(request).join("\n")).toContain("description cap reached");
+  });
+
+  test("duplicate data images are single-flight and later turns hit the process cache", async () => {
+    let calls = 0;
+    globalThis.fetch = (async (_url, init) => {
+      calls += 1;
+      await Promise.resolve();
+      return openaiSse(imageCaption(JSON.parse(String(init?.body))));
+    }) as typeof fetch;
+    const duplicate = parsed([
+      { type: "input_text", text: "same context" },
+      { type: "input_image", image_url: DATA_A },
+      { type: "input_image", image_url: DATA_A },
+    ]);
+
+    await describeImagesInPlace(duplicate, plan(), new Headers({ authorization: "Bearer test" }));
+    expect(calls).toBe(1);
+    expect(textParts(duplicate).filter(text => text.includes("caption-a"))).toHaveLength(2);
+
+    const nextTurn = parsed([
+      { type: "input_text", text: "same context" },
+      { type: "input_image", image_url: DATA_A },
+    ]);
+    await describeImagesInPlace(nextTurn, plan(), new Headers({ authorization: "Bearer test" }));
+    expect(calls).toBe(1);
+    expect(textParts(nextTurn).join("\n")).toContain("caption-a");
+  });
+
+  test("failed and empty outcomes are not cached", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      if (calls <= 2) return new Response("failed", { status: 500 });
+      return new Response("data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+
+    for (let i = 0; i < 2; i++) {
+      await describeImagesInPlace(parsed([{ type: "input_image", image_url: DATA_A }]), plan(), new Headers({ authorization: "Bearer test" }));
+    }
+    for (let i = 0; i < 2; i++) {
+      await describeImagesInPlace(parsed([{ type: "input_image", image_url: DATA_B }]), plan(), new Headers({ authorization: "Bearer test" }));
+    }
+    expect(calls).toBe(4);
+  });
+
+  test("error outcome reaches the caller unchanged and does not mutate the cache", async () => {
+    const before = visionDescriptionRetainedStoreSnapshot();
+    globalThis.fetch = (async () => new Response("preserve this exact detail", { status: 503 })) as typeof fetch;
+    const request = parsed([{ type: "input_image", image_url: DATA_A }]);
+
+    await describeImagesInPlace(request, plan(), new Headers({ authorization: "Bearer test" }));
+
+    expect(textParts(request)).toEqual([
+      "[An image was attached but could not be processed: vision sidecar HTTP 503: preserve this exact detail]",
+    ]);
+    expect(visionDescriptionRetainedStoreSnapshot()).toEqual(before);
+  });
+
+  test("interleaves hits, misses, and over-cap markers without changing message or part order", async () => {
+    globalThis.fetch = (async (_url, init) => openaiSse(imageCaption(JSON.parse(String(init?.body))))) as typeof fetch;
+    const headers = new Headers({ authorization: "Bearer test" });
+
+    await describeImagesInPlace(parsed([
+      { type: "input_text", text: "same" },
+      { type: "input_image", image_url: DATA_A },
+    ]), plan(), headers);
+
+    let calls = 0;
+    globalThis.fetch = (async (_url, init) => {
+      calls += 1;
+      return openaiSse(imageCaption(JSON.parse(String(init?.body))));
+    }) as typeof fetch;
+    const request = parsedMessages([
+      [
+        { type: "input_text", text: "same" },
+        { type: "input_image", image_url: DATA_A },
+        { type: "input_image", image_url: DATA_B },
+        { type: "input_image", image_url: DATA_C },
+      ],
+      [
+        { type: "input_text", text: "same" },
+        { type: "input_image", image_url: DATA_A },
+      ],
+    ]);
+
+    await describeImagesInPlace(request, plan({ maxDescriptionsPerTurn: 1 }), headers);
+
+    expect(calls).toBe(1);
+    const first = textParts(request, 0).join("\n");
+    expect(first.indexOf("caption-a")).toBeLessThan(first.indexOf("caption-b"));
+    expect(first.indexOf("caption-b")).toBeLessThan(first.indexOf("description cap reached"));
+    expect(textParts(request, 1).join("\n")).toContain("caption-a");
+  });
+
+  test("separates cache keys by backend, model, detail, and normalized context", async () => {
+    let calls = 0;
+    globalThis.fetch = (async (url, init) => {
+      calls += 1;
+      return String(url).includes("anthropic") ? anthropicSse(`anthropic-${calls}`) : openaiSse(`openai-${calls}`);
+    }) as typeof fetch;
+    const headers = new Headers({ authorization: "Bearer test" });
+    const run = async (visionPlan: VisionPlan, context: string, detail = "high") => {
+      await describeImagesInPlace(parsed([
+        { type: "input_text", text: context },
+        { type: "input_image", image_url: DATA_A, detail },
+      ]), visionPlan, headers);
+    };
+
+    await run(plan(), "hello   world");
+    await run(plan(), "hello world"); // normalized-context hit
+    await run(plan(), "hello world", "low");
+    await run(plan({ settings: { model: "vision-model-b", timeoutMs: 5000 } }), "hello world");
+    await run(plan(), "different context");
+    await run(plan({
+      backend: "anthropic",
+      forwardProvider: undefined,
+      anthropicSidecar: { providerName: "anthropic-cache-test", provider: anthropicProvider },
+    }), "hello world");
+
+    expect(calls).toBe(5);
+  });
+
+  test("clamps a successful description before cache insertion and first render", async () => {
+    let cached = "";
+    setVisionDescriptionCache({
+      get: () => undefined,
+      set: (_key, value) => { cached = value; },
+      clear: () => {},
+    });
+    globalThis.fetch = (async () => openaiSse("x".repeat(2_100))) as typeof fetch;
+    const request = parsed([{ type: "input_image", image_url: DATA_A }]);
+    await describeImagesInPlace(request, plan(), new Headers({ authorization: "Bearer test" }));
+    const expected = `${"x".repeat(2_000)}\n…[description truncated]`;
+    expect(cached).toBe(expected);
+    expect(textParts(request).join("\n")).toContain(expected);
+  });
+
+  test("cache hit returns the same clamped description without a sidecar call", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => { calls++; return openaiSse("y".repeat(2_100)); }) as typeof fetch;
+    const first = parsed([{ type: "input_image", image_url: DATA_A }]);
+    await describeImagesInPlace(first, plan(), new Headers({ authorization: "Bearer test" }));
+    const second = parsed([{ type: "input_image", image_url: DATA_A }]);
+    await describeImagesInPlace(second, plan(), new Headers({ authorization: "Bearer test" }));
+    expect(calls).toBe(1);
+    expect(textParts(second)).toEqual(textParts(first));
+  });
+
+  test("test-only limits make a successful clamped value larger than maxBytes observable but not retained", async () => {
+    setVisionDescriptionCacheLimitsForTests({ maxBytes: 1 });
+    globalThis.fetch = (async () => openaiSse("observable")) as typeof fetch;
+    const request = parsed([{ type: "input_image", image_url: DATA_A }]);
+    await describeImagesInPlace(request, plan(), new Headers({ authorization: "Bearer test" }));
+    expect(textParts(request).join("\n")).toContain("observable");
+    expect(visionDescriptionRetainedStoreSnapshot()).toEqual({
+      count: 0, bytes: 0, evictableBytes: 0, pinnedBytes: 0, oldestAt: null,
+    });
+  });
+
+  test("multiple entries fit exactly at the aggregate byte boundary and the next byte evicts the oldest before insert", async () => {
+    const headers = new Headers({ authorization: "Bearer test" });
+    globalThis.fetch = (async () => openaiSse("v")) as typeof fetch;
+    await describeImagesInPlace(parsed([{ type: "input_image", image_url: DATA_A }]), plan(), headers);
+    const oneEntryBytes = visionDescriptionRetainedStoreSnapshot().bytes;
+
+    setVisionDescriptionCacheLimitsForTests({ maxEntries: 3, maxBytes: oneEntryBytes * 2 });
+    let calls = 0;
+    globalThis.fetch = (async (_url, init) => {
+      calls++;
+      const caption = imageCaption(JSON.parse(String(init?.body)));
+      return openaiSse(caption === "caption-c" ? "vv" : "v");
+    }) as typeof fetch;
+    await describeImagesInPlace(parsed([{ type: "input_image", image_url: DATA_A }]), plan(), headers);
+    await describeImagesInPlace(parsed([{ type: "input_image", image_url: DATA_B }]), plan(), headers);
+    expect(visionDescriptionRetainedStoreSnapshot().bytes).toBe(oneEntryBytes * 2);
+    await describeImagesInPlace(parsed([{ type: "input_image", image_url: DATA_C }]), plan(), headers);
+    const after = visionDescriptionRetainedStoreSnapshot();
+    expect(after.count).toBe(1);
+    expect(after.bytes).toBeLessThanOrEqual(oneEntryBytes * 2);
+    await describeImagesInPlace(parsed([{ type: "input_image", image_url: DATA_A }]), plan(), headers);
+    expect(calls).toBe(4);
+  });
+
+  test("040 snapshot is observe-only and oldest-entry eviction returns exact released bytes", async () => {
+    globalThis.fetch = (async () => openaiSse("snapshot")) as typeof fetch;
+    const headers = new Headers({ authorization: "Bearer test" });
+    await describeImagesInPlace(parsed([{ type: "input_image", image_url: DATA_A }]), plan(), headers);
+    await describeImagesInPlace(parsed([{ type: "input_image", image_url: DATA_B }]), plan(), headers);
+    const before = visionDescriptionRetainedStoreSnapshot();
+    expect(visionDescriptionRetainedStoreSnapshot()).toEqual(before);
+    const released = evictOldestVisionDescriptionForBudget();
+    expect(released).toBeGreaterThan(0);
+    expect(visionDescriptionRetainedStoreSnapshot().bytes).toBe(before.bytes - released);
+  });
+});
+
+test("vision planning and image-rewrite seams preserve boundary identity and dependency direction", async () => {
+  const boundary = await import("../../src/vision");
+  const planning = await import("../../src/vision/plan");
+  const rewrite = await import("../../src/vision/image-rewrite");
+  const { readFileSync } = await import("node:fs");
+  const { repoPath } = await import("../helpers/repo-root");
+
+  expect(boundary.resolveMaxDescriptionsPerTurn).toBe(planning.resolveMaxDescriptionsPerTurn);
+  expect(boundary.stripImagesInPlace).toBe(rewrite.stripImagesInPlace);
+  expect(readFileSync(repoPath("src/vision/image-rewrite.ts"), "utf8")).not.toMatch(/from\s+["']\.\/(plan|index)["']/);
+  expect(readFileSync(repoPath("src/vision/plan.ts"), "utf8")).not.toMatch(/from\s+["']\.\/index["']/);
+});

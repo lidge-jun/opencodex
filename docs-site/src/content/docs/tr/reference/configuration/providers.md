@@ -6,6 +6,21 @@ description: Sağlayıcı girdileri, kimlik doğrulama, uç noktalar, model kata
 Bir sağlayıcı, opencodex'e bir modelin nerede yaşadığını, hangi hat adaptörünü
 konuştuğunu ve isteklerin nasıl doğrulandığını söyler.
 
+## İlk kayıtta model seçimi
+
+Yeni OAuth dışı bağlantılar, modelleri göstermeden önce güvenilir bir model listesini bekler. Models sekmesinde en az 20 benzersiz model satırı varsa tüm model anahtarları başlangıçta OFF olur; sağlayıcının kendisi ACTIVE kalır. Gerçekte OAuth veya ChatGPT girişi kullanan bağlantılar varsayılanlarını korur.
+
+Bu kural yalnızca yeni sağlayıcı kaydında uygulanır. Güncellemeler, yeniden giriş ve anahtar değişimi mevcut seçimleri sıfırlamaz. İlk ayardan sonra gerekli modelleri Models üzerinden veya aşağıdaki CLI komutlarıyla açın. Sonradan gelen yeni modellerin ayrı politikası değişmez. `<model-id>` yerine listedeki bir ID yazın.
+
+```sh
+ocx models live --provider openrouter
+ocx models enable '<model-id>'
+ocx models disable '<model-id>'
+ocx models provider openrouter on
+```
+
+Arayüzde kayıt veya OAuth girişi tamamlanınca Models sayfasını açan bir bilgilendirme penceresi gösterilir. CLI model yönetimi komutlarını yazdırır; JSON sonraki adımları içerir. `--no-wait` tamamlanmış değil, bekleyen girişi bildirir. Canlı model komutlarından önce proxy’yi `ocx start` ile başlatın.
+
 ## Sağlayıcı ile ilgili üst düzey alanlar
 
 | Alan | Tip | Varsayılan | Anlamı |
@@ -112,8 +127,8 @@ alanlı seçilmiş kimlikleri yalın kimliklere yeniden yazar.
 | `xaiResponsesXSearch?` | `boolean` | Varsayılan olarak devre dışıdır. Bir xAI Responses hedefinde, yalnızca canlı bir `web_search` aracı son istek normalleştirmesinden sağ çıktığında sağlayıcı tarafından barındırılan `x_search` bildirimini ekler. Mevcut bildirimler yinelenmez, çağıranın `tool_choice`/`allowed_tools` seçicileri hiçbir zaman genişletilmez ve bu, web araması yardımcı hizmetinin `search.xSearch` seçeneklerinden ayrıdır. |
 | `modelPreferHostedTools?` | `Record<string,string[]>` | Barındırılan bir araç ad alanı ayıran iletme harici Responses ağ geçitleri için tam model dahil etme. Şu anda yalnızca `["image_generation"]` kabul eder; eşleşen bir model `openai-responses` hattını kullanmalı ve bu barındırılan aracı desteklemelidir. Çakışan istemci `image_gen` bildirimlerini kaldırır ve arayan araç seçimini korumak için seçicilerini yeniden yazar. OpenAI API sanal `-pro` modelleri için önce seçilen genel kimlik eşleştirilir ve çözümlenen temel hat model kimliği bir geri dönüştür. `modelAdapters` önce genel kimliği, ardından temel kimliği çözer; ikinci çözümleme son hattı belirler. Diğer modeller normal takma ad davranışını korur. |
 | `annotateEmptyToolOutputs?` | `boolean` | Mevcut fakat boş bir araç sonucunu modele ulaşmadan önce kısa bir işaretle değiştirir; böylece boş sonuç eksik sonuç olarak yorumlanmaz. Boş dizelere ve yalnızca metin parçalarından oluşan dizilere uygulanır; görsel, dosya ve şifrelenmiş parçalara hiçbir zaman dokunulmaz. Yerleşik kayıt defterindeki DeepSeek için varsayılan değer `true`dur; diğer durumlarda ayarlanmamıştır. Bir sağlayıcıyı kapsam dışında bırakmak için `false` olarak ayarlayın — açık bir `false` değeri, alanı içermeyen sonraki düzenlemelerde korunur. `PATCH /api/providers?name=<provider>`, geçersiz kılmayı temizleyip kayıt defteri varsayılanı davranışına dönmek üzere `true`, `false` veya `null` kabul eder. |
-| `reasoningEffortMap?` | `Record<string, string>` | Akıl yürütme etiketleri için sağlayıcı genelinde hat takma adları. |
-| `modelReasoningEffortMap?` | `Record<string, Record<string, string>>` | Akıl yürütme etiketleri için model başına hat takma adları. |
+| `reasoningEffortMap?` | `Record<string, string>` | Akıl yürütme etiketleri için sağlayıcı genelinde hat takma adları. Bir etiketi `"__omit__"` olarak eşlemek, akıl yürütme alanını yukarı akış isteğinden tamamen çıkarır (örneğin derin mod için `reasoning_effort` alanının atlanmasını gerektiren Ollama modelleri için). |
+| `modelReasoningEffortMap?` | `Record<string, Record<string, string>>` | Akıl yürütme etiketleri için model başına hat takma adları. Bir etiketi `"__omit__"` olarak eşlemek, akıl yürütme alanını yukarı akış isteğinden tamamen çıkarır. |
 | `reasoningWireFormat?` | `"gateway-object"` | `reasoning_effort` yerine `reasoning: { enabled, effort }` kabul eden OpenAI uyumlu ağ geçitleri için. ClinePass önayarı bunu otomatik olarak ayarlar. |
 | `noReasoningModels?` | `string[]` | Akıl yürütme/düşünme parametrelerini reddeden modeller. |
 | `noTemperatureModels?` | `string[]` | Arayan tarafından belirtilen `temperature` değerini reddeden modeller. |
@@ -171,6 +186,8 @@ hedefleri engellenmiş olarak kalır. Teşhis istekleri yönlendirmeleri reddede
 kimlik bilgisi kaldırılmış bir hedef bildirir. Sıradan sağlayıcı isteği yeniden
 yönlendirme incelemesi bu teşhis korumasından ayrı kalır.
 
+Clash / Surge / Mihomo kullanıcıları için iki fake-IP DNS istisnası vardır ve ikisi de yalnızca DNS *yanıtlarına* uygulanır; URL'deki literal adres yine reddedilir. IANA benchmark aralığı `198.18.0.0/15` (IPv4-mapped IPv6 yazımları dahil), ana bilgisayara bir giden proxy uygulandığında kabul edilir. Mihomo'nun varsayılan IPv6 fake-IP aralığı `fdfe:dcba:9876::/48` daha sıkı bir koşulla kabul edilir: URL şemasıyla eşleşen proxy değişkeni (`https:` için `HTTPS_PROXY`, `http:` için `HTTP_PROXY`; `ALL_PROXY` sayılmaz) ayarlı olmalı, ana bilgisayar `NO_PROXY` ile eşleşmemeli ve istek daha sonra açıkça o proxy'ye bağlanır. Diğer tüm ULA'lar, komşu önekler veya gerçek bir özel yanıtla karışık fake-IP yanıtları hâlâ `allowPrivateNetwork: true` gerektirir. Sağlayıcı kaydetme zamanı doğrulaması IPv6 istisnasını hiçbir zaman uygulamaz.
+
 ## Codex hesap havuzu
 
 Havuz hesapları eklemek ve kotaları yenilemek için kontrol panelinde **Codex
@@ -224,7 +241,7 @@ ve otomatik rotasyon sağlayıcı kısıtlamalarını tetikleyebilir.
 
 | Anahtar | Tip | Varsayılan | Açıklama |
 | --- | --- | --- | --- |
-| `anthropicAccountPool.enabled?` | `boolean` | `false` | Yapışkan bağlılığı ve 429 soğuma yük devretmesini etkinleştirin. |
+| `anthropicAccountPool.enabled?` | `boolean` | `false` | Yapışkan oturum bağlılığını ve kullanıma dayalı yeni oturum seçimini etkinleştirir. **429 yük devretmesi buradan kontrol edilmez**: iki veya daha fazla kullanılabilir hesap saklandığında, diğer çok kimlikli sağlayıcılarda olduğu gibi devreye girer ve kapatılamaz. |
 | `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | Yeni oturumlarda etkin hesap bu eşiğe ulaştığında, yapılandırılan penceredeki bilinen en düşük önbelleğe alınmış kullanımı seçin. `0` kota seçimini devre dışı bırakır. |
 | `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Yeni oturum stratejisi; `quota`, `quotaWindow` ile belirlenen pencereye (varsayılan 5 saatlik çubuklar) göre hesapları sıralar ve `fill-first` de tükenme eşiğini aynı pencerede değerlendirir. |
 | `anthropicAccountPool.quotaWindow?` | `"five-hour" \| "weekly" \| "max-utilization"` | `"five-hour"` | Kullanıma dayalı hesap seçiminde kullanılan, sağlayıcının bildirdiği önbelleğe alınmış kullanım çubuğu. `five-hour` mevcut davranışı korur. `weekly` haftalık çubuğu kullanır ve başka uygun hesap kaldığı sürece 5 saatlik çubuğu tükenmiş hesapları atlar; hiçbiri kalmazsa bu hesaplara geri döner. `max-utilization` bilinen en yüksek değeri kullanır; haftalık değer henüz yokken 5 saatlik değeri kullanabilir, ikisi de bilinmiyorsa hesap unknown kullanım sırasını izler. Bilinen kullanım unknown değerlerden önce gelir; tüm uygun hesaplar unknown olsa bile uygun sıradaki bir hesap seçilir. Belgelenen daha düşük 5 saatlik kullanım eşitlik bozmasından sonra tam eşitlikte de uygun sıra korunur. Sağlıklı affinity oturumları önceden yeniden dengelenmez. Yeni oturum ataması ve uygun bir 429 yedeğine geçildikten sonraki yönlendirme kurtarmasında `quota`, uygun adayları doğrudan bu pencereye göre sıralar; `fill-first`, bu pencerenin eşik ve tükenme kurallarıyla kararlı sırada ilerler; `round-robin` ayarı yok sayar. Cooldown, yük devretme sınırları ve yeniden kimlik doğrulama uygunluğu ayrı yerel durum olarak kalır. Hesap başına haftalık çubuklar ancak dashboard Sağlayıcılar sayfasında sorgulandıktan sonra bilinir. |

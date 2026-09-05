@@ -1,5 +1,15 @@
 import { createServer } from "node:net";
 
+/** Temporary bind probes must not let accepted peers hold server.close() open. */
+function createProbeServer(): ReturnType<typeof createServer> {
+  const server = createServer();
+  server.on("connection", socket => {
+    socket.on("error", () => socket.destroy());
+    socket.destroy();
+  });
+  return server;
+}
+
 /**
  * True when an error means "this port/address is already bound" — the only bind failure
  * that is safe to answer with a retry on another port. Bun/Node surface it as
@@ -15,7 +25,7 @@ export function isAddrInUse(err: unknown): boolean {
 
 export async function isPortAvailable(port: number, hostname = "127.0.0.1"): Promise<boolean> {
   return await new Promise(resolve => {
-    const server = createServer();
+    const server = createProbeServer();
     // Fail closed: EACCES / EADDRNOTAVAIL / EPERM / unknown listen errors mean the
     // requested bind is not available. Only the listening event reports free.
     server.once("error", () => resolve(false));
@@ -133,7 +143,7 @@ export function setEphemeralPortAllocatorForTests(
 async function allocateEphemeralPort(hostname: string): Promise<number> {
   if (ephemeralAllocator) return ephemeralAllocator(hostname);
   return await new Promise<number>((resolve, reject) => {
-    const server = createServer();
+    const server = createProbeServer();
     server.once("error", reject);
     server.once("listening", () => {
       const address = server.address();

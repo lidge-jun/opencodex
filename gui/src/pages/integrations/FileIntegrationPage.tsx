@@ -14,6 +14,8 @@ import {
   loadIntegrationJournal,
   loadIntegrationState,
   toggleIntegration,
+  deleteJournalEntry,
+  isMissingJournalEntry,
   type FileIntegrationClientId,
   type IntegrationJournalRow,
   type IntegrationStatus,
@@ -85,6 +87,8 @@ export default function FileIntegrationPage({
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const [restoring, setRestoring] = useState<IntegrationJournalRow | null>(null);
+  /* The row awaiting delete confirmation. */
+  const [deleting, setDeleting] = useState<IntegrationJournalRow | null>(null);
   /* Open only while the user is confirming an overwrite. */
   const [overwriting, setOverwriting] = useState(false);
 
@@ -270,7 +274,7 @@ export default function FileIntegrationPage({
       ) : history.length === 0 ? (
         <p className="page-sub">{t("integrations.rollback.empty")}</p>
       ) : (
-        <RollbackHistory rows={history} onRestore={setRestoring} />
+        <RollbackHistory rows={history} onRestore={setRestoring} onDelete={setDeleting} />
       )}
 
       {restoring && (
@@ -279,6 +283,38 @@ export default function FileIntegrationPage({
           row={restoring}
           onClose={() => setRestoring(null)}
           onRestored={refresh}
+        />
+      )}
+      {deleting && (
+        <ConsequenceDialog
+          copy={{
+            titleKey: "integrations.dialog.deleteEntry.title",
+            changesKey: "integrations.dialog.deleteEntry.changes",
+            breakageKey: "integrations.dialog.deleteEntry.breakage",
+            undoKey: "integrations.dialog.deleteEntry.undo",
+            confirmKey: "integrations.dialog.deleteEntry.confirm",
+            vars: { path: deleting.configPath },
+          }}
+          onClose={() => setDeleting(null)}
+          onConfirm={async () => {
+            try {
+              await deleteJournalEntry(apiBase, deleting.opId);
+            } catch (error) {
+              // The requested end state is already true when another tab
+              // removed this row. Reconcile the view instead of keeping a
+              // confirmation open whose only possible result is another 404.
+              if (isMissingJournalEntry(error)) {
+                setDeleting(null);
+                await historyResource.refresh();
+                return;
+              }
+              // Localized before it reaches the dialog, which renders
+              // `error.message` as-is; see the twin block in IntegrationsOverview.
+              throw new Error(describeRefusal(t, error), { cause: error });
+            }
+            setDeleting(null);
+            await historyResource.refresh();
+          }}
         />
       )}
       {overwriting && (

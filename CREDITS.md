@@ -55,6 +55,7 @@ Code, design, or tests from these pull requests shipped.
 | [#3078](https://github.com/lidge-jun/opencodex/pull/3078) | [@Veritas-7](https://github.com/Veritas-7) | `0ef04e640` | "reimplements both of your production hunks on `dev`" |
 | [#3142](https://github.com/lidge-jun/opencodex/pull/3142) | [@olddonkey](https://github.com/olddonkey) | `52d941640` | "That carry keeps the measurement/refusal work and ships the guard default-off" |
 | [#3300](https://github.com/lidge-jun/opencodex/pull/3300) | [@S0RYUASUKA](https://github.com/S0RYUASUKA) | `15b43e51c` | the same two test files made hermetic |
+| [#3284](https://github.com/lidge-jun/opencodex/pull/3284) | [@mdwsk88](https://github.com/mdwsk88) | `3d3c4fe26` | "Core implementation is already on `dev` via #3286 (`3d3c4fe26`), including the suffix wire ladder, picker collapse, Google adapter coverage" |
 
 ## Report and diagnosis
 

@@ -254,6 +254,19 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
   -webkit-backdrop-filter: var(--glass-blur);
 }
 .brand { display: flex; align-items: center; gap: 10px; padding: 6px 8px 14px; }
+/* The brand is a <button> (go home), and this stylesheet has no global button reset —
+   every control resets itself locally, the way .nav-item does. Without this the UA
+   defaults land: a grey buttonface plate, a 2px border that breaks the measured 320px
+   topbar row budget, a non-inheriting font, buttontext instead of --text on .name,
+   center text-align that shows up once .name ellipsizes, and -webkit-appearance:button
+   overriding the first two in WebKit. Layout stays with .brand; this rule only undoes
+   what the element type added. */
+.brand-home {
+  appearance: none; -webkit-appearance: none;
+  background: none; border: none;
+  font: inherit; color: inherit; text-align: left;
+  cursor: pointer;
+}
 /* logo is a white-on-transparent silhouette → recolor via mask with the theme text color so it
    stays visible in BOTH light and dark (a plain <img> was invisible white-on-white in light). */
 .brand-logo { width: 26px; height: 26px; flex-shrink: 0; background: var(--text);
@@ -1291,7 +1304,17 @@ select.input { appearance: none; }
 .empty svg { width: 30px; height: 30px; color: var(--faint); margin-bottom: 12px; }
 .empty .title { color: var(--text); font-weight: var(--weight-semibold); margin-bottom: 6px; }
 
-.notice { font-size: var(--text-control); line-height: var(--leading-body); padding: 9px 12px; border-radius: var(--radius-sm); margin-bottom: 14px; display: flex; align-items: center; gap: 8px; max-width: var(--prose-measure); }
+/*
+ `:not([hidden])`, not a bare `display: flex` — same cascade trap the combos panels hit.
+
+ The admin-token dialog mounts its error notice up front and hides it with the `hidden`
+ attribute until a token is actually rejected. `[hidden] { display: none }` is a
+ USER-AGENT rule, so an author `display: flex` here beat it and painted an empty red
+ bordered box the moment the dialog opened (#3483). Specificity never got a vote; origin
+ decided it. Scoping the display to `:not([hidden])` lets the UA rule win again.
+*/
+.notice:not([hidden]) { display: flex; }
+.notice { font-size: var(--text-control); line-height: var(--leading-body); padding: 9px 12px; border-radius: var(--radius-sm); margin-bottom: 14px; align-items: center; gap: 8px; max-width: var(--prose-measure); }
 .notice svg { width: 15px; height: 15px; flex-shrink: 0; }
 
 /* Portaled status toast — out of document flow so Providers (etc.) do not reflow. */
@@ -1605,6 +1628,13 @@ dialog.modal-overlay::backdrop {
 .codex-request-user-input-controls > .toggle { margin-left: auto; }
 .codex-request-user-input-feedback { flex: 1 0 100%; margin-top: -8px; color: var(--muted); font-size: var(--text-label); line-height: var(--leading-body); text-align: right; }
 .codex-request-user-input-feedback.is-error { color: var(--red); }
+/* Ultra Fast opt-in: same card-row idiom as the picker and request-user-input switches. */
+.codex-ultrafast-card { gap: 16px; flex-wrap: wrap; }
+.codex-ultrafast-copy { flex: 1 1 auto; min-width: 0; }
+.codex-ultrafast-copy .card-sub { padding: 2px 0 0; }
+.codex-ultrafast-controls { display: flex; align-items: flex-end; gap: 12px; flex: 0 0 auto; margin-left: auto; }
+.codex-ultrafast-feedback { flex: 1 0 100%; margin-top: -8px; color: var(--muted); font-size: var(--text-label); line-height: var(--leading-body); text-align: right; }
+.codex-ultrafast-feedback.is-error { color: var(--red); }
 .codex-account-picker-card { gap: 16px; flex-wrap: wrap; margin-top: 16px; }
 .codex-auth-advanced { margin-top: 8px; }
 .codex-auth-advanced__toggle {
@@ -1763,13 +1793,26 @@ dialog.modal-overlay::backdrop {
   z-index: 1;
 }
 
-.codex-auth-page-head { align-items: flex-start; }
+/* The action cluster is four nowrap items on one line — feedback, the Spark switch,
+   and two labelled buttons. Narrow the window and that line wants ~577px inside a
+   437px column, and because `.page-head` is a plain nowrap flex row the surplus did
+   not wrap or scroll: the trailing "Refresh quotas" button rendered ~140px past its
+   own container and was sliced by the viewport edge. Both axes wrap now — the
+   cluster drops below the title first, then breaks internally if it still does not
+   fit — so every control stays reachable at any width. Wrapping is inert while the
+   line fits, so the wide layout is byte-identical. */
+.codex-auth-page-head { align-items: flex-start; flex-wrap: wrap; row-gap: 8px; }
 .codex-auth-page-head__actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 10px;
   min-width: 0;
 }
+/* Once the cluster owns its own line the title no longer competes for width, so it
+   takes the full row rather than wrapping "Codex Auth" onto two lines. */
+.codex-auth-page-head > .page-title { flex: 1 1 auto; }
 /* Spark visibility switch: a labelled toggle, not a bare knob. An unlabelled switch sitting
    between two labelled buttons is a guessing game, and this one changes what every card in the
    page renders. The label carries the meaning; the toggle carries the state. */
@@ -1783,6 +1826,23 @@ dialog.modal-overlay::backdrop {
   font-size: 12px;
   color: var(--muted);
 }
+/* The pause/refresh pair after it moved out of the page head. Right-aligned so it still
+   reads as chrome for the account list below rather than a heading of its own, and it
+   wraps because both labels grow substantially in several locales. */
+.codex-auth-actions-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.codex-quota-activation { gap: var(--space-4); flex-wrap: wrap; }
+.codex-quota-activation__copy { flex: 1 1 240px; min-width: 0; word-break: keep-all; }
+.codex-quota-activation__controls { display: flex; align-items: center; gap: var(--space-3); min-height: 44px; }
+.codex-quota-activation .is-error { color: var(--red); }
+.codex-quota-activation .toggle[aria-pressed="mixed"] .toggle-knob { transform: translateX(8px); }
 /* Account actions (pause / copy doctor / pause-exhausted): clearer hover than plain
    btn-ghost on card surface — same raised-hover + faint border as icon/list cues. */
 .codex-auth-action-btn:hover:not(:disabled) {
@@ -1906,12 +1966,13 @@ dialog.modal-overlay::backdrop {
   background: light-dark(#fffbeb, color-mix(in oklab, var(--amber) 20%, var(--surface)));
   color: light-dark(#92400e, #fef3c7);
   border: 1px solid color-mix(in srgb, var(--amber) 32%, transparent);
-  display: flex;
   align-items: center;
   gap: 6px;
   margin-bottom: 12px;
   max-width: var(--prose-measure);
 }
+/* Same UA-vs-author `[hidden]` rule as `.notice` above: `.notice-warn` is used on its own. */
+.notice-warn:not([hidden]) { display: flex; }
 .notice-warn svg { width: 14px; height: 14px; flex-shrink: 0; color: var(--amber); }
 
 .startup-runtime-notice__text,
@@ -1954,8 +2015,10 @@ dialog.modal-overlay::backdrop {
   box-sizing: border-box;
 }
 /* Message above, command+copy below. */
-.notice.notice-warn.startup-runtime-notice {
+.notice.notice-warn.startup-runtime-notice:not([hidden]) {
   display: flex;
+}
+.notice.notice-warn.startup-runtime-notice {
   flex-direction: column;
   align-items: stretch;
   gap: 8px;

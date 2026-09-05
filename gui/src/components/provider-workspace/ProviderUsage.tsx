@@ -4,25 +4,26 @@
  */
 import { Fragment, useMemo, useState } from "react";
 import { useT, useI18n } from "../../i18n/shared";
-import QuotaBars from "../QuotaBars";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
-import { formatRelativeTime, relativeTimeLabelsFromT, formatRequestCount, formatTokenCount, formatCostUsd } from "../../provider-workspace/usage";
-import { accountQuotaFromReport, formatQuotaSourceLabel, type ProviderQuotaReportView } from "../../provider-workspace/report";
-import type { ProviderUsageTotals, ProviderModelUsageRow } from "./types";
+import { formatRequestCount, formatTokenCount, formatCostUsd } from "../../provider-workspace/usage";
+import type { ProviderQuotaReportView } from "../../provider-workspace/report";
+import type { AccountQuotaReading, ProviderUsageTotals, ProviderModelUsageRow } from "./types";
+import ProviderCurrentQuota from "./ProviderCurrentQuota";
 
-export default function ProviderUsage({ item, usageTotals, quotaReport, modelUsage }: {
+export default function ProviderUsage({ item, usageTotals, quotaReport, currentQuotaReading, quotaIdentity, modelUsage, onRefreshQuota }: {
   item: WorkspaceItem;
   usageTotals?: ProviderUsageTotals;
   quotaReport?: ProviderQuotaReportView;
+  currentQuotaReading?: AccountQuotaReading;
+  quotaIdentity?: string;
   modelUsage?: ProviderModelUsageRow[];
+  /** Force a fresh quota read; omitted when the page cannot drive one. */
+  onRefreshQuota?: () => Promise<boolean>;
 }) {
   const t = useT();
   const { locale } = useI18n();
-  const timeLabels = relativeTimeLabelsFromT(t);
   const hasUsage = usageTotals?.requests !== undefined;
-  const quota = accountQuotaFromReport(quotaReport);
   const [expandedModel, setExpandedModel] = useState<string | null>(null);
-  void item;
 
   const sortedModels = useMemo(() => {
     if (!modelUsage?.length) return [];
@@ -99,6 +100,9 @@ export default function ProviderUsage({ item, usageTotals, quotaReport, modelUsa
                           >
                             {row.model}
                           </button>
+                          {row.hasUnresolvedRequestedModel && (
+                            <div className="muted pws-model-attribution">{t("pws.unresolvedRequestedModel")}</div>
+                          )}
                         </td>
                         <td className="num mono">{formatCostUsd(row.estimatedCostUsd, locale)}</td>
                         <td className="num mono">{formatTokenCount(row.totalTokens, locale)}</td>
@@ -134,28 +138,7 @@ export default function ProviderUsage({ item, usageTotals, quotaReport, modelUsa
         </div>
       )}
 
-      <div className="pws-usage-block">
-        <h3 className="pws-section-title">{t("pws.rateLimits")}</h3>
-        {quota ? (
-          <>
-            <QuotaBars quota={quota} plan={null} threshold={80} t={t} layout="stacked" />
-            <dl className="pws-kv pws-usage-meta">
-              {quotaReport?.source?.trim() && (
-                <div className="pws-kv-row">
-                  <dt>{t("pws.stats.source")}</dt>
-                  <dd>{formatQuotaSourceLabel(quotaReport.source)}</dd>
-                </div>
-              )}
-              <div className="pws-kv-row">
-                <dt>{t("pws.stats.quotaUpdated")}</dt>
-                <dd>{formatRelativeTime(quotaReport?.updatedAt, timeLabels)}</dd>
-              </div>
-            </dl>
-          </>
-        ) : (
-          <p className="muted">{t("pws.quotaUnavailable")}</p>
-        )}
-      </div>
+      <ProviderCurrentQuota key={`${item.name}:${quotaIdentity ?? ""}`} report={quotaReport} reading={currentQuotaReading} onRefreshQuota={onRefreshQuota} />
     </div>
   );
 }

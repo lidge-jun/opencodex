@@ -33,6 +33,8 @@ const FORBIDDEN_EXACT_KEYS = new Set([
 
 const RAW_POSIX_PATH_RE =
   /(?:^|[^A-Za-z0-9._~/])\/(?:(?=$|[^A-Za-z0-9._~/])|(?!\/)(?![ \t\r\n])(?:\/|[^/\0\r\n]+)+\/?(?=$|[^A-Za-z0-9._~/]))/u;
+const ASCII_URL_WHITESPACE_RE = /[\t\r\n]/g;
+const FILE_URI_RE = /(?:^|[^A-Za-z0-9+.-])file:/i;
 
 function fieldPath(base: string, key: string | number): string {
   return base ? `${base}.${String(key)}` : String(key);
@@ -80,6 +82,8 @@ export function enforceEventStructureLimits(
     }
     if (
       /^[A-Za-z]:\\/.test(value) ||
+      FILE_URI_RE.test(value) ||
+      FILE_URI_RE.test(value.replace(ASCII_URL_WHITESPACE_RE, "")) ||
       RAW_POSIX_PATH_RE.test(value) ||
       value.includes("\\Users\\")
     ) {

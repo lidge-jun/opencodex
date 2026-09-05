@@ -1,6 +1,17 @@
 import { createRequire } from "node:module";
 import { resolveEnvValue, saveConfigPreservingClaudeCode } from "../config";
 import type { OcxConfig, OcxProviderConfig } from "../types";
+import type { ProviderRegistryEntry } from "./registry";
+
+/** Shared with routing: a key-mode override is effective only while its key resolves. */
+export function providerUsesKeyAuthOverride(
+  entry: Pick<ProviderRegistryEntry, "authKind" | "allowKeyAuthOverride">,
+  provider: Pick<OcxProviderConfig, "authMode">,
+  resolvedKey: string | undefined,
+): boolean {
+  return entry.authKind === "oauth" && entry.allowKeyAuthOverride === true
+    && provider.authMode === "key" && typeof resolvedKey === "string" && resolvedKey.trim().length > 0;
+}
 
 /**
  * Opt-in OS keychain storage for provider API keys (#1221).
@@ -194,4 +205,3 @@ export function restoreProviderKeyFromKeychain(config: OcxConfig, name: string):
   saveConfigPreservingClaudeCode(config);
   return { ok: true, restored: resolved.size };
 }
-

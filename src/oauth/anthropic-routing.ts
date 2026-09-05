@@ -152,6 +152,7 @@ export function sweepExpiredAnthropicRoutingHealth(now = Date.now()): number {
 export function clearAnthropicAccountPoolState(): void {
   upstreamHealth.clear();
   sessionAffinity.clear();
+  quorumCache = null;
 }
 
 export function anthropicSessionAffinitySizeForTests(): number {
@@ -234,6 +235,79 @@ export function getEligibleAnthropicAccounts(now = Date.now()): string[] {
       && !isCooled(account.id, now)
       && isPoolCredentialUsable(account.id, now))
     .map(account => account.id);
+}
+
+/**
+ * How long a quorum answer may be reused before the store is consulted again.
+ *
+ * This predicate now runs on the INITIAL resolution of every Anthropic request, not just after a
+ * 429, so an uncached implementation puts a synchronous file read in front of ordinary traffic:
+ * `getAccountSet` goes through `loadAuthStore`, which has no cache of its own and chmods the
+ * config dir, chmods the secret, reads the whole file and normalizes it on every call.
+ *
+ * Two seconds matches the generic module's `PRESENCE_CACHE_TTL_MS` for the same reason: short
+ * enough that a login in another window is visible before the operator can switch back and send a
+ * prompt, long enough that a burst of requests shares one read. The cache holds a BOOLEAN derived
+ * from a count — never a credential, never an account id.
+ *
+ * Staleness is bounded by consequence, not only by the TTL. Explicit invalidation covers the
+ * roster mutations this module can see (rotation, pool-state reset, affinity clear on account
+ * removal, manual selection), but not one it cannot: a 401 elsewhere flagging an account
+ * `needsReauth` drops the real quorum to one while a cached `true` survives for up to 2s.
+ *
+ * That window is harmless in both directions, which is why it is left rather than plumbed
+ * through the store. A stale `true` only lets the caller ASK for an alternate;
+ * `pickAlternateAnthropicAccount` re-reads the roster through `getEligibleAnthropicAccounts`,
+ * skips the reauth-flagged account and returns `null`, so the 429 surfaces exactly as it would
+ * have. A stale `false` costs one un-rotated 429 and self-corrects on the next read. Neither
+ * can dispatch on an unusable credential, which is the only outcome worth adding a store hook
+ * to prevent.
+ */
+const QUORUM_CACHE_TTL_MS = 2_000;
+
+let quorumCache: { value: boolean; readAt: number } | null = null;
+
+/**
+ * Whether a 429 has somewhere to go: two or more accounts that could serve traffic if asked.
+ *
+ * Reactive failover is a safety net, not a routing policy. It runs only AFTER upstream refused,
+ * it cannot spread load across a healthy session, and it cannot fire at all unless the operator
+ * deliberately logged in twice. So it activates on presence, exactly like an `apiKeyPool` of two
+ * keys does in `providers/key-failover.ts` -- and unlike the PROACTIVE pool (affinity,
+ * quota-ranked new-session picks, `autoSwitchThreshold`, `strategy`), which changes which
+ * account serves a healthy request and therefore stays behind `anthropicAccountPool.enabled`.
+ *
+ * Cooldowns are deliberately ignored here. They are transient and per-request, while this
+ * answers the durable question "did the operator store a second account". Counting a cooled
+ * account as absent would switch the feature off for the length of the cooldown -- precisely
+ * when it is needed.
+ *
+ * `isPoolCredentialUsable` is still applied, so the fail-closed background `local-cli` rule
+ * holds: an expired background slot is not a quorum and cannot be adopted.
+ */
+export function hasAnthropicFailoverQuorum(now = Date.now()): boolean {
+  // Monotonic guard: a caller-supplied `now` that predates the cached read (tests pass explicit
+  // clocks) must not be served from a future entry.
+  if (quorumCache && now >= quorumCache.readAt && now - quorumCache.readAt < QUORUM_CACHE_TTL_MS) {
+    return quorumCache.value;
+  }
+  const set = getAccountSet(PROVIDER);
+  let value = false;
+  if (set) {
+    let usable = 0;
+    for (const account of set.accounts) {
+      if (account.needsReauth === true) continue;
+      if (!isPoolCredentialUsable(account.id, now)) continue;
+      if (++usable >= 2) { value = true; break; }
+    }
+  }
+  quorumCache = { value, readAt: now };
+  return value;
+}
+
+/** Test seam and manual-recovery hook: force the next quorum question to re-read the store. */
+export function forgetAnthropicFailoverQuorum(): void {
+  quorumCache = null;
 }
 
 /** Earliest remaining cooldown among cooled Anthropic accounts, for client Retry-After. */
@@ -559,6 +633,10 @@ export function clearAnthropicSessionAffinityForAccount(accountId: string): void
   for (const [key, entry] of sessionAffinity) {
     if (entry.accountId === accountId) sessionAffinity.delete(key);
   }
+  // The roster just lost or changed a member. This is the account-removal path, so the next
+  // activation question must re-read rather than answer from a count taken while the account
+  // was still present -- otherwise a delete leaves a stale quorum for the length of the TTL.
+  quorumCache = null;
 }
 
 /**
@@ -573,7 +651,13 @@ export function rotateAnthropicAccountOn429(
   sessionKey?: string | null,
   now = Date.now(),
 ): string | null {
-  if (!isAnthropicAccountPoolEnabled(config)) return null;
+  // Reactive 429 failover is NOT gated on the pool flag. That flag buys PROACTIVE routing --
+  // session affinity, quota-ranked new-session selection, autoSwitchThreshold, strategy -- all
+  // of which move a HEALTHY request and stay opt-in. Rotating away from an account upstream has
+  // just rate-limited is a different thing: it only ever runs after a refusal, and stranding a
+  // 429 while a second logged-in account sits idle is a defect, not a configuration choice.
+  // Presence is the activation rule, the same one an apiKeyPool of two keys already uses.
+  if (!isAnthropicAccountPoolEnabled(config) && !hasAnthropicFailoverQuorum(now)) return null;
 
   const parsedRetry = parseRetryAfterMs(retryAfterHeader, now);
   const cooldownMs = parsedRetry ?? DEFAULT_COOLDOWN_MS;
@@ -584,8 +668,17 @@ export function rotateAnthropicAccountOn429(
   sweepExpiredOnWrite(now);
   clearAnthropicSessionAffinityForAccount(failedAccountId);
   notePoolRotationFailure(POOL_KEY_ANTHROPIC, failedAccountId);
+  // A rotation means the roster in use just changed; do not answer the next activation question
+  // from a count read taken before the failure.
+  quorumCache = null;
 
-  const next = pickAlternateAnthropicAccount(config, failedAccountId, now);
+  // The pool's strategy is a PROACTIVE policy. When the pool is disabled, reactive
+  // presence-only recovery must not silently reactivate round-robin/fill-first merely
+  // because those dormant values remain in config. The quota picker is the neutral
+  // recovery policy already used by the default strategy.
+  const next = isAnthropicAccountPoolEnabled(config)
+    ? pickAlternateAnthropicAccount(config, failedAccountId, now)
+    : pickLowestUsage(config, failedAccountId, now);
   if (!next) {
     console.warn("[anthropic-pool] all eligible Anthropic OAuth accounts are in cooldown; returning 429");
     return null;
@@ -614,6 +707,9 @@ export function promoteAnthropicActiveAccount(accountId: string): void {
 export function resetAnthropicRoutingForManualSelection(accountId: string): void {
   sessionAffinity.clear();
   seedPoolRotationAccount(POOL_KEY_ANTHROPIC, accountId);
+  // A manual account selection is an operator statement about the roster; do not answer the
+  // next activation question from a count read before it.
+  quorumCache = null;
 }
 
 /**

@@ -49,14 +49,14 @@
 - Create: `src/lab/public/project.ts`
 - Create: `src/lab/public/index.ts`
 - Modify: `src/lab/index.ts`
-- Test: `tests/lab-public-evidence.test.ts`
+- Test: `tests/lab/lab-public-evidence.test.ts`
 
 **Interfaces:**
 - Produces: `PublicEvidenceBundleUnsignedV1`, `PublicEvidenceRecordV1`, `PublicEvidenceSubjectV1`, `PublicRouteRegistryManifestV1`, `projectPublicEvidence()`, `validatePublicEvidenceBundle()`.
 
 - [ ] **Step 1: Write RED tests** for closed-schema rejection, deterministic public IDs/day buckets, protocol/route/task subject discrimination, exact route allowlist, private-route `not_exportable`, IC-only incident refs, no local ID leakage, and secret/PII canaries.
 - [ ] **Step 2: Run focused test and verify expected RED failures.**
-  Run: `bun test tests/lab-public-evidence.test.ts`
+  Run: `bun test tests/lab/lab-public-evidence.test.ts`
 - [ ] **Step 3: Implement minimal closed public types/registry/validator/projector.**
   Public identities use domain-separated SHA-256 over JCS public-safe bytes. The registry manifest is repo-owned, versioned, digested, and cannot be supplied by an imported bundle as trust authority.
 - [ ] **Step 4: Run focused test and verify GREEN.**
@@ -67,7 +67,7 @@
 - Create: `src/lab/public/signature.ts`
 - Create: `src/lab/public/storage.ts`
 - Modify: `src/lab/paths.ts`
-- Test: `tests/lab-public-evidence.test.ts`
+- Test: `tests/lab/lab-public-evidence.test.ts`
 
 **Interfaces:**
 - Produces: `getOrCreatePublicPublisher()`, `signPublicEvidenceBundle()`, `verifyPublicEvidenceBundle()`, `writePublicEvidenceBundle()`, `readPublicEvidenceBundle()`.
@@ -82,7 +82,7 @@
 **Files:**
 - Create: `src/lab/public/revocation.ts`
 - Create: `src/lab/public/community.ts`
-- Test: `tests/lab-public-evidence.test.ts`
+- Test: `tests/lab/lab-public-evidence.test.ts`
 
 **Interfaces:**
 - Produces: `PublicEvidenceRevocationV1`, `verifyPublicEvidenceRevocation()`, `importCommunityBundle()`, `listCommunityBundles()`.
@@ -97,8 +97,8 @@
 **Files:**
 - Modify: `src/lab/ledger/purge.ts`
 - Modify: `src/lab/paths.ts`
-- Test: `tests/lab-public-evidence.test.ts`
-- Test: `tests/lab-evidence-ledger.test.ts`
+- Test: `tests/lab/lab-public-evidence.test.ts`
+- Test: `tests/lab/lab-evidence-ledger.test.ts`
 
 **Interfaces:**
 - Consumes: existing `purgeSensitiveEvidence()` and `purgeActions: export`.
@@ -114,7 +114,7 @@
 **Files:**
 - Modify: `src/cli/lab.ts`
 - Modify: `src/server/management/lab-routes.ts`
-- Test: `tests/lab-public-evidence.test.ts`
+- Test: `tests/lab/lab-public-evidence.test.ts`
 - Test: relevant Lab CLI/management tests discovered in repository.
 
 **Interfaces:**
@@ -147,7 +147,7 @@
 **Files:**
 - Modify docs only if validation findings require factual updates.
 
-- [ ] **Step 1:** Run `bun test tests/lab-public-evidence.test.ts tests/lab-evidence-ledger.test.ts`.
+- [ ] **Step 1:** Run `bun test tests/lab/lab-public-evidence.test.ts tests/lab/lab-evidence-ledger.test.ts`.
 - [ ] **Step 2:** Run `bun x tsc --noEmit`.
 - [ ] **Step 3:** Run `bun run privacy:scan`.
 - [ ] **Step 4:** Run relevant Lab query/ledger/CLI/GUI tests.

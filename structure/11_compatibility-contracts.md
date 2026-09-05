@@ -18,7 +18,7 @@ evidence before they can be added.
 | `src/compatibility/openai-responses.ts` | First bundled compatibility manifest. |
 | `src/compatibility/index.ts` | Manifest catalog for future CLI and GUI readers. |
 | `tests/fixtures/compatibility/` | Secret-free request vectors plus destination, header-boundary, and assertion-level expected behavior. |
-| `tests/compatibility-manifest.test.ts` | Executes fixtures against production adapters and proves every claim has evidence. |
+| `tests/codex-integration/compatibility-manifest.test.ts` | Executes fixtures against production adapters and proves every claim has evidence. |
 
 ## Dispositions
 

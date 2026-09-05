@@ -10,6 +10,7 @@ const PROVIDER_EDITOR_DERIVED_FIELDS = [
   "hasApiKey",
   "hasHeaders",
   "xaiResponsesOptInState",
+  "initialModelSelection",
 ] as const;
 
 type ProviderEditorConfig = {
@@ -38,7 +39,7 @@ export function useJsonConfigEditor(deps: {
   notify: (msg: string, ok?: boolean) => void;
   fetchConfig: () => Promise<void>;
   fetchProviderQuotas: (refresh?: boolean) => Promise<void>;
-  onSaved: () => void;
+  onSaved: (addedProviders: string[]) => void;
   t: (key: string, values?: Record<string, string>) => string;
 }) {
   const { apiBase, config, notify, fetchConfig, fetchProviderQuotas, onSaved, t } = deps;
@@ -84,7 +85,9 @@ export function useJsonConfigEditor(deps: {
       setJsonBaseline(JSON.stringify(parsed, null, 2));
       fetchConfig();
       fetchProviderQuotas(true);
-      onSaved();
+      const addedProviders = Object.keys((parsed as ProviderEditorConfig).providers)
+        .filter(name => !Object.hasOwn((baseline as ProviderEditorConfig).providers, name));
+      onSaved(addedProviders);
       return true;
     } catch {
       notify(t("prov.saveFailed"), false);

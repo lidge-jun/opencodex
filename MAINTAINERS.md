@@ -73,21 +73,28 @@ when a maintainer steps down.
 - Direct pushes are reserved for maintainer-owned integration work, urgent repairs, or incident
   recovery. The same CI and documentation requirements still apply.
 - Promotion from `dev` to `main` and npm releases is maintainer-controlled.
-- **Closing out a release includes moving `dev`'s version line forward.** A published
-  release leaves `dev` carrying a version at or behind it, and
-  `tests/release-version-line.test.ts` then fails on `dev` and on every pull request
-  opened against it — red that contributors inherit and cannot fix from their own diff.
-  This was repaired by hand four times (`32529c2b2`, `e4a85d134`, `076ad3036`,
-  `befcac3e1`) before it was automated.
+- **Opening a release starts by moving `dev`'s version line forward.** Before cutting
+  a release, `dev` must already outrank the version being released; `release.yml`
+  asserts this and refuses to publish otherwise. Dispatch
+  `.github/workflows/dev-version-bump.yml` with the intended version, merge the pull
+  request it opens, then promote and release. When `dev` already outranks the target
+  — a preview cut, or a stable hotfix below `dev`'s line — no move is needed and the
+  workflow reports `changed=false`.
 
-  `.github/workflows/dev-version-bump.yml` now opens that bump as a pull request when a
-  release publishes. Merging it is part of closing the release; a bot cannot, because
-  `Protect dev` requires an approving review and code-owner sign-off. Two caveats worth
-  knowing: the workflow runs from the DEFAULT branch, so it only fires once it has been
-  promoted to `main`; and a pull request opened with `GITHUB_TOKEN` does not start
-  `pull_request` workflows, so the bump pull request arrives without CI. To re-drive a
-  missed run by hand: `bun scripts/bump-dev-version.ts <released-version> package.json`,
-  then open the pull request normally.
+  Opening a preview for the next core ends the current patch line. After
+  `vX.Y.0-preview.*` is tagged, a fix ships as part of `X.Y.0`, not as
+  `X.(Y-1).(Z+1)`. The release helper refuses such a bump rather than producing a
+  version the repository would reject. This is a deliberate policy restriction, not
+  a claim that lower stable patches were historically unused.
+
+  Done after the publish, as this repository did for ten releases (`32529c2b2`,
+  `e4a85d134`, `076ad3036`, `befcac3e1`, then #3045, #3076, #3127, #3265, #3354,
+  #3434), it leaves `dev` and every open pull request carrying a failure contributors
+  cannot fix from their own diff. The pull request itself does not go away — `Protect
+  dev` requires a reviewed merge. If the pre-move is missed and publication somehow
+  succeeds, dispatch `dev-version-bump.yml` from the default branch with the released
+  version and `mode=repair`, then merge the repair pull request. Design:
+  `devlog/_plan/260904_release_version_line/`.
 
 ## The retired `dev2-go` line
 

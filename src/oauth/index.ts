@@ -1,7 +1,8 @@
 import type { KiroOAuthMetadata, OAuthController, OAuthCredentials } from "./types";
+import { initializeProviderModelSelection } from "../providers/initial-model-selection";
 import { parseCallbackInput } from "./callback-server";
 import type { OcxConfig, OcxProviderConfig, RefreshPolicy } from "../types";
-import { ConfigMutationLockError, loadConfig, saveConfig } from "../config";
+import { ConfigMutationLockError, loadConfig, mutatePersistedConfig, saveConfig } from "../config";
 import { resolveProviderApiKey } from "../providers/key-store";
 import { maskEmail } from "../lib/privacy";
 import { KiroTokenRefreshError, environmentKiroRoutingMetadata, loginKiro, refreshKiroToken, settleKiroLoginTransaction } from "./kiro";
@@ -1247,42 +1248,134 @@ function migrateLegacyAntigravityStaticCatalog(config: OcxConfig): boolean {
   return true;
 }
 
-export function reconcileOAuthProviders(config: OcxConfig): boolean {
-  let changed = migrateLegacyAntigravityStaticCatalog(config);
-  for (const [name, prov] of Object.entries(config.providers)) {
+interface OAuthReconcileProjection {
+  config: OcxConfig;
+  changed: boolean;
+  touchedProviders: string[];
+  touchedAntigravityVersion: boolean;
+}
+
+/** Pure projection over a clone: apply every reconciliation rule and report what it touched. */
+function projectOAuthProviderReconciliation(config: OcxConfig): OAuthReconcileProjection {
+  const projected = structuredClone(config);
+  const touchedProviders = new Set<string>();
+  const beforeAntigravity = JSON.stringify(projected.providers[GOOGLE_ANTIGRAVITY_PROVIDER]);
+  const beforeAntigravityVersion = projected.googleAntigravityStaticCatalogVersion;
+  let changed = migrateLegacyAntigravityStaticCatalog(projected);
+  if (JSON.stringify(projected.providers[GOOGLE_ANTIGRAVITY_PROVIDER]) !== beforeAntigravity) {
+    touchedProviders.add(GOOGLE_ANTIGRAVITY_PROVIDER);
+  }
+  const touchedAntigravityVersion = projected.googleAntigravityStaticCatalogVersion !== beforeAntigravityVersion;
+
+  for (const [name, prov] of Object.entries(projected.providers)) {
+    const beforeProvider = JSON.stringify(prov);
     const def = OAUTH_PROVIDERS[name];
     if (name === "command-code" && isLegacyCommandCodeStaticCatalog(prov)) {
       // The former experimental preset was the exact three-model seed above. It was not a user
       // choice to disable discovery, so promote only that shape to the account live catalog.
       prov.liveModels = true;
-      changed = true;
     }
-    if (!def || prov.authMode !== "oauth") continue;
-    const preset = def.providerConfig;
-    for (const field of OAUTH_RECONCILE_FIELDS) {
-      if (JSON.stringify(prov[field]) === JSON.stringify(preset[field])) continue;
-      if (preset[field] !== undefined) {
-        prov[field] = cloneProviderField(preset[field]) as never;
-      } else {
-        delete prov[field];
+    if (def && prov.authMode === "oauth") {
+      const preset = def.providerConfig;
+      for (const field of OAUTH_RECONCILE_FIELDS) {
+        if (JSON.stringify(prov[field]) === JSON.stringify(preset[field])) continue;
+        if (preset[field] !== undefined) {
+          prov[field] = cloneProviderField(preset[field]) as never;
+        } else {
+          delete prov[field];
+        }
       }
-      changed = true;
+      if (prov.liveModels === undefined && preset.liveModels !== undefined) {
+        prov.liveModels = preset.liveModels;
+      }
+      // Heal a defaultModel that no longer exists in the refreshed list (e.g. a deprecated snapshot).
+      // Skip providers without a static preset `models` list: for live-discovery providers
+      // (e.g. command-code OAuth) the account-scoped catalog is not enumerable here, so any
+      // persisted defaultModel is a user selection and must not be overwritten by the seed.
+      if (prov.defaultModel && preset.defaultModel && preset.models && preset.models.length > 0 && !(prov.models ?? []).includes(prov.defaultModel)) {
+        prov.defaultModel = preset.defaultModel;
+      }
     }
-    if (prov.liveModels === undefined && preset.liveModels !== undefined) {
-      prov.liveModels = preset.liveModels;
+    if (JSON.stringify(prov) !== beforeProvider) {
       changed = true;
-    }
-    // Heal a defaultModel that no longer exists in the refreshed list (e.g. a deprecated snapshot).
-    // Skip providers without a static preset `models` list: for live-discovery providers
-    // (e.g. command-code OAuth) the account-scoped catalog is not enumerable here, so any
-    // persisted defaultModel is a user selection and must not be overwritten by the seed.
-    if (prov.defaultModel && preset.defaultModel && preset.models && preset.models.length > 0 && !(prov.models ?? []).includes(prov.defaultModel)) {
-      prov.defaultModel = preset.defaultModel;
-      changed = true;
+      touchedProviders.add(name);
     }
   }
-  if (changed) saveConfig(config);
-  return changed;
+
+  return {
+    config: projected,
+    changed,
+    touchedProviders: [...touchedProviders],
+    touchedAntigravityVersion,
+  };
+}
+
+/**
+ * Copy only the keys the projection actually touched back onto the caller's live object.
+ *
+ * Deliberately key-by-key rather than a wholesale clear-and-reassign: a live reference held
+ * elsewhere to an untouched provider sub-object must survive startup reconciliation.
+ */
+function adoptOAuthReconciliation(config: OcxConfig, projection: OAuthReconcileProjection): void {
+  for (const name of projection.touchedProviders) {
+    const provider = projection.config.providers[name];
+    if (provider) config.providers[name] = structuredClone(provider);
+    else delete config.providers[name];
+  }
+  if (projection.touchedAntigravityVersion) {
+    config.googleAntigravityStaticCatalogVersion = projection.config.googleAntigravityStaticCatalogVersion;
+  }
+}
+
+/**
+ * Union the keys the on-disk rebase touched with the keys the live projection touched.
+ *
+ * The rebase runs against the persisted snapshot, which may already carry a reconciliation
+ * another process committed. Adopting only its touched set would leave the live object stale
+ * for a key it decided was already correct on disk.
+ */
+function withOAuthReconciliationTouchedKeys(
+  projection: OAuthReconcileProjection,
+  required: OAuthReconcileProjection,
+): OAuthReconcileProjection {
+  return {
+    ...projection,
+    touchedProviders: [...new Set([...projection.touchedProviders, ...required.touchedProviders])],
+    touchedAntigravityVersion: projection.touchedAntigravityVersion || required.touchedAntigravityVersion,
+  };
+}
+
+/**
+ * Refresh OAuth provider presets against the registry, rebasing the write on the persisted config.
+ *
+ * This runs on the boot path (`startServer`), so persistence failure must never be fatal: a
+ * missing, malformed or contended config degrades to a warning plus an in-memory adopt, exactly
+ * as every other `mutatePersistedConfig` consumer does (`src/storage/policy.ts`,
+ * `src/codex/plan-from-token.ts`, `src/server/management/agent-settings-routes.ts`). Throwing
+ * here would take the whole proxy down over a config file the operator can still repair.
+ */
+export function reconcileOAuthProviders(config: OcxConfig, persist = true): boolean {
+  const projection = projectOAuthProviderReconciliation(config);
+  if (!projection.changed) return false;
+  if (!persist) {
+    adoptOAuthReconciliation(config, projection);
+    return true;
+  }
+  const outcome = mutatePersistedConfig(fresh => {
+    const next = projectOAuthProviderReconciliation(fresh);
+    if (next.changed) adoptOAuthReconciliation(fresh, next);
+    return { changed: next.changed, value: next };
+  });
+  if (outcome.status === "unavailable") {
+    console.warn(
+      `[opencodex] OAuth provider reconciliation could not be persisted (${outcome.reason}); `
+      + "applying it in memory for this run only.",
+    );
+    adoptOAuthReconciliation(config, projection);
+    return true;
+  }
+  adoptOAuthReconciliation(config, withOAuthReconciliationTouchedKeys(outcome.value, projection));
+  return true;
 }
 
 /** Runtime guards: provider config is intentionally passthrough, so persisted fields may be malformed. */
@@ -1353,6 +1446,13 @@ export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
   if (existing?.commandCodeVersion !== undefined) {
     next.commandCodeVersion = existing.commandCodeVersion;
   }
+  // Reauth/add-account refreshes credentials, not the operator's post-upgrade wire choice.
+  if (provider === "xai") {
+    if (existing?.modelAdapters !== undefined) next.modelAdapters = { ...existing.modelAdapters };
+    if (existing?.xaiResponsesDefaultVersion !== undefined) {
+      next.xaiResponsesDefaultVersion = existing.xaiResponsesDefaultVersion;
+    }
+  }
   // User-configured price overlays are operator data, not preset state; a
   // re-login, add-account, or reauth must not silently drop them from the
   // Logs/Usage estimates.
@@ -1389,6 +1489,7 @@ export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
       if (previousModeAllowsKey) next.authMode = "key";
     }
   }
+  initializeProviderModelSelection(provider, next, existing, config);
   config.providers[provider] = next;
 }
 

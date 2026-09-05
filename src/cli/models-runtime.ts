@@ -36,6 +36,7 @@ type ModelRow = {
   namespaced?: string;
   native?: boolean;
   disabled?: boolean;
+  initialSelectionPending?: boolean;
   custom?: boolean;
   customId?: string;
   displayName?: string;
@@ -49,7 +50,7 @@ async function live(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const rows = await runtimeRequest<ModelRow[]>("/api/models", {}, deps);
   const filtered = provider ? rows.filter(row => row.provider === provider) : rows;
   printData(filtered, wantsJson, filtered.map(row => {
-    const flags = [row.native ? "native" : "routed", row.custom ? "custom" : "", row.disabled ? "disabled" : "enabled"].filter(Boolean);
+    const flags = [row.native ? "native" : "routed", row.custom ? "custom" : "", row.initialSelectionPending ? "initial discovery pending" : row.disabled ? "disabled" : "enabled"].filter(Boolean);
     return `${row.namespaced ?? `${row.provider}/${row.id}`}  [${flags.join(", ")}]`;
   }));
 }
@@ -323,7 +324,7 @@ async function shadow(argv: string[], deps: RuntimeApiDeps): Promise<void> {
 
 export async function handleModelsRuntimeCommand(sub: string, argv: string[], deps: RuntimeApiDeps = {}): Promise<number | null> {
   // The dispatch below and MODELS_RUNTIME_SUBCOMMANDS must name the same set;
-  // tests/cli-models-runtime-dispatch.test.ts fails if they drift (#3094).
+  // tests/cli/cli-models-runtime-dispatch.test.ts fails if they drift (#3094).
   if (!isModelsRuntimeSubcommand(sub)) return null;
   let action: (() => Promise<void>) | undefined;
   if (sub === "live") action = () => live(argv, deps);

@@ -32,6 +32,16 @@ the stored main credential when an OpenCodex admission bearer is substituted). A
 Pool routing excludes unentitled accounts. If no roster can be confirmed, the gated row fails closed
 instead of spending a prompt on an upstream 400.
 
+`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` and `gpt-6-astra` are deliberately **not** gated that
+way: they are listed on every install, whatever the entitlement roster says. opencodex asks upstream
+under a client version new enough to return them, but it cannot make an answer appear — an
+unconfirmed account, a timed-out lookup or a shard that has not caught up would otherwise make the
+model disappear from the picker with no explanation. Listing them means the request is sent and you
+see the real upstream status instead. An account that does not have one of these models will get an
+upstream refusal at request time rather than an absent row, and in a multi-account Pool the request
+is no longer steered to the account that owns the model first. `disabledModels` is the lever for
+hiding any of them.
+
 A separate, explicit `customModels` entry can expose the same wire id as
 `openai/gpt-daybreak-blue-latest` through the canonical Codex-login forward provider:
 

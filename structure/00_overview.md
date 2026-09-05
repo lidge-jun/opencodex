@@ -104,6 +104,10 @@ opencodex state root does not undo those writes. Putting native Codex back is th
 - Codex `spawn_agent` visibility depends on the first five featured catalog entries.
 - The management plane (`/api/*`) and the data plane (`/v1/*`) never share an admission credential.
 - `ocx stop`, `ocx restore`, and service stop/uninstall must leave native Codex usable.
+- `tests/` is organised by domain (`tests/<domain>/`, mirroring `src/`); the map is
+  `scripts/test-layout/layout.json` and `tests/test-layout.test.ts` rejects a test outside its
+  domain. Only the two layout guards sit at the root. Source-oracle tests reach the repository
+  through `tests/helpers/repo-root.ts`, never `import.meta.dir + "/.."`.
 
 ## Writing rule
 

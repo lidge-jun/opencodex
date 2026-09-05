@@ -1,4 +1,5 @@
 import AddProviderModal from "../components/AddProviderModal";
+import ProviderModelsNotice, { type ProviderModelsNoticeProps } from "../components/ProviderModelsNotice";
 import AddCodexAccountModal from "../components/AddCodexAccountModal";
 import OAuthTosWarningModal from "../components/OAuthTosWarningModal";
 import { RemoveConfirmDialog, UnsavedLeaveDialog } from "../components/provider-workspace/ProviderDialogs";
@@ -12,6 +13,7 @@ export function ProvidersPageModals({
   apiBase,
   config,
   adding,
+  modelsNotice,
   addIntent,
   busy,
   addModalAccountRows,
@@ -43,6 +45,7 @@ export function ProvidersPageModals({
   apiBase: string;
   config: ProvidersConfig;
   adding: boolean;
+  modelsNotice?: ProviderModelsNoticeProps | null;
   addIntent: AddProviderIntent | null;
   busy: string | null;
   addModalAccountRows: AccountLoginRow[];
@@ -73,6 +76,7 @@ export function ProvidersPageModals({
 }) {
   return (
     <>
+      {modelsNotice && <ProviderModelsNotice {...modelsNotice} />}
       {adding && (
         <AddProviderModal
           apiBase={apiBase}

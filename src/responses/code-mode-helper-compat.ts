@@ -1,4 +1,9 @@
-import { normalizeApplyPatchDelimiters } from "./apply-patch-envelope";
+import {
+  isCompletePatchEnvelope,
+  normalizeApplyPatchDelimiters,
+  unwrapFreeformToolInput,
+} from "./apply-patch-envelope";
+import { declaresCodeModeExec } from "../types/tools";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -50,4 +55,37 @@ export function compileCodeModeHelperInput(argumentsText: unknown, toolName: str
     return `const result = await tools.write_stdin(${JSON.stringify(args)});\ntext(result);`;
   }
   return `const result = await tools.exec_command(${JSON.stringify(args)});\ntext(result);`;
+}
+
+/**
+ * Resolve the effective code-mode helper for one freeform call.
+ *
+ * `codeModeHelperName` already covers the NAME-based case: a provider emitted
+ * `apply_patch` under a declared `exec` catalog, so `normalizeDeclaredToolName` rewrote
+ * the name and recorded the original. That decision happens at tool-call start, before
+ * any arguments exist, so it cannot see a provider that got the NAME right and the BODY
+ * wrong.
+ *
+ * This adds that second case: the name is already `exec` so nothing was rewritten, but
+ * the body is a complete patch envelope and therefore cannot be the JavaScript that
+ * `exec` runs. Same inference the name-based path makes, drawn from the payload.
+ *
+ * Returns undefined for everything else, including JavaScript that merely mentions a
+ * patch envelope — that body is a real program and is forwarded byte-identical.
+ */
+export function resolveCodeModeHelperName(
+  codeModeHelperName: string | undefined,
+  toolName: string,
+  argumentsText: unknown,
+  namespace?: string,
+  declaredNames?: ReadonlySet<string>,
+): string | undefined {
+  if (codeModeHelperName) return codeModeHelperName;
+  if (toolName !== "exec" || namespace !== undefined) return undefined;
+  // `exec` is a name, not a guarantee. Without a catalog that is genuinely code mode, a
+  // caller-defined `exec` could legitimately take patch text, and handing it generated
+  // `tools.apply_patch(...)` JavaScript would be the mis-route this repair exists to avoid.
+  if (!declaresCodeModeExec(declaredNames)) return undefined;
+  if (typeof argumentsText !== "string" || argumentsText === "") return undefined;
+  return isCompletePatchEnvelope(unwrapFreeformToolInput(argumentsText)) ? "apply_patch" : undefined;
 }

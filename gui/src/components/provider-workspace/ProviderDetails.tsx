@@ -55,6 +55,7 @@ export default function ProviderDetails({
   onRemoveProvider,
   onSetDisabled,
   onSetDefault,
+  onRefreshQuota,
 }: {
   item: WorkspaceItem;
   usageTotals?: ProviderUsageTotals;
@@ -90,6 +91,8 @@ export default function ProviderDetails({
   onRemoveProvider?: (name: string) => void;
   onSetDisabled?: (name: string, disabled: boolean) => void;
   onSetDefault?: (name: string) => void;
+  /** Force a fresh quota read for this provider; resolves with whether it succeeded. */
+  onRefreshQuota?: () => Promise<boolean>;
 }) {
   const t = useT();
   const [tab, setTab] = useState<Tab>("overview");
@@ -107,6 +110,9 @@ export default function ProviderDetails({
   const free = useMemo(() => isFreeProvider(item), [item]);
   const local = useMemo(() => isLocalProvider(item), [item]);
   const authSurface = useMemo(() => providerAuthSurface(item), [item]);
+  const currentQuotaReading = authSurface === "oauth-accounts"
+    ? accounts?.find(account => account.active)
+    : authSurface === "api-keys" ? keys?.find(entry => entry.active) : undefined;
   // Global counter from Providers — only honor it for the reveal target.
   const scopedAccountsFocusToken = accountsFocusProvider === item.name ? accountsFocusToken : 0;
   const connectionIdentity = JSON.stringify([
@@ -253,6 +259,8 @@ export default function ProviderDetails({
             connectionIdentity={connectionIdentity}
             usageTotals={usageTotals}
             quotaReport={quotaReport}
+            currentQuotaReading={currentQuotaReading}
+            onRefreshQuota={onRefreshQuota}
             oauthEmail={oauthEmail}
             oauth={oauth}
             onEditSettings={() => switchTab("settings")}
@@ -296,7 +304,15 @@ export default function ProviderDetails({
           />
         )}
         {tab === "usage" && (
-          <ProviderUsage item={item} usageTotals={usageTotals} quotaReport={quotaReport} modelUsage={modelUsage} />
+          <ProviderUsage
+            item={item}
+            usageTotals={usageTotals}
+            quotaReport={quotaReport}
+            currentQuotaReading={currentQuotaReading}
+            quotaIdentity={connectionIdentity}
+            modelUsage={modelUsage}
+            {...(onRefreshQuota ? { onRefreshQuota } : {})}
+          />
         )}
         {tab === "accounts" && (
           <ProviderAuthPanel

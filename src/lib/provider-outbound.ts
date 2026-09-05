@@ -7,7 +7,7 @@ import {
   resolvePublicAddresses,
 } from "./destination-policy";
 import { pinnedHttpGet, pinnedHttpPost } from "./pinned-http";
-import { outboundProxyConfigured } from "./proxy-env";
+import { effectiveProxyFor, outboundProxyConfigured } from "./proxy-env";
 import { publicProviderBaseUrl } from "./provider-url";
 
 type ProviderGetInit = Omit<RequestInit, "body" | "method" | "redirect">;
@@ -19,6 +19,14 @@ export interface ProviderOutboundDependencies {
   resolveAddresses?: typeof resolvePublicAddresses;
   pinnedGet?: typeof pinnedHttpGet;
   pinnedPost?: typeof pinnedHttpPost;
+  /**
+   * Canonical-URL proof for the transparent fake-IP exception (Clash TUN mode
+   * without proxy env). Injected so this transport core stays decoupled from
+   * the registry module; production compares the final request URL against the
+   * registry's own fixed discovery URL. Defaults to "not canonical" so a caller
+   * that forgets the seam fails closed, never open.
+   */
+  isCanonicalUrl?: (name: string, url: string) => boolean;
 }
 
 export class ProviderOutboundPolicyError extends Error {
@@ -31,6 +39,41 @@ function pickPinnedAddress(addresses: Array<{ address: string; family: number }>
 
 function configuredProxyFor(): boolean {
   return outboundProxyConfigured();
+}
+
+/**
+ * Registry-owned fake-IP transparency exception (Clash/Surge/Mihomo TUN mode).
+ *
+ * Under TUN mode the packet path intercepts the fake-IP destination itself, so a
+ * canonical registry destination whose local DNS answers include Clash fake-IP
+ * space (198.18.0.0/15) is reachable by pin-connecting through the TUN — no
+ * outbound HTTP(S) proxy env is required. The exception is deliberately narrow:
+ *
+ * - hostname-only: a literal 198.18.x.x URL never reaches it (the literal gate
+ *   in `resolvePublicAddresses` rejects before DNS answers are examined);
+ * - canonical-URL-only: `isCanonicalUrl` must prove the FINAL request URL is
+ *   the registry's own fixed discovery URL for this provider (not merely that
+ *   the provider NAME matches — OAuth/forward names match any baseUrl by
+ *   design, and the bearer is pinned to the registry destination independently
+ *   in `buildModelsRequest`). A retargeted row or a renamed custom row sends
+ *   its credential to the registry URL anyway, so the proof must be on the URL
+ *   actually fetched. The check is injected so the transport core stays
+ *   decoupled from the registry module;
+ * - per-answer validation: benchmark and public answers may coexist. The exception
+ *   does not admit loopback/RFC1918/link-local/metadata companions; those still
+ *   follow the resolver's private-network policy. Benchmark admission leaves
+ *   `privateNetwork` false; proxy/NO_PROXY semantics are unchanged.
+ *
+ * Image/Lab fetch never passes the underlying flag and is unaffected.
+ */
+function transparentFakeIpException(
+  url: string,
+  parsed: URL,
+  isCanonicalUrl: (name: string, url: string) => boolean,
+  name: string,
+): boolean {
+  if (noProxyMatches(parsed)) return false;
+  return isCanonicalUrl(name, url);
 }
 
 function normalizeProxyHostname(hostname: string): string {
@@ -139,9 +182,15 @@ async function providerOutboundRequest(
   }
   const parsed = postUrl ?? new URL(url);
   const proxyConfigured = configuredProxyFor();
+  // Snapshot the scheme-matched proxy once, before the DNS await, so admission and transport
+  // below reason about the same value. `null` here means "no proxy fetch would actually use",
+  // even if some other proxy variable is set.
+  const effectiveProxy = effectiveProxyFor(parsed);
+  const allowMihomoIpv6FakeIp = effectiveProxy !== null && !noProxyMatches(parsed);
   const resolveAddresses = dependencies.resolveAddresses ?? resolvePublicAddresses;
   const pinnedGet = dependencies.pinnedGet ?? pinnedHttpGet;
   const pinnedPost = dependencies.pinnedPost ?? pinnedHttpPost;
+  const isCanonicalUrl = dependencies.isCanonicalUrl ?? (() => false);
   const allowPrivate = providerAllowsPrivateNetwork(name, provider);
   let resolved: Awaited<ReturnType<typeof resolvePublicAddresses>>;
   try {
@@ -154,7 +203,21 @@ async function providerOutboundRequest(
       // destination or being pin-connected to the fake-IP (credit #1748). A NO_PROXY
       // match is a direct route, so it keeps the benchmark answer rejected. Image/Lab
       // fetch never passes this flag.
-      allowBenchmarkAddresses: proxyConfigured && !noProxyMatches(parsed),
+      //
+      // TUN-mode transparency: with no proxy env, Clash/Surge/Mihomo TUN still
+      // intercepts the fake-IP destination itself, so the REGISTRY's own fixed
+      // discovery URL stays reachable by pin-connecting through the TUN. The
+      // proof is on the final request URL — not the provider name — because an
+      // OAuth/forward name matches any baseUrl by design while the bearer is
+      // pinned to the registry destination independently.
+      allowBenchmarkAddresses: (proxyConfigured && !noProxyMatches(parsed))
+        || transparentFakeIpException(url, parsed, isCanonicalUrl, name),
+      // Mihomo IPv6 fake-IP (fdfe:dcba:9876::/48) answers are admitted on a stricter gate
+      // than the benchmark range: the proxy must be the one fetch will use for this URL's
+      // scheme, and the request below is then bound to it explicitly (#3462). A ULA answer
+      // is otherwise indistinguishable from a real private host, so proxy presence alone
+      // is not enough.
+      allowMihomoIpv6FakeIp,
     });
   } catch (error) {
     const dnsResolutionFailed = error instanceof DestinationDnsResolutionError
@@ -169,7 +232,10 @@ async function providerOutboundRequest(
   }
   if (proxyConfigured && !resolved.privateNetwork) {
     warnProxyBoundaryOnce();
-    return globalThis.fetch(url, { ...init, method, redirect: "manual" });
+    // When the Mihomo exception could have admitted an answer, pin the transport to the
+    // proxy the admission assumed instead of letting fetch re-infer it from the environment.
+    const proxy = allowMihomoIpv6FakeIp ? effectiveProxy : undefined;
+    return globalThis.fetch(url, { ...init, method, redirect: "manual", ...(proxy ? { proxy } : {}) });
   }
   if (proxyConfigured && resolved.privateNetwork && !noProxyMatches(parsed)) {
     const hostname = normalizeProxyHostname(parsed.hostname);

@@ -109,6 +109,23 @@ a label edit refresh Codex output.
 
 ## Native passthrough
 
+Astra has its own pinned native row: 272,000 default context, 872,000 opt-in ceiling,
+low-through-ultra effort, low default, and native multi-agent effort `xhigh`. The native-alias
+fallback passes the same configured limits to context, max input and compaction. Unrelated routed
+templates clear the native multi-agent effort; canonical Astra-forward custom rows retain it and
+the pinned Fast speed description. Sync repairs only the exact old built-in Astra Fast description,
+preserving custom descriptions and other stored row fields.
+
+The API registry separately owns Astra's 1,050,000 context / 922,000 input / 128,000 output and
+five API effort levels. Trusted discovery snapshots carry the output ceiling as well as input
+and context, so reconstruction cannot drop it. User output limits may only lower that ceiling.
+Pricing remains provider-scoped and API-referenced for every built-in dollar estimate, including
+Codex-login routes. Both OpenAI identities use the same Astra/Sol API base and cache prices,
+API Fast multipliers and published long-context bands; Fast stacks with long context for Astra,
+GPT-5.6 and the Daybreak Blue selectors. No subscription-specific exception or credit multiplier
+enters the estimate. Explicit user price overrides remain authoritative. See the public provider
+reference for the dated source table.
+
 Native bare OpenAI entries form one `openai` group. The provider's Pool(default)/Direct option
 changes account selection without changing those ids; `openai-apikey/<model>` creates the separate
 API-key identity. The API GPT-5.6 rows use 1,050,000 context / 922,000 max input; their `*-pro` virtual rows
@@ -230,7 +247,7 @@ is omitted *and* the `model`/`reasoning_effort` schema fields are removed). And 
 Codex-visible `priority` while `SPAWN_PRIORITY_FIELD` preserves the natural priority the roster
 sorts by, so a display reorder can never change candidate membership. That divergence from
 upstream's own ordering is the feature's purpose, not a defect —
-`tests/codex-catalog-model-picker-order.test.ts` pins it.
+`tests/codex-integration/codex-catalog-model-picker-order.test.ts` pins it.
 
 Full derivation with per-line citations: `devlog/_plan/260816_codexrs_multiagent_v2_and_history_perf/013_five_cap_v1_vs_v2.md`.
 
@@ -331,6 +348,21 @@ the request, and they never raise it.
 
 ## Subagents
 
+New non-OAuth provider registrations carry `initialModelSelection` with a unique
+registration identity. Until reliable live/static discovery completes, public
+catalogs and model candidates withhold those providers' models; the provider itself
+stays active. At 20 or more canonical Models switch rows, initialization appends
+all corresponding disabled selectors once. Existing registrations and later manual
+choices are not reinitialized. OAuth/ChatGPT forwarding is exempt using the same
+usable-key override predicate as routing. Display aliases do not add switch rows.
+
+`src/providers/initial-model-selection-runtime.ts` commits the decision against a
+matching registration/inventory snapshot before catalog authority is captured.
+Ordinary management discovery also completes it with Codex integration OFF. The
+final catalog merge fences pending retained rows, including delete/re-add recovery.
+Raw management rows remain visible as pending/OFF. Config listener bindings are
+excluded from inventory identity because live and persisted bindings may differ.
+
 Codex `spawn_agent` advertises only the highest-priority first five picker-visible catalog rows.
 Use at most five configured `subagentModels` ids; they may contain bare catalog ids, routed
 `provider/model` ids, or exact account-qualified `<selector>/<native-openai-model>` ids. The
@@ -339,8 +371,14 @@ through `ocx agent subagents set` or the opencodex configuration.
 
 When account selectors are active, one featured bare native id expands into a complete selector row
 group. Catalog priorities use the selector count as a stride so each group stays together without
-widening Codex's five-row advertisement window. Startup seeds bare native GPT defaults only when
-`subagentModels` is unset; an explicit empty list persists.
+widening Codex's five-row advertisement window. Fresh defaults are Astra, Sol, Terra, Luna, 5.5.
+Startup upgrades unmarked rosters once: prepend `gpt-6-astra`, retain the first four unique
+non-Astra choices, then move retained bare `gpt-5.5` last. The old fifth choice is dropped;
+an unmarked empty list becomes Astra only, and an unset list receives the fresh defaults.
+`subagentModelsVersion: 1` records completion, so later user edits (including an empty list or
+removing Astra) persist. The migration rebases on the latest disk config under the existing
+mutation lock; failed persistence degrades to an in-memory roster for that run without a stale
+whole-config overwrite. Existing disabled-model visibility rules remain unchanged.
 
 Quota-aware fallback walks a configured chain when the featured model is exhausted, probing
 availability on a bounded interval (default 60 s, `src/codex/subagent-model-fallback.ts`). It rewrites

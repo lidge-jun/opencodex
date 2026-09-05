@@ -174,7 +174,7 @@ function backfillOutputItem(item: unknown, slot: ItemIdSlot, inferredStatus: str
  *
  * Deliberately does NOT backfill `created_at`. #2639 proposed it for the same
  * strict-decoder reason as `status`, but the proxy also relays some upstream
- * responses verbatim, and `tests/server-combo-failover-e2e.test.ts` asserts a
+ * responses verbatim, and `tests/server/server-combo-failover-e2e.test.ts` asserts a
  * combo backup response is returned byte-exact. Injecting a field the upstream
  * never sent breaks that contract. Both cannot hold for the same body, so the
  * `created_at` half needs its own decision about which contract yields; it is

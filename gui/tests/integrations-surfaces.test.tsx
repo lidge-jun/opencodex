@@ -48,11 +48,15 @@ type JournalRow = {
   configPath: string;
   snapshot: "none" | "stored" | "expired";
   undoable: boolean;
+  deletable?: boolean;
 };
 
 let stateResponse: () => Response;
 let journalRows: JournalRow[];
 let putResponse: () => Response;
+let codexRoutingResponse: () => Response;
+let codexDesiredEnabled = true;
+let deleteResponse: () => Response;
 /**
  * The overview also reads Codex routing, API keys, Claude Code, Claude Desktop
  * and the Grok fence. Default answers keep every existing test's card grid
@@ -101,6 +105,9 @@ beforeEach(() => {
   apiBase = `http://ocx-test-${mountCount}.invalid`;
   stateResponse = () => json(status());
   putResponse = () => json({ ok: true, clientId: "hermes", changed: true, state: "absent", message: "disabled" });
+  codexRoutingResponse = () => json({ routingInjected: false, status: "native", recommendedCommand: null });
+  codexDesiredEnabled = true;
+  deleteResponse = () => json({ ok: true, clientId: "hermes", opId: "op-old", snapshotRemoved: true });
   failExtraSources = false;
 
   const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -111,11 +118,12 @@ beforeEach(() => {
       method,
       body: init?.body ? JSON.parse(String(init.body)) : undefined,
     });
+    if (url.includes("/journal") && method === "DELETE") return deleteResponse();
     if (url.includes("/journal")) return json({ operations: journalRows });
     if (url.includes("/api/startup-health")) {
       return failExtraSources
         ? json({ error: "nope" }, 500)
-        : json({ routingInjected: false, status: "native", recommendedCommand: null });
+        : codexRoutingResponse();
     }
     if (url.includes("/api/keys")) {
       return failExtraSources ? json({ error: "nope" }, 500) : json({ keys: [] });
@@ -125,15 +133,41 @@ beforeEach(() => {
         ? json({ error: "nope" }, 500)
         : json({ desiredEnabled: true, installed: true, observedKind: "standard", applied: false, stale: false, activeProfile: null, appliedAt: null });
     }
-    if (url.includes("/api/native-integrations")) {
-      return json({ clients: [{
-        clientId: "claude-desktop",
-        state: "absent",
-        installed: true,
-        configPath: "/tmp/desktop",
-        desiredEnabled: true,
-        disableBlocked: null,
-      }] });
+    if (method === "PUT" && url.endsWith("/api/native-integrations/codex")) {
+      const body = init?.body ? JSON.parse(String(init.body)) as { enabled?: unknown } : {};
+      codexDesiredEnabled = body.enabled === true;
+      codexRoutingResponse = () => json({
+        routingInjected: codexDesiredEnabled,
+        status: "native",
+        recommendedCommand: null,
+      });
+      return json({
+        ok: true,
+        clientId: "codex",
+        changed: true,
+        state: codexDesiredEnabled ? "current" : "absent",
+        message: codexDesiredEnabled ? "enabled" : "disabled",
+        desiredEnabled: codexDesiredEnabled,
+      });
+    }
+    if (method === "GET" && url.includes("/api/native-integrations")) {
+      return failExtraSources
+        ? json({ error: "nope" }, 500)
+        : json({ clients: [{
+          clientId: "codex",
+          state: codexDesiredEnabled ? "current" : "absent",
+          installed: true,
+          configPath: "/tmp/codex/config.toml",
+          desiredEnabled: codexDesiredEnabled,
+          disableBlocked: null,
+        }, {
+          clientId: "claude-desktop",
+          state: "absent",
+          installed: true,
+          configPath: "/tmp/desktop",
+          desiredEnabled: true,
+          disableBlocked: null,
+        }] });
     }
     if (url.includes("/api/claude-code")) {
       return failExtraSources ? json({ error: "nope" }, 500) : json({ enabled: false });
@@ -449,6 +483,38 @@ test("an expired snapshot offers nothing, because the bytes are gone", async () 
   expect(container.innerHTML).toContain("Backup expired");
 });
 
+test("the client page reconciles a journal row another tab already deleted", async () => {
+  journalRows = [{
+    opId: "op-stale",
+    clientId: "hermes",
+    kind: "apply",
+    at: "2026-08-02T08:00:00.000Z",
+    configPath: "/tmp/home/.hermes/config.yaml",
+    snapshot: "expired",
+    undoable: false,
+    deletable: true,
+  }];
+  deleteResponse = () => {
+    journalRows = [];
+    return json({
+      error: "integration operation not found",
+      code: "integration_operation_not_found",
+      opId: "op-stale",
+    }, 404);
+  };
+  await mountClient();
+
+  await act(async () => { buttonByText("Delete")!.click(); });
+  expect(container.querySelector(".integration-consequence-dialog")).not.toBeNull();
+  await act(async () => { buttonByText("Delete entry")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 30)); });
+
+  expect(container.querySelector(".integration-consequence-dialog")).toBeNull();
+  expect(buttonByText("Delete")).toBeUndefined();
+  expect(requests.filter(request => request.method === "DELETE")).toHaveLength(1);
+  expect(requests.filter(request => request.method === "GET" && request.url.includes("/journal")).length).toBeGreaterThanOrEqual(2);
+});
+
 test("a residual write tells the user the file may be half-written and where the backup is", async () => {
   /*
    * `residual` means compensation itself failed. It is the single most
@@ -518,6 +584,39 @@ async function mountOverview(): Promise<void> {
   });
   await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 30)); });
 }
+
+test("the overview reconciles a journal row another tab already deleted", async () => {
+  stateResponse = () => json({ clients: [status()] });
+  journalRows = [{
+    opId: "op-stale-overview",
+    clientId: "hermes",
+    kind: "apply",
+    at: "2026-08-02T08:00:00.000Z",
+    configPath: "/tmp/home/.hermes/config.yaml",
+    snapshot: "expired",
+    undoable: false,
+    deletable: true,
+  }];
+  deleteResponse = () => {
+    journalRows = [];
+    return json({
+      error: "integration operation not found",
+      code: "integration_operation_not_found",
+      opId: "op-stale-overview",
+    }, 404);
+  };
+  await mountOverview();
+
+  await act(async () => { buttonByText("Delete")!.click(); });
+  expect(container.querySelector(".integration-consequence-dialog")).not.toBeNull();
+  await act(async () => { buttonByText("Delete entry")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 30)); });
+
+  expect(container.querySelector(".integration-consequence-dialog")).toBeNull();
+  expect(buttonByText("Delete")).toBeUndefined();
+  expect(requests.filter(request => request.method === "DELETE")).toHaveLength(1);
+  expect(requests.filter(request => request.method === "GET" && request.url.includes("/journal")).length).toBeGreaterThanOrEqual(2);
+});
 
 test("the overview does not claim nothing is installed while it is still loading", async () => {
   /*
@@ -869,6 +968,40 @@ test("every reachable client gets a card, not just the file six", async () => {
   ) as unknown as HTMLButtonElement | null;
   await act(async () => { desktopLink!.click(); });
   expect(testWindow.location.hash).toBe("#integrations/claude/desktop");
+});
+
+test("Codex disable uses Codex consequences and refreshes observed routing", async () => {
+  codexRoutingResponse = () => json({ routingInjected: true, status: "native", recommendedCommand: null });
+  await mountOverview();
+
+  const sw = switchFor("codex");
+  expect(sw?.getAttribute("aria-pressed")).toBe("true");
+  await act(async () => { sw!.click(); });
+
+  // Opening the consequence gate must not mutate anything, and it must name
+  // the Codex file and the effects of restoring native Codex.
+  expect(requests.some(request => request.method === "PUT")).toBe(false);
+  const dialog = container.querySelector(".integration-consequence-dialog")!;
+  expect(dialog.textContent).toContain("Disable the Codex integration?");
+  expect(dialog.textContent).toContain("/tmp/codex/config.toml");
+  expect(dialog.textContent).toContain("/v1/responses");
+  expect(dialog.textContent).not.toContain("Grok Build");
+
+  const confirm = Array.from(dialog.querySelectorAll("button")).find(
+    button => (button.textContent ?? "").trim() === "Disable",
+  ) as HTMLButtonElement;
+  await act(async () => { confirm.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 50)); });
+
+  const put = requests.find(request => request.method === "PUT");
+  expect(put?.url).toContain("/api/native-integrations/codex");
+  expect(put?.body).toEqual({ enabled: false });
+  // The mock changes startup-health only after the mutation. This assertion
+  // therefore proves the Codex observed resource, not merely the native toggle,
+  // was refreshed.
+  expect(switchFor("codex")?.getAttribute("aria-pressed")).toBe("false");
+  expect(container.querySelector(".integration-card[data-client='codex'] .badge")
+    ?.getAttribute("data-integration-state")).toBe("absent");
 });
 
 test("a source that cannot be read is unknown, never 'not applied'", async () => {

@@ -5,6 +5,7 @@ import type { Root } from "react-dom/client";
 import { clearClientResourceStoresForTests } from "../src/client-resource";
 import { LanguageProvider } from "../src/i18n/provider";
 import Providers from "../src/pages/Providers";
+import CodexAccountPool from "../src/components/CodexAccountPool";
 
 const globals = [
   "document",
@@ -203,6 +204,7 @@ test("pending Codex completion stays amber, private, dismissible, and refreshes 
   const warning = testWindow.document.querySelector<HTMLElement>(".toast-notice.notice-warn");
   expect(warning).toBeTruthy();
   expect(warning!.textContent).toContain("The change was saved");
+  expect(host.querySelector('[role="dialog"]')?.textContent).toContain("Choose models");
   expect(warning!.textContent).toContain("ocx sync");
   expect(testWindow.document.body.textContent).not.toContain("private-account-detail");
   expect(pathCount("/api/config")).toBeGreaterThan(before.config);
@@ -232,3 +234,31 @@ test("completed Codex catalog convergence reports clean success without sync adv
   expect(success!.textContent).not.toContain("ocx sync");
   expect(testWindow.document.querySelector(".toast-notice.notice-warn")).toBeNull();
 });
+
+for (const embedded of [false, true]) {
+  test(`Codex pool completion opens Models guidance (embedded=${embedded})`, async () => {
+    const { createRoot } = await import("react-dom/client");
+    await act(async () => {
+      root = createRoot(host);
+      root.render(<LanguageProvider><CodexAccountPool apiBase={API_BASE} embedded={embedded} /></LanguageProvider>);
+    });
+    await flush();
+    await flush();
+    await act(async () => { buttonWithText(host, "Add").click(); });
+    await flush();
+    const login = testWindow.document.querySelector('dialog[aria-label="Add Codex Account"] button.list-row') as HTMLButtonElement;
+    expect(login).toBeTruthy();
+    await act(async () => { login.click(); });
+    await flush();
+    await act(async () => { jest.advanceTimersByTime(2_000); await Promise.resolve(); });
+    await flush();
+    await flush();
+    const notice = host.querySelector('[role="dialog"]');
+    expect(notice?.textContent).toContain("Choose models");
+    expect(notice?.textContent).toContain("ocx sync");
+    expect(notice?.textContent).not.toContain("All model switches were turned OFF");
+    await act(async () => { buttonWithText(notice!, "Open Models").click(); });
+    expect(testWindow.location.hash).toBe("#models");
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+  });
+}

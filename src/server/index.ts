@@ -12,7 +12,6 @@ import {
 } from "./ws-bridge";
 import type { Server, ServerWebSocket } from "bun";
 import {
-  DEFAULT_SUBAGENT_MODELS,
   applyProxyEnv,
   armClaudeCodeBaseline,
   loadConfig,
@@ -22,6 +21,8 @@ import {
 } from "../config";
 import { grokDefaultReasoningEffort } from "../grok/effort";
 import { flushConfigDirHardening } from "../config/paths";
+import { migrateStartupSubagentModels } from "./subagent-models-startup";
+import { migrateStartupXaiResponses } from "./xai-responses-startup";
 import { reconcileOAuthProviders } from "../oauth";
 import { withCatalogWriteSerialization } from "../codex/catalog-write-serialization";
 import { invalidateCodexModelsCacheWithPermit } from "../codex/catalog/sync";
@@ -33,8 +34,12 @@ import {
   type NativeCodexOwnership,
   type OwnershipInspection,
 } from "../integrations/native/ownership-preflight";
-import { createResetCreditWhamClient, registerCodexCooldownRecoveryProbeWorker } from "../codex/auth-api";
+import {
+  createResetCreditWhamClient,
+  registerCodexCooldownRecoveryProbeWorker,
+} from "../codex/auth-api";
 import { activateResetCreditAutoRedeem } from "../codex/reset-credit-auto-redeem";
+import { registerCodexQuotaAutoRefreshWorker } from "../codex/quota-auto-refresh";
 import {
   reconcileLiveStateStores,
   setLiveStateStoreConfig,
@@ -230,6 +235,7 @@ import { recordCursorSeen } from "../integrations/cursor-seen";
 import { detectCursorInstalls } from "../integrations/cursor-detect";
 import { loadCursorEffortTable } from "../integrations/cursor-effort-table";
 import { expandCursorEffortRow, knownEffortRowIds } from "./effort-row";
+import { catalogFastRowEligible, expandFastRow } from "./fast-row";
 
 export const MAX_WS_FRAME_BYTES = 50 * 1024 * 1024;
 const WEBSOCKET_IDLE_TIMEOUT_SECONDS = 0;
@@ -509,7 +515,7 @@ function attachLiveSidebandUpstream(
 
 // Adapter resolution + wire-protocol override extracted to ./server/adapter-resolve.
 
-// Source invariant for tests/passthrough-abort.test.ts after the pure module split:
+// Source invariant for tests/responses/passthrough-abort.test.ts after the pure module split:
 // if (isEventStream && upstreamResponse.body) {
 // const repairConfig = route.provider.responsesItemIdRepair;
 // const needsClientRewrite = imageGenCallAliases.size > 0
@@ -583,6 +589,8 @@ export interface StartServerDeps {
   readinessGate?: ReadinessGate;
   /** Test-only package-tree observation; production captures package.json identity at boot. */
   packageTreeIntegrity?: PackageTreeIntegrityGuard;
+  /** Test-only seam for observing quota-worker registration ownership. */
+  registerCodexQuotaAutoRefreshWorker?: typeof registerCodexQuotaAutoRefreshWorker;
 }
 
 function inspectStartupOwnership(
@@ -645,7 +653,13 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   // Captured before loadConfig() starts the optional ACL flight so stop() drains the same dir
   // even if OPENCODEX_HOME changes underneath a long-lived process.
   const startupConfigDir = getConfigDir();
-  const config = runModelRenameStartupMigration(runAlibabaRegionStartupMigration(runOpenAiTierStartupMigration(loadConfig())));
+  const startupConfig = migrateStartupSubagentModels(
+    runModelRenameStartupMigration(runAlibabaRegionStartupMigration(runOpenAiTierStartupMigration(loadConfig()))),
+  );
+  // Reconcile disk-backed presets first: it replaces provider rows and must not undo
+  // an in-memory wire upgrade when that upgrade's persistence is temporarily unavailable.
+  reconcileOAuthProviders(startupConfig);
+  const config = migrateStartupXaiResponses(startupConfig);
   warnAgentTaskRecoveryStartup(config);
   setLiveStateStoreConfig(config);
   applyProxyEnv(config);
@@ -655,16 +669,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   let userCostOverlayReconciler: { stop(): void } | null = null;
   // Arm synchronously before listen. A pending journal therefore makes __main__ unusable
   // before any request can resolve its physical credential, while health/management/Pool stay live.
-  // Refresh OAuth provider presets (models/noReasoningModels) from the registry so a proxy update
-  // adding/dropping models reaches existing configs on start — not just fresh installs.
-  reconcileOAuthProviders(config);
   reconcileLiveStateStores();
-  // Seed default featured subagent models on first run only (UNSET → defaults). A user-set list,
-  // even [], is left alone so GUI removals persist.
-  if (config.subagentModels === undefined) {
-    config.subagentModels = [...DEFAULT_SUBAGENT_MODELS];
-    saveConfig(config);
-  }
   // authMode migration (devlog 260726_claude_auth_auto/015): before "auto" existed,
   // choosing Subscription DELETED the key, so a pre-upgrade block with no authMode is
   // indistinguishable from "never chose". Pin those to subscription once so an upgrade
@@ -798,6 +803,10 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
    * on the direct-spawn host into a 404 (#3192). The handler still runs its own admission, so a
    * loopback caller without a ChatGPT credential is refused inside it rather than by this gate.
    *
+   * The standalone Images client uses the same base URL for its two POST routes. Their handler
+   * keeps the paid upstream behind its own admission and forward-credential checks, so admit only
+   * the exact methods and paths it serves (#3428).
+   *
    * `GET /v1/models` is on the list for a reason that is easy to miss. When catalog
    * materialization fails or finds no source, `syncCodex` warns and injects with
    * `catalogPath: null`; Codex then builds an ONLINE model manager and `model/list` refreshes
@@ -811,6 +820,9 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     }
     if (path === "/v1/responses/compact") return req.method === "POST";
     if (path === "/v1/alpha/search") return req.method === "POST";
+    if (path === "/v1/images/generations" || path === "/v1/images/edits") {
+      return req.method === "POST";
+    }
     if (path === "/v1/models") return req.method === "GET";
     // Realtime voice — a directly-spawned `codex app-server` needs these for desktop voice
     // the same way it needs /v1/responses. Two shapes, same trust model as /v1/responses:
@@ -1017,8 +1029,11 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     return "public";
   }
   let backgroundLifecycle: ReturnType<typeof acquireServerBackgroundLifecycle> | null = null;
+  let unregisterQuotaAutoRefresh: (() => void) | null = null;
   try {
     backgroundLifecycle = acquireServerBackgroundLifecycle(applyPolicy);
+    unregisterQuotaAutoRefresh = (deps.registerCodexQuotaAutoRefreshWorker
+      ?? registerCodexQuotaAutoRefreshWorker)(config);
     // External `ocx config set` / direct config.json edits run in other
     // processes; poll the file so Logs/Usage display prices follow them live.
     // Started inside the guarded startup transaction so the catch below can
@@ -1270,7 +1285,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           // Built directly rather than through formatErrorResponse: that helper derives
           // `code` from the status and message via classifyError, and these two need stable,
           // specific codes. `catalog_not_found` in particular is what lets a caller — and
-          // tests/api-key-attribution.test.ts — tell "this route exists and has no catalog"
+          // tests/server/api-key-attribution.test.ts — tell "this route exists and has no catalog"
           // apart from "this route is gone", which is the difference between admission proof
           // and a vacuous pass.
           return withCors(
@@ -1430,6 +1445,37 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         // Codex catalog (client_version) and the OpenAI list shape below stay byte-identical.
         const wantsAnthropicList = req.headers.get("anthropic-version") !== null
           || url.searchParams.get("flavor") === "anthropic";
+        /**
+         * Whether a NATIVE slug may carry a Fast sibling.
+         *
+         * Both halves are required. Upstream asserts the tier per model — the same
+         * `additional_speed_tiers` the Codex picker's own toggle is built from — but an
+         * operator capability override or the final wire resolution can still make the
+         * route ineligible, and `decideTier` would then drop the tier the row advertised.
+         *
+         * Declared here, above the Claude discovery call, because that call reads it while
+         * the raw OpenAI mapper further down does too; defining it there would leave this
+         * use in its temporal dead zone.
+         */
+        const nativeFastEligible = (metadataId: string): boolean =>
+          catalogFastRowEligible(config, { provider: OPENAI_CODEX_PROVIDER_ID, id: metadataId, native: true });
+
+        /**
+         * Whether a routed catalog row may carry a Fast sibling.
+         *
+         * A combo is its own namespace with no `config.providers` entry — declaring a
+         * provider named `combo` is rejected (combos/types.ts:191) — so provider lookup
+         * cannot classify it. Its aggregated `supportsServiceTier` is already true only
+         * when EVERY member supports the tier (aggregation.ts:201), which is the right
+         * rule for a row that fans out to all of them.
+         *
+         * Declared beside nativeFastEligible, above the Claude discovery call that reads
+         * both; defining it near the raw OpenAI mapper below would leave that use in its
+         * temporal dead zone.
+         */
+        const catalogRowFastEligible = (m: { provider: string; id: string; supportsServiceTier?: boolean }): boolean =>
+          catalogFastRowEligible(config, m);
+
         if (wantsAnthropicList && !url.searchParams.has("client_version")) {
           if (config.claudeCode?.enabled === false) return jsonResponse({ data: [] }, 200, req, policy);
           // Build Desktop 3P registry so inbound alias resolution works for subsequent requests.
@@ -1451,7 +1497,22 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             : idsParam === "desktop"
               ? "desktop3p" as const
               : (/^claude-code\//i.test(req.headers.get("user-agent") ?? "") ? "readable" as const : "desktop3p" as const);
-          const data = buildAnthropicModelInfos(desktopNativeSlugs, goOrdered, resolveAutoContext(config.claudeCode), idStyle, activeDesktop3pAlias, nativeContextLimits(config), config.fastMode);
+          const data = buildAnthropicModelInfos(
+            desktopNativeSlugs,
+            goOrdered,
+            resolveAutoContext(config.claudeCode),
+            idStyle,
+            activeDesktop3pAlias,
+            nativeContextLimits(config),
+            config.fastMode,
+            // Explicit opt-out omits the Fast predicate.
+            config.fastRows !== false
+              ? (model: { provider: string; id: string; supportsServiceTier?: boolean }) =>
+                model.provider === "native"
+                  ? nativeFastEligible(model.id)
+                  : catalogRowFastEligible(model)
+              : undefined,
+          );
           return jsonResponse({ data }, 200, req, policy);
         }
         if (url.searchParams.has("client_version")) {
@@ -1580,7 +1641,13 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         // The projection is opt-in. Keep the default path free of Cursor install detection,
         // and resolve the bundle table once for the whole list rather than once per row.
         const effortRowsEnabled = config.cursorEffortRows === true;
-        const effortRowKnownIds = effortRowsEnabled ? knownEffortRowIds(config) : undefined;
+        // Explicit opt-out skips policy resolution and additional rows.
+        const fastRowsEnabled = config.fastRows !== false;
+        // One inventory serves both grammars; building it twice would double the work on a
+        // hot path for no benefit.
+        const effortRowKnownIds = effortRowsEnabled || fastRowsEnabled
+          ? knownEffortRowIds(config)
+          : undefined;
         const privateInference = effortRowsEnabled
           ? detectCursorInstalls().find(install => install.build === "private-inference")
           : undefined;
@@ -1593,7 +1660,15 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             knownIds: effortRowKnownIds,
             table: cursorEffortTable,
             supportsReasoning: reasoningEfforts.length > 0,
-          });
+          }).flatMap(row => expandFastRow(
+            row,
+            // Only the BASE row earns a fast sibling. An effort row already spent the
+            // grammar, and the parser requires the stripped base to be routable, so
+            // `<base>--<effort>--fast` would publish a row no ingress can resolve.
+            row.id === id && nativeFastEligible(metadataId),
+            config,
+            effortRowKnownIds,
+          ));
         };
         const routedRows = await Promise.all(uniqueCatalogModelsForRawPublicList(goOrdered).map(async m => {
           // Same rule as the anthropic branch: with the global fast switch on, a client
@@ -1634,7 +1709,12 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             knownIds: effortRowKnownIds,
             table: cursorEffortTable,
             supportsReasoning: (m.reasoningEfforts ?? []).length > 0,
-          });
+          }).flatMap(expanded => expandFastRow(
+            expanded,
+            expanded.id === row.id && catalogRowFastEligible(m),
+            config,
+            effortRowKnownIds,
+          ));
         }));
         const data = [
           ...visibleNatives.flatMap(id => expandedNativeModelRow(id)),
@@ -1753,7 +1833,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           ...admissionFields(admission),
         };
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
-          const response = await handleSearch(req, config, logCtx, turnAdmissionLease);
+          const response = await handleSearch(req, config, logCtx, turnAdmissionLease, admission);
           addFinalRequestLog(requestId, start, logCtx, response.status,
             response.status === 499 ? { closeReason: "client_cancel" } : undefined);
           return withCors(response, req, policy);
@@ -1855,7 +1935,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         // pre-translation stream + native passthrough callbacks) — do not re-wrap the
         // translated Anthropic stream here.
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => withCors(
-          await handleClaudeMessages(req, config, logCtx, { requestId, start, turnAdmissionLease }, policy),
+          await handleClaudeMessages(req, config, logCtx, { requestId, start, turnAdmissionLease, admission }, policy),
           req,
           policy,
         ));
@@ -2056,6 +2136,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         undefined,
         guiSessionCandidate ?? undefined,
         config.runtimeRole ?? "standalone",
+        isApiAuthRequired(config),
       );
       if (guiFile) return guiFile;
       if (url.pathname === "/" && req.method === "GET") {
@@ -2322,6 +2403,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
       }
     }
   } catch (error) {
+    unregisterQuotaAutoRefresh?.();
     userCostOverlayReconciler?.stop();
     backgroundLifecycle?.releaseAfterFailedStart();
     void nativeMainLifecycle.release();
@@ -2347,7 +2429,11 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             ? [() => managementIngressRef.stop(closeActiveConnections)]
             : []),
           async () => {
-            userCostOverlayReconciler?.stop();
+            try {
+              userCostOverlayReconciler?.stop();
+            } finally {
+              unregisterQuotaAutoRefresh?.();
+            }
           },
         ],
         async () => {

@@ -9,7 +9,7 @@ import {
 } from "./combos";
 import type { NormalizedComboConfig } from "./combos/types";
 import { hasOwnProvider } from "./config/provider-name";
-import { resolveProviderApiKey } from "./providers/key-store";
+import { providerUsesKeyAuthOverride, resolveProviderApiKey } from "./providers/key-store";
 import { assertProviderDestinationAllowed } from "./lib/destination-policy";
 import { redactSecretString, redactUrlForLog } from "./lib/redact";
 import {
@@ -42,9 +42,16 @@ import {
   type RouteDecisionTraceV1,
   type TraceCandidateInput,
 } from "./routing/trace";
-import { getRoutingProfile, resolvePolicyProfileId } from "./routing/profile";
+import { getRoutingProfile, resolvePolicyProfileId, POLICY_NAMESPACE } from "./routing/profile";
 import { evaluatePolicyProfile, type PolicyRequestEvidence } from "./routing/evaluator";
 import { assemblePolicyCandidateEvidence } from "./routing/compatibility/assemble";
+
+export class UnknownRoutingPolicyError extends Error {
+  constructor(readonly profileId: string) {
+    super(`Unknown routing policy: ${profileId}`);
+    this.name = "UnknownRoutingPolicyError";
+  }
+}
 
 export class NoEligiblePolicyCandidateError extends Error {
   /** Evaluation trace (with per-candidate exclusions) when nothing qualified. */
@@ -300,10 +307,7 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
   const repairLegacyMimoFreeAuth = providerName === "mimo-free"
     && staticModelCatalog
     && (provider.authMode === undefined || provider.authMode === "local");
-  const explicitKeyOverride = registryEntry.authKind === "oauth"
-    && registryEntry.allowKeyAuthOverride === true
-    && provider.authMode === "key"
-    && resolvedApiKey !== undefined;
+  const explicitKeyOverride = providerUsesKeyAuthOverride(registryEntry, provider, resolvedApiKey);
   const canonicalAuthMode = explicitKeyOverride
     ? "key"
     : repairLegacyMimoFreeAuth
@@ -604,11 +608,13 @@ function routeModelInternal(
   // configured profile alias executes the policy evaluator and routes the
   // selected candidate. Only explicit requests reach this branch; concrete
   // recursive targets skip policy resolution entirely (bypassCombos) so an
-  // alias matching a selected candidate can never recurse, and a
-  // `policy/<id>` without a configured profile falls through to normal
-  // provider/default resolution instead of failing.
+  // alias matching a selected candidate can never recurse. Missing reserved
+  // policy selectors fail before ordinary provider/default resolution.
   const policyId = !bypassCombos ? resolvePolicyProfileId(config, modelId) : null;
   const profile = policyId ? getRoutingProfile(config, policyId) : undefined;
+  if (!bypassCombos && !profile && (policyId !== null || modelId.startsWith(`${POLICY_NAMESPACE}/`))) {
+    throw new UnknownRoutingPolicyError(policyId ?? modelId.slice(POLICY_NAMESPACE.length + 1));
+  }
   if (profile && policyId) {
     // One clock read per decision keeps candidate evidence, exclusions, and
     // scores mutually consistent and reproducible.
@@ -679,10 +685,39 @@ function routeModelInternal(
   //    no such provider exists.
   if (slash > 0) {
     const requestedProvider = modelId.slice(0, slash);
-    const provName = hasOwnProvider(config.providers, requestedProvider)
-      ? requestedProvider
-      : Object.entries(config.providers).find(([, provider]) =>
-        typeof provider.alias === "string" && provider.alias.toLowerCase() === requestedProvider.toLowerCase())?.[0];
+    const requestedLower = requestedProvider.toLowerCase();
+    let provName: string | undefined;
+
+    if (hasOwnProvider(config.providers, requestedProvider)) {
+      provName = requestedProvider;
+    } else {
+      // Pass 1: explicit configured provider aliases (operator override always wins)
+      const configuredMatches = Object.entries(config.providers).filter(([, provider]) =>
+        typeof provider.alias === "string" && provider.alias.trim().toLowerCase() === requestedLower,
+      );
+      if (configuredMatches.length === 1) {
+        provName = configuredMatches[0]![0];
+      } else if (configuredMatches.length > 1) {
+        throw new Error("provider alias '" + requestedProvider + "' is ambiguous: " + configuredMatches.map(([n]) => n).sort().join(", "));
+      } else {
+        // Pass 2: built-in registry aliases, only for providers that do NOT have an explicit alias override
+        // and whose registry alias has not been claimed by another configured provider (#3531 review)
+        const registryMatches = Object.entries(config.providers).filter(([name, provider]) => {
+          if (provider.alias !== undefined) return false;
+          const regAlias = PROVIDER_REGISTRY.find(e => e.id === name)?.alias;
+          if (!regAlias || regAlias.toLowerCase() !== requestedLower) return false;
+          const claimedByOther = Object.entries(config.providers).some(([otherName, p]) =>
+            otherName !== name && typeof p.alias === "string" && p.alias.trim().toLowerCase() === requestedLower
+          );
+          return !claimedByOther;
+        });
+        if (registryMatches.length === 1) {
+          provName = registryMatches[0]![0];
+        } else if (registryMatches.length > 1) {
+          throw new Error("provider alias '" + requestedProvider + "' is ambiguous across registry fallbacks: " + registryMatches.map(([n]) => n).sort().join(", "));
+        }
+      }
+    }
     if (!provName) {
       // A genuine slash-containing native model id still falls through unchanged.
     } else {

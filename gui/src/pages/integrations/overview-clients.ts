@@ -182,33 +182,72 @@ export function isAppliedState(state: VisualIntegrationState): boolean {
 /**
  * Codex CLI.
  *
+ * The native status owns the desired switch state, install detection, and the
+ * real Codex config path. The startup-health payload owns observed routing:
  * `routingInjected` — server-derived as `routingKind === "opencodex-local"` —
- * is the only field that answers "is opencodex in Codex's path right now".
- * `status` mixes in service viability and reboot safety, which is the Startup
- * page's question, so a `protected` status with no injected routing still
- * reads as not applied here.
+ * answers whether opencodex is in Codex's path right now. Keeping those facts
+ * separate lets the card show a disabled switch while the observed state still
+ * reports what Codex is actually using.
  */
-function codexRow(payload: CodexRoutingPayload | null): OverviewRow {
+function codexRow(
+  payload: CodexRoutingPayload | null,
+  native: NativeStatus | undefined,
+  nativeSettled: boolean | undefined,
+): OverviewRow {
   const base = {
     id: "codex" as const,
     hash: "integrations/codex",
     labelKey: "integrations.tab.codex" as TKey,
     toggle: "codex" as const,
-    toggleBlocked: null,
-    togglePath: null,
+    toggleBlocked: native?.disableBlocked ?? null,
+    togglePath: native?.configPath ?? null,
     status: null,
     detail: null,
     detailVars: null,
   };
-  if (!payload) return { ...base, state: "unknown", installed: false, applied: false, detailKey: null };
-  // The proxy answering at all means Codex CLI is present: it is the client
-  // this product exists for, and there is no separate detection probe.
+
+  // Compatibility for callers written before native status joined the
+  // overview. The live page always passes nativeSettled explicitly.
+  if (nativeSettled === undefined) {
+    if (!payload) return { ...base, state: "unknown", installed: false, applied: false, detailKey: null };
+    if (payload.routingInjected !== true) {
+      return {
+        ...base,
+        state: "absent",
+        installed: true,
+        applied: false,
+        detail: payload.recommendedCommand ?? null,
+        detailKey: payload.recommendedCommand ? null : "integrations.detail.codexAbsent",
+      };
+    }
+    return {
+      ...base,
+      state: payload.status === "error" ? "stale" : "current",
+      installed: true,
+      applied: true,
+      detailKey: "integrations.detail.codexRouted",
+    };
+  }
+
+  if (!nativeSettled) {
+    return { ...base, state: "unknown", installed: false, applied: false, detailKey: null };
+  }
+  if (!native) {
+    return { ...base, toggle: null, state: "unknown", installed: false, applied: false, detailKey: null };
+  }
+
+  const toggleOn = native.desiredEnabled;
+  if (!payload) {
+    return { ...base, state: "unknown", installed: native.installed, applied: false, toggleOn, detailKey: null };
+  }
+
   if (payload.routingInjected !== true) {
     return {
       ...base,
       state: "absent",
-      installed: true,
+      installed: native.installed,
       applied: false,
+      toggleOn,
       // The command that would fix it beats a restatement of the badge.
       detail: payload.recommendedCommand ?? null,
       detailKey: payload.recommendedCommand ? null : "integrations.detail.codexAbsent",
@@ -217,8 +256,9 @@ function codexRow(payload: CodexRoutingPayload | null): OverviewRow {
   return {
     ...base,
     state: payload.status === "error" ? "stale" : "current",
-    installed: true,
+    installed: native.installed,
     applied: true,
+    toggleOn,
     detailKey: "integrations.detail.codexRouted",
   };
 }
@@ -493,12 +533,13 @@ function fileRow(status: IntegrationStatus): OverviewRow {
  * strip above the grid, so the eye moves the same way in both.
  */
 export function buildOverviewRows(sources: OverviewSources): OverviewRows {
+  const nativeCodex = sources.native?.find(status => status.clientId === "codex");
   const nativeClaude = sources.native?.find(status => status.clientId === "claude");
   const nativeGrok = sources.native?.find(status => status.clientId === "grok");
   // One lookup table, not a find per client (react-doctor js-index-maps).
   const statusByClient = new Map(sources.clients.map(status => [status.clientId, status]));
   const rows: OverviewRow[] = [
-    codexRow(sources.codex),
+    codexRow(sources.codex, nativeCodex, sources.nativeSettled),
     claudeRow(sources.claude, nativeClaude, sources.nativeSettled),
     claudeDesktopRow(
       sources.claudeDesktop,

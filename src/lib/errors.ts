@@ -128,6 +128,28 @@ function isPermissionMessage(text: string): boolean {
 }
 
 /**
+ * Geographic / network-location denials. Google's Cloud Code Assist API returns these as
+ * HTTP 400 `FAILED_PRECONDITION: User location is not supported for the API use.` — the
+ * request is well-formed, the caller's location is refused. Treated as a permission-class
+ * rejection, never as an invalid request (#3467).
+ */
+const LOCATION_UNSUPPORTED_PATTERNS = [
+  "location is not supported",
+  "location not supported",
+  "unsupported location",
+  "region is not supported",
+  "unsupported region",
+  "country is not supported",
+  "not supported in your country",
+  "not supported in your region",
+] as const;
+
+export function isLocationUnsupportedMessage(text: string): boolean {
+  const lower = text.toLowerCase();
+  return LOCATION_UNSUPPORTED_PATTERNS.some(needle => lower.includes(needle));
+}
+
+/**
  * Client cancelled / closed the turn. Matches ONLY abort phrases this codebase
  * produces — "client closed request during web-search" (src/web-search/loop.ts),
  * "Client cancelled request" (src/server/responses.ts) — plus the explicit
@@ -244,6 +266,15 @@ export function classifyError(status: number, type: string, message: string): Oc
   ) {
     return { message, type: "authentication_error", code: "invalid_api_key" };
   }
+  // An explicit permission enum must not acquire a more specific inferred reason.
+  if (type === "PERMISSION_DENIED" || text.includes("permission_denied")) {
+    return { message, type: "permission_error", code: "permission_denied" };
+  }
+  // Location denials outrank generic permission / subscription wording, but never an
+  // authoritative 5xx. Message-only adapter terminals arrive here with inferred 403.
+  if (status < 500 && (type === "location_not_supported" || isLocationUnsupportedMessage(text))) {
+    return { message, type: "permission_error", code: "location_not_supported" };
+  }
   // Subscription labels are valid only in a known permission context.
   if (
     (status === 403 || type === "permission_error") &&
@@ -352,6 +383,9 @@ export function inferHttpStatusFromAdapterMessage(message: string): number {
   // Strong authentication signals win when a message contains mixed auth and
   // subscription/permission wording.
   if (isAuthenticationMessage(lower)) return 401;
+  // A location denial is a permission-class rejection; keep it aligned with the
+  // `permission_error` envelope status so message-only and classified paths agree.
+  if (isLocationUnsupportedMessage(lower)) return 403;
   if (isSubscriptionGateMessage(lower) || isPermissionMessage(lower)) return 403;
   // Same precedence rule as classifyCursorError: an explicit gRPC FAILED_PRECONDITION is a
   // structured, deterministic rejection, so it outranks the overload keywords that routinely
@@ -359,6 +393,11 @@ export function inferHttpStatusFromAdapterMessage(message: string): number {
   // the message matched "unavailable" and returned a retryable 503, so clients kept retrying
   // a rejection that can never succeed.
   if (lower.includes("failed_precondition") || lower.includes("failed precondition")) return 400;
+  // Bytes the upstream itself produced and then mangled are a provider protocol failure, not a
+  // malformed client request. This must sit ahead of the generic "malformed" -> 400 branch so a
+  // combo can fail over instead of returning a terminal 4xx the caller cannot act on. Scoped to
+  // the "malformed upstream" phrase our adapters emit; plain "malformed" keeps its 400 verdict.
+  if (lower.includes("malformed upstream")) return 502;
   if (
     lower.includes("unavailable") ||
     lower.includes("overloaded") ||

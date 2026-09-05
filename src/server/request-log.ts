@@ -594,6 +594,12 @@ export function requestLogErrorCode(
 export function requestLogSpeedLabel(serviceTier: string | undefined): string | undefined {
   const normalized = serviceTier?.trim().toLowerCase();
   if (normalized === "priority" || normalized === "fast") return "fast";
+  // Ultra Fast is labelled even though nothing in the shipped catalog advertises it: the
+  // reporter on #3429 reached it by hand-editing their own catalog, the request completed,
+  // and the Logs column stayed empty because this returned undefined. A tier the proxy
+  // forwarded but refuses to name is an observability hole, not a feature gate — the flag
+  // decides whether the tier survives, not whether we admit to carrying it.
+  if (normalized === "ultrafast") return "ultrafast";
   return undefined;
 }
 

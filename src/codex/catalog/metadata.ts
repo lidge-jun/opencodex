@@ -38,10 +38,12 @@ import type { RawEntry } from "./parsing";
 import { readCurrentCatalogOrCache, readCurrentCodexCatalog, readCurrentCodexModelsCache, unique } from "./bundled";
 import { trustedAccountBoundNativeCatalogSlug, visibleCodexAccountSelectors } from "./account-models";
 import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
+import { RESERVE_METADATA_SOURCE_FIELD } from "./reserve";
 import {
   ACCOUNT_GATED_NATIVE_OPENAI_MODELS,
   NATIVE_DAYBREAK_BLUE_MODEL,
   NATIVE_GPT6_ASTRA_MODEL,
+  NATIVE_RESERVE_MODEL,
   NATIVE_OPENAI_CAPABILITY_ALIAS_MODELS,
   NATIVE_OPENAI_MODELS,
   SELF_DESCRIBED_NATIVE_OPENAI_MODELS,
@@ -70,10 +72,7 @@ export {
 export const DOCUMENTED_NATIVE_OPENAI_ADDITIONS = [
   "gpt-5.3-codex-spark",
   "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
-  // Preemptive leak-based registration: no shipped codex-rs catalog carries it, so without this
-  // entry an install WITH a live catalog would drop the row that native-models.ts deliberately
-  // ungated. Listing it here keeps the bare slug reachable so a request actually dispatches and
-  // reports the upstream status.
+  // The shipped pin also backfills older installed Codex catalogs that predate Astra.
   NATIVE_GPT6_ASTRA_MODEL,
 ];
 
@@ -671,7 +670,7 @@ function isAccountBoundOpenAiNativeSlug(slug: string): boolean {
  * malformed and minimal hand-written rows. It cannot distinguish a genuine upstream observation
  * from a complete row typed by hand into `$CODEX_HOME/models_cache.json`: there is no signature,
  * source identity, or server attestation to check. A full-shape forged row is accepted, and
- * `observedFullShapeRowIsAccepted` in tests/native-model-toggle.test.ts pins that so nobody
+ * `observedFullShapeRowIsAccepted` in tests/codex-integration/native-model-toggle.test.ts pins that so nobody
  * later mistakes this predicate for a security boundary.
  *
  * That is acceptable here because the file is user-owned and written by Codex itself: anyone
@@ -700,12 +699,42 @@ function observedAccountBoundNativeSlug(entry: RawEntry): string | undefined {
   const accountBound = trustedAccountBoundNativeCatalogSlug(entry);
   const slug = accountBound ?? (typeof entry.slug === "string" ? entry.slug : "");
   if (!isAccountBoundOpenAiNativeSlug(slug)
-    || entry.supported_in_api !== true
+    || (entry.supported_in_api !== true && !(slug === NATIVE_RESERVE_MODEL && entry.supported_in_api === false))
+    || (slug === NATIVE_RESERVE_MODEL && entry[RESERVE_METADATA_SOURCE_FIELD] !== undefined
+      && entry[RESERVE_METADATA_SOURCE_FIELD] !== NATIVE_RESERVE_MODEL)
     || !hasNativeCatalogRowShape(entry)
-    || (entry.visibility !== "list" && entry[ACCOUNT_BOUND_OBSERVED_NATIVE_MARKER] !== true)) {
+    || (entry.visibility !== "list" && entry[ACCOUNT_BOUND_OBSERVED_NATIVE_MARKER] !== true
+      && !(slug === NATIVE_RESERVE_MODEL && entry.visibility === "hide"))) {
     return undefined;
   }
   return slug;
+}
+
+/** Prefer a genuine bare observation; an adapted OCX row must never become native evidence. */
+export function observedReserveCatalogSource(
+  entries: readonly RawEntry[],
+  mainSelectors: readonly string[],
+): RawEntry | null {
+  const actual = entries.filter(entry => observedAccountBoundNativeSlug(entry) === NATIVE_RESERVE_MODEL);
+  const bare = actual.find(entry => entry.slug === NATIVE_RESERVE_MODEL);
+  const qualified = actual.find(entry => entry[RESERVE_METADATA_SOURCE_FIELD] === NATIVE_RESERVE_MODEL
+    && typeof entry.slug === "string"
+    && mainSelectors.includes(entry.slug.slice(0, entry.slug.indexOf("/"))));
+  const selected = bare ?? qualified;
+  if (!selected) return null;
+  const source = structuredClone(selected);
+  if (!bare) {
+    const prefix = `${String(source.slug).split("/")[0]} / `;
+    if (typeof source.display_name === "string" && source.display_name.startsWith(prefix)) {
+      source.display_name = source.display_name.slice(prefix.length);
+    }
+  }
+  source.slug = NATIVE_RESERVE_MODEL;
+  delete source.opencodex_catalog_kind;
+  delete source[RESERVE_METADATA_SOURCE_FIELD];
+  delete source[ACCOUNT_BOUND_OBSERVED_NATIVE_MARKER];
+  delete source[ACCOUNT_BOUND_OBSERVED_SELECTORS_MARKER];
+  return source;
 }
 
 /**
@@ -748,7 +777,8 @@ export function accountBoundNativeOpenAiSlugs(
 ): string[] {
   const observed = observedEntries.flatMap(entry => {
     const slug = observedAccountBoundNativeSlug(entry);
-    return slug === undefined ? [] : [slug];
+    // Reserve belongs only to the Codex-specific opt-in builder, not generic native exports.
+    return slug === undefined || slug === NATIVE_RESERVE_MODEL ? [] : [slug];
   });
   return unique([...NATIVE_OPENAI_MODELS, ...observed]);
 }
@@ -775,7 +805,7 @@ export function accountBoundNativeOpenAiSlugsBySelector(
   );
   for (const entry of observedEntries) {
     const slug = observedAccountBoundNativeSlug(entry);
-    if (slug === undefined || SUPPORTED_NATIVE_OPENAI_SLUGS.has(slug)) continue;
+    if (slug === undefined || slug === NATIVE_RESERVE_MODEL || SUPPORTED_NATIVE_OPENAI_SLUGS.has(slug)) continue;
     const generated = trustedAccountBoundNativeCatalogSlug(entry);
     const generatedSelector = generated === undefined || typeof entry.slug !== "string"
       ? undefined
