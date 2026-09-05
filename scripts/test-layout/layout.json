@@ -484,6 +484,7 @@
     "compatibility-provider-equivalence.test.ts": "routing",
     "compatibility-version.test.ts": "ci-workflows",
     "config-load-degrade.test.ts": "config",
+    "config-initialize-if-missing.test.ts": "config",
     "config-mutation-lock.test.ts": "config",
     "config-ownership-uninstall.test.ts": "config",
     "config-rebase-provenance-writers.test.ts": "config",

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmodSync, constants as fsConstants, copyFileSync, existsSync, linkSync, mkdirSync, readFileSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants as fsConstants, copyFileSync, existsSync, fchmodSync, fstatSync, lstatSync, linkSync, mkdirSync, openSync, readFileSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Database } from "bun:sqlite";
 import * as z from "zod/v4";
@@ -106,9 +106,12 @@ import {
 } from "./lib/app-owned-memory";
 import { isHostedToolUnsupportedForModel } from "./responses/hosted-tool-policy";
 import {
+  AtomicWriteResidualTempError,
+  AtomicWriteSecretResidualError,
   atomicWriteFile,
   isMissingPathError,
   nextAtomicTempSequence,
+  resolveWriteTarget,
 } from "./config/atomic-write";
 export {
   AtomicWriteResidualTempError,
@@ -2991,6 +2994,211 @@ export const readConfigGeneration: ReadConfigGeneration = () => {
 
 export function observeConfigGeneration(): ConfigGenerationObservation {
   return observeConfigGenerationAtPath(join(getConfigDir(), CONFIG_MUTATION_DB_FILENAME));
+}
+
+export type PersistedConfigInitializationOutcome = "created" | "exists" | "invalid";
+
+export class PersistedConfigInitializationCleanupError extends Error {
+  constructor(options?: ErrorOptions) {
+    super("Initial config publication cleanup failed after rollback", options);
+    this.name = "PersistedConfigInitializationCleanupError";
+  }
+}
+
+export class PersistedConfigInitializationRollbackError extends Error {
+  constructor(options?: ErrorOptions) {
+    super("Initial config publication rollback failed", options);
+    this.name = "PersistedConfigInitializationRollbackError";
+  }
+}
+
+export class PersistedConfigInitializationHardLinkUnavailableError extends Error {
+  readonly code = "CONFIG_INITIALIZATION_HARDLINK_UNAVAILABLE";
+  constructor(options?: ErrorOptions) {
+    super("Initial config publication requires hard-link support; no-replace semantics unavailable", options);
+    this.name = "PersistedConfigInitializationHardLinkUnavailableError";
+  }
+}
+
+export interface PersistedConfigInitializationIO {
+  createExclusive(path: string): void;
+  write(path: string, bytes: string): void;
+  harden(path: string): void;
+  publishNoReplace(temp: string, target: string): void;
+  truncate(path: string): void;
+  unlink(path: string): void;
+  close?(): void;
+}
+
+let persistedConfigInitializationBeforePublishForTests: (() => void) | null = null;
+let persistedConfigInitializationAfterPublishForTests: (() => void) | null = null;
+
+export function setPersistedConfigInitializationBeforePublishForTests(hook: (() => void) | null): void {
+  persistedConfigInitializationBeforePublishForTests = hook;
+}
+export function setPersistedConfigInitializationAfterPublishForTests(hook: (() => void) | null): void {
+  persistedConfigInitializationAfterPublishForTests = hook;
+}
+
+function publishInitialConfigNoReplace(config: OcxConfig, io: PersistedConfigInitializationIO): boolean {
+  const configPath = getConfigPath();
+  const target = resolveWriteTarget(configPath);
+  assertNotRealHomeUnderTest(dirname(target));
+  const persisted = projectConfigRebaseProvenance(config);
+  const bytes = JSON.stringify(persisted, null, 2) + "\n";
+  const temp = `${target}.ocx.${process.pid}.${nextAtomicTempSequence()}.tmp`;
+  let staged = false;
+  let hardened = false;
+  let published = false;
+  let publicationAttempted = false;
+  let cleanupAttempted = false;
+
+  const scrubUnpublishedTemp = (cause?: unknown): void => {
+    cleanupAttempted = true;
+    io.close?.();
+    let scrubbed = false;
+    try { io.truncate(temp); scrubbed = true; }
+    catch (error) {
+      if (isMissingPathError(error)) scrubbed = true;
+      else { try { io.write(temp, ""); scrubbed = true; } catch { /* removal may still succeed */ } }
+    }
+    let removed = false;
+    try { io.unlink(temp); removed = true; }
+    catch (error) {
+      if (isMissingPathError(error)) removed = true;
+      else { try { io.unlink(temp); removed = true; } catch (retryError) { if (isMissingPathError(retryError)) removed = true; } }
+    }
+    if (removed) forgetEphemeralSecretPath(temp);
+    if (!removed && !scrubbed) throw new AtomicWriteSecretResidualError(temp, { cause });
+    if (!removed) throw new AtomicWriteResidualTempError(temp, hardened, { cause });
+  };
+
+  try {
+    io.createExclusive(temp); staged = true;
+    io.write(temp, bytes); io.harden(temp); hardened = true;
+    const hook = persistedConfigInitializationBeforePublishForTests;
+    persistedConfigInitializationBeforePublishForTests = null;
+    hook?.();
+    publicationAttempted = true;
+    try { io.publishNoReplace(temp, target); }
+    catch (cause) {
+      const code = cause && typeof cause === "object" && "code" in cause
+        ? String((cause as { code?: unknown }).code) : "";
+      if (code === "EOPNOTSUPP" || code === "EXDEV" || code === "EPERM") {
+        throw new PersistedConfigInitializationHardLinkUnavailableError({ cause });
+      }
+      if (!isAlreadyExistsError(cause)) throw cause;
+      scrubUnpublishedTemp(cause);
+      return false;
+    }
+    published = true;
+    try { io.unlink(temp); forgetEphemeralSecretPath(temp); }
+    catch (firstError) {
+      if (isMissingPathError(firstError)) forgetEphemeralSecretPath(temp);
+      else {
+        try { io.unlink(temp); forgetEphemeralSecretPath(temp); }
+        catch (secondError) {
+          if (isMissingPathError(secondError)) forgetEphemeralSecretPath(temp);
+          else {
+            let samePublishedInode = false;
+            try {
+              const stagedStat = lstatSync(temp);
+              const targetStat = lstatSync(target);
+              samePublishedInode = stagedStat.dev === targetStat.dev && stagedStat.ino === targetStat.ino;
+            } catch { /* leave target untouched when identity cannot be proven */ }
+            if (samePublishedInode) {
+              try { io.unlink(target); }
+              catch (cause) { throw new PersistedConfigInitializationRollbackError({ cause }); }
+            }
+            published = false;
+            scrubUnpublishedTemp(secondError);
+            throw new PersistedConfigInitializationCleanupError({ cause: secondError });
+          }
+        }
+      }
+    }
+    // Claim the config path only after no-replace publication and its identity
+    // checks have completed successfully. A losing initializer must not leave
+    // ownership metadata claiming a winner's file after an EEXIST collision.
+    recordOwnedConfigPath(getConfigDir(), configPath);
+    refreshUserCostOverlays(persisted);
+    return true;
+  } catch (cause) {
+    if (staged && (!published || publicationAttempted) && !cleanupAttempted) scrubUnpublishedTemp(cause);
+    throw cause;
+  }
+}
+
+function defaultPersistedConfigInitializationIO(configPath: string): PersistedConfigInitializationIO {
+  let descriptor: number | undefined;
+  return {
+    createExclusive: target => { descriptor = openSync(target, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL, 0o600); },
+    write: (target, bytes) => {
+      if (descriptor === undefined) writeFileSync(target, bytes);
+      else writeFileSync(descriptor, bytes, { encoding: "utf-8" });
+    },
+    harden: target => {
+      try {
+        if (descriptor === undefined) chmodSync(target, 0o600);
+        else if (process.platform !== "win32") fchmodSync(descriptor, 0o600);
+      } catch { /* platform may ignore chmod */ }
+      if (process.platform === "win32") hardenSecretPath(target, { required: true, timeoutMemoKey: configPath });
+    },
+    publishNoReplace: (temp, target) => {
+      if (descriptor !== undefined) {
+        const opened = fstatSync(descriptor);
+        const linked = lstatSync(temp);
+        if (opened.dev !== linked.dev || opened.ino !== linked.ino) {
+          closeSync(descriptor); descriptor = undefined;
+          throw new Error("atomic initialization temporary file identity changed before publication");
+        }
+      }
+      try {
+        linkSync(temp, target);
+        persistedConfigInitializationAfterPublishForTests?.();
+        persistedConfigInitializationAfterPublishForTests = null;
+        if (descriptor !== undefined) {
+          const published = lstatSync(target);
+          const opened = fstatSync(descriptor);
+          if (opened.dev !== published.dev || opened.ino !== published.ino) {
+            throw new Error("atomic initialization published target identity changed");
+          }
+        }
+      } catch (cause) {
+        const code = cause && typeof cause === "object" && "code" in cause
+          ? String((cause as { code?: unknown }).code) : "";
+        if (code === "EOPNOTSUPP" || code === "EXDEV" || code === "EPERM") {
+          throw new PersistedConfigInitializationHardLinkUnavailableError({ cause });
+        }
+        throw cause;
+      } finally {
+        if (descriptor !== undefined) { closeSync(descriptor); descriptor = undefined; }
+      }
+    },
+    truncate: target => truncateSync(target, 0),
+    unlink: unlinkSync,
+    close: () => { if (descriptor !== undefined) { closeSync(descriptor); descriptor = undefined; } },
+  };
+}
+
+export function initializePersistedConfigIfMissing(
+  config: OcxConfig,
+  io = defaultPersistedConfigInitializationIO(getConfigPath()),
+): PersistedConfigInitializationOutcome {
+  assertNotRealHomeUnderTest(getConfigDir());
+  return withConfigMutationLockSync(() => {
+    const snapshot = readConfigFileSnapshot();
+    if (snapshot.diagnostics.source === "file") return "exists";
+    if (snapshot.diagnostics.source !== "default") return "invalid";
+    const projected = projectCustomModelCatalogMigration(readRawConfigJson(), projectConfigRebaseProvenance(config));
+    if (!publishInitialConfigNoReplace(projected, io)) {
+      const winner = readConfigFileSnapshot();
+      return winner.diagnostics.source === "file" ? "exists" : "invalid";
+    }
+    bumpGenerationForCooperatingConfigWrite();
+    adoptCustomModelCatalogMigration(config, projected);
+    return "created";
+  });
 }
 
 /**
