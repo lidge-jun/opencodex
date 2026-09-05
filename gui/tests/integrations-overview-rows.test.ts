@@ -5,6 +5,7 @@ import {
   type OverviewSources,
 } from "../src/pages/integrations/overview-clients";
 import type { IntegrationStatus } from "../src/pages/integrations/integration-api";
+import type { NativeStatus } from "../src/pages/integrations/native-api";
 
 /**
  * The overview's whole job is to not lie about what is applied, so these tests
@@ -21,6 +22,18 @@ function fileStatus(overrides: Partial<IntegrationStatus> = {}): IntegrationStat
     configPath: "/tmp/home/.hermes/config.yaml",
     snapshotCount: 0,
     retentionDegraded: false,
+    ...overrides,
+  };
+}
+
+function codexNative(overrides: Partial<NativeStatus> = {}): NativeStatus {
+  return {
+    clientId: "codex",
+    state: "current",
+    installed: true,
+    configPath: "/tmp/codex/config.toml",
+    desiredEnabled: true,
+    disableBlocked: null,
     ...overrides,
   };
 }
@@ -64,21 +77,59 @@ test("Codex reads routingInjected, not status", () => {
   // `protected` is about surviving a reboot. With no injected routing the
   // proxy is not in Codex's path, and the card must say so.
   const notInjected = buildOverviewRows(
-    sources({ codex: { routingInjected: false, status: "protected" } }),
+    sources({ codex: { routingInjected: false, status: "protected" }, native: [codexNative()] }),
   );
   expect(rowById(notInjected, "codex").state).toBe("absent");
   expect(rowById(notInjected, "codex").applied).toBe(false);
 
   const injected = buildOverviewRows(
-    sources({ codex: { routingInjected: true, status: "at-risk" } }),
+    sources({ codex: { routingInjected: true, status: "at-risk" }, native: [codexNative()] }),
   );
   expect(rowById(injected, "codex").state).toBe("current");
   expect(rowById(injected, "codex").applied).toBe(true);
 
   const broken = buildOverviewRows(
-    sources({ codex: { routingInjected: true, status: "error" } }),
+    sources({ codex: { routingInjected: true, status: "error" }, native: [codexNative()] }),
   );
   expect(rowById(broken, "codex").state).toBe("stale");
+});
+
+test("Codex keeps desired switch state separate from observed routing", () => {
+  const cleanupPending = buildOverviewRows(sources({
+    codex: { routingInjected: true, status: "native" },
+    native: [{
+      clientId: "codex",
+      state: "absent",
+      installed: true,
+      configPath: "/live/codex/config.toml",
+      desiredEnabled: false,
+      disableBlocked: null,
+    }],
+  }));
+  expect(rowById(cleanupPending, "codex")).toMatchObject({
+    state: "current",
+    applied: true,
+    installed: true,
+    toggleOn: false,
+    togglePath: "/live/codex/config.toml",
+  });
+
+  const disabled = buildOverviewRows(sources({
+    codex: { routingInjected: false, status: "native" },
+    native: [{
+      clientId: "codex",
+      state: "absent",
+      installed: true,
+      configPath: "/live/codex/config.toml",
+      desiredEnabled: false,
+      disableBlocked: null,
+    }],
+  }));
+  expect(rowById(disabled, "codex")).toMatchObject({
+    state: "absent",
+    applied: false,
+    toggleOn: false,
+  });
 });
 
 test("Claude Desktop: applied but not the served profile reads as stale", () => {
@@ -191,6 +242,13 @@ test("every client counts toward the summary, not just the file clients", () => 
     claude: { enabled: true },
     claudeDesktop: { desiredEnabled: true, installed: true, applied: true, stale: true, activeProfile: true },
     native: [{
+      clientId: "codex",
+      state: "current",
+      installed: true,
+      configPath: "/tmp/codex/config.toml",
+      desiredEnabled: true,
+      disableBlocked: null,
+    }, {
       clientId: "claude-desktop",
       state: "current",
       installed: true,
