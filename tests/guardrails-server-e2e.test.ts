@@ -344,6 +344,94 @@ test("Guardrails masks and demasks a real client-facing Responses WebSocket turn
   }
 });
 
+test("Guardrails never restores secrets into a client-facing WebSocket failure envelope", async () => {
+  const secret = "sk_live_abcdefghijklmnopqrstuvwx";
+  let upstreamBody = "";
+  let proxy: ReturnType<typeof startServer> | null = null;
+  const upstream = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      upstreamBody = await request.text();
+      const failed = {
+        type: "response.failed",
+        response: {
+          id: "resp-guardrails-client-ws-failed",
+          object: "response",
+          status: "failed",
+          output: [{
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "hidden <STRIPE_ACCESS_TOKEN_1>" }],
+          }],
+          error: { message: "provider rejected <STRIPE_ACCESS_TOKEN_1>" },
+        },
+      };
+      return new Response(
+        `event: response.failed\ndata: ${JSON.stringify(failed)}\n\n`,
+        { headers: { "content-type": "text/event-stream" } },
+      );
+    },
+  });
+  try {
+    saveConfig({
+      port: 0,
+      websockets: true,
+      defaultProvider: "mock",
+      providers: {
+        mock: {
+          adapter: "openai-responses",
+          authMode: "key",
+          apiKey: "test-only-key",
+          baseUrl: upstream.url.toString().replace(/\/$/, ""),
+          responsesPath: "/responses",
+          allowPrivateNetwork: true,
+        },
+      },
+      guardrails: { enabled: true, mode: "enforce", failurePolicy: "block" },
+    } as OcxConfig);
+    proxy = startServer(0);
+    const url = new URL("/v1/responses", proxy.url);
+    url.protocol = "ws:";
+    const frames = await new Promise<string[]>((resolve, reject) => {
+      const received: string[] = [];
+      const socket = new WebSocket(url);
+      const timer = setTimeout(() => {
+        socket.close();
+        reject(new Error("Guardrails failed WebSocket timeout"));
+      }, 5_000);
+      socket.addEventListener("open", () => {
+        socket.send(JSON.stringify({
+          type: "response.create",
+          model: "mock/test-model",
+          input: secret,
+        }));
+      }, { once: true });
+      socket.addEventListener("message", event => {
+        const frame = typeof event.data === "string" ? event.data : "";
+        received.push(frame);
+        if (!frame.includes('"type":"response.failed"')) return;
+        clearTimeout(timer);
+        socket.close();
+        resolve(received);
+      });
+      socket.addEventListener("error", () => {
+        clearTimeout(timer);
+        reject(new Error("Guardrails failed client WebSocket failed"));
+      }, { once: true });
+    });
+    const wire = frames.join("\n");
+
+    expect(upstreamBody).toContain("<STRIPE_ACCESS_TOKEN_1>");
+    expect(upstreamBody).not.toContain(secret);
+    expect(wire).toContain("<STRIPE_ACCESS_TOKEN_1>");
+    expect(wire).not.toContain(secret);
+  } finally {
+    await proxy?.stop(true);
+    upstream.stop(true);
+  }
+});
+
 test("Guardrails masks native Responses input_file names and preserves file bytes", async () => {
   const secret = "sk_live_abcdefghijklmnopqrstuvwx";
   const fileData = "ZmlsZQ==";

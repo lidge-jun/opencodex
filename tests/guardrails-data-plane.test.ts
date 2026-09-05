@@ -1082,6 +1082,46 @@ test("Guardrails demasks terminal Responses SSE prose but preserves executable p
     .toBe(`{"token":"${PLACEHOLDER}"}`);
 });
 
+test("Guardrails leaves non-success SSE envelopes masked and byte-identical", async () => {
+  const secret = "sk_live_abcdefghijklmnopqrstuvwx";
+  const prepared = await prepareGuardrailsTurn(config(), "responses", { input: secret });
+  const rewrite = guardrailsSseDemaskRewrite(
+    prepared.turn!.state,
+    payload => demaskGuardrailsJsonPayload(payload, prepared.turn!),
+  );
+  const output = [{
+    type: "response.failed",
+    response: {
+      status: "failed",
+      output: [{
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: `hidden ${PLACEHOLDER}` }],
+      }],
+    },
+  }, {
+    type: "response.incomplete",
+    response: {
+      status: "incomplete",
+      output: [{
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: `hidden ${PLACEHOLDER}` }],
+      }],
+    },
+  }, {
+    type: "error",
+    error: { message: `hidden ${PLACEHOLDER}` },
+  }].map(payload => {
+    const frame = `event: ${payload.type}\ndata: ${JSON.stringify(payload)}\n\n`;
+    expect(rewrite(frame)).toEqual([frame]);
+    return frame;
+  }).join("");
+
+  expect(output).toContain(PLACEHOLDER);
+  expect(output).not.toContain(secret);
+});
+
 test("one Responses done event does not flush another stream's pending placeholder", async () => {
   const secret = "sk_live_abcdefghijklmnopqrstuvwx";
   const prepared = await prepareGuardrailsTurn(config(), "responses", { input: secret });
@@ -1219,6 +1259,33 @@ test("Guardrails restores assistant text but never executable function-call argu
   expect(parsed.output[1]?.arguments).toBe('{"token":"<STRIPE_ACCESS_TOKEN_1>"}');
   expect(payload).not.toContain(`{"token":"${secret}"}`);
   expect(skipped).toBe(1);
+});
+
+test("Guardrails never restores provider-controlled non-success response envelopes", async () => {
+  const secret = "sk_live_abcdefghijklmnopqrstuvwx";
+  const prepared = await prepareGuardrailsTurn(config(), "responses", { input: secret });
+  const assistantOutput = [{
+    type: "message",
+    role: "assistant",
+    content: [{ type: "output_text", text: `hidden ${PLACEHOLDER}` }],
+  }];
+  const payloads = [
+    { type: "response.failed", response: { status: "failed", output: assistantOutput } },
+    { type: "response.incomplete", response: { status: "incomplete", output: assistantOutput } },
+    { type: "error", response: { status: "failed", output: assistantOutput } },
+    { type: "response.done", response: { status: "cancelled", output: assistantOutput } },
+    { object: "response", status: "failed", output: assistantOutput },
+    { object: "response", error: { message: `hidden ${PLACEHOLDER}` }, output: assistantOutput },
+    { object: "response", last_error: `hidden ${PLACEHOLDER}`, output: assistantOutput },
+  ];
+
+  for (const value of payloads) {
+    const payload = JSON.stringify(value);
+    const rewritten = demaskGuardrailsJsonPayload(payload, prepared.turn!);
+    expect(rewritten).toBe(payload);
+    expect(rewritten).toContain(PLACEHOLDER);
+    expect(rewritten).not.toContain(secret);
+  }
 });
 
 test("Guardrails never restores Responses prose attributed to a non-assistant role", async () => {
