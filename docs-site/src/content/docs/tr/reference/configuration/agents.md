@@ -122,7 +122,9 @@ görevlerinde zincir, kurallı yerel ChatGPT hedefleriyle ve
 `allowEncryptedV2AgentTasks: true` kullanılarak açıkça güvenilen doğrudan anahtar
 kimlik doğrulamalı Responses rotalarıyla sınırlıdır. Hiçbiri şifrelenmiş yükü
 işleyemezse istek, okunamayan şifreli metni başka bir yere yönlendirmek yerine
-başarısız olur. Kombolar yalnızca kurallı yerel hedefleri kullanmaya devam eder.
+başarısız olur. Kombo önce kullanılabilir kurallı yerel hedefi dener; seçilebilir
+yerel hedef kalmazsa ve `agentTaskRecovery` etkinse, şifrelenmiş `NEW_TASK` yönlendirilen
+kombo gönderiminden önce bir kez kurtarılır.
 
 ```json
 {

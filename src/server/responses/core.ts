@@ -2404,22 +2404,10 @@ export async function handleComboResponses(
   let comboPayloadReadable = false;
   const payloadEligible = (target: (typeof combo.targets)[number]): boolean =>
     comboPayloadReadable || !unreadableEncryptedAgentTask || canDecryptUnreadableAgentTask(target);
-  const initialNow = Date.now();
-  const pickWithWait = (pickOptions: {
-    exclude?: Iterable<string>;
-    eligible?: (target: NonNullable<typeof combo>["targets"][number]) => boolean;
-    now?: number;
-  }) => pickComboTargetWithWait(config, comboId, {
-    ...pickOptions,
-    waitForCooldownMs: combo.waitForCooldownMs,
-    abortSignal: options.abortSignal,
-  });
-  let pick = await pickWithWait({
-    eligible: payloadEligible,
-    now: initialNow,
-  });
-
-  if (unreadableEncryptedAgentTask && !pick) {
+  let encryptedTaskRecoveryAttempted = false;
+  const recoverUnreadableEncryptedTask = async (): Promise<boolean> => {
+    if (encryptedTaskRecoveryAttempted) return false;
+    encryptedTaskRecoveryAttempted = true;
     const recovery = agentTaskRecoveryConfig(config);
     if (
       (options.inboundWire ?? "responses") !== "responses"
@@ -2433,19 +2421,7 @@ export async function handleComboResponses(
         config,
         { parentThreadId: inboundClientThreadId },
       );
-      return unreadableEncryptedAgentTaskResponse();
-    }
-    pick = await pickWithWait({ now: initialNow });
-    if (!pick) {
-      discardEncryptedAgentTaskRecovery(
-        req,
-        (body as { input?: unknown } | undefined)?.input,
-        config,
-        { parentThreadId: inboundClientThreadId },
-      );
-      return options.abortSignal?.aborted
-        ? clientCancelledResponse()
-        : comboUnavailable(comboId);
+      return false;
     }
     let recovered = false;
     try {
@@ -2470,10 +2446,43 @@ export async function handleComboResponses(
         config,
         { parentThreadId: inboundClientThreadId },
       );
-      return unreadableEncryptedAgentTaskResponse();
+      return false;
     }
     comboPayloadReadable = true;
     comboReplaySnapshot.recoveredPlaintext = true;
+    return true;
+  };
+  const initialNow = Date.now();
+  const pickWithWait = (pickOptions: {
+    exclude?: Iterable<string>;
+    eligible?: (target: NonNullable<typeof combo>["targets"][number]) => boolean;
+    now?: number;
+  }) => pickComboTargetWithWait(config, comboId, {
+    ...pickOptions,
+    waitForCooldownMs: combo.waitForCooldownMs,
+    abortSignal: options.abortSignal,
+  });
+  let pick = await pickWithWait({
+    eligible: payloadEligible,
+    now: initialNow,
+  });
+
+  if (unreadableEncryptedAgentTask && !pick) {
+    pick = await pickWithWait({ now: initialNow });
+    if (!pick) {
+      discardEncryptedAgentTaskRecovery(
+        req,
+        (body as { input?: unknown } | undefined)?.input,
+        config,
+        { parentThreadId: inboundClientThreadId },
+      );
+      return options.abortSignal?.aborted
+        ? clientCancelledResponse()
+        : comboUnavailable(comboId);
+    }
+    if (!(await recoverUnreadableEncryptedTask())) {
+      return unreadableEncryptedAgentTaskResponse();
+    }
   }
 
   if (!pick) {
@@ -2684,6 +2693,7 @@ export async function handleComboResponses(
       `[combo] ${comboId}: ${targetKey(pick.target)} failed with ${failure.response.status} after ${Date.now() - started}ms`,
     );
     const failureNow = Date.now();
+    const attemptedTargets = pick.attempted;
     const nextPick = advanceComboAfterFailure(config, pick, {
       retryAfter: failure.retryAfter,
       resetAt: failure.resetAt,
@@ -2708,6 +2718,16 @@ export async function handleComboResponses(
     }
     if (!pick) {
       if (options.abortSignal?.aborted) return clientCancelledResponse();
+      if (unreadableEncryptedAgentTask && !comboPayloadReadable) {
+        const recoveredTarget = await pickWithWait({
+          exclude: attemptedTargets,
+          now: failureNow,
+        });
+        if (recoveredTarget && await recoverUnreadableEncryptedTask()) {
+          pick = recoveredTarget;
+          continue;
+        }
+      }
       adoptFailedChildLog(childLog);
     }
   }

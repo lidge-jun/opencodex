@@ -239,6 +239,46 @@ describe("combo path encrypted agent task recovery", () => {
     expect(responseContinuationRetainedStoreSnapshot().count).toBe(0);
   });
 
+  test("recovers once when the selected native target fails model authorization", async () => {
+    const config = comboConfig([
+      { provider: "openai", model: "gpt-5.5" },
+      { provider: "xai", model: "grok-4.5" },
+    ]);
+    const assignment = "RECOVERED-AFTER-NATIVE-401";
+    const chatgptBodies: string[] = [];
+    const forwardedBodies: string[] = [];
+    globalThis.fetch = (async (input, init) => {
+      const body = typeof init?.body === "string" ? init.body : "";
+      if (String(input).includes("chatgpt.com")) {
+        chatgptBodies.push(body);
+        if (body.includes("capture_assignment")) {
+          return new Response(recoverySse(assignment), {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          });
+        }
+        return Response.json(
+          { error: { message: "model is not enabled for this account", code: "model_not_found" } },
+          { status: 401 },
+        );
+      }
+      forwardedBodies.push(body);
+      return providerCompletion();
+    }) as typeof fetch;
+
+    const response = await post(config, "combo/routed", encryptedInput(), codexHeaders());
+    await response.text();
+
+    expect(response.status).toBe(200);
+    expect(chatgptBodies).toHaveLength(2);
+    expect(chatgptBodies[0]).not.toContain("capture_assignment");
+    expect(chatgptBodies[1]).toContain("capture_assignment");
+    expect(forwardedBodies).toHaveLength(1);
+    expect(forwardedBodies[0]).toContain(assignment);
+    expect(forwardedBodies[0]).not.toContain(FERNET_TASK);
+    expect(responseContinuationRetainedStoreSnapshot().count).toBe(0);
+  });
+
   test("does not recover when every mixed-combo target is unavailable", async () => {
     const config = comboConfig([
       { provider: "xai", model: "grok-4.5" },
