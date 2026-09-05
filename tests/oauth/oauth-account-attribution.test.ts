@@ -1,10 +1,12 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { oauthAccountLogLabel, ACCOUNT_LOG_LABEL_RE } from "../../src/codex/account-label";
 import { getAccountSet, saveCredential } from "../../src/oauth/store";
 import { clearGenericFailoverHealth } from "../../src/oauth/generic-account-failover";
+import * as accountFailover from "../../src/oauth/generic-account-failover";
+import * as oauth from "../../src/oauth";
 import { stampOAuthAccountLabel } from "../../src/providers/label";
 import { isCodexUsageAccountLogLabel, isCodexPoolAccountLogLabel } from "../../src/usage/log";
 import type { PersistedUsageEntry } from "../../src/usage/log";
@@ -37,21 +39,25 @@ function oauthConfig(): OcxConfig {
   } as OcxConfig;
 }
 
-function request(): Request {
+function request(stream = false): Request {
   return new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ model: "grok-4.6", input: "hello", stream: false }),
+    body: JSON.stringify({ model: "grok-4.6", input: "hello", stream }),
   });
 }
 
-function completed(): Response {
-  return Response.json({
+function completed(stream = false): Response {
+  const response = {
     id: "resp_attrib",
     status: "completed",
     output: [],
     usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
-  });
+  };
+  return stream
+    ? new Response(`event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response })}\n\n`, {
+      headers: { "content-type": "text/event-stream" },
+    }) : Response.json(response);
 }
 
 async function withHome<T>(run: (home: string) => Promise<T>): Promise<T> {
@@ -74,6 +80,7 @@ async function withHome<T>(run: (home: string) => Promise<T>): Promise<T> {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  clearGenericFailoverHealth();
 });
 
 describe("the label families", () => {
@@ -201,7 +208,7 @@ describe("Responses per-account attribution for non-Codex OAuth", () => {
    * one that hit the 429. All three rotation sites in `core.ts` funnel through
    * `applyFailoverSnapshot`, so the re-stamp lives there -- one edit covering all three.
    */
-  test("a rotated request is attributed to the account that actually served it", async () => {
+  test.each([false, true])("a rotated request is attributed to the account that actually served it (stream=%s)", async stream => {
     await withHome(async () => {
       clearGenericFailoverHealth();
       for (const i of [1, 2]) {
@@ -222,15 +229,16 @@ describe("Responses per-account attribution for non-Codex OAuth", () => {
         if (bearers.length === 1) {
           return Response.json({ error: { message: "rate limited" } }, { status: 429, headers: { "retry-after": "42" } });
         }
-        return completed();
+        return completed(stream);
       }) as typeof fetch;
 
       const logCtx: RequestLogContext = { model: "", provider: "" };
-      const response = await handleResponses(request(), oauthConfig(), logCtx, {});
+      const response = await handleResponses(request(stream), oauthConfig(), logCtx, {});
 
       // Two accounts present and no explicit knob is the presence-consent case (#2568d), so the
       // rotation happens without configuration.
       expect(response.status).toBe(200);
+      await response.text();
       expect(bearers).toHaveLength(2);
       expect(bearers[0]).not.toBe(bearers[1]);
 
@@ -247,6 +255,80 @@ describe("Responses per-account attribution for non-Codex OAuth", () => {
       expect(logCtx.accountLogLabel).toBe(oauthAccountLogLabel(servedId!, "xai"));
       expect(logCtx.accountLogLabel).not.toBe(oauthAccountLogLabel(failedId!, "xai"));
       clearGenericFailoverHealth();
+    });
+  });
+
+  test.each([[1, 1], [5, 4]])("native Responses with %i accounts stays within %i sends on repeated 429", async (accounts, expectedSends) => {
+    await withHome(async () => {
+      clearGenericFailoverHealth();
+      for (let index = 0; index < accounts; index++) {
+        await saveCredential("xai", {
+          access: `bounded-access-${index}`, refresh: `bounded-refresh-${index}`,
+          expires: Date.now() + 3_600_000, accountId: `bounded-${index}`, source: "local-cli",
+        }, { addAccount: true } as never);
+      }
+      let sends = 0;
+      globalThis.fetch = (async () => {
+        sends++;
+        return Response.json({ error: { message: "rate limited" } }, { status: 429, headers: { "retry-after": "42" } });
+      }) as typeof fetch;
+      const response = await handleResponses(request(), oauthConfig(), { model: "", provider: "" }, {});
+      expect(response.status).toBe(429);
+      expect(await response.text()).toContain("rate limited");
+      expect(sends).toBe(expectedSends);
+      clearGenericFailoverHealth();
+    });
+  });
+
+  test("native rotation keeps the original 429 readable when the alternate snapshot fails", async () => {
+    await withHome(async () => {
+      for (const i of [1, 2]) await saveCredential("xai", {
+        access: `snapshot-access-${i}`, refresh: `snapshot-refresh-${i}`,
+        expires: Date.now() + 3_600_000, accountId: `snapshot-${i}`, source: "local-cli",
+      }, { addAccount: true } as never);
+      const snapshot = spyOn(accountFailover, "failoverAccountSnapshot").mockRejectedValue(new Error("snapshot unavailable"));
+      let sends = 0;
+      globalThis.fetch = (async () => {
+        sends++;
+        return Response.json({ error: { message: "original rate limit" } }, { status: 429 });
+      }) as typeof fetch;
+      try {
+        const response = await handleResponses(request(), oauthConfig(), { model: "", provider: "" }, {});
+        expect(response.status).toBe(429);
+        expect(await response.text()).toContain("original rate limit");
+        expect(sends).toBe(1);
+        expect(snapshot).toHaveBeenCalledTimes(1);
+      } finally { snapshot.mockRestore(); }
+    });
+  });
+
+  test("a 429 then 401 refreshes the newly selected OAuth account, not the failed one", async () => {
+    await withHome(async () => {
+      for (const i of [1, 2]) await saveCredential("xai", {
+        access: `refresh-access-${i}`, refresh: `refresh-token-${i}`,
+        expires: Date.now() + 3_600_000, accountId: `refresh-${i}`, source: "local-cli",
+      }, { addAccount: true } as never);
+      let refreshedId: string | undefined;
+      const refresh = spyOn(oauth, "forceRefreshOAuthAccessSnapshot").mockImplementation(async snapshot => {
+        refreshedId = snapshot.accountId;
+        return { ...snapshot, accessToken: "refreshed-selected-account" };
+      });
+      const bearers: string[] = [];
+      globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        bearers.push(new Headers(init?.headers).get("authorization") ?? "");
+        const status = bearers.length === 1 ? 429 : bearers.length === 2 ? 401 : 200;
+        return status === 200 ? completed() : Response.json({ error: "retry" }, { status });
+      }) as typeof fetch;
+      try {
+        const logCtx: RequestLogContext = { model: "", provider: "" };
+        const response = await handleResponses(request(), oauthConfig(), logCtx, {});
+        expect(response.status).toBe(200);
+        expect(bearers).toHaveLength(3);
+        expect(bearers[2]).toBe("Bearer refreshed-selected-account");
+        const selected = getAccountSet("xai")!.accounts.find(account => bearers[1]!.includes(account.credential.access));
+        expect(refreshedId).toBe(selected?.id);
+        expect(logCtx.accountLogLabel).toBe(oauthAccountLogLabel(selected!.id, "xai"));
+      } finally { refresh.mockRestore(); }
     });
   });
 });

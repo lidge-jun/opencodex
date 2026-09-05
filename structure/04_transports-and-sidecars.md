@@ -304,6 +304,11 @@ to the Grok CLI gateway even if its saved base URL differs; custom provider IDs 
 default. API-key requests, translated Chat/Anthropic defaults and other Grok models retain their
 existing wire and tier policy. OAuth still drops caller-owned `service_tier` on either wire.
 
+Native Responses participates in the same pre-stream OAuth HTTP-429 account rotation as the Chat
+bridge. It uses the existing account quorum, cooldown and three-rotation request cap, refreshes
+the complete credential/transport/replay identity, and attributes usage to the serving account.
+Single-account installs do not retry; a missing alternate credential preserves the original error.
+
 Startup removes legacy Grok 4.5/4.6 Chat overrides once and persists the provider-owned
 `xaiResponsesDefaultVersion` marker. Later explicit Chat choices survive restarts. The migration
 rebases under the config mutation lock; unavailable persistence warns and uses an isolated in-memory

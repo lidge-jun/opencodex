@@ -304,11 +304,9 @@ describe("sidecar on429 wiring", () => {
     // bearer by hand would reintroduce the mixed-identity bug this helper exists to prevent.
     const snapshotUses = coreSource.match(/failoverAccountSnapshot\(/g) ?? [];
     const helperUses = coreSource.match(/applyFailoverSnapshot\(snapshot(?:, nextParsed)?\)/g) ?? [];
-    // Four since the continuation loop gained its own generic-OAuth arm: the streaming loop grew
-    // one with #2568 and the continuation loop did not, so an xAI/Cursor continuation 429 stayed
-    // terminal. Bumping this count is the deliberate act of admitting a fourth rotation site --
-    // which is exactly why the guard is a count and not a floor.
-    expect(snapshotUses.length).toBe(4);
+    // Five includes native Responses passthrough, which returns before the Chat bridge loop.
+    // The explicit count keeps a newly added rotation site from skipping identity pairing.
+    expect(snapshotUses.length).toBe(5);
     expect(helperUses.length).toBe(snapshotUses.length);
     // The bearer is written in exactly one place — inside the helper. Any other occurrence is a
     // rotation site that skipped the pairing rules.
@@ -339,7 +337,9 @@ describe("sidecar on429 wiring", () => {
     // The counts differ by rotator because the recovery sites differ, and each number is a
     // statement about which providers can recover where:
     //
-    //   generic  = 4: streaming loop, continuation loop, sidecar hook, runTurn preflight.
+    //   generic  = 5: streaming loop, continuation loop, sidecar hook, runTurn preflight,
+    //                native Responses passthrough. The new default only moves OAuth traffic;
+    //                key-auth defaults and Anthropic's own wire/pool remain unchanged.
     //   anthropic = 3: the same, MINUS runTurn -- that path is Cursor-only (cursor.ts is the
     //                  sole adapter implementing runTurn), so Anthropic cannot reach it.
     //   key       = 3: hasKeyPoolFailover guards the two 429 response loops plus the
@@ -349,7 +349,7 @@ describe("sidecar on429 wiring", () => {
     //
     // Adding a fifth recovery site means deciding, deliberately, which rotators it needs and
     // updating the matching number. That decision is the thing this test exists to force.
-    expect(counts.generic).toBe(4);
+    expect(counts.generic).toBe(5);
     expect(counts.anthropic).toBe(3);
     expect(counts.key).toBe(3);
   });

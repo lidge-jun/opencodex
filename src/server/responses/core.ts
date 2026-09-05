@@ -4644,6 +4644,43 @@ async function handleResponsesInner(
       }
     }
 
+    // Native Responses returns before the generic adapter's OAuth rotation loop. Keep
+    // the same quorum, cooldown and request budget here, before any client bytes flow.
+    if (
+      upstreamResponse.status === 429
+      && genericFailoverAccountId
+      && genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
+      && isGenericOAuthFailoverEnabled(config, route.providerName)
+    ) {
+      const nextAccountId = rotateGenericOAuthAccountOn429(
+        config, route.providerName, genericFailoverAccountId,
+        upstreamResponse.headers.get("retry-after"),
+      );
+      let snapshot: OAuthAccessSnapshot | undefined;
+      if (nextAccountId) {
+        try { snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId); }
+        catch { /* Keep the original 429 body readable when the next credential is unavailable. */ }
+      }
+      if (snapshot && applyFailoverSnapshot(snapshot)) {
+        genericFailoverAccountId = snapshot.accountId;
+        genericFailovers += 1;
+        sentOAuthSnapshot = snapshot;
+        replayOAuthCredentialSnapshot = { accountId: snapshot.accountId, generation: snapshot.generation };
+        route.provider = resolveProviderTransport(
+          route.providerName, route.provider, parsed.options.promptCacheKey, snapshot.apiBaseUrl,
+        );
+        bindRouteReasoningReplayScope({
+          parsed, providerName: route.providerName, provider: route.provider,
+          adapterName: "openai-responses", oauthCredentialSnapshot: replayOAuthCredentialSnapshot,
+        });
+        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already closed */ }
+        const result = await rebuildAndRefetch("oauth-account-429");
+        if ("failed" in result) return result.failed;
+        upstreamResponse = result;
+        continue passthroughRecovery;
+      }
+    }
+
     // Same-target 429 wait-and-retry (opt-in `retryOn429`) for key-auth providers on the
     // passthrough wire. This branch returns before the recovery loop below, so Responses-shaped
     // key-auth gateways (e.g. the built-in DeepSeek preset) would otherwise surface 429
