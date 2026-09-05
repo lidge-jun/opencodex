@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { applyFullModelPickerOrder, deriveEntry, mergeCatalogEntriesForSync, SPAWN_PRIORITY_FIELD } from "../../src/codex/catalog/sync";
+import { buildCatalogEntriesFromObservedState, mergeCatalogEntriesFromObservedState, CANONICAL_NATIVE_CATALOG_CONTENT_POLICY, applyFullModelPickerOrder, deriveEntry, mergeCatalogEntriesForSync, SPAWN_PRIORITY_FIELD } from "../../src/codex/catalog/sync";
 
 test("native-first picker order preserves Go subagent ranks and is repeatable", () => {
   const rows: any[] = [
@@ -49,4 +49,43 @@ test("bare native ids and routed slugs match exactly, without suffix aliases", (
   applyFullModelPickerOrder(rows, ["gpt-5.6-sol", "openai/gpt-5.6-sol"]);
   expect(rows.map(row => row.priority)).toEqual([1, 0, 5]);
   expect(rows.map(row => row[SPAWN_PRIORITY_FIELD])).toEqual([2, 9, 3]);
+});
+
+test.each([
+  { order: [] as string[] },
+  { order: ["opencode-go/glm-5.3"] },
+  { order: ["other/model", "opencode-go/glm-5.3"] },
+])("degraded discovery clears previous full ordering for %j", ({ order }) => {
+  for (const accountSelectors of [[], ["account-a", "account-b"]]) {
+    const slug = "opencode-go/glm-5.3";
+    const fresh = (modelPickerOrder: string[]) => buildCatalogEntriesFromObservedState({
+      template: null, gptSlugs: [],
+      goModels: [{ id: "glm-5.3", provider: "opencode-go", name: "GLM 5.3", reasoningEfforts: ["high", "max"] }],
+      featured: [], modelPickerOrder, wsEnabled: false, multiAgentMode: "default",
+      exactComboSlugs: new Set(), accountSelectors, suppressedBareNativeSlugs: new Set(),
+      disabledNativeAccountSlugs: new Set(), multiAgentV2Enabled: false,
+    });
+    const merge = (catalogModels: Record<string, unknown>[], routedEntries: Record<string, unknown>[], modelPickerOrder: string[], degraded: boolean) =>
+      mergeCatalogEntriesFromObservedState({
+        catalogModels, routedEntries, modelPickerOrder, accountSelectors,
+        baselineCatalogModels: [], baseline: new Map(), featured: [], wsEnabled: false,
+        template: null, disabledModels: new Set(), selectedModelsByProvider: new Map(),
+        gatheredProviderNames: new Set(["opencode-go"]),
+        degradedProviderNames: new Set(degraded ? ["opencode-go"] : []),
+        legacyCustomModelSlugs: new Set(), multiAgentMode: "default", multiAgentV2Enabled: false,
+        exactComboSlugs: new Set(), hasPhysicalComboProvider: false, includeNativeOpenAi: true,
+        accountBoundEntries: [],
+        policy: { ...CANONICAL_NATIVE_CATALOG_CONTENT_POLICY, warningPolicy: "silent" },
+      });
+    const fullOrder = ["gpt-5.6-sol", slug];
+    const previous = merge([], fresh(fullOrder), fullOrder, false);
+    const saved = structuredClone(previous);
+    const healthy = merge(previous, fresh(order), order, false);
+    const degraded = merge(previous, [], order, true);
+    const row = (entries: Record<string, unknown>[]) => entries.find(entry => entry.slug === slug)!;
+    expect(row(degraded).priority).toBe(row(healthy).priority);
+    expect(row(degraded)[SPAWN_PRIORITY_FIELD]).toBe(row(healthy)[SPAWN_PRIORITY_FIELD]);
+    expect(merge(degraded, [], order, true)).toEqual(degraded);
+    expect(previous).toEqual(saved);
+  }
 });
