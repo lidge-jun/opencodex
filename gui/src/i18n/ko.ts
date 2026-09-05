@@ -2597,6 +2597,8 @@ export const ko: Record<TKey, string> = {
   "guardrails.bulkEnable": "{count}개 활성화",
   "guardrails.bulkDisable": "{count}개 비활성화",
   "guardrails.export": "내보내기",
+  "guardrails.exported": "Guardrails 번들을 내보냈습니다.",
+  "guardrails.exportFailed": "Guardrails 번들을 내보내지 못했습니다.",
   "guardrails.import": "가져오기",
   "guardrails.importMode": "가져오기 모드",
   "guardrails.importMerge": "병합",

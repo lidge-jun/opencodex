@@ -37,6 +37,7 @@ let emptyRules = false;
 let holdOverview = false;
 let holdActivity = false;
 let importConflict = false;
+let failExport = false;
 let releaseOverview: (() => void) | null = null;
 let releaseActivity: (() => void) | null = null;
 const mutations: Array<{ body: unknown; ifMatch: string | null }> = [];
@@ -44,6 +45,7 @@ const activityRequests: string[] = [];
 const importRequests: Array<{ body: Record<string, unknown>; ifMatch: string | null }> = [];
 let overviewRequests = 0;
 let rulesRequests = 0;
+let exportRequests = 0;
 
 const telemetry = {
   counters: {
@@ -240,6 +242,12 @@ function installFetch() {
           } : {}),
         });
       }
+      if (url.pathname === "/api/guardrails/export" && method === "GET") {
+        exportRequests += 1;
+        return failExport
+          ? json({ error: "export unavailable" }, 503)
+          : json({ version: 1, settings: {}, customRules: [] });
+      }
       if (url.pathname === "/api/guardrails/activity" && method === "GET") {
         activityRequests.push(url.search);
         if (holdActivity) {
@@ -333,6 +341,7 @@ beforeEach(() => {
   holdOverview = false;
   holdActivity = false;
   importConflict = false;
+  failExport = false;
   releaseOverview = null;
   releaseActivity = null;
   mutations.splice(0, mutations.length);
@@ -340,6 +349,7 @@ beforeEach(() => {
   importRequests.splice(0, importRequests.length);
   overviewRequests = 0;
   rulesRequests = 0;
+  exportRequests = 0;
   installFetch();
 });
 
@@ -561,6 +571,28 @@ test("bulk disable requires consequence confirmation before mutating settings", 
   expect(document.activeElement).toBe(trigger);
 });
 
+test("Rules export uses the authenticated API client and downloads the returned bundle", async () => {
+  await mount();
+  await openTab("rules");
+  let downloadedFilename = "";
+  const preventNavigation = (event: Event) => {
+    const anchor = event.target;
+    if (!(anchor instanceof testWindow.HTMLAnchorElement)) return;
+    downloadedFilename = anchor.download;
+    event.preventDefault();
+  };
+  document.addEventListener("click", preventNavigation);
+
+  await act(async () => {
+    namedButton("Export").click();
+    await new Promise(resolve => setTimeout(resolve, 15));
+  });
+
+  document.removeEventListener("click", preventNavigation);
+  expect(exportRequests).toBe(1);
+  expect(downloadedFilename).toBe("opencodex-guardrails.json");
+});
+
 test("category disable requires confirmation and keyword prefilter saves directly", async () => {
   await mount();
   await openTab("settings");
@@ -743,23 +775,32 @@ test("conflicted import preview cannot be applied", async () => {
   expect(importRequests).toHaveLength(1);
 });
 
-test("Activity category filter is sent to the server and generation is visible", async () => {
+test("Activity surface, mode, result, and category filters are sent to the server", async () => {
   await mount();
   await openTab("activity");
 
-  const category = host.querySelector<HTMLButtonElement>(
-    '#guardrails-panel-activity [role="combobox"][aria-label="Category"]',
-  )!;
-  await act(async () => { category.click(); });
-  const credentials = [...document.querySelectorAll<HTMLButtonElement>('[role="option"]')]
-    .find(option => option.textContent?.trim() === "Credentials")!;
-  await act(async () => {
-    credentials.click();
-    await new Promise(resolve => setTimeout(resolve, 20));
-  });
+  const choose = async (label: string, optionLabel: string) => {
+    const select = host.querySelector<HTMLButtonElement>(
+      `#guardrails-panel-activity [role="combobox"][aria-label="${label}"]`,
+    )!;
+    await act(async () => { select.click(); });
+    const option = [...document.querySelectorAll<HTMLButtonElement>('[role="option"]')]
+      .find(candidate => candidate.textContent?.trim() === optionLabel)!;
+    await act(async () => {
+      option.click();
+      await new Promise(resolve => setTimeout(resolve, 20));
+    });
+  };
+  await choose("Surface", "Responses");
+  await choose("Mode", "Enforce masking");
+  await choose("Result", "Masked");
+  await choose("Category", "Credentials");
 
   const query = new URLSearchParams(activityRequests.at(-1));
   expect(query.get("limit")).toBe("100");
+  expect(query.get("surface")).toBe("responses");
+  expect(query.get("mode")).toBe("enforce");
+  expect(query.get("result")).toBe("masked");
   expect(query.get("category")).toBe("1");
   expect(host.querySelector("#guardrails-panel-activity tbody tr td:nth-child(6)")?.textContent)
     .toBe("1");

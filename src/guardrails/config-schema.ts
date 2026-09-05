@@ -5,6 +5,7 @@ import type {
 } from "../types";
 import type { OcxGuardrailsProviderScope } from "../types/config";
 import { isValidGuardrailsProviderId } from "../config/provider-name";
+import { MAX_GUARDRAILS_SCANNABLE_LEAF_BYTES } from "./scanner";
 import type { GuardrailsCustomRule, GuardrailsRegistryOptions } from "./types";
 
 const DATA_TYPES = [1, 2, 3, 4, 5, 6] as const;
@@ -59,7 +60,7 @@ const customRuleSchema = z.object({
   displayName: byteLimitedString(256).min(1),
   description: byteLimitedString(2_048),
   regex: byteLimitedString(MAX_GUARDRAILS_RULE_PATTERN_BYTES).min(1),
-  minLength: z.number().int().min(1).max(1_000_000).optional(),
+  minLength: z.number().int().min(1).max(MAX_GUARDRAILS_SCANNABLE_LEAF_BYTES).optional(),
   keywords: z.array(byteLimitedString(256).min(1)).max(64),
   entropy: z.number().min(0).max(16).optional(),
   banlist: z.array(byteLimitedString(1_024).min(1)).max(1_024),

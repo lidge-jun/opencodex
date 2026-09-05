@@ -2596,6 +2596,8 @@ export const ja: Record<TKey, string> = {
   "guardrails.bulkEnable": "{count}件を有効化",
   "guardrails.bulkDisable": "{count}件を無効化",
   "guardrails.export": "エクスポート",
+  "guardrails.exported": "Guardrails バンドルをエクスポートしました。",
+  "guardrails.exportFailed": "Guardrails バンドルをエクスポートできませんでした。",
   "guardrails.import": "インポート",
   "guardrails.importMode": "インポートモード",
   "guardrails.importMerge": "マージ",

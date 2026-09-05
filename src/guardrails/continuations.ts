@@ -148,8 +148,11 @@ function prune(now = Date.now()): void {
   }
   while (entries.size > MAX_CONTINUATIONS || retainedBytes > MAX_CONTINUATION_BYTES) {
     const oldest = [...entries.entries()]
-      .filter(([, entry]) => entry.pins === 0 && entry.state !== undefined)
-      .sort((left, right) => left[1].createdAt - right[1].createdAt)[0];
+      .filter(([, entry]) => entry.pins === 0)
+      .sort((left, right) => {
+        const stateOrder = Number(right[1].state !== undefined) - Number(left[1].state !== undefined);
+        return stateOrder || left[1].createdAt - right[1].createdAt;
+      })[0];
     if (!oldest) break;
     remove(oldest[0]);
   }
@@ -163,8 +166,11 @@ function planAdmission(
   let projectedCount = entries.size - (replacing ? 1 : 0) + 1;
   const evictions: string[] = [];
   const candidates = [...entries.entries()]
-    .filter(([key, entry]) => key !== replacing?.key && entry.pins === 0 && entry.state !== undefined)
-    .sort((left, right) => left[1].createdAt - right[1].createdAt);
+    .filter(([key, entry]) => key !== replacing?.key && entry.pins === 0)
+    .sort((left, right) => {
+      const stateOrder = Number(right[1].state !== undefined) - Number(left[1].state !== undefined);
+      return stateOrder || left[1].createdAt - right[1].createdAt;
+    });
   for (const [key, entry] of candidates) {
     if (projectedBytes <= MAX_CONTINUATION_BYTES && projectedCount <= MAX_CONTINUATIONS) break;
     evictions.push(key);
@@ -305,7 +311,7 @@ export function guardrailsContinuationRetainedStoreSnapshot(): RetainedStoreSnap
   let pinnedBytes = 0;
   let oldestAt: number | null = null;
   for (const entry of entries.values()) {
-    if (entry.pins > 0 || entry.state === undefined) {
+    if (entry.pins > 0) {
       pinnedBytes += entry.sizeBytes;
       continue;
     }
@@ -323,8 +329,11 @@ export function guardrailsContinuationRetainedStoreSnapshot(): RetainedStoreSnap
 
 export function evictOldestGuardrailsContinuationForBudget(): number {
   const oldest = [...entries.entries()]
-    .filter(([, entry]) => entry.pins === 0 && entry.state !== undefined)
-    .sort((left, right) => left[1].createdAt - right[1].createdAt)[0];
+    .filter(([, entry]) => entry.pins === 0)
+    .sort((left, right) => {
+      const stateOrder = Number(right[1].state !== undefined) - Number(left[1].state !== undefined);
+      return stateOrder || left[1].createdAt - right[1].createdAt;
+    })[0];
   return oldest ? remove(oldest[0]) : 0;
 }
 

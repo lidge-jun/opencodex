@@ -2642,6 +2642,8 @@ export const en = {
   "guardrails.bulkEnable": "Enable {count}",
   "guardrails.bulkDisable": "Disable {count}",
   "guardrails.export": "Export",
+  "guardrails.exported": "Guardrails bundle exported.",
+  "guardrails.exportFailed": "Could not export the Guardrails bundle.",
   "guardrails.import": "Import",
   "guardrails.importMode": "Import mode",
   "guardrails.importMerge": "Merge",

@@ -90,6 +90,29 @@ test("strict config validation accepts a complete enforce policy with a declarat
   expect(result.ok).toBe(true);
 });
 
+test("custom rule minimum length cannot exceed the largest scannable leaf", () => {
+  const parsed = parseGuardrailsConfig({
+    customRules: [{
+      ruleId: "custom.impossible-minimum",
+      name: "Impossible minimum",
+      dataType: 6,
+      group: "CUSTOM",
+      groupPriority: 0,
+      displayName: "Impossible minimum",
+      description: "Regression fixture",
+      regex: "(custom_[A-Za-z0-9]+)",
+      minLength: 128 * 1024 + 1,
+      keywords: [],
+      banlist: [],
+      validators: [],
+      masking: { captureGroups: [1], placeholderType: "CUSTOM_IMPOSSIBLE" },
+    }],
+  });
+
+  expect(parsed.ok).toBe(false);
+  if (!parsed.ok) expect(parsed.error).toContain("131072");
+});
+
 test("provider scope defaults to all and explicit all normalizes to absence", () => {
   const absent = parseGuardrailsConfig({ enabled: true });
   const explicit = parseGuardrailsConfig({

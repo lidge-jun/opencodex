@@ -79,6 +79,12 @@ export function fetchGuardrailsRules(apiBase: string, signal: AbortSignal, error
   return getJson<GuardrailsRules>(`${apiBase}/api/guardrails/rules`, signal, error);
 }
 
+export async function fetchGuardrailsExport(apiBase: string, error: string): Promise<Blob> {
+  const response = await fetch(`${apiBase}/api/guardrails/export`);
+  if (!response.ok) throw await guardrailsMutationError(response, error);
+  return response.blob();
+}
+
 export function fetchGuardrailsActivity(
   apiBase: string,
   signal: AbortSignal,

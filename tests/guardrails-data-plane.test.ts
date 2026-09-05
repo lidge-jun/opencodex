@@ -1072,6 +1072,33 @@ test("Guardrails never restores Responses prose attributed to a non-assistant ro
   expect(demaskGuardrailsJsonPayload(payload, prepared.turn!)).toBe(payload);
 });
 
+test("Guardrails restores Chat assistant prose but never content attributed to another role", async () => {
+  const secret = "sk_live_abcdefghijklmnopqrstuvwx";
+  const prepared = await prepareGuardrailsTurn(
+    config(),
+    "chat",
+    { messages: [{ role: "user", content: secret }] },
+  );
+  const payload = demaskGuardrailsJsonPayload(JSON.stringify({
+    choices: [
+      {
+        index: 0,
+        message: { role: "assistant", content: "visible <STRIPE_ACCESS_TOKEN_1>" },
+      },
+      {
+        index: 1,
+        message: { role: "user", content: "hidden <STRIPE_ACCESS_TOKEN_1>" },
+      },
+    ],
+  }), prepared.turn!);
+  const parsed = JSON.parse(payload) as {
+    choices: Array<{ message: { role: string; content: string } }>;
+  };
+
+  expect(parsed.choices[0]?.message.content).toBe(`visible ${secret}`);
+  expect(parsed.choices[1]?.message.content).toBe("hidden <STRIPE_ACCESS_TOKEN_1>");
+});
+
 test("Guardrails fail-open rollback restores only admitted request fields", async () => {
   const secret = "sk_live_abcdefghijklmnopqrstuvwx";
   const literal = "<STRIPE_ACCESS_TOKEN_1>";
@@ -1142,6 +1169,7 @@ test("Guardrails counts but does not restore Chat and Anthropic tool inputs", as
   const chat = demaskGuardrailsJsonPayload(JSON.stringify({
     choices: [{
       message: {
+        role: "assistant",
         content: "visible <STRIPE_ACCESS_TOKEN_1>",
         tool_calls: [{
           type: "function",

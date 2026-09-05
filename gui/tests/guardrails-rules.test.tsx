@@ -134,6 +134,20 @@ test("bulk action emits all filtered built-in IDs once", async () => {
   expect(calls[0]?.ids).toEqual(DATA.rules.map(item => item.ruleId));
 });
 
+test("custom rule form exposes only functional matching controls", async () => {
+  await mount();
+  await act(async () => { button("Add rule").click(); });
+
+  const labels = [...host.querySelectorAll<HTMLElement>(".field-label")]
+    .map(label => label.textContent?.trim());
+  expect(labels).not.toContain("Group priority");
+  expect(labels).not.toContain("Keywords");
+  const minimumLength = [...host.querySelectorAll<HTMLLabelElement>("label")]
+    .find(label => label.textContent?.includes("Minimum length"))
+    ?.querySelector<HTMLInputElement>("input");
+  expect(minimumLength?.max).toBe(String(128 * 1024));
+});
+
 test("invalid JSON import is reported without invoking import", async () => {
   const errors: unknown[] = [];
   let imports = 0;

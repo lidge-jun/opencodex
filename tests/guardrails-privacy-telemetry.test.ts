@@ -11,10 +11,12 @@ import {
   guardrailsActivityRetainedStoreSnapshot,
   guardrailsTelemetryOverview,
   recordGuardrailsEvent,
+  recordGuardrailsTurn,
+  recordGuardrailsTurnDelta,
   sweepExpiredGuardrailsActivity,
 } from "../src/guardrails/telemetry";
 import { decideAndRecordGuardrailsLateFailure } from "../src/guardrails/late-failure";
-import { prepareGuardrailsTurn } from "../src/guardrails/turn";
+import { extendGuardrailsTurnText, prepareGuardrailsTurn } from "../src/guardrails/turn";
 import { GuardrailsScanCapacityError } from "../src/guardrails/scanner";
 import type { OcxConfig } from "../src/types";
 
@@ -147,6 +149,27 @@ describe("Guardrails privacy-safe response telemetry", () => {
       passthrough: 0,
       demaskWarning: 0,
       toolArgumentRestoreSkipped: 0,
+    });
+  });
+
+  test("late findings update detection totals without counting a second client request", async () => {
+    const turn = await guardrailsTurn("block");
+    recordGuardrailsTurn("responses", turn, 1);
+    const extended = extendGuardrailsTurnText(
+      "sk_live_abcdefghijklmnopqrstuvwx",
+      turn,
+    ).turn;
+
+    recordGuardrailsTurnDelta("responses", extended, turn.findings.length, 0.5);
+
+    const overview = guardrailsTelemetryOverview();
+    expect(overview.counters.scanned).toBe(1);
+    expect(overview.counters.masked).toBe(1);
+    expect(overview.recentEvents).toHaveLength(2);
+    expect(overview.recentEvents[0]).toMatchObject({
+      result: "masked",
+      count: 1,
+      severity: "info",
     });
   });
 

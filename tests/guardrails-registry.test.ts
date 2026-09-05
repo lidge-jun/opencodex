@@ -101,6 +101,20 @@ test("builtin Guardrails registry compiles every pinned donor rule exactly once"
   expect(registry.rules.some(rule => rule.ruleId === "credentials.github-oauth.gl")).toBe(true);
 });
 
+test("registry rejects an unknown disabled built-in rule instead of silently weakening status", () => {
+  expect(() => createGuardrailsRegistry({
+    disabledBuiltinRuleIds: ["removed.or.misspelled-rule"],
+  })).toThrow(GuardrailsRuleCompileError);
+  try {
+    createGuardrailsRegistry({ disabledBuiltinRuleIds: ["removed.or.misspelled-rule"] });
+  } catch (error) {
+    expect(error).toMatchObject({
+      reason: "disabled_rule",
+      ruleId: "removed.or.misspelled-rule",
+    });
+  }
+});
+
 test("supplemental assignment rules mask complete synthetic semantic values", () => {
   const registry = createBuiltinGuardrailsRegistry();
   const supplementalOnly = createGuardrailsRegistry({

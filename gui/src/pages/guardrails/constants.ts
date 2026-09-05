@@ -3,6 +3,7 @@ import type { GuardrailsDataType } from "./types";
 
 export const GUARDRAILS_DATA_TYPES: readonly GuardrailsDataType[] = [1, 2, 3, 4, 5, 6];
 export const GUARDRAILS_IMPORT_MAX_BYTES = 4 * 1024 * 1024;
+export const GUARDRAILS_MAX_CUSTOM_RULE_MIN_LENGTH = 128 * 1024;
 
 export const GUARDRAILS_VALIDATORS = [
   "luhn",

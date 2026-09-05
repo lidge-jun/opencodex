@@ -11,6 +11,7 @@ import {
 } from "./guardrails/consequence-copy";
 import {
   deleteGuardrailsCustomRule,
+  fetchGuardrailsExport,
   fetchGuardrailsActivity,
   fetchGuardrailsOverview,
   fetchGuardrailsRules,
@@ -277,11 +278,34 @@ export default function Guardrails({ apiBase }: { apiBase: string }) {
   }, [apiBase, rules, runMutation, t]);
 
   const exportRules = useCallback(() => {
-    const anchor = document.createElement("a");
-    anchor.href = `${apiBase}/api/guardrails/export`;
-    anchor.download = "opencodex-guardrails.json";
-    anchor.click();
-  }, [apiBase]);
+    if (pendingRef.current) return;
+    pendingRef.current = true;
+    setPending(true);
+    setToast(null);
+    void fetchGuardrailsExport(apiBase, t("guardrails.exportFailed"))
+      .then(blob => {
+        const objectUrl = URL.createObjectURL(blob);
+        try {
+          const anchor = document.createElement("a");
+          anchor.href = objectUrl;
+          anchor.download = "opencodex-guardrails.json";
+          anchor.hidden = true;
+          document.body.appendChild(anchor);
+          anchor.click();
+          anchor.remove();
+        } finally {
+          URL.revokeObjectURL(objectUrl);
+        }
+        setToast({ tone: "ok", text: t("guardrails.exported") });
+      })
+      .catch(error => {
+        setToast({ tone: "err", text: errorText(error, t("guardrails.exportFailed")) });
+      })
+      .finally(() => {
+        pendingRef.current = false;
+        setPending(false);
+      });
+  }, [apiBase, t]);
 
   const requestImport = useCallback((bundle: unknown, mode: "merge" | "replace") => {
     if (!rules || pendingRef.current) return;

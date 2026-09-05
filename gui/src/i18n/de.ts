@@ -2575,6 +2575,8 @@ export const de: Record<TKey, string> = {
   "guardrails.bulkEnable": "Auswahl aktivieren ({count})",
   "guardrails.bulkDisable": "Auswahl deaktivieren ({count})",
   "guardrails.export": "Exportieren",
+  "guardrails.exported": "Guardrails-Paket exportiert.",
+  "guardrails.exportFailed": "Das Guardrails-Paket konnte nicht exportiert werden.",
   "guardrails.import": "Importieren",
   "guardrails.importMode": "Importmodus",
   "guardrails.importMerge": "Zusammenführen",

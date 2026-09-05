@@ -50,7 +50,7 @@ interface DisposableWrappedRE2 {
 export class GuardrailsRuleCompileError extends Error {
   constructor(
     readonly ruleId: string,
-    readonly reason: "capture_group" | "regex",
+    readonly reason: "capture_group" | "disabled_rule" | "regex",
     detail: string,
   ) {
     super(`Guardrails rule ${ruleId} ${detail}`);
@@ -398,10 +398,16 @@ export function createGuardrailsRegistry(options: GuardrailsRegistryOptions = {}
   const builtin = builtinDefinitions();
   const enabledDataTypes = new Set<GuardrailsDataType>(options.enabledDataTypes ?? [1, 2, 3, 4, 5, 6]);
   const disabledBuiltin = new Set(options.disabledBuiltinRuleIds ?? []);
+  const builtinIds = new Set(builtin.rules.map(rule => rule.ruleId));
+  for (const ruleId of disabledBuiltin) {
+    if (!builtinIds.has(ruleId)) {
+      throw new GuardrailsRuleCompileError(ruleId, "disabled_rule", "does not identify a built-in rule");
+    }
+  }
   const builtinRules = compiledBuiltinRules().filter(rule => enabledDataTypes.has(rule.dataType) && !disabledBuiltin.has(rule.ruleId));
   const customRules: CompiledGuardrailsRule[] = [];
   const rules = [...builtinRules];
-  const ids = new Set(builtin.rules.map(rule => rule.ruleId));
+  const ids = new Set(builtinIds);
   const placeholderTypes = new Set(builtin.rules.map(rule => rule.masking.placeholderType));
   try {
     for (const customRule of options.customRules ?? []) {

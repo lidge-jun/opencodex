@@ -776,7 +776,9 @@ test("Guardrails Activity exposes bounded metadata and validates filters", async
     severity: "info",
   });
   const config = baseConfig();
-  const activity = request("/api/guardrails/activity?surface=chat&category=6&limit=10");
+  const activity = request(
+    "/api/guardrails/activity?surface=chat&mode=enforce&result=masked&category=6&limit=10",
+  );
   const body = await (await handleManagementAPI(activity, new URL(activity.url), config, persistenceSeam()))!.json() as {
     events: Array<Record<string, unknown>>;
     filteredSummary: {
@@ -804,6 +806,20 @@ test("Guardrails Activity exposes bounded metadata and validates filters", async
   expect((await handleManagementAPI(
     invalidCategory,
     new URL(invalidCategory.url),
+    config,
+    persistenceSeam(),
+  ))?.status).toBe(400);
+  const invalidMode = request("/api/guardrails/activity?mode=observe");
+  expect((await handleManagementAPI(
+    invalidMode,
+    new URL(invalidMode.url),
+    config,
+    persistenceSeam(),
+  ))?.status).toBe(400);
+  const invalidResult = request("/api/guardrails/activity?result=restored");
+  expect((await handleManagementAPI(
+    invalidResult,
+    new URL(invalidResult.url),
     config,
     persistenceSeam(),
   ))?.status).toBe(400);

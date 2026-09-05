@@ -2598,6 +2598,8 @@ export const tr: Record<TKey, string> = {
   "guardrails.bulkEnable": "{count} kuralı etkinleştir",
   "guardrails.bulkDisable": "{count} kuralı devre dışı bırak",
   "guardrails.export": "Dışa aktar",
+  "guardrails.exported": "Guardrails paketi dışa aktarıldı.",
+  "guardrails.exportFailed": "Guardrails paketi dışa aktarılamadı.",
   "guardrails.import": "İçe aktar",
   "guardrails.importMode": "İçe aktarma modu",
   "guardrails.importMerge": "Birleştir",

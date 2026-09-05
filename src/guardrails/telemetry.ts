@@ -34,6 +34,7 @@ export interface GuardrailsActivityEvent {
 interface StoredGuardrailsActivityEvent {
   event: GuardrailsActivityEvent;
   categoryContributions: Array<readonly [number, number]>;
+  countedScan: boolean;
   ruleContributions: Array<readonly [string, number]>;
   sizeBytes: number;
 }
@@ -115,7 +116,7 @@ function decrementAggregate(entry: StoredGuardrailsActivityEvent): void {
     else categoryCounts.delete(categoryId);
   }
   const { count, result } = entry.event;
-  if (result === "scanned" || result === "masked" || result === "detected") {
+  if (entry.countedScan) {
     counters.scanned = Math.max(0, counters.scanned - 1);
   }
   if (result === "masked") counters.masked = Math.max(0, counters.masked - count);
@@ -149,8 +150,12 @@ function prune(at = Date.now()): void {
   }
 }
 
-function incrementCounter(result: GuardrailsTelemetryResult, count: number): void {
-  counters.scanned += result === "scanned" || result === "masked" || result === "detected" ? 1 : 0;
+function incrementCounter(
+  result: GuardrailsTelemetryResult,
+  count: number,
+  countedScan: boolean,
+): void {
+  if (countedScan) counters.scanned += 1;
   if (result === "masked") counters.masked += count;
   if (result === "detected") counters.detected += count;
   if (result === "blocked") counters.blocked += 1;
@@ -161,6 +166,7 @@ function incrementCounter(result: GuardrailsTelemetryResult, count: number): voi
 
 /** Best-effort metadata-only recorder. It never propagates observability failures. */
 export function recordGuardrailsEvent(input: Omit<GuardrailsActivityEvent, "id" | "timestamp"> & {
+  countAsScan?: boolean;
   timestamp?: number;
 }): void {
   try {
@@ -192,11 +198,24 @@ export function recordGuardrailsEvent(input: Omit<GuardrailsActivityEvent, "id" 
       latencyMs: clampLatency(input.latencyMs),
       severity: input.severity,
     };
-    const sizeBytes = serializedBytes({ event, ruleContributions, categoryContributions });
+    const countedScan = input.countAsScan
+      ?? (event.result === "scanned" || event.result === "masked" || event.result === "detected");
+    const sizeBytes = serializedBytes({
+      event,
+      ruleContributions,
+      categoryContributions,
+      countedScan,
+    });
     if (sizeBytes === null || sizeBytes > MAX_GUARDRAILS_ACTIVITY_BYTES) return;
-    events.push({ event, ruleContributions, categoryContributions, sizeBytes });
+    events.push({
+      event,
+      ruleContributions,
+      categoryContributions,
+      countedScan,
+      sizeBytes,
+    });
     retainedBytes += sizeBytes;
-    incrementCounter(event.result, event.count);
+    incrementCounter(event.result, event.count, countedScan);
     for (const [ruleId, contribution] of ruleContributions) {
       ruleCounts.set(ruleId, (ruleCounts.get(ruleId) ?? 0) + contribution);
     }
@@ -225,6 +244,32 @@ export function recordGuardrailsTurn(
     ruleIds: turn.findings.map(finding => finding.ruleId),
     latencyMs,
     severity: "info",
+  });
+}
+
+/**
+ * Record findings introduced by a later local transformation without counting
+ * another client request. Original values never enter this metadata-only event.
+ */
+export function recordGuardrailsTurnDelta(
+  surface: GuardrailsTelemetrySurface,
+  turn: GuardrailsTurn,
+  fromFindingIndex: number,
+  latencyMs: number,
+): void {
+  const findings = turn.findings.slice(Math.max(0, fromFindingIndex));
+  if (findings.length === 0) return;
+  recordGuardrailsEvent({
+    surface,
+    mode: turn.mode,
+    result: turn.mode === "enforce" ? "masked" : "detected",
+    registryGeneration: turn.snapshot.generation,
+    count: findings.length,
+    categoryIds: findings.map(finding => finding.dataType),
+    ruleIds: findings.map(finding => finding.ruleId),
+    latencyMs,
+    severity: "info",
+    countAsScan: false,
   });
 }
 

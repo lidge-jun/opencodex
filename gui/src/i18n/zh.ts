@@ -2596,6 +2596,8 @@ export const zh: Record<TKey, string> = {
   "guardrails.bulkEnable": "启用 {count} 条",
   "guardrails.bulkDisable": "禁用 {count} 条",
   "guardrails.export": "导出",
+  "guardrails.exported": "Guardrails 配置包已导出。",
+  "guardrails.exportFailed": "无法导出 Guardrails 配置包。",
   "guardrails.import": "导入",
   "guardrails.importMode": "导入模式",
   "guardrails.importMerge": "合并",

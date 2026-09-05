@@ -380,7 +380,7 @@ test("compact continuation poisons an identical fingerprint across lineages unti
   expect(tombstone.bytes).toBeGreaterThan(0);
   expect(tombstone.bytes).toBe(tombstone.evictableBytes + tombstone.pinnedBytes);
   expect(tombstone.evictableBytes).toBeGreaterThan(0);
-  expect(tombstone.pinnedBytes).toBeGreaterThan(0);
+  expect(tombstone.pinnedBytes).toBe(0);
   expect(sweepExpiredGuardrailsCompactContinuations(expiresAt + 1)).toBe(1);
 });
 
@@ -545,4 +545,8 @@ test("pinned compact collision poisons the fingerprint without exposing sibling 
   expect(pinned?.state.replacements[0]?.original).toBe("secret-a");
   pinned?.release();
   expect(retainGuardrailsCompactContinuation(items, scope)).toBeUndefined();
+  const released = guardrailsCompactContinuationRetainedStoreSnapshot();
+  expect(released.pinnedBytes).toBe(0);
+  expect(released.evictableBytes).toBe(released.bytes);
+  expect(evictOldestGuardrailsCompactContinuationForBudget()).toBeGreaterThan(0);
 });

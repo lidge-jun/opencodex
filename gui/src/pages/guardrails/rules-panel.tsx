@@ -6,6 +6,7 @@ import {
   GUARDRAILS_DATA_TYPES,
   GUARDRAILS_DATA_TYPE_KEYS,
   GUARDRAILS_IMPORT_MAX_BYTES,
+  GUARDRAILS_MAX_CUSTOM_RULE_MIN_LENGTH,
   GUARDRAILS_VALIDATORS,
 } from "./constants";
 import type {
@@ -421,10 +422,6 @@ export function GuardrailsRulesPanel({
             <label><span className="field-label">{t("guardrails.displayName")}</span><input required value={form.displayName} disabled={pending} onChange={event => update("displayName", event.target.value)} /></label>
             <label><span className="field-label">{t("guardrails.dataType")}</span><Select value={String(form.dataType)} disabled={pending} label={t("guardrails.dataType")} onChange={value => update("dataType", Number(value) as GuardrailsDataType)} options={GUARDRAILS_DATA_TYPES.map(value => ({ value: String(value), label: t(GUARDRAILS_DATA_TYPE_KEYS[value]) }))} /></label>
             <label><span className="field-label">{t("guardrails.group")}</span><input required value={form.group} disabled={pending} onChange={event => update("group", event.target.value)} /></label>
-            <label><span className="field-label">{t("guardrails.groupPriority")}</span><input type="number" required min={-10_000} max={10_000} value={form.groupPriority} disabled={pending} onChange={event => {
-              const value = event.currentTarget.valueAsNumber;
-              if (Number.isSafeInteger(value)) update("groupPriority", value);
-            }} /></label>
             <label className="guardrails-span-all"><span className="field-label">{t("guardrails.description")}</span><input value={form.description} disabled={pending} onChange={event => update("description", event.target.value)} /></label>
             <label className="guardrails-span-all"><span className="field-label">{t("guardrails.regex")}</span><input className="mono" required value={form.regex} disabled={pending} onChange={event => update("regex", event.target.value)} /></label>
             <label><span className="field-label">{t("guardrails.placeholderType")}</span><input className="mono" required value={form.masking.placeholderType} disabled={pending} onChange={event => setForm(current => ({ ...current, masking: { ...current.masking, placeholderType: event.target.value } }))} /></label>
@@ -446,8 +443,7 @@ export function GuardrailsRulesPanel({
                 </span>
               )}
             </label>
-            <label><span className="field-label">{t("guardrails.minLength")}</span><input type="number" min={1} max={1_000_000} value={form.minLength ?? ""} disabled={pending} onChange={event => update("minLength", event.target.value === "" ? undefined : Number(event.target.value))} /></label>
-            <label><span className="field-label">{t("guardrails.keywords")}</span><input value={form.keywords.join(", ")} disabled={pending} onChange={event => update("keywords", event.target.value.split(",").map(value => value.trim()).filter(Boolean))} /></label>
+            <label><span className="field-label">{t("guardrails.minLength")}</span><input type="number" min={1} max={GUARDRAILS_MAX_CUSTOM_RULE_MIN_LENGTH} value={form.minLength ?? ""} disabled={pending} onChange={event => update("minLength", event.target.value === "" ? undefined : Number(event.target.value))} /></label>
             {form.validators.includes("entropy") && (
               <label><span className="field-label">{t("guardrails.entropy")}</span><input type="number" required min={0} max={16} step="0.1" value={form.entropy ?? ""} disabled={pending} onChange={event => update("entropy", event.target.value === "" ? undefined : Number(event.target.value))} /></label>
             )}

@@ -364,6 +364,7 @@ import {
   recordGuardrailsEvent,
   recordGuardrailsToolArgumentRestoreSkipped,
   recordGuardrailsTurn,
+  recordGuardrailsTurnDelta,
 } from "../../guardrails/telemetry";
 import {
   decideAndRecordGuardrailsLateFailure,
@@ -3061,6 +3062,11 @@ async function handleResponsesInner(
   // The Chat and Anthropic surfaces replay through here with a Responses-shaped body,
   // so an omitted value means a genuine Responses inbound.
   const inboundWire = options.inboundWire ?? "responses";
+  const lateGuardrailsTelemetrySurface = inboundWire === "chat"
+    ? "chat"
+    : inboundWire === "anthropic"
+      ? "messages"
+      : "responses";
   const translatorBudget = options.translatorBudget;
   const agentTaskRecovery = agentTaskRecoveryConfig(config);
   let body: unknown;
@@ -3306,13 +3312,17 @@ async function handleResponsesInner(
       body = prepared.body;
       options.guardrailsTurn = prepared.turn;
       if (prepared.turn) guardrailsPassthroughBody = preGuardrailsBody;
-      if (prepared.turn) {
-        recordGuardrailsTurn("responses", prepared.turn, performance.now() - guardrailsStartedAt);
-      }
       if (options.guardrailsTurn) {
         const protectedCompaction = maskLocalCompactionArtifacts(body, options.guardrailsTurn);
         body = protectedCompaction.body;
         options.guardrailsTurn = protectedCompaction.turn;
+      }
+      if (options.guardrailsTurn) {
+        recordGuardrailsTurn(
+          lateGuardrailsTelemetrySurface,
+          options.guardrailsTurn,
+          performance.now() - guardrailsStartedAt,
+        );
       }
     } catch (error) {
       if (guardrailsSnapshot?.failurePolicy !== "passthrough") {
@@ -3741,12 +3751,19 @@ async function handleResponsesInner(
 
           if (options.guardrailsTurn) {
             const turn = options.guardrailsTurn;
+            const findingCountBeforeRecovery = turn.findings.length;
             const passthroughBody = structuredClone(body);
             const guardrailsStartedAt = performance.now();
             try {
               const rescanned = rescanGuardrailsResponsesBody(body, turn);
               body = rescanned.body;
               options.guardrailsTurn = rescanned.turn;
+              recordGuardrailsTurnDelta(
+                lateGuardrailsTelemetrySurface,
+                rescanned.turn,
+                findingCountBeforeRecovery,
+                performance.now() - guardrailsStartedAt,
+              );
               if (rescanned.turn.mode === "enforce") {
                 const protectedParsed = parseRequest(body);
                 for (const key of kept) {
@@ -4356,15 +4373,15 @@ async function handleResponsesInner(
   const recordSidecarOutcome = openAiSidecar?.recordOutcome;
   if (visionPlan) {
     let stagedVisionTurn = options.guardrailsTurn;
+    const visionFindingCountBefore = stagedVisionTurn?.findings.length ?? 0;
     let visionPassthroughParsed: OcxParsedRequest | undefined;
     let visionGuardrailsDecision: GuardrailsLateFailureDecision | undefined;
     let visionFailedOpen = false;
     let preparingVisionRollback = false;
-    let visionGuardrailsStartedAt = 0;
+    let visionGuardrailsStartedAt = performance.now();
     try {
       if (stagedVisionTurn?.snapshot.failurePolicy === "passthrough") {
         preparingVisionRollback = true;
-        visionGuardrailsStartedAt = performance.now();
         visionPassthroughParsed = restoreGuardrailsResponsesParsedRequest(
           parsed,
           stagedVisionTurn,
@@ -4413,6 +4430,12 @@ async function handleResponsesInner(
         markBodyNonPersistable(parsed._rawBody);
       } else if (stagedVisionTurn) {
         options.guardrailsTurn = stagedVisionTurn;
+        recordGuardrailsTurnDelta(
+          lateGuardrailsTelemetrySurface,
+          stagedVisionTurn,
+          visionFindingCountBefore,
+          performance.now() - visionGuardrailsStartedAt,
+        );
       }
     } catch (error) {
       if (preparingVisionRollback && stagedVisionTurn) {
@@ -6074,6 +6097,7 @@ async function handleResponsesInner(
     const nextMessages = structuredClone(messages.slice(addedFromIndex));
     const passthroughMessages = structuredClone(nextMessages);
     let nextTurn = turn;
+    const findingCountBeforeLoop = turn.findings.length;
     const guardrailsStartedAt = performance.now();
     try {
       for (const message of nextMessages) {
@@ -6122,6 +6146,12 @@ async function handleResponsesInner(
     }
     messages.splice(addedFromIndex, messages.length - addedFromIndex, ...nextMessages);
     options.guardrailsTurn = nextTurn;
+    recordGuardrailsTurnDelta(
+      lateGuardrailsTelemetrySurface,
+      nextTurn,
+      findingCountBeforeLoop,
+      performance.now() - guardrailsStartedAt,
+    );
   };
 
   // Image / web-search sidecars: plan once, then dispatch with runTurn-aware priority.

@@ -597,6 +597,10 @@ function demaskChatMessage(
   if (!isRecord(value)) return value;
   consumeDemaskNodes(traversal);
   inspectChatToolCalls(value, traversal, streamPrefix);
+  const assistantProse = streamPrefix === undefined
+    ? value.role === "assistant"
+    : value.role === undefined || value.role === "assistant";
+  if (!assistantProse) return value;
   let next = withDemaskedField(value, "refusal", state, traversal);
   if (Array.isArray(value.content)) {
     const content = demaskContentParts(value.content, state, traversal);

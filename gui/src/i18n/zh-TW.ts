@@ -2566,6 +2566,8 @@ export const zhTW: Record<TKey, string> = {
   "guardrails.bulkEnable": "啟用 {count} 項",
   "guardrails.bulkDisable": "停用 {count} 項",
   "guardrails.export": "匯出",
+  "guardrails.exported": "Guardrails 設定包已匯出。",
+  "guardrails.exportFailed": "無法匯出 Guardrails 設定包。",
   "guardrails.import": "匯入",
   "guardrails.importMode": "匯入模式",
   "guardrails.importMerge": "合併",

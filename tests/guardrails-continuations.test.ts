@@ -219,9 +219,9 @@ test("Guardrails continuation poisons a same-scope response-id collision until e
   const stats = guardrailsContinuationStatsForTests();
   expect(stats.entries).toBe(1);
   expect(stats.retainedBytes).toBeGreaterThan(0);
-  expect(stats.pinnedBytes).toBe(stats.retainedBytes);
-  expect(evictOldestGuardrailsContinuationForBudget()).toBe(0);
-  expect(sweepExpiredGuardrailsContinuations(expiresAt + 1)).toBe(1);
+  expect(stats.pinnedBytes).toBe(0);
+  expect(evictOldestGuardrailsContinuationForBudget()).toBeGreaterThan(0);
+  expect(sweepExpiredGuardrailsContinuations(expiresAt + 1)).toBe(0);
   expect(guardrailsContinuationStatsForTests()).toEqual({
     entries: 0,
     retainedBytes: 0,

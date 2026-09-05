@@ -2568,6 +2568,8 @@ export const fr: Record<TKey, string> = {
   "guardrails.bulkEnable": "Activer ({count})",
   "guardrails.bulkDisable": "Désactiver ({count})",
   "guardrails.export": "Exporter",
+  "guardrails.exported": "Bundle Guardrails exporté.",
+  "guardrails.exportFailed": "Impossible d’exporter le bundle Guardrails.",
   "guardrails.import": "Importer",
   "guardrails.importMode": "Mode d’importation",
   "guardrails.importMerge": "Fusionner",

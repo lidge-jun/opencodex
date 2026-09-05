@@ -1,12 +1,15 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import Module, { createRequire } from "node:module";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 
 const RE2_WASM_LOADER_SHA256 =
   "4bfa5d6a8dd0052da8d06baf171078a392dc9c70592d5dca90c9aefa9006336e";
+const RE2_WASM_BINARY_SHA256 =
+  "79e025a30d20157807add5e7d01acefe700f06721f4a56669b0bad5d00995e72";
 const require = createRequire(import.meta.url);
 const loaderPath = require.resolve("re2-wasm/build/wasm/re2.js");
+const wasmPath = join(dirname(loaderPath), "re2.wasm");
 
 interface CompilableNodeModule extends NodeModule {
   filename: string;
@@ -48,6 +51,12 @@ function patchedLoaderSource(): string {
   const actualSha256 = createHash("sha256").update(source).digest("hex");
   if (actualSha256 !== RE2_WASM_LOADER_SHA256) {
     throw new Error("re2-wasm loader hash drifted from the reviewed 1.0.2 artifact");
+  }
+  const actualWasmSha256 = createHash("sha256")
+    .update(readFileSync(wasmPath))
+    .digest("hex");
+  if (actualWasmSha256 !== RE2_WASM_BINARY_SHA256) {
+    throw new Error("re2.wasm hash drifted from the reviewed re2-wasm@1.0.2 artifact");
   }
   source = replaceExactlyOnce(
     source,

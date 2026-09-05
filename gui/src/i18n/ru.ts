@@ -2631,6 +2631,8 @@ export const ru: Record<TKey, string> = {
   "guardrails.bulkEnable": "Включить {count}",
   "guardrails.bulkDisable": "Отключить {count}",
   "guardrails.export": "Экспорт",
+  "guardrails.exported": "Набор Guardrails экспортирован.",
+  "guardrails.exportFailed": "Не удалось экспортировать набор Guardrails.",
   "guardrails.import": "Импорт",
   "guardrails.importMode": "Режим импорта",
   "guardrails.importMerge": "Объединить",
