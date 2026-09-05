@@ -53,3 +53,5 @@ Linux shard 4 found a real native-wire parity gap: HTTP 429 bypassed generic OAu
 At `3ebc3abba`, remote typecheck and 67 tests across attribution, generic/event failover and the signature fixture passed. This includes failed alternate-snapshot preservation and `429 -> 401` refreshing the newly selected account. Independent review: PASS, zero blockers. CI then flagged a long synthetic bearer literal in the new test; use a short unmistakable fixture value instead, with identical authentication assertions and no scanner exception.
 
 Temporary UI tab closed; preview processes stopped and ports 10239/15239 verified unbound. The screenshot and private synthetic probe receipts remain as evidence. The pending gate is latest-head full CI and authorized admin landing of PR #3670.
+
+The Chat reasoning-stream regression also relied on the previous default. Its fixture now explicitly chooses Chat with the completed migration marker and static model discovery; unexpected native-wire calls fail locally instead of escaping its mock. Original reasoning ordering, tier stripping and header assertions are unchanged.

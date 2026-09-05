@@ -56,6 +56,10 @@ function config(): OcxConfig {
         baseUrl: "https://api.x.ai/v1",
         authMode: "oauth",
         models: ["grok-4.6"],
+        liveModels: false,
+        // This regression owns the optional Chat wire, not the migrated default.
+        modelAdapters: { "grok-4.6": "openai-chat" },
+        xaiResponsesDefaultVersion: 1,
       },
     },
   } as OcxConfig;
@@ -76,6 +80,7 @@ describe("xAI OAuth Chat reasoning streaming", () => {
 
     globalThis.fetch = (async (input, init) => {
       const url = input instanceof Request ? input.url : String(input);
+      if (url === `${XAI_GROK_CLI_BASE_URL}/responses`) throw new Error("Chat regression selected the native wire");
       if (url !== CHAT_ENDPOINT) return originalFetch(input, init);
       upstreamCalls += 1;
       outboundHeaders = new Headers(init?.headers);
