@@ -9,7 +9,7 @@ opencodex は、Codex が読み取る 2 つの内容 (構成 (`$CODEX_HOME/confi
 
 ## 設定の注入
 
-ローカル接続では既定で別途ログインせずに Codex を開きます。Dashboard → Overview で切り替えられます。OpenCodex に保存されたアカウントとプロバイダーを使用し、変更後は Codex の再起動が必要です。
+アドミッショントークンを必要としない単独のループバック接続先では、既定で別途ログインせずに Codex を開きます。クライアント接続やトークン認証が必要な接続先では、URL がループバックでも `requires_openai_auth = true` と `OPENCODEX_API_AUTH_TOKEN` を維持します。Dashboard → Overview で切り替えられます。OpenCodex に保存されたアカウントとプロバイダーを使用し、変更後は Codex の再起動が必要です。
 
 この設定は Codex Desktop の個別ログインのみを省略し、認証情報の作成・選択やアカウント権限の付与は行いません。Pool は設定済みの Codex アカウントを選択し、Direct は引き続き呼び出し元またはメインアカウントの認証情報を必要とします。Luna Reserve にも認証情報とプロバイダーの許可が必要です。
 

@@ -9,7 +9,7 @@ opencodex는 Codex가 읽는 두 가지, 즉 설정(`$CODEX_HOME/config.toml`, �
 
 ## 설정 주입
 
-로컬 연결은 기본적으로 별도 로그인 없이 Codex를 엽니다. Dashboard → Overview에서 전환할 수 있습니다. OpenCodex에 저장된 계정과 제공자를 사용하며 변경 후 Codex를 다시 시작해야 합니다.
+접근 토큰이 필요 없는 독립 실행형 루프백 대상에서만 기본적으로 별도 로그인 없이 Codex를 엽니다. 클라이언트 연결이나 토큰 인증이 필요한 대상은 루프백 URL이라도 `requires_openai_auth = true`와 `OPENCODEX_API_AUTH_TOKEN`을 유지합니다. Dashboard → Overview에서 전환할 수 있습니다. OpenCodex에 저장된 계정과 제공자를 사용하며 변경 후 Codex를 다시 시작해야 합니다.
 
 이 설정은 Codex Desktop의 별도 로그인만 생략하며 인증 정보를 생성하거나 선택하지 않고 계정 권한도 부여하지 않습니다. Pool은 설정된 Codex 계정을 선택하고, Direct는 여전히 호출자 또는 메인 계정의 인증 정보가 필요합니다. Luna Reserve도 인증 정보와 제공자의 허가가 필요합니다.
 

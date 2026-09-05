@@ -13,7 +13,7 @@ bearer。這些路徑不會彼此 fallback。shipped v1 設定會遷移到 marke
 
 ## 設定注入
 
-本機連線預設無需另外登入即可開啟 Codex。可在 Dashboard → Overview 中切換，使用儲存在 OpenCodex 中的帳戶和供應商。變更後請重新啟動 Codex。
+只有不需要准入權杖的獨立執行 loopback 目標，才預設無需另外登入即可開啟 Codex。用戶端連線及需要准入權杖驗證的目標，即使 URL 指向 loopback，也仍使用 `requires_openai_auth = true` 與 `OPENCODEX_API_AUTH_TOKEN`。可在 Dashboard → Overview 中切換，使用儲存在 OpenCodex 中的帳戶和供應商。變更後請重新啟動 Codex。
 
 此設定僅移除 Codex Desktop 的單獨登入要求，不會建立或選擇憑證，也不會授予帳戶存取權。Pool 選擇已設定的 Codex 帳戶；Direct 仍需要呼叫端或主帳戶的憑證。Luna Reserve 仍受憑證與供應商授權限制。
 

@@ -15,7 +15,7 @@ Ces routes ne se rabattent jamais l'une sur l'autre. Les configurations v1 distr
 
 ## Injection de configuration
 
-Les connexions locales ouvrent Codex sans connexion séparée par défaut. Le réglage dans Dashboard → Overview utilise les comptes et fournisseurs enregistrés dans OpenCodex. Redémarrez Codex après modification.
+Par défaut, seuls les points de terminaison loopback autonomes sans jeton d’admission ouvrent Codex sans connexion séparée. Les connexions clientes et les cibles authentifiées par jeton conservent `requires_openai_auth = true` et `OPENCODEX_API_AUTH_TOKEN`, même avec une URL loopback. Le réglage dans Dashboard → Overview utilise les comptes et fournisseurs enregistrés dans OpenCodex. Redémarrez Codex après modification.
 
 Ce réglage supprime uniquement la connexion séparée à Codex Desktop : il ne crée ni ne sélectionne d’identifiants et n’accorde aucun accès supplémentaire. Pool sélectionne les comptes Codex configurés ; Direct exige toujours les identifiants du compte appelant/principal. Luna Reserve reste soumis aux identifiants et aux autorisations du fournisseur.
 
