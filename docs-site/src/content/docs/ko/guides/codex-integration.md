@@ -197,7 +197,14 @@ Codex에서 model이 빠졌거나 catalog 순서/가시성이 이상해 보이�
 
 1. provider의 **`selectedModels`** - 비어 있지 않은 allowlist는 해당 id만 Codex에 노출합니다. 비어 있거나 생략하면 발견된 model이 모두 노출됩니다. allowlist에 없는 id는 catalog에 절대 들어가지 않습니다.
 2. **`disabledModels`**(top level) - catalog와 `/v1/models`에서 model을 숨기고, bare native GPT slug는 `visibility: "hide"`로 바꿉니다.
-3. **`liveModels: false`** - live discovery가 꺼져 있으면 routed model은 `models`와 `retainModels`에서 가져옵니다. `models`가 비어 있거나 생략되면 구성된 `defaultModel`도 포함되며, 어느 필드에도 ID가 없을 때만 routed model을 노출하지 않습니다.
+3. **`liveModels: false`** — `liveModels: false`에서 `models`가 비어 있거나 생략되면 초기 목록은 설정된 `defaultModel`,
+   `retainModels` 순으로 구성합니다. 중복 ID는 처음 나온 항목만 남깁니다. 비어 있지 않은 `models`를
+   명시하면 `models`, `retainModels` 순으로 구성하며, 다른 `defaultModel`을 자동으로 추가하지 않습니다.
+   그 모델도 `models`나 `retainModels`에 직접 넣으면 포함할 수 있습니다. 어느 필드에도 ID가 없으면
+   초기 목록은 비어 있습니다. 이 순서는 최종 선택기의 표시 순서를 보장하지 않습니다.
+   `selectedModels`, `disabledModels`, 공급자 비활성화 정책은 그대로 적용됩니다.
+   `authMode: "forward"`는 기존 별도 분기를 따르며 이 정적 라우팅 목록을 사용하지 않습니다.
+   이 규칙은 라이브 발견 실패 시 폴백 동작을 바꾸지 않습니다.
 4. **Cursor `GetUsableModels`** - Cursor adapter는 `/models`가 아니라 protobuf `GetUsableModels` RPC로 model을 찾습니다. 그래서 Cursor 쪽 변경이 다른 provider와 무관하게 어떤 id가 보이는지 바꿀 수 있습니다.
 5. **캐시와 `ocx sync`** - live catalog는 약 5분(`modelCacheTtlMs`, 기본값 `300000`) 동안 캐시됩니다. `ocx sync`를 실행하면 새로 가져와서 catalog를 즉시 다시 쓸 수 있습니다.
 6. **실행 중인 Codex `app-server`** - 오래 살아 있는 Codex `app-server`(Desktop / CLI background host)가 이전 목록을 메모리에 쥐고 있으면 디스크 catalog를 다시 쓰는 것만으로는 부족합니다. `ocx sync`와 `ocx sync-cache`는 그런 process를 감지하면 경고합니다. `ocx sync --restart-codex`로 다시 시작하거나(아니면 일치하는 `app-server` process를 직접 중지한 뒤), Codex가 다시 만들게 해서 새 목록이 보이게 하세요.

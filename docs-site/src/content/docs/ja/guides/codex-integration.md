@@ -197,9 +197,14 @@ ocx sync-cache
 空または省略すると、検出されたすべてのモデルが公開されます。ホワイトリストにない ID はカタログに到達しません。
 2. **`disabledModels`** (トップレベル) — カタログと `/v1/models` の両方からモデルを非表示にし、反転します
 裸のネイティブ GPT スラッグを `visibility: "hide"` にします。
-3. **`liveModels: false`** — ライブ検出がオフの場合、ルーティングモデルは `models` と
-`retainModels` から取得されます。`models` が空または省略されている場合は構成済みの `defaultModel` も含まれ、
-いずれのフィールドにも ID がない場合のみルーティングモデルを公開しません。
+3. **`liveModels: false`** — `liveModels: false` で `models` が空または省略されている場合、初期一覧には設定済みの
+   `defaultModel`、`retainModels` の順で ID を追加し、重複は最初の出現だけを残します。
+   空でない `models` が明示されている場合は、`models`、`retainModels` の順になり、別の
+   `defaultModel` を暗黙に追加しません。そのモデルも `models` または `retainModels` に明示すれば
+   含められます。どのフィールドにも ID がなければ初期一覧は空です。この順序は最終的なピッカーの
+   表示順を保証しません。`selectedModels`、`disabledModels`、プロバイダーの無効化は引き続き適用されます。
+   `authMode: "forward"` は別の分岐を維持し、このルーティング用の静的一覧を使いません。
+   これらの規則はライブ検出失敗時のフォールバックを変更しません。
 4. **Cursor `GetUsableModels`** — Cursor アダプターはその protobuf を通じてモデルを検出します。
 `/models` ではなく `GetUsableModels` RPC であるため、カーソル側の変更により、他のプロバイダーとは独立して表示される ID が変更される可能性があります。
 5. **キャッシュと `ocx sync`** - ライブ カタログは約 5 分間キャッシュされます (`modelCacheTtlMs`、

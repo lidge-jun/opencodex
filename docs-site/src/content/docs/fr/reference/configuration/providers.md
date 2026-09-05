@@ -94,7 +94,7 @@ sauvegarde dont le contenu diffère, puis réécrit en identifiants sans préfix
 | `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Style de l'en-tête de clé Anthropic. La valeur par défaut est l'en-tête natif `x-api-key` ; ce champ n'est valable que pour les fournisseurs `anthropic` authentifiés par clé. |
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | Pool multi-clés. `apiKey` reflète l'entrée active ; chaque élément a `id`, `key`, `label` facultatif et `addedAt` numérique facultatif. |
 | `defaultModel?` | `string` | Modèle utilisé lorsque ce fournisseur est sélectionné sans modèle explicite. |
-| `models?` | `string[]` | Liste initiale ou de repli. Avec `liveModels: false`, les modèles routés proviennent de `models` et `retainModels` ; `defaultModel` est aussi inclus lorsque `models` est vide. |
+| `models?` | `string[]` | Liste initiale ou de repli. Avec `liveModels: false`, une liste `models` non vide est suivie de `retainModels` ; si `models` est vide ou absent, la liste commence par `defaultModel` (si configuré), puis `retainModels`, en conservant la première occurrence de chaque identifiant. |
 | `liveModels?` | `boolean` | Récupère le catalogue actif au démarrage et lors de la synchronisation (true par défaut). Les fournisseurs personnalisés utilisent `${baseUrl}/models` ; les fournisseurs intégrés peuvent employer une URL de registre et un filtre. |
 | `selectedModels?` | `string[]` | Liste autorisée du catalogue après la découverte. Non vide expose uniquement ces identifiants ; vide ou omis expose tous les modèles découverts. |
 | `contextWindow?` | `number` | Repli contextuel à l’échelle du fournisseur lorsque les métadonnées en amont sont absentes ; sinon, un plafond qui conserve des métadonnées en direct plus petites. Le tableau de bord Modèles expose cela séparément de `providerContextCaps`. |
@@ -436,8 +436,17 @@ modèle. Le même mappage s'applique à un sélecteur natif `vercel/<model-id>`�
 
 ## Listes autorisées de modèles statiques
 
-Réglez `liveModels: false` pour exposer uniquement les modèles configurés dans `models` et `retainModels`. Si `models` est vide ou omis,
-un `defaultModel` configuré est également inclus. Si aucun de ces champs ne fournit d'identifiant, aucun modèle routé n'est exposé. La découverte dynamique rejette plus de 4 Mio ou 2 000 lignes de modèle brutes avant leur mise en cache ;
+Avec `liveModels: false`, si `models` est vide ou absent, la liste initiale commence par le
+`defaultModel` configuré, puis les identifiants de `retainModels`. Les doublons sont supprimés
+en conservant leur première occurrence. Une liste `models` explicite non vide est au contraire
+suivie de `retainModels`, sans ajout implicite d’un autre `defaultModel`. Ce dernier peut toujours
+être inscrit explicitement dans `models` ou `retainModels`. Si aucun de ces champs ne fournit
+d’identifiant, la liste initiale est vide. Cet ordre ne garantit pas l’ordre final du sélecteur.
+`selectedModels`, `disabledModels` et la désactivation du fournisseur restent applicables.
+`authMode: "forward"` conserve sa branche distincte et n’utilise pas cette liste statique routée.
+Ces règles ne changent pas le repli en cas d’échec de la découverte en direct.
+
+La découverte dynamique rejette plus de 4 Mio ou 2 000 lignes de modèle brutes avant leur mise en cache ;
 les préréglages intégrés peuvent appliquer des limites inférieures et filtrer les lignes admissibles à la conversation. Les résultats trop volumineux ou mal formés
 utilisent le catalogue obsolète ou configuré comme solution de repli. Un résultat valide ne contenant aucun modèle admissible fait autorité et n'est pas
 silencieusement remplacé ou tronqué.

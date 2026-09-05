@@ -101,7 +101,7 @@ alanlı seçilmiş kimlikleri yalın kimliklere yeniden yazar.
 | `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Anthropic anahtar başlığı stili. Varsayılan olarak yerel `x-api-key`; yalnızca anahtar kimlik doğrulamalı `anthropic` sağlayıcıları için geçerlidir. |
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | Çoklu anahtar havuzu. `apiKey` aktif girdiyi yansıtır; her öğe `id`, `key`, isteğe bağlı `label` ve isteğe bağlı sayısal `addedAt` değerine sahiptir. |
 | `defaultModel?` | `string` | Bu sağlayıcı açık bir model olmadan seçildiğinde kullanılan model. |
-| `models?` | `string[]` | Tohum/geri dönüş listesi. `liveModels: false` iken yönlendirilen modeller `models` ve `retainModels` alanlarından gelir; `models` boşsa `defaultModel` da eklenir. |
+| `models?` | `string[]` | Başlangıç/geri dönüş model listesi. `liveModels: false` iken boş olmayan `models` listesini `retainModels` izler; `models` boşsa veya atlanmışsa önce yapılandırılmış `defaultModel`, sonra `retainModels` kullanılır. Yinelenen kimliklerin yalnızca ilk geçtiği konum korunur. |
 | `liveModels?` | `boolean` | Başlatmada/senkronizasyonda canlı kataloğu getirin (varsayılan `true`). Özel sağlayıcılar `${baseUrl}/models` kullanır; yerleşikler bir kayıt defteri URL'si ve filtresi kullanabilir. |
 | `selectedModels?` | `string[]` | Keşiften sonra katalog izin listesi. Boş olmaması yalnızca bu kimlikleri gösterir; boş veya atlanmış olması keşfedilen tüm modelleri gösterir. |
 | `contextWindow?` | `number` | Yukarı akış meta verileri olmadığında sağlayıcı genelinde bağlam geri dönüşü; aksi takdirde daha küçük canlı meta verileri koruyan bir sınır. Modeller kontrol paneli bunu `providerContextCaps` alanından ayrı olarak gösterir. |
@@ -477,8 +477,16 @@ uygulamadan önce yerel `zai/glm-5.2` kimliğini geri yükler. Aynı eşleme yer
 
 ## Statik model izin listeleri
 
-Yalnızca yapılandırılmış modelleri göstermek için `liveModels: false` ayarlayın. Yönlendirilen modeller `models` ve `retainModels` alanlarından gelir;
-`models` boşsa veya atlanırsa yapılandırılmış `defaultModel` da eklenir. Bu alanların hiçbiri bir kimlik sağlamıyorsa yönlendirilmiş model gösterilmez. Canlı keşif,
+`liveModels: false` iken `models` boşsa veya atlanmışsa başlangıç listesine önce yapılandırılmış
+`defaultModel`, ardından `retainModels` eklenir. Yinelenen kimliklerde ilk geçen korunur.
+Açıkça belirtilmiş, boş olmayan `models` listesini ise `retainModels` izler; farklı bir `defaultModel`
+kendiliğinden eklenmez. Bu model yine de `models` veya `retainModels` içinde açıkça belirtilebilir.
+Bu alanların hiçbiri kimlik sağlamıyorsa başlangıç listesi boştur. Bu sıra, son seçici sırasını
+garanti etmez. `selectedModels`, `disabledModels` ve sağlayıcının devre dışı bırakılması kuralları
+geçerliliğini korur. `authMode: "forward"` ayrı dalında kalır ve bu yönlendirilmiş statik listeyi
+kullanmaz. Bu kurallar canlı keşif başarısızlığındaki geri dönüş davranışını değiştirmez.
+
+Canlı keşif,
 önbelleğe almadan önce 4 MiB'den veya 2.000 ham model satırından fazlasını
 reddeder; yerleşik önayarlar daha düşük sınırlar kullanabilir ve sohbete uygun
 satırlara filtre uygulayabilir. Büyük boyutlu veya hatalı biçimlendirilmiş

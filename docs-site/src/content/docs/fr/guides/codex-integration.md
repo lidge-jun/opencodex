@@ -311,9 +311,15 @@ S'il manque un modèle dans Codex, ou si l'ordre ou la visibilité du catalogue 
    d'autorisation n'atteint jamais le catalogue.
 2. **`disabledModels`** au niveau supérieur — masque les modèles dans le catalogue comme dans `/v1/models`, et
    fait passer les identifiants GPT natifs non qualifiés à `visibility: "hide"`.
-3. **`liveModels: false`** — lorsque la découverte en direct est désactivée, les modèles routés proviennent de
-   `models` et `retainModels`. Si `models` est vide ou absent, un `defaultModel` configuré est également inclus ;
-   si aucun de ces champs ne fournit d'identifiant, opencodex n'expose aucun modèle routé.
+3. **`liveModels: false`** — Avec `liveModels: false`, si `models` est vide ou absent, la liste initiale commence par le
+   `defaultModel` configuré, puis les identifiants de `retainModels`. Les doublons sont supprimés
+   en conservant leur première occurrence. Une liste `models` explicite non vide est au contraire
+   suivie de `retainModels`, sans ajout implicite d’un autre `defaultModel`. Ce dernier peut toujours
+   être inscrit explicitement dans `models` ou `retainModels`. Si aucun de ces champs ne fournit
+   d’identifiant, la liste initiale est vide. Cet ordre ne garantit pas l’ordre final du sélecteur.
+   `selectedModels`, `disabledModels` et la désactivation du fournisseur restent applicables.
+   `authMode: "forward"` conserve sa branche distincte et n’utilise pas cette liste statique routée.
+   Ces règles ne changent pas le repli en cas d’échec de la découverte en direct.
 4. **Cursor `GetUsableModels`** — l'adaptateur Cursor découvre les modèles par son appel RPC protobuf
    `GetUsableModels`, et non par `/models` ; une modification côté Cursor peut donc changer les identifiants visibles
    indépendamment des autres fournisseurs.

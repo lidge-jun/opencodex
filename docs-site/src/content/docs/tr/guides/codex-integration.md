@@ -353,9 +353,14 @@ sırayla kontrol edin:
 2. **`disabledModels`** (üst düzey) — modelleri hem katalogdan hem de
    `/v1/models` listesinden gizler ve yalın yerel GPT slug'larını `visibility:
    "hide"` olarak değiştirir.
-3. **`liveModels: false`** — canlı keşif kapalı olduğunda yönlendirilmiş modeller `models` ve
-   `retainModels` alanlarından gelir. `models` boş veya atlanmışsa yapılandırılmış `defaultModel` da eklenir;
-   bu alanların hiçbiri bir kimlik sağlamıyorsa opencodex yönlendirilmiş model göstermez.
+3. **`liveModels: false`** — `liveModels: false` iken `models` boşsa veya atlanmışsa başlangıç listesine önce yapılandırılmış
+   `defaultModel`, ardından `retainModels` eklenir. Yinelenen kimliklerde ilk geçen korunur.
+   Açıkça belirtilmiş, boş olmayan `models` listesini ise `retainModels` izler; farklı bir `defaultModel`
+   kendiliğinden eklenmez. Bu model yine de `models` veya `retainModels` içinde açıkça belirtilebilir.
+   Bu alanların hiçbiri kimlik sağlamıyorsa başlangıç listesi boştur. Bu sıra, son seçici sırasını
+   garanti etmez. `selectedModels`, `disabledModels` ve sağlayıcının devre dışı bırakılması kuralları
+   geçerliliğini korur. `authMode: "forward"` ayrı dalında kalır ve bu yönlendirilmiş statik listeyi
+   kullanmaz. Bu kurallar canlı keşif başarısızlığındaki geri dönüş davranışını değiştirmez.
 4. **Cursor `GetUsableModels`** — Cursor adaptörü modelleri `/models` üzerinden
    değil, protobuf `GetUsableModels` RPC'si üzerinden keşfeder; bu nedenle
    Cursor tarafındaki bir değişiklik diğer sağlayıcılardan bağımsız olarak hangi

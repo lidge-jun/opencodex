@@ -82,7 +82,7 @@ managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정
 | `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Anthropic 키 헤더 형식입니다. 기본값은 네이티브 `x-api-key`이며, 키 인증 `anthropic` 공급자에만 유효합니다. |
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | 다중 키 풀입니다. `apiKey`는 활성 항목을 그대로 반영하며, 각 항목에는 `id`, `key`, 선택적 `label`, 선택적 숫자 `addedAt`가 들어갑니다. |
 | `defaultModel?` | `string` | 이 공급자를 선택할 때 모델을 따로 지정하지 않으면 사용하는 모델입니다. |
-| `models?` | `string[]` | 시드/폴백 모델 목록입니다. `liveModels: false`이면 라우팅 모델은 `models`와 `retainModels`에서 가져오며, `models`가 비어 있으면 `defaultModel`도 포함됩니다. |
+| `models?` | `string[]` | 초기/폴백 모델 목록입니다. `liveModels: false`에서 `models`가 비어 있지 않으면 `models`, `retainModels` 순으로 구성합니다. `models`가 비어 있거나 생략되면 설정된 `defaultModel`, `retainModels` 순으로 구성하고, 중복 ID는 처음 나온 항목만 남깁니다. |
 | `liveModels?` | `boolean` | 시작 또는 동기화 시 라이브 카탈로그를 가져옵니다. 기본값은 `true`입니다. 사용자 지정 공급자는 `${baseUrl}/models`를 사용하고, 내장은 레지스트리 URL을 사용한 뒤 필터링할 수 있습니다. |
 | `selectedModels?` | `string[]` | 발견 후 카탈로그 허용 목록입니다. 값이 비어 있지 않으면 그 id만 노출하고, 비어 있거나 생략하면 발견된 모델을 모두 노출합니다. |
 | `modelDisplayNames?` | `Record<string, string>` | 이 공급자의 정확한 네이티브 모델 id를 키로 쓰는 영구 표시 전용 이름입니다. 키는 대소문자를 구분합니다. 이름은 공급자 카탈로그 메타데이터보다 우선하며 인증, 어댑터, 라우팅, 청구 또는 업스트림 요청을 바꾸지 않습니다. 맵은 발견 한도와 같은 최대 2,000개 항목을 가질 수 있습니다. |
@@ -362,7 +362,16 @@ Vercel AI Gateway는 하나의 모델을 여러 기반 추론 공급자에 걸�
 
 ## 정적 모델 허용 목록
 
-`liveModels: false`로 두면 구성된 모델만 노출합니다. 라우팅 모델은 `models`와 `retainModels`에서 가져오며, `models`가 비어 있거나 생략되면 구성된 `defaultModel`도 포함됩니다. 어느 필드에도 ID가 없을 때만 라우팅 모델을 노출하지 않습니다. 라이브 발견은 캐싱 전에 4 MiB 또는 원시 모델 행 2,000개를 넘으면 거부합니다. 내장 프리셋은 더 낮은 한도를 쓰고 chat 가능한 행만 필터링할 수 있습니다. 너무 크거나 형식이 잘못된 결과는 오래된/설정된 폴백을 따릅니다. 유효하지만 선택 가능한 항목이 0개인 결과는 그대로 권위가 있으며, 조용히 다른 값으로 바꾸거나 잘라내지 않습니다.
+`liveModels: false`에서 `models`가 비어 있거나 생략되면 초기 목록은 설정된 `defaultModel`,
+`retainModels` 순으로 구성합니다. 중복 ID는 처음 나온 항목만 남깁니다. 비어 있지 않은 `models`를
+명시하면 `models`, `retainModels` 순으로 구성하며, 다른 `defaultModel`을 자동으로 추가하지 않습니다.
+그 모델도 `models`나 `retainModels`에 직접 넣으면 포함할 수 있습니다. 어느 필드에도 ID가 없으면
+초기 목록은 비어 있습니다. 이 순서는 최종 선택기의 표시 순서를 보장하지 않습니다.
+`selectedModels`, `disabledModels`, 공급자 비활성화 정책은 그대로 적용됩니다.
+`authMode: "forward"`는 기존 별도 분기를 따르며 이 정적 라우팅 목록을 사용하지 않습니다.
+이 규칙은 라이브 발견 실패 시 폴백 동작을 바꾸지 않습니다.
+
+라이브 발견은 캐싱 전에 4 MiB 또는 원시 모델 행 2,000개를 넘으면 거부합니다. 내장 프리셋은 더 낮은 한도를 쓰고 chat 가능한 행만 필터링할 수 있습니다. 너무 크거나 형식이 잘못된 결과는 오래된/설정된 폴백을 따릅니다. 유효하지만 선택 가능한 항목이 0개인 결과는 그대로 권위가 있으며, 조용히 다른 값으로 바꾸거나 잘라내지 않습니다.
 
 `selectedModels`는 발견은 계속하되, 선택된 id만 Codex와 `/v1/models`에 나타나게 하고 싶을 때 사용합니다. 대시보드는 나중에 허용 목록을 바꿀 수 있도록 발견된 전체 목록을 보관합니다.
 

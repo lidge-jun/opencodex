@@ -66,6 +66,13 @@ deleting, or editing a provider's shape clears that per-provider cache; a disabl
 deliberately does not, because a disabled provider is already excluded from the catalog gather
 instead. Codex's own `models_cache.json` is a different cache, invalidated by catalog refresh.
 
+For `liveModels: false`, a static provider publishes the ordered union of `models` and
+`retainModels`. When `models` is absent or empty, its configured `defaultModel` seeds that
+union before retained ids; a nonempty explicit list does not import a different default.
+Without any default or configured/retained ids, the static result stays empty. The existing
+forward-auth native path remains separate. Static gathering does not refresh OAuth or call
+the provider's model endpoint, and normal selection and visibility filters still apply.
+
 ### Windows request-path catalog-state discovery
 
 [Decision Log]
