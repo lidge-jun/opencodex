@@ -49,6 +49,11 @@ provider — xAI, Kimi, DeepSeek, GLM, Groq, OpenRouter, Ollama (local), and mor
   tiers, accepts reasoning deltas from either `delta.reasoning_content` or `delta.reasoning`, requests
   streamed usage with `stream_options.include_usage`, and reads usage from non-stream response envelopes.
 
+Streaming tool calls retain their identity when a provider first sends an ID,
+then associates that ID with an index, and later sends index-only argument
+fragments. Those fragments assemble into one call with the original name and
+complete arguments; parallel calls retain separate identities.
+
 ## `ollama-native`
 
 **Targets:** Ollama's own **Chat API** (`POST /api/chat`) rather than its OpenAI-compatible

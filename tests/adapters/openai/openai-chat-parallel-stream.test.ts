@@ -1,16 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter as createOpenAIChatAdapterProduction } from "../../../src/adapters/openai-chat";
+import type { TranslatorBudget } from "../../../src/lib/translator-budget";
 import type { AdapterEvent } from "../../../src/types";
-import { withTestTranslatorBudget } from "../../helpers/translator-budget";
+import { createTestTranslatorBudget, withTestTranslatorBudget } from "../../helpers/translator-budget";
 
 const createOpenAIChatAdapter = (...args: Parameters<typeof createOpenAIChatAdapterProduction>) =>
   withTestTranslatorBudget(createOpenAIChatAdapterProduction(...args));
 
 const provider = { adapter: "openai-chat", baseUrl: "https://example.test/v1", apiKey: "key" };
 
-async function collect(body: string): Promise<AdapterEvent[]> {
+async function collect(body: string, budget?: TranslatorBudget): Promise<AdapterEvent[]> {
   const out: AdapterEvent[] = [];
-  for await (const e of createOpenAIChatAdapter(provider).parseStream(new Response(body))) out.push(e);
+  for await (const e of createOpenAIChatAdapter(provider).parseStream(new Response(body), budget)) out.push(e);
   return out;
 }
 
@@ -211,12 +212,125 @@ describe("openai-chat parallel tool call stream assembly", () => {
     expect(assembled(events)).toEqual([{ id: "call_a", name: "shell", args: "{\"cmd\":\"ls\"}" }]);
   });
 
-  test("T9b: id-only first chunk followed by index+id continuation stays ONE call", async () => {
+  test("T9b: id-only call retains a later index for index-only continuation", async () => {
+    const budget = createTestTranslatorBudget();
     const events = await collect(sse([
       chunkOf([{ id: "call_b", function: { name: "read", arguments: "{\"p\"" } }]),
-      chunkOf([{ index: 0, id: "call_b", function: { arguments: ":\"x\"}" } }]),
+      chunkOf([{ index: 0, id: "call_b", function: { arguments: ":\"x\"" } }]),
+      chunkOf([{ index: 0, function: { arguments: "}" } }]),
+      chunkOf([], "tool_calls"),
+    ]), budget);
+    expect(assembled(events)).toEqual([{ id: "call_b", name: "read", args: "{\"p\":\"x\"}" }]);
+    expect(events.at(-1)?.type).toBe("done");
+    expect(budget.snapshot()).toMatchObject({ activeCalls: 0, currentBytes: 0, overflows: 0 });
+  });
+
+  test("late indexes keep interleaved calls separate without adding budget owners", async () => {
+    const budget = createTestTranslatorBudget();
+    const response = new Response(sse([
+      chunkOf([
+        { id: "call_a", function: { name: "read", arguments: "{\"p\":" } },
+        { id: "call_b", function: { name: "write", arguments: "{\"p\":" } },
+      ]),
+      chunkOf([{ index: 9, id: "call_b", function: { arguments: "\"b\"" } }]),
+      chunkOf([{ index: 4, id: "call_a", function: { arguments: "\"a\"" } }]),
+      chunkOf([{ index: 9, function: { arguments: "}" } }]),
+      chunkOf([{ index: 4, function: { arguments: "}" } }]),
+      chunkOf([{ id: "call_a", function: { arguments: " " } }]),
       chunkOf([], "tool_calls"),
     ]));
-    expect(assembled(events)).toEqual([{ id: "call_b", name: "read", args: "{\"p\":\"x\"}" }]);
+    const events: AdapterEvent[] = [];
+    let maxActiveCalls = 0;
+    for await (const event of createOpenAIChatAdapter(provider).parseStream(response, budget)) {
+      events.push(event);
+      maxActiveCalls = Math.max(maxActiveCalls, budget.snapshot().activeCalls);
+    }
+    expect(assembled(events)).toEqual([
+      { id: "call_a", name: "read", args: "{\"p\":\"a\"} " },
+      { id: "call_b", name: "write", args: "{\"p\":\"b\"}" },
+    ]);
+    expect(events.at(-1)?.type).toBe("done");
+    expect(maxActiveCalls).toBe(2);
+    expect(budget.snapshot()).toMatchObject({ activeCalls: 0, currentBytes: 0, overflows: 0 });
+  });
+
+  test("index-only fragments do not guess an association between unindexed calls", async () => {
+    const events = await collect(sse([
+      chunkOf([
+        { id: "call_a", function: { name: "read", arguments: "{\"p\":" } },
+        { id: "call_b", function: { name: "write", arguments: "{\"p\":" } },
+      ]),
+      chunkOf([{ index: 0, function: { arguments: "\"a\"}" } }]),
+      chunkOf([{ index: 1, function: { arguments: "\"b\"}" } }]),
+      chunkOf([], "tool_calls"),
+    ]));
+    expect(events.at(-1)?.type).toBe("error");
+    expect(events.some(event => event.type === "done")).toBe(false);
+  });
+
+  test("an observed index wins over a conflicting ID without rebinding either call", async () => {
+    const events = await collect(sse([
+      chunkOf([{ id: "call_a", function: { name: "read", arguments: "{\"p\":" } }]),
+      chunkOf([{ index: 1, id: "call_b", function: { name: "write", arguments: "{\"p\":" } }]),
+      chunkOf([{ index: 0, id: "call_a", function: { arguments: "\"a\"" } }]),
+      chunkOf([{ index: 1, id: "call_a", function: { arguments: "\"b\"}" } }]),
+      chunkOf([{ index: 0, id: "call_b", function: { arguments: "}" } }]),
+      chunkOf([{ index: 0, function: { arguments: " " } }]),
+      chunkOf([], "tool_calls"),
+    ]));
+    expect(assembled(events)).toEqual([
+      { id: "call_a", name: "read", args: "{\"p\":\"a\"} " },
+      { id: "call_b", name: "write", args: "{\"p\":\"b\"}" },
+    ]);
+    expect(events.at(-1)?.type).toBe("done");
+  });
+
+  test("duplicate IDs on established indexed calls keep first-match ID fallback", async () => {
+    const events = await collect(sse([
+      chunkOf([
+        { index: 0, function: { name: "read", arguments: "{\"p\":" } },
+        { index: 1, function: { name: "write", arguments: "{\"p\":" } },
+      ]),
+      chunkOf([{ index: 0, id: "shared", function: { arguments: "\"a\"" } }]),
+      chunkOf([{ index: 1, id: "shared", function: { arguments: "\"b\"" } }]),
+      chunkOf([{ id: "shared", function: { arguments: "}" } }]),
+      chunkOf([{ index: 1, function: { arguments: "}" } }]),
+      chunkOf([], "tool_calls"),
+    ]));
+    expect(assembled(events)).toEqual([
+      { id: "shared", name: "read", args: "{\"p\":\"a\"}" },
+      { id: "shared", name: "write", args: "{\"p\":\"b\"}" },
+    ]);
+    expect(events.at(-1)?.type).toBe("done");
+  });
+
+  test("a repeated ID on a different index does not replace the first observed alias", async () => {
+    const events = await collect(sse([
+      chunkOf([{ id: "call_a", function: { name: "read", arguments: "{\"p\":" } }]),
+      chunkOf([{ index: 0, id: "call_a", function: { arguments: "\"a\"" } }]),
+      chunkOf([{ index: 1, id: "call_a", function: { arguments: "" } }]),
+      chunkOf([{ index: 0, function: { arguments: "}" } }]),
+      chunkOf([], "tool_calls"),
+    ]));
+    expect(assembled(events)).toEqual([{ id: "call_a", name: "read", args: "{\"p\":\"a\"}" }]);
+    expect(events.at(-1)?.type).toBe("done");
+  });
+
+  test.each([9, 10])("late index preserves a %i-byte argument limit across all fragments", async limit => {
+    const budget = createTestTranslatorBudget({ maxCallArgumentBytes: limit });
+    const events = await collect(sse([
+      chunkOf([{ id: "call_a", function: { name: "read", arguments: "{\"p\":" } }]),
+      chunkOf([{ index: 0, id: "call_a", function: { arguments: "\"é\"" } }]),
+      chunkOf([{ index: 0, function: { arguments: "}" } }]),
+      chunkOf([], "tool_calls"),
+    ]), budget);
+    if (limit === 9) {
+      expect(events.at(-1)).toMatchObject({ type: "error", code: "translation_buffer_limit" });
+      expect(events.some(event => event.type === "tool_call_start")).toBe(false);
+    } else {
+      expect(assembled(events)).toEqual([{ id: "call_a", name: "read", args: "{\"p\":\"é\"}" }]);
+      expect(events.at(-1)?.type).toBe("done");
+    }
+    expect(budget.snapshot()).toMatchObject({ activeCalls: 0, currentBytes: 0, overflows: limit === 9 ? 1 : 0 });
   });
 });
