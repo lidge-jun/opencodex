@@ -342,6 +342,7 @@ function prepareCatalog(
     )),
   );
   const mergedModels = mergeCatalogEntriesFromObservedState({
+    modelPickerOrder,
     catalogModels,
     baselineCatalogModels,
     routedEntries,

@@ -315,6 +315,8 @@ export function deriveEntry(
   contextCap?: NativeContextLimitsInput,
 ): RawEntry {
   const preserveExact = isExactComboCatalogModel(model, exactComboSlugs);
+  // Go exposes model-specific upstream enums; synthetic tiers mislead subagent overrides.
+  const preserveExactReasoning = preserveExact || model?.provider === "opencode-go";
   const codexForwardNativeCapabilityAlias = model?.codexForwardNativeCapabilityAlias === true
     ? upstreamNativeEntry(model.id)
     : null;
@@ -359,7 +361,7 @@ export function deriveEntry(
         e,
         model?.reasoningEfforts,
         model?.defaultReasoningEffort,
-        preserveExact || codexForwardNativeCapabilityAlias !== null,
+        preserveExactReasoning || codexForwardNativeCapabilityAlias !== null,
       );
       // This exact provider/model pair is the ChatGPT/Codex forward surface. Keep the pinned
       // native tool/search/responses-lite contract while preserving the routed slug and wire id.
@@ -409,7 +411,7 @@ export function deriveEntry(
   };
   if (isRouted) {
     applyRoutedCodexToolMode(entry, model?.codexToolMode);
-    applyReasoningLevels(entry, model?.reasoningEfforts, model?.defaultReasoningEffort, preserveExact);
+    applyReasoningLevels(entry, model?.reasoningEfforts, model?.defaultReasoningEffort, preserveExactReasoning);
   }
   else {
     applyReasoningLevels(entry, isGpt56NativeSlug(slug) ? undefined : ["low", "medium", "high", "xhigh"]);
@@ -779,12 +781,24 @@ export const CANONICAL_NATIVE_CATALOG_CONTENT_POLICY: Readonly<
   unsupportedNativeEntries: "drop",
 });
 
+/** A picker order containing native ids orders the whole list, without changing spawn ranks. */
+export function applyFullModelPickerOrder(entries: RawEntry[], order: readonly string[]): void {
+  if (!order.some(slug => !slug.includes("/"))) return;
+  const rank = new Map(order.map((slug, index) => [slug, index]));
+  for (const entry of entries) {
+    const natural = entry[SPAWN_PRIORITY_FIELD] ?? entry.priority ?? 9;
+    entry[SPAWN_PRIORITY_FIELD] = natural;
+    entry.priority = rank.get(String(entry.slug)) ?? order.length + Number(natural);
+  }
+}
+
 export interface ObservedCatalogMergeInput {
   readonly catalogModels: readonly RawEntry[];
   readonly baselineCatalogModels: readonly RawEntry[];
   readonly routedEntries: readonly RawEntry[];
   readonly baseline: ReadonlyMap<string, number>;
   readonly featured: readonly string[];
+  readonly modelPickerOrder?: readonly string[];
   readonly wsEnabled: boolean;
   readonly template: RawEntry | null;
   readonly disabledModels: ReadonlySet<string>;
@@ -817,6 +831,7 @@ export function mergeCatalogEntriesFromObservedState({
   routedEntries,
   baseline,
   featured,
+  modelPickerOrder = [],
   wsEnabled,
   template,
   disabledModels,
@@ -976,6 +991,8 @@ export function mergeCatalogEntriesFromObservedState({
         return finished;
       }
       const preserved = normalizeServiceTiers({ ...m, priority: nativePriority(slug, m.priority) });
+      // Recompute spawn rank from current featured models, not a prior picker override.
+      delete preserved[SPAWN_PRIORITY_FIELD];
       // Older natives kept from disk still need the mock top tiers (max + ultra always
       // for subagent max spawns; wire-clamped to the model's real top rung).
       if (!isGpt56NativeSlug(slug) && slug !== NATIVE_RESERVE_MODEL) ensureUltraReasoningLevel(preserved);
@@ -1134,7 +1151,7 @@ export function mergeCatalogEntriesFromObservedState({
     // Mock-max universality (260709): preserved routed entries from disk may predate
     // the max rung — ensure it here so subagent max spawns validate on every
     // reasoning-capable entry. max only: 5.6 exact ladders (luna: no ultra) stay intact.
-    if (!exactCombo && !reserveProjection) {
+    if (!exactCombo && !reserveProjection && !String(e.slug ?? "").startsWith("opencode-go/")) {
       const levels = Array.isArray(e.supported_reasoning_levels)
         ? e.supported_reasoning_levels as Array<{ effort?: string }>
         : [];
@@ -1161,6 +1178,7 @@ export function mergeCatalogEntriesFromObservedState({
     multiAgentV2Enabled,
     { keepNativeChatGptOnV1, preserveDefaultMultiAgentVersion: isReserveCatalogProjection },
   );
+  applyFullModelPickerOrder(versionedEntries, modelPickerOrder);
   for (const entry of versionedEntries) {
     const kind = entry.opencodex_catalog_kind;
     if (trustedAccountBoundNativeCatalogSlug(entry) === undefined
@@ -1762,6 +1780,7 @@ function writeRetainedCatalogSync({
     }).filter(entry => trustedAccountBoundNativeCatalogSlug(entry) !== undefined)
     : [];
   catalog.models = mergeCatalogEntriesFromObservedState({
+    modelPickerOrder,
     catalogModels: catalogModelsForMerge,
     baselineCatalogModels: baselineCatalog?.models ?? [],
     routedEntries: goEntries,

@@ -840,3 +840,18 @@ or expiry does not extend the history-recovery contract.
 Sender and recipient on Go Responses are context for the receiving model, not a new
 machine-readable routing protocol. Tool routing continues to use the existing collaboration
 contracts.
+
+## OpenCode Go reasoning efforts
+
+Go catalog rows preserve their configured reasoning efforts exactly, including during
+catalog sync. OpenCodex does not append synthetic `max` or `ultra` choices to these rows.
+Use `modelReasoningEfforts` and `modelDefaultReasoningEfforts` for each model's accepted
+upstream values. Omen Alpha accepts `low`, `high`, and `max`; Muse Spark 1.3 Contributor
+accepts `minimal`, `low`, `medium`, `high`, and `xhigh` (Go endpoint validation, 2026-09-05).
+A configured subset can exclude the lower tiers. Other providers retain their existing behavior.
+
+For a native-first picker, include native ids in `modelPickerOrder` followed by the
+routed ids. This orders the complete picker while preserving the separate subagent
+candidate priorities. Routed-only orders keep their previous behavior. See the
+[ordering migration note](/guides/model-ordering/#migration-note-native-ids-in-existing-orders).
+`modelDisplayNames` on a provider controls readable labels without changing wire ids.
