@@ -30,6 +30,8 @@ const REQUIRED_TARBALL_FILES = [
   "tests/fixtures/guardrails-donor-rule-cases.json",
 ] as const;
 const MAX_UPSTREAM_SOURCE_BYTES = 8 * 1024 * 1024;
+const PINNED_SOURCE_ATTEMPTS = 2;
+const PINNED_SOURCE_TIMEOUT_MS = 10_000;
 
 interface CommandResult {
   exitCode: number;
@@ -124,11 +126,11 @@ async function verifyPinnedSource(
 ): Promise<Uint8Array> {
   const url = rawGitHubUrl(repository, commit, sourcePath);
   let lastError: unknown;
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
+  for (let attempt = 1; attempt <= PINNED_SOURCE_ATTEMPTS; attempt += 1) {
     try {
       const response = await fetch(url, {
         redirect: "error",
-        signal: AbortSignal.timeout(30_000),
+        signal: AbortSignal.timeout(PINNED_SOURCE_TIMEOUT_MS),
       });
       assert(response.ok, `pinned source returned HTTP ${response.status}: ${sourcePath}`);
       const declaredLength = Number(response.headers.get("content-length"));

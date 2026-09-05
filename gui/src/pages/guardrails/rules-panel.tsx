@@ -54,10 +54,10 @@ export function GuardrailsRulesPanel({
   pending: boolean;
   onToggle: (ruleId: string, enabled: boolean) => void;
   onBulk: (ruleIds: string[], enabled: boolean) => void;
-  onSave: (rule: GuardrailsCustomRule, editingId: string | null) => void;
+  onSave: (rule: GuardrailsCustomRule, editingId: string | null) => Promise<void>;
   onDelete: (rule: GuardrailsCustomRule) => void;
   onExport: () => void;
-  onImport: (bundle: unknown, mode: "merge" | "replace") => void;
+  onImport: (bundle: unknown, mode: "merge" | "replace", returnFocus: HTMLElement | null) => void;
   importPreview: GuardrailsImportPreview | null;
   onApplyImport: () => void;
   onCancelImport: () => void;
@@ -75,6 +75,7 @@ export function GuardrailsRulesPanel({
   const [captureGroupsError, setCaptureGroupsError] = useState(false);
   const [importMode, setImportMode] = useState<"merge" | "replace">("merge");
   const fileRef = useRef<HTMLInputElement>(null);
+  const importButtonRef = useRef<HTMLButtonElement>(null);
   const builtinLabel = useCallback((rule: GuardrailsRules["rules"][number]) =>
     t(rule.group === "CREDENTIAL_URLS"
       ? "guardrails.groupCredentialUrls"
@@ -277,12 +278,12 @@ export function GuardrailsRulesPanel({
                 return;
               }
               void file.text()
-                .then(text => onImport(JSON.parse(text) as unknown, importMode))
+                .then(text => onImport(JSON.parse(text) as unknown, importMode, importButtonRef.current))
                 .catch(onImportError);
               event.target.value = "";
             }}
           />
-          <button type="button" className="btn btn-ghost btn-sm" disabled={pending} onClick={() => fileRef.current?.click()}>
+          <button ref={importButtonRef} type="button" className="btn btn-ghost btn-sm" disabled={pending} onClick={() => fileRef.current?.click()}>
             {t("guardrails.import")}
           </button>
         </div>
@@ -395,8 +396,8 @@ export function GuardrailsRulesPanel({
                         setForm(structuredClone(custom));
                         setCaptureGroupsText(custom.masking.captureGroups.join(", "));
                       }
-                    }}>{t("guardrails.editRule")}</button>
-                    <button type="button" className="btn btn-danger btn-icon" disabled={pending} aria-label={t("guardrails.deleteRule")} onClick={() => {
+                    }} aria-label={`${t("guardrails.editRule")}: ${rule.displayName} (${rule.ruleId})`}>{t("guardrails.editRule")}</button>
+                    <button type="button" className="btn btn-danger btn-icon" disabled={pending} aria-label={`${t("guardrails.deleteRule")}: ${rule.displayName} (${rule.ruleId})`} onClick={() => {
                       const custom = customById.get(rule.ruleId);
                       if (custom) onDelete(custom);
                     }}><IconTrash /></button>
@@ -405,7 +406,7 @@ export function GuardrailsRulesPanel({
                   <Switch
                     on={rule.enabled}
                     disabled={pending}
-                    label={`${ruleLabel(rule)}: ${t(rule.enabled ? "guardrails.statusActive" : "guardrails.statusDisabled")}`}
+                    label={`${ruleLabel(rule)} (${rule.ruleId}): ${t(rule.enabled ? "guardrails.statusActive" : "guardrails.statusDisabled")}`}
                     onClick={() => onToggle(rule.ruleId, !rule.enabled)}
                   />
                 )}
@@ -431,13 +432,13 @@ export function GuardrailsRulesPanel({
             return;
           }
           setCaptureGroupsError(false);
-          onSave({
+          void onSave({
             ...form,
             masking: {
               ...form.masking,
               captureGroups,
             },
-          }, editingId);
+          }, editingId).then(resetForm).catch(() => undefined);
         }}>
           <div className="guardrails-form-grid">
             <label><span className="field-label">{t("guardrails.ruleId")}</span><input required value={form.ruleId} disabled={pending || editingId !== null} onChange={event => update("ruleId", event.target.value)} /></label>

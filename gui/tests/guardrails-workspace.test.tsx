@@ -286,7 +286,12 @@ function installFetch() {
             revision: "rev-remote",
           }, 412);
         }
-        return json({ ok: true, dryRun: false });
+        return json({
+          ok: true,
+          dryRun: false,
+          persistence: "saved",
+          ...settings(overview.enabled, "rev-2"),
+        });
       }
       if (url.pathname === "/api/guardrails/test" && method === "POST") {
         return json({
@@ -474,7 +479,8 @@ test("revision conflict refetches authoritative state and keeps the dialog retry
 
   const dialog = document.querySelector("dialog")!;
   expect(dialog.open).toBe(true);
-  expect(dialog.textContent).toContain("Guardrails settings changed since they were loaded");
+  expect(dialog.textContent).toContain("Could not save Guardrails settings.");
+  expect(dialog.textContent).not.toContain("Guardrails settings changed since they were loaded");
   expect(dialog.querySelector<HTMLButtonElement>(".modal-actions button")?.disabled).toBe(false);
   expect(overviewRequests).toBeGreaterThanOrEqual(2);
   expect(rulesRequests).toBeGreaterThanOrEqual(2);
@@ -490,6 +496,43 @@ test("revision conflict refetches authoritative state and keeps the dialog retry
   expect(document.activeElement).toBe(trigger);
 });
 
+test("a successful mutation adopts its revision before background refresh settles", async () => {
+  await mount();
+  await openTab("settings");
+  holdOverview = true;
+
+  const credentials = [...host.querySelectorAll<HTMLLabelElement>(
+    "#guardrails-panel-settings .guardrails-types label",
+  )].find(label => label.textContent?.trim() === "Credentials")!
+    .querySelector<HTMLInputElement>("input")!;
+  await act(async () => { credentials.click(); });
+  await confirm("Disable category");
+
+  const prefilter = host.querySelector<HTMLButtonElement>(
+    '#guardrails-panel-settings button[aria-label="Keyword prefilter"]',
+  )!;
+  await act(async () => {
+    prefilter.click();
+    await new Promise(resolve => setTimeout(resolve, 15));
+  });
+
+  expect(mutations).toEqual([
+    {
+      body: { enabledDataTypes: [2, 3, 4, 5, 6] },
+      ifMatch: '"rev-1"',
+    },
+    {
+      body: { keywordPrefilterEnabled: true },
+      ifMatch: '"rev-2"',
+    },
+  ]);
+
+  holdOverview = false;
+  releaseOverview?.();
+  releaseOverview = null;
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 15)); });
+});
+
 test("import apply conflict invalidates stale preview and requires a fresh dry-run", async () => {
   failImportApply = true;
   await mount();
@@ -503,6 +546,7 @@ test("import apply conflict invalidates stale preview and requires a fresh dry-r
   });
   expect(host.textContent).not.toContain("Import preview");
   expect(importRequests[1]?.ifMatch).toBe('"rev-1"');
+  expect(document.activeElement?.textContent?.trim()).toBe("Import");
 
   await uploadImportBundle();
   expect(importRequests[2]?.body).toMatchObject({ dryRun: true });
@@ -803,6 +847,7 @@ test("import is previewed before a separate apply request", async () => {
     ifMatch: '"rev-1"',
   });
   expect(host.textContent).not.toContain("Import preview");
+  expect(document.activeElement?.textContent?.trim()).toBe("Import");
 });
 
 test("Replace import that weakens protection requires explicit confirmation", async () => {

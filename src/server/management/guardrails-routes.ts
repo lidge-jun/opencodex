@@ -67,6 +67,14 @@ function expectedRevision(ctx: ManagementContext): string | Response {
   }, 400, ctx.req, ctx.config);
 }
 
+function revisionConflictResponse(ctx: ManagementContext, revision: string): Response {
+  return jsonResponse({
+    error: "Guardrails settings changed since they were loaded",
+    code: "guardrails_revision_conflict",
+    revision,
+  }, 412, ctx.req, ctx.config);
+}
+
 function customRuleId(url: URL): string | null {
   const prefix = "/api/guardrails/rules/";
   if (!url.pathname.startsWith(prefix)) return null;
@@ -100,14 +108,15 @@ async function readJson(ctx: ManagementContext): Promise<{ body: unknown } | { r
 
 function mutationError(ctx: ManagementContext, error: unknown): Response | null {
   if (error instanceof GuardrailsConfigRevisionConflictError) {
-    return jsonResponse({
-      error: error.message,
-      code: "guardrails_revision_conflict",
-      revision: error.currentRevision,
-    }, 412, ctx.req, ctx.config);
+    return revisionConflictResponse(ctx, error.currentRevision);
   }
   if (error instanceof GuardrailsCustomRuleMutationError) {
-    return jsonResponse({ error: error.message }, error.reason === "duplicate" ? 409 : 404, ctx.req, ctx.config);
+    return jsonResponse({
+      error: error.message,
+      code: error.reason === "duplicate"
+        ? "guardrails_rule_duplicate"
+        : "guardrails_rule_not_found",
+    }, error.reason === "duplicate" ? 409 : 404, ctx.req, ctx.config);
   }
   if (error instanceof ConfigMutationLockError) {
     return jsonResponse({ error: error.message, code: "config_mutation_busy" }, 409, ctx.req, ctx.config);
@@ -275,16 +284,23 @@ export async function handleGuardrailsRoutes(ctx: ManagementContext): Promise<Re
     if ("response" in read) return read.response;
     const parsed = parseGuardrailsImport(read.body);
     if (!parsed.ok) return jsonResponse({ error: parsed.error }, 400, req, config);
+    let previewRevision: string | undefined;
+    if (parsed.request.dryRun) {
+      const expected = expectedRevision(ctx);
+      if (expected instanceof Response) return expected;
+      previewRevision = guardrailsSettingsDto(config).revision;
+      if (expected !== previewRevision) return revisionConflictResponse(ctx, previewRevision);
+    }
     try {
       const prepared = prepareGuardrailsImport(config.guardrails, parsed.request);
       if (!prepared.ok) {
         if (parsed.request.dryRun && prepared.report) {
-          return jsonResponse({
+          return withRevision(jsonResponse({
             ok: false,
             dryRun: true,
             error: prepared.error,
             ...prepared.report,
-          }, 200, req, config);
+          }, 200, req, config), previewRevision!);
         }
         return jsonResponse({
           error: prepared.error,
@@ -292,7 +308,10 @@ export async function handleGuardrailsRoutes(ctx: ManagementContext): Promise<Re
         }, prepared.conflicts ? 409 : 400, req, config);
       }
       if (parsed.request.dryRun) {
-        return jsonResponse({ ok: true, dryRun: true, ...prepared.report }, 200, req, config);
+        return withRevision(
+          jsonResponse({ ok: true, dryRun: true, ...prepared.report }, 200, req, config),
+          previewRevision!,
+        );
       }
       return persistSettings(ctx, prepared.patch, { dryRun: false, import: prepared.report });
     } catch (error) {

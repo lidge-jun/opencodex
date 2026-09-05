@@ -506,13 +506,43 @@ test("Guardrails export/import supports dry-run and one atomic apply", async () 
   ))?.status).toBe(400);
 
   const target = baseConfig();
-  const dryRun = request("/api/guardrails/import", "POST", { mode: "replace", dryRun: true, bundle });
-  expect(await (await handleManagementAPI(dryRun, new URL(dryRun.url), target, persistenceSeam()))?.json()).toMatchObject({
+  const dryRun = mutationRequest(
+    target,
+    "/api/guardrails/import",
+    "POST",
+    { mode: "replace", dryRun: true, bundle },
+  );
+  const dryRunResponse = await handleManagementAPI(
+    dryRun,
+    new URL(dryRun.url),
+    target,
+    persistenceSeam(),
+  );
+  expect(dryRunResponse?.headers.get("etag")).toBe(`"${guardrailsPolicyRevision(target.guardrails ?? {})}"`);
+  expect(await dryRunResponse?.json()).toMatchObject({
     ok: true,
     dryRun: true,
     createCount: 1,
   });
   expect(target.guardrails).toBeUndefined();
+
+  const staleDryRun = request(
+    "/api/guardrails/import",
+    "POST",
+    { mode: "replace", dryRun: true, bundle },
+  );
+  staleDryRun.headers.set("if-match", '"stale-revision"');
+  const staleDryRunResponse = await handleManagementAPI(
+    staleDryRun,
+    new URL(staleDryRun.url),
+    target,
+    persistenceSeam(),
+  );
+  expect(staleDryRunResponse?.status).toBe(412);
+  expect(await staleDryRunResponse?.json()).toMatchObject({
+    code: "guardrails_revision_conflict",
+    revision: guardrailsPolicyRevision(target.guardrails ?? {}),
+  });
 
   const conflictTarget = baseConfig();
   conflictTarget.guardrails = {
@@ -522,7 +552,12 @@ test("Guardrails export/import supports dry-run and one atomic apply", async () 
       regex: "DIFFERENT_[A-Z]+",
     }],
   };
-  const conflictDryRun = request("/api/guardrails/import", "POST", { mode: "merge", dryRun: true, bundle });
+  const conflictDryRun = mutationRequest(
+    conflictTarget,
+    "/api/guardrails/import",
+    "POST",
+    { mode: "merge", dryRun: true, bundle },
+  );
   const conflictResponse = await handleManagementAPI(
     conflictDryRun,
     new URL(conflictDryRun.url),

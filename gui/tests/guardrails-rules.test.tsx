@@ -79,9 +79,9 @@ const DATA: GuardrailsRules = {
 async function mount(overrides: {
   data?: GuardrailsRules;
   onBulk?: (ruleIds: string[], enabled: boolean) => void;
-  onImport?: (bundle: unknown, mode: "merge" | "replace") => void;
+  onImport?: (bundle: unknown, mode: "merge" | "replace", returnFocus: HTMLElement | null) => void;
   onImportError?: (error: unknown) => void;
-  onSave?: (rule: GuardrailsCustomRule, editingId: string | null) => void;
+  onSave?: (rule: GuardrailsCustomRule, editingId: string | null) => Promise<void>;
   importPreview?: GuardrailsImportPreview | null;
 } = {}) {
   const { createRoot } = await import("react-dom/client");
@@ -94,7 +94,7 @@ async function mount(overrides: {
           pending={false}
           onToggle={() => {}}
           onBulk={overrides.onBulk ?? (() => {})}
-          onSave={overrides.onSave ?? (() => {})}
+          onSave={overrides.onSave ?? (async () => {})}
           onDelete={() => {}}
           onExport={() => {}}
           onImport={overrides.onImport ?? (() => {})}
@@ -149,6 +149,9 @@ test("built-in rule labels use the active locale instead of bundled Russian meta
   expect(host.textContent).toContain("Credential URLs");
   expect(host.textContent).not.toContain("Учетные данные");
   expect(host.textContent).not.toContain("URL с учетными данными");
+  expect(host.querySelector<HTMLButtonElement>(
+    'button[aria-label*="opencodex.credentials.password-assignment"]',
+  )).not.toBeNull();
 });
 
 test("custom group headings keep the configured group instead of repeating a rule label", async () => {
@@ -187,6 +190,12 @@ test("custom group headings keep the configured group instead of repeating a rul
 
   expect(host.querySelector(".guardrails-rule-group")?.textContent).toBe("LOCAL SECRETS");
   expect(host.querySelector(".guardrails-rule-row strong")?.textContent).toBe("Synthetic token");
+  expect(host.querySelector<HTMLButtonElement>(
+    'button[aria-label="Edit rule: Synthetic token (custom.group-label)"]',
+  )).not.toBeNull();
+  expect(host.querySelector<HTMLButtonElement>(
+    'button[aria-label="Delete rule: Synthetic token (custom.group-label)"]',
+  )).not.toBeNull();
 });
 
 test("paginates fifty rules and keeps the remaining five reachable", async () => {
@@ -361,7 +370,7 @@ test("Replace preview highlights every security-setting weakening", async () => 
 
 test("capture group commas remain editable and parse only on submit", async () => {
   const saved: GuardrailsCustomRule[] = [];
-  await mount({ onSave: rule => saved.push(rule) });
+  await mount({ onSave: async rule => { saved.push(rule); } });
   const captureInput = [...host.querySelectorAll<HTMLLabelElement>("label")]
     .find(label => label.textContent?.includes("Capture groups"))
     ?.querySelector("input");
@@ -397,4 +406,47 @@ test("capture group commas remain editable and parse only on submit", async () =
   expect(saved).toHaveLength(1);
   expect(captureInput!.getAttribute("aria-invalid")).toBe("true");
   expect(host.querySelector('[role="alert"]')?.textContent).toContain("positive integer");
+});
+
+test("successful custom rule creation resets the form", async () => {
+  await mount({ onSave: async () => {} });
+  await act(async () => { button("Add rule").click(); });
+
+  const ruleId = [...host.querySelectorAll<HTMLLabelElement>("label")]
+    .find(label => label.textContent?.includes("Rule ID"))
+    ?.querySelector<HTMLInputElement>("input");
+  const name = [...host.querySelectorAll<HTMLLabelElement>("label")]
+    .find(label => label.textContent?.includes("Rule name"))
+    ?.querySelector<HTMLInputElement>("input");
+  const displayName = [...host.querySelectorAll<HTMLLabelElement>("label")]
+    .find(label => label.textContent?.includes("Display name"))
+    ?.querySelector<HTMLInputElement>("input");
+  const regex = [...host.querySelectorAll<HTMLLabelElement>("label")]
+    .find(label => label.textContent?.includes("RE2 pattern"))
+    ?.querySelector<HTMLInputElement>("input");
+  const placeholder = [...host.querySelectorAll<HTMLLabelElement>("label")]
+    .find(label => label.textContent?.includes("Placeholder type"))
+    ?.querySelector<HTMLInputElement>("input");
+  const setValue = (input: HTMLInputElement | undefined, value: string) => {
+    Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!
+      .set!.call(input, value);
+    input!.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+  };
+
+  await act(async () => {
+    setValue(ruleId, "custom.reset");
+    setValue(name, "Reset fixture");
+    setValue(displayName, "Reset fixture");
+    setValue(regex, "reset_[a-z]+");
+    setValue(placeholder, "RESET");
+  });
+  await act(async () => {
+    ruleId!.closest("form")!.dispatchEvent(
+      new testWindow.Event("submit", { bubbles: true, cancelable: true }),
+    );
+    await Promise.resolve();
+  });
+
+  expect(ruleId?.value).toBe("");
+  expect(host.textContent).not.toContain("Cancel");
 });

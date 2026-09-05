@@ -287,11 +287,25 @@ export function scanText(
   return findings;
 }
 
+/**
+ * Apply whole-file exemptions before scanning text.
+ *
+ * Keeping this boundary exported makes the fail-closed hash behavior directly
+ * testable: a one-byte fixture mutation must fall back to the normal detectors.
+ */
+export function scanTextWithFileExemptions(
+  file: string,
+  text: string,
+  fileSha256 = createHash("sha256").update(text).digest("hex"),
+): Finding[] {
+  if (HASH_PINNED_SYNTHETIC_FIXTURES.get(file) === fileSha256) return [];
+  return scanText(file, text, fileSha256);
+}
+
 function scanFile(file: string): Finding[] {
   const bytes = readFileSync(file);
   const fileSha256 = createHash("sha256").update(bytes).digest("hex");
-  if (HASH_PINNED_SYNTHETIC_FIXTURES.get(file) === fileSha256) return [];
-  return scanText(file, bytes.toString("utf8"), fileSha256);
+  return scanTextWithFileExemptions(file, bytes.toString("utf8"), fileSha256);
 }
 
 /**

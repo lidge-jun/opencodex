@@ -50,17 +50,32 @@ export class GuardrailsApiError extends Error {
   }
 }
 
+const LOCALIZED_GUARDRAILS_ERROR_CODES = new Set([
+  "config_mutation_busy",
+  "guardrails_assets_invalid",
+  "guardrails_capacity_exceeded",
+  "guardrails_revision_conflict",
+  "guardrails_revision_invalid",
+  "guardrails_revision_required",
+  "guardrails_rule_duplicate",
+  "guardrails_rule_invalid",
+  "guardrails_rule_not_found",
+]);
+
 async function guardrailsMutationError(response: Response, fallback: string): Promise<GuardrailsApiError> {
-  let message = fallback;
+  let serverMessage: string | undefined;
   let code: string | undefined;
   try {
     const body = await response.json() as { code?: unknown; error?: unknown; message?: unknown };
-    if (typeof body.error === "string" && body.error) message = body.error;
-    else if (typeof body.message === "string" && body.message) message = body.message;
+    if (typeof body.error === "string" && body.error) serverMessage = body.error;
+    else if (typeof body.message === "string" && body.message) serverMessage = body.message;
     if (typeof body.code === "string" && body.code) code = body.code;
   } catch {
     // Non-JSON errors keep the localized fallback.
   }
+  const knownCode = code !== undefined
+    && (LOCALIZED_GUARDRAILS_ERROR_CODES.has(code) || code.startsWith("config_"));
+  const message = knownCode ? fallback : (serverMessage ?? fallback);
   return new GuardrailsApiError(message, response.status, code);
 }
 
@@ -214,8 +229,8 @@ export async function importGuardrailsBundle(
   dryRun: boolean,
   revision: string,
   error: string,
-): Promise<Record<string, unknown>> {
-  return mutate<Record<string, unknown>>(
+): Promise<GuardrailsSettings> {
+  return mutate<GuardrailsSettings>(
     `${apiBase}/api/guardrails/import`,
     "POST",
     { mode, dryRun, bundle },
