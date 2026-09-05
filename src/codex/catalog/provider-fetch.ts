@@ -738,7 +738,14 @@ export function applyProviderConfigHints(
   effectiveAlias?: string | null,
 ): CatalogModel {
   const displayName = configuredModelDisplayName(prov, model.id);
-  const providerAlias = typeof effectiveAlias === "string" || effectiveAlias === null ? effectiveAlias : effectiveProviderAliasDecision(name, prov);
+  // The alias decision is resolved once at flight admission (captureProviderGather) and threaded
+  // through as `effectiveAlias`. Re-deriving it here would read PROVIDER_REGISTRY after admission,
+  // which is exactly the authority leak tests/codex-integration/codex-gather-authority.test.ts
+  // forbids: a flight must not consult the live registry once its transport has been captured.
+  // When no decision was threaded in, carry whatever the row already resolved to instead.
+  const providerAlias = typeof effectiveAlias === "string" || effectiveAlias === null
+    ? effectiveAlias
+    : model.providerAlias;
   const configuredCap = configuredContextWindow(prov, model.id);
   const configuredMaxInput = configuredMaxInputTokens(prov, model.id);
   const maxOutputTokens = routedMaxOutputTokens(name, prov, model, model.id, metadataModelIdCaseFold);
