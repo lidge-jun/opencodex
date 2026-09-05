@@ -23,11 +23,16 @@ let testDir: string;
 let previousHome: string | undefined;
 let previousCodexHome: string | undefined;
 let previousFetch: typeof fetch;
+let observationTime: number;
+let restoreObservationClock: () => void;
 
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
   previousCodexHome = process.env.CODEX_HOME;
   previousFetch = globalThis.fetch;
+  observationTime = Date.now();
+  const clock = spyOn(Date, "now").mockImplementation(() => observationTime);
+  restoreObservationClock = () => clock.mockRestore();
   testDir = mkdtempSync(join(tmpdir(), "ocx-main-window-"));
   process.env.OPENCODEX_HOME = testDir;
   process.env.CODEX_HOME = testDir;
@@ -39,6 +44,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  restoreObservationClock();
   globalThis.fetch = previousFetch;
   clearAccountQuota();
   clearMainAccountInfoCache();
@@ -292,21 +298,28 @@ describe("declared short-window producer evidence", () => {
         expect(info.quota).not.toHaveProperty("shortPercent");
         expect(getMainPolicyQuota()).toMatchObject({ weeklyPercent: 99, shortWindowSeconds: 18_000 });
         expect(getMainPolicyQuota()).not.toHaveProperty("shortPercent");
+        expect(getMainPolicyQuota()).not.toHaveProperty("shortObservedAt");
         expect(matchesMainQuotaCredential(accessToken, "fixture-main-a")).toBe(true);
         expect(getMainAccountHardLockStatus({ codexMainAccountHardLock: true })).toEqual({ enabled: true, state: "unknown" });
         // The paired case: unknown metadata must not erase a previously measured short99.
+        const firstShortObservedAt = observationTime;
         await fetchMainAccountInfo(true);
+        expect(getMainPolicyQuota()?.shortObservedAt).toBe(firstShortObservedAt);
+        observationTime += 60_000;
         await fetchMainAccountInfo(true);
         expect(calls).toBe(4);
         for (const stored of [getAccountQuota(MAIN), getMainPolicyQuota()]) {
-          expect(stored).toMatchObject({ shortPercent: 99, shortWindowSeconds: 18_000, shortResetAt: 3_000_000_000 });
+          expect(stored).toMatchObject({ shortPercent: 99, shortWindowSeconds: 18_000,
+            shortResetAt: 3_000_000_000, shortObservedAt: firstShortObservedAt });
         }
         const enabled = { codexMainAccountHardLock: true };
         expect(getMainAccountHardLockStatus(enabled, 3_000_000_000_000 - 1).state).toBe("blocked");
         expect(getMainAccountHardLockStatus(enabled, 3_000_000_000_000)).toEqual({ enabled: true, state: "blocked" });
+        observationTime += 60_000;
         await fetchMainAccountInfo(true);
         expect(calls).toBe(5);
-        expect(getMainPolicyQuota()).toMatchObject({ shortPercent: 0, shortResetAt: 4_000_000_000 });
+        expect(getMainPolicyQuota()).toMatchObject({ shortPercent: 0, shortResetAt: 4_000_000_000, shortObservedAt: observationTime });
+        expect(getAccountQuota(MAIN)?.shortObservedAt).toBe(observationTime);
         expect(getMainAccountHardLockStatus(enabled, 3_000_000_000_000 - 1).state).toBe("ready");
       } finally {
         fetchSpy.mockRestore();
@@ -335,22 +348,30 @@ describe("declared short-window producer evidence", () => {
         weeklyPercent: 99, shortWindowSeconds: 18_000, shortResetAt: 4_000_000_000,
       });
       expect(getMainPolicyQuota()).not.toHaveProperty("shortPercent");
+      expect(getMainPolicyQuota()).not.toHaveProperty("shortObservedAt");
       expect(getMainAccountHardLockStatus({ codexMainAccountHardLock: true })).toEqual({ enabled: true, state: "unknown" });
+      const firstShortObservedAt = observationTime;
       applyAccountQuotaFromUpstreamHeaders(MAIN, new Headers({
         "x-codex-primary-used-percent": "99", "x-codex-primary-window-minutes": "300",
         "x-codex-primary-reset-at": "3000000000",
       }), undefined, writer);
+      expect(getMainPolicyQuota()?.shortObservedAt).toBe(firstShortObservedAt);
+      observationTime += 60_000;
       headers.set("x-codex-primary-window-minutes", "60");
       applyAccountQuotaFromUpstreamHeaders(MAIN, headers, undefined, writer);
       for (const stored of [getAccountQuota(MAIN), getMainPolicyQuota()]) {
-        expect(stored).toMatchObject({ shortPercent: 99, shortWindowSeconds: 18_000, shortResetAt: 3_000_000_000 });
+        expect(stored).toMatchObject({ shortPercent: 99, shortWindowSeconds: 18_000,
+          shortResetAt: 3_000_000_000, shortObservedAt: firstShortObservedAt });
       }
       const enabled = { codexMainAccountHardLock: true };
       expect(getMainAccountHardLockStatus(enabled, 3_000_000_000_000 - 1).state).toBe("blocked");
       expect(getMainAccountHardLockStatus(enabled, 3_000_000_000_000)).toEqual({ enabled: true, state: "blocked" });
       headers.set("x-codex-primary-used-percent", "0");
+      observationTime += 60_000;
       applyAccountQuotaFromUpstreamHeaders(MAIN, headers, undefined, writer);
-      expect(getMainPolicyQuota()).toMatchObject({ shortPercent: 0, shortWindowSeconds: 3_600, shortResetAt: 4_000_000_000 });
+      expect(getMainPolicyQuota()).toMatchObject({ shortPercent: 0, shortWindowSeconds: 3_600,
+        shortResetAt: 4_000_000_000, shortObservedAt: observationTime });
+      expect(getAccountQuota(MAIN)?.shortObservedAt).toBe(observationTime);
       expect(getMainAccountHardLockStatus(enabled, 3_000_000_000_000 - 1).state).toBe("ready");
     });
   }

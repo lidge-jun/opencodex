@@ -626,7 +626,7 @@ function readMainPolicyQuota(value: unknown): MainPolicyQuota | null {
     }
   }
   for (const field of [
-    "weeklyResetAt", "monthlyResetAt", "shortResetAt", "shortWindowSeconds", "resetCredits",
+    "weeklyResetAt", "monthlyResetAt", "shortResetAt", "shortObservedAt", "shortWindowSeconds", "resetCredits",
   ] as const) {
     const number = raw[field];
     if (typeof number === "number" && Number.isFinite(number) && number >= 0) quota[field] = number;

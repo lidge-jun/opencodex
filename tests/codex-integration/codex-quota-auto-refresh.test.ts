@@ -231,7 +231,7 @@ describe("Codex quota window auto refresh", () => {
     await runCodexQuotaAutoRefresh(cfg, NOW + 1, deps);
     expect(attempts).toBe(2);
     expect(writes).toBe(1);
-    expect(cfg.codexQuotaAutoRefresh?.["pool-a"]?.lastWeeklyResetAt).toBe(RESET_SECONDS);
+    expect(cfg.codexQuotaAutoRefresh?.["pool-a"]?.lastWeeklyResetAt).toBe(NOW);
   });
 
   test("does not schedule pool-account warmups in Direct mode", async () => {

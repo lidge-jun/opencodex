@@ -150,7 +150,7 @@ describe("cold partial writers hydrate only the surviving legacy cache", () => {
       test(`${writerKind} credits-only write ${expired ? "does not revive expired" : "retains fresh"} ordinary windows`, () => {
         const writer = writerFor();
         const quota = {
-          shortPercent: 99, shortResetAt: 2_000_000_000, shortWindowSeconds: 18_000,
+          shortPercent: 99, shortResetAt: 2_000_000_000, shortWindowSeconds: 18_000, shortObservedAt: 1_700_000_000_000,
           weeklyPercent: 50, weeklyResetAt: 2_100_000_000,
           monthlyPercent: 25, monthlyResetAt: 2_200_000_000, resetCredits: 4,
           updatedAt: Date.now() - (expired ? 7 : 1) * 60 * 60_000,
@@ -222,22 +222,22 @@ describe("cold persisted policy percentage ranges", () => {
 
   test("rejected short usage retains independently valid unknown-window metadata", () => {
     const disk = writeColdPolicy({ weeklyPercent: 99, shortPercent: 101,
-      shortWindowSeconds: 18_000, shortResetAt: 2_000_000_000, resetCredits: 150 });
+      shortWindowSeconds: 18_000, shortResetAt: 2_000_000_000, shortObservedAt: 1_700_000_000_000, resetCredits: 150 });
     expect(getMainPolicyQuota()).toEqual({ updatedAt: disk.updatedAt, weeklyPercent: 99,
-      shortWindowSeconds: 18_000, shortResetAt: 2_000_000_000, resetCredits: 150 });
+      shortWindowSeconds: 18_000, shortResetAt: 2_000_000_000, shortObservedAt: 1_700_000_000_000, resetCredits: 150 });
     expect(getMainAccountHardLockStatus(cfg)).toEqual({ enabled: true, state: "unknown" });
   });
 
   test.each([0, 150, 2_000_000_000])("metadata and credits retain nonnegative %s independently of usage ranges", value => {
     const disk = writeColdPolicy({ shortPercent: 100, weeklyPercent: 99, monthlyPercent: 0,
       shortResetAt: value, weeklyResetAt: value, monthlyResetAt: value,
-      shortWindowSeconds: value, resetCredits: value, monthlyIsPrimaryWindow: true });
+      shortWindowSeconds: value, shortObservedAt: value, resetCredits: value, monthlyIsPrimaryWindow: true });
     expect(getMainPolicyQuota()).toEqual(disk);
   });
 
   test.each([-1, Infinity, -Infinity, "150", null])("invalid metadata %s cannot erase valid percentage evidence", value => {
     const disk = writeColdPolicy({ weeklyPercent: 99, shortResetAt: value, weeklyResetAt: value,
-      monthlyResetAt: value, shortWindowSeconds: value, resetCredits: value });
+      monthlyResetAt: value, shortWindowSeconds: value, shortObservedAt: value, resetCredits: value });
     expect(getMainPolicyQuota()).toEqual({ updatedAt: disk.updatedAt, weeklyPercent: 99 });
     expect(getMainAccountHardLockStatus(cfg).state).toBe("blocked");
   });

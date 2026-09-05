@@ -368,9 +368,9 @@ describe("main policy quota durability and lifecycle", () => {
     const writer = writerFor();
     writeSnapshot({ version: 1, quotas: {}, mainPolicyQuota: { identityKey: writer.identityKey, quota: {
       weeklyPercent: 99, monthlyPercent: "100", shortPercent: null, shortResetAt: -1,
-      updatedAt: 1, bearerHmac: "must-not-load", customWindows: [{ label: "untrusted", percent: 100 }],
+      updatedAt: 1, shortObservedAt: 1234, bearerHmac: "must-not-load", customWindows: [{ label: "untrusted", percent: 100 }],
     } } });
-    expect(getMainPolicyQuota()).toEqual({ weeklyPercent: 99, updatedAt: 1 });
+    expect(getMainPolicyQuota()).toEqual({ weeklyPercent: 99, shortObservedAt: 1234, updatedAt: 1 });
     clearAccountQuota();
     writeSnapshot({ version: 1, quotas: {}, mainPolicyQuota: {
       identityKey: "not-an-identity-key", quota: { weeklyPercent: 99, updatedAt: 1 },
