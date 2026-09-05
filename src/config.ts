@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmodSync, constants as fsConstants, copyFileSync, existsSync, linkSync, mkdirSync, readFileSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants as fsConstants, copyFileSync, existsSync, fchmodSync, fstatSync, lstatSync, linkSync, mkdirSync, openSync, readFileSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Database } from "bun:sqlite";
 import * as z from "zod/v4";
@@ -3037,6 +3037,7 @@ export interface PersistedConfigInitializationIO {
   publishNoReplace(temp: string, target: string): void;
   truncate(path: string): void;
   unlink(path: string): void;
+  close?(): void;
 }
 
 let persistedConfigInitializationBeforePublishForTests: (() => void) | null = null;
@@ -3060,6 +3061,7 @@ function publishInitialConfigNoReplace(config: OcxConfig, io: PersistedConfigIni
 
   const scrubUnpublishedTemp = (cause?: unknown): void => {
     cleanupAttempted = true;
+    io.close?.();
     let scrubbed = false;
     try { io.truncate(temp); scrubbed = true; }
     catch (error) {
@@ -3116,16 +3118,35 @@ function publishInitialConfigNoReplace(config: OcxConfig, io: PersistedConfigIni
 }
 
 function defaultPersistedConfigInitializationIO(configPath: string): PersistedConfigInitializationIO {
+  let descriptor: number | undefined;
   return {
-    createExclusive: target => writeFileSync(target, "", { flag: "wx", mode: 0o600 }),
-    write: (target, bytes) => writeFileSync(target, bytes),
+    createExclusive: target => { descriptor = openSync(target, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL, 0o600); },
+    write: (target, bytes) => {
+      if (descriptor === undefined) writeFileSync(target, bytes);
+      else writeFileSync(descriptor, bytes, { encoding: "utf-8" });
+    },
     harden: target => {
-      try { chmodSync(target, 0o600); } catch { /* platform may ignore chmod */ }
+      try {
+        if (descriptor === undefined) chmodSync(target, 0o600);
+        else if (process.platform !== "win32") fchmodSync(descriptor, 0o600);
+      } catch { /* platform may ignore chmod */ }
       if (process.platform === "win32") hardenSecretPath(target, { required: true, timeoutMemoKey: configPath });
     },
-    publishNoReplace: (temp, target) => linkSync(temp, target),
+    publishNoReplace: (temp, target) => {
+      if (descriptor !== undefined) {
+        const opened = fstatSync(descriptor);
+        const linked = lstatSync(temp);
+        if (opened.dev !== linked.dev || opened.ino !== linked.ino) {
+          closeSync(descriptor); descriptor = undefined;
+          throw new Error("atomic initialization temporary file identity changed before publication");
+        }
+        closeSync(descriptor); descriptor = undefined;
+      }
+      linkSync(temp, target);
+    },
     truncate: target => truncateSync(target, 0),
     unlink: unlinkSync,
+    close: () => { if (descriptor !== undefined) { closeSync(descriptor); descriptor = undefined; } },
   };
 }
 
