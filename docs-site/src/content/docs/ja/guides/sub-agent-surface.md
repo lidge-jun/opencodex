@@ -80,14 +80,13 @@ Codex は、v2 ネイティブからルーティングされた子タスクを�
 
 opencodex は、空のタスクまたは読み取り不可能なタスクを転送するのではなく、安全に失敗します。
 
-- 直接の非ネイティブ ルートは HTTP 400 と
-`error.code = "unreadable_encrypted_agent_task"` を返し、暗号文をエコーしません。ただし、
-キー認証 Responses プロバイダーが `allowEncryptedV2AgentTasks: true` を明示的に有効にした場合を除きます。
+- 対象外の直接非ネイティブルートは HTTP 400 と `error.code = "unreadable_encrypted_agent_task"` を返し、暗号文をエコーしません。
+  `allowEncryptedV2AgentTasks: true` を明示的に有効にした対象の直接キー認証 Responses プロバイダーは、代わりに不透明な暗号文を受け取り、このエラーを回避します。
 - コンボでは、再試行を含む、そのタスクの正規のネイティブ ChatGPT ターゲットのみが考慮されます。何もない場合
 が利用可能な場合は、同じ 400 エラーが返されます。
 - 読み取り可能なプレーンテキストのタスクは、通常のルートとフォールバック動作を維持します。
 
-回復オプションは、ネイティブ ChatGPT 子の選択、コンボへのネイティブ ChatGPT ターゲットの追加、異種プロバイダーの委任に v1 を使用する、または呼び出し元を制御するときにタスクをプレーンテキスト v2 `agent_message` コンテンツとして再送信することです。
+回復オプションは、ネイティブ ChatGPT 子の選択、不透明なペイロードを処理できる直接キー認証 Responses リレーの明示的な信頼、コンボへのネイティブ ChatGPT ターゲットの追加、異種プロバイダーの委任に v1 を使用する、または呼び出し元を制御するときにタスクをプレーンテキスト v2 `agent_message` コンテンツとして再送信することです。
 
 実験的な `agentTaskRecovery` はデフォルトで無効です。明示的に有効にすると、固定された ChatGPT エンドポイントへの追加の認証済みリクエストでこの形式を回復できますが、クォータと待ち時間が増え、非公開のバックエンド動作に依存します。失敗時は従来の `unreadable_encrypted_agent_task` を維持します。詳細は[英語版の設定リファレンス](/reference/configuration/agents/#encrypted-v2-task-recovery)を参照してください。
 

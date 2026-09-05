@@ -129,9 +129,10 @@ known [#92 limitation](https://github.com/lidge-jun/opencodex/issues/92).
 
 opencodex fails safely instead of forwarding an empty or unreadable task:
 
-- A direct non-native route returns HTTP 400 with
-  `error.code = "unreadable_encrypted_agent_task"` and does not echo the ciphertext unless its
-  key-auth Responses provider explicitly opts in with `allowEncryptedV2AgentTasks: true`.
+- An ineligible direct non-native route returns HTTP 400 with
+  `error.code = "unreadable_encrypted_agent_task"` and does not echo the ciphertext. An eligible
+  direct key-auth Responses provider that explicitly opts in with
+  `allowEncryptedV2AgentTasks: true` instead receives the opaque ciphertext and bypasses this error.
 - A combo considers only canonical native ChatGPT targets for that task, including retries. If none
   is available, it returns the same 400 error.
 - A readable plaintext task keeps the normal route and fallback behavior.

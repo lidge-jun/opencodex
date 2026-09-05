@@ -310,7 +310,7 @@ Les erreurs utilisent l'enveloppe du dialecte client lorsque cela est nécessair
 | 401 | `authentication_error` | Un identifiant requis pour l’admission au proxy est manquant ou invalide |
 | 403 | `origin_rejected` | Une demande de plan de données Réponses/OpenAI ou une mise à niveau WebSocket provient d'une origine non autorisée |
 | 503 | `combo_unavailable` | Chaque cible du combo sélectionné est indisponible, en temps de recharge, désactivée ou autrement inéligible |
-| 400 | `unreadable_encrypted_agent_task` | Une tâche de travail v2 chiffrée n'a ni cible ChatGPT canonique ni cible Responses explicitement approuvée pouvant la consommer |
+| 400 | `unreadable_encrypted_agent_task` | Une tâche de travail v2 chiffrée n’a ni cible ChatGPT canonique éligible ni cible Responses directe à authentification par clé explicitement approuvée avec `allowEncryptedV2AgentTasks: true` pouvant la consommer |
 | 426 | `upgrade_required` | Le transport Réponses WebSocket est désactivé ou la mise à niveau a échoué ; utiliser HTTP |
 
 Les échecs d'origine Anthropic sont restitués dans l'enveloppe d'erreur de Anthropic, donc le rejet d'origine est un

@@ -128,16 +128,17 @@ limitation connue [#92](https://github.com/lidge-jun/opencodex/issues/92).
 
 opencodex échoue en toute sécurité au lieu de transférer une tâche vide ou illisible :
 
-- Une route directe non native renvoie HTTP 400 avec
-  `error.code = "unreadable_encrypted_agent_task"` et ne fait pas écho au texte chiffré, sauf si
-  son fournisseur Responses à authentification par clé active explicitement `allowEncryptedV2AgentTasks: true`.
+- Une route directe non native inéligible renvoie HTTP 400 avec
+  `error.code = "unreadable_encrypted_agent_task"` et ne fait pas écho au texte chiffré. Un
+  fournisseur Responses direct à authentification par clé qui active explicitement
+  `allowEncryptedV2AgentTasks: true` reçoit à la place le texte chiffré opaque et évite cette erreur.
 - Un combo considère uniquement les cibles ChatGPT natives canoniques pour cette tâche, y compris les tentatives. Si aucun
   est disponible, il renvoie la même erreur 400.
 - Une tâche lisible en texte clair conserve la route normale et le comportement de repli.
 
-Les options de récupération consistent à sélectionner un enfant ChatGPT natif, à ajouter une cible ChatGPT native au combo, à utiliser
-v1 pour la délégation de fournisseurs hétérogènes, ou renvoyer la tâche en texte brut v2 `agent_message`
-contenu lorsque vous contrôlez l’appelant.
+Les options de récupération consistent à sélectionner un enfant ChatGPT natif, à approuver explicitement un relais Responses direct à
+authentification par clé capable de consommer la charge utile opaque, à ajouter une cible ChatGPT native au combo, à utiliser v1 pour la
+délégation de fournisseurs hétérogènes, ou à renvoyer la tâche comme contenu `agent_message` v2 en texte brut lorsque vous contrôlez l’appelant.
 
 L’option expérimentale `agentTaskRecovery`, désactivée par défaut, peut récupérer cette forme précise de
 tâche native envoyée vers une route externe. Elle utilise un transfert Responses brut vers le point de

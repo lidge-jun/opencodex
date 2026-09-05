@@ -148,18 +148,19 @@ bilinen [#92 sınırlamasıdır](https://github.com/lidge-jun/opencodex/issues/9
 opencodex boş veya okunamayan bir görevi iletmek yerine güvenli bir şekilde
 başarısız olur:
 
-- Doğrudan yerel olmayan bir rota, anahtar kimlik doğrulamalı Responses sağlayıcısı
-  `allowEncryptedV2AgentTasks: true` ile açıkça etkinleştirilmedikçe `error.code =
+- Uygun olmayan doğrudan yerel olmayan bir rota `error.code =
   "unreadable_encrypted_agent_task"` ile HTTP 400 döndürür ve şifreli metni yankılamaz.
+  `allowEncryptedV2AgentTasks: true` ile açıkça etkinleştirilen uygun bir doğrudan anahtar
+  kimlik doğrulamalı Responses sağlayıcısı bunun yerine opak şifreli metni alır ve bu hatayı atlar.
 - Bir kombo, yeniden denemeler de dahil olmak üzere bu görev için yalnızca
   kurallı yerel ChatGPT hedeflerini değerlendirir. Hiçbiri yoksa aynı 400
   hatasını döndürür.
 - Okunabilir bir düz metin görevi normal rota ve geri dönüş davranışını korur.
 
-Kurtarma seçenekleri, yerel bir ChatGPT çocuğu seçmek, komboya yerel bir ChatGPT
-hedefi eklemek, heterojen sağlayıcı yetkilendirmesi için v1 kullanmak veya
-arayanı denetlediğinizde görevi düz metin v2 `agent_message` içeriği olarak
-yeniden göndermektir.
+Kurtarma seçenekleri, yerel bir ChatGPT çocuğu seçmek, opak yükü tüketebilen doğrudan anahtar
+kimlik doğrulamalı bir Responses geçidine açıkça güvenmek, komboya yerel bir ChatGPT hedefi
+eklemek, heterojen sağlayıcı yetkilendirmesi için v1 kullanmak veya arayanı denetlediğinizde
+görevi düz metin v2 `agent_message` içeriği olarak yeniden göndermektir.
 
 Deneysel, varsayılan olarak devre dışı bırakılmış bir `agentTaskRecovery`
 seçeneği, `authMode: "forward"` ile kurallı `openai` sağlayıcısı tarafından
