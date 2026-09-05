@@ -62,9 +62,13 @@ ocx connect rotate --admin-token-stdin
 
 opencodex 不發布官方 Docker 映像，但儲存庫提供維護的 `Dockerfile` 與 `compose.yaml`，可在本機建置以 digest 固定的 Bun 映像。第一次啟動前，透過 stdin 初始化一次資料金鑰；金鑰不會被輸出，並以僅擁有者可讀的權限保存在 `ocx-state` volume。
 
+主機需要安裝 Git 與 Bun。每次建置映像前，都應從 Git 追蹤的原始碼產生標準相容性清單，產生後到建置完成前不要修改原始碼。產生的 JSON 不加入 Git；`.git` 不進入 Docker 建置上下文。主機連接埠預設繫結至 `127.0.0.1`。遠端存取須明確使用 `OPENCODEX_BIND_ADDRESS=<LAN或Tailscale-IP> docker compose up -d`；`0.0.0.0` 會公開所有介面。請使用防火牆與經過身分驗證的 TLS/tailnet 前端保護存取。
+
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
+bun scripts/generate-compatibility-version.ts
+docker compose build
 openssl rand -hex 32 | docker compose run --rm -T hub bun run docker/bootstrap-token.ts
 docker compose up -d
 ```

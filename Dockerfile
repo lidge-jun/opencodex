@@ -31,10 +31,14 @@ COPY --from=build --chown=bun:bun /home/bun/app/package.json ./package.json
 COPY --from=build --chown=bun:bun /home/bun/app/bun.lock ./bun.lock
 COPY --from=build --chown=bun:bun /home/bun/app/node_modules ./node_modules
 COPY --from=build --chown=bun:bun /home/bun/app/src ./src
+# Run `bun scripts/generate-compatibility-version.ts` on the host before building.
+# Explicit COPY makes a missing artifact a build failure; .git stays outside the context.
+COPY --chown=bun:bun src/generated/compatibility-version.json ./src/generated/compatibility-version.json
 COPY --from=build --chown=bun:bun /home/bun/app/docker ./docker
 COPY --from=build --chown=bun:bun /home/bun/app/gui/dist ./gui/dist
 
 USER bun
+RUN ["bun", "-e", "import { readOpenCodexCompatibilityVersion } from './src/routing/compatibility/version.ts'; if (!/^[0-9a-f]{64}$/.test(readOpenCodexCompatibilityVersion() ?? '')) throw new Error('Missing or invalid generated compatibility manifest');"]
 VOLUME ["/home/bun/.opencodex"]
 EXPOSE 10100
 

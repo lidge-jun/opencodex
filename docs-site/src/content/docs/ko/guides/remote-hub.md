@@ -88,9 +88,13 @@ ocx connect rotate --admin-token-stdin
 
 opencodex는 공식 컨테이너 이미지를 배포하지 않지만, 저장소 루트의 `Dockerfile`과 `compose.yaml`로 digest가 고정된 소스 이미지를 직접 빌드할 수 있습니다. 최초 실행 전에 데이터 키를 stdin으로 초기화하세요. 키는 출력되지 않으며 `ocx-state` 볼륨의 owner-only `service-api-token`에 저장됩니다.
 
+호스트에 Git과 Bun이 필요합니다. 이미지를 빌드할 때마다 Git이 추적하는 소스로 정식 매니페스트를 생성하고, 생성부터 빌드 사이에는 소스를 변경하지 마세요. 생성된 JSON은 Git에 추가하지 않으며 `.git`은 Docker 컨텍스트에서 제외됩니다. 호스트 포트는 기본적으로 `127.0.0.1`에 바인딩됩니다. 원격 공개는 `OPENCODEX_BIND_ADDRESS=<LAN-또는-Tailscale-IP> docker compose up -d`로 명시적으로 선택하며, `0.0.0.0`은 모든 인터페이스에 공개합니다. 방화벽과 인증된 TLS/tailnet 프런트엔드로 보호하세요.
+
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
+bun scripts/generate-compatibility-version.ts
+docker compose build
 openssl rand -hex 32 | docker compose run --rm -T hub bun run docker/bootstrap-token.ts
 docker compose up -d
 ```

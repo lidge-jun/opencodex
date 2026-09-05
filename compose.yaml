@@ -10,7 +10,7 @@ services:
     init: true
     read_only: true
     ports:
-      - "${OPENCODEX_PORT:-10100}:10100"
+      - "${OPENCODEX_BIND_ADDRESS:-127.0.0.1}:${OPENCODEX_PORT:-10100}:10100"
     volumes:
       - ocx-state:/home/bun/.opencodex
     tmpfs:

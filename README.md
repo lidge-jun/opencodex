@@ -87,17 +87,26 @@ ocx start                            # or `ocx service` to run it in the backgro
 
 ### Docker Compose
 
-The repository ships a digest-pinned, non-root Compose build. Initialize the data-plane token once
-through stdin, then start the hub:
+The repository ships a digest-pinned, non-root Compose build. With Git and Bun installed on the
+host, generate the canonical compatibility manifest before every image build, then initialize
+the data-plane token once through stdin and start the hub:
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
+bun scripts/generate-compatibility-version.ts
+docker compose build
 openssl rand -hex 32 | docker compose run --rm -T hub bun run docker/bootstrap-token.ts
 docker compose up -d
 curl --fail --silent http://127.0.0.1:10100/healthz
 curl --fail --silent http://127.0.0.1:10100/readyz
 ```
+
+The default host binding is `127.0.0.1:10100`. Remote exposure requires explicit
+`OPENCODEX_BIND_ADDRESS=<LAN-or-Tailscale-IP> docker compose up -d`; `0.0.0.0` opts into
+all host interfaces. Restrict access with a firewall and an authenticated TLS/tailnet frontend.
+The generated JSON stays untracked; it is copied into the image without including `.git`.
+Regenerate it after source changes, and do not change the source between generation and build.
 
 The token and mutable state stay in the `ocx-state` named volume; no credential is placed in the
 image, Compose file, environment, or shell arguments. See the

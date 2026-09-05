@@ -40,8 +40,13 @@ bun run build
 The repository ships a root multi-stage `Dockerfile`, `compose.yaml`, narrow `.dockerignore`, and
 container bootstrap helper, but still publishes no registry image. The source build pins the Bun
 base by multi-platform digest, runs non-root with a read-only root filesystem and dropped
-capabilities, persists `OPENCODEX_HOME`, and streams the initial data token through stdin into the
-owner-only canonical token file. Operators must still prove liveness, readiness, authenticated
+capabilities, publishes the data port on host loopback by default (remote binding is an explicit
+`OPENCODEX_BIND_ADDRESS` opt-in), persists `OPENCODEX_HOME`, and streams the initial data token through stdin into the
+owner-only canonical token file. Before every image build, operators run
+`bun scripts/generate-compatibility-version.ts` in the host Git checkout. The runtime copies
+that untracked JSON artifact and checks its compatibility identity without including `.git`
+in the Docker context or changing the generator's tracked-source authority.
+Operators must still prove liveness, readiness, authenticated
 catalog access, and a real routed response before promotion.
 
 An official image would create a larger release surface requiring maintained base-image digest

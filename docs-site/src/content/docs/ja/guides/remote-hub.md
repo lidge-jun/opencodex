@@ -62,9 +62,13 @@ OAuth は `POST /api/oauth/login` で開始し、コールバックできない�
 
 公式 Docker イメージはありませんが、リポジトリには digest 固定の Bun イメージをローカルビルドするための、管理された `Dockerfile` と `compose.yaml` があります。初回起動前にデータキーを stdin から一度だけ初期化します。キーは表示されず、`ocx-state` ボリューム内に所有者限定の権限で保存されます。
 
+ホストに Git と Bun が必要です。イメージをビルドするたびに、Git 管理下のソースから正規のマニフェストを生成し、生成後はビルドまでソースを変更しないでください。生成 JSON は Git に追加せず、`.git` は Docker コンテキストから除外します。ホスト側は既定で `127.0.0.1` にバインドします。リモート公開は `OPENCODEX_BIND_ADDRESS=<LANまたはTailscaleのIP> docker compose up -d` で明示的に指定し、`0.0.0.0` は全インターフェースを公開します。ファイアウォールと認証付き TLS/tailnet フロントエンドで保護してください。
+
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
+bun scripts/generate-compatibility-version.ts
+docker compose build
 openssl rand -hex 32 | docker compose run --rm -T hub bun run docker/bootstrap-token.ts
 docker compose up -d
 ```

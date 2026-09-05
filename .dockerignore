@@ -6,7 +6,8 @@
 
 !src/
 !src/**
-src/generated/compatibility-version.json
+# Prepared on the host with the canonical Git-tracked-source generator.
+!src/generated/compatibility-version.json
 
 !docker/
 !docker/**

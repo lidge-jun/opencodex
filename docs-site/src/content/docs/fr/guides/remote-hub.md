@@ -62,9 +62,13 @@ La rotation garde les deux clés valides sous le même `apiKeyId` pendant dix mi
 
 Il n’existe pas d’image Docker officielle, mais le dépôt fournit un `Dockerfile` et un `compose.yaml` maintenus pour construire localement une image Bun épinglée par digest. Initialisez une seule fois la clé de données via stdin ; elle est enregistrée avec des permissions réservées au propriétaire dans le volume `ocx-state` et n’est jamais affichée.
 
+Installez Git et Bun sur l’hôte. Avant chaque construction, générez le manifeste canonique depuis les sources suivies par Git, sans modifier les sources entre la génération et la construction. Le JSON généré reste non suivi ; `.git` est exclu du contexte Docker. Le port hôte est lié à `127.0.0.1` par défaut. Pour un accès distant, utilisez explicitement `OPENCODEX_BIND_ADDRESS=<IP-LAN-ou-Tailscale> docker compose up -d` ; `0.0.0.0` expose toutes les interfaces. Protégez cet accès par un pare-feu et un frontal TLS/tailnet authentifié.
+
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
+bun scripts/generate-compatibility-version.ts
+docker compose build
 openssl rand -hex 32 | docker compose run --rm -T hub bun run docker/bootstrap-token.ts
 docker compose up -d
 ```

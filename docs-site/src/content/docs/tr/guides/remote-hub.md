@@ -62,9 +62,13 @@ Döndürme sırasında eski ve yeni anahtar aynı `apiKeyId` altında en fazla o
 
 Resmî Docker imajı yoktur; ancak depo, digest ile sabitlenmiş Bun imajını yerelde oluşturmak için bakımı yapılan bir `Dockerfile` ve `compose.yaml` sağlar. İlk başlatmadan önce veri anahtarını stdin üzerinden bir kez başlatın; anahtar yazdırılmaz ve `ocx-state` volume içinde yalnızca sahibinin okuyabileceği izinlerle saklanır.
 
+Host üzerinde Git ve Bun gereklidir. Her imaj derlemesinden önce Git tarafından izlenen kaynaklardan kanonik manifesti üretin ve derleme bitene kadar kaynakları değiştirmeyin. Üretilen JSON dosyasını Git'e eklemeyin; `.git` Docker bağlamının dışında kalır. Host portu varsayılan olarak `127.0.0.1` adresine bağlanır. Uzak erişim için açıkça `OPENCODEX_BIND_ADDRESS=<LAN-veya-Tailscale-IP> docker compose up -d` kullanın; `0.0.0.0` tüm arayüzleri açar. Erişimi güvenlik duvarı ve kimlik doğrulamalı TLS/tailnet ön ucu ile koruyun.
+
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
+bun scripts/generate-compatibility-version.ts
+docker compose build
 openssl rand -hex 32 | docker compose run --rm -T hub bun run docker/bootstrap-token.ts
 docker compose up -d
 ```

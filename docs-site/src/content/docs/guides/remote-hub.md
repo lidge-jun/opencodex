@@ -167,16 +167,25 @@ opencodex does not publish an official container image. The repository does main
 [`compose.yaml`](https://github.com/lidge-jun/opencodex/blob/main/compose.yaml), and a narrow
 `.dockerignore`. The build pins the multi-platform Bun 1.4.0 image index by digest, runs the proxy as
 the non-root `bun` user, keeps the root filesystem read-only, drops Linux capabilities, and publishes
-only the data listener on `10100`.
+only the data listener on the host's `127.0.0.1:10100` by default.
 
 The image seeds a first-run `hub` configuration that binds the container listener to `0.0.0.0`.
 Before the first normal start, stream a freshly generated data-plane token into the bootstrap helper.
 The helper accepts at most one 4096-byte line, never prints the token, refuses to replace an existing
-token, and persists it as the canonical owner-only `service-api-token` in the `ocx-state` volume:
+token, and persists it as the canonical owner-only `service-api-token` in the `ocx-state` volume.
+
+Install Git and Bun on the host first. Before **every** image build, run the existing canonical
+generator from this Git checkout. It hashes Git-tracked working-tree sources (stage any newly
+added source files first), not an arbitrary directory scan. Do not change source files between
+generation and build. Only its untracked `src/generated/compatibility-version.json` artifact
+enters the image; `.git` remains outside the Docker context. Do not commit or hand-edit the
+manifest. A missing artifact fails the copy, and the runtime stage rejects an invalid identity.
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
+bun scripts/generate-compatibility-version.ts
+docker compose build
 openssl rand -hex 32 | docker compose run --rm -T hub bun run docker/bootstrap-token.ts
 docker compose up -d
 ```
@@ -186,6 +195,19 @@ Set an alternate host port without changing the container's fixed `10100` listen
 ```bash
 OPENCODEX_PORT=10190 docker compose up -d
 ```
+
+Remote access is an explicit opt-in. Set `OPENCODEX_BIND_ADDRESS` to the host's LAN or Tailscale
+IP, or use `0.0.0.0` to publish on **all** host interfaces:
+
+```bash
+OPENCODEX_BIND_ADDRESS=0.0.0.0 docker compose up -d
+```
+
+Use a firewall and an authenticated TLS/tailnet frontend before exposing the port. The bind
+override changes only the host publication; the container listener remains `0.0.0.0:10100`.
+Keep the same bind override on subsequent Compose invocations that recreate the hub. To update
+an existing deployment, regenerate the manifest, run `docker compose build`, and recreate the
+hub with `docker compose up -d`; do not repeat the one-time token initialization.
 
 Configure providers with the dashboard through an operator-owned management frontend, or with
 one-shot CLI commands that share the state volume. The commands below show the existing Remote Hub
