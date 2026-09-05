@@ -10,8 +10,34 @@ export const CURSOR_EXEC_COMMAND_INPUT_SCHEMA = {
     tty: { type: "boolean", description: "True allocates a PTY for the command; false or omitted uses plain pipes." },
     yield_time_ms: { type: "number", description: "Wait before yielding output. Defaults to 10000 ms; effective range is 250-30000 ms." },
     max_output_tokens: { type: "number", description: "Output token budget. Defaults to 10000 tokens; larger requests may be capped by policy." },
+    sandbox_permissions: {
+      type: "string",
+      enum: ["use_default", "require_escalated"],
+      description: "Per-command sandbox override. Defaults to use_default; use require_escalated for unsandboxed execution.",
+    },
+    justification: {
+      type: "string",
+      description: "User-facing approval question for require_escalated; omit otherwise.",
+    },
+    prefix_rule: {
+      type: "array",
+      items: { type: "string" },
+      description: "Reusable approval prefix for cmd, only with sandbox_permissions: require_escalated.",
+    },
+    login: {
+      type: "boolean",
+      description: "True runs the shell with login semantics; false disables them. Defaults to true.",
+    },
   },
   required: ["cmd"],
+  additionalProperties: false,
+} as const;
+
+/** Cursor represents a Responses freeform tool body as one string-valued input field. */
+export const CURSOR_FREEFORM_INPUT_SCHEMA = {
+  type: "object",
+  properties: { input: { type: "string" } },
+  required: ["input"],
   additionalProperties: false,
 } as const;
 
@@ -71,6 +97,10 @@ export const CODEX_SHELL_BRIDGE_ARG_NORMALIZE_SCHEMA = {
     yield_time_ms: { type: "number", description: "Wait before yielding output. Defaults to 10000 ms; effective range is 250-30000 ms." },
     max_output_tokens: { type: "number", description: "Output token budget. Defaults to 10000 tokens; larger requests may be capped by policy." },
     max_output_chars: { type: "number", description: "Output character budget when the Responses tool uses chars instead of tokens." },
+    sandbox_permissions: { type: "string", enum: ["use_default", "require_escalated"] },
+    justification: { type: "string" },
+    prefix_rule: { type: "array", items: { type: "string" } },
+    login: { type: "boolean" },
   },
   required: ["command"],
 } as const;
@@ -78,6 +108,12 @@ export const CODEX_SHELL_BRIDGE_ARG_NORMALIZE_SCHEMA = {
 
 /** Schema advertised to Cursor for this tool (may use Cursor-preferred field names like `cmd`). */
 export function cursorToolInputSchema(tool: OcxTool): unknown {
+  if (tool.freeform) {
+    if (isBareCodexShellBridgeTool(tool)) {
+      throw new Error(`freeform Cursor tools cannot use reserved shell bridge name ${tool.name}; use a namespace`);
+    }
+    return CURSOR_FREEFORM_INPUT_SCHEMA;
+  }
   return isBareCodexExecCommandTool(tool) ? CURSOR_EXEC_COMMAND_INPUT_SCHEMA : (tool.parameters ?? {});
 }
 
@@ -87,6 +123,12 @@ export function cursorToolInputSchema(tool: OcxTool): unknown {
  * treating `cmd` as canonical prevents the `cmd` → `command` rewrite Codex requires (#399).
  */
 export function cursorToolArgNormalizeSchema(tool: OcxTool): unknown {
+  if (tool.freeform) {
+    if (isBareCodexShellBridgeTool(tool)) {
+      throw new Error(`freeform Cursor tools cannot use reserved shell bridge name ${tool.name}; use a namespace`);
+    }
+    return CURSOR_FREEFORM_INPUT_SCHEMA;
+  }
   if (isBareCodexShellBridgeTool(tool)) {
     return shellBridgeArgNormalizeSchema(tool);
   }

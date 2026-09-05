@@ -1521,6 +1521,17 @@ fragments are not guessed onto pending ID-only calls.
 parallel/colliding identities, distinct unsafe raw JSON index literals, the maximum
 safe-integer boundary, invalid numeric indexes and UTF-8 byte-limit boundaries.
 
+## Cursor executable tool schema ownership
+
+`src/adapters/cursor/tool-schemas.ts` owns advertised and argument-normalization
+schemas; `tool-definitions.ts` remains the public facade and protobuf encoder.
+Advertisement and normalization intentionally differ for shell bridges: Cursor may
+emit `cmd`, while the declared Responses contract decides whether it becomes
+`command`. Both paths preserve execution-control fields. Freeform tools use one
+required string `input`; bare shell bridge names are rejected on the freeform path.
+Namespaced tools do not acquire bare-shell behavior. Regression coverage lives in
+`tests/providers/cursor/cursor-tool-definitions.test.ts`.
+
 ## Sidecars
 
 Web search and vision sidecars run only when the main request needs that capability and a usable

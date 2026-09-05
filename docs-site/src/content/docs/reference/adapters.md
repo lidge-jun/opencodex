@@ -351,6 +351,12 @@ compatibility pair: `agent.v1.AgentService/RunSSE` for server output and
   broader built-in executor and bypasses Codex approval/sandbox semantics, and legacy
   `unsafeAllowNativeLocalExec: true` remains equivalent only when `nativeLocalExec` is unset.
 
+Codex-compatible shell schemas retain sandbox permissions, justification, reusable
+prefix rules and login mode. Freeform tools expose one required string `input`;
+bare `exec_command` and `shell_command` names are reserved for non-freeform shell
+bridges. Namespace a custom freeform tool that uses either name. These schema
+declarations do not grant approval or change execution policy.
+
 ## `azure-openai` (alias: `azure`)
 
 **Targets:** **Azure OpenAI**. Wraps `openai-responses` (so also `passthrough: true`).
