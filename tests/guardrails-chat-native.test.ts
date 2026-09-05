@@ -151,6 +151,44 @@ test("disabled Guardrails matches baseline native Chat JSON and SSE", async () =
   }
 });
 
+test("Guardrails detect mode leaves native Chat wire bodies unchanged", async () => {
+  let upstreamBody = "";
+  const upstream = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      upstreamBody = await req.text();
+      return Response.json({
+        id: "chatcmpl-guardrails-detect",
+        object: "chat.completion",
+        choices: [{
+          index: 0,
+          message: { role: "assistant", content: `unchanged ${SECRET}` },
+          finish_reason: "stop",
+        }],
+      });
+    },
+  });
+  const detectConfig = config(`${upstream.url.toString().replace(/\/$/, "")}/v1`);
+  detectConfig.guardrails = { enabled: true, mode: "detect", failurePolicy: "block" };
+  saveConfig(detectConfig);
+  const server = startServer(0);
+
+  try {
+    const response = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(requestBody(false)),
+    });
+    expect(response.status).toBe(200);
+    expect(upstreamBody).toContain(SECRET);
+    expect(upstreamBody).not.toContain(PLACEHOLDER);
+    expect(await response.text()).toContain(`unchanged ${SECRET}`);
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
 test("Guardrails masks native Chat JSON upstream and demasks assistant content", async () => {
   const captured: Array<Record<string, unknown>> = [];
   const upstream = Bun.serve({

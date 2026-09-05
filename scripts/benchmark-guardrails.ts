@@ -2,7 +2,10 @@ import {
   createBuiltinGuardrailsRegistry,
   createGuardrailsRegistry,
 } from "../src/guardrails/registry";
-import { createGuardrailsMaskSession } from "../src/guardrails/placeholders";
+import {
+  createGuardrailsDemaskSession,
+  createGuardrailsMaskSession,
+} from "../src/guardrails/placeholders";
 import {
   GuardrailsScanCapacityError,
   MAX_GUARDRAILS_REGEX_INPUT_BYTES,
@@ -10,13 +13,18 @@ import {
   scanGuardrailsText,
   type GuardrailsScanBudget,
 } from "../src/guardrails/scanner";
-import type { GuardrailsCustomRule, GuardrailsRegistry } from "../src/guardrails/types";
+import type {
+  GuardrailsCustomRule,
+  GuardrailsPlaceholderState,
+  GuardrailsRegistry,
+} from "../src/guardrails/types";
 
 const LARGE_TURN_BYTES = 2 * 1024 * 1024;
 const LARGE_LEAF_BYTES = 128 * 1024;
 const MAX_CUSTOM_RULES = 100;
 const TYPICAL_ITERATIONS = 50;
 const MANY_FIELD_COUNT = 1_000;
+const DEMASK_EVENT_COUNT = 1_000;
 
 interface Measurement {
   iterations: number;
@@ -178,6 +186,27 @@ function measureManyFieldMasking(): Measurement {
   });
 }
 
+function measureManyEventDemasking(): Measurement {
+  const state: GuardrailsPlaceholderState = {
+    replacements: Array.from({ length: MANY_FIELD_COUNT }, (_, index) => ({
+      ruleId: "benchmark.secret",
+      dataType: 1,
+      original: `secret-${index}`,
+      placeholder: `<BENCHMARK_SECRET_${index + 1}>`,
+      placeholderType: "BENCHMARK_SECRET",
+    })),
+    reservedPlaceholders: [],
+  };
+  return measure(5, () => {
+    const session = createGuardrailsDemaskSession(state);
+    for (let index = 0; index < DEMASK_EVENT_COUNT; index += 1) {
+      const mappingIndex = index % MANY_FIELD_COUNT;
+      const restored = session.demask(`<BENCHMARK_SECRET_${mappingIndex + 1}>`);
+      assert(restored === `secret-${mappingIndex}`, "many-event demasking restored an invalid value");
+    }
+  });
+}
+
 function main(): void {
   const typicalText = "Summarize the release notes and list the next three review steps.";
   const largeLeaf = "x".repeat(LARGE_LEAF_BYTES);
@@ -187,6 +216,7 @@ function main(): void {
   let typical: Measurement;
   let builtinMaxLeaf: Measurement;
   const manyFieldMasking = measureManyFieldMasking();
+  const manyEventDemasking = measureManyEventDemasking();
   const builtinRuleCount = builtin.registry.rules.length;
   try {
     assert(builtinRuleCount === 272, "built-in benchmark registry must contain 272 rules");
@@ -260,6 +290,7 @@ function main(): void {
         builtinRules: builtinRuleCount,
         maximumCustomRules: MAX_CUSTOM_RULES,
         manyFieldCount: MANY_FIELD_COUNT,
+        demaskEventCount: DEMASK_EVENT_COUNT,
         worstEffectiveRules: worstRuleCount,
         atomicSwapResidentRules: filteredOld.registry.rules.length + filtered.registry.rules.length,
       },
@@ -277,6 +308,7 @@ function main(): void {
         overBudgetLargeTurnRejectedMs,
         prefilteredLargeTurn,
         manyFieldMasking,
+        manyEventDemasking,
       },
       enforcedWorstBudgetMs: budget ?? null,
     }, null, 2));

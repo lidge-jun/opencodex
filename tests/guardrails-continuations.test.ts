@@ -46,6 +46,10 @@ test("Guardrails continuation mappings remain scoped, pinned, and preserve prior
     const inherited = retainGuardrailsContinuation("resp-guardrails-1", scope);
     expect(inherited).toBeDefined();
     if (!inherited) throw new Error("expected continuation mapping to be retained");
+    expect(inherited.state).toBe(stored.lease.state);
+    expect(Object.isFrozen(inherited.state)).toBe(true);
+    expect(Object.isFrozen(inherited.state.replacements)).toBe(true);
+    expect(Object.isFrozen(inherited.state.replacements[0])).toBe(true);
     const secondSecret = "sk_live_zyxwvutsrqponmlkjihgfedc";
     const second = maskResponsesRequestFields(
       { input: `prior <STRIPE_ACCESS_TOKEN_1>; new ${secondSecret}` },

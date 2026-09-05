@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { RetainedStoreSnapshot } from "../lib/app-owned-memory";
+import { immutableGuardrailsPlaceholderState } from "./placeholders";
 import type { GuardrailsPlaceholderState } from "./types";
 
 const MAX_CONTINUATIONS = 1_000;
@@ -45,10 +46,6 @@ export class GuardrailsContinuationConflictError extends Error {
   constructor() {
     super("Guardrails continuation mappings conflict");
   }
-}
-
-function cloneState(state: GuardrailsPlaceholderState): GuardrailsPlaceholderState {
-  return structuredClone(state);
 }
 
 export function mergeGuardrailsContinuationStates(
@@ -191,7 +188,7 @@ function leaseEntry(entry: ContinuationEntry): GuardrailsContinuationLease {
     expiresAt: entry.expiresAt,
     lineageId: entry.lineageId,
     policyRevision: entry.policyRevision,
-    state: cloneState(state),
+    state,
     release() {
       if (released) return;
       released = true;
@@ -245,7 +242,7 @@ export function rememberGuardrailsContinuation(options: {
   const key = entryKey(responseId, options.scope);
   const existing = entries.get(key);
   if (existing && existing.state === undefined) return { status: "collision" };
-  const state = cloneState(options.state);
+  const state = immutableGuardrailsPlaceholderState(options.state);
   if (existing
     && existing.lineageId === lineageId
     && existing.policyRevision === policyRevision

@@ -4,6 +4,7 @@ import type {
   GuardrailsContinuationLease,
   GuardrailsContinuationScope,
 } from "./continuations";
+import { immutableGuardrailsPlaceholderState } from "./placeholders";
 import type { GuardrailsPlaceholderState } from "./types";
 
 const MAX_COMPACT_CONTINUATIONS = 1_000;
@@ -194,7 +195,7 @@ function leaseEntry(entry: CompactContinuationEntry): GuardrailsContinuationLeas
     expiresAt: entry.expiresAt,
     lineageId: entry.lineageId,
     policyRevision: entry.policyRevision,
-    state: structuredClone(state),
+    state,
     release() {
       if (released) return;
       released = true;
@@ -241,7 +242,7 @@ export function rememberGuardrailsCompactContinuation(options: {
   const fingerprint = compactFingerprint(options.items);
   if (!fingerprint) return { status: "invalid" };
   const key = entryKey(options.scope, options.items.length, fingerprint);
-  const state = structuredClone(options.state);
+  const state = immutableGuardrailsPlaceholderState(options.state);
   const now = Date.now();
   const expiresAt = Math.min(
     options.expiresAt ?? now + COMPACT_CONTINUATION_TTL_MS,

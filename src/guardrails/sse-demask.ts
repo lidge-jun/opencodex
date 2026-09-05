@@ -6,7 +6,8 @@ import {
 import {
   GuardrailsDemaskCapacityError,
   MAX_GUARDRAILS_DEMASK_EXPANSION_BYTES,
-  demaskGuardrailsText,
+  createGuardrailsDemaskSession,
+  type GuardrailsDemaskSession,
 } from "./placeholders";
 import type { GuardrailsDemaskBudget, GuardrailsPlaceholderState } from "./types";
 
@@ -69,10 +70,10 @@ function pendingSuffix(value: string, state: GuardrailsPlaceholderState): string
 
 function demaskStableText(
   value: string,
-  state: GuardrailsPlaceholderState,
+  session: GuardrailsDemaskSession,
   budget: GuardrailsDemaskBudget,
 ): string {
-  return demaskGuardrailsText(value, state, {
+  return session.demask(value, {
     allowNormalizedPlaceholderDrift: true,
     budget,
   });
@@ -212,7 +213,9 @@ export function guardrailsSseDemaskRewrite(
   onWarning?: () => void,
   sharedBudget?: GuardrailsDemaskBudget,
   isCapacityError?: (error: unknown) => boolean,
+  sharedDemaskSession?: GuardrailsDemaskSession,
 ): SseBlockRewrite {
+  const demaskSession = sharedDemaskSession ?? createGuardrailsDemaskSession(state);
   const pending = new Map<string, PendingDelta>();
   const demaskBudget = sharedBudget ?? {
     remainingExpansionBytes: MAX_GUARDRAILS_DEMASK_EXPANSION_BYTES,
@@ -292,7 +295,7 @@ export function guardrailsSseDemaskRewrite(
       payload = updateTextField(
         payload,
         delta.field,
-        demaskStableText(stable, state, stagedBudget),
+        demaskStableText(stable, demaskSession, stagedBudget),
         delta.choicePosition,
       );
       if (suffix) {

@@ -4,7 +4,10 @@ import { act } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
 import { GuardrailsTesterPanel } from "../src/pages/guardrails/tester-panel";
-import type { GuardrailsTrafficProtection } from "../src/pages/guardrails/types";
+import type {
+  GuardrailsCustomRule,
+  GuardrailsTrafficProtection,
+} from "../src/pages/guardrails/types";
 
 const globals = [
   "document",
@@ -54,6 +57,7 @@ afterEach(async () => {
 async function renderTester(
   trafficProtection?: GuardrailsTrafficProtection,
   policyRevision?: string,
+  draftRule?: GuardrailsCustomRule,
 ) {
   const { createRoot } = await import("react-dom/client");
   await act(async () => {
@@ -64,6 +68,7 @@ async function renderTester(
           apiBase="http://guardrails.test"
           trafficProtection={trafficProtection}
           policyRevision={policyRevision}
+          draftRule={draftRule}
         />
       </LanguageProvider>,
     );
@@ -184,6 +189,48 @@ test("draft settings are sent without saving and label the result", async () => 
   });
   expect(host.textContent).toContain("Draft settings");
   expect(host.textContent).toContain("Real traffic protection is disabled");
+});
+
+test("an unsaved custom rule is sent only as a Tester draft", async () => {
+  let requestBody: unknown;
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async (_url: string, init?: RequestInit) => {
+      requestBody = JSON.parse(String(init?.body)) as unknown;
+      return Response.json({
+        mode: "draft",
+        simulation: true,
+        trafficProtection: "enforce",
+        maskedPreview: "<DRAFT_SECRET_1>",
+        findingCount: 1,
+        findings: [],
+      });
+    },
+  });
+  const draftRule: GuardrailsCustomRule = {
+    ruleId: "custom.test-draft",
+    name: "Draft fixture",
+    dataType: 6,
+    group: "CUSTOM",
+    groupPriority: 0,
+    displayName: "Draft fixture",
+    description: "",
+    regex: "draft_[a-z]+",
+    keywords: [],
+    banlist: [],
+    validators: [],
+    masking: { captureGroups: [], placeholderType: "DRAFT_SECRET" },
+  };
+  await renderTester("enforce", "rev-1", draftRule);
+  await enterText("draft_value");
+  await act(async () => {
+    button("Scan").click();
+    await new Promise(resolve => setTimeout(resolve, 5));
+  });
+
+  expect(requestBody).toEqual({ text: "draft_value", draftRule });
+  expect(host.textContent).toContain("Draft settings: Draft fixture");
+  expect(host.textContent).toContain("Draft settings");
 });
 
 test("detect-only traffic and no-findings result do not imply protection", async () => {

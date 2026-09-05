@@ -82,6 +82,7 @@ async function mount(overrides: {
   onImport?: (bundle: unknown, mode: "merge" | "replace", returnFocus: HTMLElement | null) => void;
   onImportError?: (error: unknown) => void;
   onSave?: (rule: GuardrailsCustomRule, editingId: string | null) => Promise<void>;
+  onTestDraft?: (rule: GuardrailsCustomRule) => void;
   importPreview?: GuardrailsImportPreview | null;
 } = {}) {
   const { createRoot } = await import("react-dom/client");
@@ -95,6 +96,7 @@ async function mount(overrides: {
           onToggle={() => {}}
           onBulk={overrides.onBulk ?? (() => {})}
           onSave={overrides.onSave ?? (async () => {})}
+          onTestDraft={overrides.onTestDraft ?? (() => {})}
           onDelete={() => {}}
           onExport={() => {}}
           onImport={overrides.onImport ?? (() => {})}
@@ -449,4 +451,41 @@ test("successful custom rule creation resets the form", async () => {
 
   expect(ruleId?.value).toBe("");
   expect(host.textContent).not.toContain("Cancel");
+});
+
+test("custom rule draft can be tested without saving it", async () => {
+  const tested: GuardrailsCustomRule[] = [];
+  let saves = 0;
+  await mount({
+    onSave: async () => { saves += 1; },
+    onTestDraft: rule => tested.push(rule),
+  });
+  const inputFor = (labelText: string) => [...host.querySelectorAll<HTMLLabelElement>("label")]
+    .find(label => label.textContent?.includes(labelText))
+    ?.querySelector<HTMLInputElement>("input");
+  const setValue = (input: HTMLInputElement | undefined, value: string) => {
+    Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!
+      .set!.call(input, value);
+    input!.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+  };
+
+  await act(async () => {
+    setValue(inputFor("Rule ID"), "custom.test-draft");
+    setValue(inputFor("Rule name"), "Draft fixture");
+    setValue(inputFor("Display name"), "Draft fixture");
+    setValue(inputFor("RE2 pattern"), "draft_[a-z]+");
+    setValue(inputFor("Placeholder type"), "DRAFT_SECRET");
+  });
+  const testDraft = [...host.querySelectorAll<HTMLButtonElement>("button")]
+    .find(candidate => candidate.textContent?.includes("Scan")
+      && candidate.textContent.includes("Draft"))!;
+  await act(async () => { testDraft.click(); });
+
+  expect(saves).toBe(0);
+  expect(tested).toHaveLength(1);
+  expect(tested[0]).toMatchObject({
+    ruleId: "custom.test-draft",
+    regex: "draft_[a-z]+",
+    masking: { captureGroups: [], placeholderType: "DRAFT_SECRET" },
+  });
 });

@@ -328,6 +328,68 @@ test("disabled Guardrails matches baseline across native and routed Messages pat
   }
 });
 
+test("Guardrails detect mode leaves native Messages and count_tokens wire bodies unchanged", async () => {
+  const captured: Array<{ path: string; body: string }> = [];
+  const upstream = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      const path = new URL(request.url).pathname;
+      captured.push({ path, body: await request.text() });
+      if (path.endsWith("/count_tokens")) return Response.json({ input_tokens: 42 });
+      return Response.json({
+        id: "msg-guardrails-detect",
+        type: "message",
+        role: "assistant",
+        model: "claude-fable-5",
+        content: [{ type: "text", text: `unchanged ${SECRET}` }],
+        stop_reason: "end_turn",
+        stop_sequence: null,
+        usage: { input_tokens: 1, output_tokens: 1 },
+      });
+    },
+  });
+  const detectConfig = config(upstream.url.toString().replace(/\/$/, ""));
+  detectConfig.guardrails = { enabled: true, mode: "detect", failurePolicy: "block" };
+  saveConfig(detectConfig);
+  const proxy = startServer(0);
+  const headers = {
+    "content-type": "application/json",
+    "anthropic-version": "2023-06-01",
+    authorization: "Bearer sk-ant-oat01-test",
+  };
+
+  try {
+    const messages = await fetch(new URL("/v1/messages", proxy.url), {
+      method: "POST",
+      headers,
+      body: JSON.stringify(documentBody()),
+    });
+    expect(messages.status).toBe(200);
+    expect(await messages.text()).toContain(`unchanged ${SECRET}`);
+
+    const countTokens = await fetch(new URL("/v1/messages/count_tokens", proxy.url), {
+      method: "POST",
+      headers,
+      body: JSON.stringify(documentBody()),
+    });
+    expect(countTokens.status).toBe(200);
+    expect(await countTokens.json()).toEqual({ input_tokens: 42 });
+
+    expect(captured.map(entry => entry.path)).toEqual([
+      "/v1/messages",
+      "/v1/messages/count_tokens",
+    ]);
+    for (const entry of captured) {
+      expect(entry.body).toContain(SECRET);
+      expect(entry.body).not.toContain(PLACEHOLDER);
+    }
+  } finally {
+    await proxy.stop(true);
+    upstream.stop(true);
+  }
+});
+
 test("Guardrails protects Anthropic text documents in messages and count_tokens", async () => {
   const captured: Array<{ path: string; body: Record<string, unknown> }> = [];
   const upstream = Bun.serve({

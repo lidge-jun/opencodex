@@ -142,7 +142,7 @@ They expose configuration and rule metadata, not the values matched in a request
 | `GET /api/guardrails/activity` | Read bounded metadata events and filtered summaries; optional `limit=1..200`, `mode`, `surface`, `result`, and `category=1..6` filters | 400 invalid or unknown filter |
 | `GET /api/guardrails/export` | Download a versioned safe settings/custom-rule bundle | — |
 | `POST /api/guardrails/test` | Scan at most 128 KiB of text locally and return masked preview plus finding offsets/IDs/types; input is not retained or sent upstream | 400 invalid input/draft registry; 413 body, Tester, or regex-work limit |
-| `POST /api/guardrails/import` | Validate a versioned `merge` or `replace` bundle; `dryRun: true` reports counts/conflicts, and apply is one atomic mutation | 400 schema/RE2 error; apply: 428 missing `If-Match`, 412 stale revision; 409 import/config mutation conflict |
+| `POST /api/guardrails/import` | Validate a versioned `merge` or `replace` bundle; `dryRun: true` reports counts/conflicts, and apply is one atomic mutation | 400 schema/RE2 error; 428 missing `If-Match`; 412 stale revision; 409 import/config mutation conflict |
 
 `merge` adds only non-conflicting custom rules and preserves the current enabled state, mode,
 failure policy, enabled data types, built-in rule toggles, and keyword-prefilter setting. A changed

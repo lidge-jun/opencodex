@@ -123,6 +123,43 @@ test("native compact stays masked and its mapping follows exact returned items",
   expect(JSON.stringify(await continued.json())).toContain(secret);
 });
 
+test("Guardrails detect mode leaves native compact request and response unchanged", async () => {
+  const secret = "sk_live_abcdefghijklmnopqrstuvwx";
+  let upstreamBody = "";
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    upstreamBody = String(init?.body ?? "");
+    return Response.json({
+      id: "compact-guardrails-detect",
+      status: "completed",
+      output: [{
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: `unchanged ${secret}` }],
+      }],
+    });
+  }) as typeof fetch;
+  const detectConfig = config({
+    guardrails: { enabled: true, mode: "detect", failurePolicy: "block" },
+  });
+  const response = await handleResponsesCompact(
+    new Request("http://localhost/v1/responses/compact", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "openai-apikey/gpt-5.5",
+        input: secret,
+      }),
+    }),
+    detectConfig,
+    { model: "", provider: "", admissionKind: "loopback" },
+  );
+
+  expect(response.status).toBe(200);
+  expect(upstreamBody).toContain(secret);
+  expect(upstreamBody).not.toContain("<STRIPE_ACCESS_TOKEN_1>");
+  expect(await response.text()).toContain(`unchanged ${secret}`);
+});
+
 test("routed compact stays masked and retains its continuation mapping", async () => {
   const secret = "sk_live_abcdefghijklmnopqrstuvwx";
   const upstreamBodies: string[] = [];
@@ -740,6 +777,11 @@ test("pinned compact collision poisons the fingerprint without exposing sibling 
     state,
   }).status).toBe("stored");
   const pinned = retainGuardrailsCompactContinuation(items, scope);
+  const sibling = retainGuardrailsCompactContinuation(items, scope);
+  expect(pinned?.state).toBe(sibling?.state);
+  expect(Object.isFrozen(pinned?.state)).toBe(true);
+  expect(Object.isFrozen(pinned?.state.replacements)).toBe(true);
+  expect(Object.isFrozen(pinned?.state.replacements[0])).toBe(true);
   const before = guardrailsCompactContinuationRetainedStoreSnapshot();
   expect(rememberGuardrailsCompactContinuation({
     items,
@@ -760,6 +802,7 @@ test("pinned compact collision poisons the fingerprint without exposing sibling 
   expect(evictOldestGuardrailsCompactContinuationForBudget()).toBe(0);
   expect(pinned?.state.replacements[0]?.original).toBe("secret-a");
   pinned?.release();
+  sibling?.release();
   expect(retainGuardrailsCompactContinuation(items, scope)).toBeUndefined();
   const released = guardrailsCompactContinuationRetainedStoreSnapshot();
   expect(released.pinnedBytes).toBe(0);

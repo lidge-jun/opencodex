@@ -94,6 +94,160 @@ test("Guardrails masks upstream input and restores a real proxy JSON response", 
   }
 });
 
+test("Guardrails detect mode leaves a real Responses request and response unchanged", async () => {
+  const secret = "sk_live_abcdefghijklmnopqrstuvwx";
+  let upstreamBody = "";
+  let proxy: ReturnType<typeof startServer> | null = null;
+  const upstream = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      upstreamBody = await request.text();
+      return Response.json({
+        id: "resp-guardrails-detect-e2e",
+        object: "response",
+        status: "completed",
+        output: [{
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: `unchanged ${secret}` }],
+        }],
+      });
+    },
+  });
+  try {
+    saveConfig({
+      port: 0,
+      defaultProvider: "mock",
+      providers: {
+        mock: {
+          adapter: "openai-responses",
+          authMode: "key",
+          apiKey: "test-only-key",
+          baseUrl: upstream.url.toString().replace(/\/$/, ""),
+          responsesPath: "/responses",
+          allowPrivateNetwork: true,
+        },
+      },
+      guardrails: { enabled: true, mode: "detect", failurePolicy: "block" },
+    } as OcxConfig);
+    proxy = startServer(0);
+    const response = await fetch(new URL("/v1/responses", proxy.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "mock/test-model", input: secret, stream: false }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(upstreamBody).toContain(secret);
+    expect(upstreamBody).not.toContain("<STRIPE_ACCESS_TOKEN_1>");
+    expect(await response.text()).toContain(`unchanged ${secret}`);
+  } finally {
+    await proxy?.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("Guardrails masks and demasks a real client-facing Responses WebSocket turn", async () => {
+  const secret = "sk_live_abcdefghijklmnopqrstuvwx";
+  let upstreamBody = "";
+  let proxy: ReturnType<typeof startServer> | null = null;
+  const upstream = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      upstreamBody = await request.text();
+      const completed = {
+        type: "response.completed",
+        response: {
+          id: "resp-guardrails-client-ws",
+          object: "response",
+          status: "completed",
+          output: [{
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "echo <STRIPE_ACCESS_TOKEN_1>" }],
+          }],
+          usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+        },
+      };
+      return new Response([
+        `event: response.output_text.delta\ndata: ${JSON.stringify({
+          type: "response.output_text.delta",
+          item_id: "item-guardrails-ws",
+          output_index: 0,
+          content_index: 0,
+          delta: "echo <STRIPE_ACCESS_TOKEN_1>",
+        })}\n\n`,
+        `event: response.output_text.done\ndata: ${JSON.stringify({
+          type: "response.output_text.done",
+          item_id: "item-guardrails-ws",
+          output_index: 0,
+          content_index: 0,
+          text: "echo <STRIPE_ACCESS_TOKEN_1>",
+        })}\n\n`,
+        `event: response.completed\ndata: ${JSON.stringify(completed)}\n\n`,
+      ].join(""), { headers: { "content-type": "text/event-stream" } });
+    },
+  });
+  try {
+    saveConfig({
+      port: 0,
+      websockets: true,
+      defaultProvider: "mock",
+      providers: {
+        mock: {
+          adapter: "openai-responses",
+          authMode: "key",
+          apiKey: "test-only-key",
+          baseUrl: upstream.url.toString().replace(/\/$/, ""),
+          responsesPath: "/responses",
+          allowPrivateNetwork: true,
+        },
+      },
+      guardrails: { enabled: true, mode: "enforce", failurePolicy: "block" },
+    } as OcxConfig);
+    proxy = startServer(0);
+    const url = new URL("/v1/responses", proxy.url);
+    url.protocol = "ws:";
+    const frames = await new Promise<string[]>((resolve, reject) => {
+      const received: string[] = [];
+      const socket = new WebSocket(url);
+      const timer = setTimeout(() => {
+        socket.close();
+        reject(new Error("Guardrails client WebSocket timeout"));
+      }, 5_000);
+      socket.addEventListener("open", () => {
+        socket.send(JSON.stringify({
+          type: "response.create",
+          model: "mock/test-model",
+          input: secret,
+        }));
+      }, { once: true });
+      socket.addEventListener("message", event => {
+        const frame = typeof event.data === "string" ? event.data : "";
+        received.push(frame);
+        if (!frame.includes('"type":"response.completed"')) return;
+        clearTimeout(timer);
+        socket.close();
+        resolve(received);
+      });
+      socket.addEventListener("error", () => {
+        clearTimeout(timer);
+        reject(new Error("Guardrails client WebSocket failed"));
+      }, { once: true });
+    });
+
+    expect(upstreamBody).toContain("<STRIPE_ACCESS_TOKEN_1>");
+    expect(upstreamBody).not.toContain(secret);
+    expect(frames.join("\n")).toContain(secret);
+    expect(frames.join("\n")).not.toContain("<STRIPE_ACCESS_TOKEN_1>");
+  } finally {
+    await proxy?.stop(true);
+    upstream.stop(true);
+  }
+});
+
 test("Guardrails masks native Responses input_file names and preserves file bytes", async () => {
   const secret = "sk_live_abcdefghijklmnopqrstuvwx";
   const fileData = "ZmlsZQ==";

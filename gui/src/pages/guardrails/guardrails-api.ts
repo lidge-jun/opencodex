@@ -209,11 +209,16 @@ export function testGuardrailsText(
     enabledDataTypes: GuardrailsDataType[];
     keywordPrefilterEnabled: boolean;
   },
+  draftRule?: GuardrailsCustomRule,
 ) {
   return fetch(`${apiBase}/api/guardrails/test`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, ...(settings ? { settings } : {}) }),
+    body: JSON.stringify({
+      text,
+      ...(settings ? { settings } : {}),
+      ...(draftRule ? { draftRule } : {}),
+    }),
     signal,
   }).then(async response => {
     const parsed = await readJsonOrThrow<GuardrailsTesterResult>(response, error);

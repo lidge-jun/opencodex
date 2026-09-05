@@ -42,6 +42,7 @@ export function GuardrailsRulesPanel({
   onToggle,
   onBulk,
   onSave,
+  onTestDraft,
   onDelete,
   onExport,
   onImport,
@@ -55,6 +56,7 @@ export function GuardrailsRulesPanel({
   onToggle: (ruleId: string, enabled: boolean) => void;
   onBulk: (ruleIds: string[], enabled: boolean) => void;
   onSave: (rule: GuardrailsCustomRule, editingId: string | null) => Promise<void>;
+  onTestDraft: (rule: GuardrailsCustomRule) => void;
   onDelete: (rule: GuardrailsCustomRule) => void;
   onExport: () => void;
   onImport: (bundle: unknown, mode: "merge" | "replace", returnFocus: HTMLElement | null) => void;
@@ -75,6 +77,7 @@ export function GuardrailsRulesPanel({
   const [captureGroupsError, setCaptureGroupsError] = useState(false);
   const [importMode, setImportMode] = useState<"merge" | "replace">("merge");
   const fileRef = useRef<HTMLInputElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
   const importButtonRef = useRef<HTMLButtonElement>(null);
   const builtinLabel = useCallback((rule: GuardrailsRules["rules"][number]) =>
     t(rule.group === "CREDENTIAL_URLS"
@@ -219,6 +222,21 @@ export function GuardrailsRulesPanel({
         ...(validator === "banlist" && enabled ? { banlist: [] } : {}),
       };
     });
+  };
+  const resolvedDraftRule = (): GuardrailsCustomRule | null => {
+    const captureGroups = parseGuardrailsCaptureGroups(captureGroupsText);
+    if (captureGroups === null) {
+      setCaptureGroupsError(true);
+      return null;
+    }
+    setCaptureGroupsError(false);
+    return {
+      ...form,
+      masking: {
+        ...form.masking,
+        captureGroups,
+      },
+    };
   };
 
   return (
@@ -424,21 +442,11 @@ export function GuardrailsRulesPanel({
           <strong>{t(editingId ? "guardrails.editRule" : "guardrails.addRule")}</strong>
           <button type="button" className="btn btn-ghost btn-sm" disabled={pending} onClick={resetForm}><IconPlus /> {t("guardrails.addRule")}</button>
         </div>
-        <form onSubmit={event => {
+        <form ref={formRef} onSubmit={event => {
           event.preventDefault();
-          const captureGroups = parseGuardrailsCaptureGroups(captureGroupsText);
-          if (captureGroups === null) {
-            setCaptureGroupsError(true);
-            return;
-          }
-          setCaptureGroupsError(false);
-          void onSave({
-            ...form,
-            masking: {
-              ...form.masking,
-              captureGroups,
-            },
-          }, editingId).then(resetForm).catch(() => undefined);
+          const rule = resolvedDraftRule();
+          if (!rule) return;
+          void onSave(rule, editingId).then(resetForm).catch(() => undefined);
         }}>
           <div className="guardrails-form-grid">
             <label><span className="field-label">{t("guardrails.ruleId")}</span><input required value={form.ruleId} disabled={pending || editingId !== null} onChange={event => update("ruleId", event.target.value)} /></label>
@@ -491,6 +499,18 @@ export function GuardrailsRulesPanel({
           </div>
           <div className="guardrails-form-actions">
             <button type="submit" className="btn btn-primary" disabled={pending}>{t("guardrails.saveRule")}</button>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              disabled={pending}
+              onClick={() => {
+                if (!formRef.current?.reportValidity()) return;
+                const rule = resolvedDraftRule();
+                if (rule) onTestDraft(rule);
+              }}
+            >
+              {t("guardrails.test")} · {t("guardrails.draft")}
+            </button>
             {editingId && <button type="button" className="btn btn-ghost" disabled={pending} onClick={resetForm}>{t("guardrails.cancelEdit")}</button>}
           </div>
         </form>

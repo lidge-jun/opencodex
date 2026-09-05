@@ -4,6 +4,7 @@ import * as oauthModule from "../../src/oauth";
 mock.module("../../src/oauth", () => ({ ...oauthModule, getValidAccessToken: async () => "vision-cache-token" }));
 
 import { parseRequest } from "../../src/responses/parser";
+import { MAX_GUARDRAILS_SCANNABLE_LEAF_BYTES } from "../../src/guardrails/scanner";
 import type { OcxConfig, OcxContentPart, OcxProviderConfig } from "../../src/types";
 import {
   describeImagesInPlace,
@@ -286,6 +287,39 @@ describe("vision description cache and per-turn cap", () => {
 
     expect(textParts(protectedRequest).join("\n")).not.toContain("sk_li");
     expect(textParts(plaintextRequest).join("\n")).toContain("sk_li");
+  });
+
+  test("bounds oversized vision output before invoking the Guardrails sanitizer", async () => {
+    const oversized = "x".repeat(MAX_GUARDRAILS_SCANNABLE_LEAF_BYTES * 2);
+    let sanitizerBytes = 0;
+    globalThis.fetch = (async () => anthropicSse(oversized)) as typeof fetch;
+    const protectedRequest = parsed([{ type: "input_image", image_url: DATA_A }]);
+    const plaintextRequest = structuredClone(protectedRequest);
+
+    await describeImagesInPlace(
+      protectedRequest,
+      plan({
+        backend: "anthropic",
+        forwardProvider: undefined,
+        anthropicSidecar: {
+          providerName: "anthropic-bounded-sanitizer",
+          provider: anthropicProvider,
+        },
+      }),
+      new Headers({ authorization: "Bearer test" }),
+      undefined,
+      undefined,
+      undefined,
+      text => {
+        sanitizerBytes = new TextEncoder().encode(text).byteLength;
+        return text;
+      },
+      plaintextRequest,
+    );
+
+    expect(sanitizerBytes).toBe(MAX_GUARDRAILS_SCANNABLE_LEAF_BYTES);
+    expect(textParts(protectedRequest).join("\n")).toContain("…[description truncated]");
+    expect(textParts(plaintextRequest).join("\n")).toContain("…[description truncated]");
   });
 
   test("sanitizes vision-sidecar error text while preserving the plaintext rollback twin", async () => {

@@ -41,6 +41,11 @@ export interface GuardrailsMaskSession {
   mask(input: string, findings: readonly GuardrailsFinding[]): string;
 }
 
+export interface GuardrailsDemaskSession {
+  readonly placeholders: ReadonlySet<string>;
+  demask(input: string, options?: GuardrailsDemaskOptions): string;
+}
+
 function isAsciiLetter(value: string): boolean {
   return (value >= "A" && value <= "Z") || (value >= "a" && value <= "z");
 }
@@ -210,6 +215,15 @@ export function createGuardrailsPlaceholderState(texts: readonly string[] = []):
   return { replacements: [], reservedPlaceholders: [...reserved].sort() };
 }
 
+export function immutableGuardrailsPlaceholderState(
+  state: GuardrailsPlaceholderState,
+): GuardrailsPlaceholderState {
+  const replacements = Object.freeze(state.replacements.map(replacement =>
+    Object.freeze({ ...replacement })));
+  const reservedPlaceholders = Object.freeze([...state.reservedPlaceholders]);
+  return Object.freeze({ replacements, reservedPlaceholders });
+}
+
 export function createGuardrailsMaskSession(
   previousState: GuardrailsPlaceholderState = createGuardrailsPlaceholderState(),
   texts: readonly string[] = [],
@@ -257,11 +271,10 @@ export function maskGuardrailsText(
 
 function demaskGuardrailsTextInternal(
   input: string,
-  state: GuardrailsPlaceholderState,
+  indexes: PlaceholderIndexes,
   options: GuardrailsDemaskOptions,
   diagnostics?: GuardrailsPlaceholderTokenizerDiagnostics,
 ): string {
-  const indexes = buildIndexes(state);
   const parts: string[] = [];
   let nextClosing = nextClosingIndex(input, 0, diagnostics);
   for (let position = 0; position < input.length;) {
@@ -311,12 +324,24 @@ function demaskGuardrailsTextInternal(
   return parts.join("");
 }
 
+export function createGuardrailsDemaskSession(
+  state: GuardrailsPlaceholderState,
+): GuardrailsDemaskSession {
+  const indexes = buildIndexes(state);
+  return {
+    placeholders: new Set(indexes.byPlaceholder.keys()),
+    demask(input, options = {}) {
+      return demaskGuardrailsTextInternal(input, indexes, options);
+    },
+  };
+}
+
 export function demaskGuardrailsText(
   input: string,
   state: GuardrailsPlaceholderState,
   options: GuardrailsDemaskOptions = {},
 ): string {
-  return demaskGuardrailsTextInternal(input, state, options);
+  return createGuardrailsDemaskSession(state).demask(input, options);
 }
 
 export function demaskGuardrailsTextWithDiagnosticsForTests(
@@ -330,8 +355,9 @@ export function demaskGuardrailsTextWithDiagnosticsForTests(
     maxCandidateTokenLength: 0,
     visitedCodeUnits: 0,
   };
+  const indexes = buildIndexes(state);
   return {
-    text: demaskGuardrailsTextInternal(input, state, options, diagnostics),
+    text: demaskGuardrailsTextInternal(input, indexes, options, diagnostics),
     diagnostics,
   };
 }

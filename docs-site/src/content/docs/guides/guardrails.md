@@ -55,7 +55,7 @@ Mode and failure policy are separate controls:
 | Setting | Behavior |
 | --- | --- |
 | `enforce` | Masks detected values before upstream I/O and restores issued placeholders only in non-executable assistant text. |
-| `detect` | Counts request findings but sends the original request and response unchanged. It does **not** protect data sent to the provider and does not persist the request for Responses continuation replay. |
+| `detect` | Counts request findings but preserves the baseline wire payload produced by the normal opencodex protocol translation and leaves the provider response unchanged. It does **not** protect data sent to the provider and does not persist the request for Responses continuation replay. |
 | `block` | Default failure policy. A scanner, registry, traversal, or capacity failure stops the request before upstream I/O. |
 | `passthrough` | Explicit fail-open policy. A Guardrails processing failure may send the original, unmasked request upstream. The dashboard keeps a permanent warning while this policy is selected and records a high-severity metadata event when it is used. |
 
@@ -127,7 +127,8 @@ rule or add up to 100 local custom rules. A custom rule is declarative and bound
 - RE2 pattern: at most 4096 UTF-8 bytes;
 - placeholder type: `^[A-Z][A-Z0-9_]{0,63}$`;
 - required bounded arrays for `keywords`, `banlist`, `validators`, and
-  `masking.captureGroups` (use `[]` when unused), plus a required `groupPriority`;
+  `masking.captureGroups` (use `[]` when unused), plus a required `groupPriority`.
+  `groupPriority` is reserved compatibility metadata and does not currently change rule precedence;
 - optional `minLength` and `entropy` constraints. Capture-group numbers are unique ordered
   alternatives: the scanner masks the first non-empty group, not every listed group.
 
@@ -148,6 +149,8 @@ in configuration, request logs, telemetry, or browser storage. In connected mode
 the configured OpenCodex hub, so use synthetic values and never paste real secrets.
 
 Clearing the Tester cancels an in-flight scan. Reloading the page also discards the input and result.
+The custom-rule editor can send its current unsaved rule to the Tester. The draft is included only
+in that local simulation request; it is not added to the active registry until **Save rule** succeeds.
 
 Import uses a versioned JSON bundle and requires **Merge** or **Replace**. opencodex performs a dry
 run before applying it. Merge adds only new, non-conflicting custom rules and preserves the current

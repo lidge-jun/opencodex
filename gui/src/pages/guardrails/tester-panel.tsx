@@ -7,6 +7,7 @@ import {
   GUARDRAILS_DATA_TYPE_KEYS,
 } from "./constants";
 import type {
+  GuardrailsCustomRule,
   GuardrailsDataType,
   GuardrailsTesterResult,
   GuardrailsTrafficProtection,
@@ -23,10 +24,12 @@ export function GuardrailsTesterPanel({
   apiBase,
   trafficProtection,
   policyRevision,
+  draftRule,
 }: {
   apiBase: string;
   trafficProtection?: GuardrailsTrafficProtection;
   policyRevision?: string;
+  draftRule?: GuardrailsCustomRule;
 }) {
   const t = useT();
   const [text, setText] = useState("");
@@ -62,7 +65,6 @@ export function GuardrailsTesterPanel({
     policyRevisionRef.current = policyRevision;
     requestRef.current?.abort();
   }, [policyRevision]);
-
   const scan = async () => {
     if (pending || bytes > MAX_TEST_BYTES || text.length === 0) return;
     requestRef.current?.abort();
@@ -84,6 +86,7 @@ export function GuardrailsTesterPanel({
               keywordPrefilterEnabled: draftKeywordPrefilter,
             }
           : undefined,
+        draftRule,
       );
       if (!controller.signal.aborted) {
         setResultState({ policyRevision: requestPolicyRevision, value: next });
@@ -111,6 +114,11 @@ export function GuardrailsTesterPanel({
   return (
     <div className="guardrails-panel-stack">
       <Notice tone="warn">{t("guardrails.testerSimulation")}</Notice>
+      {draftRule && (
+        <Notice tone="warn">
+          {t("guardrails.draft")}: {draftRule.displayName} (<code>{draftRule.ruleId}</code>)
+        </Notice>
+      )}
       {actualTrafficProtection === "disabled" && (
         <Notice tone="warn">{t("guardrails.testerTrafficDisabled")}</Notice>
       )}

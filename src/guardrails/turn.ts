@@ -30,8 +30,9 @@ import {
   GuardrailsDemaskCapacityError,
   MAX_GUARDRAILS_DEMASK_EXPANSION_BYTES,
   canonicalGuardrailsPlaceholder,
-  demaskGuardrailsText,
+  createGuardrailsDemaskSession,
   maskGuardrailsText,
+  type GuardrailsDemaskSession,
 } from "./placeholders";
 import {
   GuardrailsSseDemaskCapacityError,
@@ -168,6 +169,7 @@ const GENERATED_PLACEHOLDER_TOKEN_PATTERN = /<[^<>]{3,254}>/g;
 
 interface DemaskTraversal {
   demaskBudget: GuardrailsDemaskBudget;
+  demaskText(value: string): string;
   executableDeltaTails: Map<string, string>;
   nodes: number;
   placeholders: ReadonlySet<string>;
@@ -535,25 +537,20 @@ export function restoreGuardrailsResponsesParsedRequest(
 
 function demaskText(
   value: unknown,
-  state: GuardrailsPlaceholderState,
   traversal: DemaskTraversal,
 ): unknown {
   return typeof value === "string"
-    ? demaskGuardrailsText(value, state, {
-        allowNormalizedPlaceholderDrift: true,
-        budget: traversal.demaskBudget,
-      })
+    ? traversal.demaskText(value)
     : value;
 }
 
 function withDemaskedField(
   record: JsonRecord,
   field: string,
-  state: GuardrailsPlaceholderState,
   traversal: DemaskTraversal,
 ): JsonRecord {
   const original = record[field];
-  const demasked = demaskText(original, state, traversal);
+  const demasked = demaskText(original, traversal);
   return demasked === original ? record : { ...record, [field]: demasked };
 }
 
@@ -568,9 +565,9 @@ function demaskAssistantContentPart(
   switch (value.type) {
     case "output_text":
     case "text":
-      return withDemaskedField(value, "text", state, traversal);
+      return withDemaskedField(value, "text", traversal);
     case "refusal":
-      return withDemaskedField(value, "refusal", state, traversal);
+      return withDemaskedField(value, "refusal", traversal);
     case "tool_use":
     case "server_tool_use":
     case "computer_tool_use":
@@ -618,12 +615,12 @@ function demaskChatMessage(
     ? value.role === "assistant"
     : value.role === undefined || value.role === "assistant";
   if (!assistantProse) return value;
-  let next = withDemaskedField(value, "refusal", state, traversal);
+  let next = withDemaskedField(value, "refusal", traversal);
   if (Array.isArray(value.content)) {
     const content = demaskContentParts(value.content, state, traversal);
     if (content !== value.content) next = { ...next, content };
   } else {
-    next = withDemaskedField(next, "content", state, traversal);
+    next = withDemaskedField(next, "content", traversal);
   }
   return next;
 }
@@ -653,7 +650,7 @@ function demaskAnthropicDelta(
   streamKey?: string,
 ): unknown {
   if (!isRecord(value)) return value;
-  if (value.type === "text_delta") return withDemaskedField(value, "text", state, traversal);
+  if (value.type === "text_delta") return withDemaskedField(value, "text", traversal);
   if (value.type === "input_json_delta") {
     inspectExecutableValue(value.partial_json, traversal, 0, streamKey);
   }
@@ -678,7 +675,6 @@ function demaskSsePayload(
       return withDemaskedField(
         payload,
         payload.type.endsWith(".delta") ? "delta" : "text",
-        state,
         traversal,
       );
     case "response.refusal.delta":
@@ -686,7 +682,6 @@ function demaskSsePayload(
       return withDemaskedField(
         payload,
         payload.type.endsWith(".delta") ? "delta" : "refusal",
-        state,
         traversal,
       );
     case "response.function_call_arguments.delta":
@@ -776,20 +771,27 @@ export function demaskGuardrailsJsonPayload(
   onToolArgumentRestoreSkipped?: (count: number) => void,
   sharedBudget?: GuardrailsDemaskBudget,
   onWarning?: () => void,
+  sharedDemaskSession?: GuardrailsDemaskSession,
 ): string {
   if (turn.mode !== "enforce" || turn.state.replacements.length === 0) return payload;
   try {
     const parsed: unknown = JSON.parse(payload);
+    const demaskSession = sharedDemaskSession ?? createGuardrailsDemaskSession(turn.state);
+    const demaskBudget = sharedBudget ?? {
+      remainingExpansionBytes: Math.max(
+        0,
+        MAX_GUARDRAILS_OUTPUT_BYTES - Buffer.byteLength(payload, "utf8"),
+      ),
+    };
     const traversal: DemaskTraversal = {
-      demaskBudget: sharedBudget ?? {
-        remainingExpansionBytes: Math.max(
-          0,
-          MAX_GUARDRAILS_OUTPUT_BYTES - Buffer.byteLength(payload, "utf8"),
-        ),
-      },
+      demaskBudget,
+      demaskText: value => demaskSession.demask(value, {
+          allowNormalizedPlaceholderDrift: true,
+          budget: demaskBudget,
+        }),
       executableDeltaTails: turn.ledger.executableDeltaTails,
       nodes: 0,
-      placeholders: new Set(turn.state.replacements.map(replacement => replacement.placeholder)),
+      placeholders: demaskSession.placeholders,
       toolArgumentRestoreSkipped: 0,
     };
     const demasked = JSON.stringify(demaskKnownResponsePayload(parsed, turn.state, traversal));
@@ -918,6 +920,7 @@ export async function demaskGuardrailsResponse(
   if (!turn || turn.mode !== "enforce" || turn.state.replacements.length === 0 || !response.ok || !response.body) {
     return response;
   }
+  const demaskSession = createGuardrailsDemaskSession(turn.state);
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   const mediaType = contentType.split(";", 1)[0]?.trim() ?? "";
   const declaredSse = mediaType === "text/event-stream";
@@ -957,10 +960,12 @@ export async function demaskGuardrailsResponse(
             onToolArgumentRestoreSkipped,
             demaskBudget,
             onWarning,
+            demaskSession,
           ),
           onWarning,
           demaskBudget,
           error => error instanceof GuardrailsOutputCapacityError,
+          demaskSession,
         ),
         translatorBudget,
       ),
@@ -1002,6 +1007,7 @@ export async function demaskGuardrailsResponse(
       onToolArgumentRestoreSkipped,
       undefined,
       onWarning,
+      demaskSession,
     );
   } catch (error) {
     if (!(error instanceof GuardrailsOutputCapacityError || error instanceof GuardrailsDemaskCapacityError)) {

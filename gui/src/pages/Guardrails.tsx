@@ -84,6 +84,10 @@ export default function Guardrails({ apiBase }: { apiBase: string }) {
   const [toast, setToast] = useState<{ tone: "err" | "ok"; text: string } | null>(null);
   const [consequence, setConsequence] = useState<PendingConsequence | null>(null);
   const [importPreview, setImportPreview] = useState<PendingImport | null>(null);
+  const [testerDraft, setTesterDraft] = useState<{
+    rule: GuardrailsCustomRule;
+    version: number;
+  } | null>(null);
   const [activityFilters, setActivityFilters] = useState<GuardrailsActivityFilters>({
     category: "",
     mode: "",
@@ -294,6 +298,14 @@ export default function Guardrails({ apiBase }: { apiBase: string }) {
     }, "guardrails.ruleSaved");
   }, [adoptRules, apiBase, runMutation, t]);
 
+  const testDraftRule = useCallback((rule: GuardrailsCustomRule) => {
+    setTesterDraft(current => ({
+      rule,
+      version: (current?.version ?? 0) + 1,
+    }));
+    selectTab("tester");
+  }, [selectTab]);
+
   const requestDelete = useCallback((rule: GuardrailsCustomRule) => {
     if (!rulesRef.current) return;
     setConsequence({
@@ -461,6 +473,7 @@ export default function Guardrails({ apiBase }: { apiBase: string }) {
                 onToggle={toggleRule}
                 onBulk={bulkRules}
                 onSave={saveRule}
+                onTestDraft={testDraftRule}
                 onDelete={requestDelete}
                 onExport={exportRules}
                 onImport={requestImport}
@@ -479,9 +492,11 @@ export default function Guardrails({ apiBase }: { apiBase: string }) {
       {mounted.has("tester") && (
         <section hidden={tab !== "tester"} role="tabpanel" id={guardrailsPanelDomId("tester")} aria-labelledby={guardrailsTabDomId("tester")}>
           <GuardrailsTesterPanel
+            key={testerDraft?.version ?? 0}
             apiBase={apiBase}
             trafficProtection={overview ? guardrailsTrafficProtectionStatus(overview) : undefined}
             policyRevision={overview?.revision}
+            draftRule={testerDraft?.rule}
           />
         </section>
       )}

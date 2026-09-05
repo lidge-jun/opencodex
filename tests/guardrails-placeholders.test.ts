@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import {
+  createGuardrailsDemaskSession,
   createGuardrailsMaskSession,
   createGuardrailsPlaceholderState,
   demaskGuardrailsText,
@@ -49,6 +50,19 @@ test("placeholder state remains stable across texts and supports controlled drif
   expect(demaskGuardrailsText("answer < access-token-002 >", second.state, {
     allowNormalizedPlaceholderDrift: true,
   })).toBe("answer access token");
+});
+
+test("one demask session reuses placeholder indexes across exact and normalized events", () => {
+  const state = createGuardrailsPlaceholderState();
+  const input = "access token";
+  const masked = maskGuardrailsText(input, [finding(input, input, 0, "ACCESS_TOKEN")], state);
+  const session = createGuardrailsDemaskSession(masked.state);
+
+  expect(session.placeholders.has("<ACCESS_TOKEN_1>")).toBe(true);
+  expect(session.demask("exact <ACCESS_TOKEN_1>")).toBe(`exact ${input}`);
+  expect(session.demask("drift < access-token-001 >", {
+    allowNormalizedPlaceholderDrift: true,
+  })).toBe(`drift ${input}`);
 });
 
 test("one masking session preserves deterministic mappings and reserves every field before replacement", () => {

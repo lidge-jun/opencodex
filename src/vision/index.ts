@@ -9,6 +9,7 @@ import { enforceAppOwnedMemoryBudget } from "../lib/app-owned-memory";
 import type { TranslatorBudget } from "../lib/translator-budget";
 import type { VisionPlan } from "./plan";
 import { carriesImages, descriptionEncoder, syncRawBodyImageDescriptions } from "./image-rewrite";
+import { MAX_GUARDRAILS_SCANNABLE_LEAF_BYTES } from "../guardrails/scanner";
 
 export { describeImage } from "./describe";
 export { isModelVisionSidecarConsumer as isModelTextOnly } from "./eligibility";
@@ -173,6 +174,19 @@ async function runBounded<T, R>(items: T[], limit: number, worker: (item: T) => 
 
 function clamp(s: string, max: number): string {
   return s.length <= max ? s : `${s.slice(0, max)}\n…[description truncated]`;
+}
+
+function truncateUtf8Prefix(value: string, maxBytes: number): string {
+  if (descriptionEncoder.encode(value).byteLength <= maxBytes) return value;
+  let cut = 0;
+  let used = 0;
+  for (const character of value) {
+    const bytes = descriptionEncoder.encode(character).byteLength;
+    if (used + bytes > maxBytes) break;
+    used += bytes;
+    cut += character.length;
+  }
+  return value.slice(0, cut);
 }
 
 function clampPlaceholderSafely(s: string, max: number): string {
@@ -367,9 +381,12 @@ export async function describeImagesInPlace(
         outcome = { text: "", error: error instanceof Error ? error.message : String(error) };
       }
       const plaintextValue = outcome.error ?? outcome.text.trim();
-      const sanitizedValue = plaintextValue && sanitizeDescription
-        ? sanitizeDescription(plaintextValue)
+      const sanitizerInput = sanitizeDescription
+        ? truncateUtf8Prefix(plaintextValue, MAX_GUARDRAILS_SCANNABLE_LEAF_BYTES)
         : plaintextValue;
+      const sanitizedValue = sanitizerInput && sanitizeDescription
+        ? sanitizeDescription(sanitizerInput)
+        : sanitizerInput;
       const boundedPlaintext = clamp(plaintextValue, DESC_MAX_CHARS);
       const boundedSanitized = clampPlaceholderSafely(sanitizedValue, DESC_MAX_CHARS);
       const successfulText = outcome.error ? "" : boundedSanitized;
