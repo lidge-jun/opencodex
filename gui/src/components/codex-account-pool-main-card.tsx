@@ -8,6 +8,7 @@ import type { CodexAccountModeState } from "../codex-multi-state";
 import type { TFn } from "../i18n/shared";
 import type { NoticeTone } from "../ui";
 import { CodexQuotaAutoRefreshControls } from "./codex-account-pool-cards";
+import { navigateHash } from "../hash-routing";
 import {
   doctorCopyButtonLabel,
   formatOAuthHealthLabel,
@@ -176,7 +177,7 @@ export function CodexAccountPoolMainCard({
             : policy.state === "ready" ? "codexAuth.mainHardLockMonitoring" : "codexAuth.mainHardLockUnknown")}</p>
           {onManageMainHardLock
             ? <button type="button" className="link-btn" onClick={onManageMainHardLock}>{t("codexAuth.mainHardLockManage")}</button>
-            : <a className="link-btn" href="#codex-set">{t("codexAuth.mainHardLockManage")}</a>}
+            : <button type="button" className="link-btn" onClick={() => navigateHash("codex-set")}>{t("codexAuth.mainHardLockManage")}</button>}
         </div>
       )}
       {healthSummary && (

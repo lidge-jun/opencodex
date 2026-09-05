@@ -31,6 +31,7 @@ Teardown: verified the fixture Bun process and workspace Vite process before sto
 - GUI `bun run build`, `bun run lint:i18n`, `bun run lint`: exit0 after final source/CSS changes. Existing large-bundle advisory remains.
 - Docs `bun install --frozen-lockfile && bun run build`: exit0,425 pages. Existing bundle/404-entry advisory unchanged.
 - No local test suite executed. New component regressions are authored for exact-head CI; all CI checks remain mandatory before merge.
+- React Doctor0.9.11, run from the actual gui project against the parent branch, found no issues after expressing fallback navigation with navigateHash. No scanner rule was suppressed. Native screenshot suffixes were corrected to.jpg; the bytes are unchanged JPEGs.
 - Runtime parent PR3552 atfe2e10e15: complete Cross-platform CI33930796875 succeeded, including macOS. Parent marked ready for review; no merge yet.
 
 ## Changed surfaces

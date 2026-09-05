@@ -262,7 +262,9 @@ test.each([
   const host = await mount((async () => response({})) as typeof fetch, <MainCard state={state} />);
   expect(host.querySelector(".codex-main-hard-lock-status")?.textContent).toContain(label);
   expect(Boolean(host.querySelector(".codex-account-switch"))).toBe(canSwitch);
-  expect(host.querySelector('.codex-main-hard-lock-status a')?.getAttribute("href")).toBe("#codex-set");
+  testWindow.location.hash = "#providers";
+  await click(button(host, ".codex-main-hard-lock-status button"));
+  expect(testWindow.location.hash).toBe("#codex-set");
 });
 
 test("same-page manage opens Advanced; save refreshes the one injected account controller", async () => {
