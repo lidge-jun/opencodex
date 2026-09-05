@@ -781,14 +781,22 @@ export const CANONICAL_NATIVE_CATALOG_CONTENT_POLICY: Readonly<
   unsupportedNativeEntries: "drop",
 });
 
+/** Preserve exact-id precedence while accepting the existing raw/encoded slug spellings. */
+function modelPickerRank(order: readonly string[]): (slug: string) => number | undefined {
+  const exact = new Map(order.map((slug, index) => [slug, index]));
+  const equivalent = new Map(order.map((slug, index) => [slugEquivalenceKey(slug), index]));
+  return slug => exact.get(slug) ?? equivalent.get(slugEquivalenceKey(slug));
+}
+
 /** A picker order containing native ids orders the whole list, without changing spawn ranks. */
 export function applyFullModelPickerOrder(entries: RawEntry[], order: readonly string[]): void {
-  if (!order.some(slug => !slug.includes("/"))) return;
-  const rank = new Map(order.map((slug, index) => [slug, index]));
+  const pickerOrder = order.filter(slug => slug.length > 0);
+  if (!pickerOrder.some(slug => !slug.includes("/"))) return;
+  const rankOf = modelPickerRank(pickerOrder);
   for (const entry of entries) {
     const natural = entry[SPAWN_PRIORITY_FIELD] ?? entry.priority ?? 9;
     entry[SPAWN_PRIORITY_FIELD] = natural;
-    entry.priority = rank.get(String(entry.slug)) ?? order.length + Number(natural);
+    entry.priority = rankOf(String(entry.slug)) ?? pickerOrder.length + Number(natural);
   }
 }
 
@@ -1081,8 +1089,9 @@ export function mergeCatalogEntriesFromObservedState({
   });
   // Retained rows bypass the builder: undo a prior display override before applying the
   // current routed-only order. Fresh rows already carry the current order and must stay intact.
-  if (!modelPickerOrder.some(slug => !slug.includes("/"))) {
-    const pickerRank = new Map(modelPickerOrder.map((slug, index) => [slug, index]));
+  const pickerOrder = modelPickerOrder.filter(slug => slug.length > 0);
+  if (!pickerOrder.some(slug => !slug.includes("/"))) {
+    const rankOf = modelPickerRank(pickerOrder);
     const priorityStride = Math.max(accountSelectors.length, 1);
     for (const entry of preservedRoutedEntries) {
       const natural = entry[SPAWN_PRIORITY_FIELD];
@@ -1097,7 +1106,7 @@ export function mergeCatalogEntriesFromObservedState({
         entry.priority = featuredRank * priorityStride;
         continue;
       }
-      const pickerIndex = pickerRank.get(slug);
+      const pickerIndex = rankOf(slug);
       if (pickerIndex !== undefined) {
         entry[SPAWN_PRIORITY_FIELD] = typeof entry.priority === "number" ? entry.priority : 5;
         entry.priority = PICKER_ORDER_PRIORITY_BASE + pickerIndex * priorityStride;

@@ -1,3 +1,4 @@
+import { routedSlug } from "../../src/providers/slug-codec";
 import { expect, test } from "bun:test";
 import { buildCatalogEntriesFromObservedState, mergeCatalogEntriesFromObservedState, CANONICAL_NATIVE_CATALOG_CONTENT_POLICY, applyFullModelPickerOrder, deriveEntry, mergeCatalogEntriesForSync, SPAWN_PRIORITY_FIELD } from "../../src/codex/catalog/sync";
 
@@ -53,19 +54,22 @@ test("bare native ids and routed slugs match exactly, without suffix aliases", (
 
 test.each([
   { order: [] as string[] },
+  { order: ["", "opencode-go/glm-5.3"] },
+  { order: [""] },
+  { order: ["opencode-go/team/model"], modelId: "team/model" },
   { order: ["opencode-go/glm-5.3"] },
   { order: ["other/model", "opencode-go/glm-5.3"] },
-])("degraded discovery clears previous full ordering for %j", ({ order }) => {
+])("degraded discovery clears previous full ordering for %j", ({ order, modelId = "glm-5.3" }) => {
   for (const accountSelectors of [[], ["account-a", "account-b"]]) {
-    const slug = "opencode-go/glm-5.3";
-    const fresh = (modelPickerOrder: string[]) => buildCatalogEntriesFromObservedState({
+    const slug = routedSlug("opencode-go", modelId);
+    const fresh = (modelPickerOrder: readonly string[]) => buildCatalogEntriesFromObservedState({
       template: null, gptSlugs: [],
-      goModels: [{ id: "glm-5.3", provider: "opencode-go", name: "GLM 5.3", reasoningEfforts: ["high", "max"] }],
+      goModels: [{ id: modelId, provider: "opencode-go", displayName: "GLM 5.3", reasoningEfforts: ["high", "max"] }],
       featured: [], modelPickerOrder, wsEnabled: false, multiAgentMode: "default",
       exactComboSlugs: new Set(), accountSelectors, suppressedBareNativeSlugs: new Set(),
       disabledNativeAccountSlugs: new Set(), multiAgentV2Enabled: false,
     });
-    const merge = (catalogModels: Record<string, unknown>[], routedEntries: Record<string, unknown>[], modelPickerOrder: string[], degraded: boolean) =>
+    const merge = (catalogModels: Record<string, unknown>[], routedEntries: Record<string, unknown>[], modelPickerOrder: readonly string[], degraded: boolean) =>
       mergeCatalogEntriesFromObservedState({
         catalogModels, routedEntries, modelPickerOrder, accountSelectors,
         baselineCatalogModels: [], baseline: new Map(), featured: [], wsEnabled: false,
@@ -75,7 +79,7 @@ test.each([
         legacyCustomModelSlugs: new Set(), multiAgentMode: "default", multiAgentV2Enabled: false,
         exactComboSlugs: new Set(), hasPhysicalComboProvider: false, includeNativeOpenAi: true,
         accountBoundEntries: [],
-        policy: { ...CANONICAL_NATIVE_CATALOG_CONTENT_POLICY, warningPolicy: "silent" },
+        policy: { ...CANONICAL_NATIVE_CATALOG_CONTENT_POLICY, warningPolicy: "suppress" },
       });
     const fullOrder = ["gpt-5.6-sol", slug];
     const previous = merge([], fresh(fullOrder), fullOrder, false);
@@ -88,4 +92,15 @@ test.each([
     expect(merge(degraded, [], order, true)).toEqual(degraded);
     expect(previous).toEqual(saved);
   }
+});
+
+
+test("full ordering ignores empty entries and accepts raw upstream ids with slashes", () => {
+  const slug = routedSlug("vendor", "team/model");
+  const rows = [{ slug, priority: 1000 }, { slug: "gpt-5.6-sol", priority: 9 }];
+  applyFullModelPickerOrder(rows, ["", "gpt-5.6-sol", "vendor/team/model"]);
+  expect(rows.map(row => row.priority)).toEqual([1, 0]);
+  const exact = [{ slug, priority: 5 }];
+  applyFullModelPickerOrder(exact, ["gpt-5.6-sol", slug, "vendor/team/model"]);
+  expect(exact[0]!.priority).toBe(1);
 });
