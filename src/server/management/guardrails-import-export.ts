@@ -77,6 +77,8 @@ export interface GuardrailsImportSecurityDiff {
     addedCount: number;
     removedCount: number;
     changedDefinitionCount: number;
+    changedRuleIds: string[];
+    removedRuleIds: string[];
     changed: boolean;
     weakening: boolean;
     requiresReview: boolean;
@@ -141,15 +143,20 @@ function securityDiff(
   const afterCustomRules = new Map(importedCustomRules.map(rule => [rule.ruleId, rule]));
   const addedCustomRuleCount = [...afterCustomRules.keys()]
     .filter(ruleId => !beforeCustomRules.has(ruleId)).length;
-  const removedCustomRuleCount = [...beforeCustomRules.keys()]
-    .filter(ruleId => !afterCustomRules.has(ruleId)).length;
-  const changedCustomRuleCount = [...afterCustomRules]
+  const removedRuleIds = [...beforeCustomRules.keys()]
+    .filter(ruleId => !afterCustomRules.has(ruleId))
+    .sort();
+  const changedRuleIds = [...afterCustomRules]
     .filter(([ruleId, rule]) => {
       const before = beforeCustomRules.get(ruleId);
       return before !== undefined
         && JSON.stringify(securityRelevantCustomRule(before))
           !== JSON.stringify(securityRelevantCustomRule(rule));
-    }).length;
+    })
+    .map(([ruleId]) => ruleId)
+    .sort();
+  const removedCustomRuleCount = removedRuleIds.length;
+  const changedCustomRuleCount = changedRuleIds.length;
   const enabled = valueDiff(
     current.configuredEnabled,
     imported.configuredEnabled,
@@ -216,6 +223,8 @@ function securityDiff(
     addedCount: addedCustomRuleCount,
     removedCount: removedCustomRuleCount,
     changedDefinitionCount: changedCustomRuleCount,
+    changedRuleIds,
+    removedRuleIds,
     changed: addedCustomRuleCount > 0
       || removedCustomRuleCount > 0
       || changedCustomRuleCount > 0,

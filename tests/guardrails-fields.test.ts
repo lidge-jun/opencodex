@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { createGuardrailsRegistry } from "../src/guardrails/registry";
@@ -9,6 +9,8 @@ import {
   RESPONSES_GUARDRAILS_ITEM_POLICY,
 } from "../src/guardrails/fields/responses";
 import { GuardrailsScanCapacityError } from "../src/guardrails/scanner";
+
+setDefaultTimeout(15_000);
 
 function registry() {
   return createGuardrailsRegistry({

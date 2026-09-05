@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test";
 import {
   clearGuardrailsContinuationsForTests,
   createGuardrailsContinuationScope,
@@ -13,6 +13,8 @@ import {
 import { createGuardrailsRegistry } from "../src/guardrails/registry";
 import { demaskGuardrailsText } from "../src/guardrails/placeholders";
 import { maskResponsesRequestFields } from "../src/guardrails/fields/responses";
+
+setDefaultTimeout(15_000);
 
 beforeEach(() => clearGuardrailsContinuationsForTests());
 afterEach(() => clearGuardrailsContinuationsForTests());

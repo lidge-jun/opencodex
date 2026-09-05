@@ -8,9 +8,11 @@ SHA-256 hashes are recorded in `provenance.json`.
 
 `guardrails_regex_rules.opencodex.yaml` is original MIT-licensed OpenCodex work.
 It supplements the pinned donor registry and is intentionally not represented
-as a donor asset in `provenance.json`. Its infrastructure-URI rule accepts a
-bounded angle-bracket host placeholder so a repeated scan can mask userinfo
-credentials left beside an already masked host.
+as a donor asset. Its distributed-file SHA-256 is recorded separately in
+`provenance.json`. Its infrastructure-URI rule accepts a bounded angle-bracket
+host placeholder so a repeated scan can mask userinfo credentials left beside
+an already masked host. Its email rule covers ASCII addresses whose final
+domain label uses the standard `xn--` punycode form.
 
 Native TypeScript code that loads and evaluates these assets is original
 OpenCodex code and is not a modification of donor Go source files.

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { EmptyState, Notice, Switch } from "../../ui";
 import { useT } from "../../i18n/shared";
 import { testGuardrailsText } from "./guardrails-api";
@@ -14,43 +14,63 @@ import type {
 
 const MAX_TEST_BYTES = 128 * 1024;
 
+interface RevisionBound<T> {
+  policyRevision: string | undefined;
+  value: T;
+}
+
 export function GuardrailsTesterPanel({
   apiBase,
   trafficProtection,
+  policyRevision,
 }: {
   apiBase: string;
   trafficProtection?: GuardrailsTrafficProtection;
+  policyRevision?: string;
 }) {
   const t = useT();
   const [text, setText] = useState("");
-  const [result, setResult] = useState<GuardrailsTesterResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [resultState, setResultState] = useState<RevisionBound<GuardrailsTesterResult> | null>(null);
+  const [errorState, setErrorState] = useState<RevisionBound<string> | null>(null);
   const [pending, setPending] = useState(false);
   const [useDraft, setUseDraft] = useState(false);
   const [draftDataTypes, setDraftDataTypes] = useState<GuardrailsDataType[]>([...GUARDRAILS_DATA_TYPES]);
   const [draftKeywordPrefilter, setDraftKeywordPrefilter] = useState(false);
   const requestRef = useRef<AbortController | null>(null);
+  const policyRevisionRef = useRef(policyRevision);
   const bytes = new TextEncoder().encode(text).byteLength;
+  const result = resultState && resultState.policyRevision === policyRevision
+    ? resultState.value
+    : null;
+  const error = errorState && errorState.policyRevision === policyRevision
+    ? errorState.value
+    : null;
   const actualTrafficProtection: GuardrailsTrafficProtection =
-    trafficProtection ?? result?.trafficProtection ?? "unknown";
+    result?.trafficProtection ?? trafficProtection ?? "unknown";
 
-  useEffect(() => () => requestRef.current?.abort(), []);
-
-  const invalidate = () => {
+  const invalidate = useCallback(() => {
     requestRef.current?.abort();
     requestRef.current = null;
     setPending(false);
-    setResult(null);
-    setError(null);
-  };
+    setResultState(null);
+    setErrorState(null);
+  }, []);
+
+  useEffect(() => () => requestRef.current?.abort(), []);
+  useEffect(() => {
+    if (policyRevisionRef.current === policyRevision) return;
+    policyRevisionRef.current = policyRevision;
+    requestRef.current?.abort();
+  }, [policyRevision]);
 
   const scan = async () => {
     if (pending || bytes > MAX_TEST_BYTES || text.length === 0) return;
     requestRef.current?.abort();
     const controller = new AbortController();
     requestRef.current = controller;
+    const requestPolicyRevision = policyRevision;
     setPending(true);
-    setError(null);
+    setErrorState(null);
     try {
       const next = await testGuardrailsText(
         apiBase,
@@ -65,10 +85,15 @@ export function GuardrailsTesterPanel({
             }
           : undefined,
       );
-      if (!controller.signal.aborted) setResult(next);
+      if (!controller.signal.aborted) {
+        setResultState({ policyRevision: requestPolicyRevision, value: next });
+      }
     } catch (cause) {
       if (!controller.signal.aborted) {
-        setError(cause instanceof Error ? cause.message : t("guardrails.testerFailed"));
+        setErrorState({
+          policyRevision: requestPolicyRevision,
+          value: cause instanceof Error ? cause.message : t("guardrails.testerFailed"),
+        });
       }
     } finally {
       if (requestRef.current === controller) {

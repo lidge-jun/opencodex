@@ -9,7 +9,9 @@ import { MAX_GUARDRAILS_SCANNABLE_LEAF_BYTES } from "./scanner";
 import type { GuardrailsCustomRule, GuardrailsRegistryOptions } from "./types";
 
 const DATA_TYPES = [1, 2, 3, 4, 5, 6] as const;
-const MAX_DISABLED_BUILTIN_RULE_IDS = 271;
+// Keep the config bound independent of the current registry size so adding a
+// built-in rule does not make a previously valid "disable all" policy invalid.
+const MAX_DISABLED_BUILTIN_RULE_IDS = 512;
 export const MAX_GUARDRAILS_CUSTOM_RULES = 100;
 export const MAX_GUARDRAILS_PROVIDER_IDS = 256;
 export const MAX_GUARDRAILS_RULE_PATTERN_BYTES = 4_096;
@@ -99,6 +101,19 @@ const customRuleSchema = z.object({
       path: ["banlist"],
       message: "requires the banlist validator",
     });
+  }
+
+  for (const [left, right] of [
+    ["ip_v4", "ip_v6"],
+    ["ip_public", "ip_private"],
+  ] as const) {
+    if (rule.validators.includes(left) && rule.validators.includes(right)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["validators"],
+        message: `${left} and ${right} cannot be combined`,
+      });
+    }
   }
 });
 

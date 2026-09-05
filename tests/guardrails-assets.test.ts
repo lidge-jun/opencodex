@@ -63,7 +63,7 @@ test("Guardrails vendors pinned donor assets with complete distribution notices"
     groups.reduce((total, group) => total + (group.rules?.length ?? 0), 0);
   expect(countRules(manual.guardrails_regex_rules as Array<{ rules?: unknown[] }>)).toBe(46);
   expect(countRules(generated.guardrails_regex_rules ?? [])).toBe(220);
-  expect(countRules(supplemental.guardrails_regex_rules ?? [])).toBe(5);
+  expect(countRules(supplemental.guardrails_regex_rules ?? [])).toBe(6);
   expect(supplementalSource).toContain("OpenCodex-authored supplemental rules");
   expect(
     supplemental.guardrails_regex_rules
@@ -71,6 +71,10 @@ test("Guardrails vendors pinned donor assets with complete distribution notices"
       .every(rule => rule.rule_id?.startsWith("opencodex.")),
   ).toBe(true);
   expect(provenance.assets.some(asset => asset.distributedPath.endsWith(".opencodex.yaml"))).toBe(false);
+  expect(provenance.distributionFiles).toContainEqual({
+    path: "src/guardrails/rules/guardrails_regex_rules.opencodex.yaml",
+    sha256: createHash("sha256").update(supplementalSource).digest("hex"),
+  });
 
   for (const path of [
     "THIRD_PARTY_NOTICES.md",

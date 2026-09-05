@@ -115,10 +115,10 @@ beforeEach(() => {
           status: "ready",
           generation: 1,
           policyRevision: "policy-1",
-          effectiveRuleCount: 271,
+          effectiveRuleCount: 272,
         },
         revision: "rev-1",
-        ruleSummary: { total: 271, builtin: 271, custom: 0 },
+        ruleSummary: { total: 272, builtin: 272, custom: 0 },
         overview: {
           counters: {
             scanned: 0,

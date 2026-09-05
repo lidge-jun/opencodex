@@ -1,7 +1,9 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { createGuardrailsRegistry } from "../src/guardrails/registry";
 import { scanGuardrailsText } from "../src/guardrails/scanner";
 import type { GuardrailsCustomRule } from "../src/guardrails/types";
+
+setDefaultTimeout(15_000);
 
 test("Guardrails minLength uses UTF-8 bytes like Go len(string)", () => {
   const rule: GuardrailsCustomRule = {

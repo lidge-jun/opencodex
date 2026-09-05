@@ -15,7 +15,7 @@ guardrails_regex_rules:
       - rule_id: opencodex.credentials.password-assignment
         name: opencodex.credentials.password-assignment
         regex: >-
-          (?i)(?:^|[\x60\r\n\t ,{])["']?(?:(?:[a-z0-9]+[_-])*(?:passwords?|passwds?|pwds?)|пароль)["']?\s*[:=]\s*(?:"([^"\\\r\n]{6,})"|'([^'\\\r\n]{6,})'|`([^`\\\r\n]{6,})`|([^\x60\s,;}\]\r\n]{6,}))
+          (?i)(?:^|[\x60\r\n\t ,{])["']?(?:(?:[a-z0-9]+[_-])*(?:passwords?|passwds?|pwds?)|пароль)["']?\s*[:=>{]+\s*(?:"([^"\\\r\n]{6,})"|'([^'\\\r\n]{6,})'|`([^`\\\r\n]{6,})`|([^\x60\s,;}\]\r\n]{6,}))
         keywords: [password, passwd, pwd, пароль]
         masking:
           capture_groups: [1, 2, 3, 4]
@@ -53,6 +53,21 @@ guardrails_regex_rules:
         masking:
           capture_groups: [1, 2, 3, 4]
           placeholder: OPENCODEX_API_KEY
+
+  - data_type: 5
+    group_priority: 80
+    name: PII
+    display_name: "Персональные данные"
+    description: "ASCII email с punycode-доменом"
+    rules:
+      - rule_id: opencodex.pii.email-punycode
+        name: opencodex.pii.email-punycode
+        regex: >-
+          (?:^|[^\w\\])([A-Za-z0-9._%+\-]+@(?:[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?\.)+xn--[A-Za-z0-9](?:[A-Za-z0-9\-]{0,57}[A-Za-z0-9])?)\b
+        validators: [email_ascii]
+        masking:
+          capture_groups: [1]
+          placeholder: OPENCODEX_EMAIL_IDN
 
   - data_type: 1
     group_priority: 90

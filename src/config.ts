@@ -1140,8 +1140,9 @@ const configSchema = z.object({
   subagentModelsVersion: z.number().int().positive().optional().catch(undefined),
   subagentModels: z.array(z.string().min(1)).optional().catch(undefined),
   clientIntegrations: clientIntegrationsSchema.optional().catch(undefined),
-  // A malformed hand edit disables this opt-in security feature only. Strict
-  // management writes are rejected in validateConfigCandidate instead.
+  // A malformed hand edit is recovered after whole-config parsing. Explicitly
+  // enabled policies fall back to enforce/block; invalid enablement stays off.
+  // Strict management writes are rejected in validateConfigCandidate instead.
   guardrails: guardrailsConfigSchema.optional().catch(undefined),
   providerContextCaps: z.record(z.string(), z.number().int().positive()).optional(),
   contextCapValue: z.number().int().positive().optional(),
@@ -2054,6 +2055,29 @@ function rawConfigRecord(rawParsed: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function guardrailsLoadWarning(rawParsed: unknown): string | null {
+  const warning = malformedGuardrailsConfigWarning(rawParsed);
+  if (!warning) return null;
+  const rawGuardrails = rawConfigRecord(rawConfigRecord(rawParsed)?.guardrails);
+  return rawGuardrails?.enabled === true
+    ? `${warning.replace(/ was ignored$/, "")}; enabled Guardrails fell back to built-in enforce/block defaults`
+    : warning;
+}
+
+function withFailSafeDegradedGuardrails(config: OcxConfig, rawParsed: unknown): OcxConfig {
+  if (!malformedGuardrailsConfigWarning(rawParsed)) return config;
+  const rawGuardrails = rawConfigRecord(rawConfigRecord(rawParsed)?.guardrails);
+  if (rawGuardrails?.enabled !== true) return config;
+  return {
+    ...config,
+    guardrails: {
+      enabled: true,
+      mode: "enforce",
+      failurePolicy: "block",
+    },
+  };
+}
+
 function malformedNativeSubagentFields(rawParsed: unknown): NativeSubagentPersistedField[] {
   const raw = rawConfigRecord(rawParsed);
   if (!raw) return [];
@@ -2189,7 +2213,10 @@ export function loadConfig(): OcxConfig {
     sanitizeModelCostsForLoad(parsed);
     const result = configSchema.safeParse(parsed);
     if (result.success) {
-      const config = normalizeApiKeyIds(result.data as OcxConfig);
+      const config = withFailSafeDegradedGuardrails(
+        normalizeApiKeyIds(result.data as OcxConfig),
+        parsed,
+      );
       warnInheritedFastWireConflicts(configPath, config);
       warnDegradedStreamMode(parsed, config);
       warnDegradedHostname(parsed, config);
@@ -2219,7 +2246,10 @@ export function loadConfig(): OcxConfig {
     const retryResult = configSchema.safeParse(merged);
     if (retryResult.success) {
       warnConfigRepaired(configPath, result.error);
-      const config = normalizeApiKeyIds(retryResult.data as OcxConfig);
+      const config = withFailSafeDegradedGuardrails(
+        normalizeApiKeyIds(retryResult.data as OcxConfig),
+        parsed,
+      );
       warnInheritedFastWireConflicts(configPath, config);
       warnDegradedHostname(parsed, config);
       warnDegradedApiKeys(parsed, config);
@@ -2244,7 +2274,10 @@ export function loadConfig(): OcxConfig {
     if (salvaged) {
       {
         warnDroppedConfigSections(configPath, salvaged.dropped, salvaged.issues);
-        const config = normalizeApiKeyIds(salvaged.parsed);
+        const config = withFailSafeDegradedGuardrails(
+          normalizeApiKeyIds(salvaged.parsed),
+          parsed,
+        );
         warnInheritedFastWireConflicts(configPath, config);
         warnDegradedHostname(parsed, config);
         warnDegradedApiKeys(parsed, config);
@@ -2374,9 +2407,13 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   // Unsafe hand-edited optional values are disabled in memory instead of rejecting
   // the entire config, which would hide unrelated providers/accounts. The next
   // ordinary save persists the normalized absence.
-  const syncDisabledReason = nativeSubagentSyncDisabledReason(config, rawParsed);
+  const failSafeConfig = withFailSafeDegradedGuardrails(config, rawParsed);
+  const syncDisabledReason = nativeSubagentSyncDisabledReason(failSafeConfig, rawParsed);
   const rawEffort = rawClaudeSubagentEffort(rawParsed);
-  const normalized = normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, rawParsed), rawParsed);
+  const normalized = normalizeClaudeSubagentEffort(
+    normalizeNativeSubagentSync(failSafeConfig, rawParsed),
+    rawParsed,
+  );
   const warnings = configPlaceholderWarnings(normalized);
   warnings.push(...inheritedFastWireConflictProviderNames(normalized).map(inheritedFastWireConflictWarning));
   warnings.push(...degradedCodexAccountPriorityWarnings(rawParsed, normalized));
@@ -2402,7 +2439,7 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   if (clientWarning) warnings.push(clientWarning);
   const notifyWarning = malformedQuotaResetNotifyWarning(rawParsed);
   if (notifyWarning) warnings.push(notifyWarning);
-  const guardrailsWarning = malformedGuardrailsConfigWarning(rawParsed);
+  const guardrailsWarning = guardrailsLoadWarning(rawParsed);
   if (guardrailsWarning) warnings.push(guardrailsWarning);
   if (syncDisabledReason) {
     warnings.push(`syncCodexSubagentDefaults ignored: ${syncDisabledReason}`);
@@ -2553,7 +2590,7 @@ function quotaResetNotifyError(value: unknown): string | null {
 }
 
 function warnDegradedGuardrailsConfig(rawParsed: unknown): void {
-  const warning = malformedGuardrailsConfigWarning(rawParsed);
+  const warning = guardrailsLoadWarning(rawParsed);
   if (warning) console.warn(`⚠️  config.json ${warning}. Other settings were preserved.`);
 }
 

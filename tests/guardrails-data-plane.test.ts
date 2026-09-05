@@ -196,6 +196,24 @@ test("Guardrails masks Responses input upstream and demasks a JSON response to t
   expect(JSON.stringify(upstreamBody)).not.toContain(secret);
 });
 
+test("password assignment separators cannot bypass prepared upstream masking", async () => {
+  const password = "qwerty";
+  const cases = [
+    `password > ${password}`,
+    `password{${password}}`,
+    `password: ${password}`,
+    `password=${password}`,
+  ] as const;
+
+  for (const input of cases) {
+    const prepared = await prepareGuardrailsTurn(config(), "responses", { input });
+    const serialized = JSON.stringify(prepared.body);
+
+    expect(serialized, input).toContain("<OPENCODEX_PASSWORD_1>");
+    expect(serialized, input).not.toContain(password);
+  }
+});
+
 test("provider scope leaves an excluded Responses route unchanged", async () => {
   const secret = "sk_live_abcdefghijklmnopqrstuvwx";
   let upstreamBody: Record<string, unknown> | undefined;

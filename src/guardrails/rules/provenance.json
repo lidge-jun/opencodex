@@ -148,8 +148,12 @@
       "sha256": "7f5b0215784eefa92a0638571f42813995d1af80c5b53a57f1c181682ddb88d7"
     },
     {
+      "path": "src/guardrails/rules/guardrails_regex_rules.opencodex.yaml",
+      "sha256": "bad53ccb5724e1e6f6e76480f4d0f5deb62adc282919ec24515da957bfc189ac"
+    },
+    {
       "path": "src/guardrails/rules/MODIFICATIONS.md",
-      "sha256": "69c35366346aec09d29f42289e02d3d87f0de4edd95986376355c96e951146f0"
+      "sha256": "8703b5cbbb71d30bbf5ad9533fb5ac4be5f5a69a8dd627b373a7e1c2d87c1738"
     },
     {
       "path": "LICENSES/Apache-2.0.txt",

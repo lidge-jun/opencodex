@@ -53,6 +53,7 @@ afterEach(async () => {
 
 async function renderTester(
   trafficProtection?: GuardrailsTrafficProtection,
+  policyRevision?: string,
 ) {
   const { createRoot } = await import("react-dom/client");
   await act(async () => {
@@ -62,6 +63,7 @@ async function renderTester(
         <GuardrailsTesterPanel
           apiBase="http://guardrails.test"
           trafficProtection={trafficProtection}
+          policyRevision={policyRevision}
         />
       </LanguageProvider>,
     );
@@ -89,11 +91,13 @@ function button(label: string): HTMLButtonElement {
     .find(candidate => candidate.textContent?.trim() === label)!;
 }
 
-test("tester is explicitly a local simulation for synthetic values", async () => {
+test("tester explains the Management API boundary and requires synthetic values", async () => {
   await mount();
 
-  expect(host.textContent).toContain("Local simulation");
-  expect(host.textContent).toContain("synthetic test values");
+  expect(host.textContent).toContain("Tester simulation");
+  expect(host.textContent).toContain("synthetic values");
+  expect(host.textContent).toContain("Management API");
+  expect(host.textContent).toContain("never to an LLM provider");
   expect(host.textContent).toContain("protection status is still unknown");
 });
 
@@ -207,7 +211,7 @@ test("detect-only traffic and no-findings result do not imply protection", async
   expect(host.textContent).not.toContain("No sensitive values detected");
 });
 
-test("live traffic mode overrides a stale tester result", async () => {
+test("scan result stays authoritative until the policy revision changes", async () => {
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
     value: async () => Response.json({
@@ -219,7 +223,7 @@ test("live traffic mode overrides a stale tester result", async () => {
       findings: [],
     }),
   });
-  await renderTester("enforce");
+  await renderTester("detect", "rev-1");
   await enterText("synthetic sample");
   await act(async () => {
     button("Scan").click();
@@ -227,9 +231,36 @@ test("live traffic mode overrides a stale tester result", async () => {
   });
   expect(host.textContent).not.toContain("Real traffic is detect-only");
 
-  await renderTester("detect");
+  await renderTester("detect", "rev-1");
+  expect(host.textContent).not.toContain("Real traffic is detect-only");
+
+  await renderTester("detect", "rev-2");
+  expect(host.textContent).toContain("Real traffic is detect-only and is not masked");
+  expect(host.querySelector("textarea")?.value).toBe("synthetic sample");
+  expect(host.textContent).not.toContain("Tester result");
+});
+
+test("scan result reports traffic protection when Overview is unavailable", async () => {
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async () => Response.json({
+      mode: "effective",
+      simulation: true,
+      trafficProtection: "detect",
+      maskedPreview: "synthetic sample",
+      findingCount: 0,
+      findings: [],
+    }),
+  });
+  await renderTester();
+  await enterText("synthetic sample");
+  await act(async () => {
+    button("Scan").click();
+    await new Promise(resolve => setTimeout(resolve, 5));
+  });
 
   expect(host.textContent).toContain("Real traffic is detect-only and is not masked");
+  expect(host.textContent).not.toContain("protection status is still unknown");
 });
 
 test("tester distinguishes unavailable, no-rules, no-provider, and reduced live protection", async () => {

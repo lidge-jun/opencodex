@@ -326,6 +326,18 @@ export function GuardrailsRulesPanel({
                   })}
                 </p>
               )}
+              {securityDiff.customRules.changedRuleIds.length > 0 && (
+                <p>
+                  <span>{t("guardrails.importSecurityChangedRuleIds")}</span>{" "}
+                  <code>{securityDiff.customRules.changedRuleIds.join(", ")}</code>
+                </p>
+              )}
+              {securityDiff.customRules.removedRuleIds.length > 0 && (
+                <p>
+                  <span>{t("guardrails.importSecurityRemovedRuleIds")}</span>{" "}
+                  <code>{securityDiff.customRules.removedRuleIds.join(", ")}</code>
+                </p>
+              )}
             </div>
           )}
           {importPreview.conflicts.length > 0 && (

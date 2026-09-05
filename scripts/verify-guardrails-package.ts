@@ -337,7 +337,7 @@ async function main(): Promise<void> {
     const guardrails = await import(moduleUrl) as GuardrailsPackageModule;
     const registry = guardrails.createBuiltinGuardrailsRegistry();
     try {
-      assert(registry.rules.length === 271, "fresh package did not compile all built-in rules");
+      assert(registry.rules.length === 272, "fresh package did not compile all built-in rules");
       const value = "sk_live_abcdefghijklmnopqrstuvwx";
       for (let iteration = 0; iteration < 300; iteration += 1) {
         const findings = guardrails.scanGuardrailsText(registry, value);
@@ -354,6 +354,12 @@ async function main(): Promise<void> {
           && finding.value === supplementalValue
         ),
         "fresh package did not scan a supplemental OpenCodex assignment",
+      );
+      const punycodeEmail = `${["agent", "example"].join("@")}.${"xn--p1ai"}`;
+      assert(
+        guardrails.scanGuardrailsText(registry, punycodeEmail)
+          .some(finding => finding.value === punycodeEmail),
+        "fresh package did not scan a punycode email",
       );
     } finally {
       registry.dispose();

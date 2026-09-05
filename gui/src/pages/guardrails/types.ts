@@ -212,6 +212,8 @@ export interface GuardrailsImportSecurityDiff {
     addedCount: number;
     removedCount: number;
     changedDefinitionCount: number;
+    changedRuleIds: string[];
+    removedRuleIds: string[];
     changed: boolean;
     weakening: boolean;
     requiresReview: boolean;

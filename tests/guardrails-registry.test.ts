@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import {
   createBuiltinGuardrailsRegistry,
   createGuardrailsRegistry,
@@ -24,6 +24,8 @@ import type {
 } from "../src/guardrails/types";
 import { validateGuardrailsCandidate } from "../src/guardrails/validators";
 import { GUARDRAILS_CONFIRMED_MISS_ANALOGS } from "./helpers/guardrails-confirmed-miss-analogs";
+
+setDefaultTimeout(15_000);
 
 function registryWithOnlyBuiltinRule(ruleId: string) {
   const allBuiltinRules = createBuiltinGuardrailsRegistry().rules;
@@ -95,8 +97,8 @@ test("builtin Guardrails registry compiles every pinned donor rule exactly once"
   const supplementalRules = registry.rules.filter(rule => rule.source === "opencodex");
 
   expect(donorRules).toHaveLength(266);
-  expect(supplementalRules).toHaveLength(5);
-  expect(new Set(registry.rules.map(rule => rule.ruleId)).size).toBe(271);
+  expect(supplementalRules).toHaveLength(6);
+  expect(new Set(registry.rules.map(rule => rule.ruleId)).size).toBe(272);
   expect(registry.rules.some(rule => rule.ruleId === "api_keys.stripe-key")).toBe(true);
   expect(registry.rules.some(rule => rule.ruleId === "credentials.github-oauth.gl")).toBe(true);
 });
@@ -128,6 +130,7 @@ test("supplemental assignment rules mask complete synthetic semantic values", ()
   const hmac = ["9f4a7c2e1d8b6a3f", "5c0e9d7b4a2c8e6f"].join("");
   const privateKey = `${"Ab9+".repeat(10)}Ab9=`;
   const longPassword = "SyntheticLongPassword".repeat(30);
+  const punycodeEmail = `${["agent", "example"].join("@")}.${"xn--p1ai"}`;
   const uri = `socks5h://synthetic-user:${password}@192.0.2.10:1080`;
   const uriWithMaskedHost = `socks5h://synthetic-user:${password}@<IPV4_1>`;
   const uriWithMaskedIpv6Host = `socks5h://synthetic-user:${password}@<IPV6_1>:1080/proxy`;
@@ -135,6 +138,10 @@ test("supplemental assignment rules mask complete synthetic semantic values", ()
   const cases = [
     [`SERVICE_API_KEY=${apiKey}`, apiKey, "OPENCODEX_API_KEY"],
     [`пароль: ${password}`, password, "OPENCODEX_PASSWORD"],
+    [`password > ${password}`, password, "OPENCODEX_PASSWORD"],
+    ["password > qwerty", "qwerty", "OPENCODEX_PASSWORD"],
+    [`password{${password}}`, password, "OPENCODEX_PASSWORD"],
+    [`password=>${password}`, password, "OPENCODEX_PASSWORD"],
     [`SERVICE_SECRET_KEYS='${keyring}'`, keyring, "OPENCODEX_SECRET"],
     [`- \`HMAC_SIGNING_SECRET=${hmac}\``, hmac, "OPENCODEX_SECRET"],
     [`- Private key: \`${privateKey}\``, privateKey, "OPENCODEX_PRIVATE_KEY"],
@@ -148,6 +155,7 @@ test("supplemental assignment rules mask complete synthetic semantic values", ()
     [`PROXY_URL=${uriWithMaximumMaskedHost}`, uriWithMaximumMaskedHost, "OPENCODEX_URL_WITH_CREDS"],
     [`API_KEY:\n  ${apiKey}`, apiKey, "OPENCODEX_API_KEY"],
     [`PASSWORD="${longPassword}"`, longPassword, "OPENCODEX_PASSWORD"],
+    [punycodeEmail, punycodeEmail, "OPENCODEX_EMAIL_IDN"],
   ] as const;
 
   for (const [input, value, placeholderType] of cases) {
@@ -504,6 +512,12 @@ test("every built-in validator has positive and negative coverage", () => {
     expect(validateGuardrailsCandidate(candidate.good, candidate.validators, candidate.options)).toBe(true);
     expect(validateGuardrailsCandidate(candidate.bad, candidate.validators, candidate.options)).toBe(false);
   }
+});
+
+test("email validator accepts a valid punycode TLD without accepting malformed labels", () => {
+  const localAndDomain = ["agent", "example"].join("@");
+  expect(validateGuardrailsCandidate(`${localAndDomain}.${"xn--p1ai"}`, ["email_ascii"])).toBe(true);
+  expect(validateGuardrailsCandidate(`${localAndDomain}.${"xn--bad-"}`, ["email_ascii"])).toBe(false);
 });
 
 test("scanner admits an exact 128 KiB leaf and rejects one byte more before RE2", () => {

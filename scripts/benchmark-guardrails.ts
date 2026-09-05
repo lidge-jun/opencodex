@@ -164,7 +164,7 @@ function main(): void {
   let builtinMaxLeaf: Measurement;
   const builtinRuleCount = builtin.registry.rules.length;
   try {
-    assert(builtinRuleCount === 271, "built-in benchmark registry must contain 271 rules");
+    assert(builtinRuleCount === 272, "built-in benchmark registry must contain 272 rules");
     scanNoFindings(builtin.registry, typicalText);
     typical = measure(TYPICAL_ITERATIONS, () => scanNoFindings(builtin.registry, typicalText));
     builtinMaxLeaf = measure(1, () => scanNoFindings(builtin.registry, largeLeaf));
@@ -175,11 +175,18 @@ function main(): void {
   const old = compileRegistry(benchmarkCustomRules("old"));
   const worst = compileRegistry(benchmarkCustomRules("new"));
   const worstRuleCount = worst.registry.rules.length;
+  const fullRegistryRuleCount = builtinRuleCount + MAX_CUSTOM_RULES;
   let noPrefilterMaxLeaf: Measurement;
   let overBudgetLargeTurnRejectedMs: number;
   try {
-    assert(old.registry.rules.length === 371, "old atomic-swap registry must contain 371 rules");
-    assert(worstRuleCount === 371, "worst benchmark registry must contain 371 rules");
+    assert(
+      old.registry.rules.length === fullRegistryRuleCount,
+      `old atomic-swap registry must contain ${fullRegistryRuleCount} rules`,
+    );
+    assert(
+      worstRuleCount === fullRegistryRuleCount,
+      `worst benchmark registry must contain ${fullRegistryRuleCount} rules`,
+    );
     noPrefilterMaxLeaf = measure(1, () => scanNoFindings(worst.registry, largeLeaf));
     overBudgetLargeTurnRejectedMs = measureExpectedCapacityRejection(worst.registry, largeLeaf);
   } finally {
@@ -191,8 +198,14 @@ function main(): void {
   const filtered = compileRegistry(benchmarkCustomRules("new", true), true);
   let prefilteredLargeTurn: Measurement;
   try {
-    assert(filteredOld.registry.rules.length === 371, "old prefiltered registry must contain 371 rules");
-    assert(filtered.registry.rules.length === 371, "new prefiltered registry must contain 371 rules");
+    assert(
+      filteredOld.registry.rules.length === fullRegistryRuleCount,
+      `old prefiltered registry must contain ${fullRegistryRuleCount} rules`,
+    );
+    assert(
+      filtered.registry.rules.length === fullRegistryRuleCount,
+      `new prefiltered registry must contain ${fullRegistryRuleCount} rules`,
+    );
     const prefilteredLeaves = admittedLargeTurnLeaves(filtered.registry, largeLeaf);
     assert(prefilteredLeaves > 0, "prefiltered benchmark must admit at least one maximum-size leaf");
     prefilteredLargeTurn = measure(1, () =>

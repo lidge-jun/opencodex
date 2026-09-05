@@ -127,10 +127,12 @@ off, so the first switch is an explicit opt-in. Use **detect** to confirm that s
 with your traffic without changing it; use **enforce** to replace supported textual values before an
 outbound provider call and restore matching placeholders in the successful reply to the same client.
 
-The five-tab workspace provides an operational Overview, rule management, a local non-retaining
-Tester, bounded metadata-only Activity, and Settings. It deliberately shows only built-in rule
-metadata, IDs, and source; it never displays the bundled regex matchers. Custom rules are local
-declarative RE2 rules, and a failed save keeps the last active configuration.
+The five-tab workspace provides an operational Overview, rule management, a non-persistent Tester
+served by the current OpenCodex Management API, bounded metadata-only Activity, and Settings.
+Tester samples are never sent to an LLM provider, but in connected mode they can traverse the
+configured OpenCodex hub; use synthetic values only. The workspace deliberately shows only
+built-in rule metadata, IDs, and source; it never displays the bundled regex matchers. Custom rules
+are local declarative RE2 rules, and a failed save keeps the last active configuration.
 
 Settings also controls provider coverage. All current and future providers are protected by
 default. Clearing a provider switches to selected-provider mode and requires a consequence

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +17,7 @@ import {
   GuardrailsConfigRevisionConflictError,
   mutateAndAdoptGuardrailsConfig,
 } from "../src/guardrails/config-coordinator";
+import { createBuiltinGuardrailsRegistry } from "../src/guardrails/registry";
 import {
   MAX_GUARDRAILS_PROVIDER_IDS,
   applyGuardrailsSettingsPatch,
@@ -26,6 +27,8 @@ import {
   parseGuardrailsSettingsPatch,
 } from "../src/guardrails/config-schema";
 import { guardrailsPolicyRevision } from "../src/guardrails/runtime";
+
+setDefaultTimeout(15_000);
 
 let testHome = "";
 const previousHome = process.env.OPENCODEX_HOME;
@@ -42,7 +45,7 @@ afterEach(() => {
   if (testHome && existsSync(testHome)) rmSync(testHome, { recursive: true, force: true });
 });
 
-test("malformed persisted Guardrails config degrades to disabled without losing providers", () => {
+test("invalid Guardrails enablement does not opt in or discard providers", () => {
   const raw = { ...getDefaultConfig(), guardrails: { enabled: "yes" } };
   writeFileSync(getConfigPath(), JSON.stringify(raw));
   const warnings: string[] = [];
@@ -53,6 +56,34 @@ test("malformed persisted Guardrails config degrades to disabled without losing 
     expect(loaded.guardrails).toBeUndefined();
     expect(loaded.providers.openai).toBeDefined();
     expect(warnings.join("\n")).toContain("guardrails");
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test("explicitly enabled malformed Guardrails config falls back to enforce and block", () => {
+  const raw = {
+    ...getDefaultConfig(),
+    guardrails: {
+      enabled: true,
+      customRules: [{ ruleId: "invalid-without-required-fields" }],
+    },
+  };
+  writeFileSync(getConfigPath(), JSON.stringify(raw));
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (message?: unknown) => warnings.push(String(message));
+  try {
+    const loaded = loadConfig();
+    expect(loaded.guardrails).toEqual({
+      enabled: true,
+      mode: "enforce",
+      failurePolicy: "block",
+    });
+    expect(loaded.providers.openai).toBeDefined();
+    expect(warnings.join("\n")).toContain(
+      "enabled Guardrails fell back to built-in enforce/block defaults",
+    );
   } finally {
     console.warn = originalWarn;
   }
@@ -111,6 +142,44 @@ test("custom rule minimum length cannot exceed the largest scannable leaf", () =
 
   expect(parsed.ok).toBe(false);
   if (!parsed.ok) expect(parsed.error).toContain("131072");
+});
+
+test("all current built-in rules fit the bounded disabled-rule configuration", () => {
+  const registry = createBuiltinGuardrailsRegistry();
+  try {
+    expect(parseGuardrailsConfig({
+      disabledBuiltinRuleIds: registry.rules.map(rule => rule.ruleId),
+    }).ok).toBe(true);
+  } finally {
+    registry.dispose();
+  }
+});
+
+test("custom rules reject mutually exclusive IP validators", () => {
+  for (const validators of [
+    ["ip_v4", "ip_v6"],
+    ["ip_public", "ip_private"],
+  ] as const) {
+    const parsed = parseGuardrailsConfig({
+      customRules: [{
+        ruleId: `custom.${validators.join("-")}`,
+        name: "Invalid IP rule",
+        dataType: 6,
+        group: "CUSTOM",
+        groupPriority: 0,
+        displayName: "Invalid IP rule",
+        description: "Test-only declarative rule",
+        regex: "([0-9a-f:.]+)",
+        keywords: [],
+        banlist: [],
+        validators: [...validators],
+        masking: { captureGroups: [1], placeholderType: `INVALID_${validators[1].toUpperCase()}` },
+      }],
+    });
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) expect(parsed.error).toContain("cannot be combined");
+  }
 });
 
 test("provider scope defaults to all and explicit all normalizes to absence", () => {

@@ -9,7 +9,7 @@ const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const SHA1_PATTERN = /^[a-f0-9]{40}$/;
 const COMMIT_PATTERN = /^[a-f0-9]{40}$/;
 const EXPECTED_PROVENANCE_SHA256 =
-  "9ccaa93fb54b02b7eb66dfb21eb03e8e402c90b1e70c76bc88d39038c5e4172d";
+  "636e00ca79202171e021be7989dc71dd4ef57ddc420137db4eddd9ea6aba903e";
 const PROVENANCE_PATH = "src/guardrails/rules/provenance.json";
 const PROVENANCE_SCHEMA_PATH = "src/guardrails/rules/provenance.schema.json";
 const PROVENANCE_SCHEMA_ID = "https://opencodex.me/schemas/guardrails-provenance-v2.json";

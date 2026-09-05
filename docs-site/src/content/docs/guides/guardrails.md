@@ -25,7 +25,7 @@ Open **Guardrails** in the opencodex sidebar. The workspace has five bookmarkabl
 | --- | --- | --- |
 | Overview | `#guardrails` | Enablement, registry health, counters, top rules/categories, and recent metadata-only activity |
 | Rules | `#guardrails/rules` | Search, filter, enable/disable, import/export, and manage custom rules |
-| Tester | `#guardrails/tester` | Scan sample text locally without sending or retaining it |
+| Tester | `#guardrails/tester` | Scan synthetic sample text through this OpenCodex Management API without sending it to an LLM provider or storing it server-side |
 | Activity | `#guardrails/activity` | Inspect the bounded in-memory metadata ring |
 | Settings | `#guardrails/settings` | Provider coverage, mode, failure policy, data types, and keyword prefilter |
 
@@ -92,11 +92,12 @@ returns HTTP `409 guardrails_policy_changed` before upstream I/O.
 
 ## Data types and rules
 
-The built-in registry contains 271 rules. Of those, 266 are pinned donor rules: 46 manually
+The built-in registry contains 272 rules. Of those, 266 are pinned donor rules: 46 manually
 curated rules from `guardrails-llm-filter` and 220 rules generated from a pinned Gitleaks
-configuration. Five additional MIT-licensed OpenCodex rules cover strongly labelled API-key,
-password, secret/keyring, private-key, and infrastructure-URI assignments without modifying the
-donor assets or their provenance hashes. The scanner uses RE2 through exact-pinned
+configuration. Six additional MIT-licensed OpenCodex rules cover strongly labelled API-key,
+password, secret/keyring, private-key, infrastructure-URI assignments, and ASCII email addresses
+with punycode domains without modifying the donor assets or their provenance hashes. The scanner
+uses RE2 through exact-pinned
 `re2-wasm@1.0.2`; it never falls back to JavaScript `RegExp`.
 Infrastructure URI detection also accepts a bounded angle-bracket placeholder in the host position.
 This lets a repeated scan protect remaining userinfo credentials in partially masked text without
@@ -133,9 +134,11 @@ detection recall.
 
 ## Test a rule safely
 
-The Tester accepts at most 128 KiB of UTF-8 text. It scans locally against the effective registry,
-returns a masked preview plus metadata-only findings, and never sends the text to a provider or
-stores it in configuration, request logs, telemetry, or browser storage.
+The Tester accepts at most 128 KiB of UTF-8 text. It sends the sample to the Management API of the
+OpenCodex instance shown in the dashboard, where the effective registry returns a masked preview
+plus metadata-only findings. The sample is never sent to an upstream LLM provider and is not stored
+in configuration, request logs, telemetry, or browser storage. In connected mode it can traverse
+the configured OpenCodex hub, so use synthetic values and never paste real secrets.
 
 Clearing the Tester cancels an in-flight scan. Reloading the page also discards the input and result.
 

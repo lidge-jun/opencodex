@@ -244,6 +244,8 @@ test("Replace preview highlights every security-setting weakening", async () => 
           addedCount: 0,
           removedCount: 1,
           changedDefinitionCount: 1,
+          changedRuleIds: ["custom.changed"],
+          removedRuleIds: ["custom.removed"],
           changed: true,
           weakening: true,
           requiresReview: true,
@@ -271,6 +273,8 @@ test("Replace preview highlights every security-setting weakening", async () => 
     "Disabled built-in rules: 0 → 1 (newly disabled: 1, re-enabled: 0)",
   );
   expect(host.textContent).toContain("Custom rules: 2 → 1 (removed: 1, changed: 1)");
+  expect(host.textContent).toContain("Changed rule definitions: custom.changed");
+  expect(host.textContent).toContain("Removed rule IDs: custom.removed");
   expect(host.textContent).toContain("Keyword prefilter: Off → On");
   expect(host.querySelectorAll(".badge-amber")).toHaveLength(7);
   const keywordPrefilterRow = [...host.querySelectorAll("li")]

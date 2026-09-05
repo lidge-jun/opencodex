@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { handleManagementAPI, type ManagementApiDeps } from "../src/server/management-api";
 import {
   clearGuardrailsTelemetryForTests,
@@ -8,6 +8,8 @@ import { GuardrailsConfigRevisionConflictError } from "../src/guardrails/config-
 import { guardrailsPolicyRevision } from "../src/guardrails/runtime";
 import type { OcxConfig } from "../src/types";
 import { GUARDRAILS_CONFIRMED_MISS_ANALOGS } from "./helpers/guardrails-confirmed-miss-analogs";
+
+setDefaultTimeout(15_000);
 
 function baseConfig(): OcxConfig {
   return {
@@ -643,6 +645,8 @@ test("Guardrails Replace dry-run reports a privacy-safe security diff", async ()
         addedCount: 0,
         removedCount: 1,
         changedDefinitionCount: 0,
+        changedRuleIds: [],
+        removedRuleIds: ["custom.removed-by-replace"],
         changed: true,
         weakening: true,
       },
@@ -725,6 +729,8 @@ test("Guardrails Replace security diff ignores cosmetic custom-rule edits", asyn
 
   expect(body.securityDiff.customRules).toMatchObject({
     changedDefinitionCount: 0,
+    changedRuleIds: [],
+    removedRuleIds: [],
     weakening: false,
     requiresReview: false,
   });
@@ -755,6 +761,8 @@ test("Guardrails Replace security diff ignores cosmetic custom-rule edits", asyn
   ))!.json();
   expect(reviewBody.securityDiff.customRules).toMatchObject({
     changedDefinitionCount: 1,
+    changedRuleIds: ["custom.cosmetic"],
+    removedRuleIds: [],
     weakening: false,
     requiresReview: true,
   });

@@ -430,7 +430,8 @@ export default function Guardrails({ apiBase }: { apiBase: string }) {
         <section hidden={tab !== "tester"} role="tabpanel" id={guardrailsPanelDomId("tester")} aria-labelledby={guardrailsTabDomId("tester")}>
           <GuardrailsTesterPanel
             apiBase={apiBase}
-            trafficProtection={guardrailsTrafficProtectionStatus(overview)}
+            trafficProtection={overview ? guardrailsTrafficProtectionStatus(overview) : undefined}
+            policyRevision={overview?.revision}
           />
         </section>
       )}

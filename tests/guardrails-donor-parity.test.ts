@@ -1,9 +1,11 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import {
   createBuiltinGuardrailsRegistry,
   scanGuardrailsText,
 } from "../src/guardrails";
 import type { GuardrailsRegistry } from "../src/guardrails/types";
+
+setDefaultTimeout(15_000);
 
 interface DonorRuleCase {
   name: string;

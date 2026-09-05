@@ -111,7 +111,13 @@ function emailAsciiValid(candidate: string): boolean {
   for (const [index, label] of labels.entries()) {
     if (label.length === 0 || label.length > 63 || label.startsWith("-") || label.endsWith("-")) return false;
     if (![...label].every(character => (character >= "a" && character <= "z") || (character >= "A" && character <= "Z") || (character >= "0" && character <= "9") || character === "-")) return false;
-    if (index === labels.length - 1 && ![...label].every(character => (character >= "a" && character <= "z") || (character >= "A" && character <= "Z"))) return false;
+    if (index === labels.length - 1) {
+      const asciiTld = [...label].every(character =>
+        (character >= "a" && character <= "z") || (character >= "A" && character <= "Z")
+      );
+      const punycodeTld = /^xn--[a-z0-9](?:[a-z0-9-]{0,57}[a-z0-9])?$/i.test(label);
+      if (!asciiTld && !punycodeTld) return false;
+    }
   }
   return true;
 }

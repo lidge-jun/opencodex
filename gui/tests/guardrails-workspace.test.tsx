@@ -121,6 +121,8 @@ const unchangedSecurityDiff: GuardrailsImportPreview["securityDiff"] = {
     addedCount: 0,
     removedCount: 0,
     changedDefinitionCount: 0,
+    changedRuleIds: [],
+    removedRuleIds: [],
     changed: false,
     weakening: false,
     requiresReview: false,
@@ -276,6 +278,16 @@ function installFetch() {
         }
         return json({ ok: true, dryRun: false });
       }
+      if (url.pathname === "/api/guardrails/test" && method === "POST") {
+        return json({
+          mode: "effective",
+          simulation: true,
+          trafficProtection: "detect",
+          maskedPreview: "synthetic sample",
+          findingCount: 0,
+          findings: [],
+        });
+      }
       if (url.pathname === "/api/guardrails/settings" && method === "PUT") {
         const body = JSON.parse(String(init?.body)) as GuardrailsSettingsPatch;
         const headers = new Headers(init?.headers);
@@ -395,7 +407,7 @@ async function confirm(label: string) {
   });
 }
 
-async function openTab(name: "rules" | "activity" | "settings") {
+async function openTab(name: "rules" | "tester" | "activity" | "settings") {
   await act(async () => {
     host.querySelector<HTMLButtonElement>(`#guardrails-tab-${name}`)!.click();
     await new Promise(resolve => setTimeout(resolve, 15));
@@ -518,6 +530,29 @@ test("failed-cold Overview exposes Retry and retries through a skeleton", async 
   releaseOverview = null;
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 15)); });
   expect(host.querySelector(".guardrails-overview-hero")).not.toBeNull();
+});
+
+test("Tester reports scan traffic status when Overview is unavailable", async () => {
+  failOverview = true;
+  await mount();
+  await openTab("tester");
+  const panel = host.querySelector("#guardrails-panel-tester")!;
+  const textarea = panel.querySelector("textarea")!;
+  const setter = Object.getOwnPropertyDescriptor(
+    testWindow.HTMLTextAreaElement.prototype,
+    "value",
+  )!.set!;
+  await act(async () => {
+    setter.call(textarea, "synthetic sample");
+    textarea.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+  });
+  await act(async () => {
+    namedButton("Scan", panel).click();
+    await new Promise(resolve => setTimeout(resolve, 15));
+  });
+
+  expect(panel.textContent).toContain("Real traffic is detect-only and is not masked");
+  expect(panel.textContent).not.toContain("protection status is still unknown");
 });
 
 test("Activity refresh keeps stale rows visible while loading", async () => {
