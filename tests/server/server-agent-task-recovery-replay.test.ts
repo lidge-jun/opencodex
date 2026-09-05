@@ -6,7 +6,7 @@ import { bindTurnTerminationScope, rememberDeliveredFinalAnswer } from "../../sr
 import { conversationIdFromResponsesRequest } from "../../src/server/request-log-conversation";
 import type { OcxParsedRequest } from "../../src/types";
 import { recoverEncryptedAgentTask, resetAgentTaskRecoveryState, restoreCachedEncryptedAgentTasks } from "../../src/server/responses/agent-task-recovery";
-import { codexHeaders, encryptedInput, FERNET_TASK, SECOND_FERNET_TASK, originalFetch, recoverySse, routedConfig } from "../helpers/agent-task-recovery";
+import { codexHeaders, encryptedInput, fakeChatGptJwt, FERNET_TASK, SECOND_FERNET_TASK, originalFetch, recoverySse, routedConfig } from "../helpers/agent-task-recovery";
 afterEach(() => { globalThis.fetch = originalFetch; resetAgentTaskRecoveryState(); });
 
 test("replay reuses admitted recovery after a tool result without another network call", async () => {
@@ -51,17 +51,106 @@ test("Responses handler restores a cached task in a continued child turn", async
     return providerResponse();
   }) as typeof fetch;
   const config = routedConfig({ enabled: true });
-  expect((await post(config, "xai/grok-4.5", encryptedInput(), codexHeaders())).status).toBe(200);
-  expect((await post(config, "xai/grok-4.5", [...encryptedInput(), { type: "message", role: "user", content: "Continue the original task." }], codexHeaders())).status).toBe(200);
-  expect(recoveries).toBe(1);
-  expect(bodies).toHaveLength(2);
-  expect(bodies[1]).toContain("Read nonce.txt exactly.");
-  expect(bodies[1]).not.toContain(FERNET_TASK);
+  let now = Math.floor(Date.now() / 1_000) * 1_000 + 995;
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  try {
+    const headers = codexHeaders();
+    expect((await post(config, "xai/grok-4.5", encryptedInput(), headers)).status).toBe(200);
+    now += 10;
+    // A freshly generated fixture JWT would be a different caller across this boundary.
+    expect(codexHeaders().get("authorization")).not.toBe(headers.get("authorization"));
+    expect((await post(config, "xai/grok-4.5", [...encryptedInput(), { type: "message", role: "user", content: "Continue the original task." }], headers)).status).toBe(200);
+    expect(recoveries).toBe(1);
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]).toContain("Read nonce.txt exactly.");
+    expect(bodies[1]).not.toContain(FERNET_TASK);
+  } finally {
+    clock.mockRestore();
+  }
 });
 
 function encryptedMessage(): unknown[] {
   return JSON.parse(JSON.stringify(encryptedInput()).replace("Message Type: NEW_TASK", "Message Type: MESSAGE"));
 }
+
+test.each([true, false, undefined])("fresh recovery and cache-only reparse preserve cohort marker %s and replay metadata", async (cohort) => {
+  const { post, providerResponse } = await import("../helpers/agent-task-recovery");
+  const parentThread = `affinity-parent-${crypto.randomUUID()}`;
+  const headers = codexHeaders("acct-caller", {
+    "x-codex-parent-thread-id": parentThread,
+    "thread-id": "distinct-child-thread",
+    session_id: "distinct-session",
+  });
+  const config = routedConfig({ enabled: true });
+  let recoveries = 0;
+  const recoveryBodies: string[] = [];
+  const providerBodies: string[] = [];
+  globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+    const body = String(init?.body);
+    if (String(url).includes("chatgpt.com")) {
+      recoveries++;
+      recoveryBodies.push(body);
+      return new Response(recoverySse("Read the affinity assignment."));
+    }
+    providerBodies.push(body);
+    return providerResponse();
+  }) as typeof fetch;
+
+  const observations: Array<{
+    cohort: boolean | undefined;
+    thread: string | undefined;
+    replay: OcxParsedRequest["_reasoningReplayScope"];
+    raw: string;
+  }> = [];
+  const createChat = ADAPTER_REGISTRY["openai-chat"].create;
+  const factory = spyOn(ADAPTER_REGISTRY["openai-chat"], "create").mockImplementation((provider, context) => {
+    const adapter = createChat(provider, context);
+    return {
+      ...adapter,
+      buildRequest(...[parsed, incoming]: Parameters<typeof adapter.buildRequest>) {
+        observations.push({
+          cohort: parsed._promptCacheKeyIsSharedCohort,
+          thread: parsed._clientThreadId,
+          replay: structuredClone(parsed._reasoningReplayScope),
+          raw: JSON.stringify(parsed._rawBody),
+        });
+        return adapter.buildRequest(parsed, incoming);
+      },
+    };
+  });
+  try {
+    const turns = [
+      encryptedInput(),
+      [...encryptedInput(), { type: "message", role: "user", content: "Continue the affinity assignment." }],
+    ];
+    for (const [index, input] of turns.entries()) {
+      const response = await post(config, "xai/grok-4.5", input, headers, undefined, {
+        promptCacheKeyIsSharedCohort: cohort,
+      });
+      expect(response.status).toBe(200);
+      await response.text();
+      expect(recoveries).toBe(1);
+      expect(observations).toHaveLength(index + 1);
+      expect(providerBodies).toHaveLength(index + 1);
+      const observed = observations[index]!;
+      expect(observed.cohort).toBe(cohort);
+      expect(observed.thread).toBe(parentThread);
+      expect(observed.replay).toMatchObject({ clientThreadId: parentThread });
+      expect(observed.replay).toEqual(observations[0]!.replay);
+      for (const body of [observed.raw, providerBodies[index]!]) {
+        expect(body).toContain("Read the affinity assignment.");
+        expect(body).not.toContain(FERNET_TASK);
+        expect(body).not.toContain("promptCacheKeyIsSharedCohort");
+      }
+    }
+    expect(providerBodies[1]).toContain("Continue the affinity assignment.");
+    expect(recoveryBodies).toHaveLength(1);
+    expect(recoveryBodies[0]).toContain(FERNET_TASK);
+    expect(recoveryBodies[0]).not.toContain("promptCacheKeyIsSharedCohort");
+  } finally {
+    factory.mockRestore();
+  }
+});
 
 test("MESSAGE recovery reaches the provider and survives tool-result replay", async () => {
   const { post, providerResponse } = await import("../helpers/agent-task-recovery");
@@ -77,16 +166,55 @@ test("MESSAGE recovery reaches the provider and survives tool-result replay", as
     return providerResponse();
   }) as typeof fetch;
   const config = routedConfig({ enabled: true });
-  expect((await post(config, "xai/grok-4.5", encryptedMessage(), codexHeaders())).status).toBe(200);
-  expect((await post(config, "xai/grok-4.5", [...encryptedMessage(), {
-    type: "message", role: "user", content: "Continue after the tool result.",
-  }], codexHeaders())).status).toBe(200);
-  expect(recoveries).toBe(1);
-  expect(bodies).toHaveLength(2);
-  for (const body of bodies) {
-    expect(body).toContain("Stop waiting and report your result.");
-    expect(body).not.toContain(FERNET_TASK);
+  let now = Math.floor(Date.now() / 1_000) * 1_000 + 995;
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  try {
+    const headers = codexHeaders();
+    expect((await post(config, "xai/grok-4.5", encryptedMessage(), headers)).status).toBe(200);
+    now += 10;
+    expect(codexHeaders().get("authorization")).not.toBe(headers.get("authorization"));
+    expect((await post(config, "xai/grok-4.5", [...encryptedMessage(), {
+      type: "message", role: "user", content: "Continue after the tool result.",
+    }], headers)).status).toBe(200);
+    expect(recoveries).toBe(1);
+    expect(bodies).toHaveLength(2);
+    for (const body of bodies) {
+      expect(body).toContain("Stop waiting and report your result.");
+      expect(body).not.toContain(FERNET_TASK);
+    }
+  } finally {
+    clock.mockRestore();
   }
+});
+
+test("a changed valid token cannot read another credential snapshot's recovery", async () => {
+  let recoveries = 0;
+  globalThis.fetch = (async () => {
+    recoveries++;
+    return new Response(recoverySse("Original caller assignment."));
+  }) as typeof fetch;
+  const config = routedConfig({ enabled: true });
+  const exp = Math.floor(Date.now() / 1_000) + 3_600;
+  const headers = codexHeaders("acct-caller");
+  headers.set("authorization", `Bearer ${fakeChatGptJwt("acct-caller", { exp })}`);
+  const req = new Request("http://localhost/v1/responses", { headers });
+  expect(await recoverEncryptedAgentTask(req, encryptedInput(), {}, config)).toBe(true);
+
+  const changedHeaders = new Headers(headers);
+  changedHeaders.set("authorization", `Bearer ${fakeChatGptJwt("acct-caller", { exp: exp + 1 })}`);
+  expect(changedHeaders.get("authorization")).not.toBe(headers.get("authorization"));
+  const changedCallerInput = encryptedInput();
+  expect(restoreCachedEncryptedAgentTasks(new Request("http://localhost/v1/responses", {
+    headers: changedHeaders,
+  }), changedCallerInput, config)).toBe(0);
+  expect(JSON.stringify(changedCallerInput)).toContain(FERNET_TASK);
+  expect(JSON.stringify(changedCallerInput)).not.toContain("Original caller assignment.");
+
+  const sameCallerInput = encryptedInput();
+  expect(restoreCachedEncryptedAgentTasks(req, sameCallerInput, config)).toBe(1);
+  expect(JSON.stringify(sameCallerInput)).toContain("Original caller assignment.");
+  expect(JSON.stringify(sameCallerInput)).not.toContain(FERNET_TASK);
+  expect(recoveries).toBe(1);
 });
 
 test("MESSAGE cache remains isolated by message type, account, parent and sender", async () => {
