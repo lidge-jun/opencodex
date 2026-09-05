@@ -49,3 +49,7 @@ PR #3670 at `4f827844b`: Linux shard 1 failed in `anthropic-thinking-signature.t
 Remote current-head follow-up before this fixture change: typecheck passed and 178 tests across OAuth upsert/native Responses passed. Independent review resolved all findings at `64e3e079a`; latest-head full CI remains required.
 
 Linux shard 4 found a real native-wire parity gap: HTTP 429 bypassed generic OAuth account rotation. Remote red proof at `4f827844b` with expanded attribution tests: 14 pass / 3 fail (both buffered/streaming rotation returned 429; five-account bound sent once rather than four times). The fix reuses the existing account/quorum/cooldown budget in the native pre-stream loop and keeps selected-account refresh/replay identity synchronized. Green proof and new exact-head CI are required.
+
+At `3ebc3abba`, remote typecheck and 67 tests across attribution, generic/event failover and the signature fixture passed. This includes failed alternate-snapshot preservation and `429 -> 401` refreshing the newly selected account. Independent review: PASS, zero blockers. CI then flagged a long synthetic bearer literal in the new test; use a short unmistakable fixture value instead, with identical authentication assertions and no scanner exception.
+
+Temporary UI tab closed; preview processes stopped and ports 10239/15239 verified unbound. The screenshot and private synthetic probe receipts remain as evidence. The pending gate is latest-head full CI and authorized admin landing of PR #3670.

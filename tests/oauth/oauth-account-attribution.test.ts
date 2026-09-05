@@ -311,7 +311,7 @@ describe("Responses per-account attribution for non-Codex OAuth", () => {
       let refreshedId: string | undefined;
       const refresh = spyOn(oauth, "forceRefreshOAuthAccessSnapshot").mockImplementation(async snapshot => {
         refreshedId = snapshot.accountId;
-        return { ...snapshot, accessToken: "refreshed-selected-account" };
+        return { ...snapshot, accessToken: "fresh-b" };
       });
       const bearers: string[] = [];
       globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -324,7 +324,7 @@ describe("Responses per-account attribution for non-Codex OAuth", () => {
         const response = await handleResponses(request(), oauthConfig(), logCtx, {});
         expect(response.status).toBe(200);
         expect(bearers).toHaveLength(3);
-        expect(bearers[2]).toBe("Bearer refreshed-selected-account");
+        expect(bearers[2]).toBe("Bearer fresh-b");
         const selected = getAccountSet("xai")!.accounts.find(account => bearers[1]!.includes(account.credential.access));
         expect(refreshedId).toBe(selected?.id);
         expect(logCtx.accountLogLabel).toBe(oauthAccountLogLabel(selected!.id, "xai"));
