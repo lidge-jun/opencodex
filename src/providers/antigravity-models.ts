@@ -279,7 +279,6 @@ export const ANTIGRAVITY_MODEL_ALIASES: Record<string, string> = {
 // Picker-visible: collapsed base models only.
 export const ANTIGRAVITY_MODELS = [
   GEMINI_FLASH_CURRENT,
-  GEMINI_FLASH_PREVIOUS,
   "gemini-3.1-pro",
   "gemini-3.1-flash-image",
   "claude-sonnet-4-6",
