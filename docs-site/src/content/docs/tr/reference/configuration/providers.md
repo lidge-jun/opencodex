@@ -171,6 +171,8 @@ hedefleri engellenmiş olarak kalır. Teşhis istekleri yönlendirmeleri reddede
 kimlik bilgisi kaldırılmış bir hedef bildirir. Sıradan sağlayıcı isteği yeniden
 yönlendirme incelemesi bu teşhis korumasından ayrı kalır.
 
+Clash / Surge / Mihomo kullanıcıları için iki fake-IP DNS istisnası vardır ve ikisi de yalnızca DNS *yanıtlarına* uygulanır; URL'deki literal adres yine reddedilir. IANA benchmark aralığı `198.18.0.0/15` (IPv4-mapped IPv6 yazımları dahil), ana bilgisayara bir giden proxy uygulandığında kabul edilir. Mihomo'nun varsayılan IPv6 fake-IP aralığı `fdfe:dcba:9876::/48` daha sıkı bir koşulla kabul edilir: URL şemasıyla eşleşen proxy değişkeni (`https:` için `HTTPS_PROXY`, `http:` için `HTTP_PROXY`; `ALL_PROXY` sayılmaz) ayarlı olmalı, ana bilgisayar `NO_PROXY` ile eşleşmemeli ve istek daha sonra açıkça o proxy'ye bağlanır. Diğer tüm ULA'lar, komşu önekler veya gerçek bir özel yanıtla karışık fake-IP yanıtları hâlâ `allowPrivateNetwork: true` gerektirir. Sağlayıcı kaydetme zamanı doğrulaması IPv6 istisnasını hiçbir zaman uygulamaz.
+
 ## Codex hesap havuzu
 
 Havuz hesapları eklemek ve kotaları yenilemek için kontrol panelinde **Codex

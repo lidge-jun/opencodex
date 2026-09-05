@@ -65,6 +65,17 @@ only a typed DNS-resolution failure degrades to proxy resolution; every literal,
 resolved-address policy error still rejects. Proxy mode logs once that the proxy-selected peer
 cannot be pinned. Private destinations additionally require allowPrivateNetwork plus NO_PROXY.
 
+Two fake-IP DNS accommodations exist, both for resolved answers only (a literal address in the URL
+still rejects). The IANA benchmark range (198.18/15 and its IPv4-mapped IPv6 spellings) is admitted
+whenever any outbound proxy applies to the host, because the range itself marks the answer synthetic.
+Mihomo's default IPv6 fake-IP range (fdfe:dcba:9876::/48) is ULA and carries no such mark, so it is
+admitted only when the proxy variable that matches the URL scheme is set (HTTPS_PROXY for https:,
+HTTP_PROXY for http:; ALL_PROXY is not consulted because Bun fetch does not honour it), the host is
+not in NO_PROXY, and the request is then bound to that proxy through Bun's explicit `proxy` option
+rather than environment inference. Both gates live in the outbound wrapper, not in classification:
+`classifyIpv6` and config-time validation (`providerDestinationResolvedError`) never admit the
+ULA, so provider save-time checks are unaffected (#3462).
+
 Both paths reject redirects and expose only credential-stripped final-address guidance. This phase
 does not cover ordinary requests, streaming, retries, or per-hop redirect review on those paths.
 Caller-owned `provider.fetch` executors are also deferred: they receive literal/config checks and

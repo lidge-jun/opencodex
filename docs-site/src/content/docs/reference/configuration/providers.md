@@ -351,6 +351,16 @@ destinations stay blocked. Diagnostic
 requests reject redirects and report a credential-stripped target. Ordinary provider request redirect
 review remains separate from this diagnostic guard.
 
+Two fake-IP DNS accommodations exist for Clash / Surge / Mihomo users, and both apply to DNS
+*answers* only — a literal address in the URL is still rejected. The IANA benchmark range
+`198.18.0.0/15` (and its IPv4-mapped IPv6 spellings) is accepted whenever an outbound proxy applies
+to the host. Mihomo's default IPv6 fake-IP range `fdfe:dcba:9876::/48` is accepted on a stricter
+gate: the proxy variable that matches the URL scheme (`HTTPS_PROXY` for `https:`, `HTTP_PROXY` for
+`http:`; `ALL_PROXY` does not count) must be set, the host must not match `NO_PROXY`, and the
+request is then bound to that proxy explicitly. Any other ULA, an adjacent prefix, or a fake-IP answer
+mixed with a real private answer still requires `allowPrivateNetwork: true`. Provider save-time
+validation never applies the IPv6 accommodation.
+
 ## Codex account pool
 
 Use **Codex Auth** in the dashboard to add pool accounts and refresh quotas. `config.json` stores
