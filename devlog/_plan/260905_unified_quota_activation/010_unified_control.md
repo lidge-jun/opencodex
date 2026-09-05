@@ -148,3 +148,10 @@ ON, keyboard OFF, partial failure/retry, mixed and empty states. CSS widths 320,
 copy. Light/dark screenshots checked; port 10191 and temporary browser tab torn down.
 Delivery PR: #3662; administrative approval bypass explicitly authorized by the owner
 and recorded on the PR. No service restart or release belongs to this unit.
+
+C2 synthesis (hosted Codex review): accepted P2 on transiently unavailable windows.
+ON must skip unavailable windows entirely, preserving previously opted-in flags;
+only explicit OFF clears those flags. The final readback verifies only the targeted
+available windows for ON, but every window for OFF. Updated the mixed-state regression
+to preserve the unavailable opt-in and then prove explicit OFF clears it. This corrects
+the earlier stale-cleanup interpretation without changing the API or worker.

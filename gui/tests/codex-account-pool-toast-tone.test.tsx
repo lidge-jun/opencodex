@@ -267,7 +267,7 @@ test("bulk activation enables and disables all supported current account windows
   expect(activationToggle().getAttribute("aria-pressed")).toBe("false");
 });
 
-test("mixed activation enables remaining windows and clears stale unavailable flags", async () => {
+test("mixed activation enables remaining windows without revoking temporarily unavailable opt-ins", async () => {
   const api = activationApi({ __main__: { weekly: true }, none: { fiveHour: true } });
   await mountPool(activationController()); await activationOpen();
   expect(activationToggle().getAttribute("aria-pressed")).toBe("mixed");
@@ -275,8 +275,14 @@ test("mixed activation enables remaining windows and clears stale unavailable fl
   expect(api.writes).toEqual([
     { id: "both", window: "fiveHour", enabled: true },
     { id: "both", window: "weekly", enabled: true },
-    { id: "none", window: "fiveHour", enabled: false },
   ]);
+  expect(api.settings.none.fiveHour).toBe(true);
+  expect(activationToggle().getAttribute("aria-pressed")).toBe("true");
+  expect(host.textContent).toContain("Automatic window activation updated");
+  api.writes.length = 0;
+  await activationClick('#codex-quota-activation .toggle');
+  expect(api.writes).toContainEqual({ id: "none", window: "fiveHour", enabled: false });
+  expect(api.writes.every(write => !write.enabled)).toBe(true);
 });
 
 test("partial OFF retry preserves OFF intent and never re-enables a saved disable", async () => {

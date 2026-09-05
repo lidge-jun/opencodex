@@ -294,7 +294,10 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     let failed = false;
     try {
       for (const target of windows) {
-        const requested = enabled && target.available;
+        // Missing quota can be transient. ON must not revoke an existing opt-in;
+        // only an explicit OFF action clears flags for unavailable windows.
+        if (enabled && !target.available) continue;
+        const requested = enabled;
         if (target.enabled === requested) continue;
         if (!current()) return;
         if (pending.signal.aborted) { failed = true; break; }
@@ -321,7 +324,8 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
         if (!response.ok) throw new Error("read");
         const saved = readQuotaActivationSettings(await response.json());
         if (!current()) return;
-        failed ||= windows.some(target => (saved[target.id]?.[target.window] === true) !== (enabled && target.available));
+        failed ||= windows.some(target => (!enabled || target.available)
+          && (saved[target.id]?.[target.window] === true) !== enabled);
         setQuotaState({ apiBase, revision: quotaReadRevision, settings: saved, error: false });
       } catch {
         if (!current()) return;
