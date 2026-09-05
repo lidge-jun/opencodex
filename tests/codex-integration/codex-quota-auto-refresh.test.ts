@@ -116,8 +116,8 @@ describe("Codex quota window auto refresh", () => {
   test("accepts reset timestamps in seconds or milliseconds and ignores completed windows", () => {
     const cfg = config();
     expect(dueCodexQuotaAutoRefreshWindows(cfg, "pool-a", quota(), NOW)).toEqual({
-      fiveHour: RESET_SECONDS,
-      weekly: RESET_SECONDS,
+      fiveHour: NOW,
+      weekly: NOW,
     });
     expect(dueCodexQuotaAutoRefreshWindows(
       cfg,
@@ -132,6 +132,62 @@ describe("Codex quota window auto refresh", () => {
       NOW,
       { fiveHour: RESET_SECONDS, weekly: RESET_SECONDS },
     )).toBeNull();
+  });
+
+  test.each([
+    [RESET_SECONDS, NOW],
+    [NOW, RESET_SECONDS],
+  ])("deduplicates saved and completed markers across units (%i -> %i)", (marker, observed) => {
+    const cfg = config();
+    const snapshot = quota({ shortResetAt: observed, weeklyResetAt: observed });
+    expect(dueCodexQuotaAutoRefreshWindows(cfg, "pool-a", snapshot, NOW, {
+      fiveHour: marker,
+      weekly: marker,
+    })).toBeNull();
+    cfg.codexQuotaAutoRefresh = {
+      "pool-a": { fiveHour: true, weekly: true, lastFiveHourResetAt: marker, lastWeeklyResetAt: marker },
+    };
+    expect(dueCodexQuotaAutoRefreshWindows(cfg, "pool-a", snapshot, NOW)).toBeNull();
+    expect(dueCodexQuotaAutoRefreshWindows(cfg, "pool-a", quota({
+      shortResetAt: RESET_SECONDS + 1,
+      weeklyResetAt: NOW + 1000,
+    }), NOW)).toBeNull();
+    expect(dueCodexQuotaAutoRefreshWindows(cfg, "pool-a", quota({
+      shortResetAt: RESET_SECONDS + 1,
+      weeklyResetAt: NOW + 1000,
+    }), NOW + 1000)).toEqual({ fiveHour: NOW + 1000, weekly: NOW + 1000 });
+  });
+
+  test.each([
+    [RESET_SECONDS, NOW],
+    [NOW, RESET_SECONDS],
+  ])("persists canonical markers and avoids warmup after a unit change and restart (%i -> %i)", async (first, second) => {
+    const cfg = config();
+    writeFileSync(join(testHome, "config.json"), JSON.stringify(cfg));
+    let observed = first;
+    let warmups = 0;
+    const deps = {
+      getQuota: (id: string) => id === "pool-a"
+        ? quota({ shortResetAt: observed, weeklyResetAt: observed }) : null,
+      warmAccount: async () => { warmups += 1; },
+    };
+    await runCodexQuotaAutoRefresh(cfg, NOW, deps);
+    expect(readConfigDiagnostics().config.codexQuotaAutoRefresh?.["pool-a"]).toMatchObject({
+      lastFiveHourResetAt: NOW,
+      lastWeeklyResetAt: NOW,
+    });
+    observed = second;
+    await runCodexQuotaAutoRefresh(cfg, NOW + 1, deps);
+    resetCodexQuotaAutoRefreshForTests();
+    await runCodexQuotaAutoRefresh(loadConfig(), NOW + 2, deps);
+    expect(warmups).toBe(1);
+    observed = RESET_SECONDS + 1;
+    await runCodexQuotaAutoRefresh(loadConfig(), NOW + 1000, deps);
+    expect(warmups).toBe(2);
+    expect(readConfigDiagnostics().config.codexQuotaAutoRefresh?.["pool-a"]).toMatchObject({
+      lastFiveHourResetAt: NOW + 1000,
+      lastWeeklyResetAt: NOW + 1000,
+    });
   });
 
   test("coalesces simultaneous windows into one warmup and persists both markers", async () => {
@@ -149,8 +205,8 @@ describe("Codex quota window auto refresh", () => {
     });
     expect(warmed).toEqual(["pool-a"]);
     expect(cfg.codexQuotaAutoRefresh?.["pool-a"]).toMatchObject({
-      lastFiveHourResetAt: RESET_SECONDS,
-      lastWeeklyResetAt: RESET_SECONDS,
+      lastFiveHourResetAt: NOW,
+      lastWeeklyResetAt: NOW,
     });
   });
 
@@ -170,20 +226,36 @@ describe("Codex quota window auto refresh", () => {
     const cfg = config();
     let warmups = 0;
     let writes = 0;
+    let observed = RESET_SECONDS;
     const persist = (target: OcxConfig, id: string, completed: CodexQuotaAutoRefreshWindows) => {
       writes += 1;
-      return writes > 1 ? recordMarkers(target, id, completed) : false;
+      return writes > 2 ? recordMarkers(target, id, completed) : false;
     };
     const deps = {
-      getQuota: (id: string) => id === "pool-a" ? quota() : null,
+      getQuota: (id: string) => id === "pool-a"
+        ? quota({ shortResetAt: observed, weeklyResetAt: observed }) : null,
       warmAccount: async () => { warmups += 1; },
       persistCompleted: persist,
     };
     await runCodexQuotaAutoRefresh(cfg, NOW, deps);
+    observed = NOW;
     await runCodexQuotaAutoRefresh(cfg, NOW + 1, deps);
     expect(warmups).toBe(1);
     expect(writes).toBe(2);
-    expect(cfg.codexQuotaAutoRefresh?.["pool-a"]?.lastWeeklyResetAt).toBe(RESET_SECONDS);
+    await runCodexQuotaAutoRefresh(cfg, NOW + 2, deps);
+    expect(warmups).toBe(1);
+    expect(writes).toBe(3);
+    expect(cfg.codexQuotaAutoRefresh?.["pool-a"]).toMatchObject({
+      lastFiveHourResetAt: NOW,
+      lastWeeklyResetAt: NOW,
+    });
+    // Equivalent legacy markers must not cause another persistence attempt either.
+    cfg.codexQuotaAutoRefresh = {
+      "pool-a": { fiveHour: true, weekly: true, lastFiveHourResetAt: RESET_SECONDS, lastWeeklyResetAt: RESET_SECONDS },
+    };
+    await runCodexQuotaAutoRefresh(cfg, NOW + 3, deps);
+    expect(warmups).toBe(1);
+    expect(writes).toBe(3);
   });
 
   test("backs a failed main-account claim or warmup off for five minutes", async () => {
@@ -202,7 +274,7 @@ describe("Codex quota window auto refresh", () => {
     await runCodexQuotaAutoRefresh(cfg, NOW + 5 * 60_000 - 1, deps);
     await runCodexQuotaAutoRefresh(cfg, NOW + 5 * 60_000, deps);
     expect(attempts).toBe(2);
-    expect(cfg.codexQuotaAutoRefresh?.__main__?.lastFiveHourResetAt).toBe(RESET_SECONDS);
+    expect(cfg.codexQuotaAutoRefresh?.__main__?.lastFiveHourResetAt).toBe(NOW);
   });
 
   test("settings route persists supported toggles and rejects unavailable windows", async () => {

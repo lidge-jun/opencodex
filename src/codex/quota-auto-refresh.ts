@@ -1,6 +1,7 @@
 import { mutatePersistedConfig } from "../config";
 import { registerStateSweepAfterTick } from "../lib/state-store-sweeper";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
+import { normalizeResetAt } from "../providers/quota-wire";
 import { providerCodexAccountMode } from "../providers/registry";
 import type { OcxConfig } from "../types";
 import { isSelectableCodexPoolAccount } from "./account-id";
@@ -18,6 +19,7 @@ export const FIVE_HOUR_WINDOW_SECONDS = 5 * 60 * 60;
 const RETRY_MS = 5 * 60_000;
 const CONCURRENCY = 4;
 
+/** Completed/due markers use epoch milliseconds; persisted legacy markers may use seconds. */
 export type CodexQuotaAutoRefreshWindows = { fiveHour?: number; weekly?: number };
 
 export interface CodexQuotaAutoRefreshStatus {
@@ -40,11 +42,6 @@ export interface CodexQuotaAutoRefreshRunDeps {
 let inFlight: Promise<void> | null = null;
 const completedByAccount = new Map<string, CodexQuotaAutoRefreshWindows>();
 const retryAfterByAccount = new Map<string, number>();
-
-function resetAtMs(resetAt: number): number {
-  // WHAM reports seconds; quota parsed from response headers may already be milliseconds.
-  return resetAt < 100_000_000_000 ? resetAt * 1000 : resetAt;
-}
 
 export function codexQuotaAutoRefreshStatus(
   config: OcxConfig,
@@ -71,20 +68,22 @@ export function dueCodexQuotaAutoRefreshWindows(
   if (!quota) return null;
   const saved = config.codexQuotaAutoRefresh?.[accountId];
   const due: CodexQuotaAutoRefreshWindows = {};
+  const shortResetAt = normalizeResetAt(quota.shortResetAt);
+  const weeklyResetAt = normalizeResetAt(quota.weeklyResetAt);
   if (saved?.fiveHour === true
     && quota.shortWindowSeconds === FIVE_HOUR_WINDOW_SECONDS
-    && typeof quota.shortResetAt === "number"
-    && resetAtMs(quota.shortResetAt) <= now
-    && saved.lastFiveHourResetAt !== quota.shortResetAt
-    && completed?.fiveHour !== quota.shortResetAt) {
-    due.fiveHour = quota.shortResetAt;
+    && shortResetAt !== undefined
+    && shortResetAt <= now
+    && normalizeResetAt(saved.lastFiveHourResetAt) !== shortResetAt
+    && normalizeResetAt(completed?.fiveHour) !== shortResetAt) {
+    due.fiveHour = shortResetAt;
   }
   if (saved?.weekly === true
-    && typeof quota.weeklyResetAt === "number"
-    && resetAtMs(quota.weeklyResetAt) <= now
-    && saved.lastWeeklyResetAt !== quota.weeklyResetAt
-    && completed?.weekly !== quota.weeklyResetAt) {
-    due.weekly = quota.weeklyResetAt;
+    && weeklyResetAt !== undefined
+    && weeklyResetAt <= now
+    && normalizeResetAt(saved.lastWeeklyResetAt) !== weeklyResetAt
+    && normalizeResetAt(completed?.weekly) !== weeklyResetAt) {
+    due.weekly = weeklyResetAt;
   }
   return due.fiveHour === undefined && due.weekly === undefined ? null : due;
 }
@@ -139,8 +138,10 @@ function retryPendingMarkers(
   for (const [accountId, completed] of completedByAccount) {
     const saved = config.codexQuotaAutoRefresh?.[accountId];
     if (!saved) continue;
-    if ((completed.fiveHour === undefined || saved.lastFiveHourResetAt === completed.fiveHour)
-      && (completed.weekly === undefined || saved.lastWeeklyResetAt === completed.weekly)) continue;
+    if ((completed.fiveHour === undefined
+      || normalizeResetAt(saved.lastFiveHourResetAt) === normalizeResetAt(completed.fiveHour))
+      && (completed.weekly === undefined
+        || normalizeResetAt(saved.lastWeeklyResetAt) === normalizeResetAt(completed.weekly))) continue;
     persist(config, accountId, completed);
   }
 }
