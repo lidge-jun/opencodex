@@ -342,14 +342,16 @@ describe("sidecar on429 wiring", () => {
     //   generic  = 4: streaming loop, continuation loop, sidecar hook, runTurn preflight.
     //   anthropic = 3: the same, MINUS runTurn -- that path is Cursor-only (cursor.ts is the
     //                  sole adapter implementing runTurn), so Anthropic cannot reach it.
-    //   key       = 2: hasKeyPoolFailover guards only the two response loops; the sidecar
-    //                  reaches the key pool through rotateProviderTransportOn429 instead.
+    //   key       = 3: hasKeyPoolFailover guards the two 429 response loops plus the
+    //                  pre-stream 401 recovery site (a rejected key rotates instead of
+    //                  failing the request); the sidecar reaches the key pool through
+    //                  rotateProviderTransportOn429 instead.
     //
     // Adding a fifth recovery site means deciding, deliberately, which rotators it needs and
     // updating the matching number. That decision is the thing this test exists to force.
     expect(counts.generic).toBe(4);
     expect(counts.anthropic).toBe(3);
-    expect(counts.key).toBe(2);
+    expect(counts.key).toBe(3);
   });
 
   test("the helper fails closed rather than pairing a new bearer with an old identity", () => {
