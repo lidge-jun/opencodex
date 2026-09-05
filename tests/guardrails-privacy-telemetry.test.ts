@@ -152,6 +152,33 @@ describe("Guardrails privacy-safe response telemetry", () => {
     });
   });
 
+  test("filtered findingCount excludes operational failures and demask warnings", () => {
+    for (const result of [
+      "masked",
+      "detected",
+      "blocked",
+      "passthrough",
+      "demask_warning",
+      "tool_argument_restore_skipped",
+    ] as const) {
+      recordGuardrailsEvent({
+        surface: "responses",
+        mode: "enforce",
+        result,
+        registryGeneration: 3,
+        count: 2,
+        categoryIds: [],
+        ruleIds: [],
+        latencyMs: 1,
+        severity: "info",
+      });
+    }
+
+    const activity = guardrailsActivity();
+    expect(activity.filteredSummary.eventCount).toBe(6);
+    expect(activity.filteredSummary.findingCount).toBe(4);
+  });
+
   test("late findings update detection totals without counting a second client request", async () => {
     const turn = await guardrailsTurn("block");
     recordGuardrailsTurn("responses", turn, 1);

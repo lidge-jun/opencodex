@@ -267,6 +267,49 @@ describe("vision description cache and per-turn cap", () => {
     expect(textParts(plaintextRequest).join("\n")).toContain(literal);
   });
 
+  test("sanitizes a description before truncation without exposing a split secret prefix", async () => {
+    const secret = "sk_live_abcdefghijklmnopqrstuvwx";
+    globalThis.fetch = (async () => openaiSse(`${"x".repeat(1_995)}${secret}`)) as typeof fetch;
+    const protectedRequest = parsed([{ type: "input_image", image_url: DATA_A }]);
+    const plaintextRequest = structuredClone(protectedRequest);
+
+    await describeImagesInPlace(
+      protectedRequest,
+      plan(),
+      new Headers({ authorization: "Bearer test" }),
+      undefined,
+      undefined,
+      undefined,
+      text => text.replaceAll(secret, "<STRIPE_ACCESS_TOKEN_1>"),
+      plaintextRequest,
+    );
+
+    expect(textParts(protectedRequest).join("\n")).not.toContain("sk_li");
+    expect(textParts(plaintextRequest).join("\n")).toContain("sk_li");
+  });
+
+  test("sanitizes vision-sidecar error text while preserving the plaintext rollback twin", async () => {
+    const detail = "private-error-marker";
+    globalThis.fetch = (async () => new Response(detail, { status: 503 })) as typeof fetch;
+    const protectedRequest = parsed([{ type: "input_image", image_url: DATA_A }]);
+    const plaintextRequest = structuredClone(protectedRequest);
+
+    await describeImagesInPlace(
+      protectedRequest,
+      plan(),
+      new Headers({ authorization: "Bearer test" }),
+      undefined,
+      undefined,
+      undefined,
+      text => text.replaceAll(detail, "<VISION_ERROR_1>"),
+      plaintextRequest,
+    );
+
+    expect(textParts(protectedRequest).join("\n")).toContain("<VISION_ERROR_1>");
+    expect(textParts(protectedRequest).join("\n")).not.toContain(detail);
+    expect(textParts(plaintextRequest).join("\n")).toContain(detail);
+  });
+
   test("error outcome reaches the caller unchanged and does not mutate the cache", async () => {
     const before = visionDescriptionRetainedStoreSnapshot();
     globalThis.fetch = (async () => new Response("preserve this exact detail", { status: 503 })) as typeof fetch;

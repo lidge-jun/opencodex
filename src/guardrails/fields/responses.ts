@@ -31,7 +31,7 @@ export const RESPONSES_GUARDRAILS_ITEM_POLICY = {
   reasoning: "skip",
   tool_search_call: "scan",
   tool_search_output: "skip",
-  web_search_call: "skip",
+  web_search_call: "scan",
 } as const satisfies Record<string, "scan" | "scan_local_envelope" | "skip">;
 
 function contentSlots(content: unknown): GuardrailsTextSlot[] {
@@ -130,6 +130,12 @@ function collectResponsesSlots(body: unknown): GuardrailsTextSlot[] {
       const slot = stringPropertySlot(item, "arguments");
       if (slot) slots.push(slot);
       else slots.push(...nestedStringSlots(item.arguments));
+      continue;
+    }
+    if (item.type === "web_search_call" && isRecord(item.action)) {
+      const query = stringPropertySlot(item.action, "query");
+      if (query) slots.push(query);
+      slots.push(...stringArraySlots(item.action.queries));
       continue;
     }
     if (item.type === "function_call_output" || item.type === "custom_tool_call_output") {

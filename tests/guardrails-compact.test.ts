@@ -8,8 +8,15 @@ import {
   sweepExpiredGuardrailsCompactContinuations,
 } from "../src/guardrails/compact-continuations";
 import { createGuardrailsContinuationScope } from "../src/guardrails/continuations";
+import {
+  decodeCompactionSummary,
+  encodeCompactionSummary,
+} from "../src/responses/compaction";
 import { handleResponses } from "../src/server/responses/core";
-import { handleResponsesCompact } from "../src/server/responses/compact";
+import {
+  clearCompactHandoffRoutesForTests,
+  handleResponsesCompact,
+} from "../src/server/responses/compact";
 import type { RequestLogContext } from "../src/server/request-log";
 import type { OcxConfig } from "../src/types";
 
@@ -18,6 +25,7 @@ const originalFetch = globalThis.fetch;
 afterEach(() => {
   globalThis.fetch = originalFetch;
   clearGuardrailsCompactContinuationsForTests();
+  clearCompactHandoffRoutesForTests();
 });
 
 function config(options: {
@@ -240,6 +248,91 @@ test("provider scope leaves an excluded routed compact request unchanged", async
   expect(responseText).toContain("<STRIPE_ACCESS_TOKEN_1>");
   expect(responseText).not.toContain(`literal ${secret}`);
   expect(logCtx.sensitiveDataProtectionActive).not.toBe(true);
+});
+
+test("native compact masks plaintext inside local ocx1 envelopes before upstream I/O", async () => {
+  const secret = "sk_live_abcdefghijklmnopqrstuvwx";
+  let upstreamBody: Record<string, unknown> | undefined;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    upstreamBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return Response.json({
+      id: "compact-local-envelope",
+      status: "completed",
+      output: [{ type: "compaction", encrypted_content: "provider-ciphertext" }],
+    });
+  }) as typeof fetch;
+
+  const response = await handleResponsesCompact(
+    new Request("http://localhost/v1/responses/compact", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "openai-apikey/gpt-5.5",
+        input: [{
+          type: "compaction",
+          encrypted_content: encodeCompactionSummary(`summary ${secret}`),
+        }],
+      }),
+    }),
+    config(),
+    { model: "", provider: "", admissionKind: "loopback" },
+  );
+  const input = upstreamBody?.input as Array<{ encrypted_content?: string }> | undefined;
+  const decoded = decodeCompactionSummary(input?.[0]?.encrypted_content ?? "");
+
+  expect(response.status).toBe(200);
+  expect(decoded).toContain("<STRIPE_ACCESS_TOKEN_1>");
+  expect(decoded).not.toContain(secret);
+});
+
+test("compact quota fallback blocks an excluded-to-protected provider transition before the fallback send", async () => {
+  const sentUrls: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    sentUrls.push(String(input));
+    return Response.json(
+      { error: { message: "quota exhausted", type: "rate_limit_error" } },
+      { status: 429 },
+    );
+  }) as typeof fetch;
+  const scoped = config({ providerName: "excluded" });
+  scoped.providers = {
+    excluded: {
+      adapter: "openai-responses",
+      authMode: "key",
+      apiKey: "test-key",
+      baseUrl: "https://excluded.example/v1",
+    },
+    protected: {
+      adapter: "openai-responses",
+      authMode: "key",
+      apiKey: "test-key",
+      baseUrl: "https://protected.example/v1",
+    },
+  };
+  scoped.guardrails!.providerScope = {
+    mode: "selected",
+    providerIds: ["protected"],
+  };
+  const blocked = await handleResponsesCompact(
+    new Request("http://localhost/v1/responses/compact", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "protected/gpt-5.5",
+        input: [{ type: "message", role: "user", content: "compact me" }],
+      }),
+    }),
+    scoped,
+    { model: "", provider: "", admissionKind: "loopback" },
+    undefined,
+    undefined,
+    { guardrailsProviderScopeAnchor: "excluded" },
+  );
+  const blockedBody = await blocked.json() as { error?: { code?: string } };
+
+  expect(sentUrls).toHaveLength(0);
+  expect(blocked.status).toBe(409);
+  expect(blockedBody.error?.code).toBe("guardrails_policy_changed");
 });
 
 test("disabled Guardrails preserve native and routed compact behavior", async () => {

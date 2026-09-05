@@ -1,8 +1,7 @@
 import {
   MAX_GUARDRAILS_DEMASK_EXPANSION_BYTES,
-  createGuardrailsPlaceholderState,
+  createGuardrailsMaskSession,
   demaskGuardrailsText,
-  maskGuardrailsText,
 } from "../placeholders";
 import {
   MAX_GUARDRAILS_FINDINGS,
@@ -216,13 +215,7 @@ export function maskGuardrailsTextSlots<T>(
   if (slots.length !== sourceSlots.length) {
     throw new GuardrailsScanCapacityError("Guardrails logical request changed during text-field admission");
   }
-  const reserved = createGuardrailsPlaceholderState(slots.map(slot => slot.value));
-  let state: GuardrailsPlaceholderState = previousState
-    ? {
-        replacements: previousState.replacements,
-        reservedPlaceholders: [...new Set([...previousState.reservedPlaceholders, ...reserved.reservedPlaceholders])].sort(),
-      }
-    : reserved;
+  const maskSession = createGuardrailsMaskSession(previousState, slots.map(slot => slot.value));
   const contextualRules = registry.rules.filter(rule => rule.source === "opencodex");
   const contextualRegistry: GuardrailsRegistry | undefined = contextualRules.length === 0
     ? undefined
@@ -242,11 +235,10 @@ export function maskGuardrailsTextSlots<T>(
     if (findings.length + currentFindings.length > MAX_GUARDRAILS_FINDINGS) {
       throw new GuardrailsScanCapacityError("Guardrails logical request exceeded the maximum findings limit");
     }
-    const result = maskGuardrailsText(current, currentFindings, state);
-    slot.replace(result.maskedText);
-    state = result.state;
+    slot.replace(maskSession.mask(current, currentFindings));
     findings.push(...currentFindings);
   }
+  const state = maskSession.finish();
   return { body: copy, state, findings, scanBudget, scannedTextBytes: totalBytes };
 }
 

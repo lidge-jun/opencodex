@@ -15,10 +15,15 @@ import {
   guardrailsFailureCode,
   guardrailsFailureStatus,
   isGuardrailsCapacityError,
+  maskLocalCompactionArtifacts,
   prepareGuardrailsTurn,
   type GuardrailsTurn,
 } from "../../guardrails/turn";
-import { captureGuardrailsPolicy } from "../../guardrails/activation";
+import {
+  captureGuardrailsPolicy,
+  guardrailsPolicyProtectsProvider,
+  type CapturedGuardrailsPolicy,
+} from "../../guardrails/activation";
 import {
   rememberGuardrailsCompactContinuation,
   retainGuardrailsCompactContinuation,
@@ -227,6 +232,10 @@ function compactHandoffRoute(req: Request, previousModel: string, now = Date.now
 }
 
 export interface HandleResponsesCompactOptions {
+  /** Immutable policy captured before the first provider attempt. */
+  guardrailsCapturedPolicy?: CapturedGuardrailsPolicy;
+  /** Provider classification that owns the complete compact fallback chain. */
+  guardrailsProviderScopeAnchor?: string;
   /** Internal recursive handoff; preserves one immutable Guardrails turn across model fallback. */
   guardrailsFallback?: {
     expiresAt?: number;
@@ -533,7 +542,8 @@ export async function handleResponsesCompact(
   admission?: DataPlaneAdmission,
   options: HandleResponsesCompactOptions = {},
 ): Promise<Response> {
-  const capturedGuardrailsPolicy = captureGuardrailsPolicy(config);
+  const capturedGuardrailsPolicy = options.guardrailsCapturedPolicy
+    ?? captureGuardrailsPolicy(config);
   let body: unknown;
   try {
     body = await readJsonRequestBody(req);
@@ -573,6 +583,20 @@ export async function handleResponsesCompact(
       logCtx.routeDecision = err.trace;
     }
     return formatErrorResponse(404, "invalid_request_error", err instanceof Error ? err.message : String(err));
+  }
+  const guardrailsProviderScopeAnchor = options.guardrailsProviderScopeAnchor
+    ?? route.providerName;
+  if (options.guardrailsProviderScopeAnchor !== undefined
+    && !guardrailsPolicyProtectsProvider(
+      capturedGuardrailsPolicy,
+      options.guardrailsProviderScopeAnchor,
+    )
+    && guardrailsPolicyProtectsProvider(capturedGuardrailsPolicy, route.providerName)) {
+    return formatErrorResponse(
+      409,
+      "guardrails_policy_changed",
+      "The compact fallback provider requires Guardrails protection. Start a new request instead of crossing provider protection scopes.",
+    );
   }
   let guardrailsAdmission;
   try {
@@ -660,6 +684,10 @@ export async function handleResponsesCompact(
     raw = body as { model?: unknown; input?: unknown };
     guardrailsTurn = prepared.turn;
     if (guardrailsTurn) {
+      const protectedCompaction = maskLocalCompactionArtifacts(body, guardrailsTurn);
+      body = protectedCompaction.body;
+      raw = body as { model?: unknown; input?: unknown };
+      guardrailsTurn = protectedCompaction.turn;
       recordGuardrailsTurn("compact", guardrailsTurn, performance.now() - guardrailsStartedAt);
     }
     } catch (error) {
@@ -1230,15 +1258,12 @@ export async function handleResponsesCompact(
           signal: req.signal,
         });
         try {
-          const fallback = await handleResponsesCompact(
-            fallbackReq,
-            config,
-            logCtx,
-            turnAdmissionLease,
-            admission,
-            guardrailsTurn?.mode === "enforce"
+          const fallbackOptions: HandleResponsesCompactOptions = {
+            ...options,
+            guardrailsCapturedPolicy: capturedGuardrailsPolicy,
+            guardrailsProviderScopeAnchor,
+            ...(guardrailsTurn?.mode === "enforce"
               ? {
-                  ...options,
                   guardrailsFallback: {
                     expiresAt: options.guardrailsFallback?.expiresAt
                       ?? compactContinuationLease?.expiresAt,
@@ -1246,7 +1271,15 @@ export async function handleResponsesCompact(
                     turn: guardrailsTurn,
                   },
                 }
-              : options,
+              : {}),
+          };
+          const fallback = await handleResponsesCompact(
+            fallbackReq,
+            config,
+            logCtx,
+            turnAdmissionLease,
+            admission,
+            fallbackOptions,
           );
           if (fallback.ok || fallback.status === 499) return fallback;
           await fallback.body?.cancel().catch(() => undefined);

@@ -29,6 +29,7 @@ import {
 import {
   GuardrailsDemaskCapacityError,
   MAX_GUARDRAILS_DEMASK_EXPANSION_BYTES,
+  canonicalGuardrailsPlaceholder,
   demaskGuardrailsText,
   maskGuardrailsText,
 } from "./placeholders";
@@ -163,7 +164,7 @@ const MAX_GUARDRAILS_OUTPUT_DEPTH = 64;
 const MAX_GUARDRAILS_OUTPUT_NODES = 100_000;
 const MAX_EXECUTABLE_DELTA_STREAMS = 128;
 const MAX_PLACEHOLDER_TOKEN_LENGTH = 256;
-const GENERATED_PLACEHOLDER_TOKEN_PATTERN = /<[A-Z][A-Z0-9_]{2,253}>/g;
+const GENERATED_PLACEHOLDER_TOKEN_PATTERN = /<[^<>]{3,254}>/g;
 
 interface DemaskTraversal {
   demaskBudget: GuardrailsDemaskBudget;
@@ -180,12 +181,23 @@ function consumeDemaskNodes(traversal: DemaskTraversal, count = 1): void {
   }
 }
 
-function executablePlaceholderTail(value: string): string {
+function executablePlaceholderTail(
+  value: string,
+  placeholders: ReadonlySet<string>,
+): string {
   const start = value.lastIndexOf("<");
   if (start < 0) return "";
   const tail = value.slice(start);
-  return tail.length < MAX_PLACEHOLDER_TOKEN_LENGTH
-    && /^<[A-Z][A-Z0-9_]{0,252}$/.test(tail)
+  if (tail.length >= MAX_PLACEHOLDER_TOKEN_LENGTH || tail.includes(">")) return "";
+  let normalized = "<";
+  for (const character of tail.slice(1)) {
+    if (/[A-Za-z0-9_]/.test(character)) normalized += character.toUpperCase();
+    else if (character === "-") normalized += "_";
+    else if (character === " " || character === "\t" || character === "\r" || character === "\n") continue;
+    else return "";
+  }
+  return normalized.length > 1
+    && [...placeholders].some(placeholder => placeholder.startsWith(normalized))
     ? tail
     : "";
 }
@@ -215,12 +227,17 @@ function countPlaceholderTokens(
     : value;
   GENERATED_PLACEHOLDER_TOKEN_PATTERN.lastIndex = 0;
   for (const match of combined.matchAll(GENERATED_PLACEHOLDER_TOKEN_PATTERN)) {
-    if (traversal.placeholders.has(match[0])) {
+    const canonical = canonicalGuardrailsPlaceholder(match[0], true);
+    if (canonical && traversal.placeholders.has(canonical)) {
       traversal.toolArgumentRestoreSkipped += 1;
     }
   }
   if (streamKey) {
-    rememberExecutableTail(traversal, streamKey, executablePlaceholderTail(combined));
+    rememberExecutableTail(
+      traversal,
+      streamKey,
+      executablePlaceholderTail(combined, traversal.placeholders),
+    );
   }
 }
 
@@ -683,6 +700,17 @@ function demaskSsePayload(
     case "response.function_call_arguments.done":
       inspectExecutableValue(payload.arguments, traversal);
       return payload;
+    case "response.custom_tool_call_input.delta":
+      inspectExecutableValue(
+        payload.delta,
+        traversal,
+        0,
+        payloadStreamIdentity(payload, "responses:custom"),
+      );
+      return payload;
+    case "response.custom_tool_call_input.done":
+      inspectExecutableValue(payload.input, traversal);
+      return payload;
     case "response.output_item.added":
     case "response.output_item.done": {
       const item = demaskResponsesOutputItem(payload.item, state, traversal);
@@ -729,7 +757,7 @@ function demaskKnownResponsePayload(
       next = { ...next, output };
     }
   }
-  const content = value.role === undefined || value.role === "assistant"
+  const content = value.role === "assistant"
     ? demaskContentParts(value.content, state, traversal)
     : value.content;
   if (content !== value.content) next = { ...next, content };

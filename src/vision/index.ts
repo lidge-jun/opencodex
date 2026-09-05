@@ -175,6 +175,21 @@ function clamp(s: string, max: number): string {
   return s.length <= max ? s : `${s.slice(0, max)}\n…[description truncated]`;
 }
 
+function clampPlaceholderSafely(s: string, max: number): string {
+  if (s.length <= max) return s;
+  let end = max;
+  const opening = s.lastIndexOf("<", max - 1);
+  if (opening >= 0) {
+    const closing = s.indexOf(">", opening + 1);
+    const candidate = closing >= 0 ? s.slice(opening, closing + 1) : "";
+    if (closing >= max
+      && candidate.length <= 256
+      && /^<[A-Z][A-Z0-9_]{2,253}>$/.test(candidate)) {
+      end = opening;
+    }
+  }
+  return `${s.slice(0, end)}\n…[description truncated]`;
+}
 
 
 interface ImageJob {
@@ -306,7 +321,10 @@ export async function describeImagesInPlace(
     return;
   }
 
-  type PreparedDescribeOutcome = DescribeOutcome & { plaintextText?: string };
+  type PreparedDescribeOutcome = DescribeOutcome & {
+    plaintextError?: string;
+    plaintextText?: string;
+  };
   const inFlight = new Map<string, Promise<PreparedDescribeOutcome>>();
   const executions: Array<() => Promise<void>> = [];
   const outcomePromises: Array<Promise<PreparedDescribeOutcome>> = [];
@@ -348,20 +366,27 @@ export async function describeImagesInPlace(
       } catch (error) {
         outcome = { text: "", error: error instanceof Error ? error.message : String(error) };
       }
-      const boundedText = outcome.error ? "" : clamp(outcome.text.trim(), DESC_MAX_CHARS);
-      const successfulText = boundedText && sanitizeDescription
-        ? sanitizeDescription(boundedText)
-        : boundedText;
+      const plaintextValue = outcome.error ?? outcome.text.trim();
+      const sanitizedValue = plaintextValue && sanitizeDescription
+        ? sanitizeDescription(plaintextValue)
+        : plaintextValue;
+      const boundedPlaintext = clamp(plaintextValue, DESC_MAX_CHARS);
+      const boundedSanitized = clampPlaceholderSafely(sanitizedValue, DESC_MAX_CHARS);
+      const successfulText = outcome.error ? "" : boundedSanitized;
       if (persistent && successfulText) {
         descriptionCache.set(identity.key, successfulText);
         enforceAppOwnedMemoryBudget();
       }
       const resolvedOutcome: PreparedDescribeOutcome = outcome.error
-        ? outcome
+        ? {
+            ...outcome,
+            error: boundedSanitized,
+            ...(sanitizeDescription ? { plaintextError: boundedPlaintext } : {}),
+          }
         : {
             ...outcome,
             text: successfulText,
-            ...(sanitizeDescription ? { plaintextText: boundedText } : {}),
+            ...(sanitizeDescription ? { plaintextText: boundedPlaintext } : {}),
           };
       resolveOutcome(resolvedOutcome);
     });
@@ -373,7 +398,7 @@ export async function describeImagesInPlace(
   const descriptions = outcomes.map(outcome => renderDescription(outcome).text);
   const plaintextDescriptions = outcomes.map(outcome => renderDescription(
     outcome.error
-      ? outcome
+      ? { ...outcome, error: outcome.plaintextError ?? outcome.error }
       : { ...outcome, text: outcome.plaintextText ?? outcome.text },
   ).text);
   const applyDescriptions = (

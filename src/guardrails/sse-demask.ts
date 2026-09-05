@@ -318,7 +318,10 @@ export function guardrailsSseDemaskRewrite(
     for (const [key, entry] of stagedPending) pending.set(key, entry);
     pendingBytes = stagedPendingBytes;
     demaskBudget.remainingExpansionBytes = stagedBudget.remainingExpansionBytes;
-    const current = replaceSseDataPayload(block, JSON.stringify(payload));
+    const current = replaceSseDataPayload(
+      block,
+      rewritePayload(JSON.stringify(payload)),
+    );
     const finishedKeys = finishedChatStreamKeys(parsed);
     return finishedKeys ? [...flush(finishedKeys), current] : [current];
   };

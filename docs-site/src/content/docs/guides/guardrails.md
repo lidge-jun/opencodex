@@ -59,6 +59,10 @@ Mode and failure policy are separate controls:
 | `block` | Default failure policy. A scanner, registry, traversal, or capacity failure stops the request before upstream I/O. |
 | `passthrough` | Explicit fail-open policy. A Guardrails processing failure may send the original, unmasked request upstream. The dashboard keeps a permanent warning while this policy is selected and records a high-severity metadata event when it is used. |
 
+The selected failure policy applies consistently to Responses, Chat Completions, native and routed
+Messages, and `messages/count_tokens`. Block failures stop before upstream I/O; passthrough
+failures forward the admitted original request rather than a partially transformed body.
+
 Switching Guardrails off, selecting detect-only mode, or enabling passthrough requires a consequence
 confirmation in the dashboard.
 
@@ -149,6 +153,8 @@ Import uses a versioned JSON bundle and requires **Merge** or **Replace**. openc
 run before applying it. Merge adds only new, non-conflicting custom rules and preserves the current
 enabled/mode/failure policy, provider scope, data types, built-in toggles, and keyword-prefilter setting. Replace
 applies the bundle settings and custom-rule list as a whole and requires a consequence confirmation.
+The Replace preview distinguishes rules that will be created or replaced from byte-equivalent rules
+that remain unchanged, so its security diff does not overstate the mutation.
 Export contains only safe settings and declarative custom rules, never findings, prompt text,
 originals, or placeholder maps.
 
@@ -163,6 +169,9 @@ Guardrails covers the current opencodex LLM surfaces:
 - native and routed `POST /v1/responses/compact`;
 - supported text material introduced by local compaction, recovery, web-search, vision, and
   additional upstream rounds.
+
+For Responses history, hosted `web_search_call.action.query` and string entries in
+`web_search_call.action.queries` are treated as semantic text and scanned before replay.
 
 Only semantic text leaves understood by the current parser are scanned. Model IDs, URLs, headers,
 metadata, JSON Schema definitions, tool definitions, images, audio/video payloads, file IDs,

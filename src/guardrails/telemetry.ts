@@ -350,7 +350,9 @@ export function guardrailsActivity(options: {
   let findingCount = 0;
   let totalLatencyMs = 0;
   for (const entry of filtered) {
-    findingCount += entry.event.count;
+    if (entry.event.result === "masked" || entry.event.result === "detected") {
+      findingCount += entry.event.count;
+    }
     totalLatencyMs += entry.event.latencyMs;
     for (const [ruleId, contribution] of entry.ruleContributions) {
       filteredRuleCounts.set(ruleId, (filteredRuleCounts.get(ruleId) ?? 0) + contribution);

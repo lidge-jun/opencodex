@@ -2,6 +2,7 @@ import {
   createBuiltinGuardrailsRegistry,
   createGuardrailsRegistry,
 } from "../src/guardrails/registry";
+import { createGuardrailsMaskSession } from "../src/guardrails/placeholders";
 import {
   GuardrailsScanCapacityError,
   MAX_GUARDRAILS_REGEX_INPUT_BYTES,
@@ -15,6 +16,7 @@ const LARGE_TURN_BYTES = 2 * 1024 * 1024;
 const LARGE_LEAF_BYTES = 128 * 1024;
 const MAX_CUSTOM_RULES = 100;
 const TYPICAL_ITERATIONS = 50;
+const MANY_FIELD_COUNT = 1_000;
 
 interface Measurement {
   iterations: number;
@@ -154,6 +156,28 @@ function explicitWorstBudget(): number | undefined {
   return budget;
 }
 
+function measureManyFieldMasking(): Measurement {
+  const texts = Array.from(
+    { length: MANY_FIELD_COUNT },
+    (_, index) => `synthetic-sensitive-value-${String(index).padStart(4, "0")}`,
+  );
+  return measure(5, () => {
+    const session = createGuardrailsMaskSession(undefined, texts);
+    for (const text of texts) {
+      const masked = session.mask(text, [{
+        ruleId: "benchmark.secret",
+        dataType: 1,
+        placeholderType: "BENCHMARK_SECRET",
+        start: 0,
+        end: text.length,
+        value: text,
+      }]);
+      assert(masked.startsWith("<BENCHMARK_SECRET_"), "many-field masking returned an invalid placeholder");
+    }
+    assert(session.finish().replacements.length === MANY_FIELD_COUNT, "many-field masking lost placeholder mappings");
+  });
+}
+
 function main(): void {
   const typicalText = "Summarize the release notes and list the next three review steps.";
   const largeLeaf = "x".repeat(LARGE_LEAF_BYTES);
@@ -162,6 +186,7 @@ function main(): void {
   const builtin = compileRegistry();
   let typical: Measurement;
   let builtinMaxLeaf: Measurement;
+  const manyFieldMasking = measureManyFieldMasking();
   const builtinRuleCount = builtin.registry.rules.length;
   try {
     assert(builtinRuleCount === 272, "built-in benchmark registry must contain 272 rules");
@@ -234,6 +259,7 @@ function main(): void {
         prefilteredExecutableRules: executableRuleCount(filtered.registry, largeLeaf),
         builtinRules: builtinRuleCount,
         maximumCustomRules: MAX_CUSTOM_RULES,
+        manyFieldCount: MANY_FIELD_COUNT,
         worstEffectiveRules: worstRuleCount,
         atomicSwapResidentRules: filteredOld.registry.rules.length + filtered.registry.rules.length,
       },
@@ -250,6 +276,7 @@ function main(): void {
         noPrefilterMaxLeaf,
         overBudgetLargeTurnRejectedMs,
         prefilteredLargeTurn,
+        manyFieldMasking,
       },
       enforcedWorstBudgetMs: budget ?? null,
     }, null, 2));

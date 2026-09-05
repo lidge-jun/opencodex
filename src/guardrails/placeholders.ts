@@ -36,6 +36,11 @@ interface PlaceholderIndexes {
   reserved: Set<string>;
 }
 
+export interface GuardrailsMaskSession {
+  finish(): GuardrailsPlaceholderState;
+  mask(input: string, findings: readonly GuardrailsFinding[]): string;
+}
+
 function isAsciiLetter(value: string): boolean {
   return (value >= "A" && value <= "Z") || (value >= "a" && value <= "z");
 }
@@ -58,7 +63,7 @@ function normalizedSequence(value: string): string | null {
   return normalized.length === 0 ? "0" : normalized;
 }
 
-function canonicalPlaceholder(token: string, allowDrift: boolean): string | null {
+export function canonicalGuardrailsPlaceholder(token: string, allowDrift: boolean): string | null {
   if (token.length < 5 || token.length > MAX_PLACEHOLDER_TOKEN_LENGTH || token[0] !== "<" || token.at(-1) !== ">") return null;
   let normalized = "";
   for (const character of token.slice(1, -1)) {
@@ -105,13 +110,13 @@ function reservePlaceholderLiterals(value: string, reserved: Set<string>): void 
       nextClosing = nextClosingIndex(value, nextClosing + 1);
     }
     if (nextClosing < 0 || nextClosing - start + 1 > MAX_PLACEHOLDER_TOKEN_LENGTH) continue;
-    const canonical = canonicalPlaceholder(value.slice(start, nextClosing + 1), true);
+    const canonical = canonicalGuardrailsPlaceholder(value.slice(start, nextClosing + 1), true);
     if (canonical) reserved.add(canonical);
   }
 }
 
 function splitCanonicalPlaceholder(placeholder: string): { sequence: number; type: string } {
-  const canonical = canonicalPlaceholder(placeholder, false);
+  const canonical = canonicalGuardrailsPlaceholder(placeholder, false);
   if (!canonical || canonical !== placeholder) throw new Error(`Invalid generated Guardrails placeholder ${placeholder}`);
   const content = canonical.slice(1, -1);
   const separator = content.lastIndexOf("_");
@@ -128,7 +133,7 @@ function buildIndexes(state: GuardrailsPlaceholderState): PlaceholderIndexes {
   const reserved = new Set<string>();
 
   for (const literal of state.reservedPlaceholders) {
-    const canonical = canonicalPlaceholder(literal, true);
+    const canonical = canonicalGuardrailsPlaceholder(literal, true);
     if (!canonical) throw new Error(`Invalid reserved Guardrails placeholder ${literal}`);
     reserved.add(canonical);
   }
@@ -205,32 +210,48 @@ export function createGuardrailsPlaceholderState(texts: readonly string[] = []):
   return { replacements: [], reservedPlaceholders: [...reserved].sort() };
 }
 
+export function createGuardrailsMaskSession(
+  previousState: GuardrailsPlaceholderState = createGuardrailsPlaceholderState(),
+  texts: readonly string[] = [],
+): GuardrailsMaskSession {
+  const indexes = buildIndexes(previousState);
+  for (const text of texts) reservePlaceholderLiterals(text, indexes.reserved);
+  return {
+    mask(input, findings) {
+      for (const finding of findings) validateFinding(input, finding);
+      reservePlaceholderLiterals(input, indexes.reserved);
+      const resolved = resolveGuardrailsFindingConflicts(input, findings);
+      const parts: string[] = [];
+      let position = 0;
+      for (const finding of resolved) {
+        if (finding.start < position) throw new Error("Guardrails findings overlap after conflict resolution");
+        const replacement = replacementForFinding(finding, indexes);
+        parts.push(input.slice(position, finding.start), replacement.placeholder);
+        position = finding.end;
+      }
+      parts.push(input.slice(position));
+      return parts.join("");
+    },
+    finish() {
+      const state = {
+        replacements: [...indexes.byOriginal.values()],
+        reservedPlaceholders: [...indexes.reserved].sort(),
+      };
+      assertPlaceholderStateCapacity(state);
+      return state;
+    },
+  };
+}
+
 export function maskGuardrailsText(
   input: string,
   findings: readonly GuardrailsFinding[],
   previousState: GuardrailsPlaceholderState = createGuardrailsPlaceholderState(),
 ): GuardrailsMaskResult {
-  for (const finding of findings) validateFinding(input, finding);
-  const indexes = buildIndexes(previousState);
-  reservePlaceholderLiterals(input, indexes.reserved);
-  const resolved = resolveGuardrailsFindingConflicts(input, findings);
-  const parts: string[] = [];
-  let position = 0;
-  for (const finding of resolved) {
-    if (finding.start < position) throw new Error("Guardrails findings overlap after conflict resolution");
-    const replacement = replacementForFinding(finding, indexes);
-    parts.push(input.slice(position, finding.start), replacement.placeholder);
-    position = finding.end;
-  }
-  parts.push(input.slice(position));
-  const state = {
-    replacements: [...indexes.byOriginal.values()],
-    reservedPlaceholders: [...indexes.reserved].sort(),
-  };
-  assertPlaceholderStateCapacity(state);
+  const session = createGuardrailsMaskSession(previousState, [input]);
   return {
-    maskedText: parts.join(""),
-    state,
+    maskedText: session.mask(input, findings),
+    state: session.finish(),
   };
 }
 
@@ -261,7 +282,7 @@ function demaskGuardrailsTextInternal(
         const token = input.slice(position, nextClosing + 1);
         const exact = indexes.byPlaceholder.get(token);
         const normalized = !exact && options.allowNormalizedPlaceholderDrift
-          ? canonicalPlaceholder(token, true)
+          ? canonicalGuardrailsPlaceholder(token, true)
           : null;
         const replacement = exact ?? (normalized ? indexes.byPlaceholder.get(normalized) : undefined);
         if (!replacement) {

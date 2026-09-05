@@ -846,6 +846,58 @@ test("Guardrails Replace security diff ignores cosmetic custom-rule edits", asyn
   expect(reviewBody.securityDiff.requiresReview).toBe(true);
 });
 
+test("Guardrails Replace import reports identical custom rules as unchanged", async () => {
+  const rule = {
+    ruleId: "custom.identical",
+    name: "Identical",
+    dataType: 6 as const,
+    group: "CUSTOM",
+    groupPriority: 1,
+    displayName: "Identical",
+    description: "Unchanged definition",
+    regex: "identical_[a-z0-9]{8}",
+    keywords: ["identical_"],
+    banlist: [],
+    validators: [],
+    masking: { captureGroups: [], placeholderType: "IDENTICAL" },
+  };
+  const target = baseConfig();
+  target.guardrails = { enabled: true, customRules: [rule] };
+  const bundle = {
+    version: 1,
+    settings: {
+      configuredEnabled: true,
+      mode: "enforce",
+      failurePolicy: "block",
+      enabledDataTypes: [1, 2, 3, 4, 5, 6],
+      disabledBuiltinRuleIds: [],
+      customRuleCount: 1,
+      keywordPrefilterEnabled: false,
+    },
+    customRules: [rule],
+  };
+  const request = mutationRequest(
+    target,
+    "/api/guardrails/import",
+    "POST",
+    { mode: "replace", dryRun: true, bundle },
+  );
+  const response = await handleManagementAPI(
+    request,
+    new URL(request.url),
+    target,
+    persistenceSeam(),
+  );
+  const body = await response!.json();
+
+  expect(body).toMatchObject({
+    ok: true,
+    createCount: 0,
+    unchangedCount: 1,
+    replaceCount: 0,
+  });
+});
+
 test("Guardrails Activity exposes bounded metadata and validates filters", async () => {
   clearGuardrailsTelemetryForTests();
   recordGuardrailsEvent({

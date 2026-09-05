@@ -698,3 +698,71 @@ test("provider scope leaves excluded native Messages and count_tokens unchanged"
     upstream.stop(true);
   }
 });
+
+test("native Messages scanner failure blocks or passes through messages and count_tokens", async () => {
+  const oversized = `prefix ${"x".repeat(128 * 1024 + 1)}`;
+  for (const failurePolicy of ["block", "passthrough"] as const) {
+    const captured: Array<{ body: Record<string, unknown>; path: string }> = [];
+    const upstream = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const path = new URL(request.url).pathname;
+        captured.push({ path, body: await request.json() as Record<string, unknown> });
+        return path.endsWith("/count_tokens")
+          ? Response.json({ input_tokens: 42 })
+          : Response.json({
+              id: `msg-guardrails-${failurePolicy}`,
+              type: "message",
+              role: "assistant",
+              model: "claude-fable-5",
+              content: [{ type: "text", text: "accepted" }],
+              stop_reason: "end_turn",
+              stop_sequence: null,
+              usage: { input_tokens: 1, output_tokens: 1 },
+            });
+      },
+    });
+    const candidate = config(upstream.url.toString().replace(/\/$/, ""));
+    candidate.guardrails!.failurePolicy = failurePolicy;
+    saveConfig(candidate);
+    const proxy = startServer(0);
+    const headers = {
+      "content-type": "application/json",
+      "anthropic-version": "2023-06-01",
+      authorization: "Bearer sk-ant-oat01-test",
+    };
+    const body = {
+      model: "claude-fable-5",
+      max_tokens: 64,
+      messages: [{ role: "user", content: [{ type: "text", text: oversized }] }],
+    };
+    try {
+      const responses = [];
+      for (const path of ["/v1/messages", "/v1/messages/count_tokens"]) {
+        const response = await fetch(new URL(path, proxy.url), {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+        });
+        await response.text();
+        responses.push(response);
+      }
+
+      if (failurePolicy === "block") {
+        expect(responses.map(response => response.status)).toEqual([413, 413]);
+        expect(captured).toHaveLength(0);
+      } else {
+        expect(responses.map(response => response.status)).toEqual([200, 200]);
+        expect(captured.map(entry => entry.path)).toEqual([
+          "/v1/messages",
+          "/v1/messages/count_tokens",
+        ]);
+        expect(captured.every(entry => JSON.stringify(entry.body).includes(oversized))).toBe(true);
+      }
+    } finally {
+      await proxy.stop(true);
+      upstream.stop(true);
+    }
+  }
+});

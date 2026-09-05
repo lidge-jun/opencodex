@@ -96,6 +96,7 @@ test("Responses walker covers parser-consumed tool search, shell, and array outp
   const body = {
     input: [
       { type: "tool_search_call", arguments: { query: value } },
+      { type: "web_search_call", action: { query: value, queries: [`first ${value}`] } },
       { type: "local_shell_call", action: { command: ["echo", value] } },
       { type: "function_call_output", output: [{ type: "input_text", text: value }] },
       { type: "custom_tool_call_output", output: [value] },
@@ -113,13 +114,15 @@ test("Responses walker covers parser-consumed tool search, shell, and array outp
   const result = maskResponsesRequestFields(body, registry());
   const input = result.body.input;
   expect((input[0] as { arguments: { query: string } }).arguments.query).toContain("<STRIPE_");
-  expect((input[1] as { action: { command: string[] } }).action.command[1]).toContain("<STRIPE_");
-  expect(((input[2] as { output: Array<{ text: string }> }).output[0]?.text)).toContain("<STRIPE_");
-  expect(((input[3] as { output: string[] }).output[0])).toContain("<STRIPE_");
-  expect(((input[4] as {
+  expect((input[1] as { action: { query: string } }).action.query).toContain("<STRIPE_");
+  expect((input[1] as { action: { queries: string[] } }).action.queries[0]).toContain("<STRIPE_");
+  expect((input[2] as { action: { command: string[] } }).action.command[1]).toContain("<STRIPE_");
+  expect(((input[3] as { output: Array<{ text: string }> }).output[0]?.text)).toContain("<STRIPE_");
+  expect(((input[4] as { output: string[] }).output[0])).toContain("<STRIPE_");
+  expect(((input[5] as {
     output: Array<{ result: { credentials: { token: string } } }>;
   }).output[0]?.result.credentials.token)).toContain("<STRIPE_");
-  expect(((input[5] as {
+  expect(((input[6] as {
     output: Array<{ image_url: string }>;
   }).output[0]?.image_url)).toBe(`data:image/png;base64,${value}`);
 });

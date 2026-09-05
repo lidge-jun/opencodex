@@ -354,8 +354,12 @@ export function prepareGuardrailsImport(
 
   if (request.mode === "replace") {
     customRules = incoming;
-    createCount = incoming.filter(rule => !existingById.has(rule.ruleId)).length;
-    replaceCount = incoming.length - createCount;
+    for (const rule of incoming) {
+      const prior = existingById.get(rule.ruleId);
+      if (!prior) createCount += 1;
+      else if (JSON.stringify(prior) === JSON.stringify(rule)) unchangedCount += 1;
+      else replaceCount += 1;
+    }
   } else {
     customRules = [...existing];
     for (const rule of incoming) {

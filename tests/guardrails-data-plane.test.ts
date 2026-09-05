@@ -29,6 +29,7 @@ import type { OcxConfig, OcxProviderConfig } from "../src/types";
 import { createTestTranslatorBudget } from "./helpers/translator-budget";
 
 const originalFetch = globalThis.fetch;
+const PLACEHOLDER = "<STRIPE_ACCESS_TOKEN_1>";
 const STALE_INTEGRITY_HEADERS = [
   "content-md5",
   "content-digest",
@@ -123,6 +124,41 @@ test("disabled Guardrails is byte-identical to baseline for every inbound walker
       .toBe(JSON.stringify(baselineResult.body));
     expect(JSON.stringify(disabledResult.body), item.protocol)
       .toBe(JSON.stringify(item.body));
+  }
+});
+
+test("detect mode records findings without changing outbound bodies for every protocol", async () => {
+  const detectConfig = config();
+  detectConfig.guardrails = { enabled: true, mode: "detect", failurePolicy: "block" };
+  const secret = "sk_live_abcdefghijklmnopqrstuvwx";
+  const cases: Array<{
+    body: Record<string, unknown>;
+    protocol: "anthropic" | "chat" | "responses";
+  }> = [
+    {
+      protocol: "responses",
+      body: { input: [{ type: "message", role: "user", content: secret }] },
+    },
+    {
+      protocol: "chat",
+      body: { messages: [{ role: "user", content: secret }] },
+    },
+    {
+      protocol: "anthropic",
+      body: { messages: [{ role: "user", content: [{ type: "text", text: secret }] }] },
+    },
+  ];
+
+  for (const item of cases) {
+    const prepared = await prepareGuardrailsTurn(
+      detectConfig,
+      item.protocol,
+      structuredClone(item.body),
+    );
+
+    expect(prepared.body, item.protocol).toEqual(item.body);
+    expect(prepared.turn?.mode, item.protocol).toBe("detect");
+    expect(prepared.turn?.findings.length, item.protocol).toBeGreaterThan(0);
   }
 });
 
@@ -990,6 +1026,62 @@ test("Guardrails demasks a placeholder split across Chat refusal deltas", async 
   expect(output).not.toContain("<STRIPE_ACCESS");
 });
 
+test("Guardrails demasks terminal Responses SSE prose but preserves executable payloads", async () => {
+  const secret = "sk_live_abcdefghijklmnopqrstuvwx";
+  const prepared = await prepareGuardrailsTurn(config(), "responses", { input: secret });
+  const rewrite = guardrailsSseDemaskRewrite(
+    prepared.turn!.state,
+    payload => demaskGuardrailsJsonPayload(payload, prepared.turn!),
+  );
+  const frames = [
+    {
+      type: "response.output_text.done",
+      item_id: "message-1",
+      output_index: 0,
+      content_index: 0,
+      text: `done ${PLACEHOLDER}`,
+    },
+    {
+      type: "response.content_part.done",
+      item_id: "message-1",
+      output_index: 0,
+      content_index: 0,
+      part: { type: "output_text", text: `part ${PLACEHOLDER}` },
+    },
+    {
+      type: "response.output_item.done",
+      output_index: 0,
+      item: {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: `item ${PLACEHOLDER}` }],
+      },
+    },
+    {
+      type: "response.output_item.done",
+      output_index: 1,
+      item: {
+        type: "function_call",
+        name: "run",
+        arguments: `{"token":"${PLACEHOLDER}"}`,
+      },
+    },
+  ];
+  const output = frames
+    .flatMap(frame => rewrite(`event: ${frame.type}\ndata: ${JSON.stringify(frame)}\n\n`))
+    .join("");
+
+  expect(output).toContain(`done ${secret}`);
+  expect(output).toContain(`part ${secret}`);
+  expect(output).toContain(`item ${secret}`);
+  const payloads = [...output.matchAll(/^data: (\{.*\})$/gm)]
+    .map(match => JSON.parse(match[1]!) as {
+      item?: { arguments?: string; type?: string };
+    });
+  expect(payloads.find(payload => payload.item?.type === "function_call")?.item?.arguments)
+    .toBe(`{"token":"${PLACEHOLDER}"}`);
+});
+
 test("Guardrails pending Chat content and refusal flush without cross-field duplication", async () => {
   const prepared = await prepareGuardrailsTurn(
     config(),
@@ -1155,6 +1247,17 @@ test("Guardrails restores top-level assistant content but not content attributed
   expect(user).not.toContain(secret);
 });
 
+test("Guardrails never restores role-less generic top-level content", async () => {
+  const secret = "sk_live_abcdefghijklmnopqrstuvwx";
+  const prepared = await prepareGuardrailsTurn(config(), "responses", { input: secret });
+  const payload = JSON.stringify({
+    type: "tool_result",
+    content: [{ type: "text", text: "hidden <STRIPE_ACCESS_TOKEN_1>" }],
+  });
+
+  expect(demaskGuardrailsJsonPayload(payload, prepared.turn!)).toBe(payload);
+});
+
 test("Guardrails fail-open rollback restores only admitted request fields", async () => {
   const secret = "sk_live_abcdefghijklmnopqrstuvwx";
   const literal = "<STRIPE_ACCESS_TOKEN_1>";
@@ -1217,6 +1320,75 @@ test("Guardrails counts a placeholder split across executable deltas without cha
   expect(skipped).toBe(1);
 });
 
+test("Guardrails counts normalized and custom-tool executable placeholders without restoring them", async () => {
+  const prepared = await prepareGuardrailsTurn(
+    config(),
+    "responses",
+    { input: "sk_live_abcdefghijklmnopqrstuvwx" },
+  );
+  let skipped = 0;
+  const payloads = [
+    {
+      type: "response.custom_tool_call_input.delta",
+      item_id: "custom-1",
+      delta: "<stripe-access-token-0001>",
+    },
+    {
+      type: "response.custom_tool_call_input.done",
+      item_id: "custom-2",
+      input: "<STRIPE_ACCESS_TOKEN_1>",
+    },
+  ];
+
+  for (const value of payloads) {
+    const payload = JSON.stringify(value);
+    expect(demaskGuardrailsJsonPayload(
+      payload,
+      prepared.turn!,
+      count => { skipped += count; },
+    )).toBe(payload);
+  }
+  expect(skipped).toBe(2);
+});
+
+test("Guardrails inspects executable siblings in a mixed Chat prose/tool SSE frame", async () => {
+  const secret = "sk_live_abcdefghijklmnopqrstuvwx";
+  const prepared = await prepareGuardrailsTurn(config(), "chat", {
+    messages: [{ role: "user", content: secret }],
+  });
+  let skipped = 0;
+  const rewrite = guardrailsSseDemaskRewrite(
+    prepared.turn!.state,
+    payload => demaskGuardrailsJsonPayload(
+      payload,
+      prepared.turn!,
+      count => { skipped += count; },
+    ),
+  );
+  const frame = `data: ${JSON.stringify({
+    choices: [{
+      index: 0,
+      delta: {
+        role: "assistant",
+        content: "visible <STRIPE_ACCESS_TOKEN_1>",
+        tool_calls: [{
+          index: 0,
+          type: "function",
+          function: {
+            name: "run",
+            arguments: "{\"token\":\"<STRIPE_ACCESS_TOKEN_1>\"}",
+          },
+        }],
+      },
+    }],
+  })}\n\n`;
+  const output = rewrite(frame).join("");
+
+  expect(output).toContain(`visible ${secret}`);
+  expect(output).toContain("<STRIPE_ACCESS_TOKEN_1>");
+  expect(skipped).toBe(1);
+});
+
 test("Guardrails counts but does not restore Chat and Anthropic tool inputs", async () => {
   const secret = "sk_live_abcdefghijklmnopqrstuvwx";
   const prepared = await prepareGuardrailsTurn(config(), "responses", { input: secret });
@@ -1235,6 +1407,7 @@ test("Guardrails counts but does not restore Chat and Anthropic tool inputs", as
     }],
   }), prepared.turn!, count => { skipped += count; });
   const anthropic = demaskGuardrailsJsonPayload(JSON.stringify({
+    role: "assistant",
     content: [
       { type: "text", text: "visible <STRIPE_ACCESS_TOKEN_1>" },
       { type: "tool_use", name: "run", input: { token: "<STRIPE_ACCESS_TOKEN_1>" } },

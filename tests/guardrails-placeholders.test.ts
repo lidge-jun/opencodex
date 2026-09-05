@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import {
+  createGuardrailsMaskSession,
   createGuardrailsPlaceholderState,
   demaskGuardrailsText,
   demaskGuardrailsTextWithDiagnosticsForTests,
@@ -48,6 +49,24 @@ test("placeholder state remains stable across texts and supports controlled drif
   expect(demaskGuardrailsText("answer < access-token-002 >", second.state, {
     allowNormalizedPlaceholderDrift: true,
   })).toBe("answer access token");
+});
+
+test("one masking session preserves deterministic mappings and reserves every field before replacement", () => {
+  const session = createGuardrailsMaskSession(undefined, [
+    "first secret",
+    "literal <SECRET_1>",
+    "second secret",
+  ]);
+  const first = "first secret";
+  const second = "second secret";
+
+  const maskedFirst = session.mask(first, [finding(first, first, 0)]);
+  const maskedSecond = session.mask(second, [finding(second, second, 0)]);
+  const state = session.finish();
+
+  expect(maskedFirst).toBe("<SECRET_2>");
+  expect(maskedSecond).toBe("<SECRET_3>");
+  expect(demaskGuardrailsText(`${maskedFirst} ${maskedSecond}`, state)).toBe(`${first} ${second}`);
 });
 
 test("demask preserves nested-token overlap and uses the first closing delimiter", () => {

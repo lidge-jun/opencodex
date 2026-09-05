@@ -418,3 +418,53 @@ test("Guardrails demasks a placeholder split across native Chat SSE events", asy
     upstream.stop(true);
   }
 });
+
+test("native Chat scanner failure blocks or passes through exactly as configured", async () => {
+  const oversized = `prefix ${"x".repeat(128 * 1024 + 1)}`;
+  for (const failurePolicy of ["block", "passthrough"] as const) {
+    const captured: Array<Record<string, unknown>> = [];
+    const upstream = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        captured.push(await req.json() as Record<string, unknown>);
+        return Response.json({
+          id: `chatcmpl-guardrails-${failurePolicy}`,
+          object: "chat.completion",
+          choices: [{
+            index: 0,
+            message: { role: "assistant", content: "accepted" },
+            finish_reason: "stop",
+          }],
+        });
+      },
+    });
+    const candidate = config(`${upstream.url.toString().replace(/\/$/, "")}/v1`);
+    candidate.guardrails!.failurePolicy = failurePolicy;
+    saveConfig(candidate);
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/v1/chat/completions", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock/test-model",
+          stream: false,
+          messages: [{ role: "user", content: oversized }],
+        }),
+      });
+      await response.text();
+
+      if (failurePolicy === "block") {
+        expect(response.status).toBe(413);
+        expect(captured).toHaveLength(0);
+      } else {
+        expect(response.status).toBe(200);
+        expect(captured).toHaveLength(1);
+        expect(JSON.stringify(captured[0])).toContain(oversized);
+      }
+    } finally {
+      await server.stop(true);
+      upstream.stop(true);
+    }
+  }
+});
