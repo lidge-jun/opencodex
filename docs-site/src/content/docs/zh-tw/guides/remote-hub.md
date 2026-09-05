@@ -64,6 +64,8 @@ opencodex 不發布官方 Docker 映像，但儲存庫提供維護的 `Dockerfil
 
 主機需要安裝 Git 與 Bun。每次建置映像前，都應從 Git 追蹤的原始碼產生標準相容性清單，產生後到建置完成前不要修改原始碼。產生的 JSON 不加入 Git；`.git` 不進入 Docker 建置上下文。主機連接埠預設繫結至 `127.0.0.1`。遠端存取須明確使用 `OPENCODEX_BIND_ADDRESS=<LAN或Tailscale-IP> docker compose up -d`；`0.0.0.0` 會公開所有介面。請使用防火牆與經過身分驗證的 TLS/tailnet 前端保護存取。
 
+建置會拒絕過期清單，並將每個 SHA-256 分別與建置上下文及複製後的檔案核對。缺少或不符的檔案、清單以外的原始碼及符號連結都會導致失敗。必須包含 `package.json`、`bun.lock`，以及 `scripts/` 中唯一納入的 `scripts/model-metadata.source.json`。
+
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex

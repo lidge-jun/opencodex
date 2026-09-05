@@ -90,6 +90,8 @@ opencodex는 공식 컨테이너 이미지를 배포하지 않지만, 저장소 
 
 호스트에 Git과 Bun이 필요합니다. 이미지를 빌드할 때마다 Git이 추적하는 소스로 정식 매니페스트를 생성하고, 생성부터 빌드 사이에는 소스를 변경하지 마세요. 생성된 JSON은 Git에 추가하지 않으며 `.git`은 Docker 컨텍스트에서 제외됩니다. 호스트 포트는 기본적으로 `127.0.0.1`에 바인딩됩니다. 원격 공개는 `OPENCODEX_BIND_ADDRESS=<LAN-또는-Tailscale-IP> docker compose up -d`로 명시적으로 선택하며, `0.0.0.0`은 모든 인터페이스에 공개합니다. 방화벽과 인증된 TLS/tailnet 프런트엔드로 보호하세요.
 
+빌드는 오래된 매니페스트를 거부하며 모든 SHA-256을 컨텍스트와 복사된 파일에 각각 대조합니다. 누락·불일치 파일, 매니페스트에 없는 추가 소스, 심볼릭 링크는 거부됩니다. `package.json`, `bun.lock`과 `scripts/`에서 유일하게 포함하는 `scripts/model-metadata.source.json`이 필수입니다.
+
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex

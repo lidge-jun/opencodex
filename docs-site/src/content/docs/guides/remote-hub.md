@@ -179,7 +179,13 @@ generator from this Git checkout. It hashes Git-tracked working-tree sources (st
 added source files first), not an arbitrary directory scan. Do not change source files between
 generation and build. Only its untracked `src/generated/compatibility-version.json` artifact
 enters the image; `.git` remains outside the Docker context. Do not commit or hand-edit the
-manifest. A missing artifact fails the copy, and the runtime stage rejects an invalid identity.
+manifest. The build rejects stale manifests: it verifies every recorded SHA-256 against the
+read-only build context and again against the copied runtime files. It requires `package.json`,
+`bun.lock`, and `scripts/model-metadata.source.json`; only that exact scripts artifact is
+included, not the rest of `scripts/`. Missing or mismatched files, extra source files absent
+from the manifest, and symlinks (including parent directories) fail the build. The only source
+file exempt from the inventory is the generated manifest itself. If validation fails, reconcile
+the tracked sources, remove unintended source files, and rerun the canonical generator.
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git

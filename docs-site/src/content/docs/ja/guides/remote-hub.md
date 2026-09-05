@@ -64,6 +64,8 @@ OAuth は `POST /api/oauth/login` で開始し、コールバックできない�
 
 ホストに Git と Bun が必要です。イメージをビルドするたびに、Git 管理下のソースから正規のマニフェストを生成し、生成後はビルドまでソースを変更しないでください。生成 JSON は Git に追加せず、`.git` は Docker コンテキストから除外します。ホスト側は既定で `127.0.0.1` にバインドします。リモート公開は `OPENCODEX_BIND_ADDRESS=<LANまたはTailscaleのIP> docker compose up -d` で明示的に指定し、`0.0.0.0` は全インターフェースを公開します。ファイアウォールと認証付き TLS/tailnet フロントエンドで保護してください。
 
+ビルドは古いマニフェストを拒否し、すべての SHA-256 をコンテキストとコピー後のファイルに照合します。欠落・不一致のファイル、余分なソース、シンボリックリンクは拒否されます。`package.json`、`bun.lock`、および `scripts/` から唯一取り込む `scripts/model-metadata.source.json` が必須です。
+
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex

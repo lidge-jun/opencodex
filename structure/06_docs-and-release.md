@@ -44,8 +44,12 @@ capabilities, publishes the data port on host loopback by default (remote bindin
 `OPENCODEX_BIND_ADDRESS` opt-in), persists `OPENCODEX_HOME`, and streams the initial data token through stdin into the
 owner-only canonical token file. Before every image build, operators run
 `bun scripts/generate-compatibility-version.ts` in the host Git checkout. The runtime copies
-that untracked JSON artifact and checks its compatibility identity without including `.git`
-in the Docker context or changing the generator's tracked-source authority.
+that untracked JSON artifact without including `.git` in the Docker context or changing the
+generator's tracked-source authority. `docker/verify-compatibility.ts` rejects stale manifests
+by comparing all file hashes and the complete source inventory in the read-only build context
+and copied runtime tree. It rejects symlinks, missing/mismatched entries, and extra source files.
+The required roots are `package.json`, `bun.lock`, and `scripts/model-metadata.source.json`;
+the context admits only that exact scripts artifact.
 Operators must still prove liveness, readiness, authenticated
 catalog access, and a real routed response before promotion.
 

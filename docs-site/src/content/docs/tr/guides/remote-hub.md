@@ -64,6 +64,8 @@ Resmî Docker imajı yoktur; ancak depo, digest ile sabitlenmiş Bun imajını y
 
 Host üzerinde Git ve Bun gereklidir. Her imaj derlemesinden önce Git tarafından izlenen kaynaklardan kanonik manifesti üretin ve derleme bitene kadar kaynakları değiştirmeyin. Üretilen JSON dosyasını Git'e eklemeyin; `.git` Docker bağlamının dışında kalır. Host portu varsayılan olarak `127.0.0.1` adresine bağlanır. Uzak erişim için açıkça `OPENCODEX_BIND_ADDRESS=<LAN-veya-Tailscale-IP> docker compose up -d` kullanın; `0.0.0.0` tüm arayüzleri açar. Erişimi güvenlik duvarı ve kimlik doğrulamalı TLS/tailnet ön ucu ile koruyun.
 
+Derleme, her SHA-256 değerini önce bağlamdaki, ardından kopyalanan dosyalardaki baytlarla karşılaştırarak eski manifestleri reddeder. Eksik veya uyuşmayan dosyalar, fazladan kaynak dosyaları ve sembolik bağlantılar reddedilir. `package.json`, `bun.lock` ve `scripts/` içinden yalnızca dahil edilen `scripts/model-metadata.source.json` zorunludur.
+
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex

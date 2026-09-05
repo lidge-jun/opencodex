@@ -64,6 +64,8 @@ Il n’existe pas d’image Docker officielle, mais le dépôt fournit un `Docke
 
 Installez Git et Bun sur l’hôte. Avant chaque construction, générez le manifeste canonique depuis les sources suivies par Git, sans modifier les sources entre la génération et la construction. Le JSON généré reste non suivi ; `.git` est exclu du contexte Docker. Le port hôte est lié à `127.0.0.1` par défaut. Pour un accès distant, utilisez explicitement `OPENCODEX_BIND_ADDRESS=<IP-LAN-ou-Tailscale> docker compose up -d` ; `0.0.0.0` expose toutes les interfaces. Protégez cet accès par un pare-feu et un frontal TLS/tailnet authentifié.
 
+La construction rejette les manifestes périmés en comparant chaque SHA-256 aux fichiers du contexte puis de l’image. Les fichiers manquants ou divergents, les sources supplémentaires et les liens symboliques sont refusés. `package.json`, `bun.lock` et le seul fichier autorisé de `scripts/`, `scripts/model-metadata.source.json`, sont obligatoires.
+
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex

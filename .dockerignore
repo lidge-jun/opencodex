@@ -9,6 +9,10 @@
 # Prepared on the host with the canonical Git-tracked-source generator.
 !src/generated/compatibility-version.json
 
+!scripts/
+scripts/**
+!scripts/model-metadata.source.json
+
 !docker/
 !docker/**
 

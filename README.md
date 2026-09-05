@@ -107,6 +107,9 @@ The default host binding is `127.0.0.1:10100`. Remote exposure requires explicit
 all host interfaces. Restrict access with a firewall and an authenticated TLS/tailnet frontend.
 The generated JSON stays untracked; it is copied into the image without including `.git`.
 Regenerate it after source changes, and do not change the source between generation and build.
+The build rejects stale manifests, missing or mismatched files, extra source files, and symlinks.
+It checks every recorded SHA-256 against the build context and copied runtime files, including
+`package.json`, `bun.lock`, and the specifically included `scripts/model-metadata.source.json`.
 
 The token and mutable state stay in the `ocx-state` named volume; no credential is placed in the
 image, Compose file, environment, or shell arguments. See the

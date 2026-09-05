@@ -64,6 +64,8 @@ opencodex 不发布官方 Docker 镜像，但仓库提供维护的 `Dockerfile` 
 
 宿主机需要安装 Git 和 Bun。每次构建镜像前，都应从 Git 跟踪的源码生成规范兼容性清单，生成后到构建完成前不要修改源码。生成的 JSON 不加入 Git；`.git` 不进入 Docker 构建上下文。宿主机端口默认绑定 `127.0.0.1`。远程访问须显式使用 `OPENCODEX_BIND_ADDRESS=<LAN或Tailscale-IP> docker compose up -d`；`0.0.0.0` 会公开所有接口。请使用防火墙和经过身份验证的 TLS/tailnet 前端保护访问。
 
+构建会拒绝过期清单，并将每个 SHA-256 分别与构建上下文及复制后的文件进行核对。缺失或不匹配的文件、清单之外的源码和符号链接都会导致失败。必须包含 `package.json`、`bun.lock`，以及 `scripts/` 中唯一纳入的 `scripts/model-metadata.source.json`。
+
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
