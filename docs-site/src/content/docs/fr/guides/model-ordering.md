@@ -148,7 +148,9 @@ Pour ordonner tout le sélecteur, incluez un identifiant natif non qualifié :
 Les lignes indiquées apparaissent d’abord dans l’ordre du tableau, puis les lignes absentes
 selon leur priorité naturelle. La correspondance est exacte : `gpt-5.6-sol` et
 `openai/gpt-5.6-sol` désignent deux lignes distinctes. Pour une ligne qualifiée par un compte,
-indiquez son identifiant complet, sélecteur inclus.
+indiquez son identifiant complet, sélecteur inclus. Les formes brute et encodée du même
+identifiant routé sont acceptées, avec priorité aux correspondances exactes. Les entrées
+vides sont ignorées.
 
 ### Migration : identifiants natifs dans les listes existantes
 

@@ -422,7 +422,8 @@ export interface OcxConfig {
    * Routed-only lists order non-featured routed rows; featured and native rows keep
    * their normal positions. Including a bare native id opts into ordering the complete
    * picker: listed ids appear first in array order, followed by unlisted rows in their
-   * natural priority order. Values are exact catalog ids. The separate natural spawn
+   * natural priority order. Exact catalog ids take precedence over equivalent raw/encoded
+   * routed ids; empty entries are ignored. The separate natural spawn
    * priority is preserved, so display order does not change subagent candidates.
    * Unset or empty leaves catalog priorities unchanged.
    */

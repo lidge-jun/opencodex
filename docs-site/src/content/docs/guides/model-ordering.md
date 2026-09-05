@@ -145,7 +145,9 @@ To order the complete picker, include a bare native id:
 
 Listed rows appear first in array order, followed by unlisted rows in natural priority
 order. Matching uses exact catalog ids: `gpt-5.6-sol` and `openai/gpt-5.6-sol` are separate
-rows. Account-qualified rows need their exact selector-qualified id in the list.
+rows. Raw and encoded spellings of the same routed id are also accepted, with exact
+matches taking precedence. Empty entries are ignored. Account-qualified rows need
+their selector-qualified id in the list.
 
 ### Migration note: native ids in existing orders
 
