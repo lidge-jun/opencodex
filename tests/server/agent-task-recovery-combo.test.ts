@@ -10,6 +10,11 @@ import {
 } from "../../src/responses/state";
 import { resetAgentTaskRecoveryState } from "../../src/server/responses/agent-task-recovery";
 import { agentTaskRecoveryCacheSnapshotForTests } from "../../src/server/responses/agent-task-recovery-cache";
+import { clearComboTargetCooldowns, coolComboTarget } from "../../src/combos/failover";
+import {
+  clearCachedProviderQuotas,
+  setCachedProviderQuotaForTests,
+} from "../../src/providers/quota-routing-cache";
 import {
   codexHeaders,
   encryptedInput,
@@ -55,11 +60,15 @@ describe("combo path encrypted agent task recovery", () => {
     process.env["OPENCODEX_HOME"] = home;
     clearResponseStateMemoryForTests();
     resetAgentTaskRecoveryState();
+    clearCachedProviderQuotas();
+    clearComboTargetCooldowns();
   });
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
     resetAgentTaskRecoveryState();
+    clearCachedProviderQuotas();
+    clearComboTargetCooldowns();
     clearResponseStateForTests();
     removeTreeWithRetry(home);
     if (priorHome === undefined) delete process.env["OPENCODEX_HOME"];
@@ -170,6 +179,82 @@ describe("combo path encrypted agent task recovery", () => {
     expect(agentTaskRecoveryCacheSnapshotForTests()).toEqual({ entries: 0, bytes: 0 });
     expect(recoveryFetches).toBe(1);
     expect(providerFetches).toBe(1);
+  });
+
+  test.each(["disabled", "cooldown"] as const)("recovers a mixed combo when the native target is blocked by %s", async (reason) => {
+    const config = comboConfig([
+      { provider: "xai", model: "grok-4.5" },
+      { provider: "openai", model: "gpt-5.5" },
+    ]);
+    if (reason === "disabled") {
+      config.providers.openai!.disabled = true;
+    } else {
+      coolComboTarget("routed", { provider: "openai", model: "gpt-5.5" }, { cooldownMs: 60_000 });
+    }
+    const assignment = "MIXED-RECOVERY-PRIVATE-ASSIGNMENT";
+    const recoveryBodies: string[] = [];
+    const forwardedBodies: string[] = [];
+    globalThis.fetch = (async (input, init) => {
+      const body = typeof init?.body === "string" ? init.body : "";
+      if (String(input).includes("chatgpt.com")) {
+        recoveryBodies.push(body);
+        return new Response(recoverySse(assignment), {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        });
+      }
+      forwardedBodies.push(body);
+      return providerCompletion();
+    }) as typeof fetch;
+
+    const response = await post(config, "combo/routed", encryptedInput(), codexHeaders());
+    await response.text();
+
+    expect(response.status).toBe(200);
+    expect(recoveryBodies).toHaveLength(1);
+    expect(forwardedBodies).toHaveLength(1);
+    expect(forwardedBodies[0]).toContain(assignment);
+    expect(forwardedBodies[0]).not.toContain(FERNET_TASK);
+    expect(responseContinuationRetainedStoreSnapshot().count).toBe(0);
+  });
+
+  test("fails closed without routed dispatch when mixed-combo recovery fails", async () => {
+    const config = comboConfig([
+      { provider: "xai", model: "grok-4.5" },
+      { provider: "openai", model: "gpt-5.5" },
+    ]);
+    coolComboTarget("routed", { provider: "openai", model: "gpt-5.5" }, { cooldownMs: 60_000 });
+    const urls: string[] = [];
+    globalThis.fetch = (async (input) => {
+      urls.push(String(input));
+      return new Response("unavailable", { status: 503 });
+    }) as typeof fetch;
+
+    const response = await post(config, "combo/routed", encryptedInput(), codexHeaders());
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: { code: "unreadable_encrypted_agent_task" } });
+    expect(urls).toHaveLength(1);
+    expect(urls[0]).toContain("chatgpt.com/backend-api/codex/responses");
+    expect(responseContinuationRetainedStoreSnapshot().count).toBe(0);
+  });
+
+  test("does not recover when every mixed-combo target is unavailable", async () => {
+    const config = comboConfig([
+      { provider: "xai", model: "grok-4.5" },
+      { provider: "openai", model: "gpt-5.5" },
+    ]);
+    coolComboTarget("routed", { provider: "openai", model: "gpt-5.5" }, { cooldownMs: 60_000 });
+    setCachedProviderQuotaForTests("xai", { updatedAt: Date.now(), weeklyPercent: 100 });
+    globalThis.fetch = (async () => {
+      throw new Error("No network call is permitted without an eligible execution target");
+    }) as typeof fetch;
+
+    const response = await post(config, "combo/routed", encryptedInput(), codexHeaders());
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ error: { code: "combo_unavailable" } });
+    expect(responseContinuationRetainedStoreSnapshot().count).toBe(0);
   });
 
   test("keeps an opted-in Responses target out of encrypted combo dispatch", async () => {

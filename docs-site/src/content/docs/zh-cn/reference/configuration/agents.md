@@ -52,7 +52,7 @@ per-role fallback 链必须放在 opencodex 配置里。把 `model_fallback` 写
 `$CODEX_HOME/agents/*.toml` 会让 Codex 0.146+ 把整个角色文件当作未知字段拒绝并跳过该角色
 （#1190）。TOML 中的旧版 `model_fallback` 仍会被读取以保持向后兼容，但 `ocx doctor` 会标记它。
 
-opencodex 会跳过已禁用、不可路由、不健康、处于冷却中，或已达到配额阈值的候选项。可用性快照会在 `subagentModelFallbackPollMs` 期间缓存。对于加密的子任务，候选链只包含规范的原生 ChatGPT 目标，以及通过 `allowEncryptedV2AgentTasks: true` 明确信任的直接密钥认证 Responses 路由。如果没有任何目标能处理加密载荷，请求就会失败，而不是把不可读的密文路由到别处。combo 仍然只使用规范的原生目标。
+opencodex 会跳过已禁用、不可路由、不健康、处于冷却中，或已达到配额阈值的候选项。可用性快照会在 `subagentModelFallbackPollMs` 期间缓存。对于加密的子任务，候选链只包含规范的原生 ChatGPT 目标，以及通过 `allowEncryptedV2AgentTasks: true` 明确信任的直接密钥认证 Responses 路由。如果没有任何目标能处理加密载荷，请求就会失败，而不是把不可读的密文路由到别处。combo 会先尝试可用的规范原生目标；如果没有可选择的原生目标且已启用 `agentTaskRecovery`，会在路由到 combo 目标前对加密的 `NEW_TASK` 恢复一次。
 
 ```json
 {

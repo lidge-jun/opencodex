@@ -2405,7 +2405,6 @@ export async function handleComboResponses(
   const payloadEligible = (target: (typeof combo.targets)[number]): boolean =>
     comboPayloadReadable || !unreadableEncryptedAgentTask || canDecryptUnreadableAgentTask(target);
   const initialNow = Date.now();
-  let pick: ReturnType<typeof pickComboTarget> = null;
   const pickWithWait = (pickOptions: {
     exclude?: Iterable<string>;
     eligible?: (target: NonNullable<typeof combo>["targets"][number]) => boolean;
@@ -2415,8 +2414,12 @@ export async function handleComboResponses(
     waitForCooldownMs: combo.waitForCooldownMs,
     abortSignal: options.abortSignal,
   });
+  let pick = await pickWithWait({
+    eligible: payloadEligible,
+    now: initialNow,
+  });
 
-  if (unreadableEncryptedAgentTask && !combo.targets.some(canDecryptUnreadableAgentTask)) {
+  if (unreadableEncryptedAgentTask && !pick) {
     const recovery = agentTaskRecoveryConfig(config);
     if (
       (options.inboundWire ?? "responses") !== "responses"
@@ -2471,11 +2474,6 @@ export async function handleComboResponses(
     }
     comboPayloadReadable = true;
     comboReplaySnapshot.recoveredPlaintext = true;
-  } else {
-    pick = await pickWithWait({
-      eligible: payloadEligible,
-      now: initialNow,
-    });
   }
 
   if (!pick) {

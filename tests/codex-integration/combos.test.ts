@@ -858,6 +858,101 @@ describe("combo failure policy and advancement", () => {
     expect(pick?.target.provider).toBe("b");
   });
 
+  test.each(["pool", "direct"] as const)("defers native %s quota decisions to account and model scoped authentication", mode => {
+    const now = 50_000;
+    const config = baseConfig({
+      providers: {
+        a: {
+          adapter: "openai-responses",
+          authMode: "forward",
+          codexAccountMode: mode,
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+        },
+        b: { adapter: "openai-chat", baseUrl: "https://b.example/v1", apiKey: "kb" },
+      },
+    });
+    setCachedProviderQuotaForTests("a", { weeklyPercent: 100, updatedAt: now });
+
+    const pick = pickComboTarget(config, "free", { now });
+
+    expect(pick?.target.provider).toBe("a");
+  });
+
+  test("native provider summary quota does not suppress a bounded cooldown wait", async () => {
+    const now = 50_000;
+    const config = baseConfig({
+      providers: {
+        a: {
+          adapter: "openai-responses",
+          authMode: "forward",
+          codexAccountMode: "pool",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+        },
+      },
+      combos: {
+        free: {
+          targets: [{ provider: "a", model: "m1" }],
+          waitForCooldownMs: 2_000,
+        },
+      },
+    });
+    setCachedProviderQuotaForTests("a", { weeklyPercent: 100, updatedAt: now });
+    coolComboTarget("free", { provider: "a", model: "m1" }, { now, cooldownMs: 1_000 });
+    const sleeps: number[] = [];
+
+    const pick = await pickComboTargetWithWait(config, "free", {
+      now,
+      waitForCooldownMs: 2_000,
+      sleep: async ms => { sleeps.push(ms); },
+    });
+
+    expect(pick?.target.provider).toBe("a");
+    expect(sleeps).toEqual([1_000]);
+  });
+
+  test("still filters exhausted quota on a noncanonical forward destination", () => {
+    const now = 50_000;
+    const config = baseConfig({
+      providers: {
+        a: {
+          adapter: "openai-responses",
+          authMode: "forward",
+          codexAccountMode: "pool",
+          baseUrl: "https://chatgpt.com.example/backend-api/codex",
+        },
+        b: { adapter: "openai-chat", baseUrl: "https://b.example/v1", apiKey: "kb" },
+      },
+    });
+    setCachedProviderQuotaForTests("a", { weeklyPercent: 100, updatedAt: now });
+
+    const pick = pickComboTarget(config, "free", { now });
+
+    expect(pick?.target.provider).toBe("b");
+  });
+
+  test("retains caller eligibility restrictions for native targets", () => {
+    const now = 50_000;
+    const config = baseConfig({
+      providers: {
+        a: {
+          adapter: "openai-responses",
+          authMode: "forward",
+          codexAccountMode: "pool",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+        },
+        b: { adapter: "openai-chat", baseUrl: "https://b.example/v1", apiKey: "kb" },
+      },
+    });
+    setCachedProviderQuotaForTests("a", { weeklyPercent: 100, updatedAt: now });
+
+    const pick = pickComboTarget(config, "free", {
+      now,
+      eligible: target => target.provider !== "a",
+    });
+
+    expect(pick?.target.provider).toBe("b");
+  });
+
   test("elapsed quota reset does not permanently blacklist a provider", () => {
     const now = 50_000;
     const config = baseConfig();
