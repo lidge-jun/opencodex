@@ -65,6 +65,62 @@ function writerFor() {
 }
 
 describe("declared short-window producer evidence", () => {
+  for (const slot of ["primary", "secondary", "tertiary"] as const) {
+    test(`owned WHAM ${slot} negative cannot release short99, but genuine zero can`, async () => {
+      const aclOk = { success: true, exitCode: 0, timedOut: false, stdout: "" };
+      setIcaclsRunnerForTests(() => aclOk);
+      setAsyncIcaclsRunnerForTests(async () => aclOk);
+      writeFileSync(join(testDir, "auth.json"), JSON.stringify({ tokens: {
+        access_token: "fixture-main-token", account_id: "fixture-main-a",
+      } }));
+      let calls = 0;
+      globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0]) => {
+        expect(String(input)).toBe("https://chatgpt.com/backend-api/wham/usage");
+        calls += 1;
+        return Response.json({ plan_type: "plus", rate_limit: {
+          primary_window: { used_percent: calls === 1 ? 99 : calls === 2 && slot === "primary" ? -1 : 0,
+            limit_window_seconds: 18_000, reset_at: 1 },
+          secondary_window: { used_percent: calls === 2 && slot === "secondary" ? "-1" : 0,
+            limit_window_seconds: 604_800 },
+          tertiary_window: { used_percent: calls === 2 && slot === "tertiary" ? -1 : 0 },
+        } });
+      }, { preconnect: previousFetch.preconnect });
+      const enabled = { codexMainAccountHardLock: true };
+      await fetchMainAccountInfo(true);
+      const retained = getMainPolicyQuota();
+      expect(getMainAccountHardLockStatus(enabled)).toEqual({ enabled: true, state: "blocked" });
+      await fetchMainAccountInfo(true);
+      expect(getAccountQuota(MAIN)?.shortPercent).toBe(0);
+      expect(getMainPolicyQuota()).toEqual(retained);
+      expect(getMainAccountHardLockStatus(enabled).state).toBe("blocked");
+      await fetchMainAccountInfo(true);
+      expect(calls).toBe(3);
+      expect(getMainAccountHardLockStatus(enabled)).toEqual({ enabled: true, state: "ready" });
+    });
+
+    test(`header ${slot} negative cannot release short99, but genuine zero can`, () => {
+      const writer = writerFor();
+      const enabled = { codexMainAccountHardLock: true };
+      const headers = new Headers({
+        "x-codex-primary-used-percent": "99", "x-codex-primary-window-minutes": "300",
+        "x-codex-primary-reset-at": "1", "x-codex-secondary-used-percent": "0",
+        "x-codex-tertiary-used-percent": "0",
+      });
+      applyAccountQuotaFromUpstreamHeaders(MAIN, headers, undefined, writer);
+      const retained = getMainPolicyQuota();
+      expect(getMainAccountHardLockStatus(enabled)).toEqual({ enabled: true, state: "blocked" });
+      headers.set("x-codex-primary-used-percent", "0");
+      headers.set(`x-codex-${slot}-used-percent`, "-1");
+      applyAccountQuotaFromUpstreamHeaders(MAIN, headers, undefined, writer);
+      expect(getAccountQuota(MAIN)?.shortPercent).toBe(0);
+      expect(getMainPolicyQuota()).toEqual(retained);
+      expect(getMainAccountHardLockStatus(enabled).state).toBe("blocked");
+      headers.set(`x-codex-${slot}-used-percent`, "0");
+      applyAccountQuotaFromUpstreamHeaders(MAIN, headers, undefined, writer);
+      expect(getMainAccountHardLockStatus(enabled)).toEqual({ enabled: true, state: "ready" });
+    });
+  }
+
   const cases = [
     { name: "missing usage with weekly99", usage: undefined, weekly: true },
     { name: "invalid usage with weekly99", usage: "unreadable", weekly: true },
@@ -125,7 +181,7 @@ describe("declared short-window producer evidence", () => {
         }
         const enabled = { codexMainAccountHardLock: true };
         expect(getMainAccountHardLockStatus(enabled, 3_000_000_000_000 - 1).state).toBe("blocked");
-        expect(getMainAccountHardLockStatus(enabled, 3_000_000_000_000).state).toBe("unknown");
+        expect(getMainAccountHardLockStatus(enabled, 3_000_000_000_000)).toEqual({ enabled: true, state: "blocked" });
         await fetchMainAccountInfo(true);
         expect(calls).toBe(5);
         expect(getMainPolicyQuota()).toMatchObject({ shortPercent: 0, shortResetAt: 4_000_000_000 });
@@ -169,7 +225,7 @@ describe("declared short-window producer evidence", () => {
       }
       const enabled = { codexMainAccountHardLock: true };
       expect(getMainAccountHardLockStatus(enabled, 3_000_000_000_000 - 1).state).toBe("blocked");
-      expect(getMainAccountHardLockStatus(enabled, 3_000_000_000_000).state).toBe("unknown");
+      expect(getMainAccountHardLockStatus(enabled, 3_000_000_000_000)).toEqual({ enabled: true, state: "blocked" });
       headers.set("x-codex-primary-used-percent", "0");
       applyAccountQuotaFromUpstreamHeaders(MAIN, headers, undefined, writer);
       expect(getMainPolicyQuota()).toMatchObject({ shortPercent: 0, shortWindowSeconds: 3_600, shortResetAt: 4_000_000_000 });

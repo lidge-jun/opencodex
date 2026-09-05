@@ -58,11 +58,13 @@ describe("identity-bound main-account hard-lock policy", () => {
     expect(isMainAccountHardLocked(enabled, now)).toBe(true);
   });
 
-  test("reset times accept seconds and milliseconds and unlock at the boundary", () => {
+  test("reset times accept seconds and milliseconds but recovery requires fresh evidence", () => {
     observe({ weeklyPercent: 99, weeklyResetAt: (now + 60_000) / 1000, shortPercent: 100, shortResetAt: now + 120_000 });
     expect(getMainAccountHardLockStatus(enabled, now)).toEqual({ enabled: true, state: "blocked", resetAt: now + 120_000 });
     expect(getMainAccountHardLockStatus(enabled, now + 60_000).state).toBe("blocked");
-    expect(getMainAccountHardLockStatus(enabled, now + 120_000).state).toBe("unknown");
+    expect(getMainAccountHardLockStatus(enabled, now + 120_000)).toEqual({ enabled: true, state: "blocked" });
+    observe({ shortPercent: 0 });
+    expect(getMainAccountHardLockStatus(enabled, now + 120_000)).toEqual({ enabled: true, state: "ready" });
   });
 
   test("one missing reset prevents a false scheduled-unlock promise", () => {
@@ -89,7 +91,9 @@ describe("identity-bound main-account hard-lock policy", () => {
 
   test("an expired 5h window does not fall back to the high weekly bar", () => {
     observe({ shortPercent: 99, shortWindowSeconds: 18_000, shortResetAt: now / 1000, weeklyPercent: 100 });
-    expect(getMainAccountHardLockStatus(enabled, now).state).toBe("unknown");
+    expect(getMainAccountHardLockStatus(enabled, now)).toEqual({ enabled: true, state: "blocked" });
+    observe({ shortPercent: 0 });
+    expect(getMainAccountHardLockStatus(enabled, now).state).toBe("ready");
   });
 
   test("a known 5h shape with no percentage stays unknown instead of selecting weekly", () => {

@@ -89,6 +89,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  if (pendingPersist) clearTimeout(pendingPersist.timer);
+  pendingPersist = undefined;
   clearAccountQuota();
   clearMainAccountInfoCache();
   timerSpy.mockRestore();

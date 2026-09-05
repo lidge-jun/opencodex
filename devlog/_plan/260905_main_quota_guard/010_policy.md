@@ -2,6 +2,8 @@
 
 Depends on wp0. C4 care for quota/credential boundary; existing authentication and upstream grants remain authoritative.
 
+Review amendment (033/034 in the Reserve plan layer) supersedes all expiry-retirement statements below: retained99 remains blocked after resetAt until a fresh valid lower reading arrives. Expired resetAt is omitted from the DTO. The existing60s sweep performs bounded/coalesced owned quota refresh; no inference, reset credits or new periodic timer. Raw negative readings are rejected as policy evidence before legacy clamping. Both quota writers hydrate before reading merge bases.
+
 ## Contract and complete field chain
 
 NEW config `codexMainAccountHardLock?: boolean` in `src/types/config.ts`; `src/config.ts` parses optional boolean with malformed input treated as off. Persist through existing `saveConfigPreservingClaudeCode`; GET and PUT `/api/settings` return `codexMainAccountHardLock: config.codexMainAccountHardLock === true`. PUT rejects nonboolean input, captures presence/value, deletes when false, and restores exactly on save failure. Creation: settings PUT/hand-edited JSON; serialization: existing atomic config writer; deserialization: Zod loader; consumers: policy helper, account usability, native auth resolution, settings/main DTO, GUI in wp2. No new endpoint.

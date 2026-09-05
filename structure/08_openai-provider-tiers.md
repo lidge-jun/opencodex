@@ -85,8 +85,11 @@ It blocks newly admitted identity-matched main-account requests at 99% of the 5h
 when present, otherwise the weekly window (monthly for monthly-only accounts). It does not take
 the maximum across those windows. Pool alternatives remain eligible; explicit main selection and stored Direct
 substitution do not override it. It neither pauses the account nor clears upstream cooldown/reauth
-state, and management quota refresh remains available. Passed reset timestamps and fresh lower
-readings release this policy. Missing observations are reported as unknown, not fabricated headroom.
+state, and management quota refresh remains available. Only a fresh valid reading below 99%, including
+0%, releases a measured block; passing a reset timestamp alone does not. While blocked, the existing
+once-per-minute background sweep refreshes owned main usage, with bounded/coalesced reads and no
+inference or reset-credit consumption. Failed, missing or negative readings do not release the block.
+Previously unobserved usage is unknown, not fabricated headroom.
 
 The policy reads a separately retained identity-tagged quota snapshot, so the legacy rotation
 cache's six-hour expiry does not silently release a known block. A confirmed account transition

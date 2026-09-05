@@ -43,7 +43,7 @@ The Reserve client gate is a separate feasibility decision, not permission to mi
 
 - Off/absent flag preserves current routing. Enabled flag uses the 5h/short window when present, otherwise weekly, otherwise monthly-only usage; it blocks at >=99 on that selected window. Other windows cannot trigger this local policy. Unknown data is not invented as 0 or 100. Owner steering is recorded in 013.
 - Main exclusion cannot prevent usage refresh or profile recovery. Explicit main and Direct paths cannot evade a measured block; unrelated caller credentials cannot inherit main's quota.
-- Observations are identity-bound; account changes and restart cannot attach another account's cached reading. Window expiry and a fresh lower observation release only this policy, not pause/cooldown/reauth.
+- Observations are identity-bound; account changes and restart cannot attach another account's cached reading. Only a fresh valid lower observation releases this policy, not clock-only expiry, pause/cooldown/reauth. The existing minute sweep refreshes blocked main usage without inference or reset credits.
 - UI distinguishes enabled from currently blocked. Cancel/Escape do not save; save errors preserve actual server state; success requires explicit acknowledgment. Main status remains visible outside Advanced.
 - Do not claim 1% is reserved: parallel/in-flight/direct-to-upstream use can reach 100 before observation. Luna reserve cannot be used while this policy blocks the main account.
 - Keep server Reserve grants and `ordinary_usage_allowed` unchanged.

@@ -603,6 +603,8 @@
   "management-api-logs-metrics.test.ts": "server",
   "main-account-hard-lock-auth.test.ts": "codex-integration",
   "main-account-hard-lock-policy.test.ts": "codex-integration",
+  "main-account-hard-lock-recovery.test.ts": "codex-integration",
+  "main-quota-evidence-validation.test.ts": "codex-integration",
   "main-quota-provenance.test.ts": "codex-integration",
   "main-quota-window-observation.test.ts": "codex-integration",
   "management-client-config-route.test.ts": "server",

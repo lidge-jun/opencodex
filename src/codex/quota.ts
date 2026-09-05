@@ -202,6 +202,11 @@ export function normalizeUsagePercent(value: unknown): number | undefined {
   return Math.max(0, Math.min(100, numeric));
 }
 
+/** Validate policy evidence before legacy normalization can turn a negative into zero. */
+function isNegativeUsagePercent(value: unknown): boolean {
+  return (typeof value === "number" || typeof value === "string") && Number(value) < 0;
+}
+
 function normalizeResetAt(value: unknown): number | undefined {
   const numeric = typeof value === "number"
     ? value
@@ -284,13 +289,14 @@ export function setAccountQuotaFromParsed(
   quota: Omit<StoredAccountQuota, "updatedAt"> | null,
   writerGeneration = captureConfigGeneration(),
   mainWriter?: MainQuotaWriter,
+  policyQuota: Omit<StoredAccountQuota, "updatedAt"> | null = quota,
 ): void {
   if (!quota) return;
   if (!mayCommitAccountQuota(accountId, writerGeneration)) return;
   const isMain = accountId === MAIN_CODEX_ACCOUNT_ID;
   if (isMain && mainWriter && !isMainQuotaWriterLive(mainWriter)) return;
-  const legacyExisting = accountQuota.get(accountId);
   hydrateAccountQuotasFromDisk();
+  const legacyExisting = accountQuota.get(accountId);
   const updatedAt = Date.now();
   // Legacy rotation keeps its existing carry behavior, but never inherits policy-only
   // evidence that outlived its disk TTL. Policy has a separate, identity-checked base.
@@ -300,10 +306,12 @@ export function setAccountQuotaFromParsed(
     const policyExisting = mainWriter && mainPolicyQuota?.identityKey === mainWriter.identityKey
       ? mainPolicyQuota.quota
       : undefined;
-    mainPolicyQuota = mainWriter
+    mainPolicyQuota = mainWriter && (policyQuota || policyExisting)
       ? {
         identityKey: mainWriter.identityKey,
-        quota: structuredClone(mergeAccountQuota(quota, policyExisting, updatedAt, true)),
+        quota: policyQuota
+          ? structuredClone(mergeAccountQuota(policyQuota, policyExisting, updatedAt, true))
+          : policyExisting!,
       }
       : null;
   }
@@ -525,7 +533,10 @@ export function applyAccountQuotaFromUpstreamHeaders(
 ): void {
   const quota = parseUpstreamQuotaHeaders(headers);
   if (!quota) return;
-  setAccountQuotaFromParsed(accountId, quota, writerGeneration, mainWriter);
+  const policyQuota = [
+    "x-codex-primary-used-percent", "x-codex-secondary-used-percent", "x-codex-tertiary-used-percent",
+  ].some(name => isNegativeUsagePercent(headers.get(name))) ? null : quota;
+  setAccountQuotaFromParsed(accountId, quota, writerGeneration, mainWriter, policyQuota);
 }
 
 export function updateAccountQuota(
@@ -538,11 +549,11 @@ export function updateAccountQuota(
   writerGeneration = captureConfigGeneration(),
 ): void {
   if (!mayCommitAccountQuota(accountId, writerGeneration)) return;
-  const existing = accountQuota.get(accountId);
   const nextWeekly = normalizeUsagePercent(weekly);
   const nextMonthly = normalizeUsagePercent(monthly);
   if (nextWeekly === undefined && nextMonthly === undefined && resetCredits === undefined) return;
   hydrateAccountQuotasFromDisk();
+  const existing = accountQuota.get(accountId);
 
   const quota: StoredAccountQuota = {
     ...(existing?.weeklyPercent !== undefined ? { weeklyPercent: existing.weeklyPercent } : {}),
@@ -731,6 +742,13 @@ export function reconcileCodexQuotaAccounts(context: GenerationContext): number 
   lastReconciledGeneration = context.generation;
   if (removed > 0) schedulePersistAccountQuotas();
   return removed;
+}
+
+/** Ordinary main policy rejects the entire message if any normal window is negative. */
+export function parseMainPolicyUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuota, "updatedAt"> | null {
+  const windows = [data.rate_limit?.primary_window, data.rate_limit?.secondary_window, data.rate_limit?.tertiary_window];
+  if (windows.some(window => isNegativeUsagePercent(window?.used_percent))) return null;
+  return parseUsageQuota(data);
 }
 
 export function parseUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuota, "updatedAt"> | null {

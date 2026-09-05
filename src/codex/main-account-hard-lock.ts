@@ -6,7 +6,7 @@ export const MAIN_ACCOUNT_HARD_LOCK_PERCENT = 99;
 export interface MainAccountHardLockStatus {
   enabled: boolean;
   state: "off" | "unknown" | "ready" | "blocked";
-  /** Unix milliseconds; absent when a blocking observation has no known reset. */
+  /** Unix milliseconds; absent when a blocking observation has no future reset. */
   resetAt?: number;
 }
 
@@ -35,13 +35,15 @@ export function getMainAccountHardLockStatus(
     : hasWeekly ? [quota.weeklyPercent, quota.weeklyResetAt] : [quota.monthlyPercent, quota.monthlyResetAt];
   const resetAt = resetTimestamp(rawReset);
   // The routing score's unknown sentinel is 101. It is never a raw quota observation.
-  if (typeof percent !== "number" || !Number.isFinite(percent) || percent < 0 || percent > 100
-    || (resetAt !== undefined && resetAt <= now)) return { enabled: true, state: "unknown" };
+  if (typeof percent !== "number" || !Number.isFinite(percent) || percent < 0 || percent > 100) {
+    return { enabled: true, state: "unknown" };
+  }
   if (percent < MAIN_ACCOUNT_HARD_LOCK_PERCENT) return { enabled: true, state: "ready" };
   return {
     enabled: true,
     state: "blocked",
-    ...(resetAt !== undefined ? { resetAt } : {}),
+    // A predicted reset is not evidence of recovery. Only a fresh lower reading releases.
+    ...(resetAt !== undefined && resetAt > now ? { resetAt } : {}),
   };
 }
 

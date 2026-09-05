@@ -9,7 +9,7 @@ Independent reviewer Ohm returned FAIL; accepted both findings after tracing the
 
 RCA: one shared result cannot represent two distinct retention contracts. Keep one window-merging implementation with an explicit narrow policy-mode distinction for supplementary monthly updates, but evaluate it separately against legacy and policy bases. Preserve default-off legacy carry-forward; exclude untagged/cross-identity fields only from the new policy record. No generic cache redesign.
 
-Required repair verification: typed checks after source settles; CI regression proves tertiary-only update leaves policy blocked, expired legacy cache remains absent after credits-only update, and actual monthly-primary replacement still clears obsolete weekly policy. Same reviewer re-verifies blocker closure before publication.
+Required repair verification: typed checks after source settles; CI regression proves tertiary-only update leaves policy blocked, expired legacy cache remains absent after credits-only update, and actual monthly-primary replacement still clears obsolete weekly policy. Same reviewer re-verifies blocker closure before publication. Later review amendment033/034 supersedes clock-only policy expiry mentioned below: retained99 requires fresh valid lower evidence, refreshed by the existing minute sweep.
 
 Observed before repair: root typecheck exit0; all four new regression files passed standalone TypeScript7 checking with --ignoreConfig. No local tests executed. Privacy scan passed before final integration; final scan remains due if subsequent edits affect it.
 
