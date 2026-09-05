@@ -311,8 +311,8 @@ describe("passthrough scrub of ocxr1 envelopes", () => {
   test("sanitize strips ocxr1 encrypted_content even with empty content", async () => {
     const { createResponsesPassthroughAdapter } = await import("../../../src/adapters/openai-responses");
     const adapter = withTestTranslatorBudget(createResponsesPassthroughAdapter({
-      adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", passthrough: true,
-    } as OcxProviderConfig));
+      adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward",
+    }));
     expect(adapter.passthrough).toBe(true);
     const body = {
       model: "gpt-5.5",
@@ -321,7 +321,7 @@ describe("passthrough scrub of ocxr1 envelopes", () => {
       ],
     };
     // Build the outgoing request the adapter would send; the ocxr1 envelope must be stripped.
-    const req = await adapter.buildRequest({ _rawBody: body, model: "gpt-5.5", messages: [], options: {} } as never) as { body?: string };
+    const req = await adapter.buildRequest(parseRequest(body));
     expect(req.body ?? "").not.toContain(OCX_REASONING_PREFIX);
     expect(req.body ?? "").toContain('"rs_1"'); // reasoning item itself survives
   });

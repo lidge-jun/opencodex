@@ -41,3 +41,9 @@ Screenshot: `assets/001_chat_optin.png`, inspected after capture. The app-level 
 ## Remaining delivery gate
 
 Templated PR, current-head CI, admin-bypass disclosure, fetched dev merge ancestry, and temporary resource teardown must be recorded before completion.
+
+## First full-CI finding
+
+PR #3670 at `4f827844b`: Linux shard 1 failed in `anthropic-thinking-signature.test.ts` because its hand-built `as never` request omitted the required `OcxParsedRequest.context` and used obsolete provider `passthrough` metadata. The new guidance path exposed this malformed fixture. Fix the fixture with the real `parseRequest(body)` and `authMode: forward`, keeping both original envelope-stripping assertions unchanged. Do not add a production fallback for a state the parser cannot produce.
+
+Remote current-head follow-up before this fixture change: typecheck passed and 178 tests across OAuth upsert/native Responses passed. Independent review resolved all findings at `64e3e079a`; latest-head full CI remains required.
