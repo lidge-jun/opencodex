@@ -44,7 +44,6 @@ import type {
 } from "../../codex/app-server-restart-service";
 import type { ManagementContext } from "./context";
 import { acceptSystemRestart } from "./system-restart";
-import { tryGoSidecarHealthForward } from "../go-sidecar-slot";
 
 const ENDPOINT_SAMPLE_LIMIT = 60;
 
@@ -55,13 +54,12 @@ export async function handleSystemRoutes(ctx: ManagementContext): Promise<Respon
     // unauthenticated liveness route off its management ingress, while the connected dashboard
     // still needs bounded process identity and PID replacement evidence (#3158).
     //
-    // ADR-0008 seam: when the optional Go sidecar is attached, this exact route is answered by
-    // the Go binary (byte-identical shape, sidecar's own pid/uptime). The core route holds only
-    // a slot (go-sidecar-slot.ts); the optional module registers its forwarder at activation.
-    // The proxy falls back to the in-process handler below whenever the slot is empty or the
-    // sidecar is unreachable, so the route never goes dark on a supervision blip.
-    const goHealth = await tryGoSidecarHealthForward();
-    if (goHealth) return goHealth;
+    // ADR-0008 ownership (ticket #14): when the optional Go sidecar is attached, this exact
+    // route is answered by the Go binary (byte-identical shape, sidecar's own pid/uptime). The
+    // forwarding happens in the single management-API dispatch branch keyed on the declared
+    // Go-owned marker in route-registry.ts, NOT here; this handler is the in-process fallback
+    // and the differential oracle, so a default install and a supervision blip both answer here
+    // and the route never goes dark.
     return jsonResponse({
       status: "ok",
       service: "opencodex",

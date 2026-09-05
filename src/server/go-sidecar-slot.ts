@@ -1,27 +1,35 @@
 /**
- * Core-owned slot for the optional ADR-0008 Go sidecar health forwarder.
+ * Core-owned slot for the optional ADR-0008 Go sidecar route forwarder.
  *
  * The Go sidecar is an optional subsystem: a default install never spawns it
- * and must execute none of its code. Core route files therefore hold only this
- * slot — null on installs that never activate the sidecar — and the optional
- * module (`src/server/go-sidecar.ts`) registers its forwarder here when it
- * activates. This mirrors `passive-route-linker.ts`: an optional subsystem
- * registers into a core-owned slot at activation instead of being imported.
+ * and must execute none of its code. Core route dispatch therefore holds only
+ * this slot — empty on installs that never activate the sidecar — and the
+ * optional module (`src/server/go-sidecar.ts`) registers its forwarder here
+ * when it activates. This mirrors `passive-route-linker.ts`: an optional
+ * subsystem registers into a core-owned slot at activation instead of being
+ * imported.
  *
- * Contract for any registered forwarder: given the sidecar is attached, return
- * the sidecar's `GET /api/system/health` Response; return null when there is
- * nothing to forward (not attached, not reachable, or a supervision blip) so
- * the caller serves the in-process handler exactly as before. The try/catch
- * lives here so the guarantee belongs to the mechanism instead of being
- * restated by every caller.
+ * Contract for any registered forwarder: given the sidecar is attached, relay
+ * the request (`method` + `pathAndSearch`) to the sidecar's loopback listener
+ * and return its Response; return null when there is nothing to forward (not
+ * attached, not reachable, a supervision blip, or a non-2xx upstream) so the
+ * caller serves the in-process handler exactly as before. The try/catch lives
+ * here so the guarantee belongs to the mechanism instead of being restated by
+ * every caller.
+ *
+ * Dispatch decides WHICH requests reach this slot: `management-api.ts` first
+ * looks up the route in the declared Go-owned surface (`route-registry.ts`) and
+ * only then asks the slot to forward, so the slot never invents surface of its
+ * own and a misconfigured opt-in cannot hijack a route that is not declared
+ * Go-owned.
  */
 
-export type GoSidecarHealthForwarder = () => Promise<Response | null>;
+export type GoOwnedRouteForwarder = (method: string, pathAndSearch: string) => Promise<Response | null>;
 
-let forwarder: GoSidecarHealthForwarder | null = null;
+let forwarder: GoOwnedRouteForwarder | null = null;
 
 /** Install the forwarder. Returns a detach function. */
-export function setGoSidecarHealthForwarder(next: GoSidecarHealthForwarder): () => void {
+export function setGoOwnedRouteForwarder(next: GoOwnedRouteForwarder): () => void {
   forwarder = next;
   return () => {
     // Only detach our own registration: a later activation may have replaced it.
@@ -30,24 +38,24 @@ export function setGoSidecarHealthForwarder(next: GoSidecarHealthForwarder): () 
 }
 
 /**
- * Forward the health request to the attached Go sidecar, or null when no
- * subsystem is active or the sidecar is unreachable. Never throws.
+ * Forward one declared Go-owned request to the attached sidecar, or null when
+ * no subsystem is active or the sidecar is unreachable. Never throws.
  */
-export async function tryGoSidecarHealthForward(): Promise<Response | null> {
+export async function tryForwardGoOwnedRoute(method: string, pathAndSearch: string): Promise<Response | null> {
   if (!forwarder) return null;
   try {
-    return await forwarder();
+    return await forwarder(method, pathAndSearch);
   } catch {
     return null;
   }
 }
 
 /** True when the optional subsystem has installed a forwarder. Test/diagnostic use. */
-export function hasGoSidecarHealthForwarder(): boolean {
+export function hasGoOwnedRouteForwarder(): boolean {
   return forwarder !== null;
 }
 
 /** Test-only reset. */
-export function resetGoSidecarHealthForwarderForTests(): void {
+export function resetGoOwnedRouteForwarderForTests(): void {
   forwarder = null;
 }

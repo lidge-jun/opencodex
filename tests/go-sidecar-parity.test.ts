@@ -7,23 +7,22 @@ import { SERVER_BUDGET_MS } from "./helpers/test-budget";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
 import { VERSION } from "../src/server/management-api";
+import { GO_OWNED_MANAGEMENT_ROUTES } from "../src/server/management/route-registry";
 import {
   GO_SIDECAR_BIN_ENV,
-  GO_SIDECAR_VOLATILE_FIELDS,
   activeGoSidecarBaseUrl,
   resetGoSidecarForTests,
 } from "../src/server/go-sidecar";
 import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /**
- * Differential oracle for the first ADR-0008 increment (devlog/_plan/260905_go_sidecar_takeover).
+ * Differential oracle for the ADR-0008 Go sidecar (devlog/_plan/260905_go_sidecar_takeover).
  *
- * The TS in-process health handler and the Go ocx-sidecar must agree on status,
- * headers, and the normalised body for GET /api/system/health. "Normalised" is
- * a DECLARED set — pid and uptime, the sidecar's own process values — and
- * nothing else, so a later route cannot silently widen what parity means. The
- * volatile field list lives in src/server/go-sidecar.ts and is mirrored here;
- * both must stay in lockstep.
+ * The TS in-process handlers and the Go ocx-sidecar must agree on status,
+ * headers, and the normalised body for every declared Go-owned route.
+ * "Normalised" is the DECLARED per-route volatile set from
+ * src/server/management/route-registry.ts (the `go.volatileFields` marker) and
+ * nothing else, so a later route cannot silently widen what parity means.
  *
  * The divergence class this pins is the one that sank dev2-go: Go runtime
  * numbers rendered under JavaScript labels, or a shape that merely looks like
@@ -71,12 +70,23 @@ const goAvailable = goToolchainAvailable();
 const sidecarBinary: string | null = goAvailable ? buildSidecarBinary() : null;
 
 /**
- * Normalise the declared volatile fields of a health body to a fixed token.
- * Any other difference between two health bodies fails the byte comparison.
+ * The declared Go-owned health route (ADR-0008): the single migrated route the
+ * oracle must prove today. Reads are the only surface that can be Go-owned, so
+ * this must exist whenever the harness runs.
  */
-function normaliseHealthBody(raw: string): string {
+const goOwnedHealth = GO_OWNED_MANAGEMENT_ROUTES.find(
+  route => route.method === "GET" && route.path === "/api/system/health",
+);
+
+/**
+ * Normalise the declared volatile fields of a route body to a fixed token.
+ * Any other difference between two bodies fails the byte comparison. The field
+ * list comes from the route's `go.volatileFields` marker (route-registry.ts):
+ * the oracle normalises exactly the declared set and nothing else.
+ */
+function normaliseBody(raw: string, volatileFields: readonly string[]): string {
   let out = raw;
-  for (const field of GO_SIDECAR_VOLATILE_FIELDS) {
+  for (const field of volatileFields) {
     out = out.replace(
       new RegExp(`"${field}":-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?`, "g"),
       `"${field}":0`,
@@ -84,6 +94,8 @@ function normaliseHealthBody(raw: string): string {
   }
   return out;
 }
+
+const healthVolatileFields = goOwnedHealth?.go.volatileFields ?? [];
 
 interface HealthCapture {
   status: number;
@@ -176,9 +188,13 @@ function runFixtureTest(name: string, fn: (token: string) => Promise<void>): voi
 }
 
 describe.skipIf(!goAvailable || sidecarBinary === null)("ocx-sidecar differential parity (ADR-0008)", () => {
-  test("the Go sidecar binary is buildable before the oracle runs", () => {
+  test("the Go sidecar binary is buildable and health is declared Go-owned before the oracle runs", () => {
     expect(sidecarBinary).toBeTruthy();
     expect(existsSync(sidecarBinary!)).toBe(true);
+    // The harness must prove a declared surface: if the marker is ever removed
+    // the oracle would compare nothing and pass vacuously.
+    expect(goOwnedHealth).toBeDefined();
+    expect(healthVolatileFields).toEqual(["pid", "uptime"]);
   });
 
   runFixtureTest("in-process handler and Go sidecar agree on status, headers, and normalised body", async (token) => {
@@ -218,7 +234,7 @@ describe.skipIf(!goAvailable || sidecarBinary === null)("ocx-sidecar differentia
         // Byte parity after the declared normalisation: the oracle fails on
         // drift rather than logging it. Raw bodies still differ (pid/uptime),
         // so a vacuous equality is impossible.
-        expect(normaliseHealthBody(goBody.body)).toBe(normaliseHealthBody(tsBody.body));
+        expect(normaliseBody(goBody.body, healthVolatileFields)).toBe(normaliseBody(tsBody.body, healthVolatileFields));
 
         // The front door must relay the Go bytes without alteration. The two
         // requests land at different instants, so uptime (a volatile field)
@@ -228,7 +244,7 @@ describe.skipIf(!goAvailable || sidecarBinary === null)("ocx-sidecar differentia
           headers: { accept: "application/json" },
         });
         expect(direct.status).toBe(200);
-        expect(normaliseHealthBody(await direct.text())).toBe(normaliseHealthBody(goBody.body));
+        expect(normaliseBody(await direct.text(), healthVolatileFields)).toBe(normaliseBody(goBody.body, healthVolatileFields));
       } finally {
         await serverB.stop(true);
       }
@@ -252,10 +268,39 @@ describe.skipIf(!goAvailable || sidecarBinary === null)("ocx-sidecar differentia
     }
   });
 
-  test("the declared volatile field set is exactly pid and uptime", () => {
-    // Keep the mirror honest: widening parity would silently tolerate drift in
-    // fields the TS handler owns (status/service/version), which is the exact
-    // divergence class the oracle exists to catch.
-    expect([...GO_SIDECAR_VOLATILE_FIELDS]).toEqual(["pid", "uptime"]);
+  runFixtureTest("an unexpected sidecar exit deregisters the forwarder and health falls back in-process", async (token) => {
+    // #11: a crash must surface, not fall silent. The supervisor deregisters the
+    // forwarder on an unexpected child exit, so the next health response flips
+    // back to the PROXY's pid — observable through the exact route the sidecar
+    // was serving, with no gap where health is unanswered.
+    process.env[GO_SIDECAR_BIN_ENV] = sidecarBinary!;
+    const server = startServer(0);
+    try {
+      const sidecarUrl = await waitFor(() => activeGoSidecarBaseUrl(), 15_000);
+      const served = await captureHealth(server, token);
+      expect(served.parsed.pid).not.toBe(process.pid);
+      expect(served.parsed.pid).toBeGreaterThan(0);
+
+      // The sidecar reports its own pid; kill that process to simulate a crash.
+      const childPid = served.parsed.pid;
+      let killed = false;
+      try {
+        process.kill(childPid, "SIGTERM");
+        killed = true;
+      } catch {
+        killed = false;
+      }
+      expect(killed).toBe(true);
+
+      // The supervisor observes the exit and empties the slot (base URL gone).
+      await waitFor(() => (activeGoSidecarBaseUrl() === null ? true : null), 10_000);
+
+      // Health still answers — from the in-process handler, pid flipped back.
+      const after = await captureHealth(server, token);
+      expect(after.status).toBe(200);
+      expect(after.parsed.pid).toBe(process.pid);
+    } finally {
+      await server.stop(true);
+    }
   });
 });

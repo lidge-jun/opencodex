@@ -14,6 +14,13 @@
  * never import anything from `src/lab/`. The `module` field names the owning file as text
  * for exactly this reason.
  *
+ * The file is also the ADR-0008 Go-ownership ledger. A read route declares itself
+ * Go-owned by carrying a `go` marker (see `GoOwnedRouteDeclaration`); the discriminated
+ * union makes the marker impossible on a write route, `GO_OWNED_MANAGEMENT_ROUTES` is the
+ * derived migrated surface, and the single forwarding branch in `management-api.ts` reads
+ * that data. Migrating a read route is a marker flip here plus the Go handler and oracle
+ * coverage -- never a dispatch edit.
+ *
  * Reconciliation lives in `tests/management-route-registry.test.ts`, which resolves
  * `(method, path)` pairs from source and fails loudly on a route whose method it cannot
  * determine. Adding a route without declaring it here fails that test.
@@ -65,16 +72,69 @@ export type NonLiteralMechanism =
   | "ends-with"
   | "regex";
 
-export interface ManagementRoute {
+/**
+ * ADR-0008 Go-ownership declaration carried by a read route that the Go
+ * ocx-sidecar has taken over (ticket #14: the ownership marker is typed so a
+ * write route cannot carry it, and migration is a flip of this data marker).
+ *
+ * The declaration is per route, not per payload family, because the volatile
+ * fields belong to the route's response contract: when the differential oracle
+ * compares the in-process TypeScript response against the Go-served response it
+ * normalises exactly these top-level JSON keys and nothing else, so a later
+ * route can never silently widen what "equal" means.
+ */
+export interface GoOwnedRouteDeclaration {
+  /**
+   * Top-level JSON body keys of the route's response that may legitimately
+   * differ between the two implementations (process-specific values such as
+   * `pid` or `uptime`). Must be non-empty: a route that migrates while
+   * declaring "nothing may differ" would demand byte equality the harness
+   * cannot actually check, which is a vacuous pass.
+   */
+  readonly volatileFields: readonly string[];
+}
+
+interface ManagementWriteRoute {
+  /** The route mutates state; it must stay in TypeScript until increment 3. */
+  readonly mutates: true;
+  /**
+   * A write route cannot be declared Go-owned. The read/write split is a
+   * discriminated union so the type system refuses `go` on this arm: only a
+   * read route (`mutates: false`) may carry a GoOwnedRouteDeclaration.
+   */
+  readonly go?: never;
+}
+
+interface ManagementReadRoute {
+  readonly mutates: false;
+  /**
+   * When present, the route is declared Go-owned: the single forwarding branch
+   * in `management-api.ts` serves it from the attached ocx-sidecar, and the
+   * in-process handler below remains the fallback and the differential oracle.
+   */
+  readonly go?: GoOwnedRouteDeclaration;
+}
+
+/**
+ * Every reachable management route. The union splits reads from writes so the
+ * `go` ownership marker exists only on the read arm: a write route cannot be
+ * migrated early, at compile time, without a comment or a cast to explain it.
+ */
+export type ManagementRoute = {
   readonly method: HttpMethod;
   readonly path: string;
   /** Owning source file, repo-relative without the `src/` prefix or `.ts` suffix. */
   readonly module: string;
-  readonly mutates: boolean;
   /** Set when the route is not recoverable from an equality scan of its own file. */
   readonly mechanism?: NonLiteralMechanism;
   readonly exempt?: RouteExemption;
-}
+} & (ManagementWriteRoute | ManagementReadRoute);
+
+/** A read route that carries a Go-ownership declaration (ADR-0008). */
+export type GoOwnedManagementRoute = ManagementRoute & {
+  readonly mutates: false;
+  readonly go: GoOwnedRouteDeclaration;
+};
 
 
 /** Every reachable management route. */
@@ -296,11 +356,13 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "POST", path: "/api/storage/codex-logs/repair", module: "server/management/storage-log-guard-routes", mutates: true },
   { method: "POST", path: "/api/storage/codex-logs/unprotect", module: "server/management/storage-log-guard-routes", mutates: true },
   // server/management/system-routes
-  // ADR-0008 seam: GET /api/system/health is answered by the Go ocx-sidecar when the optional
-  // sidecar is attached (spawned from OPENCODEX_GO_SIDECAR_BIN); system-routes stays the
-  // declared owner so this row reconciles for the default install, where the route is served
-  // in-process exactly as before.
-  { method: "GET", path: "/api/system/health", module: "server/management/system-routes", mutates: false },
+  // ADR-0008 ownership: GET /api/system/health is Go-owned (ticket #14). The typed marker below
+  // is the migration act -- the single forwarding branch in management-api.ts serves this route
+  // from the ocx-sidecar when it is attached (spawned from OPENCODEX_GO_SIDECAR_BIN) and the
+  // in-process handler otherwise, so system-routes stays the declared owner for the default
+  // install. volatileFields is the oracle's normalisation contract: pid and uptime are the
+  // sidecar's own process values; everything else must be byte-identical.
+  { method: "GET", path: "/api/system/health", module: "server/management/system-routes", mutates: false, go: { volatileFields: ["pid", "uptime"] } },
   { method: "GET", path: "/api/system/memory", module: "server/management/system-routes", mutates: false },
   { method: "GET", path: "/api/system/windows-replace-retries", module: "server/management/system-routes", mutates: false },
   { method: "POST", path: "/api/system/restart", module: "server/management/system-routes", mutates: true },
@@ -324,3 +386,29 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/lab/artifacts/{digest}", module: "server/management/lab-routes", mutates: false, mechanism: "regex", exempt: { reason: "local-transport", why: "ocx lab reads the same rows from the local SQLite projection; src/cli/lab.ts imports ../lab/query directly and never fetches /api/lab." } },
   { method: "POST", path: "/api/lab/automation/runs/{id}/cancel", module: "server/management/lab-automation-routes", mutates: true, mechanism: "regex", exempt: { reason: "deferred-verb", why: "Lab automation run cancellation has no CLI verb yet. A local SQLite read cannot drive it, so local-transport does not apply.", owner: "wp7", ownerDoc: "devlog/_plan/260828_ocx_agentic_control/060_phase_gui_parity.md" } },
 ];
+
+/**
+ * The declared Go-owned surface (ADR-0008): exactly the read routes whose
+ * `go` marker is flipped. This is the single data source the forwarding branch
+ * and the differential oracle read, so migrating another read route is a
+ * marker flip here plus the matching Go handler and oracle coverage -- never a
+ * second dispatch edit. Read-only by construction: the write arm of the union
+ * cannot carry a `go` declaration, and this filter re-checks at runtime.
+ */
+export const GO_OWNED_MANAGEMENT_ROUTES: readonly GoOwnedManagementRoute[] = MANAGEMENT_ROUTES.filter(
+  (route): route is GoOwnedManagementRoute => route.mutates === false && route.go !== undefined,
+);
+
+/**
+ * Dispatch lookup for the single forwarding branch: the declared Go-owned
+ * route for an exact (method, pathname), or undefined when the request is not
+ * part of the migrated surface. Non-literal (parameterised) routes cannot be
+ * Go-owned today, which is why the lookup is an exact-match scan over a list
+ * that is at most a few entries long.
+ */
+export function findGoOwnedManagementRoute(
+  method: HttpMethod,
+  pathname: string,
+): GoOwnedManagementRoute | undefined {
+  return GO_OWNED_MANAGEMENT_ROUTES.find(route => route.method === method && route.path === pathname);
+}

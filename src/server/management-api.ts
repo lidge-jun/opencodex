@@ -82,6 +82,8 @@ import type { CatalogDisposition, ConvergeCodex } from "../codex/convergence-typ
 import { normalizeCatalogDisposition } from "../codex/catalog-refresh-status";
 import { managementBodyTooLargeResponse } from "./management/body";
 import { handleSessionRoutes } from "./management/session-routes";
+import { findGoOwnedManagementRoute, type HttpMethod } from "./management/route-registry";
+import { tryForwardGoOwnedRoute } from "./go-sidecar-slot";
 
 // installed npm version instead of a stale hardcode.
 export const VERSION = (() => {
@@ -132,6 +134,19 @@ async function handleLabRoutesOnDemand(ctx: ManagementContext): Promise<Response
   return handleLabRoutes(ctx);
 }
 
+/**
+ * Declared-Go-owned dispatch lookup for the single forwarding branch
+ * (ADR-0008, ticket #14). The registry owns the migrated surface; this helper
+ * only turns an incoming request into the declared route, then hands it to the
+ * optional-subsystem slot. Null means "not declared Go-owned" OR "sidecar not
+ * attached / unreachable" — both fall through to the in-process handlers.
+ */
+async function tryForwardDeclaredGoOwnedRoute(req: Request, url: URL): Promise<Response | null> {
+  const declared = findGoOwnedManagementRoute(req.method as HttpMethod, url.pathname);
+  if (!declared) return null;
+  return tryForwardGoOwnedRoute(req.method, `${url.pathname}${url.search}`);
+}
+
 export async function handleManagementAPI(
   req: Request,
   url: URL,
@@ -151,6 +166,18 @@ export async function handleManagementAPI(
       return jsonResponse({ error: "request body too large" }, 413, req, config);
     }
   }
+
+  // ADR-0008 single forwarding branch (ticket #14). When the management-route registry
+  // declares this exact request Go-owned and the optional ocx-sidecar is attached, answer it
+  // from the Go binary with the response relayed verbatim. Returns null when the request is
+  // not part of the declared Go-owned surface or when no sidecar is attached, so dispatch
+  // falls through to the in-process handlers below: a default install and a supervision blip
+  // behave byte-identically to a build without Go, and the in-process handler stays the
+  // differential oracle. One branch, driven by data — migrating another read route flips the
+  // `go` marker in route-registry.ts and never edits this dispatch.
+  const goOwnedResponse = await tryForwardDeclaredGoOwnedRoute(req, url);
+  if (goOwnedResponse) return goOwnedResponse;
+
   async function convergeCodexCatalog(): Promise<CatalogDisposition> {
     let convergenceInvoked = false;
     let managementConvergeCodex: ConvergeCodex | undefined;

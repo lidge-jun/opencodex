@@ -2,12 +2,14 @@
  * Optional Go sidecar supervision for the first incremental-takeover seam
  * (ADR-0008, devlog/_plan/260905_go_sidecar_takeover).
  *
- * The TypeScript front door keeps owning `GET /api/system/health`; this module
- * spawns, supervises, and forwards to a fresh Go binary (`go/cmd/ocx-sidecar`)
- * that serves that one route with byte-identical HTTP semantics. The Go body
- * carries the sidecar's own pid and uptime; status, service, and version equal
- * the TypeScript values because the parent passes the package version at spawn
- * time.
+ * The TypeScript front door keeps owning dispatch for every management route;
+ * this module spawns, supervises, and forwards declared Go-owned management routes to a fresh Go
+ * binary (`go/cmd/ocx-sidecar`) that serves them with byte-identical HTTP semantics.
+ * Which routes are forwarded is DATA, not code: the ownership markers live in
+ * `src/server/management/route-registry.ts`, and `management-api.ts` consults them
+ * before asking this module's forwarder. The Go body carries the sidecar's own pid and
+ * uptime; status, service, and version equal the TypeScript values because the parent
+ * passes the package version at spawn time.
  *
  * Strictly optional and default-OFF. A process that never activates the
  * sidecar (no `OPENCODEX_GO_SIDECAR_BIN`) executes no spawn and imports no
@@ -16,7 +18,7 @@
  * registered its forwarder at activation (the AGENTS.md optional-subsystem
  * pattern, same shape as `passive-route-linker.ts`).
  *
- * The supervision model is deliberately small for a first increment: spawn,
+ * The supervision model is deliberately small for the first increments: spawn,
  * wait for the ready line, register the forwarder, and on an unexpected child
  * exit deregister (falling back to the in-process TypeScript handler) and log.
  * There is no respawn loop yet; that is a later increment once the seam has
@@ -25,7 +27,7 @@
 import { existsSync } from "node:fs";
 import { directLocalHttpFetch } from "./direct-local-http";
 import { registerOptionalShutdownHook } from "../lib/optional-shutdown-hooks";
-import { setGoSidecarHealthForwarder } from "./go-sidecar-slot";
+import { setGoOwnedRouteForwarder } from "./go-sidecar-slot";
 
 /** Environment variable naming the ocx-sidecar binary to spawn. */
 export const GO_SIDECAR_BIN_ENV = "OPENCODEX_GO_SIDECAR_BIN";
@@ -38,14 +40,6 @@ export const GO_SIDECAR_READY_PREFIX = "ocx-sidecar-ready";
 
 /** How long the front door waits for the child's ready line before giving up. */
 export const GO_SIDECAR_READY_TIMEOUT_MS = 10_000;
-
-/**
- * The declared volatile field set of the health payload. Byte comparisons of
- * the two implementations must normalise exactly these fields and nothing else,
- * so the oracle cannot silently widen what "equal" means. Mirrored by the Bun
- * differential harness in tests/go-sidecar-parity.test.ts.
- */
-export const GO_SIDECAR_VOLATILE_FIELDS = ["pid", "uptime"] as const;
 
 type KillableChild = {
   exited: Promise<number>;
@@ -79,7 +73,7 @@ function parseReadyLine(line: string): string | null {
   try {
     const parsed = new URL(`http://${url}`);
     // Loopback-only by construction: the sidecar binds 127.0.0.1. Refuse any
-    // other host on the ready line instead of forwarding health to it.
+    // other host on the ready line instead of forwarding management reads to it.
     if (parsed.hostname !== "127.0.0.1" && parsed.hostname !== "localhost") return null;
     return `http://${parsed.host}`;
   } catch {
@@ -148,13 +142,17 @@ function warnActivation(message: string): void {
   console.warn(`[go-sidecar] ${message}; serving health in-process`);
 }
 
-/** Forward one health request to a ready sidecar, or null on any failure. */
-async function forwardTo(baseUrl: string): Promise<Response | null> {
+/** Forward one declared Go-owned route request to a ready sidecar, or null on any failure. */
+async function forwardTo(baseUrl: string, method: string, pathAndSearch: string): Promise<Response | null> {
   try {
-    const upstream = await directLocalHttpFetch(new URL("/api/system/health", baseUrl), {
+    const upstream = await directLocalHttpFetch(new URL(pathAndSearch, baseUrl), {
+      method,
       headers: { accept: "application/json" },
     });
     if (!upstream.ok) return null;
+    // Relay the sidecar's response with the in-process handler's header shape:
+    // Content-Type plus the body verbatim. The management-API CORS wrapper adds
+    // the shared headers downstream exactly as it does for an in-process route.
     return new Response(upstream.body, {
       status: upstream.status,
       headers: { "content-type": upstream.headers.get("content-type") ?? "application/json" },
@@ -253,13 +251,13 @@ export function activateGoSidecar(version: string): { stop(): void } | null {
     if (stopped || myGeneration !== generation) return;
     readyBaseUrl = parsed;
     const baseUrl = parsed;
-    const detach = setGoSidecarHealthForwarder(() => forwardTo(baseUrl));
+    const detach = setGoOwnedRouteForwarder((method, pathAndSearch) => forwardTo(baseUrl, method, pathAndSearch));
     if (stopped || myGeneration !== generation) {
       detach();
       return;
     }
     forwardDetach = detach;
-    console.log(`[go-sidecar] ocx-sidecar attached at ${parsed}; GET /api/system/health served by Go`);
+    console.log(`[go-sidecar] ocx-sidecar attached at ${parsed}; declared Go-owned routes served by Go`);
   });
 
   return { stop: stopSidecar };
