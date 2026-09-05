@@ -25,6 +25,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import { shouldInjectApiAuthHeader, standaloneCodexRoutingTarget } from "../codex/inject";
 import { FORMAT_MEDIA_TYPE, serializeDocument, type ConfigFormat } from "../integrations/serialize";
 import { canonicalizeReasoningEfforts } from "../reasoning-effort";
+import { expandFastExportModels } from "./config-export/fast-models";
 import { probeHostname } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
 
@@ -587,9 +588,8 @@ export function opencodeProviderBlocks(
 ): OpencodeProviderBlocks {
   const v1Models: Record<string, OpencodeModelEntry> = {};
   const v2Models: Record<string, OpencodeV2ModelEntry> = {};
-  for (const model of catalogModels) {
+  for (const model of expandFastExportModels(catalogModels)) {
     const key = model.namespaced;
-    if (v1Models[key]) continue; // first entry wins; native rows lead /api/models
     const entry: OpencodeModelEntry = { name: exportModelLabel(model) };
     const context = authoritativeContextWindow(model.contextWindow);
     if (context !== undefined) {

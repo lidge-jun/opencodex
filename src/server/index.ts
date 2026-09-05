@@ -234,9 +234,7 @@ import { recordCursorSeen } from "../integrations/cursor-seen";
 import { detectCursorInstalls } from "../integrations/cursor-detect";
 import { loadCursorEffortTable } from "../integrations/cursor-effort-table";
 import { expandCursorEffortRow, knownEffortRowIds } from "./effort-row";
-import { expandFastRow, fastRowEligible } from "./fast-row";
-// Direct import: the catalog facade does not re-export this table.
-import { UPSTREAM_NATIVE_ENTRIES } from "../codex/catalog/metadata";
+import { catalogFastRowEligible, expandFastRow } from "./fast-row";
 
 export const MAX_WS_FRAME_BYTES = 50 * 1024 * 1024;
 const WEBSOCKET_IDLE_TIMEOUT_SECONDS = 0;
@@ -1457,15 +1455,9 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
          * the raw OpenAI mapper further down does too; defining it there would leave this
          * use in its temporal dead zone.
          */
-        const nativeFastEligible = (metadataId: string): boolean => {
-          if (config.fastRows !== true) return false;
-          const upstream = UPSTREAM_NATIVE_ENTRIES.get(metadataId);
-          const speedTiers = upstream?.additional_speed_tiers;
-          if (!Array.isArray(speedTiers) || !speedTiers.includes("fast")) return false;
-          const nativeProvider = config.providers[OPENAI_CODEX_PROVIDER_ID];
-          return nativeProvider !== undefined
-            && fastRowEligible(nativeProvider, metadataId, OPENAI_CODEX_PROVIDER_ID);
-        };
+        const nativeFastEligible = (metadataId: string): boolean =>
+          catalogFastRowEligible(config, { provider: OPENAI_CODEX_PROVIDER_ID, id: metadataId, native: true });
+
         /**
          * Whether a routed catalog row may carry a Fast sibling.
          *
@@ -1479,12 +1471,9 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
          * both; defining it near the raw OpenAI mapper below would leave that use in its
          * temporal dead zone.
          */
-        const catalogRowFastEligible = (m: { provider: string; id: string; supportsServiceTier?: boolean }): boolean => {
-          if (config.fastRows !== true) return false;
-          if (m.supportsServiceTier !== undefined) return m.supportsServiceTier === true;
-          const rowProvider = config.providers[m.provider];
-          return rowProvider !== undefined && fastRowEligible(rowProvider, m.id, m.provider);
-        };
+        const catalogRowFastEligible = (m: { provider: string; id: string; supportsServiceTier?: boolean }): boolean =>
+          catalogFastRowEligible(config, m);
+
         if (wantsAnthropicList && !url.searchParams.has("client_version")) {
           if (config.claudeCode?.enabled === false) return jsonResponse({ data: [] }, 200, req, policy);
           // Build Desktop 3P registry so inbound alias resolution works for subsequent requests.
@@ -1514,9 +1503,8 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             activeDesktop3pAlias,
             nativeContextLimits(config),
             config.fastMode,
-            // Presence is the gate: undefined when the flag is off, so a default install
-            // publishes no Fast rows here.
-            config.fastRows === true
+            // Explicit opt-out omits the Fast predicate.
+            config.fastRows !== false
               ? (model: { provider: string; id: string; supportsServiceTier?: boolean }) =>
                 model.provider === "native"
                   ? nativeFastEligible(model.id)
@@ -1651,8 +1639,8 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         // The projection is opt-in. Keep the default path free of Cursor install detection,
         // and resolve the bundle table once for the whole list rather than once per row.
         const effortRowsEnabled = config.cursorEffortRows === true;
-        // Same opt-in discipline: with the flag off, no policy resolution and no extra rows.
-        const fastRowsEnabled = config.fastRows === true;
+        // Explicit opt-out skips policy resolution and additional rows.
+        const fastRowsEnabled = config.fastRows !== false;
         // One inventory serves both grammars; building it twice would double the work on a
         // hot path for no benefit.
         const effortRowKnownIds = effortRowsEnabled || fastRowsEnabled

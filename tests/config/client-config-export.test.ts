@@ -14,6 +14,7 @@ import {
   buildClientConfigText,
   isExportClientId,
   normalizeExportModels,
+  opencodeProviderBlocks,
   ompModelsConfigPath,
   type DshGeneratedConfig,
   type ExportContext,
@@ -21,7 +22,8 @@ import {
   type OpencodeGeneratedConfig,
   type PiGeneratedConfig,
 } from "../../src/clients/config-export";
-import { buildOpencodeProviderBlockFromCatalog, opencodeGlobalConfigPath } from "../../src/cli/opencode";
+import { buildOpencodeProviderBlockFromCatalog, opencodeCatalogFromProxyRows, opencodeGlobalConfigPath } from "../../src/cli/opencode";
+import { exportModelsFromProxyRows } from "../../src/cli/export-command";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import * as facade from "../../src/clients/config-export";
@@ -648,6 +650,144 @@ describe("stable ordering (accept criterion 4)", () => {
     expect(Object.keys(opencodeConfig(dupes).provider.opencodex!.models)).toEqual(["gpt-5.6-luna"]);
     expect(piConfig(dupes).providers.opencodex!.models).toHaveLength(1);
     expect(piConfig(dupes).providers.opencodex!.models[0]!.name).toBe("gpt-5.6-luna (native)");
+  });
+});
+
+describe("hub-resolved Fast exports", () => {
+  const eligible: ExportModel = {
+    namespaced: "remote/model", provider: "remote", id: "model", displayName: "Remote Model",
+    fastRowAvailable: true, contextWindow: 8192, inputModalities: ["text", "image"],
+    reasoningEfforts: ["none", "high", "ultra"], defaultReasoningEffort: "high",
+  };
+
+  test("preserves underlying metadata, labels Fast, and normalizes idempotently without mutation", () => {
+    const native = Object.freeze({ ...eligible, namespaced: "native-model", id: "native-model", provider: "openai", native: true });
+    const input = Object.freeze([native, Object.freeze({ ...eligible })]);
+    const before = JSON.stringify(input);
+    const expanded = normalizeExportModels(input);
+    expect(expanded.map(model => model.namespaced)).toEqual([
+      "native-model", "native-model--fast", "remote/model", "remote/model--fast",
+    ]);
+    expect(expanded[1]).toEqual({
+      ...native, namespaced: "native-model--fast", displayName: "Remote Model Fast", fastRowAvailable: false,
+    });
+    expect(expanded[3]).toEqual({
+      ...eligible, namespaced: "remote/model--fast", displayName: "Remote Model Fast", fastRowAvailable: false,
+    });
+    expect(normalizeExportModels(expanded)).toEqual(expanded);
+    expect(JSON.stringify(input)).toBe(before);
+  });
+
+  test("reserves all exact IDs before synthesis in either order and keeps the first duplicate", () => {
+    const real = { ...eligible, namespaced: "remote/model--fast", id: "real-fast", displayName: "Real model", fastRowAvailable: false };
+    const shadow = { ...real, displayName: "Shadow loses", fastRowAvailable: true };
+    for (const input of [[eligible, real, shadow], [real, shadow, eligible]]) {
+      const expanded = normalizeExportModels(input);
+      expect(expanded).toEqual([eligible, real]);
+      expect(normalizeExportModels(expanded)).toEqual(expanded);
+    }
+    const unavailable = { ...eligible, fastRowAvailable: false };
+    expect(normalizeExportModels([unavailable, eligible])).toEqual([unavailable]);
+    expect(normalizeExportModels([eligible, unavailable]).map(model => model.namespaced))
+      .toEqual(["remote/model", "remote/model--fast"]);
+  });
+
+  for (const client of EXPORT_CLIENT_IDS) {
+    test(`${client} emits only hub-approved selectors and remains stable across ordering and re-expansion`, () => {
+      const absent: ExportModel = { namespaced: "remote/old-hub", provider: "remote", id: "old-hub", contextWindow: 8192 };
+      const disabled = { ...eligible, namespaced: "remote/off", fastRowAvailable: false };
+      const models = [eligible, absent, disabled];
+      const context = ctx({ models, config: cfg({ fastRows: false }) });
+      const document = buildClientConfig(client, context);
+      const bytes = JSON.stringify(document);
+      expect(EXPORT_CLIENTS[client].summarize(document).modelCount).toBe(4);
+      expect(bytes).toContain('"remote/model--fast"');
+      expect(bytes).not.toContain("remote/off--fast");
+      expect(bytes).not.toContain("remote/old-hub--fast");
+      expect(bytes).not.toContain("--fast--fast");
+      expect(bytes).not.toContain("fastRowAvailable");
+      expect(JSON.stringify(buildClientConfig(client, { ...context, models: [...models].reverse() }))).toBe(bytes);
+      expect(JSON.stringify(buildClientConfig(client, { ...context, models: normalizeExportModels(models) }))).toBe(bytes);
+      // Local default-on cannot override an old or explicitly disabled hub.
+      const localOn = buildClientConfig(client, ctx({ models: [absent, disabled], config: cfg({ fastRows: true }) }));
+      expect(EXPORT_CLIENTS[client].summarize(localOn).modelCount).toBe(2);
+      expect(JSON.stringify(localOn)).not.toContain("--fast");
+    });
+  }
+
+  test("pi Fast rows retain modalities, context and the exact thinking ladder", () => {
+    const models = piConfig(ctx({ models: [eligible] })).providers.opencodex!.models;
+    expect(models).toHaveLength(2);
+    expect(models[1]).toEqual({
+      id: "remote/model--fast", name: "Remote Model Fast (remote)", input: ["text", "image"],
+      contextWindow: 8192, maxTokens: 8192, reasoning: true,
+      thinkingLevelMap: { off: "none", minimal: null, low: null, medium: null, high: "high", xhigh: null, max: "ultra" },
+    });
+  });
+
+  test("direct OpenCode V1 and V2 expand the hub projection and preserve limits, variants and auth", () => {
+    const sparse = { namespaced: "z/sparse", fastRowAvailable: true };
+    const real = { ...eligible, namespaced: "remote/model--fast", displayName: "Exact row", fastRowAvailable: false };
+    const catalog = [sparse, eligible, real, { ...real, displayName: "Duplicate loses" }];
+    const blocks = opencodeProviderBlocks(BASE_URL, catalog, cfg({ fastRows: false }));
+    for (const block of [blocks.v1, blocks.v2]) {
+      expect(Object.keys(block.models)).toEqual(["z/sparse", "remote/model", "remote/model--fast", "z/sparse--fast"]);
+      expect(block.models["remote/model--fast"]!.name).toBe("Exact row (remote)");
+      expect(block.models["z/sparse--fast"]).toEqual({ name: "z/sparse Fast (routed)" });
+    }
+    const expanded = opencodeProviderBlocks(BASE_URL, [eligible], cfg({ fastRows: false }));
+    expect(expanded.v1.models["remote/model--fast"]).toEqual({
+      name: "Remote Model Fast (remote)", limit: { context: 8192, output: 8192 },
+    });
+    expect(expanded.v2.models["remote/model--fast"]).toEqual({
+      name: "Remote Model Fast (remote)", limit: { context: 8192, output: 8192 },
+      variants: [
+        { id: "high", settings: { reasoningEffort: "high" } },
+        { id: "ultra", settings: { reasoningEffort: "ultra" } },
+      ],
+    });
+    expect(expanded.v1.options).toEqual({ baseURL: BASE_URL, apiKey: OPENCODE_API_KEY_ENV_REF });
+    expect(expanded.v2.settings).toEqual({ baseURL: BASE_URL, apiKey: OPENCODE_API_KEY_ENV_REF });
+    const remote = opencodeProviderBlocks(BASE_URL, [eligible], cfg({ hostname: "0.0.0.0" }));
+    expect(remote.v1.options).toEqual({ baseURL: BASE_URL, headers: { "x-opencodex-api-key": OPENCODE_API_KEY_ENV_REF } });
+    expect(remote.v2.settings).toEqual(remote.v1.options);
+  });
+
+  test("both CLI projections retain hub true/false/absence despite conflicting local settings", () => {
+    for (const localFast of [false, true]) {
+      for (const hubFast of [undefined, false, true]) {
+        const row = { ...eligible, fastRowAvailable: hubFast };
+        const config = cfg({ fastRows: localFast }); // No matching remote provider locally.
+        const catalog = opencodeCatalogFromProxyRows([row], config);
+        const models = exportModelsFromProxyRows([row], config);
+        expect(catalog[0]!.fastRowAvailable).toBe(hubFast);
+        expect(models[0]!.fastRowAvailable).toBe(hubFast);
+        if (hubFast === undefined) {
+          expect(catalog[0]).not.toHaveProperty("fastRowAvailable");
+          expect(models[0]).not.toHaveProperty("fastRowAvailable");
+        }
+        const expected = hubFast === true ? ["remote/model", "remote/model--fast"] : ["remote/model"];
+        expect(normalizeExportModels(models).map(model => model.namespaced)).toEqual(expected);
+        const direct = opencodeProviderBlocks(BASE_URL, catalog, config);
+        expect(Object.keys(direct.v1.models)).toEqual(expected);
+        expect(Object.keys(direct.v2.models)).toEqual(expected);
+      }
+    }
+  });
+
+  test("filtered and duplicate rows cannot donate availability; a hub collision decision survives filtering", () => {
+    const visible = { ...eligible, fastRowAvailable: false };
+    const rows = [
+      { ...eligible, disabled: true }, visible, eligible,
+      { ...eligible, namespaced: "remote/model--fast", disabled: true },
+    ];
+    const config = cfg({ fastRows: true });
+    const projected = exportModelsFromProxyRows(rows, config);
+    expect(projected).toEqual([visible]);
+    expect(normalizeExportModels(projected)).toEqual([visible]);
+    const blocks = opencodeProviderBlocks(BASE_URL, opencodeCatalogFromProxyRows(rows, config), config);
+    expect(Object.keys(blocks.v1.models)).toEqual(["remote/model"]);
+    expect(Object.keys(blocks.v2.models)).toEqual(["remote/model"]);
   });
 });
 

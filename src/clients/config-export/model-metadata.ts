@@ -1,5 +1,6 @@
 // Shared client export model metadata.
 import { SCHEMA_REQUIRED_OUTPUT_BUDGET } from "./constants";
+import { expandFastExportModels } from "./fast-models";
 import type { OpencodeCatalogModel, ExportModel, ExportClientId, ManagedContribution } from "./contracts";
 import type { OcxConfig } from "../../types";
 import { shouldInjectApiAuthHeader } from "../../codex/inject";
@@ -86,20 +87,14 @@ export function exportModelLabel(model: OpencodeCatalogModel): string {
 }
 
 /**
- * Shared precondition for every serializer: drop duplicate `namespaced` (first wins,
- * native rows lead `/api/models`) and sort by `namespaced` so two calls with the same
+ * Shared precondition for every serializer: expand hub-approved Fast rows, drop duplicate
+ * `namespaced` (first wins, native rows lead `/api/models`) and sort so calls with the same
  * models produce identical bytes. Stability matters because the GUI shows a diffable
  * preview and agents may checksum the payload.
  */
 export function normalizeExportModels(models: readonly ExportModel[]): ExportModel[] {
-  const seen = new Set<string>();
-  const unique: ExportModel[] = [];
-  for (const model of models) {
-    if (seen.has(model.namespaced)) continue;
-    seen.add(model.namespaced);
-    unique.push(model);
-  }
-  return unique.sort((a, b) => (a.namespaced < b.namespaced ? -1 : a.namespaced > b.namespaced ? 1 : 0));
+  return expandFastExportModels(models)
+    .sort((a, b) => (a.namespaced < b.namespaced ? -1 : a.namespaced > b.namespaced ? 1 : 0));
 }
 
 /** Extra headers a non-loopback bind needs, or nothing on loopback. */

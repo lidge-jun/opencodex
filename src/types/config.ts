@@ -376,10 +376,11 @@ export interface OcxConfig {
    */
   cursorEffortRows?: boolean;
   /**
-   * Opt-in synthetic Fast selectors. When true, the raw OpenAI-style `/v1/models` list and
+   * Default-on synthetic Fast selectors. The raw OpenAI-style `/v1/models` list and
    * Claude Code discovery add a `<base-id>--fast` row for every model whose resolved Fast
    * policy is eligible, and selecting one routes the base model with the canonical
-   * `priority` service tier. Omitted/false preserves discovery output exactly.
+   * `priority` service tier. Client config exports include the same selectors. Set false
+   * to disable them; omission enables them.
    */
   fastRows?: boolean;
   /**

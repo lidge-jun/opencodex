@@ -28,6 +28,8 @@ import type { OcxConfig } from "../../types";
 import { ensureCodexEntitlementFreshness } from "../../codex/model-entitlements";
 import { fetchAllModels } from "./shared";
 import { initialModelSelectionPending } from "../../providers/initial-model-selection";
+import { catalogFastRowEligible, fastRowId } from "../fast-row";
+import { knownEffortRowIds } from "../effort-row";
 
 /**
  * One row of the `/api/models` list. Routed rows spread a `CatalogModel`, so the shape is
@@ -43,6 +45,7 @@ export type ManagementModelRow = Partial<CatalogModel> & {
   native?: boolean;
   custom?: boolean;
   customId?: string;
+  fastRowAvailable?: boolean;
   displayNameOverride?: string;
   displayNameSource?: "operator" | "provider" | "fallback";
 };
@@ -166,10 +169,20 @@ export async function listManagementModelRows(
       ...(contextCap !== undefined ? { contextCap, contextCapped: m.contextCapped === true } : {}),
     };
   }).filter((row): row is ManagementModelRow => row !== null);
-  return [...native, ...dedupedRouted, ...visibleCustomModels].map(row =>
-    initialModelSelectionPending(config.providers[row.provider])
-      ? { ...row, disabled: true, initialSelectionPending: true }
-      : row);
+  const rows = [...native, ...dedupedRouted, ...visibleCustomModels];
+  // Include disabled rows and configured aliases before the export visibility filter:
+  // a hidden real `x--fast` must never become a synthetic selector for another model.
+  const knownIds = config.fastRows === false ? new Set<string>() : knownEffortRowIds(config);
+  for (const row of rows) knownIds.add(row.namespaced);
+  return rows.map(row => {
+    const pending = initialModelSelectionPending(config.providers[row.provider]);
+    return {
+      ...row,
+      ...(pending ? { disabled: true, initialSelectionPending: true } : {}),
+      fastRowAvailable: !row.disabled && !pending
+        && !knownIds.has(fastRowId(row.namespaced)) && catalogFastRowEligible(config, row),
+    };
+  });
 }
 
 /** `/api/models` row → the narrower input the client-config serializers accept. */
@@ -178,6 +191,7 @@ export function toExportModel(row: ManagementModelRow): ExportModel {
     namespaced: row.namespaced,
     provider: row.provider,
     id: row.id,
+    fastRowAvailable: row.fastRowAvailable === true,
     ...(row.native ? { native: true } : {}),
     ...(row.displayName && row.displayNameSource !== "fallback" ? { displayName: row.displayName } : {}),
     ...(row.contextWindow !== undefined ? { contextWindow: row.contextWindow } : {}),

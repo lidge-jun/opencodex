@@ -1113,9 +1113,8 @@ const configSchema = z.object({
   defaultModelAliases: z.boolean().optional(),
   // Malformed hand edits disable this opt-in projection without rejecting providers.
   cursorEffortRows: z.boolean().optional().catch(false),
-  // Same opt-in discipline: a malformed hand edit degrades to off rather than rejecting
-  // every provider.
-  fastRows: z.boolean().optional().catch(false),
+  // Fast selectors default on; malformed hand edits disable them without rejecting providers.
+  fastRows: z.boolean().default(true).catch(false),
   // Ultra Fast is opt-in for the same reason and degrades the same way: a malformed hand
   // edit turns the tier off rather than rejecting the config that carries it.
   ultraFastTier: z.boolean().optional().catch(false),
@@ -3684,6 +3683,7 @@ export function getDefaultConfig(): OcxConfig {
   return {
     port: 10100,
     emptyCompletionRetry: false,
+    fastRows: true,
     managementUsageMaxReadBytes: 64 * 1024 * 1024,
     appOwnedMemoryBudgetMb: DEFAULT_APP_OWNED_MEMORY_BUDGET_BYTES / (1024 * 1024),
     // Fresh/re-initialized configs are already written in the current three-tier

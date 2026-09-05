@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { clearModelCache, setCached } from "../../src/codex/model-cache";
 import { knownEffortRowIds, parseEffortRowId, parseRequestEffortRowId } from "../../src/server/effort-row";
 import {
+  catalogFastRowEligible,
   effortBaseCarriesFastMarker,
   expandFastRow,
   fastRowBases,
@@ -23,7 +24,7 @@ import type { OcxConfig, OcxProviderConfig } from "../../src/types";
  * it, and a suffix-shape composite guard suppressed rows this feature itself publishes.
  */
 
-const OFF = {} as Pick<OcxConfig, "fastRows">;
+const OFF = { fastRows: false } as Pick<OcxConfig, "fastRows">;
 const ON = { fastRows: true } as Pick<OcxConfig, "fastRows">;
 
 function provider(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig {
@@ -45,11 +46,14 @@ function configWith(providers: Record<string, OcxProviderConfig>, extra: Partial
 }
 
 describe("fast-row grammar", () => {
-  test("the flag is off by default, on both the parser and the expander", () => {
-    // The path every existing install runs. Both inventories are optional, so this needs no
-    // config at all.
+  test("explicit opt-out disables both the parser and the expander", () => {
     expect(parseFastRowId("x--fast", OFF)).toBeNull();
     expect(expandFastRow({ id: "x" }, true, OFF)).toEqual([{ id: "x" }]);
+  });
+
+  test("omission enables parsing and additive listing", () => {
+    expect(parseFastRowId("x--fast", {}, new Set(), new Set(["x"]))).toEqual({ baseId: "x" });
+    expect(expandFastRow({ id: "x" }, true, {})).toEqual([{ id: "x" }, { id: "x--fast" }]);
   });
 
   test("a fast row is additive, never a replacement", () => {
@@ -370,3 +374,12 @@ describe("review findings from PR #3457", () => {
   });
 });
 
+
+
+test("shared native Fast listing policy requires upstream evidence and allows account selectors", () => {
+  const config = configWith({ openai: provider({ supportsServiceTier: true }) }, { fastRows: undefined });
+  expect(catalogFastRowEligible(config, { provider: "openai", id: "gpt-5.6-sol", native: true })).toBe(true);
+  expect(catalogFastRowEligible(config, { provider: "openai", id: "account/gpt-5.6-sol", native: true })).toBe(true);
+  expect(catalogFastRowEligible(config, { provider: "openai", id: "unknown-native", native: true })).toBe(false);
+  expect(catalogFastRowEligible({ ...config, fastRows: false }, { provider: "openai", id: "gpt-5.6-sol", native: true })).toBe(false);
+});

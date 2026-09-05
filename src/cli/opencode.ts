@@ -88,6 +88,8 @@ export interface OpencodeRoutedModel {
 
 /** Row shape from authenticated GET /api/models on the running proxy. */
 export interface OpencodeProxyModelRow {
+  /** Hub-resolved availability, independent of the launcher's local Fast setting. */
+  fastRowAvailable?: boolean;
   provider?: string;
   id?: string;
   namespaced?: string;
@@ -389,6 +391,7 @@ export function opencodeCatalogFromProxyRows(
       id: row.id,
       contextWindow: row.contextWindow,
       displayName: row.displayNameSource === "fallback" ? undefined : row.displayName,
+      ...(typeof row.fastRowAvailable === "boolean" ? { fastRowAvailable: row.fastRowAvailable } : {}),
       ...(Array.isArray(row.reasoningEfforts) && row.reasoningEfforts.length > 0
         ? { reasoningEfforts: [...row.reasoningEfforts] }
         : {}),

@@ -31,6 +31,8 @@ export interface OpencodeLaunchEnv {
 /** Visible catalog entry keyed by the proxy's canonical namespaced selector. */
 export interface OpencodeCatalogModel {
   namespaced: string;
+  /** Hub-resolved Fast availability. Missing metadata means unavailable. */
+  fastRowAvailable?: boolean;
   native?: boolean;
   provider?: string;
   id?: string;
@@ -54,6 +56,8 @@ export interface OpencodeCatalogModel {
 export interface ExportModel {
   /** Canonical proxy selector: `provider/id`, or bare slug for native. */
   namespaced: string;
+  /** Hub-resolved Fast availability; exporters never infer it from local config. */
+  fastRowAvailable?: boolean;
   provider: string;
   id: string;
   /** Native OpenAI entry. Read by the shared label rule. */

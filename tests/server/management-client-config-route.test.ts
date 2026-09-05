@@ -79,6 +79,7 @@ interface ModelRow {
   namespaced: string;
   disabled: boolean;
   native?: boolean;
+  fastRowAvailable?: boolean;
   displayName?: string;
   displayNameSource?: "operator" | "provider" | "fallback";
   contextWindow?: number;
@@ -149,6 +150,7 @@ function toExportModel(row: ModelRow): ExportModel {
     namespaced: row.namespaced,
     provider: row.provider,
     id: row.id,
+    fastRowAvailable: row.fastRowAvailable === true,
     ...(row.native ? { native: true } : {}),
     ...(row.displayName && row.displayNameSource !== "fallback" ? { displayName: row.displayName } : {}),
     ...(row.contextWindow !== undefined ? { contextWindow: row.contextWindow } : {}),
@@ -552,4 +554,49 @@ describe("GET /api/client-config", () => {
     );
     expect(response?.status).toBe(403);
   }, 15_000);
+});
+
+
+describe("default Fast availability reaches external exports", () => {
+  function fastConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
+    return baseConfig({
+      defaultProvider: "fixture",
+      providers: { fixture: {
+        adapter: "openai-responses", baseUrl: "https://fixture.example/v1",
+        liveModels: false, models: ["m", "slow"], supportsServiceTier: true,
+        modelSupportsServiceTier: { slow: false },
+      } },
+      ...overrides,
+    });
+  }
+
+  test("omitted flag exports eligible Fast to pi, with the base still selectable", async () => {
+    const config = fastConfig();
+    const rows = await modelRows(config);
+    expect(rows.find(row => row.namespaced === "fixture/m")?.fastRowAvailable).toBe(true);
+    expect(rows.find(row => row.namespaced === "fixture/slow")?.fastRowAvailable).toBe(false);
+    const response = await clientConfigApi(config, "?client=pi");
+    const body = await response.json() as ClientConfigEnvelope;
+    const models = (body.config as PiGeneratedConfig).providers.opencodex.models.map(model => model.id);
+    expect(models).toContain("fixture/m");
+    expect(models).toContain("fixture/m--fast");
+    expect(models).not.toContain("fixture/slow--fast");
+  });
+
+  test("explicit off survives management and export projection", async () => {
+    const config = fastConfig({ fastRows: false });
+    const rows = await loadExportModels(config);
+    expect(rows.every(row => row.fastRowAvailable === false)).toBe(true);
+    const result = buildClientConfig("pi", { baseUrl: "http://127.0.0.1:10100/v1", models: rows, config }) as PiGeneratedConfig;
+    expect(result.providers.opencodex.models.map(model => model.id)).not.toContain("fixture/m--fast");
+  });
+
+  test("a disabled real Fast-named model defeats synthesis before visibility filtering", async () => {
+    const config = fastConfig({ disabledModels: ["fixture/m--fast"] });
+    config.providers.fixture.models = ["m", "m--fast"];
+    const rows = await loadExportModels(config);
+    expect(rows.find(row => row.namespaced === "fixture/m")?.fastRowAvailable).toBe(false);
+    const result = buildClientConfig("pi", { baseUrl: "http://127.0.0.1:10100/v1", models: rows, config }) as PiGeneratedConfig;
+    expect(result.providers.opencodex.models.map(model => model.id)).not.toContain("fixture/m--fast");
+  });
 });

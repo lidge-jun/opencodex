@@ -127,3 +127,15 @@ test("load warnings never reveal display values or secret shaped provider names"
     warn.mockRestore();
   }
 });
+
+
+test("Fast rows default on for fresh and omitted config; explicit false and malformed values disable", () => {
+  expect(getDefaultConfig().fastRows).toBe(true);
+  for (const [value, expected] of [[undefined, true], [true, true], [false, false], ["invalid", false]] as const) {
+    const config = { ...candidate({}), fastRows: value };
+    writeFileSync(getConfigPath(), JSON.stringify(config), "utf8");
+    const loaded = loadConfig();
+    expect(loaded.fastRows).toBe(expected);
+    expect(loaded.providers.xai.note).toBe("keep me");
+  }
+});
