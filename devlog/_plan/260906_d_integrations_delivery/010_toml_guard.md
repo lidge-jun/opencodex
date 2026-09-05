@@ -51,7 +51,7 @@ index 54ab80de1..872e9b382 100644
 @@ -401,6 +401,25 @@ describe("classifier unit behavior", () => {
      expect(parseConfig("{{{", "json")).toBe(PARSE_FAILED);
    });
- 
+
 +  test("parseConfig refuses typed TOML dates before a JSON clone can turn them into strings", () => {
 +    for (const literal of [
 +      "2026-09-05T10:00:00Z",
@@ -80,7 +80,7 @@ index 0bf81fdb5..de2f16471 100644
 +++ b/tests/clients/integrations-writer.test.ts
 @@ -141,6 +141,24 @@ function reverseJsonObjectKeys(value: unknown): unknown {
  }
- 
+
  describe("apply", () => {
 +  test("refuses Kimi TOML date rewrites without changing the file or ownership store", () => {
 +    const spec = INTEGRATION_CLIENTS.kimi;
