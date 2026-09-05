@@ -3364,7 +3364,10 @@ async function handleResponsesInner(
    *   tolerates project discovery failing, so a stored account can legitimately have no project;
    *   sending that account's bearer with the FAILED account's project is worse than not rotating.
    */
-  const applyFailoverSnapshot = (snapshot: OAuthAccessSnapshot): boolean => {
+  const applyFailoverSnapshot = (
+    snapshot: OAuthAccessSnapshot,
+    retryParsed: OcxParsedRequest = parsed,
+  ): boolean => {
     if (route.provider.googleMode === "cloud-code-assist" && !snapshot.projectId) return false;
     let rotatedProvider: OcxProviderConfig = { ...route.provider, apiKey: snapshot.accessToken };
     if (route.providerName === "github-copilot") {
@@ -3377,7 +3380,14 @@ async function handleResponsesInner(
     }
     if (snapshot.projectId) rotatedProvider = { ...rotatedProvider, project: snapshot.projectId };
     route.provider = rotatedProvider;
-    if (route.providerName === "kiro") parsed._kiroAuthContext = { ...(snapshot.kiro ?? {}) };
+    if (route.providerName === "kiro") {
+      const kiroContext = { ...(snapshot.kiro ?? {}) };
+      // Terminal-guard continuations are rebuilt from a shallow clone. Updating only the
+      // outer request pairs the new bearer with the failed account's region/profile on
+      // the retry. Keep both owners synchronized; for ordinary paths they are identical.
+      parsed._kiroAuthContext = kiroContext;
+      if (retryParsed !== parsed) retryParsed._kiroAuthContext = { ...kiroContext };
+    }
     // Re-stamp: a request that rotated accounts must be attributed to the account that actually
     // served it. All three rotation sites funnel through here, so this is the only re-stamp
     // needed -- and putting it anywhere else would let one of the three drift.
@@ -6686,7 +6696,7 @@ async function handleResponsesInner(
             const snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId);
             genericFailoverAccountId = nextAccountId;
             genericFailovers += 1;
-            if (applyFailoverSnapshot(snapshot)) {
+            if (applyFailoverSnapshot(snapshot, nextParsed)) {
               invalidateSameTargetRequest();
               activeAdapter = resolveAdapter(
                 resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),

@@ -303,7 +303,7 @@ describe("sidecar on429 wiring", () => {
     // Kiro's routing metadata) live in exactly one place. A fourth rotation site that swaps the
     // bearer by hand would reintroduce the mixed-identity bug this helper exists to prevent.
     const snapshotUses = coreSource.match(/failoverAccountSnapshot\(/g) ?? [];
-    const helperUses = coreSource.match(/applyFailoverSnapshot\(snapshot\)/g) ?? [];
+    const helperUses = coreSource.match(/applyFailoverSnapshot\(snapshot(?:, nextParsed)?\)/g) ?? [];
     // Four since the continuation loop gained its own generic-OAuth arm: the streaming loop grew
     // one with #2568 and the continuation loop did not, so an xAI/Cursor continuation 429 stayed
     // terminal. Bumping this count is the deliberate act of admitting a fourth rotation site --
@@ -375,6 +375,10 @@ describe("sidecar on429 wiring", () => {
 
     // Kiro routing metadata still travels with its own token.
     expect(body).toContain("_kiroAuthContext");
+    // ...and reaches the object actually retried. The terminal-guard continuation dispatches a
+    // shallow clone, so writing only the outer request pairs the rotated bearer with the failed
+    // account's region/profile.
+    expect(coreSource).toContain("applyFailoverSnapshot(snapshot, nextParsed)");
   });
 
   test("pre-dispatch selection replaces the CCA project instead of inheriting one", () => {

@@ -684,6 +684,7 @@
     "kimi-oauth-identity.test.ts": "providers",
     "kiro-account-quota.test.ts": "providers/kiro",
     "kiro-adapter.test.ts": "providers/kiro",
+    "kiro-auth-context-continuation.test.ts": "providers/kiro",
     "kiro-builder-id-profile.test.ts": "providers/kiro",
     "kiro-calibration.test.ts": "providers/kiro",
     "kiro-images.test.ts": "providers/kiro",
