@@ -534,6 +534,7 @@
    their own layout. Dropdowns and popovers already portal outside the container. */
 .dash-overview-stack {
   --dash-controls-width: 26rem;
+
   container: dashboard-overview / inline-size;
 }
 
