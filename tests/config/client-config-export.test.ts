@@ -715,6 +715,17 @@ describe("hub-resolved Fast exports", () => {
     });
   }
 
+  test("an eligible real suffix-shaped model has a valid Fast sibling in every client", () => {
+    const real = { ...eligible, namespaced: "remote/model--fast", id: "model--fast" };
+    for (const client of EXPORT_CLIENT_IDS) {
+      const context = ctx({ models: [real] });
+      const document = buildClientConfig(client, context);
+      expect(EXPORT_CLIENTS[client].summarize(document).modelCount).toBe(2);
+      expect(JSON.stringify(document)).toContain('"remote/model--fast--fast"');
+      expect(buildClientConfig(client, { ...context, models: normalizeExportModels([real]) })).toEqual(document);
+    }
+  });
+
   test("pi Fast rows retain modalities, context and the exact thinking ladder", () => {
     const models = piConfig(ctx({ models: [eligible] })).providers.opencodex!.models;
     expect(models).toHaveLength(2);

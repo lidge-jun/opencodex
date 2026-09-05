@@ -383,3 +383,14 @@ test("shared native Fast listing policy requires upstream evidence and allows ac
   expect(catalogFastRowEligible(config, { provider: "openai", id: "unknown-native", native: true })).toBe(false);
   expect(catalogFastRowEligible({ ...config, fastRows: false }, { provider: "openai", id: "gpt-5.6-sol", native: true })).toBe(false);
 });
+
+test("Fast discovery agrees with ingress for configured and live-only suffix-shaped bases", () => {
+  const row = { provider: "fixture", id: "model--fast", supportsServiceTier: true };
+  const config = configWith({ fixture: provider({ models: ["model--fast"], supportsServiceTier: true }) });
+  expect(catalogFastRowEligible(config, row)).toBe(true);
+  expect(parseSyntheticRowId("fixture/model--fast--fast", config).fastRow)
+    .toEqual({ baseId: "fixture/model--fast" });
+  config.providers.fixture.models = ["ordinary"];
+  expect(catalogFastRowEligible(config, row)).toBe(false);
+  expect(parseSyntheticRowId("fixture/model--fast--fast", config).fastRow).toBeNull();
+});

@@ -67,6 +67,10 @@ export function catalogFastRowEligible(
   model: { provider: string; id: string; native?: boolean; supportsServiceTier?: boolean },
 ): boolean {
   if (config.fastRows === false) return false;
+  // Configured suffix-shaped IDs are real bases; live-only ones are deliberately
+  // refused by ingress. Discovery must not advertise a selector ingress cannot strip.
+  if (model.id.endsWith(FAST_ROW_SUFFIX)
+    && !fastRowBases(config)(model.native ? model.id : `${model.provider}/${model.id}`)) return false;
   if (model.native) {
     const id = model.id.slice(model.id.lastIndexOf("/") + 1);
     const tiers = UPSTREAM_NATIVE_ENTRIES.get(id)?.additional_speed_tiers;
