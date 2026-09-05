@@ -717,8 +717,21 @@ export function parseRequest(
           }
         }
         const failed = typeof out.status === "string" && out.status !== "completed" && out.status !== "success";
+        let resolvedCallId = typeof out.call_id === "string" && out.call_id.trim().length > 0 ? out.call_id : "";
+        if (!resolvedCallId) {
+          for (let k = messages.length - 1; k >= 0; k--) {
+            const m = messages[k];
+            if (m.role === "assistant") {
+              const tc = m.content.find(p => p.type === "toolCall" && p.name === "tool_search");
+              if (tc && tc.type === "toolCall" && tc.id) {
+                resolvedCallId = tc.id;
+                break;
+              }
+            }
+          }
+        }
         messages.push({
-          role: "toolResult", toolCallId: out.call_id ?? "", toolName: "tool_search",
+          role: "toolResult", toolCallId: resolvedCallId || `call_synth_tool_search_${now}`, toolName: "tool_search",
           content: failed && wireNames.length === 0
             ? `Tool search failed (status: ${out.status}).`
             : wireNames.length
@@ -730,13 +743,48 @@ export function parseRequest(
       }
 
       if (effectiveType === "function_call_output") {
-        const output = item as { call_id: string; output?: string | unknown[] };
-        attachPendingReasoningToCallOwner(messages, output.call_id, pendingReasoning);
+        const output = item as { id?: string; call_id?: string; name?: string; namespace?: string; output?: string | unknown[] };
+        const rawCallId = typeof output.call_id === "string" && output.call_id.trim().length > 0
+          ? output.call_id
+          : typeof output.id === "string" && output.id.trim().length > 0
+            ? output.id
+            : undefined;
+
+        const itemName = typeof output.name === "string" ? output.name : undefined;
+        const itemNamespace = typeof output.namespace === "string" ? output.namespace : undefined;
+        const rawText = typeof output.output === "string"
+          ? output.output
+          : Array.isArray(output.output)
+            ? output.output.map(p => (typeof p === "object" && p && "text" in p ? String((p as any).text) : JSON.stringify(p))).join("")
+            : "";
+        const isHeartbeatOrAutomation = itemName === "automation_update" || itemName?.startsWith("automation_") || itemNamespace === "codex_app" || rawText.includes("<heartbeat>");
+
+        if (!rawCallId && isHeartbeatOrAutomation) {
+          // Codex injects background automation triggers / scheduled heartbeats as FunctionCallOutput
+          // with name="automation_update", namespace="codex_app", and call_id=None.
+          // In Codex prompt instructions, heartbeats are defined as:
+          // "Occasionally you will see a user message surrounded with a <heartbeat> XML tag."
+          // These are system/user event triggers rather than tool results waiting for a tool_call.
+          // Translate them as user messages so translating adapters (Google, Anthropic, Ollama)
+          // receive the heartbeat prompt without hitting the unpaired-tool-result guard (issue #3259).
+          pendingReasoning.length = 0;
+          messages.push({
+            role: "user",
+            content: outputToToolResultContent(output.output),
+            timestamp: now,
+          });
+          continue;
+        }
+
+        const callId = rawCallId ?? output.call_id;
+        if (callId) {
+          attachPendingReasoningToCallOwner(messages, callId, pendingReasoning);
+        }
         pendingReasoning.length = 0;
-        const toolInfo = findToolById(messages, output.call_id);
+        const toolInfo = callId ? findToolById(messages, callId) : { name: itemName ?? "", namespace: itemNamespace };
         messages.push({
-          role: "toolResult", toolCallId: output.call_id,
-          toolName: toolInfo.name, toolNamespace: toolInfo.namespace,
+          role: "toolResult", toolCallId: (callId ?? output.call_id) as string,
+          toolName: toolInfo.name || itemName || "", toolNamespace: toolInfo.namespace || itemNamespace,
           content: outputToToolResultContent(output.output), isError: false, timestamp: now,
           ...(toolOutputContainsEncryptedContent(output.output) ? { containsEncryptedContent: true } : {}),
         });
@@ -744,15 +792,41 @@ export function parseRequest(
       }
 
       if (effectiveType === "custom_tool_call_output") {
-        const output = item as { call_id: string; output: string | unknown[] };
-        attachPendingReasoningToCallOwner(messages, output.call_id, pendingReasoning);
+        const output = item as { id?: string; call_id?: string; name?: string; namespace?: string; output: string | unknown[] };
+        const rawCallId = typeof output.call_id === "string" && output.call_id.trim().length > 0
+          ? output.call_id
+          : typeof output.id === "string" && output.id.trim().length > 0
+            ? output.id
+            : undefined;
+
+        const itemName = typeof output.name === "string" ? output.name : undefined;
+        const itemNamespace = typeof output.namespace === "string" ? output.namespace : undefined;
+        const rawText = typeof output.output === "string"
+          ? output.output
+          : Array.isArray(output.output)
+            ? output.output.map(p => (typeof p === "object" && p && "text" in p ? String((p as any).text) : JSON.stringify(p))).join("")
+            : "";
+        const isHeartbeatOrAutomation = itemName === "automation_update" || itemName?.startsWith("automation_") || itemNamespace === "codex_app" || rawText.includes("<heartbeat>");
+
+        if (!rawCallId && isHeartbeatOrAutomation) {
+          pendingReasoning.length = 0;
+          messages.push({
+            role: "user",
+            content: outputToToolResultContent(output.output),
+            timestamp: now,
+          });
+          continue;
+        }
+
+        const callId = rawCallId ?? output.call_id;
+        if (callId) {
+          attachPendingReasoningToCallOwner(messages, callId, pendingReasoning);
+        }
         pendingReasoning.length = 0;
-        const toolInfo = findToolById(messages, output.call_id);
+        const toolInfo = callId ? findToolById(messages, callId) : { name: itemName ?? "", namespace: itemNamespace };
         messages.push({
-          role: "toolResult", toolCallId: output.call_id,
-          toolName: toolInfo.name, toolNamespace: toolInfo.namespace,
-          // Same payload shape as function_call_output (codex-rs FunctionCallOutputPayload):
-          // string or content items — normalize arrays instead of leaking raw wire blocks.
+          role: "toolResult", toolCallId: (callId ?? output.call_id) as string,
+          toolName: toolInfo.name || itemName || "", toolNamespace: toolInfo.namespace || itemNamespace,
           content: outputToToolResultContent(output.output), isError: false, timestamp: now,
           ...(toolOutputContainsEncryptedContent(output.output) ? { containsEncryptedContent: true } : {}),
         });

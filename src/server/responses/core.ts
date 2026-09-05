@@ -5263,6 +5263,34 @@ async function handleResponsesInner(
   // Keyed on the adapter, not on position: routedCompaction skips the passthrough branch above
   // yet still builds from _rawBody (see the :3703 comment).
   if (!("passthrough" in adapter && adapter.passthrough)) {
+    // Repair any automation/heartbeat tool results that entered without a call_id:
+    for (let idx = 0; idx < parsed.context.messages.length; idx++) {
+      const msg = parsed.context.messages[idx];
+      if (
+        msg.role === "toolResult"
+        && (typeof (msg as { toolCallId?: unknown }).toolCallId !== "string"
+          || (msg as { toolCallId: string }).toolCallId.length === 0)
+      ) {
+        const text = typeof msg.content === "string"
+          ? msg.content
+          : Array.isArray(msg.content)
+            ? msg.content.map(p => (p.type === "text" ? p.text : "")).join("")
+            : "";
+        if (
+          msg.toolName === "automation_update"
+          || msg.toolName?.startsWith("automation_")
+          || msg.toolNamespace === "codex_app"
+          || text.includes("<heartbeat>")
+        ) {
+          parsed.context.messages[idx] = {
+            role: "user",
+            content: msg.content,
+            timestamp: msg.timestamp,
+          };
+        }
+      }
+    }
+
     const unpaired = parsed.context.messages.find(
       message => message.role === "toolResult"
         && (typeof (message as { toolCallId?: unknown }).toolCallId !== "string"
