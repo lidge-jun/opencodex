@@ -20,8 +20,13 @@ material only. This is a fresh codebase.
   `src/server/management/route-registry.ts`, and the single forwarding branch
   in `src/server/management-api.ts` reads them before asking the sidecar.
 - `internal/sidecar` — the handler plus its unit tests. The JSON key order and
-  number formatting of the health payload are part of the byte contract with
-  the Bun differential oracle (`tests/go-sidecar-parity.test.ts`).
+  number formatting of each payload are part of the byte contract with the Bun
+  differential oracle (`tests/go-sidecar-parity.test.ts`).
+- `internal/config` — the shared Go config reader (ticket #16). It parses the
+  operator's `config.json` (OPENCODEX_HOME, defaulting to `~/.opencodex`)
+  exactly where the TypeScript runtime keeps it, so a Go-served read route
+  answers from the real on-disk state; route bodies are pure functions of the
+  subsection they read.
 
 ## Building
 
@@ -42,7 +47,22 @@ external dependencies, so there is no `go.sum`.
 - After binding its loopback listener, the sidecar prints one readiness line on
   stdout: `ocx-sidecar-ready http://127.0.0.1:<port>`. The parent waits for
   this line before registering the route forwarder.
-- The migrated route's declared volatile fields (today: `pid`, `uptime` for
-  `GET /api/system/health`) are normalised by the differential oracle and
-  nothing else is: a later route cannot silently widen what parity means. The
-  declaration lives with the route in `route-registry.ts`, not here.
+- The migrated route's declared volatile fields are normalised by the
+  differential oracle and nothing else is: a later route cannot silently widen
+  what parity means. The declaration lives with the route in
+  `route-registry.ts`, not here. Today: `GET /api/system/health` declares
+  `["pid", "uptime"]` (the sidecar reports its own process values), and
+  `GET /api/shadow-call-settings` declares an EMPTY set — its body is a pure
+  function of `config.json`, so the oracle compares raw bytes with no
+  normalisation at all.
+
+## Config read routes (ticket #16)
+
+`GET /api/shadow-call-settings` is the first config read route served from Go.
+The sidecar reads the same `config.json` the TypeScript in-process handler's
+config snapshot came from (`internal/config`), then projects the
+`shadowCallIntercept` section through the same rules the TS handler applies
+(`shadowSourceModels` defaults, trim/non-empty filtering, `sci.model ?? ""`).
+The config is read per request; the sidecar carries no state. The in-process
+TS handler remains the fallback and the differential oracle, so a default
+install and a supervision blip behave byte-identically to a build without Go.

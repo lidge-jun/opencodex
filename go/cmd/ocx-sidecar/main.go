@@ -1,12 +1,14 @@
 // Command ocx-sidecar is the first Go-owned process of the incremental
 // runtime takeover (ADR-0008). It is spawned and supervised by the
-// TypeScript proxy front door and serves exactly one read-only management
-// route, GET /api/system/health, with byte-identical HTTP semantics to the
-// in-process TypeScript handler. See go/internal/sidecar for the contract.
+// TypeScript proxy front door and serves the declared Go-owned read-only
+// management routes (today: GET /api/system/health and
+// GET /api/shadow-call-settings) with byte-identical HTTP semantics to the
+// in-process TypeScript handlers. See go/internal/sidecar for the contract.
 //
 // The binary is built CGO_ENABLED=0 and carries no state: everything it must
 // echo from the parent (service label, package version) arrives through the
-// environment at spawn time.
+// environment at spawn time, and the config read route reads the operator's
+// config.json from the same OPENCODEX_HOME the parent was launched with.
 package main
 
 import (

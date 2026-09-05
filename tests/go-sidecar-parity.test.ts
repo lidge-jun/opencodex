@@ -19,15 +19,19 @@ import { removeTreeWithRetry } from "./helpers/remove-tree";
  * Differential oracle for the ADR-0008 Go sidecar (devlog/_plan/260905_go_sidecar_takeover).
  *
  * The TS in-process handlers and the Go ocx-sidecar must agree on status,
- * headers, and the normalised body for every declared Go-owned route.
- * "Normalised" is the DECLARED per-route volatile set from
- * src/server/management/route-registry.ts (the `go.volatileFields` marker) and
- * nothing else, so a later route cannot silently widen what parity means.
+ * headers, and the body for every declared Go-owned route. The per-route
+ * volatile set from src/server/management/route-registry.ts (the
+ * `go.volatileFields` marker) is exactly what may legitimately differ — and it
+ * may be EMPTY, which declares a strict route whose raw bytes must be equal
+ * with no normalisation at all (a pure config read, e.g.
+ * /api/shadow-call-settings). Nothing outside the declared set is ever
+ * forgiven, so a later route cannot silently widen what parity means.
  *
  * The divergence class this pins is the one that sank dev2-go: Go runtime
  * numbers rendered under JavaScript labels, or a shape that merely looks like
  * the TS response. The assertion is byte identity of the wire bodies after the
- * declared normalisation — a JSON re-parse would forgive key-order drift and
+ * declared normalisation (or raw byte identity for strict routes with an empty
+ * volatile set) — a JSON re-parse would forgive key-order drift and
  * float-formatting drift that a byte compare catches.
  *
  * The harness needs the Go toolchain to build the sidecar, and boots two real
@@ -70,12 +74,19 @@ const goAvailable = goToolchainAvailable();
 const sidecarBinary: string | null = goAvailable ? buildSidecarBinary() : null;
 
 /**
- * The declared Go-owned health route (ADR-0008): the single migrated route the
- * oracle must prove today. Reads are the only surface that can be Go-owned, so
- * this must exist whenever the harness runs.
+ * The declared Go-owned health route (ADR-0008, ticket #14): volatile pid and
+ * uptime, normalised by the oracle. The strict shadow-call-settings config read
+ * (ticket #16) is pure and declares no volatile field. The oracle must prove
+ * both; if a marker is ever removed it would compare nothing and pass
+ * vacuously.
  */
 const goOwnedHealth = GO_OWNED_MANAGEMENT_ROUTES.find(
   route => route.method === "GET" && route.path === "/api/system/health",
+);
+
+/** The strict config read route (ticket #16): pure function of config.json. */
+const goOwnedShadowCallSettings = GO_OWNED_MANAGEMENT_ROUTES.find(
+  route => route.method === "GET" && route.path === "/api/shadow-call-settings",
 );
 
 /**
@@ -102,6 +113,21 @@ interface HealthCapture {
   contentType: string | null;
   body: string;
   parsed: { status: string; service: string; version: string; uptime: number; pid: number };
+}
+
+async function captureJson(server: { url: URL }, token: string, pathname: string): Promise<{ status: number; contentType: string | null; body: string }> {
+  const response = await fetch(new URL(pathname, server.url), {
+    headers: { "x-opencodex-api-key": token },
+  });
+  return {
+    status: response.status,
+    contentType: response.headers.get("content-type"),
+    body: await response.text(),
+  };
+}
+
+async function captureShadowCall(server: { url: URL }, token: string) {
+  return captureJson(server, token, "/api/shadow-call-settings");
 }
 
 async function captureHealth(server: { url: URL }, token: string): Promise<HealthCapture> {
@@ -195,6 +221,10 @@ describe.skipIf(!goAvailable || sidecarBinary === null)("ocx-sidecar differentia
     // the oracle would compare nothing and pass vacuously.
     expect(goOwnedHealth).toBeDefined();
     expect(healthVolatileFields).toEqual(["pid", "uptime"]);
+    // The strict config read route must stay declared too; its contract is the
+    // empty volatile set (raw byte equality, no normalisation).
+    expect(goOwnedShadowCallSettings).toBeDefined();
+    expect(goOwnedShadowCallSettings!.go.volatileFields).toEqual([]);
   });
 
   runFixtureTest("in-process handler and Go sidecar agree on status, headers, and normalised body", async (token) => {
@@ -301,6 +331,81 @@ describe.skipIf(!goAvailable || sidecarBinary === null)("ocx-sidecar differentia
       expect(after.parsed.pid).toBe(process.pid);
     } finally {
       await server.stop(true);
+    }
+  });
+
+  runFixtureTest("shadow-call-settings default body is byte-identical with no normalisation", async (token) => {
+    // Ticket #16 first vertical slice: GET /api/shadow-call-settings is a pure
+    // function of config.json. The fixture has no shadowCallIntercept section,
+    // so both implementations must report the defaults. The declared volatile
+    // set is EMPTY, so this comparison normalises nothing: raw bytes must be
+    // equal.
+    const serverA = startServer(0);
+    try {
+      const tsBody = await captureShadowCall(serverA, token);
+      expect(tsBody.status).toBe(200);
+      expect(tsBody.contentType).toBe("application/json");
+      // Pin the exact TS body so a Go handler that merely echoes something
+      // plausible but different cannot pass.
+      expect(tsBody.body).toBe(`{"enabled":false,"model":"","sourceModels":["gpt-5.6-luna"]}`);
+
+      process.env[GO_SIDECAR_BIN_ENV] = sidecarBinary!;
+      const serverB = startServer(0);
+      try {
+        await waitFor(() => activeGoSidecarBaseUrl(), 15_000);
+        const goBody = await captureShadowCall(serverB, token);
+        expect(goBody.status).toBe(200);
+        expect(goBody.contentType).toBe("application/json");
+        expect(goBody.body).toBe(tsBody.body);
+        expect(goBody.body).toBe(`{"enabled":false,"model":"","sourceModels":["gpt-5.6-luna"]}`);
+      } finally {
+        await serverB.stop(true);
+      }
+      expect(activeGoSidecarBaseUrl()).toBeNull();
+    } finally {
+      await serverA.stop(true);
+    }
+  });
+
+  runFixtureTest("shadow-call-settings configured body is byte-identical and the relay alters nothing", async (token) => {
+    // A non-default section exercises the projection (enabled, model verbatim,
+    // sourceModels normalised exactly as TS normalises them) rather than the
+    // empty-config fallback.
+    saveConfig({
+      ...configFixture(),
+      shadowCallIntercept: {
+        enabled: true,
+        model: "gpt-5.5",
+        sourceModels: [" gpt-5.4-mini ", "", "gpt-x"],
+      },
+    });
+    const want = `{"enabled":true,"model":"gpt-5.5","sourceModels":["gpt-5.4-mini","gpt-x"]}`;
+
+    const serverA = startServer(0);
+    try {
+      const tsBody = await captureShadowCall(serverA, token);
+      expect(tsBody.body).toBe(want);
+
+      process.env[GO_SIDECAR_BIN_ENV] = sidecarBinary!;
+      const serverB = startServer(0);
+      try {
+        const sidecarUrl = await waitFor(() => activeGoSidecarBaseUrl(), 15_000);
+        const goBody = await captureShadowCall(serverB, token);
+        expect(goBody.body).toBe(want);
+
+        // The front door must relay the Go bytes without alteration, matching
+        // the sidecar's own direct response exactly.
+        const direct = await fetch(new URL("/api/shadow-call-settings", sidecarUrl), {
+          headers: { accept: "application/json" },
+        });
+        expect(direct.status).toBe(200);
+        expect(await direct.text()).toBe(goBody.body);
+      } finally {
+        await serverB.stop(true);
+      }
+      expect(activeGoSidecarBaseUrl()).toBeNull();
+    } finally {
+      await serverA.stop(true);
     }
   });
 });

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"regexp"
 	"testing"
 	"time"
@@ -158,3 +159,94 @@ func TestReadyLineConstant(t *testing.T) {
 		t.Fatalf("ReadyLinePrefix = %q changed; the TS supervisor parses this exact token", ReadyLinePrefix)
 	}
 }
+
+// writeConfigFile writes a config.json fixture into dir and returns its path.
+func writeConfigFile(t *testing.T, dir, content string) string {
+	t.Helper()
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestShadowCallSettingsShapeAndOrder(t *testing.T) {
+	dir := t.TempDir()
+	writeConfigFile(t, dir, `{"shadowCallIntercept": {"enabled": true, "model": "gpt-5.5", "sourceModels": ["gpt-5.4-mini"]}}`)
+	h := NewHandler(Config{ConfigDir: dir})
+
+	resp := do(t, h, http.MethodGet, "/api/shadow-call-settings")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Type"); got != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", got)
+	}
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Byte contract with the TS handler: the raw body must be exactly this
+	// string (key order enabled, model, sourceModels; no trailing newline).
+	want := `{"enabled":true,"model":"gpt-5.5","sourceModels":["gpt-5.4-mini"]}`
+	if string(raw) != want {
+		t.Fatalf("body = %s, want %s", raw, want)
+	}
+}
+
+func TestShadowCallSettingsDefaultsWithoutConfig(t *testing.T) {
+	// No config.json at all: the body must match the TS handler reading a
+	// default config (enabled false, model "", default source list).
+	h := NewHandler(Config{ConfigDir: t.TempDir()})
+	resp := do(t, h, http.MethodGet, "/api/shadow-call-settings")
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"enabled":false,"model":"","sourceModels":["gpt-5.6-luna"]}`
+	if string(raw) != want {
+		t.Fatalf("body = %s, want %s", raw, want)
+	}
+}
+
+func TestShadowCallSettingsCoercions(t *testing.T) {
+	dir := t.TempDir()
+	// Mirrors the TS projection: enabled only when strictly true, model echoed
+	// verbatim when a string, empty entries dropped from sourceModels.
+	writeConfigFile(t, dir, `{"shadowCallIntercept": {"enabled": "yes", "model": "  gpt-5.5  ", "sourceModels": [" ", "gpt-6-terra", ""]}}`)
+	h := NewHandler(Config{ConfigDir: dir})
+	resp := do(t, h, http.MethodGet, "/api/shadow-call-settings")
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"enabled":false,"model":"  gpt-5.5  ","sourceModels":["gpt-6-terra"]}`
+	if string(raw) != want {
+		t.Fatalf("body = %s, want %s", raw, want)
+	}
+}
+
+func TestShadowCallSettingsSurfaceIsNarrow(t *testing.T) {
+	h := NewHandler(Config{ConfigDir: t.TempDir()})
+	cases := []struct {
+		method string
+		path   string
+		want   int
+	}{
+		{http.MethodPost, "/api/shadow-call-settings", http.StatusMethodNotAllowed},
+		{http.MethodGet, "/api/config", http.StatusNotFound},
+		{http.MethodGet, "/api/settings", http.StatusNotFound},
+		{http.MethodGet, "/api/shadow-call-settings/", http.StatusNotFound},
+		{http.MethodGet, "/api/shadow-call-settings?x=1", http.StatusOK},
+	}
+	for _, tc := range cases {
+		resp := do(t, h, tc.method, tc.path)
+		resp.Body.Close()
+		if resp.StatusCode != tc.want {
+			t.Errorf("%s %s status = %d, want %d", tc.method, tc.path, resp.StatusCode, tc.want)
+		}
+	}
+}
+

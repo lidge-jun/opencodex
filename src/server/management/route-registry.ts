@@ -212,7 +212,15 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/config", module: "server/management/config-routes", mutates: false },
   { method: "GET", path: "/api/diagnostics/project-config", module: "server/management/config-routes", mutates: false },
   { method: "GET", path: "/api/settings", module: "server/management/config-routes", mutates: false },
-  { method: "GET", path: "/api/shadow-call-settings", module: "server/management/config-routes", mutates: false },
+  // ADR-0008 ownership: GET /api/shadow-call-settings is Go-owned (ticket #16).
+  // The body is a PURE function of config.json's shadowCallIntercept section
+  // (no process values), so it declares an EMPTY volatile set: the differential
+  // oracle compares its raw bytes with no normalisation — the strictest
+  // contract it can impose. The Go handler (go/internal/sidecar) reads the same
+  // OPENCODEX_HOME/config.json the in-process TS handler's snapshot came from
+  // (go/internal/config) and projects it through the same rules
+  // (shadowSourceModels defaults, trim/non-empty filtering, sci.model ?? "").
+  { method: "GET", path: "/api/shadow-call-settings", module: "server/management/config-routes", mutates: false, go: { volatileFields: [] } },
   { method: "GET", path: "/api/sidecar-settings", module: "server/management/config-routes", mutates: false },
   { method: "GET", path: "/api/startup-health", module: "server/management/config-routes", mutates: false },
   { method: "GET", path: "/api/update/check", module: "server/management/config-routes", mutates: false },

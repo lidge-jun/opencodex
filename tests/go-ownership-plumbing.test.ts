@@ -27,9 +27,11 @@ import { removeTreeWithRetry } from "./helpers/remove-tree";
  * 1. REGISTRY INVARIANTS — the typed `go` ownership marker lives only on read
  *    routes (the discriminated union in route-registry.ts refuses it on a write
  *    route at compile time; these tests re-check at runtime), every Go-owned
- *    route declares a non-empty volatile set for the differential oracle, and
- *    the derived GO_OWNED_MANAGEMENT_ROUTES view stays in lockstep with the
- *    markers in MANAGEMENT_ROUTES.
+ *    route declares a duplicate-free volatile set for the differential oracle
+ *    (EMPTY when the route is strict: its body is a pure function of shared
+ *    state and must be byte-identical with no normalisation), and the derived
+ *    GO_OWNED_MANAGEMENT_ROUTES view stays in lockstep with the markers in
+ *    MANAGEMENT_ROUTES.
  *
  * 2. DISPATCH BEHAVIOUR — one forwarding branch, driven by the registry data
  *    (not by per-route code), serves declared Go-owned routes from the sidecar
@@ -123,16 +125,28 @@ async function getJson(token: string, server: { url: URL }, pathname: string): P
 // ---------------------------------------------------------------------------
 
 describe("ADR-0008 ownership markers are typed read/write (ticket #14)", () => {
-  test("the declared Go-owned surface is exactly GET /api/system/health today", () => {
+  test("the declared Go-owned surface is health (volatile) and shadow-call-settings (strict) today", () => {
     // Pin the migrated set so an accidental marker flip on another read route
     // fails here instead of silently changing what the proxy serves. Adding a
-    // real migration updates this list deliberately.
-    const keys = GO_OWNED_MANAGEMENT_ROUTES.map(r => `${r.method} ${r.path}`);
-    expect(keys).toEqual(["GET /api/system/health"]);
-    const health = GO_OWNED_MANAGEMENT_ROUTES[0]!;
+    // real migration updates this list deliberately. Health reports the serving
+    // process's own pid/uptime and declares them volatile; shadow-call-settings
+    // is a pure function of config.json and declares NO volatile field, which
+    // means the oracle compares its bytes with no normalisation at all.
+    const byPath = new Map(GO_OWNED_MANAGEMENT_ROUTES.map(r => [r.path, r]));
+    expect([...byPath.keys()].sort()).toEqual([
+      "/api/shadow-call-settings",
+      "/api/system/health",
+    ]);
+    const health = byPath.get("/api/system/health")!;
+    expect(health.method).toBe("GET");
     expect(health.mutates).toBe(false);
     expect(health.module).toBe("server/management/system-routes");
     expect(health.go.volatileFields).toEqual(["pid", "uptime"]);
+    const shadowCall = byPath.get("/api/shadow-call-settings")!;
+    expect(shadowCall.method).toBe("GET");
+    expect(shadowCall.mutates).toBe(false);
+    expect(shadowCall.module).toBe("server/management/config-routes");
+    expect(shadowCall.go.volatileFields).toEqual([]);
   });
 
   test("no write route can be Go-owned: runtime re-check of the union's read-only arm", () => {
@@ -152,20 +166,31 @@ describe("ADR-0008 ownership markers are typed read/write (ticket #14)", () => {
     expect(writesWithGo).toEqual([]);
   });
 
-  test("every Go-owned route declares a non-empty, duplicate-free volatile set", () => {
+  test("every Go-owned route declares a duplicate-free volatile set (empty = strict byte equality)", () => {
     expect(GO_OWNED_MANAGEMENT_ROUTES.length).toBeGreaterThan(0);
     for (const route of GO_OWNED_MANAGEMENT_ROUTES) {
-      expect(route.go.volatileFields.length, `${route.method} ${route.path}`).toBeGreaterThan(0);
-      expect(new Set(route.go.volatileFields).size).toBe(route.go.volatileFields.length);
+      // An EMPTY volatile set is the strict contract: the route body must be
+      // byte-identical between the TS handler and the Go sidecar with no
+      // normalisation. A non-empty set names exactly the keys that may differ
+      // (process values). Either way, no key may be listed twice.
+      expect(Array.isArray(route.go.volatileFields), `${route.method} ${route.path}`).toBe(true);
+      expect(new Set(route.go.volatileFields).size, `${route.method} ${route.path}`).toBe(route.go.volatileFields.length);
     }
   });
 
   test("the dispatch lookup is exact on method and path, and sees only the declared surface", () => {
-    expect(findGoOwnedManagementRoute("GET", "/api/system/health")).toBe(GO_OWNED_MANAGEMENT_ROUTES[0]);
+    const health = GO_OWNED_MANAGEMENT_ROUTES.find(r => r.path === "/api/system/health");
+    expect(health).toBeDefined();
+    expect(findGoOwnedManagementRoute("GET", "/api/system/health")).toBe(health);
     expect(findGoOwnedManagementRoute("POST", "/api/system/health")).toBeUndefined();
     expect(findGoOwnedManagementRoute("GET", "/api/system/health/")).toBeUndefined();
     expect(findGoOwnedManagementRoute("GET", "/api/system/memory")).toBeUndefined();
     expect(findGoOwnedManagementRoute("GET", "/api/config")).toBeUndefined();
+    const shadowCall = GO_OWNED_MANAGEMENT_ROUTES.find(r => r.path === "/api/shadow-call-settings");
+    expect(shadowCall).toBeDefined();
+    expect(findGoOwnedManagementRoute("GET", "/api/shadow-call-settings")).toBe(shadowCall);
+    expect(findGoOwnedManagementRoute("PUT", "/api/shadow-call-settings")).toBeUndefined();
+    expect(findGoOwnedManagementRoute("GET", "/api/shadow-call-settings/")).toBeUndefined();
   });
 
   test("the forwarding branch in management-api.ts names no route of its own", () => {
