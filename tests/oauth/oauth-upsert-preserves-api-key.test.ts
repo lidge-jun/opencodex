@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { upsertOAuthProvider } from "../../src/oauth";
+import { OAUTH_PROVIDERS, upsertOAuthProvider } from "../../src/oauth";
 import {
   apiKeyPoolEntryId,
   listProviderApiKeys,
@@ -345,6 +345,35 @@ describe("upsertOAuthProvider credential preservation", () => {
     expect(provider.apiKey).toBeUndefined();
     expect(provider.apiKeyPool).toBeUndefined();
     expect(provider.note).toBe("stale-note");
+  });
+
+  test("refreshes registry-owned catalog fields immediately without losing operator fields", () => {
+    const config = {
+      port: 10100,
+      defaultProvider: "anthropic",
+      providers: {
+        anthropic: {
+          adapter: "anthropic",
+          baseUrl: "https://api.anthropic.com",
+          authMode: "oauth",
+          models: ["retired-model"],
+          defaultModel: "retired-model",
+          contextWindow: 1,
+          disabled: true,
+          note: "operator-note",
+        },
+      },
+    } as unknown as OcxConfig;
+
+    upsertOAuthProvider(config, "anthropic");
+
+    const provider = config.providers.anthropic!;
+    const preset = OAUTH_PROVIDERS.anthropic!.providerConfig;
+    expect(provider.models).toEqual(preset.models);
+    expect(provider.contextWindow).toBe(preset.contextWindow);
+    expect(provider.defaultModel).toBe(preset.defaultModel);
+    expect(provider.disabled).toBe(true);
+    expect(provider.note).toBe("operator-note");
   });
 
   test.each(["login", "add-account", "reauthentication"])(

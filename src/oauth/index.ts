@@ -1238,6 +1238,36 @@ function isLegacyAntigravityStaticCatalog(provider: OcxProviderConfig): boolean 
     ]);
 }
 
+/** Refresh registry-owned catalog fields while preserving valid operator selections. */
+function applyOAuthPresetCatalog(
+  provider: OcxProviderConfig,
+  preset: OcxProviderConfig,
+): void {
+  for (const field of OAUTH_RECONCILE_FIELDS) {
+    if (JSON.stringify(provider[field]) === JSON.stringify(preset[field])) continue;
+    if (preset[field] !== undefined) {
+      provider[field] = cloneProviderField(preset[field]) as never;
+    } else {
+      delete provider[field];
+    }
+  }
+  if (provider.liveModels === undefined && preset.liveModels !== undefined) {
+    provider.liveModels = preset.liveModels;
+  }
+  // Heal only a selection that the refreshed static catalog no longer contains. Providers
+  // with live discovery do not expose an enumerable account catalog here, so their saved
+  // default remains operator-owned.
+  if (
+    provider.defaultModel
+    && preset.defaultModel
+    && preset.models
+    && preset.models.length > 0
+    && !(provider.models ?? []).includes(provider.defaultModel)
+  ) {
+    provider.defaultModel = preset.defaultModel;
+  }
+}
+
 /** Promote only the versioned canonical static seed; unmarked `liveModels: false` remains user intent. */
 function migrateLegacyAntigravityStaticCatalog(config: OcxConfig): boolean {
   if (config.googleAntigravityStaticCatalogVersion !== 1) return false;
@@ -1276,24 +1306,7 @@ function projectOAuthProviderReconciliation(config: OcxConfig): OAuthReconcilePr
     }
     if (def && prov.authMode === "oauth") {
       const preset = def.providerConfig;
-      for (const field of OAUTH_RECONCILE_FIELDS) {
-        if (JSON.stringify(prov[field]) === JSON.stringify(preset[field])) continue;
-        if (preset[field] !== undefined) {
-          prov[field] = cloneProviderField(preset[field]) as never;
-        } else {
-          delete prov[field];
-        }
-      }
-      if (prov.liveModels === undefined && preset.liveModels !== undefined) {
-        prov.liveModels = preset.liveModels;
-      }
-      // Heal a defaultModel that no longer exists in the refreshed list (e.g. a deprecated snapshot).
-      // Skip providers without a static preset `models` list: for live-discovery providers
-      // (e.g. command-code OAuth) the account-scoped catalog is not enumerable here, so any
-      // persisted defaultModel is a user selection and must not be overwritten by the seed.
-      if (prov.defaultModel && preset.defaultModel && preset.models && preset.models.length > 0 && !(prov.models ?? []).includes(prov.defaultModel)) {
-        prov.defaultModel = preset.defaultModel;
-      }
+      applyOAuthPresetCatalog(prov, preset);
     }
     if (JSON.stringify(prov) !== beforeProvider) {
       changed = true;
@@ -1433,6 +1446,9 @@ export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
     if (value === undefined) delete next[field];
     else next[field] = structuredClone(value) as never;
   }
+  // Login used to rebuild the whole row from the preset, so catalog data refreshed
+  // immediately. Keep that timing without overwriting unrelated operator-owned fields.
+  applyOAuthPresetCatalog(next, def.providerConfig);
   // The original Command Code seed was an implementation-owned static catalog, not an
   // operator opt-out. Promote that exact legacy shape when OAuth login refreshes the row.
   if (provider === "command-code" && existing && isLegacyCommandCodeStaticCatalog(existing)) {
