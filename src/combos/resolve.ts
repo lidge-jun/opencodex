@@ -155,6 +155,7 @@ export function pickComboTarget(
   const eligible = (target: Required<OcxComboTarget>): boolean =>
     targetProviderIsUsable(config, target)
     && !cachedProviderQuotaIsExhausted(getCachedProviderQuota(target.provider, now), now)
+    && !isComboTargetInCooldown(comboId, target, now)
     && !excluded.has(targetKey(target))
     && (options.eligible?.(target) ?? true);
 
@@ -284,14 +285,18 @@ export function advanceComboAfterFailure(
 ): ComboPick | null {
   noteComboFailure(pick.comboId, pick.target, pick.writerGeneration);
   const combo = getCombo(config, pick.comboId);
-  const cooldownTargets = options.cooldownScope === "provider" && combo
-    ? combo.targets.filter(target => target.provider === pick.target.provider)
-    : [pick.target];
-  for (const target of cooldownTargets) {
-    coolComboTarget(pick.comboId, target, {
-      ...options,
-      writerGeneration: pick.writerGeneration,
-    });
+  // "none" records no cooldown at all: the failure described the request, not the target, so
+  // the target must stay immediately selectable for the next (differently shaped) request.
+  if (options.cooldownScope !== "none") {
+    const cooldownTargets = options.cooldownScope === "provider" && combo
+      ? combo.targets.filter(target => target.provider === pick.target.provider)
+      : [pick.target];
+    for (const target of cooldownTargets) {
+      coolComboTarget(pick.comboId, target, {
+        ...options,
+        writerGeneration: pick.writerGeneration,
+      });
+    }
   }
   return pickComboTarget(config, pick.comboId, {
     exclude: pick.attempted,

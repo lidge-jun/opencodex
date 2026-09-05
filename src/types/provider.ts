@@ -436,7 +436,7 @@ export interface OcxProviderConfig {
    * activate it, and a 429 with an idle second account is a defect rather than a preference.
    * What an explicit `false` still refuses is the pre-dispatch preference that steers a HEALTHY
    * request toward the account with more known headroom. It beats the global
-   * `oauthAccountFailover`; only `false` is meaningful, since `true` adds nothing over presence.
+   * `oauthAccountFailover` in either direction; reactive 429 rotation remains presence-driven.
    */
   oauthAccountFailover?: {
     enabled?: boolean;

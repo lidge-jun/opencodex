@@ -137,9 +137,12 @@ describe("#2568 adapter-event OAuth failover", () => {
       [{ type: "text", text: "ok" }],
     ];
 
-    const body = await (await handleResponses(request(true), config(false), { model: "", provider: "" })).text();
+    const response = await handleResponses(request(true), config(false), { model: "", provider: "" });
+    const body = await response.text();
 
+    expect(response.status).toBe(200);
     expect(attemptKeys).toEqual(["cursor-access-1", "cursor-access-0"]);
+    expect(body).toContain("ok");
     expect(body).not.toContain("rate_limit_exceeded");
   });
 

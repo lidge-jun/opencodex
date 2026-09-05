@@ -12,7 +12,7 @@ import {
   preferredInitialAccount,
   rotateGenericOAuthAccountOn429,
 } from "../../src/oauth/generic-account-failover";
-import { getAccountSet, markAccountNeedsReauth, saveCredential } from "../../src/oauth/store";
+import { getAccountSet, markAccountNeedsReauth, saveCredential, setActiveAccount } from "../../src/oauth/store";
 import { clearAccountQuotaCache, setCachedProviderAccountQuotaForTests } from "../../src/providers/quota";
 import { resolveCopilotApiBaseUrl } from "../../src/oauth/github-copilot";
 import { resolveProviderTransport } from "../../src/providers/xai-transport";
@@ -135,6 +135,20 @@ describe("#2568 generic OAuth account failover", () => {
     setCachedProviderAccountQuotaForTests("xai", ids[1]!, { fiveHourPercent: 1 });
     expect(preferredInitialAccount(config(false), "xai")).toBeNull();
     expect(preferredInitialAccount(config(true, false), "xai")).toBeNull();
+  });
+
+  test("a provider-level true overrides a global proactive opt-out", async () => {
+    // The documented precedence is narrow-over-broad in BOTH directions. A per-provider false
+    // refuses the preference under a global true (pinned above); the mirror case is an operator
+    // who declines steering globally and opts one provider back in. Honouring only `false`
+    // silently drops that opt-in.
+    const ids = await seed(2);
+    await setActiveAccount("xai", ids[0]!);
+    clearGenericFailoverHealth("xai");
+    setCachedProviderAccountQuotaForTests("xai", ids[0]!, { fiveHourPercent: 99 });
+    setCachedProviderAccountQuotaForTests("xai", ids[1]!, { fiveHourPercent: 1 });
+
+    expect(preferredInitialAccount(config(false, true), "xai")).toBe(ids[1]);
   });
 
   test("a second account flagged for reauth is not a quorum", async () => {
@@ -289,7 +303,7 @@ describe("sidecar on429 wiring", () => {
     // Kiro's routing metadata) live in exactly one place. A fourth rotation site that swaps the
     // bearer by hand would reintroduce the mixed-identity bug this helper exists to prevent.
     const snapshotUses = coreSource.match(/failoverAccountSnapshot\(/g) ?? [];
-    const helperUses = coreSource.match(/applyFailoverSnapshot\(snapshot\)/g) ?? [];
+    const helperUses = coreSource.match(/applyFailoverSnapshot\(snapshot(?:, nextParsed)?\)/g) ?? [];
     // Four since the continuation loop gained its own generic-OAuth arm: the streaming loop grew
     // one with #2568 and the continuation loop did not, so an xAI/Cursor continuation 429 stayed
     // terminal. Bumping this count is the deliberate act of admitting a fourth rotation site --
@@ -328,14 +342,16 @@ describe("sidecar on429 wiring", () => {
     //   generic  = 4: streaming loop, continuation loop, sidecar hook, runTurn preflight.
     //   anthropic = 3: the same, MINUS runTurn -- that path is Cursor-only (cursor.ts is the
     //                  sole adapter implementing runTurn), so Anthropic cannot reach it.
-    //   key       = 2: hasKeyPoolFailover guards only the two response loops; the sidecar
-    //                  reaches the key pool through rotateProviderTransportOn429 instead.
+    //   key       = 3: hasKeyPoolFailover guards the two 429 response loops plus the
+    //                  pre-stream 401 recovery site (a rejected key rotates instead of
+    //                  failing the request); the sidecar reaches the key pool through
+    //                  rotateProviderTransportOn429 instead.
     //
     // Adding a fifth recovery site means deciding, deliberately, which rotators it needs and
     // updating the matching number. That decision is the thing this test exists to force.
     expect(counts.generic).toBe(4);
     expect(counts.anthropic).toBe(3);
-    expect(counts.key).toBe(2);
+    expect(counts.key).toBe(3);
   });
 
   test("the helper fails closed rather than pairing a new bearer with an old identity", () => {
@@ -361,6 +377,10 @@ describe("sidecar on429 wiring", () => {
 
     // Kiro routing metadata still travels with its own token.
     expect(body).toContain("_kiroAuthContext");
+    // ...and reaches the object actually retried. The terminal-guard continuation dispatches a
+    // shallow clone, so writing only the outer request pairs the rotated bearer with the failed
+    // account's region/profile.
+    expect(coreSource).toContain("applyFailoverSnapshot(snapshot, nextParsed)");
   });
 
   test("pre-dispatch selection replaces the CCA project instead of inheriting one", () => {

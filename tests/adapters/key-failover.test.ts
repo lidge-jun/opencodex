@@ -14,7 +14,9 @@ import {
   getKeyCooldownUntil,
   hasKeyPoolFailover,
   rotateKeyOn429,
+  rotateKeyOn401,
   rotateProviderTransportOn429,
+  rotateProviderTransportOn401,
 } from "../../src/providers/key-failover";
 import { resolveOpenCodeGoTransport } from "../../src/providers/opencode-go-transport";
 import { deriveXaiConvId } from "../../src/providers/xai-transport";
@@ -108,6 +110,7 @@ describe("rotateKeyOn429", () => {
 
   test("returns null for oauth/forward providers and single-key pools", () => {
     const oauth = makeConfig({ authMode: "oauth", apiKey: "t", apiKeyPool: pool3() });
+    expect(rotateKeyOn401(oauth, "p")).toBeNull();
     expect(rotateKeyOn429(oauth, "p", null)).toBeNull();
     const single = makeConfig({ apiKey: "key-alpha-000111222333", apiKeyPool: [pool3()![0]] });
     expect(rotateKeyOn429(single, "p", null)).toBeNull();
@@ -332,5 +335,39 @@ describe("rotateProviderTransportOn429", () => {
     expect(rotated?.headers?.["x-grok-client-version"]).toBeUndefined();
     expect(rotated?.headers?.["x-xai-token-auth"]).toBeUndefined();
     expect(JSON.stringify(rotated?.headers)).not.toContain(promptCacheKey);
+  });
+});
+
+describe("rotateKeyOn401", () => {
+  test("rotates to the next key and holds the rejected key for the full cap, not the 429 default", () => {
+    const config = makeConfig({ apiKey: "key-alpha-000111222333", apiKeyPool: pool3() });
+    const now = 1_000_000;
+    const rotated = rotateKeyOn401(config, "p", now);
+    expect(rotated?.apiKey).toBe("key-beta-444555666777");
+    expect(config.providers.p.apiKey).toBe("key-beta-444555666777");
+    // A 401 is a verdict about the credential, so the cooldown is MAX_COOLDOWN_MS (10 min),
+    // not the 60s DEFAULT_COOLDOWN_MS a header-less 429 gets.
+    expect(getKeyCooldownUntil("p", "k1", now)).toBe(now + 10 * 60_000);
+    expect(getKeyCooldownUntil("p", "k1", now)).not.toBe(now + 60_000);
+  });
+
+  test("a rejected key is not retried once the 429 default window would have elapsed", () => {
+    const config = makeConfig({ apiKey: "key-alpha-000111222333", apiKeyPool: pool3() });
+    const now = 1_000_000;
+    rotateKeyOn401(config, "p", now);
+    rotateKeyOn401(config, "p", now);
+    // alpha and beta are both rejected; gamma is the only candidate left.
+    expect(rotateKeyOn401(config, "p", now)?.apiKey ?? config.providers.p.apiKey).toBe("key-gamma-888999000111");
+    // 61s later a 429 cooldown would have expired, but a 401 hold has not.
+    expect(getKeyCooldownUntil("p", "k1", now + 61_000)).toBe(now + 10 * 60_000);
+  });
+
+  test("rotateProviderTransportOn401 rebuilds the transport with the rotated key", () => {
+    const config = makeConfig({ apiKey: "key-alpha-000111222333", apiKeyPool: pool3() });
+    const now = 1_000_000;
+    const routed = { ...config.providers.p } as Parameters<typeof rotateProviderTransportOn401>[2];
+    const rotated = rotateProviderTransportOn401(config, "p", routed, { now });
+    expect(rotated?.apiKey).toBe("key-beta-444555666777");
+    expect(getKeyCooldownUntil("p", "k1", now)).toBe(now + 10 * 60_000);
   });
 });

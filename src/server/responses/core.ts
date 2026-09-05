@@ -238,6 +238,7 @@ import {
   rateLimitRetryDelayMs,
   rateLimitRetryPolicyFor,
   rotateProviderTransportOn429,
+  rotateProviderTransportOn401,
   transientRetryPolicyFor,
 } from "../../providers/key-failover";
 import { shouldAttemptImageTierRetry } from "../image-retry";
@@ -3397,7 +3398,10 @@ async function handleResponsesInner(
    *   tolerates project discovery failing, so a stored account can legitimately have no project;
    *   sending that account's bearer with the FAILED account's project is worse than not rotating.
    */
-  const applyFailoverSnapshot = (snapshot: OAuthAccessSnapshot): boolean => {
+  const applyFailoverSnapshot = (
+    snapshot: OAuthAccessSnapshot,
+    retryParsed: OcxParsedRequest = parsed,
+  ): boolean => {
     if (route.provider.googleMode === "cloud-code-assist" && !snapshot.projectId) return false;
     let rotatedProvider: OcxProviderConfig = { ...route.provider, apiKey: snapshot.accessToken };
     if (route.providerName === "github-copilot") {
@@ -3410,7 +3414,14 @@ async function handleResponsesInner(
     }
     if (snapshot.projectId) rotatedProvider = { ...rotatedProvider, project: snapshot.projectId };
     route.provider = rotatedProvider;
-    if (route.providerName === "kiro") parsed._kiroAuthContext = { ...(snapshot.kiro ?? {}) };
+    if (route.providerName === "kiro") {
+      const kiroContext = { ...(snapshot.kiro ?? {}) };
+      // Terminal-guard continuations are rebuilt from a shallow clone. Updating only the
+      // outer request pairs the new bearer with the failed account's region/profile on
+      // the retry. Keep both owners synchronized; for ordinary paths they are identical.
+      parsed._kiroAuthContext = kiroContext;
+      if (retryParsed !== parsed) retryParsed._kiroAuthContext = { ...kiroContext };
+    }
     // Re-stamp: a request that rotated accounts must be attributed to the account that actually
     // served it. All three rotation sites funnel through here, so this is the only re-stamp
     // needed -- and putting it anywhere else would let one of the three drift.
@@ -6177,6 +6188,37 @@ async function handleResponsesInner(
         continue recovery;
       }
 
+      // Static API-key pools can recover a credential-scoped 401 without abandoning the
+      // provider: one revoked or mistyped key says nothing about its siblings. OAuth providers
+      // refresh above and never enter here — `hasKeyPoolFailover` rejects oauth/forward modes.
+      // Runs after the OAuth replay so a refreshable token is never treated as a dead key.
+      while (upstreamResponse.status === 401 && hasKeyPoolFailover(route.provider)) {
+        const rotated = rotateProviderTransportOn401(config, route.providerName, route.provider, {
+          now: Date.now(),
+          attemptedKey: route.provider.apiKey,
+          promptCacheKey: parsed.options.promptCacheKey,
+        });
+        if (!rotated) break;
+        // Release the failed response's socket before retrying; unread bodies otherwise linger
+        // until runtime cleanup (one per rotated key).
+        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+        route.provider = rotated;
+        invalidateSameTargetRequest();
+        activeAdapter = resolveAdapter(
+          resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
+          config.cacheRetention,
+        );
+        bindRouteReasoningReplayScope({
+          parsed,
+          providerName: route.providerName,
+          provider: route.provider,
+          adapterName: activeAdapter.name,
+        });
+        const result = await rebuildAndRefetch("key-401");
+        if ("failed" in result) return result.failed;
+        upstreamResponse = result;
+      }
+
       // Same-target 429 wait-and-retry (opt-in `retryOn429`, issue #487). Codex never retries
       // 429 itself (it retries 5xx only), and single-key pools cannot use the failover below,
       // so wait (Retry-After or the fixed interval) and replay the IDENTICAL request on the
@@ -6719,7 +6761,7 @@ async function handleResponsesInner(
             const snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId);
             genericFailoverAccountId = nextAccountId;
             genericFailovers += 1;
-            if (applyFailoverSnapshot(snapshot)) {
+            if (applyFailoverSnapshot(snapshot, nextParsed)) {
               invalidateSameTargetRequest();
               activeAdapter = resolveAdapter(
                 resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),

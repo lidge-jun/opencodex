@@ -1412,8 +1412,17 @@ surface is listed here so a maintainer can find the owner without grepping:
 | Image/video generation loop | `src/images/loop.ts`, `src/images/plan.ts`, `src/images/fulfill.ts`, `src/images/xai-client.ts`, `src/images/xai-video-client.ts`, `src/images/artifacts.ts` | A provider-returned image URL is downloaded into a local artifact once, then served locally; warnings stay URL-free because provider CDN URLs may embed credentials. |
 | GitHub Copilot | `src/providers/xai-transport.ts` (`resolveProviderTransport`), `src/providers/github-copilot-transport.ts` | `resolveProviderTransport` selects the Copilot transport when the routed provider name is `github-copilot`; the Copilot module then resolves its headers and base URL, and the registry seeds the provider row and model fallback. |
 | API-key pools | `src/providers/key-failover.ts` | A 429 rotates the active key and records a cooldown; `provider.apiKey` keeps mirroring the active entry so routing stays single-key. |
+| OAuth account failover | `src/oauth/generic-account-failover.ts`, `src/oauth/anthropic-routing.ts` | Reactive pre-output 429 recovery is presence-driven with 2+ eligible accounts. Pool and `oauthAccountFailover` flags govern proactive routing, not the reactive retry: a disabled Anthropic pool recovers through quota ordering rather than its dormant strategy, and a per-provider `enabled` beats the global default in either direction. |
 | Alibaba regions | `src/providers/alibaba-region-backup.ts`, `src/providers/alibaba-region-migration.ts`, `src/providers/alibaba-region-startup.ts` | Region migration backs up before rewriting and is idempotent across restarts. |
 | Discovery and quota | `src/providers/model-discovery.ts`, `src/providers/quota.ts` | Discovery rejects a response over 4 MiB or past 2,000 raw rows before caching it. |
+
+[Decision Log]
+- 목적과 의도: Keep reactive OAuth 429 recovery available without silently enabling proactive account-routing policy the operator switched off.
+- 기존 구현 및 제약 조건: #3495 made reactive recovery presence-driven, but a disabled Anthropic pool still consulted its dormant strategy on the reactive path, and a per-provider `oauthAccountFailover.enabled: true` could no longer beat a global `false`.
+- 검토한 주요 대안: Restore the old all-or-nothing enable flag; leave the merged behavior and document the gaps; or keep the reactive/proactive split and repair the exact policy boundaries.
+- 선택한 방식: Keep presence-driven reactive recovery, apply proactive precedence only before dispatch, and use quota ordering for disabled-pool Anthropic recovery.
+- 다른 대안 대신 이 방식을 선택한 이유: This preserves the merged product decision without letting disabled proactive settings influence a retry, and it restores the published narrow-over-broad precedence in both directions.
+- 장점, 단점 및 영향: 429 recovery stays automatic for operators with multiple eligible accounts; operators who require no automatic account switch must keep one eligible account, which the GUI and public docs state explicitly.
 
 ## Sidecars
 
