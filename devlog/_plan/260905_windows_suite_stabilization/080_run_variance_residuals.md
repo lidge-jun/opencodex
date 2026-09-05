@@ -72,3 +72,93 @@ budgeting one case moved the failure. That is the next work-phase.
 
 Fixing only `waitFor`'s default and the one `SERVER_BUDGET_MS` call would be
 the same mistake `050` recorded: it moves the failure to the next site.
+
+---
+
+## Inventory (wp5 step 1, done)
+
+`rg` over `tests/` for literal deadlines that gate on something external —
+`waitFor*(…, N)`, `deadline = Date.now() + N`, `AbortSignal.timeout(N)`,
+helper defaults `timeoutMs = N` — excluding sites already on a named budget.
+58 hits. Classified by what the wait actually gates on, after reading each:
+
+### A. Gates on a spawned Bun child reaching a marker — MUST budget
+
+These are the `retained-root` shape: a real `bun --eval` boot that costs 8-19 s
+on `windows-latest`, behind a literal under 20 s.
+
+| site | literal | gates on |
+|---|---|---|
+| `codex-integration/codex-write-lock.test.ts:314` | `waitFor` default 10 s | holder child writes marker (**failed run 5**) |
+| `codex-integration/codex-history-lock.test.ts:59` | `waitForPath` default 10 s | child marker |
+| `codex-integration/native-profile-startup.test.ts:229` | `waitForPath` default 10 s | child marker |
+| `codex-integration/native-profile-startup.test.ts:243` | `waitForPort` default 18 s | child binds a port |
+| `codex-integration/native-profile-manager.test.ts:199` | 12 s | child ready marker |
+| `codex-integration/codex-history-worker.test.ts:346` | 10 s | worker child |
+| `codex-integration/codex-inject-write-lock.test.ts:343` | 10 s | child marker |
+| `oauth/oauth-refresh-lock-multiprocess.test.ts:95` | 15 s | child |
+| `codex-integration/codex-retained-root-serialization.test.ts:203,373,450` | 12 s / 16 s | child marker — the file `050` budgeted at the CASE level; its internal waits are still literal |
+| `codex-integration/codex-retained-root-serialization.test.ts:514` | 8 s | two children |
+
+### B. Gates on a real server / HTTP round-trip — MUST budget
+
+| site | literal | gates on |
+|---|---|---|
+| `codex-integration/codex-composed-acceptance.test.ts:494,503` | `SERVER_BUDGET_MS` 30 s | already named, still lost on run 5 at 57 s wall; the CASE budget is 150 s on CI, so the per-request bound is the one that fires. See note. |
+| `server/server-background-lifecycle.test.ts:221,243` | 5 s / 10 s | live server + storage worker |
+| `storage/storage-policy-job-responsive.test.ts:140` | 10 s | server under a blocked worker |
+| `storage/storage-worker-lifecycle.test.ts:70,80`, `storage-worker-teardown-isolate.test.ts:95` | 10-20 s | Worker thread lifecycle (Windows OS-thread join is the slow half; `worker-lifecycle.ts` already keeps a 1.5 s settle) |
+
+### C. Deliberately short — LEAVE ALONE
+
+Bounds that exist to prove something is fast or absent; raising them would
+weaken the assertion:
+
+- `AbortSignal.timeout(500/800)` on `/healthz` polls (`composed-acceptance:251`,
+  `cli-start-journal-order:135`, `ocx-launcher-runtime:57`, `shutdown-launcher:63`,
+  `local-management-direct-transport` ×4) — each is inside its own retry loop
+  whose OUTER bound is already a budget; the 500 ms is per-probe.
+- `issue-914-transport-attribution:163` — `fetch("http://127.0.0.1:1/")` is
+  asserting a refused connection, 5 s is generous.
+- `terminal-guard:235` (25 ms), `web-search-progress-stream:15` (100 ms),
+  `translator-budget:17` (2 s) — in-process logic, no child, no socket.
+- `windows-secret-acl:1680,1714,1831` (5 s) — stubbed runners, in-process.
+- `deepseek-*`, `responses-reasoning-summary-passthrough`, `cli-account:397`
+  (`AbortSignal.timeout(5_000)` on adapter calls against an in-process mock
+  server) — no child, loopback only, 5 s is not the floor these hit.
+
+### D. Ambiguous — read at B, decide per site
+
+`oauth-status-privacy:365,427`, `oauth-manual-code:226`, `codex-account-store:1302`,
+`codex-shim:1704`, `codex-prompt-*:35,74`, `native-main-claim:202`,
+`native-profile-drain-server:189`, `server-live:1221,1309`,
+`storage-policy-config-race:135`, `cursor-http1-transport:289`,
+`package-tree-integrity:192`, `user-cost-overlay-*` — 2-5 s deadlines whose
+subject I have not read yet. Rule for B: if the loop body spawns or awaits a
+real listener, it is A/B; if it polls in-process state, it is C.
+
+### Note on the composed-acceptance case
+
+Its per-request bound is already `SERVER_BUDGET_MS` and it still lost. The
+siblings on the same run took 47.9 s and 57.8 s and PASSED, so this case's
+total (57.7 s) is inside the file's normal band; what fired was one
+`fx.request` at the 30 s mark while the server was mid-startup under four
+shards. The honest fix is not "raise 30 to 60" but to give the held-request
+pattern its own named bound: the request is deliberately held open by the
+fixture until `release()`, so its ceiling is "a startup plus a held gather",
+not "a request". That is a design note for B, not a number.
+
+## Plan for B (wp5)
+
+One PR. For every A/B site: replace the literal with the matching named budget
+(`SPAWN_BUDGET_MS` for a child boot, `SERVER_BUDGET_MS` for a round-trip,
+`isolationBudgetMs()` where the file already scales by lane), and leave a
+one-line comment naming the run that motivated the class (33930757649). For
+each helper with a default (`waitFor`, `waitForPath`, `waitForPort`), change
+the DEFAULT so every caller inherits it. C sites untouched. D sites resolved
+by reading, listed in the commit message either way.
+
+Verifier: macOS focused run of every touched file, `typecheck`, then two
+consecutive CI dispatches. The ablation rule from `test-budget.ts` applies per
+file: at least one case per touched file is driven red by disabling the thing
+it waits for, so a budget cannot hide a vacuous wait.
