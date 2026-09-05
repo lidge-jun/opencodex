@@ -39,6 +39,7 @@ import { nextAtomicTempSequence } from "../../src/config/atomic-write";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import { DEFAULT_SUBAGENT_MODELS, migrateSubagentModels } from "../../src/config/subagent-models";
 import { migrateStartupSubagentModels } from "../../src/server/subagent-models-startup";
+import * as configStore from "../../src/config";
 import { providerManagementConfigError } from "../../src/server/auth-cors";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 let testDir = "";
@@ -127,7 +128,7 @@ describe("Astra-first subagent upgrade", () => {
     }
   });
 
-  test.each([null, "bad", ["one", 2], [""]])("invalid roster %j does not discard providers", roster => {
+  test.each([null, "bad", ["one", 2], [""]].map(roster => ({ roster })))("invalid roster %j does not discard providers", ({ roster }) => {
     writeConfig({ ...getDefaultConfig(), subagentModels: roster, subagentModelsVersion: "invalid" });
     const config = loadConfig();
     expect(config.providers.openai).toEqual(getDefaultConfig().providers.openai);
@@ -171,6 +172,25 @@ describe("Astra-first subagent upgrade", () => {
       expect(readFileSync(getConfigPath(), "utf8")).toBe("{ invalid");
       expect(warn).toHaveBeenCalled();
     } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("a failed persistence transaction does not abort startup", () => {
+    const legacy = { ...getDefaultConfig(), subagentModelsVersion: undefined, subagentModels: ["one"] };
+    saveConfig(legacy);
+    const before = readFileSync(getConfigPath(), "utf8");
+    const mutation = spyOn(configStore, "mutatePersistedConfig").mockImplementation(() => {
+      throw new Error("private filesystem path must not be logged");
+    });
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(() => migrateStartupSubagentModels(legacy)).not.toThrow();
+      expect(legacy.subagentModels).toEqual(["gpt-6-astra", "one"]);
+      expect(readFileSync(getConfigPath(), "utf8")).toBe(before);
+      expect(warn).toHaveBeenCalledWith("[subagent-models-migration] Persistence failed; using the upgraded roster in memory only.");
+    } finally {
+      mutation.mockRestore();
       warn.mockRestore();
     }
   });
