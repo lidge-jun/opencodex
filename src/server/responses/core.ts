@@ -318,6 +318,7 @@ import {
   agentTaskRecoveryConfig,
   discardEncryptedAgentTaskRecovery,
   recoverEncryptedAgentTask,
+  restoreCachedEncryptedAgentTasks,
 } from "./agent-task-recovery";
 import { relaySseEagerBounded } from "../relay-eager";
 import {
@@ -3234,14 +3235,18 @@ async function handleResponsesInner(
     inboundWire === "responses"
     &&
     threadSpawn
-    && unreadableEncryptedAgentTask
     && agentTaskRecovery
     && !isCanonicalOpenAiForwardProvider(route.provider)
     && !options.comboAttempt
     && !canPassThroughEncryptedV2AgentTask(route, inboundWire)
   ) {
-    let recovered = false;
-    try {
+    let recovered = restoreCachedEncryptedAgentTasks(
+      req, (body as { input?: unknown } | undefined)?.input, config, { parentThreadId },
+    ) > 0;
+    unreadableEncryptedAgentTask = hasUnreadableEncryptedAgentTask(
+      (body as { input?: unknown } | undefined)?.input,
+    );
+    if (unreadableEncryptedAgentTask) try {
       recovered = await recoverEncryptedAgentTask(
         req,
         (body as { input?: unknown } | undefined)?.input,

@@ -810,3 +810,28 @@ ids with context `922000` and max input `922000`; OpenRouter seeds `openai/gpt-5
   "visionSidecar": { "enabled": true }
 }
 ```
+
+## OpenCode Go session and agent messages
+
+On Go Responses routes, plaintext Codex `agent_message` items become user messages.
+Author and recipient remain explicit text metadata, and the content parts are preserved.
+Encrypted and unknown content is not normalized; native encrypted tasks still require the
+separate opt-in [task recovery](/reference/configuration/agents/#encrypted-v2-task-recovery).
+
+With task recovery enabled, replayed `NEW_TASK` and `MESSAGE` items reuse a cached assignment only
+after validating the caller and matching the parent-thread scope. Replay restoration
+does not make a new recovery request or extend cache expiry. Expired or unseen
+ciphertext is not replaced. Fresh encrypted `NEW_TASK` and `MESSAGE` items use the same
+opt-in recovery path, including native-parent `send_message` delivery. Message type,
+sender, recipient, parent scope and caller credentials remain part of validation or cache identity.
+
+When a request contains several agent messages, cached replay restoration checks each
+message independently. The cache separates message type, sender, recipient and ciphertext
+within the admitted caller/account and parent scope. Fresh recovery only handles the
+current tail message (ignoring trailing `compaction_trigger` or `additional_tools` metadata).
+It does not batch-recover unseen historical messages; those remain unchanged. A cache miss
+or expiry does not extend the history-recovery contract.
+
+Sender and recipient on Go Responses are context for the receiving model, not a new
+machine-readable routing protocol. Tool routing continues to use the existing collaboration
+contracts.
