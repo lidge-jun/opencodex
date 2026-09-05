@@ -1,0 +1,41 @@
+name: A Windows fixture proof
+on:
+  push:
+    branches: [codex/a-verify-windows]
+permissions:
+  contents: read
+concurrency:
+  group: a-windows-fixture-proof
+  cancel-in-progress: true
+jobs:
+  proof:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout verification snapshot
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
+      - name: Install frozen dependencies
+        shell: pwsh
+        run: |
+          bun install --frozen-lockfile
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Push-Location gui
+          bun install --frozen-lockfile
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Pop-Location
+      - name: Prove fixture behavior and negative controls
+        shell: pwsh
+        run: |
+          & .\node_modules\bun\bin\bun.exe .github/scripts/a-fixture-probe.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Check product source restoration and types
+        shell: pwsh
+        run: |
+          git diff --exit-code
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .\node_modules\bun\bin\bun.exe run typecheck
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
