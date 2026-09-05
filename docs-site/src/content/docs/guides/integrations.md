@@ -21,6 +21,10 @@ file, and removes it again. Twelve clients work this way, each with a switch:
 | ZCode | `~/.zcode/v2/config.json` | JSON | on restart | loopback placeholder |
 | Aside | `~/.aside/u/<account>/models.json` | JSON | after fully quitting and reopening Aside | loopback placeholder |
 
+Generated catalogs include only enabled models from each provider selection. This applies to both
+downloads and managed integrations, including Pi and Aside. The management model list still shows
+the full roster so you can enable additional models.
+
 The managed OpenCode integration owns two fragments: `provider.opencodex` (opencode V1) and
 `providers.opencodex` (opencode V2). Only the V2 block carries the per-model reasoning-effort
 variants, so both are written and kept in sync; they name the same provider and model ids, and

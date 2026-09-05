@@ -39,7 +39,7 @@ import type {
   OpencodeProviderBlocks,
   OpencodeV2ProviderBlock,
 } from "../clients/config-export";
-import { visibleNativeSlugs } from "../codex/catalog";
+import { filterCatalogVisibleModels, visibleNativeSlugs } from "../codex/catalog";
 import { commandInvocation } from "../lib/win-exec";
 import { loadServiceTokenFromFile, serviceApiTokenFilePath } from "../lib/service-secrets";
 import { providerCodexAccountMode } from "../providers/registry";
@@ -376,12 +376,17 @@ export function opencodeCatalogFromProxyRows(
   config: OcxConfig,
 ): OpencodeCatalogModel[] {
   const omitNative = providerCodexAccountMode("openai", config.providers?.openai) === "direct";
+  const routedRows = rows.filter((row): row is OpencodeProxyModelRow & { provider: string; id: string } =>
+    row.native !== true && typeof row.provider === "string" && typeof row.id === "string");
+  const visibleRouted = new Set<OpencodeProxyModelRow>(filterCatalogVisibleModels(routedRows, config));
   const seen = new Set<string>();
   const catalog: OpencodeCatalogModel[] = [];
   for (const row of rows) {
     const namespaced = row.namespaced?.trim();
     if (!namespaced || row.disabled === true) continue;
     if (omitNative && row.native === true) continue;
+    if (row.native !== true && typeof row.provider === "string" && typeof row.id === "string"
+      && !visibleRouted.has(row)) continue;
     if (seen.has(namespaced)) continue;
     seen.add(namespaced);
     catalog.push({

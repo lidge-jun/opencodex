@@ -8,7 +8,7 @@ import {
   seedCodexModelEntitlementsForTests,
 } from "../../src/codex/model-entitlements";
 import { handleManagementAPI } from "../../src/server/management-api";
-import { loadExportModels } from "../../src/server/management/model-rows";
+import { listManagementModelRows, loadExportModels } from "../../src/server/management/model-rows";
 import {
   OPENCODE_API_KEY_ENV,
   OPENCODE_CONFIG_SCHEMA,
@@ -643,5 +643,34 @@ describe("default Fast availability reaches external exports", () => {
     expect(rows.find(row => row.namespaced === "fixture/m")?.fastRowAvailable).toBe(false);
     const result = buildClientConfig("pi", { baseUrl: "http://127.0.0.1:10100/v1", models: rows, config }) as PiGeneratedConfig;
     expect(result.providers.opencodex.models.map(model => model.id)).not.toContain("fixture/m--fast");
+  });
+});
+
+describe("Pi and Aside provider selection", () => {
+  test.each(["pi", "aside"] as const)("%s exports selected Grok models while management retains the full roster", async client => {
+    const config = baseConfig({
+      fastRows: false,
+      defaultProvider: "xai",
+      providers: {
+        xai: {
+          adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", authMode: "key",
+          liveModels: false, models: ["grok-4.6", "grok-4.5", "grok-4.3"],
+          selectedModels: ["grok-4.6"],
+        },
+      },
+    });
+    const ids = async () => {
+      const models = await loadExportModels(config);
+      const doc = buildClientConfig(client, { baseUrl: "http://127.0.0.1:10100/v1", config, models }) as PiGeneratedConfig;
+      return doc.providers.opencodex!.models.map(model => model.id).filter(id => id.startsWith("xai/"));
+    };
+    const management = await listManagementModelRows(config);
+    expect(management.filter(row => row.provider === "xai")).toHaveLength(3);
+    expect(await ids()).toEqual(["xai/grok-4.6"]);
+    config.disabledModels = ["xai/grok-4.6"];
+    expect(await ids()).toEqual([]);
+    config.disabledModels = [];
+    config.providers.xai!.selectedModels = [];
+    expect(await ids()).toEqual(["xai/grok-4.3", "xai/grok-4.5", "xai/grok-4.6"]);
   });
 });

@@ -430,3 +430,35 @@ describe("export row filtering", () => {
     expect(model?.defaultReasoningEffort).toBe("high");
   });
 });
+
+describe("export allowlist parity", () => {
+  test("filters the full management roster before deduplication and keeps other providers", () => {
+    const cfg = config();
+    cfg.providers.xai = {
+      adapter: "openai-chat", baseUrl: "https://api.x.ai/v1",
+      selectedModels: ["grok-4.6"],
+    };
+    const rows = [
+      { provider: "xai", id: "grok-4.5", namespaced: "xai/grok-4.5", disabled: false },
+      { provider: "xai", id: "grok-4.6", namespaced: "xai/grok-4.6", disabled: true },
+      { provider: "xai", id: "grok-4.6", namespaced: "xai/grok-4.6", reasoningEfforts: ["high"] },
+      { provider: "other", id: "model", namespaced: "other/model" },
+    ];
+    const exported = exportModelsFromProxyRows(rows, cfg);
+    expect(exported.map(row => row.namespaced)).toEqual(["xai/grok-4.6", "other/model"]);
+    expect(exported[0]!.reasoningEfforts).toEqual(["high"]);
+    cfg.disabledModels = ["xai/grok-4.6"];
+    expect(exportModelsFromProxyRows(rows, cfg).map(row => row.namespaced)).toEqual(["other/model"]);
+  });
+
+  test("uses the catalog's encoded-id selection equivalence", () => {
+    const cfg = config();
+    cfg.providers.slash = {
+      adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", selectedModels: ["org-model"],
+    };
+    expect(exportModelsFromProxyRows([
+      { provider: "slash", id: "org/model", namespaced: "slash/org-model" },
+      { provider: "slash", id: "other", namespaced: "slash/other" },
+    ], cfg).map(row => row.namespaced)).toEqual(["slash/org-model"]);
+  });
+});

@@ -40,6 +40,13 @@ TOML temporal scalars cannot survive the JSON-cloned merge representation with t
 intact. The common parser refuses documents containing them before either status or mutation
 proceeds, including nested arrays and inline tables. Quoted date strings remain supported.
 
+## Catalog visibility
+
+Management export and CLI export apply the canonical routed catalog visibility filter before
+serialization: provider selections, disabled models, and pending initial selection all constrain
+the client roster. The full management list remains available for selection. Native rows retain
+their existing visibility rules.
+
 ## Fast model selectors
 
 The serving proxy resolves `fastRowAvailable` on every management model row, including its

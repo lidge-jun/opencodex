@@ -11,6 +11,7 @@
 import type { CatalogModel } from "../../codex/catalog";
 import {
   catalogModelSlug,
+  filterCatalogVisibleModels,
   accountBoundNativeOpenAiSlugsBySelector,
   nativeDefaultReasoningEffort,
   NATIVE_OPENAI_MODELS,
@@ -217,5 +218,8 @@ export function toExportModel(row: ManagementModelRow): ExportModel {
  */
 export async function loadExportModels(config: OcxConfig): Promise<ExportModel[]> {
   const rows = await listManagementModelRows(config);
-  return rows.filter(row => !row.disabled).map(toExportModel);
+  // Management deliberately lists the full roster so hidden models can be enabled.
+  // A client picker must also honor the provider selection, not just its blocklist.
+  const visibleRouted = new Set(filterCatalogVisibleModels(rows.filter(row => !row.native), config));
+  return rows.filter(row => !row.disabled && (row.native || visibleRouted.has(row))).map(toExportModel);
 }
