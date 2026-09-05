@@ -1132,6 +1132,35 @@ Grounded in the open-sourced official client (xai-org/grok-build); unit + eviden
   `fetchWithHeaderTimeout` takes an executor so provider fetch wrappers stay inside the
   timeout race.
 
+The generated Grok client marker also enables a client-facing sparse-terminal repair for native
+Responses streams. Grok Build renders text deltas immediately but derives its durable assistant
+turn from `response.completed.response.output`; an OpenAI-compatible stream may instead place the
+complete items in `response.output_item.done` and finish with an explicit empty output array. For
+that marked client only, OpenCodex uses a terminal-only tracker: it retains bounded, contiguous,
+unique and semantically valid raw completed items, then backfills a missing or empty terminal
+snapshot. It never promotes locally synthesized or merely repaired items. Unmarked callers continue
+to treat an explicit empty array as authoritative. Within this marked client-facing repair,
+malformed, gapped, oversized, contradictory, failed, or incomplete streams stay fail-closed.
+
+[Decision Log]
+- 목적과 의도: Prevent Grok Build from classifying a visibly streamed answer as empty and replaying
+  the same billable turn when the terminal snapshot is sparse.
+- 기존 구현 및 제약 조건: OpenCodex already reconstructed missing terminal output for provider
+  opt-ins, but preserved explicit empty arrays; Grok Build discarded ordinary completed-item events
+  when constructing its final conversation response.
+- 검토한 주요 대안: Change every caller's empty-array semantics; accept a turn merely because a
+  text delta was visible; reuse the provider's broader lifecycle synthesis; add a strict repair at
+  the generated Grok client boundary.
+- 선택한 방식: Use the existing generated client marker to opt Grok into a terminal-only repair and
+  backfill only from unique, contiguous, bounded real done items whose raw semantics are valid.
+- 다른 대안 대신 이 방식을 선택한 이유: A global rewrite would alter valid provider semantics,
+  while accepting deltas without durable items would leave persistence and continuation empty. The
+  marker is already the client-specific compatibility boundary; keeping the provider repair separate
+  also prevents synthesized or permissively normalized items from overriding an explicit empty terminal.
+- 장점, 단점 및 영향: Grok receives one durable completed answer without a paid retry; ordinary
+  clients remain byte-semantics compatible. The proxy retains bounded item state for marked streams
+  and intentionally refuses ambiguous reconstruction.
+
 ## Kiro client parallel-tool hint
 
 Kiro's wire remains serialized even when an OpenAI Responses client sends
