@@ -44,7 +44,7 @@ export function DashboardEffortCapPanel({ apiBase, d }: { apiBase: string; d: Da
   if (!maModeResolved || maMode === "v1") return null;
 
   return (
-    <div className="panel">
+    <div className="panel dash-effort-panel">
       <div className="injection-head">
         <span className="injection-label" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
           {t("dash.effortCapLabel")}
@@ -62,56 +62,58 @@ export function DashboardEffortCapPanel({ apiBase, d }: { apiBase: string; d: Da
             <IconInfo width={13} height={13} aria-hidden="true" />
           </button>
         </span>
-        <Select
-          value={effortCap}
-          options={[
-            { value: "", label: t("dash.effortCapNone") },
-            ...EFFORT_CAP_LEVELS.map(e => ({ value: e, label: e })),
-          ]}
-          onChange={async (v) => {
-            if (effortCapSaving) return;
-            setEffortCapSaving(true);
-            try {
-              const res = await fetch(`${apiBase}/api/effort-caps`, {
-                method: "PUT",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ effortCap: v || null }),
-              });
-              const data = await requireJson<{ ok: boolean; effortCap?: string | null; subagentEffortCap?: string | null }>(res);
-              setEffortCap(data.effortCap ?? "");
-              setSubagentEffortCap(data.subagentEffortCap ?? "");
-            } catch { /* ignore */ }
-            finally { setEffortCapSaving(false); }
-          }}
-          disabled={effortCapSaving}
-          label={t("dash.effortCapLabel")}
-          align="right"
-        />
-        <Select
-          value={subagentEffortCap}
-          options={[
-            { value: "", label: t("dash.effortCapNone") },
-            ...EFFORT_CAP_LEVELS.map(e => ({ value: e, label: e })),
-          ]}
-          onChange={async (v) => {
-            if (effortCapSaving) return;
-            setEffortCapSaving(true);
-            try {
-              const res = await fetch(`${apiBase}/api/effort-caps`, {
-                method: "PUT",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ subagentEffortCap: v || null }),
-              });
-              const data = await requireJson<{ ok: boolean; effortCap?: string | null; subagentEffortCap?: string | null }>(res);
-              setEffortCap(data.effortCap ?? "");
-              setSubagentEffortCap(data.subagentEffortCap ?? "");
-            } catch { /* ignore */ }
-            finally { setEffortCapSaving(false); }
-          }}
-          disabled={effortCapSaving}
-          label={t("dash.subagentEffortCapLabel")}
-          align="right"
-        />
+        <div className="dash-effort-controls">
+          <Select
+            value={effortCap}
+            options={[
+              { value: "", label: t("dash.effortCapNone") },
+              ...EFFORT_CAP_LEVELS.map(e => ({ value: e, label: e })),
+            ]}
+            onChange={async (v) => {
+              if (effortCapSaving) return;
+              setEffortCapSaving(true);
+              try {
+                const res = await fetch(`${apiBase}/api/effort-caps`, {
+                  method: "PUT",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ effortCap: v || null }),
+                });
+                const data = await requireJson<{ ok: boolean; effortCap?: string | null; subagentEffortCap?: string | null }>(res);
+                setEffortCap(data.effortCap ?? "");
+                setSubagentEffortCap(data.subagentEffortCap ?? "");
+              } catch { /* ignore */ }
+              finally { setEffortCapSaving(false); }
+            }}
+            disabled={effortCapSaving}
+            label={t("dash.effortCapLabel")}
+            align="right"
+          />
+          <Select
+            value={subagentEffortCap}
+            options={[
+              { value: "", label: t("dash.effortCapNone") },
+              ...EFFORT_CAP_LEVELS.map(e => ({ value: e, label: e })),
+            ]}
+            onChange={async (v) => {
+              if (effortCapSaving) return;
+              setEffortCapSaving(true);
+              try {
+                const res = await fetch(`${apiBase}/api/effort-caps`, {
+                  method: "PUT",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ subagentEffortCap: v || null }),
+                });
+                const data = await requireJson<{ ok: boolean; effortCap?: string | null; subagentEffortCap?: string | null }>(res);
+                setEffortCap(data.effortCap ?? "");
+                setSubagentEffortCap(data.subagentEffortCap ?? "");
+              } catch { /* ignore */ }
+              finally { setEffortCapSaving(false); }
+            }}
+            disabled={effortCapSaving}
+            label={t("dash.subagentEffortCapLabel")}
+            align="right"
+          />
+        </div>
       </div>
     </div>
   );
@@ -642,7 +644,7 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
             </button>
             <code className="muted text-caption">{`⚠ ${shadowSourceModelBadge(shadowCall?.sourceModels)}`}</code>
           </div>
-          <div className="setting-controls" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div className="setting-controls dash-shadow-controls">
             <button
               type="button"
               className={`switch ${shadowCall?.enabled ? "on" : ""}`}

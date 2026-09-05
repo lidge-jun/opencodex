@@ -271,11 +271,15 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
    stays visible in BOTH light and dark (a plain <img> was invisible white-on-white in light). */
 .brand-logo { width: 26px; height: 26px; flex-shrink: 0; background: var(--text);
   -webkit-mask: url(/logo.png) center / contain no-repeat; mask: url(/logo.png) center / contain no-repeat; }
-.brand .name { font-weight: var(--weight-semibold); font-size: var(--text-subtitle); letter-spacing: 0; line-height: 26px; }
+.brand .name { flex-shrink: 0; font-weight: var(--weight-semibold); font-size: var(--text-subtitle); letter-spacing: 0; line-height: 26px; }
 .brand .ver {
   font-family: var(--font-code); font-size: var(--text-micro); color: var(--muted); line-height: var(--leading-tight);
   background: var(--raised); border: 1px solid var(--border); padding: 2px 6px; border-radius: var(--radius-pill);
   align-self: center;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* [Decision Log]
@@ -2421,7 +2425,7 @@ button.prov-account-row.active { cursor: default; }
   .mobile-topbar .brand .name {
     min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  .mobile-topbar .brand .ver { flex-shrink: 0; }
+  .mobile-topbar .brand .ver { flex-shrink: 1; }
   .mobile-topbar .stop-toggle { width: auto; min-width: 44px; min-height: 44px; justify-content: center; padding: 8px; }
   /* Both orbs keep the 44x44 touch target the single stop button had; a bare 28px
      .sidebar-orb would be a regression on the surface where it matters most. */
