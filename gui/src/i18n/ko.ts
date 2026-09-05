@@ -288,7 +288,7 @@ export const ko: Record<TKey, string> = {
   "dash.codexRestartTimeout": "프록시가 제때 응답하지 않았습니다. app-server를 계속 종료하는 중일 수 있습니다.",
   "models.staleBanner": "Codex가 이 카탈로그보다 오래된 모델 목록을 보여주고 있습니다. Codex를 재시작하면 새로 읽습니다.",
   "dash.codexDesktopAuthless": "로그인 없이 Codex 열기",
-  "dash.codexDesktopAuthlessHint": "로컬 연결에서 기본으로 활성화됩니다. OpenCodex에 저장된 계정과 제공자를 사용합니다. 변경 후 Codex를 다시 시작하세요. Codex의 ChatGPT 계정 기능을 사용할 수 없을 수 있습니다.",
+  "dash.codexDesktopAuthlessHint": "독립 실행형 로컬 연결에서 기본으로 활성화됩니다. 제공자 접근에는 여전히 인증 정보가 필요합니다. Pool은 저장된 계정, Direct는 호출자 또는 메인 계정을 사용합니다. 계정 권한을 부여하지 않습니다. 변경 후 Codex를 다시 시작하세요. 계정이 필요한 기능은 사용할 수 없을 수 있습니다.",
   "dash.codexAutoStart": "Codex 실행 시 opencodex 시작",
   "dash.codexAutoStartHint": "설치된 launcher shim이 ocx ensure를 실행하도록 허용합니다. 이 설정은 재부팅 보호를 설치하지 않으므로 시작 안전성에서 실제 상태를 확인하세요.",
   "dash.searchModel": "서치 사이드카 모델",

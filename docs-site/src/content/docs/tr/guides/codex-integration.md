@@ -20,6 +20,8 @@ korur.
 
 Yerel bağlantılar varsayılan olarak Codex’i ayrı oturum açmadan başlatır. Dashboard → Overview ayarı OpenCodex’te kayıtlı hesapları ve sağlayıcıları kullanır. Değişiklikten sonra Codex’i yeniden başlatın.
 
+Bu ayar yalnızca Codex Desktop’ın ayrı oturum açma adımını kaldırır; kimlik bilgisi oluşturmaz veya seçmez ve hesap erişimi vermez. Pool yapılandırılmış Codex hesaplarını seçer; Direct hâlâ çağıranın/ana hesabın kimlik bilgilerini gerektirir. Luna Reserve de kimlik bilgilerine ve sağlayıcının iznine bağlıdır.
+
 `ocx init`, `ocx start` ve `ocx sync` enjektörü çağırır. `codexDesktopAuthless: false` olan geri döngü
 (loopback) bağlantısında, Codex'in yerleşik `openai` sağlayıcı kimliğini korur
 ve bu sağlayıcıyı opencodex'e yönlendirir:

@@ -22,7 +22,7 @@ configs migrate to marker 2 and preserve `config.json.pre-openai-tiers-v2.bak` f
 
 ## Config injection
 
-`ocx init`, `ocx start`, and `ocx sync` call the injector. On loopback, it defaults to the
+`ocx init`, `ocx start`, and `ocx sync` call the injector. For standalone loopback targets that require no admission token, it defaults to the
 [authless dedicated provider](#authless-codex-desktop). If `codexDesktopAuthless` is explicitly
 `false`, it keeps Codex's built-in `openai` provider id and points that provider at opencodex:
 
@@ -216,9 +216,13 @@ HTTP/SSE.
 
 ### Authless Codex Desktop
 
-Codex Desktop starts without a separate ChatGPT login by default on local connections.
+Codex Desktop starts without a separate ChatGPT login by default for standalone loopback targets
+that require no admission token. Client connections and other admission-authenticated targets
+keep `requires_openai_auth = true` and `OPENCODEX_API_AUTH_TOKEN`, even when their URL is loopback.
 OpenCodex still authenticates requests with the accounts and providers saved in OpenCodex;
 ChatGPT accounts in Pool mode remain available. Direct mode still requires caller/main credentials.
+The switch does not create or select credentials or grant account permissions. Luna Reserve still
+requires the appropriate credentials and a current upstream permission.
 
 Toggle **Open Codex without signing in** in **Dashboard → Overview**. Saving synchronizes the
 Codex configuration; restart Codex to apply the change. If synchronization is pending, the dashboard

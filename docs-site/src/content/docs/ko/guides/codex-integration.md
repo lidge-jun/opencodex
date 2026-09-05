@@ -11,6 +11,8 @@ opencodex는 Codex가 읽는 두 가지, 즉 설정(`$CODEX_HOME/config.toml`, �
 
 로컬 연결은 기본적으로 별도 로그인 없이 Codex를 엽니다. Dashboard → Overview에서 전환할 수 있습니다. OpenCodex에 저장된 계정과 제공자를 사용하며 변경 후 Codex를 다시 시작해야 합니다.
 
+이 설정은 Codex Desktop의 별도 로그인만 생략하며 인증 정보를 생성하거나 선택하지 않고 계정 권한도 부여하지 않습니다. Pool은 설정된 Codex 계정을 선택하고, Direct는 여전히 호출자 또는 메인 계정의 인증 정보가 필요합니다. Luna Reserve도 인증 정보와 제공자의 허가가 필요합니다.
+
 `ocx init`, `ocx start`, `ocx sync`는 모두 인젝터를 호출합니다. `codexDesktopAuthless: false`인 loopback 바인드에서는 Codex의 빌트인 `openai` 프로바이더 id를 그대로 유지한 채, 그 프로바이더가 opencodex를 바라보게 합니다.
 
 ```toml

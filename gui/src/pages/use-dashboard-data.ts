@@ -621,7 +621,7 @@ export function useDashboardData(apiBase: string) {
       });
       const data = await requireJson<SettingsData>(res, "save failed");
       settingsMutationEpochRef.current += 1;
-      setSettings(prev => prev ? { ...prev, [key]: data[key], catalogRefreshPending: data.catalogRefreshPending, startupHealth: data.startupHealth ?? prev.startupHealth } : prev);
+      setSettings(prev => prev ? { ...prev, [key]: data[key], catalogRefreshPending: key === "codexDesktopAuthless" ? data.catalogRefreshPending : prev.catalogRefreshPending, startupHealth: data.startupHealth ?? prev.startupHealth } : prev);
       if (key === "codexDesktopAuthless") await runSync();
     } catch {
       setSettings(prev => prev ? { ...prev, [key]: !next } : prev);

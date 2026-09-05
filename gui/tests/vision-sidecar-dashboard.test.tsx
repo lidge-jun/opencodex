@@ -414,8 +414,11 @@ test("Desktop login preference is persisted before full sync; sync failure keeps
     if (init?.method === "PUT") {
       const body = JSON.parse(String(init.body));
       writes.push({ path, body });
-      saved = body.codexDesktopAuthless;
-      return Response.json({ codexDesktopAuthless: saved });
+      if (body.codexDesktopAuthless !== undefined) {
+        saved = body.codexDesktopAuthless;
+        return Response.json({ codexDesktopAuthless: saved, catalogRefreshPending: true });
+      }
+      return Response.json({ codexAutoStart: body.codexAutoStart, catalogRefreshPending: false });
     }
     if (path.endsWith("/api/sync")) {
       writes.push({ path, body: null });
@@ -441,6 +444,10 @@ test("Desktop login preference is persisted before full sync; sync failure keeps
     ]);
     expect(latest?.settings?.codexDesktopAuthless).toBe(false);
     expect(latest?.syncError).toBe("sync unavailable");
+    expect(latest?.settings?.catalogRefreshPending).toBe(true);
+    await act(async () => { await latest!.toggleCodexAutoStart(); });
+    expect(latest?.settings?.codexAutoStart).toBe(false);
+    expect(latest?.settings?.catalogRefreshPending).toBe(true);
   } finally {
     await act(async () => { root?.unmount(); });
     root = null;
