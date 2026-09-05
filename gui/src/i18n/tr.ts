@@ -294,7 +294,7 @@ export const tr: Record<TKey, string> = {
   "dash.codexRestartTimeout": "Proxy zamanında yanıt vermedi. App-server'ları durdurmaya devam ediyor olabilir.",
   "models.staleBanner": "Codex, bu katalogdan daha eski bir model listesi gösteriyor. Yeniden okumak için Codex'i yeniden başlatın.",
   "dash.codexDesktopAuthless": "Codex’i oturum açmadan başlat",
-  "dash.codexDesktopAuthlessHint": "Bağımsız yerel bağlantılarda varsayılandır. Sağlayıcı erişimi hâlâ kimlik bilgileri gerektirir: Pool kayıtlı hesapları, Direct çağıranın/ana hesabın bilgilerini kullanır. Ek hesap yetkisi vermez. Değişiklikten sonra Codex’i yeniden başlatın. Hesaba bağlı Codex özellikleri kullanılamayabilir.",
+  "dash.codexDesktopAuthlessHint": "Bağımsız yerel bağlantılarda varsayılandır. Sağlayıcı erişimi hâlâ kimlik bilgileri gerektirir: Pool kayıtlı hesapların kimlik bilgilerini kullanır; Direct ise çağıranın/ana hesabın kimlik bilgilerini kullanır. Ek hesap yetkisi vermez. Değişiklikten sonra Codex’i yeniden başlatın. Hesaba bağlı Codex özellikleri kullanılamayabilir.",
   "dash.codexAutoStart": "opencodex'i Codex ile başlat",
   "dash.codexAutoStartHint": "Yüklü bir shim'in ocx ensure çalıştırmasına izin verir. Arka plan servisi veya yeniden başlatma koruması kurmaz; sistem durumu için Başlatma Güvenliği'ne bakın.",
   "dash.searchModel": "Arama yan araç modeli",

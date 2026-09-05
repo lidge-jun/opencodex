@@ -18,7 +18,7 @@ korur.
 
 ## Yapılandırma enjeksiyonu
 
-Yerel bağlantılar varsayılan olarak Codex’i ayrı oturum açmadan başlatır. Dashboard → Overview ayarı OpenCodex’te kayıtlı hesapları ve sağlayıcıları kullanır. Değişiklikten sonra Codex’i yeniden başlatın.
+Yalnızca erişim belirteci gerektirmeyen bağımsız loopback hedefleri varsayılan olarak Codex’i ayrı oturum açmadan başlatır. İstemci bağlantıları ve belirteçle doğrulanan hedefler, URL loopback olsa bile `requires_openai_auth = true` ve `OPENCODEX_API_AUTH_TOKEN` kullanmayı sürdürür. Dashboard → Overview ayarı OpenCodex’te kayıtlı hesapları ve sağlayıcıları kullanır. Değişiklikten sonra Codex’i yeniden başlatın.
 
 Bu ayar yalnızca Codex Desktop’ın ayrı oturum açma adımını kaldırır; kimlik bilgisi oluşturmaz veya seçmez ve hesap erişimi vermez. Pool yapılandırılmış Codex hesaplarını seçer; Direct hâlâ çağıranın/ana hesabın kimlik bilgilerini gerektirir. Luna Reserve de kimlik bilgilerine ve sağlayıcının iznine bağlıdır.
 
