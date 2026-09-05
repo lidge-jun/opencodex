@@ -4373,6 +4373,11 @@ async function handleResponsesInner(
         releaseCodexAuthContextProbeLease(authCtx);
         return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(err));
       }
+      if (route.provider.googleMode === "cloud-code-assist" && !refreshed.projectId) {
+        upstream.abort();
+        releaseCodexAuthContextProbeLease(authCtx);
+        return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(new Error("Cloud Code Assist project is required")));
+      }
       sentOAuthSnapshot = refreshed;
       replayOAuthCredentialSnapshot = {
         accountId: refreshed.accountId,
@@ -6127,6 +6132,10 @@ async function handleResponsesInner(
         } catch (err) {
           cleanupUpstreamAbort();
           return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(err));
+        }
+        if (route.provider.googleMode === "cloud-code-assist" && !refreshed.projectId) {
+          cleanupUpstreamAbort();
+          return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(new Error("Cloud Code Assist project is required")));
         }
         sentOAuthSnapshot = refreshed;
         replayOAuthCredentialSnapshot = {

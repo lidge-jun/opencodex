@@ -39,13 +39,13 @@ afterEach(() => {
   if (testDir) removeTreeWithRetry(testDir);
 });
 
-async function seedOAuth(expires = Date.now() + 3_600_000): Promise<void> {
+async function seedOAuth(expires = Date.now() + 3_600_000, projectId?: string | null): Promise<void> {
   await saveCredential("google-antigravity", {
     access: "rejected-access",
     refresh: "initial-refresh",
     expires,
     accountId: "antigravity-test-account",
-    projectId: "initial-project-id",
+    ...(projectId !== undefined ? (projectId ? { projectId } : {}) : { projectId: "initial-project-id" }),
     source: "oauth",
   });
 }
@@ -58,6 +58,24 @@ function antigravityConfig(): OcxConfig {
     providers: {
       "google-antigravity": {
         adapter: "google",
+        baseUrl: DAILY_API_BASE,
+        authMode: "oauth",
+        googleMode: "cloud-code-assist",
+        project: "initial-project-id",
+        models: ["gemini-3.8-flash"],
+      },
+    },
+  } as OcxConfig;
+}
+
+function antigravityPassthroughConfig(): OcxConfig {
+  return {
+    port: 0,
+    hostname: "127.0.0.1",
+    defaultProvider: "google-antigravity",
+    providers: {
+      "google-antigravity": {
+        adapter: "openai-responses",
         baseUrl: DAILY_API_BASE,
         authMode: "oauth",
         googleMode: "cloud-code-assist",
@@ -91,14 +109,14 @@ function sseSuccessBody(text: string): string {
   return `data: ${JSON.stringify(jsonSuccessBody(text))}\n\n`;
 }
 
-async function postResponses(server: ReturnType<typeof startServer>): Promise<Response> {
+async function postResponses(server: ReturnType<typeof startServer>, stream = false): Promise<Response> {
   return originalFetch(new URL("/v1/responses", server.url), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       model: "google-antigravity/gemini-3.8-flash",
       input: "hello",
-      stream: false,
+      stream,
     }),
   });
 }
@@ -119,7 +137,7 @@ function installOAuthFetch(
   apiStatuses: number[],
   options: {
     tokenErrorDescription?: string;
-    refreshedProjectId?: string;
+    refreshedProjectId?: string | null;
   } = {},
 ): { chatAuth: string[]; chatProjects: string[]; counts: { refresh: number } } {
   const chatAuth: string[] = [];
@@ -149,9 +167,48 @@ function installOAuthFetch(
 
     // Google Cloud Code Assist project discovery
     if (url.includes(":loadCodeAssist")) {
+      if (options.refreshedProjectId === null) {
+        return new Response(JSON.stringify({}), { status: 404, headers: { "content-type": "application/json" } });
+      }
       return new Response(JSON.stringify({
         cloudaicompanionProject: options.refreshedProjectId ?? "refreshed-project-id",
       }), { headers: { "content-type": "application/json" } });
+    }
+
+    if (url.includes(":onboardUser")) {
+      if (options.refreshedProjectId === null) {
+        return new Response(JSON.stringify({}), { status: 404, headers: { "content-type": "application/json" } });
+      }
+    }
+
+    // Responses passthrough endpoint
+    if (url.endsWith("/responses") && url.includes("daily-cloudcode-pa.googleapis.com")) {
+      const auth = new Headers(init?.headers).get("authorization") ?? "";
+      chatAuth.push(auth);
+      const status = apiStatuses.shift() ?? 200;
+      if (status === 401) {
+        return new Response(JSON.stringify({
+          error: {
+            code: 401,
+            message: "Request had invalid authentication credentials.",
+            status: "UNAUTHENTICATED",
+          },
+        }), {
+          status: 401,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({
+        id: "resp-passthrough",
+        output: [{
+          id: "msg-passthrough",
+          type: "message",
+          content: [{ type: "output_text", text: "ok after passthrough" }],
+        }],
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
     }
 
     // Google Antigravity Generate Content endpoint
@@ -381,6 +438,87 @@ describe("Google Antigravity OAuth upstream 401 replay", () => {
       expect(refreshCalls).toBe(1);
       expect(attemptsByBearer.get("Bearer rejected-access")).toBe(2);
       expect(attemptsByBearer.get("Bearer fresh-access")).toBe(2);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("negative project-less refresh rejects replay in native Responses passthrough", async () => {
+    await seedOAuth(undefined, null);
+    saveConfig(antigravityPassthroughConfig());
+    const observed = installOAuthFetch([401], { refreshedProjectId: null });
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      const json = await response.json() as { error?: { code?: string; message?: string; type?: string } };
+      expect(response.status).toBe(401);
+      expect(json.error?.type).toBe("authentication_error");
+      expect(json.error?.message).toBe(PUBLIC_OAUTH_AUTHENTICATION_ERROR);
+      expect(observed.counts.refresh).toBe(1);
+      expect(observed.chatAuth).toEqual(["Bearer rejected-access"]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("negative project-less refresh rejects replay in generic adapter", async () => {
+    await seedOAuth(undefined, null);
+    saveConfig(antigravityConfig());
+    const observed = installOAuthFetch([401], { refreshedProjectId: null });
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      const json = await response.json() as { error?: { code?: string; message?: string; type?: string } };
+      expect(response.status).toBe(401);
+      expect(json.error?.type).toBe("authentication_error");
+      expect(json.error?.message).toBe(PUBLIC_OAUTH_AUTHENTICATION_ERROR);
+      expect(observed.counts.refresh).toBe(1);
+      expect(observed.chatAuth).toEqual(["Bearer rejected-access"]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("negative project-less refresh rejects replay in chat completions", async () => {
+    await seedOAuth(undefined, null);
+    saveConfig(antigravityConfig());
+    const observed = installOAuthFetch([401], { refreshedProjectId: null });
+    const server = startServer(0);
+    try {
+      const response = await postChat(server);
+      const json = await response.json() as { error?: { message?: string; type?: string } };
+      expect(response.status).toBe(401);
+      expect(json.error?.type).toBe("authentication_error");
+      expect(json.error?.message).toBe(PUBLIC_OAUTH_AUTHENTICATION_ERROR);
+      expect(observed.counts.refresh).toBe(1);
+      expect(observed.chatAuth).toEqual(["Bearer rejected-access"]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("401 then 200 on /v1/responses with stream: true performs one refresh and one replay with refreshed token and project", async () => {
+    await seedOAuth();
+    saveConfig(antigravityConfig());
+    const observed = installOAuthFetch([401, 200], { refreshedProjectId: "stream-project-999" });
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server, true);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("text/event-stream");
+
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let streamText = "";
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        streamText += decoder.decode(chunk.value, { stream: true });
+      }
+      expect(streamText).toContain("ok after google refresh");
+      expect(observed.counts.refresh).toBe(1);
+      expect(observed.chatAuth).toEqual(["Bearer rejected-access", "Bearer fresh-access"]);
+      expect(observed.chatProjects).toEqual(["initial-project-id", "stream-project-999"]);
     } finally {
       await server.stop(true);
     }
