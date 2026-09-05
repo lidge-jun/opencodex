@@ -398,12 +398,8 @@ export function createGuardrailsRegistry(options: GuardrailsRegistryOptions = {}
   const builtin = builtinDefinitions();
   const enabledDataTypes = new Set<GuardrailsDataType>(options.enabledDataTypes ?? [1, 2, 3, 4, 5, 6]);
   const disabledBuiltin = new Set(options.disabledBuiltinRuleIds ?? []);
+  validateGuardrailsBuiltinRuleIds(disabledBuiltin);
   const builtinIds = new Set(builtin.rules.map(rule => rule.ruleId));
-  for (const ruleId of disabledBuiltin) {
-    if (!builtinIds.has(ruleId)) {
-      throw new GuardrailsRuleCompileError(ruleId, "disabled_rule", "does not identify a built-in rule");
-    }
-  }
   const builtinRules = compiledBuiltinRules().filter(rule => enabledDataTypes.has(rule.dataType) && !disabledBuiltin.has(rule.ruleId));
   const customRules: CompiledGuardrailsRule[] = [];
   const rules = [...builtinRules];
@@ -438,6 +434,15 @@ export function createGuardrailsRegistry(options: GuardrailsRegistryOptions = {}
       for (const rule of customRules) disposeMatcher(rule.matcher);
     },
   };
+}
+
+export function validateGuardrailsBuiltinRuleIds(ruleIds: Iterable<string>): void {
+  const builtinIds = new Set(builtinDefinitions().rules.map(rule => rule.ruleId));
+  for (const ruleId of ruleIds) {
+    if (!builtinIds.has(ruleId)) {
+      throw new GuardrailsRuleCompileError(ruleId, "disabled_rule", "does not identify a built-in rule");
+    }
+  }
 }
 
 export function validateGuardrailsCustomRulesCompatibility(

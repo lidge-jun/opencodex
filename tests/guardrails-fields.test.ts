@@ -172,13 +172,19 @@ test("Chat walker masks legacy arguments before translation and leaves names unt
   const value = "sk_live_abcdefghijklmnopqrstuvwx";
   const body = {
     model: value,
-    messages: [{ role: "user", content: value, tool_calls: [{ function: { name: value, arguments: `{"key":"${value}"}` } }] }],
+    messages: [{
+      role: "assistant",
+      content: value,
+      refusal: value,
+      tool_calls: [{ function: { name: value, arguments: `{"key":"${value}"}` } }],
+    }],
   };
 
   const result = maskChatRequestFields(body, registry());
 
   expect(result.body.model).toBe(value);
   expect(result.body.messages[0]?.content).toContain("<STRIPE_");
+  expect(result.body.messages[0]?.refusal).toContain("<STRIPE_");
   expect(result.body.messages[0]?.tool_calls?.[0]?.function.name).toBe(value);
   expect(result.body.messages[0]?.tool_calls?.[0]?.function.arguments).toContain("<STRIPE_");
 });

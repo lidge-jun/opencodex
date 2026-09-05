@@ -122,7 +122,10 @@ rule or add up to 100 local custom rules. A custom rule is declarative and bound
 - rule ID: `^[a-z0-9_.-]{1,128}$`;
 - RE2 pattern: at most 4096 UTF-8 bytes;
 - placeholder type: `^[A-Z][A-Z0-9_]{0,63}$`;
-- optional capture groups, minimum length, keywords, entropy, banlist, and supported validators.
+- required bounded arrays for `keywords`, `banlist`, `validators`, and
+  `masking.captureGroups` (use `[]` when unused), plus a required `groupPriority`;
+- optional `minLength` and `entropy` constraints. Capture-group numbers are unique ordered
+  alternatives: the scanner masks the first non-empty group, not every listed group.
 
 The complete effective registry is validated and compiled before a write is committed. A malformed
 rule, conflicting placeholder type, or failed import leaves the prior configuration active.
@@ -217,7 +220,9 @@ The reversible mapping exists only in process memory and is bounded by time, ent
 Responses continuation inheritance requires all three:
 
 - a valid `previous_response_id`; and
-- the same non-empty `x-codex-parent-thread-id`; and
+- the same non-empty continuation lane derived from `x-codex-parent-thread-id`, `thread-id`, or
+  `session_id`/`session-id` (a parent and a more specific child/session ID are paired when both
+  are present); and
 - the same admission identity: configured-key ID, process-wide environment credential identity, or
   trusted loopback admission.
 
@@ -274,7 +279,9 @@ is disabled.
 
 Prefer the dashboard or scoped Management API so the effective registry is validated before the
 write commits. A malformed optional `guardrails` section found during startup is ignored with a
-warning and Guardrails remains disabled; unrelated provider/account configuration is preserved.
+warning when it was not explicitly enabled. If the malformed section contains `enabled: true`,
+opencodex preserves the opt-in and falls back to the built-in `enforce`/`block` policy. Unrelated
+provider/account configuration is preserved in both cases.
 
 See [Configuration](/reference/configuration/#guardrails-sensitive-data-placeholders) and the
 [Management API](/reference/management-api/#guardrails) for field and endpoint details.

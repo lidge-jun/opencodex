@@ -245,12 +245,18 @@ export function rememberGuardrailsContinuation(options: {
   const key = entryKey(responseId, options.scope);
   const existing = entries.get(key);
   if (existing && existing.state === undefined) return { status: "collision" };
-  if (existing && (existing.lineageId !== lineageId || existing.pins > 0)) {
+  const state = cloneState(options.state);
+  if (existing
+    && existing.lineageId === lineageId
+    && existing.policyRevision === policyRevision
+    && JSON.stringify(existing.state) === JSON.stringify(state)) {
+    return { status: "stored", lease: leaseEntry(existing) };
+  }
+  if (existing) {
     poisonEntry(existing);
     return { status: "collision" };
   }
 
-  const state = cloneState(options.state);
   const sizeBytes = sizeOf({
     createdAt: now,
     expiresAt,

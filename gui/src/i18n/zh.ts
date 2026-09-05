@@ -2528,6 +2528,7 @@ export const zh: Record<TKey, string> = {
   "guardrails.dataTypes": "已启用的数据类型",
   "guardrails.dataType": "数据类型",
   "guardrails.dataType.credentials": "凭据",
+  "guardrails.groupCredentialUrls": "含凭据的 URL",
   "guardrails.dataType.apiKeys": "API 密钥",
   "guardrails.dataType.accessTokens": "访问令牌",
   "guardrails.dataType.ipAddresses": "IP 地址",

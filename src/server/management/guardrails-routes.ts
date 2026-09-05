@@ -41,6 +41,17 @@ function withRevision(response: Response, revision: string): Response {
   return response;
 }
 
+function guardrailsAssetsInvalidResponse(ctx: ManagementContext): Response {
+  return jsonResponse({
+    error: "Guardrails rule assets are unavailable or invalid",
+    code: "guardrails_assets_invalid",
+  }, 503, ctx.req, ctx.config);
+}
+
+function builtinRuleCatalog(ctx: ManagementContext) {
+  return (ctx.deps.guardrailsBuiltinRuleCatalog ?? guardrailsBuiltinRuleCatalog)();
+}
+
 function expectedRevision(ctx: ManagementContext): string | Response {
   const raw = ctx.req.headers.get("if-match")?.trim();
   if (!raw) {
@@ -222,12 +233,9 @@ export async function handleGuardrailsRoutes(ctx: ManagementContext): Promise<Re
   }
   if (url.pathname === "/api/guardrails/catalog" && req.method === "GET") {
     try {
-      return jsonResponse({ builtinRules: guardrailsBuiltinRuleCatalog() }, 200, req, config);
+      return jsonResponse({ builtinRules: builtinRuleCatalog(ctx) }, 200, req, config);
     } catch {
-      return jsonResponse({
-        error: "Guardrails rule assets are unavailable or invalid",
-        code: "guardrails_assets_invalid",
-      }, 503, req, config);
+      return guardrailsAssetsInvalidResponse(ctx);
     }
   }
   if (url.pathname === "/api/guardrails/activity" && req.method === "GET") {
@@ -303,7 +311,13 @@ export async function handleGuardrailsRoutes(ctx: ManagementContext): Promise<Re
 
   const toggleRuleId = builtInToggleRuleId(url);
   if (toggleRuleId && req.method === "PUT") {
-    if (!guardrailsBuiltinRuleCatalog().some(rule => rule.ruleId === toggleRuleId)) {
+    let catalog;
+    try {
+      catalog = builtinRuleCatalog(ctx);
+    } catch {
+      return guardrailsAssetsInvalidResponse(ctx);
+    }
+    if (!catalog.some(rule => rule.ruleId === toggleRuleId)) {
       return jsonResponse({ error: "built-in Guardrails rule was not found" }, 404, req, config);
     }
     const read = await readJson(ctx);

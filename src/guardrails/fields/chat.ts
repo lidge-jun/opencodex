@@ -41,6 +41,8 @@ function collectChatSlots(body: unknown): GuardrailsTextSlot[] {
   for (const message of body.messages) {
     if (!isRecord(message)) continue;
     slots.push(...messageContentSlots(message));
+    const refusal = stringPropertySlot(message, "refusal");
+    if (refusal) slots.push(refusal);
     if (isRecord(message.function_call)) {
       slots.push(...argumentSlots(message.function_call, "arguments"));
     }

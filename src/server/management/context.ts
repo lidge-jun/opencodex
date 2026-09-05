@@ -22,6 +22,7 @@ import type {
   mutateAndAdoptGuardrailsConfig,
   mutateAndAdoptGuardrailsCustomRule,
 } from "../../guardrails/config-coordinator";
+import type { guardrailsBuiltinRuleCatalog } from "../../guardrails/registry";
 
 export interface ManagementApiDeps {
   /** Platform seam for capability projections; does not alter host-level startup behavior. */
@@ -44,6 +45,8 @@ export interface ManagementApiDeps {
   mutateAndAdoptGuardrailsConfig?: typeof mutateAndAdoptGuardrailsConfig;
   /** Atomic custom-rule seam; kept separate so test fixtures never write real config. */
   mutateAndAdoptGuardrailsCustomRule?: typeof mutateAndAdoptGuardrailsCustomRule;
+  /** Bundled Guardrails catalog seam for deterministic asset-failure route tests. */
+  guardrailsBuiltinRuleCatalog?: typeof guardrailsBuiltinRuleCatalog;
   /**
    * Catalog seam for the Grok toggle (WP2, devlog 260803_integrations_toggle_all
    * Rev 3 N2). Production leaves this unset and the route dynamic-imports the

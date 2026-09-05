@@ -63,8 +63,10 @@ payloads deliberately remain placeholders; the proxy never turns model-controlle
 output into an original secret.
 
 Responses continuation mapping is in memory for at most one hour and requires the same non-empty
-`x-codex-parent-thread-id` and admission identity with `previous_response_id`. Configured-key IDs are
-isolated; environment admission is process-wide; loopback relies on the local-process trust boundary.
+continuation lane and admission identity with `previous_response_id`. The lane is derived from
+`x-codex-parent-thread-id`, `thread-id`, or `session_id`/`session-id`; a parent and a more specific
+child/session ID are paired when both are present. Configured-key IDs are isolated; environment
+admission is process-wide; loopback relies on the local-process trust boundary.
 Cross-scope and unscoped requests cannot inherit originals. Enforce registry/settings changes keep
 old mappings at their original expiry and scan new values with the current registry. Switching the
 continuation to detect or disabled returns HTTP `409` with code `guardrails_policy_changed`.

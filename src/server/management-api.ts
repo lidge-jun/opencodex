@@ -146,7 +146,9 @@ async function handleQuotaResetRoutesOnDemand(ctx: ManagementContext): Promise<R
 async function handleGuardrailsRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
   if (!pathInManagementNamespace(ctx.url.pathname, "/api/guardrails")) return null;
   const { handleGuardrailsRoutes } = await import("./management/guardrails-routes");
-  return handleGuardrailsRoutes(ctx);
+  const response = await handleGuardrailsRoutes(ctx);
+  response?.headers.set("Cache-Control", "no-store");
+  return response;
 }
 
 export async function handleManagementAPI(

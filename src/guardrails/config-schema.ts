@@ -69,7 +69,8 @@ const customRuleSchema = z.object({
   validators: z.array(validatorSchema).max(VALIDATORS.length)
     .refine(values => new Set(values).size === values.length, "must not contain duplicate validators"),
   masking: z.object({
-    captureGroups: z.array(z.number().int().positive()).max(64),
+    captureGroups: z.array(z.number().int().positive()).max(64)
+      .refine(values => new Set(values).size === values.length, "must not contain duplicate capture groups"),
     placeholderType: z.string().regex(/^[A-Z][A-Z0-9_]{0,63}$/),
   }).strict(),
 }).strict().superRefine((rule, ctx) => {

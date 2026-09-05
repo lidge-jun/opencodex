@@ -115,8 +115,11 @@ Routing has its own ordered resolution rules; see [Routing](/reference/configura
 `guardrails` is disabled by default. Enabling it makes opencodex scan supported textual request fields
 for the Responses, Chat Completions, Anthropic Messages/token-count, and Responses compact paths.
 In `enforce` mode, detected values are replaced before an outbound provider call with per-turn placeholders such as
-`<STRIPE_ACCESS_TOKEN_1>`. Exact placeholders in a successful JSON, SSE, or Responses-over-WebSocket
-reply are restored only for the original client and only in non-executable assistant prose.
+`<STRIPE_ACCESS_TOKEN_1>`. Exact placeholders, plus bounded normalized variants produced by a
+model, are restored in a successful JSON, SSE, or Responses-over-WebSocket reply only for the
+original client and only in non-executable assistant prose. Normalization is limited to ASCII case,
+hyphen-versus-underscore separators, embedded ASCII whitespace, and leading zeroes in the numeric
+suffix; the candidate token remains capped at 256 UTF-16 code units.
 Function/tool arguments, Anthropic `tool_use` input, and shell/computer/tool-search actions remain
 masked even in the client-facing response.
 
@@ -177,15 +180,19 @@ excluded; a mixed combo remains protected as one logical turn. A protected conti
 resume through an unchecked provider and receives HTTP `409 guardrails_policy_changed` before
 upstream I/O.
 
-If startup finds a malformed optional `guardrails` section, opencodex warns, ignores that section,
-and keeps Guardrails disabled without discarding unrelated provider/account configuration. Live
-writes are strict and fail without changing the active or persisted registry.
+If startup finds a malformed optional `guardrails` section, opencodex warns and ignores it when the
+section was not explicitly enabled. A malformed section containing `enabled: true` preserves that
+opt-in by falling back to the built-in `enforce`/`block` policy. Unrelated provider/account
+configuration is preserved in both cases. Live writes are strict and fail without changing the
+active or persisted registry.
 
 ### Continuations and telemetry boundary
 
 When a Responses request uses `previous_response_id`, the placeholder mapping is retained only in
-process memory for up to one hour, with bounded entry count and memory. It is keyed to the normalized
-`x-codex-parent-thread-id` plus the admission identity. Configured credentials use their key ID;
+process memory for up to one hour, with bounded entry count and memory. It is keyed to a normalized
+continuation lane derived from `x-codex-parent-thread-id`, `thread-id`, or
+`session_id`/`session-id`, plus the admission identity. A parent and a more specific child/session
+ID are paired when both are present. Configured credentials use their key ID;
 environment admission is one process-wide identity; loopback relies on the local-process trust
 boundary. Unscoped, cross-thread, or cross-key requests never inherit a mapping. It is never
 written to the ordinary response replay cache or its snapshots. After a restart or expiry, resend the

@@ -2492,6 +2492,7 @@ export const zhTW: Record<TKey, string> = {
   "guardrails.dataTypes": "已啟用的資料類型",
   "guardrails.dataType": "資料類型",
   "guardrails.dataType.credentials": "憑證",
+  "guardrails.groupCredentialUrls": "含憑證資訊的 URL",
   "guardrails.dataType.apiKeys": "API 金鑰",
   "guardrails.dataType.accessTokens": "存取權杖",
   "guardrails.dataType.ipAddresses": "IP 位址",

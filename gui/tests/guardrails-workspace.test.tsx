@@ -32,6 +32,7 @@ let overview: GuardrailsOverview;
 let activity: GuardrailsActivity;
 let failOverview = false;
 let failSettings = false;
+let failImportApply = false;
 let failActivity = false;
 let emptyRules = false;
 let holdOverview = false;
@@ -276,6 +277,15 @@ function installFetch() {
             ...(importConflict ? { error: "import conflicts with an existing custom rule" } : {}),
           });
         }
+        if (failImportApply) {
+          failImportApply = false;
+          overview = overviewFixture(false, "rev-remote");
+          return json({
+            error: "Guardrails settings changed since they were loaded",
+            code: "guardrails_revision_conflict",
+            revision: "rev-remote",
+          }, 412);
+        }
         return json({ ok: true, dryRun: false });
       }
       if (url.pathname === "/api/guardrails/test" && method === "POST") {
@@ -347,6 +357,7 @@ beforeEach(() => {
     },
   };
   failSettings = false;
+  failImportApply = false;
   failActivity = false;
   failOverview = false;
   emptyRules = false;
@@ -469,11 +480,34 @@ test("revision conflict refetches authoritative state and keeps the dialog retry
   expect(rulesRequests).toBeGreaterThanOrEqual(2);
   expect(trigger.getAttribute("aria-pressed")).toBe("false");
 
-  await act(async () => {
-    dialog.querySelector<HTMLButtonElement>(".modal-head button")!.click();
-    await new Promise(resolve => setTimeout(resolve, 5));
-  });
+  failSettings = false;
+  await confirm("Disable");
+  expect(mutations).toEqual([
+    { body: { enabled: false }, ifMatch: '"rev-1"' },
+    { body: { enabled: false }, ifMatch: '"rev-remote"' },
+  ]);
+  expect(document.querySelector("dialog")).toBeNull();
   expect(document.activeElement).toBe(trigger);
+});
+
+test("import apply conflict invalidates stale preview and requires a fresh dry-run", async () => {
+  failImportApply = true;
+  await mount();
+  await openTab("rules");
+  await uploadImportBundle();
+  expect(host.textContent).toContain("Import preview");
+
+  await act(async () => {
+    namedButton("Apply import").click();
+    await new Promise(resolve => setTimeout(resolve, 20));
+  });
+  expect(host.textContent).not.toContain("Import preview");
+  expect(importRequests[1]?.ifMatch).toBe('"rev-1"');
+
+  await uploadImportBundle();
+  expect(importRequests[2]?.body).toMatchObject({ dryRun: true });
+  expect(importRequests[2]?.ifMatch).toBe('"rev-remote"');
+  expect(host.textContent).toContain("Import preview");
 });
 
 test("Activity refresh failure preserves stale rows and shows an error", async () => {

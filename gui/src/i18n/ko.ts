@@ -2529,6 +2529,7 @@ export const ko: Record<TKey, string> = {
   "guardrails.dataTypes": "활성화된 데이터 유형",
   "guardrails.dataType": "데이터 유형",
   "guardrails.dataType.credentials": "자격 증명",
+  "guardrails.groupCredentialUrls": "자격 증명 URL",
   "guardrails.dataType.apiKeys": "API 키",
   "guardrails.dataType.accessTokens": "액세스 토큰",
   "guardrails.dataType.ipAddresses": "IP 주소",

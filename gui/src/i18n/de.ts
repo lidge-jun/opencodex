@@ -2507,6 +2507,7 @@ export const de: Record<TKey, string> = {
   "guardrails.dataTypes": "Aktivierte Datentypen",
   "guardrails.dataType": "Datentyp",
   "guardrails.dataType.credentials": "Zugangsdaten",
+  "guardrails.groupCredentialUrls": "URLs mit Zugangsdaten",
   "guardrails.dataType.apiKeys": "API-Schlüssel",
   "guardrails.dataType.accessTokens": "Zugriffstoken",
   "guardrails.dataType.ipAddresses": "IP-Adressen",

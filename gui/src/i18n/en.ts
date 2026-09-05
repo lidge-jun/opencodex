@@ -2568,6 +2568,7 @@ export const en = {
   "guardrails.dataTypes": "Enabled data types",
   "guardrails.dataType": "Data type",
   "guardrails.dataType.credentials": "Credentials",
+  "guardrails.groupCredentialUrls": "Credential URLs",
   "guardrails.dataType.apiKeys": "API keys",
   "guardrails.dataType.accessTokens": "Access tokens",
   "guardrails.dataType.ipAddresses": "IP addresses",

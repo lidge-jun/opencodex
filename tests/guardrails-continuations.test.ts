@@ -231,6 +231,58 @@ test("Guardrails continuation poisons a same-scope response-id collision until e
   });
 });
 
+test("Guardrails continuation accepts exact duplicate storage but poisons same-lineage mapping drift", () => {
+  const scope = createGuardrailsContinuationScope("loopback", undefined, "same-lineage-collision");
+  const state = {
+    replacements: [{
+      dataType: 6 as const,
+      original: "secret-a",
+      placeholder: "<CUSTOM_1>",
+      placeholderType: "CUSTOM",
+      ruleId: "custom.same-lineage",
+    }],
+    reservedPlaceholders: [],
+  };
+  const first = rememberGuardrailsContinuation({
+    responseId: "resp-same-lineage",
+    scope,
+    lineageId: "lineage-a",
+    policyRevision: "a".repeat(64),
+    state,
+  });
+  expect(first.status).toBe("stored");
+  if (first.status !== "stored") throw new Error("expected continuation mapping to be stored");
+  const duplicate = rememberGuardrailsContinuation({
+    responseId: "resp-same-lineage",
+    scope,
+    lineageId: "lineage-a",
+    policyRevision: "a".repeat(64),
+    state,
+  });
+  expect(duplicate.status).toBe("stored");
+  if (duplicate.status !== "stored") throw new Error("expected duplicate continuation mapping to be leased");
+
+  const collision = rememberGuardrailsContinuation({
+    responseId: "resp-same-lineage",
+    scope,
+    lineageId: "lineage-a",
+    policyRevision: "a".repeat(64),
+    state: {
+      replacements: [{
+        ...state.replacements[0]!,
+        original: "secret-b",
+      }],
+      reservedPlaceholders: [],
+    },
+  });
+
+  expect(collision.status).toBe("collision");
+  expect(retainGuardrailsContinuation("resp-same-lineage", scope)).toBeUndefined();
+  expect(first.lease.state.replacements[0]?.original).toBe("secret-a");
+  duplicate.lease.release();
+  first.lease.release();
+});
+
 test("Guardrails continuation keeps inherited absolute expiry", () => {
   const registry = createGuardrailsRegistry();
   try {

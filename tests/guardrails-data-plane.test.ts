@@ -24,10 +24,18 @@ import {
 import { expandPreviousResponseInput } from "../src/responses/state";
 import { parseRequest } from "../src/responses/parser";
 import { handleResponses } from "../src/server/responses/core";
+import type { RequestLogContext } from "../src/server/request-log";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
 import { createTestTranslatorBudget } from "./helpers/translator-budget";
 
 const originalFetch = globalThis.fetch;
+const STALE_INTEGRITY_HEADERS = [
+  "content-md5",
+  "content-digest",
+  "digest",
+  "etag",
+  "repr-digest",
+] as const;
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
@@ -187,13 +195,18 @@ test("Guardrails masks Responses input upstream and demasks a JSON response to t
         role: "assistant",
         content: [{ type: "output_text", text: "echo <STRIPE_ACCESS_TOKEN_1>" }],
       }],
+    }, {
+      headers: Object.fromEntries(STALE_INTEGRITY_HEADERS.map(name => [name, "stale"])),
     });
   }) as typeof fetch;
 
-  const response = await handleResponses(request(secret), config(), { model: "", provider: "" });
+  const logCtx: RequestLogContext = { model: "", provider: "" };
+  const response = await handleResponses(request(secret), config(), logCtx);
   expect(upstreamBody).toMatchObject({ input: "<STRIPE_ACCESS_TOKEN_1>" });
   expect(JSON.stringify(await response.json())).toContain(secret);
   expect(JSON.stringify(upstreamBody)).not.toContain(secret);
+  expect(logCtx.sensitiveDataProtectionActive).toBe(true);
+  for (const name of STALE_INTEGRITY_HEADERS) expect(response.headers.get(name)).toBeNull();
 });
 
 test("password assignment separators cannot bypass prepared upstream masking", async () => {
@@ -446,7 +459,10 @@ test("Guardrails preserves SSE framing while demasking streamed payload JSON", a
     "event: response.completed\n",
     "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-guardrails-sse\",\"status\":\"completed\",\"output\":[]}}\n\n",
   ].join(""), {
-    headers: { "content-type": "text/event-stream" },
+    headers: {
+      "content-type": "text/event-stream",
+      ...Object.fromEntries(STALE_INTEGRITY_HEADERS.map(name => [name, "stale"])),
+    },
   })) as typeof fetch;
 
   const response = await handleResponses(request(secret, true), config(), { model: "", provider: "" });
@@ -454,6 +470,7 @@ test("Guardrails preserves SSE framing while demasking streamed payload JSON", a
   expect(text).toContain("event: response.output_text.delta");
   expect(text).toContain(secret);
   expect(text).not.toContain("<STRIPE_ACCESS_TOKEN_1>");
+  for (const name of STALE_INTEGRITY_HEADERS) expect(response.headers.get(name)).toBeNull();
 });
 
 test("Guardrails demasks a placeholder split across Responses SSE delta events", async () => {
@@ -1115,6 +1132,27 @@ test("Guardrails restores Chat assistant prose but never content attributed to a
 
   expect(parsed.choices[0]?.message.content).toBe(`visible ${secret}`);
   expect(parsed.choices[1]?.message.content).toBe("hidden <STRIPE_ACCESS_TOKEN_1>");
+});
+
+test("Guardrails restores top-level assistant content but not content attributed to another role", async () => {
+  const secret = "sk_live_abcdefghijklmnopqrstuvwx";
+  const prepared = await prepareGuardrailsTurn(config(), "anthropic", {
+    messages: [{ role: "user", content: secret }],
+  });
+  const assistant = demaskGuardrailsJsonPayload(JSON.stringify({
+    type: "message",
+    role: "assistant",
+    content: [{ type: "text", text: "visible <STRIPE_ACCESS_TOKEN_1>" }],
+  }), prepared.turn!);
+  const user = demaskGuardrailsJsonPayload(JSON.stringify({
+    type: "message",
+    role: "user",
+    content: [{ type: "text", text: "hidden <STRIPE_ACCESS_TOKEN_1>" }],
+  }), prepared.turn!);
+
+  expect(assistant).toContain(secret);
+  expect(user).toContain("<STRIPE_ACCESS_TOKEN_1>");
+  expect(user).not.toContain(secret);
 });
 
 test("Guardrails fail-open rollback restores only admitted request fields", async () => {

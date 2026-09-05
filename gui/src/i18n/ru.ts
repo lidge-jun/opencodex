@@ -2557,6 +2557,7 @@ export const ru: Record<TKey, string> = {
   "guardrails.dataTypes": "Включённые типы данных",
   "guardrails.dataType": "Тип данных",
   "guardrails.dataType.credentials": "Учётные данные",
+  "guardrails.groupCredentialUrls": "URL с учётными данными",
   "guardrails.dataType.apiKeys": "API-ключи",
   "guardrails.dataType.accessTokens": "Токены доступа",
   "guardrails.dataType.ipAddresses": "IP-адреса",

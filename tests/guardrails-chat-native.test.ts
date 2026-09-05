@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
+import { handleChatCompletions } from "../src/server/chat-completions";
+import type { RequestLogContext } from "../src/server/request-log";
 import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
@@ -184,6 +186,139 @@ test("Guardrails masks native Chat JSON upstream and demasks assistant content",
     expect(upstreamText).not.toContain(SECRET);
     expect(responseText).toContain(SECRET);
     expect(responseText).not.toContain(PLACEHOLDER);
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("Guardrails masks assistant refusal before native Chat upstream serialization", async () => {
+  const captured: Array<Record<string, unknown>> = [];
+  const upstream = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      captured.push(await req.json() as Record<string, unknown>);
+      return Response.json({
+        id: "chatcmpl-guardrails-refusal",
+        object: "chat.completion",
+        choices: [{
+          index: 0,
+          message: { role: "assistant", content: "accepted" },
+          finish_reason: "stop",
+        }],
+      });
+    },
+  });
+  saveConfig(config(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
+  const server = startServer(0);
+
+  try {
+    const response = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock/test-model",
+        stream: false,
+        messages: [{ role: "assistant", refusal: `cannot disclose ${SECRET}` }],
+      }),
+    });
+    expect(response.status).toBe(200);
+    const upstreamText = JSON.stringify(captured);
+
+    expect(captured).toHaveLength(1);
+    expect(upstreamText).toContain(PLACEHOLDER);
+    expect(upstreamText).not.toContain(SECRET);
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("active Guardrails marks the native Chat request-log context as privacy-sensitive", async () => {
+  const upstream = Bun.serve({
+    port: 0,
+    fetch() {
+      return Response.json({
+        id: "chatcmpl-guardrails-log-context",
+        object: "chat.completion",
+        choices: [{
+          index: 0,
+          message: { role: "assistant", content: "accepted" },
+          finish_reason: "stop",
+        }],
+      });
+    },
+  });
+  const logCtx: RequestLogContext = { model: "", provider: "" };
+
+  try {
+    const response = await handleChatCompletions(
+      new Request("http://localhost/v1/chat/completions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(requestBody(false)),
+      }),
+      config(`${upstream.url.toString().replace(/\/$/, "")}/v1`),
+      logCtx,
+    );
+    await response.text();
+
+    expect(logCtx.sensitiveDataProtectionActive).toBe(true);
+  } finally {
+    upstream.stop(true);
+  }
+});
+
+test("Guardrails preserves mappings across routed Chat to Responses JSON and SSE", async () => {
+  const captured: Array<Record<string, unknown>> = [];
+  const upstream = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      captured.push(await req.json() as Record<string, unknown>);
+      return new Response([
+        `event: response.output_text.delta\ndata: ${JSON.stringify({
+          type: "response.output_text.delta",
+          delta: `echo ${PLACEHOLDER}`,
+        })}\n\n`,
+        `event: response.completed\ndata: ${JSON.stringify({
+          type: "response.completed",
+          response: {
+            id: "resp-guardrails-routed-chat",
+            status: "completed",
+            output: [{
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text: `echo ${PLACEHOLDER}` }],
+            }],
+            usage: { input_tokens: 1, output_tokens: 1 },
+          },
+        })}\n\n`,
+      ].join(""), {
+        headers: { "content-type": "text/event-stream" },
+      });
+    },
+  });
+  const routed = config(`${upstream.url.toString().replace(/\/$/, "")}/v1`);
+  routed.providers.mock!.adapter = "openai-responses";
+  saveConfig(routed);
+  const server = startServer(0);
+
+  try {
+    for (const stream of [false, true]) {
+      const response = await fetch(new URL("/v1/chat/completions", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(requestBody(stream)),
+      });
+      expect(response.status, `stream=${stream}`).toBe(200);
+      const responseText = await response.text();
+      expect(responseText, `stream=${stream}`).toContain(SECRET);
+      expect(responseText, `stream=${stream}`).not.toContain(PLACEHOLDER);
+    }
+
+    expect(captured).toHaveLength(2);
+    expect(JSON.stringify(captured)).toContain(PLACEHOLDER);
+    expect(JSON.stringify(captured)).not.toContain(SECRET);
   } finally {
     await server.stop(true);
     upstream.stop(true);

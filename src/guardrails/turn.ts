@@ -729,7 +729,9 @@ function demaskKnownResponsePayload(
       next = { ...next, output };
     }
   }
-  const content = demaskContentParts(value.content, state, traversal);
+  const content = value.role === undefined || value.role === "assistant"
+    ? demaskContentParts(value.content, state, traversal)
+    : value.content;
   if (content !== value.content) next = { ...next, content };
   const choices = demaskChatChoices(value.choices, state, traversal);
   if (choices !== value.choices) next = { ...next, choices };

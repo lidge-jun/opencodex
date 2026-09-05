@@ -77,6 +77,7 @@ const DATA: GuardrailsRules = {
 };
 
 async function mount(overrides: {
+  data?: GuardrailsRules;
   onBulk?: (ruleIds: string[], enabled: boolean) => void;
   onImport?: (bundle: unknown, mode: "merge" | "replace") => void;
   onImportError?: (error: unknown) => void;
@@ -89,7 +90,7 @@ async function mount(overrides: {
     root.render(
       <LanguageProvider>
         <GuardrailsRulesPanel
-          data={DATA}
+          data={overrides.data ?? DATA}
           pending={false}
           onToggle={() => {}}
           onBulk={overrides.onBulk ?? (() => {})}
@@ -111,6 +112,82 @@ function button(label: string): HTMLButtonElement {
   return [...host.querySelectorAll<HTMLButtonElement>("button")]
     .find(candidate => candidate.textContent?.trim() === label)!;
 }
+
+test("built-in rule labels use the active locale instead of bundled Russian metadata", async () => {
+  await mount({
+    data: {
+      revision: "rev-localized",
+      rules: [
+        {
+          ruleId: "opencodex.credentials.password-assignment",
+          dataType: 1,
+          group: "CREDENTIALS",
+          displayName: "Учетные данные",
+          description: "Контекстные password assignments",
+          source: "opencodex",
+          enabled: true,
+          custom: false,
+        },
+        {
+          ruleId: "opencodex.credentials.infrastructure-uri-userinfo",
+          dataType: 1,
+          group: "CREDENTIAL_URLS",
+          displayName: "URL с учетными данными",
+          description: "Контекстные URI",
+          source: "opencodex",
+          enabled: true,
+          custom: false,
+        },
+      ],
+      builtinRuleCount: 2,
+      customRuleCount: 0,
+      customRules: [],
+    },
+  });
+
+  expect(host.textContent).toContain("Credentials");
+  expect(host.textContent).toContain("Credential URLs");
+  expect(host.textContent).not.toContain("Учетные данные");
+  expect(host.textContent).not.toContain("URL с учетными данными");
+});
+
+test("custom group headings keep the configured group instead of repeating a rule label", async () => {
+  const customRule: GuardrailsCustomRule = {
+    ruleId: "custom.group-label",
+    name: "Group label fixture",
+    dataType: 6,
+    group: "LOCAL SECRETS",
+    groupPriority: 0,
+    displayName: "Synthetic token",
+    description: "Test-only custom rule",
+    regex: "synthetic_[a-z]+",
+    keywords: [],
+    banlist: [],
+    validators: [],
+    masking: { captureGroups: [], placeholderType: "SYNTHETIC_TOKEN" },
+  };
+  await mount({
+    data: {
+      revision: "rev-custom-group",
+      rules: [{
+        ruleId: customRule.ruleId,
+        dataType: customRule.dataType,
+        group: customRule.group,
+        displayName: customRule.displayName,
+        description: customRule.description,
+        source: "custom",
+        enabled: true,
+        custom: true,
+      }],
+      builtinRuleCount: 0,
+      customRuleCount: 1,
+      customRules: [customRule],
+    },
+  });
+
+  expect(host.querySelector(".guardrails-rule-group")?.textContent).toBe("LOCAL SECRETS");
+  expect(host.querySelector(".guardrails-rule-row strong")?.textContent).toBe("Synthetic token");
+});
 
 test("paginates fifty rules and keeps the remaining five reachable", async () => {
   await mount();

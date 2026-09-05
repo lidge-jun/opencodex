@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useMemo, useRef, useState } from "react";
 import { EmptyState, Notice, Select, Switch } from "../../ui";
 import { IconPlus, IconTrash } from "../../icons";
 import { useT } from "../../i18n/shared";
@@ -75,15 +75,26 @@ export function GuardrailsRulesPanel({
   const [captureGroupsError, setCaptureGroupsError] = useState(false);
   const [importMode, setImportMode] = useState<"merge" | "replace">("merge");
   const fileRef = useRef<HTMLInputElement>(null);
+  const builtinLabel = useCallback((rule: GuardrailsRules["rules"][number]) =>
+    t(rule.group === "CREDENTIAL_URLS"
+      ? "guardrails.groupCredentialUrls"
+      : GUARDRAILS_DATA_TYPE_KEYS[rule.dataType]), [t]);
+  const ruleLabel = useCallback((rule: GuardrailsRules["rules"][number]) => rule.custom
+    ? rule.displayName
+    : builtinLabel(rule), [builtinLabel]);
+  const groupLabel = (rule: GuardrailsRules["rules"][number]) => rule.custom
+    ? rule.group
+    : builtinLabel(rule);
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return data.rules
-      .filter(rule => !needle || `${rule.ruleId} ${rule.displayName} ${rule.group}`.toLowerCase().includes(needle))
+      .filter(rule => !needle
+        || `${rule.ruleId} ${ruleLabel(rule)} ${rule.group}`.toLowerCase().includes(needle))
       .filter(rule => !source || rule.source === source)
       .filter(rule => !status || (status === "enabled" ? rule.enabled : !rule.enabled))
       .filter(rule => !dataType || rule.dataType === Number(dataType));
-  }, [data.rules, dataType, query, source, status]);
+  }, [data.rules, dataType, query, ruleLabel, source, status]);
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const visiblePage = Math.min(page, pageCount - 1);
   const visible = filtered.slice(visiblePage * PAGE_SIZE, (visiblePage + 1) * PAGE_SIZE);
@@ -366,11 +377,11 @@ export function GuardrailsRulesPanel({
         : <section className="card guardrails-rule-list">{visible.map((rule, index) => (
           <Fragment key={rule.ruleId}>
             {(index === 0 || visible[index - 1]?.group !== rule.group) && (
-              <div className="guardrails-rule-group"><strong>{rule.group}</strong></div>
+              <div className="guardrails-rule-group"><strong>{groupLabel(rule)}</strong></div>
             )}
             <div className="guardrails-rule-row">
               <div>
-                <strong>{rule.displayName}</strong>
+                <strong>{ruleLabel(rule)}</strong>
                 <code>{rule.ruleId}</code>
                 <span className="muted">{rule.group} · {rule.source}</span>
               </div>
@@ -394,7 +405,7 @@ export function GuardrailsRulesPanel({
                   <Switch
                     on={rule.enabled}
                     disabled={pending}
-                    label={`${rule.displayName}: ${t(rule.enabled ? "guardrails.statusActive" : "guardrails.statusDisabled")}`}
+                    label={`${ruleLabel(rule)}: ${t(rule.enabled ? "guardrails.statusActive" : "guardrails.statusDisabled")}`}
                     onClick={() => onToggle(rule.ruleId, !rule.enabled)}
                   />
                 )}

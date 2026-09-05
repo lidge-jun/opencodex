@@ -135,10 +135,10 @@ They expose configuration and rule metadata, not the values matched in a request
 | `GET /api/guardrails/settings` | Read the safe effective settings projection and provider IDs available to the dashboard | — |
 | `PUT /api/guardrails/settings` | Atomically update one or more settings: `enabled`, `mode`, `failurePolicy`, `providerScope`, `enabledDataTypes`, `disabledBuiltinRuleIds`, or `keywordPrefilterEnabled` | 400 invalid, unsupported, or empty patch; 428 missing `If-Match`; 412 stale revision; 409 writer busy or unavailable config state |
 | `GET /api/guardrails/rules` | List safe summaries for all effective rules plus declarative custom-rule definitions; built-in regexes are omitted | 503 invalid/unavailable rule assets |
-| `GET /api/guardrails/catalog` | List built-in rule metadata and IDs without regex matchers | — |
+| `GET /api/guardrails/catalog` | List built-in rule metadata and IDs without regex matchers | 503 invalid/unavailable rule assets |
 | `POST /api/guardrails/rules` | Create one custom rule | 400 invalid rule; 428 missing `If-Match`; 412 stale revision; 409 duplicate ID, writer busy, or unavailable config state |
 | `PUT, DELETE /api/guardrails/rules/:ruleId` | Replace a local rule without changing its ID, or delete it | 400 invalid replacement; 404 unknown rule; 428 missing `If-Match`; 412 stale revision; 409 writer busy or unavailable config state |
-| `PUT /api/guardrails/rules/:ruleId/enabled` | Enable or disable one built-in rule | 400 invalid body; 404 unknown built-in ID; 428 missing `If-Match`; 412 stale revision; 409 writer/config conflict |
+| `PUT /api/guardrails/rules/:ruleId/enabled` | Enable or disable one built-in rule | 400 invalid body; 404 unknown built-in ID; 503 invalid/unavailable rule assets; 428 missing `If-Match`; 412 stale revision; 409 writer/config conflict |
 | `GET /api/guardrails/activity` | Read bounded metadata events and filtered summaries; optional `limit=1..200`, `mode`, `surface`, `result`, and `category=1..6` filters | 400 invalid or unknown filter |
 | `GET /api/guardrails/export` | Download a versioned safe settings/custom-rule bundle | — |
 | `POST /api/guardrails/test` | Scan at most 128 KiB of text locally and return masked preview plus finding offsets/IDs/types; input is not retained or sent upstream | 400 invalid input/draft registry; 413 body, Tester, or regex-work limit |

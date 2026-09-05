@@ -53,6 +53,7 @@ afterEach(() => {
 
 const PNG_DATA_URL = "data:image/png;base64,aGVsbG8taW1hZ2UtYnl0ZXM=";
 const CAPTION = "A red square logo with the word OPENCODEX in white monospace text.";
+const SIDECAR_SECRET = "sk_live_abcdefghijklmnopqrstuvwx";
 
 /** Fake ChatGPT forward backend: answers /responses with an SSE caption stream. */
 function serveSidecar(
@@ -172,7 +173,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
       sidecarAuth = req.headers.get("authorization");
       sidecarAccount = req.headers.get("chatgpt-account-id");
       sidecarPath = new URL(req.url).pathname;
-    });
+    }, `${CAPTION} ${SIDECAR_SECRET}`);
     globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
       const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       const url = new URL(requestUrl);
@@ -200,6 +201,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
           codexAccountMode: "direct",
         },
       },
+      guardrails: { enabled: true, mode: "enforce", failurePolicy: "block" },
     } as OcxConfig;
     saveConfig(config);
     const server = startServer(0);
@@ -226,6 +228,8 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
 
       // The text-only upstream saw the caption, not the image bytes.
       expect(upstreamBody).toContain(CAPTION);
+      expect(upstreamBody).toContain("<STRIPE_ACCESS_TOKEN_1>");
+      expect(upstreamBody).not.toContain(SIDECAR_SECRET);
       expect(upstreamBody).not.toContain("aGVsbG8taW1hZ2UtYnl0ZXM=");
       expect(upstreamBody).not.toContain("image_url");
     } finally {

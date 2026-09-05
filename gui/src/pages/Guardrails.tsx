@@ -125,6 +125,14 @@ export default function Guardrails({ apiBase }: { apiBase: string }) {
 
   const overview = overviewResource.state.data;
   const rules = rulesResource.state.data;
+  const overviewRef = useRef(overview);
+  const rulesRef = useRef(rules);
+  useEffect(() => {
+    overviewRef.current = overview;
+  }, [overview]);
+  useEffect(() => {
+    rulesRef.current = rules;
+  }, [rules]);
 
   const activateTab = useCallback((next: GuardrailsTab) => {
     setTab(next);
@@ -169,11 +177,12 @@ export default function Guardrails({ apiBase }: { apiBase: string }) {
   }, [refreshAll, t]);
 
   const performSettings = useCallback(async (patch: GuardrailsSettingsPatch) => {
-    if (!overview) return;
+    const current = overviewRef.current;
+    if (!current) return;
     await runMutation(async () => {
-      await updateGuardrailsSettings(apiBase, patch, overview.revision, t("guardrails.saveFailed"));
+      await updateGuardrailsSettings(apiBase, patch, current.revision, t("guardrails.saveFailed"));
     }, "guardrails.saved");
-  }, [apiBase, overview, runMutation, t]);
+  }, [apiBase, runMutation, t]);
 
   const requestSettings = useCallback((
     patch: GuardrailsSettingsPatch,
@@ -197,11 +206,12 @@ export default function Guardrails({ apiBase }: { apiBase: string }) {
   }, [consequence]);
 
   const applyRuleToggle = useCallback((ruleId: string, enabled: boolean) => {
-    if (!rules) return;
+    const current = rulesRef.current;
+    if (!current) return;
     return runMutation(async () => {
-      await toggleGuardrailsRule(apiBase, ruleId, enabled, rules.revision, t("guardrails.ruleSaveFailed"));
+      await toggleGuardrailsRule(apiBase, ruleId, enabled, current.revision, t("guardrails.ruleSaveFailed"));
     }, "guardrails.ruleSaved");
-  }, [apiBase, rules, runMutation, t]);
+  }, [apiBase, runMutation, t]);
 
   const toggleRule = useCallback((ruleId: string, enabled: boolean) => {
     if (enabled) {
@@ -217,10 +227,11 @@ export default function Guardrails({ apiBase }: { apiBase: string }) {
   }, [applyRuleToggle]);
 
   const applyBulkRules = useCallback((ids: string[], enabled: boolean) => {
-    if (!overview) return;
+    const current = overviewRef.current;
+    if (!current) return;
     return runMutation(async () => {
       const selected = new Set(ids);
-      const disabled = new Set(overview.disabledBuiltinRuleIds);
+      const disabled = new Set(current.disabledBuiltinRuleIds);
       for (const ruleId of selected) {
         if (enabled) disabled.delete(ruleId);
         else disabled.add(ruleId);
@@ -228,11 +239,11 @@ export default function Guardrails({ apiBase }: { apiBase: string }) {
       await updateGuardrailsSettings(
         apiBase,
         { disabledBuiltinRuleIds: [...disabled].sort() },
-        overview.revision,
+        current.revision,
         t("guardrails.ruleSaveFailed"),
       );
     }, "guardrails.ruleSaved");
-  }, [apiBase, overview, runMutation, t]);
+  }, [apiBase, runMutation, t]);
 
   const bulkRules = useCallback((ids: string[], enabled: boolean) => {
     if (enabled) {
@@ -248,34 +259,37 @@ export default function Guardrails({ apiBase }: { apiBase: string }) {
   }, [applyBulkRules]);
 
   const saveRule = useCallback((rule: GuardrailsCustomRule, editingId: string | null) => {
-    if (!rules) return;
+    const current = rulesRef.current;
+    if (!current) return;
     void runMutation(async () => {
       await saveGuardrailsCustomRule(
         apiBase,
         rule,
         editingId,
-        rules.revision,
+        current.revision,
         t("guardrails.ruleSaveFailed"),
       );
     }, "guardrails.ruleSaved").catch(() => undefined);
-  }, [apiBase, rules, runMutation, t]);
+  }, [apiBase, runMutation, t]);
 
   const requestDelete = useCallback((rule: GuardrailsCustomRule) => {
-    if (!rules) return;
+    if (!rulesRef.current) return;
     setConsequence({
       kind: "deleteRule",
       vars: { ruleId: rule.ruleId },
       returnFocus: document.activeElement instanceof HTMLElement ? document.activeElement : null,
       run: () => runMutation(async () => {
+        const current = rulesRef.current;
+        if (!current) return;
         await deleteGuardrailsCustomRule(
           apiBase,
           rule.ruleId,
-          rules.revision,
+          current.revision,
           t("guardrails.ruleDeleteFailed"),
         );
       }, "guardrails.ruleDeleted"),
     });
-  }, [apiBase, rules, runMutation, t]);
+  }, [apiBase, runMutation, t]);
 
   const exportRules = useCallback(() => {
     if (pendingRef.current) return;
@@ -339,17 +353,25 @@ export default function Guardrails({ apiBase }: { apiBase: string }) {
   const applyImportPreview = useCallback(() => {
     if (!importPreview || importPreview.preview.conflicts.length > 0) return;
     const apply = async () => {
-      await runMutation(async () => {
-        await importGuardrailsBundle(
-          apiBase,
-          importPreview.bundle,
-          importPreview.preview.mode,
-          false,
-          importPreview.revision,
-          t("guardrails.importFailed"),
-        );
-      }, "guardrails.imported");
-      setImportPreview(null);
+      try {
+        await runMutation(async () => {
+          await importGuardrailsBundle(
+            apiBase,
+            importPreview.bundle,
+            importPreview.preview.mode,
+            false,
+            importPreview.revision,
+            t("guardrails.importFailed"),
+          );
+        }, "guardrails.imported");
+        setImportPreview(null);
+      } catch (error) {
+        if (isGuardrailsRevisionConflict(error)) {
+          setImportPreview(null);
+          setConsequence(null);
+        }
+        throw error;
+      }
     };
     if (importPreview.preview.mode === "replace") {
       setConsequence({

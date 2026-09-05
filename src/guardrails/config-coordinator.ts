@@ -20,7 +20,10 @@ import {
   publishGuardrailsRuntimeSnapshot,
   type GuardrailsRuntimeSnapshot,
 } from "./runtime";
-import { validateGuardrailsCustomRulesCompatibility } from "./registry";
+import {
+  validateGuardrailsBuiltinRuleIds,
+  validateGuardrailsCustomRulesCompatibility,
+} from "./registry";
 
 export type GuardrailsConfigMutationOutcome = PersistedConfigMutationOutcome<OcxGuardrailsConfig | undefined>;
 type PreparedGuardrailsConfig = { config: OcxGuardrailsConfig | undefined; snapshot: GuardrailsRuntimeSnapshot | undefined };
@@ -98,6 +101,9 @@ function mutateGuardrailsConfig(
           }
           const fullConfig = validateConfigCandidate(config);
           if (!fullConfig.ok) throw new Error(`Guardrails settings rejected: ${fullConfig.error}`);
+          if (next?.disabledBuiltinRuleIds) {
+            validateGuardrailsBuiltinRuleIds(next.disabledBuiltinRuleIds);
+          }
           if (next?.enabled !== true && next?.customRules) {
             validateGuardrailsCustomRulesCompatibility(next.customRules);
           }

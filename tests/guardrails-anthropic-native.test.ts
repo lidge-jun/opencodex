@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
+import { handleClaudeMessages } from "../src/server/claude-messages";
+import type { RequestLogContext } from "../src/server/request-log";
 import type { OcxConfig } from "../src/types";
 import {
   installIsolatedCodexHome,
@@ -106,6 +108,43 @@ function canonicalMessagesResponse(body: string, contentType: string | null): st
     ))}`;
   }).join("\n");
 }
+
+test("active Guardrails marks the Anthropic request-log context as privacy-sensitive", async () => {
+  const upstream = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch() {
+      return Response.json({
+        id: "msg-guardrails-log-context",
+        type: "message",
+        role: "assistant",
+        model: "claude-fable-5",
+        content: [{ type: "text", text: "accepted" }],
+        stop_reason: "end_turn",
+        stop_sequence: null,
+        usage: { input_tokens: 1, output_tokens: 1 },
+      });
+    },
+  });
+  const logCtx: RequestLogContext = { model: "", provider: "" };
+
+  try {
+    const response = await handleClaudeMessages(
+      new Request("http://localhost/v1/messages", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(documentBody()),
+      }),
+      config(upstream.url.toString().replace(/\/$/, "")),
+      logCtx,
+    );
+    await response.text();
+
+    expect(logCtx.sensitiveDataProtectionActive).toBe(true);
+  } finally {
+    upstream.stop(true);
+  }
+});
 
 test("disabled Guardrails matches baseline across native and routed Messages paths", async () => {
   const captured: Array<{ body: string; path: string }> = [];

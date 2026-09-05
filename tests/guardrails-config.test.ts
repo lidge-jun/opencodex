@@ -182,6 +182,28 @@ test("custom rules reject mutually exclusive IP validators", () => {
   }
 });
 
+test("custom rules reject duplicate capture-group alternatives", () => {
+  const parsed = parseGuardrailsConfig({
+    customRules: [{
+      ruleId: "custom.duplicate-capture",
+      name: "Duplicate capture",
+      dataType: 6,
+      group: "CUSTOM",
+      groupPriority: 0,
+      displayName: "Duplicate capture",
+      description: "Must be rejected",
+      regex: "(secret)-(value)",
+      keywords: [],
+      banlist: [],
+      validators: [],
+      masking: { captureGroups: [1, 1], placeholderType: "DUPLICATE_CAPTURE" },
+    }],
+  });
+
+  expect(parsed.ok).toBe(false);
+  if (!parsed.ok) expect(parsed.error).toContain("duplicate capture groups");
+});
+
 test("provider scope defaults to all and explicit all normalizes to absence", () => {
   const absent = parseGuardrailsConfig({ enabled: true });
   const explicit = parseGuardrailsConfig({
@@ -411,6 +433,21 @@ test("coordinator rejects an invalid custom RE2 rule before changing disk or liv
       masking: { captureGroups: [1], placeholderType: "CUSTOM_INVALID" },
     }],
   }, guardrailsPolicyRevision(liveConfig.guardrails ?? {}))).toThrow("not RE2 compatible");
+
+  expect(liveConfig.guardrails).toBeUndefined();
+  const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as { guardrails?: unknown };
+  expect(persisted.guardrails).toBeUndefined();
+});
+
+test("coordinator rejects unknown built-in rule IDs while disabled without changing disk or live config", () => {
+  saveConfig(getDefaultConfig());
+  const liveConfig = loadConfig();
+
+  expect(() => mutateAndAdoptGuardrailsConfig(liveConfig, {
+    enabled: false,
+    disabledBuiltinRuleIds: ["removed.or.misspelled-rule"],
+  }, guardrailsPolicyRevision(liveConfig.guardrails ?? {})))
+    .toThrow("does not identify a built-in rule");
 
   expect(liveConfig.guardrails).toBeUndefined();
   const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as { guardrails?: unknown };

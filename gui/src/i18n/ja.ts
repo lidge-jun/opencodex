@@ -2528,6 +2528,7 @@ export const ja: Record<TKey, string> = {
   "guardrails.dataTypes": "有効なデータ型",
   "guardrails.dataType": "データ型",
   "guardrails.dataType.credentials": "認証情報",
+  "guardrails.groupCredentialUrls": "認証情報を含む URL",
   "guardrails.dataType.apiKeys": "APIキー",
   "guardrails.dataType.accessTokens": "アクセストークン",
   "guardrails.dataType.ipAddresses": "IPアドレス",

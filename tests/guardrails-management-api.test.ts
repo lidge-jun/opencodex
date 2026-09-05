@@ -92,6 +92,22 @@ test("GET /api/guardrails is disabled by default and never exposes runtime mappi
   expect(body).not.toHaveProperty("original");
 });
 
+test("every Guardrails Management API response is non-cacheable", async () => {
+  const config = baseConfig();
+  for (const path of [
+    "/api/guardrails",
+    "/api/guardrails/settings",
+    "/api/guardrails/rules",
+    "/api/guardrails/catalog",
+    "/api/guardrails/activity",
+    "/api/guardrails/export",
+  ]) {
+    const req = request(path);
+    const response = await handleManagementAPI(req, new URL(req.url), config, persistenceSeam());
+    expect(response?.headers.get("cache-control"), path).toBe("no-store");
+  }
+});
+
 test("PUT /api/guardrails/settings persists valid settings and reports inactive configuration", async () => {
   const config = baseConfig();
   const req = mutationRequest(config, "/api/guardrails/settings", "PUT", {
@@ -221,6 +237,31 @@ test("Guardrails catalog exposes safe built-in metadata without compiled matcher
   }));
   expect(body.builtinRules[0]).not.toHaveProperty("regex");
   expect(body.builtinRules[0]).not.toHaveProperty("matcher");
+});
+
+test("Guardrails catalog and built-in toggle return the same typed asset failure", async () => {
+  const config = baseConfig();
+  const deps: ManagementApiDeps = {
+    ...persistenceSeam(),
+    guardrailsBuiltinRuleCatalog: () => {
+      throw new Error("synthetic bundled asset failure");
+    },
+  };
+  const catalog = request("/api/guardrails/catalog");
+  const catalogResponse = await handleManagementAPI(catalog, new URL(catalog.url), config, deps);
+  const toggle = mutationRequest(
+    config,
+    "/api/guardrails/rules/api_keys.stripe-key/enabled",
+    "PUT",
+    { enabled: false },
+  );
+  const toggleResponse = await handleManagementAPI(toggle, new URL(toggle.url), config, deps);
+
+  for (const response of [catalogResponse, toggleResponse]) {
+    expect(response?.status).toBe(503);
+    expect(await response!.json()).toMatchObject({ code: "guardrails_assets_invalid" });
+  }
+  expect(config.guardrails).toBeUndefined();
 });
 
 test("Guardrails rules endpoint toggles a built-in rule and enforces revisions", async () => {
