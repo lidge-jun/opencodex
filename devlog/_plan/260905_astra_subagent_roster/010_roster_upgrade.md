@@ -20,11 +20,12 @@
   Chain: fresh builder/migration -> saveConfig JSON -> optional schema on load ->
   startup migration guard. Future positive versions skip the v1 transform.
 - NEW `src/server/subagent-models-startup.ts`: use `mutatePersistedConfig` to
-  transform the fresh disk roster under the existing mutation lock, then adopt
-  only roster/version into live config. On unavailable persistence, warn and use
-  the in-memory projection for this run; never overwrite stale unrelated fields.
-- MODIFY `src/server/index.ts`: replace unset-only block with the startup helper
-  before catalog use. Remove unused default import.
+  transform the fresh disk roster under the existing mutation lock, then return
+  the entire rebased config. On unavailable persistence, warn and return the
+  in-memory projection for this run; never overwrite stale unrelated fields.
+- MODIFY `src/server/index.ts`: consume the returned config immediately after the
+  initial migration chain, before auth validation and live consumers are created.
+  Remove the old unset-only block and unused default import.
 - MODIFY existing `tests/server/config.test.ts`: fresh exact order; old five and
   partial/empty lists; Astra-present duplicate handling; missing list; save/load
   marker and later user reorder/removal; future marker; invalid marker isolation.
@@ -50,6 +51,7 @@
 | null/scalar/mixed/empty-string-element roster, no valid marker | load normalizes to unset; migration seeds valid defaults |
 | missing providers triggers defaults repair | raw legacy marker remains unset; roster migrates |
 | disk roster changes after live load | transform latest disk roster; unrelated disk edits survive |
+| Claude auth-mode migration saves after roster upgrade | returned config retains rebased port and deletions |
 | persistence unavailable | no stale disk overwrite; live projection with warning |
 
 ## Review and delivery
@@ -60,3 +62,11 @@ cross-platform tests execute the changed test target. Fill PR Summary,
 Verification, Checklist; disclose no-local-tests and user-authorized admin bypass.
 Push with --no-verify. Do not merge failing exact-head CI. Fetch dev and prove
 merge ancestry. Close the FSM with receipt/evidence and archive this unit.
+
+### PR review synthesis
+
+The connector review correctly identified that copying only roster/version left
+the live object stale for subsequent startup saves. Accepted: return the complete
+rebased document and consume it before live initialization, with a regression that
+runs the following Claude auth-mode migration and save. No shared adoption helper
+or unrelated startup migration rewrite is necessary.

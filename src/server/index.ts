@@ -654,7 +654,9 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   // Captured before loadConfig() starts the optional ACL flight so stop() drains the same dir
   // even if OPENCODEX_HOME changes underneath a long-lived process.
   const startupConfigDir = getConfigDir();
-  const config = runModelRenameStartupMigration(runAlibabaRegionStartupMigration(runOpenAiTierStartupMigration(loadConfig())));
+  const config = migrateStartupSubagentModels(
+    runModelRenameStartupMigration(runAlibabaRegionStartupMigration(runOpenAiTierStartupMigration(loadConfig()))),
+  );
   warnAgentTaskRecoveryStartup(config);
   setLiveStateStoreConfig(config);
   applyProxyEnv(config);
@@ -668,7 +670,6 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   // adding/dropping models reaches existing configs on start — not just fresh installs.
   reconcileOAuthProviders(config);
   reconcileLiveStateStores();
-  migrateStartupSubagentModels(config);
   // authMode migration (devlog 260726_claude_auth_auto/015): before "auto" existed,
   // choosing Subscription DELETED the key, so a pre-upgrade block with no authMode is
   // indistinguishable from "never chose". Pin those to subscription once so an upgrade
