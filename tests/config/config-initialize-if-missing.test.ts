@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  AtomicWriteSecretResidualError,
   getConfigPath,
   initializePersistedConfigIfMissing,
   loadConfig,
@@ -54,6 +55,18 @@ test("a competing creator wins and losing staged bytes are scrubbed", () => {
   expect(readdirSync(root).filter(name => name.includes(".ocx.") && name.endsWith(".tmp"))).toEqual([]);
 });
 
+test("rejects pathname replacement of the staged temporary file", () => {
+  setPersistedConfigInitializationBeforePublishForTests(() => {
+    const staged = readdirSync(root).find(name => name.endsWith(".tmp"));
+    if (!staged) throw new Error("staged temp not found");
+    const path = join(root, staged);
+    unlinkSync(path);
+    writeFileSync(path, "attacker-bytes");
+  });
+  expect(() => initializePersistedConfigIfMissing(config(19000))).toThrow(/identity changed/);
+  expect(existsSync(getConfigPath())).toBe(false);
+});
+
 test("surfaces publication cleanup failure", () => {
   const io = {
     createExclusive: (path: string) => writeFileSync(path, "", { flag: "wx" }),
@@ -65,4 +78,17 @@ test("surfaces publication cleanup failure", () => {
   };
   expect(() => initializePersistedConfigIfMissing(config(), io)).toThrow();
   expect(existsSync(getConfigPath())).toBe(false);
+});
+
+test("reports secret residual when staged bytes cannot be scrubbed or removed", () => {
+  let writes = 0;
+  const io = {
+    createExclusive: (path: string) => writeFileSync(path, "", { flag: "wx" }),
+    write: (path: string, bytes: string) => { writes += 1; if (writes > 1) throw new Error("write blocked"); writeFileSync(path, bytes); },
+    harden: () => {},
+    publishNoReplace: () => { throw Object.assign(new Error("race"), { code: "EEXIST" }); },
+    truncate: () => { throw new Error("truncate blocked"); },
+    unlink: (() => { throw new Error("unlink blocked"); }) as (path: string) => void,
+  };
+  expect(() => initializePersistedConfigIfMissing(config(), io)).toThrow(AtomicWriteSecretResidualError);
 });
