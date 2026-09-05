@@ -93,6 +93,30 @@ Remove the stored OAuth credential for a provider.
 
 ## Accounts and key pools
 
+### Main-account 99% protection
+
+In **Codex settings → Multi-auth → Advanced settings**, **Block main account at 99%**
+is an independent opt-in beside Ultra Fast. Enabling it first shows the consequences; cancelling
+does not change the setting. The main-account card shows monitoring, unknown usage, or a current
+policy block even when Advanced settings is closed.
+
+The policy uses the **5h window when present**, otherwise the weekly window. Monthly-only
+accounts use their monthly window. It does not take the highest percentage across windows.
+A fresh **0%** observation automatically releases the block while the switch stays on; the next
+99% observation blocks again. Unknown usage does not fabricate a zero, and a missing reading does
+not erase an already measured blocking tuple. Other pause, reauthentication, and upstream limits
+remain independent.
+
+The persisted option is `"codexMainAccountHardLock": true` in OpenCodex's `config.json`; it is off
+by default. This protects new requests using the identified main account, not the last 1% itself:
+already-running requests, unmatched caller-owned keyring credentials, and traffic outside the
+proxy can still spend quota. Added accounts and other providers remain available.
+
+While this policy blocks main, Luna Reserve on that account is blocked too. Staying below ordinary
+quota exhaustion may prevent Reserve activation. Disabling the switch restores normal local
+handling, not additional upstream entitlement. Use the account quota refresh action to obtain a
+fresh observation; no reset credit is consumed automatically.
+
 ### `ocx account <subcommand>`
 
 List and switch provider accounts and API-key pools through the running proxy. The shipped help

@@ -35,7 +35,8 @@ Reuse existing config mutation/rollback, quota parsing, account identity reconci
 1. wp0: source-grounded docs-only roadmap and independent audit; lock before production edits.
 2. wp1 / `010_policy.md`: main quota protection contracts, admission and management, with regression coverage. Bottom PR targets dev and works without the UI layer.
 3. wp2 / `020_settings.md`: switch, confirmation, main-card state and supported Reserve compatibility documentation; depends on the policy contract. Upper PR targets the bottom branch.
-4. wp3 / `030_delivery.md`: exact-head review/CI and bottom-up authorized admin merge, followed by fetched ancestry and closure evidence.
+4. wp-reserve / `030_reserve_compatibility.md`: source-grounded explicit Reserve metadata/availability and independent quota handling; depends on the preceding identity and settings contracts.
+5. wp3 / `040_delivery.md`: exact-head review/CI and bottom-up authorized admin merge, followed by fetched ancestry and closure evidence. Pending macOS and other platform gates remain mandatory.
 
 The Reserve client gate is a separate feasibility decision, not permission to misrepresent server state. If source establishes a safe OCX-only compatibility patch, concretize it as a P amendment before writing. If it requires modifying the installed Desktop client or publishing to an unspecified upstream repository, record the boundary and ask for that specific decision after completing in-scope work; do not claim same-picker coexistence.
 

@@ -402,3 +402,42 @@
 .codex-set-base-dialog__dot.active {
   background: var(--green);
 }
+
+/* Main quota protection shares existing card/toggle/dialog tokens. */
+.codex-main-hard-lock-setting.card-row {
+  margin-top: 16px;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.codex-main-hard-lock-copy { flex: 1 1 240px; min-width: 0; }
+.codex-main-hard-lock-setting > .toggle { flex: 0 0 auto; margin-left: auto; }
+.codex-main-hard-lock-feedback { flex: 1 0 100%; min-width: 0; }
+.codex-main-hard-lock-feedback:empty { display: none; }
+.codex-main-hard-lock-feedback p,
+.codex-main-hard-lock-status p { margin: 0; }
+.codex-main-hard-lock-feedback [role="alert"] { color: var(--red); }
+.codex-main-hard-lock-status {
+  margin-top: 12px;
+  padding: 0 16px 8px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  font-size: var(--text-label);
+  line-height: var(--leading-body);
+  color: var(--muted);
+}
+.codex-main-hard-lock-status.is-blocked { color: var(--amber); }
+.codex-main-hard-lock-status .link-btn { min-height: 32px; display: inline-flex; align-items: center; }
+@media (max-width: 640px) {
+  .codex-main-hard-lock-status .link-btn { min-height: 44px; }
+  .codex-main-hard-lock-dialog .modal-actions .btn { min-height: 44px; }
+}
+.codex-main-hard-lock-dialog .modal-actions { flex-wrap: wrap; }
+.codex-main-hard-lock-copy .card-sub,
+.codex-main-hard-lock-dialog .modal-desc { overflow-wrap: anywhere; }
+.codex-main-hard-lock-copy .card-sub { text-wrap: balance; }
+.codex-main-hard-lock-dialog .modal-desc { text-wrap: pretty; }
+:lang(ko) .codex-main-hard-lock-copy .card-sub,
+:lang(ko) .codex-main-hard-lock-dialog .modal-desc { word-break: keep-all; }

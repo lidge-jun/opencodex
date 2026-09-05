@@ -1,6 +1,6 @@
 # Reviewable stack delivery
 
-Depends on wp1 and wp2. No production code in this cycle unless a verified defect requires a new scoped repair plan.
+Depends on the completed runtime, settings and Reserve compatibility outputs. No production code in this cycle unless a verified defect requires a new scoped repair plan. All remaining platform checks, including macOS, are mandatory before each merge; runtime checkpoints are not merge approval.
 
 ## Branch and PR operations
 
