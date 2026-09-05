@@ -1,3 +1,4 @@
+import { contextCompatibleBaseLine } from "./context-compat";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import {
   atomicWriteFile,
@@ -364,7 +365,7 @@ export function setRootOpenaiBaseUrl(
   const lines = content.split("\n");
   const firstTable = lines.findIndex((l) => /^\s*\[/.test(l));
   const rootEnd = firstTable === -1 ? lines.length : firstTable;
-  const key = buildOpenaiBaseUrlLine(portOrTarget, hostname);
+  const key = contextCompatibleBaseLine(content, buildOpenaiBaseUrlLine(portOrTarget, hostname));
 
   for (let i = 0; i < rootEnd; i++) {
     if (!isRootOpenaiBaseUrlLine(lines[i])) continue;
@@ -399,7 +400,7 @@ function setRootOpenaiBaseUrlForTarget(
   const lines = content.split("\n");
   const firstTable = lines.findIndex((line) => /^\s*\[/.test(line));
   const rootEnd = firstTable === -1 ? lines.length : firstTable;
-  const key = buildOpenaiBaseUrlLineForTarget(target);
+  const key = contextCompatibleBaseLine(content, buildOpenaiBaseUrlLineForTarget(target));
   for (let index = 0; index < rootEnd; index += 1) {
     if (!isRootOpenaiBaseUrlLine(lines[index])) continue;
     const markerOwned = index > 0 && lines[index - 1].includes(OCX_SECTION_MARKER);

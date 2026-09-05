@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   applyEol,
   buildOpenaiBaseUrlLine,
+  buildRealtimeWsBaseUrlLine,
   buildProfileFile,
   buildProviderTableBlock,
   chooseCatalogPathForInjection,
@@ -13,7 +14,7 @@ import {
   stripRootContextWindowOverrides,
   standaloneCodexRoutingTarget,
 } from "../../src/codex/inject";
-import { stripJournaledOpenaiBaseUrl } from "../../src/codex/injected-marker";
+import { OCX_SECTION_MARKER, stripJournaledOpenaiBaseUrl } from "../../src/codex/injected-marker";
 import {
   MANAGED_AGENTS_TABLE_MARKER,
   MANAGED_SUBAGENT_DEFAULT_MARKER,
@@ -686,4 +687,21 @@ describe("EOL boundary helpers (Windows CRLF configs)", () => {
     // Idempotent on already-normalized input.
     expect(applyEol(crlf, "\r\n")).toBe(crlf);
   });
+});
+
+test('managed injection is idempotent and retains every unrelated value',()=>{
+ const source=`model = "gpt-6-astra"\n${OCX_SECTION_MARKER}\nopenai_base_url = "http://127.0.0.1:10100/v1"\nservice_tier = "fast"\n[features]\ncontext_management.experimental_mode = true\n[features.multi_agent_v2]\nenabled = true\n`;
+ const target={baseUrl:'http://127.0.0.1:10100/v1',requiresAdmissionToken:false,tokenEnv:'OPENCODEX_API_AUTH_TOKEN' as const};
+ const result=setRootOpenaiBaseUrl(source,target);
+ expect(result.keptUserBaseUrl).toBe(false);
+ expect(result.content).toBe(source.replace('10100/v1','10100/backend-api/codex'));
+ expect(setRootOpenaiBaseUrl(result.content,target).content).toBe(result.content);
+ expect(buildRealtimeWsBaseUrlLine(target)).toContain('10100/v1');
+ expect(setRootOpenaiBaseUrl(source,10100).content).toBe(result.content);
+});
+test('feature disabled and user-owned routing remain intact',()=>{
+ const source='openai_base_url = "http://127.0.0.1:10100/v1"\n[features]\ncontext_management.experimental_mode = true\n';
+ expect(setRootOpenaiBaseUrl(source,10100)).toEqual({content:source,keptUserBaseUrl:true});
+ const managed=`${OCX_SECTION_MARKER}\nopenai_base_url = "http://127.0.0.1:10100/v1"\n[features]\ncontext_management.experimental_mode = false\n`;
+ expect(setRootOpenaiBaseUrl(managed,10100).content).toBe(managed);
 });

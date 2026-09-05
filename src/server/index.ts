@@ -195,6 +195,8 @@ import {
 import { handleImages } from "./images";
 import { handleLive, logLiveSidebandFrame, parseLiveSidebandTarget, resolveLiveSidebandUpgrade } from "./live";
 import { handleSearch } from "./search";
+import { handleContextHistory } from "./context-history";
+import { codexCompatibleUrl, contextEndpoint } from "../codex/context-compat";
 import { fetchAllModels, handleManagementAPI, VERSION, type ManagementApiDeps } from "./management-api";
 import {
   createManagementSessionControl,
@@ -820,6 +822,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     }
     if (path === "/v1/responses/compact") return req.method === "POST";
     if (path === "/v1/alpha/search") return req.method === "POST";
+    if (contextEndpoint(path)) return req.method === "POST";
     if (path === "/v1/images/generations" || path === "/v1/images/edits") {
       return req.method === "POST";
     }
@@ -1047,7 +1050,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
       // The unauthenticated loopback listener (#1102) serves a fixed allowlist and nothing
       // else. Rejecting here, before any handler runs, is what keeps the surface from growing
       // silently when a route is added below.
-      if (ingress === "unauthenticated-loopback" && !loopbackRouteAllowed(new URL(req.url), req)) {
+      if (ingress === "unauthenticated-loopback" && !loopbackRouteAllowed(codexCompatibleUrl(req.url), req)) {
         return withCors(
           formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${new URL(req.url).pathname}`),
           req,
@@ -1056,7 +1059,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
       }
       // Tailscale Serve terminates only on this separately bound loopback socket. Reject before
       // dispatch so no data, readiness, health, WebSocket, or unknown-static handler can run.
-      if (ingress === "hub-management" && !managementIngressRouteAllowed(new URL(req.url), req)) {
+      if (ingress === "hub-management" && !managementIngressRouteAllowed(codexCompatibleUrl(req.url), req)) {
         return withCors(
           formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${new URL(req.url).pathname}`),
           req,
@@ -1069,7 +1072,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
       // same code path a plain loopback bind has always taken — Host-header check included.
       // Routing, provider selection and response bodies keep using `config`.
       const policy: RequestPolicyView = ingress === "unauthenticated-loopback" ? loopbackPolicy() : config;
-      const url = new URL(req.url);
+      const url = codexCompatibleUrl(req.url);
       markActivity(`${req.method} ${url.pathname}`);
 
       // Readiness is exact-GET on the literal /readyz path. Compare the DECODED
@@ -1823,6 +1826,31 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             "x-content-type-options": "nosniff",
           },
         }), req, policy);
+      }
+
+      if (contextEndpoint(url.pathname) !== undefined && req.method === "POST") {
+        disableResponsesRequestTimeout(req, requestServer);
+        if (isDraining()) {
+          return drainingResponse(req, policy);
+        }
+        const admission = resolveApiAuth(req, policy);
+        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
+        if (!isAllowedRequestOrigin(req, policy)) {
+          return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, policy);
+        }
+        const start = Date.now();
+        const requestId = nextRequestLogId(start);
+        const logCtx: RequestLogContext = {
+          model: "context_history",
+          provider: "unknown",
+          ...admissionFields(admission),
+        };
+        return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
+          const response = await handleContextHistory(req, config, logCtx, contextEndpoint(url.pathname)!, turnAdmissionLease);
+          addFinalRequestLog(requestId, start, logCtx, response.status,
+            response.status === 499 ? { closeReason: "client_cancel" } : undefined);
+          return withCors(response, req, policy);
+        });
       }
 
       if (url.pathname === "/v1/alpha/search" && req.method === "POST") {

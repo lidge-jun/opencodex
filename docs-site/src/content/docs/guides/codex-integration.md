@@ -57,6 +57,39 @@ The proxy listens on port `10100` by default and serves `POST /v1/responses`,
 `POST /v1/responses/compact`, `POST /v1/images/generations`, `POST /v1/images/edits`,
 `GET /v1/models`, `GET /healthz`, and the `/api/*` management surface.
 
+### Experimental context management (Codex 0.153+)
+
+For an eligible ChatGPT account, enable the experimental feature in Codex's own
+`config.toml` (merge this into an existing `[features]` table):
+
+```toml
+[features]
+context_management.experimental_mode = true
+```
+
+On the default built-in loopback integration, the next `ocx sync` or proxy start changes the
+managed root `openai_base_url` to `http://127.0.0.1:10100/backend-api/codex`. Codex checks this
+backend path before enabling its `new_context`, history, and notes tools. Start a new Codex
+session after synchronization. The feature remains opt-in; user-owned base URLs and remote
+custom-provider injection are not rewritten. No context-window or compaction-limit override
+is needed or added.
+
+The backend prefix aliases the existing data-plane routes, including Responses WebSocket
+upgrades. The original `/v1` routes and the realtime sideband override remain available. The
+proxy also relays the ten native `alpha/history/v2/*` and `alpha/notes/v2/*` POST endpoints
+through the configured ChatGPT forward provider. Encrypted arguments, tool-output policy
+headers, response bodies, and upstream error statuses are preserved. These private endpoints
+are not implemented by other model providers or the OpenAI API-key route.
+
+Pool/Direct account selection is unchanged. History requests use their root
+`context.session_id` to recover the same local account-affinity lane as the root model request;
+this does not migrate server-side history between accounts. An automatic account change or
+a proxy restart can therefore affect continuity. Notes writes are not automatically retried,
+and history traffic does not consume or settle a model quota-recovery probe.
+
+To disable the feature, remove the experimental key (or set it to `false`), run `ocx sync`,
+and start a new Codex session. The managed root base returns to `/v1`.
+
 ### Built-in image generation (`image_gen`)
 
 Codex's built-in `image_gen` tool does not go through `/v1/responses` — the codex-rs extension

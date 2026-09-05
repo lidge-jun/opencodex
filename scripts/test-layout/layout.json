@@ -11,7 +11,7 @@
   "domains": {
     "providers": {
       "match": [
-        "^(?:aside|auto|azure|baseten|chutes|cline|command|commandcode|context|cyber|deepinfra|deepseek|digitalocean|exa|featherless|forward|hyperbolic|kimi|meta|mimo|minimax|moonshot|muse|new|nous|novita|nscale|nvidia|opencode|openrouter|qwen38|sambanova|umans|vercel|zcode|zhipu)-"
+        "^(?:aside|auto|azure|baseten|chutes|cline|command|commandcode|context(?!-compat|-history)|cyber|deepinfra|deepseek|digitalocean|exa|featherless|forward|hyperbolic|kimi|meta|mimo|minimax|moonshot|muse|new|nous|novita|nscale|nvidia|opencode|openrouter|qwen38|sambanova|umans|vercel|zcode|zhipu)-"
       ],
       "children": {
         "cursor": [
@@ -33,11 +33,13 @@
     },
     "codex-integration": {
       "match": [
+        "^context-compat\\.test\\.ts$",
         "^(?:active|app|bearer|catalog|combos\\.test\\.ts|doctor\\.test\\.ts|effort|gather|history|injection|issue|multi|native|parallel|project|selected|slug|ultrafast|warmup\\.test\\.ts)-"
       ]
     },
     "server": {
       "match": [
+        "^context-history\\.test\\.ts$",
         "^(?:account|alias|bounded|cancel|config\\.test\\.ts|consume|data|debug|error|errors|fetch|health|input|loopback|management|memory|outbound|owned|passive|port|ports\\.test\\.ts|proxy|relay|response|retry|server|session|sidebar|stream|v2)-"
       ]
     },
@@ -493,6 +495,8 @@
     "consume-for-inspection-cancel.test.ts": "server",
     "container-bootstrap.test.ts": "service",
     "context-cap-unknown-window.test.ts": "providers",
+    "context-compat.test.ts": "codex-integration",
+    "context-history.test.ts": "server",
     "continuation-dedup.test.ts": "responses",
     "core-lab-boundary.test.ts": "lab",
     "cost-cap-unknown-evidence.test.ts": "usage",

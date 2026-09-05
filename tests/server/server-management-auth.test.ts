@@ -589,6 +589,26 @@ describe("management and data-plane credential separation", () => {
     }
   });
 
+  test("Codex backend aliases retain data-plane authentication and cannot enter management", async () => {
+    saveConfig(remoteConfig());
+    const server = startServer(0);
+    try {
+      for (const token of [undefined, "admin-secret", "data-secret"]) {
+        const headers: Record<string, string> = token ? { "x-opencodex-api-key": token } : {};
+        const models = await fetch(new URL("/backend-api/codex/models", server.url), { headers });
+        expect(models.status).toBe(token === "data-secret" ? 200 : 401);
+        const context = await fetch(new URL("/backend-api/codex/alpha/notes/v2/read_file", server.url), {
+          method: "POST", headers, body: "{}",
+        });
+        expect(context.status).toBe(token === "data-secret" ? 400 : 401);
+        const management = await fetch(new URL("/backend-api/codex/api/config", server.url), { headers });
+        expect(management.status).toBe(404);
+      }
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("data and management environment tokens authorize only their own planes", async () => {
     saveConfig(remoteConfig());
     const server = startServer(0);
