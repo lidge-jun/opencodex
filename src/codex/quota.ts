@@ -616,9 +616,14 @@ function readMainPolicyQuota(value: unknown): MainPolicyQuota | null {
   const raw = entry.quota as Record<string, unknown>;
   if (typeof raw.updatedAt !== "number" || !Number.isFinite(raw.updatedAt) || raw.updatedAt < 0) return null;
   const quota: StoredAccountQuota = { updatedAt: raw.updatedAt };
+  for (const field of ["weeklyPercent", "monthlyPercent", "shortPercent"] as const) {
+    const number = raw[field];
+    if (typeof number === "number" && Number.isFinite(number) && number >= 0 && number <= 100) {
+      quota[field] = number;
+    }
+  }
   for (const field of [
-    "weeklyPercent", "monthlyPercent", "shortPercent", "weeklyResetAt", "monthlyResetAt",
-    "shortResetAt", "shortWindowSeconds", "resetCredits",
+    "weeklyResetAt", "monthlyResetAt", "shortResetAt", "shortWindowSeconds", "resetCredits",
   ] as const) {
     const number = raw[field];
     if (typeof number === "number" && Number.isFinite(number) && number >= 0) quota[field] = number;

@@ -171,3 +171,80 @@ describe("cold partial writers hydrate only the surviving legacy cache", () => {
     }
   }
 });
+
+/** Write external disk input without priming either cache through a getter or setter. */
+function writeColdPolicy(fields: Record<string, unknown>) {
+  clearAccountQuota();
+  const writer = writerFor();
+  const quota = { updatedAt: Date.now(), ...fields };
+  const body = JSON.stringify({
+    version: 1, quotas: { [MAIN]: quota }, mainPolicyQuota: { identityKey: writer.identityKey, quota },
+  }, (_key, value: unknown) => value === Infinity ? "positive-overflow"
+    : value === -Infinity ? "negative-overflow" : value)
+    .replaceAll('"positive-overflow"', "1e400").replaceAll('"negative-overflow"', "-1e400");
+  writeFileSync(join(home, "codex-quota-cache.json"), body);
+  return quota;
+}
+
+describe("cold persisted policy percentage ranges", () => {
+  const cfg = { codexMainAccountHardLock: true };
+  for (const field of ["shortPercent", "weeklyPercent", "monthlyPercent"] as const) {
+    test.each([-1, -0.01, 101, 100.01, Infinity, -Infinity, null, "99", "101", "NaN", "Infinity", false, {}, []]
+      .map(value => ({ value })))(
+      `${field}=%j cannot shadow a valid blocking window or invent a window`, ({ value }) => {
+        const blocking = field === "weeklyPercent"
+          ? { monthlyPercent: 99, monthlyIsPrimaryWindow: true }
+          : { weeklyPercent: 99 };
+        const disk = writeColdPolicy({ ...blocking, [field]: value });
+        expect(getMainAccountHardLockStatus(cfg)).toEqual({ enabled: true, state: "blocked" });
+        expect(getMainPolicyQuota()).toEqual({ updatedAt: disk.updatedAt, ...blocking });
+        // The ordinary disk cache is intentionally not sanitized by the policy parser.
+        expect(getAccountQuota(MAIN)).toEqual(disk);
+
+        const isolated = writeColdPolicy({ [field]: value, monthlyIsPrimaryWindow: true });
+        expect(getMainPolicyQuota()).toEqual({ updatedAt: isolated.updatedAt });
+        expect(getMainAccountHardLockStatus(cfg)).toEqual({ enabled: true, state: "unknown" });
+      },
+    );
+
+    test.each([0, 98.99, 99, 100])(`${field}=%s survives disk hydration without clamping`, value => {
+      const disk = writeColdPolicy({ [field]: value });
+      expect(getMainPolicyQuota()).toEqual(disk);
+      expect(getMainAccountHardLockStatus(cfg).state).toBe(value < 99 ? "ready" : "blocked");
+    });
+  }
+
+  test("valid short zero keeps priority over weekly99 after hydration", () => {
+    const disk = writeColdPolicy({ weeklyPercent: 99, shortPercent: 0 });
+    expect(getMainPolicyQuota()).toEqual(disk);
+    expect(getMainAccountHardLockStatus(cfg).state).toBe("ready");
+  });
+
+  test("rejected short usage retains independently valid unknown-window metadata", () => {
+    const disk = writeColdPolicy({ weeklyPercent: 99, shortPercent: 101,
+      shortWindowSeconds: 18_000, shortResetAt: 2_000_000_000, resetCredits: 150 });
+    expect(getMainPolicyQuota()).toEqual({ updatedAt: disk.updatedAt, weeklyPercent: 99,
+      shortWindowSeconds: 18_000, shortResetAt: 2_000_000_000, resetCredits: 150 });
+    expect(getMainAccountHardLockStatus(cfg)).toEqual({ enabled: true, state: "unknown" });
+  });
+
+  test.each([0, 150, 2_000_000_000])("metadata and credits retain nonnegative %s independently of usage ranges", value => {
+    const disk = writeColdPolicy({ shortPercent: 100, weeklyPercent: 99, monthlyPercent: 0,
+      shortResetAt: value, weeklyResetAt: value, monthlyResetAt: value,
+      shortWindowSeconds: value, resetCredits: value, monthlyIsPrimaryWindow: true });
+    expect(getMainPolicyQuota()).toEqual(disk);
+  });
+
+  test.each([-1, Infinity, -Infinity, "150", null])("invalid metadata %s cannot erase valid percentage evidence", value => {
+    const disk = writeColdPolicy({ weeklyPercent: 99, shortResetAt: value, weeklyResetAt: value,
+      monthlyResetAt: value, shortWindowSeconds: value, resetCredits: value });
+    expect(getMainPolicyQuota()).toEqual({ updatedAt: disk.updatedAt, weeklyPercent: 99 });
+    expect(getMainAccountHardLockStatus(cfg).state).toBe("blocked");
+  });
+
+  test.each([-1, Infinity, -Infinity, "0", null])("invalid updatedAt %s still rejects the entire policy record", value => {
+    writeColdPolicy({ weeklyPercent: 99, updatedAt: value });
+    expect(getMainPolicyQuota()).toBeNull();
+    expect(getMainAccountHardLockStatus(cfg).state).toBe("unknown");
+  });
+});
