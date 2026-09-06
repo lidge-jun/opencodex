@@ -317,6 +317,7 @@ These settings govern `/v1/messages`, `/v1/messages/count_tokens`, the `ocx clau
 | --- | --- | --- | --- |
 | `claudeCode.bodyStallSec?` | `number` | `90` | Native-passthrough body inactivity budget in seconds while a read is pending, not total duration. Minimum 1; exactly `0` disables. |
 | `claudeCode.bodyMaxBytes?` | `number` | `67108864` | Cumulative native-passthrough body cap for streamed and buffered responses. Exactly `0` disables. |
+| `claudeCode.compatibility?` | `"shadow" | "enforce"` | unset | Optional routed-protocol compatibility gate. `shadow` reports compatibility decisions without rejecting; `enforce` rejects Anthropic features that cannot be represented losslessly by the selected routed adapter. Unset preserves legacy translation behavior. |
 | `claudeCode.authMode?` | `"proxy" \| "subscription"` | auto | How launch handles `ANTHROPIC_AUTH_TOKEN`. Auto detects auth each launch; an explicit value is never overridden. |
 | `claudeCode.authModeMigratedAt?` | `string` | unset | Internal one-time upgrade marker. Do not set manually. |
 | `claudeCode.classifierModel?` | `string` | unset | Explicit target for Claude Code Auto Mode classifier turns, as a qualified `provider/model` (for example `RelayA/claude-opus-5`). Auto Mode sends bare safety checks such as `claude-opus-5` with no provider, so without this they fall through to `defaultProvider` — which may not speak Anthropic at all. Nothing is inferred automatically: only a target you declare here is used. |
