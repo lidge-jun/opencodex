@@ -10,8 +10,8 @@ const SENSITIVE_PATTERNS: Array<[RegExp, string]> = [
   [/\b\d{10,13}\b/g, ""],
   [/(:\d+\s*:\s*\d+)(?=\b|\D)/g, ""],
   [/\b(?:line|col(?:umn)?)\s*[:=]?\s*\d+/gi, ""],
-  [/(?:\/[\p{L}\p{N}\p{M}._-]+(?: [\p{L}\p{N}\p{M}._-]+)*)+\/[\p{L}\p{N}\p{M}._-]+/gu, "[path]"],
-  [/[a-zA-Z]:\\(?:[\p{L}\p{N}\p{M}._-]+(?: [\p{L}\p{N}\p{M}._-]+)*\\)+[\p{L}\p{N}\p{M}._-]+/gu, "[path]"],
+  [/(?:\/[^\s/\\]+(?: [^\s/\\]+)*(?=\/))+(?:\/[^\s/\\]+)/gu, "[path]"],
+  [/[a-zA-Z]:\\(?:[^\s/\\]+(?: [^\s/\\]+)*\\)+[^\s/\\]+/gu, "[path]"],
 ];
 
 const MAX_SIGNATURE_LEN = 1024;
@@ -19,7 +19,7 @@ const MAX_FIELD_LEN = 128;
 
 export function sanitizeSignature(raw: string): string {
   if (typeof raw !== "string") return "";
-  let text = raw;
+  let text = raw.normalize("NFC");
   for (const [pattern, replacement] of SENSITIVE_PATTERNS) {
     text = text.replace(pattern, replacement);
   }
