@@ -11,7 +11,7 @@ opencodex는 Codex가 읽는 두 가지, 즉 설정(`$CODEX_HOME/config.toml`, �
 
 접근 토큰이 필요 없는 독립 실행형 루프백 대상에서만 기본적으로 별도 로그인 없이 Codex를 엽니다. 클라이언트 연결이나 토큰 인증이 필요한 대상은 루프백 URL이라도 `requires_openai_auth = true`와 `OPENCODEX_API_AUTH_TOKEN`을 유지합니다. Dashboard → Overview에서 전환할 수 있습니다. OpenCodex에 저장된 계정과 제공자를 사용하며 변경 후 Codex를 다시 시작해야 합니다.
 
-이 설정은 Codex Desktop의 별도 로그인만 생략하며 인증 정보를 생성하거나 선택하지 않고 계정 권한도 부여하지 않습니다. Pool은 설정된 Codex 계정을 선택하고, Direct는 여전히 호출자 또는 메인 계정의 인증 정보가 필요합니다. Luna Reserve는 로컬 `codexDesktopAuthless` 모드가 실제로 활성화되어 있어야 하며, 해당 인증 정보에 연결된 제공자의 현재 허가가 필요합니다. 카탈로그에 표시되는 것만으로 요청이 허가되지는 않습니다. Luna Reserve는 인증 정보에 연결된 업스트림 허가가 있는 정식 ChatGPT-forward 어댑터에서만 지원됩니다. API 키 인증과 임의의 Responses 게이트웨이는 지원 대상이 아닙니다.
+이 설정은 Codex Desktop의 별도 로그인만 생략하며 인증 정보를 생성하거나 선택하지 않고 계정 권한도 부여하지 않습니다. Pool은 설정된 Codex 계정을 선택하고, Direct는 여전히 호출자 또는 메인 계정의 인증 정보가 필요합니다. Luna Reserve는 로컬 `codexDesktopAuthless` 모드가 실제로 활성화되어 있어야 하며, 해당 인증 정보에 연결된 제공자의 현재 허가가 필요합니다. 카탈로그에 표시되는 것만으로 요청이 허가되지는 않습니다. Luna Reserve는 인증 정보에 연결된 업스트림 허가가 있는 정식 ChatGPT-forward 어댑터에서만 지원됩니다. API 키 인증과 임의의 Responses 게이트웨이는 지원 대상이 아닙니다. ChatGPT 요청에서 Pool과 Direct는 모두 API 키 인증 정보로 대체하지 않습니다. 별도의 이미지 생성 대체 경로는 이미지 요청에만 적용됩니다.
 
 `ocx init`, `ocx start`, `ocx sync`는 Codex 통합이 활성화된 경우 인젝터를 호출합니다. 통합이 꺼져 있으면 주입을 건너뛰며, 카탈로그 전용 동기화는 Codex 설정을 변경하지 않습니다. `codexDesktopAuthless: false`인 loopback 바인드에서는 Codex의 빌트인 `openai` 프로바이더 id를 그대로 유지한 채, 그 프로바이더가 opencodex를 바라보게 합니다.
 

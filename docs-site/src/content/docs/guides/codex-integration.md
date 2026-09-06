@@ -222,7 +222,7 @@ keep `requires_openai_auth = true` and `OPENCODEX_API_AUTH_TOKEN`, even when the
 OpenCodex still authenticates requests with the accounts and providers saved in OpenCodex;
 ChatGPT accounts in Pool mode remain available. Direct mode still requires caller/main credentials.
 The switch does not create or select credentials or grant account permissions. Luna Reserve still
-requires effective local `codexDesktopAuthless` mode, the appropriate credentials and a current upstream permission. Catalog visibility alone never authorizes a request. Luna Reserve is supported only through the canonical ChatGPT-forward adapter with credential-bound upstream authorization. API-key authentication and arbitrary Responses gateways do not qualify.
+requires effective local `codexDesktopAuthless` mode, the appropriate credentials and a current upstream permission. Catalog visibility alone never authorizes a request. Luna Reserve is supported only through the canonical ChatGPT-forward adapter with credential-bound upstream authorization. API-key authentication and arbitrary Responses gateways do not qualify. For ChatGPT requests, neither Pool nor Direct falls back to API-key credentials; the separate image-generation fallback applies only to image requests.
 
 Toggle **Open Codex without signing in** in **Dashboard → Overview**. Saving synchronizes the
 Codex configuration; restart Codex to apply the change. If synchronization is pending, the dashboard

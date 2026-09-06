@@ -11,7 +11,7 @@ opencodex は、Codex が読み取る 2 つの内容 (構成 (`$CODEX_HOME/confi
 
 アドミッショントークンを必要としない単独のループバック接続先では、既定で別途ログインせずに Codex を開きます。クライアント接続やトークン認証が必要な接続先では、URL がループバックでも `requires_openai_auth = true` と `OPENCODEX_API_AUTH_TOKEN` を維持します。Dashboard → Overview で切り替えられます。OpenCodex に保存されたアカウントとプロバイダーを使用し、変更後は Codex の再起動が必要です。
 
-この設定は Codex Desktop の個別ログインのみを省略し、認証情報の作成・選択やアカウント権限の付与は行いません。Pool は設定済みの Codex アカウントを選択し、Direct は引き続き呼び出し元またはメインアカウントの認証情報を必要とします。Luna Reserve には有効なローカル `codexDesktopAuthless` モード、認証情報、およびその認証情報に紐づく現在のプロバイダーの許可が必要です。カタログに表示されるだけではリクエストは許可されません。 Luna Reserve は、認証情報に紐づく上流の許可を持つ正規の ChatGPT-forward アダプターでのみ利用できます。API キー認証や任意の Responses ゲートウェイは対象外です。
+この設定は Codex Desktop の個別ログインのみを省略し、認証情報の作成・選択やアカウント権限の付与は行いません。Pool は設定済みの Codex アカウントを選択し、Direct は引き続き呼び出し元またはメインアカウントの認証情報を必要とします。Luna Reserve には有効なローカル `codexDesktopAuthless` モード、認証情報、およびその認証情報に紐づく現在のプロバイダーの許可が必要です。カタログに表示されるだけではリクエストは許可されません。 Luna Reserve は、認証情報に紐づく上流の許可を持つ正規の ChatGPT-forward アダプターでのみ利用できます。API キー認証や任意の Responses ゲートウェイは対象外です。 ChatGPT リクエストでは、Pool も Direct も API キー認証にフォールバックしません。別途用意された画像生成のフォールバックは、画像リクエストにのみ適用されます。
 
 `ocx init`、`ocx start`、および `ocx sync` は Codex 統合が有効な場合にインジェクターを呼び出します。統合が無効な場合は注入をスキップし、カタログのみの同期では Codex 設定を変更しません。`codexDesktopAuthless: false` のループバック バインドでは、Codex の組み込み `openai` プロバイダー ID を保持し、そのプロバイダーを opencodex にポイントします。
 
