@@ -1533,6 +1533,23 @@ export function codexForwardTerminalOutcomeRecorder(
   if (!usesCodexForwardPoolAuth(authCtx, provider)) return undefined;
   return (status, httpStatusOverride) => {
     if (status === "incomplete") {
+      const isQuotaOrRateLimit = Boolean(
+        (logCtx?.upstreamError && isRateLimitOrQuotaFailureMessage(logCtx.upstreamError))
+        || logCtx?.terminalHttpStatus === 429
+        || httpStatusOverride === 429
+      );
+      if (isQuotaOrRateLimit) {
+        recordCodexUpstreamOutcome(config, authCtx.accountId, 429, {
+          threadId: authCtx.affinityKey,
+          fixedAccount: authCtx.fixedAccount,
+          modelId,
+          probeLeaseId: codexProbeLeaseId(authCtx),
+          probeQuotaScope: codexProbeQuotaScope(authCtx),
+          writerGeneration: authCtx.writerGeneration,
+          ...(authCtx.kind === "pool" ? { credentialGeneration: authCtx.generation } : {}),
+        });
+        return;
+      }
       // Normal limit/content-filter/stall terminal — the account served the
       // request. Don't penalize account health; record success to clear any
       // prior soft-avoid so a healthy account isn't stuck avoided.
@@ -5143,11 +5160,12 @@ async function handleResponsesInner(
       if (terminalBodyWillRecord) {
         options.setTerminalOutcomeRecorder?.((status, httpStatusOverride) => {
           terminalRecorder(status, httpStatusOverride);
-          if (status === "failed") {
+          if (status === "failed" || status === "incomplete") {
             const quotaFailureMessage = httpStatusOverride === 429 || httpStatusOverride === 402
               || logCtx.terminalHttpStatus === 429
               || logCtx.terminalHttpStatus === 402
-              ? (httpStatusOverride ?? logCtx.terminalHttpStatus)
+              || (logCtx.upstreamError && isRateLimitOrQuotaFailureMessage(logCtx.upstreamError))
+              ? (httpStatusOverride ?? logCtx.terminalHttpStatus ?? 429)
               : undefined;
             if (!isFixedCodexAccount(authCtx) && quotaFailureMessage !== undefined) {
               recordSubagentQuotaFailureForThreadSpawn(
@@ -5354,11 +5372,12 @@ async function handleResponsesInner(
         const reportNativeTerminal = recordTerminalOutcomes
           ? (status: ResponsesTerminalStatus, httpStatusOverride?: number) => {
             terminalRecorder?.(status, httpStatusOverride);
-            if (status === "failed") {
+            if (status === "failed" || status === "incomplete") {
               const quotaFailureMessage = httpStatusOverride === 429 || httpStatusOverride === 402
                 || logCtx.terminalHttpStatus === 429
                 || logCtx.terminalHttpStatus === 402
-                ? (httpStatusOverride ?? logCtx.terminalHttpStatus)
+                || (logCtx.upstreamError && isRateLimitOrQuotaFailureMessage(logCtx.upstreamError))
+                ? (httpStatusOverride ?? logCtx.terminalHttpStatus ?? 429)
                 : undefined;
               if (!isFixedCodexAccount(authCtx) && quotaFailureMessage !== undefined) {
                 recordSubagentQuotaFailureForThreadSpawn(
@@ -5447,11 +5466,12 @@ async function handleResponsesInner(
         // client-cancel (no terminal seen) is finalized separately via consumeForInspection's onCancel.
         const reportNativeTerminal = (status: ResponsesTerminalStatus, httpStatusOverride?: number) => {
           terminalRecorder?.(status, httpStatusOverride);
-          if (status === "failed") {
+          if (status === "failed" || status === "incomplete") {
             const quotaFailureMessage = httpStatusOverride === 429 || httpStatusOverride === 402
               || logCtx.terminalHttpStatus === 429
               || logCtx.terminalHttpStatus === 402
-              ? (httpStatusOverride ?? logCtx.terminalHttpStatus)
+              || (logCtx.upstreamError && isRateLimitOrQuotaFailureMessage(logCtx.upstreamError))
+              ? (httpStatusOverride ?? logCtx.terminalHttpStatus ?? 429)
               : undefined;
             if (!isFixedCodexAccount(authCtx) && quotaFailureMessage !== undefined) {
               recordSubagentQuotaFailureForThreadSpawn(

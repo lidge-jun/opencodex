@@ -1088,7 +1088,12 @@ export async function handleResponsesCompact(
         }
       }
     }
-    return buffered;
+    if (buffered.status !== 404) {
+      return buffered;
+    }
+    // Upstream returned 404 on /responses/compact (e.g. canonical ChatGPT Codex forward backend
+    // does not serve /responses/compact; it only supports compaction via POST /responses turns).
+    // Fall through to the routed synthetic-compaction turn below.
     } finally {
       releaseUpstreamHostAdmission(compactHostAdmissionLease);
       releaseCodexAuthContextProbeLease(authCtx);
@@ -1105,7 +1110,7 @@ export async function handleResponsesCompact(
     // the completed event back into the v1 compact JSON contract below. Combo-dispatched
     // turns also go out as SSE: failover can land on a canonical child that rejects a
     // non-streaming turn, and every combo-capable provider already serves streaming traffic.
-    stream: accountGatedCompactWireModel || route.combo ? true : false,
+    stream: isCanonicalOpenAiForwardProvider(route.provider) || accountGatedCompactWireModel || route.combo ? true : false,
     input: [...inputItems, { type: "compaction_trigger" }],
   };
   const internalHeaders = new Headers({ "content-type": "application/json" });
