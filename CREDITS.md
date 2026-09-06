@@ -122,6 +122,39 @@ The correction commit records these contributors and the earlier **Carried work*
 authors as co-authors. This is forward attribution: the old commit objects,
 their original dates and release tags are unchanged.
 
+### 2026-09-07 follow-up: four-track source-to-landing attribution
+
+At the owner's request, this audit makes the original PR titles, authors and
+delivered slices explicit for the four follow-up tracks after #3771. All linked
+landing commits are ancestors of `5759d9ea2f1e7281cdc01eb9628f2e0a123fb59c`.
+The human contributors already resolve through reachable source commits or merge
+trailers; a merge commit with no repeated trailer does not erase its parents'
+authorship. This forward record strengthens discoverability without claiming that
+every earlier landing omitted credit or rewriting existing commits and tags.
+
+| Original pull request | Original author | Landed through | Delivered scope |
+| --- | --- | --- | --- |
+| [#3769: fix(responses): fallback to routed compaction on 404 and enable quota failover on incomplete terminal](https://github.com/lidge-jun/opencodex/pull/3769) | [@ideabib](https://github.com/ideabib) | [#3791](https://github.com/lidge-jun/opencodex/pull/3791) (`fcf07446aa`) | Quota/incomplete attribution only; native compact 404 fallback remains outside this landing. |
+| [#3736: fix: preserve compaction progress and use a 600s stall budget](https://github.com/lidge-jun/opencodex/pull/3736) | [@Hylouis233](https://github.com/Hylouis233) | [#3792](https://github.com/lidge-jun/opencodex/pull/3792) (`823ffeb771`) | Content-free buffered-compaction progress; the proposed global 600-second default was not adopted. |
+| [#3744: fix(server): opt the compact route out of the request idle timeout](https://github.com/lidge-jun/opencodex/pull/3744) | [@mashfromband](https://github.com/mashfromband) | [#3792](https://github.com/lidge-jun/opencodex/pull/3792) (`823ffeb771`) | Accepted compact-request lifetime, with complete-body admission and bounded response-body inactivity. |
+| [#3740: fix(responses): answer a wrapped WebSocket rejection with its HTTP status](https://github.com/lidge-jun/opencodex/pull/3740) | [@FredAmartey](https://github.com/FredAmartey) | [#3793](https://github.com/lidge-jun/opencodex/pull/3793) (`110623ecfc`) | Precommit wrapped WebSocket rejection status; mid-turn failures retain their separate boundary. |
+| [#3779: fix(chat): preserve completion semantics in JSON-to-SSE fallback](https://github.com/lidge-jun/opencodex/pull/3779) | [@Ingwannu](https://github.com/Ingwannu) | [#3803](https://github.com/lidge-jun/opencodex/pull/3803) (`ac4a7659fd`) | JSON-to-stream tools, reasoning, usage and finish-reason preservation, extended across both fallback paths. |
+| [#3730: feat(claude): gate routed protocol compatibility](https://github.com/lidge-jun/opencodex/pull/3730) | [@yansigit](https://github.com/yansigit) | [#3806](https://github.com/lidge-jun/opencodex/pull/3806) (`4255bfac61`), [#3808](https://github.com/lidge-jun/opencodex/pull/3808) (`5759d9ea2f`) | Opt-in translated Messages compatibility and bounded diagnostics; integrated with the final fixture layer. |
+| [#3747: fix(container): persist Codex home separately from OCX state](https://github.com/lidge-jun/opencodex/pull/3747) | [@Ingwannu](https://github.com/Ingwannu) | [#3788](https://github.com/lidge-jun/opencodex/pull/3788) (`ad5285e415`) | Separate persisted Codex home under the read-only container root, with serializer and documentation corrections. |
+| [#3324: docs(skill): keep access-key secrets out of agent sessions](https://github.com/lidge-jun/opencodex/pull/3324) | [@luvs01](https://github.com/luvs01) | [#3789](https://github.com/lidge-jun/opencodex/pull/3789) (`26fa36424a`) | Agent-facing secret-bearing command and rotation-recipe restrictions, including aliases and management API spellings. |
+| [#3632: feat(config): add exclusive initialize-if-missing primitive](https://github.com/lidge-jun/opencodex/pull/3632) | [@yansigit](https://github.com/yansigit) | [#3796](https://github.com/lidge-jun/opencodex/pull/3796) (`443310e5dc`), [#3802](https://github.com/lidge-jun/opencodex/pull/3802) (`f89b815090`) | Exclusive initial configuration publication and its real setup consumer, with filesystem and cancellation corrections. |
+| [#3728: feat(quota): show subscription credits in capacity bars](https://github.com/lidge-jun/opencodex/pull/3728) | [@yansigit](https://github.com/yansigit) | [#3798](https://github.com/lidge-jun/opencodex/pull/3798) (`b72b8ea6c8`) | Subscription-credit quota rows, including duplicate-label and displayed-row urgency handling. |
+| [#3250: perf(logs): poll request history incrementally](https://github.com/lidge-jun/opencodex/pull/3250) | [@chilung-cgu](https://github.com/chilung-cgu) | [#3800](https://github.com/lidge-jun/opencodex/pull/3800) (`57211f43d4`) | Incremental request-history polling, extended to preserve changed requests and reset behavior. |
+| [#3383: feat(models): add main picker ordering controls](https://github.com/lidge-jun/opencodex/pull/3383) | [@x3M3x](https://github.com/x3M3x) | [#3801](https://github.com/lidge-jun/opencodex/pull/3801) (`8615f1a1c9`) | Picker-order controls and isolated saves; unrelated source-PR Windows changes are not credited as part of this layer. |
+
+The source commits for @yansigit also credit Yumi. That original automation
+attribution remains in the reachable history; this audit does not invent a GitHub
+account mapping for its unlinked automation identity. The forward human trailers
+use the source authors' verified numeric GitHub account identities.
+
+A delivered slice is not a statement that every requirement in its original PR
+or umbrella issue is complete. The table deliberately retains the unadopted scope.
+
 ## Report and diagnosis
 
 These fixes exist because of the report. The branch's own approach was not the
@@ -137,6 +170,25 @@ code would misstate what happened in the other direction.
 | [#3117](https://github.com/lidge-jun/opencodex/pull/3117) | [@olddonkey](https://github.com/olddonkey) | `b46164e78` | "Thank you for the focused report and tests" |
 | [#3143](https://github.com/lidge-jun/opencodex/pull/3143) | [@Ingwannu](https://github.com/Ingwannu) | `408652698` | "The diagnosis here was yours and it was right" |
 | [#3223](https://github.com/lidge-jun/opencodex/pull/3223) | [@alex-jordan547](https://github.com/alex-jordan547) | `d23eab43a` | "The report itself was what made the fix quick; the wire capture pointed straight at the cause" |
+
+### Four-track reports and diagnostic evidence
+
+These issue authors supplied the reports or observations used by the follow-up
+work. They are acknowledged as reporters, separately from the carried PR authors.
+
+| Report | Reporter | Follow-up | Contribution |
+| --- | --- | --- | --- |
+| [#3778](https://github.com/lidge-jun/opencodex/issues/3778) | [@turin-dev](https://github.com/turin-dev) | [#3786](https://github.com/lidge-jun/opencodex/pull/3786) | Non-atomic cleanup-manifest failure report. |
+| [#3746](https://github.com/lidge-jun/opencodex/issues/3746) | [@juzijia](https://github.com/juzijia) | [#3788](https://github.com/lidge-jun/opencodex/pull/3788) | Read-only container Codex-home persistence failure. |
+| [#3770](https://github.com/lidge-jun/opencodex/issues/3770) | [@turin-dev](https://github.com/turin-dev) | [#3803](https://github.com/lidge-jun/opencodex/pull/3803) | JSON-to-SSE completion-semantics loss. |
+| [#3767](https://github.com/lidge-jun/opencodex/issues/3767) | [@turin-dev](https://github.com/turin-dev) | [#3805](https://github.com/lidge-jun/opencodex/pull/3805) | Refusal loss across Chat projections. |
+| [#3775](https://github.com/lidge-jun/opencodex/issues/3775) | [@leonclab](https://github.com/leonclab) | [#3804](https://github.com/lidge-jun/opencodex/pull/3804) | Unsupported effort report; the delivered fix is limited to proven native capability aliases. |
+| [#3661](https://github.com/lidge-jun/opencodex/issues/3661) | [@Hu9956](https://github.com/Hu9956) | [#3794](https://github.com/lidge-jun/opencodex/pull/3794) | Encrypted-task recovery failure classes; the landed change exposes bounded reasons. |
+| [#3522](https://github.com/lidge-jun/opencodex/issues/3522) | [@stephen-drew](https://github.com/stephen-drew) | [#3790](https://github.com/lidge-jun/opencodex/pull/3790) | Same-process Windows spill failure evidence; the landed change separates timeout origins. |
+| [#3781](https://github.com/lidge-jun/opencodex/issues/3781) | [@jaychou0642-create](https://github.com/jaychou0642-create) | [#3799](https://github.com/lidge-jun/opencodex/pull/3799) | Canonical-destination/Fake-IP quota-path investigation; field acceptance remains separate. |
+
+Diagnostic-only delivery does not establish that the reported runtime failure
+has been resolved.
 
 ## Closed as landed, carry not stated
 
