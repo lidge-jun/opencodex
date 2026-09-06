@@ -79,20 +79,25 @@ func statusDomainBytes(t *testing.T, full []byte) []byte {
 		t.Fatalf("compact status oracle: %v; output=%s", err, full)
 	}
 	var status struct {
-		Proxy       json.RawMessage `json:"proxy"`
-		Dashboard   json.RawMessage `json:"dashboard"`
-		Listen      json.RawMessage `json:"listen"`
-		Paths       json.RawMessage `json:"paths"`
-		Runtime     json.RawMessage `json:"runtime"`
-		Config      json.RawMessage `json:"config"`
-		VersionSkew json.RawMessage `json:"versionSkew"`
+		SchemaVersion   json.RawMessage `json:"schemaVersion"`
+		Proxy           json.RawMessage `json:"proxy"`
+		Dashboard       json.RawMessage `json:"dashboard"`
+		Listen          json.RawMessage `json:"listen"`
+		Paths           json.RawMessage `json:"paths"`
+		Runtime         json.RawMessage `json:"runtime"`
+		CodexAutostart  json.RawMessage `json:"codexAutostart"`
+		Startup         json.RawMessage `json:"startup"`
+		DefaultProvider json.RawMessage `json:"defaultProvider"`
+		Config          json.RawMessage `json:"config"`
+		Connection      json.RawMessage `json:"connection"`
+		VersionSkew     json.RawMessage `json:"versionSkew"`
 	}
 	if err := json.Unmarshal(compact.Bytes(), &status); err != nil {
 		t.Fatalf("decode status oracle: %v; output=%s", err, compact.Bytes())
 	}
 	return []byte(fmt.Sprintf(
-		`{"proxy":%s,"dashboard":%s,"listen":%s,"paths":%s,"runtime":%s,"config":%s,"versionSkew":%s}`,
-		status.Proxy, status.Dashboard, status.Listen, status.Paths, status.Runtime, status.Config, status.VersionSkew,
+		`{"schemaVersion":%s,"proxy":%s,"dashboard":%s,"listen":%s,"paths":%s,"runtime":%s,"codexAutostart":%s,"startup":%s,"defaultProvider":%s,"config":%s,"connection":%s,"versionSkew":%s}`,
+		status.SchemaVersion, status.Proxy, status.Dashboard, status.Listen, status.Paths, status.Runtime, status.CodexAutostart, status.Startup, status.DefaultProvider, status.Config, status.Connection, status.VersionSkew,
 	))
 }
 
@@ -605,6 +610,43 @@ func TestStatusDomainsMatchTypeScriptOracleForDashboardPathRuntimeAndVersionSkew
 	}
 	if string(got) != string(want) {
 		t.Fatalf("domain bytes\n got: %s\nwant: %s", got, want)
+	}
+}
+
+func TestStatusDomainsMatchTypeScriptOracleForAutostartAndConnection(t *testing.T) {
+	for _, test := range []struct {
+		name, content string
+	}{
+		{name: "autostart-disabled", content: `{"providers":{},"codexAutoStart":false}`},
+		{name: "custom-default-provider", content: `{"providers":{"fixture":{"adapter":"openai-chat","baseUrl":"https://api.example.test/v1","apiKey":"test-key"}},"defaultProvider":"fixture"}`},
+		{name: "connected-client", content: `{"providers":{},"runtimeRole":"client","client":{"serverUrl":"https://hub.example.test","managementUrl":"https://manage.example.test","managementTransport":"direct","selectedClients":["codex"],"tokenEnv":"OPENCODEX_API_AUTH_TOKEN","apiKeyId":"issued-key-id","tokenFingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","protocolVersion":1,"connectedAt":"2026-08-28T00:00:00.000Z"}}`},
+		{name: "connected-client-future-catalog-age", content: `{"providers":{},"runtimeRole":"client","client":{"serverUrl":"https://hub.example.test","managementUrl":"https://manage.example.test","managementTransport":"direct","selectedClients":["codex"],"tokenEnv":"OPENCODEX_API_AUTH_TOKEN","apiKeyId":"issued-key-id","tokenFingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","protocolVersion":1,"connectedAt":"2026-08-28T00:00:00.000Z","catalogSyncedAt":"2099-01-01T00:00:00.000Z"}}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			if err := os.Mkdir(filepath.Join(home, "codex"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(test.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("HOME", home)
+			t.Setenv("OPENCODEX_HOME", home)
+			t.Setenv("CODEX_HOME", filepath.Join(home, "codex"))
+			oracle := runTypeScriptStatusJSON(t, home)
+			want := statusDomainBytes(t, oracle)
+			got, err := json.Marshal(CollectStatusDomains(StatusDomainDeps{
+				ReadPID:        func() int64 { return 0 },
+				ReadRuntime:    func() (StatusRuntimeRecord, error) { return StatusRuntimeRecord{}, errors.New("missing") },
+				ReadBunRuntime: func() StatusBunRuntime { return statusOracleRuntime(t, oracle) },
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != string(want) {
+				t.Fatalf("domain bytes\n got: %s\nwant: %s", got, want)
+			}
+		})
 	}
 }
 

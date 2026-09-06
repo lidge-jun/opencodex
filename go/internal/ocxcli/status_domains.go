@@ -33,18 +33,24 @@ type StatusDomainDeps struct {
 	ReadBunRuntime func() StatusBunRuntime
 	CLIVersion     string
 	HTTPClient     *http.Client
+	Extra          StatusExtraDeps
 }
 
 // StatusDomains is the ordered JSON projection for the status domains Go has
 // incrementally ported. The field order intentionally matches CliStatusJson.
 type StatusDomains struct {
-	Proxy       StatusProxyDomain       `json:"proxy"`
-	Dashboard   StatusDashboardDomain   `json:"dashboard"`
-	Listen      StatusListenDomain      `json:"listen"`
-	Paths       StatusPathsDomain       `json:"paths"`
-	Runtime     StatusRuntimeDomain     `json:"runtime"`
-	Config      StatusConfigDomain      `json:"config"`
-	VersionSkew StatusVersionSkewDomain `json:"versionSkew"`
+	SchemaVersion   int                     `json:"schemaVersion"`
+	Proxy           StatusProxyDomain       `json:"proxy"`
+	Dashboard       StatusDashboardDomain   `json:"dashboard"`
+	Listen          StatusListenDomain      `json:"listen"`
+	Paths           StatusPathsDomain       `json:"paths"`
+	Runtime         StatusRuntimeDomain     `json:"runtime"`
+	CodexAutostart  bool                    `json:"codexAutostart"`
+	Startup         StatusStartupDomain     `json:"startup"`
+	DefaultProvider string                  `json:"defaultProvider"`
+	Config          StatusConfigDomain      `json:"config"`
+	Connection      StatusConnectionDomain  `json:"connection"`
+	VersionSkew     StatusVersionSkewDomain `json:"versionSkew"`
 }
 
 type StatusProxyDomain struct {
@@ -334,6 +340,7 @@ func CollectStatusDomains(deps StatusDomainDeps) StatusDomains {
 		pathsPID = filepath.Join(filepath.Dir(pathsConfig), "ocx.pid")
 	}
 	bunRuntime := deps.ReadBunRuntime()
+	extra := CollectStatusExtraDomains(diagnostic, deps.Extra)
 	proxyVersion := ""
 	if health.OK {
 		proxyVersion = health.Version
@@ -343,6 +350,7 @@ func CollectStatusDomains(deps StatusDomainDeps) StatusDomains {
 		healthMessage = "ok (pid " + strconv.FormatInt(pid, 10) + ")"
 	}
 	return StatusDomains{
+		SchemaVersion: 1,
 		Proxy: StatusProxyDomain{
 			Running: pid > 0 && health.OK,
 			PID:     pidValue,
@@ -355,8 +363,12 @@ func CollectStatusDomains(deps StatusDomainDeps) StatusDomains {
 			PID:     pathsPID,
 			Runtime: bunRuntime.Path,
 		},
-		Runtime:     StatusRuntimeDomain{Source: bunRuntime.Source, OverrideEnv: bunRuntime.OverrideEnv},
-		Config:      StatusConfigDomain{Source: diagnostic.Source, Error: diagnostic.Error},
-		VersionSkew: ComputeStatusVersionSkew(deps.CLIVersion, proxyVersion),
+		Runtime:         StatusRuntimeDomain{Source: bunRuntime.Source, OverrideEnv: bunRuntime.OverrideEnv},
+		CodexAutostart:  extra.CodexAutostart,
+		Startup:         extra.Startup,
+		DefaultProvider: extra.DefaultProvider,
+		Config:          StatusConfigDomain{Source: diagnostic.Source, Error: diagnostic.Error},
+		Connection:      extra.Connection,
+		VersionSkew:     ComputeStatusVersionSkew(deps.CLIVersion, proxyVersion),
 	}
 }
