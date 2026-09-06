@@ -18,50 +18,36 @@ jobs:
           bun install --frozen-lockfile
           cd gui
           bun install --frozen-lockfile
-      - name: Compare test file selection
-        shell: bash
-        run: |
-          mkdir -p .tmp
-          cat > .tmp/windows-fixture-probe.ts <<'JS'
-          import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
-          import { tmpdir } from 'node:os';
-          import { join, resolve } from 'node:path';
-          import { spawnSync } from 'node:child_process';
-          const preload = resolve('tests/preload.ts');
-          const root = mkdtempSync(join(tmpdir(), 'ocx-fixture-path-probe-'));
-          const name = 'fixture.test.ts';
-          writeFileSync(join(root, name), 'import { test } from "bun:test"; test("sentinel", () => { console.log("fixture_sentinel"); });');
-          try {
-            for (const form of ['absolute', 'relative', 'absolute']) {
-              const p = spawnSync(process.execPath, ['test', '--preload', preload, form === 'absolute' ? join(root, name) : './' + name], { cwd: root, encoding: 'utf8', timeout: 20000 });
-              console.log(JSON.stringify({ form, status: p.status, signal: p.signal, sentinel: p.stdout.includes('fixture_sentinel'), noTests: /No tests found|did not match any test files/i.test(p.stderr), preloadError: /preload.*not found|cannot find.*preload/i.test(p.stderr) }));
-              if (form === 'relative' && (p.status !== 0 || !p.stdout.includes('fixture_sentinel'))) process.exitCode = 1;
-            }
-          } finally { rmSync(root, { recursive: true, force: true }); }
-          JS
-          bun .tmp/windows-fixture-probe.ts
-      - name: Original lifecycle scenarios must reproduce failure
-        shell: bash
-        run: |
-          if bun test --isolate --timeout 60000 ./tests/clients/client-connect.test.ts --test-name-pattern 'Desktop copy coherence'; then
-            echo 'Expected baseline failure did not reproduce'; exit 1
-          fi
-      - name: Change only fixture argument to explicit relative path
+      - name: Classify nested fixture startup
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
           p = Path('tests/clients/client-connect.test.ts')
           s = p.read_text()
-          old = 'join(repoRoot, "tests/preload.ts"), fixturePath]'
+          old = '    const marker = child.stdout.trim().split("\\n").reverse().find(line =>'
           assert s.count(old) == 1
-          p.write_text(s.replace(old, 'join(repoRoot, "tests/preload.ts"), "./client-lifecycle-fixture.test.ts"]'))
+          diagnostic = '''    console.log(JSON.stringify({ fixtureDiagnostic: {
+                stdoutBytes: child.stdout.length, stderrBytes: child.stderr.length,
+                moduleEntered: child.stdout.includes("fixture_module_entered"),
+                preloadEntered: child.stdout.includes("fixture_preload_entered"),
+                preloadComplete: child.stdout.includes("fixture_preload_complete"),
+                noTests: /No tests found|did not match any test files/i.test(child.stderr),
+                syntax: /SyntaxError|Expected|Unexpected token|ParseError/i.test(child.stderr),
+                moduleNotFound: /Cannot find|ModuleNotFound|ResolveMessage|not found/i.test(child.stderr),
+                runLock: /test.run.lock|test run lock|effective.account|SID|runtime root/i.test(child.stderr),
+                guard: /guard|unprotected|protected home/i.test(child.stderr),
+                access: /EACCES|EPERM|permission/i.test(child.stderr),
+                cliError: /Usage:|unknown option|unrecognized|invalid argument/i.test(child.stderr),
+                nestedWorker: !!process.env.BUN_TEST_WORKER_ID,
+                bunEnvKeys: Object.keys(process.env).filter(k => k.startsWith("BUN_")).sort(),
+              } }));
+'''
+          s = s.replace(old, diagnostic + old)
+          s = s.replace('writeFileSync(fixturePath, `import { test }', 'writeFileSync(fixturePath, `console.log("fixture_module_entered"); import { test }')
+          p.write_text(s)
+          preload = Path('tests/preload.ts')
+          text = preload.read_text()
+          preload.write_text('console.log("fixture_preload_entered");\n' + text + '\nconsole.log("fixture_preload_complete");\n')
           PY
-          bun test --isolate --timeout 60000 ./tests/clients/client-connect.test.ts --test-name-pattern 'Desktop copy coherence'
-      - name: Restore absolute argument and confirm failure returns
-        shell: bash
-        run: |
-          git restore tests/clients/client-connect.test.ts
-          if bun test --isolate --timeout 60000 ./tests/clients/client-connect.test.ts --test-name-pattern 'Desktop copy coherence'; then
-            echo 'Expected restored failure did not reproduce'; exit 1
-          fi
+          bun test --isolate --timeout 60000 ./tests/clients/client-connect.test.ts --test-name-pattern 'rotate settles Desktop'
