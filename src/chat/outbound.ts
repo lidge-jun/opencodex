@@ -290,7 +290,10 @@ export function responsesSseToChatCompletionsSse(
   const snapshotRefusalItem = (outputIndex: unknown, item: Rec) => {
     const existing = typeof outputIndex === "number" ? refusalItems.get(outputIndex) : undefined;
     // Sparse final snapshots may omit type/content but cannot change a known ID.
-    if (existing && Object.hasOwn(item, "id")) refusalItem(outputIndex, item, "id");
+    if (Object.hasOwn(item, "id")
+      && (existing || (typeof item.id === "string" && refusalIndexById.has(item.id)))) {
+      refusalItem(outputIndex, item, "id");
+    }
     if (item.type !== "message") {
       if (existing && existing.parts.size > 0 && item.type !== undefined) throw refusalTranslationError();
       return;

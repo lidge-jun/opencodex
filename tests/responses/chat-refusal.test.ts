@@ -176,6 +176,7 @@ describe("Chat refusal projection", () => {
     ["sparse snapshot ID mismatch", terminal([{ id: "other" }])],
     ["sparse nonstring snapshot ID", terminal([{ id: null }])],
     ["same ID at another position", terminal([{}, {}, message([part("fixture")], "item_fixture")])],
+    ["sparse same ID at another position", terminal([{}, {}, { id: "item_fixture" }])],
     ["different part type", terminal([message([{ type: "output_text", text: "fixture" }])])],
     ["negative position", refusalDelta("fixture", -1)],
     ["fractional position", refusalDelta("fixture", 0, 0.5)],
