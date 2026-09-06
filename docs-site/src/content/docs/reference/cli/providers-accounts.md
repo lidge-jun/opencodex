@@ -14,7 +14,7 @@ both `--adapter` and `--base-url`.
 
 | Subcommand | Supported flags | Action |
 | --- | --- | --- |
-| `list` | `--json` | List configured providers and the remaining registry entries. |
+| `list` | `--json`, `--jsonl` | List configured providers and the remaining registry entries; `--jsonl` emits one configured provider object per line. |
 | `add <name>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | Add a registry/custom provider. `--force` overwrites; `--sync` refreshes a running proxy in human-output mode. |
 | `edit <name>` | provider field flags, `--headers <json>`, `--json` | Edit validated live provider fields without replacing key pools. `--headers` merges custom request headers; pass `{}` or `-` to clear them. |
 | `test <name>` | `--json` | Probe the real upstream model endpoint. |
@@ -29,6 +29,7 @@ both `--adapter` and `--base-url`.
 
 ```bash
 ocx provider list --json
+ocx provider list --jsonl        # one configured provider object per line
 ocx provider test ark
 ocx provider add anthropic --api-key sk-ant-... --set-default --sync
 ocx provider add local-dev --adapter openai-chat --base-url http://localhost:11434/v1
@@ -36,6 +37,10 @@ ocx provider show anthropic --json
 ocx models --provider anthropic --json
 ocx models live --provider ark --json
 ```
+
+`--jsonl` writes only configured providers, one JSON object per line, and omits the
+`registryCount` summary from `--json`. Use it for line-oriented scripts that should not
+buffer the whole provider list.
 
 :::caution[Custom headers are not a credential channel]
 `--headers` is for non-secret request metadata — routing hints, tenant or

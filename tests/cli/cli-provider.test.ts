@@ -109,6 +109,32 @@ describe("ocx provider", () => {
     }
   });
 
+  test("provider list --jsonl emits one configured provider per line", () => {
+    const { dir } = freshConfig();
+    try {
+      const result = runCli(["provider", "list", "--jsonl"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      const lines = result.stdout.trim().split(/\r?\n/);
+      expect(lines).toHaveLength(1);
+      const parsed = JSON.parse(lines[0] ?? "");
+      expect(parsed).toMatchObject({ name: "openai", isDefault: true });
+      expect(parsed).not.toHaveProperty("registryCount");
+    } finally {
+      removeTreeWithRetry(dir);
+    }
+  });
+
+  test("provider list rejects --json and --jsonl together", () => {
+    const { dir } = freshConfig();
+    try {
+      const result = runCli(["provider", "list", "--json", "--jsonl"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Use only one of --json or --jsonl");
+    } finally {
+      removeTreeWithRetry(dir);
+    }
+  });
+
   test("provider add registry provider seeds config", () => {
     const { dir } = freshConfig();
     try {

@@ -52,6 +52,11 @@ to `requestedModel` is how you get a wrong answer about which provider served it
 `displayMetrics.cost.estimate.estimateReasons` lists why — for example `usage_estimated`,
 `cache_detail_missing`, `expected_price_overlay`.
 
+## `ocx provider list --jsonl`
+
+One configured provider per line. Each object has the same fields as an item in the
+`configured` array from `ocx provider list --json`; the `registryCount` summary is omitted.
+
 ## `ocx logs explain <request-id>`
 
 ```json

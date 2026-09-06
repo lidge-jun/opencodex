@@ -67,6 +67,7 @@ Drives no management route.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the provider list as JSON. |
+| `--jsonl` | boolean | Emit one configured provider per JSON line. |
 
 JSON mode: `envelope`.
 

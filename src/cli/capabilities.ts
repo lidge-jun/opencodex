@@ -148,7 +148,10 @@ export const CAPABILITIES: readonly Capability[] = [
     summary: "Configured providers with connectivity and selected models.",
     // Local config + PROVIDER_REGISTRY. Does not call GET /api/providers.
     routes: [],
-    flags: [{ name: "--json", value: "boolean", summary: "Emit the provider list as JSON." }],
+    flags: [
+      { name: "--json", value: "boolean", summary: "Emit the provider list as JSON." },
+      { name: "--jsonl", value: "boolean", summary: "Emit one configured provider per JSON line." },
+    ],
     mutates: false,
     json: "envelope",
     details: ["Reads local config; drives no management API route."],

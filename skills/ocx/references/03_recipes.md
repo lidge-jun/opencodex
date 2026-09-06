@@ -116,6 +116,7 @@ exist for them — do not attribute usage to either.
 
 ```bash
 ocx provider list --json
+ocx provider list --jsonl                   # one configured provider per line
 ocx provider add <name> --json                # registry providers auto-configure by name
 ocx provider test <name> --json
 ocx provider set-default <name> --json
