@@ -625,8 +625,18 @@ export function responsesJsonToChatCompletion(json: unknown, model: string, tran
           arguments: typeof raw.arguments === "string" ? raw.arguments : "{}",
         },
       };
-      translatorBudget?.chargeRetained(Buffer.byteLength(JSON.stringify(call)), { kind: "retained_collectors" });
-      toolCalls.push(call);
+      // A complete buffered call still obeys the same per-call cap as live deltas.
+      // Reserve before serializing, then transfer ownership to the complete call.
+      // The internal scope stays nonempty even when an upstream call_id is empty.
+      const argumentsReservation = translatorBudget?.reserveTransient(Buffer.byteLength(call.function.arguments), {
+        kind: "tool_args", callId: `chat_json_${toolCalls.length}`,
+      });
+      try {
+        translatorBudget?.chargeRetained(Buffer.byteLength(JSON.stringify(call)), { kind: "retained_collectors" });
+        toolCalls.push(call);
+      } finally {
+        argumentsReservation?.release();
+      }
     }
   }
 

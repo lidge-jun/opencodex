@@ -18,7 +18,7 @@ interface Chunk {
   usage?: { prompt_tokens: number; completion_tokens: number };
 }
 
-async function streamFixture(output: unknown[], status = "completed", cancel = false, reason = "max_output_tokens", delivery: { jsonFinish?: string; error?: boolean } = {}): Promise<Chunk[]> {
+async function streamFixture(output: unknown[], status = "completed", cancel = false, reason = "max_output_tokens", delivery: { jsonFinish?: string; error?: boolean; errorCode?: string } = {}): Promise<Chunk[]> {
   const budgetBefore = translatorObservedBufferSnapshot().currentBytes;
   const requestId = `chat-json-fixture-${crypto.randomUUID()}`;
   let requests = 0;
@@ -49,7 +49,7 @@ async function streamFixture(output: unknown[], status = "completed", cancel = f
   };
   if (delivery.error) {
     expect(response.status).toBe(502);
-    expect(await response.json()).toMatchObject({ error: { type: "upstream_error", code: "upstream_incomplete" } });
+    expect(await response.json()).toMatchObject({ error: { type: "upstream_error", code: delivery.errorCode ?? "upstream_incomplete" } });
     assertSingleFinal();
     expect(requests).toBe(1);
     expect(translatorObservedBufferSnapshot().currentBytes).toBe(budgetBefore);
@@ -226,4 +226,29 @@ test("JSON projection accounts split Unicode and ignores empty fragments", () =>
     expect(completion.choices).toMatchObject([{ message: { content: "😀", reasoning_content: "😀" } }]);
     expect(budget.snapshot().currentBytes).toBe(8);
   } finally { budget.dispose(); }
+});
+
+
+test("buffered calls enforce their per-call cap, including an empty upstream ID", () => {
+  for (const call_id of ["fixture-call", ""]) {
+    const budget = createTranslatorBudget({ maxCallArgumentBytes: 4, maxTurnBytes: 8192 });
+    try {
+      let failure: unknown;
+      try {
+        responsesJsonToChatCompletion({ output: [{ type: "function_call", call_id, name: "lookup", arguments: "12345" }] }, "model", budget);
+      } catch (error) { failure = error; }
+      expect(isTranslatorBudgetExceededError(failure)).toBe(true);
+      expect(failure).toMatchObject({ code: "translation_buffer_limit", kind: "tool_args", limitBytes: 4 });
+      expect(budget.snapshot().currentBytes).toBe(0);
+      expect(budget.snapshot().activeCalls).toBe(0);
+      const result = responsesJsonToChatCompletion({ output: [{ type: "function_call", call_id, name: "lookup", arguments: "1234" }] }, "model", budget);
+      expect(result.choices).toMatchObject([{ message: { tool_calls: [{ function: { arguments: "1234" } }] } }]);
+      expect(budget.snapshot().activeCalls).toBe(0);
+    } finally { budget.dispose(); }
+  }
+});
+
+test("JSON-to-SSE rejects a call above 2 MiB without success output or duplicate usage", async () => {
+  await streamFixture([{ type: "function_call", call_id: "large-call", name: "lookup", arguments: JSON.stringify({ text: "x".repeat(2 * 1024 * 1024) }) }],
+    "completed", false, "max_output_tokens", { error: true, errorCode: "translation_buffer_limit" });
 });
