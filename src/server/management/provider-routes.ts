@@ -35,6 +35,7 @@ import {
 } from "../../oauth";
 import { replaceProviderAccountSet } from "../../oauth/store";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
+import { resolveProviderApiKey } from "../../providers/key-store";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { ProviderOutboundPolicyError, providerOutboundGet, providerOutboundPost, providerRedirectError } from "../../lib/provider-outbound";
 import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
@@ -1229,6 +1230,19 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     }
     const { buildModelsRequest, getValidAccessTokenSnapshot, resolveModelsAuthToken } = await import("../../oauth");
     const antigravity = effectiveGoogleMode(name, prov) === "cloud-code-assist";
+    const requestWithoutCredential = buildModelsRequest(prov, undefined, name);
+    const configuredApiKey = resolveProviderApiKey(prov.apiKey);
+    const azureKeyless = (
+      (prov.adapter === "azure-openai" || prov.adapter === "azure")
+      && (!configuredApiKey || configuredApiKey.trim() === "")
+    );
+    if (azureKeyless && new URL(requestWithoutCredential.url).protocol !== "https:") {
+      return jsonResponse({
+        ok: false,
+        latencyMs: 0,
+        error: "Azure Entra model discovery requires an HTTPS endpoint",
+      });
+    }
     const snapshot = antigravity
       ? await getValidAccessTokenSnapshot(name).catch(() => undefined)
       : undefined;

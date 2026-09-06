@@ -126,6 +126,41 @@ describe("ocx provider", () => {
     }
   });
 
+  test("provider add gives Entra guidance for Azure without an API key", () => {
+    const { dir } = freshConfig();
+    try {
+      const result = runCli(["provider", "add", "azure-openai"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain('Provider "azure-openai"');
+      expect(result.stdout).toContain("Microsoft Entra ID");
+      expect(result.stdout).toContain("DefaultAzureCredential");
+      expect(result.stdout).toContain("az login");
+      expect(result.stdout).not.toContain("Set API key with:");
+      expect(result.stdout).not.toContain("AZURE_OPENAI_API_KEY");
+
+      const config = readConfig(dir);
+      expect(config.providers["azure-openai"]).toMatchObject({
+        adapter: "azure-openai",
+        authMode: "key",
+        keyOptional: true,
+      });
+    } finally {
+      removeTreeWithRetry(dir);
+    }
+  });
+
+  test("provider add keeps API-key guidance for key-required registry providers", () => {
+    const { dir } = freshConfig();
+    try {
+      const result = runCli(["provider", "add", "deepseek"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("Set API key with: ocx provider add deepseek --api-key <key> --force");
+      expect(result.stdout).toContain("DEEPSEEK_API_KEY");
+    } finally {
+      removeTreeWithRetry(dir);
+    }
+  });
+
   test("provider add rejects a configured Codex account namespace without mutating config", () => {
     const { dir, configPath } = freshConfig({
       codexAccountNamespaces: { deepseek: "side-account-id" },

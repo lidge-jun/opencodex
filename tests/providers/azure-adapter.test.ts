@@ -1,12 +1,30 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createAzureAdapter as createAzureAdapterProduction } from "../../src/adapters/azure";
 import { getConfigPath, loadConfig, readConfigDiagnostics } from "../../src/config";
 import type { OcxParsedRequest, OcxProviderConfig } from "../../src/types";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+
+let requestedScope: string | undefined;
+let getTokenCalls = 0;
+let credentialError: Error | undefined;
+mock.module("@azure/identity", () => ({
+  DefaultAzureCredential: class {
+    async getToken(scope: string) {
+      getTokenCalls += 1;
+      requestedScope = scope;
+      if (credentialError) throw credentialError;
+      return { token: "entra-access-token", expiresOnTimestamp: Date.now() + 3_600_000 };
+    }
+  },
+}));
+
+const { createAzureAdapter: createAzureAdapterProduction } = await import("../../src/adapters/azure");
+const { resolveModelsAuthToken } = await import("../../src/oauth");
+const { fetchProviderModels } = await import("../../src/codex/catalog/provider-fetch");
+const { clearModelCache } = await import("../../src/codex/model-cache");
 
 const createAzureAdapter = (...args: Parameters<typeof createAzureAdapterProduction>) =>
   withTestTranslatorBudget(createAzureAdapterProduction(...args));
@@ -38,6 +56,16 @@ describe("Azure OpenAI adapter hardening", () => {
     expect(request.headers.Authorization).toBeUndefined();
   });
 
+  test("uses DefaultAzureCredential when no API key is configured", async () => {
+    requestedScope = undefined;
+
+    const request = await createAzureAdapter(provider({ apiKey: undefined })).buildRequest(parsed);
+
+    expect(request.headers.Authorization).toBe("Bearer entra-access-token");
+    expect(request.headers["api-key"]).toBeUndefined();
+    expect(requestedScope).toBe("https://cognitiveservices.azure.com/.default");
+  });
+
   test("lowers the private image_gen namespace on the inherited API-key path", async () => {
     const request = await createAzureAdapter(provider()).buildRequest({
       ...parsed,
@@ -65,10 +93,112 @@ describe("Azure OpenAI adapter hardening", () => {
     ]);
   });
 
-  test("rejects missing and blank API keys", async () => {
+  test("uses Entra ID when the API key is missing or blank", async () => {
     for (const apiKey of [undefined, "", "   "]) {
-      await expect(createAzureAdapter(provider({ apiKey })).buildRequest(parsed))
-        .rejects.toThrow("azure-openai requires a non-empty apiKey");
+      const request = await createAzureAdapter(provider({ apiKey })).buildRequest(parsed);
+      expect(request.headers.Authorization).toBe("Bearer entra-access-token");
+      expect(request.headers["api-key"]).toBeUndefined();
+    }
+  });
+
+  test("rejects an HTTP keyless URL before requesting an Entra token", async () => {
+    requestedScope = undefined;
+    const callsBeforeRequest = getTokenCalls;
+
+    await expect(createAzureAdapter(provider({
+      apiKey: undefined,
+      baseUrl: "http://myres.openai.azure.com/openai",
+    })).buildRequest(parsed)).rejects.toThrow("azure-openai keyless authentication requires HTTPS");
+
+    expect(getTokenCalls).toBe(callsBeforeRequest);
+    expect(requestedScope).toBeUndefined();
+  });
+
+  test("redacts DefaultAzureCredential error details", async () => {
+    const previousCredentialError = credentialError;
+    const previousRequestedScope = requestedScope;
+    const sdkErrorDetail = "credential-chain diagnostic with tenant-specific details";
+    credentialError = new Error(sdkErrorDetail);
+    requestedScope = undefined;
+
+    try {
+      let thrown: unknown;
+      try {
+        await createAzureAdapter(provider({ apiKey: undefined })).buildRequest(parsed);
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message)
+        .toBe("azure-openai DefaultAzureCredential failed to acquire an access token");
+      expect((thrown as Error).message).not.toContain(sdkErrorDetail);
+      expect(requestedScope).toBe("https://cognitiveservices.azure.com/.default");
+    } finally {
+      credentialError = previousCredentialError;
+      requestedScope = previousRequestedScope;
+    }
+  });
+
+  test("uses Entra ID for live model discovery when the API key is missing", async () => {
+    for (const apiKey of [undefined, "", "   "]) {
+      expect(await resolveModelsAuthToken("azure-openai", provider({ apiKey })))
+        .toBe("entra-access-token");
+    }
+  });
+
+  test("fails softly and logs a safe diagnostic when Entra model discovery authentication fails", async () => {
+    const previousCredentialError = credentialError;
+    const sdkErrorDetail = "credential-chain diagnostic with tenant-specific details";
+    const info = spyOn(console, "info").mockImplementation(() => {});
+    credentialError = new Error(sdkErrorDetail);
+
+    try {
+      expect(await resolveModelsAuthToken("azure-openai", provider({ apiKey: undefined }))).toBeUndefined();
+
+      expect(info).toHaveBeenCalledTimes(1);
+      const diagnostic = String(info.mock.calls[0]?.[0] ?? "");
+      expect(diagnostic).toContain("Azure Entra model-discovery authentication failed");
+      expect(diagnostic).not.toContain(sdkErrorDetail);
+    } finally {
+      credentialError = previousCredentialError;
+      info.mockRestore();
+    }
+  });
+
+  test("HTTP model discovery rejects before acquiring an Entra token or fetching", async () => {
+    let fetchCalls = 0;
+    const originalFetch = globalThis.fetch;
+    const info = spyOn(console, "info").mockImplementation(() => {});
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      return new Response(JSON.stringify({ data: [{ id: "should-not-load" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    const before = getTokenCalls;
+    const providerName = "azure-http-discovery-test";
+    try {
+      expect(await resolveModelsAuthToken(providerName, provider({
+        baseUrl: "http://azure.example.test/v1",
+        apiKey: undefined,
+      }))).toBeUndefined();
+      expect(getTokenCalls).toBe(before);
+
+      const models = await fetchProviderModels(providerName, provider({
+        baseUrl: "http://azure.example.test/v1",
+        apiKey: undefined,
+        models: ["configured-fallback"],
+      }), 0);
+
+      expect(models.map(model => model.id)).toEqual(["configured-fallback"]);
+      expect(getTokenCalls).toBe(before);
+      expect(fetchCalls).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+      info.mockRestore();
+      clearModelCache(providerName);
     }
   });
 

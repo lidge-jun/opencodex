@@ -45,7 +45,7 @@ export function presetTierInput(preset: CatalogPreset): WorkspaceProvider {
     adapter: preset.adapter,
     baseUrl: preset.baseUrl,
     authMode: preset.auth,
-    freeTier: !!preset.freeTier,
+    ...(preset.freeTier !== undefined ? { freeTier: preset.freeTier } : {}),
     keyOptional: !!preset.keyOptional,
   };
 }

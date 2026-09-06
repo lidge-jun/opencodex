@@ -265,9 +265,13 @@ async function handleAdd(args: string[]): Promise<void> {
     console.log(`   Authenticate with: ocx login ${name}`);
   }
   if (registryEntry?.authKind === "key" && !apiKey) {
-    const envKey = `${name.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_API_KEY`;
-    console.log(`   Set API key with: ocx provider add ${name} --api-key <key> --force`);
-    console.log(`   Or set env var: ${envKey}`);
+    if (registryEntry.keyOptional && registryEntry.adapter === "azure-openai") {
+      console.log("   Auth with Microsoft Entra ID via DefaultAzureCredential (for example: az login).");
+    } else if (!registryEntry.keyOptional) {
+      const envKey = `${name.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_API_KEY`;
+      console.log(`   Set API key with: ocx provider add ${name} --api-key <key> --force`);
+      console.log(`   Or set env var: ${envKey}`);
+    }
   }
   if (wantsSync && !codexSyncSkipped) {
     console.log(`   Models synced to Codex.`);
