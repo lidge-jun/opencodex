@@ -114,6 +114,42 @@ describe("TelemetryLedger", () => {
     ledger.close();
   });
 
+  test("status updates merge sanitized details instead of replacing diagnostics", () => {
+    const ledger = new TelemetryLedger(":memory:");
+    const record = ledger.recordFailure(
+      { failureKind: "status_details_merge", signature: "preserve diagnostics", timestamp: 100 },
+      10000,
+      { issueNumber: 9, safeNote: "original" },
+    );
+    ledger.updateStatus(record.fingerprint, "fixed", { resolution: "patched", prompt: "must not persist" });
+    expect(ledger.getRecord(record.fingerprint)).toMatchObject({
+      status: "fixed",
+      details: { issueNumber: 9, safeNote: "original", resolution: "patched" },
+    });
+    ledger.close();
+  });
+
+  test("keeps lastSeen monotonic and excludes delayed events outside the active window", () => {
+    const ledger = new TelemetryLedger(":memory:");
+    const event: FailureEvent = { failureKind: "delayed_event", signature: "arrived late", timestamp: 10000 };
+    const fingerprint = ledger.recordFailure(event, 1000).fingerprint;
+    const record = ledger.recordFailure({ ...event, timestamp: 1000 }, 1000);
+    expect(record).toMatchObject({ firstSeen: 1000, lastSeen: 10000, count: 1 });
+    expect(ledger.shouldDispatch(fingerprint, 2, 1000)).toBe(false);
+    ledger.close();
+  });
+
+  test("prunes terminal records before active monitoring records", () => {
+    const ledger = new TelemetryLedger(":memory:", { maxRecords: 2 });
+    const fixed = ledger.recordFailure({ failureKind: "fixed_old", signature: "fixed", timestamp: 100 }, 10000);
+    ledger.updateStatus(fixed.fingerprint, "fixed");
+    const monitoring = ledger.recordFailure({ failureKind: "monitoring_old", signature: "active", timestamp: 200 }, 10000);
+    ledger.recordFailure({ failureKind: "new_record", signature: "new", timestamp: 300 }, 10000);
+    expect(ledger.getRecord(fixed.fingerprint)).toBeNull();
+    expect(ledger.getRecord(monitoring.fingerprint)).not.toBeNull();
+    ledger.close();
+  });
+
   test("malformed stored details fail closed without breaking reads or records", () => {
     const dir = mkdtempSync(join(tmpdir(), "ocx-telemetry-"));
     paths.push(dir);
