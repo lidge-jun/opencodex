@@ -49,6 +49,7 @@ describe("Models dashboard discovered display name integration", () => {
   let mutationFailure: string | null;
   let mutationGate: Promise<void> | null;
   let modelFetches: number;
+  let modelFetchFailure: string | null;
   let currentModels: ModelRow[];
 
   const routedModel = (): ModelRow => ({
@@ -97,6 +98,7 @@ describe("Models dashboard discovered display name integration", () => {
     mutationFailure = null;
     mutationGate = null;
     modelFetches = 0;
+    modelFetchFailure = null;
     testWindow.localStorage.setItem("ocx-models-collapsed:v2", JSON.stringify([]));
     testWindow.sessionStorage.setItem("ocx.models.catalog.v1:http://localhost", JSON.stringify({
       models: currentModels,
@@ -115,6 +117,9 @@ describe("Models dashboard discovered display name integration", () => {
       const url = String(input);
       if (url.endsWith("/api/models")) {
         modelFetches += 1;
+        if (modelFetchFailure) {
+          return Response.json({ error: modelFetchFailure }, { status: 500 });
+        }
         return Response.json(currentModels);
       }
       if (url.endsWith("/api/providers")) return Response.json([
@@ -257,6 +262,23 @@ describe("Models dashboard discovered display name integration", () => {
     expect(container.querySelector("dialog")).not.toBeNull();
     expect(dialogInput().value).toBe("Retry Name");
     expect(container.textContent).toContain("Catalog refresh failed");
+    expect(testWindow.document.activeElement).toBe(dialogInput());
+  });
+
+  test("a failed catalog reload after save keeps the dialog available for retry", async () => {
+    await mountModels();
+    modelFetchFailure = "Catalog reload failed";
+    await act(async () => nameTrigger().click());
+    await act(async () => {
+      setInputValue(dialogInput(), "Retry Reload");
+      dialogButton("Save").click();
+    });
+    await flush();
+
+    expect(mutationBodies).toEqual([{ modelId: "grok-4.6", displayName: "Retry Reload" }]);
+    expect(container.querySelector("dialog")).not.toBeNull();
+    expect(dialogInput().value).toBe("Retry Reload");
+    expect(container.textContent).toContain("Failed to load models");
     expect(testWindow.document.activeElement).toBe(dialogInput());
   });
 

@@ -604,7 +604,9 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
           displayNameSource: result.displayNameSource ?? row.displayNameSource,
         }));
       }
-      await load(true);
+      if (!await load(true)) {
+        throw new Error(t("models.loadFail"));
+      }
       displayNameSavingRef.current = false;
       setDisplayNameSaving(false);
       publishFeedback(true, displayName === null
