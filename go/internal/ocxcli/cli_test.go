@@ -58,7 +58,7 @@ func TestVersionAndRegistry(t *testing.T) {
 	if got := Run([]string{"--version"}, depsFor(RuntimeState{}, &out, &err)); got != ExitOK || out.String() != "opencodex 2.42.0\n" {
 		t.Fatalf("version = code %d stdout %q", got, out.String())
 	}
-	if len(Commands) != 5 || Commands[0].Name != "health" || Commands[1].Name != "ready" || Commands[2].Name != "status" || Commands[3].Name != "doctor" || Commands[4].Name != "service" {
+	if len(Commands) != 8 || Commands[0].Name != "health" || Commands[1].Name != "ready" || Commands[2].Name != "status" || Commands[3].Name != "doctor" || Commands[4].Name != "service" || Commands[5].Name != "config" || Commands[6].Name != "models" || Commands[7].Name != "provider" {
 		t.Fatalf("unexpected command registry: %#v", Commands)
 	}
 }
