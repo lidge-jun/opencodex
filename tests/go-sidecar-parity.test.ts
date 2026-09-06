@@ -9,6 +9,7 @@ import { getConfigPath } from "../src/config/paths";
 import { startServer } from "../src/server";
 import { VERSION } from "../src/server/management-api";
 import { GO_OWNED_MANAGEMENT_ROUTES } from "../src/server/management/route-registry";
+import { READ_SURFACE_DIFF_MATRIX } from "../src/server/management/read-surface-ownership";
 import {
   GO_SIDECAR_BIN_ENV,
   activeGoSidecarBaseUrl,
@@ -319,6 +320,42 @@ describe.skipIf(!goAvailable || sidecarBinary === null)("ocx-sidecar differentia
         await serverB.stop(true);
       }
       expect(activeGoSidecarBaseUrl()).toBeNull();
+    } finally {
+      await serverA.stop(true);
+    }
+  });
+
+  runFixtureTest("every go-now read matrix row has a real default wire-parity vector", async (token) => {
+    // A marker flip requires a go-now matrix row. This loop gives every such
+    // row a real TS-server versus Go-sidecar wire comparison; richer route
+    // cases below retain their edge vectors.
+    const rows = READ_SURFACE_DIFF_MATRIX.filter(row => row.transition === "go-now");
+    const declared = GO_OWNED_MANAGEMENT_ROUTES.filter(route => !route.mutates);
+    expect(rows.map(row => row.method + " " + row.path).sort()).toEqual(
+      declared.map(route => route.method + " " + route.path).sort(),
+    );
+
+    const serverA = startServer(0);
+    try {
+      process.env[GO_SIDECAR_BIN_ENV] = sidecarBinary!;
+      const serverB = startServer(0);
+      try {
+        await waitFor(() => activeGoSidecarBaseUrl(), 15_000);
+        for (const row of rows) {
+          expect(row.parityFixture).toBe("default-get");
+          const ts = await captureJson(serverA, token, row.path);
+          const go = await captureJson(serverB, token, row.path);
+          const route = declared.find(candidate => candidate.method === row.method && candidate.path === row.path)!;
+          const label = row.method + " " + row.path;
+          expect(go.status, label + " status").toBe(ts.status);
+          expect(go.contentType, label + " content type").toBe(ts.contentType);
+          expect(normaliseBody(go.body, route.go.volatileFields), label + " body").toBe(
+            normaliseBody(ts.body, route.go.volatileFields),
+          );
+        }
+      } finally {
+        await serverB.stop(true);
+      }
     } finally {
       await serverA.stop(true);
     }
