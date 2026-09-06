@@ -69,6 +69,29 @@ describe("buildQuotaRows (WP070)", () => {
     expect(rows.map(r => r.label)).toEqual(["quota.totalSubscriptionCredits"]);
   });
 
+  test("direct creditsUsd renders Total subscription credits with resetAt", () => {
+    const rows = buildQuotaRows(quota({
+      fiveHourPercent: 0,
+      weeklyPercent: 0,
+      creditsUsd: { used: 89.96, limit: 90, remaining: 0.04, percent: 99.96, expiresAt: 1790430938000 },
+    }), null, t);
+    expect(rows.map(r => r.limitLabel)).toEqual([
+      "quota.fiveHourLimit",
+      "quota.weeklyLimit",
+      "quota.totalSubscriptionCredits",
+    ]);
+    expect(rows[2]?.percent).toBe(99.96);
+    expect(rows[2]?.resetAt).toBe(1790430938000);
+  });
+
+  test("direct creditsUsd does not duplicate an existing credits custom window", () => {
+    const rows = buildQuotaRows(quota({
+      customWindows: [{ label: "Total subscription credits", percent: 50 }],
+      creditsUsd: { used: 50, limit: 100, remaining: 50, percent: 50 },
+    }), null, t);
+    expect(rows.map(r => r.label)).toEqual(["quota.totalSubscriptionCredits"]);
+  });
+
   test("null and empty quotas produce no rows; 30-day plans strip to monthly", () => {
     expect(buildQuotaRows(null, null, t)).toEqual([]);
     expect(buildQuotaRows(quota({}), null, t)).toEqual([]);
@@ -93,6 +116,11 @@ describe("maxQuotaUtilisation", () => {
       fiveHourPercent: 10,
       customWindows: [{ label: "x", percent: 95 }],
     }))).toBe(95);
+    expect(maxQuotaUtilisation(quota({
+      fiveHourPercent: 0,
+      weeklyPercent: 0,
+      creditsUsd: { used: 90, limit: 90, remaining: 0, percent: 100 },
+    }))).toBe(100);
   });
 });
 

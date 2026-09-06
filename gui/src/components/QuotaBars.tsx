@@ -26,6 +26,7 @@ function rawCustomWindowRank(rawLabel: string): number {
   if (rawLabel === "5h") return 0;
   if (rawLabel === "First-party models") return 2;
   if (rawLabel === "API usage") return 3;
+  if (rawLabel === "Total subscription credits") return 4.5;
   return 5;
 }
 
@@ -96,6 +97,22 @@ export function buildQuotaRows(quota: AccountQuota | null, plan: string | null |
       },
     });
   }
+  if (displayQuota.creditsUsd && typeof displayQuota.creditsUsd.percent === "number") {
+    const hasCreditCustom = displayQuota.customWindows?.some(w => /credits?/i.test(w.label));
+    if (!hasCreditCustom) {
+      const localized = localizeCustomQuotaLabel("Total subscription credits", t);
+      ranked.push({
+        rank: rawCustomWindowRank("Total subscription credits"),
+        row: {
+          customLabel: "Total subscription credits",
+          label: localized,
+          limitLabel: localized,
+          percent: displayQuota.creditsUsd.percent,
+          resetAt: displayQuota.creditsUsd.expiresAt,
+        },
+      });
+    }
+  }
   return ranked.sort((a, b) => a.rank - b.rank).map(entry => entry.row);
 }
 
@@ -106,6 +123,9 @@ export function maxQuotaUtilisation(quota: AccountQuota | null): number {
     .filter((n): n is number => typeof n === "number");
   for (const w of quota.customWindows ?? []) {
     if (typeof w.percent === "number") vals.push(w.percent);
+  }
+  if (typeof quota.creditsUsd?.percent === "number") {
+    vals.push(quota.creditsUsd.percent);
   }
   return vals.length ? Math.max(...vals) : -1;
 }
