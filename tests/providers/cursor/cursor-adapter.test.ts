@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, test } from "bun:test";
 import {
   createCursorAdapter as createCursorAdapterProduction,
@@ -121,19 +122,20 @@ describe("Cursor adapter live transport", () => {
     expect(inputs[0]?.fetch).toBe(pacedFetch);
   });
 
-  test("runTurn selects a pooled token by trusted owner and thread", async () => {
+  const makeTransportMock = (inputs: CursorTransportFactoryInput[]) =>
+    (input: CursorTransportFactoryInput) => {
+      inputs.push(input);
+      return {
+        async *run() {
+          yield { type: "done" } satisfies CursorServerMessage;
+        },
+        writeClient() {},
+      };
+    };
+
+  test("runTurn passes selected pooled token to activeProvider transport", async () => {
     const selectedInputs: CursorTransportFactoryInput[] = [];
     const selectorCalls: Array<[string, string]> = [];
-    const makeTransport = (inputs: CursorTransportFactoryInput[]) =>
-      (input: CursorTransportFactoryInput) => {
-        inputs.push(input);
-        return {
-          async *run() {
-            yield { type: "done" } satisfies CursorServerMessage;
-          },
-          writeClient() {},
-        };
-      };
     const scopedRequest: OcxParsedRequest = {
       ...parsed,
       context: { messages: [{ role: "user", content: "hi", timestamp: 1 }] },
@@ -143,7 +145,7 @@ describe("Cursor adapter live transport", () => {
     const selected = createCursorAdapter(
       { ...provider, apiKey: "original-token" },
       {
-        createTransport: makeTransport(selectedInputs),
+        createTransport: makeTransportMock(selectedInputs),
         selectPoolToken(owner, thread) {
           selectorCalls.push([owner, thread]);
           return "pooled-token";
@@ -159,12 +161,20 @@ describe("Cursor adapter live transport", () => {
 
     expect(selectorCalls).toEqual([["owner-scope", "thread-scope"]]);
     expect(selectedInputs[0]?.provider.apiKey).toBe("pooled-token");
+  });
 
+  test("runTurn falls back to provider.apiKey when selectPoolToken returns undefined", async () => {
     const fallbackInputs: CursorTransportFactoryInput[] = [];
+    const scopedRequest: OcxParsedRequest = {
+      ...parsed,
+      context: { messages: [{ role: "user", content: "hi", timestamp: 1 }] },
+      _cursorIdentityScope: "owner-scope",
+      _clientThreadId: "thread-scope",
+    };
     const fallback = createCursorAdapter(
       { ...provider, apiKey: "original-token" },
       {
-        createTransport: makeTransport(fallbackInputs),
+        createTransport: makeTransportMock(fallbackInputs),
         selectPoolToken: () => undefined,
       },
     );
@@ -174,12 +184,20 @@ describe("Cursor adapter live transport", () => {
       () => {},
     );
     expect(fallbackInputs[0]?.provider.apiKey).toBe("original-token");
+  });
 
+  test("runTurn falls back to provider.apiKey when selectPoolToken is unconfigured", async () => {
     const unconfiguredInputs: CursorTransportFactoryInput[] = [];
+    const scopedRequest: OcxParsedRequest = {
+      ...parsed,
+      context: { messages: [{ role: "user", content: "hi", timestamp: 1 }] },
+      _cursorIdentityScope: "owner-scope",
+      _clientThreadId: "thread-scope",
+    };
     const unconfigured = createCursorAdapter(
       { ...provider, apiKey: "original-token" },
       {
-        createTransport: makeTransport(unconfiguredInputs),
+        createTransport: makeTransportMock(unconfiguredInputs),
       },
     );
     await unconfigured.runTurn?.(
@@ -188,12 +206,15 @@ describe("Cursor adapter live transport", () => {
       () => {},
     );
     expect(unconfiguredInputs[0]?.provider.apiKey).toBe("original-token");
+  });
 
+  test("runTurn derives deterministic fallback identity scope when unscoped", async () => {
+    const fallbackScopeInputs: CursorTransportFactoryInput[] = [];
     const fallbackScopeCalls: Array<[string, string]> = [];
     const fallbackScopeAdapter = createCursorAdapter(
       { ...provider, apiKey: "original-token" },
       {
-        createTransport: makeTransport([]),
+        createTransport: makeTransportMock(fallbackScopeInputs),
         selectPoolToken(owner, thread) {
           fallbackScopeCalls.push([owner, thread]);
           return undefined;
@@ -210,10 +231,23 @@ describe("Cursor adapter live transport", () => {
       { headers: new Headers() },
       () => {},
     );
+    const expectedScope = createHash("sha256")
+      .update("ocx:cursor:acct:")
+      .update("original-token")
+      .digest("hex")
+      .slice(0, 16);
     expect(fallbackScopeCalls).toHaveLength(1);
-    expect(fallbackScopeCalls[0]?.[0]).toBe(unscopedRequest._cursorIdentityScope ?? "");
-    expect(fallbackScopeCalls[0]?.[0]?.length).toBe(16);
+    expect(fallbackScopeCalls[0]?.[0]).toBe(expectedScope);
+    expect(fallbackScopeCalls[0]?.[0]).toMatch(/^[0-9a-f]{16}$/);
     expect(fallbackScopeCalls[0]?.[1]).toBe("thread-scope");
+    expect(fallbackScopeInputs[0]?.provider.apiKey).toBe("original-token");
+
+    await fallbackScopeAdapter.runTurn?.(
+      unscopedRequest,
+      { headers: new Headers() },
+      () => {},
+    );
+    expect(fallbackScopeCalls[1]?.[0]).toBe(expectedScope);
   });
 
   // #1527: the envelope rejection is raised locally while building the request, so it surfaces

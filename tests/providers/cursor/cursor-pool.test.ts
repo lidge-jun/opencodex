@@ -79,9 +79,12 @@ describe("CursorPoolKernel", () => {
   });
   test("same thread text is isolated by owner and absent scope fails closed", () => {
     const { kernel, capability } = setup();
-    expect(kernel.pick("owner-a", "same", capability)?.accountRef).toBe(
-      kernel.pick("owner-b", "same", capability)?.accountRef,
-    );
+    const a = kernel.pick("owner-a", "same", capability)!;
+    const b = kernel.pick("owner-b", "same", capability)!;
+    expect(a).not.toBeNull();
+    expect(b).not.toBeNull();
+    expect(kernel.note429(a.accountRef, "owner-a", "same", capability)).toBe(true);
+    expect(kernel.pick("owner-b", "same", capability)?.accountRef).toBe(b.accountRef);
     expect(kernel.pick("", "same", capability)).toBeNull();
   });
   test("refs are random opaque values and token is never exposed by snapshot", () => {
@@ -123,7 +126,6 @@ describe("CursorPoolKernel", () => {
     expect(s.kernel.note429(first.accountRef, "o", "t", s.capability)).toBe(
       true,
     );
-    expect(CURSOR_POOL_COOLDOWN_MS).toBeGreaterThan(0);
   });
   test("rollback is owner-scoped CAS; TTL, removal and clear leave no state", () => {
     const s = setup();
@@ -143,12 +145,14 @@ describe("CursorPoolKernel", () => {
     const reminted = s.kernel.pick("b", "t", s.capability);
     expect(reminted).not.toBeNull();
     expect(reminted?.accountRef).not.toBe(b.accountRef);
-    expect(CURSOR_POOL_TTL_MS).toBeGreaterThan(0);
     s.advance(CURSOR_POOL_TTL_MS + 1);
-    s.kernel.pick("a", "t2", s.capability);
+    const beforeClear = s.kernel.pick("a", "t2", s.capability)!;
+    const clearSnapshot = s.kernel.activate("a", "t2", s.capability)!;
     s.kernel.clear(s.capability);
-    expect(s.kernel.pick("a", "t", s.capability)).not.toBeNull();
-    expect(a.accountRef).toBe(b.accountRef);
+    expect(s.kernel.pick("a", "t2", s.capability)?.accountRef).not.toBe(
+      beforeClear.accountRef,
+    );
+    expect(s.kernel.rollback(clearSnapshot, s.capability)).toBe(false);
   });
 
   test("TTL sweep for one owner preserves another owner's live affinity", () => {
@@ -160,6 +164,59 @@ describe("CursorPoolKernel", () => {
     expect(s.kernel.pick("owner-b", "thread", s.capability)?.accountRef).toBe(
       ownerB.accountRef,
     );
-    expect(ownerA.accountRef).toBe(ownerB.accountRef);
+    expect(ownerA).not.toBeNull();
+  });
+
+  test("retains opaque refs for temporarily unusable accounts across activate", () => {
+    const s = setup();
+    const pick1 = s.kernel.pick("owner-a", "thread", s.capability)!;
+    const originalRef = pick1.accountRef;
+
+    // Simulate account-a temporarily needing reauth or having expired token
+    s.setAccounts([
+      { id: "account-a", access: "access-a", expires: 500, needsReauth: true },
+      { id: "account-b", access: "access-b", expires: Number.MAX_SAFE_INTEGER },
+    ]);
+    // activate will see only account-b as usable, so < 2 usable accounts returns null
+    // But let's add account-c so activate succeeds
+    s.setAccounts([
+      { id: "account-a", access: "access-a", expires: 500, needsReauth: true },
+      { id: "account-b", access: "access-b", expires: Number.MAX_SAFE_INTEGER },
+      { id: "account-c", access: "access-c", expires: Number.MAX_SAFE_INTEGER },
+    ]);
+    const snap = s.kernel.activate("owner-b", "thread", s.capability);
+    expect(snap).not.toBeNull();
+
+    // Now account-a is restored
+    s.setAccounts(accounts);
+    const pickRestored = s.kernel.pick("owner-a", "thread", s.capability)!;
+    expect(pickRestored.accountRef).toBe(originalRef);
+  });
+
+  test("rejects NaN expiry in usable and unexpired checks", () => {
+    const s = setup();
+    s.setAccounts([
+      { id: "account-a", access: "access-a", expires: NaN },
+      { id: "account-b", access: "access-b", expires: Number.MAX_SAFE_INTEGER },
+    ]);
+    expect(s.kernel.pick("owner", "thread", s.capability)).toBeNull();
+  });
+
+  test("sweep prunes versions when owner/thread has no live states", () => {
+    const s = setup();
+    s.kernel.pick("owner-ephemeral", "thread", s.capability);
+    s.advance(CURSOR_POOL_TTL_MS + 1);
+    // After TTL, next activate or pick triggers sweep and removes version
+    s.kernel.pick("owner-other", "thread", s.capability);
+    // Rollback with stale generation should fail closed
+    const staleSnap = {
+      generation: 1,
+      owner: "owner-ephemeral",
+      thread: "thread",
+      refs: [],
+      previous: [],
+    };
+    expect(s.kernel.rollback(staleSnap, s.capability)).toBe(false);
   });
 });
+

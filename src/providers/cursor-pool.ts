@@ -35,20 +35,16 @@ export interface CursorPoolSnapshot {
   readonly previousAffinity?: string;
 }
 
+function unexpired(expires: number | undefined, now: number): boolean {
+  return expires === undefined || (Number.isFinite(expires) && expires > now);
+}
+
 function usable(
-  account:
-    | CursorPoolAccount
-    | { credential?: CursorPoolAccount; needsReauth?: boolean },
+  account: CursorPoolAccount,
   now: number,
 ): boolean {
   if (account.needsReauth === true) return false;
-  const c = ("credential" in account ? account.credential : account) as
-    CursorPoolAccount | undefined;
-  if (!c) return false;
-  return (
-    Boolean(c.access) &&
-    (!Number.isFinite(c.expires) || (c.expires as number) > now)
-  );
+  return Boolean(account.access) && unexpired(account.expires, now);
 }
 
 export interface CursorPoolAccount {
@@ -91,7 +87,7 @@ export class CursorPoolKernel {
     return this.versions.get(key) ?? 0;
   }
   private advanceVersion(key: string): number {
-    const next = this.version(key) + 1;
+    const next = ++this.generation;
     this.versions.set(key, next);
     return next;
   }
@@ -104,19 +100,26 @@ export class CursorPoolKernel {
           (candidate) =>
             candidate.owner === s.owner && candidate.thread === s.thread,
         );
-        if (!stillLive) this.affinity.delete(ownerThread);
+        if (!stillLive) {
+          this.affinity.delete(ownerThread);
+          this.versions.delete(ownerThread);
+        }
       }
   }
-  private accounts(
-    now: number,
-  ): Array<{ ref: string; id: string; token: string }> {
-    const source =
+  private rawAccounts(): ReadonlyArray<CursorPoolAccount> {
+    return (
       this.listAccounts?.() ??
       (getAccountSet(CURSOR_POOL_KEY)?.accounts ?? []).map((a) => ({
         id: a.id,
         ...a.credential,
         needsReauth: a.needsReauth,
-      }));
+      }))
+    );
+  }
+  private accounts(
+    now: number,
+  ): Array<{ ref: string; id: string; token: string }> {
+    const source = this.rawAccounts();
     return source
       .filter((a) => usable(a, now))
       .map((a) => {
@@ -127,8 +130,7 @@ export class CursorPoolKernel {
         }
         const token =
           this.resolveAccessToken?.(a.id) ??
-          (a.access &&
-          (!Number.isFinite(a.expires) || (a.expires as number) > now)
+          (a.access && unexpired(a.expires, now)
             ? a.access
             : undefined);
         return { ref, id: a.id, token: token ?? "" };
@@ -150,18 +152,29 @@ export class CursorPoolKernel {
         expectedGeneration !== this.version(ownerThread))
     )
       return null;
+    const { snapshot } = this.activateInternal(owner, thread);
+    return snapshot;
+  }
+  private activateInternal(
+    owner: string,
+    thread: string,
+  ): {
+    snapshot: CursorPoolSnapshot | null;
+    resolvedAccounts: Array<{ ref: string; id: string; token: string }>;
+  } {
+    const ownerThread = this.key(owner, thread);
     this.sweep();
     const now = this.now();
     const accounts = this.accounts(now);
-    if (accounts.length < 2) return null;
+    if (accounts.length < 2) return { snapshot: null, resolvedAccounts: [] };
     const previous = accounts.flatMap((a) => {
       const prior = this.states.get(`${owner}\0${thread}\0${a.ref}`);
       return prior ? [{ ...prior }] : [];
     });
     const previousAffinity = this.affinity.get(ownerThread);
-    const active = new Set(accounts.map((a) => a.id));
+    const knownSource = new Set(this.rawAccounts().map((a) => a.id));
     for (const [id, ref] of this.refs)
-      if (!active.has(id)) this.refs.delete(id);
+      if (!knownSource.has(id)) this.refs.delete(id);
     for (const a of accounts) {
       const key = `${owner}\0${thread}\0${a.ref}`;
       const p = this.states.get(key);
@@ -175,15 +188,17 @@ export class CursorPoolKernel {
         touched: now,
       });
     }
-    this.generation++;
     const generation = this.advanceVersion(ownerThread);
     return {
-      generation,
-      owner,
-      thread,
-      refs: accounts.map((a) => a.ref),
-      previous,
-      previousAffinity,
+      snapshot: {
+        generation,
+        owner,
+        thread,
+        refs: accounts.map((a) => a.ref),
+        previous,
+        previousAffinity,
+      },
+      resolvedAccounts: accounts,
     };
   }
   pick(
@@ -191,8 +206,11 @@ export class CursorPoolKernel {
     thread: string,
     capability: symbol,
   ): CursorPoolPick | null {
-    if (capability !== this.capability) return null;
-    const snap = this.activate(owner, thread, capability);
+    if (capability !== this.capability || !owner || !thread) return null;
+    const { snapshot: snap, resolvedAccounts } = this.activateInternal(
+      owner,
+      thread,
+    );
     if (!snap) return null;
     const now = this.now(),
       key = this.key(owner, thread),
@@ -205,7 +223,7 @@ export class CursorPoolKernel {
     if (!state) return null;
     this.affinity.set(key, state.ref);
     state.touched = now;
-    const a = this.accounts(now).find((x) => x.ref === state.ref);
+    const a = resolvedAccounts.find((x) => x.ref === state.ref);
     return a
       ? { accountRef: state.ref, token: a.token, generation: snap.generation }
       : null;
@@ -240,7 +258,6 @@ export class CursorPoolKernel {
       this.states.set(`${prior.owner}\0${prior.thread}\0${prior.ref}`, { ...prior });
     if (snapshot.previousAffinity) this.affinity.set(key, snapshot.previousAffinity);
     else this.affinity.delete(key);
-    this.generation++;
     this.advanceVersion(key);
     return true;
   }
@@ -256,7 +273,6 @@ export class CursorPoolKernel {
       if (v === accountRef) this.affinity.delete(k);
     for (const [id, ref] of this.refs)
       if (ref === accountRef) this.refs.delete(id);
-    this.generation++;
     for (const key of changed) this.advanceVersion(key);
   }
   clear(capability: symbol): void {
@@ -265,7 +281,6 @@ export class CursorPoolKernel {
       this.states.clear();
       this.affinity.clear();
       this.refs.clear();
-      this.generation++;
     }
   }
 }
@@ -321,3 +336,4 @@ export class CursorCredentialRouter {
     }));
   }
 }
+
