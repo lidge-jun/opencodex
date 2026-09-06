@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/lidge-jun/opencodex/go/internal/config"
 	"github.com/lidge-jun/opencodex/go/internal/managementauth"
 )
 
@@ -177,5 +178,87 @@ func TestReadyAndUsageExitCodes(t *testing.T) {
 	stderr.Reset()
 	if got := Run([]string{"ready", "--timeout", "5"}, depsFor(state, &out, &stderr)); got != ExitUsage {
 		t.Fatalf("invalid ready = %d", got)
+	}
+}
+
+func TestProviderMutationsPersistConfig(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OPENCODEX_HOME", dir)
+	initial := "{\"providers\":{\"openai\":{\"adapter\":\"openai-responses\",\"baseUrl\":\"https://example.test/v1\"}},\"defaultProvider\":\"openai\"}"
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(initial), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	deps := depsFor(RuntimeState{}, &out, &stderr)
+	if got := Run([]string{"provider", "add", "test", "--adapter", "openai-chat", "--base-url", "https://test.invalid/v1", "--api-key", "secret", "--set-default"}, deps); got != ExitOK {
+		t.Fatalf("add = %d stderr=%q", got, stderr.String())
+	}
+	if !strings.Contains(out.String(), "Provider \"test\" added.") {
+		t.Fatalf("add output = %q", out.String())
+	}
+	out.Reset()
+	stderr.Reset()
+	if got := Run([]string{"provider", "set-default", "openai", "--json"}, deps); got != ExitOK {
+		t.Fatalf("set-default = %d stderr=%q", got, stderr.String())
+	}
+	if !strings.Contains(out.String(), "\"action\": \"set-default\"") {
+		t.Fatalf("default JSON = %q", out.String())
+	}
+	out.Reset()
+	stderr.Reset()
+	if got := Run([]string{"provider", "remove", "test", "--json"}, deps); got != ExitOK {
+		t.Fatalf("remove = %d stderr=%q", got, stderr.String())
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	providers := cfg.Raw["providers"].(map[string]any)
+	if _, ok := providers["test"]; ok {
+		t.Fatal("removed provider persisted")
+	}
+}
+
+func TestCustomModelLifecyclePersistsConfig(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OPENCODEX_HOME", dir)
+	initial := "{\"providers\":{\"test\":{\"adapter\":\"openai-chat\",\"baseUrl\":\"https://example.test/v1\"}},\"defaultProvider\":\"test\"}"
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(initial), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	deps := depsFor(RuntimeState{}, &out, &stderr)
+	if got := Run([]string{"models", "add", "test", "model/a"}, deps); got != ExitOK {
+		t.Fatalf("add = %d stderr=%q", got, stderr.String())
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	models := cfg.Raw["customModels"].([]any)
+	if len(models) != 1 {
+		t.Fatalf("customModels = %#v", models)
+	}
+	model := models[0].(map[string]any)
+	if model["modelId"] != "model/a" {
+		t.Fatalf("model = %#v", model)
+	}
+	id := model["id"].(string)
+	out.Reset()
+	stderr.Reset()
+	if got := Run([]string{"models", "list-custom", "--json"}, deps); got != ExitOK || !strings.Contains(out.String(), "\"modelId\": \"model/a\"") {
+		t.Fatalf("list = %d output=%q stderr=%q", got, out.String(), stderr.String())
+	}
+	out.Reset()
+	stderr.Reset()
+	if got := Run([]string{"models", "remove", id, "--yes"}, deps); got != ExitOK {
+		t.Fatalf("remove = %d stderr=%q", got, stderr.String())
+	}
+	cfg, err = config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cfg.Raw["customModels"]; ok {
+		t.Fatal("empty customModels should be omitted")
 	}
 }

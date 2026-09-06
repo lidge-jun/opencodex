@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/lidge-jun/opencodex/go/internal/config"
 )
@@ -15,6 +16,7 @@ import (
 const (
 	configUsage           = "Usage:\n  ocx config [show] [--json]\n  ocx config get <dot.path> [--json]\n  ocx config set <dot.path> <json-or-string> [--json]\n  ocx config unset <dot.path> [--json]\n  ocx config validate [path|-] [--json]\n  ocx config export <path|->\n  ocx config import <path|-> --yes [--json]\n"
 	modelsUsage           = "Usage: ocx models [--provider <name>] [--json]\n"
+	modelAddUsage         = "Usage: ocx models add <provider> <modelId> [--display-name <name>] [--context-window <tokens>] [--modalities text,image,audio] [--reasoning-efforts <none,minimal,low,medium,high,xhigh,max,ultra>] [--default-reasoning-effort <level>]"
 	providerRegistryCount = 85
 )
 
@@ -340,6 +342,16 @@ func isSecretKey(key string) bool {
 }
 
 func runModels(args []string, deps Deps) int {
+	if len(args) > 0 {
+		switch args[0] {
+		case "add":
+			return runCustomModelAdd(args[1:], deps)
+		case "remove":
+			return runCustomModelRemove(args[1:], deps)
+		case "list-custom":
+			return runCustomModelList(args[1:], deps)
+		}
+	}
 	jsonOutput, provider, ok := parseModelsArgs(args)
 	if !ok {
 		fmt.Fprint(deps.Stderr, modelsUsage)
@@ -486,6 +498,18 @@ func runProvider(args []string, deps Deps) int {
 		fmt.Fprintln(deps.Stdout, "Usage: ocx provider <subcommand>")
 		return ExitOK
 	}
+	// Mutating subcommands own their flags. Read-only commands retain the
+	// original trailing --json parser below.
+	if args[0] == "add" || args[0] == "remove" || args[0] == "set-default" {
+		switch args[0] {
+		case "add":
+			return runProviderAdd(args[1:], deps)
+		case "remove":
+			return runProviderRemove(args[1:], deps)
+		default:
+			return runProviderSetDefault(args[1:], deps)
+		}
+	}
 	jsonOutput := len(args) > 1 && args[len(args)-1] == "--json"
 	if jsonOutput {
 		args = args[:len(args)-1]
@@ -584,6 +608,307 @@ func maskSecret(value string) string {
 		return "****"
 	}
 	return value[:4] + "****" + value[len(value)-4:]
+}
+
+func runProviderAdd(args []string, deps Deps) int {
+	if len(args) == 0 {
+		fmt.Fprintln(deps.Stderr, "Usage: ocx provider add <name> --adapter <adapter> --base-url <url> [--api-key <key>]")
+		return ExitFailure
+	}
+	name, flags := args[0], args[1:]
+	if strings.TrimSpace(name) != name || name == "" {
+		fmt.Fprintf(deps.Stderr, "Invalid provider name: %q. Use letters, numbers, dots, underscores, or hyphens.\n", name)
+		return ExitFailure
+	}
+	jsonOutput, force, setDefault := takeFlag(&flags, "--json"), takeFlag(&flags, "--force"), takeFlag(&flags, "--set-default")
+	adapter, baseURL, apiKey, defaultModel := "", "", "", ""
+	for len(flags) > 0 {
+		if len(flags) < 2 {
+			fmt.Fprintf(deps.Stderr, "Unknown flag(s): %s\n", flags[0])
+			return ExitFailure
+		}
+		flag, value := flags[0], flags[1]
+		flags = flags[2:]
+		switch flag {
+		case "--adapter":
+			adapter = value
+		case "--base-url":
+			baseURL = value
+		case "--api-key":
+			apiKey = value
+		case "--default-model":
+			defaultModel = value
+		default:
+			fmt.Fprintf(deps.Stderr, "Unknown flag(s): %s\n", flag)
+			return ExitFailure
+		}
+	}
+	if adapter == "" || baseURL == "" {
+		fmt.Fprintf(deps.Stderr, "Provider %q is not in the registry. --adapter and --base-url are required.\nUsage: ocx provider add <name> --adapter <adapter> --base-url <url> [--api-key <key>]\n", name)
+		return ExitFailure
+	}
+	cfg, err := loadCLIConfig()
+	if err != nil {
+		fmt.Fprintln(deps.Stderr, err)
+		return ExitFailure
+	}
+	providers, _ := cfg["providers"].(map[string]any)
+	if providers == nil {
+		providers = map[string]any{}
+		cfg["providers"] = providers
+	}
+	if _, exists := providers[name]; exists && !force {
+		fmt.Fprintf(deps.Stderr, "Provider %q already exists. Use --force to overwrite.\n", name)
+		return ExitFailure
+	}
+	provider := map[string]any{"adapter": adapter, "baseUrl": baseURL}
+	if apiKey != "" {
+		provider["apiKey"] = apiKey
+	}
+	if defaultModel != "" {
+		provider["defaultModel"] = defaultModel
+	}
+	if old, ok := providers[name].(map[string]any); ok && old["modelCosts"] != nil {
+		provider["modelCosts"] = old["modelCosts"]
+	}
+	providers[name] = provider
+	if setDefault {
+		cfg["defaultProvider"] = name
+	}
+	if err := validateCLIConfig(cfg); err != nil {
+		fmt.Fprintln(deps.Stderr, err)
+		return ExitFailure
+	}
+	if err := config.SaveRaw(cfg); err != nil {
+		fmt.Fprintln(deps.Stderr, err)
+		return ExitFailure
+	}
+	if jsonOutput {
+		return writeIndentedJSON(deps.Stdout, map[string]any{"action": "added", "provider": name, "adapter": adapter, "baseUrl": baseURL, "defaultModel": provider["defaultModel"], "isDefault": cfg["defaultProvider"] == name, "source": "custom", "needsSync": true})
+	}
+	fmt.Fprintf(deps.Stdout, "✅ Provider %q added.\n", name)
+	if setDefault {
+		fmt.Fprintln(deps.Stdout, "   Set as default provider.")
+	}
+	fmt.Fprintln(deps.Stdout, "   Apply to Codex: ocx sync")
+	return ExitOK
+}
+
+func runProviderRemove(args []string, deps Deps) int {
+	jsonOutput := takeFlag(&args, "--json")
+	if len(args) != 1 {
+		fmt.Fprintln(deps.Stderr, "Usage: ocx provider remove <name> [--json]")
+		return ExitFailure
+	}
+	name := args[0]
+	cfg, err := loadCLIConfig()
+	if err != nil {
+		fmt.Fprintln(deps.Stderr, err)
+		return ExitFailure
+	}
+	providers, _ := cfg["providers"].(map[string]any)
+	if _, ok := providers[name]; !ok {
+		fmt.Fprintf(deps.Stderr, "Provider %q is not configured.\n", name)
+		return ExitFailure
+	}
+	if cfg["defaultProvider"] == name {
+		fmt.Fprintf(deps.Stderr, "Cannot remove %q — it is the default provider. Change the default first: ocx provider set-default <other>\n", name)
+		return ExitFailure
+	}
+	if len(providers) <= 1 {
+		fmt.Fprintln(deps.Stderr, "Cannot remove the last provider.")
+		return ExitFailure
+	}
+	delete(providers, name)
+	dropped := 0
+	if models, ok := cfg["customModels"].([]any); ok {
+		next := []any{}
+		for _, raw := range models {
+			if model, ok := raw.(map[string]any); ok && model["provider"] == name {
+				dropped++
+				continue
+			}
+			next = append(next, raw)
+		}
+		if len(next) == 0 {
+			delete(cfg, "customModels")
+		} else {
+			cfg["customModels"] = next
+		}
+	}
+	if err := config.SaveRaw(cfg); err != nil {
+		fmt.Fprintln(deps.Stderr, err)
+		return ExitFailure
+	}
+	if jsonOutput {
+		names := []string{}
+		for provider := range providers {
+			names = append(names, provider)
+		}
+		out := map[string]any{"action": "removed", "provider": name, "remainingProviders": names, "defaultProvider": cfg["defaultProvider"], "needsSync": true}
+		if dropped > 0 {
+			out["droppedCustomModels"] = dropped
+		}
+		return writeIndentedJSON(deps.Stdout, out)
+	}
+	fmt.Fprintf(deps.Stdout, "✅ Provider %q removed.\n", name)
+	return ExitOK
+}
+
+func runProviderSetDefault(args []string, deps Deps) int {
+	jsonOutput := takeFlag(&args, "--json")
+	if len(args) != 1 {
+		fmt.Fprintln(deps.Stderr, "Usage: ocx provider set-default <name> [--json]")
+		return ExitFailure
+	}
+	name := args[0]
+	cfg, err := loadCLIConfig()
+	if err != nil {
+		fmt.Fprintln(deps.Stderr, err)
+		return ExitFailure
+	}
+	providers, _ := cfg["providers"].(map[string]any)
+	if _, ok := providers[name]; !ok {
+		fmt.Fprintf(deps.Stderr, "Provider %q is not configured. Add it first: ocx provider add %s\n", name, name)
+		return ExitFailure
+	}
+	if cfg["defaultProvider"] == name {
+		if jsonOutput {
+			return writeIndentedJSON(deps.Stdout, map[string]any{"action": "noop", "provider": name, "defaultProvider": name, "needsSync": false})
+		}
+		fmt.Fprintf(deps.Stdout, "%q is already the default provider.\n", name)
+		return ExitOK
+	}
+	cfg["defaultProvider"] = name
+	if err := config.SaveRaw(cfg); err != nil {
+		fmt.Fprintln(deps.Stderr, err)
+		return ExitFailure
+	}
+	if jsonOutput {
+		return writeIndentedJSON(deps.Stdout, map[string]any{"action": "set-default", "provider": name, "defaultProvider": name, "needsSync": true})
+	}
+	fmt.Fprintf(deps.Stdout, "✅ Default provider set to %q.\n", name)
+	return ExitOK
+}
+
+func runCustomModelAdd(args []string, deps Deps) int {
+	if len(args) < 2 {
+		fmt.Fprintln(deps.Stderr, "Error: provider and modelId are required")
+		fmt.Fprintln(deps.Stderr, modelAddUsage)
+		return ExitFailure
+	}
+	provider, modelID, flags := args[0], args[1], args[2:]
+	if provider == "" || modelID == "" {
+		fmt.Fprintln(deps.Stderr, "Error: provider and modelId are required")
+		return ExitFailure
+	}
+	if len(flags) != 0 {
+		fmt.Fprintln(deps.Stderr, "Error: Unknown flag(s): "+strings.Join(flags, ", "))
+		return ExitFailure
+	}
+	cfg, err := loadCLIConfig()
+	if err != nil {
+		fmt.Fprintln(deps.Stderr, err)
+		return ExitFailure
+	}
+	providers, _ := cfg["providers"].(map[string]any)
+	if _, ok := providers[provider]; !ok {
+		fmt.Fprintf(deps.Stderr, "Error: provider %q is not configured. See: ocx provider list\n", provider)
+		return ExitFailure
+	}
+	models, _ := cfg["customModels"].([]any)
+	slug := provider + "/" + strings.ReplaceAll(modelID, "/", "-")
+	for _, raw := range models {
+		if model, ok := raw.(map[string]any); ok && fmt.Sprint(model["provider"])+"/"+strings.ReplaceAll(fmt.Sprint(model["modelId"]), "/", "-") == slug {
+			fmt.Fprintf(deps.Stderr, "Error: custom model %q already exists\n", slug)
+			return ExitFailure
+		}
+	}
+	id := fmt.Sprintf("go-%d", time.Now().UnixNano())
+	entry := map[string]any{"id": id, "provider": provider, "modelId": modelID, "addedAt": time.Now().UTC().Format(time.RFC3339Nano)}
+	cfg["customModels"] = append(models, entry)
+	if err := config.SaveRaw(cfg); err != nil {
+		fmt.Fprintln(deps.Stderr, err)
+		return ExitFailure
+	}
+	fmt.Fprintf(deps.Stdout, "Added custom model %s (%s).\n", slug, id)
+	return ExitOK
+}
+func runCustomModelList(args []string, deps Deps) int {
+	jsonOutput := takeFlag(&args, "--json")
+	if len(args) != 0 {
+		fmt.Fprintln(deps.Stderr, "Error: Unknown flag(s): "+strings.Join(args, ", "))
+		return ExitFailure
+	}
+	cfg, err := loadCLIConfig()
+	if err != nil {
+		fmt.Fprintln(deps.Stderr, err)
+		return ExitFailure
+	}
+	models, _ := cfg["customModels"].([]any)
+	if jsonOutput {
+		return writeIndentedJSON(deps.Stdout, models)
+	}
+	if len(models) == 0 {
+		fmt.Fprintln(deps.Stdout, "No custom models registered.")
+		return ExitOK
+	}
+	for _, raw := range models {
+		model := raw.(map[string]any)
+		fmt.Fprintf(deps.Stdout, "%s: %s\n", model["provider"], model["modelId"])
+	}
+	return ExitOK
+}
+func runCustomModelRemove(args []string, deps Deps) int {
+	confirmed := takeFlag(&args, "--yes")
+	if len(args) != 1 {
+		fmt.Fprintln(deps.Stderr, "Error: custom model id or provider/modelId is required")
+		return ExitFailure
+	}
+	if !confirmed {
+		fmt.Fprintln(deps.Stderr, "Error: remove requires --yes in non-interactive mode")
+		return ExitFailure
+	}
+	target := args[0]
+	cfg, err := loadCLIConfig()
+	if err != nil {
+		fmt.Fprintln(deps.Stderr, err)
+		return ExitFailure
+	}
+	models, _ := cfg["customModels"].([]any)
+	matched := -1
+	for i, raw := range models {
+		model, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		slug := fmt.Sprint(model["provider"]) + "/" + strings.ReplaceAll(fmt.Sprint(model["modelId"]), "/", "-")
+		if fmt.Sprint(model["id"]) == target || slug == target {
+			if matched >= 0 {
+				fmt.Fprintf(deps.Stderr, "Error: custom model selector %q is ambiguous; use the custom model id\n", target)
+				return ExitFailure
+			}
+			matched = i
+		}
+	}
+	if matched < 0 {
+		fmt.Fprintf(deps.Stderr, "Error: custom model %q not found\n", target)
+		return ExitFailure
+	}
+	model := models[matched].(map[string]any)
+	next := append([]any{}, models[:matched]...)
+	next = append(next, models[matched+1:]...)
+	if len(next) == 0 {
+		delete(cfg, "customModels")
+	} else {
+		cfg["customModels"] = next
+	}
+	if err := config.SaveRaw(cfg); err != nil {
+		fmt.Fprintln(deps.Stderr, err)
+		return ExitFailure
+	}
+	fmt.Fprintf(deps.Stdout, "Removed custom model %s.\n", fmt.Sprint(model["provider"])+"/"+strings.ReplaceAll(fmt.Sprint(model["modelId"]), "/", "-"))
+	return ExitOK
 }
 func writeIndentedJSON(writer io.Writer, value any) int {
 	raw, err := json.MarshalIndent(value, "", "  ")
