@@ -1,6 +1,7 @@
 package ocxcli
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
@@ -13,10 +14,12 @@ import (
 	"time"
 
 	"github.com/lidge-jun/opencodex/go/internal/config"
+	"github.com/lidge-jun/opencodex/go/internal/configschema"
 )
 
 const (
-	configUsage           = "Usage:\n  ocx config [show] [--json]\n  ocx config get <dot.path> [--json]\n  ocx config set <dot.path> <json-or-string> [--json]\n  ocx config unset <dot.path> [--json]\n  ocx config validate [path|-] [--json]\n  ocx config export <path|->\n  ocx config import <path|-> --yes [--json]\n"
+	configUsage           = "Usage:\n  ocx config [show] [--json] [--source]\n  ocx config get <dot.path> [--json]\n  ocx config set <dot.path> <json-or-string> [--json]\n  ocx config unset <dot.path> [--json]\n  ocx config validate [path|-] [--json]\n  ocx config export <path|->\n  ocx config import <path|-> --yes [--json]\n"
+	configHelp            = "Usage: ocx config <show|get|set|unset|validate|export|import> ...\n\nInspect and safely modify validated OpenCodex configuration.\n\nSecrets are masked by show/get. Import requires --yes and validates before writing.\n"
 	modelsUsage           = "Usage: ocx models [--provider <name>] [--json]\n"
 	modelAddUsage         = "Usage: ocx models add <provider> <modelId> [--display-name <name>] [--context-window <tokens>] [--modalities text,image,audio] [--reasoning-efforts <none,minimal,low,medium,high,xhigh,max,ultra>] [--default-reasoning-effort <level>]"
 	modelRemoveUsage      = "Usage: ocx models remove <customId|provider/modelId> [--yes]"
@@ -29,6 +32,12 @@ var modelRuntimeSubcommands = map[string]Ownership{
 	"context": TypeScriptOwned, "shadow": TypeScriptOwned,
 }
 
+// Writes retain the TypeScript owner until Go participates in the shared
+// config-mutation.sqlite generation transaction.
+var configRuntimeSubcommands = map[string]Ownership{
+	"show": GoOwned, "validate": GoOwned, "export": GoOwned,
+}
+
 func loadCLIConfig() (map[string]any, error) {
 	loaded, err := config.Load()
 	if err != nil {
@@ -38,159 +47,151 @@ func loadCLIConfig() (map[string]any, error) {
 }
 
 func runConfig(args []string, deps Deps) int {
-	if len(args) == 0 || args[0] == "show" {
-		if len(args) > 0 {
-			args = args[1:]
-		}
-		if len(args) > 1 || (len(args) == 1 && args[0] != "--json") {
-			fmt.Fprint(deps.Stderr, configUsage)
-			return ExitUsage
-		}
-		cfg, err := loadCLIConfig()
-		if err != nil {
-			fmt.Fprintln(deps.Stderr, err)
-			return ExitFailure
-		}
-		return writeIndentedJSON(deps.Stdout, redactConfig(cfg))
+	action := "show"
+	if len(args) > 0 && args[0] != "--json" && args[0] != "--source" {
+		action, args = args[0], args[1:]
 	}
-	action := args[0]
-	jsonOutput := takeFlag(&args, "--json")
 	switch action {
-	case "get":
-		if len(args) != 2 {
-			fmt.Fprint(deps.Stderr, configUsage)
-			return ExitUsage
-		}
-		cfg, err := loadCLIConfig()
-		if err != nil {
-			fmt.Fprintln(deps.Stderr, err)
-			return ExitFailure
-		}
-		value, ok := configPath(cfg, args[1])
-		if !ok {
-			fmt.Fprintf(deps.Stderr, "config path not found: %s\n", args[1])
-			return ExitUsage
-		}
-		value = redactConfigValue(value, lastSegment(args[1]))
-		if jsonOutput || isComposite(value) {
-			return writeIndentedJSON(deps.Stdout, value)
-		}
-		fmt.Fprintln(deps.Stdout, scalarString(value))
-		return ExitOK
-	case "set", "unset":
-		if (action == "set" && len(args) != 3) || (action == "unset" && len(args) != 2) {
-			fmt.Fprint(deps.Stderr, configUsage)
-			return ExitUsage
-		}
-		path := args[1]
-		cfg, err := loadCLIConfig()
-		if err != nil {
-			fmt.Fprintln(deps.Stderr, err)
-			return ExitFailure
-		}
-		var value any
-		if action == "set" {
-			value = parseConfigValue(args[2])
-		}
-		if err := setConfigPath(cfg, path, value, action == "unset"); err != nil {
-			fmt.Fprintln(deps.Stderr, err)
-			return ExitUsage
-		}
-		if err := validateCLIConfig(cfg); err != nil {
-			fmt.Fprintln(deps.Stderr, err)
-			return ExitUsage
-		}
-		if err := config.SaveRaw(cfg); err != nil {
-			fmt.Fprintln(deps.Stderr, err)
-			return ExitFailure
-		}
-		if action == "unset" {
-			value = nil
-		} else {
-			value, _ = configPath(cfg, path)
-		}
-		result := map[string]any{"ok": true, "path": path, "value": redactConfigValue(value, lastSegment(path))}
-		if jsonOutput {
-			return writeIndentedJSON(deps.Stdout, result)
-		}
-		fmt.Fprintf(deps.Stdout, "%s %s.\n", strings.Title(action), path)
-		return ExitOK
+	case "show":
+		return runNativeConfigShow(args, deps)
 	case "validate":
-		if len(args) > 2 || len(args) == 2 && args[1] != "-" {
-			fmt.Fprint(deps.Stderr, configUsage)
-			return ExitUsage
-		}
-		var cfg map[string]any
-		var err error
-		if len(args) == 2 {
-			cfg, err = readConfigInput(args[1])
-		} else {
-			cfg, err = loadCLIConfig()
-		}
-		if err == nil {
-			err = validateCLIConfig(cfg)
-		}
-		if err != nil {
-			if jsonOutput {
-				writeIndentedJSON(deps.Stdout, map[string]any{"ok": false, "error": err.Error()})
-			} else {
-				fmt.Fprintf(deps.Stdout, "Config is invalid: %s\n", err)
-			}
-			return ExitFailure
-		}
-		if jsonOutput {
-			return writeIndentedJSON(deps.Stdout, map[string]any{"ok": true})
-		}
-		fmt.Fprintln(deps.Stdout, "Config is valid.")
-		return ExitOK
+		return runNativeConfigValidate(args, deps)
 	case "export":
-		if len(args) != 2 {
-			fmt.Fprint(deps.Stderr, configUsage)
-			return ExitUsage
-		}
-		cfg, err := loadCLIConfig()
-		if err != nil {
-			fmt.Fprintln(deps.Stderr, err)
-			return ExitFailure
-		}
-		content, _ := json.MarshalIndent(cfg, "", "  ")
-		content = append(content, '\n')
-		if args[1] == "-" {
-			_, _ = deps.Stdout.Write(content)
-			return ExitOK
-		}
-		if err := os.WriteFile(args[1], content, 0o600); err != nil {
-			fmt.Fprintln(deps.Stderr, err)
-			return ExitFailure
-		}
-		fmt.Fprintf(deps.Stdout, "Exported config to %s.\n", args[1])
-		return ExitOK
-	case "import":
-		if len(args) != 3 || args[2] != "--yes" {
-			fmt.Fprint(deps.Stderr, configUsage)
-			return ExitUsage
-		}
-		cfg, err := readConfigInput(args[1])
-		if err == nil {
-			err = validateCLIConfig(cfg)
-		}
-		if err != nil {
-			fmt.Fprintln(deps.Stderr, err)
-			return ExitUsage
-		}
-		if err := config.SaveRaw(cfg); err != nil {
-			fmt.Fprintln(deps.Stderr, err)
-			return ExitFailure
-		}
-		if jsonOutput {
-			return writeIndentedJSON(deps.Stdout, map[string]any{"ok": true, "source": args[1]})
-		}
-		fmt.Fprintf(deps.Stdout, "Imported config from %s. Restart or run ocx sync if needed.\n", args[1])
-		return ExitOK
+		return runNativeConfigExport(args, deps)
 	default:
+		return runDelegated(append([]string{"config", action}, args...), deps)
+	}
+}
+
+type configSourceOutput struct {
+	Config   json.RawMessage `json:"config"`
+	Source   string          `json:"source"`
+	Error    any             `json:"error"`
+	Warnings []string        `json:"warnings"`
+}
+
+func readNativeConfig() (*configschema.Normalized, []byte, string, error) {
+	path, err := config.Path()
+	if err != nil {
+		return nil, nil, "", err
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, nil, path, err
+	}
+	normalized, err := configschema.ValidateCandidateJSON(raw)
+	if err != nil {
+		return nil, nil, path, err
+	}
+	return normalized, raw, path, nil
+}
+
+func runNativeConfigShow(args []string, deps Deps) int {
+	_ = takeFlag(&args, "--json")
+	source := takeFlag(&args, "--source")
+	if len(args) != 0 {
 		fmt.Fprint(deps.Stderr, configUsage)
 		return ExitUsage
 	}
+	normalized, _, _, err := readNativeConfig()
+	if err != nil {
+		delegateArgs := []string{"config", "show"}
+		if source {
+			delegateArgs = append(delegateArgs, "--source")
+		}
+		return runDelegated(delegateArgs, deps)
+	}
+	data, err := normalized.RedactedIndentedJSON()
+	if err != nil {
+		fmt.Fprintln(deps.Stderr, err)
+		return ExitFailure
+	}
+	if !source {
+		_, _ = deps.Stdout.Write(append(data, '\n'))
+		return ExitOK
+	}
+	return writeNativeConfigJSON(deps.Stdout, configSourceOutput{Config: json.RawMessage(data), Source: "file", Error: nil, Warnings: []string{}})
+}
+
+func runNativeConfigValidate(args []string, deps Deps) int {
+	jsonOutput := takeFlag(&args, "--json")
+	if len(args) > 1 {
+		fmt.Fprint(deps.Stderr, configUsage)
+		return ExitUsage
+	}
+	path := ""
+	var raw []byte
+	var err error
+	if len(args) == 1 {
+		path = args[0]
+		if path == "-" {
+			raw, err = io.ReadAll(os.Stdin)
+		} else {
+			raw, err = os.ReadFile(path)
+		}
+	} else {
+		_, raw, path, err = readNativeConfig()
+	}
+	if err == nil {
+		_, err = configschema.ValidateCandidateJSON(raw)
+	}
+	if err != nil {
+		if len(args) == 0 {
+			return runDelegated([]string{"config", "validate"}, deps)
+		}
+		return reportNativeConfigValidation(deps, jsonOutput, false, "", err.Error())
+	}
+	return reportNativeConfigValidation(deps, jsonOutput, true, path, "")
+}
+
+func reportNativeConfigValidation(deps Deps, jsonOutput, valid bool, source, message string) int {
+	if jsonOutput {
+		if valid {
+			return writeNativeConfigJSON(deps.Stdout, struct {
+				OK     bool   `json:"ok"`
+				Source string `json:"source"`
+			}{true, source})
+		}
+		_ = writeNativeConfigJSON(deps.Stdout, struct {
+			OK    bool   `json:"ok"`
+			Error string `json:"error"`
+		}{false, message})
+	} else if valid {
+		fmt.Fprintln(deps.Stdout, "Config is valid.")
+	} else {
+		fmt.Fprintf(deps.Stdout, "Config is invalid: %s\n", message)
+	}
+	if valid || jsonOutput {
+		return ExitOK
+	}
+	return ExitFailure
+}
+
+func runNativeConfigExport(args []string, deps Deps) int {
+	if len(args) != 1 {
+		fmt.Fprint(deps.Stderr, configUsage)
+		return ExitUsage
+	}
+	normalized, _, _, err := readNativeConfig()
+	if err != nil {
+		return runDelegated(append([]string{"config", "export"}, args...), deps)
+	}
+	data, err := normalized.IndentedJSON()
+	if err != nil {
+		fmt.Fprintln(deps.Stderr, err)
+		return ExitFailure
+	}
+	data = append(data, '\n')
+	if args[0] == "-" {
+		_, _ = deps.Stdout.Write(data)
+		return ExitOK
+	}
+	if err := os.WriteFile(args[0], data, 0o600); err != nil {
+		fmt.Fprintln(deps.Stderr, err)
+		return ExitFailure
+	}
+	fmt.Fprintf(deps.Stdout, "Exported config to %s.\n", args[0])
+	return ExitOK
 }
 
 func takeFlag(args *[]string, flag string) bool {
@@ -1353,6 +1354,19 @@ func writeIndentedJSON(writer io.Writer, value any) int {
 		fmt.Fprintln(writer, err)
 		return ExitFailure
 	}
+	fmt.Fprintln(writer, string(raw))
+	return ExitOK
+}
+
+func writeNativeConfigJSON(writer io.Writer, value any) int {
+	raw, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		fmt.Fprintln(writer, err)
+		return ExitFailure
+	}
+	raw = bytes.ReplaceAll(raw, []byte("\\u003e"), []byte(">"))
+	raw = bytes.ReplaceAll(raw, []byte("\\u003c"), []byte("<"))
+	raw = bytes.ReplaceAll(raw, []byte("\\u0026"), []byte("&"))
 	fmt.Fprintln(writer, string(raw))
 	return ExitOK
 }

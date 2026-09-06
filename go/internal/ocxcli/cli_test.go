@@ -106,6 +106,85 @@ func TestModelRuntimeOwnershipDelegates(t *testing.T) {
 	}
 }
 
+func TestConfigRuntimeOwnershipUsesNativeReadCommands(t *testing.T) {
+	for _, subcommand := range []string{"show", "validate", "export"} {
+		if got, known := OwnershipFor([]string{"config", subcommand}); !known || got != GoOwned {
+			t.Fatalf("OwnershipFor(config %s) = %q, %t", subcommand, got, known)
+		}
+	}
+	for _, subcommand := range []string{"get", "set", "unset", "import"} {
+		if got, known := OwnershipFor([]string{"config", subcommand}); !known || got != TypeScriptOwned {
+			t.Fatalf("OwnershipFor(config %s) = %q, %t", subcommand, got, known)
+		}
+	}
+}
+
+func TestNativeConfigReadCommandsMatchOracleShape(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OPENCODEX_HOME", dir)
+	initial := "{\"providers\":{\"test\":{\"adapter\":\"openai-chat\",\"baseUrl\":\"https://example.test/v1\",\"apiKey\":\"secret\",\"defaultModel\":\"m\"}},\"defaultProvider\":\"test\",\"port\":10123,\"unknown\":true}"
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(initial), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	deps := depsFor(RuntimeState{}, &out, &stderr)
+	deps.Delegate = func([]string) (int, error) { t.Fatal("native config read delegated"); return 0, nil }
+	if got := Run([]string{"config", "show", "--source"}, deps); got != ExitOK {
+		t.Fatalf("show = %d stderr=%q", got, stderr.String())
+	}
+	if !strings.Contains(out.String(), "\"apiKey\": \"********\"") || !strings.Contains(out.String(), "\"source\": \"file\"") {
+		t.Fatalf("show = %q", out.String())
+	}
+	out.Reset()
+	stderr.Reset()
+	if got := Run([]string{"config", "validate", "--json"}, deps); got != ExitOK {
+		t.Fatalf("validate = %d stdout=%q stderr=%q", got, out.String(), stderr.String())
+	}
+	if !strings.Contains(out.String(), "\"ok\": true") || !strings.Contains(out.String(), filepath.Join(dir, "config.json")) {
+		t.Fatalf("validate = %q", out.String())
+	}
+	out.Reset()
+	stderr.Reset()
+	if got := Run([]string{"config", "export", "-"}, deps); got != ExitOK {
+		t.Fatalf("export = %d stderr=%q", got, stderr.String())
+	}
+	if !strings.Contains(out.String(), "\"apiKey\": \"secret\"") || !strings.Contains(out.String(), "\"unknown\": true") {
+		t.Fatalf("export = %q", out.String())
+	}
+}
+
+func TestNativeConfigCandidateValidationMatchesMultiIssueOracle(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bad.json")
+	if err := os.WriteFile(path, []byte("{\"port\":-1}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	deps := depsFor(RuntimeState{}, &out, &stderr)
+	deps.Delegate = func([]string) (int, error) { t.Fatal("candidate validation delegated"); return 0, nil }
+	if got := Run([]string{"config", "validate", path, "--json"}, deps); got != ExitOK {
+		t.Fatalf("validate = %d", got)
+	}
+	want := "{\n  \"ok\": false,\n  \"error\": \"schema_invalid: port: Too small: expected number to be >=0; providers: Invalid input: expected record, received undefined\"\n}\n"
+	if out.String() != want {
+		t.Fatalf("stdout = %q, want %q", out.String(), want)
+	}
+}
+
+func TestNativeConfigReadFallsBackForUnreadableStoredConfig(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OPENCODEX_HOME", dir)
+	var out, stderr bytes.Buffer
+	var received []string
+	deps := depsFor(RuntimeState{}, &out, &stderr)
+	deps.Delegate = func(args []string) (int, error) { received = append([]string(nil), args...); return 17, nil }
+	if got := Run([]string{"config", "show", "--source"}, deps); got != 17 {
+		t.Fatalf("show = %d", got)
+	}
+	if want := []string{"config", "show", "--source"}; !slices.Equal(received, want) {
+		t.Fatalf("fallback argv=%#v want=%#v", received, want)
+	}
+}
+
 func TestHelpSurfaceMatchesCommandRegistry(t *testing.T) {
 	documented := map[string]bool{}
 	for _, line := range strings.Split(fullUsage, "\n") {
@@ -159,18 +238,15 @@ func TestTypeScriptOwnedFamiliesDelegateExactArgumentsAndExitCode(t *testing.T) 
 	}
 }
 
-func TestConfigHelpDelegatesToTheConfigOwner(t *testing.T) {
-	var received []string
-	deps := depsFor(RuntimeState{}, &bytes.Buffer{}, &bytes.Buffer{})
-	deps.Delegate = func(args []string) (int, error) {
-		received = append([]string(nil), args...)
-		return ExitOK, nil
-	}
+func TestConfigHelpIsNative(t *testing.T) {
+	var out, stderr bytes.Buffer
+	deps := depsFor(RuntimeState{}, &out, &stderr)
+	deps.Delegate = func([]string) (int, error) { t.Fatal("config help delegated"); return 0, nil }
 	if got := Run([]string{"help", "config"}, deps); got != ExitOK {
 		t.Fatalf("help config exit = %d", got)
 	}
-	if want := []string{"config", "--help"}; !slices.Equal(received, want) {
-		t.Fatalf("delegated argv = %#v, want %#v", received, want)
+	if out.String() != configHelp {
+		t.Fatalf("help = %q", out.String())
 	}
 }
 

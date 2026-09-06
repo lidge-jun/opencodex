@@ -73,6 +73,22 @@ func (n *Normalized) IndentedJSON() ([]byte, error) {
 	return out.Bytes(), nil
 }
 
+// RedactedIndentedJSON renders a diagnostic/config-show view without exposing
+// credentials. It preserves the schema-projected object order used by
+// IndentedJSON so callers can retain TypeScript's observable JSON layout.
+func (n *Normalized) RedactedIndentedJSON() ([]byte, error) {
+	if n == nil || n.root == nil {
+		return nil, errors.New("nil normalized config")
+	}
+	var out bytes.Buffer
+	redactValue(n.root, "").write(&out)
+	var indented bytes.Buffer
+	if err := json.Indent(&indented, out.Bytes(), "", "  "); err != nil {
+		return nil, err
+	}
+	return indented.Bytes(), nil
+}
+
 type valueKind uint8
 
 const (
@@ -283,54 +299,62 @@ func validIntRange(v *value, min, max int64) bool {
 }
 
 func validateTop(v *value) error {
+	var diagnostics []string
 	if port := v.find("port"); port != nil {
 		if port.kind != numberKind {
-			return errors.New("schema_invalid: port: Invalid input: expected number, received string")
+			diagnostics = append(diagnostics, "port: Invalid input: expected number, received string")
 		}
-		n, err := strconv.ParseInt(port.number.String(), 10, 64)
-		if err != nil {
-			return errors.New("schema_invalid: port: Invalid input: expected int, received number")
-		}
-		if n < 0 {
-			return errors.New("schema_invalid: port: Too small: expected number to be >=0")
-		}
-		if n > 65535 {
-			return errors.New("schema_invalid: port: Too big: expected number to be <=65535")
+		if port.kind == numberKind {
+			n, err := strconv.ParseInt(port.number.String(), 10, 64)
+			if err != nil {
+				diagnostics = append(diagnostics, "port: Invalid input: expected int, received number")
+			} else if n < 0 {
+				diagnostics = append(diagnostics, "port: Too small: expected number to be >=0")
+			} else if n > 65535 {
+				diagnostics = append(diagnostics, "port: Too big: expected number to be <=65535")
+			}
 		}
 	}
 	providers := v.find("providers")
 	if providers == nil {
-		return errors.New("schema_invalid: providers: Invalid input: expected record, received undefined")
+		diagnostics = append(diagnostics, "providers: Invalid input: expected record, received undefined")
 	}
-	if providers.kind != objectKind {
-		return fmt.Errorf("schema_invalid: providers: Invalid input: expected record, received %s", zodType(providers))
-	}
-	for _, p := range providers.object {
-		if p.value.kind != objectKind {
-			return fmt.Errorf("schema_invalid: providers.%s: Invalid input: expected object, received %s", p.key, zodType(p.value))
-		}
-		if x := p.value.find("adapter"); x == nil {
-			return fmt.Errorf("schema_invalid: providers.%s.adapter: Invalid input: expected string, received undefined", p.key)
-		} else if x.kind != stringKind {
-			return fmt.Errorf("schema_invalid: providers.%s.adapter: Invalid input: expected string, received %s", p.key, zodType(x))
-		} else if x.text == "" {
-			return fmt.Errorf("schema_invalid: providers.%s.adapter: Too small: expected string to have >=1 characters", p.key)
-		}
-		if x := p.value.find("baseUrl"); x == nil {
-			return fmt.Errorf("schema_invalid: providers.%s.baseUrl: Invalid input: expected string, received undefined", p.key)
-		} else if x.kind != stringKind {
-			return fmt.Errorf("schema_invalid: providers.%s.baseUrl: Invalid input: expected string, received %s", p.key, zodType(x))
-		} else if x.text == "" {
-			return fmt.Errorf("schema_invalid: providers.%s.baseUrl: Too small: expected string to have >=1 characters", p.key)
+	if providers != nil {
+		if providers.kind != objectKind {
+			diagnostics = append(diagnostics, fmt.Sprintf("providers: Invalid input: expected record, received %s", zodType(providers)))
+		} else {
+			for _, p := range providers.object {
+				if p.value.kind != objectKind {
+					diagnostics = append(diagnostics, fmt.Sprintf("providers.%s: Invalid input: expected object, received %s", p.key, zodType(p.value)))
+					continue
+				}
+				if x := p.value.find("adapter"); x == nil {
+					diagnostics = append(diagnostics, fmt.Sprintf("providers.%s.adapter: Invalid input: expected string, received undefined", p.key))
+				} else if x.kind != stringKind {
+					diagnostics = append(diagnostics, fmt.Sprintf("providers.%s.adapter: Invalid input: expected string, received %s", p.key, zodType(x)))
+				} else if x.text == "" {
+					diagnostics = append(diagnostics, fmt.Sprintf("providers.%s.adapter: Too small: expected string to have >=1 characters", p.key))
+				}
+				if x := p.value.find("baseUrl"); x == nil {
+					diagnostics = append(diagnostics, fmt.Sprintf("providers.%s.baseUrl: Invalid input: expected string, received undefined", p.key))
+				} else if x.kind != stringKind {
+					diagnostics = append(diagnostics, fmt.Sprintf("providers.%s.baseUrl: Invalid input: expected string, received %s", p.key, zodType(x)))
+				} else if x.text == "" {
+					diagnostics = append(diagnostics, fmt.Sprintf("providers.%s.baseUrl: Too small: expected string to have >=1 characters", p.key))
+				}
+			}
 		}
 	}
 	if d := v.find("defaultProvider"); d != nil {
 		if d.kind != stringKind {
-			return fmt.Errorf("schema_invalid: defaultProvider: Invalid input: expected string, received %s", zodType(d))
+			diagnostics = append(diagnostics, fmt.Sprintf("defaultProvider: Invalid input: expected string, received %s", zodType(d)))
 		}
-		if d.text == "" {
-			return errors.New("schema_invalid: defaultProvider: Too small: expected string to have >=1 characters")
+		if d.kind == stringKind && d.text == "" {
+			diagnostics = append(diagnostics, "defaultProvider: Too small: expected string to have >=1 characters")
 		}
+	}
+	if len(diagnostics) > 0 {
+		return errors.New("schema_invalid: " + strings.Join(diagnostics, "; "))
 	}
 	return nil
 }
@@ -391,4 +415,34 @@ func (v *value) write(b *bytes.Buffer) {
 		}
 		b.WriteByte('}')
 	}
+}
+
+func redactValue(v *value, key string) *value {
+	if isSecretKey(key) && v.kind == stringKind && v.text != "" {
+		return stringValue("********")
+	}
+	switch v.kind {
+	case arrayKind:
+		out := &value{kind: arrayKind, array: make([]*value, len(v.array))}
+		for i, child := range v.array {
+			out.array[i] = redactValue(child, "")
+		}
+		return out
+	case objectKind:
+		out := &value{kind: objectKind, object: make([]member, len(v.object))}
+		for i, child := range v.object {
+			out.object[i] = member{key: child.key, value: redactValue(child.value, child.key)}
+		}
+		return out
+	default:
+		return v
+	}
+}
+
+func isSecretKey(key string) bool {
+	switch strings.ToLower(key) {
+	case "apikey", "key", "accesstoken", "refreshtoken", "idtoken", "token", "password", "clientsecret":
+		return true
+	}
+	return false
 }

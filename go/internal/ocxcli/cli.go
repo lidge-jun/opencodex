@@ -92,7 +92,10 @@ var Commands = []Command{
 	{Name: "integration", Usage: "ocx integration client <sub>", Summary: "Manage integrations.", Owner: TypeScriptOwned},
 	{Name: "grok", Usage: "ocx grok <sub>", Summary: "Manage Grok Build.", Owner: TypeScriptOwned},
 	{Name: "system", Usage: "ocx system <sub>", Summary: "Manage runtime settings.", Owner: TypeScriptOwned},
-	{Name: "config", Usage: "ocx config <sub>", Summary: "Manage configuration.", Owner: TypeScriptOwned},
+	// The command default and read subset are Go-owned. Mutations remain
+	// TypeScript-owned by configRuntimeSubcommands until they share its SQLite
+	// generation transaction.
+	{Name: "config", Usage: "ocx config <sub>", Summary: "Manage configuration.", Owner: GoOwned},
 	{Name: "lab", Usage: "ocx lab <sub>", Summary: "Inspect Compatibility Lab.", Owner: TypeScriptOwned},
 	{Name: "claude", Usage: "ocx claude [args...]", Summary: "Launch Claude Code.", Owner: TypeScriptOwned},
 	{Name: "opencode", Usage: "ocx opencode [args...]", Summary: "Launch opencode.", Owner: TypeScriptOwned},
@@ -131,6 +134,15 @@ func OwnershipFor(args []string) (Ownership, bool) {
 		if owner, ok := modelRuntimeSubcommands[args[1]]; ok {
 			return owner, true
 		}
+	}
+	if command.Name == "config" && len(args) > 1 {
+		if args[1] == "--json" || args[1] == "--source" {
+			return GoOwned, true
+		}
+		if owner, ok := configRuntimeSubcommands[args[1]]; ok {
+			return owner, true
+		}
+		return TypeScriptOwned, true
 	}
 	return command.Owner, true
 }
@@ -233,6 +245,8 @@ func Run(args []string, deps Deps) int {
 		return runModels(args[1:], deps)
 	case "provider":
 		return runProvider(args[1:], deps)
+	case "config":
+		return runConfig(args[1:], deps)
 	default:
 		// The ownership registry above and this switch must be reconciled by
 		// TestOwnershipMapMatchesDispatch; this is defensive for future edits.
@@ -264,6 +278,10 @@ func hasHelpFlag(args []string) bool {
 	return false
 }
 func printSubcommandHelp(name string, deps Deps) int {
+	if name == "config" {
+		fmt.Fprint(deps.Stdout, configHelp)
+		return ExitOK
+	}
 	if owner, known := OwnershipFor([]string{name}); known && owner == TypeScriptOwned {
 		return runDelegated([]string{name, "--help"}, deps)
 	}
@@ -274,6 +292,8 @@ func printSubcommandHelp(name string, deps Deps) int {
 		fmt.Fprint(deps.Stdout, "Usage: ocx ready [--json] [--wait [--timeout <seconds>]]\n\nCheck post-sync readiness. Exits 0 only when ready.\n\nExact unauthenticated GET /readyz returns HTTP 200 when ready, or 503 with Retry-After: 1 for pending or failed.\nIts sanitized HTTP identity is {service, version, uptime, pid, port, status}; /healthz is separate liveness, not readiness.\nDefault is a single identity-checked /readyz probe; old proxies without /readyz fail closed as unreachable.\n--wait polls until ready or timeout, but exits immediately on terminal failed (default 45s, max 300s).\n--timeout requires --wait and accepts a positive integer (1..300).\n--json emits {ready, status, pid, port}; status is one of ready|pending|failed|unreachable.\nInvalid or unknown arguments exit 64. Not-ready, pending, failed, timeout, and unreachable exit 1.\n")
 	case "models":
 		fmt.Fprint(deps.Stdout, modelsUsage+"\nCustom models:\n  "+modelAddUsage+"\n  "+modelRemoveUsage+"\n  Usage: ocx models list-custom [--json]\n\nRuntime subcommands (live, edit, enable, disable, provider, selected, preset, new-policy, new-arrivals, context, shadow) retain the TypeScript management API owner during the incremental takeover.\n")
+	case "config":
+		fmt.Fprint(deps.Stdout, configHelp)
 	default:
 		fmt.Fprintf(deps.Stderr, "Unknown command: %s\n", name)
 		printHelp(deps.Stdout)
