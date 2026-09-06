@@ -113,6 +113,14 @@ export function providerModelDiscoverySpecError(spec: ProviderModelDiscoverySpec
   if (queryEntries.some(([key, value]) => !key.trim() || key.length > 128 || typeof value !== "string" || value.length > 512)) {
     return "discovery query keys/values exceed their bounds";
   }
+  if (spec.idKey !== undefined && spec.envelopeKey === undefined) {
+    return "idKey requires envelopeKey";
+  }
+  for (const [field, key] of [["envelopeKey", spec.envelopeKey], ["idKey", spec.idKey]] as const) {
+    if (key !== undefined && !/^[A-Za-z][A-Za-z0-9_-]{0,31}$/.test(key)) {
+      return `${field} must be an identifier-shaped key of 1-32 characters`;
+    }
+  }
   for (const [field, value, hardLimit] of [
     ["maxResponseBytes", spec.maxResponseBytes, MODEL_DISCOVERY_MAX_RESPONSE_BYTES],
     ["maxModels", spec.maxModels, MODEL_DISCOVERY_MAX_MODELS],
@@ -137,14 +145,17 @@ export function resolveProviderModelDiscovery(
   providerName: string,
   provider: Pick<OcxProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<OcxProviderConfig, "authMode">>,
 ): ResolvedProviderModelDiscovery {
-  // The dashboard permits a canonical preset to be saved under a different name. Recover its
-  // registry-owned discovery policy by transport in that case. The destination helper is limited
-  // to exact fixed-key baseUrl + adapter matches, so custom endpoints, OAuth rows, templates, and
-  // overridable destinations cannot acquire another provider's discovery URL or filter.
+  // The dashboard permits a canonical preset to be saved under a different name, and a saved
+  // row may carry a registry id as its name while pointing at another entry's transport
+  // (e.g. a `zai`-named row on BigModel's Responses endpoint). Discovery policy follows the
+  // transport the row actually points at: the named entry owns the policy only when it
+  // declares one AND owns the row, and otherwise the destination helper decides. It is
+  // limited to exact fixed-key baseUrl + adapter matches, so custom endpoints, OAuth rows,
+  // templates, and overridable destinations cannot acquire another provider's discovery
+  // URL or filter.
   const namedEntry = getProviderRegistryEntry(providerName);
-  const entry = namedEntry
-    ? (providerMatchesRegistryTransport(providerName, provider) ? namedEntry : undefined)
-    : registryEntryForProviderDestination(provider);
+  const entry = (namedEntry?.modelDiscovery && providerMatchesRegistryTransport(providerName, provider) ? namedEntry : undefined)
+    ?? registryEntryForProviderDestination(provider);
   const spec = entry?.modelDiscovery;
   return {
     ...(spec ? { spec } : {}),
@@ -490,19 +501,26 @@ export function extractProviderModelItems(
     if (value.length > limit) return { ok: false, reason: "too_many_models" };
     data = value;
   } else {
-    const envelope = extractModelEnvelopeRows(value, discovery.maxModels, ["data"]);
+    const envelope = extractModelEnvelopeRows(
+      value,
+      discovery.maxModels,
+      discovery.spec?.envelopeKey ? [discovery.spec.envelopeKey] : ["data"],
+    );
     if (!envelope.ok) return envelope;
     data = envelope.rows;
-    siblings = buildSiblingIndex(value, limit);
+    // The sibling index exists to join a SECONDARY `models[]` array onto `data[]` rows
+    // (#1797). A declared `models` envelope IS the row source, not a sibling.
+    siblings = discovery.spec?.envelopeKey ? null : buildSiblingIndex(value, limit);
   }
 
   const items: ProviderModelsApiItem[] = [];
   const seen = new Set<string>();
+  const idKey = discovery.spec?.idKey ?? "id";
   for (const raw of data) {
     if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
       return { ok: false, reason: "invalid_shape" };
     }
-    const id = (raw as { id?: unknown }).id;
+    const id = (raw as Record<PropertyKey, unknown>)[idKey];
     if (!isValidModelDiscoveryModelId(id)) return { ok: false, reason: "invalid_shape" };
     const prefix = discovery.spec?.stripIdPrefix;
     let finalId = id;
@@ -510,7 +528,9 @@ export function extractProviderModelItems(
       finalId = finalId.slice(prefix.length);
       if (!isValidModelDiscoveryModelId(finalId)) continue;
     }
-    const item = finalId === id ? raw as ProviderModelsApiItem : { ...(raw as ProviderModelsApiItem), id: finalId };
+    const item = idKey === "id" && finalId === id
+      ? raw as ProviderModelsApiItem
+      : { ...(raw as ProviderModelsApiItem), id: finalId };
     // Admission is decided on the ORIGINAL `data[]` row, before any sibling
     // enrichment. Merging first let a `models[]` entry supply the very field a
     // provider filter requires — reproduced against the real Chutes policy,
