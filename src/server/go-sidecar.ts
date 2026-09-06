@@ -29,6 +29,7 @@ import { directLocalHttpFetch } from "./direct-local-http";
 import { registerOptionalShutdownHook } from "../lib/optional-shutdown-hooks";
 import { setGoOwnedRouteForwarder } from "./go-sidecar-slot";
 import { HOT_PATH_SEAM_PATH, HOT_PATH_SIDECAR_REQUEST_HEADER } from "./hot-path-seam";
+import { forwardGoWebSocketFrames } from "./go-sidecar-ws-bridge";
 
 /** Environment variable naming the ocx-sidecar binary to spawn. */
 export const GO_SIDECAR_BIN_ENV = "OPENCODEX_GO_SIDECAR_BIN";
@@ -110,6 +111,12 @@ export function activeGoSidecarBaseUrl(): string | null {
  */
 export function isDataPlaneSeamAttached(): boolean {
   return !stopped && dataPlaneSeam !== null && readyBaseUrl !== "";
+}
+
+export async function forwardGoResponsesWebSocket(frame: Record<string, unknown>, admission: unknown): Promise<string[] | null> {
+  const seam = dataPlaneSeam;
+  if (!seam || stopped) return null;
+  try { return await forwardGoWebSocketFrames(seam.baseUrl, seam.requestToken, frame, admission); } catch { return null; }
 }
 
 /**

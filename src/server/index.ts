@@ -54,7 +54,8 @@ import {
 } from "../lib/app-owned-memory-stores";
 import { acquireServerBackgroundLifecycle } from "./background-lifecycle";
 import { activateLab, labActivationRequired } from "../lib/lab-activation";
-import { activateGoSidecar, forwardHotPathSeam, isDataPlaneSeamAttached } from "./go-sidecar";
+import { activateGoSidecar, forwardGoResponsesWebSocket, forwardHotPathSeam, isDataPlaneSeamAttached } from "./go-sidecar";
+import { goWsBridgeEnabled } from "./go-sidecar-ws-bridge";
 import {
   createDataPlaneSeamHeaders,
   createHotPathResponsesBridge,
@@ -1117,6 +1118,39 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
       if (url.pathname === HOT_PATH_RESPONSES_BRIDGE_PATH) {
         const bridge = goSidecarHotPathBridge;
         return bridge ? bridge.handle(req, url) : new Response(null, { status: 404 });
+      }
+      // Ticket #28's private frame source. The public Bun socket stays here;
+      // Go holds only a child capability and never receives client headers.
+      if (url.pathname === "/__ocx_go_sidecar/responses-ws") {
+        if (req.method !== "POST" || !goSidecarLiveStateBridgeToken
+          || req.headers.get("x-ocx-go-sidecar-bridge") !== goSidecarLiveStateBridgeToken) {
+          return new Response(null, { status: 404 });
+        }
+        try {
+          const input = await req.json() as { frame?: Record<string, unknown>; admission?: DataPlaneAdmission };
+          if (!input.frame || !input.admission) return new Response(null, { status: 400 });
+          const payload = { ...input.frame };
+          delete payload.type;
+          const internalReq = new Request("http://localhost/v1/responses", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ ...payload, stream: true }),
+            signal: req.signal,
+          });
+          const logCtx: RequestLogContext = {
+            model: "unknown", provider: "unknown", ...admissionFields(input.admission), inboundProtocol: "responses",
+          };
+          return await handleResponses(internalReq, config, logCtx, {
+            admission: input.admission,
+            forceEmptyResponseId: true,
+            inboundTransport: "websocket",
+            abortSignal: req.signal,
+          });
+        } catch {
+          return new Response(JSON.stringify({ error: { type: "proxy_error", message: "WebSocket bridge dispatch failed" } }), {
+            status: 502, headers: { "content-type": "application/json" },
+          });
+        }
       }
       markActivity(`${req.method} ${url.pathname}`);
 
@@ -2270,6 +2304,10 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           return;
         }
 
+        // Ticket #28: Bun keeps the client socket (a descriptor cannot cross
+        // processes); the optional Go sidecar owns just the wire reframing on
+        // its token-gated loopback WebSocket. A failed optional hop falls back
+        // before the model turn starts, so it cannot duplicate execution.
         const turnAdmissionLease = tryAdmitTurn(ws.data.sessionLaneId);
         if (!turnAdmissionLease) {
           sendJsonFrame(ws, buildWsErrorFrame(503, {
@@ -2279,6 +2317,25 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             retryable: true,
           }, new Headers({ "Retry-After": "1" })));
           if (ws.data.cancel === cancelTurn) ws.data.cancel = undefined;
+          return;
+        }
+
+        if (goWsBridgeEnabled() && isDataPlaneSeamAttached()) {
+          void (async () => {
+            try {
+              const frames = await forwardGoResponsesWebSocket(frame, ws.data.admission);
+              if (!isCurrent()) return;
+              if (!frames) {
+                sendJsonFrame(ws, buildWsErrorFrame(502, { type: "proxy_error", message: "Go WebSocket bridge unavailable" }));
+                return;
+              }
+              for (const text of frames) { if (isCurrent()) sendTextFrame(ws, text); }
+            } catch { /* socket gone */
+            } finally {
+              turnAdmissionLease.release();
+              if (ws.data.cancel === cancelTurn) ws.data.cancel = undefined;
+            }
+          })();
           return;
         }
 
