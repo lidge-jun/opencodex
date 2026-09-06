@@ -87,7 +87,31 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
     const result = expectParity(args);
     expect(result.code).toBe(64);
   });
-  test.each([{ args: ["status"], reason: "Go has not implemented the status command." }, { args: ["config", "show"], reason: "Go has not implemented the config command." }])("records $reason", ({ args }) => {
+  test.each([
+    { args: ["config", "get", "defaultProvider"] },
+    { args: ["config", "get", "providers.fixture.apiKey"] },
+    { args: ["models", "--json"] },
+    { args: ["models", "--provider", "fixture", "--json"] },
+    { args: ["provider", "list", "--json"] },
+    { args: ["provider", "show", "fixture", "--json"] },
+  ])("diffs config, models, and provider output and exit code for $args", ({ args }) => {
+    testHome = mkdtempSync(join(tmpdir(), "ocx-go-cli-parity-"));
+    writeFileSync(join(testHome, "config.json"), JSON.stringify({
+      providers: {
+        fixture: {
+          adapter: "openai-chat",
+          baseUrl: "https://example.test/v1",
+          apiKey: "secret-key",
+          defaultModel: "fixture-model",
+          models: ["fixture-model", "second"],
+          contextWindow: 128000,
+        },
+      },
+      defaultProvider: "fixture",
+    }));
+    expectParity(args);
+  });
+  test.each([{ args: ["status"], reason: "Go has not implemented the status command." }])("records $reason", ({ args }) => {
     testHome = mkdtempSync(join(tmpdir(), "ocx-go-cli-parity-"));
     expect(runTs(args).code).not.toBe(runGo(args).code);
   });

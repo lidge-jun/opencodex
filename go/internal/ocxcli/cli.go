@@ -34,6 +34,9 @@ type Command struct{ Name, Usage, Summary string }
 var Commands = []Command{
 	{Name: "health", Usage: "ocx health [--json]", Summary: "Verify the local proxy identity and report health."},
 	{Name: "ready", Usage: "ocx ready [--json]", Summary: "Verify the local proxy identity and report readiness."},
+	{Name: "config", Usage: "ocx config <subcommand>", Summary: "Inspect the durable configuration."},
+	{Name: "models", Usage: "ocx models [--provider <name>] [--json]", Summary: "List configured models."},
+	{Name: "provider", Usage: "ocx provider <subcommand>", Summary: "Inspect configured providers."},
 }
 
 type RuntimeState struct {
@@ -112,6 +115,12 @@ func Run(args []string, deps Deps) int {
 		return runHealth(args[1:], deps)
 	case "ready":
 		return runReady(args[1:], deps)
+	case "config":
+		return runConfig(args[1:], deps)
+	case "models":
+		return runModels(args[1:], deps)
+	case "provider":
+		return runProvider(args[1:], deps)
 	default:
 		fmt.Fprintf(deps.Stderr, "Unknown command: %s\n", args[0])
 		printHelp(deps.Stdout)
