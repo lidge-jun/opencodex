@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { existsSync, linkSync, mkdtempSync, readFileSync, readdirSync, unlinkSync, writeFileSync, renameSync } from "node:fs";
+import { existsSync, linkSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, unlinkSync, writeFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import {
   AtomicWriteSecretResidualError,
@@ -180,4 +180,22 @@ test("synchronizes provenance and clears pending deletions after creation", () =
   expect(cfg.configRebaseProvenance).toEqual({ version: 1, deletedTopLevelKeys: ["hostname"] });
   const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
   expect(persisted.configRebaseProvenance).toEqual(cfg.configRebaseProvenance);
+});
+
+test("replacement of the staged temporary file with a symlink does not truncate the symlink target", () => {
+  const victimPath = join(root, "victim-file");
+  const victimContent = "critical user data that must not be truncated";
+  writeFileSync(victimPath, victimContent);
+
+  setPersistedConfigInitializationBeforePublishForTests(() => {
+    const staged = readdirSync(root).find(name => name.endsWith(".tmp"));
+    if (!staged) throw new Error("staged temp not found");
+    const path = join(root, staged);
+    unlinkSync(path);
+    symlinkSync(victimPath, path, "file");
+  });
+
+  expect(() => initializePersistedConfigIfMissing(config(24000))).toThrow(/identity changed/);
+  expect(existsSync(getConfigPath())).toBe(false);
+  expect(readFileSync(victimPath, "utf8")).toBe(victimContent);
 });

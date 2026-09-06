@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmodSync, closeSync, constants as fsConstants, copyFileSync, existsSync, fchmodSync, fstatSync, lstatSync, linkSync, mkdirSync, openSync, readFileSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants as fsConstants, copyFileSync, existsSync, fchmodSync, fstatSync, ftruncateSync, lstatSync, linkSync, mkdirSync, openSync, readFileSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Database } from "bun:sqlite";
 import * as z from "zod/v4";
@@ -3073,13 +3073,13 @@ function publishInitialConfigNoReplace(config: OcxConfig, io: PersistedConfigIni
 
   const scrubUnpublishedTemp = (cause?: unknown): void => {
     cleanupAttempted = true;
-    io.close?.();
     let scrubbed = false;
     try { io.truncate(temp); scrubbed = true; }
     catch (error) {
       if (isMissingPathError(error)) scrubbed = true;
       else { try { io.write(temp, ""); scrubbed = true; } catch { /* removal may still succeed */ } }
     }
+    io.close?.();
     let removed = false;
     try { io.unlink(temp); removed = true; }
     catch (error) {
@@ -3110,6 +3110,7 @@ function publishInitialConfigNoReplace(config: OcxConfig, io: PersistedConfigIni
       return false;
     }
     published = true;
+    io.close?.();
     try { io.unlink(temp); forgetEphemeralSecretPath(temp); }
     catch (firstError) {
       if (isMissingPathError(firstError)) forgetEphemeralSecretPath(temp);
@@ -3168,7 +3169,6 @@ function defaultPersistedConfigInitializationIO(configPath: string): PersistedCo
         const opened = fstatSync(descriptor);
         const linked = lstatSync(temp);
         if (opened.dev !== linked.dev || opened.ino !== linked.ino) {
-          closeSync(descriptor); descriptor = undefined;
           throw new Error("atomic initialization temporary file identity changed before publication");
         }
       }
@@ -3191,11 +3191,12 @@ function defaultPersistedConfigInitializationIO(configPath: string): PersistedCo
           throw new PersistedConfigInitializationHardLinkUnavailableError({ cause });
         }
         throw cause;
-      } finally {
-        if (descriptor !== undefined) { closeSync(descriptor); descriptor = undefined; }
       }
     },
-    truncate: target => truncateSync(target, 0),
+    truncate: target => {
+      if (descriptor !== undefined) ftruncateSync(descriptor, 0);
+      else truncateSync(target, 0);
+    },
     unlink: unlinkSync,
     close: () => { if (descriptor !== undefined) { closeSync(descriptor); descriptor = undefined; } },
   };
