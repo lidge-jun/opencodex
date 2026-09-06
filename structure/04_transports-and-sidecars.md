@@ -1671,3 +1671,8 @@ using `stallTimeoutSec` (300 seconds by default). Nonempty chunks reset that
 deadline; a stalled body returns HTTP 504, client cancellation retains HTTP 499,
 and cleanup does not wait for a stuck upstream cancellation promise. The 32 MiB
 response ceiling and the original body bytes are preserved.
+
+A canonical upstream WebSocket refused-create error can become an HTTP 4xx only
+before the response is committed and after stream correlation checks. Permitted
+quota headers are bounded and rebuilt without upstream framing headers; the JSON
+response is not cacheable. Post-commit and 5xx errors keep the no-resend path.
