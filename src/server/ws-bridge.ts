@@ -84,6 +84,40 @@ export class WsSendDroppedError extends Error {
   }
 }
 
+/** Private parent/sidecar payload field; never forwarded to a provider request body. */
+export const GO_WS_BRIDGE_FORWARD_HEADERS_FIELD = "__ocx_go_sidecar_forward_headers";
+
+/**
+ * A Go bridge turn starts from a socket frame, while the upstream request's
+ * caller headers live only on the Bun socket. Carry the already-filtered set
+ * through the token-gated bridge so its parent dispatch matches the native
+ * WebSocket path. The private key is written last to prevent client frames
+ * from supplying or replacing it.
+ */
+export function withGoWsBridgeForwardHeaders(
+  frame: Record<string, unknown>,
+  headers: Headers | undefined,
+): Record<string, unknown> {
+  const forwarded: Record<string, string> = {};
+  for (const name of FORWARD_HEADERS) {
+    const value = headers?.get(name);
+    if (value) forwarded[name] = value;
+  }
+  return { ...frame, [GO_WS_BRIDGE_FORWARD_HEADERS_FIELD]: forwarded };
+}
+
+/** Restore only the same explicit caller-header allowlist at the parent endpoint. */
+export function forwardHeadersFromGoWsBridgeFrame(frame: Record<string, unknown>): Headers {
+  const headers = new Headers({ "content-type": "application/json" });
+  const raw = frame[GO_WS_BRIDGE_FORWARD_HEADERS_FIELD];
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return headers;
+  for (const name of FORWARD_HEADERS) {
+    const value = (raw as Record<string, unknown>)[name];
+    if (typeof value === "string" && value) headers.set(name, value);
+  }
+  return headers;
+}
+
 export function selectForwardHeaders(
   headers: Headers,
   codexOverride?: { accessToken: string; chatgptAccountId: string },

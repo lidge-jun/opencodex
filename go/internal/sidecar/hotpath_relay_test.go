@@ -391,6 +391,7 @@ func TestRequestQualifiesForRelayRefusals(t *testing.T) {
 		{"non-responses adapter refuses", map[string]any{"adapter": "anthropic"}, `{"model":"test-model","input":"ping"}`, nil, "not openai-responses"},
 		{"keychain apiKey refuses", map[string]any{"apiKey": "keychain:prod"}, `{"model":"test-model","input":"ping"}`, nil, "keychain"},
 		{"custom responsesPath refuses", map[string]any{"responsesPath": "/chat"}, `{"model":"test-model","input":"ping"}`, nil, "responsesPath"},
+		{"custom provider headers refuse", map[string]any{"headers": map[string]any{"X-Provider-Key": "secret"}}, `{"model":"test-model","input":"ping"}`, nil, "custom headers"},
 		{"default provider absent refuses", map[string]any{"defaultProvider": "gone"}, `{"model":"other-model","input":"ping"}`, nil, "no provider owns model"},
 	}
 	for _, c := range cases {

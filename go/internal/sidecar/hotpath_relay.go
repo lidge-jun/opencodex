@@ -516,6 +516,12 @@ func relayPlanForProvider(name string, provider *jsonwire.Value) (*relayPlan, *r
 	if provider.Find("responsesPath") != nil {
 		return nil, refuseRelay("provider %q configures a custom responsesPath", name)
 	}
+	if headers := provider.Find("headers"); headers != nil && headers.Kind() == jsonwire.Object && len(headers.Members()) > 0 {
+		// The direct relay owns only the canonical generated headers. Provider
+		// headers may override or extend adapter output, so keep these rows on
+		// the bridge until their exact adapter precedence is ported.
+		return nil, refuseRelay("provider %q configures custom headers", name)
+	}
 	apiKey := ""
 	if raw, ok := stringMember(provider, "apiKey"); ok {
 		var keyOK bool

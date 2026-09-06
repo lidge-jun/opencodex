@@ -26,4 +26,47 @@ describe.skipIf(!go || !binary)("Go WebSocket bridge differential (ticket #28)",
     const sidecar = startServer(0); const actual = await frames(sidecar); await sidecar.stop(true); upstream.stop(true);
     expect(actual).toEqual(expected);
   });
+
+  test("Go bridge forwards the first upstream event before its terminal arrives", async () => {
+    let releaseTerminal!: () => void;
+    const terminalReleased = new Promise<void>(resolve => { releaseTerminal = resolve; });
+    const encoder = new TextEncoder();
+    const upstream = Bun.serve({
+      port: 0,
+      fetch: () => new Response(new ReadableStream({
+        async start(controller) {
+          controller.enqueue(encoder.encode("data: {\"type\":\"response.created\"}\n\n"));
+          await terminalReleased;
+          controller.enqueue(encoder.encode("data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"));
+          controller.close();
+        },
+      }), { headers: { "content-type": "text/event-stream" } }),
+    });
+    const home = mkdtempSync(join(tmpdir(), "ocx-ws-live-"));
+    process.env.OPENCODEX_HOME = home;
+    process.env.OPENCODEX_API_AUTH_TOKEN = "secret";
+    process.env[GO_SIDECAR_BIN_ENV] = binary!;
+    process.env[GO_WS_BRIDGE_ENV] = "1";
+    saveConfig({ port: 0, hostname: "127.0.0.1", websockets: true, defaultProvider: "fixture", providers: { fixture: { adapter: "openai-responses", baseUrl: "http://127.0.0.1:" + upstream.port + "/v1", allowPrivateNetwork: true, apiKey: "x", models: ["fixture"] } } } as never);
+    const server = startServer(0);
+    const url = new URL("/v1/responses", server.url);
+    url.protocol = "ws:";
+    const first = await new Promise<string>((resolve, reject) => {
+      const ws = new WebSocket(url, { headers: { "x-opencodex-api-key": "secret" } } as unknown as string[]);
+      const timer = setTimeout(() => reject(new Error("first Go bridge frame was withheld until terminal")), 3_000);
+      ws.addEventListener("open", () => ws.send(JSON.stringify({ type: "response.create", model: "fixture", input: "hello" })), { once: true });
+      ws.addEventListener("message", event => {
+        const text = String(event.data);
+        if (!text.includes("response.created")) return;
+        clearTimeout(timer);
+        ws.close();
+        resolve(text);
+      });
+      ws.addEventListener("error", () => reject(new Error("live Go bridge socket error")), { once: true });
+    });
+    expect(first).toContain("response.created");
+    releaseTerminal();
+    await server.stop(true);
+    upstream.stop(true);
+  });
 });

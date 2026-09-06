@@ -9,8 +9,10 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/lidge-jun/opencodex/go/internal/managementauth"
@@ -20,6 +22,7 @@ const (
 	ResponsesWSBridgePath       = "/v1/responses/ws-bridge"
 	ResponsesWSParentBridgePath = "/__ocx_go_sidecar/responses-ws"
 	maxWSFrameBytes             = 50 * 1024 * 1024
+	maxSynthesizedOutputItems   = 10000
 )
 
 type wsBridgeRequest struct {
@@ -204,56 +207,112 @@ func bridgeWSFrames(w *bufio.Writer, cfg Config, input wsBridgeRequest) {
 		sendJSONEvents(w, v)
 		return
 	}
-	data, e := io.ReadAll(io.LimitReader(resp.Body, maxWSFrameBytes+1))
-	if e != nil || len(data) > maxWSFrameBytes {
-		protocolWSError(w, "Upstream stream exceeds WebSocket frame limit")
-		return
-	}
-	if !strings.Contains(ct, "text/event-stream") && !looksSSE(data) {
-		protocolWSError(w, "Unexpected successful non-SSE upstream response ("+ct+")")
-		return
-	}
-	terminal := false
-	for _, block := range splitSSE(data) {
-		p := sseData(block)
-		if p == "" || p == "[DONE]" {
+	stream := newWSSSEBlockReader(bufio.NewReader(resp.Body), maxWSFrameBytes)
+	first := true
+	for {
+		block, e := stream.Next()
+		if e == io.EOF {
+			break
+		}
+		if e != nil {
+			if e == errWSSSEBlockTooLarge {
+				protocolWSError(w, "Upstream SSE frame exceeds WebSocket frame limit")
+			} else {
+				protocolWSError(w, "Unable to read upstream SSE stream")
+			}
+			return
+		}
+		if first {
+			first = false
+			if !strings.Contains(ct, "text/event-stream") && !looksSSE(block) {
+				protocolWSError(w, "Unexpected successful non-SSE upstream response ("+ct+")")
+				return
+			}
+		}
+		payload, hasData := sseDataPayloadBytes(block)
+		if !hasData || len(payload) == 0 || bytes.Equal(payload, []byte("[DONE]")) {
 			continue
 		}
 		var v map[string]any
-		if json.Unmarshal([]byte(p), &v) != nil {
+		if json.Unmarshal(payload, &v) != nil {
 			protocolWSError(w, "Invalid JSON payload in upstream SSE frame")
 			return
 		}
-		if terminal {
-			continue
+		if err := writeWSText(w, payload); err != nil {
+			return
 		}
-		_ = writeWSText(w, []byte(p))
+		// A WebSocket client must see every complete Responses event promptly,
+		// even while the upstream HTTP response remains open.
+		if err := w.Flush(); err != nil {
+			return
+		}
 		typ, _ := v["type"].(string)
 		if typ == "response.completed" || typ == "response.failed" || typ == "response.incomplete" {
-			terminal = true
+			// Match the parent bridge: a Responses terminal ends this relay even
+			// when an upstream keeps its HTTP connection open afterwards.
+			return
 		}
 	}
-	if !terminal {
-		protocolWSError(w, "Upstream stream ended before response terminal event")
+	if first && !strings.Contains(ct, "text/event-stream") {
+		protocolWSError(w, "Unexpected successful non-SSE upstream response ("+ct+")")
+		return
 	}
+	protocolWSError(w, "Upstream stream ended before response terminal event")
 }
 func looksSSE(b []byte) bool {
 	s := strings.TrimSpace(string(b))
 	return strings.HasPrefix(s, "data:") || strings.HasPrefix(s, "event:")
 }
-func splitSSE(b []byte) []string {
-	return strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n\n")
+
+var errWSSSEBlockTooLarge = errors.New("upstream SSE frame exceeds WebSocket frame limit")
+
+// wsSSEBlockReader incrementally frames one upstream SSE response. Its limit
+// applies to each SSE event, which becomes one WebSocket text frame; it never
+// limits the aggregate response length.
+type wsSSEBlockReader struct {
+	r     *bufio.Reader
+	buf   []byte
+	limit int
 }
-func sseData(block string) string {
-	var a []string
-	for _, l := range strings.Split(block, "\n") {
-		if strings.HasPrefix(l, "data:") {
-			a = append(a, strings.TrimPrefix(strings.TrimPrefix(l, "data:"), " "))
+
+func newWSSSEBlockReader(r *bufio.Reader, limit int) *wsSSEBlockReader {
+	return &wsSSEBlockReader{r: r, limit: limit}
+}
+
+func (s *wsSSEBlockReader) Next() ([]byte, error) {
+	for {
+		at, delimiterLen, _ := sseDelimiter(s.buf)
+		if at >= 0 {
+			block := append([]byte(nil), s.buf[:at]...)
+			s.buf = append(s.buf[:0], s.buf[at+delimiterLen:]...)
+			return block, nil
 		}
+		if len(s.buf) > s.limit {
+			return nil, errWSSSEBlockTooLarge
+		}
+		chunk, err := s.r.ReadSlice('\n')
+		if len(chunk) > 0 {
+			s.buf = append(s.buf, chunk...)
+			if len(s.buf) > s.limit {
+				return nil, errWSSSEBlockTooLarge
+			}
+		}
+		if err == nil || err == bufio.ErrBufferFull {
+			continue
+		}
+		if err == io.EOF && len(s.buf) > 0 {
+			block := append([]byte(nil), s.buf...)
+			s.buf = nil
+			return block, nil
+		}
+		return nil, err
 	}
-	return strings.Join(a, "\n")
 }
 func sendJSONEvents(w *bufio.Writer, r map[string]any) {
+	if out, ok := r["output"].([]any); ok && len(out) > maxSynthesizedOutputItems {
+		protocolWSError(w, "Responses JSON output contains "+strconv.Itoa(len(out))+" items; maximum is "+strconv.Itoa(maxSynthesizedOutputItems))
+		return
+	}
 	status, _ := r["status"].(string)
 	if status != "failed" && status != "incomplete" {
 		status = "completed"

@@ -4,7 +4,9 @@ import { knownModelIdsForProvider } from "../router";
 import {
   buildWarmupCompletionFrames,
   buildWsErrorFrame,
+  forwardHeadersFromGoWsBridgeFrame,
   selectForwardHeaders,
+  withGoWsBridgeForwardHeaders,
   sendJsonFrame,
   buildResponsesWsData,
   sendResponseToWebSocket,
@@ -1149,11 +1151,13 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         try {
           const input = await req.json() as { frame?: Record<string, unknown>; admission?: DataPlaneAdmission };
           if (!input.frame || !input.admission) return new Response(null, { status: 400 });
+          const forwardedHeaders = forwardHeadersFromGoWsBridgeFrame(input.frame);
           const payload = { ...input.frame };
           delete payload.type;
+          delete payload.__ocx_go_sidecar_forward_headers;
           const internalReq = new Request("http://localhost/v1/responses", {
             method: "POST",
-            headers: { "content-type": "application/json" },
+            headers: forwardedHeaders,
             body: JSON.stringify({ ...payload, stream: true }),
             signal: req.signal,
           });
@@ -2343,13 +2347,16 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         if (goWsBridgeEnabled() && isDataPlaneSeamAttached()) {
           void (async () => {
             try {
-              const frames = await forwardGoResponsesWebSocket(frame, ws.data.admission);
+              const relayed = await forwardGoResponsesWebSocket(
+                withGoWsBridgeForwardHeaders(frame, ws.data.headers),
+                ws.data.admission,
+                text => { if (isCurrent()) sendTextFrame(ws, text); },
+              );
               if (!isCurrent()) return;
-              if (!frames) {
+              if (!relayed) {
                 sendJsonFrame(ws, buildWsErrorFrame(502, { type: "proxy_error", message: "Go WebSocket bridge unavailable" }));
                 return;
               }
-              for (const text of frames) { if (isCurrent()) sendTextFrame(ws, text); }
             } catch { /* socket gone */
             } finally {
               turnAdmissionLease.release();

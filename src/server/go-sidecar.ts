@@ -113,10 +113,25 @@ export function isDataPlaneSeamAttached(): boolean {
   return !stopped && dataPlaneSeam !== null && readyBaseUrl !== "";
 }
 
-export async function forwardGoResponsesWebSocket(frame: Record<string, unknown>, admission: unknown): Promise<string[] | null> {
+export async function forwardGoResponsesWebSocket(
+  frame: Record<string, unknown>,
+  admission: unknown,
+  onFrame: (text: string) => void,
+): Promise<boolean> {
   const seam = dataPlaneSeam;
-  if (!seam || stopped) return null;
-  try { return await forwardGoWebSocketFrames(seam.baseUrl, seam.requestToken, frame, admission); } catch { return null; }
+  if (!seam || stopped) return false;
+  let sent = false;
+  try {
+    await forwardGoWebSocketFrames(seam.baseUrl, seam.requestToken, frame, admission, text => {
+      sent = true;
+      onFrame(text);
+    });
+    return true;
+  } catch {
+    // Once the child has started a turn its frames are observable. Do not
+    // synthesize a second error turn after a partial relay.
+    return sent;
+  }
 }
 
 /**
