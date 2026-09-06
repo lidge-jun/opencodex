@@ -72,6 +72,9 @@
     "@types/bun": "1.4.0",
     "typescript": "7.0.2"
   },
+  "optionalDependencies": {
+    "wreq-js": "2.3.1"
+  },
   "overrides": {
     "@hono/node-server": "2.1.0",
     "fast-uri": "^3.1.7",

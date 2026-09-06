@@ -62,6 +62,7 @@ import { recordOwnedConfigPath } from "./lib/config-ownership";
 import { assertNotRealHomeUnderTest } from "./lib/test-home-guard";
 import { providerDestinationConfigError } from "./lib/destination-policy";
 import { redactSecretString } from "./lib/redact";
+import { providerTlsProfileConfigError } from "./lib/provider-tls-profile";
 import { openRouterRoutingConfigError } from "./providers/openrouter-routing";
 import { MODEL_ALIAS_PATTERN } from "./providers/default-aliases";
 import { MODEL_DISCOVERY_MAX_MODELS } from "./providers/model-discovery-limits";
@@ -521,6 +522,7 @@ const modelDisplayNamesSchema = z.unknown().superRefine((value, ctx) => {
 const providerConfigSchema = z.object({
   adapter: z.string().min(1),
   baseUrl: z.string().min(1),
+  tlsProfile: z.literal("antigravity-browser").optional(),
   alias: z.string().optional(),
   modelAliases: z.record(z.string(), z.string()).optional(),
   modelDisplayNames: modelDisplayNamesSchema.optional(),
@@ -1338,6 +1340,14 @@ const configSchema = z.object({
         code: "custom",
         path: ["providers", redactSecretString(name), "responsesPath"],
         message: responsesPathError,
+      });
+    }
+    const tlsProfileError = providerTlsProfileConfigError(name, provider);
+    if (tlsProfileError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "tlsProfile"],
+        message: tlsProfileError,
       });
     }
     const headersError = providerHeadersConfigError((provider as { headers?: unknown }).headers);

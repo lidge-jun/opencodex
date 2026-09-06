@@ -9,6 +9,7 @@ import type { OcxProviderConfig } from "../../types";
 import type { WsData } from "../ws-bridge";
 import { waitForProviderRequestSlot } from "../../providers/request-pacing";
 import { withUpstreamHttpVersion } from "../../lib/upstream-http-version";
+import { providerTlsFetch } from "../../lib/provider-tls-profile";
 import type { CodexWsQuotaObserver } from "./codex-ws-metadata";
 
 export { withUpstreamHttpVersion };
@@ -69,13 +70,14 @@ export function providerFetch(
   options: ProviderFetchOptions = {},
 ): ProviderFetch {
   const base = (provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? globalThis.fetch;
+  const transport = options.providerName ? providerTlsFetch(options.providerName, provider, base) : base;
   const preconnect = (...args: Parameters<typeof globalThis.fetch.preconnect>): void => {
     base.preconnect?.(...args);
   };
   const httpFetch = Object.assign(
     async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
       options.beforeDispatch?.(new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)));
-      return base(input, { ...withUpstreamHttpVersion(input, init, provider), timeout: 0 });
+      return transport(input, { ...withUpstreamHttpVersion(input, init, provider), timeout: 0 });
     },
     { preconnect },
   ) as typeof globalThis.fetch;
