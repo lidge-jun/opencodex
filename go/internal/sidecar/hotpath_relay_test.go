@@ -376,7 +376,7 @@ func TestRequestQualifiesForRelayRefusals(t *testing.T) {
 	}{
 		{"happy path qualifies", nil, `{"model":"test-model","input":"ping"}`, nil, ""},
 		{"unknown model routes to default provider", nil, `{"model":"other-model","input":"ping"}`, nil, ""},
-		{"streaming refuses", nil, `{"model":"test-model","input":"ping","stream":true}`, nil, "streaming"},
+		{"narrow streaming request qualifies", nil, `{"model":"test-model","input":"ping","stream":true}`, nil, ""},
 		{"namespaced model refuses", nil, `{"model":"test/test-model","input":"ping"}`, nil, "namespaced"},
 		{"empty model refuses", nil, `{"model":"","input":"ping"}`, nil, "model id is empty"},
 		{"previous_response_id refuses", nil, `{"model":"test-model","input":"ping","previous_response_id":"x"}`, nil, "previous_response_id"},
@@ -441,6 +441,9 @@ func TestRequestQualifiesForRelayRefusals(t *testing.T) {
 			if c.wantRefuse == "" {
 				if plan == nil {
 					t.Fatalf("expected a plan, got refusal %q", refusal.reason)
+				}
+				if strings.Contains(c.name, "streaming") && !plan.streaming {
+					t.Fatalf("plan = %#v, want streaming relay plan", plan)
 				}
 				return
 			}
