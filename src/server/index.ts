@@ -1142,7 +1142,9 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         return bridge ? bridge.handle(req, url) : new Response(null, { status: 404 });
       }
       // Ticket #28's private frame source. The public Bun socket stays here;
-      // Go holds only a child capability and never receives client headers.
+      // Go holds only its child capability plus a frame-scoped, allowlisted
+      // header snapshot. The parent restores that snapshot for dispatch, and
+      // the Go bridge neither logs nor forwards it to an upstream itself.
       if (url.pathname === "/__ocx_go_sidecar/responses-ws") {
         if (req.method !== "POST" || !goSidecarLiveStateBridgeToken
           || req.headers.get("x-ocx-go-sidecar-bridge") !== goSidecarLiveStateBridgeToken) {

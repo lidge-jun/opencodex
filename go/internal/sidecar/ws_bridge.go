@@ -26,6 +26,10 @@ const (
 )
 
 type wsBridgeRequest struct {
+	// Frame can contain the parent-owned, allowlisted header snapshot required
+	// to recreate a native WebSocket turn. The sidecar treats it as opaque and
+	// forwards it only to the token-gated parent bridge; it never logs it or
+	// sends it to an upstream provider.
 	Frame     json.RawMessage `json:"frame"`
 	Admission json.RawMessage `json:"admission"`
 }

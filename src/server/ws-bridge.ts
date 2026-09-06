@@ -84,7 +84,11 @@ export class WsSendDroppedError extends Error {
   }
 }
 
-/** Private parent/sidecar payload field; never forwarded to a provider request body. */
+/**
+ * Private, frame-scoped parent/sidecar payload field. It carries only the
+ * existing upstream-header allowlist across the token-gated loopback bridge;
+ * the parent removes it before constructing the provider request body.
+ */
 export const GO_WS_BRIDGE_FORWARD_HEADERS_FIELD = "__ocx_go_sidecar_forward_headers";
 
 /**
