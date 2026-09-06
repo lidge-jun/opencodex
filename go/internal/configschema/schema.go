@@ -10,9 +10,13 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -55,6 +59,7 @@ func ValidateCandidateJSON(raw []byte) (*Normalized, error) {
 	if err := validateTop(v); err != nil {
 		return nil, err
 	}
+	normalizeStrictWriteOutput(v)
 	return &Normalized{root: normalizeLoad(v)}, nil
 }
 
@@ -85,7 +90,518 @@ func validateStrictWriteFields(v *value) error {
 			return errors.New("schema_invalid: visionSidecar.reasoning: must be one of none, minimal, low, medium, high, xhigh, max, ultra")
 		}
 	}
+	if err := validateAgentTaskRecovery(v); err != nil {
+		return err
+	}
+	if err := validateCodexAccountMaps(v); err != nil {
+		return err
+	}
+	if err := validateRuntimeAndRemote(v); err != nil {
+		return err
+	}
+	if err := validateLoopbackAndIngress(v); err != nil {
+		return err
+	}
 	return nil
+}
+
+func validateAgentTaskRecovery(root *value) error {
+	x := root.find("agentTaskRecovery")
+	if x == nil {
+		return nil
+	}
+	if x.kind != objectKind {
+		return errors.New("schema_invalid: agentTaskRecovery: Invalid input: expected object, received " + zodType(x))
+	}
+	for _, m := range x.object {
+		if m.key != "enabled" && m.key != "model" && m.key != "timeoutMs" && m.key != "cacheEntries" {
+			return fmt.Errorf("schema_invalid: agentTaskRecovery: Unrecognized key: %q", m.key)
+		}
+	}
+	if y := x.find("enabled"); y != nil && y.kind != boolKind {
+		return errors.New("schema_invalid: agentTaskRecovery.enabled: Invalid input: expected boolean, received " + zodType(y))
+	}
+	if y := x.find("model"); y != nil {
+		if y.kind != stringKind {
+			return errors.New("schema_invalid: agentTaskRecovery.model: Invalid input: expected string, received " + zodType(y))
+		}
+		if strings.TrimSpace(y.text) == "" {
+			return errors.New("schema_invalid: agentTaskRecovery.model: Too small: expected string to have >=1 characters")
+		}
+	}
+	if y := x.find("timeoutMs"); y != nil {
+		if y.kind != numberKind {
+			return errors.New("schema_invalid: agentTaskRecovery.timeoutMs: Invalid input: expected number, received " + zodType(y))
+		}
+		if !validInteger(y) {
+			return errors.New("schema_invalid: agentTaskRecovery.timeoutMs: Invalid input: expected int, received number")
+		}
+		if !validIntRange(y, 1000, 120000) {
+			if integerBelow(y, 1000) {
+				return errors.New("schema_invalid: agentTaskRecovery.timeoutMs: Too small: expected number to be >=1000")
+			}
+			return errors.New("schema_invalid: agentTaskRecovery.timeoutMs: Too big: expected number to be <=120000")
+		}
+	}
+	if y := x.find("cacheEntries"); y != nil {
+		if y.kind != numberKind {
+			return errors.New("schema_invalid: agentTaskRecovery.cacheEntries: Invalid input: expected number, received " + zodType(y))
+		}
+		if !validInteger(y) {
+			return errors.New("schema_invalid: agentTaskRecovery.cacheEntries: Invalid input: expected int, received number")
+		}
+		if !validIntRange(y, 1, 512) {
+			if integerBelow(y, 1) {
+				return errors.New("schema_invalid: agentTaskRecovery.cacheEntries: Too small: expected number to be >=1")
+			}
+			return errors.New("schema_invalid: agentTaskRecovery.cacheEntries: Too big: expected number to be <=512")
+		}
+	}
+	return nil
+}
+
+func validateCodexAccountMaps(root *value) error {
+	if x := root.find("codexAccountPriorities"); x != nil {
+		if x.kind != objectKind {
+			return errors.New("schema_invalid: codexAccountPriorities.config: codexAccountPriorities must be a plain object mapping Codex account ids to selection-order integers")
+		}
+		for _, m := range x.object {
+			if !validPriorityKey(m.key) {
+				return fmt.Errorf("schema_invalid: codexAccountPriorities.%s: selection-order keys must be a Codex pool-account id or the main Codex account and cannot be reserved JavaScript object keys", m.key)
+			}
+			if !validIntRange(m.value, -100, 100) {
+				return fmt.Errorf("schema_invalid: codexAccountPriorities.%s: selection order must be an integer between -100 and 100", m.key)
+			}
+		}
+	}
+	if x := root.find("activeCodexAccountPinned"); x != nil && (x.kind != stringKind || !regexp.MustCompile(`^[a-zA-Z0-9._-]{1,64}$`).MatchString(x.text)) {
+		return errors.New("schema_invalid: activeCodexAccountPinned: must be an account id")
+	}
+	if x := root.find("codexAccountNamespaces"); x != nil {
+		if x.kind != objectKind {
+			return errors.New("schema_invalid: codexAccountNamespaces: codexAccountNamespaces must be a plain object mapping account selectors to Codex account ids")
+		}
+		providers := root.find("providers")
+		configuredAccountIDs := configuredPoolAccountIDs(root.find("codexAccounts"))
+		for _, m := range x.object {
+			if !validProviderName(m.key) {
+				return fmt.Errorf("schema_invalid: codexAccountNamespaces.%s: account selectors must use 1-64 letters, numbers, dots, underscores, or hyphens and cannot be reserved JavaScript object keys", m.key)
+			}
+			if m.value.kind != stringKind || (m.value.text != "@main" && !validAccountID(m.value.text)) {
+				return fmt.Errorf("schema_invalid: codexAccountNamespaces.%s: account selector targets must be @main or valid Codex pool-account ids", m.key)
+			}
+			if strings.EqualFold(m.key, "combo") || strings.EqualFold(m.key, "openai") || strings.EqualFold(m.key, "policy") || (providers != nil && providers.kind == objectKind && hasFold(providers, m.key)) {
+				return fmt.Errorf("schema_invalid: codexAccountNamespaces.%s: account selectors must not collide with configured provider, combo, or routing policy namespaces", m.key)
+			}
+			if m.value.text != "@main" && (configuredAccountIDs[m.key] || hasKey(x, m.value.text)) {
+				return fmt.Errorf("schema_invalid: codexAccountNamespaces.%s: account selectors must not collide with configured Codex pool-account ids or account selector targets", m.key)
+			}
+		}
+	}
+	return nil
+}
+
+func validateRuntimeAndRemote(root *value) error {
+	role := root.find("runtimeRole")
+	if role != nil && (role.kind != stringKind || (role.text != "standalone" && role.text != "hub" && role.text != "client")) {
+		return errors.New("schema_invalid: runtimeRole: must be one of \"standalone\", \"hub\", or \"client\"")
+	}
+	if err := validateHub(root.find("hub")); err != nil {
+		return err
+	}
+	if err := validateRemoteGUI(root.find("remoteGui")); err != nil {
+		return err
+	}
+	if err := validateClient(root.find("client")); err != nil {
+		return err
+	}
+	hasClient := root.find("client") != nil
+	if role != nil && role.kind == stringKind && role.text == "client" && !hasClient {
+		return errors.New("schema_invalid: runtimeRole client requires a complete client connection")
+	}
+	if hasClient && (role == nil || role.kind != stringKind || role.text != "client") {
+		return errors.New("schema_invalid: client connection requires runtimeRole client")
+	}
+	return nil
+}
+
+func validateHub(x *value) error {
+	if x == nil {
+		return nil
+	}
+	if x.kind != objectKind {
+		return errors.New("schema_invalid: hub: Invalid input: expected object, received " + zodType(x))
+	}
+	for _, m := range x.object {
+		if m.key != "managementPublicOrigin" && m.key != "managementIngress" {
+			return fmt.Errorf("schema_invalid: hub: Unrecognized key: %q", m.key)
+		}
+	}
+	if y := x.find("managementPublicOrigin"); y != nil && (y.kind != stringKind || !canonicalHTTPOrigin(y.text)) {
+		return errors.New("schema_invalid: hub.managementPublicOrigin: must be a canonical http(s) origin without credentials, path, query, or fragment")
+	}
+	return nil
+}
+
+func validateRemoteGUI(x *value) error {
+	if x == nil {
+		return nil
+	}
+	if x.kind != objectKind {
+		return errors.New("schema_invalid: remoteGui: Invalid input: expected object, received " + zodType(x))
+	}
+	for _, m := range x.object {
+		if m.key != "allowedTailscaleUsers" && m.key != "allowInsecureHttp" {
+			return fmt.Errorf("schema_invalid: remoteGui: Unrecognized key: %q", m.key)
+		}
+	}
+	if y := x.find("allowInsecureHttp"); y != nil && y.kind != boolKind {
+		return errors.New("schema_invalid: remoteGui.allowInsecureHttp: Invalid input: expected boolean, received " + zodType(y))
+	}
+	users := x.find("allowedTailscaleUsers")
+	if users == nil {
+		return nil
+	}
+	if users.kind != arrayKind {
+		return errors.New("schema_invalid: remoteGui.allowedTailscaleUsers: Invalid input: expected array, received " + zodType(users))
+	}
+	if len(users.array) > 64 {
+		return errors.New("schema_invalid: remoteGui.allowedTailscaleUsers: Too big: expected array to have <=64 items")
+	}
+	seen := map[string]bool{}
+	for i, user := range users.array {
+		if user.kind != stringKind {
+			return fmt.Errorf("schema_invalid: remoteGui.allowedTailscaleUsers.%d: Invalid input: expected string, received %s", i, zodType(user))
+		}
+		trimmed := strings.TrimSpace(user.text)
+		if trimmed == "" {
+			return fmt.Errorf("schema_invalid: remoteGui.allowedTailscaleUsers.%d: Too small: expected string to have >=1 characters", i)
+		}
+		if len([]byte(trimmed)) > 320 {
+			return fmt.Errorf("schema_invalid: remoteGui.allowedTailscaleUsers.%d: must be at most 320 UTF-8 bytes", i)
+		}
+		if strings.IndexFunc(trimmed, func(r rune) bool { return r < 32 || r == 127 }) >= 0 {
+			return fmt.Errorf("schema_invalid: remoteGui.allowedTailscaleUsers.%d: must not contain ASCII control characters", i)
+		}
+		if seen[trimmed] {
+			return fmt.Errorf("schema_invalid: remoteGui.allowedTailscaleUsers.%d: must contain unique users after trimming", i)
+		}
+		seen[trimmed] = true
+	}
+	return nil
+}
+
+func validateClient(x *value) error {
+	if x == nil {
+		return nil
+	}
+	if x.kind != objectKind {
+		return errors.New("schema_invalid: client: Invalid input: expected object, received " + zodType(x))
+	}
+	allowed := map[string]bool{"serverUrl": true, "managementUrl": true, "managementTransport": true, "selectedClients": true, "tokenEnv": true, "apiKeyId": true, "tokenFingerprint": true, "protocolVersion": true, "connectedAt": true, "catalogFingerprint": true, "priorCatalog": true, "catalogSyncedAt": true, "pendingOperation": true}
+	for _, m := range x.object {
+		if !allowed[m.key] {
+			return fmt.Errorf("schema_invalid: client: Unrecognized key: %q", m.key)
+		}
+	}
+	for _, field := range []string{"serverUrl", "managementUrl", "managementTransport", "selectedClients", "tokenEnv", "apiKeyId", "tokenFingerprint", "protocolVersion", "connectedAt"} {
+		if x.find(field) == nil {
+			return fmt.Errorf("schema_invalid: client.%s: Invalid input: expected %s, received undefined", field, clientExpectedType(field))
+		}
+	}
+	for _, field := range []string{"serverUrl", "managementUrl"} {
+		y := x.find(field)
+		if y.kind != stringKind || !canonicalHTTPOrigin(y.text) {
+			return fmt.Errorf("schema_invalid: client.%s: must be a canonical http(s) origin without credentials, path, query, or fragment", field)
+		}
+	}
+	if y := x.find("managementTransport"); y.kind != stringKind || (y.text != "direct" && y.text != "relay") {
+		return errors.New("schema_invalid: client.managementTransport: Invalid option: expected one of \"direct\"|\"relay\"")
+	}
+	y := x.find("selectedClients")
+	if y.kind != arrayKind || len(y.array) < 1 || len(y.array) > 2 {
+		return errors.New("schema_invalid: client.selectedClients: Invalid input")
+	}
+	selected := map[string]bool{}
+	for _, c := range y.array {
+		if c.kind != stringKind || (c.text != "codex" && c.text != "claude") {
+			return errors.New("schema_invalid: client.selectedClients: Invalid option")
+		}
+		if selected[c.text] {
+			return errors.New("schema_invalid: client.selectedClients: must contain unique client ids")
+		}
+		selected[c.text] = true
+	}
+	if y := x.find("tokenEnv"); y.kind != stringKind || y.text != "OPENCODEX_API_AUTH_TOKEN" {
+		return errors.New("schema_invalid: client.tokenEnv: Invalid input: expected \"OPENCODEX_API_AUTH_TOKEN\"")
+	}
+	if y := x.find("apiKeyId"); y.kind != stringKind || strings.TrimSpace(y.text) == "" || len(y.text) > 256 {
+		return errors.New("schema_invalid: client.apiKeyId: Invalid input")
+	}
+	if y := x.find("tokenFingerprint"); y.kind != stringKind || !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(y.text) {
+		return errors.New("schema_invalid: client.tokenFingerprint: Invalid string: must match pattern /^[a-f0-9]{64}$/")
+	}
+	if y := x.find("protocolVersion"); !validIntRange(y, 1, 1) {
+		return errors.New("schema_invalid: client.protocolVersion: Invalid input: expected 1")
+	}
+	if y := x.find("connectedAt"); y.kind != stringKind || !validTimestamp(y.text) {
+		return errors.New("schema_invalid: client.connectedAt: Invalid ISO datetime")
+	}
+	if y := x.find("catalogFingerprint"); y != nil && (y.kind != stringKind || len(y.text) < 1 || len(y.text) > 512) {
+		return errors.New("schema_invalid: client.catalogFingerprint: Invalid input")
+	}
+	if y := x.find("priorCatalog"); y != nil && (y.kind != stringKind || len(y.text) > 64*1024*1024) {
+		return errors.New("schema_invalid: client.priorCatalog: Invalid input")
+	}
+	if y := x.find("catalogSyncedAt"); y != nil && (y.kind != stringKind || !validTimestamp(y.text)) {
+		return errors.New("schema_invalid: client.catalogSyncedAt: Invalid ISO datetime")
+	}
+	if y := x.find("pendingOperation"); y != nil {
+		if err := validatePendingOperation(y); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validatePendingOperation(x *value) error {
+	if x.kind != objectKind {
+		return errors.New("schema_invalid: client.pendingOperation: Invalid input: expected object, received " + zodType(x))
+	}
+	for _, m := range x.object {
+		if m.key != "kind" && m.key != "rotationId" && m.key != "newKeyIssuedAt" && m.key != "oldKeyBackupPath" {
+			return fmt.Errorf("schema_invalid: client.pendingOperation: Unrecognized key: %q", m.key)
+		}
+	}
+	if y := x.find("kind"); y == nil || y.kind != stringKind || y.text != "rotate" {
+		return errors.New("schema_invalid: client.pendingOperation.kind: Invalid input: expected \"rotate\"")
+	}
+	if y := x.find("rotationId"); y == nil || y.kind != stringKind || strings.TrimSpace(y.text) == "" || len(y.text) > 256 {
+		return errors.New("schema_invalid: client.pendingOperation.rotationId: Invalid input")
+	}
+	if y := x.find("newKeyIssuedAt"); y == nil || y.kind != stringKind || !validTimestamp(y.text) {
+		return errors.New("schema_invalid: client.pendingOperation.newKeyIssuedAt: Invalid ISO datetime")
+	}
+	if y := x.find("oldKeyBackupPath"); y == nil || y.kind != stringKind || y.text == "" {
+		return errors.New("schema_invalid: client.pendingOperation.oldKeyBackupPath: Invalid input")
+	} else if y.text != filepath.Join(configDir(), "service-api-token.prev") {
+		return fmt.Errorf("schema_invalid: client.pendingOperation.oldKeyBackupPath: must equal %s", filepath.Join(configDir(), "service-api-token.prev"))
+	}
+	return nil
+}
+
+func validateLoopbackAndIngress(root *value) error {
+	if x := root.find("unauthenticatedLoopbackListener"); x != nil {
+		if x.kind != objectKind {
+			return errors.New("schema_invalid: unauthenticatedLoopbackListener: must be an object or omitted")
+		}
+		enabled := x.find("enabled")
+		if enabled == nil || enabled.kind != boolKind {
+			return errors.New("schema_invalid: unauthenticatedLoopbackListener.enabled: must be a boolean")
+		}
+		if !enabled.b {
+			for _, m := range x.object {
+				if m.key != "enabled" {
+					return fmt.Errorf("schema_invalid: unauthenticatedLoopbackListener: Unrecognized key: %q", m.key)
+				}
+			}
+		} else {
+			for _, m := range x.object {
+				if m.key != "enabled" && m.key != "port" {
+					return fmt.Errorf("schema_invalid: unauthenticatedLoopbackListener: Unrecognized key: %q", m.key)
+				}
+			}
+			if err := validPortObject(x, "unauthenticatedLoopbackListener"); err != nil {
+				return err
+			}
+			if p := root.find("port"); p != nil && validIntRange(p, 0, 65535) && x.find("port").number.String() == p.number.String() {
+				return errors.New("schema_invalid: unauthenticatedLoopbackListener.port: must differ from the proxy port")
+			}
+		}
+	}
+	hub := root.find("hub")
+	if hub == nil || hub.kind != objectKind {
+		return nil
+	}
+	ingress := hub.find("managementIngress")
+	if ingress == nil {
+		return nil
+	}
+	if ingress.kind != objectKind {
+		return errors.New("schema_invalid: hub.managementIngress: must be an object or omitted")
+	}
+	enabled := ingress.find("enabled")
+	if enabled == nil || enabled.kind != boolKind {
+		return errors.New("schema_invalid: hub.managementIngress.enabled: must be a boolean")
+	}
+	if !enabled.b {
+		if len(ingress.object) != 1 {
+			return errors.New("schema_invalid: hub.managementIngress: disabled ingress accepts only enabled")
+		}
+		return nil
+	}
+	for _, m := range ingress.object {
+		if m.key != "enabled" && m.key != "port" {
+			return errors.New("schema_invalid: hub.managementIngress: contains an unsupported field")
+		}
+	}
+	if err := validPortObject(ingress, "hub.managementIngress"); err != nil {
+		return err
+	}
+	role := root.find("runtimeRole")
+	if role == nil || role.kind != stringKind || role.text != "hub" {
+		return errors.New("schema_invalid: hub.managementIngress: enabled ingress requires runtimeRole hub")
+	}
+	ingressPort := ingress.find("port").number.String()
+	proxy := "10100"
+	if p := root.find("port"); p != nil && p.kind == numberKind {
+		proxy = p.number.String()
+	}
+	if ingressPort == proxy {
+		return errors.New("schema_invalid: hub.managementIngress.port: must differ from the proxy port")
+	}
+	if loop := root.find("unauthenticatedLoopbackListener"); loop != nil && loop.kind == objectKind {
+		if enabled := loop.find("enabled"); enabled != nil && enabled.kind == boolKind && enabled.b {
+			if p := loop.find("port"); p != nil && p.kind == numberKind && p.number.String() == ingressPort {
+				return errors.New("schema_invalid: hub.managementIngress.port: must differ from unauthenticatedLoopbackListener.port")
+			}
+		}
+	}
+	return nil
+}
+
+func validPortObject(x *value, path string) error {
+	p := x.find("port")
+	if !validIntRange(p, 1, 65535) {
+		return fmt.Errorf("schema_invalid: %s.port: must be an integer port when enabled", path)
+	}
+	return nil
+}
+func validInteger(v *value) bool {
+	_, err := strconv.ParseInt(v.number.String(), 10, 64)
+	return v != nil && v.kind == numberKind && err == nil
+}
+func integerBelow(v *value, n int64) bool {
+	x, err := strconv.ParseInt(v.number.String(), 10, 64)
+	return err == nil && x < n
+}
+func validAccountID(s string) bool {
+	return regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`).MatchString(s) && !reservedKey(s) && s != "__main__"
+}
+func validPriorityKey(s string) bool { return s == "__main__" || validAccountID(s) }
+func validProviderName(s string) bool {
+	return regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9])?$`).MatchString(s) && !reservedKey(s) && !strings.EqualFold(s, "policy")
+}
+func reservedKey(s string) bool {
+	return strings.EqualFold(s, "__proto__") || strings.EqualFold(s, "prototype") || strings.EqualFold(s, "constructor")
+}
+func hasFold(v *value, key string) bool {
+	for _, m := range v.object {
+		if strings.EqualFold(m.key, key) {
+			return true
+		}
+	}
+	return false
+}
+func hasKey(v *value, key string) bool { return v.find(key) != nil }
+func configuredPoolAccountIDs(v *value) map[string]bool {
+	ids := map[string]bool{}
+	if v == nil || v.kind != arrayKind {
+		return ids
+	}
+	for _, account := range v.array {
+		if account == nil || account.kind != objectKind {
+			continue
+		}
+		id, isMain := account.find("id"), account.find("isMain")
+		if id != nil && id.kind == stringKind && (isMain == nil || isMain.kind != boolKind || !isMain.b) {
+			ids[id.text] = true
+		}
+	}
+	return ids
+}
+func canonicalHTTPOrigin(s string) bool {
+	return canonicalOrigin(s) != ""
+}
+
+func canonicalOrigin(s string) string {
+	u, err := url.Parse(s)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+		return ""
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "" {
+		return ""
+	}
+	port := u.Port()
+	if (u.Scheme == "http" && port == "80") || (u.Scheme == "https" && port == "443") {
+		port = ""
+	}
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	if port != "" {
+		host += ":" + port
+	}
+	return strings.ToLower(u.Scheme) + "://" + host
+}
+
+func normalizeStrictWriteOutput(root *value) {
+	if recovery := root.find("agentTaskRecovery"); recovery != nil && recovery.kind == objectKind {
+		if model := recovery.find("model"); model != nil && model.kind == stringKind {
+			model.text = strings.TrimSpace(model.text)
+		}
+	}
+	if hub := root.find("hub"); hub != nil && hub.kind == objectKind {
+		if origin := hub.find("managementPublicOrigin"); origin != nil && origin.kind == stringKind {
+			origin.text = canonicalOrigin(origin.text)
+		}
+	}
+	if remote := root.find("remoteGui"); remote != nil && remote.kind == objectKind {
+		if users := remote.find("allowedTailscaleUsers"); users != nil && users.kind == arrayKind {
+			for _, user := range users.array {
+				if user.kind == stringKind {
+					user.text = strings.TrimSpace(user.text)
+				}
+			}
+		}
+	}
+	if client := root.find("client"); client != nil && client.kind == objectKind {
+		for _, field := range []string{"serverUrl", "managementUrl"} {
+			if origin := client.find(field); origin != nil && origin.kind == stringKind {
+				origin.text = canonicalOrigin(origin.text)
+			}
+		}
+		if apiKeyID := client.find("apiKeyId"); apiKeyID != nil && apiKeyID.kind == stringKind {
+			apiKeyID.text = strings.TrimSpace(apiKeyID.text)
+		}
+		if operation := client.find("pendingOperation"); operation != nil && operation.kind == objectKind {
+			if rotationID := operation.find("rotationId"); rotationID != nil && rotationID.kind == stringKind {
+				rotationID.text = strings.TrimSpace(rotationID.text)
+			}
+		}
+	}
+}
+func validTimestamp(s string) bool { _, err := time.Parse(time.RFC3339, s); return err == nil }
+func clientExpectedType(field string) string {
+	if field == "selectedClients" {
+		return "array"
+	}
+	if field == "protocolVersion" {
+		return "number"
+	}
+	return "string"
+}
+
+func configDir() string {
+	if home := strings.TrimSpace(os.Getenv("OPENCODEX_HOME")); home != "" {
+		return home
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ".opencodex"
+	}
+	return filepath.Join(home, ".opencodex")
 }
 
 func (n *Normalized) CompactJSON() ([]byte, error) {
