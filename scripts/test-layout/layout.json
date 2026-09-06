@@ -88,7 +88,6 @@
         "^(?:chatgpt|generic|state)-"
       ]
     },
-    "claude-compatibility.test.ts": "claude-integration",
     "claude-integration": {
       "match": []
     },
@@ -291,6 +290,7 @@
     "claude-authmode-migration.test.ts": "claude-integration",
     "claude-cli.test.ts": "claude-integration",
     "claude-code-thought-signature-scope.test.ts": "claude-integration",
+    "claude-compatibility.test.ts": "claude-integration",
     "claude-context-windows.test.ts": "claude-integration",
     "claude-desktop-1m.test.ts": "claude-integration",
     "claude-desktop-cli.test.ts": "claude-integration",
