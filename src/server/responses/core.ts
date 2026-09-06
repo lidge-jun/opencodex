@@ -200,6 +200,7 @@ import {
   fetchWithResetRetry,
   fetchWithTransientRetry,
   prepareSameTarget429Wait,
+  wrapWithZeroOutputRefetch,
 } from "../../lib/upstream-retry";
 import {
   ForwardAdmissionCredentialError,
@@ -5459,15 +5460,45 @@ async function handleResponsesInner(
         route.provider,
         route.modelId,
       );
+      // Mid-stream socket resets (Cloudflare closing idle keep-alive connections
+      // while Bun's pool reuses the half-closed socket) surface as body read()
+      // rejections — outside every pre-stream retry wrapper — and previously
+      // killed the turn with `response.failed / upstream_reset` even when zero
+      // bytes had been relayed. Wrap the raw upstream body so a zero-output
+      // reset transparently refetches once on a fresh connection; the repair
+      // layer below (when configured) then runs over the refetched body too.
+      const rawPassthroughBody = wrapWithZeroOutputRefetch(
+        upstreamResponse.body,
+        recovery => {
+          noteAttemptSend(logCtx.activeAttempt, passthroughEstimate, recovery ?? "connection-reset");
+          return fetchWithHeaderTimeout(request.url, applyUpstreamRecoveryInit({
+            method: request.method,
+            headers: request.headers,
+            body: request.body,
+          }, recovery ?? "connection-reset"), upstream.signal, connectMs, parsed.stream,
+            providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              providerName: route.providerName,
+              modelId: route.modelId,
+            }),
+            route.provider.authMode === "forward")
+            // Every real attempt response — including the refetch — proves the
+            // host was reached (#914 review).
+            .then(res => {
+              settleObservedHostResponse();
+              return res;
+            });
+        },
+        { abortSignal: upstream.signal, label: safeHostLabel(request.url) },
+      );
       const passthroughSseBody = terminalRepairPolicy
         ? relayResponsesSseWithTerminalRepair(
-          upstreamResponse.body,
+          rawPassthroughBody,
           upstream,
           terminalRepairPolicy,
           translatorBudget,
           options.responsesTerminalRepairScheduler,
         )
-        : upstreamResponse.body;
+        : rawPassthroughBody;
       const repairConfig = route.provider.responsesItemIdRepair;
       // Grok Build renders deltas live but reconstructs its durable assistant
       // turn from the completed response snapshot. Native Responses streams
