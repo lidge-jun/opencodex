@@ -450,8 +450,8 @@ jobs:
             GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -o "/tmp/ocx-sidecar-$os-$arch" ./cmd/ocx-sidecar
           done
 
-      - name: Differential oracle
-        run: bun test --timeout 60000 tests/go-sidecar-parity.test.ts
+      - name: Differential oracles
+        run: bun test --timeout 60000 tests/go-sidecar-parity.test.ts tests/go-cli-parity.test.ts
 
   # Everything that is not the suite: type safety, privacy, lint, build, smoke.
   # One runner, once per push. Splitting these across the shards would repeat a

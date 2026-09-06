@@ -70,7 +70,7 @@ func TestHealthRequiresValidAttestationProof(t *testing.T) {
 	if got := Run([]string{"health", "--json"}, depsFor(state, &out, &stderr)); got != ExitOK {
 		t.Fatalf("health exit = %d stderr %s", got, stderr.String())
 	}
-	if !strings.Contains(out.String(), "\"service\":\"opencodex\"") {
+	if !strings.Contains(out.String(), "\"ok\":true") {
 		t.Fatalf("health output %q", out.String())
 	}
 	server.Close()
@@ -92,7 +92,7 @@ func TestReadyAndUsageExitCodes(t *testing.T) {
 	}
 	out.Reset()
 	stderr.Reset()
-	if got := Run([]string{"ready", "--wait"}, depsFor(state, &out, &stderr)); got != ExitUsage {
+	if got := Run([]string{"ready", "--timeout", "5"}, depsFor(state, &out, &stderr)); got != ExitUsage {
 		t.Fatalf("invalid ready = %d", got)
 	}
 }
