@@ -30,6 +30,15 @@ function rawCustomWindowRank(rawLabel: string): number {
   return 5;
 }
 
+const SUBSCRIPTION_CREDITS_LABEL = "Total subscription credits";
+
+function canonicalCustomWindowLabel(rawLabel: string): string {
+  const trimmed = rawLabel.trim();
+  return trimmed.toLowerCase() === SUBSCRIPTION_CREDITS_LABEL.toLowerCase()
+    ? SUBSCRIPTION_CREDITS_LABEL
+    : trimmed;
+}
+
 function localizeCustomQuotaLabel(rawLabel: string, t: TFn): string {
   switch (rawLabel) {
     case "First-party models":
@@ -85,11 +94,12 @@ export function buildQuotaRows(quota: AccountQuota | null, plan: string | null |
     });
   }
   for (const w of displayQuota.customWindows ?? []) {
-    const localized = localizeCustomQuotaLabel(w.label, t);
+    const customLabel = canonicalCustomWindowLabel(w.label);
+    const localized = localizeCustomQuotaLabel(customLabel, t);
     ranked.push({
-      rank: rawCustomWindowRank(w.label),
+      rank: rawCustomWindowRank(customLabel),
       row: {
-        customLabel: w.label,
+        customLabel,
         label: localized,
         limitLabel: localized,
         percent: w.percent,
@@ -99,14 +109,14 @@ export function buildQuotaRows(quota: AccountQuota | null, plan: string | null |
   }
   if (displayQuota.creditsUsd && typeof displayQuota.creditsUsd.percent === "number") {
     const hasSubscriptionCreditsCustom = displayQuota.customWindows?.some(
-      w => w.label.trim().toLowerCase() === "total subscription credits",
+      w => canonicalCustomWindowLabel(w.label) === SUBSCRIPTION_CREDITS_LABEL,
     );
     if (!hasSubscriptionCreditsCustom) {
-      const localized = localizeCustomQuotaLabel("Total subscription credits", t);
+      const localized = localizeCustomQuotaLabel(SUBSCRIPTION_CREDITS_LABEL, t);
       ranked.push({
-        rank: rawCustomWindowRank("Total subscription credits"),
+        rank: rawCustomWindowRank(SUBSCRIPTION_CREDITS_LABEL),
         row: {
-          customLabel: "Total subscription credits",
+          customLabel: SUBSCRIPTION_CREDITS_LABEL,
           label: localized,
           limitLabel: localized,
           percent: displayQuota.creditsUsd.percent,
@@ -126,7 +136,10 @@ export function maxQuotaUtilisation(quota: AccountQuota | null): number {
   for (const w of quota.customWindows ?? []) {
     if (typeof w.percent === "number") vals.push(w.percent);
   }
-  if (typeof quota.creditsUsd?.percent === "number") {
+  const hasSubscriptionCreditsCustom = quota.customWindows?.some(
+    w => canonicalCustomWindowLabel(w.label) === SUBSCRIPTION_CREDITS_LABEL,
+  );
+  if (!hasSubscriptionCreditsCustom && typeof quota.creditsUsd?.percent === "number") {
     vals.push(quota.creditsUsd.percent);
   }
   return vals.length ? Math.max(...vals) : -1;

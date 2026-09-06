@@ -86,10 +86,11 @@ describe("buildQuotaRows (WP070)", () => {
 
   test("direct creditsUsd does not duplicate an existing credits custom window", () => {
     const rows = buildQuotaRows(quota({
-      customWindows: [{ label: "Total subscription credits", percent: 50 }],
+      customWindows: [{ label: "  TOTAL SUBSCRIPTION CREDITS  ", percent: 50 }],
       creditsUsd: { used: 50, limit: 100, remaining: 50, percent: 50 },
     }), null, t);
     expect(rows.map(r => r.label)).toEqual(["quota.totalSubscriptionCredits"]);
+    expect(rows[0]?.customLabel).toBe("Total subscription credits");
   });
 
   test("unrelated credit windows do not suppress direct subscription credits", () => {
@@ -129,6 +130,13 @@ describe("maxQuotaUtilisation", () => {
       weeklyPercent: 0,
       creditsUsd: { used: 90, limit: 90, remaining: 0, percent: 100 },
     }))).toBe(100);
+  });
+
+  test("subscription-credit urgency follows the visible canonical custom window", () => {
+    expect(maxQuotaUtilisation(quota({
+      customWindows: [{ label: " total subscription credits ", percent: 25 }],
+      creditsUsd: { used: 99, limit: 100, remaining: 1, percent: 99 },
+    }))).toBe(25);
   });
 });
 
