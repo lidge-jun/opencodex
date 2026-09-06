@@ -174,6 +174,46 @@ describe("Cursor adapter live transport", () => {
       () => {},
     );
     expect(fallbackInputs[0]?.provider.apiKey).toBe("original-token");
+
+    const unconfiguredInputs: CursorTransportFactoryInput[] = [];
+    const unconfigured = createCursorAdapter(
+      { ...provider, apiKey: "original-token" },
+      {
+        createTransport: makeTransport(unconfiguredInputs),
+      },
+    );
+    await unconfigured.runTurn?.(
+      { ...scopedRequest },
+      { headers: new Headers() },
+      () => {},
+    );
+    expect(unconfiguredInputs[0]?.provider.apiKey).toBe("original-token");
+
+    const fallbackScopeCalls: Array<[string, string]> = [];
+    const fallbackScopeAdapter = createCursorAdapter(
+      { ...provider, apiKey: "original-token" },
+      {
+        createTransport: makeTransport([]),
+        selectPoolToken(owner, thread) {
+          fallbackScopeCalls.push([owner, thread]);
+          return undefined;
+        },
+      },
+    );
+    const unscopedRequest: OcxParsedRequest = {
+      ...parsed,
+      context: { messages: [{ role: "user", content: "hi", timestamp: 1 }] },
+      _clientThreadId: "thread-scope",
+    };
+    await fallbackScopeAdapter.runTurn?.(
+      unscopedRequest,
+      { headers: new Headers() },
+      () => {},
+    );
+    expect(fallbackScopeCalls).toHaveLength(1);
+    expect(fallbackScopeCalls[0]?.[0]).toBe(unscopedRequest._cursorIdentityScope ?? "");
+    expect(fallbackScopeCalls[0]?.[0]?.length).toBe(16);
+    expect(fallbackScopeCalls[0]?.[1]).toBe("thread-scope");
   });
 
   // #1527: the envelope rejection is raised locally while building the request, so it surfaces
