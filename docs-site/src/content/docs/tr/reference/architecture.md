@@ -124,7 +124,7 @@ Köprü ayrıca bir **kalp atışı canlı tutması (heartbeat keep-alive)** ça
 yeniden kurmak için her 2 saniyede bir ayrıştırıcı tarafından yok sayılan
 `: opencodex heartbeat` SSE yorum satırı yayar. Yorum satırı, olay üretmeden her
 eventsource ayrıştırıcısı tarafından atılır, böylece katı Responses kod çözücüleri
-asla bilinmeyen bir varyant görmez. Varsayılan **durma süresi sınırı** 300
+asla bilinmeyen bir varyant görmez. Varsayılan **durma süresi sınırı** 600
 saniyedir (`stallTimeoutSec`); bu sınıra ulaşılması yukarı akışı iptal eder ve
 `upstream_stall_timeout` nedeni ile `response.incomplete` yayar, böylece askıda
 kalan bir bağlantının Codex'i süresiz olarak engellemesi önlenir.

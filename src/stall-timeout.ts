@@ -2,10 +2,10 @@
  * Bridge upstream stall budget: seconds of silence (no adapter events) before the
  * Responses bridge emits `response.incomplete` / `upstream_stall_timeout`.
  *
- * Raised from 90s so long reasoning + large tool writes are not cut mid-turn.
- * Hung streams still die; they just get a more realistic window.
+ * Allow ten minutes for long reasoning and buffered compaction requests.
+ * Explicit per-installation overrides still control the inactivity budget.
  */
-export const DEFAULT_STALL_TIMEOUT_SEC = 300;
+export const DEFAULT_STALL_TIMEOUT_SEC = 600;
 
 /**
  * Resolve the effective bridge stall deadline for a turn.

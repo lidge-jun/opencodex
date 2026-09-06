@@ -687,11 +687,10 @@ frame rather than always emitting `response.completed`. If the response status i
 
 ## Heartbeat and stall deadline
 
-The HTTP/SSE bridge emits an SSE comment-line keep-alive (`: opencodex heartbeat`) during upstream
-silence to re-arm Codex's idle timer (Codex's default `stream_idle_timeout` is 300 s and ANY SSE
-bytes re-arm it). A comment line is discarded by every eventsource parser without producing an event,
-so strict Responses decoders never see an unknown variant. Those bridge-enqueued keepalive frames do
-NOT count as activity for the bridge's own watchdog: a bounded stall deadline (default 300 s,
+The HTTP/SSE bridge emits a typed `response.heartbeat` frame during wire silence so event-based
+Codex readers can re-arm their idle timer. Clients requiring comment-only keepalives opt into
+`heartbeatStyle: "comment"`. Those bridge-enqueued keepalive frames do NOT count as activity for
+the bridge's own watchdog: a bounded stall deadline (default 600 s,
 configurable via `stallTimeoutSec`, checked on the 2 s heartbeat tick) closes the stream with
 `response.incomplete` / `upstream_stall_timeout` and cancels the upstream request if no real
 adapter events arrive. Adapter-yielded `{ type: "heartbeat" }` events DO reset the watchdog.
@@ -827,8 +826,8 @@ raw response-byte inactivity for a routed-model iteration and resets on every no
 from 200 s so an unavailable/limit-exhausted search backend degrades within ~1 min instead of
 hanging the whole turn, #398). The
 effective web-search bridge watchdog is
-`max(base stall, connect timeout, routed-model stall, sidecar timeout) + 30 s` (230 s at defaults,
-dominated by the routed-model stall clock),
+`max(base stall, connect timeout, routed-model stall, sidecar timeout) + 30 s` (630 s at defaults,
+dominated by the base bridge stall clock),
 with seam heartbeats between bounded units. None of these clocks is a total generation deadline.
 
 ## Reasoning and tool-result compatibility

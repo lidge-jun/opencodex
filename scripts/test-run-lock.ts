@@ -150,11 +150,11 @@ function machineDiscriminator(hostName: string): string {
 }
 
 /**
- * Read a Windows-wrapper-provided lock path without repeating effective-user
- * discovery in every Bun worker. Bare and POSIX runs never trust this environment
- * value. Wrapped Windows paths are constrained to the exact host-specific lock
- * filename and namespace shape; the wrapper remains responsible for resolving
- * and validating the directory.
+ * Read a Windows lock path supplied by a wrapper or an admitted parent preload
+ * without repeating effective-user discovery in every Bun worker. Runs without
+ * an inherited run ID, and POSIX runs, never trust this environment value.
+ * Inherited paths are constrained to the exact host-specific lock filename and
+ * namespace shape; the originating process resolves and validates the directory.
  */
 export function resolveInheritedTestRunLock(
   options: ResolveInheritedTestRunLockOptions,

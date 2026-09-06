@@ -2550,6 +2550,17 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         let payload: unknown;
         try { payload = JSON.parse(event.data); } catch { continue; }
         if (!isPlainObject(payload)) continue;
+        // Buffered compaction output still represents real upstream progress.
+        // Gateway comment keepalives must not hide a stalled model.
+        if (
+          (payload.type === "response.output_text.delta"
+            || payload.type === "response.reasoning_summary_text.delta"
+            || payload.type === "response.reasoning_text.delta")
+          && typeof payload.delta === "string"
+          && payload.delta.length > 0
+        ) {
+          yield { type: "heartbeat" };
+        }
         switch (payload.type) {
           case "response.output_text.delta":
             if (typeof payload.delta === "string") {

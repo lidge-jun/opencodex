@@ -18,7 +18,7 @@ import type { CursorRunRequest, CursorServerMessage } from "../../../src/adapter
  * T04 (devlog 260822_senpi_cursor_transfer/110): inbound stream-health watchdog.
  * A turn that received its first frame but then goes silent (or heartbeat-only)
  * must fail at the transport with a typed stall error instead of waiting for the
- * 300s bridge stall watchdog (issue #2210 class).
+ * 600s bridge stall watchdog (issue #2210 class).
  */
 
 function agentFrame(message: Parameters<typeof create<typeof AgentServerMessageSchema>>[1]): Uint8Array {

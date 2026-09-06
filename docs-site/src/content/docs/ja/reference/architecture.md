@@ -89,7 +89,7 @@ HTTP の境界は `server/index.ts` が担い、Responses データプレーン�
 | `done` | `response.completed`（usage 付き） |
 | `error` | `response.failed`（`last_error` 付き） |
 
-ブリッジは **ハートビートキープアライブ**（RC3）も実行します。上流からデータが来ないとき 2 秒ごとにパーサーが無視する `: opencodex heartbeat` SSE コメント行を送り、Codex のアイドルタイマーを再開します。コメント行はイベントを生成せずに任意の eventsource パーサーに破棄されるため、厳格な Responses デコーダは未知のバリアントを決して見ません。デフォルトの **stall deadline** は 300 秒（`stallTimeoutSec`）です。この時間を超えると上流を中断し、理由が `upstream_stall_timeout` の `response.incomplete` を送り、接続が延々とぶら下がらないようにします。
+ブリッジは **ハートビートキープアライブ**（RC3）も実行します。上流からデータが来ないとき 2 秒ごとにパーサーが無視する `: opencodex heartbeat` SSE コメント行を送り、Codex のアイドルタイマーを再開します。コメント行はイベントを生成せずに任意の eventsource パーサーに破棄されるため、厳格な Responses デコーダは未知のバリアントを決して見ません。デフォルトの **stall deadline** は 600 秒（`stallTimeoutSec`）です。この時間を超えると上流を中断し、理由が `upstream_stall_timeout` の `response.incomplete` を送り、接続が延々とぶら下がらないようにします。
 
 ツール呼び出しはパーサーが取得した名前空間マップ、freeform 集合、tool-search 集合を使って 3 種類の Responses 項目タイプに振り分けます — そのため MCP 名前空間、`apply_patch` スタイルの freeform ツール、クライアントが実行する `tool_search` がすべてラウンドトリップします。`buildResponseJSON()` 変種は同じイベントから単一の非ストリーミングレスポンスオブジェクトを生成します。
 

@@ -106,7 +106,9 @@ understands:
 The bridge also runs a **heartbeat keep-alive** (RC3): during upstream silence, it emits an SSE
 comment line (`: opencodex heartbeat`) every 2 seconds to re-arm Codex's idle timer. Comment lines
 are discarded by every eventsource parser without producing an event, so strict Responses decoders
-never see an unknown variant. The default **stall deadline** is 300 seconds (`stallTimeoutSec`);
+never see an unknown variant. Buffered Responses compaction reports non-empty text and reasoning deltas as upstream progress,
+while gateway comment keepalives do not reset its stall watchdog.
+The default **stall deadline** is 600 seconds (`stallTimeoutSec`);
 reaching it aborts the upstream and emits `response.incomplete` with reason
 `upstream_stall_timeout`, preventing a hung connection from blocking Codex indefinitely.
 

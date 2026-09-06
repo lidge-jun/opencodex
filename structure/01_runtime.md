@@ -113,7 +113,7 @@ absolute environment candidates for lexical app-bundle/version-manager reporting
 This check does not attest or admit a selected runtime. The command exposes no private mutation authority and does not query
 a registry, execute Codex/npm, install, repair, stop, restart, or change configuration/cache state.
 
-The bridge enforces a heartbeat stall deadline. It defaults to 300 seconds sampled on a 2 s tick
+The bridge enforces a heartbeat stall deadline. It defaults to 600 seconds sampled on a 2 s tick
 (`src/stall-timeout.ts`) and is configurable, so treat the number as a default rather than an
 invariant; sidecars keep their own clocks. On expiry the stream is closed and the upstream request
 cancelled. If the adapter generator ends without an explicit done/error event, the response is marked
