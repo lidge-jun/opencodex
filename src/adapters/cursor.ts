@@ -65,6 +65,8 @@ export interface CursorAdapterDeps {
   kv?: CursorKvStore;
   /** Test seam: observe/replace context-usage rekeying on conversation-id rotation. */
   rekeyContextUsage?: (fromConversationId: string, toConversationId: string) => void;
+  /** Optional internal pool seam. Owner is supplied by trusted route parsing, never request headers. */
+  selectPoolToken?: (owner: string, thread: string) => string | undefined;
 }
 
 function safeCursorTransportError(err: unknown, sizeContext?: CursorSizeContext): string {
@@ -145,9 +147,8 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
         const makeTransport = deps.createTransport ?? createLiveCursorTransport;
         const kv = deps.kv ?? createCursorKvStore({}, incoming.translatorBudget);
         const rekeyContextUsage = deps.rekeyContextUsage ?? rekeyCursorContextUsage;
-        // Namespace thread→conversation derivation by the authenticated Cursor credential so
-        // shared-proxy tenants with different Cursor accounts cannot collide on a parent thread id.
-        // Prefer an already-set auth scope (e.g. Codex pool account) when present.
+        // Pool ownership is a trusted parsed-route field. When older callers do not provide
+        // that scope, retain the credential-isolation fallback; the digest is never emitted.
         if (!_parsed._cursorIdentityScope) {
           try {
             const token = resolveCursorToken(provider, incoming.headers);
@@ -157,9 +158,11 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
               .digest("hex")
               .slice(0, 16);
           } catch {
-            /* Missing credential is handled by the live transport path below. */
+            // Missing credentials fail closed in the live transport path.
           }
         }
+        const pooledToken = deps.selectPoolToken?.(_parsed._cursorIdentityScope ?? "", _parsed._clientThreadId ?? "");
+        const activeProvider = pooledToken ? { ...provider, apiKey: pooledToken } : provider;
         const inheritedCheckpointRef = _parsed._providerContinuation?.cursor?.checkpointRef;
         const previousConversationId = _parsed._cursorConversationId;
         let request = createCursorRequest(_parsed);
@@ -290,7 +293,7 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
           await runCursorTurnWithRetry(
             makeTransport,
             {
-              provider,
+              provider: activeProvider,
               headers: incoming.headers,
               translatorBudget: incoming.translatorBudget,
               requestDeclaresFullAccess: cursorRequestDeclaresFullAccess(activeRequest),
