@@ -1385,6 +1385,44 @@ test("claudeCode.enabled=false -> 403 permission_error on both routes", async ()
   }
 });
 
+test("Claude compatibility enforcement is opt-in at the Messages endpoint", async () => {
+  const { server: upstream, captured } = mockChatUpstreamCapturing();
+  const baseUrl = `${upstream.url.toString().replace(/\/$/, "")}/v1`;
+  const body = {
+    model: "mock/test-model",
+    max_tokens: 64,
+    stream: true,
+    messages: [{
+      role: "user",
+      content: [{ type: "document", source: { type: "text", media_type: "text/plain", data: "fixture" } }],
+    }],
+  };
+
+  saveConfig(mockConfig(baseUrl));
+  const legacyServer = startServer(0);
+  try {
+    const response = await postMessages(legacyServer.url.toString(), body);
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(captured).toHaveLength(1);
+  } finally {
+    await legacyServer.stop(true);
+  }
+
+  saveConfig(mockConfig(baseUrl, { compatibility: "enforce" }));
+  const enforcingServer = startServer(0);
+  try {
+    const response = await postMessages(enforcingServer.url.toString(), body);
+    expect(response.status).toBe(400);
+    const payload = await response.json() as Record<string, any>;
+    expect(payload.error.type).toBe("invalid_request_error");
+    expect(captured).toHaveLength(1);
+  } finally {
+    await enforcingServer.stop(true);
+    await upstream.stop(true);
+  }
+});
+
 async function postMessages(serverUrl: string, body: Record<string, unknown>): Promise<Response> {
   return fetch(new URL("/v1/messages", serverUrl), {
     method: "POST",

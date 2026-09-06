@@ -3,7 +3,6 @@ import {
   analyzeClaudeCompatibility,
   collectClaudeFeatureCodes,
   isClaudeCompatibilityMode,
-  resolveClaudeCompatibilityMode,
 } from "../../src/claude/compatibility";
 import { AnthropicRequestError } from "../../src/claude/inbound";
 import { enforceClaudeCompatibility } from "../../src/server/claude-messages";
@@ -29,17 +28,49 @@ describe("Claude routed compatibility foundation", () => {
     expect(result.featureCodes).not.toContain("mcp_tool");
   });
 
+  test("does not mistake a client function name for hosted code execution", () => {
+    const result = analyzeClaudeCompatibility({
+      tools: [{ type: "function", name: "safe_code_execution", input_schema: { type: "object" } }],
+    }, { mode: "enforce", adapter: "openai-chat" });
+    expect(result).toMatchObject({ compatible: true, decision: "allow" });
+    expect(result.featureCodes).not.toContain("code_execution");
+  });
+
+  test("recognizes cache control only at Anthropic block positions", () => {
+    expect(collectClaudeFeatureCodes({
+      tools: [{
+        type: "function",
+        name: "lookup",
+        input_schema: {
+          type: "object",
+          properties: { cache_control: { type: "string" } },
+        },
+      }],
+    })).not.toContain("cache_control");
+    expect(collectClaudeFeatureCodes({
+      system: [{ type: "text", text: "stable", cache_control: { type: "ephemeral" } }],
+    })).toContain("cache_control");
+    expect(analyzeClaudeCompatibility({
+      system: [{ type: "text", text: "stable", cache_control: { type: "ephemeral" } }],
+    }, { mode: "enforce", adapter: "openai-chat" })).toMatchObject({ compatible: true, decision: "allow" });
+  });
+
+  test("recognizes deferred tools by activation value, not field presence", () => {
+    expect(collectClaudeFeatureCodes({ defer_tools: false, deferred_tools: [] })).not.toContain("deferred_tools");
+    expect(collectClaudeFeatureCodes({ tools: [{ type: "function", name: "later", defer_loading: true }] })).toContain("deferred_tools");
+    expect(collectClaudeFeatureCodes({ deferred_tools: ["later"] })).toContain("deferred_tools");
+  });
+
   test("shadow mode reports, but does not reject, an incompatible feature", () => {
     const result = analyzeClaudeCompatibility({ context_management: { edits: [{ op: "remove" }] } }, { mode: "shadow", adapter: "openai-chat" });
     expect(result).toMatchObject({ compatible: true, decision: "shadow" });
     expect(result.reason).toContain("context_management");
   });
 
-  test("mode resolution is strict and defaults to enforce", () => {
+  test("mode recognition is strict", () => {
     expect(isClaudeCompatibilityMode("shadow")).toBe(true);
+    expect(isClaudeCompatibilityMode("enforce")).toBe(true);
     expect(isClaudeCompatibilityMode("invalid")).toBe(false);
-    expect(resolveClaudeCompatibilityMode()).toBe("enforce");
-    expect(resolveClaudeCompatibilityMode({ compatibility: "shadow" })).toBe("shadow");
   });
 
   test("the Messages endpoint gate is opt-in, fail-closed, and reason-bounded", () => {

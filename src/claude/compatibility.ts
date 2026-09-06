@@ -17,7 +17,7 @@
  * - mcp_tool: mcp tool declarations (no lossless routed mapping)
  * - server_tool: generic fallback for other hosted/server tool types
  * - tool_search: tool_search declaration/call (lossless via tool_search)
- * - deferred_tools: tools with defer/defer_loading or deferred beta markers
+ * - deferred_tools: tools with active defer/defer_loading or a non-empty deferred-tools declaration
  * - structured_output: output_config.format json_schema/json_object (lossless via text.format)
  * - service_tier: top-level service_tier (lossless via Responses option)
  * - context_management: top-level context_management field (no lossless routed mapping)
@@ -31,12 +31,6 @@ export const CLAUDE_COMPATIBILITY_MODES = ["shadow", "enforce"] as const;
 
 export function isClaudeCompatibilityMode(value: unknown): value is ClaudeCompatibilityMode {
   return typeof value === "string" && (CLAUDE_COMPATIBILITY_MODES as readonly string[]).includes(value);
-}
-
-export function resolveClaudeCompatibilityMode(
-  cc?: { compatibility?: unknown },
-): ClaudeCompatibilityMode {
-  return isClaudeCompatibilityMode(cc?.compatibility) ? cc.compatibility : "enforce";
 }
 
 export type ClaudeCompatibilityDecision = "allow" | "reject" | "shadow";
@@ -61,12 +55,17 @@ function sanitizeBetaToken(raw: string): string {
   return trimmed.replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
 }
 
-function walkForCacheControl(value: unknown): boolean {
-  if (!value || typeof value !== "object") return false;
-  if (Array.isArray(value)) return value.some(walkForCacheControl);
-  const rec = value as Rec;
-  if (Object.prototype.hasOwnProperty.call(rec, "cache_control")) return true;
-  return Object.values(rec).some(walkForCacheControl);
+function hasCacheControl(body: Rec): boolean {
+  if (Object.prototype.hasOwnProperty.call(body, "cache_control")) return true;
+  const blockHasCacheControl = (value: unknown): boolean =>
+    isRec(value) && Object.prototype.hasOwnProperty.call(value, "cache_control");
+  if (Array.isArray(body.system) && body.system.some(blockHasCacheControl)) return true;
+  if (Array.isArray(body.tools) && body.tools.some(blockHasCacheControl)) return true;
+  if (!Array.isArray(body.messages)) return false;
+  return body.messages.some(message =>
+    isRec(message)
+    && Array.isArray(message.content)
+    && message.content.some(blockHasCacheControl));
 }
 
 function hasThinkingBlock(body: Rec): boolean {
@@ -130,7 +129,6 @@ function hasCodeExecution(body: Rec): boolean {
       if (!isRec(t)) continue;
       const type = typeof t.type === "string" ? t.type : "";
       if (type.includes("code_execution")) return true;
-      if (typeof t.name === "string" && t.name.includes("code_execution")) return true;
     }
   }
   const msgs = body.messages;
@@ -302,13 +300,11 @@ function hasDeferredTools(body: Rec): boolean {
       if (!isRec(t)) continue;
       if (t.defer === true) return true;
       if ((t as Rec).defer_loading === true) return true;
-      if (Object.hasOwn(t, "defer") || Object.hasOwn(t, "defer_loading")) {
-        // presence with truthy already handled; presence with explicit true is deferred
-      }
     }
   }
-  if (Object.hasOwn(body, "defer_tools") || Object.hasOwn(body, "deferred_tools")) return true;
-  return false;
+  if (body.defer_tools === true || body.deferred_tools === true) return true;
+  if (Array.isArray(body.deferred_tools)) return body.deferred_tools.length > 0;
+  return isRec(body.deferred_tools) && Object.keys(body.deferred_tools).length > 0;
 }
 
 function hasInputExamples(body: Rec): boolean {
@@ -362,7 +358,7 @@ export function collectClaudeFeatureCodes(
   const codes: string[] = [];
   const rec = isRec(body) ? (body as Rec) : null;
   if (rec) {
-    if (walkForCacheControl(body)) codes.push("cache_control");
+    if (hasCacheControl(rec)) codes.push("cache_control");
     if (hasContextManagement(rec)) codes.push("context_management");
     if (Object.hasOwn(rec, "container")) codes.push("container");
     if (Object.hasOwn(rec, "inference_geo")) codes.push("inference_geo");
@@ -406,12 +402,12 @@ export function analyzeClaudeCompatibility(
     return { featureCodes, compatible: true, decision: "allow" };
   }
   // Incompatible set for routed adapters (non-anthropic native).
-  // Compatible (translated or lossless): cache_control, thinking_block, web_search_tool,
-  // tool_search, structured_output, service_tier, input_examples (deferred? no), beta_*.
+  // Compatible (translated, safely omitted, or preserved by the source envelope):
+  // cache_control, thinking_block, web_search_tool, tool_search, structured_output,
+  // service_tier, input_examples, and beta_*.
   // Incompatible: features without lossless Responses mapping — they require Anthropic
   // source preservation and must be rejected on routed targets.
   const INCOMPATIBLE = new Set([
-    "cache_control",
     "context_management",
     "container",
     "inference_geo",
@@ -423,7 +419,6 @@ export function analyzeClaudeCompatibility(
     "computer_use",
     "mcp_tool",
     "server_tool",
-    "input_examples",
   ]);
   if (opts.adapter !== "openai-responses") INCOMPATIBLE.add("deferred_tools");
   const incompatible = featureCodes.filter(c => INCOMPATIBLE.has(c)).slice(0, 32);
