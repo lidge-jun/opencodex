@@ -46,9 +46,10 @@ describe("TelemetryLedger", () => {
 
   test("sanitizes details by stripping sensitive keys", () => {
     const sampleKey = ["sk", "secret", "fixture", "123"].join("-");
-    const email = ["alice", "example.com"].join("@");
-    const unixPath = ["", "Users", "李", "project", "index.ts"].join("/");
-    const windowsPath = ["C:", "Users", "李", "project", "index.ts"].join("\\");
+    const email = [`ale${String.fromCharCode(0x301)}`, "example.com"].join("@");
+    const punctuatedComponent = ["O", "Connor+Team"].join("'");
+    const unixPath = ["", "Users", "李", punctuatedComponent, "trace(1).log"].join("/");
+    const windowsPath = ["C:", "Users", "李", punctuatedComponent, "trace(1).log"].join("\\");
     const ledger = new TelemetryLedger(":memory:");
     const event: FailureEvent = { failureKind: "sanitized_error", signature: "sensitive details test", timestamp: 1000 };
     const details = {
@@ -64,6 +65,7 @@ describe("TelemetryLedger", () => {
     expect(record.details?.issueNumber).toBe(42);
     expect(record.details?.safeNote).not.toContain(email);
     expect(record.details?.safeNote).not.toContain("李");
+    expect(record.details?.safeNote).not.toContain(punctuatedComponent);
     expect(record.details?.safeNote).toContain("[redacted-email]");
     expect(record.details?.safeNote).toContain("[path]");
     expect(record.details?.prompt).toBeUndefined();
