@@ -127,6 +127,11 @@
         "^(?:storage)-"
       ]
     },
+    "telemetry": {
+      "match": [
+        "^(?:telemetry)-"
+      ]
+    },
     "vision": {
       "match": [
         "^(?:sidecar)-"
@@ -1157,6 +1162,8 @@
     "storage-worker-lifecycle.test.ts": "storage",
     "storage-worker-os-join-settle.test.ts": "storage",
     "storage-worker-teardown-isolate.test.ts": "storage",
+    "telemetry-fingerprint.test.ts": "telemetry",
+    "telemetry-ledger.test.ts": "telemetry",
     "stream-aborted-marker.test.ts": "server",
     "strict-semver.test.ts": "lib",
     "subagent-context-staleness.test.ts": "routing",
@@ -1304,6 +1311,7 @@
     "server",
     "service",
     "storage",
+    "telemetry",
     "update",
     "usage",
     "vision",
