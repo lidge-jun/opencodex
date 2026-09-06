@@ -1765,7 +1765,9 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
           let response: Response;
           try {
-            response = await handleResponsesCompact(req, config, logCtx, turnAdmissionLease, admission);
+            response = await handleResponsesCompact(req, config, logCtx, turnAdmissionLease, admission, {
+              onRequestBodyRead: () => disableResponsesRequestTimeout(req, requestServer),
+            });
           } catch {
             response = formatErrorResponse(500, "server_error", "Unexpected compact request failure");
           }

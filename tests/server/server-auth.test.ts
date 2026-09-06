@@ -38,7 +38,7 @@ import {
 import { clearRequestLogsForTests, getRequestLogEntries } from "../../src/server/request-log";
 import { readUsageEntries } from "../../src/usage/log";
 import { handleManagementAPI } from "../../src/server/management-api";
-import { handleResponses } from "../../src/server/responses";
+import { handleResponses, handleResponsesCompact } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -601,6 +601,41 @@ describe("server local API auth", () => {
       },
     })).toBe(false);
   });
+
+  test("compact keeps the idle guard until a valid request body is complete", async () => {
+    let bodyController!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({ start(controller) { bodyController = controller; } });
+    const cfg = config();
+    cfg.defaultProvider = "fixture";
+    cfg.providers = { fixture: { ...cfg.providers.openai!, disabled: true } };
+    const request = new Request("http://localhost/v1/responses/compact", {
+      method: "POST", headers: { "content-type": "application/json" }, body,
+    });
+    let accepted = 0;
+    const result = handleResponsesCompact(request, cfg, { model: "unknown", provider: "unknown" }, undefined, undefined, {
+      onRequestBodyRead: () => { accepted++; },
+    });
+    bodyController.enqueue(new TextEncoder().encode('{"model":"fixture/gpt-test","input":['));
+    expect(accepted).toBe(0);
+    bodyController.enqueue(new TextEncoder().encode(']}'));
+    bodyController.close();
+    expect((await result).status).toBe(404);
+    expect(accepted).toBe(1);
+  });
+
+  for (const body of ["{", "[]", "{}", '{"model":0}', '{"model":""}']) {
+    test(`compact does not release idle protection for rejected body ${body}`, async () => {
+      let accepted = false;
+      const request = new Request("http://localhost/v1/responses/compact", {
+        method: "POST", headers: { "content-type": "application/json" }, body,
+      });
+      const response = await handleResponsesCompact(request, config(), { model: "unknown", provider: "unknown" }, undefined, undefined, {
+        onRequestBodyRead: () => { accepted = true; },
+      });
+      expect(response.status).toBe(400);
+      expect(accepted).toBe(false);
+    });
+  }
 
   test("responses handler keeps the request timeout until the body is fully accepted", async () => {
     let controller!: ReadableStreamDefaultController<Uint8Array>;

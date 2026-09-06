@@ -492,6 +492,7 @@
     "command-code-quota.test.ts": "providers",
     "command-code-workspace-cache.test.ts": "providers",
     "commandcode-provider.test.ts": "providers",
+    "compaction-progress.test.ts": "responses",
     "compatibility-manifest.test.ts": "codex-integration",
     "compatibility-provider-equivalence.test.ts": "routing",
     "compatibility-version.test.ts": "ci-workflows",

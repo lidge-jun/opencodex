@@ -210,3 +210,18 @@ Structured `incomplete_details.reason` and error codes are accepted without a
 message; ordinary output-limit, filtering, steering and stall incompletes do not
 cool an account. Cyber-policy classification retains precedence. The terminal is
 not replayed after output, and fixed-account request selection remains fixed.
+
+Remote compact requests can buffer their response for longer than the server's
+request-idle timeout. That listener timeout is disabled after the request body is
+accepted; client cancellation and upstream operation deadlines still apply.
+
+Buffered routed compaction treats nonempty text and reasoning deltas as progress
+without exposing partial summary text. Comments, empty deltas and gateway
+keepalives do not reset the adapter-event stall watchdog. The default stall
+timeout stays 300 seconds; encrypted compaction content is preserved unchanged.
+
+Native compact response buffering also enforces a body-byte inactivity deadline
+using `stallTimeoutSec` (300 seconds by default). Nonempty chunks reset that
+deadline; a stalled body returns HTTP 504, client cancellation retains HTTP 499,
+and cleanup does not wait for a stuck upstream cancellation promise. The 32 MiB
+response ceiling and the original body bytes are preserved.

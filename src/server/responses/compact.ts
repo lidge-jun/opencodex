@@ -112,7 +112,8 @@ import type { WsData } from "../ws-bridge";
 import { codexAccountSelectionForTurn, registerTurn, trackStreamLifetime, unregisterTurn } from "../lifecycle";
 import type { AdmissionLease } from "../../lib/admission";
 import { redactSecretString } from "../../lib/redact";
-import { readBoundedResponseBody } from "../../lib/bounded-body";
+import { readBoundedResponseBytes } from "../../lib/bounded-body";
+import { resolveStallTimeoutSec } from "../../stall-timeout";
 import { isRateLimitOrQuotaFailureMessage } from "../../lib/errors";
 import { supportedLadderFor } from "../effort-policy";
 import {
@@ -212,6 +213,8 @@ function compactHandoffRoute(req: Request, previousModel: string, now = Date.now
 
 export interface HandleResponsesCompactOptions {
   nativeMainRefreshDependencies?: NativeMainRefreshDependencies;
+  /** Release the listener's idle guard only after the complete request body is accepted. */
+  onRequestBodyRead?: () => void;
 }
 
 export function compactResponseTooLargeError(): Response {
@@ -464,43 +467,45 @@ function compactResponseHeaders(upstream: Response): Headers {
   return headers;
 }
 
-export async function bufferCompactResponse(upstream: Response, signal: AbortSignal): Promise<Response> {
-  const reader = upstream.body?.getReader();
+export async function bufferCompactResponse(
+  upstream: Response,
+  signal: AbortSignal,
+  stallTimeoutSec?: number,
+): Promise<Response> {
   const headers = compactResponseHeaders(upstream);
-  if (!reader) return new Response(null, { status: upstream.status, statusText: upstream.statusText, headers });
-  const declaredLength = Number(upstream.headers.get("content-length"));
-  if (Number.isFinite(declaredLength) && declaredLength > COMPACT_RESPONSE_MAX_BYTES) {
-    await reader.cancel("compact_response_too_large").catch(() => undefined);
-    return compactResponseTooLargeError();
-  }
-  const chunks: Uint8Array[] = [];
-  let total = 0;
   try {
-    while (true) {
-      if (signal.aborted) {
-        await reader.cancel(signal.reason).catch(() => undefined);
-        return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
-      }
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > COMPACT_RESPONSE_MAX_BYTES) {
-        await reader.cancel("compact_response_too_large").catch(() => undefined);
-        return compactResponseTooLargeError();
-      }
-      chunks.push(value);
+    if (signal.aborted) {
+      // No reader is attached yet. Cancellation must not wait for a broken source's cleanup.
+      void upstream.body?.cancel(signal.reason).catch(() => undefined);
+      return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
     }
-  } catch {
+    if (!upstream.body) return new Response(null, { status: upstream.status, statusText: upstream.statusText, headers });
+    const declaredLength = Number(upstream.headers.get("content-length"));
+    if (Number.isFinite(declaredLength) && declaredLength > COMPACT_RESPONSE_MAX_BYTES) {
+      void upstream.body.cancel("compact_response_too_large").catch(() => undefined);
+      return compactResponseTooLargeError();
+    }
+    // Header admission has finished; only non-empty body chunks re-arm this deadline.
+    // The raw reader preserves bytes and cancels/releases without awaiting source cleanup.
+    const result = await readBoundedResponseBytes(upstream, {
+      signal,
+      maxBytes: COMPACT_RESPONSE_MAX_BYTES,
+      inactivityTimeoutMs: resolveStallTimeoutSec(stallTimeoutSec) * 1_000,
+    });
     if (signal.aborted) return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
+    if (result.oversized) return compactResponseTooLargeError();
+    return new Response(result.bytes, { status: upstream.status, statusText: upstream.statusText, headers });
+  } catch (error) {
+    if (signal.aborted) return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
+    if (error instanceof DOMException && error.name === "TimeoutError") {
+      return Response.json({ error: {
+        message: "Compact response body stalled",
+        type: "upstream_stall_timeout",
+        code: "upstream_stall_timeout",
+      } }, { status: 504 });
+    }
     return formatErrorResponse(502, "upstream_error", "Failed to read compact response");
   }
-  const body = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return new Response(body, { status: upstream.status, statusText: upstream.statusText, headers });
 }
 
 
@@ -526,6 +531,7 @@ export async function handleResponsesCompact(
   if (typeof raw.model !== "string" || raw.model.length === 0) {
     return formatErrorResponse(400, "invalid_request_error", "compaction request requires a model");
   }
+  options.onRequestBodyRead?.();
   // Correct the IDENTITY before routing, or the synthetic id does not route at all. Held in
   // a local rather than written back to `raw.model`: assigning to the property widens it out
   // of the `string` narrowing the guard above just established.
@@ -1037,7 +1043,7 @@ export async function handleResponsesCompact(
       upstream.headers.get("x-codex-secondary-reset-at"),
       upstream.headers.get("x-codex-tertiary-reset-at"),
     ].filter(Boolean);
-    const buffered = await bufferCompactResponse(upstream, req.signal);
+    const buffered = await bufferCompactResponse(upstream, req.signal, config.stallTimeoutSec);
     const bufferedErrorText = buffered.ok
       ? ""
       : await buffered.clone().text().catch(() => "");

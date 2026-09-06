@@ -4,7 +4,7 @@
  * contract; every other gateway has to be driven as a plain summarizer, or Codex
  * fatals on a compaction turn that came back as an ordinary message.
  */
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, jest, spyOn, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -947,6 +947,57 @@ describe("compact alternate-account attempt (#913)", () => {
       else process.env.CODEX_HOME = previousCodexHome;
     });
   }
+
+  test("native compact headers followed by a stalled body return 504 without retry and release account cleanup", async () => {
+    await withPoolEnv("ocx-compact-body-deadline-", async config => {
+      config.stallTimeoutSec = 2;
+      const readStarted = Promise.withResolvers<void>();
+      let sends = 0;
+      let cancelled = 0;
+      let acceptedBody = false;
+      const body = new ReadableStream<Uint8Array>({
+        pull() { readStarted.resolve(); },
+        cancel() { cancelled++; return new Promise<void>(() => {}); },
+      }, { highWaterMark: 0 });
+      globalThis.fetch = (async () => {
+        sends++;
+        return new Response(body, { headers: { "content-type": "application/json" } });
+      }) as typeof fetch;
+      const releaseSpy = spyOn(authContextModule, "releaseCodexAuthContextProbeLease");
+      const client = new AbortController();
+      // Same scoped, non-concurrent Bun timer control as responses/ws-upstream.test.ts.
+      jest.useFakeTimers();
+      const pending = handleResponsesCompact(
+        compactionRequest({ model: "gpt-5.5", input: [
+          { type: "message", role: "user", content: [{ type: "input_text", text: "earlier turn" }] },
+        ] }, client.signal), config, { model: "", provider: "" },
+        undefined, undefined, { onRequestBodyRead: () => { acceptedBody = true; } },
+      );
+      try {
+        await Promise.race([
+          readStarted.promise,
+          pending.then(response => { throw new Error(`compact returned ${response.status} before reading its body`); }),
+        ]);
+        expect(acceptedBody).toBe(true);
+        expect(sends).toBe(1);
+        jest.advanceTimersByTime(2_000);
+        const response = await pending;
+        expect(response.status).toBe(504);
+        expect(await response.json()).toMatchObject({ error: { code: "upstream_stall_timeout" } });
+        expect(sends).toBe(1);
+        expect(cancelled).toBe(1);
+        expect(body.locked).toBe(false);
+        expect(releaseSpy).toHaveBeenCalledWith(expect.objectContaining({ kind: "pool", accountId: "pool-a" }));
+      } finally {
+        client.abort();
+        try { await pending; } finally {
+          jest.clearAllTimers();
+          jest.useRealTimers();
+          releaseSpy.mockRestore();
+        }
+      }
+    });
+  });
 
   test("canonical trailing slashes are pinned before native compact sends pool credentials", async () => {
     await withPoolEnv("ocx-compact-canonical-url-", async config => {

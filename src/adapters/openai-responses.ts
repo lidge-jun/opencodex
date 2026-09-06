@@ -2546,6 +2546,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       let snapshot = "";
       let usage: OcxUsage | undefined;
       let compactionEncryptedContent: string | undefined;
+      let completedSeen = false;
       for await (const event of decodeServerSentEvents(response.body, { translatorBudget: budget })) {
         let payload: unknown;
         try { payload = JSON.parse(event.data); } catch { continue; }
@@ -2580,6 +2581,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
             return;
           case "response.completed":
             {
+              completedSeen = true;
               const responsePayload = isPlainObject(payload.response) ? payload.response : undefined;
               const output = Array.isArray(responsePayload?.output) ? responsePayload.output : [];
               const compaction = output.find(item => isPlainObject(item) && item.type === "compaction");
@@ -2619,6 +2621,18 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
               }
             }
             break;
+        }
+        // Buffered text is still upstream progress, but gateway keepalives are not.
+        // Yield after accounting, directly to the consumer: no progress queue or content leak.
+        if (
+          !completedSeen
+          && (payload.type === "response.output_text.delta"
+            || payload.type === "response.reasoning_summary_text.delta"
+            || payload.type === "response.reasoning_text.delta")
+          && typeof payload.delta === "string"
+          && payload.delta.length > 0
+        ) {
+          yield { type: "heartbeat" };
         }
       }
       // Gateways differ in which of these they emit; prefer the authoritative
