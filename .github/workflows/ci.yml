@@ -152,7 +152,7 @@ jobs:
           # policy changes; original HOME/USERPROFILE/service/coordinator code stays intact.
           bun=shutil.which("bun")
           assert bun, "Prepared Bun unavailable"
-          assert subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip()=="84c94f3d774d64b8b05ae2193485348f20fc17c1"
+          assert subprocess.check_output(["git","rev-parse","HEAD"],text=True,env=env).strip()=="84c94f3d774d64b8b05ae2193485348f20fc17c1"
           # Three fixed fixture variants; every replacement must match exactly once.
           def replace(text, old, new):
               assert text.count(old)==1, "Pinned fixture anchor mismatch"
