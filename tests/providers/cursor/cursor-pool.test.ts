@@ -188,6 +188,20 @@ describe("CursorPoolKernel", () => {
     expect(pickRestored.accountRef).toBe(originalRef);
   });
 
+  test("prunes removed refs even when the usable pool falls below threshold", () => {
+    const s = setup();
+    const original = s.kernel.pick("owner", "thread", s.capability)!;
+
+    s.setAccounts([
+      { id: "account-b", access: "access-b", expires: Number.MAX_SAFE_INTEGER },
+    ]);
+    expect(s.kernel.activate("owner", "thread", s.capability)).toBeNull();
+
+    s.setAccounts(accounts);
+    const restored = s.kernel.pick("owner", "thread", s.capability)!;
+    expect(restored.accountRef).not.toBe(original.accountRef);
+  });
+
   test("rejects NaN expiry in usable and unexpired checks", () => {
     const s = setup();
     s.setAccounts([

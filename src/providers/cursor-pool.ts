@@ -168,15 +168,15 @@ export class CursorPoolKernel {
     const now = this.now();
     const raw = this.rawAccounts();
     const accounts = this.accounts(raw, now);
+    const knownSource = new Set(raw.map((a) => a.id));
+    for (const [id] of this.refs)
+      if (!knownSource.has(id)) this.refs.delete(id);
     if (accounts.length < 2) return { snapshot: null, resolvedAccounts: [] };
     const previous = accounts.flatMap((a) => {
       const prior = this.states.get(`${owner}\0${thread}\0${a.ref}`);
       return prior ? [{ ...prior }] : [];
     });
     const previousAffinity = this.affinity.get(ownerThread);
-    const knownSource = new Set(raw.map((a) => a.id));
-    for (const [id, ref] of this.refs)
-      if (!knownSource.has(id)) this.refs.delete(id);
     for (const a of accounts) {
       const key = `${owner}\0${thread}\0${a.ref}`;
       const p = this.states.get(key);
