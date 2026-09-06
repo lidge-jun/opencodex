@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -37,13 +38,26 @@ func runTypeScriptStatusJSON(t *testing.T, home string) []byte {
 }
 
 // The focused Go worktree intentionally does not install JavaScript packages.
-// Use its own dependency tree when present, otherwise use the primary checkout
-// named by the migration task as the immutable TypeScript oracle.
+// Use its own dependency tree when present, otherwise discover another local
+// checkout with its dependency tree. This keeps the TypeScript oracle local and
+// makes an unavailable oracle an explicit skip instead of a machine path.
 func typeScriptOracleRepo(t *testing.T) string {
 	t.Helper()
 	worktree := filepath.Clean(filepath.Join(filepath.Dir(currentTestFile(t)), "..", "..", ".."))
 	if info, err := os.Stat(filepath.Join(worktree, "node_modules")); err == nil && info.IsDir() {
 		return worktree
+	}
+	listed, err := exec.Command("git", "-C", worktree, "worktree", "list", "--porcelain").Output()
+	if err == nil {
+		for _, line := range strings.Split(string(listed), "\n") {
+			path, ok := strings.CutPrefix(line, "worktree ")
+			if !ok {
+				continue
+			}
+			if info, statErr := os.Stat(filepath.Join(path, "node_modules")); statErr == nil && info.IsDir() {
+				return path
+			}
+		}
 	}
 	t.Skip("TypeScript status/doctor oracle needs node_modules in this checkout")
 	return ""
@@ -65,14 +79,38 @@ func statusDomainBytes(t *testing.T, full []byte) []byte {
 		t.Fatalf("compact status oracle: %v; output=%s", err, full)
 	}
 	var status struct {
-		Proxy  json.RawMessage `json:"proxy"`
-		Listen json.RawMessage `json:"listen"`
-		Config json.RawMessage `json:"config"`
+		Proxy       json.RawMessage `json:"proxy"`
+		Dashboard   json.RawMessage `json:"dashboard"`
+		Listen      json.RawMessage `json:"listen"`
+		Paths       json.RawMessage `json:"paths"`
+		Runtime     json.RawMessage `json:"runtime"`
+		Config      json.RawMessage `json:"config"`
+		VersionSkew json.RawMessage `json:"versionSkew"`
 	}
 	if err := json.Unmarshal(compact.Bytes(), &status); err != nil {
 		t.Fatalf("decode status oracle: %v; output=%s", err, compact.Bytes())
 	}
-	return []byte(`{"proxy":` + string(status.Proxy) + `,"listen":` + string(status.Listen) + `,"config":` + string(status.Config) + `}`)
+	return []byte(fmt.Sprintf(
+		`{"proxy":%s,"dashboard":%s,"listen":%s,"paths":%s,"runtime":%s,"config":%s,"versionSkew":%s}`,
+		status.Proxy, status.Dashboard, status.Listen, status.Paths, status.Runtime, status.Config, status.VersionSkew,
+	))
+}
+
+func statusOracleRuntime(t *testing.T, full []byte) StatusBunRuntime {
+	t.Helper()
+	var status struct {
+		Paths struct {
+			Runtime string `json:"runtime"`
+		} `json:"paths"`
+		Runtime struct {
+			Source      string  `json:"source"`
+			OverrideEnv *string `json:"overrideEnv"`
+		} `json:"runtime"`
+	}
+	if err := json.Unmarshal(full, &status); err != nil {
+		t.Fatalf("decode status runtime oracle: %v", err)
+	}
+	return StatusBunRuntime{Path: status.Paths.Runtime, Source: status.Runtime.Source, OverrideEnv: status.Runtime.OverrideEnv}
 }
 
 func runTypeScriptDoctorProxyHint(t *testing.T, input DoctorProxyDownInput) string {
@@ -483,6 +521,7 @@ func TestStatusDomainsMatchTypeScriptOracleForConfigFallback(t *testing.T) {
 	}
 	t.Setenv("OPENCODEX_HOME", home)
 	t.Setenv("CODEX_HOME", filepath.Join(home, "codex"))
+	t.Setenv("HOME", home)
 	if err := os.Mkdir(filepath.Join(home, "codex"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -490,9 +529,10 @@ func TestStatusDomainsMatchTypeScriptOracleForConfigFallback(t *testing.T) {
 	oracle := runTypeScriptStatusJSON(t, home)
 	want := statusDomainBytes(t, oracle)
 	got, err := json.Marshal(CollectStatusDomains(StatusDomainDeps{
-		ReadPID:     func() int64 { return 0 },
-		ReadRuntime: func() (StatusRuntimeRecord, error) { return StatusRuntimeRecord{}, errors.New("missing") },
-		HTTPClient:  &http.Client{Timeout: 800 * time.Millisecond},
+		ReadPID:        func() int64 { return 0 },
+		ReadRuntime:    func() (StatusRuntimeRecord, error) { return StatusRuntimeRecord{}, errors.New("missing") },
+		ReadBunRuntime: func() StatusBunRuntime { return statusOracleRuntime(t, oracle) },
+		HTTPClient:     &http.Client{Timeout: 800 * time.Millisecond},
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -522,12 +562,15 @@ func TestStatusDomainsMatchTypeScriptOracleForDefaultAndMalformedConfig(t *testi
 			}
 			t.Setenv("OPENCODEX_HOME", home)
 			t.Setenv("CODEX_HOME", filepath.Join(home, "codex"))
+			t.Setenv("HOME", home)
 
-			want := statusDomainBytes(t, runTypeScriptStatusJSON(t, home))
+			oracle := runTypeScriptStatusJSON(t, home)
+			want := statusDomainBytes(t, oracle)
 			got, err := json.Marshal(CollectStatusDomains(StatusDomainDeps{
-				ReadPID:     func() int64 { return 0 },
-				ReadRuntime: func() (StatusRuntimeRecord, error) { return StatusRuntimeRecord{}, errors.New("missing") },
-				HTTPClient:  &http.Client{Timeout: 800 * time.Millisecond},
+				ReadPID:        func() int64 { return 0 },
+				ReadRuntime:    func() (StatusRuntimeRecord, error) { return StatusRuntimeRecord{}, errors.New("missing") },
+				ReadBunRuntime: func() StatusBunRuntime { return statusOracleRuntime(t, oracle) },
+				HTTPClient:     &http.Client{Timeout: 800 * time.Millisecond},
 			}))
 			if err != nil {
 				t.Fatal(err)
@@ -536,6 +579,93 @@ func TestStatusDomainsMatchTypeScriptOracleForDefaultAndMalformedConfig(t *testi
 				t.Fatalf("domain bytes\\n got: %s\\nwant: %s", got, want)
 			}
 		})
+	}
+}
+
+func TestStatusDomainsMatchTypeScriptOracleForDashboardPathRuntimeAndVersionSkew(t *testing.T) {
+	home := t.TempDir()
+	if err := os.Mkdir(filepath.Join(home, "codex"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"port":4567,"hostname":"0.0.0.0"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("OPENCODEX_HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, "codex"))
+	oracle := runTypeScriptStatusJSON(t, home)
+	want := statusDomainBytes(t, oracle)
+	got, err := json.Marshal(CollectStatusDomains(StatusDomainDeps{
+		ReadPID:        func() int64 { return 0 },
+		ReadRuntime:    func() (StatusRuntimeRecord, error) { return StatusRuntimeRecord{}, errors.New("missing") },
+		ReadBunRuntime: func() StatusBunRuntime { return statusOracleRuntime(t, oracle) },
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("domain bytes\n got: %s\nwant: %s", got, want)
+	}
+}
+
+func TestStatusDomainsMatchTypeScriptOracleForLiveVersionSkew(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"service": "opencodex", "version": "2.43.0", "uptime": 1, "pid": os.Getpid(),
+		})
+	}))
+	defer server.Close()
+	port := serverPort(strings.TrimPrefix(server.URL, "http://"))
+	home := t.TempDir()
+	if err := os.Mkdir(filepath.Join(home, "codex"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "ocx.pid"), []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtimeState, err := json.Marshal(StatusRuntimeRecord{PID: int64(os.Getpid()), Port: port, Hostname: "127.0.0.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "runtime-port.json"), runtimeState, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("OPENCODEX_HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, "codex"))
+	oracle := runTypeScriptStatusJSON(t, home)
+	want := statusDomainBytes(t, oracle)
+	got, err := json.Marshal(CollectStatusDomains(StatusDomainDeps{
+		ReadPID: func() int64 { return int64(os.Getpid()) },
+		ReadRuntime: func() (StatusRuntimeRecord, error) {
+			return StatusRuntimeRecord{PID: int64(os.Getpid()), Port: port, Hostname: "127.0.0.1"}, nil
+		},
+		ReadBunRuntime: func() StatusBunRuntime { return statusOracleRuntime(t, oracle) },
+		CLIVersion:     "2.42.0",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("domain bytes\n got: %s\nwant: %s", got, want)
+	}
+}
+
+func TestComputeStatusVersionSkewMatchesTypeScriptContract(t *testing.T) {
+	for _, test := range []struct {
+		cli, proxy string
+		want       bool
+	}{
+		{cli: "2.42.0", proxy: "", want: false},
+		{cli: "unknown", proxy: "2.43.0", want: false},
+		{cli: "2.42.0", proxy: "0.0.0", want: false},
+		{cli: "2.42.0", proxy: "2.42.0", want: false},
+		{cli: "2.42.0", proxy: "2.43.0", want: true},
+	} {
+		got := ComputeStatusVersionSkew(test.cli, test.proxy)
+		if got.Skewed != test.want {
+			t.Fatalf("ComputeStatusVersionSkew(%q, %q) = %#v", test.cli, test.proxy, got)
+		}
 	}
 }
 
