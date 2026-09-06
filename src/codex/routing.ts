@@ -1587,7 +1587,7 @@ function isUnknownUsage(usage: number): boolean {
  *
  * Downward moves are deliberately left to {@link applyQuotaAutoSwitch}: this only
  * fires when the tier filter has already excluded `active`, and only toward a
- * tier that strictly outranks it. Threads bound by affinity never reach here.
+ * tier that strictly outranks it. Bound threads reach here only through opt-in live failback.
  */
 function pickPriorityPreemption(
   config: OcxConfig,
@@ -1764,6 +1764,30 @@ export function resolveCodexAccountForThread(
   return resolution.status === "selected" ? resolution.accountId : null;
 }
 
+/** Reuse ordinary eligibility, priority and manual-pin rules for opt-in live failback.
+ * Only observed headroom can move an existing task; unknown quota is not recovery evidence.
+ * Quota polling is TTL-bounded in primeCodexPoolQuotas, not on the synchronous selector path.
+ */
+function pickAffinityPriorityFailback(
+  config: OcxConfig,
+  accountId: string,
+  now: number,
+  quotaScope?: CodexQuotaScope,
+  selectionOptions?: CodexAccountUsabilityOptions,
+): string | null {
+  if (config.codexAccountPriorityFailback !== true
+    || normalizeAccountPoolStrategy(config.accountPoolStrategy) !== "quota"
+    || (config.autoSwitchThreshold ?? 80) <= 0) return null;
+  const candidate = pickPriorityPreemption(config, accountId, now, quotaScope, selectionOptions);
+  if (!candidate) return null;
+  const usage = computeCodexUsageScore(
+    getAccountQuota(candidate),
+    getPoolAccountPlanForSelection(config, candidate, selectionOptions),
+    now,
+  );
+  return !isUnknownUsage(usage) && usage < (config.autoSwitchThreshold ?? 80) ? candidate : null;
+}
+
 function previewReusableAffinityAccount(
   entry: ThreadAffinityEntry | undefined,
   config: OcxConfig,
@@ -1780,6 +1804,8 @@ function previewReusableAffinityAccount(
   ) {
     return null;
   }
+  const recovered = pickAffinityPriorityFailback(config, entry.accountId, now, quotaScope, selectionOptions);
+  if (recovered) return recovered;
   // Quota strategy only: non-quota strategies keep affinity for ongoing threads
   // (new-session-only rotation — docs / affinity policy A).
   if (normalizeAccountPoolStrategy(config.accountPoolStrategy) === "quota") {
@@ -1809,7 +1835,7 @@ function previewReusableAffinityAccount(
 
 /**
  * Re-evaluate an affined account under the quota strategy. Returns a strictly
- * cooler replacement, or null when the current binding should remain.
+ * cooler replacement (or an opt-in recovered higher priority), or null to keep the binding.
  */
 function reevaluateAffinityQuota(
   entry: ThreadAffinityEntry,
@@ -1819,6 +1845,8 @@ function reevaluateAffinityQuota(
   selectionOptions?: CodexAccountUsabilityOptions,
 ): string | null {
   if (normalizeAccountPoolStrategy(config.accountPoolStrategy) !== "quota") return null;
+  const recovered = pickAffinityPriorityFailback(config, entry.accountId, now, quotaScope, selectionOptions);
+  if (recovered) return recovered;
   const threshold = config.autoSwitchThreshold ?? 80;
   const usage = threshold > 0
     ? computeCodexUsageScore(

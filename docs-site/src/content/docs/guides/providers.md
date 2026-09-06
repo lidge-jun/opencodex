@@ -251,6 +251,16 @@ across proxy restarts). On credential failures (`401` / `403`) the account is qu
 reauth and affinities for that account are cleared. On `429`, the account enters cooldown, affinities
 are cleared, and pool selection may rotate — threads are not pinned through a rate-limit response.
 
+**Return to a recovered account.** To resume using the highest-priority account during an
+ongoing task, enable `ocx config set codexAccountPriorityFailback true` and keep the Pool strategy
+at `quota` with automatic switching enabled. For example, a task can move from Plus to another
+account when its five-hour window fills, then return to Plus after the quota refresh confirms
+recovery. While requests are flowing, background refresh attempts run at most once every five
+minutes. The request that triggers a refresh may still use the previous account; the next request
+after the refresh completes can move back. Already-running requests finish on their captured
+account. Manual account pins and model-access restrictions still apply. This feature is off by
+default; use `ocx config set codexAccountPriorityFailback false` to restore stable bindings.
+
 **Codex client metadata.** The ChatGPT forward path passes through the curated `FORWARD_HEADERS`
 allowlist (authorization, `chatgpt-account-id`, originator, session/thread ids, and related Codex
 headers — see [Adapters](/reference/adapters/)). Pool mode overwrites only auth and

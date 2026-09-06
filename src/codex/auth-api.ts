@@ -1464,6 +1464,7 @@ async function fetchPoolAccountQuota(
 }
 
 let primeInFlight: Promise<void> | null = null;
+let lastPriorityFailbackPrimeAt: number | undefined;
 /**
  * Last prime attempt per pool account. A failed WHAM lookup stores no quota, so
  * without this the account stays "unknown" and every later prime trigger re-selects
@@ -1619,6 +1620,13 @@ export async function primeCodexPoolQuotas(
     || providerCodexAccountMode(OPENAI_CODEX_PROVIDER_ID, openai) !== "pool"
   ) return;
   if (primeInFlight) return primeInFlight;
+  // Live failback observes inactive accounts too. Bound the whole pass, including failed
+  // refreshes, so stale quota cannot cause one WHAM request per incoming model request.
+  if (reason === "priority-failback") {
+    const now = Date.now();
+    if (lastPriorityFailbackPrimeAt !== undefined && now - lastPriorityFailbackPrimeAt < POOL_CACHE_TTL) return;
+    lastPriorityFailbackPrimeAt = now;
+  }
   primeInFlight = (async () => {
     const pool = (runtimeConfig.codexAccounts ?? []).filter(isSelectableCodexPoolAccount);
     const stale = pool.filter(a => {
@@ -1642,7 +1650,8 @@ export async function primeCodexPoolQuotas(
             // Keep one local owner and one cross-process reader from physical
             // identity reconciliation through WHAM and all quota publication.
             (options.reconcileMainAccount ?? reconcileMainCodexAccountRuntimeState)();
-            if (getAccountQuota(MAIN_CODEX_ACCOUNT_ID)) return;
+            const quota = getAccountQuota(MAIN_CODEX_ACCOUNT_ID);
+            if (quota && (reason !== "priority-failback" || Date.now() - quota.updatedAt < MAIN_CACHE_TTL)) return;
             if (!(options.readMainTokens ?? readCodexTokens)()) return;
             if (options.fetchMainInfo) await options.fetchMainInfo(false);
             else await fetchMainAccountInfoAttempt(false, 1, mainLease, true);
@@ -1700,6 +1709,7 @@ export async function primeCodexPoolQuotas(
  * from another suite cannot coalesce into the next prime. */
 export function clearCodexQuotaPrimeState(): void {
   primeInFlight = null;
+  lastPriorityFailbackPrimeAt = undefined;
   poolQuotaPrimeAttemptedAt.clear();
   getValidPoolTokenForPrime = getValidCodexToken;
 }
@@ -1709,6 +1719,7 @@ export function clearCodexQuotaPrimeState(): void {
  * the throttle a production caller would see. */
 export function clearCodexQuotaPrimeSingleFlightForTests(): void {
   primeInFlight = null;
+  lastPriorityFailbackPrimeAt = undefined;
 }
 
 /** Test-only reset for the worker-level single-flight. */

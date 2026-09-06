@@ -1177,6 +1177,7 @@ const configSchema = z.object({
   // typo cannot trip the backup-and-defaults repair path and wipe providers or
   // pool accounts. Warning emitted in loadConfig.
   codexAccountPriorities: codexAccountPrioritiesSchema.optional().catch(undefined),
+  codexAccountPriorityFailback: z.boolean().optional(),
   activeCodexAccountPinned: z.string().regex(CODEX_ACCOUNT_PIN_PATTERN).optional().catch(undefined),
   // A malformed hand edit must degrade to false without discarding providers, accounts,
   // or the exact selector map. Live writes remain strict.
