@@ -4,7 +4,7 @@ import { runtimeProviderFetch } from "./provider-runtime-fetch";
 import { resolveProxyRoute } from "./proxy-env";
 
 export type ProviderTlsProfile = "antigravity-browser";
-export type ProviderTlsProfileStatus = "disabled" | "active" | "fallback";
+export type ProviderTlsProfileStatus = "disabled" | "active" | "failed";
 export const ANTIGRAVITY_TLS_HOSTS = new Set(["daily-cloudcode-pa.googleapis.com", "cloudcode-pa.googleapis.com"]);
 type TlsRuntime = { fetch(input: string | URL | Request, init?: RequestInit): Promise<Response> };
 let status = new Map<string, ProviderTlsProfileStatus>();
@@ -65,7 +65,7 @@ export function providerTlsFetch(
     return fallback;
   }
   if (providerTlsProfileConfigError(name, provider)) {
-    status.set(name, "fallback");
+    status.set(name, "failed");
     return (async () => { throw new Error("invalid provider TLS profile"); }) as unknown as typeof globalThis.fetch;
   }
   return (async (input, init) => {
@@ -86,7 +86,7 @@ export function providerTlsFetch(
       status.set(name, "active");
       return response;
     } catch (error) {
-      status.set(name, "fallback");
+      status.set(name, "failed");
       throw preserveTransportError(error);
     }
   }) as typeof globalThis.fetch;
