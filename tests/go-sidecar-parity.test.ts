@@ -134,6 +134,10 @@ async function captureCustomModels(server: { url: URL }, token: string) {
   return captureJson(server, token, "/api/custom-models");
 }
 
+async function captureProviderQuotas(server: { url: URL }, token: string, suffix = "") {
+  return captureJson(server, token, "/api/provider-quotas" + suffix);
+}
+
 async function captureHealth(server: { url: URL }, token: string): Promise<HealthCapture> {
   const response = await fetch(new URL("/api/system/health", server.url), {
     headers: { "x-opencodex-api-key": token },
@@ -235,6 +239,11 @@ describe.skipIf(!goAvailable || sidecarBinary === null)("ocx-sidecar differentia
     );
     expect(customModels).toBeDefined();
     expect(customModels!.go.volatileFields).toEqual([]);
+    const providerQuotas = GO_OWNED_MANAGEMENT_ROUTES.find(
+      route => route.method === "GET" && route.path === "/api/provider-quotas",
+    );
+    expect(providerQuotas).toBeDefined();
+    expect(providerQuotas!.go.volatileFields).toEqual(["generatedAt"]);
   });
 
   runFixtureTest("in-process handler and Go sidecar agree on status, headers, and normalised body", async (token) => {
@@ -444,6 +453,54 @@ describe.skipIf(!goAvailable || sidecarBinary === null)("ocx-sidecar differentia
         await serverB.stop(true);
       }
       expect(activeGoSidecarBaseUrl()).toBeNull();
+    } finally {
+      await serverA.stop(true);
+    }
+  });
+
+  runFixtureTest("provider-quotas is Go-owned and preserves cached and forced-refresh bytes", async (token) => {
+    // Ticket #20: the fixture's only provider is disabled, so the aggregation
+    // never calls an upstream. It still exercises both cache modes and proves
+    // the Go public handler relays the TypeScript-owned live-state bridge
+    // byte-for-byte. generatedAt is volatile only for a forced refresh.
+    const serverA = startServer(0);
+    try {
+      const cachedTs = await captureProviderQuotas(serverA, token);
+      expect(cachedTs.status).toBe(200);
+      expect(cachedTs.contentType).toBe("application/json");
+      expect(cachedTs.body).toContain("\"reports\":[]");
+
+      process.env[GO_SIDECAR_BIN_ENV] = sidecarBinary!;
+      const serverB = startServer(0);
+      try {
+        const sidecarUrl = await waitFor(() => activeGoSidecarBaseUrl(), 15_000);
+        const cachedGo = await captureProviderQuotas(serverB, token);
+        expect(cachedGo.status).toBe(200);
+        expect(cachedGo.contentType).toBe("application/json");
+        expect(cachedGo.body).toBe(cachedTs.body);
+
+        const refreshedTs = await captureProviderQuotas(serverA, token, "?refresh=1");
+        const refreshedGo = await captureProviderQuotas(serverB, token, "?refresh=1");
+        expect(refreshedGo.status).toBe(200);
+        expect(normaliseBody(refreshedGo.body, ["generatedAt"])).toBe(
+          normaliseBody(refreshedTs.body, ["generatedAt"]),
+        );
+
+        // The sidecar listener is loopback-only but it is still a process
+        // boundary. A local peer without the parent-minted capability cannot
+        // use it to trigger a quota refresh.
+        const direct = await fetch(new URL("/api/provider-quotas?refresh=1", sidecarUrl));
+        expect(direct.status).toBe(404);
+
+        // The parent bridge is never a second management endpoint: an admin
+        // token does not substitute for the child-only capability.
+        const bridge = await fetch(new URL("/__ocx_go_sidecar/provider-quotas", serverB.url), {
+          headers: { "x-opencodex-api-key": token },
+        });
+        expect(bridge.status).toBe(404);
+      } finally {
+        await serverB.stop(true);
+      }
     } finally {
       await serverA.stop(true);
     }

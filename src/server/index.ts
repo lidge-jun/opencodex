@@ -1,4 +1,5 @@
 import { markActivity } from "../lib/sidecar-tracker";
+import { randomUUID } from "node:crypto";
 import { knownModelIdsForProvider } from "../router";
 import {
   buildWarmupCompletionFrames,
@@ -34,6 +35,7 @@ import {
   type OwnershipInspection,
 } from "../integrations/native/ownership-preflight";
 import { createResetCreditWhamClient, registerCodexCooldownRecoveryProbeWorker } from "../codex/auth-api";
+import { fetchProviderQuotaReports } from "../providers/quota";
 import { activateResetCreditAutoRedeem } from "../codex/reset-credit-auto-redeem";
 import {
   reconcileLiveStateStores,
@@ -1018,6 +1020,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     return "public";
   }
   let backgroundLifecycle: ReturnType<typeof acquireServerBackgroundLifecycle> | null = null;
+  let goSidecarLiveStateBridgeToken: string | null = null;
   // Set only when the optional Go sidecar activated (ADR-0008); consumed by the server.stop
   // override below, which is built before activation runs. Null default keeps a process that
   // never opted in from carrying any Go-sidecar state.
@@ -1060,6 +1063,22 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
       // Routing, provider selection and response bodies keep using `config`.
       const policy: RequestPolicyView = ingress === "unauthenticated-loopback" ? loopbackPolicy() : config;
       const url = new URL(req.url);
+      // Ticket #20 bridge: the Go sidecar owns the public quota route while
+      // the authoritative cache remains in this process until the runtime
+      // flip. This private capability endpoint is not a management route and
+      // never accepts an admin token or browser session as a substitute.
+      if (url.pathname === "/__ocx_go_sidecar/provider-quotas") {
+        const bridgeToken = goSidecarLiveStateBridgeToken;
+        if (
+          req.method !== "GET"
+          || !bridgeToken
+          || req.headers.get("x-ocx-go-sidecar-bridge") !== bridgeToken
+        ) {
+          return new Response(null, { status: 404 });
+        }
+        const forceRefresh = url.searchParams.get("refresh") === "1" || url.searchParams.get("refresh") === "true";
+        return jsonResponse(await fetchProviderQuotaReports(config, forceRefresh));
+      }
       markActivity(`${req.method} ${url.pathname}`);
 
       // Readiness is exact-GET on the literal /readyz path. Compare the DECODED
@@ -2455,9 +2474,21 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   // registration of an off-stack readiness wait), so the activation-window invariant that
   // tests/core-lab-boundary.test.ts scans for still holds; a default install spawns nothing
   // and every existing route behaves byte-identically.
-  const goSidecarHandle = activateGoSidecar(VERSION);
+  const goSidecarHandle = process.env.OPENCODEX_GO_SIDECAR_BIN?.trim()
+    ? (() => {
+      goSidecarLiveStateBridgeToken = randomUUID();
+      return activateGoSidecar(VERSION, {
+        parentUrl: "http://127.0.0.1:" + actualPort,
+        bridgeToken: goSidecarLiveStateBridgeToken,
+        requestToken: randomUUID(),
+        onStopped: () => { goSidecarLiveStateBridgeToken = null; },
+      });
+    })()
+    : null;
   if (goSidecarHandle) {
     goSidecarStop = goSidecarHandle.stop;
+  } else {
+    goSidecarLiveStateBridgeToken = null;
   }
 
   return server;

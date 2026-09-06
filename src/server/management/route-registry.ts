@@ -344,7 +344,10 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "DELETE", path: "/api/providers", module: "server/management/provider-routes", mutates: true },
   { method: "GET", path: "/api/provider-context-caps", module: "server/management/provider-routes", mutates: false },
   { method: "GET", path: "/api/provider-presets", module: "server/management/provider-routes", mutates: false },
-  { method: "GET", path: "/api/provider-quotas", module: "server/management/provider-routes", mutates: false },
+  // Ticket #20: Go owns the public HTTP route. Its handler uses a private,
+  // capability-protected bridge for the pre-flip quota cache, whose refresh
+  // semantics still belong to the serving TypeScript process.
+  { method: "GET", path: "/api/provider-quotas", module: "server/management/provider-routes", mutates: false, go: { volatileFields: ["generatedAt"] } },
   { method: "GET", path: "/api/provider-request-pacing", module: "server/management/provider-routes", mutates: false },
   { method: "GET", path: "/api/providers", module: "server/management/provider-routes", mutates: false },
   { method: "PATCH", path: "/api/providers", module: "server/management/provider-routes", mutates: true },

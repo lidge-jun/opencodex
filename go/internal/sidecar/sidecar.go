@@ -12,7 +12,10 @@ package sidecar
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 
@@ -43,6 +46,12 @@ type Config struct {
 	// resolution as src/config/paths.ts in the parent. Set explicitly only by
 	// unit tests; the supervisor inherits OPENCODEX_HOME at spawn time.
 	ConfigDir string
+	// ParentURL and BridgeToken identify the private parent endpoint that owns
+	// live quota state until the Go runtime flip. RequestToken is required on
+	// every forwarded sidecar request, so direct loopback access cannot refresh.
+	ParentURL    string
+	BridgeToken  string
+	RequestToken string
 }
 
 // healthPayload mirrors the JSON object literal in
@@ -142,6 +151,62 @@ func NewHandler(cfg Config) http.Handler {
 			}
 		}
 		writeRawJSON(w, raw, "custom-models")
+	})
+
+	// Ticket #20: provider quota aggregation remains process state until the
+	// runtime flip. Go owns this public HTTP route and obtains the existing
+	// cache/probe result from a capability-scoped parent loopback bridge, so
+	// refresh, invalidation, passive observations and last-good retention keep
+	// their established semantics while the wire response stays byte-identical.
+	mux.HandleFunc("GET /api/provider-quotas", func(w http.ResponseWriter, r *http.Request) {
+		if cfg.RequestToken == "" || r.Header.Get("X-Ocx-Go-Sidecar-Request") != cfg.RequestToken {
+			http.NotFound(w, r)
+			return
+		}
+		parent, err := url.Parse(cfg.ParentURL)
+		if err != nil || parent.Scheme != "http" || parent.Hostname() != "127.0.0.1" || cfg.BridgeToken == "" {
+			http.Error(w, "quota state bridge unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		parent.Path = "/__ocx_go_sidecar/provider-quotas"
+		parent.RawQuery = r.URL.RawQuery
+		bridgeReq, err := http.NewRequestWithContext(r.Context(), http.MethodGet, parent.String(), nil)
+		if err != nil {
+			http.Error(w, "quota state bridge unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		bridgeReq.Header.Set("X-Ocx-Go-Sidecar-Bridge", cfg.BridgeToken)
+		bridgeTransport := &http.Transport{
+			Proxy:       nil,
+			DialContext: (&net.Dialer{}).DialContext,
+		}
+		defer bridgeTransport.CloseIdleConnections()
+		bridgeClient := &http.Client{
+			Timeout: 30 * time.Second,
+			// The bridge credential must never be sent through HTTP_PROXY or a
+			// system proxy. The parent is a literal IPv4 loopback listener.
+			Transport: bridgeTransport,
+		}
+		bridgeResp, err := bridgeClient.Do(bridgeReq)
+		if err != nil {
+			http.Error(w, "quota state bridge unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		defer bridgeResp.Body.Close()
+		raw, err := io.ReadAll(io.LimitReader(bridgeResp.Body, 8*1024*1024+1))
+		if err != nil || len(raw) > 8*1024*1024 {
+			http.Error(w, "quota state bridge unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		contentType := bridgeResp.Header.Get("Content-Type")
+		if contentType == "" {
+			contentType = "application/json"
+		}
+		w.Header().Set("Content-Type", contentType)
+		w.WriteHeader(bridgeResp.StatusCode)
+		if _, err := w.Write(raw); err != nil {
+			fmt.Fprintf(os.Stderr, "ocx-sidecar: write provider-quotas payload: %v\n", err)
+		}
 	})
 	return mux
 }

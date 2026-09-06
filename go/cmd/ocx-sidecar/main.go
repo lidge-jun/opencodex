@@ -59,9 +59,12 @@ func serve() error {
 	addr := listener.Addr().String()
 
 	cfg := sidecar.Config{
-		Service:   "opencodex",
-		Version:   os.Getenv("OCX_SIDECAR_VERSION"),
-		StartedAt: time.Now(),
+		Service:      "opencodex",
+		Version:      os.Getenv("OCX_SIDECAR_VERSION"),
+		StartedAt:    time.Now(),
+		ParentURL:    os.Getenv("OCX_SIDECAR_PARENT_URL"),
+		BridgeToken:  os.Getenv("OCX_SIDECAR_BRIDGE_TOKEN"),
+		RequestToken: os.Getenv("OCX_SIDECAR_REQUEST_TOKEN"),
 	}
 	if cfg.Version == "" {
 		fmt.Fprintln(os.Stderr, "ocx-sidecar: warning: OCX_SIDECAR_VERSION is unset; reporting version 0.0.0")

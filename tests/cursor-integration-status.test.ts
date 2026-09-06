@@ -93,6 +93,7 @@ describe("cursorEffortFamily", () => {
 });
 
 const previousHome = process.env.OPENCODEX_HOME;
+const previousDataToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 let testHome = "";
 const CURSOR_EFFORT_FIXTURE = readFileSync(join(import.meta.dir, "fixtures/cursor-agent-exec-effort-table.min.js"), "utf8");
 const STATIC_CURSOR_EFFORT_DEPS = { managementApi: { loadCursorEffortTable: () => null } };
@@ -128,6 +129,10 @@ describe("GET /api/native-integrations/cursor", () => {
   beforeEach(() => {
     testHome = mkdtempSync(join(tmpdir(), "ocx-cursor-status-"));
     process.env.OPENCODEX_HOME = testHome;
+    // The placeholder-mode fixture is about an install with no data-plane
+    // credential. Keep that contract independent of a developer or CI shell
+    // that exports an API token for unrelated tests.
+    delete process.env.OPENCODEX_API_AUTH_TOKEN;
     resetCursorSeenForTests();
   });
 
@@ -136,6 +141,8 @@ describe("GET /api/native-integrations/cursor", () => {
     resetCursorSeenForTests();
     if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousHome;
+    if (previousDataToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
+    else process.env.OPENCODEX_API_AUTH_TOKEN = previousDataToken;
     if (testHome) removeTreeWithRetry(testHome);
     testHome = "";
   });

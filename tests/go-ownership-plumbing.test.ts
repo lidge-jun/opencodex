@@ -125,7 +125,7 @@ async function getJson(token: string, server: { url: URL }, pathname: string): P
 // ---------------------------------------------------------------------------
 
 describe("ADR-0008 ownership markers are typed read/write (ticket #14)", () => {
-  test("the declared Go-owned surface is health (volatile), shadow-call-settings (strict) and custom-models (strict) today", () => {
+  test("the declared Go-owned surface includes the ticket #20 quota route", () => {
     // Pin the migrated set so an accidental marker flip on another read route
     // fails here instead of silently changing what the proxy serves. Adding a
     // real migration updates this list deliberately. Health reports the serving
@@ -136,6 +136,7 @@ describe("ADR-0008 ownership markers are typed read/write (ticket #14)", () => {
     const byPath = new Map(GO_OWNED_MANAGEMENT_ROUTES.map(r => [r.path, r]));
     expect([...byPath.keys()].sort()).toEqual([
       "/api/custom-models",
+      "/api/provider-quotas",
       "/api/shadow-call-settings",
       "/api/system/health",
     ]);
@@ -154,6 +155,11 @@ describe("ADR-0008 ownership markers are typed read/write (ticket #14)", () => {
     expect(customModels.mutates).toBe(false);
     expect(customModels.module).toBe("server/management/model-routes");
     expect(customModels.go.volatileFields).toEqual([]);
+    const providerQuotas = byPath.get("/api/provider-quotas")!;
+    expect(providerQuotas.method).toBe("GET");
+    expect(providerQuotas.mutates).toBe(false);
+    expect(providerQuotas.module).toBe("server/management/provider-routes");
+    expect(providerQuotas.go.volatileFields).toEqual(["generatedAt"]);
   });
 
   test("no write route can be Go-owned: runtime re-check of the union's read-only arm", () => {
@@ -203,6 +209,8 @@ describe("ADR-0008 ownership markers are typed read/write (ticket #14)", () => {
     expect(findGoOwnedManagementRoute("GET", "/api/custom-models")).toBe(customModels);
     expect(findGoOwnedManagementRoute("POST", "/api/custom-models")).toBeUndefined();
     expect(findGoOwnedManagementRoute("GET", "/api/custom-models/")).toBeUndefined();
+    expect(findGoOwnedManagementRoute("GET", "/api/provider-quotas")).toBeDefined();
+    expect(findGoOwnedManagementRoute("POST", "/api/provider-quotas")).toBeUndefined();
   });
 
   test("the forwarding branch in management-api.ts names no route of its own", () => {

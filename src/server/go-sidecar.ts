@@ -35,11 +35,23 @@ export const GO_SIDECAR_BIN_ENV = "OPENCODEX_GO_SIDECAR_BIN";
 /** Environment variable the parent uses to pass the installed package version. */
 export const GO_SIDECAR_VERSION_ENV = "OCX_SIDECAR_VERSION";
 
+/** Parent loopback endpoint used only by the sidecar live-state bridge. */
+export const GO_SIDECAR_PARENT_URL_ENV = "OCX_SIDECAR_PARENT_URL";
+
+/** Capability presented by the child when reading parent-owned live state. */
+export const GO_SIDECAR_BRIDGE_TOKEN_ENV = "OCX_SIDECAR_BRIDGE_TOKEN";
+
+/** Capability presented by the parent when forwarding to the sidecar. */
+export const GO_SIDECAR_REQUEST_TOKEN_ENV = "OCX_SIDECAR_REQUEST_TOKEN";
+
 /** Readiness marker the Go binary prints on stdout after binding. */
 export const GO_SIDECAR_READY_PREFIX = "ocx-sidecar-ready";
 
 /** How long the front door waits for the child's ready line before giving up. */
 export const GO_SIDECAR_READY_TIMEOUT_MS = 10_000;
+
+/** Quota aggregation may await provider probes; keep one refresh attempt alive. */
+export const GO_SIDECAR_QUOTA_ROUTE_TIMEOUT_MS = 30_000;
 
 type KillableChild = {
   exited: Promise<number>;
@@ -53,6 +65,7 @@ let stopped = true;
 let readyBaseUrl = "";
 let generation = 0;
 let forwardDetach: (() => void) | null = null;
+let bridgeStopped: (() => void) | null = null;
 
 /** Test-only reset so an isolated harness does not inherit a live child. */
 export function resetGoSidecarForTests(): void {
@@ -143,12 +156,12 @@ function warnActivation(message: string): void {
 }
 
 /** Forward one declared Go-owned route request to a ready sidecar, or null on any failure. */
-async function forwardTo(baseUrl: string, method: string, pathAndSearch: string): Promise<Response | null> {
+async function forwardTo(baseUrl: string, requestToken: string, method: string, pathAndSearch: string): Promise<Response | null> {
   try {
     const upstream = await directLocalHttpFetch(new URL(pathAndSearch, baseUrl), {
       method,
-      headers: { accept: "application/json" },
-    });
+      headers: { accept: "application/json", "x-ocx-go-sidecar-request": requestToken },
+    }, pathAndSearch.startsWith("/api/provider-quotas") ? { timeoutMs: GO_SIDECAR_QUOTA_ROUTE_TIMEOUT_MS } : undefined);
     if (!upstream.ok) return null;
     // Relay the sidecar's response with the in-process handler's header shape:
     // Content-Type plus the body verbatim. The management-API CORS wrapper adds
@@ -165,6 +178,9 @@ async function forwardTo(baseUrl: string, method: string, pathAndSearch: string)
 function stopSidecar(): void {
   if (stopped) return;
   stopped = true;
+  const notifyBridgeStopped = bridgeStopped;
+  bridgeStopped = null;
+  notifyBridgeStopped?.();
   if (forwardDetach) {
     forwardDetach();
     forwardDetach = null;
@@ -195,7 +211,10 @@ function stopSidecar(): void {
  * — and after any unexpected exit — the slot is empty and the in-process
  * handler answers, byte-identically to a build without Go.
  */
-export function activateGoSidecar(version: string): { stop(): void } | null {
+export function activateGoSidecar(
+  version: string,
+  liveStateBridge: { parentUrl: string; bridgeToken: string; requestToken: string; onStopped(): void },
+): { stop(): void } | null {
   const binary = process.env[GO_SIDECAR_BIN_ENV]?.trim();
   if (!binary) return null;
   if (!existsSync(binary)) {
@@ -213,6 +232,9 @@ export function activateGoSidecar(version: string): { stop(): void } | null {
       env: {
         ...process.env,
         [GO_SIDECAR_VERSION_ENV]: version,
+        [GO_SIDECAR_PARENT_URL_ENV]: liveStateBridge.parentUrl,
+        [GO_SIDECAR_BRIDGE_TOKEN_ENV]: liveStateBridge.bridgeToken,
+        [GO_SIDECAR_REQUEST_TOKEN_ENV]: liveStateBridge.requestToken,
       },
     });
   } catch (error) {
@@ -225,6 +247,7 @@ export function activateGoSidecar(version: string): { stop(): void } | null {
   stopped = false;
   childProc = proc;
   readyBaseUrl = "";
+  bridgeStopped = liveStateBridge.onStopped;
   // The optional-subsystem shutdown hook is keyed, so a re-activation replaces
   // the previous registration instead of accumulating duplicate teardown.
   registerOptionalShutdownHook("go-sidecar", stopSidecar);
@@ -251,7 +274,9 @@ export function activateGoSidecar(version: string): { stop(): void } | null {
     if (stopped || myGeneration !== generation) return;
     readyBaseUrl = parsed;
     const baseUrl = parsed;
-    const detach = setGoOwnedRouteForwarder((method, pathAndSearch) => forwardTo(baseUrl, method, pathAndSearch));
+    const detach = setGoOwnedRouteForwarder((method, pathAndSearch) => (
+      forwardTo(baseUrl, liveStateBridge.requestToken, method, pathAndSearch)
+    ));
     if (stopped || myGeneration !== generation) {
       detach();
       return;
