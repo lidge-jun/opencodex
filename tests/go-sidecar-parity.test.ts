@@ -130,6 +130,10 @@ async function captureShadowCall(server: { url: URL }, token: string) {
   return captureJson(server, token, "/api/shadow-call-settings");
 }
 
+async function captureCustomModels(server: { url: URL }, token: string) {
+  return captureJson(server, token, "/api/custom-models");
+}
+
 async function captureHealth(server: { url: URL }, token: string): Promise<HealthCapture> {
   const response = await fetch(new URL("/api/system/health", server.url), {
     headers: { "x-opencodex-api-key": token },
@@ -225,6 +229,12 @@ describe.skipIf(!goAvailable || sidecarBinary === null)("ocx-sidecar differentia
     // empty volatile set (raw byte equality, no normalisation).
     expect(goOwnedShadowCallSettings).toBeDefined();
     expect(goOwnedShadowCallSettings!.go.volatileFields).toEqual([]);
+    // The strict raw-echo config route (ticket #17) must stay declared too.
+    const customModels = GO_OWNED_MANAGEMENT_ROUTES.find(
+      route => route.method === "GET" && route.path === "/api/custom-models",
+    );
+    expect(customModels).toBeDefined();
+    expect(customModels!.go.volatileFields).toEqual([]);
   });
 
   runFixtureTest("in-process handler and Go sidecar agree on status, headers, and normalised body", async (token) => {
@@ -396,6 +406,78 @@ describe.skipIf(!goAvailable || sidecarBinary === null)("ocx-sidecar differentia
         // The front door must relay the Go bytes without alteration, matching
         // the sidecar's own direct response exactly.
         const direct = await fetch(new URL("/api/shadow-call-settings", sidecarUrl), {
+          headers: { accept: "application/json" },
+        });
+        expect(direct.status).toBe(200);
+        expect(await direct.text()).toBe(goBody.body);
+      } finally {
+        await serverB.stop(true);
+      }
+      expect(activeGoSidecarBaseUrl()).toBeNull();
+    } finally {
+      await serverA.stop(true);
+    }
+  });
+
+  runFixtureTest("custom-models default body is byte-identical with no normalisation", async (token) => {
+    // Ticket #17: GET /api/custom-models is a raw echo of the config's
+    // customModels subsection (JSON.stringify(config.customModels ?? [])). The
+    // fixture carries no customModels key, so both implementations must report
+    // the nullish fallback []. Empty volatile set: raw bytes must be equal.
+    const serverA = startServer(0);
+    try {
+      const tsBody = await captureCustomModels(serverA, token);
+      expect(tsBody.status).toBe(200);
+      expect(tsBody.contentType).toBe("application/json");
+      expect(tsBody.body).toBe(`[]`);
+
+      process.env[GO_SIDECAR_BIN_ENV] = sidecarBinary!;
+      const serverB = startServer(0);
+      try {
+        await waitFor(() => activeGoSidecarBaseUrl(), 15_000);
+        const goBody = await captureCustomModels(serverB, token);
+        expect(goBody.status).toBe(200);
+        expect(goBody.contentType).toBe("application/json");
+        expect(goBody.body).toBe(tsBody.body);
+        expect(goBody.body).toBe(`[]`);
+      } finally {
+        await serverB.stop(true);
+      }
+      expect(activeGoSidecarBaseUrl()).toBeNull();
+    } finally {
+      await serverA.stop(true);
+    }
+  });
+
+  runFixtureTest("custom-models configured body is byte-identical (unknown keys and file order kept)", async (token) => {
+    // A non-default section exercises the echo, not the fallback: unknown
+    // per-entry keys survive, and each entry's key order follows the file
+    // (JSON.stringify of the parsed value, not a schema). saveConfig persists
+    // customModels as a passthrough (probed), so the fixture keeps its order.
+    saveConfig({
+      ...configFixture(),
+      customModels: [
+        { zetaField: 1, provider: "test", modelId: "custom-a", displayName: "Custom A", contextWindow: 99999 },
+        { provider: "anthropic", modelId: "custom-b" },
+      ],
+    });
+    const want = `[{"zetaField":1,"provider":"test","modelId":"custom-a","displayName":"Custom A","contextWindow":99999},{"provider":"anthropic","modelId":"custom-b"}]`;
+
+    const serverA = startServer(0);
+    try {
+      const tsBody = await captureCustomModels(serverA, token);
+      expect(tsBody.body).toBe(want);
+
+      process.env[GO_SIDECAR_BIN_ENV] = sidecarBinary!;
+      const serverB = startServer(0);
+      try {
+        const sidecarUrl = await waitFor(() => activeGoSidecarBaseUrl(), 15_000);
+        const goBody = await captureCustomModels(serverB, token);
+        expect(goBody.body).toBe(want);
+
+        // The front door must relay the Go bytes without alteration, matching
+        // the sidecar's own direct response exactly.
+        const direct = await fetch(new URL("/api/custom-models", sidecarUrl), {
           headers: { accept: "application/json" },
         });
         expect(direct.status).toBe(200);

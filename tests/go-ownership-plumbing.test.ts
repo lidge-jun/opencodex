@@ -125,15 +125,17 @@ async function getJson(token: string, server: { url: URL }, pathname: string): P
 // ---------------------------------------------------------------------------
 
 describe("ADR-0008 ownership markers are typed read/write (ticket #14)", () => {
-  test("the declared Go-owned surface is health (volatile) and shadow-call-settings (strict) today", () => {
+  test("the declared Go-owned surface is health (volatile), shadow-call-settings (strict) and custom-models (strict) today", () => {
     // Pin the migrated set so an accidental marker flip on another read route
     // fails here instead of silently changing what the proxy serves. Adding a
     // real migration updates this list deliberately. Health reports the serving
     // process's own pid/uptime and declares them volatile; shadow-call-settings
-    // is a pure function of config.json and declares NO volatile field, which
-    // means the oracle compares its bytes with no normalisation at all.
+    // and custom-models are pure functions of config.json (the latter a raw
+    // JSON.stringify echo) and declare NO volatile field, which means the
+    // oracle compares their bytes with no normalisation at all.
     const byPath = new Map(GO_OWNED_MANAGEMENT_ROUTES.map(r => [r.path, r]));
     expect([...byPath.keys()].sort()).toEqual([
+      "/api/custom-models",
       "/api/shadow-call-settings",
       "/api/system/health",
     ]);
@@ -147,6 +149,11 @@ describe("ADR-0008 ownership markers are typed read/write (ticket #14)", () => {
     expect(shadowCall.mutates).toBe(false);
     expect(shadowCall.module).toBe("server/management/config-routes");
     expect(shadowCall.go.volatileFields).toEqual([]);
+    const customModels = byPath.get("/api/custom-models")!;
+    expect(customModels.method).toBe("GET");
+    expect(customModels.mutates).toBe(false);
+    expect(customModels.module).toBe("server/management/model-routes");
+    expect(customModels.go.volatileFields).toEqual([]);
   });
 
   test("no write route can be Go-owned: runtime re-check of the union's read-only arm", () => {
@@ -191,6 +198,11 @@ describe("ADR-0008 ownership markers are typed read/write (ticket #14)", () => {
     expect(findGoOwnedManagementRoute("GET", "/api/shadow-call-settings")).toBe(shadowCall);
     expect(findGoOwnedManagementRoute("PUT", "/api/shadow-call-settings")).toBeUndefined();
     expect(findGoOwnedManagementRoute("GET", "/api/shadow-call-settings/")).toBeUndefined();
+    const customModels = GO_OWNED_MANAGEMENT_ROUTES.find(r => r.path === "/api/custom-models");
+    expect(customModels).toBeDefined();
+    expect(findGoOwnedManagementRoute("GET", "/api/custom-models")).toBe(customModels);
+    expect(findGoOwnedManagementRoute("POST", "/api/custom-models")).toBeUndefined();
+    expect(findGoOwnedManagementRoute("GET", "/api/custom-models/")).toBeUndefined();
   });
 
   test("the forwarding branch in management-api.ts names no route of its own", () => {
@@ -205,6 +217,7 @@ describe("ADR-0008 ownership markers are typed read/write (ticket #14)", () => {
     expect(src).toContain("tryForwardGoOwnedRoute");
     expect(src).not.toContain('"/api/system/health"');
     expect(src).not.toContain('"/api/system/memory"');
+    expect(src).not.toContain('"/api/custom-models"');
     expect(src).not.toContain("tryForwardGoOwnedRoute(\"/");
   });
 });

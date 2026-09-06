@@ -279,7 +279,16 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/aliases", module: "server/management/model-routes", mutates: false },
   { method: "GET", path: "/api/catalog", module: "server/management/model-routes", mutates: false },
   { method: "GET", path: "/api/client-config", module: "server/management/model-routes", mutates: false },
-  { method: "GET", path: "/api/custom-models", module: "server/management/model-routes", mutates: false },
+  // ADR-0008 ownership: GET /api/custom-models is Go-owned (ticket #17). The
+  // body is JSON.stringify(config.customModels ?? []): a raw echo of the
+  // config subsection, which is a passthrough in the zod pipeline (unknown
+  // keys, key order and non-schema values survive a save/load round trip). So
+  // it also declares an EMPTY volatile set: the oracle compares raw bytes with
+  // no normalisation. The Go handler (go/internal/sidecar) reads the same file
+  // through the ordered decoder (go/internal/config) so object key order and
+  // JSON.stringify escaping match exactly; absent or null customModels coalesce
+  // to [] like the TS nullish operator.
+  { method: "GET", path: "/api/custom-models", module: "server/management/model-routes", mutates: false, go: { volatileFields: [] } },
   { method: "GET", path: "/api/model-discovery", module: "server/management/model-routes", mutates: false },
   { method: "GET", path: "/api/model-presets", module: "server/management/model-routes", mutates: false },
   { method: "GET", path: "/api/models", module: "server/management/model-routes", mutates: false },

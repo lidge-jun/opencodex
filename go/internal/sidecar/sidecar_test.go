@@ -250,3 +250,81 @@ func TestShadowCallSettingsSurfaceIsNarrow(t *testing.T) {
 	}
 }
 
+func TestCustomModelsEchoVerbatim(t *testing.T) {
+	dir := t.TempDir()
+	// Pretty-printed, unknown per-entry keys, key order NOT matching any schema:
+	// the echo must follow the file (JSON.stringify of the parsed value), not a
+	// Go struct.
+	writeConfigFile(t, dir, `{
+  "port": 18080,
+  "customModels": [
+    { "zetaField": 1, "provider": "test", "modelId": "custom-a", "displayName": "Custom A", "contextWindow": 99999 },
+    { "provider": "anthropic", "modelId": "custom-b" }
+  ]
+}`)
+	h := NewHandler(Config{ConfigDir: dir})
+	resp := do(t, h, http.MethodGet, "/api/custom-models")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Type"); got != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", got)
+	}
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `[{"zetaField":1,"provider":"test","modelId":"custom-a","displayName":"Custom A","contextWindow":99999},{"provider":"anthropic","modelId":"custom-b"}]`
+	if string(raw) != want {
+		t.Fatalf("body = %s\nwant  %s", raw, want)
+	}
+}
+
+func TestCustomModelsDefaultsWithoutConfig(t *testing.T) {
+	// No customModels key and no config file at all both coalesce to [] (the TS
+	// handler's `config.customModels ?? []`).
+	for _, tc := range []struct {
+		name    string
+		content string
+	}{
+		{"missing key", `{"port": 18080}`},
+		{"null value", `{"customModels": null}`},
+		{"no file", ""},
+	} {
+		dir := t.TempDir()
+		if tc.content != "" {
+			writeConfigFile(t, dir, tc.content)
+		}
+		h := NewHandler(Config{ConfigDir: dir})
+		resp := do(t, h, http.MethodGet, "/api/custom-models")
+		raw, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(raw) != "[]" {
+			t.Errorf("%s: body = %s, want []", tc.name, raw)
+		}
+	}
+}
+
+func TestCustomModelsSurfaceIsNarrow(t *testing.T) {
+	h := NewHandler(Config{ConfigDir: t.TempDir()})
+	cases := []struct {
+		method string
+		path   string
+		want   int
+	}{
+		{http.MethodPost, "/api/custom-models", http.StatusMethodNotAllowed},
+		{http.MethodPut, "/api/custom-models", http.StatusMethodNotAllowed},
+		{http.MethodGet, "/api/custom-models/", http.StatusNotFound},
+		{http.MethodGet, "/api/custom-models?x=1", http.StatusOK},
+	}
+	for _, tc := range cases {
+		resp := do(t, h, tc.method, tc.path)
+		resp.Body.Close()
+		if resp.StatusCode != tc.want {
+			t.Errorf("%s %s status = %d, want %d", tc.method, tc.path, resp.StatusCode, tc.want)
+		}
+	}
+}

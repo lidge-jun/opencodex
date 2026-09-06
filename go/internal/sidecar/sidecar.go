@@ -2,13 +2,11 @@
 // incremental runtime takeover (ADR-0008, devlog/_plan/260905_go_sidecar_takeover).
 //
 // Today it owns GET /api/system/health (volatile pid/uptime normalised by the
-// oracle) and GET /api/shadow-call-settings (a pure function of config.json,
-// compared with no normalisation at all). Each handler must reproduce the
-// TypeScript handler's HTTP semantics byte-for-byte: the shape, key order, and
-// number formatting of the JSON body are part of the contract. The Bun
-// differential harness compares the wire bodies, so this package's payload
-// struct field order and its use of encoding/json (shortest round-trip number
-// formatting, matching ECMAScript) are load-bearing, not cosmetic.
+// oracle), GET /api/shadow-call-settings (a pure function of config.json,
+// compared with no normalisation at all) and GET /api/custom-models (the raw
+// config.customModels echo, also compared byte-for-byte). Each handler must
+// reproduce the TypeScript handler's HTTP semantics byte-for-byte: the shape,
+// key order, and number formatting of the JSON body are part of the contract.
 package sidecar
 
 import (
@@ -112,6 +110,39 @@ func NewHandler(cfg Config) http.Handler {
 		}
 		respondJSON(w, payload, "shadow-call-settings")
 	})
+
+	// GET /api/custom-models (ticket #17): the TS handler returns
+	// JSON.stringify(config.customModels ?? []), i.e. the config subsection echoed
+	// back. The subsection is a passthrough in the zod pipeline (verified: unknown
+	// keys, key order and non-schema values all survive a save/load round trip), so
+	// byte parity needs a document-order echo rather than a typed projection. The
+	// sidecar reads the file with the ordered loader and emits JSON.stringify-
+	// compatible bytes (compact, insertion order kept, no HTML or U+2028/U+2029
+	// escaping, number literals verbatim). Absent or null customModels coalesce to
+	// [] exactly like the TS nullish operator.
+	mux.HandleFunc("GET /api/custom-models", func(w http.ResponseWriter, r *http.Request) {
+		root, err := loadSidecarOrdered(cfg.ConfigDir)
+		if err != nil {
+			// A missing file yields a null root (no error). A malformed file would
+			// have been salvaged by the TS runtime at startup; without it the
+			// echo degrades to the nullish fallback, never to a partial body.
+			root = nil
+		}
+		customModels := root.Find("customModels")
+		var raw []byte
+		if customModels == nil || customModels.IsNull() {
+			raw = []byte("[]")
+		} else {
+			raw, err = customModels.MarshalStringify()
+			if err != nil {
+				// The ordered tree was decoded from valid JSON, so marshal cannot
+				// fail; stay silent rather than emit a partial body.
+				fmt.Fprintf(os.Stderr, "ocx-sidecar: marshal custom-models echo: %v\n", err)
+				return
+			}
+		}
+		writeRawJSON(w, raw, "custom-models")
+	})
 	return mux
 }
 
@@ -123,6 +154,28 @@ func loadSidecarConfig(configDir string) (*config.Config, error) {
 		return config.LoadFromDir(configDir)
 	}
 	return config.Load()
+}
+
+// loadSidecarOrdered loads config.json through the ordered decoder used by the
+// echo routes. An explicit dir (unit tests) wins; otherwise the same
+// OPENCODEX_HOME then ~/.opencodex resolution the TS parent uses at spawn.
+func loadSidecarOrdered(configDir string) (*config.OrderedValue, error) {
+	if configDir != "" {
+		return config.LoadOrderedFromDir(configDir)
+	}
+	return config.LoadOrdered()
+}
+
+// writeRawJSON writes pre-marshalled bytes exactly the way the TS handlers
+// emit jsonResponse: Content-Type application/json, 200, no trailing newline.
+// The echo routes marshal through the ordered tree first, so the bytes are
+// already the byte contract; re-marshalling would reformat them.
+func writeRawJSON(w http.ResponseWriter, raw []byte, owner string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if _, err := w.Write(raw); err != nil {
+		fmt.Fprintf(os.Stderr, "ocx-sidecar: write %s payload: %v\n", owner, err)
+	}
 }
 
 // respondJSON writes a fixed-shape payload exactly the way the TS handlers
