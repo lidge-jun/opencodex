@@ -56,6 +56,11 @@ type DoctorCommandDeps struct {
 	HistoryNamespace func() DoctorHistoryState
 	ProjectConfigs   func() []DoctorProjectConfigWarning
 	ProxyDownHint    func() string
+	Coordinator      func() DoctorCoordinatorDiagnostic
+	OAuth            func() []DoctorOAuthCheck
+	OAuthLive        func() (DoctorOAuthHealthSource, []DoctorOAuthAccount)
+	Catalog          func() DoctorCatalogState
+	Hints            func(DoctorHintsInput) []string
 }
 
 func defaultDoctorCommandDeps(deps DoctorCommandDeps) DoctorCommandDeps {
@@ -165,14 +170,25 @@ func defaultDoctorCommandDeps(deps DoctorCommandDeps) DoctorCommandDeps {
 	if deps.ProxyDownHint == nil {
 		deps.ProxyDownHint = func() string { return "" }
 	}
+	if deps.Coordinator == nil {
+		deps.Coordinator = CollectDoctorCoordinator
+	}
+	if deps.OAuth == nil {
+		deps.OAuth = CollectDoctorOAuthReliabilityDefault
+	}
+	if deps.OAuthLive == nil {
+		deps.OAuthLive = func() (DoctorOAuthHealthSource, []DoctorOAuthAccount) { return DoctorOAuthUnavailable, nil }
+	}
+	if deps.Catalog == nil {
+		deps.Catalog = CollectDoctorCatalogStateDefault
+	}
+	if deps.Hints == nil {
+		deps.Hints = CollectDoctorHints
+	}
 	return deps
 }
 
-var doctorCommandTODOs = []DoctorTODOSection{
-	{"Codex native-write coordinator", "native-write coordinator diagnostic has not been ported."},
-	{"OAuth reliability", "credential-collision, refresh-lock, and catalog freshness diagnostics have not been ported; live Codex account health is collected but not rendered."},
-	{"Hints", "remaining hints need their source diagnostics; proxy-down hint is assembled when supplied."},
-}
+var doctorCommandTODOs = []DoctorTODOSection{}
 
 func doctorTODO(section DoctorTODOSection) []string {
 	return []string{section.Heading, "  TODO: " + section.Reason}
@@ -240,16 +256,34 @@ func AssembleDoctorCommand(args []string, deps DoctorCommandDeps) DoctorCommandR
 		FormatDoctorRunningProxyEnv(deps.RunningProxyEnv()),
 		formatDoctorMemorySection(deps.Memory(), deps.BunVersion()),
 		FormatDoctorWHAM(deps.WHAM()),
-		FormatDoctorHistoryState(deps.HistoryNamespace()), doctorTODO(doctorCommandTODOs[0]), FormatDoctorHistoryPending(deps.History()), FormatDoctorProjectConfigs(deps.ProjectConfigs()),
+		FormatDoctorHistoryState(deps.HistoryNamespace()), append([]string{"Codex native-write coordinator"}, FormatDoctorCoordinator(deps.Coordinator())...), FormatDoctorHistoryPending(deps.History()), FormatDoctorProjectConfigs(deps.ProjectConfigs()),
 		FormatDoctorAgentRoles(deps.AgentRoles()),
 		FormatDoctorWslDualInstall(deps.WSL()),
-		doctorTODO(doctorCommandTODOs[1]),
+		append(formatDoctorOAuthSection(deps.OAuth(), deps.OAuthLive), FormatDoctorCatalogState(deps.Catalog())...),
 	}
-	last := doctorTODO(doctorCommandTODOs[2])
-	if hint := deps.ProxyDownHint(); hint != "" {
-		last = append(last, "  - "+hint)
+	providerRows := CollectDoctorProviderAPIKeysOrdered(deps.OrderedProviders(), env)
+	providerHints := make([]string, 0, len(providerRows))
+	for _, row := range providerRows {
+		providerHints = append(providerHints, row.Detail+". Set "+row.EnvName+" in the shell that starts the proxy, or store a literal key in config (value hidden here).")
 	}
-	sections = append(sections, last)
+	readiness := CollectDoctorCodexEnvKeyReadiness(deps.CodexConfigText(), env, deps.Shim(), deps.ServiceToken())
+	startup := CollectStatusExtraDomains(diagnostic, StatusExtraDeps{}).Startup
+	recommended, restore := "", startup.Commands.RestoreNative
+	if startup.RecommendedCommand != nil {
+		recommended = *startup.RecommendedCommand
+	}
+	input := DoctorHintsInput{ProxyDown: deps.ProxyDownHint(), ProviderKeyDetails: providerHints, RebootSafe: deps.RestartSafety().RebootSafe, RecommendedCommand: recommended, RestoreNativeCommand: restore, ProbeOK: deps.WHAM().OK, ProbeClassification: deps.WHAM().Classification, PendingFailed: deps.History().Failed, PendingFailureReason: deps.History().FailureReason, BackupEntries: deps.History().BackupEntries}
+	if readiness != nil {
+		input.CodexEnvKeyDetail, input.CodexEnvKeyAction = readiness.Detail, readiness.Action
+	}
+	hints := deps.Hints(input)
+	if len(hints) > 0 {
+		last := []string{"Hints"}
+		for _, hint := range hints {
+			last = append(last, "  - "+hint)
+		}
+		sections = append(sections, last)
+	}
 	parts := make([]string, 0, len(sections))
 	for _, section := range sections {
 		if len(section) == 0 {
@@ -257,7 +291,20 @@ func AssembleDoctorCommand(args []string, deps DoctorCommandDeps) DoctorCommandR
 		}
 		parts = append(parts, strings.Join(section, "\n"))
 	}
-	return DoctorCommandResult{Text: "opencodex doctor\n\n" + strings.Join(parts, "\n\n") + "\n", Exit: ExitOK, TODOs: append([]DoctorTODOSection(nil), doctorCommandTODOs...)}
+	exit := ExitOK
+	for _, row := range deps.OAuth() {
+		if row.Level == "FAIL" {
+			exit = ExitFailure
+		}
+	}
+	return DoctorCommandResult{Text: "opencodex doctor\n\n" + strings.Join(parts, "\n\n") + "\n", Exit: exit, TODOs: append([]DoctorTODOSection(nil), doctorCommandTODOs...)}
+}
+
+func formatDoctorOAuthSection(checks []DoctorOAuthCheck, live func() (DoctorOAuthHealthSource, []DoctorOAuthAccount)) []string {
+	lines := FormatDoctorOAuthChecks(checks)
+	source, accounts := live()
+	liveLines := FormatDoctorOAuthLive(source, accounts)
+	return append(lines, liveLines[1:]...)
 }
 
 // RunDoctorCommand is the future command dispatch target. It exists now so

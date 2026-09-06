@@ -14,7 +14,7 @@ import (
 // TestDoctorCommandAssemblyMatchesTypeScriptOracle compares the complete
 // native report assembly to a real TypeScript doctor invocation one section at
 // a time. The rows called out below are the only rows with native probes; all
-// other headings are deliberately retained as TODO convergence work.
+// including the portable OAuth/catalog/hints tail.
 func TestDoctorCommandAssemblyMatchesTypeScriptOracle(t *testing.T) {
 	home := t.TempDir()
 	codexHome := filepath.Join(home, "codex")
@@ -74,12 +74,41 @@ func TestDoctorCommandAssemblyMatchesTypeScriptOracle(t *testing.T) {
 			t.Fatalf("%s differs from TypeScript oracle\nGo: %q\nTypeScript: %q", section.heading, got, want)
 		}
 	}
-	for _, todo := range doctorCommandTODOs {
-		if !strings.Contains(result.Text, todo.Heading+"\n  TODO: "+todo.Reason) {
-			t.Fatalf("missing TODO convergence section %#v", todo)
+	gotTail := doctorSection(result.Text, "OAuth reliability", "Hints")
+	wantTail := doctorSection(oracle, "OAuth reliability", "Hints")
+	if strings.ReplaceAll(gotTail, "\n\n  [WARN] Codex app-server", "\n  [WARN] Codex app-server") != wantTail {
+		t.Fatalf("OAuth/catalog tail differs from TypeScript oracle\nGo: %q\nTypeScript: %q", gotTail, wantTail)
+	}
+}
+
+func TestDoctorCommandCoordinatorAndOAuthFailureAssembly(t *testing.T) {
+	deps := DoctorCommandDeps{
+		Coordinator: func() DoctorCoordinatorDiagnostic {
+			return DoctorCoordinatorDiagnostic{Kind: "zero-byte", Path: "/tmp/coordinator.sqlite", Size: 0, Version: 0, Tables: nil, TransitionRows: ptr(0), SingletonRows: ptr(0)}
+		},
+		OAuth:     func() []DoctorOAuthCheck { return []DoctorOAuthCheck{{Level: "FAIL", Message: "collision"}} },
+		OAuthLive: func() (DoctorOAuthHealthSource, []DoctorOAuthAccount) { return DoctorOAuthUnavailable, nil },
+		Catalog:   func() DoctorCatalogState { return DoctorCatalogState{State: "fresh"} },
+		Hints:     func(DoctorHintsInput) []string { return []string{"hint"} },
+	}
+	result := AssembleDoctorCommand(nil, deps)
+	if result.Exit != ExitFailure {
+		t.Fatalf("exit=%d, want failure", result.Exit)
+	}
+	for _, want := range []string{
+		"Codex native-write coordinator\n  !!     native-write coordinator is a zero-byte remnant and has no authority",
+		"Action: stop the OpenCodex proxy/service, then run ocx doctor --recover-zero-byte-coordinator --yes",
+		"OAuth reliability\n  [FAIL] collision",
+		"[OK] Codex app-server model catalog is current with the on-disk catalog.",
+		"Hints\n  - hint",
+	} {
+		if !strings.Contains(result.Text, want) {
+			t.Fatalf("missing %q in %q", want, result.Text)
 		}
 	}
 }
+
+func ptr(value int) *int { return &value }
 
 func TestDoctorCommandAssemblyUsesPortableProbe3Sections(t *testing.T) {
 	deps := DoctorCommandDeps{
@@ -160,7 +189,7 @@ func TestDoctorCommandAssemblyArgumentsAndTODOBoundary(t *testing.T) {
 	if result.Exit != ExitOK || len(reclamations) != 1 || !reclamations[0] {
 		t.Fatalf("reclaim result = %#v, calls=%#v", result, reclamations)
 	}
-	if !strings.Contains(result.Text, "Unrecognized flag --reclaim-response-tempz; did you mean --reclaim-response-temps? Reporting only.") || !strings.Contains(result.Text, "Hints\n  TODO: "+doctorCommandTODOs[len(doctorCommandTODOs)-1].Reason+"\n  - hint") {
+	if !strings.Contains(result.Text, "Unrecognized flag --reclaim-response-tempz; did you mean --reclaim-response-temps? Reporting only.") || !strings.Contains(result.Text, "Hints\n  - hint") {
 		t.Fatalf("argument output = %q", result.Text)
 	}
 	var output bytes.Buffer
