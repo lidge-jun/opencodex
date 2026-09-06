@@ -66,3 +66,29 @@ export function deleteConfigTopLevelKey<K extends keyof OcxConfig>(config: OcxCo
 export function clearPendingConfigTopLevelDeletions(config: OcxConfig): void {
   pendingTopLevelDeletions.delete(config);
 }
+
+/**
+ * Capture field replacements and deletion intent for a synchronous live-config save.
+ * Restore before yielding on failure: an asynchronous rollback could overwrite a newer
+ * mutation. Descriptors preserve absent versus explicitly undefined properties; the
+ * private pending set must also retain its original presence, even when it was empty.
+ * Unrelated fields and the live object's identity/baselines are left in place.
+ */
+export function captureConfigTopLevelRollback(
+  config: OcxConfig,
+  keys: readonly (keyof OcxConfig)[],
+): () => void {
+  const descriptors = new Map([...new Set([...keys, CONFIG_REBASE_PROVENANCE_KEY])]
+    .map(key => [key, Object.getOwnPropertyDescriptor(config, key)] as const));
+  const pending = pendingTopLevelDeletions.get(config);
+  const pendingBefore = pending === undefined ? undefined : new Set(pending);
+  return () => {
+    for (const [key, descriptor] of descriptors) {
+      if (descriptor) Object.defineProperty(config, key, descriptor);
+      else deleteConfigTopLevelKey(config, key);
+    }
+    // The absent fields above are restoration, not new user deletion commands.
+    if (pendingBefore === undefined) pendingTopLevelDeletions.delete(config);
+    else pendingTopLevelDeletions.set(config, new Set(pendingBefore));
+  };
+}

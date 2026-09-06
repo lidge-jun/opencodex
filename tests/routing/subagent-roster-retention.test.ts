@@ -161,15 +161,21 @@ describe("picker updates preserve roster and persistence intent", () => {
       expect((await handleAgentSettingsRoutes(context(config, { pickerOrder: [id] })))?.status).toBe(400);
     }
   });
-  test.each([null, ["beta/two"]])("failed picker save %j restores fields AND deletion provenance", async pickerOrder => {
+  test.each([{ pickerOrder: null }, { pickerOrder: ["beta/two"] }])("failed picker save %j restores fields AND deletion provenance", async ({ pickerOrder }) => {
     const config = makeConfig({ subagentModels: ["keep"], modelPickerOrder: ["alpha/one"], modelPickerOrderMode: "most-used" });
     deleteConfigTopLevelKey(config, "streamMode");
     const before = structuredClone(config);
     const intent = [...configRebaseDeletionKeys(config)];
     const projected = projectConfigRebaseProvenance(config);
     const ctx = context(config, { models: ["replacement"], pickerOrder });
-    ctx.deps.saveConfigPreservingClaudeCode = () => { throw new Error("disk full"); };
+    const save = mock((candidate: OcxConfig) => {
+      expect(candidate.subagentModels).toEqual(["replacement"]);
+      expect(candidate.modelPickerOrder).toEqual(pickerOrder ?? undefined);
+      throw new Error("disk full");
+    });
+    ctx.deps.saveConfigPreservingClaudeCode = save;
     await expect(handleAgentSettingsRoutes(ctx)).rejects.toThrow("disk full");
+    expect(save).toHaveBeenCalledTimes(1);
     expect(config).toEqual(before);
     expect([...configRebaseDeletionKeys(config)]).toEqual(intent);
     expect(projectConfigRebaseProvenance(config)).toEqual(projected);

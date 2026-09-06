@@ -12,6 +12,26 @@ const BANNER_SRC = await Bun.file(new URL("../src/components/codex-stale-banner.
 const MODELS_SRC = await Bun.file(new URL("../src/pages/Models.tsx", import.meta.url)).text();
 const APP_TSX_SRC = await Bun.file(new URL("../src/App.tsx", import.meta.url)).text();
 
+function sourceSection(source: string, startMarker: string, endMarker: string): string {
+  const start = source.indexOf(startMarker);
+  expect(start, `missing source anchor: ${startMarker}`).toBeGreaterThanOrEqual(0);
+  const end = source.indexOf(endMarker, start + startMarker.length);
+  expect(end, `missing source terminator: ${endMarker}`).toBeGreaterThan(start);
+  return source.slice(start, end + endMarker.length);
+}
+
+function appServerReadEffect(source: string): string {
+  const marker = source.indexOf("appServerReadBase.current = apiBase;");
+  expect(marker, "missing app-server base adoption").toBeGreaterThanOrEqual(0);
+  const start = source.lastIndexOf("useEffect(() => {", marker);
+  expect(start, "base adoption must belong to an effect").toBeGreaterThanOrEqual(0);
+  const dependencyStart = source.indexOf("\n  }, [", marker);
+  expect(dependencyStart, "missing app-server effect dependencies").toBeGreaterThan(marker);
+  const end = source.indexOf("]);", dependencyStart);
+  expect(end, "unterminated app-server effect").toBeGreaterThan(dependencyStart);
+  return source.slice(start, end + 3);
+}
+
 function response(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -104,16 +124,32 @@ describe("Models page wiring", () => {
   });
 
   test("reads the state once on mount, not on a timer", () => {
-    expect(src).toContain("reloadAppServerState");
-    const block = src.slice(src.indexOf("reloadAppServerState(controller.signal)"));
-    expect(block.slice(0, 200)).toContain("controller.abort()");
+    const effect = appServerReadEffect(src);
+    const cancel = sourceSection(src, "const cancelAppServerRead = useCallback(", "}, []);");
+    const read = sourceSection(src, "const reloadAppServerState = useCallback(", "}, [apiBase, cancelAppServerRead]);");
+    expect(effect.match(/reloadAppServerState\(\)/g)).toHaveLength(1);
+    expect(effect).toContain("return cancelAppServerRead;");
+    expect(cancel).toContain("appServerReadGeneration.current++");
+    expect(cancel).toContain("appServerRead.current?.controller.abort()");
+    expect(cancel).toContain("appServerRead.current?.clear()");
+    expect(cancel).toContain("appServerRead.current = null");
+    expect(read).toContain("cancelAppServerRead();");
+    expect(read).toContain("await fetchCodexAppServerState(apiBase, { signal: bounded.signal })");
+    expect(read).toContain("generation !== appServerReadGeneration.current");
+    expect(read).toContain("appServerReadBase.current !== apiBase");
+    expect(read).toContain("!appServerMounted.current");
+    const settlement = sourceSection(read, "finally {", "if (appServerRead.current === bounded)");
+    expect(settlement).toContain("bounded.clear()");
+    expect(effect).not.toMatch(/\bset(?:Interval|Timeout)\s*\(/);
+    expect(read).not.toMatch(/\bset(?:Interval|Timeout)\s*\(/);
     expect(src).not.toContain("setInterval(() => reloadAppServerState");
   });
 
   test("the head action and the banner share one controller", () => {
     expect(src).toContain("useCodexRestart(apiBase, {");
     expect(src).toContain("controller={{ restarting: codexRestarting, restart: handleCodexRestart }}");
-    expect(src).toContain("onSettled: () => reloadAppServerState()");
+    const controller = sourceSection(src, "useCodexRestart(apiBase, {", "\n  });");
+    expect(controller).toMatch(/onSettled:\s*\(\)\s*=>\s*\{\s*void reloadAppServerState\(\);\s*\}/);
   });
 
   test("the banner sits above the tab strip so every sub-tab shows it", () => {
@@ -146,8 +182,12 @@ describe("cross-surface invalidation", () => {
   });
 
   test("Models re-reads staleness when the epoch changes", () => {
-    const effect = MODELS.slice(MODELS.indexOf("reloadAppServerState(controller.signal)"));
-    expect(effect.slice(0, 220)).toContain("[reloadAppServerState, restartEpoch]");
+    const effect = appServerReadEffect(MODELS);
+    expect(effect).toContain("void reloadAppServerState();");
+    expect(effect).toContain("return cancelAppServerRead;");
+    const dependencies = effect.slice(effect.lastIndexOf("}, [") + 4, effect.lastIndexOf("]"))
+      .split(",").map(value => value.trim());
+    expect(dependencies).toEqual(["apiBase", "cancelAppServerRead", "reloadAppServerState", "restartEpoch"]);
   });
 
   test("the epoch is the only cross-surface coupling, not a shared controller", () => {

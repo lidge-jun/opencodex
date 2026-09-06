@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../../codex/catalog";
 import { catalogModelSlug, filterCatalogVisibleModels, invalidateCodexModelsCache, nativeContextLimits, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
-import { parsedConfigRebaseDeletionKeys, projectConfigRebaseProvenance } from "../../config/rebase-provenance";
+import { captureConfigTopLevelRollback, parsedConfigRebaseDeletionKeys, projectConfigRebaseProvenance } from "../../config/rebase-provenance";
 import {
   DEFAULT_SUBAGENT_MODELS,
   codexAutoStartEnabled,
@@ -707,8 +707,8 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     }
 
     // Everything above can await. From this snapshot through persistence there is no yield.
-    // Stage deletion intent on a separate object: a failed save must not leave a new
-    // pendingTopLevelDeletions entry attached to the long-lived config's WeakMap identity.
+    // Stage deletion intent before adopting the touched fields through the canonical
+    // live deletion owner. A failed save restores both fields and pending intent.
     if (updatesPicker && config.configRebaseProvenance !== undefined
       && parsedConfigRebaseDeletionKeys(config) === null) {
       // A newer provenance format must not silently discard this clear's intent on rebase.
@@ -732,21 +732,17 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       ...(updatesPicker ? ["modelPickerOrder" as const, "modelPickerOrderMode" as const] : []),
       "configRebaseProvenance" as const,
     ];
-    const before = Object.getOwnPropertyDescriptors(config);
+    const rollback = captureConfigTopLevelRollback(config, touched);
     try {
       for (const key of touched) {
         if (Object.hasOwn(projected, key)) Object.defineProperty(config, key, {
           value: projected[key], writable: true, enumerable: true, configurable: true,
         });
-        else delete config[key];
+        else deleteConfigTopLevelKey(config, key);
       }
       (deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode)(config);
     } catch (error) {
-      for (const key of touched) {
-        const descriptor = before[key];
-        if (descriptor) Object.defineProperty(config, key, descriptor);
-        else delete config[key];
-      }
+      rollback();
       throw error;
     }
     // Capture the result before convergence yields to another settings mutation.

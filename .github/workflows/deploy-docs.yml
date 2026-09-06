@@ -14,7 +14,7 @@ jobs:
       - name: Checkout reviewed source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          ref: 6ffa357f2ff6ff20c950bf234d69135947522ba1
+          ref: 118819f08c7d17278e01f2e2005c3916d1ca8c27
           persist-credentials: false
       - name: Record source identity
         run: git rev-parse HEAD
@@ -29,9 +29,17 @@ jobs:
         run: cd gui && bun run lint
       - name: Typecheck
         run: bun run typecheck
+      - name: Focused config and picker regression failures
+        run: bun test tests/config/config-rebase-provenance-writers.test.ts tests/routing/subagent-roster-retention.test.ts
       - name: GUI tests
         run: cd gui && bun test --isolate tests
       - name: Privacy scan
         run: bun run privacy:scan
       - name: GUI build
         run: cd gui && bun run build
+      - name: Install frozen documentation dependencies
+        working-directory: docs-site
+        run: bun install --frozen-lockfile
+      - name: Build documentation without deployment
+        working-directory: docs-site
+        run: bun run build
