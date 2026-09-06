@@ -104,7 +104,7 @@ src/
 橋接器還會執行**心跳保活**（RC3）：上游沒有資料時，每 2 秒傳送一個 SSE 註解行
 （`: opencodex heartbeat`）來重新啟動 Codex 的空閒計時器。註解行會被每個
 eventsource 解析器丟棄而不會產生任何事件，因此嚴格的 Responses 解碼器永遠不會
-遇到未知 variant。預設**停滯截止時間**為 300 秒（`stallTimeoutSec`）；達到該時限後
+遇到未知 variant。預設**停滯截止時間**為 600 秒（`stallTimeoutSec`）；達到該時限後
 會中止上游，並發出 reason 為 `upstream_stall_timeout` 的 `response.incomplete`，
 避免掛起的連線無限期阻塞 Codex。
 

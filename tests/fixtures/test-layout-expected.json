@@ -321,6 +321,7 @@
   "combo-management-api.test.ts": "routing",
   "combo-stream-preflight.test.ts": "routing",
   "combo-workspace-data.test.ts": "gui",
+  "compaction-progress.test.ts": "responses",
   "combos.test.ts": "codex-integration",
   "command-code-error-finish.test.ts": "providers",
   "command-code-provider.test.ts": "providers",

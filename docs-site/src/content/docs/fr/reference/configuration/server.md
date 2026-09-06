@@ -14,7 +14,7 @@ exécute des fonctionnalités d'assistance autour des demandes du fournisseur.
 | `hostname?` | `string` | `"127.0.0.1"` | Adresse de liaison. Les liaisons hors bouclage nécessitent `OPENCODEX_API_AUTH_TOKEN`. |
 | `proxy?` | `string` | — | URL du proxy HTTP(S) sortant ou `${ENV_VAR}`. Appliquée à `HTTP_PROXY` / `HTTPS_PROXY` uniquement lorsque ces variables ne sont pas définies ; le bouclage reste dans `NO_PROXY`. |
 | `emptyCompletionRetry?` | `boolean` | `false` | Active une nouvelle tentative Responses identique lorsqu’une réponse ne contient ni texte ni appel d’outil. Cette tentative peut être facturée. `OCX_EMPTY_COMPLETION_RETRY=0` la désactive sans modifier la configuration ; les combinaisons et les tours de compactage routés restent exclus. |
-| `stallTimeoutSec?` | `number` | `300` | Nombre de secondes sans données en amont avant `response.incomplete`. Minimum : 1. |
+| `stallTimeoutSec?` | `number` | `600` | Nombre de secondes sans données en amont avant `response.incomplete`. Minimum : 1. |
 | `connectTimeoutMs?` | `number` | `200000` | Délai maximal par tentative pour DNS/TCP/TLS et les en-têtes finaux ; il prend fin avant la génération du corps. |
 | `shutdownTimeoutMs?` | `number` | `5000` | Délai de vidange gracieux avant l’annulation des tours actifs. |
 | `websockets?` | `boolean` | `false` | Annonce et autorise la route WebSocket Responses destinée aux clients. La valeur false maintient les clients sur HTTP/SSE ; elle ne désactive pas une optimisation WebSocket canonique admissible vers ChatGPT en amont. |
