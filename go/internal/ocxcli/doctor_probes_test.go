@@ -1,6 +1,7 @@
 package ocxcli
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -240,5 +241,91 @@ func TestDoctorResponseTempReclaimFragmentMatchesTypeScriptDoctor(t *testing.T) 
 	goSection := strings.Join(append([]string{"Response-state temp files"}, FormatDoctorResponseTemps(goReport, true)...), "\n")
 	if got := doctorSection(oracle, "Response-state temp files", "Codex app home targeting"); got != goSection {
 		t.Fatalf("response-temp reclaim bytes\n got: %q\nwant: %q", got, goSection)
+	}
+}
+
+func TestDoctorProbe3StableFragmentsMatchTypeScriptDoctor(t *testing.T) {
+	home := t.TempDir()
+	codexHome := filepath.Join(home, "codex")
+	if err := os.MkdirAll(filepath.Join(codexHome, "agents"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(codexHome, "agents", "reviewer.toml"), []byte("model_fallback = []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("OPENCODEX_HOME", home)
+	t.Setenv("CODEX_HOME", codexHome)
+	for _, key := range []string{"HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"} {
+		t.Setenv(key, "")
+	}
+	oracle, exitCode := runTypeScriptDoctor(t, home, codexHome)
+	if exitCode != 0 {
+		t.Fatalf("TypeScript doctor exit = %d; output=%s", exitCode, oracle)
+	}
+	if got := strings.Join(FormatDoctorOrcaHome(CollectDoctorOrcaHome()), "\n"); got != doctorSection(oracle, "Codex app home targeting", "Codex restart safety") {
+		t.Fatalf("Orca home bytes\n got: %q\nwant: %q", got, doctorSection(oracle, "Codex app home targeting", "Codex restart safety"))
+	}
+	extra := CollectStatusExtraDomains(ReadStatusConfigDiagnostics(), StatusExtraDeps{})
+	if got := strings.Join(FormatDoctorRestartSafety(CollectDoctorRestartSafety(extra.Startup)), "\n"); got != doctorSection(oracle, "Codex restart safety", "Codex runtime selection") {
+		t.Fatalf("restart safety bytes\n got: %q\nwant: %q", got, doctorSection(oracle, "Codex restart safety", "Codex runtime selection"))
+	}
+	if got := strings.Join(FormatDoctorRuntimeSelection(CollectDoctorRuntimeSelection()), "\n"); got != doctorSection(oracle, "Codex runtime selection", "Current doctor process proxy env (presence only)") {
+		t.Fatalf("runtime selection bytes\n got: %q\nwant: %q", got, doctorSection(oracle, "Codex runtime selection", "Current doctor process proxy env (presence only)"))
+	}
+	if got := strings.Join(FormatDoctorAgentRoles(CollectDoctorAgentRoles(codexHome)), "\n"); got != doctorSection(oracle, "Codex agent role files", "OAuth reliability") {
+		t.Fatalf("agent role bytes\n got: %q\nwant: %q", got, doctorSection(oracle, "Codex agent role files", "OAuth reliability"))
+	}
+}
+
+func TestDoctorProbe3PureFormatContracts(t *testing.T) {
+	if got := strings.Join(FormatDoctorServiceMemory(DoctorServiceMemoryReport{Status: "unreachable", Error: "fetch failed"}, "1.2.3"), "\n"); got != "  --     doctor process Bun 1.2.3 (this is NOT the service process)\n  --     proxy not reachable (not running?) [fetch failed]" {
+		t.Fatalf("memory fallback = %q", got)
+	}
+	if got := strings.Join(FormatDoctorProjectConfigs(nil), "\n"); got != "Project Codex configs\n  ok     no project-local provider bypass detected" {
+		t.Fatalf("project fallback = %q", got)
+	}
+	if got := strings.Join(FormatDoctorCatalogState(DoctorCatalogState{State: "fresh"}), "\n"); got != "  [OK] Codex app-server model catalog is current with the on-disk catalog." {
+		t.Fatalf("catalog = %q", got)
+	}
+}
+
+func TestDoctorServiceMemoryFormatterMatchesTypeScriptOracle(t *testing.T) {
+	repo := typeScriptOracleRepo(t)
+	script := "import { formatServiceMemoryLines } from \"./src/cli/doctor\";\n" +
+		"const input = JSON.parse(process.env.OCX_MEMORY_INPUT);\n" +
+		"process.stdout.write(JSON.stringify(formatServiceMemoryLines(input)));"
+	input := map[string]any{
+		"status": "ok",
+		"data": map[string]any{
+			"pid": 42, "bunVersion": "1.3.14", "platform": "linux",
+			"rss": 5 * 1024 * 1024 * 1024, "heapUsed": 100 * 1024 * 1024,
+			"external": 0, "arrayBuffers": 0, "streamMode": "auto",
+			"eagerRelay": nil, "jscHeap": nil, "watchdog": nil,
+		},
+	}
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bun", "-e", script)
+	cmd.Dir, cmd.Env = repo, append(os.Environ(), "OCX_MEMORY_INPUT="+string(encoded))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("TypeScript service-memory oracle: %v: %s", err, out)
+	}
+	var want []string
+	if err := json.Unmarshal(out, &want); err != nil {
+		t.Fatalf("decode service-memory oracle: %v: %s", err, out)
+	}
+	got := FormatDoctorServiceMemory(DoctorServiceMemoryReport{Status: "ok", Data: DoctorServiceMemoryData{
+		PID: 42, BunVersion: "1.3.14", Platform: "linux", RSS: 5 * 1024 * 1024 * 1024,
+		HeapUsed: 100 * 1024 * 1024, StreamMode: "auto",
+	}}, "oracle")
+	// Bun.version belongs to the oracle process, so compare all output that is
+	// determined by the shared endpoint payload verbatim.
+	got[0] = want[0]
+	if gotText, wantText := strings.Join(got, "\n"), strings.Join(want, "\n"); gotText != wantText {
+		t.Fatalf("service memory bytes\n got: %q\nwant: %q", gotText, wantText)
 	}
 }
