@@ -24,6 +24,7 @@ import {
   isKnownUsageSurface,
   isCodexUsageAccountLogLabel,
   isValidReasoningWireValue,
+  normalizeClaudeCompatibilityUsageLog,
   readRecentUsageEntries,
   usageForFinalLog,
   usageStatusForFinalLog,
@@ -31,6 +32,7 @@ import {
   type AttemptRecoveryKind,
   type PersistedUsageAttempt,
   type PersistedUsageEntry,
+  type PersistedClaudeCompatibilityLog,
   type UsageStatus,
 } from "../usage/log";
 import {
@@ -142,11 +144,7 @@ export interface RequestLogContext {
   claudeCompatibility?: ClaudeCompatibilityLog;
 }
 
-export interface ClaudeCompatibilityLog {
-  decision: "shadow";
-  featureCodes: string[];
-  reason?: string;
-}
+export type ClaudeCompatibilityLog = PersistedClaudeCompatibilityLog;
 
 export interface RequestLogEntry {
   requestId: string;
@@ -258,20 +256,6 @@ export function evictOldestRequestLogForBudget(): number {
   return removeOldestRequestLogEntry();
 }
 
-function normalizeClaudeCompatibilityLog(value: ClaudeCompatibilityLog | undefined): ClaudeCompatibilityLog | undefined {
-  if (value?.decision !== "shadow" || !Array.isArray(value.featureCodes)) return undefined;
-  const featureCodes = [...new Set(value.featureCodes
-    .filter(code => typeof code === "string" && /^[a-z0-9_]{1,64}$/.test(code)))]
-    .sort()
-    .slice(0, 32);
-  const reason = sanitizeLogMetadataString(value.reason, 512);
-  return {
-    decision: "shadow",
-    featureCodes,
-    ...(reason ? { reason } : {}),
-  };
-}
-
 function asTerminalStatus(value: string | undefined): ResponsesTerminalStatus | undefined {
   if (value === "completed" || value === "failed" || value === "incomplete") return value;
   return undefined;
@@ -295,6 +279,7 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
   const terminalStatus = asTerminalStatus(entry.terminalStatus);
   const closeReason = asCloseReason(entry.closeReason);
   const routeDecision = normalizeRouteDecisionTraceForLog(entry.routeDecision);
+  const claudeCompatibility = normalizeClaudeCompatibilityUsageLog(entry.claudeCompatibility);
   return {
     requestId: entry.requestId,
     timestamp: entry.timestamp,
@@ -337,6 +322,7 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
     ...(entry.totalTokens !== undefined ? { totalTokens: entry.totalTokens } : {}),
     ...(entry.attempts !== undefined ? { attempts: entry.attempts } : {}),
     ...(routeDecision ? { routeDecision } : {}),
+    ...(claudeCompatibility ? { claudeCompatibility } : {}),
   };
 }
 
@@ -392,7 +378,7 @@ export function addRequestLog(entry: RequestLogEntry) {
   // line-oriented viewer — while `usage.jsonl` looked clean, which is the worst shape for a
   // sanitization bug because the safe surface is the one you check.
   const shadowCallRewrittenFrom = sanitizeLogMetadataString(entry.shadowCallRewrittenFrom);
-  const claudeCompatibility = normalizeClaudeCompatibilityLog(entry.claudeCompatibility);
+  const claudeCompatibility = normalizeClaudeCompatibilityUsageLog(entry.claudeCompatibility);
   const retained: RequestLogEntry = shadowCallRewrittenFrom === entry.shadowCallRewrittenFrom
     && claudeCompatibility === entry.claudeCompatibility
     ? entry
@@ -462,6 +448,9 @@ export function addRequestLog(entry: RequestLogEntry) {
       ...(entry.attempts !== undefined ? { attempts: entry.attempts } : {}),
       ...failureDiagnostics,
       ...(entry.routeDecision ? { routeDecision: entry.routeDecision } : {}),
+      ...(entry.claudeCompatibility
+        ? { claudeCompatibility: entry.claudeCompatibility }
+        : {}),
     });
   } catch {
     /* request logging must never fail a user request */

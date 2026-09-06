@@ -11,6 +11,28 @@ import { normalizeRouteDecisionTrace, type RouteDecisionTraceV1 } from "../routi
 import { ACCOUNT_LOG_LABEL_RE, CODEX_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 
 export type UsageStatus = "reported" | "unreported" | "unsupported" | "estimated";
+
+export interface PersistedClaudeCompatibilityLog {
+  decision: "shadow";
+  featureCodes: string[];
+  reason?: string;
+}
+
+export function normalizeClaudeCompatibilityUsageLog(
+  value: PersistedClaudeCompatibilityLog | undefined,
+): PersistedClaudeCompatibilityLog | undefined {
+  if (value?.decision !== "shadow" || !Array.isArray(value.featureCodes)) return undefined;
+  const featureCodes = [...new Set(value.featureCodes
+    .filter(code => typeof code === "string" && /^[a-z0-9_]{1,64}$/.test(code)))]
+    .sort()
+    .slice(0, 32);
+  const reason = sanitizeLogMetadataString(value.reason, 512);
+  return {
+    decision: "shadow",
+    featureCodes,
+    ...(reason ? { reason } : {}),
+  };
+}
 /**
  * A persisted account label: a Codex pool account (`main`/`p<hex6>`) or a non-Codex OAuth
  * provider account (`o<hex6>`, #2699).
@@ -160,6 +182,8 @@ export interface PersistedUsageEntry {
    * contains prompts, credentials, or hidden reasoning.
    */
   routeDecision?: RouteDecisionTraceV1;
+  /** Bounded, non-payload Claude compatibility evidence for opt-in shadow mode. */
+  claudeCompatibility?: PersistedClaudeCompatibilityLog;
 }
 
 const KNOWN_USAGE_SURFACES = new Set<NonNullable<PersistedUsageEntry["surface"]>>([
@@ -493,6 +517,7 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   const routeDecision = entry.routeDecision
     ? normalizeRouteDecisionTrace(entry.routeDecision)
     : undefined;
+  const claudeCompatibility = normalizeClaudeCompatibilityUsageLog(entry.claudeCompatibility);
   return {
     requestId: entry.requestId,
     timestamp: entry.timestamp,
@@ -563,6 +588,7 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(entry.closeReason ? { closeReason: entry.closeReason } : {}),
     ...(entry.upstreamError ? { upstreamError: entry.upstreamError } : {}),
     ...(routeDecision ? { routeDecision } : {}),
+    ...(claudeCompatibility ? { claudeCompatibility } : {}),
   };
 }
 

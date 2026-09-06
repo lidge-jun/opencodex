@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
+import { readRecentUsageEntries } from "../../src/usage/log";
 import { buildDesktop3pRegistry } from "../../src/claude/desktop-3p";
 import type { DesktopProfile } from "../../src/claude/desktop-profile";
 import { createAnthropicAdapter } from "../../src/adapters/anthropic";
@@ -12,6 +13,7 @@ import { clearableDeadline } from "../../src/lib/abort";
 import {
   clearRequestLogsForTests,
   getRequestLogEntries,
+  hydrateRequestLogsFromDisk,
   type RequestLogContext,
 } from "../../src/server/request-log";
 import { startServer } from "../../src/server";
@@ -1423,7 +1425,7 @@ test("Claude compatibility enforcement is opt-in at the Messages endpoint", asyn
   }
 });
 
-test("Claude compatibility shadow decisions reach the bounded request-log ring", async () => {
+test("Claude compatibility shadow decisions survive the persisted request-log projection", async () => {
   clearRequestLogsForTests();
   const { server: upstream } = mockChatUpstreamCapturing();
   const baseUrl = `${upstream.url.toString().replace(/\/$/, "")}/v1`;
@@ -1441,11 +1443,16 @@ test("Claude compatibility shadow decisions reach the bounded request-log ring",
     });
     expect(response.status).toBe(200);
     await response.text();
-    expect(getRequestLogEntries().at(-1)?.claudeCompatibility).toEqual({
+    const expected = {
       decision: "shadow",
       featureCodes: ["documents"],
       reason: "shadow: would reject for documents",
-    });
+    } as const;
+    expect(getRequestLogEntries().at(-1)?.claudeCompatibility).toEqual(expected);
+    expect(readRecentUsageEntries(1).at(-1)?.claudeCompatibility).toEqual(expected);
+    clearRequestLogsForTests();
+    expect(hydrateRequestLogsFromDisk()).toBe(1);
+    expect(getRequestLogEntries().at(-1)?.claudeCompatibility).toEqual(expected);
   } finally {
     await server.stop(true);
     await upstream.stop(true);
