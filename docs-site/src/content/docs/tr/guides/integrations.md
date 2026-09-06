@@ -1,10 +1,10 @@
 ---
 title: Entegrasyonlar
-description: Kontrol panelinden OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, Gajae Code, DeepSeek Harness ve MiniMax Code'u opencodex'e bağlayın — istemci başına tek bir anahtar ve her yazmadan önce alınan bir yedek.
+description: Kontrol panelinden OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, Gajae Code, DeepSeek Harness, MiniMax Code ve Raycast'i opencodex'e bağlayın — istemci başına tek bir anahtar ve her yazmadan önce alınan bir yedek.
 ---
 
 **Entegrasyonlar** sekmesi, opencodex'in sağlayıcı bloğunu istemcinin kendi
-yapılandırma dosyasına yazar ve tekrar kaldırır. Dokuz istemci bu şekilde
+yapılandırma dosyasına yazar ve tekrar kaldırır. On istemci bu şekilde
 çalışır, her biri bir anahtarla:
 
 | İstemci | Yapılandırma dosyası | Format | Değişiklik ne zaman geçerli olur? | Kimlik bilgisi |
@@ -18,6 +18,7 @@ yapılandırma dosyasına yazar ve tekrar kaldırır. Dokuz istemci bu şekilde
 | Gajae Code | `~/.gjc/agent/models.yml` | YAML | yeni oturumlarda veya `/model` açtığınızda | `OPENCODEX_GAJAE_API_KEY` |
 | DeepSeek Harness (DSH) | `$DSH_HOME/settings.yaml` (varsayılan `~/.dsh/settings.yaml`) | YAML | çalışırken yeniden yükleme | gizli olmayan geri döngü bearer yer tutucusu |
 | MiniMax Code | `~/.minimax/config.yaml` | YAML | yeni oturumlarda veya model seçici açıldıktan sonra | geri döngü (loopback) yer tutucusu |
+| Raycast | `~/.config/raycast/ai/providers.yaml` | YAML | kaydedildiği anda — Raycast dosyayı izler | yok — yalnızca geri döngü |
 
 Yönetilen DSH desteğinin en düşük uyumlu sürümü **DSH 0.1.0-rc.6**'dır. OpenCodex yalnızca
 `llm-pi-ai.providers.opencodex` bölümünü yönetir: Uygula ve Yenile bu bölümü değiştirir, Devre Dışı
@@ -34,6 +35,29 @@ Bağladıktan sonra MCode içinde bir `custom_provider:opencodex/<provider/model
 Entegrasyon yenilendiğinde model başına doğrulanmış bağlam pencereleri ve akıl yürütme
 çabası seçenekleri de yenilenir; bilinmeyen yetenekler atlanır ve MCode oturumunun
 yönettiği geçerli çaba seçimi korunur.
+
+Raycast'in iki ön koşulu vardır. Özel sağlayıcılar (Custom Providers) bir **Raycast Pro**
+özelliğidir: ücretsiz planda dosya yine yazılır, ancak Raycast onu okumayacağı için
+`ocx integration client status --client raycast` ve Entegrasyonlar sayfası bir uyarı
+bildirir. Ayrıca Raycast `ai` klasörünü yalnızca Raycast → Settings → AI →
+**Reveal Providers Config** seçeneğini bir kez açtığınızda oluşturur; opencodex bu
+klasörü kurulum sinyali olarak kullanır ve klasör var olana kadar istemciyi kurulu değil
+olarak bildirir. Raycast, `~/.config/raycast/ai/providers.yaml` dosyasını macOS ve
+Windows'ta aynı şekilde okur ve `XDG_CONFIG_HOME` değerini dikkate almaz; bu nedenle bu
+yol taşınamaz.
+
+Yönetilen blok, dosyanın `providers` dizisindeki tek bir öğedir: `id: opencodex`,
+`name: OpenCodex`, `base_url: http://<host>:<port>/v1` ve `abilities` alanıyla birlikte
+yönlendirilen her model — `tools` ve `system_message` her zaman destekli, `vision`
+kataloğun giriş modalitelerini izler, `reasoning_effort` modelin bir çaba merdiveni
+varsa ayarlanır ve `temperature` akıl yürütme modelleri için kapatılır. Dosyadaki diğer
+sağlayıcılar korunur ve devre dışı bırakma yalnızca OpenCodex öğesini kaldırır. Raycast
+değişikliği dosya kaydedilir kaydedilmez, yeniden başlatma gerekmeden alır; modeller
+Raycast'in model seçicisinde **OpenCodex** altında gruplanmış olarak görünür. Dosyada
+kimlik bilgisi için bir yer yoktur, bu yüzden bu istemci yalnızca geri döngü içindir:
+hiçbir `api_keys` girdisi yazılmaz ve geri döngü dışı bir bağlama reddedilir. Format
+[manual.raycast.com/ai/custom-providers](https://manual.raycast.com/ai/custom-providers)
+adresinde belgelenmiştir.
 
 Yollar, varsa her istemcinin kendi ortam geçersiz kılmalarını dikkate alır. OMP
 için `OMP_PROFILE`, açıkça boş olduğunda bile varlığıyla `PI_PROFILE`'a üstün
@@ -112,7 +136,7 @@ hiçbir şey sessizce değiştirilmez veya düşürülmez. **OMP** de yanındaki
 düzenlemelerden etkilenmez, ama başka bir nedenle: writer'ı yalnızca kendi
 `providers.opencodex` aralığını bayt bayt yamalar, dosyanın geri kalanı hiçbir
 zaman yeniden yazılmaz. Yorum taşıyabilen diğer biçimlerde (Hermes, OpenClaw,
-Kimi Code, Gajae Code, MiniMax Code — bütün belge olarak yazılan YAML, JSON5 ve TOML) veya
+Kimi Code, Gajae Code, MiniMax Code, Raycast — bütün belge olarak yazılan YAML, JSON5 ve TOML) veya
 kendi girdilerimiz düzenlenmişse, anahtar kilitlenir ve hangi düzenlemelerin
 size ait olduğunu tahmin etmek yerine devre dışı bırakmayı reddeder.
 
@@ -192,10 +216,12 @@ ocx integration client enable --client mcode
 ocx mcode
 ```
 
-Bağlandıktan sonra `ocx sync`, yönetilen MCode bloğunu güncel bağlam pencereleri ve
-akıl yürütme çabası seçenekleriyle de yeniler. Eksik, dışarıdan düzenlenmiş, güvenli
-olmayan veya hiç sahiplenilmemiş bloklara dokunmaz; yeniden bağlamak istediğinizde
-entegrasyonu açıkça yeniden etkinleştirin.
+Bağlandıktan sonra `ocx sync` ve `POST /api/sync`, yönetilen MCode, Pi, Aside ve
+Raycast kataloglarını yeniler. Proxy başlangıcı da yönetilen Raycast kataloğunu
+yeniler. Model görünürlüğü, sağlayıcı veya ön ayar değişiklikleri Pi, Aside ve
+Raycast kataloglarını günceller. Eksik, dışarıdan düzenlenmiş, güvenli olmayan
+veya elle kaldırılmış bloklara dokunmaz; yeniden bağlamak istediğinizde
+entegrasyonu açıkça etkinleştirin.
 
 Ayrı MiniMax platform CLI'si (`mmx`) bir dosya anahtarı entegrasyonu değildir.
 Metin komutları MiniMax'ın Anthropic uyumlu uç noktasını kullandığı için OpenCodex,

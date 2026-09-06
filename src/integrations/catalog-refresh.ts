@@ -10,7 +10,7 @@ import {
 /** Refresh only previously connected clients; a refused file never blocks its peers. */
 export async function refreshOwnedCatalogIntegrations(
   input: Omit<OwnedIntegrationRefreshInput, "clientId">,
-  clientIds: readonly IntegrationClientId[] = ["pi", "aside"],
+  clientIds: readonly IntegrationClientId[] = ["pi", "aside", "raycast"],
 ): Promise<OwnedIntegrationRefreshOutcome[]> {
   let models: Promise<readonly ExportModel[]> | undefined;
   const loadModels = () => models ??= Promise.resolve().then(() =>

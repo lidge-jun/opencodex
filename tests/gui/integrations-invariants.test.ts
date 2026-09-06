@@ -6,7 +6,7 @@ import { EXPORT_CLIENTS, EXPORT_CLIENT_IDS, type ExportModel } from "../../src/c
 import { parseConfig } from "../../src/integrations/config-io";
 import { INTEGRATION_CLIENTS, INTEGRATION_CLIENT_IDS, type IntegrationClientId } from "../../src/integrations/registry";
 import { createIntegrationStateStore, type IntegrationStateStore } from "../../src/integrations/store";
-import { readIntegrationState } from "../../src/integrations/state";
+import { readIntegrationState, readPath } from "../../src/integrations/state";
 import { applyIntegration, disableIntegration, restoreIntegration } from "../../src/integrations/writer";
 import { printSubcommandUsage, printUsage } from "../../src/cli/help";
 import type { OcxConfig } from "../../src/types";
@@ -78,9 +78,9 @@ afterEach(() => {
 });
 
 describe("the client registries cannot drift apart", () => {
-  test("every list of clients holds exactly the same twelve ids", async () => {
+  test("every list of clients holds exactly the same thirteen ids", async () => {
     /*
-     * Five lists name the same twelve clients, and two of them are maintained by
+     * Five lists name the same thirteen clients, and two of them are maintained by
      * hand: the GUI cannot import the backend registry, because that would
      * pull node:os and node:path into the browser bundle. A client added
      * server-side renders no row until someone remembers the tuple, and the
@@ -91,7 +91,7 @@ describe("the client registries cannot drift apart", () => {
     const guiRouting = await import("../../gui/src/app-routing");
 
     const expected = [...EXPORT_CLIENT_IDS].sort();
-    expect(expected).toHaveLength(12);
+    expect(expected).toHaveLength(13);
 
     expect([...INTEGRATION_CLIENT_IDS].sort()).toEqual(expected);
     expect([...gui.CLIENTS].sort()).toEqual(expected);
@@ -170,6 +170,13 @@ describe("every client survives a full lifecycle", () => {
     prime: '{\n  "providers": {\n    "mine": { "api": "http://keep-me" }\n  }\n}\n',
     // Aside reads the same models.json contract as Pi and Prime.
     aside: '{\n  "providers": {\n    "mine": { "api": "http://keep-me" }\n  }\n}\n',
+    // Raycast's `providers` is a SEQUENCE keyed by `id`, so the user's entry is
+    // a sibling element rather than a sibling map key.
+    raycast: "providers:\n  - id: lmstudio\n    name: LM Studio\n    base_url: http://localhost:1234/v1\n    models: []\n",
+  };
+  /** Where the seed's user-owned entry lives when the seed is a sequence. */
+  const USER_ELEMENT: Partial<Record<IntegrationClientId, readonly string[]>> = {
+    raycast: ["providers", "[id=lmstudio]"],
   };
 
   for (const clientId of INTEGRATION_CLIENT_IDS) {
@@ -190,18 +197,22 @@ describe("every client survives a full lifecycle", () => {
       const afterApply = parseConfig(readFileSync(configPath, "utf8"), format);
       const record = store.readRecords()[clientId]!;
       expect(record.fragmentPaths.length).toBeGreaterThan(0);
+      // Read through the writer's own segment grammar: Raycast's path holds a
+      // `[id=opencodex]` selector into a sequence, not a map key.
       for (const path of record.fragmentPaths) {
-        let cursor: unknown = afterApply;
-        for (const segment of path) {
-          expect(cursor && typeof cursor === "object").toBe(true);
-          cursor = (cursor as Record<string, unknown>)[segment];
-        }
-        expect(cursor).toBeDefined();
+        expect(readPath(afterApply, path)).toBeDefined();
       }
-      // …and the user's own entry is untouched.
-      expect((afterApply as Record<string, unknown>)).toMatchObject(
-        original as Record<string, unknown>,
-      );
+      // …and the user's own entry is untouched. `toMatchObject` treats an
+      // array as exact-length, so a sequence-shaped seed is checked by the
+      // same selector the writer uses to find its own element.
+      const userElement = USER_ELEMENT[clientId];
+      if (userElement) {
+        expect(readPath(afterApply, userElement)).toEqual(readPath(original, userElement));
+      } else {
+        expect((afterApply as Record<string, unknown>)).toMatchObject(
+          original as Record<string, unknown>,
+        );
+      }
 
       const disabled = disableIntegration({
         clientId, models: MODELS, config: CONFIG, port: 10100,

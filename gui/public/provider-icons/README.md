@@ -47,6 +47,16 @@ Export-client marks (used by the API tab's connect rows, not the provider list):
   on the web (`aside.com/favicon.svg` is a 404), so the shipping application is
   the first-party source.
 
+- `raycast.svg` — fetched 2026-09-04 from
+  `https://fz1sd71lwhbqy6sh.public.blob.vercel-storage.com/press/images/logo/raycast-logo-dark.svg`,
+  the "Logo (dark)" download Raycast's own press kit (`raycast.com/press`) links.
+  `raycast.com/favicon.svg` and the other conventional paths are 404s, so the
+  press kit is the first-party source. Path data and the `#FF6363` fill are
+  verbatim; the fixed `width`/`height` are dropped in favour of the `viewBox`,
+  and the `<clipPath>` wrapper — a full-frame white `<rect>` the export tool left
+  behind — is removed because the path never leaves the frame and the rect
+  would read as a second ink to the mark tooling here.
+
 - `minimax.svg` — fetched 2026-08-31 from
   `https://raw.githubusercontent.com/MiniMax-AI/MiniMax-01/main/figures/minimax.svg`,
   MiniMax's own symbol as committed in their own model repository. The API-docs
@@ -135,6 +145,9 @@ Decisions that are not obvious from looking at the file:
 - `aside.svg` **is masked.** It already paints with `currentColor`, so it would
   follow the theme either way; masking keeps it consistent with the other
   silhouettes rather than depending on inherited color.
+- `raycast.svg` **is not masked.** One ink, but that ink is #FF6363 — Raycast
+  red, the same case as `openai.svg` and `deepseek-harness.svg`. Legible on both
+  surfaces as an image.
 
 Both directions are enforced in `gui/tests/integration-marks.test.ts`, including a
 luminance check that fails any single-ink near-neutral mark left as an image. That

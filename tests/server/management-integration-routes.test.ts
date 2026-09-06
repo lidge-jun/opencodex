@@ -14,6 +14,7 @@ import { handleManagementAPI } from "../../src/server/management-api";
 import {
   setIntegrationMutationFlightTestHooks,
   setIntegrationPathTestHooks,
+  setRaycastDetectTestHook,
 } from "../../src/server/management/integration-routes";
 import type { OcxConfig } from "../../src/types";
 import { catalogConvergenceFactory } from "../helpers/catalog-convergence";
@@ -273,6 +274,31 @@ describe("GET /api/client-integrations", () => {
     expect(body.configPath).toBe(hermesConfigPath());
     // A read is a read: it appends nothing.
     expect(store.listOperations()).toHaveLength(before);
+  });
+
+  test("the raycast envelope carries the plan block; every other client's does not", async () => {
+    // Stubbed: the real detector spawns `defaults` and would report the
+    // developer's own subscription.
+    setRaycastDetectTestHook(() => ({ appPath: "/Applications/Raycast.app", aiDirPresent: false, plan: "free" }));
+    try {
+      const raycast = await api("/api/client-integrations/raycast");
+      expect(raycast.status).toBe(200);
+      const body = await raycast.json() as { clientId: string; raycast?: { plan: string; appPath: string | null; aiDirPresent: boolean } };
+      expect(body.clientId).toBe("raycast");
+      expect(body.raycast).toEqual({ appPath: "/Applications/Raycast.app", aiDirPresent: false, plan: "free" });
+
+      installHermes();
+      const hermes = await api("/api/client-integrations/hermes");
+      expect(hermes.status).toBe(200);
+      expect("raycast" in (await hermes.json() as Record<string, unknown>)).toBe(false);
+
+      // The collection read describes files, not apps: no client gets the block there.
+      const list = await api("/api/client-integrations");
+      const { clients } = await list.json() as { clients: Array<Record<string, unknown>> };
+      expect(clients.some(client => "raycast" in client)).toBe(false);
+    } finally {
+      setRaycastDetectTestHook(null);
+    }
   });
 });
 

@@ -1,10 +1,10 @@
 ---
 title: Integrations
-description: Connect opencodex to OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, Gajae Code, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent and Aside from the dashboard — one switch per client, with a backup taken before every write.
+description: Connect opencodex to OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, Gajae Code, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside and Raycast from the dashboard — one switch per client, with a backup taken before every write.
 ---
 
 The **Integrations** tab writes opencodex's provider block into a client's own config
-file, and removes it again. Twelve clients work this way, each with a switch:
+file, and removes it again. Thirteen clients work this way, each with a switch:
 
 | Client | Config file | Format | When the change takes effect | Credential |
 |---|---|---|---|---|
@@ -20,6 +20,7 @@ file, and removes it again. Twelve clients work this way, each with a switch:
 | Prime Agent | `~/.prime/agent/models.json` | JSON | new sessions | loopback placeholder |
 | ZCode | `~/.zcode/v2/config.json` | JSON | on restart | loopback placeholder |
 | Aside | `~/.aside/u/<account>/models.json` | JSON | after fully quitting and reopening Aside | loopback placeholder |
+| Raycast | `~/.config/raycast/ai/providers.yaml` | YAML | immediately on save — Raycast watches the file | none — loopback only |
 
 Generated catalogs include only enabled models from each provider selection. This applies to both
 downloads and managed integrations, including Pi and Aside. The management model list still shows
@@ -60,6 +61,28 @@ Aside connection enables all profiles by default; individual exclusions survive 
 One caveat specific to Aside: the running app rewrites `models.json` itself, so
 fully quit and reopen Aside after applying, the same way Claude Desktop needs a
 restart. Aside's block is loopback-only and never carries a real credential.
+
+Raycast has two prerequisites. Custom Providers is a **Raycast Pro** feature: on a
+free plan the file is still written, but `ocx integration client status --client
+raycast` and the Integrations page report a warning, because Raycast will not
+read it. And Raycast only creates its `ai` folder when you open Raycast →
+Settings → AI → **Reveal Providers Config** once; opencodex uses that folder as
+the install signal and reports the client as not installed until then. Raycast
+reads `~/.config/raycast/ai/providers.yaml` on macOS and Windows alike and does
+not honor `XDG_CONFIG_HOME`, so that path is not relocatable.
+
+The managed block is one element, `id: opencodex`, in the file's `providers`
+sequence: `name: OpenCodex`, `base_url: http://<host>:<port>/v1`, and every
+routed model with its `abilities` — `tools` and `system_message` are always
+supported, `vision` follows the catalog's input modalities, `reasoning_effort`
+is set when the model has an effort ladder, and `temperature` is turned off for
+reasoning models. Other providers in the file are preserved, and disable removes
+only the OpenCodex element. Raycast picks up the change as soon as the file is
+saved, no restart needed; the models appear in Raycast's model picker grouped
+under **OpenCodex**. The file has no place for a credential, so this client is
+loopback-only: no `api_keys` entry is written and a non-loopback bind is refused.
+The format is documented at
+[manual.raycast.com/ai/custom-providers](https://manual.raycast.com/ai/custom-providers).
 
 Cursor has a tab but is not one of these switches. Regular Cursor calls custom endpoints from
 its own backend, so a loopback proxy is unreachable without a public tunnel, and Cursor's
@@ -130,7 +153,7 @@ than 1000 levels — which locks the switch instead, so nothing is silently chan
 **OMP** is unaffected by sibling edits too, for a different reason: its writer
 patches only its own `providers.opencodex` range byte-wise, so the rest of the
 file is never rewritten. For the remaining formats that can carry comments
-(Hermes, OpenClaw, Kimi Code, Gajae Code, MiniMax Code — YAML, JSON5 and TOML
+(Hermes, OpenClaw, Kimi Code, Gajae Code, MiniMax Code, Raycast — YAML, JSON5 and TOML
 written as whole documents), or
 whenever our own entries were edited, the switch locks and disable refuses rather
 than guessing which edits were yours.
@@ -216,10 +239,12 @@ ocx integration client enable --client mcode
 ocx mcode
 ```
 
-Once connected, `ocx sync` refreshes owned MCode, Pi, and Aside catalogs with the current
-model selection, context windows, and reasoning-effort ladders. Changes to model visibility,
-provider selection, or presets also refresh connected Pi and Aside catalogs. Foreign-edited
-or unsafe blocks stay untouched, as do previously owned blocks you removed manually.
+Once connected, `ocx sync` and `POST /api/sync` refresh owned MCode, Pi, Aside, and
+Raycast catalogs with the current model selection, context windows, and reasoning-effort
+ladders. Proxy startup refreshes an owned Raycast catalog. Changes to model visibility,
+provider selection, or presets also refresh connected Pi, Aside, and Raycast catalogs.
+Missing, foreign-edited, or unsafe blocks stay untouched, as do previously owned blocks
+you removed manually.
 An enabled Aside profile is an exception to the usual owned-only refresh: if its account
 directory exists and it has never had an owned block, sync may create its first block when
 that slot is empty. A prior Aside connection enables this behavior for all registered

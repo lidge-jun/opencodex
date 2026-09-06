@@ -93,7 +93,8 @@ export type ExportClientId =
   | "mcode"
   | "zcode"
   | "prime"
-  | "aside";
+  | "aside"
+  | "raycast";
 
 export interface ExportClientSpec {
   id: ExportClientId;

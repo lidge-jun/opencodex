@@ -403,7 +403,7 @@ const commandRunners: Record<string, CommandRunner> = {
             },
             config,
             port: live.port,
-          }, ["mcode", "pi"]));
+          }, ["mcode", "pi", "raycast"]));
         } catch (error) {
           console.warn(`Client integrations were not refreshed: ${error instanceof Error ? error.message : String(error)}`);
         }

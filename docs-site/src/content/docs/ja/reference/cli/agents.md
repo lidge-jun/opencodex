@@ -125,7 +125,7 @@ Grok Build モデル フェンスを管理および適用します。
 
 ## クライアント設定のエクスポート
 
-### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime>`
+### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast>`
 
 実行中のプロキシに接続するクライアント設定を出力します。このコマンドは、ベース URL、モデル一覧、およびクライアントに応じた認証情報参照または `opencodex-loopback` プレースホルダーを含む `opencodex` プロバイダーブロックを、選択したクライアントのネイティブ形式でシリアル化します。
 
@@ -133,7 +133,7 @@ Grok Build モデル フェンスを管理および適用します。
 
 |旗 |アクション |
 | --- | --- |
-| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh\|mcode\|zcode\|prime>` |必須。クライアントの設定形式を選択します。 |
+| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh\|mcode\|zcode\|prime\|aside\|raycast>` |必須。クライアントの設定形式を選択します。 |
 | `--json` |構成 JSON のみを標準出力に出力するため、リダイレクトはバイト正確な出力をキャプチャします。 `--out` 書き込みメモを含むすべての診断は stderr に送られます。 |
 | `--out <path>` |設定を `<path>` に書き込みます。既存のファイルの置き換えを拒否します。 |
 | `--force` | `--out` が既存のファイルを置き換えることを許可します。 |
@@ -160,6 +160,9 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 | `mcode` | `~/.minimax/config.yaml` (`MINIMAX_DATA_DIR`、次に旧 `MAVIS_DATA_DIR` が設定時に優先。相対値は拒否されます) | `mcode-config.yaml` | なし — loopback placeholder |
 | `zcode` | `~/.zcode/v2/config.json` (`ZCODE_DATA_DIR` が設定時に優先。相対値は拒否されます) | `config.json` | なし — loopback placeholder |
 | `prime` | `~/.prime/agent/models.json` (`PRIME_AGENT_CODING_AGENT_DIR` が設定時に優先。相対値は拒否されます) | `prime-models.json` | なし — loopback placeholder |
+| `raycast` | `~/.config/raycast/ai/providers.yaml` (macOS と Windows で同じ。Raycast は `XDG_CONFIG_HOME` を尊重しません) | `raycast-providers.yaml` | なし — loopback のみ。`api_keys` エントリは書き込まれません |
+
+Raycast のエクスポートは、`providers` シーケンスに `id: opencodex` 要素を 1 つだけ持つ独立した `providers.yaml` 文書です。内容は `name: OpenCodex`、プロキシの `/v1` ベース URL、および `abilities` 付きのルーティング済み全モデルです (`tools` と `system_message` は常にサポート、`vision` はカタログの入力モダリティから、`reasoning_effort` はモデルに effort ラダーがある場合、`temperature` は推論モデルではオフ)。Custom Providers は Raycast Pro の機能で、Raycast はこのファイルを監視しているため、保存した変更は再起動なしで反映されます。形式は [manual.raycast.com/ai/custom-providers](https://manual.raycast.com/ai/custom-providers) に記載されています。`api_keys` エントリは書き込まれないため、このエクスポートは loopback 専用で、loopback 以外のバインドは拒否されます。
 
 opencode は `{env:OPENCODEX_OPENCODE_API_KEY}` を補間します。opencodex が生成する Pi のエクスポートには環境変数が不要で、リテラルのプレースホルダー `opencodex-loopback` が入ります。この値は必須です。Pi はモデル リストを構築する際に `apiKey` を解決し、既存の設定に未設定の環境変数参照がある場合はプロバイダー全体を隠すためです。ループバックでは、生成されたプレースホルダーをプロキシが検査することはありません。
 

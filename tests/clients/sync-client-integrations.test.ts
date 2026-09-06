@@ -65,7 +65,7 @@ describe("ocx sync fans out to enabled native clients and owned file integration
 
     expect(fn).toContain("grokIntegrationEnabled(config)");
     expect(fn).toContain("claudeDesktopIntegrationEnabled(config)");
-    expect(fn).toContain('["mcode", "pi", "aside"]');
+    expect(fn).toContain('["mcode", "pi", "aside", "raycast"]');
     expect(fn).toContain("refreshOwnedCatalogIntegrations");
     // Native clients keep their catches; the owned catalog helper isolates file clients.
     expect(fn.match(/catch \(error\)/g)?.length).toBe(2);
@@ -651,15 +651,27 @@ describe("owned Pi/Aside catalogs follow filtered model selections", () => {
   });
 });
 
-test("the direct ocx sync command refreshes MCode, Pi and Aside instead of relying on /api/sync", async () => {
+test("the direct ocx sync command refreshes MCode, Pi, Raycast and server-owned Aside", async () => {
   const src = await Bun.file(new URL("../../src/cli/dispatch.ts", import.meta.url)).text();
   const start = src.indexOf("sync: async deps =>");
   const command = src.slice(start, src.indexOf("v2: async deps =>", start));
   expect(command).toContain("refreshOwnedCatalogIntegrations");
-  expect(command).toContain('["mcode", "pi"]');
+  expect(command).toContain('["mcode", "pi", "raycast"]');
   expect(command).toContain("refreshAsideProfilesThroughServer");
   expect(command.indexOf("syncModelsToCodex")).toBeLessThan(command.indexOf("refreshOwnedCatalogIntegrations"));
   expect(command).toContain('synced.status !== "refused"');
+});
+
+test("startup and ensure refresh owned Raycast through the catalog coordinator", async () => {
+  const src = await Bun.file(new URL("../../src/cli/index.ts", import.meta.url)).text();
+  const start = src.slice(src.indexOf("async function handleStart"), src.indexOf("function detachedStartEnvironment"));
+  const ensure = src.slice(src.indexOf("async function handleEnsure"), src.indexOf("async function handleTrayProxyStart"));
+  expect(src).toContain("refreshOwnedCatalogIntegrations");
+  expect(src).toContain('}, ["raycast"]);');
+  expect(start).toContain("await refreshOwnedRaycastCatalog(config, port)");
+  expect(ensure).toContain("await refreshOwnedRaycastCatalog(config, live.port)");
+  expect(ensure).toContain("await refreshOwnedRaycastCatalog(config, port)");
+  expect(src).not.toContain("refreshAllOwnedIntegrations");
 });
 
 test("identical explicit mutation keys join but cannot swallow a different apply or disable", async () => {
