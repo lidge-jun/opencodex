@@ -51,8 +51,11 @@ describe("TelemetryLedger", () => {
     const sampleKey = ["sk", "secret", "fixture", "123"].join("-");
     const email = [`ale${String.fromCharCode(0x301)}`, "example.com"].join("@");
     const punctuatedComponent = ["O", "Connor+Team"].join("'");
+    const repeatedSpaceComponent = "Alice  Smith";
     const unixPath = ["", "Users", "李", punctuatedComponent, "trace(1).log"].join("/");
     const windowsPath = ["C:", "Users", "李", punctuatedComponent, "trace(1).log"].join("\\");
+    const spacedUnixPath = ["", "Users", repeatedSpaceComponent, "trace.log"].join("/");
+    const spacedWindowsPath = ["C:", "Users", repeatedSpaceComponent, "trace.log"].join("\\");
     const ledger = new TelemetryLedger(databasePath);
     const event: FailureEvent = { failureKind: "sanitized_error", signature: "sensitive details test", timestamp: 1000 };
     const details = {
@@ -64,7 +67,7 @@ describe("TelemetryLedger", () => {
       userPrompt: "raw user input",
       " prompt": "whitespace-prefixed raw user input",
       arbitraryDiagnostic: "not part of the ledger contract",
-      safeNote: `connection timeout for ${email} at ${unixPath} or ${windowsPath}`,
+      safeNote: `connection timeout for ${email} at ${unixPath}, ${windowsPath}, ${spacedUnixPath}, or ${spacedWindowsPath}`,
     };
     const record = ledger.recordFailure(event, 10000, details);
     expect(record.details).toBeDefined();
@@ -72,6 +75,7 @@ describe("TelemetryLedger", () => {
     expect(record.details?.safeNote).not.toContain(email);
     expect(record.details?.safeNote).not.toContain("李");
     expect(record.details?.safeNote).not.toContain(punctuatedComponent);
+    expect(record.details?.safeNote).not.toContain(repeatedSpaceComponent);
     expect(record.details?.safeNote).toContain("[redacted-email]");
     expect(record.details?.safeNote).toContain("[path]");
     expect(record.details?.prompt).toBeUndefined();
