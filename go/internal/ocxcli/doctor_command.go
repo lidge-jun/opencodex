@@ -50,6 +50,11 @@ type DoctorCommandDeps struct {
 	WHAM             func() DoctorWhamResult
 	AgentRoles       func() []string
 	WSL              func() DoctorWslDiagnostic
+	BunVersion       func() string
+	Memory           func() DoctorServiceMemoryReport
+	History          func() DoctorHistoryPending
+	HistoryNamespace func() DoctorHistoryState
+	ProjectConfigs   func() []DoctorProjectConfigWarning
 	ProxyDownHint    func() string
 }
 
@@ -134,6 +139,29 @@ func defaultDoctorCommandDeps(deps DoctorCommandDeps) DoctorCommandDeps {
 	if deps.WSL == nil {
 		deps.WSL = CollectCurrentDoctorWslDualInstall
 	}
+	if deps.BunVersion == nil {
+		deps.BunVersion = doctorBunVersion
+	}
+	if deps.Memory == nil {
+		deps.Memory = func() DoctorServiceMemoryReport {
+			runtime, err := ReadRuntime()
+			if err != nil {
+				return DoctorServiceMemoryReport{Status: "not_running"}
+			}
+			return FetchDoctorServiceMemory(context.Background(), DoctorManagementReader{Runtime: runtime})
+		}
+	}
+	if deps.History == nil {
+		deps.History = CollectCurrentDoctorHistoryPending
+	}
+	if deps.HistoryNamespace == nil {
+		deps.HistoryNamespace = CollectDoctorHistoryNamespace
+	}
+	if deps.ProjectConfigs == nil {
+		deps.ProjectConfigs = func() []DoctorProjectConfigWarning {
+			return CollectDoctorProjectConfigsWithGlobal(doctorCodexHome(), "")
+		}
+	}
 	if deps.ProxyDownHint == nil {
 		deps.ProxyDownHint = func() string { return "" }
 	}
@@ -141,10 +169,7 @@ func defaultDoctorCommandDeps(deps DoctorCommandDeps) DoctorCommandDeps {
 }
 
 var doctorCommandTODOs = []DoctorTODOSection{
-	{"Memory / runtime", "doctor Bun runtime identity is unavailable in the Go process; service evidence is collected but cannot yet match TypeScript text."},
-	{"Codex history metadata restore", "history metadata restore diagnostic has not been ported."},
 	{"Codex native-write coordinator", "native-write coordinator diagnostic has not been ported."},
-	{"Project Codex configs", "profile-aware project config bypass diagnostic has not been ported."},
 	{"OAuth reliability", "credential-collision, refresh-lock, and catalog freshness diagnostics have not been ported; live Codex account health is collected but not rendered."},
 	{"Hints", "remaining hints need their source diagnostics; proxy-down hint is assembled when supplied."},
 }
@@ -213,14 +238,14 @@ func AssembleDoctorCommand(args []string, deps DoctorCommandDeps) DoctorCommandR
 		FormatDoctorProviderAPIKeys(CollectDoctorProviderAPIKeysOrdered(deps.OrderedProviders(), env)),
 		FormatDoctorCodexEnvKeyReadiness(CollectDoctorCodexEnvKeyReadiness(deps.CodexConfigText(), env, deps.Shim(), deps.ServiceToken())),
 		FormatDoctorRunningProxyEnv(deps.RunningProxyEnv()),
-		doctorTODO(doctorCommandTODOs[0]),
+		formatDoctorMemorySection(deps.Memory(), deps.BunVersion()),
 		FormatDoctorWHAM(deps.WHAM()),
-		doctorTODO(doctorCommandTODOs[1]), doctorTODO(doctorCommandTODOs[2]), doctorTODO(doctorCommandTODOs[3]),
+		FormatDoctorHistoryState(deps.HistoryNamespace()), doctorTODO(doctorCommandTODOs[0]), FormatDoctorHistoryPending(deps.History()), FormatDoctorProjectConfigs(deps.ProjectConfigs()),
 		FormatDoctorAgentRoles(deps.AgentRoles()),
 		FormatDoctorWslDualInstall(deps.WSL()),
-		doctorTODO(doctorCommandTODOs[4]),
+		doctorTODO(doctorCommandTODOs[1]),
 	}
-	last := doctorTODO(doctorCommandTODOs[5])
+	last := doctorTODO(doctorCommandTODOs[2])
 	if hint := deps.ProxyDownHint(); hint != "" {
 		last = append(last, "  - "+hint)
 	}

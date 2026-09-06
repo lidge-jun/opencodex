@@ -1,8 +1,10 @@
 package ocxcli
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -327,5 +329,86 @@ func TestDoctorServiceMemoryFormatterMatchesTypeScriptOracle(t *testing.T) {
 	got[0] = want[0]
 	if gotText, wantText := strings.Join(got, "\n"), strings.Join(want, "\n"); gotText != wantText {
 		t.Fatalf("service memory bytes\n got: %q\nwant: %q", gotText, wantText)
+	}
+}
+
+func TestDoctorProjectProfileFixtureMatchesTypeScriptOracle(t *testing.T) {
+	home := t.TempDir()
+	codexHome, project := filepath.Join(home, "codex"), filepath.Join(home, "project")
+	if err := os.MkdirAll(filepath.Join(project, ".codex"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(codexHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte("model_provider = \"opencodex\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fixture := "profile = \"review\"\nmodel_provider = \"openai\"\n\n[profiles.review]\nmodel_provider = \"fixture\"\n\n[model_providers.fixture]\n"
+	if err := os.WriteFile(filepath.Join(project, ".codex", "config.toml"), []byte(fixture), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", codexHome)
+	repo := typeScriptOracleRepo(t)
+	script := "import { collectProjectCodexConfigWarnings, formatProjectCodexConfigWarningsForDoctor } from './src/codex/project-config-warnings'; process.stdout.write(JSON.stringify(formatProjectCodexConfigWarningsForDoctor(collectProjectCodexConfigWarnings({cwd: process.env.OCX_PROJECT, codexConfigPath: process.env.OCX_CODEX_CONFIG}))));"
+	cmd := exec.Command("bun", "-e", script)
+	cmd.Dir = repo
+	cmd.Env = append(os.Environ(), "OCX_PROJECT="+project, "OCX_CODEX_CONFIG="+filepath.Join(codexHome, "config.toml"))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("TypeScript project oracle: %v: %s", err, out)
+	}
+	var want []string
+	if err := json.Unmarshal(out, &want); err != nil {
+		t.Fatal(err)
+	}
+	got := FormatDoctorProjectConfigs(CollectDoctorProjectConfigsWithGlobal(codexHome, project))[1:]
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("project profile bytes\n got: %q\nwant: %q", got, want)
+	}
+}
+
+func TestDoctorHistoryManifestFixtureMatchesTypeScriptDoctor(t *testing.T) {
+	home := t.TempDir()
+	codexHome := filepath.Join(home, "codex")
+	if err := os.MkdirAll(codexHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	state, rollout := filepath.Join(codexHome, "state_5.sqlite"), filepath.Join(home, "rollout.jsonl")
+	rolloutText := `{"type":"session_meta","payload":{"id":"thread-1","model_provider":"opencodex","source":"cli"}}` + "\n"
+	if err := os.WriteFile(rollout, []byte(rolloutText), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT, model_provider TEXT, source TEXT, has_user_event INTEGER, first_user_message TEXT)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO threads VALUES (?, ?, 'opencodex', 'cli', 1, '')", "thread-1", rollout); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	manifest := fmt.Sprintf(`{"version":2,"stateDbPath":%q,"entries":{"thread-1":{"id":"thread-1","rolloutPath":%q,"modelProvider":"openai","source":"cli","hasUserEvent":1}}}`, state, rollout)
+	backup := DoctorHistoryBackupPath(state, home)
+	if err := os.WriteFile(backup, []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("OPENCODEX_HOME", home)
+	t.Setenv("CODEX_HOME", codexHome)
+	oracle, code := runTypeScriptDoctor(t, home, codexHome)
+	if code != 0 {
+		t.Fatalf("TypeScript doctor exit %d: %s", code, oracle)
+	}
+	want := "  --     1 backup manifest entry pending exact metadata restore"
+	if !strings.Contains(oracle, want) {
+		t.Fatalf("TypeScript history line missing: %s", oracle)
+	}
+	got := strings.Join(FormatDoctorHistoryPending(CollectDoctorHistoryPending(state, backup)), "\n")
+	if got != want {
+		t.Fatalf("history bytes got %q want %q", got, want)
 	}
 }

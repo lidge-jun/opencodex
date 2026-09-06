@@ -10,12 +10,40 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// doctorBunVersion obtains the exact runtime identity that runs the TypeScript
+// oracle. Go has no Bun.version equivalent; an unavailable Bun follows the
+// TypeScript no-live wording with an explicit unknown value rather than hiding
+// the line.
+func doctorBunVersion() string {
+	path, err := exec.LookPath("bun")
+	if err != nil {
+		return "unknown"
+	}
+	out, err := exec.Command(path, "--version").Output()
+	if err != nil {
+		return "unknown"
+	}
+	if version := strings.TrimSpace(string(out)); version != "" {
+		return version
+	}
+	return "unknown"
+}
+
+func formatDoctorMemorySection(report DoctorServiceMemoryReport, bun string) []string {
+	lines := []string{"Memory / runtime"}
+	if report.Status == "not_running" {
+		return append(lines, fmt.Sprintf("  --     doctor process Bun %s (this is NOT the service process)", bun), "  --     no running ocx proxy found (no live pid/runtime record)")
+	}
+	return append(lines, FormatDoctorServiceMemory(report, bun)...)
+}
 
 const doctorWHAMURL = "https://chatgpt.com/backend-api/wham/usage"
 
@@ -418,6 +446,135 @@ func CollectDoctorProjectConfigs(cwd string) []DoctorProjectConfigWarning {
 	}
 	return rows
 }
+
+// CollectDoctorProjectConfigsWithGlobal mirrors the TypeScript project warning
+// gate: only diagnose a project override when the global Codex config is
+// actually routed through OpenCodex. It also discovers trusted projects listed
+// in the global [projects."…"] tables.
+func CollectDoctorProjectConfigsWithGlobal(codexHome, cwd string) []DoctorProjectConfigWarning {
+	globalPath := filepath.Join(codexHome, "config.toml")
+	global, err := os.ReadFile(globalPath)
+	if err != nil || !doctorGlobalOpenCodexRouting(string(global)) {
+		return nil
+	}
+	if cwd == "" {
+		cwd, _ = os.Getwd()
+	}
+	paths := doctorProjectConfigPaths(cwd, globalPath, string(global))
+	var rows []DoctorProjectConfigWarning
+	for _, path := range paths {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		if row, ok := doctorProjectConfigWarning(string(raw), path); ok {
+			rows = append(rows, row)
+		}
+	}
+	return rows
+}
+
+func doctorGlobalOpenCodexRouting(text string) bool {
+	return doctorTomlRoot3(text, "model_provider") == "opencodex" || strings.Contains(text, "# Auto-injected by opencodex") && strings.Contains(text, "openai_base_url")
+}
+func doctorProjectConfigPaths(cwd, globalPath, global string) []string {
+	seen := map[string]bool{}
+	paths := []string{}
+	add := func(root string) {
+		p := filepath.Join(root, ".codex", "config.toml")
+		if p != globalPath && !seen[p] {
+			if _, err := os.Stat(p); err == nil {
+				seen[p] = true
+				paths = append(paths, p)
+			}
+		}
+	}
+	for i := 0; i < 12; i++ {
+		add(cwd)
+		parent := filepath.Dir(cwd)
+		if parent == cwd {
+			break
+		}
+		cwd = parent
+	}
+	for _, line := range strings.Split(global, "\n") {
+		m := regexp.MustCompile(`^\s*\[projects\.(?:"([^"]+)"|'([^']+)')\]\s*$`).FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		root := m[1]
+		if root == "" {
+			root = m[2]
+		}
+		// A trusted-project table is only admitted when its own body says trusted.
+		// The simple scan below is bounded by the next TOML table.
+		start := strings.Index(global, line)
+		rest := global[start+len(line):]
+		next := strings.Index(rest, "\n[")
+		body := rest
+		if next >= 0 {
+			body = rest[:next]
+		}
+		if strings.EqualFold(doctorTomlRoot3(body, "trust_level"), "trusted") {
+			add(root)
+		}
+	}
+	return paths
+}
+func doctorProjectConfigWarning(text, path string) (DoctorProjectConfigWarning, bool) {
+	rootProvider, profile := doctorTomlRoot3(text, "model_provider"), doctorTomlRoot3(text, "profile")
+	provider := rootProvider
+	viaProfile := false
+	if profile != "" {
+		if p := doctorTomlTableString(text, "profiles."+profile, "model_provider"); p != "" {
+			provider, viaProfile = p, true
+		}
+	}
+	if provider == "" || provider == "opencodex" || provider == "openai" {
+		return DoctorProjectConfigWarning{}, false
+	}
+	issue := "model_provider=\"" + provider + "\""
+	if viaProfile {
+		issue = "profile=\"" + profile + "\""
+	}
+	if doctorTomlTableExists(text, "model_providers."+provider) {
+		issue = "[model_providers." + provider + "]"
+	}
+	return DoctorProjectConfigWarning{path, issue, "Overrides OpenCodex — Codex uses " + doctorHumanProvider(provider) + " for this repo instead of the proxy (~/.codex/config.toml)."}, true
+}
+func doctorTomlTableString(text, table, key string) string {
+	in := false
+	for _, line := range strings.Split(text, "\n") {
+		l := strings.TrimSpace(line)
+		if strings.HasPrefix(l, "[") {
+			in = strings.Trim(l, "[]") == table
+			continue
+		}
+		if in {
+			if v := doctorTomlRoot3(l, key); v != "" {
+				return v
+			}
+		}
+	}
+	return ""
+}
+func doctorTomlTableExists(text, table string) bool {
+	for _, line := range strings.Split(text, "\n") {
+		if strings.Trim(strings.TrimSpace(line), "[]") == table {
+			return true
+		}
+	}
+	return false
+}
+func doctorHumanProvider(provider string) string {
+	if provider == "opencode_go" {
+		return "OpenCode Go"
+	}
+	if strings.HasPrefix(provider, "opencode") {
+		return "OpenCode"
+	}
+	return provider
+}
 func doctorTomlRoot3(text, key string) string {
 	for _, line := range strings.Split(text, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "[") {
@@ -436,9 +593,24 @@ func FormatDoctorProjectConfigs(rows []DoctorProjectConfigWarning) []string {
 		return append(lines, "  ok     no project-local provider bypass detected")
 	}
 	for _, r := range rows {
-		lines = append(lines, "  --     "+r.Path+" — "+r.Issue, "         "+r.Bypass)
+		lines = append(lines, "  --     "+doctorDisplayProjectPath(r.Path)+" — "+r.Issue, "         "+r.Bypass)
 	}
 	return append(lines, "       fix: remove those entries so OpenCodex proxy routing applies in this project")
+}
+
+func doctorDisplayProjectPath(path string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+	rel, err := filepath.Rel(home, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
+		return path
+	}
+	if rel == "." {
+		return "~"
+	}
+	return "~/" + filepath.ToSlash(rel)
 }
 
 func CollectDoctorAgentRoles(codexHome string) []string {
@@ -538,4 +710,27 @@ func FormatDoctorHistoryState(d DoctorHistoryState) []string {
 		lines = append(lines, d.Restore)
 	}
 	return lines
+}
+
+// CollectDoctorHistoryNamespace is the read-only counterpart of the TypeScript
+// coordinator namespace probe. In particular, it never creates the directory:
+// a fresh installation must report "not created yet", not mutate /tmp merely
+// because doctor ran.
+func CollectDoctorHistoryNamespace() DoctorHistoryState {
+	if runtime.GOOS == "windows" {
+		return DoctorHistoryState{Namespace: "refused", Restore: "Windows coordinator namespace probing is unavailable in the Go runtime"}
+	}
+	uid := os.Getuid()
+	path := filepath.Join("/tmp", fmt.Sprintf("opencodex-runtime-v1-%d", uid))
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return DoctorHistoryState{Namespace: "missing"}
+	}
+	if err != nil {
+		return DoctorHistoryState{Namespace: "refused", Restore: "The Codex coordinator namespace cannot be inspected."}
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || !doctorOwnedByCurrentUser(info) || info.Mode().Perm() != 0o700 {
+		return DoctorHistoryState{Namespace: "refused", Restore: "The Codex coordinator namespace has unsafe ownership or permissions."}
+	}
+	return DoctorHistoryState{Namespace: "ok"}
 }

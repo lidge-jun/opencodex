@@ -64,6 +64,9 @@ func TestDoctorCommandAssemblyMatchesTypeScriptOracle(t *testing.T) {
 		{"Provider API keys (value hidden)", "Codex env_key launch readiness"},
 		{"Codex env_key launch readiness", "Running proxy process proxy env (presence only)"},
 		{"Running proxy process proxy env (presence only)", "Memory / runtime"},
+		{"Memory / runtime", "WHAM reachability"},
+		{"Codex history metadata restore", "Codex native-write coordinator"},
+		{"Project Codex configs", "Codex agent role files"},
 	} {
 		got := doctorSection(result.Text, section.heading, section.next)
 		want := doctorSection(oracle, section.heading, section.next)
@@ -99,6 +102,11 @@ func TestDoctorCommandAssemblyUsesPortableProbe3Sections(t *testing.T) {
 		WSL: func() DoctorWslDiagnostic {
 			return DoctorWslDiagnostic{WSL: true, EffectiveCodexHome: "/home/a/.codex"}
 		},
+		BunVersion:       func() string { return "1.3.14" },
+		Memory:           func() DoctorServiceMemoryReport { return DoctorServiceMemoryReport{Status: "not_running"} },
+		History:          func() DoctorHistoryPending { return DoctorHistoryPending{} },
+		HistoryNamespace: func() DoctorHistoryState { return DoctorHistoryState{Namespace: "missing"} },
+		ProjectConfigs:   func() []DoctorProjectConfigWarning { return nil },
 	}
 	got := AssembleDoctorCommand(nil, deps).Text
 	for _, want := range []string{
@@ -141,6 +149,11 @@ func TestDoctorCommandAssemblyArgumentsAndTODOBoundary(t *testing.T) {
 		WHAM:             func() DoctorWhamResult { return DoctorWhamResult{} },
 		AgentRoles:       func() []string { return nil },
 		WSL:              func() DoctorWslDiagnostic { return DoctorWslDiagnostic{} },
+		BunVersion:       func() string { return "1.3.14" },
+		Memory:           func() DoctorServiceMemoryReport { return DoctorServiceMemoryReport{Status: "not_running"} },
+		History:          func() DoctorHistoryPending { return DoctorHistoryPending{} },
+		HistoryNamespace: func() DoctorHistoryState { return DoctorHistoryState{Namespace: "missing"} },
+		ProjectConfigs:   func() []DoctorProjectConfigWarning { return nil },
 		ProxyDownHint:    func() string { return "hint" },
 	}
 	result := AssembleDoctorCommand([]string{"--reclaim-response-tempz", "--reclaim-response-temps"}, deps)

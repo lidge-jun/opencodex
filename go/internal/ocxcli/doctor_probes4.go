@@ -261,7 +261,10 @@ func CollectDoctorHistoryPending(stateDB, backup string) DoctorHistoryPending {
 	var manifest struct {
 		Version     int
 		StateDBPath string
-		Entries     map[string]json.RawMessage
+		Entries     map[string]struct {
+			ID, RolloutPath, ModelProvider, Source string
+			HasUserEvent                           int
+		}
 	}
 	if json.Unmarshal(raw, &manifest) != nil || (manifest.Version != 1 && manifest.Version != 2) || manifest.Entries == nil {
 		return DoctorHistoryPending{Failed: true, FailureReason: "integrity"}
@@ -272,6 +275,11 @@ func CollectDoctorHistoryPending(stateDB, backup string) DoctorHistoryPending {
 		return DoctorHistoryPending{Failed: true, FailureReason: "integrity"}
 	}
 	n := len(manifest.Entries)
+	for id, entry := range manifest.Entries {
+		if id == "" || entry.ID != id || !filepath.IsAbs(entry.RolloutPath) || entry.ModelProvider == "" || entry.Source == "" || (entry.HasUserEvent != 0 && entry.HasUserEvent != 1) || !doctorHistoryProvenanceAllowed(entry.ModelProvider, entry.Source) {
+			return DoctorHistoryPending{BackupEntries: n, Failed: true, FailureReason: "integrity"}
+		}
+	}
 	if _, err := os.Stat(stateDB); err != nil {
 		if n == 0 && os.IsNotExist(err) {
 			return DoctorHistoryPending{}
@@ -287,7 +295,51 @@ func CollectDoctorHistoryPending(stateDB, backup string) DoctorHistoryPending {
 	if err := db.QueryRow("SELECT 1 FROM threads LIMIT 1").Scan(&one); err != nil && err != sql.ErrNoRows {
 		return DoctorHistoryPending{BackupEntries: n, Failed: true, FailureReason: "integrity"}
 	}
+	for id, entry := range manifest.Entries {
+		var rollout, provider, source string
+		var hasUser int
+		err := db.QueryRow("SELECT rollout_path, model_provider, source, has_user_event FROM threads WHERE id = ?", id).Scan(&rollout, &provider, &source, &hasUser)
+		if err != nil || rollout != entry.RolloutPath || (provider != "opencodex" && provider != entry.ModelProvider) || (source != "exec" && source != entry.Source) || (hasUser != 0 && hasUser != 1) {
+			return DoctorHistoryPending{BackupEntries: n, Failed: true, FailureReason: "integrity"}
+		}
+		if _, err := os.Stat(entry.RolloutPath); err != nil {
+			return DoctorHistoryPending{BackupEntries: n, Failed: true, FailureReason: "integrity"}
+		}
+	}
 	return DoctorHistoryPending{BackupEntries: n}
+}
+
+func doctorHistoryProvenanceAllowed(provider, source string) bool {
+	return (provider == "openai" && (source == "cli" || source == "vscode")) || (provider == "opencodex" && source == "exec")
+}
+
+// CollectCurrentDoctorHistoryPending resolves the same state_5.sqlite and
+// manifest location as TypeScript for the normal, environment-driven path.
+func CollectCurrentDoctorHistoryPending() DoctorHistoryPending {
+	state := doctorStateDBPath(doctorCodexHome())
+	dir := statusConfigDir()
+	if dir == "" {
+		return DoctorHistoryPending{Failed: true, FailureReason: "permission"}
+	}
+	return CollectDoctorHistoryPending(state, DoctorHistoryBackupPath(state, dir))
+}
+
+func doctorStateDBPath(codexHome string) string {
+	root := strings.TrimSpace(os.Getenv("CODEX_SQLITE_HOME"))
+	if raw, err := os.ReadFile(filepath.Join(codexHome, "config.toml")); err == nil {
+		if configured := doctorTomlRoot3(string(raw), "sqlite_home"); configured != "" {
+			root = configured
+		}
+	}
+	if root == "" {
+		root = codexHome
+	}
+	if !filepath.IsAbs(root) {
+		if cwd, err := os.Getwd(); err == nil {
+			root = filepath.Join(cwd, root)
+		}
+	}
+	return filepath.Join(root, "state_5.sqlite")
 }
 func FormatDoctorHistoryPending(d DoctorHistoryPending) []string {
 	if d.Failed {
