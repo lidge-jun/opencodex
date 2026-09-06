@@ -653,6 +653,8 @@ describe.skipIf(!goAvailable || sidecarBinary === null)("ocx-sidecar differentia
     ];
     const tsServer = startServer(0);
     const tsResults: Array<Awaited<ReturnType<typeof captureMutation>>> = [];
+    let failureVectors: Array<{ method: "PUT" | "PATCH" | "POST"; path: string; body: unknown }>;
+    const tsFailures: Array<Awaited<ReturnType<typeof captureMutation>>> = [];
     let tsFinalState: Buffer;
     try {
       for (const v of vectors) {
@@ -663,11 +665,23 @@ describe.skipIf(!goAvailable || sidecarBinary === null)("ocx-sidecar differentia
       // leg actually changed the file, so a later equality is not vacuous.
       expect(tsFinalState.equals(initial)).toBe(false);
 
-      // Failure leg: an invalid strategy must be rejected with no write.
-      const beforeFailure = readFileSync(getConfigPath());
-      const failed = await captureMutation(tsServer, token, "PATCH", "/api/codex-auth/pool-strategy", { strategy: "bogus" });
-      expect(failed.status).toBe(400);
-      expect(readFileSync(getConfigPath()).equals(beforeFailure)).toBe(true);
+      // Every batch verb gets a rejecting leg. The pool strategy vector puts a
+      // valid field before an invalid one: this is the actual fail-safe case,
+      // because an implementation that assigns while validating would leave
+      // the strategy behind after rejecting stickyLimit. The active and cooldown
+      // vectors reject before touching their respective runtime stores.
+      failureVectors = [
+        { method: "PUT", path: "/api/codex-auth/active", body: { accountId: "not a valid account id" } },
+        { method: "PATCH", path: "/api/codex-auth/pool-strategy", body: { strategy: "round-robin", stickyLimit: 0 } },
+        { method: "POST", path: "/api/codex-auth/accounts/clear-cooldown", body: { id: "not a valid account id" } },
+      ];
+      for (const failure of failureVectors) {
+        const beforeFailure = readFileSync(getConfigPath());
+        const failed = await captureMutation(tsServer, token, failure.method, failure.path, failure.body);
+        tsFailures.push(failed);
+        expect(failed.status).toBe(400);
+        expect(readFileSync(getConfigPath()).equals(beforeFailure)).toBe(true);
+      }
     } finally {
       await tsServer.stop(true);
     }
@@ -682,10 +696,14 @@ describe.skipIf(!goAvailable || sidecarBinary === null)("ocx-sidecar differentia
         expect(await captureMutation(goServer, token, v.method, v.path, v.body)).toEqual(tsResults[i]!);
       }
       expect(readFileSync(getConfigPath()).equals(tsFinalState!)).toBe(true);
-      const beforeFailure = readFileSync(getConfigPath());
-      const failed = await captureMutation(goServer, token, "PATCH", "/api/codex-auth/pool-strategy", { strategy: "bogus" });
-      expect(failed.status).toBe(400);
-      expect(readFileSync(getConfigPath()).equals(beforeFailure)).toBe(true);
+      for (let i = 0; i < failureVectors.length; i++) {
+        const failure = failureVectors[i]!;
+        const beforeFailure = readFileSync(getConfigPath());
+        const failed = await captureMutation(goServer, token, failure.method, failure.path, failure.body);
+        expect(failed).toEqual(tsFailures[i]!);
+        expect(failed.status).toBe(400);
+        expect(readFileSync(getConfigPath()).equals(beforeFailure)).toBe(true);
+      }
     } finally {
       await goServer.stop(true);
     }
@@ -708,6 +726,8 @@ describe.skipIf(!goAvailable || sidecarBinary === null)("ocx-sidecar differentia
     ];
     const tsServer = startServer(0);
     const tsResults: Array<Awaited<ReturnType<typeof captureMutation>>> = [];
+    let failureVectors: Array<{ method: "PUT" | "PATCH" | "POST"; path: string; body: unknown }>;
+    const tsFailures: Array<Awaited<ReturnType<typeof captureMutation>>> = [];
     let tsFinalState: Buffer;
     try {
       for (const v of vectors) {
@@ -716,6 +736,23 @@ describe.skipIf(!goAvailable || sidecarBinary === null)("ocx-sidecar differentia
       tsFinalState = readFileSync(getConfigPath());
       expect(tsResults[1]!.status).toBe(404); // account-store route under an empty fixture
       expect(tsFinalState.equals(initial)).toBe(false); // pool PATCH persisted
+
+      // Validate all fields before the pool document is replaced: the valid
+      // enabled/strategy fields must not survive the invalid stickyLimit. The
+      // sibling failure vectors pin the account-store and runtime-cooldown
+      // verbs to their no-partial-state contract too.
+      failureVectors = [
+        { method: "PUT", path: "/api/oauth/accounts/active", body: { provider: "anthropic", accountId: "missing-account" } },
+        { method: "PATCH", path: "/api/oauth/accounts/pool", body: { provider: "anthropic", enabled: true, strategy: "round-robin", stickyLimit: 0 } },
+        { method: "POST", path: "/api/oauth/accounts/clear-cooldown", body: { provider: "anthropic", accountId: "" } },
+      ];
+      for (const failure of failureVectors) {
+        const beforeFailure = readFileSync(getConfigPath());
+        const failed = await captureMutation(tsServer, token, failure.method, failure.path, failure.body);
+        tsFailures.push(failed);
+        expect(failed.status).toBeGreaterThanOrEqual(400);
+        expect(readFileSync(getConfigPath()).equals(beforeFailure)).toBe(true);
+      }
     } finally {
       await tsServer.stop(true);
     }
@@ -730,11 +767,14 @@ describe.skipIf(!goAvailable || sidecarBinary === null)("ocx-sidecar differentia
         expect(await captureMutation(goServer, token, v.method, v.path, v.body)).toEqual(tsResults[i]!);
       }
       expect(readFileSync(getConfigPath()).equals(tsFinalState!)).toBe(true);
-      // Failure leg: an invalid strategy is rejected with no write on both faces.
-      const beforeFailure = readFileSync(getConfigPath());
-      const failed = await captureMutation(goServer, token, "PATCH", "/api/oauth/accounts/pool", { provider: "anthropic", strategy: "bogus" });
-      expect(failed.status).toBe(400);
-      expect(readFileSync(getConfigPath()).equals(beforeFailure)).toBe(true);
+      for (let i = 0; i < failureVectors.length; i++) {
+        const failure = failureVectors[i]!;
+        const beforeFailure = readFileSync(getConfigPath());
+        const failed = await captureMutation(goServer, token, failure.method, failure.path, failure.body);
+        expect(failed).toEqual(tsFailures[i]!);
+        expect(failed.status).toBeGreaterThanOrEqual(400);
+        expect(readFileSync(getConfigPath()).equals(beforeFailure)).toBe(true);
+      }
     } finally {
       await goServer.stop(true);
     }
