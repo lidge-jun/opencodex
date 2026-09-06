@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -87,6 +88,22 @@ func (n *Normalized) RedactedIndentedJSON() ([]byte, error) {
 		return nil, err
 	}
 	return indented.Bytes(), nil
+}
+
+// ClearCodexAccountPinForSet applies the config-set hook shared by the
+// TypeScript CLI.  Restating any codexAccountPriorities path releases a stale
+// manual account pin; imports deliberately do not call this hook because an
+// import supplies its own complete pin state.  It is intentionally a library
+// operation until the native write dispatcher owns the full set contract.
+func (n *Normalized) ClearCodexAccountPinForSet(path string) bool {
+	if n == nil || n.root == nil || n.root.kind != objectKind {
+		return false
+	}
+	first := strings.TrimSpace(strings.Split(path, ".")[0])
+	if first != "codexAccountPriorities" {
+		return false
+	}
+	return n.root.delete("activeCodexAccountPinned")
 }
 
 type valueKind uint8
@@ -200,6 +217,18 @@ func (v *value) set(key string, x *value) {
 		}
 	}
 	v.object = append(v.object, member{key, x})
+}
+func (v *value) delete(key string) bool {
+	if v == nil || v.kind != objectKind {
+		return false
+	}
+	for i, m := range v.object {
+		if m.key == key {
+			v.object = append(v.object[:i], v.object[i+1:]...)
+			return true
+		}
+	}
+	return false
 }
 func (v *value) has(key string) bool { return v.find(key) != nil }
 func number(n int64) *value {
@@ -418,6 +447,9 @@ func (v *value) write(b *bytes.Buffer) {
 }
 
 func redactValue(v *value, key string) *value {
+	if key == "modelCosts" {
+		return sanitizeModelCostsForDisplay(v)
+	}
 	if isSecretKey(key) && v.kind == stringKind && v.text != "" {
 		return stringValue("********")
 	}
@@ -429,14 +461,78 @@ func redactValue(v *value, key string) *value {
 		}
 		return out
 	case objectKind:
-		out := &value{kind: objectKind, object: make([]member, len(v.object))}
-		for i, child := range v.object {
-			out.object[i] = member{key: child.key, value: redactValue(child.value, child.key)}
+		out := &value{kind: objectKind, object: make([]member, 0, len(v.object))}
+		for _, child := range v.object {
+			redacted := redactValue(child.value, child.key)
+			// JSON.stringify omits an object property whose value is undefined.
+			// TS's sanitizeModelCostsForDisplay returns undefined when no row
+			// survives, so retain the same projection here.
+			if child.key == "modelCosts" && redacted == nil {
+				continue
+			}
+			out.object = append(out.object, member{key: child.key, value: redacted})
 		}
 		return out
 	default:
 		return v
 	}
+}
+
+var secretModelIDPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9._-])sk-[A-Za-z0-9][A-Za-z0-9._-]{6,}(?:$|[^A-Za-z0-9._-])`),
+	regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9_])(gh[pousr]_[A-Za-z0-9_]{8,}|github_pat_[A-Za-z0-9_]{20,})(?:$|[^A-Za-z0-9_])`),
+	regexp.MustCompile(`(?i)\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret)=[^&\s"',;]+`),
+}
+
+// sanitizeModelCostsForDisplay mirrors sanitizeModelCostsForDisplay in
+// src/config.ts: project only valid four-rate tuples and drop a model ID which
+// resembles a credential rather than replacing it with a colliding placeholder.
+// nil models JavaScript's undefined, causing the containing modelCosts member to
+// be omitted by redactValue.
+func sanitizeModelCostsForDisplay(costs *value) *value {
+	if costs == nil || costs.kind != objectKind {
+		return nil
+	}
+	out := &value{kind: objectKind}
+	for _, row := range costs.object {
+		if secretShapedModelID(row.key) || row.value == nil || row.value.kind != objectKind {
+			continue
+		}
+		rates := make([]member, 0, 4)
+		valid := true
+		for _, field := range []string{"input", "output", "cacheRead", "cacheWrite"} {
+			rate := row.value.find(field)
+			if !validCostRate(rate) {
+				valid = false
+				break
+			}
+			rates = append(rates, member{key: field, value: rate})
+		}
+		if valid {
+			out.object = append(out.object, member{key: row.key, value: &value{kind: objectKind, object: rates}})
+		}
+	}
+	if len(out.object) == 0 {
+		return nil
+	}
+	return out
+}
+
+func validCostRate(v *value) bool {
+	if v == nil || v.kind != numberKind {
+		return false
+	}
+	n, err := strconv.ParseFloat(v.number.String(), 64)
+	return err == nil && !math.IsNaN(n) && !math.IsInf(n, 0) && n >= 0 && n <= 1_000_000
+}
+
+func secretShapedModelID(id string) bool {
+	for _, pattern := range secretModelIDPatterns {
+		if pattern.MatchString(id) {
+			return true
+		}
+	}
+	return false
 }
 
 func isSecretKey(key string) bool {

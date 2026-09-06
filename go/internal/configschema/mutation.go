@@ -4,13 +4,14 @@
 // Current config write commands deliberately remain TypeScript-owned. This
 // package only provides the cross-language BEGIN IMMEDIATE/generation
 // foundation; it must not be wired into CLI dispatch until the TypeScript write
-// contract is ported in full. Required prerequisites are: full write-boundary
-// schema and load-normalization coverage, modelCosts key redaction, clearing
-// activeCodexAccountPinned when codexAccountPriorities changes, and raw-byte
-// revalidation/rebase for non-cooperating direct writers.
+// contract is ported in full. The library now includes display redaction, the
+// account-priority pin hook, and raw-byte revalidation; full write-boundary
+// schema/load-normalization coverage and command-level parity remain required
+// before CLI ownership can change.
 package configschema
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -31,6 +32,9 @@ var (
 	// promptly when either runtime owns BEGIN IMMEDIATE.
 	ErrMutationBusy       = errors.New("config mutation already in progress")
 	ErrGenerationConflict = errors.New("config generation conflict")
+	// ErrRawByteConflict is the public CLI wording used by TypeScript when a
+	// direct config.json writer keeps winning the bounded rebase loop.
+	ErrRawByteConflict = errors.New("config changed while applying this update; retry")
 )
 
 type GenerationConflictError struct{ Current int64 }
@@ -44,6 +48,20 @@ type MutationResult struct {
 	Changed    bool
 	Generation int64
 }
+
+// RawByteConflictError reports a direct writer which changed config.json while
+// the SQLite coordinator was held. It unwraps to ErrRawByteConflict so a CLI
+// caller can present the TypeScript-compatible retry message without matching
+// error text.
+type RawByteConflictError struct{ Attempts int }
+
+func (e *RawByteConflictError) Error() string { return ErrRawByteConflict.Error() }
+func (e *RawByteConflictError) Unwrap() error { return ErrRawByteConflict }
+
+// ConfigMutationMaxRebaseAttempts is the bounded direct-writer retry budget
+// used by TypeScript's mutatePersistedConfig. A direct writer can always race a
+// final rename, so the operation fails closed after this many observed changes.
+const ConfigMutationMaxRebaseAttempts = 3
 
 // MutationDatabasePath is $OPENCODEX_HOME/config-mutation.sqlite, the exact
 // coordinator location used by src/config.ts.
@@ -143,6 +161,60 @@ func WithMutationCoordinator(ctx context.Context, configPath string, expected *i
 	}
 	open = false
 	return result, nil
+}
+
+// WithRevalidatedConfigMutation is the raw-byte freshness transaction for a
+// future native config set/unset/import dispatcher. It reads the authoritative
+// config bytes only after BEGIN IMMEDIATE, runs mutate on a copy, then rereads
+// twice before every atomic write. A non-cooperating direct writer therefore
+// rebases the mutation against its latest bytes; repeated changes fail with the
+// same retry message the TypeScript CLI reports.
+//
+// mutate must return complete replacement bytes. It may be invoked more than
+// once, and must therefore be side-effect free outside the proposed config.
+func WithRevalidatedConfigMutation(ctx context.Context, configPath string, expected *int64, mutate func(raw []byte, generation int64) (replacement []byte, changed bool, err error)) (MutationResult, error) {
+	return WithMutationCoordinator(ctx, configPath, expected, func(generation int64) (bool, error) {
+		base, err := os.ReadFile(configPath)
+		if err != nil {
+			return false, err
+		}
+		for attempt := 0; attempt < ConfigMutationMaxRebaseAttempts; attempt++ {
+			// The first decision catches a direct write that happened before or
+			// during mutation evaluation.
+			_, changed, err := mutate(bytes.Clone(base), generation)
+			if err != nil || !changed {
+				return changed, err
+			}
+			latest, err := os.ReadFile(configPath)
+			if err != nil {
+				return false, err
+			}
+			if !bytes.Equal(latest, base) {
+				base = latest
+				continue
+			}
+			// Match TypeScript's confirmed callback: even unchanged bytes are
+			// replayed because another authority (for example a credential
+			// generation) may have changed at the revalidation seam.
+			proposal, changed, err := mutate(bytes.Clone(latest), generation)
+			if err != nil || !changed {
+				return changed, err
+			}
+			commitBase, err := os.ReadFile(configPath)
+			if err != nil {
+				return false, err
+			}
+			if !bytes.Equal(commitBase, latest) {
+				base = commitBase
+				continue
+			}
+			if err := writeConfigBytesAtomic(configPath, proposal); err != nil {
+				return false, err
+			}
+			return true, nil
+		}
+		return false, &RawByteConflictError{Attempts: ConfigMutationMaxRebaseAttempts}
+	})
 }
 
 func classifyMutationError(err error) error {

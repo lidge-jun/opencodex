@@ -66,3 +66,80 @@ func TestNormalizeDropsLoadTimeDegradedOptionals(t *testing.T) {
 		t.Fatalf("app default missing: %s", compact)
 	}
 }
+
+func TestRedactedProjectionDropsSecretAndInvalidModelCostsRows(t *testing.T) {
+	normalized, err := NormalizeJSON([]byte(`{
+  "providers": {
+    "example": {
+      "adapter": "openai-chat",
+      "baseUrl": "https://example.test",
+      "modelCosts": {
+        "gpt-safe": {"input": 1, "output": 2, "cacheRead": 0, "cacheWrite": 3, "ignored": "not displayed"},
+        "sk-abcdef1234567890": {"input": 99, "output": 99, "cacheRead": 99, "cacheWrite": 99},
+        "bad-rate": {"input": 1, "output": 2, "cacheRead": 0}
+      }
+    }
+  }
+}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := normalized.RedactedIndentedJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(got)
+	for _, leaked := range []string{"sk-abcdef1234567890", "99", "bad-rate", "ignored"} {
+		if strings.Contains(text, leaked) {
+			t.Fatalf("redacted config leaked %q: %s", leaked, text)
+		}
+	}
+	if !strings.Contains(text, `"gpt-safe": {`) || !strings.Contains(text, `"cacheWrite": 3`) {
+		t.Fatalf("valid display tuple missing: %s", text)
+	}
+}
+
+func TestRedactedProjectionOmitsEmptyModelCosts(t *testing.T) {
+	normalized, err := NormalizeJSON([]byte(`{"providers":{"example":{"adapter":"openai-chat","baseUrl":"https://example.test","modelCosts":{"sk-abcdef1234567890":{"input":1,"output":1,"cacheRead":1,"cacheWrite":1}}}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := normalized.RedactedIndentedJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(got), "modelCosts") {
+		t.Fatalf("empty sanitized modelCosts must be omitted: %s", got)
+	}
+}
+
+func TestSetCodexAccountPrioritiesClearsManualPin(t *testing.T) {
+	normalized, err := NormalizeJSON([]byte(`{"providers":{},"activeCodexAccountPinned":"acct-1","codexAccountPriorities":{"acct-1":7}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !normalized.ClearCodexAccountPinForSet("codexAccountPriorities.acct-1") {
+		t.Fatal("priority set did not clear manual pin")
+	}
+	got, err := normalized.CompactJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(got), "activeCodexAccountPinned") {
+		t.Fatalf("manual pin survived priority update: %s", got)
+	}
+	other, err := NormalizeJSON([]byte(`{"providers":{},"activeCodexAccountPinned":"acct-2"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other.ClearCodexAccountPinForSet("providers.example.adapter") {
+		t.Fatal("unrelated config set cleared a pin")
+	}
+	otherJSON, err := other.CompactJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(otherJSON), "activeCodexAccountPinned") {
+		t.Fatalf("unrelated config set removed pin: %s", otherJSON)
+	}
+}
