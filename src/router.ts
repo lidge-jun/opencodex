@@ -321,6 +321,8 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
   const modelReasoningEffortMap = mergeNestedRecord(registryEntry.modelReasoningEffortMap, provider.modelReasoningEffortMap);
   const modelReasoningEfforts = mergeStringArrayRecord(registryEntry.modelReasoningEfforts, provider.modelReasoningEfforts);
   const modelDefaultReasoningEfforts = mergeRecordFill(registryEntry.modelDefaultReasoningEfforts, provider.modelDefaultReasoningEfforts);
+  const modelPinnedReasoningEfforts = mergeRecordFill(registryEntry.modelPinnedReasoningEfforts, provider.modelPinnedReasoningEfforts);
+  const pinnedReasoningEffort = provider.pinnedReasoningEffort ?? registryEntry.pinnedReasoningEffort;
   const modelContextWindows = providerName === OPENAI_API_PROVIDER_ID
     ? mergePositiveNumberCaps(registryEntry.modelContextWindows, provider.modelContextWindows)
     : mergeRecordFill(registryEntry.modelContextWindows, provider.modelContextWindows);
@@ -466,6 +468,8 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     ...(modelSupportsVerbosity ? { modelSupportsVerbosity } : {}),
     ...(modelReasoningEfforts ? { modelReasoningEfforts } : {}),
     ...(modelDefaultReasoningEfforts ? { modelDefaultReasoningEfforts } : {}),
+    ...(pinnedReasoningEffort ? { pinnedReasoningEffort } : {}),
+    ...(modelPinnedReasoningEfforts ? { modelPinnedReasoningEfforts } : {}),
     ...(reasoningEffortMap ? { reasoningEffortMap } : {}),
     ...(modelReasoningEffortMap ? { modelReasoningEffortMap } : {}),
     ...(noVisionModels ? { noVisionModels } : {}),

@@ -545,6 +545,12 @@ export interface OcxConfig {
    */
   subagentEffortCap?: string;
   /**
+   * Optional map of model IDs (or model family / bare slugs) to an enforced reasoning effort tier
+   * ("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max").
+   * Overrides incoming caller choices globally across all providers.
+   */
+  modelPinnedEfforts?: Record<string, string>;
+  /**
    * Models hidden from Codex discovery without blocking direct proxy calls. Routed provider ids
    * are excluded from the catalog + /v1/models entirely. Account-qualified native ids hide only
    * their generated selector row and are omitted from raw /v1/models. BARE native GPT ids hide

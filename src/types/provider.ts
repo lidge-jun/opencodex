@@ -494,6 +494,17 @@ export interface OcxProviderConfig {
   /** Model-specific default Codex reasoning tier; must also be present in the visible tier list. */
   modelDefaultReasoningEfforts?: Record<string, string>;
   /**
+   * Provider-wide pinned reasoning effort tier ("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max").
+   * When configured, models under this provider default to being forcefully pinned to this tier.
+   */
+  pinnedReasoningEffort?: string;
+  /**
+   * Model-specific pinned reasoning effort overrides ("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max").
+   * When set, any incoming request targeting that model has its reasoning effort forcefully pinned
+   * to this tier, overriding caller choices.
+   */
+  modelPinnedReasoningEfforts?: Record<string, string>;
+  /**
    * Model-specific Codex reasoning-summary capability. Set false when an OpenAI-compatible
    * Responses backend rejects Codex summary-delivery fields for that model.
    */
