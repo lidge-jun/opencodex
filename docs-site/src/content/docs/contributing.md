@@ -147,6 +147,12 @@ The current maintainers, their responsibilities, and the review and merge policy
 [`MAINTAINERS.md`](https://github.com/lidge-jun/opencodex/blob/main/MAINTAINERS.md). GitHub review
 ownership for the repository and security-sensitive paths is declared in `.github/CODEOWNERS`.
 
+Contributor pull requests normally need a maintainer's approval. A current maintainer with
+GitHub `maintain` or `admin` access may explicitly integrate a PR into `dev`, including their
+own, without a second maintainer approval. The decision and exact-head verification must be
+recorded; CI, security review and outstanding maintainer objections still apply. This exception
+does not change `main`/`preview` review rules or allow direct pushes, force-pushes or deletion.
+
 ## Conventions
 
 - **ES Modules only** (`import`/`export`), TypeScript, `strict` mode. Keep `bun x tsc --noEmit` clean.

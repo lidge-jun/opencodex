@@ -136,6 +136,11 @@ değişen bir değer yazıp buna başarı demek yerine durur ve bunu söyler. Do
 adlandırıldığını ve diskte hiçbir şeyin taşınmadığını görürsünüz. Bu dosyayı
 elle düzenlemek hala çalışır; yalnızca otomatik yeniden yazmamız reddeder.
 
+TOML tarih ve saat değerleri de otomatik yeniden yazmayı engeller: birleştirme adımı,
+diziler ve satır içi tablolar dahil bu türlenmiş değerleri tırnaklı metne dönüştürür.
+Zaten tırnak içinde yazılmış tarihler desteklenir. Tırnaksız tarih türünü korumak
+için yapılandırmayı elle düzenleyin.
+
 **Pi, Kimi Code, Gajae Code, MiniMax Code ve yönetilen DSH entegrasyonu yalnızca geri döngü (loopback) bağlantısına karşı
 çalışır.** İlk dördünün yapılandırmasında geri döngü olmayan bir bağlantının gerektirdiği
 `x-opencodex-api-key` başlığı için alan yoktur. DSH genel bir headers haritası sunar, ancak rc.6

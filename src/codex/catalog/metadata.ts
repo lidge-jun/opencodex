@@ -299,8 +299,6 @@ function narrowToLimits(raw: number | undefined, slug: string, input: NativeCont
     return overlay !== undefined && cap !== undefined ? Math.min(window, cap) : window;
   }
   const narrowed = overlay === undefined ? raw : Math.min(raw, overlay);
-  // 922k is the GPT-5.6 1M opt-in, not a request to shrink gpt-5.4's 1M window.
-  if (cap === NATIVE_GPT56_MAX_INPUT_TOKENS) return narrowed;
   return applyProviderContextCap(narrowed, cap) ?? narrowed;
 }
 

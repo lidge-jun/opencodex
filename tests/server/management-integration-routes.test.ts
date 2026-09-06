@@ -245,10 +245,17 @@ describe("GET /api/client-integrations", () => {
     // The route must read through the SAME store the caller bound, or a test
     // that isolates writes still reads the developer's real snapshots.
     const models = await exportModels();
-    expect(body.clients).toEqual(INTEGRATION_CLIENT_IDS.map(clientId =>
+    expect(body.clients.filter(client => client.clientId !== "aside")).toEqual(INTEGRATION_CLIENT_IDS.filter(clientId => clientId !== "aside").map(clientId =>
       JSON.parse(JSON.stringify(readIntegrationState({
         clientId, models, config, port: 10100, store, env: routeEnv, home,
       })))));
+    // Aside now returns an aggregate even when this fixture has no account manifest.
+    expect(body.clients.find(client => client.clientId === "aside")).toEqual({
+      clientId: "aside", configPath: join(home, ".aside", "u"),
+      profiles: [], total: 0, enabledCount: 0, appliedCount: 0, allEnabled: false,
+      state: "unsafe", installed: false, reason: "unresolvable-path",
+      snapshotCount: -1, retentionDegraded: true, error: expect.any(String),
+    });
     expect(text).not.toContain(REAL_LOOKING_KEY);
   });
 

@@ -288,3 +288,7 @@ yeniden kullanır. Hedeflenen hesap ve iş yükünü kapsamlı bir şekilde test
 `runtimeRole` varsayılan olarak `standalone` değerindedir. Hub; `hub.managementPublicOrigin`, yalnız loopback `hub.managementIngress` (yokken `enabled:false`) ve tam `remoteGui.allowedTailscaleUsers` (yokken boş) kullanır. İstemci anahtarı `config.json` yerine `service-api-token` içinde kalır; döndürme sırasında `service-api-token.prev` geçici olarak bulunabilir. Kullanım kayıtları yansıtılmaz.
 
 `remoteGui.allowInsecureHttp`, yalnızca eski strict-schema yapılandırmalarının yüklenebilmesi için tutulan, kullanımdan kaldırılmış bir no-op'tur. Yapılandırmadan silin: pairing grant'leri yalnız loopback veya kimliği doğrulanmış HTTPS üzerinden kabul edilir ve `true` değeri düz HTTP pairing'i yeniden açmaz.
+
+## Codex kota ağı tanılaması
+
+Ana Codex hesabının satırındaki `quotaRefresh`, kalan kotayı veya model erişim yetkisini değil, kota sorgusunun sonucunu açıklar. Önbellek kullanıldığında ya da sorgu yapılmadığında alan bulunmayabilir. Sorgu, etkileşimli terminalin değil çalışan proxy servisinin ortamını kullanır. `proxy` ayarlanmazsa mevcut ortam korunur; `"auto"` yalnızca başlangıçta Windows’un statik proxy ayarlarını okur. PAC/WPAD, yalnızca SOCKS ayarları ve çalışma sırasındaki değişiklikler otomatik uygulanmaz. TUN ile başarı, HTTP proxy yolunun da çalıştığını tek başına göstermez. [Komutlar ve durumlar için İngilizce bölüme](/reference/configuration/server/#codex-quota-network-diagnostics) bakın.

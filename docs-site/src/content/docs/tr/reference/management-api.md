@@ -184,11 +184,14 @@ gönderin. Kurtarma gerekebileceğinde karantinayı tercih edin.
 | `GET /api/models` | Kontrol paneli/CLI model satırlarını döndürün | Toplama doyduğunda `catalog_busy` |
 | `GET /api/client-config?client=...` | Desteklenen herhangi bir dosya entegrasyonu için salt okunur bir istemci yapılandırması oluşturun | 400 desteklenmeyen istemci; 503 katalog kullanılamıyor |
 | `PUT /api/disabled-models` | Paylaşılan devre dışı model listesini değiştirin | 400 geçersiz JSON |
-| `PUT /api/model-visibility` | Sağlayıcı veya model düzeyindeki görünürlüğü atomik olarak değiştirin | 400 geçersiz sağlayıcı, kapsam, hedef veya gövde |
+| `PUT /api/model-visibility` | Sağlayıcı veya model düzeyindeki görünürlüğü atomik olarak değiştirin | 400 geçersiz sağlayıcı, kapsam, hedef veya gövde; 409 `initial_model_selection_pending` (Model listesini yenileyip tekrar deneyin.) |
 | `GET, POST /api/custom-models` | Özel modelleri listeleyin veya bir tane ekleyin | 400 geçersiz alanlar; 404 sağlayıcı eksik; 409 yinelenen model |
 | `PUT, DELETE /api/custom-models/{id}` | Bir özel modeli düzenleyin veya silin | 400 geçersiz kimlik/alanlar; 404 bulunamadı; 409 yinelenen model |
 | `GET, PUT /api/selected-models` | Sağlayıcı izin listelerini ve kullanılabilirliğini okuyun veya bir izin listesini değiştirin | 400 eksik sağlayıcı/gövde; 404 bilinmeyen sağlayıcı; PUT 409 `initial_model_selection_pending` |
 | `GET, PUT /api/model-presets` | Ön ayarları okuyun veya preset/all/custom modunu seçin | 400 geçersiz mod veya desteklenmeyen ön ayar; 404 bilinmeyen sağlayıcı; PUT 409 `initial_model_selection_pending` |
+
+Manuel model, Models panosunda aynı sağlayıcı ve model kimliğine sahip satırın yerini alır. OpenAI manuel satırı `openai/<model>` kimliğini ve görünürlük kontrollerini korur. Silindiğinde hesap niteleyicisi olmayan yerel satır geri gelir. Hesapla nitelenen yerel satırlar ayrı kalır. Yerel rotalar ve hesap yetkileri değişmez. Yerel olmayan OpenAI görünürlük hedefi, yapılandırılmış bir manuel modelle eşleşmelidir.
+
 
 Güvenilir ilk model listesi hazır olana kadar `/api/selected-models` ve `/api/model-presets` için geçerli PUT istekleri de HTTP 409 ve `initial_model_selection_pending` kodunu döndürür. Model keşfini örneğin `GET /api/models` ile yenileyin ve başarılı olduktan sonra yeniden deneyin.
 
@@ -229,6 +232,17 @@ döndürülmez.
 | `GET /api/provider-quotas` | Sağlayıcı kota raporlarını okuyun; `refresh=1` yenilemeye zorlar | — |
 | `GET, PUT /api/provider-context-caps` | Küresel, tüm sağlayıcılar veya tek sağlayıcı bağlam sınırlarını okuyun veya güncelleyin | 400 geçersiz istek; 404 bilinmeyen sağlayıcı |
 | `GET /api/provider-presets` | Çalışma zamanı kayıt defterinden türetilen GUI sağlayıcı önayarlarını döndürün | — |
+
+Bağlam sınırı yanıtı `caps` (etkin sınırlar) ve `values` (devre dışıyken de saklanan son seçimler)
+alanlarını içerir. Sağlayıcının sınırını `value` olmadan etkinleştirmek seçimini geri yükler;
+ilk etkinleştirmede genel `contextCapValue` kullanılır. Bu kural OpenAI için de geçerlidir:
+anahtar özel bir 922k modu seçmez. Etkin sınır tüm yerel pencereleri sınırlar; uzun bağlamı
+destekleyen modeller yalnızca kendi desteklenen üst sınırlarına kadar genişletilebilir.
+`{ "value": 600000, "setAll": true }`, genel değeri ve yalnızca etkin sınırları günceller.
+Sınırı kapalı olan sağlayıcılar, daha sonra yeniden etkinleştirildiğinde kullanılacak seçimlerini korur.
+`value` olmadan `{ "setAll": true }`, yapılandırılmış tüm sağlayıcıların sınırlarını geçerli genel
+değerle etkinleştirir ve saklanan seçimlerini değiştirir. Devre dışı bırakmak seçimi silmez;
+yeniden yüklemeden sonra da saklar, ancak bir sınır olarak uygulamaz.
 
 `provider_has_dependent_combos` bir güvenlik engelidir: sağlayıcılarını silmeden
 önce bağımlı komboları kaldırın veya düzenleyin.

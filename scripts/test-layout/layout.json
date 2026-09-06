@@ -11,7 +11,7 @@
   "domains": {
     "providers": {
       "match": [
-        "^(?:aside|auto|azure|baseten|chutes|cline|command|commandcode|context|cyber|deepinfra|deepseek|digitalocean|exa|featherless|forward|hyperbolic|kimi|meta|mimo|minimax|moonshot|muse|new|nous|novita|nscale|nvidia|opencode|openrouter|qwen38|sambanova|umans|vercel|zcode|zhipu)-"
+        "^(?:aside(?!-profile)|auto|azure|baseten|chutes|cline|command|commandcode|context|cyber|deepinfra|deepseek|digitalocean|exa|featherless|forward|hyperbolic|kimi|meta|mimo|minimax|moonshot|muse|new|nous|novita|nscale|nvidia|opencode|openrouter|qwen38|sambanova|umans|vercel|zcode|zhipu)-"
       ],
       "children": {
         "cursor": [
@@ -38,6 +38,7 @@
     },
     "server": {
       "match": [
+        "^aside-profiles-routes",
         "^(?:account|alias|bounded|cancel|config\\.test\\.ts|consume|data|debug|error|errors|fetch|health|input|loopback|management|memory|outbound|owned|passive|port|ports\\.test\\.ts|proxy|relay|response|retry|server|session|sidebar|stream|v2)-"
       ]
     },
@@ -107,6 +108,7 @@
     },
     "clients": {
       "match": [
+        "^aside-profile(?!s-routes)",
         "^(?:desktop|omp|pi|prime|remote|sync)-"
       ]
     },
@@ -232,6 +234,10 @@
     "artifacts-prune.test.ts": "images",
     "artifacts-ssrf.test.ts": "images",
     "aside-client.test.ts": "providers",
+    "aside-profiles-routes.test.ts": "server",
+    "aside-profiles.test.ts": "clients",
+    "aside-profile-paths.test.ts": "clients",
+    "aside-profile-sync-owner.test.ts": "clients",
     "assert-mergeable-review.test.ts": "ci-workflows",
     "auto-compact-budget.test.ts": "providers",
     "autostart-health.test.ts": "service",
@@ -255,6 +261,8 @@
     "bun-stream-caps.test.ts": "lib",
     "cancel-body-on-abort.test.ts": "server",
     "catalog-cursor-search.test.ts": "codex-integration",
+    "catalog-full-picker-order.test.ts": "codex-integration",
+    "catalog-go-exact-efforts.test.ts": "codex-integration",
     "catalog-input-modality-enum.test.ts": "codex-integration",
     "catalog-llamacpp-capabilities.test.ts": "codex-integration",
     "catalog-oauth-observation.test.ts": "codex-integration",
@@ -284,8 +292,10 @@
     "claude-desktop-1m.test.ts": "claude-integration",
     "claude-desktop-cli.test.ts": "claude-integration",
     "claude-desktop-config-path.test.ts": "claude-integration",
+    "claude-desktop-discovery.test.ts": "claude-integration",
     "claude-desktop-native-context.test.ts": "claude-integration",
     "claude-desktop-policy.test.ts": "claude-integration",
+    "claude-desktop-remote-hub.test.ts": "claude-integration",
     "claude-dotenv-provenance-transport.test.ts": "claude-integration",
     "claude-gateway-cache.test.ts": "claude-integration",
     "claude-inbound-debug.test.ts": "claude-integration",
@@ -340,6 +350,8 @@
     "client-config-export.test.ts": "config",
     "client-config-new-clients.test.ts": "config",
     "client-connect.test.ts": "clients",
+    "client-injection-guard.test.ts": "codex-integration",
+    "client-lifecycle-lock.test.ts": "clients",
     "client-export-modality-enum.test.ts": "clients",
     "client-fingerprint.test.ts": "clients",
     "client-hub-relay.test.ts": "clients",
@@ -577,6 +589,7 @@
     "desktop-3p-guard.test.ts": "clients",
     "desktop-3p-removal.test.ts": "clients",
     "desktop-3p.test.ts": "clients",
+    "desktop-remote-store.test.ts": "clients",
     "desktop-app-restart.test.ts": "clients",
     "desktop-profile.test.ts": "clients",
     "destination-policy-resolved.test.ts": "routing",
@@ -718,6 +731,7 @@
     "lab-evidence-sanitization.test.ts": "lab",
     "lab-fabric-outcome-validation.test.ts": "lab",
     "lab-fabric-persistence-boundary.test.ts": "lab",
+    "lab-fabric-producer-deadline.test.ts": "lab",
     "lab-fabric-task.test.ts": "lab",
     "lab-installation-salt-cache.test.ts": "lab",
     "lab-ledger-mutation-lock.test.ts": "lab",
@@ -764,6 +778,7 @@
     "loop.test.ts": "images",
     "loopback-listener-admission.test.ts": "server",
     "loopback-listener-integration.test.ts": "server",
+    "macos-serial-lanes.test.ts": "ci-workflows",
     "management-api-logs-metrics.test.ts": "server",
     "main-account-hard-lock-auth.test.ts": "codex-integration",
     "main-account-hard-lock-policy.test.ts": "codex-integration",
@@ -889,6 +904,7 @@
     "openai-responses-passthrough.test.ts": "responses",
     "opencode-cli.test.ts": "providers",
     "opencode-free-provider.test.ts": "providers",
+    "opencode-go-agent-messages.test.ts": "providers",
     "opencode-go-deepseek.test.ts": "providers",
     "opencode-go-grok46-responses.test.ts": "providers",
     "opencode-go-luna-wire.test.ts": "providers",
@@ -1005,6 +1021,7 @@
     "responses-context-overflow.test.ts": "responses",
     "responses-custom-tool-guidance.test.ts": "responses",
     "responses-custom-tool-repair.test.ts": "responses",
+    "responses-function-tool-repair.test.ts": "responses",
     "responses-fetch-helpers-boundary.test.ts": "responses",
     "responses-field-backfill.test.ts": "responses",
     "responses-forward-dangling-call.test.ts": "responses",
@@ -1064,10 +1081,12 @@
     "selected-models.test.ts": "codex-integration",
     "self-launch-argv.test.ts": "lib",
     "server-403-permission-e2e.test.ts": "server",
+    "server-agent-task-recovery-replay.test.ts": "server",
     "server-auth.test.ts": "server",
     "server-background-lifecycle.test.ts": "server",
     "server-clickjacking-headers.test.ts": "server",
     "server-combo-failover-e2e.test.ts": "server",
+    "server-google-antigravity-oauth-401-replay.test.ts": "server",
     "server-images-bodyless-content-length.test.ts": "server",
     "server-images.test.ts": "server",
     "server-key-failover-e2e.test.ts": "server",

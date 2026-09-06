@@ -27,8 +27,9 @@ ocx models provider openrouter on
 | `providers` | `Record<string, OcxProviderConfig>` | — | 提供者名称到提供者配置的映射。 |
 | `openaiProviderTierVersion?` | `2` | 由迁移设置 | 标记单一、可感知选项的 OpenAI 投影已完成。 |
 | `disabledModels?` | `string[]` | — | 从 Codex catalog 和 `/v1/models` 中隐藏、但不阻止直接 proxy 调用的 model。routed id 会从列表中移除。account-qualified native id 只隐藏对应 selector row；bare native GPT id 会隐藏 bare row 以及该 model 的所有 account-selector row。Models 页面只显示裸原生行和路由行；若只隐藏一个 selector-qualified 行，请直接设置此配置字段。 |
-| `providerContextCaps?` | `Record<string, number>` | `{}` | 按提供者设置、对 Codex 可见的上下文上限。上限只会降低已知的上下文窗口。 |
-| `contextCapValue?` | `number` | `350000` | 仪表板上下文上限控件使用的默认值。仅当勾选“应用到所有已路由的提供方”时，修改它才会把值应用到所有已路由提供方（包括没有现有 `providerContextCaps` 条目的提供方）；否则每个提供方保留自己的上限。 |
+| `providerContextCaps?` | `Record<string, number>` | `{}` | 按提供商设置的有效上下文上限。普通窗口只能缩小；支持长窗口的原生模型可以扩展到该模型支持的上限。 |
+| `providerContextCapValues?` | `Record<string, number>` | `{}` | 各提供商最后选择的上限，关闭后仍保留。仅保存这些值不会启用上限。有效值优先于保存的选择值。 |
+| `contextCapValue?` | `number` | `350000` | 首次开启时使用的默认值。再次开启时恢复该提供商的选择值。修改全局值时附带 `setAll: true` 只会更新已开启的上限；不带值的 `setAll: true` 会按当前全局值开启所有已配置提供商的上限。 |
 | `codexAccounts?` | `CodexAccount[]` | `[]` | 由 Codex Auth 管理的 ChatGPT/Codex 池账户元数据。密钥单独存放在 `codex-accounts.json` 中。 |
 | `pausedCodexAccountIds?` | `string[]` | `[]` | 在恢复之前从 Pool 选择中排除的账户，包括被暂停时的主 `__main__` 账户。 |
 | `codexAccountNamespaces?` | `Record<string, string>` | — | 将任意公开 model selector 映射到已保存 Codex account target 的可选配置。启用账户限定的选择器行后，target 存在的每个 selector 都会在 Codex picker 中添加独立的 `<selector>/<native-openai-model>` row，且每个 row 只使用对应账户。只要有 selector 生效，bare native row 就会在 picker 中隐藏；但除非显式禁用，其 id 仍可路由，并继续列在 raw `/v1/models` 中。 |
@@ -81,7 +82,7 @@ selector，而不是分配一个新名称。
 | `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Anthropic key 头部样式。默认使用原生 `x-api-key`；仅对 key-auth `anthropic` 提供者有效。 |
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | 多 key 池。`apiKey` 会镜像当前激活条目；每个条目都有 `id`、`key`、可选 `label`，以及可选的数值 `addedAt`。 |
 | `defaultModel?` | `string` | 当选择该提供者但未显式指定模型时使用的模型。 |
-| `models?` | `string[]` | 种子/回退模型列表。配合 `liveModels: false` 时，这些就是唯一发现到的模型。 |
+| `models?` | `string[]` | 初始/回退模型列表。`liveModels: false` 时，非空 `models` 后接 `retainModels`；若 `models` 为空或省略，则按已配置的 `defaultModel`、`retainModels` 顺序构建初始列表，重复 ID 仅保留首次出现的位置。 |
 | `liveModels?` | `boolean` | 启动/同步时获取实时目录（默认 `true`）。自定义提供者使用 `${baseUrl}/models`；内置项可能使用注册表 URL 并进行过滤。 |
 | `selectedModels?` | `string[]` | 发现之后的目录允许列表。非空时只暴露这些 id；为空或省略时则暴露全部发现到的模型。 |
 | `modelDisplayNames?` | `Record<string, string>` | 持久的仅显示名称，以此提供者的精确原生模型 id 为键。键区分大小写。名称优先于提供者目录元数据，并且不会改变身份验证、适配器、路由、计费或上游请求。该映射最多可包含 2,000 个条目，与发现上限相同。 |
@@ -357,7 +358,14 @@ Vercel AI Gateway 可以在多个底层推理提供者之间路由一个模型�
 
 ## 静态模型允许列表
 
-将 `liveModels: false` 设为只暴露 `models`。如果 `models` 为空或省略，该提供者将不暴露任何路由模型。实时发现会在缓存前拒绝超过 4 MiB 或 2,000 条原始模型行；内置预设可能使用更低的限制，并过滤为可聊天的行。过大或格式错误的结果会走陈旧/配置回退。合法的、零可用结果的发现仍然具有权威性，不会被静默替换或截断。
+`liveModels: false` 时，若 `models` 为空或省略，初始列表先加入已配置的 `defaultModel`，
+再加入 `retainModels`，重复 ID 仅保留首次出现的位置。若显式设置了非空 `models`，则按
+`models`、`retainModels` 顺序构建，不会自动加入另一个 `defaultModel`；仍可将该模型明确写入
+`models` 或 `retainModels`。这些字段均未提供 ID 时，初始列表为空。此顺序不保证最终选择器的显示顺序。
+`selectedModels`、`disabledModels` 和提供商禁用策略仍然适用。`authMode: "forward"` 保留原有独立分支，
+不使用此静态路由列表。这些规则不改变实时发现失败时的回退行为。
+
+实时发现会在缓存前拒绝超过 4 MiB 或 2,000 条原始模型行；内置预设可能使用更低的限制，并过滤为可聊天的行。过大或格式错误的结果会走陈旧/配置回退。合法的、零可用结果的发现仍然具有权威性，不会被静默替换或截断。
 
 当需要继续运行发现，但只有选定 id 应该出现在 Codex 和 `/v1/models` 中时，请使用 `selectedModels`。仪表板会保留完整的已发现列表，以便之后调整允许列表。
 

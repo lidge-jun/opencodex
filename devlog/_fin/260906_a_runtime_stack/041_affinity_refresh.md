@@ -1,0 +1,5 @@
+# Affinity layer P refresh
+
+Consume 040 on prepared recovery parent332a30e6d. Original #3581 remains f60397d3408e0339ffc66acdcaca8133e40866c2, with SB Yoon attribution preserved. Retain new recovery cache/history logic and termination WeakMap rebind when applying the two core hunks. The new cohort flag must survive initial parse and both fresh/cache-only reparse; true/undefined never authorize cache-key-based session identity. No changes to OAuth command-code cache-key forwarding; enable the existing API-key commandcode registry capability only.
+
+Scoped regression worker after carry owns tests/helpers/agent-task-recovery.ts, tests/server/server-agent-task-recovery-replay.test.ts and tests/providers/command-code-provider.test.ts. Use the actual ADAPTER_REGISTRY openai-chat create seam already proven in the parent regression to observe parsed fields at real buildRequest. Main owns production and adapters documentation. Remote helper asserts project Bun1.4.0; no local suites/typecheck/build. Full exact-head CI and --admin integration remain final gates.

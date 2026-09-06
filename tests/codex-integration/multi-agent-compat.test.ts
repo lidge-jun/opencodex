@@ -1089,6 +1089,66 @@ describe("injectDeveloperMessage", () => {
     expect(parsed.context.messages.map(message => message.role)).toEqual(["toolResult", "developer", "user"]);
   });
 
+  for (const withLeadingResult of [false, true]) {
+    test(`aligns raw and parsed external-task guidance with leading result=${withLeadingResult}`, () => {
+      const leading: Record<string, unknown>[] = withLeadingResult ? [{
+        type: "function_call_output", call_id: "call_1", id: "result_fixture",
+        name: "exec", namespace: "functions", output: "previous tool output",
+      }] : [];
+      const external = {
+        type: "function_call_output", id: "external_fixture", name: "handoff_input",
+        namespace: "task_inbox", output: "current task",
+      };
+      const rawInput: Record<string, unknown>[] = [...leading, external];
+      const raw = { model: "gpt-5.5", previous_response_id: "resp_remote", input: rawInput };
+      const parsed = parseRequest(raw);
+      expect(parsed._continuationConversationMessageIndex).toBe(leading.length);
+
+      injectDeveloperMessage(parsed, guidance);
+
+      expect(raw.previous_response_id).toBe("resp_remote");
+      expect(rawInput).toEqual([...leading, generatedItem(), external]);
+      expect(parsed.context.messages.map(message => message.role)).toEqual([
+        ...(withLeadingResult ? ["toolResult"] : []), "developer", "user",
+      ]);
+      const reparsed = parseRequest(raw);
+      expect(reparsed.context.messages.map(({ role, content }) => ({ role, content }))).toEqual(
+        parsed.context.messages.map(({ role, content }) => ({ role, content })),
+      );
+    });
+  }
+
+  test("keeps historical external tasks inside the replay prefix before changed guidance", () => {
+    const guidanceA = "<multi_agent_mode>A</multi_agent_mode>";
+    const guidanceB = "<multi_agent_mode>B</multi_agent_mode>";
+    const task = (id: string, output: string) => ({
+      type: "function_call_output", id, name: "handoff_input", namespace: "task_inbox", output,
+    });
+    const current = task("current_external", "current task");
+    const rawInput = [
+      generatedItem(guidanceA), task("previous_external", "previous task"),
+      { type: "message", role: "assistant", content: "done" }, current,
+    ];
+    const history = structuredClone(rawInput.slice(0, 3));
+    const raw = { model: "gpt-5.5", previous_response_id: "resp_remote", input: rawInput };
+    const parsed = parseRequest(raw);
+    parsed._replayPrefixLen = 3;
+    parsed._continuationConversationMessageIndex = 3;
+
+    injectDeveloperMessage(parsed, guidanceB);
+
+    expect(raw.previous_response_id).toBe("resp_remote");
+    expect(rawInput.slice(0, 3)).toEqual(history);
+    expect(rawInput.slice(3)).toEqual([generatedItem(guidanceB), current]);
+    expect(parsed.context.messages.map(message => message.role)).toEqual([
+      "developer", "user", "assistant", "developer", "user",
+    ]);
+    const reparsed = parseRequest(raw);
+    expect(reparsed.context.messages.map(({ role, content }) => ({ role, content }))).toEqual(
+      parsed.context.messages.map(({ role, content }) => ({ role, content })),
+    );
+  });
+
   test("keeps raw and parsed stateful placement aligned across reconstructed compaction history", () => {
     const rawInput = [
       { type: "message", role: "user", content: "current turn" },

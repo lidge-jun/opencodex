@@ -58,6 +58,28 @@ Use `--api-key` or an OAuth login for anything secret.
 
 ## Authentication
 
+### Diagnosing missing main-account quota
+
+`ocx account list openai --quota --refresh --json` includes a `quotaRefresh` object on
+the main-account row when that operation attempts a WHAM usage read. The existing
+`GET /api/codex-auth/accounts?refresh=1` response exposes the same diagnostic.
+
+Its `status` is `ok`, `not_reported` (no parseable quota in a successful response),
+`http_error`, `timeout`, `network_error`, `invalid_response`, or `internal_error`.
+Only `http_error` includes a numeric `httpStatus`. No raw response, error message,
+credential, or account identifier is included in this object. Cache-only reads,
+credential deferrals, and invalidated account snapshots omit it; older servers
+also omit it. Absence is not proof of success. A non-success HTTP status remains
+`http_error` even if its error body cannot be read; `timeout` and `network_error`
+describe failures before headers or while reading a successful response.
+
+A valid login does not guarantee that this separate usage request succeeds.
+These categories do not change authentication, account selection, or quota
+freshness rules, and do not turn unknown quota into zero usage. This diagnostic
+currently covers the native main account, not pool-account refreshes. When
+reporting missing quota, share the category and HTTP status rather than credential
+files or a raw network capture.
+
 ### `ocx login <provider>`
 
 Start the provider's registered login flow. OAuth providers open a browser and store auto-refreshed
@@ -74,6 +96,16 @@ account pool (Reauthenticate) or the headless `ocx account reauth` flow instead.
 ocx login xai
 ocx login anthropic
 ```
+
+OAuth reauthentication preserves operator settings such as model selections, pricing overrides,
+and account failover preferences. Login-owned transport/authentication fields and registry-owned
+catalog metadata are refreshed. A live-discovery provider keeps its selected default model; a
+static provider can replace a default that no longer exists in its refreshed catalog.
+
+For Antigravity, an upstream `401` can refresh the rejected account’s OAuth credential and
+retry the request once. The retry uses that credential’s Cloud Code Assist project. If refresh
+fails or no usable project is available, the request returns an authentication error; use the
+reauthentication flow above. A second `401` does not start another refresh/retry cycle.
 
 A proxy that is already running picks up the new credential without a restart: the CLI asks it to
 reload that one provider from disk, and the request carries no credential of its own. If the

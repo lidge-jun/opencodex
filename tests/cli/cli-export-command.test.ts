@@ -430,3 +430,116 @@ describe("export row filtering", () => {
     expect(model?.defaultReasoningEffort).toBe("high");
   });
 });
+
+describe("export allowlist parity", () => {
+  test("the first export rereads selection completed during model discovery", async () => {
+    const previous = process.env.OPENCODEX_HOME;
+    const home = tempDir();
+    const path = join(home, "config.json");
+    const pending = config({
+      defaultProvider: "pending", fastRows: false,
+      providers: { pending: {
+        adapter: "openai-chat", baseUrl: "https://fixture.example.test/v1", liveModels: false,
+        models: ["chosen", "other"],
+        initialModelSelection: { version: 1, registrationId: crypto.randomUUID(), status: "pending" },
+      } },
+    });
+    const ready = structuredClone(pending);
+    ready.providers.pending!.initialModelSelection!.status = "ready";
+    ready.providers.pending!.selectedModels = ["chosen"];
+    const rows = ["chosen", "other"].map(id => ({ provider: "pending", id, namespaced: `pending/${id}` }));
+    expect(exportModelsFromProxyRows(rows, pending)).toEqual([]);
+    let requests = 0;
+    try {
+      process.env.OPENCODEX_HOME = home;
+      writeFileSync(path, JSON.stringify(pending));
+      const code = await handleExportCommand(["--client", "pi", "--json"], {
+        baseUrl: "http://127.0.0.1:10123",
+        fetchImpl: async input => {
+          expect(String(input)).toBe("http://127.0.0.1:10123/api/models");
+          requests += 1;
+          // The server publishes its finalized selection before returning the rows.
+          writeFileSync(path, JSON.stringify(ready));
+          return Response.json(rows);
+        },
+      });
+      expect(code).toBe(0);
+      expect(requests).toBe(1);
+      expect(JSON.parse(stdout()).providers.opencodex.models.map((row: { id: string }) => row.id))
+        .toEqual(["pending/chosen"]);
+      expect(pending.providers.pending!.initialModelSelection!.status).toBe("pending");
+    } finally {
+      if (previous === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previous;
+    }
+  });
+
+  test("post-discovery filtering retains injected config provenance instead of reading local policy", async () => {
+    const previous = process.env.OPENCODEX_HOME;
+    const home = tempDir();
+    const path = join(home, "config.json");
+    const local = config({ providers: { custom: {
+      adapter: "openai-chat", baseUrl: "https://local.example.test/v1", selectedModels: ["local-only"],
+    } } });
+    const remote = config({ providers: { custom: {
+      adapter: "openai-chat", baseUrl: "https://remote.example.test/v1", selectedModels: ["remote-only"],
+      initialModelSelection: { version: 1, registrationId: crypto.randomUUID(), status: "pending" },
+    } } });
+    const ready = structuredClone(remote);
+    ready.providers.custom!.initialModelSelection!.status = "ready";
+    let resolved = remote;
+    const events: string[] = [];
+    try {
+      process.env.OPENCODEX_HOME = home;
+      const localBytes = JSON.stringify(local);
+      writeFileSync(path, localBytes);
+      const code = await handleExportCommand(["--client", "pi", "--json"], {
+        baseUrl: "http://127.0.0.1:10123",
+        configImpl: () => { events.push("config"); return structuredClone(resolved); },
+        fetchImpl: async () => {
+          events.push("fetch");
+          resolved = ready;
+          return Response.json(["local-only", "remote-only"].map(id => ({ provider: "custom", id, namespaced: `custom/${id}` })));
+        },
+      });
+      expect(code).toBe(0);
+      expect(events).toEqual(["fetch", "config"]);
+      expect(JSON.parse(stdout()).providers.opencodex.models.map((row: { id: string }) => row.id))
+        .toEqual(["custom/remote-only"]);
+      expect(readFileSync(path, "utf8")).toBe(localBytes);
+    } finally {
+      if (previous === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previous;
+    }
+  });
+
+  test("filters the full management roster before deduplication and keeps other providers", () => {
+    const cfg = config();
+    cfg.providers.xai = {
+      adapter: "openai-chat", baseUrl: "https://api.x.ai/v1",
+      selectedModels: ["grok-4.6"],
+    };
+    const rows = [
+      { provider: "xai", id: "grok-4.5", namespaced: "xai/grok-4.5", disabled: false },
+      { provider: "xai", id: "grok-4.6", namespaced: "xai/grok-4.6", disabled: true },
+      { provider: "xai", id: "grok-4.6", namespaced: "xai/grok-4.6", reasoningEfforts: ["high"] },
+      { provider: "other", id: "model", namespaced: "other/model" },
+    ];
+    const exported = exportModelsFromProxyRows(rows, cfg);
+    expect(exported.map(row => row.namespaced)).toEqual(["xai/grok-4.6", "other/model"]);
+    expect(exported[0]!.reasoningEfforts).toEqual(["high"]);
+    cfg.disabledModels = ["xai/grok-4.6"];
+    expect(exportModelsFromProxyRows(rows, cfg).map(row => row.namespaced)).toEqual(["other/model"]);
+  });
+
+  test("uses the catalog's encoded-id selection equivalence", () => {
+    const cfg = config();
+    cfg.providers.slash = {
+      adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", selectedModels: ["org-model"],
+    };
+    expect(exportModelsFromProxyRows([
+      { provider: "slash", id: "org/model", namespaced: "slash/org-model" },
+      { provider: "slash", id: "other", namespaced: "slash/other" },
+    ], cfg).map(row => row.namespaced)).toEqual(["slash/org-model"]);
+  });
+});

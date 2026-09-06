@@ -301,6 +301,8 @@ export interface WebSearchLoopDeps {
   onUsage?: (usage: OcxUsage | undefined) => void;
   /** Observe the exact adapter request selected for each routed-model iteration. */
   onRequestBuilt?: (request: AdapterRequest) => void;
+  /** Request-scoped executor retains the core's selection binding across loop retries. */
+  fetchForRequest?: (request: AdapterRequest, parsed: OcxParsedRequest) => typeof globalThis.fetch;
   /** Called before each routed-model dispatch in the loop, for attempt telemetry. Same-target 429 replays pass the `rate-limit-429` recovery kind. */
   onAttemptSend?: (recovery?: AttemptRecoveryKind) => void;
   /**
@@ -440,6 +442,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           cachedRequest = request;
           cachedAdapter = requestAdapter;
         }
+        const requestFetch = deps.fetchForRequest?.(request, iterParsed) ?? routedProviderFetch;
         let response: Response;
         try {
           if (requestAdapter.fetchResponse) {
@@ -449,7 +452,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
               timeoutMs: connectTimeoutMs,
               returnRawErrors: true,
               stream: true,
-              executor: routedProviderFetch,
+              executor: requestFetch,
             });
           } else {
             response = await fetchWithResetRetry(
@@ -465,7 +468,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
                 // so the transport-level `keepalive: false` this helper adds is what actually
                 // opens a new connection. Spending `retryRecovery` on telemetry alone left every
                 // replay on this leg eligible for the same dead socket the reset came from.
-                return routedProviderFetch(request.url, applyUpstreamRecoveryInit({
+                return requestFetch(request.url, applyUpstreamRecoveryInit({
                   method: request.method,
                   headers: h,
                   body: request.body,

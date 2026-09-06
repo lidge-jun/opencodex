@@ -60,6 +60,14 @@ kararıdır.
 | **Depolama** | Salt okunur CODEX_HOME disk dökümü (oturumlar, arşivler, DB'ler, ekler). İsteğe bağlı arşivlenmiş temizleme: en eski %N'yi önizleyin, ardından `CODEX_HOME/.trash` konumuna karantinaya alın (varsayılan) veya açık bir onay kutusu arkasında kalıcı olarak silin. **Otomatik temizleme politikası** isteğe bağlıdır ve **varsayılan olarak KAPALIDIR** (`storageCleanupPolicy.enabled`); Depolama sayfasında eşik/hedef/zamanlama/mod yapılandırın veya **Şimdi çalıştır (Run now)**'ı tetikleyin. Karantinaya alınan girdiler Depolama sayfasından geri yüklenebilir (JSONL + iş parçacıkları). Aktif oturumlar salt okunur kalır. Codex en yeni/aktif `state_*.sqlite` dosyasını kilitli tuttuğu sürece temizleme ve geri yükleme reddedilir. |
 | **Durdur** | Proxy'yi ve kurulu arka plan servisini zarif bir şekilde durdurun, yerel Codex'i geri yükleyin ve çıkın (`POST /api/stop`). Windows'ta Görev Zamanlayıcı arka ucunda panel reddeder ve `ocx stop` çalıştırmanızı ister: görev bittikten sonra sarmalayıcı proxy'yi yeniden başlatabilir ve bu yeniden başlatma penceresini istemci yapılandırmanız geri yüklenmeden önce yalnızca proxy dışında çalışan bir stop doğrulayabilir. Reddedildiğinde hiçbir şey değiştirilmez. |
 
+### İstek günlüklerini filtreleme
+
+Filtreler yüklü günlükte yüzey, yakalanan istekler, sağlayıcı, tam model adı, durum, zaman, hız ve konuşma kimliğini birleştirir. Seçenekler yedek denemeleri de içerir; model eşleşmesi büyük/küçük harfi ve dış boşlukları yok sayar, kısmi adları eşleştirmez. Kaybolan seçenek tüm kayıtlara döner.
+
+Son 15 dakika, saat ve gün pencereleri Logs sekmesinde otomatik yenileme kapalıyken de 30 saniyede bir güncellenir. Hız, tam istek süresindeki saniyelik çıktı jetonudur: 15 altı, 15 dahil 50 altı, en az 50; hız filtresi açıkken ölçülemeyenler dışlanır. Başarı 2xx, hata 4xx/5xx anlamındadır.
+
+Sayaç eşleşen ve yüklü toplam sayıları gösterir; sıfırlama tüm satırları geri getirir. Eşleşme olmaması boş günlükten ayrılır. Yüzey seçimi oklar ve Home/End ile çalışır. Yüklü günlüğün dışındaki geçmiş sorgulanmaz.
+
 ### Bir bölüme bağlantı verme
 
 Tek bir düzen vardır, bu nedenle yapılandırılacak bir düzen anahtarı yoktur.
@@ -81,6 +89,25 @@ model yalnızca sağlayıcı izin listesi onu içerdiğinde (veya hiçbir izin l
 ayarlanmadığında) ve devre dışı bırakılmadığında açıktır. Bir modeli açmak her
 iki filtreyi de atomik olarak uzlaştırır; **Tümünü aç (All on)** sağlayıcı izin
 listesini temizler, böylece yeni keşfedilen modeller de açık olur.
+
+### Sağlayıcı çalışma alanında modelleri yönetme
+
+Sağlayıcının **Modeller** sekmesinde **Sil**, kayıtlı özel tanımı kaldırır. Alttaki yerel veya canlı
+keşfedilmiş model yeniden görünebilir; bu nedenle model sayısı aynı kalabilir. **Gizle** yalnızca
+katalog görünürlüğünü değiştirir; tanımı silmez veya doğrudan yönlendirme ilkesini değiştirmez.
+**Modeller bölümünde görünürlüğü yönet**, görünürlüğü geri yükleyebileceğiniz **Modeller** sayfasını
+açar. Sağlayıcı sekmesinde hiç satır kalmasa da bu bağlantı kullanılabilir.
+
+**Ekle**, özel tanımı kaydeder; mevcut gizleme durumunu veya sağlayıcı seçim kurallarını kaldırmaz.
+Kaydedilen model gizli kalabilir. Model zaten biliniyorsa görünürlüğünü **Modeller** bölümünden
+yönetin. Kayıt doğrulandıysa katalog yenilemesi başarısız olsa bile tanım kaydedilmiştir. Yeniden
+eklemek yerine yenileme mesajını izleyin. Değişiklik doğrulanamıyorsa tekrar denemeden önce
+modellerin durumunu yenileyin.
+
+Sağlayıcının model sayısı, sunucunun döndürdüğü güncel model envanterindeki devre dışı olmayan
+benzersiz girdileri, arama ve görüntüleme sınırı uygulanmadan önce sayar. Bu sayı izin listesinin
+boyutu veya canlı keşif sayısı değildir; girdinin sağlayıcıdan keşfedildiğini de kanıtlamaz.
+Seçim rozetleri ve keşif bilgileri bu sayıdan ayrıdır.
 
 ## Yetkilendirme seçicisi ve spawn yönlendirmesi
 
@@ -247,7 +274,7 @@ noktalar şunları içerir:
 | `PUT /api/codex-auth/active` · `PUT /api/codex-auth/auto-switch` · `PUT /api/codex-auth/failover` | Bir sonraki istek için hesabı seçin ve havuz yönlendirmesini yapılandırın. |
 | `GET /api/codex-auth/active` · `PUT /api/codex-auth/accounts/priority` | Geçerli hesabı okuyun (`pinned` ve hangi hesabın `pinnedAccountId` olduğu dahil) ve bir hesabın seçim sırasını ayarlayın. |
 | `POST /api/codex-auth/login` · `GET /api/codex-auth/login-status` | Tarayıcı girişi aracılığıyla bir havuz hesabı ekleyin. |
-| `GET /api/logs?tail=50&limit=20&offset=0&provider=...&status=5xx` | İsteğe bağlı kuyruk, sağlayıcı ve tam/sınıf durum filtreleriyle son istek meta verilerini okuyun. `limit`/`offset` ile sayfalama en yeni satırdan geriye doğru ilerler (`offset=0` en son sayfayı döndürür). Yanıt şekli: `{ timeZone, total, logs }` burada `total`, sayfalamadan önceki filtrelenmiş satır sayısıdır. |
+| `GET /api/logs?tail=50&limit=20&offset=0&provider=...&status=5xx` | İsteğe bağlı kuyruk, sağlayıcı ve tam/sınıf durum filtreleriyle son istek meta verilerini okuyun. `limit`/`offset` ile sayfalama en yeni satırdan geriye doğru ilerler (`offset=0` en son sayfayı döndürür). Yanıt şekli: `{ timeZone, generatedAt, total, logs }` burada `total`, sayfalamadan önceki filtrelenmiş satır sayısıdır. |
 | `GET` / `PUT /api/subagent-models` | Öne çıkan beş `spawn_agent` geçersiz kılma modelini okuyun veya ayarlayın. |
 | `POST /api/stop` | Proxy'yi/servisi durdurun, yerel Codex'i geri yükleyin ve çıkın. Windows Görev Zamanlayıcı arka ucunda `respawnable_service`, bu durum okunamadığında `service_state_unknown` ile reddedilir; her iki durumda da hiçbir şey değiştirilmez. |
 

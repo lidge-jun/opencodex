@@ -58,7 +58,7 @@ Pour un tour enfant créé, l’ordre de repli est le suivant :
 
 Les chaînes de repli propres à un rôle doivent résider dans la configuration d’opencodex. L’ajout de `model_fallback` dans `$CODEX_HOME/agents/*.toml` amène Codex 0.146+ à rejeter le fichier de rôle entier à cause de ce champ inconnu, puis à ignorer le rôle (#1190). Une ancienne ligne `model_fallback` dans le fichier TOML reste lue par souci de rétrocompatibilité, mais `ocx doctor` la signale.
 
-opencodex ignore les candidats désactivés, non routables, en mauvais état, en période de temporisation ou ayant atteint le seuil de quota. L’instantané de disponibilité est mis en cache pendant `subagentModelFallbackPollMs`. Les tâches enfants chiffrées limitent la chaîne aux cibles ChatGPT natives canoniques et aux routes Responses directes avec authentification par clé explicitement approuvées via `allowEncryptedV2AgentTasks: true` ; si aucune ne peut consommer la charge chiffrée, la requête échoue au lieu d’envoyer un texte chiffré illisible à une autre destination. Les combos restent limités aux cibles natives canoniques.
+opencodex ignore les candidats désactivés, non routables, en mauvais état, en période de temporisation ou ayant atteint le seuil de quota. L’instantané de disponibilité est mis en cache pendant `subagentModelFallbackPollMs`. Les tâches enfants chiffrées limitent la chaîne aux cibles ChatGPT natives canoniques et aux routes Responses directes avec authentification par clé explicitement approuvées via `allowEncryptedV2AgentTasks: true` ; si aucune ne peut consommer la charge chiffrée et que la récupération facultative ne permet pas un envoi routé, la requête échoue sans transmettre de texte chiffré illisible. Un combo essaie d’abord une cible native canonique disponible ; si aucune n’est sélectionnable ou si les tentatives natives sont épuisées, et que `agentTaskRecovery` est activé, un `NEW_TASK` chiffré est récupéré une fois avant l’envoi routé du combo.
 
 ```json
 {
@@ -111,7 +111,7 @@ Ce mécanisme ne protège pas contre un autre processus exécuté sous le même 
 
 N’activez cette option que si la requête authentifiée supplémentaire, la consommation de quota, la présence de texte en clair dans le processus et la dépendance à un service privé sont acceptables. Dans le cas contraire, privilégiez un enfant ChatGPT natif ou une délégation hétérogène v1.
 
-Ce mécanisme de récupération s’applique aux enfants routés directement. Au maximum 32 requêtes de récupération peuvent être actives simultanément ; toute absence supplémentaire dans le cache échoue de manière sûre. Pour les tâches chiffrées, le routage par combinaison conserve son filtre existant limité aux cibles natives et n’utilise pas la récupération.
+Ce mécanisme de récupération s’applique aux enfants routés directement et aux `NEW_TASK` chiffrés d’un combo. Au maximum 32 requêtes de récupération peuvent être actives simultanément ; toute absence supplémentaire dans le cache échoue de manière sûre. Un combo disposant d’une cible native canonique disponible continue d’envoyer directement le texte chiffré ; la récupération peut s’exécuter si aucune cible native n’est sélectionnable ou si les tentatives natives sont épuisées. Si la récupération est désactivée ou échoue, ou si aucune cible routée n’est disponible, le texte chiffré illisible n’est pas transmis à un fournisseur routé.
 
 ## Plafonds d’effort
 

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
@@ -16,8 +16,22 @@ import {
   resetProviderRequestPacingForTest,
   setProviderRequestPacingLimitsForTest,
 } from "../../src/providers/request-pacing";
+import {
+  clearResponseStateForTests,
+  clearResponseStateMemoryForTests,
+  responseContinuationRetainedStoreSnapshot,
+  runPendingResponseStatePersistForTests,
+} from "../../src/responses/state";
+import { resetAgentTaskRecoveryState } from "../../src/server/responses/agent-task-recovery";
+import { agentTaskRecoveryCacheSnapshotForTests } from "../../src/server/responses/agent-task-recovery-cache";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
+import {
+  FERNET_TASK,
+  codexHeaders,
+  encryptedInput,
+  recoverySse,
+} from "../helpers/agent-task-recovery";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 /**
@@ -64,17 +78,25 @@ const THREAD_ID = "thread-2887";
 
 function request(
   path: "/v1/responses" | "/v1/responses/compact",
-  options: { affined?: boolean; model?: string; headers?: HeadersInit; stream?: boolean } = {},
+  options: {
+    affined?: boolean;
+    model?: string;
+    headers?: HeadersInit;
+    stream?: boolean;
+    input?: unknown;
+  } = {},
 ): Request {
   const headers = new Headers(options.headers);
   headers.set("content-type", "application/json");
   if (options.affined) headers.set("x-codex-parent-thread-id", THREAD_ID);
+  const compact = path.endsWith("compact");
+  const input = options.input ?? (compact ? [] : "hello");
   return new Request(`http://localhost${path}`, {
     method: "POST",
     headers,
-    body: JSON.stringify(path.endsWith("compact")
-      ? { model: options.model ?? "gpt-5.5", input: [] }
-      : { model: options.model ?? "gpt-5.5", input: "hello", stream: options.stream ?? false }),
+    body: JSON.stringify(compact
+      ? { model: options.model ?? "gpt-5.5", input }
+      : { model: options.model ?? "gpt-5.5", input, stream: options.stream ?? false }),
   });
 }
 
@@ -117,7 +139,14 @@ function readStoredGeneration(): number {
   return raw[ACCOUNT_ID]!.generation;
 }
 
-type Harness = { sends: string[]; refreshes: string[] };
+type Harness = {
+  sends: string[];
+  refreshes: string[];
+  recoveryAuths: string[];
+  backupAuths: string[];
+  backupBodies: string[];
+  canonicalAliasSends: number;
+};
 
 /**
  * Upstream rejects the old bearer once, the token endpoint rotates, and the replay with the
@@ -126,11 +155,18 @@ type Harness = { sends: string[]; refreshes: string[] };
 function installHarness(options: {
   refresh?: () => Response;
   responseForSend?: (authorization: string, sendNumber: number, url: URL) => Response | undefined;
+  recovery?: (authorization: string, init?: RequestInit) => Response | Promise<Response>;
 } = {}): Harness {
   const sends: string[] = [];
   const refreshes: string[] = [];
+  const recoveryAuths: string[] = [];
+  const backupAuths: string[] = [];
+  const backupBodies: string[] = [];
+  let canonicalAliasSends = 0;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
+    const body = typeof init?.body === "string" ? init.body : "";
+    const authorization = new Headers(init?.headers).get("authorization") ?? "";
     if (url.hostname === "auth.openai.com") {
       refreshes.push(new URLSearchParams(String(init?.body)).get("refresh_token") ?? "");
       if (options.refresh) return options.refresh();
@@ -140,10 +176,29 @@ function installHarness(options: {
         expires_in: 3600,
       });
     }
+    if (body.includes("capture_assignment")) {
+      recoveryAuths.push(authorization);
+      if (options.recovery) return await options.recovery(authorization, init);
+      return new Response(recoverySse("RECOVERED-POOL-PLAINTEXT-SENTINEL"), {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+    }
     if (!url.pathname.endsWith("/responses") && !url.pathname.endsWith("/responses/compact")) {
       return Response.json({ rate_limit: { primary_window: { used_percent: 10 } } });
     }
-    const authorization = new Headers(init?.headers).get("authorization") ?? "";
+    if (url.hostname === "backup.example" || url.hostname === "spare.example") {
+      backupAuths.push(authorization);
+      backupBodies.push(body);
+    }
+    if (
+      url.hostname === "chatgpt.com"
+      && authorization !== "Bearer rejected-access"
+      && authorization !== "Bearer refreshed-access"
+      && authorization !== "Bearer other-access"
+    ) {
+      canonicalAliasSends += 1;
+    }
     sends.push(authorization);
     const customResponse = options.responseForSend?.(authorization, sends.length, url);
     if (customResponse) return customResponse;
@@ -152,7 +207,7 @@ function installHarness(options: {
     }
     return Response.json({ id: "resp_replayed", object: "response", status: "completed", output: [] });
   }) as typeof fetch;
-  return { sends, refreshes };
+  return { sends, refreshes, recoveryAuths, backupAuths, backupBodies, get canonicalAliasSends() { return canonicalAliasSends; } };
 }
 
 function recoveryComboConfig(): OcxConfig {
@@ -175,6 +230,75 @@ function recoveryComboConfig(): OcxConfig {
   return cfg;
 }
 
+function writeWorkAndOtherAccounts(): void {
+  writeStoredAccount({
+    [OTHER_ACCOUNT_ID]: storedRecord({
+      accessToken: "other-access",
+      refreshToken: "other-grant",
+      generation: 1,
+      chatgptAccountId: "acc-other",
+    }),
+  });
+}
+
+function encryptedRecoveryComboConfig(options: {
+  extraCanonical?: boolean;
+  extraSpare?: boolean;
+  includeBackup?: boolean;
+} = {}): OcxConfig {
+  const cfg = recoveryComboConfig();
+  cfg.agentTaskRecovery = { enabled: true };
+  cfg.accountPoolStrategy = "fill-first";
+  cfg.codexAccounts = [
+    { id: ACCOUNT_ID, label: "work" },
+    { id: OTHER_ACCOUNT_ID, label: "other" },
+  ];
+  if (options.extraCanonical) {
+    cfg.providers.chatgpt = {
+      adapter: "openai-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      authMode: "forward",
+    };
+  }
+  if (options.extraSpare) {
+    cfg.providers.spare = {
+      adapter: "openai-responses",
+      baseUrl: "https://spare.example/v1",
+      authMode: "key",
+      apiKey: "spare-test-key",
+    };
+  }
+  const targets: Array<{ provider: string; model: string }> = [
+    { provider: "openai", model: "gpt-5.5" },
+  ];
+  if (options.extraCanonical) targets.push({ provider: "chatgpt", model: "gpt-5.5" });
+  if (options.includeBackup !== false) targets.push({ provider: "backup", model: "m2" });
+  if (options.extraSpare) targets.push({ provider: "spare", model: "m3" });
+  cfg.combos = {
+    recovery: {
+      strategy: "failover",
+      targets,
+    },
+  };
+  return cfg;
+}
+
+function storedReplay401(authorization: string, url: URL): Response | undefined {
+  if (url.hostname === "spare.example") {
+    return Response.json({ id: "must-not-run-spare", object: "response", status: "completed", output: [] });
+  }
+  if (authorization === "Bearer rejected-access") {
+    return Response.json({ error: { message: "rejected bearer" } }, { status: 401 });
+  }
+  if (authorization === "Bearer refreshed-access") {
+    return Response.json({ error: { message: "replay rejected" } }, { status: 401 });
+  }
+  if (authorization === "Bearer other-access") {
+    return Response.json({ id: "must-not-run-other", object: "response", status: "completed", output: [] });
+  }
+  return undefined;
+}
+
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "ocx-responses-pool-401-"));
   previousOcxHome = process.env.OPENCODEX_HOME;
@@ -185,6 +309,8 @@ beforeEach(() => {
   clearAccountNeedsReauth(OTHER_ACCOUNT_ID);
   clearCodexUpstreamHealth();
   clearThreadAccountMap();
+  clearResponseStateMemoryForTests();
+  resetAgentTaskRecoveryState();
   writeStoredAccount();
 });
 
@@ -195,6 +321,8 @@ afterEach(() => {
   clearAccountNeedsReauth(OTHER_ACCOUNT_ID);
   clearCodexUpstreamHealth();
   clearThreadAccountMap();
+  resetAgentTaskRecoveryState();
+  clearResponseStateForTests();
   if (previousOcxHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOcxHome;
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
@@ -890,5 +1018,212 @@ describe("ordinary pool 401 refresh and replay (#2887)", () => {
       "Bearer refreshed-access",
     ]);
     expect(harness.refreshes).toEqual(["refresh-grant"]);
+  });
+});
+
+describe("stored pool 401 replay then encrypted combo recovery", () => {
+  const assignment = "RECOVERED-POOL-PLAINTEXT-SENTINEL";
+
+  async function postEncryptedCombo(
+    cfg: OcxConfig,
+    headers: Headers,
+    abortSignal?: AbortSignal,
+    logCtx: RequestLogContext = { model: "", provider: "" } as RequestLogContext,
+  ): Promise<Response> {
+    return handleResponses(
+      request("/v1/responses", {
+        model: "combo/recovery",
+        headers,
+        input: encryptedInput(),
+      }),
+      cfg,
+      logCtx,
+      abortSignal ? { abortSignal } : {},
+    );
+  }
+
+  test("refreshes once, recovers once with the caller bearer, and backups plaintext without storing it", async () => {
+    writeWorkAndOtherAccounts();
+    const headers = codexHeaders();
+    const cfg = encryptedRecoveryComboConfig({ extraCanonical: true });
+    const harness = installHarness({
+      responseForSend: (authorization, _sendNumber, url) => {
+        if (url.hostname === "backup.example") {
+          return Response.json({ id: "resp_backup", object: "response", status: "completed", output: [] });
+        }
+        return storedReplay401(authorization, url);
+      },
+    });
+
+    const response = await postEncryptedCombo(cfg, headers);
+    await runPendingResponseStatePersistForTests();
+    const payload = await response.clone().json() as { id?: string };
+
+    expect(response.status).toBe(200);
+    expect(typeof payload.id).toBe("string");
+    expect(harness.refreshes).toEqual(["refresh-grant"]);
+    expect(harness.sends.filter(send => send === "Bearer rejected-access" || send === "Bearer refreshed-access"))
+      .toEqual(["Bearer rejected-access", "Bearer refreshed-access"]);
+    expect(harness.sends).not.toContain("Bearer other-access");
+    expect(harness.recoveryAuths).toEqual([headers.get("authorization")]);
+    expect(harness.backupAuths).toEqual(["Bearer backup-test-key"]);
+    expect(harness.backupBodies).toHaveLength(1);
+    expect(harness.backupBodies[0]).toContain(assignment);
+    expect(harness.backupBodies[0]).not.toContain(FERNET_TASK);
+    expect(harness.canonicalAliasSends).toBe(0);
+    expect(responseContinuationRetainedStoreSnapshot().count).toBe(0);
+    const snapshotPath = join(home, "responses-state.json");
+    const snapshot = existsSync(snapshotPath) ? readFileSync(snapshotPath, "utf8") : "";
+    expect(snapshot).not.toContain(assignment);
+    expect(snapshot).not.toContain(payload.id!);
+  });
+
+  test("skips another canonical alias before the independently routed backup", async () => {
+    writeWorkAndOtherAccounts();
+    const headers = codexHeaders();
+    const cfg = encryptedRecoveryComboConfig({ extraCanonical: true });
+    const harness = installHarness({
+      responseForSend: (authorization, _sendNumber, url) => {
+        if (url.hostname === "backup.example") {
+          return Response.json({ id: "resp_backup", object: "response", status: "completed", output: [] });
+        }
+        return storedReplay401(authorization, url);
+      },
+    });
+
+    const response = await postEncryptedCombo(cfg, headers);
+    expect(response.status).toBe(200);
+    expect(harness.canonicalAliasSends).toBe(0);
+    expect(harness.sends).not.toContain("Bearer other-access");
+    expect(harness.backupBodies).toHaveLength(1);
+    expect(harness.backupBodies[0]).toContain(assignment);
+  });
+
+  test("abort during recovery returns 499 without backup, other-account spend, or cache", async () => {
+    writeWorkAndOtherAccounts();
+    const headers = codexHeaders();
+    const cfg = encryptedRecoveryComboConfig({ extraCanonical: true });
+    const controller = new AbortController();
+    let markRecoveryStarted: (() => void) | undefined;
+    const recoveryStarted = new Promise<void>((resolve) => {
+      markRecoveryStarted = resolve;
+    });
+    const harness = installHarness({
+      responseForSend: (authorization, _sendNumber, url) => storedReplay401(authorization, url),
+      recovery: (_authorization, init) => {
+        markRecoveryStarted?.();
+        return new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          const rejectAbort = () => reject(signal?.reason ?? new DOMException("aborted", "AbortError"));
+          if (signal?.aborted) rejectAbort();
+          else signal?.addEventListener("abort", rejectAbort, { once: true });
+        });
+      },
+    });
+
+    const pending = postEncryptedCombo(cfg, headers, controller.signal);
+    await recoveryStarted;
+    controller.abort(new DOMException("client disconnected", "AbortError"));
+    const response = await pending;
+    await runPendingResponseStatePersistForTests();
+    const payload = await response.json() as { error?: { code?: string } };
+
+    expect(response.status).toBe(499);
+    expect(payload).toMatchObject({ error: { code: "client_cancelled" } });
+    expect(harness.backupAuths).toEqual([]);
+    expect(harness.sends).not.toContain("Bearer other-access");
+    expect(harness.canonicalAliasSends).toBe(0);
+    expect(agentTaskRecoveryCacheSnapshotForTests()).toEqual({ entries: 0, bytes: 0 });
+    expect(responseContinuationRetainedStoreSnapshot().count).toBe(0);
+  });
+
+  test("recovery failure keeps the replay 401 and does not send backup", async () => {
+    writeWorkAndOtherAccounts();
+    const headers = codexHeaders();
+    const cfg = encryptedRecoveryComboConfig({ extraCanonical: true });
+    const harness = installHarness({
+      responseForSend: (authorization, _sendNumber, url) => storedReplay401(authorization, url),
+      recovery: () => new Response("not-sse", { status: 500 }),
+    });
+
+    const response = await postEncryptedCombo(cfg, headers);
+    expect(response.status).toBe(401);
+    expect(harness.recoveryAuths).toHaveLength(1);
+    expect(harness.backupAuths).toEqual([]);
+    expect(harness.sends).toEqual(["Bearer rejected-access", "Bearer refreshed-access"]);
+    expect(harness.canonicalAliasSends).toBe(0);
+  });
+
+  test("no independently routed target retains the replay 401 without recovery", async () => {
+    writeWorkAndOtherAccounts();
+    const headers = codexHeaders();
+    const cfg = encryptedRecoveryComboConfig({ extraCanonical: true, includeBackup: false });
+    const harness = installHarness({
+      responseForSend: (authorization, _sendNumber, url) => storedReplay401(authorization, url),
+    });
+
+    const response = await postEncryptedCombo(cfg, headers);
+    expect(response.status).toBe(401);
+    expect(harness.recoveryAuths).toEqual([]);
+    expect(harness.backupAuths).toEqual([]);
+    expect(harness.sends).toEqual(["Bearer rejected-access", "Bearer refreshed-access"]);
+    expect(harness.canonicalAliasSends).toBe(0);
+  });
+
+  test("a hop-class backup failure cannot reopen later combo or native hops", async () => {
+    writeWorkAndOtherAccounts();
+    const headers = codexHeaders();
+    const cfg = encryptedRecoveryComboConfig({ extraCanonical: true, extraSpare: true });
+    const logCtx = { model: "", provider: "" } as RequestLogContext;
+    const harness = installHarness({
+      responseForSend: (authorization, _sendNumber, url) => {
+        if (url.hostname === "backup.example") {
+          return Response.json({ error: { message: "backup overloaded" } }, { status: 503 });
+        }
+        return storedReplay401(authorization, url);
+      },
+    });
+
+    const response = await postEncryptedCombo(cfg, headers, undefined, logCtx);
+    expect(response.status).toBe(503);
+    expect(harness.recoveryAuths).toHaveLength(1);
+    expect(harness.sends.filter(send => send === "Bearer rejected-access" || send === "Bearer refreshed-access"))
+      .toEqual(["Bearer rejected-access", "Bearer refreshed-access"]);
+    expect(harness.sends).not.toContain("Bearer other-access");
+    expect(harness.canonicalAliasSends).toBe(0);
+    expect(harness.backupAuths).toContain("Bearer backup-test-key");
+    expect(harness.backupAuths).not.toContain("Bearer spare-test-key");
+    expect((logCtx.attempts ?? []).filter(attempt => attempt.provider === "backup")).toHaveLength(1);
+    expect((logCtx.attempts ?? []).some(attempt => attempt.provider === "spare")).toBe(false);
+    expect((logCtx.attempts ?? []).filter(attempt => attempt.provider === "chatgpt")).toHaveLength(0);
+  });
+
+  test.each(["cyber_policy", "invalid_request_error"])("encrypted replay %s remains a terminal 400 without recovery or backup", async (code) => {
+    writeWorkAndOtherAccounts();
+    const headers = codexHeaders();
+    const cfg = encryptedRecoveryComboConfig({ extraCanonical: true });
+    const harness = installHarness({
+      responseForSend: (authorization, _sendNumber, url) => {
+        if (url.hostname === "backup.example") {
+          return Response.json({ id: "must-not-run", object: "response", status: "completed", output: [] });
+        }
+        if (authorization === "Bearer rejected-access") {
+          return Response.json({ error: { message: "rejected bearer" } }, { status: 401 });
+        }
+        if (authorization === "Bearer refreshed-access") {
+          return Response.json({
+            error: { type: code, code, message: "blocked" },
+          }, { status: 400 });
+        }
+        return storedReplay401(authorization, url);
+      },
+    });
+
+    const response = await postEncryptedCombo(cfg, headers);
+    expect(response.status).toBe(400);
+    expect(harness.recoveryAuths).toEqual([]);
+    expect(harness.backupAuths).toEqual([]);
+    expect(harness.sends).toEqual(["Bearer rejected-access", "Bearer refreshed-access"]);
+    expect(harness.canonicalAliasSends).toBe(0);
   });
 });

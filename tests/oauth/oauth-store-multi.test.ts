@@ -1,7 +1,9 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { INTERNAL_DEADLINE_MS, STORE_BUDGET_MS } from "../helpers/test-budget";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import * as atomicWrite from "../../src/config/atomic-write";
+import * as oauthStore from "../../src/oauth/store";
 import {
   resetHardenedStateForTests,
   setIcaclsRunnerForTests,
@@ -14,16 +16,19 @@ import {
   listAccounts,
   markAccountNeedsReauth,
   markAccountNeedsReauthIfGeneration,
+  mergeAccountCredential,
   mutateStore,
   OAuthMutationBusyError,
   oauthMutationTailSnapshot,
   reconcileOAuthReauthState,
   removeAccount,
   removeCredential,
+  replaceProviderAccountSet,
   saveAccountCredential,
   saveCredential,
   setAccountAlias,
   setActiveAccount,
+  upsertCredentialByIdentity,
 } from "../../src/oauth/store";
 import type { OAuthCredentials } from "../../src/oauth/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -37,6 +42,17 @@ const cred = (over: Partial<OAuthCredentials> = {}): OAuthCredentials => ({
   expires: Date.now() + 3600_000,
   ...over,
 });
+
+const SELECTION_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+async function selectionAccounts() {
+  await saveCredential("xai", cred({ accountId: "selection-a" }));
+  const idA = getAccountSet("xai")!.activeAccountId;
+  await saveCredential("xai", cred({ accountId: "selection-b", access: "access-b" }));
+  const idB = getAccountSet("xai")!.activeAccountId;
+  await setActiveAccount("xai", idA);
+  return { idA, idB };
+}
 
 describe("multi-account auth store", () => {
   beforeEach(() => {
@@ -304,6 +320,264 @@ describe("multi-account auth store", () => {
     const set = getAccountSet("xai")!;
     expect(set.accounts.length).toBe(1);
     expect(set.activeAccountId).toBe("ok"); // dangling active healed
+  });
+
+  test("selection revision rejects an automatic promotion after manual A-B-A", async () => {
+    const { idA, idB } = await selectionAccounts();
+    const before = getAccountSet("xai")!.selectionRevision;
+    expect(before).toMatch(SELECTION_UUID);
+    const expectedSelection = oauthStore.captureOAuthAccountSelection("xai")!;
+    await setActiveAccount("xai", idB);
+    await setActiveAccount("xai", idA);
+    expect(getAccountSet("xai")!.selectionRevision).not.toBe(before);
+    expect(await oauthStore.commitOAuthAccountSelection("xai", idB, { expectedSelection })).toBeNull();
+    expect(oauthStore.captureOAuthAccountSelection("xai")?.accountId).toBe(idA);
+  });
+
+  test("selection revision preserves credential-only refresh and unrelated account metadata", async () => {
+    const { idA, idB } = await selectionAccounts();
+    // Seed a persisted revision independently to catch normalization dropping it.
+    const authPath = join(TEST_DIR, "auth.json");
+    const raw = JSON.parse(readFileSync(authPath, "utf8"));
+    const revision = "f4abbddc-5c7c-4e87-bd8a-b5775a182860";
+    raw.xai.selectionRevision = revision;
+    writeFileSync(authPath, JSON.stringify(raw));
+    await saveAccountCredential("xai", idA, cred({ accountId: "selection-a", access: "refreshed-a" }));
+    expect(getAccountSet("xai")!.selectionRevision).toBe(revision);
+    await mergeAccountCredential("xai", idB, cred({ accountId: "selection-b", access: "refreshed-b" }));
+    await setAccountAlias("xai", idA, "Selection test");
+    await markAccountNeedsReauth("xai", idB, true);
+    await upsertCredentialByIdentity("xai", cred({ accountId: "selection-a", access: "import-refreshed" }));
+    expect(getAccountSet("xai")!.selectionRevision).toBe(revision);
+    expect(JSON.parse(readFileSync(authPath, "utf8")).xai.selectionRevision).toBe(revision);
+    expect(oauthStore.captureOAuthAccountSelection("xai")).toEqual({ accountId: idA, revision });
+  });
+
+  test("selection revision advances for removal, recreation, and rollback replacement", async () => {
+    const { idA, idB } = await selectionAccounts();
+    const original = getAccountSet("xai")!;
+    expect(original.selectionRevision).toMatch(SELECTION_UUID);
+    const expectedSelection = oauthStore.captureOAuthAccountSelection("xai")!;
+    await removeAccount("xai", idA);
+    expect(getAccountSet("xai")!.activeAccountId).toBe(idB);
+    const promoted = getAccountSet("xai")!.selectionRevision;
+    expect(promoted).not.toBe(original.selectionRevision);
+    await removeCredential("xai");
+    expect(oauthStore.captureOAuthAccountSelection("xai")).toBeNull();
+    await saveCredential("xai", cred({ accountId: "selection-a" }));
+    const recreated = getAccountSet("xai")!;
+    expect(recreated.activeAccountId).toBe(idA);
+    expect(recreated.selectionRevision).not.toBe(original.selectionRevision);
+    await replaceProviderAccountSet("xai", original);
+    const restored = getAccountSet("xai")!;
+    expect(restored.selectionRevision).toMatch(SELECTION_UUID);
+    expect([original.selectionRevision, promoted, recreated.selectionRevision]).not.toContain(restored.selectionRevision);
+    expect(original.selectionRevision).toBe(expectedSelection.revision);
+    expect(await oauthStore.commitOAuthAccountSelection("xai", idB, { expectedSelection })).toBeNull();
+  });
+
+  test("selection revision advances on same-id manual reselect but not automatic validation", async () => {
+    const { idA } = await selectionAccounts();
+    const before = getAccountSet("xai")!.selectionRevision;
+    await setActiveAccount("xai", idA);
+    const after = getAccountSet("xai")!.selectionRevision;
+    expect(after).not.toBe(before);
+    expect(after).toMatch(SELECTION_UUID);
+    const expectedSelection = oauthStore.captureOAuthAccountSelection("xai")!;
+    expect(await oauthStore.commitOAuthAccountSelection("xai", idA, {
+      expectedSelection,
+      expectedCredentialGeneration: credentialGeneration(getAccountCredential("xai", idA)!),
+      requireUsableAccount: true,
+    })).toEqual(expectedSelection);
+    expect(oauthStore.captureOAuthAccountSelection("xai")).toEqual(expectedSelection);
+  });
+
+  test("selection commit supports revisionless legacy snapshots and guards the original id", async () => {
+    const authPath = join(TEST_DIR, "auth.json");
+    writeFileSync(authPath, JSON.stringify({ xai: {
+      activeAccountId: "legacy-a",
+      accounts: [{ id: "legacy-a", credential: cred() }, { id: "legacy-b", credential: cred({ access: "b" }) }],
+    } }));
+    const expectedSelection = oauthStore.captureOAuthAccountSelection("xai")!;
+    expect(expectedSelection).toEqual({ accountId: "legacy-a" });
+    expect(await oauthStore.commitOAuthAccountSelection("xai", "legacy-b", {
+      expectedSelection: { accountId: "wrong-id" },
+    })).toBeNull();
+    expect(await oauthStore.commitOAuthAccountSelection("xai", "legacy-a", { expectedSelection })).toEqual(expectedSelection);
+    const committed = await oauthStore.commitOAuthAccountSelection("xai", "legacy-b", { expectedSelection });
+    expect(committed?.accountId).toBe("legacy-b");
+    expect(committed?.revision).toMatch(SELECTION_UUID);
+    expect(oauthStore.captureOAuthAccountSelection("xai")).toEqual(committed);
+  });
+
+  test.each(["manual", "refresh", "reauth", "remove"] as const)("selection commit rechecks queued %s changes under the writer", async change => {
+    const { idA, idB } = await selectionAccounts();
+    const expectedSelection = oauthStore.captureOAuthAccountSelection("xai")!;
+    const expectedCredentialGeneration = credentialGeneration(getAccountCredential("xai", idB)!);
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const blocker = mutateStore(async () => { entered(); await gate; });
+    await started;
+    const mutation = change === "manual" ? setActiveAccount("xai", idA)
+      : change === "refresh" ? saveAccountCredential("xai", idB, cred({ accountId: "selection-b", access: "fresh-b" }))
+      : change === "reauth" ? markAccountNeedsReauth("xai", idB, true)
+      : removeAccount("xai", idB);
+    const pending = oauthStore.commitOAuthAccountSelection("xai", idB, {
+      expectedSelection, expectedCredentialGeneration, requireUsableAccount: true,
+    });
+    try {
+      release();
+      await blocker;
+      await mutation;
+      expect(await pending).toBeNull();
+      expect(getAccountSet("xai")!.activeAccountId).toBe(idA);
+    } finally {
+      release();
+      await Promise.allSettled([blocker, mutation, pending]);
+    }
+  });
+
+  test("selection commit checks same-account usability and refreshed credential generation", async () => {
+    const { idA, idB } = await selectionAccounts();
+    const expectedSelection = oauthStore.captureOAuthAccountSelection("xai")!;
+    const oldGeneration = credentialGeneration(getAccountCredential("xai", idA)!);
+    await saveAccountCredential("xai", idA, cred({ accountId: "selection-a", access: "rotated-a" }));
+    expect(await oauthStore.commitOAuthAccountSelection("xai", idA, {
+      expectedSelection, expectedCredentialGeneration: oldGeneration, requireUsableAccount: true,
+    })).toBeNull();
+    await markAccountNeedsReauth("xai", idA, true);
+    expect(await oauthStore.commitOAuthAccountSelection("xai", idA, {
+      expectedSelection, requireUsableAccount: true,
+    })).toBeNull();
+    const committed = await oauthStore.commitOAuthAccountSelection("xai", idB, {
+      expectedSelection,
+      expectedCredentialGeneration: credentialGeneration(getAccountCredential("xai", idB)!),
+      requireUsableAccount: true,
+    });
+    expect(committed?.accountId).toBe(idB);
+    expect(committed?.revision).not.toBe(expectedSelection.revision);
+    expect(oauthStore.captureOAuthAccountSelection("xai")).toEqual(committed);
+  });
+
+  test("unchanged selection admission neither joins a busy writer nor persists", async () => {
+    const { idA } = await selectionAccounts();
+    const expectedSelection = oauthStore.captureOAuthAccountSelection("xai")!;
+    const expectedCredentialGeneration = credentialGeneration(getAccountCredential("xai", idA)!);
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const blocker = mutateStore(async () => { entered(); await gate; });
+    await started;
+    const write = spyOn(atomicWrite, "atomicWriteFile");
+    const pending = oauthStore.commitOAuthAccountSelection("xai", idA, {
+      expectedSelection, expectedCredentialGeneration, requireUsableAccount: true,
+    });
+    try {
+      expect(oauthMutationTailSnapshot().active).toBe(1);
+      expect(await pending).toEqual(expectedSelection);
+      expect(write).not.toHaveBeenCalled();
+    } finally {
+      write.mockRestore();
+      release();
+      await Promise.allSettled([blocker, pending]);
+    }
+  });
+
+  test("selection events follow persistence and omit failed commits, refreshes, and credentials", async () => {
+    const { idA, idB } = await selectionAccounts();
+    const { subscribeAccountSelections, currentAccountSelectionRevision } = await import("../../src/lib/account-selection-events");
+    const events: unknown[] = [];
+    const observedSelections: unknown[] = [];
+    const start = currentAccountSelectionRevision();
+    const unsubscribe = subscribeAccountSelections(event => {
+      events.push(event);
+      observedSelections.push(oauthStore.captureOAuthAccountSelection("xai"));
+    });
+    try {
+      const expectedSelection = oauthStore.captureOAuthAccountSelection("xai")!;
+      await setActiveAccount("xai", idA);
+      const manual = oauthStore.captureOAuthAccountSelection("xai")!;
+      expect(events).toEqual([{ provider: "xai", kind: "oauth", revision: start + 1 }]);
+      expect(observedSelections).toEqual([manual]);
+      expect(await oauthStore.commitOAuthAccountSelection("xai", idB, { expectedSelection })).toBeNull();
+      expect(await oauthStore.commitOAuthAccountSelection("xai", "missing")).toBeNull();
+      expect(await setActiveAccount("xai", "missing")).toBe(false);
+      await oauthStore.commitOAuthAccountSelection("xai", idA, { expectedSelection: manual });
+      await saveAccountCredential("xai", idA, cred({ accountId: "selection-a", access: "event-refresh" }));
+      expect(events).toHaveLength(1);
+
+      // Only the I/O boundary is faulted; the actual commit, locks, and store stay real.
+      const write = spyOn(atomicWrite, "atomicWriteFile").mockImplementation(() => { throw new Error("selection persist failed"); });
+      try {
+        await expect(oauthStore.commitOAuthAccountSelection("xai", idB, { expectedSelection: manual })).rejects.toThrow("selection persist failed");
+      } finally {
+        write.mockRestore();
+      }
+      expect(oauthStore.captureOAuthAccountSelection("xai")).toEqual(manual);
+      expect(events).toHaveLength(1);
+      expect(currentAccountSelectionRevision()).toBe(start + 1);
+      await expect(saveCredential("xai", cred({ accountId: "blocked-login" }), {
+        assertBeforePersist: () => { throw new Error("selection pre-persist rejected"); },
+      })).rejects.toThrow("selection pre-persist rejected");
+      expect(events).toHaveLength(1);
+
+      await oauthStore.commitOAuthAccountSelection("xai", idB, { expectedSelection: manual });
+      expect(events).toEqual([
+        { provider: "xai", kind: "oauth", revision: start + 1 },
+        { provider: "xai", kind: "oauth", revision: start + 2 },
+      ]);
+      unsubscribe();
+      unsubscribe();
+      await setActiveAccount("xai", idA);
+      expect(events).toHaveLength(2);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  test("selection events cover create, inactive removal, replacement, clear, and recreate", async () => {
+    const { subscribeAccountSelections, currentAccountSelectionRevision, publishAccountSelection } = await import("../../src/lib/account-selection-events");
+    const events: unknown[] = [];
+    const start = currentAccountSelectionRevision();
+    const unsubscribe = subscribeAccountSelections(event => { events.push(event); });
+    try {
+      await upsertCredentialByIdentity("xai", cred({ accountId: "selection-a" }));
+      const original = getAccountSet("xai")!;
+      await upsertCredentialByIdentity("xai", cred({ accountId: "selection-b" }));
+      expect(events).toHaveLength(1); // Importing an inactive account preserves the selection.
+      const inactive = listAccounts("xai").find(account => account.id !== original.activeAccountId)!;
+      await removeAccount("xai", inactive.id);
+      expect(getAccountSet("xai")!.selectionRevision).not.toBe(original.selectionRevision);
+      await replaceProviderAccountSet("xai", original);
+      await replaceProviderAccountSet("xai", null);
+      await replaceProviderAccountSet("xai", null);
+      await saveCredential("xai", cred({ accountId: "selection-a" }));
+      publishAccountSelection("key-provider", "api-key");
+      expect(events).toEqual([
+        ...Array.from({ length: 5 }, (_, index) => ({ provider: "xai", kind: "oauth", revision: start + index + 1 })),
+        { provider: "key-provider", kind: "api-key", revision: start + 6 },
+      ]);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  test("selection subscriber failure cannot fail a persisted selection or block other subscribers", async () => {
+    const { idA } = await selectionAccounts();
+    const { subscribeAccountSelections } = await import("../../src/lib/account-selection-events");
+    const stopBroken = subscribeAccountSelections(() => { throw new Error("disconnected consumer"); });
+    const seen: unknown[] = [];
+    const stopHealthy = subscribeAccountSelections(event => { seen.push(event); });
+    try {
+      expect(await setActiveAccount("xai", idA)).toBe(true);
+      expect(seen).toHaveLength(1);
+    } finally {
+      stopBroken();
+      stopHealthy();
+    }
   });
 
   test("queued generation-checked reauth mutation rechecks liveness after reconciliation", async () => {

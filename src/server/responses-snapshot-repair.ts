@@ -26,6 +26,7 @@ import {
   MAX_COMPLETED_OUTPUT_ITEM_SOURCE_BYTES,
 } from "./relay";
 import { sseDataPayload, type SseBlockRewrite } from "./sse-payload-rewrite";
+import { isPlainObject, jsonBlock, type RetainedOutputItem } from "./responses-snapshot-codec";
 
 const RESPONSE_EVENT_STATUSES: Readonly<Record<string, string>> = {
   "response.created": "in_progress",
@@ -41,10 +42,6 @@ type RequestDefaults = {
   toolChoice: unknown;
   tools: unknown[];
 };
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
 
 function isStructurallyValidToolChoice(value: unknown): boolean {
   return (typeof value === "string" && value.trim().length > 0)
@@ -178,15 +175,6 @@ type OpenItem = {
 /** Open-item retention bounds (#893 review): aggregate, not just per-item. */
 const MAX_OPEN_ITEMS = MAX_COMPLETED_OUTPUT_ITEMS;
 const MAX_OPEN_ITEM_AGGREGATE_TEXT_BYTES = MAX_COMPLETED_OUTPUT_ITEM_SOURCE_BYTES;
-
-type RetainedOutputItem = {
-  item: Record<string, unknown>;
-  sourceBytes: number;
-};
-
-function jsonBlock(event: Record<string, unknown>): string {
-  return `data: ${JSON.stringify(event)}`;
-}
 
 /**
  * Stateful block rewrite: field backfills + lifecycle completion injection.

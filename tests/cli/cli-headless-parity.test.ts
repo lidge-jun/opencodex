@@ -232,6 +232,7 @@ describe("headless GUI parity CLI", () => {
       // skipping the endpoint.
       ["/api/github/star", "(none — GUI-only)"],
       ["/api/oauth", "ocx account"],
+      ["/api/accounts/events", "(none — dashboard invalidation; ocx account reads current selection)"],
       ["/api/providers/keys", "ocx account"],
       ["/api/providers", "ocx provider"],
       ["/api/provider-", "ocx provider/models"],
@@ -918,5 +919,135 @@ describe("#2566 per-account quota in ocx account list", () => {
 
   test("an account whose probe failed says so instead of reading as empty", () => {
     expect(formatAccountTable([row({ quotaUnavailable: true })] as never, true)).toContain("unavailable");
+  });
+});
+
+describe("Aside profile integration CLI", () => {
+  test("scopes status, toggle, history and restore without changing other client routes", async () => {
+    const runtime = fakeRuntime();
+    expect(await handleClientIntegrationCommand(["status", "--client", "aside", "--profile", "2", "--json"], runtime.deps)).toBe(0);
+    expect(await handleClientIntegrationCommand(["disable", "--client", "aside", "--profile", "2", "--json"], runtime.deps)).toBe(0);
+    expect(await handleClientIntegrationCommand(["history", "--client", "aside", "--profile", "2", "--json"], runtime.deps)).toBe(0);
+    expect(await handleClientIntegrationCommand(["restore", "--client", "aside", "--profile", "2", "--op", "op-profile", "--json"], runtime.deps)).toBe(0);
+    expect(runtime.requests.map(row => row.path)).toEqual([
+      "/api/client-integrations/aside/profiles/2",
+      "/api/client-integrations/aside/profiles/2",
+      "/api/client-integrations/aside/profiles/2/journal",
+      "/api/client-integrations/aside/profiles/2/restore",
+    ]);
+    expect(runtime.requests[1]!.body).toEqual({ enabled: false });
+    expect(runtime.requests[3]!.body).toEqual({ opId: "op-profile", confirmDrift: false });
+  });
+
+  test.each([
+    ["enable", "--client", "pi", "--profile", "0"],
+    ["status", "--profile", "0"],
+    ["enable", "--client", "aside", "--profile", "../0"],
+    ["disable", "--client", "aside", "--profile", "01"],
+    ["restore", "--client", "aside", "--op", "op-profile"],
+  ].map(args => ({ args })))("rejects unsupported or ambiguous profile selectors before a request: $args", async ({ args }) => {
+    const runtime = fakeRuntime();
+    expect(await handleClientIntegrationCommand(args, runtime.deps)).toBe(2);
+    expect(runtime.requests).toHaveLength(0);
+  });
+
+  test("unqualified Aside enable remains bulk and reports partial failure as nonzero", async () => {
+    const runtime = fakeRuntime(() => ({
+      ok: false, clientId: "aside", message: "one profile refused",
+      results: [{ profileId: 0, ok: true, message: "updated" }, { profileId: 1, ok: false, message: "conflict" }],
+    }));
+    expect(await handleClientIntegrationCommand(["enable", "--client", "aside", "--json"], runtime.deps)).toBe(1);
+    expect(runtime.requests[0]).toEqual({ path: "/api/client-integrations/aside/profiles", method: "PUT", body: { enabled: true } });
+  });
+});
+
+test("Aside status prints the empty-profile diagnostic for humans", async () => {
+  const runtime = fakeRuntime(() => ({ profiles: [], error: "Open Aside to create a profile" }));
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  try {
+    expect(await handleClientIntegrationCommand(["status", "--client", "aside"], runtime.deps)).toBe(0);
+    expect(log.mock.calls.flat().join("\n")).toContain("Open Aside to create a profile");
+  } finally { log.mockRestore(); }
+});
+
+describe("Aside CLI recovery metadata", () => {
+  test.each([
+    { name: "a long POSIX backup path", snapshotPath: `/tmp/aside-recovery/${"profile-2-snapshot/".repeat(80)}models.json.bak` },
+    { name: "a Windows backup path with spaces and Unicode", snapshotPath: String.raw`C:\Aside Recovery\프로필 2\models.json.before-write` },
+    { name: "no backup path", snapshotPath: undefined },
+  ])("a refused restore preserves recovery guidance after a long message: $name", async ({ snapshotPath }) => {
+    const message = `Restore failed: ${"the profile file could not be replaced; ".repeat(80)}`;
+    const runtime = fakeRuntime(() => Response.json({
+      ok: false, clientId: "aside", profileId: 2, state: "absent",
+      message, reason: "write_failed", residual: true,
+      ...(snapshotPath === undefined ? {} : { snapshotPath }),
+    }, { status: 500 }));
+    const log = spyOn(console, "log").mockImplementation(() => {});
+    const error = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await handleClientIntegrationCommand([
+        "restore", "--client", "aside", "--profile", "2", "--op", "op-recovery",
+      ], runtime.deps)).toBe(1);
+      const stderr = error.mock.calls.map(call => String(call[0])).join("\n");
+      expect(stderr).toContain("Restore failed:");
+      // Recovery fields have their own output budget, after the bounded main message.
+      expect(stderr).not.toContain(message);
+      expect(stderr.split("\n")).toContain("Automatic recovery did not finish; check the client configuration before retrying.");
+      if (snapshotPath !== undefined) {
+        expect(stderr.split("\n")).toContain(`Backup: ${snapshotPath}`);
+      } else {
+        expect(stderr).not.toContain("Backup:");
+      }
+      expect(log.mock.calls).toHaveLength(0);
+      expect(runtime.requests).toEqual([{
+        path: "/api/client-integrations/aside/profiles/2/restore", method: "POST",
+        body: { opId: "op-recovery", confirmDrift: false },
+      }]);
+    } finally {
+      log.mockRestore();
+      error.mockRestore();
+    }
+  });
+
+  test.each([false, true])("bulk 207 retains each profile's recovery metadata and fails nonzero (json=%s)", async wantsJson => {
+    const snapshotPath = "/tmp/aside-recovery/profile 2/models.json.before-write";
+    const otherSnapshot = String.raw`C:\Aside Recovery\profile 7\models.json.bak`;
+    const longMessage = `Profile 2 write failed: ${"could not replace models.json; ".repeat(80)}`;
+    const result = {
+      ok: false, clientId: "aside", message: "Three profiles could not be updated",
+      results: [
+        { profileId: 0, ok: true, message: "updated" },
+        { profileId: 2, ok: false, message: longMessage, reason: "write_failed", snapshotPath, residual: true },
+        { profileId: 7, ok: false, message: "Profile 7 is conflicted", reason: "conflict", snapshotPath: otherSnapshot, residual: false },
+        { profileId: 9, ok: false, message: "Profile 9 recovery failed", reason: "write_failed", residual: true },
+      ],
+    };
+    const runtime = fakeRuntime(() => Response.json(result, { status: 207 }));
+    const log = spyOn(console, "log").mockImplementation(() => {});
+    const error = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await handleClientIntegrationCommand([
+        "enable", "--client", "aside", ...(wantsJson ? ["--json"] : []),
+      ], runtime.deps)).toBe(1);
+      const stdout = log.mock.calls.map(call => String(call[0])).join("\n");
+      if (wantsJson) {
+        expect(JSON.parse(stdout)).toEqual(result);
+      } else {
+        // Exact rows catch dropped/truncated paths and metadata leaking to a sibling.
+        expect(stdout.split("\n")).toEqual([
+          "aside:0  updated",
+          `aside:2  ${longMessage} Recovery did not finish. Backup: ${snapshotPath}`,
+          `aside:7  Profile 7 is conflicted Backup: ${otherSnapshot}`,
+          "aside:9  Profile 9 recovery failed Recovery did not finish.",
+        ]);
+      }
+      expect(error.mock.calls.map(call => String(call[0])).join("\n")).toContain(result.message);
+      expect(runtime.requests).toEqual([{
+        path: "/api/client-integrations/aside/profiles", method: "PUT", body: { enabled: true },
+      }]);
+    } finally {
+      log.mockRestore();
+      error.mockRestore();
+    }
   });
 });

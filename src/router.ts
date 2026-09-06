@@ -10,6 +10,7 @@ import {
 import type { NormalizedComboConfig } from "./combos/types";
 import { hasOwnProvider } from "./config/provider-name";
 import { providerUsesKeyAuthOverride, resolveProviderApiKey } from "./providers/key-store";
+import { captureProviderApiKeySelection } from "./providers/api-key-selection";
 import { assertProviderDestinationAllowed } from "./lib/destination-policy";
 import { redactSecretString, redactUrlForLog } from "./lib/redact";
 import {
@@ -297,6 +298,7 @@ function usableResolvedApiKey(apiKey: string | undefined): string | undefined {
 }
 
 export function routedProviderConfig(providerName: string, provider: OcxProviderConfig): OcxProviderConfig {
+  provider = { ...provider, _apiKeyAttempt: provider._apiKeyAttempt ?? captureProviderApiKeySelection(provider) };
   const registryEntry = PROVIDER_REGISTRY.find(entry => entry.id === providerName);
   if (!registryEntry || !providerMatchesRegistryTransportWithStaticGuards(providerName, provider)) {
     assertProviderDestinationAllowed(providerName, provider);

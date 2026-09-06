@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
@@ -106,7 +106,8 @@ function withInstalledShim(run: (paths: {
       writeFileSync(wrapper, process.platform === "win32" ? `real ${wrapper}\n` : "#!/bin/sh\necho real\n", "utf8");
       if (process.platform !== "win32") chmodSync(wrapper, 0o755);
     }
-    expect(installCodexShim().installed).toBe(true);
+    const installed = installCodexShim();
+    expect(installed.installed, installed.message).toBe(true);
     const statePath = join(home, "codex-shim.json");
     const state = JSON.parse(readFileSync(statePath, "utf8")) as { wrappers: Array<{ wrapperPath: string; backupPath: string }> };
     run({
@@ -712,53 +713,149 @@ os._exit(0)
     },
   );
 
-  test("Unix install rolls back when launcher validation times out", () => {
-    if (process.platform === "win32") return;
+  for (const [name, mode] of [
+    ["Unix install rolls back when launcher validation times out", "native"],
+    ["Unix timeout cleanup observes disappearance after EPERM without another signal", "disappears"],
+    ["Unix timeout cleanup preserves EPERM when passive probes keep failing", "permission"],
+    ["Unix timeout cleanup preserves EPERM when passive probes report a live group", "live"],
+  ] as const) {
+    test(name, () => {
+      if (process.platform === "win32") return;
 
-    const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-install-timeout-bin-"));
-    const home = mkdtempSync(join(tmpdir(), "ocx-shim-install-timeout-home-"));
-    const oldPath = process.env.PATH;
-    const oldHome = process.env.OPENCODEX_HOME;
-    const codexPath = join(binDir, "codex");
-    const childPidPath = join(home, "probe-child.pid");
-    const groupIdPath = join(home, "probe-group.pid");
-    const original = `#!/bin/sh
+      const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-install-timeout-bin-"));
+      const home = mkdtempSync(join(tmpdir(), "ocx-shim-install-timeout-home-"));
+      const oldPath = process.env.PATH;
+      const oldHome = process.env.OPENCODEX_HOME;
+      const codexPath = join(binDir, "codex");
+      const childPidPath = join(home, "probe-child.pid");
+      const groupIdPath = join(home, "probe-group.pid");
+      const original = `#!/bin/sh
 /bin/sleep 30 &
 child=$!
 printf '%s\\n' "$child" > "${childPidPath}"
 printf '%s\\n' "$$" > "${groupIdPath}"
 wait "$child"
 `;
-    try {
-      process.env.PATH = prependPath(binDir, oldPath);
-      process.env.OPENCODEX_HOME = home;
-      writeFileSync(codexPath, original, "utf8");
-      chmodSync(codexPath, 0o755);
+      const nativeKill = process.kill.bind(process);
+      const permissionError = Object.assign(new Error("fixture termination denied"), { code: "EPERM" });
+      let restoreKill: (() => void) | undefined;
+      let killCalls = 0;
+      let passiveProbes = 0;
+      let terminationStartedAt = 0;
+      let terminationElapsedMs = 0;
+      let childPid = 0;
+      let groupId = 0;
+      try {
+        process.env.PATH = prependPath(binDir, oldPath);
+        process.env.OPENCODEX_HOME = home;
+        writeFileSync(codexPath, original, "utf8");
+        chmodSync(codexPath, 0o755);
 
-      const installed = installCodexShim();
+        if (mode !== "native") {
+          const killSpy = spyOn(process, "kill").mockImplementation((pid, signal) => {
+            // The child writes its own group identity before the parent resumes from spawnSync.
+            if (groupId === 0 && existsSync(groupIdPath)) {
+              const recorded = Number.parseInt(readFileSync(groupIdPath, "utf8").trim(), 10);
+              if (Number.isInteger(recorded) && recorded > 1) groupId = recorded;
+            }
+            if (groupId <= 1 || pid !== -groupId) return nativeKill(pid, signal);
+            if (signal === "SIGKILL") {
+              killCalls += 1;
+              if (killCalls === 1) terminationStartedAt = Date.now();
+              throw permissionError;
+            }
+            if (signal === 0 && killCalls > 0) {
+              passiveProbes += 1;
+              if (mode === "permission" || (mode === "disappears" && passiveProbes === 1)) {
+                throw permissionError;
+              }
+              if (mode === "disappears") {
+                throw Object.assign(new Error("fixture group disappeared"), { code: "ESRCH" });
+              }
+              return true;
+            }
+            return nativeKill(pid, signal);
+          });
+          restoreKill = () => { killSpy.mockRestore(); };
+        }
+        let installed: ReturnType<typeof installCodexShim>;
+        try {
+          installed = installCodexShim();
+          terminationElapsedMs = Date.now() - terminationStartedAt;
+        } finally {
+          restoreKill?.();
+          restoreKill = undefined;
+          if (mode !== "native" && existsSync(groupIdPath)) {
+            groupId = Number.parseInt(readFileSync(groupIdPath, "utf8").trim(), 10);
+            if (Number.isInteger(groupId) && groupId > 1) {
+              // Join only this fixture's real group, even when a later assertion fails.
+              // Synthetic ESRCH never proves cleanup; these observations use the native binding.
+              const deadline = Date.now() + 1_000;
+              while (Date.now() < deadline) {
+                try { nativeKill(-groupId, 0); }
+                catch (error) {
+                  if ((error as NodeJS.ErrnoException).code === "ESRCH") break;
+                }
+                Bun.sleepSync(10);
+              }
+            }
+          }
+        }
+        childPid = Number.parseInt(readFileSync(childPidPath, "utf8").trim(), 10);
+        groupId = Number.parseInt(readFileSync(groupIdPath, "utf8").trim(), 10);
 
-      expect(installed.installed).toBe(false);
-      expect(installed.message).toContain("did not finish --version within 5000ms");
-      expect(installed.message).toContain("original launcher was restored");
-      expect(readFileSync(codexPath, "utf8")).toBe(original);
-      expect(existsSync(`${codexPath}.opencodex-real`)).toBe(false);
-      expect(existsSync(join(home, "codex-shim.json"))).toBe(false);
-      const childPid = Number.parseInt(readFileSync(childPidPath, "utf8").trim(), 10);
-      const groupId = Number.parseInt(readFileSync(groupIdPath, "utf8").trim(), 10);
-      expect(Number.isInteger(childPid)).toBe(true);
-      expect(Number.isInteger(groupId)).toBe(true);
-      expectProcessGroupMissing(groupId);
-      const childState = processState(childPid);
-      expect(childState === "" || childState.startsWith("Z")).toBe(true);
-    } finally {
-      if (oldPath === undefined) delete process.env.PATH;
-      else process.env.PATH = oldPath;
-      if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = oldHome;
-      removeTreeWithRetry(binDir);
-      removeTreeWithRetry(home);
-    }
-  }, 10_000);
+        expect(installed.installed).toBe(false);
+        if (mode === "native" || mode === "disappears") {
+          expect(installed.message).toContain("did not finish --version within 5000ms");
+        } else {
+          expect(installed.message).toContain("[phase=termination; code=EPERM; status=124; signal=none]");
+          expect(installed.message).not.toContain("did not finish --version within 5000ms");
+          expect(terminationElapsedMs).toBeGreaterThanOrEqual(1_000);
+        }
+        if (mode !== "native") {
+          expect(killCalls).toBe(1);
+          expect(passiveProbes).toBeGreaterThanOrEqual(2);
+        }
+        expect(installed.message).toContain("original launcher was restored");
+        expect(readFileSync(codexPath, "utf8")).toBe(original);
+        expect(existsSync(`${codexPath}.opencodex-real`)).toBe(false);
+        expect(existsSync(join(home, "codex-shim.json"))).toBe(false);
+        expect(Number.isInteger(childPid)).toBe(true);
+        expect(Number.isInteger(groupId)).toBe(true);
+        expect(childPid).toBeGreaterThan(1);
+        expect(groupId).toBeGreaterThan(1);
+        expectProcessGroupMissing(groupId);
+        const childState = processState(childPid);
+        expect(childState === "" || childState.startsWith("Z")).toBe(true);
+      } catch (error) {
+        restoreKill?.();
+        restoreKill = undefined;
+        let groupState = "unrecorded";
+        if (groupId > 1) {
+          try { nativeKill(-groupId, 0); groupState = "present"; }
+          catch (probeError) {
+            const code = (probeError as NodeJS.ErrnoException).code;
+            groupState = code === "ESRCH" || code === "EPERM" ? code : "other-error";
+          }
+        }
+        let childState = "unrecorded";
+        if (childPid > 1) {
+          try { childState = processState(childPid).replace(/[^A-Za-z+<>N]/g, "").slice(0, 16) || "absent"; }
+          catch { childState = "unavailable"; }
+        }
+        console.error("[shim-timeout-fixture]", { mode, groupId, childPid, groupState, childState, killCalls, passiveProbes });
+        throw error;
+      } finally {
+        restoreKill?.();
+        if (oldPath === undefined) delete process.env.PATH;
+        else process.env.PATH = oldPath;
+        if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+        else process.env.OPENCODEX_HOME = oldHome;
+        removeTreeWithRetry(binDir);
+        removeTreeWithRetry(home);
+      }
+    }, 10_000);
+  }
 
   test("Unix install preserves an existing backup without probing or mutation", () => {
     if (process.platform === "win32") return;

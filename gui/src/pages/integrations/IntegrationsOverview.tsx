@@ -667,6 +667,7 @@ export default function IntegrationsOverview({
           row={restoring}
           onClose={() => setRestoring(null)}
           onRestored={refresh}
+          onReconcile={refresh}
         />
       )}
       {deleting && (
@@ -682,7 +683,7 @@ export default function IntegrationsOverview({
           onClose={() => setDeleting(null)}
           onConfirm={async () => {
             try {
-              await deleteJournalEntry(apiBase, deleting.opId);
+              await deleteJournalEntry(apiBase, deleting.opId, undefined, deleting.clientId === "aside" ? deleting.profileId : undefined);
             } catch (error) {
               // Another tab may have completed the same idempotent user action.
               // Close the stale dialog and refresh instead of offering a retry

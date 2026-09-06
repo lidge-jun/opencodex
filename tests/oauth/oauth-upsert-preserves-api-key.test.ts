@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { upsertOAuthProvider } from "../../src/oauth";
+import { OAUTH_PROVIDERS, upsertOAuthProvider } from "../../src/oauth";
+import { loadConfig, saveConfig } from "../../src/config";
 import { migrateXaiResponsesDefault } from "../../src/providers/xai-responses-opt-in";
 import { resolveWireProtocolOverride } from "../../src/server/adapter-resolve";
 import {
@@ -240,8 +241,13 @@ describe("upsertOAuthProvider credential preservation", () => {
       expect(listed.keys.find(entry => entry.id === activeId)?.active).toBe(true);
       expect(listed.keys.find(entry => entry.id === "pool-visible")?.active).toBe(false);
 
+      // runLogin persists the upsert before GUI key mutations. The shared selection
+      // transaction requires that authoritative file; it must not recreate missing config.
+      saveConfig(config);
+      expect(loadConfig().providers.xai!.apiKeyPool).toEqual(provider.apiKeyPool);
       expect(setActiveProviderApiKey(config, "xai", "pool-visible")).toBe(true);
       expect(config.providers.xai!.apiKey).toBe("pool-visible-key");
+      expect(loadConfig().providers.xai!.apiKey).toBe("pool-visible-key");
       expect(listProviderApiKeys(config, "xai").activeId).toBe("pool-visible");
 
       expect(setActiveProviderApiKey(config, "xai", activeId)).toBe(true);
@@ -250,6 +256,7 @@ describe("upsertOAuthProvider credential preservation", () => {
       expect(config.providers.xai!.apiKey).toBe("pool-visible-key");
       expect(config.providers.xai!.apiKeyPool).toEqual([{ id: "pool-visible", key: "pool-visible-key" }]);
       expect(listProviderApiKeys(config, "xai").activeId).toBe("pool-visible");
+      expect(loadConfig().providers.xai!.apiKeyPool).toEqual(config.providers.xai!.apiKeyPool);
     } finally {
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousHome;
@@ -329,16 +336,21 @@ describe("upsertOAuthProvider credential preservation", () => {
     const testHome = mkdtempSync(join(tmpdir(), "ocx-oauth-upsert-"));
     process.env.OPENCODEX_HOME = testHome;
     try {
+      saveConfig(config);
       expect(removeProviderApiKey(config, "xai", "aaaaaaaa")).toBe(true);
       expect(config.providers.xai!.authMode).toBe("key");
       expect(config.providers.xai!.apiKey).toBeUndefined();
       expect(config.providers.xai!.apiKeyPool).toBeUndefined();
+      expect(loadConfig().providers.xai!.apiKey).toBeUndefined();
+      expect(loadConfig().providers.xai!.apiKeyPool).toBeUndefined();
 
       upsertOAuthProvider(config, "xai");
       const provider = config.providers.xai!;
       expect(provider.authMode).toBe("oauth");
       expect(provider.apiKey).toBeUndefined();
       expect(provider.apiKeyPool).toBeUndefined();
+      saveConfig(config);
+      expect(loadConfig().providers.xai!.authMode).toBe("oauth");
     } finally {
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousHome;
@@ -346,7 +358,7 @@ describe("upsertOAuthProvider credential preservation", () => {
     }
   });
 
-  test("still applies the plain preset for oauth-only providers", () => {
+  test("applies OAuth credentials while preserving notes for oauth-only providers", () => {
     const config = {
       port: 10100,
       defaultProvider: "anthropic",
@@ -366,15 +378,207 @@ describe("upsertOAuthProvider credential preservation", () => {
     expect(provider.authMode).toBe("oauth");
     expect(provider.apiKey).toBeUndefined();
     expect(provider.apiKeyPool).toBeUndefined();
-    expect(provider.note).toBeUndefined();
+    expect(provider.note).toBe("stale-note");
+  });
+
+  test("replaces stale login transport fields instead of retaining an alternate credential destination", () => {
+    const config = configWithKey("anthropic", "openai-chat", "https://stale.example.invalid");
+    const existing = config.providers.anthropic!;
+    existing.headers = { Authorization: "Bearer stale-header-sentinel" };
+    existing.apiKeyTransport = "x-api-key";
+    existing.responsesPath = "/stale-responses";
+    existing.googleMode = "vertex";
+    existing.keyOptional = true;
+    const before = structuredClone(existing);
+    const preset = OAUTH_PROVIDERS.anthropic!.providerConfig;
+
+    upsertOAuthProvider(config, "anthropic");
+
+    const provider = config.providers.anthropic!;
+    expect(provider.adapter).toBe("anthropic");
+    expect(provider.baseUrl).toBe("https://api.anthropic.com");
+    expect(provider.authMode).toBe("oauth");
+    expect(provider.headers).toEqual(preset.headers);
+    expect(provider.apiKeyTransport).toBe(preset.apiKeyTransport);
+    expect(provider.responsesPath).toBeUndefined();
+    expect(provider.googleMode).toBeUndefined();
+    expect(provider.keyOptional).toBeUndefined();
+    expect(provider.apiKey).toBeUndefined();
+    expect(provider.apiKeyPool).toBeUndefined();
+    expect(existing).toEqual(before);
+  });
+
+  test("clears the previous CCA project only after resolving the canonical login mode", () => {
+    const config = configWithKey("google-antigravity", "google", "https://stale.example.invalid");
+    const existing = config.providers["google-antigravity"]!;
+    existing.googleMode = "vertex";
+    existing.project = "previous-account-project";
+
+    upsertOAuthProvider(config, "google-antigravity");
+
+    expect(config.providers["google-antigravity"]!.googleMode).toBe("cloud-code-assist");
+    expect(config.providers["google-antigravity"]!.project).toBeUndefined();
+    expect(existing.project).toBe("previous-account-project");
+  });
+
+  test("preserves an operator project when the canonical login mode is not CCA", () => {
+    const config = configWithKey("xai", "openai-chat", "https://api.x.ai/v1");
+    const existing = config.providers.xai!;
+    existing.googleMode = "cloud-code-assist";
+    existing.project = "operator-project";
+
+    upsertOAuthProvider(config, "xai");
+
+    expect(config.providers.xai!.googleMode).toBeUndefined();
+    expect(config.providers.xai!.project).toBe("operator-project");
+  });
+
+  test("isolates nested operator and unchanged catalog data from the previous row and registry", () => {
+    const preset = OAUTH_PROVIDERS.anthropic!.providerConfig;
+    const presetBefore = structuredClone(preset);
+    const existing = {
+      ...structuredClone(preset),
+      modelCosts: { "operator-model": { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 } },
+      forwardCompatibleFlag: { labels: ["keep"] },
+    };
+    const before = structuredClone(existing);
+    const config: OcxConfig = { port: 10100, defaultProvider: "anthropic", providers: { anthropic: existing } };
+
+    upsertOAuthProvider(config, "anthropic");
+
+    const provider = config.providers.anthropic! as typeof existing;
+    expect(provider.models).not.toBe(preset.models);
+    expect(provider.models).not.toBe(existing.models);
+    provider.modelCosts["operator-model"]!.input = 99;
+    provider.forwardCompatibleFlag.labels.push("changed");
+    provider.models!.push("test-only-model");
+    expect(existing).toEqual(before);
+    expect(preset).toEqual(presetBefore);
+  });
+
+  test("refreshes registry-owned catalog fields immediately without losing operator fields", () => {
+    const config = {
+      port: 10100,
+      defaultProvider: "anthropic",
+      providers: {
+        anthropic: {
+          adapter: "anthropic",
+          baseUrl: "https://api.anthropic.com",
+          authMode: "oauth",
+          models: ["retired-model"],
+          defaultModel: "retired-model",
+          contextWindow: 1,
+          disabled: true,
+          note: "operator-note",
+        },
+      },
+    } as unknown as OcxConfig;
+
+    upsertOAuthProvider(config, "anthropic");
+
+    const provider = config.providers.anthropic!;
+    const preset = OAUTH_PROVIDERS.anthropic!.providerConfig;
+    expect(provider.models).toEqual(preset.models);
+    expect(provider.contextWindow).toBe(preset.contextWindow);
+    expect(provider.defaultModel).toBe(preset.defaultModel);
+    expect(provider.disabled).toBe(true);
+    expect(provider.note).toBe("operator-note");
+  });
+
+  test.each(["login", "add-account", "reauthentication"])(
+    "preserves operator policy and unknown fields during %s-shaped upsert",
+    operation => {
+      const config = configWithKey("xai", "openai-chat", "https://api.x.ai/v1");
+      const existing = config.providers.xai! as OcxConfig["providers"][string] & Record<string, unknown>;
+      existing.disabled = true;
+      existing.requestPacing = { enabled: true, minIntervalMs: 250 };
+      existing.retryOn429 = { attempts: 4, intervalMs: 900 };
+      existing.refreshPolicy = "lazy-only";
+      existing.selectedModels = ["grok-4"];
+      existing.note = `operator-${operation}`;
+      existing.modelCosts = { "grok-4": { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 } };
+      existing.oauthAccountFailover = { enabled: false };
+      existing.forwardCompatibleFlag = { enabled: true };
+
+      upsertOAuthProvider(config, "xai");
+
+      const provider = config.providers.xai! as typeof existing;
+      expect(provider.disabled).toBe(true);
+      expect(provider.requestPacing).toEqual({ enabled: true, minIntervalMs: 250 });
+      expect(provider.retryOn429).toEqual({ attempts: 4, intervalMs: 900 });
+      expect(provider.refreshPolicy).toBe("lazy-only");
+      expect(provider.selectedModels).toEqual(["grok-4"]);
+      expect(provider.note).toBe(`operator-${operation}`);
+      expect(provider.modelCosts).toEqual({ "grok-4": { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 } });
+      expect(provider.oauthAccountFailover).toEqual({ enabled: false });
+      expect(provider.forwardCompatibleFlag).toEqual({ enabled: true });
+      expect(provider.apiKey).toBe("stored-key-sentinel");
+    },
+  );
+
+  test("removes incompatible API-key and Azure credentials while preserving unknown fields", () => {
+    const config = {
+      port: 10100,
+      defaultProvider: "anthropic",
+      providers: {
+        anthropic: {
+          adapter: "anthropic",
+          baseUrl: "https://api.anthropic.com",
+          authMode: "key",
+          apiKey: "stale-key",
+          apiKeyPool: [{ id: "stale", key: "stale-key" }],
+          azureCredential: { token: "stale" },
+          disabled: true,
+          forwardCompatibleFlag: "retain-me",
+        },
+      },
+    } as unknown as OcxConfig;
+
+    upsertOAuthProvider(config, "anthropic");
+
+    const provider = config.providers.anthropic! as OcxConfig["providers"][string] & Record<string, unknown>;
+    expect(provider.apiKey).toBeUndefined();
+    expect(provider.apiKeyPool).toBeUndefined();
+    expect(provider.azureCredential).toBeUndefined();
+    expect(provider.disabled).toBe(true);
+    expect(provider.forwardCompatibleFlag).toBe("retain-me");
+    expect(provider.authMode).toBe("oauth");
   });
 
   test("a fresh login on an unconfigured provider gets the untouched preset", () => {
     const config = { port: 10100, defaultProvider: "openai", providers: {} } as unknown as OcxConfig;
+    const preset = OAUTH_PROVIDERS.xai!.providerConfig;
+    const before = structuredClone(preset);
     upsertOAuthProvider(config, "xai");
     const provider = config.providers.xai!;
     expect(provider.authMode).toBe("oauth");
     expect(provider.apiKey).toBeUndefined();
     expect(provider.apiKeyPool).toBeUndefined();
+    expect(provider.models).not.toBe(preset.models);
+    provider.models!.push("test-only-model");
+    expect(preset).toEqual(before);
+  });
+
+  test("promotes the legacy Command Code static catalog during OAuth upsert", () => {
+    const config = {
+      port: 10100,
+      defaultProvider: "command-code",
+      providers: {
+        "command-code": {
+          adapter: "command-code",
+          baseUrl: "https://api.commandcode.ai",
+          authMode: "oauth",
+          liveModels: false,
+          defaultModel: "deepseek-v4-flash",
+          models: ["deepseek-v4-flash", "kimi-k3", "glm-5.2"],
+          note: "operator-note",
+        },
+      },
+    } as unknown as OcxConfig;
+
+    upsertOAuthProvider(config, "command-code");
+
+    expect(config.providers["command-code"]!.liveModels).toBe(true);
+    expect(config.providers["command-code"]!.note).toBe("operator-note");
   });
 });

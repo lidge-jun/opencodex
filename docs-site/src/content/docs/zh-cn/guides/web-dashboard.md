@@ -47,6 +47,14 @@ bun run dev:gui
 | **Storage** | 只读查看 CODEX_HOME 磁盘占用（会话、归档、数据库、附件）。可选归档清理：预览最旧 N%，默认隔离到 `CODEX_HOME/.trash`，或勾选后永久删除。**自动清理策略**为可选且**默认关闭**（`storageCleanupPolicy.enabled`）；可在 Storage 页配置阈值/目标/计划/模式，或点「立即运行」。可在 Storage 页从隔离区恢复（JSONL + 线程）。活动会话保持只读。Codex 锁定最新/活动的 `state_*.sqlite` 时拒绝清理与恢复。 |
 | **Stop** | 优雅地停止代理和已安装的后台服务，恢复原生 Codex 并退出（`POST /api/stop`）。在使用任务计划程序后端的 Windows 上，仪表板会拒绝并提示改用 `ocx stop`：任务结束后包装器仍可能重新拉起代理，只有运行在代理之外的 stop 才能在恢复客户端配置前确认这个重启窗口。被拒绝时不会做任何更改。 |
 
+### 筛选请求日志
+
+Logs 可组合界面、被拦截请求、提供商、完整模型名、状态、时间、速度和会话 ID，筛选当前已加载的日志。选项包含回退尝试；模型匹配忽略大小写及首尾空格，但不做部分匹配。日志中消失的选项恢复为全部。
+
+时间范围为最近 15 分钟、1 小时或 1 天；Logs 标签页每 30 秒更新一次，即使关闭自动刷新也会更新。速度按完整请求耗时计算每秒输出 token，分为小于 15、15 至小于 50、至少 50；启用速度筛选时排除无测量值的请求。成功为 2xx，错误为 4xx/5xx。
+
+显示匹配数与已加载总数；重置恢复全部行，并区分无匹配与空日志。界面选择支持方向键及 Home/End，不查询已加载范围之外的历史记录。
+
 ### 链接到某个部分
 
 布局只有一种，无需切换。Dashboard 的各个部分都有自己的地址：`#dashboard` 打开 Overview，`#dashboard/providers` 与 `#dashboard/models` 打开另外两个。刷新、收藏和后退都会保留当前所在的部分。**Logs** 同理，使用 `#logs` 与 `#logs/debug`。旧的 `#providers/workspace` 书签现在会跳转到 `#providers`。
@@ -57,6 +65,19 @@ bun run dev:gui
 ## 模型可见性
 
 **Models** 开关表示 Codex 中的最终可见状态。路由模型只有在 provider allowlist 中（或未设置 allowlist）且未被禁用时才会开启。开启模型会原子地协调两个过滤条件；**全部开启** 会清除 allowlist，因此以后新发现的模型也会开启。
+
+### 在提供方工作区管理模型
+
+在提供方的**模型**标签页中，**删除**会移除已保存的自定义定义。原有的原生模型或实时发现的模型可能
+重新显示，因此模型数量可能保持不变。**隐藏**只改变目录可见性，不会删除定义，也不会改变直接路由策略。
+点击**在模型中管理可见性**可打开**模型**页面并恢复显示；即使提供方标签页已没有任何模型行，也能使用此入口。
+
+**添加**会保存自定义定义，但不会清除已有的隐藏状态或提供方选择规则。保存后的模型可能仍被隐藏。
+如果模型已存在，请在**模型**页面管理其可见性。已确认保存时，即使目录刷新失败，定义也已保存；
+请按刷新提示操作，不要重复添加。若无法确认更改结果，请先刷新模型状态，再重试。
+
+提供方的模型数量统计服务器返回的当前模型清单中未禁用的唯一条目，计数在搜索和显示数量限制之前进行。
+它不是允许列表的大小或实时发现的模型数量，也不能证明条目来自上游发现。选择标记和发现信息与该计数分开显示。
 
 ## 委派选择器与生成路由的区别
 
@@ -141,7 +162,7 @@ GUI 是代理 JSON 管理 API 之上的轻量客户端。常用 endpoint 包括�
 | `PUT /api/codex-auth/active` · `PUT /api/codex-auth/auto-switch` · `PUT /api/codex-auth/failover` | 选择下一次请求使用的账号并配置账号池路由。 |
 | `GET /api/codex-auth/active` · `PUT /api/codex-auth/accounts/priority` | 读取实际生效的账号（含表示是否固定的 `pinned` 和指明被固定账号的 `pinnedAccountId`），并设置单个账号的选择顺序。 |
 | `POST /api/codex-auth/login` · `GET /api/codex-auth/login-status` | 通过浏览器登录添加池账号。 |
-| `GET /api/logs?tail=50&limit=20&offset=0&provider=...&status=5xx` | 使用 tail、provider、精确状态码或状态类别筛选近期请求元数据。`limit`/`offset` 从最新一行向前分页（`offset=0` 为最新一页）。响应为 `{ timeZone, total, logs }`，其中 `total` 为分页前的匹配行数。 |
+| `GET /api/logs?tail=50&limit=20&offset=0&provider=...&status=5xx` | 使用 tail、provider、精确状态码或状态类别筛选近期请求元数据。`limit`/`offset` 从最新一行向前分页（`offset=0` 为最新一页）。响应为 `{ timeZone, generatedAt, total, logs }`，其中 `total` 为分页前的匹配行数。 |
 | `GET` / `PUT /api/subagent-models` | 读取或设置五个置顶的 `spawn_agent` override 模型。 |
 | `POST /api/stop` | 停止代理/服务，恢复原生 Codex 并退出。在 Windows 任务计划程序后端会以 `respawnable_service` 拒绝，无法读取该状态时以 `service_state_unknown` 拒绝；两种情况都不会做任何更改。 |
 

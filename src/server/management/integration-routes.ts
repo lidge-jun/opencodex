@@ -9,6 +9,12 @@
  * Design of record: devlog/_fin/260802_client_toggle_api/040_wp4_management_api.md.
  */
 import { readFileSync } from "node:fs";
+import { saveConfigPreservingClaudeCode } from "../../config";
+import { listAsideProfileStates, type AsideProfilesInput } from "../../integrations/aside-profiles";
+import {
+  handleAsideProfileRoutes, asideJournalResponse, asideRestoreResponse,
+  asideJournalDeleteResponse, type AsideProfileRouteOptions,
+} from "./aside-profile-routes";
 import type { IntegrationIO } from "../../integrations/config-io";
 import { matchesOperationResult } from "../../integrations/journal";
 import {
@@ -41,6 +47,8 @@ import { loadExportModels } from "./model-rows";
 
 
 const INTEGRATION_ROUTE_PREFIX = "/api/client-integrations/";
+const INTEGRATION_COLLECTION_PATH = "/api/client-integrations";
+const INTEGRATION_HISTORY_PATHS = ["/api/client-integrations/journal", "/api/client-integrations/restore"];
 export { INTEGRATION_MUTATION_TERMINAL_MS };
 
 type IntegrationStateRecord = Awaited<ReturnType<typeof readIntegrationState>>;
@@ -85,6 +93,7 @@ export interface IntegrationJournalRow {
    * is what a user reaches for right after the mistake.
    */
   deletable: boolean;
+  profileId?: number;
 }
 
 export interface IntegrationToggleBody {
@@ -179,6 +188,23 @@ export function setIntegrationMutationFlightTestHooks(
  */
 function integrationStore(): IntegrationStateStore {
   return integrationMutationTestHooks?.store ?? createIntegrationStateStore();
+}
+
+function asideOptions(ctx: ManagementContext): AsideProfileRouteOptions {
+  let input: AsideProfilesInput | undefined;
+  return {
+    input: () => input ??= {
+      config: ctx.config,
+      port: Number(ctx.url.port) || ctx.config.port,
+      models: () => loadExportModels(ctx.config),
+      store: integrationStore(),
+      ...pathOverrides(),
+      io: integrationMutationTestHooks?.io,
+      lockSeams: integrationMutationTestHooks?.lockSeams,
+      persistConfig: ctx.deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode,
+    },
+    failure: result => writerFailureResponse("aside", result, ctx),
+  };
 }
 
 async function buildIntegrationWriteInput(
@@ -331,6 +357,8 @@ async function handleJournalDelete(ctx: ManagementContext): Promise<Response> {
       code: "invalid_op_id",
     }, 400, req, ctx.config);
   }
+  const aside = await asideJournalDeleteResponse(ctx, opId, asideOptions(ctx));
+  if (aside) return aside;
   try {
     const store = integrationStore();
     const operation = store.findOperation(opId);
@@ -392,6 +420,14 @@ async function handleJournalDelete(ctx: ManagementContext): Promise<Response> {
 
 export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url } = ctx;
+  const profileOptions = asideOptions(ctx);
+  const aside = await handleAsideProfileRoutes(ctx, profileOptions);
+  if (aside) return aside;
+  if (url.searchParams.has("profile")
+    && (url.pathname === INTEGRATION_COLLECTION_PATH || url.pathname.startsWith(INTEGRATION_ROUTE_PREFIX))
+    && !INTEGRATION_HISTORY_PATHS.includes(url.pathname)) {
+    return jsonResponse({ error: "profile applies only to Aside", code: "invalid_aside_profile" }, 400, req, ctx.config);
+  }
 
   if (url.pathname === "/api/client-integrations" && req.method === "GET") {
     try {
@@ -408,8 +444,13 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
        * later one silently — a duplicate that could only ever hide a
        * disagreement, never surface it.
        */
-      const clients = INTEGRATION_CLIENT_IDS.map(clientId =>
-        readIntegrationState({ clientId, models, config: ctx.config, port, store, ...pathOverrides() }));
+      const clients = await Promise.all(INTEGRATION_CLIENT_IDS.map(async clientId => {
+        if (clientId === "aside") {
+          try { return await listAsideProfileStates({ ...profileOptions.input(), models }); }
+          catch { /* Existing status projection retains a safe unresolved-path diagnostic. */ }
+        }
+        return readIntegrationState({ clientId, models, config: ctx.config, port, store, ...pathOverrides() });
+      }));
       return jsonResponse({ clients } satisfies IntegrationStateListEnvelope, 200, req, ctx.config);
     } catch (error) {
       return internalErrorResponse(error, ctx);
@@ -426,6 +467,8 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
     if (requestedClient !== null && !isIntegrationClientId(requestedClient)) {
       return invalidClientResponse(ctx);
     }
+    const asideJournal = await asideJournalResponse(ctx, requestedClient, profileOptions);
+    if (asideJournal) return asideJournal;
     try {
       const store = integrationStore();
       const storedOperations = store.listOperations(requestedClient ?? undefined);
@@ -435,7 +478,7 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
           newestByClient.set(operation.clientId, operation.opId);
         }
       }
-      const operations: IntegrationJournalRow[] = storedOperations.map(operation => {
+      let operations: IntegrationJournalRow[] = storedOperations.map(operation => {
         /*
          * Resolved against the DISK, not read off the row.
          *
@@ -481,6 +524,14 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
           deletable: newestByClient.get(operation.clientId) !== operation.opId,
         };
       });
+      if (requestedClient === null) {
+        const profiles = await asideJournalResponse(ctx, "aside", profileOptions);
+        if (profiles?.ok) {
+          const body = await profiles.json() as IntegrationJournalEnvelope;
+          operations = [...operations.filter(row => row.clientId !== "aside"), ...body.operations]
+            .sort((a, b) => b.at.localeCompare(a.at));
+        }
+      }
       return jsonResponse({ operations } satisfies IntegrationJournalEnvelope, 200, req, ctx.config);
     } catch (error) {
       return internalErrorResponse(error, ctx);
@@ -506,6 +557,8 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
 
     const opId = parsed.opId.trim();
     const confirmDrift = parsed.confirmDrift ?? false;
+    const asideRestore = await asideRestoreResponse(ctx, { opId, confirmDrift }, profileOptions);
+    if (asideRestore) return asideRestore;
     let restoreClientId: IntegrationClientId | undefined;
     try {
       const store = integrationStore();
@@ -570,6 +623,11 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
   const requestedClient = decodeClientPath(url.pathname);
   if (requestedClient === null) return null;
   if (!isIntegrationClientId(requestedClient)) return invalidClientResponse(ctx);
+  // Canonical Aside paths are owned above. Never decode an alternate spelling
+  // into the legacy single-account writer or bypass profile policy/guards.
+  if (requestedClient === "aside") {
+    return jsonResponse({ error: "Use the canonical Aside profile path", code: "invalid_aside_profile_path" }, 400, req, ctx.config);
+  }
 
   if (req.method === "GET") {
     try {

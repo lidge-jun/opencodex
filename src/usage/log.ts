@@ -55,9 +55,14 @@ export type AttemptRecoveryKind =
   | "opaque-blob-rejection"
   | "empty-completion";
 
+/** Request-time upstream credential class, never a credential or account identifier. */
+export type UsageCredentialSource = "grok-oauth" | "xai-api-key";
+
 export interface PersistedUsageAttempt {
   ordinal: number;
   provider: string;
+  /** Absent on historic attempts and routes whose subscription attribution is unknown. */
+  credentialSource?: UsageCredentialSource;
   model: string;
   adapter: string;
   status: number;
@@ -400,6 +405,10 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
   return {
     ordinal: attempt.ordinal as number,
     provider: attempt.provider,
+    ...(attempt.provider === "xai"
+      && (attempt.credentialSource === "grok-oauth" || attempt.credentialSource === "xai-api-key")
+      ? { credentialSource: attempt.credentialSource }
+      : {}),
     model: attempt.model,
     adapter: attempt.adapter,
     status: attempt.status,

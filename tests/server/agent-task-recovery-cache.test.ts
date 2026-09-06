@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
+  agentTaskRecoveryCacheSnapshotForTests,
+  agentTaskRecoveryWaiterCountForTests,
+  cachedAgentTaskRecovery,
   resetAgentTaskRecoveryCache,
   resolveCachedAgentTaskRecovery,
 } from "../../src/server/responses/agent-task-recovery-cache";
@@ -12,6 +15,61 @@ describe("agent task recovery cache", () => {
   afterEach(() => {
     Date.now = realDateNow;
     resetAgentTaskRecoveryCache();
+  });
+
+  test("read-only hits retain the original expiry and exact-expiry reads release UTF-8 bytes", async () => {
+    const insertedAt = 1_800_000_000_000;
+    let now = insertedAt;
+    Date.now = () => now;
+    let requests = 0;
+    expect(cachedAgentTaskRecovery("missing")).toBeNull();
+    expect(agentTaskRecoveryCacheSnapshotForTests()).toEqual({ entries: 0, bytes: 0 });
+    expect(await resolveCachedAgentTaskRecovery("task", 200, async () => {
+      requests++;
+      return "한😀"; // Three UTF-8 bytes plus four, rather than three UTF-16 code units.
+    })).toBe("한😀");
+
+    for (const elapsed of [0, 60_000, 15 * 60 * 1000 - 1]) {
+      now = insertedAt + elapsed;
+      expect(cachedAgentTaskRecovery("task")).toBe("한😀");
+      expect(agentTaskRecoveryCacheSnapshotForTests()).toEqual({ entries: 1, bytes: 7 });
+    }
+    now = insertedAt + 15 * 60 * 1000;
+    expect(cachedAgentTaskRecovery("task")).toBeNull();
+    expect(agentTaskRecoveryCacheSnapshotForTests()).toEqual({ entries: 0, bytes: 0 });
+    expect(cachedAgentTaskRecovery("task")).toBeNull();
+    expect(requests).toBe(1);
+
+    // Repeated expiry reads must not subtract bytes belonging to a later entry.
+    await resolveCachedAgentTaskRecovery("later", 200, async () => "ok");
+    expect(cachedAgentTaskRecovery("task")).toBeNull();
+    expect(cachedAgentTaskRecovery("later")).toBe("ok");
+    expect(agentTaskRecoveryCacheSnapshotForTests()).toEqual({ entries: 1, bytes: 2 });
+  });
+
+  test("read-only misses do not join or restart an in-flight recovery", async () => {
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let requests = 0;
+    const pending = resolveCachedAgentTaskRecovery("pending", 200, async () => {
+      requests++;
+      await gate;
+      return "recovered";
+    });
+    try {
+      expect(cachedAgentTaskRecovery("pending")).toBeNull();
+      expect(cachedAgentTaskRecovery("unknown")).toBeNull();
+      expect(cachedAgentTaskRecovery("pending")).toBeNull();
+      expect(agentTaskRecoveryWaiterCountForTests()).toBe(1);
+      expect(agentTaskRecoveryCacheSnapshotForTests()).toEqual({ entries: 0, bytes: 0 });
+      expect(requests).toBe(1);
+    } finally {
+      release?.();
+      await pending;
+    }
+    expect(cachedAgentTaskRecovery("pending")).toBe("recovered");
+    expect(agentTaskRecoveryWaiterCountForTests()).toBe(0);
+    expect(requests).toBe(1);
   });
 
   test("expires recovered plaintext after fifteen minutes", async () => {

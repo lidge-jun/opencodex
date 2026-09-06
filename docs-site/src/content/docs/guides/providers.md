@@ -620,6 +620,12 @@ A provider is included when opencodex has a matching wire adapter, **not** based
 (AI Studio, Vertex, and Antigravity/Cloud Code Assist modes), `azure` / `azure-openai`, `kiro`, and
 `cursor`. A proprietary API without one of these implementations, such as native Amazon Bedrock,
 is not supported directly.
+
+Provider configuration selects the adapter; upstream transport selection is separate. Eligible
+Responses traffic can use WSS with [explicit proxy routing](/reference/proxy-formats/#json-and-sse-output).
+Invalid or unsupported WebSocket proxy settings fall back to HTTP/SSE, which uses Bun's HTTP
+proxy rules rather than the WSS-specific `ALL_PROXY` fallback.
+
 **GitHub Copilot** is an OAuth provider (`ocx login github-copilot`) that exchanges a GitHub
 device-flow login for a short-lived Copilot API token — not a pasted API key. **GitLab Duo** remains
 a key/subscription-token gateway on its OpenAI-compatible endpoint. **Cloudflare AI

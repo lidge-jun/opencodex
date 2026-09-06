@@ -1506,11 +1506,14 @@ async function fetchProviderModelsWithAuth(
     && prov.googleMode === "vertex"
     && (prov.models?.length ?? 0) === 0
     && Boolean(prov.defaultModel);
-  // Ordered dedupe union: Vertex seed, then `models`, then `retainModels`. `configured` is the
+  const seedStaticDefault = prov.liveModels === false
+    && (prov.models?.length ?? 0) === 0
+    && Boolean(prov.defaultModel);
+  // Ordered dedupe union: implicit default seed, then `models`, then `retainModels`. `configured` is the
   // single seed for the static path, the degraded fallback, drop diagnostics, and provider hints,
   // so a retain-only id must enter here or it never exists to be retained (#1690).
   const configuredIds = [...new Set([
-    ...(seedVertexDefault && prov.defaultModel ? [prov.defaultModel] : []),
+    ...((seedVertexDefault || seedStaticDefault) && prov.defaultModel ? [prov.defaultModel] : []),
     ...(prov.models ?? []),
     ...(prov.retainModels ?? []),
   ])];
@@ -1563,9 +1566,8 @@ async function fetchProviderModelsWithAuth(
     : resolveAuth.resolve(name, prov));
   const apiKey = auth.apiKey;
   // A configured default is a real callable selector and must remain discoverable when a
-  // compatible provider's live /models request fails (issue #308). Keep this separate from the
-  // explicit static list: `liveModels: false` + empty `models[]` intentionally publishes zero
-  // rows, while a failed live discovery may degrade to the default selector.
+  // compatible provider's live /models request fails (issue #308). Static providers already seed
+  // their default selector above when no explicit model list exists.
   const failedDiscoveryConfigured = configured.length > 0 || !prov.defaultModel || prov.adapter !== "anthropic"
     ? configured
     : [{

@@ -50,6 +50,56 @@ If an older development build changed resume-history metadata before backup supp
 It force-relabels every user-message `opencodex` row, including legitimate dedicated-provider
 history; review the full-scope warning in the lifecycle reference before running it.
 
+## Codex quota network diagnostics
+
+The main Codex account row may include `quotaRefresh` when a quota fetch was
+attempted. This describes that fetch, not remaining quota, model access or
+permission to retry. Cached reads and rows without a fetch may omit it; absence
+does not mean success. A `null` quota value means unavailable, not zero quota.
+
+To request fresh data and display only the diagnostic in PowerShell:
+
+```powershell
+$quotaReport = ocx account list openai --quota --refresh --json | ConvertFrom-Json
+$quotaReport.accounts |
+    ForEach-Object { if ($_.quotaRefresh) { $_.quotaRefresh } } |
+    ConvertTo-Json -Depth 3
+```
+
+If no diagnostic is present, this projection produces no diagnostic object. Share
+only these fields when comparing network modes, rather than the full account list.
+
+| `quotaRefresh.status` | Meaning |
+| --- | --- |
+| `ok` | The fetch completed and a quota object was parsed. |
+| `not_reported` | The response contained no usable quota object. |
+| `http_error` | The upstream returned an HTTP failure; `httpStatus` contains its status code. |
+| `timeout` | The quota fetch timed out. |
+| `network_error` | The request failed before a classified HTTP response. |
+| `invalid_response` | The response was not a usable quota document. |
+| `internal_error` | An internal refresh step failed. |
+
+Only `http_error` includes `httpStatus`. Other statuses do not imply HTTP 0 or an
+account entitlement problem.
+
+### Which proxy path is used?
+
+The running proxy service fetches quota. It uses its own environment, not the
+interactive shell that later runs `ocx account list`. Configure the service's
+proxy setting or environment, then restart it; changing variables in another
+terminal does not update an already running service.
+
+An unset `proxy` leaves inherited proxy variables unchanged. An explicit HTTP(S)
+proxy URL fills `HTTP_PROXY` and `HTTPS_PROXY` only where they are unset.
+`"proxy": "auto"` reads the Windows static WinINET proxy once at startup; existing
+proxy environment variables take precedence. Auto discovery does not resolve
+PAC/WPAD, SOCKS-only settings or live proxy changes. Use a supported static HTTP
+proxy setting or an explicit HTTP(S) proxy URL when needed.
+
+Compare the diagnostic on the same machine and account under the two network
+modes. A successful TUN test alone does not identify why the service's HTTP proxy
+path failed, and does not establish a general fix.
+
 ## Remote access
 
 The default `127.0.0.1` bind is loopback-only. A non-loopback address such as `0.0.0.0` requires

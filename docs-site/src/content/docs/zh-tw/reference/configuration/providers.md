@@ -27,8 +27,9 @@ ocx models provider openrouter on
 | `providers` | `Record<string, OcxProviderConfig>` | — | 供應商名稱到供應商設定的映射。 |
 | `openaiProviderTierVersion?` | `2` | 由遷移設定 | 標記單一選項感知的 OpenAI projection 已完成。 |
 | `disabledModels?` | `string[]` | — | 對 Codex 目錄與 `/v1/models` 隱藏的模型，但不阻擋直接代理呼叫。路由 id 從清單中移除；裸原生 GPT id 取得 `visibility: "hide"`。 |
-| `providerContextCaps?` | `Record<string, number>` | `{}` | Per-供應商的 Codex 可見 context 上限。上限只會降低已知的 context window。 |
-| `contextCapValue?` | `number` | `350000` | 儀表板 context-cap 控制使用的值；變更它會更新每個啟用的 `providerContextCaps` 項目。 |
+| `providerContextCaps?` | `Record<string, number>` | `{}` | 各供應商目前生效的上下文上限。一般視窗只能縮小；支援長視窗的原生模型可以擴展到該模型支援的上限。 |
+| `providerContextCapValues?` | `Record<string, number>` | `{}` | 各供應商最後選擇的上限，停用後仍保留。僅儲存這些值不會啟用上限。生效中的值優先於儲存的選擇值。 |
+| `contextCapValue?` | `number` | `350000` | 首次啟用時使用的預設值。再次啟用時恢復該供應商的選擇值。修改全域值時附帶 `setAll: true` 只會更新已啟用的上限；不帶值的 `setAll: true` 會以目前全域值啟用所有已設定供應商的上限。 |
 | `codexAccounts?` | `CodexAccount[]` | `[]` | 由 Codex Auth 管理的 ChatGPT/Codex 池帳號中繼資料。秘密分別存在 `codex-accounts.json`。 |
 | `pausedCodexAccountIds?` | `string[]` | `[]` | 被排除於池選擇直到恢復的帳號，包含暫停時的 main `__main__` 帳號。 |
 | `codexAccountNamespaces?` | `Record<string, string>` | — | 公開模型選擇器命名空間到已儲存 Codex 帳號目標。這會驗證並持久化映射，但不會自行新增 picker 列或變更路由。 |
@@ -63,7 +64,7 @@ ocx models provider openrouter on
 | `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Anthropic 金鑰標頭風格。預設為原生 `x-api-key`；僅對 key-auth `anthropic` 供應商有效。 |
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | 多金鑰池。`apiKey` 反映現用項目；每個項目有 `id`、`key`、可選 `label` 與可選數值 `addedAt`。 |
 | `defaultModel?` | `string` | 在未指定明確模型時選擇此供應商所使用的模型。 |
-| `models?` | `string[]` | 播種／後備模型清單。在 `liveModels: false` 時，這些是唯一探索的模型。 |
+| `models?` | `string[]` | 初始／後備模型列表。`liveModels: false` 時，非空 `models` 後接 `retainModels`；若 `models` 為空或省略，則按已設定的 `defaultModel`、`retainModels` 順序建立初始列表，重複 ID 僅保留首次出現的位置。 |
 | `liveModels?` | `boolean` | 在啟動／同步時擷取即時目錄（預設 `true`）。自訂供應商使用 `${baseUrl}/models`；內建可能使用 registry URL 並過濾。 |
 | `selectedModels?` | `string[]` | 探索後的目錄允許清單。非空時僅暴露那些 id；空或省略時暴露所有探索的模型。 |
 | `contextWindow?` | `number` | 供應商範圍的 Codex 可見 context 上限。較小的即時中繼資料被保留。 |
@@ -324,7 +325,14 @@ Vercel AI Gateway 可在多個底層推論供應商之間路由一個模型。`v
 
 ## 靜態模型允許清單
 
-設定 `liveModels: false` 以僅暴露 `models`。若 `models` 為空或省略，供應商暴露無路由模型。即時探索在快取前拒絕超過 4 MiB 或 2,000 個原始模型列；內建預設可能使用較低限制並過濾到 chat 合格列。過大或格式錯誤的結果遵循過時／設定的後備。有效的零合格結果恆為權威，且不被靜默取代或截斷。
+`liveModels: false` 時，若 `models` 為空或省略，初始列表先加入已設定的 `defaultModel`，
+再加入 `retainModels`，重複 ID 僅保留首次出現的位置。若明確設定了非空 `models`，則按
+`models`、`retainModels` 順序建立，不會自動加入另一個 `defaultModel`；仍可將該模型明確寫入
+`models` 或 `retainModels`。這些欄位均未提供 ID 時，初始列表為空。此順序不保證最終選擇器的顯示順序。
+`selectedModels`、`disabledModels` 與供應商停用規則仍然適用。`authMode: "forward"` 保留原有獨立分支，
+不使用此靜態路由列表。這些規則不改變即時探索失敗時的後備行為。
+
+即時探索在快取前拒絕超過 4 MiB 或 2,000 個原始模型列；內建預設可能使用較低限制並過濾到 chat 合格列。過大或格式錯誤的結果遵循過時／設定的後備。有效的零合格結果恆為權威，且不被靜默取代或截斷。
 
 當探索應仍然執行但只有 selected id 應出現在 Codex 與 `/v1/models` 時，請使用 `selectedModels`。儀表板保留完整的探索清單供日後允許清單變更。
 

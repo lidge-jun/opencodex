@@ -13,6 +13,7 @@
 // (passthrough relay, adapter parsers, usage sniffing) is unchanged.
 
 import { compareBunVersions } from "../../lib/bun-stream-caps";
+import { resolveProxyRoute } from "../../lib/proxy-env";
 import type { CodexWsQuotaObserver } from "./codex-ws-metadata";
 import { CODEX_RESPONSES_HTTP_URL, CODEX_RESPONSES_WS_URL, prepareCodexHttpInit, prepareCodexWsRequest } from "./codex-ws-request";
 import { codexWsExchange } from "./codex-ws-exchange";
@@ -150,6 +151,10 @@ export function codexWsUpstreamFetch(
     return sseFallback(url, init);
   }
 
+  const wsUrl = wsUpstreamUrlFor(url);
+  const proxyRoute = resolveProxyRoute(new URL(wsUrl));
+  if (proxyRoute.kind === "fallback") return sseFallback(url, init);
+  const proxy = proxyRoute.kind === "proxy" ? proxyRoute.proxy : undefined;
   // A genuine caller `originator` is already in these headers via the forward
   // set. Never fabricate one here: pool/forward traffic must not impersonate
   // Codex CLI, per the metadata-integrity contract. (The backend's fast lane
@@ -164,9 +169,9 @@ export function codexWsUpstreamFetch(
   }
   let session: CodexWsSession;
   try {
-    const identity = codexWsReuseIdentity(url, headers, frameText);
-    session = (identity ? codexWsPool.acquire(identity, wsUpstreamUrlFor(url), headers) : null)
-      ?? new CodexWsSession(wsUpstreamUrlFor(url), headers);
+    const identity = codexWsReuseIdentity(url, headers, frameText, proxy);
+    session = (identity ? codexWsPool.acquire(identity, wsUrl, headers, proxy) : null)
+      ?? new CodexWsSession(wsUrl, headers, false, undefined, proxy);
     if (!session.busy && !session.reserve()) {
       session.dispose();
       return sseFallback(url, init);

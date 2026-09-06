@@ -167,3 +167,7 @@ Anthropic OAuth サイドカーは、opencodex の既存のクロード コー�
 `runtimeRole` の既定値は `standalone` です。hub は `hub.managementPublicOrigin`、loopback 限定の `hub.managementIngress`（未設定時 `enabled:false`）、正確な `remoteGui.allowedTailscaleUsers`（未設定時は空）を使います。クライアントキーは `config.json` ではなく `service-api-token` に保存され、更新中だけ `service-api-token.prev` が存在する場合があります。使用量はミラーリングされません。
 
 `remoteGui.allowInsecureHttp` は、古い strict-schema 設定を読み込むためだけに残された非推奨の no-op です。設定から削除してください。pairing grant は loopback または認証済み HTTPS でのみ受け付けられ、この値を `true` にしても平文 HTTP pairing は再び有効になりません。
+
+## Codex クォータのネットワーク診断
+
+メイン Codex アカウント行の `quotaRefresh` はクォータ取得の診断情報であり、残量やモデルへのアクセス権を示すものではありません。キャッシュ利用時や取得を行わない場合は省略されることがあります。取得には操作中のシェルではなく、実行中のプロキシサービスの環境が使われます。`proxy` 未設定では既存の環境を維持し、`"auto"` は起動時に Windows の静的プロキシ設定だけを読みます。PAC/WPAD、SOCKS のみの設定、実行中の変更は自動反映されません。TUN での成功だけでは HTTP プロキシ経路の正常性は確認できません。[コマンドと状態の説明（英語）](/reference/configuration/server/#codex-quota-network-diagnostics)を参照してください。
