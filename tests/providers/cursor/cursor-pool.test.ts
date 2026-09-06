@@ -132,13 +132,14 @@ describe("CursorPoolKernel", () => {
     s.kernel.remove(b.accountRef, s.capability);
     expect(s.kernel.currentGeneration).toBeGreaterThan(generationBeforeRemove);
     expect(s.kernel.rollback(snap, s.capability)).toBe(false);
-    s.setAccounts([]);
-    expect(s.kernel.pick("b", "t", s.capability)).toBeNull();
+    const reminted = s.kernel.pick("b", "t", s.capability);
+    expect(reminted).not.toBeNull();
+    expect(reminted?.accountRef).not.toBe(b.accountRef);
     expect(CURSOR_POOL_TTL_MS).toBeGreaterThan(0);
     s.advance(CURSOR_POOL_TTL_MS + 1);
     s.kernel.pick("a", "t2", s.capability);
     s.kernel.clear(s.capability);
-    expect(s.kernel.pick("a", "t", s.capability)).toBeNull();
+    expect(s.kernel.pick("a", "t", s.capability)).not.toBeNull();
     expect(a.accountRef).toBe(b.accountRef);
   });
 

@@ -235,12 +235,15 @@ export class CursorPoolKernel {
       if (s.ref === accountRef) this.states.delete(k);
     for (const [k, v] of this.affinity)
       if (v === accountRef) this.affinity.delete(k);
+    for (const [id, ref] of this.refs)
+      if (ref === accountRef) this.refs.delete(id);
     this.generation++;
   }
   clear(capability: symbol): void {
     if (capability === this.capability) {
       this.states.clear();
       this.affinity.clear();
+      this.refs.clear();
       this.generation++;
     }
   }
