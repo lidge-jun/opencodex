@@ -131,7 +131,9 @@ func probeStatusHealth(port int, hostname string, client *http.Client) StatusHea
 	}
 	defer response.Body.Close()
 	var body map[string]any
-	if response.StatusCode != http.StatusOK {
+	// Response.ok in the TypeScript oracle accepts every 2xx response, not
+	// only 200. Preserve that distinction before validating the JSON identity.
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		result.Message = fmt.Sprintf("returned HTTP %d", response.StatusCode)
 		return result
 	}

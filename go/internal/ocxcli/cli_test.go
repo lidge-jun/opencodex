@@ -389,6 +389,22 @@ func TestStatusEvidenceUsesTypeScriptHealthzMessageRules(t *testing.T) {
 	}
 }
 
+func TestStatusEvidenceAcceptsAnySuccessfulHealthzStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]any{"service": "opencodex"})
+	}))
+	defer server.Close()
+	port := serverPort(strings.TrimPrefix(server.URL, "http://"))
+	probe := ProbeStatusEvidence(StatusProbeDeps{
+		LoadConfig:  func() (*config.Config, error) { return &config.Config{Port: port}, nil },
+		ReadRuntime: func() (StatusRuntimeRecord, error) { return StatusRuntimeRecord{}, errors.New("missing") },
+	})
+	if !probe.Health.OK || probe.Health.Message != "ok" {
+		t.Fatalf("health = %#v", probe.Health)
+	}
+}
+
 func TestDelegatedFamilyHelpUsesOwnerOutput(t *testing.T) {
 	for _, command := range []string{"status", "doctor", "service"} {
 		t.Run(command, func(t *testing.T) {
