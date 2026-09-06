@@ -143,3 +143,38 @@ func TestSetCodexAccountPrioritiesClearsManualPin(t *testing.T) {
 		t.Fatalf("unrelated config set removed pin: %s", otherJSON)
 	}
 }
+
+func TestStrictWriteSchemaRejectsLoadDegradedFields(t *testing.T) {
+	cases := []struct{ raw, want string }{
+		{`{"providers":{},"hostname":"   "}`, "schema_invalid: hostname: must be a nonblank bind address"},
+		{`{"providers":{},"appOwnedMemoryBudgetMb":63}`, "schema_invalid: appOwnedMemoryBudgetMb: must be an integer from 64 to 4096"},
+		{`{"providers":{},"googleAntigravityStaticCatalogVersion":3}`, "schema_invalid: googleAntigravityStaticCatalogVersion: must be 1, 2, or omitted"},
+		{`{"providers":{},"activeCodexAccountPinned":123}`, "schema_invalid: activeCodexAccountPinned: must be an account id"},
+	}
+	for _, tc := range cases {
+		_, err := ValidateCandidateJSON([]byte(tc.raw))
+		if err == nil || err.Error() != tc.want {
+			t.Fatalf("ValidateCandidateJSON(%s) = %v, want %q", tc.raw, err, tc.want)
+		}
+	}
+}
+
+func TestApplyConfigPathMutationUsesStrictSchemaAndPinHook(t *testing.T) {
+	raw := []byte(`{"providers":{},"activeCodexAccountPinned":"acct-1","codexAccountPriorities":{"acct-1":1}}`)
+	updated, saved, changed, err := ApplyConfigPathMutation(raw, "codexAccountPriorities.acct-1", "2", false)
+	if err != nil || !changed {
+		t.Fatalf("mutation = %v, changed=%t", err, changed)
+	}
+	savedJSON, _ := saved.CompactJSON()
+	if string(savedJSON) != "2" {
+		t.Fatalf("saved value = %s", savedJSON)
+	}
+	updatedJSON, _ := updated.CompactJSON()
+	if strings.Contains(string(updatedJSON), "activeCodexAccountPinned") {
+		t.Fatalf("set retained pin: %s", updatedJSON)
+	}
+	_, _, _, err = ApplyConfigPathMutation(raw, "hostname", `" "`, false)
+	if err == nil || err.Error() != "schema_invalid: hostname: must be a nonblank bind address" {
+		t.Fatalf("strict mutation error = %v", err)
+	}
+}

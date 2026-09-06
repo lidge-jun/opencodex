@@ -49,10 +49,43 @@ func ValidateCandidateJSON(raw []byte) (*Normalized, error) {
 	if v.kind != objectKind {
 		return nil, errors.New("schema_invalid: Invalid input: expected object, received array")
 	}
+	if err := validateStrictWriteFields(v); err != nil {
+		return nil, err
+	}
 	if err := validateTop(v); err != nil {
 		return nil, err
 	}
 	return &Normalized{root: normalizeLoad(v)}, nil
+}
+
+// validateStrictWriteFields covers fields which deliberately degrade on the
+// read path but must refuse a live config set/import instead of silently
+// deleting or replacing operator intent.
+func validateStrictWriteFields(v *value) error {
+	if x := v.find("hostname"); x != nil && (x.kind != stringKind || strings.TrimSpace(x.text) == "") {
+		return errors.New("schema_invalid: hostname: must be a nonblank bind address")
+	}
+	if x := v.find("appOwnedMemoryBudgetMb"); x != nil && !validIntRange(x, 64, maxAppOwnedMemoryBudgetMB) {
+		return fmt.Errorf("schema_invalid: appOwnedMemoryBudgetMb: must be an integer from 64 to %d", maxAppOwnedMemoryBudgetMB)
+	}
+	if x := v.find("upstreamHostCircuitThreshold"); x != nil && !validIntRange(x, 0, 100) {
+		return errors.New("schema_invalid: upstreamHostCircuitThreshold: must be an integer from 0 to 100")
+	}
+	if x := v.find("googleAntigravityStaticCatalogVersion"); x != nil && !(x.kind == numberKind && (x.number.String() == "1" || x.number.String() == "2")) {
+		return errors.New("schema_invalid: googleAntigravityStaticCatalogVersion: must be 1, 2, or omitted")
+	}
+	if x := v.find("activeCodexAccountPinned"); x != nil && (x.kind != stringKind || !regexp.MustCompile(`^[a-zA-Z0-9._-]{1,64}$`).MatchString(x.text)) {
+		return errors.New("schema_invalid: activeCodexAccountPinned: must be an account id")
+	}
+	if x := v.find("codexAccountPickerEnabled"); x != nil && x.kind != boolKind {
+		return errors.New("schema_invalid: codexAccountPickerEnabled: Invalid input: expected boolean, received " + zodType(x))
+	}
+	if x := v.find("visionSidecar"); x != nil && x.kind == objectKind {
+		if r := x.find("reasoning"); r != nil && (r.kind != stringKind || !map[string]bool{"none": true, "minimal": true, "low": true, "medium": true, "high": true, "xhigh": true, "max": true, "ultra": true}[r.text]) {
+			return errors.New("schema_invalid: visionSidecar.reasoning: must be one of none, minimal, low, medium, high, xhigh, max, ultra")
+		}
+	}
+	return nil
 }
 
 func (n *Normalized) CompactJSON() ([]byte, error) {
@@ -104,6 +137,122 @@ func (n *Normalized) ClearCodexAccountPinForSet(path string) bool {
 		return false
 	}
 	return n.root.delete("activeCodexAccountPinned")
+}
+
+// ApplyConfigPathMutation performs the strict config set/unset write boundary.
+// It keeps JSON object order through the private value representation, then
+// projects the result through the same schema normalization used by TS writes.
+func ApplyConfigPathMutation(raw []byte, path, rawValue string, remove bool) (config *Normalized, saved *Normalized, changed bool, err error) {
+	base, err := ValidateCandidateJSON(raw)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	candidate := cloneValue(base.root)
+	segments, err := configPathSegments(path)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	current := candidate
+	for _, segment := range segments[:len(segments)-1] {
+		next := current.find(segment)
+		if next == nil || next.kind != objectKind {
+			return nil, nil, false, fmt.Errorf("config parent path not found: %s", segment)
+		}
+		current = next
+	}
+	leaf := segments[len(segments)-1]
+	if remove {
+		if !current.delete(leaf) {
+			return nil, nil, false, fmt.Errorf("config path not found: %s", path)
+		}
+	} else {
+		parsed, parseErr := parse([]byte(rawValue))
+		if parseErr != nil {
+			parsed = stringValue(rawValue)
+		}
+		current.set(leaf, parsed)
+	}
+	compact := candidate.compact()
+	config, err = ValidateCandidateJSON(compact)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if !remove {
+		config.ClearCodexAccountPinForSet(path)
+	}
+	if !remove {
+		value, found := getConfigPathValue(config.root, segments)
+		if !found {
+			return nil, nil, false, fmt.Errorf("config path not found: %s", path)
+		}
+		saved = &Normalized{root: cloneValue(value)}
+	}
+	before, _ := base.CompactJSON()
+	after, _ := config.CompactJSON()
+	return config, saved, !bytes.Equal(before, after), nil
+}
+
+// ConfigPathValue returns a redacted JSON-ready normalized path value.
+func (n *Normalized) ConfigPathValue(path string) (*Normalized, error) {
+	segments, err := configPathSegments(path)
+	if err != nil {
+		return nil, err
+	}
+	value, ok := getConfigPathValue(n.root, segments)
+	if !ok {
+		return nil, fmt.Errorf("config path not found: %s", path)
+	}
+	return &Normalized{root: redactValue(cloneValue(value), segments[len(segments)-1])}, nil
+}
+
+func configPathSegments(path string) ([]string, error) {
+	parts := make([]string, 0)
+	for _, part := range strings.Split(path, ".") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if part == "__proto__" || part == "prototype" || part == "constructor" {
+			return nil, errors.New("invalid config path")
+		}
+		parts = append(parts, part)
+	}
+	if len(parts) == 0 {
+		return nil, errors.New("invalid config path")
+	}
+	return parts, nil
+}
+func getConfigPathValue(root *value, segments []string) (*value, bool) {
+	current := root
+	for _, segment := range segments {
+		if current == nil || current.kind != objectKind {
+			return nil, false
+		}
+		current = current.find(segment)
+		if current == nil {
+			return nil, false
+		}
+	}
+	return current, true
+}
+func cloneValue(v *value) *value {
+	if v == nil {
+		return nil
+	}
+	out := *v
+	if v.array != nil {
+		out.array = make([]*value, len(v.array))
+		for i := range v.array {
+			out.array[i] = cloneValue(v.array[i])
+		}
+	}
+	if v.object != nil {
+		out.object = make([]member, len(v.object))
+		for i := range v.object {
+			out.object[i] = member{key: v.object[i].key, value: cloneValue(v.object[i].value)}
+		}
+	}
+	return &out
 }
 
 type valueKind uint8

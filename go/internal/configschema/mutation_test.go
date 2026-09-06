@@ -103,6 +103,29 @@ func TestMutationCoordinatorCrashRecoveryReleasesImmediate(t *testing.T) {
 	}
 }
 
+func TestReplaceConfigCandidateUsesGenerationCoordinator(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	candidate, err := ValidateCandidateJSON([]byte(`{"providers":{"x":{"adapter":"openai-chat","baseUrl":"https://x.test"}},"defaultProvider":"x"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := ReplaceConfigCandidate(context.Background(), path, candidate)
+	if err != nil || !result.Changed || result.Generation != 1 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(got, []byte(`"defaultProvider": "x"`)) || got[len(got)-1] != '\n' {
+		t.Fatalf("imported config=%q", got)
+	}
+	result, err = ReplaceConfigCandidate(context.Background(), path, candidate)
+	if err != nil || result.Changed || result.Generation != 1 {
+		t.Fatalf("unchanged result=%+v err=%v", result, err)
+	}
+}
+
 func TestRevalidatedMutationRebasesAfterDirectWriterChangesBytes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	if err := os.WriteFile(path, []byte(`{"revision":1}`), 0o600); err != nil {

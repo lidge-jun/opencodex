@@ -217,6 +217,30 @@ func WithRevalidatedConfigMutation(ctx context.Context, configPath string, expec
 	})
 }
 
+// ReplaceConfigCandidate persists an already strict-validated import through
+// the shared generation coordinator. Imports intentionally replace the full
+// document and do not apply the config-set account-pin hook.
+func ReplaceConfigCandidate(ctx context.Context, configPath string, candidate *Normalized) (MutationResult, error) {
+	data, err := candidate.IndentedJSON()
+	if err != nil {
+		return MutationResult{}, err
+	}
+	data = append(data, '\n')
+	return WithMutationCoordinator(ctx, configPath, nil, func(int64) (bool, error) {
+		previous, readErr := os.ReadFile(configPath)
+		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+			return false, readErr
+		}
+		if bytes.Equal(previous, data) {
+			return false, nil
+		}
+		if err := writeConfigBytesAtomic(configPath, data); err != nil {
+			return false, err
+		}
+		return true, nil
+	})
+}
+
 func classifyMutationError(err error) error {
 	message := strings.ToLower(err.Error())
 	if strings.Contains(message, "database is locked") || strings.Contains(message, "database is busy") || strings.Contains(message, "sqlite_busy") || strings.Contains(message, "sqlite_locked") {
