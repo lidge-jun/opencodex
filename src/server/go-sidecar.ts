@@ -293,7 +293,9 @@ async function forwardTo(
       headers: goSidecarRelayHeaders(request, requestToken, relayHeaders ?? undefined),
       body,
       signal: request.signal,
-    }, pathAndSearch.startsWith("/api/provider-quotas") ? { timeoutMs: GO_SIDECAR_QUOTA_ROUTE_TIMEOUT_MS } : undefined);
+    }, pathAndSearch.startsWith("/api/provider-quotas") || pathAndSearch.startsWith("/api/usage")
+      ? { timeoutMs: GO_SIDECAR_QUOTA_ROUTE_TIMEOUT_MS }
+      : undefined);
     // A Go-owned write's 4xx/5xx response is its observable result. Falling
     // through on it would execute the legacy mutation a second time. Reads
     // retain the existing fallback-on-non-2xx supervision behavior.

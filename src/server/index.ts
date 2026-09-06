@@ -1104,6 +1104,25 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         const forceRefresh = url.searchParams.get("refresh") === "1" || url.searchParams.get("refresh") === "true";
         return jsonResponse(await fetchProviderQuotaReports(config, forceRefresh));
       }
+      // Ticket #20: Go owns the public usage aggregate route while the
+      // TypeScript process stays the ledger/cache oracle until the runtime
+      // flip. This endpoint accepts only the child capability.
+      if (url.pathname === "/__ocx_go_sidecar/usage") {
+        const bridgeToken = goSidecarLiveStateBridgeToken;
+        if (
+          req.method !== "GET"
+          || !bridgeToken
+          || req.headers.get("x-ocx-go-sidecar-bridge") !== bridgeToken
+        ) {
+          return new Response(null, { status: 404 });
+        }
+        const oracleUrl = new URL("http://localhost/api/usage" + url.search);
+        return (await handleManagementAPI(
+          new Request(oracleUrl, { method: "GET", headers: { accept: "application/json" } }),
+          oracleUrl, config, deps.managementApi, undefined, managementSessionControl,
+          { skipGoSidecarForwarding: true },
+        )) ?? new Response(null, { status: 404 });
+      }
       // Ticket #33 bridge: Go owns literal Lab reads while TypeScript remains
       // the SQLite projection oracle until the runtime flip. Re-dispatching
       // with forwarding disabled makes the private hop non-recursive.

@@ -142,6 +142,10 @@ async function captureProviderQuotas(server: { url: URL }, token: string, suffix
   return captureJson(server, token, "/api/provider-quotas" + suffix);
 }
 
+async function captureUsage(server: { url: URL }, token: string, suffix = "") {
+  return captureJson(server, token, "/api/usage" + suffix);
+}
+
 async function captureModelDiscovery(server: { url: URL }, token: string) { return captureJson(server, token, "/api/model-discovery"); }
 
 async function captureHealth(server: { url: URL }, token: string): Promise<HealthCapture> {
@@ -270,6 +274,11 @@ describe.skipIf(!goAvailable || sidecarBinary === null)("ocx-sidecar differentia
     );
     expect(providerQuotas).toBeDefined();
     expect(providerQuotas!.go.volatileFields).toEqual(["generatedAt"]);
+    const usage = GO_OWNED_MANAGEMENT_ROUTES.find(
+      route => route.method === "GET" && route.path === "/api/usage",
+    );
+    expect(usage).toBeDefined();
+    expect(usage!.go.volatileFields).toEqual(["generatedAt", "since"]);
   });
 
   runFixtureTest("in-process handler and Go sidecar agree on status, headers, and normalised body", async (token) => {
@@ -845,6 +854,44 @@ describe.skipIf(!goAvailable || sidecarBinary === null)("ocx-sidecar differentia
         // The parent bridge is never a second management endpoint: an admin
         // token does not substitute for the child-only capability.
         const bridge = await fetch(new URL("/__ocx_go_sidecar/provider-quotas", serverB.url), {
+          headers: { "x-opencodex-api-key": token },
+        });
+        expect(bridge.status).toBe(404);
+      } finally {
+        await serverB.stop(true);
+      }
+    } finally {
+      await serverA.stop(true);
+    }
+  });
+
+  runFixtureTest("usage aggregation is Go-owned and relays byte-identical summaries", async (token) => {
+    // Ticket #20: the summary's scanner, cache and cost-overlay state remain
+    // owned by the serving process until the runtime flip. Go owns the public
+    // route and capability-scoped hop, then relays the aggregate bytes without
+    // projection. The time-derived fields are the only declared volatility.
+    const serverA = startServer(0);
+    try {
+      const tsBody = await captureUsage(serverA, token, "?range=all&surface=codex");
+      expect(tsBody.status).toBe(200);
+      expect(tsBody.contentType).toBe("application/json");
+
+      process.env[GO_SIDECAR_BIN_ENV] = sidecarBinary!;
+      const serverB = startServer(0);
+      try {
+        const sidecarUrl = await waitFor(() => activeGoSidecarBaseUrl(), 15_000);
+        const goBody = await captureUsage(serverB, token, "?range=all&surface=codex");
+        expect(goBody.status).toBe(200);
+        expect(goBody.contentType).toBe("application/json");
+        expect(normaliseBody(goBody.body, ["generatedAt", "since"])).toBe(
+          normaliseBody(tsBody.body, ["generatedAt", "since"]),
+        );
+
+        // A loopback peer cannot query the child directly or substitute an
+        // admin credential for the parent-minted bridge capability.
+        const direct = await fetch(new URL("/api/usage?range=all", sidecarUrl));
+        expect(direct.status).toBe(404);
+        const bridge = await fetch(new URL("/__ocx_go_sidecar/usage?range=all", serverB.url), {
           headers: { "x-opencodex-api-key": token },
         });
         expect(bridge.status).toBe(404);

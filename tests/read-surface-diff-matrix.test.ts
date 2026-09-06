@@ -40,7 +40,10 @@ describe("read-surface differential matrix (ticket #25)", () => {
     const matrixGoNow = READ_SURFACE_DIFF_MATRIX.filter(row => row.transition === "go-now").map(row => key(row.method, row.path)).sort();
     const registryGoReads = MANAGEMENT_ROUTES.filter(route => !route.mutates && route.go).map(route => key(route.method, route.path)).sort();
     expect(matrixGoNow).toEqual(registryGoReads);
-    expect(matrixGoNow).toHaveLength(5);
+    // This count makes adding a new pre-flip Go-owned read deliberate; the
+    // bidirectional set assertion above still proves the count cannot mask a
+    // route-registry/matrix disagreement. Ticket #20 adds /api/usage.
+    expect(matrixGoNow).toHaveLength(17);
   });
 
   test("records runtime-flip evidence in tracked repository documentation", () => {

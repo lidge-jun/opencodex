@@ -366,6 +366,54 @@ func TestProviderQuotasRelaysTheParentStateBridgeVerbatim(t *testing.T) {
 	}
 }
 
+func TestUsageRelaysTheParentAggregateBridgeVerbatim(t *testing.T) {
+	const requestToken = "parent-to-sidecar"
+	const bridgeToken = "sidecar-to-parent"
+	const want = "{\"range\":\"all\",\"generatedAt\":123,\"summary\":{\"requests\":1}}"
+	bridge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/__ocx_go_sidecar/usage" {
+			t.Errorf("bridge request = %s %s", r.Method, r.URL.String())
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if r.URL.RawQuery != "range=all&surface=codex" {
+			t.Errorf("bridge query = %q", r.URL.RawQuery)
+		}
+		if r.Header.Get("X-Ocx-Go-Sidecar-Bridge") != bridgeToken {
+			t.Errorf("bridge capability was not forwarded")
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(want))
+	}))
+	defer bridge.Close()
+
+	h := NewHandler(Config{ParentURL: bridge.URL, BridgeToken: bridgeToken, RequestToken: requestToken})
+	denied := do(t, h, http.MethodGet, "/api/usage?range=all")
+	denied.Body.Close()
+	if denied.StatusCode != http.StatusNotFound {
+		t.Fatalf("unauthenticated usage request status = %d, want 404", denied.StatusCode)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/usage?range=all&surface=codex", nil)
+	req.Header.Set("X-Ocx-Go-Sidecar-Request", requestToken)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	resp := rec.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != want {
+		t.Fatalf("body = %s, want %s", raw, want)
+	}
+}
+
 func TestReadyLineConstant(t *testing.T) {
 	if ReadyLinePrefix != "ocx-sidecar-ready" {
 		t.Fatalf("ReadyLinePrefix = %q changed; the TS supervisor parses this exact token", ReadyLinePrefix)

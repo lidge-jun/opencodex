@@ -257,6 +257,51 @@ func NewHandler(cfg Config) http.Handler {
 		}
 	})
 
+	// Ticket #20: the serving process owns the ledger scan, aggregate cache and
+	// cost overlay until the runtime flip. Go owns the public route and relays
+	// the authoritative JSON bytes without decoding them.
+	mux.HandleFunc("GET /api/usage", func(w http.ResponseWriter, r *http.Request) {
+		if cfg.RequestToken == "" || !managementauth.EqualSecret(r.Header.Get(SidecarRequestHeader), cfg.RequestToken) {
+			http.NotFound(w, r)
+			return
+		}
+		parent, err := url.Parse(cfg.ParentURL)
+		if err != nil || parent.Scheme != "http" || parent.Hostname() != "127.0.0.1" || cfg.BridgeToken == "" {
+			http.Error(w, "usage state bridge unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		parent.Path = "/__ocx_go_sidecar/usage"
+		parent.RawQuery = r.URL.RawQuery
+		bridgeReq, err := http.NewRequestWithContext(r.Context(), http.MethodGet, parent.String(), nil)
+		if err != nil {
+			http.Error(w, "usage state bridge unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		bridgeReq.Header.Set(SidecarBridgeHeader, cfg.BridgeToken)
+		bridgeTransport := &http.Transport{Proxy: nil, DialContext: (&net.Dialer{}).DialContext}
+		defer bridgeTransport.CloseIdleConnections()
+		bridgeResp, err := (&http.Client{Timeout: 30 * time.Second, Transport: bridgeTransport}).Do(bridgeReq)
+		if err != nil {
+			http.Error(w, "usage state bridge unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		defer bridgeResp.Body.Close()
+		raw, err := io.ReadAll(io.LimitReader(bridgeResp.Body, 8*1024*1024+1))
+		if err != nil || len(raw) > 8*1024*1024 {
+			http.Error(w, "usage state bridge unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		contentType := bridgeResp.Header.Get("Content-Type")
+		if contentType == "" {
+			contentType = "application/json"
+		}
+		w.Header().Set("Content-Type", contentType)
+		w.WriteHeader(bridgeResp.StatusCode)
+		if _, err := w.Write(raw); err != nil {
+			fmt.Fprintf(os.Stderr, "ocx-sidecar: write usage payload: %v\\n", err)
+		}
+	})
+
 	// Ticket #33: the parent remains the Lab SQLite projection oracle. The
 	// exact literal list mirrors the ownership registry; parameterised routes
 	// are never accidentally acquired through a prefix.
