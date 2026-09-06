@@ -432,8 +432,8 @@ func (s *snapshotRepairState) repairResponse(response *jsonwire.Value, fallback 
 	if output := response.Find("output"); output != nil && output.Kind() == jsonwire.Array {
 		status, _ := stringMember(response, "status")
 		inferred, _ := responseStatusToItemStatus(status)
-		for i, item := range output.Elements() {
-			changed = backfillSSEOutputItem(item, itoa(i), inferred) || changed
+		for _, item := range output.Elements() {
+			changed = snapshotRepairOutputItem(item, inferred) || changed
 		}
 	}
 	return changed
