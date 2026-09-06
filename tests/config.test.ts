@@ -1345,7 +1345,8 @@ describe("opencodex config defaults", () => {
   });
 
   test("backs up invalid JSON config before falling back to defaults", () => {
-    writeConfig("{ invalid json");
+    const invalidConfig = "{ invalid json";
+    writeConfig(invalidConfig);
     const errorSpy = spyOn(console, "error").mockImplementation(() => {});
 
     try {
@@ -1354,8 +1355,15 @@ describe("opencodex config defaults", () => {
       expect(loaded).toEqual(getDefaultConfig());
       const backups = backupNames();
       expect(backups).toHaveLength(1);
-      expect(readFileSync(join(testDir, backups[0]), "utf-8")).toBe("{ invalid json");
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("Could not load opencodex config"));
+      const backupPath = join(testDir, backups[0]);
+      expect(readFileSync(getConfigPath(), "utf-8")).toBe(invalidConfig);
+      expect(readFileSync(backupPath, "utf-8")).toBe(invalidConfig);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(`Could not load opencodex config at ${getConfigPath()}:`),
+      );
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(`A backup was written to ${backupPath}.`),
+      );
     } finally {
       errorSpy.mockRestore();
     }
