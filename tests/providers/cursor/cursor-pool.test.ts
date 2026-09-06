@@ -42,8 +42,8 @@ describe("CursorCredentialRouter", () => {
 
 describe("CursorPoolKernel", () => {
   const accounts = [
-    { id: "account-a", access: "access-a", expires: 2_000 },
-    { id: "account-b", access: "access-b", expires: 2_000 },
+    { id: "account-a", access: "access-a", expires: Number.MAX_SAFE_INTEGER },
+    { id: "account-b", access: "access-b", expires: Number.MAX_SAFE_INTEGER },
   ];
   function setup(now = 1_000, resolver?: (id: string) => string | undefined) {
     let clock = now;
