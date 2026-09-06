@@ -29,13 +29,8 @@ export type ClaudeCompatibilityMode = "shadow" | "enforce";
 
 export const CLAUDE_COMPATIBILITY_MODES = ["shadow", "enforce"] as const;
 
-export function isClaudeCompatibilityMode(
-  value: unknown,
-): value is ClaudeCompatibilityMode {
-  return (
-    typeof value === "string" &&
-    (CLAUDE_COMPATIBILITY_MODES as readonly string[]).includes(value)
-  );
+export function isClaudeCompatibilityMode(value: unknown): value is ClaudeCompatibilityMode {
+  return typeof value === "string" && (CLAUDE_COMPATIBILITY_MODES as readonly string[]).includes(value);
 }
 
 export type ClaudeCompatibilityDecision = "allow" | "reject" | "shadow";
@@ -57,28 +52,20 @@ function isRec(v: unknown): v is Rec {
 function sanitizeBetaToken(raw: string): string {
   const trimmed = raw.trim().toLowerCase();
   if (!trimmed) return "";
-  return trimmed
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 48);
+  return trimmed.replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 48);
 }
 
 function hasCacheControl(body: Rec): boolean {
   if (Object.prototype.hasOwnProperty.call(body, "cache_control")) return true;
   const blockHasCacheControl = (value: unknown): boolean =>
-    isRec(value) &&
-    Object.prototype.hasOwnProperty.call(value, "cache_control");
-  if (Array.isArray(body.system) && body.system.some(blockHasCacheControl))
-    return true;
-  if (Array.isArray(body.tools) && body.tools.some(blockHasCacheControl))
-    return true;
+    isRec(value) && Object.prototype.hasOwnProperty.call(value, "cache_control");
+  if (Array.isArray(body.system) && body.system.some(blockHasCacheControl)) return true;
+  if (Array.isArray(body.tools) && body.tools.some(blockHasCacheControl)) return true;
   if (!Array.isArray(body.messages)) return false;
-  return body.messages.some(
-    (message) =>
-      isRec(message) &&
-      Array.isArray(message.content) &&
-      message.content.some(blockHasCacheControl),
-  );
+  return body.messages.some(message =>
+    isRec(message)
+    && Array.isArray(message.content)
+    && message.content.some(blockHasCacheControl));
 }
 
 function hasThinkingBlock(body: Rec): boolean {
@@ -91,8 +78,7 @@ function hasThinkingBlock(body: Rec): boolean {
     if (Array.isArray(content)) {
       for (const b of content) {
         if (!isRec(b)) continue;
-        if (b.type === "thinking" || b.type === "redacted_thinking")
-          return true;
+        if (b.type === "thinking" || b.type === "redacted_thinking") return true;
       }
     }
   }
@@ -100,16 +86,8 @@ function hasThinkingBlock(body: Rec): boolean {
 }
 
 const KNOWN_CONTENT_TYPES = new Set([
-  "text",
-  "image",
-  "tool_use",
-  "tool_result",
-  "thinking",
-  "redacted_thinking",
-  "document",
-  "server_tool_use",
-  "web_search_tool_result",
-  "code_execution_tool_result",
+  "text", "image", "tool_use", "tool_result", "thinking", "redacted_thinking",
+  "document", "server_tool_use", "web_search_tool_result", "code_execution_tool_result",
   "tool_search_tool_result",
 ]);
 
@@ -162,12 +140,7 @@ function hasCodeExecution(body: Rec): boolean {
       for (const b of content) {
         if (!isRec(b)) continue;
         if (b.type === "code_execution_tool_result") return true;
-        if (
-          b.type === "server_tool_use" &&
-          typeof b.name === "string" &&
-          b.name.includes("code_execution")
-        )
-          return true;
+        if (b.type === "server_tool_use" && typeof b.name === "string" && b.name.includes("code_execution")) return true;
       }
     }
   }
@@ -191,8 +164,7 @@ function hasComputerUse(body: Rec): boolean {
     if (!Array.isArray(content)) continue;
     for (const b of content) {
       if (!isRec(b)) continue;
-      if (typeof b.type === "string" && b.type.includes("computer"))
-        return true;
+      if (typeof b.type === "string" && b.type.includes("computer")) return true;
     }
   }
   return false;
@@ -213,14 +185,7 @@ function hasMcpTool(body: Rec): boolean {
   if (Array.isArray(messages)) {
     for (const message of messages) {
       if (!isRec(message) || !Array.isArray(message.content)) continue;
-      if (
-        message.content.some(
-          (block) =>
-            isRec(block) &&
-            (block.type === "mcp_tool_use" || block.type === "mcp_tool_result"),
-        )
-      )
-        return true;
+      if (message.content.some(block => isRec(block) && (block.type === "mcp_tool_use" || block.type === "mcp_tool_result"))) return true;
     }
   }
   return false;
@@ -244,12 +209,7 @@ function hasWebSearchTool(body: Rec): boolean {
       for (const b of content) {
         if (!isRec(b)) continue;
         if (b.type === "web_search_tool_result") return true;
-        if (
-          b.type === "server_tool_use" &&
-          typeof b.name === "string" &&
-          b.name.includes("web_search")
-        )
-          return true;
+        if (b.type === "server_tool_use" && typeof b.name === "string" && b.name.includes("web_search")) return true;
       }
     }
   }
@@ -269,14 +229,7 @@ function hasGenericServerTool(body: Rec): boolean {
           if (!isRec(b)) continue;
           if (b.type !== "server_tool_use") continue;
           const name = typeof b.name === "string" ? b.name : "";
-          if (
-            name.includes("web_search") ||
-            name.includes("code_execution") ||
-            name.includes("computer") ||
-            name === "tool_search" ||
-            name.startsWith("tool_search_tool_")
-          )
-            continue;
+          if (name.includes("web_search") || name.includes("code_execution") || name.includes("computer") || name.startsWith("tool_search_tool_")) continue;
           return true;
         }
       }
@@ -288,17 +241,9 @@ function hasGenericServerTool(body: Rec): boolean {
     // Exclude known function tools, tool_search, and already-classified server tools
     const type = typeof t.type === "string" ? t.type : "";
     const name = typeof t.name === "string" ? t.name : "";
-    if (name === "tool_search" || name.startsWith("tool_search_tool_"))
-      continue;
-    if (type === "tool_search" || type.startsWith("tool_search_tool_"))
-      continue;
-    if (
-      type.includes("web_search") ||
-      type.includes("code_execution") ||
-      type.includes("computer") ||
-      type.startsWith("mcp")
-    )
-      continue;
+    if (name === "tool_search" || name.startsWith("tool_search_tool_")) continue;
+    if (type === "tool_search" || type.startsWith("tool_search_tool_")) continue;
+    if (type.includes("web_search") || type.includes("code_execution") || type.includes("computer") || type.startsWith("mcp")) continue;
     if (type && type !== "function") return true;
     if (type && typeof t.name !== "string") return true;
   }
@@ -312,14 +257,7 @@ function hasGenericServerTool(body: Rec): boolean {
         if (!isRec(b)) continue;
         if (b.type === "server_tool_use") {
           const n = typeof b.name === "string" ? b.name : "";
-          if (
-            n.includes("web_search") ||
-            n.includes("code_execution") ||
-            n.includes("computer") ||
-            n === "tool_search" ||
-            n.startsWith("tool_search_tool_")
-          )
-            continue;
+          if (n.includes("web_search") || n.includes("code_execution") || n.includes("computer") || n.startsWith("tool_search_tool_")) continue;
           return true;
         }
       }
@@ -333,11 +271,7 @@ function hasToolSearch(body: Rec): boolean {
   if (Array.isArray(tools)) {
     for (const t of tools) {
       if (!isRec(t)) continue;
-      if (
-        typeof t.type === "string" &&
-        (t.type === "tool_search" || t.type.startsWith("tool_search_tool_"))
-      )
-        return true;
+      if (typeof t.type === "string" && (t.type === "tool_search" || t.type.startsWith("tool_search_tool_"))) return true;
     }
   }
   const msgs = body.messages;
@@ -349,12 +283,9 @@ function hasToolSearch(body: Rec): boolean {
       for (const b of content) {
         if (!isRec(b)) continue;
         if (b.type === "tool_search_tool_result") return true;
-        if (
-          b.type === "server_tool_use" &&
-          typeof b.name === "string" &&
-          (b.name === "tool_search" || b.name.startsWith("tool_search_tool_"))
-        )
-          return true;
+        if (b.type === "server_tool_use"
+          && typeof b.name === "string"
+          && (b.name === "tool_search" || b.name.startsWith("tool_search_tool_"))) return true;
       }
     }
   }
@@ -372,9 +303,7 @@ function hasDeferredTools(body: Rec): boolean {
   }
   if (body.defer_tools === true || body.deferred_tools === true) return true;
   if (Array.isArray(body.deferred_tools)) return body.deferred_tools.length > 0;
-  return (
-    isRec(body.deferred_tools) && Object.keys(body.deferred_tools).length > 0
-  );
+  return isRec(body.deferred_tools) && Object.keys(body.deferred_tools).length > 0;
 }
 
 function hasInputExamples(body: Rec): boolean {
@@ -399,10 +328,7 @@ function hasStructuredOutput(body: Rec): boolean {
 }
 
 function hasServiceTier(body: Rec): boolean {
-  return (
-    typeof body.service_tier === "string" &&
-    (body.service_tier as string).length > 0
-  );
+  return typeof body.service_tier === "string" && (body.service_tier as string).length > 0;
 }
 
 function hasContextManagement(body: Rec): boolean {
@@ -410,32 +336,14 @@ function hasContextManagement(body: Rec): boolean {
 }
 
 const KNOWN_BODY_FIELDS = new Set([
-  "model",
-  "max_tokens",
-  "messages",
-  "system",
-  "tools",
-  "tool_choice",
-  "thinking",
-  "output_config",
-  "metadata",
-  "service_tier",
-  "stop_sequences",
-  "stream",
-  "temperature",
-  "top_p",
-  "top_k",
-  "cache_control",
-  "context_management",
-  "container",
-  "inference_geo",
-  "user_profile_id",
-  "defer_tools",
-  "deferred_tools",
+  "model", "max_tokens", "messages", "system", "tools", "tool_choice", "thinking",
+  "output_config", "metadata", "service_tier", "stop_sequences", "stream",
+  "temperature", "top_p", "top_k", "cache_control", "context_management",
+  "container", "inference_geo", "user_profile_id", "defer_tools", "deferred_tools",
 ]);
 
 function hasUnknownBodyField(body: Rec): boolean {
-  return Object.keys(body).some((field) => !KNOWN_BODY_FIELDS.has(field));
+  return Object.keys(body).some(field => !KNOWN_BODY_FIELDS.has(field));
 }
 
 /**
@@ -486,11 +394,7 @@ export function collectClaudeFeatureCodes(
  */
 export function analyzeClaudeCompatibility(
   body: unknown,
-  opts: {
-    mode: ClaudeCompatibilityMode;
-    adapter?: string;
-    anthropicBeta?: string;
-  },
+  opts: { mode: ClaudeCompatibilityMode; adapter?: string; anthropicBeta?: string },
 ): ClaudeCompatibilityResult {
   const featureCodes = collectClaudeFeatureCodes(body, opts.anthropicBeta);
   if (opts.adapter === "anthropic") {
@@ -516,17 +420,13 @@ export function analyzeClaudeCompatibility(
     "server_tool",
   ]);
   if (opts.adapter !== "openai-responses") INCOMPATIBLE.add("deferred_tools");
-  const incompatible = featureCodes
-    .filter((c) => INCOMPATIBLE.has(c))
-    .slice(0, 32);
+  const incompatible = featureCodes.filter(c => INCOMPATIBLE.has(c)).slice(0, 32);
   if (opts.mode === "shadow") {
     return {
       featureCodes,
       compatible: true,
       decision: incompatible.length > 0 ? "shadow" : "allow",
-      ...(incompatible.length > 0
-        ? { reason: `shadow: would reject for ${incompatible.join(", ")}` }
-        : {}),
+      ...(incompatible.length > 0 ? { reason: `shadow: would reject for ${incompatible.join(", ")}` } : {}),
     };
   }
   if (incompatible.length > 0) {
@@ -534,11 +434,7 @@ export function analyzeClaudeCompatibility(
       featureCodes,
       compatible: false,
       decision: "reject",
-      reason:
-        `unsupported features for routed adapter ${opts.adapter ?? "unknown"}: ${incompatible.join(", ")}. Select an Anthropic route, remove the feature, or begin a fresh reasoning turn`.slice(
-          0,
-          512,
-        ),
+      reason: `unsupported features for routed adapter ${opts.adapter ?? "unknown"}: ${incompatible.join(", ")}. Select an Anthropic route, remove the feature, or begin a fresh reasoning turn`.slice(0, 512),
     };
   }
   return { featureCodes, compatible: true, decision: "allow" };
