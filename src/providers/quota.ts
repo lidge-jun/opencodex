@@ -1643,6 +1643,108 @@ export function setCachedProviderAccountQuotaForTests(
 }
 
 /**
+ * Anthropic's unified rate-limit headers, present on EVERY `/v1/messages` response.
+ *
+ * The account's own five-hour and seven-day headroom rides along with the answer, so the
+ * pool can be told what a turn cost without spending a probe on `/api/oauth/usage`. Two
+ * wire details differ from every other reader here and are the reason this parser exists
+ * rather than reusing one:
+ *
+ * - `utilization` is a FRACTION (`0.74`), while `ProviderQuota.*Percent` is 0..100 and
+ *   `fetchAnthropicUsageQuota` already reads the probe's `74.0` as a percent. Passing the
+ *   header value through `normalizePercent` unscaled would file a 74%-spent account as
+ *   0.74% and make the emptiest account look like the freshest.
+ * - `reset` is epoch SECONDS; `normalizeResetAt` promotes a sub-1e10 number to
+ *   milliseconds, so it is fed the raw value on purpose.
+ *
+ * Returns null when neither window parses, so a header set that Anthropic renames or drops
+ * degrades to "no measurement" — the same state as before the observation existed.
+ */
+export function parseAnthropicRateLimitHeaders(headers: Headers): ProviderQuota | null {
+  const fiveHourPercent = normalizeUtilizationFraction(headers.get("anthropic-ratelimit-unified-5h-utilization"));
+  const weeklyPercent = normalizeUtilizationFraction(headers.get("anthropic-ratelimit-unified-7d-utilization"));
+  if (fiveHourPercent === undefined && weeklyPercent === undefined) return null;
+  const fiveHourResetAt = normalizeResetAt(headers.get("anthropic-ratelimit-unified-5h-reset"));
+  const weeklyResetAt = normalizeResetAt(headers.get("anthropic-ratelimit-unified-7d-reset"));
+  return {
+    ...(fiveHourPercent !== undefined ? { fiveHourPercent } : {}),
+    ...(fiveHourResetAt !== undefined ? { fiveHourResetAt } : {}),
+    ...(weeklyPercent !== undefined ? { weeklyPercent } : {}),
+    ...(weeklyResetAt !== undefined ? { weeklyResetAt } : {}),
+    updatedAt: Date.now(),
+  };
+}
+
+/**
+ * A 0..1 utilization fraction as a 0..100 percent.
+ *
+ * Anthropic sends `1.0` for a fully drained window, so the guard is `> 1` rather than
+ * `>= 1`: a value above one is a wire change (or a percent that leaked into a fraction
+ * field), and inventing `100` from it would cool an account on a misread. Reject instead --
+ * an unmeasured account already has a defined meaning here.
+ *
+ * Rounded to two decimals because `fraction * 100` is lossy in binary floating point: 0.29
+ * yields 28.999999999999996, and the CLI renderers interpolate the percent raw
+ * (`account.ts`, `account-extended.ts`) rather than rounding at the edge like the GUI does.
+ * The value is also persisted, so an artifact would survive restarts.
+ */
+function normalizeUtilizationFraction(value: string | null): number | undefined {
+  const numeric = toFiniteNumber(value);
+  if (numeric === undefined || numeric < 0 || numeric > 1) return undefined;
+  return Math.round(numeric * 10_000) / 100;
+}
+
+/**
+ * File rate-limit headers observed on a live Anthropic turn against the account that served it.
+ *
+ * Modelled on Codex's `applyAccountQuotaFromUpstreamHeaders`: a pure side effect, fail-soft on
+ * anything unparseable, and fenced by a `writerGeneration` the CALLER captured when it resolved
+ * the serving credential — not here at write time, because a streaming turn is a long await and
+ * a generation read at the end cannot see an account change from the start of the same turn.
+ *
+ * Unlike `recordPassiveAccountQuota` this is not gated on `hasPassiveAccountQuota`: Anthropic
+ * does publish a usage endpoint and stays a probe provider. The headers are a free refresh
+ * BETWEEN probes, never a replacement, and two rules keep it that way:
+ *
+ * - The write MERGES over the existing row. The headers report exactly two windows; the probe
+ *   also returns `customWindows` with the model-scoped weekly limits (Opus, Sonnet, Fable),
+ *   which nothing on the wire carries. A wholesale replace would delete those bars, and they
+ *   are read for real: by the manual-preference exhaustion check in `anthropic-routing.ts` and
+ *   by `headroomOf` in `account-quota-rank.ts`, not only by the dashboard.
+ * - The entry's `ts` is NOT advanced. `fetchAccountQuota` gates re-probing on that timestamp
+ *   (`Date.now() - cached.ts < ACCOUNT_QUOTA_TTL_MS`), so refreshing it on every turn would
+ *   silence the probe entirely for any account used more than once per ten minutes: the
+ *   observation would both narrow the row and disable the only thing that could widen it again.
+ *   The quota's own `updatedAt` still moves, because the numbers it carries really are fresh.
+ */
+export function recordAnthropicAccountQuotaFromHeaders(
+  accountId: string,
+  headers: Headers,
+  writerGeneration: number,
+): void {
+  if (!accountId) return;
+  const observed = parseAnthropicRateLimitHeaders(headers);
+  if (!observed) return;
+  const key = accountCacheKey("anthropic", accountId);
+  if (!mayCommitAccountQuotaKey(key, writerGeneration)) return;
+  // Hydrate before writing, for the same reason `recordPassiveAccountQuota` does: this write
+  // arrives unprompted from the request path, and `persistAccountQuotaCache` serializes the
+  // whole map. Landing before any reader has hydrated would persist this single row and erase
+  // every other provider's saved row.
+  hydrateAccountQuotaCache();
+  const previous = accountQuotaCache.get(key);
+  accountQuotaCache.set(key, {
+    ...previous,
+    // A row that held only a failed probe (`quota: null`, `unavailable`) is now measured, so
+    // that failure flag must not survive the observation which replaced it.
+    unavailable: undefined,
+    ts: previous?.ts ?? Date.now(),
+    quota: { ...(previous?.quota ?? {}), ...observed },
+  });
+  persistAccountQuotaCache();
+}
+
+/**
  * Providers whose per-account quota is OBSERVED in-band, never probed.
  *
  * Deliberately separate from `supportsPerAccountQuota` rather than folded into it. That

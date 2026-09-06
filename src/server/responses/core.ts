@@ -230,7 +230,7 @@ import {
 } from "../../providers/request-pacing";
 import { slugsEquivalent } from "../../providers/slug-codec";
 import { isMuseSubscriptionUsagePayload, parseMuseSubscriptionUsage } from "../../providers/muse-subscription-usage";
-import { hasPassiveAccountQuota, recordPassiveAccountQuota } from "../../providers/quota";
+import { hasPassiveAccountQuota, recordAnthropicAccountQuotaFromHeaders, recordPassiveAccountQuota } from "../../providers/quota";
 import { captureConfigGeneration } from "../../lib/state-store-sweeper";
 import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../../providers/openai-virtual-models";
 import { isUsageDebugEnabled } from "../../usage/debug";
@@ -3696,6 +3696,16 @@ async function handleResponsesInner(
   let replayOAuthCredentialSnapshot: Pick<OAuthAccessSnapshot, "accountId" | "generation"> | undefined;
   let anthropicPoolAccountId: string | null = null;
   let anthropicPoolFailovers = 0;
+  /**
+   * Generation fence for the Anthropic rate-limit headers observed on this turn.
+   *
+   * Captured where the serving credential is RESOLVED, for the same reason
+   * `passiveQuotaWriterGeneration` is: a turn is a long await, and a generation read at
+   * write time cannot see a config or account change that happened earlier in it. Stays 0
+   * for every provider that is not Anthropic OAuth, which the observer treats as "no
+   * account to attribute" and skips.
+   */
+  let anthropicQuotaWriterGeneration = 0;
   // Generic OAuth rotation (#2568) for providers with no pool of their own. Bound to the account
   // the request actually used, so a concurrent rotation cannot cool an innocent replacement.
   let genericFailoverAccountId: string | null = null;
@@ -3837,6 +3847,7 @@ async function handleResponsesInner(
     stampOAuthAccountLabel(logCtx, route.providerName, route.provider, snapshot.accountId);
     if (route.providerName === "anthropic") {
       anthropicPoolAccountId = snapshot.accountId;
+      anthropicQuotaWriterGeneration = captureConfigGeneration();
       logCtx.provider = formatAnthropicProviderForLog("anthropic", snapshot.accountId, config);
     } else {
       genericFailoverAccountId = snapshot.accountId;
@@ -3978,6 +3989,20 @@ async function handleResponsesInner(
       throw new Error("OAuth account selection changed repeatedly before dispatch");
     };
   };
+  /**
+   * File Anthropic's in-band rate-limit headers against the account that served the turn.
+   *
+   * A no-op without an account id, which is the honest answer for an API-key provider or a
+   * single-account OAuth install below failover quorum: the headers describe a subscription
+   * the pool has no row for. Never throws -- a quota measurement must not be able to fail a
+   * turn that already succeeded.
+   */
+  const observeAnthropicRateLimitHeaders = (accountId: string | null, headers: Headers): void => {
+    if (route.providerName !== "anthropic" || !accountId) return;
+    try {
+      recordAnthropicAccountQuotaFromHeaders(accountId, headers, anthropicQuotaWriterGeneration);
+    } catch { /* best-effort observation */ }
+  };
   const anthropicSessionKey = route.providerName === "anthropic" && route.provider.authMode === "oauth"
     ? anthropicSessionKeyFromParts({
       sessionIdHeader: sessionIdHeaderFromRequest(req.headers),
@@ -4006,6 +4031,7 @@ async function handleResponsesInner(
         const admitted = await commitResolvedOAuthSelection(await getAnthropicPoolAccessSnapshot(selection.accountId), true, selection.reason);
         if (!admitted) return formatErrorResponse(409, "conflict_error", "OAuth account selection changed; retry the request");
         anthropicPoolAccountId = admitted.accountId;
+        anthropicQuotaWriterGeneration = captureConfigGeneration();
         route.provider = { ...route.provider, apiKey: admitted.accessToken };
         logCtx.provider = formatAnthropicProviderForLog("anthropic", admitted.accountId, config);
       } else {
@@ -4082,6 +4108,7 @@ async function handleResponsesInner(
         // are proactive and stay behind anthropicAccountPool.enabled.
         if (route.providerName === "anthropic" && hasAnthropicFailoverQuorum()) {
           anthropicPoolAccountId = resolved.accountId;
+          anthropicQuotaWriterGeneration = captureConfigGeneration();
         }
         // Captured beside the account it fences, so the two can never disagree.
         if (hasPassiveAccountQuota(route.providerName)) {
@@ -5956,7 +5983,15 @@ async function handleResponsesInner(
   const imgPlan = !routedCompaction ? await planImageBridge(config, parsed, route.provider) : undefined;
   const vidPlan = !routedCompaction ? await planVideoBridge(config, parsed, route.provider) : undefined;
   const canRunWebSearch = !!wsPlan && !adapter.runTurn;
-  const rotateSidecarProviderOn429 = async (retryAfter: string | null): Promise<ProviderAdapter | null> => {
+  const rotateSidecarProviderOn429 = async (
+    retryAfter: string | null,
+    responseHeaders?: Headers,
+  ): Promise<ProviderAdapter | null> => {
+    // Read BEFORE the rotation rebinds the account: a 429 reports the refusing account's
+    // utilization too, and `onUpstreamResponse` cannot deliver it because both sidecar loops
+    // throw on a non-OK response before reaching their success hook. Without this the one
+    // reading that matters most -- the window that just hit 100% -- is the one never recorded.
+    if (responseHeaders) observeAnthropicRateLimitHeaders(anthropicPoolAccountId, responseHeaders);
     const rotated = rotateProviderTransportOn429(config, route.providerName, route.provider, {
       retryAfter,
       now: Date.now(),
@@ -6000,6 +6035,8 @@ async function handleResponsesInner(
         anthropicPoolAccountId,
         retryAfter,
         anthropicSessionKey,
+        Date.now(),
+        responseHeaders,
       );
       if (!nextAccountId) return null;
       try {
@@ -6011,6 +6048,8 @@ async function handleResponsesInner(
         const admitted = await commitResolvedOAuthSelection(await getAnthropicPoolAccessSnapshot(nextAccountId));
         if (!admitted) throw new Error("OAuth selection changed during recovery");
         anthropicPoolAccountId = admitted.accountId;
+        // Re-captured with the rebind, for the same reason as the main recovery loop.
+        anthropicQuotaWriterGeneration = captureConfigGeneration();
         anthropicPoolFailovers += 1;
         route.provider = { ...route.provider, apiKey: admitted.accessToken };
         logCtx.provider = formatAnthropicProviderForLog("anthropic", admitted.accountId, config);
@@ -6132,6 +6171,10 @@ async function handleResponsesInner(
         }
       },
       on429: rotateSidecarProviderOn429,
+      // The sidecar's accepted responses carry the same headroom headers as the main path.
+      // `anthropicPoolAccountId` is read here, at event time, because the sidecar's own 429 arm
+      // rebinds it mid-loop.
+      onUpstreamResponse: headers => observeAnthropicRateLimitHeaders(anthropicPoolAccountId, headers),
       retryOn429Policy: rateLimitRetryPolicyFor(route.provider),
       ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
       ...(options.forceEmptyResponseId ? { forceEmptyResponseId: true } : {}),
@@ -6217,6 +6260,10 @@ async function handleResponsesInner(
       stallTimeoutSec: wsPlan.stallTimeoutSec,
       streamRoutedModelOutput: wsPlan.streamRoutedModelOutput,
       on429: rotateSidecarProviderOn429,
+      // The sidecar's accepted responses carry the same headroom headers as the main path.
+      // `anthropicPoolAccountId` is read here, at event time, because the sidecar's own 429 arm
+      // rebinds it mid-loop.
+      onUpstreamResponse: headers => observeAnthropicRateLimitHeaders(anthropicPoolAccountId, headers),
       retryOn429Policy: rateLimitRetryPolicyFor(route.provider),
       onCompletedResponse: commitReasoningReplayServingRoute,
     });
@@ -7032,6 +7079,8 @@ async function handleResponsesInner(
           anthropicPoolAccountId,
           upstreamResponse.headers.get("retry-after"),
           anthropicSessionKey,
+          Date.now(),
+          upstreamResponse.headers,
         );
         if (!nextAccountId) break;
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
@@ -7039,6 +7088,11 @@ async function handleResponsesInner(
           const admitted = await commitResolvedOAuthSelection(await getAnthropicPoolAccessSnapshot(nextAccountId));
           if (!admitted) throw new Error("OAuth selection changed during recovery");
           anthropicPoolAccountId = admitted.accountId;
+          // Re-captured with the rebind, never left at the value taken for the account that
+          // just 429'd: the fence answers "is this measurement still current for THIS
+          // account", so carrying a stale generation past a rotation can refuse the very
+          // observation the rotation exists to produce.
+          anthropicQuotaWriterGeneration = captureConfigGeneration();
           anthropicPoolFailovers += 1;
           route.provider = { ...route.provider, apiKey: admitted.accessToken };
           invalidateSameTargetRequest();
@@ -7219,6 +7273,15 @@ async function handleResponsesInner(
   }
 
   cancelBodyOnAbort(upstreamResponse.body, upstream.signal);
+
+  // Anthropic reports the serving account's five-hour and seven-day headroom on EVERY
+  // `/v1/messages` response, so the only quota measurement the pool has stops being a
+  // periodic `/api/oauth/usage` probe of whichever account happens to be active. Read here,
+  // after every recovery arm has settled, so the numbers are attributed to the account that
+  // actually served the turn rather than one the request rotated away from. Reading
+  // `anthropicPoolAccountId` live (not a value captured before dispatch) is load-bearing for
+  // the same reason: all three 429 arms rebind it mid-request.
+  observeAnthropicRateLimitHeaders(anthropicPoolAccountId, upstreamResponse.headers);
 
   // One bounded internal continuation re-ask for clean end_turn turns that announced an edit
   // without emitting a tool call. Anthropic gets this by default; openai-chat providers opt in
@@ -7445,6 +7508,8 @@ async function handleResponsesInner(
           anthropicPoolAccountId,
           response.headers.get("retry-after"),
           anthropicSessionKey,
+          Date.now(),
+          response.headers,
         );
         if (nextAccountId) {
           try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
@@ -7452,6 +7517,8 @@ async function handleResponsesInner(
             const admitted = await commitResolvedOAuthSelection(await getAnthropicPoolAccessSnapshot(nextAccountId));
             if (!admitted) throw new Error("OAuth selection changed during recovery");
             anthropicPoolAccountId = admitted.accountId;
+            // Re-captured with the rebind, for the same reason as the main recovery loop.
+            anthropicQuotaWriterGeneration = captureConfigGeneration();
             anthropicPoolFailovers += 1;
             route.provider = { ...route.provider, apiKey: admitted.accessToken };
             invalidateSameTargetRequest();
@@ -7546,6 +7613,12 @@ async function handleResponsesInner(
       };
       return;
     }
+
+    // A continuation is a second billed Anthropic call with its own fresh headers, and it
+    // never passes the observation above. Without this the numbers recorded for a
+    // terminal-guard turn are those of the first leg only -- and the guard is on by default
+    // for Anthropic, so that is the common case, not an edge one.
+    observeAnthropicRateLimitHeaders(anthropicPoolAccountId, response.headers);
 
     try {
       // Protect the continuation body against a client abort landing between fetch resolution and

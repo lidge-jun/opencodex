@@ -433,10 +433,20 @@ rotation may trigger provider restrictions.
 | `anthropicAccountPool.quotaWindow?` | `"five-hour" \| "weekly" \| "max-utilization"` | `"five-hour"` | The cached provider-reported utilization bar used for usage-aware account selection. `five-hour` keeps the original behavior. `weekly` scores the weekly bar and skips accounts whose 5-hour bar is exhausted while another eligible account remains, but falls back to exhausted candidates when none do. `max-utilization` scores the highest known bar, so it can use 5-hour usage before weekly usage is available; if neither is known, the account follows unknown-usage ordering. Known usage ranks before unknown usage under the opt-in `weekly` and `max-utilization` windows only; an omitted or explicit `five-hour` preserves the legacy ordering. If every eligible account is unknown, selection still returns one in eligible order. After the documented lower-5-hour tie-break, exact ties preserve eligible order. A healthy affinity-bound session is not proactively rebalanced. For new-session assignment and routing recovery after an eligible 429 replacement, `quota` ranks eligible candidates directly with this window; `fill-first` advances in stable order using this window's threshold and exhaustion rules; `round-robin` ignores it. Cooldown, failover limits, and reauthentication eligibility remain separate local state. Per-account weekly bars are only known once the dashboard Providers page has polled them. |
 | `anthropicAccountPool.stickyLimit?` | `number` | `1` | Successful new-session binds retained on one round-robin selection. Range 1–100. |
 
-When enabled, 429 records bounded cooldown from `Retry-After` or a default backoff and may rotate
-within the request. Affinity is process-local and size-bounded. Credential 401/403 marks the account
-as needing reauthentication. If all eligible accounts are cooling, clients receive 429 with
+When enabled, 429 records bounded cooldown and may rotate within the request. The cooldown length
+comes from `Retry-After` when the refusal carries one, otherwise from the reset time of whichever
+rate-limit window Anthropic reports as `rejected`; a stated reset is honoured up to six hours, so a
+drained 5-hour window is not re-offered every few minutes. A refusal that states neither falls back
+to a short default backoff. Affinity is process-local and size-bounded. Credential 401/403 marks the
+account as needing reauthentication. If all eligible accounts are cooling, clients receive 429 with
 `Retry-After` when known, not an authentication error.
+
+Anthropic responses also report the serving account's 5-hour and weekly utilization, and whichever
+of those two a given response carries is recorded against that account — each window independently,
+on refusals as well as successes. Usage-aware selection therefore works from the accounts you
+actually use, without waiting for the dashboard Providers page to poll them. These readings refresh
+the existing row rather than replacing it, so the model-scoped weekly bars that only the usage
+endpoint reports are preserved.
 
 :::caution[Experimental]
 Leave this disabled unless you understand Anthropic account policy risk. Prefer manual

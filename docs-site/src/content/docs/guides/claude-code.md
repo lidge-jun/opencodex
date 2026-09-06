@@ -27,9 +27,15 @@ rotation does not protect against provider enforcement.
 
 Operational contract when enabled:
 
-- Upstream **429** cools that account using `Retry-After` when present (else a default backoff),
-  clears its affinities, and may rotate to another eligible account within the same request
-  (bounded).
+- Upstream **429** cools that account, clears its affinities, and may rotate to another eligible
+  account within the same request (bounded). The cooldown uses `Retry-After` when present,
+  otherwise the reset time of whichever window Anthropic marks `rejected` — a drained 5-hour
+  window is honoured up to six hours rather than being retried every few minutes. A refusal that
+  states neither falls back to a default backoff.
+- Responses report the serving account's 5-hour and weekly utilization, and whichever of those
+  two the response carries is recorded for that account — each window independently, and a
+  refusal counts as well as a success. Usage-aware selection works from ordinary traffic,
+  without waiting for a dashboard poll.
 - Affinity is **process-local** (lost on proxy restart).
 - **401/403** credential failures quarantine the account (`needsReauth`) so it is excluded from
   selection until re-authenticated.

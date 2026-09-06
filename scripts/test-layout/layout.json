@@ -204,6 +204,7 @@
     "anthropic-image-retry.test.ts": "adapters/anthropic",
     "anthropic-pool-toggle-copy.test.ts": "adapters/anthropic",
     "anthropic-quorum-cache.test.ts": "routing",
+    "anthropic-ratelimit-headers.test.ts": "adapters/anthropic",
     "anthropic-reasoning.test.ts": "adapters/anthropic",
     "anthropic-sidecar-account-failover.test.ts": "adapters/anthropic",
     "anthropic-stream-hardening.test.ts": "adapters/anthropic",

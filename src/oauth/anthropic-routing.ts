@@ -10,9 +10,10 @@
  * Intentionally narrower than the Codex pool: no mid-session quota rotation,
  * soft-avoid ladders, or probe leases. Anthropic OAuth is ToS-sensitive.
  *
- * Affinity is process-local (lost on restart). Cooldown uses Retry-After when present,
- * otherwise a default backoff. 401/403 credential failures should set needsReauth on the
- * store (existing OAuth path) so the account is excluded from eligibility.
+ * Affinity is process-local (lost on restart). Cooldown uses Retry-After when present, else
+ * the reset time of whichever rate-limit window upstream reports as rejected, else a default
+ * backoff. 401/403 credential failures should set needsReauth on the store (existing OAuth
+ * path) so the account is excluded from eligibility.
  */
 import { createHash } from "node:crypto";
 import { captureOAuthAccountSelection, commitOAuthAccountSelection, credentialGeneration, getAccountSet, getAccountCredential, getAccountCredentialWithStatus } from "./store";
@@ -33,9 +34,35 @@ import type { OcxAccountPoolQuotaWindow, OcxAccountPoolRotationStrategy, OcxConf
 import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 import { retainedUtf8Bytes } from "../lib/admission";
 
+/**
+ * The read side of a `Headers` object, so a caller can pass the live upstream response's
+ * headers without this module importing anything from the server layer -- and so a test can
+ * hand it a plain `new Headers({...})`.
+ */
+export type AnthropicRateLimitHeaders = Pick<Headers, "get">;
+
 const PROVIDER = "anthropic";
+/**
+ * The cooldown for a refusal that states nothing about when it ends.
+ *
+ * A fixed short backoff and no ceiling of its own: with no upstream evidence there is
+ * nothing to bound. The old 15-minute MAX_COOLDOWN_MS capped the STATED durations instead
+ * and was removed with that clamp -- keeping it would have described a limit that no
+ * remaining path applies. `generic-account-failover.ts` still has its own copy for the
+ * providers it serves.
+ */
 const DEFAULT_COOLDOWN_MS = 60_000;
-const MAX_COOLDOWN_MS = 15 * 60_000;
+/**
+ * Ceiling for a cooldown derived from an upstream-stated reset time.
+ *
+ * Anthropic's five-hour window answers a drained account with `Retry-After: 7999` and a
+ * matching `anthropic-ratelimit-unified-5h-reset`. Clamping that to 15 minutes does not
+ * shorten the ban -- upstream keeps refusing -- it only makes the pool re-offer the same
+ * exhausted account every quarter hour and hand the client another 429. Five hours plus a
+ * margin covers the longest window Anthropic publishes; anything beyond it is treated as a
+ * wire anomaly rather than a fact.
+ */
+const MAX_MEASURED_COOLDOWN_MS = 6 * 60 * 60_000;
 const AFFINITY_IDLE_TTL_MS = 24 * 60 * 60_000;
 const MAX_AFFINITY_ENTRIES = 2_000;
 const MAX_AFFINITY_COMPONENT_BYTES = 512;
@@ -58,9 +85,19 @@ export interface AnthropicAccountPoolConfig {
   quotaWindow?: OcxAccountPoolQuotaWindow;
 }
 
+/**
+ * Where a cooldown's length came from. Same vocabulary as `CodexCooldownSource`, because it
+ * answers the same question for the same reason: `retry-after` is upstream answering THIS
+ * refusal, `reset-derived` is upstream stating when the spent window reopens, and `default`
+ * is our own guess. The dashboard renders the first as a rate limit and the rest as quota,
+ * which is exactly the distinction a reset-derived cooldown carries -- collapsing it into
+ * `retry-after` would report a drained five-hour window as request-rate throttling.
+ */
+type AnthropicCooldownSource = "retry-after" | "reset-derived" | "default";
+
 interface AccountHealth {
   cooldownUntil: number;
-  cooldownSource: "retry-after" | "default";
+  cooldownSource: AnthropicCooldownSource;
 }
 
 interface AffinityEntry {
@@ -112,19 +149,59 @@ export function anthropicQuotaWindow(config: AnthropicAccountPoolConfig): OcxAcc
   return normalizeAccountPoolQuotaWindow(config.quotaWindow);
 }
 
+/**
+ * A Retry-After header as a cooldown length in ms.
+ *
+ * Both forms the RFC allows are a STATEMENT by upstream about when it will serve this
+ * account again, so both are bounded by MAX_MEASURED_COOLDOWN_MS rather than by the
+ * 15-minute ceiling that used to apply here. Truncating a stated 2h13m to 15 minutes was
+ * the bug: it does not shorten the ban, it just re-offers the exhausted account four times
+ * an hour, and each attempt spends a real request to earn another 429.
+ */
 function parseRetryAfterMs(value: string | null | undefined, now: number): number | undefined {
   const text = value?.trim();
   if (!text) return undefined;
   if (/^\d+(?:\.\d+)?$/.test(text)) {
     const seconds = Number(text);
     if (Number.isFinite(seconds) && seconds > 0) {
-      return Math.min(Math.max(Math.ceil(seconds * 1000), 1), MAX_COOLDOWN_MS);
+      return Math.min(Math.max(Math.ceil(seconds * 1000), 1), MAX_MEASURED_COOLDOWN_MS);
     }
   }
   const timestamp = Date.parse(text);
   if (!Number.isFinite(timestamp)) return undefined;
   const delay = timestamp - now;
-  return delay > 0 ? Math.min(delay, MAX_COOLDOWN_MS) : undefined;
+  return delay > 0 ? Math.min(delay, MAX_MEASURED_COOLDOWN_MS) : undefined;
+}
+
+/**
+ * The cooldown implied by the account's own rate-limit headers, when they say a window is
+ * spent.
+ *
+ * Retry-After is not always present on an Anthropic 429, but
+ * `anthropic-ratelimit-unified-*-status: rejected` plus a `-reset` epoch always is, and it
+ * names the exact second the window reopens. Only a REJECTED window counts: an `allowed`
+ * window's reset is just the end of the current period, and cooling an account until then
+ * would bench a healthy account for hours.
+ *
+ * With more than one window rejected the answer is the LATEST reset, not the earliest. The
+ * limiter is AND-composed -- upstream refuses while ANY window rejects -- so an account whose
+ * 5-hour bucket rolls in three minutes is still refused for the five days its weekly window
+ * needs. Cooling to the earliest reset would re-offer that account every three minutes for
+ * five days, which is the re-offer loop this whole path exists to end.
+ */
+function parseRateLimitResetMs(headers: AnthropicRateLimitHeaders | null | undefined, now: number): number | undefined {
+  if (!headers) return undefined;
+  let latest: number | undefined;
+  for (const window of ["5h", "7d"] as const) {
+    if (headers.get(`anthropic-ratelimit-unified-${window}-status`)?.trim() !== "rejected") continue;
+    const resetSeconds = Number(headers.get(`anthropic-ratelimit-unified-${window}-reset`)?.trim());
+    if (!Number.isFinite(resetSeconds) || resetSeconds <= 0) continue;
+    const resetAt = resetSeconds * 1000;
+    if (resetAt <= now) continue;
+    if (latest === undefined || resetAt > latest) latest = resetAt;
+  }
+  if (latest === undefined) return undefined;
+  return Math.min(latest - now, MAX_MEASURED_COOLDOWN_MS);
 }
 
 export function getAnthropicAccountHealthSnapshot(
@@ -669,6 +746,7 @@ export function rotateAnthropicAccountOn429(
   retryAfterHeader: string | null | undefined,
   sessionKey?: string | null,
   now = Date.now(),
+  rateLimitHeaders?: AnthropicRateLimitHeaders | null,
 ): string | null {
   // Reactive 429 failover is NOT gated on the pool flag. That flag buys PROACTIVE routing --
   // session affinity, quota-ranked new-session selection, autoSwitchThreshold, strategy -- all
@@ -678,11 +756,18 @@ export function rotateAnthropicAccountOn429(
   // Presence is the activation rule, the same one an apiKeyPool of two keys already uses.
   if (!isAnthropicAccountPoolEnabled(config) && !hasAnthropicFailoverQuorum(now)) return null;
 
+  // Retry-After first: it is the header written FOR this decision. The rejected window's
+  // reset is the fallback, because a 429 that omits Retry-After still carries it -- and
+  // without that fallback such a refusal cools for the 60s default and the exhausted
+  // account is back in the rotation a minute later.
   const parsedRetry = parseRetryAfterMs(retryAfterHeader, now);
-  const cooldownMs = parsedRetry ?? DEFAULT_COOLDOWN_MS;
+  const resetDerived = parsedRetry === undefined ? parseRateLimitResetMs(rateLimitHeaders, now) : undefined;
+  const cooldownMs = parsedRetry ?? resetDerived ?? DEFAULT_COOLDOWN_MS;
   upstreamHealth.set(failedAccountId, {
     cooldownUntil: now + cooldownMs,
-    cooldownSource: parsedRetry ? "retry-after" : "default",
+    cooldownSource: parsedRetry !== undefined
+      ? "retry-after"
+      : resetDerived !== undefined ? "reset-derived" : "default",
   });
   sweepExpiredOnWrite(now);
   clearAnthropicSessionAffinityForAccount(failedAccountId);
