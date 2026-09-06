@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import { summarizeUsage } from "../../src/usage/summary";
+import type { PersistedUsageEntry } from "../../src/usage/log";
 import { isModelPickerUsage, isPickerOrderSaved, isPickerOrderSettings, modelPickerOrder, modelPickerOrderMode } from "../src/model-picker-order";
 
 const models = ["zeta/beta", "alpha/zeta", "alpha/alpha"];
@@ -9,12 +11,12 @@ test("presets save deterministic model/provider ordering and Default clears", ()
   expect(modelPickerOrder("default", models)).toBeNull();
   expect(models).toEqual(["zeta/beta", "alpha/zeta", "alpha/alpha"]);
 });
-test("Most used sums requested identities and only falls back for missing requested identities", () => {
+test("Most used counts only requested identities, ignoring representative resolved targets", () => {
   expect(modelPickerOrder("most-used", models, [
     { provider: "alpha", model: "zeta", resolvedModel: "alpha", requests: 4 },
     { provider: "alpha", model: "alpha/zeta", requests: 4 },
     { provider: "zeta", model: "missing", resolvedModel: "beta", requests: 3 },
-  ])).toEqual(["alpha/zeta", "zeta/beta", "alpha/alpha"]);
+  ])).toEqual(["alpha/zeta", "alpha/alpha", "zeta/beta"]);
   expect(modelPickerOrder("most-used", models, [])).toEqual(["alpha/alpha", "alpha/zeta", "zeta/beta"]);
 });
 test("raw slash-bearing ids resolve through observed canonical identities, never guessed namespaces", () => {
@@ -54,4 +56,24 @@ test("encoded collisions cannot attribute usage to an unproven winner", () => {
       { provider: "p", id: "team/model", namespaced: "p/team-model" },
       { provider: "p", id: "team-model", namespaced: "p/team-model" },
     ])).toEqual(["p/a", "p/team-model"]);
+});
+
+
+test("real mixed-resolved usage summary never credits an entire legacy bucket to its representative", () => {
+  const now = Date.UTC(2026, 8, 7, 12);
+  const entries: PersistedUsageEntry[] = Array.from({ length: 15 }, (_, index) => ({
+    requestId: `picker-mixed-${index}`, timestamp: now - 15 + index,
+    provider: "p", model: index < 10 ? "legacy" : "a",
+    resolvedModel: index === 0 ? "b" : index < 10 ? "c" : "a",
+    status: 200, durationMs: 10, usageStatus: "unreported",
+  }));
+  const summary = summarizeUsage(entries, "all", now);
+  const legacy = summary.models.find(row => row.model === "legacy")!;
+  expect(legacy.requests).toBe(10);
+  expect(legacy.resolvedModel).toBe("b");
+  expect(summary.models.find(row => row.model === "a")?.requests).toBe(5);
+  // Only a's five requested-identity calls are attributable to current candidates.
+  // b/c remain tied at zero; the first representative b does not inherit ten calls.
+  expect(modelPickerOrder("most-used", ["p/c", "p/b", "p/a"], summary.models))
+    .toEqual(["p/a", "p/b", "p/c"]);
 });

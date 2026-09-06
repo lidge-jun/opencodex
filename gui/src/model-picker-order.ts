@@ -79,9 +79,9 @@ export function modelPickerOrder(
   };
   const counts = new Map<string, number>();
   for (const row of usage) {
-    const requested = resolve(row.provider, row.model);
-    const target = requested === undefined && row.resolvedModel !== undefined
-      ? resolve(row.provider, row.resolvedModel) : requested;
+    // Summary buckets are keyed by requested model. resolvedModel is only a
+    // representative observation, not proof that every request used that target.
+    const target = resolve(row.provider, row.model);
     if (target) counts.set(target, (counts.get(target) ?? 0) + row.requests);
   }
   return unique.sort((a, b) => (counts.get(b) ?? 0) - (counts.get(a) ?? 0) || byProvider(a, b));
@@ -94,10 +94,13 @@ export function modelPickerOrderMode(
   // Existing complete/native orders are never silently replaced by a routed preset.
   if (saved.some(id => !id.includes("/"))) return "custom";
   if (mode === "alphabetical" || mode === "provider" || mode === "most-used") return mode;
-  if (new Set(saved).size !== saved.length || saved.length !== new Set(models).size
-    || saved.some(id => !models.includes(id))) return "custom";
+  const candidates = new Set(models);
+  if (new Set(saved).size !== saved.length || saved.length !== candidates.size
+    || saved.some(id => !candidates.has(id))) return "custom";
   for (const preset of ["alphabetical", "provider"] as const) {
-    if (modelPickerOrder(preset, models)?.every((id, index) => id === saved[index])) return preset;
+    const expected = modelPickerOrder(preset, models);
+    if (expected !== null && expected.length === saved.length
+      && expected.every((id, index) => id === saved[index])) return preset;
   }
   return "custom";
 }

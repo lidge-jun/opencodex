@@ -146,26 +146,48 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
     return () => { appServerMounted.current = false; };
   }, []);
 
-  const reloadAppServerState = useCallback((signal?: AbortSignal) => {
-    void fetchCodexAppServerState(apiBase, { signal }).then(outcome => {
-      if (signal?.aborted || !appServerMounted.current) return;
+  const appServerRead = useRef<BoundedFetch | null>(null);
+  const appServerReadGeneration = useRef(0);
+  const appServerReadBase = useRef(apiBase);
+  const cancelAppServerRead = useCallback(() => {
+    appServerReadGeneration.current++;
+    appServerRead.current?.controller.abort();
+    appServerRead.current?.clear();
+    appServerRead.current = null;
+  }, []);
+  const reloadAppServerState = useCallback(async () => {
+    // An old restart callback must not start an A read after the page moved to B.
+    if (!appServerMounted.current || appServerReadBase.current !== apiBase) return;
+    cancelAppServerRead();
+    const generation = appServerReadGeneration.current;
+    const bounded = createBoundedFetch(15_000);
+    appServerRead.current = bounded;
+    try {
+      const outcome = await fetchCodexAppServerState(apiBase, { signal: bounded.signal });
+      if (bounded.signal.aborted || !appServerMounted.current
+        || appServerReadBase.current !== apiBase || generation !== appServerReadGeneration.current
+        || appServerRead.current !== bounded) return;
       setAppServerState(outcome.state);
-    });
-  }, [apiBase]);
+    } finally {
+      // The observation owns its deadline until settlement, independently of PUT.
+      bounded.clear();
+      if (appServerRead.current === bounded) appServerRead.current = null;
+    }
+  }, [apiBase, cancelAppServerRead]);
 
   // onSettled, not a per-button callback: the sidebar control knows nothing about
   // this page, and a restart succeeding there must still clear the banner here.
   const { restarting: codexRestarting, restart: handleCodexRestart } = useCodexRestart(apiBase, {
-    onSettled: () => reloadAppServerState(),
+    onSettled: () => { void reloadAppServerState(); },
   });
 
   useEffect(() => {
-    // Once on mount, on apiBase change, and when a restart settles anywhere in the
-    // app (restartEpoch) — never a timer.
-    const controller = new AbortController();
-    reloadAppServerState(controller.signal);
-    return () => controller.abort();
-  }, [reloadAppServerState, restartEpoch]);
+    // Once on mount/base change or restart completion, never on a timer.
+    appServerReadBase.current = apiBase;
+    setAppServerState(null);
+    void reloadAppServerState();
+    return cancelAppServerRead;
+  }, [apiBase, cancelAppServerRead, reloadAppServerState, restartEpoch]);
 
 
 
@@ -252,8 +274,9 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
       pickerFlight.current?.controller.abort();
       pickerFlight.current?.clear();
       pickerFlight.current = null;
+      cancelAppServerRead();
     };
-  }, [apiBase, catalogActive]);
+  }, [apiBase, catalogActive, cancelAppServerRead]);
   const [customCap, setCustomCap] = useState("");
   const [showCustom, setShowCustom] = useState(false);
   const [providerCapCustomOpen, setProviderCapCustomOpen] = useState<Record<string, boolean>>({});
@@ -1659,12 +1682,14 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
       setClientResourceData(pickerCacheKey, next);
       writeSessionListCache(pickerCacheKey, next);
       setPickerDraft(null);
-      reloadAppServerState(bounded.signal);
+
       const refresh = "catalogRefresh" in data ? data.catalogRefresh : undefined;
       const converged = refresh !== null && typeof refresh === "object"
         && "status" in refresh && refresh.status === "committed"
         && "degraded" in refresh && refresh.degraded === false;
       publishFeedback(converged, t(converged ? "models.pickerOrder.saved" : "models.pickerOrder.pending"));
+      // Durable save is already accepted. Observational failure must not undo it.
+      void reloadAppServerState();
     } catch (error) {
       if (pickerFlight.current === bounded) {
         publishFeedback(false, error instanceof Error ? error.message : t("models.networkError"));

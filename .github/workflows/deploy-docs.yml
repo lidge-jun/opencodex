@@ -1,10 +1,10 @@
-name: Track 4 documentation build validation
+name: Track 4 final-gates diagnostics
 on:
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
-  group: t4-docs-validation-81a8
+  group: t4-gates-diagnostics-81a8
   cancel-in-progress: true
 jobs:
   build:
@@ -14,15 +14,24 @@ jobs:
       - name: Checkout reviewed source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          ref: 6eec1265c756e406baa28688661d59e258aa7319
+          ref: 6ffa357f2ff6ff20c950bf234d69135947522ba1
           persist-credentials: false
       - name: Record source identity
         run: git rev-parse HEAD
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
-      - name: Install frozen documentation dependencies
-        working-directory: docs-site
-        run: bun install --frozen-lockfile
-      - name: Build documentation without deployment
-        working-directory: docs-site
-        run: bun run build
+      - name: Install frozen dependencies
+        run: |
+          bun install --frozen-lockfile
+          cd gui
+          bun install --frozen-lockfile
+      - name: GUI lint
+        run: cd gui && bun run lint
+      - name: Typecheck
+        run: bun run typecheck
+      - name: GUI tests
+        run: cd gui && bun test --isolate tests
+      - name: Privacy scan
+        run: bun run privacy:scan
+      - name: GUI build
+        run: cd gui && bun run build
