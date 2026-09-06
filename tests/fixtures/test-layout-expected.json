@@ -106,6 +106,7 @@
   "catalog-vision-sidecar-modalities.test.ts": "codex-integration",
   "chat-completions-endpoint.test.ts": "responses",
   "chat-json-sse-fallback.test.ts": "responses",
+  "chat-refusal.test.ts": "responses",
   "chatgpt-device-auth.test.ts": "oauth",
   "chatgpt-oauth.test.ts": "oauth",
   "chatgpt-token-expiry.test.ts": "oauth",
