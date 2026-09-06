@@ -1752,6 +1752,11 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         if (!isAllowedRequestOrigin(req, policy)) {
           return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, policy);
         }
+        // Compaction buffers the whole upstream turn before the first byte reaches the
+        // client, so the server-level `idleTimeout` (255 s) would close this connection
+        // under a long remote compact even though the upstream is still working. Opt out
+        // the same way the other buffered data-plane routes above and below do.
+        disableResponsesRequestTimeout(req, requestServer);
         const start = Date.now();
         const requestId = nextRequestLogId(start);
         const logCtx: RequestLogContext = {

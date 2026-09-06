@@ -602,6 +602,19 @@ describe("server local API auth", () => {
     })).toBe(false);
   });
 
+  test("compact route opts out of the request timeout before it buffers the compaction", () => {
+    // `/v1/responses/compact` answers only after the whole upstream turn has been collected,
+    // so unlike the streaming route it never sends a byte that would keep the connection
+    // alive. Without this opt-out the server-level `idleTimeout` closes a long remote
+    // compact mid-flight and the client sees a truncated body, not an error.
+    const source = readFileSync(new URL("../../src/server/index.ts", import.meta.url), "utf8");
+    const compactStart = source.indexOf('url.pathname === "/v1/responses/compact" && req.method === "POST"');
+    expect(compactStart).toBeGreaterThan(-1);
+    const handlerCall = source.indexOf("await handleResponsesCompact(req, config, logCtx", compactStart);
+    expect(handlerCall).toBeGreaterThan(compactStart);
+    expect(source.slice(compactStart, handlerCall)).toContain("disableResponsesRequestTimeout(req, requestServer);");
+  });
+
   test("responses handler keeps the request timeout until the body is fully accepted", async () => {
     let controller!: ReadableStreamDefaultController<Uint8Array>;
     const body = new ReadableStream<Uint8Array>({
