@@ -24,6 +24,7 @@ import {
   positiveIntegerRecordConfigError,
   providerBaseUrlConfigError,
   providerHeadersConfigError,
+  providerProxyConfigError,
   reasoningSummaryDeliveryRecordConfigError,
   upstreamHttpVersionConfigError,
 } from "../config/provider-validation";
@@ -756,6 +757,11 @@ export function providerManagementConfigError(
   if (destinationError) return `provider ${name} ${destinationError}`;
   const headersError = providerHeadersConfigError(typed.headers);
   if (headersError) return `provider ${name} ${headersError}`;
+  // Reject provider proxy values the request-scoped transport cannot honor.
+  const proxyError = providerProxyConfigError(typed.proxy);
+  if (proxyError) {
+    return `provider ${JSON.stringify(redactSecretString(name))} ${proxyError}`;
+  }
   const retryOn429Error = retryOn429PolicyConfigError(raw.retryOn429);
   if (retryOn429Error) {
     // The provider name is caller-controlled and can be token-shaped; redact and JSON-escape
@@ -921,6 +927,8 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   allowEncryptedV2AgentTasks: "editor",
   allowPrivateNetwork: "editor",
   upstreamHttpVersion: "editor",
+  // Keep proxy credentials out of dashboard responses.
+  proxy: "redacted",
   upstreamWebsocket: "editor",
   directGeminiWireRenames: "editor",
   disabled: "editor",

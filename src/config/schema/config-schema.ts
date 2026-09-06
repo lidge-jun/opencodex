@@ -35,6 +35,7 @@ import {
   positiveIntegerRecordConfigError,
   providerBaseUrlConfigError,
   providerHeadersConfigError,
+  providerProxyConfigError,
   reasoningSummaryDeliveryRecordConfigError,
 } from "../provider-validation";
 import {
@@ -366,6 +367,14 @@ export const configSchema = z.object({
           message: sendPathError,
         });
       }
+    }
+    const proxyError = providerProxyConfigError((provider as { proxy?: unknown }).proxy);
+    if (proxyError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "proxy"],
+        message: proxyError,
+      });
     }
     const headersError = providerHeadersConfigError((provider as { headers?: unknown }).headers);
     if (headersError) {
