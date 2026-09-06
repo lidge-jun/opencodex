@@ -212,6 +212,18 @@ describe("route exemptions stay honest", () => {
       .map(r => key(r.method, r.path));
     expect(wrong).toEqual([]);
   });
+
+  test("literal Lab reads are Go-owned; parameterised reads stay exact-match deferred", () => {
+    const labReads = MANAGEMENT_ROUTES.filter(route => route.path.startsWith("/api/lab/") && !route.mutates);
+    const literal = labReads.filter(route => !route.mechanism);
+    const parameterised = labReads.filter(route => route.mechanism === "regex");
+    expect(literal).toHaveLength(11);
+    expect(literal.every(route => route.go?.volatileFields.length === 0)).toBe(true);
+    expect(parameterised.map(route => route.path).sort()).toEqual([
+      "/api/lab/artifacts/{digest}", "/api/lab/events/{id}", "/api/lab/subjects/{id}",
+    ]);
+    expect(parameterised.every(route => route.exempt?.reason === "local-transport")).toBe(true);
+  });
 });
 
 describe("the registry is inert data", () => {

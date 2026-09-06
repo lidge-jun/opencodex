@@ -135,6 +135,54 @@ func TestConfigWriteRelayRejectsMissingTokenOrChangedBody(t *testing.T) {
 	}
 }
 
+func TestLabReadBridgeIsExactAndCapabilityProtected(t *testing.T) {
+	const requestToken = "parent-to-sidecar"
+	const bridgeToken = "sidecar-to-parent"
+	var calls int
+	bridge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.Method != http.MethodGet || r.URL.Path != privateLabReadBridgePath {
+			t.Fatalf("bridge request = %s %s", r.Method, r.URL.String())
+		}
+		if r.Header.Get(SidecarBridgeHeader) != bridgeToken {
+			t.Fatal("bridge token missing")
+		}
+		if r.Header.Get("X-Ocx-Go-Sidecar-Path") != "/api/lab/verdicts" {
+			t.Fatalf("path header = %q", r.Header.Get("X-Ocx-Go-Sidecar-Path"))
+		}
+		if r.URL.RawQuery != "limit=1" {
+			t.Fatalf("query = %q", r.URL.RawQuery)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"error":{"code":"lab_projection_unavailable"}}`))
+	}))
+	defer bridge.Close()
+	h := NewHandler(Config{ParentURL: bridge.URL, BridgeToken: bridgeToken, RequestToken: requestToken})
+	missing := do(t, h, http.MethodGet, "/api/lab/verdicts?limit=1")
+	if missing.StatusCode != http.StatusNotFound {
+		t.Fatalf("missing token status = %d, want 404", missing.StatusCode)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/lab/verdicts?limit=1", nil)
+	req.Header.Set(SidecarRequestHeader, requestToken)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	want := `{"error":{"code":"lab_projection_unavailable"}}`
+	if rec.Code != http.StatusServiceUnavailable || rec.Body.String() != want {
+		t.Fatalf("relay = %d %s", rec.Code, rec.Body.String())
+	}
+	if calls != 1 {
+		t.Fatalf("bridge calls = %d, want 1", calls)
+	}
+	unknown := httptest.NewRequest(http.MethodGet, "/api/lab/verdicts/extra", nil)
+	unknown.Header.Set(SidecarRequestHeader, requestToken)
+	unknownRec := httptest.NewRecorder()
+	h.ServeHTTP(unknownRec, unknown)
+	if unknownRec.Code != http.StatusNotFound || calls != 1 {
+		t.Fatalf("nonliteral route status/calls = %d/%d", unknownRec.Code, calls)
+	}
+}
+
 func TestHealthShape(t *testing.T) {
 	startedAt := time.Now().Add(-123 * time.Second)
 	h := NewHandler(Config{Service: "opencodex", Version: "2.42.0", StartedAt: startedAt})
