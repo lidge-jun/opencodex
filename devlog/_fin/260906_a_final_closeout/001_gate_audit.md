@@ -1,0 +1,3 @@
+# Final gate audit resolution
+
+Accepted the independent audit finding: merge automation must not ignore a failed/cancelled aggregate or skipped applicable producer. The helper now enumerates all24 applicable producer names for the pinned manual-all workflow and requires every one completed/successful. No job-level skip is applicable to this workflow invocation. Exactly one ci aggregator must be successful or only queued; all other states reject. Queued aggregation is accepted only after the full producer predicate has been independently established and recorded. Prior three A merge records were rechecked and satisfy this stronger condition; no failed/skipped producer was previously bypassed.

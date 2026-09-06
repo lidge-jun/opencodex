@@ -32,6 +32,20 @@ Start with **base**. Choose **v1** when cross-provider delegation must work pred
 only when you specifically want its newer session model across every catalog entry.
 :::
 
+## External task input
+
+Codex can deliver a task's initial input or follow-up in a result-shaped envelope
+without a `call_id`. On translated routes, OpenCodex recognizes only the complete
+`function_call_output` shape with nonblank `id`, `name` and `namespace` and supported
+text/image output, then treats it as a user turn. This also starts the new conversation
+boundary during continuation and clears pending reasoning from the preceding turn.
+Generated developer guidance is placed before the current task in both parsed
+messages and saved raw history, preserving the same order when that history is replayed.
+
+Malformed, empty, opaque or incomplete envelopes still fail validation. Actual tool
+results keep their required `call_id`; native passthrough and compaction retain their
+existing raw-input handling. See [the adapter contract](/reference/adapters/#external-task-input-on-translated-responses-routes).
+
 ## How it works
 
 The selected mode controls the `multi_agent_version` field in every catalog entry Codex reads:
@@ -133,8 +147,9 @@ opencodex fails safely instead of forwarding an empty or unreadable task:
   `error.code = "unreadable_encrypted_agent_task"` and does not echo the ciphertext. An eligible
   direct key-auth Responses provider that explicitly opts in with
   `allowEncryptedV2AgentTasks: true` instead receives the opaque ciphertext and bypasses this error.
-- A combo considers only canonical native ChatGPT targets for that task, including retries. If none
-  is available, it returns the same 400 error.
+- A combo first considers canonical native ChatGPT targets. If none is available or their attempts
+  are exhausted, enabled recovery may make the task readable for an available routed target.
+  Without successful recovery and an eligible target, unreadable ciphertext is never forwarded.
 - A readable plaintext task keeps the normal route and fallback behavior.
 
 Recovery options are to select a native ChatGPT child, explicitly trust a direct key-auth Responses
@@ -151,12 +166,28 @@ authentication, another provider credential, or another Codex account. Only `aut
 `content-type` and `accept` are generated locally, and no other caller headers cross the boundary.
 It consumes quota, adds latency, briefly retains recovered plaintext in a bounded in-memory cache,
 and depends on undocumented ChatGPT backend behavior. Because a model returns the recovered text,
-byte-for-byte fidelity is not guaranteed. It rejects generic/API-key proxy callers and preserves
-`unreadable_encrypted_agent_task` on any failure. See
+byte-for-byte fidelity is not guaranteed. It rejects generic/API-key proxy callers. Failed recovery before any native attempt returns
+`unreadable_encrypted_agent_task`; after native attempts have failed, their last error is retained. See
 [Agent configuration: Encrypted v2 task recovery](/reference/configuration/agents/#encrypted-v2-task-recovery)
 for the full trust boundary and configuration.
-Combo routing remains unchanged and continues to consider only canonical native ChatGPT targets for
-encrypted tasks.
+Combo routing prefers a selectable canonical native ChatGPT target for encrypted tasks. If none
+is usable, or native authorization attempts are exhausted, an explicitly enabled recovery may
+make the task readable for one available routed target. All recovery trust and no-persistence
+guards above still apply; a configured but disabled or cooling native target does not block this
+fallback, and cancellation never becomes an unreadable-task error.
+
+## Rejected encrypted history
+
+An upstream Responses server can reject encrypted parts in earlier function/custom-tool
+output or `agent_message` content with `Encrypted function output content could not be decrypted or decoded.`. Before
+any output is committed, opencodex replaces those parts with `[encrypted content omitted]`
+and rebuilds the request once. The surrounding readable content stays intact; the
+omitted content is not decrypted or recovered by this retry.
+
+If the rebuilt request receives another bare SSE `error` followed by EOF, both relay
+modes preserve the error message in a `response.failed` terminal instead of reporting
+`adapter_eof`. Other upstream `response.failed` events remain SSE failures. This history
+recovery does not change the encrypted v2 task-delivery restrictions described above.
 
 ## Changing the mode
 

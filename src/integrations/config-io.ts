@@ -162,7 +162,22 @@ export function parseConfig(text: string | null, format: ConfigFormat): unknown 
          * evidence is gone.
          */
         if (/(^|[\s,[=])[-+]?(?:inf|nan)(?=[\s,\]]|$)/mi.test(text)) return PARSE_FAILED;
-        return Bun.TOML.parse(text);
+        const document = Bun.TOML.parse(text);
+        // TOML date/time scalars are Temporal objects with toJSON methods.
+        // The merge layer JSON-clones documents, which silently turns these
+        // into strings. Refuse before either status or a writer can admit a
+        // lossy rewrite, including dates nested in arrays and inline tables.
+        const pending: unknown[] = [document];
+        while (pending.length > 0) {
+          const value = pending.pop();
+          if (value === null || typeof value !== "object") continue;
+          if (!Array.isArray(value)) {
+            const prototype = Object.getPrototypeOf(value);
+            if (prototype !== Object.prototype && prototype !== null) return PARSE_FAILED;
+          }
+          for (const child of Object.values(value)) pending.push(child);
+        }
+        return document;
       }
     }
   } catch {

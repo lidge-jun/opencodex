@@ -10,7 +10,8 @@ import type { OcxProviderConfig } from "../types";
  *
  * `strategy` and `autoSwitchThreshold` are still a declared contract the selector does not
  * consume — that is what `inert` reports. `enabled` is NOT inert any more: an explicit
- * `false` refuses the pre-dispatch account preference (`preferredInitialAccount`). What it can
+ * `true` enables pre-dispatch exhaustion avoidance (`preferredInitialAccount`); absence is off.
+ * Healthy manual selections remain authoritative. What the switch can
  * no longer do is refuse reactive 429 rotation, which activates on account presence and is not
  * disableable.
  */

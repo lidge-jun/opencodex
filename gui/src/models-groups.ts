@@ -81,7 +81,8 @@ export function buildProviderModelGroups<Row extends { provider: string; native?
         provider,
         rows: providerRows,
         native: providerRows.length > 0 && providerRows.every(row => row.native === true),
-        nativeProviderGroup: providerRows.some(row => row.native === true),
+        nativeProviderGroup: providerRows.some(row => row.native === true)
+          || (provider === "openai" && configured?.authMode === "forward"),
         liveModels: configured?.liveModels !== false,
         configuredModels: configured?.models ?? [],
         contextWindow: configured?.contextWindow,

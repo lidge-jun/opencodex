@@ -2,12 +2,15 @@ import { describe, expect, test } from "bun:test";
 import { fromBinary, toJson } from "@bufbuild/protobuf";
 import { ValueSchema } from "@bufbuild/protobuf/wkt";
 import { normalizeArgKeys } from "../../../src/adapters/cursor/arg-normalize";
+import { buildTools } from "../../../src/responses/parser-tools";
 import {
   appendCursorGenericToolUseHint,
   buildCursorToolDefinitions,
   cursorToolsForActivePrompt,
   buildCursorToolGuidanceSystemNote,
+  CODEX_SHELL_BRIDGE_ARG_NORMALIZE_SCHEMA,
   CURSOR_EXEC_COMMAND_INPUT_SCHEMA,
+  CURSOR_FREEFORM_INPUT_SCHEMA,
   cursorRequestAdvertisesApplyPatch,
   cursorRequestUsesCodeMode,
   isCursorCodeModeExecTool,
@@ -128,6 +131,218 @@ describe("Cursor tool definitions", () => {
     expect(toJson(ValueSchema, fromBinary(ValueSchema, defs[0]!.inputSchema))).toEqual(CURSOR_EXEC_COMMAND_INPUT_SCHEMA);
   });
 
+  test("preserves sandbox escalation controls in shell advertisement and normalization", () => {
+    const advertised = CURSOR_EXEC_COMMAND_INPUT_SCHEMA.properties;
+    const normalized = CODEX_SHELL_BRIDGE_ARG_NORMALIZE_SCHEMA.properties;
+
+    expect(advertised.sandbox_permissions.enum).toEqual(["use_default", "require_escalated"]);
+    expect(advertised.justification.type).toBe("string");
+    expect(advertised.prefix_rule.items).toEqual({ type: "string" });
+    expect(advertised.login.type).toBe("boolean");
+    expect(normalized.sandbox_permissions.enum).toEqual(["use_default", "require_escalated"]);
+    expect(normalized.justification.type).toBe("string");
+    expect(normalized.prefix_rule.items).toEqual({ type: "string" });
+    expect(normalized.login.type).toBe("boolean");
+  });
+
+  test("advertises and normalizes freeform tools as one required string input", () => {
+    // Independent wire contract: using the production constant as the expected value
+    // would let an incorrect constant validate both schema selection and protobuf output.
+    const expectedSchema = {
+      type: "object",
+      properties: { input: { type: "string" } },
+      required: ["input"],
+      additionalProperties: false,
+    };
+    const tool: OcxTool = {
+      name: "apply_patch",
+      description: "Apply a patch",
+      parameters: {},
+      freeform: true,
+    };
+
+    expect(CURSOR_FREEFORM_INPUT_SCHEMA).toEqual(expectedSchema);
+    expect(cursorToolInputSchema(tool)).toEqual(expectedSchema);
+    expect(cursorToolArgNormalizeSchema(tool)).toEqual(expectedSchema);
+    const defs = buildCursorToolDefinitions([tool]);
+    expect(defs).toHaveLength(1);
+    expect(toJson(ValueSchema, fromBinary(ValueSchema, defs[0]!.inputSchema))).toEqual(expectedSchema);
+
+    const codeModeExec: OcxTool = { name: "exec", description: "Run JavaScript", freeform: true };
+    expect(cursorToolInputSchema(codeModeExec)).toEqual(expectedSchema);
+    expect(cursorToolArgNormalizeSchema(codeModeExec)).toEqual(expectedSchema);
+    const execDefs = buildCursorToolDefinitions([codeModeExec]);
+    expect(execDefs).toHaveLength(1);
+    expect(toJson(ValueSchema, fromBinary(ValueSchema, execDefs[0]!.inputSchema))).toEqual(expectedSchema);
+  });
+
+  describe("freeform input guidance", () => {
+    const closedSchema = {
+      type: "object",
+      properties: { input: { type: "string" } },
+      required: ["input"],
+      additionalProperties: false,
+    };
+
+    test("preserves buildTools guidance through both selectors and protobuf registration", () => {
+      const tools = buildTools([
+        { type: "custom", name: "apply_patch", description: "Apply a patch" },
+        { type: "custom", name: "exec", description: "Run JavaScript" },
+        { type: "namespace", name: "mcp__custom", tools: [
+          { type: "custom", name: "exec_command", description: "Custom input" },
+        ] },
+      ]);
+      const descriptions = [
+        "Raw tool input. For apply_patch, begin exactly with `*** Begin Patch` (no trailing `***`), then use its standard patch envelope.",
+        "Raw freeform input for this tool.",
+        "Raw freeform input for this tool.",
+      ];
+      expect(tools).toHaveLength(3);
+      const defs = buildCursorToolDefinitions(tools);
+      expect(defs.map(def => def.toolName)).toEqual(["apply_patch", "exec", "mcp__custom__exec_command"]);
+      expect(defs.map(def => def.description)).toEqual(["Apply a patch", "Run JavaScript", "Custom input"]);
+      for (const [index, description] of descriptions.entries()) {
+        const expected = {
+          ...closedSchema,
+          properties: { input: { type: "string", description } },
+        };
+        expect(tools![index]).toMatchObject({
+          freeform: true,
+          parameters: { properties: { input: { type: "string", description } } },
+        });
+        expect(cursorToolInputSchema(tools![index]!)).toEqual(expected);
+        expect(cursorToolArgNormalizeSchema(tools![index]!)).toEqual(expected);
+        expect(toJson(ValueSchema, fromBinary(ValueSchema, defs[index]!.inputSchema))).toEqual(expected);
+      }
+    });
+
+    test("isolates per-tool descriptions including empty strings without mutating inputs or defaults", () => {
+      const descriptions = ["guidance-A", "guidance-B", undefined, ""];
+      const tools: OcxTool[] = descriptions.map((description, index) => ({
+        name: `custom_${index}`,
+        description: "Top-level description must not become input guidance",
+        freeform: true,
+        parameters: Object.freeze({
+          type: "object",
+          properties: Object.freeze({
+            input: Object.freeze({ type: "string", ...(description !== undefined ? { description } : {}) }),
+          }),
+        }),
+      }));
+      // Collect all results before comparing, so shared-object mutation cannot hide
+      // behind a check that runs before the next tool overwrites the guidance.
+      const advertised = tools.map(cursorToolInputSchema);
+      const normalized = tools.map(cursorToolArgNormalizeSchema);
+      const defs = buildCursorToolDefinitions(tools);
+      expect(defs).toHaveLength(4);
+      for (const [index, description] of descriptions.entries()) {
+        const expected = description === undefined ? closedSchema : {
+          ...closedSchema,
+          properties: { input: { type: "string", description } },
+        };
+        expect(advertised[index]).toEqual(expected);
+        expect(normalized[index]).toEqual(expected);
+        expect(toJson(ValueSchema, fromBinary(ValueSchema, defs[index]!.inputSchema))).toEqual(expected);
+      }
+      expect(CURSOR_FREEFORM_INPUT_SCHEMA).toEqual(closedSchema);
+    });
+
+    test("copies only input description while enforcing the canonical closed shape", () => {
+      const tool: OcxTool = {
+        name: "custom_shape",
+        description: "Custom input",
+        freeform: true,
+        parameters: {
+          type: "object",
+          properties: {
+            input: { type: "number", description: "guidance-A", enum: [1, 2], default: 1 },
+            command: { type: "string" },
+          },
+          required: ["command"],
+          additionalProperties: true,
+        },
+      };
+      const before = JSON.stringify(tool.parameters);
+      const expected = {
+        ...closedSchema,
+        properties: { input: { type: "string", description: "guidance-A" } },
+      };
+      expect(cursorToolInputSchema(tool)).toEqual(expected);
+      expect(cursorToolArgNormalizeSchema(tool)).toEqual(expected);
+      const defs = buildCursorToolDefinitions([tool]);
+      expect(defs).toHaveLength(1);
+      expect(toJson(ValueSchema, fromBinary(ValueSchema, defs[0]!.inputSchema))).toEqual(expected);
+      expect(JSON.stringify(tool.parameters)).toBe(before);
+    });
+
+    test.each([
+      ["missing properties", {}],
+      ["null properties", { properties: null }],
+      ["string properties", { properties: "input" }],
+      ["array properties", { properties: [{ input: { description: "not guidance" } }] }],
+      ["missing input", { properties: {} }],
+      ["null input", { properties: { input: null } }],
+      ["string input", { properties: { input: "not guidance" } }],
+      ["array input", { properties: { input: [{ description: "not guidance" }] } }],
+      ["numeric description", { properties: { input: { description: 42 } } }],
+      ["null description", { properties: { input: { description: null } } }],
+      ["boolean description", { properties: { input: { description: false } } }],
+      ["object description", { properties: { input: { description: { text: "not guidance" } } } }],
+    ] as const)("uses the canonical fallback for %s", (_label, parameters) => {
+      const tool: OcxTool = { name: "custom_fallback", description: "Top-level only", freeform: true, parameters };
+      expect(cursorToolInputSchema(tool)).toEqual(closedSchema);
+      expect(cursorToolArgNormalizeSchema(tool)).toEqual(closedSchema);
+      const defs = buildCursorToolDefinitions([tool]);
+      expect(defs).toHaveLength(1);
+      expect(toJson(ValueSchema, fromBinary(ValueSchema, defs[0]!.inputSchema))).toEqual(closedSchema);
+      expect(CURSOR_FREEFORM_INPUT_SCHEMA).toEqual(closedSchema);
+    });
+  });
+
+  test("rejects freeform tools that reuse bare shell bridge names", () => {
+    for (const name of ["exec_command", "shell_command"]) {
+      const tool: OcxTool = { name, description: "Custom", parameters: {}, freeform: true };
+
+      expect(() => cursorToolInputSchema(tool)).toThrow(`freeform Cursor tools cannot use reserved shell bridge name ${name}`);
+      expect(() => cursorToolArgNormalizeSchema(tool)).toThrow(`freeform Cursor tools cannot use reserved shell bridge name ${name}`);
+      expect(() => buildCursorToolDefinitions([tool])).toThrow(`freeform Cursor tools cannot use reserved shell bridge name ${name}`);
+    }
+  });
+
+  test("preserves namespaced shell names and ordinary freeform/non-freeform contracts", () => {
+    const expectedFreeformSchema = {
+      type: "object",
+      properties: { input: { type: "string" } },
+      required: ["input"],
+      additionalProperties: false,
+    };
+    const namespacedFreeform: OcxTool = {
+      name: "exec_command",
+      namespace: "mcp__custom",
+      description: "Custom",
+      parameters: {},
+      freeform: true,
+    };
+    expect(cursorToolInputSchema(namespacedFreeform)).toEqual(expectedFreeformSchema);
+    expect(cursorToolArgNormalizeSchema(namespacedFreeform)).toEqual(expectedFreeformSchema);
+    const defs = buildCursorToolDefinitions([namespacedFreeform]);
+    expect(defs).toHaveLength(1);
+    expect(defs[0]?.toolName).toBe("mcp__custom__exec_command");
+    expect(toJson(ValueSchema, fromBinary(ValueSchema, defs[0]!.inputSchema))).toEqual(expectedFreeformSchema);
+
+    const ordinaryFreeform: OcxTool = { name: "apply_patch", description: "Patch", parameters: {}, freeform: true };
+    expect(cursorToolInputSchema(ordinaryFreeform)).toEqual(expectedFreeformSchema);
+    expect(cursorToolArgNormalizeSchema(ordinaryFreeform)).toEqual(expectedFreeformSchema);
+
+    const ordinaryFunction: OcxTool = {
+      name: "exec_command",
+      description: "Run",
+      parameters: { type: "object", properties: { cmd: { type: "string" } }, required: ["cmd"] },
+    };
+    expect(cursorToolInputSchema(ordinaryFunction)).toEqual(CURSOR_EXEC_COMMAND_INPUT_SCHEMA);
+    expect(cursorToolArgNormalizeSchema(ordinaryFunction)).toEqual(ordinaryFunction.parameters);
+  });
+
   test("normalizes advertised shell_command cmd args to Responses command before Codex sees them", () => {
     // Live #399 failure: Cursor advertisement requires `cmd`, models send `cmd`, but Codex
     // shell_command validates `command` → "missing field `command`". Normalization must use the
@@ -153,6 +368,19 @@ describe("Cursor tool definitions", () => {
     });
     expect(normalizeArgKeys({ command: "git status" }, cursorToolArgNormalizeSchema(tool))).toEqual({
       command: "git status",
+    });
+    expect(normalizeArgKeys({
+      cmd: "git status",
+      sandbox_permissions: "require_escalated",
+      justification: "Fetch the requested upstream ref",
+      prefix_rule: ["git", "fetch"],
+      login: false,
+    }, cursorToolArgNormalizeSchema(tool))).toEqual({
+      command: "git status",
+      sandbox_permissions: "require_escalated",
+      justification: "Fetch the requested upstream ref",
+      prefix_rule: ["git", "fetch"],
+      login: false,
     });
   });
 
@@ -181,6 +409,19 @@ describe("Cursor tool definitions", () => {
     expect(normalizeArgKeys({ cmd: "git status", workdir: "C:/repo" }, cursorToolArgNormalizeSchema(tool))).toEqual({
       cmd: "git status",
       workdir: "C:/repo",
+    });
+    expect(normalizeArgKeys({
+      cmd: "git fetch",
+      sandbox_permissions: "require_escalated",
+      justification: "Fetch the requested upstream ref",
+      prefix_rule: ["git", "fetch"],
+      login: false,
+    }, cursorToolArgNormalizeSchema(tool))).toEqual({
+      cmd: "git fetch",
+      sandbox_permissions: "require_escalated",
+      justification: "Fetch the requested upstream ref",
+      prefix_rule: ["git", "fetch"],
+      login: false,
     });
   });
 

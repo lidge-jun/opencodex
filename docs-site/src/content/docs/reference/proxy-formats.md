@@ -28,7 +28,7 @@ should select among several targets.
 | OpenAI Chat Completions | `POST /v1/chat/completions` | `chat.completion` JSON | `chat.completion.chunk` SSE ending in `[DONE]` |
 | Anthropic Messages | `POST /v1/messages` | Anthropic `message` JSON | Anthropic Messages SSE |
 | Anthropic token count | `POST /v1/messages/count_tokens` | `{ "input_tokens": number }` | Not applicable |
-| Model discovery | `GET /v1/models` | One of three catalog contracts | Not applicable |
+| Model discovery | `GET /v1/models` | Catalog or explicit Desktop snapshot | Not applicable |
 | Voice and Realtime | `POST /v1/live`, `POST /v1/realtime/calls` | Relayed call-creation response | A separate sideband WebSocket relays frames in both directions |
 | Responses compaction | `POST /v1/responses/compact` | Replacement-history JSON | Not applicable |
 
@@ -83,6 +83,11 @@ This applies to both tee inspection and eager relay, including Windows rewrite t
 even when the upstream read rejects before the response-body cancellation hook runs.
 A terminal captured during the bounded post-disconnect drain retains its actual outcome.
 
+If native passthrough rewriting fails, including when it exceeds the translation
+buffer budget, the relay reports the failure without waiting for upstream inspection
+to finish. It cancels the upstream work and emits `response.failed` followed by
+`data: [DONE]`; a budget overflow uses the `translation_buffer_limit` error code.
+
 Client-facing Responses SSE frames are limited to 4 MiB per frame, measured in raw bytes before the
 SSE block delimiter. On HTTP, an unterminated upstream frame that exceeds the limit fails closed
 with a synthetic `response.failed` event followed by `data: [DONE]`. On the Responses WebSocket
@@ -112,6 +117,19 @@ identities use HTTP/SSE. The upstream WS adapter keeps the same downstream SSE c
 the raw JSON frame and its SSE envelope at 4 MiB, and closes the upstream when its 8 MiB byte queue
 would overflow. That overflow emits a terminal downstream `response.failed` event followed by
 `[DONE]`.
+
+The upstream WebSocket checks `NO_PROXY`/`no_proxy` first. Otherwise it uses the first non-empty
+`HTTPS_PROXY`, `https_proxy`, `ALL_PROXY`, or `all_proxy` value; `HTTP_PROXY` alone does not proxy a
+WSS connection. HTTP and HTTPS proxy URLs are passed to Bun. If the selected value is invalid or
+uses an unsupported protocol, opencodex skips the WebSocket attempt and uses HTTP/SSE instead of
+dialing the upstream directly.
+
+These rules belong to the upstream WebSocket transport, independently of the selected provider
+adapter. HTTP fetch-based Responses requests, including SSE fallback, use Bun's HTTP proxy rules
+and do not use `ALL_PROXY`. `config.proxy` fills missing `HTTP_PROXY`/`HTTPS_PROXY` values; the
+resulting scheme-specific value also takes precedence over an existing `ALL_PROXY` for WebSocket.
+For an HTTPS upstream that requires a proxy, set `HTTPS_PROXY` or `config.proxy`; `HTTP_PROXY`
+alone leaves both WSS and its HTTPS fallback without a scheme-matched proxy.
 
 Every terminal Responses usage object includes both detail objects, even when the provider did not
 report those details:
@@ -284,16 +302,46 @@ documented estimate over system content, messages, and tools and return:
 { "input_tokens": 123 }
 ```
 
+An unresolved date-shaped Desktop ID can also be a genuine native model missing from discovery.
+Messages and count-tokens return HTTP 503 with the fixed `desktop_model_mapping_unavailable` error when the available
+evidence cannot resolve that ID; this does not establish that the model is invalid. Unknown legacy
+hash aliases still return HTTP 400. Neither case strips the date or falls back to another route.
+Known IDs, registered mappings and exact `modelMap` matches keep their existing behavior, including
+recognized real native IDs. Refresh model discovery or reapply the connected hub profile before
+trying again; retrying alone does not guarantee resolution.
+
 ## `GET /v1/models`
 
-The same route serves three clients that expect incompatible catalog envelopes. Anthropic flavor
-wins unless `client_version` is also present.
+Without `format=desktop-config`, the ordinary catalog contracts are:
 
 | Contract | Trigger | Top-level shape | Model-id behavior |
 | --- | --- | --- | --- |
 | Anthropic model list | `anthropic-version` header or `?flavor=anthropic`, without `client_version` | `{ "data": [...] }` with Anthropic model-info entries | Claude Code receives readable ids; Desktop can receive its profile-specific alias family |
 | Codex catalog | `client_version` query parameter | `{ "models": [...] }` | Native and routed entries carry the richer Codex catalog fields, visibility, effort, WebSocket, and multi-agent metadata |
 | Plain OpenAI list | Neither trigger | `{ "object": "list", "data": [...] }` | Visible native ids are bare; routed ids are aliases or `provider/model` |
+
+### Desktop configuration snapshot
+
+`GET /v1/models?ids=desktop&format=desktop-config` explicitly selects the Desktop snapshot,
+independently of user-agent detection. The response is `{ "version": 1, "models": [...] }`
+with `Cache-Control: no-store`. The connected client sends `Accept: application/json`,
+`anthropic-version: 2023-06-01` and its existing data credential; no admin token or profile
+upload is involved. Entries are the hub-issued Desktop configuration models, not Codex catalog rows.
+
+Combining this format with `ids=cli` or any `client_version` returns HTTP 400. Without the
+format selector, the ordinary contracts above remain unchanged. When Claude is disabled,
+the snapshot is `{ "version": 1, "models": [] }`; connected Desktop apply treats this as
+unavailable and does not write a replacement profile. Old hubs returning an ordinary catalog
+instead of version 1 are unsupported; the client does not fall back to locally generated IDs.
+
+The snapshot remains a read-only model-list contract; it is not a key-rotation or profile-upload
+API. Connected Desktop key migration, recovery and disconnect operate through the existing client
+lifecycle. Rotation preserves model entries and selections; CLI `rotation` distinguishes
+`committed` from `rolled_back`. Disconnect restores owned settings or reports a known-legacy
+standard fallback, preserving user fields and later valid selections. Conflicts or incomplete
+recovery prevent a completion claim. Restart Desktop to load disk changes; disconnect does not
+automatically revoke the hub key. See [Claude Desktop lifecycle](/guides/claude-code/).
+Thinking replay and prompt-cache work remain separate in [#3719](https://github.com/lidge-jun/opencodex/issues/3719).
 
 ## `POST /v1/live` and Realtime sideband
 

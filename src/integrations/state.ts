@@ -352,6 +352,8 @@ export interface IntegrationStateInput {
   /** The whole integration state store, bound to one root. */
   store?: IntegrationStateStore;
   io?: IntegrationIO;
+  /** Internal explicit profile target; never accepted as a caller-provided path. */
+  resolvedPaths?: { configPath: string; detectDir: string };
 }
 
 export function exportContextOf(input: {
@@ -431,7 +433,7 @@ export function readIntegrationState(input: IntegrationStateInput): IntegrationS
   try {
     // One resolution for both, so a client whose paths come from mutable state
     // cannot report one account's install beside another account's config path.
-    const paths = resolveIntegrationPaths(input.clientId, input.env, input.home);
+    const paths = input.resolvedPaths ?? resolveIntegrationPaths(input.clientId, input.env, input.home);
     configPath = paths.configPath;
     installed = io.statKind(paths.detectDir) === "dir";
   } catch (error) {

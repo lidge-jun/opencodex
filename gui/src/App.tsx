@@ -265,7 +265,7 @@ export default function App() {
     >
       <span className="brand-logo" role="img" aria-label={t("app.logoAria")} />
       <span className="name">opencodex</span>
-      <span className="ver">v{displayedVersion}</span>
+      <span className="ver" title={displayedVersion}>v{displayedVersion}</span>
     </button>
   );
 

@@ -175,3 +175,281 @@ test("success toast expires after 6s and a repeated action re-arms it", async ()
   await fireTimers(6000);
   expect(container.querySelector(".action-toast")).toBeNull();
 });
+
+test("OpenAI context switch restores the selected cap after a disabled-page reload instead of forcing 922k", async () => {
+  testWindow.sessionStorage.clear();
+  let caps: Record<string, number> = {openai:128_000};
+  const values = {openai:128_000};
+  const bodies: unknown[] = [];
+  let capReads = 0;
+  const fallback = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/api/models")) return Response.json([
+      {provider:"openai",id:"gpt-5.5",namespaced:"gpt-5.5",native:true,disabled:false,contextWindow:caps.openai??272_000},
+    ]);
+    if (url.endsWith("/api/providers")) return Response.json([{name:"openai",authMode:"forward",liveModels:false}]);
+    if (url.endsWith("/api/provider-context-caps")) {
+      if (init?.method === "PUT") {
+        const body=JSON.parse(String(init.body)); bodies.push(body);
+        caps=body.enabled ? {openai:values.openai} : {};
+      } else capReads += 1;
+      return Response.json({caps,values,value:350_000});
+    }
+    return fallback(input,init);
+  }) as typeof fetch;
+  const { createRoot } = await import("react-dom/client");
+  await act(async () => { root=createRoot(container); root.render(<LanguageProvider><Models apiBase="http://localhost" /></LanguageProvider>); });
+  const settle=async()=>{await new Promise(resolve=>testWindow.setTimeout(resolve,0));};
+  await act(settle);
+  const cluster=()=>container.querySelector<HTMLElement>(".models-cap-cluster")!;
+  const toggle=()=>cluster().querySelector<HTMLButtonElement>("button.switch")!;
+  expect(cluster().textContent).toContain("128k");
+  await act(async()=>{toggle().click();await settle();});
+  expect(toggle().getAttribute("aria-pressed")).toBe("false");
+  expect(cluster().textContent).toContain("128k");
+  const readsBeforeReload = capReads;
+  await act(async () => { root!.unmount(); root = null; });
+  clearClientResourceStoresForTests();
+  testWindow.sessionStorage.clear();
+  await act(async () => {
+    root = createRoot(container);
+    root.render(<LanguageProvider><Models apiBase="http://localhost" /></LanguageProvider>);
+  });
+  await act(settle);
+  expect(capReads).toBeGreaterThan(readsBeforeReload);
+  expect(toggle().getAttribute("aria-pressed")).toBe("false");
+  expect(cluster().textContent).toContain("128k");
+  expect(bodies).toEqual([{ provider: "openai", enabled: false }]);
+  await act(async()=>{toggle().click();await settle();});
+  expect(toggle().getAttribute("aria-pressed")).toBe("true");
+  expect(cluster().textContent).toContain("128k");
+  expect(bodies).toEqual([{provider:"openai",enabled:false},{provider:"openai",enabled:true}]);
+});
+
+test.each([
+  { response: { caps: { anthropic: 128_000 }, value: 350_000 }, label: "128k", enabled: true },
+  { response: { caps: {}, value: 600_000 }, label: "600k", enabled: false },
+  { response: { caps: {}, cap: 350_000 }, label: "350k", enabled: false },
+])("legacy cap response $response falls back without remembered values", async ({ response, label, enabled }) => {
+  // The existing seed is also the old cache shape, without contextCapValues.
+  const fallback = globalThis.fetch;
+  let capReads = 0;
+  globalThis.fetch = (async (input, init) => {
+    if (String(input).endsWith("/api/provider-context-caps")) {
+      capReads += 1;
+      return Response.json(response);
+    }
+    return fallback(input, init);
+  }) as typeof fetch;
+  const { createRoot } = await import("react-dom/client");
+  await act(async () => {
+    root = createRoot(container);
+    root.render(<LanguageProvider><Models apiBase="http://localhost" /></LanguageProvider>);
+  });
+  await act(async () => {
+    await new Promise(resolve => testWindow.setTimeout(resolve, 0));
+  });
+  expect(capReads).toBeGreaterThan(0);
+  const cluster = container.querySelector<HTMLElement>(".models-cap-cluster")!;
+  expect(cluster.textContent).toContain(label);
+  expect(cluster.querySelector("button.switch")?.getAttribute("aria-pressed")).toBe(String(enabled));
+});
+
+const catalogRefreshFailures = [
+  { client: "pi", ok: false, reason: "Pi file changed outside opencodex" },
+  { client: "aside", profileId: 2, ok: false, reason: "Profile file busy" },
+];
+const integrationWarningCopy = "Model selection saved. Some client catalogs could not be refreshed. Check Integrations before starting a new session.";
+
+async function waitForModelsFeedback(predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + 1500;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error(`Models feedback did not settle: ${container.textContent}`);
+    await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 0)); });
+  }
+}
+
+function allOffButton(): HTMLButtonElement {
+  const button = [...container.querySelectorAll<HTMLButtonElement>("button")].find(node => node.textContent === "All off");
+  if (!button) throw new Error("All off button not found");
+  return button;
+}
+
+async function mountModelsForRefreshWarning(): Promise<void> {
+  clearClientResourceStoresForTests();
+  testWindow.localStorage.setItem("ocx-lang", "en");
+  installFakeTimers();
+  const { createRoot } = await import("react-dom/client");
+  await act(async () => {
+    root = createRoot(container);
+    root.render(<LanguageProvider><Models apiBase="http://localhost" /></LanguageProvider>);
+  });
+  await waitForModelsFeedback(() => [...container.querySelectorAll<HTMLButtonElement>("button")]
+    .some(button => button.textContent === "All off" && !button.disabled));
+}
+
+test("a saved selection keeps its success toast and separate catalog warning until the next successful refresh", async () => {
+  const fallback = globalThis.fetch;
+  let mutations = 0;
+  globalThis.fetch = (async (input, init) => {
+    if (String(input).endsWith("/api/model-visibility") && init?.method === "PUT") {
+      mutations += 1;
+      return Response.json({ ok: true, clientIntegrations: mutations === 1 ? catalogRefreshFailures : [
+        { client: "pi", ok: true, changed: true },
+        { client: "aside", profileId: 2, ok: true, changed: true },
+      ] });
+    }
+    return fallback(input, init);
+  }) as typeof fetch;
+  await mountModelsForRefreshWarning();
+  await act(async () => { allOffButton().click(); });
+  await waitForModelsFeedback(() => Boolean(container.querySelector(".action-toast.notice-ok")) && !allOffButton().disabled);
+  const toast = container.querySelector<HTMLElement>(".action-toast")!;
+  const warning = container.querySelector<HTMLElement>(".models-integration-warning")!;
+  expect(mutations).toBe(1);
+  expect(toast.textContent).toContain("Applied");
+  expect(toast.getAttribute("role")).toBe("status");
+  expect(warning).not.toBeNull();
+  expect(warning.querySelector(".notice.notice-warn")).not.toBeNull();
+  expect(warning.hasAttribute("hidden")).toBe(false);
+  expect(warning.closest(".action-toast")).toBeNull();
+  expect(warning.textContent).toContain(integrationWarningCopy);
+  expect(warning.textContent).toContain("Pi file changed outside opencodex");
+  expect(warning.textContent).toContain("Profile file busy");
+  expect(warning.textContent).toMatch(/aside[\s\S]*2/i);
+  await fireTimers(6000);
+  expect(container.querySelector(".action-toast")).toBeNull();
+  expect(container.querySelector(".models-integration-warning")?.textContent).toContain(integrationWarningCopy);
+  await act(async () => { allOffButton().click(); });
+  await waitForModelsFeedback(() => mutations === 2 && Boolean(container.querySelector(".action-toast.notice-ok")) && !allOffButton().disabled);
+  expect(container.querySelector(".models-integration-warning")).toBeNull();
+  expect(container.textContent).not.toContain("Pi file changed outside opencodex");
+  expect(container.textContent).not.toContain("Profile file busy");
+});
+
+test.each([false, true])("HTTP save failure does not publish a new saved-selection warning (prior warning=%s)", async priorWarning => {
+  const fallback = globalThis.fetch;
+  let rejectSave = !priorWarning;
+  let mutations = 0;
+  globalThis.fetch = (async (input, init) => {
+    if (String(input).endsWith("/api/model-visibility") && init?.method === "PUT") {
+      mutations += 1;
+      return rejectSave
+        ? Response.json({ error: "Selection could not be saved", clientIntegrations: [
+          { client: "pi", ok: false, reason: "This rejected save must not create a catalog warning" },
+        ] }, { status: 500 })
+        : Response.json({ ok: true, clientIntegrations: catalogRefreshFailures });
+    }
+    return fallback(input, init);
+  }) as typeof fetch;
+  await mountModelsForRefreshWarning();
+  if (priorWarning) {
+    await act(async () => { allOffButton().click(); });
+    await waitForModelsFeedback(() => Boolean(container.querySelector(".action-toast.notice-ok")) && !allOffButton().disabled);
+    expect(container.querySelector(".models-integration-warning")?.textContent).toContain(integrationWarningCopy);
+    rejectSave = true;
+  }
+  await act(async () => { allOffButton().click(); });
+  await waitForModelsFeedback(() => Boolean(container.querySelector(".action-toast.notice-err")) && !allOffButton().disabled);
+  expect(mutations).toBe(priorWarning ? 2 : 1);
+  expect(container.querySelector(".action-toast")?.textContent).toContain("Save failed");
+  expect(container.querySelector(".action-toast.notice-ok")).toBeNull();
+  expect(container.textContent).not.toContain("This rejected save must not create a catalog warning");
+  // An earlier warning may remain useful; a failed save cannot introduce a new one.
+  if (!priorWarning) {
+    expect(container.querySelector(".models-integration-warning")).toBeNull();
+    expect(container.textContent).not.toContain(integrationWarningCopy);
+  }
+});
+
+const providerPresetPreview = { providers: { anthropic: {
+  mode: "all", availableVersion: 1, presetIds: ["claude-sonnet-5"], presetCount: 1, totalCount: 2,
+} } };
+
+function presetButton(): HTMLButtonElement {
+  const button = [...container.querySelectorAll<HTMLButtonElement>('button[role="radio"]')]
+    .find(node => node.textContent === "Preset");
+  if (!button) throw new Error("Anthropic preset selector not found");
+  return button;
+}
+
+for (const reportsRefresh of [false, true]) {
+  test(`preset-empty keeps the previous integration warning (${reportsRefresh ? "success metadata present" : "no refresh metadata"})`, async () => {
+    const fallback = globalThis.fetch;
+    const presetWrites: unknown[] = [];
+    globalThis.fetch = (async (input, init) => {
+      if (String(input).endsWith("/api/model-presets")) {
+        if (init?.method !== "PUT") return Response.json(providerPresetPreview);
+        presetWrites.push(JSON.parse(String(init.body)));
+        return Response.json({ ok: true, provider: "anthropic", fallback: "preset-empty", selected: [],
+          ...(reportsRefresh ? { clientIntegrations: [{ client: "pi", ok: true }, { client: "aside", profileId: 2, ok: true }] } : {}),
+        });
+      }
+      if (String(input).endsWith("/api/model-visibility") && init?.method === "PUT") {
+        return Response.json({ ok: true, clientIntegrations: catalogRefreshFailures });
+      }
+      return fallback(input, init);
+    }) as typeof fetch;
+    await mountModelsForRefreshWarning();
+    await waitForModelsFeedback(() => Boolean(container.querySelector('button[role="radio"]')));
+    await act(async () => { allOffButton().click(); });
+    await waitForModelsFeedback(() => Boolean(container.querySelector(".action-toast.notice-ok")) && !allOffButton().disabled);
+    const warningBefore = container.querySelector(".models-integration-warning")?.textContent;
+    expect(warningBefore).toContain("Pi file changed outside opencodex");
+    expect(warningBefore).toContain("Profile file busy");
+    await act(async () => { presetButton().click(); });
+    await waitForModelsFeedback(() => container.querySelector(".action-toast")?.textContent?.includes("preset matched no models") === true
+      && !presetButton().disabled);
+    expect(presetWrites).toEqual([{ provider: "anthropic", mode: "preset" }]);
+    expect(container.querySelector(".action-toast.notice-ok")).toBeNull();
+    expect(container.querySelector(".action-toast")?.textContent).toContain("selection unchanged");
+    expect(container.querySelector(".models-integration-warning")?.textContent).toBe(warningBefore);
+  });
+}
+
+test.each(["preset", "visibility"] as const)("an in-flight %s mutation blocks the competing catalog mutation", async first => {
+  const fallback = globalThis.fetch;
+  const writes: string[] = [];
+  let gateMutations = false;
+  let release!: (response: Response) => void;
+  const responseGate = new Promise<Response>(resolve => { release = resolve; });
+  globalThis.fetch = (async (input, init) => {
+    const path = new URL(String(input)).pathname;
+    if (path === "/api/model-presets" && init?.method !== "PUT") return Response.json(providerPresetPreview);
+    if ((path === "/api/model-presets" || path === "/api/model-visibility") && init?.method === "PUT") {
+      writes.push(path);
+      return gateMutations ? responseGate : Response.json({ ok: true, clientIntegrations: catalogRefreshFailures });
+    }
+    return fallback(input, init);
+  }) as typeof fetch;
+  await mountModelsForRefreshWarning();
+  await waitForModelsFeedback(() => Boolean(container.querySelector('button[role="radio"]')));
+  await act(async () => { allOffButton().click(); });
+  await waitForModelsFeedback(() => Boolean(container.querySelector(".action-toast.notice-ok")) && !allOffButton().disabled);
+  const warningBefore = container.querySelector(".models-integration-warning")?.textContent;
+  expect(warningBefore).toContain(integrationWarningCopy);
+  gateMutations = true;
+  const expectedWrites = ["/api/model-visibility", first === "preset" ? "/api/model-presets" : "/api/model-visibility"];
+  try {
+    // Both clicks occur before React can paint disabled controls: the shared flight guard owns this race.
+    await act(async () => {
+      if (first === "preset") { presetButton().click(); allOffButton().click(); }
+      else { allOffButton().click(); presetButton().click(); }
+    });
+    expect(writes).toEqual(expectedWrites);
+    expect(allOffButton().disabled).toBe(true);
+    expect(presetButton().disabled).toBe(true);
+    expect(container.querySelector(".models-integration-warning")?.textContent).toBe(warningBefore);
+    await act(async () => { allOffButton().click(); presetButton().click(); });
+    expect(writes).toEqual(expectedWrites);
+  } finally {
+    await act(async () => { release(Response.json({ ok: true, selected: ["claude-sonnet-5"], clientIntegrations: [
+      { client: "pi", ok: true, changed: true }, { client: "aside", profileId: 2, ok: true, changed: true },
+    ] })); });
+  }
+  await waitForModelsFeedback(() => !allOffButton().disabled && !presetButton().disabled);
+  expect(writes).toEqual(expectedWrites);
+  expect(container.querySelector(".models-integration-warning")).toBeNull();
+  expect(container.querySelector(".action-toast.notice-ok")).not.toBeNull();
+});

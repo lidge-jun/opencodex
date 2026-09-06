@@ -5,6 +5,7 @@ import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { isApiAuthRequired, isProxyAdmissionSecret } from "../auth-cors";
 import { structurallyValidFernetTokens } from "./encrypted-payload";
 import {
+  cachedAgentTaskRecovery,
   discardCachedAgentTaskRecovery,
   resetAgentTaskRecoveryCache,
   resolveCachedAgentTaskRecovery,
@@ -61,7 +62,7 @@ interface AgentEnvelope {
   itemIndex: number;
   encryptedIndex: number;
   headerText: string;
-  messageType: "NEW_TASK";
+  messageType: "NEW_TASK" | "MESSAGE";
   taskName: string;
   sender: string;
   ciphertext: string;
@@ -69,7 +70,7 @@ interface AgentEnvelope {
   recipient: string;
 }
 
-const ROUTING_HEADER = /(?:^|\n)Message Type\s*:\s*(NEW_TASK)\s*\nTask name\s*:\s*(\S+)\s*\nSender\s*:\s*(\S+)\s*\nPayload\s*:\s*(?:\n|$)/;
+const ROUTING_HEADER = /(?:^|\n)Message Type\s*:\s*(NEW_TASK|MESSAGE)\s*\nTask name\s*:\s*(\S+)\s*\nSender\s*:\s*(\S+)\s*\nPayload\s*:\s*(?:\n|$)/;
 
 function findEnvelope(input: unknown): AgentEnvelope | null {
   if (!Array.isArray(input)) return null;
@@ -90,7 +91,7 @@ function findEnvelope(input: unknown): AgentEnvelope | null {
   if (!Array.isArray(content)) return null;
 
   let headerText: string | null = null;
-  let messageType: "NEW_TASK" | null = null;
+  let messageType: "NEW_TASK" | "MESSAGE" | null = null;
   let taskName: string | null = null;
   let sender: string | null = null;
   let encryptedIndex = -1;
@@ -113,7 +114,7 @@ function findEnvelope(input: unknown): AgentEnvelope | null {
           || part.text.slice(match.index + match[0].length).trim().length > 0
         ) return null;
         headerText = match[0].startsWith("\n") ? match[0].slice(1) : match[0];
-        messageType = "NEW_TASK";
+        messageType = match[1] as "NEW_TASK" | "MESSAGE";
         taskName = match[2]!;
         sender = match[3]!;
       }
@@ -495,4 +496,23 @@ export function discardEncryptedAgentTaskRecovery(
 
 export function resetAgentTaskRecoveryState(): void {
   resetAgentTaskRecoveryCache();
+}
+
+/** Codex replays the original encrypted agent messages after tool calls. Reuse only an admitted cache hit. */
+export function restoreCachedEncryptedAgentTasks(
+  req: Request, input: unknown, config: OcxConfig,
+  context: { parentThreadId?: string | null } = {},
+): number {
+  if (!Array.isArray(input)) return 0;
+  let restored = 0;
+  for (const item of input) {
+    if (!item || typeof item !== "object" || item.type !== "agent_message") continue;
+    const single = [item];
+    // Revalidates caller credentials and the exact supported agent envelope before cache access.
+    const admitted = admittedRecovery(req, single, config, context.parentThreadId);
+    if (!admitted) continue;
+    const assignment = cachedAgentTaskRecovery(admitted.cacheKey);
+    if (assignment && injectAssignment(single, admitted.envelope, assignment)) restored += 1;
+  }
+  return restored;
 }

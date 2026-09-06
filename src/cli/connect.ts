@@ -8,6 +8,8 @@ import {
 } from "../client/connect";
 import { inspectClientRotationRecoveryGate, readClientConnectionState } from "../client/state";
 import { readServiceApiTokenState } from "../lib/service-secrets";
+import type { ClientLifecycleLockDeps } from "../client/lifecycle-lock";
+import { inspectRemoteDesktopStore } from "../claude/desktop-remote-store";
 import type { OcxConnectedClientId } from "../types";
 import {
   CliUsageError,
@@ -21,6 +23,10 @@ import {
   takeOption,
   type RuntimeApiDeps,
 } from "./runtime-api";
+
+export interface ClientCommandDeps extends RuntimeApiDeps {
+  lifecycleLockDeps?: ClientLifecycleLockDeps;
+}
 
 export const CONNECT_USAGE = `Usage:
   ocx connect <url> [--management-url <url>]
@@ -52,10 +58,10 @@ export type ClientConnectionStatus = {
   rotation: "clean" | "orphan-cleaned" | "recovery-required" | "unsafe";
 };
 
-export function collectClientConnectionStatus(now = Date.now()): ClientConnectionStatus {
+export function collectClientConnectionStatus(now = Date.now(), lifecycleLockDeps?: ClientLifecycleLockDeps): ClientConnectionStatus {
   const state = readClientConnectionState();
   const tokenState = readServiceApiTokenState();
-  const rotation = inspectClientRotationRecoveryGate(state).kind;
+  const rotation = inspectClientRotationRecoveryGate(state, lifecycleLockDeps).kind;
   let catalog: ClientConnectionStatus["catalog"] = "missing";
   if (existsSync(DEFAULT_CATALOG_PATH)) {
     try {
@@ -124,7 +130,7 @@ function statusLines(status: ClientConnectionStatus): string[] {
   ];
 }
 
-async function runRotate(argv: string[], deps: RuntimeApiDeps): Promise<void> {
+async function runRotate(argv: string[], deps: ClientCommandDeps): Promise<void> {
   const args = [...argv];
   const wantsJson = takeFlag(args, "--json");
   const pairing = takeFlag(args, "--pairing-code-stdin");
@@ -136,13 +142,17 @@ async function runRotate(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const value = new TextEncoder().encode(await readSecretLine(deps, pairing ? "pairing code" : "admin token"));
   const connection = await rotateConnectedClientKey({
     credential: { kind: pairing ? "pairing-grant" : "admin", value },
-  }, { fetchImpl: deps.fetchImpl });
-  printData({ apiKeyId: connection.apiKeyId, rotation: "committed" }, wantsJson, [
-    `Rotated connected API key ${connection.apiKeyId}; the previous key is no longer admitted.`,
+  }, { fetchImpl: deps.fetchImpl, lifecycleLockDeps: deps.lifecycleLockDeps });
+  const restartRequired = inspectRemoteDesktopStore({ serverUrl: connection.serverUrl, apiKeyId: connection.apiKeyId, connectedAt: connection.connectedAt }).kind !== "absent";
+  printData({ apiKeyId: connection.apiKeyId, rotation: connection.rotationOutcome, restartRequired }, wantsJson, [
+    connection.rotationOutcome === "committed"
+      ? `Rotated connected API key ${connection.apiKeyId}; the previous key is no longer admitted.`
+      : `Rotation rolled back for API key ${connection.apiKeyId}; the previous key was retained or restored.`,
+    ...(restartRequired ? ["Fully quit and reopen Claude Desktop; a running app may still hold the previous credential."] : []),
   ]);
 }
 
-async function runConnect(argv: string[], deps: RuntimeApiDeps): Promise<void> {
+async function runConnect(argv: string[], deps: ClientCommandDeps): Promise<void> {
   const args = [...argv];
   const serverUrl = args.shift();
   if (!serverUrl || serverUrl.startsWith("--")) throw new CliUsageError("hub URL is required", CONNECT_USAGE);
@@ -173,28 +183,28 @@ async function runConnect(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     managementTransport,
     noSync,
     ...(catalogTimeoutSeconds === undefined ? {} : { catalogTimeoutMs: catalogTimeoutSeconds * 1_000 }),
-  }, { fetchImpl: deps.fetchImpl });
+  }, { fetchImpl: deps.fetchImpl, lifecycleLockDeps: deps.lifecycleLockDeps });
   console.log(`Connected to ${connection.serverUrl} as key ${connection.apiKeyId}.`);
 }
 
-async function runRevoke(argv: string[], deps: RuntimeApiDeps): Promise<void> {
+async function runRevoke(argv: string[], deps: ClientCommandDeps): Promise<void> {
   const args = [...argv];
   const wantsJson = takeFlag(args, "--json");
   const admin = takeFlag(args, "--admin-token-stdin");
   if (!admin) throw new CliUsageError("revoke requires --admin-token-stdin", CONNECT_USAGE);
   rejectArgs(args, CONNECT_USAGE, { redactValues: true });
   const value = new TextEncoder().encode(await readSecretLine(deps, "admin token"));
-  const result = await revokeConnectedClientKey({ kind: "admin", value }, { fetchImpl: deps.fetchImpl });
+  const result = await revokeConnectedClientKey({ kind: "admin", value }, { fetchImpl: deps.fetchImpl, lifecycleLockDeps: deps.lifecycleLockDeps });
   printData(result, wantsJson, [`Revoked connected API key ${result.apiKeyId}. Disconnect this client next.`]);
 }
 
-export async function handleConnectCommand(argv: string[], deps: RuntimeApiDeps = {}): Promise<number> {
+export async function handleConnectCommand(argv: string[], deps: ClientCommandDeps = {}): Promise<number> {
   return runCliAction(async () => {
     if (argv[0] === "status") {
       const args = argv.slice(1);
       const wantsJson = takeFlag(args, "--json");
       rejectArgs(args, CONNECT_USAGE, { redactValues: true });
-      const status = collectClientConnectionStatus();
+      const status = collectClientConnectionStatus(Date.now(), deps.lifecycleLockDeps);
       printData(status, wantsJson, statusLines(status));
       return;
     }
@@ -210,13 +220,13 @@ export async function handleConnectCommand(argv: string[], deps: RuntimeApiDeps 
   });
 }
 
-export async function handleDisconnectCommand(argv: string[]): Promise<number> {
+export async function handleDisconnectCommand(argv: string[], deps: Pick<ClientCommandDeps, "lifecycleLockDeps"> = {}): Promise<number> {
   return runCliAction(async () => {
     const args = [...argv];
     const keepCatalog = takeFlag(args, "--keep-catalog");
     const wantsJson = takeFlag(args, "--json");
     rejectArgs(args, DISCONNECT_USAGE, { redactValues: true });
-    const result = await disconnectClient({ keepCatalog });
+    const result = await disconnectClient({ keepCatalog }, deps);
     const payload = {
       ...result,
       revoke: {
@@ -226,6 +236,9 @@ export async function handleDisconnectCommand(argv: string[]): Promise<number> {
     };
     printData(payload, wantsJson, [
       "Disconnected locally; native Codex state was restored.",
+      ...(result.desktopRestoration === "standard_fallback"
+        ? ["Previous Desktop settings were not recorded; the managed profile was switched to standard mode."] : []),
+      ...(result.restartRequired ? ["Fully quit and reopen Claude Desktop; local cleanup cannot revoke an in-memory credential."] : []),
       `The hub key ${result.apiKeyId} is still valid. Revoke it from Integrations → API Keys.`,
     ]);
   });

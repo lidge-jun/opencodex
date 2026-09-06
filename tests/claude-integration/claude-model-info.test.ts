@@ -44,6 +44,22 @@ describe("anthropic-flavor ModelInfo discovery entries (devlog 130 B4b)", () => 
     expect(info!.capabilities.effort.max.supported).toBe(true);
   });
 
+  test("readable Fable rows keep base and 1M selections distinct in Claude Code", () => {
+    const infos = buildAnthropicModelInfos([], [{
+      provider: "anthropic",
+      id: "claude-fable-5-1",
+      contextWindow: 1_000_000,
+      maxInputTokens: 1_000_000,
+    }], undefined, "readable");
+
+    expect(infos.map(info => info.id)).toEqual([
+      "claude-fable-5-1",
+      "claude-ocx-native--claude-fable-5-1[1m]",
+    ]);
+    expect(infos[1]!.display_name).toBe("claude-fable-5-1 (anthropic) · 1M");
+    expect(infos[1]!.max_input_tokens).toBe(1_000_000);
+  });
+
   test("native effective ladder only advertises clamp-identity rungs (audit R4#1)", () => {
     for (const slug of ["gpt-5.5", "gpt-5.4", "gpt-5.6-sol"]) {
       for (const rung of nativeEffectiveLadder(slug)) {

@@ -153,6 +153,10 @@ ocx status --json
 
 将 opencodex 作为登录管理的后台服务运行（macOS **launchd**、Linux **systemd user unit**、Windows **Task Scheduler**），在登录时自动启动，在崩溃时自动重启。服务运行会设置 `OCX_SERVICE=1`，因此重启时不会反复改动 Codex 配置。
 
+Windows 任务计划程序安装使用普通进程优先级（`Priority=4`）。旧的后台优先级（`7`，省略时调度器也默认使用 `7`）
+可能在 CPU 竞争时延迟健康检查响应，导致进程仍存活时托盘显示 Offline。升级后运行 `ocx service repair`，
+即可迁移该注册优先级并重启服务；过程中可能需要批准 UAC 提示。已设为普通或高优先级时，不会仅因优先级而重新注册。
+
 | 子命令 | 操作 |
 | --- | --- |
 | none | 服务不存在时安装并启动；已存在时刷新并重启。正常的 Windows 任务计划程序定义会复用；过时定义可能会重新注册并需要提升权限。 |

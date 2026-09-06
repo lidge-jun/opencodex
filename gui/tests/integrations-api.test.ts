@@ -175,3 +175,37 @@ test("the state badge exposes text shape and non-color semantics for every visua
     expect(markup).toContain(`>${fixture.label}</span>`);
   }
 });
+
+test("scoped Aside details reject malformed status fields before controls consume them", async () => {
+  const valid = { clientId: "aside", profileId: 2, current: false, enabled: true, state: "current", installed: true,
+    configPath: "/fixture/u/2/models.json", snapshotCount: 1, retentionDegraded: false };
+  for (const bad of [{ state: "unknown" }, { installed: "yes" }, { snapshotCount: NaN }, { profileId: 1 }]) {
+    globalThis.fetch = (async () => Response.json({ ...valid, ...bad })) as typeof fetch;
+    await expect(loadIntegrationState("http://fixture", "aside", undefined, 2)).rejects.toMatchObject({
+      body: { code: "invalid_aside_profile_response" },
+    });
+  }
+});
+
+test("bulk Aside refusals retain operation-specific recovery fields", async () => {
+  globalThis.fetch = (async () => Response.json({ ok: false, message: "partial", results: [
+    { clientId: "aside", profileId: 2, ok: false, state: "conflict", reason: "write_failed",
+      message: "write failed", snapshotPath: "/backup/profile-2", residual: true },
+  ] }, { status: 207 })) as typeof fetch;
+  await expect(toggleIntegration("http://fixture", "aside", true)).rejects.toMatchObject({ body: {
+    results: [{ profileId: 2, reason: "write_failed", snapshotPath: "/backup/profile-2", residual: true }],
+  } });
+});
+
+test.each([
+  { ok: false, results: [{ profileId: 2, ok: true }] },
+  { ok: false, results: [] },
+  { ok: true, results: [{ profileId: 0, ok: true }, { profileId: 2, ok: false }] },
+])("bulk Aside rejects a contradictory aggregate result: $ok / $results", async body => {
+  globalThis.fetch = (async () => Response.json(body, { status: body.ok ? 200 : 207 })) as typeof fetch;
+
+  await expect(toggleIntegration("http://fixture", "aside", true)).rejects.toMatchObject({
+    status: 502,
+    body: { code: "invalid_aside_profile_response" },
+  });
+});

@@ -3,13 +3,14 @@ import { CLI_COMMANDS } from "../../src/cli/registry";
 import { DISPATCH_ALIASES, DISPATCH_COMMANDS, dispatchCommand, resolveDispatchCommand, decideStartWithLiveOwner } from "../../src/cli/dispatch";
 import type { CliDispatchDeps } from "../../src/cli/dispatch";
 import { runGuiCommand } from "../../src/cli/gui";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getConfigDir } from "../../src/config";
 import { getAccountSet, removeCredential, saveCredential } from "../../src/oauth/store";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
+import type { OcxConfig } from "../../src/types";
 
 /** Minimal fake deps. dispatchCommand only touches deps for real command
  * runners, which these tests never invoke, so an empty object is enough. */
@@ -93,6 +94,80 @@ describe("dispatchCommand exit codes", () => {
       removeTreeWithRetry(home);
     }
   });
+
+  test.each(["applied", "catalog-only", "refused"] as const)(
+    "sync with no live proxy reports Aside unavailability after Codex %s without local fallback", async status => {
+      const home = mkdtempSync(join(tmpdir(), "ocx-dispatch-aside-offline-"));
+      const previous = { OPENCODEX_HOME: process.env.OPENCODEX_HOME, CODEX_HOME: process.env.CODEX_HOME };
+      const syncModule = await import("../../src/codex/sync");
+      const catalogModule = await import("../../src/integrations/catalog-refresh");
+      const livenessModule = await import("../../src/server/proxy-liveness");
+      const warnings: string[] = [];
+      const logs: string[] = [];
+      const sync = spyOn(syncModule, "syncModelsToCodex").mockResolvedValue({
+        status, ok: status !== "refused", added: 0, catalogPath: null, catalogExists: false,
+        catalogWritten: false, cacheSynced: false, message: "fixture Codex sync result",
+      });
+      // The real Aside helper/runtime client must run. Fence the independent local
+      // writer and unscoped discovery so this regression cannot reach user files
+      // or a developer's real proxy if either dispatch boundary regresses.
+      const localRefresh = spyOn(catalogModule, "refreshOwnedCatalogIntegrations").mockResolvedValue([]);
+      // A globally discoverable proxy must not override the injected null result.
+      const unscopedDiscovery = spyOn(livenessModule, "findLiveProxy").mockResolvedValue({
+        pid: null, port: 65534, hostname: "127.0.0.1", source: "config",
+      });
+      const http = spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected runtime HTTP request"));
+      const warn = spyOn(console, "warn").mockImplementation((...args) => { warnings.push(args.map(String).join(" ")); });
+      const log = spyOn(console, "log").mockImplementation((...args) => { logs.push(args.map(String).join(" ")); });
+      const error = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        process.env.OPENCODEX_HOME = home;
+        process.env.CODEX_HOME = join(home, "codex");
+        mkdirSync(process.env.CODEX_HOME);
+        const config = {
+          port: 10100, providers: {}, defaultProvider: "openai",
+          asideProfileSync: { allProfiles: true, profiles: {} },
+        } as OcxConfig;
+        const configPath = join(home, "config.json");
+        const before = JSON.stringify(config);
+        writeFileSync(configPath, before);
+        let discoveries = 0;
+        const args = ["sync"];
+        const deps = {
+          ...fakeDeps, args, loadConfig: () => config,
+          findLiveProxy: async () => { discoveries += 1; return null; },
+        };
+        const code = await dispatchCommand({ kind: "command", command: "sync", args }, deps);
+        // An Aside warning does not change a successful Codex sync's exit code.
+        expect(code).toBe(status === "refused" ? 1 : 0);
+        expect(discoveries).toBe(1);
+        expect(sync).toHaveBeenCalledTimes(1);
+        expect(unscopedDiscovery).not.toHaveBeenCalled();
+        expect(http).not.toHaveBeenCalled();
+        expect(localRefresh).not.toHaveBeenCalled();
+        if (status === "refused") {
+          expect(warnings).toEqual([]);
+        } else {
+          expect(warnings).toHaveLength(1);
+          expect(warnings[0]).toContain("Aside profiles were not refreshed:");
+          expect(warnings[0]).toContain("Proxy is not running");
+          expect(warnings[0]).toContain("ocx start");
+        }
+        expect(logs.join("\n")).not.toContain("integration refreshed");
+        expect(readFileSync(configPath, "utf8")).toBe(before);
+        expect(readdirSync(home).sort()).toEqual(["codex", "config.json"]);
+        expect(readdirSync(join(home, "codex"))).toEqual([]);
+      } finally {
+        sync.mockRestore(); localRefresh.mockRestore(); unscopedDiscovery.mockRestore(); http.mockRestore();
+        warn.mockRestore(); log.mockRestore(); error.mockRestore();
+        for (const [key, value] of Object.entries(previous)) {
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
+        removeTreeWithRetry(home);
+      }
+    },
+  );
 
   test("returns 0 for help forms", async () => {
     expect(await dispatchCommand({ kind: "help", command: "help", args: ["help"] }, fakeDeps)).toBe(0);

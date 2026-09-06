@@ -31,7 +31,7 @@ genel model kimliği birkaç hedef arasından seçim yapması gerektiğinde
 | OpenAI Chat Completions | `POST /v1/chat/completions` | `chat.completion` JSON | `[DONE]` ile biten `chat.completion.chunk` SSE |
 | Anthropic Messages | `POST /v1/messages` | Anthropic `message` JSON | Anthropic Messages SSE |
 | Anthropic belirteç sayısı | `POST /v1/messages/count_tokens` | `{ "input_tokens": sayi }` | Geçerli değil |
-| Model keşfi | `GET /v1/models` | Üç katalog sözleşmesinden biri | Geçerli değil |
+| Model keşfi | `GET /v1/models` | Katalog veya açıkça istenen Desktop anlık görüntüsü | Geçerli değil |
 | Ses ve Realtime | `POST /v1/live`, `POST /v1/realtime/calls` | İletilen çağrı oluşturma yanıtı | Ayrı bir yan bant WebSocket her iki yönde de çerçeveleri iletir |
 | Responses sıkıştırması | `POST /v1/responses/compact` | Değiştirme geçmişi JSON'ı | Geçerli değil |
 
@@ -233,16 +233,47 @@ yerel belgelenmiş tahmini kullanır ve şunu döndürür:
 { "input_tokens": 123 }
 ```
 
+Çözümlenemeyen tarih biçimli bir Desktop kimliği, keşifte yer almayan gerçek bir yerel model
+kimliği de olabilir. Mevcut bilgi kimliği çözmeye yetmiyorsa Messages ve count-tokens sabit
+`desktop_model_mapping_unavailable` hatasıyla HTTP 503 döndürür; bu, modelin geçersiz olduğunu kanıtlamaz.
+Bilinmeyen eski hash takma adları HTTP 400 ile reddedilmeye devam eder. Her iki durumda da tarih
+kaldırılmaz ve başka rotaya geçilmez. Bilinen kimlikler, kayıtlı eşlemeler, tam `modelMap`
+eşleşmeleri ve tanınan gerçek yerel kimlikler aynı şekilde işlenir. Yeniden denemeden önce model
+keşfini yenileyin veya bağlı hub profilini yeniden uygulayın; yalnızca tekrar denemek çözümü
+garanti etmez.
+
 ## `GET /v1/models`
 
-Aynı rota uyumsuz katalog zarfları bekleyen üç istemciye hizmet verir.
-`client_version` da mevcut olmadıkça Anthropic türü kazanır.
+`format=desktop-config` belirtilmezse aşağıdaki olağan katalog sözleşmeleri kullanılır:
 
 | Sözleşme | Tetikleyici | Üst düzey şekil | Model kimliği davranışı |
 | --- | --- | --- | --- |
 | Anthropic model listesi | `client_version` olmadan `anthropic-version` başlığı veya `?flavor=anthropic` | Anthropic model bilgisi girdileriyle `{ "data": [...] }` | Claude Code okunabilir kimlikleri alır; Desktop profile özgü takma ad ailesini alabilir |
 | Codex kataloğu | `client_version` sorgu parametresi | `{ "models": [...] }` | Yerel ve yönlendirilen girdiler daha zengin Codex katalog alanlarını, görünürlüğü, çabayı, WebSocket ve çoklu ajan meta verilerini taşır |
 | Düz OpenAI listesi | Hiçbir tetikleyici yok | `{ "object": "list", "data": [...] }` | Görünür yerel kimlikler yalındır; yönlendirilen kimlikler takma adlar veya `sağlayıcı/model`'dir |
+
+### Desktop yapılandırma anlık görüntüsü
+
+`GET /v1/models?ids=desktop&format=desktop-config`, user-agent'tan bağımsız olarak Desktop
+anlık görüntüsünü seçer. Yanıt `{ "version": 1, "models": [...] }` ve `Cache-Control: no-store`
+başlığıdır. İstemci `Accept: application/json`, `anthropic-version: 2023-06-01` ve mevcut veri
+erişim kimlik bilgilerini gönderir; yönetici belirteci veya profil yüklemesi gerekmez.
+Girdiler Codex katalog satırları değil, hub'ın verdiği Desktop yapılandırma modelleridir.
+
+Bu biçim `ids=cli` veya herhangi bir `client_version` ile kullanılırsa HTTP 400 döner. Biçim
+seçicisi yoksa yukarıdaki olağan sözleşmeler değişmez. Claude kapalıysa
+`{ "version": 1, "models": [] }` döner; bağlı Desktop apply bunu kullanılamaz sayar ve yeni
+profil yazmaz. Sürüm 1 yerine olağan katalog döndüren eski hub'lar desteklenmez; yerel üretilmiş
+kimliklere geçilmez.
+
+Anlık görüntü salt okunur model listesidir; anahtar döndürme veya profil yükleme API'si değildir.
+Desktop anahtar taşıma, kurtarma ve bağlantıyı kesme mevcut istemci yaşam döngüsünü kullanır.
+Döndürme modelleri ve seçimi korur; CLI `rotation` alanı `committed` ile `rolled_back` sonucunu
+ayırır. Bağlantıyı kesme yönetilen ayarları geri yükler veya tanınan eski profil için standart
+moda dönüşü bildirir; kullanıcı alanları ve sonraki geçerli seçimler korunur. Çatışma veya eksik
+kurtarma tamamlanmış sayılmaz. Disk değişiklikleri için Desktop'ı yeniden başlatın; bağlantıyı
+kesmek hub anahtarını otomatik iptal etmez. [Desktop kılavuzuna](/tr/guides/claude-code/) bakın.
+Thinking yeniden gönderimi ve önbellek, ayrı [#3719](https://github.com/lidge-jun/opencodex/issues/3719) işidir.
 
 ## `POST /v1/live` ve Realtime yan bandı
 

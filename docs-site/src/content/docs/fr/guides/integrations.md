@@ -114,6 +114,11 @@ l'application s'arrête et le signale au lieu d'écrire une valeur modifiée en 
 réussi. Le fichier concerné est indiqué et rien n'est déplacé sur le disque. Vous pouvez toujours modifier
 ce fichier manuellement ; seule la réécriture automatique est refusée.
 
+Les dates et heures TOML empêchent également la réécriture automatique : la fusion
+les convertirait en chaînes entre guillemets, y compris dans les tableaux et les
+tables en ligne. Les dates déjà écrites entre guillemets restent prises en charge.
+Pour conserver une date typée sans guillemets, modifiez manuellement la configuration.
+
 **Pi, Kimi Code, Gajae Code, MiniMax Code et l'intégration DSH gérée fonctionnent uniquement avec une adresse de
 bouclage.** Les quatre premiers n'ont aucun champ de configuration pour l'en-tête `x-opencodex-api-key`
 qu'exige une liaison hors bouclage. DSH possède une table d'en-têtes générique, mais rc.6 ne documente pas

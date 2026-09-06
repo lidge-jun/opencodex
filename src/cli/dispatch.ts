@@ -14,6 +14,7 @@ import type { CliHead } from "./root";
 import type { ReadyArgs } from "./ready";
 import type { LivenessIo, LiveProxy } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
+import type { OwnedIntegrationRefreshOutcome } from "../integrations/owned-refresh";
 import { hasHelpFlag, printSubcommandUsage, printUsage } from "./help";
 import { setIntegrationEnabled, shouldSyncCodexOnStart } from "../codex/desired-state";
 import { syncModelsToCodex } from "../codex/sync";
@@ -387,25 +388,38 @@ const commandRunners: Record<string, CommandRunner> = {
       if (restartDesktopApp) await handleDesktopAppRestart(console);
     }
     // `ocx sync` is a direct CLI path; it does not call the management
-    // `/api/sync` route. Refresh the already-connected MCode block here too,
+    // `/api/sync` route. Refresh already-connected file integrations here too,
     // after Codex has published the catalog that supplies its capabilities.
-    if (synced.status !== "refused" && live) {
+    if (synced.status !== "refused") {
+      const results: OwnedIntegrationRefreshOutcome[] = [];
+      if (live) {
+        try {
+          const config = deps.loadConfig();
+          const { refreshOwnedCatalogIntegrations } = await import("../integrations/catalog-refresh");
+          results.push(...await refreshOwnedCatalogIntegrations({
+            models: async () => {
+              const { loadExportModels } = await import("../server/management/model-rows");
+              return loadExportModels(config);
+            },
+            config,
+            port: live.port,
+          }, ["mcode", "pi"]));
+        } catch (error) {
+          console.warn(`Client integrations were not refreshed: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      // Even without a live proxy, report why Aside could not sync. Its server
+      // owner is never bypassed, and another client's failure cannot hide it.
       try {
-        const config = deps.loadConfig();
-        const { refreshOwnedIntegration } = await import("../integrations/owned-refresh");
-        const result = await refreshOwnedIntegration({
-          clientId: "mcode",
-          models: async () => {
-            const { loadExportModels } = await import("../server/management/model-rows");
-            return loadExportModels(config);
-          },
-          config,
-          port: live.port,
-        });
-        if (result?.changed) console.log("MCode integration refreshed from the current catalog.");
-        else if (result?.reason) console.warn(`MCode integration was not refreshed: ${result.reason}`);
+        const { refreshAsideProfilesThroughServer } = await import("./aside-profiles");
+        results.push(...await refreshAsideProfilesThroughServer({ findLiveProxy: async () => live }));
       } catch (error) {
-        console.warn(`MCode integration was not refreshed: ${error instanceof Error ? error.message : String(error)}`);
+        console.warn(`Aside profiles were not refreshed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      for (const result of results) {
+        const label = result.profileId === undefined ? result.client : `${result.client}:${result.profileId}`;
+        if (result.changed) console.log(`${label} integration refreshed from the current catalog.`);
+        else if (result.reason) console.warn(`${label} integration was not refreshed: ${result.reason}${result.residual ? " Recovery did not finish." : ""}${result.snapshotPath ? ` Backup: ${result.snapshotPath}` : ""}`);
       }
     }
     return code;

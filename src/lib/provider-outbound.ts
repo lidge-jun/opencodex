@@ -7,7 +7,7 @@ import {
   resolvePublicAddresses,
 } from "./destination-policy";
 import { pinnedHttpGet, pinnedHttpPost } from "./pinned-http";
-import { effectiveProxyFor, outboundProxyConfigured } from "./proxy-env";
+import { effectiveProxyFor, noProxyMatches, normalizeProxyHostname, outboundProxyConfigured } from "./proxy-env";
 import { publicProviderBaseUrl } from "./provider-url";
 
 type ProviderGetInit = Omit<RequestInit, "body" | "method" | "redirect">;
@@ -35,10 +35,6 @@ export class ProviderOutboundPolicyError extends Error {
 
 function pickPinnedAddress(addresses: Array<{ address: string; family: number }>): { address: string; family: number } {
   return addresses.find(address => address.family === 4) ?? addresses[0]!;
-}
-
-function configuredProxyFor(): boolean {
-  return outboundProxyConfigured();
 }
 
 /**
@@ -74,45 +70,6 @@ function transparentFakeIpException(
 ): boolean {
   if (noProxyMatches(parsed)) return false;
   return isCanonicalUrl(name, url);
-}
-
-function normalizeProxyHostname(hostname: string): string {
-  const normalized = hostname.trim().toLowerCase().replace(/\.+$/, "");
-  return normalized.startsWith("[") && normalized.endsWith("]")
-    ? normalized.slice(1, -1)
-    : normalized;
-}
-
-function noProxyMatches(url: URL): boolean {
-  const raw = process.env.NO_PROXY ?? process.env.no_proxy ?? "";
-  const hostname = normalizeProxyHostname(url.hostname);
-  const port = url.port || (url.protocol === "https:" ? "443" : "80");
-  for (const rawEntry of raw.split(",")) {
-    let entry = rawEntry.trim().toLowerCase();
-    if (!entry) continue;
-    if (entry === "*") return true;
-    entry = entry.replace(/^https?:\/\//, "").split("/", 1)[0]!;
-
-    let entryHost = entry;
-    let entryPort = "";
-    const bracketed = /^\[([^\]]+)](?::(\d+))?$/.exec(entry);
-    if (bracketed) {
-      entryHost = bracketed[1]!;
-      entryPort = bracketed[2] ?? "";
-    } else if ((entry.match(/:/g)?.length ?? 0) === 1) {
-      const separator = entry.lastIndexOf(":");
-      const possiblePort = entry.slice(separator + 1);
-      if (/^\d+$/.test(possiblePort)) {
-        entryHost = entry.slice(0, separator);
-        entryPort = possiblePort;
-      }
-    }
-    if (entryPort && entryPort !== port) continue;
-    entryHost = normalizeProxyHostname(entryHost.replace(/^\*?\./, ""));
-    if (!entryHost) continue;
-    if (hostname === entryHost || hostname.endsWith(`.${entryHost}`)) return true;
-  }
-  return false;
 }
 
 let proxyBoundaryWarned = false;
@@ -181,7 +138,7 @@ async function providerOutboundRequest(
     return provider.fetch(url, { ...init, method, redirect: "manual" });
   }
   const parsed = postUrl ?? new URL(url);
-  const proxyConfigured = configuredProxyFor();
+  const proxyConfigured = outboundProxyConfigured();
   // Snapshot the scheme-matched proxy once, before the DNS await, so admission and transport
   // below reason about the same value. `null` here means "no proxy fetch would actually use",
   // even if some other proxy variable is set.

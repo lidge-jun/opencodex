@@ -20,7 +20,11 @@ import {
 } from "../../src/providers/key-failover";
 import { resolveOpenCodeGoTransport } from "../../src/providers/opencode-go-transport";
 import { deriveXaiConvId } from "../../src/providers/xai-transport";
-import { routeModel } from "../../src/router";
+import { routeModel, routedProviderConfig } from "../../src/router";
+import { setProviderKeychainEntryFactoryForTests } from "../../src/providers/key-store";
+import { setActiveProviderApiKey } from "../../src/providers/api-keys";
+import { subscribeAccountSelections } from "../../src/lib/account-selection-events";
+import { providerManagementConfigError, safeConfigDTO } from "../../src/server/auth-cors";
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -63,6 +67,17 @@ afterEach(() => {
 });
 
 describe("hasKeyPoolFailover", () => {
+  test("request key identity is rejected by management and stripped from the public config", () => {
+    const config = makeConfig({ apiKey: "synthetic-first", apiKeyPool: [{ id: "first", key: "synthetic-first" }] });
+    const routed = routedProviderConfig("p", config.providers.p);
+    expect(providerManagementConfigError("p", routed)).toContain("runtime field");
+    const dto = JSON.stringify(safeConfigDTO({ ...config, providers: { p: {
+      ...routed, apiKeySelectionRevision: "internal-revision",
+    } } }));
+    expect(dto).not.toContain("_apiKeyAttempt");
+    expect(dto).not.toContain("apiKeySelectionRevision");
+    expect(dto).not.toContain("synthetic-first");
+  });
   test("true only for key-auth providers with 2+ pool entries", () => {
     expect(hasKeyPoolFailover({ adapter: "openai-chat", baseUrl: "x", apiKeyPool: pool3() } as OcxProviderConfig)).toBe(true);
     expect(hasKeyPoolFailover({ adapter: "openai-chat", baseUrl: "x", apiKeyPool: [pool3()![0]] } as OcxProviderConfig)).toBe(false);
@@ -73,6 +88,70 @@ describe("hasKeyPoolFailover", () => {
 });
 
 describe("rotateKeyOn429", () => {
+  test("an old attempt cannot overwrite a newer manual key selection or its ABA revision", () => {
+    const config = makeConfig({ apiKey: "key-alpha-000111222333", apiKeyPool: pool3() });
+    const routed = routedProviderConfig("p", config.providers.p);
+    const events: string[] = [];
+    const unsubscribe = subscribeAccountSelections(event => {
+      if (event.provider === "p") events.push(loadConfig().providers.p.apiKey!);
+    });
+    try {
+      expect(setActiveProviderApiKey(config, "p", "k2")).toBe(true);
+      expect(rotateProviderTransportOn429(config, "p", routed, { attemptedKey: routed.apiKey })?.apiKey)
+        .toBe("key-beta-444555666777");
+      expect(events).toEqual(["key-beta-444555666777"]);
+      expect(setActiveProviderApiKey(config, "p", "k1")).toBe(true);
+      expect(rotateProviderTransportOn429(config, "p", routed, { attemptedKey: routed.apiKey })).toBeNull();
+      expect(loadConfig().providers.p.apiKey).toBe("key-alpha-000111222333");
+      expect(getKeyCooldownUntil("p", "k1")).toBeNull();
+      expect(events).toEqual(["key-beta-444555666777", "key-alpha-000111222333"]);
+    } finally { unsubscribe(); }
+  });
+
+  test("manual and automatic selection events observe committed disk state", () => {
+    const config = makeConfig({ apiKey: "key-alpha-000111222333", apiKeyPool: pool3() });
+    const events: string[] = [];
+    const unsubscribe = subscribeAccountSelections(event => {
+      if (event.provider === "p") {
+        expect(event.kind).toBe("api-key");
+        expect(Object.keys(event).sort()).toEqual(["kind", "provider", "revision"]);
+        events.push(loadConfig().providers.p.apiKey!);
+      }
+    });
+    try {
+      const routed = routedProviderConfig("p", config.providers.p);
+      expect(rotateProviderTransportOn429(config, "p", routed)?.apiKey).toBe("key-beta-444555666777");
+      expect(events).toEqual(["key-beta-444555666777"]);
+      unlinkSync(getConfigPath());
+      expect(rotateKeyOn429(config, "p", null)).toBeNull();
+      expect(events).toHaveLength(1);
+    } finally { unsubscribe(); }
+  });
+
+  test.each(["env", "keychain"])("rotates a rejected %s reference instead of reusing its resolved credential", kind => {
+    const reference = kind === "env" ? "${OCX_SELECTION_TEST_KEY}" : "keychain:p/k1";
+    process.env.OCX_SELECTION_TEST_KEY = "synthetic-resolved-first";
+    setProviderKeychainEntryFactoryForTests(() => ({
+      getPassword: () => "synthetic-resolved-first",
+      setPassword: () => {},
+      deletePassword: () => true,
+    }));
+    try {
+      const config = makeConfig({ apiKey: reference, apiKeyPool: [
+        { id: "k1", key: reference }, { id: "k2", key: "synthetic-second" },
+      ] });
+      const routed = routedProviderConfig("p", config.providers.p);
+      expect(routed.apiKey).toBe("synthetic-resolved-first");
+      const rotated = rotateProviderTransportOn429(config, "p", routed, { attemptedKey: routed.apiKey });
+      expect(rotated?.apiKey).toBe("synthetic-second");
+      expect(loadConfig().providers.p.apiKey).toBe("synthetic-second");
+      expect(getKeyCooldownUntil("p", "k1")).not.toBeNull();
+    } finally {
+      delete process.env.OCX_SELECTION_TEST_KEY;
+      setProviderKeychainEntryFactoryForTests(null);
+    }
+  });
+
   test("rotates to the next key and cools down the exhausted one", () => {
     const config = makeConfig({ apiKey: "key-alpha-000111222333", apiKeyPool: pool3() });
     const now = 1_000_000;

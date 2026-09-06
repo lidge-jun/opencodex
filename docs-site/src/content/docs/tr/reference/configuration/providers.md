@@ -28,8 +28,9 @@ Arayüzde kayıt veya OAuth girişi tamamlanınca Models sayfasını açan bir b
 | `providers` | `Record<string, OcxProviderConfig>` | — | Sağlayıcı adından sağlayıcı yapılandırmasına eşleme haritası. |
 | `openaiProviderTierVersion?` | `2` | geçiş tarafından ayarlanır | Tek seçenek duyarlı OpenAI projeksiyonunu tamamlandı olarak işaretler. |
 | `disabledModels?` | `string[]` | — | Codex kataloğundan ve `/v1/models` listesinden gizlenen, ancak doğrudan proxy çağrılarından engellenmeyen modeller. Yönlendirilen bir kimlik listelerden kaldırılır. Hesap nitelikli bir yerel kimlik yalnızca o seçici satırını gizler; yalın bir yerel GPT kimliği, yalın satırı ve o model için her hesap seçici satırını gizler. Kontrol paneli Modeller sayfası yalnızca yönlendirilen ve yalın yerel satırları gösterir; seçici nitelikli bir satırı gizlemek için doğrudan bu yapılandırma alanını kullanın. |
-| `providerContextCaps?` | `Record<string, number>` | `{}` | Sağlayıcı başına Codex tarafından görülebilen bağlam sınırları. Bir sınır yalnızca bilinen bir bağlam penceresini düşürür. |
-| `contextCapValue?` | `number` | `350000` | Kontrol paneli bağlam sınırı kontrolleri tarafından kullanılan varsayılan değer. Değiştirilmesi, yalnızca "tüm yönlendirilen sağlayıcılara uygula" açık olduğunda değeri mevcut bir `providerContextCaps` girdisi olmayan sağlayıcılar da dahil olmak üzere yönlendirilen her sağlayıcıya uygular; aksi takdirde her sağlayıcı kendi sınırını korur. |
+| `providerContextCaps?` | `Record<string, number>` | `{}` | Sağlayıcı başına etkin bağlam sınırları. Normal pencereler küçültülür; uzun pencereyi destekleyen yerel modeller yalnızca kendi desteklenen üst sınırlarına kadar genişletilebilir. |
+| `providerContextCapValues?` | `Record<string, number>` | `{}` | Sağlayıcı başına son seçilen sınırlar; devre dışı bırakıldığında da saklanır. Bu değerler tek başına sınırı etkinleştirmez. Etkin değer, saklanan değerden önceliklidir. |
+| `contextCapValue?` | `number` | `350000` | İlk etkinleştirmede kullanılan varsayılan değer. Sonraki etkinleştirmelerde sağlayıcının seçimi geri yüklenir. Genel değeri `setAll: true` ile güncellemek yalnızca etkin sınırları değiştirir; değer olmadan `setAll: true`, yapılandırılmış tüm sağlayıcıların sınırlarını geçerli genel değerle etkinleştirir. |
 | `codexAccounts?` | `CodexAccount[]` | `[]` | Codex Auth tarafından yönetilen ChatGPT/Codex havuz hesabı meta verileri. Sırlar ayrı olarak `codex-accounts.json` içinde yer alır. |
 | `pausedCodexAccountIds?` | `string[]` | `[]` | Duraklatıldığında ana `__main__` hesabı da dahil olmak üzere, devam ettirilene kadar Havuz seçiminden hariç tutulan hesaplar. |
 | `codexAccountNamespaces?` | `Record<string, string>` | — | İsteğe bağlı olarak rastgele bir genel model seçiciden saklanan bir Codex hesap hedefine eşleme. Hesap nitelikli seçici satırları etkinleştirildiğinde, hedefi mevcut olan her seçici, Codex seçicisine ayrı `<seçici>/<yerel-openai-modeli>` satırları ekler; her satır yalnızca o hesabı kullanır. Herhangi bir seçici etkinken, yalın yerel satırlar seçicide gizlenir, ancak açıkça devre dışı bırakılmadıkça kimlikleri yönlendirilebilir kalır ve ham `/v1/models` tarafından listelenir. |
@@ -100,7 +101,7 @@ alanlı seçilmiş kimlikleri yalın kimliklere yeniden yazar.
 | `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Anthropic anahtar başlığı stili. Varsayılan olarak yerel `x-api-key`; yalnızca anahtar kimlik doğrulamalı `anthropic` sağlayıcıları için geçerlidir. |
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | Çoklu anahtar havuzu. `apiKey` aktif girdiyi yansıtır; her öğe `id`, `key`, isteğe bağlı `label` ve isteğe bağlı sayısal `addedAt` değerine sahiptir. |
 | `defaultModel?` | `string` | Bu sağlayıcı açık bir model olmadan seçildiğinde kullanılan model. |
-| `models?` | `string[]` | Tohum/geri dönüş model listesi. `liveModels: false` olduğunda bunlar keşfedilen tek modellerdir. |
+| `models?` | `string[]` | Başlangıç/geri dönüş model listesi. `liveModels: false` iken boş olmayan `models` listesini `retainModels` izler; `models` boşsa veya atlanmışsa önce yapılandırılmış `defaultModel`, sonra `retainModels` kullanılır. Yinelenen kimliklerin yalnızca ilk geçtiği konum korunur. |
 | `liveModels?` | `boolean` | Başlatmada/senkronizasyonda canlı kataloğu getirin (varsayılan `true`). Özel sağlayıcılar `${baseUrl}/models` kullanır; yerleşikler bir kayıt defteri URL'si ve filtresi kullanabilir. |
 | `selectedModels?` | `string[]` | Keşiften sonra katalog izin listesi. Boş olmaması yalnızca bu kimlikleri gösterir; boş veya atlanmış olması keşfedilen tüm modelleri gösterir. |
 | `contextWindow?` | `number` | Yukarı akış meta verileri olmadığında sağlayıcı genelinde bağlam geri dönüşü; aksi takdirde daha küçük canlı meta verileri koruyan bir sınır. Modeller kontrol paneli bunu `providerContextCaps` alanından ayrı olarak gösterir. |
@@ -476,8 +477,16 @@ uygulamadan önce yerel `zai/glm-5.2` kimliğini geri yükler. Aynı eşleme yer
 
 ## Statik model izin listeleri
 
-Yalnızca `models`'ı göstermek için `liveModels: false` ayarlayın. `models` boşsa
-veya atlanırsa sağlayıcı yönlendirilen hiçbir modeli göstermez. Canlı keşif,
+`liveModels: false` iken `models` boşsa veya atlanmışsa başlangıç listesine önce yapılandırılmış
+`defaultModel`, ardından `retainModels` eklenir. Yinelenen kimliklerde ilk geçen korunur.
+Açıkça belirtilmiş, boş olmayan `models` listesini ise `retainModels` izler; farklı bir `defaultModel`
+kendiliğinden eklenmez. Bu model yine de `models` veya `retainModels` içinde açıkça belirtilebilir.
+Bu alanların hiçbiri kimlik sağlamıyorsa başlangıç listesi boştur. Bu sıra, son seçici sırasını
+garanti etmez. `selectedModels`, `disabledModels` ve sağlayıcının devre dışı bırakılması kuralları
+geçerliliğini korur. `authMode: "forward"` ayrı dalında kalır ve bu yönlendirilmiş statik listeyi
+kullanmaz. Bu kurallar canlı keşif başarısızlığındaki geri dönüş davranışını değiştirmez.
+
+Canlı keşif,
 önbelleğe almadan önce 4 MiB'den veya 2.000 ham model satırından fazlasını
 reddeder; yerleşik önayarlar daha düşük sınırlar kullanabilir ve sohbete uygun
 satırlara filtre uygulayabilir. Büyük boyutlu veya hatalı biçimlendirilmiş

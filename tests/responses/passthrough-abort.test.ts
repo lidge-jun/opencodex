@@ -78,7 +78,9 @@ describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
     expect(sseBranch).toContain("win32EagerRewrite");
     expect(sseBranch).toContain("rewriteBlocks: clientBlockRewrite");
     // Elsewhere the failed-tail relay converts mid-stream resets into a clean response.failed.
-    expect(sseBranch).toContain("relaySseWithFailedTail(rewrittenBody, upstream");
+    expect(sseBranch).toMatch(
+      /relaySseWithFailedTail\(\s*rewrittenBody,\s*upstream,\s*reason\s*=>\s*clientGone\.abort\(reason\),\s*\{\s*upstreamError:\s*logCtx\.upstreamError\s*\},\s*\)/,
+    );
     expect(sseBranch).toContain("new Response(clientBody");
     expect(sseBranch).toContain("markNativePassthroughSseResponse");
     // #314/phase 100 two-platform contract: the real core gate delegates to the

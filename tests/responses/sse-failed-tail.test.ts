@@ -238,6 +238,32 @@ describe("relaySseWithFailedTail", () => {
     expect(eager.split("data: [DONE]").length - 1).toBe(1);
   });
 
+  test("clean EOF after a recorded upstream error reports that error instead of adapter_eof", async () => {
+    const upstream = new AbortController();
+    const src = sourceStream(['data: {"type":"response.in_progress"}\n\n']);
+    const out = await drain(relaySseWithFailedTail(src, upstream, undefined, {
+      upstreamError: "The usage limit has been reached",
+    }));
+
+    expect(out).toContain("event: response.failed");
+    expect(out).toContain("The usage limit has been reached");
+    expect(out).not.toContain('"reason":"adapter_eof"');
+    expect(out.endsWith("data: [DONE]\n\n")).toBe(true);
+  });
+
+  test("clean EOF after an upstream error keeps the same failed payload through eager relay", async () => {
+    const upstream = new AbortController();
+    const src = sourceStream(['data: {"type":"response.in_progress"}\n\n']);
+    const out = await drain(relaySseEagerBounded(src, upstream, parityHooks, {
+      upstreamError: "The usage limit has been reached",
+    }));
+
+    expect(out).toContain("event: response.failed");
+    expect(out).toContain("The usage limit has been reached");
+    expect(out).not.toContain('"reason":"adapter_eof"');
+    expect(out.endsWith("data: [DONE]\n\n")).toBe(true);
+  });
+
   test.each([
     [
       "clean EOF without a terminal",
@@ -306,5 +332,93 @@ describe("relaySseWithFailedTail", () => {
         expect(text).toContain('"reason":"adapter_eof"');
       }
     }
+  });
+
+  const CREDENTIAL_CANARY = "sk-testCANARY9live";
+  const OVERLONG_SUFFIX = "x".repeat(600);
+  const BARE_ERROR_MESSAGE = "upstream failed " + CREDENTIAL_CANARY + " " + OVERLONG_SUFFIX;
+  const EXPECTED_SYNTHETIC_MESSAGE = ("upstream failed [REDACTED] " + OVERLONG_SUFFIX)
+    .slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS);
+
+  const sseDataFrame = (payload: unknown): string => "data: " + JSON.stringify(payload) + "\n\n";
+
+  const synthesizedTail = (out: string, original: string): string => {
+    expect(out.startsWith(original)).toBe(true);
+    return out.slice(original.length);
+  };
+
+  const synthesizedFailedPayload = (tail: string): {
+    type: string;
+    response: { status: string; error: { type: string; code: string; message: string } };
+  } => {
+    const dataLine = tail.split("event: response.failed\ndata: ")[1]?.split("\n")[0];
+    if (!dataLine) throw new Error("missing synthesized response.failed payload");
+    return JSON.parse(dataLine) as {
+      type: string;
+      response: { status: string; error: { type: string; code: string; message: string } };
+    };
+  };
+
+  test.each([
+    [
+      "tee",
+      "flat",
+      (src: ReadableStream<Uint8Array>) => relaySseWithFailedTail(src, new AbortController()),
+      { type: "error", message: BARE_ERROR_MESSAGE },
+    ],
+    [
+      "tee",
+      "nested",
+      (src: ReadableStream<Uint8Array>) => relaySseWithFailedTail(src, new AbortController()),
+      { type: "error", error: { message: BARE_ERROR_MESSAGE } },
+    ],
+    [
+      "eager",
+      "flat",
+      (src: ReadableStream<Uint8Array>) => relaySseEagerBounded(src, new AbortController(), parityHooks),
+      { type: "error", message: BARE_ERROR_MESSAGE },
+    ],
+    [
+      "eager",
+      "nested",
+      (src: ReadableStream<Uint8Array>) => relaySseEagerBounded(src, new AbortController(), parityHooks),
+      { type: "error", error: { message: BARE_ERROR_MESSAGE } },
+    ],
+  ] as const)("%s %s bare error synthesizes a redacted capped failed tail", async (_mode, _shape, relay, payload) => {
+    const original = sseDataFrame({ type: "response.in_progress" }) + sseDataFrame(payload);
+    const out = await drain(relay(sourceStream([original])));
+    const tail = synthesizedTail(out, original);
+    const parsed = synthesizedFailedPayload(tail);
+
+    expect(original).toContain(CREDENTIAL_CANARY);
+    expect(out.slice(0, original.length)).toBe(original);
+    expect(tail).toContain("event: response.failed");
+    expect(tail).not.toContain(CREDENTIAL_CANARY);
+    expect(parsed.type).toBe("response.failed");
+    expect(parsed.response.status).toBe("failed");
+    expect(parsed.response.error.code).toBe("upstream_server_error");
+    expect(parsed.response.error.message).toBe(EXPECTED_SYNTHETIC_MESSAGE);
+    expect(parsed.response.error.message).toHaveLength(MAX_TAIL_ERROR_MESSAGE_CHARS);
+    expect(parsed.response.error.message).not.toContain(CREDENTIAL_CANARY);
+    expect(terminalEvents(tail)).toEqual(["response.failed"]);
+    expect(doneEvents(out)).toHaveLength(1);
+    expect(doneEvents(tail)).toHaveLength(1);
+    expect(tail.endsWith("data: [DONE]\n\n")).toBe(true);
+    expect(out).not.toContain('"reason":"adapter_eof"');
+  });
+
+  test.each(["tee", "eager"] as const)("%s existing terminal wins over a preceding bare error and does not duplicate DONE", async (mode) => {
+    const original = sseDataFrame({ type: "error", message: BARE_ERROR_MESSAGE })
+      + 'event: response.completed\ndata: {"type":"response.completed","response":{"status":"completed"}}\n\n'
+      + "data: [DONE]\n\n";
+    const relay = mode === "tee"
+      ? (src: ReadableStream<Uint8Array>) => relaySseWithFailedTail(src, new AbortController())
+      : (src: ReadableStream<Uint8Array>) => relaySseEagerBounded(src, new AbortController(), parityHooks);
+    const out = await drain(relay(sourceStream([original])));
+
+    expect(out).toBe(original);
+    expect(terminalEvents(out)).toEqual(["response.completed"]);
+    expect(doneEvents(out)).toHaveLength(1);
+    expect(out).not.toContain("event: response.failed");
   });
 });

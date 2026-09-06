@@ -54,10 +54,10 @@
   gap: var(--space-4);
 }
 
-/* Sub-agent delegation + Sync models share one row (same auto-fit rhythm as sidecars). */
+/* Settings keep one reading order and one control column across the overview. */
 .dash-overview-tools {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 21rem), 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-4);
   align-items: stretch;
 }
@@ -526,4 +526,178 @@
   background: var(--raised);
   color: var(--text);
   white-space: nowrap;
+}
+
+
+/* Overview settings share a fixed control column, then stack together when the
+   content area is too narrow. Scope this to Overview; provider/model tables keep
+   their own layout. Dropdowns and popovers already portal outside the container. */
+.dash-overview-stack {
+  --dash-controls-width: 26rem;
+
+  container: dashboard-overview / inline-size;
+}
+
+.dash-overview-head .stat-row {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.dash-overview-head .stat-row > .stat {
+  min-width: 0;
+  min-height: 126px;
+  display: grid;
+  grid-template-rows: 24px 36px 18px;
+  align-content: center;
+  justify-content: stretch;
+  gap: 4px;
+}
+
+.dash-overview-head .stat .label {
+  margin: 0;
+  min-width: 0;
+}
+
+.dash-overview-head .stat .value {
+  min-width: 0;
+  align-self: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.dash-overview-head .dash-stat-version {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dash-overview-head .dash-stat-coverage { margin: 0; }
+
+.dash-overview-stack .panel {
+  min-width: 0;
+  padding: 20px;
+}
+
+.dash-overview-stack .dash-delegation-summary,
+.dash-overview-stack .dash-sync-summary,
+.dash-overview-stack .dash-effort-panel .injection-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--dash-controls-width);
+  align-items: center;
+  gap: 24px;
+}
+
+.dash-overview-stack .dash-delegation-controls,
+.dash-effort-controls,
+.dash-shadow-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.dash-overview-tools .dash-delegation-controls {
+  justify-content: flex-start;
+}
+
+.dash-overview-tools .dash-delegation-controls > .custom-select:first-child {
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+
+.dash-overview-tools .dash-delegation-controls > .btn {
+  margin-left: auto;
+}
+
+.dash-effort-panel .injection-label { order: 0; }
+.dash-effort-controls { order: 1; }
+.dash-effort-controls > .custom-select { flex: 1; min-width: 0; }
+
+.dash-overview-stack .dash-delegation-controls .select-trigger,
+.dash-effort-controls .select-trigger,
+.dash-shadow-controls .select-trigger {
+  justify-content: space-between;
+  width: 100%;
+  min-width: 0;
+}
+
+.dash-overview-stack .dash-delegation-controls .select-trigger > span,
+.dash-effort-controls .select-trigger > span,
+.dash-shadow-controls .select-trigger > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dash-overview-stack .dash-sidecar-row-card .dash-sidecar-copy {
+  min-width: 0;
+}
+
+.dash-overview-stack .dash-sidecar-row-card .setting-hint { min-height: 0; }
+
+.dash-overview-stack .dash-sidecar-row-card .dash-delegation-controls {
+  width: 100%;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.dash-overview-stack .dash-sidecar-select-row .custom-select:first-child {
+  flex: 1;
+  min-width: 0;
+  max-width: none;
+}
+
+.dash-shadow-controls {
+  width: var(--dash-controls-width);
+  flex-shrink: 0;
+}
+
+.dash-shadow-controls > .custom-select { flex: 1; min-width: 0; }
+.dash-shadow-controls > .switch { order: 1; }
+
+.dash-overview-stack .setting-hint,
+.dash-overview-stack .dash-sync-hint { max-width: 60ch; }
+
+@container dashboard-overview (max-width: 64rem) {
+  .dash-overview-head .stat-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@container dashboard-overview (max-width: 46rem) {
+  .dash-overview-stack .dash-delegation-summary,
+  .dash-overview-stack .dash-sync-summary,
+  .dash-overview-stack .dash-effort-panel .injection-head {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+
+  .dash-overview-stack .dash-delegation-controls,
+  .dash-overview-stack .dash-effort-controls,
+  .dash-overview-stack .dash-shadow-controls { width: 100%; }
+
+  .dash-overview-stack .dash-shadow-controls { flex-basis: 100%; }
+  .dash-overview-stack .spread:has(.dash-shadow-controls) { flex-wrap: wrap; }
+  .dash-shadow-label { min-width: 0; max-width: 100%; flex-wrap: wrap; }
+  .dash-shadow-label > .font-semibold { flex-shrink: 0; max-width: 100%; }
+  .dash-shadow-label > code { flex-basis: 100%; min-width: 0; overflow-wrap: anywhere; }
+  .dash-overview-stack .maintenance-actions { justify-content: flex-start; }
+}
+
+@container dashboard-overview (max-width: 30rem) {
+  .dash-overview-head .stat-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dash-overview-stack .panel { padding: 16px; }
+  .dash-overview-stack .select-trigger,
+  .dash-overview-stack .panel .btn:not([aria-haspopup="dialog"]),
+  .dash-overview-stack .dash-vision-advanced-trigger { min-height: 44px; }
+}
+
+
+.dash-ma-option { min-width: 36px; padding: 5px 10px; }
+
+@container dashboard-overview (max-width: 22rem) {
+  .dash-overview-head .dash-ma-switch { max-width: 100%; }
+  .dash-overview-head .dash-ma-option {
+    min-width: 0;
+    flex: 1 1 auto;
+    padding: 5px 4px;
+  }
 }
