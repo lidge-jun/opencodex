@@ -6,6 +6,8 @@ import type { CodexAccount } from "./accounts";
  * /v1/messages surface, the `ocx claude` launcher, and the GUI Claude page.
  */
 export interface OcxClaudeCodeConfig {
+  /** Opt-in translated Messages admission; unset keeps legacy behavior. Native passthrough is exempt. */
+  compatibility?: "shadow" | "enforce";
   /** Kill switch for the /v1/messages inbound (GUI "Claude ON" toggle). Default: enabled. */
   enabled?: boolean;
   /**

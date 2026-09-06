@@ -57,6 +57,55 @@ function log(overrides: Partial<RequestLogEntry>): RequestLogEntry {
 }
 
 describe("request log metadata", () => {
+  test("Claude evidence is normalized before direct ring ingress and cannot be mutated afterwards", () => {
+    const previousHome = process.env.OPENCODEX_HOME;
+    const home = mkdtempSync(join(tmpdir(), "ocx-claude-log-"));
+    process.env.OPENCODEX_HOME = home;
+    clearRequestLogsForTests();
+    try {
+      const raw = JSON.parse('{"decision":"shadow","featureCodes":["documents","unknown_beta","private-header"],"reason":"private-reason"}');
+      addRequestLog(log({ claudeCompatibility: raw }));
+      raw.featureCodes.length = 0;
+      raw.reason = "changed";
+      const expected = { decision: "shadow", featureCodes: ["documents", "unknown_beta"], reason: "shadow: would reject: documents" };
+      expect(getRequestLogEntries()[0]?.claudeCompatibility).toEqual(expected);
+      expect(readUsageEntries()[0]?.claudeCompatibility).toEqual(expected);
+      const finalized: RequestLogEntry[] = [];
+      addFinalRequestLog("claude-final", 1, { model: "test", provider: "mock",
+        claudeCompatibility: JSON.parse('{"decision":"shadow","featureCodes":["documents"],"reason":"private-final"}') },
+      200, { closeReason: "non_stream" }, row => finalized.push(row));
+      expect(finalized).toHaveLength(1);
+      expect(finalized[0].claudeCompatibility).toEqual({
+        decision: "shadow", featureCodes: ["documents"], reason: "shadow: would reject: documents",
+      });
+    } finally {
+      clearRequestLogsForTests();
+      resetUsageReadCacheForTests();
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      removeTreeWithRetry(home);
+    }
+  });
+
+  test("custom hydration normalizes Claude evidence and ignores malformed optional rows", () => {
+    clearRequestLogsForTests();
+    const raw: PersistedUsageEntry[] = [
+      { ...log({ requestId: "legacy" }) },
+      { ...log({ requestId: "shadow" }), claudeCompatibility: JSON.parse('{"decision":"shadow","featureCodes":["documents","private-header"],"reason":"private-reason"}') },
+      { ...log({ requestId: "malformed" }), claudeCompatibility: JSON.parse('{"decision":"shadow","featureCodes":null,"reason":"private-reason"}') },
+    ];
+    try {
+      expect(hydrateRequestLogsFromDisk(() => raw)).toBe(3);
+      expect(getRequestLogEntries().map(row => row.claudeCompatibility)).toEqual([
+        undefined, { decision: "shadow", featureCodes: ["documents"], reason: "shadow: would reject: documents" }, undefined,
+      ]);
+      raw[1].claudeCompatibility!.featureCodes.length = 0;
+      expect(getRequestLogEntries()[1]?.claudeCompatibility?.featureCodes).toEqual(["documents"]);
+      expect(hydrateRequestLogsFromDisk(() => raw)).toBe(0);
+      expect(JSON.stringify(getRequestLogEntries())).not.toContain("private-");
+    } finally { clearRequestLogsForTests(); }
+  });
+
   test("upstream credential attribution requires the resolved canonical xAI transport", () => {
     const attempt = beginRequestAttempt(1, "xai", "grok-test", "openai-chat");
     const oauth = { adapter: "openai-chat", authMode: "oauth" as const, baseUrl: "https://cli-chat-proxy.grok.com/v1" };

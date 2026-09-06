@@ -24,6 +24,7 @@ import {
   isKnownUsageSurface,
   isCodexUsageAccountLogLabel,
   isValidReasoningWireValue,
+  normalizeClaudeCompatibilityUsageLog,
   readRecentUsageEntries,
   usageForFinalLog,
   usageStatusForFinalLog,
@@ -31,6 +32,7 @@ import {
   type AttemptRecoveryKind,
   type PersistedUsageAttempt,
   type PersistedUsageEntry,
+  type PersistedClaudeCompatibilityLog,
   type UsageStatus,
 } from "../usage/log";
 import {
@@ -138,6 +140,8 @@ export interface RequestLogContext {
   terminalSource?: "upstream" | "synthetic";
   /** Bounded route-decision trace (RI-01); never contains secrets. */
   routeDecision?: RouteDecisionTraceV1;
+  /** Opt-in shadow evidence, normalized again at the logging boundary. */
+  claudeCompatibility?: PersistedClaudeCompatibilityLog;
 }
 
 export interface RequestLogEntry {
@@ -203,6 +207,8 @@ export interface RequestLogEntry {
   terminalSource?: "upstream" | "synthetic";
   /** Bounded route-decision trace (RI-01); never contains secrets. */
   routeDecision?: RouteDecisionTraceV1;
+  /** Closed Claude protocol codes; no request or header values. */
+  claudeCompatibility?: PersistedClaudeCompatibilityLog;
 }
 
 const requestLog: RequestLogEntry[] = [];
@@ -271,6 +277,7 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
   const terminalStatus = asTerminalStatus(entry.terminalStatus);
   const closeReason = asCloseReason(entry.closeReason);
   const routeDecision = normalizeRouteDecisionTraceForLog(entry.routeDecision);
+  const claudeCompatibility = normalizeClaudeCompatibilityUsageLog(entry.claudeCompatibility);
   return {
     requestId: entry.requestId,
     timestamp: entry.timestamp,
@@ -313,6 +320,7 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
     ...(entry.totalTokens !== undefined ? { totalTokens: entry.totalTokens } : {}),
     ...(entry.attempts !== undefined ? { attempts: entry.attempts } : {}),
     ...(routeDecision ? { routeDecision } : {}),
+    ...(claudeCompatibility ? { claudeCompatibility } : {}),
   };
 }
 
@@ -368,10 +376,13 @@ export function addRequestLog(entry: RequestLogEntry) {
   // line-oriented viewer — while `usage.jsonl` looked clean, which is the worst shape for a
   // sanitization bug because the safe surface is the one you check.
   const shadowCallRewrittenFrom = sanitizeLogMetadataString(entry.shadowCallRewrittenFrom);
-  const retained: RequestLogEntry = shadowCallRewrittenFrom === entry.shadowCallRewrittenFrom
+  const claudeCompatibility = normalizeClaudeCompatibilityUsageLog(entry.claudeCompatibility);
+  const retained: RequestLogEntry = shadowCallRewrittenFrom === entry.shadowCallRewrittenFrom && entry.claudeCompatibility === undefined
     ? entry
     : { ...entry, ...(shadowCallRewrittenFrom ? { shadowCallRewrittenFrom } : {}) };
   if (!shadowCallRewrittenFrom && retained !== entry) delete retained.shadowCallRewrittenFrom;
+  if (claudeCompatibility) retained.claudeCompatibility = claudeCompatibility;
+  else if (retained !== entry) delete retained.claudeCompatibility;
   entry = retained;
   retainRequestLogEntry(entry);
   try {
@@ -431,6 +442,7 @@ export function addRequestLog(entry: RequestLogEntry) {
       ...(entry.attempts !== undefined ? { attempts: entry.attempts } : {}),
       ...failureDiagnostics,
       ...(entry.routeDecision ? { routeDecision: entry.routeDecision } : {}),
+      ...(entry.claudeCompatibility ? { claudeCompatibility: entry.claudeCompatibility } : {}),
     });
   } catch {
     /* request logging must never fail a user request */
@@ -985,6 +997,7 @@ export function addFinalRequestLog(
   // means a future caller cannot reintroduce the hole by forgetting to sanitize first, and
   // the in-memory /api/logs row matches what usage.jsonl already stores.
   const shadowCallRewrittenFrom = sanitizeLogMetadataString(logCtx.shadowCallRewrittenFrom);
+  const claudeCompatibility = normalizeClaudeCompatibilityUsageLog(logCtx.claudeCompatibility);
   addLog({
     requestId,
     timestamp: start,
@@ -1034,6 +1047,7 @@ export function addFinalRequestLog(
     ...(logCtx.transportPhase ? { transportPhase: logCtx.transportPhase } : {}),
     ...(logCtx.terminalSource ? { terminalSource: logCtx.terminalSource } : {}),
     ...(logCtx.routeDecision ? { routeDecision: logCtx.routeDecision } : {}),
+    ...(claudeCompatibility ? { claudeCompatibility } : {}),
   });
   if (isUsageDebugEnabled()) {
     appendUsageDebug({

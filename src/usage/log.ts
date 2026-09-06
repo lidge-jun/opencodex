@@ -9,6 +9,24 @@ import { usageDisplayTotalTokens } from "./totals";
 import type { AttemptTierOutcome, OcxUsage } from "../types";
 import { normalizeRouteDecisionTrace, type RouteDecisionTraceV1 } from "../routing/trace";
 import { ACCOUNT_LOG_LABEL_RE, CODEX_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
+import { claudeCompatibilityReason, normalizeClaudeFeatureCodes, type ClaudeFeatureCode } from "../claude/compatibility";
+
+export interface PersistedClaudeCompatibilityLog {
+  decision: "shadow";
+  featureCodes: ClaudeFeatureCode[];
+  reason?: string;
+}
+
+/** Disk and in-memory callers share a closed-code projection; free-form reasons are discarded. */
+export function normalizeClaudeCompatibilityUsageLog(value: unknown): PersistedClaudeCompatibilityLog | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const row = value as Record<string, unknown>;
+  if (row.decision !== "shadow") return undefined;
+  const featureCodes = normalizeClaudeFeatureCodes(row.featureCodes);
+  const reason = claudeCompatibilityReason(featureCodes, true);
+  if (!reason) return undefined;
+  return { decision: "shadow", featureCodes, reason };
+}
 
 export type UsageStatus = "reported" | "unreported" | "unsupported" | "estimated";
 /**
@@ -160,6 +178,8 @@ export interface PersistedUsageEntry {
    * contains prompts, credentials, or hidden reasoning.
    */
   routeDecision?: RouteDecisionTraceV1;
+  /** Closed Claude protocol codes only; absent on older rows. */
+  claudeCompatibility?: PersistedClaudeCompatibilityLog;
 }
 
 const KNOWN_USAGE_SURFACES = new Set<NonNullable<PersistedUsageEntry["surface"]>>([
@@ -490,6 +510,7 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   const callerServiceTier = sanitizeLogMetadataString(entry.callerServiceTier);
   const responseServiceTier = sanitizeLogMetadataString(entry.responseServiceTier);
   const shadowCallRewrittenFrom = sanitizeLogMetadataString(entry.shadowCallRewrittenFrom);
+  const claudeCompatibility = normalizeClaudeCompatibilityUsageLog(entry.claudeCompatibility);
   const routeDecision = entry.routeDecision
     ? normalizeRouteDecisionTrace(entry.routeDecision)
     : undefined;
@@ -563,6 +584,7 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(entry.closeReason ? { closeReason: entry.closeReason } : {}),
     ...(entry.upstreamError ? { upstreamError: entry.upstreamError } : {}),
     ...(routeDecision ? { routeDecision } : {}),
+    ...(claudeCompatibility ? { claudeCompatibility } : {}),
   };
 }
 

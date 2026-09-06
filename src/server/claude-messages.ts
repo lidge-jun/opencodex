@@ -16,6 +16,7 @@ import { resolveAlias, claudeCodeNativeAlias } from "../claude/alias";
 import { recordDesktopRequest } from "../claude/desktop-health";
 import { stripOneMillionMarker } from "../claude/context-windows";
 import { captureClaudeInbound } from "../claude/inbound-debug";
+import { analyzeClaudeCompatibility, isClaudeCompatibilityMode } from "../claude/compatibility";
 import { isTransientUpstreamStatus } from "../lib/upstream-retry";
 import { resolveClientRetryAfter } from "../lib/retry-after";
 import {
@@ -718,6 +719,32 @@ async function handleClaudeMessagesWithBudget(
     // adapter set by design, so the tier would be silently dropped.
     if (!effortRow && !fastRow && isRec(anthropicBody) && wantsNativePassthrough(req, config, requestPolicy, anthropicBody.model)) {
       return await anthropicNativePassthrough(req, config, logCtx, logIds, anthropicBody, "/v1/messages");
+    }
+    // Capture source semantics before effort rewriting or translation drops fields.
+    // This policy is uniform across translated targets, including later fallback attempts.
+    const compatibilityMode: unknown = config.claudeCode?.compatibility;
+    if (compatibilityMode !== undefined) {
+      if (!isClaudeCompatibilityMode(compatibilityMode)) {
+        logCtx.errorCode = "claude_compatibility_configuration";
+        if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 503, { closeReason: "non_stream" });
+        return anthropicErrorResponse(503, "Invalid claudeCode.compatibility setting", "api_error");
+      }
+      const compatibility = analyzeClaudeCompatibility(anthropicBody, {
+        mode: compatibilityMode,
+        anthropicBeta: req.headers.get("anthropic-beta") ?? undefined,
+      });
+      if (compatibility.decision === "reject") {
+        logCtx.errorCode = "claude_compatibility_unsupported";
+        if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 400, { closeReason: "non_stream" });
+        return anthropicErrorResponse(400, compatibility.reason!, "invalid_request_error");
+      }
+      if (compatibility.decision === "shadow") {
+        logCtx.claudeCompatibility = {
+          decision: "shadow",
+          featureCodes: compatibility.featureCodes,
+          reason: compatibility.reason,
+        };
+      }
     }
     if (isRec(anthropicBody) && effortOverride) {
       anthropicBody.output_config = {

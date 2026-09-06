@@ -7,6 +7,8 @@ import {
   appendUsageEntry,
   currentUsageLogRevision,
   normalizeUsageEntryForTest,
+  normalizeClaudeCompatibilityUsageLog,
+  normalizePersistedUsageRow,
   readRecentUsageEntries,
   readUsageEntries,
   readUsageEntriesForManagement,
@@ -39,6 +41,45 @@ afterEach(() => {
 });
 
 describe("usage log", () => {
+  test("Claude shadow metadata round trips as closed codes and a regenerated reason", () => {
+    const evidence = normalizeClaudeCompatibilityUsageLog({
+      decision: "shadow", featureCodes: ["unknown_beta", "documents", "documents", "private-header", "__proto__"],
+      reason: "private-reason", extra: "private-payload",
+    });
+    const expected = { decision: "shadow", featureCodes: ["documents", "unknown_beta"], reason: "shadow: would reject: documents" };
+    expect(evidence).toEqual(expected);
+    appendUsageEntry({ requestId: "claude-shadow", timestamp: 1, provider: "mock", model: "test-model",
+      status: 200, durationMs: 1, usageStatus: "reported", usage: { inputTokens: 3, outputTokens: 2 },
+      claudeCompatibility: evidence });
+    // Later mutation of the caller's evidence cannot rewrite the serialized record.
+    evidence!.featureCodes.length = 0;
+    resetUsageReadCacheForTests();
+    expect(readUsageEntries()[0]?.claudeCompatibility).toEqual(expected);
+    expect(readRecentUsageEntries(1)[0]?.claudeCompatibility).toEqual(expected);
+    expect(readUsageEntries()[0]?.usage).toMatchObject({ inputTokens: 3, outputTokens: 2 });
+    expect(readFileSync(usageLogPath(), "utf8")).not.toContain("private-");
+  });
+
+  test("legacy and malformed persisted Claude metadata does not poison readers", () => {
+    const base = { requestId: "claude-legacy", timestamp: 1, provider: "mock", model: "test-model",
+      status: 200, durationMs: 1, usageStatus: "unreported" };
+    const invalid: unknown[] = [undefined, null, [], "private-value", 1,
+      { decision: "reject", featureCodes: ["documents"] },
+      { decision: "shadow", featureCodes: "documents" },
+      { decision: "shadow", featureCodes: [null, {}, "constructor", "private-header"] },
+      { decision: "shadow", featureCodes: ["cache_control"], reason: "private-reason" },
+    ];
+    for (const claudeCompatibility of invalid) {
+      const row = normalizePersistedUsageRow({ ...base, claudeCompatibility });
+      expect(row).toBeDefined();
+      expect(row?.claudeCompatibility).toBeUndefined();
+    }
+    writeFileSync(usageLogPath(), invalid.map(claudeCompatibility => JSON.stringify({ ...base, claudeCompatibility })).join("\n") + "\n");
+    resetUsageReadCacheForTests();
+    expect(readUsageEntries()).toHaveLength(invalid.length);
+    expect(readUsageEntries().every(row => row.claudeCompatibility === undefined)).toBe(true);
+  });
+
   test("round trips only recognized per-attempt xAI credential sources", () => {
     const attempt = {
       ordinal: 1, provider: "xai", model: "grok-test", adapter: "openai-chat", status: 200,
