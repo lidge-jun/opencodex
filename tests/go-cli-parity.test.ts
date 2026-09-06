@@ -111,11 +111,12 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
     }));
     expectParity(args);
   });
-  test("diffs every config mutation, validation, and export path through the shared owner", () => {
+  test("diffs native config writes from argument parsing through persistence", () => {
     const home = mkdtempSync(join(tmpdir(), "ocx-go-config-parity-"));
     const configPath = join(home, "config.json");
     const exportPath = join(home, "export.json");
     const importPath = join(home, "import.json");
+    const invalidImportPath = join(home, "invalid-import.json");
     const initial = {
       port: 10100,
       providers: { fixture: { adapter: "openai-chat", baseUrl: "https://example.test/v1", apiKey: "secret-key" } },
@@ -132,6 +133,7 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
     };
     try {
       writeFileSync(importPath, JSON.stringify({ ...initial, port: 10102 }));
+      writeFileSync(invalidImportPath, "{not-json");
       parity(["config", "show", "--source"]);
       parity(["config", "set", "autoSwitchThreshold", "70", "--json"]);
       parity(["config", "set", "port", "-1", "--json"]);
@@ -142,6 +144,12 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
       parity(["config", "export", exportPath]);
       parity(["config", "import", importPath, "--yes", "--json"]);
       parity(["config", "import", importPath, "--json"]);
+      parity(["config", "set"]);
+      parity(["config", "set", "constructor", "true", "--json"]);
+      parity(["config", "set", "missing.child", "true", "--json"]);
+      parity(["config", "unset", "missing", "--json"]);
+      parity(["config", "import"]);
+      parity(["config", "import", invalidImportPath, "--yes", "--json"]);
     } finally {
       removeTreeWithRetry(home);
     }
