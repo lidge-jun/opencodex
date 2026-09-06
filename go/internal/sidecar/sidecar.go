@@ -70,9 +70,10 @@ const (
 	// process, asked the sidecar to serve a protected bridge-backed route.
 	SidecarRequestHeader = "X-Ocx-Go-Sidecar-Request"
 	// SidecarBridgeHeader authenticates the sidecar to the private parent bridge.
-	SidecarBridgeHeader    = "X-Ocx-Go-Sidecar-Bridge"
-	privateWriteBridgePath = "/__ocx_go_sidecar/write"
-	maxWriteBodyBytes      = 2 * 1024 * 1024
+	SidecarBridgeHeader      = "X-Ocx-Go-Sidecar-Bridge"
+	privateWriteBridgePath   = "/__ocx_go_sidecar/write"
+	privateLabReadBridgePath = "/__ocx_go_sidecar/lab-read"
+	maxWriteBodyBytes        = 2 * 1024 * 1024
 )
 
 // healthPayload mirrors the JSON object literal in
@@ -255,6 +256,21 @@ func NewHandler(cfg Config) http.Handler {
 		}
 	})
 
+	// Ticket #33: the parent remains the Lab SQLite projection oracle. The
+	// exact literal list mirrors the ownership registry; parameterised routes
+	// are never accidentally acquired through a prefix.
+	for _, route := range []string{
+		"/api/lab/automation", "/api/lab/automation/runs", "/api/lab/artifacts",
+		"/api/lab/catalog", "/api/lab/events", "/api/lab/observations",
+		"/api/lab/production-signals", "/api/lab/public/community", "/api/lab/status",
+		"/api/lab/subjects", "/api/lab/verdicts",
+	} {
+		path := route
+		mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
+			relayLabRead(w, r, cfg, path)
+		})
+	}
+
 	// Ticket #21's public mutation surface is deliberately exact. The sidecar
 	// never dispatches by prefix or forwards an unrecognised write: each allowed
 	// method/path pair is registered explicitly and the private bridge remains
@@ -404,6 +420,47 @@ func privateBridgeClient() *http.Client {
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
+	}
+}
+
+func relayLabRead(w http.ResponseWriter, r *http.Request, cfg Config, path string) {
+	if cfg.RequestToken == "" || !managementauth.EqualSecret(r.Header.Get(SidecarRequestHeader), cfg.RequestToken) {
+		http.NotFound(w, r)
+		return
+	}
+	parent, ok := privateParentBridgeURL(cfg.ParentURL, privateLabReadBridgePath)
+	if !ok || cfg.BridgeToken == "" {
+		http.Error(w, "lab state bridge unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	parent.RawQuery = r.URL.RawQuery
+	bridgeReq, err := http.NewRequestWithContext(r.Context(), http.MethodGet, parent.String(), nil)
+	if err != nil {
+		http.Error(w, "lab state bridge unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	bridgeReq.Header.Set(SidecarBridgeHeader, cfg.BridgeToken)
+	bridgeReq.Header.Set("X-Ocx-Go-Sidecar-Path", path)
+	bridgeResp, err := privateBridgeClient().Do(bridgeReq)
+	if err != nil {
+		http.Error(w, "lab state bridge unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer bridgeResp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(bridgeResp.Body, 8*1024*1024+1))
+	if err != nil || len(raw) > 8*1024*1024 {
+		http.Error(w, "lab state bridge unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if contentType := bridgeResp.Header.Get("Content-Type"); contentType != "" {
+		w.Header().Set("Content-Type", contentType)
+	}
+	if retryAfter := bridgeResp.Header.Get("Retry-After"); retryAfter != "" {
+		w.Header().Set("Retry-After", retryAfter)
+	}
+	w.WriteHeader(bridgeResp.StatusCode)
+	if _, err := w.Write(raw); err != nil {
+		fmt.Fprintf(os.Stderr, "ocx-sidecar: write lab read response: %v\\n", err)
 	}
 }
 

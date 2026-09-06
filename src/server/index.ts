@@ -55,6 +55,7 @@ import {
 import { acquireServerBackgroundLifecycle } from "./background-lifecycle";
 import { activateLab, labActivationRequired } from "../lib/lab-activation";
 import { activateGoSidecar, forwardHotPathSeam, isDataPlaneSeamAttached } from "./go-sidecar";
+import { findGoOwnedManagementRoute } from "./management/route-registry";
 import {
   createDataPlaneSeamHeaders,
   createHotPathResponsesBridge,
@@ -1099,6 +1100,25 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         }
         const forceRefresh = url.searchParams.get("refresh") === "1" || url.searchParams.get("refresh") === "true";
         return jsonResponse(await fetchProviderQuotaReports(config, forceRefresh));
+      }
+      // Ticket #33 bridge: Go owns literal Lab reads while TypeScript remains
+      // the SQLite projection oracle until the runtime flip. Re-dispatching
+      // with forwarding disabled makes the private hop non-recursive.
+      if (url.pathname === "/__ocx_go_sidecar/lab-read") {
+        const bridgeToken = goSidecarLiveStateBridgeToken;
+        const path = req.headers.get("x-ocx-go-sidecar-path");
+        const declared = path ? findGoOwnedManagementRoute("GET", path) : undefined;
+        if (
+          req.method !== "GET" || !bridgeToken
+          || req.headers.get("x-ocx-go-sidecar-bridge") !== bridgeToken
+          || !path || !declared || !path.startsWith("/api/lab/") || path.includes("?")
+        ) return new Response(null, { status: 404 });
+        const oracleUrl = new URL("http://localhost" + path + url.search);
+        return (await handleManagementAPI(
+          new Request(oracleUrl, { method: "GET", headers: { accept: "application/json" } }),
+          oracleUrl, config, deps.managementApi, undefined, managementSessionControl,
+          { skipGoSidecarForwarding: true },
+        )) ?? new Response(null, { status: 404 });
       }
       // ADR-0008 write relay: only a supervised sidecar holding both the
       // per-child bridge capability and a fresh, body-bound parent claim may
