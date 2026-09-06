@@ -444,6 +444,7 @@ Subcommands:
 
 Examples:
   ocx provider list
+  ocx provider list --jsonl
   ocx provider add anthropic --api-key sk-ant-...
   ocx provider add my-ollama --adapter openai-chat --base-url http://localhost:11434/v1
   ocx provider show anthropic --json

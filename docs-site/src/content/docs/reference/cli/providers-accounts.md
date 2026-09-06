@@ -37,6 +37,10 @@ ocx models --provider anthropic --json
 ocx models live --provider ark --json
 ```
 
+`--jsonl` writes only configured providers, one JSON object per line, and omits the
+`registryCount` summary from `--json`. Use it for line-oriented scripts that should not
+buffer the whole provider list.
+
 :::caution[Custom headers are not a credential channel]
 `--headers` is for non-secret request metadata — routing hints, tenant or
 project selectors, tracing ids. It is **not** a place to put authentication
