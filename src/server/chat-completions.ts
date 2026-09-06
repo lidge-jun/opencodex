@@ -455,20 +455,28 @@ async function handleChatCompletionsWithBudget(
     });
   }
 
-  // Streaming client + JSON upstream: synthesize a minimal Chat Completions stream.
+  // JSON upstream changes delivery, not semantics: preserve the converted message and finish.
   const encoder = new TextEncoder();
   const id = typeof completion.id === "string" ? completion.id : `chatcmpl-${Date.now()}`;
   const created = typeof completion.created === "number" ? completion.created : Math.floor(Date.now() / 1000);
-  const message = isRec((completion.choices as Rec[] | undefined)?.[0])
-    ? ((completion.choices as Rec[])[0] as Rec).message as Rec | undefined
-    : undefined;
-  const content = message && typeof message.content === "string" ? message.content : "";
+  const rawChoice = Array.isArray(completion.choices) ? completion.choices[0] : undefined;
+  const choice = isRec(rawChoice) ? rawChoice : {};
+  const message = isRec(choice.message) ? choice.message : {};
+  const delta: Rec = {};
+  for (const field of ["content", "reasoning_content", "refusal"] as const) {
+    if (typeof message[field] === "string" && message[field].length > 0) delta[field] = message[field];
+  }
+  if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+    // JSON tool calls have no index; streamed clients use it to assemble each parallel call.
+    delta.tool_calls = message.tool_calls.filter(isRec).map((call, index) => ({ ...call, index }));
+  }
+  const finishReason = typeof choice.finish_reason === "string" ? choice.finish_reason : "stop";
   const frames = [
     `data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model: requestedModel, choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }] })}\n\n`,
-    ...(content
-      ? [`data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model: requestedModel, choices: [{ index: 0, delta: { content }, finish_reason: null }] })}\n\n`]
+    ...(Object.keys(delta).length > 0
+      ? [`data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model: requestedModel, choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`]
       : []),
-    `data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model: requestedModel, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: completion.usage })}\n\n`,
+    `data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model: requestedModel, choices: [{ index: 0, delta: {}, finish_reason: finishReason }], usage: completion.usage })}\n\n`,
     "data: [DONE]\n\n",
   ];
   return new Response(encoder.encode(frames.join("")), {
