@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/lidge-jun/opencodex/go/internal/jsonwire"
 )
 
 // relayFixtureConfigDir writes the canonical #27 fixture config into a temp
@@ -388,7 +390,7 @@ func TestRequestQualifiesForRelayRefusals(t *testing.T) {
 		{"grok surface refuses", nil, `{"model":"test-model","input":"ping"}`, map[string]string{"x-opencodex-grok": "1"}, "grok"},
 		{"reserved openai row refuses", map[string]any{"name": "openai"}, `{"model":"test-model","input":"ping"}`, nil, "reserved native"},
 		{"oauth auth mode refuses", map[string]any{"authMode": "oauth"}, `{"model":"test-model","input":"ping"}`, nil, "not key"},
-		{"non-responses adapter refuses", map[string]any{"adapter": "anthropic"}, `{"model":"test-model","input":"ping"}`, nil, "not openai-responses"},
+		{"non-responses adapter refuses", map[string]any{"adapter": "anthropic"}, `{"model":"test-model","input":"ping"}`, nil, "no direct relay contract"},
 		{"keychain apiKey refuses", map[string]any{"apiKey": "keychain:prod"}, `{"model":"test-model","input":"ping"}`, nil, "keychain"},
 		{"custom responsesPath refuses", map[string]any{"responsesPath": "/chat"}, `{"model":"test-model","input":"ping"}`, nil, "responsesPath"},
 		{"custom provider headers refuse", map[string]any{"headers": map[string]any{"X-Provider-Key": "secret"}}, `{"model":"test-model","input":"ping"}`, nil, "custom headers"},
@@ -453,6 +455,24 @@ func TestRequestQualifiesForRelayRefusals(t *testing.T) {
 			}
 			if refusal == nil || !strings.Contains(refusal.reason, c.wantRefuse) {
 				t.Fatalf("refusal = %v, want it to contain %q", refusal, c.wantRefuse)
+			}
+		})
+	}
+}
+
+func TestAzureContractUsesAPIKeyHeader(t *testing.T) {
+	for _, adapter := range []string{"azure", "azure-openai"} {
+		t.Run(adapter, func(t *testing.T) {
+			provider, err := jsonwire.Parse([]byte(`{"adapter":"` + adapter + `","baseUrl":"https://resource.example/openai/v1","apiKey":"secret"}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan, refusal := relayPlanForProvider("azure-test", provider)
+			if refusal != nil || plan == nil {
+				t.Fatalf("plan = %#v, refusal = %#v", plan, refusal)
+			}
+			if plan.apiKeyHeader != "api-key" || plan.apiKey != "secret" {
+				t.Fatalf("plan auth = (%q, %q), want api-key/secret", plan.apiKeyHeader, plan.apiKey)
 			}
 		})
 	}

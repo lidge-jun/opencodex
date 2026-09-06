@@ -91,6 +91,7 @@ type relayPlan struct {
 	modelID      string
 	endpoint     string // full POST target URL
 	apiKey       string // resolved bearer secret, "" when the provider has none
+	apiKeyHeader string // Azure-compatible adapters use api-key instead of Bearer auth
 	streaming    bool
 }
 
@@ -507,8 +508,8 @@ func relayPlanForProvider(name string, provider *jsonwire.Value) (*relayPlan, *r
 		return nil, refuseRelay("provider %q is a reserved native OpenAI row", name)
 	}
 	adapter, ok := stringMember(provider, "adapter")
-	if !ok || adapter != "openai-responses" {
-		return nil, refuseRelay("provider %q adapter %q is not openai-responses", name, adapter)
+	if !ok || (adapter != "openai-responses" && adapter != "azure" && adapter != "azure-openai") {
+		return nil, refuseRelay("provider %q adapter %q has no direct relay contract", name, adapter)
 	}
 	if authMode, ok := stringMember(provider, "authMode"); ok && authMode != "key" {
 		return nil, refuseRelay("provider %q authMode %q is not key", name, authMode)
@@ -545,7 +546,11 @@ func relayPlanForProvider(name string, provider *jsonwire.Value) (*relayPlan, *r
 	if !relayDestinationAllowed(endpoint, allowPrivate) {
 		return nil, refuseRelay("provider %q baseUrl destination is not allowed", name)
 	}
-	return &relayPlan{providerName: name, endpoint: endpoint, apiKey: apiKey}, nil
+	apiKeyHeader := ""
+	if adapter == "azure" || adapter == "azure-openai" {
+		apiKeyHeader = "api-key"
+	}
+	return &relayPlan{providerName: name, endpoint: endpoint, apiKey: apiKey, apiKeyHeader: apiKeyHeader}, nil
 }
 
 // directRelayResponseBytes is the bounded upstream body the relay read plus the
@@ -590,7 +595,11 @@ func doDirectRelay(w http.ResponseWriter, r *http.Request, cfg Config, plan *rel
 	}
 	upstreamReq.Header.Set("Content-Type", "application/json")
 	if plan.apiKey != "" {
-		upstreamReq.Header.Set("Authorization", "Bearer "+plan.apiKey)
+		if plan.apiKeyHeader == "api-key" {
+			upstreamReq.Header.Set("api-key", plan.apiKey)
+		} else {
+			upstreamReq.Header.Set("Authorization", "Bearer "+plan.apiKey)
+		}
 	}
 	upstreamResp, err := relayUpstreamClient().Do(upstreamReq)
 	if err != nil {
