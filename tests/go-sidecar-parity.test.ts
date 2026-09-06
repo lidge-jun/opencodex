@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import { SERVER_BUDGET_MS } from "./helpers/test-budget";
 import { saveConfig } from "../src/config";
 import { getConfigPath } from "../src/config/paths";
+import { saveCodexAccountCredential } from "../src/codex/account-store";
+import { clearAccountQuota, getAccountQuota } from "../src/codex/quota";
 import { startServer } from "../src/server";
 import { VERSION } from "../src/server/management-api";
 import { GO_OWNED_MANAGEMENT_ROUTES } from "../src/server/management/route-registry";
@@ -487,6 +489,76 @@ describe.skipIf(!goAvailable || sidecarBinary === null)("ocx-sidecar differentia
       expect(readFileSync(getConfigPath()).equals(beforeFailure)).toBe(true);
     } finally {
       await goServer.stop(true);
+    }
+  });
+
+  runFixtureTest("successful quota consume with a valid account matches through Go", async (token) => {
+    // The empty-body vector above deliberately exercises validation only. Seed a
+    // real pool account plus its credential record so this vector crosses the
+    // successful upstream consume and WHAM-refresh path. The response is a raw
+    // capture, so equality includes status, headers, and exact JSON bytes.
+    const accountId = "quota-consume-success";
+    const initial = readFileSync(getConfigPath());
+    const fixture = configFixture();
+    fixture.codexAccounts = [{ id: accountId, email: "quota@example.test", isMain: false }];
+    saveConfig(fixture);
+    saveCodexAccountCredential(accountId, {
+      accessToken: "quota-consume-access",
+      refreshToken: "quota-consume-refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "acct-quota-consume",
+    });
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/rate-limit-reset-credits/consume")) {
+        expect(init?.method).toBe("POST");
+        return Response.json({ code: "reset" });
+      }
+      if (url.includes("/backend-api/wham/usage")) {
+        return Response.json({
+          rate_limit: { primary_window: { used_percent: 10, reset_at: 1_782_000_000 } },
+          rate_limit_reset_credits: { available_count: 2 },
+        });
+      }
+      return previousFetch(input, init);
+    }) as typeof fetch;
+
+    try {
+      let tsResult: Awaited<ReturnType<typeof captureMutation>>;
+      let tsQuota: ReturnType<typeof getAccountQuota>;
+      const tsServer = startServer(0);
+      try {
+        tsResult = await captureMutation(tsServer, token, "POST", "/api/codex-auth/reset-credits/consume", { accountId });
+        tsQuota = getAccountQuota(accountId);
+        expect(tsResult).toMatchObject({ status: 200, body: '{"code":"reset","remaining":2}' });
+        expect(tsQuota?.resetCredits).toBe(2);
+      } finally {
+        await tsServer.stop(true);
+      }
+
+      clearAccountQuota(accountId);
+      process.env[GO_SIDECAR_BIN_ENV] = sidecarBinary!;
+      const goServer = startServer(0);
+      try {
+        await waitFor(() => activeGoSidecarBaseUrl(), 15_000);
+        const goResult = await captureMutation(goServer, token, "POST", "/api/codex-auth/reset-credits/consume", { accountId });
+        const goQuota = getAccountQuota(accountId);
+        expect(goResult).toEqual(tsResult!);
+        // The cache's update instant belongs to each separate server leg; its
+        // refreshed quota projection must still agree exactly.
+        expect(goQuota).toMatchObject({
+          weeklyPercent: tsQuota?.weeklyPercent,
+          weeklyResetAt: tsQuota?.weeklyResetAt,
+          resetCredits: tsQuota?.resetCredits,
+        });
+        expect(goQuota?.updatedAt).toBeGreaterThan(0);
+      } finally {
+        await goServer.stop(true);
+      }
+    } finally {
+      globalThis.fetch = previousFetch;
+      writeFileSync(getConfigPath(), initial);
     }
   });
 
