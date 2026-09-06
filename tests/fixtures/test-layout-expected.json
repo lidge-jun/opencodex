@@ -792,6 +792,8 @@
   "provider-model-discovery-contract.test.ts": "providers",
   "provider-outbound-private-network.test.ts": "providers",
   "provider-outbound.test.ts": "providers",
+  "provider-runtime-fetch.test.ts": "providers",
+  "provider-tls-profile.test.ts": "providers",
   "provider-payload.test.ts": "gui",
   "provider-quota-observed-marker.test.ts": "providers",
   "provider-quota.test.ts": "providers",
