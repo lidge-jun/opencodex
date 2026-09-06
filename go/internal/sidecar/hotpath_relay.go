@@ -94,7 +94,11 @@ type relayPlan struct {
 	endpoint     string // full POST target URL
 	apiKey       string // resolved bearer secret, "" when the provider has none
 	apiKeyHeader string // Azure-compatible adapters use api-key instead of Bearer auth
-	streaming    bool
+	// providerHeaders are validated static headers assigned after generated auth,
+	// as the TypeScript openai-responses adapter does with Object.assign.
+	// Their original document order is retained for deterministic request output.
+	providerHeaders []jsonwire.Member
+	streaming       bool
 }
 
 // resolveRelayAPIKey resolves a provider apiKey the way the TS key store does:
@@ -561,6 +565,27 @@ func boolMember(obj *jsonwire.Value, key string) (bool, bool) {
 	return member.Bool(), true
 }
 
+// relayProviderHeaderValid mirrors providerHeadersConfigError. The TypeScript
+// config schema owns credential headers, so manually written or stale config
+// must not turn the direct relay into a second, less strict header boundary.
+func relayProviderHeaderValid(name, value string) bool {
+	if name == "" || strings.ContainsAny(value, "\r\n") {
+		return false
+	}
+	for _, char := range name {
+		if !((char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9') || char == '\x60' || char == '|' ||
+			strings.ContainsRune("!#$%&'*+-.^_~", char)) {
+			return false
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "authorization", "cookie", "set-cookie", "proxy-authorization", "x-api-key", "x-goog-api-key", "x-amz-security-token":
+		return false
+	}
+	return true
+}
+
 // relayPlanForProvider validates one candidate provider for the relay and
 // builds the endpoint. Returns a refusal when the provider row needs TS-only
 // machinery (forward/oauth auth, keychain keys, non-responses adapter, custom
@@ -576,14 +601,24 @@ func relayPlanForProvider(name string, provider *jsonwire.Value) (*relayPlan, *r
 	if authMode, ok := stringMember(provider, "authMode"); ok && authMode != "key" {
 		return nil, refuseRelay("provider %q authMode %q is not key", name, authMode)
 	}
+	azureAdapter := adapter == "azure" || adapter == "azure-openai"
 	if provider.Find("responsesPath") != nil {
 		return nil, refuseRelay("provider %q configures a custom responsesPath", name)
 	}
-	if headers := provider.Find("headers"); headers != nil && headers.Kind() == jsonwire.Object && len(headers.Members()) > 0 {
-		// The direct relay owns only the canonical generated headers. Provider
-		// headers may override or extend adapter output, so keep these rows on
-		// the bridge until their exact adapter precedence is ported.
-		return nil, refuseRelay("provider %q configures custom headers", name)
+	var providerHeaders []jsonwire.Member
+	if headers := provider.Find("headers"); headers != nil {
+		if headers.Kind() != jsonwire.Object {
+			return nil, refuseRelay("provider %q headers are not an object", name)
+		}
+		for _, member := range headers.Members() {
+			if member.Value == nil || member.Value.Kind() != jsonwire.String {
+				return nil, refuseRelay("provider %q headers contain a non-string value", name)
+			}
+			if !relayProviderHeaderValid(member.Key, member.Value.String()) {
+				return nil, refuseRelay("provider %q headers violate the provider header policy", name)
+			}
+			providerHeaders = append(providerHeaders, member)
+		}
 	}
 	apiKey := ""
 	if raw, ok := stringMember(provider, "apiKey"); ok {
@@ -592,6 +627,12 @@ func relayPlanForProvider(name string, provider *jsonwire.Value) (*relayPlan, *r
 		if !keyOK {
 			return nil, refuseRelay("provider %q apiKey is a keychain reference", name)
 		}
+	}
+	// createAzureAdapter rejects a missing or blank key before it calls the
+	// inherited Responses request builder. Keep that validation on the bridge
+	// rather than incorrectly treating Azure as an anonymous endpoint.
+	if azureAdapter && strings.TrimSpace(apiKey) == "" {
+		return nil, refuseRelay("provider %q Azure adapter requires a non-empty apiKey", name)
 	}
 	baseURL, ok := stringMember(provider, "baseUrl")
 	if !ok {
@@ -609,10 +650,10 @@ func relayPlanForProvider(name string, provider *jsonwire.Value) (*relayPlan, *r
 		return nil, refuseRelay("provider %q baseUrl destination is not allowed", name)
 	}
 	apiKeyHeader := ""
-	if adapter == "azure" || adapter == "azure-openai" {
+	if azureAdapter {
 		apiKeyHeader = "api-key"
 	}
-	return &relayPlan{providerName: name, endpoint: endpoint, apiKey: apiKey, apiKeyHeader: apiKeyHeader}, nil
+	return &relayPlan{providerName: name, endpoint: endpoint, apiKey: apiKey, apiKeyHeader: apiKeyHeader, providerHeaders: providerHeaders}, nil
 }
 
 // directRelayResponseBytes is the bounded upstream body the relay read plus the
@@ -656,11 +697,31 @@ func doDirectRelay(w http.ResponseWriter, r *http.Request, cfg Config, plan *rel
 		return
 	}
 	upstreamReq.Header.Set("Content-Type", "application/json")
+	// For ordinary Responses providers, TypeScript assigns provider headers
+	// after generated Bearer auth. Azure wraps that request differently: it
+	// copies the inherited headers, sets api-key last, and deletes Authorization.
+	// Apply the shared static headers first for the Azure branch so its generated
+	// API key has the same final precedence.
+	if plan.apiKeyHeader == "api-key" {
+		for _, member := range plan.providerHeaders {
+			upstreamReq.Header.Set(member.Key, member.Value.String())
+		}
+	}
 	if plan.apiKey != "" {
 		if plan.apiKeyHeader == "api-key" {
 			upstreamReq.Header.Set("api-key", plan.apiKey)
 		} else {
 			upstreamReq.Header.Set("Authorization", "Bearer "+plan.apiKey)
+		}
+	}
+	if plan.apiKeyHeader == "api-key" {
+		upstreamReq.Header.Del("Authorization")
+	} else {
+		// TypeScript sets generated key auth first, then Object.assigns provider
+		// headers. Header.Set is case-insensitive, which is also the Fetch Headers
+		// behavior reached by the TypeScript adapter.
+		for _, member := range plan.providerHeaders {
+			upstreamReq.Header.Set(member.Key, member.Value.String())
 		}
 	}
 	upstreamResp, err := relayUpstreamClient().Do(upstreamReq)

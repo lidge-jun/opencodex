@@ -154,6 +154,9 @@ interface UpstreamLog {
   method: string;
   path: string;
   contentType: string | null;
+  authorization: string | null;
+  apiKey: string | null;
+  providerHeader: string | null;
 }
 
 const upstreamLogs: UpstreamLog[] = [];
@@ -164,7 +167,7 @@ interface ResponseCapture {
   body: string;
 }
 
-function configFixture(upstreamPort: number) {
+function configFixture(upstreamPort: number, providerOverrides: Record<string, unknown> = {}) {
   return {
     port: 0,
     hostname: "127.0.0.1",
@@ -176,6 +179,7 @@ function configFixture(upstreamPort: number) {
         allowPrivateNetwork: true,
         disabled: false,
         models: ["test-model"],
+        ...providerOverrides,
       },
     },
   };
@@ -205,11 +209,11 @@ function captureEnv(): void {
   }
 }
 
-function setUpFixture(upstreamPort: number): void {
+function setUpFixture(upstreamPort: number, providerOverrides?: Record<string, unknown>): void {
   testHome = mkdtempSync(join(tmpdir(), "ocx-hotpath-relay-"));
   process.env.OPENCODEX_HOME = testHome;
   process.env.OPENCODEX_API_AUTH_TOKEN = "data-secret";
-  saveConfig(configFixture(upstreamPort));
+  saveConfig(configFixture(upstreamPort, providerOverrides));
 }
 
 function tearDownFixture(): void {
@@ -261,6 +265,9 @@ describe.skipIf(!goAvailable || sidecarBinary === null)("ocx-sidecar non-streami
           method: req.method,
           path: new URL(req.url).pathname,
           contentType: req.headers.get("content-type"),
+          authorization: req.headers.get("authorization"),
+          apiKey: req.headers.get("api-key"),
+          providerHeader: req.headers.get("x-provider-batch"),
         });
         // The upstream body is the same bytes whichever path reached it (the
         // relay forwards the seam body verbatim, the bridge forwards the
@@ -393,6 +400,83 @@ describe.skipIf(!goAvailable || sidecarBinary === null)("ocx-sidecar non-streami
       expect(cLogs[i]!.ua, `${cases[i]!.name} must take the bridge with the relay gate off`).not.toBe(GO_UA);
       expect(bridgeCaptures[i]!.status, `${cases[i]!.name} status`).toBe(tsCaptures[i]!.status);
       expect(bridgeCaptures[i]!.body, `${cases[i]!.name} body must match the oracle`).toBe(tsCaptures[i]!.body);
+    }
+  });
+
+  runFixtureTest("provider adapter matrix matches the TS oracle and proves direct Go ownership", async () => {
+    const token = "data-secret";
+    const port = upstream!.port;
+    const cases = [
+      {
+        name: "openai-responses",
+        provider: {
+          apiKey: "responses-key",
+          headers: { "api-key": "static-key", "X-Provider-Batch": "responses" },
+        },
+        authorization: "Bearer responses-key",
+        apiKey: "static-key",
+        providerHeader: "responses",
+      },
+      ...(["azure", "azure-openai"] as const).map(adapter => ({
+        name: adapter,
+        provider: {
+          adapter,
+          apiKey: "azure-key",
+          headers: { "api-key": "static-key", "X-Provider-Batch": adapter },
+        },
+        authorization: null,
+        apiKey: "azure-key",
+        providerHeader: adapter,
+      })),
+    ];
+
+    for (const fixture of cases) {
+      // Server A is the TypeScript adapter oracle for this exact provider row.
+      resetGoSidecarForTests();
+      delete process.env[GO_SIDECAR_BIN_ENV];
+      delete process.env[HOT_PATH_SEAM_ENV];
+      delete process.env[HOT_PATH_RELAY_ENV];
+      setUpFixture(port, fixture.provider);
+      const serverA = startServer(0);
+      let tsCapture: ResponseCapture;
+      const oracleStart = upstreamLogs.length;
+      try {
+        tsCapture = await postCase(serverA, token, { model: "test-model", input: "plain" });
+      } finally {
+        await serverA.stop(true);
+      }
+      const oracleLog = upstreamLogs[oracleStart]!;
+      expect(oracleLog.ua, fixture.name + " oracle must use Bun").not.toBe(GO_UA);
+
+      // Server B uses the same persisted row with the hot-path relay armed.
+      process.env[GO_SIDECAR_BIN_ENV] = sidecarBinary!;
+      process.env[HOT_PATH_SEAM_ENV] = "1";
+      process.env[HOT_PATH_RELAY_ENV] = "1";
+      const serverB = startServer(0);
+      const relayStart = upstreamLogs.length;
+      let goCapture: ResponseCapture;
+      try {
+        await waitFor(() => activeGoSidecarBaseUrl(), 15_000);
+        goCapture = await postCase(serverB, token, { model: "test-model", input: "plain" });
+      } finally {
+        await serverB.stop(true);
+        resetGoSidecarForTests();
+      }
+      const goLog = upstreamLogs[relayStart]!;
+
+      expect(goCapture!.status, fixture.name + " status").toBe(tsCapture!.status);
+      expect(goCapture!.contentType, fixture.name + " content-type").toBe(tsCapture!.contentType);
+      expect(goCapture!.body, fixture.name + " client bytes").toBe(tsCapture!.body);
+      expect(goLog.ua, fixture.name + " must be Go-owned").toBe(GO_UA);
+      expect(goLog.method).toBe(oracleLog.method);
+      expect(goLog.path).toBe(oracleLog.path);
+      expect(goLog.contentType).toBe(oracleLog.contentType);
+      expect(goLog.authorization).toBe(fixture.authorization);
+      expect(goLog.apiKey).toBe(fixture.apiKey);
+      expect(goLog.providerHeader).toBe(fixture.providerHeader);
+      expect(goLog.authorization).toBe(oracleLog.authorization);
+      expect(goLog.apiKey).toBe(oracleLog.apiKey);
+      expect(goLog.providerHeader).toBe(oracleLog.providerHeader);
     }
   });
 });

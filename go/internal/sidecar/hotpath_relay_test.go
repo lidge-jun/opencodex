@@ -389,6 +389,158 @@ func TestDirectRelayGateOffStaysOnTheBridge(t *testing.T) {
 	}
 }
 
+func TestDirectRelayProviderHeadersMatchResponsesAdapterOrder(t *testing.T) {
+	var gotAuthorization, gotContentType, gotProviderHeader string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuthorization = r.Header.Get("Authorization")
+		gotContentType = r.Header.Get("Content-Type")
+		gotProviderHeader = r.Header.Get("X-Provider-Metadata")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_fixture","status":"completed","output":[]}`))
+	}))
+	defer upstream.Close()
+
+	// TypeScript validates static headers as non-sensitive before the adapter
+	// assigns them after generated Bearer auth. Safe metadata carries through
+	// while owned Authorization and Content-Type keep their generated values.
+	dir := relayFixtureConfigDir(t, upstream.URL, map[string]any{
+		"apiKey": "generated-key",
+		"headers": map[string]any{
+			"X-Provider-Metadata": "batch-a",
+		},
+	})
+	rec, err := relayPost(t, relaySeamHandler(t, dir, true), `{"model":"test-model","input":"ping"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if gotAuthorization != "Bearer generated-key" {
+		t.Fatalf("Authorization = %q, want generated key", gotAuthorization)
+	}
+	if gotContentType != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", gotContentType)
+	}
+	if gotProviderHeader != "batch-a" {
+		t.Fatalf("X-Provider-Metadata = %q, want batch-a", gotProviderHeader)
+	}
+}
+
+func TestRelayPlanRejectsMalformedProviderHeaders(t *testing.T) {
+	for _, raw := range []string{
+		`{"adapter":"openai-responses","baseUrl":"https://api.example/v1","headers":"wrong"}`,
+		`{"adapter":"openai-responses","baseUrl":"https://api.example/v1","headers":{"X-Number":3}}`,
+		`{"adapter":"openai-responses","baseUrl":"https://api.example/v1","headers":{"Authorization":"Bearer manual"}}`,
+		`{"adapter":"openai-responses","baseUrl":"https://api.example/v1","headers":{"X-Injected":"one\ntwo"}}`,
+	} {
+		provider, err := jsonwire.Parse([]byte(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan, refusal := relayPlanForProvider("test", provider)
+		if plan != nil || refusal == nil || !strings.Contains(refusal.reason, "headers") {
+			t.Fatalf("relayPlanForProvider(%s) = plan %#v, refusal %#v; want header refusal", raw, plan, refusal)
+		}
+	}
+}
+
+func TestRelayAdapterWireSnapshots(t *testing.T) {
+	type snapshot struct {
+		adapter             string
+		apiKey              string
+		headers             map[string]any
+		wantAuthorization   string
+		wantAPIKey          string
+		wantProviderHeader  string
+		wantContentType     string
+		wantRefusalContains string
+	}
+	// Fixed snapshots from the TypeScript adapter + config contracts. Static
+	// headers are non-sensitive; Azure copies them, then sets api-key last.
+	cases := []snapshot{
+		{
+			adapter:            "openai-responses",
+			apiKey:             "openai-key",
+			headers:            map[string]any{"X-Provider": "responses", "api-key": "static-key"},
+			wantAuthorization:  "Bearer openai-key",
+			wantAPIKey:         "static-key",
+			wantProviderHeader: "responses",
+			wantContentType:    "application/json",
+		},
+		{
+			adapter:            "azure",
+			apiKey:             "azure-key",
+			headers:            map[string]any{"X-Provider": "azure", "api-key": "static-key"},
+			wantAPIKey:         "azure-key",
+			wantProviderHeader: "azure",
+			wantContentType:    "application/json",
+		},
+		{
+			adapter:             "azure-openai",
+			apiKey:              " ",
+			wantRefusalContains: "requires a non-empty apiKey",
+		},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.adapter, func(t *testing.T) {
+			provider := map[string]any{
+				"adapter": "openai-responses", "baseUrl": "https://api.example/v1", "apiKey": c.apiKey,
+			}
+			if c.adapter == "azure" || c.adapter == "azure-openai" {
+				provider["adapter"] = c.adapter
+			}
+			if c.headers != nil {
+				provider["headers"] = c.headers
+			}
+			raw, err := json.Marshal(provider)
+			if err != nil {
+				t.Fatal(err)
+			}
+			parsed, err := jsonwire.Parse(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan, refusal := relayPlanForProvider("snapshot", parsed)
+			if c.wantRefusalContains != "" {
+				if plan != nil || refusal == nil || !strings.Contains(refusal.reason, c.wantRefusalContains) {
+					t.Fatalf("plan=%#v refusal=%#v, want %q", plan, refusal, c.wantRefusalContains)
+				}
+				return
+			}
+			if refusal != nil || plan == nil {
+				t.Fatalf("plan=%#v refusal=%#v", plan, refusal)
+			}
+
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if got := r.Header.Get("Authorization"); got != c.wantAuthorization {
+					t.Errorf("Authorization = %q, want %q", got, c.wantAuthorization)
+				}
+				if got := r.Header.Get("api-key"); got != c.wantAPIKey {
+					t.Errorf("api-key = %q, want %q", got, c.wantAPIKey)
+				}
+				if got := r.Header.Get("X-Provider"); got != c.wantProviderHeader {
+					t.Errorf("X-Provider = %q, want %q", got, c.wantProviderHeader)
+				}
+				if got := r.Header.Get("Content-Type"); got != c.wantContentType {
+					t.Errorf("Content-Type = %q, want %q", got, c.wantContentType)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"id":"resp_fixture","status":"completed","output":[]}`))
+			}))
+			defer upstream.Close()
+			plan.endpoint = upstream.URL + "/v1/responses"
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"test-model","input":"ping"}`))
+			doDirectRelay(rec, req, Config{}, plan, []byte(`{"model":"test-model","input":"ping"}`))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
 func TestRequestQualifiesForRelayRefusals(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.Copy(io.Discard, r.Body)
@@ -422,7 +574,7 @@ func TestRequestQualifiesForRelayRefusals(t *testing.T) {
 		{"non-responses adapter refuses", map[string]any{"adapter": "anthropic"}, `{"model":"test-model","input":"ping"}`, nil, "no direct relay contract"},
 		{"keychain apiKey refuses", map[string]any{"apiKey": "keychain:prod"}, `{"model":"test-model","input":"ping"}`, nil, "keychain"},
 		{"custom responsesPath refuses", map[string]any{"responsesPath": "/chat"}, `{"model":"test-model","input":"ping"}`, nil, "responsesPath"},
-		{"custom provider headers refuse", map[string]any{"headers": map[string]any{"X-Provider-Key": "secret"}}, `{"model":"test-model","input":"ping"}`, nil, "custom headers"},
+		{"custom provider headers qualify", map[string]any{"headers": map[string]any{"X-Provider-Key": "secret"}}, `{"model":"test-model","input":"ping"}`, nil, ""},
 		{"default provider absent refuses", map[string]any{"defaultProvider": "gone"}, `{"model":"other-model","input":"ping"}`, nil, "no provider owns model"},
 	}
 	for _, c := range cases {
