@@ -46,6 +46,9 @@ describe("TelemetryLedger", () => {
 
   test("sanitizes details by stripping sensitive keys", () => {
     const sampleKey = ["sk", "secret", "fixture", "123"].join("-");
+    const email = ["alice", "example.com"].join("@");
+    const unixPath = ["", "Users", "李", "project", "index.ts"].join("/");
+    const windowsPath = ["C:", "Users", "李", "project", "index.ts"].join("\\");
     const ledger = new TelemetryLedger(":memory:");
     const event: FailureEvent = { failureKind: "sanitized_error", signature: "sensitive details test", timestamp: 1000 };
     const details = {
@@ -54,12 +57,15 @@ describe("TelemetryLedger", () => {
       response: "secret response",
       body: "secret body",
       apiKey: sampleKey,
-      safeNote: "connection timeout on leg 1",
+      safeNote: `connection timeout for ${email} at ${unixPath} or ${windowsPath}`,
     };
     const record = ledger.recordFailure(event, 10000, details);
     expect(record.details).toBeDefined();
     expect(record.details?.issueNumber).toBe(42);
-    expect(record.details?.safeNote).toBe("connection timeout on leg 1");
+    expect(record.details?.safeNote).not.toContain(email);
+    expect(record.details?.safeNote).not.toContain("李");
+    expect(record.details?.safeNote).toContain("[redacted-email]");
+    expect(record.details?.safeNote).toContain("[path]");
     expect(record.details?.prompt).toBeUndefined();
     expect(record.details?.response).toBeUndefined();
     expect(record.details?.body).toBeUndefined();
@@ -122,10 +128,12 @@ describe("TelemetryLedger", () => {
       { issueNumber: 9, safeNote: "original" },
     );
     ledger.updateStatus(record.fingerprint, "fixed", { resolution: "patched", prompt: "must not persist" });
-    expect(ledger.getRecord(record.fingerprint)).toMatchObject({
+    const updated = ledger.getRecord(record.fingerprint);
+    expect(updated).toMatchObject({
       status: "fixed",
       details: { issueNumber: 9, safeNote: "original", resolution: "patched" },
     });
+    expect(updated?.details).not.toHaveProperty("prompt");
     ledger.close();
   });
 
