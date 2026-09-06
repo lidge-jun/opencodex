@@ -237,7 +237,7 @@ func (s *ResponsesSSEStream) rewriteBlock(block, payload []byte, hasData bool) [
 	if err != nil || event.Kind() != jsonwire.Object {
 		return block
 	}
-	changed := s.pipeline.repairValue(event)
+	changed := s.pipeline.repairPayload(event)
 	changed = s.rewriteEvent(event) || changed
 	if !changed {
 		return block

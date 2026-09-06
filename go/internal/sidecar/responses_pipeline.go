@@ -24,14 +24,7 @@ func (p responseRepairPipeline) repairJSON(raw []byte) ([]byte, bool) {
 	if err != nil || root.Kind() != jsonwire.Object {
 		return raw, false
 	}
-	changed := false
-	if p.modelID != "" {
-		changed = rewriteModelField(root, p.modelID)
-		if response := root.Find("response"); response != nil {
-			changed = rewriteModelField(response, p.modelID) || changed
-		}
-	}
-	changed = p.repairValue(root) || changed
+	changed := p.repairPayload(root)
 	changed = backfillResponsesJSON(root) || changed
 	if !changed {
 		return raw, false
@@ -43,19 +36,26 @@ func (p responseRepairPipeline) repairJSON(raw []byte) ([]byte, bool) {
 	return encoded, true
 }
 
+// repairPayload applies model metadata only at the two locations covered by
+// the TypeScript model rewrite: the event/response root and its direct
+// `response` child. Nested output items may legally contain unrelated model
+// metadata and must remain untouched.
+func (p responseRepairPipeline) repairPayload(root *jsonwire.Value) bool {
+	changed := false
+	if p.modelID != "" {
+		changed = rewriteModelField(root, p.modelID)
+		if response := root.Find("response"); response != nil {
+			changed = rewriteModelField(response, p.modelID) || changed
+		}
+	}
+	return p.repairValue(root) || changed
+}
+
 func (p responseRepairPipeline) repairValue(v *jsonwire.Value) bool {
 	if v == nil {
 		return false
 	}
 	changed := false
-	// Model payload rewrite applies to the event/response object pair only;
-	// walking nested output items must not rewrite an unrelated model field.
-	if p.modelID != "" && v.Kind() == jsonwire.Object {
-		changed = rewriteModelField(v, p.modelID)
-		if response := v.Find("response"); response != nil {
-			changed = rewriteModelField(response, p.modelID) || changed
-		}
-	}
 	switch v.Kind() {
 	case jsonwire.Array:
 		for _, e := range v.Elements() {
