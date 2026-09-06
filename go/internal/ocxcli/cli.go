@@ -27,21 +27,112 @@ const (
 	attestationProofHeader     = "x-opencodex-attestation-proof"
 )
 
-// Command is one user-visible top-level command. Keeping the registry data
-// separate makes later parity additions additive and unit-testable.
-type Command struct{ Name, Usage, Summary string }
+// Ownership identifies the runtime that implements a documented command.
+// TypeScriptOwned is an explicit migration seam, not a claim that Go owns the
+// command merely because the Go binary forwards it.
+type Ownership string
+
+const (
+	GoOwned         Ownership = "go-owned"
+	TypeScriptOwned Ownership = "typescript-owned"
+)
+
+// Command is one user-visible top-level command. Commands is the Go CLI's
+// machine-readable surface map: fullUsage, dispatch, and CI tests are all
+// reconciled against it. Aliases resolve to the same owner as their command.
+type Command struct {
+	Name, Usage, Summary string
+	Aliases              []string
+	Owner                Ownership
+}
 
 var Commands = []Command{
-	{Name: "health", Usage: "ocx health [--json]", Summary: "Verify the local proxy identity and report health."},
-	{Name: "ready", Usage: "ocx ready [--json]", Summary: "Verify the local proxy identity and report readiness."},
-	{Name: "status", Usage: "ocx status [--json]", Summary: "Report local listener diagnostics."},
-	{Name: "doctor", Usage: "ocx doctor", Summary: "Report local runtime diagnostics."},
-	{Name: "service", Usage: "ocx service status", Summary: "Report the local service manager state."},
-	{Name: "codex-shim", Usage: "ocx codex-shim status", Summary: "Inspect the Codex autostart shim."},
-	{Name: "tray", Usage: "ocx tray status", Summary: "Inspect the Windows status tray."},
-	{Name: "config", Usage: "ocx config <subcommand>", Summary: "Inspect the durable configuration."},
-	{Name: "models", Usage: "ocx models [--provider <name>] [--json]", Summary: "List configured models."},
-	{Name: "provider", Usage: "ocx provider <subcommand>", Summary: "Inspect configured providers."},
+	{Name: "setup", Aliases: []string{"init"}, Usage: "ocx setup", Summary: "Interactive setup.", Owner: TypeScriptOwned},
+	{Name: "start", Usage: "ocx start [--port <port>]", Summary: "Start the proxy.", Owner: TypeScriptOwned},
+	{Name: "stop", Usage: "ocx stop", Summary: "Stop the proxy.", Owner: TypeScriptOwned},
+	{Name: "restore", Aliases: []string{"eject"}, Usage: "ocx restore [back]", Summary: "Restore native Codex configuration.", Owner: TypeScriptOwned},
+	{Name: "recover-history", Usage: "ocx recover-history --legacy-openai --yes", Summary: "Recover legacy history.", Owner: TypeScriptOwned},
+	{Name: "uninstall", Aliases: []string{"remove"}, Usage: "ocx uninstall", Summary: "Remove OpenCodex integration.", Owner: TypeScriptOwned},
+	{Name: "service", Usage: "ocx service [sub]", Summary: "Run as a background service.", Owner: TypeScriptOwned},
+	{Name: "codex-shim", Usage: "ocx codex-shim <sub>", Summary: "Manage the Codex autostart shim.", Owner: TypeScriptOwned},
+	{Name: "tray", Usage: "ocx tray <sub>", Summary: "Manage the Windows status tray.", Owner: TypeScriptOwned},
+	{Name: "ensure", Usage: "ocx ensure", Summary: "Ensure the proxy is running.", Owner: TypeScriptOwned},
+	{Name: "connect", Usage: "ocx connect <url>", Summary: "Connect to a remote hub.", Owner: TypeScriptOwned},
+	{Name: "disconnect", Usage: "ocx disconnect", Summary: "Disconnect from a remote hub.", Owner: TypeScriptOwned},
+	{Name: "sync", Usage: "ocx sync [--restart-codex]", Summary: "Sync provider models.", Owner: TypeScriptOwned},
+	{Name: "sync-cache", Usage: "ocx sync-cache [--restart-codex]", Summary: "Refresh the model cache.", Owner: TypeScriptOwned},
+	{Name: "status", Usage: "ocx status", Summary: "Check proxy status.", Owner: TypeScriptOwned},
+	{Name: "doctor", Usage: "ocx doctor", Summary: "Diagnose the environment.", Owner: TypeScriptOwned},
+	{Name: "debug", Usage: "ocx debug <scope>", Summary: "Manage debug settings.", Owner: TypeScriptOwned},
+	{Name: "login", Usage: "ocx login <provider>", Summary: "Log in to a provider.", Owner: TypeScriptOwned},
+	{Name: "logout", Usage: "ocx logout <provider>", Summary: "Log out from a provider.", Owner: TypeScriptOwned},
+	{Name: "gui", Usage: "ocx gui", Summary: "Open the dashboard.", Owner: TypeScriptOwned},
+	{Name: "update", Usage: "ocx update [--tag <tag>]", Summary: "Update OpenCodex.", Owner: TypeScriptOwned},
+	{Name: "restart", Usage: "ocx restart", Summary: "Restart the proxy.", Owner: TypeScriptOwned},
+	{Name: "v2", Usage: "ocx v2 <sub>", Summary: "Manage the v2 surface.", Owner: TypeScriptOwned},
+	{Name: "health", Usage: "ocx health [--json]", Summary: "Verify the local proxy identity and report health.", Owner: GoOwned},
+	{Name: "capabilities", Usage: "ocx capabilities [--json]", Summary: "List declared capabilities.", Owner: TypeScriptOwned},
+	{Name: "ready", Usage: "ocx ready [--json] [--wait [--timeout <s>]]", Summary: "Verify readiness.", Owner: GoOwned},
+	{Name: "provider", Usage: "ocx provider <sub>", Summary: "Inspect configured providers.", Owner: GoOwned},
+	{Name: "account", Usage: "ocx account <sub>", Summary: "Manage accounts.", Owner: TypeScriptOwned},
+	{Name: "models", Usage: "ocx models [--provider <name>] [--json]", Summary: "List configured models.", Owner: GoOwned},
+	{Name: "alias", Usage: "ocx alias <sub>", Summary: "Manage aliases.", Owner: TypeScriptOwned},
+	{Name: "combo", Usage: "ocx combo <sub>", Summary: "Manage combo routing.", Owner: TypeScriptOwned},
+	{Name: "agent", Usage: "ocx agent <sub>", Summary: "Manage agents.", Owner: TypeScriptOwned},
+	{Name: "observe", Usage: "ocx observe <sub>", Summary: "Inspect runtime observations.", Owner: TypeScriptOwned},
+	{Name: "inspect", Usage: "ocx inspect <sub>", Summary: "Inspect effective state.", Owner: TypeScriptOwned},
+	{Name: "route", Usage: "ocx route <sub>", Summary: "Manage routing.", Owner: TypeScriptOwned},
+	{Name: "logs", Usage: "ocx logs [filters]", Summary: "Read logs.", Owner: TypeScriptOwned},
+	{Name: "usage", Usage: "ocx usage", Summary: "Report usage.", Owner: TypeScriptOwned},
+	{Name: "storage", Usage: "ocx storage <sub>", Summary: "Manage storage.", Owner: TypeScriptOwned},
+	{Name: "memory", Usage: "ocx memory [--json]", Summary: "Inspect memory.", Owner: TypeScriptOwned},
+	{Name: "api-key", Usage: "ocx api-key <sub>", Summary: "Manage API keys.", Owner: TypeScriptOwned},
+	{Name: "access", Usage: "ocx access <sub>", Summary: "Manage external access.", Owner: TypeScriptOwned},
+	{Name: "export", Usage: "ocx export --client <id>", Summary: "Export client configuration.", Owner: TypeScriptOwned},
+	{Name: "integration", Usage: "ocx integration client <sub>", Summary: "Manage integrations.", Owner: TypeScriptOwned},
+	{Name: "grok", Usage: "ocx grok <sub>", Summary: "Manage Grok Build.", Owner: TypeScriptOwned},
+	{Name: "system", Usage: "ocx system <sub>", Summary: "Manage runtime settings.", Owner: TypeScriptOwned},
+	{Name: "config", Usage: "ocx config <sub>", Summary: "Manage configuration.", Owner: TypeScriptOwned},
+	{Name: "lab", Usage: "ocx lab <sub>", Summary: "Inspect Compatibility Lab.", Owner: TypeScriptOwned},
+	{Name: "claude", Usage: "ocx claude [args...]", Summary: "Launch Claude Code.", Owner: TypeScriptOwned},
+	{Name: "opencode", Usage: "ocx opencode [args...]", Summary: "Launch opencode.", Owner: TypeScriptOwned},
+	{Name: "mcode", Usage: "ocx mcode [args...]", Summary: "Launch MiniMax Code.", Owner: TypeScriptOwned},
+	{Name: "mmx", Usage: "ocx mmx text <sub> [args]", Summary: "Launch MiniMax CLI.", Owner: TypeScriptOwned},
+	{Name: "zcode", Usage: "ocx zcode [sub]", Summary: "Connect ZCode.", Owner: TypeScriptOwned},
+}
+
+// commandForName resolves canonical command names and aliases from Commands.
+func commandForName(name string) (Command, bool) {
+	for _, command := range Commands {
+		if command.Name == name {
+			return command, true
+		}
+		for _, alias := range command.Aliases {
+			if alias == name {
+				return command, true
+			}
+		}
+	}
+	return Command{}, false
+}
+
+// OwnershipFor reports the owner of argv's command surface. It is intentionally
+// data-driven so a command cannot become native by accident while it still
+// routes through DelegateToTypeScript.
+func OwnershipFor(args []string) (Ownership, bool) {
+	if len(args) == 0 {
+		return GoOwned, true // Root help is emitted by this binary.
+	}
+	command, ok := commandForName(args[0])
+	if !ok {
+		return "", false
+	}
+	if command.Name == "models" && len(args) > 1 {
+		if owner, ok := modelRuntimeSubcommands[args[1]]; ok {
+			return owner, true
+		}
+	}
+	return command.Owner, true
 }
 
 type RuntimeState struct {
@@ -123,29 +214,29 @@ func Run(args []string, deps Deps) int {
 	case "--version", "-v", "version":
 		fmt.Fprintf(deps.Stdout, "opencodex %s\n", deps.Version)
 		return ExitOK
+	}
+	owner, known := OwnershipFor(args)
+	if !known {
+		fmt.Fprintf(deps.Stderr, "Unknown command: %s\n", args[0])
+		printHelp(deps.Stdout)
+		return ExitFailure
+	}
+	if owner == TypeScriptOwned {
+		return runDelegated(args, deps)
+	}
+	switch args[0] {
 	case "health":
 		return runHealth(args[1:], deps)
 	case "ready":
 		return runReady(args[1:], deps)
-	case "status":
-		return runDelegated(args, deps)
-	case "doctor":
-		return runDelegated(args, deps)
-	case "service":
-		return runDelegated(args, deps)
-	case "codex-shim":
-		return runDelegated(args, deps)
-	case "tray":
-		return runDelegated(args, deps)
-	case "config":
-		return runDelegated(args, deps)
 	case "models":
 		return runModels(args[1:], deps)
 	case "provider":
 		return runProvider(args[1:], deps)
 	default:
-		fmt.Fprintf(deps.Stderr, "Unknown command: %s\n", args[0])
-		printHelp(deps.Stdout)
+		// The ownership registry above and this switch must be reconciled by
+		// TestOwnershipMapMatchesDispatch; this is defensive for future edits.
+		fmt.Fprintf(deps.Stderr, "Unimplemented Go-owned command: %s\n", args[0])
 		return ExitFailure
 	}
 }
@@ -173,23 +264,14 @@ func hasHelpFlag(args []string) bool {
 	return false
 }
 func printSubcommandHelp(name string, deps Deps) int {
+	if owner, known := OwnershipFor([]string{name}); known && owner == TypeScriptOwned {
+		return runDelegated([]string{name, "--help"}, deps)
+	}
 	switch name {
 	case "health":
 		fmt.Fprint(deps.Stdout, "Usage: ocx health [--json]\n\nCheck proxy health. Exits 0 if healthy, 1 otherwise.\n\nUse --json for structured output: {ok, pid, port}.\n")
 	case "ready":
 		fmt.Fprint(deps.Stdout, "Usage: ocx ready [--json] [--wait [--timeout <seconds>]]\n\nCheck post-sync readiness. Exits 0 only when ready.\n\nExact unauthenticated GET /readyz returns HTTP 200 when ready, or 503 with Retry-After: 1 for pending or failed.\nIts sanitized HTTP identity is {service, version, uptime, pid, port, status}; /healthz is separate liveness, not readiness.\nDefault is a single identity-checked /readyz probe; old proxies without /readyz fail closed as unreachable.\n--wait polls until ready or timeout, but exits immediately on terminal failed (default 45s, max 300s).\n--timeout requires --wait and accepts a positive integer (1..300).\n--json emits {ready, status, pid, port}; status is one of ready|pending|failed|unreachable.\nInvalid or unknown arguments exit 64. Not-ready, pending, failed, timeout, and unreachable exit 1.\n")
-	case "status":
-		return runDelegated([]string{"status", "--help"}, deps)
-	case "doctor":
-		return runDelegated([]string{"doctor", "--help"}, deps)
-	case "service":
-		return runDelegated([]string{"service", "--help"}, deps)
-	case "codex-shim":
-		fmt.Fprint(deps.Stdout, "Usage: ocx codex-shim <install|status|uninstall|remove>\n\nAuto-start the proxy when `codex` launches.\n\nUse `remove` as an alias for `uninstall`.\n")
-	case "tray":
-		fmt.Fprint(deps.Stdout, "Usage: ocx tray <install|start|stop|status|uninstall|remove> [--json] [--no-start]\n\nInstall and control the Windows status tray icon.\n\nThe tray starts at Windows login and provides one-click proxy controls.\nTray start/stop controls the icon only; use its menu to start or stop the proxy.\n--no-start (install only) installs the tray without launching it immediately.\n")
-	case "config":
-		return runDelegated([]string{"config", "--help"}, deps)
 	case "models":
 		fmt.Fprint(deps.Stdout, modelsUsage+"\nCustom models:\n  "+modelAddUsage+"\n  "+modelRemoveUsage+"\n  Usage: ocx models list-custom [--json]\n\nRuntime subcommands (live, edit, enable, disable, provider, selected, preset, new-policy, new-arrivals, context, shadow) retain the TypeScript management API owner during the incremental takeover.\n")
 	default:

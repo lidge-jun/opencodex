@@ -23,10 +23,10 @@ const (
 	providerRegistryCount = 85
 )
 
-var modelRuntimeSubcommands = map[string]bool{
-	"live": true, "edit": true, "enable": true, "disable": true, "provider": true,
-	"selected": true, "preset": true, "new-policy": true, "new-arrivals": true,
-	"context": true, "shadow": true,
+var modelRuntimeSubcommands = map[string]Ownership{
+	"live": TypeScriptOwned, "edit": TypeScriptOwned, "enable": TypeScriptOwned, "disable": TypeScriptOwned, "provider": TypeScriptOwned,
+	"selected": TypeScriptOwned, "preset": TypeScriptOwned, "new-policy": TypeScriptOwned, "new-arrivals": TypeScriptOwned,
+	"context": TypeScriptOwned, "shadow": TypeScriptOwned,
 }
 
 func loadCLIConfig() (map[string]any, error) {
@@ -360,7 +360,7 @@ func runModels(args []string, deps Deps) int {
 		case "list-custom":
 			return runCustomModelList(args[1:], deps)
 		}
-		if modelRuntimeSubcommands[args[0]] {
+		if modelRuntimeSubcommands[args[0]] == TypeScriptOwned {
 			// These commands are management-API clients, not config projections. The
 			// TypeScript owner already supplies their authenticated API transaction and
 			// exact user-facing output; preserving that owner avoids a second client

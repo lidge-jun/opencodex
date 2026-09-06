@@ -63,8 +63,76 @@ func TestVersionAndRegistry(t *testing.T) {
 	if got := Run([]string{"--version"}, depsFor(RuntimeState{}, &out, &err)); got != ExitOK || out.String() != "opencodex 2.42.0\n" {
 		t.Fatalf("version = code %d stdout %q", got, out.String())
 	}
-	if len(Commands) != 10 || Commands[0].Name != "health" || Commands[1].Name != "ready" || Commands[2].Name != "status" || Commands[3].Name != "doctor" || Commands[4].Name != "service" || Commands[5].Name != "codex-shim" || Commands[6].Name != "tray" || Commands[7].Name != "config" || Commands[8].Name != "models" || Commands[9].Name != "provider" {
-		t.Fatalf("unexpected command registry: %#v", Commands)
+	if len(Commands) < 50 {
+		t.Fatalf("incomplete command registry: %#v", Commands)
+	}
+}
+
+func TestOwnershipMapMatchesDispatch(t *testing.T) {
+	for _, command := range Commands {
+		for _, name := range append([]string{command.Name}, command.Aliases...) {
+			t.Run(name, func(t *testing.T) {
+				var delegated []string
+				deps := depsFor(RuntimeState{}, &bytes.Buffer{}, &bytes.Buffer{})
+				deps.Delegate = func(args []string) (int, error) {
+					delegated = append([]string(nil), args...)
+					return 17, nil
+				}
+				owner, known := OwnershipFor([]string{name})
+				if !known || owner != command.Owner {
+					t.Fatalf("OwnershipFor(%q) = %q, %t; want %q, true", name, owner, known, command.Owner)
+				}
+				got := Run([]string{name}, deps)
+				if command.Owner == TypeScriptOwned {
+					if got != 17 || !slices.Equal(delegated, []string{name}) {
+						t.Fatalf("typescript-owned %q did not delegate: code=%d argv=%#v", name, got, delegated)
+					}
+				} else if len(delegated) != 0 {
+					t.Fatalf("go-owned %q delegated argv=%#v", name, delegated)
+				}
+			})
+		}
+	}
+}
+
+func TestModelRuntimeOwnershipDelegates(t *testing.T) {
+	for subcommand, owner := range modelRuntimeSubcommands {
+		if owner != TypeScriptOwned {
+			t.Fatalf("models %s owner = %q, want typescript-owned", subcommand, owner)
+		}
+		if got, known := OwnershipFor([]string{"models", subcommand}); !known || got != TypeScriptOwned {
+			t.Fatalf("OwnershipFor(models %s) = %q, %t", subcommand, got, known)
+		}
+	}
+}
+
+func TestHelpSurfaceMatchesCommandRegistry(t *testing.T) {
+	documented := map[string]bool{}
+	for _, line := range strings.Split(fullUsage, "\n") {
+		if !strings.HasPrefix(line, "  ocx ") {
+			continue
+		}
+		fields := strings.Fields(strings.TrimPrefix(strings.TrimSpace(line), "ocx "))
+		if len(fields) > 0 {
+			documented[fields[0]] = true
+		}
+	}
+	for name := range documented {
+		if name == "help" || name == "--version" {
+			continue // Dispatch-head entries never select an implementation owner.
+		}
+		if _, ok := commandForName(name); !ok {
+			t.Fatalf("help documents %q but ownership registry has no command", name)
+		}
+	}
+	for _, command := range Commands {
+		found := documented[command.Name]
+		for _, alias := range command.Aliases {
+			found = found || documented[alias]
+		}
+		if !found {
+			t.Fatalf("ownership registry command %q is missing from top-level help", command.Name)
+		}
 	}
 }
 
@@ -115,15 +183,21 @@ func TestLifecycleDelegateFailureIsReported(t *testing.T) {
 	}
 }
 
-func TestReadOnlyFamilyHelp(t *testing.T) {
+func TestTypeScriptOwnedFamilyHelpDelegates(t *testing.T) {
 	for _, command := range []string{"codex-shim", "tray"} {
 		t.Run(command, func(t *testing.T) {
 			var out, stderr bytes.Buffer
-			if got := Run([]string{"help", command}, depsFor(RuntimeState{}, &out, &stderr)); got != ExitOK {
+			var received []string
+			deps := depsFor(RuntimeState{}, &out, &stderr)
+			deps.Delegate = func(args []string) (int, error) {
+				received = append([]string(nil), args...)
+				return ExitOK, nil
+			}
+			if got := Run([]string{"help", command}, deps); got != ExitOK {
 				t.Fatalf("help exit = %d stderr %q", got, stderr.String())
 			}
-			if !strings.Contains(out.String(), "Usage: ocx "+command) {
-				t.Fatalf("help output = %q", out.String())
+			if want := []string{command, "--help"}; !slices.Equal(received, want) {
+				t.Fatalf("delegated argv = %#v, want %#v", received, want)
 			}
 		})
 	}
