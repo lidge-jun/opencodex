@@ -460,6 +460,38 @@ func TestRequestQualifiesForRelayRefusals(t *testing.T) {
 	}
 }
 
+func TestSelectedRelayModelMatchesRouteFallthrough(t *testing.T) {
+	cases := []struct {
+		name      string
+		provider  string
+		requested string
+		want      string
+	}{
+		{"listed model keeps requested id", `{"models":["test-model"]}`, "test-model", "test-model"},
+		{"unlisted model uses defaultModel", `{"models":["test-model"],"defaultModel":"fallback-model"}`, "other-model", "fallback-model"},
+		{"requesting defaultModel keeps it", `{"models":["test-model"],"defaultModel":"fallback-model"}`, "fallback-model", "fallback-model"},
+		{"unlisted model without defaultModel uses first catalog entry", `{"models":["first-model","second-model"]}`, "other-model", "first-model"},
+		{"unlisted model without catalog keeps requested id", `{"defaultModel":""}`, "other-model", "other-model"},
+		{"missing provider keeps requested id", `null`, "other-model", "other-model"},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			var provider *jsonwire.Value
+			if c.provider != "null" {
+				parsed, err := jsonwire.Parse([]byte(c.provider))
+				if err != nil {
+					t.Fatal(err)
+				}
+				provider = parsed
+			}
+			if got := selectedRelayModel(provider, c.requested); got != c.want {
+				t.Fatalf("selectedRelayModel(%s, %q) = %q, want %q", c.provider, c.requested, got, c.want)
+			}
+		})
+	}
+}
+
 func TestAzureContractUsesAPIKeyHeader(t *testing.T) {
 	for _, adapter := range []string{"azure", "azure-openai"} {
 		t.Run(adapter, func(t *testing.T) {

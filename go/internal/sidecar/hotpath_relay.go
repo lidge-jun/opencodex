@@ -258,6 +258,7 @@ func requestQualifiesForRelay(cfg Config, contentType string, headers http.Heade
 	}
 	plan.modelID = modelID
 	provider := providers.Find(plan.providerName)
+	plan.modelID = selectedRelayModel(provider, modelID)
 	plan.reasoning = providerUsesContentReasoning(provider, modelID)
 	if refusal := unsupportedResponseRepairRefusal(provider); refusal != nil {
 		return nil, refusal
@@ -269,6 +270,33 @@ func requestQualifiesForRelay(cfg Config, contentType string, headers http.Heade
 		plan.streaming = true
 	}
 	return plan, nil
+}
+
+// selectedRelayModel mirrors the model identity exposed by the TS route when
+// the request falls through to a provider's default model. A configured model
+// keeps the requested id; an unlisted id uses defaultModel or the first model
+// in the provider catalog, which is the value returned by Responses model
+// metadata rewrite.
+func selectedRelayModel(provider *jsonwire.Value, requested string) string {
+	if provider == nil || provider.Kind() != jsonwire.Object {
+		return requested
+	}
+	if defaultModel, ok := stringMember(provider, "defaultModel"); ok && defaultModel != "" {
+		if defaultModel == requested || !modelInProviderList(provider.Find("models"), requested) {
+			return defaultModel
+		}
+	}
+	if modelInProviderList(provider.Find("models"), requested) {
+		return requested
+	}
+	if models := provider.Find("models"); models != nil && models.Kind() == jsonwire.Array {
+		for _, model := range models.Elements() {
+			if model != nil && model.Kind() == jsonwire.String && model.String() != "" {
+				return model.String()
+			}
+		}
+	}
+	return requested
 }
 
 // unsupportedResponseRepairRefusal keeps stateful repairs on the TypeScript
