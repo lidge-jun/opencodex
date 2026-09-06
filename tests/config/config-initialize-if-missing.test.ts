@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, unlinkSync, writeFileSync, renameSync } from "node:fs";
+import { existsSync, linkSync, mkdtempSync, readFileSync, readdirSync, unlinkSync, writeFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import {
   AtomicWriteSecretResidualError,
   getConfigPath,
   initializePersistedConfigIfMissing,
   loadConfig,
+  deleteConfigTopLevelKey,
   setPersistedConfigInitializationBeforePublishForTests,
   setPersistedConfigInitializationAfterPublishForTests,
 } from "../../src/config";
@@ -139,4 +140,44 @@ test("does not remove a concurrent target during cleanup rollback", () => {
   };
   expect(() => initializePersistedConfigIfMissing(config(), io)).toThrow();
   expect(readFileSync(getConfigPath(), "utf8")).toBe("winner");
+});
+
+test("does not scrub the published inode when rollback unlink fails", () => {
+  let temp = "";
+  let truncateCalled = false;
+  let unlinkCalls = 0;
+  const io = {
+    createExclusive: (path: string) => { temp = path; writeFileSync(path, "", { flag: "wx" }); },
+    write: (path: string, bytes: string) => writeFileSync(path, bytes),
+    harden: () => {},
+    publishNoReplace: (staged: string, target: string) => linkSync(staged, target),
+    truncate: () => { truncateCalled = true; },
+    unlink: (path: string) => {
+      unlinkCalls += 1;
+      if (path === temp) throw new Error("temp unlink blocked");
+      throw new Error("rollback unlink blocked");
+    },
+  };
+  expect(() => initializePersistedConfigIfMissing(config(), io)).toThrow(/rollback failed/);
+  expect(unlinkCalls).toBe(3);
+  expect(truncateCalled).toBe(false);
+  expect(readFileSync(getConfigPath(), "utf8")).toContain('"port": 10100');
+});
+
+test("clears a throwing after-publish hook before the next publication", () => {
+  let calls = 0;
+  setPersistedConfigInitializationAfterPublishForTests(() => { calls += 1; throw new Error("after hook failed"); });
+  expect(() => initializePersistedConfigIfMissing(config(21000))).toThrow("after hook failed");
+  unlinkSync(getConfigPath());
+  expect(initializePersistedConfigIfMissing(config(22000))).toBe("created");
+  expect(calls).toBe(1);
+});
+
+test("synchronizes provenance and clears pending deletions after creation", () => {
+  const cfg = config(23000);
+  deleteConfigTopLevelKey(cfg, "hostname");
+  expect(initializePersistedConfigIfMissing(cfg)).toBe("created");
+  expect(cfg.configRebaseProvenance).toEqual({ version: 1, deletedTopLevelKeys: ["hostname"] });
+  const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+  expect(persisted.configRebaseProvenance).toEqual(cfg.configRebaseProvenance);
 });

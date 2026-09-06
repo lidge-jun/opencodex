@@ -3125,6 +3125,7 @@ function publishInitialConfigNoReplace(config: OcxConfig, io: PersistedConfigIni
               samePublishedInode = stagedStat.dev === targetStat.dev && stagedStat.ino === targetStat.ino;
             } catch { /* leave target untouched when identity cannot be proven */ }
             if (samePublishedInode) {
+              cleanupAttempted = true;
               try { io.unlink(target); }
               catch (cause) { throw new PersistedConfigInitializationRollbackError({ cause }); }
             }
@@ -3173,8 +3174,9 @@ function defaultPersistedConfigInitializationIO(configPath: string): PersistedCo
       }
       try {
         linkSync(temp, target);
-        persistedConfigInitializationAfterPublishForTests?.();
+        const hook = persistedConfigInitializationAfterPublishForTests;
         persistedConfigInitializationAfterPublishForTests = null;
+        hook?.();
         if (descriptor !== undefined) {
           const published = lstatSync(target);
           const opened = fstatSync(descriptor);
@@ -3215,6 +3217,9 @@ export function initializePersistedConfigIfMissing(
     }
     bumpGenerationForCooperatingConfigWrite();
     adoptCustomModelCatalogMigration(config, projected);
+    if (projected.configRebaseProvenance === undefined) delete config.configRebaseProvenance;
+    else config.configRebaseProvenance = structuredClone(projected.configRebaseProvenance);
+    clearPendingConfigTopLevelDeletions(config);
     return "created";
   });
 }
