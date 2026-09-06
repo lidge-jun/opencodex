@@ -58,6 +58,11 @@ type Config struct {
 	// distinct from BridgeToken: the latter only authenticates the child on the
 	// private parent hop.
 	WriteRelaySecret string
+	// HotPathRelay admits direct non-streaming provider relays on the data-plane
+	// seam (ticket #27). Empty keeps every seam request on the parent bridge;
+	// the TypeScript parent must pass OPENCODEX_GO_HOTPATH_RELAY=1 in the
+	// environment to arm it.
+	HotPathRelay bool
 }
 
 const (

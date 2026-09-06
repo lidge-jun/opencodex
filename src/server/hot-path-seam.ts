@@ -28,6 +28,17 @@ import type { DataPlaneAdmission } from "./auth-cors";
 /** Independent activation gate: management reads and the data plane roll back separately. */
 export const HOT_PATH_SEAM_ENV = "OPENCODEX_GO_HOTPATH_SEAM";
 
+/**
+ * Independent gate for the direct non-streaming provider relay (ticket #27,
+ * devlog 036). The seam's default source is the parent bridge, which runs the
+ * in-process pipeline; when this is set the sidecar serves a relay-safe
+ * non-streaming request for one key-mode openai-responses provider directly
+ * upstream. The front door only declares it and passes the environment
+ * through at spawn — the sidecar process reads it per request, exactly like
+ * the seam gate is read on this side.
+ */
+export const HOT_PATH_RELAY_ENV = "OPENCODEX_GO_HOTPATH_RELAY";
+
 /** The declared data-plane seam route. One entry; a later ticket flips the marker, never the dispatch. */
 export const HOT_PATH_SEAM_PATH = "/v1/responses";
 

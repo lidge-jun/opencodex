@@ -1,0 +1,164 @@
+[
+  {
+    "name": "sparse-message-canonical",
+    "input": "{\"id\":\"resp_abc123\",\"object\":\"response\",\"created_at\":1,\"status\":\"completed\",\"model\":\"test-model\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi\"}]}]}",
+    "expected": "{\"id\":\"resp_abc123\",\"object\":\"response\",\"created_at\":1,\"status\":\"completed\",\"model\":\"test-model\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi\",\"annotations\":[]}],\"id\":\"msg_ocx_0\",\"status\":\"completed\"}]}",
+    "changed": true
+  },
+  {
+    "name": "already-complete-raw-identity",
+    "input": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"id\":\"msg_1\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi\",\"annotations\":[]}]}]}",
+    "expected": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"id\":\"msg_1\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi\",\"annotations\":[]}]}]}",
+    "changed": false
+  },
+  {
+    "name": "already-complete-number-literal-preserved",
+    "input": "{\"id\":\"resp_x\",\"status\":\"completed\",\"latency\":1.0,\"output\":[{\"type\":\"message\",\"id\":\"msg_1\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi\",\"annotations\":[]}]}]}",
+    "expected": "{\"id\":\"resp_x\",\"status\":\"completed\",\"latency\":1.0,\"output\":[{\"type\":\"message\",\"id\":\"msg_1\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi\",\"annotations\":[]}]}]}",
+    "changed": false
+  },
+  {
+    "name": "change-with-number-literal-canonicalised",
+    "input": "{\"id\":\"resp_x\",\"status\":\"completed\",\"latency\":1.0,\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi\"}]}]}",
+    "expected": "{\"id\":\"resp_x\",\"status\":\"completed\",\"latency\":1,\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi\",\"annotations\":[]}],\"id\":\"msg_ocx_0\",\"status\":\"completed\"}]}",
+    "changed": true
+  },
+  {
+    "name": "response-status-failed-maps-incomplete",
+    "input": "{\"id\":\"resp_x\",\"status\":\"failed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"partial\"}]}]}",
+    "expected": "{\"id\":\"resp_x\",\"status\":\"failed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"partial\",\"annotations\":[]}],\"id\":\"msg_ocx_0\",\"status\":\"incomplete\"}]}",
+    "changed": true
+  },
+  {
+    "name": "response-status-queued-maps-in-progress",
+    "input": "{\"id\":\"resp_x\",\"status\":\"queued\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"soon\"}]}]}",
+    "expected": "{\"id\":\"resp_x\",\"status\":\"queued\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"soon\",\"annotations\":[]}],\"id\":\"msg_ocx_0\",\"status\":\"in_progress\"}]}",
+    "changed": true
+  },
+  {
+    "name": "response-status-incomplete-passthrough",
+    "input": "{\"id\":\"resp_x\",\"status\":\"incomplete\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"done-ish\"}]}]}",
+    "expected": "{\"id\":\"resp_x\",\"status\":\"incomplete\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"done-ish\",\"annotations\":[]}],\"id\":\"msg_ocx_0\",\"status\":\"incomplete\"}]}",
+    "changed": true
+  },
+  {
+    "name": "status-non-string-falls-back-completed",
+    "input": "{\"id\":\"resp_x\",\"status\":7,\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"x\"}]}]}",
+    "expected": "{\"id\":\"resp_x\",\"status\":7,\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"x\",\"annotations\":[]}],\"id\":\"msg_ocx_0\",\"status\":\"completed\"}]}",
+    "changed": true
+  },
+  {
+    "name": "function-call-gets-fc-prefix",
+    "input": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"id\":\"msg_0\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]},{\"type\":\"function_call\",\"name\":\"f\",\"arguments\":\"{}\"}]}",
+    "expected": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"id\":\"msg_0\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\",\"annotations\":[]}],\"status\":\"completed\"},{\"type\":\"function_call\",\"name\":\"f\",\"arguments\":\"{}\",\"id\":\"fc_ocx_1\"}]}",
+    "changed": true
+  },
+  {
+    "name": "reasoning-kept-with-existing-id-and-reasoning-text-parts",
+    "input": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":[{\"type\":\"reasoning\",\"id\":\"rs_keep\",\"summary\":[],\"content\":[{\"type\":\"reasoning_text\",\"text\":\"think\"}]},{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi\"}]}]}",
+    "expected": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":[{\"type\":\"reasoning\",\"id\":\"rs_keep\",\"summary\":[],\"content\":[{\"type\":\"reasoning_text\",\"text\":\"think\"}]},{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi\",\"annotations\":[]}],\"id\":\"msg_ocx_1\",\"status\":\"completed\"}]}",
+    "changed": true
+  },
+  {
+    "name": "existing-custom-tool-call-id-preserved",
+    "input": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":[{\"type\":\"custom_tool_call\",\"id\":\"ctc_keep\",\"name\":\"doit\",\"arguments\":\"{}\"}]}",
+    "expected": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":[{\"type\":\"custom_tool_call\",\"id\":\"ctc_keep\",\"name\":\"doit\",\"arguments\":\"{}\"}]}",
+    "changed": false
+  },
+  {
+    "name": "empty-string-id-replaced-in-place",
+    "input": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"id\":\"\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi\"}]}]}",
+    "expected": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"id\":\"msg_ocx_0\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi\",\"annotations\":[]}],\"status\":\"completed\"}]}",
+    "changed": true
+  },
+  {
+    "name": "compaction-item-untouched",
+    "input": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":[{\"type\":\"compaction\",\"id\":\"keep_compaction_id\"},{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi\"}]}]}",
+    "expected": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":[{\"type\":\"compaction\",\"id\":\"keep_compaction_id\"},{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi\",\"annotations\":[]}],\"id\":\"msg_ocx_1\",\"status\":\"completed\"}]}",
+    "changed": true
+  },
+  {
+    "name": "output-index-deterministic",
+    "input": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"id\":\"a\",\"content\":[{\"type\":\"output_text\",\"text\":\"1\"}]},{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"2\"}]},{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"3\"}]}]}",
+    "expected": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"id\":\"a\",\"content\":[{\"type\":\"output_text\",\"text\":\"1\",\"annotations\":[]}],\"status\":\"completed\"},{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"2\",\"annotations\":[]}],\"id\":\"msg_ocx_1\",\"status\":\"completed\"},{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"3\",\"annotations\":[]}],\"id\":\"msg_ocx_2\",\"status\":\"completed\"}]}",
+    "changed": true
+  },
+  {
+    "name": "missing-type-gets-generic-item-prefix",
+    "input": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"id\":\"msg_0\",\"content\":[{\"type\":\"output_text\",\"text\":\"a\"}]},{\"content\":[{\"type\":\"output_text\",\"text\":\"b\"}]}]}",
+    "expected": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"id\":\"msg_0\",\"content\":[{\"type\":\"output_text\",\"text\":\"a\",\"annotations\":[]}],\"status\":\"completed\"},{\"content\":[{\"type\":\"output_text\",\"text\":\"b\",\"annotations\":[]}],\"id\":\"item_ocx_1\"}]}",
+    "changed": true
+  },
+  {
+    "name": "existing-status-and-annotations-null-preserved",
+    "input": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"id\":\"m\",\"status\":\"in_progress\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi\",\"annotations\":null}]}]}",
+    "expected": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"id\":\"m\",\"status\":\"in_progress\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi\",\"annotations\":null}]}]}",
+    "changed": false
+  },
+  {
+    "name": "multiple-parts-one-repaired",
+    "input": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"a\",\"annotations\":[]},{\"type\":\"output_text\",\"text\":\"b\"}]}]}",
+    "expected": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"a\",\"annotations\":[]},{\"type\":\"output_text\",\"text\":\"b\",\"annotations\":[]}],\"id\":\"msg_ocx_0\",\"status\":\"completed\"}]}",
+    "changed": true
+  },
+  {
+    "name": "output-not-array-raw",
+    "input": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":{}}",
+    "expected": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":{}}",
+    "changed": false
+  },
+  {
+    "name": "non-object-output-entry-skipped",
+    "input": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":[42,{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi\"}]}]}",
+    "expected": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":[42,{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi\",\"annotations\":[]}],\"id\":\"msg_ocx_1\",\"status\":\"completed\"}]}",
+    "changed": true
+  },
+  {
+    "name": "content-not-array",
+    "input": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":\"nope\"}]}",
+    "expected": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":\"nope\",\"id\":\"msg_ocx_0\",\"status\":\"completed\"}]}",
+    "changed": true
+  },
+  {
+    "name": "function-call-content-output-text-parts",
+    "input": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":[{\"type\":\"function_call\",\"name\":\"f\",\"content\":[{\"type\":\"output_text\",\"text\":\"explaining\"}]}]}",
+    "expected": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":[{\"type\":\"function_call\",\"name\":\"f\",\"content\":[{\"type\":\"output_text\",\"text\":\"explaining\",\"annotations\":[]}],\"id\":\"fc_ocx_0\"}]}",
+    "changed": true
+  },
+  {
+    "name": "top-level-status-absent",
+    "input": "{\"id\":\"resp_x\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi\"}]}]}",
+    "expected": "{\"id\":\"resp_x\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi\",\"annotations\":[]}],\"id\":\"msg_ocx_0\",\"status\":\"completed\"}]}",
+    "changed": true
+  },
+  {
+    "name": "large-integer-index-id",
+    "input": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"id\":\"m0\",\"content\":[{\"type\":\"output_text\",\"text\":\"a\"}]},{\"type\":\"message\",\"id\":\"m1\",\"content\":[{\"type\":\"output_text\",\"text\":\"b\"}]},{\"type\":\"message\",\"id\":\"m2\",\"content\":[{\"type\":\"output_text\",\"text\":\"c\"}]},{\"type\":\"message\",\"id\":\"m3\",\"content\":[{\"type\":\"output_text\",\"text\":\"d\"}]},{\"type\":\"message\",\"id\":\"m4\",\"content\":[{\"type\":\"output_text\",\"text\":\"e\"}]},{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"f\"}]}]}",
+    "expected": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"id\":\"m0\",\"content\":[{\"type\":\"output_text\",\"text\":\"a\",\"annotations\":[]}],\"status\":\"completed\"},{\"type\":\"message\",\"id\":\"m1\",\"content\":[{\"type\":\"output_text\",\"text\":\"b\",\"annotations\":[]}],\"status\":\"completed\"},{\"type\":\"message\",\"id\":\"m2\",\"content\":[{\"type\":\"output_text\",\"text\":\"c\",\"annotations\":[]}],\"status\":\"completed\"},{\"type\":\"message\",\"id\":\"m3\",\"content\":[{\"type\":\"output_text\",\"text\":\"d\",\"annotations\":[]}],\"status\":\"completed\"},{\"type\":\"message\",\"id\":\"m4\",\"content\":[{\"type\":\"output_text\",\"text\":\"e\",\"annotations\":[]}],\"status\":\"completed\"},{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"f\",\"annotations\":[]}],\"id\":\"msg_ocx_5\",\"status\":\"completed\"}]}",
+    "changed": true
+  },
+  {
+    "name": "message-id-present-status-missing",
+    "input": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"id\":\"msg_keep\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi\",\"annotations\":[]}]}]}",
+    "expected": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"id\":\"msg_keep\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi\",\"annotations\":[]}],\"status\":\"completed\"}]}",
+    "changed": true
+  },
+  {
+    "name": "item-with-id-number-replaced",
+    "input": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"id\":7,\"content\":[{\"type\":\"output_text\",\"text\":\"hi\"}]}]}",
+    "expected": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"id\":\"msg_ocx_0\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi\",\"annotations\":[]}],\"status\":\"completed\"}]}",
+    "changed": true
+  },
+  {
+    "name": "escaped-unicode-text-survives",
+    "input": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"\\u0001 control\\n\\u2028sep\"}]}]}",
+    "expected": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"\\u0001 control\\n sep\",\"annotations\":[]}],\"id\":\"msg_ocx_0\",\"status\":\"completed\"}]}",
+    "changed": true
+  },
+  {
+    "name": "deep-text-and-instructions-order-preserved",
+    "input": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi\"}]}],\"usage\":{\"input_tokens\":5,\"output_tokens\":1}}",
+    "expected": "{\"id\":\"resp_x\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi\",\"annotations\":[]}],\"id\":\"msg_ocx_0\",\"status\":\"completed\"}],\"usage\":{\"input_tokens\":5,\"output_tokens\":1}}",
+    "changed": true
+  }
+]

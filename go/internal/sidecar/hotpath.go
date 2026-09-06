@@ -84,6 +84,16 @@ func dataPlaneSeam(w http.ResponseWriter, r *http.Request, cfg Config) {
 		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 		return
 	}
+	// The seam first asks whether this request can be served by the direct
+	// provider relay (ticket #27): a relay-safe non-streaming request for a
+	// key-mode openai-responses provider is answered upstream without the
+	// parent bridge, everything else falls through to the in-process pipeline.
+	// Refusals are silent here — they mean "bridge", never an error.
+	if plan, _ := requestQualifiesForRelay(cfg, r.Header.Get("Content-Type"), r.Header, body); plan != nil {
+		doDirectRelay(w, r, cfg, plan, body)
+		return
+	}
+
 	bridgeReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, parent.String(), bytes.NewReader(body))
 	if err != nil {
 		http.Error(w, "responses bridge unavailable", http.StatusServiceUnavailable)
