@@ -4,14 +4,9 @@ on:
 permissions:
   contents: read
 jobs:
-  known-folder-phases:
-    name: known-folder ${{ matrix.mode }}
+  known-folder-emission-prototype:
     runs-on: windows-latest
-    timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        mode: [missing, temp, profile, both]
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
@@ -25,141 +20,72 @@ jobs:
           cd gui
           bun install --frozen-lockfile
           bun run build
-      - name: Measure PowerShell compilation and native lookup separately
+      - name: Preserve the original reference expression
         shell: bash
-        env:
-          MODE: ${{ matrix.mode }}
         run: |
-          cat > .tmp-instrument-template.py <<'TEMPLATE'
-          from pathlib import Path
-          p=Path('tests/fixtures/claude-desktop-network-guard.ts')
-          s=p.read_text()
-          trace=r'''
-          const tracePath = process.env.OCX_TEST_TIMING_PATH;
-          const traceStart = performance.now();
-          let traceCount = 0;
-          function trace(event: string, detail: Record<string, unknown> = {}) {
-            if (tracePath && traceCount++ < 512) appendFileSync(tracePath, JSON.stringify({ event, ms: Math.round(performance.now() - traceStart), ...detail }) + "\n");
-          }
-          trace("cli_preload");
-          const originalSpawnSync = Bun.spawnSync;
-          Bun.spawnSync = ((...args: any[]) => {
-            const command = Array.isArray(args[0]) ? args[0][0] : args[0]?.cmd?.[0];
-            const value = typeof command === "string" ? command.replaceAll("\\", "/").split("/").at(-1)?.toLowerCase() : "";
-            const category = value === "icacls.exe" ? "icacls" : value === "powershell.exe" ? "powershell" : value === "reg.exe" ? "registry" : "other";
-            const start = performance.now();
-            trace("spawn_start", { category });
-            try { return originalSpawnSync.apply(Bun, args); }
-            finally { trace("spawn_end", { category, durationMs: Math.round(performance.now() - start) }); }
-          }) as typeof Bun.spawnSync;
-          const originalSpawn = Bun.spawn;
-          Bun.spawn = ((...args: any[]) => {
-            const command = Array.isArray(args[0]) ? args[0][0] : args[0]?.cmd?.[0];
-            const value = typeof command === "string" ? command.replaceAll("\\", "/").split("/").at(-1)?.toLowerCase() : "";
-            const category = value === "icacls.exe" ? "icacls" : value === "powershell.exe" ? "powershell" : value === "reg.exe" ? "registry" : "other";
-            const start = performance.now();
-            trace("async_spawn_start", { category });
-            const child = originalSpawn.apply(Bun, args);
-            void child.exited.then((code: number) => trace("async_spawn_end", { category, code, durationMs: Math.round(performance.now() - start) }), () => trace("async_spawn_error", { category }));
-            return child;
-          }) as typeof Bun.spawn;
-          const originalExit = process.exit;
-          process.exit = ((code?: number) => { trace("process_exit", { code }); return originalExit(code); }) as typeof process.exit;
-          '''
-          s=s.replace('const nativeFetch = globalThis.fetch;',trace+'\nconst nativeFetch = globalThis.fetch;')
-          s=s.replace('    return nativeFetch(...args);','    trace("fetch_start");\n    return nativeFetch(...args).finally(() => trace("fetch_end"));')
-          p.write_text(s)
-          p=Path('tests/claude-integration/claude-desktop-remote-hub.test.ts');s=p.read_text()
-          old='''    const apply = spawnOwned(client, ["claude", "desktop", "apply", "--static"]);
-              const appliedCode = await within(apply.child.exited, 30_000, "Remote Desktop apply deadline");'''
-          new='''    const traceFile = join(client.root, "apply-timing.jsonl");
-              client.env.OCX_TEST_TIMING_PATH = traceFile;
-              const applyStart = performance.now();
-              const apply = spawnOwned(client, ["claude", "desktop", "apply", "--static"]);
-              let appliedCode: number;
-              try { appliedCode = await within(apply.child.exited, 30_000, "Remote Desktop apply deadline"); }
-              finally {
-                const trace = existsSync(traceFile) ? readFileSync(traceFile, "utf8").trim().split("\\n").filter(Boolean).map(line => JSON.parse(line)) : [];
-                console.log(JSON.stringify({ applyTiming: { elapsedMs: Math.round(performance.now() - applyStart), alive: apply.child.exitCode === null, trace } }));
-              }'''
-          assert s.count(old)==1
-          p.write_text(s.replace(old,new))
-          TEMPLATE
+          mkdir -p .tmp
+          bun -e 'import { windowsLocalAppDataExpressionForTests } from "./src/codex/user-identity"; await Bun.write(".tmp/old-known-folder.json", JSON.stringify(windowsLocalAppDataExpressionForTests()));'
+      - name: Apply the experimental emitted binding
+        shell: bash
+        run: |
           python - <<'PY'
           from pathlib import Path
-          import ast
-          source=Path('.tmp-instrument-template.py').read_text(encoding='utf-8')
-          tree=ast.parse(source)
-          trace=next(node.value.value for node in tree.body if isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='trace' for t in node.targets))
-          trace=trace.replace('try { return originalSpawnSync.apply(Bun, args); }', '''try {
-              const result = originalSpawnSync.apply(Bun, args);
-              trace("spawn_result", { category, exitCode: result.exitCode, timedOut: result.exitedDueToTimeout === true, phases: [...new TextDecoder().decode(result.stderr ?? new Uint8Array()).matchAll(/OCX_KNOWN_FOLDER_TIMING:(start|compiled|queried|hresult)=(-?[0-9]+)/g)].map(match => ({ phase: match[1], value: Number(match[2]) })) });
-              return result;
-            }''')
-          p=Path('tests/fixtures/claude-desktop-network-guard.ts');s=p.read_text(encoding='utf-8')
-          s=s.replace('const nativeFetch = globalThis.fetch;',trace+'\nconst nativeFetch = globalThis.fetch;')
-          s=s.replace('    return nativeFetch(...args);','    trace("fetch_start");\n    return nativeFetch(...args).finally(() => trace("fetch_end"));')
-          p.write_text(s,encoding='utf-8')
-          p=Path('tests/claude-integration/claude-desktop-remote-hub.test.ts');s=p.read_text(encoding='utf-8')
-          marker='    const apply = spawnOwned(client, ["claude", "desktop", "apply", "--static"]);'
-          assert s.count(marker)==1
-          s=s.replace(marker,'''    const traceFile = join(client.root, "apply-timing.jsonl");
-              client.env.OCX_TEST_TIMING_PATH = traceFile;
-              const applyStart = performance.now();
-          '''+marker)
-          marker='    const appliedCode = await within(apply.child.exited, SPAWN_BUDGET_MS, "Remote Desktop apply deadline");'
-          assert s.count(marker)==1
-          s=s.replace(marker,'''    let appliedCode: number;
-              try { appliedCode = await within(apply.child.exited, SPAWN_BUDGET_MS, "Remote Desktop apply deadline"); }
-              finally {
-                const trace = existsSync(traceFile) ? readFileSync(traceFile, "utf8").trim().split("\\n").filter(Boolean).map(line => JSON.parse(line)) : [];
-                console.log(JSON.stringify({ applyTiming: { elapsedMs: Math.round(performance.now() - applyStart), alive: apply.child.exitCode === null, trace } }));
-              }''')
-          p.write_text(s,encoding='utf-8')
-          p=Path('src/client/lifecycle-lock.ts');s=p.read_text(encoding='utf-8')
-          s=s.replace('import { chmodSync,','import { appendFileSync, chmodSync,')
-          marker='    const code = errorCode(error);'
-          assert s.count(marker)==1
-          report='''    if (process.env.OCX_TEST_TIMING_PATH) {
-                const allowed = new Set(["CODEX_USER_IDENTITY_REFUSED", "ETIMEDOUT", "EICACLS", "EACCES", "EPERM", "ENOENT", "EIO", "ENOTDIR", "SQLITE_BUSY", "SQLITE_LOCKED", "SQLITE_CORRUPT", "SQLITE_CANTOPEN"]);
-                const codes: string[] = [];
-                let identityTimeout = false, identityRefusal = false, namespaceRefusal = false;
-                let current: unknown = error;
-                for (let depth = 0; depth < 5 && current; depth++) {
-                  const value = errorCode(current);
-                  if (typeof value === "string" && allowed.has(value)) codes.push(value);
-                  const message = current instanceof Error ? current.message : "";
-                  identityTimeout ||= message === "Windows effective-account lookup timed out.";
-                  identityRefusal ||= value === "CODEX_USER_IDENTITY_REFUSED";
-                  namespaceRefusal ||= /namespace|runtime directory|LocalAppData/.test(message);
-                  current = typeof current === "object" && "cause" in current ? current.cause : undefined;
-                }
-                appendFileSync(process.env.OCX_TEST_TIMING_PATH, JSON.stringify({ event: "lifecycle_acquire_failure", codes, identityTimeout, identityRefusal, namespaceRefusal }) + "\\n");
-              }
-          '''
-          s=s.replace(marker,report+marker);p.write_text(s,encoding='utf-8')
-          
           import json
           p=Path('src/codex/user-identity.ts');s=p.read_text(encoding='utf-8')
-          def statement(value): return '    '+json.dumps(value)+','
-          anchor='  const statements = [\n'
-          assert s.count(anchor)==1
-          s=s.replace(anchor,anchor+statement('$ocxStageWatch = [Diagnostics.Stopwatch]::StartNew()')+'\n'+statement('[Console]::Error.WriteLine("OCX_KNOWN_FOLDER_TIMING:start=0")')+'\n',1)
-          anchor='      + " -Name OcxKnownFolder -Namespace OcxIdentity -PassThru",'
-          assert s.count(anchor)==1
-          s=s.replace(anchor,anchor+'\n'+statement('[Console]::Error.WriteLine("OCX_KNOWN_FOLDER_TIMING:compiled=" + $ocxStageWatch.ElapsedMilliseconds)'),1)
-          anchor='    "if ($ocxHr -ne 0)'
-          assert s.count(anchor)==1
-          s=s.replace(anchor,statement('[Console]::Error.WriteLine("OCX_KNOWN_FOLDER_TIMING:queried=" + $ocxStageWatch.ElapsedMilliseconds)')+'\n'+statement('[Console]::Error.WriteLine("OCX_KNOWN_FOLDER_TIMING:hresult=" + $ocxHr)')+'\n'+anchor,1)
+          start=s.index('  const signature =',s.index('function windowsLocalAppDataExpression'))
+          end=s.index('    `$ocxFolderId =',start)
+          statements=[
+          "$ocxAssemblyName = New-Object -TypeName System.Reflection.AssemblyName -ArgumentList 'OcxIdentity'",
+          "$ocxAssembly = [AppDomain]::CurrentDomain.DefineDynamicAssembly($ocxAssemblyName, [Reflection.Emit.AssemblyBuilderAccess]::Run)",
+          "$ocxModule = $ocxAssembly.DefineDynamicModule('OcxKnownFolder')",
+          "$ocxType = $ocxModule.DefineType('OcxIdentity.OcxKnownFolder', [Reflection.TypeAttributes]'Public,Sealed,Abstract')",
+          "$ocxParameters = [Type[]]@([Guid].MakeByRefType(), [UInt32], [IntPtr], [IntPtr].MakeByRefType())",
+          "$ocxDll = [IO.Path]::Combine([Environment]::SystemDirectory, 'shell32.dll')",
+          "$ocxMethod = $ocxType.DefinePInvokeMethod('SHGetKnownFolderPath', $ocxDll, 'SHGetKnownFolderPath', [Reflection.MethodAttributes]'Public,Static,PinvokeImpl', [Reflection.CallingConventions]::Standard, [Int32], $ocxParameters, [Runtime.InteropServices.CallingConvention]::Winapi, [Runtime.InteropServices.CharSet]::Unicode)",
+          "$ocxMethod.SetImplementationFlags($ocxMethod.GetMethodImplementationFlags() -bor [Reflection.MethodImplAttributes]::PreserveSig)",
+          "$null = $ocxMethod.DefineParameter(4, [Reflection.ParameterAttributes]::Out, 'path')",
+          "$ocxShell = $ocxType.CreateType()",
+          ]
+          prefix='  const statements = [\n'+''.join('    '+json.dumps(x)+',\n' for x in statements)
+          s=s[:start]+prefix+s[end:]
+          s=s.replace('    "if ($ocxHr -ne 0) { throw \'SHGetKnownFolderPath failed\' }",\n    "try { [System.Runtime.InteropServices.Marshal]::PtrToStringUni($ocxPathPtr) }"', '    "try { if ($ocxHr -ne 0) { throw \'SHGetKnownFolderPath failed\' }; [System.Runtime.InteropServices.Marshal]::PtrToStringUni($ocxPathPtr) }"')
           p.write_text(s,encoding='utf-8')
           PY
-          python - <<'PY'
-          from pathlib import Path
-          p=Path('tests/claude-integration/claude-desktop-remote-hub.test.ts')
-          s=p.read_text(encoding="utf-8")
-          anchor='  mkdirSync(env.XDG_RUNTIME_DIR!, { recursive: true });'
-          assert s.count(anchor)==1
-          extra='\n  const envMode = process.env.OCX_FIXTURE_ENV_MODE;\n  if (envMode === "temp" || envMode === "both") {\n    const temp = join(root, "temp");\n    mkdirSync(temp, { recursive: true });\n    env.TEMP = temp;\n    env.TMP = temp;\n  }\n  if (envMode === "profile" || envMode === "both") {\n    mkdirSync(env.APPDATA!, { recursive: true });\n    mkdirSync(env.LOCALAPPDATA!, { recursive: true });\n  }\n'
-          p.write_text(s.replace(anchor,anchor+extra),encoding="utf-8")
-          PY
-          OCX_FIXTURE_ENV_MODE="$MODE" bun test --isolate ./tests/claude-integration/claude-desktop-remote-hub.test.ts --test-name-pattern 'stored profile=true'
+          cat > .tmp/known-folder-conformance.ts <<'TS'
+          import { readFileSync, mkdirSync } from "node:fs";
+          import { join } from "node:path";
+          import {
+            windowsLocalAppDataExpressionForTests,
+            windowsIdentityPowerShellCommandForTests,
+            windowsIdentityPowerShellSpawnOptionsForTests,
+            decodeWindowsIdentityPowerShellOutputForTests,
+          } from "../src/codex/user-identity";
+          const original = JSON.parse(readFileSync(".tmp/old-known-folder.json", "utf8"));
+          const query = (expression: string, env = process.env, legacy = false) => {
+            const start = performance.now();
+            const child = Bun.spawnSync(windowsIdentityPowerShellCommandForTests(expression), {
+              ...windowsIdentityPowerShellSpawnOptionsForTests(), env, ...(legacy ? { timeout: 45_000 } : {}),
+            });
+            return { child, ms: Math.round(performance.now() - start), value: child.exitCode === 0 ? decodeWindowsIdentityPowerShellOutputForTests(child.stdout) : "" };
+          };
+          const reference = query(original, process.env, true);
+          if (reference.child.exitCode !== 0 || !reference.value) throw new Error("Reference lookup failed");
+          const expression = windowsLocalAppDataExpressionForTests();
+          const actual = query(expression);
+          if (actual.child.exitCode !== 0 || actual.value !== reference.value) throw new Error("Emitted lookup differs from reference");
+          const shadow = join(process.cwd(), ".tmp", "shadow-profile");
+          mkdirSync(shadow, { recursive: true });
+          const shadowed = query(expression, { ...process.env, HOME: shadow, USERPROFILE: shadow, LOCALAPPDATA: shadow, APPDATA: shadow, TEMP: shadow, TMP: shadow });
+          if (shadowed.child.exitCode !== 0 || shadowed.value !== reference.value) throw new Error("Emitted lookup followed environment shadow");
+          const invalid = expression.replace("F1B32785-6FBA-4FCF-9D55-7B8E7F157091", "00000000-0000-0000-0000-000000000000")
+            .replace("if ($ocxHr -ne 0)", "[Console]::Error.WriteLine('OCX_FIXTURE_HRESULT=' + $ocxHr); if ($ocxHr -ne 0)");
+          const negative = query(invalid);
+          const stderr = new TextDecoder().decode(negative.child.stderr);
+          const hr = /OCX_FIXTURE_HRESULT=(-[0-9]+)/.exec(stderr);
+          if (negative.child.exitCode === 0 || !hr || Number(hr[1]) >= 0) throw new Error("Native HRESULT refusal was not preserved");
+          console.log(JSON.stringify({ referenceMs: reference.ms, emittedMs: actual.ms, shadowedMs: shadowed.ms, samePath: true, shadowIgnored: true, failedHRESULTPreserved: true, productionTimeoutMs: windowsIdentityPowerShellSpawnOptionsForTests().timeout }));
+          TS
+          bun .tmp/known-folder-conformance.ts
+      - name: Run existing identity and Desktop contract tests
+        shell: bash
+        run: bun test --isolate --timeout 60000 ./tests/codex-integration/codex-user-identity.test.ts ./tests/claude-integration/claude-desktop-remote-hub.test.ts
