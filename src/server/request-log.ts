@@ -8,6 +8,7 @@ import {
   isClientClosedMessage,
   isCyberPolicyCode,
   isCyberPolicyMessage,
+  isRateLimitOrQuotaFailureMessage,
   upstreamErrorMessageFromPayload,
 } from "../lib/errors";
 import { CODEX_CONFIG_PATH, readRootTomlString } from "../codex/paths";
@@ -842,7 +843,7 @@ function incompleteReasonLabel(reason: string): string {
   }
 }
 
-function captureTerminalHttpStatus(
+export function captureTerminalHttpStatus(
   logCtx: RequestLogContext,
   json: {
     type?: unknown;
@@ -873,6 +874,15 @@ function captureTerminalHttpStatus(
   if (policy) {
     logCtx.terminalErrorCode = CYBER_POLICY_ERROR_CODE;
     logCtx.terminalHttpStatus = 400;
+    return;
+  }
+  const quota = candidates.some(candidate => (
+    typeof candidate?.message === "string"
+    && candidate.message.trim().length > 0
+    && isRateLimitOrQuotaFailureMessage(candidate.message)
+  ));
+  if (quota) {
+    logCtx.terminalHttpStatus = 429;
     return;
   }
   if (type !== "response.failed" || !responseError || typeof responseError !== "object") return;
