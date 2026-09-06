@@ -33,11 +33,12 @@ var modelRuntimeSubcommands = map[string]Ownership{
 	"context": TypeScriptOwned, "shadow": TypeScriptOwned,
 }
 
-// Writes retain the TypeScript owner until Go participates in the shared
-// config-mutation.sqlite generation transaction.
+// The full config command family is Go-owned: reads project through the
+// schema/normalizer and writes go through the shared config-mutation.sqlite
+// generation coordinator.
 var configRuntimeSubcommands = map[string]Ownership{
 	"show": GoOwned, "validate": GoOwned, "export": GoOwned,
-	"set": GoOwned, "unset": GoOwned, "import": GoOwned,
+	"get": GoOwned, "set": GoOwned, "unset": GoOwned, "import": GoOwned,
 }
 
 func loadCLIConfig() (map[string]any, error) {
@@ -56,6 +57,8 @@ func runConfig(args []string, deps Deps) int {
 	switch action {
 	case "show":
 		return runNativeConfigShow(args, deps)
+	case "get":
+		return runNativeConfigGet(args, deps)
 	case "validate":
 		return runNativeConfigValidate(args, deps)
 	case "export":
@@ -80,6 +83,49 @@ func configWriteError(deps Deps, message string, usage bool) int {
 
 func configWriteUsageError(deps Deps, message string) int {
 	return configWriteError(deps, message, true)
+}
+
+func runNativeConfigGet(args []string, deps Deps) int {
+	jsonOutput := takeFlag(&args, "--json")
+	if len(args) == 0 {
+		return configWriteUsageError(deps, "config path is required")
+	}
+	path := args[0]
+	args = args[1:]
+	if len(args) != 0 {
+		return configWriteUsageError(deps, "Unexpected argument(s): "+strings.Join(args, " "))
+	}
+	normalized, _, _, err := readNativeConfig()
+	if err != nil {
+		return runDelegated([]string{"config", "get", path}, deps)
+	}
+	value, err := normalized.ConfigPathValue(path)
+	if err != nil {
+		return configWriteValidationError(deps, err.Error())
+	}
+	compact, err := value.CompactJSON()
+	if err != nil {
+		fmt.Fprintln(deps.Stderr, err)
+		return ExitFailure
+	}
+	// TypeScript prints JSON for objects and for explicit --json; bare scalars
+	// go through String(value).
+	if jsonOutput || compact[0] == '{' || compact[0] == '[' {
+		data, err := value.IndentedJSON()
+		if err != nil {
+			fmt.Fprintln(deps.Stderr, err)
+			return ExitFailure
+		}
+		_, _ = deps.Stdout.Write(append(data, '\n'))
+		return ExitOK
+	}
+	var scalar any
+	if err := json.Unmarshal(compact, &scalar); err != nil {
+		fmt.Fprintln(deps.Stderr, err)
+		return ExitFailure
+	}
+	fmt.Fprintln(deps.Stdout, scalar)
+	return ExitOK
 }
 
 func configWriteValidationError(deps Deps, message string) int {

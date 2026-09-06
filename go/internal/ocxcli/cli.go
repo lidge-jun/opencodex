@@ -93,9 +93,8 @@ var Commands = []Command{
 	{Name: "integration", Usage: "ocx integration client <sub>", Summary: "Manage integrations.", Owner: TypeScriptOwned},
 	{Name: "grok", Usage: "ocx grok <sub>", Summary: "Manage Grok Build.", Owner: TypeScriptOwned},
 	{Name: "system", Usage: "ocx system <sub>", Summary: "Manage runtime settings.", Owner: TypeScriptOwned},
-	// The command default and read subset are Go-owned. Mutations remain
-	// TypeScript-owned by configRuntimeSubcommands until they share its SQLite
-	// generation transaction.
+	// The full config family is Go-owned: reads project through the schema
+	// normalizer and writes share the SQLite generation transaction.
 	{Name: "config", Usage: "ocx config <sub>", Summary: "Manage configuration.", Owner: GoOwned},
 	{Name: "lab", Usage: "ocx lab <sub>", Summary: "Inspect Compatibility Lab.", Owner: TypeScriptOwned},
 	{Name: "claude", Usage: "ocx claude [args...]", Summary: "Launch Claude Code.", Owner: TypeScriptOwned},

@@ -235,13 +235,8 @@ func TestModelRuntimeOwnershipDelegates(t *testing.T) {
 }
 
 func TestConfigRuntimeOwnershipUsesNativeReadCommands(t *testing.T) {
-	for _, subcommand := range []string{"show", "validate", "export", "set", "unset", "import"} {
+	for _, subcommand := range []string{"show", "get", "validate", "export", "set", "unset", "import"} {
 		if got, known := OwnershipFor([]string{"config", subcommand}); !known || got != GoOwned {
-			t.Fatalf("OwnershipFor(config %s) = %q, %t", subcommand, got, known)
-		}
-	}
-	for _, subcommand := range []string{"get"} {
-		if got, known := OwnershipFor([]string{"config", subcommand}); !known || got != TypeScriptOwned {
 			t.Fatalf("OwnershipFor(config %s) = %q, %t", subcommand, got, known)
 		}
 	}
@@ -401,6 +396,38 @@ func TestNativeConfigWriteCommandsMatchOracleShape(t *testing.T) {
 	}
 	if code, out, stderr := run([]string{"config", "unset", "missing", "--json"}); code != 2 || out != "" || stderr != "Error: config path not found: missing\n" {
 		t.Fatalf("missing unset = code=%d stdout=%q stderr=%q", code, out, stderr)
+	}
+}
+
+func TestNativeConfigGetMatchesOracleShape(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OPENCODEX_HOME", dir)
+	configPath := filepath.Join(dir, "config.json")
+	initial := []byte(`{"port":10100,"providers":{"fixture":{"adapter":"openai-chat","baseUrl":"https://example.test/v1","apiKey":"secret-key","defaultModel":"m1","models":["m1","m2"],"contextWindow":128000}},"defaultProvider":"fixture"}`)
+	if err := os.WriteFile(configPath, initial, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	run := func(argv []string) (int, string, string) {
+		var out, stderr bytes.Buffer
+		deps := depsFor(RuntimeState{}, &out, &stderr)
+		deps.Delegate = func([]string) (int, error) { t.Fatal("native config get delegated"); return 0, nil }
+		return Run(argv, deps), out.String(), stderr.String()
+	}
+	if code, out, stderr := run([]string{"config", "get", "providers.fixture"}); code != ExitOK || out != "{\n  \"adapter\": \"openai-chat\",\n  \"baseUrl\": \"https://example.test/v1\",\n  \"apiKey\": \"********\",\n  \"defaultModel\": \"m1\",\n  \"models\": [\n    \"m1\",\n    \"m2\"\n  ],\n  \"contextWindow\": 128000\n}\n" || stderr != "" {
+		t.Fatalf("object get = code=%d stdout=%q stderr=%q", code, out, stderr)
+	}
+	if code, out, stderr := run([]string{"config", "get", "defaultProvider", "--json"}); code != ExitOK || out != "\"fixture\"\n" || stderr != "" {
+		t.Fatalf("scalar get = code=%d stdout=%q stderr=%q", code, out, stderr)
+	}
+	if code, out, stderr := run([]string{"config", "get", "providers.fixture.apiKey", "--json"}); code != ExitOK || out != "\"********\"\n" || stderr != "" {
+		t.Fatalf("secret get = code=%d stdout=%q stderr=%q", code, out, stderr)
+	}
+	if code, out, stderr := run([]string{"config", "get", "does.not.exist"}); code != 2 || out != "" || stderr != "Error: config path not found: does.not.exist\n" {
+		t.Fatalf("missing get = code=%d stdout=%q stderr=%q", code, out, stderr)
+	}
+	if code, out, stderr := run([]string{"config", "get"}); code != 2 || out != "" || stderr != "Error: config path is required\n"+configUsage {
+		t.Fatalf("no-path get = code=%d stdout=%q stderr=%q", code, out, stderr)
 	}
 }
 
