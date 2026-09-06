@@ -39,7 +39,7 @@ describe("computeFailureFingerprint", () => {
       model: "gpt-5",
       signature: "Connection timeout",
     };
-    const withForbidden: FailureEvent = {
+    const withForbidden = {
       ...baseline,
       prompt: "secret user prompt text",
       response: "secret assistant response text",
@@ -61,6 +61,16 @@ describe("computeFailureFingerprint", () => {
     expect(sanitized).not.toContain(sampleKey);
     expect(sanitized).toContain("[path]");
     expect(sanitized).toContain("[redacted]");
+  });
+
+  test("redacts Basic credentials and complete paths with spaced components", () => {
+    const credential = ["YWxpY2U6", "c2VjcmV0"].join("");
+    const unixPath = ["", "Users", "Alice Smith", "project", "index.ts"].join("/");
+    const windowsPath = ["C:", "Users", "Alice Smith", "project", "index.ts"].join("\\");
+    const sanitized = sanitizeSignature(`Basic ${credential}; ${unixPath}; ${windowsPath}`);
+    expect(sanitized).not.toContain(credential);
+    expect(sanitized).not.toContain("Alice Smith");
+    expect(sanitized.match(/\[path\]/g)?.length).toBe(2);
   });
 
   test("bounds oversized signatures", () => {

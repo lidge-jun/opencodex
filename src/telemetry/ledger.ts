@@ -87,9 +87,10 @@ export class TelemetryLedger {
       }
     }
 
-    const minTimestamp = timestamp - Math.max(0, windowMs);
+    const lastSeen = Math.max(old?.last_seen ?? timestamp, timestamp);
+    const minTimestamp = lastSeen - Math.max(0, windowMs);
     const occurrences = [...priorOccurrences, timestamp]
-      .filter(seen => seen >= minTimestamp)
+      .filter(seen => Number.isFinite(seen) && seen >= minTimestamp && seen <= lastSeen)
       .sort((a, b) => a - b)
       .slice(-this.maxOccurrences);
 
@@ -101,8 +102,8 @@ export class TelemetryLedger {
 
     const record: LedgerRecord = {
       fingerprint,
-      firstSeen: old?.first_seen ?? timestamp,
-      lastSeen: timestamp,
+      firstSeen: Math.min(old?.first_seen ?? timestamp, timestamp),
+      lastSeen,
       count: occurrences.length,
       status: old?.status ?? "monitoring",
       ...(cleanDetails ? { details: cleanDetails } : {}),
@@ -121,7 +122,7 @@ export class TelemetryLedger {
     ).run(
       fingerprint,
       record.firstSeen,
-      timestamp,
+      record.lastSeen,
       record.count,
       record.status,
       cleanDetails ? JSON.stringify(cleanDetails) : null,
@@ -161,7 +162,14 @@ export class TelemetryLedger {
       this.db.query("UPDATE failure_events SET status = ? WHERE fingerprint = ?").run(status, fingerprint);
       return;
     }
-    const safeDetails = sanitizeDetails(details);
+    const row = this.db.query("SELECT details FROM failure_events WHERE fingerprint = ?").get(fingerprint) as {
+      details: string | null;
+    } | null;
+    const mergedDetails = {
+      ...(parseStoredDetails(row?.details ?? null) ?? {}),
+      ...(sanitizeDetails(details) ?? {}),
+    };
+    const safeDetails = Object.keys(mergedDetails).length > 0 ? mergedDetails : undefined;
     this.db.query("UPDATE failure_events SET status = ?, details = ? WHERE fingerprint = ?").run(
       status,
       safeDetails ? JSON.stringify(safeDetails) : null,
@@ -218,7 +226,8 @@ export class TelemetryLedger {
     const excess = countRow.total - this.maxRecords;
     this.db.query(
       "DELETE FROM failure_events WHERE fingerprint IN (" +
-      "SELECT fingerprint FROM failure_events ORDER BY last_seen ASC LIMIT ?" +
+      "SELECT fingerprint FROM failure_events " +
+      "ORDER BY CASE status WHEN 'fixed' THEN 0 WHEN 'ignored' THEN 0 WHEN 'dispatched' THEN 1 ELSE 2 END, last_seen ASC LIMIT ?" +
       ")"
     ).run(excess);
   }

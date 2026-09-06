@@ -2,15 +2,15 @@ import { createHash } from "node:crypto";
 import type { FailureEvent, FailureFingerprint } from "./types";
 
 const SENSITIVE_PATTERNS: Array<[RegExp, string]> = [
-  [/\b(?:bearer\s+|api[_-]?key\s*[:=]\s*|token\s*[:=]\s*|secret\s*[:=]\s*)[^\s,;]+/gi, "[redacted]"],
+  [/\b(?:bearer\s+|basic\s+|api[_-]?key\s*[:=]\s*|token\s*[:=]\s*|secret\s*[:=]\s*)[^\s,;]+/gi, "[redacted]"],
   [/\bsk-[a-zA-Z0-9_-]{8,}\b/g, "[redacted-key]"],
   [/\b(?:request|session)[_-]?id\s*[:=]\s*[^\s,;]+/gi, ""],
   [/\b(?:timestamp|time)\s*[:=]\s*[^\s,;]+/gi, ""],
   [/\b\d{10,13}\b/g, ""],
   [/(:\d+\s*:\s*\d+)(?=\b|\D)/g, ""],
   [/\b(?:line|col(?:umn)?)\s*[:=]?\s*\d+/gi, ""],
-  [/(?:\/[a-zA-Z0-9._-]+){2,}/g, "[path]"],
-  [/[a-zA-Z]:\\(?:[a-zA-Z0-9._-]+\\)+[a-zA-Z0-9._-]*/g, "[path]"],
+  [/\/(?:[a-zA-Z0-9._-]+(?: [a-zA-Z0-9._-]+)*\/){1,}[a-zA-Z0-9._-]+(?: [a-zA-Z0-9._-]+)*/g, "[path]"],
+  [/[a-zA-Z]:\\(?:[a-zA-Z0-9._-]+(?: [a-zA-Z0-9._-]+)*\\)+[a-zA-Z0-9._-]+(?: [a-zA-Z0-9._-]+)*/g, "[path]"],
 ];
 
 const MAX_SIGNATURE_LEN = 1024;
