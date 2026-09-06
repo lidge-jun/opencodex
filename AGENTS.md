@@ -331,9 +331,13 @@ keeps the PR a draft.
 Authors with repository push permission skip the ancestry heuristic only. As with approval requirements in
 [`MAINTAINERS.md`](./MAINTAINERS.md), the ancestry heuristic is a CI check
 rather than a branch rule. The branches themselves are protected: `dev`,
-`main`, and `preview` each carry an active ruleset requiring a reviewed pull
-request and blocking force-pushes and deletion, so a direct push to `dev` is
-rejected regardless of `--no-verify`.
+`main`, and `preview` each require a pull request and block force-pushes and deletion.
+For `dev` only, a current maintainer with GitHub `maintain` or `admin` access may
+explicitly integrate through a PR without another maintainer approval, including
+their own PR, under the policy in `MAINTAINERS.md`. Record the decision and exact-head
+CI evidence; keep outstanding maintainer objections and security review separate.
+The bypass is PR-only, so a direct push to `dev` remains rejected regardless of
+`--no-verify`. Contributor review and `main`/`preview` rules remain unchanged.
 
 [`MAINTAINERS.md`](./MAINTAINERS.md) is authoritative for review and merge
 policy (approvals, CI requirements, security review, promotion). This file

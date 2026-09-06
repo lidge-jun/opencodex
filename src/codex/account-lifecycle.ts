@@ -1,6 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
 import {
-  atomicWriteFile,
   deleteConfigTopLevelKey,
   getConfigPath,
   saveConfigPreservingClaudeCode,
@@ -107,13 +106,10 @@ function restoreRuntimeConfig(target: OcxConfig, snapshot: OcxConfig): void {
   Object.assign(target, snapshot);
 }
 
-function restorePersistedConfig(configPath: string, previousBytes: string): void {
-  try {
-    if (readFileSync(configPath, "utf8") === previousBytes) return;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+function assertPersistedConfigUnchanged(configPath: string, previousBytes: Buffer): void {
+  if (!readFileSync(configPath).equals(previousBytes)) {
+    throw new CodexAccountDeleteRollbackError();
   }
-  atomicWriteFile(configPath, previousBytes);
 }
 
 /**
@@ -133,7 +129,7 @@ export function deleteCodexAccount(runtimeConfig: OcxConfig, accountId: string):
     const previousConfig = structuredClone(runtimeConfig);
     const configPath = getConfigPath();
     const hasPersistedConfig = existsSync(configPath);
-    const previousPersistedConfig = hasPersistedConfig ? readFileSync(configPath, "utf8") : undefined;
+    const previousPersistedConfig = hasPersistedConfig ? readFileSync(configPath) : undefined;
     const hadStoredAccount = (runtimeConfig.codexAccounts ?? [])
       .some(account => !account.isMain && account.id === accountId);
     const hadVisiblePickerBinding = hadStoredAccount
@@ -162,7 +158,7 @@ export function deleteCodexAccount(runtimeConfig: OcxConfig, accountId: string):
       } catch (error) {
         restoreRuntimeConfig(runtimeConfig, previousConfig);
         try {
-          restorePersistedConfig(configPath, previousPersistedConfig);
+          assertPersistedConfigUnchanged(configPath, previousPersistedConfig);
         } catch {
           throw new CodexAccountDeleteRollbackError();
         }

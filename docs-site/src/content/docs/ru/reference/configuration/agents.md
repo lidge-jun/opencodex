@@ -84,7 +84,8 @@ cooldown либо уже достигли порога quota. Availability-сн�
 native ChatGPT-target'ами и прямыми key-auth Responses-маршрутами, явно доверенными через
 `allowEncryptedV2AgentTasks: true`. Если ни один из них не может обработать encrypted payload,
 запрос завершается ошибкой вместо отправки нечитаемого ciphertext наружу. Combo по-прежнему
-использует только канонические native-цели.
+сначала выбирает доступную каноническую native-цель; если её нельзя выбрать и включён
+`agentTaskRecovery`, encrypted `NEW_TASK` восстанавливается один раз перед routed combo dispatch.
 
 ```json
 {

@@ -153,4 +153,82 @@ describe("SSE payload rewrite composition", () => {
     expect(budget.snapshot().currentBytes).toBe(0);
     budget.dispose();
   });
+
+  test.each(["resolve", "reject"] as const)(
+    "surfaces a rewrite failure before tee cancellation can %s",
+    async cancellationOutcome => {
+      const budget = createTestTranslatorBudget({ maxTurnBytes: 64 });
+      const upstream = new AbortController();
+      const cancellation = Promise.withResolvers<void>();
+      const cancellationError = new Error("upstream cancellation failed");
+      let cancelCalls = 0;
+      let disposeCalls = 0;
+      const source = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("data: partial"));
+          controller.enqueue(new TextEncoder().encode("x".repeat(80)));
+          // Keep the source open after exhausting the rewrite budget.
+        },
+        cancel() {
+          cancelCalls += 1;
+          return cancellation.promise;
+        },
+      });
+      const [native, inspection] = source.tee();
+      const inspectionReader = inspection.getReader();
+      await inspectionReader.read();
+      await inspectionReader.read();
+      let inspectionSettled = false;
+      const pendingInspection = inspectionReader.read().then(() => { inspectionSettled = true; });
+      const rewrite = Object.assign((block: string) => [block], {
+        dispose() { disposeCalls += 1; },
+      });
+      const rewritten = relaySseWithBlockRewrite(native, rewrite, budget);
+      const client = relaySseWithFailedTail(rewritten, upstream);
+      const completion = readAll(client);
+      let deadline: ReturnType<typeof setTimeout> | undefined;
+
+      try {
+        const out = await Promise.race([
+          completion,
+          new Promise<never>((_, reject) => {
+            deadline = setTimeout(() => reject(new Error("rewrite failure waited for the inspection tee")), 1_000);
+          }),
+        ]);
+        expect(out.match(/event: response.failed/g)).toHaveLength(1);
+        expect(out).toContain('"code":"translation_buffer_limit"');
+        expect(out).toEndWith("data: [DONE]\n\n");
+        expect(upstream.signal.aborted).toBe(true);
+        expect(inspectionSettled).toBe(false);
+        expect(cancelCalls).toBe(0);
+        expect(disposeCalls).toBe(1);
+        expect(budget.snapshot().currentBytes).toBe(0);
+        expect(budget.snapshot().overflows).toBe(1);
+
+        // Releasing inspection settles both tee cancellation promises. A late
+        // rejection must be handled by the rewriter as well as this reader.
+        const siblingCancellation = inspectionReader.cancel("inspection cleanup");
+        expect(cancelCalls).toBe(1);
+        if (cancellationOutcome === "reject") {
+          cancellation.reject(cancellationError);
+          await expect(siblingCancellation).rejects.toBe(cancellationError);
+        } else {
+          cancellation.resolve();
+          await siblingCancellation;
+        }
+        await pendingInspection;
+        await Bun.sleep(0); // Let the runner observe any unhandled cancellation rejection.
+        expect(disposeCalls).toBe(1);
+      } finally {
+        clearTimeout(deadline);
+        const cleanup = inspectionReader.cancel().catch(() => {});
+        cancellation.resolve();
+        await cleanup;
+        await pendingInspection;
+        await completion.catch(() => {});
+        inspectionReader.releaseLock();
+        budget.dispose();
+      }
+    },
+  );
 });

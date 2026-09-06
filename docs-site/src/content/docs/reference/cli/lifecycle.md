@@ -237,6 +237,12 @@ Run opencodex as a login-managed background service (macOS **launchd**, Linux **
 Windows **Task Scheduler**) that auto-starts on login and auto-restarts on crash. Service runs set
 `OCX_SERVICE=1` so a restart does not churn the Codex config.
 
+Windows Task Scheduler installs use normal process priority (`Priority=4`). The older background
+priority (`7`, also the scheduler default when omitted) can delay the proxy's health responses under
+CPU contention, making the tray report Offline even while the process is alive. After upgrading,
+run `ocx service repair` to migrate that registered priority and restart the service. This migration
+may request UAC approval; a priority already set to normal or high does not itself trigger replacement.
+
 The Windows wrapper verifies its baked Bun runtime and CLI entry before every start attempt. If an
 interrupted package update removed either file, it logs one `installation is incomplete` message and
 stops instead of retrying the same missing executable every five seconds. Reinstall opencodex, then

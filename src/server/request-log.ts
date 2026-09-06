@@ -12,7 +12,7 @@ import {
 } from "../lib/errors";
 import { CODEX_CONFIG_PATH, readRootTomlString } from "../codex/paths";
 import { readCodexCatalogPath } from "../codex/catalog";
-import type { AttemptTierOutcome, OcxUsage } from "../types";
+import type { AttemptTierOutcome, OcxProviderConfig, OcxUsage } from "../types";
 import { normalizeRouteDecisionTrace, type RouteDecisionTraceV1 } from "../routing/trace";
 import type { AdapterRequest } from "../adapters/base";
 import type { AdapterTierMetadata } from "../providers/fastwire";
@@ -1211,9 +1211,37 @@ export function sealRequestAttemptIdentity(
   accountLogLabel?: string,
 ): void {
   if (!attempt) return;
+  if (attempt.provider !== provider || attempt.adapter !== adapter) delete attempt.credentialSource;
   attempt.provider = provider;
   attempt.adapter = adapter;
   if (isCodexUsageAccountLogLabel(accountLogLabel)) attempt.accountLogLabel = accountLogLabel;
+}
+
+/** Capture only the resolved upstream route; inbound auth and today's config cannot label old usage. */
+export function recordAttemptCredentialSource(
+  attempt: PersistedUsageAttempt | undefined,
+  providerName: string,
+  provider: Pick<OcxProviderConfig, "authMode" | "baseUrl" | "adapter">,
+  adapterName: string = provider.adapter,
+): void {
+  if (!attempt) return;
+  // Rebinding an attempt to an unrecognized route must not retain its previous attribution.
+  delete attempt.credentialSource;
+  if (providerName !== "xai"
+    || !["openai-chat", "openai-responses"].includes(adapterName)) return;
+  try {
+    const url = new URL(provider.baseUrl ?? "");
+    if (url.protocol !== "https:" || url.port || url.username || url.password
+      || url.search || url.hash || !["/v1", "/v1/"].includes(url.pathname)) return;
+    if (provider.authMode === "oauth" && url.hostname === "cli-chat-proxy.grok.com") {
+      attempt.credentialSource = "grok-oauth";
+    } else if ((provider.authMode === "key" || provider.authMode === undefined)
+      && url.hostname === "api.x.ai") {
+      attempt.credentialSource = "xai-api-key";
+    }
+  } catch {
+    // Invalid/custom destinations have no known subscription provenance.
+  }
 }
 
 export function noteAttemptSend(

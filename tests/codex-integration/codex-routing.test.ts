@@ -1339,6 +1339,90 @@ describe("codex routing", () => {
     expect(getCodexUpstreamHealth("a")).toBeNull();
   });
 
+  test("flat bare error at inspection EOF records failed 502 without clearing avoidance", async () => {
+    const config = makeConfig();
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 10);
+    const now = 1_800_000_000_000;
+    recordCodexUpstreamOutcome(config, "a", 503, { now });
+    recordCodexUpstreamOutcome(config, "a", 503, { now: now + 1 });
+    recordCodexUpstreamOutcome(config, "a", 503, { now: now + 2 });
+    expect(isCodexAccountSoftAvoided("a", now + 2)).toBe(true);
+    expect(getCodexUpstreamHealth("a")?.consecutiveFailures).toBe(3);
+    const terminals: Array<[string, number | undefined]> = [];
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode("data: " + JSON.stringify({
+          type: "error",
+          message: "provider reset",
+        }) + "\n\n"));
+        controller.close();
+      },
+    });
+
+    await new Promise<void>(resolve => {
+      consumeForInspection(stream, (status, override) => {
+        terminals.push([status, override]);
+        recordCodexUpstreamOutcome(
+          config,
+          "a",
+          status === "failed" ? (override ?? 502) : 200,
+          { now: now + 3, threadId: "bare-error-flat" },
+        );
+      }, undefined, resolve);
+    });
+
+    expect(terminals).toEqual([["failed", 502]]);
+    expect(isCodexAccountSoftAvoided("a", now + 3)).toBe(true);
+    expect(getCodexUpstreamHealth("a")).toMatchObject({
+      consecutiveFailures: 4,
+      lastFailureStatus: 502,
+    });
+  });
+
+  test("nested bare error at inspection EOF records failed 502 without clearing avoidance", async () => {
+    const config = makeConfig();
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 10);
+    const now = 1_800_000_000_000;
+    recordCodexUpstreamOutcome(config, "a", 503, { now });
+    recordCodexUpstreamOutcome(config, "a", 503, { now: now + 1 });
+    recordCodexUpstreamOutcome(config, "a", 503, { now: now + 2 });
+    expect(isCodexAccountSoftAvoided("a", now + 2)).toBe(true);
+    expect(getCodexUpstreamHealth("a")?.consecutiveFailures).toBe(3);
+    const terminals: Array<[string, number | undefined]> = [];
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode("data: " + JSON.stringify({
+          type: "error",
+          error: { message: "nested provider reset" },
+        }) + "\n\n"));
+        controller.close();
+      },
+    });
+
+    await new Promise<void>(resolve => {
+      consumeForInspection(stream, (status, override) => {
+        terminals.push([status, override]);
+        recordCodexUpstreamOutcome(
+          config,
+          "a",
+          status === "failed" ? (override ?? 502) : 200,
+          { now: now + 3, threadId: "bare-error-nested" },
+        );
+      }, undefined, resolve);
+    });
+
+    expect(terminals).toEqual([["failed", 502]]);
+    expect(isCodexAccountSoftAvoided("a", now + 3)).toBe(true);
+    expect(getCodexUpstreamHealth("a")).toMatchObject({
+      consecutiveFailures: 4,
+      lastFailureStatus: 502,
+    });
+  });
+
   test("transient cooldown escalates to 2m, 10m, then the 30m cap", () => {
     const config = makeConfig();
     const now = 1_800_000_000_000;

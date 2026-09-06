@@ -122,7 +122,9 @@ görevlerinde zincir, kurallı yerel ChatGPT hedefleriyle ve
 `allowEncryptedV2AgentTasks: true` kullanılarak açıkça güvenilen doğrudan anahtar
 kimlik doğrulamalı Responses rotalarıyla sınırlıdır. Hiçbiri şifrelenmiş yükü
 işleyemezse istek, okunamayan şifreli metni başka bir yere yönlendirmek yerine
-başarısız olur. Kombolar yalnızca kurallı yerel hedefleri kullanmaya devam eder.
+başarısız olur. Kombo önce kullanılabilir kurallı yerel hedefi dener; seçilebilir
+yerel hedef kalmazsa ve `agentTaskRecovery` etkinse, şifrelenmiş `NEW_TASK` yönlendirilen
+kombo gönderiminden önce bir kez kurtarılır.
 
 ```json
 {
@@ -226,10 +228,13 @@ sınırı ve özel arka uç bağımlılığı kabul edilebilir olduğunda etkinl
 Olmadıklarında yerel bir ChatGPT çocuğunu veya v1 heterojen yetkilendirmesini
 tercih edin.
 
-Bu kurtarma yolu doğrudan yönlendirilen çocuklara uygulanır. Aynı anda en fazla
-32 kurtarma isteği etkin olabilir; ek ıskalamalar kapalı olarak başarısız olur.
-Kombo yönlendirmesi şifrelenmiş görevler için mevcut yalnızca yerel filtresini
-korur ve kurtarmayı çağırmaz.
+Bu kurtarma yolu doğrudan yönlendirilen çocuklara ve bir kombodaki şifrelenmiş
+`NEW_TASK` oluşturma isteklerine uygulanır. Aynı anda en fazla 32 kurtarma isteği
+etkin olabilir; ek ıskalamalar kapalı olarak başarısız olur. Kullanılabilir kanonik
+yerel hedefi olan bir kombo şifreli metni yine doğrudan gönderir; kurtarma yalnızca
+seçilebilir yerel hedef kalmadığında çalışır. Kurtarma hatası, tükenen hedefler veya
+kullanılamayan hedefler, şifreli metin yönlendirilen sağlayıcıya gönderilmeden yine
+kapalı biçimde başarısız olur.
 
 ## Çaba sınırları
 
@@ -248,4 +253,3 @@ ile `xhigh` arasını sunar.
 
 v1, varsayılan ve v2 davranışının yeni başlayanlara yönelik açıklaması için [Alt
 ajan yüzeyleri](/tr/guides/sub-agent-surface/) sayfasına bakın.
-

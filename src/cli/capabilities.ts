@@ -527,6 +527,45 @@ export const CAPABILITIES: readonly Capability[] = [
     ],
   },
   {
+    command: ["integration", "client"],
+    summary: "Inspect and toggle Aside profile catalogs, read their history, and restore a selected profile operation.",
+    routes: [
+      { method: "GET", path: "/api/client-integrations/aside/profiles" },
+      { method: "PUT", path: "/api/client-integrations/aside/profiles" },
+      { method: "GET", path: "/api/client-integrations/aside/profiles/{profileId}" },
+      { method: "PUT", path: "/api/client-integrations/aside/profiles/{profileId}" },
+      { method: "GET", path: "/api/client-integrations/aside/profiles/journal" },
+      { method: "GET", path: "/api/client-integrations/aside/profiles/{profileId}/journal" },
+      { method: "POST", path: "/api/client-integrations/aside/profiles/{profileId}/restore" },
+    ],
+    flags: [
+      { name: "--client", value: "string", summary: "Select the file integration; use aside for profile controls." },
+      { name: "--profile", value: "number", summary: "Select one registered Aside account; omitted toggles affect all profiles." },
+      { name: "--op", value: "string", summary: "Operation ID for restore." },
+      { name: "--confirm-drift", value: "boolean", summary: "Explicitly allow restore to replace subsequent edits." },
+      { name: "--overwrite-conflict", value: "boolean", summary: "Explicitly allow enable to replace a conflicting provider block." },
+      { name: "--json", value: "boolean", summary: "Emit the profile state, history, or mutation result as JSON." },
+    ],
+    mutates: true,
+    json: "payload",
+    details: [
+      "Use status/show/list, history/journal, enable/disable, or restore after integration client.",
+      "These declarations cover the dedicated Aside profile paths; existing generic client routes retain their separate parity inventory.",
+    ],
+  },
+  {
+    command: ["sync"],
+    summary: "Synchronize client catalogs, including Aside profiles through the running server's mutation owner.",
+    routes: [{ method: "POST", path: "/api/client-integrations/aside/sync" }],
+    flags: [
+      { name: "--restart-codex", value: "boolean", summary: "Restart Codex app-servers after a catalog or cache write." },
+      { name: "--restart-desktop-app", value: "boolean", summary: "Restart the Codex desktop app after a catalog or cache write." },
+    ],
+    mutates: true,
+    json: "none",
+    details: ["The Aside refresh uses the live server; other catalog synchronization also performs local work."],
+  },
+  {
     command: ["agent", "request-user-input"],
     summary: "Show or set whether default mode may ask the operator a question mid-task.",
     routes: [

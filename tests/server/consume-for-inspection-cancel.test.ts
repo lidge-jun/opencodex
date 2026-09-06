@@ -317,3 +317,111 @@ describe("inspection consumer teardown", () => {
     expect(metadataSpy.disposes()).toBe(1);
   });
 });
+
+function errorFrame(payload: Record<string, unknown>): Uint8Array {
+  return encoder.encode("data: " + JSON.stringify(payload) + "\n\n");
+}
+
+describe("consumeForInspection bare-error EOF finality", () => {
+  test("custom onParsedPayload still runs for a witnessed bare error", async () => {
+    const source = controlledStream();
+    const parsed: unknown[] = [];
+    const terminals: string[] = [];
+    const done = new Promise<void>(resolve => {
+      consumeForInspection(
+        source.stream,
+        status => terminals.push(status),
+        undefined,
+        resolve,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { onParsedPayload: payload => parsed.push(payload) },
+      );
+    });
+
+    source.push(errorFrame({ type: "error", message: "flat reset" }));
+    source.close();
+    await done;
+
+    expect(parsed).toEqual([{ type: "error", message: "flat reset" }]);
+    expect(terminals).toEqual(["failed"]);
+  });
+
+  test("a real completed terminal after a bare error still wins", async () => {
+    const source = controlledStream();
+    const terminals: string[] = [];
+    const completed: unknown[] = [];
+    const done = new Promise<void>(resolve => {
+      consumeForInspection(
+        source.stream,
+        status => terminals.push(status),
+        undefined,
+        resolve,
+        undefined,
+        undefined,
+        response => completed.push(response),
+      );
+    });
+
+    source.push(errorFrame({ type: "error", error: { message: "nested reset" } }));
+    source.push(completedFrame("after-error"));
+    source.close();
+    await done;
+
+    expect(terminals).toEqual(["completed"]);
+    expect(completed).toHaveLength(1);
+  });
+
+  test("stale logCtx.upstreamError without a bare error remains incomplete", async () => {
+    const source = controlledStream();
+    const logCtx: RequestLogContext = { model: "m", provider: "p", upstreamError: "stale borrowed failure" };
+    let terminalStatus: string | null = null;
+    const done = new Promise<void>(resolve => {
+      consumeForInspection(
+        source.stream,
+        status => { terminalStatus = status; },
+        undefined,
+        resolve,
+        logCtx,
+      );
+    });
+
+    source.push(encoder.encode("data: {\"type\":\"response.output_item.added\"}\n\n"));
+    source.close();
+    await done;
+
+    expect(terminalStatus).toBe("incomplete");
+  });
+
+  test("cancellation after a bare error stays neutral", async () => {
+    const source = controlledStream();
+    const ac = new AbortController();
+    let terminals = 0;
+    let cancels = 0;
+    let markParsed!: () => void;
+    const parsed = new Promise<void>(resolve => { markParsed = resolve; });
+    const done = new Promise<void>(resolve => {
+      consumeForInspection(
+        source.stream,
+        () => { terminals += 1; },
+        ac.signal,
+        resolve,
+        undefined,
+        () => { cancels += 1; },
+        undefined,
+        undefined,
+        { onParsedPayload: () => markParsed() },
+      );
+    });
+
+    source.push(errorFrame({ type: "error", message: "reset then cancel" }));
+    await parsed;
+    ac.abort();
+    await done;
+
+    expect(terminals).toBe(0);
+    expect(cancels).toBe(1);
+  });
+});

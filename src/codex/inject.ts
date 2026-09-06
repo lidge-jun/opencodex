@@ -6,6 +6,7 @@ import {
   readConfigAdmissionSnapshot,
   subagentDefaultSyncEffective,
   websocketsEnabled,
+  withConfigMutationLockSync,
 } from "../config";
 import { CodexWriteLockSkipped, withCodexWriteLock } from "./codex-write-lock";
 import { shouldSyncCodexOnStart } from "./desired-state";
@@ -148,6 +149,18 @@ export interface InjectCodexOptions {
   /** Explicit remote routing target. Absence preserves byte-compatible standalone output. */
   routingTarget?: CodexRoutingTarget;
   journalOwner?: { kind: "process" } | { kind: "client"; apiKeyId: string };
+  /** Synchronous read-only client ownership guard, evaluated at the artifact commit boundary. */
+  beforeClientWrite?: () => void;
+}
+
+function runClientWriteGuard(guard: InjectCodexOptions["beforeClientWrite"]): void {
+  const result: unknown = guard?.();
+  if (result !== null && (typeof result === "object" || typeof result === "function")
+    && typeof (result as { then?: unknown }).then === "function") {
+    // Reject async guards without leaving their eventual rejection unhandled.
+    void Promise.resolve(result).catch(() => {});
+    throw new Error("Connected client write guard must be synchronous");
+  }
 }
 
 export interface CodexRoutingTarget {
@@ -901,7 +914,14 @@ export async function injectCodexConfig(
   if (activeProvider) {
     // A launcher may have journaled before the provider manager took ownership. Never let shutdown
     // replay that stale snapshot over externally managed config.
-    if (!options.validateOnly) removeJournal();
+    if (!options.validateOnly) {
+      if (options.beforeClientWrite) {
+        withConfigMutationLockSync(() => {
+          runClientWriteGuard(options.beforeClientWrite);
+          removeJournal();
+        });
+      } else removeJournal();
+    }
     const nativeSubagentDefaultsWarning = configuredManagedSubagentDefaults(
       config,
     )
@@ -974,8 +994,8 @@ export async function injectCodexConfig(
   // not-ours (which would make them unrestorable).
   content = stripJournaledOpenaiBaseUrl(
     content,
-    journaledInjectedOpenaiBaseUrl(),
-    journaledInjectedRealtimeWsBaseUrl(),
+    journaledInjectedOpenaiBaseUrl({ readOnly: !!options.beforeClientWrite }),
+    journaledInjectedRealtimeWsBaseUrl({ readOnly: !!options.beforeClientWrite }),
   );
   if (hasOcxProviderTable(content)) {
     content = removeOcxSection(content);
@@ -1179,17 +1199,24 @@ export async function injectCodexConfig(
   let transitionReceipt: { nativeGeneration: number; currentTxId: string } | undefined;
 
   if (eligibility.kind === "legacy-uncoordinated") {
-    // Unchanged behavior for homes the coordinator cannot yet adopt. Stated
-    // rather than implied: this is the boundary, and adoption is its own phase.
-    if (!shouldSyncCodexOnStart(loadConfig())) {
-      return {
-        success: true,
-        status: "skipped",
-        skippedReason: "desired_disabled",
-        message: "Codex integration is OFF; no Codex config, catalog, cache, or history was changed.",
-      };
-    }
-    applyNativeArtifacts();
+    const applyLegacy = (): CodexInjectResult | undefined => {
+      if (!shouldSyncCodexOnStart(loadConfig())) {
+        return {
+          success: true,
+          status: "skipped",
+          skippedReason: "desired_disabled",
+          message: "Codex integration is OFF; no Codex config, catalog, cache, or history was changed.",
+        };
+      }
+      runClientWriteGuard(options.beforeClientWrite);
+      applyNativeArtifacts();
+    };
+    // Only connected guarded writes add C here. A concurrent disconnect claim
+    // either follows this commit or is observed by the guard before any write.
+    const skipped = options.beforeClientWrite
+      ? withConfigMutationLockSync(applyLegacy)
+      : applyLegacy();
+    if (skipped) return skipped;
   } else {
     const coordinated = await withCodexWriteLock(
       {
@@ -1210,6 +1237,10 @@ export async function injectCodexConfig(
         if (!shouldSyncCodexOnStart(loadConfig())) {
           throw new CodexWriteLockSkipped("desired_disabled");
         }
+        // N and C are held here. Reject stale client work before publishing a
+        // transition or capturing preimages; rejection must not compensate over
+        // a disconnect's restored files.
+        runClientWriteGuard(options.beforeClientWrite);
         /*
          * Publish BEFORE touching the filesystem. `assertPublished` runs after this
          * callback returns and throws unless a transition was recorded, so writing

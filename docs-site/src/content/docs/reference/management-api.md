@@ -94,7 +94,47 @@ For the concepts behind the model roster and encrypted worker-task behavior, see
 | `DELETE /api/client-integrations/journal?opId=...` | Retire one older rollback operation and remove its snapshot when possible. Success returns `snapshotRemoved`; `false` means cleanup was retained for maintenance retry. | 400 missing `opId`; 404 missing or already retired operation; 409 newest operation for that client |
 
 Deletion appends a tombstone instead of rewriting the journal. The newest operation for each client
-is protected server-side so the current undo point remains available.
+is protected server-side so the current undo point remains available. For Aside, protection is
+per profile, and journal rows include `profileId`.
+
+### Aside profile controls
+
+Use these dedicated paths with a compatible running proxy. `{profileId}` is a registered
+nonnegative integer account ID returned by the profile list; it is not a browser path.
+
+| Method and path | Purpose | Notable errors |
+| --- | --- | --- |
+| `GET /api/client-integrations/aside/profiles` | List `profiles[]`, desired `enabledCount`/`allEnabled`, actual `appliedCount`, and `total` | HTTP 200 may contain an empty, unsafe aggregate with an `error` when discovery is unavailable |
+| `PUT /api/client-integrations/aside/profiles` | Set every registered profile's desired state and apply it; body `{ "enabled": true }`, with optional `overwriteConflict` when enabling | 400 invalid body; 409 operation busy; 500 preference-save failure; 207 per-profile refusals |
+| `GET /api/client-integrations/aside/profiles/{profileId}` | Read one profile's desired `enabled` and actual integration status | 400 invalid ID; 404 unregistered profile |
+| `PUT /api/client-integrations/aside/profiles/{profileId}` | Change one profile with the same body as bulk PUT, leaving sibling preferences unchanged | 400 invalid body/ID; 404 unknown profile; 409 busy or refusal; 500 save/write failure |
+| `GET /api/client-integrations/aside/profiles/journal` | List history across registered Aside profiles | Rows include `profileId`, snapshot availability, `undoable`, and `deletable` |
+| `GET /api/client-integrations/aside/profiles/{profileId}/journal` | List one profile's history, including matching legacy operations | 400 invalid ID; 404 unknown profile |
+| `DELETE /api/client-integrations/aside/profiles/journal?opId=...` | Retire an older operation, resolving its profile from history | 400 missing ID; 404 missing operation; 409 newest operation for its profile |
+| `DELETE /api/client-integrations/aside/profiles/{profileId}/journal?opId=...` | Retire an older operation belonging to the selected profile | Same deletion errors; an operation cannot target a different profile |
+| `POST /api/client-integrations/aside/profiles/{profileId}/restore` | Undo an operation using `{ "opId": "..." }`; optional `confirmDrift: true` permits replacing later edits | 404 missing operation/profile; 409 busy, mismatch, or required drift confirmation; 410 expired snapshot; 500 save/write failure |
+| `POST /api/client-integrations/aside/sync` | Refresh enabled profiles through the server's mutation owner; body `{}` | 400 nonempty body/profile selector; 409 busy; 207 per-profile refusals |
+
+Bulk PUT returns `{ ok, clientId, changed, state, message, results }`; each result identifies
+its `profileId` and reports the writer outcome. Sync returns `{ ok, clientId, results }`, with
+per-profile refresh outcomes. Both return HTTP 200 when all returned attempts succeed and
+HTTP 207 with `ok: false` when any attempt refuses. HTTP 207 is a partial-result envelope,
+including when every attempted profile refuses: inspect each result rather than treating a
+2xx response as complete success. A successful no-op can have `changed: false`; sync does not
+attempt disabled profiles. Single-profile writes and restores return HTTP 200 on success or
+the corresponding error status on refusal.
+
+Explicit changes save desired preferences before writing files. A preference-save failure
+leaves profile files unchanged. A later file refusal preserves saved intent and successful
+sibling writes; inspect the affected profile before retrying. Refusals may include
+`snapshotPath` and `residual: true` when recovery did not finish. Restore also reconciles the
+target profile's desired state, so the next sync does not reverse Undo. Deletion returns
+`snapshotRemoved`; `false` means snapshot cleanup still needs maintenance.
+
+The legacy `GET, PUT /api/client-integrations/aside` aliases remain available. New clients
+should use the dedicated paths above so an older proxy cannot ignore a profile selector.
+See [Aside profile controls](/guides/integrations/#aside-profile-controls) for CLI commands and
+the proxy upgrade, restart, and retry sequence.
 
 ### Combos
 
@@ -145,6 +185,14 @@ See [Combos](/guides/combos/) for target strategies, cooldowns, aliases, and rou
 | `POST /api/storage/cleanup-policy/run` | Start a manual cleanup-policy run | 409 `already_running`; 500 `cleanup_failed` |
 | `GET /api/storage/cleanup-policy/test-stream` | Test-only policy stream hook | 404 `not_found` when unavailable |
 
+New xAI attempts in `usage.jsonl` include a request-time `credentialSource`: `grok-oauth`
+for the resolved Grok CLI OAuth transport, or `xai-api-key` for the public xAI API key
+transport. This fixed label contains no credential or account identifier. It belongs to
+each item in `attempts`, so a combo's aggregate token total must not be attributed to its
+final provider. Custom destinations and historic rows omit the field; consumers must not
+infer subscription usage from the current configuration, model name, or inbound API key.
+The log reports usage, not subscription invoice amounts.
+
 `GET /api/usage` reads `~/.opencodex/usage.jsonl` from the beginning through the current ledger
 snapshot on a cold start. It processes fixed 1 MiB chunks and retains compact aggregate state rather
 than every normalized request row. Later refreshes validate the previous line boundary and fold only
@@ -191,13 +239,30 @@ first and submit the returned digest. Prefer quarantine when recovery may be nee
 | `GET /api/models` | Return the dashboard/CLI model rows | `catalog_busy` when gathering is saturated |
 | `GET /api/client-config?client=...` | Build a read-only client config for any supported file integration | 400 unsupported client; 503 catalog unavailable |
 | `PUT /api/disabled-models` | Replace the shared disabled-model list | 400 invalid JSON |
-| `PUT /api/model-visibility` | Atomically change provider- or model-level visibility | 400 invalid provider, scope, target, or body |
+| `PUT /api/model-visibility` | Atomically change provider- or model-level visibility | 400 invalid provider, scope, target, or body; 409 `initial_model_selection_pending` (refresh the model list and retry) |
 | `GET, POST /api/custom-models` | List custom models or add one | 400 invalid fields; 404 provider missing; 409 duplicate model |
 | `PUT, DELETE /api/custom-models/{id}` | Edit or delete one custom model | 400 invalid id/fields; 404 not found; 409 duplicate model |
 | `GET, PUT /api/selected-models` | Read provider allowlists and availability, or replace one allowlist | 400 missing provider/body; 404 unknown provider; PUT 409 `initial_model_selection_pending` |
 | `GET, PUT /api/model-presets` | Read preset summaries or choose preset/all/custom mode | 400 invalid mode or unsupported preset; 404 unknown provider; PUT 409 `initial_model_selection_pending` |
 
+A manual model replaces the Models dashboard row with the same provider and model ID.
+For OpenAI, the manual row keeps `openai/<model>` and supports the same visibility controls
+as other routed models; removing it restores the bare native dashboard row. Explicit
+account-qualified native rows stay separate. This does not rename bare native routes or
+change account entitlements. Non-native OpenAI visibility targets must match a configured
+manual model.
+
 Valid PUT requests to `/api/selected-models` and `/api/model-presets` return HTTP 409 with code `initial_model_selection_pending` until a reliable initial model list is available. Refresh model discovery (for example, `GET /api/models`) and retry after it succeeds.
+
+Successful visibility/selection writes to `/api/disabled-models`, `/api/model-visibility`,
+`/api/selected-models`, and `/api/model-presets` report follow-up outcomes in `catalogRefresh`
+and `clientIntegrations` when that refresh path runs. HTTP 200 and `ok: true` confirm the
+selection save; they do not guarantee every client catalog updated. Inspect
+`clientIntegrations[]` for `ok: false`, `client`, optional Aside `profileId`, and the refusal
+`reason`; recovery details may also include `refusalReason`, `snapshotPath`, and `residual`.
+The Models page keeps the saved selection and shows a separate client-refresh warning.
+Inspect Integrations and resolve the reported issue before retrying `ocx sync`. Missing
+outcome fields from an older server do not establish successful recovery.
 
 ### OAuth accounts, provider keys, and data-plane keys
 
@@ -236,6 +301,18 @@ keys are not returned to dashboard clients.
 | `GET /api/quota-resets` | List recently detected quota-window resets and whether detection is enabled; `limit=<n>` caps the count | 400 invalid `limit` |
 | `GET, PUT /api/provider-context-caps` | Read or update global, all-provider, or one-provider context caps | 400 invalid request; 404 unknown provider |
 | `GET /api/provider-presets` | Return GUI provider presets derived from the runtime registry | — |
+
+The provider context-cap response includes `caps` (active limits) and `values` (last selected
+values, retained while disabled). Enabling a provider without `value` restores its selection,
+or uses the global `contextCapValue` on first enable. This also applies to OpenAI: the switch
+does not select a special 922k mode. An active cap bounds every native window; models with a
+supported long-context window may expand only up to their own supported ceiling.
+Updating the global value with `{ "value": 600000, "setAll": true }` changes only enabled
+provider caps; disabled providers keep their remembered selections when later enabled.
+In contrast, `{ "setAll": true }` without `value` enables every configured provider at the
+current global value, replacing their remembered selections. Turning a cap off does not
+activate its remembered value or erase the selection.
+
 
 `provider_has_dependent_combos` is a safety barrier: remove or edit the dependent combos before
 deleting their provider.

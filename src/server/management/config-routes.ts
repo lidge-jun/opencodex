@@ -1,3 +1,4 @@
+import type { IntegrationClientId } from "../../integrations/registry";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../../codex/catalog";
@@ -8,6 +9,7 @@ import {
   deleteConfigTopLevelKey,
   hasOwnProvider,
   isValidProviderName,
+  loadConfig,
   multiAgentGuidanceEnabled,
   providerBaseUrlConfigError,
   providerHeadersConfigError,
@@ -151,10 +153,11 @@ async function sidecarVisionResponseSettings(config: OcxConfig): Promise<{
 
 /** One client's outcome from a fan-out sync. Absent from the list means "left alone". */
 interface ClientIntegrationSyncOutcome {
-  readonly client: "grok" | "claude-desktop" | "mcode";
+  readonly client: "grok" | "claude-desktop" | IntegrationClientId;
   readonly ok: boolean;
   readonly changed?: boolean;
   readonly reason?: string;
+  readonly profileId?: number;
 }
 
 /**
@@ -171,9 +174,10 @@ interface ClientIntegrationSyncOutcome {
  * does not fail the sync: Codex is the one that matters for routing, and a broken Grok file
  * should surface as a warning, not as a 500 on a command that did its main job.
  */
-async function syncEnabledClientIntegrations(
+export async function syncEnabledClientIntegrations(
   port: number | undefined,
   config: OcxConfig,
+  deps: Pick<ManagementContext["deps"], "fetchAllModels" | "writeDesktop3pConfig"> = {},
 ): Promise<ClientIntegrationSyncOutcome[]> {
   if (port === undefined) return [];
   const { claudeDesktopIntegrationEnabled, grokIntegrationEnabled } = await import("../../codex/desired-state");
@@ -196,49 +200,40 @@ async function syncEnabledClientIntegrations(
       const { writeDesktop3pConfig } = await import("../../claude/desktop-3p");
       const { desktopVisibleNativeSlugs, filterCatalogVisibleModels } = await import("../../codex/catalog");
       const { fetchAllModels } = await import("../management-api");
-      const routed = filterCatalogVisibleModels(await fetchAllModels(config), config)
-        .map(model => ({ provider: model.provider, id: model.id, contextWindow: model.contextWindow }));
-      const r = writeDesktop3pConfig(
-        port,
-        [...desktopVisibleNativeSlugs(config)],
-        routed,
-        config.apiKeys?.[0]?.key,
-        "static",
-        config.claudeCode?.desktopProfile,
-        nativeContextLimits(config),
-      );
-      out.push(r.written
-        ? { client: "claude-desktop", ok: true, changed: true }
-        : { client: "claude-desktop", ok: false, reason: r.reason ?? "Claude Desktop write failed" });
+      const models = await (deps.fetchAllModels ?? fetchAllModels)(config);
+      // Discovery admits a concurrent OFF or settings edit. Re-read outside C:
+      // the writer facade owns L and its final desired-state check under L→C.
+      const latest = loadConfig();
+      if (claudeDesktopIntegrationEnabled(latest)) {
+        const routed = filterCatalogVisibleModels(models, latest)
+          .map(model => ({ provider: model.provider, id: model.id, contextWindow: model.contextWindow }));
+        const r = (deps.writeDesktop3pConfig ?? writeDesktop3pConfig)(
+          port,
+          [...desktopVisibleNativeSlugs(latest)],
+          routed,
+          latest.apiKeys?.[0]?.key,
+          "static",
+          latest.claudeCode?.desktopProfile,
+          nativeContextLimits(latest),
+        );
+        out.push(r.written
+          ? { client: "claude-desktop", ok: true, changed: true }
+          : { client: "claude-desktop", ok: false, reason: r.reason ?? "Claude Desktop write failed" });
+      }
     } catch (error) {
       out.push({ client: "claude-desktop", ok: false, reason: error instanceof Error ? error.message : String(error) });
     }
   }
 
-  try {
-    const { refreshOwnedIntegration } = await import("../../integrations/owned-refresh");
-    const result = await refreshOwnedIntegration({
-      clientId: "mcode",
-      models: async () => {
-        const { loadExportModels } = await import("./model-rows");
-        return loadExportModels(config);
-      },
-      config,
-      port,
-    });
-    if (result) {
-      out.push(result.ok
-        ? {
-            client: "mcode",
-            ok: true,
-            changed: result.changed === true,
-            ...(result.reason ? { reason: result.reason } : {}),
-          }
-        : { client: "mcode", ok: false, reason: result.reason });
-    }
-  } catch (error) {
-    out.push({ client: "mcode", ok: false, reason: error instanceof Error ? error.message : String(error) });
-  }
+  const { refreshOwnedCatalogIntegrations } = await import("../../integrations/catalog-refresh");
+  out.push(...await refreshOwnedCatalogIntegrations({
+    models: async () => {
+      const { loadExportModels } = await import("./model-rows");
+      return loadExportModels(config);
+    },
+    config,
+    port,
+  }, ["mcode", "pi", "aside"]));
 
   return out;
 }
@@ -651,7 +646,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     // for the on-demand command. Codex goes first because the others read its catalog.
     const integrations = result.status === "refused"
       ? []
-      : await syncEnabledClientIntegrations(runtime?.port, config);
+      : await syncEnabledClientIntegrations(runtime?.port, config, deps);
     const status = result.status === "refused" ? 409 : (result.status === "skipped" || result.ok ? 200 : 500);
     return jsonResponse({
       ...attachStaleAppServerHint(result),

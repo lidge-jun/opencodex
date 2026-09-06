@@ -4,7 +4,8 @@ import { mkdtempSync, readdirSync, readFileSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, saveConfig } from "../../src/config";
-import { startServer } from "../../src/server";
+import { startServer as startServerImpl } from "../../src/server";
+import { writeDesktop3pConfig, removeDesktop3pStandardPivot } from "../../src/claude/desktop-3p";
 import * as systemEnv from "../../src/server/system-env";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -20,6 +21,19 @@ let previousHome: string | undefined;
 let previousClaudeConfigDir: string | undefined;
 let previousDesktopConfigDir: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
+
+// Keep the production SQLite kernel while each fixture owns its lock namespace.
+function startServer(port?: number, deps: NonNullable<Parameters<typeof startServerImpl>[1]> = {}) {
+  return startServerImpl(port, {
+    ...deps,
+    managementApi: {
+      writeDesktop3pConfig: (port, slugs, models, key, mode, profile, cap) =>
+        writeDesktop3pConfig(port, slugs, models, key, mode, profile, cap, { lockPath: join(testDir, "lifecycle.sqlite") }),
+      removeDesktop3pStandardPivot: options => removeDesktop3pStandardPivot({ ...options, lifecycleLockDeps: { lockPath: join(testDir, "lifecycle.sqlite") } }),
+      ...deps.managementApi,
+    },
+  });
+}
 
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;

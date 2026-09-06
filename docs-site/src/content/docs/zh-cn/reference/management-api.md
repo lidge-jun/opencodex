@@ -144,11 +144,14 @@ Authorization: Bearer <admin-token>
 | `GET /api/models` | 返回仪表板/CLI 模型行 | 收集饱和时返回 `catalog_busy` |
 | `GET /api/client-config?client=...` | 为任意支持的文件集成构建只读客户端配置 | 400 不支持的客户端；503 目录不可用 |
 | `PUT /api/disabled-models` | 替换共享的禁用模型列表 | 400 无效 JSON |
-| `PUT /api/model-visibility` | 原子性地更改 provider 级或 model 级可见性 | 400 provider、scope、target 或请求体无效 |
+| `PUT /api/model-visibility` | 原子性地更改 provider 级或 model 级可见性 | 400 provider、scope、target 或请求体无效; 409 `initial_model_selection_pending` (刷新模型列表后重试。) |
 | `GET, POST /api/custom-models` | 列出自定义模型或添加一个 | 400 字段无效；404 provider 缺失；409 模型重复 |
 | `PUT, DELETE /api/custom-models/{id}` | 编辑或删除一个自定义模型 | 400 id/字段无效；404 未找到；409 模型重复 |
 | `GET, PUT /api/selected-models` | 读取 provider 允许列表和可用性，或替换一个允许列表 | 400 缺少 provider/请求体；404 未知 provider; PUT 409 `initial_model_selection_pending` |
 | `GET, PUT /api/model-presets` | 读取预设信息或选择 preset/all/custom 模式 | 400 模式无效或不支持该预设；404 未知提供者; PUT 409 `initial_model_selection_pending` |
+
+手动模型会替换 Models 仪表板中 provider 和 model ID 相同的行。OpenAI 手动行保留 `openai/<model>`，并支持可见性控制。删除手动行后，不带账户限定符的原生行会恢复。带账户限定符的原生行仍单独保留。原生路由和账户权限不会改变。非原生 OpenAI 可见性目标必须匹配已配置的手动模型。
+
 
 可靠的初始模型列表尚未确认时，有效的 `PUT /api/selected-models` 和 `PUT /api/model-presets` 请求也会返回 HTTP 409 和代码 `initial_model_selection_pending`。请使用 `GET /api/models` 等方式刷新模型列表，成功后再重试。
 
@@ -187,6 +190,14 @@ Authorization: Bearer <admin-token>
 | `GET /api/provider-quotas` | 读取 provider 配额报告；`refresh=1` 会强制刷新 | — |
 | `GET, PUT /api/provider-context-caps` | 读取或更新全局、全部 provider，或单个 provider 的上下文上限 | 400 请求无效；404 未知 provider |
 | `GET /api/provider-presets` | 返回从运行时注册表派生的 GUI provider 预设 | — |
+
+上下文上限响应包含 `caps`（当前有效的上限）和 `values`（关闭后仍保留的最后选择值）。
+开启提供商的上限时，如果未指定 `value`，则恢复其选择值；首次开启时使用全局 `contextCapValue`。
+OpenAI 也遵循此规则：开关不会选择特殊的 922k 模式。有效上限约束每个原生窗口；支持长上下文的模型
+只能扩展到该模型支持的上限。
+`{ "value": 600000, "setAll": true }` 修改全局值，并且只更新已开启的上限；上限已关闭的提供商保留
+自己的选择值，供之后开启时恢复。不带 `value` 的 `{ "setAll": true }` 会按当前全局值开启所有
+已配置提供商的上限，并替换保存的选择值。关闭上限不会清除选择值，重新加载后仍保留，但不会将其作为限制应用。
 
 `provider_has_dependent_combos` 是一个安全屏障：在删除 provider 之前，先移除或编辑依赖它的 combos。
 

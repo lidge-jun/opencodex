@@ -249,7 +249,9 @@ export function relaySseWithBlockRewrite(
       } catch (error) {
         releaseBuffer();
         disposeRewrite();
-        try { await reader.cancel(error); } catch { /* already closed */ }
+        // Cancelling one tee branch waits for its sibling. Surface the failure
+        // now so downstream can abort upstream and release the inspection branch.
+        void reader.cancel(error).catch(() => {});
         controller.error(error);
       }
     },

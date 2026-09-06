@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { restoreRoutedCustomCalls, rewriteRoutedCustomToolsForUpstream } from "../../src/responses/custom-tool-compat";
 import {
   createRoutedNamespaceCallRestoreRewrite,
   restoreRoutedNamespaceCalls,
@@ -67,6 +68,7 @@ describe("Responses namespace tool compatibility", () => {
     ]);
     expect([...rewritten.aliases]).toEqual([
       ["collaboration__spawn_agent", { namespace: "collaboration", name: "spawn_agent", kind: "function" }],
+      ["collaboration.spawn_agent", { namespace: "collaboration", name: "spawn_agent", kind: "function" }],
     ]);
   });
 
@@ -124,6 +126,7 @@ describe("Responses namespace tool compatibility", () => {
     });
     expect([...allowed.aliases]).toEqual([
       ["collaboration__safe", { namespace: "collaboration", name: "safe", kind: "function" }],
+      ["collaboration.safe", { namespace: "collaboration", name: "safe", kind: "function" }],
     ]);
     expect(restoreRoutedNamespaceCalls({
       type: "function_call",
@@ -237,7 +240,7 @@ describe("Responses namespace tool compatibility", () => {
           ],
         },
       });
-      expect([...aliases.keys()]).toEqual([wireName]);
+      expect([...aliases.keys()]).toEqual([wireName, "collaboration.safe"]);
     });
   });
 
@@ -253,7 +256,7 @@ describe("Responses namespace tool compatibility", () => {
       const { aliases } = rewriteRoutedNamespaceToolsForUpstream(
         choice === undefined ? { tools } : { tools, tool_choice: choice },
       );
-      expect(aliases.size).toBe(2);
+      expect(aliases.size).toBe(4);
     }
     // A top-level selector for another tool kind states a restriction that no
     // namespace call satisfies, so it authorizes nothing.
@@ -482,6 +485,7 @@ describe("Responses namespace tool compatibility", () => {
   test("restores only aliases authorized by this request in JSON and SSE payloads", () => {
     const aliases = new Map([
       ["collaboration__spawn_agent", { namespace: "collaboration", name: "spawn_agent", kind: "function" }],
+      ["collaboration.spawn_agent", { namespace: "collaboration", name: "spawn_agent", kind: "function" }],
     ]);
     const payload = {
       type: "response.completed",
@@ -515,5 +519,70 @@ describe("Responses namespace tool compatibility", () => {
       ] },
     });
     expect(restoreRoutedNamespaceCallsInJson("not-json", aliases)).toBe("not-json");
+  });
+});
+
+describe("dotted namespace restoration uses the declaration collision boundary", () => {
+  const ping = { type: "namespace", name: "mcp", tools: [{ type: "function", name: "ping", parameters: {} }] };
+  test.each(["mcp.ping", "mcp__ping"])("preserves a custom call whose alias %s declares an ordinary function", name => {
+    const { aliases } = rewriteRoutedNamespaceToolsForUpstream({ tools: [ping] });
+    expect(aliases.get(name)?.kind).toBe("function");
+    for (const namespace of [undefined, "mcp"]) {
+      const call = { type: "custom_tool_call", name, call_id: "call_ping", input: "raw custom input",
+        ...(namespace === undefined ? {} : { namespace }) };
+      expect(restoreRoutedNamespaceCalls(call, aliases)).toEqual({ value: call, changed: false });
+      expect(restoreRoutedNamespaceCalls(call, aliases).value).toBe(call);
+      const text = JSON.stringify({ type: "response.completed", response: { output: [call] } }, null, 2);
+      expect(restoreRoutedNamespaceCallsInJson(text, aliases)).toBe(text);
+      expect(createRoutedNamespaceCallRestoreRewrite(aliases)(text)).toBe(text);
+    }
+  });
+
+  test.each(["mcp.run", "mcp__run"])("restores the declared custom tool after upstream function downgrade via %s", name => {
+    const downgraded = rewriteRoutedCustomToolsForUpstream({
+      tools: [{ type: "namespace", name: "mcp", tools: [{ type: "custom", name: "run", description: "Run raw input" }] }],
+    }, false);
+    const namespaced = rewriteRoutedNamespaceToolsForUpstream(downgraded.body, downgraded.names);
+    expect(namespaced.body).toMatchObject({ tools: [{ type: "function", name: "mcp__run" }] });
+    expect(downgraded.names.has("mcp__run")).toBe(true);
+    expect(namespaced.aliases.get(name)?.kind).toBe("custom");
+    const call = { type: "function_call", name, id: "fc_run", call_id: "call_run", arguments: '{"input":"echo ready"}' };
+    const restored = restoreRoutedNamespaceCalls(call, namespaced.aliases);
+    expect(restored).toEqual({ changed: true, value: { ...call, name: "run", namespace: "mcp" } });
+    expect(restoreRoutedCustomCalls({ output: [restored.value] }, downgraded.names).value).toEqual({
+      output: [{ type: "custom_tool_call", name: "run", namespace: "mcp", id: "ctc_run", call_id: "call_run", input: "echo ready" }],
+    });
+    const nativeCustom = { type: "custom_tool_call", name, input: "raw custom input" };
+    expect(restoreRoutedNamespaceCalls(nativeCustom, namespaced.aliases).value)
+      .toEqual({ ...nativeCustom, name: "run", namespace: "mcp" });
+  });
+
+  test("restores the dotted spelling after canonical tool-choice authorization", () => {
+    const { aliases } = rewriteRoutedNamespaceToolsForUpstream({ tools: [ping], tool_choice: { type: "function", namespace: "mcp", name: "ping" } });
+    expect(restoreRoutedNamespaceCalls({ type: "function_call", name: "mcp.ping", arguments: "{}" }, aliases).value)
+      .toEqual({ type: "function_call", name: "ping", namespace: "mcp", arguments: "{}" });
+    const conflicting = { type: "function_call", name: "mcp.ping", namespace: "other", arguments: "{}" };
+    expect(restoreRoutedNamespaceCalls(conflicting, aliases).value).toEqual(conflicting);
+  });
+  test.each([
+    { type: "function", name: "mcp.ping", parameters: {} },
+    { type: "namespace", name: "functions", tools: [{ type: "function", name: "mcp.ping", parameters: {} }] },
+  ])("a bare canonical declaration prevents dotted shadowing in either order", collision => {
+    for (const tools of [[ping, collision], [collision, ping]]) {
+      const { aliases } = rewriteRoutedNamespaceToolsForUpstream({ tools, tool_choice: { type: "function", namespace: "mcp", name: "ping" } });
+      expect(aliases.has("mcp.ping")).toBe(false);
+      expect(aliases.has("mcp__ping")).toBe(true);
+    }
+  });
+  test("different dotted coordinates remain ambiguous and canonical forms remain distinct", () => {
+    for (const tools of [
+      [{ type: "namespace", name: "a.b", tools: [{ type: "function", name: "c" }] }, { type: "namespace", name: "a", tools: [{ type: "function", name: "b.c" }] }],
+      [{ type: "namespace", name: "a", tools: [{ type: "function", name: "b.c" }] }, { type: "namespace", name: "a.b", tools: [{ type: "function", name: "c" }] }],
+    ]) {
+      const { aliases } = rewriteRoutedNamespaceToolsForUpstream({ tools });
+      expect(aliases.has("a.b.c")).toBe(false);
+      expect(aliases.has("a.b__c")).toBe(true);
+      expect(aliases.has("a__b.c")).toBe(true);
+    }
   });
 });

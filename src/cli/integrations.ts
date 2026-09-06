@@ -1,5 +1,6 @@
 import {
   CliUsageError,
+  RuntimeApiError,
   csv,
   printData,
   rejectArgs,
@@ -28,10 +29,25 @@ const GROK_USAGE = `Usage:
   ocx grok apply [--json]`;
 
 const CLIENT_USAGE = `Usage:
-  ocx integration client [status] [--client <id>] [--json]
-  ocx integration client <enable|disable> --client <id> [--overwrite-conflict] [--json]
-  ocx integration client history [--client <id>] [--json]
-  ocx integration client restore --op <opId> [--confirm-drift] [--json]`;
+  ocx integration client [status] [--client <id>] [--profile <id>] [--json]
+  ocx integration client <enable|disable> --client <id> [--profile <id>] [--overwrite-conflict] [--json]
+  ocx integration client history [--client <id>] [--profile <id>] [--json]
+  ocx integration client restore --op <opId> [--client aside --profile <id>] [--confirm-drift] [--json]
+  --profile selects one Aside account-backed profile; omitted Aside toggles affect all profiles.`;
+
+function validateAsideProfile(profile: string | undefined, client: string | undefined): void {
+  if (profile === undefined) return;
+  if (client !== "aside") throw new CliUsageError("--profile requires --client aside", CLIENT_USAGE);
+  if (!/^(0|[1-9][0-9]*)$/.test(profile) || !Number.isSafeInteger(Number(profile))) {
+    throw new CliUsageError("--profile must be a nonnegative integer account ID", CLIENT_USAGE);
+  }
+
+}
+
+function clientIntegrationPath(client: string, profile?: string): string {
+  const base = `/api/client-integrations/${encodeURIComponent(client)}`;
+  return client === "aside" ? `${base}/profiles${profile === undefined ? "" : `/${encodeURIComponent(profile)}`}` : base;
+}
 
 function parseMap(raw: string): Record<string, string> {
   if (raw === "-") return {};
@@ -163,16 +179,23 @@ export async function handleClientIntegrationCommand(
     const args = [...argv];
     const action = (args.shift() ?? "status").toLowerCase();
     const wantsJson = takeFlag(args, "--json");
+    const profile = takeOption(args, "--profile");
 
     if (action === "status" || action === "show" || action === "list") {
       const client = takeOption(args, "--client");
+      validateAsideProfile(profile, client);
       rejectArgs(args, CLIENT_USAGE);
       const path = client
-        ? `/api/client-integrations/${encodeURIComponent(client)}`
+        ? clientIntegrationPath(client, profile)
         : "/api/client-integrations";
       const result = await runtimeRequest(path, {}, deps);
       const rows = (result as { clients?: Array<Record<string, unknown>> }).clients;
-      printData(result, wantsJson, rows
+      const profiles = (result as { profiles?: Array<Record<string, unknown>> }).profiles;
+      printData(result, wantsJson, profiles
+        ? profiles.length > 0
+          ? profiles.map(row => `${String(row.profileId)}  ${String(row.name ?? "Aside")}: ${row.enabled ? "on" : "off"} (${String(row.state)})${row.current ? " [current]" : ""}`)
+          : [String((result as { error?: string }).error ?? "No Aside profiles found.")]
+        : rows
         ? rows.map(row => `${String(row.clientId)}: ${String(row.state)}${row.installed ? "" : " (not installed)"}`)
         : summaryLines(result));
       return;
@@ -180,9 +203,11 @@ export async function handleClientIntegrationCommand(
 
     if (action === "history" || action === "journal") {
       const client = takeOption(args, "--client");
+      validateAsideProfile(profile, client);
       rejectArgs(args, CLIENT_USAGE);
-      const query = client ? `?client=${encodeURIComponent(client)}` : "";
-      const result = await runtimeRequest(`/api/client-integrations/journal${query}`, {}, deps);
+      const path = client === "aside" ? `${clientIntegrationPath(client, profile)}/journal`
+        : `/api/client-integrations/journal${client ? `?client=${encodeURIComponent(client)}` : ""}`;
+      const result = await runtimeRequest(path, {}, deps);
       const operations = (result as { operations?: Array<Record<string, unknown>> }).operations ?? [];
       printData(result, wantsJson, operations.length === 0
         ? ["No integration operations recorded yet."]
@@ -190,7 +215,8 @@ export async function handleClientIntegrationCommand(
           // `snapshot` is resolved against the disk by the route, so "expired"
           // here means the bytes are genuinely gone, not merely old.
           const backup = row.snapshot === "expired" ? "backup expired" : `op ${String(row.opId)}`;
-          return `${String(row.at)}  ${String(row.clientId)}  ${String(row.kind)}  (${backup})`;
+          const owner = row.profileId === undefined ? String(row.clientId) : `${String(row.clientId)}:${String(row.profileId)}`;
+          return `${String(row.at)}  ${owner}  ${String(row.kind)}  (${backup})`;
         }));
       return;
     }
@@ -198,9 +224,12 @@ export async function handleClientIntegrationCommand(
     if (action === "restore") {
       const opId = takeOption(args, "--op") ?? takeOption(args, "--op-id");
       const confirmDrift = takeFlag(args, "--confirm-drift");
+      const client = takeOption(args, "--client");
+      validateAsideProfile(profile, client);
+      if (client !== undefined && profile === undefined) throw new CliUsageError("restore --client requires --profile", CLIENT_USAGE);
       rejectArgs(args, CLIENT_USAGE);
       if (!opId) throw new CliUsageError("--op <opId> is required", CLIENT_USAGE);
-      const result = await runtimeRequest("/api/client-integrations/restore", {
+      const result = await runtimeRequest(profile === undefined ? "/api/client-integrations/restore" : `${clientIntegrationPath("aside", profile)}/restore`, {
         method: "POST",
         body: JSON.stringify({ opId, confirmDrift }),
       }, deps);
@@ -212,6 +241,7 @@ export async function handleClientIntegrationCommand(
       throw new CliUsageError(`unknown client integration command ${action}`, CLIENT_USAGE);
     }
     const client = takeOption(args, "--client");
+    validateAsideProfile(profile, client);
     /*
      * The conflict escape hatch, spelled the way `restore --confirm-drift` is: the
      * refusal is the default and the waiver has to be typed.
@@ -232,7 +262,7 @@ export async function handleClientIntegrationCommand(
     if (overwriteConflict && action === "disable") {
       throw new CliUsageError("--overwrite-conflict applies only to enable", CLIENT_USAGE);
     }
-    const result = await runtimeRequest(`/api/client-integrations/${encodeURIComponent(client)}`, {
+    const result = await runtimeRequest(clientIntegrationPath(client, profile), {
       method: "PUT",
       // Sent only when asked for, so a proxy on an older build sees the request it
       // has always seen rather than an unknown field.
@@ -240,7 +270,11 @@ export async function handleClientIntegrationCommand(
         ? { enabled: true, overwriteConflict: true }
         : { enabled: action === "enable" }),
     }, deps);
-    printData(result, wantsJson, [String((result as Record<string, unknown>).message ?? `${client} ${action}d.`)]);
+    const batch = result as { ok?: boolean; message?: string; results?: Array<Record<string, unknown>> };
+    printData(result, wantsJson, batch.results
+      ? batch.results.map(row => `aside:${String(row.profileId)}  ${String(row.message ?? (row.ok ? "updated" : "refused"))}${row.residual === true ? " Recovery did not finish." : ""}${typeof row.snapshotPath === "string" ? ` Backup: ${row.snapshotPath}` : ""}`)
+      : [String(batch.message ?? `${client} ${action}d.`)]);
+    if (batch.ok === false) throw new RuntimeApiError(batch.message ?? "Some Aside profiles could not be updated", 207, result);
   });
 }
 

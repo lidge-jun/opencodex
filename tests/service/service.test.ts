@@ -491,6 +491,7 @@ describe("Windows service task", () => {
     expect(xml).toContain("<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>");
     expect(xml).toContain("<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>");
     expect(xml).toContain("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>");
+    expect(xml).toContain("<Priority>4</Priority>");
     expect(xml).toContain("<RestartOnFailure>");
     expect(xml).toContain("<Interval>PT1M</Interval>");
     expect(xml).toContain("<Count>3</Count>");
@@ -2599,6 +2600,37 @@ describe("service repair", () => {
     });
     // Re-registration happens after the assets exist and before the task is started.
     expect(calls).toEqual(["env", "auth", "stop", "assets", "reregister", "start", "state"]);
+  });
+
+  test.each(["7", "omitted", "4", "1"])("repair migrates only the background scheduler priority (%s)", async priority => {
+    const calls: string[] = [];
+    const previousXml = buildWindowsTaskXml().replace(/<Priority>\d<\/Priority>/,
+      priority === "omitted" ? "" : `<Priority>${priority}</Priority>`);
+    const shouldUpgrade = priority === "7" || priority === "omitted";
+    let attemptNonce = "";
+    await repairService({
+      platform: "win32",
+      diagnose: () => baseDiag,
+      assertEnv: () => {},
+      assertAuth: () => {},
+      resolveExpectedUserId: () => TEST_WINDOWS_TASK_SID,
+      stopScheduler: () => { calls.push("stop"); },
+      writeSchedulerAssets: () => { calls.push("assets"); },
+      readSchedulerXml: () => attemptNonce
+        ? buildWindowsTaskXml(undefined, undefined, attemptNonce)
+        : previousXml,
+      reregisterScheduler: async (nonce, registeredXml) => {
+        expect(registeredXml).toBe(previousXml);
+        expect(buildWindowsTaskXmlDocument()).toContain("<Priority>4</Priority>");
+        calls.push("reregister");
+        attemptNonce = nonce;
+      },
+      startScheduler: () => { calls.push("start"); },
+      writeSchedulerState: () => { calls.push("state"); },
+    });
+    expect(calls).toEqual(shouldUpgrade
+      ? ["stop", "assets", "reregister", "start", "state"]
+      : ["stop", "assets", "start", "state"]);
   });
 
   test("repair migrates an exact legacy account name to the preferred SID", async () => {

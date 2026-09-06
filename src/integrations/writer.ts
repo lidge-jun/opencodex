@@ -711,7 +711,9 @@ function freezeIntegrationInput(input: IntegrationWriteInput): FrozenIntegration
    * its manifest, so two independent calls could verify one account's install
    * and then write another account's catalog if a switch landed between them.
    */
-  const resolvedPaths = resolveIntegrationPaths(input.clientId, env, home);
+  const resolvedPaths = input.resolvedPaths
+    ? { ...input.resolvedPaths }
+    : resolveIntegrationPaths(input.clientId, env, home);
   return { ...input, env, home, store, io, resolvedPaths };
 }
 

@@ -1,7 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import {
   HUB_RELAY_REQUEST_BODY_MAX_BYTES,
   HUB_RELAY_RESPONSE_BODY_MAX_BYTES,
+  HUB_RELAY_DEFAULT_TIMEOUT_MS,
   relayHubManagementRequest,
   validateHubRelayRequestHeaders,
 } from "../../src/client/hub-relay";
@@ -143,5 +144,129 @@ describe("fixed-target hub management relay", () => {
     expect((await reader.read()).done).toBe(false);
     await reader.cancel();
     expect(cancelled).toBe(true);
+  });
+
+  test("established account SSE outlives the handshake deadline and still cancels on client abort", async () => {
+    const deadline = new AbortController();
+    const timeout = spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+    const browser = new AbortController();
+    let upstreamSignal!: AbortSignal;
+    let upstreamController!: ReadableStreamDefaultController<Uint8Array>;
+    let cancelled = false;
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    try {
+      const response = await relayHubManagementRequest(relayRequest("/api/accounts/events", { signal: browser.signal }), "/api/accounts/events", target, {
+        fetchImpl: (async (_input, init) => {
+          upstreamSignal = init!.signal!;
+          return new Response(new ReadableStream<Uint8Array>({
+            start(controller) { upstreamController = controller; controller.enqueue(new TextEncoder().encode("event: ready\n\n")); },
+            cancel() { cancelled = true; },
+          }), { headers: { "Content-Type": "text/event-stream; charset=utf-8" } });
+        }) as typeof fetch,
+      });
+      expect(timeout).toHaveBeenCalledWith(HUB_RELAY_DEFAULT_TIMEOUT_MS);
+      reader = response.body!.getReader();
+      expect(new TextDecoder().decode((await reader.read()).value)).toContain("ready");
+      deadline.abort(new DOMException("Handshake deadline", "TimeoutError"));
+      expect(upstreamSignal.aborted).toBe(false);
+      expect(cancelled).toBe(false);
+      upstreamController.enqueue(new TextEncoder().encode("event: account-selection\n\n"));
+      expect(new TextDecoder().decode((await reader.read()).value)).toContain("account-selection");
+      const pending = reader.read();
+      browser.abort();
+      await pending.catch(() => undefined);
+      expect(upstreamSignal.aborted).toBe(true);
+      expect(cancelled).toBe(true);
+    } finally {
+      await reader?.cancel().catch(() => undefined);
+      browser.abort();
+      timeout.mockRestore();
+    }
+  });
+
+  test.each([
+    ["/api/config", "GET", 200, "application/json"],
+    ["/api/config", "GET", 200, "text/event-stream"],
+    ["/api/accounts/events", "POST", 200, "text/event-stream"],
+    ["/api/accounts/events", "GET", 201, "text/event-stream"],
+    ["/api/accounts/events", "GET", 401, "text/event-stream"],
+    ["/api/accounts/events", "GET", 200, "application/json"],
+    ["/api/accounts/events", "GET", 200, "text/event-streamish"],
+    ["/api/accounts/events?other=1", "GET", 200, "text/event-stream"],
+  ] as const)("relay keeps the total deadline for %s %s %i %s", async (path, method, status, contentType) => {
+    const deadline = new AbortController();
+    const timeout = spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+    let upstreamSignal!: AbortSignal;
+    let cancelled = false;
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    try {
+      const response = await relayHubManagementRequest(relayRequest(path, { method }), path, target, {
+        fetchImpl: (async (_input, init) => {
+          upstreamSignal = init!.signal!;
+          return new Response(new ReadableStream<Uint8Array>({ cancel() { cancelled = true; } }), {
+            status, headers: { "Content-Type": contentType },
+          });
+        }) as typeof fetch,
+      });
+      reader = response.body!.getReader();
+      const pending = reader.read();
+      deadline.abort(new DOMException("Total deadline", "TimeoutError"));
+      await pending.catch(() => undefined);
+      expect(upstreamSignal.aborted).toBe(true);
+      expect(cancelled).toBe(true);
+    } finally {
+      await reader?.cancel().catch(() => undefined);
+      timeout.mockRestore();
+    }
+  });
+
+  test("selection SSE still has a handshake deadline and a response body cap", async () => {
+    const deadline = new AbortController();
+    const timeout = spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+    let handshakeStarted!: () => void;
+    const started = new Promise<void>(resolve => { handshakeStarted = resolve; });
+    try {
+      const pending = relayHubManagementRequest(relayRequest("/api/accounts/events"), "/api/accounts/events", target, {
+        fetchImpl: (async (_input, init) => new Promise<Response>((_resolve, reject) => {
+          init!.signal!.addEventListener("abort", () => reject(init!.signal!.reason), { once: true });
+          handshakeStarted();
+        })) as typeof fetch,
+      });
+      await started;
+      deadline.abort(new DOMException("Handshake deadline", "TimeoutError"));
+      expect((await pending).status).toBe(502);
+    } finally { timeout.mockRestore(); }
+
+    let cancelled = false;
+    const response = await relayHubManagementRequest(relayRequest("/api/accounts/events"), "/api/accounts/events", target, {
+      fetchImpl: (async () => new Response(new ReadableStream<Uint8Array>({
+        start(controller) { controller.enqueue(new Uint8Array(HUB_RELAY_RESPONSE_BODY_MAX_BYTES + 1)); },
+        cancel() { cancelled = true; },
+      }), { headers: { "Content-Type": "text/event-stream" } })) as typeof fetch,
+    });
+    await expect(response.arrayBuffer()).rejects.toThrow("response body too large");
+    expect(cancelled).toBe(true);
+  });
+
+  test.each(["complete", "cancel"] as const)("relay detaches deadline and client listeners after body %s", async disposition => {
+    const deadline = new AbortController();
+    const timeout = spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+    const browser = new AbortController();
+    let upstreamSignal!: AbortSignal;
+    try {
+      const response = await relayHubManagementRequest(relayRequest("/api/config", { signal: browser.signal }), "/api/config", target, {
+        fetchImpl: (async (_input, init) => {
+          upstreamSignal = init!.signal!;
+          return new Response(new ReadableStream<Uint8Array>({
+            start(controller) { if (disposition === "complete") controller.close(); },
+          }), { headers: { "Content-Type": "application/json" } });
+        }) as typeof fetch,
+      });
+      if (disposition === "complete") await response.text();
+      else await response.body!.cancel();
+      deadline.abort();
+      browser.abort();
+      expect(upstreamSignal.aborted).toBe(false);
+    } finally { timeout.mockRestore(); }
   });
 });

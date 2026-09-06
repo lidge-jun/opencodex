@@ -19,9 +19,16 @@ import {
   resolveCodexCoordinatorDatabasePath,
   resolveEffectiveUserIdentity,
 } from "../../src/codex/user-identity";
+import { WINDOWS_PRINCIPAL_LOOKUP_TIMEOUT_MS } from "../../src/lib/windows-user-principal";
+import { watchdogMs } from "../helpers/ci-watchdog";
 import { repoPath } from "../helpers/repo-root";
 
-const CHILD_TIMEOUT_MS = 10_000;
+// Before publishing ready, a Windows probe resolves its SID and known folder
+// with two separately bounded PowerShell calls. The harness must cover both;
+// this watchdog bounds the fixture, not coordinator lock/transition latency.
+const CHILD_TIMEOUT_MS = watchdogMs(process.platform === "win32"
+  ? 2 * WINDOWS_PRINCIPAL_LOOKUP_TIMEOUT_MS + 5_000
+  : 10_000);
 const transitionStateModuleUrl = pathToFileURL(
   repoPath("src", "codex", "transition-state.ts"),
 ).href;
@@ -169,9 +176,18 @@ async function collectProbe(child: ReturnType<typeof spawnProbe>): Promise<Probe
   }
 }
 
-async function waitForFiles(paths: readonly string[]): Promise<void> {
+async function waitForFiles(
+  paths: readonly string[],
+  children: readonly ReturnType<typeof spawnProbe>[],
+): Promise<void> {
   const deadline = Date.now() + CHILD_TIMEOUT_MS;
   while (!paths.every(existsSync)) {
+    for (const child of children) {
+      if (child.exitCode !== null) {
+        const stderr = await new Response(child.stderr).text();
+        throw new Error(`probe exited before barrier (code=${child.exitCode}): ${stderr}`);
+      }
+    }
     if (Date.now() >= deadline) throw new Error(`timed out waiting for ${paths.join(", ")}`);
     await Bun.sleep(5);
   }
@@ -198,9 +214,9 @@ test("two real processes racing first use publish exactly one initial transition
   ));
 
   try {
-    await waitForFiles([join(barrier, "a.ready"), join(barrier, "b.ready")]);
+    await waitForFiles([join(barrier, "a.ready"), join(barrier, "b.ready")], children);
     writeFileSync(releasePath, "go");
-    await waitForFiles([join(barrier, "a.outcome"), join(barrier, "b.outcome")]);
+    await waitForFiles([join(barrier, "a.outcome"), join(barrier, "b.outcome")], children);
     writeFileSync(retryPath, "retry-busy-loser");
     const results = await Promise.all(children.map(collectProbe));
 
@@ -248,9 +264,10 @@ test("two real processes racing first use publish exactly one initial transition
     }
   } finally {
     for (const child of children) child.kill();
+    await Promise.all(children.map(child => child.exited));
     cleanupSandbox(sandbox);
   }
-}, { timeout: 30_000 });
+}, { timeout: 4 * CHILD_TIMEOUT_MS });
 
 test("different OPENCODEX_HOME claimants advance the row under one CODEX_HOME", async () => {
   const sandbox = createSandbox("shared-codex-home");
@@ -293,7 +310,7 @@ test("different OPENCODEX_HOME claimants advance the row under one CODEX_HOME", 
   } finally {
     cleanupSandbox(sandbox);
   }
-}, { timeout: 30_000 });
+}, { timeout: 4 * CHILD_TIMEOUT_MS });
 
 test("a locked coordinator returns the exact typed busy outcome", async () => {
   const sandbox = createSandbox("busy");
@@ -313,7 +330,7 @@ test("a locked coordinator returns the exact typed busy outcome", async () => {
     controller?.close();
     cleanupSandbox(sandbox);
   }
-}, { timeout: 20_000 });
+}, { timeout: 3 * CHILD_TIMEOUT_MS });
 
 test("an unsafe coordinator path returns the exact typed unsafe-path outcome", async () => {
   const sandbox = createSandbox("unsafe-path");
@@ -329,4 +346,4 @@ test("an unsafe coordinator path returns the exact typed unsafe-path outcome", a
     }
     cleanupSandbox(sandbox);
   }
-}, { timeout: 20_000 });
+}, { timeout: 2 * CHILD_TIMEOUT_MS });

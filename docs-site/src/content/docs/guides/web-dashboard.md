@@ -68,6 +68,13 @@ missing credential — the proxy did not recognise the request as loopback. Open
 the address the proxy prints on startup (usually `http://127.0.0.1:<port>`), and prefer that exact
 host and port over a LAN IP or an alias.
 
+## Dashboard layout
+
+Overview uses matching status cards and full-width settings rows. On wide screens, labels share
+one column and model/effort controls share another. On narrower screens, controls move below their
+labels in the same reading order. Long version labels are shortened visually; hover the version
+badge or the version value to read the full value.
+
 ## What you can do
 
 | Area | What it does |
@@ -88,6 +95,35 @@ host and port over a LAN IP or an alias.
 | **Usage / Debug** | Inspect token-usage coverage and trends, or enable opt-in provider transport and usage-extraction diagnostics. |
 | **Storage** | Read-only CODEX_HOME disk breakdown (sessions, archives, DBs, attachments). Optional archived cleanup: preview the oldest N%, then quarantine to `CODEX_HOME/.trash` (default) or permanently delete behind an explicit checkbox. **Auto-cleanup policy** is opt-in and **default OFF** (`storageCleanupPolicy.enabled`); configure threshold/target/schedule/mode on the Storage page, or trigger **Run now**. Quarantined entries can be restored from the Storage page (JSONL + threads). Active sessions stay read-only. Cleanup and restore are refused while Codex holds the newest/active `state_*.sqlite` locked. |
 | **Stop** | Gracefully stop the proxy and installed background service, restore native Codex, and exit (`POST /api/stop`). On Windows with the Task Scheduler backend the dashboard refuses and asks you to run `ocx stop` instead: that wrapper can respawn the proxy after the task ends, and only a stop running outside this process can verify the restart window before restoring your client config. Nothing is changed when it refuses. |
+
+### Account selection
+
+Account selection is shared with request routing. Selecting an OAuth account takes effect on the
+next request even when a pool is enabled. A healthy selection is not replaced merely because
+another generic OAuth account has more unused quota. If the account returns 429, automatic
+failover can still select another usable account with the pool off. A committed automatic
+selection updates the dashboard immediately; account changes do not wait for the quota refresh
+timer. Requests already sent upstream retain their original credentials.
+
+### Filtering request logs
+
+Logs filters combine surface, intercepted requests, provider, exact model, status, time,
+speed, and conversation ID over the currently loaded request ring. Provider and model
+choices also include fallback attempts; model matching ignores case and surrounding spaces
+but does not match partial names. Choices that disappear from the ring reset to All.
+
+Time windows cover the last 15 minutes, hour, or day and refresh every 30 seconds while the
+Logs tab is active, even with auto-refresh off. Windows use the proxy timestamp from
+the logs response and advance with elapsed browser time, so a different browser clock
+does not shift the cutoff. Older proxies without that timestamp retain the browser-clock
+fallback until a valid sample is available. Speed uses output tokens per second over the
+full request duration: below 15, 15 to below 50, or at least 50. Unavailable speed values are
+excluded when a speed filter is active. Success means 2xx; errors mean 4xx or 5xx.
+
+Active filters show the matching count out of the loaded total. Reset filters restores all
+rows and returns keyboard focus to the All surface control; “No matching requests”
+differs from an empty log ring. Use arrow keys or Home/End in
+the surface selector. These controls do not query historical records beyond the loaded ring.
 
 ### Linking to a section
 
@@ -120,6 +156,25 @@ new or that every upstream measurement was refreshed.
 ## Model visibility
 
 The **Models** switches show final Codex visibility: a routed model is on only when its provider allowlist includes it (or no allowlist is set) and it is not disabled. Turning a model on reconciles both filters atomically; **All on** clears the provider allowlist so newly discovered models are also on.
+
+### Managing models in a provider workspace
+
+In a provider’s **Models** tab, **Delete** removes the stored custom definition. An underlying
+native or live-discovered model may then appear again, so the model count can stay the same.
+**Hide** changes catalog visibility only: it does not delete the definition or change direct
+routing policy. Use **Manage visibility in Models** to open the **Models** page and restore
+visibility, even when the provider tab has no rows left.
+
+**Add** saves a custom definition; it does not clear an existing hide or provider selection rule.
+A saved model can therefore remain hidden. If the model is already known, manage its visibility
+in **Models**. A confirmed save with a failed catalog refresh is still saved: follow the refresh
+message instead of adding it again. If the change cannot be confirmed, refresh the model state
+before retrying.
+
+The provider’s model count is the number of unique, non-disabled entries in the current model
+inventory returned by the server, before search or display truncation. It is not the provider
+allowlist size, a live-discovery count, or proof that an entry was discovered upstream. Selection
+badges and discovery information remain separate from that count.
 
 ## Delegation picker vs spawn routing
 
@@ -270,7 +325,7 @@ The GUI is a thin client over the proxy's JSON management API. Useful endpoints 
 | `PUT /api/codex-auth/active` · `PUT /api/codex-auth/auto-switch` · `PUT /api/codex-auth/failover` | Select the account for the next request and configure pool routing. |
 | `GET /api/codex-auth/active` · `PUT /api/codex-auth/accounts/priority` | Read the effective account (including `pinned` and which account is `pinnedAccountId`) and set one account's selection order. |
 | `POST /api/codex-auth/login` · `GET /api/codex-auth/login-status` | Add a pool account through browser login. |
-| `GET /api/logs?tail=50&limit=20&offset=0&provider=...&status=5xx` | Read recent request metadata with optional tail, provider, and exact/class status filters. With `limit`/`offset`, paging walks backward from the newest row (`offset=0` returns the latest page). Response shape: `{ timeZone, total, logs }` where `total` is the filtered row count before pagination. |
+| `GET /api/logs?tail=50&limit=20&offset=0&provider=...&status=5xx` | Read recent request metadata with optional tail, provider, and exact/class status filters. With `limit`/`offset`, paging walks backward from the newest row (`offset=0` returns the latest page). Response shape: `{ timeZone, generatedAt, total, logs }` where `total` is the filtered row count before pagination. |
 | `GET` / `PUT /api/subagent-models` | Read or set the five featured `spawn_agent` override models. |
 | `POST /api/stop` | Stop the proxy/service, restore native Codex, and exit. Refused with `respawnable_service` on the Windows Task Scheduler backend, and with `service_state_unknown` when that state cannot be read; nothing is changed either way. |
 

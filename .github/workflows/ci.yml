@@ -445,6 +445,21 @@ jobs:
           cd gui
           bun run build
 
+      - name: Record dashboard preview source
+        if: needs.changes.outputs.gui == 'true'
+        run: |
+          git rev-parse HEAD > gui/dist/build-commit.txt
+          git rev-parse HEAD:gui > gui/dist/build-gui-tree.txt
+
+      - name: Upload dashboard preview
+        if: needs.changes.outputs.gui == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dashboard-preview-${{ github.sha }}
+          path: gui/dist
+          retention-days: 7
+          if-no-files-found: error
+
       - name: CLI help smoke
         run: bun run src/cli/index.ts help
 
@@ -515,33 +530,90 @@ jobs:
     # scripts/ci/run-bun-test-batches.sh. An assertion failure still fails on
     # the first attempt — only the crash signature is retried, exactly once.
       - name: Test
+        env:
+          MACOS_TEST_SHARD: ${{ matrix.shard }}
         run: |
           # GitHub Actions starts bash `run:` blocks with `-e`. Disable
           # errexit so a Bun crash reaches PIPESTATUS and the bounded retry.
           set +e
           set -uo pipefail
-          suite_log="$(mktemp -t ocx-macos-suite.XXXXXX)"
-          for attempt in 1 2; do
-            # --timeout: Bun's default 5s per-test ceiling is the recurring flake
-            # class on this loaded shared runner (real retry windows + server
-            # round-trips exceed 5s under contention; a 10s-floor in-test
-            # watchdog fired at 10.16s there). 60s keeps hangs bounded (the 30m
-            # job timeout is the outer backstop) while removing the timing
-            # flakes — assertions are untouched. Pairs with the 30s CI floor in
-            # tests/helpers/ci-watchdog.ts.
-            bun test --isolate --timeout 60000 tests --shard=${{ matrix.shard }}/2 2>&1 | tee "$suite_log"
-            suite_status="${PIPESTATUS[0]}"
-            if [ "$suite_status" -eq 0 ]; then
-              exit 0
+
+          run_macos_suite() {
+            local suite_log suite_status attempt
+            suite_log="$(mktemp -t ocx-macos-suite.XXXXXX)" || return $?
+            for attempt in 1 2; do
+              # Preserve the existing per-test ceiling and crash-only retry for
+              # every invocation, including each isolated serial file.
+              bun test --isolate --timeout 60000 "$@" 2>&1 | tee "$suite_log"
+              suite_status="${PIPESTATUS[0]}"
+              if [ "$suite_status" -eq 0 ]; then
+                rm -f "$suite_log"
+                return 0
+              fi
+              if ! grep -Eqi 'oh no: Bun has crashed|Internal assertion failure|Segmentation fault at address|Illegal instruction|Bus error|Aborted \(core dumped\)' "$suite_log"; then
+                echo "::error::macOS suite failed on attempt ${attempt} (exit ${suite_status}); assertion failures are not retried."
+                rm -f "$suite_log"
+                return "$suite_status"
+              fi
+              echo "::warning::Bun runtime crash in the macOS suite (exit ${suite_status}, attempt ${attempt})."
+            done
+            echo "::error::Bun runtime crash repeated on the macOS suite; failing after one retry."
+            rm -f "$suite_log"
+            return "$suite_status"
+          }
+
+          case "$MACOS_TEST_SHARD" in
+            1|2) ;;
+            *) echo "::error::Invalid macOS test shard"; exit 64 ;;
+          esac
+          serial_manifest="$(bun -e 'import { SERIAL_FULL_SUITE_FILES } from "./scripts/test.ts"; console.log(SERIAL_FULL_SUITE_FILES.join("\n"));')"
+          manifest_status=$?
+          if [ "$manifest_status" -ne 0 ]; then
+            exit "$manifest_status"
+          fi
+          serial_files=()
+          ignore_args=()
+          serial_count=0
+          while IFS= read -r file; do
+            if [[ ! "$file" =~ ^[[:alnum:]_./-]+$ || "$file" == /* || "/$file/" == *"/../"* || "/$file/" == *"/./"* ]]; then
+              echo "::error::Invalid serial test path"
+              exit 1
             fi
-            if ! grep -Eqi 'oh no: Bun has crashed|Internal assertion failure|Segmentation fault at address|Illegal instruction|Bus error|Aborted \(core dumped\)' "$suite_log"; then
-              echo "::error::macOS suite failed on attempt ${attempt} (exit ${suite_status}); assertion failures are not retried."
-              exit "$suite_status"
+            for ((index=0; index<serial_count; index++)); do
+              if [ "${serial_files[$index]}" = "$file" ]; then
+                echo "::error::Duplicate serial test path"
+                exit 1
+              fi
+            done
+            # The established basename glob must exclude exactly the owned file.
+            # Refuse missing files or collisions instead of silently losing tests.
+            base="${file##*/}"
+            matches="$(find tests -type f -name "$base")" || exit $?
+            if [ "$matches" != "tests/$file" ]; then
+              echo "::error::Missing or ambiguous serial test path: $file"
+              exit 1
             fi
-            echo "::warning::Bun runtime crash in the macOS suite (exit ${suite_status}, attempt ${attempt})."
+            serial_files[$serial_count]="$file"
+            ignore_args+=("--path-ignore-patterns" "**/$base")
+            serial_count=$((serial_count + 1))
+          done <<< "$serial_manifest"
+          if [ "$serial_count" -eq 0 ]; then
+            echo "::error::Empty serial test manifest"
+            exit 1
+          fi
+
+          run_macos_suite tests "--shard=$MACOS_TEST_SHARD/2" "${ignore_args[@]}"
+          suite_status=$?
+          if [ "$suite_status" -ne 0 ]; then exit "$suite_status"; fi
+          for ((index=0; index<serial_count; index++)); do
+            if [ "$((index % 2 + 1))" -ne "$MACOS_TEST_SHARD" ]; then continue; fi
+            file="${serial_files[$index]}"
+            echo "::group::macOS isolated $file"
+            run_macos_suite --parallel=1 "./tests/$file"
+            suite_status=$?
+            echo "::endgroup::"
+            if [ "$suite_status" -ne 0 ]; then exit "$suite_status"; fi
           done
-          echo "::error::Bun runtime crash repeated on the macOS suite; failing after one retry."
-          exit 1
 
       - name: CLI help smoke
         run: bun run src/cli/index.ts help
@@ -679,7 +751,11 @@ jobs:
     # the same truncation as above. The bound is kept; the work per shard is cut instead.
     # Six shards put each leg at roughly two-thirds of the four-shard wall time, back
     # inside the margin 25 was chosen to provide.
-    timeout-minutes: 25
+    # Shard 1 of run 34036848646 then reached that wall with 2736 passing tests
+    # and no test failures. The matched tests were 25% slower than the prior
+    # complete run; about one minute of tests remained. Keep every test deadline
+    # and all six shards, but leave the whole batch and cleanup a 30-minute bound.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:

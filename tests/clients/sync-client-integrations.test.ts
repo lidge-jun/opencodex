@@ -1,16 +1,22 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ExportModel } from "../../src/clients/config-export";
+import type { writeDesktop3pConfig } from "../../src/claude/desktop-3p";
+import { desktopVisibleNativeSlugs, type CatalogModel } from "../../src/codex/catalog";
 import { claudeDesktopIntegrationEnabled, grokIntegrationEnabled } from "../../src/codex/desired-state";
 import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
-import { IntegrationMutationBusyError, runIntegrationMutationFlight } from "../../src/integrations/mutation-flight";
+import { IntegrationMutationBusyError, runIntegrationMutationFlight, setIntegrationMutationFlightTestHook } from "../../src/integrations/mutation-flight";
+import { refreshOwnedCatalogIntegrations } from "../../src/integrations/catalog-refresh";
+import * as asideProfiles from "../../src/integrations/aside-profiles";
 import { refreshOwnedIntegration } from "../../src/integrations/owned-refresh";
+import * as ownedRefresh from "../../src/integrations/owned-refresh";
 import { createIntegrationStateStore, type IntegrationStateStore } from "../../src/integrations/store";
 import type { IntegrationWriterLockSeams } from "../../src/integrations/writer-lock";
 import { applyIntegration, disableIntegrationCoordinated } from "../../src/integrations/writer";
 import type { OcxConfig } from "../../src/types";
+import { syncEnabledClientIntegrations } from "../../src/server/management/config-routes";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 /**
@@ -59,20 +65,142 @@ describe("ocx sync fans out to enabled native clients and owned file integration
 
     expect(fn).toContain("grokIntegrationEnabled(config)");
     expect(fn).toContain("claudeDesktopIntegrationEnabled(config)");
-    expect(fn).toContain('clientId: "mcode"');
-    expect(fn).toContain("refreshOwnedIntegration");
-    // One catch per client: a broken client file is a warning, not a 500 on a command whose
-    // main job (the Codex catalog) succeeded.
-    expect(fn.match(/catch \(error\)/g)?.length).toBe(3);
+    expect(fn).toContain('["mcode", "pi", "aside"]');
+    expect(fn).toContain("refreshOwnedCatalogIntegrations");
+    // Native clients keep their catches; the owned catalog helper isolates file clients.
+    expect(fn.match(/catch \(error\)/g)?.length).toBe(2);
     // The Desktop write gets the native context limits, same as every other Desktop
     // call site. 8b672205e threaded `nativeContextLimits` through those writers and
     // left this assertion naming the retired `providerContextCap` spelling, so the
     // source-shape check failed against the very change it is meant to pin.
-    expect(fn).toContain("nativeContextLimits(config)");
+    expect(fn).toContain("nativeContextLimits(latest)");
     // A client that is off is omitted rather than reported: the caller has to be able to
     // tell "left alone" from "tried and failed", so there is no skipped state to emit.
     expect(fn).not.toContain('"skipped"');
   });
+});
+
+describe("Desktop sync rechecks persisted state after discovery", () => {
+  let root: string;
+  let previousHome: string | undefined;
+
+  beforeEach(() => {
+    previousHome = process.env.OPENCODEX_HOME;
+    root = mkdtempSync(join(tmpdir(), "ocx-desktop-sync-refresh-"));
+    process.env.OPENCODEX_HOME = root;
+  });
+
+  afterEach(() => {
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+    removeTreeWithRetry(root);
+  });
+
+  for (const outcome of ["off", "refresh", "refusal"] as const) {
+    test(`${outcome} during discovery preserves fresh Desktop state and MCode fan-out`, async () => {
+      const config: OcxConfig = {
+        port: 10100,
+        defaultProvider: "mock",
+        clientIntegrations: { grok: false },
+        providers: {
+          mock: { adapter: "openai-chat", baseUrl: "https://example.test/v1", models: ["keep", "hidden"] },
+          openai: { adapter: "openai-responses", baseUrl: "https://example.test/v1", contextWindow: 400_000 },
+        },
+        apiKeys: [{ id: "sync-key", name: "fixture", key: "ocx_old_sync_fixture", createdAt: "2026-01-01T00:00:00.000Z" }],
+        providerContextCaps: { openai: 272_000 },
+        claudeCode: { desktopProfile: {
+          version: 1,
+          assignments: { "mock/hidden": { family: "opus", alias: "claude-opus-4-8-20260201" } },
+          defaults: { opus: "mock/hidden", fable: null, sonnet: null, haiku: null },
+        } },
+      };
+      const nativeToDisable = desktopVisibleNativeSlugs(config)[0];
+      expect(nativeToDisable).toBeDefined();
+      writeFileSync(join(root, "config.json"), JSON.stringify(config));
+      const models: CatalogModel[] = [
+        { provider: "mock", id: "keep", contextWindow: 123_000 },
+        { provider: "mock", id: "hidden", contextWindow: 456_000 },
+      ];
+      let releaseDiscovery!: () => void;
+      let announceDiscovery!: () => void;
+      const discoveryGate = new Promise<void>(resolve => { releaseDiscovery = resolve; });
+      const discoveryStarted = new Promise<void>(resolve => { announceDiscovery = resolve; });
+      const writes: Parameters<typeof writeDesktop3pConfig>[] = [];
+      // The shared refresh now also receives Pi. Stub only MCode so peers retain
+      // their real unowned-client behavior instead of manufacturing MCode results.
+      const realRefresh = ownedRefresh.refreshOwnedIntegration;
+      const refresh = spyOn(ownedRefresh, "refreshOwnedIntegration").mockImplementation((input, options) =>
+        input.clientId === "mcode"
+          ? Promise.resolve({ client: "mcode", ok: true, changed: true })
+          : realRefresh(input, options));
+      const aside = spyOn(asideProfiles, "refreshAsideProfiles");
+      const sync = syncEnabledClientIntegrations(12345, config, {
+        fetchAllModels: async () => {
+          announceDiscovery();
+          await discoveryGate;
+          return models;
+        },
+        writeDesktop3pConfig: (...args) => {
+          writes.push(args);
+          return outcome === "refusal"
+            ? { written: false, path: "fixture", reason: "desktop_remote_store_active" }
+            : { written: true, path: "fixture" };
+        },
+      });
+      try {
+        await Promise.race([
+          discoveryStarted,
+          sync.then(() => { throw new Error("sync ended without entering Desktop discovery"); }),
+        ]);
+        const latest = structuredClone(config);
+        latest.clientIntegrations = { grok: false, "claude-desktop": outcome !== "off" };
+        latest.disabledModels = ["mock/hidden", nativeToDisable!];
+        latest.apiKeys![0]!.key = "ocx_new_sync_fixture";
+        latest.providerContextCaps = { openai: 922_000 };
+        latest.providers.openai!.contextWindow = 1_000_000;
+        latest.claudeCode!.desktopProfile = {
+          version: 1,
+          assignments: { "mock/keep": { family: "sonnet", alias: "claude-opus-4-8-20260202" } },
+          defaults: { opus: null, fable: null, sonnet: "mock/keep", haiku: null },
+        };
+        writeFileSync(join(root, "config.json"), JSON.stringify(latest));
+        releaseDiscovery();
+        const results = await sync;
+        const mcodeCalls = refresh.mock.calls.filter(([input]) => input.clientId === "mcode");
+        expect(mcodeCalls).toHaveLength(1);
+        expect(mcodeCalls[0]![0]).toMatchObject({ clientId: "mcode", port: 12345 });
+        expect(refresh.mock.calls.filter(([input]) => input.clientId === "pi")).toHaveLength(1);
+        expect(aside).toHaveBeenCalledTimes(1);
+        expect(aside.mock.calls[0]![0]).toMatchObject({ config, port: 12345 });
+        expect(await aside.mock.results[0]!.value).toEqual([]);
+        expect(results.filter(result => result.client === "mcode"))
+          .toEqual([{ client: "mcode", ok: true, changed: true }]);
+        expect(results.filter(result => result.client === "pi" || result.client === "aside")).toEqual([]);
+        if (outcome === "off") {
+          expect(writes).toHaveLength(0);
+          expect(results).toEqual([{ client: "mcode", ok: true, changed: true }]);
+        } else {
+          expect(writes).toHaveLength(1);
+          const [port, natives, routed, key, mode, profile, limits] = writes[0]!;
+          expect(port).toBe(12345);
+          expect(natives).not.toContain(nativeToDisable);
+          expect(routed).toEqual([{ provider: "mock", id: "keep", contextWindow: 123_000 }]);
+          expect(key).toBe("ocx_new_sync_fixture");
+          expect(mode).toBe("static");
+          expect(profile).toEqual(latest.claudeCode!.desktopProfile);
+          expect(limits).toEqual({ cap: 922_000, providerWindow: 1_000_000 });
+          expect(results.find(result => result.client === "claude-desktop")).toEqual(outcome === "refusal"
+            ? { client: "claude-desktop", ok: false, reason: "desktop_remote_store_active" }
+            : { client: "claude-desktop", ok: true, changed: true });
+        }
+      } finally {
+        releaseDiscovery();
+        await sync.catch(() => undefined);
+        refresh.mockRestore();
+        aside.mockRestore();
+      }
+    });
+  }
 });
 
 describe("ocx sync refreshes an already-owned MCode integration", () => {
@@ -158,6 +286,23 @@ describe("ocx sync refreshes an already-owned MCode integration", () => {
     expect(catalogLoads).toBe(0);
     expect(readFileSync(configPath, "utf8")).toBe(before);
     expect(store.listOperations("mcode")).toHaveLength(0);
+  });
+
+  test("retains recovery details when refresh bookkeeping and compensation both fail", async () => {
+    expect(applyIntegration(input(oldModels)).ok).toBe(true);
+    const io = store.io();
+    let writes = 0;
+    const result = await refreshOwnedIntegration({ ...input(newModels), io: {
+      ...io,
+      writeText(path, text) {
+        if (path === configPath && ++writes > 1) throw new Error("synthetic rollback failure");
+        io.writeText(path, text);
+      },
+      putRecord() { throw new Error("synthetic ownership failure"); },
+    } });
+    expect(result).toMatchObject({ client: "mcode", ok: false, refusalReason: "write_failed", residual: true });
+    expect(result?.snapshotPath).toBeString();
+    expect(result?.reason).toContain("could not be rolled back");
   });
 
   test("refuses a foreign edit without changing bytes or appending a journal row", async () => {
@@ -302,17 +447,222 @@ describe("ocx sync refreshes an already-owned MCode integration", () => {
   });
 });
 
-test("the direct ocx sync command refreshes MCode instead of relying on /api/sync", async () => {
+describe("owned Pi/Aside catalogs follow filtered model selections", () => {
+  const clients = ["pi", "aside"] as const;
+  const env: NodeJS.ProcessEnv = {};
+  const config = {
+    port: 10100,
+    hostname: "127.0.0.1",
+    defaultProvider: "mock",
+    providers: { mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1/v1" } },
+  } as OcxConfig;
+  const oldModels: ExportModel[] = [
+    { namespaced: "mock/visible", provider: "mock", id: "visible", contextWindow: 128_000 },
+    { namespaced: "mock/hidden", provider: "mock", id: "hidden", contextWindow: 64_000 },
+  ];
+  const filteredModels = oldModels.slice(0, 1);
+  const sibling = { baseUrl: "http://user.invalid/v1", models: [{ id: "personal" }] };
+  let root: string;
+  let home: string;
+  let store: IntegrationStateStore;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "ocx-owned-catalog-refresh-"));
+    home = join(root, "home");
+    store = createIntegrationStateStore(join(root, "state", "integrations"));
+    mkdirSync(join(home, ".aside"), { recursive: true });
+    writeFileSync(join(home, ".aside", "accounts.json"), JSON.stringify({ currentAccountId: 0 }));
+    for (const client of clients) {
+      mkdirSync(INTEGRATION_CLIENTS[client].detectDir(env, home), { recursive: true });
+      mkdirSync(dirname(INTEGRATION_CLIENTS[client].configPath(env, home)), { recursive: true });
+      writeFileSync(INTEGRATION_CLIENTS[client].configPath(env, home), JSON.stringify({
+        theme: "dark", providers: { personal: sibling },
+      }));
+    }
+  });
+
+  afterEach(() => {
+    removeTreeWithRetry(root);
+  });
+
+  function input(models: readonly ExportModel[] | (() => Promise<readonly ExportModel[]>)) {
+    return { models, config, port: 10100, env, home, store };
+  }
+
+  function document(client: typeof clients[number]) {
+    return JSON.parse(readFileSync(INTEGRATION_CLIENTS[client].configPath(env, home), "utf8")) as {
+      theme: string;
+      providers: {
+        personal: typeof sibling;
+        opencodex?: { baseUrl: string; api: string; apiKey: string; models: Array<{ id: string }> };
+      };
+    };
+  }
+
+  test("refreshes both owned catalogs from one lazy load and preserves unrelated settings", async () => {
+    for (const clientId of clients) {
+      expect(applyIntegration({ ...input(oldModels), clientId }).ok).toBe(true);
+      expect(document(clientId).providers.opencodex?.models.map(model => model.id))
+        .toEqual(["mock/hidden", "mock/visible"]);
+    }
+    let loads = 0;
+    const outcomes = await refreshOwnedCatalogIntegrations(input(async () => {
+      loads += 1;
+      return filteredModels;
+    }));
+    expect(outcomes).toEqual(clients.map(client => ({ client, ok: true, changed: true, ...(client === "aside" ? { profileId: 0 } : {}) })));
+    expect(loads).toBe(1);
+    for (const client of clients) {
+      expect(document(client)).toMatchObject({ theme: "dark", providers: { personal: sibling } });
+      expect(document(client).providers.opencodex).toMatchObject({
+        baseUrl: "http://127.0.0.1:10100/v1", api: "openai-completions", apiKey: "opencodex-loopback",
+      });
+      expect(document(client).providers.opencodex?.models.map(model => model.id)).toEqual(["mock/visible"]);
+      expect(store.listOperations(client).map(row => row.kind)).toEqual(["refresh", "apply"]);
+    }
+  });
+
+  test("never loads or writes unowned manual catalogs", async () => {
+    const before = JSON.stringify({ providers: { personal: sibling, opencodex: { models: [{ id: "manual" }] } } });
+    for (const client of clients) writeFileSync(INTEGRATION_CLIENTS[client].configPath(env, home), before);
+    let loads = 0;
+    const outcomes = await refreshOwnedCatalogIntegrations(input(async () => {
+      loads += 1;
+      return filteredModels;
+    }));
+    expect(outcomes).toEqual([]);
+    expect(loads).toBe(0);
+    for (const client of clients) {
+      expect(readFileSync(INTEGRATION_CLIENTS[client].configPath(env, home), "utf8")).toBe(before);
+    }
+    expect(store.readRecords()).toEqual({});
+    expect(store.listOperations()).toEqual([]);
+    expect(existsSync(store.root)).toBe(false);
+  });
+
+  test.each(clients)("does not reconnect a removed %s block", async clientId => {
+    expect(applyIntegration({ ...input(oldModels), clientId }).ok).toBe(true);
+    const recordBefore = store.readRecords()[clientId];
+    const before = JSON.stringify({ theme: "dark", providers: { personal: sibling } });
+    const path = INTEGRATION_CLIENTS[clientId].configPath(env, home);
+    writeFileSync(path, before);
+    expect(await refreshOwnedCatalogIntegrations(input(filteredModels))).toEqual([{
+      client: clientId, ok: true, changed: false,
+      ...(clientId === "aside" ? { profileId: 0 } : {}),
+      reason: "managed block is absent; refresh did not reconnect it",
+    }]);
+    expect(readFileSync(path, "utf8")).toBe(before);
+    expect(store.readRecords()[clientId]).toEqual(recordBefore);
+    expect(store.listOperations(clientId).map(row => row.kind)).toEqual(["apply"]);
+  });
+
+  test.each(clients)("does not recreate an uninstalled %s client", async clientId => {
+    expect(applyIntegration({ ...input(oldModels), clientId }).ok).toBe(true);
+    const recordBefore = store.readRecords()[clientId];
+    const detectDir = INTEGRATION_CLIENTS[clientId].detectDir(env, home);
+    removeTreeWithRetry(detectDir);
+    const outcomes = await refreshOwnedCatalogIntegrations(input(filteredModels));
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]).toMatchObject({ client: clientId, ok: false });
+    expect(outcomes[0]?.reason).toContain(`${clientId} is not installed`);
+    expect(existsSync(detectDir)).toBe(false);
+    expect(store.readRecords()[clientId]).toEqual(recordBefore);
+    expect(store.listOperations(clientId).map(row => row.kind)).toEqual(["apply"]);
+  });
+
+  test.each(clients)("preserves a drifted %s provider and its ownership record", async clientId => {
+    expect(applyIntegration({ ...input(oldModels), clientId }).ok).toBe(true);
+    const recordBefore = store.readRecords()[clientId];
+    const edited = document(clientId);
+    edited.providers.opencodex!.baseUrl = "http://user-edited.invalid/v1";
+    const before = JSON.stringify(edited);
+    const path = INTEGRATION_CLIENTS[clientId].configPath(env, home);
+    writeFileSync(path, before);
+    const outcomes = await refreshOwnedCatalogIntegrations(input(filteredModels));
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]).toMatchObject({ client: clientId, ok: false });
+    expect(outcomes[0]?.reason).toContain("changed after opencodex wrote it");
+    expect(readFileSync(path, "utf8")).toBe(before);
+    expect(store.readRecords()[clientId]).toEqual(recordBefore);
+    expect(store.listOperations(clientId).map(row => row.kind)).toEqual(["apply"]);
+  });
+
+  test("a thrown Pi filesystem error does not prevent the owned Aside refresh", async () => {
+    for (const clientId of clients) expect(applyIntegration({ ...input(oldModels), clientId }).ok).toBe(true);
+    const path = INTEGRATION_CLIENTS.pi.configPath(env, home);
+    const before = readFileSync(path, "utf8");
+    const recordBefore = store.readRecords().pi;
+    const io = store.io();
+    const outcomes = await refreshOwnedCatalogIntegrations({
+      ...input(filteredModels),
+      io: { ...io, statKind: candidate => {
+        if (candidate === path) throw new Error("synthetic Pi stat failure");
+        return io.statKind(candidate);
+      } },
+    });
+    expect(outcomes).toEqual([
+      { client: "pi", ok: false, reason: "synthetic Pi stat failure" },
+      { client: "aside", profileId: 0, ok: true, changed: true },
+    ]);
+    expect(readFileSync(path, "utf8")).toBe(before);
+    expect(store.readRecords().pi).toEqual(recordBefore);
+    expect(store.listOperations("pi").map(row => row.kind)).toEqual(["apply"]);
+    expect(document("aside").providers.opencodex?.models.map(model => model.id)).toEqual(["mock/visible"]);
+    expect(store.listOperations("aside").map(row => row.kind)).toEqual(["refresh", "apply"]);
+  });
+
+  test.each(clients)("overlapping %s selections report busy and a later retry applies the new roster", async clientId => {
+    expect(applyIntegration({ ...input(oldModels), clientId }).ok).toBe(true);
+    const nextModels = oldModels.slice(1);
+    let release!: () => void;
+    let observeFirst!: () => void;
+    let observeSecond!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { observeFirst = resolve; });
+    const contended = new Promise<void>(resolve => { observeSecond = resolve; });
+    setIntegrationMutationFlightTestHook(async operation => {
+      observeFirst();
+      await gate;
+      return operation();
+    });
+    const first = refreshOwnedCatalogIntegrations(input(filteredModels), [clientId]);
+    let second: ReturnType<typeof refreshOwnedCatalogIntegrations> | undefined;
+    try {
+      await started;
+      second = refreshOwnedCatalogIntegrations({
+        ...input(nextModels),
+        io: { ...store.io(), now: () => { observeSecond(); return Date.now(); } },
+      }, [clientId]);
+      await contended;
+      release();
+      expect(await first).toEqual([{ client: clientId, ok: true, changed: true, ...(clientId === "aside" ? { profileId: 0 } : {}) }]);
+      expect(await second).toEqual([{ client: clientId, ok: false, reason: "integration_mutation_busy" }]);
+      expect(document(clientId).providers.opencodex?.models.map(model => model.id)).toEqual(["mock/visible"]);
+      expect(store.listOperations(clientId).map(row => row.kind)).toEqual(["refresh", "apply"]);
+    } finally {
+      release();
+      await Promise.allSettled([first, ...(second ? [second] : [])]);
+      setIntegrationMutationFlightTestHook(null);
+    }
+    expect(await refreshOwnedCatalogIntegrations(input(nextModels), [clientId]))
+      .toEqual([{ client: clientId, ok: true, changed: true, ...(clientId === "aside" ? { profileId: 0 } : {}) }]);
+    expect(document(clientId).providers.opencodex?.models.map(model => model.id)).toEqual(["mock/hidden"]);
+    expect(store.listOperations(clientId).map(row => row.kind)).toEqual(["refresh", "refresh", "apply"]);
+  });
+});
+
+test("the direct ocx sync command refreshes MCode, Pi and Aside instead of relying on /api/sync", async () => {
   const src = await Bun.file(new URL("../../src/cli/dispatch.ts", import.meta.url)).text();
   const start = src.indexOf("sync: async deps =>");
   const command = src.slice(start, src.indexOf("v2: async deps =>", start));
-  expect(command).toContain("refreshOwnedIntegration");
-  expect(command).toContain('clientId: "mcode"');
-  expect(command.indexOf("syncModelsToCodex")).toBeLessThan(command.indexOf("refreshOwnedIntegration"));
+  expect(command).toContain("refreshOwnedCatalogIntegrations");
+  expect(command).toContain('["mcode", "pi"]');
+  expect(command).toContain("refreshAsideProfilesThroughServer");
+  expect(command.indexOf("syncModelsToCodex")).toBeLessThan(command.indexOf("refreshOwnedCatalogIntegrations"));
   expect(command).toContain('synced.status !== "refused"');
 });
 
-test("refresh joins refresh but cannot swallow an explicit apply or disable", async () => {
+test("identical explicit mutation keys join but cannot swallow a different apply or disable", async () => {
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   let refreshRuns = 0;

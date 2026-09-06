@@ -4,11 +4,16 @@ import {
   hasResponsesSnapshotRepair,
   repairResponsesSnapshotJson,
 } from "../../src/server/responses-snapshot-repair";
+import { createGrokResponsesSparseTerminalBlockRewrite } from "../../src/server/grok-responses-snapshot-repair";
 import {
   composeSseBlockRewrites,
   payloadRewriteAsBlockRewrite,
   relaySseWithBlockRewrite,
 } from "../../src/server/sse-payload-rewrite";
+import {
+  MAX_COMPLETED_OUTPUT_ITEMS,
+  MAX_COMPLETED_OUTPUT_ITEM_SOURCE_BYTES,
+} from "../../src/server/relay";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 
 
@@ -30,6 +35,437 @@ const ISSUE_FIXTURE = {
   delta: { type: "response.output_text.delta", item_id: "msg_1", output_index: 0, delta: "hello" },
   completed: { type: "response.completed", response: { id: "resp_1" } },
 };
+
+describe("createGrokResponsesSparseTerminalBlockRewrite", () => {
+  test("Grok compatibility backfills explicit empty output from completed items", () => {
+    const rewrite = createGrokResponsesSparseTerminalBlockRewrite(createTestTranslatorBudget());
+    const item = {
+      type: "message",
+      id: "msg_1",
+      role: "assistant",
+      status: "completed",
+      phase: "final_answer",
+      content: [{ type: "output_text", text: "hello", annotations: [] }],
+    };
+    rewrite(dataBlock({ type: "response.output_item.done", output_index: 0, item }));
+    const out = rewrite(dataBlock({
+      type: "response.completed",
+      response: { id: "resp_1", status: "completed", output: [] },
+    }));
+    const terminal = eventsOf(out).find(event => event.type === "response.completed")!;
+    expect((terminal.response as Record<string, unknown>).output).toEqual([item]);
+  });
+
+  test("Grok compatibility preserves explicit empty output when completed items are gapped", () => {
+    const rewrite = createGrokResponsesSparseTerminalBlockRewrite(createTestTranslatorBudget());
+    rewrite(dataBlock({
+      type: "response.output_item.done",
+      output_index: 1,
+      item: {
+        type: "message",
+        id: "msg_2",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text: "partial", annotations: [] }],
+      },
+    }));
+    const out = rewrite(dataBlock({
+      type: "response.completed",
+      response: { id: "resp_1", status: "completed", output: [] },
+    }));
+    const terminal = eventsOf(out).find(event => event.type === "response.completed")!;
+    expect((terminal.response as Record<string, unknown>).output).toEqual([]);
+  });
+
+  test("Grok compatibility also backfills a missing terminal output", () => {
+    const rewrite = createGrokResponsesSparseTerminalBlockRewrite(createTestTranslatorBudget());
+    const item = {
+      type: "message",
+      id: "msg_1",
+      role: "assistant",
+      status: "completed",
+      content: [{ type: "output_text", text: "hello", annotations: [] }],
+    };
+    rewrite(dataBlock({ type: "response.output_item.done", output_index: 0, item }));
+    const out = rewrite(dataBlock({ type: "response.completed", response: { id: "resp_1" } }));
+    const terminal = eventsOf(out)[0]!.response as Record<string, unknown>;
+    expect(terminal.output).toEqual([item]);
+  });
+
+  test("Grok compatibility trusts missing ids/status only when semantic content is already valid", () => {
+    // The always-on field backfill that follows this rewrite supplies the id,
+    // message status, and annotations. The official Codex SSE parser also
+    // accepts done items that omit id/status, so absence alone is not a
+    // contradiction; malformed values still are.
+    const rewrite = createGrokResponsesSparseTerminalBlockRewrite(createTestTranslatorBudget());
+    const item = {
+      type: "message",
+      role: "assistant",
+      content: [{ type: "output_text", text: "hello" }],
+    };
+    rewrite(dataBlock({ type: "response.output_item.done", output_index: 0, item }));
+    const out = rewrite(dataBlock({
+      type: "response.completed",
+      response: { id: "resp_1", output: [] },
+    }));
+    const terminal = eventsOf(out)[0]!.response as Record<string, unknown>;
+    expect(terminal.output).toEqual([item]);
+  });
+
+  test("Grok compatibility never promotes repaired or contradictory done items", () => {
+    const invalidItems = [
+      {
+        type: "message",
+        id: "msg_user",
+        role: "user",
+        status: "completed",
+        content: [{ type: "output_text", text: "bad", annotations: [] }],
+      },
+      {
+        type: "message",
+        id: "msg_failed",
+        role: "assistant",
+        status: "failed",
+        content: [{ type: "output_text", text: "bad", annotations: [] }],
+      },
+      {
+        type: "message",
+        id: "msg_content",
+        role: "assistant",
+        status: "completed",
+        content: "bad",
+      },
+      {
+        type: "message",
+        id: "",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text: "bad", annotations: [] }],
+      },
+      {
+        type: "message",
+        id: 42,
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text: "bad", annotations: [] }],
+      },
+    ];
+    for (const item of invalidItems) {
+      const rewrite = createGrokResponsesSparseTerminalBlockRewrite(createTestTranslatorBudget());
+      rewrite(dataBlock({ type: "response.output_item.done", output_index: 0, item }));
+      const out = rewrite(dataBlock({
+        type: "response.completed",
+        response: { id: "resp_1", output: [] },
+      }));
+      const terminal = eventsOf(out)[0]!.response as Record<string, unknown>;
+      expect(terminal.output).toEqual([]);
+    }
+  });
+
+  test("Grok compatibility treats every duplicate done index as contradictory", () => {
+    for (const conflicting of [false, true]) {
+      const rewrite = createGrokResponsesSparseTerminalBlockRewrite(createTestTranslatorBudget());
+      const first = {
+        type: "message",
+        id: "msg_1",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text: "first", annotations: [] }],
+      };
+      const second = conflicting
+        ? { ...first, id: "msg_2", content: [{ type: "output_text", text: "second", annotations: [] }] }
+        : first;
+      rewrite(dataBlock({ type: "response.output_item.done", output_index: 0, item: first }));
+      rewrite(dataBlock({ type: "response.output_item.done", output_index: 0, item: second }));
+      const out = rewrite(dataBlock({
+        type: "response.completed",
+        response: { id: "resp_1", output: [] },
+      }));
+      const terminal = eventsOf(out)[0]!.response as Record<string, unknown>;
+      expect(terminal.output).toEqual([]);
+    }
+  });
+
+  test("Grok compatibility requires a real done item, not deltas or an open item", () => {
+    const rewrite = createGrokResponsesSparseTerminalBlockRewrite(createTestTranslatorBudget());
+    rewrite(dataBlock({
+      type: "response.output_item.added",
+      output_index: 0,
+      item: { type: "message", id: "msg_1", role: "assistant", status: "in_progress", content: [] },
+    }));
+    rewrite(dataBlock({
+      type: "response.output_text.delta",
+      output_index: 0,
+      item_id: "msg_1",
+      delta: "visible but not durable",
+    }));
+    const out = rewrite(dataBlock({
+      type: "response.completed",
+      response: { id: "resp_1", output: [] },
+    }));
+    const terminal = eventsOf(out)[0]!.response as Record<string, unknown>;
+    expect(terminal.output).toEqual([]);
+  });
+
+  test("Grok compatibility reconstructs a contiguous reasoning-plus-message snapshot", () => {
+    const rewrite = createGrokResponsesSparseTerminalBlockRewrite(createTestTranslatorBudget());
+    const reasoning = {
+      type: "reasoning",
+      id: "rs_1",
+      status: "completed",
+      summary: [{ type: "summary_text", text: "summary" }],
+      content: [{ type: "reasoning_text", text: "reasoning" }],
+      encrypted_content: null,
+    };
+    const message = {
+      type: "message",
+      id: "msg_1",
+      role: "assistant",
+      status: "completed",
+      phase: "final_answer",
+      content: [{ type: "output_text", text: "answer", annotations: [] }],
+    };
+    rewrite(dataBlock({ type: "response.output_item.done", output_index: 0, item: reasoning }));
+    rewrite(dataBlock({ type: "response.output_item.done", output_index: 1, item: message }));
+    const out = rewrite(dataBlock({
+      type: "response.completed",
+      response: { id: "resp_1", output: [] },
+    }));
+    const terminal = eventsOf(out)[0]!.response as Record<string, unknown>;
+    expect(terminal.output).toEqual([reasoning, message]);
+  });
+
+  test("Grok compatibility reconstructs a valid function call", () => {
+    const rewrite = createGrokResponsesSparseTerminalBlockRewrite(createTestTranslatorBudget());
+    const call = {
+      type: "function_call",
+      id: "fc_1",
+      status: "completed",
+      call_id: "call_1",
+      name: "search",
+      arguments: "{}",
+    };
+    rewrite(dataBlock({ type: "response.output_item.done", output_index: 0, item: call }));
+    const out = rewrite(dataBlock({
+      type: "response.completed",
+      response: { id: "resp_1", output: [] },
+    }));
+    const terminal = eventsOf(out)[0]!.response as Record<string, unknown>;
+    expect(terminal.output).toEqual([call]);
+  });
+
+  test("Grok compatibility rejects missing, empty, or whitespace function_call call_id", () => {
+    const callIds = [undefined, "", "   "] as const;
+    for (const callId of callIds) {
+      const rewrite = createGrokResponsesSparseTerminalBlockRewrite(createTestTranslatorBudget());
+      const call = {
+        type: "function_call",
+        id: "fc_1",
+        status: "completed",
+        name: "search",
+        arguments: "{}",
+        ...(callId === undefined ? {} : { call_id: callId }),
+      };
+      rewrite(dataBlock({ type: "response.output_item.done", output_index: 0, item: call }));
+      const out = rewrite(dataBlock({
+        type: "response.completed",
+        response: { id: "resp_1", output: [] },
+      }));
+      const terminal = eventsOf(out)[0]!.response as Record<string, unknown>;
+      expect(terminal.output).toEqual([]);
+    }
+  });
+
+  test("Grok compatibility rejects missing, empty, or whitespace custom_tool_call call_id even with a visible message", () => {
+    const message = {
+      type: "message",
+      id: "msg_1",
+      role: "assistant",
+      status: "completed",
+      content: [{ type: "output_text", text: "answer", annotations: [] }],
+    };
+    const callIds = [undefined, "", "   "] as const;
+    for (const callId of callIds) {
+      const rewrite = createGrokResponsesSparseTerminalBlockRewrite(createTestTranslatorBudget());
+      const custom = {
+        type: "custom_tool_call",
+        id: "ctc_1",
+        status: "completed",
+        name: "browser",
+        input: "{}",
+        ...(callId === undefined ? {} : { call_id: callId }),
+      };
+      rewrite(dataBlock({ type: "response.output_item.done", output_index: 0, item: custom }));
+      rewrite(dataBlock({ type: "response.output_item.done", output_index: 1, item: message }));
+      const out = rewrite(dataBlock({
+        type: "response.completed",
+        response: { id: "resp_1", output: [] },
+      }));
+      const terminal = eventsOf(out)[0]!.response as Record<string, unknown>;
+      expect(terminal.output).toEqual([]);
+    }
+  });
+
+  test("Grok compatibility reconstructs a valid custom_tool_call with a visible message", () => {
+    const rewrite = createGrokResponsesSparseTerminalBlockRewrite(createTestTranslatorBudget());
+    const custom = {
+      type: "custom_tool_call",
+      id: "ctc_1",
+      status: "completed",
+      call_id: "call_1",
+      name: "browser",
+      input: "{}",
+    };
+    const message = {
+      type: "message",
+      id: "msg_1",
+      role: "assistant",
+      status: "completed",
+      content: [{ type: "output_text", text: "answer", annotations: [] }],
+    };
+    rewrite(dataBlock({ type: "response.output_item.done", output_index: 0, item: custom }));
+    rewrite(dataBlock({ type: "response.output_item.done", output_index: 1, item: message }));
+    const out = rewrite(dataBlock({
+      type: "response.completed",
+      response: { id: "resp_1", output: [] },
+    }));
+    const terminal = eventsOf(out)[0]!.response as Record<string, unknown>;
+    expect(terminal.output).toEqual([custom, message]);
+  });
+
+  test("Grok compatibility preserves a non-empty terminal snapshot as authoritative", () => {
+    const rewrite = createGrokResponsesSparseTerminalBlockRewrite(createTestTranslatorBudget());
+    rewrite(dataBlock({
+      type: "response.output_item.done",
+      output_index: 0,
+      item: {
+        type: "message", id: "msg_done", role: "assistant", status: "completed",
+        content: [{ type: "output_text", text: "done", annotations: [] }],
+      },
+    }));
+    const canonical = [{
+      type: "message", id: "msg_canonical", role: "assistant", status: "completed",
+      content: [{ type: "output_text", text: "canonical", annotations: [] }],
+    }];
+    const terminalBlock = dataBlock({
+      type: "response.completed",
+      response: { id: "resp_1", output: canonical },
+    });
+    const out = rewrite(terminalBlock);
+    expect(out).toEqual([terminalBlock]);
+  });
+
+  test("Grok compatibility leaves explicit malformed terminal output fail-closed", () => {
+    for (const malformed of [null, "bad", 42, { bad: true }]) {
+      const rewrite = createGrokResponsesSparseTerminalBlockRewrite(createTestTranslatorBudget());
+      rewrite(dataBlock({
+        type: "response.output_item.done",
+        output_index: 0,
+        item: {
+          type: "message", id: "msg_1", role: "assistant", status: "completed",
+          content: [{ type: "output_text", text: "answer", annotations: [] }],
+        },
+      }));
+      const terminalBlock = dataBlock({
+        type: "response.completed",
+        response: { id: "resp_1", output: malformed },
+      });
+      expect(rewrite(terminalBlock)).toEqual([terminalBlock]);
+    }
+  });
+
+  test("Grok compatibility bounds and releases open-item identity state", () => {
+    const budget = createTestTranslatorBudget();
+    const rewrite = createGrokResponsesSparseTerminalBlockRewrite(budget);
+    for (let outputIndex = 0; outputIndex <= MAX_COMPLETED_OUTPUT_ITEMS; outputIndex++) {
+      rewrite(dataBlock({
+        type: "response.output_item.added",
+        output_index: outputIndex,
+        item: { type: "message", id: `msg_${outputIndex}` },
+      }));
+    }
+    // The first item beyond the count bound taints and immediately refunds all
+    // retained identities; an empty terminal remains authoritative.
+    expect(budget.snapshot().currentBytes).toBe(0);
+    const terminalBlock = dataBlock({
+      type: "response.completed",
+      response: { id: "resp_1", output: [] },
+    });
+    expect(rewrite(terminalBlock)).toEqual([terminalBlock]);
+  });
+
+  test("Grok compatibility rejects an oversized retained open identity", () => {
+    const budget = createTestTranslatorBudget();
+    const rewrite = createGrokResponsesSparseTerminalBlockRewrite(budget);
+    rewrite(dataBlock({
+      type: "response.output_item.added",
+      output_index: 0,
+      item: { type: "message", id: "x".repeat(MAX_COMPLETED_OUTPUT_ITEM_SOURCE_BYTES + 1) },
+    }));
+    expect(budget.snapshot().currentBytes).toBe(0);
+    const terminalBlock = dataBlock({
+      type: "response.completed",
+      response: { id: "resp_1", output: [] },
+    });
+    expect(rewrite(terminalBlock)).toEqual([terminalBlock]);
+  });
+
+  test("Grok compatibility dispose releases an unfinished open identity", () => {
+    const budget = createTestTranslatorBudget();
+    const rewrite = createGrokResponsesSparseTerminalBlockRewrite(budget);
+    rewrite(dataBlock({
+      type: "response.output_item.added",
+      output_index: 0,
+      item: { type: "message", id: "msg_1" },
+    }));
+    expect(budget.snapshot().currentBytes).toBeGreaterThan(0);
+    rewrite.dispose?.();
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test("Grok compatibility never rewrites failed, incomplete, or contradictory completed terminals", () => {
+    for (const terminal of [
+      { type: "response.failed", response: { id: "resp_1", output: [] } },
+      { type: "response.incomplete", response: { id: "resp_1", output: [] } },
+      { type: "response.completed", response: { id: "resp_1", status: "failed", output: [] } },
+    ]) {
+      const rewrite = createGrokResponsesSparseTerminalBlockRewrite(createTestTranslatorBudget());
+      rewrite(dataBlock({
+        type: "response.output_item.done",
+        output_index: 0,
+        item: {
+          type: "message", id: "msg_1", role: "assistant", status: "completed",
+          content: [{ type: "output_text", text: "answer", annotations: [] }],
+        },
+      }));
+      const terminalBlock = dataBlock(terminal);
+      expect(rewrite(terminalBlock)).toEqual([terminalBlock]);
+    }
+  });
+
+  test("Grok sparse repair still fills an empty terminal when composed ahead of provider snapshot repair", () => {
+    const done = {
+      type: "message",
+      id: "msg_1",
+      role: "assistant",
+      status: "completed",
+      phase: "final_answer",
+      content: [{ type: "output_text", text: "answer", annotations: [] }],
+    };
+    const chain = composeSseBlockRewrites(
+      createGrokResponsesSparseTerminalBlockRewrite(createTestTranslatorBudget()),
+      createResponsesSnapshotBlockRewrite(undefined, createTestTranslatorBudget()),
+    );
+    chain(dataBlock({ type: "response.output_item.done", output_index: 0, item: done }));
+    const out = chain(dataBlock({
+      type: "response.completed",
+      response: { id: "resp_1", status: "completed", output: [] },
+    }));
+    const completed = eventsOf(out).find(event => event.type === "response.completed");
+    expect(completed).toBeDefined();
+    expect((completed!.response as Record<string, unknown>).output).toEqual([done]);
+  });
+});
 
 describe("createResponsesSnapshotBlockRewrite", () => {
   test("the exact #893 issue fixture yields the full canonical lifecycle and a committed message", () => {

@@ -53,7 +53,7 @@ V1 안내는 `max` 또는 `ultra`에서만 선제 텍스트로 제공됩니다. 
 거부하고 역할을 건너뜁니다 (#1190). TOML의 기존 `model_fallback` 줄은 하위 호환성을 위해
 계속 읽히지만 `ocx doctor`가 이를 표시합니다.
 
-opencodex는 비활성, 라우팅 불가, 비정상, 쿨다운 중, 또는 할당량 임계값에 걸린 후보를 건너뜁니다. 사용 가능성 스냅샷은 `subagentModelFallbackPollMs` 동안 캐시됩니다. 암호화된 하위 작업은 정규 네이티브 ChatGPT 대상과 `allowEncryptedV2AgentTasks: true`로 명시적으로 신뢰한 직접 키 인증 Responses 라우트만 후보로 사용합니다. 암호화된 페이로드를 처리할 수 있는 대상이 없으면 읽을 수 없는 암호문을 다른 곳으로 보내지 않고 요청이 실패합니다. 콤보는 계속 정규 네이티브 대상만 사용합니다.
+opencodex는 비활성, 라우팅 불가, 비정상, 쿨다운 중, 또는 할당량 임계값에 걸린 후보를 건너뜁니다. 사용 가능성 스냅샷은 `subagentModelFallbackPollMs` 동안 캐시됩니다. 암호화된 하위 작업은 정규 네이티브 ChatGPT 대상과 `allowEncryptedV2AgentTasks: true`로 명시적으로 신뢰한 직접 키 인증 Responses 라우트만 후보로 사용합니다. 암호화된 페이로드를 처리할 수 있는 대상이 없으면 읽을 수 없는 암호문을 다른 곳으로 보내지 않고 요청이 실패합니다. 콤보는 먼저 사용 가능한 정규 네이티브 대상을 시도하고, 선택 가능한 네이티브 대상이 없으며 `agentTaskRecovery`가 켜져 있으면 암호화된 `NEW_TASK`를 라우팅된 콤보 전송 전에 한 번 복구합니다.
 
 ```json
 {

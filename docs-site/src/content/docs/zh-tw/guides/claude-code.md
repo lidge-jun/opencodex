@@ -112,9 +112,12 @@ Claude Desktop 使用與 Claude Code 分開的設定檔。在儀表板開啟 **C
 
 你也可以用命令列管理同一份設定檔：
 
+以下設定檔編輯說明適用於本機設定檔；連接遠端 hub 時的套用方式另見下節。
+
 ```bash
 ocx claude desktop [apply]
 ocx claude desktop show [--json]
+ocx claude desktop status [--json]
 ocx claude desktop move <route> <opus|fable|sonnet|haiku> [--default]
 ocx claude desktop default <opus|fable|sonnet|haiku> <route|none>
 ocx claude desktop export <path|->
@@ -168,6 +171,52 @@ Anthropic。若任一供應商標頭含有代理許可密鑰，該密鑰會被�
 可以設定 `claudeCode.nativePassthrough: false` 來停用；也可以透過
 `claudeCode.anthropicBaseUrl` 指向其他位置。
 
+## 連接遠端 hub 的 Claude Desktop
+
+已連接的機器執行 `ocx claude desktop apply` 或 `ocx claude desktop` 時，會讀取 hub 的
+Desktop 快照，將 hub origin 和 hub 發出的完整模型 ID 原樣寫入本機 Desktop 設定，不再於本機
+產生別名。static/hybrid 模式也複製模型清單；discovery-only 模式使用 hub origin，不嵌入清單。
+
+Desktop 設定檔、模型家族分組及預設值由 hub 管理。在 hub 上修改後，請在客戶端重新套用，
+並在 Desktop 中重新選擇模型。以前只在客戶端產生的別名也需要重新套用、重新選擇，不會自動
+移轉。`show`、本機編輯及 import/export 仍只操作本機設定。連接期間不支援
+`ocx claude desktop import <path> --apply`，會在儲存前拒絕；不帶 `--apply` 的 import 仍是本機操作。
+
+讀取使用現有連線的資料存取憑證，不需要管理員權杖，也不會上傳設定檔。舊版 hub 不支援快照、
+回應無效或 Desktop 清單為空時，套用會失敗，不會改用本機目錄或回環位址。
+請更新或設定 hub 後重新套用。
+
+本次別名修改不解決 [#3719](https://github.com/lidge-jun/opencodex/issues/3719) 中獨立的 `thinking` / `redacted_thinking` 重播與提示快取請求。
+只有代理存取憑證不會啟用原生 Anthropic 透傳，但經過轉換的 Anthropic 路由仍可使用提示快取。
+重播保真與快取命中率比較仍是獨立工作。
+
+### 金鑰輪換、復原與中斷連線
+
+金鑰輪換和復原會同步更新本機連線憑證與該連線管理的 Desktop 設定中的金鑰，無須為了移轉
+金鑰而手動重新 apply。模型 ID、家族分組、預設值及目前設定選擇都會保留；輪換不會重新選取
+管理設定，也不會啟用已關閉的整合。CLI JSON 的 `rotation: "committed"` 表示新金鑰已生效，
+`rotation: "rolled_back"` 表示保留或還原了舊金鑰，不代表新金鑰已提交或舊金鑰已撤銷。
+結果不確定或復原未完成時，不會回報輪換成功。
+
+首次連線套用會儲存原先的管理設定和選擇，以供還原；後續 apply 和輪換不會覆寫這份初始紀錄。
+`ocx disconnect` 還原連線管理的設定，同時保留使用者新增欄位和其他設定檔。只有管理設定檔
+仍被選取時才還原之前的選擇；使用者後來選取的其他有效設定檔保持不變。新建設定檔若已有
+使用者新增內容，會保留為可讀取的標準模式，而不是刪除這些內容。`--keep-catalog` 保留的是
+目錄，不是 Desktop 連線金鑰。
+
+沒有原始紀錄的舊管理設定檔，只要能明確確認屬於目前 hub 和已識別的連線金鑰，就能移轉。
+apply、輪換/復原或直接 disconnect 均可處理，無須新參數或事先重新 apply。系統會警告：
+先前的設定未記錄，中斷連線時將使用標準模式。只移除連線擁有的閘道設定，保留使用者欄位和
+另行選取的有效設定檔；結果標為標準回退，而非還原原始設定。
+
+管理欄位衝突、無法識別的憑證或損壞的還原紀錄會保留並回報，不會覆寫。中斷的清理僅針對
+同一連線繼續，不會刪除新連線，也不會在還原未完成時宣稱完成。中斷前先完成待處理的金鑰
+輪換復原；重試中斷時保持原來的目錄保留選項。
+
+套用、輪換/復原或還原設定後，請完全退出並重新開啟 Claude Desktop。修改磁碟檔案不會替換
+執行中應用程式持有的金鑰，也不會自動退出或重新啟動應用程式。中斷連線在本機完成，不會
+自動撤銷 hub 金鑰或刪除外部副本；如有需要，請另行在 hub 撤銷。
+
 ## /model 選擇器（“From gateway”）
 
 Claude Code 2.1.129+ 透過 `GET /v1/models?limit=1000` 發現閘道器模型，並在原生 `/model`
@@ -198,6 +247,14 @@ user-agent 會獲得易讀的 CLI 形式，其他用戶端會獲得 Desktop 雜�
 
 **模型解析順序：**移除 `[1m]` 標記 → 解碼易讀別名 → 解碼 Desktop 雜湊別名 →
 `modelMap` 精確匹配 → 移除日期後的匹配（移除 `-20250514`）→ 透傳。
+
+<a id="desktop-alias-resolution"></a>
+
+無法解析的日期型 Desktop ID 也可能是探索結果中缺少的真實原生模型 ID。現有資訊不足以
+解析該 ID 時，Messages 和 count-tokens 回傳 HTTP 503 及固定錯誤 `desktop_model_mapping_unavailable`；這不代表
+模型無效。未知的舊版雜湊別名仍回傳 HTTP 400。兩種情況都不會移除日期或回退到其他路由。
+已知 ID、已註冊映射、精確 `modelMap` 匹配及已識別的真實原生 ID 維持原有處理方式。
+請重新整理模型探索或重新套用已連接 hub 的設定後再試；僅重試本身不能保證解決。
 
 每個條目都帶有類似 `gemini-3-pro (gemini)` 的顯示名稱，以及官方 `ModelInfo` 結構中的完整
 模型能力（推理強度階梯、思考型別）。真正的 Anthropic 模型在兩個介面上都保留其規範 ID。
@@ -289,6 +346,8 @@ opencodex 會在**已路由**請求中將該技能內容替換為一個短佔位
 ```
 
 查詢順序：發現別名 → 精確 ID → 移除日期字尾的 ID（`-20250514`）→ 透傳。
+
+拒絕規則請見 [Desktop 別名解析](#desktop-alias-resolution)。
 
 ## Sidecar 矩陣：Web Search 與圖像理解
 

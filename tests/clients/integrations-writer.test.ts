@@ -141,6 +141,24 @@ function reverseJsonObjectKeys(value: unknown): unknown {
 }
 
 describe("apply", () => {
+  test("refuses Kimi TOML date rewrites without changing the file or ownership store", () => {
+    const spec = INTEGRATION_CLIENTS.kimi;
+    mkdirSync(spec.detectDir(TEST_ENV, home), { recursive: true });
+    const configPath = spec.configPath(TEST_ENV, home);
+    mkdirSync(dirname(configPath), { recursive: true });
+    const original = "[user]\nexpires = 2026-09-05T10:00:00Z\n";
+    writeFileSync(configPath, original);
+    const request = input({ clientId: "kimi" });
+
+    expect(readIntegrationState(request).state).toBe("unsafe");
+    const result = applyIntegration(request);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("unsafe");
+    expect(readFileSync(configPath, "utf8")).toBe(original);
+    expect(store.listOperations()).toHaveLength(0);
+    expect(store.readRecords().kimi).toBeUndefined();
+  });
+
   test("refuses a client that is not installed, and writes nothing", () => {
     const result = applyIntegration(input());
     expect(result.ok).toBe(false);

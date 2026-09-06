@@ -1,0 +1,17 @@
+# Grok catalog selection and Codex patch parity
+
+Class C3, spec-satisfaction repair. The user clarified that filtering means enabled model visibility in Pi/Aside, not assistant output filtering. No output-filter changes are authorized by this unit. Prior Chat patch fixes must remain effective at every Codex Responses tool completion boundary.
+
+Scope: export catalog selection, refresh of already-owned Pi/Aside integrations, native Responses custom-tool repair, focused regression tests, matching docs. No live user config changes, deployment, release, unrelated cleanup, local test suites or local typecheck. Push --no-verify and admin merge are explicitly authorized. Probes and hosted CI are authorized.
+
+Evidence: src/clients/config-export/constants.ts selects openai-completions for Pi; Aside uses the same builder. src/server/management/model-rows.ts:218 filters disabled only. src/cli/opencode.ts:373 likewise ignores selectedModels. src/codex/catalog/provider-fetch.ts:1992 is canonical for allowlist plus disabled and pending selection. src/server/management/model-routes.ts visibility writes converge Codex only. Both explicit sync paths refresh only MCode among owned file integrations. Live read-only snapshot: /v1/models and existing Aside managed file currently contain xai/grok-4.6 only; do not claim that the live snapshot reproduced a full catalog leak. Synthetic allowlist and stale-owned-file scenarios will establish the gaps.
+
+Independent patch analysis: native custom exec is skipped by repairable||aliased in responses-custom-tool-repair.ts:206. Its item.done/input.done preserve raw patch while response.completed repairs it. Function apply_patch helper aliases can stream raw patch before compiling final JS. Existing arbitrary JS and foreign namespace boundaries stay byte-exact.
+
+Dependencies: 010 export selection -> 020 owned file convergence -> 030 Codex patch completion parity. Each has its own PABCD and reviewable PR. The patch layer is a separate user-requested stabilization concern published after catalog layers in the requested stack.
+
+Resource scope: existing GitHub repo credentials, read-only local configuration with no secret output; at most 24 synthetic live-provider calls, each <=120 seconds; six-hour execution window. No explicit token budget. Probe scripts stay ignored .tmp; public notes contain no credentials or private requests. DONE = regression probes, actual hosted exact-head test/typecheck CI, independent review, registered stack merged and fetched-dev ancestry. BLOCKED only for a persistent external dependency; no stopping on CI queueing. Each later P rechecks current source and carries earlier evidence. Escalation: reclaim failed delegated scope; new write delegation requires P amendment.
+
+## Baseline probes
+
+`bun .tmp/grok-stabilization/catalog-probe.ts` exit 0: management/CLI × pi/aside each emitted grok-4.3, grok-4.5, grok-4.6 despite selectedModels=[grok-4.6]; full management roster was three. `bun .tmp/grok-stabilization/patch-probe.ts` exit 0: native custom exec emitted one raw delta, input.done uncompiled and item.done uncompiled; function apply_patch alias emitted one raw preview despite compiled final. Both are observation probes before repair, not passing acceptance assertions. `python3 .tmp/grok-stabilization/verify-roadmap.py` exit 0 checks numbered roadmap artifacts and actual existing source target paths. No local suite or typecheck was run.
