@@ -2,16 +2,18 @@ package ocxcli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
+	"os"
 	"strings"
 
 	"github.com/lidge-jun/opencodex/go/internal/config"
 )
 
 const (
-	configUsage           = "Usage:\n  ocx config [show] [--json]\n  ocx config get <dot.path> [--json]\n"
+	configUsage           = "Usage:\n  ocx config [show] [--json]\n  ocx config get <dot.path> [--json]\n  ocx config set <dot.path> <json-or-string> [--json]\n  ocx config unset <dot.path> [--json]\n  ocx config validate [path|-] [--json]\n  ocx config export <path|->\n  ocx config import <path|-> --yes [--json]\n"
 	modelsUsage           = "Usage: ocx models [--provider <name>] [--json]\n"
 	providerRegistryCount = 85
 )
@@ -40,26 +42,239 @@ func runConfig(args []string, deps Deps) int {
 		}
 		return writeIndentedJSON(deps.Stdout, redactConfig(cfg))
 	}
-	if args[0] != "get" || len(args) < 2 || len(args) > 3 || (len(args) == 3 && args[2] != "--json") {
+	action := args[0]
+	jsonOutput := takeFlag(&args, "--json")
+	switch action {
+	case "get":
+		if len(args) != 2 {
+			fmt.Fprint(deps.Stderr, configUsage)
+			return ExitUsage
+		}
+		cfg, err := loadCLIConfig()
+		if err != nil {
+			fmt.Fprintln(deps.Stderr, err)
+			return ExitFailure
+		}
+		value, ok := configPath(cfg, args[1])
+		if !ok {
+			fmt.Fprintf(deps.Stderr, "config path not found: %s\n", args[1])
+			return ExitUsage
+		}
+		value = redactConfigValue(value, lastSegment(args[1]))
+		if jsonOutput || isComposite(value) {
+			return writeIndentedJSON(deps.Stdout, value)
+		}
+		fmt.Fprintln(deps.Stdout, scalarString(value))
+		return ExitOK
+	case "set", "unset":
+		if (action == "set" && len(args) != 3) || (action == "unset" && len(args) != 2) {
+			fmt.Fprint(deps.Stderr, configUsage)
+			return ExitUsage
+		}
+		path := args[1]
+		cfg, err := loadCLIConfig()
+		if err != nil {
+			fmt.Fprintln(deps.Stderr, err)
+			return ExitFailure
+		}
+		var value any
+		if action == "set" {
+			value = parseConfigValue(args[2])
+		}
+		if err := setConfigPath(cfg, path, value, action == "unset"); err != nil {
+			fmt.Fprintln(deps.Stderr, err)
+			return ExitUsage
+		}
+		if err := validateCLIConfig(cfg); err != nil {
+			fmt.Fprintln(deps.Stderr, err)
+			return ExitUsage
+		}
+		if err := config.SaveRaw(cfg); err != nil {
+			fmt.Fprintln(deps.Stderr, err)
+			return ExitFailure
+		}
+		if action == "unset" {
+			value = nil
+		} else {
+			value, _ = configPath(cfg, path)
+		}
+		result := map[string]any{"ok": true, "path": path, "value": redactConfigValue(value, lastSegment(path))}
+		if jsonOutput {
+			return writeIndentedJSON(deps.Stdout, result)
+		}
+		fmt.Fprintf(deps.Stdout, "%s %s.\n", strings.Title(action), path)
+		return ExitOK
+	case "validate":
+		if len(args) > 2 || len(args) == 2 && args[1] != "-" {
+			fmt.Fprint(deps.Stderr, configUsage)
+			return ExitUsage
+		}
+		var cfg map[string]any
+		var err error
+		if len(args) == 2 {
+			cfg, err = readConfigInput(args[1])
+		} else {
+			cfg, err = loadCLIConfig()
+		}
+		if err == nil {
+			err = validateCLIConfig(cfg)
+		}
+		if err != nil {
+			if jsonOutput {
+				writeIndentedJSON(deps.Stdout, map[string]any{"ok": false, "error": err.Error()})
+			} else {
+				fmt.Fprintf(deps.Stdout, "Config is invalid: %s\n", err)
+			}
+			return ExitFailure
+		}
+		if jsonOutput {
+			return writeIndentedJSON(deps.Stdout, map[string]any{"ok": true})
+		}
+		fmt.Fprintln(deps.Stdout, "Config is valid.")
+		return ExitOK
+	case "export":
+		if len(args) != 2 {
+			fmt.Fprint(deps.Stderr, configUsage)
+			return ExitUsage
+		}
+		cfg, err := loadCLIConfig()
+		if err != nil {
+			fmt.Fprintln(deps.Stderr, err)
+			return ExitFailure
+		}
+		content, _ := json.MarshalIndent(cfg, "", "  ")
+		content = append(content, '\n')
+		if args[1] == "-" {
+			_, _ = deps.Stdout.Write(content)
+			return ExitOK
+		}
+		if err := os.WriteFile(args[1], content, 0o600); err != nil {
+			fmt.Fprintln(deps.Stderr, err)
+			return ExitFailure
+		}
+		fmt.Fprintf(deps.Stdout, "Exported config to %s.\n", args[1])
+		return ExitOK
+	case "import":
+		if len(args) != 3 || args[2] != "--yes" {
+			fmt.Fprint(deps.Stderr, configUsage)
+			return ExitUsage
+		}
+		cfg, err := readConfigInput(args[1])
+		if err == nil {
+			err = validateCLIConfig(cfg)
+		}
+		if err != nil {
+			fmt.Fprintln(deps.Stderr, err)
+			return ExitUsage
+		}
+		if err := config.SaveRaw(cfg); err != nil {
+			fmt.Fprintln(deps.Stderr, err)
+			return ExitFailure
+		}
+		if jsonOutput {
+			return writeIndentedJSON(deps.Stdout, map[string]any{"ok": true, "source": args[1]})
+		}
+		fmt.Fprintf(deps.Stdout, "Imported config from %s. Restart or run ocx sync if needed.\n", args[1])
+		return ExitOK
+	default:
 		fmt.Fprint(deps.Stderr, configUsage)
 		return ExitUsage
 	}
-	cfg, err := loadCLIConfig()
+}
+
+func takeFlag(args *[]string, flag string) bool {
+	for i, value := range *args {
+		if value == flag {
+			*args = append((*args)[:i], (*args)[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+var blockedConfigSegment = map[string]bool{"__proto__": true, "prototype": true, "constructor": true}
+
+func configSegments(path string) ([]string, error) {
+	segments := []string{}
+	for _, segment := range strings.Split(path, ".") {
+		segment = strings.TrimSpace(segment)
+		if segment != "" {
+			if blockedConfigSegment[segment] {
+				return nil, errors.New("invalid config path")
+			}
+			segments = append(segments, segment)
+		}
+	}
+	if len(segments) == 0 {
+		return nil, errors.New("invalid config path")
+	}
+	return segments, nil
+}
+func setConfigPath(root map[string]any, path string, value any, remove bool) error {
+	segments, err := configSegments(path)
 	if err != nil {
-		fmt.Fprintln(deps.Stderr, err)
-		return ExitFailure
+		return err
 	}
-	value, ok := configPath(cfg, args[1])
-	if !ok {
-		fmt.Fprintf(deps.Stderr, "config path not found: %s\n", args[1])
-		return ExitUsage
+	current := root
+	for _, segment := range segments[:len(segments)-1] {
+		next, ok := current[segment].(map[string]any)
+		if !ok {
+			return fmt.Errorf("config parent path not found: %s", segment)
+		}
+		current = next
 	}
-	value = redactConfigValue(value, lastSegment(args[1]))
-	if len(args) == 3 || isComposite(value) {
-		return writeIndentedJSON(deps.Stdout, value)
+	leaf := segments[len(segments)-1]
+	if remove {
+		if _, ok := current[leaf]; !ok {
+			return fmt.Errorf("config path not found: %s", path)
+		}
+		delete(current, leaf)
+	} else {
+		current[leaf] = value
 	}
-	fmt.Fprintln(deps.Stdout, scalarString(value))
-	return ExitOK
+	return nil
+}
+func parseConfigValue(raw string) any {
+	var value any
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.UseNumber()
+	if decoder.Decode(&value) == nil {
+		return value
+	}
+	return raw
+}
+func readConfigInput(path string) (map[string]any, error) {
+	var data []byte
+	var err error
+	if path == "-" {
+		data, err = io.ReadAll(os.Stdin)
+	} else {
+		data, err = os.ReadFile(path)
+	}
+	if err != nil {
+		return nil, err
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.UseNumber()
+	result := map[string]any{}
+	if err := decoder.Decode(&result); err != nil {
+		return nil, fmt.Errorf("invalid JSON in %s", path)
+	}
+	return result, nil
+}
+func validateCLIConfig(cfg map[string]any) error {
+	providers, ok := cfg["providers"].(map[string]any)
+	if !ok || len(providers) == 0 {
+		return errors.New("schema_invalid: providers must be a non-empty object")
+	}
+	defaultProvider, ok := cfg["defaultProvider"].(string)
+	if !ok || defaultProvider == "" {
+		return errors.New("schema_invalid: defaultProvider is required")
+	}
+	if _, ok := providers[defaultProvider]; !ok {
+		return fmt.Errorf("schema_invalid: defaultProvider %q does not exist in providers", defaultProvider)
+	}
+	return nil
 }
 
 func configPath(root map[string]any, path string) (any, bool) {

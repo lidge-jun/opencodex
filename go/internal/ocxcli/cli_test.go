@@ -7,9 +7,12 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/lidge-jun/opencodex/go/internal/config"
 	"github.com/lidge-jun/opencodex/go/internal/managementauth"
 )
 
@@ -137,5 +140,73 @@ func TestReadyAndUsageExitCodes(t *testing.T) {
 	stderr.Reset()
 	if got := Run([]string{"ready", "--timeout", "5"}, depsFor(state, &out, &stderr)); got != ExitUsage {
 		t.Fatalf("invalid ready = %d", got)
+	}
+}
+
+func TestConfigMutationFamilyPersistsAtomically(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OPENCODEX_HOME", dir)
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte("{\"providers\":{\"alpha\":{\"adapter\":\"openai-chat\",\"baseUrl\":\"https://alpha.test\"}},\"defaultProvider\":\"alpha\",\"port\":10100}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	if got := Run([]string{"config", "set", "port", "10200", "--json"}, depsFor(RuntimeState{}, &out, &stderr)); got != ExitOK {
+		t.Fatalf("set exit = %d stderr %q", got, stderr.String())
+	}
+	if !strings.Contains(out.String(), "\"value\": 10200") {
+		t.Fatalf("set output = %q", out.String())
+	}
+	loaded, err := config.LoadFromDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := loaded.Raw["port"]; got != json.Number("10200") {
+		t.Fatalf("persisted port = %#v", got)
+	}
+	out.Reset()
+	stderr.Reset()
+	if got := Run([]string{"config", "unset", "port"}, depsFor(RuntimeState{}, &out, &stderr)); got != ExitOK {
+		t.Fatalf("unset exit = %d stderr %q", got, stderr.String())
+	}
+	loaded, err = config.LoadFromDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := loaded.Raw["port"]; exists {
+		t.Fatalf("unset left port in %#v", loaded.Raw)
+	}
+	out.Reset()
+	stderr.Reset()
+	if got := Run([]string{"config", "set", "__proto__.polluted", "true"}, depsFor(RuntimeState{}, &out, &stderr)); got != ExitUsage {
+		t.Fatalf("blocked path exit = %d", got)
+	}
+	if got := Run([]string{"config", "validate", "--json"}, depsFor(RuntimeState{}, &out, &stderr)); got != ExitOK {
+		t.Fatalf("validate exit = %d stderr %q", got, stderr.String())
+	}
+}
+
+func TestConfigImportExportRequiresConfirmation(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OPENCODEX_HOME", dir)
+	input := filepath.Join(dir, "input.json")
+	if err := os.WriteFile(input, []byte("{\"providers\":{\"beta\":{\"adapter\":\"openai-chat\",\"baseUrl\":\"https://beta.test\"}},\"defaultProvider\":\"beta\"}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	if got := Run([]string{"config", "import", input}, depsFor(RuntimeState{}, &out, &stderr)); got != ExitUsage {
+		t.Fatalf("unconfirmed import = %d", got)
+	}
+	out.Reset()
+	stderr.Reset()
+	if got := Run([]string{"config", "import", input, "--yes", "--json"}, depsFor(RuntimeState{}, &out, &stderr)); got != ExitOK {
+		t.Fatalf("import = %d stderr %q", got, stderr.String())
+	}
+	if !strings.Contains(out.String(), "\"ok\": true") {
+		t.Fatalf("import output = %q", out.String())
+	}
+	out.Reset()
+	stderr.Reset()
+	if got := Run([]string{"config", "export", "-"}, depsFor(RuntimeState{}, &out, &stderr)); got != ExitOK || !strings.Contains(out.String(), "\"beta\"") {
+		t.Fatalf("export = %d %q", got, out.String())
 	}
 }

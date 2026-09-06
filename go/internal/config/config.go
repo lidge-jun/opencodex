@@ -233,3 +233,44 @@ func defaultSourceModels() []string {
 	// default and skew a later response.
 	return append([]string(nil), DefaultShadowSourceModels...)
 }
+
+// SaveRaw atomically replaces config.json with an indented JSON representation
+// of raw. It creates the config directory as needed and keeps user config
+// private (0600). Validation deliberately belongs to the owning command: this
+// shared reader must preserve unknown config fields.
+func SaveRaw(raw map[string]any) error {
+	path, err := Path()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	encoded, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return err
+	}
+	encoded = append(encoded, '\n')
+	temp, err := os.CreateTemp(filepath.Dir(path), ".config.json-*")
+	if err != nil {
+		return err
+	}
+	tempName := temp.Name()
+	defer os.Remove(tempName)
+	if err := temp.Chmod(0o600); err != nil {
+		temp.Close()
+		return err
+	}
+	if _, err := temp.Write(encoded); err != nil {
+		temp.Close()
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tempName, path)
+}
