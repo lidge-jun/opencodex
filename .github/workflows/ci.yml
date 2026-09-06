@@ -30,7 +30,7 @@ jobs:
           production=Path("src/cli/codex-shim-readiness.ts")
           out=Path(".tmp/shim-budget-diagnostics");out.mkdir(parents=True,exist_ok=True)
           original=fixture.read_bytes();prod_original=production.read_bytes()
-          base=fixture.read_text()
+          base=fixture.read_text(encoding="utf-8")
           def once(s,a,b):
               assert s.count(a)==1, "Pinned source anchor drifted"
               return s.replace(a,b,1)
@@ -50,13 +50,13 @@ jobs:
           mutant=once(prod_original.decode(),'  } catch {\n    // Routing readiness is advisory;','  } catch {\n    throw new Error("diagnostic broken advisory");\n    // Routing readiness is advisory;')
           results={}
           def sample(label,text,prod=prod_original):
-              fixture.write_text(text);production.write_bytes(prod)
+              fixture.write_text(text,encoding="utf-8");production.write_bytes(prod)
               with (out/(label+".log")).open("wb") as log:
                   p=subprocess.Popen(["bun","test","--isolate","--timeout","60000",str(fixture),"--test-name-pattern","keeps install advisory when the Codex config cannot be read"],stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
                   for line in p.stdout:
                       log.write(line);log.flush();sys.stdout.buffer.write(line);sys.stdout.buffer.flush()
                   code=p.wait()
-              logtext=re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]","",(out/(label+".log")).read_text(errors="replace"))
+              logtext=re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]","",(out/(label+".log")).read_text(encoding="utf-8",errors="replace"))
               events=[]
               for line in logtext.splitlines():
                   if line.startswith("SHIM_CHILD_RESULT "):
