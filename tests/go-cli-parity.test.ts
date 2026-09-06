@@ -115,4 +115,20 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
     testHome = mkdtempSync(join(tmpdir(), "ocx-go-cli-parity-"));
     expect(runTs(args).code).not.toBe(runGo(args).code);
   });
+  test.each([
+    { args: ["codex-shim", "status"] },
+    { args: ["help", "codex-shim"] },
+    { args: ["codex-shim", "--help"] },
+  ])("diffs read-only Codex shim contracts for $args", ({ args }) => {
+    testHome = mkdtempSync(join(tmpdir(), "ocx-go-cli-parity-"));
+    expectParity(args);
+  });
+  test.skipIf(process.platform === "win32").each([
+    { args: ["tray", "status"] },
+    { args: ["help", "tray"] },
+    { args: ["tray", "--help"] },
+  ])("diffs portable tray contracts for $args", ({ args }) => {
+    testHome = mkdtempSync(join(tmpdir(), "ocx-go-cli-parity-"));
+    expectParity(args);
+  });
 });

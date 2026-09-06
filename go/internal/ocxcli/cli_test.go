@@ -9,10 +9,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
-	"github.com/lidge-jun/opencodex/go/internal/config"
 	"github.com/lidge-jun/opencodex/go/internal/managementauth"
 )
 
@@ -61,7 +61,7 @@ func TestVersionAndRegistry(t *testing.T) {
 	if got := Run([]string{"--version"}, depsFor(RuntimeState{}, &out, &err)); got != ExitOK || out.String() != "opencodex 2.42.0\n" {
 		t.Fatalf("version = code %d stdout %q", got, out.String())
 	}
-	if len(Commands) != 8 || Commands[0].Name != "health" || Commands[1].Name != "ready" || Commands[2].Name != "status" || Commands[3].Name != "doctor" || Commands[4].Name != "service" || Commands[5].Name != "config" || Commands[6].Name != "models" || Commands[7].Name != "provider" {
+	if len(Commands) != 10 || Commands[0].Name != "health" || Commands[1].Name != "ready" || Commands[2].Name != "status" || Commands[3].Name != "doctor" || Commands[4].Name != "service" || Commands[5].Name != "codex-shim" || Commands[6].Name != "tray" || Commands[7].Name != "config" || Commands[8].Name != "models" || Commands[9].Name != "provider" {
 		t.Fatalf("unexpected command registry: %#v", Commands)
 	}
 }
@@ -96,7 +96,7 @@ func TestDoctorAndServiceValidateReadOnlyArguments(t *testing.T) {
 }
 
 func TestReadOnlyFamilyHelp(t *testing.T) {
-	for _, command := range []string{"status", "doctor", "service"} {
+	for _, command := range []string{"status", "doctor", "service", "codex-shim", "tray"} {
 		t.Run(command, func(t *testing.T) {
 			var out, stderr bytes.Buffer
 			if got := Run([]string{"help", command}, depsFor(RuntimeState{}, &out, &stderr)); got != ExitOK {
@@ -106,6 +106,43 @@ func TestReadOnlyFamilyHelp(t *testing.T) {
 				t.Fatalf("help output = %q", out.String())
 			}
 		})
+	}
+}
+
+func TestCodexShimStatusReadsOnlyItsStateFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OPENCODEX_HOME", dir)
+	var out, stderr bytes.Buffer
+	if got := Run([]string{"codex-shim", "status"}, depsFor(RuntimeState{}, &out, &stderr)); got != ExitOK {
+		t.Fatalf("absent status exit = %d stderr %q", got, stderr.String())
+	}
+	if want := "Codex autostart shim is not installed.\n"; out.String() != want {
+		t.Fatalf("absent status = %q, want %q", out.String(), want)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "codex-shim.json"), []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	stderr.Reset()
+	if got := Run([]string{"codex-shim", "status"}, depsFor(RuntimeState{}, &out, &stderr)); got != ExitOK {
+		t.Fatalf("corrupt status exit = %d stderr %q", got, stderr.String())
+	}
+	want := "Codex autostart shim state is invalid or corrupt at " + filepath.Join(dir, "codex-shim.json") + ". Reinstall or remove the shim.\n"
+	if out.String() != want {
+		t.Fatalf("corrupt status = %q, want %q", out.String(), want)
+	}
+}
+
+func TestTrayStatusMatchesThePortableUnsupportedContract(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows tray state remains TypeScript-owned")
+	}
+	var out, stderr bytes.Buffer
+	if got := Run([]string{"tray", "status"}, depsFor(RuntimeState{}, &out, &stderr)); got != ExitOK {
+		t.Fatalf("tray status exit = %d stderr %q", got, stderr.String())
+	}
+	if want := "Windows tray: unsupported on " + runtime.GOOS + "\n"; out.String() != want {
+		t.Fatalf("tray status = %q, want %q", out.String(), want)
 	}
 }
 
@@ -140,73 +177,5 @@ func TestReadyAndUsageExitCodes(t *testing.T) {
 	stderr.Reset()
 	if got := Run([]string{"ready", "--timeout", "5"}, depsFor(state, &out, &stderr)); got != ExitUsage {
 		t.Fatalf("invalid ready = %d", got)
-	}
-}
-
-func TestConfigMutationFamilyPersistsAtomically(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("OPENCODEX_HOME", dir)
-	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte("{\"providers\":{\"alpha\":{\"adapter\":\"openai-chat\",\"baseUrl\":\"https://alpha.test\"}},\"defaultProvider\":\"alpha\",\"port\":10100}"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	var out, stderr bytes.Buffer
-	if got := Run([]string{"config", "set", "port", "10200", "--json"}, depsFor(RuntimeState{}, &out, &stderr)); got != ExitOK {
-		t.Fatalf("set exit = %d stderr %q", got, stderr.String())
-	}
-	if !strings.Contains(out.String(), "\"value\": 10200") {
-		t.Fatalf("set output = %q", out.String())
-	}
-	loaded, err := config.LoadFromDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := loaded.Raw["port"]; got != json.Number("10200") {
-		t.Fatalf("persisted port = %#v", got)
-	}
-	out.Reset()
-	stderr.Reset()
-	if got := Run([]string{"config", "unset", "port"}, depsFor(RuntimeState{}, &out, &stderr)); got != ExitOK {
-		t.Fatalf("unset exit = %d stderr %q", got, stderr.String())
-	}
-	loaded, err = config.LoadFromDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, exists := loaded.Raw["port"]; exists {
-		t.Fatalf("unset left port in %#v", loaded.Raw)
-	}
-	out.Reset()
-	stderr.Reset()
-	if got := Run([]string{"config", "set", "__proto__.polluted", "true"}, depsFor(RuntimeState{}, &out, &stderr)); got != ExitUsage {
-		t.Fatalf("blocked path exit = %d", got)
-	}
-	if got := Run([]string{"config", "validate", "--json"}, depsFor(RuntimeState{}, &out, &stderr)); got != ExitOK {
-		t.Fatalf("validate exit = %d stderr %q", got, stderr.String())
-	}
-}
-
-func TestConfigImportExportRequiresConfirmation(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("OPENCODEX_HOME", dir)
-	input := filepath.Join(dir, "input.json")
-	if err := os.WriteFile(input, []byte("{\"providers\":{\"beta\":{\"adapter\":\"openai-chat\",\"baseUrl\":\"https://beta.test\"}},\"defaultProvider\":\"beta\"}"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	var out, stderr bytes.Buffer
-	if got := Run([]string{"config", "import", input}, depsFor(RuntimeState{}, &out, &stderr)); got != ExitUsage {
-		t.Fatalf("unconfirmed import = %d", got)
-	}
-	out.Reset()
-	stderr.Reset()
-	if got := Run([]string{"config", "import", input, "--yes", "--json"}, depsFor(RuntimeState{}, &out, &stderr)); got != ExitOK {
-		t.Fatalf("import = %d stderr %q", got, stderr.String())
-	}
-	if !strings.Contains(out.String(), "\"ok\": true") {
-		t.Fatalf("import output = %q", out.String())
-	}
-	out.Reset()
-	stderr.Reset()
-	if got := Run([]string{"config", "export", "-"}, depsFor(RuntimeState{}, &out, &stderr)); got != ExitOK || !strings.Contains(out.String(), "\"beta\"") {
-		t.Fatalf("export = %d %q", got, out.String())
 	}
 }

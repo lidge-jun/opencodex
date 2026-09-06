@@ -39,6 +39,8 @@ var Commands = []Command{
 	{Name: "status", Usage: "ocx status [--json]", Summary: "Report local listener diagnostics."},
 	{Name: "doctor", Usage: "ocx doctor", Summary: "Report local runtime diagnostics."},
 	{Name: "service", Usage: "ocx service status", Summary: "Report the local service manager state."},
+	{Name: "codex-shim", Usage: "ocx codex-shim status", Summary: "Inspect the Codex autostart shim."},
+	{Name: "tray", Usage: "ocx tray status", Summary: "Inspect the Windows status tray."},
 	{Name: "config", Usage: "ocx config <subcommand>", Summary: "Inspect the durable configuration."},
 	{Name: "models", Usage: "ocx models [--provider <name>] [--json]", Summary: "List configured models."},
 	{Name: "provider", Usage: "ocx provider <subcommand>", Summary: "Inspect configured providers."},
@@ -126,6 +128,10 @@ func Run(args []string, deps Deps) int {
 		return runDoctor(args[1:], deps)
 	case "service":
 		return runService(args[1:], deps)
+	case "codex-shim":
+		return runCodexShim(args[1:], deps)
+	case "tray":
+		return runTray(args[1:], deps)
 	case "config":
 		return runConfig(args[1:], deps)
 	case "models":
@@ -229,6 +235,53 @@ func runService(args []string, deps Deps) int {
 	}
 	return ExitOK
 }
+
+// runCodexShim owns only the read-only status projection during the incremental
+// takeover. Installation and removal mutate Codex launch paths and stay behind
+// the TypeScript lifecycle owner until their exact on-disk transaction contracts
+// have a differential oracle.
+func runCodexShim(args []string, deps Deps) int {
+	if len(args) != 1 || args[0] != "status" {
+		fmt.Fprintln(deps.Stderr, "Usage: ocx codex-shim <install|status|uninstall|remove>")
+		return ExitFailure
+	}
+	dir, err := config.Dir()
+	if err != nil {
+		fmt.Fprintln(deps.Stderr, err)
+		return ExitFailure
+	}
+	path := filepath.Join(dir, "codex-shim.json")
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		fmt.Fprintln(deps.Stdout, "Codex autostart shim is not installed.")
+		return ExitOK
+	}
+	if err != nil || !json.Valid(raw) {
+		fmt.Fprintf(deps.Stdout, "Codex autostart shim state is invalid or corrupt at %s. Reinstall or remove the shim.\n", path)
+		return ExitOK
+	}
+	// A syntactically valid state still needs the TypeScript ownership and file
+	// graph checks before it can truthfully be described as healthy. Keep that
+	// richer projection TS-owned rather than inventing an incomplete status.
+	fmt.Fprintln(deps.Stdout, "Codex autostart shim status requires the TypeScript lifecycle owner.")
+	return ExitOK
+}
+
+// runTray preserves the portable status contract. Windows tray state includes
+// registry ownership and a live host heartbeat, so its Windows projection and
+// every lifecycle mutation remain TypeScript-owned until separately migrated.
+func runTray(args []string, deps Deps) int {
+	if len(args) != 1 || args[0] != "status" {
+		fmt.Fprintln(deps.Stderr, "Usage: ocx tray <install|start|stop|status|uninstall|remove> [--json] [--no-start]")
+		return ExitFailure
+	}
+	if runtime.GOOS != "windows" {
+		fmt.Fprintf(deps.Stdout, "Windows tray: unsupported on %s\n", runtime.GOOS)
+		return ExitOK
+	}
+	fmt.Fprintln(deps.Stdout, "Windows tray status requires the TypeScript lifecycle owner.")
+	return ExitOK
+}
 func printHelp(w io.Writer) { fmt.Fprint(w, fullUsage) }
 func hasHelpFlag(args []string) bool {
 	for _, arg := range args {
@@ -250,6 +303,10 @@ func printSubcommandHelp(name string, deps Deps) int {
 		fmt.Fprint(deps.Stdout, "Usage: ocx doctor\n\nReport Go-owned local runtime diagnostics.\n")
 	case "service":
 		fmt.Fprint(deps.Stdout, "Usage: ocx service status\n\nReport the local service manager state. Lifecycle mutations remain TypeScript-owned during the incremental takeover.\n")
+	case "codex-shim":
+		fmt.Fprint(deps.Stdout, "Usage: ocx codex-shim <install|status|uninstall|remove>\n\nAuto-start the proxy when `codex` launches.\n\nUse `remove` as an alias for `uninstall`.\n")
+	case "tray":
+		fmt.Fprint(deps.Stdout, "Usage: ocx tray <install|start|stop|status|uninstall|remove> [--json] [--no-start]\n\nInstall and control the Windows status tray icon.\n\nThe tray starts at Windows login and provides one-click proxy controls.\nTray start/stop controls the icon only; use its menu to start or stop the proxy.\n--no-start (install only) installs the tray without launching it immediately.\n")
 	default:
 		fmt.Fprintf(deps.Stderr, "Unknown command: %s\n", name)
 		printHelp(deps.Stdout)
