@@ -9,16 +9,101 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lidge-jun/opencodex/go/internal/config"
 	"github.com/lidge-jun/opencodex/go/internal/managementauth"
 )
 
 const testSecret = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG"
+
+func runTypeScriptStatusJSON(t *testing.T, home string) []byte {
+	t.Helper()
+	repo := typeScriptOracleRepo(t)
+	cmd := exec.Command("bun", "src/cli/index.ts", "status", "--json")
+	cmd.Dir = repo
+	cmd.Env = append(os.Environ(), "OPENCODEX_HOME="+home, "CODEX_HOME="+filepath.Join(home, "codex"))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("TypeScript status oracle: %v: %s", err, out)
+	}
+	return out
+}
+
+// The focused Go worktree intentionally does not install JavaScript packages.
+// Use its own dependency tree when present, otherwise use the primary checkout
+// named by the migration task as the immutable TypeScript oracle.
+func typeScriptOracleRepo(t *testing.T) string {
+	t.Helper()
+	worktree := filepath.Clean(filepath.Join(filepath.Dir(currentTestFile(t)), "..", "..", ".."))
+	if info, err := os.Stat(filepath.Join(worktree, "node_modules")); err == nil && info.IsDir() {
+		return worktree
+	}
+	t.Skip("TypeScript status/doctor oracle needs node_modules in this checkout")
+	return ""
+}
+
+func currentTestFile(t *testing.T) string {
+	t.Helper()
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot resolve test file")
+	}
+	return file
+}
+
+func statusDomainBytes(t *testing.T, full []byte) []byte {
+	t.Helper()
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, full); err != nil {
+		t.Fatalf("compact status oracle: %v; output=%s", err, full)
+	}
+	var status struct {
+		Proxy  json.RawMessage `json:"proxy"`
+		Listen json.RawMessage `json:"listen"`
+		Config json.RawMessage `json:"config"`
+	}
+	if err := json.Unmarshal(compact.Bytes(), &status); err != nil {
+		t.Fatalf("decode status oracle: %v; output=%s", err, compact.Bytes())
+	}
+	return []byte(`{"proxy":` + string(status.Proxy) + `,"listen":` + string(status.Listen) + `,"config":` + string(status.Config) + `}`)
+}
+
+func runTypeScriptDoctorProxyHint(t *testing.T, input DoctorProxyDownInput) string {
+	t.Helper()
+	repo := typeScriptOracleRepo(t)
+	script := `import { proxyDownRestartHint } from "./src/cli/doctor";
+const value = proxyDownRestartHint(JSON.parse(process.env.OCX_DOCTOR_INPUT));
+process.stdout.write(JSON.stringify(value));`
+	encoded, err := json.Marshal(map[string]any{
+		"proxyRunning": input.ProxyRunning, "port": input.Port, "serviceViable": input.ServiceViable,
+		"serviceInstalled": input.ServiceInstalled, "serviceConflict": input.ServiceConflict, "staleProcessState": input.StaleProcessState,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bun", "-e", script)
+	cmd.Dir = repo
+	cmd.Env = append(os.Environ(), "OCX_DOCTOR_INPUT="+string(encoded))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("TypeScript doctor oracle: %v: %s", err, out)
+	}
+	var hint *string
+	if err := json.Unmarshal(out, &hint); err != nil {
+		t.Fatalf("decode doctor oracle: %v; output=%s", err, out)
+	}
+	if hint == nil {
+		return ""
+	}
+	return *hint
+}
 
 func testServer(t *testing.T, readyStatus string, validProof bool) (*httptest.Server, RuntimeState) {
 	t.Helper()
@@ -386,6 +471,86 @@ func TestStatusEvidenceUsesTypeScriptHealthzMessageRules(t *testing.T) {
 	})
 	if !probe.Health.OK || probe.Health.Message != "ok" {
 		t.Fatalf("health = %#v", probe.Health)
+	}
+}
+
+func TestStatusDomainsMatchTypeScriptOracleForConfigFallback(t *testing.T) {
+	// The TypeScript command remains the owner, so its byte representation is
+	// the contract for the diagnostic domains Go is incrementally porting.
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte("{\"port\":9,\"hostname\":\"0.0.0.0\"}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENCODEX_HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, "codex"))
+	if err := os.Mkdir(filepath.Join(home, "codex"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	oracle := runTypeScriptStatusJSON(t, home)
+	want := statusDomainBytes(t, oracle)
+	got, err := json.Marshal(CollectStatusDomains(StatusDomainDeps{
+		ReadPID:     func() int64 { return 0 },
+		ReadRuntime: func() (StatusRuntimeRecord, error) { return StatusRuntimeRecord{}, errors.New("missing") },
+		HTTPClient:  &http.Client{Timeout: 800 * time.Millisecond},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("domain bytes\\n got: %s\\nwant: %s", got, want)
+	}
+}
+
+func TestStatusDomainsMatchTypeScriptOracleForDefaultAndMalformedConfig(t *testing.T) {
+	for _, test := range []struct {
+		name, content string
+	}{
+		{name: "default"},
+		{name: "malformed", content: "{ invalid"},
+		{name: "schema-invalid", content: "{\"port\":\"not-a-port\"}"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			if test.content != "" {
+				if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(test.content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Mkdir(filepath.Join(home, "codex"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("OPENCODEX_HOME", home)
+			t.Setenv("CODEX_HOME", filepath.Join(home, "codex"))
+
+			want := statusDomainBytes(t, runTypeScriptStatusJSON(t, home))
+			got, err := json.Marshal(CollectStatusDomains(StatusDomainDeps{
+				ReadPID:     func() int64 { return 0 },
+				ReadRuntime: func() (StatusRuntimeRecord, error) { return StatusRuntimeRecord{}, errors.New("missing") },
+				HTTPClient:  &http.Client{Timeout: 800 * time.Millisecond},
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != string(want) {
+				t.Fatalf("domain bytes\\n got: %s\\nwant: %s", got, want)
+			}
+		})
+	}
+}
+
+func TestDoctorProxyDownHintMatchesTypeScriptOracle(t *testing.T) {
+	for _, input := range []DoctorProxyDownInput{
+		{ProxyRunning: true, Port: 10100},
+		{Port: 10100},
+		{Port: 12000, ServiceViable: true},
+		{Port: 10100, ServiceInstalled: true},
+		{Port: 10100, ServiceInstalled: true, ServiceConflict: true, StaleProcessState: true},
+	} {
+		want := runTypeScriptDoctorProxyHint(t, input)
+		if got := DoctorProxyDownRestartHint(input); got != want {
+			t.Fatalf("doctor hint\\n got: %q\\nwant: %q", got, want)
+		}
 	}
 }
 
