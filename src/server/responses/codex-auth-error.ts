@@ -9,6 +9,7 @@ import {
   CodexMainSubstitutionUnavailableError,
   CodexPoolAuthenticationError,
   CodexThreadAffinityExpiredError,
+  CodexStrictQuotaUnavailableError,
 } from "../../codex/auth-context";
 import {
   MAIN_CODEX_ACCOUNT_ID,
@@ -16,6 +17,7 @@ import {
   MainAuthJsonChangedDuringRefreshError,
 } from "../../codex/main-account";
 import { NativeProfileError } from "../../codex/native-profile-types";
+import { markStrictQuotaWaitResponse } from "./strict-quota-response";
 
 export interface CodexAuthContextErrorResponseOptions {
   accountSelector?: string;
@@ -46,6 +48,12 @@ export function mapCodexAuthContextErrorToResponse(
   error: unknown,
   options: CodexAuthContextErrorResponseOptions,
 ): Response | undefined {
+  if (error instanceof CodexStrictQuotaUnavailableError) {
+    const response = formatErrorResponse(429, "codex_quota_unavailable", error.message);
+    if (error.waitable) markStrictQuotaWaitResponse(response);
+    response.headers.set("Retry-After", "30");
+    return response;
+  }
   if (error instanceof CodexAccountCooldownError) {
     return cooldownErrorResponse(error, options.now, options.accountSelector);
   }

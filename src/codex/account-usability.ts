@@ -12,12 +12,16 @@ import { isNativeMainTrafficBlocked } from "./native-profile-startup";
 import { isMainAccountHardLocked } from "./main-account-hard-lock";
 
 export interface CodexAccountUsabilityOptions {
+  /** Live admission policy when the routing config is a request-specific replay snapshot. */
+  strictQuotaPolicy?: Readonly<Pick<OcxConfig, "codexAccountStrictQuota" | "autoSwitchThreshold">>;
   /** Route using cached runtime state only; the caller must reject selected main before auth. */
   nativeMainSelectionOnly?: boolean;
   /** Test seam for proving whether routing attempted a physical native-token read. */
   isMainAccountTokenLive?: typeof isMainAccountTokenLive;
   /** Confirmed account ids for an account-gated model; omitted for ordinary native models. */
   modelEligibleAccountIds?: ReadonlySet<string>;
+  /** Request-local retry exclusions are independent of the model's entitlement roster. */
+  excludedAccountIds?: ReadonlySet<string>;
 }
 
 export function isCodexAccountUsable(
@@ -25,6 +29,7 @@ export function isCodexAccountUsable(
   accountId: string,
   options: CodexAccountUsabilityOptions = {},
 ): boolean {
+  if (options.excludedAccountIds?.has(accountId)) return false;
   if (options.modelEligibleAccountIds && !options.modelEligibleAccountIds.has(accountId)) return false;
   if (accountId === MAIN_CODEX_ACCOUNT_ID) {
     if (isMainAccountHardLocked(config)) return false;
