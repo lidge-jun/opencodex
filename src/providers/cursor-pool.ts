@@ -1,5 +1,4 @@
 /** Cursor OAuth account-pool kernel. No configuration or HTTP surface lives here. */
-import { randomUUID } from "node:crypto";
 import { getAccountSet } from "../oauth/store";
 
 export const CURSOR_POOL_KEY = "cursor";
@@ -9,7 +8,11 @@ export interface CursorCredential {
   readonly id: string;
   weight: number;
 }
-export class NoAvailableCursorCredentialError extends Error {}
+export class NoAvailableCursorCredentialError extends Error {
+  constructor(message = "No available Cursor credentials") {
+    super(message);
+  }
+}
 interface State {
   ref: string;
   owner: string;
@@ -110,7 +113,7 @@ export class CursorPoolKernel {
       .map((a) => {
         let ref = this.refs.get(a.id);
         if (!ref) {
-          ref = `cp_${randomUUID().replaceAll("-", "")}`;
+          ref = `cp_${crypto.randomUUID().replaceAll("-", "")}`;
           this.refs.set(a.id, ref);
         }
         const token =
@@ -249,7 +252,7 @@ export class CursorPoolKernel {
   }
 }
 export function createCursorPoolCapability(): symbol {
-  return Symbol(`cursor-pool:${randomUUID()}`);
+  return Symbol(`cursor-pool:${crypto.randomUUID()}`);
 }
 
 /** Legacy weighted router; generic 429 rotation is owned elsewhere. */
