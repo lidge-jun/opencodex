@@ -316,6 +316,23 @@ func TestCodexShimMutationDelegates(t *testing.T) {
 	}
 }
 
+func TestCodexShimStatusReportsCorruptStateWithoutFailing(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OPENCODEX_HOME", dir)
+	if err := os.WriteFile(filepath.Join(dir, "codex-shim.json"), []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	deps := depsFor(RuntimeState{}, &out, &stderr)
+	deps.Delegate = func([]string) (int, error) { t.Fatal("codex-shim status delegated"); return 0, nil }
+	if got := Run([]string{"codex-shim", "status"}, deps); got != ExitOK {
+		t.Fatalf("exit=%d stderr=%q", got, stderr.String())
+	}
+	if !strings.Contains(out.String(), "state is invalid or corrupt") {
+		t.Fatalf("stdout=%q", out.String())
+	}
+}
+
 func TestDelegatedFamilyHelpUsesOwnerOutput(t *testing.T) {
 	for _, command := range []string{"status", "doctor", "service"} {
 		t.Run(command, func(t *testing.T) {

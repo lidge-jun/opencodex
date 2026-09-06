@@ -54,7 +54,6 @@ func runCodexShim(args []string, deps Deps) int {
 		files = append(files, state)
 	}
 	lines := []string{}
-	healthy := true
 	for _, file := range files {
 		wrapperPath, wok := file["wrapperPath"].(string)
 		originalPath, ook := file["originalPath"].(string)
@@ -68,26 +67,18 @@ func runCodexShim(args []string, deps Deps) int {
 				wrapper = "shim present"
 			} else {
 				wrapper = "present but not an opencodex shim"
-				healthy = false
 			}
-		} else {
-			healthy = false
 		}
 		backup := "missing"
 		if _, err := os.Stat(backupPath); err == nil {
 			backup = "present"
-		} else {
-			healthy = false
 		}
 		lines = append(lines, fmt.Sprintf("Codex autostart shim: wrapper %s at %s; original backup %s at %s.", wrapper, wrapperPath, backup, backupPath))
 	}
 	fmt.Fprintln(deps.Stdout, strings.Join(lines, "\n"))
-	if healthy {
-		return ExitOK
-	}
-	return ExitFailure
+	return ExitOK
 }
 func invalidShimState(path string, deps Deps) int {
 	fmt.Fprintln(deps.Stdout, "Codex autostart shim state is invalid or corrupt at "+path+". Reinstall or remove the shim.")
-	return ExitFailure
+	return ExitOK
 }
