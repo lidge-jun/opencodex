@@ -78,7 +78,7 @@ export function captureConfigTopLevelRollback(
   config: OcxConfig,
   keys: readonly (keyof OcxConfig)[],
 ): () => void {
-  const descriptors = new Map([...new Set([...keys, CONFIG_REBASE_PROVENANCE_KEY])]
+  const descriptors = new Map([...new Set<keyof OcxConfig>([...keys, CONFIG_REBASE_PROVENANCE_KEY])]
     .map(key => [key, Object.getOwnPropertyDescriptor(config, key)] as const));
   const pending = pendingTopLevelDeletions.get(config);
   const pendingBefore = pending === undefined ? undefined : new Set(pending);
