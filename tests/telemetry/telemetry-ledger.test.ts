@@ -44,13 +44,16 @@ describe("TelemetryLedger", () => {
     memLedger.close();
   });
 
-  test("sanitizes details by stripping sensitive keys", () => {
+  test("persists only allowlisted sanitized details", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-telemetry-"));
+    paths.push(dir);
+    const databasePath = join(dir, "telemetry.sqlite");
     const sampleKey = ["sk", "secret", "fixture", "123"].join("-");
     const email = [`ale${String.fromCharCode(0x301)}`, "example.com"].join("@");
     const punctuatedComponent = ["O", "Connor+Team"].join("'");
     const unixPath = ["", "Users", "李", punctuatedComponent, "trace(1).log"].join("/");
     const windowsPath = ["C:", "Users", "李", punctuatedComponent, "trace(1).log"].join("\\");
-    const ledger = new TelemetryLedger(":memory:");
+    const ledger = new TelemetryLedger(databasePath);
     const event: FailureEvent = { failureKind: "sanitized_error", signature: "sensitive details test", timestamp: 1000 };
     const details = {
       issueNumber: 42,
@@ -58,6 +61,9 @@ describe("TelemetryLedger", () => {
       response: "secret response",
       body: "secret body",
       apiKey: sampleKey,
+      userPrompt: "raw user input",
+      " prompt": "whitespace-prefixed raw user input",
+      arbitraryDiagnostic: "not part of the ledger contract",
       safeNote: `connection timeout for ${email} at ${unixPath} or ${windowsPath}`,
     };
     const record = ledger.recordFailure(event, 10000, details);
@@ -72,6 +78,34 @@ describe("TelemetryLedger", () => {
     expect(record.details?.response).toBeUndefined();
     expect(record.details?.body).toBeUndefined();
     expect(record.details?.apiKey).toBeUndefined();
+    expect(record.details?.userPrompt).toBeUndefined();
+    expect(record.details?.[" prompt"]).toBeUndefined();
+    expect(record.details?.arbitraryDiagnostic).toBeUndefined();
+    const db = new Database(databasePath, { readonly: true });
+    const row = db.query("SELECT details FROM failure_events WHERE fingerprint = ?").get(record.fingerprint) as { details: string };
+    const persisted = JSON.parse(row.details) as Record<string, unknown>;
+    expect(persisted).toEqual(record.details);
+    expect(row.details).not.toContain("raw user input");
+    expect(row.details).not.toContain("whitespace-prefixed raw user input");
+    expect(row.details).not.toContain("not part of the ledger contract");
+    expect(persisted).not.toHaveProperty("userPrompt");
+    expect(persisted).not.toHaveProperty(" prompt");
+    expect(persisted).not.toHaveProperty("arbitraryDiagnostic");
+    ledger.updateStatus(record.fingerprint, "fixed", {
+      resolution: "patched",
+      userPrompt: "status update raw user input",
+      " prompt": "status update whitespace bypass",
+    });
+    const updatedRow = db.query("SELECT details FROM failure_events WHERE fingerprint = ?").get(record.fingerprint) as { details: string };
+    const updatedPersisted = JSON.parse(updatedRow.details) as Record<string, unknown>;
+    expect(updatedPersisted).toEqual({
+      issueNumber: 42,
+      safeNote: record.details?.safeNote,
+      resolution: "patched",
+    });
+    expect(updatedRow.details).not.toContain("status update raw user input");
+    expect(updatedRow.details).not.toContain("status update whitespace bypass");
+    db.close();
     ledger.close();
   });
 

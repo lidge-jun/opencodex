@@ -20,7 +20,7 @@ interface StoredRow {
   occurrences: string;
 }
 
-const FORBIDDEN_DETAILS_KEY = /^(prompt|response|body|headers?|authorization|auth|api[_-]?key|key|token|secret|credential|password|account|cookie|path)/i;
+const ALLOWED_DETAILS_KEYS = new Set(["issueNumber", "resolution", "safeNote"]);
 
 function parseStoredDetails(raw: string | null): Record<string, unknown> | undefined {
   if (!raw) return undefined;
@@ -36,7 +36,7 @@ export function sanitizeDetails(details?: Record<string, unknown>): Record<strin
   if (!details || typeof details !== "object" || Array.isArray(details)) return undefined;
   const safe: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(details)) {
-    if (FORBIDDEN_DETAILS_KEY.test(k)) continue;
+    if (!ALLOWED_DETAILS_KEYS.has(k)) continue;
     if (typeof v === "string") {
       safe[k] = sanitizeSignature(v).slice(0, 256);
     } else if (typeof v === "number" || typeof v === "boolean") {
