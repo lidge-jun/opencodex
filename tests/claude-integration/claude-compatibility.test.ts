@@ -45,6 +45,13 @@ describe("Claude routed compatibility foundation", () => {
     expect(result.featureCodes).not.toContain("tool_search");
   });
 
+  test("classifies hosted tool search without also adding generic server-tool evidence", () => {
+    const result = collectClaudeFeatureCodes({
+      messages: [{ role: "assistant", content: [{ type: "server_tool_use", name: "tool_search", id: "srvtoolu_1", input: {} }] }],
+    });
+    expect(result).toEqual(["tool_search"]);
+  });
+
   test("recognizes cache control only at Anthropic block positions", () => {
     expect(collectClaudeFeatureCodes({
       tools: [{

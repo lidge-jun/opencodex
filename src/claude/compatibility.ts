@@ -229,7 +229,7 @@ function hasGenericServerTool(body: Rec): boolean {
           if (!isRec(b)) continue;
           if (b.type !== "server_tool_use") continue;
           const name = typeof b.name === "string" ? b.name : "";
-          if (name.includes("web_search") || name.includes("code_execution") || name.includes("computer") || name.startsWith("tool_search_tool_")) continue;
+          if (name.includes("web_search") || name.includes("code_execution") || name.includes("computer") || name === "tool_search" || name.startsWith("tool_search_tool_")) continue;
           return true;
         }
       }
@@ -257,7 +257,7 @@ function hasGenericServerTool(body: Rec): boolean {
         if (!isRec(b)) continue;
         if (b.type === "server_tool_use") {
           const n = typeof b.name === "string" ? b.name : "";
-          if (n.includes("web_search") || n.includes("code_execution") || n.includes("computer") || n.startsWith("tool_search_tool_")) continue;
+          if (n.includes("web_search") || n.includes("code_execution") || n.includes("computer") || n === "tool_search" || n.startsWith("tool_search_tool_")) continue;
           return true;
         }
       }
