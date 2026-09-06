@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mode: [missing, modules, executable_path, infrastructure]
+        mode: [missing, system_drive, account_environment, remaining_environment]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
@@ -159,7 +159,7 @@ jobs:
           s=p.read_text(encoding="utf-8")
           anchor='  mkdirSync(env.XDG_RUNTIME_DIR!, { recursive: true });'
           assert s.count(anchor)==1
-          extra='\n  const envMode = process.env.OCX_FIXTURE_ENV_MODE;\n  if (envMode === "modules" || envMode === "infrastructure") {\n    env.PSModulePath = process.env.PSModulePath;\n  }\n  if (envMode === "executable_path" || envMode === "infrastructure") {\n    env.PATH = process.env.PATH;\n    env.PATHEXT = process.env.PATHEXT;\n  }\n  if (envMode === "infrastructure") {\n    for (const key of ["COMSPEC", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "CommonProgramFiles", "CommonProgramFiles(x86)", "CommonProgramW6432", "ProgramData", "ALLUSERSPROFILE", "PUBLIC", "OS", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE"]) env[key] = process.env[key];\n    const temp = join(root, "temp");\n    mkdirSync(temp, { recursive: true }); env.TEMP = temp; env.TMP = temp;\n    mkdirSync(env.APPDATA!, { recursive: true }); mkdirSync(env.LOCALAPPDATA!, { recursive: true });\n  }\n'
+          extra='\n  const envMode = process.env.OCX_FIXTURE_ENV_MODE;\n  const readParent = (key: string) => process.env[Object.keys(process.env).find(k => k.toLowerCase() === key.toLowerCase()) ?? key];\n  if (envMode === "system_drive" || envMode === "account_environment") {\n    env.SystemDrive = readParent("SystemDrive");\n  }\n  if (envMode === "account_environment") {\n    for (const key of ["HOMEDRIVE", "HOMEPATH", "USERNAME", "USERDOMAIN", "USERDOMAIN_ROAMINGPROFILE", "USERDNSDOMAIN", "COMPUTERNAME", "LOGONSERVER"]) env[key] = readParent(key);\n  }\n  if (envMode === "remaining_environment") {\n    for (const [key, value] of Object.entries(process.env)) {\n      if (/^(OCX_|OPENCODEX_|CODEX_|CLAUDE_|BUN_|NODE_OPTIONS|GITHUB_|GH_|ACTIONS_|RUNNER_|NPM_)/i.test(key) || /TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY|CREDENTIAL|AUTH/i.test(key)) continue;\n      if (!Object.keys(env).some(k => k.toLowerCase() === key.toLowerCase())) env[key] = value;\n    }\n  }\n'
           p.write_text(s.replace(anchor,anchor+extra),encoding="utf-8")
           PY
           OCX_FIXTURE_ENV_MODE="$MODE" bun test --isolate ./tests/claude-integration/claude-desktop-remote-hub.test.ts --test-name-pattern 'stored profile=true'
