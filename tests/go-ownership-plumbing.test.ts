@@ -11,6 +11,7 @@ import {
   MANAGEMENT_ROUTES,
   findGoOwnedManagementRoute,
 } from "../src/server/management/route-registry";
+import { READ_SURFACE_DIFF_MATRIX } from "../src/server/management/read-surface-ownership";
 import {
   hasGoOwnedRouteForwarder,
   resetGoOwnedRouteForwarderForTests,
@@ -125,52 +126,17 @@ async function getJson(token: string, server: { url: URL }, pathname: string): P
 // ---------------------------------------------------------------------------
 
 describe("ADR-0008 ownership markers are typed read/write", () => {
-  test("the declared Go-owned surface includes bounded write batches", () => {
-    // Pin the migrated set so an accidental marker flip on another read route
-    // fails here instead of silently changing what the proxy serves. Adding a
-    // real migration updates this list deliberately. Health reports the serving
-    // process's own pid/uptime and declares them volatile; shadow-call-settings
-    // and custom-models are pure functions of config.json (the latter a raw
-    // JSON.stringify echo) and declare NO volatile field, which means the
-    // oracle compares their bytes with no normalisation at all.
-    const byPath = new Map(GO_OWNED_MANAGEMENT_ROUTES.map(r => [r.path, r]));
-    expect([...byPath.keys()].sort()).toEqual([
-      "/api/codex-auth/accounts/clear-cooldown",
-      "/api/codex-auth/active",
-      "/api/codex-auth/pool-strategy",
-      "/api/codex-auth/reset-credits/consume",
-      "/api/custom-models",
-      "/api/oauth/accounts/active",
-      "/api/oauth/accounts/clear-cooldown",
-      "/api/oauth/accounts/pool",
-      "/api/provider-quotas",
-      "/api/settings",
-      "/api/shadow-call-settings",
-      "/api/sidecar-settings",
-      "/api/system/health",
-    ]);
-    const health = byPath.get("/api/system/health")!;
-    expect(health.method).toBe("GET");
-    expect(health.mutates).toBe(false);
-    expect(health.module).toBe("server/management/system-routes");
-    expect(health.go.volatileFields).toEqual(["pid", "uptime"]);
-    const shadowCall = GO_OWNED_MANAGEMENT_ROUTES.find(route => (
-      route.method === "GET" && route.path === "/api/shadow-call-settings"
-    ))!;
-    expect(shadowCall.method).toBe("GET");
-    expect(shadowCall.mutates).toBe(false);
-    expect(shadowCall.module).toBe("server/management/config-routes");
-    expect(shadowCall.go.volatileFields).toEqual([]);
-    const customModels = byPath.get("/api/custom-models")!;
-    expect(customModels.method).toBe("GET");
-    expect(customModels.mutates).toBe(false);
-    expect(customModels.module).toBe("server/management/model-routes");
-    expect(customModels.go.volatileFields).toEqual([]);
-    const providerQuotas = byPath.get("/api/provider-quotas")!;
-    expect(providerQuotas.method).toBe("GET");
-    expect(providerQuotas.mutates).toBe(false);
-    expect(providerQuotas.module).toBe("server/management/provider-routes");
-    expect(providerQuotas.go.volatileFields).toEqual(["generatedAt"]);
+  test("the declared Go-owned surface includes matrix-backed reads and bounded write batches", () => {
+    const reads = GO_OWNED_MANAGEMENT_ROUTES.filter(route => !route.mutates);
+    const matrixReads = READ_SURFACE_DIFF_MATRIX.filter(row => row.transition === "go-now");
+    expect(reads.map(route => route.method + " " + route.path).sort()).toEqual(
+      matrixReads.map(row => row.method + " " + row.path).sort(),
+    );
+    for (const route of reads) {
+      const row = matrixReads.find(candidate => candidate.method === route.method && candidate.path === route.path)!;
+      expect(route.module).toBe(row.module);
+      expect(row.parityFixture).toBe("default-get");
+    }
     const writes = GO_OWNED_MANAGEMENT_ROUTES.filter(route => route.mutates);
     expect(writes.map(route => `${route.method} ${route.path}`).sort()).toEqual([
       "PATCH /api/codex-auth/pool-strategy",

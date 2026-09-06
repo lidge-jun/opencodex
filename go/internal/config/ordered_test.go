@@ -1,6 +1,7 @@
 package config
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -149,5 +150,23 @@ func TestOrderedEchoMalformedFileErrors(t *testing.T) {
 	writeFixture(t, dir, `{"customModels": [`)
 	if _, err := LoadOrderedFromDir(dir); err == nil {
 		t.Fatal("expected a decode error for a truncated file")
+	}
+}
+
+func TestECMAScriptEntriesSortArrayIndexesOnly(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, `{"10":true,"z":true,"2":true,"01":true,"4294967295":true,"0":true}`)
+	root, err := LoadOrderedFromDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := root.ECMAScriptEntries()
+	got := make([]string, len(entries))
+	for i, entry := range entries {
+		got[i] = entry.Key
+	}
+	want := []string{"0", "2", "10", "z", "01", "4294967295"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("entries = %#v, want %#v", got, want)
 	}
 }
