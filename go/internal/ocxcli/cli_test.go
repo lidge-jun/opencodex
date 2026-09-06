@@ -116,7 +116,7 @@ func TestLifecycleDelegateFailureIsReported(t *testing.T) {
 }
 
 func TestReadOnlyFamilyHelp(t *testing.T) {
-	for _, command := range []string{"status", "doctor", "service", "codex-shim", "tray"} {
+	for _, command := range []string{"codex-shim", "tray"} {
 		t.Run(command, func(t *testing.T) {
 			var out, stderr bytes.Buffer
 			if got := Run([]string{"help", command}, depsFor(RuntimeState{}, &out, &stderr)); got != ExitOK {
@@ -124,6 +124,26 @@ func TestReadOnlyFamilyHelp(t *testing.T) {
 			}
 			if !strings.Contains(out.String(), "Usage: ocx "+command) {
 				t.Fatalf("help output = %q", out.String())
+			}
+		})
+	}
+}
+
+func TestDelegatedFamilyHelpUsesOwnerOutput(t *testing.T) {
+	for _, command := range []string{"status", "doctor", "service"} {
+		t.Run(command, func(t *testing.T) {
+			var received []string
+			deps := depsFor(RuntimeState{}, &bytes.Buffer{}, &bytes.Buffer{})
+			deps.Delegate = func(args []string) (int, error) {
+				received = append([]string(nil), args...)
+				return ExitOK, nil
+			}
+			if got := Run([]string{"help", command}, deps); got != ExitOK {
+				t.Fatalf("help exit = %d", got)
+			}
+			want := []string{command, "--help"}
+			if !slices.Equal(received, want) {
+				t.Fatalf("delegated argv = %#v, want %#v", received, want)
 			}
 		})
 	}

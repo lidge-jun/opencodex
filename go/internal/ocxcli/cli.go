@@ -163,66 +163,6 @@ func runDelegated(args []string, deps Deps) int {
 	return code
 }
 
-type statusReport struct {
-	SchemaVersion int
-	Running       bool
-	PID           *int64
-	HealthOK      bool
-	HealthURL     string
-	HealthMessage string
-	Port          int
-	Hostname      string
-	Source        string
-}
-
-func runStatus(args []string, deps Deps) int {
-	jsonOutput := len(args) == 1 && args[0] == "--json"
-	if len(args) != 0 && !jsonOutput {
-		fmt.Fprintln(deps.Stderr, "Usage: ocx status [--json]")
-		return ExitFailure
-	}
-	report := collectGoStatus(deps)
-	if jsonOutput {
-		fmt.Fprintf(deps.Stdout, "{\"schemaVersion\":%d,\"proxy\":{\"running\":%t,\"pid\":", report.SchemaVersion, report.Running)
-		if report.PID == nil {
-			fmt.Fprint(deps.Stdout, "null")
-		} else {
-			fmt.Fprint(deps.Stdout, *report.PID)
-		}
-		fmt.Fprintf(deps.Stdout, ",\"health\":{\"ok\":%t,\"url\":%q,\"message\":%q}},\"listen\":{\"port\":%d,\"hostname\":%q,\"source\":%q}}\n", report.HealthOK, report.HealthURL, report.HealthMessage, report.Port, report.Hostname, report.Source)
-		return ExitOK
-	}
-	if report.Running {
-		fmt.Fprintf(deps.Stdout, "Proxy: running (PID %d)\n", *report.PID)
-	} else {
-		fmt.Fprintln(deps.Stdout, "Proxy: not running")
-	}
-	fmt.Fprintf(deps.Stdout, "Health: %s\nListen: %s:%d (%s)\n", report.HealthMessage, probeHost(report.Hostname), report.Port, report.Source)
-	return ExitOK
-}
-
-func collectGoStatus(deps Deps) statusReport {
-	report := statusReport{SchemaVersion: 1, Port: 10100, Source: "config", HealthMessage: "unreachable"}
-	if cfg, err := config.Load(); err == nil && cfg != nil {
-		report.Port, report.Hostname = cfg.ListenTarget()
-	}
-	report.HealthURL = "http://" + probeHost(report.Hostname) + ":" + strconv.Itoa(report.Port) + "/healthz"
-	state, err := deps.ReadRuntime()
-	if err != nil {
-		return report
-	}
-	report.Port, report.Hostname, report.Source = state.Port, state.Hostname, "runtime"
-	report.HealthURL = baseURL(state) + "/healthz"
-	health, _, err := ProbeHealth(deps)
-	if err != nil {
-		return report
-	}
-	report.Running, report.HealthOK, report.HealthMessage = true, true, "ok"
-	pid := health.PID
-	report.PID = &pid
-	return report
-}
-
 func printHelp(w io.Writer) { fmt.Fprint(w, fullUsage) }
 func hasHelpFlag(args []string) bool {
 	for _, arg := range args {
@@ -239,11 +179,11 @@ func printSubcommandHelp(name string, deps Deps) int {
 	case "ready":
 		fmt.Fprint(deps.Stdout, "Usage: ocx ready [--json] [--wait [--timeout <seconds>]]\n\nCheck post-sync readiness. Exits 0 only when ready.\n\nExact unauthenticated GET /readyz returns HTTP 200 when ready, or 503 with Retry-After: 1 for pending or failed.\nIts sanitized HTTP identity is {service, version, uptime, pid, port, status}; /healthz is separate liveness, not readiness.\nDefault is a single identity-checked /readyz probe; old proxies without /readyz fail closed as unreachable.\n--wait polls until ready or timeout, but exits immediately on terminal failed (default 45s, max 300s).\n--timeout requires --wait and accepts a positive integer (1..300).\n--json emits {ready, status, pid, port}; status is one of ready|pending|failed|unreachable.\nInvalid or unknown arguments exit 64. Not-ready, pending, failed, timeout, and unreachable exit 1.\n")
 	case "status":
-		fmt.Fprint(deps.Stdout, "Usage: ocx status [--json]\n\nReport Go-owned local listener diagnostics.\n")
+		return runDelegated([]string{"status", "--help"}, deps)
 	case "doctor":
-		fmt.Fprint(deps.Stdout, "Usage: ocx doctor\n\nReport Go-owned local runtime diagnostics.\n")
+		return runDelegated([]string{"doctor", "--help"}, deps)
 	case "service":
-		fmt.Fprint(deps.Stdout, "Usage: ocx service status\n\nReport the local service manager state. Lifecycle mutations remain TypeScript-owned during the incremental takeover.\n")
+		return runDelegated([]string{"service", "--help"}, deps)
 	case "codex-shim":
 		fmt.Fprint(deps.Stdout, "Usage: ocx codex-shim <install|status|uninstall|remove>\n\nAuto-start the proxy when `codex` launches.\n\nUse `remove` as an alias for `uninstall`.\n")
 	case "tray":
