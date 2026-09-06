@@ -875,6 +875,10 @@ export function mergeCatalogEntriesFromObservedState({
   const detachedBaselineCatalogModels = baselineCatalogModels
     .map(entry => structuredClone(entry) as RawEntry);
   const detachedRoutedEntries = routedEntries.map(entry => structuredClone(entry) as RawEntry);
+  // Track this invocation's generated custom rows, not ownership markers read from disk.
+  // Their builder already finalized exact native ladders and ordinary routed mock tiers.
+  const freshCustomEntries = new Set(detachedRoutedEntries.filter(entry =>
+    entry.opencodex_catalog_kind === CODEX_CUSTOM_MODEL_CATALOG_KIND));
   const detachedAccountBoundEntries = accountBoundEntries
     .map(entry => structuredClone(entry) as RawEntry);
   const disabledModelKeys = new Set([...disabledModels].map(slugEquivalenceKey));
@@ -1195,7 +1199,7 @@ export function mergeCatalogEntriesFromObservedState({
     // Mock-max universality (260709): preserved routed entries from disk may predate
     // the max rung — ensure it here so subagent max spawns validate on every
     // reasoning-capable entry. max only: 5.6 exact ladders (luna: no ultra) stay intact.
-    if (!exactCombo && !reserveProjection && !String(e.slug ?? "").startsWith("opencode-go/")) {
+    if (!freshCustomEntries.has(m) && !exactCombo && !reserveProjection && !String(e.slug ?? "").startsWith("opencode-go/")) {
       const levels = Array.isArray(e.supported_reasoning_levels)
         ? e.supported_reasoning_levels as Array<{ effort?: string }>
         : [];

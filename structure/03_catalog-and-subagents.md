@@ -37,6 +37,24 @@ custom catalog remains the native metadata/template authority even when a bundle
 warm. Both paths may use an admitted matching bundled memo only as installed-runtime capability
 evidence to remove unsupported reasoning efforts; convergence never probes Codex itself.
 
+Custom Astra and Daybreak rows acquire native reasoning capability only through the existing
+canonical `openai` forward destination and explicit capability-source predicate. The shared
+custom-row producer bounds their merged effort lists against pinned per-model Codex metadata,
+preserves an explicit empty list without a default, and recovers an incompatible nonempty list
+to the native default singleton. A default must belong to the projected list. Other custom rows
+keep their declaration precedence; a GPT model name, display alias, or arbitrary gateway is not
+native provenance. Stored configuration and native capability maps are unchanged.
+
+The observed-state merge tracks the current invocation's freshly generated custom row objects
+after detaching its inputs. Those rows already own their complete reasoning projection, so the
+merge does not append `max` again. This also keeps a generic none-only custom row none-only;
+ordinary retained provider rows still receive the existing mock-tier policy. A persisted custom
+marker alone never grants this exemption. Both gather entry points, retained sync, management
+convergence and direct Codex model discovery use the same producer. The legacy runtime effort
+union clamp remains separate; it is not a per-model or per-client-version grammar oracle.
+Existing thread settings and the reported Desktop 0.153.4 gateway rejection require separate
+runtime evidence. Codex's native `ultra` mode is preserved and is not a literal API wire promise.
+
 When account selectors are enabled, the sync path may also observe exact, visible, API-supported
 OpenAI-family ids from Codex's user-owned catalog/cache. Only rows with native catalog provenance
 are trusted; unknown ids are carried through startup cache invalidation as hidden observations and

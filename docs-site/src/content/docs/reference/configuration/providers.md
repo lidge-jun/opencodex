@@ -201,6 +201,14 @@ predictions. Explicit provider/model price overrides still take precedence.
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor legacy boolean, equivalent to `nativeLocalExec: "on"` only when the newer field is unset. |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor local-exec policy. `off` is default; `codex-sandbox` currently fails closed like `off`. |
 
+Custom-model `reasoningEfforts` normally override discovered provider metadata. The bounded
+exception is an explicit Astra or Daybreak custom row on the canonical `openai` Codex-forward
+destination: its advertised list is intersected with that model's pinned native capabilities.
+An explicit empty list remains empty with no default; a nonempty incompatible list falls back
+to the native default as a single choice. Defaults must belong to the final list. This changes
+the catalog projection, not stored configuration or arbitrary gateway models sharing a GPT name.
+See [custom native catalog examples](/guides/codex-app-models/).
+
 ### Discovered model display names
 
 Use `modelDisplayNames` when a provider returns machine friendly ids but the Codex model picker

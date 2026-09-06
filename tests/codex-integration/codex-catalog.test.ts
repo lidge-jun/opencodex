@@ -46,6 +46,7 @@ import { enrichProviderFromCatalog } from "../../src/oauth/key-providers";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { OAUTH_PROVIDERS } from "../../src/oauth";
 import {
+  catalogEntryEfforts,
   clampCatalogModelsToObservedCodexSupport,
   supportedCodexReasoningEffortsFromObservedCatalog,
 } from "../../src/codex/catalog/effort";
@@ -3704,6 +3705,114 @@ describe("Codex catalog routed normalization", () => {
     expect(astra?.base_instructions).not.toContain("daybreak");
   });
 
+  const nativeCustomEffortCases: Array<{
+    name: string;
+    efforts?: string[];
+    defaultEffort?: string;
+    expected: string[];
+    expectedDefault?: string;
+  }> = [
+    { name: "legacy sentinels", efforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max"], defaultEffort: "minimal", expected: ["low", "medium", "high", "xhigh", "max"], expectedDefault: "low" },
+    { name: "native default", expected: ["low", "medium", "high", "xhigh", "max", "ultra"], expectedDefault: "low" },
+    { name: "empty declaration", efforts: [], defaultEffort: "minimal", expected: [] },
+    { name: "no compatible rung", efforts: ["none", "minimal"], defaultEffort: "minimal", expected: ["low"], expectedDefault: "low" },
+    { name: "narrow subset", efforts: ["low"], defaultEffort: "high", expected: ["low"], expectedDefault: "low" },
+    { name: "valid explicit default", efforts: ["high", "medium", "high"], defaultEffort: "high", expected: ["medium", "high"], expectedDefault: "high" },
+    { name: "first survivor default", efforts: ["high", "medium"], defaultEffort: "minimal", expected: ["medium", "high"], expectedDefault: "medium" },
+    { name: "Ultra mode", efforts: ["minimal", "ultra"], defaultEffort: "minimal", expected: ["ultra"], expectedDefault: "ultra" },
+  ];
+
+  test.each(nativeCustomEffortCases)("canonical custom Astra bounds $name through gather/build/merge", async fixture => {
+    globalThis.fetch = (() => { throw new Error("canonical forward discovery must not fetch"); }) as typeof fetch;
+    const config = withStubbedProviderFetch<OcxConfig>({
+      port: 10100,
+      defaultProvider: "openai",
+      providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", codexAccountMode: "pool" } },
+      customModels: [{
+        id: "astra-effort",
+        provider: "openai",
+        modelId: "gpt-6-astra",
+        ...(fixture.efforts !== undefined ? { reasoningEfforts: fixture.efforts } : {}),
+        ...(fixture.defaultEffort !== undefined ? { defaultReasoningEffort: fixture.defaultEffort } : {}),
+      }],
+    });
+    const beforeConfig = JSON.stringify(config);
+    const beforeNative = JSON.stringify(upstreamNativeEntry("gpt-6-astra"));
+    const models = await gatherRoutedModelsDirect(config);
+    const custom = models.find(row => row.provider === "openai" && row.id === "gpt-6-astra");
+    expect(custom?.codexForwardNativeCapabilityAlias).toBe(true);
+    expect(custom?.reasoningEfforts).toEqual(fixture.expected);
+    expect(custom?.defaultReasoningEffort).toBe(fixture.expectedDefault);
+
+    const entries = buildCatalogEntries(nativeTemplate(), [], models);
+    const first = mergeCatalogEntriesForSync([], entries, new Map(), [], false);
+    const second = mergeCatalogEntriesForSync(first, buildCatalogEntries(nativeTemplate(), [], models), new Map(), [], false);
+    // Another model's sentinels make the legacy union permissive: it cannot mask this bug.
+    const observed = { models: [{
+      slug: "other-model",
+      supported_reasoning_levels: ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].map(effort => ({ effort })),
+    }] };
+    const beforeObserved = JSON.stringify(observed);
+    for (const projection of [entries, first, second]) {
+      clampCatalogModelsToObservedCodexSupport(projection, supportedCodexReasoningEffortsFromObservedCatalog(observed));
+      const row = projection.find(entry => entry.slug === "openai/gpt-6-astra");
+      expect(row ? catalogEntryEfforts(row) : undefined).toEqual(fixture.expected);
+      expect(row?.default_reasoning_level).toBe(fixture.expectedDefault);
+      expect(row?.use_responses_lite).toBe(true);
+      expect(row?.multi_agent_reasoning_effort).toBe("xhigh");
+      if (fixture.expected.length === 0) expect(row).not.toHaveProperty("default_reasoning_level");
+    }
+    expect(JSON.stringify(config)).toBe(beforeConfig);
+    expect(JSON.stringify(upstreamNativeEntry("gpt-6-astra"))).toBe(beforeNative);
+    expect(JSON.stringify(observed)).toBe(beforeObserved);
+  });
+
+  test.each([
+    { name: "YYLJ", adapter: "openai-responses", baseUrl: "https://gateway.example.test/v1", authMode: "key", modelId: "gpt-6-astra" },
+    { name: "openai", adapter: "openai-responses", baseUrl: "https://gateway.example.test/v1", authMode: "forward", modelId: "gpt-6-astra" },
+    { name: "openai", adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "key", modelId: "gpt-6-astra" },
+    { name: "openai", adapter: "openai-chat", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "key", modelId: "gpt-6-astra" },
+    { name: "openai-apikey", adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", authMode: "key", modelId: "gpt-6-astra" },
+    { name: "openai", adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", modelId: "gpt-unproven" },
+  ] satisfies Array<{ name: string; adapter: OcxProviderConfig["adapter"]; baseUrl: string; authMode: OcxProviderConfig["authMode"]; modelId: string }>)(
+    "custom $name/$modelId does not infer native effort capability from $baseUrl / $authMode / $adapter",
+    async fixture => {
+      const models = await gatherRoutedModels({
+        port: 10100,
+        defaultProvider: fixture.name,
+        providers: { [fixture.name]: { adapter: fixture.adapter, baseUrl: fixture.baseUrl, authMode: fixture.authMode, liveModels: false, models: [fixture.modelId] } },
+        customModels: [{ id: "unproven", provider: fixture.name, modelId: fixture.modelId, displayName: "Astra", reasoningEfforts: ["none", "minimal", "low"], defaultReasoningEffort: "minimal" }],
+      });
+      const custom = models.find(row => row.provider === fixture.name && row.id === fixture.modelId);
+      expect(custom?.codexForwardNativeCapabilityAlias).toBeUndefined();
+      expect(custom?.reasoningEfforts).toEqual(["none", "minimal", "low"]);
+      expect(custom?.defaultReasoningEffort).toBe("minimal");
+      const entries = buildCatalogEntries(nativeTemplate(), [], models);
+      const row = entries.find(entry => entry.slug === `${fixture.name}/${fixture.modelId}`);
+      expect(row ? catalogEntryEfforts(row) : undefined)
+        .toEqual(["none", "minimal", "low", "max", "ultra"]);
+    },
+  );
+
+  test("fresh none-only custom rows keep their ladder while retained provider rows still gain max", async () => {
+    const models = await gatherRoutedModels({
+      port: 10100,
+      defaultProvider: "custom-provider",
+      providers: { "custom-provider": { adapter: "openai-chat", baseUrl: "https://example.invalid/v1", liveModels: false } },
+      customModels: [{ id: "none-only", provider: "custom-provider", modelId: "none-only", reasoningEfforts: ["none"] }],
+    });
+    const entries = buildCatalogEntries(nativeTemplate(), [], models);
+    const retained = { ...nativeTemplate(), slug: "foreign/model", supported_reasoning_levels: [{ effort: "low", description: "Low" }] };
+    const stale = { ...entries[0]!, slug: "custom-provider/deleted" };
+    const merged = mergeCatalogEntriesForSync([retained, stale], entries, new Map(), [], false);
+    expect(merged.find(row => row.slug === "custom-provider/none-only")?.supported_reasoning_levels)
+      .toEqual(entries[0]!.supported_reasoning_levels);
+    const foreign = merged.find(row => row.slug === "foreign/model");
+    expect(foreign ? catalogEntryEfforts(foreign) : undefined)
+      .toEqual(["low", "max"]);
+    expect(merged.some(row => row.slug === "custom-provider/deleted")).toBe(false);
+  });
+
   test("Astra refresh repairs only built-in speed text and does not leak native effort", () => {
     const pinned = upstreamNativeEntry(NATIVE_GPT6_ASTRA_MODEL)!;
     expect(pinned.service_tiers).toEqual([{ id: "priority", name: "Fast", description: "2x speed, increased usage" }]);
@@ -3771,6 +3880,7 @@ describe("Codex catalog routed normalization", () => {
         // not overwrite it — otherwise the catalog would advertise reasoning the user
         // explicitly disabled for this row.
         reasoningEfforts: [],
+        defaultReasoningEffort: "minimal",
       }],
     });
     const model = models.find(row => row.provider === "openai" && row.id === NATIVE_DAYBREAK_BLUE_MODEL);

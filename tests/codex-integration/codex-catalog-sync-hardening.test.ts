@@ -28,9 +28,9 @@ function runScript(
   return { stdout: result.stdout?.trim() ?? "", stderr: result.stderr ?? "", status: result.status ?? 1 };
 }
 
-function createCodexCatalogFixture(dir: string): string {
+function createCodexCatalogFixture(dir: string, models = [nativeEntry("gpt-5.5", 0)]): string {
   const scriptPath = join(dir, "codex-catalog-fixture.js");
-  const bundled = JSON.stringify({ models: [nativeEntry("gpt-5.5", 0)] });
+  const bundled = JSON.stringify({ models });
   writeFileSync(scriptPath, [
     'if (process.argv.includes("--version")) {',
     '  console.log("codex-cli 0.999.0");',
@@ -445,6 +445,58 @@ describe("Codex catalog sync hardening", () => {
     // Main's authenticated roster grants Daybreak, so Pool publishes one bare row alongside
     // the exact selector row. The observed cache row alone is not entitlement evidence.
     expect(rows.filter(row => row.slug === "gpt-daybreak-blue-latest")).toHaveLength(1);
+  });
+
+  test("canonical custom Astra repairs stale efforts and keeps a narrow ladder across syncs", () => {
+    const catalogPath = join(codexHome, "catalog.json");
+    const runtime = createCodexCatalogFixture(codexHome, [{
+      ...nativeEntry("gpt-5.5", 0),
+      // Another model permits sentinels, so the global union cannot perform this repair.
+      supported_reasoning_levels: ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].map(effort => ({ effort, description: effort })),
+    }]);
+    writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n');
+    writeFileSync(catalogPath, JSON.stringify({ models: [{
+      ...ocxAuthoredEntry("openai/gpt-6-astra", 5),
+      opencodex_catalog_kind: "custom-model-v1",
+      supported_reasoning_levels: [{ effort: "minimal", description: "stale" }],
+      default_reasoning_level: "minimal",
+    }] }));
+    const result = runScript(codexHome, opencodexHome, `
+      const { readFileSync } = require("node:fs");
+      const { saveConfig } = require("./src/config");
+      const { syncCatalogModels } = require("./src/codex/catalog");
+      const config = {
+        port: 10100,
+        defaultProvider: "openai",
+        providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "pool" } },
+        codexAccountPickerEnabled: false,
+        customModels: [{ id: "astra", provider: "openai", modelId: "gpt-6-astra", reasoningEfforts: ["none", "minimal", "low"], defaultReasoningEffort: "minimal" }]
+      };
+      saveConfig(config);
+      (async () => {
+        const first = await syncCatalogModels(config, { allowWhenDesiredDisabled: true });
+        const firstBytes = readFileSync(first.path, "utf8");
+        const second = await syncCatalogModels(config, { allowWhenDesiredDisabled: true });
+        const secondBytes = readFileSync(second.path, "utf8");
+        config.customModels = [];
+        saveConfig(config);
+        await syncCatalogModels(config, { allowWhenDesiredDisabled: true });
+        console.log(JSON.stringify({
+          first: JSON.parse(firstBytes), second: JSON.parse(secondBytes),
+          unchanged: firstBytes === secondBytes,
+          deleted: JSON.parse(readFileSync(first.path, "utf8"))
+        }));
+      })();
+    `, { CODEX_CLI_PATH: runtime });
+    expect(result.status).toBe(0);
+    const output = JSON.parse(result.stdout);
+    for (const catalog of [output.first, output.second]) {
+      const astra = catalog.models.find((row: { slug: string }) => row.slug === "openai/gpt-6-astra");
+      expect(astra.supported_reasoning_levels.map((level: { effort: string }) => level.effort)).toEqual(["low"]);
+      expect(astra.default_reasoning_level).toBe("low");
+    }
+    expect(output.unchanged).toBe(true);
+    expect(output.deleted.models.some((row: { slug: string }) => row.slug === "openai/gpt-6-astra")).toBe(false);
   });
 
   test("explicit Codex-forward Daybreak survives sync with Sol metadata while account picker is off", () => {
