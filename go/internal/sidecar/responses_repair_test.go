@@ -96,3 +96,16 @@ func TestResponseRepairPipelineRunsOrderedModelAndImageRestoresBeforeBackfill(t 
 		t.Fatalf("got %s\nwant %s", out, want)
 	}
 }
+
+func TestResponseRepairPipelineReasoningEventUsesClientFieldWhitelist(t *testing.T) {
+	input := `{"type":"response.reasoning_text.delta","item_id":"rs_1","output_index":2,"delta":"think","sequence_number":7,"provider_extra":"drop-me"}`
+	p := responseRepairPipeline{reasoning: true}
+	out, changed := p.repairJSON([]byte(input))
+	if !changed {
+		t.Fatal("pipeline reported unchanged")
+	}
+	want := `{"type":"response.reasoning_summary_text.delta","item_id":"rs_1","output_index":2,"summary_index":0,"delta":"think","sequence_number":7}`
+	if string(out) != want {
+		t.Fatalf("got %s\nwant %s", out, want)
+	}
+}
