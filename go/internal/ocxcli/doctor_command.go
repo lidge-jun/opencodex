@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/lidge-jun/opencodex/go/internal/config"
 )
@@ -223,13 +224,31 @@ func AssembleDoctorCommand(args []string, deps DoctorCommandDeps) DoctorCommandR
 			return DoctorCommandResult{Stderr: doctorJSONUsage, Exit: doctorJSONExit, TODOs: append([]DoctorTODOSection(nil), doctorCommandTODOs...)}
 		}
 	}
-	// The two action modes are intentionally not emulated: they write runtime or
-	// Codex state and need their TypeScript transaction ports before ownership can
-	// move. Reporting failure is safer than an apparent successful no-op.
+	// TypeScript gives runtime repair priority when both action flags occur.
 	for _, arg := range args {
-		if arg == "--fix-codex-runtime" || arg == "--recover-zero-byte-coordinator" {
-			return DoctorCommandResult{Text: "opencodex doctor\n\nTODO: " + arg + " requires its TypeScript diagnostic and recovery transaction.\n", Exit: ExitFailure, TODOs: append([]DoctorTODOSection(nil), doctorCommandTODOs...)}
+		if arg == "--fix-codex-runtime" {
+			return doctorFixCodexRuntime()
 		}
+	}
+	for _, arg := range args {
+		if arg != "--recover-zero-byte-coordinator" {
+			continue
+		}
+		yes := false
+		for _, candidate := range args {
+			yes = yes || candidate == "--yes"
+		}
+		if !yes {
+			return DoctorCommandResult{Text: "Recovery is explicit and creates a same-directory backup. Re-run: ocx doctor --recover-zero-byte-coordinator --yes\n", Exit: ExitFailure}
+		}
+		if pid := doctorLiveProxyPID(); pid != 0 {
+			return DoctorCommandResult{Text: fmt.Sprintf("Recovery refused: OpenCodex proxy pid %d is still running. Stop the proxy/service and retry.\n", pid), Exit: ExitFailure}
+		}
+		backup, err := RecoverZeroByteCodexCoordinator(time.Now())
+		if err != nil {
+			return DoctorCommandResult{Text: "Recovery refused: " + err.Error() + ".\n", Exit: ExitFailure}
+		}
+		return DoctorCommandResult{Text: "Moved the non-authoritative coordinator to " + backup + "\nRun `ocx sync` to retry Codex config injection. The backup was preserved and no Codex config/catalog file was changed by recovery.\n", Exit: ExitOK}
 	}
 	reclaim := false
 	var reclaimWarnings []string

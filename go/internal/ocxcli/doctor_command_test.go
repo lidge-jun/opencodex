@@ -194,10 +194,10 @@ func TestDoctorCommandAssemblyArgumentsAndTODOBoundary(t *testing.T) {
 	}
 	var output bytes.Buffer
 	if code := RunDoctorCommand([]string{"--recover-zero-byte-coordinator"}, &output, &output, deps); code != ExitFailure {
-		t.Fatalf("unported recovery exit = %d", code)
+		t.Fatalf("recovery confirmation exit = %d", code)
 	}
-	if !strings.Contains(output.String(), "TODO: --recover-zero-byte-coordinator requires its TypeScript diagnostic and recovery transaction.") {
-		t.Fatalf("recovery TODO = %q", output.String())
+	if output.String() != "Recovery is explicit and creates a same-directory backup. Re-run: ocx doctor --recover-zero-byte-coordinator --yes\n" {
+		t.Fatalf("recovery confirmation = %q", output.String())
 	}
 	// The command dispatcher owns this rejection today. Keep the future native
 	// boundary byte-identical to its real TypeScript oracle before doctor moves.

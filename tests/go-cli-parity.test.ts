@@ -178,7 +178,6 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
     }
   });
   test.each([
-    { args: ["doctor", "--json"] },
     { args: ["service", "status"] }, { args: ["service", "not-a-command"] },
     { args: ["codex-shim", "status"] }, { args: ["codex-shim", "not-a-command"] },
     { args: ["tray", "status"] }, { args: ["tray", "not-a-command"] },
@@ -186,7 +185,7 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
     testHome = mkdtempSync(join(tmpdir(), "ocx-go-cli-parity-"));
     expectParity(args);
   });
-  test.each([{ args: ["status"] }, { args: ["status", "--json"] }])("diffs Go-owned status output and exit code for $args", ({ args }) => {
+  test.each([{ args: ["status"] }, { args: ["status", "--json"] }, { args: ["doctor", "--json"] }])("diffs Go-owned status and doctor output and exit code for $args", ({ args }) => {
     testHome = mkdtempSync(join(tmpdir(), "ocx-go-cli-parity-"));
     expectParity(args);
   });

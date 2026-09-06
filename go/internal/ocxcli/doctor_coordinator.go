@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -141,6 +142,88 @@ func CollectDoctorCoordinator() DoctorCoordinatorDiagnostic {
 		d.Kind = "zero-byte"
 	}
 	return d
+}
+
+// RecoverZeroByteCodexCoordinator moves only a coordinator that continues to
+// satisfy the TypeScript zero-byte recovery evidence transaction.
+func RecoverZeroByteCodexCoordinator(now time.Time) (string, error) {
+	observed := CollectDoctorCoordinator()
+	if observed.Kind != "zero-byte" {
+		if observed.Kind == "unsafe" || observed.Kind == "unreadable" {
+			return "", fmt.Errorf("coordinator state is %s: %s", observed.Kind, observed.Reason)
+		}
+		return "", fmt.Errorf("coordinator state is %s, not a recoverable zero-byte remnant", observed.Kind)
+	}
+	path := observed.Path
+	before, err := os.Lstat(path)
+	if err != nil {
+		return "", fmt.Errorf("the coordinator changed before recovery acquired its SQLite lock")
+	}
+	db, err := sql.Open("sqlite", "file:"+path+"?mode=rw")
+	if err != nil {
+		return "", doctorCoordinatorRecoveryError(err)
+	}
+	locked := false
+	defer func() {
+		if locked {
+			_, _ = db.Exec("ROLLBACK")
+		}
+		_ = db.Close()
+	}()
+	if _, err = db.Exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE"); err != nil {
+		return "", doctorCoordinatorRecoveryError(err)
+	}
+	locked = true
+	underLock, err := os.Lstat(path)
+	if err != nil || !underLock.Mode().IsRegular() || !os.SameFile(before, underLock) || before.Size() != underLock.Size() {
+		return "", fmt.Errorf("the coordinator changed before recovery acquired its SQLite lock")
+	}
+	if underLock.Size() != 0 {
+		return "", fmt.Errorf("the coordinator stopped being zero-byte before recovery")
+	}
+	if _, err = db.Exec("ROLLBACK"); err != nil {
+		return "", doctorCoordinatorRecoveryError(err)
+	}
+	locked = false
+	if err = db.Close(); err != nil {
+		return "", doctorCoordinatorRecoveryError(err)
+	}
+
+	// Repeat the immutable inspection (including private-file and sidecar
+	// checks) after releasing SQLite, then revalidate full identity.
+	final := CollectDoctorCoordinator()
+	if final.Kind != "zero-byte" || final.Path != path {
+		return "", fmt.Errorf("the coordinator changed before the backup move")
+	}
+	finalInfo, err := os.Lstat(path)
+	if err != nil || !doctorSameFullFileIdentity(underLock, finalInfo) {
+		return "", fmt.Errorf("the coordinator changed before the backup move")
+	}
+	backup := path + ".zero-byte-backup-" + now.UTC().Format("20060102T150405.000Z")
+	if _, err := os.Lstat(backup); err == nil {
+		return "", fmt.Errorf("the same-directory backup path already exists")
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+	if err := os.Rename(path, backup); err != nil {
+		return "", err
+	}
+	backupInfo, err := os.Lstat(backup)
+	if err != nil || !backupInfo.Mode().IsRegular() || !os.SameFile(finalInfo, backupInfo) || finalInfo.Size() != backupInfo.Size() {
+		return "", fmt.Errorf("the coordinator backup move could not be verified")
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		return "", fmt.Errorf("the coordinator backup move could not be verified")
+	}
+	return backup, nil
+}
+
+func doctorCoordinatorRecoveryError(err error) error {
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "database is locked") || strings.Contains(message, "database table is locked") || strings.Contains(message, "sqlite_busy") || strings.Contains(message, "sqlite_locked") {
+		return fmt.Errorf("the coordinator is busy; stop active sync/service writers and retry")
+	}
+	return err
 }
 
 func FormatDoctorCoordinator(d DoctorCoordinatorDiagnostic) []string {
