@@ -19,6 +19,8 @@ material only. This is a fresh codebase.
   route's volatile-field declaration) live in
   `src/server/management/route-registry.ts`, and the single forwarding branch
   in `src/server/management-api.ts` reads them before asking the sidecar.
+- `cmd/ocx` — the Go CLI scaffold (ticket #35). It currently provides
+  version, help, and identity-attested local health / ready transport commands.
 - `internal/sidecar` — the handler plus its unit tests. The JSON key order and
   number formatting of each payload are part of the byte contract with the Bun
   differential oracle (`tests/go-sidecar-parity.test.ts`).
