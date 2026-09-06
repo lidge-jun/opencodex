@@ -28,6 +28,8 @@ export interface CursorPoolSnapshot {
   readonly owner: string;
   readonly thread: string;
   readonly refs: ReadonlyArray<string>;
+  readonly previous: ReadonlyArray<State>;
+  readonly previousAffinity?: string;
 }
 
 function usable(
@@ -135,18 +137,24 @@ export class CursorPoolKernel {
     const now = this.now();
     const accounts = this.accounts(now);
     if (accounts.length < 2) return null;
+    const previous = accounts.flatMap((a) => {
+      const prior = this.states.get(`${owner}\0${thread}\0${a.ref}`);
+      return prior ? [{ ...prior }] : [];
+    });
+    const previousAffinity = this.affinity.get(this.key(owner, thread));
     const active = new Set(accounts.map((a) => a.id));
     for (const [id, ref] of this.refs)
       if (!active.has(id)) this.refs.delete(id);
     for (const a of accounts) {
       const key = `${owner}\0${thread}\0${a.ref}`;
       const p = this.states.get(key);
+      const expired = p && p.cooldownUntil <= now;
       this.states.set(key, {
         ref: a.ref,
         owner,
         thread,
         cooldownUntil: p?.cooldownUntil ?? 0,
-        rotated: p?.rotated ?? false,
+        rotated: expired ? false : (p?.rotated ?? false),
         touched: now,
       });
     }
@@ -156,6 +164,8 @@ export class CursorPoolKernel {
       owner,
       thread,
       refs: accounts.map((a) => a.ref),
+      previous,
+      previousAffinity,
     };
   }
   pick(
@@ -191,7 +201,8 @@ export class CursorPoolKernel {
   ): boolean {
     if (capability !== this.capability) return false;
     const s = this.states.get(`${owner}\0${thread}\0${accountRef}`);
-    if (!s || s.rotated) return false;
+    if (!s) return false;
+    if (s.rotated && s.cooldownUntil > now) return false;
     s.cooldownUntil = Math.max(s.cooldownUntil, now + CURSOR_POOL_COOLDOWN_MS);
     s.rotated = true;
     s.touched = now;
@@ -206,8 +217,11 @@ export class CursorPoolKernel {
     for (const [k, s] of this.states)
       if (s.owner === snapshot.owner && s.thread === snapshot.thread)
         this.states.delete(k);
+    for (const prior of snapshot.previous)
+      this.states.set(`${prior.owner}\0${prior.thread}\0${prior.ref}`, { ...prior });
     const key = this.key(snapshot.owner, snapshot.thread);
-    this.affinity.delete(key);
+    if (snapshot.previousAffinity) this.affinity.set(key, snapshot.previousAffinity);
+    else this.affinity.delete(key);
     this.generation++;
     return true;
   }
@@ -217,6 +231,7 @@ export class CursorPoolKernel {
       if (s.ref === accountRef) this.states.delete(k);
     for (const [k, v] of this.affinity)
       if (v === accountRef) this.affinity.delete(k);
+    this.generation++;
   }
   clear(capability: symbol): void {
     if (capability === this.capability) {
