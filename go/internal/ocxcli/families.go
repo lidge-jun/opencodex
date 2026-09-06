@@ -232,7 +232,7 @@ func collectConfiguredModels(providers map[string]any, filter string) []any {
 				unique = append(unique, model)
 			}
 		}
-		context, hasContext := provider["contextWindow"].(float64)
+		context, hasContext := provider["contextWindow"].(json.Number)
 		for index, model := range unique {
 			window := any(nil)
 			if hasContext {
@@ -288,13 +288,13 @@ func runProvider(args []string, deps Deps) int {
 			return ExitUsage
 		}
 		if jsonOutput {
-			configured := []any{}
+			configured := []providerListRow{}
 			defaultProvider, _ := cfg["defaultProvider"].(string)
 			for name, raw := range providers {
 				provider, _ := raw.(map[string]any)
 				configured = append(configured, providerListEntry(name, provider, name == defaultProvider))
 			}
-			return writeIndentedJSON(deps.Stdout, map[string]any{"configured": configured, "registryCount": providerRegistryCount})
+			return writeIndentedJSON(deps.Stdout, providerListOutput{Configured: configured, RegistryCount: providerRegistryCount})
 		}
 		fmt.Fprint(deps.Stdout, "Configured providers:\n\n")
 		return ExitOK
@@ -320,21 +320,43 @@ func runProvider(args []string, deps Deps) int {
 		return ExitFailure
 	}
 }
-func providerListEntry(name string, provider map[string]any, isDefault bool) map[string]any {
-	return map[string]any{"name": name, "adapter": provider["adapter"], "baseUrl": provider["baseUrl"], "authMode": valueOr(provider["authMode"], "key"), "defaultModel": provider["defaultModel"], "isDefault": isDefault, "source": "custom", "models": valueOr(provider["models"], []any{})}
+
+type providerListRow struct {
+	Name         string `json:"name"`
+	Adapter      any    `json:"adapter"`
+	BaseURL      any    `json:"baseUrl"`
+	AuthMode     any    `json:"authMode"`
+	DefaultModel any    `json:"defaultModel"`
+	IsDefault    bool   `json:"isDefault"`
+	Source       string `json:"source"`
+	Models       any    `json:"models"`
 }
-func providerShowEntry(name string, provider map[string]any, isDefault bool) map[string]any {
-	out := map[string]any{"name": name, "isDefault": isDefault}
-	for key, value := range provider {
-		if key == "apiKey" {
-			if text, ok := value.(string); ok {
-				out[key] = maskSecret(text)
-				continue
-			}
-		}
-		out[key] = value
+type providerListOutput struct {
+	Configured    []providerListRow `json:"configured"`
+	RegistryCount int               `json:"registryCount"`
+}
+
+func providerListEntry(name string, provider map[string]any, isDefault bool) providerListRow {
+	return providerListRow{Name: name, Adapter: provider["adapter"], BaseURL: provider["baseUrl"], AuthMode: valueOr(provider["authMode"], "key"), DefaultModel: provider["defaultModel"], IsDefault: isDefault, Source: "custom", Models: valueOr(provider["models"], []any{})}
+}
+
+type providerShowRow struct {
+	Name          string `json:"name"`
+	IsDefault     bool   `json:"isDefault"`
+	Adapter       any    `json:"adapter"`
+	BaseURL       any    `json:"baseUrl"`
+	APIKey        any    `json:"apiKey"`
+	DefaultModel  any    `json:"defaultModel"`
+	Models        any    `json:"models"`
+	ContextWindow any    `json:"contextWindow"`
+}
+
+func providerShowEntry(name string, provider map[string]any, isDefault bool) providerShowRow {
+	apiKey := provider["apiKey"]
+	if text, ok := apiKey.(string); ok {
+		apiKey = maskSecret(text)
 	}
-	return out
+	return providerShowRow{Name: name, IsDefault: isDefault, Adapter: provider["adapter"], BaseURL: provider["baseUrl"], APIKey: apiKey, DefaultModel: provider["defaultModel"], Models: provider["models"], ContextWindow: provider["contextWindow"]}
 }
 func valueOr(value, fallback any) any {
 	if value == nil {
