@@ -19,29 +19,127 @@ jobs:
           cd gui
           bun install --frozen-lockfile
           bun run build
-      - name: Verify the longer subprocess budget still rejects wrong hub model IDs
+      - name: Classify lifecycle failure in three diagnostic samples
         shell: bash
         run: |
+          cat > .tmp-instrument-template.py <<'TEMPLATE'
+          from pathlib import Path
+          p=Path('tests/fixtures/claude-desktop-network-guard.ts')
+          s=p.read_text()
+          trace=r'''
+          const tracePath = process.env.OCX_TEST_TIMING_PATH;
+          const traceStart = performance.now();
+          let traceCount = 0;
+          function trace(event: string, detail: Record<string, unknown> = {}) {
+            if (tracePath && traceCount++ < 512) appendFileSync(tracePath, JSON.stringify({ event, ms: Math.round(performance.now() - traceStart), ...detail }) + "\n");
+          }
+          trace("cli_preload");
+          const originalSpawnSync = Bun.spawnSync;
+          Bun.spawnSync = ((...args: any[]) => {
+            const command = Array.isArray(args[0]) ? args[0][0] : args[0]?.cmd?.[0];
+            const value = typeof command === "string" ? command.replaceAll("\\", "/").split("/").at(-1)?.toLowerCase() : "";
+            const category = value === "icacls.exe" ? "icacls" : value === "powershell.exe" ? "powershell" : value === "reg.exe" ? "registry" : "other";
+            const start = performance.now();
+            trace("spawn_start", { category });
+            try { return originalSpawnSync.apply(Bun, args); }
+            finally { trace("spawn_end", { category, durationMs: Math.round(performance.now() - start) }); }
+          }) as typeof Bun.spawnSync;
+          const originalSpawn = Bun.spawn;
+          Bun.spawn = ((...args: any[]) => {
+            const command = Array.isArray(args[0]) ? args[0][0] : args[0]?.cmd?.[0];
+            const value = typeof command === "string" ? command.replaceAll("\\", "/").split("/").at(-1)?.toLowerCase() : "";
+            const category = value === "icacls.exe" ? "icacls" : value === "powershell.exe" ? "powershell" : value === "reg.exe" ? "registry" : "other";
+            const start = performance.now();
+            trace("async_spawn_start", { category });
+            const child = originalSpawn.apply(Bun, args);
+            void child.exited.then((code: number) => trace("async_spawn_end", { category, code, durationMs: Math.round(performance.now() - start) }), () => trace("async_spawn_error", { category }));
+            return child;
+          }) as typeof Bun.spawn;
+          const originalExit = process.exit;
+          process.exit = ((code?: number) => { trace("process_exit", { code }); return originalExit(code); }) as typeof process.exit;
+          '''
+          s=s.replace('const nativeFetch = globalThis.fetch;',trace+'\nconst nativeFetch = globalThis.fetch;')
+          s=s.replace('    return nativeFetch(...args);','    trace("fetch_start");\n    return nativeFetch(...args).finally(() => trace("fetch_end"));')
+          p.write_text(s)
+          p=Path('tests/claude-integration/claude-desktop-remote-hub.test.ts');s=p.read_text()
+          old='''    const apply = spawnOwned(client, ["claude", "desktop", "apply", "--static"]);
+              const appliedCode = await within(apply.child.exited, 30_000, "Remote Desktop apply deadline");'''
+          new='''    const traceFile = join(client.root, "apply-timing.jsonl");
+              client.env.OCX_TEST_TIMING_PATH = traceFile;
+              const applyStart = performance.now();
+              const apply = spawnOwned(client, ["claude", "desktop", "apply", "--static"]);
+              let appliedCode: number;
+              try { appliedCode = await within(apply.child.exited, 30_000, "Remote Desktop apply deadline"); }
+              finally {
+                const trace = existsSync(traceFile) ? readFileSync(traceFile, "utf8").trim().split("\\n").filter(Boolean).map(line => JSON.parse(line)) : [];
+                console.log(JSON.stringify({ applyTiming: { elapsedMs: Math.round(performance.now() - applyStart), alive: apply.child.exitCode === null, trace } }));
+              }'''
+          assert s.count(old)==1
+          p.write_text(s.replace(old,new))
+          TEMPLATE
           python - <<'PY'
           from pathlib import Path
-          p=Path('tests/claude-integration/claude-desktop-remote-hub.test.ts')
-          s=p.read_text(encoding="utf-8")
-          s='import { SPAWN_BUDGET_MS } from "../helpers/test-budget";\n'+s
-          old='within(apply.child.exited, 30_000, "Remote Desktop apply deadline")'
-          assert s.count(old)==1
-          p.write_text(s.replace(old,'within(apply.child.exited, SPAWN_BUDGET_MS, "Remote Desktop apply deadline")'),encoding="utf-8")
-          p=Path('src/cli/claude-desktop.ts')
-          s=p.read_text(encoding="utf-8")
-          marker='    const result: DesktopStoreResult = withClientLifecycleSync('
+          import ast
+          source=Path('.tmp-instrument-template.py').read_text(encoding='utf-8')
+          tree=ast.parse(source)
+          trace=next(node.value.value for node in tree.body if isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='trace' for t in node.targets))
+          trace=trace.replace('try { return originalSpawnSync.apply(Bun, args); }', '''try {
+              const result = originalSpawnSync.apply(Bun, args);
+              trace("spawn_result", { category, exitCode: result.exitCode, timedOut: result.exitedDueToTimeout === true });
+              return result;
+            }''')
+          p=Path('tests/fixtures/claude-desktop-network-guard.ts');s=p.read_text(encoding='utf-8')
+          s=s.replace('const nativeFetch = globalThis.fetch;',trace+'\nconst nativeFetch = globalThis.fetch;')
+          s=s.replace('    return nativeFetch(...args);','    trace("fetch_start");\n    return nativeFetch(...args).finally(() => trace("fetch_end"));')
+          p.write_text(s,encoding='utf-8')
+          p=Path('tests/claude-integration/claude-desktop-remote-hub.test.ts');s=p.read_text(encoding='utf-8')
+          marker='    const apply = spawnOwned(client, ["claude", "desktop", "apply", "--static"]);'
           assert s.count(marker)==1
-          mutation='    snapshot.models = snapshot.models.map(model => model.name === "claude-opus-4-8-20260211" ? { ...model, name: "claude-opus-4-8-20260911" } : model);\n'
-          p.write_text(s.replace(marker,mutation+marker),encoding="utf-8")
+          s=s.replace(marker,'''    const traceFile = join(client.root, "apply-timing.jsonl");
+              client.env.OCX_TEST_TIMING_PATH = traceFile;
+              const applyStart = performance.now();
+          '''+marker)
+          marker='    const appliedCode = await within(apply.child.exited, SPAWN_BUDGET_MS, "Remote Desktop apply deadline");'
+          assert s.count(marker)==1
+          s=s.replace(marker,'''    let appliedCode: number;
+              try { appliedCode = await within(apply.child.exited, SPAWN_BUDGET_MS, "Remote Desktop apply deadline"); }
+              finally {
+                const trace = existsSync(traceFile) ? readFileSync(traceFile, "utf8").trim().split("\\n").filter(Boolean).map(line => JSON.parse(line)) : [];
+                console.log(JSON.stringify({ applyTiming: { elapsedMs: Math.round(performance.now() - applyStart), alive: apply.child.exitCode === null, trace } }));
+              }''')
+          p.write_text(s,encoding='utf-8')
+          p=Path('src/client/lifecycle-lock.ts');s=p.read_text(encoding='utf-8')
+          s=s.replace('import { chmodSync,','import { appendFileSync, chmodSync,')
+          marker='    const code = errorCode(error);'
+          assert s.count(marker)==1
+          report='''    if (process.env.OCX_TEST_TIMING_PATH) {
+                const allowed = new Set(["CODEX_USER_IDENTITY_REFUSED", "ETIMEDOUT", "EICACLS", "EACCES", "EPERM", "ENOENT", "EIO", "ENOTDIR", "SQLITE_BUSY", "SQLITE_LOCKED", "SQLITE_CORRUPT", "SQLITE_CANTOPEN"]);
+                const codes: string[] = [];
+                let identityTimeout = false, identityRefusal = false, namespaceRefusal = false;
+                let current: unknown = error;
+                for (let depth = 0; depth < 5 && current; depth++) {
+                  const value = errorCode(current);
+                  if (typeof value === "string" && allowed.has(value)) codes.push(value);
+                  const message = current instanceof Error ? current.message : "";
+                  identityTimeout ||= message === "Windows effective-account lookup timed out.";
+                  identityRefusal ||= value === "CODEX_USER_IDENTITY_REFUSED";
+                  namespaceRefusal ||= /namespace|runtime directory|LocalAppData/.test(message);
+                  current = typeof current === "object" && "cause" in current ? current.cause : undefined;
+                }
+                appendFileSync(process.env.OCX_TEST_TIMING_PATH, JSON.stringify({ event: "lifecycle_acquire_failure", codes, identityTimeout, identityRefusal, namespaceRefusal }) + "\\n");
+              }
+          '''
+          s=s.replace(marker,report+marker);p.write_text(s,encoding='utf-8')
           PY
           set +e
-          bun test --isolate ./tests/claude-integration/claude-desktop-remote-hub.test.ts --test-name-pattern 'stored profile=true' 2>&1 | tee mutant.log
-          result=${PIPESTATUS[0]}
+          for sample in 1 2 3; do
+            echo "diagnostic sample=$sample"
+            bun test --isolate ./tests/claude-integration/claude-desktop-remote-hub.test.ts --test-name-pattern 'stored profile=true' 2>&1 | tee "sample-$sample.log"
+            echo "sample_exit=${PIPESTATUS[0]}"
+          done
           set -e
-          test "$result" -ne 0
-          grep -F 'toEqual' mutant.log
-          grep -F 'claude-opus-4-8-20260911' mutant.log
-          if grep -F 'Remote Desktop apply deadline' mutant.log; then exit 1; fi
+          if grep -F 'lifecycle_acquire_failure' sample-*.log; then
+            echo 'Captured a classified failure; inspect the fixed flags.'
+          else
+            echo 'No lifecycle failure captured; no root cause closure claimed.'
+          fi

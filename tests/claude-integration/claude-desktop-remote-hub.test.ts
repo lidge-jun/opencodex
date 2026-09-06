@@ -7,6 +7,7 @@ import type { OcxConfig } from "../../src/types";
 import type { Desktop3pModelEntry } from "../../src/claude/desktop-3p";
 import { repoPath, fixturePath } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 const DATA_KEY = "test-key";
 const cliPath = repoPath("src/cli/index.ts");
@@ -209,7 +210,9 @@ for (const storedProfile of [true, false]) {
     else expect(chosenEntry!.name).toMatch(/^claude-opus-4-8-[a-z][a-z0-9]{2}$/);
 
     const apply = spawnOwned(client, ["claude", "desktop", "apply", "--static"]);
-    const appliedCode = await within(apply.child.exited, 30_000, "Remote Desktop apply deadline");
+    // The Windows known-folder lookup alone may validly use its 30s budget
+    // (22.8s in hosted tracing); leave room for the rest of this real CLI apply.
+    const appliedCode = await within(apply.child.exited, SPAWN_BUDGET_MS, "Remote Desktop apply deadline");
     const appliedOutput = await within(Promise.all([apply.stdout, apply.stderr]), 5_000, "Apply output drain deadline");
     if (appliedCode !== 0) throw new Error("Remote Desktop apply failed: " + appliedOutput[1]);
     expect(appliedOutput.join("\n")).not.toContain(DATA_KEY);
