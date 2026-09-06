@@ -2,7 +2,7 @@
 
 Unit: `260905_go_sidecar_takeover`
 Date: 2026-09-06
-Status: in progress on `fix/ticket-26-write-auth-gate` (rebase-follows dev-go @ `f8ab6d510`, which carries #24)
+Status: implemented on `dev-go` at `05f1e9632` (merge `e4d684d11` + `05f1e9632` on top of #25 config test `befb594d2`)
 Ticket: [#26](https://github.com/waxiangzi/opencodex/issues/26) (spec #3 capstone: "Write-surface full parity + authorization gate")
 Parent spec: [#3](https://github.com/waxiangzi/opencodex/issues/3) (increment 3: write surface)
 Blocked-by (#21/#22/#23): closed on `dev-go` — `eb4292e8f` relays the three
