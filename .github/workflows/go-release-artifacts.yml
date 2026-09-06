@@ -1,0 +1,86 @@
+name: Go release artifact scaffold
+
+on:
+  # This workflow deliberately stays outside the release path until #40 proves
+  # that the Go artifact embeds every runtime asset required by a clean host.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: go-release-artifacts-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-go-runtime:
+    name: verify Go runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go/go.mod
+          cache: false
+
+      - name: Build, vet, and test Go runtime
+        run: |
+          set -euo pipefail
+          cd go
+          CGO_ENABLED=0 go build -buildvcs=false ./...
+          go vet ./...
+          go test ./...
+
+      - name: Smoke test Linux release candidate
+        run: |
+          set -euo pipefail
+          scripts/build-go-release-artifact.sh linux/amd64 .tmp/go-release/linux-amd64
+          .tmp/go-release/linux-amd64/ocx-linux-amd64 --version
+
+  build-release-artifact:
+    name: build ${{ matrix.target }}
+    needs: verify-go-runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux/amd64
+            artifact: ocx-linux-amd64
+          - target: linux/arm64
+            artifact: ocx-linux-arm64
+          - target: darwin/amd64
+            artifact: ocx-darwin-amd64
+          - target: darwin/arm64
+            artifact: ocx-darwin-arm64
+          - target: windows/amd64
+            artifact: ocx-windows-amd64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go/go.mod
+          cache: false
+
+      - name: Cross-compile static ocx candidate
+        run: scripts/build-go-release-artifact.sh '${{ matrix.target }}' dist
+
+      - name: Upload candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
