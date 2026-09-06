@@ -10,11 +10,11 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          ref: 1cbb1777adf7c8fc994a26ed0537ee20070fc4da
+          ref: 9ea896737bd17085ebb8a69b3320c9cace61889e
           persist-credentials: false
       - name: Assert exact source
         shell: bash
-        run: test "$(git rev-parse HEAD)" = 1cbb1777adf7c8fc994a26ed0537ee20070fc4da
+        run: test "$(git rev-parse HEAD)" = 9ea896737bd17085ebb8a69b3320c9cace61889e
       - uses: ./.github/actions/setup-project-bun
       - name: Install locked documentation dependencies
         working-directory: docs-site
