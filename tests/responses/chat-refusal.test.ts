@@ -173,6 +173,9 @@ describe("Chat refusal projection", () => {
     ["nonstring event ID", refusalDone("fixture", 0, 0, { item_id: null })],
     ["snapshot ID mismatch", terminal([message([part("fixture")], "other")])],
     ["nonstring snapshot ID", terminal([message([part("fixture")], 5)])],
+    ["sparse snapshot ID mismatch", terminal([{ id: "other" }])],
+    ["sparse nonstring snapshot ID", terminal([{ id: null }])],
+    ["same ID at another position", terminal([{}, {}, message([part("fixture")], "item_fixture")])],
     ["different part type", terminal([message([{ type: "output_text", text: "fixture" }])])],
     ["negative position", refusalDelta("fixture", -1)],
     ["fractional position", refusalDelta("fixture", 0, 0.5)],
@@ -448,4 +451,23 @@ describe("refusal handler delivery matrix", () => {
       }
     }
   }
+});
+
+test("sparse terminal preserves a matching refusal ID", async () => {
+  const wire = await new Response(translated([
+    refusalDelta("fixture", 0, 0, { item_id: "item_fixture" }),
+    terminal([{ id: "item_fixture" }]),
+  ])).text();
+  expectSuccess(wire, "fixture");
+});
+
+test("JSON refusal charges joined surrogate bytes and rejects retained overflow", () => {
+  const budget = createTestTranslatorBudget({ maxTurnBytes: 16 });
+  const completion = responsesJsonToChatCompletion({ output: [message([part("\ud83d"), part("\ude00")])] }, model, budget);
+  expect(firstChoice(completion).message.refusal).toBe("😀");
+  expect(budget.snapshot().currentBytes).toBe(4);
+  const small = createTestTranslatorBudget({ maxTurnBytes: 4 });
+  expect(() => responsesJsonToChatCompletion({ output: [message([part("fixture")])] }, model, small)).toThrow();
+  expect(small.snapshot().overflows).toBe(1);
+  expect(small.snapshot().currentBytes).toBe(0);
 });

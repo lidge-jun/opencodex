@@ -207,10 +207,12 @@ export function responsesSseToChatCompletionsSse(
     id?: string;
     parts: Map<number, { text: string; bytes: number; present: boolean }>;
   }>();
+  const refusalIndexById = new Map<string, number>();
   let refusalMetadataBytes = 0;
   let refusalTextBytes = 0;
   const releaseRefusals = () => {
     refusalItems.clear();
+    refusalIndexById.clear();
     translatorBudget.releaseRetained(refusalMetadataBytes, { kind: "item_ids" });
     translatorBudget.releaseRetained(refusalTextBytes, { kind: "retained_collectors" });
     refusalMetadataBytes = 0;
@@ -238,10 +240,13 @@ export function responsesSseToChatCompletionsSse(
       refusalItems.set(index, item);
     }
     if (hasId && typeof candidate === "string") {
+      const knownIndex = refusalIndexById.get(candidate);
+      if (knownIndex !== undefined && knownIndex !== index) throw refusalTranslationError();
       if (item.id !== undefined && item.id !== candidate) throw refusalTranslationError();
       if (item.id === undefined) {
-        chargeRefusalMetadata(Buffer.byteLength(candidate));
+        chargeRefusalMetadata(refusalEntryBytes + Buffer.byteLength(candidate));
         item.id = candidate;
+        refusalIndexById.set(candidate, index);
       }
     }
     return item;
@@ -284,6 +289,8 @@ export function responsesSseToChatCompletionsSse(
   };
   const snapshotRefusalItem = (outputIndex: unknown, item: Rec) => {
     const existing = typeof outputIndex === "number" ? refusalItems.get(outputIndex) : undefined;
+    // Sparse final snapshots may omit type/content but cannot change a known ID.
+    if (existing && Object.hasOwn(item, "id")) refusalItem(outputIndex, item, "id");
     if (item.type !== "message") {
       if (existing && existing.parts.size > 0 && item.type !== undefined) throw refusalTranslationError();
       return;
