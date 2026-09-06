@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mode: [missing, system_drive, account_environment, remaining_environment]
+        mode: [all_missing, first_half, second_half]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
@@ -159,7 +159,7 @@ jobs:
           s=p.read_text(encoding="utf-8")
           anchor='  mkdirSync(env.XDG_RUNTIME_DIR!, { recursive: true });'
           assert s.count(anchor)==1
-          extra='\n  const envMode = process.env.OCX_FIXTURE_ENV_MODE;\n  const readParent = (key: string) => process.env[Object.keys(process.env).find(k => k.toLowerCase() === key.toLowerCase()) ?? key];\n  if (envMode === "system_drive" || envMode === "account_environment") {\n    env.SystemDrive = readParent("SystemDrive");\n  }\n  if (envMode === "account_environment") {\n    for (const key of ["HOMEDRIVE", "HOMEPATH", "USERNAME", "USERDOMAIN", "USERDOMAIN_ROAMINGPROFILE", "USERDNSDOMAIN", "COMPUTERNAME", "LOGONSERVER"]) env[key] = readParent(key);\n  }\n  if (envMode === "remaining_environment") {\n    for (const [key, value] of Object.entries(process.env)) {\n      if (/^(OCX_|OPENCODEX_|CODEX_|CLAUDE_|BUN_|NODE_OPTIONS|GITHUB_|GH_|ACTIONS_|RUNNER_|NPM_)/i.test(key) || /TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY|CREDENTIAL|AUTH/i.test(key)) continue;\n      if (!Object.keys(env).some(k => k.toLowerCase() === key.toLowerCase())) env[key] = value;\n    }\n  }\n'
+          extra='\n  const envMode = process.env.OCX_FIXTURE_ENV_MODE;\n  const candidates = Object.entries(process.env).filter(([key]) => {\n    if (/^(OCX_|OPENCODEX_|CODEX_|CLAUDE_|BUN_|NODE_OPTIONS|GITHUB_|GH_|ACTIONS_|RUNNER_|NPM_)/i.test(key) || /TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY|CREDENTIAL|AUTH/i.test(key)) return false;\n    return !Object.keys(env).some(k => k.toLowerCase() === key.toLowerCase());\n  }).sort(([a], [b]) => a.localeCompare(b));\n  const midpoint = Math.ceil(candidates.length / 2);\n  const selected = envMode === "first_half" ? candidates.slice(0, midpoint) : envMode === "second_half" ? candidates.slice(midpoint) : candidates;\n  console.log(JSON.stringify({ fixtureEnvironmentKeys: { side, mode: envMode, selected: selected.map(([key]) => key) } }));\n  for (const [key, value] of selected) env[key] = value;\n'
           p.write_text(s.replace(anchor,anchor+extra),encoding="utf-8")
           PY
           OCX_FIXTURE_ENV_MODE="$MODE" bun test --isolate ./tests/claude-integration/claude-desktop-remote-hub.test.ts --test-name-pattern 'stored profile=true'
