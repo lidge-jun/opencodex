@@ -42,7 +42,7 @@ jobs:
                 nestedWorker: !!process.env.BUN_TEST_WORKER_ID,
                 bunEnvKeys: Object.keys(process.env).filter(k => k.startsWith("BUN_")).sort(),
               } }));
-'''
+          '''
           s = s.replace(old, diagnostic + old)
           s = s.replace('writeFileSync(fixturePath, `import { test }', 'writeFileSync(fixturePath, `console.log("fixture_module_entered"); import { test }')
           p.write_text(s)
