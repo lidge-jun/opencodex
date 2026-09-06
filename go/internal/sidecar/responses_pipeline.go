@@ -127,8 +127,15 @@ func (p responseRepairPipeline) repairReasoningItem(v *jsonwire.Value) bool {
 			}
 		}
 	}
-	if text.Len() == 0 || v.Find("encrypted_content") != nil {
+	if text.Len() == 0 {
 		return false
+	}
+	if encrypted := v.Find("encrypted_content"); encrypted != nil {
+		// The TS rewrite preserves encrypted reasoning items. An empty string is
+		// not opaque state and remains eligible for the content-to-summary move.
+		if encrypted.Kind() == jsonwire.String && encrypted.String() != "" {
+			return false
+		}
 	}
 	v.Delete("content")
 	summary := jsonwire.EmptyArray()

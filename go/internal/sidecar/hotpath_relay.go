@@ -89,6 +89,7 @@ var relayBlockingRequestHeaders = []string{
 type relayPlan struct {
 	providerName string
 	modelID      string
+	reasoning    bool
 	endpoint     string // full POST target URL
 	apiKey       string // resolved bearer secret, "" when the provider has none
 	apiKeyHeader string // Azure-compatible adapters use api-key instead of Bearer auth
@@ -256,14 +257,35 @@ func requestQualifiesForRelay(cfg Config, contentType string, headers http.Heade
 		return nil, refusal
 	}
 	plan.modelID = modelID
+	provider := providers.Find(plan.providerName)
+	plan.reasoning = providerUsesContentReasoning(provider, modelID)
+	if refusal := unsupportedResponseRepairRefusal(provider); refusal != nil {
+		return nil, refusal
+	}
 	if streaming {
-		provider := providers.Find(plan.providerName)
 		if refusal := streamRelayRefusal(provider, modelID); refusal != nil {
 			return nil, refusal
 		}
 		plan.streaming = true
 	}
 	return plan, nil
+}
+
+// unsupportedResponseRepairRefusal keeps stateful repairs on the TypeScript
+// bridge until their per-request state machines are ported. Passing these
+// providers through the direct relay would silently emit a different client
+// payload, which is worse than the explicit seam fallback.
+func unsupportedResponseRepairRefusal(provider *jsonwire.Value) *relayRefusal {
+	if provider == nil || provider.Kind() != jsonwire.Object {
+		return refuseRelay("response repair provider config unavailable")
+	}
+	if repair := provider.Find("responsesItemIdRepair"); responsesItemIDRepairArmed(repair) {
+		return refuseRelay("provider enables responsesItemIdRepair")
+	}
+	if snapshot, ok := boolMember(provider, "responsesSnapshotRepair"); ok && snapshot {
+		return refuseRelay("provider enables responsesSnapshotRepair")
+	}
+	return nil
 }
 
 // loadRelayConfigOrdered reads the operator config.json into a jsonwire tree,
@@ -363,6 +385,20 @@ func streamRelayRefusal(provider *jsonwire.Value, modelID string) *relayRefusal 
 		return refuseRelay("provider preserves reasoning content for model %q", modelID)
 	}
 	return nil
+}
+
+// providerUsesContentReasoning mirrors routeUsesContentChannelReasoning in the
+// TypeScript Responses path. It is used by the bounded JSON relay as well as
+// the SSE pipeline; stream admission still refuses these providers until the
+// stateful stream repairs are enabled there.
+func providerUsesContentReasoning(provider *jsonwire.Value, modelID string) bool {
+	if provider == nil || provider.Kind() != jsonwire.Object {
+		return false
+	}
+	if stateless, ok := boolMember(provider, "statelessResponses"); ok && stateless {
+		return true
+	}
+	return modelInProviderList(provider.Find("preserveReasoningContentModels"), modelID)
 }
 
 func responsesItemIDRepairArmed(repair *jsonwire.Value) bool {
@@ -626,7 +662,7 @@ func doDirectRelay(w http.ResponseWriter, r *http.Request, cfg Config, plan *rel
 		w.WriteHeader(upstreamResp.StatusCode)
 		if upstreamResp.StatusCode >= 200 && upstreamResp.StatusCode < 300 && strings.Contains(strings.ToLower(contentType), "text/event-stream") {
 			requestRoot, _ := jsonwire.Parse(body)
-			pipeline := responseRepairPipeline{modelID: plan.modelID}
+			pipeline := responseRepairPipeline{modelID: plan.modelID, reasoning: plan.reasoning}
 			if requestRoot != nil {
 				pipeline.imageAliases = imageAliasesFromRequest(requestRoot)
 			}
@@ -664,7 +700,7 @@ func doDirectRelay(w http.ResponseWriter, r *http.Request, cfg Config, plan *rel
 			// the backfill changed nothing or the body is not a JSON object, so
 			// assigning unconditionally preserves raw-bytes relay parity.
 			requestRoot, _ := jsonwire.Parse(body)
-			pipeline := responseRepairPipeline{modelID: plan.modelID}
+			pipeline := responseRepairPipeline{modelID: plan.modelID, reasoning: plan.reasoning}
 			if requestRoot != nil {
 				pipeline.imageAliases = imageAliasesFromRequest(requestRoot)
 			}
