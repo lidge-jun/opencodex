@@ -71,86 +71,57 @@ describe("provider TLS profile", () => {
   });
 
   test("passes supported proxy semantics to the TLS transport", async () => {
-    const previous = {
-      HTTPS_PROXY: process.env.HTTPS_PROXY,
-      https_proxy: process.env.https_proxy,
-      NO_PROXY: process.env.NO_PROXY,
-      no_proxy: process.env.no_proxy,
-    };
     let seen: RequestInit | undefined;
-    try {
-      process.env.HTTPS_PROXY = "http://127.0.0.1:9191";
-      delete process.env.https_proxy;
-      delete process.env.NO_PROXY;
-      delete process.env.no_proxy;
-      setProviderTlsRuntimeForTest({
-        fetch: async (_input, init) => {
-          seen = init;
-          return new Response("ok");
-        },
-      });
-      const provider = {
-        adapter: "google",
-        authMode: "oauth",
-        googleMode: "cloud-code-assist",
-        baseUrl: "https://cloudcode-pa.googleapis.com",
-        tlsProfile: "antigravity-browser" as const,
-      };
-      await providerTlsFetch(
-        "google-antigravity",
-        provider,
-        fetch,
-      )("https://cloudcode-pa.googleapis.com/v1");
-      expect((seen as RequestInit & { proxy?: string }).proxy).toBe(
-        "http://127.0.0.1:9191",
-      );
-      expect(getProviderTlsProfileStatus("google-antigravity")).toBe("active");
-    } finally {
-      for (const [key, value] of Object.entries(previous)) {
-        if (value === undefined) delete process.env[key];
-        else process.env[key] = value;
-      }
-    }
+    setProviderTlsRuntimeForTest({
+      fetch: async (_input, init) => {
+        seen = init;
+        return new Response("ok");
+      },
+      resolveProxyRoute: () => ({
+        kind: "proxy",
+        proxy: "http://127.0.0.1:9191",
+      }),
+    });
+    const provider = {
+      adapter: "google",
+      authMode: "oauth",
+      googleMode: "cloud-code-assist",
+      baseUrl: "https://cloudcode-pa.googleapis.com",
+      tlsProfile: "antigravity-browser" as const,
+    };
+    await providerTlsFetch(
+      "google-antigravity",
+      provider,
+      fetch,
+    )("https://cloudcode-pa.googleapis.com/v1");
+    expect((seen as RequestInit & { proxy?: string }).proxy).toBe(
+      "http://127.0.0.1:9191",
+    );
+    expect(getProviderTlsProfileStatus("google-antigravity")).toBe("active");
   });
 
   test("fails closed when configured proxy semantics cannot be preserved", async () => {
-    const previous = {
-      HTTPS_PROXY: process.env.HTTPS_PROXY,
-      https_proxy: process.env.https_proxy,
-      NO_PROXY: process.env.NO_PROXY,
-      no_proxy: process.env.no_proxy,
-    };
     let called = false;
-    try {
-      process.env.HTTPS_PROXY = "socks5://127.0.0.1:9191";
-      delete process.env.https_proxy;
-      delete process.env.NO_PROXY;
-      delete process.env.no_proxy;
-      setProviderTlsRuntimeForTest({
-        fetch: async () => {
-          called = true;
-          return new Response("unexpected");
-        },
-      });
-      const provider = {
-        adapter: "google",
-        authMode: "oauth",
-        googleMode: "cloud-code-assist",
-        baseUrl: "https://cloudcode-pa.googleapis.com",
-        tlsProfile: "antigravity-browser" as const,
-      };
-      const fetcher = providerTlsFetch("google-antigravity", provider, fetch);
-      await expect(
-        fetcher("https://cloudcode-pa.googleapis.com/v1"),
-      ).rejects.toThrow("cannot preserve configured proxy semantics");
-      expect(called).toBe(false);
-      expect(getProviderTlsProfileStatus("google-antigravity")).toBe("failed");
-    } finally {
-      for (const [key, value] of Object.entries(previous)) {
-        if (value === undefined) delete process.env[key];
-        else process.env[key] = value;
-      }
-    }
+    setProviderTlsRuntimeForTest({
+      fetch: async () => {
+        called = true;
+        return new Response("unexpected");
+      },
+      resolveProxyRoute: () => ({ kind: "fallback" }),
+    });
+    const provider = {
+      adapter: "google",
+      authMode: "oauth",
+      googleMode: "cloud-code-assist",
+      baseUrl: "https://cloudcode-pa.googleapis.com",
+      tlsProfile: "antigravity-browser" as const,
+    };
+    const fetcher = providerTlsFetch("google-antigravity", provider, fetch);
+    await expect(
+      fetcher("https://cloudcode-pa.googleapis.com/v1"),
+    ).rejects.toThrow("cannot preserve configured proxy semantics");
+    expect(called).toBe(false);
+    expect(getProviderTlsProfileStatus("google-antigravity")).toBe("failed");
   });
 
   test("redacts credential text from transport errors", async () => {
