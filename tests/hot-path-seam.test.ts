@@ -41,7 +41,7 @@ function seamRequest(headers: Headers, body = `{"model":"fixture","stream":true}
 
 describe("hot-path seam claim and bridge (ticket #24)", () => {
   test("an admitted claim reaches dispatch with the reconstructed admission and identical body", async () => {
-    let captured: { admission: DataPlaneAdmission; contentType: string | null; body: Uint8Array } | null = null;
+    let captured: { admission: DataPlaneAdmission; contentType: string | null; grokSurface: boolean; body: Uint8Array } | null = null;
     const bridge = makeBridge(c => { captured = c as typeof captured; });
     const bodyBytes = new TextEncoder().encode(`{"model":"fixture","stream":true}`);
     const headers = createDataPlaneSeamHeaders(secret, admission, "POST", HOT_PATH_SEAM_PATH, bodyBytes, clock);
@@ -54,7 +54,19 @@ describe("hot-path seam claim and bridge (ticket #24)", () => {
     expect(captured).not.toBeNull();
     expect(captured!.admission).toEqual(admission);
     expect(captured!.contentType).toBe("application/json");
+    expect(captured!.grokSurface).toBe(false);
     expect(new TextDecoder().decode(captured!.body)).toBe(`{"model":"fixture","stream":true}`);
+  });
+
+  test("the explicit Grok surface marker reaches the bridge dispatch", async () => {
+    let captured: { grokSurface: boolean } | null = null;
+    const bridge = makeBridge(c => { captured = c as typeof captured; });
+    const body = new Uint8Array(0);
+    const headers = createDataPlaneSeamHeaders(secret, admission, "POST", HOT_PATH_SEAM_PATH, body, clock)!;
+    const { request, url } = seamRequest(headers, "");
+    request.headers.set("x-opencodex-grok", "1");
+    expect((await bridge.handle(request, url)).status).toBe(200);
+    expect(captured!.grokSurface).toBe(true);
   });
 
   test("a configured-key admission keeps its keyId across the bridge", async () => {

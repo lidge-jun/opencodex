@@ -185,6 +185,7 @@ export interface HotPathResponsesBridgeOptions {
   dispatchResponses(context: {
     admission: DataPlaneAdmission;
     contentType: string | null;
+    grokSurface: boolean;
     body: Uint8Array;
     signal: AbortSignal | null;
   }): Promise<Response>;
@@ -250,6 +251,7 @@ export function createHotPathResponsesBridge(options: HotPathResponsesBridgeOpti
       return await options.dispatchResponses({
         admission: claim.admission,
         contentType,
+        grokSurface: request.headers.get("x-opencodex-grok") === "1",
         body,
         signal: request.signal,
       });

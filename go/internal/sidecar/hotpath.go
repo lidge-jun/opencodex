@@ -113,6 +113,12 @@ func dataPlaneSeam(w http.ResponseWriter, r *http.Request, cfg Config) {
 	if contentType := r.Header.Get("Content-Type"); contentType != "" {
 		bridgeReq.Header.Set("Content-Type", contentType)
 	}
+	// The public surface marker is intentionally the only caller header this
+	// bridge relays. It carries no credential material, and preserving it makes
+	// the fallback execute the same TypeScript Grok surface as the front door.
+	if r.Header.Get("X-Opencodex-Grok") == "1" {
+		bridgeReq.Header.Set("X-Opencodex-Grok", "1")
+	}
 
 	bridgeResp, err := dataPlaneBridgeClient().Do(bridgeReq)
 	if err != nil {

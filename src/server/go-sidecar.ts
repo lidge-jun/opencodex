@@ -153,6 +153,12 @@ export async function forwardHotPathSeam(
     headers.set(HOT_PATH_SIDECAR_REQUEST_HEADER, seam.requestToken);
     const contentType = request.headers.get("content-type");
     if (contentType) headers.set("content-type", contentType);
+    // This is a non-credential surface attribution marker. It must survive the
+    // tightly allowlisted seam so the Go relay can decline Grok traffic and the
+    // TypeScript bridge can preserve the request's observable surface.
+    if (request.headers.get("x-opencodex-grok") === "1") {
+      headers.set("x-opencodex-grok", "1");
+    }
     const upstream = await directLocalHttpFetch(target, {
       method: "POST",
       headers,

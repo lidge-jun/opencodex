@@ -43,7 +43,7 @@ func TestDataPlaneSeamRelaysStreamByteForByte(t *testing.T) {
 	const bridgeToken = "sidecar-to-parent"
 	const body = `{"model":"fixture","input":"ping","stream":true}`
 	var gotBridgeMethod, gotBridgePath, gotBridgeToken string
-	var gotClaimNonce, gotClaimAdmission, gotContentType string
+	var gotClaimNonce, gotClaimAdmission, gotContentType, gotGrokSurface string
 	var gotBody []byte
 
 	bridge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -53,6 +53,7 @@ func TestDataPlaneSeamRelaysStreamByteForByte(t *testing.T) {
 		gotClaimNonce = r.Header.Get(DataPlaneNonceHeader)
 		gotClaimAdmission = r.Header.Get(DataPlaneAdmissionHeader)
 		gotContentType = r.Header.Get("Content-Type")
+		gotGrokSurface = r.Header.Get("X-Opencodex-Grok")
 		var readErr error
 		gotBody, readErr = io.ReadAll(r.Body)
 		if readErr != nil {
@@ -77,6 +78,7 @@ func TestDataPlaneSeamRelaysStreamByteForByte(t *testing.T) {
 	h := dataPlaneSeamHandler(t, requestToken, bridgeToken, bridge.URL)
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewBufferString(body))
 	req.Header = dataPlaneHeaders(requestToken, bridgeToken, []byte(body))
+	req.Header.Set("X-Opencodex-Grok", "1")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	resp := rec.Result()
@@ -107,6 +109,9 @@ func TestDataPlaneSeamRelaysStreamByteForByte(t *testing.T) {
 	}
 	if gotContentType != "application/json" {
 		t.Fatalf("content-type = %q", gotContentType)
+	}
+	if gotGrokSurface != "1" {
+		t.Fatalf("grok surface = %q, want 1", gotGrokSurface)
 	}
 	if string(gotBody) != body {
 		t.Fatalf("bridge body = %q, want %q", gotBody, body)

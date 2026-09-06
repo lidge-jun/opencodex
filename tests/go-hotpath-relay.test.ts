@@ -187,10 +187,15 @@ function configFixture(upstreamPort: number, providerOverrides: Record<string, u
 
 const GO_UA = "Go-http-client/1.1";
 
-async function postCase(server: { url: URL }, token: string, body: unknown): Promise<ResponseCapture> {
+async function postCase(
+  server: { url: URL },
+  token: string,
+  body: unknown,
+  headers: Record<string, string> = {},
+): Promise<ResponseCapture> {
   const response = await fetch(new URL("/v1/responses", server.url), {
     method: "POST",
-    headers: { "content-type": "application/json", "x-opencodex-api-key": token },
+    headers: { "content-type": "application/json", "x-opencodex-api-key": token, ...headers },
     body: JSON.stringify(body),
   });
   return {
@@ -209,11 +214,17 @@ function captureEnv(): void {
   }
 }
 
-function setUpFixture(upstreamPort: number, providerOverrides?: Record<string, unknown>): void {
+function setUpFixture(
+  upstreamPort: number,
+  providerOverrides?: Record<string, unknown>,
+  configure?: (config: Record<string, unknown>) => void,
+): void {
   testHome = mkdtempSync(join(tmpdir(), "ocx-hotpath-relay-"));
   process.env.OPENCODEX_HOME = testHome;
   process.env.OPENCODEX_API_AUTH_TOKEN = "data-secret";
-  saveConfig(configFixture(upstreamPort, providerOverrides));
+  const fixture = configFixture(upstreamPort, providerOverrides) as Record<string, unknown>;
+  configure?.(fixture);
+  saveConfig(fixture as Parameters<typeof saveConfig>[0]);
 }
 
 function tearDownFixture(): void {
@@ -477,6 +488,117 @@ describe.skipIf(!goAvailable || sidecarBinary === null)("ocx-sidecar non-streami
       expect(goLog.authorization).toBe(oracleLog.authorization);
       expect(goLog.apiKey).toBe(oracleLog.apiKey);
       expect(goLog.providerHeader).toBe(oracleLog.providerHeader);
+    }
+  });
+
+  runFixtureTest("every remaining relay refusal stays byte-identical on the TypeScript bridge", async () => {
+    const token = "data-secret";
+    const port = upstream!.port;
+    type RefusalCase = {
+      name: string;
+      body: unknown;
+      provider?: Record<string, unknown>;
+      headers?: Record<string, string>;
+      configure?: (config: Record<string, unknown>) => void;
+    };
+    const cases: RefusalCase[] = [
+      {
+        name: "combos use the TypeScript picker",
+        body: { model: "test-model", input: "plain" },
+        configure: config => {
+          config.combos = { only: { targets: [{ provider: "test", model: "test-model" }] } };
+        },
+      },
+      {
+        name: "routing profiles use the TypeScript policy engine",
+        body: { model: "test-model", input: "plain" },
+        configure: config => {
+          config.routingProfiles = { only: { candidates: [{ provider: "test", model: "test-model" }] } };
+        },
+      },
+      {
+        name: "blocked model redirects rewrite before routing",
+        body: { model: "blocked", input: "plain" },
+        configure: config => { config.blockedModelRedirects = { blocked: "test-model" }; },
+      },
+      {
+        name: "shadow intercept rewrites before routing",
+        body: { model: "source-model", input: "plain" },
+        configure: config => {
+          config.shadowCallIntercept = { enabled: true, model: "test-model", sourceModels: ["source-model"] };
+        },
+      },
+      { name: "oauth providers remain on the TypeScript credential path", body: { model: "test-model", input: "plain" }, provider: { authMode: "oauth" } },
+      { name: "keychain API keys remain on the TypeScript credential path", body: { model: "test-model", input: "plain" }, provider: { apiKey: "keychain:relay-differential" } },
+      { name: "custom responses paths remain on the TypeScript adapter path", body: { model: "test-model", input: "plain" }, provider: { responsesPath: "/custom-responses" } },
+      { name: "stateless streaming responses keep TypeScript stream repair", body: { model: "test-model", input: "stream", stream: true }, provider: { statelessResponses: true } },
+      { name: "reasoning-preserving streams keep TypeScript stream repair", body: { model: "test-model", input: "stream", stream: true }, provider: { preserveReasoningContentModels: ["test-model"] } },
+      {
+        name: "reserved OpenAI family rows remain on the native TypeScript path",
+        body: { model: "test-model", input: "plain" },
+        configure: config => {
+          const providers = config.providers as Record<string, unknown>;
+          providers.openai = providers.test!;
+          delete providers.test;
+          config.defaultProvider = "openai";
+        },
+      },
+      { name: "grok surface remains on the TypeScript surface path", body: { model: "test-model", input: "plain" }, headers: { "x-opencodex-grok": "1" } },
+      { name: "compaction markers remain on the TypeScript compaction path", body: { model: "test-model", input: "plain", compaction_trigger: true } },
+      {
+        name: "encrypted input remains on the TypeScript encrypted-payload path",
+        body: { model: "test-model", input: [{ type: "message", role: "user", encrypted_content: "ciphertext" }] },
+      },
+      { name: "namespaced model selectors remain on the TypeScript router", body: { model: "test/test-model", input: "plain" } },
+      { name: "previous response continuations remain on the TypeScript state path", body: { model: "test-model", input: "plain", previous_response_id: "resp_unknown" } },
+      {
+        name: "namespaced tools remain on the TypeScript tool bridge",
+        body: { model: "test-model", input: "plain", tools: [{ type: "function", name: "calc", namespace: "mcp" }] },
+      },
+    ];
+
+    for (const fixture of cases) {
+      resetGoSidecarForTests();
+      delete process.env[GO_SIDECAR_BIN_ENV];
+      delete process.env[HOT_PATH_SEAM_ENV];
+      delete process.env[HOT_PATH_RELAY_ENV];
+      setUpFixture(port, fixture.provider, fixture.configure);
+
+      const oracleStart = upstreamLogs.length;
+      const serverA = startServer(0);
+      let oracle: ResponseCapture;
+      try {
+        oracle = await postCase(serverA, token, fixture.body, fixture.headers);
+      } finally {
+        await serverA.stop(true);
+      }
+      const oracleLogs = upstreamLogs.slice(oracleStart);
+      expect(oracleLogs.every(log => log.ua !== GO_UA), fixture.name + " oracle uses Bun").toBe(true);
+
+      process.env[GO_SIDECAR_BIN_ENV] = sidecarBinary!;
+      process.env[HOT_PATH_SEAM_ENV] = "1";
+      process.env[HOT_PATH_RELAY_ENV] = "1";
+      const relayStart = upstreamLogs.length;
+      const serverB = startServer(0);
+      let armed: ResponseCapture;
+      try {
+        await waitFor(() => activeGoSidecarBaseUrl(), 15_000);
+        armed = await postCase(serverB, token, fixture.body, fixture.headers);
+      } finally {
+        await serverB.stop(true);
+        resetGoSidecarForTests();
+      }
+      const armedLogs = upstreamLogs.slice(relayStart);
+
+      expect(armed!.status, fixture.name + " status").toBe(oracle!.status);
+      expect(armed!.contentType, fixture.name + " content-type").toBe(oracle!.contentType);
+      expect(armed!.body, fixture.name + " client bytes").toBe(oracle!.body);
+      // Every fixture above intentionally exercises a refusal predicate. If it
+      // reaches an upstream, that request must still be sent by Bun through
+      // the parent bridge rather than directly by the Go relay. Some credential
+      // and encrypted fixtures fail before an upstream call, which is equally
+      // valid evidence of bridge ownership.
+      expect(armedLogs.every(log => log.ua !== GO_UA), fixture.name + " must not be Go-owned").toBe(true);
     }
   });
 });

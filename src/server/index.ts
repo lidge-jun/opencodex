@@ -2675,9 +2675,10 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         goSidecarHotPathBridge = createHotPathResponsesBridge({
           bridgeToken: goSidecarLiveStateBridgeToken,
           relaySecret: writeRelaySecret,
-          dispatchResponses: async ({ admission, contentType, body, signal }) => {
+          dispatchResponses: async ({ admission, contentType, grokSurface, body, signal }) => {
             const headers = new Headers();
             if (contentType) headers.set("content-type", contentType);
+            if (grokSurface) headers.set("x-opencodex-grok", "1");
             const internalReq = new Request("http://localhost/v1/responses", {
               method: "POST",
               headers,
