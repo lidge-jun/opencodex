@@ -579,6 +579,14 @@ jobs:
           cd gui
           bun run build
 
+      # Run the two data-plane differentials explicitly before the full-suite
+      # control. The unsharded suite also discovers them, but this named step
+      # makes macOS parity evidence independently visible and stable.
+      - name: Hot-path differential oracles
+        run: >-
+          bun test --timeout 60000
+          tests/go-hotpath-relay.test.ts tests/go-hotpath-seam.test.ts
+
       # Bun 1.3.14 segfaults while reclaiming a Worker at an `--isolate` file
       # boundary: the header shows BALANCED `workers_spawned(N)
       # workers_terminated(N)` and the process dies with exit 133 after the last
@@ -704,6 +712,14 @@ jobs:
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
 
+      - name: Setup Go
+        # The explicit Windows hot-path differential below builds and executes
+        # a native sidecar, so GOOS cross-compilation alone is insufficient.
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go/go.mod
+          cache: false
+
       - name: Install dependencies
         run: |
           bun install --frozen-lockfile
@@ -715,6 +731,14 @@ jobs:
         run: |
           cd gui
           bun run build
+
+      # This is deliberately separate from the sharded suite: a shard can move
+      # with file ordering, while this named result is the Windows evidence for
+      # byte-identical relay and SSE-seam behaviour against a native sidecar.
+      - name: Hot-path differential oracles
+        run: >-
+          bun test --timeout 60000
+          tests/go-hotpath-relay.test.ts tests/go-hotpath-seam.test.ts
 
       - name: Test
         # --timeout: the Linux batches and the macOS control both pass 60000; this leg was
