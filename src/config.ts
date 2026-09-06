@@ -3068,7 +3068,6 @@ function publishInitialConfigNoReplace(config: OcxConfig, io: PersistedConfigIni
   let staged = false;
   let hardened = false;
   let published = false;
-  let publicationAttempted = false;
   let cleanupAttempted = false;
 
   const scrubUnpublishedTemp = (cause?: unknown): void => {
@@ -3097,7 +3096,6 @@ function publishInitialConfigNoReplace(config: OcxConfig, io: PersistedConfigIni
     const hook = persistedConfigInitializationBeforePublishForTests;
     persistedConfigInitializationBeforePublishForTests = null;
     hook?.();
-    publicationAttempted = true;
     try { io.publishNoReplace(temp, target); }
     catch (cause) {
       const code = cause && typeof cause === "object" && "code" in cause
@@ -3110,14 +3108,13 @@ function publishInitialConfigNoReplace(config: OcxConfig, io: PersistedConfigIni
       return false;
     }
     published = true;
-    io.close?.();
-    try { io.unlink(temp); forgetEphemeralSecretPath(temp); }
+    try { io.unlink(temp); io.close?.(); forgetEphemeralSecretPath(temp); }
     catch (firstError) {
-      if (isMissingPathError(firstError)) forgetEphemeralSecretPath(temp);
+      if (isMissingPathError(firstError)) { io.close?.(); forgetEphemeralSecretPath(temp); }
       else {
-        try { io.unlink(temp); forgetEphemeralSecretPath(temp); }
+        try { io.unlink(temp); io.close?.(); forgetEphemeralSecretPath(temp); }
         catch (secondError) {
-          if (isMissingPathError(secondError)) forgetEphemeralSecretPath(temp);
+          if (isMissingPathError(secondError)) { io.close?.(); forgetEphemeralSecretPath(temp); }
           else {
             let samePublishedInode = false;
             try {
@@ -3128,10 +3125,18 @@ function publishInitialConfigNoReplace(config: OcxConfig, io: PersistedConfigIni
             if (samePublishedInode) {
               cleanupAttempted = true;
               try { io.unlink(target); }
-              catch (cause) { throw new PersistedConfigInitializationRollbackError({ cause }); }
+              catch (cause) {
+                io.close?.();
+                throw new PersistedConfigInitializationRollbackError({ cause });
+              }
+              published = false;
+              scrubUnpublishedTemp(secondError);
+            } else {
+              // Publication succeeded, but the temporary pathname no longer
+              // identifies its inode. Do not follow it for scrubbing.
+              cleanupAttempted = true;
+              io.close?.();
             }
-            published = false;
-            scrubUnpublishedTemp(secondError);
             throw new PersistedConfigInitializationCleanupError({ cause: secondError });
           }
         }
@@ -3144,7 +3149,7 @@ function publishInitialConfigNoReplace(config: OcxConfig, io: PersistedConfigIni
     refreshUserCostOverlays(persisted);
     return true;
   } catch (cause) {
-    if (staged && (!published || publicationAttempted) && !cleanupAttempted) scrubUnpublishedTemp(cause);
+    if (staged && !published && !cleanupAttempted) scrubUnpublishedTemp(cause);
     throw cause;
   }
 }

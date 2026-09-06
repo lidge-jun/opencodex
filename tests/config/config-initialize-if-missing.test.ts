@@ -199,3 +199,29 @@ test("replacement of the staged temporary file with a symlink does not truncate 
   expect(existsSync(getConfigPath())).toBe(false);
   expect(readFileSync(victimPath, "utf8")).toBe(victimContent);
 });
+
+test("post-publication cleanup never scrubs a replaced temporary pathname", () => {
+  const victimPath = join(root, "post-publish-victim");
+  const victimContent = "critical post-publication data";
+  writeFileSync(victimPath, victimContent);
+  let temp = "";
+  const io = {
+    createExclusive: (path: string) => { temp = path; writeFileSync(path, "", { flag: "wx" }); },
+    write: (path: string, bytes: string) => writeFileSync(path, bytes),
+    harden: () => {},
+    publishNoReplace: (staged: string, target: string) => {
+      linkSync(staged, target);
+      unlinkSync(staged);
+      symlinkSync(victimPath, staged, "file");
+    },
+    truncate: (path: string) => writeFileSync(path, ""),
+    unlink: (path: string) => {
+      if (path === temp) throw new Error("temp unlink blocked");
+      unlinkSync(path);
+    },
+  };
+
+  expect(() => initializePersistedConfigIfMissing(config(25000), io)).toThrow(/cleanup failed/);
+  expect(readFileSync(getConfigPath(), "utf8")).toContain('"port": 25000');
+  expect(readFileSync(victimPath, "utf8")).toBe(victimContent);
+});
