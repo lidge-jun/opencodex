@@ -90,9 +90,19 @@ func defaults(d Deps) Deps {
 // Run dispatches a parsed argv and returns a POSIX-style process code.
 func Run(args []string, deps Deps) int {
 	deps = defaults(deps)
-	if len(args) == 0 || args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
+	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
 		printHelp(deps.Stdout)
 		return ExitOK
+	}
+	if args[0] == "help" {
+		if len(args) > 1 {
+			return printSubcommandHelp(args[1], deps)
+		}
+		printHelp(deps.Stdout)
+		return ExitOK
+	}
+	if hasHelpFlag(args[1:]) {
+		return printSubcommandHelp(args[0], deps)
 	}
 	switch args[0] {
 	case "--version", "-v", "version":
@@ -104,68 +114,130 @@ func Run(args []string, deps Deps) int {
 		return runReady(args[1:], deps)
 	default:
 		fmt.Fprintf(deps.Stderr, "Unknown command: %s\n", args[0])
-		printHelp(deps.Stderr)
-		return ExitUsage
-	}
-}
-
-func printHelp(w io.Writer) {
-	fmt.Fprintln(w, "Usage: ocx <command>\n\nCommands:")
-	for _, c := range Commands {
-		fmt.Fprintf(w, "  %-24s %s\n", c.Usage, c.Summary)
-	}
-	fmt.Fprintln(w, "  ocx --version | -v       Print version")
-}
-func parseJSON(args []string) (bool, bool) {
-	if len(args) == 0 {
-		return false, true
-	}
-	return len(args) == 1 && args[0] == "--json", len(args) == 1 && args[0] == "--json"
-}
-
-func runHealth(args []string, deps Deps) int {
-	jsonOutput, ok := parseJSON(args)
-	if !ok {
-		fmt.Fprintln(deps.Stderr, "Usage: ocx health [--json]")
-		return ExitUsage
-	}
-	health, raw, err := ProbeHealth(deps)
-	if err != nil {
-		fmt.Fprintf(deps.Stderr, "Proxy health check failed: %v\n", err)
+		printHelp(deps.Stdout)
 		return ExitFailure
 	}
-	if jsonOutput {
-		fmt.Fprintln(deps.Stdout, string(raw))
-	} else {
-		fmt.Fprintf(deps.Stdout, "Proxy healthy (PID %d, port %d, version %s)\n", health.PID, health.Port, health.Version)
+}
+func printHelp(w io.Writer) { fmt.Fprint(w, fullUsage) }
+func hasHelpFlag(args []string) bool {
+	for _, arg := range args {
+		if arg == "--help" || arg == "-h" || arg == "help" {
+			return true
+		}
+	}
+	return false
+}
+func printSubcommandHelp(name string, deps Deps) int {
+	switch name {
+	case "health":
+		fmt.Fprint(deps.Stdout, "Usage: ocx health [--json]\n\nCheck proxy health. Exits 0 if healthy, 1 otherwise.\n\nUse --json for structured output: {ok, pid, port}.\n")
+	case "ready":
+		fmt.Fprint(deps.Stdout, "Usage: ocx ready [--json] [--wait [--timeout <seconds>]]\n\nCheck post-sync readiness. Exits 0 only when ready.\n\nExact unauthenticated GET /readyz returns HTTP 200 when ready, or 503 with Retry-After: 1 for pending or failed.\nIts sanitized HTTP identity is {service, version, uptime, pid, port, status}; /healthz is separate liveness, not readiness.\nDefault is a single identity-checked /readyz probe; old proxies without /readyz fail closed as unreachable.\n--wait polls until ready or timeout, but exits immediately on terminal failed (default 45s, max 300s).\n--timeout requires --wait and accepts a positive integer (1..300).\n--json emits {ready, status, pid, port}; status is one of ready|pending|failed|unreachable.\nInvalid or unknown arguments exit 64. Not-ready, pending, failed, timeout, and unreachable exit 1.\n")
+	default:
+		fmt.Fprintf(deps.Stderr, "Unknown command: %s\n", name)
+		printHelp(deps.Stdout)
+		return ExitFailure
 	}
 	return ExitOK
 }
-func runReady(args []string, deps Deps) int {
-	jsonOutput, ok := parseJSON(args)
-	if !ok {
-		fmt.Fprintln(deps.Stderr, "Usage: ocx ready [--json]")
-		return ExitUsage
+func runHealth(args []string, deps Deps) int {
+	jsonOutput := false
+	for _, arg := range args {
+		if arg == "--json" {
+			jsonOutput = true
+		}
 	}
 	health, _, err := ProbeHealth(deps)
 	if err != nil {
-		return reportReady(deps, jsonOutput, false, "unreachable", 0, 0)
+		if jsonOutput {
+			fmt.Fprintln(deps.Stdout, "{\"ok\":false,\"pid\":null,\"port\":null}")
+		} else {
+			fmt.Fprintln(deps.Stdout, "Proxy not healthy")
+		}
+		return ExitFailure
 	}
-	state, err := deps.ReadRuntime()
-	if err != nil {
-		return reportReady(deps, jsonOutput, false, "unreachable", health.PID, health.Port)
+	if jsonOutput {
+		fmt.Fprintf(deps.Stdout, "{\"ok\":true,\"pid\":%d,\"port\":%d}\n", health.PID, health.Port)
+	} else {
+		fmt.Fprintf(deps.Stdout, "Proxy healthy (PID %d, port %d)\n", health.PID, health.Port)
 	}
-	ready, err := ProbeReady(state, deps.HTTPClient)
-	if err != nil {
-		return reportReady(deps, jsonOutput, false, "unreachable", health.PID, health.Port)
+	return ExitOK
+}
+
+type readyArgs struct {
+	json, wait, hasTimeout bool
+	timeout                time.Duration
+}
+
+func parseReady(args []string) (readyArgs, bool) {
+	parsed := readyArgs{timeout: 45 * time.Second}
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--json":
+			parsed.json = true
+		case "--wait":
+			parsed.wait = true
+		case "--timeout":
+			if i+1 >= len(args) {
+				return readyArgs{}, false
+			}
+			seconds, err := strconv.Atoi(args[i+1])
+			if err != nil || seconds < 1 || seconds > 300 {
+				return readyArgs{}, false
+			}
+			parsed.timeout = time.Duration(seconds) * time.Second
+			parsed.hasTimeout = true
+			i++
+		default:
+			return readyArgs{}, false
+		}
 	}
-	return reportReady(deps, jsonOutput, ready.Status == "ready", ready.Status, ready.PID, ready.Port)
+	if parsed.hasTimeout && !parsed.wait {
+		return readyArgs{}, false
+	}
+	return parsed, true
+}
+func runReady(args []string, deps Deps) int {
+	parsed, ok := parseReady(args)
+	if !ok {
+		fmt.Fprintln(deps.Stderr, "Usage: ocx ready [--json] [--wait [--timeout <seconds>]]")
+		fmt.Fprintln(deps.Stderr, "  --timeout requires --wait; <seconds> must be a positive integer (1..300).")
+		fmt.Fprintln(deps.Stderr, "  Default wait timeout is 45 seconds.")
+		return ExitUsage
+	}
+	deadline := time.Now().Add(parsed.timeout)
+	for {
+		_, _, err := ProbeHealth(deps)
+		if err != nil {
+			return reportReady(deps, parsed.json, false, "unreachable", 0, 0)
+		}
+		state, err := deps.ReadRuntime()
+		if err != nil {
+			return reportReady(deps, parsed.json, false, "unreachable", 0, 0)
+		}
+		ready, err := ProbeReady(state, deps.HTTPClient)
+		if err != nil {
+			return reportReady(deps, parsed.json, false, "unreachable", 0, 0)
+		}
+		if ready.Status != "pending" || !parsed.wait || time.Now().Add(500*time.Millisecond).After(deadline) {
+			return reportReady(deps, parsed.json, ready.Status == "ready", ready.Status, ready.PID, ready.Port)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 }
 func reportReady(deps Deps, jsonOutput bool, isReady bool, status string, pid int64, port int) int {
 	if jsonOutput {
-		fmt.Fprintf(deps.Stdout, "{\"ready\":%t,\"status\":%q,\"pid\":%d,\"port\":%d}\n", isReady, status, pid, port)
+		if status == "unreachable" {
+			fmt.Fprintln(deps.Stdout, "{\"ready\":false,\"status\":\"unreachable\",\"pid\":null,\"port\":null}")
+		} else {
+			fmt.Fprintf(deps.Stdout, "{\"ready\":%t,\"status\":%q,\"pid\":%d,\"port\":%d}\n", isReady, status, pid, port)
+		}
 	} else if isReady {
 		fmt.Fprintf(deps.Stdout, "Proxy ready (PID %d, port %d)\n", pid, port)
+	} else if status == "pending" {
+		fmt.Fprintln(deps.Stdout, "Proxy running but not ready yet (pending).")
+	} else if status == "failed" {
+		fmt.Fprintln(deps.Stdout, "Proxy running but not ready (sync failed).")
 	} else {
 		fmt.Fprintln(deps.Stdout, "Proxy not reachable or readiness unavailable.")
 	}
@@ -192,6 +264,9 @@ func ReadRuntime() (RuntimeState, error) {
 	}
 	if state.PID <= 0 || state.Port < 1 || state.Port > 65535 || !managementauth.IsAttestationSecret(state.AttestationSecret) {
 		return RuntimeState{}, errors.New("invalid runtime record")
+	}
+	if state.Hostname == "localhost" {
+		state.Hostname = "127.0.0.1"
 	}
 	return state, nil
 }

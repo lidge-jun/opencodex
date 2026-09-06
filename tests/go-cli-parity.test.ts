@@ -3,12 +3,13 @@ import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { saveConfig } from "../src/config";
-import { startServer } from "../src/server";
-import { createLocalAttestationChallenge, createLocalAttestationProof } from "../src/lib/local-management-attestation";
+import { createLocalAttestationProof } from "../src/lib/local-management-attestation";
 import { removeTreeWithRetry } from "./helpers/remove-tree";
 
-/** First CLI differential for ADR-0008 ticket #35; #36 extends its matrix. */
+/**
+ * Reusable ADR-0008 CLI differential. Add a row when Go takes ownership of a
+ * TypeScript command; TS-only rows make the remaining migration surface explicit.
+ */
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const secret = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG";
 function goToolchainAvailable(): boolean { return Bun.spawnSync(["go", "version"], { stdout: "ignore", stderr: "ignore" }).success; }
@@ -22,23 +23,72 @@ function buildGoCLI(): string {
 const goAvailable = goToolchainAvailable();
 const goCLI = goAvailable ? buildGoCLI() : null;
 let testHome = "";
-afterEach(async () => { delete process.env.OPENCODEX_HOME; if (testHome && existsSync(testHome)) removeTreeWithRetry(testHome); testHome = ""; });
+let testServer: ReturnType<typeof Bun.serve> | undefined;
+type Result = { code: number; stdout: string; stderr: string };
+function runTs(args: string[], home = testHome): Result {
+  const result = Bun.spawnSync([process.execPath, "src/cli/index.ts", ...args], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
+  return { code: result.exitCode, stdout: new TextDecoder().decode(result.stdout), stderr: new TextDecoder().decode(result.stderr) };
+}
+function runGo(args: string[], home = testHome): Result {
+  const result = Bun.spawnSync([goCLI!, ...args], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
+  return { code: result.exitCode, stdout: new TextDecoder().decode(result.stdout), stderr: new TextDecoder().decode(result.stderr) };
+}
+async function runTsAsync(args: string[], home = testHome): Promise<Result> {
+  const child = Bun.spawn([process.execPath, "src/cli/index.ts", ...args], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
+  return { code: await child.exited, stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text() };
+}
+async function runGoAsync(args: string[], home = testHome): Promise<Result> {
+  const child = Bun.spawn([goCLI!, ...args], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
+  return { code: await child.exited, stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text() };
+}
+function expectParity(args: string[]): Result { const ts = runTs(args); const go = runGo(args); expect(go).toEqual(ts); return ts; }
+function normalizeHealthPid(result: Result): Result {
+  if (!result.stdout.startsWith("Proxy healthy") && !result.stdout.startsWith("{\"ok\":true")) return result;
+  return { ...result, stdout: result.stdout.replace(/PID (?:null|\d+)/, "PID <pid>").replace(/\"pid\":(?:null|\d+)/, '"pid":<pid>') };
+}
+afterEach(async () => { testServer?.stop(true); testServer = undefined; delete process.env.OPENCODEX_HOME; if (testHome && existsSync(testHome)) removeTreeWithRetry(testHome); testHome = ""; });
+function startAttestedFixture(status: "ready" | "pending" | "failed"): void {
+  testHome = mkdtempSync(join(tmpdir(), "ocx-go-cli-parity-"));
+  testServer = Bun.serve({ port: 0, fetch(request) {
+    const path = new URL(request.url).pathname;
+    if (path === "/healthz") {
+      const challenge = request.headers.get("x-opencodex-attestation-challenge") ?? "";
+      const headers = challenge ? { "x-opencodex-attestation-proof": createLocalAttestationProof(secret, challenge, process.pid, testServer!.port) } : {};
+      return Response.json({ status: "ok", service: "opencodex", version: "2.42.0", uptime: 1, pid: process.pid, port: testServer!.port }, { headers });
+    }
+    if (path === "/readyz") return Response.json({ status, service: "opencodex", version: "2.42.0", uptime: 1, pid: process.pid, port: testServer!.port }, { status: status === "ready" ? 200 : 503 });
+    return new Response("not found", { status: 404 });
+  }});
+  writeFileSync(join(testHome, "runtime-port.json"), JSON.stringify({ pid: process.pid, port: testServer.port, hostname: "127.0.0.1", attestationSecret: secret }));
+}
 describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket #35)", () => {
-  test("prints byte-identical TypeScript version output", () => {
-    const ts = Bun.spawnSync([process.execPath, "src/cli/index.ts", "--version"], { cwd: repoRoot, stdout: "pipe", stderr: "pipe" });
-    const go = Bun.spawnSync([goCLI!, "--version"], { cwd: repoRoot, stdout: "pipe", stderr: "pipe" });
-    expect(ts.exitCode).toBe(0); expect(go.exitCode).toBe(0); expect(new TextDecoder().decode(go.stdout)).toBe(new TextDecoder().decode(ts.stdout)); expect(new TextDecoder().decode(go.stderr)).toBe("");
+  test.each([{ args: ["--version"] }, { args: ["-v"] }, { args: ["version"] }])("diffs version output and exit code for $args", ({ args }) => { expect(expectParity(args)).toMatchObject({ code: 0, stderr: "" }); });
+  test.each([{ args: [] }, { args: ["--help"] }, { args: ["-h"] }, { args: ["help"] }, { args: ["help", "health"] }, { args: ["health", "--help"] }, { args: ["help", "ready"] }, { args: ["ready", "--help"] }])("diffs help output and exit code for $args", ({ args }) => { expectParity(args); });
+  test("diffs unknown-command output and exit code", () => {
+    testHome = mkdtempSync(join(tmpdir(), "ocx-go-cli-parity-"));
+    expect(expectParity(["not-a-command"])).toMatchObject({ code: 1, stderr: "Unknown command: not-a-command\n" });
   });
-  test("attests and reports the live TypeScript proxy health JSON", async () => {
-    testHome = mkdtempSync(join(tmpdir(), "ocx-go-cli-parity-")); process.env.OPENCODEX_HOME = testHome; saveConfig({ port: 0, hostname: "127.0.0.1", providers: {} });
-    const server = startServer(0, { localAttestationSecret: secret });
-    try {
-      writeFileSync(join(testHome, "runtime-port.json"), JSON.stringify({ pid: process.pid, port: server.port, hostname: "127.0.0.1", attestationSecret: secret }));
-      const challenge = createLocalAttestationChallenge(); const ts = await fetch(new URL("/healthz", server.url), { headers: { "x-opencodex-attestation-challenge": challenge } }); const tsBody = await ts.json() as Record<string, unknown>;
-      expect(ts.headers.get("x-opencodex-attestation-proof")).toBe(createLocalAttestationProof(secret, challenge, process.pid, server.port));
-      const go = Bun.spawn([goCLI!, "health", "--json"], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: testHome }, stdout: "pipe", stderr: "pipe" });
-      expect(await go.exited).toBe(0); expect(await new Response(go.stderr).text()).toBe("");
-      const goBody = JSON.parse(await new Response(go.stdout).text()) as Record<string, unknown>; for (const field of ["status", "service", "version", "pid", "port"]) expect(goBody[field]).toBe(tsBody[field]); expect(typeof goBody.uptime).toBe("number");
-    } finally { await server.stop(true); }
+  test.each([{ args: ["health"] }, { args: ["health", "--json"] }, { args: ["ready"] }, { args: ["ready", "--json"] }])("diffs unavailable command output and exit code for $args", ({ args }) => {
+    testHome = mkdtempSync(join(tmpdir(), "ocx-go-cli-parity-"));
+    expectParity(args);
+  });
+  test.each([{ args: ["health"] }, { args: ["health", "--json"] }, { args: ["ready"] }, { args: ["ready", "--json"] }])("diffs live ready command output and exit code for $args", async ({ args }) => {
+    startAttestedFixture("ready");
+    const ts = await runTsAsync(args);
+    const go = await runGoAsync(args);
+    expect(normalizeHealthPid(go)).toEqual(normalizeHealthPid(ts));
+  });
+  test.each(["pending", "failed"] as const)("diffs live %s readiness JSON", status => {
+    startAttestedFixture(status);
+    expectParity(["ready", "--json"]);
+  });
+  test.each([{ args: ["ready", "--timeout", "5"] }, { args: ["ready", "--wait", "--timeout", "0"] }, { args: ["ready", "--wait", "--timeout", "301"] }, { args: ["ready", "--wat"] }])("diffs ready usage output and exit code for $args", ({ args }) => {
+    testHome = mkdtempSync(join(tmpdir(), "ocx-go-cli-parity-"));
+    const result = expectParity(args);
+    expect(result.code).toBe(64);
+  });
+  test.each([{ args: ["status"], reason: "Go has not implemented the status command." }, { args: ["config", "show"], reason: "Go has not implemented the config command." }])("records $reason", ({ args }) => {
+    testHome = mkdtempSync(join(tmpdir(), "ocx-go-cli-parity-"));
+    expect(runTs(args).code).not.toBe(runGo(args).code);
   });
 });
