@@ -138,7 +138,7 @@ func Run(args []string, deps Deps) int {
 	case "tray":
 		return runDelegated(args, deps)
 	case "config":
-		return runConfig(args[1:], deps)
+		return runDelegated(args, deps)
 	case "models":
 		return runModels(args[1:], deps)
 	case "provider":
@@ -248,6 +248,8 @@ func printSubcommandHelp(name string, deps Deps) int {
 		fmt.Fprint(deps.Stdout, "Usage: ocx codex-shim <install|status|uninstall|remove>\n\nAuto-start the proxy when `codex` launches.\n\nUse `remove` as an alias for `uninstall`.\n")
 	case "tray":
 		fmt.Fprint(deps.Stdout, "Usage: ocx tray <install|start|stop|status|uninstall|remove> [--json] [--no-start]\n\nInstall and control the Windows status tray icon.\n\nThe tray starts at Windows login and provides one-click proxy controls.\nTray start/stop controls the icon only; use its menu to start or stop the proxy.\n--no-start (install only) installs the tray without launching it immediately.\n")
+	case "config":
+		return runDelegated([]string{"config", "--help"}, deps)
 	case "models":
 		fmt.Fprint(deps.Stdout, modelsUsage+"\nCustom models:\n  "+modelAddUsage+"\n  "+modelRemoveUsage+"\n  Usage: ocx models list-custom [--json]\n\nRuntime subcommands (live, edit, enable, disable, provider, selected, preset, new-policy, new-arrivals, context, shadow) retain the TypeScript management API owner during the incremental takeover.\n")
 	default:
