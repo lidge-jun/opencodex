@@ -118,6 +118,49 @@ type DoctorOAuthAccount struct {
 	NeedsReauth               bool
 }
 
+func doctorMaskAccountID(id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" || len(id) <= 4 {
+		return "account-…"
+	}
+	return "account-…" + id[len(id)-4:]
+}
+
+func FormatDoctorOAuthLive(source DoctorOAuthHealthSource, accounts []DoctorOAuthAccount) []string {
+	lines := []string{"OAuth reliability"}
+	switch source {
+	case DoctorOAuthUnavailable:
+		lines = append(lines, "  [WARN] Codex account health unavailable (proxy not running). Action: start the proxy and re-run \x60ocx doctor\x60 to inspect live cooldown/reauth")
+	case DoctorOAuthAuthFailed:
+		lines = append(lines, "  [WARN] Codex account health unavailable (proxy running; management authentication failed). Action: verify the admin token configuration, restart the proxy, and re-run \x60ocx doctor\x60")
+	case DoctorOAuthAPIUnavailable:
+		lines = append(lines, "  [WARN] Codex account health unavailable (proxy running; management API response failed). Action: inspect the proxy service log, restart the proxy if needed, and re-run \x60ocx doctor\x60")
+	}
+	for _, account := range accounts {
+		if account.Status == "healthy" {
+			continue
+		}
+		masked := doctorMaskAccountID(account.ID)
+		switch account.Status {
+		case "reauth_required":
+			lines = append(lines, "  [WARN] Account "+masked+" requires reauthentication. Action: reauthenticate via the dashboard Codex account pool")
+		case "cooldown":
+			prefix := "quota limited"
+			if account.Reason == "rate_limit" {
+				prefix = "rate limited"
+			}
+			lines = append(lines, "  [WARN] Account "+masked+" is "+prefix+" until "+account.Until+". Action: wait until "+account.Until+" or start a new session with another eligible account")
+		case "warning":
+			detail := strings.ReplaceAll(account.Reason, "_", " ")
+			if detail == "" {
+				detail = "unhealthy"
+			}
+			lines = append(lines, "  [WARN] Account "+masked+" has a "+detail+". Action: reauthenticate via the dashboard Codex account pool")
+		}
+	}
+	return append(lines, "  [OK] Codex forward path uses pass-through client metadata (build-time invariant; not a runtime scan).")
+}
+
 func CollectDoctorLiveCodexAccounts(ctx context.Context, r *DoctorManagementReader) (DoctorOAuthHealthSource, []DoctorOAuthAccount) {
 	if r == nil {
 		return DoctorOAuthUnavailable, nil

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,5 +51,12 @@ func TestDoctorCatalogEqualMtimeIsStale(t *testing.T) {
 	got := CollectDoctorCatalogState(DoctorCatalogProbe{PIDs: []int{7}, Starts: map[int]*time.Time{7: &equal}, CatalogMtime: &mtime})
 	if got.State != "stale" {
 		t.Fatalf("state=%#v", got)
+	}
+}
+
+func TestFormatDoctorOAuthLiveMatchesDoctorMessages(t *testing.T) {
+	lines := FormatDoctorOAuthLive(DoctorOAuthManagementAPI, []DoctorOAuthAccount{{ID: "account-12345", Status: "cooldown", Reason: "quota", Until: "2026-01-01T00:00:00.000Z"}})
+	if got, want := strings.Join(lines, "\n"), "OAuth reliability\n  [WARN] Account account-…2345 is quota limited until 2026-01-01T00:00:00.000Z. Action: wait until 2026-01-01T00:00:00.000Z or start a new session with another eligible account\n  [OK] Codex forward path uses pass-through client metadata (build-time invariant; not a runtime scan)."; got != want {
+		t.Fatalf("OAuth text = %q", got)
 	}
 }

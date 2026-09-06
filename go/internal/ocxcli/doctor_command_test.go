@@ -56,6 +56,9 @@ func TestDoctorCommandAssemblyMatchesTypeScriptOracle(t *testing.T) {
 	for _, section := range []struct{ heading, next string }{
 		{"Paths", "Response-state temp files"},
 		{"Response-state temp files", "Codex app home targeting"},
+		{"Codex app home targeting", "Codex restart safety"},
+		{"Codex restart safety", "Codex runtime selection"},
+		{"Codex runtime selection", "Current doctor process proxy env (presence only)"},
 		{"Current doctor process proxy env (presence only)", "Configured proxy (value hidden)"},
 		{"Configured proxy (value hidden)", "Provider API keys (value hidden)"},
 		{"Provider API keys (value hidden)", "Codex env_key launch readiness"},
@@ -75,6 +78,47 @@ func TestDoctorCommandAssemblyMatchesTypeScriptOracle(t *testing.T) {
 	}
 }
 
+func TestDoctorCommandAssemblyUsesPortableProbe3Sections(t *testing.T) {
+	deps := DoctorCommandDeps{
+		Paths: func() []DoctorPathRow { return nil }, Mounts: func() string { return "" },
+		ResponseTemps:    func(bool) DoctorResponseTempResult { return DoctorResponseTempResult{} },
+		Env:              func() map[string]string { return map[string]string{} },
+		Config:           func() StatusConfigDiagnostic { return StatusConfigDiagnostic{Source: "default"} },
+		OrderedProviders: func() *config.OrderedValue { return nil }, CodexConfigText: func() string { return "" },
+		ServiceToken: func() bool { return false }, Shim: func() DoctorShimDiagnostic { return DoctorShimDiagnostic{} },
+		RunningProxyEnv: func() DoctorRunningProxyEnv { return DoctorRunningProxyEnv{Status: "not_running"} },
+		OrcaHome:        func() DoctorOrcaHome { return DoctorOrcaHome{EffectiveCodexHome: "/codex"} },
+		RestartSafety: func() DoctorRestartSafety {
+			return DoctorRestartSafety{RebootSafe: true, Summary: "native Codex routing (no opencodex restart dependency)", Detail: "routing=native, service=not installed, shim=not installed"}
+		},
+		RuntimeSelection: func() DoctorRuntimeSelection { return DoctorRuntimeSelection{Path: "codex", Source: "fallback"} },
+		WHAM: func() DoctorWhamResult {
+			return DoctorWhamResult{OK: true, Classification: "ok", Duration: 12 * time.Millisecond}
+		},
+		AgentRoles: func() []string { return []string{"reviewer"} },
+		WSL: func() DoctorWslDiagnostic {
+			return DoctorWslDiagnostic{WSL: true, EffectiveCodexHome: "/home/a/.codex"}
+		},
+	}
+	got := AssembleDoctorCommand(nil, deps).Text
+	for _, want := range []string{
+		"Codex app home targeting\n  ok  Effective Codex home: /codex",
+		"Codex restart safety\n  ok  native Codex routing (no opencodex restart dependency)",
+		"Codex runtime selection\n  ok  Selected runtime: codex (unknown, source=fallback)",
+		"WHAM reachability\n  ok https://chatgpt.com/backend-api/wham/usage\n       error=ok, 12ms, unauthenticated",
+		"Codex agent role files\n  [WARN] 1 agent role file contains `model_fallback`: reviewer",
+		"WSL Codex installs\n  -- Linux ~/.codex/config.toml",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("report missing %q in %q", want, got)
+		}
+	}
+	deps.WSL = func() DoctorWslDiagnostic { return DoctorWslDiagnostic{} }
+	if got := AssembleDoctorCommand(nil, deps).Text; strings.Contains(got, "WSL Codex installs") {
+		t.Fatalf("non-WSL report included an empty WSL section: %q", got)
+	}
+}
+
 func TestDoctorCommandAssemblyArgumentsAndTODOBoundary(t *testing.T) {
 	var reclamations []bool
 	deps := DoctorCommandDeps{
@@ -91,6 +135,12 @@ func TestDoctorCommandAssemblyArgumentsAndTODOBoundary(t *testing.T) {
 		ServiceToken:     func() bool { return false },
 		Shim:             func() DoctorShimDiagnostic { return DoctorShimDiagnostic{} },
 		RunningProxyEnv:  func() DoctorRunningProxyEnv { return DoctorRunningProxyEnv{Status: "not_running"} },
+		OrcaHome:         func() DoctorOrcaHome { return DoctorOrcaHome{} },
+		RestartSafety:    func() DoctorRestartSafety { return DoctorRestartSafety{} },
+		RuntimeSelection: func() DoctorRuntimeSelection { return DoctorRuntimeSelection{} },
+		WHAM:             func() DoctorWhamResult { return DoctorWhamResult{} },
+		AgentRoles:       func() []string { return nil },
+		WSL:              func() DoctorWslDiagnostic { return DoctorWslDiagnostic{} },
 		ProxyDownHint:    func() string { return "hint" },
 	}
 	result := AssembleDoctorCommand([]string{"--reclaim-response-tempz", "--reclaim-response-temps"}, deps)

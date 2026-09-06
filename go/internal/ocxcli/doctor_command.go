@@ -1,8 +1,10 @@
 package ocxcli
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,6 +44,12 @@ type DoctorCommandDeps struct {
 	ServiceToken     func() bool
 	Shim             func() DoctorShimDiagnostic
 	RunningProxyEnv  func() DoctorRunningProxyEnv
+	OrcaHome         func() DoctorOrcaHome
+	RestartSafety    func() DoctorRestartSafety
+	RuntimeSelection func() DoctorRuntimeSelection
+	WHAM             func() DoctorWhamResult
+	AgentRoles       func() []string
+	WSL              func() DoctorWslDiagnostic
 	ProxyDownHint    func() string
 }
 
@@ -101,6 +109,31 @@ func defaultDoctorCommandDeps(deps DoctorCommandDeps) DoctorCommandDeps {
 	if deps.RunningProxyEnv == nil {
 		deps.RunningProxyEnv = func() DoctorRunningProxyEnv { return CollectDoctorRunningProxyEnv(int(readStatusPIDFile()), nil) }
 	}
+	if deps.OrcaHome == nil {
+		deps.OrcaHome = CollectDoctorOrcaHome
+	}
+	if deps.RestartSafety == nil {
+		deps.RestartSafety = func() DoctorRestartSafety {
+			return CollectDoctorRestartSafety(CollectStatusExtraDomains(deps.Config(), StatusExtraDeps{}).Startup)
+		}
+	}
+	if deps.RuntimeSelection == nil {
+		deps.RuntimeSelection = CollectDoctorRuntimeSelection
+	}
+	if deps.WHAM == nil {
+		// The token-aware implementation lands with the native-profile collector.
+		// Until then this remains a real reachability probe without reading or
+		// serializing credentials.
+		deps.WHAM = func() DoctorWhamResult {
+			return ProbeDoctorWHAM(context.Background(), &http.Client{}, "", "")
+		}
+	}
+	if deps.AgentRoles == nil {
+		deps.AgentRoles = func() []string { return CollectDoctorAgentRoles(doctorCodexHome()) }
+	}
+	if deps.WSL == nil {
+		deps.WSL = CollectCurrentDoctorWslDualInstall
+	}
 	if deps.ProxyDownHint == nil {
 		deps.ProxyDownHint = func() string { return "" }
 	}
@@ -108,17 +141,11 @@ func defaultDoctorCommandDeps(deps DoctorCommandDeps) DoctorCommandDeps {
 }
 
 var doctorCommandTODOs = []DoctorTODOSection{
-	{"Codex app home targeting", "Orca/Codex home diagnostic has not been ported."},
-	{"Codex restart safety", "startup/restart safety diagnostic has not been ported."},
-	{"Codex runtime selection", "runtime selection and live version diagnostics have not been ported."},
-	{"Memory / runtime", "live service memory/runtime diagnostic has not been ported."},
-	{"WHAM reachability", "WHAM network reachability probe has not been ported."},
+	{"Memory / runtime", "doctor Bun runtime identity is unavailable in the Go process; service evidence is collected but cannot yet match TypeScript text."},
 	{"Codex history metadata restore", "history metadata restore diagnostic has not been ported."},
 	{"Codex native-write coordinator", "native-write coordinator diagnostic has not been ported."},
-	{"Project Codex configs", "project config bypass diagnostic has not been ported."},
-	{"Codex agent role files", "agent-role model_fallback diagnostic has not been ported."},
-	{"WSL Codex installs", "WSL dual-install diagnostic has not been ported."},
-	{"OAuth reliability", "OAuth health and catalog freshness diagnostics have not been ported."},
+	{"Project Codex configs", "profile-aware project config bypass diagnostic has not been ported."},
+	{"OAuth reliability", "credential-collision, refresh-lock, and catalog freshness diagnostics have not been ported; live Codex account health is collected but not rendered."},
 	{"Hints", "remaining hints need their source diagnostics; proxy-down hint is assembled when supplied."},
 }
 
@@ -178,21 +205,31 @@ func AssembleDoctorCommand(args []string, deps DoctorCommandDeps) DoctorCommandR
 	sections := [][]string{
 		FormatDoctorPaths(deps.Paths(), deps.Mounts()),
 		append([]string{"Response-state temp files"}, append(reclaimWarnings, FormatDoctorResponseTemps(deps.ResponseTemps(reclaim), reclaim)...)...),
-		doctorTODO(doctorCommandTODOs[0]), doctorTODO(doctorCommandTODOs[1]), doctorTODO(doctorCommandTODOs[2]),
+		FormatDoctorOrcaHome(deps.OrcaHome()),
+		FormatDoctorRestartSafety(deps.RestartSafety()),
+		FormatDoctorRuntimeSelection(deps.RuntimeSelection()),
 		FormatDoctorCurrentProxyEnv(CollectDoctorProxyEnv(env)),
 		FormatDoctorConfiguredProxy(CollectDoctorConfiguredProxy(diagnostic, env)),
 		FormatDoctorProviderAPIKeys(CollectDoctorProviderAPIKeysOrdered(deps.OrderedProviders(), env)),
 		FormatDoctorCodexEnvKeyReadiness(CollectDoctorCodexEnvKeyReadiness(deps.CodexConfigText(), env, deps.Shim(), deps.ServiceToken())),
 		FormatDoctorRunningProxyEnv(deps.RunningProxyEnv()),
-		doctorTODO(doctorCommandTODOs[3]), doctorTODO(doctorCommandTODOs[4]), doctorTODO(doctorCommandTODOs[5]), doctorTODO(doctorCommandTODOs[6]), doctorTODO(doctorCommandTODOs[7]), doctorTODO(doctorCommandTODOs[8]), doctorTODO(doctorCommandTODOs[9]), doctorTODO(doctorCommandTODOs[10]),
+		doctorTODO(doctorCommandTODOs[0]),
+		FormatDoctorWHAM(deps.WHAM()),
+		doctorTODO(doctorCommandTODOs[1]), doctorTODO(doctorCommandTODOs[2]), doctorTODO(doctorCommandTODOs[3]),
+		FormatDoctorAgentRoles(deps.AgentRoles()),
+		FormatDoctorWslDualInstall(deps.WSL()),
+		doctorTODO(doctorCommandTODOs[4]),
 	}
-	last := doctorTODO(doctorCommandTODOs[11])
+	last := doctorTODO(doctorCommandTODOs[5])
 	if hint := deps.ProxyDownHint(); hint != "" {
 		last = append(last, "  - "+hint)
 	}
 	sections = append(sections, last)
 	parts := make([]string, 0, len(sections))
 	for _, section := range sections {
+		if len(section) == 0 {
+			continue
+		}
 		parts = append(parts, strings.Join(section, "\n"))
 	}
 	return DoctorCommandResult{Text: "opencodex doctor\n\n" + strings.Join(parts, "\n\n") + "\n", Exit: ExitOK, TODOs: append([]DoctorTODOSection(nil), doctorCommandTODOs...)}
