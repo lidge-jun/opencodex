@@ -4,13 +4,19 @@ on:
 permissions:
   contents: read
 jobs:
-  desktop-apply-timing:
+  known-folder-phases:
+    name: known-folder ${{ matrix.mode }}
     runs-on: windows-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [isolated, shard]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          fetch-tags: true
       - uses: ./.github/actions/setup-project-bun
       - name: Install and build fixture dependencies
         shell: bash
@@ -19,8 +25,10 @@ jobs:
           cd gui
           bun install --frozen-lockfile
           bun run build
-      - name: Classify lifecycle failure in three diagnostic samples
+      - name: Measure PowerShell compilation and native lookup separately
         shell: bash
+        env:
+          MODE: ${{ matrix.mode }}
         run: |
           cat > .tmp-instrument-template.py <<'TEMPLATE'
           from pathlib import Path
@@ -85,7 +93,7 @@ jobs:
           trace=next(node.value.value for node in tree.body if isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='trace' for t in node.targets))
           trace=trace.replace('try { return originalSpawnSync.apply(Bun, args); }', '''try {
               const result = originalSpawnSync.apply(Bun, args);
-              trace("spawn_result", { category, exitCode: result.exitCode, timedOut: result.exitedDueToTimeout === true });
+              trace("spawn_result", { category, exitCode: result.exitCode, timedOut: result.exitedDueToTimeout === true, phases: [...new TextDecoder().decode(result.stderr ?? new Uint8Array()).matchAll(/OCX_KNOWN_FOLDER_TIMING:(start|compiled|queried|hresult)=(-?[0-9]+)/g)].map(match => ({ phase: match[1], value: Number(match[2]) })) });
               return result;
             }''')
           p=Path('tests/fixtures/claude-desktop-network-guard.ts');s=p.read_text(encoding='utf-8')
@@ -130,16 +138,23 @@ jobs:
               }
           '''
           s=s.replace(marker,report+marker);p.write_text(s,encoding='utf-8')
+          
+          import json
+          p=Path('src/codex/user-identity.ts');s=p.read_text(encoding='utf-8')
+          def statement(value): return '    '+json.dumps(value)+','
+          anchor='  const statements = [\n'
+          assert s.count(anchor)==1
+          s=s.replace(anchor,anchor+statement('$ocxStageWatch = [Diagnostics.Stopwatch]::StartNew()')+'\n'+statement('[Console]::Error.WriteLine("OCX_KNOWN_FOLDER_TIMING:start=0")')+'\n',1)
+          anchor='      + " -Name OcxKnownFolder -Namespace OcxIdentity -PassThru",'
+          assert s.count(anchor)==1
+          s=s.replace(anchor,anchor+'\n'+statement('[Console]::Error.WriteLine("OCX_KNOWN_FOLDER_TIMING:compiled=" + $ocxStageWatch.ElapsedMilliseconds)'),1)
+          anchor='    "if ($ocxHr -ne 0)'
+          assert s.count(anchor)==1
+          s=s.replace(anchor,statement('[Console]::Error.WriteLine("OCX_KNOWN_FOLDER_TIMING:queried=" + $ocxStageWatch.ElapsedMilliseconds)')+'\n'+statement('[Console]::Error.WriteLine("OCX_KNOWN_FOLDER_TIMING:hresult=" + $ocxHr)')+'\n'+anchor,1)
+          p.write_text(s,encoding='utf-8')
           PY
-          set +e
-          for sample in 1 2 3; do
-            echo "diagnostic sample=$sample"
-            bun test --isolate ./tests/claude-integration/claude-desktop-remote-hub.test.ts --test-name-pattern 'stored profile=true' 2>&1 | tee "sample-$sample.log"
-            echo "sample_exit=${PIPESTATUS[0]}"
-          done
-          set -e
-          if grep -F 'lifecycle_acquire_failure' sample-*.log; then
-            echo 'Captured a classified failure; inspect the fixed flags.'
+          if [ "$MODE" = shard ]; then
+            bun test --isolate --timeout 60000 tests --shard=3/6
           else
-            echo 'No lifecycle failure captured; no root cause closure claimed.'
+            bun test --isolate ./tests/claude-integration/claude-desktop-remote-hub.test.ts --test-name-pattern 'stored profile=true'
           fi
