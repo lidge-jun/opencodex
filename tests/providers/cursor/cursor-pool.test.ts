@@ -112,6 +112,10 @@ describe("CursorPoolKernel", () => {
     expect(s.kernel.note429(first.accountRef, "other", "t", s.capability)).toBe(
       false,
     );
+    s.advance(CURSOR_POOL_COOLDOWN_MS + 1);
+    expect(s.kernel.note429(first.accountRef, "o", "t", s.capability)).toBe(
+      true,
+    );
     expect(CURSOR_POOL_COOLDOWN_MS).toBeGreaterThan(0);
   });
   test("rollback is owner-scoped CAS; TTL, removal and clear leave no state", () => {
@@ -124,7 +128,10 @@ describe("CursorPoolKernel", () => {
       b.accountRef,
     );
     expect(s.kernel.rollback(snap, s.capability)).toBe(false);
+    const generationBeforeRemove = s.kernel.currentGeneration;
     s.kernel.remove(b.accountRef, s.capability);
+    expect(s.kernel.currentGeneration).toBeGreaterThan(generationBeforeRemove);
+    expect(s.kernel.rollback(snap, s.capability)).toBe(false);
     s.setAccounts([]);
     expect(s.kernel.pick("b", "t", s.capability)).toBeNull();
     expect(CURSOR_POOL_TTL_MS).toBeGreaterThan(0);
