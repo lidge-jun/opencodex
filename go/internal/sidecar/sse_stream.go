@@ -39,6 +39,7 @@ type ResponsesSSEStream struct {
 	terminal    bool
 	done        bool
 	pendingDone []sseFrame
+	pipeline    responseRepairPipeline
 }
 
 type sseFrame struct {
@@ -48,7 +49,13 @@ type sseFrame struct {
 
 // NewResponsesSSEStream creates a stream-local state machine. Do not share one
 // instance between concurrent upstream Responses requests.
-func NewResponsesSSEStream() *ResponsesSSEStream { return &ResponsesSSEStream{} }
+func NewResponsesSSEStream(pipeline ...responseRepairPipeline) *ResponsesSSEStream {
+	s := &ResponsesSSEStream{}
+	if len(pipeline) > 0 {
+		s.pipeline = pipeline[0]
+	}
+	return s
+}
 
 // TerminalSeen reports whether a response.completed, response.failed, or
 // response.incomplete event crossed the client boundary.
@@ -227,7 +234,12 @@ func (s *ResponsesSSEStream) rewriteBlock(block, payload []byte, hasData bool) [
 		return block
 	}
 	event, err := jsonwire.Parse(payload)
-	if err != nil || event.Kind() != jsonwire.Object || !s.rewriteEvent(event) {
+	if err != nil || event.Kind() != jsonwire.Object {
+		return block
+	}
+	changed := s.pipeline.repairValue(event)
+	changed = s.rewriteEvent(event) || changed
+	if !changed {
 		return block
 	}
 	encoded, err := event.Encode()

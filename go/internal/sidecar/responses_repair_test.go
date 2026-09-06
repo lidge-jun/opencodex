@@ -83,3 +83,16 @@ func TestRepairResponsesJSONEmptyStringIDReplacesInPlace(t *testing.T) {
 		t.Fatalf("got  %s\nwant %s", out, want)
 	}
 }
+
+func TestResponseRepairPipelineRunsOrderedModelAndImageRestoresBeforeBackfill(t *testing.T) {
+	input := `{"model":"upstream","output":[{"type":"function_call","name":"image_gen__create","arguments":"{}"},{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}`
+	p := responseRepairPipeline{modelID: "client-model", imageAliases: map[string]imageAlias{"image_gen__create": {name: "create", namespace: "image_gen"}}}
+	out, changed := p.repairJSON([]byte(input))
+	if !changed {
+		t.Fatal("pipeline reported unchanged")
+	}
+	want := `{"model":"client-model","output":[{"type":"function_call","name":"create","arguments":"{}","namespace":"image_gen","id":"fc_ocx_0"},{"type":"message","content":[{"type":"output_text","text":"ok","annotations":[]}],"id":"msg_ocx_1","status":"completed"}]}`
+	if string(out) != want {
+		t.Fatalf("got %s\nwant %s", out, want)
+	}
+}
