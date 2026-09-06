@@ -118,7 +118,7 @@ describe("GitHub Actions hardening", () => {
     expect(ci.jobs?.["macos-control"]?.["timeout-minutes"]).toBe(30);
     // Higher than the Linux shards on purpose: at 15 the Windows leg cancelled a
     // shard mid-suite, which reports as neither pass nor fail (#2152).
-    expect(ci.jobs?.["platform-windows"]?.["timeout-minutes"]).toBe(25);
+    expect(ci.jobs?.["platform-windows"]?.["timeout-minutes"]).toBe(30);
     expect(ci.jobs?.["keyring-smoke"]?.["timeout-minutes"]).toBe(8);
     // Same lesson as the Windows shards above, one job later: at 8 the Windows leg
     // spent ~7 minutes installing dependencies and was cancelled at the wall before

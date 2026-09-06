@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { delimiter, dirname, join } from "node:path";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { tmpdir } from "node:os";
 import type { OcxConfig } from "../../src/types";
 import type { Desktop3pModelEntry } from "../../src/claude/desktop-3p";
@@ -44,6 +44,30 @@ function fixture(side: string, allowedOrigins: string[]) {
     OCX_TEST_DENIED_REQUESTS: paths.denied,
   };
   mkdirSync(env.XDG_RUNTIME_DIR!, { recursive: true });
+  if (process.platform === "win32") {
+    // A fresh profile otherwise rebuilds PowerShell's command-analysis cache
+    // in every CLI child. Seed an owned copy; background updates must never
+    // write the runner's or developer's original cache.
+    const cache = join(root, "module-analysis-cache");
+    env.PSModuleAnalysisCachePath = cache;
+    const source = Object.entries(process.env).find(([key]) =>
+      key.toLowerCase() === "psmoduleanalysiscachepath")?.[1];
+    if (source && isAbsolute(source)) {
+      try {
+        const before = lstatSync(source);
+        if (before.isFile() && !before.isSymbolicLink()) {
+          copyFileSync(source, cache);
+          if (lstatSync(cache).size !== before.size) rmSync(cache, { force: true });
+        }
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "ENOENT" && code !== "ESTALE") {
+          throw new Error("Desktop fixture could not read or copy the PowerShell module cache");
+        }
+        rmSync(cache, { force: true });
+      }
+    }
+  }
   return { ...paths, env };
 }
 type Fixture = ReturnType<typeof fixture>;

@@ -751,7 +751,11 @@ jobs:
     # the same truncation as above. The bound is kept; the work per shard is cut instead.
     # Six shards put each leg at roughly two-thirds of the four-shard wall time, back
     # inside the margin 25 was chosen to provide.
-    timeout-minutes: 25
+    # Shard 1 of run 34036848646 then reached that wall with 2736 passing tests
+    # and no test failures. The matched tests were 25% slower than the prior
+    # complete run; about one minute of tests remained. Keep every test deadline
+    # and all six shards, but leave the whole batch and cleanup a 30-minute bound.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
