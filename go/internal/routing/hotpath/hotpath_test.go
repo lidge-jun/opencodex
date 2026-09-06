@@ -14,3 +14,11 @@ func TestDecideQuotaCooldownAndFailover(t *testing.T) {
 		t.Fatal(d)
 	}
 }
+
+func TestRetryAfterRejectsNonTypeScriptNumericForms(t *testing.T) {
+	for _, value := range []string{"1e3", "+5", "0x10"} {
+		if got := retryMS(value, 1_000); got != DefaultKeyCooldownMS {
+			t.Fatalf("%q = %d, want default", value, got)
+		}
+	}
+}

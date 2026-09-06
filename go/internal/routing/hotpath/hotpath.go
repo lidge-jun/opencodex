@@ -2,7 +2,6 @@ package hotpath
 
 import (
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -72,11 +71,12 @@ func SelectAccount(as []Account, active string, threshold *float64, strategy str
 	if threshold != nil {
 		limit = *threshold
 	}
-	if strategy == "round-robin" {
-		return Decision{AccountID: es[0].ID}
-	}
-	if strategy == "fill-first" {
-		return Decision{AccountID: fill(es, active, limit).ID}
+	// Rotation strategies are not claimed by this seam yet: their TS source of
+	// truth includes mutable smooth-weight and sticky-success state. Returning
+	// no account is deliberate; callers must retain TS ownership until that
+	// state is carried in a parent-authorized snapshot.
+	if strategy == "round-robin" || strategy == "fill-first" {
+		return Decision{}
 	}
 	for _, a := range es {
 		if a.ID == active && (a.UsagePercent == nil || limit <= 0 || *a.UsagePercent < limit) {
@@ -90,21 +90,6 @@ func SelectAccount(as []Account, active string, threshold *float64, strategy str
 		}
 	}
 	return Decision{AccountID: best.ID}
-}
-func fill(es []Account, active string, limit float64) Account {
-	xs := append([]Account(nil), es...)
-	sort.SliceStable(xs, func(i, j int) bool { return xs[i].ID < xs[j].ID })
-	for _, a := range xs {
-		if a.ID == active && (a.UsagePercent == nil || limit <= 0 || *a.UsagePercent < limit) {
-			return a
-		}
-	}
-	for _, a := range xs {
-		if a.UsagePercent == nil || limit <= 0 || *a.UsagePercent < limit {
-			return a
-		}
-	}
-	return xs[0]
 }
 func usage(a Account) float64 {
 	if a.UsagePercent == nil {
@@ -138,7 +123,8 @@ func FailoverKey(keys []Key, failed, retry string, now int64) (string, int64) {
 }
 func retryMS(v string, now int64) int64 {
 	s := strings.TrimSpace(v)
-	if n, e := strconv.ParseFloat(s, 64); e == nil && n >= 0 {
+	if numericRetryAfter(s) {
+		n, _ := strconv.ParseFloat(s, 64)
 		d := int64(n*1000 + .999999)
 		if d < 1 {
 			d = 1
@@ -159,4 +145,22 @@ func retryMS(v string, now int64) int64 {
 		return d
 	}
 	return DefaultKeyCooldownMS
+}
+
+func numericRetryAfter(value string) bool {
+	if value == "" {
+		return false
+	}
+	dot := false
+	for index, r := range value {
+		if r >= '0' && r <= '9' {
+			continue
+		}
+		if r == '.' && !dot && index > 0 && index < len(value)-1 {
+			dot = true
+			continue
+		}
+		return false
+	}
+	return true
 }
