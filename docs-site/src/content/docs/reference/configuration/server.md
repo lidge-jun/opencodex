@@ -23,6 +23,7 @@ runs helper features around provider requests.
 | `corsAllowOrigins?` | `string[]` | `[]` | Additional exact origins allowed by CORS. Loopback origins are always allowed. Authority-based browser extension origins such as `chrome-extension://<extension-id>` are supported; `*` is not a wildcard. Firefox and Safari regenerate the extension UUID (per install / per browser launch), so update the entry when the origin changes. |
 | `apiKeys?` | `OcxApiKey[]` | `[]` | Generated `ocx_…` credentials accepted by management and data-plane auth on non-loopback binds. Dashboard-managed. |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | Opt-in archived-session cleanup policy. Never enabled implicitly. |
+| `usageLedgerRetention?` | `{ enabled?: boolean; maxBytes?: number }` | disabled | Opt-in cap for `$OPENCODEX_HOME/usage.jsonl`. Never enabled implicitly. When enabled, older JSONL rows are dropped permanently so the file stays within `maxBytes` (default 512 MiB, floor 1 MiB). The derived `routing-history.sqlite` index is deleted after a rewrite and rebuilt on the next open. |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | Cap in MiB for evictable app-owned logs, caches, blobs, and continuation payloads. Range 64–4096; not an RSS cap. |
 | `codexAutoStart?` | `boolean` | `true` | Let the Codex shim run `ocx ensure` before launching Codex. False makes ensure a no-op. |
 | `codexShimAutoRestore?` | `boolean` | `true` | Restore an installed shim after a completed external Codex update replaces it. Environment opt-out: `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`. |
@@ -220,6 +221,18 @@ either `target.reduceToBytes` or `target.removeOldestPercent`. `mode` defaults t
 `permanent` only as an explicit destructive choice. The policy persists `lastRun` and `nextRun`.
 Configure it on the Storage page or with `GET`/`PUT /api/storage/cleanup-policy`; trigger a manual run
 with `POST /api/storage/cleanup-policy/run`.
+
+`usageLedgerRetention` is a separate opt-in for OpenCodex's own request ledger (`usage.jsonl`), not
+Codex session archives. Default off. Enable it in `config.json`:
+
+```json
+{
+  "usageLedgerRetention": { "enabled": true, "maxBytes": 536870912 }
+}
+```
+
+The ceiling is enforced at process start (before `/api/logs` hydration) and after each append once
+the file exceeds `maxBytes`. Older rows are dropped permanently; there is no quarantine copy.
 
 ## Quota-reset notifications (`quotaResetNotify`)
 

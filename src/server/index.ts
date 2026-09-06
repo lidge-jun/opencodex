@@ -121,6 +121,7 @@ import {
   type RequestLogEntry,
 } from "./request-log";
 import { sessionLaneIdFromRequest } from "./request-log-conversation";
+import { enforceUsageLedgerRetention } from "../usage/ledger-retention";
 export {
   addFinalRequestLog,
   filterRequestLogs,
@@ -741,6 +742,9 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   // purpose: a lazy "arm on first save" loses exactly the hand edit made before that
   // first save, which is the case the guard exists for.
   armClaudeCodeBaseline(config);
+  // Opt-in usage.jsonl ceiling runs BEFORE log hydration so a multi-GB ledger is
+  // trimmed once at startup instead of being parsed and then rewritten.
+  try { enforceUsageLedgerRetention(); } catch { /* retention must not block listen */ }
   // usage.jsonl already persists every request; rehydrate the in-memory Logs ring so
   // /api/logs (and the GUI) survive `ocx stop` / `ocx start` process restarts.
   hydrateRequestLogsFromDisk();
