@@ -276,8 +276,17 @@ export class CursorPoolKernel {
       }
     for (const [k, v] of this.affinity)
       if (v === accountRef) this.affinity.delete(k);
+    let removedKnownRef = false;
     for (const [id, ref] of this.refs)
-      if (ref === accountRef) this.refs.delete(id);
+      if (ref === accountRef) {
+        this.refs.delete(id);
+        removedKnownRef = true;
+      }
+    // Membership is pool-global. A swept state no longer identifies every
+    // snapshot that observed this ref, so conservatively invalidate all live
+    // snapshot versions when a known account leaves the pool.
+    if (removedKnownRef)
+      for (const key of this.versions.keys()) changed.add(key);
     for (const key of changed) this.advanceVersion(key);
   }
   clear(capability: symbol): void {

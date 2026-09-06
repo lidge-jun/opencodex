@@ -225,6 +225,36 @@ describe("CursorPoolKernel", () => {
     ).toBe(false);
   });
 
+  test("removal invalidates a snapshot after only that account state was swept", () => {
+    const s = setup();
+    const snap = s.kernel.activate("owner", "thread", s.capability)!;
+
+    s.advance(CURSOR_POOL_TTL_MS - 1);
+    expect(
+      s.kernel.note429(
+        snap.refs[1]!,
+        "owner",
+        "thread",
+        s.capability,
+      ),
+    ).toBe(true);
+    s.advance(2);
+    s.setAccounts([
+      { id: "account-b", access: "access-b", expires: Number.MAX_SAFE_INTEGER },
+    ]);
+
+    expect(s.kernel.activate("owner", "thread", s.capability)).toBeNull();
+    expect(s.kernel.rollback(snap, s.capability)).toBe(false);
+    expect(
+      s.kernel.note429(
+        snap.refs[0]!,
+        "owner",
+        "thread",
+        s.capability,
+      ),
+    ).toBe(false);
+  });
+
   test("rejects NaN expiry in usable and unexpired checks", () => {
     const s = setup();
     s.setAccounts([
