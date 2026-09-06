@@ -1,12 +1,14 @@
 package ocxcli
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,8 +19,15 @@ const (
 	configUsage           = "Usage:\n  ocx config [show] [--json]\n  ocx config get <dot.path> [--json]\n  ocx config set <dot.path> <json-or-string> [--json]\n  ocx config unset <dot.path> [--json]\n  ocx config validate [path|-] [--json]\n  ocx config export <path|->\n  ocx config import <path|-> --yes [--json]\n"
 	modelsUsage           = "Usage: ocx models [--provider <name>] [--json]\n"
 	modelAddUsage         = "Usage: ocx models add <provider> <modelId> [--display-name <name>] [--context-window <tokens>] [--modalities text,image,audio] [--reasoning-efforts <none,minimal,low,medium,high,xhigh,max,ultra>] [--default-reasoning-effort <level>]"
+	modelRemoveUsage      = "Usage: ocx models remove <customId|provider/modelId> [--yes]"
 	providerRegistryCount = 85
 )
+
+var modelRuntimeSubcommands = map[string]bool{
+	"live": true, "edit": true, "enable": true, "disable": true, "provider": true,
+	"selected": true, "preset": true, "new-policy": true, "new-arrivals": true,
+	"context": true, "shadow": true,
+}
 
 func loadCLIConfig() (map[string]any, error) {
 	loaded, err := config.Load()
@@ -351,6 +360,13 @@ func runModels(args []string, deps Deps) int {
 		case "list-custom":
 			return runCustomModelList(args[1:], deps)
 		}
+		if modelRuntimeSubcommands[args[0]] {
+			// These commands are management-API clients, not config projections. The
+			// TypeScript owner already supplies their authenticated API transaction and
+			// exact user-facing output; preserving that owner avoids a second client
+			// with divergent request/response semantics during the takeover.
+			return runDelegated(append([]string{"models"}, args...), deps)
+		}
 	}
 	jsonOutput, provider, ok := parseModelsArgs(args)
 	if !ok {
@@ -395,10 +411,7 @@ func runModels(args []string, deps Deps) int {
 		if model["isDefault"].(bool) {
 			marker = " *"
 		}
-		context := ""
-		if raw, ok := model["contextWindow"].(float64); ok {
-			context = fmt.Sprintf(" (%dk)", int(math.Round(raw/1000)))
-		}
+		context := formatContextWindow(model["contextWindow"])
 		fmt.Fprintf(deps.Stdout, "  %s%s%s\n", model["model"], marker, context)
 		if model["last"].(bool) {
 			fmt.Fprintln(deps.Stdout)
@@ -459,13 +472,17 @@ func collectConfiguredModels(providers map[string]any, filter string) []any {
 				unique = append(unique, model)
 			}
 		}
-		context, hasContext := provider["contextWindow"].(json.Number)
 		for index, model := range unique {
-			window := any(nil)
-			if hasContext {
-				window = context
+			window := modelRecordValue(provider["modelContextWindows"], model)
+			if window == nil {
+				window = provider["contextWindow"]
 			}
-			out = append(out, map[string]any{"provider": name, "model": model, "isDefault": model == defaultModel, "contextWindow": window, "inputModalities": nil, "reasoningEfforts": nil, "first": index == 0, "last": index == len(unique)-1})
+			modalities := modelRecordValue(provider["modelInputModalities"], model)
+			if modelInList(provider["noVisionModels"], model) {
+				modalities = []any{"text"}
+			}
+			efforts := configuredModelReasoningEfforts(provider, model)
+			out = append(out, map[string]any{"provider": name, "model": model, "isDefault": model == defaultModel, "contextWindow": window, "inputModalities": modalities, "reasoningEfforts": efforts, "first": index == 0, "last": index == len(unique)-1})
 		}
 	}
 	return out
@@ -488,7 +505,96 @@ func modelOutputRows(models []any) []modelOutput {
 	out := make([]modelOutput, 0, len(models))
 	for _, raw := range models {
 		model := raw.(map[string]any)
-		out = append(out, modelOutput{Provider: model["provider"].(string), Model: model["model"].(string), IsDefault: model["isDefault"].(bool), ContextWindow: model["contextWindow"]})
+		out = append(out, modelOutput{Provider: model["provider"].(string), Model: model["model"].(string), IsDefault: model["isDefault"].(bool), ContextWindow: model["contextWindow"], InputModalities: model["inputModalities"], ReasoningEfforts: model["reasoningEfforts"]})
+	}
+	return out
+}
+
+func formatContextWindow(raw any) string {
+	var value float64
+	switch typed := raw.(type) {
+	case json.Number:
+		value, _ = typed.Float64()
+	case float64:
+		value = typed
+	case int:
+		value = float64(typed)
+	}
+	if value <= 0 {
+		return ""
+	}
+	return fmt.Sprintf(" (%dk)", int(math.Round(value/1000)))
+}
+
+func modelInList(raw any, model string) bool {
+	list, ok := raw.([]any)
+	if !ok {
+		return false
+	}
+	family := model
+	if colon := strings.Index(model, ":"); colon > 0 {
+		family = model[:colon]
+	}
+	for _, value := range list {
+		if text, ok := value.(string); ok && (text == model || text == family) {
+			return true
+		}
+	}
+	return false
+}
+
+func modelRecordValue(raw any, model string) any {
+	record, ok := raw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	if value, ok := record[model]; ok {
+		return value
+	}
+	if colon := strings.Index(model, ":"); colon > 0 {
+		if value, ok := record[model[:colon]]; ok {
+			return value
+		}
+	}
+	for key, value := range record {
+		if strings.EqualFold(key, model) {
+			return value
+		}
+	}
+	return nil
+}
+
+func configuredModelReasoningEfforts(provider map[string]any, model string) any {
+	if modelInList(provider["noReasoningModels"], model) {
+		return []any{}
+	}
+	if efforts := modelRecordValue(provider["modelReasoningEfforts"], model); efforts != nil {
+		return canonicalReasoningEfforts(efforts)
+	}
+	if efforts, ok := provider["reasoningEfforts"]; ok {
+		return canonicalReasoningEfforts(efforts)
+	}
+	return nil
+}
+
+func canonicalReasoningEfforts(raw any) []any {
+	values, ok := raw.([]any)
+	if !ok {
+		return []any{}
+	}
+	allowed := map[string]bool{"none": true, "minimal": true, "low": true, "medium": true, "high": true, "xhigh": true, "max": true, "ultra": true}
+	order := []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
+	seen := map[string]bool{}
+	for _, rawValue := range values {
+		if value, ok := rawValue.(string); ok && allowed[value] {
+			seen[value] = true
+		}
+	}
+	out := []any{}
+	for _, value := range order {
+		if seen[value] {
+			out = append(out, value)
+		}
 	}
 	return out
 }
@@ -797,13 +903,18 @@ func runCustomModelAdd(args []string, deps Deps) int {
 		fmt.Fprintln(deps.Stderr, modelAddUsage)
 		return ExitFailure
 	}
-	provider, modelID, flags := args[0], args[1], args[2:]
+	provider, modelID, flags := strings.TrimSpace(args[0]), strings.TrimSpace(args[1]), append([]string(nil), args[2:]...)
 	if provider == "" || modelID == "" {
 		fmt.Fprintln(deps.Stderr, "Error: provider and modelId are required")
 		return ExitFailure
 	}
-	if len(flags) != 0 {
-		fmt.Fprintln(deps.Stderr, "Error: Unknown flag(s): "+strings.Join(flags, ", "))
+	if !isValidProviderName(provider) {
+		fmt.Fprintf(deps.Stderr, "Error: invalid provider name %q\n", provider)
+		return ExitFailure
+	}
+	displayName, contextWindow, modalities, reasoningEfforts, defaultEffort, err := parseCustomModelAddFlags(&flags)
+	if err != nil {
+		fmt.Fprintln(deps.Stderr, "Error: "+err.Error())
 		return ExitFailure
 	}
 	cfg, err := loadCLIConfig()
@@ -812,20 +923,45 @@ func runCustomModelAdd(args []string, deps Deps) int {
 		return ExitFailure
 	}
 	providers, _ := cfg["providers"].(map[string]any)
-	if _, ok := providers[provider]; !ok {
+	rawProvider, ok := providers[provider]
+	if !ok {
 		fmt.Fprintf(deps.Stderr, "Error: provider %q is not configured. See: ocx provider list\n", provider)
 		return ExitFailure
 	}
 	models, _ := cfg["customModels"].([]any)
-	slug := provider + "/" + strings.ReplaceAll(modelID, "/", "-")
+	slug := routedSlug(provider, modelID)
 	for _, raw := range models {
-		if model, ok := raw.(map[string]any); ok && fmt.Sprint(model["provider"])+"/"+strings.ReplaceAll(fmt.Sprint(model["modelId"]), "/", "-") == slug {
+		if model, ok := raw.(map[string]any); ok && routedSlug(fmt.Sprint(model["provider"]), fmt.Sprint(model["modelId"])) == slug {
 			fmt.Fprintf(deps.Stderr, "Error: custom model %q already exists\n", slug)
 			return ExitFailure
 		}
 	}
-	id := fmt.Sprintf("go-%d", time.Now().UnixNano())
+	providerConfig, _ := rawProvider.(map[string]any)
+	if encodedModelIDCollides(modelID, knownModelIDs(provider, providerConfig, models)) {
+		fmt.Fprintf(deps.Stderr, "Error: custom model %q is ambiguous; it encodes to an existing model id\n", slug)
+		return ExitFailure
+	}
+	id, err := customModelUUID()
+	if err != nil {
+		fmt.Fprintln(deps.Stderr, err)
+		return ExitFailure
+	}
 	entry := map[string]any{"id": id, "provider": provider, "modelId": modelID, "addedAt": time.Now().UTC().Format(time.RFC3339Nano)}
+	if displayName != "" {
+		entry["displayName"] = displayName
+	}
+	if contextWindow != nil {
+		entry["contextWindow"] = *contextWindow
+	}
+	if modalities != nil {
+		entry["inputModalities"] = *modalities
+	}
+	if reasoningEfforts != nil {
+		entry["reasoningEfforts"] = *reasoningEfforts
+	}
+	if defaultEffort != "" {
+		entry["defaultReasoningEffort"] = defaultEffort
+	}
 	cfg["customModels"] = append(models, entry)
 	if err := config.SaveRaw(cfg); err != nil {
 		fmt.Fprintln(deps.Stderr, err)
@@ -853,16 +989,14 @@ func runCustomModelList(args []string, deps Deps) int {
 		fmt.Fprintln(deps.Stdout, "No custom models registered.")
 		return ExitOK
 	}
-	for _, raw := range models {
-		model := raw.(map[string]any)
-		fmt.Fprintf(deps.Stdout, "%s: %s\n", model["provider"], model["modelId"])
-	}
+	printCustomModelTable(models, deps.Stdout)
 	return ExitOK
 }
 func runCustomModelRemove(args []string, deps Deps) int {
 	confirmed := takeFlag(&args, "--yes")
 	if len(args) != 1 {
 		fmt.Fprintln(deps.Stderr, "Error: custom model id or provider/modelId is required")
+		fmt.Fprintln(deps.Stderr, modelRemoveUsage)
 		return ExitFailure
 	}
 	if !confirmed {
@@ -877,13 +1011,28 @@ func runCustomModelRemove(args []string, deps Deps) int {
 	}
 	models, _ := cfg["customModels"].([]any)
 	matched := -1
+	selectedProvider := ""
+	if slash := strings.Index(target, "/"); slash >= 0 {
+		selectedProvider = target[:slash]
+	}
+	admitted := map[string]bool{}
+	if selectedProvider != "" {
+		roster := []string{}
+		for _, raw := range models {
+			if model, ok := raw.(map[string]any); ok && model["provider"] == selectedProvider {
+				roster = append(roster, fmt.Sprint(model["modelId"]))
+			}
+		}
+		for _, id := range resolveSlugSelection(selectedProvider, target, roster) {
+			admitted[id] = true
+		}
+	}
 	for i, raw := range models {
 		model, ok := raw.(map[string]any)
 		if !ok {
 			continue
 		}
-		slug := fmt.Sprint(model["provider"]) + "/" + strings.ReplaceAll(fmt.Sprint(model["modelId"]), "/", "-")
-		if fmt.Sprint(model["id"]) == target || slug == target {
+		if fmt.Sprint(model["id"]) == target || (selectedProvider != "" && fmt.Sprint(model["provider"]) == selectedProvider && admitted[fmt.Sprint(model["modelId"])]) {
 			if matched >= 0 {
 				fmt.Fprintf(deps.Stderr, "Error: custom model selector %q is ambiguous; use the custom model id\n", target)
 				return ExitFailure
@@ -907,8 +1056,296 @@ func runCustomModelRemove(args []string, deps Deps) int {
 		fmt.Fprintln(deps.Stderr, err)
 		return ExitFailure
 	}
-	fmt.Fprintf(deps.Stdout, "Removed custom model %s.\n", fmt.Sprint(model["provider"])+"/"+strings.ReplaceAll(fmt.Sprint(model["modelId"]), "/", "-"))
+	fmt.Fprintf(deps.Stdout, "Removed custom model %s.\n", routedSlug(fmt.Sprint(model["provider"]), fmt.Sprint(model["modelId"])))
 	return ExitOK
+}
+
+func parseCustomModelAddFlags(args *[]string) (string, *int, *[]any, *[]any, string, error) {
+	var displayName, defaultEffort string
+	var contextWindow *int
+	var modalities, efforts *[]any
+	take := func(flag string) (string, bool) {
+		for i := 0; i < len(*args); i++ {
+			if (*args)[i] == flag {
+				if i+1 == len(*args) {
+					return "", false
+				}
+				value := (*args)[i+1]
+				*args = append((*args)[:i], (*args)[i+2:]...)
+				return value, true
+			}
+		}
+		return "", false
+	}
+	if value, found := take("--display-name"); found {
+		displayName = strings.TrimSpace(value)
+		if strings.Contains(displayName, "/") {
+			return "", nil, nil, nil, "", errors.New("displayName must not contain /")
+		}
+	}
+	if value, found := take("--context-window"); found {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed <= 0 {
+			return "", nil, nil, nil, "", errors.New("context window must be a positive integer")
+		}
+		contextWindow = &parsed
+	}
+	if value, found := take("--modalities"); found {
+		values := strings.Split(value, ",")
+		seen := map[string]bool{}
+		out := []any{}
+		for _, item := range values {
+			item = strings.TrimSpace(item)
+			if item != "text" && item != "image" && item != "audio" {
+				return "", nil, nil, nil, "", errors.New("modalities must be comma-separated values from text|image|audio")
+			}
+			if !seen[item] {
+				seen[item] = true
+				out = append(out, item)
+			}
+		}
+		modalities = &out
+	}
+	if value, found := take("--reasoning-efforts"); found {
+		if strings.TrimSpace(value) != "-" {
+			parsed, err := parseReasoningEfforts(value)
+			if err != nil {
+				return "", nil, nil, nil, "", err
+			}
+			efforts = &parsed
+		}
+	}
+	if value, found := take("--default-reasoning-effort"); found {
+		defaultEffort = strings.TrimSpace(value)
+		if defaultEffort == "-" {
+			defaultEffort = ""
+		} else {
+			if !isDeclaredReasoningEffort(defaultEffort) {
+				return "", nil, nil, nil, "", fmt.Errorf("unsupported reasoning effort: %s (allowed: none, minimal, low, medium, high, xhigh, max, ultra)", defaultEffort)
+			}
+			if efforts == nil || len(*efforts) == 0 {
+				return "", nil, nil, nil, "", errors.New("--default-reasoning-effort requires --reasoning-efforts")
+			}
+			found := false
+			for _, effort := range *efforts {
+				if effort == defaultEffort {
+					found = true
+				}
+			}
+			if !found {
+				return "", nil, nil, nil, "", fmt.Errorf("--default-reasoning-effort %q is not in the declared reasoning efforts", defaultEffort)
+			}
+		}
+	}
+	if len(*args) > 0 {
+		return "", nil, nil, nil, "", fmt.Errorf("Unknown flag(s): %s", strings.Join(*args, ", "))
+	}
+	return displayName, contextWindow, modalities, efforts, defaultEffort, nil
+}
+
+func parseReasoningEfforts(raw string) ([]any, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "-" {
+		return nil, nil
+	}
+	if trimmed == "" {
+		return []any{}, nil
+	}
+	values := strings.Split(trimmed, ",")
+	seen := map[string]bool{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if !isDeclaredReasoningEffort(value) {
+			return nil, fmt.Errorf("unsupported reasoning effort: %s (allowed: none, minimal, low, medium, high, xhigh, max, ultra)", value)
+		}
+		seen[value] = true
+	}
+	order := []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
+	out := []any{}
+	for _, value := range order {
+		if seen[value] {
+			out = append(out, value)
+		}
+	}
+	return out, nil
+}
+func isDeclaredReasoningEffort(value string) bool {
+	for _, allowed := range []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"} {
+		if value == allowed {
+			return true
+		}
+	}
+	return false
+}
+
+func isValidProviderName(value string) bool {
+	if value == "" || len(value) > 64 || value != strings.TrimSpace(value) {
+		return false
+	}
+	reserved := map[string]bool{"__proto__": true, "prototype": true, "constructor": true}
+	if reserved[strings.ToLower(value)] {
+		return false
+	}
+	for i, char := range value {
+		alnum := char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9'
+		if i == 0 || i == len(value)-1 {
+			if !alnum {
+				return false
+			}
+			continue
+		}
+		if !alnum && char != '.' && char != '_' && char != '-' {
+			return false
+		}
+	}
+	return true
+}
+func routedSlug(provider, model string) string {
+	return provider + "/" + strings.ReplaceAll(model, "/", "-")
+}
+func encodedModelIDCollides(model string, known []string) bool {
+	encoded := strings.ReplaceAll(model, "/", "-")
+	for _, id := range known {
+		if id != model && strings.ReplaceAll(id, "/", "-") == encoded {
+			return true
+		}
+	}
+	return false
+}
+func knownModelIDs(provider string, config map[string]any, custom []any) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	add := func(id string) {
+		if id != "" && !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	if id, _ := config["defaultModel"].(string); id != "" {
+		add(id)
+	}
+	if models, ok := config["models"].([]any); ok {
+		for _, raw := range models {
+			if id, ok := raw.(string); ok {
+				add(id)
+			}
+		}
+	}
+	for _, raw := range custom {
+		if model, ok := raw.(map[string]any); ok && model["provider"] == provider {
+			add(fmt.Sprint(model["modelId"]))
+		}
+	}
+	return out
+}
+func resolveSlugSelection(provider, selection string, ids []string) []string {
+	namesNative := false
+	for _, id := range ids {
+		if id == selection {
+			namesNative = true
+		}
+	}
+	qualified := routedSlug(provider, selection)
+	if !namesNative && strings.HasPrefix(selection, provider+"/") {
+		qualified = selection
+	}
+	key := slugKey(qualified)
+	out := []string{}
+	for _, id := range ids {
+		if slugKey(routedSlug(provider, id)) == key {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+func slugKey(slug string) string {
+	slash := strings.Index(slug, "/")
+	if slash <= 0 {
+		return "exact:" + slug
+	}
+	return "routed:" + slug[:slash] + ":" + strings.ReplaceAll(slug[slash+1:], "/", "-")
+}
+func customModelUUID() (string, error) {
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	raw[6] = raw[6]&0x0f | 0x40
+	raw[8] = raw[8]&0x3f | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", raw[:4], raw[4:6], raw[6:8], raw[8:10], raw[10:]), nil
+}
+func printCustomModelTable(models []any, writer io.Writer) {
+	groups := map[string][]map[string]any{}
+	names := []string{}
+	for _, raw := range models {
+		model, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		provider := fmt.Sprint(model["provider"])
+		if _, ok := groups[provider]; !ok {
+			names = append(names, provider)
+		}
+		groups[provider] = append(groups[provider], model)
+	}
+	for _, provider := range names {
+		headers := []string{"ID", "MODEL", "DISPLAY NAME", "CONTEXT", "MODALITIES", "EFFORTS", "DEFAULT EFFORT"}
+		rows := make([][]string, 0, len(groups[provider]))
+		widths := make([]int, len(headers))
+		copy(widths, []int{2, 5, 12, 7, 10, 7, 14})
+		for _, model := range groups[provider] {
+			id := fmt.Sprint(model["id"])
+			if len(id) > 8 {
+				id = id[:8]
+			}
+			row := []string{id, fmt.Sprint(model["modelId"]), dash(model["displayName"]), customContext(model["contextWindow"]), customCSV(model["inputModalities"]), customCSV(model["reasoningEfforts"]), dash(model["defaultReasoningEffort"])}
+			rows = append(rows, row)
+			for i, cell := range row {
+				if len(cell) > widths[i] {
+					widths[i] = len(cell)
+				}
+			}
+		}
+		line := func(row []string) string {
+			cells := make([]string, len(row))
+			for i, cell := range row {
+				cells[i] = fmt.Sprintf("%-*s", widths[i], cell)
+			}
+			return strings.Join(cells, "  ")
+		}
+		fmt.Fprintf(writer, "%s:\n  %s\n", provider, line(headers))
+		for _, row := range rows {
+			fmt.Fprintf(writer, "  %s\n", line(row))
+		}
+		fmt.Fprintln(writer)
+	}
+}
+func dash(value any) string {
+	if value == nil || fmt.Sprint(value) == "" {
+		return "-"
+	}
+	return fmt.Sprint(value)
+}
+func customContext(value any) string {
+	if value == nil {
+		return "-"
+	}
+	number, err := strconv.ParseFloat(fmt.Sprint(value), 64)
+	if err != nil || number <= 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%dk", int(math.Round(number/1000)))
+}
+func customCSV(value any) string {
+	values, ok := value.([]any)
+	if !ok || len(values) == 0 {
+		return "-"
+	}
+	parts := make([]string, 0, len(values))
+	for _, raw := range values {
+		parts = append(parts, fmt.Sprint(raw))
+	}
+	return strings.Join(parts, ",")
 }
 func writeIndentedJSON(writer io.Writer, value any) int {
 	raw, err := json.MarshalIndent(value, "", "  ")

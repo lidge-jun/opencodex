@@ -228,3 +228,98 @@ func TestCustomModelLifecyclePersistsConfig(t *testing.T) {
 		t.Fatal("empty customModels should be omitted")
 	}
 }
+
+func TestCustomModelMetadataAndSelectorParity(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OPENCODEX_HOME", dir)
+	initial := "{\"providers\":{\"test\":{\"adapter\":\"openai-chat\",\"baseUrl\":\"https://example.test/v1\",\"models\":[\"native-id\"]}},\"defaultProvider\":\"test\"}"
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(initial), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	deps := depsFor(RuntimeState{}, &out, &stderr)
+	argv := []string{"models", "add", "test", "openai/gpt-5.5", "--display-name", "GPT", "--context-window", "128000", "--modalities", "text,image", "--reasoning-efforts", "high,low,high", "--default-reasoning-effort", "high"}
+	if got := Run(argv, deps); got != ExitOK {
+		t.Fatalf("add = %d stderr=%q", got, stderr.String())
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := cfg.Raw["customModels"].([]any)[0].(map[string]any)
+	if model["displayName"] != "GPT" || model["contextWindow"] != json.Number("128000") {
+		t.Fatalf("metadata = %#v", model)
+	}
+	if got := fmt.Sprint(model["inputModalities"]); got != "[text image]" {
+		t.Fatalf("modalities = %s", got)
+	}
+	if got := fmt.Sprint(model["reasoningEfforts"]); got != "[low high]" {
+		t.Fatalf("efforts = %s", got)
+	}
+	out.Reset()
+	stderr.Reset()
+	if got := Run([]string{"models", "remove", "test/openai/gpt-5.5", "--yes"}, deps); got != ExitOK {
+		t.Fatalf("raw selector remove = %d stderr=%q", got, stderr.String())
+	}
+}
+
+func TestCustomModelRejectsEncodedCollisionAndAmbiguousRemoval(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OPENCODEX_HOME", dir)
+	initial := "{\"providers\":{\"test\":{\"adapter\":\"openai-chat\",\"baseUrl\":\"https://example.test/v1\",\"defaultModel\":\"openai-gpt-5.5\"}},\"defaultProvider\":\"test\"}"
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(initial), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	deps := depsFor(RuntimeState{}, &out, &stderr)
+	if got := Run([]string{"models", "add", "test", "openai/gpt-5.5"}, deps); got != ExitFailure || !strings.Contains(stderr.String(), "ambiguous") {
+		t.Fatalf("collision add = %d stderr=%q", got, stderr.String())
+	}
+	initial = "{\"providers\":{\"test\":{\"adapter\":\"openai-chat\",\"baseUrl\":\"https://example.test/v1\"}},\"defaultProvider\":\"test\",\"customModels\":[{\"id\":\"11111111-1111-4111-8111-111111111111\",\"provider\":\"test\",\"modelId\":\"openai/gpt-5.5\"},{\"id\":\"22222222-2222-4222-8222-222222222222\",\"provider\":\"test\",\"modelId\":\"openai-gpt-5.5\"}]}"
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(initial), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	stderr.Reset()
+	if got := Run([]string{"models", "remove", "test/openai/gpt-5.5", "--yes"}, deps); got != ExitFailure || !strings.Contains(stderr.String(), "ambiguous") {
+		t.Fatalf("ambiguous remove = %d stderr=%q", got, stderr.String())
+	}
+}
+
+func TestModelsRuntimeCommandsDelegateToTypeScriptOwner(t *testing.T) {
+	var received []string
+	deps := depsFor(RuntimeState{}, &bytes.Buffer{}, &bytes.Buffer{})
+	deps.Delegate = func(args []string) (int, error) { received = append([]string(nil), args...); return 17, nil }
+	if got := Run([]string{"models", "new-arrivals", "--json"}, deps); got != 17 {
+		t.Fatalf("exit = %d", got)
+	}
+	if !slices.Equal(received, []string{"models", "new-arrivals", "--json"}) {
+		t.Fatalf("delegated argv = %#v", received)
+	}
+}
+
+func TestModelsMetadataResolvesRuntimeStyleFamilyRules(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OPENCODEX_HOME", dir)
+	initial := "{\"providers\":{\"test\":{\"adapter\":\"openai-chat\",\"baseUrl\":\"https://example.test/v1\",\"defaultModel\":\"gpt-oss:120b\",\"modelContextWindows\":{\"gpt-oss\":131000},\"noVisionModels\":[\"gpt-oss\"],\"modelInputModalities\":{\"gpt-oss:120b\":[\"text\",\"image\"]},\"modelReasoningEfforts\":{\"gpt-oss\":[\"high\",\"bogus\",\"low\"]}}},\"defaultProvider\":\"test\"}"
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(initial), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	if got := Run([]string{"models", "--json"}, depsFor(RuntimeState{}, &out, &stderr)); got != ExitOK {
+		t.Fatalf("models = %d stderr=%q", got, stderr.String())
+	}
+	var response struct {
+		Models []modelOutput `json:"models"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Models) != 1 {
+		t.Fatalf("models = %#v", response.Models)
+	}
+	row := response.Models[0]
+	if fmt.Sprint(row.ContextWindow) != "131000" || fmt.Sprint(row.InputModalities) != "[text]" || fmt.Sprint(row.ReasoningEfforts) != "[low high]" {
+		t.Fatalf("row = %#v", row)
+	}
+}
