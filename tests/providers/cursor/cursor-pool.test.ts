@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { CursorCredentialRouter, CursorPoolKernel, NoAvailableCursorCredentialError, createCursorPoolCapability, CURSOR_POOL_COOLDOWN_MS, CURSOR_POOL_TTL_MS } from "../../../src/providers/cursor-pool";
+import {
+  CursorCredentialRouter,
+  CursorPoolKernel,
+  NoAvailableCursorCredentialError,
+  createCursorPoolCapability,
+  CURSOR_POOL_COOLDOWN_MS,
+  CURSOR_POOL_TTL_MS,
+} from "../../../src/providers/cursor-pool";
 
 describe("CursorCredentialRouter", () => {
   test("weighted round-robin distributes picks proportionally", () => {
@@ -42,8 +49,20 @@ describe("CursorPoolKernel", () => {
     let clock = now;
     let listed = [...accounts];
     const capability = createCursorPoolCapability();
-    const kernel = new CursorPoolKernel(capability, () => clock, { listAccounts: () => listed, resolveAccessToken: resolver });
-    return { kernel, capability, advance: (ms: number) => { clock += ms; }, setAccounts: (next: typeof accounts) => { listed = [...next]; } };
+    const kernel = new CursorPoolKernel(capability, () => clock, {
+      listAccounts: () => listed,
+      resolveAccessToken: resolver,
+    });
+    return {
+      kernel,
+      capability,
+      advance: (ms: number) => {
+        clock += ms;
+      },
+      setAccounts: (next: typeof accounts) => {
+        listed = [...next];
+      },
+    };
   }
   test("requires capability, trusted owner, and two usable accounts", () => {
     const { kernel, capability } = setup();
@@ -53,38 +72,66 @@ describe("CursorPoolKernel", () => {
   });
   test("same thread text is isolated by owner and absent scope fails closed", () => {
     const { kernel, capability } = setup();
-    expect(kernel.pick("owner-a", "same", capability)?.accountRef).toBe(kernel.pick("owner-b", "same", capability)?.accountRef);
+    expect(kernel.pick("owner-a", "same", capability)?.accountRef).toBe(
+      kernel.pick("owner-b", "same", capability)?.accountRef,
+    );
     expect(kernel.pick("", "same", capability)).toBeNull();
   });
   test("refs are random opaque values and token is never exposed by snapshot", () => {
     const a = setup().kernel.pick("o", "t", setup().capability);
-    const first = setup(); const picked = first.kernel.pick("o", "t", first.capability)!;
-    expect(picked.accountRef).toMatch(/^cp_[0-9a-f]{32}$/); expect(picked.accountRef).not.toContain("account-a");
+    const first = setup();
+    const picked = first.kernel.pick("o", "t", first.capability)!;
+    expect(picked.accountRef).toMatch(/^cp_[0-9a-f]{32}$/);
+    expect(picked.accountRef).not.toContain("account-a");
     expect(JSON.stringify(picked)).not.toContain("account-a");
     expect(a).toBeNull();
   });
   test("uses authoritative resolver and never falls back to refresh token", () => {
-    const { kernel, capability } = setup(1_000, id => id === "account-a" ? "resolved-a" : "resolved-b");
+    const { kernel, capability } = setup(1_000, (id) =>
+      id === "account-a" ? "resolved-a" : "resolved-b",
+    );
     expect(kernel.pick("o", "t", capability)?.token).toBe("resolved-a");
-    const expired = new CursorPoolKernel(capability, () => 3_000, { listAccounts: () => accounts.map(a => ({ ...a, access: undefined, refresh: "refresh" })) });
+    const expired = new CursorPoolKernel(capability, () => 3_000, {
+      listAccounts: () =>
+        accounts.map((a) => ({ ...a, access: undefined, refresh: "refresh" })),
+    });
     expect(expired.pick("o", "t", capability)).toBeNull();
   });
   test("sticky generation and exactly-once monotonic cooldown", () => {
-    const s = setup(); const first = s.kernel.pick("o", "t", s.capability)!; const second = s.kernel.pick("o", "t", s.capability)!;
-    expect(second.accountRef).toBe(first.accountRef); expect(second.generation).toBeGreaterThan(first.generation);
-    expect(s.kernel.note429(first.accountRef, "o", "t", s.capability)).toBe(true);
-    expect(s.kernel.note429(first.accountRef, "o", "t", s.capability)).toBe(false);
-    expect(s.kernel.note429(first.accountRef, "other", "t", s.capability)).toBe(false);
+    const s = setup();
+    const first = s.kernel.pick("o", "t", s.capability)!;
+    const second = s.kernel.pick("o", "t", s.capability)!;
+    expect(second.accountRef).toBe(first.accountRef);
+    expect(second.generation).toBeGreaterThan(first.generation);
+    expect(s.kernel.note429(first.accountRef, "o", "t", s.capability)).toBe(
+      true,
+    );
+    expect(s.kernel.note429(first.accountRef, "o", "t", s.capability)).toBe(
+      false,
+    );
+    expect(s.kernel.note429(first.accountRef, "other", "t", s.capability)).toBe(
+      false,
+    );
     expect(CURSOR_POOL_COOLDOWN_MS).toBeGreaterThan(0);
   });
   test("rollback is owner-scoped CAS; TTL, removal and clear leave no state", () => {
-    const s = setup(); const a = s.kernel.pick("a", "t", s.capability)!; const b = s.kernel.pick("b", "t", s.capability)!;
+    const s = setup();
+    const a = s.kernel.pick("a", "t", s.capability)!;
+    const b = s.kernel.pick("b", "t", s.capability)!;
     const snap = s.kernel.activate("a", "t", s.capability)!;
     expect(s.kernel.rollback(snap, s.capability)).toBe(true);
-    expect(s.kernel.pick("b", "t", s.capability)?.accountRef).toBe(b.accountRef);
+    expect(s.kernel.pick("b", "t", s.capability)?.accountRef).toBe(
+      b.accountRef,
+    );
     expect(s.kernel.rollback(snap, s.capability)).toBe(false);
-    s.kernel.remove(b.accountRef, s.capability); s.setAccounts([]); expect(s.kernel.pick("b", "t", s.capability)).toBeNull();
-    expect(CURSOR_POOL_TTL_MS).toBeGreaterThan(0); s.advance(CURSOR_POOL_TTL_MS + 1); s.kernel.pick("a", "t2", s.capability); s.kernel.clear(s.capability); expect(s.kernel.pick("a", "t", s.capability)).toBeNull();
+    s.kernel.remove(b.accountRef, s.capability);
+    s.setAccounts([]);
+    expect(s.kernel.pick("b", "t", s.capability)).toBeNull();
+    expect(CURSOR_POOL_TTL_MS).toBeGreaterThan(0);
+    s.advance(CURSOR_POOL_TTL_MS + 1);
+    s.kernel.pick("a", "t2", s.capability);
+    s.kernel.clear(s.capability);
+    expect(s.kernel.pick("a", "t", s.capability)).toBeNull();
     expect(a.accountRef).toBe(b.accountRef);
   });
 });
