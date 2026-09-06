@@ -28,6 +28,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"sort"
 	"strconv"
 )
 
@@ -113,7 +114,20 @@ func decodeValue(decoder *json.Decoder, token json.Token) (*Value, error) {
 				if err != nil {
 					return nil, err
 				}
-				obj.obj = append(obj.obj, Member{Key: key, Value: member})
+				// JSON.parse keeps the last duplicate value but does not move the
+				// property's original insertion position. Preserve that observable
+				// V8 object semantics for any payload we later re-serialize.
+				replaced := false
+				for i := range obj.obj {
+					if obj.obj[i].Key == key {
+						obj.obj[i].Value = member
+						replaced = true
+						break
+					}
+				}
+				if !replaced {
+					obj.obj = append(obj.obj, Member{Key: key, Value: member})
+				}
 			}
 			if _, err := decoder.Token(); err != nil { // consume '}'
 				return nil, err
@@ -238,8 +252,9 @@ func (v *Value) AppendArray(element *Value) {
 }
 
 // Encode emits the value exactly like ECMAScript JSON.stringify: compact, no
-// HTML/U+2028/U+2029 escaping, object keys in document order, and numbers in
-// V8 shortest-decimal form.
+// HTML/U+2028/U+2029 escaping, array-index object keys in ascending numeric
+// order followed by other keys in document order, and numbers in V8
+// shortest-decimal form.
 func (v *Value) Encode() ([]byte, error) {
 	var out bytes.Buffer
 	if err := v.encode(&out); err != nil {
@@ -279,7 +294,8 @@ func (v *Value) encode(out *bytes.Buffer) error {
 		out.WriteByte(']')
 	case Object:
 		out.WriteByte('{')
-		for i, member := range v.obj {
+		members := orderedObjectMembers(v.obj)
+		for i, member := range members {
 			if i > 0 {
 				out.WriteByte(',')
 			}
@@ -298,6 +314,45 @@ func (v *Value) encode(out *bytes.Buffer) error {
 		out.WriteString("null")
 	}
 	return nil
+}
+
+// orderedObjectMembers applies ECMAScript's own-property order for the string
+// keys that JSON can contain: array-index keys first in ascending numeric
+// order, followed by all other keys in their insertion order.
+func orderedObjectMembers(members []Member) []Member {
+	ordered := append([]Member(nil), members...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		left, leftIsIndex := arrayIndex(ordered[i].Key)
+		right, rightIsIndex := arrayIndex(ordered[j].Key)
+		if leftIsIndex != rightIsIndex {
+			return leftIsIndex
+		}
+		return leftIsIndex && left < right
+	})
+	return ordered
+}
+
+// arrayIndex returns the numeric value for an ECMAScript array-index property
+// key. An index is its canonical decimal spelling in [0, 2^32-2]; 2^32-1 is
+// deliberately excluded by the specification.
+func arrayIndex(key string) (uint32, bool) {
+	if key == "0" {
+		return 0, true
+	}
+	if len(key) == 0 || key[0] < '1' || key[0] > '9' || len(key) > 10 {
+		return 0, false
+	}
+	var value uint64
+	for i := 0; i < len(key); i++ {
+		if key[i] < '0' || key[i] > '9' {
+			return 0, false
+		}
+		value = value*10 + uint64(key[i]-'0')
+	}
+	if value >= (1<<32)-1 {
+		return 0, false
+	}
+	return uint32(value), true
 }
 
 // EncodeString encodes one string the way ECMAScript JSON.stringify does.

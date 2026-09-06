@@ -5,8 +5,10 @@ package sidecar
 // (OPENCODEX_GO_HOTPATH_RELAY, Config.HotPathRelay) and a request qualifies,
 // the sidecar replaces the #24 private parent bridge with a direct upstream
 // relay for ONE provider class: a key-mode `openai-responses` provider whose
-// Responses wire needs no translation, on a NON-STREAMING request. Everything
-// else stays on the bridge so the TypeScript pipeline remains the oracle.
+// Responses wire needs no translation. Non-streaming requests can use the
+// whole-body repair below; streaming requests qualify only when their selected
+// provider needs no stream-time rewrite. Everything else stays on the bridge
+// so the TypeScript pipeline remains the oracle.
 //
 // The relay reproduces what the TS pipeline does for the qualifying subset,
 // byte for byte (verified against the TS oracle):
@@ -89,6 +91,7 @@ type relayPlan struct {
 	modelID      string
 	endpoint     string // full POST target URL
 	apiKey       string // resolved bearer secret, "" when the provider has none
+	streaming    bool
 }
 
 // resolveRelayAPIKey resolves a provider apiKey the way the TS key store does:
@@ -216,10 +219,9 @@ func requestQualifiesForRelay(cfg Config, contentType string, headers http.Heade
 	if parseErr != nil || root.Kind() != jsonwire.Object {
 		return nil, refuseRelay("body is not a JSON object")
 	}
-	if stream := bodyMember(root, "stream"); stream != nil {
-		if stream.Kind() == jsonwire.Bool && stream.Bool() {
-			return nil, refuseRelay("request is streaming")
-		}
+	streaming := false
+	if stream := bodyMember(root, "stream"); stream != nil && stream.Kind() == jsonwire.Bool {
+		streaming = stream.Bool()
 	}
 	modelValue := bodyMember(root, "model")
 	if modelValue == nil || modelValue.Kind() != jsonwire.String {
@@ -253,6 +255,13 @@ func requestQualifiesForRelay(cfg Config, contentType string, headers http.Heade
 		return nil, refusal
 	}
 	plan.modelID = modelID
+	if streaming {
+		provider := providers.Find(plan.providerName)
+		if refusal := streamRelayRefusal(provider, modelID); refusal != nil {
+			return nil, refusal
+		}
+		plan.streaming = true
+	}
 	return plan, nil
 }
 
@@ -330,6 +339,58 @@ func requestBodyRelayRefusal(root *jsonwire.Value) *relayRefusal {
 		}
 	}
 	return nil
+}
+
+// streamRelayRefusal rejects a stream whenever the selected provider would
+// make the TypeScript path rewrite client-facing SSE. Empty/false repair
+// configuration remains inert and therefore relay-safe. Model-list matches
+// mirror the case-insensitive check used by routeUsesContentChannelReasoning.
+func streamRelayRefusal(provider *jsonwire.Value, modelID string) *relayRefusal {
+	if provider == nil || provider.Kind() != jsonwire.Object {
+		return refuseRelay("stream provider config unavailable")
+	}
+	if repair := provider.Find("responsesItemIdRepair"); responsesItemIDRepairArmed(repair) {
+		return refuseRelay("provider enables responsesItemIdRepair")
+	}
+	if snapshot, ok := boolMember(provider, "responsesSnapshotRepair"); ok && snapshot {
+		return refuseRelay("provider enables responsesSnapshotRepair")
+	}
+	if stateless, ok := boolMember(provider, "statelessResponses"); ok && stateless {
+		return refuseRelay("provider enables statelessResponses")
+	}
+	if modelInProviderList(provider.Find("preserveReasoningContentModels"), modelID) {
+		return refuseRelay("provider preserves reasoning content for model %q", modelID)
+	}
+	return nil
+}
+
+func responsesItemIDRepairArmed(repair *jsonwire.Value) bool {
+	if repair == nil || repair.Kind() != jsonwire.Object {
+		return false
+	}
+	for _, key := range []string{"repairMissingTerminalIds", "repairInvalidIds"} {
+		if enabled, ok := boolMember(repair, key); ok && enabled {
+			return true
+		}
+	}
+	for _, key := range []string{"message", "reasoning"} {
+		if values := repair.Find(key); values != nil && values.Kind() == jsonwire.Array && len(values.Elements()) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func modelInProviderList(values *jsonwire.Value, modelID string) bool {
+	if values == nil || values.Kind() != jsonwire.Array {
+		return false
+	}
+	for _, value := range values.Elements() {
+		if value != nil && value.Kind() == jsonwire.String && strings.EqualFold(value.String(), modelID) {
+			return true
+		}
+	}
+	return false
 }
 
 // configLevelRelayRefusal rejects config shapes whose routing logic the relay
@@ -532,6 +593,32 @@ func doDirectRelay(w http.ResponseWriter, r *http.Request, cfg Config, plan *rel
 	}
 	defer upstreamResp.Body.Close()
 
+	if plan.streaming {
+		contentType := upstreamResp.Header.Get("Content-Type")
+		if contentType != "" {
+			w.Header().Set("Content-Type", contentType)
+		} else if upstreamResp.StatusCode >= 200 && upstreamResp.StatusCode < 300 {
+			// The successful Responses SSE path in TypeScript defaults a
+			// missing upstream content type to the event-stream contract.
+			contentType = "text/event-stream"
+			w.Header().Set("Content-Type", contentType)
+		} else {
+			w.Header().Set("Content-Type", "application/json")
+		}
+		if retryAfter := upstreamResp.Header.Get("Retry-After"); relayRetryAfterValid(retryAfter) {
+			w.Header().Set("Retry-After", strings.TrimSpace(retryAfter))
+		}
+		w.WriteHeader(upstreamResp.StatusCode)
+		if upstreamResp.StatusCode >= 200 && upstreamResp.StatusCode < 300 && strings.Contains(strings.ToLower(contentType), "text/event-stream") {
+			if err := relayResponsesSSEWithFlush(w, upstreamResp.Body); err != nil {
+				fmt.Fprintf(os.Stderr, "ocx-sidecar: relay stream write: %v\n", err)
+			}
+		} else if err := streamCopyWithFlush(w, upstreamResp.Body); err != nil {
+			fmt.Fprintf(os.Stderr, "ocx-sidecar: relay stream write: %v\n", err)
+		}
+		return
+	}
+
 	rawBody, readErr := io.ReadAll(io.LimitReader(upstreamResp.Body, maxRelayUpstreamBodyBytes+1))
 	if readErr != nil || len(rawBody) > maxRelayUpstreamBodyBytes {
 		// Oversized or unreadable body: refuse like the TS bounded read fails
@@ -540,7 +627,6 @@ func doDirectRelay(w http.ResponseWriter, r *http.Request, cfg Config, plan *rel
 		w.Header().Set("Content-Type", "application/json")
 		return
 	}
-
 	contentType := upstreamResp.Header.Get("Content-Type")
 	if contentType != "" {
 		w.Header().Set("Content-Type", contentType)
@@ -563,6 +649,75 @@ func doDirectRelay(w http.ResponseWriter, r *http.Request, cfg Config, plan *rel
 	w.WriteHeader(upstreamResp.StatusCode)
 	if _, err := w.Write(out); err != nil {
 		fmt.Fprintf(os.Stderr, "ocx-sidecar: relay write: %v\n", err)
+	}
+}
+
+// relayResponsesSSEWithFlush feeds upstream transport chunks through the
+// Responses field-backfill and terminal boundary, flushing each emitted block.
+// It stops reading after the first terminal so a gateway cannot append frames
+// after completion and hold the client request open.
+func relayResponsesSSEWithFlush(w http.ResponseWriter, src io.Reader) error {
+	stream := NewResponsesSSEStream()
+	flusher, canFlush := w.(http.Flusher)
+	write := func(out []byte) error {
+		if len(out) == 0 {
+			return nil
+		}
+		if _, err := w.Write(out); err != nil {
+			return err
+		}
+		if canFlush {
+			flusher.Flush()
+		}
+		return nil
+	}
+	buf := make([]byte, 32*1024)
+	for {
+		n, readErr := src.Read(buf)
+		if n > 0 {
+			out, err := stream.Feed(buf[:n])
+			if err != nil {
+				return err
+			}
+			if err := write(out); err != nil {
+				return err
+			}
+			if stream.TerminalSeen() {
+				tail, err := stream.Finish()
+				if err != nil {
+					return err
+				}
+				return write(tail)
+			}
+		}
+		if readErr == io.EOF {
+			out, err := stream.Finish()
+			if err != nil {
+				return err
+			}
+			if err := write(out); err != nil {
+				return err
+			}
+			return nil
+		}
+		if readErr != nil {
+			partial, err := stream.FinishPartial()
+			if err != nil {
+				return err
+			}
+			if err := write(partial); err != nil {
+				return err
+			}
+			if stream.TerminalSeen() {
+				if !stream.DoneSeen() {
+					return write([]byte("data: [DONE]\n\n"))
+				}
+				return nil
+			}
+			// Go read errors have different text from Bun's fetch errors. Keep
+			// the documented static TS fallback envelope for byte-stable tails.
+			return write([]byte("\n\nevent: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"type\":\"upstream_error\",\"code\":\"upstream_reset\",\"message\":\"Upstream stream terminated unexpectedly\"},\"last_error\":{\"type\":\"upstream_error\",\"code\":\"upstream_reset\",\"message\":\"Upstream stream terminated unexpectedly\"}}}\n\ndata: [DONE]\n\n"))
+		}
 	}
 }
 

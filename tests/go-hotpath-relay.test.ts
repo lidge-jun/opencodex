@@ -120,9 +120,9 @@ const relayCases: RelayCase[] = [
 ];
 
 const streamCase: RelayCase = {
-  name: "streaming-stays-on-bridge",
+  name: "streaming-relays-directly",
   body: { model: "test-model", input: "stream", stream: true },
-  direct: false,
+  direct: true,
 };
 
 const streamUpstreamReply =
@@ -332,8 +332,7 @@ describe.skipIf(!goAvailable || sidecarBinary === null)("ocx-sidecar non-streami
     }
 
     // Path proof: the fixture upstream must have seen the Go http client for
-    // every relay-admitted case and must NOT have seen it for the streaming
-    // refusal (which still ran through the Bun bridge).
+    // every relay-admitted case, including the narrow stream subset.
     const goLogs = upstreamLogs.slice(allCases.length);
     expect(goLogs.length).toBe(allCases.length);
     for (let i = 0; i < allCases.length; i++) {

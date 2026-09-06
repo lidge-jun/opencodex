@@ -249,12 +249,18 @@ func TestDirectRelayDropsInvalidRetryAfterAndRepairsPlain2xx(t *testing.T) {
 	}
 }
 
-// TestDirectRelayStreamingFallsBackToBridge: the relay claims non-streaming
-// requests only. A streaming request on the same config must take the bridge
-// path — proven by the 503 from the dead bridge (a relay would have answered
-// 200 from the fixture upstream).
-func TestDirectRelayStreamingFallsBackToBridge(t *testing.T) {
-	upstream := deadSparseUpstream(t, nil)
+// TestDirectRelayStreamingRelaySafeRequest: a stream whose selected provider
+// has no stream-time client rewrite can bypass the parent bridge.
+func TestDirectRelayStreamingRelaySafeRequest(t *testing.T) {
+	const upstreamFixture = "event: response.completed\ndata: {\"type\":\"response.completed\"}\n\n"
+	const clientFixture = upstreamFixture + "data: [DONE]\n\n"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
+			t.Errorf("path = %s, want /v1/responses", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(upstreamFixture))
+	}))
 	defer upstream.Close()
 	configDir := relayFixtureConfigDir(t, upstream.URL, nil)
 	h := relaySeamHandler(t, configDir, true)
@@ -262,8 +268,79 @@ func TestDirectRelayStreamingFallsBackToBridge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503 (streaming request must not reach the relay)", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (relay-safe stream must reach the relay)", rec.Code)
+	}
+	if got := rec.Body.String(); got != clientFixture {
+		t.Fatalf("stream body = %q, want %q", got, clientFixture)
+	}
+}
+
+func TestDirectRelayStreamingConfigGatesFallBackToBridge(t *testing.T) {
+	upstream := deadSparseUpstream(t, nil)
+	defer upstream.Close()
+	cases := []struct {
+		name  string
+		extra map[string]any
+		want  int
+	}{
+		{"materially armed item ID repair", map[string]any{"responsesItemIdRepair": map[string]any{"repairInvalidIds": true}}, http.StatusServiceUnavailable},
+		{"empty item ID repair remains relay-safe", map[string]any{"responsesItemIdRepair": map[string]any{"message": []any{}}}, http.StatusOK},
+		{"snapshot repair", map[string]any{"responsesSnapshotRepair": true}, http.StatusServiceUnavailable},
+		{"stateless Responses", map[string]any{"statelessResponses": true}, http.StatusServiceUnavailable},
+		{"preserved reasoning model is case-insensitive", map[string]any{"preserveReasoningContentModels": []any{"TEST-MODEL"}}, http.StatusServiceUnavailable},
+		{"different preserved reasoning model remains relay-safe", map[string]any{"preserveReasoningContentModels": []any{"other-model"}}, http.StatusOK},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			configDir := relayFixtureConfigDir(t, upstream.URL, c.extra)
+			h := relaySeamHandler(t, configDir, true)
+			rec, err := relayPost(t, h, `{"model":"test-model","input":"ping","stream":true}`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if rec.Code != c.want {
+				t.Fatalf("status = %d, want %d", rec.Code, c.want)
+			}
+		})
+	}
+}
+
+func TestStreamRelayQualificationConfigGates(t *testing.T) {
+	cases := []struct {
+		name  string
+		extra map[string]any
+		want  string
+	}{
+		{"narrow stream qualifies", nil, ""},
+		{"materially armed item ID repair refuses", map[string]any{"responsesItemIdRepair": map[string]any{"repairMissingTerminalIds": true}}, "responsesItemIdRepair"},
+		{"empty item ID repair qualifies", map[string]any{"responsesItemIdRepair": map[string]any{"reasoning": []any{}}}, ""},
+		{"snapshot repair refuses", map[string]any{"responsesSnapshotRepair": true}, "responsesSnapshotRepair"},
+		{"stateless Responses refuses", map[string]any{"statelessResponses": true}, "statelessResponses"},
+		{"preserved reasoning model match is case-insensitive", map[string]any{"preserveReasoningContentModels": []any{"TEST-MODEL"}}, "preserves reasoning content"},
+		{"different preserved reasoning model qualifies", map[string]any{"preserveReasoningContentModels": []any{"other-model"}}, ""},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			dir := relayFixtureConfigDir(t, "https://upstream.example", c.extra)
+			plan, refusal := requestQualifiesForRelay(
+				Config{HotPathRelay: true, ConfigDir: dir},
+				"application/json",
+				make(http.Header),
+				[]byte(`{"model":"test-model","input":"ping","stream":true}`),
+			)
+			if c.want == "" {
+				if plan == nil || !plan.streaming {
+					t.Fatalf("plan = %#v, refusal = %#v; want streaming relay plan", plan, refusal)
+				}
+				return
+			}
+			if plan != nil || refusal == nil || !strings.Contains(refusal.reason, c.want) {
+				t.Fatalf("plan = %#v, refusal = %#v; want refusal containing %q", plan, refusal, c.want)
+			}
+		})
 	}
 }
 

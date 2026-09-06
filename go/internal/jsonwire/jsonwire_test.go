@@ -105,6 +105,66 @@ func TestOrderedRoundTripAndSetAppendsAtEnd(t *testing.T) {
 	}
 }
 
+// TestEncodeOrdersArrayIndexKeysLikeV8 verifies the own-property order used by
+// JSON.stringify: canonical array-index keys sort numerically before ordinary
+// string keys, whose relative insertion order remains intact.
+func TestEncodeOrdersArrayIndexKeysLikeV8(t *testing.T) {
+	root, err := Parse([]byte(`{"z":0,"10":"ten","02":"leading","2":"two","4294967294":"last-index","4294967295":"not-index","0":"zero","1e0":"exponent","01":"also-leading","1":"one","nested":{"b":0,"3":3,"0":0,"a":1}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root.Set("4", StringValue("four"))
+	root.Set("after", BoolValue(true))
+
+	encoded, err := root.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"0":"zero","1":"one","2":"two","4":"four","10":"ten","4294967294":"last-index","z":0,"02":"leading","4294967295":"not-index","1e0":"exponent","01":"also-leading","nested":{"0":0,"3":3,"b":0,"a":1},"after":true}`
+	if got := string(encoded); got != want {
+		t.Fatalf("encode = %s, want %s", got, want)
+	}
+}
+
+func TestArrayIndex(t *testing.T) {
+	cases := map[string]struct {
+		value uint32
+		ok    bool
+	}{
+		"0":          {0, true},
+		"1":          {1, true},
+		"4294967294": {4294967294, true},
+		"":           {0, false},
+		"00":         {0, false},
+		"01":         {0, false},
+		"-0":         {0, false},
+		"1.0":        {0, false},
+		"1e0":        {0, false},
+		"4294967295": {0, false},
+		"4294967296": {0, false},
+	}
+	for key, want := range cases {
+		got, ok := arrayIndex(key)
+		if got != want.value || ok != want.ok {
+			t.Errorf("arrayIndex(%q) = (%d, %t), want (%d, %t)", key, got, ok, want.value, want.ok)
+		}
+	}
+}
+
+func TestParseCollapsesDuplicateObjectKeysLikeJSONParse(t *testing.T) {
+	root, err := Parse([]byte(`{"type":"first","nested":0,"type":"last","nested":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := root.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(encoded), `{"type":"last","nested":1}`; got != want {
+		t.Fatalf("duplicate-key encode = %s, want %s", got, want)
+	}
+}
+
 // TestEncodeCanonicalisesNumbers: a JSON literal is re-emitted the way
 // JSON.stringify of the parsed Number would emit it.
 func TestEncodeCanonicalisesNumbers(t *testing.T) {
