@@ -194,6 +194,9 @@ under `/home/bun/.opencodex`, back it up and deliberately copy only the catalog 
 the new Codex home, preserving owner-only access. Do not copy either product's
 `auth.json` over the other. Deployments with a custom `CODEX_HOME` should retain
 their explicit environment and writable volume mapping until migration is complete.
+When overriding `CODEX_HOME`, mount that exact directory writable and persist the
+default catalog at `${CODEX_HOME}/opencodex-catalog.json`. If `model_catalog_json`
+explicitly selects another file, that resolved path must also be persisted.
 
 Install Git and Bun on the host first. Before **every** image build, run the existing canonical
 generator from this Git checkout. It hashes Git-tracked working-tree sources (stage any newly
