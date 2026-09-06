@@ -279,6 +279,44 @@ describe("CursorPoolKernel", () => {
     expect(s.kernel.rollback(staleSnap, s.capability)).toBe(false);
   });
 
+  test("removing the final account prunes its version before key recreation", () => {
+    const s = setup();
+    const stale = s.kernel.activate("owner", "thread", s.capability)!;
+    const generationBeforeRemoval = s.kernel.currentGeneration;
+
+    s.setAccounts([]);
+    expect(s.kernel.activate("owner", "thread", s.capability)).toBeNull();
+    expect(s.kernel.currentGeneration).toBeGreaterThan(generationBeforeRemoval);
+    expect(s.kernel.rollback(stale, s.capability)).toBe(false);
+    expect(
+      (
+        s.kernel as unknown as {
+          versions: Map<string, number>;
+        }
+      ).versions.size,
+    ).toBe(0);
+
+    s.setAccounts(accounts);
+    const recreated = s.kernel.pick("owner", "thread", s.capability)!;
+    expect(recreated.generation).toBeGreaterThan(generationBeforeRemoval);
+    expect(s.kernel.rollback(stale, s.capability)).toBe(false);
+  });
+
+  test("rolling back an initial activation prunes its orphaned version", () => {
+    const s = setup();
+    const initial = s.kernel.activate("owner", "thread", s.capability)!;
+
+    expect(s.kernel.rollback(initial, s.capability)).toBe(true);
+    expect(
+      (
+        s.kernel as unknown as {
+          versions: Map<string, number>;
+        }
+      ).versions.size,
+    ).toBe(0);
+    expect(s.kernel.rollback(initial, s.capability)).toBe(false);
+  });
+
   test("activate and pick perform exactly one listAccounts store read and resolve pass per call", () => {
     let listAccountsCalls = 0;
     let resolveCalls = 0;
