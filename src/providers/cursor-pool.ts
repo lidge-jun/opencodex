@@ -1,5 +1,5 @@
 /** Cursor OAuth account-pool kernel. No configuration or HTTP surface lives here. */
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { getAccountSet } from "../oauth/store";
 
 export const CURSOR_POOL_KEY = "cursor";
