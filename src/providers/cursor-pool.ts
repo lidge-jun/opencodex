@@ -66,6 +66,7 @@ export interface CursorPoolKernelOptions {
 export class CursorPoolKernel {
   private states = new Map<string, State>();
   private affinity = new Map<string, string>();
+  private versions = new Map<string, number>();
   private generation = 0;
   private readonly resolveAccessToken?: (
     accountId: string,
@@ -85,6 +86,14 @@ export class CursorPoolKernel {
   }
   private key(owner: string, thread: string): string {
     return `${owner}\0${thread}`;
+  }
+  private version(key: string): number {
+    return this.versions.get(key) ?? 0;
+  }
+  private advanceVersion(key: string): number {
+    const next = this.version(key) + 1;
+    this.versions.set(key, next);
+    return next;
   }
   private sweep(now = this.now()): void {
     for (const [key, s] of this.states)
@@ -132,12 +141,13 @@ export class CursorPoolKernel {
     capability: symbol,
     expectedGeneration?: number,
   ): CursorPoolSnapshot | null {
+    const ownerThread = this.key(owner, thread);
     if (
       capability !== this.capability ||
       !owner ||
       !thread ||
       (expectedGeneration !== undefined &&
-        expectedGeneration !== this.generation)
+        expectedGeneration !== this.version(ownerThread))
     )
       return null;
     this.sweep();
@@ -148,7 +158,7 @@ export class CursorPoolKernel {
       const prior = this.states.get(`${owner}\0${thread}\0${a.ref}`);
       return prior ? [{ ...prior }] : [];
     });
-    const previousAffinity = this.affinity.get(this.key(owner, thread));
+    const previousAffinity = this.affinity.get(ownerThread);
     const active = new Set(accounts.map((a) => a.id));
     for (const [id, ref] of this.refs)
       if (!active.has(id)) this.refs.delete(id);
@@ -166,8 +176,9 @@ export class CursorPoolKernel {
       });
     }
     this.generation++;
+    const generation = this.advanceVersion(ownerThread);
     return {
-      generation: this.generation,
+      generation,
       owner,
       thread,
       refs: accounts.map((a) => a.ref),
@@ -196,7 +207,7 @@ export class CursorPoolKernel {
     state.touched = now;
     const a = this.accounts(now).find((x) => x.ref === state.ref);
     return a
-      ? { accountRef: state.ref, token: a.token, generation: this.generation }
+      ? { accountRef: state.ref, token: a.token, generation: snap.generation }
       : null;
   }
   note429(
@@ -216,9 +227,10 @@ export class CursorPoolKernel {
     return true;
   }
   rollback(snapshot: CursorPoolSnapshot, capability: symbol): boolean {
+    const key = this.key(snapshot.owner, snapshot.thread);
     if (
       capability !== this.capability ||
-      snapshot.generation !== this.generation
+      snapshot.generation !== this.version(key)
     )
       return false;
     for (const [k, s] of this.states)
@@ -226,24 +238,30 @@ export class CursorPoolKernel {
         this.states.delete(k);
     for (const prior of snapshot.previous)
       this.states.set(`${prior.owner}\0${prior.thread}\0${prior.ref}`, { ...prior });
-    const key = this.key(snapshot.owner, snapshot.thread);
     if (snapshot.previousAffinity) this.affinity.set(key, snapshot.previousAffinity);
     else this.affinity.delete(key);
     this.generation++;
+    this.advanceVersion(key);
     return true;
   }
   remove(accountRef: string, capability: symbol): void {
     if (capability !== this.capability) return;
+    const changed = new Set<string>();
     for (const [k, s] of this.states)
-      if (s.ref === accountRef) this.states.delete(k);
+      if (s.ref === accountRef) {
+        this.states.delete(k);
+        changed.add(this.key(s.owner, s.thread));
+      }
     for (const [k, v] of this.affinity)
       if (v === accountRef) this.affinity.delete(k);
     for (const [id, ref] of this.refs)
       if (ref === accountRef) this.refs.delete(id);
     this.generation++;
+    for (const key of changed) this.advanceVersion(key);
   }
   clear(capability: symbol): void {
     if (capability === this.capability) {
+      for (const key of this.versions.keys()) this.advanceVersion(key);
       this.states.clear();
       this.affinity.clear();
       this.refs.clear();
