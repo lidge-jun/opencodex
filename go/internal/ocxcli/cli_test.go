@@ -333,6 +333,62 @@ func TestCodexShimStatusReportsCorruptStateWithoutFailing(t *testing.T) {
 	}
 }
 
+func TestStatusEvidenceUsesRuntimeRecordAndPublicHealthzIdentity(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/healthz" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"service": "opencodex", "status": "ok", "version": "2.42.0", "uptime": 1.6, "pid": 4242,
+		})
+	}))
+	defer server.Close()
+	state := StatusRuntimeRecord{PID: 4242, Port: serverPort(strings.TrimPrefix(server.URL, "http://")), Hostname: "127.0.0.1"}
+	probe := ProbeStatusEvidence(StatusProbeDeps{
+		LoadConfig:  func() (*config.Config, error) { return &config.Config{Port: 9, Hostname: "0.0.0.0"}, nil },
+		ReadRuntime: func() (StatusRuntimeRecord, error) { return state, nil },
+	})
+	if probe.Source != "runtime" || probe.Port != state.Port || probe.Runtime == nil {
+		t.Fatalf("selection = %#v", probe)
+	}
+	if !probe.Health.OK || probe.Health.PID != 4242 || probe.Health.Message != "ok v2.42.0, uptime 2s" {
+		t.Fatalf("health = %#v", probe.Health)
+	}
+}
+
+func TestStatusEvidenceFallsBackToConfigAndRejectsForeignHealthz(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"service": "other", "status": "ok"})
+	}))
+	defer server.Close()
+	port := serverPort(strings.TrimPrefix(server.URL, "http://"))
+	probe := ProbeStatusEvidence(StatusProbeDeps{
+		LoadConfig:  func() (*config.Config, error) { return &config.Config{Port: port, Hostname: "0.0.0.0"}, nil },
+		ReadRuntime: func() (StatusRuntimeRecord, error) { return StatusRuntimeRecord{}, errors.New("missing") },
+	})
+	if probe.Source != "config" || probe.Runtime != nil || probe.Health.URL != fmt.Sprintf("http://127.0.0.1:%d/healthz", port) {
+		t.Fatalf("probe = %#v", probe)
+	}
+	if probe.Health.OK || probe.Health.Message != "responded, but not an opencodex proxy" {
+		t.Fatalf("health = %#v", probe.Health)
+	}
+}
+
+func TestStatusEvidenceUsesTypeScriptHealthzMessageRules(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"service": "opencodex"})
+	}))
+	defer server.Close()
+	port := serverPort(strings.TrimPrefix(server.URL, "http://"))
+	probe := ProbeStatusEvidence(StatusProbeDeps{
+		LoadConfig:  func() (*config.Config, error) { return &config.Config{Port: port}, nil },
+		ReadRuntime: func() (StatusRuntimeRecord, error) { return StatusRuntimeRecord{}, errors.New("missing") },
+	})
+	if !probe.Health.OK || probe.Health.Message != "ok" {
+		t.Fatalf("health = %#v", probe.Health)
+	}
+}
+
 func TestDelegatedFamilyHelpUsesOwnerOutput(t *testing.T) {
 	for _, command := range []string{"status", "doctor", "service"} {
 		t.Run(command, func(t *testing.T) {
