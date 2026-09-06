@@ -16,6 +16,12 @@ interface ExchangeOptions {
   beforeDispatch?: (headers: Headers) => void;
 }
 
+// The frame's headers describe the upstream's HTTP representation. The body is
+// re-encoded as plain JSON below, so the framing and encoding headers would lie.
+const REBUILT_REJECTION_DROPPED_HEADERS = new Set([
+  "content-encoding", "content-length", "content-type", "transfer-encoding", "connection", "keep-alive",
+]);
+
 /**
  * Turn a refused create frame back into the HTTP error it stands for.
  *
@@ -30,7 +36,9 @@ interface ExchangeOptions {
  * pre-stream quota, refresh and rotation handlers never see the status.
  *
  * 4xx only: those refusals come before generation, so answering with the status
- * cannot double-generate. 5xx keeps the stream path and its no-resend rule.
+ * cannot double-generate. 5xx keeps the stream path and its no-resend rule. This
+ * reaches only the canonical ChatGPT lane: an opt-in `upstreamWebsocket` provider
+ * commits its response on send, before any frame can be inspected.
  */
 function wrappedRejectionResponse(payload: Record<string, unknown>): Response | null {
   const raw = payload.status_code ?? payload.status;
@@ -39,13 +47,13 @@ function wrappedRejectionResponse(payload: Record<string, unknown>): Response | 
   const source = payload.headers;
   if (source && typeof source === "object" && !Array.isArray(source)) {
     for (const [name, value] of Object.entries(source as Record<string, unknown>)) {
-      if (typeof value !== "string") continue;
-      const lower = name.toLowerCase();
-      if (lower === "content-length" || lower === "content-type" || lower === "transfer-encoding" || lower === "connection") continue;
+      if (typeof value !== "string" || REBUILT_REJECTION_DROPPED_HEADERS.has(name.toLowerCase())) continue;
       try { headers.set(name, value); } catch { /* an invalid upstream header name/value is not ours to relay */ }
     }
   }
   headers.set("content-type", "application/json");
+  // The body is account-specific and rebuilt here, never a cacheable representation.
+  headers.set("cache-control", "no-store");
   const error = payload.error && typeof payload.error === "object" && !Array.isArray(payload.error)
     ? payload.error
     : { type: "upstream_error", message: "Upstream rejected the request" };

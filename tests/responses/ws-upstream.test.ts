@@ -650,6 +650,7 @@ describe("codexWsUpstreamFetch", () => {
         "X-Codex-Primary-Reset-At": "1800000000",
         "Content-Length": "174",
         "Content-Type": "application/json",
+        "Content-Encoding": "gzip",
       },
     };
     installFake(ws => {
@@ -665,8 +666,11 @@ describe("codexWsUpstreamFetch", () => {
     expect(response.headers.get("content-type")).toBe("application/json");
     expect(response.headers.get("x-codex-primary-used-percent")).toBe("100");
     expect(response.headers.get("x-codex-primary-reset-at")).toBe("1800000000");
-    // The body is re-encoded, so the frame's framing headers must not survive.
+    // The body is re-encoded as plain JSON, so the frame's framing and encoding
+    // headers must not survive, and the account-specific result must not be cached.
     expect(response.headers.get("content-length")).toBeNull();
+    expect(response.headers.get("content-encoding")).toBeNull();
+    expect(response.headers.get("cache-control")).toBe("no-store");
     expect(await response.json()).toEqual({ error: frame.error });
     expect(isCodexWsUpstreamResponse(response)).toBe(false);
     const ws = FakeWebSocket.instances[0]!;

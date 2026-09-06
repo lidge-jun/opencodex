@@ -150,7 +150,10 @@ and derives its routing hint from the actual outgoing model and service tier.
 Initial upstream quota/model metadata becomes bounded HTTP response headers;
 later quota updates are attributed to the serving account, not retroactively
 added to headers already sent. A failure after a WS request was sent does not
-trigger an automatic HTTP resend. These mappings do not enable the client-facing
+trigger an automatic HTTP resend. A refusal the backend sends before any output, as one
+`error` frame carrying a 4xx `status_code`, is returned as that HTTP status with the frame's
+headers (minus framing and encoding headers) and a `{"error": ...}` JSON body, so the same
+refresh, quota and account-rotation handling applies as on the HTTP path. These mappings do not enable the client-facing
 WebSocket setting or change other providers' transport selection.
 Bundled Bun 1.3.14, prereleases, and unverifiable runtime identities use HTTP/SSE. Successful
 upstream WS responses keep the downstream SSE contract and bypass `tee()` through a bounded eager
