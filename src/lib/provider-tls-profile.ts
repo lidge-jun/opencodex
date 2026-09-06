@@ -1,6 +1,7 @@
 import type { OcxProviderConfig } from "../types";
 import { redactSecretString } from "./redact";
 import { runtimeProviderFetch } from "./provider-runtime-fetch";
+import { resolveProxyRoute } from "./proxy-env";
 
 export type ProviderTlsProfile = "antigravity-browser";
 export type ProviderTlsProfileStatus = "disabled" | "active" | "fallback";
@@ -45,6 +46,15 @@ export function setProviderTlsRuntimeForTest(next: TlsRuntime | undefined): void
   runtime = next;
 }
 
+function preserveTransportError(error: unknown): Error {
+  const message = redactSecretString(error instanceof Error ? error.message : "provider TLS transport failed");
+  const name = error instanceof Error ? error.name : "Error";
+  if (name === "AbortError" || name === "TimeoutError") return new DOMException(message, name);
+  const wrapped = new Error(message);
+  wrapped.name = name;
+  return wrapped;
+}
+
 export function providerTlsFetch(
   name: string,
   provider: Pick<OcxProviderConfig, "adapter" | "authMode" | "googleMode" | "baseUrl" | "tlsProfile">,
@@ -64,17 +74,20 @@ export function providerTlsFetch(
     try {
       const configured = runtimeProviderFetch(provider as OcxProviderConfig, name);
       const mod = runtime ?? (await import("wreq-js") as unknown as TlsRuntime);
+      const proxyRoute = resolveProxyRoute(new URL(destination));
+      if (proxyRoute.kind === "fallback") throw new Error("provider TLS profile cannot preserve configured proxy semantics");
       const response = await (configured ?? mod.fetch)(input, {
         ...init,
         redirect: "manual",
         browser: "chrome_142",
         os: "windows",
+        ...(proxyRoute.kind === "proxy" ? { proxy: proxyRoute.proxy } : {}),
       } as RequestInit & { browser: string; os: string });
       status.set(name, "active");
       return response;
     } catch (error) {
       status.set(name, "fallback");
-      throw new Error(redactSecretString(error instanceof Error ? error.message : "provider TLS transport failed"));
+      throw preserveTransportError(error);
     }
   }) as typeof globalThis.fetch;
 }
