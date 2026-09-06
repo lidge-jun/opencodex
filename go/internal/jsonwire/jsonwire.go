@@ -229,6 +229,24 @@ func (v *Value) Set(key string, member *Value) {
 	v.obj = append(v.obj, Member{Key: key, Value: member})
 }
 
+// ObjectValue creates an empty ordered object for transforms that need to
+// synthesize a nested JSON value.
+func ObjectValue() *Value { return &Value{kind: Object} }
+
+// Delete removes an object member while preserving the order of all remaining
+// members. It is a no-op for non-objects or absent keys.
+func (v *Value) Delete(key string) {
+	if v == nil || v.kind != Object {
+		return
+	}
+	for i := range v.obj {
+		if v.obj[i].Key == key {
+			v.obj = append(v.obj[:i], v.obj[i+1:]...)
+			return
+		}
+	}
+}
+
 // Constructors for the values a repair synthesises (strings, empty arrays,
 // booleans). Numbers are not synthesised by the current transforms; NumberFrom
 // exists so future transforms can stay on the same tree.

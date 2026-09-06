@@ -616,7 +616,12 @@ func doDirectRelay(w http.ResponseWriter, r *http.Request, cfg Config, plan *rel
 		}
 		w.WriteHeader(upstreamResp.StatusCode)
 		if upstreamResp.StatusCode >= 200 && upstreamResp.StatusCode < 300 && strings.Contains(strings.ToLower(contentType), "text/event-stream") {
-			if err := relayResponsesSSEWithFlush(w, upstreamResp.Body); err != nil {
+			requestRoot, _ := jsonwire.Parse(body)
+			pipeline := responseRepairPipeline{modelID: plan.modelID}
+			if requestRoot != nil {
+				pipeline.imageAliases = imageAliasesFromRequest(requestRoot)
+			}
+			if err := relayResponsesSSEWithFlush(w, upstreamResp.Body, pipeline); err != nil {
 				fmt.Fprintf(os.Stderr, "ocx-sidecar: relay stream write: %v\n", err)
 			}
 		} else if err := streamCopyWithFlush(w, upstreamResp.Body); err != nil {
@@ -649,7 +654,12 @@ func doDirectRelay(w http.ResponseWriter, r *http.Request, cfg Config, plan *rel
 			// RepairResponsesJSONBody returns the original bytes untouched when
 			// the backfill changed nothing or the body is not a JSON object, so
 			// assigning unconditionally preserves raw-bytes relay parity.
-			out, _ = RepairResponsesJSONBody(rawBody)
+			requestRoot, _ := jsonwire.Parse(body)
+			pipeline := responseRepairPipeline{modelID: plan.modelID}
+			if requestRoot != nil {
+				pipeline.imageAliases = imageAliasesFromRequest(requestRoot)
+			}
+			out, _ = pipeline.repairJSON(rawBody)
 		}
 	}
 	w.WriteHeader(upstreamResp.StatusCode)
@@ -662,8 +672,8 @@ func doDirectRelay(w http.ResponseWriter, r *http.Request, cfg Config, plan *rel
 // Responses field-backfill and terminal boundary, flushing each emitted block.
 // It stops reading after the first terminal so a gateway cannot append frames
 // after completion and hold the client request open.
-func relayResponsesSSEWithFlush(w http.ResponseWriter, src io.Reader) error {
-	stream := NewResponsesSSEStream()
+func relayResponsesSSEWithFlush(w http.ResponseWriter, src io.Reader, pipeline responseRepairPipeline) error {
+	stream := NewResponsesSSEStream(pipeline)
 	flusher, canFlush := w.(http.Flusher)
 	write := func(out []byte) error {
 		if len(out) == 0 {
