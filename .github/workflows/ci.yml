@@ -35,6 +35,7 @@ jobs:
                 noTests: /No tests found|did not match any test files/i.test(child.stderr),
                 syntax: /SyntaxError|Expected|Unexpected token|ParseError/i.test(child.stderr),
                 moduleNotFound: /Cannot find|ModuleNotFound|ResolveMessage|not found/i.test(child.stderr),
+                incompleteCapability: child.stderr.includes("capability is incomplete"),
                 runLock: /test.run.lock|test run lock|effective.account|SID|runtime root/i.test(child.stderr),
                 guard: /guard|unprotected|protected home/i.test(child.stderr),
                 access: /EACCES|EPERM|permission/i.test(child.stderr),
@@ -50,4 +51,33 @@ jobs:
           text = preload.read_text()
           preload.write_text('console.log("fixture_preload_entered");\n' + text + '\nconsole.log("fixture_preload_complete");\n')
           PY
-          bun test --isolate --timeout 60000 ./tests/clients/client-connect.test.ts --test-name-pattern 'rotate settles Desktop'
+          if bun test --isolate --timeout 60000 ./tests/clients/client-connect.test.ts --test-name-pattern 'rotate settles Desktop'; then exit 1; fi
+      - name: Complete the acquired bare-run capability
+        shell: bash
+        run: |
+          git restore tests/preload.ts tests/clients/client-connect.test.ts
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('tests/preload.ts')
+          s=p.read_text()
+          s=s.replace('  resolveInheritedTestRunLock,\n  TEST_RUN_ID_ENV,','  resolveInheritedTestRunLock,\n  resolveWrappedTestRunLockPath,\n  TEST_RUN_ID_ENV,\n  TEST_RUN_LOCK_PATH_ENV,\n  TEST_RUN_LOCK_TOKEN_ENV,')
+          s=s.replace('await acquireTestRunLock({', '''// A bare Windows run also parents nested Bun tests. Resolve its validated path
+          // once, then pass the complete capability to descendants just as the wrapper does.
+          const lockPath = inheritedLock?.lockPath
+            ?? (process.platform === "win32" ? resolveWrappedTestRunLockPath() : undefined);
+          const runLock = await acquireTestRunLock({''')
+          s=s.replace('  lockPath: inheritedLock?.lockPath,\n  validatedRuntimePath: inheritedLock !== undefined,','  lockPath,\n  validatedRuntimePath: lockPath !== undefined,')
+          s=s.replace('// Clean up only the root this preload created.', '''if (process.platform === "win32" && lockPath && runLock.owner) {
+            process.env[TEST_RUN_LOCK_PATH_ENV] = lockPath;
+            process.env[TEST_RUN_LOCK_TOKEN_ENV] = runLock.owner.token;
+          }
+          
+          // Clean up only the root this preload created.''')
+          p.write_text(s)
+          PY
+          bun test --isolate --timeout 60000 ./tests/clients/client-connect.test.ts --test-name-pattern 'Desktop copy coherence'
+      - name: Restore incomplete capability and confirm original failure
+        shell: bash
+        run: |
+          git restore tests/preload.ts
+          if bun test --isolate --timeout 60000 ./tests/clients/client-connect.test.ts --test-name-pattern 'rotate settles Desktop'; then exit 1; fi
