@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mode: [missing, cache_inherited, cache_disabled, cache_owned]
+        mode: [cache_copied, cache_inherited]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
@@ -159,7 +159,7 @@ jobs:
           s=p.read_text(encoding="utf-8")
           anchor='  mkdirSync(env.XDG_RUNTIME_DIR!, { recursive: true });'
           assert s.count(anchor)==1
-          extra='\n  const envMode = process.env.OCX_FIXTURE_ENV_MODE;\n  const key = Object.keys(process.env).find(k => k.toLowerCase() === "psmoduleanalysiscachepath");\n  const inherited = key ? process.env[key] : undefined;\n  if (envMode === "cache_inherited") env.PSModuleAnalysisCachePath = inherited;\n  if (envMode === "cache_disabled") env.PSModuleAnalysisCachePath = "NUL";\n  if (envMode === "cache_owned") env.PSModuleAnalysisCachePath = join(root, "module-analysis-cache");\n  console.log(JSON.stringify({ fixtureCacheMode: { side, mode: envMode, parentIsNullDevice: inherited?.toUpperCase() === "NUL", parentHasValue: Boolean(inherited) } }));\n'
+          extra='\n  const key = Object.keys(process.env).find(k => k.toLowerCase() === "psmoduleanalysiscachepath");\n  const inherited = key ? process.env[key] : undefined;\n  if (process.env.OCX_FIXTURE_ENV_MODE === "cache_inherited") env.PSModuleAnalysisCachePath = inherited;\n  else if (inherited) {\n    const fs = require("node:fs") as typeof import("node:fs");\n    if (!fs.statSync(inherited).isFile()) throw new Error("fixture_cache_seed_not_file");\n    const cache = join(root, "module-analysis-cache");\n    fs.copyFileSync(inherited, cache);\n    env.PSModuleAnalysisCachePath = cache;\n    console.log(JSON.stringify({ copiedCacheSeed: true }));\n  } else throw new Error("fixture_cache_seed_missing");\n'
           p.write_text(s.replace(anchor,anchor+extra),encoding="utf-8")
           PY
           OCX_FIXTURE_ENV_MODE="$MODE" bun test --isolate ./tests/claude-integration/claude-desktop-remote-hub.test.ts --test-name-pattern 'stored profile=true'
