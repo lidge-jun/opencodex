@@ -90,9 +90,9 @@ export class CursorPoolKernel {
     this.versions.set(key, next);
     return next;
   }
-  private hasLiveStateFor(owner: string, thread: string): boolean {
+  private hasLiveStateFor(key: string): boolean {
     for (const s of this.states.values()) {
-      if (s.owner === owner && s.thread === thread) return true;
+      if (this.key(s.owner, s.thread) === key) return true;
     }
     return false;
   }
@@ -101,7 +101,7 @@ export class CursorPoolKernel {
       if (s.touched + CURSOR_POOL_TTL_MS <= now) {
         this.states.delete(key);
         const ownerThread = this.key(s.owner, s.thread);
-        if (!this.hasLiveStateFor(s.owner, s.thread)) {
+        if (!this.hasLiveStateFor(ownerThread)) {
           this.affinity.delete(ownerThread);
           this.versions.delete(ownerThread);
         }
@@ -261,6 +261,7 @@ export class CursorPoolKernel {
     if (snapshot.previousAffinity) this.affinity.set(key, snapshot.previousAffinity);
     else this.affinity.delete(key);
     this.advanceVersion(key);
+    if (!this.hasLiveStateFor(key)) this.versions.delete(key);
     return true;
   }
   remove(accountRef: string, capability: symbol): void {
@@ -287,7 +288,10 @@ export class CursorPoolKernel {
     // snapshot versions when a known account leaves the pool.
     if (removedKnownRef)
       for (const key of this.versions.keys()) changed.add(key);
-    for (const key of changed) this.advanceVersion(key);
+    for (const key of changed) {
+      this.advanceVersion(key);
+      if (!this.hasLiveStateFor(key)) this.versions.delete(key);
+    }
   }
   clear(capability: symbol): void {
     if (capability === this.capability) {
