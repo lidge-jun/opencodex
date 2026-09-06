@@ -16,7 +16,7 @@ import { resolveAlias, claudeCodeNativeAlias } from "../claude/alias";
 import { recordDesktopRequest } from "../claude/desktop-health";
 import { stripOneMillionMarker } from "../claude/context-windows";
 import { captureClaudeInbound } from "../claude/inbound-debug";
-import { analyzeClaudeCompatibility } from "../claude/compatibility";
+import { analyzeClaudeCompatibility, type ClaudeCompatibilityResult } from "../claude/compatibility";
 import { isTransientUpstreamStatus } from "../lib/upstream-retry";
 import { resolveClientRetryAfter } from "../lib/retry-after";
 import {
@@ -69,8 +69,8 @@ type Rec = Record<string, unknown>;
 export function enforceClaudeCompatibility(
   body: unknown,
   opts: { mode?: unknown; adapter: string; anthropicBeta?: string },
-): void {
-  if (opts.mode !== "shadow" && opts.mode !== "enforce") return;
+): ClaudeCompatibilityResult | undefined {
+  if (opts.mode !== "shadow" && opts.mode !== "enforce") return undefined;
   const result = analyzeClaudeCompatibility(body, {
     mode: opts.mode,
     adapter: opts.adapter,
@@ -79,6 +79,7 @@ export function enforceClaudeCompatibility(
   if (result.decision === "reject") {
     throw new AnthropicRequestError(result.reason ?? "unsupported Claude protocol feature");
   }
+  return result;
 }
 
 /**
@@ -784,11 +785,18 @@ async function handleClaudeMessagesWithBudget(
     // Opt-in protocol gate: native passthrough has already returned above. Keep the
     // legacy translator behavior unchanged when unset; enforce only an explicitly
     // requested mode and never include request data in the bounded error reason.
-    enforceClaudeCompatibility(anthropicBody, {
+    const compatibility = enforceClaudeCompatibility(anthropicBody, {
       mode: config.claudeCode?.compatibility,
       adapter: route.provider.adapter,
       anthropicBeta: req.headers.get("anthropic-beta") ?? undefined,
     });
+    if (compatibility?.decision === "shadow") {
+      logCtx.claudeCompatibility = {
+        decision: "shadow",
+        featureCodes: compatibility.featureCodes,
+        ...(compatibility.reason ? { reason: compatibility.reason } : {}),
+      };
+    }
     if (route.provider.adapter === "openai-responses") {
       nativeRoute = true;
       delete internalBody.max_output_tokens;

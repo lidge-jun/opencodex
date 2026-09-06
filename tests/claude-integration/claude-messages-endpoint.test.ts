@@ -1423,6 +1423,35 @@ test("Claude compatibility enforcement is opt-in at the Messages endpoint", asyn
   }
 });
 
+test("Claude compatibility shadow decisions reach the bounded request-log ring", async () => {
+  clearRequestLogsForTests();
+  const { server: upstream } = mockChatUpstreamCapturing();
+  const baseUrl = `${upstream.url.toString().replace(/\/$/, "")}/v1`;
+  saveConfig(mockConfig(baseUrl, { compatibility: "shadow" }));
+  const server = startServer(0);
+  try {
+    const response = await postMessages(server.url.toString(), {
+      model: "mock/test-model",
+      max_tokens: 64,
+      stream: true,
+      messages: [{
+        role: "user",
+        content: [{ type: "document", source: { type: "text", media_type: "text/plain", data: "fixture" } }],
+      }],
+    });
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(getRequestLogEntries().at(-1)?.claudeCompatibility).toEqual({
+      decision: "shadow",
+      featureCodes: ["documents"],
+      reason: "shadow: would reject for documents",
+    });
+  } finally {
+    await server.stop(true);
+    await upstream.stop(true);
+  }
+});
+
 async function postMessages(serverUrl: string, body: Record<string, unknown>): Promise<Response> {
   return fetch(new URL("/v1/messages", serverUrl), {
     method: "POST",

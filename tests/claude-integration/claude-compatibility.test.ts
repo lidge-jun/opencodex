@@ -36,6 +36,15 @@ describe("Claude routed compatibility foundation", () => {
     expect(result.featureCodes).not.toContain("code_execution");
   });
 
+  test("does not mistake client function names or tool_use blocks for hosted tool search", () => {
+    const result = analyzeClaudeCompatibility({
+      tools: [{ type: "function", name: "tool_search_tool_local", input_schema: { type: "object" } }],
+      messages: [{ role: "assistant", content: [{ type: "tool_use", name: "tool_search", id: "toolu_1", input: {} }] }],
+    }, { mode: "enforce", adapter: "openai-chat" });
+    expect(result).toMatchObject({ compatible: true, decision: "allow" });
+    expect(result.featureCodes).not.toContain("tool_search");
+  });
+
   test("recognizes cache control only at Anthropic block positions", () => {
     expect(collectClaudeFeatureCodes({
       tools: [{
@@ -65,6 +74,13 @@ describe("Claude routed compatibility foundation", () => {
     const result = analyzeClaudeCompatibility({ context_management: { edits: [{ op: "remove" }] } }, { mode: "shadow", adapter: "openai-chat" });
     expect(result).toMatchObject({ compatible: true, decision: "shadow" });
     expect(result.reason).toContain("context_management");
+  });
+
+  test("feature evidence is bounded", () => {
+    const betas = Array.from({ length: 40 }, (_, index) => `feature-${index}-${"x".repeat(100)}`).join(",");
+    const codes = collectClaudeFeatureCodes({}, betas);
+    expect(codes).toHaveLength(32);
+    expect(codes.every(code => code.length <= 53)).toBe(true);
   });
 
   test("mode recognition is strict", () => {

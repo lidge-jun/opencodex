@@ -138,6 +138,14 @@ export interface RequestLogContext {
   terminalSource?: "upstream" | "synthetic";
   /** Bounded route-decision trace (RI-01); never contains secrets. */
   routeDecision?: RouteDecisionTraceV1;
+  /** Bounded, non-payload Claude compatibility evidence for opt-in shadow mode. */
+  claudeCompatibility?: ClaudeCompatibilityLog;
+}
+
+export interface ClaudeCompatibilityLog {
+  decision: "shadow";
+  featureCodes: string[];
+  reason?: string;
 }
 
 export interface RequestLogEntry {
@@ -203,6 +211,8 @@ export interface RequestLogEntry {
   terminalSource?: "upstream" | "synthetic";
   /** Bounded route-decision trace (RI-01); never contains secrets. */
   routeDecision?: RouteDecisionTraceV1;
+  /** Bounded, non-payload Claude compatibility evidence for opt-in shadow mode. */
+  claudeCompatibility?: ClaudeCompatibilityLog;
 }
 
 const requestLog: RequestLogEntry[] = [];
@@ -246,6 +256,20 @@ export function requestLogRetainedStoreSnapshot(): RetainedStoreSnapshot {
 
 export function evictOldestRequestLogForBudget(): number {
   return removeOldestRequestLogEntry();
+}
+
+function normalizeClaudeCompatibilityLog(value: ClaudeCompatibilityLog | undefined): ClaudeCompatibilityLog | undefined {
+  if (value?.decision !== "shadow" || !Array.isArray(value.featureCodes)) return undefined;
+  const featureCodes = [...new Set(value.featureCodes
+    .filter(code => typeof code === "string" && /^[a-z0-9_]{1,64}$/.test(code)))]
+    .sort()
+    .slice(0, 32);
+  const reason = sanitizeLogMetadataString(value.reason, 512);
+  return {
+    decision: "shadow",
+    featureCodes,
+    ...(reason ? { reason } : {}),
+  };
 }
 
 function asTerminalStatus(value: string | undefined): ResponsesTerminalStatus | undefined {
@@ -368,10 +392,17 @@ export function addRequestLog(entry: RequestLogEntry) {
   // line-oriented viewer — while `usage.jsonl` looked clean, which is the worst shape for a
   // sanitization bug because the safe surface is the one you check.
   const shadowCallRewrittenFrom = sanitizeLogMetadataString(entry.shadowCallRewrittenFrom);
+  const claudeCompatibility = normalizeClaudeCompatibilityLog(entry.claudeCompatibility);
   const retained: RequestLogEntry = shadowCallRewrittenFrom === entry.shadowCallRewrittenFrom
+    && claudeCompatibility === entry.claudeCompatibility
     ? entry
-    : { ...entry, ...(shadowCallRewrittenFrom ? { shadowCallRewrittenFrom } : {}) };
+    : {
+      ...entry,
+      ...(shadowCallRewrittenFrom ? { shadowCallRewrittenFrom } : {}),
+      ...(claudeCompatibility ? { claudeCompatibility } : {}),
+    };
   if (!shadowCallRewrittenFrom && retained !== entry) delete retained.shadowCallRewrittenFrom;
+  if (!claudeCompatibility && retained !== entry) delete retained.claudeCompatibility;
   entry = retained;
   retainRequestLogEntry(entry);
   try {
@@ -1034,6 +1065,7 @@ export function addFinalRequestLog(
     ...(logCtx.transportPhase ? { transportPhase: logCtx.transportPhase } : {}),
     ...(logCtx.terminalSource ? { terminalSource: logCtx.terminalSource } : {}),
     ...(logCtx.routeDecision ? { routeDecision: logCtx.routeDecision } : {}),
+    ...(logCtx.claudeCompatibility ? { claudeCompatibility: logCtx.claudeCompatibility } : {}),
   });
   if (isUsageDebugEnabled()) {
     appendUsageDebug({

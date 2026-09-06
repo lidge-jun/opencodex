@@ -39,7 +39,7 @@ export interface ClaudeCompatibilityResult {
   featureCodes: string[];
   compatible: boolean;
   decision: ClaudeCompatibilityDecision;
-  /** Human-readable reason when rejected, otherwise undefined. */
+  /** Bounded human-readable reason when rejected or shadowed. */
   reason?: string;
 }
 
@@ -52,7 +52,7 @@ function isRec(v: unknown): v is Rec {
 function sanitizeBetaToken(raw: string): string {
   const trimmed = raw.trim().toLowerCase();
   if (!trimmed) return "";
-  return trimmed.replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return trimmed.replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 48);
 }
 
 function hasCacheControl(body: Rec): boolean {
@@ -272,7 +272,6 @@ function hasToolSearch(body: Rec): boolean {
     for (const t of tools) {
       if (!isRec(t)) continue;
       if (typeof t.type === "string" && (t.type === "tool_search" || t.type.startsWith("tool_search_tool_"))) return true;
-      if (typeof t.name === "string" && (t.name === "tool_search" || t.name.startsWith("tool_search_tool_"))) return true;
     }
   }
   const msgs = body.messages;
@@ -284,7 +283,7 @@ function hasToolSearch(body: Rec): boolean {
       for (const b of content) {
         if (!isRec(b)) continue;
         if (b.type === "tool_search_tool_result") return true;
-        if ((b.type === "tool_use" || b.type === "server_tool_use")
+        if (b.type === "server_tool_use"
           && typeof b.name === "string"
           && (b.name === "tool_search" || b.name.startsWith("tool_search_tool_"))) return true;
       }
@@ -385,7 +384,7 @@ export function collectClaudeFeatureCodes(
       codes.push(`beta_${sanitized}`);
     }
   }
-  return [...new Set(codes)].sort();
+  return [...new Set(codes)].sort().slice(0, 32);
 }
 
 /**
