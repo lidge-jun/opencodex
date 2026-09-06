@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -395,11 +396,18 @@ describe.skipIf(!goAvailable || sidecarBinary === null)("ocx-sidecar differentia
     // treating a validation-only no-op as evidence of write parity.
     const initial = readFileSync(getConfigPath());
     const tsServer = startServer(0);
-    let tsWrite: Awaited<ReturnType<typeof captureWrite>>;
+    let tsWrites: Array<Awaited<ReturnType<typeof captureMutation>>>;
     let tsPostState: Buffer;
     try {
-      tsWrite = await captureMutation(tsServer, token, "PUT", "/api/shadow-call-settings", { enabled: false });
+      tsWrites = [
+        await captureMutation(tsServer, token, "PUT", "/api/shadow-call-settings", { enabled: false }),
+      ];
       tsPostState = readFileSync(getConfigPath());
+      // A rejected mutation must return the same wire error without changing
+      // the successfully-mutated state that preceded it.
+      tsWrites.push(await captureMutation(tsServer, token, "PUT", "/api/shadow-call-settings", { enabled: "false" }));
+      expect(tsWrites[1]!.status).toBe(400);
+      expect(readFileSync(getConfigPath()).equals(tsPostState)).toBe(true);
     } finally {
       await tsServer.stop(true);
     }
@@ -409,10 +417,11 @@ describe.skipIf(!goAvailable || sidecarBinary === null)("ocx-sidecar differentia
     const goServer = startServer(0);
     try {
       await waitFor(() => activeGoSidecarBaseUrl(), 15_000);
-      const goWrite = await captureMutation(goServer, token, "PUT", "/api/shadow-call-settings", { enabled: false });
-      const goPostState = readFileSync(getConfigPath());
-      expect(goWrite).toEqual(tsWrite!);
-      expect(goPostState.equals(tsPostState!)).toBe(true);
+      for (const body of [{ enabled: false }, { enabled: "false" }]) {
+        const index = body.enabled === false ? 0 : 1;
+        expect(await captureMutation(goServer, token, "PUT", "/api/shadow-call-settings", body)).toEqual(tsWrites![index]!);
+      }
+      expect(readFileSync(getConfigPath()).equals(tsPostState!)).toBe(true);
     } finally {
       await goServer.stop(true);
     }
@@ -421,11 +430,14 @@ describe.skipIf(!goAvailable || sidecarBinary === null)("ocx-sidecar differentia
   runFixtureTest("settings write has a state-reset differential oracle", async (token) => {
     const initial = readFileSync(getConfigPath());
     const tsServer = startServer(0);
-    let tsWrite: Awaited<ReturnType<typeof captureMutation>>;
+    let tsWrites: Array<Awaited<ReturnType<typeof captureMutation>>>;
     let tsPostState: Buffer;
     try {
-      tsWrite = await captureMutation(tsServer, token, "PUT", "/api/settings", { streamMode: "eager-relay" });
+      tsWrites = [await captureMutation(tsServer, token, "PUT", "/api/settings", { streamMode: "eager-relay" })];
       tsPostState = readFileSync(getConfigPath());
+      tsWrites.push(await captureMutation(tsServer, token, "PUT", "/api/settings", { streamMode: "passthrough" }));
+      expect(tsWrites[1]!.status).toBe(400);
+      expect(readFileSync(getConfigPath()).equals(tsPostState)).toBe(true);
     } finally {
       await tsServer.stop(true);
     }
@@ -434,8 +446,8 @@ describe.skipIf(!goAvailable || sidecarBinary === null)("ocx-sidecar differentia
     const goServer = startServer(0);
     try {
       await waitFor(() => activeGoSidecarBaseUrl(), 15_000);
-      const goWrite = await captureMutation(goServer, token, "PUT", "/api/settings", { streamMode: "eager-relay" });
-      expect(goWrite).toEqual(tsWrite!);
+      expect(await captureMutation(goServer, token, "PUT", "/api/settings", { streamMode: "eager-relay" })).toEqual(tsWrites![0]!);
+      expect(await captureMutation(goServer, token, "PUT", "/api/settings", { streamMode: "passthrough" })).toEqual(tsWrites![1]!);
       expect(readFileSync(getConfigPath()).equals(tsPostState!)).toBe(true);
     } finally {
       await goServer.stop(true);
@@ -445,13 +457,18 @@ describe.skipIf(!goAvailable || sidecarBinary === null)("ocx-sidecar differentia
   runFixtureTest("sidecar-settings write has a state-reset differential oracle", async (token) => {
     const initial = readFileSync(getConfigPath());
     const tsServer = startServer(0);
-    let tsWrite: Awaited<ReturnType<typeof captureMutation>>;
+    let tsWrites: Array<Awaited<ReturnType<typeof captureMutation>>>;
     let tsPostState: Buffer;
     try {
-      tsWrite = await captureMutation(tsServer, token, "PUT", "/api/sidecar-settings", {
+      tsWrites = [await captureMutation(tsServer, token, "PUT", "/api/sidecar-settings", {
         webSearch: { streamRoutedModelOutput: true },
-      });
+      })];
       tsPostState = readFileSync(getConfigPath());
+      tsWrites.push(await captureMutation(tsServer, token, "PUT", "/api/sidecar-settings", {
+        webSearch: { streamRoutedModelOutput: "true" },
+      }));
+      expect(tsWrites[1]!.status).toBe(400);
+      expect(readFileSync(getConfigPath()).equals(tsPostState)).toBe(true);
     } finally {
       await tsServer.stop(true);
     }
@@ -460,13 +477,60 @@ describe.skipIf(!goAvailable || sidecarBinary === null)("ocx-sidecar differentia
     const goServer = startServer(0);
     try {
       await waitFor(() => activeGoSidecarBaseUrl(), 15_000);
-      const goWrite = await captureMutation(goServer, token, "PUT", "/api/sidecar-settings", {
+      expect(await captureMutation(goServer, token, "PUT", "/api/sidecar-settings", {
         webSearch: { streamRoutedModelOutput: true },
-      });
-      expect(goWrite).toEqual(tsWrite!);
+      })).toEqual(tsWrites![0]!);
+      expect(await captureMutation(goServer, token, "PUT", "/api/sidecar-settings", {
+        webSearch: { streamRoutedModelOutput: "true" },
+      })).toEqual(tsWrites![1]!);
       expect(readFileSync(getConfigPath()).equals(tsPostState!)).toBe(true);
     } finally {
       await goServer.stop(true);
+    }
+  });
+
+  runFixtureTest("config-write busy failures have state-reset differentials for the complete batch", async (token) => {
+    // This is real cross-process-compatible SQLite contention, not a mocked
+    // relay error. The holder speaks the same BEGIN IMMEDIATE protocol as the
+    // TypeScript writer and remains in place until each request returns.
+    // The disk must remain at its reset bytes for both legs: a busy write is
+    // never evidence of parity if it leaked a partial config commit.
+    const initial = readFileSync(getConfigPath());
+    const vectors: Array<{ path: string; body: unknown }> = [
+      { path: "/api/settings", body: { streamMode: "eager-relay" } },
+      { path: "/api/shadow-call-settings", body: { enabled: false } },
+      { path: "/api/sidecar-settings", body: { webSearch: { streamRoutedModelOutput: true } } },
+    ];
+
+    async function execute(useSidecar: boolean, vector: typeof vectors[number]) {
+      writeFileSync(getConfigPath(), initial);
+      if (useSidecar) process.env[GO_SIDECAR_BIN_ENV] = sidecarBinary!;
+      else delete process.env[GO_SIDECAR_BIN_ENV];
+      const server = startServer(0);
+      let holder: Database | undefined;
+      try {
+        if (useSidecar) await waitFor(() => activeGoSidecarBaseUrl(), 15_000);
+        // Server bootstrap may perform its own one-time config reconciliation;
+        // the no-write assertion starts at the exact request boundary.
+        const preState = readFileSync(getConfigPath());
+        holder = new Database(join(testHome, "config-mutation.sqlite"), { create: true });
+        holder.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+        const response = await captureMutation(server, token, "PUT", vector.path, vector.body);
+        return { response, preState, postState: readFileSync(getConfigPath()) };
+      } finally {
+        try { holder?.exec("ROLLBACK"); } catch { /* acquisition can fail before BEGIN */ }
+        holder?.close();
+        await server.stop(true);
+      }
+    }
+
+    for (const vector of vectors) {
+      const ts = await execute(false, vector);
+      const go = await execute(true, vector);
+      expect(ts.response.status, vector.path + " TypeScript busy status").toBe(503);
+      expect(go.response).toEqual(ts.response);
+      expect(ts.postState.equals(ts.preState), vector.path + " TypeScript busy post-state").toBe(true);
+      expect(go.postState.equals(go.preState), vector.path + " Go busy post-state").toBe(true);
     }
   });
 

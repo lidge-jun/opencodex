@@ -281,6 +281,20 @@ export async function handleManagementAPI(
   } catch (error) {
     const tooLarge = managementBodyTooLargeResponse(error, req, config);
     if (tooLarge) return tooLarge;
+    // Config-backed management routes share the same cross-process SQLite
+    // coordinator as Codex-auth. A contended write is an expected retryable
+    // condition, never an uncaught exception that Bun turns into an
+    // environment-specific fallback HTML page. Keeping this mapping at the
+    // common dispatch boundary gives every route the same stable wire contract.
+    const { ConfigMutationLockError } = await import("../config");
+    if (error instanceof ConfigMutationLockError) {
+      return jsonResponse(
+        { error: "Configuration is busy; retry shortly", code: "CONFIG_MUTATION_LOCK_UNAVAILABLE" },
+        503,
+        req,
+        config,
+      );
+    }
     if (error instanceof OAuthMutationBusyError) {
       return new Response(JSON.stringify({ error: { type: "server_error", code: "oauth_mutation_busy", message: error.message } }), {
         status: 503,
