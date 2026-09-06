@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-responses";
 import { bridgeToResponsesSSE } from "../../src/bridge";
-import { createTranslatorBudget } from "../../src/lib/translator-budget";
+import { createTestTranslatorBudget } from "../helpers/translator-budget";
 
 const encoder = new TextEncoder();
 const provider = { adapter: "openai-responses", baseUrl: "https://gateway.example/v1", authMode: "key" as const };
@@ -15,7 +15,7 @@ const completed = {
 const frame = (payload: unknown) => "data: " + JSON.stringify(payload) + "\n\n";
 
 function harness() {
-  const budget = createTranslatorBudget();
+  const budget = createTestTranslatorBudget();
   let upstream!: ReadableStreamDefaultController<Uint8Array>;
   let ended = false;
   let beat = () => {};
@@ -85,7 +85,7 @@ describe("buffered Responses compaction progress", () => {
   });
 
   test("progress does not duplicate buffered text or override the completed snapshot", async () => {
-    const budget = createTranslatorBudget();
+    const budget = createTestTranslatorBudget();
     try {
       const input = frame({ type: "response.output_text.delta", delta: "Partial text" })
         + frame({ type: "response.output_text.done", text: "Done text" }) + frame(completed);
