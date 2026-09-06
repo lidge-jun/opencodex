@@ -130,6 +130,7 @@ describe("CursorPoolKernel", () => {
     const a = s.kernel.pick("a", "t", s.capability)!;
     const b = s.kernel.pick("b", "t", s.capability)!;
     const snap = s.kernel.activate("a", "t", s.capability)!;
+    s.kernel.pick("b", "other-thread", s.capability);
     expect(s.kernel.rollback(snap, s.capability)).toBe(true);
     expect(s.kernel.pick("b", "t", s.capability)?.accountRef).toBe(
       b.accountRef,
