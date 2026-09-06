@@ -79,26 +79,37 @@ function validateAndSave(config: ReturnType<typeof loadConfig>): void {
 
 function handleList(args: string[]): void {
   const wantsJson = consumeFlag(args, "--json");
-  rejectUnknownArgs(args, "Usage: ocx provider list [--json]");
+  const wantsJsonl = consumeFlag(args, "--jsonl");
+  rejectUnknownArgs(args, "Usage: ocx provider list [--json|--jsonl]");
+
+  if (wantsJson && wantsJsonl) {
+    console.error("Use only one of --json or --jsonl.");
+    process.exit(1);
+  }
 
   const config = loadConfig();
   const configured = Object.keys(config.providers);
+  const entries = configured.map(name => {
+    const prov = config.providers[name];
+    const registryEntry = getProviderRegistryEntry(name);
+    return {
+      name,
+      adapter: prov.adapter,
+      baseUrl: prov.baseUrl,
+      authMode: prov.authMode ?? "key",
+      defaultModel: prov.defaultModel ?? null,
+      isDefault: name === config.defaultProvider,
+      source: registryEntry ? "registry" : "custom",
+      models: prov.models ?? [],
+    };
+  });
+
+  if (wantsJsonl) {
+    for (const entry of entries) console.log(JSON.stringify(entry));
+    return;
+  }
 
   if (wantsJson) {
-    const entries = configured.map(name => {
-      const prov = config.providers[name];
-      const registryEntry = getProviderRegistryEntry(name);
-      return {
-        name,
-        adapter: prov.adapter,
-        baseUrl: prov.baseUrl,
-        authMode: prov.authMode ?? "key",
-        defaultModel: prov.defaultModel ?? null,
-        isDefault: name === config.defaultProvider,
-        source: registryEntry ? "registry" : "custom",
-        models: prov.models ?? [],
-      };
-    });
     console.log(JSON.stringify({ configured: entries, registryCount: PROVIDER_REGISTRY.length }, null, 2));
     return;
   }

@@ -57,7 +57,7 @@ to `requestedModel` is how you get a wrong answer about which provider served it
 One configured provider per line. Each object has the same fields as an item in the
 `configured` array from `ocx provider list --json`; the `registryCount` summary is omitted.
 
-## `ocx logs explain <request-id`
+## `ocx logs explain <request-id>`
 
 ```json
 {"requestId":"ocx-…","routeDecision":{"version":1,"decisionId":"…","requestedModel":"kiro/claude-opus-5",
