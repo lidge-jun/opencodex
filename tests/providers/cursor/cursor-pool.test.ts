@@ -39,7 +39,6 @@ describe("CursorCredentialRouter", () => {
     expect(cred.id).toBe("b");
   });
 });
-
 describe("CursorPoolKernel", () => {
   const accounts = [
     { id: "account-a", access: "access-a", expires: Number.MAX_SAFE_INTEGER },
@@ -149,9 +148,13 @@ describe("CursorPoolKernel", () => {
     const beforeClear = s.kernel.pick("a", "t2", s.capability)!;
     const clearSnapshot = s.kernel.activate("a", "t2", s.capability)!;
     s.kernel.clear(s.capability);
-    expect(s.kernel.pick("a", "t2", s.capability)?.accountRef).not.toBe(
-      beforeClear.accountRef,
-    );
+    // Old pre-clear snapshot is rejected by rollback
+    expect(s.kernel.rollback(clearSnapshot, s.capability)).toBe(false);
+    // Recreated key mints a new ref and acquires a strictly later monotonic generation
+    const afterClear = s.kernel.pick("a", "t2", s.capability)!;
+    expect(afterClear.accountRef).not.toBe(beforeClear.accountRef);
+    expect(afterClear.generation).toBeGreaterThan(clearSnapshot.generation);
+    // And rollback with the old snapshot still fails against the recreated key
     expect(s.kernel.rollback(clearSnapshot, s.capability)).toBe(false);
   });
 
@@ -172,13 +175,6 @@ describe("CursorPoolKernel", () => {
     const pick1 = s.kernel.pick("owner-a", "thread", s.capability)!;
     const originalRef = pick1.accountRef;
 
-    // Simulate account-a temporarily needing reauth or having expired token
-    s.setAccounts([
-      { id: "account-a", access: "access-a", expires: 500, needsReauth: true },
-      { id: "account-b", access: "access-b", expires: Number.MAX_SAFE_INTEGER },
-    ]);
-    // activate will see only account-b as usable, so < 2 usable accounts returns null
-    // But let's add account-c so activate succeeds
     s.setAccounts([
       { id: "account-a", access: "access-a", expires: 500, needsReauth: true },
       { id: "account-b", access: "access-b", expires: Number.MAX_SAFE_INTEGER },
@@ -187,7 +183,6 @@ describe("CursorPoolKernel", () => {
     const snap = s.kernel.activate("owner-b", "thread", s.capability);
     expect(snap).not.toBeNull();
 
-    // Now account-a is restored
     s.setAccounts(accounts);
     const pickRestored = s.kernel.pick("owner-a", "thread", s.capability)!;
     expect(pickRestored.accountRef).toBe(originalRef);
@@ -206,9 +201,7 @@ describe("CursorPoolKernel", () => {
     const s = setup();
     s.kernel.pick("owner-ephemeral", "thread", s.capability);
     s.advance(CURSOR_POOL_TTL_MS + 1);
-    // After TTL, next activate or pick triggers sweep and removes version
     s.kernel.pick("owner-other", "thread", s.capability);
-    // Rollback with stale generation should fail closed
     const staleSnap = {
       generation: 1,
       owner: "owner-ephemeral",
@@ -218,5 +211,31 @@ describe("CursorPoolKernel", () => {
     };
     expect(s.kernel.rollback(staleSnap, s.capability)).toBe(false);
   });
-});
 
+  test("activate and pick perform exactly one listAccounts store read and resolve pass per call", () => {
+    let listAccountsCalls = 0;
+    let resolveCalls = 0;
+    const capability = createCursorPoolCapability();
+    const kernel = new CursorPoolKernel(capability, () => 1_000, {
+      listAccounts: () => {
+        listAccountsCalls++;
+        return accounts;
+      },
+      resolveAccessToken: (id) => {
+        resolveCalls++;
+        return id === "account-a" ? "access-a" : "access-b";
+      },
+    });
+
+    const picked = kernel.pick("owner", "thread", capability);
+    expect(picked).not.toBeNull();
+    // Exactly 1 listAccounts call and 1 resolve pass per account (2 accounts)
+    expect(listAccountsCalls).toBe(1);
+    expect(resolveCalls).toBe(2);
+
+    const activated = kernel.activate("owner", "thread-2", capability);
+    expect(activated).not.toBeNull();
+    expect(listAccountsCalls).toBe(2);
+    expect(resolveCalls).toBe(4);
+  });
+});
