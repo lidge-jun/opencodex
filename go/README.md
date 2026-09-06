@@ -27,6 +27,32 @@ material only. This is a fresh codebase.
   exactly where the TypeScript runtime keeps it, so a Go-served read route
   answers from the real on-disk state; route bodies are pure functions of the
   subsection they read.
+- `internal/managementauth` — the Go management admission model (ticket #18):
+  admin-token, dashboard-session, and capability-principal validation
+  mirroring `src/server/management-auth.ts` and the `src/lib/*-contract.ts`
+  HMACs, including the replay stores and the exact 401/503 rejection bodies.
+  Substrate: the TS front door still admits every management request pre-flip;
+  this gate is what Go uses when it answers without that front door (write
+  batches #21–#23, authorization gate #26, flip).
+- `internal/labactivation` + `internal/routing/compatibility` — the Go
+  Compatibility Lab opt-in gate and the core-owned evidence-provider slot
+  (ticket #19), mirroring `src/lib/lab-activation.ts` and
+  `src/routing/compatibility/provider-slot.ts`. The gate reads the same
+  on-disk files the TS side reads (config.json routingProfiles,
+  lab/automation-config.json over the legacy automation-policy.json); the slot
+  registers only when the gate says the install uses Lab. Real Lab content
+  arrives with ticket #33.
+
+## Differential-oracle subcommands
+
+`ocx-sidecar authcheck <json>` evaluates admission vectors (request, state,
+config, local context) through the real Go gate and prints decisions; the Bun
+oracle (`tests/go-auth-parity.test.ts`) feeds the same arrays through
+`src/server/management-auth.ts` and compares byte for byte. `ocx-sidecar
+labcheck <configDir>` prints the Lab gate's three outputs for the Bun oracle
+(`tests/go-lab-gate-parity.test.ts`). Both are inert on the live path: the
+supervisor launches the sidecar with no arguments, so they only run when
+invoked directly.
 
 ## Building
 

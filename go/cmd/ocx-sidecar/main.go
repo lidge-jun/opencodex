@@ -32,6 +32,23 @@ func main() {
 }
 
 func run() error {
+	// Differential-oracle subcommands (ADR-0008 tickets #18/#19). The
+	// supervisor never passes an argument, so the live sidecar path is
+	// unaffected; these exist so the Bun oracle can evaluate the same request
+	// vectors and Lab-gate fixtures through the real Go code.
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "authcheck":
+			return runAuthCheck()
+		case "labcheck":
+			return runLabCheck()
+		}
+		return fmt.Errorf("unknown subcommand %q", os.Args[1])
+	}
+	return serve()
+}
+
+func serve() error {
 	// Bind first, announce second: the parent only starts forwarding once it
 	// has read the ready line, so announcing a listener that failed to bind
 	// would leave the front door waiting on a dead child.
