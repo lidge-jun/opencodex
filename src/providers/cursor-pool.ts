@@ -11,9 +11,10 @@ interface State { ref: string; owner: string; thread: string; cooldownUntil: num
 export interface CursorPoolPick { readonly accountRef: string; readonly token: string; readonly generation: number }
 export interface CursorPoolSnapshot { readonly generation: number; readonly owner: string; readonly thread: string; readonly refs: ReadonlyArray<string> }
 
-function usable(account: { credential?: { access?: string; refresh?: string; expires?: number }; needsReauth?: boolean }, now: number): boolean {
-  if (account.needsReauth === true || !account.credential) return false;
-  const c = account.credential;
+function usable(account: CursorPoolAccount | { credential?: CursorPoolAccount; needsReauth?: boolean }, now: number): boolean {
+  if (account.needsReauth === true) return false;
+  const c = ("credential" in account ? account.credential : account) as CursorPoolAccount | undefined;
+  if (!c) return false;
   return Boolean(c.access) && (!Number.isFinite(c.expires) || (c.expires as number) > now);
 }
 
