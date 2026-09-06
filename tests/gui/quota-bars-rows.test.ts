@@ -92,6 +92,14 @@ describe("buildQuotaRows (WP070)", () => {
     expect(rows.map(r => r.label)).toEqual(["quota.totalSubscriptionCredits"]);
   });
 
+  test("unrelated credit windows do not suppress direct subscription credits", () => {
+    const rows = buildQuotaRows(quota({
+      customWindows: [{ label: "API credits", percent: 20 }],
+      creditsUsd: { used: 50, limit: 100, remaining: 50, percent: 50 },
+    }), null, t);
+    expect(rows.map(r => r.label)).toEqual(["quota.totalSubscriptionCredits", "API credits"]);
+  });
+
   test("null and empty quotas produce no rows; 30-day plans strip to monthly", () => {
     expect(buildQuotaRows(null, null, t)).toEqual([]);
     expect(buildQuotaRows(quota({}), null, t)).toEqual([]);

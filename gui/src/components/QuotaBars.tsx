@@ -98,8 +98,10 @@ export function buildQuotaRows(quota: AccountQuota | null, plan: string | null |
     });
   }
   if (displayQuota.creditsUsd && typeof displayQuota.creditsUsd.percent === "number") {
-    const hasCreditCustom = displayQuota.customWindows?.some(w => /credits?/i.test(w.label));
-    if (!hasCreditCustom) {
+    const hasSubscriptionCreditsCustom = displayQuota.customWindows?.some(
+      w => w.label.trim().toLowerCase() === "total subscription credits",
+    );
+    if (!hasSubscriptionCreditsCustom) {
       const localized = localizeCustomQuotaLabel("Total subscription credits", t);
       ranked.push({
         rank: rawCustomWindowRank("Total subscription credits"),
