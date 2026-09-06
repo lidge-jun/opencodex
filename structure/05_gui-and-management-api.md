@@ -165,6 +165,22 @@ User aliases are display metadata only. Codex pool aliases live on `CodexAccount
 identity, active selection, and routing never consult these fields. The matching CLI is
 `ocx account alias <provider> <id> <display-name|->` (`rename` is accepted as a synonym).
 
+OAuth manual and automatic selection share `commitOAuthAccountSelection` in the auth store.
+The caller resolves a usable credential, commits its matching selection, then dispatches it;
+request-local token replacement must not leave a different dashboard account selected.
+Opaque selection revisions protect manual reselection and A→B→A changes from older requests.
+Credential-only refresh preserves the revision. Generic proactive routing is opt-in and retains
+a healthy selected account; reactive 429 recovery remains available even when the pool is off.
+API-key manual selection and failover similarly share `commitProviderApiKeySelection`, carrying
+stable entry identity and selection revision instead of comparing a resolved secret with an env reference.
+
+The authenticated `GET /api/accounts/events` stream invalidates account/key selection after
+successful persistence. Events contain provider/kind/revision only. The dashboard immediately
+reconciles the cheap local roster and preserves its quota rows; no upstream quota probe is caused
+by an event. One screen-owned stream has disconnect cleanup and bounded server subscribers;
+reconnection and the existing shared scheduler provide recovery. Codex retains its own established
+selection controller. These events cannot change credentials or select an account.
+
 Selection order is the opposite case and must not be folded into the alias route. `codexAccountPriorities`
 is routing metadata that Pool selection consults, it lives in config rather than on `CodexAccount` so the
 `__main__` Desktop login can carry one, and the alias route's rejection of `__main__` would be wrong for

@@ -815,10 +815,10 @@ export interface OcxConfig {
    * provider has 2 or more eligible stored accounts, the same consent rule an `apiKeyPool` of
    * two keys already applies, and a single account remains a strict no-op.
    *
-   * What `enabled: false` still refuses is the PRE-DISPATCH preference: steering a request
-   * upstream has not refused toward the account with more known headroom. That moves a healthy
-   * request, so it stays a real choice. `providers.<name>.oauthAccountFailover` overrides this
-   * per provider in either direction; reactive 429 rotation remains presence-driven.
+   * Proactive avoidance of an exhausted selected account requires `enabled: true`.
+   * A healthy selected account retains priority; an unknown quota is not exhaustion.
+   * `providers.<name>.oauthAccountFailover` overrides this per provider in either direction.
+   * Reactive 429 rotation remains presence-driven even when proactive routing is disabled.
    */
   oauthAccountFailover?: {
     enabled?: boolean;

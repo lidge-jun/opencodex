@@ -1,5 +1,5 @@
 import { usageSummary30dResourceKey } from "../usage-summary-resource";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import ProviderWorkspaceShell, { type AddProviderIntent } from "../components/provider-workspace/ProviderWorkspaceShell";
 import ProviderDetails from "../components/provider-workspace/ProviderDetails";
 import { isAccountProvider, type WorkspaceProvider } from "../provider-workspace/catalog";
@@ -8,7 +8,7 @@ import { oauthTosRisk } from "../oauth-tos-risk";
 import { ToastNotice, type NoticeTone } from "../ui";
 import { IconPlus } from "../icons";
 import { useT } from "../i18n/shared";
-import { useProviderAccountPools } from "../hooks/useProviderAccountPools";
+import { useProviderAccountPools, type AccountSelectionTarget } from "../hooks/useProviderAccountPools";
 import { useCodexAccountPool } from "../hooks/useCodexAccountPool";
 import { useJsonConfigEditor } from "../hooks/useJsonConfigEditor";
 import { useKeyedClientResource } from "../client-resource";
@@ -73,6 +73,137 @@ export function useQuotaRefreshCoordinator(apiBase: string) {
     return settled;
   }, [finish, invalidateProviderQuotas]);
   return { quotaRefresh, invalidateProviderQuotas, settleQuotaRefresh, beginQuotaRefresh };
+}
+
+/** One authenticated SSE connection, with bounded reconnect backoff and scheduler recovery. */
+function useAccountSelectionEvents(
+  apiBase: string,
+  enabled: boolean,
+  refresh: (target?: AccountSelectionTarget) => Promise<boolean>,
+) {
+  const refreshRef = useRef(refresh);
+  useLayoutEffect(() => { refreshRef.current = refresh; });
+  const recoverRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    if (!enabled) return;
+    let stopped = false;
+    let retryTimer: ReturnType<typeof window.setTimeout> | null = null;
+    let retryDelay = 250;
+    type Connection = { controller: AbortController; reader?: ReadableStreamDefaultReader<Uint8Array>; lastActivity: number; openedAt?: number };
+    let connection: Connection | null = null;
+    const clearRetry = () => {
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
+      retryTimer = null;
+    };
+    const close = (current: Connection) => {
+      current.controller.abort();
+      void current.reader?.cancel().catch(() => {});
+    };
+    const connect = () => {
+      if (stopped || connection) return;
+      clearRetry();
+      const current: Connection = { controller: new AbortController(), lastActivity: Date.now() };
+      connection = current;
+      void (async () => {
+        try {
+          // Native EventSource cannot send the session/relay headers installed by api.ts.
+          const response = await fetch(`${apiBase}/api/accounts/events`, {
+            signal: current.controller.signal, credentials: "same-origin", headers: { Accept: "text/event-stream" },
+          });
+          if (!response.ok || !response.headers.get("content-type")?.includes("text/event-stream") || !response.body) {
+            throw new Error("Account selection stream unavailable");
+          }
+          if (stopped || current.controller.signal.aborted) { await response.body.cancel(); return; }
+          const reader = response.body.getReader();
+          current.reader = reader;
+          current.openedAt = Date.now();
+          const decoder = new TextDecoder();
+          const revisions = new Map<string, number>();
+          const pending = new Map<string, AccountSelectionTarget>();
+          let refreshAll = false;
+          let queued = false;
+          const flush = () => {
+            if (queued) return;
+            queued = true;
+            void Promise.resolve().then(async () => {
+              queued = false;
+              if (stopped || current.controller.signal.aborted) return;
+              const targets = refreshAll ? [undefined] : [...pending.values()];
+              refreshAll = false;
+              pending.clear();
+              await Promise.all(targets.map(target => refreshRef.current(target)));
+            }).catch(() => { /* The recovery tick retries failed invalidation reads. */ });
+          };
+          let buffer = "";
+          let event = "";
+          let data: string[] = [];
+          let frameSize = 0;
+          const dispatch = () => {
+            let value: { provider?: unknown; kind?: unknown; revision?: unknown };
+            try { value = JSON.parse(data.join("\n")) as typeof value; } catch { return; }
+            if (!value || typeof value !== "object" || typeof value.revision !== "number" || !Number.isSafeInteger(value.revision) || value.revision < 0) return;
+            if (event === "ready") {
+              revisions.clear();
+              refreshAll = true;
+              flush();
+            } else if (event === "account-selection" && typeof value.provider === "string" && value.provider
+              && (value.kind === "oauth" || value.kind === "api-key")) {
+              const key = `${value.kind}:${value.provider}`;
+              if (value.revision <= (revisions.get(key) ?? -1)) return;
+              revisions.set(key, value.revision);
+              pending.set(key, { provider: value.provider, kind: value.kind });
+              flush();
+            }
+          };
+          while (!stopped && !current.controller.signal.aborted) {
+            const chunk = await reader.read();
+            if (chunk.done) break;
+            current.lastActivity = Date.now();
+            buffer += decoder.decode(chunk.value, { stream: true });
+            let end: number;
+            while ((end = buffer.indexOf("\n")) !== -1) {
+              const line = buffer.slice(0, end).replace(/\r$/, "");
+              buffer = buffer.slice(end + 1);
+              frameSize += line.length;
+              if (frameSize > 16_384) throw new Error("Account selection event too large");
+              if (!line) { dispatch(); event = ""; data = []; frameSize = 0; }
+              else if (line.startsWith("event:")) event = line.slice(6).replace(/^ /, "");
+              else if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
+            }
+            if (buffer.length + frameSize > 16_384) throw new Error("Account selection event too large");
+          }
+        } catch {
+          // api.ts owns authentication. Transport failures follow the same retry path as EOF.
+        } finally {
+          close(current);
+          if (connection === current) {
+            connection = null;
+            if (!stopped) {
+              // Only a stable connection resets backoff; repeated ready-then-EOF cannot spin.
+              if (current.openedAt !== undefined && Date.now() - current.openedAt >= 10_000) retryDelay = 250;
+              const delay = retryDelay;
+              retryDelay = Math.min(retryDelay * 2, 5_000);
+              retryTimer = window.setTimeout(() => { retryTimer = null; connect(); }, delay);
+            }
+          }
+        }
+      })();
+    };
+    const recover = () => {
+      // Also retire a hung handshake or a silent connection that lost its heartbeat.
+      if (connection && Date.now() - connection.lastActivity > 60_000) { close(connection); connection = null; }
+      connect();
+    };
+    recoverRef.current = recover;
+    connect();
+    return () => {
+      stopped = true;
+      recoverRef.current = () => {};
+      clearRetry();
+      if (connection) close(connection);
+    };
+  }, [apiBase, enabled]);
+  return useCallback(() => recoverRef.current(), []);
 }
 
 export default function Providers({ apiBase }: { apiBase: string }) {
@@ -243,9 +374,23 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   });
   const {
     accountSets, setAccountSets, accountLoadStates, switchingAccount, keyPools, fetchAccountSets, fetchKeyPools,
+    refreshAccountRosters, oauthCardProviders, keyCardProviders,
     switchAccount, switchApiKey, removeApiKey, addApiKeyValue, editCredentialAlias,
     removeAccount, activeAccountNeedsReauth,
   } = pools;
+  const refreshSelection = useCallback((target?: AccountSelectionTarget) => {
+    if (target && !(target.kind === "oauth" ? oauthCardProviders : keyCardProviders).includes(target.provider)) return Promise.resolve(true);
+    return refreshAccountRosters(target);
+  }, [refreshAccountRosters, oauthCardProviders, keyCardProviders]);
+  const recoverSelectionStream = useAccountSelectionEvents(apiBase, config !== null, refreshSelection);
+  const rosterKey = JSON.stringify([apiBase, oauthCardProviders.toSorted(), keyCardProviders.toSorted()]);
+  const rosterRecoveryKeyRef = useRef<string | null>(null);
+  useKeyedClientResource(`provider-rosters:${rosterKey}`, [rosterKey], async signal => {
+    // Existing bootstrap effects own the first enriched reads. This resource is recovery only.
+    if (rosterRecoveryKeyRef.current !== rosterKey) { rosterRecoveryKeyRef.current = rosterKey; return true; }
+    recoverSelectionStream();
+    return refreshAccountRosters(undefined, signal);
+  }, { enabled: config !== null, pollMs: 30_000 });
   const jsonEditor = useJsonConfigEditor({
     apiBase, config,
     notify,

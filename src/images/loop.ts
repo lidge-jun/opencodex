@@ -253,6 +253,8 @@ export interface ImageBridgeDeps {
   stallTimeoutSec?: number;
   /** Provider-specific fetch (e.g. xAI transport wrapper). Falls back to global fetch. */
   fetchImpl?: typeof globalThis.fetch;
+  /** Bind physical dispatch to this iteration's built request; pacing remains owned by the loop. */
+  fetchForRequest?: (request: AdapterRequest, parsed: OcxParsedRequest) => typeof globalThis.fetch;
   /** Reserve the routed provider's next request-start slot before each adapter dispatch. */
   waitForRequestSlot?: (signal?: AbortSignal) => Promise<void>;
   /** Raw adapter usage at the terminal event, pre wire-normalization (see bridgeToResponsesSSE onUsage). */
@@ -499,6 +501,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
           cachedRequest = request;
           cachedAdapter = requestAdapter;
         }
+        const requestFetch = deps.fetchForRequest?.(request, iterParsed) ?? fetchImpl;
         let response: Response;
         try {
           if (requestAdapter.fetchResponse) {
@@ -509,7 +512,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
               timeoutMs: connectTimeoutMs,
               returnRawErrors: true,
               stream: true,
-              executor: fetchImpl,
+              executor: requestFetch,
             });
           } else {
             response = await fetchWithResetRetry(
@@ -524,7 +527,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
                 // Same reset-recovery parity as the web-search loop: the replay needs
                 // `keepalive: false` to abandon the pooled socket, because Bun has ignored the
                 // hop-by-hop header alone (oven-sh/bun#20492).
-                return fetchImpl(request.url, applyUpstreamRecoveryInit({
+                return requestFetch(request.url, applyUpstreamRecoveryInit({
                   method: request.method,
                   headers: h,
                   body: request.body,

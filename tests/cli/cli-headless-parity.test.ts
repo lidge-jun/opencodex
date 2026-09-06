@@ -232,6 +232,7 @@ describe("headless GUI parity CLI", () => {
       // skipping the endpoint.
       ["/api/github/star", "(none — GUI-only)"],
       ["/api/oauth", "ocx account"],
+      ["/api/accounts/events", "(none — dashboard invalidation; ocx account reads current selection)"],
       ["/api/providers/keys", "ocx account"],
       ["/api/providers", "ocx provider"],
       ["/api/provider-", "ocx provider/models"],

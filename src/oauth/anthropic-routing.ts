@@ -15,7 +15,8 @@
  * store (existing OAuth path) so the account is excluded from eligibility.
  */
 import { createHash } from "node:crypto";
-import { setActiveAccount, getAccountSet, getAccountCredential } from "./store";
+import { captureOAuthAccountSelection, commitOAuthAccountSelection, credentialGeneration, getAccountSet, getAccountCredential, getAccountCredentialWithStatus } from "./store";
+import type { OAuthAccessSnapshot } from "./index";
 import { getCachedProviderAccountQuota } from "../providers/quota";
 import { fallbackCodexAccountLogLabel } from "../codex/account-label";
 import {
@@ -24,6 +25,7 @@ import {
   notePoolRotationFailure,
   notePoolRotationSuccess,
   pickRoundRobinAccount,
+  peekRoundRobinAccount,
   POOL_KEY_ANTHROPIC,
   seedPoolRotationAccount,
 } from "../codex/pool-rotation";
@@ -68,6 +70,10 @@ interface AffinityEntry {
 
 const upstreamHealth = new Map<string, AccountHealth>();
 const sessionAffinity = new Map<string, AffinityEntry>();
+type OAuthAccountSelection = NonNullable<ReturnType<typeof captureOAuthAccountSelection>>;
+// Undefined means this runtime has not admitted a selection yet; null means consumed.
+// The startup baseline comes from the authoritative store, never a second persisted pin.
+let manualPreference: OAuthAccountSelection | null | undefined;
 
 function normalizeAffinityComponent(value: string | null | undefined): string {
   const normalized = value?.trim() ?? "";
@@ -152,6 +158,7 @@ export function sweepExpiredAnthropicRoutingHealth(now = Date.now()): number {
 export function clearAnthropicAccountPoolState(): void {
   upstreamHealth.clear();
   sessionAffinity.clear();
+  manualPreference = undefined;
   quorumCache = null;
 }
 
@@ -409,7 +416,7 @@ function pickAlternateAnthropicAccount(
   const strategy = anthropicPoolStrategy(config);
   const eligible = getEligibleAnthropicAccounts(now).filter(id => id !== excludeId);
   if (strategy === "round-robin") {
-    return pickRoundRobinAccount(POOL_KEY_ANTHROPIC, eligible, stickyLimitForPool(config));
+    return peekRoundRobinAccount(POOL_KEY_ANTHROPIC, eligible, stickyLimitForPool(config));
   }
   if (strategy === "fill-first") {
     return pickNextFillFirstAnthropicAccount(config, excludeId, eligible);
@@ -434,6 +441,7 @@ export type AnthropicAccountSelectionReason =
   | "lowest-usage"
   | "only-eligible"
   | "round-robin"
+  | "manual"
   | "fill-first"
   | "none"
   | "all-cooled";
@@ -500,9 +508,8 @@ function pickUnboundStrategyAccount(
   if (strategy === "round-robin") {
     const eligible = getEligibleAnthropicAccounts(now);
     const limit = stickyLimitForPool(config);
-    const picked = pickRoundRobinAccount(POOL_KEY_ANTHROPIC, eligible, limit);
+    const picked = peekRoundRobinAccount(POOL_KEY_ANTHROPIC, eligible, limit);
     if (!picked) return null;
-    notePoolRotationSuccess(POOL_KEY_ANTHROPIC, picked, limit);
     return { accountId: picked, reason: "round-robin" };
   }
 
@@ -528,8 +535,31 @@ export function resolveAnthropicAccountForSession(
   const set = getAccountSet(PROVIDER);
   if (!set || set.accounts.length === 0) return { accountId: null, reason: "none" };
 
+  if (manualPreference === undefined) {
+    manualPreference = set.selectionRevision !== undefined
+      ? { accountId: set.activeAccountId, revision: set.selectionRevision }
+      : null;
+  }
+
   if (!isAnthropicAccountPoolEnabled(config)) {
     return { accountId: set.activeAccountId, reason: "pool-disabled" };
+  }
+
+  // A manual choice is a one-dispatch preference, not a lower-priority quota hint.
+  // Consume it only after admission commits, so a failed token lookup cannot spend it.
+  if (manualPreference) {
+    if (manualPreference.accountId !== set.activeAccountId || manualPreference.revision !== set.selectionRevision) {
+      manualPreference = null;
+    } else {
+      const chosen = manualPreference.accountId;
+      const quota = getCachedProviderAccountQuota(PROVIDER, chosen);
+      const exhausted = [quota?.fiveHourPercent, quota?.weeklyPercent, quota?.monthlyPercent,
+        ...(quota?.customWindows ?? []).map(window => window.percent)]
+        .some(percent => typeof percent === "number" && percent >= 100);
+      if (!exhausted && getEligibleAnthropicAccounts(now).includes(chosen)) {
+        return { accountId: chosen, reason: "manual" };
+      }
+    }
   }
 
   const key = normalizeAffinityComponent(sessionKey);
@@ -538,7 +568,6 @@ export function resolveAnthropicAccountForSession(
     if (affined && now - affined.lastUsedAt <= AFFINITY_IDLE_TTL_MS) {
       const stillThere = set.accounts.some(a => a.id === affined.accountId && a.needsReauth !== true);
       if (stillThere && !isCooled(affined.accountId, now) && isPoolCredentialUsable(affined.accountId, now)) {
-        affined.lastUsedAt = now;
         return { accountId: affined.accountId, reason: "affinity" };
       }
       sessionAffinity.delete(key);
@@ -560,12 +589,6 @@ export function resolveAnthropicAccountForSession(
 
   const strategyPick = pickUnboundStrategyAccount(config, now);
   if (strategyPick) {
-    // Do not promote active here — token validation may still fail. Callers
-    // (responses/core) promote after getAnthropicPoolAccessToken succeeds.
-    if (key && normalizeAffinityComponent(strategyPick.accountId)) {
-      sessionAffinity.set(key, { accountId: strategyPick.accountId, lastUsedAt: now });
-      pruneExpiredAffinity(now);
-    }
     return { accountId: strategyPick.accountId, reason: strategyPick.reason };
   }
 
@@ -611,10 +634,6 @@ export function resolveAnthropicAccountForSession(
     return { accountId: null, reason: anyCooled ? "all-cooled" : "none" };
   }
 
-  if (key && normalizeAffinityComponent(accountId)) {
-    sessionAffinity.set(key, { accountId, lastUsedAt: now });
-    pruneExpiredAffinity(now);
-  }
   return { accountId, reason };
 }
 
@@ -684,20 +703,57 @@ export function rotateAnthropicAccountOn429(
     return null;
   }
 
-  const affinityKey = normalizeAffinityComponent(sessionKey);
-  if (affinityKey && normalizeAffinityComponent(next)) {
-    sessionAffinity.set(affinityKey, { accountId: next, lastUsedAt: now });
-    pruneExpiredAffinity(now);
-  }
   console.warn(
     `[anthropic-pool] 429 on ${formatAnthropicAccountOrdinal(failedAccountId)}; failing over to ${formatAnthropicAccountOrdinal(next)}`,
   );
   return next;
 }
 
-/** Promote dashboard active account after a validated failover target is usable. */
-export function promoteAnthropicActiveAccount(accountId: string): void {
-  void setActiveAccount(PROVIDER, accountId).catch(() => { /* best-effort */ });
+export interface AnthropicSelectionRoutingOptions {
+  config: OcxConfig;
+  sessionKey?: string | null;
+  reason?: AnthropicAccountSelectionReason;
+  expectedCredentialGeneration?: string;
+}
+
+/** Commit the selected account before dispatch; rejected proposals have no routing side effects. */
+export async function promoteAnthropicActiveAccount(
+  accountId: string,
+  expectedSelection: OAuthAccountSelection | null,
+  options: AnthropicSelectionRoutingOptions,
+): Promise<OAuthAccountSelection | null> {
+  if (!expectedSelection || !isPoolCredentialUsable(accountId, Date.now()) || isCooled(accountId, Date.now())) return null;
+  const committed = await commitOAuthAccountSelection(PROVIDER, accountId, {
+    expectedSelection,
+    expectedCredentialGeneration: options.expectedCredentialGeneration,
+    requireUsableAccount: true,
+  });
+  if (!committed) return null;
+  return commitAnthropicSelectionRouting(accountId, expectedSelection, committed, options) ? committed : null;
+}
+
+/** Main's shared selection owner calls this only after its authoritative commit succeeds. */
+export function commitAnthropicSelectionRouting(
+  accountId: string,
+  expectedSelection: OAuthAccountSelection,
+  committed: OAuthAccountSelection,
+  options: AnthropicSelectionRoutingOptions,
+): boolean {
+  if (committed.accountId !== accountId) return false;
+  const current = captureOAuthAccountSelection(PROVIDER);
+  if (current?.accountId !== committed.accountId || current.revision !== committed.revision) return false;
+  if (isAnthropicAccountPoolEnabled(options.config)) {
+    if (anthropicPoolStrategy(options.config) === "round-robin" && options.reason !== "affinity") {
+      const limit = stickyLimitForPool(options.config);
+      const picked = pickRoundRobinAccount(POOL_KEY_ANTHROPIC, getEligibleAnthropicAccounts(), limit);
+      if (picked !== accountId) seedPoolRotationAccount(POOL_KEY_ANTHROPIC, accountId);
+      notePoolRotationSuccess(POOL_KEY_ANTHROPIC, accountId, limit);
+    }
+    bindAnthropicSessionAffinity(options.sessionKey, accountId);
+  }
+  if (manualPreference === undefined || (manualPreference?.accountId === expectedSelection.accountId
+    && manualPreference.revision === expectedSelection.revision)) manualPreference = null;
+  return true;
 }
 
 /**
@@ -706,6 +762,7 @@ export function promoteAnthropicActiveAccount(accountId: string): void {
  */
 export function resetAnthropicRoutingForManualSelection(accountId: string): void {
   sessionAffinity.clear();
+  manualPreference = captureOAuthAccountSelection(PROVIDER);
   seedPoolRotationAccount(POOL_KEY_ANTHROPIC, accountId);
   // A manual account selection is an operator statement about the roster; do not answer the
   // next activation question from a count read before it.
@@ -729,6 +786,17 @@ export async function getAnthropicPoolAccessToken(accountId: string): Promise<st
   }
   const { getValidAccessTokenForAccount } = await import("./index");
   return getValidAccessTokenForAccount(PROVIDER, accountId);
+}
+
+/** Resolve through the pool's local-CLI restrictions, then bind the exact returned generation. */
+export async function getAnthropicPoolAccessSnapshot(accountId: string): Promise<OAuthAccessSnapshot> {
+  const accessToken = await getAnthropicPoolAccessToken(accountId);
+  const row = getAccountCredentialWithStatus(PROVIDER, accountId);
+  if (!row || row.needsReauth || row.credential.access !== accessToken
+    || row.credential.expires <= Date.now()) {
+    throw new Error("Anthropic pool credential changed during account selection");
+  }
+  return { provider: PROVIDER, accountId, accessToken, generation: credentialGeneration(row.credential) };
 }
 
 /**

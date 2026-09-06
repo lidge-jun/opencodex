@@ -96,6 +96,15 @@ badge or the version value to read the full value.
 | **Storage** | Read-only CODEX_HOME disk breakdown (sessions, archives, DBs, attachments). Optional archived cleanup: preview the oldest N%, then quarantine to `CODEX_HOME/.trash` (default) or permanently delete behind an explicit checkbox. **Auto-cleanup policy** is opt-in and **default OFF** (`storageCleanupPolicy.enabled`); configure threshold/target/schedule/mode on the Storage page, or trigger **Run now**. Quarantined entries can be restored from the Storage page (JSONL + threads). Active sessions stay read-only. Cleanup and restore are refused while Codex holds the newest/active `state_*.sqlite` locked. |
 | **Stop** | Gracefully stop the proxy and installed background service, restore native Codex, and exit (`POST /api/stop`). On Windows with the Task Scheduler backend the dashboard refuses and asks you to run `ocx stop` instead: that wrapper can respawn the proxy after the task ends, and only a stop running outside this process can verify the restart window before restoring your client config. Nothing is changed when it refuses. |
 
+### Account selection
+
+Account selection is shared with request routing. Selecting an OAuth account takes effect on the
+next request even when a pool is enabled. A healthy selection is not replaced merely because
+another generic OAuth account has more unused quota. If the account returns 429, automatic
+failover can still select another usable account with the pool off. A committed automatic
+selection updates the dashboard immediately; account changes do not wait for the quota refresh
+timer. Requests already sent upstream retain their original credentials.
+
 ### Filtering request logs
 
 Logs filters combine surface, intercepted requests, provider, exact model, status, time,

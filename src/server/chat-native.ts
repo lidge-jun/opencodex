@@ -37,6 +37,8 @@ import {
   transientRetryPolicyFor,
 } from "../providers/key-failover";
 import { fastPolicyForModel } from "../providers/service-tier";
+import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../providers/api-key-selection";
+import type { OcxProviderTransport } from "../providers/xai-transport";
 import type { RouteResult } from "../router";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel } from "./responses/fetch-helpers";
@@ -228,7 +230,6 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
       const fetchWithPolicy = requestTransientPolicy ? fetchWithTransientRetry : fetchWithResetRetry;
       return await fetchWithPolicy(
         (transportRecovery?: UpstreamSendRecovery) => {
-          noteAttemptSend(attempt, logCtx.usageLogInputTokens, transportRecovery ?? recovery);
           return fetchWithHeaderTimeout(
             request.url,
             applyUpstreamRecoveryInit({
@@ -242,6 +243,32 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
             providerFetch(activeProvider, undefined, {
               providerName: route.providerName,
               modelId: route.modelId,
+              dispatchOverride: async (_input, init, execute) => {
+                if (!providerApiKeySelectionIsCurrent(config, route.providerName, activeProvider)) {
+                  const current = resolveCurrentProviderApiKeyTransport(config, route.providerName, activeProvider);
+                  if (!current || !isNativeChatRouteEligible({ ...route, provider: current }, options.chatBody)) {
+                    throw new Error("Provider key selection is no longer available for native Chat");
+                  }
+                  activeProvider = current;
+                  activeAdapter = createOpenAIChatAdapter(current);
+                  activeRequest.releaseBodyObservation?.();
+                  releaseRetainedRequest();
+                  activeRequest = buildActiveRequest();
+                  try { retainRequest(activeRequest); }
+                  catch (error) { activeRequest.releaseBodyObservation?.(); throw error; }
+                }
+                // The retry closure may still hold a pre-pacing request. Replace its entire
+                // wire shape, not just Authorization, and retain transport recovery flags.
+                request = activeRequest;
+                const headers = new Headers(request.headers);
+                const encoding = new Headers(init.headers).get("accept-encoding");
+                if (!headers.has("accept-encoding") && encoding) headers.set("accept-encoding", encoding);
+                if (init.signal?.aborted) throw init.signal.reason;
+                noteAttemptSend(attempt, logCtx.usageLogInputTokens, transportRecovery ?? recovery);
+                return ((activeProvider as OcxProviderTransport).fetch ?? execute)(request.url, applyUpstreamRecoveryInit({
+                  ...init, method: request.method, headers, body: request.body,
+                }, transportRecovery));
+              },
             }),
           );
         },
@@ -286,6 +313,7 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
         retryAfter: response.headers.get("retry-after"),
         now: Date.now(),
         attemptedKey: activeProvider.apiKey,
+        attemptedSelection: activeProvider._apiKeyAttempt,
         promptCacheKey: typeof options.chatBody.prompt_cache_key === "string" ? options.chatBody.prompt_cache_key : undefined,
       });
       if (!rotated) break;
@@ -306,6 +334,9 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
     cleanupAbort();
     upstream.abort();
     if (req.signal.aborted) return fail(499, "Client cancelled request", "client_cancelled");
+    if (isTranslatorBudgetExceededError(error)) {
+      return fail(413, "request translation buffer exceeded the safe limit", "request_too_large", "translation_buffer_limit");
+    }
     return fail(502, error instanceof Error ? error.message : String(error), "server_error");
   }
   releaseRetainedRequest();

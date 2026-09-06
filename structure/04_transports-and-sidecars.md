@@ -1555,7 +1555,7 @@ surface is listed here so a maintainer can find the owner without grepping:
 | Hosted search relay | `src/server/search.ts` | Direct relay; distinct from the web-search sidecar loop below. |
 | Image/video generation loop | `src/images/loop.ts`, `src/images/plan.ts`, `src/images/fulfill.ts`, `src/images/xai-client.ts`, `src/images/xai-video-client.ts`, `src/images/artifacts.ts` | A provider-returned image URL is downloaded into a local artifact once, then served locally; warnings stay URL-free because provider CDN URLs may embed credentials. |
 | GitHub Copilot | `src/providers/xai-transport.ts` (`resolveProviderTransport`), `src/providers/github-copilot-transport.ts` | `resolveProviderTransport` selects the Copilot transport when the routed provider name is `github-copilot`; the Copilot module then resolves its headers and base URL, and the registry seeds the provider row and model fallback. |
-| API-key pools | `src/providers/key-failover.ts` | A 429 rotates the active key and records a cooldown; `provider.apiKey` keeps mirroring the active entry so routing stays single-key. |
+| API-key pools | `src/providers/api-key-selection.ts`, `src/providers/key-failover.ts` | A 429 rotates the active key and records a cooldown; `provider.apiKey` keeps mirroring the active entry so routing stays single-key. |
 | OAuth account failover | `src/oauth/generic-account-failover.ts`, `src/oauth/anthropic-routing.ts` | Reactive pre-output 429 recovery is presence-driven with 2+ eligible accounts. Pool and `oauthAccountFailover` flags govern proactive routing, not the reactive retry: a disabled Anthropic pool recovers through quota ordering rather than its dormant strategy, and a per-provider `enabled` beats the global default in either direction. |
 | Alibaba regions | `src/providers/alibaba-region-backup.ts`, `src/providers/alibaba-region-migration.ts`, `src/providers/alibaba-region-startup.ts` | Region migration backs up before rewriting and is idempotent across restarts. |
 | Discovery and quota | `src/providers/model-discovery.ts`, `src/providers/quota.ts` | Discovery rejects a response over 4 MiB or past 2,000 raw rows before caching it. |
@@ -1639,3 +1639,9 @@ object guard, JSON block encoder and retained-item shape live in the dependency-
 free `responses-snapshot-codec.ts`. Core imports each tracker directly. No existing
 snapshot export moves, and neither tracker imports the core dispatcher. The Grok
 marker selects compatibility behavior and conveys no authenticated client identity.
+
+Manual and automatic OAuth/API-key selection commit through their shared selection owners before
+dispatch. Selection revisions fence stale retries and reselection; request identity includes the
+actual committed account/key. Generic proactive selection is opt-in and preserves a healthy active
+account, while reactive429 recovery remains enabled even with the pool off. Post-commit selection
+events immediately invalidate dashboard roster state; see`05_gui-and-management-api.md`.

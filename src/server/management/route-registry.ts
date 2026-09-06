@@ -26,6 +26,8 @@ export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD";
  * can check, not a way to quiet the parity test.
  */
 export type ExemptionReason =
+  /** Invalidates dashboard state; the CLI reads the underlying resource directly. */
+  | "gui-invalidation"
   /** Requires a dashboard browser session. Includes the user-consent star boundary. */
   | "session-only"
   /** Deliberately returns 405; there is nothing to drive. */
@@ -256,6 +258,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/key-providers", module: "server/management/oauth-account-routes", mutates: false },
   { method: "GET", path: "/api/keys", module: "server/management/oauth-account-routes", mutates: false },
   { method: "GET", path: "/api/oauth/accounts", module: "server/management/oauth-account-routes", mutates: false },
+  { method: "GET", path: "/api/accounts/events", module: "server/management/oauth-account-routes", mutates: false, exempt: { reason: "gui-invalidation", why: "Dashboard selection invalidation stream; CLI account commands read the authoritative account/key resources directly rather than subscribing to browser refresh notifications." } },
   { method: "GET", path: "/api/oauth/accounts/pool", module: "server/management/oauth-account-routes", mutates: false },
   { method: "GET", path: "/api/oauth/providers", module: "server/management/oauth-account-routes", mutates: false },
   { method: "GET", path: "/api/oauth/status", module: "server/management/oauth-account-routes", mutates: false },

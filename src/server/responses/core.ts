@@ -118,18 +118,19 @@ import {
   type OAuthAccessSnapshot,
   UnsupportedOAuthProviderError,
 } from "../../oauth";
+import { captureOAuthAccountSelection, commitOAuthAccountSelection, credentialGeneration, getAccountCredentialWithStatus } from "../../oauth/store";
 import {
   ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
   anthropicSessionKeyFromParts,
-  bindAnthropicSessionAffinity,
+  commitAnthropicSelectionRouting,
   formatAnthropicProviderForLog,
-  getAnthropicPoolAccessToken,
+  getAnthropicPoolAccessSnapshot,
   getAnthropicPoolRetryAfterSeconds,
   isAnthropicAccountPoolEnabled,
   hasAnthropicFailoverQuorum,
-  promoteAnthropicActiveAccount,
   resolveAnthropicAccountForSession,
   rotateAnthropicAccountOn429,
+  type AnthropicAccountSelectionReason,
 } from "../../oauth/anthropic-routing";
 import { stampOAuthAccountLabel } from "../../providers/label";
 import {
@@ -241,6 +242,7 @@ import {
   type InboundWire,
 } from "../../providers/registry";
 import type { AdapterRequest, ProviderAdapter } from "../../adapters/base";
+import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../../providers/api-key-selection";
 import {
   hasKeyPoolFailover,
   rateLimitRetryDelayMs,
@@ -358,7 +360,7 @@ import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/cat
 import { buildToolBridgeMaps, collabSurface, injectDeveloperMessage, multiAgentGuidanceText } from "./collaboration";
 import { mapCodexAuthContextErrorToResponse, nativeMainRefreshFailureResponse } from "./codex-auth-error";
 import { hasUnreadableEncryptedAgentTask, looksLikeBackendCiphertext, sanitizeEncryptedContentInPlace } from "./encrypted-payload";
-import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel, storedPoolReplayDispatchNotifier } from "./fetch-helpers";
+import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel, storedPoolReplayDispatchNotifier, type ProviderFetchOptions } from "./fetch-helpers";
 import { classifyTransportFailureKind, transportErrorCode } from "../../lib/upstream-reachability";
 import {
   acquireUpstreamHostAdmission,
@@ -3673,6 +3675,82 @@ async function handleResponsesInner(
   // the request actually used, so a concurrent rotation cannot cool an innocent replacement.
   let genericFailoverAccountId: string | null = null;
   let genericFailovers = 0;
+  let oauthSelection = route.provider.authMode === "oauth"
+    ? captureOAuthAccountSelection(route.providerName) : null;
+  let servingOAuthSnapshot: OAuthAccessSnapshot | undefined;
+  // These owners also serve early passthrough and sidecar sends. A dispatch-time
+  // rebuild must update every later builder, without entering a later block's TDZ.
+  let adapter: ProviderAdapter;
+  let activeAdapter: ProviderAdapter;
+  let runTurnAdapter: ProviderAdapter;
+  let sameTargetRequest: AdapterRequest | undefined;
+  let sameTargetParsed: OcxParsedRequest | undefined;
+  let sameTargetToken = 0;
+  let transportToken = 0;
+  let imageTierBias = 0;
+  const invalidateSameTargetRequest = (): void => { transportToken += 1; };
+  type DispatchBinding =
+    | { kind: "oauth"; selection: NonNullable<typeof oauthSelection>; snapshot: OAuthAccessSnapshot }
+    | { kind: "api-key"; provider: OcxProviderConfig };
+  const requestBindings = new WeakMap<AdapterRequest, DispatchBinding>();
+  const adapterBindings = new WeakMap<ProviderAdapter, DispatchBinding>();
+  const rawRunTurns = new WeakMap<ProviderAdapter, NonNullable<ProviderAdapter["runTurn"]>>();
+  const commitResolvedOAuthSelection = async (
+    candidate: OAuthAccessSnapshot,
+    proactive = false,
+    anthropicReason?: AnthropicAccountSelectionReason,
+  ): Promise<OAuthAccessSnapshot | null> => {
+    const maxSelectionAttempts = 3;
+    for (let attempt = 0; attempt < maxSelectionAttempts; attempt++) {
+      if (!oauthSelection) return null;
+      const proactiveEnabled = route.providerName === "anthropic"
+        ? isAnthropicAccountPoolEnabled(config)
+        : (config.providers[route.providerName]?.oauthAccountFailover?.enabled
+          ?? config.oauthAccountFailover?.enabled) === true;
+      if (proactive && candidate.accountId !== oauthSelection.accountId && !proactiveEnabled) {
+        oauthSelection = captureOAuthAccountSelection(route.providerName);
+        if (!oauthSelection) return null;
+        candidate = route.providerName === "anthropic"
+          ? await getAnthropicPoolAccessSnapshot(oauthSelection.accountId)
+          : await getValidAccessSnapshotForAccount(route.providerName, oauthSelection.accountId, { requireUsableAccount: true });
+      }
+      const committed = await commitOAuthAccountSelection(route.providerName, candidate.accountId, {
+        expectedSelection: oauthSelection,
+        expectedCredentialGeneration: candidate.generation,
+        requireUsableAccount: true,
+      });
+      if (committed) {
+        if (route.providerName === "anthropic" && !commitAnthropicSelectionRouting(
+          candidate.accountId, oauthSelection, committed,
+          { config, sessionKey: anthropicSessionKey, reason: anthropicReason, expectedCredentialGeneration: candidate.generation },
+        )) return null;
+        oauthSelection = committed;
+        servingOAuthSnapshot = candidate;
+        forgetGenericFailoverRoster(route.providerName);
+        return candidate;
+      }
+      // A newer manual choice wins over this request's old proposal, including A→B→A.
+      // Resolve that choice, not the rejected candidate, before trying admission again.
+      oauthSelection = captureOAuthAccountSelection(route.providerName);
+      if (!oauthSelection) return null;
+      candidate = route.providerName === "anthropic"
+        ? await getAnthropicPoolAccessSnapshot(oauthSelection.accountId)
+        : await getValidAccessSnapshotForAccount(route.providerName, oauthSelection.accountId, { requireUsableAccount: true });
+      if (route.provider.googleMode === "cloud-code-assist" && !candidate.projectId) return null;
+    }
+    return null;
+  };
+  const refreshResolvedOAuthSelection = async (sent: OAuthAccessSnapshot): Promise<OAuthAccessSnapshot> => {
+    const current = captureOAuthAccountSelection(route.providerName);
+    const unchanged = current?.accountId === oauthSelection?.accountId
+      && current?.revision === oauthSelection?.revision;
+    const candidate = unchanged ? await forceRefreshOAuthAccessSnapshot(sent) : sent;
+    const admitted = await commitResolvedOAuthSelection(candidate);
+    if (!admitted) throw new Error("OAuth selection changed during credential recovery");
+    genericFailoverAccountId = admitted.accountId;
+    stampOAuthAccountLabel(logCtx, route.providerName, route.provider, admitted.accountId);
+    return admitted;
+  };
   /**
    * Config generation captured where the serving credential is RESOLVED, not where the
    * quota is written. A streaming turn is a long await, so a generation captured at write
@@ -3701,11 +3779,14 @@ async function handleResponsesInner(
    *   tolerates project discovery failing, so a stored account can legitimately have no project;
    *   sending that account's bearer with the FAILED account's project is worse than not rotating.
    */
-  const applyFailoverSnapshot = (
+  const applyFailoverSnapshot = async (
     snapshot: OAuthAccessSnapshot,
     retryParsed: OcxParsedRequest = parsed,
-  ): boolean => {
+  ): Promise<boolean> => {
     if (route.provider.googleMode === "cloud-code-assist" && !snapshot.projectId) return false;
+    const committed = await commitResolvedOAuthSelection(snapshot);
+    if (!committed) return false;
+    snapshot = committed;
     let rotatedProvider: OcxProviderConfig = { ...route.provider, apiKey: snapshot.accessToken };
     if (route.providerName === "github-copilot") {
       rotatedProvider = resolveProviderTransport(
@@ -3729,7 +3810,148 @@ async function handleResponsesInner(
     // served it. All three rotation sites funnel through here, so this is the only re-stamp
     // needed -- and putting it anywhere else would let one of the three drift.
     stampOAuthAccountLabel(logCtx, route.providerName, route.provider, snapshot.accountId);
+    if (route.providerName === "anthropic") {
+      anthropicPoolAccountId = snapshot.accountId;
+      logCtx.provider = formatAnthropicProviderForLog("anthropic", snapshot.accountId, config);
+    } else {
+      genericFailoverAccountId = snapshot.accountId;
+    }
+    sentOAuthSnapshot = snapshot;
+    replayOAuthCredentialSnapshot = { accountId: snapshot.accountId, generation: snapshot.generation };
     return true;
+  };
+  const selectionIsCurrent = (binding: DispatchBinding | undefined): boolean => {
+    if (route.provider.authMode === "forward") return true;
+    if (!binding) return false;
+    if (binding.kind === "api-key") return providerApiKeySelectionIsCurrent(config, route.providerName, binding.provider);
+    const selected = captureOAuthAccountSelection(route.providerName);
+    const row = getAccountCredentialWithStatus(route.providerName, binding.snapshot.accountId);
+    return selected?.accountId === binding.selection.accountId && selected?.revision === binding.selection.revision
+      && !!row && !row.needsReauth && row.credential.expires > Date.now()
+      && credentialGeneration(row.credential) === binding.snapshot.generation;
+  };
+  const resolveSelectionAdapter = (provider: OcxProviderConfig, retention = config.cacheRetention): ProviderAdapter => {
+    const resolved = resolveAdapter(provider, retention);
+    if (route.provider.authMode === "forward") return resolved;
+    const binding: DispatchBinding | undefined = route.provider.authMode === "oauth"
+      ? oauthSelection && servingOAuthSnapshot
+        ? { kind: "oauth", selection: { ...oauthSelection }, snapshot: servingOAuthSnapshot }
+        : undefined
+      : { kind: "api-key", provider: { ...route.provider } };
+    if (binding) adapterBindings.set(resolved, binding);
+    const build = resolved.buildRequest.bind(resolved);
+    resolved.buildRequest = async (requestParsed, incoming) => {
+      const request = await build(requestParsed, incoming);
+      // Capture at adapter creation, never from mutable serving state after an await.
+      if (binding) requestBindings.set(request, binding);
+      return request;
+    };
+    if (resolved.runTurn) {
+      rawRunTurns.set(resolved, resolved.runTurn.bind(resolved));
+      resolved.runTurn = (requestParsed, incoming, emit) => runSelectedTurn(resolved, requestParsed, incoming, emit);
+    }
+    return resolved;
+  };
+  const refreshDispatchAdapter = async (requestParsed: OcxParsedRequest): Promise<ProviderAdapter> => {
+    if (route.provider.authMode === "oauth") {
+      if (!servingOAuthSnapshot || !await applyFailoverSnapshot(servingOAuthSnapshot, requestParsed)) {
+        throw new Error("OAuth account selection changed before dispatch");
+      }
+    } else {
+      const current = resolveCurrentProviderApiKeyTransport(config, route.providerName, route.provider);
+      if (!current) throw new Error("API key selection is unavailable before dispatch");
+      route.provider = current;
+    }
+    adapter = activeAdapter = runTurnAdapter = resolveSelectionAdapter(
+      resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
+    );
+    invalidateSameTargetRequest();
+    return adapter;
+  };
+  const refreshRunTurnAdapter = async (requestParsed: OcxParsedRequest): Promise<ProviderAdapter> => {
+    requestParsed._cursorIdentityScope = undefined;
+    requestParsed._cursorConversationId = undefined;
+    if (requestParsed._providerContinuation?.cursor) {
+      const { cursor: _oldCursor, ...rest } = requestParsed._providerContinuation;
+      requestParsed._providerContinuation = rest;
+    }
+    return refreshDispatchAdapter(requestParsed);
+  };
+  const runSelectedTurn = async (
+    selectedAdapter: ProviderAdapter,
+    ...[requestParsed, incoming, emit]: Parameters<NonNullable<ProviderAdapter["runTurn"]>>
+  ): Promise<void> => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (!selectionIsCurrent(adapterBindings.get(selectedAdapter))) selectedAdapter = await refreshRunTurnAdapter(requestParsed);
+      const binding = adapterBindings.get(selectedAdapter);
+      const run = rawRunTurns.get(selectedAdapter);
+      if (!run) throw new Error("Selected provider no longer supports this turn transport");
+      let sent = false;
+      let refused = false;
+      // Both main and image-loop callers already acquired the initial pacing slot.
+      // Subsequent physical messages retain this adapter/credential and are paced normally.
+      const fetch = providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+        providerName: route.providerName, modelId: route.modelId, pacingSlotAcquired: true,
+        beforeDispatch: () => {
+          if (sent) return;
+          if (!selectionIsCurrent(binding)) {
+            refused = true;
+            throw new Error("Account selection changed before the first turn dispatch");
+          }
+          sent = true;
+        },
+      });
+      try {
+        await run(requestParsed, { ...incoming, providerFetch: fetch }, event => { if (!refused) emit(event); });
+      } catch (error) {
+        if (!refused) throw error;
+      }
+      if (!refused) return;
+      // The adapter may map the guard's exception to an error event. Neither that
+      // event nor a refused send may escape before retrying the newly selected account.
+      selectedAdapter = await refreshRunTurnAdapter(requestParsed);
+    }
+    throw new Error("Account selection changed repeatedly before turn dispatch");
+  };
+  const oauthDispatch = (wireRequest: AdapterRequest, requestParsed = parsed): ProviderFetchOptions["dispatchOverride"] => {
+    if (route.provider.authMode === "forward") return undefined;
+    return async (input, init, execute) => {
+      let destination = input;
+      let dispatchInit = init;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (selectionIsCurrent(requestBindings.get(wireRequest))) {
+          const fetchImpl = (route.provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? execute;
+          return fetchImpl(destination, dispatchInit);
+        }
+        const nextAdapter = await refreshDispatchAdapter(requestParsed);
+        const rebuilt = await nextAdapter.buildRequest(requestParsed, {
+          headers: selectedForwardHeaders, translatorBudget,
+          ...(imageTierBias > 0 ? { imageTierBias } : {}),
+        });
+        const bodySize = checkOutboundBodySize(rebuilt.body, config.maxUpstreamBodyBytes);
+        if (!bodySize.admitted) {
+          rebuilt.releaseBodyObservation?.();
+          return formatErrorResponse(413, "outbound_body_too_large", describeOutboundBodyRefusal(bodySize));
+        }
+        const headers = new Headers(dispatchInit.headers);
+        for (const name of Object.keys(wireRequest.headers)) headers.delete(name);
+        for (const [name, value] of Object.entries(rebuilt.headers)) headers.set(name, value);
+        wireRequest.releaseBodyObservation?.();
+        Object.assign(wireRequest, rebuilt);
+        const binding = requestBindings.get(rebuilt);
+        if (binding) requestBindings.set(wireRequest, binding);
+        else requestBindings.delete(wireRequest);
+        sameTargetRequest = wireRequest;
+        sameTargetParsed = requestParsed;
+        sameTargetToken = transportToken;
+        destination = rebuilt.url;
+        dispatchInit = { ...dispatchInit, method: rebuilt.method, headers, body: rebuilt.body };
+        bindRouteReasoningReplayScope({ parsed: requestParsed, providerName: route.providerName, provider: route.provider,
+          adapterName: nextAdapter.name, oauthCredentialSnapshot: replayOAuthCredentialSnapshot });
+        // The next iteration validates synchronously and calls fetch in that same turn.
+      }
+      throw new Error("OAuth account selection changed repeatedly before dispatch");
+    };
   };
   const anthropicSessionKey = route.providerName === "anthropic" && route.provider.authMode === "oauth"
     ? anthropicSessionKeyFromParts({
@@ -3756,12 +3978,11 @@ async function handleResponsesInner(
           }
           return formatErrorResponse(401, "authentication_error", "No eligible Anthropic OAuth account available");
         }
-        const accessToken = await getAnthropicPoolAccessToken(selection.accountId);
-        anthropicPoolAccountId = selection.accountId;
-        bindAnthropicSessionAffinity(anthropicSessionKey, selection.accountId);
-        promoteAnthropicActiveAccount(selection.accountId);
-        route.provider = { ...route.provider, apiKey: accessToken };
-        logCtx.provider = formatAnthropicProviderForLog("anthropic", selection.accountId, config);
+        const admitted = await commitResolvedOAuthSelection(await getAnthropicPoolAccessSnapshot(selection.accountId), true, selection.reason);
+        if (!admitted) return formatErrorResponse(409, "conflict_error", "OAuth account selection changed; retry the request");
+        anthropicPoolAccountId = admitted.accountId;
+        route.provider = { ...route.provider, apiKey: admitted.accessToken };
+        logCtx.provider = formatAnthropicProviderForLog("anthropic", admitted.accountId, config);
       } else {
         // Prefer the account with known headroom BEFORE the first attempt. Rotation alone
         // only reacts to a 429, so a turn could open on an account a previous probe already
@@ -3810,6 +4031,10 @@ async function handleResponsesInner(
           resolved = await getValidAccessTokenSnapshot(route.providerName);
           usedPreferredAccount = false;
         }
+        const admitted = await commitResolvedOAuthSelection(resolved, true);
+        if (!admitted) return formatErrorResponse(409, "conflict_error", "OAuth account selection changed; retry the request");
+        if (admitted.accountId !== resolved.accountId) usedPreferredAccount = true;
+        resolved = admitted;
         replayOAuthCredentialSnapshot = {
           accountId: resolved.accountId,
           generation: resolved.generation,
@@ -3842,22 +4067,11 @@ async function handleResponsesInner(
           // Only genuinely accountless adapter calls leave the context undefined and use local/env fallback.
           parsed._kiroAuthContext = { ...(resolved.kiro ?? {}) };
         }
-        // Antigravity (cloud-code-assist) needs the discovered Cloud Code Assist project id in the
-        // CCA envelope. Keep it paired with the token snapshot so an account rotation cannot mix
-        // a fresh token with project metadata re-read from a different credential generation.
+        // Project identity belongs to the admitted account on EVERY request, including
+        // the request after a pool transition made that account the persisted active one.
         if (route.provider.googleMode === "cloud-code-assist") {
-          // When pre-dispatch chose a DIFFERENT account, the configured project belongs to
-          // the account we did not use, and `!route.provider.project` would skip right past
-          // it — installing B's bearer alongside A's project. That is the #2841 pairing bug
-          // in its original shape, so the preferred-account path replaces the project
-          // unconditionally and refuses to dispatch at all if the chosen account has none.
-          // A project-less preferred account already fell back above, so by here the
-          // preferred path always has one.
-          if (usedPreferredAccount && resolved.projectId) {
-            route.provider = { ...route.provider, project: resolved.projectId };
-          } else if (!route.provider.project && resolved.projectId) {
-            route.provider = { ...route.provider, project: resolved.projectId };
-          }
+          if (!resolved.projectId) return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(new Error("Cloud Code Assist account project is unavailable")));
+          route.provider = { ...route.provider, project: resolved.projectId };
         }
       }
     } catch (err) {
@@ -3899,7 +4113,7 @@ async function handleResponsesInner(
     logCtx.provider = route.providerName;
     delete logCtx.accountLogLabel;
   }
-  const adapter = resolveAdapter(adapterProvider, config.cacheRetention);
+  adapter = resolveSelectionAdapter(adapterProvider, config.cacheRetention);
   bindRouteReasoningReplayScope({
     parsed,
     providerName: route.providerName,
@@ -3928,7 +4142,7 @@ async function handleResponsesInner(
   }
   sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, adapter.name, logCtx.accountLogLabel);
   recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, adapterProvider, adapter.name);
-  let runTurnAdapter = adapter;
+  runTurnAdapter = adapter;
   if (adapter.runTurn) {
     recordAdapterTierMetadata(logCtx, adapter.tierLogForRunTurn?.(parsed));
   }
@@ -4529,6 +4743,7 @@ async function handleResponsesInner(
             body: request.body,
           }, recovery), upstream.signal, connectMs, parsed.stream,
             providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              dispatchOverride: oauthDispatch(request),
               providerName: route.providerName,
               modelId: route.modelId,
               onCodexWsQuota: codexWsQuotaObserver(authCtx, route.provider),
@@ -4559,7 +4774,7 @@ async function handleResponsesInner(
     const rebuildAndRefetch = async (
       recovery: AttemptRecoveryKind,
     ): Promise<Response | { failed: Response }> => {
-      const retryAdapter = resolveAdapter(
+      const retryAdapter = resolveSelectionAdapter(
         resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
         config.cacheRetention,
       );
@@ -4606,6 +4821,7 @@ async function handleResponsesInner(
               body: request.body,
             }, innerRecovery), upstream.signal, connectMs, parsed.stream,
               providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              dispatchOverride: oauthDispatch(request),
                 providerName: route.providerName,
                 modelId: route.modelId,
                 onCodexWsQuota: codexWsQuotaObserver(authCtx, route.provider),
@@ -4664,7 +4880,7 @@ async function handleResponsesInner(
       authCtx = replay.authCtx;
       route.provider = replay.provider;
       selectedForwardHeaders = replay.headers;
-      const replayAdapter = resolveAdapter(
+      const replayAdapter = resolveSelectionAdapter(
         resolveWireProtocolOverride(route.providerName, route.modelId, replay.provider, inboundWire),
         config.cacheRetention,
       );
@@ -4711,6 +4927,7 @@ async function handleResponsesInner(
           // here on is a genuine transport attempt.
           storedPoolReplayDispatchNotifier(
             providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              dispatchOverride: oauthDispatch(request),
               providerName: route.providerName,
               modelId: route.modelId,
               onCodexWsQuota: codexWsQuotaObserver(authCtx, route.provider),
@@ -4748,7 +4965,7 @@ async function handleResponsesInner(
       try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
       let refreshed: OAuthAccessSnapshot;
       try {
-        refreshed = await forceRefreshOAuthAccessSnapshot(sentOAuthSnapshot);
+        refreshed = await refreshResolvedOAuthSelection(sentOAuthSnapshot);
       } catch (err) {
         upstream.abort();
         releaseCodexAuthContextProbeLease(authCtx);
@@ -4780,7 +4997,7 @@ async function handleResponsesInner(
           : undefined,
       );
       route.provider = refreshedProvider;
-      const refreshedAdapter = resolveAdapter(
+      const refreshedAdapter = resolveSelectionAdapter(
         resolveWireProtocolOverride(route.providerName, route.modelId, refreshedProvider, inboundWire),
         config.cacheRetention,
       );
@@ -4830,6 +5047,7 @@ async function handleResponsesInner(
               body: request.body,
             }, recovery), upstream.signal, connectMs, parsed.stream,
               providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              dispatchOverride: oauthDispatch(request),
                 providerName: route.providerName,
                 modelId: route.modelId,
                 onCodexWsQuota: codexWsQuotaObserver(authCtx, route.provider),
@@ -4868,13 +5086,10 @@ async function handleResponsesInner(
         try { snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId); }
         catch { /* Keep the original 429 body readable when the next credential is unavailable. */ }
       }
-      if (snapshot && applyFailoverSnapshot(snapshot)) {
-        genericFailoverAccountId = snapshot.accountId;
+      if (snapshot && await applyFailoverSnapshot(snapshot)) {
         genericFailovers += 1;
-        sentOAuthSnapshot = snapshot;
-        replayOAuthCredentialSnapshot = { accountId: snapshot.accountId, generation: snapshot.generation };
         route.provider = resolveProviderTransport(
-          route.providerName, route.provider, parsed.options.promptCacheKey, snapshot.apiBaseUrl,
+          route.providerName, route.provider, parsed.options.promptCacheKey, sentOAuthSnapshot?.apiBaseUrl,
         );
         bindRouteReasoningReplayScope({
           parsed, providerName: route.providerName, provider: route.provider,
@@ -4932,6 +5147,7 @@ async function handleResponsesInner(
               body: request.body,
             }, recovery), upstream.signal, connectMs, parsed.stream,
               providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              dispatchOverride: oauthDispatch(request),
                 providerName: route.providerName,
                 modelId: route.modelId,
                 onCodexWsQuota: codexWsQuotaObserver(authCtx, route.provider),
@@ -5751,9 +5967,8 @@ async function handleResponsesInner(
       if (!nextAccountId) return null;
       try {
         const snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId);
-        genericFailoverAccountId = nextAccountId;
         genericFailovers += 1;
-        if (!applyFailoverSnapshot(snapshot)) return null;
+        if (!await applyFailoverSnapshot(snapshot)) return null;
       } catch {
         return null;
       }
@@ -5777,12 +5992,12 @@ async function handleResponsesInner(
         // carries none, and getAnthropicPoolAccessToken is what enforces its fail-closed
         // local-cli credential rule. Both existing Anthropic rotation sites apply the token the
         // same way.
-        const accessToken = await getAnthropicPoolAccessToken(nextAccountId);
-        anthropicPoolAccountId = nextAccountId;
+        const admitted = await commitResolvedOAuthSelection(await getAnthropicPoolAccessSnapshot(nextAccountId));
+        if (!admitted) throw new Error("OAuth selection changed during recovery");
+        anthropicPoolAccountId = admitted.accountId;
         anthropicPoolFailovers += 1;
-        route.provider = { ...route.provider, apiKey: accessToken };
-        promoteAnthropicActiveAccount(nextAccountId);
-        logCtx.provider = formatAnthropicProviderForLog("anthropic", nextAccountId, config);
+        route.provider = { ...route.provider, apiKey: admitted.accessToken };
+        logCtx.provider = formatAnthropicProviderForLog("anthropic", admitted.accountId, config);
       } catch {
         return null;
       }
@@ -5791,7 +6006,7 @@ async function handleResponsesInner(
       // credential. The 429 is terminal for this sidecar turn.
       return null;
     }
-    const rotatedAdapter = resolveAdapter(
+    const rotatedAdapter = resolveSelectionAdapter(
       resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
       config.cacheRetention,
     );
@@ -5875,6 +6090,13 @@ async function handleResponsesInner(
       stallTimeoutSec: config.stallTimeoutSec,
       waitForRequestSlot: imageProviderFetch.waitForPacing,
       fetchImpl: imageProviderFetch.unpacedFetch ?? imageProviderFetch,
+      fetchForRequest: (request, iterParsed) => {
+        const fetch = providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+          dispatchOverride: oauthDispatch(request, iterParsed),
+          providerName: route.providerName, modelId: route.modelId,
+        });
+        return fetch.unpacedFetch ?? fetch;
+      },
       onRequestBuilt: request => {
         recordAdapterReasoning(logCtx, request);
         recordAdapterTier(logCtx, request);
@@ -5935,6 +6157,10 @@ async function handleResponsesInner(
       })(input, init)) as typeof globalThis.fetch;
     const wsResponse = await runWithWebSearch({
       parsed, adapter,
+      fetchForRequest: (request, iterParsed) => providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+        dispatchOverride: oauthDispatch(request, iterParsed),
+        providerName: route.providerName, modelId: route.modelId,
+      }),
       incomingMeta: {
         headers: selectedForwardHeaders,
         abortSignal: options.abortSignal,
@@ -6010,6 +6236,13 @@ async function handleResponsesInner(
     const queue = createAdapterEventQueue({
       onBacklogExceeded: () => runTurnAbort.abort(),
     });
+    const refreshRunTurnSelection = async (): Promise<void> => {
+      if (selectionIsCurrent(adapterBindings.get(runTurnAdapter))) return;
+      await refreshRunTurnAdapter(parsed);
+      bindRouteReasoningReplayScope({ parsed, providerName: route.providerName, provider: route.provider,
+        adapterName: runTurnAdapter.name, oauthCredentialSnapshot: replayOAuthCredentialSnapshot });
+      sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, runTurnAdapter.name, logCtx.accountLogLabel);
+    };
     // Initial admission must settle before the streaming Response commits HTTP 200.
     // Let the outer Responses facade preserve the local retryable-429 contract.
     try {
@@ -6033,6 +6266,7 @@ async function handleResponsesInner(
         if (!pacingSlotAcquired) {
           await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, runTurnAbort.signal);
         }
+        await refreshRunTurnSelection();
         noteAttemptSend(logCtx.activeAttempt, logCtx.usageLogInputTokens, recovery);
         const runTurnProviderFetch = providerFetch(
           route.provider,
@@ -6098,9 +6332,8 @@ async function handleResponsesInner(
       if (!nextAccountId) return false;
       try {
         const snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId);
-        genericFailoverAccountId = nextAccountId;
         genericFailovers += 1;
-        if (!applyFailoverSnapshot(snapshot)) return false;
+        if (!await applyFailoverSnapshot(snapshot)) return false;
         // A Cursor conversation/checkpoint is credential-scoped. The failed attempt emitted no
         // client-visible bytes, so replay is safe, but carrying its account identity into the next
         // account would not be. Let the rotated adapter derive a fresh identity and conversation.
@@ -6116,7 +6349,7 @@ async function handleResponsesInner(
           route.provider,
           inboundWire,
         );
-        const rotatedAdapter = resolveAdapter(rotatedProvider, config.cacheRetention);
+        const rotatedAdapter = resolveSelectionAdapter(rotatedProvider, config.cacheRetention);
         if (!rotatedAdapter.runTurn) return false;
         runTurnAdapter = rotatedAdapter;
         bindRouteReasoningReplayScope({
@@ -6166,7 +6399,7 @@ async function handleResponsesInner(
     if (parsed.stream) {
       void runTurn();
       let eventSource: AsyncIterable<AdapterEvent> = queue.stream();
-      if (genericFailoverAccountId && isGenericOAuthFailoverEnabled(config, route.providerName)) {
+      if (route.provider.authMode === "oauth" || (genericFailoverAccountId && isGenericOAuthFailoverEnabled(config, route.providerName))) {
         // Preflight holds only heartbeats and the first meaningful event. A first-event 429 can be
         // replayed transparently; after any output reaches the bridge, a later error stays terminal.
         eventSource = await preflightRunTurnFailover(eventSource);
@@ -6249,7 +6482,7 @@ async function handleResponsesInner(
     await runTurn();
     const firstAttemptEvents = await queue.collect();
     let runTurnEvents: AdapterEvent[] = firstAttemptEvents;
-    if (genericFailoverAccountId && isGenericOAuthFailoverEnabled(config, route.providerName)) {
+    if (route.provider.authMode === "oauth" || (genericFailoverAccountId && isGenericOAuthFailoverEnabled(config, route.providerName))) {
       runTurnEvents = [];
       for await (const event of await preflightRunTurnFailover(
         (async function* () { yield* firstAttemptEvents; })(),
@@ -6321,7 +6554,7 @@ async function handleResponsesInner(
   const stallTimeoutMs = typeof config.stallTimeoutSec === "number" && Number.isFinite(config.stallTimeoutSec) && config.stallTimeoutSec > 0
     ? Math.floor(config.stallTimeoutSec * 1000)
     : 300_000;
-  let activeAdapter = adapter;
+  activeAdapter = adapter;
 
   // One immutable, body-safe outbound request per same-target sequence (URL, serialized body,
   // auth headers, generated compat headers). Same-target 429 replays reuse it verbatim; the
@@ -6420,16 +6653,15 @@ async function handleResponsesInner(
   // Capture it in a const so the fetch callbacks read a narrowed, immutable value
   // (TypeScript drops narrowing for a `let` captured by a nested function).
   const builtInitialRequest = initialRequest;
-  let sameTargetRequest: AdapterRequest | undefined = builtInitialRequest;
-  let sameTargetParsed: OcxParsedRequest | undefined = parsed;
-  let sameTargetToken = 0;
-  let transportToken = 0;
+  sameTargetRequest = builtInitialRequest;
+  sameTargetParsed = parsed;
+  sameTargetToken = transportToken;
   /**
    * Invalidate the same-target request cache. Every credential/adapter/parsed mutation MUST
    * go through here: the cache keys on `parsed` REFERENCE identity, so an in-place mutation
    * is invisible to it and a missed bump would replay a request built with a stale key.
    */
-  const invalidateSameTargetRequest = (): void => { transportToken += 1; };
+
   let upstreamResponse: Response;
   try {
     if (activeAdapter.fetchResponse) {
@@ -6440,6 +6672,7 @@ async function handleResponsesInner(
         timeoutMs: connectMs,
         stream: parsed.stream,
         executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              dispatchOverride: oauthDispatch(builtInitialRequest),
           providerName: route.providerName,
           modelId: route.modelId,
         }),
@@ -6465,6 +6698,7 @@ async function handleResponsesInner(
             body: builtInitialRequest.body,
           }, recovery), upstream.signal, connectMs, parsed.stream,
             providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              dispatchOverride: oauthDispatch(builtInitialRequest),
               providerName: route.providerName,
               modelId: route.modelId,
             }));
@@ -6496,7 +6730,6 @@ async function handleResponsesInner(
   let rateLimitRetries = 0;
   // Shared with the terminal-guard continuation below: an image-tier reduction that let the
   // main request clear a 413 must not be forgotten on the very next continuation build.
-  let imageTierBias = 0;
   if (!upstreamResponse.ok) {
     // Recovery loop: multi-key 429 failover + at most ONE opaque-state rebuild and ONE
     // anthropic 413 tightened retry
@@ -6560,6 +6793,7 @@ async function handleResponsesInner(
               timeoutMs: connectMs,
               stream: parsed.stream,
               executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              dispatchOverride: oauthDispatch(retryRequest),
                 providerName: route.providerName,
                 modelId: route.modelId,
               }),
@@ -6581,6 +6815,7 @@ async function handleResponsesInner(
                 method: retryRequest.method, headers: retryRequest.headers, body: retryRequest.body,
               }, recoveryKind), upstream.signal, connectMs, parsed.stream,
               providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              dispatchOverride: oauthDispatch(retryRequest),
                 providerName: route.providerName,
                 modelId: route.modelId,
               })),
@@ -6620,7 +6855,7 @@ async function handleResponsesInner(
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
         let refreshed: OAuthAccessSnapshot;
         try {
-          refreshed = await forceRefreshOAuthAccessSnapshot(sentOAuthSnapshot);
+          refreshed = await refreshResolvedOAuthSelection(sentOAuthSnapshot);
         } catch (err) {
           cleanupUpstreamAbort();
           return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(err));
@@ -6651,7 +6886,7 @@ async function handleResponsesInner(
         );
         route.provider = refreshedProvider;
         invalidateSameTargetRequest();
-        activeAdapter = resolveAdapter(
+        activeAdapter = resolveSelectionAdapter(
           resolveWireProtocolOverride(route.providerName, route.modelId, refreshedProvider, inboundWire),
           config.cacheRetention,
         );
@@ -6684,7 +6919,7 @@ async function handleResponsesInner(
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
         route.provider = rotated;
         invalidateSameTargetRequest();
-        activeAdapter = resolveAdapter(
+        activeAdapter = resolveSelectionAdapter(
           resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
           config.cacheRetention,
         );
@@ -6754,7 +6989,7 @@ async function handleResponsesInner(
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
         route.provider = rotated;
         invalidateSameTargetRequest();
-        activeAdapter = resolveAdapter(
+        activeAdapter = resolveSelectionAdapter(
           resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
           config.cacheRetention,
         );
@@ -6785,14 +7020,14 @@ async function handleResponsesInner(
         if (!nextAccountId) break;
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
         try {
-          const accessToken = await getAnthropicPoolAccessToken(nextAccountId);
-          anthropicPoolAccountId = nextAccountId;
+          const admitted = await commitResolvedOAuthSelection(await getAnthropicPoolAccessSnapshot(nextAccountId));
+          if (!admitted) throw new Error("OAuth selection changed during recovery");
+          anthropicPoolAccountId = admitted.accountId;
           anthropicPoolFailovers += 1;
-          route.provider = { ...route.provider, apiKey: accessToken };
+          route.provider = { ...route.provider, apiKey: admitted.accessToken };
           invalidateSameTargetRequest();
-          promoteAnthropicActiveAccount(nextAccountId);
-          logCtx.provider = formatAnthropicProviderForLog("anthropic", nextAccountId, config);
-          activeAdapter = resolveAdapter(
+          logCtx.provider = formatAnthropicProviderForLog("anthropic", admitted.accountId, config);
+          activeAdapter = resolveSelectionAdapter(
             resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
             config.cacheRetention,
           );
@@ -6832,11 +7067,10 @@ async function handleResponsesInner(
           // projectId with its token and Kiro carries routing metadata, so a token-only swap
           // would mix one account's credential with another's routing data.
           const snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId);
-          genericFailoverAccountId = nextAccountId;
-          genericFailovers += 1;
-          if (!applyFailoverSnapshot(snapshot)) break;
+            genericFailovers += 1;
+          if (!await applyFailoverSnapshot(snapshot)) break;
           invalidateSameTargetRequest();
-          activeAdapter = resolveAdapter(
+          activeAdapter = resolveSelectionAdapter(
             resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
             config.cacheRetention,
           );
@@ -7041,6 +7275,7 @@ async function handleResponsesInner(
             timeoutMs: connectMs,
             stream: nextParsed.stream,
             executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              dispatchOverride: oauthDispatch(builtContinuationRequest, nextParsed),
               providerName: route.providerName,
               modelId: nextParsed.modelId,
             }),
@@ -7066,6 +7301,7 @@ async function handleResponsesInner(
               connectMs,
               nextParsed.stream,
               providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              dispatchOverride: oauthDispatch(builtContinuationRequest, nextParsed),
                 providerName: route.providerName,
                 modelId: nextParsed.modelId,
               }),
@@ -7161,7 +7397,7 @@ async function handleResponsesInner(
           try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
           route.provider = rotated;
           invalidateSameTargetRequest();
-          activeAdapter = resolveAdapter(
+          activeAdapter = resolveSelectionAdapter(
             resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
             config.cacheRetention,
           );
@@ -7197,14 +7433,14 @@ async function handleResponsesInner(
         if (nextAccountId) {
           try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
           try {
-            const accessToken = await getAnthropicPoolAccessToken(nextAccountId);
-            anthropicPoolAccountId = nextAccountId;
+            const admitted = await commitResolvedOAuthSelection(await getAnthropicPoolAccessSnapshot(nextAccountId));
+            if (!admitted) throw new Error("OAuth selection changed during recovery");
+            anthropicPoolAccountId = admitted.accountId;
             anthropicPoolFailovers += 1;
-            route.provider = { ...route.provider, apiKey: accessToken };
+            route.provider = { ...route.provider, apiKey: admitted.accessToken };
             invalidateSameTargetRequest();
-            promoteAnthropicActiveAccount(nextAccountId);
-            logCtx.provider = formatAnthropicProviderForLog("anthropic", nextAccountId, config);
-            activeAdapter = resolveAdapter(
+            logCtx.provider = formatAnthropicProviderForLog("anthropic", admitted.accountId, config);
+            activeAdapter = resolveSelectionAdapter(
               resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
               config.cacheRetention,
             );
@@ -7242,11 +7478,10 @@ async function handleResponsesInner(
             // metadata, so a token-only swap would mix one account's credential with another's
             // routing data.
             const snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId);
-            genericFailoverAccountId = nextAccountId;
-            genericFailovers += 1;
-            if (applyFailoverSnapshot(snapshot, nextParsed)) {
+                genericFailovers += 1;
+            if (await applyFailoverSnapshot(snapshot, nextParsed)) {
               invalidateSameTargetRequest();
-              activeAdapter = resolveAdapter(
+              activeAdapter = resolveSelectionAdapter(
                 resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
                 config.cacheRetention,
               );

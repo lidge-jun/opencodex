@@ -164,6 +164,7 @@ function boundedRelayResponseStream(
   body: ReadableStream<Uint8Array>,
   limit: number,
   signal: AbortSignal,
+  cleanup: () => void,
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   let bytes = 0;
@@ -172,6 +173,7 @@ function boundedRelayResponseStream(
     if (finished) return;
     finished = true;
     signal.removeEventListener("abort", onAbort);
+    cleanup();
     try { reader.releaseLock(); } catch { /* a pending read may still own it */ }
   };
   const onAbort = () => {
@@ -245,9 +247,19 @@ export async function relayHubManagementRequest(
     ? Math.min(Math.floor(deps.timeoutMs), 120_000)
     : HUB_RELAY_DEFAULT_TIMEOUT_MS;
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
-  const signal = req.signal
-    ? AbortSignal.any([req.signal, timeoutSignal])
-    : timeoutSignal;
+  const relayAbort = new AbortController();
+  const signal = relayAbort.signal;
+  const stopDeadline = () => timeoutSignal.removeEventListener("abort", onTimeout);
+  const cleanup = () => {
+    stopDeadline();
+    req.signal.removeEventListener("abort", onClientAbort);
+  };
+  const onTimeout = () => { relayAbort.abort(timeoutSignal.reason); cleanup(); };
+  const onClientAbort = () => { relayAbort.abort(req.signal.reason); cleanup(); };
+  timeoutSignal.addEventListener("abort", onTimeout, { once: true });
+  req.signal.addEventListener("abort", onClientAbort, { once: true });
+  if (req.signal.aborted) onClientAbort();
+  else if (timeoutSignal.aborted) onTimeout();
   let upstream: Response;
   try {
     upstream = await (deps.fetchImpl ?? fetch)(destination, {
@@ -258,9 +270,16 @@ export async function relayHubManagementRequest(
       signal,
     });
   } catch {
+    cleanup();
+    return relayError(502, "hub relay unavailable");
+  }
+  if (signal.aborted) {
+    cleanup();
+    try { await upstream.body?.cancel(); } catch { /* best effort */ }
     return relayError(502, "hub relay unavailable");
   }
   if (upstream.status >= 300 && upstream.status < 400) {
+    cleanup();
     try { await upstream.body?.cancel(); } catch { /* best effort */ }
     return relayError(502, "hub relay redirect refused");
   }
@@ -268,18 +287,31 @@ export async function relayHubManagementRequest(
   const responseConnectionNamed = new Set((upstream.headers.get("connection") ?? "").split(",").map(value => value.trim().toLowerCase()).filter(Boolean));
   const responseHeaders = filteredHeaders(upstream.headers, RESPONSE_HEADERS, responseConnectionNamed);
   if (!headersWithinLimit(responseHeaders)) {
+    cleanup();
     try { await upstream.body?.cancel(); } catch { /* best effort */ }
     return relayError(502, "hub relay response headers too large");
   }
   const declaredResponseLength = upstream.headers.get("content-length");
   if (declaredResponseLength !== null && (!/^\d+$/.test(declaredResponseLength)
     || Number(declaredResponseLength) > HUB_RELAY_RESPONSE_BODY_MAX_BYTES)) {
+    cleanup();
     try { await upstream.body?.cancel(); } catch { /* best effort */ }
     return relayError(502, "hub relay response body too large");
   }
-  const responseBody = method === "HEAD" || !upstream.body
-    ? null
-    : boundedRelayResponseStream(upstream.body, HUB_RELAY_RESPONSE_BODY_MAX_BYTES, signal);
+  // Only this known, successfully established SSE endpoint outlives the handshake.
+  // Its body remains byte-bounded and connected to the browser's abort signal.
+  if (method === "GET" && destination.pathname === "/api/accounts/events" && !destination.search
+    && upstream.status === 200
+    && responseHeaders.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() === "text/event-stream") {
+    stopDeadline();
+  }
+  let responseBody: ReadableStream<Uint8Array> | null = null;
+  if (method === "HEAD" || !upstream.body) {
+    cleanup();
+    try { await upstream.body?.cancel(); } catch { /* best effort */ }
+  } else {
+    responseBody = boundedRelayResponseStream(upstream.body, HUB_RELAY_RESPONSE_BODY_MAX_BYTES, signal, cleanup);
+  }
   return new Response(responseBody, {
     status: upstream.status,
     statusText: upstream.statusText,

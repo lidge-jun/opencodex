@@ -3,6 +3,7 @@ import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OAUTH_PROVIDERS, upsertOAuthProvider } from "../../src/oauth";
+import { loadConfig, saveConfig } from "../../src/config";
 import { migrateXaiResponsesDefault } from "../../src/providers/xai-responses-opt-in";
 import { resolveWireProtocolOverride } from "../../src/server/adapter-resolve";
 import {
@@ -240,8 +241,13 @@ describe("upsertOAuthProvider credential preservation", () => {
       expect(listed.keys.find(entry => entry.id === activeId)?.active).toBe(true);
       expect(listed.keys.find(entry => entry.id === "pool-visible")?.active).toBe(false);
 
+      // runLogin persists the upsert before GUI key mutations. The shared selection
+      // transaction requires that authoritative file; it must not recreate missing config.
+      saveConfig(config);
+      expect(loadConfig().providers.xai!.apiKeyPool).toEqual(provider.apiKeyPool);
       expect(setActiveProviderApiKey(config, "xai", "pool-visible")).toBe(true);
       expect(config.providers.xai!.apiKey).toBe("pool-visible-key");
+      expect(loadConfig().providers.xai!.apiKey).toBe("pool-visible-key");
       expect(listProviderApiKeys(config, "xai").activeId).toBe("pool-visible");
 
       expect(setActiveProviderApiKey(config, "xai", activeId)).toBe(true);
@@ -250,6 +256,7 @@ describe("upsertOAuthProvider credential preservation", () => {
       expect(config.providers.xai!.apiKey).toBe("pool-visible-key");
       expect(config.providers.xai!.apiKeyPool).toEqual([{ id: "pool-visible", key: "pool-visible-key" }]);
       expect(listProviderApiKeys(config, "xai").activeId).toBe("pool-visible");
+      expect(loadConfig().providers.xai!.apiKeyPool).toEqual(config.providers.xai!.apiKeyPool);
     } finally {
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousHome;
@@ -329,16 +336,21 @@ describe("upsertOAuthProvider credential preservation", () => {
     const testHome = mkdtempSync(join(tmpdir(), "ocx-oauth-upsert-"));
     process.env.OPENCODEX_HOME = testHome;
     try {
+      saveConfig(config);
       expect(removeProviderApiKey(config, "xai", "aaaaaaaa")).toBe(true);
       expect(config.providers.xai!.authMode).toBe("key");
       expect(config.providers.xai!.apiKey).toBeUndefined();
       expect(config.providers.xai!.apiKeyPool).toBeUndefined();
+      expect(loadConfig().providers.xai!.apiKey).toBeUndefined();
+      expect(loadConfig().providers.xai!.apiKeyPool).toBeUndefined();
 
       upsertOAuthProvider(config, "xai");
       const provider = config.providers.xai!;
       expect(provider.authMode).toBe("oauth");
       expect(provider.apiKey).toBeUndefined();
       expect(provider.apiKeyPool).toBeUndefined();
+      saveConfig(config);
+      expect(loadConfig().providers.xai!.authMode).toBe("oauth");
     } finally {
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousHome;
