@@ -1,0 +1,5 @@
+# Development version pre-move
+Dependencies: integrated frozen RC. MODIFY package.json only in a PR based on currentdev: version2.44.0 ->2.45.0, or NOOP only when freshdev already strictly outranks intendedstable2.44.0. No runtime/code/lock dependency change. Keep frozenRC at2.44.0.
+Inspect the defaultmain version of dev-version-bump.yml. If workflow_dispatch exists, dispatch frommain with intended-version=2.44.0 mode=pre-move and use generatedPR. If older main has onlyworkflow_call, create the established one-file versionPR via scripts/bump-dev-version.ts (--help/CLI inspected first) or exact JSON version rewrite. No local build/tests. Push scopedbranch --no-verify; require hosted exacthead CI and reviewed version-onlydiff, then authorizedadminPR merge todev. Verify origin/dev:package.json and ancestry fresh. Releaseworkflow assert-ahead independently enforces pre-move. A version collision is a blocker, not an automatic unreviewed versionchoice. Capture sourceSHA/version/PR/run proof in this unit.
+
+Current defaultmain workflow_dispatch was fetched and confirmed (exit0) on2026-09-06; the manual workflow path is selected.

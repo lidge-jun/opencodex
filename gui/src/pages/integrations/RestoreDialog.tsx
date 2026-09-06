@@ -23,11 +23,15 @@ export default function RestoreDialog({
   row,
   onClose,
   onRestored,
+  profileId,
+  onReconcile,
 }: {
   apiBase: string;
   row: IntegrationJournalRow;
   onClose: () => void;
   onRestored: () => void;
+  profileId?: number;
+  onReconcile?: () => void;
 }) {
   const t = useT();
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -92,11 +96,14 @@ export default function RestoreDialog({
     setPending(true);
     setFailure(null);
     try {
-      await restoreIntegration(apiBase, row.opId, drift);
+      await restoreIntegration(apiBase, row.opId, drift, undefined, row.clientId === "aside" ? profileId ?? row.profileId : undefined);
       restoredRef.current = true;
       onRestored();
       onClose();
     } catch (error) {
+      // Aside may have saved target intent before the writer refused. Reconcile
+      // without closing the dialog or announcing a successful restore.
+      if (row.clientId === "aside") onReconcile?.();
       if (refusalOf(error)?.reason === "drift_requires_confirm") {
         // Not a failure: the user has not been asked yet. Ask now.
         setDrift(true);

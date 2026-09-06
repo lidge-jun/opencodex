@@ -11,7 +11,7 @@ Two commands, and every one of them runs any LLM you point it at.</p>
 
 ```bash
 npm install -g @bitkyc08/opencodex
-ocx start        # proxy + dashboard on localhost:10100
+ocx start
 ```
 
 <table>
@@ -78,14 +78,29 @@ account while existing threads stay pinned to the account that started them.
 
 ## Quick start
 
-### For humans
+### Personal install
 
 ```bash
 npm install -g @bitkyc08/opencodex   # Node 18+; the Bun runtime is bundled automatically
-ocx start                            # or `ocx service` to run it in the background
+ocx start                         # proxy + dashboard on localhost:10100
 ```
 
-### Docker Compose
+Use `ocx service` to run it in the background.
+
+Open **http://localhost:10100** and configure everything in the web dashboard — add providers
+(40+ built-ins, or any OpenAI-compatible endpoint), pick models, manage accounts. `ocx gui`
+re-opens the dashboard at any time.
+It can also manage a **ChatGPT account pool** for Codex auth. Add multiple ChatGPT / Codex accounts,
+refresh their 5h / weekly / 30d quota in the dashboard. Under quota routing, new sessions can use
+the lowest-usage healthy account; round-robin and fill-first use their own policies. Existing Codex
+threads normally retain affinity to the account that started them, so long SSH, tmux, or
+mobile-connected sessions do not jump accounts mid-conversation — but quota re-evaluation, failover,
+account exclusion, affinity expiry, or 401/403 and 429 recovery can rebind them. Give the accounts a
+selection order when one of them — usually your Codex Desktop login — should only be reached for
+once the others are drained.
+
+<details>
+<summary>Docker Compose</summary>
 
 The repository ships a digest-pinned, non-root Compose build. With Git and Bun installed on the
 host, generate the canonical compatibility manifest before every image build, then initialize
@@ -116,6 +131,8 @@ image, Compose file, environment, or shell arguments. See the
 [Remote Hub deployment guide](https://opencodex.me/guides/remote-hub/#docker-compose) for provider
 setup, authenticated acceptance checks, remote management, and rollback.
 
+</details>
+
 <details>
 <summary>Install from source (latest dev)</summary>
 
@@ -143,19 +160,8 @@ they reach the npm package.
 
 </details>
 
-Open **http://localhost:10100** and configure everything in the web dashboard — add providers
-(40+ built-ins, or any OpenAI-compatible endpoint), pick models, manage accounts. `ocx gui`
-re-opens the dashboard at any time.
-It can also manage a **ChatGPT account pool** for Codex auth. Add multiple ChatGPT / Codex accounts,
-refresh their 5h / weekly / 30d quota in the dashboard. Under quota routing, new sessions can use
-the lowest-usage healthy account; round-robin and fill-first use their own policies. Existing Codex
-threads normally retain affinity to the account that started them, so long SSH, tmux, or
-mobile-connected sessions do not jump accounts mid-conversation — but quota re-evaluation, failover,
-account exclusion, affinity expiry, or 401/403 and 429 recovery can rebind them. Give the accounts a
-selection order when one of them — usually your Codex Desktop login — should only be reached for
-once the others are drained.
-
-### For agents
+<details>
+<summary>For agents</summary>
 
 ```bash
 npm install -g @bitkyc08/opencodex
@@ -171,6 +177,8 @@ when it is unreachable). `ocx status` / `ocx doctor` / `ocx health` report the r
 > [`AGENTS_INSTALL.md`](./AGENTS_INSTALL.md). An interactive `ocx start` may ask once whether to
 > star this repository — that is the user's decision, never an agent's. The CLI suppresses the
 > prompt for agent-driven runs and the API refuses them with `403 agent_consent_required`.
+
+</details>
 
 ## Supported platforms
 

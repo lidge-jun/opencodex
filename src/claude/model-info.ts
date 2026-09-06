@@ -143,14 +143,19 @@ export function buildAnthropicModelInfos(
   // the auto-context widening that let a 372K route carry the marker (and be
   // over-filled) is the #854 defect and does not come back. Guards (audit R1#11):
   // same dedupe set, never double-suffix.
-  const push1mVariant = (base: AnthropicModelInfo, contextWindow: number | undefined, maxInputTokens?: number) => {
+  const push1mVariant = (
+    base: AnthropicModelInfo,
+    contextWindow: number | undefined,
+    maxInputTokens?: number,
+    selectorId?: string,
+  ) => {
     // The [1m] marker makes Claude Code account 1e6 tokens for the row, so it
     // may only name models whose AUTHORITATIVE effective window is >= 1M —
     // never the auto-context widening, which would mark a 372K route and have
     // Claude Code over-fill it (the #854 defect).
     if (contextWindow === undefined || contextWindow < ONE_MILLION) return;
     if (base.id.includes("[1m]")) return;
-    const id = `${base.id}[1m]`;
+    const id = selectorId ?? `${base.id}[1m]`;
     if (seen.has(id)) return;
     seen.add(id);
     // The marker fixes Claude Code's accounting at 1e6, but a model may accept less input
@@ -220,7 +225,15 @@ export function buildAnthropicModelInfos(
     out.push(info);
     // Anthropic passthrough guard (audit 021 #3): never auto-widen canonical claude
     // routes — only a genuine >=1M window earns the variant row there.
-    push1mVariant(info, m.contextWindow, routedMaxInput);
+    // Claude Code groups canonical Fable ids before it compares the [1m] marker. This
+    // reversible alias only separates picker families; it is not an OpenAI-native route.
+    // The Messages ingress restores the canonical Anthropic id before passthrough.
+    const oneMillionSelector = idStyle === "readable"
+      && m.provider === "anthropic"
+      && listedModelId.startsWith("claude-fable-")
+      ? `${claudeCodeNativeAlias(listedModelId)}[1m]`
+      : undefined;
+    push1mVariant(info, m.contextWindow, routedMaxInput, oneMillionSelector);
     // The whole model is passed, not a (provider, id) pair: a combo row lives in its own
     // namespace with no config.providers entry, so the caller classifies it from the
     // aggregated supportsServiceTier the row already carries.

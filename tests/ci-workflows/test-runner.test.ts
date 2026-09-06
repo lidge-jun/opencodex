@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, posix, win32 } from "node:path";
 import {
@@ -19,6 +20,7 @@ import {
   resolveDefaultTestRunLockPath,
   resolveInheritedTestRunLock,
   resolveWrappedTestRunLockPath,
+  TEST_RUN_ID_ENV,
   TEST_RUN_LOCK_PATH_ENV,
   TEST_RUN_LOCK_TOKEN_ENV,
   TEST_RUN_NO_QUEUE_ENV,
@@ -30,6 +32,7 @@ import {
   windowsIdentityPowerShellSpawnOptionsForTests,
 } from "../../src/codex/user-identity";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 
 function runGit(cwd: string, ...args: string[]): string {
@@ -655,6 +658,60 @@ describe("bun test user lock", () => {
     expect(lockPath).toBeUndefined();
     expect(resolveCalls).toBe(0);
   });
+
+  test.if(process.platform === "win32" && process.env[TEST_RUN_NO_QUEUE_ENV] !== "1")(
+    "nested Windows Bun tests inherit the acquired live lock and refuse an incomplete capability",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "opencodex-nested-test-"));
+      try {
+        const lockPath = process.env[TEST_RUN_LOCK_PATH_ENV];
+        expect(Boolean(lockPath && process.env[TEST_RUN_LOCK_TOKEN_ENV] && process.env[TEST_RUN_ID_ENV])).toBe(true);
+        const ownerBefore = readFileSync(join(lockPath!, "owner.json"), "utf8");
+        const fixture = join(root, "nested.test.ts");
+        writeFileSync(fixture, `
+          import { test } from "bun:test";
+          import { readFileSync, existsSync } from "node:fs";
+          import { join } from "node:path";
+          test("nested lock receipt", () => {
+            const path = process.env.OCX_TEST_RUN_LOCK_PATH;
+            const owner = JSON.parse(readFileSync(join(path, "owner.json"), "utf8"));
+            console.log(JSON.stringify({ nestedLockReceipt: {
+              samePath: path === ${JSON.stringify(lockPath)},
+              sameRun: owner.runId === ${JSON.stringify(process.env[TEST_RUN_ID_ENV])},
+              sameToken: owner.token === process.env.OCX_TEST_RUN_LOCK_TOKEN,
+              member: existsSync(join(path, "members", process.pid + "-" + owner.token)),
+              preloadRan: process.env.OCX_TEST_PRELOAD_PID === String(process.pid),
+              guardArmed: process.env.OCX_TEST_HOME_GUARD === "1",
+            } }));
+          });
+        `);
+        const args = ["test", "--preload", repoPath("tests/preload.ts"), fixture];
+        const child = spawnSync(process.execPath, args, {
+          cwd: root, env: { ...process.env }, encoding: "utf8", timeout: INTERNAL_DEADLINE_MS,
+        });
+        // Keep process diagnostics bounded and never render the owner token or child output.
+        expect(child.status).toBe(0);
+        const marker = child.stdout.split("\n").find(line => line.startsWith('{"nestedLockReceipt":'));
+        expect(marker ? JSON.parse(marker).nestedLockReceipt : null).toEqual({
+          samePath: true, sameRun: true, sameToken: true, member: true, preloadRan: true, guardArmed: true,
+        });
+        expect(readFileSync(join(lockPath!, "owner.json"), "utf8") === ownerBefore).toBe(true);
+
+        const incomplete = { ...process.env };
+        delete incomplete[TEST_RUN_LOCK_TOKEN_ENV];
+        const refused = spawnSync(process.execPath, args, {
+          cwd: root, env: incomplete, encoding: "utf8", timeout: INTERNAL_DEADLINE_MS,
+        });
+        expect(refused.status).toBe(1);
+        expect(refused.stderr.includes("capability is incomplete")).toBe(true);
+        expect(refused.stdout.includes('{"nestedLockReceipt":')).toBe(false);
+        expect(readFileSync(join(lockPath!, "owner.json"), "utf8") === ownerBefore).toBe(true);
+      } finally {
+        removeTreeWithRetry(root);
+      }
+    },
+    { timeout: SPAWN_BUDGET_MS },
+  );
 
   test("falls back from an unsafe XDG root to a validated mode-0700 UID directory", () => {
     if (process.platform === "win32" || typeof process.getuid !== "function") return;

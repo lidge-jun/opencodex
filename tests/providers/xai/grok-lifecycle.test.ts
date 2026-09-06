@@ -25,13 +25,20 @@ function sliceFn(source: string, start: string, end: string): string {
 describe("Grok fence lifecycle wiring", () => {
   test("handleStart syncs the Grok fence outside the Desktop-3P try", () => {
     const startFn = sliceFn(CLI_SOURCE, "async function handleStart(", "async function handleEnsure(");
+    const startupAt = startFn.indexOf("await reconcileClientStartupBeforeReady(");
     const registryAt = startFn.indexOf("buildDesktop3pRegistry(");
-    const registryCatchAt = startFn.indexOf("/* best-effort — registry rebuilds on first /v1/models call */", registryAt);
+    const afterStartupAt = startFn.indexOf("if (!startupSync.ran)", registryAt);
     const grokSyncAt = startFn.indexOf('await import("../grok/sync")');
 
-    expect(registryCatchAt).toBeGreaterThan(registryAt);
-    // Nested inside the registry try, a catalog throw skipped the fence entirely.
-    expect(grokSyncAt).toBeGreaterThan(registryCatchAt);
+    expect(startupAt).toBeGreaterThan(-1);
+    expect(registryAt).toBeGreaterThan(startupAt);
+    expect(afterStartupAt).toBeGreaterThan(registryAt);
+    const initialization = startFn.slice(startupAt, afterStartupAt);
+    expect(initialization).toMatch(/\}\s*catch\s*(?:\([^)]*\)\s*)?\{/);
+    expect(initialization).not.toContain('import("../grok/sync")');
+    // Grok follows the completed initialization call, outside its callback/try.
+    // A comment wording change must not masquerade as a lifecycle regression.
+    expect(grokSyncAt).toBeGreaterThan(afterStartupAt);
   });
 
   test("ensure passes only the observed live bind host across the mutation boundary", () => {

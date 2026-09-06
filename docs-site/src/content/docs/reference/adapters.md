@@ -23,11 +23,30 @@ adapter own retries/timeouts, while `runTurn` supports transports that cannot be
 HTTP fetch followed by one response stream. [`bridge.ts`](/reference/architecture/#the-bridge)
 then turns the events into Responses SSE.
 
+## External task input on translated Responses routes
+
+Codex task coordination can deliver input as `function_call_output` with nonblank
+`id`, `name` and `namespace` fields and no `call_id` property. OpenCodex maps this
+complete envelope to a user message before adapter translation. Its output must be
+nonblank text or a fully supported array of text and `input_image` URL parts. Text
+and image order are preserved; image detail `original` maps to `high`.
+
+Empty content, malformed or opaque parts, file-id-only images and partial envelopes
+remain invalid. Ordinary function/custom tool results still require a nonempty
+`call_id`. The envelope metadata identifies a compatibility shape and grants no
+additional permissions. Native passthrough and compaction retain their raw-body rules.
+
 ## `openai-chat`
 
 **Targets:** OpenAI **Chat Completions** (`POST {baseUrl}/chat/completions`; a trailing `/chat/completions` or `/` on `baseUrl` is stripped first) and every compatible
 provider — xAI, Kimi, DeepSeek, GLM, Groq, OpenRouter, Ollama (local), and more.
 **Auth:** `key` (Bearer).
+
+For xAI, the resolved upstream adapter can be `openai-chat` or `openai-responses`,
+depending on model defaults and explicit `modelAdapters` overrides. Both support
+public xAI API-key authentication and Grok CLI OAuth. The usage log's
+[`attempts[].credentialSource`](/reference/management-api/) follows that resolved
+transport; it does not infer subscription attribution from the inbound protocol.
 
 - Converts internal messages to OpenAI roles; maps tools to `{type:"function", function:{…}}` and
   `tool_choice` (`auto`/`none`/`required` or a named function).
@@ -48,6 +67,15 @@ provider — xAI, Kimi, DeepSeek, GLM, Groq, OpenRouter, Ollama (local), and mor
   this request shape. The adapter preserves requested `low`, `medium`, `high`, `xhigh`, and `max`
   tiers, accepts reasoning deltas from either `delta.reasoning_content` or `delta.reasoning`, requests
   streamed usage with `stream_options.include_usage`, and reads usage from non-stream response envelopes.
+
+Streaming tool calls retain their identity when a provider first sends an ID,
+then associates that ID with an index, and later sends index-only argument
+fragments. Those fragments assemble into one call with the original name and
+complete arguments; parallel calls retain separate identities.
+When present, streamed tool-call indexes must be non-negative safe integers. Non-numeric
+values and negative, fractional, or unsafe numbers terminate the stream with an upstream
+error before identity matching. Missing and null indexes remain absent-index placeholders;
+numeric strings are not coerced.
 
 ## `ollama-native`
 
@@ -95,10 +123,22 @@ body and response, with narrow compatibility rewrites for routed gateways.
 `forward` uses configured static headers without relaying caller authorization; `key` uses the
 configured provider key.
 
+Adapter selection does not select the upstream transport. Eligible requests can use the
+[upstream WebSocket proxy route](/reference/proxy-formats/#json-and-sse-output); invalid or unsupported
+WebSocket proxy settings fall back to HTTP/SSE. HTTP fetch-based Responses handling uses Bun's
+HTTP proxy rules and does not inherit the WSS-specific `ALL_PROXY` fallback.
+
 Noncanonical Responses gateways receive Codex's client-executed `tool_search` declaration as a
 collision-safe public function tool. Matching request history and JSON/SSE function calls are
 translated back to the private `tool_search` lifecycle for the client. Canonical OpenAI forward
 keeps the native private type unchanged.
+
+For OpenCode Go at `https://opencode.ai/zen/go/v1`, requests with `authMode` other
+than `"forward"` convert plaintext Codex `agent_message` items into public user messages, preserving content parts and readable author/recipient
+metadata. This conversion leaves encrypted or unknown content unchanged and does not apply
+to other destinations. Providers using `authMode: "forward"` retain these items unchanged.
+See [Go agent messages](/reference/configuration/providers/#opencode-go-session-and-agent-messages)
+for the separate opt-in encrypted-task recovery behavior.
 
 The canonical ChatGPT Codex forward destination also normalizes two public Responses shapes that
 its stricter backend rejects: fully textual `system` messages inside `input` are appended to the
@@ -135,6 +175,19 @@ of the HTTP retry loop.
 - In `forward` mode only a safe header allowlist is relayed (`FORWARD_HEADERS`): authorization,
   ChatGPT account id, and the OpenAI beta/originator/session headers. This is the ChatGPT-login path
   that also powers the [sidecars](/guides/sidecars/).
+
+## Command Code session affinity
+
+The OAuth `command-code` adapter derives an opaque `x-session-id` from the client
+thread identity, then the reasoning-replay conversation identity. When neither is
+available, it uses a prompt-cache key only if the integration has explicitly
+classified that key as belonging to one conversation. Shared or unclassified cache
+keys do not establish session affinity; requests without a usable identity receive
+a fresh session ID. Recovery and cached-history replay preserve this classification.
+
+The API-key `commandcode` provider uses the `openai-chat` adapter and supports
+forwarding `prompt_cache_key`. This is separate from the OAuth adapter's session
+header and does not guarantee a provider cache hit.
 
 ## `anthropic`
 
@@ -214,6 +267,13 @@ of the HTTP retry loop.
 
 - Builds Kiro `conversationState`, maps Codex tools and tool results, and sends image blocks supported
   by the Kiro wire.
+- Coalesces adjacent outputs from the same original tool call into one Kiro result. Text remains
+  ordered, images retain the existing per-message limits, and any error flag remains set. User,
+  developer, assistant or another tool's output ends the group. Distinct original IDs that map
+  to the same normalized Kiro ID are rejected.
+- Combined outputs keep real text and failure information without inserting an empty-output hint
+  for a later blank chunk. A single result keeps its existing normalization; an entirely text-empty
+  group receives one fallback, with neutral wording when images or an error flag are present.
 - Treats a client `parallel_tool_calls: true` value as permission rather than a wire requirement.
   Kiro remains serialized: the routed catalog advertises no parallel-tool capability and the
   adapter sends no parallel-control field upstream, but ordinary Codex tool turns are not rejected
@@ -344,6 +404,13 @@ compatibility pair: `agent.v1.AgentService/RunSSE` for server output and
   broader built-in executor and bypasses Codex approval/sandbox semantics, and legacy
   `unsafeAllowNativeLocalExec: true` remains equivalent only when `nativeLocalExec` is unset.
 
+Codex-compatible shell schemas retain sandbox permissions, justification, reusable
+prefix rules and login mode. Freeform tools expose one required string `input`
+and preserve its tool-specific guidance, such as the required patch envelope;
+bare `exec_command` and `shell_command` names are reserved for non-freeform shell
+bridges. Namespace a custom freeform tool that uses either name. These schema
+declarations do not grant approval or change execution policy.
+
 ## `azure-openai` (alias: `azure`)
 
 **Targets:** **Azure OpenAI**. Wraps `openai-responses` (so also `passthrough: true`).
@@ -361,3 +428,18 @@ Shared helpers used by the vision-aware adapters:
   Anthropic/Google image blocks.
 - `contentPartsToText(content)` — flatten content parts to text for text-only tool messages
   (an undescribed image becomes a short `[image]` marker, never a token-exploding base64 blob).
+
+## Grok Build terminal snapshots
+
+Requests marked with `x-opencodex-grok: 1` opt into a narrow Responses terminal
+repair. If `response.completed.response.output` is missing or empty, opencodex
+can reconstruct it from real, uniquely indexed, contiguous `output_item.done`
+items whose raw fields satisfy the supported shapes. Deltas alone do not create
+output. Malformed, contradictory, duplicated, gapped or oversized evidence keeps
+the empty terminal unchanged; failed and incomplete responses never become success.
+
+The marker is a client-selected compatibility option, not authenticated identity
+or a permission grant. Unmarked clients retain their existing behavior. This
+repair runs before the separate provider `responsesSnapshotRepair` option and
+does not enable that broader lifecycle repair. Existing tool-search, custom-tool,
+function-completion and undeclared-tool handling keep their established order.

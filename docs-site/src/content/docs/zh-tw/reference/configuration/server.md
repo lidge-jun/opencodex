@@ -201,3 +201,7 @@ Anthropic OAuth sidecar 重用 opencodex 既有的 Claude Code OAuth 指紋。�
 `runtimeRole` 預設為 `standalone`。Hub 使用 `hub.managementPublicOrigin`、僅限迴路的 `hub.managementIngress`（缺省為 `enabled:false`）與正確的 `remoteGui.allowedTailscaleUsers`（缺省為空）。用戶端金鑰保存在 `service-api-token` 而不是 `config.json`；輪替期間可能暫時存在 `service-api-token.prev`。用量不會鏡像。
 
 `remoteGui.allowInsecureHttp` 是已棄用的 no-op，只為讓舊的 strict-schema 設定繼續載入而保留。請從設定移除：pairing grant 僅接受 loopback 或已驗證的 HTTPS；設為 `true` 也不會重新開放明文 HTTP pairing。
+
+## Codex 配額網路診斷
+
+主 Codex 帳戶列中的 `quotaRefresh` 描述配額查詢結果，並不代表剩餘配額或模型存取權限。讀取快取或未執行查詢時，這個欄位可能省略。查詢使用執行中代理服務的環境，而不是目前終端機的環境。未設定 `proxy` 時保留既有環境；`"auto"` 只在啟動時讀取 Windows 靜態代理設定，不會自動處理 PAC/WPAD、僅 SOCKS 的設定或執行中的變更。TUN 測試成功本身不能證明 HTTP 代理路徑正常。命令與狀態說明請見[英文網路診斷章節](/reference/configuration/server/#codex-quota-network-diagnostics)。

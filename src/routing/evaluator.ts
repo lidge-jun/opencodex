@@ -54,6 +54,8 @@ export interface PolicyCandidateEvidence {
   accountRef?: string;
   /** Codex pool account id (provider "openai"); used to derive account-scoped quota evidence. */
   codexAccountId?: string;
+  /** A failed effective-transport resolution excludes the candidate under every unknown policy. */
+  routeResolutionFailed?: boolean;
   capability?: RouteCapabilityEvidence;
   health?: RouteHealthEvidence;
   quota?: RouteQuotaEvidence;
@@ -278,6 +280,8 @@ export function evaluatePolicyProfile(
       ...requestRequirementFor(requestEvidence, evidence.capability),
     ];
     const exclusions: RouteExclusionReason[] = [];
+    const routeUnavailable = evidence.routeResolutionFailed === true;
+    if (routeUnavailable) exclusions.push({ code: "route-unavailable" });
     const bad = unsatisfiedOrUnknown(requirements);
     for (const requirement of bad) {
       if (requirement.outcome === "unsatisfied") {
@@ -310,7 +314,7 @@ export function evaluatePolicyProfile(
     if (unknownCostBlocked) {
       exclusions.push({ code: "cost-limit-unknown", detail: "maxEstimatedCostUsd" });
     }
-    let eligible = !unsatisfied && !excludedByUnknown && !overCostLimit && !unknownCostBlocked;
+    let eligible = !routeUnavailable && !unsatisfied && !excludedByUnknown && !overCostLimit && !unknownCostBlocked;
 
     // Trace/dry-run copy only: report the profile cap that was applied and the
     // operator-visible outcome. Do not feed this copy into costScore() — that

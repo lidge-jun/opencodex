@@ -32,6 +32,10 @@ OpenCodex 儀表板中的 **Models → Routing** 分頁可以直接管理 `confi
 
 ## 試跑已儲存的設定檔
 
+候選能力使用套用 registry 覆寫後的有效供應商設定。因此，本地性需求（`localOnly` 與 `remoteAllowed`）會依據實際上游位址判定。若無法分類該位址，則由設定檔的 `unknownEvidence.capability` 決定候選是否合格。
+無法解析的無效供應商設定一律以 `route-unavailable` 排除，即使原則允許未知能力也是如此。
+缺少或停用的供應商也會在評分前以 `route-unavailable` 排除。
+
 選取一個已儲存的設定檔，使用 **Dry-run evaluation** 加入請求證據，例如 context-window 大小、工具使用、圖片輸入或結構化輸出。試跑會評估資格與評分，但永遠不會送出上游模型請求。
 
 未儲存的編輯不會被試跑使用。請先儲存設定檔，讓顯示的 revision 與評估參照同一份設定。

@@ -60,6 +60,8 @@ opencodex 從自己的環境讀取這些變數。如果你的 gateway 以 profil
 
 **如果某個值無法忠實重寫，開關會拒絕執行。** 往返覆蓋這些格式在實務上會用到的值種類；當它做不到時——例如使用 `inf` 或 `nan` 的 TOML 檔案，我們可用的 parser 無法準確讀回——套用會停止並說明，而不是寫入被改動的值然後宣稱成功。你會看到檔案被指名，磁碟上沒有任何東西被移動。手動編輯那個檔案仍然有效；只有我們的自動重寫會拒絕。
 
+TOML 日期與時間值也會阻止自動重寫：合併步驟會將這些帶有型別的值轉成加引號的字串，陣列和行內表格中的值也一樣。原本就加引號的日期字串仍受支援；若要保留不加引號的日期型別，請手動編輯設定。
+
 **Pi、Kimi Code、Gajae Code、MiniMax Code 與受管理 DSH 整合只能對 loopback bind 運作。** 前四者的設定沒有非 loopback bind 所需的 `x-opencodex-api-key` header 欄位。DSH 雖然提供通用 headers map，但 rc.6 並未把這個專用准入 header 記錄為受支援的整合契約，因此受管理 writer 會選擇安全拒絕，而不自行猜測。請改用 SSH tunnel，或由本機 forwarder 加上該 header 後再以 loopback 存取。
 
 **產生的 OMP 整合也刻意只支援 loopback。** OMP 確實支援 provider 層級的 headers，但這個最初的整合不會發出遠端 `x-opencodex-api-key` 憑證連線。手動的遠端 OMP 設定目前不在受管理的整合範圍內。

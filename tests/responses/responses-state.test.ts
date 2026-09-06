@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, jest, spyOn, test } from "bun:test";
 import { BULK_DURABLE_IO_BUDGET_MS } from "../helpers/test-budget";
 import { findDeadPid } from "../helpers/dead-pid";
 import {
@@ -1297,6 +1297,8 @@ describe("Responses previous_response_id state", () => {
   test("shutdown drain reaches a stable tail after a publication is appended mid-drain", async () => {
     forceWindowsAclLane();
     setResponseSpillShutdownBudgetForTests({ totalMs: 1_000, fallbackReserveMs: 500 });
+    const nativeSetImmediate = setImmediate;
+    const epoch = Date.now();
     let releaseFirst!: () => void;
     let releaseSecond!: () => void;
     let firstEntered!: () => void;
@@ -1305,35 +1307,99 @@ describe("Responses previous_response_id state", () => {
     const secondGate = new Promise<void>(resolve => { releaseSecond = resolve; });
     const firstStarted = new Promise<void>(resolve => { firstEntered = resolve; });
     const secondStarted = new Promise<void>(resolve => { secondEntered = resolve; });
-    let aclCalls = 0;
-    setAsyncIcaclsRunnerForTests(async () => {
-      aclCalls += 1;
-      if (aclCalls === 1) {
-        firstEntered();
-        await firstGate;
-      } else if (aclCalls === 7) {
-        secondEntered();
-        await secondGate;
+    const gatedTemps = new Set<string>();
+    setAsyncIcaclsRunnerForTests(async args => {
+      const target = args[0] ?? "";
+      if (!isSpillAclTarget(args) || !target.endsWith(".tmp") || args[1] !== "/grant:r") {
+        return ICACLS_OK;
       }
-      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+      if (!gatedTemps.has(target)) {
+        gatedTemps.add(target);
+        if (gatedTemps.size === 1) {
+          firstEntered();
+          await firstGate;
+        } else if (gatedTemps.size === 2) {
+          secondEntered();
+          await secondGate;
+        }
+      }
+      return ICACLS_OK;
+    });
+    let syncSpillCalls = 0;
+    setIcaclsRunnerForTests(args => {
+      if (isSpillAclTarget(args)) syncSpillCalls += 1;
+      return ICACLS_OK;
+    });
+    let stubSwaps = 0;
+    setSpillIoForTest({
+      record: event => { if (event === "stub-swap") stubSwaps += 1; },
     });
     setResponseStateByteCapForTests(1_024);
-    rememberLarge("resp_fixed_point_first", "a".repeat(8_000));
-    await firstStarted;
-
     let flushed = false;
-    const flushing = flushResponseState().then(() => { flushed = true; });
-    rememberLarge("resp_fixed_point_second", "b".repeat(8_000));
-    releaseFirst();
-    await secondStarted;
+    let drained = false;
+    let draining: Promise<{ ok: true } | { ok: false; error: unknown }> | undefined;
+    let flushing: Promise<{ ok: true } | { ok: false; error: unknown }> | undefined;
+    let restoreClock: (() => void) | undefined;
     try {
-      await new Promise(resolve => setTimeout(resolve, 25));
+      // This case proves publication ordering; real disk latency must not fire the drain timer.
+      jest.useFakeTimers();
+      const nowSpy = spyOn(Date, "now").mockReturnValue(epoch);
+      restoreClock = () => { nowSpy.mockRestore(); };
+      setNowForTests(() => epoch);
+      setResponseSpillNowForTests(() => epoch);
+      rememberLarge("resp_fixed_point_first", "a".repeat(8_000));
+      await firstStarted;
+
+      // Handle rejection immediately, including when a gate/assertion fails before this await.
+      draining = flushPendingResponseSpillsForTests().then(
+        () => { drained = true; return { ok: true } as const; },
+        (error: unknown) => { drained = true; return { ok: false, error } as const; },
+      );
+      flushing = flushResponseState().then(
+        () => { flushed = true; return { ok: true } as const; },
+        (error: unknown) => { flushed = true; return { ok: false, error } as const; },
+      );
+      rememberLarge("resp_fixed_point_second", "b".repeat(8_000));
+      releaseFirst();
+      await secondStarted;
+      await new Promise<void>(resolve => nativeSetImmediate(resolve));
+      jest.advanceTimersByTime(25);
+      await new Promise<void>(resolve => nativeSetImmediate(resolve));
+      // Snapshot I/O after draining must not mask a premature drain return.
+      expect(drained).toBe(false);
       expect(flushed).toBe(false);
-    } finally {
+      expect(gatedTemps.size).toBe(2);
+      expect(stubSwaps).toBe(1);
+      expect(syncSpillCalls).toBe(0);
+
       releaseSecond();
+      const drainOutcome = await draining;
+      if (!drainOutcome.ok) throw drainOutcome.error;
+      const outcome = await flushing;
+      if (!outcome.ok) throw outcome.error;
+      expect(responseStateMetrics()).toMatchObject({ residentCount: 0, spillStubCount: 2 });
+      expect(pendingResponseSpillMetricsForTests()).toEqual({ count: 0, bytes: 0 });
+      expect(stubSwaps).toBe(2);
+      expect(syncSpillCalls).toBe(0);
+      for (const [id, payload] of [["resp_fixed_point_first", "a"], ["resp_fixed_point_second", "b"]] as const) {
+        expect(JSON.stringify(expandPreviousResponseInput({
+          previous_response_id: id,
+          input: "next",
+        }))).toContain(payload.repeat(8_000));
+      }
+    } finally {
+      releaseFirst();
+      releaseSecond();
+      try {
+        await draining;
+        await flushing;
+        await awaitResponseSpillPublicationTailForTests();
+        await flushPendingResponseSpillsForTests();
+      } finally {
+        restoreClock?.();
+        jest.useRealTimers();
+      }
     }
-    await flushing;
-    expect(responseStateMetrics()).toMatchObject({ residentCount: 0, spillStubCount: 2 });
   });
 
   test("shutdown drain cap expiry enters the synchronous spill fallback", async () => {
@@ -1361,16 +1427,27 @@ describe("Responses previous_response_id state", () => {
       return { success: true, exitCode: 0, timedOut: false, stdout: "" };
     });
     setResponseStateByteCapForTests(1_024);
-    rememberLarge("resp_shutdown_fallback", "f".repeat(2 * 1024 * 1024 + 4_096));
-    await started;
-
+    let restoreClock: (() => void) | undefined;
     try {
+      rememberLarge("resp_shutdown_fallback", "f".repeat(2 * 1024 * 1024 + 4_096));
+      await started;
+      // ACL/spill clocks alone do not control the shutdown reserve: state.ts
+      // uses Date.now(). Keep its 80 ms budget independent of real disk latency.
+      // The real 40 ms drain timer still fires while publication stays gated.
+      const shutdownNow = Date.now();
+      const nowSpy = spyOn(Date, "now").mockReturnValue(shutdownNow);
+      restoreClock = () => { nowSpy.mockRestore(); };
       await flushResponseState();
       expect(synchronousCalls).toBeGreaterThan(0);
       expect(pendingResponseSpillMetricsForTests()).toEqual({ count: 0, bytes: 0 });
       expect(responseStateMetrics()).toMatchObject({ residentCount: 0, spillStubCount: 1 });
     } finally {
       release();
+      try {
+        await awaitResponseSpillPublicationTailForTests();
+      } finally {
+        restoreClock?.();
+      }
     }
   });
 
@@ -1446,31 +1523,61 @@ describe("Responses previous_response_id state", () => {
     const started = new Promise<void>(resolve => { entered = resolve; });
     let aclClock = 0;
     setNowForTests(() => aclClock);
+    setResponseSpillNowForTests(() => aclClock);
     setAsyncIcaclsRunnerForTests(async args => {
       if (!isSpillAclTarget(args)) return ICACLS_OK;
       entered();
       await gate;
       return ICACLS_OK;
     });
-    const deadlines: number[] = [];
-    setIcaclsRunnerForTests((_args, timeoutMs) => {
-      deadlines.push(timeoutMs);
+    let released = false;
+    const deadlines: Array<{ target: string; timeoutMs: number; spentBefore: number; gateReleased: boolean }> = [];
+    setIcaclsRunnerForTests((args, timeoutMs) => {
+      if (!isSpillAclTarget(args)) return ICACLS_OK;
+      deadlines.push({ target: args[0]!, timeoutMs, spentBefore: aclClock, gateReleased: released });
       aclClock += 20;
-      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+      return ICACLS_OK;
     });
     setResponseStateByteCapForTests(1_024);
-    rememberLarge("resp_shutdown_budget", "b".repeat(2 * 1024 * 1024 + 4_096));
-    await started;
-
+    let restoreClock: (() => void) | undefined;
     try {
+      rememberLarge("resp_shutdown_budget", "b".repeat(2 * 1024 * 1024 + 4_096));
+      await started;
+      // Keep the native 200 ms drain timer, but charge only logical ACL work to the reserve.
+      const epoch = Date.now();
+      const nowSpy = spyOn(Date, "now").mockImplementation(() => epoch + aclClock);
+      restoreClock = () => { nowSpy.mockRestore(); };
       await flushResponseState();
+      const logicalElapsedMs = totalMs - fallbackReserveMs + aclClock;
+      expect(deadlines.length).toBeGreaterThanOrEqual(6);
+      expect(Math.max(...deadlines.map(call => call.timeoutMs))).toBeLessThanOrEqual(Math.floor(fallbackReserveMs / 2));
+      expect(logicalElapsedMs).toBeLessThanOrEqual(totalMs);
+      const previousDeadlineByTarget = new Map<string, number>();
+      for (const { target, timeoutMs, spentBefore, gateReleased } of deadlines) {
+        expect(gateReleased).toBe(false);
+        expect(timeoutMs).toBeGreaterThan(0);
+        expect(timeoutMs).toBeLessThanOrEqual(300 - spentBefore);
+        const previous = previousDeadlineByTarget.get(target);
+        if (previous !== undefined) expect(timeoutMs).toBe(previous - 20);
+        previousDeadlineByTarget.set(target, timeoutMs);
+      }
+      expect(pendingResponseSpillMetricsForTests()).toEqual({ count: 0, bytes: 0 });
+      expect(responseStateMetrics()).toMatchObject({ residentCount: 0, spillStubCount: 1 });
+      expect(JSON.stringify(expandPreviousResponseInput({
+        previous_response_id: "resp_shutdown_budget",
+        input: "next",
+      }))).toContain("b".repeat(2 * 1024 * 1024 + 4_096));
     } finally {
+      released = true;
       release();
+      try {
+        // Shutdown can clear pending ownership before the superseded async runner settles.
+        await awaitResponseSpillPublicationTailForTests();
+        await flushPendingResponseSpillsForTests();
+      } finally {
+        restoreClock?.();
+      }
     }
-    const logicalElapsedMs = totalMs - fallbackReserveMs + aclClock;
-    expect(deadlines.length).toBeGreaterThanOrEqual(6);
-    expect(Math.max(...deadlines)).toBeLessThanOrEqual(Math.floor(fallbackReserveMs / 2));
-    expect(logicalElapsedMs).toBeLessThanOrEqual(totalMs);
   });
 
   test("late async spill completion cannot overwrite the shutdown fallback", async () => {

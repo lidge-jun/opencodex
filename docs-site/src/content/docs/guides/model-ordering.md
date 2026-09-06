@@ -23,7 +23,7 @@ priorities `i * N + j`, where `j` is the selector's zero-based position; a route
 rows are moved outside those selector groups. Codex still advertises only the first five
 picker-visible rows.
 
-The relevant no-selector priorities are:
+Without complete-picker ordering, the relevant no-selector priorities are:
 
 | Catalog entry | Priority | Source |
 | --- | ---: | --- |
@@ -133,10 +133,41 @@ featured block:
 Listed routed rows appear in the configured order. A routed row omitted from the array keeps its
 normal priority, so it remains ahead of the `modelPickerOrder` display band; list every routed row
 whose relative position you want to control. A row also present in `subagentModels` keeps its
-featured priority. Bare native and account-qualified native rows are not reordered by
-`modelPickerOrder`; use `subagentModels` for those rows.
+featured priority. With a routed-only list, native rows keep their normal positions.
 
-`modelPickerOrder` never changes the `spawn_agent` candidate set. It changes only the
-Codex-visible picker priority while opencodex retains each moved row's natural priority for
-sub-agent selection. `disabledModels` and each provider's `selectedModels` remain visibility fields,
+To order the complete picker, include a bare native id:
+
+```json
+{
+  "modelPickerOrder": ["gpt-5.6-sol", "opencode-go/glm-5.3"]
+}
+```
+
+Listed rows appear first in array order, followed by unlisted rows in natural priority
+order. Matching uses exact catalog ids: `gpt-5.6-sol` and `openai/gpt-5.6-sol` are separate
+rows. Raw and encoded spellings of the same routed id are also accepted, with exact
+matches taking precedence. Empty entries are ignored. Account-qualified rows need
+their selector-qualified id in the list.
+
+### Migration note: native ids in existing orders
+
+Previously, native ids in `modelPickerOrder` were ignored. An existing list containing
+a bare native id now activates complete-picker ordering, including featured rows.
+Remove bare native ids to keep the previous routed-only behavior. Unset, empty and
+routed-only lists retain their behavior; OpenCodex's natural-priority guidance candidate calculation is unchanged.
+
+`modelPickerOrder` preserves OpenCodex's natural-priority calculation of up to five preferred
+candidates for subagent guidance. Each moved row retains its natural priority separately from
+its native `priority`; changing picker order alone must not change that OpenCodex calculation.
+It does not restrict eligibility for an exact-name model override: the native advertised list
+is not an allowlist, and existing authentication, model/effort and backend constraints still apply.
+
+Native Codex uses native `priority` to select the first five eligible picker-visible models
+advertised by `spawn_agent` on V1 and on V2 when model overrides are exposed. Those advertised
+five may therefore change with picker order, even when OpenCodex's preferred candidates remain
+unchanged. V1 receives no OpenCodex preferred-roster injection. V2 may additionally receive
+OpenCodex's natural-priority guidance when the client catalog state permits; that guidance does
+not reorder the native tool's advertised list.
+
+`disabledModels` and each provider's `selectedModels` remain visibility fields,
 not ordering controls. There is no separate `modelOrder`, `providerOrder`, or priority-map setting.

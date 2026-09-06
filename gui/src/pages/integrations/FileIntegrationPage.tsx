@@ -78,12 +78,17 @@ export default function FileIntegrationPage({
   apiBase,
   client,
   active = true,
+  profileId,
+  profileLabel,
 }: {
   apiBase: string;
   client: FileIntegrationClientId;
   active?: boolean;
+  profileId?: number;
+  profileLabel?: string;
 }) {
   const t = useT();
+  const scopeKey = profileId === undefined ? client : `${client}:${profileId}`;
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const [restoring, setRestoring] = useState<IntegrationJournalRow | null>(null);
@@ -93,36 +98,38 @@ export default function FileIntegrationPage({
   const [overwriting, setOverwriting] = useState(false);
 
   const fetchState = useCallback(
-    (signal: AbortSignal) => loadIntegrationState(apiBase, client, signal),
-    [apiBase, client],
+    (signal: AbortSignal) => loadIntegrationState(apiBase, client, signal, profileId),
+    [apiBase, client, profileId],
   );
   const fetchHistory = useCallback(
-    async (signal: AbortSignal) => (await loadIntegrationJournal(apiBase, client, signal)).operations,
-    [apiBase, client],
+    async (signal: AbortSignal) => (await loadIntegrationJournal(apiBase, client, signal, profileId)).operations,
+    [apiBase, client, profileId],
   );
 
   const stateResource = useDataSurface<IntegrationStatus>(
-    `integration-state:${apiBase}:${client}`,
-    [apiBase, client],
+    `integration-state:${apiBase}:${scopeKey}`,
+    [apiBase, client, profileId],
     fetchState,
     {
       isEmpty: () => false,
       enabled: active,
-      sessionCacheKey: `ocx.integrations.state.v1:${apiBase}:${client}`,
+      sessionCacheKey: `ocx.integrations.state.v1:${apiBase}:${scopeKey}`,
     },
   );
   const historyResource = useDataSurface<IntegrationJournalRow[]>(
-    `integration-journal:${apiBase}:${client}`,
-    [apiBase, client],
+    `integration-journal:${apiBase}:${scopeKey}`,
+    [apiBase, client, profileId],
     fetchHistory,
     {
       isEmpty: rows => rows.length === 0,
       enabled: active,
-      sessionCacheKey: `ocx.integrations.client-journal.v1:${apiBase}:${client}`,
+      sessionCacheKey: `ocx.integrations.client-journal.v1:${apiBase}:${scopeKey}`,
     },
   );
 
-  const status = stateResource.state.data ?? null;
+  const candidate = stateResource.state.data ?? null;
+  const status = candidate && (profileId === undefined
+    || (candidate.profileId === profileId && typeof candidate.enabled === "boolean")) ? candidate : null;
   const history = historyResource.state.data ?? [];
 
   const refresh = () => {
@@ -135,11 +142,11 @@ export default function FileIntegrationPage({
     setPending(true);
     setFailure(null);
     try {
-      await toggleIntegration(apiBase, client, enabled);
-      refresh();
+      await toggleIntegration(apiBase, client, enabled, undefined, undefined, profileId);
     } catch (error) {
       setFailure(describeRefusal(t, error));
     } finally {
+      refresh();
       setPending(false);
     }
   };
@@ -157,10 +164,11 @@ export default function FileIntegrationPage({
     if (!status) return;
     setFailure(null);
     try {
-      await toggleIntegration(apiBase, client, true, undefined, true);
+      await toggleIntegration(apiBase, client, true, undefined, true, profileId);
       refresh();
     } catch (error) {
       setFailure(describeRefusal(t, error));
+      refresh();
       throw error;
     }
   };
@@ -174,12 +182,12 @@ export default function FileIntegrationPage({
    * to remove the block; updating a stale block is a separate action with its
    * own button below.
    */
-  const toggle = () => void mutate(!(status && (status.state === "current" || status.state === "stale")));
+  const toggle = () => void mutate(!(status && (profileId !== undefined ? status.enabled : (status.state === "current" || status.state === "stale"))));
 
   if (!status) {
     return (
       <section className="integration-client-page">
-        {stateResource.state.kind === "failed-cold"
+        {stateResource.state.showError
           ? <Notice tone="err">{t("integrations.error.load")}</Notice>
           : <p className="page-sub">{t("common.loading")}</p>}
       </section>
@@ -187,34 +195,42 @@ export default function FileIntegrationPage({
   }
 
   const applied = status.state === "current" || status.state === "stale";
-  // Conflict and unsafe are never auto-resolved: the switch is locked and the
-  // user is told why, because the alternative is deleting an edit we do not own.
-  const locked = !status.installed || status.state === "conflict" || status.state === "unsafe";
+  const enabled = profileId !== undefined ? status.enabled === true : applied;
+  const profileUnavailable = profileId !== undefined && (stateResource.state.showError || stateResource.state.refreshing);
+  // A profile may stop future sync even when its file cannot be changed; the
+  // writer still refuses unsafe deletion and reports the actual state separately.
+  const locked = (!status.installed || status.state === "conflict" || status.state === "unsafe")
+    && !(profileId !== undefined && enabled);
 
   return (
     <section className="integration-client-page">
       <div className="integration-client-head">
         <ClientMark src={markFor(client)} label={t(TAB_LABEL_KEY[client])} size={24} />
-        <h3>{t(TAB_LABEL_KEY[client])}</h3>
+        <h3>{profileLabel ?? t(TAB_LABEL_KEY[client])}</h3>
         <IntegrationStateBadge
           state={status.state}
           installed={status.installed}
-          id={`integration-state-${client}`}
+          id={`integration-state-${client}${profileId === undefined ? "" : `-${profileId}`}`}
         />
         <Switch
-          on={applied}
+          on={enabled}
           onClick={toggle}
-          disabled={locked || pending}
-          label={applied ? t("integrations.action.disable") : t("integrations.action.apply")}
+          disabled={locked || pending || profileUnavailable}
+          label={enabled ? t("integrations.action.disable") : t("integrations.action.apply")}
         />
       </div>
 
+      {profileId !== undefined && stateResource.state.showError && (
+        <Notice tone="err">{t("integrations.aside.loadError")}
+          <button type="button" className="btn btn-ghost btn-sm" onClick={refresh} disabled={pending || stateResource.state.refreshing}>{t("common.retry")}</button>
+        </Notice>
+      )}
       {/*
         Updating a stale block is its own action. Folding it into the switch
         made "off" mean "refresh", which is the opposite of what the control
         said it would do.
       */}
-      {status.state === "stale" && (
+      {status.state === "stale" && enabled && (
         <button
           type="button"
           className="btn btn-ghost"
@@ -281,8 +297,10 @@ export default function FileIntegrationPage({
         <RestoreDialog
           apiBase={apiBase}
           row={restoring}
+          profileId={profileId}
           onClose={() => setRestoring(null)}
           onRestored={refresh}
+          onReconcile={refresh}
         />
       )}
       {deleting && (
@@ -298,7 +316,7 @@ export default function FileIntegrationPage({
           onClose={() => setDeleting(null)}
           onConfirm={async () => {
             try {
-              await deleteJournalEntry(apiBase, deleting.opId);
+              await deleteJournalEntry(apiBase, deleting.opId, undefined, profileId);
             } catch (error) {
               // The requested end state is already true when another tab
               // removed this row. Reconcile the view instead of keeping a

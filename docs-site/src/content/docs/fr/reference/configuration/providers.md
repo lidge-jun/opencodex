@@ -28,8 +28,9 @@ Après une inscription ou une connexion OAuth dans l’interface, une boîte de 
 | `providers` | `Record<string, OcxProviderConfig>` | — | Mappage du nom du fournisseur avec la configuration du fournisseur. |
 | `openaiProviderTierVersion?` | `2` | défini par la migration | Marque la projection OpenAI prenant en compte les options uniques comme terminée. |
 | `disabledModels?` | `string[]` | — | Modèles masqués du catalogue de Codex et de `/v1/models`, mais non bloqués des appels proxy directs. Un identifiant acheminé est supprimé des listes. Un identifiant natif qualifié de compte masque uniquement cette ligne de sélecteur ; un identifiant GPT natif nu masque la ligne nue et chaque ligne de sélecteur de compte pour ce modèle. La page Modèles du tableau de bord expose uniquement les lignes natives routées et nues ; utilisez ce champ de configuration directement pour masquer une ligne qualifiée par le sélecteur. |
-| `providerContextCaps?` | `Record<string, number>` | `{}` | Limites de contexte Codex-visibles par fournisseur. Un plafond abaisse uniquement une fenêtre de contexte connue. |
-| `contextCapValue?` | `number` | `350000` | Valeur par défaut utilisée par les contrôles de plafond de contexte du tableau de bord. La modifier applique la valeur à chaque fournisseur routé — y compris ceux qui ne possèdent aucune entrée `providerContextCaps` — uniquement lorsque l'option « appliquer à chaque fournisseur routé » est activée ; sinon, chaque fournisseur conserve son propre plafond. |
+| `providerContextCaps?` | `Record<string, number>` | `{}` | Limites de contexte actives par fournisseur. Les fenêtres ordinaires sont réduites ; les modèles natifs prenant en charge une fenêtre longue peuvent être étendus uniquement jusqu’à leur propre plafond pris en charge. |
+| `providerContextCapValues?` | `Record<string, number>` | `{}` | Dernières limites sélectionnées par fournisseur, conservées après désactivation. Ces valeurs n’activent aucun plafond. Une valeur active est prioritaire sur une valeur mémorisée. |
+| `contextCapValue?` | `number` | `350000` | Valeur par défaut lors de la première activation. Les activations suivantes restaurent la sélection du fournisseur. Modifier la valeur globale avec `setAll: true` ne modifie que les plafonds actifs ; `setAll: true` sans valeur active tous les fournisseurs configurés à la valeur globale actuelle. |
 | `codexAccounts?` | `CodexAccount[]` | `[]` | Métadonnées du compte pool ChatGPT/Codex gérées par Codex Auth. Les secrets vivent séparément dans `codex-accounts.json`. |
 | `pausedCodexAccountIds?` | `string[]` | `[]` | Comptes exclus de la sélection du pool jusqu'à la reprise, y compris le compte principal `__main__` lorsqu'il est mis en pause. |
 | `codexAccountNamespaces?` | `Record<string, string>` | — | Mappage facultatif d’un sélecteur de modèle public arbitraire vers une cible de compte Codex stockée. Lorsque les lignes du sélecteur qualifié par compte sont activées, chaque sélecteur dont la cible est présente ajoute des lignes `<selector>/<native-openai-model>` distinctes au sélecteur Codex ; chaque ligne utilise uniquement ce compte. Dès qu'un sélecteur est actif, les lignes natives non qualifiées sont masquées dans le sélecteur, mais leurs identifiants restent routables et figurent toujours dans la réponse brute de `/v1/models`, sauf désactivation explicite. |
@@ -93,7 +94,7 @@ sauvegarde dont le contenu diffère, puis réécrit en identifiants sans préfix
 | `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Style de l'en-tête de clé Anthropic. La valeur par défaut est l'en-tête natif `x-api-key` ; ce champ n'est valable que pour les fournisseurs `anthropic` authentifiés par clé. |
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | Pool multi-clés. `apiKey` reflète l'entrée active ; chaque élément a `id`, `key`, `label` facultatif et `addedAt` numérique facultatif. |
 | `defaultModel?` | `string` | Modèle utilisé lorsque ce fournisseur est sélectionné sans modèle explicite. |
-| `models?` | `string[]` | Liste initiale ou de repli des modèles. Avec `liveModels: false`, ce sont les seuls modèles découverts. |
+| `models?` | `string[]` | Liste initiale ou de repli. Avec `liveModels: false`, une liste `models` non vide est suivie de `retainModels` ; si `models` est vide ou absent, la liste commence par `defaultModel` (si configuré), puis `retainModels`, en conservant la première occurrence de chaque identifiant. |
 | `liveModels?` | `boolean` | Récupère le catalogue actif au démarrage et lors de la synchronisation (true par défaut). Les fournisseurs personnalisés utilisent `${baseUrl}/models` ; les fournisseurs intégrés peuvent employer une URL de registre et un filtre. |
 | `selectedModels?` | `string[]` | Liste autorisée du catalogue après la découverte. Non vide expose uniquement ces identifiants ; vide ou omis expose tous les modèles découverts. |
 | `contextWindow?` | `number` | Repli contextuel à l’échelle du fournisseur lorsque les métadonnées en amont sont absentes ; sinon, un plafond qui conserve des métadonnées en direct plus petites. Le tableau de bord Modèles expose cela séparément de `providerContextCaps`. |
@@ -435,8 +436,17 @@ modèle. Le même mappage s'applique à un sélecteur natif `vercel/<model-id>`�
 
 ## Listes autorisées de modèles statiques
 
-Réglez `liveModels: false` pour exposer uniquement `models`. Si `models` est vide ou omis, le fournisseur n'expose
-aucun modèle routé. La découverte dynamique rejette plus de 4 Mio ou 2 000 lignes de modèle brutes avant leur mise en cache ;
+Avec `liveModels: false`, si `models` est vide ou absent, la liste initiale commence par le
+`defaultModel` configuré, puis les identifiants de `retainModels`. Les doublons sont supprimés
+en conservant leur première occurrence. Une liste `models` explicite non vide est au contraire
+suivie de `retainModels`, sans ajout implicite d’un autre `defaultModel`. Ce dernier peut toujours
+être inscrit explicitement dans `models` ou `retainModels`. Si aucun de ces champs ne fournit
+d’identifiant, la liste initiale est vide. Cet ordre ne garantit pas l’ordre final du sélecteur.
+`selectedModels`, `disabledModels` et la désactivation du fournisseur restent applicables.
+`authMode: "forward"` conserve sa branche distincte et n’utilise pas cette liste statique routée.
+Ces règles ne changent pas le repli en cas d’échec de la découverte en direct.
+
+La découverte dynamique rejette plus de 4 Mio ou 2 000 lignes de modèle brutes avant leur mise en cache ;
 les préréglages intégrés peuvent appliquer des limites inférieures et filtrer les lignes admissibles à la conversation. Les résultats trop volumineux ou mal formés
 utilisent le catalogue obsolète ou configuré comme solution de repli. Un résultat valide ne contenant aucun modèle admissible fait autorité et n'est pas
 silencieusement remplacé ou tronqué.

@@ -100,14 +100,13 @@ function installModeHintRuntime(supported = true): string {
 describe("catalog ultra (always-on)", () => {
   const routed = [{ id: "glm-5.2", provider: "opencode-go", reasoningEfforts: ["low", "medium", "high", "xhigh"] }];
 
-  test("routed + old natives always advertise mock max AND ultra", () => {
+  test("Go keeps declared efforts while old natives retain mock tiers", () => {
     const entries = buildCatalogEntries(template(), ["gpt-5.5"], routed as never, [], false);
     const native = entries.find(e => e.slug === "gpt-5.5")!;
     const glm = entries.find(e => e.slug === "opencode-go/glm-5.2")!;
     expect(efforts(native)).toContain("ultra");
     expect(efforts(native)).toContain("max");
-    expect(efforts(glm)).toContain("ultra");
-    expect(efforts(glm)).toContain("max"); // mock max: adapters/wire clamp keep it honest
+    expect(efforts(glm)).toEqual(["low", "medium", "high", "xhigh"]);
   });
 
   test("gpt-5.6-sol keeps native ultra + max; luna has max but no native ultra (upstream ladder)", () => {

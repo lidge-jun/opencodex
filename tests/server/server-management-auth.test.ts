@@ -5,7 +5,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getConfigPath, saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
-import { findAvailablePort } from "../../src/server/ports";
 import type { OcxConfig } from "../../src/types";
 import { serveGuiFile, serveSessionBootstrap } from "../../src/server/gui-static";
 import { isProxyAdmissionSecret } from "../../src/server/auth-cors";
@@ -114,6 +113,37 @@ function hubConfig(publicOrigin = "https://hub.example.test"): OcxConfig {
     remoteGui: { allowedTailscaleUsers: ["alice@example.test"] },
     corsAllowOrigins: ["https://dashboard.example.test"],
   };
+}
+
+/** Keep real ingress/handlers while the kernel allocates both ports at the actual bind. */
+async function startEphemeralHubServer(deps: Parameters<typeof startServer>[1]) {
+  const nativeServe = Bun.serve.bind(Bun);
+  const listeners: Array<ReturnType<typeof Bun.serve>> = [];
+  const hostnames: unknown[] = [];
+  const serveSpy = spyOn(Bun, "serve").mockImplementation((options) => {
+    const listener = nativeServe({ ...options, port: 0 } as Parameters<typeof Bun.serve>[0]);
+    listeners.push(listener);
+    hostnames.push("hostname" in options ? options.hostname : undefined);
+    return listener;
+  });
+  try {
+    let server: ReturnType<typeof startServer>;
+    try {
+      server = startServer(0, deps);
+    } finally {
+      // startServer is synchronous; restore before requests or any awaited cleanup.
+      serveSpy.mockRestore();
+    }
+    expect(listeners).toHaveLength(2);
+    expect(listeners[0]).toBe(server);
+    expect(hostnames).toEqual(["0.0.0.0", "127.0.0.1"]);
+    const managementPort = listeners[1]?.port;
+    if (!managementPort || managementPort === server.port) throw new Error("expected distinct live ingress ports");
+    return { server, managementPort };
+  } catch (error) {
+    await Promise.allSettled(listeners.map(async listener => { await listener.stop(true); }));
+    throw error;
+  }
 }
 
 function websocketHandshakeOpens(url: URL, token: string): Promise<boolean> {
@@ -978,17 +1008,15 @@ describe("management and data-plane credential separation", () => {
   });
 
   test("the live listener trusts Tailscale identity only on hub management ingress", async () => {
-    const managementPort = await findAvailablePort(0, "127.0.0.1");
-    const publicPort = await findAvailablePort(0, "127.0.0.1", { reservedPort: managementPort });
     const config = hubConfig();
     config.hub = {
       ...config.hub,
-      managementIngress: { enabled: true, port: managementPort },
+      managementIngress: { enabled: true, port: 10101 },
     };
     saveConfig(config);
     const state = initializeManagementAuthState(config);
     if (!state.available) throw new Error("expected management auth state");
-    const server = startServer(publicPort, { managementAuthState: state });
+    const { server, managementPort } = await startEphemeralHubServer({ managementAuthState: state });
     const headers = { Host: "hub.example.test", "Tailscale-User-Login": "alice@example.test" };
     try {
       const spoofedPublic = await fetch(new URL("/opencodex-session", server.url), { headers });
@@ -1164,15 +1192,13 @@ describe("management and data-plane credential separation", () => {
   });
 
   test("the management ingress preserves the one-use pairing exchange contract", async () => {
-    const managementPort = await findAvailablePort(0, "127.0.0.1");
-    const publicPort = await findAvailablePort(0, "127.0.0.1", { reservedPort: managementPort });
     const config = hubConfig();
-    config.hub = { ...config.hub, managementIngress: { enabled: true, port: managementPort } };
+    config.hub = { ...config.hub, managementIngress: { enabled: true, port: 10101 } };
     saveConfig(config);
     const state = initializeManagementAuthState(config);
     if (!state.available) throw new Error("expected management auth state");
     const created = createGuiPairingGrant("https://dashboard.example.test", config, state);
-    const server = startServer(publicPort, { managementAuthState: state });
+    const { server, managementPort } = await startEphemeralHubServer({ managementAuthState: state });
     const url = `http://127.0.0.1:${managementPort}/opencodex-session`;
     const headers = {
       Host: "hub.example.test",

@@ -8,6 +8,13 @@ import type { UpstreamHttpVersion, ReasoningSummaryDelivery, CodexAccountMode } 
  */
 export type RefreshPolicy = "proactive" | "lazy-only" | "disabled";
 
+/** Request-owned identity of the configured key, before env/keychain resolution. */
+export interface ProviderApiKeySelection {
+  entryId?: string;
+  reference?: string;
+  revision?: string;
+}
+
 export interface OpenRouterProviderRouting {
   /** OpenRouter provider slugs to try first, in priority order. */
   order?: string[];
@@ -329,6 +336,10 @@ export interface OcxProviderConfig {
    * `apiKey` seeds a one-entry pool on first management touch.
    */
   apiKeyPool?: Array<{ id: string; key: string; label?: string; addedAt?: number }>;
+  /** Changes on manual selection (including re-selection) and committed automatic allocation. */
+  apiKeySelectionRevision?: string;
+  /** Runtime only. Never expose in management responses or persist a routed provider. */
+  _apiKeyAttempt?: ProviderApiKeySelection;
   defaultModel?: string;
   models?: string[];
   /**
@@ -441,9 +452,9 @@ export interface OcxProviderConfig {
    *
    * Reactive 429 rotation is presence-driven and cannot be refused here — 2+ logged-in accounts
    * activate it, and a 429 with an idle second account is a defect rather than a preference.
-   * What an explicit `false` still refuses is the pre-dispatch preference that steers a HEALTHY
-   * request toward the account with more known headroom. It beats the global
-   * `oauthAccountFailover` in either direction; reactive 429 rotation remains presence-driven.
+   * Proactive exhaustion avoidance requires explicit `true`; a healthy selected account
+   * retains priority. This overrides global `oauthAccountFailover` in either direction.
+   * Reactive 429 rotation remains available even when proactive routing is disabled.
    */
   oauthAccountFailover?: {
     enabled?: boolean;

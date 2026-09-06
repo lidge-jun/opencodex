@@ -1,7 +1,7 @@
 /**
  * Declared inventory of every reachable management route.
  *
- * DECLARED, not harvested. A grep cannot see this surface: 19 routes are registered
+ * DECLARED, not harvested. A grep cannot see this surface: some routes are registered
  * through a regex, an `endsWith`, a `pathname.slice`, a prefix decode, a path constant, or a
  * negated `pathname !== "…"` guard, and two of those are live routes whose only textual
  * trace is the negated form. For `GET /api/storage` an equality scan finds solely the dead
@@ -26,6 +26,8 @@ export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD";
  * can check, not a way to quiet the parity test.
  */
 export type ExemptionReason =
+  /** Invalidates dashboard state; the CLI reads the underlying resource directly. */
+  | "gui-invalidation"
   /** Requires a dashboard browser session. Includes the user-consent star boundary. */
   | "session-only"
   /** Deliberately returns 405; there is nothing to drive. */
@@ -36,6 +38,8 @@ export type ExemptionReason =
   | "test-seam"
   /** The CLI reaches the same data through a local transport instead of HTTP. */
   | "local-transport"
+  /** Older clients use this alias; the current CLI drives its declared replacement. */
+  | "compatibility-alias"
   /** Unreachable in the live dispatch order; delete rather than expose. */
   | "dead"
   /**
@@ -135,6 +139,19 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "PUT", path: "/api/subagent-model-fallback", module: "server/management/agent-settings-routes", mutates: true },
   { method: "PUT", path: "/api/subagent-models", module: "server/management/agent-settings-routes", mutates: true },
   { method: "PUT", path: "/api/v2", module: "server/management/agent-settings-routes", mutates: true },
+  // server/management/aside-profile-routes
+  { method: "GET", path: "/api/client-integrations/aside", module: "server/management/aside-profile-routes", mutates: false, mechanism: "path-constant", exempt: { reason: "compatibility-alias", why: "Legacy Aside status alias; the current CLI reads the same aggregate through GET /api/client-integrations/aside/profiles." } },
+  { method: "PUT", path: "/api/client-integrations/aside", module: "server/management/aside-profile-routes", mutates: true, mechanism: "path-constant", exempt: { reason: "compatibility-alias", why: "Legacy Aside toggle alias; the current CLI uses PUT /api/client-integrations/aside/profiles so older servers cannot mistake a bulk request for a current-account toggle." } },
+  { method: "GET", path: "/api/client-integrations/aside/profiles", module: "server/management/aside-profile-routes", mutates: false, mechanism: "path-constant" },
+  { method: "PUT", path: "/api/client-integrations/aside/profiles", module: "server/management/aside-profile-routes", mutates: true, mechanism: "path-constant" },
+  { method: "POST", path: "/api/client-integrations/aside/sync", module: "server/management/aside-profile-routes", mutates: true },
+  { method: "GET", path: "/api/client-integrations/aside/profiles/{profileId}", module: "server/management/aside-profile-routes", mutates: false, mechanism: "prefix-decode" },
+  { method: "PUT", path: "/api/client-integrations/aside/profiles/{profileId}", module: "server/management/aside-profile-routes", mutates: true, mechanism: "prefix-decode" },
+  { method: "GET", path: "/api/client-integrations/aside/profiles/journal", module: "server/management/aside-profile-routes", mutates: false, mechanism: "prefix-decode" },
+  { method: "DELETE", path: "/api/client-integrations/aside/profiles/journal", module: "server/management/aside-profile-routes", mutates: true, mechanism: "prefix-decode", exempt: { reason: "deferred-verb", why: "Aside history deletion uses the dashboard journal cleanup; the CLI has history and restore but no deletion verb yet.", owner: "260904_priority65_closeout WP7", ownerDoc: "devlog/_plan/260904_priority65_closeout/060_wp7_rollback_journal_crud.md" } },
+  { method: "GET", path: "/api/client-integrations/aside/profiles/{profileId}/journal", module: "server/management/aside-profile-routes", mutates: false, mechanism: "prefix-decode" },
+  { method: "DELETE", path: "/api/client-integrations/aside/profiles/{profileId}/journal", module: "server/management/aside-profile-routes", mutates: true, mechanism: "prefix-decode", exempt: { reason: "deferred-verb", why: "Aside profile history deletion uses the dashboard journal cleanup; the CLI has scoped history and restore but no deletion verb yet.", owner: "260904_priority65_closeout WP7", ownerDoc: "devlog/_plan/260904_priority65_closeout/060_wp7_rollback_journal_crud.md" } },
+  { method: "POST", path: "/api/client-integrations/aside/profiles/{profileId}/restore", module: "server/management/aside-profile-routes", mutates: true, mechanism: "prefix-decode" },
   // server/management/codex-prompt-routes
   { method: "GET", path: "/api/codex-prompt", module: "server/management/codex-prompt-routes", mutates: false },
   { method: "GET", path: "/api/codex-prompt/text", module: "server/management/codex-prompt-routes", mutates: false },
@@ -241,6 +258,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/key-providers", module: "server/management/oauth-account-routes", mutates: false },
   { method: "GET", path: "/api/keys", module: "server/management/oauth-account-routes", mutates: false },
   { method: "GET", path: "/api/oauth/accounts", module: "server/management/oauth-account-routes", mutates: false },
+  { method: "GET", path: "/api/accounts/events", module: "server/management/oauth-account-routes", mutates: false, exempt: { reason: "gui-invalidation", why: "Dashboard selection invalidation stream; CLI account commands read the authoritative account/key resources directly rather than subscribing to browser refresh notifications." } },
   { method: "GET", path: "/api/oauth/accounts/pool", module: "server/management/oauth-account-routes", mutates: false },
   { method: "GET", path: "/api/oauth/providers", module: "server/management/oauth-account-routes", mutates: false },
   { method: "GET", path: "/api/oauth/status", module: "server/management/oauth-account-routes", mutates: false },
@@ -303,7 +321,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/system/memory", module: "server/management/system-routes", mutates: false },
   { method: "GET", path: "/api/system/windows-replace-retries", module: "server/management/system-routes", mutates: false },
   { method: "POST", path: "/api/system/restart", module: "server/management/system-routes", mutates: true },
-  // --- Routes an equality scan of their own file cannot see (19). ---
+  // --- Further routes an equality scan of their own file cannot see. ---
   // Each carries `mechanism`; the reconciliation test counts these separately.
   { method: "GET", path: "/api/storage", module: "server/management/storage-log-guard-routes", mutates: false, mechanism: "negated-guard" },
   { method: "GET", path: "/api/routing-analytics", module: "server/management/routing-analytics-routes", mutates: false, mechanism: "negated-guard" },

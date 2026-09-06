@@ -54,9 +54,17 @@ when a maintainer steps down.
   Authors with repository push permission skip the ancestry heuristic only. As
   with the approval requirement above, this part is enforced by convention;
   the ruleset does not check ancestry (see the note under the change log).
-- A pull request requires approval from at least one maintainer and successful required CI checks
-  before merge.
-- Authors do not approve their own pull requests.
+- Pull requests require successful required CI checks before merge. Contributor pull requests
+  normally require approval from at least one maintainer other than the author.
+- A current maintainer with GitHub `maintain` or `admin` access may explicitly integrate a pull
+  request into `dev` without another maintainer's approval, including their own pull request.
+  Record that choice and the exact-head verification in the pull-request description or comment.
+  This is maintainer integration, not a self-approval or an independent review. Outstanding
+  maintainer change requests must still be resolved or explicitly withdrawn. Technical review,
+  attribution, documentation and security-review duties remain in force.
+- The maintainer-integration exception applies only to `dev`. It does not change review rules
+  for `main` or `preview`, grant contributor authors approval authority, or permit direct pushes,
+  force-pushes or branch deletion. Authors do not submit approving reviews of their own work.
 - Authentication, credential handling, GitHub Actions, release automation, dependency installation,
   and other security-boundary changes require explicit security review.
 - A new or promoted provider preset is a credential-destination change. Before merge it needs the
@@ -70,8 +78,9 @@ when a maintainer steps down.
   canonical registry entry.
 - Security-sensitive and release-related changes should be reviewed by both maintainers when
   practical.
-- Direct pushes are reserved for maintainer-owned integration work, urgent repairs, or incident
-  recovery. The same CI and documentation requirements still apply.
+- Integration uses pull requests, including urgent maintainer repairs. The PR-only ruleset
+  bypass does not authorize direct pushes; incident changes to branch protection require a
+  separate owner decision.
 - Promotion from `dev` to `main` and npm releases is maintainer-controlled.
 - **Opening a release starts by moving `dev`'s version line forward.** Before cutting
   a release, `dev` must already outrank the version being released; `release.yml`
@@ -129,6 +138,19 @@ Adding or removing a maintainer requires:
 
 ### Change log
 
+- 2026-09-06 — The owner authorized explicit maintainer integration into `dev` without a second
+  maintainer approval. Both current maintainers have `admin` access. The dev-only PR bypass
+  includes GitHub's `admin` and `maintain` roles; `write` access alone is insufficient. Contributor
+  review remains the default and the `main`/`preview` rules are unchanged. The optional
+  `scripts/ci/assert-mergeable-review.sh --maintainer-integration <pr-number> [repo]` path checks
+  the authenticated actor against the trusted `dev` roster and live repository permissions,
+  preserves outstanding maintainer objections, and binds its result to the current head and base.
+  The helper emits a validation snapshot, not a ready-to-run privileged merge command: head
+  matching does not pin a PR's base, which may change after inspection. Revalidate the current
+  actor and `dev` base before a separately authorized merge. The helper is not proof of CI or
+  security review and not a barrier against an administrator bypassing it. Repository settings
+  remain authoritative for actual permissions.
+
 - 2026-08-19 — [@Wibias](https://github.com/Wibias) stepped down as a maintainer
   and is now a contributor. This follows his own decision to stop developing
   opencodex; it is not a disciplinary action, and it was made with the owner's
@@ -176,12 +198,11 @@ Adding or removing a maintainer requires:
   changes, and it blocks deletion and non-fast-forward pushes. Allowed merge
   methods are merge and squash; rebase merges are off.
 
-  The one carve-out is that the `maintain`/`admin` repository role holds a
-  `pull_request` bypass, so an owner can merge without the approval the rules
-  otherwise require. That is a bypass, not an exemption: "Authors do not approve
-  their own pull requests" above still governs, and an owner who uses the bypass
-  should record it on the pull request rather than leave it to be inferred from
-  a merge timestamp. Widening the security boundary is a separate decision.
+  At that time, the actual PR bypass covered `admin`; the earlier wording that
+  included `maintain` was inaccurate. The 2026-09-06 policy above adds the explicit
+  maintainer-integration exception for `dev` and the corresponding `maintain` role.
+  Both roles bypass through pull requests only. Force-push and deletion protections
+  remain in place, and the integrating maintainer records the decision and evidence.
 
 ## Security reports
 

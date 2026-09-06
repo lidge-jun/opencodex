@@ -117,8 +117,9 @@ opencodex skips disabled, unroutable, unhealthy, cooling-down, or quota-threshol
 availability snapshot is cached for `subagentModelFallbackPollMs`. Encrypted child tasks restrict
 the chain to canonical native ChatGPT targets plus direct key-auth Responses routes explicitly
 trusted with `allowEncryptedV2AgentTasks: true`; if none can consume the encrypted payload, the
-request fails instead of routing unreadable ciphertext elsewhere. Combo routing remains
-canonical-native-only.
+request fails instead of routing unreadable ciphertext elsewhere. Combo routing first tries an
+available canonical native target; when none is selectable and `agentTaskRecovery` is enabled,
+an encrypted `NEW_TASK` is recovered once before routed combo dispatch.
 
 ```json
 {
@@ -203,9 +204,13 @@ Enable this only when the additional authenticated request, quota use, plaintext
 and private-backend dependency are acceptable. Prefer a native ChatGPT child or v1 heterogeneous
 delegation when they are not.
 
-This recovery path applies to direct-routed children. At most 32 recovery requests can be active at
-once; additional misses fail closed. Combo routing keeps its existing native-only filter for
-encrypted tasks and does not invoke recovery.
+This recovery path applies to direct-routed children and encrypted combo `NEW_TASK` spawns. At
+most 32 recovery requests can be active at once; additional misses fail closed. A combo with an
+available canonical native target still sends ciphertext directly; recovery runs only when no
+native target is selectable. After a stored Pool account's refresh and same-account replay are
+exhausted, recovery can use the incoming caller credential for one available routed target without
+trying another native account. Policy refusals remain terminal. Failed recovery, exhausted targets,
+or unavailable targets still fail closed without forwarding ciphertext to a routed provider.
 
 ## Effort caps
 

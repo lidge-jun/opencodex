@@ -1,0 +1,5 @@
+# Effective-capability layer P refresh
+
+Consume050 on prepared affinity6b00fa8d6. Original #3671 remains7b1beb9c5, with two Hako commits. Carry both; fix the remaining public review by initializing routeResolutionFailed to !provider || provider.disabled===true before resolving enabled candidates. Preserve synthetic caller-supplied dry-run evidence semantics and the core/Lab slot boundary. Explicitly test missing and disabled candidates under allow/penalize/exclude, with healthy sibling and with none, at both runtime/evaluator and ordinary management dry-run.
+
+Regression worker owns only tests/routing/routing-capability-model-matching.test.ts and tests/routing/routing-profile.test.ts. Main owns production, four existing guide locales and runtime SOT. No local tests/typecheck/build; pinned remote Bun1.4 --isolate focused checks, actual API assertions, privacy/docs/fullCI before landing. Windows verifier repair is registered as an additional required cycle and does not weaken any earlier gate.

@@ -20,6 +20,7 @@ import { AUTO_CONTEXT_OFF, shouldMarkOneMillion, stripOneMillionMarker, withOneM
 import { claudeConfigDir } from "./gateway-cache";
 import { DEFAULT_SUBAGENT_MODELS, hasOwnProvider } from "../config";
 import { effectiveBlockedSkillNames, resolveInboundModel } from "./inbound";
+import { AnthropicRequestError } from "./inbound-records";
 import { knownModelIdsForProvider } from "../router";
 import { decodeRoutedModelIdOrThrow } from "../providers/slug-codec";
 
@@ -97,11 +98,17 @@ export function buildClaudeAgentDefs(config: OcxConfig, windows: Record<string, 
   const blockedSkills = effectiveBlockedSkillNames(config.claudeCode);
   const blockedSkillsFor = (model: string): readonly string[] => {
     const unmarked = stripOneMillionMarker(model);
-    const nativePassthrough = config.claudeCode?.nativePassthrough !== false
-      && !unmarked.includes("/")
-      && /^(claude|anthropic)(?:-|$)/i.test(unmarked)
-      && resolveInboundModel(unmarked, config.claudeCode) === unmarked;
-    return nativePassthrough ? [] : blockedSkills;
+    try {
+      const nativePassthrough = config.claudeCode?.nativePassthrough !== false
+        && !unmarked.includes("/")
+        && /^(claude|anthropic)(?:-|$)/i.test(unmarked)
+        && resolveInboundModel(unmarked, config.claudeCode) === unmarked;
+      return nativePassthrough ? [] : blockedSkills;
+    } catch (error) {
+      // A stale Desktop selector must not break the roster or acquire native exemptions.
+      if (error instanceof AnthropicRequestError) return blockedSkills;
+      throw error;
+    }
   };
   const defs: ClaudeAgentDef[] = [];
   const usedNames = new Set<string>();

@@ -401,6 +401,25 @@ describe("classifier unit behavior", () => {
     expect(parseConfig("{{{", "json")).toBe(PARSE_FAILED);
   });
 
+  test("parseConfig refuses typed TOML dates before a JSON clone can turn them into strings", () => {
+    for (const literal of [
+      "2026-09-05T10:00:00Z",
+      "2026-09-05T10:00:00-07:00",
+      "2026-09-05T10:00:00.123456",
+      "2026-09-05",
+      "10:00:00.123456",
+    ]) {
+      for (const text of [
+        `expires = ${literal}\n`,
+        `[user]\nexpires = ${literal}\n`,
+        `items = [{ expires = ${literal} }]\n`,
+      ]) {
+        expect(parseConfig(text, "toml")).toBe(PARSE_FAILED);
+      }
+      expect(parseConfig(`expires = "${literal}"\n`, "toml")).toEqual({ expires: literal });
+    }
+  });
+
   test("parseConfig refuses json number literals a rewrite would change", () => {
     // Overflow to Infinity — a rewrite would bake in null.
     expect(parseConfig("{\"a\": 1e999}", "json")).toBe(PARSE_FAILED);

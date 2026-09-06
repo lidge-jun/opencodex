@@ -68,7 +68,9 @@ test("the guard rejects an over-long label", () => {
 test("writeDesktop3pConfig emits a config whose model list passes the guard end to end", () => {
   const dir = mkdtempSync(join(tmpdir(), "ocx-desktop-guard-"));
   const prev = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
+  const previousHome = process.env.OPENCODEX_HOME;
   process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = dir;
+  process.env.OPENCODEX_HOME = join(dir, "ocx");
   try {
     const result = writeDesktop3pConfig(
       10100,
@@ -76,6 +78,9 @@ test("writeDesktop3pConfig emits a config whose model list passes the guard end 
       [{ provider: "kimi", id: "k3[1m]", contextWindow: 1_048_576 }],
       "test-key",
       "static",
+      undefined,
+      undefined,
+      { lockPath: join(dir, "lifecycle.sqlite") },
     );
     expect(result.written).toBe(true);
     const written = JSON.parse(readFileSync(result.path, "utf8")) as {
@@ -87,6 +92,8 @@ test("writeDesktop3pConfig emits a config whose model list passes the guard end 
   } finally {
     if (prev === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
     else process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = prev;
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
     removeTreeWithRetry(dir);
   }
 });

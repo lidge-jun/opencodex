@@ -1,16 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter as createOpenAIChatAdapterProduction } from "../../../src/adapters/openai-chat";
+import type { TranslatorBudget } from "../../../src/lib/translator-budget";
 import type { AdapterEvent } from "../../../src/types";
-import { withTestTranslatorBudget } from "../../helpers/translator-budget";
+import { createTestTranslatorBudget, withTestTranslatorBudget } from "../../helpers/translator-budget";
 
 const createOpenAIChatAdapter = (...args: Parameters<typeof createOpenAIChatAdapterProduction>) =>
   withTestTranslatorBudget(createOpenAIChatAdapterProduction(...args));
 
 const provider = { adapter: "openai-chat", baseUrl: "https://example.test/v1", apiKey: "key" };
 
-async function collect(body: string): Promise<AdapterEvent[]> {
+async function collect(body: string, budget?: TranslatorBudget): Promise<AdapterEvent[]> {
   const out: AdapterEvent[] = [];
-  for await (const e of createOpenAIChatAdapter(provider).parseStream(new Response(body))) out.push(e);
+  for await (const e of createOpenAIChatAdapter(provider).parseStream(new Response(body), budget)) out.push(e);
   return out;
 }
 
@@ -211,12 +212,251 @@ describe("openai-chat parallel tool call stream assembly", () => {
     expect(assembled(events)).toEqual([{ id: "call_a", name: "shell", args: "{\"cmd\":\"ls\"}" }]);
   });
 
-  test("T9b: id-only first chunk followed by index+id continuation stays ONE call", async () => {
+  test("T9b: id-only call retains a later index for index-only continuation", async () => {
+    const budget = createTestTranslatorBudget();
     const events = await collect(sse([
       chunkOf([{ id: "call_b", function: { name: "read", arguments: "{\"p\"" } }]),
-      chunkOf([{ index: 0, id: "call_b", function: { arguments: ":\"x\"}" } }]),
+      chunkOf([{ index: 0, id: "call_b", function: { arguments: ":\"x\"" } }]),
+      chunkOf([{ index: 0, function: { arguments: "}" } }]),
+      chunkOf([], "tool_calls"),
+    ]), budget);
+    expect(assembled(events)).toEqual([{ id: "call_b", name: "read", args: "{\"p\":\"x\"}" }]);
+    expect(events.at(-1)?.type).toBe("done");
+    expect(budget.snapshot()).toMatchObject({ activeCalls: 0, currentBytes: 0, overflows: 0 });
+  });
+
+  test("late indexes keep interleaved calls separate without adding budget owners", async () => {
+    const budget = createTestTranslatorBudget();
+    const response = new Response(sse([
+      chunkOf([
+        { id: "call_a", function: { name: "read", arguments: "{\"p\":" } },
+        { id: "call_b", function: { name: "write", arguments: "{\"p\":" } },
+      ]),
+      chunkOf([{ index: 9, id: "call_b", function: { arguments: "\"b\"" } }]),
+      chunkOf([{ index: 4, id: "call_a", function: { arguments: "\"a\"" } }]),
+      chunkOf([{ index: 9, function: { arguments: "}" } }]),
+      chunkOf([{ index: 4, function: { arguments: "}" } }]),
+      chunkOf([{ id: "call_a", function: { arguments: " " } }]),
       chunkOf([], "tool_calls"),
     ]));
-    expect(assembled(events)).toEqual([{ id: "call_b", name: "read", args: "{\"p\":\"x\"}" }]);
+    const events: AdapterEvent[] = [];
+    let maxActiveCalls = 0;
+    for await (const event of createOpenAIChatAdapter(provider).parseStream(response, budget)) {
+      events.push(event);
+      maxActiveCalls = Math.max(maxActiveCalls, budget.snapshot().activeCalls);
+    }
+    expect(assembled(events)).toEqual([
+      { id: "call_a", name: "read", args: "{\"p\":\"a\"} " },
+      { id: "call_b", name: "write", args: "{\"p\":\"b\"}" },
+    ]);
+    expect(events.at(-1)?.type).toBe("done");
+    expect(maxActiveCalls).toBe(2);
+    expect(budget.snapshot()).toMatchObject({ activeCalls: 0, currentBytes: 0, overflows: 0 });
+  });
+
+  test("index-only fragments do not guess an association between unindexed calls", async () => {
+    const events = await collect(sse([
+      chunkOf([
+        { id: "call_a", function: { name: "read", arguments: "{\"p\":" } },
+        { id: "call_b", function: { name: "write", arguments: "{\"p\":" } },
+      ]),
+      chunkOf([{ index: 0, function: { arguments: "\"a\"}" } }]),
+      chunkOf([{ index: 1, function: { arguments: "\"b\"}" } }]),
+      chunkOf([], "tool_calls"),
+    ]));
+    expect(events.at(-1)?.type).toBe("error");
+    expect(events.some(event => event.type === "done")).toBe(false);
+  });
+
+  test.each([
+    ["negative, no ID", -1, undefined],
+    ["negative, matching ID", -1, "call_a"],
+    ["fractional, no ID", 0.5, undefined],
+    ["fractional, matching ID", 0.5, "call_a"],
+    ["numeric string, no ID", "0", undefined],
+    ["numeric string, matching ID", "0", "call_a"],
+    ["empty string", "", undefined],
+    ["true", true, undefined],
+    ["false", false, undefined],
+    ["object", {}, undefined],
+    ["array", [], undefined],
+  ] as const)("invalid index (%s) aborts without reassigning pending calls", async (_label, index, id) => {
+    const budget = createTestTranslatorBudget();
+    const response = new Response(sse([
+      chunkOf([
+        { id: "call_a", function: { name: "read", arguments: '{"p":"a"}' } },
+        { id: "call_b", function: { name: "write", arguments: '{"p":"b"}' } },
+      ]),
+      chunkOf([{ index: 0, id: "call_a", function: { arguments: "" } }]),
+      // Whitespace keeps either complete JSON argument valid if the invalid index is
+      // mistakenly ignored and this fragment falls back to its ID or the last call.
+      chunkOf([{ index, id, function: { arguments: " " } }]),
+      chunkOf([{ index: 0, function: { arguments: " " } }]),
+      chunkOf([], "tool_calls"),
+    ]));
+    const events: AdapterEvent[] = [];
+    let sawBothPendingReservations = false;
+    for await (const event of createOpenAIChatAdapter(provider).parseStream(response, budget)) {
+      events.push(event);
+      const snapshot = budget.snapshot();
+      // Each ASCII JSON argument is nine bytes; the valid alias heartbeat observes
+      // both retained reservations before the malformed continuation arrives.
+      sawBothPendingReservations ||= snapshot.activeCalls === 2 && snapshot.currentBytes === 18;
+      if (event.type === "error") {
+        expect(snapshot).toMatchObject({ activeCalls: 0, currentBytes: 0, overflows: 0 });
+      }
+    }
+    expect(sawBothPendingReservations).toBe(true);
+    expect(events.filter(event => event.type === "error")).toEqual([expect.objectContaining({
+      type: "error",
+      status: 502,
+      errorType: "upstream_error",
+      message: "upstream response contained invalid tool calls (invalid index)",
+    })]);
+    expect(events.at(-1)?.type).toBe("error");
+    expect(events.some(event => event.type === "done")).toBe(false);
+    expect(events.some(event => event.type === "tool_call_start"
+      || event.type === "tool_call_delta" || event.type === "tool_call_end")).toBe(false);
+    expect(budget.snapshot()).toMatchObject({ activeCalls: 0, currentBytes: 0, overflows: 0 });
+  });
+
+  test.each([
+    ["missing", undefined],
+    ["null", null],
+  ] as const)("%s index placeholders preserve continuation through a later valid alias", async (_label, index) => {
+    const budget = createTestTranslatorBudget();
+    const events = await collect(sse([
+      chunkOf([{ index, id: "call_a", function: { name: "read", arguments: '{"p":' } }]),
+      chunkOf([{ index, id: "call_a", function: { arguments: '"x"' } }]),
+      chunkOf([{ index: 7, id: "call_a", function: { arguments: "}" } }]),
+      chunkOf([{ index, function: { arguments: " " } }]),
+      chunkOf([{ index: 7, function: { arguments: " " } }]),
+      chunkOf([], "tool_calls"),
+    ]), budget);
+    expect(assembled(events)).toEqual([{ id: "call_a", name: "read", args: '{"p":"x"}  ' }]);
+    expect(events.some(event => event.type === "error")).toBe(false);
+    expect(events.at(-1)?.type).toBe("done");
+    expect(budget.snapshot()).toMatchObject({ activeCalls: 0, currentBytes: 0, overflows: 0 });
+  });
+
+  test("rejects distinct unsafe raw JSON indexes before they collapse into one call", async () => {
+    const budget = createTestTranslatorBudget();
+    // Keep both index literals on the wire: constructing JS numbers before JSON.stringify
+    // would already round 9007199254740993 to 9007199254740992. Without rejection,
+    // both whitespace fragments would silently join call_a's valid JSON despite call_b's ID/name.
+    const response = new Response(String.raw`data: {"choices":[{"delta":{"tool_calls":[{"id":"call_a","function":{"name":"read","arguments":"{}"}}]}}]}
+
+data: {"choices":[{"delta":{"tool_calls":[{"id":"call_a","function":{"arguments":""}}]}}]}
+
+data: {"choices":[{"delta":{"tool_calls":[{"index":9007199254740992,"id":"call_a","function":{"name":"read","arguments":" "}}]}}]}
+
+data: {"choices":[{"delta":{"tool_calls":[{"index":9007199254740993,"id":"call_b","function":{"name":"write","arguments":" "}}]}}]}
+
+data: {"choices":[{"delta":{"tool_calls":[]},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+
+`);
+    const events: AdapterEvent[] = [];
+    let sawPendingReservation = false;
+    for await (const event of createOpenAIChatAdapter(provider).parseStream(response, budget)) {
+      events.push(event);
+      const snapshot = budget.snapshot();
+      sawPendingReservation ||= snapshot.activeCalls === 1 && snapshot.currentBytes === 2;
+      if (event.type === "error") {
+        expect(snapshot).toMatchObject({ activeCalls: 0, currentBytes: 0, overflows: 0 });
+      }
+    }
+    expect(sawPendingReservation).toBe(true);
+    // The first unsafe index terminates before either unsafe fragment emits a heartbeat,
+    // a tool call, or done; the buffered reservation is released at the error itself.
+    expect(events.map(event => event.type)).toEqual(["heartbeat", "heartbeat", "error"]);
+    expect(events.at(-1)).toMatchObject({
+      type: "error",
+      status: 502,
+      errorType: "upstream_error",
+      message: "upstream response contained invalid tool calls (invalid index)",
+    });
+    expect(budget.snapshot()).toMatchObject({ activeCalls: 0, currentBytes: 0, overflows: 0 });
+  });
+
+  test("retains a late MAX_SAFE_INTEGER alias for index-only continuation", async () => {
+    const budget = createTestTranslatorBudget();
+    const events = await collect(sse([
+      chunkOf([{ id: "call_boundary", function: { name: "read", arguments: '{"p":' } }]),
+      chunkOf([{ index: Number.MAX_SAFE_INTEGER, id: "call_boundary", function: { arguments: '"x"' } }]),
+      chunkOf([{ index: Number.MAX_SAFE_INTEGER, function: { arguments: "}" } }]),
+      chunkOf([], "tool_calls"),
+    ]), budget);
+    expect(assembled(events)).toEqual([{ id: "call_boundary", name: "read", args: '{"p":"x"}' }]);
+    expect(events.some(event => event.type === "error")).toBe(false);
+    expect(events.at(-1)?.type).toBe("done");
+    expect(budget.snapshot()).toMatchObject({ activeCalls: 0, currentBytes: 0, overflows: 0 });
+  });
+
+  test("an observed index wins over a conflicting ID without rebinding either call", async () => {
+    const events = await collect(sse([
+      chunkOf([{ id: "call_a", function: { name: "read", arguments: "{\"p\":" } }]),
+      chunkOf([{ index: 1, id: "call_b", function: { name: "write", arguments: "{\"p\":" } }]),
+      chunkOf([{ index: 0, id: "call_a", function: { arguments: "\"a\"" } }]),
+      chunkOf([{ index: 1, id: "call_a", function: { arguments: "\"b\"}" } }]),
+      chunkOf([{ index: 0, id: "call_b", function: { arguments: "}" } }]),
+      chunkOf([{ index: 0, function: { arguments: " " } }]),
+      chunkOf([], "tool_calls"),
+    ]));
+    expect(assembled(events)).toEqual([
+      { id: "call_a", name: "read", args: "{\"p\":\"a\"} " },
+      { id: "call_b", name: "write", args: "{\"p\":\"b\"}" },
+    ]);
+    expect(events.at(-1)?.type).toBe("done");
+  });
+
+  test("duplicate IDs on established indexed calls keep first-match ID fallback", async () => {
+    const events = await collect(sse([
+      chunkOf([
+        { index: 0, function: { name: "read", arguments: "{\"p\":" } },
+        { index: 1, function: { name: "write", arguments: "{\"p\":" } },
+      ]),
+      chunkOf([{ index: 0, id: "shared", function: { arguments: "\"a\"" } }]),
+      chunkOf([{ index: 1, id: "shared", function: { arguments: "\"b\"" } }]),
+      chunkOf([{ id: "shared", function: { arguments: "}" } }]),
+      chunkOf([{ index: 1, function: { arguments: "}" } }]),
+      chunkOf([], "tool_calls"),
+    ]));
+    expect(assembled(events)).toEqual([
+      { id: "shared", name: "read", args: "{\"p\":\"a\"}" },
+      { id: "shared", name: "write", args: "{\"p\":\"b\"}" },
+    ]);
+    expect(events.at(-1)?.type).toBe("done");
+  });
+
+  test("a repeated ID on a different index does not replace the first observed alias", async () => {
+    const events = await collect(sse([
+      chunkOf([{ id: "call_a", function: { name: "read", arguments: "{\"p\":" } }]),
+      chunkOf([{ index: 0, id: "call_a", function: { arguments: "\"a\"" } }]),
+      chunkOf([{ index: 1, id: "call_a", function: { arguments: "" } }]),
+      chunkOf([{ index: 0, function: { arguments: "}" } }]),
+      chunkOf([], "tool_calls"),
+    ]));
+    expect(assembled(events)).toEqual([{ id: "call_a", name: "read", args: "{\"p\":\"a\"}" }]);
+    expect(events.at(-1)?.type).toBe("done");
+  });
+
+  test.each([9, 10])("late index preserves a %i-byte argument limit across all fragments", async limit => {
+    const budget = createTestTranslatorBudget({ maxCallArgumentBytes: limit });
+    const events = await collect(sse([
+      chunkOf([{ id: "call_a", function: { name: "read", arguments: "{\"p\":" } }]),
+      chunkOf([{ index: 0, id: "call_a", function: { arguments: "\"é\"" } }]),
+      chunkOf([{ index: 0, function: { arguments: "}" } }]),
+      chunkOf([], "tool_calls"),
+    ]), budget);
+    if (limit === 9) {
+      expect(events.at(-1)).toMatchObject({ type: "error", code: "translation_buffer_limit" });
+      expect(events.some(event => event.type === "tool_call_start")).toBe(false);
+    } else {
+      expect(assembled(events)).toEqual([{ id: "call_a", name: "read", args: "{\"p\":\"é\"}" }]);
+      expect(events.at(-1)?.type).toBe("done");
+    }
+    expect(budget.snapshot()).toMatchObject({ activeCalls: 0, currentBytes: 0, overflows: limit === 9 ? 1 : 0 });
   });
 });

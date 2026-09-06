@@ -961,14 +961,20 @@ function unixProcessGroupAlive(groupId: number): boolean {
 }
 
 function terminateUnixProcessGroup(groupId: number): void {
+  let permissionError: unknown;
   try {
     process.kill(-groupId, "SIGKILL");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EPERM") permissionError = error;
+    else if (code !== "ESRCH") throw error;
   }
+  // A concurrently exiting group can briefly reject a second signal. Only
+  // observed disappearance clears that uncertainty; never send another signal.
   const deadline = Date.now() + CODEX_SHIM_INSTALL_PROBE_EXIT_TIMEOUT_MS;
   while (Date.now() < deadline && unixProcessGroupAlive(groupId)) Bun.sleepSync(10);
   if (unixProcessGroupAlive(groupId)) {
+    if (permissionError) throw permissionError;
     throw new Error(`Codex shim install probe process group ${groupId} did not terminate`);
   }
 }

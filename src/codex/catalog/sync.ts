@@ -88,15 +88,15 @@ import {
 export const MAX_SPAWN_AGENT_MODEL_OVERRIDES = 5;
 
 // Base for config.modelPickerOrder display priorities (#1649). modelPickerOrder is a DISPLAY-ONLY
-// reordering of the Codex model picker: it rewrites a row's Codex-visible `priority` but never the
-// spawn_agent candidate window. The window is derived from SPAWN_PRIORITY_FIELD (the natural
-// priority captured before the override), so display order and spawn candidates are decoupled.
+// reordering of the Codex model picker: it rewrites a row's Codex-visible `priority` but not
+// OpenCodex's natural-priority guidance window. Native Codex advertisements still follow the
+// visible priority and can differ from that guidance window.
 export const PICKER_ORDER_PRIORITY_BASE = 1_000;
 
-// OpenCodex-private catalog field: the spawn_agent candidate priority a row would have WITHOUT
+// OpenCodex-private catalog field: the guidance candidate priority a row would have WITHOUT
 // modelPickerOrder. Codex ignores unknown catalog fields (same as opencodex_catalog_kind), so this
-// is invisible to Codex; effectiveSubagentRoster reads it so a display reorder cannot change which
-// rows are spawn_agent candidates. Absent on rows modelPickerOrder did not move.
+// is invisible to Codex; effectiveSubagentRoster reads it to keep OpenCodex guidance candidates
+// independent of display order. It does not freeze native advertisements. Absent on unmoved rows.
 export const SPAWN_PRIORITY_FIELD = "opencodex_spawn_priority";
 
 export type SpawnAgentSurface = "v1" | "v2";
@@ -154,7 +154,9 @@ export interface SubagentRosterExclusion {
 }
 
 export interface EffectiveSubagentRoster {
+  /** OpenCodex's natural-priority guidance projection, not captured native tool text. */
   candidates: EffectiveSubagentModel[];
+  /** Configured models within that projection; exact-name eligibility is a separate check. */
   advertised: EffectiveSubagentModel[];
   excluded: SubagentRosterExclusion[];
 }
@@ -191,8 +193,8 @@ export function effectiveSubagentRoster(
     .filter(({ entry }) => entry.visibility === "list")
     .filter(({ entry }) => surface !== "v2" || isEligibleV2SubagentEntry(entry))
     .sort((left, right) => {
-      // Spawn candidates rank by the natural priority (SPAWN_PRIORITY_FIELD when present), so a
-      // modelPickerOrder display reorder (#1649) can never change candidate membership. Rows the
+      // OpenCodex guidance candidates rank by natural priority (SPAWN_PRIORITY_FIELD when present),
+      // so modelPickerOrder does not change this projection. Native tool advertisements differ. Rows the
       // override did not move fall back to their Codex-visible `priority`.
       const spawnPriorityOf = (entry: RawEntry): number => {
         const spawn = entry[SPAWN_PRIORITY_FIELD];
@@ -315,6 +317,8 @@ export function deriveEntry(
   contextCap?: NativeContextLimitsInput,
 ): RawEntry {
   const preserveExact = isExactComboCatalogModel(model, exactComboSlugs);
+  // Go exposes model-specific upstream enums; synthetic tiers mislead subagent overrides.
+  const preserveExactReasoning = preserveExact || model?.provider === "opencode-go";
   const codexForwardNativeCapabilityAlias = model?.codexForwardNativeCapabilityAlias === true
     ? upstreamNativeEntry(model.id)
     : null;
@@ -328,6 +332,8 @@ export function deriveEntry(
   }
   if (template || codexForwardNativeCapabilityAlias) {
     const e = JSON.parse(JSON.stringify(codexForwardNativeCapabilityAlias ?? template)) as RawEntry;
+    // A cached template may carry display-order history; each new row owns its natural rank.
+    delete e[SPAWN_PRIORITY_FIELD];
     e.slug = slug;
     e.display_name = routedDisplayName(slug, model);
     e.description = desc;
@@ -359,7 +365,7 @@ export function deriveEntry(
         e,
         model?.reasoningEfforts,
         model?.defaultReasoningEffort,
-        preserveExact || codexForwardNativeCapabilityAlias !== null,
+        preserveExactReasoning || codexForwardNativeCapabilityAlias !== null,
       );
       // This exact provider/model pair is the ChatGPT/Codex forward surface. Keep the pinned
       // native tool/search/responses-lite contract while preserving the routed slug and wire id.
@@ -409,7 +415,7 @@ export function deriveEntry(
   };
   if (isRouted) {
     applyRoutedCodexToolMode(entry, model?.codexToolMode);
-    applyReasoningLevels(entry, model?.reasoningEfforts, model?.defaultReasoningEffort, preserveExact);
+    applyReasoningLevels(entry, model?.reasoningEfforts, model?.defaultReasoningEffort, preserveExactReasoning);
   }
   else {
     applyReasoningLevels(entry, isGpt56NativeSlug(slug) ? undefined : ["low", "medium", "high", "xhigh"]);
@@ -516,27 +522,25 @@ export function buildCatalogEntriesFromObservedState({
   // catalog stays put across rebuilds. Featured rows keep their existing 0..N-1 band; when
   // modelPickerOrder is unset the helper is a no-op and every priority below is byte-identical to
   // before. The spawn_agent candidate window is derived separately from SPAWN_PRIORITY_FIELD, so
-  // this display reorder cannot change which rows are spawn candidates.
-  const pickerOrder = Array.isArray(modelPickerOrder)
-    ? modelPickerOrder.filter((id): id is string => typeof id === "string" && id.length > 0)
-    : [];
+  // this display reorder does not change OpenCodex's guidance candidate calculation.
+  const pickerOrder = normalizeModelPickerOrder(modelPickerOrder);
   const pickerOrderRank = new Map(pickerOrder.map((slug, i) => [slug, i] as const));
   const pickerOrderActive = pickerOrder.length > 0;
   // The display band reuses the existing high priority tier (>= PICKER_ORDER_PRIORITY_BASE, the
   // same 1_000+ neighborhood account rows occupy), keeping listed rows visually after the featured
-  // band. Candidate membership does not depend on this — see SPAWN_PRIORITY_FIELD.
+  // band. OpenCodex guidance membership does not depend on this — see SPAWN_PRIORITY_FIELD.
   /**
    * Priority for a non-featured routed row that is explicitly LISTED in modelPickerOrder. Listed
    * slugs sort in declared order within the high picker-order display tier
    * (>= PICKER_ORDER_PRIORITY_BASE). This sets the Codex-visible `priority` only; the caller records
-   * the row's natural priority in SPAWN_PRIORITY_FIELD so the spawn_agent candidate window is
-   * unchanged. Returns undefined when the feature is off or the row is not listed, so those rows
+   * the row's natural priority in SPAWN_PRIORITY_FIELD for OpenCodex's unchanged guidance window.
+   * Returns undefined when the feature is off or the row is not listed, so those rows
    * keep their original assignment (default 5 / account 1_000+) untouched.
    *
    * Scope: only the generic routed `<provider>/<model>` rows call this (see the goModels loop
    * below). Native passthrough rows and account-qualified native rows keep their own priority
-   * logic and are intentionally not reordered here — this matches the documented contract on
-   * OcxConfig.modelPickerOrder (route native ordering through subagentModels instead).
+   * logic and are intentionally not reordered in this legacy builder pass. The final merge can
+   * apply complete ordering when the configured list includes a bare id.
    */
   const pickerOrderPriority = (slug: string, altSlug?: string): number | undefined => {
     if (!pickerOrderActive) return undefined;
@@ -658,9 +662,9 @@ export function buildCatalogEntriesFromObservedState({
       // Keep the generated account rows together in Codex's priority-sorted flat picker.
       e.priority = 1_000 + (typeof e.priority === "number" ? e.priority : 5);
     }
-    // #1649: modelPickerOrder is a DISPLAY-ONLY override. Record the natural priority spawn_agent
-    // must keep using, then let modelPickerOrder move only the Codex-visible `priority`. Featured
-    // rows are never overridden (their rank is authoritative for both display and spawn).
+    // The legacy routed-only builder pass keeps featured ranks and records natural priority
+    // before changing non-featured display priority. The final complete-order pass may move
+    // featured display rows too; OpenCodex guidance continues to use their natural ranks.
     if (rankHit === undefined) {
       const pickerPriority = pickerOrderPriority(slug, `${m.provider}/${m.id}`);
       if (pickerPriority !== undefined) {
@@ -779,12 +783,39 @@ export const CANONICAL_NATIVE_CATALOG_CONTENT_POLICY: Readonly<
   unsupportedNativeEntries: "drop",
 });
 
+function normalizeModelPickerOrder(order: unknown): string[] {
+  return Array.isArray(order)
+    ? order.filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+    : [];
+}
+
+/** Preserve exact-id precedence while accepting the existing raw/encoded slug spellings. */
+function modelPickerRank(order: readonly string[]): (slug: string) => number | undefined {
+  const exact = new Map(order.map((slug, index) => [slug, index]));
+  const equivalent = new Map(order.map((slug, index) => [slugEquivalenceKey(slug), index]));
+  return slug => exact.get(slug) ?? equivalent.get(slugEquivalenceKey(slug));
+}
+
+/** Complete display ordering retains natural ranks for OpenCodex's separate guidance projection. */
+export function applyFullModelPickerOrder(entries: RawEntry[], order: readonly string[]): void {
+  const pickerOrder = normalizeModelPickerOrder(order);
+  if (!pickerOrder.some(slug => !slug.includes("/"))) return;
+  const rankOf = modelPickerRank(pickerOrder);
+  for (const entry of entries) {
+    const natural = entry[SPAWN_PRIORITY_FIELD] ?? entry.priority ?? 9;
+    entry[SPAWN_PRIORITY_FIELD] = natural;
+    entry.priority = rankOf(String(entry.slug)) ?? pickerOrder.length + Number(natural);
+  }
+}
+
 export interface ObservedCatalogMergeInput {
   readonly catalogModels: readonly RawEntry[];
   readonly baselineCatalogModels: readonly RawEntry[];
   readonly routedEntries: readonly RawEntry[];
   readonly baseline: ReadonlyMap<string, number>;
   readonly featured: readonly string[];
+  readonly modelPickerOrder?: readonly string[];
+  readonly accountSelectors?: readonly string[];
   readonly wsEnabled: boolean;
   readonly template: RawEntry | null;
   readonly disabledModels: ReadonlySet<string>;
@@ -817,6 +848,8 @@ export function mergeCatalogEntriesFromObservedState({
   routedEntries,
   baseline,
   featured,
+  modelPickerOrder = [],
+  accountSelectors = [],
   wsEnabled,
   template,
   disabledModels,
@@ -975,7 +1008,9 @@ export function mergeCatalogEntriesFromObservedState({
         finished.priority = nativePriority(slug, upstream.priority);
         return finished;
       }
-      const preserved = normalizeServiceTiers({ ...m, priority: nativePriority(slug, m.priority) });
+      const preserved = normalizeServiceTiers({ ...m, priority: nativePriority(slug, m[SPAWN_PRIORITY_FIELD] ?? m.priority) });
+      // Recompute spawn rank from current featured models, not a prior picker override.
+      delete preserved[SPAWN_PRIORITY_FIELD];
       // Older natives kept from disk still need the mock top tiers (max + ultra always
       // for subagent max spawns; wire-clamped to the model's real top rung).
       if (!isGpt56NativeSlug(slug) && slug !== NATIVE_RESERVE_MODEL) ensureUltraReasoningLevel(preserved);
@@ -1060,6 +1095,32 @@ export function mergeCatalogEntriesFromObservedState({
     // remain outside provider ownership and survive unless a fresh row replaces their exact slug.
     return !isOcxAuthoredRoutedEntry(entry);
   });
+  // Retained rows bypass the builder. Recompute managed spawn ranks from current config
+  // before either display-order mode; a saved display override is not current roster authority.
+  const pickerOrder = normalizeModelPickerOrder(modelPickerOrder);
+  const fullPickerOrder = pickerOrder.some(slug => !slug.includes("/"));
+  const rankOf = modelPickerRank(pickerOrder);
+  const featuredRankOf = modelPickerRank(featured);
+  const priorityStride = Math.max(accountSelectors.length, 1);
+  for (const entry of preservedRoutedEntries) {
+    const natural = entry[SPAWN_PRIORITY_FIELD];
+    if (typeof natural === "number") {
+      entry.priority = natural;
+      delete entry[SPAWN_PRIORITY_FIELD];
+    }
+    const slug = String(entry.slug);
+    if (!isOcxAuthoredRoutedEntry(entry) || isNativeAliasCatalogEntry(entry)) continue;
+    const featuredRank = featuredRankOf(slug);
+    entry.priority = featuredRank !== undefined
+      ? featuredRank * priorityStride
+      : (accountSelectors.length > 0 ? 1_000 : 0) + 5;
+    if (featuredRank !== undefined || fullPickerOrder) continue;
+    const pickerIndex = rankOf(slug);
+    if (pickerIndex !== undefined) {
+      entry[SPAWN_PRIORITY_FIELD] = entry.priority;
+      entry.priority = PICKER_ORDER_PRIORITY_BASE + pickerIndex * priorityStride;
+    }
+  }
   let finalRoutedEntries = [...admittedRoutedEntries, ...preservedRoutedEntries];
   finalRoutedEntries = finalRoutedEntries.filter(entry => {
     const slug = typeof entry.slug === "string" ? entry.slug : "";
@@ -1134,7 +1195,7 @@ export function mergeCatalogEntriesFromObservedState({
     // Mock-max universality (260709): preserved routed entries from disk may predate
     // the max rung — ensure it here so subagent max spawns validate on every
     // reasoning-capable entry. max only: 5.6 exact ladders (luna: no ultra) stay intact.
-    if (!exactCombo && !reserveProjection) {
+    if (!exactCombo && !reserveProjection && !String(e.slug ?? "").startsWith("opencode-go/")) {
       const levels = Array.isArray(e.supported_reasoning_levels)
         ? e.supported_reasoning_levels as Array<{ effort?: string }>
         : [];
@@ -1161,6 +1222,7 @@ export function mergeCatalogEntriesFromObservedState({
     multiAgentV2Enabled,
     { keepNativeChatGptOnV1, preserveDefaultMultiAgentVersion: isReserveCatalogProjection },
   );
+  applyFullModelPickerOrder(versionedEntries, modelPickerOrder);
   for (const entry of versionedEntries) {
     const kind = entry.opencodex_catalog_kind;
     if (trustedAccountBoundNativeCatalogSlug(entry) === undefined
@@ -1762,6 +1824,8 @@ function writeRetainedCatalogSync({
     }).filter(entry => trustedAccountBoundNativeCatalogSlug(entry) !== undefined)
     : [];
   catalog.models = mergeCatalogEntriesFromObservedState({
+    modelPickerOrder,
+    accountSelectors,
     catalogModels: catalogModelsForMerge,
     baselineCatalogModels: baselineCatalog?.models ?? [],
     routedEntries: goEntries,

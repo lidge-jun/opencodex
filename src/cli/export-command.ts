@@ -171,12 +171,14 @@ export async function handleExportCommand(argv: string[], deps: ExportCommandDep
     rejectArgs(args, USAGE);
 
     const spec = EXPORT_CLIENTS[client];
-    const config = (deps.configImpl ?? loadConfig)();
     const root = await runtimeBaseUrl(deps);
     const rows = await runtimeRequest<ExportProxyModelRow[]>("/api/models", {}, { ...deps, baseUrl: root });
     if (!Array.isArray(rows)) {
       throw new RuntimeApiError("Management API returned an unexpected /api/models payload.", 502, rows);
     }
+    // Discovery can persist pending -> ready selection. Read from the caller's
+    // config source after the response, rather than filtering with a stale snapshot.
+    const config = (deps.configImpl ?? loadConfig)();
     const models = exportModelsFromProxyRows(rows, config);
     // The text is the client's OWN format — YAML, TOML and JSON5 clients would
     // otherwise receive a JSON rendering their parser reads differently.

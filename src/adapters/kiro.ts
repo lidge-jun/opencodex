@@ -44,7 +44,7 @@ import { extractKiroImages, normalizeKiroImages, type KiroImage } from "./kiro-i
 import { sniffImageDimensions } from "./anthropic-image-guard";
 import { fetchKiroWithRetry, noteKiroTransientThrottle } from "./kiro-retry";
 import { convertKiroToolContext } from "./kiro-tools";
-import { normalizeEmptyExecToolResultText } from "./exec-tool-result-normalize";
+import { EMPTY_EXEC_OUTPUT_MESSAGE, normalizeEmptyExecToolResultText } from "./exec-tool-result-normalize";
 import { identifyRoutedModel } from "./identity";
 import { buildNonOpenAIToolCatalogNudgeFromNames, isBareShellBridgeTool, isCodexCodeModeExecTool } from "./tool-catalog-nudge";
 import {
@@ -663,7 +663,7 @@ export function buildKiroPayload(
   }
   const systemPrefix = systemParts.length > 0 ? `${systemParts.join("\n\n")}\n\n` : "";
   const turns: KiroTurn[] = [];
-  const priorCalls = new Map<string, { wireName: string }>();
+  const priorCalls = new Map<string, { wireName: string; rawId: string }>();
   const pushUser = (content: string, images: KiroImage[] = [], toolResults: KiroToolResult[] = []): void => {
     const last = turns.at(-1);
     if (last?.kind === "user") {
@@ -695,7 +695,27 @@ export function buildKiroPayload(
     }
   };
 
+  let adjacentResult: {
+    rawId: string;
+    result: KiroToolResult;
+    texts: string[];
+    count: number;
+    hasImages: boolean;
+  } | undefined;
+  const finishAdjacentResult = (): void => {
+    if (adjacentResult && adjacentResult.count > 1) {
+      if (adjacentResult.texts.some(text => text.trim())) {
+        adjacentResult.result.content = adjacentResult.texts.map(text => ({ text }));
+      } else if (adjacentResult.hasImages || adjacentResult.result.status === "error") {
+        adjacentResult.result.content = [{ text: KIRO_EMPTY_TOOL_RESULT_MESSAGE }];
+      }
+    }
+    adjacentResult = undefined;
+  };
+
   for (const msg of kiroPayloadMessages(parsed)) {
+    // Original-message adjacency matters even when a turn is collapsed or skipped below.
+    if (msg.role !== "toolResult") finishAdjacentResult();
     if (msg.role === "user" || msg.role === "developer") {
       const text = userContentText((msg as { content: string | OcxContentPart[] }).content);
       const images = extractKiroImages((msg as { content: string | OcxContentPart[] }).content);
@@ -714,7 +734,7 @@ export function buildKiroPayload(
         if (priorCalls.has(toolUseId)) throw new Error(`Kiro history contains duplicate tool call id ${JSON.stringify(tc.id)}`);
         const wireName = namespacedToolName(tc.namespace, tc.name);
         const name = registry.alias(wireName);
-        priorCalls.set(toolUseId, { wireName });
+        priorCalls.set(toolUseId, { wireName, rawId: tc.id });
         return { name, input: (tc.arguments ?? {}) as Record<string, unknown>, toolUseId };
       });
       if (!text && toolUses.length === 0) {
@@ -735,26 +755,52 @@ export function buildKiroPayload(
       // the task instead of calling text()/notify(). Checked before `text.trim()` because the
       // wrapper form ("Script completed\nWall time ...\nOutput:\n") is non-blank and would
       // otherwise pass through as if it were real output.
-      const resultText = normalizeEmptyExecToolResultText(text, {
+      const normalizedExecText = normalizeEmptyExecToolResultText(text, {
         toolName: tr.toolName,
         toolNamespace: tr.toolNamespace,
-      }) ?? (text.trim() ? text : KIRO_EMPTY_TOOL_RESULT_MESSAGE);
+      });
+      const resultText = normalizedExecText ?? (text.trim() ? text : KIRO_EMPTY_TOOL_RESULT_MESSAGE);
       const images = extractKiroImages(tr.content);
       const toolUseId = normalizeToolId(tr.toolCallId);
-      if (!priorCalls.has(toolUseId)) {
+      const call = priorCalls.get(toolUseId);
+      if (!call || call.rawId !== tr.toolCallId) {
         throw new Error(`Kiro history contains an orphaned tool result for call ${JSON.stringify(tr.toolCallId)}`);
       }
+      // Keep real whitespace and failed wrappers, but no empty-success wrapper boilerplate.
+      const rawGroupText = text.length > 0 && (!text.trim() || normalizedExecText !== EMPTY_EXEC_OUTPUT_MESSAGE)
+        ? text : undefined;
+      const last = turns.at(-1);
+      if (
+        adjacentResult?.rawId === tr.toolCallId
+        && last?.kind === "user"
+        && last.toolResults.at(-1) === adjacentResult.result
+      ) {
+        adjacentResult.count += 1;
+        adjacentResult.hasImages ||= images.length > 0;
+        if (rawGroupText !== undefined) adjacentResult.texts.push(rawGroupText);
+        last.images.push(...images);
+        if (tr.isError) adjacentResult.result.status = "error";
+        continue;
+      }
+      finishAdjacentResult();
       // Carrier text is a placeholder for an OTHERWISE EMPTY tool-result turn, not a prefix.
       // Passing it here would push proxy filler AHEAD of a human instruction that Claude Code
       // sends in the same turn (mid-turn steering / queued_command, issue #543), burying the
       // newest user intent behind boilerplate. Backfill below only when nothing else speaks.
-      pushUser("", images, [{
+      const result: KiroToolResult = {
         content: [{ text: resultText }],
         status: tr.isError ? "error" : "success",
         toolUseId,
-      }]);
+      };
+      pushUser("", images, [result]);
+      adjacentResult = {
+        rawId: tr.toolCallId, result,
+        texts: rawGroupText === undefined ? [] : [rawGroupText],
+        count: 1, hasImages: images.length > 0,
+      };
     }
   }
+  finishAdjacentResult();
 
   if (turns.length === 0 || turns[0].kind === "assistant") {
     turns.unshift({ kind: "user", content: KIRO_CONTINUATION_MESSAGE, images: [], toolResults: [] });

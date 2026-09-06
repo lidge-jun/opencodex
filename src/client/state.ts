@@ -6,8 +6,11 @@ import {
   mutatePersistedConfig,
   readConfigDiagnostics,
   saveConfig,
+  withConfigMutationLockSync,
 } from "../config";
 import type { OcxClientConnectionConfig } from "../types";
+import { inspectRemoteDesktopStore, readDesktopDisconnectReceipt } from "../claude/desktop-remote-store";
+import { withClientLifecycleSync, type ClientLifecycleLockDeps } from "./lifecycle-lock";
 import {
   readServiceApiTokenState,
   readTokenBackupState,
@@ -71,60 +74,86 @@ export function readClientConnectionState(): ClientConnectionState {
   return { kind: "connected", value: client };
 }
 
-/**
- * Does the persisted config record a rotation that has not finished?
- *
- * Read fresh rather than taken from a caller-supplied snapshot: the whole point is to see a
- * `pendingOperation` that landed after that snapshot was taken.
- */
-function rotationInFlight(): boolean {
+export function sameClientConnectionOwner(
+  left: Pick<OcxClientConnectionConfig, "serverUrl" | "apiKeyId" | "connectedAt">,
+  right: Pick<OcxClientConnectionConfig, "serverUrl" | "apiKeyId" | "connectedAt">,
+): boolean {
+  return left.serverUrl === right.serverUrl && left.apiKeyId === right.apiKeyId && left.connectedAt === right.connectedAt;
+}
+
+/** Read-only: safe at a Codex N/C commit boundary; never acquires L or removes recovery state. */
+export function assertNoClientDisconnectPending(): void {
+  const receipt = readDesktopDisconnectReceipt();
+  if (receipt.kind === "unsafe") throw new Error("client_disconnect_receipt_unsafe");
+  if (receipt.kind === "valid" && receipt.value.phase !== "complete") {
+    throw new Error("client_disconnect_pending");
+  }
+}
+
+/** Full snapshot CAS for work returning from an await, including selection and rotation state. */
+export function assertClientConnectionUnchanged(expected: OcxClientConnectionConfig): void {
+  assertNoClientDisconnectPending();
   const current = readClientConnectionState();
-  return current.kind === "connected" && current.value.pendingOperation !== undefined;
+  if (current.kind !== "connected" || JSON.stringify(current.value) !== JSON.stringify(expected)) {
+    throw new Error("client_connection_changed");
+  }
+}
+
+/** Undefined means only "possible orphan": the caller must repeat this read under L/C. */
+function observeClientRotationRecovery(): ClientRotationRecoveryGate | undefined {
+  const state = readClientConnectionState();
+  const current = readServiceApiTokenState();
+  const backup = readTokenBackupState();
+  const receipt = readDesktopDisconnectReceipt();
+  if (receipt.kind === "unsafe") return { kind: "unsafe", reason: "client_disconnect_receipt_unsafe" };
+  if (receipt.kind === "valid" && receipt.value.phase !== "complete") {
+    return { kind: "recovery-required", reason: "client_disconnect_pending" };
+  }
+  if (state.kind === "connected" && state.value.pendingOperation) {
+    if (current.kind !== "present" || backup.kind !== "present") {
+      return { kind: "unsafe", reason: "pending rotation requires current and backup token files" };
+    }
+    return { kind: "recovery-required", reason: "rerun ocx connect rotate with transient authority" };
+  }
+  if (backup.kind === "unsafe") return { kind: "unsafe", reason: "service token backup is unsafe" };
+  if (backup.kind === "present" && current.kind === "present") {
+    if (state.kind === "invalid" || state.kind === "mismatched"
+      || (state.kind === "connected" && current.fingerprint !== state.value.tokenFingerprint)) {
+      return { kind: "unsafe", reason: "connected token ownership changed" };
+    }
+    if (state.kind === "connected") {
+      const desktop = inspectRemoteDesktopStore({ serverUrl: state.value.serverUrl, apiKeyId: state.value.apiKeyId, connectedAt: state.value.connectedAt });
+      if (desktop.kind !== "absent" && desktop.kind !== "restored") {
+        // The inspection DTO deliberately exposes no credential generation. Let
+        // explicit rotation reconcile an active Desktop copy before discarding .prev.
+        return { kind: "recovery-required", reason: "Desktop credential reconciliation requires ocx connect rotate" };
+      }
+    }
+    return undefined;
+  }
+  return { kind: "clean" };
 }
 
 export function inspectClientRotationRecoveryGate(
-  state: ClientConnectionState = readClientConnectionState(),
+  _state: ClientConnectionState = readClientConnectionState(),
+  lockDeps?: ClientLifecycleLockDeps,
 ): ClientRotationRecoveryGate {
-  const current = readServiceApiTokenState();
-  const backup = readTokenBackupState();
-  if (state.kind === "connected" && state.value.pendingOperation) {
-    if (current.kind !== "present" || backup.kind !== "present") {
-      return {
-        kind: "unsafe",
-        reason: "pending key rotation requires owner-only service-api-token and service-api-token.prev files",
-      };
-    }
-    return {
-      kind: "recovery-required",
-      reason: "rerun ocx connect rotate with --pairing-code-stdin or --admin-token-stdin",
-    };
-  }
-  if (backup.kind === "unsafe") return { kind: "unsafe", reason: backup.reason };
-  if (backup.kind === "present" && current.kind === "present") {
-    // Only an ORPHAN backup is cleanable, and this branch cannot always tell an orphan from
-    // a backup belonging to a rotation that is mid-flight.
-    //
-    // `rotateConnectedClientKey` writes the .prev backup BEFORE it persists
-    // `pendingOperation`. A concurrent `ocx connect status` landing in that window sees
-    // "backup present, token present, no pending marker" — indistinguishable from a stale
-    // leftover — and deleted the live rollback target. If the rotation then failed, its
-    // restore had nothing to restore from.
-    //
-    // Re-reading the persisted state closes most of the window: the caller's `state` may
-    // have been captured before the marker landed, while a fresh read sees it. The
-    // remaining window is narrow enough that the rotation's own lock is the right owner,
-    // and deleting nothing is the safe side of it.
-    if (rotationInFlight()) {
-      return { kind: "recovery-required", reason: "a key rotation is in flight; leave service-api-token.prev in place" };
-    }
-    try {
+  try {
+    // Ordinary status is read-only: even acquiring C creates config-mutation.sqlite.
+    // Only actual orphan cleanup needs L/C; this first observation authorizes no write.
+    const observed = observeClientRotationRecovery();
+    if (observed) return observed;
+    return withClientLifecycleSync(() => withConfigMutationLockSync((): ClientRotationRecoveryGate => {
+      const fresh = observeClientRotationRecovery();
+      if (fresh) return fresh;
       removeOrphanTokenBackup();
       return { kind: "orphan-cleaned" };
-    } catch (error) {
-      return { kind: "unsafe", reason: error instanceof Error ? error.message : "token backup cleanup failed" };
-    }
+    }), lockDeps);
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+    if (code === "client_lifecycle_busy") return { kind: "recovery-required", reason: "client_lifecycle_busy" };
+    return { kind: "unsafe", reason: "client rotation state could not be inspected safely" };
   }
-  return { kind: "clean" };
 }
 
 export function commitClientConnection(
@@ -157,13 +186,13 @@ export function commitClientConnection(
 }
 
 export function clearClientConnection(
-  expectedApiKeyId: string,
+  expected: string | Pick<OcxClientConnectionConfig, "serverUrl" | "apiKeyId" | "connectedAt">,
 ): "committed" | "absent" | "conflict" {
   const outcome = mutatePersistedConfig(config => {
     if (!config.client && config.runtimeRole !== "client") {
       return { changed: false, value: "absent" as const };
     }
-    if (!config.client || config.runtimeRole !== "client" || config.client.apiKeyId !== expectedApiKeyId) {
+    if (!config.client || config.runtimeRole !== "client" || (typeof expected === "string" ? config.client.apiKeyId !== expected : !sameClientConnectionOwner(config.client, expected))) {
       return { changed: false, value: "conflict" as const };
     }
     deleteConfigTopLevelKey(config, "client");
