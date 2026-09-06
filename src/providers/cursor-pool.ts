@@ -90,22 +90,28 @@ export class CursorPoolKernel {
     this.versions.set(key, next);
     return next;
   }
-  private hasLiveStateFor(key: string): boolean {
+  private liveStateKeys(): Set<string> {
+    const live = new Set<string>();
     for (const s of this.states.values()) {
-      if (this.key(s.owner, s.thread) === key) return true;
+      live.add(this.key(s.owner, s.thread));
     }
-    return false;
+    return live;
   }
   private sweep(now = this.now()): void {
+    const candidates = new Set<string>();
     for (const [key, s] of this.states)
       if (s.touched + CURSOR_POOL_TTL_MS <= now) {
         this.states.delete(key);
-        const ownerThread = this.key(s.owner, s.thread);
-        if (!this.hasLiveStateFor(ownerThread)) {
+        candidates.add(this.key(s.owner, s.thread));
+      }
+    if (candidates.size) {
+      const live = this.liveStateKeys();
+      for (const ownerThread of candidates)
+        if (!live.has(ownerThread)) {
           this.affinity.delete(ownerThread);
           this.versions.delete(ownerThread);
         }
-      }
+    }
   }
   private rawAccounts(): ReadonlyArray<CursorPoolAccount> {
     return (
@@ -261,7 +267,7 @@ export class CursorPoolKernel {
     if (snapshot.previousAffinity) this.affinity.set(key, snapshot.previousAffinity);
     else this.affinity.delete(key);
     this.advanceVersion(key);
-    if (!this.hasLiveStateFor(key)) this.versions.delete(key);
+    if (!snapshot.previous.length) this.versions.delete(key);
     return true;
   }
   remove(accountRef: string, capability: symbol): void {
@@ -288,9 +294,10 @@ export class CursorPoolKernel {
     // snapshot versions when a known account leaves the pool.
     if (removedKnownRef)
       for (const key of this.versions.keys()) changed.add(key);
+    const live = changed.size ? this.liveStateKeys() : undefined;
     for (const key of changed) {
       this.advanceVersion(key);
-      if (!this.hasLiveStateFor(key)) this.versions.delete(key);
+      if (!live!.has(key)) this.versions.delete(key);
     }
   }
   clear(capability: symbol): void {
