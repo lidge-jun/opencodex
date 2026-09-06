@@ -94,6 +94,7 @@ type healthPayload struct {
 // never sees another request while the seam is wired correctly.
 func NewHandler(cfg Config) http.Handler {
 	mux := http.NewServeMux()
+	mountResponsesWebSocketBridge(mux, cfg)
 	writeRelay := managementauth.NewWriteRelayVerifier(cfg.WriteRelaySecret)
 	mux.HandleFunc("GET /api/system/health", func(w http.ResponseWriter, r *http.Request) {
 		version := cfg.Version
