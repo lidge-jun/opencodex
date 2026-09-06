@@ -141,4 +141,16 @@ describe("CursorPoolKernel", () => {
     expect(s.kernel.pick("a", "t", s.capability)).toBeNull();
     expect(a.accountRef).toBe(b.accountRef);
   });
+
+  test("TTL sweep for one owner preserves another owner's live affinity", () => {
+    const s = setup();
+    const ownerA = s.kernel.pick("owner-a", "thread", s.capability)!;
+    s.advance(CURSOR_POOL_TTL_MS - 1);
+    const ownerB = s.kernel.pick("owner-b", "thread", s.capability)!;
+    s.advance(2);
+    expect(s.kernel.pick("owner-b", "thread", s.capability)?.accountRef).toBe(
+      ownerB.accountRef,
+    );
+    expect(ownerA.accountRef).toBe(ownerB.accountRef);
+  });
 });
