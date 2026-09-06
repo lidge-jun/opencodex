@@ -172,8 +172,11 @@ func reportNativeConfigWriteError(deps Deps, err error) int {
 	if strings.HasPrefix(message, "invalid JSON:") {
 		return configWriteError(deps, "config is invalid", false)
 	}
-	if message == "invalid config path" || strings.HasPrefix(message, "config parent path not found:") || strings.HasPrefix(message, "config path not found:") {
+	if message == "invalid config path" || strings.HasPrefix(message, "config parent path not found:") {
 		return configWriteUsageError(deps, message)
+	}
+	if strings.HasPrefix(message, "config path not found:") {
+		return configWriteValidationError(deps, message)
 	}
 	if strings.HasPrefix(message, "schema_invalid:") {
 		return configWriteValidationError(deps, message)

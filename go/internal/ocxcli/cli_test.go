@@ -399,6 +399,9 @@ func TestNativeConfigWriteCommandsMatchOracleShape(t *testing.T) {
 	if code, out, stderr := run([]string{"config", "import", importPath, "--json"}); code != 2 || out != "" || stderr != "Error: import requires --yes\n"+configUsage {
 		t.Fatalf("unconfirmed import = code=%d stdout=%q stderr=%q", code, out, stderr)
 	}
+	if code, out, stderr := run([]string{"config", "unset", "missing", "--json"}); code != 2 || out != "" || stderr != "Error: config path not found: missing\n" {
+		t.Fatalf("missing unset = code=%d stdout=%q stderr=%q", code, out, stderr)
+	}
 }
 
 func TestConfigHelpIsNative(t *testing.T) {
