@@ -218,7 +218,7 @@ func TestHelpSurfaceMatchesCommandRegistry(t *testing.T) {
 func TestTypeScriptOwnedFamiliesDelegateExactArgumentsAndExitCode(t *testing.T) {
 	for _, argv := range [][]string{
 		{"status", "--json"}, {"doctor", "--json"}, {"service", "restart"},
-		{"codex-shim", "status"}, {"tray", "status"},
+		{"tray", "status"},
 		{"config", "set", "port", "10101", "--json"},
 	} {
 		t.Run(strings.Join(argv, " "), func(t *testing.T) {
@@ -276,6 +276,43 @@ func TestTypeScriptOwnedFamilyHelpDelegates(t *testing.T) {
 				t.Fatalf("delegated argv = %#v, want %#v", received, want)
 			}
 		})
+	}
+}
+
+func TestCodexShimStatusIsNativeAndMatchesStateSummary(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OPENCODEX_HOME", dir)
+	wrapper := filepath.Join(dir, "codex")
+	backup := filepath.Join(dir, "codex.opencodex-original")
+	if err := os.WriteFile(wrapper, []byte("#!/bin/sh\n# opencodex codex autostart shim\nensure\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(backup, []byte("original"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	state := "{\"platform\":\"linux\",\"wrapperPath\":\"" + wrapper + "\",\"originalPath\":\"" + wrapper + "\",\"backupPath\":\"" + backup + "\"}"
+	if err := os.WriteFile(filepath.Join(dir, "codex-shim.json"), []byte(state), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	deps := depsFor(RuntimeState{}, &out, &stderr)
+	deps.Delegate = func([]string) (int, error) { t.Fatal("codex-shim status delegated"); return 0, nil }
+	if got := Run([]string{"codex-shim", "status"}, deps); got != ExitOK {
+		t.Fatalf("exit=%d stderr=%q", got, stderr.String())
+	}
+	want := "Codex autostart shim: wrapper shim present at " + wrapper + "; original backup present at " + backup + ".\n"
+	if out.String() != want {
+		t.Fatalf("stdout=%q want=%q", out.String(), want)
+	}
+}
+
+func TestCodexShimMutationDelegates(t *testing.T) {
+	var out, stderr bytes.Buffer
+	var received []string
+	deps := depsFor(RuntimeState{}, &out, &stderr)
+	deps.Delegate = func(args []string) (int, error) { received = append([]string(nil), args...); return 17, nil }
+	if got := Run([]string{"codex-shim", "install"}, deps); got != 17 || !slices.Equal(received, []string{"codex-shim", "install"}) {
+		t.Fatalf("mutation code=%d argv=%#v", got, received)
 	}
 }
 

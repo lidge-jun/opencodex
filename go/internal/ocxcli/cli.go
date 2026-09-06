@@ -135,6 +135,12 @@ func OwnershipFor(args []string) (Ownership, bool) {
 			return owner, true
 		}
 	}
+	if command.Name == "codex-shim" && len(args) > 1 {
+		if args[1] == "status" {
+			return GoOwned, true
+		}
+		return TypeScriptOwned, true
+	}
 	if command.Name == "config" && len(args) > 1 {
 		if args[1] == "--json" || args[1] == "--source" {
 			return GoOwned, true
@@ -237,6 +243,8 @@ func Run(args []string, deps Deps) int {
 		return runDelegated(args, deps)
 	}
 	switch args[0] {
+	case "codex-shim":
+		return runCodexShim(args[1:], deps)
 	case "health":
 		return runHealth(args[1:], deps)
 	case "ready":
