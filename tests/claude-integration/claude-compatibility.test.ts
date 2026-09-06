@@ -23,6 +23,12 @@ describe("Claude routed compatibility foundation", () => {
     expect(analyzeClaudeCompatibility(body, { mode: "enforce", adapter: "anthropic" })).toMatchObject({ compatible: true, decision: "allow" });
   });
 
+  test("does not mistake a client function name for MCP admission", () => {
+    const result = analyzeClaudeCompatibility({ tools: [{ type: "function", name: "mcp_lookup", input_schema: { type: "object" } }] }, { mode: "enforce", adapter: "openai-chat" });
+    expect(result).toMatchObject({ compatible: true, decision: "allow" });
+    expect(result.featureCodes).not.toContain("mcp_tool");
+  });
+
   test("shadow mode reports, but does not reject, an incompatible feature", () => {
     const result = analyzeClaudeCompatibility({ context_management: { edits: [{ op: "remove" }] } }, { mode: "shadow", adapter: "openai-chat" });
     expect(result).toMatchObject({ compatible: true, decision: "shadow" });

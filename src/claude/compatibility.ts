@@ -178,8 +178,16 @@ function hasMcpTool(body: Rec): boolean {
     for (const t of tools) {
       if (!isRec(t)) continue;
       const type = typeof t.type === "string" ? t.type : "";
-      if (type.startsWith("mcp")) return true;
-      if (typeof t.name === "string" && t.name.startsWith("mcp")) return true;
+      // A client-executed function may legitimately be named `mcp_*`; only the
+      // protocol-declared server toolset is an MCP admission feature.
+      if (type === "mcp_toolset") return true;
+    }
+  }
+  const messages = body.messages;
+  if (Array.isArray(messages)) {
+    for (const message of messages) {
+      if (!isRec(message) || !Array.isArray(message.content)) continue;
+      if (message.content.some(block => isRec(block) && (block.type === "mcp_tool_use" || block.type === "mcp_tool_result"))) return true;
     }
   }
   return false;
