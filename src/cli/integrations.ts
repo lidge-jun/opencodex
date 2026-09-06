@@ -161,6 +161,39 @@ export async function handleGrokCommand(argv: string[], deps: RuntimeApiDeps = {
   });
 }
 
+/** The Raycast-only block the single-client route adds; see IntegrationStateEnvelope. */
+interface RaycastStatusBlock {
+  plan: string;
+  aiDirPresent: boolean;
+}
+
+function raycastBlock(result: unknown): RaycastStatusBlock | null {
+  if (!result || typeof result !== "object") return null;
+  const block = (result as { raycast?: unknown }).raycast;
+  if (!block || typeof block !== "object") return null;
+  const { plan, aiDirPresent } = block as Partial<RaycastStatusBlock>;
+  return typeof plan === "string" && typeof aiDirPresent === "boolean" ? { plan, aiDirPresent } : null;
+}
+
+/**
+ * Text view of one client's status.
+ *
+ * Raycast carries an extra block, and the generic summary would print it as
+ * three dotted keys. A `current` file that Raycast ignores for want of a Pro
+ * subscription is the one fact this view must not bury, so `plan` gets its own
+ * line and a missing `ai` folder gets the instruction that creates it.
+ */
+function singleClientStatusLines(result: unknown): string[] {
+  const raycast = raycastBlock(result);
+  if (!raycast) return summaryLines(result);
+  const rest = Object.fromEntries(Object.entries(result as Record<string, unknown>).filter(([key]) => key !== "raycast"));
+  const lines = [...summaryLines(rest), `plan: ${raycast.plan}`];
+  if (!raycast.aiDirPresent) {
+    lines.push('Open Raycast → Settings → AI → "Reveal Providers Config" once so the ai folder exists.');
+  }
+  return lines;
+}
+
 /**
  * The headless half of the client-integration toggle.
  *
@@ -197,7 +230,7 @@ export async function handleClientIntegrationCommand(
           : [String((result as { error?: string }).error ?? "No Aside profiles found.")]
         : rows
         ? rows.map(row => `${String(row.clientId)}: ${String(row.state)}${row.installed ? "" : " (not installed)"}`)
-        : summaryLines(result));
+        : singleClientStatusLines(result));
       return;
     }
 

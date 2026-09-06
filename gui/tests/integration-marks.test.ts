@@ -61,15 +61,16 @@ test("no multi-color asset is masked", () => {
 /*
  * The inverse rule, and the one that cannot be derived from the file: a mark may
  * be a single ink and still not be a masking candidate, because that ink is the
- * brand. openai.svg is #10A37F and deepseek-harness.svg is #4d6bfe; masking
- * either repaints a trademark in the theme's text color. Pinned with their inks
- * so a vendor changing its asset shows up here rather than silently satisfying
- * the assertion.
+ * brand. openai.svg is #10A37F, deepseek-harness.svg is #4d6bfe and raycast.svg
+ * is #FF6363; masking any of them repaints a trademark in the theme's text
+ * color. Pinned with their inks so a vendor changing its asset shows up here
+ * rather than silently satisfying the assertion.
  */
 test("a single-ink asset whose ink is a brand color is not masked", () => {
   for (const [src, ink] of [
     ["/provider-icons/openai.svg", "#10a37f"],
     ["/provider-icons/deepseek-harness.svg", "#4d6bfe"],
+    ["/provider-icons/raycast.svg", "#ff6363"],
   ] as const) {
     expect(MASKED_MARKS.has(src), `${src} must not be masked`).toBe(false);
     expect([...inksOf(bodyOf(src))], `${src} ink changed upstream`).toEqual([ink]);

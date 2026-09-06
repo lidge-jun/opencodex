@@ -27,7 +27,7 @@ import {
   refreshablePathsOf,
   semanticProtectedContributionFingerprint,
 } from "./ownership-policy";
-import { createdContainerPaths, mergeContribution, removeFragments } from "./merge";
+import { AmbiguousSelectorError, createdContainerPaths, mergeContribution, removeFragments } from "./merge";
 import { INTEGRATION_CLIENTS, isLoopbackOnly, resolveIntegrationPaths, type IntegrationClientId } from "./registry";
 import { classifyIntegration, exportContextOf } from "./state";
 import type { IntegrationState } from "./state";
@@ -352,36 +352,39 @@ function applyOrRefreshIntegration(
    * concludes the user owns it, and the replacement record forgets we made it
    * — so a later disable strands it forever.
    */
-  const base = classified.state === "stale" && record
-    ? removeFragments(parsed, record.fragmentPaths, new Set(record.createdContainers ?? [])).doc
-    : classified.state === "conflict" && record
-      /*
-       * A forced overwrite of a `foreign-edit` conflict drops what the previous
-       * record owned for the same reason a stale refresh does: the replacement
-       * record covers the paths we are about to write, so a path the old record
-       * owned and the new one does not would be stranded forever, unremovable by
-       * any later disable.
-       *
-       * With NO record -- an `unowned-key` conflict -- there is nothing to drop and
-       * the merge runs against the user's document directly. That is correct:
-       * createdContainerPaths then attributes every container they already had to
-       * them, so a later disable removes our leaves and leaves their structure
-       * standing.
-       */
-      ? removeFragments(parsed, record.fragmentPaths, new Set(record.createdContainers ?? [])).doc
-      : parsed;
-  // Computed against the document as it stands BEFORE the merge: afterwards
-  // every container exists and "did we create this?" is unanswerable.
-  const created = createdContainerPaths(base, contribution);
   /*
    * A document can hold a value its own format cannot round-trip through our
    * renderers. That used to throw straight out of the writer and reach the
    * user as a 500 with no path and no advice; it is a refusal like any other,
-   * and the file is untouched because this happens before any write.
+   * and the file is untouched because this happens before any write. The
+   * removal and merge sit inside the same guard: a sequence holding two
+   * entries our selector matches is equally unwritable, and equally untouched.
    */
-  const nextDocument = mergeContribution(base, contribution);
+  let created: string[];
   let text: string;
   try {
+    const base = classified.state === "stale" && record
+      ? removeFragments(parsed, record.fragmentPaths, new Set(record.createdContainers ?? [])).doc
+      : classified.state === "conflict" && record
+        /*
+         * A forced overwrite of a `foreign-edit` conflict drops what the previous
+         * record owned for the same reason a stale refresh does: the replacement
+         * record covers the paths we are about to write, so a path the old record
+         * owned and the new one does not would be stranded forever, unremovable by
+         * any later disable.
+         *
+         * With NO record -- an `unowned-key` conflict -- there is nothing to drop and
+         * the merge runs against the user's document directly. That is correct:
+         * createdContainerPaths then attributes every container they already had to
+         * them, so a later disable removes our leaves and leaves their structure
+         * standing.
+         */
+        ? removeFragments(parsed, record.fragmentPaths, new Set(record.createdContainers ?? [])).doc
+        : parsed;
+    // Computed against the document as it stands BEFORE the merge: afterwards
+    // every container exists and "did we create this?" is unanswerable.
+    created = createdContainerPaths(base, contribution);
+    const nextDocument = mergeContribution(base, contribution);
     if (spec.sourcePreservingYaml && before !== null) {
       const value = sourcePreservingFragmentValue(contribution, spec.sourcePreservingYaml.path);
       const patched = value === undefined
@@ -401,6 +404,10 @@ function applyOrRefreshIntegration(
       text = serializeDocument(nextDocument, exportSpec.format);
     }
   } catch (error) {
+    if (error instanceof AmbiguousSelectorError) {
+      return refuse(clientId, "unsafe", "unsafe",
+        `${configPath} holds more than one entry matching ours, so it was left alone`);
+    }
     if (!(error instanceof UnserializableValueError)) throw error;
     return refuse(clientId, "unsafe", "unsafe",
       `${configPath} contains something opencodex cannot rewrite safely (${error.message}), so it was left alone`);
@@ -527,11 +534,15 @@ export function disableIntegration(input: IntegrationWriteInput): WriteOutcome {
     return refuse(clientId, "unsafe", "unsafe",
       `${configPath} uses YAML source opencodex cannot patch without risking unrelated comments or formatting, so nothing was removed`);
   }
-  const { doc, removed } = removeFragments(
-    parsed,
-    record!.fragmentPaths,
-    new Set(prunableCreated),
-  );
+  let doc: unknown;
+  let removed: boolean;
+  try {
+    ({ doc, removed } = removeFragments(parsed, record!.fragmentPaths, new Set(prunableCreated)));
+  } catch (error) {
+    if (!(error instanceof AmbiguousSelectorError)) throw error;
+    return refuse(clientId, "unsafe", "unsafe",
+      `${configPath} holds more than one entry matching ours, so nothing was removed`);
+  }
   if (!removed) {
     return { ok: true, changed: false, state: "absent", clientId, message: "nothing to remove" };
   }

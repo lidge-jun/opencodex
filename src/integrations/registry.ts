@@ -35,6 +35,8 @@ import {
   piConfigPath,
   primeAgentDir,
   primeConfigPath,
+  raycastAiDir,
+  raycastConfigPath,
   zcodeConfigPath,
   zcodeHomeDir,
   type ExportClientId,
@@ -260,6 +262,22 @@ export const INTEGRATION_CLIENTS: Record<IntegrationClientId, IntegrationClientS
      * look at.
      */
     unresolvedPathHint: (env = process.env, home = homedir()) => join(asideHomeDir(env, home), "u"),
+  },
+  raycast: {
+    id: "raycast",
+    configPath: (env = process.env, home = homedir()) => raycastConfigPath(env, home),
+    /*
+     * The `ai` directory, not `Raycast.app`. Raycast creates it only when the
+     * user clicks "Reveal Providers Config" in Settings > AI, which is exactly
+     * the signal that Custom Providers is reachable on this install; an app
+     * bundle alone says nothing about the plan or the feature.
+     *
+     * No `sourcePreservingYaml`: that patcher handles block-map leaves only,
+     * and our entry is a SEQUENCE item, so the file is re-rendered through
+     * `renderYaml` (block style). The `[id=opencodex]` selector keeps the user's
+     * other providers in place across that re-render.
+     */
+    detectDir: (env = process.env, home = homedir()) => raycastAiDir(env, home),
   },
 };
 

@@ -32,6 +32,7 @@ import { normalizeExportModels as leafNormalizeExportModels } from "../../src/cl
 import * as omp from "../../src/clients/config-export/omp";
 import * as dsh from "../../src/clients/config-export/dsh";
 import * as mcode from "../../src/clients/config-export/mcode";
+import * as raycast from "../../src/clients/config-export/raycast";
 import * as zcode from "../../src/clients/config-export/zcode";
 
 /**
@@ -100,6 +101,7 @@ describe("split config-export public facade", () => {
       ["dsh", dsh.buildDshClientConfig, dsh.summarizeDsh, dsh.buildDshContribution],
       ["mcode", mcode.buildMcodeClientConfig, mcode.summarizeMcode, mcode.buildMcodeContribution],
       ["zcode", zcode.buildZcodeClientConfig, zcode.summarizeZcode, zcode.buildZcodeContribution],
+      ["raycast", raycast.buildRaycastClientConfig, raycast.summarizeRaycast, raycast.buildRaycastContribution],
     ] as const;
     for (const [id, build, summarize, contribute] of leaves) {
       expect(EXPORT_CLIENTS[id].build).toBe(build);
@@ -803,8 +805,8 @@ describe("hub-resolved Fast exports", () => {
 });
 
 describe("EXPORT_CLIENTS registry", () => {
-  test("covers exactly the twelve file-toggle clients", () => {
-    expect(EXPORT_CLIENT_IDS).toEqual(["opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode", "zcode", "prime", "aside"]);
+  test("covers exactly the thirteen file-toggle clients", () => {
+    expect(EXPORT_CLIENT_IDS).toEqual(["opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode", "zcode", "prime", "aside", "raycast"]);
     for (const id of EXPORT_CLIENT_IDS) expect(isExportClientId(id)).toBe(true);
     // The exception clients keep their own surfaces and are not export clients.
     expect(isExportClientId("claude-desktop")).toBe(false);
