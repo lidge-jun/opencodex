@@ -15,6 +15,9 @@ type responseRepairPipeline struct {
 	modelID      string
 	imageAliases map[string]imageAlias
 	reasoning    bool
+	itemIDs      *itemIDRepairState
+	snapshot     *snapshotRepairState
+	request      *jsonwire.Value
 }
 
 type imageAlias struct{ name, namespace string }
@@ -25,6 +28,18 @@ func (p responseRepairPipeline) repairJSON(raw []byte) ([]byte, bool) {
 		return raw, false
 	}
 	changed := p.repairPayload(root)
+	if p.itemIDs != nil {
+		// Whole JSON replies have no event lifecycle, but use the identical
+		// per-response mapping rule as TypeScript's repairResponsesJsonItemIds.
+		if output := root.Find("output"); output != nil && output.Kind() == jsonwire.Array {
+			for index, item := range output.Elements() {
+				changed = p.itemIDs.rewriteItem(itoa(index), item) || changed
+			}
+		}
+	}
+	if p.snapshot != nil && p.snapshot.enabled {
+		changed = p.snapshot.repairJSON(root) || changed
+	}
 	changed = backfillResponsesJSON(root) || changed
 	if !changed {
 		return raw, false

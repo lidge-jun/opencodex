@@ -156,8 +156,10 @@ func (s *ResponsesSSEStream) processFrame(out *bytes.Buffer, frame sseFrame) {
 		return
 	}
 	rewritten := s.rewriteBlock(frame.block, payload, hasData)
-	out.Write(rewritten)
-	out.Write(frame.delimiter)
+	for _, block := range rewritten {
+		out.Write(block)
+		out.Write(frame.delimiter)
+	}
 	if hasData && responsesSSETerminal(payload) {
 		s.terminal = true
 		for _, pending := range s.pendingDone {
@@ -229,24 +231,48 @@ func sseDataPayloadBytes(block []byte) ([]byte, bool) {
 	return payload, found
 }
 
-func (s *ResponsesSSEStream) rewriteBlock(block, payload []byte, hasData bool) []byte {
+func (s *ResponsesSSEStream) rewriteBlock(block, payload []byte, hasData bool) [][]byte {
 	if !hasData {
-		return block
+		return [][]byte{block}
 	}
 	event, err := jsonwire.Parse(payload)
 	if err != nil || event.Kind() != jsonwire.Object {
-		return block
+		return [][]byte{block}
 	}
 	changed := s.pipeline.repairPayload(event)
+	if s.pipeline.itemIDs != nil {
+		changed = s.pipeline.itemIDs.rewriteEvent(event) || changed
+	}
 	changed = s.rewriteEvent(event) || changed
+	var injected []*jsonwire.Value
+	if s.pipeline.snapshot != nil {
+		var snapshotChanged bool
+		injected, snapshotChanged = s.pipeline.snapshot.rewrite(event)
+		changed = snapshotChanged || changed
+	}
 	if !changed {
-		return block
+		if len(injected) == 0 {
+			return [][]byte{block}
+		}
+		out := make([][]byte, 0, len(injected)+1)
+		for _, value := range injected {
+			if encoded, err := value.Encode(); err == nil {
+				out = append(out, append([]byte("data: "), encoded...))
+			}
+		}
+		return append(out, block)
 	}
 	encoded, err := event.Encode()
 	if err != nil {
-		return block
+		return [][]byte{block}
 	}
-	return replaceSSEDataPayload(block, encoded)
+	out := make([][]byte, 0, len(injected)+1)
+	for _, value := range injected {
+		if encoded, err := value.Encode(); err == nil {
+			out = append(out, append([]byte("data: "), encoded...))
+		}
+	}
+	return append(out, replaceSSEDataPayload(block, encoded))
 }
 
 func (s *ResponsesSSEStream) rewriteEvent(event *jsonwire.Value) bool {

@@ -278,6 +278,35 @@ func TestDirectRelayStreamingRelaySafeRequest(t *testing.T) {
 	}
 }
 
+func TestDirectRelayStreamsStatefulResponseRepairs(t *testing.T) {
+	upstreamFixture := "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"bare-id\"}}\n\ndata: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"item_id\":\"bare-id\",\"delta\":\"hi\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\"}}\n\n"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(upstreamFixture))
+	}))
+	defer upstream.Close()
+	configDir := relayFixtureConfigDir(t, upstream.URL, map[string]any{"responsesItemIdRepair": map[string]any{"repairInvalidIds": true}, "responsesSnapshotRepair": true})
+	rec, err := relayPost(t, relaySeamHandler(t, configDir, true), "{\"model\":\"test-model\",\"input\":\"ping\",\"stream\":true}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "bare-id") {
+		t.Fatalf("item id was not repaired: %s", body)
+	}
+	for _, want := range []string{"response.content_part.added", "response.output_text.done", "response.content_part.done", "response.output_item.done"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("missing %s: %s", want, body)
+		}
+	}
+	if strings.Index(body, "response.output_item.done") > strings.Index(body, "response.completed") {
+		t.Fatalf("snapshot closing event appeared after terminal: %s", body)
+	}
+}
+
 func TestDirectRelayStreamingConfigGatesFallBackToBridge(t *testing.T) {
 	upstream := deadSparseUpstream(t, nil)
 	defer upstream.Close()
@@ -286,9 +315,9 @@ func TestDirectRelayStreamingConfigGatesFallBackToBridge(t *testing.T) {
 		extra map[string]any
 		want  int
 	}{
-		{"materially armed item ID repair", map[string]any{"responsesItemIdRepair": map[string]any{"repairInvalidIds": true}}, http.StatusServiceUnavailable},
+		{"materially armed item ID repair", map[string]any{"responsesItemIdRepair": map[string]any{"repairInvalidIds": true}}, http.StatusOK},
 		{"empty item ID repair remains relay-safe", map[string]any{"responsesItemIdRepair": map[string]any{"message": []any{}}}, http.StatusOK},
-		{"snapshot repair", map[string]any{"responsesSnapshotRepair": true}, http.StatusServiceUnavailable},
+		{"snapshot repair", map[string]any{"responsesSnapshotRepair": true}, http.StatusOK},
 		{"stateless Responses", map[string]any{"statelessResponses": true}, http.StatusServiceUnavailable},
 		{"preserved reasoning model is case-insensitive", map[string]any{"preserveReasoningContentModels": []any{"TEST-MODEL"}}, http.StatusServiceUnavailable},
 		{"different preserved reasoning model remains relay-safe", map[string]any{"preserveReasoningContentModels": []any{"other-model"}}, http.StatusOK},
@@ -316,9 +345,9 @@ func TestStreamRelayQualificationConfigGates(t *testing.T) {
 		want  string
 	}{
 		{"narrow stream qualifies", nil, ""},
-		{"materially armed item ID repair refuses", map[string]any{"responsesItemIdRepair": map[string]any{"repairMissingTerminalIds": true}}, "responsesItemIdRepair"},
+		{"materially armed item ID repair qualifies", map[string]any{"responsesItemIdRepair": map[string]any{"repairMissingTerminalIds": true}}, ""},
 		{"empty item ID repair qualifies", map[string]any{"responsesItemIdRepair": map[string]any{"reasoning": []any{}}}, ""},
-		{"snapshot repair refuses", map[string]any{"responsesSnapshotRepair": true}, "responsesSnapshotRepair"},
+		{"snapshot repair qualifies", map[string]any{"responsesSnapshotRepair": true}, ""},
 		{"stateless Responses refuses", map[string]any{"statelessResponses": true}, "statelessResponses"},
 		{"preserved reasoning model match is case-insensitive", map[string]any{"preserveReasoningContentModels": []any{"TEST-MODEL"}}, "preserves reasoning content"},
 		{"different preserved reasoning model qualifies", map[string]any{"preserveReasoningContentModels": []any{"other-model"}}, ""},

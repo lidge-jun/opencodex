@@ -88,6 +88,7 @@ var relayBlockingRequestHeaders = []string{
 // needs to make the direct upstream call for one admitted request.
 type relayPlan struct {
 	providerName string
+	provider     *jsonwire.Value
 	modelID      string
 	reasoning    bool
 	endpoint     string // full POST target URL
@@ -258,6 +259,7 @@ func requestQualifiesForRelay(cfg Config, contentType string, headers http.Heade
 	}
 	plan.modelID = modelID
 	provider := providers.Find(plan.providerName)
+	plan.provider = provider
 	plan.modelID = selectedRelayModel(provider, modelID)
 	plan.reasoning = providerUsesContentReasoning(provider, modelID)
 	if refusal := unsupportedResponseRepairRefusal(provider); refusal != nil {
@@ -299,27 +301,19 @@ func selectedRelayModel(provider *jsonwire.Value, requested string) string {
 	return requested
 }
 
-// unsupportedResponseRepairRefusal keeps stateful repairs on the TypeScript
-// bridge until their per-request state machines are ported. Passing these
-// providers through the direct relay would silently emit a different client
-// payload, which is worse than the explicit seam fallback.
+// unsupportedResponseRepairRefusal contains only repairs the direct relay has
+// not ported. Item-id and sparse-snapshot repair are now request-local Go
+// state machines, so they deliberately remain direct-relay eligible.
 func unsupportedResponseRepairRefusal(provider *jsonwire.Value) *relayRefusal {
 	if provider == nil || provider.Kind() != jsonwire.Object {
 		return refuseRelay("response repair provider config unavailable")
-	}
-	if refusal := statefulResponseRepairRefusal(provider); refusal != nil {
-		return refusal
 	}
 	return nil
 }
 
 func statefulResponseRepairRefusal(provider *jsonwire.Value) *relayRefusal {
-	if repair := provider.Find("responsesItemIdRepair"); responsesItemIDRepairArmed(repair) {
-		return refuseRelay("provider enables responsesItemIdRepair")
-	}
-	if snapshot, ok := boolMember(provider, "responsesSnapshotRepair"); ok && snapshot {
-		return refuseRelay("provider enables responsesSnapshotRepair")
-	}
+	// Stable seam for future stateful repairs. The historical item-id and
+	// snapshot entries are now handled directly by ResponsesSSEStream.
 	return nil
 }
 
@@ -698,6 +692,7 @@ func doDirectRelay(w http.ResponseWriter, r *http.Request, cfg Config, plan *rel
 			if requestRoot != nil {
 				pipeline.imageAliases = imageAliasesFromRequest(requestRoot)
 			}
+			configureStatefulResponseRepairs(&pipeline, plan.provider, requestRoot)
 			if err := relayResponsesSSEWithFlush(w, upstreamResp.Body, pipeline); err != nil {
 				fmt.Fprintf(os.Stderr, "ocx-sidecar: relay stream write: %v\n", err)
 			}
@@ -736,12 +731,25 @@ func doDirectRelay(w http.ResponseWriter, r *http.Request, cfg Config, plan *rel
 			if requestRoot != nil {
 				pipeline.imageAliases = imageAliasesFromRequest(requestRoot)
 			}
+			configureStatefulResponseRepairs(&pipeline, plan.provider, requestRoot)
 			out, _ = pipeline.repairJSON(rawBody)
 		}
 	}
 	w.WriteHeader(upstreamResp.StatusCode)
 	if _, err := w.Write(out); err != nil {
 		fmt.Fprintf(os.Stderr, "ocx-sidecar: relay write: %v\n", err)
+	}
+}
+
+func configureStatefulResponseRepairs(pipeline *responseRepairPipeline, provider, request *jsonwire.Value) {
+	if pipeline == nil || provider == nil {
+		return
+	}
+	if config, enabled := itemIDRepairConfigFromProvider(provider); enabled {
+		pipeline.itemIDs = newItemIDRepairState(config)
+	}
+	if enabled, _ := boolMember(provider, "responsesSnapshotRepair"); enabled {
+		pipeline.snapshot = newSnapshotRepairState(true, request)
 	}
 }
 
