@@ -1,4 +1,5 @@
-name: Track2 held sync diagnostics
+# Diagnostic-only branch. Parent + explicit security review must precede dispatch.
+name: Track2 held sync cache diagnostics
 on:
   workflow_dispatch:
 permissions:
@@ -8,50 +9,85 @@ concurrency:
   cancel-in-progress: false
 jobs:
   held-sync:
-    name: held sync (${{ matrix.label }})
+    name: cache A-B-C-A diagnostic capture (not integration)
     runs-on: windows-latest
     timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - label: base
-            head: 24c761a052957883f9279c291b16194f91affcc3
-          - label: prior
-            head: d60a0716d27a284f91631297bed4003c479f6298
-          - label: current
-            head: 84c94f3d774d64b8b05ae2193485348f20fc17c1
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        id: checkout
         with:
-          ref: ${{ matrix.head }}
+          ref: 84c94f3d774d64b8b05ae2193485348f20fc17c1
           persist-credentials: false
           fetch-tags: true
       - uses: ./.github/actions/setup-project-bun
-      - name: Existing fixture inputs
+        id: runtime
+      - name: Existing fixture inputs and installs
+        id: install
         shell: bash
         run: |
           set -euo pipefail
+          test "$(git rev-parse HEAD)" = 84c94f3d774d64b8b05ae2193485348f20fc17c1
           git rev-parse HEAD
           git hash-object tests/codex-integration/codex-composed-acceptance.test.ts
           bun install --frozen-lockfile
           (cd gui && bun install --frozen-lockfile && bun run build)
-          mkdir -p .tmp/held-sync-diagnostics
-      - name: Unmodified B sample
-        id: original
-        continue-on-error: true
+          mkdir -p .tmp/held-sync-cache-diagnostics
+      - name: Read-only preparation of an owned parent cache
+        id: prepare
         shell: bash
         run: |
-          set -o pipefail
-          bun test --isolate --timeout 60000 tests/codex-integration/codex-composed-acceptance.test.ts --test-name-pattern 'B-reduced' 2>&1 | tee .tmp/held-sync-diagnostics/original.log
+          python - <<'PYCODE'
+          import errno, json, os, shutil, stat, tempfile
+          from pathlib import Path
+          out=Path(".tmp/held-sync-cache-diagnostics")
+          private=Path(".tmp/held-sync-cache-private")
+          out.mkdir(parents=True, exist_ok=True)
+          private.mkdir(parents=True, exist_ok=True)
+          # Original path/env value/cache content never enters stdout or artifacts.
+          source=next((v for k,v in os.environ.items() if k.lower()=="psmoduleanalysiscachepath"), None)
+          seed=Path(tempfile.mkdtemp(prefix="ocx-cache-parent-", dir=os.environ["RUNNER_TEMP"]))/"module-analysis-cache"
+          available=False
+          copied=False
+          try:
+              if source and os.path.isabs(source):
+                  before=os.lstat(source)
+                  available=stat.S_ISREG(before.st_mode) and not stat.S_ISLNK(before.st_mode) and before.st_size>0
+                  if available:
+                      # Only read the runner original. Parent test processes get this
+                      # prepared job-owned copy, never the original cache pathname.
+                      # Copy bytes into an exclusively created file, never copy a link.
+                      with open(source, "rb") as reader, seed.open("xb") as writer:
+                          opened=os.fstat(reader.fileno())
+                          if not stat.S_ISREG(opened.st_mode) or (opened.st_dev,opened.st_ino)!=(before.st_dev,before.st_ino):
+                              raise RuntimeError("Parent cache source changed during preparation")
+                          shutil.copyfileobj(reader, writer)
+                      after=os.lstat(source)
+                      destination=os.lstat(seed)
+                      copied=(stat.S_ISREG(destination.st_mode) and not stat.S_ISLNK(destination.st_mode)
+                              and destination.st_size==before.st_size
+                              and (destination.st_dev,destination.st_ino)!=(before.st_dev,before.st_ino)
+                              and stat.S_ISREG(after.st_mode) and not stat.S_ISLNK(after.st_mode)
+                              and (after.st_dev,after.st_ino)==(before.st_dev,before.st_ino))
+                      if not copied:
+                          seed.unlink(missing_ok=True)
+          except OSError as error:
+              seed.unlink(missing_ok=True)
+              if error.errno not in (errno.ENOENT, getattr(errno,"ESTALE",116)):
+                  raise RuntimeError("Could not prepare the owned parent module cache") from None
+          (private/"parent.json").write_text(json.dumps({"path":str(seed),"sourceAvailable":available,"copied":copied,
+              "identity":[destination.st_dev,destination.st_ino] if copied else None}))
+          public={"sourceAvailable":available,"copied":copied}
+          (out/"parent-cache.json").write_text(json.dumps(public, indent=2))
+          print("CACHE_DIAG "+json.dumps(public))
+          PYCODE
       - name: Fixed diagnostic markers only
         id: markers
-        if: always() && steps.original.outcome != 'skipped'
         shell: bash
         run: |
           python - <<'PYCODE'
           from pathlib import Path
           p=Path("tests/codex-integration/codex-composed-acceptance.test.ts")
+          original=p.read_bytes()
           s=p.read_text()
           needle="    const response = await fetch(" + chr(96) + "http://127.0.0.1:${runtime.port}${path}" + chr(96) + ", {"
           assert s.count(needle)==1
@@ -78,49 +114,182 @@ jobs:
           needle="      const server = await fx.start();"
           assert needle in block
           block=block.replace(needle,'      console.log("HELD_DIAG", JSON.stringify({ phase: "server.start", at: performance.now() }));\n'+needle+'\n      console.log("HELD_DIAG", JSON.stringify({ phase: "server.ready", at: performance.now() }));',1)
+          private=Path(".tmp/held-sync-cache-private")
+          (private/"fixture-original.ts").write_bytes(original)
           p.write_text(s[:start]+block+s[end:])
+          (private/"fixture-instrumented.ts").write_bytes(p.read_bytes())
           print("Diagnostic logging only: unchanged deadlines and assertions.")
           PYCODE
-      - name: Two predetermined traced samples
-        id: traced
-        if: always() && steps.markers.outcome == 'success'
+      - name: Same-VM A2 empty2 copied-whole copied2 restored-A1
+        id: experiment
         continue-on-error: true
         shell: bash
         run: |
-          set +e
-          failed=0
-          for sample in 1 2; do
-            bun test --isolate --timeout 60000 tests/codex-integration/codex-composed-acceptance.test.ts --test-name-pattern 'B-reduced' 2>&1 | tee ".tmp/held-sync-diagnostics/traced-${sample}.log"
-            result=${PIPESTATUS[0]}
-            echo "TRACE_SAMPLE=${sample} EXIT=${result}"
-            if [ "$result" -ne 0 ]; then failed=$((failed+1)); fi
-          done
-          echo "failed=$failed" >> "$GITHUB_OUTPUT"
-          test "$failed" -eq 0
-      - name: Whole-file context when isolated samples pass
-        id: whole
-        if: always() && steps.original.outcome == 'success' && steps.traced.outcome == 'success'
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -o pipefail
-          bun test --isolate --timeout 60000 tests/codex-integration/codex-composed-acceptance.test.ts 2>&1 | tee .tmp/held-sync-diagnostics/whole.log
-      - name: Preserve all outcomes
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: held-sync-${{ matrix.label }}
-          path: .tmp/held-sync-diagnostics
-          if-no-files-found: warn
-      - name: Diagnostic outcome, not integration proof
+          python - <<'PYCODE'
+          import json, os, re, shutil, stat, subprocess, sys
+          from pathlib import Path
+          fixture=Path("tests/codex-integration/codex-composed-acceptance.test.ts")
+          private=Path(".tmp/held-sync-cache-private")
+          out=Path(".tmp/held-sync-cache-diagnostics")
+          original=(private/"fixture-instrumented.ts").read_bytes()
+          base=(private/"fixture-instrumented.ts").read_text()
+          parent=json.loads((private/"parent.json").read_text())
+          labels=["A-1","A-2","empty-1","empty-2","copied-whole","copied-1","copied-2","A-restored"]
+          results={label:{"outcome":"NOT_RUN"} for label in labels}
+          def save():
+              (out/"outcomes.json").write_text(json.dumps(results,indent=2))
+          save()
+          assert parent["sourceAvailable"] and parent["copied"], "Prepared parent cache unavailable; comparison inconclusive"
+          try:
+              seed_stat=os.lstat(parent["path"])
+          except OSError:
+              raise RuntimeError("Prepared parent cache unavailable") from None
+          assert stat.S_ISREG(seed_stat.st_mode) and not stat.S_ISLNK(seed_stat.st_mode), "Prepared parent cache is not a regular owned file"
+          assert [seed_stat.st_dev,seed_stat.st_ino]==parent["identity"], "Prepared parent cache identity changed"
+          env={k:v for k,v in os.environ.items() if k.lower()!="psmoduleanalysiscachepath"}
+          env["PSModuleAnalysisCachePath"]=parent["path"]
+          # Same parent environment in every phase. Only fixture-owned child cache
+          # policy changes; original HOME/USERPROFILE/service/coordinator code stays intact.
+          bun=shutil.which("bun")
+          assert bun, "Prepared Bun unavailable"
+          assert subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip()=="84c94f3d774d64b8b05ae2193485348f20fc17c1"
+          # Three fixed fixture variants; every replacement must match exactly once.
+          def replace(text, old, new):
+              assert text.count(old)==1, "Pinned fixture anchor mismatch"
+              return text.replace(old,new,1)
+          owned=replace(base,"  existsSync,","  copyFileSync,\n  rmSync,\n  existsSync,")
+          owned=replace(owned,'import { join, relative, resolve } from "node:path";',
+                        'import { isAbsolute, join, relative, resolve } from "node:path";')
+          owned=replace(owned,'  readonly children: Array<ReturnType<typeof Bun.spawn>> = [];',
+                        '  readonly diagnosticCacheEnv: Record<string, string> = {};\n  readonly children: Array<ReturnType<typeof Bun.spawn>> = [];')
+          owned=replace(owned,"      HOME: home,","      ...this.diagnosticCacheEnv,\n      HOME: home,")
+          init='''    if (process.platform === "win32") {
+                const cache = join(this.root, "module-analysis-cache");
+                this.diagnosticCacheEnv.PSModuleAnalysisCachePath = cache;
+                let sourceAvailable = false;
+                let copied = false;
+          '''
+          # EXACT Desktop fixture copy policy (47-69), plus booleans only. Once per
+          # Fixture constructor, never per env()/spawn; cache is outside this.codex.
+          copy='''      const source = Object.entries(process.env).find(([key]) =>
+                  key.toLowerCase() === "psmoduleanalysiscachepath")?.[1];
+                if (source && isAbsolute(source)) {
+                  try {
+                    const before = lstatSync(source);
+                    if (before.isFile() && !before.isSymbolicLink()) {
+                      sourceAvailable = true;
+                      copyFileSync(source, cache);
+                      if (lstatSync(cache).size !== before.size) rmSync(cache, { force: true });
+                      else copied = true;
+                    }
+                  } catch (error) {
+                    const code = (error as NodeJS.ErrnoException).code;
+                    if (code !== "ENOENT" && code !== "ESTALE") {
+                      throw new Error("Composed fixture could not read or copy the PowerShell module cache");
+                    }
+                    rmSync(cache, { force: true });
+                  }
+                }
+          '''
+          end='''      console.log("CACHE_DIAG", JSON.stringify({ sourceAvailable, copied }));
+              }
+          '''
+          variants={"empty":replace(owned,"  constructor() {\n","  constructor() {\n"+init+end),
+                    "copied":replace(owned,"  constructor() {\n","  constructor() {\n"+init+copy+end)}
+          def sample(label, whole=False):
+              results[label]={"outcome":"RUNNING"}; save()
+              args=[bun,"test","--isolate","--timeout","60000",str(fixture)]
+              if not whole: args += ["--test-name-pattern","B-reduced"]
+              with (out/(label+".log")).open("wb") as log:
+                  process=subprocess.Popen(args,env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+                  for line in process.stdout:
+                      log.write(line); log.flush()
+                      sys.stdout.buffer.write(line); sys.stdout.buffer.flush()
+                  code=process.wait()
+              text=re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]","",(out/(label+".log")).read_text(errors="replace"))
+              events=[]; cache=[]
+              for line in text.splitlines():
+                  for prefix, dest in (("HELD_DIAG ",events),("CACHE_DIAG ",cache)):
+                      if prefix in line:
+                          try: dest.append(json.loads(line.split(prefix,1)[1]))
+                          except json.JSONDecodeError: pass
+              def one(phase,path=None):
+                  hits=[e for e in events if e.get("phase")==phase and (path is None or e.get("path")==path)]
+                  return hits[0] if len(hits)==1 else {}
+              start=one("server.start"); ready=one("server.ready")
+              off=one("request.end","/api/native-integrations/codex")
+              sync=one("request.end","/api/sync"); released=one("provider.release")
+              timed=any(e.get("phase")=="request.abort" for e in events) or bool(re.search(r"\b(?:TimeoutError|AbortError|watchdog)\b|timed out",text,re.I))
+              outcome="PASS" if code==0 else "TIMEOUT" if timed else "ASSERTION_FAILURE" if re.search(r"error:\s*expect\(",text) else "OTHER_FAILURE"
+              results[label]={"exitCode":code,"outcome":outcome,"cache":cache,"events":events,
+                  "startupMs":ready["at"]-start["at"] if start and ready else None,
+                  "offMs":off.get("elapsed") if not whole else None,
+                  "offAbortMs":one("request.abort","/api/native-integrations/codex").get("elapsed") if not whole else None,
+                  "syncEndMinusReleaseMs":sync["at"]-released["at"] if sync and released and not whole else None}
+              save()
+              print("CACHE_SAMPLE "+json.dumps({"sample":label,"exitCode":code,"outcome":outcome}),flush=True)
+          try:
+              fixture.write_bytes(original)
+              sample("A-1"); sample("A-2")
+              fixture.write_text(variants["empty"])
+              sample("empty-1"); sample("empty-2")
+              fixture.write_text(variants["copied"])
+              sample("copied-whole",whole=True)
+              sample("copied-1"); sample("copied-2")
+          finally:
+              fixture.write_bytes(original)
+              assert fixture.read_bytes()==original, "Instrumented A restoration mismatch"
+              sample("A-restored")
+          print("Diagnostic capture only; compare startup/OFF controls and copied booleans. No runtime fix selected.")
+          PYCODE
+      - name: Restore fixture source and record all step outcomes
+        id: restore
         if: always()
         shell: bash
         env:
-          ORIGINAL: ${{ steps.original.outcome }}
-          TRACED: ${{ steps.traced.outcome }}
-          WHOLE: ${{ steps.whole.outcome }}
+          CHECKOUT: ${{ steps.checkout.outcome }}
+          RUNTIME: ${{ steps.runtime.outcome }}
+          INSTALL: ${{ steps.install.outcome }}
+          PREPARE: ${{ steps.prepare.outcome }}
+          MARKERS: ${{ steps.markers.outcome }}
+          EXPERIMENT: ${{ steps.experiment.outcome }}
         run: |
-          printf 'original=%s traced=%s whole=%s\n' "$ORIGINAL" "$TRACED" "$WHOLE"
-          test "$ORIGINAL" = success
-          test "$TRACED" = success
-          test "$WHOLE" = success
+          python - <<'PYCODE'
+          import json, os
+          from pathlib import Path
+          out=Path(".tmp/held-sync-cache-diagnostics")
+          out.mkdir(parents=True,exist_ok=True)
+          if not (out/"outcomes.json").exists():
+              labels=["A-1","A-2","empty-1","empty-2","copied-whole","copied-1","copied-2","A-restored"]
+              (out/"outcomes.json").write_text(json.dumps({label:{"outcome":"NOT_RUN"} for label in labels},indent=2))
+          saved=Path(".tmp/held-sync-cache-private/fixture-original.ts")
+          fixture=Path("tests/codex-integration/codex-composed-acceptance.test.ts")
+          restored=False
+          if saved.is_file():
+              fixture.write_bytes(saved.read_bytes())
+              restored=fixture.read_bytes()==saved.read_bytes()
+          steps={key:os.environ[key] for key in ("CHECKOUT","RUNTIME","INSTALL","PREPARE","MARKERS","EXPERIMENT")}
+          (out/"steps.json").write_text(json.dumps({"steps":steps,"fixtureRestored":restored,"diagnosticOnly":True,"fullIntegrationProof":False,"ablation":"DEFERRED"},indent=2))
+          if steps["MARKERS"]=="success" and not restored:
+              raise RuntimeError("Fixture restoration incomplete")
+          PYCODE
+      - name: Preserve all diagnostic logs and outcomes (no caches or homes)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: held-sync-cache-84c94f3
+          path: |
+            .tmp/held-sync-cache-diagnostics/*.log
+            .tmp/held-sync-cache-diagnostics/*.json
+          include-hidden-files: true
+          if-no-files-found: warn
+      - name: Diagnostic capture status, never full integration proof
+        if: always()
+        shell: bash
+        env:
+          EXPERIMENT: ${{ steps.experiment.outcome }}
+          RESTORE: ${{ steps.restore.outcome }}
+        run: |
+          printf 'diagnostic_capture=%s source_restoration=%s full_integration_proof=false\n' "$EXPERIMENT" "$RESTORE"
+          test "$EXPERIMENT" = success
+          test "$RESTORE" = success
