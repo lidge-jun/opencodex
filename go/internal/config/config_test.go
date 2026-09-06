@@ -27,6 +27,26 @@ func TestLoadMissingFileIsEmpty(t *testing.T) {
 	}
 }
 
+func TestListenTargetUsesValidatedConfigOrDefault(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, "{\"port\": 18080, \"hostname\": \"127.0.0.2\"}")
+	cfg, err := LoadFromDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if port, host := cfg.ListenTarget(); port != 18080 || host != "127.0.0.2" {
+		t.Fatalf("ListenTarget = %d, %q", port, host)
+	}
+	writeFixture(t, dir, "{\"port\": 0}")
+	cfg, err = LoadFromDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if port, host := cfg.ListenTarget(); port != 10100 || host != "" {
+		t.Fatalf("default ListenTarget = %d, %q", port, host)
+	}
+}
+
 func TestLoadMalformedJSONDefaultsWithoutMovingTheFile(t *testing.T) {
 	dir := t.TempDir()
 	path := writeFixture(t, dir, "{not json")

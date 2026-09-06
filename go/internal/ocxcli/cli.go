@@ -10,7 +10,9 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -34,6 +36,9 @@ type Command struct{ Name, Usage, Summary string }
 var Commands = []Command{
 	{Name: "health", Usage: "ocx health [--json]", Summary: "Verify the local proxy identity and report health."},
 	{Name: "ready", Usage: "ocx ready [--json]", Summary: "Verify the local proxy identity and report readiness."},
+	{Name: "status", Usage: "ocx status [--json]", Summary: "Report local listener diagnostics."},
+	{Name: "doctor", Usage: "ocx doctor", Summary: "Report local runtime diagnostics."},
+	{Name: "service", Usage: "ocx service status", Summary: "Report the local service manager state."},
 	{Name: "config", Usage: "ocx config <subcommand>", Summary: "Inspect the durable configuration."},
 	{Name: "models", Usage: "ocx models [--provider <name>] [--json]", Summary: "List configured models."},
 	{Name: "provider", Usage: "ocx provider <subcommand>", Summary: "Inspect configured providers."},
@@ -115,6 +120,12 @@ func Run(args []string, deps Deps) int {
 		return runHealth(args[1:], deps)
 	case "ready":
 		return runReady(args[1:], deps)
+	case "status":
+		return runStatus(args[1:], deps)
+	case "doctor":
+		return runDoctor(args[1:], deps)
+	case "service":
+		return runService(args[1:], deps)
 	case "config":
 		return runConfig(args[1:], deps)
 	case "models":
@@ -126,6 +137,97 @@ func Run(args []string, deps Deps) int {
 		printHelp(deps.Stdout)
 		return ExitFailure
 	}
+}
+
+type statusReport struct {
+	SchemaVersion int
+	Running       bool
+	PID           *int64
+	HealthOK      bool
+	HealthURL     string
+	HealthMessage string
+	Port          int
+	Hostname      string
+	Source        string
+}
+
+func runStatus(args []string, deps Deps) int {
+	jsonOutput := len(args) == 1 && args[0] == "--json"
+	if len(args) != 0 && !jsonOutput {
+		fmt.Fprintln(deps.Stderr, "Usage: ocx status [--json]")
+		return ExitFailure
+	}
+	report := collectGoStatus(deps)
+	if jsonOutput {
+		fmt.Fprintf(deps.Stdout, "{\"schemaVersion\":%d,\"proxy\":{\"running\":%t,\"pid\":", report.SchemaVersion, report.Running)
+		if report.PID == nil {
+			fmt.Fprint(deps.Stdout, "null")
+		} else {
+			fmt.Fprint(deps.Stdout, *report.PID)
+		}
+		fmt.Fprintf(deps.Stdout, ",\"health\":{\"ok\":%t,\"url\":%q,\"message\":%q}},\"listen\":{\"port\":%d,\"hostname\":%q,\"source\":%q}}\n", report.HealthOK, report.HealthURL, report.HealthMessage, report.Port, report.Hostname, report.Source)
+		return ExitOK
+	}
+	if report.Running {
+		fmt.Fprintf(deps.Stdout, "Proxy: running (PID %d)\n", *report.PID)
+	} else {
+		fmt.Fprintln(deps.Stdout, "Proxy: not running")
+	}
+	fmt.Fprintf(deps.Stdout, "Health: %s\nListen: %s:%d (%s)\n", report.HealthMessage, probeHost(report.Hostname), report.Port, report.Source)
+	return ExitOK
+}
+
+func collectGoStatus(deps Deps) statusReport {
+	report := statusReport{SchemaVersion: 1, Port: 10100, Source: "config", HealthMessage: "unreachable"}
+	if cfg, err := config.Load(); err == nil && cfg != nil {
+		report.Port, report.Hostname = cfg.ListenTarget()
+	}
+	report.HealthURL = "http://" + probeHost(report.Hostname) + ":" + strconv.Itoa(report.Port) + "/healthz"
+	state, err := deps.ReadRuntime()
+	if err != nil {
+		return report
+	}
+	report.Port, report.Hostname, report.Source = state.Port, state.Hostname, "runtime"
+	report.HealthURL = baseURL(state) + "/healthz"
+	health, _, err := ProbeHealth(deps)
+	if err != nil {
+		return report
+	}
+	report.Running, report.HealthOK, report.HealthMessage = true, true, "ok"
+	pid := health.PID
+	report.PID = &pid
+	return report
+}
+
+func runDoctor(args []string, deps Deps) int {
+	if len(args) != 0 {
+		fmt.Fprintln(deps.Stderr, "Usage: ocx doctor")
+		return ExitFailure
+	}
+	report := collectGoStatus(deps)
+	fmt.Fprintf(deps.Stdout, "opencodex doctor\n  runtime: %s/%s\n  proxy: %s\n  listener: %s:%d (%s)\n", runtime.GOOS, runtime.GOARCH, report.HealthMessage, probeHost(report.Hostname), report.Port, report.Source)
+	return ExitOK
+}
+
+func runService(args []string, deps Deps) int {
+	if len(args) != 1 || args[0] != "status" {
+		fmt.Fprintln(deps.Stderr, "Usage: ocx service status")
+		return ExitFailure
+	}
+	if runtime.GOOS != "linux" {
+		fmt.Fprintf(deps.Stdout, "Service status is not available through the Go CLI on %s.\n", runtime.GOOS)
+		return ExitFailure
+	}
+	output, err := exec.Command("systemctl", "--user", "is-active", "opencodex.service").Output()
+	state := strings.TrimSpace(string(output))
+	if state == "" {
+		state = "unknown"
+	}
+	fmt.Fprintln(deps.Stdout, state)
+	if err != nil || state != "active" {
+		return ExitFailure
+	}
+	return ExitOK
 }
 func printHelp(w io.Writer) { fmt.Fprint(w, fullUsage) }
 func hasHelpFlag(args []string) bool {
@@ -142,6 +244,12 @@ func printSubcommandHelp(name string, deps Deps) int {
 		fmt.Fprint(deps.Stdout, "Usage: ocx health [--json]\n\nCheck proxy health. Exits 0 if healthy, 1 otherwise.\n\nUse --json for structured output: {ok, pid, port}.\n")
 	case "ready":
 		fmt.Fprint(deps.Stdout, "Usage: ocx ready [--json] [--wait [--timeout <seconds>]]\n\nCheck post-sync readiness. Exits 0 only when ready.\n\nExact unauthenticated GET /readyz returns HTTP 200 when ready, or 503 with Retry-After: 1 for pending or failed.\nIts sanitized HTTP identity is {service, version, uptime, pid, port, status}; /healthz is separate liveness, not readiness.\nDefault is a single identity-checked /readyz probe; old proxies without /readyz fail closed as unreachable.\n--wait polls until ready or timeout, but exits immediately on terminal failed (default 45s, max 300s).\n--timeout requires --wait and accepts a positive integer (1..300).\n--json emits {ready, status, pid, port}; status is one of ready|pending|failed|unreachable.\nInvalid or unknown arguments exit 64. Not-ready, pending, failed, timeout, and unreachable exit 1.\n")
+	case "status":
+		fmt.Fprint(deps.Stdout, "Usage: ocx status [--json]\n\nReport Go-owned local listener diagnostics.\n")
+	case "doctor":
+		fmt.Fprint(deps.Stdout, "Usage: ocx doctor\n\nReport Go-owned local runtime diagnostics.\n")
+	case "service":
+		fmt.Fprint(deps.Stdout, "Usage: ocx service status\n\nReport the local service manager state. Lifecycle mutations remain TypeScript-owned during the incremental takeover.\n")
 	default:
 		fmt.Fprintf(deps.Stderr, "Unknown command: %s\n", name)
 		printHelp(deps.Stdout)

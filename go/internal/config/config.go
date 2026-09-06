@@ -79,6 +79,11 @@ func Path() (string, error) {
 // foundation, not a full schema port: TS-side validation/normalisation is
 // replicated only where a Go-owned route body depends on it (see package doc).
 type Config struct {
+	// Port and Hostname are the listener defaults used by the initial Go CLI
+	// diagnostics. Other status projections stay TypeScript-owned until their
+	// own parity increments add them.
+	Port     int
+	Hostname string
 	// ShadowCallIntercept mirrors config.shadowCallIntercept (the optional
 	// shadow/helper-call rewrite section). Nil when absent from the file.
 	ShadowCallIntercept *ShadowCallIntercept
@@ -141,6 +146,14 @@ func decode(reader io.Reader) (*Config, error) {
 		return &Config{Raw: map[string]any{}}, err
 	}
 	cfg := &Config{Raw: raw}
+	if port, ok := raw["port"].(json.Number); ok {
+		if parsed, err := port.Int64(); err == nil && parsed > 0 && parsed <= 65535 {
+			cfg.Port = int(parsed)
+		}
+	}
+	if hostname, ok := raw["hostname"].(string); ok {
+		cfg.Hostname = hostname
+	}
 	if section, ok := raw["shadowCallIntercept"]; ok {
 		if obj, ok := section.(map[string]any); ok {
 			cfg.ShadowCallIntercept = &ShadowCallIntercept{
@@ -151,6 +164,17 @@ func decode(reader io.Reader) (*Config, error) {
 		}
 	}
 	return cfg, nil
+}
+
+// ListenTarget returns normalized listener defaults for a no-runtime status
+// report. The TypeScript default port is 10100.
+func (c *Config) ListenTarget() (port int, hostname string) {
+	if c.Port > 0 {
+		port = c.Port
+	} else {
+		port = 10100
+	}
+	return port, c.Hostname
 }
 
 // ShadowCallSettings is the projection the shadow-call settings read route

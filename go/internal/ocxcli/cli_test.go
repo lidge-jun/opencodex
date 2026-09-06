@@ -58,8 +58,51 @@ func TestVersionAndRegistry(t *testing.T) {
 	if got := Run([]string{"--version"}, depsFor(RuntimeState{}, &out, &err)); got != ExitOK || out.String() != "opencodex 2.42.0\n" {
 		t.Fatalf("version = code %d stdout %q", got, out.String())
 	}
-	if len(Commands) != 5 || Commands[0].Name != "health" || Commands[1].Name != "ready" || Commands[2].Name != "config" || Commands[3].Name != "models" || Commands[4].Name != "provider" {
+	if len(Commands) != 5 || Commands[0].Name != "health" || Commands[1].Name != "ready" || Commands[2].Name != "status" || Commands[3].Name != "doctor" || Commands[4].Name != "service" {
 		t.Fatalf("unexpected command registry: %#v", Commands)
+	}
+}
+
+func TestStatusUsesAttestedRuntimeAndRejectsInvalidArgs(t *testing.T) {
+	server, state := testServer(t, "ready", true)
+	defer server.Close()
+	var out, stderr bytes.Buffer
+	if got := Run([]string{"status", "--json"}, depsFor(state, &out, &stderr)); got != ExitOK {
+		t.Fatalf("status exit = %d stderr %q", got, stderr.String())
+	}
+	if !strings.Contains(out.String(), "\"running\":true") || !strings.Contains(out.String(), "\"source\":\"runtime\"") {
+		t.Fatalf("status output = %q", out.String())
+	}
+	out.Reset()
+	stderr.Reset()
+	if got := Run([]string{"status", "--bad"}, depsFor(state, &out, &stderr)); got != ExitFailure || stderr.String() != "Usage: ocx status [--json]\n" {
+		t.Fatalf("invalid status = code %d stderr %q", got, stderr.String())
+	}
+}
+
+func TestDoctorAndServiceValidateReadOnlyArguments(t *testing.T) {
+	var out, stderr bytes.Buffer
+	if got := Run([]string{"doctor", "--json"}, depsFor(RuntimeState{}, &out, &stderr)); got != ExitFailure || stderr.String() != "Usage: ocx doctor\n" {
+		t.Fatalf("invalid doctor = code %d stderr %q", got, stderr.String())
+	}
+	out.Reset()
+	stderr.Reset()
+	if got := Run([]string{"service", "restart"}, depsFor(RuntimeState{}, &out, &stderr)); got != ExitFailure || stderr.String() != "Usage: ocx service status\n" {
+		t.Fatalf("invalid service = code %d stderr %q", got, stderr.String())
+	}
+}
+
+func TestReadOnlyFamilyHelp(t *testing.T) {
+	for _, command := range []string{"status", "doctor", "service"} {
+		t.Run(command, func(t *testing.T) {
+			var out, stderr bytes.Buffer
+			if got := Run([]string{"help", command}, depsFor(RuntimeState{}, &out, &stderr)); got != ExitOK {
+				t.Fatalf("help exit = %d stderr %q", got, stderr.String())
+			}
+			if !strings.Contains(out.String(), "Usage: ocx "+command) {
+				t.Fatalf("help output = %q", out.String())
+			}
+		})
 	}
 }
 
