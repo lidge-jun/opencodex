@@ -164,6 +164,7 @@
     }
   },
   "explicit": {
+    "claude-compatibility.test.ts": "claude-integration",
     "abort-idle-deadline.test.ts": "lib",
     "abort-race.test.ts": "adapters",
     "account-import.test.ts": "server",

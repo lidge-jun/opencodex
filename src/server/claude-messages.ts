@@ -16,6 +16,7 @@ import { resolveAlias, claudeCodeNativeAlias } from "../claude/alias";
 import { recordDesktopRequest } from "../claude/desktop-health";
 import { stripOneMillionMarker } from "../claude/context-windows";
 import { captureClaudeInbound } from "../claude/inbound-debug";
+import { analyzeClaudeCompatibility } from "../claude/compatibility";
 import { isTransientUpstreamStatus } from "../lib/upstream-retry";
 import { resolveClientRetryAfter } from "../lib/retry-after";
 import {
@@ -63,6 +64,22 @@ import {
 } from "./fast-row";
 
 type Rec = Record<string, unknown>;
+
+/** Apply the opt-in Claude protocol gate without exposing request content. */
+export function enforceClaudeCompatibility(
+  body: unknown,
+  opts: { mode?: unknown; adapter: string; anthropicBeta?: string },
+): void {
+  if (opts.mode !== "shadow" && opts.mode !== "enforce") return;
+  const result = analyzeClaudeCompatibility(body, {
+    mode: opts.mode,
+    adapter: opts.adapter,
+    anthropicBeta: opts.anthropicBeta,
+  });
+  if (result.decision === "reject") {
+    throw new AnthropicRequestError(result.reason ?? "unsupported Claude protocol feature");
+  }
+}
 
 /**
  * Decode a Claude selector that may carry the fast marker.
@@ -764,6 +781,14 @@ async function handleClaudeMessagesWithBudget(
     // adapter rather than the provider-wide default (#404).
     route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, "anthropic");
     logCtx.routeDecision = route.routeDecision;
+    // Opt-in protocol gate: native passthrough has already returned above. Keep the
+    // legacy translator behavior unchanged when unset; enforce only an explicitly
+    // requested mode and never include request data in the bounded error reason.
+    enforceClaudeCompatibility(anthropicBody, {
+      mode: config.claudeCode?.compatibility,
+      adapter: route.provider.adapter,
+      anthropicBeta: req.headers.get("anthropic-beta") ?? undefined,
+    });
     if (route.provider.adapter === "openai-responses") {
       nativeRoute = true;
       delete internalBody.max_output_tokens;
