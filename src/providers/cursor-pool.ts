@@ -84,11 +84,15 @@ export class CursorPoolKernel {
     return `${owner}\0${thread}`;
   }
   private sweep(now = this.now()): void {
-    for (const [ref, s] of this.states)
+    for (const [key, s] of this.states)
       if (s.touched + CURSOR_POOL_TTL_MS <= now) {
-        this.states.delete(ref);
-        for (const [k, v] of this.affinity)
-          if (v === ref) this.affinity.delete(k);
+        this.states.delete(key);
+        const ownerThread = this.key(s.owner, s.thread);
+        const stillLive = [...this.states.values()].some(
+          (candidate) =>
+            candidate.owner === s.owner && candidate.thread === s.thread,
+        );
+        if (!stillLive) this.affinity.delete(ownerThread);
       }
   }
   private accounts(
