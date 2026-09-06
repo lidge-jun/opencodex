@@ -371,6 +371,13 @@ Vercel AI Gateway 可以在多个底层推理提供者之间路由一个模型�
 
 请使用 `modelDisplayNames` 设置显示名称。优先顺序是操作者设置的 `modelDisplayNames`、提供者目录元数据，然后是普通的 `provider/model` 显示。键是此提供者内精确的原生模型 id，例如 `xai/grok-4.6` 的键是 `grok-4.6`。名称只改变显示，不会改变精确路由 id 或上游模型 id。请只把此字段加入 `config.json` 中现有的提供者设置，并保留所有其他字段。向 `PUT /api/providers/:provider/model-display-names` 发送 `{ "modelId": "grok-4.6", "displayName": "Grok 4.6" }` 可保存名称，发送 `displayName: null` 只重置该名称。
 
+本地 Codex 目录中受支持的不带前缀的原生 GPT 条目也可以通过
+`providers.openai.modelDisplayNames` 设置精确的显示名称, 例如 `"gpt-6-astra": "GPT 6 Astra"`。
+启动时同步和本地目录收敛都会重新应用这些名称。删除名称设置时, 只有条目的当前显示名称仍与已应用的覆盖值一致,
+才会恢复原始原生名称。之后由外部更改的显示名称会被保留。
+模型 ID、能力、排序、路由组合别名和带账户限定的条目均保持不变。
+此本地目录覆盖不会重命名 HTTP 模型列表中的条目或虚拟 `*-pro` 条目。
+
 预览版 GPT-5.6 回退条目使用相同机制。OpenAI API key 预设会为基础和 Pro id 设定 `922000` 上下文和 `922000` 最大输入；OpenRouter 会为 `openai/gpt-5.6-sol`、`openai/gpt-5.6-terra` 和 `openai/gpt-5.6-luna` 设定 `922000` 上下文。Pool/Direct 会声明 `922000`；同步后的目录会声明 `max`，同时保留 `xhigh` 的独立性。
 
 ```json

@@ -377,6 +377,13 @@ Vercel AI Gateway는 하나의 모델을 여러 기반 추론 공급자에 걸�
 
 표시 이름은 `modelDisplayNames`로 설정합니다. 우선순위는 운영자가 설정한 `modelDisplayNames`, 공급자 카탈로그 메타데이터, 일반 `provider/model` 표시 순서입니다. 키는 이 공급자 안의 정확한 네이티브 모델 id입니다. 예를 들어 `xai/grok-4.6`의 키는 `grok-4.6`입니다. 이름은 표시 전용이며 정확한 라우팅 id나 업스트림 모델 id를 바꾸지 않습니다. `config.json`의 기존 공급자 설정에 이 필드만 추가하고 다른 모든 필드는 유지하세요. `PUT /api/providers/:provider/model-display-names`에 `{ "modelId": "grok-4.6", "displayName": "Grok 4.6" }`를 보내 저장하고, `displayName: null`을 보내 해당 이름만 초기화합니다.
 
+로컬 Codex 카탈로그에서 지원되는 접두사 없는 네이티브 GPT 항목에도
+`providers.openai.modelDisplayNames`로 정확한 표시 이름을 지정할 수 있습니다. 예를 들어 `"gpt-6-astra": "GPT 6 Astra"`를 사용합니다.
+시작 시 동기화와 로컬 카탈로그 수렴은 모두 이 이름을 다시 적용합니다. 이름 설정을 삭제하면 항목의 현재 표시 이름이
+적용된 재정의와 여전히 일치할 때만 원래 네이티브 이름을 복원합니다. 이후 외부에서 변경된 표시 이름은 유지합니다.
+모델 ID, 기능, 정렬 순서, 라우팅된 콤보 별칭 및 계정 선택자가 붙은 항목은 바뀌지 않습니다.
+이 로컬 카탈로그 재정의는 HTTP 모델 목록이나 가상 `*-pro` 항목의 이름을 바꾸지 않습니다.
+
 프리뷰 GPT-5.6 폴백 항목도 같은 메커니즘을 사용합니다. OpenAI API 키 프리셋은 base와 Pro id에 컨텍스트 `922000`, 최대 입력 `922000`을 채웁니다. OpenRouter는 `openai/gpt-5.6-sol`, `openai/gpt-5.6-terra`, `openai/gpt-5.6-luna`에 컨텍스트 `922000`을 채웁니다. Pool/Direct는 `922000`을 노출하고, 동기화된 카탈로그는 `xhigh`를 구분한 채 `max`를 노출합니다.
 
 ```json
