@@ -7,11 +7,11 @@ jobs:
   known-folder-phases:
     name: known-folder ${{ matrix.mode }}
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
-        mode: [isolated, shard]
+        mode: [missing, temp, profile, both]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
@@ -153,8 +153,13 @@ jobs:
           s=s.replace(anchor,statement('[Console]::Error.WriteLine("OCX_KNOWN_FOLDER_TIMING:queried=" + $ocxStageWatch.ElapsedMilliseconds)')+'\n'+statement('[Console]::Error.WriteLine("OCX_KNOWN_FOLDER_TIMING:hresult=" + $ocxHr)')+'\n'+anchor,1)
           p.write_text(s,encoding='utf-8')
           PY
-          if [ "$MODE" = shard ]; then
-            bun test --isolate --timeout 60000 tests --shard=3/6
-          else
-            bun test --isolate ./tests/claude-integration/claude-desktop-remote-hub.test.ts --test-name-pattern 'stored profile=true'
-          fi
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('tests/claude-integration/claude-desktop-remote-hub.test.ts')
+          s=p.read_text(encoding="utf-8")
+          anchor='  mkdirSync(env.XDG_RUNTIME_DIR!, { recursive: true });'
+          assert s.count(anchor)==1
+          extra='\n  const envMode = process.env.OCX_FIXTURE_ENV_MODE;\n  if (envMode === "temp" || envMode === "both") {\n    const temp = join(root, "temp");\n    mkdirSync(temp, { recursive: true });\n    env.TEMP = temp;\n    env.TMP = temp;\n  }\n  if (envMode === "profile" || envMode === "both") {\n    mkdirSync(env.APPDATA!, { recursive: true });\n    mkdirSync(env.LOCALAPPDATA!, { recursive: true });\n  }\n'
+          p.write_text(s.replace(anchor,anchor+extra),encoding="utf-8")
+          PY
+          OCX_FIXTURE_ENV_MODE="$MODE" bun test --isolate ./tests/claude-integration/claude-desktop-remote-hub.test.ts --test-name-pattern 'stored profile=true'
