@@ -8,7 +8,6 @@ export interface FailureEvent {
   timestamp?: number;
   requestId?: string;
   sessionId?: string;
-  [key: string]: unknown;
 }
 
 export type FailureFingerprint = string;
