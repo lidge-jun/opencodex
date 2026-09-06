@@ -146,7 +146,20 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
         const makeTransport = deps.createTransport ?? createLiveCursorTransport;
         const kv = deps.kv ?? createCursorKvStore({}, incoming.translatorBudget);
         const rekeyContextUsage = deps.rekeyContextUsage ?? rekeyCursorContextUsage;
-        // Pool ownership is a trusted parsed-route field. Never derive it from caller headers.
+        // Pool ownership is a trusted parsed-route field. When older callers do not provide
+        // that scope, retain the credential-isolation fallback; the digest is never emitted.
+        if (!_parsed._cursorIdentityScope) {
+          try {
+            const token = resolveCursorToken(provider, incoming.headers);
+            _parsed._cursorIdentityScope = createHash("sha256")
+              .update("ocx:cursor:acct:")
+              .update(token)
+              .digest("hex")
+              .slice(0, 16);
+          } catch {
+            // Missing credentials fail closed in the live transport path.
+          }
+        }
         const pooledToken = deps.selectPoolToken?.(_parsed._cursorIdentityScope ?? "", _parsed._clientThreadId ?? "");
         const activeProvider = pooledToken ? { ...provider, apiKey: pooledToken } : provider;
         const inheritedCheckpointRef = _parsed._providerContinuation?.cursor?.checkpointRef;
@@ -511,3 +524,4 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
     },
   };
 }
+import { createHash } from "node:crypto";
