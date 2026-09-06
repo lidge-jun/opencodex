@@ -128,7 +128,7 @@ npm 警告里给出的缩写命令缺少包名，会把当前目录重新安装�
 
 - **在 Codex 中使用任意 LLM。** 5 种协议 adapter 覆盖 Anthropic Messages、Google Gemini、Azure、OpenAI Responses 直通，以及所有 OpenAI 兼容 Chat Completions 端点 —— 即开箱即用的 **40+ provider**。
 - **在 Claude 中也能使用任意 LLM。** `ocx claude` 可通过代理启动 Claude Code。Claude 仪表盘还提供独立的 Desktop 配置，可管理 Opus、Fable、Sonnet、Haiku 四个系列，并支持拖放、键盘操作和 JSON 导入/导出。
-- **安全地池化 ChatGPT 账户。** 现有 Codex 线程保持在一个账户上，而新会话可以从池中自动挑选使用量更低的账户，并带有配额刷新和非 PII 请求标签。
+- **安全地池化 ChatGPT 账户。** 现有 Codex 线程通常保持账户亲和，新会话按配置策略选取账户。可选的[严格额度门禁](../docs/codex-strict-quota.md)复用现有填满优先等策略，到达阈值后不再因亲和使用该账户，真实额度恢复后重新参与选择；带有配额刷新和非 PII 请求标签。
 - **登录一次，免填 API key。** xAI、Anthropic、Kimi 支持 OAuth，可用现有账户认证，token 自动刷新。也可以转发 `codex login`、粘贴 API key，或使用 `${ENV_VAR}` 引用 —— 随你选择。
 - **Codex 在哪里能用，它就在哪里能用。** 自动注入 Codex CLI、TUI、App 和 SDK。路由模型像原生模型一样出现在 Codex 的模型选择器里。
 - **委派给合适的模型。** 在仪表盘或 config 中把最多 5 个路由/原生模型放进 Codex 的 subagent 选择器 —— 复杂任务交给 reasoning 模型，快速任务交给便宜模型。在 v2 多智能体表面（GPT-5.6 Sol/Terra）上，代理会注入精简的委派指引：首选子智能体模型与 effort（`injectionModel` / `injectionEffort`）、featured 模型清单及各自支持的 effort 阶梯，以及让跨模型 `spawn_agent` 覆盖得以应用的 `fork_turns` 规则。已知限制：原生父代理 spawn 路由子代理时，任务正文可能以后端加密形式到达而丢失（[#92](https://github.com/lidge-jun/opencodex/issues/92)）—— 需要可靠的跨 provider 委派请使用 v1 表面。想自定义文案，可在 `injectionPrompt` 中使用 `{{model}}` / `{{effort}}` / `{{roster}}` 占位符。

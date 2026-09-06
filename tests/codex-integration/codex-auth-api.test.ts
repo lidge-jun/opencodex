@@ -1486,6 +1486,7 @@ describe("codex-auth API", () => {
       pinnedAccountId: null,
       autoSwitchThreshold: 55,
       upstreamFailoverThreshold: 3,
+      codexAccountStrictQuota: false,
       accountPoolStrategy: "quota",
       accountPoolStickyLimit: 1,
     });
@@ -3476,6 +3477,28 @@ describe("codex-auth API", () => {
       const resp = await handleCodexAuthAPI(req, url, {} as any);
       expect(resp!.status).toBe(200);
     }
+  });
+
+  test("strict quota opt-in uses the existing threshold API and validates before mutation", async () => {
+    const config = makeConfig({ autoSwitchThreshold: 80 });
+    const put = async (body: unknown) => {
+      const req = new Request("http://localhost/api/codex-auth/auto-switch", {
+        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      return handleCodexAuthAPI(req, new URL(req.url), config);
+    };
+    expect((await put({ threshold: 95, strictQuota: "true" }))!.status).toBe(400);
+    expect(config.autoSwitchThreshold).toBe(80);
+    expect(config.codexAccountStrictQuota).toBeUndefined();
+    expect((await put({ threshold: 95, strictQuota: true }))!.status).toBe(200);
+    expect(config.codexAccountStrictQuota).toBe(true);
+    expect((await put({ threshold: 90 }))!.status).toBe(200);
+    expect(config.codexAccountStrictQuota).toBe(true);
+    const req = new Request("http://localhost/api/codex-auth/active");
+    const state = await (await handleCodexAuthAPI(req, new URL(req.url), config))!.json();
+    expect(state).toMatchObject({ autoSwitchThreshold: 90, codexAccountStrictQuota: true });
+    expect((await put({ threshold: 90, strictQuota: false }))!.status).toBe(200);
+    expect(config.codexAccountStrictQuota).toBe(false);
   });
 
   test("PUT /api/codex-auth/active mutates live runtime config", async () => {

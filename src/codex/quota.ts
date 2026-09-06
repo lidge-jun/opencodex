@@ -1,3 +1,7 @@
+import { createHash } from "node:crypto";
+import { readCodexAccountRecord } from "./account-store";
+import { notifyCodexQuotaChanges } from "./quota-events";
+import type { StrictAccountQuota } from "./quota-types";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { atomicWriteFile, getConfigDir } from "../config";
@@ -19,6 +23,7 @@ type QuotaDiskFile = {
   version: 1;
   quotas: Record<string, StoredAccountQuota>;
   mainPolicyQuota?: MainPolicyQuota;
+  strictQuotas?: Record<string, { identity: string; quota: StrictAccountQuota }>;
 };
 
 type MainPolicyQuota = { identityKey: string; quota: StoredAccountQuota };
@@ -46,6 +51,47 @@ const MONTHLY_WINDOW_MIN_MINUTES = MONTHLY_WINDOW_MIN_SECONDS / 60;
 const WEEKLY_WINDOW_MIN_MINUTES = WEEKLY_WINDOW_MIN_SECONDS / 60;
 
 const accountQuota = new Map<string, StoredAccountQuota>();
+const strictQuotas = new Map<string, { identity: string; quota: StrictAccountQuota }>();
+// Parser provenance is private and cannot alter legacy dashboard DTOs.
+const invalidStrictSnapshots = new WeakSet<object>();
+// Only a structurally complete WHAM response can retire a previously observed window.
+// Header subsets and caller-built parsed snapshots never receive this private provenance.
+const retiredStrictWindows = new WeakMap<object, ReadonlySet<"weekly" | "monthly" | "short">>();
+function strictQuotaIdentity(accountId: string): string | null {
+  if (accountId === MAIN_CODEX_ACCOUNT_ID) return getObservedMainQuotaIdentityKey() ?? null;
+  const record = readCodexAccountRecord(accountId);
+  if (!record?.credential || record.deletedAt != null) return null;
+  // Token refresh changes generation without changing the upstream quota owner. Retain
+  // blocked windows across that refresh; a different account identity starts unknown.
+  const owner = record.credential.chatgptAccountId;
+  return owner ? createHash("sha256").update(owner).digest("hex") : `generation:${record.generation}`;
+}
+function observeStrictQuota(accountId: string, quota: Omit<StoredAccountQuota, "updatedAt"> | null, now: number): void {
+  const identity = strictQuotaIdentity(accountId);
+  if (!identity) { strictQuotas.delete(accountId); return; }
+  if (!quota || invalidStrictSnapshots.has(quota)) return;
+  const previous = strictQuotas.get(accountId);
+  const retired = retiredStrictWindows.get(quota);
+  const windows = previous?.identity === identity
+    ? previous.quota.windows.filter(window => !retired?.has(window.key)) : [];
+  for (const key of ["weekly", "monthly", "short"] as const) {
+    const usedPercent = quota[`${key}Percent`];
+    if (typeof usedPercent !== "number" || !Number.isFinite(usedPercent) || usedPercent < 0 || usedPercent > 100) continue;
+    const resetAt = quota[`${key}ResetAt`];
+    const next = { scope: "shared" as const, key, usedPercent, observedAt: now,
+      ...(typeof resetAt === "number" && Number.isFinite(resetAt) && resetAt >= 0 ? { resetAt } : {}) };
+    const index = windows.findIndex(window => window.key === key);
+    if (index < 0) windows.push(next); else windows[index] = next;
+  }
+  if (windows.length) strictQuotas.set(accountId, { identity, quota: { windows } });
+}
+/** Reads only added-account store or already-observed main identity, never native-main ownership. */
+export function getStrictAccountQuota(accountId: string): StrictAccountQuota | null {
+  hydrateAccountQuotasFromDisk();
+  const cached = strictQuotas.get(accountId);
+  return cached && cached.identity === strictQuotaIdentity(accountId) ? structuredClone(cached.quota) : null;
+}
+
 let lastReconciledGeneration = 0;
 let liveAccountIds = new Set<string>();
 
@@ -259,7 +305,11 @@ export function setAccountQuotaFromParsed(
       }
       : null;
   }
+  // Strict pool admission evaluates all reported shared windows, independently of the
+  // narrower legacy main hard-lock window policy. The writer still proves main ownership.
+  observeStrictQuota(accountId, isMain ? (mainWriter ? quota : null) : quota, updatedAt);
   schedulePersistAccountQuotas();
+  notifyCodexQuotaChanges();
   // Credits carry the previous usage tuple; they must not refresh its observation clock.
   if (!(quota.resetCredits !== undefined && !snapshotHasUsage(quota))) {
     notifyCodexQuotaSnapshot(accountId, next);
@@ -469,6 +519,7 @@ export function parseUpstreamQuotaHeaders(headers: Headers): Omit<StoredAccountQ
     if (tertiaryResetAt !== undefined) quota.monthlyResetAt = tertiaryResetAt;
   }
 
+  if ([primaryRaw, secondaryRaw, tertiaryRaw].some(isInvalidPolicyUsagePercent)) invalidStrictSnapshots.add(quota);
   return hasKnownQuotaValue(quota) ? quota : null;
 }
 
@@ -538,6 +589,11 @@ export function updateAccountQuota(
   if (resetCredits !== undefined) quota.resetCredits = resetCredits;
 
   accountQuota.set(accountId, quota);
+  if (accountId !== MAIN_CODEX_ACCOUNT_ID && !isInvalidPolicyUsagePercent(weekly) && !isInvalidPolicyUsagePercent(monthly)) {
+    observeStrictQuota(accountId, { weeklyPercent: nextWeekly, monthlyPercent: nextMonthly,
+      weeklyResetAt: nextWeeklyResetAt, monthlyResetAt: nextMonthlyResetAt }, quota.updatedAt);
+  }
+  notifyCodexQuotaChanges();
   // This legacy writer has no physical credential provenance.
   if (accountId === MAIN_CODEX_ACCOUNT_ID) mainPolicyQuota = null;
   schedulePersistAccountQuotas();
@@ -585,6 +641,19 @@ function hydrateAccountQuotasFromDisk(): void {
     if (!parsed || parsed.version !== 1 || !parsed.quotas || typeof parsed.quotas !== "object") return;
     // Policy evidence deliberately outlives the legacy six-hour rotation-cache TTL.
     mainPolicyQuota = readMainPolicyQuota(parsed.mainPolicyQuota);
+    for (const [id, entry] of Object.entries(parsed.strictQuotas ?? {})) {
+      if (!entry || typeof entry.identity !== "string" || !Array.isArray(entry.quota?.windows)) continue;
+      const windows = entry.quota.windows.filter(window => window && window.scope === "shared"
+        && ["weekly", "monthly", "short"].includes(window.key)
+        && typeof window.usedPercent === "number" && Number.isFinite(window.usedPercent)
+        && window.usedPercent >= 0 && window.usedPercent <= 100
+        && typeof window.observedAt === "number" && Number.isFinite(window.observedAt) && window.observedAt >= 0)
+        .map(window => ({ scope: "shared" as const, key: window.key, usedPercent: window.usedPercent,
+          observedAt: window.observedAt,
+          ...(typeof window.resetAt === "number" && Number.isFinite(window.resetAt) && window.resetAt >= 0
+            ? { resetAt: window.resetAt } : {}) }));
+      if (windows.length) strictQuotas.set(id, { identity: entry.identity, quota: { windows } });
+    }
     const now = Date.now();
     for (const [accountId, quota] of Object.entries(parsed.quotas)) {
       if (!quota || typeof quota !== "object" || typeof quota.updatedAt !== "number") continue;
@@ -608,6 +677,7 @@ function schedulePersistAccountQuotas(): void {
       const body: QuotaDiskFile = {
         version: 1,
         quotas,
+        strictQuotas: Object.fromEntries(strictQuotas),
         ...(mainPolicyQuota ? { mainPolicyQuota } : {}),
       };
       atomicWriteFile(join(getConfigDir(), QUOTA_CACHE_FILENAME), `${JSON.stringify(body)}\n`);
@@ -660,12 +730,16 @@ export function clearAccountQuota(accountId?: string): void {
   if (accountId) {
     hydrateAccountQuotasFromDisk();
     accountQuota.delete(accountId);
+    strictQuotas.delete(accountId);
+    notifyCodexQuotaChanges();
     if (accountId === MAIN_CODEX_ACCOUNT_ID) mainPolicyQuota = null;
     schedulePersistAccountQuotas();
     forgetCodexQuotaBaseline(accountId);
     return;
   }
   accountQuota.clear();
+  strictQuotas.clear();
+  notifyCodexQuotaChanges();
   forgetCodexQuotaBaseline();
   mainPolicyQuota = null;
   diskHydrated = false;
@@ -688,6 +762,7 @@ export function reconcileCodexQuotaAccounts(context: GenerationContext): number 
   for (const accountId of accountQuota.keys()) {
     if (context.codexAccountIds.has(accountId)) continue;
     accountQuota.delete(accountId);
+    strictQuotas.delete(accountId);
     removed += 1;
   }
   liveAccountIds = new Set(context.codexAccountIds);
@@ -703,6 +778,8 @@ function filterMainPolicyMonthlyQuota(
 ): Omit<StoredAccountQuota, "updatedAt"> | null {
   if (!quota || monthlyOnlyPlan || quota.monthlyIsPrimaryWindow === true) return quota;
   const filtered = { ...quota };
+  const retired = retiredStrictWindows.get(quota);
+  if (retired) retiredStrictWindows.set(filtered, retired);
   delete filtered.monthlyPercent;
   delete filtered.monthlyResetAt;
   delete filtered.monthlyIsPrimaryWindow;
@@ -715,6 +792,30 @@ export function parseMainPolicyUsageQuota(data: WhamUsageResponse): Omit<StoredA
   const windows = [data.rate_limit?.primary_window, data.rate_limit?.secondary_window, data.rate_limit?.tertiary_window];
   if (windows.some(window => isInvalidPolicyUsagePercent(window?.used_percent))) return null;
   return filterMainPolicyMonthlyQuota(parseUsageQuota(data), isThirtyDayOnlyCodexPlan(data.plan_type));
+}
+
+function markCompleteStrictWindowAuthority(data: WhamUsageResponse, quota: object): void {
+  const rate = data.rate_limit;
+  const complete = (window: WhamUsageWindow | null | undefined): window is WhamUsageWindow =>
+    !!window && typeof window.used_percent === "number" && Number.isFinite(window.used_percent)
+    && window.used_percent >= 0 && window.used_percent <= 100
+    && typeof window.limit_window_seconds === "number" && Number.isFinite(window.limit_window_seconds)
+    && window.limit_window_seconds > 0;
+  if (!rate || !complete(rate.primary_window) || !Object.hasOwn(rate, "secondary_window")) return;
+  if (rate.secondary_window !== null && !complete(rate.secondary_window)) return;
+  if (rate.tertiary_window != null && !complete(rate.tertiary_window)) return;
+  const declared = new Set<"weekly" | "monthly" | "short">();
+  for (const window of [rate.primary_window, rate.secondary_window]) {
+    if (!window) continue;
+    declared.add(isExplicitShortWindow(window) ? "short" : isExplicitMonthlyWindow(window) ? "monthly" : "weekly");
+  }
+  // The established parser treats tertiary as supplementary monthly. Its omission is not
+  // proof that a prior monthly window disappeared, so only explicit null retires that bar.
+  if (rate.tertiary_window) declared.add("monthly");
+  const retired = new Set<"weekly" | "monthly" | "short">();
+  for (const key of ["weekly", "short"] as const) if (!declared.has(key)) retired.add(key);
+  if (rate.tertiary_window === null && !declared.has("monthly")) retired.add("monthly");
+  retiredStrictWindows.set(quota, retired);
 }
 
 export function parseUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuota, "updatedAt"> | null {
@@ -815,5 +916,10 @@ export function parseUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuot
   }
   if (resetCredits !== undefined) quota.resetCredits = resetCredits;
 
+  if ([primaryWindow, secondaryWindow, tertiaryWindow].some(window => isInvalidPolicyUsagePercent(window?.used_percent))) {
+    invalidStrictSnapshots.add(quota);
+  } else {
+    markCompleteStrictWindowAuthority(data, quota);
+  }
   return hasKnownQuotaValue(quota) || resetCredits !== undefined ? quota : null;
 }

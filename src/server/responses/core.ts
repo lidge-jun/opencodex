@@ -1,3 +1,5 @@
+import { isCodexStrictQuotaEnabled } from "../../codex/strict-quota";
+import { isStrictQuotaWaitResponse, markStrictQuotaWaitResponse } from "./strict-quota-response";
 import type { Server } from "bun";
 import { randomUUID } from "node:crypto";
 import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse, type ResponsesTerminalStatus } from "../../bridge";
@@ -152,6 +154,7 @@ import {
   unwrapUpstreamRetryEvidenceError,
   codexPoolAffinityKey,
   CodexAccountCooldownError,
+  CodexStrictQuotaUnavailableError,
   CodexAuthContextError,
   CodexMainProfileDrainingError,
   CodexPoolAuthenticationError,
@@ -1018,6 +1021,8 @@ interface CodexPoolAccountRetryArgs {
    * out of budget.
    */
   sameAccountOnly?: boolean;
+  /** Request-owned exclusion/budget for strict quota traversal only. */
+  attemptedAccountIds?: Set<string>;
   upstream: AbortController;
   connectMs: number;
   passthroughEstimate?: number;
@@ -1037,7 +1042,7 @@ type CodexPoolAccountRetryResult =
     upstreamResponse: Response;
     selectedForwardHeaders: Headers;
   }
-  | { kind: "no-alternate" }
+  | { kind: "no-alternate"; quotaWaitable?: boolean }
   | {
     kind: "transport";
     error: unknown;
@@ -1150,6 +1155,63 @@ function shouldDeferCodexResetDerivedCooldown(response: Response, enabled?: bool
 async function retryCodexPoolOnAlternateAccount(
   args: CodexPoolAccountRetryArgs,
 ): Promise<CodexPoolAccountRetryResult> {
+  if (!isCodexStrictQuotaEnabled(args.config, args.firstAuthCtx.quotaScope)
+    || (args.outcomeStatus !== 429 && args.outcomeStatus !== 402)
+    || args.firstAuthCtx.fixedAccount || args.sameAccountOnly) {
+    return retryCodexPoolOnOneAlternateAccount(args);
+  }
+  // Only authoritative pre-stream quota refusals enter this loop. A sent WS frame,
+  // a body failure, or an ambiguous transport error never authorizes another send.
+  const attemptedAccountIds = new Set([args.firstAuthCtx.accountId]);
+  const accountBudget = new Set([
+    MAIN_CODEX_ACCOUNT_ID, ...(args.config.codexAccounts ?? []).map(account => account.id),
+  ]).size;
+  let current = args;
+  let last: CodexPoolAccountRetryResult = { kind: "no-alternate" };
+  while (attemptedAccountIds.size < accountBudget) {
+    if (args.upstream.signal.aborted || args.options.abortSignal?.aborted) {
+      return { kind: "transport", error: args.upstream.signal.reason
+        ?? args.options.abortSignal?.reason, authCtx: current.firstAuthCtx };
+    }
+    const retry = await retryCodexPoolOnOneAlternateAccount({ ...current, attemptedAccountIds });
+    if (retry.kind === "no-alternate") {
+      if (!retry.quotaWaitable) return last;
+      if (last.kind === "retried") {
+        last.upstreamResponse = codexQuotaWaitResponse(last.upstreamResponse);
+        return last;
+      }
+      return retry;
+    }
+    if (retry.kind === "transport") return retry;
+    last = retry;
+    if (retry.authCtx.kind === "main"
+      || !await shouldRetryCodexPoolAccountQuota(retry.upstreamResponse, args.options.abortSignal)) return retry;
+    current = {
+      ...args,
+      firstAuthCtx: retry.authCtx,
+      firstResponse: retry.upstreamResponse,
+      outcomeStatus: retry.upstreamResponse.status >= 500 ? 429 : retry.upstreamResponse.status,
+    };
+  }
+  // Every available account in the frozen budget has explicitly rejected this turn.
+  if (last.kind === "retried") {
+    last.upstreamResponse = codexQuotaWaitResponse(last.upstreamResponse);
+    return last;
+  }
+  return { kind: "no-alternate", quotaWaitable: true };
+}
+
+/** Internal policy signal; only attach to an authoritative pre-stream quota rejection. */
+function codexQuotaWaitResponse(response: Response): Response {
+  const headers = new Headers(response.headers);
+  headers.set("x-opencodex-quota-wait", "1");
+  const marked = new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+  return markStrictQuotaWaitResponse(marked);
+}
+
+async function retryCodexPoolOnOneAlternateAccount(
+  args: CodexPoolAccountRetryArgs,
+): Promise<CodexPoolAccountRetryResult> {
   const {
     req, config, route, parsed, logCtx, options, firstAuthCtx, firstResponse,
     outcomeStatus, upstream, connectMs, passthroughEstimate, stream,
@@ -1190,6 +1252,8 @@ async function retryCodexPoolOnAlternateAccount(
         "pool",
         {
           excludeAccountId: firstAuthCtx.accountId,
+          ...(args.attemptedAccountIds ? { excludeAccountIds: args.attemptedAccountIds } : {}),
+          signal: options.abortSignal ?? upstream.signal,
           admission: options.admission,
           codexAuthPolicy: options.codexAuthPolicy,
           modelId: route.modelId,
@@ -1199,6 +1263,9 @@ async function retryCodexPoolOnAlternateAccount(
         },
       );
   } catch (error) {
+    if (args.attemptedAccountIds && error instanceof CodexStrictQuotaUnavailableError && error.waitable) {
+      return { kind: "no-alternate", quotaWaitable: true };
+    }
     const unexpectedRetryError =
       !(error instanceof CodexPoolAuthenticationError)
       && !(error instanceof CodexAuthContextError)
@@ -1232,6 +1299,16 @@ async function retryCodexPoolOnAlternateAccount(
       });
     }
     return { kind: "no-alternate" };
+  }
+
+  if (args.attemptedAccountIds) {
+    const selectedId = retryAuthCtx.accountId ?? MAIN_CODEX_ACCOUNT_ID;
+    // Defence in depth against a selector racing a config/credential update.
+    if (args.attemptedAccountIds.has(selectedId)) {
+      releaseCodexAuthContextProbeLease(retryAuthCtx);
+      return { kind: "no-alternate" };
+    }
+    args.attemptedAccountIds.add(selectedId);
   }
 
   const quotaMeta = { ...codexQuotaOutcomeMeta(firstResponse), ...(await codexDenialOutcomeMeta(firstResponse)) };
@@ -1289,6 +1366,16 @@ async function retryCodexPoolOnAlternateAccount(
   recordAdapterTier(logCtx, request);
 
   await firstResponse.body?.cancel().catch(() => undefined);
+  if (args.attemptedAccountIds) {
+    if (logCtx.activeAttempt) finishRequestAttempt(logCtx.activeAttempt, firstResponse.status,
+      Date.now() - (logCtx.activeAttemptStartedAt ?? Date.now()));
+    const attempt = beginRequestAttempt((logCtx.attempts?.length ?? 0) + 1,
+      formatCodexProviderForLog(route.providerName, retryAuthCtx.accountId, config),
+      route.modelId, retryAdapter.name);
+    logCtx.activeAttempt = attempt;
+    logCtx.activeAttemptStartedAt = Date.now();
+    (logCtx.attempts ??= []).push(attempt);
+  }
   options.onCodexAuthContextResolved?.(retryAuthCtx);
   route.provider = retryProvider;
   logCtx.provider = formatCodexProviderForLog(
@@ -1317,6 +1404,9 @@ async function retryCodexPoolOnAlternateAccount(
   let upstreamResponse: Response;
   try {
     while (true) {
+      if (upstream.signal.aborted || options.abortSignal?.aborted) {
+        return { kind: "transport", error: upstream.signal.reason ?? options.abortSignal?.reason, authCtx: retryAuthCtx };
+      }
       noteAttemptSend(logCtx.activeAttempt, passthroughEstimate);
       try {
         upstreamResponse = await fetchWithHeaderTimeout(
@@ -1512,6 +1602,13 @@ export interface ConsumedComboFailure {
 
 
 
+export interface ResponsesReplaySnapshot {
+  sourceBody: unknown;
+  previousResponseInputExpanded: boolean;
+  providerContinuation: OcxProviderContinuationState | undefined;
+  recoveredPlaintext: boolean;
+}
+
 export interface HandleResponsesOptions {
   /** Original live policy owner; separate from caller-specific routing/sidecar snapshots. */
   codexAuthPolicy?: CodexAuthPolicyConfig;
@@ -1568,12 +1665,11 @@ export interface HandleResponsesOptions {
   /** Internal recursion guard; callers outside this module must not set it. */
   comboAttempt?: boolean;
   /** Internal combo handoff for one parent-validated continuation snapshot. */
-  comboReplaySnapshot?: {
-    sourceBody: unknown;
-    previousResponseInputExpanded: boolean;
-    providerContinuation: OcxProviderContinuationState | undefined;
-    recoveredPlaintext: boolean;
-  };
+  comboReplaySnapshot?: ResponsesReplaySnapshot;
+  /** Internal same-request quota handoff; never populated from client JSON. */
+  quotaReplaySnapshot?: ResponsesReplaySnapshot;
+  /** Lazy capture: materialize only when a trusted quota refusal enters waiting. */
+  onQuotaReplaySnapshot?: (capture: () => ResponsesReplaySnapshot) => void;
   /** Internal combo handoff: allow a later same-provider model after a reset-derived 429/402. */
   deferCodexResetDerivedCooldown?: boolean;
   /** 030-owned handoff when a child consumed the original failure under bounds. */
@@ -2762,6 +2858,7 @@ function finalizeOwnedTranslatorBudget(response: Response, budget: TranslatorBud
     statusText: response.statusText,
     headers: response.headers,
   });
+  if (isStrictQuotaWaitResponse(response)) markStrictQuotaWaitResponse(finalizedResponse);
   if (isNativePassthroughSseResponse(response)) {
     markNativePassthroughSseResponse(finalizedResponse);
   }
@@ -2917,8 +3014,9 @@ async function handleResponsesInner(
   const inboundClientThreadId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
   const cursorClientThreadId = codexPoolAffinityKey(req.headers);
   const originalBody = body;
-  if (options.comboReplaySnapshot) {
-    copyPreviousResponseReplayProvenance(options.comboReplaySnapshot.sourceBody, body);
+  const replaySnapshot = options.comboReplaySnapshot ?? options.quotaReplaySnapshot;
+  if (replaySnapshot) {
+    copyPreviousResponseReplayProvenance(replaySnapshot.sourceBody, body);
   } else {
     body = expandPreviousResponseInput(body, inboundClientThreadId);
     if (previousResponseScopeMismatch(body)) {
@@ -2932,7 +3030,7 @@ async function handleResponsesInner(
       );
     }
   }
-  const previousResponseInputExpanded = options.comboReplaySnapshot?.previousResponseInputExpanded
+  const previousResponseInputExpanded = replaySnapshot?.previousResponseInputExpanded
     ?? (body !== originalBody
       && typeof (body as { previous_response_id?: unknown }).previous_response_id === "string");
 
@@ -2978,13 +3076,13 @@ async function handleResponsesInner(
         effort: effortRow.effort,
       };
     }
-    if (options.comboReplaySnapshot?.recoveredPlaintext) {
+    if (replaySnapshot?.recoveredPlaintext) {
       markBodyNonPersistable(parsed._rawBody);
     }
     toolBridgeMaps = buildToolBridgeMaps(parsed, translatorBudget);
     if (previousResponseInputExpanded) parsed._previousResponseInputExpanded = true;
-    const providerContinuationCandidate = options.comboReplaySnapshot
-      ? options.comboReplaySnapshot.providerContinuation
+    const providerContinuationCandidate = replaySnapshot
+      ? replaySnapshot.providerContinuation
       : previousResponseProviderState(parsed.previousResponseId);
     if (providerContinuationCandidate) parsed._providerContinuationCandidate = providerContinuationCandidate;
     if (inboundClientThreadId) {
@@ -3019,6 +3117,21 @@ async function handleResponsesInner(
       });
     }
     return formatErrorResponse(400, "invalid_request_error", err instanceof Error ? err.message : String(err));
+  }
+  // Preserve the validated expanded input before route-specific top-level rewrites. The
+  // shallow envelope retains no extra copy of large content; the full clone happens only
+  // when the caller actually enters quota waiting. Scope/provenance remain proxy-private.
+  let quotaRecoveredPlaintext = replaySnapshot?.recoveredPlaintext ?? false;
+  if (options.onQuotaReplaySnapshot) {
+    const replayBody = { ...(body as Record<string, unknown>) };
+    copyPreviousResponseReplayProvenance(body, replayBody);
+    const providerContinuation = parsed._providerContinuationCandidate;
+    options.onQuotaReplaySnapshot(() => {
+      const sourceBody = structuredClone(replayBody);
+      copyPreviousResponseReplayProvenance(replayBody, sourceBody);
+      return { sourceBody, previousResponseInputExpanded, providerContinuation,
+        recoveredPlaintext: quotaRecoveredPlaintext };
+    });
   }
   options.onRequestBodyRead?.();
   const responseStateOptions = (force = false): { force?: boolean; clientThreadId?: string } => ({
@@ -3290,6 +3403,7 @@ async function handleResponsesInner(
           // text. Bar it from the continuation cache before any recording path can reach it —
           // that cache is persisted to disk, which would defeat the recovery cache's TTL.
           markBodyNonPersistable(parsed._rawBody);
+          quotaRecoveredPlaintext = true;
 
           // The ciphertext-only pass intentionally excludes routed candidates. Once recovery
           // makes the assignment readable, run selection again with the full configured chain
@@ -4855,6 +4969,9 @@ async function handleResponsesInner(
             );
           },
         });
+        if (retry.kind === "no-alternate" && retry.quotaWaitable) {
+          upstreamResponse = codexQuotaWaitResponse(upstreamResponse);
+        }
         if (retry.kind === "transport") {
           authCtx = retry.authCtx;
           return transportFailureResponse(retry.error);
@@ -4891,6 +5008,9 @@ async function handleResponsesInner(
     break;
     }
     const headers = sanitizePassthroughHeaders(upstreamResponse.headers);
+    // An upstream-provided header is not authority to replay the request.
+    headers.delete("x-opencodex-quota-wait");
+    if (isStrictQuotaWaitResponse(upstreamResponse)) headers.set("x-opencodex-quota-wait", "1");
     const resolvedModel = headers.get("openai-model")?.trim();
     if (resolvedModel && !logCtx.preserveResolvedModelFromRoute) logCtx.resolvedModel = resolvedModel;
     if (isUsageDebugEnabled()) {
@@ -4980,7 +5100,7 @@ async function handleResponsesInner(
       return new Response(upstreamResponse.body, {
         status: upstreamResponse.status,
         statusText: upstreamResponse.statusText,
-        headers: sanitizePassthroughHeaders(upstreamResponse.headers),
+        headers,
       });
     }
     if (!upstreamResponse.ok) {
@@ -5004,10 +5124,13 @@ async function handleResponsesInner(
           translatorBudget,
         );
       }
-      return formatPassthroughUpstreamError(upstreamResponse.status, errorText, {
+      const formattedError = formatPassthroughUpstreamError(upstreamResponse.status, errorText, {
         statusText: upstreamResponse.statusText,
         headers,
       });
+      return isStrictQuotaWaitResponse(upstreamResponse)
+        ? markStrictQuotaWaitResponse(formattedError)
+        : formattedError;
     }
 
     // Bun#32111 workaround: passthrough SSE uses tee()+native relay to avoid the

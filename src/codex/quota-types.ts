@@ -49,3 +49,14 @@ export type WhamUsageResponse = {
   rate_limit_reset_credits?: { available_count: number } | null;
   additional_rate_limits?: WhamAdditionalRateLimit[] | null;
 };
+
+/** Durable usage evidence; each window owns its clock independently of partial updates. */
+export type StrictAccountQuota = {
+  windows: Array<{
+    scope: "shared";
+    key: "weekly" | "monthly" | "short";
+    usedPercent: number;
+    observedAt: number;
+    resetAt?: number;
+  }>;
+};

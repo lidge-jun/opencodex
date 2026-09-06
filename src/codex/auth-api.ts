@@ -6,6 +6,7 @@ import {
   withConfigMutationLockSync,
 } from "../config";
 import { codexAccountLogLabel, withCodexAccountLogLabel } from "./account-label";
+import { notifyCodexQuotaChanges } from "./quota-events";
 import {
   getCodexAccountCredential,
   getValidCodexToken,
@@ -1463,6 +1464,25 @@ async function fetchPoolAccountQuota(
   }
 }
 
+/** Explicitly read-only usage refresh for request-owned strict-quota recovery. */
+export async function refreshStrictCodexPoolQuotaSnapshots(
+  config: OcxConfig, accountIds: readonly string[],
+  policy: Pick<OcxConfig, "codexAccountStrictQuota"> = config,
+): Promise<void> {
+  if (policy.codexAccountStrictQuota !== true) return;
+  await mapWithConcurrency([...accountIds], POOL_QUOTA_REFRESH_CONCURRENCY, async id => {
+    if (isCodexAccountPaused(config, id)) return;
+    if (id === MAIN_CODEX_ACCOUNT_ID) {
+      // A background/request check cannot clear a reauth quarantine or redeem credits.
+      await fetchMainAccountInfoAttempt(true, 1, undefined, false, false);
+      return;
+    }
+    const account = configuredPoolAccount(config, id);
+    if (!account || isAccountNeedsReauth(id)) return;
+    await fetchPoolAccountQuota(id, true, account.plan);
+  });
+}
+
 let primeInFlight: Promise<void> | null = null;
 /**
  * Last prime attempt per pool account. A failed WHAM lookup stores no quota, so
@@ -2157,6 +2177,7 @@ export async function handleCodexAuthAPI(
       // lets a surface mark the account the operator actually chose.
       pinnedAccountId: pinnedCodexAccountId(runtimeConfig) ?? null,
       autoSwitchThreshold: runtimeConfig.autoSwitchThreshold ?? 80,
+      codexAccountStrictQuota: runtimeConfig.codexAccountStrictQuota === true,
       upstreamFailoverThreshold: runtimeConfig.upstreamFailoverThreshold ?? 3,
       accountPoolStrategy: normalizeAccountPoolStrategy(runtimeConfig.accountPoolStrategy),
       accountPoolStickyLimit: normalizeAccountPoolStickyLimit(runtimeConfig.accountPoolStickyLimit),
@@ -2164,14 +2185,19 @@ export async function handleCodexAuthAPI(
   }
 
   if (url.pathname === "/api/codex-auth/auto-switch" && req.method === "PUT") {
-    let body: { threshold: number };
+    let body: { threshold: number; strictQuota?: unknown };
     try { body = (await req.json()) as typeof body; } catch { return jsonResponse({ error: "Invalid JSON" }, 400); }
     if (typeof body.threshold !== "number" || !Number.isInteger(body.threshold) || body.threshold < 0 || body.threshold > 100) {
       return jsonResponse({ error: "Threshold must be an integer 0-100" }, 400);
     }
+    if (body.strictQuota !== undefined && typeof body.strictQuota !== "boolean") {
+      return jsonResponse({ error: "strictQuota must be a boolean" }, 400);
+    }
     const runtimeConfig = getRuntimeConfig(config);
     runtimeConfig.autoSwitchThreshold = body.threshold;
+    if (typeof body.strictQuota === "boolean") runtimeConfig.codexAccountStrictQuota = body.strictQuota;
     saveRuntimeConfig(config, runtimeConfig);
+    notifyCodexQuotaChanges();
     return jsonResponse({ ok: true });
   }
 

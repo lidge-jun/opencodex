@@ -7,6 +7,8 @@ import {
   assertCodexAuthContextNotCooled,
   CODEX_MAIN_PROFILE_MAINTENANCE_MESSAGE,
   CodexAccountCooldownError,
+  CodexStrictQuotaUnavailableError,
+  createCodexReserveDispatchGuard,
   CodexAuthContextError,
   CodexDirectAuthenticationError,
   CodexMainProfileDrainingError,
@@ -73,6 +75,8 @@ import {
 } from "../../src/server/lifecycle";
 import type { CodexModelEntitlementSnapshot } from "../../src/codex/model-entitlements";
 import { hasForwardableCodexBearer } from "../../src/server/auth-cors";
+import { refreshStrictCodexQuotasOnDemand, setStrictCodexQuotaRefreshForTests } from "../../src/codex/strict-quota-refresh";
+import { captureMainQuotaWriter, observeMainQuotaIdentity } from "../../src/codex/main-account-cache";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 let testDir: string;
@@ -2226,5 +2230,138 @@ describe("native-main fence names its gate reason", () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+
+describe("strict quota Pool auth admission", () => {
+  function strictFixture() {
+    const cfg = config();
+    cfg.codexAccountStrictQuota = true; cfg.autoSwitchThreshold = 95;
+    cfg.activeCodexAccountId = MAIN_CODEX_ACCOUNT_ID; cfg.activeCodexAccountPinned = MAIN_CODEX_ACCOUNT_ID;
+    resetCodexRoutingForManualSelection(MAIN_CODEX_ACCOUNT_ID);
+    observeMainQuotaIdentity("strict-main-owner");
+    const writer = captureMainQuotaWriter("strict-main-owner")!;
+    const mainQuota = (weeklyPercent: number) => setAccountQuotaFromParsed(MAIN_CODEX_ACCOUNT_ID, { weeklyPercent }, undefined, writer);
+    mainQuota(20);
+    saveCodexAccountCredential("pool-a", { accessToken: "strict-pool-access", refreshToken: "strict-pool-refresh",
+      chatgptAccountId: "strict-pool-owner", expiresAt: Date.now() + 3600000 });
+    setAccountQuotaFromParsed("pool-a", { weeklyPercent: 10 });
+    const headers = new Headers({ authorization: "Bearer access-token-strict-test", "chatgpt-account-id": "strict-main-owner" });
+    return { cfg, mainQuota, headers };
+  }
+  const poolEntitlements = async (): Promise<CodexModelEntitlementSnapshot> => ({
+    modelsByAccount: new Map([["pool-a", new Set(["gpt-daybreak-blue-latest"])]]),
+    confirmedAccountIds: new Set(["pool-a"]), credentialIdentities: new Map(),
+  });
+  test("caller-owned main selected by Pool is rechecked before materialization and dispatch", async () => {
+    const { cfg, mainQuota, headers } = strictFixture();
+    const ctx = await resolveCodexAuthContext(headers, cfg, "pool", { requestScopedMainCredential: true });
+    expect(ctx).toMatchObject({ kind: "main", poolQuotaScope: "shared" });
+    const guard = createCodexReserveDispatchGuard(ctx, cfg, "gpt-6-astra");
+    expect(guard).toBeDefined();
+    mainQuota(95);
+    expect(() => materializeCodexUpstreamAuth(headers, ctx, { config: cfg })).toThrow(CodexStrictQuotaUnavailableError);
+    expect(() => guard!(headers)).toThrow(CodexStrictQuotaUnavailableError);
+  });
+  for (const change of ["quota", "pause", "exclude"] as const) {
+    test(`main pin is rechecked after async entitlement ${change} change`, async () => {
+      const { cfg, mainQuota, headers } = strictFixture();
+      const excluded = new Set<string>();
+      const ctx = await resolveCodexAuthContext(headers, cfg, "pool", {
+        requestScopedMainCredential: true, modelId: "gpt-daybreak-blue-latest", excludeAccountIds: excluded,
+        isDirectCallerEntitledToCodexModel: async () => {
+          if (change === "quota") mainQuota(99);
+          if (change === "pause") cfg.pausedCodexAccountIds = [MAIN_CODEX_ACCOUNT_ID];
+          if (change === "exclude") excluded.add(MAIN_CODEX_ACCOUNT_ID);
+          return true;
+        },
+        resolveCodexModelEntitlements: poolEntitlements,
+        isMainAccountTokenLive: () => { throw new Error("must not inspect native main"); },
+        getMainAccountToken: () => { throw new Error("must not inspect native main"); },
+        getValidMainAccountToken: async () => { throw new Error("must not inspect native main"); },
+      });
+      expect(ctx).toMatchObject({ kind: "pool", accountId: "pool-a" });
+    });
+  }
+  test("explicit Pool main caller credential remains fixed at resolve and late dispatch", async () => {
+    const { cfg, mainQuota, headers } = strictFixture();
+    const options = { requestScopedMainCredential: true, accountId: MAIN_CODEX_ACCOUNT_ID };
+    const ctx = await resolveCodexAuthContext(headers, cfg, "pool", options);
+    expect(ctx).toMatchObject({ kind: "main", poolQuotaScope: "shared", fixedAccount: true });
+    const guard = createCodexReserveDispatchGuard(ctx, cfg, "gpt-6-astra")!;
+    mainQuota(99);
+    await expect(resolveCodexAuthContext(headers, cfg, "pool", options)).rejects.toMatchObject({
+      name: "CodexStrictQuotaUnavailableError", waitable: false,
+    });
+    for (const dispatch of [() => guard(headers), () => materializeCodexUpstreamAuth(headers, ctx, { config: cfg })]) {
+      expect(dispatch).toThrow(CodexStrictQuotaUnavailableError);
+      try { dispatch(); } catch (error) { expect((error as CodexStrictQuotaUnavailableError).waitable).toBe(false); }
+    }
+  });
+  test("dispatch callback remains installed while policy is off, then sees live enablement", () => {
+    const { cfg, headers } = strictFixture(); cfg.codexAccountStrictQuota = false;
+    const ctx = { kind: "pool" as const, accountId: "pool-a", writerGeneration: 0, generation: 1,
+      accessToken: "strict-pool-access", chatgptAccountId: "strict-pool-owner" };
+    const guard = createCodexReserveDispatchGuard(ctx, cfg, "gpt-5.6-luna");
+    expect(guard).toBeDefined();
+    setAccountQuotaFromParsed("pool-a", { weeklyPercent: 99 });
+    expect(() => guard!(headers)).not.toThrow();
+    cfg.codexAccountStrictQuota = true;
+    expect(() => guard!(headers)).toThrow(CodexStrictQuotaUnavailableError);
+  });
+  test("explicit Direct and independent scopes keep their own admission", async () => {
+    const { cfg, mainQuota, headers } = strictFixture(); mainQuota(99);
+    const ctx = await resolveCodexAuthContext(headers, cfg, "direct", { requestScopedMainCredential: true });
+    expect(ctx).toEqual({ kind: "main", accountId: null });
+    expect(createCodexReserveDispatchGuard(ctx, cfg, "gpt-6-astra")).toBeUndefined();
+    expect(materializeCodexUpstreamAuth(headers, ctx, { config: cfg }).get("authorization")).toBe(headers.get("authorization"));
+    const pool = { kind: "pool" as const, accountId: "pool-a", writerGeneration: 0, generation: 1,
+      accessToken: "strict-pool-access", chatgptAccountId: "strict-pool-owner" };
+    setAccountQuotaFromParsed("pool-a", { weeklyPercent: 99 });
+    expect(() => createCodexReserveDispatchGuard(pool, cfg, "gpt-5.3-codex-spark")!(headers)).not.toThrow();
+  });
+  test("live strict policy selects an alternative without replacing the replay config owner", async () => {
+    const { cfg, headers } = strictFixture();
+    cfg.codexAccountStrictQuota = false; cfg.autoSwitchThreshold = 0; cfg.accountPoolStrategy = "fill-first";
+    cfg.pausedCodexAccountIds = [MAIN_CODEX_ACCOUNT_ID]; cfg.activeCodexAccountId = "pool-a";
+    delete cfg.activeCodexAccountPinned; resetCodexRoutingForManualSelection("pool-a");
+    cfg.codexAccounts!.push({ id: "pool-b", isMain: false });
+    saveCodexAccountCredential("pool-b", { accessToken: "pool-b-access", refreshToken: "pool-b-refresh",
+      chatgptAccountId: "pool-b-owner", expiresAt: Date.now() + 3600000 });
+    setAccountQuotaFromParsed("pool-a", { weeklyPercent: 99 });
+    setAccountQuotaFromParsed("pool-b", { weeklyPercent: 10 });
+    const ctx = await resolveCodexAuthContext(headers, cfg, "pool", { codexAuthPolicy: {
+      codexAccountStrictQuota: true, autoSwitchThreshold: 95, pausedCodexAccountIds: [MAIN_CODEX_ACCOUNT_ID],
+    } });
+    expect(ctx).toMatchObject({ kind: "pool", accountId: "pool-b" });
+    expect(cfg.codexAccountStrictQuota).toBe(false); expect(cfg.autoSwitchThreshold).toBe(0);
+  });
+  test("client cancellation stops waiting for shared metadata without aborting other callers", async () => {
+    const { cfg, headers } = strictFixture();
+    cfg.pausedCodexAccountIds = [MAIN_CODEX_ACCOUNT_ID]; cfg.activeCodexAccountId = "pool-a";
+    delete cfg.activeCodexAccountPinned; resetCodexRoutingForManualSelection("pool-a"); clearAccountQuota("pool-a");
+    let started!: () => void; let release!: () => void;
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    const restore = setStrictCodexQuotaRefreshForTests(async () => {
+      started(); await new Promise<void>(resolve => { release = resolve; });
+    });
+    const controller = new AbortController();
+    const work = resolveCodexAuthContext(headers, cfg, "pool", { signal: controller.signal });
+    const stopped = work.catch(error => error);
+    try {
+      await entered; controller.abort();
+      expect(await stopped).toBeInstanceOf(DOMException);
+    } finally {
+      release(); await refreshStrictCodexQuotasOnDemand(cfg, new Set(["pool-a"])); restore();
+    }
+  });
+  test("strict refusal is neither reauth nor a fabricated reset deadline", async () => {
+    const err = new CodexStrictQuotaUnavailableError(false);
+    expect(shouldMarkAccountNeedsReauthForCodexAuthFailure(err)).toBe(false);
+    expect(cooldownErrorMessage(err)).toBe(err.message);
+    const response = cooldownErrorResponse(err);
+    expect(response.headers.get("retry-after")).toBeNull();
+    expect(await response.text()).not.toContain("1970");
   });
 });
