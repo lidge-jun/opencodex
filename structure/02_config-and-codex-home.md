@@ -20,6 +20,19 @@ $CODEX_HOME/.opencodex-native-main-profiles/
 Never assume macOS-only paths. Windows, service installs, and app-launched Codex can all depend on
 the resolved `CODEX_HOME`.
 
+The source-built Docker image explicitly keeps `CODEX_HOME=/home/bun/.codex` separate
+from `OPENCODEX_HOME=/home/bun/.opencodex`. Compose persists them in `codex-state` and
+`ocx-state` respectively, retaining a read-only root and owner-only writable homes.
+The catalog resolver is unchanged; a writable empty home is not a materialized catalog.
+
+[Decision Log]
+- 목적과 의도: Make the container's catalog location persistent and writable without changing native home semantics.
+- 기존 구현 및 제약 조건: Compose persisted only the OCX home, leaving Codex state on a read-only root; both products use incompatible auth.json formats.
+- 검토한 주요 대안: Merge the homes, nest Codex under an existing volume with a new startup initializer, or persist the existing separate Codex home.
+- 선택한 방식: Add a separate codex-state volume and create both owner-only directories in the image.
+- 다른 대안 대신 이 방식을 선택한 이유: It preserves existing paths, avoids credential-file collisions, and works when an older ocx-state volume hides the image's seeded directory tree.
+- 장점, 단점 및 영향: Two volumes must be backed up, but no automatic credential migration or runtime resolver change is needed. Catalog import/materialization remains an explicit prerequisite.
+
 Service install-state ownership uses this same resolver. In WSL, an unset `CODEX_HOME` may resolve
 to the single discoverable Windows Desktop home; recording Linux `~/.codex` instead would make a
 later repair or uninstall look foreign even though the service and runtime were started from the

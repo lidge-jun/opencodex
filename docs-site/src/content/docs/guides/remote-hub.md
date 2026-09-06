@@ -174,6 +174,27 @@ Before the first normal start, stream a freshly generated data-plane token into 
 The helper accepts at most one 4096-byte line, never prints the token, refuses to replace an existing
 token, and persists it as the canonical owner-only `service-api-token` in the `ocx-state` volume.
 
+The deployment persists two separate homes: `ocx-state` at `/home/bun/.opencodex` for
+OpenCodex configuration, provider credentials and usage, and `codex-state` at
+`/home/bun/.codex` for Codex state and `opencodex-catalog.json`. The image and Compose
+explicitly set `CODEX_HOME=/home/bun/.codex`, so this catalog path remains writable
+with `read_only: true` and survives container recreation. The image creates both
+directories for the non-root `bun` user with mode `0700`; existing volume
+ownership and permissions are not migrated automatically.
+
+Do not combine `CODEX_HOME` and `OPENCODEX_HOME`: both products use an `auth.json`
+filename with different formats. This packaging change adds persistence, not a
+catalog generator. Materialize or import a valid catalog into
+`/home/bun/.codex/opencodex-catalog.json` before the catalog acceptance check below;
+without one, `catalog_not_found` remains the expected response.
+
+Upgrading preserves the existing `ocx-state` volume and adds `codex-state`; no files
+are migrated automatically. If a previous workaround placed a catalog directly
+under `/home/bun/.opencodex`, back it up and deliberately copy only the catalog to
+the new Codex home, preserving owner-only access. Do not copy either product's
+`auth.json` over the other. Deployments with a custom `CODEX_HOME` should retain
+their explicit environment and writable volume mapping until migration is complete.
+
 Install Git and Bun on the host first. Before **every** image build, run the existing canonical
 generator from this Git checkout. It hashes Git-tracked working-tree sources (stage any newly
 added source files first), not an arbitrary directory scan. Do not change source files between
@@ -244,9 +265,9 @@ docker compose exec hub bun -e \
 Then send one real authenticated routed response with a configured model. If the secret is absent or
 unreadable, a non-loopback hub must not be accepted as ready. Never treat liveness alone as proof.
 
-`docker compose down` removes the container and network but retains the named volume. Treat
+`docker compose down` removes the container and network but retains both named volumes. Treat
 `docker compose down --volumes` as destructive: it deletes configuration, OAuth credentials, usage
-history, and the data-plane token together.
+history, the data-plane token, and persisted Codex state together.
 
 ## Rollback
 

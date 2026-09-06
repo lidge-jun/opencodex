@@ -39,6 +39,59 @@ describe("container token bootstrap", () => {
 });
 
 describe("container deployment contract", () => {
+  test("persists separate OCX and Codex homes under the read-only root", () => {
+    const compose = Bun.YAML.parse(readFileSync(repoPath("compose.yaml"), "utf8")) as {
+      services: { hub: { environment: Record<string, string>; volumes: string[]; read_only: boolean } };
+      volumes: Record<string, unknown>;
+    };
+    const hub = compose.services.hub;
+    expect(hub.environment?.CODEX_HOME).toBe("/home/bun/.codex");
+    expect(hub.read_only).toBe(true);
+    expect(hub.volumes).toContain("ocx-state:/home/bun/.opencodex");
+    expect(hub.volumes).toContain("codex-state:/home/bun/.codex");
+    expect(Object.hasOwn(compose.volumes, "codex-state")).toBe(true);
+
+    const runtime = readFileSync(repoPath("Dockerfile"), "utf8").split(" AS runtime")[1]!;
+    expect(runtime).toContain("CODEX_HOME=/home/bun/.codex");
+    expect(runtime).toContain("install -d -m 0700 -o bun -g bun /home/bun/.opencodex /home/bun/.codex");
+    expect(runtime).toContain('VOLUME ["/home/bun/.opencodex", "/home/bun/.codex"]');
+    expect(runtime).toContain("USER bun");
+  });
+
+  test("catalog serialization uses the persistent Codex home without combining auth stores", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-container-catalog-"));
+    snapshotDirs.push(root);
+    const ocxHome = join(root, "ocx-state");
+    const codexHome = join(root, "codex-state");
+    mkdirSync(ocxHome, { mode: 0o700 });
+    mkdirSync(codexHome, { mode: 0o700 });
+    const previousOcx = process.env.OPENCODEX_HOME;
+    const previousCodex = process.env.CODEX_HOME;
+    process.env.OPENCODEX_HOME = ocxHome;
+    process.env.CODEX_HOME = codexHome;
+    const ocxAuth = '{"fixture":"ocx-oauth-store"}';
+    const codexAuth = '{"fixture":"native-codex-store"}';
+    writeFileSync(join(ocxHome, "auth.json"), ocxAuth, { mode: 0o600 });
+    writeFileSync(join(codexHome, "auth.json"), codexAuth, { mode: 0o600 });
+    const catalog = { models: [{ slug: "fixture/model", display_name: "Fixture", description: "fixture",
+      priority: 1, visibility: "list", base_instructions: "Fixture", input_modalities: ["text"] }] };
+    try {
+      const { serializePersistedCatalog } = await import("../../src/server/catalog-download");
+      expect((await serializePersistedCatalog()).body).toBeNull();
+      writeFileSync(join(ocxHome, "opencodex-catalog.json"), JSON.stringify(catalog), { mode: 0o600 });
+      expect((await serializePersistedCatalog()).body).toBeNull();
+      writeFileSync(join(codexHome, "opencodex-catalog.json"), JSON.stringify(catalog), { mode: 0o600 });
+      expect(JSON.parse((await serializePersistedCatalog()).body!)).toEqual(catalog);
+      expect(readFileSync(join(ocxHome, "auth.json"), "utf8")).toBe(ocxAuth);
+      expect(readFileSync(join(codexHome, "auth.json"), "utf8")).toBe(codexAuth);
+    } finally {
+      if (previousOcx === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousOcx;
+      if (previousCodex === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodex;
+    }
+  });
+
   test("publishes only the data port with loopback and explicit bind overrides", () => {
     const compose = Bun.YAML.parse(readFileSync(repoPath("compose.yaml"), "utf8")) as {
       services: { hub: { ports: string[] } };
