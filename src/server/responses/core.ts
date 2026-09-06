@@ -321,8 +321,9 @@ import {
 import {
   agentTaskRecoveryConfig,
   discardEncryptedAgentTaskRecovery,
-  recoverEncryptedAgentTask,
+  recoverEncryptedAgentTaskWithResult,
   restoreCachedEncryptedAgentTasks,
+  type AgentTaskRecoveryFailureReason,
 } from "./agent-task-recovery";
 import { relaySseEagerBounded } from "../relay-eager";
 import {
@@ -1933,13 +1934,14 @@ export const UPSTREAM_JSON_BODY_READ_OPTIONS = {
   firstByteTimeoutMs: UPSTREAM_JSON_BODY_TOTAL_TIMEOUT_MS,
 };
 
-function unreadableEncryptedAgentTaskResponse(): Response {
+function unreadableEncryptedAgentTaskResponse(reason?: AgentTaskRecoveryFailureReason): Response {
   return new Response(
     JSON.stringify({
       error: {
         message: UNREADABLE_ENCRYPTED_AGENT_TASK_MESSAGE,
         type: "invalid_request_error",
         code: "unreadable_encrypted_agent_task",
+        ...(reason === undefined ? {} : { recovery_reason: reason }),
       },
     }),
     { status: 400, headers: { "Content-Type": "application/json" } },
@@ -2532,6 +2534,7 @@ export async function handleComboResponses(
   const payloadEligible = (target: (typeof combo.targets)[number]): boolean =>
     comboPayloadReadable || !unreadableEncryptedAgentTask || canDecryptUnreadableAgentTask(target);
   let encryptedTaskRecoveryAttempted = false;
+  let recoveryFailureReason: AgentTaskRecoveryFailureReason | undefined;
   let storedPool401ReplayDispatched = false;
   const recoverUnreadableEncryptedTask = async (): Promise<boolean> => {
     if (encryptedTaskRecoveryAttempted) return false;
@@ -2553,15 +2556,18 @@ export async function handleComboResponses(
     }
     let recovered = false;
     try {
-      recovered = await recoverEncryptedAgentTask(
+      const result = await recoverEncryptedAgentTaskWithResult(
         req,
         (body as { input?: unknown } | undefined)?.input,
         recovery,
         config,
         { parentThreadId: inboundClientThreadId, abortSignal: options.abortSignal },
       );
+      recovered = result.recovered;
+      recoveryFailureReason = result.recovered ? undefined : result.reason;
     } catch {
       recovered = false;
+      recoveryFailureReason = undefined;
     }
     // Recovery has the same in-place input mutation contract as the direct routed path.
     if (
@@ -2611,7 +2617,7 @@ export async function handleComboResponses(
     if (!(await recoverUnreadableEncryptedTask())) {
       return options.abortSignal?.aborted
         ? clientCancelledResponse()
-        : unreadableEncryptedAgentTaskResponse();
+        : unreadableEncryptedAgentTaskResponse(recoveryFailureReason);
     }
   }
 
@@ -3415,6 +3421,7 @@ async function handleResponsesInner(
     previewSelectionAdmission?.release();
   }
 
+  let recoveryFailureReason: AgentTaskRecoveryFailureReason | undefined;
   // Native fallback and explicitly trusted direct Responses routes can consume ciphertext,
   // so recover only after final route selection.
   if (
@@ -3433,15 +3440,18 @@ async function handleResponsesInner(
       (body as { input?: unknown } | undefined)?.input,
     );
     if (unreadableEncryptedAgentTask) try {
-      recovered = await recoverEncryptedAgentTask(
+      const result = await recoverEncryptedAgentTaskWithResult(
         req,
         (body as { input?: unknown } | undefined)?.input,
         agentTaskRecovery,
         config,
         { parentThreadId, abortSignal: options.abortSignal },
       );
+      recovered = result.recovered;
+      recoveryFailureReason = result.recovered ? undefined : result.reason;
     } catch {
       recovered = false;
+      recoveryFailureReason = undefined;
     }
     if (recovered) {
       unreadableEncryptedAgentTask = hasUnreadableEncryptedAgentTask(
@@ -3565,7 +3575,7 @@ async function handleResponsesInner(
     && !finalRouteCanPassThroughEncryptedTask
     && unreadableEncryptedAgentTask
   ) {
-    return unreadableEncryptedAgentTaskResponse();
+    return unreadableEncryptedAgentTaskResponse(recoveryFailureReason);
   }
 
   // The canonical ChatGPT backend rejects previous_response_id, so a local replay miss leaves no

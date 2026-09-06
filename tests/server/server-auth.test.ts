@@ -604,7 +604,15 @@ describe("server local API auth", () => {
 
   test("compact keeps the idle guard until a valid request body is complete", async () => {
     let bodyController!: ReadableStreamDefaultController<Uint8Array>;
-    const body = new ReadableStream<Uint8Array>({ start(controller) { bodyController = controller; } });
+    const readerWaiting = Promise.withResolvers<void>();
+    let readRequests = 0;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { bodyController = controller; },
+      pull(controller) {
+        if (readRequests++ === 0) controller.enqueue(new TextEncoder().encode('{"model":"fixture/gpt-test","input":['));
+        else readerWaiting.resolve();
+      },
+    }, { highWaterMark: 0 });
     const cfg = config();
     cfg.defaultProvider = "fixture";
     cfg.providers = { fixture: { ...cfg.providers.openai!, disabled: true } };
@@ -615,7 +623,7 @@ describe("server local API auth", () => {
     const result = handleResponsesCompact(request, cfg, { model: "unknown", provider: "unknown" }, undefined, undefined, {
       onRequestBodyRead: () => { accepted++; },
     });
-    bodyController.enqueue(new TextEncoder().encode('{"model":"fixture/gpt-test","input":['));
+    await readerWaiting.promise;
     expect(accepted).toBe(0);
     bodyController.enqueue(new TextEncoder().encode(']}'));
     bodyController.close();

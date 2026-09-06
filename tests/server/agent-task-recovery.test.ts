@@ -1,7 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import { warnAgentTaskRecoveryStartup } from "../../src/server";
-import { resetAgentTaskRecoveryState } from "../../src/server/responses/agent-task-recovery";
+import {
+  discardEncryptedAgentTaskRecovery,
+  recoverEncryptedAgentTask,
+  recoverEncryptedAgentTaskWithResult,
+  resetAgentTaskRecoveryState,
+  restoreCachedEncryptedAgentTasks,
+} from "../../src/server/responses/agent-task-recovery";
 import { agentTaskRecoveryWaiterCountForTests } from "../../src/server/responses/agent-task-recovery-cache";
 import {
   agentMessage,
@@ -28,6 +34,84 @@ describe("agent task recovery (opt-in, default off)", () => {
     globalThis.fetch = originalFetch;
     resetAgentTaskRecoveryState();
   });
+
+  for (const messageType of ["NEW_TASK", "MESSAGE"] as const) {
+    test(`typed ${messageType} recovery preserves boolean, replay and discard contracts`, async () => {
+      const req = new Request("http://localhost/v1/responses", { headers: codexHeaders() });
+      const config = routedConfig();
+      const context = { parentThreadId: "parent-diagnostics" };
+      const input = () => agentMessage([
+        { type: "input_text", text: ROUTING_ENVELOPE.replace("NEW_TASK", messageType) },
+        { type: "encrypted_content", encrypted_content: FERNET_TASK },
+      ]);
+      let fetches = 0;
+      globalThis.fetch = (async () => {
+        fetches += 1;
+        return new Response(recoverySse("Recovered diagnostic fixture."));
+      }) as typeof fetch;
+
+      const typedInput = input();
+      expect(await recoverEncryptedAgentTaskWithResult(req, typedInput, {}, config, context))
+        .toEqual({ recovered: true });
+      const booleanInput = input();
+      expect(await recoverEncryptedAgentTask(req, booleanInput, {}, config, context)).toBe(true);
+      expect(booleanInput).toEqual(typedInput);
+      expect(typedInput).toEqual([{
+        type: "message", role: "user", content: [
+          { type: "input_text", text: ROUTING_ENVELOPE.replace("NEW_TASK", messageType) },
+          { type: "input_text", text: "Recovered diagnostic fixture." },
+        ],
+      }]);
+      const replay = input();
+      expect(restoreCachedEncryptedAgentTasks(req, replay, config, context)).toBe(1);
+      expect(replay).toEqual(typedInput);
+      expect(fetches).toBe(1);
+
+      const otherType = agentMessage([
+        { type: "input_text", text: ROUTING_ENVELOPE.replace("NEW_TASK", messageType === "MESSAGE" ? "NEW_TASK" : "MESSAGE") },
+        { type: "encrypted_content", encrypted_content: FERNET_TASK },
+      ]);
+      expect(restoreCachedEncryptedAgentTasks(req, otherType, config, context)).toBe(0);
+      discardEncryptedAgentTaskRecovery(req, input(), config, context);
+      expect(restoreCachedEncryptedAgentTasks(req, input(), config, context)).toBe(0);
+      expect(fetches).toBe(1);
+    });
+  }
+
+  const failedRecoveries: Array<[string, () => Response]> = [
+    ["HTTP 503", () => new Response("raw-error-sentinel", { status: 503 })],
+    ["network exception", () => { throw new Error("raw-error-sentinel"); }],
+    ["malformed SSE", () => new Response("data: {not-json}\n\n")],
+    ["missing completion", () => new Response(recoverySse("payload-sentinel").split("data: {\"type\":\"response.completed\"")[0])],
+    ["conflicting assignment", () => new Response(recoverySse("payload-sentinel") + recoveryCompletedSse("other-payload-sentinel"))],
+    ["failed terminal", () => new Response(recoverySse("payload-sentinel") + 'data: {"type":"response.failed","response":{"error":{"message":"raw-error-sentinel"}}}\n\n')],
+    ["incomplete terminal", () => new Response(recoverySse("payload-sentinel") + 'data: {"type":"response.incomplete"}\n\n')],
+    ["bare error", () => new Response(recoverySse("payload-sentinel") + 'data: {"type":"error","error":{"message":"raw-error-sentinel"}}\n\n')],
+    // Exact-case events are also used by the pinned official Codex source. Recovery's
+    // additional completed-status requirement remains deliberately stricter.
+    ["mixed-case completion", () => new Response(recoverySse("payload-sentinel").replace("response.completed", "Response.Completed"))],
+    ["mixed-case status", () => new Response(recoverySse("payload-sentinel").replace('"status":"completed"', '"status":"Completed"'))],
+    ["missing status", () => new Response(recoverySse("payload-sentinel").replace('"status":"completed",', ""))],
+    ["ciphertext assignment", () => new Response(recoverySse(FERNET_TASK))],
+  ];
+  for (const [name, response] of failedRecoveries) {
+    test(`typed recovery keeps ${name} coarse and preserves false without retrying`, async () => {
+      const req = new Request("http://localhost/v1/responses", { headers: codexHeaders() });
+      const config = routedConfig();
+      let fetches = 0;
+      globalThis.fetch = (async () => { fetches += 1; return response(); }) as typeof fetch;
+      const input = encryptedInput();
+      const original = structuredClone(input);
+      expect(await recoverEncryptedAgentTaskWithResult(req, input, {}, config))
+        .toEqual({ recovered: false, reason: "recovery_unavailable" });
+      expect(input).toEqual(original);
+      expect(fetches).toBe(1);
+      expect(restoreCachedEncryptedAgentTasks(req, encryptedInput(), config)).toBe(0);
+      expect(await recoverEncryptedAgentTask(req, input, {}, config)).toBe(false);
+      expect(fetches).toBe(2); // One request per explicit invocation; no internal retry.
+      expect(input).toEqual(original);
+    });
+  }
 
   test("keeps the disabled fail-fast response byte-identical to the absent feature", async () => {
     const snapshot = async (config: ReturnType<typeof routedConfig>) => {
@@ -138,10 +222,11 @@ describe("agent task recovery (opt-in, default off)", () => {
       encryptedInput(),
       codexHeaders(),
     );
-    const json = await response.json() as { error?: { code?: string } };
+    const json = await response.json() as { error?: { code?: string; recovery_reason?: string } };
 
     expect(response.status).toBe(400);
     expect(json.error?.code).toBe("unreadable_encrypted_agent_task");
+    expect(json.error?.recovery_reason).toBe("recovery_unavailable");
     expect(fetchedUrls.length).toBeGreaterThan(0);
     expect(fetchedUrls[0]).toContain("chatgpt.com/backend-api/codex");
   });
@@ -693,7 +778,7 @@ describe("agent task recovery (opt-in, default off)", () => {
     expect(fetchedUrls).toHaveLength(1);
     expect(fetchedUrls[0]).toContain("chatgpt.com/backend-api/codex/responses");
     expect(await response.json()).toMatchObject({
-      error: { code: "unreadable_encrypted_agent_task" },
+      error: { code: "unreadable_encrypted_agent_task", recovery_reason: "recovery_unavailable" },
     });
   });
 });

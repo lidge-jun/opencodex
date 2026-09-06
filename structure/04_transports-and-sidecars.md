@@ -1676,3 +1676,10 @@ A canonical upstream WebSocket refused-create error can become an HTTP 4xx only
 before the response is committed and after stream correlation checks. Permitted
 quota headers are bounded and rebuilt without upstream framing headers; the JSON
 response is not cacheable. Post-commit and 5xx errors keep the no-resend path.
+
+When encrypted agent-task recovery refuses a routed task, its existing 400 error
+can include a bounded `recovery_reason`: `unsupported_envelope`,
+`admission_denied`, `recovery_unavailable`, `caller_cancelled`, or `input_changed`.
+The field is omitted when no classified recovery result exists.
+`recovery_unavailable` includes cache/singleflight capacity and does not prove an
+upstream request was attempted. No retry or broader envelope acceptance is enabled.
