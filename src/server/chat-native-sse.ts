@@ -77,6 +77,7 @@ export function jsonCompletionSse(value: Rec, requestedModel: string, budget?: T
   }];
   const delta: Rec = {};
   if (typeof message.content === "string" && message.content.length > 0) delta.content = message.content;
+  if (typeof message.refusal === "string") delta.refusal = message.refusal;
   if (typeof message.reasoning_content === "string" && message.reasoning_content.length > 0) {
     delta.reasoning_content = message.reasoning_content;
   }

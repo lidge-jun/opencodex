@@ -260,6 +260,14 @@ It does not issue an additional inference request. An incomplete response caused
 token limit or content filtering retains `length` or `content_filter`, even if it includes tool
 output. Other incomplete boundaries return an upstream error instead of claiming a normal finish.
 
+Refusal text stays separate from answer text: JSON completions use nullable `message.refusal`,
+and streaming chunks use `delta.refusal`. Native Chat JSON-to-SSE and SSE-to-JSON conversions
+preserve that field; native streaming relay preserves the provider's refusal deltas. On translated
+Responses streams, refusal parts are buffered until the terminal event and emitted once in their
+original output/content order. Compatible repeated or sparse snapshots do not duplicate or erase
+text. Contradictory refusal snapshots and buffer overflow produce a typed error without a successful
+finish or `[DONE]`. This preserves the upstream refusal; it does not introduce a proxy policy decision.
+
 Because the internal execution path is Responses-based, a provider adapter can impose a narrower
 feature set. For example, a request feature that cannot be represented by the selected adapter is
 returned as an error instead of silently changing its meaning.

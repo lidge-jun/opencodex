@@ -1323,6 +1323,25 @@ release on consumption or cancellation. Actual upstream SSE and native Chat bypa
 - 다른 대안 대신 이 방식을 선택한 이유: One conversion authority prevents the streaming fallback from drifting from non-streaming semantics without changing routing or retry behavior.
 - 장점, 단점 및 영향: No additional upstream request or dependency; this remains buffered delivery, not token-by-token upstream streaming. Handler regressions cover tools, reasoning, length, ordinary and empty completions, and budget release.
 
+### Chat refusal projection
+
+`src/chat/outbound.ts` keeps Responses refusal parts separate from ordinary content. JSON output
+and the stream collector expose nullable `message.refusal`; `jsonCompletionSse` preserves it as
+`delta.refusal`, while the native SSE relay remains opaque. The translated live stream keys refusal
+state by raw `output_index` / `content_index`, validates present item IDs as correlation constraints,
+and emits buffered parts in that order only at a valid completed/incomplete terminal. Deltas append;
+equal, empty, absent, and shorter-prefix snapshots preserve existing text; extending snapshots add
+only new text. Non-string or contradictory snapshots fail with a content-free typed error.
+
+The existing turn budget accounts for refusal text and map metadata, including empty entries, and
+releases that state on terminal, failure, or cancellation. Pending role/tool/refusal/finish/`[DONE]`
+frames form one terminal batch: all serialized strings and encoded frames must be admitted before
+any batch frame is enqueued. Admission failure releases the batch and refusal state, cancels upstream,
+and emits only the bounded overflow error. Collector processing failures cancel their reader before
+releasing its lock, so upstream translation cannot continue after failed JSON collection. The outer
+response finalizer continues to own retained response bytes. These are projection rules, not new
+refusal policy or changes to ordinary content/tool semantics.
+
 ## Parallel tool calls (default-on for chat providers)
 
 The openai-chat adapter buffers ALL streamed `tool_calls` deltas (keyed by `index`, falling back to
