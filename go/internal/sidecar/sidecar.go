@@ -10,6 +10,7 @@
 package sidecar
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,9 +18,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/lidge-jun/opencodex/go/internal/config"
+	"github.com/lidge-jun/opencodex/go/internal/managementauth"
 )
 
 // Config carries the values the sidecar must echo from its TypeScript parent.
@@ -52,7 +55,21 @@ type Config struct {
 	ParentURL    string
 	BridgeToken  string
 	RequestToken string
+	// WriteRelaySecret signs parent admission claims for public mutations. It is
+	// distinct from BridgeToken: the latter only authenticates the child on the
+	// private parent hop.
+	WriteRelaySecret string
 }
+
+const (
+	// SidecarRequestHeader proves the parent, rather than an arbitrary local
+	// process, asked the sidecar to serve a protected bridge-backed route.
+	SidecarRequestHeader = "X-Ocx-Go-Sidecar-Request"
+	// SidecarBridgeHeader authenticates the sidecar to the private parent bridge.
+	SidecarBridgeHeader    = "X-Ocx-Go-Sidecar-Bridge"
+	privateWriteBridgePath = "/__ocx_go_sidecar/write"
+	maxWriteBodyBytes      = 2 * 1024 * 1024
+)
 
 // healthPayload mirrors the JSON object literal in
 // src/server/management/system-routes.ts. Field order is the byte contract:
@@ -73,6 +90,7 @@ type healthPayload struct {
 // never sees another request while the seam is wired correctly.
 func NewHandler(cfg Config) http.Handler {
 	mux := http.NewServeMux()
+	writeRelay := managementauth.NewWriteRelayVerifier(cfg.WriteRelaySecret)
 	mux.HandleFunc("GET /api/system/health", func(w http.ResponseWriter, r *http.Request) {
 		version := cfg.Version
 		if version == "" {
@@ -104,7 +122,16 @@ func NewHandler(cfg Config) http.Handler {
 	// with NO normalisation — any drift is a real divergence. The config is
 	// read per request (the sidecar carries no state) from cfg.ConfigDir or the
 	// OPENCODEX_HOME / ~/.opencodex resolution the TS parent uses.
-	mux.HandleFunc("GET /api/shadow-call-settings", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/shadow-call-settings", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			relayPublicWrite(w, r, cfg, writeRelay, "/api/shadow-call-settings")
+			return
+		}
+		if r.Method != http.MethodGet {
+			// Preserve the GET-qualified handler's pre-write ServeMux behavior.
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
 		loaded, err := loadSidecarConfig(cfg.ConfigDir)
 		if err != nil {
 			// A missing or unreadable config is an empty Config (the TS runtime
@@ -159,7 +186,7 @@ func NewHandler(cfg Config) http.Handler {
 	// refresh, invalidation, passive observations and last-good retention keep
 	// their established semantics while the wire response stays byte-identical.
 	mux.HandleFunc("GET /api/provider-quotas", func(w http.ResponseWriter, r *http.Request) {
-		if cfg.RequestToken == "" || r.Header.Get("X-Ocx-Go-Sidecar-Request") != cfg.RequestToken {
+		if cfg.RequestToken == "" || !managementauth.EqualSecret(r.Header.Get(SidecarRequestHeader), cfg.RequestToken) {
 			http.NotFound(w, r)
 			return
 		}
@@ -175,7 +202,7 @@ func NewHandler(cfg Config) http.Handler {
 			http.Error(w, "quota state bridge unavailable", http.StatusServiceUnavailable)
 			return
 		}
-		bridgeReq.Header.Set("X-Ocx-Go-Sidecar-Bridge", cfg.BridgeToken)
+		bridgeReq.Header.Set(SidecarBridgeHeader, cfg.BridgeToken)
 		bridgeTransport := &http.Transport{
 			Proxy:       nil,
 			DialContext: (&net.Dialer{}).DialContext,
@@ -208,7 +235,150 @@ func NewHandler(cfg Config) http.Handler {
 			fmt.Fprintf(os.Stderr, "ocx-sidecar: write provider-quotas payload: %v\n", err)
 		}
 	})
+
+	// Ticket #21's public mutation surface is deliberately exact. The sidecar
+	// never dispatches by prefix or forwards an unrecognised write: each allowed
+	// method/path pair is registered explicitly and the private bridge remains
+	// the TypeScript oracle until that route's native mutation lands.
+	for _, route := range []string{
+		"/api/settings",
+		"/api/sidecar-settings",
+		"/api/codex-auth/active",
+		"/api/codex-auth/pool-strategy",
+		"/api/oauth/accounts/active",
+		"/api/oauth/accounts/pool",
+	} {
+		path := route
+		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+			// A method-qualified ServeMux pattern would synthesize 405 for an
+			// existing sidecar read probe. Keep the pre-write surface exactly as
+			// it was: only an allowlisted PUT exists; every other method is 404.
+			if r.Method != http.MethodPut && !(path == "/api/oauth/accounts/pool" && r.Method == http.MethodPatch) && !(path == "/api/codex-auth/pool-strategy" && r.Method == http.MethodPatch) {
+				http.NotFound(w, r)
+				return
+			}
+			relayPublicWrite(w, r, cfg, writeRelay, path)
+		})
+	}
+	for _, path := range []string{
+		"/api/codex-auth/accounts/clear-cooldown",
+		"/api/codex-auth/reset-credits/consume",
+		"/api/oauth/accounts/clear-cooldown",
+	} {
+		path := path
+		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				http.NotFound(w, r)
+				return
+			}
+			relayPublicWrite(w, r, cfg, writeRelay, path)
+		})
+	}
 	return mux
+}
+
+// relayPublicWrite verifies the parent's request token and one-use relay proof
+// before it can contact the private parent bridge. It forwards the original
+// bytes and only the authenticated relay metadata; public credentials and
+// arbitrary client headers never cross this process boundary.
+func relayPublicWrite(w http.ResponseWriter, r *http.Request, cfg Config, verifier *managementauth.WriteRelayVerifier, path string) {
+	if cfg.RequestToken == "" || !managementauth.EqualSecret(r.Header.Get(SidecarRequestHeader), cfg.RequestToken) {
+		http.NotFound(w, r)
+		return
+	}
+	if r.URL.Path != path || r.URL.RawQuery != "" {
+		http.NotFound(w, r)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxWriteBodyBytes+1))
+	if err != nil || len(body) > maxWriteBodyBytes {
+		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	expiresAt, ok := managementauth.ParseWriteRelayExpiry(r.Header.Get(managementauth.WriteRelayExpiresAtHeader))
+	relayProof := managementauth.WriteRelayProof{
+		Nonce:     r.Header.Get(managementauth.WriteRelayNonceHeader),
+		Principal: managementauth.Principal(r.Header.Get(managementauth.WriteRelayPrincipalHeader)),
+		Method:    r.Method,
+		Path:      path,
+		ExpiresAt: expiresAt,
+		Proof:     r.Header.Get(managementauth.WriteRelayProofHeader),
+	}
+	if !ok || !verifier.VerifyAndConsume(relayProof, body) {
+		http.Error(w, "write relay unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	parent, ok := privateParentBridgeURL(cfg.ParentURL, privateWriteBridgePath)
+	if !ok || cfg.BridgeToken == "" {
+		http.Error(w, "write state bridge unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	bridgeReq, err := http.NewRequestWithContext(r.Context(), http.MethodPut, parent.String(), bytes.NewReader(body))
+	if err != nil {
+		http.Error(w, "write state bridge unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	bridgeReq.Header.Set(SidecarBridgeHeader, cfg.BridgeToken)
+	bridgeReq.Header.Set(managementauth.WriteRelayNonceHeader, r.Header.Get(managementauth.WriteRelayNonceHeader))
+	bridgeReq.Header.Set(managementauth.WriteRelayPrincipalHeader, r.Header.Get(managementauth.WriteRelayPrincipalHeader))
+	bridgeReq.Header.Set("X-Ocx-Go-Sidecar-Relay-Method", r.Method)
+	bridgeReq.Header.Set("X-Ocx-Go-Sidecar-Relay-Path", path)
+	bridgeReq.Header.Set(managementauth.WriteRelayExpiresAtHeader, r.Header.Get(managementauth.WriteRelayExpiresAtHeader))
+	bridgeReq.Header.Set(managementauth.WriteRelayProofHeader, r.Header.Get(managementauth.WriteRelayProofHeader))
+	if contentType := r.Header.Get("Content-Type"); contentType != "" {
+		bridgeReq.Header.Set("Content-Type", contentType)
+	}
+
+	bridgeResp, err := privateBridgeClient().Do(bridgeReq)
+	if err != nil {
+		http.Error(w, "write state bridge unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer bridgeResp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(bridgeResp.Body, 8*1024*1024+1))
+	if err != nil || len(raw) > 8*1024*1024 {
+		http.Error(w, "write state bridge unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if contentType := bridgeResp.Header.Get("Content-Type"); contentType != "" {
+		w.Header().Set("Content-Type", contentType)
+	}
+	if retryAfter := bridgeResp.Header.Get("Retry-After"); retryAfter != "" {
+		w.Header().Set("Retry-After", retryAfter)
+	}
+	w.WriteHeader(bridgeResp.StatusCode)
+	if _, err := w.Write(raw); err != nil {
+		fmt.Fprintf(os.Stderr, "ocx-sidecar: write relay response: %v\\n", err)
+	}
+}
+
+// privateParentBridgeURL derives the exact private route from the loopback
+// parent URL supplied to the sidecar in OCX_SIDECAR_PARENT_URL. Credentials,
+// proxy destinations and public hosts are rejected before any request occurs.
+func privateParentBridgeURL(raw, bridgePath string) (*url.URL, bool) {
+	parent, err := url.Parse(raw)
+	if err != nil || parent.Scheme != "http" || parent.Hostname() != "127.0.0.1" || parent.User != nil || parent.Fragment != "" {
+		return nil, false
+	}
+	if parent.Port() == "" || !strings.HasPrefix(bridgePath, "/__ocx_go_sidecar/") {
+		return nil, false
+	}
+	parent.Path = bridgePath
+	parent.RawPath = ""
+	parent.RawQuery = ""
+	return parent, true
+}
+
+func privateBridgeClient() *http.Client {
+	transport := &http.Transport{Proxy: nil, DialContext: (&net.Dialer{}).DialContext}
+	return &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: transport,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 }
 
 // loadSidecarConfig is the config-file loader used by the shadow-call route.

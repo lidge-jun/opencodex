@@ -44,6 +44,9 @@ export const GO_SIDECAR_BRIDGE_TOKEN_ENV = "OCX_SIDECAR_BRIDGE_TOKEN";
 /** Capability presented by the parent when forwarding to the sidecar. */
 export const GO_SIDECAR_REQUEST_TOKEN_ENV = "OCX_SIDECAR_REQUEST_TOKEN";
 
+/** HMAC secret for parent-admission claims on Go-owned write routes. */
+export const GO_SIDECAR_WRITE_RELAY_SECRET_ENV = "OCX_SIDECAR_WRITE_RELAY_SECRET";
+
 /** Readiness marker the Go binary prints on stdout after binding. */
 export const GO_SIDECAR_READY_PREFIX = "ocx-sidecar-ready";
 
@@ -66,6 +69,21 @@ let readyBaseUrl = "";
 let generation = 0;
 let forwardDetach: (() => void) | null = null;
 let bridgeStopped: (() => void) | null = null;
+
+export type GoSidecarSupervisorConfig = {
+  parentUrl: string;
+  bridgeToken: string;
+  requestToken: string;
+  writeRelaySecret: string;
+  /** Mints a proof bound to one admitted write's method, path and body bytes. */
+  createWriteRelayHeaders?: (request: {
+    method: string;
+    pathname: string;
+    body: Uint8Array;
+    principal?: import("./management-auth").ManagementPrincipal;
+  }) => HeadersInit | null;
+  onStopped(): void;
+};
 
 /** Test-only reset so an isolated harness does not inherit a live child. */
 export function resetGoSidecarForTests(): void {
@@ -155,20 +173,54 @@ function warnActivation(message: string): void {
   console.warn(`[go-sidecar] ${message}; serving health in-process`);
 }
 
+/** Build sidecar headers without forwarding browser credentials or cookies. */
+export function goSidecarRelayHeaders(request: Request, requestToken: string, relayHeaders: HeadersInit | null | undefined): Headers {
+  const headers = new Headers(relayHeaders ?? undefined);
+  headers.set("accept", "application/json");
+  headers.set("x-ocx-go-sidecar-request", requestToken);
+  const contentType = request.headers.get("content-type");
+  if (contentType) headers.set("content-type", contentType);
+  return headers;
+}
+
 /** Forward one declared Go-owned route request to a ready sidecar, or null on any failure. */
-async function forwardTo(baseUrl: string, requestToken: string, method: string, pathAndSearch: string): Promise<Response | null> {
+async function forwardTo(
+  baseUrl: string,
+  requestToken: string,
+  createWriteRelayHeaders: GoSidecarSupervisorConfig["createWriteRelayHeaders"],
+  request: Request,
+  pathAndSearch: string,
+  principal?: import("./management-auth").ManagementPrincipal,
+): Promise<Response | null> {
   try {
-    const upstream = await directLocalHttpFetch(new URL(pathAndSearch, baseUrl), {
-      method,
-      headers: { accept: "application/json", "x-ocx-go-sidecar-request": requestToken },
+    const target = new URL(pathAndSearch, baseUrl);
+    const isWrite = request.method !== "GET" && request.method !== "HEAD";
+    const body = isWrite ? new Uint8Array(await request.arrayBuffer()) : undefined;
+    const relayHeaders = isWrite
+      ? createWriteRelayHeaders?.({ method: request.method, pathname: target.pathname, body: body!, principal }) ?? null
+      : undefined;
+    // Go writes require a parent-minted, body-bound proof; otherwise use the
+    // in-process handler, which still owns the original request body.
+    if (isWrite && relayHeaders === null) return null;
+    const upstream = await directLocalHttpFetch(target, {
+      method: request.method,
+      headers: goSidecarRelayHeaders(request, requestToken, relayHeaders ?? undefined),
+      body,
+      signal: request.signal,
     }, pathAndSearch.startsWith("/api/provider-quotas") ? { timeoutMs: GO_SIDECAR_QUOTA_ROUTE_TIMEOUT_MS } : undefined);
-    if (!upstream.ok) return null;
+    // A Go-owned write's 4xx/5xx response is its observable result. Falling
+    // through on it would execute the legacy mutation a second time. Reads
+    // retain the existing fallback-on-non-2xx supervision behavior.
+    if (!upstream.ok && !isWrite) return null;
     // Relay the sidecar's response with the in-process handler's header shape:
     // Content-Type plus the body verbatim. The management-API CORS wrapper adds
     // the shared headers downstream exactly as it does for an in-process route.
     return new Response(upstream.body, {
       status: upstream.status,
-      headers: { "content-type": upstream.headers.get("content-type") ?? "application/json" },
+      headers: {
+        "content-type": upstream.headers.get("content-type") ?? "application/json",
+        ...(upstream.headers.has("retry-after") ? { "retry-after": upstream.headers.get("retry-after")! } : {}),
+      },
     });
   } catch {
     return null;
@@ -213,7 +265,7 @@ function stopSidecar(): void {
  */
 export function activateGoSidecar(
   version: string,
-  liveStateBridge: { parentUrl: string; bridgeToken: string; requestToken: string; onStopped(): void },
+  liveStateBridge: GoSidecarSupervisorConfig,
 ): { stop(): void } | null {
   const binary = process.env[GO_SIDECAR_BIN_ENV]?.trim();
   if (!binary) return null;
@@ -235,6 +287,7 @@ export function activateGoSidecar(
         [GO_SIDECAR_PARENT_URL_ENV]: liveStateBridge.parentUrl,
         [GO_SIDECAR_BRIDGE_TOKEN_ENV]: liveStateBridge.bridgeToken,
         [GO_SIDECAR_REQUEST_TOKEN_ENV]: liveStateBridge.requestToken,
+        [GO_SIDECAR_WRITE_RELAY_SECRET_ENV]: liveStateBridge.writeRelaySecret,
       },
     });
   } catch (error) {
@@ -274,8 +327,8 @@ export function activateGoSidecar(
     if (stopped || myGeneration !== generation) return;
     readyBaseUrl = parsed;
     const baseUrl = parsed;
-    const detach = setGoOwnedRouteForwarder((method, pathAndSearch) => (
-      forwardTo(baseUrl, liveStateBridge.requestToken, method, pathAndSearch)
+    const detach = setGoOwnedRouteForwarder((request, pathAndSearch, principal) => (
+      forwardTo(baseUrl, liveStateBridge.requestToken, liveStateBridge.createWriteRelayHeaders, request, pathAndSearch, principal)
     ));
     if (stopped || myGeneration !== generation) {
       detach();

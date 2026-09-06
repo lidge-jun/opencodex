@@ -219,7 +219,7 @@ function parseResponse(bytes: Buffer): Response {
 }
 
 /**
- * Fetch one bodyless local HTTP GET or POST over a direct TCP connection.
+ * Fetch one local HTTP request over a direct TCP connection.
  *
  * Bun's global fetch and Bun 1.3's node:http compatibility layer can honor
  * HTTP(S)_PROXY. Local identity and capability probes must not expose headers
@@ -239,16 +239,26 @@ export async function directLocalHttpFetch(
 
   if (url.protocol !== "http:") throw new Error("direct local request must use HTTP");
   if (url.username || url.password) throw new Error("direct local request URL must not contain credentials");
-  if ((method !== "GET" && method !== "POST") || body !== null) {
-    throw new Error("direct local request must be a bodyless GET or POST");
+  if (!/^(GET|HEAD|POST|PUT|PATCH|DELETE)$/.test(method)) {
+    throw new Error("direct local request method is unsupported");
+  }
+  if ((method === "GET" || method === "HEAD") && body !== null) {
+    throw new Error("direct local GET or HEAD request must be bodyless");
   }
   if (signal?.aborted) throw abortReason(signal);
 
   const headers = new Headers(init.headers ?? (input instanceof Request ? input.headers : undefined));
   headers.delete("proxy-authorization");
   headers.delete("proxy-connection");
-  if (method === "POST") headers.set("content-length", "0");
-  else headers.delete("content-length");
+  const bodyBytes = body === null ? Buffer.alloc(0) : Buffer.from(await new Response(body).arrayBuffer());
+  if (bodyBytes.byteLength > DIRECT_LOCAL_HTTP_MAX_BYTES) {
+    throw new Error("direct local HTTP request exceeds the byte cap");
+  }
+  if (bodyBytes.byteLength > 0 || method === "POST" || method === "PUT" || method === "PATCH") {
+    headers.set("content-length", String(bodyBytes.byteLength));
+  } else {
+    headers.delete("content-length");
+  }
   headers.set("host", url.host);
   headers.set("connection", "close");
   const headerLines: string[] = [];
@@ -257,6 +267,7 @@ export async function directLocalHttpFetch(
     `${method} ${url.pathname}${url.search} HTTP/1.1\r\n${headerLines.join("\r\n")}\r\n\r\n`,
     "latin1",
   );
+  const requestPayload = bodyBytes.byteLength === 0 ? requestBytes : Buffer.concat([requestBytes, bodyBytes]);
   const parsedHostname = url.hostname.startsWith("[") && url.hostname.endsWith("]")
     ? url.hostname.slice(1, -1)
     : url.hostname;
@@ -313,7 +324,7 @@ export async function directLocalHttpFetch(
       return;
     }
     socket.on("connect", () => {
-      try { socket?.write(requestBytes); } catch (error) {
+      try { socket?.write(requestPayload); } catch (error) {
         finish(error instanceof Error ? error : new Error(String(error)));
       }
     });

@@ -16,7 +16,7 @@ import {
   resetGoOwnedRouteForwarderForTests,
   setGoOwnedRouteForwarder,
 } from "../src/server/go-sidecar-slot";
-import { resetGoSidecarForTests } from "../src/server/go-sidecar";
+import { goSidecarRelayHeaders, resetGoSidecarForTests } from "../src/server/go-sidecar";
 import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /**
@@ -121,11 +121,11 @@ async function getJson(token: string, server: { url: URL }, pathname: string): P
 }
 
 // ---------------------------------------------------------------------------
-// 1. Registry invariants: the marker is typed read-only and volatile is declared.
+// 1. Registry invariants: reads and writes have distinct ownership declarations.
 // ---------------------------------------------------------------------------
 
-describe("ADR-0008 ownership markers are typed read/write (ticket #14)", () => {
-  test("the declared Go-owned surface includes the ticket #20 quota route", () => {
+describe("ADR-0008 ownership markers are typed read/write", () => {
+  test("the declared Go-owned surface includes bounded write batches", () => {
     // Pin the migrated set so an accidental marker flip on another read route
     // fails here instead of silently changing what the proxy serves. Adding a
     // real migration updates this list deliberately. Health reports the serving
@@ -135,9 +135,18 @@ describe("ADR-0008 ownership markers are typed read/write (ticket #14)", () => {
     // oracle compares their bytes with no normalisation at all.
     const byPath = new Map(GO_OWNED_MANAGEMENT_ROUTES.map(r => [r.path, r]));
     expect([...byPath.keys()].sort()).toEqual([
+      "/api/codex-auth/accounts/clear-cooldown",
+      "/api/codex-auth/active",
+      "/api/codex-auth/pool-strategy",
+      "/api/codex-auth/reset-credits/consume",
       "/api/custom-models",
+      "/api/oauth/accounts/active",
+      "/api/oauth/accounts/clear-cooldown",
+      "/api/oauth/accounts/pool",
       "/api/provider-quotas",
+      "/api/settings",
       "/api/shadow-call-settings",
+      "/api/sidecar-settings",
       "/api/system/health",
     ]);
     const health = byPath.get("/api/system/health")!;
@@ -145,7 +154,9 @@ describe("ADR-0008 ownership markers are typed read/write (ticket #14)", () => {
     expect(health.mutates).toBe(false);
     expect(health.module).toBe("server/management/system-routes");
     expect(health.go.volatileFields).toEqual(["pid", "uptime"]);
-    const shadowCall = byPath.get("/api/shadow-call-settings")!;
+    const shadowCall = GO_OWNED_MANAGEMENT_ROUTES.find(route => (
+      route.method === "GET" && route.path === "/api/shadow-call-settings"
+    ))!;
     expect(shadowCall.method).toBe("GET");
     expect(shadowCall.mutates).toBe(false);
     expect(shadowCall.module).toBe("server/management/config-routes");
@@ -160,23 +171,33 @@ describe("ADR-0008 ownership markers are typed read/write (ticket #14)", () => {
     expect(providerQuotas.mutates).toBe(false);
     expect(providerQuotas.module).toBe("server/management/provider-routes");
     expect(providerQuotas.go.volatileFields).toEqual(["generatedAt"]);
+    const writes = GO_OWNED_MANAGEMENT_ROUTES.filter(route => route.mutates);
+    expect(writes.map(route => `${route.method} ${route.path}`).sort()).toEqual([
+      "PATCH /api/codex-auth/pool-strategy",
+      "PATCH /api/oauth/accounts/pool",
+      "POST /api/codex-auth/accounts/clear-cooldown",
+      "POST /api/codex-auth/reset-credits/consume",
+      "POST /api/oauth/accounts/clear-cooldown",
+      "PUT /api/codex-auth/active",
+      "PUT /api/codex-auth/pool-strategy",
+      "PUT /api/oauth/accounts/active",
+      "PUT /api/oauth/accounts/pool",
+      "PUT /api/settings",
+      "PUT /api/shadow-call-settings",
+      "PUT /api/sidecar-settings",
+    ]);
+    for (const route of writes) expect(route.go).toEqual({ relay: "signed", volatileFields: [] });
   });
 
-  test("no write route can be Go-owned: runtime re-check of the union's read-only arm", () => {
-    // The discriminated union in route-registry.ts already refuses `go` on a
-    // write route at compile time. This is the runtime belt-and-braces check:
-    // it re-derives the marker set from MANAGEMENT_ROUTES and compares it with
-    // the exported view, so a cast or an array-level workaround cannot drift.
+  test("the derived surface matches every marker and writes require a signed relay", () => {
     const marked = MANAGEMENT_ROUTES.filter(
-      (r): r is (typeof GO_OWNED_MANAGEMENT_ROUTES)[number] => r.mutates === false && r.go !== undefined,
+      (r): r is (typeof GO_OWNED_MANAGEMENT_ROUTES)[number] => r.go !== undefined,
     );
     expect(marked).toEqual(GO_OWNED_MANAGEMENT_ROUTES);
     for (const route of marked) {
-      expect(route.mutates).toBe(false);
+      if (route.mutates) expect(route.go).toHaveProperty("relay", "signed");
+      else expect(route.go).not.toHaveProperty("relay");
     }
-    // And explicitly: no mutating route anywhere in the table declares Go ownership.
-    const writesWithGo = MANAGEMENT_ROUTES.filter(r => r.mutates === true && "go" in r);
-    expect(writesWithGo).toEqual([]);
   });
 
   test("every Go-owned route declares a duplicate-free volatile set (empty = strict byte equality)", () => {
@@ -202,7 +223,7 @@ describe("ADR-0008 ownership markers are typed read/write (ticket #14)", () => {
     const shadowCall = GO_OWNED_MANAGEMENT_ROUTES.find(r => r.path === "/api/shadow-call-settings");
     expect(shadowCall).toBeDefined();
     expect(findGoOwnedManagementRoute("GET", "/api/shadow-call-settings")).toBe(shadowCall);
-    expect(findGoOwnedManagementRoute("PUT", "/api/shadow-call-settings")).toBeUndefined();
+    expect(findGoOwnedManagementRoute("PUT", "/api/shadow-call-settings")).toBeDefined();
     expect(findGoOwnedManagementRoute("GET", "/api/shadow-call-settings/")).toBeUndefined();
     const customModels = GO_OWNED_MANAGEMENT_ROUTES.find(r => r.path === "/api/custom-models");
     expect(customModels).toBeDefined();
@@ -211,6 +232,8 @@ describe("ADR-0008 ownership markers are typed read/write (ticket #14)", () => {
     expect(findGoOwnedManagementRoute("GET", "/api/custom-models/")).toBeUndefined();
     expect(findGoOwnedManagementRoute("GET", "/api/provider-quotas")).toBeDefined();
     expect(findGoOwnedManagementRoute("POST", "/api/provider-quotas")).toBeUndefined();
+    expect(findGoOwnedManagementRoute("PUT", "/api/settings")).toBeDefined();
+    expect(findGoOwnedManagementRoute("GET", "/api/settings")).toBeUndefined();
   });
 
   test("the forwarding branch in management-api.ts names no route of its own", () => {
@@ -236,6 +259,28 @@ describe("ADR-0008 ownership markers are typed read/write (ticket #14)", () => {
 // ---------------------------------------------------------------------------
 
 describe("single forwarding branch serves declared Go-owned routes (ticket #14)", () => {
+  test("supervisor relay headers retain only signed claims and content type", () => {
+    const request = new Request("http://localhost/api/settings", {
+      method: "PUT",
+      headers: {
+        authorization: "Bearer browser-secret",
+        cookie: "session=browser",
+        "content-type": "application/json",
+      },
+      body: "{}",
+    });
+    const headers = goSidecarRelayHeaders(request, "child-capability", {
+      "x-ocx-go-relay-principal": "admin-token",
+      "x-ocx-go-relay-signature": "supervisor-signature",
+    });
+    expect(headers.get("x-ocx-go-relay-principal")).toBe("admin-token");
+    expect(headers.get("x-ocx-go-relay-signature")).toBe("supervisor-signature");
+    expect(headers.get("x-ocx-go-sidecar-request")).toBe("child-capability");
+    expect(headers.get("content-type")).toBe("application/json");
+    expect(headers.get("authorization")).toBeNull();
+    expect(headers.get("cookie")).toBeNull();
+  });
+
   runFixtureTest("a registered forwarder answers the declared route and nothing else", async (token) => {
     const calls: string[] = [];
     const fakeBody = JSON.stringify({
@@ -245,8 +290,8 @@ describe("single forwarding branch serves declared Go-owned routes (ticket #14)"
       uptime: 1,
       pid: 987654,
     });
-    const detach = setGoOwnedRouteForwarder(async (method, pathAndSearch) => {
-      calls.push(`${method} ${pathAndSearch}`);
+    const detach = setGoOwnedRouteForwarder(async (request, pathAndSearch) => {
+      calls.push(`${request.method} ${pathAndSearch}`);
       return new Response(fakeBody, {
         status: 200,
         headers: { "content-type": "application/json" },
@@ -275,6 +320,36 @@ describe("single forwarding branch serves declared Go-owned routes (ticket #14)"
       detach();
     }
     expect(hasGoOwnedRouteForwarder()).toBe(false);
+  });
+
+  runFixtureTest("a declared write forwards a cloned request body and admitted principal", async (token) => {
+    const calls: Array<{ method: string; path: string; body: string; principal: string | undefined }> = [];
+    const detach = setGoOwnedRouteForwarder(async (request, pathAndSearch, principal) => {
+      calls.push({ method: request.method, path: pathAndSearch, body: await request.text(), principal });
+      return Response.json({ forwarded: true });
+    });
+    try {
+      const server = startServer(0);
+      try {
+        const response = await fetch(new URL("/api/settings", server.url), {
+          method: "PUT",
+          headers: { "content-type": "application/json", "x-opencodex-api-key": token },
+          body: JSON.stringify({ streamMode: "passthrough" }),
+        });
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({ forwarded: true });
+        expect(calls).toEqual([{
+          method: "PUT",
+          path: "/api/settings",
+          body: JSON.stringify({ streamMode: "passthrough" }),
+          principal: "admin-token",
+        }]);
+      } finally {
+        await server.stop(true);
+      }
+    } finally {
+      detach();
+    }
   });
 
   runFixtureTest("a forwarder returning null falls back to the in-process handler", async (token) => {

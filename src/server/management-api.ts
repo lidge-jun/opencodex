@@ -141,10 +141,15 @@ async function handleLabRoutesOnDemand(ctx: ManagementContext): Promise<Response
  * optional-subsystem slot. Null means "not declared Go-owned" OR "sidecar not
  * attached / unreachable" — both fall through to the in-process handlers.
  */
-async function tryForwardDeclaredGoOwnedRoute(req: Request, url: URL): Promise<Response | null> {
+async function tryForwardDeclaredGoOwnedRoute(
+  req: Request,
+  url: URL,
+  principal: ManagementPrincipal | undefined,
+): Promise<Response | null> {
   const declared = findGoOwnedManagementRoute(req.method as HttpMethod, url.pathname);
   if (!declared) return null;
-  return tryForwardGoOwnedRoute(req.method, `${url.pathname}${url.search}`);
+  // Preserve the original body for the TypeScript fallback if the optional sidecar is unavailable.
+  return tryForwardGoOwnedRoute(req.clone(), `${url.pathname}${url.search}`, principal);
 }
 
 export async function handleManagementAPI(
@@ -154,6 +159,7 @@ export async function handleManagementAPI(
   deps: ManagementApiDeps = {},
   principal?: ManagementPrincipal,
   sessionControl?: ManagementSessionControl,
+  options?: { skipGoSidecarForwarding?: boolean },
 ): Promise<Response | null> {
   if (!isAllowedManagementOrigin(req, config)) {
     return jsonResponse({ error: "cross-origin request blocked" }, 403, req, config);
@@ -175,8 +181,10 @@ export async function handleManagementAPI(
   // behave byte-identically to a build without Go, and the in-process handler stays the
   // differential oracle. One branch, driven by data — migrating another read route flips the
   // `go` marker in route-registry.ts and never edits this dispatch.
-  const goOwnedResponse = await tryForwardDeclaredGoOwnedRoute(req, url);
-  if (goOwnedResponse) return goOwnedResponse;
+  if (!options?.skipGoSidecarForwarding) {
+    const goOwnedResponse = await tryForwardDeclaredGoOwnedRoute(req, url, principal);
+    if (goOwnedResponse) return goOwnedResponse;
+  }
 
   async function convergeCodexCatalog(): Promise<CatalogDisposition> {
     let convergenceInvoked = false;

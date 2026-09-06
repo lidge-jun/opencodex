@@ -1,5 +1,5 @@
 import { markActivity } from "../lib/sidecar-tracker";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { knownModelIdsForProvider } from "../router";
 import {
   buildWarmupCompletionFrames,
@@ -55,6 +55,12 @@ import {
 import { acquireServerBackgroundLifecycle } from "./background-lifecycle";
 import { activateLab, labActivationRequired } from "../lib/lab-activation";
 import { activateGoSidecar } from "./go-sidecar";
+import {
+  createGoSidecarWriteRelay,
+  createGoSidecarWriteRelayHeaders,
+  GO_SIDECAR_WRITE_BRIDGE_PATH,
+  type GoSidecarWriteRelay,
+} from "./go-sidecar-write-relay";
 import { runOpenAiTierStartupMigration } from "../providers/openai-tier-startup";
 import { runAlibabaRegionStartupMigration } from "../providers/alibaba-region-startup";
 import { runModelRenameStartupMigration } from "../providers/model-rename-startup";
@@ -1021,6 +1027,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   }
   let backgroundLifecycle: ReturnType<typeof acquireServerBackgroundLifecycle> | null = null;
   let goSidecarLiveStateBridgeToken: string | null = null;
+  let goSidecarWriteRelay: GoSidecarWriteRelay | null = null;
   // Set only when the optional Go sidecar activated (ADR-0008); consumed by the server.stop
   // override below, which is built before activation runs. Null default keeps a process that
   // never opted in from carrying any Go-sidecar state.
@@ -1078,6 +1085,14 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         }
         const forceRefresh = url.searchParams.get("refresh") === "1" || url.searchParams.get("refresh") === "true";
         return jsonResponse(await fetchProviderQuotaReports(config, forceRefresh));
+      }
+      // ADR-0008 write relay: only a supervised sidecar holding both the
+      // per-child bridge capability and a fresh, body-bound parent claim may
+      // reach legacy management dispatch. The reconstructed request bypasses
+      // Go forwarding, so a declared write cannot loop back into its sidecar.
+      if (url.pathname === GO_SIDECAR_WRITE_BRIDGE_PATH) {
+        const relay = goSidecarWriteRelay;
+        return relay ? relay.handle(req, url) : new Response(null, { status: 404 });
       }
       markActivity(`${req.method} ${url.pathname}`);
 
@@ -2477,11 +2492,37 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   const goSidecarHandle = process.env.OPENCODEX_GO_SIDECAR_BIN?.trim()
     ? (() => {
       goSidecarLiveStateBridgeToken = randomUUID();
+      // Generate an unexported child-only HMAC key per activation. An operator
+      // environment value is intentionally not reused: environment inheritance
+      // is broader than the parent/child capability relationship.
+      const writeRelaySecret = randomBytes(32).toString("base64url");
+      goSidecarWriteRelay = createGoSidecarWriteRelay({
+        bridgeToken: goSidecarLiveStateBridgeToken,
+        relaySecret: writeRelaySecret,
+        dispatchLegacy: (relayRequest, relayUrl, relayPrincipal) => (
+          handleManagementAPI(
+            relayRequest,
+            relayUrl,
+            config,
+            deps.managementApi,
+            relayPrincipal,
+            managementSessionControl,
+            { skipGoSidecarForwarding: true },
+          )
+        ),
+      });
       return activateGoSidecar(VERSION, {
         parentUrl: "http://127.0.0.1:" + actualPort,
         bridgeToken: goSidecarLiveStateBridgeToken,
         requestToken: randomUUID(),
-        onStopped: () => { goSidecarLiveStateBridgeToken = null; },
+        writeRelaySecret,
+        createWriteRelayHeaders: goSidecarWriteRelay
+          ? request => createGoSidecarWriteRelayHeaders(writeRelaySecret, request.principal, request)
+          : undefined,
+        onStopped: () => {
+          goSidecarLiveStateBridgeToken = null;
+          goSidecarWriteRelay = null;
+        },
       });
     })()
     : null;
@@ -2489,6 +2530,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     goSidecarStop = goSidecarHandle.stop;
   } else {
     goSidecarLiveStateBridgeToken = null;
+    goSidecarWriteRelay = null;
   }
 
   return server;

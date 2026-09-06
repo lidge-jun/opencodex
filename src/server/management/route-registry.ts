@@ -14,12 +14,13 @@
  * never import anything from `src/lab/`. The `module` field names the owning file as text
  * for exactly this reason.
  *
- * The file is also the ADR-0008 Go-ownership ledger. A read route declares itself
- * Go-owned by carrying a `go` marker (see `GoOwnedRouteDeclaration`); the discriminated
- * union makes the marker impossible on a write route, `GO_OWNED_MANAGEMENT_ROUTES` is the
- * derived migrated surface, and the single forwarding branch in `management-api.ts` reads
- * that data. Migrating a read route is a marker flip here plus the Go handler and oracle
- * coverage -- never a dispatch edit.
+ * The file is also the ADR-0008 Go-ownership ledger. A route declares itself
+ * Go-owned by carrying a `go` marker (see `GoOwnedRouteDeclaration`): reads
+ * list volatile response fields and writes explicitly opt into the signed
+ * relay needed during the pre-flip transition. `GO_OWNED_MANAGEMENT_ROUTES`
+ * is the derived migrated surface, and the single forwarding branch in
+ * `management-api.ts` reads that data. Migrating a route is a marker flip
+ * here plus the Go handler and oracle coverage -- never a dispatch edit.
  *
  * Reconciliation lives in `tests/management-route-registry.test.ts`, which resolves
  * `(method, path)` pairs from source and fails loudly on a route whose method it cannot
@@ -83,7 +84,7 @@ export type NonLiteralMechanism =
  * normalises exactly these top-level JSON keys and nothing else, so a later
  * route can never silently widen what "equal" means.
  */
-export interface GoOwnedRouteDeclaration {
+export interface GoOwnedReadRouteDeclaration {
   /**
    * Top-level JSON body keys of the route's response that may legitimately
    * differ between the two implementations (process-specific values such as
@@ -94,15 +95,18 @@ export interface GoOwnedRouteDeclaration {
   readonly volatileFields: readonly string[];
 }
 
+/** A write must opt into a parent-signed relay instead of inheriting read ownership. */
+export interface GoOwnedWriteRouteDeclaration {
+  readonly relay: "signed";
+  readonly volatileFields: readonly string[];
+}
+
+export type GoOwnedRouteDeclaration = GoOwnedReadRouteDeclaration | GoOwnedWriteRouteDeclaration;
+
 interface ManagementWriteRoute {
-  /** The route mutates state; it must stay in TypeScript until increment 3. */
   readonly mutates: true;
-  /**
-   * A write route cannot be declared Go-owned. The read/write split is a
-   * discriminated union so the type system refuses `go` on this arm: only a
-   * read route (`mutates: false`) may carry a GoOwnedRouteDeclaration.
-   */
-  readonly go?: never;
+  /** A write declaration must name the signed parent-to-sidecar relay. */
+  readonly go?: GoOwnedWriteRouteDeclaration;
 }
 
 interface ManagementReadRoute {
@@ -112,7 +116,7 @@ interface ManagementReadRoute {
    * in `management-api.ts` serves it from the attached ocx-sidecar, and the
    * in-process handler below remains the fallback and the differential oracle.
    */
-  readonly go?: GoOwnedRouteDeclaration;
+  readonly go?: GoOwnedReadRouteDeclaration;
 }
 
 /**
@@ -130,9 +134,8 @@ export type ManagementRoute = {
   readonly exempt?: RouteExemption;
 } & (ManagementWriteRoute | ManagementReadRoute);
 
-/** A read route that carries a Go-ownership declaration (ADR-0008). */
+/** A route that carries a Go-ownership declaration (ADR-0008). */
 export type GoOwnedManagementRoute = ManagementRoute & {
-  readonly mutates: false;
   readonly go: GoOwnedRouteDeclaration;
 };
 
@@ -148,21 +151,21 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/codex-auth/login-status", module: "codex/auth-api", mutates: false },
   { method: "GET", path: "/api/codex-auth/quota", module: "codex/auth-api", mutates: false },
   { method: "GET", path: "/api/codex-auth/reset-credits", module: "codex/auth-api", mutates: false },
-  { method: "PATCH", path: "/api/codex-auth/pool-strategy", module: "codex/auth-api", mutates: true },
+  { method: "PATCH", path: "/api/codex-auth/pool-strategy", module: "codex/auth-api", mutates: true, go: { relay: "signed", volatileFields: [] } },
   { method: "POST", path: "/api/codex-auth/accounts", module: "codex/auth-api", mutates: true },
-  { method: "POST", path: "/api/codex-auth/accounts/clear-cooldown", module: "codex/auth-api", mutates: true },
+  { method: "POST", path: "/api/codex-auth/accounts/clear-cooldown", module: "codex/auth-api", mutates: true, go: { relay: "signed", volatileFields: [] } },
   { method: "POST", path: "/api/codex-auth/login", module: "codex/auth-api", mutates: true },
   { method: "POST", path: "/api/codex-auth/login/cancel", module: "codex/auth-api", mutates: true },
   { method: "POST", path: "/api/codex-auth/login/code", module: "codex/auth-api", mutates: true },
-  { method: "POST", path: "/api/codex-auth/reset-credits/consume", module: "codex/auth-api", mutates: true },
+  { method: "POST", path: "/api/codex-auth/reset-credits/consume", module: "codex/auth-api", mutates: true, go: { relay: "signed", volatileFields: [] } },
   { method: "PUT", path: "/api/codex-auth/accounts/alias", module: "codex/auth-api", mutates: true },
   { method: "PUT", path: "/api/codex-auth/accounts/pause", module: "codex/auth-api", mutates: true },
   { method: "PUT", path: "/api/codex-auth/accounts/pause-exhausted", module: "codex/auth-api", mutates: true },
   { method: "PUT", path: "/api/codex-auth/accounts/priority", module: "codex/auth-api", mutates: true },
-  { method: "PUT", path: "/api/codex-auth/active", module: "codex/auth-api", mutates: true },
+  { method: "PUT", path: "/api/codex-auth/active", module: "codex/auth-api", mutates: true, go: { relay: "signed", volatileFields: [] } },
   { method: "PUT", path: "/api/codex-auth/auto-switch", module: "codex/auth-api", mutates: true },
   { method: "PUT", path: "/api/codex-auth/failover", module: "codex/auth-api", mutates: true },
-  { method: "PUT", path: "/api/codex-auth/pool-strategy", module: "codex/auth-api", mutates: true },
+  { method: "PUT", path: "/api/codex-auth/pool-strategy", module: "codex/auth-api", mutates: true, go: { relay: "signed", volatileFields: [] } },
   // codex/native-profile-api
   { method: "GET", path: "/api/native-main-profiles", module: "codex/native-profile-api", mutates: false },
   { method: "GET", path: "/api/native-main-profiles/doctor", module: "codex/native-profile-api", mutates: false },
@@ -231,9 +234,9 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "POST", path: "/api/update/run", module: "server/management/config-routes", mutates: true },
   { method: "POST", path: "/api/windows-tray", module: "server/management/config-routes", mutates: true },
   { method: "PUT", path: "/api/config", module: "server/management/config-routes", mutates: true, exempt: { reason: "disabled", why: "Returns 405 by design; provider changes go through POST /api/providers." } },
-  { method: "PUT", path: "/api/settings", module: "server/management/config-routes", mutates: true },
-  { method: "PUT", path: "/api/shadow-call-settings", module: "server/management/config-routes", mutates: true },
-  { method: "PUT", path: "/api/sidecar-settings", module: "server/management/config-routes", mutates: true },
+  { method: "PUT", path: "/api/settings", module: "server/management/config-routes", mutates: true, go: { relay: "signed", volatileFields: [] } },
+  { method: "PUT", path: "/api/shadow-call-settings", module: "server/management/config-routes", mutates: true, go: { relay: "signed", volatileFields: [] } },
+  { method: "PUT", path: "/api/sidecar-settings", module: "server/management/config-routes", mutates: true, go: { relay: "signed", volatileFields: [] } },
   // server/management/integration-routes
   { method: "GET", path: "/api/client-integrations", module: "server/management/integration-routes", mutates: false },
   { method: "GET", path: "/api/client-integrations/journal", module: "server/management/integration-routes", mutates: false },
@@ -324,20 +327,20 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/providers/keychain", module: "server/management/oauth-account-routes", mutates: false },
   { method: "POST", path: "/api/providers/keychain", module: "server/management/oauth-account-routes", mutates: true },
   { method: "PATCH", path: "/api/keys", module: "server/management/oauth-account-routes", mutates: true },
-  { method: "PATCH", path: "/api/oauth/accounts/pool", module: "server/management/oauth-account-routes", mutates: true },
+  { method: "PATCH", path: "/api/oauth/accounts/pool", module: "server/management/oauth-account-routes", mutates: true, go: { relay: "signed", volatileFields: [] } },
   { method: "POST", path: "/api/keys", module: "server/management/oauth-account-routes", mutates: true },
   { method: "POST", path: "/api/keys/rotate", module: "server/management/oauth-account-routes", mutates: true },
   { method: "POST", path: "/api/keys/rotate/commit", module: "server/management/oauth-account-routes", mutates: true },
-  { method: "POST", path: "/api/oauth/accounts/clear-cooldown", module: "server/management/oauth-account-routes", mutates: true },
+  { method: "POST", path: "/api/oauth/accounts/clear-cooldown", module: "server/management/oauth-account-routes", mutates: true, go: { relay: "signed", volatileFields: [] } },
   { method: "POST", path: "/api/oauth/accounts/import", module: "server/management/oauth-account-routes", mutates: true },
   { method: "POST", path: "/api/oauth/login", module: "server/management/oauth-account-routes", mutates: true },
   { method: "POST", path: "/api/oauth/login/cancel", module: "server/management/oauth-account-routes", mutates: true },
   { method: "POST", path: "/api/oauth/login/code", module: "server/management/oauth-account-routes", mutates: true },
   { method: "POST", path: "/api/oauth/logout", module: "server/management/oauth-account-routes", mutates: true },
   { method: "POST", path: "/api/providers/keys", module: "server/management/oauth-account-routes", mutates: true },
-  { method: "PUT", path: "/api/oauth/accounts/active", module: "server/management/oauth-account-routes", mutates: true },
+  { method: "PUT", path: "/api/oauth/accounts/active", module: "server/management/oauth-account-routes", mutates: true, go: { relay: "signed", volatileFields: [] } },
   { method: "PUT", path: "/api/oauth/accounts/alias", module: "server/management/oauth-account-routes", mutates: true },
-  { method: "PUT", path: "/api/oauth/accounts/pool", module: "server/management/oauth-account-routes", mutates: true },
+  { method: "PUT", path: "/api/oauth/accounts/pool", module: "server/management/oauth-account-routes", mutates: true, go: { relay: "signed", volatileFields: [] } },
   { method: "PUT", path: "/api/providers/keys/active", module: "server/management/oauth-account-routes", mutates: true },
   { method: "PUT", path: "/api/providers/keys/alias", module: "server/management/oauth-account-routes", mutates: true },
   // server/management/provider-routes
@@ -408,15 +411,14 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
 ];
 
 /**
- * The declared Go-owned surface (ADR-0008): exactly the read routes whose
- * `go` marker is flipped. This is the single data source the forwarding branch
- * and the differential oracle read, so migrating another read route is a
- * marker flip here plus the matching Go handler and oracle coverage -- never a
- * second dispatch edit. Read-only by construction: the write arm of the union
- * cannot carry a `go` declaration, and this filter re-checks at runtime.
+ * The declared Go-owned surface (ADR-0008): exactly the routes whose `go`
+ * marker is flipped. This is the single data source the forwarding branch and
+ * differential oracle read, so migration is a marker flip here plus matching
+ * Go handler and oracle coverage -- never a second dispatch edit. Write routes
+ * must declare the signed-relay arm of the union.
  */
 export const GO_OWNED_MANAGEMENT_ROUTES: readonly GoOwnedManagementRoute[] = MANAGEMENT_ROUTES.filter(
-  (route): route is GoOwnedManagementRoute => route.mutates === false && route.go !== undefined,
+  (route): route is GoOwnedManagementRoute => route.go !== undefined,
 );
 
 /**

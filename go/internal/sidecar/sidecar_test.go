@@ -3,6 +3,7 @@ package sidecar
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,8 @@ import (
 	"regexp"
 	"testing"
 	"time"
+
+	"github.com/lidge-jun/opencodex/go/internal/managementauth"
 )
 
 // requestURLs each case against the handler and returns the raw response.
@@ -20,6 +23,116 @@ func do(t *testing.T, h http.Handler, method, path string) *http.Response {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec.Result()
+}
+
+func writeRelayHeaders(t *testing.T, token, secret, path string, body []byte, nonce string) http.Header {
+	t.Helper()
+	expiresAt := time.Now().Add(10 * time.Second).UnixMilli()
+	proof := managementauth.WriteRelayProof{Nonce: nonce, Principal: managementauth.PrincipalAdminToken, Method: http.MethodPut, Path: path, ExpiresAt: expiresAt}
+	proof.Proof = managementauth.CreateWriteRelayProof(secret, proof, body)
+	if proof.Proof == "" {
+		t.Fatal("write relay proof was empty")
+	}
+	headers := make(http.Header)
+	headers.Set(SidecarRequestHeader, token)
+	headers.Set(managementauth.WriteRelayNonceHeader, proof.Nonce)
+	headers.Set(managementauth.WriteRelayPrincipalHeader, string(proof.Principal))
+	headers.Set(managementauth.WriteRelayExpiresAtHeader, fmt.Sprintf("%d", proof.ExpiresAt))
+	headers.Set(managementauth.WriteRelayProofHeader, proof.Proof)
+	headers.Set("Content-Type", "application/json")
+	return headers
+}
+
+func TestConfigWriteRelayVerifiesProofAndRelaysOnlyTheAllowlist(t *testing.T) {
+	const requestToken = "parent-to-sidecar"
+	const bridgeToken = "sidecar-to-parent"
+	const body = "{\"streamMode\":\"eager-relay\"}"
+	var bridgeCalls int
+	bridge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		bridgeCalls++
+		if r.Method != http.MethodPut || r.URL.Path != privateWriteBridgePath {
+			t.Errorf("bridge request = %s %s", r.Method, r.URL.String())
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if r.Header.Get(SidecarBridgeHeader) != bridgeToken {
+			t.Error("bridge token missing")
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		if r.Header.Get(managementauth.WriteRelayPrincipalHeader) != string(managementauth.PrincipalAdminToken) {
+			t.Errorf("principal = %q", r.Header.Get(managementauth.WriteRelayPrincipalHeader))
+		}
+		if got, _ := io.ReadAll(r.Body); string(got) != body {
+			t.Errorf("bridge body = %s, want %s", got, body)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Retry-After", "1")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte("{\"error\":\"configuration is busy\"}"))
+	}))
+	defer bridge.Close()
+
+	h := NewHandler(Config{ParentURL: bridge.URL, BridgeToken: bridgeToken, RequestToken: requestToken, WriteRelaySecret: bridgeToken})
+	path := "/api/settings"
+	req := httptest.NewRequest(http.MethodPut, path, bytes.NewBufferString(body))
+	req.Header = writeRelayHeaders(t, requestToken, bridgeToken, path, []byte(body), fmt.Sprintf("%043d", 1))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	resp := rec.Result()
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusConflict || string(raw) != "{\"error\":\"configuration is busy\"}" {
+		t.Fatalf("response = %d %s", resp.StatusCode, raw)
+	}
+	if got := resp.Header.Get("Retry-After"); got != "1" {
+		t.Fatalf("Retry-After = %q, want 1", got)
+	}
+	if bridgeCalls != 1 {
+		t.Fatalf("bridge calls = %d, want 1", bridgeCalls)
+	}
+
+	replayed := httptest.NewRequest(http.MethodPut, path, bytes.NewBufferString(body))
+	replayed.Header = req.Header.Clone()
+	replayRec := httptest.NewRecorder()
+	h.ServeHTTP(replayRec, replayed)
+	if replayRec.Code != http.StatusUnauthorized {
+		t.Fatalf("replay status = %d, want 401", replayRec.Code)
+	}
+	blocked := httptest.NewRequest(http.MethodPost, "/api/providers", bytes.NewBufferString(body))
+	blocked.Header = writeRelayHeaders(t, requestToken, bridgeToken, "/api/providers", []byte(body), fmt.Sprintf("%043d", 2))
+	blockedRec := httptest.NewRecorder()
+	h.ServeHTTP(blockedRec, blocked)
+	if blockedRec.Code != http.StatusNotFound {
+		t.Fatalf("non-allowlisted write status = %d, want 404", blockedRec.Code)
+	}
+	if bridgeCalls != 1 {
+		t.Fatalf("blocked write reached bridge (%d calls)", bridgeCalls)
+	}
+}
+
+func TestConfigWriteRelayRejectsMissingTokenOrChangedBody(t *testing.T) {
+	const requestToken = "parent-to-sidecar"
+	const bridgeToken = "sidecar-to-parent"
+	body := []byte("{\"enabled\":true}")
+	h := NewHandler(Config{ParentURL: "http://127.0.0.1:1", BridgeToken: bridgeToken, RequestToken: requestToken, WriteRelaySecret: bridgeToken})
+	path := "/api/shadow-call-settings"
+	missing := httptest.NewRequest(http.MethodPut, path, bytes.NewReader(body))
+	missingRec := httptest.NewRecorder()
+	h.ServeHTTP(missingRec, missing)
+	if missingRec.Code != http.StatusNotFound {
+		t.Fatalf("missing request token status = %d, want 404", missingRec.Code)
+	}
+	changed := httptest.NewRequest(http.MethodPut, path, bytes.NewBufferString("{\"enabled\":false}"))
+	changed.Header = writeRelayHeaders(t, requestToken, bridgeToken, path, body, fmt.Sprintf("%043d", 1))
+	changedRec := httptest.NewRecorder()
+	h.ServeHTTP(changedRec, changed)
+	if changedRec.Code != http.StatusUnauthorized {
+		t.Fatalf("changed body status = %d, want 401", changedRec.Code)
+	}
 }
 
 func TestHealthShape(t *testing.T) {

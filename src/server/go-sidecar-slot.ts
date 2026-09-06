@@ -24,7 +24,11 @@
  * Go-owned.
  */
 
-export type GoOwnedRouteForwarder = (method: string, pathAndSearch: string) => Promise<Response | null>;
+export type GoOwnedRouteForwarder = (
+  request: Request,
+  pathAndSearch: string,
+  principal?: import("./management-auth").ManagementPrincipal,
+) => Promise<Response | null>;
 
 let forwarder: GoOwnedRouteForwarder | null = null;
 
@@ -41,10 +45,14 @@ export function setGoOwnedRouteForwarder(next: GoOwnedRouteForwarder): () => voi
  * Forward one declared Go-owned request to the attached sidecar, or null when
  * no subsystem is active or the sidecar is unreachable. Never throws.
  */
-export async function tryForwardGoOwnedRoute(method: string, pathAndSearch: string): Promise<Response | null> {
+export async function tryForwardGoOwnedRoute(
+  request: Request,
+  pathAndSearch: string,
+  principal?: import("./management-auth").ManagementPrincipal,
+): Promise<Response | null> {
   if (!forwarder) return null;
   try {
-    return await forwarder(method, pathAndSearch);
+    return await forwarder(request, pathAndSearch, principal);
   } catch {
     return null;
   }

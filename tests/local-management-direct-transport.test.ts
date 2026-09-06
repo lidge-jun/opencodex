@@ -55,6 +55,40 @@ describe("local management direct transport", () => {
       await server.stop(true);
     }
   });
+
+  test("sends a signed JSON PUT directly with its exact content length", async () => {
+    let observed: { method: string; contentLength: string | null; relay: string | null; body: string } | null = null;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        observed = {
+          method: request.method,
+          contentLength: request.headers.get("content-length"),
+          relay: request.headers.get("x-ocx-go-relay-signature"),
+          body: await request.text(),
+        };
+        return Response.json({ ok: true });
+      },
+    });
+    const body = JSON.stringify({ streamMode: "passthrough" });
+    try {
+      const response = await directLocalHttpFetch(`http://127.0.0.1:${server.port}/api/settings`, {
+        method: "PUT",
+        headers: { "content-type": "application/json", "x-ocx-go-relay-signature": "supervisor-signature" },
+        body,
+      });
+      expect(response.status).toBe(200);
+      expect(observed).toEqual({
+        method: "PUT",
+        contentLength: String(Buffer.byteLength(body)),
+        relay: "supervisor-signature",
+        body,
+      });
+    } finally {
+      await server.stop(true);
+    }
+  });
   test("preserves an AbortError for an already-cancelled request", async () => {
     const controller = new AbortController();
     controller.abort();

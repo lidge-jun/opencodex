@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SERVER_BUDGET_MS } from "./helpers/test-budget";
 import { saveConfig } from "../src/config";
+import { getConfigPath } from "../src/config/paths";
 import { startServer } from "../src/server";
 import { VERSION } from "../src/server/management-api";
 import { GO_OWNED_MANAGEMENT_ROUTES } from "../src/server/management/route-registry";
@@ -148,6 +149,26 @@ async function captureHealth(server: { url: URL }, token: string): Promise<Healt
     contentType: response.headers.get("content-type"),
     body,
     parsed: JSON.parse(body) as HealthCapture["parsed"],
+  };
+}
+
+async function captureMutation(
+  server: { url: URL },
+  token: string,
+  method: "POST" | "PUT" | "PATCH",
+  pathname: string,
+  body: unknown,
+): Promise<{ status: number; contentType: string | null; retryAfter: string | null; body: string }> {
+  const response = await fetch(new URL(pathname, server.url), {
+    method,
+    headers: { "x-opencodex-api-key": token, "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return {
+    status: response.status,
+    contentType: response.headers.get("content-type"),
+    retryAfter: response.headers.get("retry-after"),
+    body: await response.text(),
   };
 }
 
@@ -314,6 +335,119 @@ describe.skipIf(!goAvailable || sidecarBinary === null)("ocx-sidecar differentia
       expect(activeGoSidecarBaseUrl()).toBeNull();
     } finally {
       await server.stop(true);
+    }
+  });
+
+  runFixtureTest("shadow-call write has a state-reset differential oracle", async (token) => {
+    // Run the exact mutation first through TypeScript, then restore the initial
+    // bytes and run it through the Go public surface. This compares status,
+    // response headers/body, and the post-write config bytes rather than
+    // treating a validation-only no-op as evidence of write parity.
+    const initial = readFileSync(getConfigPath());
+    const tsServer = startServer(0);
+    let tsWrite: Awaited<ReturnType<typeof captureWrite>>;
+    let tsPostState: Buffer;
+    try {
+      tsWrite = await captureMutation(tsServer, token, "PUT", "/api/shadow-call-settings", { enabled: false });
+      tsPostState = readFileSync(getConfigPath());
+    } finally {
+      await tsServer.stop(true);
+    }
+
+    writeFileSync(getConfigPath(), initial);
+    process.env[GO_SIDECAR_BIN_ENV] = sidecarBinary!;
+    const goServer = startServer(0);
+    try {
+      await waitFor(() => activeGoSidecarBaseUrl(), 15_000);
+      const goWrite = await captureMutation(goServer, token, "PUT", "/api/shadow-call-settings", { enabled: false });
+      const goPostState = readFileSync(getConfigPath());
+      expect(goWrite).toEqual(tsWrite!);
+      expect(goPostState.equals(tsPostState!)).toBe(true);
+    } finally {
+      await goServer.stop(true);
+    }
+  });
+
+  runFixtureTest("settings write has a state-reset differential oracle", async (token) => {
+    const initial = readFileSync(getConfigPath());
+    const tsServer = startServer(0);
+    let tsWrite: Awaited<ReturnType<typeof captureMutation>>;
+    let tsPostState: Buffer;
+    try {
+      tsWrite = await captureMutation(tsServer, token, "PUT", "/api/settings", { streamMode: "eager-relay" });
+      tsPostState = readFileSync(getConfigPath());
+    } finally {
+      await tsServer.stop(true);
+    }
+    writeFileSync(getConfigPath(), initial);
+    process.env[GO_SIDECAR_BIN_ENV] = sidecarBinary!;
+    const goServer = startServer(0);
+    try {
+      await waitFor(() => activeGoSidecarBaseUrl(), 15_000);
+      const goWrite = await captureMutation(goServer, token, "PUT", "/api/settings", { streamMode: "eager-relay" });
+      expect(goWrite).toEqual(tsWrite!);
+      expect(readFileSync(getConfigPath()).equals(tsPostState!)).toBe(true);
+    } finally {
+      await goServer.stop(true);
+    }
+  });
+
+  runFixtureTest("sidecar-settings write has a state-reset differential oracle", async (token) => {
+    const initial = readFileSync(getConfigPath());
+    const tsServer = startServer(0);
+    let tsWrite: Awaited<ReturnType<typeof captureMutation>>;
+    let tsPostState: Buffer;
+    try {
+      tsWrite = await captureMutation(tsServer, token, "PUT", "/api/sidecar-settings", {
+        webSearch: { streamRoutedModelOutput: true },
+      });
+      tsPostState = readFileSync(getConfigPath());
+    } finally {
+      await tsServer.stop(true);
+    }
+    writeFileSync(getConfigPath(), initial);
+    process.env[GO_SIDECAR_BIN_ENV] = sidecarBinary!;
+    const goServer = startServer(0);
+    try {
+      await waitFor(() => activeGoSidecarBaseUrl(), 15_000);
+      const goWrite = await captureMutation(goServer, token, "PUT", "/api/sidecar-settings", {
+        webSearch: { streamRoutedModelOutput: true },
+      });
+      expect(goWrite).toEqual(tsWrite!);
+      expect(readFileSync(getConfigPath()).equals(tsPostState!)).toBe(true);
+    } finally {
+      await goServer.stop(true);
+    }
+  });
+
+  runFixtureTest("quota validation and account-pool state-reset vectors match through Go", async (token) => {
+    const initial = readFileSync(getConfigPath());
+    const tsServer = startServer(0);
+    let quotaTs: Awaited<ReturnType<typeof captureMutation>>;
+    let poolTs: Awaited<ReturnType<typeof captureMutation>>;
+    let poolPostState: Buffer;
+    try {
+      quotaTs = await captureMutation(tsServer, token, "POST", "/api/codex-auth/reset-credits/consume", {});
+      poolTs = await captureMutation(tsServer, token, "PUT", "/api/oauth/accounts/pool", { provider: "anthropic", enabled: true, strategy: "round-robin" });
+      poolPostState = readFileSync(getConfigPath());
+    } finally {
+      await tsServer.stop(true);
+    }
+    writeFileSync(getConfigPath(), initial);
+    process.env[GO_SIDECAR_BIN_ENV] = sidecarBinary!;
+    const goServer = startServer(0);
+    try {
+      await waitFor(() => activeGoSidecarBaseUrl(), 15_000);
+      expect(await captureMutation(goServer, token, "POST", "/api/codex-auth/reset-credits/consume", {})).toEqual(quotaTs!);
+      expect(await captureMutation(goServer, token, "PUT", "/api/oauth/accounts/pool", { provider: "anthropic", enabled: true, strategy: "round-robin" })).toEqual(poolTs!);
+      expect(readFileSync(getConfigPath()).equals(poolPostState!)).toBe(true);
+
+      const beforeFailure = readFileSync(getConfigPath());
+      const failed = await captureMutation(goServer, token, "PUT", "/api/oauth/accounts/pool", { provider: "anthropic", enabled: false, strategy: "invalid" });
+      expect(failed.status).toBe(400);
+      expect(readFileSync(getConfigPath()).equals(beforeFailure)).toBe(true);
+    } finally {
+      await goServer.stop(true);
     }
   });
 
