@@ -4,13 +4,14 @@ import type { FailureEvent, FailureFingerprint } from "./types";
 const SENSITIVE_PATTERNS: Array<[RegExp, string]> = [
   [/\b(?:bearer\s+|basic\s+|api[_-]?key\s*[:=]\s*|token\s*[:=]\s*|secret\s*[:=]\s*)[^\s,;]+/gi, "[redacted]"],
   [/\bsk-[a-zA-Z0-9_-]{8,}\b/g, "[redacted-key]"],
+  [/[\p{L}\p{N}._%+-]+@[\p{L}\p{N}.-]+\.[\p{L}]{2,}/gu, "[redacted-email]"],
   [/\b(?:request|session)[_-]?id\s*[:=]\s*[^\s,;]+/gi, ""],
   [/\b(?:timestamp|time)\s*[:=]\s*[^\s,;]+/gi, ""],
   [/\b\d{10,13}\b/g, ""],
   [/(:\d+\s*:\s*\d+)(?=\b|\D)/g, ""],
   [/\b(?:line|col(?:umn)?)\s*[:=]?\s*\d+/gi, ""],
-  [/\/(?:[a-zA-Z0-9._-]+(?: [a-zA-Z0-9._-]+)*\/){1,}[a-zA-Z0-9._-]+(?: [a-zA-Z0-9._-]+)*/g, "[path]"],
-  [/[a-zA-Z]:\\(?:[a-zA-Z0-9._-]+(?: [a-zA-Z0-9._-]+)*\\)+[a-zA-Z0-9._-]+(?: [a-zA-Z0-9._-]+)*/g, "[path]"],
+  [/(?:\/[\p{L}\p{N}\p{M}._-]+(?: [\p{L}\p{N}\p{M}._-]+)*)+\/[\p{L}\p{N}\p{M}._-]+/gu, "[path]"],
+  [/[a-zA-Z]:\\(?:[\p{L}\p{N}\p{M}._-]+(?: [\p{L}\p{N}\p{M}._-]+)*\\)+[\p{L}\p{N}\p{M}._-]+/gu, "[path]"],
 ];
 
 const MAX_SIGNATURE_LEN = 1024;
