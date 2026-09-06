@@ -21,11 +21,14 @@ package config
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 )
 
 // OrderedValue is one JSON value with object keys in document order. Only the
@@ -54,6 +57,14 @@ const (
 type orderedMember struct {
 	key string
 	val *OrderedValue
+}
+
+// OrderedEntry is one document-order object member. Projection routes use it
+// when TypeScript's Object.entries order is part of their wire contract.
+type OrderedEntry struct {
+	Key   string
+	Value *OrderedValue
+	index uint32
 }
 
 // LoadOrdered reads and decodes config.json into an ordered value tree (the
@@ -183,6 +194,78 @@ func (v *OrderedValue) Find(key string) *OrderedValue {
 		}
 	}
 	return nil
+}
+
+// Entries returns the object's members in document order. A non-object has no
+// entries. The returned slice is a copy so callers cannot mutate the tree.
+func (v *OrderedValue) Entries() []OrderedEntry {
+	if v == nil || v.kind != orderedObject {
+		return nil
+	}
+	entries := make([]OrderedEntry, len(v.obj))
+	for i, member := range v.obj {
+		entries[i] = OrderedEntry{Key: member.key, Value: member.val}
+	}
+	return entries
+}
+
+// Elements returns an array's values in document order. A non-array has no
+// elements. The returned slice is a copy.
+func (v *OrderedValue) Elements() []*OrderedValue {
+	if v == nil || v.kind != orderedArray {
+		return nil
+	}
+	return append([]*OrderedValue(nil), v.arr...)
+}
+
+// StringValue returns a JSON string's decoded value.
+func (v *OrderedValue) StringValue() (string, bool) {
+	if v == nil || v.kind != orderedString {
+		return "", false
+	}
+	return v.str, true
+}
+
+// JSONStringifyString exports the package's ECMAScript-compatible string
+// escaping for projections that construct a new object around ordered values.
+func JSONStringifyString(value string) ([]byte, error) {
+	return marshalStringJSONStringify(value)
+}
+
+// ECMAScriptEntries returns object entries in Object.entries order: canonical
+// array-index keys first by numeric value, followed by other keys in document
+// order. Projection routes use it when mirroring TypeScript object iteration.
+func (v *OrderedValue) ECMAScriptEntries() []OrderedEntry {
+	entries := v.Entries()
+	if len(entries) < 2 {
+		return entries
+	}
+	indices := make([]OrderedEntry, 0, len(entries))
+	rest := make([]OrderedEntry, 0, len(entries))
+	for _, entry := range entries {
+		if index, ok := ecmaArrayIndex(entry.Key); ok {
+			entry.index = index
+			indices = append(indices, entry)
+		} else {
+			rest = append(rest, entry)
+		}
+	}
+	slices.SortFunc(indices, func(a, b OrderedEntry) int { return cmp.Compare(a.index, b.index) })
+	return append(indices, rest...)
+}
+
+func ecmaArrayIndex(key string) (uint32, bool) {
+	if key == "0" {
+		return 0, true
+	}
+	if key == "" || key[0] == '0' {
+		return 0, false
+	}
+	value, err := strconv.ParseUint(key, 10, 32)
+	if err != nil || value >= 4294967295 || strconv.FormatUint(value, 10) != key {
+		return 0, false
+	}
+	return uint32(value), true
 }
 
 // IsNull reports whether the value is the JSON null literal.

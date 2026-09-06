@@ -492,3 +492,18 @@ func TestCustomModelsSurfaceIsNarrow(t *testing.T) {
 		}
 	}
 }
+
+func TestModelDiscoveryProjectionIsByteExact(t *testing.T) {
+	dir := t.TempDir()
+	writeConfigFile(t, dir, "{\"providers\":{\"zeta\":{\"newModelPolicy\":\"off\"},\"alpha\":{}},\"disabledModels\":[\"zeta/new-model\",\"alpha/raw/model\"],\"modelDiscovery\":{\"newModelPolicy\":\"off\",\"recentArrivals\":{\"zeta\":[{\"id\":\"new/model\",\"at\":\"2026-09-06T00:00:00Z\"}],\"alpha\":[{\"id\":\"raw/model\",\"at\":\"2026-09-07T00:00:00Z\"}]},\"knownModels\":{\"zeta\":{\"ids\":[\"one\",\"two\"],\"removed\":[],\"updatedAt\":\"x\"},\"alpha\":{\"ids\":[],\"removed\":[],\"updatedAt\":\"x\"}}}}")
+	resp := do(t, NewHandler(Config{ConfigDir: dir}), http.MethodGet, "/api/model-discovery")
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "{\"policy\":\"off\",\"providers\":{\"zeta\":\"off\",\"alpha\":\"inherit\"},\"recentArrivals\":{\"zeta\":[{\"id\":\"new/model\",\"at\":\"2026-09-06T00:00:00Z\",\"state\":\"auto-disabled\"}],\"alpha\":[{\"id\":\"raw/model\",\"at\":\"2026-09-07T00:00:00Z\",\"state\":\"auto-disabled\"}]},\"baselineCounts\":{\"zeta\":2,\"alpha\":0}}"
+	if string(raw) != want {
+		t.Fatalf("body = %s\\nwant  %s", raw, want)
+	}
+}

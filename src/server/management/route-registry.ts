@@ -292,7 +292,9 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   // JSON.stringify escaping match exactly; absent or null customModels coalesce
   // to [] like the TS nullish operator.
   { method: "GET", path: "/api/custom-models", module: "server/management/model-routes", mutates: false, go: { volatileFields: [] } },
-  { method: "GET", path: "/api/model-discovery", module: "server/management/model-routes", mutates: false },
+  // Pure persisted-config projection: output order is covered by the strict
+  // sidecar differential oracle, including arrival state from disabledModels.
+  { method: "GET", path: "/api/model-discovery", module: "server/management/model-routes", mutates: false, go: { volatileFields: [] } },
   { method: "GET", path: "/api/model-presets", module: "server/management/model-routes", mutates: false },
   { method: "GET", path: "/api/models", module: "server/management/model-routes", mutates: false },
   { method: "GET", path: "/api/selected-models", module: "server/management/model-routes", mutates: false },

@@ -80,7 +80,8 @@ completion of each batch. Deferred routes migrate with the binary at the flip
 | `GET /api/models` | defer (live catalog) | `listManagementModelRows(config)` over the converged live catalog (fetchAllModels family). #17's own acceptance says "catalog reads reflect live state" — that lives with the catalog store at the flip. |
 | `GET /api/catalog` | defer (persisted-catalog serializer) | `serializePersistedCatalog()` from `src/server/catalog-download.ts` — a large deterministic serializer over the Codex-converged catalog; port is flip-scale model-store work, plus corsHeaders sharing. |
 | `GET /api/client-config` | defer (catalog rows) | rows over the converged catalog. |
-| `GET /api/model-discovery` / `/api/selected-models` / `/api/model-presets` | defer (live catalog + discovery) | `fetchAllModels(config)`, `getProviderLiveModelCount`, `materializeModelPreset` over the live catalog. |
+| `GET /api/model-discovery` | **Go-owned, strict** | pure persisted config projection: policy, per-provider overrides, stored arrival/baseline rows, and `disabledModels`-derived state; no catalog/cache lookup. |
+| `GET /api/selected-models` / `/api/model-presets` | defer (live catalog + discovery) | `getProviderLiveModelCount`, `materializeModelPreset` over the live catalog. |
 | `GET /api/aliases` | defer (live /models cache) | `knownModelIdsForProvider` unions in `getStaleCached(provName)` (router.ts:99) — the last-known-good live /models cache; catalog drift handling (`builtinRule`) is registry-side. |
 | `GET /api/providers` | defer (live keys in one body) | config-derived keys share one object with live `discovery` status and openai entitlement state. |
 | `GET /api/provider-context-caps` | defer (in-memory caps module) | live context-capability state. |
@@ -90,9 +91,9 @@ completion of each batch. Deferred routes migrate with the binary at the flip
 
 ## Registry and oracle state after this run
 
-Three read routes are Go-owned: `/api/system/health` (volatile pid/uptime),
-`/api/shadow-call-settings` (strict), `/api/custom-models` (strict). The strict
-pair exercises the empty-volatile contract against real wire bytes. Nothing in
+Four read routes are Go-owned: `/api/system/health` (volatile pid/uptime),
+`/api/shadow-call-settings`, `/api/custom-models`, and `/api/model-discovery` (strict). The strict
+trio exercises the empty-volatile contract against real wire bytes. Nothing in
 `management-api.ts` names a route (pinned by test 7 of
 `tests/go-ownership-plumbing.test.ts`); adding the next route stays a marker
 flip + Go handler + oracle cases.

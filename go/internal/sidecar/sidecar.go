@@ -2,9 +2,8 @@
 // incremental runtime takeover (ADR-0008, devlog/_plan/260905_go_sidecar_takeover).
 //
 // Today it owns GET /api/system/health (volatile pid/uptime normalised by the
-// oracle), GET /api/shadow-call-settings (a pure function of config.json,
-// compared with no normalisation at all) and GET /api/custom-models (the raw
-// config.customModels echo, also compared byte-for-byte). Each handler must
+// oracle), GET /api/shadow-call-settings, GET /api/custom-models and GET
+// /api/model-discovery (strict config-derived reads). Each handler must
 // reproduce the TypeScript handler's HTTP semantics byte-for-byte: the shape,
 // key order, and number formatting of the JSON body are part of the contract.
 package sidecar
@@ -178,6 +177,21 @@ func NewHandler(cfg Config) http.Handler {
 			}
 		}
 		writeRawJSON(w, raw, "custom-models")
+	})
+
+	// The management route only projects persisted policy/baseline/arrival data;
+	// it does not discover models or consult a live catalog.
+	mux.HandleFunc("GET /api/model-discovery", func(w http.ResponseWriter, r *http.Request) {
+		root, err := loadSidecarOrdered(cfg.ConfigDir)
+		if err != nil {
+			root = nil
+		}
+		raw, err := modelDiscoveryPayload(root)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ocx-sidecar: marshal model-discovery projection: %v\n", err)
+			return
+		}
+		writeRawJSON(w, raw, "model-discovery")
 	})
 
 	// Ticket #20: provider quota aggregation remains process state until the

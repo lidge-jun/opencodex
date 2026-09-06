@@ -40,7 +40,7 @@ describe("read-surface differential matrix (ticket #25)", () => {
     const matrixGoNow = READ_SURFACE_DIFF_MATRIX.filter(row => row.transition === "go-now").map(row => key(row.method, row.path)).sort();
     const registryGoReads = MANAGEMENT_ROUTES.filter(route => !route.mutates && route.go).map(route => key(route.method, route.path)).sort();
     expect(matrixGoNow).toEqual(registryGoReads);
-    expect(matrixGoNow).toHaveLength(4);
+    expect(matrixGoNow).toHaveLength(5);
   });
 
   test("records runtime-flip evidence in tracked repository documentation", () => {

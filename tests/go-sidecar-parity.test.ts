@@ -140,6 +140,8 @@ async function captureProviderQuotas(server: { url: URL }, token: string, suffix
   return captureJson(server, token, "/api/provider-quotas" + suffix);
 }
 
+async function captureModelDiscovery(server: { url: URL }, token: string) { return captureJson(server, token, "/api/model-discovery"); }
+
 async function captureHealth(server: { url: URL }, token: string): Promise<HealthCapture> {
   const response = await fetch(new URL("/api/system/health", server.url), {
     headers: { "x-opencodex-api-key": token },
@@ -718,4 +720,31 @@ describe.skipIf(!goAvailable || sidecarBinary === null)("ocx-sidecar differentia
       await serverA.stop(true);
     }
   });
+  runFixtureTest("model-discovery configured body is byte-identical across TypeScript and Go", async (token) => {
+    saveConfig({
+      ...configFixture(), defaultProvider: "10",
+      providers: {
+        "10": { adapter: "openai-chat", baseUrl: "https://ten.example/v1", disabled: true, newModelPolicy: "off" },
+        "2": { adapter: "openai-chat", baseUrl: "https://two.example/v1", disabled: true },
+      },
+      disabledModels: ["10/new-model", "2/raw/model"],
+      modelDiscovery: {
+        newModelPolicy: "off",
+        recentArrivals: { "10": [{ "10": "ten", id: "new/model", at: "2026-09-06T00:00:00Z", "2": "two" }], "2": [{ id: "raw/model", at: "2026-09-07T00:00:00Z" }] },
+        knownModels: { "10": { ids: ["one", "two"], removed: [], updatedAt: "x" }, "2": { ids: [], removed: [], updatedAt: "x" } },
+      },
+    });
+    expect(GO_OWNED_MANAGEMENT_ROUTES.find(route => route.method === "GET" && route.path === "/api/model-discovery")?.go.volatileFields).toEqual([]);
+    const serverA = startServer(0);
+    try {
+      const ts = await captureModelDiscovery(serverA, token);
+      process.env[GO_SIDECAR_BIN_ENV] = sidecarBinary!;
+      const serverB = startServer(0);
+      try {
+        await waitFor(() => activeGoSidecarBaseUrl(), 15_000);
+        expect(await captureModelDiscovery(serverB, token)).toEqual(ts);
+      } finally { await serverB.stop(true); }
+    } finally { await serverA.stop(true); }
+  });
+
 });
