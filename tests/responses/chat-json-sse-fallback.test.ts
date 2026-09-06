@@ -4,6 +4,8 @@ import { createTranslatorBudget, isTranslatorBudgetExceededError, translatorObse
 import type { OcxConfig } from "../../src/types";
 import { responsesJsonToChatCompletion, isChatCompletionsStreamError } from "../../src/chat/outbound";
 import { jsonCompletionSse } from "../../src/server/chat-native-sse";
+import { getRequestLogEntries } from "../../src/server/request-log";
+import { readUsageEntries } from "../../src/usage/log";
 
 let upstream: ReturnType<typeof Bun.serve> | undefined;
 afterEach(async () => { await upstream?.stop(true); upstream = undefined; });
@@ -18,6 +20,7 @@ interface Chunk {
 
 async function streamFixture(output: unknown[], status = "completed", cancel = false, reason = "max_output_tokens", delivery: { jsonFinish?: string; error?: boolean } = {}): Promise<Chunk[]> {
   const budgetBefore = translatorObservedBufferSnapshot().currentBytes;
+  const requestId = `chat-json-fixture-${crypto.randomUUID()}`;
   let requests = 0;
   upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
     expect(new URL(req.url).pathname).toBe("/v1/responses");
@@ -35,10 +38,19 @@ async function streamFixture(output: unknown[], status = "completed", cancel = f
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ model: "fixture/model", stream: !delivery.jsonFinish, messages: [{ role: "user", content: "fixture" }],
       tools: [{ type: "function", function: { name: "lookup", parameters: { type: "object" } } }] }),
-  }), config, { model: "", provider: "" });
+  }), config, { model: "", provider: "" }, { requestId, start: Date.now() });
+  const assertSingleFinal = () => {
+    const rows = getRequestLogEntries().filter(entry => entry.requestId === requestId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.status).toBe(delivery.error ? 502 : 200);
+    const persisted = readUsageEntries().filter(entry => entry.requestId === requestId);
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]?.status).toBe(delivery.error ? 502 : 200);
+  };
   if (delivery.error) {
     expect(response.status).toBe(502);
     expect(await response.json()).toMatchObject({ error: { type: "upstream_error", code: "upstream_incomplete" } });
+    assertSingleFinal();
     expect(requests).toBe(1);
     expect(translatorObservedBufferSnapshot().currentBytes).toBe(budgetBefore);
     return [];
@@ -46,6 +58,7 @@ async function streamFixture(output: unknown[], status = "completed", cancel = f
   expect(response.status).toBe(200);
   if (delivery.jsonFinish) {
     expect(await response.json()).toMatchObject({ choices: [{ finish_reason: delivery.jsonFinish }] });
+    assertSingleFinal();
     expect(requests).toBe(1);
     expect(translatorObservedBufferSnapshot().currentBytes).toBe(budgetBefore);
     return [];
@@ -53,11 +66,13 @@ async function streamFixture(output: unknown[], status = "completed", cancel = f
   expect(response.headers.get("content-type")).toContain("text/event-stream");
   if (cancel) {
     await response.body!.cancel("fixture cancellation");
+    assertSingleFinal();
     expect(requests).toBe(1);
     expect(translatorObservedBufferSnapshot().currentBytes).toBe(budgetBefore);
     return [];
   }
   const text = await response.text();
+  assertSingleFinal();
   expect(translatorObservedBufferSnapshot().currentBytes).toBe(budgetBefore);
   expect(requests).toBe(1);
   const payloads = text.split(/\r?\n/).filter(line => line.startsWith("data: ")).map(line => line.slice(6));
@@ -195,3 +210,20 @@ test.each([["max_output_tokens", "length"], ["content_filter", "content_filter"]
       "incomplete", false, reason, { jsonFinish: finish });
   },
 );
+
+
+test("JSON projection accounts split Unicode and ignores empty fragments", () => {
+  const budget = createTranslatorBudget({ maxTurnBytes: 8192 });
+  try {
+    const completion = responsesJsonToChatCompletion({ output: [
+      { type: "message", content: [
+        { type: "output_text", text: "\ud83d" },
+        ...Array.from({ length: 100 }, () => ({ type: "output_text", text: "" })),
+        { type: "output_text", text: "\ude00" },
+      ] },
+      { type: "reasoning", summary: [{ type: "summary_text", text: "\ud83d" }, { type: "summary_text", text: "\ude00" }] },
+    ] }, "model", budget);
+    expect(completion.choices).toMatchObject([{ message: { content: "😀", reasoning_content: "😀" } }]);
+    expect(budget.snapshot().currentBytes).toBe(8);
+  } finally { budget.dispose(); }
+});

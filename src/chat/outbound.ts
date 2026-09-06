@@ -574,16 +574,19 @@ export function responsesJsonToChatCompletion(json: unknown, model: string, tran
   const output = Array.isArray(body.output) ? body.output : [];
   let content = "";
   let reasoning = "";
+  let contentBytes = 0;
+  let reasoningBytes = 0;
   const toolCalls: Rec[] = [];
-  const append = (previous: string, fragment: string): string => {
+  const append = (previous: string, previousBytes: number, fragment: string): { text: string; bytes: number } => {
+    if (!fragment) return { text: previous, bytes: previousBytes };
     const scope = { kind: "retained_collectors" as const };
-    const nextBytes = appendedUtf8Bytes(previous, Buffer.byteLength(previous), fragment);
+    const nextBytes = appendedUtf8Bytes(previous, previousBytes, fragment);
     const reservation = translatorBudget?.reserveTransient(nextBytes, scope);
     try {
       const next = previous + fragment;
       reservation?.commitRetained();
-      translatorBudget?.releaseRetained(Buffer.byteLength(previous), scope);
-      return next;
+      translatorBudget?.releaseRetained(previousBytes, scope);
+      return { text: next, bytes: nextBytes };
     } catch (error) {
       reservation?.release();
       throw error;
@@ -595,21 +598,21 @@ export function responsesJsonToChatCompletion(json: unknown, model: string, tran
     if (raw.type === "message" && Array.isArray(raw.content)) {
       for (const part of raw.content) {
         if (isRec(part) && part.type === "output_text" && typeof part.text === "string") {
-          content = append(content, part.text);
+          ({ text: content, bytes: contentBytes } = append(content, contentBytes, part.text));
         }
       }
     } else if (raw.type === "reasoning") {
       if (Array.isArray(raw.summary)) {
         for (const part of raw.summary) {
           if (isRec(part) && part.type === "summary_text" && typeof part.text === "string") {
-            reasoning = append(reasoning, part.text);
+            ({ text: reasoning, bytes: reasoningBytes } = append(reasoning, reasoningBytes, part.text));
           }
         }
       }
       if (Array.isArray(raw.content)) {
         for (const part of raw.content) {
           if (isRec(part) && part.type === "reasoning_text" && typeof part.text === "string") {
-            reasoning = append(reasoning, part.text);
+            ({ text: reasoning, bytes: reasoningBytes } = append(reasoning, reasoningBytes, part.text));
           }
         }
       }
