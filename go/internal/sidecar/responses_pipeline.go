@@ -64,17 +64,9 @@ func (p responseRepairPipeline) repairValue(v *jsonwire.Value) bool {
 	case jsonwire.Object:
 		if typ, ok := stringMember(v, "type"); ok {
 			if p.reasoning && typ == "response.reasoning_text.delta" {
-				v.Set("type", jsonwire.StringValue("response.reasoning_summary_text.delta"))
-				if v.Find("summary_index") == nil {
-					v.Set("summary_index", jsonwire.NumberFrom(0))
-				}
-				changed = true
+				changed = rewriteReasoningDelta(v) || changed
 			} else if p.reasoning && typ == "response.reasoning_text.done" {
-				v.Set("type", jsonwire.StringValue("response.reasoning_summary_text.done"))
-				if v.Find("summary_index") == nil {
-					v.Set("summary_index", jsonwire.NumberFrom(0))
-				}
-				changed = true
+				changed = rewriteReasoningDone(v) || changed
 			}
 		}
 		// Image-gen aliases are representation-only and are restored before
@@ -96,6 +88,40 @@ func (p responseRepairPipeline) repairValue(v *jsonwire.Value) bool {
 		}
 	}
 	return changed
+}
+
+// Reasoning delta/done rewrites intentionally construct a fresh payload. The
+// TypeScript transform whitelists the client-facing fields and drops provider
+// extensions, so mutating the original object would diverge byte-for-byte.
+func rewriteReasoningDelta(v *jsonwire.Value) bool {
+	return rewriteReasoningEvent(v, "response.reasoning_summary_text.delta", "delta")
+}
+
+func rewriteReasoningDone(v *jsonwire.Value) bool {
+	return rewriteReasoningEvent(v, "response.reasoning_summary_text.done", "text")
+}
+
+func rewriteReasoningEvent(v *jsonwire.Value, typ, valueKey string) bool {
+	if v == nil || v.Kind() != jsonwire.Object {
+		return false
+	}
+	next := jsonwire.ObjectValue()
+	next.Set("type", jsonwire.StringValue(typ))
+	for _, key := range []string{"item_id", "output_index"} {
+		if value := v.Find(key); value != nil {
+			next.Set(key, value)
+		}
+	}
+	next.Set("summary_index", jsonwire.NumberFrom(0))
+	if value := v.Find(valueKey); value != nil {
+		next.Set(valueKey, value)
+	}
+	if sequence := v.Find("sequence_number"); sequence != nil {
+		next.Set("sequence_number", sequence)
+	}
+	// Replace the live object while retaining the caller's pointer identity.
+	*v = *next
+	return true
 }
 
 func rewriteModelField(v *jsonwire.Value, modelID string) bool {

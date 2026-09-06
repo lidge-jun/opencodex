@@ -279,6 +279,13 @@ func unsupportedResponseRepairRefusal(provider *jsonwire.Value) *relayRefusal {
 	if provider == nil || provider.Kind() != jsonwire.Object {
 		return refuseRelay("response repair provider config unavailable")
 	}
+	if refusal := statefulResponseRepairRefusal(provider); refusal != nil {
+		return refusal
+	}
+	return nil
+}
+
+func statefulResponseRepairRefusal(provider *jsonwire.Value) *relayRefusal {
 	if repair := provider.Find("responsesItemIdRepair"); responsesItemIDRepairArmed(repair) {
 		return refuseRelay("provider enables responsesItemIdRepair")
 	}
@@ -372,11 +379,8 @@ func streamRelayRefusal(provider *jsonwire.Value, modelID string) *relayRefusal 
 	if provider == nil || provider.Kind() != jsonwire.Object {
 		return refuseRelay("stream provider config unavailable")
 	}
-	if repair := provider.Find("responsesItemIdRepair"); responsesItemIDRepairArmed(repair) {
-		return refuseRelay("provider enables responsesItemIdRepair")
-	}
-	if snapshot, ok := boolMember(provider, "responsesSnapshotRepair"); ok && snapshot {
-		return refuseRelay("provider enables responsesSnapshotRepair")
+	if refusal := statefulResponseRepairRefusal(provider); refusal != nil {
+		return refusal
 	}
 	if stateless, ok := boolMember(provider, "statelessResponses"); ok && stateless {
 		return refuseRelay("provider enables statelessResponses")
