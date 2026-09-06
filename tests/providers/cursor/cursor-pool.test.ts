@@ -202,6 +202,29 @@ describe("CursorPoolKernel", () => {
     expect(restored.accountRef).not.toBe(original.accountRef);
   });
 
+  test("removing an account below activation threshold invalidates earlier snapshot rollback", () => {
+    const s = setup();
+    const snap1 = s.kernel.activate("owner-a", "thread", s.capability)!;
+    expect(snap1).not.toBeNull();
+    const snap2 = s.kernel.activate("owner-b", "thread", s.capability)!;
+    expect(snap2).not.toBeNull();
+
+    s.setAccounts([
+      { id: "account-b", access: "access-b", expires: Number.MAX_SAFE_INTEGER },
+    ]);
+    expect(s.kernel.activate("owner-a", "thread", s.capability)).toBeNull();
+    expect(s.kernel.rollback(snap1, s.capability)).toBe(false);
+    expect(s.kernel.rollback(snap2, s.capability)).toBe(false);
+    expect(
+      s.kernel.note429(
+        snap1.refs[0]!,
+        "owner-a",
+        "thread",
+        s.capability,
+      ),
+    ).toBe(false);
+  });
+
   test("rejects NaN expiry in usable and unexpired checks", () => {
     const s = setup();
     s.setAccounts([
