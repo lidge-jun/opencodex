@@ -451,6 +451,111 @@ describe.skipIf(!goAvailable || sidecarBinary === null)("ocx-sidecar differentia
     }
   });
 
+  runFixtureTest("codex-auth account-pool write vectors have a state-reset differential oracle", async (token) => {
+    // Covers the declared Go-owned codex-auth writes not yet pinned by a
+    // differential: active (pin + write), pool-strategy PUT and PATCH (write),
+    // and the accounts/clear-cooldown verb (no config post-state under an empty
+    // fixture — it clears in-process routing health, so the oracle proves the
+    // response path and the no-write leg instead, exactly as the parity seam
+    // allows for a route with no on-disk mutation). Each vector runs against a
+    // freshly started server; the on-disk config is restored between the TS and
+    // the Go legs so both start from the same reset bytes.
+    const initial = readFileSync(getConfigPath());
+    const vectors: Array<{ method: "PUT" | "PATCH" | "POST"; path: string; body: unknown }> = [
+      { method: "PUT", path: "/api/codex-auth/active", body: { accountId: "__main__" } },
+      { method: "PUT", path: "/api/codex-auth/pool-strategy", body: { strategy: "quota" } },
+      { method: "PATCH", path: "/api/codex-auth/pool-strategy", body: { stickyLimit: 5 } },
+      { method: "POST", path: "/api/codex-auth/accounts/clear-cooldown", body: { id: "__main__" } },
+    ];
+    const tsServer = startServer(0);
+    const tsResults: Array<Awaited<ReturnType<typeof captureMutation>>> = [];
+    let tsFinalState: Buffer;
+    try {
+      for (const v of vectors) {
+        tsResults.push(await captureMutation(tsServer, token, v.method, v.path, v.body));
+      }
+      tsFinalState = readFileSync(getConfigPath());
+      // The write vectors persisted (active pin + pool strategy); prove the write
+      // leg actually changed the file, so a later equality is not vacuous.
+      expect(tsFinalState.equals(initial)).toBe(false);
+
+      // Failure leg: an invalid strategy must be rejected with no write.
+      const beforeFailure = readFileSync(getConfigPath());
+      const failed = await captureMutation(tsServer, token, "PATCH", "/api/codex-auth/pool-strategy", { strategy: "bogus" });
+      expect(failed.status).toBe(400);
+      expect(readFileSync(getConfigPath()).equals(beforeFailure)).toBe(true);
+    } finally {
+      await tsServer.stop(true);
+    }
+
+    writeFileSync(getConfigPath(), initial);
+    process.env[GO_SIDECAR_BIN_ENV] = sidecarBinary!;
+    const goServer = startServer(0);
+    try {
+      await waitFor(() => activeGoSidecarBaseUrl(), 15_000);
+      for (let i = 0; i < vectors.length; i++) {
+        const v = vectors[i]!;
+        expect(await captureMutation(goServer, token, v.method, v.path, v.body)).toEqual(tsResults[i]!);
+      }
+      expect(readFileSync(getConfigPath()).equals(tsFinalState!)).toBe(true);
+      const beforeFailure = readFileSync(getConfigPath());
+      const failed = await captureMutation(goServer, token, "PATCH", "/api/codex-auth/pool-strategy", { strategy: "bogus" });
+      expect(failed.status).toBe(400);
+      expect(readFileSync(getConfigPath()).equals(beforeFailure)).toBe(true);
+    } finally {
+      await goServer.stop(true);
+    }
+  });
+
+  runFixtureTest("oauth account-pool and account-store vectors match through Go", async (token) => {
+    // Covers the declared Go-owned oauth writes not yet pinned by a differential:
+    // accounts/pool PATCH (persists anthropicAccountPool), accounts/active PUT
+    // (account-store route — under an empty fixture it is a 404 no-write, which is
+    // the rejection path a real deployment exercises when the account is gone),
+    // and accounts/clear-cooldown POST (clears in-process routing health, no
+    // config post-state). The empty fixture cannot hold a real OAuth account
+    // (its tokens live in auth.json), so the active verb proves the no-write
+    // rejection leg and the parity seam documents that explicitly.
+    const initial = readFileSync(getConfigPath());
+    const vectors: Array<{ method: "PUT" | "PATCH" | "POST"; path: string; body: unknown }> = [
+      { method: "PATCH", path: "/api/oauth/accounts/pool", body: { provider: "anthropic", strategy: "quota" } },
+      { method: "PUT", path: "/api/oauth/accounts/active", body: { provider: "anthropic", accountId: "acc-1" } },
+      { method: "POST", path: "/api/oauth/accounts/clear-cooldown", body: { provider: "anthropic", accountId: "acc-1" } },
+    ];
+    const tsServer = startServer(0);
+    const tsResults: Array<Awaited<ReturnType<typeof captureMutation>>> = [];
+    let tsFinalState: Buffer;
+    try {
+      for (const v of vectors) {
+        tsResults.push(await captureMutation(tsServer, token, v.method, v.path, v.body));
+      }
+      tsFinalState = readFileSync(getConfigPath());
+      expect(tsResults[1]!.status).toBe(404); // account-store route under an empty fixture
+      expect(tsFinalState.equals(initial)).toBe(false); // pool PATCH persisted
+    } finally {
+      await tsServer.stop(true);
+    }
+
+    writeFileSync(getConfigPath(), initial);
+    process.env[GO_SIDECAR_BIN_ENV] = sidecarBinary!;
+    const goServer = startServer(0);
+    try {
+      await waitFor(() => activeGoSidecarBaseUrl(), 15_000);
+      for (let i = 0; i < vectors.length; i++) {
+        const v = vectors[i]!;
+        expect(await captureMutation(goServer, token, v.method, v.path, v.body)).toEqual(tsResults[i]!);
+      }
+      expect(readFileSync(getConfigPath()).equals(tsFinalState!)).toBe(true);
+      // Failure leg: an invalid strategy is rejected with no write on both faces.
+      const beforeFailure = readFileSync(getConfigPath());
+      const failed = await captureMutation(goServer, token, "PATCH", "/api/oauth/accounts/pool", { provider: "anthropic", strategy: "bogus" });
+      expect(failed.status).toBe(400);
+      expect(readFileSync(getConfigPath()).equals(beforeFailure)).toBe(true);
+    } finally {
+      await goServer.stop(true);
+    }
+  });
+
   runFixtureTest("an unexpected sidecar exit deregisters the forwarder and health falls back in-process", async (token) => {
     // #11: a crash must surface, not fall silent. The supervisor deregisters the
     // forwarder on an unexpected child exit, so the next health response flips
