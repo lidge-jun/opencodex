@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { AdapterEvent, OcxProviderConfig } from "../types";
 import type { ProviderAdapter } from "./base";
 import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
@@ -524,4 +525,3 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
     },
   };
 }
-import { createHash } from "node:crypto";
