@@ -637,9 +637,92 @@ describe("codexWsUpstreamFetch", () => {
     expect(FakeWebSocket.instances[0].closed).toBe(true);
   });
 
+  // A refused create frame arrives as one `error` frame with the HTTP status and
+  // headers, then a close. Codex's SSE parser has no `error` arm, so relaying it
+  // in-band reaches the client as nothing but the synthesized adapter_eof.
+  test("answers a wrapped 4xx rejection with its HTTP status instead of a 200 stream", async () => {
+    const frame = {
+      type: "error",
+      error: { type: "usage_limit_reached", message: "The usage limit has been reached", plan_type: "plus", resets_at: 1_800_000_000 },
+      status_code: 429,
+      headers: {
+        "X-Codex-Primary-Used-Percent": "100",
+        "X-Codex-Primary-Reset-At": "1800000000",
+        "Content-Length": "174",
+        "Content-Type": "application/json",
+      },
+    };
+    installFake(ws => {
+      ws.emit("open", {});
+      ws.emit("message", { data: JSON.stringify(frame) });
+      ws.emit("close", { code: 1000, reason: "normal" });
+    });
+    const response = await codexWsUpstreamFetch(CODEX_URL, streamingInit(), (() => {
+      throw new Error("a sent frame must not be resent over HTTP");
+    }) as unknown as typeof fetch);
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("content-type")).toBe("application/json");
+    expect(response.headers.get("x-codex-primary-used-percent")).toBe("100");
+    expect(response.headers.get("x-codex-primary-reset-at")).toBe("1800000000");
+    // The body is re-encoded, so the frame's framing headers must not survive.
+    expect(response.headers.get("content-length")).toBeNull();
+    expect(await response.json()).toEqual({ error: frame.error });
+    expect(isCodexWsUpstreamResponse(response)).toBe(false);
+    const ws = FakeWebSocket.instances[0]!;
+    expect(ws.sent).toHaveLength(1);
+    expect(ws.closed).toBe(true);
+  });
+
+  test("honors the status field spelling Codex accepts", async () => {
+    installFake(ws => {
+      ws.emit("open", {});
+      ws.emit("message", {
+        data: JSON.stringify({ type: "error", status: 401, error: { type: "invalid_token", message: "expired" } }),
+      });
+    });
+    const response = await codexWsUpstreamFetch(CODEX_URL, streamingInit(), (() => {
+      throw new Error("fallback must not run after open");
+    }) as unknown as typeof fetch);
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: { type: "invalid_token", message: "expired" } });
+  });
+
+  test("keeps a wrapped error on the stream once output has been committed", async () => {
+    installFake(ws => {
+      ws.emit("open", {});
+      ws.emit("message", { data: JSON.stringify({ type: "response.created", response: { id: "r1" } }) });
+      ws.emit("message", {
+        data: JSON.stringify({ type: "error", status_code: 429, error: { type: "usage_limit_reached", message: "mid-turn" } }),
+      });
+    });
+    const response = await codexWsUpstreamFetch(CODEX_URL, streamingInit(), (() => {
+      throw new Error("fallback must not run after open");
+    }) as unknown as typeof fetch);
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    expect(text).toContain("event: response.created");
+    expect(text).toContain("event: error");
+    expect(text).toContain("mid-turn");
+  });
+
+  test("leaves a wrapped 5xx on the stream path", async () => {
+    installFake(ws => {
+      ws.emit("open", {});
+      ws.emit("message", {
+        data: JSON.stringify({ type: "error", status_code: 502, error: { type: "server_error", message: "bad gateway" } }),
+      });
+    });
+    const response = await codexWsUpstreamFetch(CODEX_URL, streamingInit(), (() => {
+      throw new Error("fallback must not run after open");
+    }) as unknown as typeof fetch);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("event: error");
+  });
+
   test.each(["error", "response.completed"])("multiline upstream %s JSON remains one valid SSE data value", async type => {
     const payload = type === "error"
-      ? { type, status: 400, error: { type: "invalid_request_error", message: "fixture refusal" } }
+      ? { type, error: { type: "invalid_request_error", message: "fixture refusal" } }
       : { type, response: { id: "pretty-response", status: "completed", output: [] } };
     installFake(ws => {
       ws.emit("open", {});

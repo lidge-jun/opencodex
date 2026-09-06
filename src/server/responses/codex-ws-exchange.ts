@@ -16,6 +16,42 @@ interface ExchangeOptions {
   beforeDispatch?: (headers: Headers) => void;
 }
 
+/**
+ * Turn a refused create frame back into the HTTP error it stands for.
+ *
+ * When the backend rejects a turn before it starts (an expired token, a usage
+ * limit), it does not open a response. It sends one `error` frame carrying a
+ * `status_code`, the error object and the response headers, then closes. Codex's
+ * own WebSocket client maps that frame to the HTTP error (codex-api
+ * `responses_websocket.rs`, `map_wrapped_websocket_error_event`). Relayed as an
+ * SSE `error` event it is lost twice: the relay does not count `error` as a
+ * terminal and appends an `adapter_eof` incomplete, and Codex's SSE parser has no
+ * arm for `error`, so the client sees only the `adapter_eof` (#3029) and the
+ * pre-stream quota, refresh and rotation handlers never see the status.
+ *
+ * 4xx only: those refusals come before generation, so answering with the status
+ * cannot double-generate. 5xx keeps the stream path and its no-resend rule.
+ */
+function wrappedRejectionResponse(payload: Record<string, unknown>): Response | null {
+  const raw = payload.status_code ?? payload.status;
+  if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 400 || raw > 499) return null;
+  const headers = new Headers();
+  const source = payload.headers;
+  if (source && typeof source === "object" && !Array.isArray(source)) {
+    for (const [name, value] of Object.entries(source as Record<string, unknown>)) {
+      if (typeof value !== "string") continue;
+      const lower = name.toLowerCase();
+      if (lower === "content-length" || lower === "content-type" || lower === "transfer-encoding" || lower === "connection") continue;
+      try { headers.set(name, value); } catch { /* an invalid upstream header name/value is not ours to relay */ }
+    }
+  }
+  headers.set("content-type", "application/json");
+  const error = payload.error && typeof payload.error === "object" && !Array.isArray(payload.error)
+    ? payload.error
+    : { type: "upstream_error", message: "Upstream rejected the request" };
+  return new Response(JSON.stringify({ error }), { status: raw, headers });
+}
+
 /** The sole SSE exchange state machine for both one-shot and retained sockets. */
 export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
   const { session, url, init, prepared, sseFallback, onQuota, beforeDispatch } = options;
@@ -171,6 +207,18 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
       const normalized = normalizeResponsesWsRelayEvent(text);
       if (!normalized) return;
       const { type } = normalized;
+      // Nothing has been committed to the client yet, so a wrapped rejection
+      // can still become the real HTTP response instead of a 200 stream.
+      if (!responseCommitted && type === "error") {
+        const rejection = wrappedRejectionResponse(normalized.payload);
+        if (rejection) {
+          terminal = true;
+          cleanup();
+          session.dispose();
+          resolve(rejection);
+          return;
+        }
+      }
       let relayText = normalized.text;
       let controlFrame = false;
       if (metadata) {
