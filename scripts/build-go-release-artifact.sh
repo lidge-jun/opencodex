@@ -34,7 +34,14 @@ if [ "$goos" = windows ]; then
 fi
 
 mkdir -p "$output_dir"
+# The release artifact embeds the actual Vite output; source builds retain the checked-in fallback snapshot.
+"$repo_root/scripts/sync-go-embedded-dashboard.sh"
+version="$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$repo_root/package.json" | head -n 1)"
+if [ -z "$version" ]; then
+  echo "could not read package version for Go release artifact" >&2
+  exit 1
+fi
 cd "$repo_root/go"
 GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 \
-  go build -buildvcs=false -trimpath -o "$output_dir/$filename" ./cmd/ocx
+  go build -buildvcs=false -trimpath -ldflags "-X main.version=$version" -o "$output_dir/$filename" ./cmd/ocx
 printf '%s\n' "$output_dir/$filename"

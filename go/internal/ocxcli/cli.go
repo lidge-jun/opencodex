@@ -229,6 +229,10 @@ func Run(args []string, deps Deps) int {
 		return printSubcommandHelp(args[0], deps)
 	}
 	switch args[0] {
+	case "serve-dashboard":
+		// Deliberately undocumented while start/service remain TypeScript-owned.
+		// This release smoke command proves the embedded artifact independently.
+		return runEmbeddedDashboard(args[1:], deps)
 	case "--version", "-v", "version":
 		fmt.Fprintf(deps.Stdout, "opencodex %s\n", deps.Version)
 		return ExitOK

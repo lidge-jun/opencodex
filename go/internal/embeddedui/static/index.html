@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>opencodex · proxy dashboard</title>
+    <script>
+      // FOWT guard: apply an explicit light/dark choice before first paint. "system" leaves the
+      // attribute unset so color-scheme:light-dark follows the OS. Mirrors App.tsx.
+      (function () {
+        try {
+          var t = localStorage.getItem("ocx-theme");
+          if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+        } catch (e) {}
+      })();
+    </script>
+    <script type="module" crossorigin src="/assets/index-BU1tE0sr.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-DL9-iS6J.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

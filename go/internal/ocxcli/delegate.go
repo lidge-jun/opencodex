@@ -40,7 +40,7 @@ func typeScriptCLIPath() (string, error) {
 		if info, err := os.Stat(configured); err == nil && !info.IsDir() {
 			return configured, nil
 		}
-		return "", fmt.Errorf("OCX_TYPESCRIPT_CLI is not a readable file: %s", configured)
+		return "", fmt.Errorf("OCX_TYPESCRIPT_CLI is not a readable TypeScript CLI file: %s; install or update the full OpenCodex distribution, or point OCX_TYPESCRIPT_CLI at src/cli/index.ts", configured)
 	}
 	dir, err := os.Getwd()
 	if err != nil {
@@ -57,5 +57,5 @@ func typeScriptCLIPath() (string, error) {
 		}
 		dir = parent
 	}
-	return "", errors.New("TypeScript lifecycle owner not found; set OCX_TYPESCRIPT_CLI to src/cli/index.ts")
+	return "", errors.New("this standalone ocx binary needs the TypeScript lifecycle owner for this command; install or update the full OpenCodex distribution, or set OCX_TYPESCRIPT_CLI to an explicit src/cli/index.ts path (and OCX_BUN to Bun if it is not on PATH)")
 }

@@ -29,6 +29,9 @@ jobs:
           go-version-file: go/go.mod
           cache: false
 
+      - name: Setup project Bun for embedded dashboard
+        uses: ./.github/actions/setup-project-bun
+
       - name: Build, vet, and test Go runtime
         run: |
           set -euo pipefail
@@ -73,6 +76,9 @@ jobs:
         with:
           go-version-file: go/go.mod
           cache: false
+
+      - name: Setup project Bun for embedded dashboard
+        uses: ./.github/actions/setup-project-bun
 
       - name: Cross-compile static ocx candidate
         run: scripts/build-go-release-artifact.sh '${{ matrix.target }}' dist
