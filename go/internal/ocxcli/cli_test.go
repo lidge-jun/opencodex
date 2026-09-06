@@ -3,13 +3,12 @@ package ocxcli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
-	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -67,32 +66,34 @@ func TestVersionAndRegistry(t *testing.T) {
 	}
 }
 
-func TestStatusUsesAttestedRuntimeAndRejectsInvalidArgs(t *testing.T) {
-	server, state := testServer(t, "ready", true)
-	defer server.Close()
-	var out, stderr bytes.Buffer
-	if got := Run([]string{"status", "--json"}, depsFor(state, &out, &stderr)); got != ExitOK {
-		t.Fatalf("status exit = %d stderr %q", got, stderr.String())
-	}
-	if !strings.Contains(out.String(), "\"running\":true") || !strings.Contains(out.String(), "\"source\":\"runtime\"") {
-		t.Fatalf("status output = %q", out.String())
-	}
-	out.Reset()
-	stderr.Reset()
-	if got := Run([]string{"status", "--bad"}, depsFor(state, &out, &stderr)); got != ExitFailure || stderr.String() != "Usage: ocx status [--json]\n" {
-		t.Fatalf("invalid status = code %d stderr %q", got, stderr.String())
+func TestLifecycleFamiliesDelegateExactArgumentsAndExitCode(t *testing.T) {
+	for _, argv := range [][]string{
+		{"status", "--json"}, {"doctor", "--json"}, {"service", "restart"},
+		{"codex-shim", "status"}, {"tray", "status"},
+	} {
+		t.Run(strings.Join(argv, " "), func(t *testing.T) {
+			var received []string
+			deps := depsFor(RuntimeState{}, &bytes.Buffer{}, &bytes.Buffer{})
+			deps.Delegate = func(args []string) (int, error) {
+				received = append([]string(nil), args...)
+				return 17, nil
+			}
+			if got := Run(argv, deps); got != 17 {
+				t.Fatalf("exit code = %d, want delegated 17", got)
+			}
+			if !slices.Equal(received, argv) {
+				t.Fatalf("delegated argv = %#v, want %#v", received, argv)
+			}
+		})
 	}
 }
 
-func TestDoctorAndServiceValidateReadOnlyArguments(t *testing.T) {
+func TestLifecycleDelegateFailureIsReported(t *testing.T) {
 	var out, stderr bytes.Buffer
-	if got := Run([]string{"doctor", "--json"}, depsFor(RuntimeState{}, &out, &stderr)); got != ExitFailure || stderr.String() != "Usage: ocx doctor\n" {
-		t.Fatalf("invalid doctor = code %d stderr %q", got, stderr.String())
-	}
-	out.Reset()
-	stderr.Reset()
-	if got := Run([]string{"service", "restart"}, depsFor(RuntimeState{}, &out, &stderr)); got != ExitFailure || stderr.String() != "Usage: ocx service status\n" {
-		t.Fatalf("invalid service = code %d stderr %q", got, stderr.String())
+	deps := depsFor(RuntimeState{}, &out, &stderr)
+	deps.Delegate = func([]string) (int, error) { return 0, errors.New("owner unavailable") }
+	if got := Run([]string{"service", "status"}, deps); got != ExitFailure || stderr.String() != "owner unavailable\n" {
+		t.Fatalf("delegate failure = code %d stderr %q", got, stderr.String())
 	}
 }
 
@@ -107,43 +108,6 @@ func TestReadOnlyFamilyHelp(t *testing.T) {
 				t.Fatalf("help output = %q", out.String())
 			}
 		})
-	}
-}
-
-func TestCodexShimStatusReadsOnlyItsStateFile(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("OPENCODEX_HOME", dir)
-	var out, stderr bytes.Buffer
-	if got := Run([]string{"codex-shim", "status"}, depsFor(RuntimeState{}, &out, &stderr)); got != ExitOK {
-		t.Fatalf("absent status exit = %d stderr %q", got, stderr.String())
-	}
-	if want := "Codex autostart shim is not installed.\n"; out.String() != want {
-		t.Fatalf("absent status = %q, want %q", out.String(), want)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "codex-shim.json"), []byte("not json"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	out.Reset()
-	stderr.Reset()
-	if got := Run([]string{"codex-shim", "status"}, depsFor(RuntimeState{}, &out, &stderr)); got != ExitOK {
-		t.Fatalf("corrupt status exit = %d stderr %q", got, stderr.String())
-	}
-	want := "Codex autostart shim state is invalid or corrupt at " + filepath.Join(dir, "codex-shim.json") + ". Reinstall or remove the shim.\n"
-	if out.String() != want {
-		t.Fatalf("corrupt status = %q, want %q", out.String(), want)
-	}
-}
-
-func TestTrayStatusMatchesThePortableUnsupportedContract(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Windows tray state remains TypeScript-owned")
-	}
-	var out, stderr bytes.Buffer
-	if got := Run([]string{"tray", "status"}, depsFor(RuntimeState{}, &out, &stderr)); got != ExitOK {
-		t.Fatalf("tray status exit = %d stderr %q", got, stderr.String())
-	}
-	if want := "Windows tray: unsupported on " + runtime.GOOS + "\n"; out.String() != want {
-		t.Fatalf("tray status = %q, want %q", out.String(), want)
 	}
 }
 

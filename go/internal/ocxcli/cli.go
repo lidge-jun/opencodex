@@ -10,9 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -76,6 +74,10 @@ type Deps struct {
 	ReadRuntime    func() (RuntimeState, error)
 	HTTPClient     *http.Client
 	Challenge      func() (string, error)
+	// Delegate runs a TypeScript-owned lifecycle command.  It is deliberately
+	// injected: these commands own OS registrations and Codex launch paths, and
+	// the Go command must preserve both their transaction and their exact output.
+	Delegate func([]string) (int, error)
 }
 
 func defaults(d Deps) Deps {
@@ -93,6 +95,9 @@ func defaults(d Deps) Deps {
 	}
 	if d.Challenge == nil {
 		d.Challenge = CreateChallenge
+	}
+	if d.Delegate == nil {
+		d.Delegate = DelegateToTypeScript
 	}
 	return d
 }
@@ -123,15 +128,15 @@ func Run(args []string, deps Deps) int {
 	case "ready":
 		return runReady(args[1:], deps)
 	case "status":
-		return runStatus(args[1:], deps)
+		return runDelegated(args, deps)
 	case "doctor":
-		return runDoctor(args[1:], deps)
+		return runDelegated(args, deps)
 	case "service":
-		return runService(args[1:], deps)
+		return runDelegated(args, deps)
 	case "codex-shim":
-		return runCodexShim(args[1:], deps)
+		return runDelegated(args, deps)
 	case "tray":
-		return runTray(args[1:], deps)
+		return runDelegated(args, deps)
 	case "config":
 		return runConfig(args[1:], deps)
 	case "models":
@@ -143,6 +148,19 @@ func Run(args []string, deps Deps) int {
 		printHelp(deps.Stdout)
 		return ExitFailure
 	}
+}
+
+// runDelegated is the ownership seam for commands whose correctness depends on
+// TypeScript's established file transactions and platform service integrations.
+// Inheriting stdout and stderr gives the Go binary byte-for-byte parity and, more
+// importantly, prevents a second implementation from bypassing ownership checks.
+func runDelegated(args []string, deps Deps) int {
+	code, err := deps.Delegate(args)
+	if err != nil {
+		fmt.Fprintln(deps.Stderr, err)
+		return ExitFailure
+	}
+	return code
 }
 
 type statusReport struct {
@@ -205,83 +223,6 @@ func collectGoStatus(deps Deps) statusReport {
 	return report
 }
 
-func runDoctor(args []string, deps Deps) int {
-	if len(args) != 0 {
-		fmt.Fprintln(deps.Stderr, "Usage: ocx doctor")
-		return ExitFailure
-	}
-	report := collectGoStatus(deps)
-	fmt.Fprintf(deps.Stdout, "opencodex doctor\n  runtime: %s/%s\n  proxy: %s\n  listener: %s:%d (%s)\n", runtime.GOOS, runtime.GOARCH, report.HealthMessage, probeHost(report.Hostname), report.Port, report.Source)
-	return ExitOK
-}
-
-func runService(args []string, deps Deps) int {
-	if len(args) != 1 || args[0] != "status" {
-		fmt.Fprintln(deps.Stderr, "Usage: ocx service status")
-		return ExitFailure
-	}
-	if runtime.GOOS != "linux" {
-		fmt.Fprintf(deps.Stdout, "Service status is not available through the Go CLI on %s.\n", runtime.GOOS)
-		return ExitFailure
-	}
-	output, err := exec.Command("systemctl", "--user", "is-active", "opencodex.service").Output()
-	state := strings.TrimSpace(string(output))
-	if state == "" {
-		state = "unknown"
-	}
-	fmt.Fprintln(deps.Stdout, state)
-	if err != nil || state != "active" {
-		return ExitFailure
-	}
-	return ExitOK
-}
-
-// runCodexShim owns only the read-only status projection during the incremental
-// takeover. Installation and removal mutate Codex launch paths and stay behind
-// the TypeScript lifecycle owner until their exact on-disk transaction contracts
-// have a differential oracle.
-func runCodexShim(args []string, deps Deps) int {
-	if len(args) != 1 || args[0] != "status" {
-		fmt.Fprintln(deps.Stderr, "Usage: ocx codex-shim <install|status|uninstall|remove>")
-		return ExitFailure
-	}
-	dir, err := config.Dir()
-	if err != nil {
-		fmt.Fprintln(deps.Stderr, err)
-		return ExitFailure
-	}
-	path := filepath.Join(dir, "codex-shim.json")
-	raw, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		fmt.Fprintln(deps.Stdout, "Codex autostart shim is not installed.")
-		return ExitOK
-	}
-	if err != nil || !json.Valid(raw) {
-		fmt.Fprintf(deps.Stdout, "Codex autostart shim state is invalid or corrupt at %s. Reinstall or remove the shim.\n", path)
-		return ExitOK
-	}
-	// A syntactically valid state still needs the TypeScript ownership and file
-	// graph checks before it can truthfully be described as healthy. Keep that
-	// richer projection TS-owned rather than inventing an incomplete status.
-	fmt.Fprintln(deps.Stdout, "Codex autostart shim status requires the TypeScript lifecycle owner.")
-	return ExitOK
-}
-
-// runTray preserves the portable status contract. Windows tray state includes
-// registry ownership and a live host heartbeat, so its Windows projection and
-// every lifecycle mutation remain TypeScript-owned until separately migrated.
-func runTray(args []string, deps Deps) int {
-	if len(args) != 1 || args[0] != "status" {
-		fmt.Fprintln(deps.Stderr, "Usage: ocx tray <install|start|stop|status|uninstall|remove> [--json] [--no-start]")
-		return ExitFailure
-	}
-	if runtime.GOOS != "windows" {
-		fmt.Fprintf(deps.Stdout, "Windows tray: unsupported on %s\n", runtime.GOOS)
-		return ExitOK
-	}
-	fmt.Fprintln(deps.Stdout, "Windows tray status requires the TypeScript lifecycle owner.")
-	return ExitOK
-}
 func printHelp(w io.Writer) { fmt.Fprint(w, fullUsage) }
 func hasHelpFlag(args []string) bool {
 	for _, arg := range args {
