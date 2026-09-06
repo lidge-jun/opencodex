@@ -111,6 +111,64 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
     }));
     expectParity(args);
   });
+  test("diffs every config mutation, validation, and export path through the shared owner", () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-go-config-parity-"));
+    const configPath = join(home, "config.json");
+    const exportPath = join(home, "export.json");
+    const importPath = join(home, "import.json");
+    const initial = {
+      port: 10100,
+      providers: { fixture: { adapter: "openai-chat", baseUrl: "https://example.test/v1", apiKey: "secret-key" } },
+      defaultProvider: "fixture",
+      autoSwitchThreshold: 50,
+    };
+    const reset = () => writeFileSync(configPath, JSON.stringify(initial));
+    const parity = (args: string[]) => {
+      reset();
+      const ts = runTs(args, home);
+      reset();
+      const go = runGo(args, home);
+      expect(go).toEqual(ts);
+    };
+    try {
+      writeFileSync(importPath, JSON.stringify({ ...initial, port: 10102 }));
+      parity(["config", "show", "--source"]);
+      parity(["config", "set", "autoSwitchThreshold", "70", "--json"]);
+      parity(["config", "set", "port", "-1", "--json"]);
+      parity(["config", "unset", "autoSwitchThreshold", "--json"]);
+      parity(["config", "validate", "--json"]);
+      parity(["config", "validate", importPath, "--json"]);
+      parity(["config", "export", "-"]);
+      parity(["config", "export", exportPath]);
+      parity(["config", "import", importPath, "--yes", "--json"]);
+      parity(["config", "import", importPath, "--json"]);
+    } finally {
+      removeTreeWithRetry(home);
+    }
+  });
+  test("keeps a rejected config mutation atomic in both CLI entry points", async () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-go-config-atomic-"));
+    const configPath = join(home, "config.json");
+    const initial = JSON.stringify({
+      port: 10100,
+      providers: { fixture: { adapter: "openai-chat", baseUrl: "https://example.test/v1" } },
+      defaultProvider: "fixture",
+      appOwnedMemoryBudgetMb: 128,
+    });
+    try {
+      writeFileSync(configPath, initial);
+      const ts = runTs(["config", "set", "appOwnedMemoryBudgetMb", "63", "--json"], home);
+      const afterTS = await Bun.file(configPath).text();
+      writeFileSync(configPath, initial);
+      const go = runGo(["config", "set", "appOwnedMemoryBudgetMb", "63", "--json"], home);
+      const afterGo = await Bun.file(configPath).text();
+      expect(go).toEqual(ts);
+      expect(afterTS).toBe(initial);
+      expect(afterGo).toBe(initial);
+    } finally {
+      removeTreeWithRetry(home);
+    }
+  });
   test.each([
     { args: ["status"] }, { args: ["status", "--json"] }, { args: ["doctor", "--json"] },
     { args: ["service", "status"] }, { args: ["service", "not-a-command"] },

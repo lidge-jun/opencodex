@@ -68,10 +68,11 @@ func TestVersionAndRegistry(t *testing.T) {
 	}
 }
 
-func TestLifecycleFamiliesDelegateExactArgumentsAndExitCode(t *testing.T) {
+func TestTypeScriptOwnedFamiliesDelegateExactArgumentsAndExitCode(t *testing.T) {
 	for _, argv := range [][]string{
 		{"status", "--json"}, {"doctor", "--json"}, {"service", "restart"},
 		{"codex-shim", "status"}, {"tray", "status"},
+		{"config", "set", "port", "10101", "--json"},
 	} {
 		t.Run(strings.Join(argv, " "), func(t *testing.T) {
 			var received []string
@@ -87,6 +88,21 @@ func TestLifecycleFamiliesDelegateExactArgumentsAndExitCode(t *testing.T) {
 				t.Fatalf("delegated argv = %#v, want %#v", received, argv)
 			}
 		})
+	}
+}
+
+func TestConfigHelpDelegatesToTheConfigOwner(t *testing.T) {
+	var received []string
+	deps := depsFor(RuntimeState{}, &bytes.Buffer{}, &bytes.Buffer{})
+	deps.Delegate = func(args []string) (int, error) {
+		received = append([]string(nil), args...)
+		return ExitOK, nil
+	}
+	if got := Run([]string{"help", "config"}, deps); got != ExitOK {
+		t.Fatalf("help config exit = %d", got)
+	}
+	if want := []string{"config", "--help"}; !slices.Equal(received, want) {
+		t.Fatalf("delegated argv = %#v, want %#v", received, want)
 	}
 }
 
