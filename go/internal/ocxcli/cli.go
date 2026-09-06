@@ -23,6 +23,7 @@ const (
 	ExitOK                     = 0
 	ExitFailure                = 1
 	ExitUsage                  = 64
+	configWriteUsageExit       = 2
 	attestationChallengeHeader = "x-opencodex-attestation-challenge"
 	attestationProofHeader     = "x-opencodex-attestation-proof"
 )

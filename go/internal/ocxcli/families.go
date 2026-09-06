@@ -2,6 +2,7 @@ package ocxcli
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
@@ -36,6 +37,7 @@ var modelRuntimeSubcommands = map[string]Ownership{
 // config-mutation.sqlite generation transaction.
 var configRuntimeSubcommands = map[string]Ownership{
 	"show": GoOwned, "validate": GoOwned, "export": GoOwned,
+	"set": GoOwned, "unset": GoOwned, "import": GoOwned,
 }
 
 func loadCLIConfig() (map[string]any, error) {
@@ -49,7 +51,7 @@ func loadCLIConfig() (map[string]any, error) {
 func runConfig(args []string, deps Deps) int {
 	action := "show"
 	if len(args) > 0 && args[0] != "--json" && args[0] != "--source" {
-		action, args = args[0], args[1:]
+		action, args = strings.ToLower(args[0]), args[1:]
 	}
 	switch action {
 	case "show":
@@ -58,9 +60,191 @@ func runConfig(args []string, deps Deps) int {
 		return runNativeConfigValidate(args, deps)
 	case "export":
 		return runNativeConfigExport(args, deps)
+	case "set", "unset":
+		return runNativeConfigSet(args, action == "unset", deps)
+	case "import":
+		return runNativeConfigImport(args, deps)
 	default:
-		return runDelegated(append([]string{"config", action}, args...), deps)
+		return configWriteUsageError(deps, "unknown config command "+action)
 	}
+}
+
+func configWriteError(deps Deps, message string, usage bool) int {
+	fmt.Fprintf(deps.Stderr, "Error: %s\n", message)
+	if usage {
+		fmt.Fprint(deps.Stderr, configUsage)
+		return configWriteUsageExit
+	}
+	return ExitFailure
+}
+
+func configWriteUsageError(deps Deps, message string) int {
+	return configWriteError(deps, message, true)
+}
+
+func configWriteValidationError(deps Deps, message string) int {
+	fmt.Fprintf(deps.Stderr, "Error: %s\n", message)
+	return configWriteUsageExit
+}
+
+func runNativeConfigSet(args []string, remove bool, deps Deps) int {
+	jsonOutput := takeFlag(&args, "--json")
+	if len(args) == 0 || (!remove && len(args) == 1) {
+		return configWriteUsageError(deps, "config path and value are required")
+	}
+	path := args[0]
+	args = args[1:]
+	rawValue := ""
+	if !remove {
+		rawValue = args[0]
+		args = args[1:]
+	}
+	if len(args) != 0 {
+		return configWriteUsageError(deps, "Unexpected argument(s): "+strings.Join(args, " "))
+	}
+	configPath, err := config.Path()
+	if err != nil {
+		return configWriteError(deps, err.Error(), false)
+	}
+	if _, err := os.Stat(configPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return configWriteError(deps, "config is missing", false)
+		}
+		return configWriteError(deps, err.Error(), false)
+	}
+	var saved *configschema.Normalized
+	_, err = configschema.WithRevalidatedConfigMutation(context.Background(), configPath, nil, func(raw []byte, _ int64) ([]byte, bool, error) {
+		updated, value, changed, mutationErr := configschema.ApplyConfigPathMutation(raw, path, rawValue, remove)
+		if mutationErr != nil {
+			return nil, false, mutationErr
+		}
+		if !remove {
+			_ = value // ApplyConfigPathMutation verifies the saved path; display must redact it.
+			display, displayErr := updated.ConfigPathValue(path)
+			if displayErr != nil {
+				return nil, false, displayErr
+			}
+			saved = display
+		}
+		data, encodeErr := updated.IndentedJSON()
+		if encodeErr != nil {
+			return nil, false, encodeErr
+		}
+		return append(data, '\n'), changed, nil
+	})
+	if err != nil {
+		return reportNativeConfigWriteError(deps, err)
+	}
+	value := json.RawMessage("null")
+	if !remove && saved != nil {
+		data, encodeErr := saved.CompactJSON()
+		if encodeErr != nil {
+			return configWriteError(deps, encodeErr.Error(), false)
+		}
+		value = data
+	}
+	if jsonOutput {
+		return writeNativeConfigJSON(deps.Stdout, struct {
+			OK    bool            `json:"ok"`
+			Path  string          `json:"path"`
+			Value json.RawMessage `json:"value"`
+		}{true, path, value})
+	}
+	if remove {
+		fmt.Fprintf(deps.Stdout, "Unset %s.\n", path)
+	} else {
+		fmt.Fprintf(deps.Stdout, "Set %s.\n", path)
+	}
+	return ExitOK
+}
+
+func reportNativeConfigWriteError(deps Deps, err error) int {
+	if errors.Is(err, configschema.ErrRawByteConflict) {
+		return configWriteError(deps, "config changed while applying this update; retry", false)
+	}
+	if errors.Is(err, configschema.ErrMutationBusy) {
+		return configWriteError(deps, "Config mutation already in progress", false)
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return configWriteError(deps, "config is missing", false)
+	}
+	message := err.Error()
+	if strings.HasPrefix(message, "invalid JSON:") {
+		return configWriteError(deps, "config is invalid", false)
+	}
+	if message == "invalid config path" || strings.HasPrefix(message, "config parent path not found:") || strings.HasPrefix(message, "config path not found:") {
+		return configWriteUsageError(deps, message)
+	}
+	if strings.HasPrefix(message, "schema_invalid:") {
+		return configWriteValidationError(deps, message)
+	}
+	return configWriteError(deps, message, false)
+}
+
+func runNativeConfigImport(args []string, deps Deps) int {
+	jsonOutput := takeFlag(&args, "--json")
+	if len(args) == 0 {
+		return configWriteUsageError(deps, "import path is required")
+	}
+	path := args[0]
+	args = args[1:]
+	yes := takeFlag(&args, "--yes")
+	if !yes {
+		return configWriteUsageError(deps, "import requires --yes")
+	}
+	if len(args) != 0 {
+		return configWriteUsageError(deps, "Unexpected argument(s): "+strings.Join(args, " "))
+	}
+	raw, err := readConfigInputBytes(path)
+	if err != nil {
+		if strings.HasPrefix(err.Error(), "invalid JSON in ") {
+			return configWriteValidationError(deps, err.Error())
+		}
+		return configWriteError(deps, err.Error(), false)
+	}
+	candidate, err := configschema.ValidateCandidateJSON(raw)
+	if err != nil {
+		return configWriteValidationError(deps, err.Error())
+	}
+	configPath, err := config.Path()
+	if err != nil {
+		return configWriteError(deps, err.Error(), false)
+	}
+	if _, err := configschema.ReplaceConfigCandidate(context.Background(), configPath, candidate); err != nil {
+		if errors.Is(err, configschema.ErrMutationBusy) {
+			return configWriteError(deps, "Config mutation already in progress", false)
+		}
+		return configWriteError(deps, err.Error(), false)
+	}
+	if jsonOutput {
+		return writeNativeConfigJSON(deps.Stdout, struct {
+			OK     bool   `json:"ok"`
+			Source string `json:"source"`
+		}{true, path})
+	}
+	fmt.Fprintf(deps.Stdout, "Imported config from %s. Restart or run ocx sync if needed.\n", path)
+	return ExitOK
+}
+
+func readConfigInputBytes(path string) ([]byte, error) {
+	var raw []byte
+	var err error
+	if path == "-" {
+		raw, err = io.ReadAll(os.Stdin)
+	} else {
+		raw, err = os.ReadFile(path)
+	}
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("ENOENT: no such file or directory, open %q", path)
+		}
+		return nil, err
+	}
+	var parsed any
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return nil, fmt.Errorf("invalid JSON in %s", path)
+	}
+	return raw, nil
 }
 
 type configSourceOutput struct {

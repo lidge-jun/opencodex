@@ -86,8 +86,8 @@ func validateStrictWriteFields(v *value) error {
 		return errors.New("schema_invalid: codexAccountPickerEnabled: Invalid input: expected boolean, received " + zodType(x))
 	}
 	if x := v.find("visionSidecar"); x != nil && x.kind == objectKind {
-		if r := x.find("reasoning"); r != nil && (r.kind != stringKind || !map[string]bool{"none": true, "minimal": true, "low": true, "medium": true, "high": true, "xhigh": true, "max": true, "ultra": true}[r.text]) {
-			return errors.New("schema_invalid: visionSidecar.reasoning: must be one of none, minimal, low, medium, high, xhigh, max, ultra")
+		if r := x.find("reasoning"); r != nil && (r.kind != stringKind || !map[string]bool{"low": true, "medium": true, "high": true, "xhigh": true, "max": true}[r.text]) {
+			return errors.New("schema_invalid: visionSidecar.reasoning: must be one of low, medium, high, xhigh, max")
 		}
 	}
 	if err := validateAgentTaskRecovery(v); err != nil {

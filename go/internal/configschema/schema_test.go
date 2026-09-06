@@ -159,6 +159,16 @@ func TestStrictWriteSchemaRejectsLoadDegradedFields(t *testing.T) {
 	}
 }
 
+func TestStrictWriteSchemaUsesVisionCommandVocabulary(t *testing.T) {
+	for _, reasoning := range []string{"none", "minimal", "ultra"} {
+		_, err := ValidateCandidateJSON([]byte(`{"providers":{},"visionSidecar":{"reasoning":"` + reasoning + `"}}`))
+		const want = "schema_invalid: visionSidecar.reasoning: must be one of low, medium, high, xhigh, max"
+		if err == nil || err.Error() != want {
+			t.Fatalf("reasoning %q error = %v, want %q", reasoning, err, want)
+		}
+	}
+}
+
 func TestApplyConfigPathMutationUsesStrictSchemaAndPinHook(t *testing.T) {
 	raw := []byte(`{"providers":{},"activeCodexAccountPinned":"acct-1","codexAccountPriorities":{"acct-1":1}}`)
 	updated, saved, changed, err := ApplyConfigPathMutation(raw, "codexAccountPriorities.acct-1", "2", false)

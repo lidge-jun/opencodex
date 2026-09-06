@@ -235,12 +235,12 @@ func TestModelRuntimeOwnershipDelegates(t *testing.T) {
 }
 
 func TestConfigRuntimeOwnershipUsesNativeReadCommands(t *testing.T) {
-	for _, subcommand := range []string{"show", "validate", "export"} {
+	for _, subcommand := range []string{"show", "validate", "export", "set", "unset", "import"} {
 		if got, known := OwnershipFor([]string{"config", subcommand}); !known || got != GoOwned {
 			t.Fatalf("OwnershipFor(config %s) = %q, %t", subcommand, got, known)
 		}
 	}
-	for _, subcommand := range []string{"get", "set", "unset", "import"} {
+	for _, subcommand := range []string{"get"} {
 		if got, known := OwnershipFor([]string{"config", subcommand}); !known || got != TypeScriptOwned {
 			t.Fatalf("OwnershipFor(config %s) = %q, %t", subcommand, got, known)
 		}
@@ -347,7 +347,6 @@ func TestTypeScriptOwnedFamiliesDelegateExactArgumentsAndExitCode(t *testing.T) 
 	for _, argv := range [][]string{
 		{"status", "--json"}, {"doctor", "--json"}, {"service", "restart"},
 		{"tray", "status"},
-		{"config", "set", "port", "10101", "--json"},
 	} {
 		t.Run(strings.Join(argv, " "), func(t *testing.T) {
 			var received []string
@@ -363,6 +362,42 @@ func TestTypeScriptOwnedFamiliesDelegateExactArgumentsAndExitCode(t *testing.T) 
 				t.Fatalf("delegated argv = %#v, want %#v", received, argv)
 			}
 		})
+	}
+}
+
+func TestNativeConfigWriteCommandsMatchOracleShape(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OPENCODEX_HOME", dir)
+	configPath := filepath.Join(dir, "config.json")
+	initial := []byte(`{"port":10100,"providers":{"fixture":{"adapter":"openai-chat","baseUrl":"https://example.test/v1"}},"defaultProvider":"fixture","autoSwitchThreshold":50}`)
+	if err := os.WriteFile(configPath, initial, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	run := func(argv []string) (int, string, string) {
+		var out, stderr bytes.Buffer
+		deps := depsFor(RuntimeState{}, &out, &stderr)
+		deps.Delegate = func([]string) (int, error) { t.Fatal("native config write delegated"); return 0, nil }
+		return Run(argv, deps), out.String(), stderr.String()
+	}
+	if code, out, stderr := run([]string{"config", "set", "autoSwitchThreshold", "70", "--json"}); code != ExitOK || out != "{\n  \"ok\": true,\n  \"path\": \"autoSwitchThreshold\",\n  \"value\": 70\n}\n" || stderr != "" {
+		t.Fatalf("set = code=%d stdout=%q stderr=%q", code, out, stderr)
+	}
+	if code, out, stderr := run([]string{"config", "unset", "autoSwitchThreshold", "--json"}); code != ExitOK || out != "{\n  \"ok\": true,\n  \"path\": \"autoSwitchThreshold\",\n  \"value\": null\n}\n" || stderr != "" {
+		t.Fatalf("unset = code=%d stdout=%q stderr=%q", code, out, stderr)
+	}
+	importPath := filepath.Join(dir, "import.json")
+	if err := os.WriteFile(importPath, []byte(`{"port":10102,"providers":{"fixture":{"adapter":"openai-chat","baseUrl":"https://example.test/v1"}},"defaultProvider":"fixture"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code, out, stderr := run([]string{"config", "import", importPath, "--yes", "--json"}); code != ExitOK || out != "{\n  \"ok\": true,\n  \"source\": \""+importPath+"\"\n}\n" || stderr != "" {
+		t.Fatalf("import = code=%d stdout=%q stderr=%q", code, out, stderr)
+	}
+	if code, out, stderr := run([]string{"config", "set", "port", "-1", "--json"}); code != 2 || out != "" || stderr != "Error: schema_invalid: port: Too small: expected number to be >=0\n" {
+		t.Fatalf("invalid set = code=%d stdout=%q stderr=%q", code, out, stderr)
+	}
+	if code, out, stderr := run([]string{"config", "import", importPath, "--json"}); code != 2 || out != "" || stderr != "Error: import requires --yes\n"+configUsage {
+		t.Fatalf("unconfirmed import = code=%d stdout=%q stderr=%q", code, out, stderr)
 	}
 }
 
