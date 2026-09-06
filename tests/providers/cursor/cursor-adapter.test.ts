@@ -121,6 +121,61 @@ describe("Cursor adapter live transport", () => {
     expect(inputs[0]?.fetch).toBe(pacedFetch);
   });
 
+  test("runTurn selects a pooled token by trusted owner and thread", async () => {
+    const selectedInputs: CursorTransportFactoryInput[] = [];
+    const selectorCalls: Array<[string, string]> = [];
+    const makeTransport = (inputs: CursorTransportFactoryInput[]) =>
+      (input: CursorTransportFactoryInput) => {
+        inputs.push(input);
+        return {
+          async *run() {
+            yield { type: "done" } satisfies CursorServerMessage;
+          },
+          writeClient() {},
+        };
+      };
+    const scopedRequest: OcxParsedRequest = {
+      ...parsed,
+      context: { messages: [{ role: "user", content: "hi", timestamp: 1 }] },
+      _cursorIdentityScope: "owner-scope",
+      _clientThreadId: "thread-scope",
+    };
+    const selected = createCursorAdapter(
+      { ...provider, apiKey: "original-token" },
+      {
+        createTransport: makeTransport(selectedInputs),
+        selectPoolToken(owner, thread) {
+          selectorCalls.push([owner, thread]);
+          return "pooled-token";
+        },
+      },
+    );
+
+    await selected.runTurn?.(
+      scopedRequest,
+      { headers: new Headers() },
+      () => {},
+    );
+
+    expect(selectorCalls).toEqual([["owner-scope", "thread-scope"]]);
+    expect(selectedInputs[0]?.provider.apiKey).toBe("pooled-token");
+
+    const fallbackInputs: CursorTransportFactoryInput[] = [];
+    const fallback = createCursorAdapter(
+      { ...provider, apiKey: "original-token" },
+      {
+        createTransport: makeTransport(fallbackInputs),
+        selectPoolToken: () => undefined,
+      },
+    );
+    await fallback.runTurn?.(
+      { ...scopedRequest },
+      { headers: new Headers() },
+      () => {},
+    );
+    expect(fallbackInputs[0]?.provider.apiKey).toBe("original-token");
+  });
+
   // #1527: the envelope rejection is raised locally while building the request, so it surfaces
   // through the same terminal catch as a transport fault. Review found the class was flattened to
   // a bare message there, losing the stable code a caller needs to tell "this conversation cannot

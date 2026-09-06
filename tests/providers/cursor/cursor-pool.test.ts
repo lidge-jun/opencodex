@@ -65,10 +65,17 @@ describe("CursorPoolKernel", () => {
     };
   }
   test("requires capability, trusted owner, and two usable accounts", () => {
-    const { kernel, capability } = setup();
+    const { kernel, capability, setAccounts } = setup();
     expect(kernel.pick("owner", "thread", Symbol("wrong"))).toBeNull();
     expect(kernel.pick("", "thread", capability)).toBeNull();
-    expect(kernel.pick("owner", "thread", capability)?.token).toBe("access-a");
+    setAccounts([accounts[0]!]);
+    expect(kernel.pick("owner", "thread", capability)).toBeNull();
+    setAccounts(accounts);
+    const snapshot = kernel.activate("owner", "thread", capability);
+    expect(snapshot).not.toBeNull();
+    const serialized = JSON.stringify(snapshot);
+    for (const secret of ["account-a", "account-b", "access-a", "access-b"])
+      expect(serialized).not.toContain(secret);
   });
   test("same thread text is isolated by owner and absent scope fails closed", () => {
     const { kernel, capability } = setup();
