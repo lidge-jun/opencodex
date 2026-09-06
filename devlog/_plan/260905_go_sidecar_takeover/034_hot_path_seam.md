@@ -2,7 +2,7 @@
 
 Unit: `260905_go_sidecar_takeover`
 Date: 2026-09-06
-Status: in progress on `fix/ticket-24-hotpath-seam` (dev-go + 1)
+Status: implemented on `fix/ticket-24-hotpath-seam` (dev-go + 2)
 Ticket: [#24](https://github.com/waxiangzi/opencodex/issues/24) (spec #4: hot-path seam + streaming differential harness)
 Blocked-by (#13/#16): closed — differential-oracle infrastructure and shared Go config parsing landed on `dev-go`.
 
@@ -95,4 +95,42 @@ legitimately request-scoped.
 
 ## Delivery notes (filled in at close)
 
-- (pending)
+Delivered on `fix/ticket-24-hotpath-seam` (two commits on top of `dev-go`):
+
+- `src/server/hot-path-seam.ts` — seam data (route + env gate + bridge path),
+  the body-bound parent claim (mint at the front door, verify at the bridge,
+  bounded one-use nonce table), and the private bridge object. The Go sidecar
+  never sees a client credential; it relays the claim verbatim.
+- `go/internal/sidecar/hotpath.go` (+ tests) — the sidecar owns
+  `POST /v1/responses`: parent-token 404 gate, 256MB body bound, bridge URL
+  loopback validation, and byte-for-byte chunked stream relay with per-chunk
+  flush (frame order preserved by construction).
+- `src/server/index.ts` — bridge endpoint (404 when the seam env is off), the
+  front-door seam gate inside the existing `/v1/responses` turn (default off;
+  no in-process fallback after the body read, so a dead seam is a retryable
+  502, never a double-executed model call), and activation wiring.
+- `src/server/go-sidecar.ts` — data-plane seam attachment state and the
+  seam forward hop, armed whenever the sidecar is attached and gated per
+  request by the env, so flipping the env at runtime is honoured.
+- `tests/go-hotpath-seam.test.ts` — the streaming differential: two live
+  servers (in-process oracle vs seam) against one deterministic fixture
+  upstream must agree on the ordered SSE frame sequence. Declared volatile
+  set: the per-request trace header, `Date`, and the server CORS origin echo;
+  the body volatile set is EMPTY (raw frame identity).
+- `tests/hot-path-seam.test.ts` — claim/bridge unit coverage incl. replay,
+  expiry, body-bound proof, oversized body, admission round-trip.
+
+Acceptance criteria:
+
+- [x] Hot-path seam exists in the sidecar (Go-owned `POST /v1/responses`
+      surface with a replaceable bridge source for #27/#29).
+- [x] Streaming differential compares ordered frame sequences (frame
+      extractor + two-server oracle; reorder/drop classes proven non-vacuous).
+- [x] Only declared volatile fields normalised (empty body volatile set;
+      declared header volatile set; the harness asserts the declaration).
+
+Verification: `go build/vet/test ./...`, `bun run typecheck`,
+`privacy:scan`, and the four focused suites above are green. The repository
+wide suite was attempted but stalled in this container on unrelated
+OAuth/provider-management flakes (all six affected files pass standalone on
+both this branch and `dev-go`); no seam-related file failed.

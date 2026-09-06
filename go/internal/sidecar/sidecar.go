@@ -274,6 +274,7 @@ func NewHandler(cfg Config) http.Handler {
 			relayPublicWrite(w, r, cfg, writeRelay, path)
 		})
 	}
+	mountDataPlaneSeam(mux, cfg)
 	return mux
 }
 
@@ -370,11 +371,17 @@ func privateParentBridgeURL(raw, bridgePath string) (*url.URL, bool) {
 	return parent, true
 }
 
+func bridgeTransport() *http.Transport {
+	return &http.Transport{
+		Proxy:       nil,
+		DialContext: (&net.Dialer{}).DialContext,
+	}
+}
+
 func privateBridgeClient() *http.Client {
-	transport := &http.Transport{Proxy: nil, DialContext: (&net.Dialer{}).DialContext}
 	return &http.Client{
 		Timeout:   30 * time.Second,
-		Transport: transport,
+		Transport: bridgeTransport(),
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 			return http.ErrUseLastResponse
 		},

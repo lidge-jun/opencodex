@@ -28,6 +28,7 @@ import { existsSync } from "node:fs";
 import { directLocalHttpFetch } from "./direct-local-http";
 import { registerOptionalShutdownHook } from "../lib/optional-shutdown-hooks";
 import { setGoOwnedRouteForwarder } from "./go-sidecar-slot";
+import { HOT_PATH_SEAM_PATH, HOT_PATH_SIDECAR_REQUEST_HEADER } from "./hot-path-seam";
 
 /** Environment variable naming the ocx-sidecar binary to spawn. */
 export const GO_SIDECAR_BIN_ENV = "OPENCODEX_GO_SIDECAR_BIN";
@@ -70,6 +71,12 @@ let generation = 0;
 let forwardDetach: (() => void) | null = null;
 let bridgeStopped: (() => void) | null = null;
 
+// Data-plane hot-path seam state (ticket #24, devlog 034). Set once the ready
+// line lands, independently of the seam env: the front door decides whether to
+// use it (OPENCODEX_GO_HOTPATH_SEAM) so an operator flipping the env at runtime
+// is honoured, while the capability pair below stays fixed per activation.
+let dataPlaneSeam: { baseUrl: string; requestToken: string } | null = null;
+
 export type GoSidecarSupervisorConfig = {
   parentUrl: string;
   bridgeToken: string;
@@ -93,6 +100,57 @@ export function resetGoSidecarForTests(): void {
 /** Base URL of the attached sidecar, or null when none is attached and ready. */
 export function activeGoSidecarBaseUrl(): string | null {
   return stopped ? null : readyBaseUrl || null;
+}
+
+/**
+ * True when the sidecar is attached AND ready to serve the data-plane seam.
+ * The front door consults this only after its own env gate, and only before
+ * reading the request body: a seam that is not attached must never consume a
+ * body it cannot fall back from.
+ */
+export function isDataPlaneSeamAttached(): boolean {
+  return !stopped && dataPlaneSeam !== null && readyBaseUrl !== "";
+}
+
+/**
+ * Forward one seam-gated POST /v1/responses request to the attached sidecar
+ * with the parent request token and the front-door claim headers. Returns the
+ * sidecar's Response (status and stream verbatim) or null when the seam is not
+ * attached or the hop failed. Never throws.
+ */
+export async function forwardHotPathSeam(
+  request: Request,
+  body: Uint8Array<ArrayBuffer>,
+  claimHeaders: Headers,
+): Promise<Response | null> {
+  const seam = dataPlaneSeam;
+  if (!seam || stopped) return null;
+  const target = new URL(HOT_PATH_SEAM_PATH, seam.baseUrl);
+  try {
+    const headers = new Headers(claimHeaders);
+    headers.set(HOT_PATH_SIDECAR_REQUEST_HEADER, seam.requestToken);
+    const contentType = request.headers.get("content-type");
+    if (contentType) headers.set("content-type", contentType);
+    const upstream = await directLocalHttpFetch(target, {
+      method: "POST",
+      headers,
+      body,
+      signal: request.signal,
+    });
+    // A 4xx/5xx from the seam is its observable result (the bridge ran the
+    // pipeline); it must reach the client rather than being swallowed.
+    return new Response(upstream.body, {
+      status: upstream.status,
+      headers: {
+        "content-type": upstream.headers.get("content-type") ?? "text/event-stream",
+        ...(upstream.headers.has("retry-after")
+          ? { "retry-after": upstream.headers.get("retry-after")! }
+          : {}),
+      },
+    });
+  } catch {
+    return null;
+  }
 }
 
 function parseReadyLine(line: string): string | null {
@@ -240,6 +298,7 @@ function stopSidecar(): void {
   const proc = childProc;
   childProc = null;
   readyBaseUrl = "";
+  dataPlaneSeam = null;
   if (proc) {
     try {
       proc.kill();
@@ -327,6 +386,9 @@ export function activateGoSidecar(
     if (stopped || myGeneration !== generation) return;
     readyBaseUrl = parsed;
     const baseUrl = parsed;
+    // The data-plane seam is armed whenever the sidecar is attached; whether
+    // the front door uses it is the seam env gate's decision, read per request.
+    dataPlaneSeam = { baseUrl, requestToken: liveStateBridge.requestToken };
     const detach = setGoOwnedRouteForwarder((request, pathAndSearch, principal) => (
       forwardTo(baseUrl, liveStateBridge.requestToken, liveStateBridge.createWriteRelayHeaders, request, pathAndSearch, principal)
     ));

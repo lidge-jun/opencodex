@@ -54,7 +54,15 @@ import {
 } from "../lib/app-owned-memory-stores";
 import { acquireServerBackgroundLifecycle } from "./background-lifecycle";
 import { activateLab, labActivationRequired } from "../lib/lab-activation";
-import { activateGoSidecar } from "./go-sidecar";
+import { activateGoSidecar, forwardHotPathSeam, isDataPlaneSeamAttached } from "./go-sidecar";
+import {
+  createDataPlaneSeamHeaders,
+  createHotPathResponsesBridge,
+  HOT_PATH_BRIDGE_HEADER,
+  HOT_PATH_RESPONSES_BRIDGE_PATH,
+  hotPathSeamEnabled,
+  type HotPathResponsesBridge,
+} from "./hot-path-seam";
 import {
   createGoSidecarWriteRelay,
   createGoSidecarWriteRelayHeaders,
@@ -1028,6 +1036,12 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   let backgroundLifecycle: ReturnType<typeof acquireServerBackgroundLifecycle> | null = null;
   let goSidecarLiveStateBridgeToken: string | null = null;
   let goSidecarWriteRelay: GoSidecarWriteRelay | null = null;
+  // Data-plane hot-path seam (ticket #24, devlog 034): the claim secret is the
+  // same per-activation HMAC key the write relay uses, and the bridge runs the
+  // in-process responses pipeline for one seam-gated request. Both are created
+  // only when the operator enables OPENCODEX_GO_HOTPATH_SEAM.
+  let goSidecarHotPathRelaySecret: string | null = null;
+  let goSidecarHotPathBridge: HotPathResponsesBridge | null = null;
   // Set only when the optional Go sidecar activated (ADR-0008); consumed by the server.stop
   // override below, which is built before activation runs. Null default keeps a process that
   // never opted in from carrying any Go-sidecar state.
@@ -1093,6 +1107,16 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
       if (url.pathname === GO_SIDECAR_WRITE_BRIDGE_PATH) {
         const relay = goSidecarWriteRelay;
         return relay ? relay.handle(req, url) : new Response(null, { status: 404 });
+      }
+      // ADR-0008 hot-path seam bridge (ticket #24): the Go sidecar owns the
+      // public POST /v1/responses surface while the authoritative pipeline is
+      // still this process. The bridge verifies the per-child capability AND
+      // the fresh body-bound claim (never an admin token or client API key) and
+      // runs the real responses dispatch. It exists only when the seam env is
+      // on, so a management-only sidecar install has no such endpoint at all.
+      if (url.pathname === HOT_PATH_RESPONSES_BRIDGE_PATH) {
+        const bridge = goSidecarHotPathBridge;
+        return bridge ? bridge.handle(req, url) : new Response(null, { status: 404 });
       }
       markActivity(`${req.method} ${url.pathname}`);
 
@@ -1827,7 +1851,52 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           addFinalRequestLog(requestId, start, logCtx, status, meta);
         };
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
-          const response = await handleResponses(req, config, logCtx, {
+          // ADR-0008 hot-path seam (ticket #24, devlog 034): when the seam env
+          // is on AND a sidecar is attached, the request is forwarded to the Go
+          // seam, which runs the same pipeline through the private bridge and
+          // streams the response back. The body is read exactly once here;
+          // there is deliberately NO in-process fallback after that read, so a
+          // seam that dies mid-request surfaces a retryable 502 instead of
+          // double-executing the model call.
+          let seamResponse: Response | null = null;
+          if (hotPathSeamEnabled() && isDataPlaneSeamAttached()) {
+            let rawBody: Uint8Array<ArrayBuffer> | null = null;
+            try {
+              rawBody = new Uint8Array(await req.arrayBuffer());
+            } catch (error) {
+              if (req.signal.aborted) {
+                // Client went away before the body settled. Fall through to
+                // the shared tail wrapper so the 499 carries the same CORS and
+                // request-id headers as every other response.
+                seamResponse = new Response(null, { status: 499 });
+              } else {
+                throw error;
+              }
+            }
+            if (rawBody) {
+              // The body is fully received; the upstream stream may run long, so
+              // disable the request timeout exactly like the direct branch does
+              // on body completion. This happens BEFORE any seam hop, so every
+              // path below runs without the caller-owned timeout transition.
+              disableResponsesRequestTimeout(req, requestServer);
+              const claimSecret = goSidecarHotPathRelaySecret;
+              const claimHeaders = claimSecret
+                ? createDataPlaneSeamHeaders(claimSecret, admission, "POST", "/v1/responses", rawBody)
+                : null;
+              // The body has been consumed: there is deliberately NO in-process
+              // fallback past this point (double-executing the model call is
+              // worse than a retryable error), so a seam that cannot mint or
+              // reach its claim surfaces a 502 exactly like a dead sidecar.
+              const seam = claimHeaders ? await forwardHotPathSeam(req, rawBody, claimHeaders) : null;
+              seamResponse = seam ?? new Response(JSON.stringify({
+                error: { type: "server_error", code: "server_error", message: "hot-path seam unavailable" },
+              }), {
+                status: 502,
+                headers: { "Content-Type": "application/json" },
+              });
+            }
+          }
+          const response = seamResponse ?? await handleResponses(req, config, logCtx, {
             turnAdmissionLease,
             admission,
             onRequestBodyRead: () => disableResponsesRequestTimeout(req, requestServer),
@@ -2496,6 +2565,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
       // environment value is intentionally not reused: environment inheritance
       // is broader than the parent/child capability relationship.
       const writeRelaySecret = randomBytes(32).toString("base64url");
+      goSidecarHotPathRelaySecret = writeRelaySecret;
       goSidecarWriteRelay = createGoSidecarWriteRelay({
         bridgeToken: goSidecarLiveStateBridgeToken,
         relaySecret: writeRelaySecret,
@@ -2511,6 +2581,42 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           )
         ),
       });
+      // Hot-path seam bridge (ticket #24): present only when the operator
+      // enabled OPENCODEX_GO_HOTPATH_SEAM at startup, so a management-only
+      // sidecar install has no data-plane bridge endpoint at all. The bridge
+      // runs the in-process responses pipeline for an admitted seam request.
+      if (hotPathSeamEnabled()) {
+        goSidecarHotPathBridge = createHotPathResponsesBridge({
+          bridgeToken: goSidecarLiveStateBridgeToken,
+          relaySecret: writeRelaySecret,
+          dispatchResponses: async ({ admission, contentType, body, signal }) => {
+            const headers = new Headers();
+            if (contentType) headers.set("content-type", contentType);
+            const internalReq = new Request("http://localhost/v1/responses", {
+              method: "POST",
+              headers,
+              body: new Uint8Array(body),
+              signal: signal ?? undefined,
+            });
+            const logCtx: RequestLogContext = {
+              model: "unknown",
+              provider: "unknown",
+              ...admissionFields(admission),
+              inboundProtocol: "responses",
+            };
+            // The client-side turn was already admitted by the seam gate in
+            // the public listener; this second admission gates the actual
+            // pipeline work (the bridge is where the model runs).
+            return runAdmittedHttpTurn(internalReq, config, async turnAdmissionLease =>
+              handleResponses(internalReq, config, logCtx, {
+                turnAdmissionLease,
+                admission,
+                abortSignal: signal ?? undefined,
+              }),
+            );
+          },
+        });
+      }
       return activateGoSidecar(VERSION, {
         parentUrl: "http://127.0.0.1:" + actualPort,
         bridgeToken: goSidecarLiveStateBridgeToken,
@@ -2522,6 +2628,8 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         onStopped: () => {
           goSidecarLiveStateBridgeToken = null;
           goSidecarWriteRelay = null;
+          goSidecarHotPathRelaySecret = null;
+          goSidecarHotPathBridge = null;
         },
       });
     })()
