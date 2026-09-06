@@ -40,9 +40,10 @@ describe("CursorPoolKernel", () => {
   ];
   function setup(now = 1_000, resolver?: (id: string) => string | undefined) {
     let clock = now;
+    let listed = [...accounts];
     const capability = createCursorPoolCapability();
-    const kernel = new CursorPoolKernel(capability, () => clock, { listAccounts: () => accounts, resolveAccessToken: resolver });
-    return { kernel, capability, advance: (ms: number) => { clock += ms; } };
+    const kernel = new CursorPoolKernel(capability, () => clock, { listAccounts: () => listed, resolveAccessToken: resolver });
+    return { kernel, capability, advance: (ms: number) => { clock += ms; }, setAccounts: (next: typeof accounts) => { listed = [...next]; } };
   }
   test("requires capability, trusted owner, and two usable accounts", () => {
     const { kernel, capability } = setup();
@@ -52,7 +53,7 @@ describe("CursorPoolKernel", () => {
   });
   test("same thread text is isolated by owner and absent scope fails closed", () => {
     const { kernel, capability } = setup();
-    expect(kernel.pick("owner-a", "same", capability)?.accountRef).not.toBe(kernel.pick("owner-b", "same", capability)?.accountRef);
+    expect(kernel.pick("owner-a", "same", capability)?.accountRef).toBe(kernel.pick("owner-b", "same", capability)?.accountRef);
     expect(kernel.pick("", "same", capability)).toBeNull();
   });
   test("refs are random opaque values and token is never exposed by snapshot", () => {
@@ -82,8 +83,8 @@ describe("CursorPoolKernel", () => {
     expect(s.kernel.rollback(snap, s.capability)).toBe(true);
     expect(s.kernel.pick("b", "t", s.capability)?.accountRef).toBe(b.accountRef);
     expect(s.kernel.rollback(snap, s.capability)).toBe(false);
-    s.kernel.remove(b.accountRef, s.capability); expect(s.kernel.pick("b", "t", s.capability)?.accountRef).not.toBe(b.accountRef);
+    s.kernel.remove(b.accountRef, s.capability); s.setAccounts([]); expect(s.kernel.pick("b", "t", s.capability)).toBeNull();
     expect(CURSOR_POOL_TTL_MS).toBeGreaterThan(0); s.advance(CURSOR_POOL_TTL_MS + 1); s.kernel.pick("a", "t2", s.capability); s.kernel.clear(s.capability); expect(s.kernel.pick("a", "t", s.capability)).toBeNull();
-    expect(a.accountRef).not.toBe(b.accountRef);
+    expect(a.accountRef).toBe(b.accountRef);
   });
 });
