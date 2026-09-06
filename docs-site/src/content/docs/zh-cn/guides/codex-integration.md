@@ -14,7 +14,11 @@ proxy 提供一条裸 `openai` Codex 登录路由，支持 Pool（默认）和 D
 
 ## Config 注入
 
-`ocx init`、`ocx start` 和 `ocx sync` 都会调用注入器。在默认的 loopback 绑定下，它会保留
+仅不需要准入令牌的独立运行 loopback 目标默认无需单独登录即可打开 Codex。客户端连接和需要准入令牌认证的目标，即使 URL 指向 loopback，也仍使用 `requires_openai_auth = true` 和 `OPENCODEX_API_AUTH_TOKEN`。可在 Dashboard → Overview 中切换，使用保存在 OpenCodex 中的账户和提供商。更改后请重启 Codex。
+
+此设置仅移除 Codex Desktop 的单独登录要求，不会创建或选择凭据，也不会授予账户访问权。Pool 选择已配置的 Codex 账户；Direct 仍需要调用方或主账户的凭据。Luna Reserve 还需要实际启用本地 `codexDesktopAuthless` 模式、有效凭据以及与这些凭据绑定的当前提供商授权。模型出现在目录中并不代表请求已获授权。 Luna Reserve 仅支持通过规范的 ChatGPT-forward 适配器使用，并且需要与凭据绑定的上游授权。API 密钥认证和任意 Responses 网关均不符合条件。 对于 ChatGPT 请求，Pool 和 Direct 都不会回退到 API 密钥凭据；独立的图像生成回退机制仅适用于图像请求。
+
+`ocx init`、`ocx start` 和 `ocx sync` 在 Codex 集成启用时调用注入器。集成禁用时会跳过注入；仅同步目录不会更改 Codex 配置。在 `codexDesktopAuthless: false` 的 loopback 绑定下，它会保留
 Codex 内置的 `openai` provider id，并将该 provider 指向 opencodex：
 
 ```toml
@@ -112,7 +116,7 @@ model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
 # appended at the end of the file
 # Auto-injected by opencodex
 [model_providers.opencodex]
-name = "OpenCodex Proxy"
+name = "OpenCodex"
 base_url = "http://your-host:10100/v1"
 wire_api = "responses"
 requires_openai_auth = true
@@ -159,7 +163,7 @@ opencodex 也会通过 WebSocket 提供 `/v1/responses`。专用 provider 只有
 
 ## 线程标识与历史记录
 
-默认的 loopback 形式会让新线程继续标记为 Codex 原生的 `openai` provider，因此正常的 resume history 不需要
+`codexDesktopAuthless: false` 的 loopback 形式会让新线程继续标记为 Codex 原生的 `openai` provider，因此正常的 resume history 不需要
 重映射。sync 和 restore 只应用与当前状态数据库匹配的备份 manifest，并精确恢复每个线程原来的 provider、
 source 和 event marker。没有 manifest 的 `opencodex` 行会保持不变；只有明确要强制执行旧式重标记时，才使用
 `ocx recover-history --legacy-openai --yes`。此命令的作用范围有意设置得很广：它会把所有包含用户消息且当前标记为

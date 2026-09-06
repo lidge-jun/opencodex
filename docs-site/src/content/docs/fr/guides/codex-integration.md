@@ -15,7 +15,11 @@ Ces routes ne se rabattent jamais l'une sur l'autre. Les configurations v1 distr
 
 ## Injection de configuration
 
-`ocx init`, `ocx start` et `ocx sync` appellent l'injecteur. Sur la liaison de bouclage par défaut, il conserve
+Par défaut, seuls les points de terminaison loopback autonomes sans jeton d’admission ouvrent Codex sans connexion séparée. Les connexions clientes et les cibles authentifiées par jeton conservent `requires_openai_auth = true` et `OPENCODEX_API_AUTH_TOKEN`, même avec une URL loopback. Le réglage dans Dashboard → Overview utilise les comptes et fournisseurs enregistrés dans OpenCodex. Redémarrez Codex après modification.
+
+Ce réglage supprime uniquement la connexion séparée à Codex Desktop : il ne crée ni ne sélectionne d’identifiants et n’accorde aucun accès supplémentaire. Pool sélectionne les comptes Codex configurés ; Direct exige toujours les identifiants du compte appelant/principal. Luna Reserve exige aussi le mode local `codexDesktopAuthless` effectif, des identifiants et une autorisation actuelle du fournisseur liée à ces identifiants. La présence dans le catalogue ne suffit pas à autoriser une requête. Luna Reserve est pris en charge uniquement via l’adaptateur canonique ChatGPT-forward avec une autorisation amont liée aux identifiants. L’authentification par clé API et les passerelles Responses arbitraires ne sont pas éligibles. Pour les requêtes ChatGPT, ni Pool ni Direct ne se rabat sur des identifiants par clé API ; le mécanisme de repli distinct pour la génération d’images concerne uniquement les requêtes d’images.
+
+`ocx init`, `ocx start` et `ocx sync` appellent l’injecteur lorsque l’intégration Codex est activée. Sinon, l’injection est ignorée ; une synchronisation du catalogue seul ne modifie pas la configuration Codex. Avec `codexDesktopAuthless: false`, sur la liaison de bouclage, il conserve
 l'identifiant du fournisseur `openai` intégré à Codex et fait pointer ce fournisseur vers opencodex :
 
 ```toml
@@ -121,7 +125,7 @@ model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
 # appended at the end of the file
 # Auto-injected by opencodex
 [model_providers.opencodex]
-name = "OpenCodex Proxy"
+name = "OpenCodex"
 base_url = "http://your-host:10100/v1"
 wire_api = "responses"
 requires_openai_auth = true
@@ -185,7 +189,7 @@ le proxy renvoie `426` et Codex se rabat sur HTTP/SSE.
 
 ## Identité et historique du fil de discussion
 
-La configuration de bouclage par défaut conserve l'étiquette du fournisseur natif `openai` de Codex sur les
+La configuration de bouclage avec `codexDesktopAuthless: false` conserve l'étiquette du fournisseur natif `openai` de Codex sur les
 nouveaux fils ; la reprise normale de l'historique ne nécessite donc aucun remappage. La synchronisation et la
 restauration n'appliquent qu'un manifeste de sauvegarde correspondant et rétablissent exactement le fournisseur,
 la source et l'indicateur d'événement d'origine. Une ligne `opencodex` sans manifeste reste inchangée ; utilisez

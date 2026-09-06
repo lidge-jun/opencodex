@@ -15,7 +15,11 @@ opencodex заставляет Codex маршрутизировать запро
 
 ## Внедрение в конфигурацию
 
-`ocx init`, `ocx start` и `ocx sync` вызывают injector. На loopback-привязке по умолчанию он
+По умолчанию Codex открывается без отдельного входа только для автономных loopback-адресов, не требующих токена допуска. Клиентские подключения и адреса с токенной аутентификацией сохраняют `requires_openai_auth = true` и `OPENCODEX_API_AUTH_TOKEN`, даже если URL указывает на loopback. Переключатель в Dashboard → Overview использует аккаунты и провайдеры, сохранённые в OpenCodex. После изменения перезапустите Codex.
+
+Настройка убирает только отдельный вход в Codex Desktop: она не создаёт и не выбирает учётные данные и не предоставляет доступ к аккаунтам. Pool выбирает настроенные аккаунты Codex; Direct по-прежнему требует учётные данные вызывающей стороны/основного аккаунта. Luna Reserve также требует действующего локального режима `codexDesktopAuthless`, учётных данных и актуального разрешения провайдера, связанного с этими данными. Наличие модели в каталоге само по себе не разрешает запрос. Luna Reserve поддерживается только через канонический адаптер ChatGPT-forward с разрешением вышестоящего сервиса, привязанным к учётным данным. Аутентификация по API-ключу и произвольные шлюзы Responses не подходят. Для запросов ChatGPT ни Pool, ни Direct не переходят на учётные данные API-ключа; отдельный резервный механизм генерации изображений применяется только к запросам изображений.
+
+`ocx init`, `ocx start` и `ocx sync` вызывают injector при включённой интеграции Codex. При отключённой интеграции внедрение пропускается; синхронизация только каталога не меняет конфигурацию Codex. При `codexDesktopAuthless: false` на loopback-привязке он
 сохраняет встроенный id провайдера Codex `openai` и направляет его на opencodex:
 
 ```toml
@@ -124,7 +128,7 @@ model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
 # appended at the end of the file
 # Auto-injected by opencodex
 [model_providers.opencodex]
-name = "OpenCodex Proxy"
+name = "OpenCodex"
 base_url = "http://your-host:10100/v1"
 wire_api = "responses"
 requires_openai_auth = true
@@ -177,7 +181,7 @@ loopback встроенный провайдер Codex может сначала
 
 ## Идентичность тредов и история
 
-Форма loopback по умолчанию сохраняет новые треды помеченными нативным провайдером Codex
+Форма loopback при `codexDesktopAuthless: false` сохраняет новые треды помеченными нативным провайдером Codex
 `openai`, поэтому обычной resume-history не нужен никакой remap. Sync и restore применяют только
 соответствующий backup manifest и точно восстанавливают исходные provider, source и event marker.
 Строка `opencodex` без manifest остаётся неизменной; используйте

@@ -434,7 +434,7 @@ describe("pre-substrate home adoption", () => {
 
     const result = runInject(10100);
     expect(result.success).toBeTrue();
-    expect(readFileSync(join(codexHome, "config.toml"), "utf-8")).toContain("openai_base_url");
+    expect(readFileSync(join(codexHome, "config.toml"), "utf-8")).toContain("requires_openai_auth = false");
     const coordinatorPath = resolveCodexCoordinatorDatabasePath(
       resolveEffectiveUserIdentity(),
       realpathSync.native(codexHome),
@@ -480,7 +480,7 @@ describe("pre-substrate home adoption", () => {
     const result = runInject(10100);
 
     expect(result.success).toBeTrue();
-    expect(readFileSync(join(codexHome, "config.toml"), "utf-8")).toContain("openai_base_url");
+    expect(readFileSync(join(codexHome, "config.toml"), "utf-8")).toContain("requires_openai_auth = false");
     expect(readFileSync(coordinatorPath)).toHaveLength(0);
   });
 });

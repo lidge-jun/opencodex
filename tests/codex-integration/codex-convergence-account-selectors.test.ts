@@ -1012,6 +1012,7 @@ test("retained sync and convergence produce identical canonical bytes in either 
       const baseSlug = entry.slug?.slice(entry.slug.indexOf("/") + 1);
       expect(ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(baseSlug ?? "")).toBe(false);
     }
+    expect(slugs.includes("desktop/gpt-reserve")).toBe(pickerEnabled);
     expect(slugs).not.toContain("gpt-legacy-unsupported");
     expect(slugs).toContain("user-native");
     expect(models.find(entry => entry.slug === "gpt-5.5")?.visibility)
