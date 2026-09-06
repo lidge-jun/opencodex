@@ -14,11 +14,10 @@ import (
 )
 
 // TestStatusCommandAssemblyJSONMatchesTypeScriptOracle compares the complete
-// public JSON payload byte-for-byte. The assembler is a pure Go seam until the
-// text-only domains are migrated and status can change ownership.
+// public JSON payload byte-for-byte after native status ownership.
 func TestStatusCommandAssemblyJSONMatchesTypeScriptOracle(t *testing.T) {
-	if owner, known := OwnershipFor([]string{"status"}); !known || owner != TypeScriptOwned {
-		t.Fatalf("status ownership = %q, %t; want TypeScript-owned until text domains migrate", owner, known)
+	if owner, known := OwnershipFor([]string{"status"}); !known || owner != GoOwned {
+		t.Fatalf("status ownership = %q, %t; want Go-owned", owner, known)
 	}
 	for _, scenario := range []struct {
 		name  string
@@ -64,9 +63,7 @@ func TestStatusCommandAssemblyJSONMatchesTypeScriptOracle(t *testing.T) {
 	}
 }
 
-// Text status retains TypeScript ownership because its OAuth login and live
-// Codex account-health blocks are not present in the machine JSON contract.
-func TestStatusCommandTextStillRequiresTypeScriptOwner(t *testing.T) {
+func TestStatusCommandTextMatchesTypeScriptOracleForUnavailableCodexHealth(t *testing.T) {
 	home := t.TempDir()
 	if err := os.Mkdir(filepath.Join(home, "codex"), 0o700); err != nil {
 		t.Fatal(err)
@@ -74,9 +71,54 @@ func TestStatusCommandTextStillRequiresTypeScriptOwner(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("OPENCODEX_HOME", home)
 	t.Setenv("CODEX_HOME", filepath.Join(home, "codex"))
-	result := runTypeScriptStatusCommandText(t, typeScriptOracleRepo(t), home)
-	if !strings.Contains(result, "OAuth logins:") || !strings.Contains(result, "Codex health:") {
-		t.Fatalf("TypeScript text oracle no longer exposes outstanding domains: %s", result)
+	t.Setenv("CODEX_CLI_PATH", "/bin/false")
+	repo := typeScriptOracleRepo(t)
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(repo); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previous) })
+	result := runTypeScriptStatusCommandText(t, repo, home)
+	var out, stderr bytes.Buffer
+	if code := Run([]string{"status"}, Deps{Stdout: &out, Stderr: &stderr}); code != ExitOK {
+		t.Fatalf("native status exit = %d, stderr=%s", code, stderr.String())
+	}
+	if out.String() != result {
+		t.Fatalf("text status differs from TypeScript oracle\\nGo:\\n%s\\nTypeScript:\\n%s", out.String(), result)
+	}
+}
+
+func TestStatusMalformedConfigWritesTypeScriptCompatibleBackup(t *testing.T) {
+	home := t.TempDir()
+	if err := os.Mkdir(filepath.Join(home, "codex"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(home, "config.json")
+	raw := []byte("{not-json")
+	writeStatusOracleFile(t, path, raw)
+	t.Setenv("HOME", home)
+	t.Setenv("OPENCODEX_HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, "codex"))
+	var out, stderr bytes.Buffer
+	if code := Run([]string{"status"}, Deps{Stdout: &out, Stderr: &stderr}); code != ExitOK {
+		t.Fatalf("exit = %d", code)
+	}
+	if !strings.Contains(stderr.String(), "Could not load opencodex config at "+path) || !strings.Contains(stderr.String(), "Using default config. A backup was written to ") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+	matches, err := filepath.Glob(path + ".invalid-*")
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("backups = %v, %v", matches, err)
+	}
+	got, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, raw) {
+		t.Fatalf("backup bytes = %q, want %q", got, raw)
 	}
 }
 

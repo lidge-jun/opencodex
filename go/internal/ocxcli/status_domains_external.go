@@ -333,6 +333,12 @@ func statusClaudeDesktop(cfg *config.Config) StatusClaudeDesktop {
 	return StatusClaudeDesktop{desired, StatusClaudeDesktopPolicy{true, "ok", "not_applicable", "Windows managed Claude policy is not applicable on this platform.", "No action required."}}
 }
 func redactStatusPath(path string) string {
+	if strings.HasPrefix(path, "/home/") {
+		parts := strings.Split(path, string(os.PathSeparator))
+		if len(parts) > 3 {
+			return "/home/[USER]" + strings.TrimPrefix(path, "/home/"+parts[2])
+		}
+	}
 	if home, err := os.UserHomeDir(); err == nil && home != "" && strings.HasPrefix(path, home+string(os.PathSeparator)) {
 		if strings.HasPrefix(home, "/home/") {
 			return "/home/[USER]" + strings.TrimPrefix(path, home)

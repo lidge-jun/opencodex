@@ -340,7 +340,7 @@ func TestHelpSurfaceMatchesCommandRegistry(t *testing.T) {
 
 func TestTypeScriptOwnedFamiliesDelegateExactArgumentsAndExitCode(t *testing.T) {
 	for _, argv := range [][]string{
-		{"status", "--json"}, {"doctor", "--json"}, {"service", "restart"},
+		{"doctor", "--json"}, {"service", "restart"},
 		{"tray", "status"},
 	} {
 		t.Run(strings.Join(argv, " "), func(t *testing.T) {
@@ -808,7 +808,7 @@ func TestStatusEvidenceAcceptsAnySuccessfulHealthzStatus(t *testing.T) {
 }
 
 func TestDelegatedFamilyHelpUsesOwnerOutput(t *testing.T) {
-	for _, command := range []string{"status", "doctor", "service"} {
+	for _, command := range []string{"doctor", "service"} {
 		t.Run(command, func(t *testing.T) {
 			var received []string
 			deps := depsFor(RuntimeState{}, &bytes.Buffer{}, &bytes.Buffer{})

@@ -216,6 +216,9 @@ func readStatusPackageVersion() string {
 // Go process. A trusted launcher marker must name this executable; otherwise
 // the running executable is the only honest process runtime to report.
 func ReadStatusBunRuntime() StatusBunRuntime {
+	if bundled := statusBundledBunRuntime(); bundled != "" {
+		return StatusBunRuntime{Path: bundled, Source: "bundled"}
+	}
 	path, err := os.Executable()
 	if err != nil || path == "" {
 		path = os.Args[0]
@@ -231,6 +234,24 @@ func ReadStatusBunRuntime() StatusBunRuntime {
 		overrideEnv = &value
 	}
 	return StatusBunRuntime{Path: path, Source: source, OverrideEnv: overrideEnv}
+}
+
+func statusBundledBunRuntime() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	for {
+		candidate := filepath.Join(dir, "node_modules", "bun", "bin", "bun.exe")
+		if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() {
+			return candidate
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
 }
 
 func sameStatusRuntimePath(left, right string) bool {

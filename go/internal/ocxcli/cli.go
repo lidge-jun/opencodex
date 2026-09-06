@@ -62,7 +62,7 @@ var Commands = []Command{
 	{Name: "disconnect", Usage: "ocx disconnect", Summary: "Disconnect from a remote hub.", Owner: TypeScriptOwned},
 	{Name: "sync", Usage: "ocx sync [--restart-codex]", Summary: "Sync provider models.", Owner: TypeScriptOwned},
 	{Name: "sync-cache", Usage: "ocx sync-cache [--restart-codex]", Summary: "Refresh the model cache.", Owner: TypeScriptOwned},
-	{Name: "status", Usage: "ocx status", Summary: "Check proxy status.", Owner: TypeScriptOwned},
+	{Name: "status", Usage: "ocx status", Summary: "Check proxy status.", Owner: GoOwned},
 	{Name: "doctor", Usage: "ocx doctor", Summary: "Diagnose the environment.", Owner: TypeScriptOwned},
 	{Name: "debug", Usage: "ocx debug <scope>", Summary: "Manage debug settings.", Owner: TypeScriptOwned},
 	{Name: "login", Usage: "ocx login <provider>", Summary: "Log in to a provider.", Owner: TypeScriptOwned},
@@ -255,6 +255,8 @@ func Run(args []string, deps Deps) int {
 		return runProvider(args[1:], deps)
 	case "config":
 		return runConfig(args[1:], deps)
+	case "status":
+		return runStatus(args[1:], deps)
 	default:
 		// The ownership registry above and this switch must be reconciled by
 		// TestOwnershipMapMatchesDispatch; this is defensive for future edits.
@@ -294,6 +296,8 @@ func printSubcommandHelp(name string, deps Deps) int {
 		return runDelegated([]string{name, "--help"}, deps)
 	}
 	switch name {
+	case "status":
+		fmt.Fprint(deps.Stdout, "Usage: ocx status\n\nCheck proxy server status.\n")
 	case "health":
 		fmt.Fprint(deps.Stdout, "Usage: ocx health [--json]\n\nCheck proxy health. Exits 0 if healthy, 1 otherwise.\n\nUse --json for structured output: {ok, pid, port}.\n")
 	case "ready":
