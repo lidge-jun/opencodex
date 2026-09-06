@@ -46,6 +46,7 @@ import {
   type TranslatorBudget,
 } from "../lib/translator-budget";
 import { handleNativeChatCompletions, isNativeChatRouteEligible } from "./chat-native";
+import { jsonCompletionSse } from "./chat-native-sse";
 import { parseRequestEffortRowId } from "./effort-row";
 import { parseSyntheticRowId } from "./fast-row";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
@@ -79,6 +80,14 @@ export async function handleChatCompletions(
     );
   } catch (error) {
     translatorBudget.dispose();
+    if (isTranslatorBudgetExceededError(error)) {
+      if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 502, { closeReason: "non_stream" });
+      return chatCompletionsErrorResponse(502, "upstream translation buffer exceeded the safe limit", "upstream_error", "translation_buffer_limit");
+    }
+    if (isChatCompletionsStreamError(error)) {
+      if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, error.status, { closeReason: "non_stream" });
+      return chatCompletionsErrorResponse(error.status, error.message, error.type, error.code);
+    }
     throw error;
   }
 }
@@ -447,35 +456,15 @@ async function handleChatCompletionsWithBudget(
       classified.code,
     );
   }
-  const completion = responsesJsonToChatCompletion(json, requestedModel);
-  if (!stream) {
-    return new Response(JSON.stringify(completion), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
-
-  // Streaming client + JSON upstream: synthesize a minimal Chat Completions stream.
-  const encoder = new TextEncoder();
-  const id = typeof completion.id === "string" ? completion.id : `chatcmpl-${Date.now()}`;
-  const created = typeof completion.created === "number" ? completion.created : Math.floor(Date.now() / 1000);
-  const message = isRec((completion.choices as Rec[] | undefined)?.[0])
-    ? ((completion.choices as Rec[])[0] as Rec).message as Rec | undefined
-    : undefined;
-  const content = message && typeof message.content === "string" ? message.content : "";
-  const frames = [
-    `data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model: requestedModel, choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }] })}\n\n`,
-    ...(content
-      ? [`data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model: requestedModel, choices: [{ index: 0, delta: { content }, finish_reason: null }] })}\n\n`]
-      : []),
-    `data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model: requestedModel, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: completion.usage })}\n\n`,
-    "data: [DONE]\n\n",
-  ];
-  return new Response(encoder.encode(frames.join("")), {
+  const completion = responsesJsonToChatCompletion(json, requestedModel, translatorBudget);
+  const body = stream
+    ? jsonCompletionSse(completion, requestedModel, translatorBudget)
+    : JSON.stringify(completion);
+  if (!stream) translatorBudget.chargeRetained(Buffer.byteLength(body) * 2, { kind: "live_transient" });
+  return new Response(body, {
     status: 200,
-    headers: {
-      "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-cache",
-    },
+    headers: stream
+      ? { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache", Connection: "keep-alive" }
+      : { "Content-Type": "application/json" },
   });
 }

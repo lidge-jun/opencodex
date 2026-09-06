@@ -502,15 +502,22 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
     attempt.usage = usage;
   }
   if (logIds) recordFirstOutput(logCtx, logIds.start);
-  finishLog(200);
-  if (requestedStream) {
-    return new Response(jsonCompletionSse(completion, requestedModel), {
+  try {
+    const serialized = requestedStream
+      ? jsonCompletionSse(completion, requestedModel, translatorBudget)
+      : JSON.stringify(completion);
+    if (!requestedStream) translatorBudget.chargeRetained(Buffer.byteLength(serialized) * 2, { kind: "live_transient" });
+    finishLog(200);
+    return new Response(serialized, {
       status: 200,
-      headers: { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache" },
+      headers: requestedStream
+        ? { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache" }
+        : { "Content-Type": "application/json" },
     });
+  } catch (error) {
+    if (isTranslatorBudgetExceededError(error)) {
+      return fail(502, "upstream translation buffer exceeded the safe limit", "upstream_error", "translation_buffer_limit");
+    }
+    throw error;
   }
-  return new Response(JSON.stringify(completion), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  });
 }

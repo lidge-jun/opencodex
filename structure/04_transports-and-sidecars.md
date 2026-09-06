@@ -1302,6 +1302,27 @@ messages are redacted before either JSON or SSE reaches the client. The native p
 request-attempt logging, reset retry, same-key 429 replay, key rotation, usage extraction, and
 request-signal cancellation contracts as routed Responses transport.
 
+## Chat streaming client with a JSON upstream result
+
+The translated inbound path in `src/server/chat-completions.ts` may receive a complete JSON
+Responses result even when the Chat client requested SSE. Its synthetic stream reuses
+`responsesJsonToChatCompletion` as the semantic authority: converted text, reasoning, available
+refusal content, tool calls, finish reason, and usage must survive this final delivery conversion.
+Tool calls gain their array-order stream `index`; the stream retains one assistant-role frame,
+one terminal choice, and one `[DONE]`. Both native and translated JSON fallbacks share
+`jsonCompletionSse`; its temporary frame strings and final body ownership are charged to the
+existing translator budget. Known incomplete limits take precedence over tool finish reasons;
+unmapped incomplete boundaries remain errors. The existing response-body lifecycle owns translation-budget
+release on consumption or cancellation. Actual upstream SSE and native Chat bypass this fallback.
+
+[Decision Log]
+- 목적과 의도: Keep tool execution and incomplete-response detection working when a streaming client receives a JSON upstream result.
+- 기존 구현 및 제약 조건: The existing fallback copied only text and forced `stop`, despite the JSON converter already retaining tool calls, reasoning, and incomplete status.
+- 검토한 주요 대안: Duplicate Responses parsing in the emitter; perform another inference request; preserve the already-converted Chat completion.
+- 선택한 방식: Copy supported converted message fields into one delta, assign tool-call stream indexes, and retain the converted finish reason.
+- 다른 대안 대신 이 방식을 선택한 이유: One conversion authority prevents the streaming fallback from drifting from non-streaming semantics without changing routing or retry behavior.
+- 장점, 단점 및 영향: No additional upstream request or dependency; this remains buffered delivery, not token-by-token upstream streaming. Handler regressions cover tools, reasoning, length, ordinary and empty completions, and budget release.
+
 ## Parallel tool calls (default-on for chat providers)
 
 The openai-chat adapter buffers ALL streamed `tool_calls` deltas (keyed by `index`, falling back to

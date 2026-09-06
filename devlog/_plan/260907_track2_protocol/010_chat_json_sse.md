@@ -16,3 +16,7 @@ Streaming Chat request + JSON Responses upstream is the trigger. Native Chat and
 ## Check and delivery
 
 No local execution. Final remote CI must execute tests/responses/chat-json-sse-fallback.test.ts and existing chat-completions-endpoint coverage, typecheck and test-layout guards. Preserve upstream author credit in carried commit and final PR body. Lower refs are published with --no-verify; no native stack registration.
+
+## Build checkpoint
+
+Carried #3779 and applied independent-audit corrections: shared native serializer, indexed tools, typed unknown incompletes, correct length/content_filter precedence, and explicit converted/serialized byte ownership. New tests preserve the source PR cases and add official-contract boundary/accounting cases. Local suites/typecheck/build NOT RUN by instruction; git diff --check is a whitespace check only. Remote verification remains pending.

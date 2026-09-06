@@ -251,6 +251,15 @@ Non-streaming output has `object: "chat.completion"`. Streaming output uses SSE 
 `data: [DONE]`. Tool-call and usage information are translated back where the source events carry
 them.
 
+If a streaming Chat request receives a complete JSON Responses result upstream, the proxy
+synthesizes SSE from the converted completion. It preserves answer and reasoning content,
+function tool calls (with a separate stream `index` for each call), usage, and the converted
+`finish_reason`, including `tool_calls` and `length`. This fallback delivers the completed result
+in chunks; it cannot provide token-by-token delivery before the upstream JSON response arrives.
+It does not issue an additional inference request. An incomplete response caused by the output
+token limit or content filtering retains `length` or `content_filter`, even if it includes tool
+output. Other incomplete boundaries return an upstream error instead of claiming a normal finish.
+
 Because the internal execution path is Responses-based, a provider adapter can impose a narrower
 feature set. For example, a request feature that cannot be represented by the selected adapter is
 returned as an error instead of silently changing its meaning.

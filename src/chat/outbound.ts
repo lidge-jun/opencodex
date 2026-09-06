@@ -560,51 +560,74 @@ export function responsesSseToChatCompletionsSse(
 }
 
 /** Non-streaming: /v1/responses JSON -> Chat Completions message JSON. */
-export function responsesJsonToChatCompletion(json: unknown, model: string): Rec {
+export function responsesJsonToChatCompletion(json: unknown, model: string, translatorBudget?: TranslatorBudget): Rec {
   const body = isRec(json) ? json : {};
+  const incomplete = isRec(body.incomplete_details) ? body.incomplete_details : {};
+  let incompleteFinish: "length" | "content_filter" | undefined;
+  if (body.status === "incomplete") {
+    if (incomplete.reason === "max_output_tokens") incompleteFinish = "length";
+    else if (incomplete.reason === "content_filter") incompleteFinish = "content_filter";
+    else throw new ChatCompletionsStreamError("upstream response ended without a supported completion boundary", {
+      code: "upstream_incomplete", type: "upstream_error",
+    });
+  }
   const output = Array.isArray(body.output) ? body.output : [];
   let content = "";
   let reasoning = "";
   const toolCalls: Rec[] = [];
+  const append = (previous: string, fragment: string): string => {
+    const scope = { kind: "retained_collectors" as const };
+    const nextBytes = appendedUtf8Bytes(previous, Buffer.byteLength(previous), fragment);
+    const reservation = translatorBudget?.reserveTransient(nextBytes, scope);
+    try {
+      const next = previous + fragment;
+      reservation?.commitRetained();
+      translatorBudget?.releaseRetained(Buffer.byteLength(previous), scope);
+      return next;
+    } catch (error) {
+      reservation?.release();
+      throw error;
+    }
+  };
 
   for (const raw of output) {
     if (!isRec(raw)) continue;
     if (raw.type === "message" && Array.isArray(raw.content)) {
       for (const part of raw.content) {
         if (isRec(part) && part.type === "output_text" && typeof part.text === "string") {
-          content += part.text;
+          content = append(content, part.text);
         }
       }
     } else if (raw.type === "reasoning") {
       if (Array.isArray(raw.summary)) {
         for (const part of raw.summary) {
           if (isRec(part) && part.type === "summary_text" && typeof part.text === "string") {
-            reasoning += part.text;
+            reasoning = append(reasoning, part.text);
           }
         }
       }
       if (Array.isArray(raw.content)) {
         for (const part of raw.content) {
           if (isRec(part) && part.type === "reasoning_text" && typeof part.text === "string") {
-            reasoning += part.text;
+            reasoning = append(reasoning, part.text);
           }
         }
       }
     } else if (raw.type === "function_call") {
-      toolCalls.push({
+      const call = {
         id: typeof raw.call_id === "string" ? raw.call_id : `call_${uuid().slice(0, 16)}`,
         type: "function",
         function: {
           name: typeof raw.name === "string" ? raw.name : "",
           arguments: typeof raw.arguments === "string" ? raw.arguments : "{}",
         },
-      });
+      };
+      translatorBudget?.chargeRetained(Buffer.byteLength(JSON.stringify(call)), { kind: "retained_collectors" });
+      toolCalls.push(call);
     }
   }
 
-  const finishReason = toolCalls.length > 0 ? "tool_calls"
-    : body.status === "incomplete" ? "length"
-    : "stop";
+  const finishReason = incompleteFinish ?? (toolCalls.length > 0 ? "tool_calls" : "stop");
 
   const message: Rec = {
     role: "assistant",
