@@ -7,7 +7,7 @@ import {
   QWEN_CLOUD_BASE_URL_CHOICES, QWEN_CLOUD_TOKEN_PLAN_BASE_URL,
   ALIBABA_INTL_BASE_URL_CHOICES, ALIBABA_INTL_TOKEN_PLAN_BASE_URL,
   ALIBABA_CODING_BASE_URL_CHOICES, ALIBABA_CODING_INTL_BASE_URL,
-  MOONSHOT_BASE_URL_CHOICES, MOONSHOT_INTL_BASE_URL, MOONSHOT_CN_BASE_URL,
+  MOONSHOT_BASE_URL_CHOICES, MOONSHOT_INTL_BASE_URL,
 } from "./base-url-choices";
 import {
   CURSOR_NO_VISION_MODELS,
@@ -1486,10 +1486,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     noPenaltyModels: KIMI_LOCKED_PARAMETER_MODELS,
     autoToolChoiceOnlyModels: KIMI_AUTO_TOOL_CHOICE_ONLY_MODELS,
     preserveReasoningContentModels: KIMI_THINKING_MODELS,
-    // 260908 K3 live canary (Codex code mode): k3 completes multi-step tool loops
+    // 260908 K3 live canary (api.kimi.com coding endpoint, not NIM): k3 completes multi-step tool loops
     // (read -> patch -> test -> inspect -> repair) with multiple tool calls per turn,
     // so advertise the parallel capability bit and stop pinning the wire field off.
-    // Evidence: devlog/_plan/260908_k3_codex_compat/ (this unit).
+    // Evidence: devlog/_plan/260908_openai_chat_compat/ (this unit).
     parallelToolCalls: true,
   },
   {
