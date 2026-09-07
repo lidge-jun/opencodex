@@ -31,6 +31,7 @@ const account: CodexAccountEntry = {
   isMain: false,
   paused: false,
   priority: 0,
+  autoSwitchThresholdOverride: null,
   hasCredential: true,
   quota: null,
   usage30d: {
@@ -46,6 +47,7 @@ const mainAccount: CodexAccountEntry = {
   isMain: true,
   paused: false,
   priority: 0,
+  autoSwitchThresholdOverride: null,
   hasCredential: true,
   quota: null,
 };
@@ -58,6 +60,7 @@ function makeController(overrides: Partial<CodexAccountPoolController> = {}): Co
     switchingId: null,
     pauseUpdatingId: null,
     priorityUpdatingId: null,
+    autoSwitchUpdatingId: null,
     pausingExhausted: false,
     activeNeedsReauth: false,
     activePinnedId: null,
@@ -65,6 +68,7 @@ function makeController(overrides: Partial<CodexAccountPoolController> = {}): Co
     switchAccount: async () => ({ ok: true, activeId: null }),
     setAccountPaused: async () => ({ ok: true }),
     setAccountPriority: async () => ({ ok: true }),
+    setAccountAutoSwitchThreshold: async () => ({ ok: true }),
     pauseExhaustedAccounts: async () => ({ ok: true, pausedCount: 0 }),
     saveAlias: async () => ({ ok: true }),
     removeAccount: async () => ({ ok: true }),
@@ -279,4 +283,109 @@ test("healthy account cards omit log-label and 30-day usage copy", async () => {
   const main = cardFor("main@example.test");
   expect(main.textContent).not.toContain("Log label: main");
   expect(hasPinnedHint(main)).toBe(false);
+});
+
+test("account cards show custom threshold controls only when enabled", async () => {
+  const inherited = {
+    ...account,
+    autoSwitchThresholdOverride: null,
+  };
+  const overridden = {
+    ...account,
+    id: "pool-2",
+    email: "override@example.test",
+    autoSwitchThresholdOverride: 70,
+  };
+  await mountPool(makeController({
+    accounts: [
+      { ...mainAccount, autoSwitchThresholdOverride: null },
+      inherited,
+      overridden,
+    ],
+    readLastThreshold: () => 95,
+  }));
+
+  const inheritedCard = cardFor("pool@example.test");
+  expect(inheritedCard.textContent).toContain("Custom account threshold");
+  expect(inheritedCard.textContent).not.toContain("Global 95%");
+  expect(inheritedCard.querySelector('input[type="number"]')).toBeNull();
+  const inheritedToggle = inheritedCard.querySelector<HTMLButtonElement>('button[aria-pressed="false"]');
+  expect(inheritedToggle).not.toBeNull();
+  expect(inheritedToggle!.disabled).toBe(false);
+
+  const overrideCard = cardFor("override@example.test");
+  expect(overrideCard.textContent).toContain("Custom account threshold");
+  const input = overrideCard.querySelector<HTMLInputElement>(
+    'input[aria-label="Usage threshold for override@example.test"]',
+  );
+  expect(input?.value).toBe("70");
+  expect(overrideCard.querySelector('button[aria-pressed="true"]')).not.toBeNull();
+});
+
+test("custom account threshold uses only the custom number stepper", async () => {
+  const style = win.document.createElement("style");
+  style.textContent = await Bun.file(new URL("../src/styles.css", import.meta.url)).text();
+  win.document.head.appendChild(style);
+  await mountPool(makeController({
+    accounts: [{ ...account, autoSwitchThresholdOverride: 70 }],
+    readLastThreshold: () => 95,
+  }));
+
+  const card = cardFor("pool@example.test");
+  const input = card.querySelector<HTMLInputElement>('input[type="number"]');
+  expect(input).not.toBeNull();
+  expect(win.getComputedStyle(input!).appearance).toBe("textfield");
+  expect(card.querySelectorAll(".ocx-stepper__btn")).toHaveLength(2);
+});
+
+test("toggle-off wins over a pending edited-threshold blur", async () => {
+  const writes: Array<number | null> = [];
+  await mountPool(makeController({
+    accounts: [{ ...account, autoSwitchThresholdOverride: 70 }],
+    readLastThreshold: () => 95,
+    setAccountAutoSwitchThreshold: async (_id, threshold) => {
+      if (writes.length > 0) return { ok: false, reason: "busy" };
+      writes.push(threshold);
+      return await new Promise(() => {});
+    },
+  }));
+
+  const card = cardFor("pool@example.test");
+  const input = card.querySelector<HTMLInputElement>('input[type="number"]')!;
+  const toggle = card.querySelector<HTMLButtonElement>('button[aria-pressed="true"]')!;
+
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!
+      .set!.call(input, "75");
+    input.dispatchEvent(new win.Event("input", { bubbles: true }));
+    toggle.dispatchEvent(new win.Event("pointerdown", { bubbles: true }));
+    input.dispatchEvent(new win.FocusEvent("focusout", { bubbles: true, relatedTarget: null }));
+    toggle.dispatchEvent(new win.Event("pointerup", { bubbles: true }));
+    toggle.dispatchEvent(new win.MouseEvent("click", { bubbles: true }));
+    await Promise.resolve();
+  });
+
+  expect(writes).toEqual([null]);
+});
+
+test("account threshold override cannot persist the seed before global threshold hydration", async () => {
+  let writes = 0;
+  await mountPool(makeController({
+    readLastThreshold: () => undefined,
+    setAccountAutoSwitchThreshold: async () => {
+      writes += 1;
+      return { ok: true };
+    },
+  }));
+
+  const inheritedCard = cardFor("pool@example.test");
+  const toggle = inheritedCard.querySelector<HTMLButtonElement>('button[aria-pressed="false"]');
+  expect(toggle).not.toBeNull();
+  expect(toggle!.disabled).toBe(true);
+
+  await act(async () => {
+    toggle!.click();
+    await Promise.resolve();
+  });
+  expect(writes).toBe(0);
 });

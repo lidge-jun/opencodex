@@ -4,6 +4,7 @@ import { isCodexAccountGenerationLive, readCodexAccountRecord, type CodexRefresh
 import { codexAccountLogLabel } from "./account-label";
 import { NATIVE_RESERVE_MODEL } from "./catalog/native-models";
 import { isCodexAccountPaused } from "./account-pause";
+import { getEffectiveCodexAutoSwitchThreshold } from "./account-auto-switch";
 import { clearCodexAccountPin, codexAccountPriorityLookup, pinnedCodexAccountId } from "./account-priority";
 import { isCodexAccountUsable, type CodexAccountUsabilityOptions } from "./account-usability";
 import { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
@@ -1305,7 +1306,7 @@ function hasCodexQuotaHeadroom(
   selectionOptions?: CodexAccountUsabilityOptions,
   now: number = Date.now(),
 ): boolean {
-  const threshold = config.autoSwitchThreshold ?? 80;
+  const threshold = getEffectiveCodexAutoSwitchThreshold(config, accountId);
   if (threshold <= 0) return true;
   const usage = computeCodexUsageScore(
     getAccountQuota(accountId),
@@ -1742,7 +1743,7 @@ function applyQuotaAutoSwitch(
   selectionOptions?: CodexAccountUsabilityOptions,
   commitSharedSelection = true,
 ): string {
-  const threshold = config.autoSwitchThreshold ?? 80;
+  const threshold = getEffectiveCodexAutoSwitchThreshold(config, active);
   if (threshold <= 0) return active;
   const quota = getAccountQuota(active);
   const activeUsage = computeCodexUsageScore(
@@ -1864,7 +1865,7 @@ function previewReusableAffinityAccount(
   // Quota strategy only: non-quota strategies keep affinity for ongoing threads
   // (new-session-only rotation — docs / affinity policy A).
   if (normalizeAccountPoolStrategy(config.accountPoolStrategy) === "quota") {
-    const threshold = config.autoSwitchThreshold ?? 80;
+    const threshold = getEffectiveCodexAutoSwitchThreshold(config, entry.accountId);
     if (threshold > 0) {
       const usage = computeCodexUsageScore(
         getAccountQuota(entry.accountId),
@@ -1900,7 +1901,7 @@ function reevaluateAffinityQuota(
   selectionOptions?: CodexAccountUsabilityOptions,
 ): string | null {
   if (normalizeAccountPoolStrategy(config.accountPoolStrategy) !== "quota") return null;
-  const threshold = config.autoSwitchThreshold ?? 80;
+  const threshold = getEffectiveCodexAutoSwitchThreshold(config, entry.accountId);
   const usage = threshold > 0
     ? computeCodexUsageScore(
         getAccountQuota(entry.accountId),
@@ -1994,7 +1995,7 @@ export function previewCodexAccountForRequest(
   }
   active = pickPriorityPreemption(config, active, now, quotaScope, selectionOptions) ?? active;
 
-  const threshold = config.autoSwitchThreshold ?? 80;
+  const threshold = getEffectiveCodexAutoSwitchThreshold(config, active);
   if (threshold > 0) {
     const usage = computeCodexUsageScore(
       getAccountQuota(active),

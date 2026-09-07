@@ -16,6 +16,7 @@ import { clearMainAccountCredentialPresence, clearMainAccountInfoCache, observeM
 import { forgetCodexAccountPause } from "./account-pause";
 import { clearCodexAccountPin, forgetCodexAccountPriority } from "./account-priority";
 import { forgetCodexQuotaAutoRefreshAccount } from "./quota-auto-refresh-state";
+import { forgetCodexAccountAutoSwitchThreshold } from "./account-auto-switch";
 import { codexAccountNamespaceEntries, codexAccountPickerEnabled } from "./account-namespaces";
 import type { OcxConfig } from "../types";
 
@@ -141,6 +142,7 @@ export function deleteCodexAccount(runtimeConfig: OcxConfig, accountId: string):
       .filter(account => account.isMain || account.id !== accountId);
     forgetCodexAccountPause(runtimeConfig, accountId);
     forgetCodexAccountPriority(runtimeConfig, accountId);
+    forgetCodexAccountAutoSwitchThreshold(runtimeConfig, accountId);
     if (runtimeConfig.codexQuotaAutoRefresh?.[accountId]) {
       const retained = { ...runtimeConfig.codexQuotaAutoRefresh };
       delete retained[accountId];

@@ -3895,6 +3895,80 @@ describe("codex-auth API", () => {
     expect(accounts.find(a => a.isMain)?.priority).toBe(0);
   });
 
+  async function putAccountAutoSwitch(config: OcxConfig, body: unknown): Promise<Response> {
+    const req = new Request("http://localhost/api/codex-auth/auto-switch", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: typeof body === "string" ? body : JSON.stringify(body),
+    });
+    return (await handleCodexAuthAPI(req, new URL(req.url), config))!;
+  }
+
+  test("PUT /api/codex-auth/auto-switch persists a pool account override", async () => {
+    const config = makeConfig({ autoSwitchThreshold: 95 });
+    seedPoolAccount(config, { id: "work", email: "work@example.test" });
+
+    const resp = await putAccountAutoSwitch(config, { id: "work", threshold: 60 });
+
+    expect(resp.status).toBe(200);
+    expect(await resp.json()).toMatchObject({
+      ok: true,
+      id: "work",
+      autoSwitchThresholdOverride: 60,
+      autoSwitchThreshold: 60,
+    });
+    expect(config.codexAccountAutoSwitchThresholds).toEqual({ work: 60 });
+  });
+
+  test("a null account threshold restores global inheritance and drops an empty map", async () => {
+    const config = makeConfig({
+      autoSwitchThreshold: 95,
+      codexAccountAutoSwitchThresholds: { work: 60 },
+    });
+    seedPoolAccount(config, { id: "work", email: "work@example.test" });
+
+    const resp = await putAccountAutoSwitch(config, { id: "work", threshold: null });
+
+    expect(resp.status).toBe(200);
+    expect(await resp.json()).toMatchObject({
+      id: "work",
+      autoSwitchThresholdOverride: null,
+      autoSwitchThreshold: 95,
+    });
+    expect(config.codexAccountAutoSwitchThresholds).toBeUndefined();
+  });
+
+  test("account threshold overrides include main and are reported by the account list", async () => {
+    const config = makeConfig({
+      autoSwitchThreshold: 95,
+      codexAccountAutoSwitchThresholds: { work: 60, [MAIN_CODEX_ACCOUNT_ID]: 0 },
+    });
+    seedPoolAccount(config, { id: "work", email: "work@example.test" });
+    seedPoolAccount(config, { id: "side", email: "side@example.test" });
+
+    const accounts = await listCodexAuthAccounts(config);
+
+    expect(accounts.find(a => a.id === "work")?.autoSwitchThresholdOverride).toBe(60);
+    expect(accounts.find(a => a.id === "side")?.autoSwitchThresholdOverride).toBeNull();
+    expect(accounts.find(a => a.isMain)?.autoSwitchThresholdOverride).toBe(0);
+  });
+
+  test.each([
+    ["a negative threshold", -1],
+    ["a threshold above 100", 101],
+    ["a fractional threshold", 1.5],
+    ["a numeric string", "80"],
+    ["a missing threshold", undefined],
+  ] as const)("rejects %s as an account threshold override", async (_label, threshold) => {
+    const config = makeConfig();
+    seedPoolAccount(config, { id: "work", email: "work@example.test" });
+
+    const resp = await putAccountAutoSwitch(config, { id: "work", threshold });
+
+    expect(resp.status).toBe(400);
+    expect(config.codexAccountAutoSwitchThresholds).toBeUndefined();
+  });
+
   test("GET /api/codex-auth/active reports an operator pin but not an automatic pick", async () => {
     const config = makeConfig({ activeCodexAccountId: "work" });
     seedPoolAccount(config, { id: "work", email: "work@example.test" });

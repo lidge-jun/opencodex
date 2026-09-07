@@ -240,7 +240,7 @@ OpenAI 也遵循此规则：开关不会选择特殊的 922k 模式。有效上�
 | `PUT /api/codex-auth/accounts/pause-exhausted` | 暂停配额已耗尽的账户 | 变更锁失败会变成 503 |
 | `POST /api/codex-auth/accounts/clear-cooldown` | 清除一个账户或所有账户的运行时冷却 | 400 id 无效 |
 | `GET, PUT /api/codex-auth/active` | 读取或选择当前活跃账户 | 400 账户无效或缺失；409 暂停/旧行冲突 |
-| `PUT /api/codex-auth/auto-switch` | 设置自动切换账户的配额阈值 | 400 阈值无效 |
+| `PUT /api/codex-auth/auto-switch` | 使用 `{ threshold }` 设置全局阈值，或使用 `{ id, threshold }` 设置账号阈值；`null` 恢复继承全局值 | 400 ID/阈值无效；404 账号不存在 |
 | `PUT, PATCH /api/codex-auth/pool-strategy` | 更新 Codex 账户池选择策略 | 400 策略/配置无效 |
 | `PUT /api/codex-auth/failover` | 设置账户故障转移阈值 | 400 阈值无效 |
 | `GET /api/codex-auth/quota` | 按账户读取缓存的配额状态 | — |

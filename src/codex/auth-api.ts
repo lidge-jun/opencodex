@@ -39,6 +39,13 @@ import {
   setCodexAccountPriority,
 } from "./account-priority";
 import {
+  getCodexAccountAutoSwitchThresholdOverride,
+  getEffectiveCodexAutoSwitchThreshold,
+  isCodexAccountAutoSwitchThresholdKey,
+  parseCodexAutoSwitchThreshold,
+  setCodexAccountAutoSwitchThresholdOverride,
+} from "./account-auto-switch";
+import {
   claimDueCodexQuotaRecoveryProbes,
   claimManualResetCooldowns,
   settleManualResetCooldown,
@@ -365,6 +372,7 @@ function poolAccountDto(
   hasCredential: boolean,
   paused: boolean,
   priority: number,
+  autoSwitchThresholdOverride: number | null,
 ): CodexAuthAccountDto {
   const plan = codexPlanValue(account.plan);
   const quota = quotaForPlan(quotaResult.quota, plan);
@@ -379,6 +387,7 @@ function poolAccountDto(
     isMain: false,
     paused,
     priority,
+    autoSwitchThresholdOverride,
     quota: quota ? { ...quota } : null,
     needsReauth,
     hasCredential,
@@ -1146,6 +1155,8 @@ export interface CodexAuthAccountDto {
   paused: boolean;
   /** Selection order; higher is used earlier. Always present, 0 when unset. */
   priority: number;
+  /** Null inherits the global usage-switch threshold; 0 disables it for this account. */
+  autoSwitchThresholdOverride: number | null;
   quota: (StoredAccountQuota | (Omit<StoredAccountQuota, "updatedAt"> & { updatedAt: number })) | null;
   needsReauth?: boolean;
   hasCredential: boolean;
@@ -1920,6 +1931,7 @@ export async function listCodexAuthAccountsSnapshot(
         false,
         isCodexAccountPaused(runtimeConfig, accountId),
         getCodexAccountPriority(runtimeConfig, accountId),
+        getCodexAccountAutoSwitchThresholdOverride(runtimeConfig, accountId),
       )];
     }
     const resultGeneration = quotaResult.credentialGeneration ?? quotaResult.freshCredentialGeneration;
@@ -1939,6 +1951,7 @@ export async function listCodexAuthAccountsSnapshot(
       true,
       isCodexAccountPaused(runtimeConfig, accountId),
       getCodexAccountPriority(runtimeConfig, accountId),
+      getCodexAccountAutoSwitchThresholdOverride(runtimeConfig, accountId),
     )];
   });
   const fetchedMainGeneration = mainResult.identityGeneration ?? captureMainAccountIdentityGeneration();
@@ -1965,6 +1978,10 @@ export async function listCodexAuthAccountsSnapshot(
     paused: isCodexAccountPaused(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),
     mainAccountHardLock: getMainAccountHardLockStatus(runtimeConfig),
     priority: getCodexAccountPriority(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),
+    autoSwitchThresholdOverride: getCodexAccountAutoSwitchThresholdOverride(
+      runtimeConfig,
+      MAIN_CODEX_ACCOUNT_ID,
+    ),
     hasCredential: hasMainCredential,
     needsReauth: mainNeedsReauth,
     quota: mainInfo.quota ? {
@@ -2345,12 +2362,36 @@ export async function handleCodexAuthAPI(
   }
 
   if (url.pathname === "/api/codex-auth/auto-switch" && req.method === "PUT") {
-    let body: { threshold: number };
-    try { body = (await req.json()) as typeof body; } catch { return jsonResponse({ error: "Invalid JSON" }, 400); }
+    let parsedBody: unknown;
+    try { parsedBody = await req.json(); } catch { return jsonResponse({ error: "Invalid JSON" }, 400); }
+    if (typeof parsedBody !== "object" || parsedBody === null || Array.isArray(parsedBody)) {
+      return jsonResponse({ error: "body must be an object" }, 400);
+    }
+    const body = parsedBody as { id?: unknown; threshold?: unknown };
+    const runtimeConfig = getRuntimeConfig(config);
+    if (Object.hasOwn(body, "id")) {
+      if (!isCodexAccountAutoSwitchThresholdKey(body.id)) {
+        return jsonResponse({ error: "id must be a Codex account id" }, 400);
+      }
+      const threshold = body.threshold === null ? null : parseCodexAutoSwitchThreshold(body.threshold);
+      if (body.threshold !== null && threshold === null) {
+        return jsonResponse({ error: "threshold must be null or an integer 0-100" }, 400);
+      }
+      if (body.id !== MAIN_CODEX_ACCOUNT_ID && !configuredPoolAccount(runtimeConfig, body.id)) {
+        return jsonResponse({ error: "Codex account not found" }, 404);
+      }
+      setCodexAccountAutoSwitchThresholdOverride(runtimeConfig, body.id, threshold);
+      saveRuntimeConfig(config, runtimeConfig);
+      return jsonResponse({
+        ok: true,
+        id: body.id,
+        autoSwitchThresholdOverride: threshold,
+        autoSwitchThreshold: getEffectiveCodexAutoSwitchThreshold(runtimeConfig, body.id),
+      });
+    }
     if (typeof body.threshold !== "number" || !Number.isInteger(body.threshold) || body.threshold < 0 || body.threshold > 100) {
       return jsonResponse({ error: "Threshold must be an integer 0-100" }, 400);
     }
-    const runtimeConfig = getRuntimeConfig(config);
     runtimeConfig.autoSwitchThreshold = body.threshold;
     saveRuntimeConfig(config, runtimeConfig);
     return jsonResponse({ ok: true });

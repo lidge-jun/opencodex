@@ -48,6 +48,7 @@ function seededConfig(): OcxConfig {
   config.codexAccountPickerEnabled = true;
   config.pausedCodexAccountIds = [ACCOUNT_ID];
   config.codexAccountPriorities = { [ACCOUNT_ID]: 7 };
+  config.codexAccountAutoSwitchThresholds = { [ACCOUNT_ID]: 65 };
   config.activeCodexAccountPinned = ACCOUNT_ID;
   config.activeCodexAccountId = ACCOUNT_ID;
   saveConfig(config);
@@ -289,6 +290,7 @@ describe("Codex account delete persistence ordering", () => {
       expect(config.codexAccountNamespaces).toEqual({ stable: ACCOUNT_ID });
       expect(config.pausedCodexAccountIds).toBeUndefined();
       expect(config.codexAccountPriorities).toBeUndefined();
+      expect(config.codexAccountAutoSwitchThresholds).toBeUndefined();
       expect(config.activeCodexAccountPinned).toBeUndefined();
       expect(config.activeCodexAccountId).toBeUndefined();
       expect(getCodexAccountCredential(ACCOUNT_ID)).toBeNull();
@@ -328,6 +330,7 @@ describe("Codex account delete persistence ordering", () => {
     expect(config.codexAccounts?.some(account => account.id === ACCOUNT_ID)).toBe(false);
     expect(config.pausedCodexAccountIds).toBeUndefined();
     expect(config.codexAccountPriorities).toBeUndefined();
+    expect(config.codexAccountAutoSwitchThresholds).toBeUndefined();
     expect(config.activeCodexAccountPinned).toBeUndefined();
     expect(config.activeCodexAccountId).toBeUndefined();
     expect(getCodexAccountCredential(ACCOUNT_ID)).toBeNull();

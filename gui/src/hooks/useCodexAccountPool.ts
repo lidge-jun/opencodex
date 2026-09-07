@@ -44,6 +44,8 @@ export interface CodexAccountEntry {
   paused: boolean;
   /** Selection order; higher is used earlier. Always present, 0 when unset. */
   priority: number;
+  /** Null inherits global threshold; 0 disables usage-driven switching for this account. */
+  autoSwitchThresholdOverride: number | null;
   hasCredential: boolean;
   quota: AccountQuota | null;
   quotaAutoRefresh: {
@@ -100,6 +102,7 @@ export interface CodexAccountPoolController {
   switchingId: string | null;
   pauseUpdatingId: string | null;
   priorityUpdatingId: string | null;
+  autoSwitchUpdatingId: string | null;
   pausingExhausted: boolean;
   activeNeedsReauth: boolean;
   /**
@@ -114,6 +117,8 @@ export interface CodexAccountPoolController {
   setAccountPaused(id: string, paused: boolean): Promise<CodexAccountActionResult>;
   /** `null` resets the account to the default order. Accepts the `__main__` sentinel. */
   setAccountPriority(id: string, priority: number | null): Promise<CodexAccountActionResult>;
+  /** `null` restores global inheritance. Accepts the `__main__` sentinel. */
+  setAccountAutoSwitchThreshold(id: string, threshold: number | null): Promise<CodexAccountActionResult>;
   pauseExhaustedAccounts(): Promise<CodexAccountActionResult<{ pausedCount: number }>>;
   saveAlias(id: string, alias: string): Promise<CodexAccountActionResult>;
   removeAccount(id: string): Promise<CodexAccountActionResult<CodexAccountMutationCompletion>>;
@@ -143,6 +148,12 @@ interface CodexAccountUsageSummary {
 /** In-memory last-good snapshot (not sessionStorage — accounts carry emails/ids). */
 const lastGoodByBase = new Map<string, { accounts: CodexAccountEntry[]; activeId: string | null }>();
 
+function normalizeAccountAutoSwitchThreshold(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 100
+    ? value
+    : null;
+}
+
 export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccountPoolController {
   const seed = lastGoodByBase.get(apiBase);
   const [accounts, setAccounts] = useState<CodexAccountEntry[]>(() => seed?.accounts ?? []);
@@ -161,6 +172,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
   const [switchingId, setSwitchingId] = useState<string | null>(null);
   const [pauseUpdatingId, setPauseUpdatingId] = useState<string | null>(null);
   const [priorityUpdatingId, setPriorityUpdatingId] = useState<string | null>(null);
+  const [autoSwitchUpdatingId, setAutoSwitchUpdatingId] = useState<string | null>(null);
   const [pausingExhausted, setPausingExhausted] = useState(false);
   const [activePinnedId, setActivePinnedId] = useState<string | null>(null);
   // A counter, not a boolean: the initial load, the 30s poll, quota-fill retries and explicit
@@ -197,6 +209,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
   // Its own gate, deliberately not the pause one: re-ordering one account and pausing
   // another are independent writes, and a shared ref would make either reject the other.
   const priorityMutationRef = useRef<{ accountId: string } | null>(null);
+  const autoSwitchMutationRef = useRef<{ accountId: string } | null>(null);
 
   const subscribeLoadObserver = useCallback((observer: CodexAccountLoadObserver) => {
     observersRef.current!.add(observer);
@@ -250,6 +263,9 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
                 ...account,
                 ...(logLabel ? { logLabel } : {}),
                 priority: normalizeAccountPriority(account.priority),
+                autoSwitchThresholdOverride: normalizeAccountAutoSwitchThreshold(
+                  account.autoSwitchThresholdOverride,
+                ),
                 quotaAutoRefresh: account.quotaAutoRefresh ?? {
                   ...available,
                   fiveHourEnabled: false,
@@ -511,6 +527,42 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
     }
   }, [apiBase, load]);
 
+  const setAccountAutoSwitchThreshold = useCallback(async (
+    id: string,
+    threshold: number | null,
+  ) => {
+    if (autoSwitchMutationRef.current) return { ok: false, reason: "busy" } as const;
+    autoSwitchMutationRef.current = { accountId: id };
+    setAutoSwitchUpdatingId(id);
+    try {
+      const response = await fetch(`${apiBase}/api/codex-auth/auto-switch`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, threshold }),
+      });
+      if (!response.ok) return { ok: false, reason: "request" } as const;
+      const raw = await response.json().catch(() => ({}));
+      const result = (raw && typeof raw === "object" ? raw : {}) as {
+        autoSwitchThresholdOverride?: unknown;
+      };
+      const stored = Object.prototype.hasOwnProperty.call(result, "autoSwitchThresholdOverride")
+        ? normalizeAccountAutoSwitchThreshold(result.autoSwitchThresholdOverride)
+        : threshold;
+      setAccounts(current => current.map(account => (
+        account.id === id || (id === "__main__" && account.isMain)
+          ? { ...account, autoSwitchThresholdOverride: stored }
+          : account
+      )));
+      void load();
+      return { ok: true } as const;
+    } catch {
+      return { ok: false, reason: "request" } as const;
+    } finally {
+      autoSwitchMutationRef.current = null;
+      setAutoSwitchUpdatingId(null);
+    }
+  }, [apiBase, load]);
+
   const pauseExhaustedAccounts = useCallback(async () => {
     if (pauseMutationRef.current) return { ok: false, reason: "busy" } as const;
     pauseMutationRef.current = "bulk";
@@ -597,6 +649,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
     switchingId,
     pauseUpdatingId,
     priorityUpdatingId,
+    autoSwitchUpdatingId,
     pausingExhausted,
     activeNeedsReauth,
     activePinnedId,
@@ -604,6 +657,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
     switchAccount,
     setAccountPaused,
     setAccountPriority,
+    setAccountAutoSwitchThreshold,
     pauseExhaustedAccounts,
     saveAlias,
     removeAccount,

@@ -46,6 +46,10 @@ import {
   MAIN_CODEX_ACCOUNT_NAMESPACE_TARGET,
 } from "./codex/account-namespace-match";
 import { isCodexAccountPriorityKey } from "./codex/account-priority";
+import {
+  isCodexAccountAutoSwitchThresholdKey,
+  parseCodexAutoSwitchThreshold,
+} from "./codex/account-auto-switch";
 import { UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD } from "./codex/upstream-host-health";
 import {
   adoptCustomModelCatalogMigration,
@@ -158,11 +162,14 @@ export {
   type RuntimePortState,
 } from "./config/process-state";
 import {
+  applyConfigObjectChildDeletions,
+  clearPendingConfigObjectChildDeletions,
   clearPendingConfigTopLevelDeletions,
   configHasRebaseProvenance,
   configRebaseDeletionKeys,
   CONFIG_REBASE_PROVENANCE_KEY,
   deleteConfigTopLevelKey,
+  prepareConfigObjectChildDeletionRebase,
   projectConfigRebaseProvenance,
 } from "./config/rebase-provenance";
 export { deleteConfigTopLevelKey } from "./config/rebase-provenance";
@@ -898,6 +905,38 @@ const codexQuotaAutoRefreshSchema = z.custom<Record<string, unknown>>(
   }
 }).pipe(z.record(z.string(), codexQuotaAutoRefreshEntrySchema));
 
+const CODEX_ACCOUNT_AUTO_SWITCH_THRESHOLDS_RECORD_ERROR =
+  "codexAccountAutoSwitchThresholds must be a plain object mapping Codex account ids to usage thresholds";
+const CODEX_ACCOUNT_AUTO_SWITCH_THRESHOLD_KEY_ERROR =
+  "usage-threshold keys must be a Codex pool-account id or the main Codex account and cannot be reserved JavaScript object keys";
+const CODEX_ACCOUNT_AUTO_SWITCH_THRESHOLD_VALUE_ERROR =
+  "account usage threshold must be an integer between 0 and 100";
+
+const codexAccountAutoSwitchThresholdsSchema = z.custom<Record<string, unknown>>(
+  (value): value is Record<string, unknown> => !!value
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null),
+  { error: CODEX_ACCOUNT_AUTO_SWITCH_THRESHOLDS_RECORD_ERROR },
+).superRefine((thresholds, ctx) => {
+  for (const [accountId, threshold] of Object.entries(thresholds)) {
+    if (!isCodexAccountAutoSwitchThresholdKey(accountId)) {
+      ctx.addIssue({
+        code: "custom",
+        path: [accountId],
+        message: CODEX_ACCOUNT_AUTO_SWITCH_THRESHOLD_KEY_ERROR,
+      });
+    }
+    if (parseCodexAutoSwitchThreshold(threshold) === null) {
+      ctx.addIssue({
+        code: "custom",
+        path: [accountId],
+        message: CODEX_ACCOUNT_AUTO_SWITCH_THRESHOLD_VALUE_ERROR,
+      });
+    }
+  }
+}).pipe(z.record(z.string(), z.number().int()));
+
 /**
  * Deliberately permissive. A user's config is not ours to invalidate: a strict
  * entry fails the whole parse, and loadConfig's fallback then backs the file up
@@ -1197,6 +1236,9 @@ const configSchema = z.object({
   // typo cannot trip the backup-and-defaults repair path and wipe providers or
   // pool accounts. Warning emitted in loadConfig.
   codexAccountPriorities: codexAccountPrioritiesSchema.optional().catch(undefined),
+  // Same preference boundary as selection order: malformed hand edits disable only
+  // account-local overrides instead of resetting providers or pool accounts.
+  codexAccountAutoSwitchThresholds: codexAccountAutoSwitchThresholdsSchema.optional().catch(undefined),
   activeCodexAccountPinned: z.string().regex(CODEX_ACCOUNT_PIN_PATTERN).optional().catch(undefined),
   // A malformed hand edit must degrade to false without discarding providers, accounts,
   // or the exact selector map. Live writes remain strict.
@@ -1853,6 +1895,10 @@ function degradedCodexAccountPriorityWarnings(rawParsed: unknown, validated: Ocx
   const raw = record?.codexAccountPriorities;
   if (raw !== undefined && validated.codexAccountPriorities === undefined) {
     warnings.push("codexAccountPriorities is invalid (expected account ids mapped to integers between -100 and 100) — account selection order is disabled");
+  }
+  const rawThresholds = record?.codexAccountAutoSwitchThresholds;
+  if (rawThresholds !== undefined && validated.codexAccountAutoSwitchThresholds === undefined) {
+    warnings.push("codexAccountAutoSwitchThresholds is invalid (expected account ids mapped to integers between 0 and 100) — per-account usage thresholds are disabled");
   }
   return warnings;
 }
@@ -2632,6 +2678,13 @@ function codexAccountPrioritiesError(value: unknown): string | null {
       return schemaDiagnosticsError(parsed.error).replace("schema_invalid: ", "schema_invalid: codexAccountPriorities.");
     }
   }
+  if (raw.codexAccountAutoSwitchThresholds !== undefined) {
+    const parsed = codexAccountAutoSwitchThresholdsSchema.safeParse(raw.codexAccountAutoSwitchThresholds);
+    if (!parsed.success) {
+      return schemaDiagnosticsError(parsed.error)
+        .replace("schema_invalid: ", "schema_invalid: codexAccountAutoSwitchThresholds.");
+    }
+  }
   // Tested as a string rather than coerced: `String(123)` matches the id pattern, so a
   // coercing guard waves a non-string pin through to the schema, where `.catch(undefined)`
   // drops it and reports the write as a success — the exact silent-degrade this guards.
@@ -3255,6 +3308,7 @@ export function saveConfig(config: OcxConfig): void {
     adoptCustomModelCatalogMigration(config, withProvenance);
     if (withProvenance.configRebaseProvenance === undefined) delete config.configRebaseProvenance;
     else config.configRebaseProvenance = structuredClone(withProvenance.configRebaseProvenance);
+    clearPendingConfigObjectChildDeletions(config);
     clearPendingConfigTopLevelDeletions(config);
   });
 }
@@ -3631,12 +3685,14 @@ export function reconcileLiveConfigFromDisk(config: OcxConfig, persistedBaseline
     ...(persisted.hostname !== undefined ? { hostname: persisted.hostname } : {}),
   });
 
+  const childDeletions = prepareConfigObjectChildDeletionRebase(config);
   reconcileConfigRecord(
     config as unknown as Record<string, unknown>,
     persistedBaseline as unknown as Record<string, unknown>,
     persisted as unknown as Record<string, unknown>,
     new Set(["hostname", "port", ...(claudeGuardArmed ? ["claudeCode"] : [])]),
   );
+  applyConfigObjectChildDeletions(config, childDeletions);
 
   if (claudeGuardArmed && !pendingLiveClaudeMutation) {
     if (persisted.claudeCode === undefined) delete config.claudeCode;
@@ -3704,6 +3760,7 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
   const pinError = configReasoningPinsConfigError(config);
   if (pinError) throw new Error(pinError);
   withConfigMutationLockSync(() => {
+    const childDeletions = prepareConfigObjectChildDeletionRebase(config);
     const bindingBaseline = persistedLiveServerBinding.get(config);
     // One authoritative pre-write read feeds both the live-config reconciliation and
     // custom-model deletion migration. A second read could observe different bytes.
@@ -3744,6 +3801,7 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
         for (const key of deletedKeys) delete (config as unknown as Record<string, unknown>)[key];
       }
     }
+    applyConfigObjectChildDeletions(config, childDeletions);
     if (claudeCodeBaseline.has(config)) {
       if (onDisk !== undefined) {
         const baseline = claudeCodeBaseline.get(config);
@@ -3783,6 +3841,7 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
       else config.configRebaseProvenance = structuredClone(projectedConfig.configRebaseProvenance);
       liveConfigBaseline.set(config, structuredClone(projectedConfig));
     }
+    clearPendingConfigObjectChildDeletions(config);
     clearPendingConfigTopLevelDeletions(config);
   });
 }

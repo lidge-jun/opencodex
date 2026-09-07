@@ -1996,6 +1996,50 @@ describe("codex routing", () => {
     expect(config.activeCodexAccountId).toBe("a");
   });
 
+  test("an inherited fractional global threshold keeps its configured value", () => {
+    const config = makeConfig({ autoSwitchThreshold: 95.5 });
+    updateAccountQuota("a", 90);
+    updateAccountQuota("b", 5);
+
+    expect(resolveCodexAccountForThread("fractional-global-threshold", config)).toBe("a");
+  });
+
+  test("an account threshold override switches below the global threshold", () => {
+    const config = makeConfig({
+      autoSwitchThreshold: 95,
+      codexAccountAutoSwitchThresholds: { a: 50 },
+    } as Partial<OcxConfig> & { codexAccountAutoSwitchThresholds: Record<string, number> });
+    updateAccountQuota("a", 60);
+    updateAccountQuota("b", 5);
+
+    expect(resolveCodexAccountForThread("account-threshold", config)).toBe("b");
+  });
+
+  test("a zero account override disables proactive switching only for that account", () => {
+    const config = makeConfig({
+      autoSwitchThreshold: 50,
+      codexAccountAutoSwitchThresholds: { a: 0 },
+    } as Partial<OcxConfig> & { codexAccountAutoSwitchThresholds: Record<string, number> });
+    updateAccountQuota("a", 99);
+    updateAccountQuota("b", 1);
+
+    expect(resolveCodexAccountForThread("account-threshold-off", config)).toBe("a");
+  });
+
+  test("a bound task uses its account threshold override for immediate re-evaluation", () => {
+    const config = makeConfig({
+      autoSwitchThreshold: 95,
+      codexAccountAutoSwitchThresholds: { a: 50 },
+    } as Partial<OcxConfig> & { codexAccountAutoSwitchThresholds: Record<string, number> });
+    const now = 1_800_000_000_000;
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 5);
+    expect(resolveCodexAccountForThread("account-threshold-bound", config, now)).toBe("a");
+
+    updateAccountQuota("a", 60);
+    expect(resolveCodexAccountForThread("account-threshold-bound", config, now + 1)).toBe("b");
+  });
+
   test("unknown active quota stays selected even when other candidates differ in health", () => {
     const config = makeConfig({
       codexAccounts: [

@@ -798,6 +798,20 @@ test("the native-main drain sentinel covers the flagships without widening to gp
     expect(isNativeModelQuotaExhausted("gpt-5.6-sol", config, "pool-a", now)).toBe(false);
   });
 
+  test("native subagent quota checks use the resolved account threshold override", () => {
+    resetSubagentModelFallbackStateForTests();
+    updateAccountQuota("pool-a", 60);
+    const config = cfg({
+      autoSwitchThreshold: 95,
+      codexAccountAutoSwitchThresholds: { "pool-a": 50 },
+    });
+
+    expect(isNativeModelQuotaExhausted("gpt-5.6-sol", config, "pool-a")).toBe(true);
+
+    config.codexAccountAutoSwitchThresholds = { "pool-a": 0 };
+    expect(isNativeModelQuotaExhausted("gpt-5.6-sol", config, "pool-a")).toBe(false);
+  });
+
   test("openai-direct/gpt-5.5 is accepted as encrypted-task fallback when canonical", () => {
     resetSubagentModelFallbackStateForTests();
     updateAccountQuota("pool-a", 95, undefined, 20);

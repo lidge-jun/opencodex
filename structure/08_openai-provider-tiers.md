@@ -179,6 +179,14 @@ being selectable, or affinity expiry. The stable `__main__` alias carries an ord
 added accounts, which is what lets the Desktop login be ordered last. An absent or empty map
 reproduces the prior selection sequence exactly.
 
+`codexAccountAutoSwitchThresholds` is persisted per-account routing metadata. Each 0..100 value
+overrides global `autoSwitchThreshold` for that source account; absence inherits global, and 0 disables
+only usage-driven switching from that account. Runtime must resolve this effective value anywhere it
+asks whether an account is drained: unbound selection, quota-strategy bound-task re-evaluation,
+fill-first, priority-tier headroom, main-account pin reuse, previews, and subagent quota fallback.
+Failure recovery remains separate. The stable `__main__` alias participates, deletion removes an added
+account's sidecar entry, and malformed maps degrade as a unit rather than invalidating the config.
+
 Preemption moves unbound requests back up when a higher tier regains headroom, and it holds the
 runtime cursor only. Under an independent quota scope it must never touch the shared active cursor,
 because the scopes track separate native quota groups and a scoped request has no standing to move

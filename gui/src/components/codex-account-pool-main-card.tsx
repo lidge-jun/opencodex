@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { IconLock, IconPause, IconPlay, IconPlus, IconRefresh, IconTicket } from "../icons";
 import AccountPriorityControl, { AccountPriorityBadge } from "./AccountPriorityControl";
+import AccountAutoSwitchControl from "./AccountAutoSwitchControl";
 import QuotaBars from "./QuotaBars";
 import { CodexPauseToggleLabel, CodexTicketBadge } from "./codex-account-pool-helpers";
 import type { CodexAccountEntry } from "./codex-account-pool-types";
@@ -31,6 +32,8 @@ export function CodexAccountPoolMainCard({
   pauseBusy,
   onPriorityChange,
   priorityUpdatingId,
+  onAutoSwitchThresholdChange,
+  autoSwitchDisabled,
   switchingId,
   pinnedId = null,
   onOpenReset,
@@ -50,6 +53,8 @@ export function CodexAccountPoolMainCard({
   pauseBusy: boolean;
   onPriorityChange: (entry: CodexAccountEntry, priority: number) => void;
   priorityUpdatingId: string | null;
+  onAutoSwitchThresholdChange: (entry: CodexAccountEntry, threshold: number | null) => Promise<boolean>;
+  autoSwitchDisabled: boolean;
   /** In-flight manual switch, which writes the same pin an order write clears. */
   switchingId: string | null;
   /**
@@ -72,6 +77,7 @@ export function CodexAccountPoolMainCard({
     isMain: true,
     paused: main?.paused ?? false,
     priority: main?.priority ?? 0,
+    autoSwitchThresholdOverride: main?.autoSwitchThresholdOverride ?? null,
     hasCredential: true,
     quota: main?.quota ?? null,
     quotaAutoRefresh: main?.quotaAutoRefresh ?? {
@@ -151,19 +157,30 @@ export function CodexAccountPoolMainCard({
         {/* The main card keeps its order select inline: it is one control, not one per pool row,
             and the main card has no ⋯ disclosure to fold it into. */}
         {main && (
-          <AccountPriorityControl
-            value={mainSwitchEntry.priority}
-            // Derived from the synthesized id rather than hardcoded as "-main": a pool account
-            // may legitimately be named `main` (the id pattern allows it), and that account's
-            // control would then claim the same DOM id, pointing this label at its dropdown.
-            selectId={`codex-account-priority-${mainSwitchEntry.id}`}
-            // Any in-flight order write, not just this card's: order writes share one mutation
-            // ref, so a pick made during another card's write returns "busy" and is dropped
-            // silently. Mirrors pauseBusy. A pending switch counts too — it writes the same
-            // pin this clears, so the controller refuses to overlap them, just as silently.
-            disabled={priorityUpdatingId !== null || switchingId !== null}
-            onChange={(priority) => onPriorityChange(mainSwitchEntry, priority)}
-          />
+          <div className="codex-account-controls">
+            <AccountPriorityControl
+              value={mainSwitchEntry.priority}
+              // Derived from the synthesized id rather than hardcoded as "-main": a pool account
+              // may legitimately be named `main` (the id pattern allows it), and that account's
+              // control would then claim the same DOM id, pointing this label at its dropdown.
+              selectId={`codex-account-priority-${mainSwitchEntry.id}`}
+              // Any in-flight order write, not just this card's: order writes share one mutation
+              // ref, so a pick made during another card's write returns "busy" and is dropped
+              // silently. Mirrors pauseBusy. A pending switch counts too — it writes the same
+              // pin this clears, so the controller refuses to overlap them, just as silently.
+              disabled={priorityUpdatingId !== null || switchingId !== null}
+              onChange={(priority) => onPriorityChange(mainSwitchEntry, priority)}
+            />
+            <AccountAutoSwitchControl
+              key={`${mainSwitchEntry.id}:${mainSwitchEntry.autoSwitchThresholdOverride ?? "global"}:${threshold}`}
+              accountLabel={mainSwitchEntry.email}
+              globalThreshold={threshold}
+              override={mainSwitchEntry.autoSwitchThresholdOverride}
+              inputId={`codex-account-auto-switch-${mainSwitchEntry.id}`}
+              disabled={autoSwitchDisabled}
+              onChange={(next) => onAutoSwitchThresholdChange(mainSwitchEntry, next)}
+            />
+          </div>
         )}
       </div>
       {policy?.enabled && (
@@ -187,7 +204,7 @@ export function CodexAccountPoolMainCard({
             <QuotaBars
               quota={main?.quota ?? null}
               plan={main?.plan}
-              threshold={threshold}
+              threshold={mainSwitchEntry.autoSwitchThresholdOverride ?? threshold}
               t={t}
               pending={main != null && main.quota == null}
             />
