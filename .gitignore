@@ -64,3 +64,10 @@ tests/.tmp-*
 # `go build -o bin` cannot be committed. Nothing in `src/` imports `go/` at
 # runtime — the TypeScript server spawns the built binary as a child process.
 go/bin/
+
+# Embedded dashboard build output (ADR-0008). go/internal/embeddedui/static/
+# carries only hand-written source assets; the release Vite build is read from
+# gui/dist at runtime and must never be committed into the embed tree (the
+# deterministic PR hygiene gate rejects generated build output, matching the
+# repository-wide gui/dist convention).
+go/internal/embeddedui/static/assets/

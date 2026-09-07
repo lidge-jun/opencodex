@@ -2,24 +2,77 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/png" href="/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
     <title>opencodex · proxy dashboard</title>
-    <script>
-      // FOWT guard: apply an explicit light/dark choice before first paint. "system" leaves the
-      // attribute unset so color-scheme:light-dark follows the OS. Mirrors App.tsx.
-      (function () {
-        try {
-          var t = localStorage.getItem("ocx-theme");
-          if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
-        } catch (e) {}
-      })();
-    </script>
-    <script type="module" crossorigin src="/assets/index-BU1tE0sr.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-DL9-iS6J.css">
+    <style>
+      :root { color-scheme: light dark; }
+      body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+             display: grid; place-items: center; min-height: 100vh;
+             background: #f6f7f9; color: #1c1e21; }
+      @media (prefers-color-scheme: dark) {
+        body { background: #121417; color: #e8eaed; }
+        .card { background: #1c1f24; border-color: #2d3138; }
+        a { color: #7cb3ff; }
+      }
+      .card { background: #fff; border: 1px solid #dfe2e6; border-radius: 12px;
+              padding: 40px 48px; max-width: 560px; margin: 24px; }
+      h1 { font-size: 20px; margin: 0 0 8px; }
+      p { line-height: 1.55; margin: 8px 0; }
+      .ok { color: #137333; }
+      .err { color: #b3261e; }
+      @media (prefers-color-scheme: dark) { .ok { color: #81c995; } .err { color: #f28b82; } }
+      code { background: rgba(127, 127, 127, 0.15); padding: 1px 5px; border-radius: 4px;
+             font-size: 0.9em; }
+      .foot { font-size: 12px; opacity: 0.7; margin-top: 16px; }
+      button { background: #1466b8; color: #fff; border: 0; border-radius: 6px;
+               padding: 7px 14px; cursor: pointer; }
+      @media (prefers-color-scheme: dark) { button { background: #3b82c4; } }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <main class="card">
+      <h1>opencodex proxy dashboard</h1>
+      <p>The full dashboard build is not available in this standalone runtime.</p>
+      <p>Status: <strong id="status" class="err">checking&hellip;</strong></p>
+      <p id="detail"></p>
+      <button id="retry" type="button" hidden>Retry</button>
+      <p class="foot">Release builds embed the full Vite dashboard; this page is the
+      offline fallback when no GUI build ships with the runtime. Management API:
+      <code>http://127.0.0.1:<span id="port"></span>/api/</code></p>
+    </main>
+    <script>
+      (function () {
+        var status = document.getElementById("status");
+        var detail = document.getElementById("detail");
+        var retry = document.getElementById("retry");
+        var port = document.getElementById("port");
+        function check() {
+          status.textContent = "checking…";
+          status.className = "";
+          detail.textContent = "";
+          retry.hidden = true;
+          // The runtime serves /healthz on the same origin as this page.
+          fetch("healthz", { cache: "no-store" })
+            .then(function (response) {
+              return response.ok ? response.json() : Promise.reject(new Error("healthz HTTP " + response.status));
+            })
+            .then(function (health) {
+              status.textContent = "reachable";
+              status.className = "ok";
+              port.textContent = String(health.port || "");
+              detail.textContent = health.service + " " + (health.version || "") + " — the proxy API is live; the GUI bundle is not installed.";
+            })
+            .catch(function (error) {
+              status.textContent = "unreachable";
+              status.className = "err";
+              detail.textContent = error instanceof Error ? error.message : String(error);
+              retry.hidden = false;
+            });
+        }
+        check();
+        retry.addEventListener("click", check);
+      })();
+    </script>
   </body>
 </html>
