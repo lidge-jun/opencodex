@@ -227,6 +227,11 @@ so stable notes are the aggregate of their preview train. The raw commit dump is
 intentionally gone — non-PR commits stay reachable via the Full Changelog compare link when
 that link is available.
 
+Both summary bullets and full-changelog titles strip the exact leading `[WRONG BRANCH] `
+enforcement marker. Other bracketed text is preserved. Summary bullets still remove conventional
+commit prefixes and group by scope; full-changelog entries keep those conventional prefixes,
+PR numbers, and author attribution. This normalization does not change PR-target enforcement.
+
 The deterministic renderer produces the structure but not curated prose. Maintainers who want
 the OpenAI-style grouped summaries can run the optional local polish step against the rendered
 body (needs an OpenAI-compatible API key):
