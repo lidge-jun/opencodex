@@ -1010,6 +1010,7 @@ export const en = {
   "storage.cleanup.confirmPermanent": "Delete permanently",
   "storage.cleanup.doneQuarantine": "Quarantined {count} file(s) ({size}).",
   "storage.cleanup.donePermanent": "Permanently deleted {count} file(s) ({size}).",
+  "storage.cleanup.skippedReferenced": "Skipped {count} referenced file(s).",
   "storage.cleanup.previewFailed": "Preview failed.",
   "storage.cleanup.cleanupFailed": "Cleanup failed.",
   "storage.cleanup.err.codex_busy": "Codex is using state.sqlite — try again after quitting Codex.",

@@ -1816,6 +1816,7 @@ export const ko: Record<TKey, string> = {
   "storage.cleanup.confirmPermanent": "영구 삭제",
   "storage.cleanup.doneQuarantine": "파일 {count}개를 격리했습니다({size}).",
   "storage.cleanup.donePermanent": "파일 {count}개를 영구 삭제했습니다({size}).",
+  "storage.cleanup.skippedReferenced": "참조된 파일 {count}개를 건너뛰었습니다.",
   "storage.cleanup.previewFailed": "미리보기에 실패했습니다.",
   "storage.cleanup.cleanupFailed": "정리에 실패했습니다.",
   "storage.cleanup.err.codex_busy": "Codex가 state.sqlite를 사용 중입니다 — Codex를 종료한 뒤 다시 시도하세요.",

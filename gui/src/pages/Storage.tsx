@@ -29,6 +29,7 @@ interface CleanupResult {
   trashDir?: string;
   error?: string;
   message?: string;
+  skippedReferencedPaths?: string[];
 }
 
 interface TrashEntry {
@@ -222,11 +223,12 @@ function ArchivedCleanupPanel({
         throw new Error(mapCleanupError(json.error, json.message, json.trashDir));
       }
       closeConfirm(true);
-      setStatus(
-        permanent
+      const complete = permanent
           ? t("storage.cleanup.donePermanent", { count: String(json.count), size: formatBytes(json.bytes, locale) })
-          : t("storage.cleanup.doneQuarantine", { count: String(json.count), size: formatBytes(json.bytes, locale) }),
-      );
+          : t("storage.cleanup.doneQuarantine", { count: String(json.count), size: formatBytes(json.bytes, locale) });
+      setStatus(json.skippedReferencedPaths?.length
+        ? `${complete} ${t("storage.cleanup.skippedReferenced", { count: String(json.skippedReferencedPaths.length) })}`
+        : complete);
       onDone();
     } catch (e) {
       // Keep the dialog open (except stale_preview) so the failure is visible.

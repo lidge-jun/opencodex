@@ -1640,6 +1640,43 @@ describe("combo catalog capability intersection", () => {
     )).not.toHaveProperty("reasoningEfforts");
   });
 
+  test("resolveComboCatalogMember restores canonical OpenAI effort levels through generic routes", () => {
+    const providers = new Map([["azu-lab2", {
+      adapter: "openai-chat" as const,
+      baseUrl: "https://azu-lab2.example/v1",
+    }]]);
+    const member = resolveComboCatalogMember(
+      { provider: "azu-lab2", model: "gpt-5.6-terra" },
+      new Map([["azu-lab2/gpt-5.6-terra", {
+        provider: "azu-lab2",
+        id: "gpt-5.6-terra",
+        contextWindow: 373_000,
+        inputModalities: ["text", "image"],
+      }]]),
+      providers,
+    );
+    expect(member?.reasoningEfforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
+  });
+
+  test("resolveComboCatalogMember applies sidecar hints to complete discovery rows", () => {
+    const providers = new Map([["sidecar", {
+      adapter: "openai-chat" as const,
+      baseUrl: "https://sidecar.example/v1",
+      modelInputModalities: { planner: ["text"] },
+    }]]);
+    const member = resolveComboCatalogMember(
+      { provider: "sidecar", model: "planner" },
+      new Map([["sidecar/planner", {
+        provider: "sidecar",
+        id: "planner",
+        contextWindow: 200_000,
+        inputModalities: ["text"],
+      }]]),
+      providers,
+    );
+    expect(member?.inputModalities).toEqual(["text", "image"]);
+  });
+
   // Sniper for the OUTPUT-vs-INPUT mapping defect carried over from PR #3332. The test
   // above uses toMatchObject, which only inspects the keys it names, so without this a
   // regression that puts the OUTPUT ceiling into the INPUT slot passes green.
