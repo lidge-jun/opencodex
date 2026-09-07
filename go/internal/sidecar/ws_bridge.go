@@ -5,6 +5,7 @@ package sidecar
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/binary"
@@ -34,12 +35,18 @@ type wsBridgeRequest struct {
 	Admission json.RawMessage `json:"admission"`
 }
 
-func mountResponsesWebSocketBridge(mux *http.ServeMux, cfg Config) {
+func mountResponsesWebSocketBridge(mux *http.ServeMux, cfg Config, tracker *ShutdownTracker) {
 	mux.HandleFunc(ResponsesWSBridgePath, func(w http.ResponseWriter, r *http.Request) {
 		if cfg.RequestToken == "" || !managementauth.EqualSecret(r.Header.Get(SidecarRequestHeader), cfg.RequestToken) || r.Method != http.MethodGet || !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
 			http.NotFound(w, r)
 			return
 		}
+		lease, admitted := tracker.Register(r.Context())
+		if !admitted {
+			writeDrainingResponse(w)
+			return
+		}
+		defer lease.Release()
 		if cfg.BridgeToken == "" {
 			http.NotFound(w, r)
 			return
@@ -58,6 +65,7 @@ func mountResponsesWebSocketBridge(mux *http.ServeMux, cfg Config) {
 		if err != nil {
 			return
 		}
+		lease.OnAbort(func() { _ = conn.Close() })
 		defer conn.Close()
 		if _, err = rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: " + websocketAccept(key) + "\r\n\r\n"); err != nil {
 			return
@@ -75,7 +83,7 @@ func mountResponsesWebSocketBridge(mux *http.ServeMux, cfg Config) {
 			_ = rw.Flush()
 			return
 		}
-		bridgeWSFrames(rw.Writer, cfg, input)
+		bridgeWSFrames(rw.Writer, cfg, input, lease.Context())
 		_ = rw.Flush()
 		_, _ = rw.Write([]byte{0x88, 0x00})
 		_ = rw.Flush()
@@ -169,14 +177,18 @@ func protocolWSError(w *bufio.Writer, m string) {
 	sendWSError(w, 502, map[string]any{"type": "protocol_error", "code": "websocket_protocol_error", "message": m}, nil)
 }
 
-func bridgeWSFrames(w *bufio.Writer, cfg Config, input wsBridgeRequest) {
+func bridgeWSFrames(w *bufio.Writer, cfg Config, input wsBridgeRequest, contexts ...context.Context) {
+	ctx := context.Background()
+	if len(contexts) > 0 && contexts[0] != nil {
+		ctx = contexts[0]
+	}
 	parent, ok := privateParentBridgeURL(cfg.ParentURL, ResponsesWSParentBridgePath)
 	if !ok {
 		sendWSError(w, 503, map[string]any{"type": "server_error", "message": "responses bridge unavailable"}, nil)
 		return
 	}
 	body, _ := json.Marshal(input)
-	req, e := http.NewRequest(http.MethodPost, parent.String(), bytes.NewReader(body))
+	req, e := http.NewRequestWithContext(ctx, http.MethodPost, parent.String(), bytes.NewReader(body))
 	if e != nil {
 		sendWSError(w, 503, map[string]any{"type": "server_error", "message": "responses bridge unavailable"}, nil)
 		return

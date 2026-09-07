@@ -2708,6 +2708,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         bridgeToken: goSidecarLiveStateBridgeToken,
         requestToken: randomUUID(),
         writeRelaySecret,
+        shutdownTimeoutMs: config.shutdownTimeoutMs ?? 5000,
         createWriteRelayHeaders: goSidecarWriteRelay
           ? request => createGoSidecarWriteRelayHeaders(writeRelaySecret, request.principal, request)
           : undefined,

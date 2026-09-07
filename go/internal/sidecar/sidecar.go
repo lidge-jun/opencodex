@@ -63,6 +63,9 @@ type Config struct {
 	// the TypeScript parent must pass OPENCODEX_GO_HOTPATH_RELAY=1 in the
 	// environment to arm it.
 	HotPathRelay bool
+	// ShutdownTracker is the process-lifetime admission fence. A nil tracker
+	// creates a fresh one, while the command wires one into all long-lived routes.
+	ShutdownTracker *ShutdownTracker
 }
 
 const (
@@ -94,8 +97,12 @@ type healthPayload struct {
 // The TypeScript front door only forwards declared routes, so this handler
 // never sees another request while the seam is wired correctly.
 func NewHandler(cfg Config) http.Handler {
+	tracker := cfg.ShutdownTracker
+	if tracker == nil {
+		tracker = NewShutdownTracker()
+	}
 	mux := http.NewServeMux()
-	mountResponsesWebSocketBridge(mux, cfg)
+	mountResponsesWebSocketBridge(mux, cfg, tracker)
 	writeRelay := managementauth.NewWriteRelayVerifier(cfg.WriteRelaySecret)
 	mux.HandleFunc("GET /api/system/health", func(w http.ResponseWriter, r *http.Request) {
 		version := cfg.Version
@@ -310,7 +317,7 @@ func NewHandler(cfg Config) http.Handler {
 			relayPublicWrite(w, r, cfg, writeRelay, path)
 		})
 	}
-	mountDataPlaneSeam(mux, cfg)
+	mountDataPlaneSeam(mux, cfg, tracker)
 	return mux
 }
 

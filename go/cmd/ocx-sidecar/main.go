@@ -12,7 +12,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -70,6 +69,9 @@ func serve() error {
 		WriteRelaySecret: os.Getenv("OCX_SIDECAR_WRITE_RELAY_SECRET"),
 		HotPathRelay:     os.Getenv(sidecar.HotPathRelayEnv) != "",
 	}
+	shutdownTracker := sidecar.NewShutdownTracker()
+	cfg.ShutdownTracker = shutdownTracker
+	shutdownTimeout := sidecar.ParseShutdownTimeout(os.Getenv(sidecar.ShutdownTimeoutEnv))
 	if cfg.Version == "" {
 		fmt.Fprintln(os.Stderr, "ocx-sidecar: warning: OCX_SIDECAR_VERSION is unset; reporting version 0.0.0")
 	}
@@ -98,9 +100,7 @@ func serve() error {
 	select {
 	case sig := <-signals:
 		fmt.Fprintf(os.Stderr, "ocx-sidecar: received %s; shutting down\n", sig)
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := server.Shutdown(ctx); err != nil {
+		if err := sidecar.ShutdownServer(server, shutdownTracker, shutdownTimeout); err != nil {
 			return fmt.Errorf("shutdown: %w", err)
 		}
 		return nil
