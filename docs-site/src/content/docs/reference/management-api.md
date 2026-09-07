@@ -427,6 +427,13 @@ manager. Its routes are:
 | `POST /api/codex-auth/login/cancel` | Cancel a Codex login flow | — |
 | `GET /api/codex-auth/login-status` | Poll a flow or account login state. A completed new-account flow includes `catalogRefreshPending: true` only when recovery is needed. | Unknown flows report `expired`; no active flow reports `idle` |
 
+For reset-credit consumption, a different `operationId` supplied while the same physical
+account has an unfinished operation joins that operation as an alias. Its retry uses the
+original upstream request ID and records the outcome under that same identity, so later
+requests with the original ID or a known alias replay the stored result without another
+consume request. A previously unseen ID supplied after settlement starts a new explicit
+redemption; clients retrying an existing action should keep its ID.
+
 If a new account config row is saved but credential setup cannot finish, OAuth `login-status` reports
 `status: "error"` with
 `code: "codex_credential_persistence_failed"`, `accountId`, `needsReauth: true`, and optional

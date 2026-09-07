@@ -2341,7 +2341,7 @@ export async function handleCodexAuthAPI(
       const operation = await withResetCreditAuth(getRuntimeConfig(config), accountId, async auth => {
         // The ledger keys manual operations by the *physical* ChatGPT account, which is
         // only known after the auth wrapper resolves credentials. Open here, not earlier.
-        const identity = requestedOperationId === undefined
+        let identity = requestedOperationId === undefined
           ? undefined
           : {
             accountId,
@@ -2377,6 +2377,7 @@ export async function handleCodexAuthAPI(
             return response;
           }
           // Canonical id, which an alias join may map to an earlier caller id.
+          identity = { ...identity, operationId: opened.operationId };
           idempotencyKey = opened.operationId;
         } else {
           idempotencyKey = crypto.randomUUID();
