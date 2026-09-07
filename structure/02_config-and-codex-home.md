@@ -284,6 +284,12 @@ and publication followed by a later failure can leave a complete config or priva
 foreign winner's ownership under future uninstall; the existing ownership manifest and global CLI
 shim preflight keep their separate contracts.
 
+Initial publication diagnostics distinguish required permission-hardening failures from denied
+hard-link publication without exposing raw filesystem causes. Both identify `OPENCODEX_HOME`
+as the supported-location recovery path; uncertain publication and cleanup warnings remain in
+the CLI. The quickstart documents inspection before retry, private-permission requirements,
+and fresh-location examples. Diagnostics do not introduce a fallback or alter file I/O ordering.
+
 `src/config/paths.ts` is the single owner of `OPENCODEX_HOME` expansion and resolution. It exposes
 the config directory and `config.json` path and retains the existing cache rule: a relative home is
 resolved once for each distinct raw environment value, so a later working-directory change cannot
