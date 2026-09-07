@@ -48,10 +48,25 @@ is untouched.
 
 ## Authorship
 
-Commits are cherry-picked with `-x`; the branch carries
-`Co-authored-by: x3M3x <amroeid1999@gmail.com>` so the credit survives a squash.
+Both commits are cherry-picked with `-x`, so each retains
+`x3M3x <amroeid1999@gmail.com>` as its git author and records the source SHA:
+
+| Carried commit | Source commit |
+|---|---|
+| `6a0abcf90` fix: use portable exclusive config temp creation | `52c7495618f18f2847b7f9468421442c1c573da1` |
+| `24a078d80` test: guard atomic temp writes against Bun/Windows ENOENT | `744eb644028492784446fe9f0f73813d5d1fe59f` |
+
+A squash landing keeps only the squash message and drops per-commit authors, so
+`b1a7f111c` adds the `Co-authored-by: x3M3x <amroeid1999@gmail.com>` trailer to
+the branch. That trailer must be carried into the tip PR squash message and
+re-read on the landed commit.
 
 ## Verification
+
+An independent read-only audit of the built branch confirmed the carried
+source-and-test diff is byte-identical to #3900 pinned patch (2,176 bytes),
+that both `-x` annotations and the original author survive, that the trailer
+parses through `git interpret-trailers`, and that no other `src/` file changed.
 
 Repository CI on the stack tip only. Local suite, typecheck, and build:
 **NOT RUN** (owner instruction).
