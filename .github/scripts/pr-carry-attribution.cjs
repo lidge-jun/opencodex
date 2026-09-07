@@ -54,8 +54,61 @@ function carryWindow(text, from) {
 
 const TRAILER_RE = /^[ \t]*co-authored-by:[ \t]*(.+)$/gim;
 
-const FENCED_CODE_RE = /^[ \t]*(\u0060{3,}|~{3,})[\s\S]*?^[ \t]*\1[ \t]*$/gm;
 const INLINE_CODE_RE = /\u0060[^\u0060\n]*\u0060/g;
+
+/**
+ * Remove fenced blocks in one forward pass.
+ *
+ * A regex that searches lazily for a closing fence has to retry from every
+ * opening-looking line when no close exists. Pull request and commit text is
+ * untrusted workflow input, so that quadratic failure mode is significant
+ * here. Keep the opening range pending until a matching close is found: an
+ * unclosed fence remains ordinary text, matching the previous behavior.
+ */
+function stripFencedCode(text) {
+  let output = "";
+  let copiedThrough = 0;
+  let pendingStart = -1;
+  let pendingFence = "";
+  let lineStart = 0;
+
+  while (lineStart <= text.length) {
+    const newline = text.indexOf("\n", lineStart);
+    const lineEnd = newline === -1 ? text.length : newline;
+    const line = text.slice(lineStart, lineEnd);
+
+    if (pendingStart === -1) {
+      const opening = /^[ \t]*(\u0060{3,}|~{3,})/.exec(line);
+      if (opening) {
+        pendingStart = lineStart;
+        pendingFence = opening[1];
+      }
+    } else {
+      let contentStart = 0;
+      let contentEnd = line.length;
+      while (line[contentStart] === " " || line[contentStart] === "\t") {
+        contentStart++;
+      }
+      while (line[contentEnd - 1] === " " || line[contentEnd - 1] === "\t") {
+        contentEnd--;
+      }
+      if (line.slice(contentStart, contentEnd) !== pendingFence) {
+        if (newline === -1) break;
+        lineStart = newline + 1;
+        continue;
+      }
+      output += text.slice(copiedThrough, pendingStart);
+      copiedThrough = newline === -1 ? lineEnd : lineEnd + 1;
+      pendingStart = -1;
+      pendingFence = "";
+    }
+
+    if (newline === -1) break;
+    lineStart = newline + 1;
+  }
+
+  return output + text.slice(copiedThrough);
+}
 /**
  * HTML comments, which GitHub never renders.
  *
@@ -81,8 +134,7 @@ const HTML_COMMENT_RE = /<!--[\s\S]*?(?:-->|$)/g;
  */
 function strippedText(text) {
   if (typeof text !== "string") return "";
-  return text
-    .replace(FENCED_CODE_RE, "")
+  return stripFencedCode(text)
     .replace(HTML_COMMENT_RE, "")
     .replace(INLINE_CODE_RE, "");
 }

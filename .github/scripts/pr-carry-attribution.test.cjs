@@ -2,7 +2,10 @@
 
 const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
-const { assessCarryAttribution } = require("./pr-carry-attribution.cjs");
+const {
+  assessCarryAttribution,
+  referencedCarryNumbers,
+} = require("./pr-carry-attribution.cjs");
 
 const RRMLIMA = {
   login: "rrmlima",
@@ -118,6 +121,14 @@ describe("assessCarryAttribution", () => {
       ),
       [],
     );
+  });
+
+  it("scans many unclosed fence-like lines without repeatedly searching the tail", () => {
+    const body = "```x\n".repeat(20_000) + "Reimplements #2797.";
+    const started = performance.now();
+
+    assert.deepEqual([...referencedCarryNumbers(body)], [2797]);
+    assert.ok(performance.now() - started < 2_000, "fence scan should remain linear");
   });
 
   it("ignores carry language after an unclosed HTML comment", () => {
