@@ -636,6 +636,8 @@ export const ja: Record<TKey, string> = {
   "sub.fallbackHint": "サブエージェントモデルが利用できないか失敗した場合に順番に試すモデルです。",
   "sub.fallbackAdd": "フォールバックモデルを追加…",
   "sub.fallbackPoll": "利用可能性チェック間隔",
+  "sub.fallbackPollUnit": "ミリ秒",
+  "sub.fallbackPollInvalid": "{min} から {max} ミリ秒までの整数を入力してください。",
   "sub.fallbackSaved": "サブエージェントのフォールバック設定を保存しました。",
   "sub.fallbackSaveFailed": "フォールバック設定の保存に失敗しました",
 

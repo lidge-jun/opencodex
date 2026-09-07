@@ -686,6 +686,8 @@ export const zh: Record<TKey, string> = {
   "sub.fallbackHint": "子代理模型不可用或失败时按顺序尝试的模型。",
   "sub.fallbackAdd": "添加回退模型…",
   "sub.fallbackPoll": "可用性检查间隔",
+  "sub.fallbackPollUnit": "毫秒",
+  "sub.fallbackPollInvalid": "请输入 {min} 到 {max} 毫秒之间的整数。",
   "sub.fallbackSaved": "子代理回退设置已保存。",
   "sub.fallbackSaveFailed": "保存回退设置失败",
 

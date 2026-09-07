@@ -691,6 +691,8 @@ export const ru: Record<TKey, string> = {
   "sub.fallbackHint": "Модели, которые последовательно пробуются, если модель субагента недоступна или завершается ошибкой.",
   "sub.fallbackAdd": "Добавить резервную модель…",
   "sub.fallbackPoll": "Интервал проверки доступности",
+  "sub.fallbackPollUnit": "мс",
+  "sub.fallbackPollInvalid": "Введите целое число от {min} до {max} миллисекунд.",
   "sub.fallbackSaved": "Настройки резервных моделей субагента сохранены.",
   "sub.fallbackSaveFailed": "Не удалось сохранить настройки резервных моделей",
 

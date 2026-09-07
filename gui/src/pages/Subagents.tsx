@@ -21,6 +21,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   const [chosen, setChosen] = useState<string[]>(() => cached?.chosen ?? []);
   const [fallback, setFallback] = useState<string[]>(() => cached?.fallback ?? []);
   const [fallbackPollMs, setFallbackPollMs] = useState(() => cached?.pollMs ?? 60000);
+  const [fallbackPollError, setFallbackPollError] = useState("");
   const [fallbackBusy, setFallbackBusy] = useState(false);
   const [status, setStatus] = useState("");
   const [ok, setOk] = useState(false);
@@ -185,7 +186,11 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
       const d = await readJsonOrThrow<{ applied?: string[] }>(r, t("sub.saveFailed"));
       const applied = d?.applied ?? chosen;
       if (d?.applied) setChosen(d.applied);
-      writeSessionListCache(cacheKey, { available, chosen: applied, fallback, pollMs: fallbackPollMs });
+      writeSessionListCache(cacheKey, {
+        ...(seedSubagents(cacheKey) ?? { available, chosen: [], fallback: [], pollMs: 60000 }),
+        available,
+        chosen: applied,
+      });
       setOk(true);
       setStatus(t("sub.saved", { n: applied.length, cmd: "ocx sync" }));
     } catch (error) {
@@ -199,7 +204,15 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
 
   const saveFallback = async () => {
     if (fallbackBusy) return;
+    if (!Number.isInteger(fallbackPollMs) || fallbackPollMs < 5000 || fallbackPollMs > 600000) {
+      const message = t("sub.fallbackPollInvalid", { min: 5000, max: 600000 });
+      setFallbackPollError(message);
+      setOk(false);
+      setStatus(message);
+      return;
+    }
     setFallbackBusy(true);
+    setFallbackPollError("");
     try {
       const r = await fetch(`${apiBase}/api/subagent-model-fallback`, {
         method: "PUT",
@@ -207,8 +220,16 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
         body: JSON.stringify({ models: fallback, pollMs: fallbackPollMs }),
       });
       const d = await readJsonOrThrow<{ models?: string[]; pollMs?: number }>(r, t("sub.fallbackSaveFailed"));
-      if (d?.models) setFallback(d.models);
-      if (d?.pollMs) setFallbackPollMs(d.pollMs);
+      const confirmedFallback = d?.models ?? fallback;
+      const confirmedPollMs = d?.pollMs ?? fallbackPollMs;
+      setFallback(confirmedFallback);
+      setFallbackPollMs(confirmedPollMs);
+      writeSessionListCache(cacheKey, {
+        ...(seedSubagents(cacheKey) ?? { available, chosen: [], fallback: [], pollMs: 60000 }),
+        available,
+        fallback: confirmedFallback,
+        pollMs: confirmedPollMs,
+      });
       setOk(true);
       setStatus(t("sub.fallbackSaved"));
     } catch (error) {
@@ -250,9 +271,10 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
           onSave={() => { void save(); }}
           fallback={fallback}
           fallbackPollMs={fallbackPollMs}
+          fallbackPollError={fallbackPollError}
           fallbackBusy={fallbackBusy}
           onFallbackChange={setFallback}
-          onFallbackPollMsChange={setFallbackPollMs}
+          onFallbackPollMsChange={pollMs => { setFallbackPollError(""); setFallbackPollMs(pollMs); }}
           onFallbackSave={() => { void saveFallback(); }}
         delegation={{
           model: delegation.model,

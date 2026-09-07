@@ -30,6 +30,7 @@ export interface SubagentDelegationSectionProps {
   onUltraModeRetry: () => void;
   fallback: string[];
   fallbackPollMs: number;
+  fallbackPollError?: string;
   fallbackBusy: boolean;
   availableModels: string[];
   onFallbackChange: (models: string[]) => void;
@@ -51,7 +52,7 @@ export default function SubagentDelegationSection({
   onUltraModeSave,
   ultraLoadFailed,
   onUltraModeRetry,
-  fallback, fallbackPollMs, fallbackBusy, availableModels, onFallbackChange, onFallbackPollMsChange, onFallbackSave,
+  fallback, fallbackPollMs, fallbackPollError, fallbackBusy, availableModels, onFallbackChange, onFallbackPollMsChange, onFallbackSave,
 }: SubagentDelegationSectionProps) {
   const t = useT();
   // A present empty/whitespace hint is an upstream override that suppresses the
@@ -116,7 +117,7 @@ export default function SubagentDelegationSection({
               <span>{index + 1}. {modelName}</span>
               <button type="button" className="btn btn-ghost btn-sm" onClick={() => { const next = [...fallback]; if (index > 0) [next[index - 1], next[index]] = [next[index], next[index - 1]]; onFallbackChange(next); }} disabled={fallbackBusy || index === 0} aria-label={t("sub.moveUp", { m: modelName })}>↑</button>
               <button type="button" className="btn btn-ghost btn-sm" onClick={() => { const next = [...fallback]; if (index < next.length - 1) [next[index], next[index + 1]] = [next[index + 1], next[index]]; onFallbackChange(next); }} disabled={fallbackBusy || index === fallback.length - 1} aria-label={t("sub.moveDown", { m: modelName })}>↓</button>
-              <button type="button" className="btn btn-ghost btn-sm" onClick={() => onFallbackChange(fallback.filter(item => item !== modelName))} disabled={fallbackBusy}>×</button>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => onFallbackChange(fallback.filter(item => item !== modelName))} disabled={fallbackBusy} aria-label={t("sub.removeAria", { m: modelName })}>×</button>
             </div>
           ))}
           <select className="input" value="" onChange={e => { if (e.target.value && !fallback.includes(e.target.value)) onFallbackChange([...fallback, e.target.value]); }} disabled={fallbackBusy}>
@@ -124,8 +125,9 @@ export default function SubagentDelegationSection({
             {availableModels.filter(modelName => !fallback.includes(modelName)).map(modelName => <option key={modelName} value={modelName}>{modelName}</option>)}
           </select>
           <label className="setting-hint">{t("sub.fallbackPoll")}
-            <input className="input" type="number" min={5000} max={600000} step={1000} value={fallbackPollMs} onChange={e => onFallbackPollMsChange(Number(e.target.value) || 60000)} disabled={fallbackBusy} /> ms
+            <input className="input" type="number" min={5000} max={600000} step={1000} value={fallbackPollMs} onChange={e => onFallbackPollMsChange(Number(e.target.value))} disabled={fallbackBusy} aria-invalid={Boolean(fallbackPollError)} aria-describedby={fallbackPollError ? "subagent-fallback-poll-error" : undefined} /> {t("sub.fallbackPollUnit")}
           </label>
+          {fallbackPollError && <div id="subagent-fallback-poll-error" className="muted setting-hint" role="alert">{fallbackPollError}</div>}
           <button type="button" className="btn btn-primary btn-sm" onClick={onFallbackSave} disabled={fallbackBusy}>{t("common.save")}</button>
         </div>
       </div>

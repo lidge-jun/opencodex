@@ -698,6 +698,8 @@ export const tr: Record<TKey, string> = {
   "sub.fallbackHint": "Alt ajan modeli kullanılamadığında veya başarısız olduğunda sırayla denenecek modeller.",
   "sub.fallbackAdd": "Yedek model ekle…",
   "sub.fallbackPoll": "Kullanılabilirlik kontrol aralığı",
+  "sub.fallbackPollUnit": "ms",
+  "sub.fallbackPollInvalid": "{min} ile {max} milisaniye arasında tam sayı girin.",
   "sub.fallbackSaved": "Alt ajan yedek ayarları kaydedildi.",
   "sub.fallbackSaveFailed": "Yedek ayarlar kaydedilemedi",
 

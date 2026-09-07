@@ -18,6 +18,8 @@ let root: Root | null = null;
 let requests: { url: string; init?: RequestInit }[] = [];
 let available: string[] = [];
 let chosen: string[] = [];
+let fallback: string[] = [];
+let pollMs = 60000;
 
 beforeEach(() => {
   previousGlobals = Object.fromEntries(globals.map((k) => [k, Reflect.get(globalThis, k)])) as typeof previousGlobals;
@@ -34,16 +36,19 @@ beforeEach(() => {
   requests = [];
   available = ["a-1", "a-2", "a-3", "a-4", "a-5", "a-6"];
   chosen = [];
+  fallback = [];
+  pollMs = 60000;
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
     value: async (url: string, init?: RequestInit) => {
       requests.push({ url: String(url), init });
-      const body = JSON.stringify({ available, chosen });
+      const isFallback = String(url).includes("/api/subagent-model-fallback");
+      const body = JSON.stringify(isFallback ? { available, models: fallback, pollMs } : { available, chosen });
       return {
         ok: true,
         status: 200,
         text: async () => body,
-        json: async () => ({ available, chosen }),
+        json: async () => (isFallback ? { available, models: fallback, pollMs } : { available, chosen }),
       } as unknown as Response;
     },
   });
@@ -147,4 +152,20 @@ test("saves the featured order with PUT and the models payload", async () => {
   expect(put).toBeDefined();
   expect(put!.url).toContain("/api/subagent-models");
   expect(put!.init?.body).toBe(JSON.stringify({ models: ["a-1", "a-2"] }));
+});
+
+test("rejects an invalid fallback polling interval before sending a request", async () => {
+  await mount();
+
+  const interval = container.querySelector('input[type="number"]') as HTMLInputElement;
+  const valueSetter = Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")?.set;
+  await act(async () => {
+    valueSetter?.call(interval, "4000");
+    interval.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+  });
+  const saves = Array.from(container.querySelectorAll("button")).filter(button => button.textContent?.trim() === "Save");
+  await act(async () => { saves.at(-1)!.click(); });
+
+  expect(requests.some(request => request.url.includes("/api/subagent-model-fallback") && request.init?.method === "PUT")).toBe(false);
+  expect(container.textContent).toContain("Enter a whole number from 5000 to 600000 milliseconds.");
 });

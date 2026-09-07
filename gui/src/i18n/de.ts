@@ -676,6 +676,8 @@ export const de: Record<TKey, string> = {
   "sub.fallbackHint": "Geordnete Modelle, die versucht werden, wenn ein Sub-Agent-Modell nicht verfügbar ist oder fehlschlägt.",
   "sub.fallbackAdd": "Fallback-Modell hinzufügen…",
   "sub.fallbackPoll": "Intervall der Verfügbarkeitsprüfung",
+  "sub.fallbackPollUnit": "ms",
+  "sub.fallbackPollInvalid": "Geben Sie eine ganze Zahl von {min} bis {max} Millisekunden ein.",
   "sub.fallbackSaved": "Fallback-Einstellungen für Sub-Agenten gespeichert.",
   "sub.fallbackSaveFailed": "Fallback-Einstellungen konnten nicht gespeichert werden",
   "logs.title": "Anfrage-Protokolle",

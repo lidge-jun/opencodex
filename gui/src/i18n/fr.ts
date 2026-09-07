@@ -309,6 +309,8 @@ export const fr: Record<TKey, string> = {
   "sub.fallbackHint": "Modèles essayés dans l’ordre lorsqu’un modèle de sous-agent est indisponible ou échoue.",
   "sub.fallbackAdd": "Ajouter un modèle de secours…",
   "sub.fallbackPoll": "Intervalle de vérification de disponibilité",
+  "sub.fallbackPollUnit": "ms",
+  "sub.fallbackPollInvalid": "Saisissez un nombre entier compris entre {min} et {max} millisecondes.",
   "sub.fallbackSaved": "Paramètres de secours des sous-agents enregistrés.",
   "sub.fallbackSaveFailed": "Échec de l’enregistrement des paramètres de secours",
   "dash.shadowCallIntercept": "Interception des appels fantômes",

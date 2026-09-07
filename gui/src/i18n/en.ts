@@ -319,6 +319,8 @@ export const en = {
   "sub.fallbackHint": "Ordered models tried when a sub-agent model is unavailable or fails.",
   "sub.fallbackAdd": "Add fallback model…",
   "sub.fallbackPoll": "Availability check interval",
+  "sub.fallbackPollUnit": "ms",
+  "sub.fallbackPollInvalid": "Enter a whole number from {min} to {max} milliseconds.",
   "sub.fallbackSaved": "Sub-agent fallback settings saved.",
   "sub.fallbackSaveFailed": "Failed to save fallback settings",
   "dash.shadowCallIntercept": "Shadow Call Intercept",

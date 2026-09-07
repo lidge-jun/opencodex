@@ -545,6 +545,8 @@ export const zhTW: Record<TKey, string> = {
   "sub.fallbackHint": "子代理模型無法使用或失敗時，依序嘗試的模型。",
   "sub.fallbackAdd": "新增備援模型…",
   "sub.fallbackPoll": "可用性檢查間隔",
+  "sub.fallbackPollUnit": "毫秒",
+  "sub.fallbackPollInvalid": "請輸入介於 {min} 與 {max} 毫秒之間的整數。",
   "sub.fallbackSaved": "子代理備援設定已儲存。",
   "sub.fallbackSaveFailed": "備援設定儲存失敗",
   "logs.title": "請求日誌",
