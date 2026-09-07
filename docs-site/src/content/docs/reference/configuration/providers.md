@@ -941,8 +941,8 @@ their previous behavior. See the
 With the [`openai-responses` adapter](/reference/adapters/#openai-responses), plaintext
 Codex `agent_message` items become user messages when `authMode` is not `"forward"`
 (for example, `"key"`). Providers using `authMode: "forward"` retain these items unchanged.
-`agent_message` is private to the ChatGPT Codex backend, so any routed destination that
-receives one answers the whole request with
+`agent_message` is private to the ChatGPT Codex backend, and the routed destinations
+reported so far answer the whole request with
 `422 unknown item type "agent_message"`; Codex replays sub-agent history on every
 subsequent turn, so the thread keeps failing until the item is converted.
 Author and recipient remain explicit text metadata, and the content parts are preserved.

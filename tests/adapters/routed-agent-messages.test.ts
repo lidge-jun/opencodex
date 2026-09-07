@@ -73,6 +73,26 @@ test("an arbitrary routed destination converts too, and gains no session identit
   budget.dispose();
 });
 
+test("an OAuth destination converts as well, since the gate reads authMode rather than the URL", async () => {
+  // The reported xAI/Grok failure (#3907) is an OAuth pool destination, not a key-auth
+  // one, and the gate is `authMode !== "forward"`. Pin a mode other than key/forward so
+  // a future narrowing of the gate back toward key-only cannot pass unnoticed.
+  const budget = createTranslatorBudget();
+  const raw = body();
+  const original = structuredClone(raw);
+  try {
+    const request = await createResponsesPassthroughAdapter({
+      ...base, baseUrl: "https://api.x.ai/v1", authMode: "oauth" as const,
+    }).buildRequest(parseRequest(raw), { headers: new Headers(), translatorBudget: budget });
+    const sent = JSON.parse(request.body as string);
+    expect(sent.input[0]).toMatchObject({ type: "message", role: "user" });
+    expect(sent.input[0].content.slice(1)).toEqual(original.input[0]!.content);
+    expect(raw).toEqual(original);
+  } finally {
+    budget.dispose();
+  }
+});
+
 test("canonical Go forward auth preserves private agent messages and the raw replay body", async () => {
   const raw = body();
   const original = structuredClone(raw);
