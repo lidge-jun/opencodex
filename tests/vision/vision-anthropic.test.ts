@@ -23,6 +23,7 @@ import {
   describeImageAnthropic,
   parseAnthropicVisionSSE,
   planVisionSidecar,
+  resetVisionDescriptionCache,
   type VisionPlan,
 } from "../../src/vision";
 
@@ -244,6 +245,56 @@ describe("Anthropic vision executor", () => {
     // The cap stops the read long before the producer would have finished on its own.
     expect(produced).toBeLessThan(1024 * 1024);
     expect(out.text).toBe("");
+  });
+
+  test("a byte-limited partial description is rejected and never cached", async () => {
+    let calls = 0;
+    let cancelled = false;
+    const frame = `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "incomplete description" } })}\n\n`;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      if (calls > 1) return successSse("complete description");
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(frame + `data: ${"x".repeat(64 * 1024)}`));
+        },
+        cancel() {
+          cancelled = true;
+          // Provider teardown must not hold up the error outcome.
+          return new Promise<void>(() => {});
+        },
+      }));
+    }) as typeof fetch;
+    const request = () => parseRequest({
+      model: "routed/text-only",
+      input: [{ type: "message", role: "user", content: [
+        { type: "input_image", image_url: DATA_IMAGE },
+      ] }],
+    });
+    const plan: VisionPlan = {
+      backend: "anthropic",
+      anthropicSidecar: { providerName: "anthropic-vision-test", provider: anthropicProvider },
+      settings,
+      maxDescriptionsPerTurn: 1,
+    };
+    resetVisionDescriptionCache();
+    try {
+      const first = request();
+      await describeImagesInPlace(first, plan, new Headers());
+      expect(cancelled).toBe(true);
+      expect(JSON.stringify(first.context.messages)).toContain("anthropic vision sidecar response byte limit reached");
+      expect(JSON.stringify(first.context.messages)).not.toContain("incomplete description");
+      const second = request();
+      await describeImagesInPlace(second, plan, new Headers());
+      expect(calls).toBe(2);
+      expect(JSON.stringify(second.context.messages)).toContain("complete description");
+      const third = request();
+      await describeImagesInPlace(third, plan, new Headers());
+      expect(calls).toBe(2);
+      expect(JSON.stringify(third.context.messages)).toContain("complete description");
+    } finally {
+      resetVisionDescriptionCache();
+    }
   });
 
   test("malformed and terminal-error streams degrade to explicit errors", async () => {

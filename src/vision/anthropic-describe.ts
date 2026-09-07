@@ -119,7 +119,9 @@ export async function parseAnthropicVisionSSE(res: Response): Promise<DescribeOu
         buffer = buffer.slice(separator + 2);
       }
       if (responseBytes >= MAX_SIDECAR_RESPONSE_BYTES) {
-        // Keep the frames folded above, drop the unterminated tail, and do not wait on teardown.
+        // A bounded prefix is not a complete description. Reject it so callers cannot display
+        // or cache partial image facts as a successful result, and do not wait on teardown.
+        if (!terminalError) terminalError = "anthropic vision sidecar response byte limit reached";
         try { void reader.cancel("vision sidecar response byte limit reached").catch(() => undefined); }
         catch { /* best-effort body teardown */ }
         buffer = "";

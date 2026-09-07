@@ -154,6 +154,8 @@ model field.
   `gpt-oss:120b`.
 - If description fails, the model receives a short processing-error marker. (Without an available
   sidecar plan, no description is attempted — the raw image is stripped, as described above.)
+  Anthropic responses are limited to 64 KiB; reaching that limit rejects the partial description
+  and leaves it uncached so a later request can try again.
 - `maxDescriptionsPerTurn` (default 8) limits new descriptions per main-model turn. Cache hits and
   same-turn duplicates do not consume it. Successful `data:` image descriptions are cached by
   backend, model, detail, image bytes, and message context — plus the reasoning effort on OpenAI
