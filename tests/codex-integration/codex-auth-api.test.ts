@@ -9,6 +9,9 @@ import {
   getNativeMainProfileRequestCount,
   resetLifecycleDrainStateForTests,
 } from "../../src/server/lifecycle";
+import { getCodexStrictQuotaStatus } from "../../src/codex/strict-quota";
+import { resolveCodexAuthContext } from "../../src/codex/auth-context";
+import { getCodexQuotaRevision } from "../../src/codex/quota-events";
 import { fallbackCodexAccountLogLabel } from "../../src/codex/account-label";
 import {
   handleCodexAuthAPI, updateAccountQuota, getAccountQuota,
@@ -3501,6 +3504,57 @@ describe("codex-auth API", () => {
     expect(config.codexAccountStrictQuota).toBe(false);
   });
 
+  for (const action of ["select-main", "enable-strict"] as const) {
+    test(`${action} primes unknown main usage under management ownership before waking requests`, async () => {
+      const config = makeConfig({ codexAccountStrictQuota: true, autoSwitchThreshold: action === "enable-strict" ? 0 : 95,
+        activeCodexAccountId: MAIN_CODEX_ACCOUNT_ID, activeCodexAccountPinned: MAIN_CODEX_ACCOUNT_ID });
+      writeFileSync(join(TEST_CODEX_HOME, "auth.json"), JSON.stringify({
+        tokens: { access_token: "main-strict-owned", account_id: "acct-main-strict-owned" },
+      }));
+      expect(getCodexStrictQuotaStatus({ ...config, autoSwitchThreshold: 95 }, MAIN_CODEX_ACCOUNT_ID).state).toBe("unknown");
+      const urls: string[] = [];
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        urls.push(String(input));
+        if (String(input) !== "https://chatgpt.com/backend-api/wham/usage") throw new Error("unexpected non-metadata request");
+        return Response.json({ plan_type: "plus", rate_limit: { secondary_window: { used_percent: 0 } } });
+      }) as typeof fetch;
+      const req = new Request(`http://localhost/api/codex-auth/${action === "select-main" ? "active" : "auto-switch"}`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(action === "select-main" ? { accountId: MAIN_CODEX_ACCOUNT_ID } : { threshold: 95, strictQuota: true }),
+      });
+      const revision = getCodexQuotaRevision();
+      expect((await handleCodexAuthAPI(req, new URL(req.url), config))!.status).toBe(200);
+      expect(urls).toEqual(["https://chatgpt.com/backend-api/wham/usage"]);
+      expect(getCodexQuotaRevision()).toBeGreaterThan(revision);
+      expect(getCodexStrictQuotaStatus(config, MAIN_CODEX_ACCOUNT_ID)).toMatchObject({ state: "ready", usedPercent: 0 });
+      const context = await resolveCodexAuthContext(new Headers({ authorization: "Bearer main-strict-owned", "chatgpt-account-id": "acct-main-strict-owned" }), config, "pool", {
+        requestScopedMainCredential: true,
+        isMainAccountTokenLive: () => { throw new Error("request must not inspect native main"); },
+      });
+      expect(context.kind).toBe("main");
+    });
+  }
+  test("failed strict main metadata priming preserves unknown quota and never redeems credits", async () => {
+    const config = makeConfig({ codexAccountStrictQuota: true, autoSwitchThreshold: 95,
+      activeCodexAccountId: MAIN_CODEX_ACCOUNT_ID, activeCodexAccountPinned: MAIN_CODEX_ACCOUNT_ID });
+    writeFileSync(join(TEST_CODEX_HOME, "auth.json"), JSON.stringify({
+      tokens: { access_token: "main-strict-failed", account_id: "acct-main-strict-failed" },
+    }));
+    const urls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      urls.push(String(input));
+      return new Response("unavailable", { status: 503 });
+    }) as typeof fetch;
+    const req = new Request("http://localhost/api/codex-auth/active", { method: "PUT",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ accountId: MAIN_CODEX_ACCOUNT_ID }) });
+    expect((await handleCodexAuthAPI(req, new URL(req.url), config))!.status).toBe(200);
+    expect(urls).toEqual(["https://chatgpt.com/backend-api/wham/usage"]);
+    expect(getCodexStrictQuotaStatus(config, MAIN_CODEX_ACCOUNT_ID).state).toBe("unknown");
+    expect(isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)).toBe(false);
+    await expect(resolveCodexAuthContext(new Headers({ authorization: "Bearer main-strict-failed", "chatgpt-account-id": "acct-main-strict-failed" }), config, "pool", {
+      requestScopedMainCredential: true, accountId: MAIN_CODEX_ACCOUNT_ID,
+    })).rejects.toMatchObject({ name: "CodexStrictQuotaUnavailableError" });
+  });
   test("PUT /api/codex-auth/active mutates live runtime config", async () => {
     const config = makeConfig({
       codexAccounts: [{ id: "pool-next", email: "pool-next@example.test", isMain: false }],
@@ -3510,9 +3564,11 @@ describe("codex-auth API", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ accountId: "pool-next" }),
     });
+    const revision = getCodexQuotaRevision();
     const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
     expect(resp!.status).toBe(200);
     expect(await resp!.json()).toMatchObject({ activeCodexAccountId: "pool-next", appliesImmediately: true });
+    expect(getCodexQuotaRevision()).toBeGreaterThan(revision);
     expect(config.activeCodexAccountId).toBe("pool-next");
   });
 

@@ -169,7 +169,7 @@ export async function handleResponsesWithPolicyFallback(
     captureQuotaReplay = undefined;
     const body = (snapshot?.sourceBody ?? raw) as Record<string, unknown>;
     return waitForStrictQuotaResponse({
-      config, initial: first, stream: body.stream === true,
+      config, quotaPolicy: options.codexAuthPolicy, initial: first, stream: body.stream === true,
       signals: [req.signal, options.abortSignal], lease: options.turnAdmissionLease,
       canReplay: () => !storedPool401ReplayDispatched,
       finishAttempt: status => finishFailedPolicyAttempt(logCtx, status),

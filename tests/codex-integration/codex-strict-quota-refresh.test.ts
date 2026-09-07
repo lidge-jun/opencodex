@@ -101,7 +101,7 @@ describe("strict quota request refresh", () => {
     test(`${unit} reset permits one early read, never automatic recovery`, async () => {
       runtime(); const cfg = config();
       const reset = Date.now() + 10000;
-      setAccountQuotaFromParsed("a", { weeklyPercent: 99, weeklyResetAt: unit === "seconds" ? reset / 1000 : reset });
+      setAccountQuotaFromParsed("a", { weeklyPercent: 100, weeklyResetAt: unit === "seconds" ? reset / 1000 : reset });
       now = reset - 1;
       await refreshStrictCodexQuotasOnDemand(cfg, new Set(["a"])); expect(calls).toHaveLength(0);
       now = reset + 1000;
@@ -112,7 +112,7 @@ describe("strict quota request refresh", () => {
     });
   }
   test("requested ready account does not trigger reads of other blocked accounts", async () => {
-    runtime(); updateAccountQuota("a", 1); updateAccountQuota("b", 99);
+    runtime(); updateAccountQuota("a", 1); updateAccountQuota("b", 100);
     now = Date.now();
     await refreshStrictCodexQuotasOnDemand(config(), new Set(["a"]));
     expect(calls).toHaveLength(0);
@@ -155,7 +155,7 @@ describe("strict quota live waiters", () => {
     runtime(); const cfg = config(); cfg.pausedCodexAccountIds = [];
     observeMainQuotaIdentity("strict-wait-ineligible-main");
     const writer = captureMainQuotaWriter("strict-wait-ineligible-main")!;
-    setAccountQuotaFromParsed("__main__", { weeklyPercent: 99 }, undefined, writer);
+    setAccountQuotaFromParsed("__main__", { weeklyPercent: 100 }, undefined, writer);
     now = Date.now() + 300001;
     // The resolver cannot use physical main for this request, so it probes only its real pool candidate.
     await refreshStrictCodexQuotasOnDemand(cfg, new Set(["a"]));
@@ -195,4 +195,44 @@ describe("strict quota live waiters", () => {
     runtime(); const controller = new AbortController(); controller.abort();
     await expect(waitForStrictCodexQuotaChange(config(), controller.signal)).rejects.toThrow();
   });
+});
+
+describe("selection-time quota metadata", () => {
+  test("a top-up is discovered while switching even inside the ordinary five-minute cache", async () => {
+    const cfg = config(); updateAccountQuota("a", 100);
+    now = Date.now() + 10_001;
+    runtime(async () => updateAccountQuota("a", 0));
+    await refreshStrictCodexQuotasOnDemand(cfg, new Set(["a"]), { forSelection: true });
+    expect(calls).toEqual([["a"]]);
+    expect(getCodexStrictQuotaStatus(cfg, "a").state).toBe("ready");
+    expect(timers.size).toBe(0);
+  });
+  test("healthy capacity crossing its predicted reset is re-read without assuming recovery", async () => {
+    const cfg = config(); const reset = Date.now() + 10000;
+    setAccountQuotaFromParsed("a", { weeklyPercent: 50, weeklyResetAt: reset / 1000 });
+    runtime(); now = reset + 1000;
+    expect(getCodexStrictQuotaStatus(cfg, "a", "shared", now).state).toBe("unknown");
+    await refreshStrictCodexQuotasOnDemand(cfg, new Set(["a"]));
+    expect(calls).toEqual([["a"]]);
+    expect(getCodexStrictQuotaStatus(cfg, "a", "shared", now).state).toBe("unknown");
+  });
+  test("failed switch-time metadata reads retain backoff instead of probing every turn", async () => {
+    const cfg = config(); updateAccountQuota("a", 100);
+    now = Date.now() + 10_001;
+    runtime(async () => { throw new Error("metadata unavailable"); });
+    await refreshStrictCodexQuotasOnDemand(cfg, new Set(["a"]), { forSelection: true });
+    now += 10_001;
+    await refreshStrictCodexQuotasOnDemand(cfg, new Set(["a"]), { forSelection: true });
+    expect(calls).toHaveLength(1);
+    expect(getCodexStrictQuotaStatus(cfg, "a").state).toBe("blocked");
+  });
+});
+
+test("a resolved metadata failure with no new observation keeps selection backoff", async () => {
+  const cfg = config(); updateAccountQuota("a", 100);
+  now = Date.now() + 10_001; runtime();
+  await refreshStrictCodexQuotasOnDemand(cfg, new Set(["a"]), { forSelection: true });
+  now += 10_001;
+  await refreshStrictCodexQuotasOnDemand(cfg, new Set(["a"]), { forSelection: true });
+  expect(calls).toEqual([["a"]]);
 });

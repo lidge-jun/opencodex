@@ -43,15 +43,18 @@ describe("strict quota policy", () => {
     expect(getCodexStrictQuotaStatus(config(), "a", "reserve").state).toBe("off");
     expect(getCodexStrictQuotaStatus(config(), "a", "spark").state).toBe("off");
   });
-  test("threshold inclusive with a hard ceiling of 99", () => {
-    updateAccountQuota("a", 95);
-    expect(getCodexStrictQuotaStatus(config(), "a").state).toBe("blocked");
-    expect(getCodexStrictQuotaStatus(config({ autoSwitchThreshold: 100 }), "a").state).toBe("ready");
-    updateAccountQuota("a", 99);
-    expect(getCodexStrictQuotaStatus(config({ autoSwitchThreshold: 100 }), "a").state).toBe("blocked");
+  test("switch threshold preserves remaining quota until actual exhaustion", () => {
+    for (const threshold of [95, 99, 100]) {
+      for (const used of [95, 99, 99.9]) {
+        updateAccountQuota("a", used);
+        expect(getCodexStrictQuotaStatus(config({ autoSwitchThreshold: threshold }), "a").state).toBe("ready");
+      }
+      updateAccountQuota("a", 100);
+      expect(getCodexStrictQuotaStatus(config({ autoSwitchThreshold: threshold }), "a").state).toBe("blocked");
+    }
   });
   test("reset passage and unrelated partial/credits updates cannot recover an observed short block", () => {
-    setAccountQuotaFromParsed("a", { shortPercent: 99, shortResetAt: Date.now() / 1000 - 1, weeklyPercent: 10 });
+    setAccountQuotaFromParsed("a", { shortPercent: 100, shortResetAt: Date.now() / 1000 - 1, weeklyPercent: 10 });
     setAccountQuotaFromParsed("a", { weeklyPercent: 0, resetCredits: 4 });
     expect(getCodexStrictQuotaStatus(config(), "a", "shared", Date.now() + 86400000).state).toBe("blocked");
     setAccountQuotaFromParsed("a", { shortPercent: 0 });
@@ -67,7 +70,7 @@ describe("strict quota policy", () => {
     expect(getStrictAccountQuota("a")!.windows.find(w => w.key === "weekly")!.observedAt).toBe(observed);
   });
   test("invalid upstream evidence is not clamped into recovery", () => {
-    updateAccountQuota("a", 99);
+    updateAccountQuota("a", 100);
     for (const used_percent of [-1, NaN, Infinity]) {
       setAccountQuotaFromParsed("a", parseUsageQuota({ rate_limit: { primary_window: { used_percent } } }));
       expect(getCodexStrictQuotaStatus(config(), "a").state).toBe("blocked");
@@ -79,7 +82,7 @@ describe("strict quota policy", () => {
     const old = Date.now() - 86400000;
     writeFileSync(join(dir, "codex-quota-cache.json"), JSON.stringify({ version: 1, quotas: {},
       strictQuotas: { a: { identity: createHash("sha256").update("test-account-a").digest("hex"),
-        quota: { windows: [{ scope: "shared", key: "weekly", usedPercent: 99, observedAt: old, resetAt: old / 1000 }] } } } }));
+        quota: { windows: [{ scope: "shared", key: "weekly", usedPercent: 100, observedAt: old, resetAt: old / 1000 }] } } } }));
     expect(getCodexStrictQuotaStatus(config(), "a").state).toBe("blocked");
     updateAccountQuota("a", 0);
     expect(getCodexStrictQuotaStatus(config(), "a").state).toBe("ready");
@@ -91,12 +94,12 @@ describe("strict quota policy", () => {
     expect(getCodexStrictQuotaStatus(config(), "a").state).toBe("ready");
   });
   test("token refresh retains blocked windows until those windows are freshly observed", () => {
-    setAccountQuotaFromParsed("a", { shortPercent: 99, weeklyPercent: 1 });
+    setAccountQuotaFromParsed("a", { shortPercent: 100, weeklyPercent: 1 });
     credential("a"); updateAccountQuota("a", 0);
     expect(getCodexStrictQuotaStatus(config(), "a").state).toBe("blocked");
   });
   test("complete monthly-only WHAM retires old weekly and short windows", () => {
-    setAccountQuotaFromParsed("a", { weeklyPercent: 99, shortPercent: 99 });
+    setAccountQuotaFromParsed("a", { weeklyPercent: 100, shortPercent: 100 });
     setAccountQuotaFromParsed("a", parseUsageQuota({ rate_limit: {
       primary_window: { used_percent: 0, limit_window_seconds: 30 * 86400 }, secondary_window: null,
     } }));
@@ -104,7 +107,7 @@ describe("strict quota policy", () => {
     expect(getStrictAccountQuota("a")!.windows.map(w => w.key)).toEqual(["monthly"]);
   });
   test("partial or invalid monthly response cannot retire a blocked weekly window", () => {
-    setAccountQuotaFromParsed("a", { weeklyPercent: 99 });
+    setAccountQuotaFromParsed("a", { weeklyPercent: 100 });
     for (const rate_limit of [
       { primary_window: { used_percent: 0, limit_window_seconds: 30 * 86400 } },
       { primary_window: { used_percent: -1, limit_window_seconds: 30 * 86400 }, secondary_window: null },
@@ -119,11 +122,11 @@ describe("strict quota policy", () => {
   test("main policy retains complete WHAM authority through validated parsing", () => {
     observeMainQuotaIdentity("strict-monthly-migration");
     const writer = captureMainQuotaWriter("strict-monthly-migration")!;
-    setAccountQuotaFromParsed("__main__", { weeklyPercent: 99 }, undefined, writer);
+    setAccountQuotaFromParsed("__main__", { weeklyPercent: 100 }, undefined, writer);
     const data = { rate_limit: { primary_window: { used_percent: 0, limit_window_seconds: 30 * 86400 }, secondary_window: null } };
     setAccountQuotaFromParsed("__main__", parseUsageQuota(data), undefined, writer, parseMainPolicyUsageQuota(data));
     expect(getCodexStrictQuotaStatus(config(), "__main__").state).toBe("ready");
-    setAccountQuotaFromParsed("__main__", { monthlyPercent: 99 }, undefined, writer);
+    setAccountQuotaFromParsed("__main__", { monthlyPercent: 100 }, undefined, writer);
     const weekly = { rate_limit: { primary_window: { used_percent: 0, limit_window_seconds: 7 * 86400 },
       secondary_window: null, tertiary_window: null } };
     setAccountQuotaFromParsed("__main__", parseUsageQuota(weekly), undefined, writer, parseMainPolicyUsageQuota(weekly));
@@ -133,7 +136,7 @@ describe("strict quota policy", () => {
     observeMainQuotaIdentity("strict-shared-max");
     const writer = captureMainQuotaWriter("strict-shared-max")!;
     const data = { rate_limit: { primary_window: { used_percent: 20, limit_window_seconds: 7 * 86400 },
-      tertiary_window: { used_percent: 95, limit_window_seconds: 30 * 86400 } } };
+      tertiary_window: { used_percent: 100, limit_window_seconds: 30 * 86400 } } };
     setAccountQuotaFromParsed("a", parseUsageQuota(data));
     setAccountQuotaFromParsed("__main__", parseUsageQuota(data), undefined, writer, parseMainPolicyUsageQuota(data));
     expect(getCodexStrictQuotaStatus(config(), "a").state).toBe("blocked");
@@ -213,7 +216,7 @@ describe("strict pool routing", () => {
     expect(resolveCodexAccountForThreadDetailed("rr-3", cfg)).toEqual({ status: "selected", accountId: "b" });
   });
   test("all blocked or unknown never falls back to active", () => {
-    updateAccountQuota("a", 95);
+    updateAccountQuota("a", 100);
     expect(previewCodexAccountForRequest(null, config())).toBeNull();
     expect(resolveCodexAccountForThreadDetailed(null, config())).toEqual({ status: "none" });
   });
@@ -222,5 +225,77 @@ describe("strict pool routing", () => {
     const cfg = config({ pausedCodexAccountIds: ["a", "b"] });
     expect(resolveCodexAccountForThreadDetailed(null, cfg)).toEqual({ status: "none" });
     expect(cfg.pausedCodexAccountIds).toEqual(["a", "b"]);
+  });
+});
+
+describe("independent scope selection", () => {
+  for (const quotaScope of ["spark", "reserve"] as const) {
+    for (const evidence of ["unknown", "stale"] as const) {
+      test(`${quotaScope}: ${evidence} shared quota does not rotate fill-first`, () => {
+        const cfg = config({ accountPoolStrategy: "fill-first", pausedCodexAccountIds: ["__main__"] });
+        resetCodexRoutingForManualSelection("a");
+        if (evidence === "stale") {
+          updateAccountQuota("a", 10); updateAccountQuota("b", 20);
+        }
+        const now = Date.now() + (evidence === "stale" ? 300_001 : 0);
+        expect(getCodexStrictQuotaStatus(cfg, "a", "shared", now).state).toBe("unknown");
+        // Independent scopes retain their own admission policy even when strict
+        // shared evidence would reject both accounts.
+        for (const threadId of [null, "independent-scope", "independent-scope"]) {
+          expect(previewCodexAccountForRequest(threadId, cfg, now, quotaScope)).toBe("a");
+          expect(resolveCodexAccountForThreadDetailed(threadId, cfg, now, quotaScope))
+            .toEqual({ status: "selected", accountId: "a" });
+        }
+        expect(cfg.activeCodexAccountId).toBe("a");
+      });
+    }
+  }
+});
+
+describe("soft threshold remainder routing", () => {
+  for (const accountPoolStrategy of ["quota", "fill-first"] as const) {
+    test(`${accountPoolStrategy}: one exhausted account does not strand the last five percent`, () => {
+      const cfg = config({ accountPoolStrategy, activeCodexAccountId: "b" });
+      resetCodexRoutingForManualSelection("b");
+      updateAccountQuota("a", 100); updateAccountQuota("b", 94);
+      expect(resolveCodexAccountForThreadDetailed("remainder", cfg)).toEqual({ status: "selected", accountId: "b" });
+      for (const used of [95, 99, 99.9]) {
+        updateAccountQuota("b", used);
+        expect(previewCodexAccountForRequest("remainder", cfg)).toBe("b");
+        expect(resolveCodexAccountForThreadDetailed("remainder", cfg)).toEqual({ status: "selected", accountId: "b" });
+        expect(resolveCodexAccountForThreadDetailed(null, cfg)).toEqual({ status: "selected", accountId: "b" });
+      }
+      updateAccountQuota("b", 100);
+      expect(previewCodexAccountForRequest("remainder", cfg)).toBeNull();
+      expect(resolveCodexAccountForThreadDetailed("remainder", cfg)).toEqual({ status: "none" });
+    });
+    test(`${accountPoolStrategy}: no churn between remainders, but restored headroom wins`, () => {
+      const cfg = config({ accountPoolStrategy });
+      updateAccountQuota("a", 96); updateAccountQuota("b", 95);
+      for (let i = 0; i < 3; i++) {
+        expect(previewCodexAccountForRequest("stable", cfg)).toBe("a");
+        expect(resolveCodexAccountForThreadDetailed("stable", cfg)).toEqual({ status: "selected", accountId: "a" });
+      }
+      updateAccountQuota("b", 0);
+      expect(previewCodexAccountForRequest("stable", cfg)).toBe("b");
+      expect(resolveCodexAccountForThreadDetailed("stable", cfg)).toEqual({ status: "selected", accountId: "b" });
+    });
+    test(`${accountPoolStrategy}: request-ineligible headroom does not hide usable remainder`, () => {
+      const cfg = config({ accountPoolStrategy });
+      updateAccountQuota("a", 99.5); updateAccountQuota("b", 0);
+      const selection = { modelEligibleAccountIds: new Set(["a"]) };
+      expect(previewCodexAccountForRequest("scoped", cfg, Date.now(), "shared", selection)).toBe("a");
+      expect(resolveCodexAccountForThreadDetailed("scoped", cfg, Date.now(), "shared", selection))
+        .toEqual({ status: "selected", accountId: "a" });
+      cfg.pausedCodexAccountIds = ["a"];
+      expect(previewCodexAccountForRequest("scoped", cfg, Date.now(), "shared", selection)).toBeNull();
+    });
+  }
+  test("exhaustion selects another remainder and a fresh reset restores eligibility", () => {
+    const cfg = config({ accountPoolStrategy: "fill-first" });
+    updateAccountQuota("a", 100); updateAccountQuota("b", 99.5);
+    expect(resolveCodexAccountForThreadDetailed("fallback", cfg)).toEqual({ status: "selected", accountId: "b" });
+    updateAccountQuota("a", 0);
+    expect(previewCodexAccountForRequest("fallback", cfg)).toBe("a");
   });
 });

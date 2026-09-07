@@ -1,8 +1,8 @@
 # Strict Codex pool quota admission
 
 Strict quota admission is opt-in. It uses the existing account selector, threshold,
-manual pin, credential store, and quota endpoints. It does not introduce another
-account selection strategy.
+manual pin, credential store, and WHAM quota metadata endpoint. It does not introduce
+another account selection strategy.
 
 To keep using a manually selected account until its threshold is reached, select
 `fill-first` and enable strict admission in the configuration:
@@ -22,29 +22,36 @@ authentication requirements apply. There is no new GUI control.
 
 ## Selection and recovery
 
-- A stored pool account is eligible only when its observed shared quota windows
-  are below the configured threshold. The effective ceiling is 99%, even if the
-  configured threshold is 100%. Setting the threshold to zero disables this
-  admission policy, consistent with the existing auto-switch control.
-- A manual selection and thread affinity cannot override the quota gate. With
-  strict `fill-first`, an eligible selected account stays active until it is
-  unavailable, including accounts selected automatically. Higher-priority accounts
-  that recover do not preempt it. When another account is needed, higher selection
-  order numbers are preferred. This reuses the existing priority-tier selector
-  without creating a persistent manual pin for an automatic selection.
-- A below-threshold snapshot is usable for five minutes. Unknown or stale quota
-  triggers a coalesced usage read before selection. Failed reads also receive a
-  five-minute backoff; they do not turn unknown quota into zero usage.
+- `autoSwitchThreshold` is a soft preference. When strict quota is enabled, selection
+  first filters for actually usable accounts (credentials, pause, reauthentication,
+  cooldown, model, and hard quota state), then prefers an account below the threshold.
+  If none is below it, the current usable account may continue with any remaining
+  quota below 100%. Only a confirmed 100% window is a hard quota block. When every
+  usable account is truly exhausted, the request waits for new evidence.
+- A manual selection and thread affinity cannot make a paused, cooling, reauth-needed,
+  model-ineligible, or 100%-blocked account usable. With strict `fill-first`, an
+  eligible selected account stays active when no below-threshold replacement exists.
+  Higher-priority accounts are preferred when a switch is possible; this reuses the
+  existing priority-tier selector without creating a persistent manual pin for an
+  automatic selection. The independent `codexMainAccountHardLock` protection switch
+  remains separate and may still restrict the main account; strict quota does not
+  promise to override it.
+- Quota reads use the WHAM metadata endpoint. Selection merges concurrent reads and
+  uses a short 10-second cache; a failed read earns a five-minute backoff. A reset
+  timestamp only makes the next metadata read due and never implies that quota has
+  recovered. Unknown or stale quota is never treated as zero usage.
 - A measured block survives stale cache data, token refresh, and predicted reset
   deadlines. A new valid quota reading must establish recovery. Partial or
   credits-only responses cannot clear another window's known block.
 - Only pending requests own recovery timers. Usage reads are shared and bounded;
-  with no pending request this feature performs no periodic work. A predicted
-  reset can schedule an earlier verification. Manual usage refreshes wake pending
-  requests. Unexpected upstream resets are discovered by the next due usage read.
-- This feature never redeems reset credits. Existing separately configured reset
-  automation is independent and must remain disabled when manual redemption is
-  desired.
+  with no pending request this feature performs no periodic work. Manual usage
+  refreshes wake pending requests. This feature sends no warmup model requests and
+  never redeems reset credits.
+- Selecting main or enabling strict quota while main is active reads its identity-bound
+  usage in the management operation. If main usage is missing after startup or has
+  gone stale, a real waiting request requests metadata through a separate owned main
+  profile claim. Caller-owned authentication still does not read local credentials;
+  a failed metadata read keeps the request waiting with backoff.
 
 ## Request boundaries
 

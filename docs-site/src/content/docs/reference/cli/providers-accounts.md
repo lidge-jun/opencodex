@@ -339,6 +339,14 @@ exit 1. `--json` returns:
 { provider, autoSwitchThreshold: number, enabled: boolean }
 ```
 
+With `codexAccountStrictQuota: true`, this threshold is a soft switching preference: eligible
+accounts below it are preferred, but a usable account may continue with any remaining quota below
+100%. Only a confirmed 100% window is hard-blocked; requests wait only when every usable account
+is exhausted. Reads use merged WHAM metadata with a short cache, failed reads back off for five
+minutes, and a reset time triggers a read without implying recovery. The independent
+`codexMainAccountHardLock` switch remains a separate main-account restriction. See the
+[strict Codex pool quota guide](https://github.com/lidge-jun/opencodex/blob/main/docs/codex-strict-quota.md).
+
 ### `ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
 
 Reads or sets one Codex pool account's selection order: **higher is used earlier**, the default is

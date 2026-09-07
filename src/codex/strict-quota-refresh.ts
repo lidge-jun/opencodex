@@ -8,7 +8,8 @@ import { getCodexQuotaRevision, subscribeCodexQuotaChanges } from "./quota-event
 import { CODEX_STRICT_QUOTA_FRESHNESS_MS, getCodexStrictQuotaStatus, isCodexStrictQuotaEnabled, type CodexStrictQuotaConfig } from "./strict-quota";
 
 type Refresh = (config: OcxConfig, accountIds: readonly string[], policy?: CodexStrictQuotaConfig) => Promise<void>;
-type Probe = { attemptedAt: number; credentialKey: string };
+type Probe = { attemptedAt: number; credentialKey: string; failed?: boolean };
+const SELECTION_QUOTA_FRESHNESS_MS = 10_000;
 export type StrictCodexQuotaRefreshResult = {
   /** Attempted does not claim a successful quota read; eligibility still comes from the cache. */
   status: "off" | "idle" | "attempted" | "failed";
@@ -49,14 +50,12 @@ function probeDueAt(config: CodexStrictQuotaConfig, id: string, now: number): nu
   const observedAt = state.updatedAt;
   if (attemptedAt === undefined && observedAt === undefined) return now;
   let due = Math.max(attemptedAt ?? 0, observedAt ?? 0) + CODEX_STRICT_QUOTA_FRESHNESS_MS;
-  if (state.state === "blocked") {
-    for (const window of getStrictAccountQuota(id)?.windows ?? []) {
-      const raw = window.resetAt;
-      if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) continue;
-      const resetMs = raw < 1_000_000_000_000 ? raw * 1000 : raw;
-      // One early probe per prediction. A failed post-reset read earns normal backoff.
-      if (resetMs > Math.max(attemptedAt ?? 0, window.observedAt)) due = Math.min(due, resetMs + 1000);
-    }
+  for (const window of getStrictAccountQuota(id)?.windows ?? []) {
+    const raw = window.resetAt;
+    if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) continue;
+    const resetMs = raw < 1_000_000_000_000 ? raw * 1000 : raw;
+    // One early probe per prediction. A failed post-reset read earns normal backoff.
+    if (resetMs > Math.max(attemptedAt ?? 0, window.observedAt)) due = Math.min(due, resetMs + 1000);
   }
   return due;
 }
@@ -76,7 +75,7 @@ function waitForRefresh<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {
 /** Request-triggered usage reads. No idle timer and no inference/reset-credit calls. */
 export async function refreshStrictCodexQuotasOnDemand(
   config: OcxConfig, requestedIds?: ReadonlySet<string>,
-  options: { policy?: CodexStrictQuotaConfig; signal?: AbortSignal } = {},
+  options: { policy?: CodexStrictQuotaConfig; signal?: AbortSignal; forSelection?: boolean } = {},
 ): Promise<StrictCodexQuotaRefreshResult> {
   options.signal?.throwIfAborted();
   const policy = options.policy ?? config;
@@ -87,18 +86,40 @@ export async function refreshStrictCodexQuotasOnDemand(
   while (flight) joined = await waitForRefresh(flight, options.signal);
   const configured = accountIds(config);
   const now = clock();
-  const ids = configured.filter(id => (!requestedIds || requestedIds.has(id))
-    && getCodexStrictQuotaStatus(policy, id, "shared", now).state !== "ready"
-    && probeDueAt(policy, id, now) <= now);
+  const ids = configured.filter(id => {
+    if (requestedIds && !requestedIds.has(id)) return false;
+    const state = getCodexStrictQuotaStatus(policy, id, "shared", now);
+    const prior = probes.get(id);
+    // A real selection consults recent metadata, including accounts formerly exhausted
+    // but topped up since. Collapse bursts; an unsuccessful read still earns normal backoff.
+    const selectionDue = options.forSelection === true && !prior?.failed
+      && now >= Math.max(prior?.attemptedAt ?? 0, state.updatedAt ?? 0) + SELECTION_QUOTA_FRESHNESS_MS;
+    return selectionDue || (state.state !== "ready" && probeDueAt(policy, id, now) <= now);
+  });
   if (!ids.length) {
     const joinedIds = joined?.accountIds.filter(id => configured.includes(id) && (!requestedIds || requestedIds.has(id))) ?? [];
     return joinedIds.length ? { status: joined!.status, accountIds: joinedIds } : { status: "idle", accountIds: [] };
   }
+  const observations = new Map(ids.map(id => [id, JSON.stringify(getStrictAccountQuota(id))]));
   for (const id of ids) probes.set(id, { attemptedAt: now, credentialKey: credentialKey(id) });
   // Start in a microtask so the shared flight exists before any synchronous injected work.
+  const markFailed = (id: string) => {
+    const prior = probes.get(id);
+    if (prior?.attemptedAt === now) prior.failed = true;
+  };
   const batch = Promise.resolve().then(() => refresh(config, ids, policy)).then(
-    (): StrictCodexQuotaRefreshResult => ({ status: "attempted", accountIds: ids }),
-    (): StrictCodexQuotaRefreshResult => ({ status: "failed", accountIds: ids }),
+    (): StrictCodexQuotaRefreshResult => {
+      for (const id of ids) {
+        // Some metadata APIs report a failed read without throwing. No new observation
+        // must not become a successful short-backoff refresh just because the promise resolved.
+        if (JSON.stringify(getStrictAccountQuota(id)) === observations.get(id)) markFailed(id);
+      }
+      return { status: "attempted", accountIds: ids };
+    },
+    (): StrictCodexQuotaRefreshResult => {
+      for (const id of ids) markFailed(id);
+      return { status: "failed", accountIds: ids };
+    },
   );
   const owned = batch.finally(() => { if (flight === owned) flight = undefined; });
   flight = owned;

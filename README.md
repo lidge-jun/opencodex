@@ -155,10 +155,12 @@ account exclusion, affinity expiry, or 401/403 and 429 recovery can rebind them.
 selection order when one of them — usually your Codex Desktop login — should only be reached for
 once the others are drained.
 
-For an opt-in hard threshold that also overrides thread affinity, see
+For an opt-in soft threshold that can move a request away from a high-usage account
+while preserving any usable remainder, see
 [strict Codex pool quota admission](docs/codex-strict-quota.md). It reuses the
-existing selectors, including fill-first, and verifies quota recovery before
-re-enabling an account.
+existing selectors, including fill-first; only a confirmed 100% window is blocked,
+and recovery is verified from fresh quota metadata before an exhausted account is
+re-enabled.
 
 ### For agents
 

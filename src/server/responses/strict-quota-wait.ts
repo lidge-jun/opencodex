@@ -1,7 +1,9 @@
 import type { OcxConfig } from "../../types";
+import type { CodexAuthPolicyConfig } from "../../codex/auth-context";
 import type { AdmissionLease } from "../../lib/admission";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
-import { waitForStrictCodexQuotaChange } from "../../codex/strict-quota-refresh";
+import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/account-id";
+import { refreshStrictCodexQuotasOnDemand, waitForStrictCodexQuotaChange } from "../../codex/strict-quota-refresh";
 import { registerTurn, unregisterTurn } from "../lifecycle";
 import { isStrictQuotaWaitResponse } from "./strict-quota-response";
 
@@ -11,6 +13,7 @@ const HEARTBEAT = new TextEncoder().encode(
 
 export interface StrictQuotaWaitOptions {
   config: OcxConfig;
+  quotaPolicy?: CodexAuthPolicyConfig;
   initial: Response;
   stream: boolean;
   signals: readonly (AbortSignal | undefined)[];
@@ -96,6 +99,11 @@ export async function waitForStrictQuotaResponse(options: StrictQuotaWaitOptions
         void changed.catch(() => {});
         await response.body?.cancel().catch(() => {});
         options.finishAttempt(response.status);
+        // Caller-owned routing cannot inspect the physical main profile. This pending
+        // request uses the metadata owner's separate claim to recover missing/stale usage;
+        // no caller credential crosses that boundary and no work runs while idle.
+        const refreshConfig = options.quotaPolicy ? { ...options.config, ...options.quotaPolicy } : options.config;
+        await refreshStrictCodexQuotasOnDemand(refreshConfig, new Set([MAIN_CODEX_ACCOUNT_ID]), { signal: ac.signal });
         await changed;
         ac.signal.throwIfAborted();
         response = await options.resume(ac.signal);

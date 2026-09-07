@@ -35,6 +35,7 @@ import {
   tryAcquireCodexQuotaScopeProbeLease,
   pickAlternateCodexAccount,
   resolveCodexAccountForThreadDetailed,
+  strictQuotaReplacement,
 } from "./routing";
 import {
   entitledCodexAccountIdsForModel,
@@ -322,7 +323,7 @@ export class CodexStrictQuotaUnavailableError extends CodexAccountCooldownError 
   constructor(readonly waitable = true) {
     super(MAIN_CODEX_ACCOUNT_ID, 0);
     this.name = "CodexStrictQuotaUnavailableError";
-    this.message = "No Codex account has confirmed quota below the configured threshold";
+    this.message = "No Codex account has confirmed remaining quota";
   }
 }
 
@@ -720,7 +721,30 @@ export async function resolveCodexAuthContext(
   // is the one exception where that exclusion is selection evidence in the opposite direction.
   // Validate the caller's own gated-model roster before using it, and fall through to a Pool model
   // detour when it lacks the grant. This branch performs no physical-main credential read.
-  if (preserveRequestOwnedMainPin) {
+  let preferStoredQuotaReplacement = false;
+  if (preserveRequestOwnedMainPin && isCodexStrictQuotaEnabled(policy, quotaScope)) {
+    const mainStatus = getCodexStrictQuotaStatus(policy, MAIN_CODEX_ACCOUNT_ID, quotaScope);
+    if (mainStatus.state === "ready" && mainStatus.usedPercent! >= mainStatus.threshold!) {
+      // A caller-owned main pin may use its remainder, but a usable below-threshold
+      // stored account still takes precedence. Exclude physical main from both reads.
+      const excluded = new Set([MAIN_CODEX_ACCOUNT_ID, ...(options.excludeAccountIds ?? [])]);
+      if (options.excludeAccountId) excluded.add(options.excludeAccountId);
+      const entitlement = options.modelId && ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(options.modelId)
+        ? await (options.resolveCodexModelEntitlements ?? resolveCodexModelEntitlements)(config, {
+          excludeAccountIds: excluded, signal: options.signal,
+          nativeMainRefreshDependencies: options.nativeMainRefreshDependencies,
+        }) : undefined;
+      const modelEligibleAccountIds = entitlement
+        ? entitledCodexAccountIdsForModel(entitlement, options.modelId) : undefined;
+      const candidateOptions = { strictQuotaPolicy: policy, excludedAccountIds: excluded, modelEligibleAccountIds };
+      const candidates = new Set((config.codexAccounts ?? []).map(account => account.id)
+        .filter(id => !policy.pausedCodexAccountIds?.includes(id) && isCodexAccountUsable(config, id, candidateOptions)));
+      await refreshStrictCodexQuotasOnDemand(config, candidates, { policy, signal: options.signal, forSelection: true });
+      options.signal?.throwIfAborted();
+      preferStoredQuotaReplacement = strictQuotaReplacement(config, MAIN_CODEX_ACCOUNT_ID, Date.now(), quotaScope, candidateOptions) !== null;
+    }
+  }
+  if (preserveRequestOwnedMainPin && !preferStoredQuotaReplacement) {
     const callerEntitled = !options.modelId
       || !ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(options.modelId)
       || await (
@@ -833,6 +857,16 @@ export async function resolveCodexAuthContext(
         options.signal?.throwIfAborted();
       }
     }
+    // A switch re-reads candidate metadata, including previously exhausted accounts
+    // that may have reset or received quota since the last request.
+    const preferredStatus = getCodexStrictQuotaStatus(policy,
+      fixedAccountId ?? getEffectiveActiveCodexAccountId(config) ?? MAIN_CODEX_ACCOUNT_ID, quotaScope);
+    if (strict && (options.excludeAccountId || options.excludeAccountIds?.size
+      || preferredStatus.state !== "ready" || preferredStatus.usedPercent! >= preferredStatus.threshold!)) {
+      const ids = fixedAccountId === undefined ? potentialIds() : potentialIds().filter(id => id === fixedAccountId);
+      await refreshStrictCodexQuotasOnDemand(config, new Set(ids), { policy, signal: options.signal, forSelection: true });
+      options.signal?.throwIfAborted();
+    }
     let resolution = resolveSelection();
     if (strict && resolution.status === "none" && fixedAccountId === undefined) {
       await refreshStrictCodexQuotasOnDemand(config, new Set(potentialIds()), { policy, signal: options.signal });
@@ -842,11 +876,6 @@ export async function resolveCodexAuthContext(
     if (resolution.status === "expired") throw new CodexThreadAffinityExpiredError(resolution.accountId);
     const selected = resolution.status === "selected" ? resolution.accountId : null;
     if (!selected) {
-      if (strict && fixedAccountId === undefined && potentialIds().some(id =>
-        !isCodexStrictQuotaEligible(policy, id, quotaScope)
-        || getCodexQuotaHealthSnapshot(id, quotaScope) !== null)) {
-        throw new CodexStrictQuotaUnavailableError();
-      }
       // A retry that excluded a failed Pool account may still use the validated caller-owned
       // main credential. Treating every exclusion as if main itself had failed strands a healthy
       // native bearer after the first Pool attempt. Preserve the exactly-once boundary by refusing
@@ -856,9 +885,26 @@ export async function resolveCodexAuthContext(
         && fixedAccountId === undefined
         && options.excludeAccountId !== MAIN_CODEX_ACCOUNT_ID
         && !options.excludeAccountIds?.has(MAIN_CODEX_ACCOUNT_ID)
+        && !policy.pausedCodexAccountIds?.includes(MAIN_CODEX_ACCOUNT_ID)
         && (!strict || isCodexStrictQuotaEligible(policy, MAIN_CODEX_ACCOUNT_ID, quotaScope))
       ) {
         return await resolveCallerOwnedMainContext();
+      }
+      // A request-owned main cannot inspect auth.json here. Let the pending-request
+      // owner obtain metadata under its own native claim instead of reporting a
+      // profile drain when only main quota evidence is missing or expired.
+      if (strict && requestScopedMainCredential && fixedAccountId === undefined
+        && options.excludeAccountId !== MAIN_CODEX_ACCOUNT_ID
+        && !options.excludeAccountIds?.has(MAIN_CODEX_ACCOUNT_ID)
+        && !policy.pausedCodexAccountIds?.includes(MAIN_CODEX_ACCOUNT_ID)
+        && !(callerMatchesObservedMain(headers) && isMainAccountHardLocked(policy))
+        && !isCodexStrictQuotaEligible(policy, MAIN_CODEX_ACCOUNT_ID, quotaScope)) {
+        throw new CodexStrictQuotaUnavailableError();
+      }
+      if (strict && fixedAccountId === undefined && potentialIds().some(id =>
+        !isCodexStrictQuotaEligible(policy, id, quotaScope)
+        || getCodexQuotaHealthSnapshot(id, quotaScope) !== null)) {
+        throw new CodexStrictQuotaUnavailableError();
       }
       if (fixedAccountId !== undefined) {
         throw new CodexPoolAuthenticationError(

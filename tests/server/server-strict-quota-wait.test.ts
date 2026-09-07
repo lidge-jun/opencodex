@@ -6,11 +6,11 @@ import { markStrictQuotaWaitResponse } from "../../src/server/responses/strict-q
 import { beginRequestAttempt, type RequestLogContext } from "../../src/server/request-log";
 import { abortAndReleaseAllTurns, getActiveTurnCount, tryAdmitTurn } from "../../src/server/lifecycle";
 import { notifyCodexQuotaChanges } from "../../src/codex/quota-events";
-import { strictCodexQuotaWaiterCount } from "../../src/codex/strict-quota-refresh";
+import { setStrictCodexQuotaRefreshForTests, strictCodexQuotaWaiterCount } from "../../src/codex/strict-quota-refresh";
 import { responseWithDeferredRequestLog } from "../../src/server/relay";
 import { sendResponseToWebSocket, type WsData } from "../../src/server/ws-bridge";
 
-const config = { providers: {}, codexAccounts: [], codexAccountStrictQuota: true } as OcxConfig;
+const config = { providers: {}, codexAccounts: [], codexAccountStrictQuota: true, autoSwitchThreshold: 95 } as OcxConfig;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const completed = 'event: response.completed\ndata: {"type":"response.completed","response":{"id":"real-response","status":"completed","output":[]}}\n\n';
@@ -51,14 +51,75 @@ async function until(predicate: () => boolean): Promise<void> {
 }
 
 let precedingTurns = 0;
-beforeEach(() => { precedingTurns = getActiveTurnCount(); });
-afterEach(() => {
+let restoreRefresh: () => void;
+let refreshOnWait: (ids: readonly string[]) => Promise<void>;
+beforeEach(() => {
+  precedingTurns = getActiveTurnCount();
+  refreshOnWait = async () => {};
+  restoreRefresh = setStrictCodexQuotaRefreshForTests(async (_config, ids) => refreshOnWait(ids));
+});
+afterEach(async () => {
+  // An aborted SSE consumer may finish before the shared metadata microtask settles.
+  await Bun.sleep(0);
   // Other server suites share this process; assert this test returns its own admission.
   expect(getActiveTurnCount()).toBe(precedingTurns);
   expect(strictCodexQuotaWaiterCount()).toBe(0);
+  restoreRefresh();
 });
 
 describe("strict quota request wait", () => {
+  test("a successful response at the 95% soft threshold is sent immediately", async () => {
+    let sends = 0;
+    const response = await handleResponsesWithPolicyFallback(request(), config, log(), {}, {
+      runCore: async () => { sends++; return Response.json({ id: "soft-threshold-response", status: "completed" }); },
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ id: "soft-threshold-response", status: "completed" });
+    expect(sends).toBe(1);
+  });
+
+  test("a pending request refreshes unknown main metadata and resumes without a management action", async () => {
+    let known = false; let sends = 0; const reads: string[][] = [];
+    refreshOnWait = async ids => {
+      reads.push([...ids]);
+      expect(strictCodexQuotaWaiterCount()).toBe(1);
+      known = true; notifyCodexQuotaChanges();
+    };
+    const response = await handleResponsesWithPolicyFallback(request(), config, log(), {}, {
+      runCore: async () => { sends++; return known ? Response.json({ id: "fresh-main" }) : rejection(); },
+    });
+    expect(await response.json()).toEqual({ id: "fresh-main" });
+    expect(reads).toEqual([["__main__"]]); expect(sends).toBe(2);
+  });
+
+  test("main metadata uses live policy while replay retains its captured config", async () => {
+    const captured = { ...config, codexAccountStrictQuota: false, pausedCodexAccountIds: ["__main__"] };
+    const live = { ...config, pausedCodexAccountIds: [] };
+    let known = false; const reads: string[][] = [];
+    refreshOnWait = async ids => { reads.push([...ids]); known = true; notifyCodexQuotaChanges(); };
+    const response = await handleResponsesWithPolicyFallback(request(), captured, log(), { codexAuthPolicy: live }, {
+      runCore: async (_req, owner, _log, options) => {
+        expect(owner).toBe(captured); expect(options?.codexAuthPolicy).toBe(live);
+        return known ? Response.json({ id: "live-main" }) : rejection();
+      },
+    });
+    expect(await response.json()).toEqual({ id: "live-main" }); expect(reads).toEqual([["__main__"]]);
+  });
+
+  test("failed main metadata keeps waiting and is not retried on every wake", async () => {
+    const ac = new AbortController(); let reads = 0; let sends = 0;
+    refreshOnWait = async () => { reads++; throw new Error("metadata unavailable"); };
+    const pending = handleResponsesWithPolicyFallback(request(false, ac.signal), config, log(), {}, {
+      runCore: async () => { sends++; return rejection(); },
+    });
+    await until(() => reads === 1);
+    notifyCodexQuotaChanges();
+    await until(() => sends === 2 && strictCodexQuotaWaiterCount() === 1);
+    expect(reads).toBe(1);
+    ac.abort(new Error("stop waiting"));
+    await expect(pending).rejects.toThrow("stop waiting");
+  });
+
   test("non-streaming resumes the exact input after quota wakeup and preserves attempts", async () => {
     const gate = waitGate(); const ctx = log(); const seen: unknown[] = [];
     const runCore: NonNullable<PolicyFallbackDeps["runCore"]> = async (req, _config, logCtx, options) => {

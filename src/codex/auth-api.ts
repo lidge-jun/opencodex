@@ -2162,6 +2162,14 @@ export async function handleCodexAuthAPI(
     else setCodexAccountPin(runtimeConfig, targetAccountId);
     resetCodexRoutingForManualSelection(targetAccountId);
     saveRuntimeConfig(config, runtimeConfig);
+    // Management owns the physical-main claim. Rebuild identity-bound usage here;
+    // caller-owned requests cannot read auth.json to recover an unknown main snapshot.
+    if (targetAccountId === MAIN_CODEX_ACCOUNT_ID && runtimeConfig.codexAccountStrictQuota === true
+      && (runtimeConfig.autoSwitchThreshold ?? 80) > 0) {
+      await fetchMainAccountInfoAttempt(true, 1, undefined, false, false);
+    }
+    // A pending strict-quota request must reconsider an operator-selected account now.
+    notifyCodexQuotaChanges();
     return jsonResponse({ ok: true, activeCodexAccountId: body.accountId, appliesImmediately: true });
   }
 
@@ -2197,6 +2205,11 @@ export async function handleCodexAuthAPI(
     runtimeConfig.autoSwitchThreshold = body.threshold;
     if (typeof body.strictQuota === "boolean") runtimeConfig.codexAccountStrictQuota = body.strictQuota;
     saveRuntimeConfig(config, runtimeConfig);
+    if (runtimeConfig.codexAccountStrictQuota === true && body.threshold > 0
+      && (getEffectiveActiveCodexAccountId(runtimeConfig) ?? MAIN_CODEX_ACCOUNT_ID) === MAIN_CODEX_ACCOUNT_ID
+      && !isCodexAccountPaused(runtimeConfig, MAIN_CODEX_ACCOUNT_ID)) {
+      await fetchMainAccountInfoAttempt(true, 1, undefined, false, false);
+    }
     notifyCodexQuotaChanges();
     return jsonResponse({ ok: true });
   }

@@ -2254,13 +2254,83 @@ describe("strict quota Pool auth admission", () => {
     modelsByAccount: new Map([["pool-a", new Set(["gpt-daybreak-blue-latest"])]]),
     confirmedAccountIds: new Set(["pool-a"]), credentialIdentities: new Map(),
   });
+  for (const evidence of ["missing", "stale"] as const) {
+    test(`${evidence} caller-main evidence requests quota recovery instead of a native-profile drain`, async () => {
+      const { cfg, mainQuota, headers } = strictFixture();
+      cfg.codexAccounts = [];
+      if (evidence === "missing") clearAccountQuota(MAIN_CODEX_ACCOUNT_ID);
+      else {
+        const now = Date.now();
+        const clock = spyOn(Date, "now").mockReturnValue(now - 6 * 60_000);
+        try { mainQuota(0); } finally { clock.mockRestore(); }
+      }
+      await expect(resolveCodexAuthContext(headers, cfg, "pool", {
+        requestScopedMainCredential: true,
+        isMainAccountTokenLive: () => { throw new Error("must not inspect native main"); },
+        getMainAccountToken: () => { throw new Error("must not inspect native main"); },
+      })).rejects.toMatchObject({ name: "CodexStrictQuotaUnavailableError", waitable: true });
+      await expect(resolveCodexAuthContext(headers, cfg, "pool", {
+        requestScopedMainCredential: true, accountId: MAIN_CODEX_ACCOUNT_ID,
+      })).rejects.toMatchObject({ name: "CodexStrictQuotaUnavailableError", waitable: false });
+    });
+  }
+  test("a manually pinned caller-owned main with fresh zero usage remains available at 95", async () => {
+    const { cfg, mainQuota, headers } = strictFixture(); mainQuota(0);
+    const ctx = await resolveCodexAuthContext(headers, cfg, "pool", {
+      requestScopedMainCredential: true,
+      isMainAccountTokenLive: () => { throw new Error("must not inspect native main"); },
+    });
+    expect(ctx).toMatchObject({ kind: "main", poolQuotaScope: "shared" });
+  });
+  for (const replacement of ["below", "remainder", "paused", "model-ineligible"] as const) {
+    test(`caller-owned main remainder considers ${replacement} replacement without native reads`, async () => {
+      const { cfg, mainQuota, headers } = strictFixture(); mainQuota(99.9);
+      if (replacement === "remainder") setAccountQuotaFromParsed("pool-a", { weeklyPercent: 98 });
+      if (replacement === "paused") cfg.pausedCodexAccountIds = ["pool-a"];
+      const ctx = await resolveCodexAuthContext(headers, cfg, "pool", {
+        requestScopedMainCredential: true,
+        ...(replacement === "model-ineligible" ? {
+          modelId: "gpt-daybreak-blue-latest",
+          isDirectCallerEntitledToCodexModel: async () => true,
+          resolveCodexModelEntitlements: async (): Promise<CodexModelEntitlementSnapshot> => ({
+            modelsByAccount: new Map([["pool-a", new Set<string>()]]),
+            confirmedAccountIds: new Set(["pool-a"]), credentialIdentities: new Map(),
+          }),
+        } : {}),
+        isMainAccountTokenLive: () => { throw new Error("must not inspect native main"); },
+        getMainAccountToken: () => { throw new Error("must not inspect native main"); },
+      });
+      expect(ctx.kind).toBe(replacement === "below" ? "pool" : "main");
+      if (ctx.kind === "main") expect(() => materializeCodexUpstreamAuth(headers, ctx, { config: cfg })).not.toThrow();
+    });
+  }
+  test("a replacement exhausted during model discovery does not strand a usable main remainder", async () => {
+    const { cfg, mainQuota, headers } = strictFixture(); mainQuota(99);
+    let discoveries = 0;
+    const ctx = await resolveCodexAuthContext(headers, cfg, "pool", {
+      requestScopedMainCredential: true, modelId: "gpt-daybreak-blue-latest",
+      isDirectCallerEntitledToCodexModel: async () => true,
+      resolveCodexModelEntitlements: async () => {
+        if (++discoveries === 2) setAccountQuotaFromParsed("pool-a", { weeklyPercent: 100 });
+        return poolEntitlements();
+      },
+      isMainAccountTokenLive: () => { throw new Error("must not inspect native main"); },
+    });
+    expect(ctx.kind).toBe("main");
+  });
+  test("an exhausted caller main can select another account's remainder", async () => {
+    const { cfg, mainQuota, headers } = strictFixture(); mainQuota(100);
+    setAccountQuotaFromParsed("pool-a", { weeklyPercent: 99 });
+    const ctx = await resolveCodexAuthContext(headers, cfg, "pool", { requestScopedMainCredential: true });
+    expect(ctx).toMatchObject({ kind: "pool", accountId: "pool-a" });
+  });
   test("caller-owned main selected by Pool is rechecked before materialization and dispatch", async () => {
     const { cfg, mainQuota, headers } = strictFixture();
     const ctx = await resolveCodexAuthContext(headers, cfg, "pool", { requestScopedMainCredential: true });
     expect(ctx).toMatchObject({ kind: "main", poolQuotaScope: "shared" });
     const guard = createCodexReserveDispatchGuard(ctx, cfg, "gpt-6-astra");
     expect(guard).toBeDefined();
-    mainQuota(95);
+    mainQuota(100);
     expect(() => materializeCodexUpstreamAuth(headers, ctx, { config: cfg })).toThrow(CodexStrictQuotaUnavailableError);
     expect(() => guard!(headers)).toThrow(CodexStrictQuotaUnavailableError);
   });
@@ -2271,7 +2341,7 @@ describe("strict quota Pool auth admission", () => {
       const ctx = await resolveCodexAuthContext(headers, cfg, "pool", {
         requestScopedMainCredential: true, modelId: "gpt-daybreak-blue-latest", excludeAccountIds: excluded,
         isDirectCallerEntitledToCodexModel: async () => {
-          if (change === "quota") mainQuota(99);
+          if (change === "quota") mainQuota(100);
           if (change === "pause") cfg.pausedCodexAccountIds = [MAIN_CODEX_ACCOUNT_ID];
           if (change === "exclude") excluded.add(MAIN_CODEX_ACCOUNT_ID);
           return true;
@@ -2290,7 +2360,7 @@ describe("strict quota Pool auth admission", () => {
     const ctx = await resolveCodexAuthContext(headers, cfg, "pool", options);
     expect(ctx).toMatchObject({ kind: "main", poolQuotaScope: "shared", fixedAccount: true });
     const guard = createCodexReserveDispatchGuard(ctx, cfg, "gpt-6-astra")!;
-    mainQuota(99);
+    mainQuota(100);
     await expect(resolveCodexAuthContext(headers, cfg, "pool", options)).rejects.toMatchObject({
       name: "CodexStrictQuotaUnavailableError", waitable: false,
     });
@@ -2305,20 +2375,20 @@ describe("strict quota Pool auth admission", () => {
       accessToken: "strict-pool-access", chatgptAccountId: "strict-pool-owner" };
     const guard = createCodexReserveDispatchGuard(ctx, cfg, "gpt-5.6-luna");
     expect(guard).toBeDefined();
-    setAccountQuotaFromParsed("pool-a", { weeklyPercent: 99 });
+    setAccountQuotaFromParsed("pool-a", { weeklyPercent: 100 });
     expect(() => guard!(headers)).not.toThrow();
     cfg.codexAccountStrictQuota = true;
     expect(() => guard!(headers)).toThrow(CodexStrictQuotaUnavailableError);
   });
   test("explicit Direct and independent scopes keep their own admission", async () => {
-    const { cfg, mainQuota, headers } = strictFixture(); mainQuota(99);
+    const { cfg, mainQuota, headers } = strictFixture(); mainQuota(100);
     const ctx = await resolveCodexAuthContext(headers, cfg, "direct", { requestScopedMainCredential: true });
     expect(ctx).toEqual({ kind: "main", accountId: null });
     expect(createCodexReserveDispatchGuard(ctx, cfg, "gpt-6-astra")).toBeUndefined();
     expect(materializeCodexUpstreamAuth(headers, ctx, { config: cfg }).get("authorization")).toBe(headers.get("authorization"));
     const pool = { kind: "pool" as const, accountId: "pool-a", writerGeneration: 0, generation: 1,
       accessToken: "strict-pool-access", chatgptAccountId: "strict-pool-owner" };
-    setAccountQuotaFromParsed("pool-a", { weeklyPercent: 99 });
+    setAccountQuotaFromParsed("pool-a", { weeklyPercent: 100 });
     expect(() => createCodexReserveDispatchGuard(pool, cfg, "gpt-5.3-codex-spark")!(headers)).not.toThrow();
   });
   test("live strict policy selects an alternative without replacing the replay config owner", async () => {
@@ -2329,7 +2399,7 @@ describe("strict quota Pool auth admission", () => {
     cfg.codexAccounts!.push({ id: "pool-b", isMain: false });
     saveCodexAccountCredential("pool-b", { accessToken: "pool-b-access", refreshToken: "pool-b-refresh",
       chatgptAccountId: "pool-b-owner", expiresAt: Date.now() + 3600000 });
-    setAccountQuotaFromParsed("pool-a", { weeklyPercent: 99 });
+    setAccountQuotaFromParsed("pool-a", { weeklyPercent: 100 });
     setAccountQuotaFromParsed("pool-b", { weeklyPercent: 10 });
     const ctx = await resolveCodexAuthContext(headers, cfg, "pool", { codexAuthPolicy: {
       codexAccountStrictQuota: true, autoSwitchThreshold: 95, pausedCodexAccountIds: [MAIN_CODEX_ACCOUNT_ID],

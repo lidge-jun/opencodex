@@ -215,6 +215,15 @@ OAuth 및 API 키 제공자에는 제공자의 할당량 보고 엔드포인트�
 { provider, autoSwitchThreshold: number, enabled: boolean }
 ```
 
+`codexAccountStrictQuota: true`이면 이 임계값은 선제 전환을 위한 소프트 선호입니다. 적격한
+계정 중 임계값 미만인 계정을 먼저 고르지만, 사용할 수 있는 계정에 100% 미만의 잔여량이
+있으면 계속 사용할 수 있습니다. 확인된 100% 창만 하드 차단되며 모든 적격 계정이 소진된
+경우에만 요청이 대기합니다. 읽기는 WHAM metadata를 병합해 짧게 캐시하고, 실패한 읽기는
+5분 backoff를 적용하며, reset 시간은 복구를 가정하지 않고 다음 읽기만 실행합니다. 독립적인
+`codexMainAccountHardLock` 스위치는 별도의 main 계정 제한으로 유지됩니다. 자세한 내용은
+[strict Codex pool quota guide](https://github.com/lidge-jun/opencodex/blob/main/docs/codex-strict-quota.md)를
+참조하세요.
+
 ### `ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
 
 Codex pool 계정 하나의 선택 순서를 읽거나 설정합니다. **값이 클수록 먼저** 쓰이고 기본값은 `0`,
