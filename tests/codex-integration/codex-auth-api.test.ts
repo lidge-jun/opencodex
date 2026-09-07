@@ -29,6 +29,7 @@ import {
 import * as accountStoreModule from "../../src/codex/account-store";
 import * as reserveAvailabilityModule from "../../src/codex/reserve-availability";
 import { getMainAccountInfoCache, observeMainQuotaCredential } from "../../src/codex/main-account-cache";
+import { openManualResetCreditOperation } from "../../src/codex/reset-credit-operation-ledger";
 import {
   clearCodexUpstreamHealth,
   clearThreadAccountMap,
@@ -3292,6 +3293,48 @@ describe("codex-auth API", () => {
         globalThis.fetch = previousFetch;
       }
     });
+
+    for (const failure of ["throw", "non-2xx", "unknown-code"] as const) {
+      test(`an alias marks a pending canonical operation ambiguous after ${failure}`, async () => {
+        const config = makeConfig();
+        const accountId = "pool-pending-alias";
+        const chatgptAccountId = "physical-pending-alias";
+        seedPoolAccount(config, { id: accountId, email: "pending@example.test", chatgptAccountId });
+        expect(openManualResetCreditOperation({ accountId, chatgptAccountId, operationId: OP_ID }))
+          .toMatchObject({ kind: "execute", operationId: OP_ID });
+        const readOperation = () => {
+          const database = new Database(join(TEST_DIR, "config-mutation.sqlite"), { readonly: true });
+          try {
+            return database.query<{ account_key: string; operation_id: string; state: string; code: string | null }, []>(
+              "SELECT account_key, operation_id, state, code FROM reset_credit_operations WHERE operation_kind = 'manual'",
+            ).get();
+          } finally {
+            database.close();
+          }
+        };
+        const pending = readOperation();
+        expect(pending).toMatchObject({ operation_id: OP_ID, state: "pending", code: null });
+        const upstream = stubUpstream(() => {
+          if (failure === "throw") throw new Error("fixture consume failure");
+          return failure === "non-2xx"
+            ? new Response("fixture unavailable", { status: 503 })
+            : Response.json({ code: "weird" });
+        });
+        try {
+          const response = await handleCodexAuthAPI(
+            consumeRequest({ accountId, operationId: OTHER_OP_ID }),
+            new URL("http://localhost/api/codex-auth/reset-credits/consume"),
+            config,
+          );
+          expect(response!.status).toBe(failure === "throw" ? 500 : failure === "non-2xx" ? 503 : 200);
+          expect(readOperation()).toEqual({ ...pending!, state: "ambiguous" });
+          expect(upstream.redeemRequestIds).toEqual([OP_ID]);
+          expect(getCodexAccountCredential(accountId)?.chatgptAccountId).toBe(chatgptAccountId);
+        } finally {
+          globalThis.fetch = previousFetch;
+        }
+      });
+    }
 
     test("an unknown upstream code stays ambiguous instead of settling the ledger", async () => {
       const config = makeConfig();
