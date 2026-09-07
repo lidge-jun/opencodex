@@ -303,6 +303,10 @@ export async function* parseStreamWithProgress(
         }
         if (event.type === "done" || event.type === "incomplete") {
           heldTerminal = event;
+          // Response-byte inactivity ends once the adapter has produced a terminal event.
+          // From here the separate post-terminal drain guard owns the bounded wait for
+          // iterator cleanup, so leaving the inactivity timer armed creates a false timeout.
+          clearInactivity();
           continue;
         }
         await handoff.deliver(event);
