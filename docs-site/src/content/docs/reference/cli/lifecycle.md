@@ -453,7 +453,7 @@ when the variable is missing (`Missing environment variable: OPENCODEX_API_AUTH_
 proxy is never reached. The value lives in `$OPENCODEX_HOME/service-api-token`; only a process that
 exports it into Codex's environment closes the gap.
 
-Use the maintained shim installed by `ocx codex-shim install`. It reads the owner-only token file
+Use the maintained shim installed by `ocx codex-shim install`. It reads the token file created by OpenCodex
 at launch and supplies the variable to Codex; this is the supported path for Codex started from
 shells, Desktop, cron, or another service. Codex's own child processes may still inherit it.
 
