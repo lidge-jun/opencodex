@@ -79,7 +79,7 @@ var Commands = []Command{
 	{Name: "models", Usage: "ocx models [--provider <name>] [--json]", Summary: "List configured models.", Owner: GoOwned},
 	{Name: "alias", Usage: "ocx alias <sub>", Summary: "Manage aliases.", Owner: TypeScriptOwned},
 	{Name: "combo", Usage: "ocx combo <sub>", Summary: "Manage combo routing.", Owner: TypeScriptOwned},
-	{Name: "agent", Usage: "ocx agent <sub>", Summary: "Manage agents.", Owner: TypeScriptOwned},
+	{Name: "agent", Usage: "ocx agent <status|injection|effort|subagents|fallback|sidecar> ...", Summary: "Manage headless multi-agent, roster, effort, injection, and sidecar settings.", Owner: GoOwned},
 	{Name: "observe", Usage: "ocx observe <sub>", Summary: "Inspect runtime observations.", Owner: TypeScriptOwned},
 	{Name: "inspect", Usage: "ocx inspect <sub>", Summary: "Inspect effective state.", Owner: TypeScriptOwned},
 	{Name: "route", Usage: "ocx route <sub>", Summary: "Manage routing.", Owner: TypeScriptOwned},
@@ -87,18 +87,21 @@ var Commands = []Command{
 	// usage is Go-owned (the /api/usage read plus its renderer); observe keeps
 	// its other subcommands TypeScript-owned until each carries an oracle.
 	{Name: "usage", Usage: "ocx usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--json]", Summary: "Alias of ocx observe usage.", Owner: GoOwned},
-	{Name: "storage", Usage: "ocx storage <sub>", Summary: "Manage storage.", Owner: TypeScriptOwned},
+	{Name: "storage", Usage: "ocx storage <report|cleanup|trash|policy> ...", Summary: "Storage report, archived-session cleanup, trash restore, and the cleanup policy.", Owner: GoOwned},
 	{Name: "memory", Usage: "ocx memory [--json]", Summary: "Inspect memory.", Owner: TypeScriptOwned},
 	{Name: "api-key", Usage: "ocx api-key <sub>", Summary: "Manage API keys.", Owner: TypeScriptOwned},
 	{Name: "access", Usage: "ocx access <sub>", Summary: "Manage external access.", Owner: TypeScriptOwned},
 	{Name: "export", Usage: "ocx export --client <id>", Summary: "Export client configuration.", Owner: TypeScriptOwned},
-	{Name: "integration", Usage: "ocx integration client <sub>", Summary: "Manage integrations.", Owner: TypeScriptOwned},
-	{Name: "grok", Usage: "ocx grok <sub>", Summary: "Manage Grok Build.", Owner: TypeScriptOwned},
+	{Name: "integration", Usage: "ocx integration <claude|grok|client|native> ...", Summary: "Manage supported client integrations, and the native client toggles.", Owner: GoOwned},
+	{Name: "grok", Usage: "ocx grok <status|exclude|include|set|clear|apply> ...", Summary: "Manage and apply the Grok Build model fence.", Owner: GoOwned},
 	{Name: "system", Usage: "ocx system <sub>", Summary: "Manage runtime settings.", Owner: TypeScriptOwned},
 	// The full config family is Go-owned: reads project through the schema
 	// normalizer and writes share the SQLite generation transaction.
 	{Name: "config", Usage: "ocx config <sub>", Summary: "Manage configuration.", Owner: GoOwned},
-	{Name: "lab", Usage: "ocx lab <sub>", Summary: "Inspect Compatibility Lab.", Owner: TypeScriptOwned},
+	// lab is Go-owned at the top level: status is a local SQLite projection read.
+	// The read/operator verbs still route to their TypeScript owner through the
+	// labRuntimeSubcommands map until each carries its own parity oracle.
+	{Name: "lab", Usage: "ocx lab <status|verdicts|subjects|subject|observations|events|event|artifacts|artifact|catalog> [options] [--json]", Summary: "Read-only Compatibility Lab projection inspection (local SQLite; no daemon).", Owner: GoOwned},
 	{Name: "claude", Usage: "ocx claude [args...]", Summary: "Launch Claude Code.", Owner: TypeScriptOwned},
 	{Name: "opencode", Usage: "ocx opencode [args...]", Summary: "Launch opencode.", Owner: TypeScriptOwned},
 	{Name: "mcode", Usage: "ocx mcode [args...]", Summary: "Launch MiniMax Code.", Owner: TypeScriptOwned},
@@ -156,6 +159,21 @@ func OwnershipFor(args []string) (Ownership, bool) {
 	// usage implementation, everything else stays with the TS owner until each
 	// subcommand carries its own oracle.
 	if command.Name == "observe" && len(args) > 1 && args[1] == "usage" {
+		return GoOwned, true
+	}
+	// storage owns report/cleanup/trash/policy; `codex-logs` is observe storage
+	// codex-logs spelled through the storage command and stays with the observe
+	// owner until the observe slice flips it.
+	if command.Name == "storage" && len(args) > 1 && args[1] == "codex-logs" {
+		return TypeScriptOwned, true
+	}
+	// lab keeps its operator/read verbs with the TypeScript owner (public
+	// evidence crypto, automation scheduler, manual runs, deeper projection
+	// queries) while `status` and the family surface are Go-owned.
+	if command.Name == "lab" && len(args) > 1 {
+		if owner, ok := labRuntimeSubcommands[args[1]]; ok {
+			return owner, true
+		}
 		return GoOwned, true
 	}
 	return command.Owner, true
@@ -285,6 +303,16 @@ func Run(args []string, deps Deps) int {
 		}
 		fmt.Fprintf(deps.Stderr, "Unimplemented Go-owned command: %s\n", args[0])
 		return ExitFailure
+	case "storage":
+		return runStorage(args[1:], deps)
+	case "agent":
+		return runAgent(args[1:], deps)
+	case "grok":
+		return runGrok(args[1:], deps)
+	case "integration":
+		return runIntegration(args[1:], deps)
+	case "lab":
+		return runLab(args[1:], deps)
 	default:
 		// The ownership registry above and this switch must be reconciled by
 		// TestOwnershipMapMatchesDispatch; this is defensive for future edits.
@@ -340,6 +368,16 @@ func printSubcommandHelp(name string, deps Deps) int {
 				fmt.Fprintf(deps.Stdout, "Usage: %s\n\n%s\n", command.Usage, command.Summary)
 			}
 		}
+	case "storage":
+		fmt.Fprint(deps.Stdout, storageHelp)
+	case "agent":
+		fmt.Fprint(deps.Stdout, agentHelp)
+	case "grok":
+		fmt.Fprint(deps.Stdout, grokHelp)
+	case "integration":
+		fmt.Fprint(deps.Stdout, integrationHelp)
+	case "lab":
+		fmt.Fprint(deps.Stdout, labHelp)
 	case "config":
 		fmt.Fprint(deps.Stdout, configHelp)
 	default:

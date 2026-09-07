@@ -239,6 +239,22 @@ func TestModelRuntimeOwnershipDelegates(t *testing.T) {
 	}
 }
 
+func TestLabRuntimeOwnershipDelegates(t *testing.T) {
+	for subcommand, owner := range labRuntimeSubcommands {
+		if owner != TypeScriptOwned {
+			t.Fatalf("lab %s owner = %q, want typescript-owned", subcommand, owner)
+		}
+		if got, known := OwnershipFor([]string{"lab", subcommand}); !known || got != TypeScriptOwned {
+			t.Fatalf("OwnershipFor(lab %s) = %q, %t", subcommand, got, known)
+		}
+	}
+	for _, subcommand := range []string{"status", "bogus"} {
+		if got, known := OwnershipFor([]string{"lab", subcommand}); !known || got != GoOwned {
+			t.Fatalf("OwnershipFor(lab %s) = %q, %t; want GoOwned", subcommand, got, known)
+		}
+	}
+}
+
 func TestConfigRuntimeOwnershipUsesNativeReadCommands(t *testing.T) {
 	for _, subcommand := range []string{"show", "get", "validate", "export", "set", "unset", "import"} {
 		if got, known := OwnershipFor([]string{"config", subcommand}); !known || got != GoOwned {
