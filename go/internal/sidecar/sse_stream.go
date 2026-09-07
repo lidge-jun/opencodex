@@ -376,25 +376,21 @@ func replaceSSEDataPayload(block, payload []byte) []byte {
 		newline = []byte("\r\n")
 	}
 	lines := bytes.Split(block, []byte("\n"))
-	var out bytes.Buffer
+	kept := make([][]byte, 0, len(lines))
 	replaced := false
-	for index, original := range lines {
+	for _, original := range lines {
 		line := bytes.TrimSuffix(original, []byte("\r"))
-		if index > 0 {
-			out.Write(newline)
-		}
 		if bytes.HasPrefix(line, []byte("data:")) {
-			if !replaced {
-				out.WriteString("data: ")
-				out.Write(payload)
-				replaced = true
+			if replaced {
+				continue
 			}
-			continue
+			line = append([]byte("data: "), payload...)
+			replaced = true
 		}
-		out.Write(line)
+		kept = append(kept, line)
 	}
 	if !replaced {
 		return block
 	}
-	return out.Bytes()
+	return bytes.Join(kept, newline)
 }

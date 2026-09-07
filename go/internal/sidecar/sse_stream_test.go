@@ -152,6 +152,19 @@ func TestResponsesSSEMalformedOutputIndexUsesProcessGlobalFallback(t *testing.T)
 	}
 }
 
+func TestReplaceSSEDataPayloadDropsSplitDataLinesWithoutBlankFrames(t *testing.T) {
+	block := []byte("event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\ndata: \"output_index\":0}\nid: 1")
+	payload := []byte("{\"type\":\"response.output_item.added\",\"output_index\":0}")
+	got := string(replaceSSEDataPayload(block, payload))
+	want := "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"output_index\":0}\nid: 1"
+	if got != want {
+		t.Fatalf("split data rewrite = %q, want %q", got, want)
+	}
+	if bytes.Contains([]byte(got), []byte("\n\nid: 1")) {
+		t.Fatalf("rewrite introduced a blank SSE frame: %q", got)
+	}
+}
+
 func TestResponsesSSEOutputIndexUsesNumberIsIntegerSemantics(t *testing.T) {
 	cases := map[string]string{"1.0": "1", "1e0": "1", "1e3": "1000"}
 	for index, slot := range cases {

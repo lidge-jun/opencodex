@@ -257,11 +257,11 @@ func requestQualifiesForRelay(cfg Config, contentType string, headers http.Heade
 		return nil, refusal
 	}
 	plan.modelID = modelID
+	provider := providers.Find(plan.providerName)
+	if refusal := streamRelayRefusal(provider, modelID); refusal != nil {
+		return nil, refusal
+	}
 	if streaming {
-		provider := providers.Find(plan.providerName)
-		if refusal := streamRelayRefusal(provider, modelID); refusal != nil {
-			return nil, refusal
-		}
 		plan.streaming = true
 	}
 	return plan, nil
@@ -619,7 +619,10 @@ func doDirectRelay(w http.ResponseWriter, r *http.Request, cfg Config, plan *rel
 		w.WriteHeader(upstreamResp.StatusCode)
 		if upstreamResp.StatusCode >= 200 && upstreamResp.StatusCode < 300 && strings.Contains(strings.ToLower(contentType), "text/event-stream") {
 			requestRoot, _ := jsonwire.Parse(body)
-			pipeline := responseRepairPipeline{modelID: plan.modelID}
+			// The admitted provider class is openai-responses. The TypeScript
+			// response-model rewrite is Anthropic-only, so preserve upstream model
+			// metadata here rather than rewriting ordinary OpenAI model aliases.
+			pipeline := responseRepairPipeline{}
 			if requestRoot != nil {
 				pipeline.imageAliases = imageAliasesFromRequest(requestRoot)
 			}
@@ -657,7 +660,10 @@ func doDirectRelay(w http.ResponseWriter, r *http.Request, cfg Config, plan *rel
 			// the backfill changed nothing or the body is not a JSON object, so
 			// assigning unconditionally preserves raw-bytes relay parity.
 			requestRoot, _ := jsonwire.Parse(body)
-			pipeline := responseRepairPipeline{modelID: plan.modelID}
+			// The admitted provider class is openai-responses. The TypeScript
+			// response-model rewrite is Anthropic-only, so preserve upstream model
+			// metadata here rather than rewriting ordinary OpenAI model aliases.
+			pipeline := responseRepairPipeline{}
 			if requestRoot != nil {
 				pipeline.imageAliases = imageAliasesFromRequest(requestRoot)
 			}
@@ -794,7 +800,10 @@ func observeResponsesSSEChunk(inspector *ResponsesSSEStream, lifecycle *relayLif
 	if lifecycle.terminal || len(chunk) == 0 {
 		return
 	}
-	_, _ = inspector.Feed(chunk)
+	if _, err := inspector.Feed(chunk); err != nil {
+		fmt.Fprintf(os.Stderr, "ocx-sidecar: SSE inspection feed: %v\n", err)
+		return
+	}
 	if inspector.TerminalSeen() {
 		lifecycle.terminalOutcome(ResponsesSSETerminal{Status: inspector.TerminalStatus()})
 	}
@@ -805,7 +814,9 @@ func finishResponsesSSEInspection(inspector *ResponsesSSEStream, lifecycle *rela
 		return
 	}
 	if cleanEOF {
-		_, _ = inspector.Finish()
+		if _, err := inspector.Finish(); err != nil {
+			fmt.Fprintf(os.Stderr, "ocx-sidecar: SSE inspection finish: %v\n", err)
+		}
 		if inspector.TerminalSeen() {
 			lifecycle.terminalOutcome(ResponsesSSETerminal{Status: inspector.TerminalStatus()})
 			return
@@ -815,7 +826,9 @@ func finishResponsesSSEInspection(inspector *ResponsesSSEStream, lifecycle *rela
 		}
 		return
 	}
-	_, _ = inspector.FinishPartial()
+	if _, err := inspector.FinishPartial(); err != nil {
+		fmt.Fprintf(os.Stderr, "ocx-sidecar: SSE inspection partial finish: %v\n", err)
+	}
 	if inspector.TerminalSeen() {
 		lifecycle.terminalOutcome(ResponsesSSETerminal{Status: inspector.TerminalStatus()})
 		return
