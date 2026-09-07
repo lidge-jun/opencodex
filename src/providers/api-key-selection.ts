@@ -6,14 +6,9 @@ import type { ProviderApiKeySelection } from "../types/provider";
 import { routedProviderConfig } from "../router";
 import { OPENCODE_GO_SESSION_HEADER } from "./opencode-go-transport";
 import { resolveProviderTransport, XAI_GROK_COMPATIBILITY, type OcxProviderTransport } from "./xai-transport";
+import { captureProviderApiKeySelection } from "./api-key-selection-capture";
 
-export function captureProviderApiKeySelection(provider: OcxProviderConfig): ProviderApiKeySelection {
-  return {
-    entryId: provider.apiKeyPool?.find(entry => entry.key === provider.apiKey)?.id,
-    reference: provider.apiKey,
-    revision: provider.apiKeySelectionRevision,
-  };
-}
+export { captureProviderApiKeySelection } from "./api-key-selection-capture";
 
 function matchesSelection(provider: OcxProviderConfig, expected: ProviderApiKeySelection): boolean {
   const current = captureProviderApiKeySelection(provider);

@@ -57,6 +57,7 @@
   "api-codex-log-guard.test.ts": "server",
   "api-debug.test.ts": "server",
   "api-key-attribution.test.ts": "server",
+  "api-key-selection-capture.test.ts": "providers",
   "api-keys-routes.test.ts": "server",
   "api-storage-cleanup.test.ts": "storage",
   "api-storage-policy-already-running.test.ts": "storage",
