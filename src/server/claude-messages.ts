@@ -30,12 +30,13 @@ import {
 import { clearableDeadline, idleDeadline } from "../lib/abort";
 import { estimateTokens } from "../lib/token-estimate";
 import { NoEligiblePolicyCandidateError, UnknownRoutingPolicyError, routeModel } from "../router";
+import { registryEntryForProviderDestination } from "../providers/registry";
 import { evidenceFromBody } from "../routing/request-evidence";
 import { resolveWireProtocolOverride } from "./adapter-resolve";
 import type { OcxConfig } from "../types";
 import { readJsonRequestBody } from "./request-decompress";
 import { addFinalRequestLog, httpStatusForRequestLogTerminal, recordFirstOutput, type RequestLogContext, type RequestLogEntry } from "./request-log";
-import { conversationIdFromClaudeMetadata } from "./request-log-conversation";
+import { conversationIdFromClaudeMetadata, sessionLaneIdFromRequest } from "./request-log-conversation";
 import { responseWithDeferredRequestLog } from "./relay";
 import { handleResponses } from "./responses";
 import {
@@ -786,8 +787,12 @@ async function handleClaudeMessagesWithBudget(
   // bodies: it 400s on sampling params ("Unsupported parameter: max_output_tokens",
   // verified live 2026-07-11). Strip them for that route; routed providers keep them.
   let nativeRoute = false;
+  let opencodeGoRoute = false;
   try {
     const route = routeModel(config, internalBody.model as string, evidenceFromBody(internalBody));
+    // Match the fixed key-auth destination before per-model wire overrides, including
+    // renamed Go providers without treating custom or lookalike URLs as Go.
+    opencodeGoRoute = registryEntryForProviderDestination(route.provider)?.id === "opencode-go";
     // Settle the wire once so the sampling decision below reads the effective
     // adapter rather than the provider-wide default (#404).
     route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, "anthropic");
@@ -851,11 +856,18 @@ async function handleClaudeMessagesWithBudget(
       headers.set("chatgpt-account-id", token.chatgptAccountId);
     }
   }
-  if (nativeRoute) {
+  if (opencodeGoRoute) {
+    const session = req.headers.get("x-opencode-session");
+    if (session) headers.set("x-opencode-session", session);
+  }
+  const hasExplicitGoSession = opencodeGoRoute
+    && (sessionLaneIdFromRequest(headers) !== undefined || headers.has("x-opencode-session"));
+  if ((nativeRoute || opencodeGoRoute) && !hasExplicitGoSession) {
     // ChatGPT-backend prompt-cache affinity rides the session_id HEADER (codex
     // clients always send their session uuid; devlog 090 follow-up: body-level
     // prompt_cache_key alone still yielded cached_tokens:0). Claude Code never sends
-    // the header, so synthesize a stable per-session uuid from the same cache key —
+    // the header, so synthesize a stable per-session uuid from the same cache key.
+    // Routed Go requests need this lane too for their x-opencode-session affinity —
     // but ONLY for a real per-session key (metadata.user_id). The system-hash fallback
     // key is shared across Desktop conversations, and a shared session_id's backend
     // semantics are unproven (audit 133 R2#3): body prompt_cache_key only there.
