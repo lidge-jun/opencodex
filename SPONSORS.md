@@ -63,8 +63,8 @@ and the placements themselves:
 1. One Main banner (empty until a Main sponsor signs).
 2. The Standard table, one row per sponsor, in order of signing date.
 
-The tier summary and the contact channels live in a **Sponsorship** section at the bottom of the
-README, just above the license, and point here for the full rule set.
+The README says nothing else about sponsorship; tiers, pricing, and contact channels live only on
+this page.
 
 The translated READMEs under [`readme/`](./readme) carry one linking line right after their
 own quick-start block instead of duplicating the section, so a sponsor change is one edit in

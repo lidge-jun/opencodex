@@ -101,8 +101,8 @@ once the others are drained.
 
 ### Sponsors
 
-Sponsors keep opencodex maintained across every upstream protocol change — see
-[Sponsorship](#sponsorship) at the bottom of this page.
+Sponsors keep opencodex maintained across every upstream protocol change. Interested?
+See [SPONSORS.md](./SPONSORS.md).
 
 <!-- sponsors:main — one banner, model developers only; empty until a Main sponsor signs -->
 
@@ -390,17 +390,6 @@ where the commit does not name its original author, is recorded in
 opencodex is an independent, community-maintained project and is **not affiliated with or endorsed by OpenAI, Anthropic, or any other provider**.
 
 Some providers — notably Anthropic (Claude) — may suspend or restrict accounts that route API traffic through third-party proxies. **Use at your own risk (UAYOR).** Before connecting a provider, review its Terms of Service to confirm that proxy-based access is permitted. The opencodex maintainers are not responsible for any account actions taken by upstream providers.
-
-## Sponsorship
-
-Two tiers, one [rule set](./SPONSORS.md): **Main** is reserved for model developers and takes
-the banner above the sponsor table; **Standard** is for relays and gateways and takes a table
-row plus a built-in preset near the top of the provider picker. Pricing is by inquiry and rises
-after 20,000 stars — early sponsors keep their rate. Sponsors never influence routing, defaults,
-or security review.
-
-To sponsor, ask on [X](https://x.com/claudeebum), [Discord](https://discord.gg/JEaPEtkHwh)
-(`#sponsors`), or jun@lidgeai.com, and read [SPONSORS.md](./SPONSORS.md) first.
 
 ## License
 
