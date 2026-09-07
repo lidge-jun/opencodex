@@ -41,6 +41,18 @@ var configRuntimeSubcommands = map[string]Ownership{
 	"get": GoOwned, "set": GoOwned, "unset": GoOwned, "import": GoOwned,
 }
 
+// accountRuntimeSubcommands are the `ocx account` subcommands with a Go-native
+// implementation and a differential oracle (issue #51). Everything else in the
+// family — add-key/import (stdin), main (native CODEX_HOME staging), and the
+// login/reauth/code/cancel/reset-credits device flows — stays
+// TypeScript-owned until each surface carries its own oracle.
+var accountRuntimeSubcommands = map[string]struct{}{
+	"list": {}, "current": {}, "use": {}, "refresh": {},
+	"auto-switch": {}, "alias": {}, "rename": {}, "priority": {},
+	"pause": {}, "resume": {}, "pause-exhausted": {},
+	"strategy": {}, "sticky": {}, "remove": {}, "clear-cooldown": {},
+}
+
 func loadCLIConfig() (map[string]any, error) {
 	loaded, err := config.Load()
 	if err != nil {

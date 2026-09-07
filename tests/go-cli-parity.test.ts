@@ -366,4 +366,340 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
     // The whole file is normalised on the rewrite: untouched openai/xai rows
     // survive in the same normalised shape from both owners.
   });
+  // ---- ocx account (issue #51 slice) -------------------------------------
+  // The account API-routing subcommands (list/current/use/refresh/auto-switch/
+  // alias/priority/pause/resume/pause-exhausted/strategy/sticky/remove/
+  // clear-cooldown) are Go-owned with the TS CLI still running its own handler.
+  // The differential runs the same argv through both CLIs against an identical
+  // fresh attested fixture proxy (reset per side so mutations start equal) and
+  // compares stdout/stderr and the exit code.
+  type AccountStore = {
+    codexAccounts: Array<Record<string, unknown>>;
+    codexActiveId: string | null;
+    autoSwitch: number | null;
+    strategyMode: number | null;
+    stickyLimit: number | null;
+    cooldownIds: string[];
+    oauth: Record<string, { accounts: Array<Record<string, unknown>>; activeId: string | null; autoSwitch: number | null; strategyMode: number | null; stickyLimit: number | null }>;
+    keys: Record<string, { keys: Array<Record<string, unknown>>; activeId: string | null }>;
+    reports: Array<Record<string, unknown>>;
+  };
+  function freshAccountStore(): AccountStore {
+    return {
+      codexAccounts: [
+        { id: "acct-a", email: "a@example.com", plan: "chatgpt-plus", priority: 2 },
+        { id: "acct-b", email: "b@example.com", plan: "chatgpt-plus" },
+        { id: "acct-c", alias: "main-work", email: "c@example.com", priority: -1, paused: true },
+        { id: "acct-d", email: "d@example.com", quota: { shortPercent: 90, shortResetAt: 1756000000, weeklyPercent: 40, monthlyPercent: 30 }, exhausted: true },
+      ],
+      codexActiveId: "acct-a",
+      autoSwitch: 80,
+      strategyMode: null,
+      stickyLimit: null,
+      cooldownIds: ["acct-c"],
+      oauth: {
+        anthropic: {
+          accounts: [{ id: "claude-1", alias: "work", email: "w@example.com" }, { id: "claude-2", email: "c2@example.com" }, { id: "claude-3" }],
+          activeId: "claude-1",
+          autoSwitch: null,
+          strategyMode: null,
+          stickyLimit: null,
+        },
+        xai: { accounts: [{ id: "grok-1", email: "g@example.com" }], activeId: "grok-1", autoSwitch: null, strategyMode: null, stickyLimit: null },
+      },
+      keys: {
+        deepseek: { keys: [{ id: "key-1", masked: "sk-ds-\u2026abcd" }, { id: "key-2", label: "prod", masked: "sk-ds-\u2026wxyz" }], activeId: "key-1" },
+      },
+      reports: [{ provider: "anthropic", quota: { weeklyPercent: 12.5, weeklyResetAt: 1756000000, customWindows: [{ label: "5h", percent: 33.3, resetAt: 1756000000000 }] } }],
+    };
+  }
+  function startAccountFixture(store: AccountStore): void {
+    testHome = mkdtempSync(join(tmpdir(), "ocx-go-account-parity-"));
+    writeFileSync(join(testHome, "config.json"), JSON.stringify({
+      defaultProvider: "deepseek",
+      providers: { deepseek: { adapter: "openai-chat", baseUrl: "https://example.test/v1", authMode: "key", apiKey: "sk-abc", defaultModel: "deepseek-chat", models: ["deepseek-chat"] } },
+    }));
+    const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
+    testServer = Bun.serve({ port: 0, async fetch(request) {
+      const url = new URL(request.url);
+      const path = url.pathname;
+      const query = url.searchParams;
+      if (path === "/healthz") {
+        const challenge = request.headers.get("x-opencodex-attestation-challenge") ?? "";
+        const headers = challenge ? { "x-opencodex-attestation-proof": createLocalAttestationProof(secret, challenge, process.pid, testServer!.port) } : {};
+        return Response.json({ status: "ok", service: "opencodex", version: "2.42.0", uptime: 1, pid: process.pid, port: testServer!.port }, { headers });
+      }
+      let body: Record<string, unknown> = {};
+      if (request.method !== "GET" && request.method !== "DELETE") {
+        try { body = await request.json(); } catch { body = {}; }
+      }
+      if (path === "/api/codex-auth/accounts") {
+        if (request.method === "DELETE") {
+          const id = query.get("id") ?? "";
+          store.codexAccounts = store.codexAccounts.filter(a => a.id !== id);
+          if (store.codexActiveId === id) store.codexActiveId = store.codexAccounts[0]?.id ?? null;
+          return json({});
+        }
+        return json({ accounts: store.codexAccounts });
+      }
+      if (path === "/api/codex-auth/active") {
+        if (request.method === "PUT") {
+          if (typeof body.accountId === "string") store.codexActiveId = body.accountId;
+          return json({});
+        }
+        return json({
+          activeCodexAccountId: store.codexActiveId,
+          ...(store.autoSwitch !== null ? { autoSwitchThreshold: store.autoSwitch } : {}),
+          ...(store.strategyMode !== null ? { accountPoolStrategy: store.strategyMode } : {}),
+          ...(store.stickyLimit !== null ? { accountPoolStickyLimit: store.stickyLimit } : {}),
+        });
+      }
+      if (path === "/api/codex-auth/auto-switch") {
+        store.autoSwitch = typeof body.threshold === "number" ? body.threshold : null;
+        return json({});
+      }
+      if (path === "/api/codex-auth/accounts/priority") {
+        const account = store.codexAccounts.find(a => a.id === body.id);
+        if (!account) return json({ error: `unknown account ${String(body.id)}` }, 404);
+        account.priority = body.priority;
+        return json({ priority: body.priority });
+      }
+      if (path === "/api/codex-auth/accounts/pause") {
+        const account = store.codexAccounts.find(a => a.id === body.id);
+        if (!account) return json({ error: `unknown account ${String(body.id)}` }, 404);
+        account.paused = body.paused === true;
+        return json({});
+      }
+      if (path === "/api/codex-auth/accounts/pause-exhausted") {
+        const paused = store.codexAccounts.filter(a => a.exhausted === true).map(a => a.id);
+        return json({ pausedAccountIds: paused, checkedAccountCount: store.codexAccounts.length, failedAccountCount: 0 });
+      }
+      if (path === "/api/codex-auth/accounts/clear-cooldown") {
+        const id = String(body.id);
+        const cleared = store.cooldownIds.includes(id);
+        store.cooldownIds = store.cooldownIds.filter(c => c !== id);
+        return json({ cleared });
+      }
+      if (path === "/api/codex-auth/pool-strategy") {
+        if ("strategyMode" in body) store.strategyMode = body.strategyMode as number;
+        if ("stickyLimit" in body) store.stickyLimit = body.stickyLimit as number;
+        return json({ accountPoolStrategy: store.strategyMode, accountPoolStickyLimit: store.stickyLimit });
+      }
+      if (path === "/api/codex-auth/accounts/alias") {
+        const account = store.codexAccounts.find(a => a.id === body.id);
+        if (!account) return json({ error: `unknown account ${String(body.id)}` }, 404);
+        if (typeof body.alias === "string" && body.alias) account.alias = body.alias; else delete account.alias;
+        return json({});
+      }
+      if (path === "/api/oauth/providers") return json({ providers: Object.keys(store.oauth) });
+      if (path === "/api/oauth/accounts") {
+        const name = query.get("provider") ?? "";
+        const pool = store.oauth[name];
+        if (!pool) return json({ error: `unknown oauth provider "${name}"` }, 400);
+        if (request.method === "DELETE") {
+          const id = query.get("id") ?? "";
+          pool.accounts = pool.accounts.filter(a => a.id !== id);
+          if (pool.activeId === id) pool.activeId = pool.accounts[0]?.id ?? null;
+          return json({});
+        }
+        if (request.method === "PUT") {
+          if (typeof body.accountId === "string") pool.activeId = body.accountId;
+          return json({});
+        }
+        return json({ accounts: pool.accounts, activeAccountId: pool.activeId });
+      }
+      if (path === "/api/oauth/accounts/active") {
+        const pool = store.oauth[String(body.provider)];
+        if (!pool) return json({ error: `unknown oauth provider "${String(body.provider)}"` }, 400);
+        pool.activeId = String(body.accountId);
+        return json({});
+      }
+      if (path === "/api/oauth/accounts/pool") {
+        const pool = store.oauth[String(body.provider)] ?? store.oauth[query.get("provider") ?? ""];
+        if (!pool) return json({ error: "unknown oauth provider" }, 400);
+        if (typeof body.autoSwitchThreshold === "number") pool.autoSwitch = body.autoSwitchThreshold;
+        if ("strategy" in body) pool.strategyMode = body.strategy as number;
+        if ("stickyLimit" in body) pool.stickyLimit = body.stickyLimit as number;
+        return json({ autoSwitchThreshold: pool.autoSwitch, strategy: pool.strategyMode ?? null, stickyLimit: pool.stickyLimit ?? null });
+      }
+      if (path === "/api/oauth/accounts/alias") {
+        const pool = store.oauth[String(body.provider)];
+        const account = pool?.accounts.find(a => a.id === body.accountId);
+        if (!account) return json({ error: `unknown account ${String(body.accountId)}` }, 404);
+        if (typeof body.alias === "string" && body.alias) account.alias = body.alias; else delete account.alias;
+        return json({});
+      }
+      if (path === "/api/providers/keys") {
+        const name = query.get("name") ?? "";
+        const pool = store.keys[name];
+        if (!pool) return json({ error: `unknown provider "${name}"` }, 404);
+        if (request.method === "DELETE") {
+          const id = query.get("id") ?? "";
+          pool.keys = pool.keys.filter(k => k.id !== id);
+          if (pool.activeId === id) pool.activeId = pool.keys[0]?.id ?? null;
+          return json({});
+        }
+        return json({ keys: pool.keys, activeId: pool.activeId });
+      }
+      if (path === "/api/providers/keys/active") {
+        const pool = store.keys[String(body.name)];
+        if (!pool) return json({ error: `unknown provider "${String(body.name)}"` }, 404);
+        pool.activeId = String(body.id);
+        return json({});
+      }
+      if (path === "/api/providers/keys/alias") {
+        const pool = store.keys[String(body.name)];
+        const key = pool?.keys.find(k => k.id === body.id);
+        if (!key) return json({ error: `unknown key ${String(body.id)}` }, 404);
+        if (typeof body.alias === "string" && body.alias) key.label = body.alias; else delete key.label;
+        return json({});
+      }
+      if (path === "/api/provider-quotas") return json({ reports: store.reports });
+      return json({ error: `no fixture route ${request.method} ${path}` }, 404);
+    }});
+    writeFileSync(join(testHome, "runtime-port.json"), JSON.stringify({ pid: process.pid, port: testServer.port, hostname: "127.0.0.1", attestationSecret: secret }));
+  }
+  async function accountParity(args: string[], mutate?: (store: AccountStore) => void): Promise<Result> {
+    const boot = () => {
+      const store = freshAccountStore();
+      if (mutate) mutate(store);
+      startAccountFixture(store);
+    };
+    boot();
+    const ts = await runTsAsync(args);
+    boot();
+    const go = await runGoAsync(args);
+    expect(go).toEqual(ts);
+    return ts;
+  }
+  test.each([
+    { args: ["account", "list", "--json"] },
+    { args: ["account", "list"] },
+    { args: ["account", "list", "openai", "--json"] },
+    { args: ["account", "list", "anthropic", "--json"] },
+    { args: ["account", "list", "deepseek"] },
+    { args: ["account", "list", "--all"] },
+    { args: ["account", "list", "openai", "--quota", "--json"] },
+    { args: ["account", "list", "openai", "--quota"] },
+    { args: ["account", "list", "--quota", "--refresh", "--json"] },
+    { args: ["account", "list", "unknown-provider"] },
+  ])("diffs account list output and exit code for $args", async ({ args }) => {
+    const result = await accountParity(args);
+    expect(result.code).toBeLessThanOrEqual(1);
+  });
+  test.each([
+    { args: ["account", "current", "openai"] },
+    { args: ["account", "current", "openai", "--json"] },
+    { args: ["account", "current", "anthropic", "--json"] },
+    { args: ["account", "current"] },
+  ])("diffs account current output and exit code for $args", async ({ args }) => {
+    const result = await accountParity(args);
+    expect(result.code).toBeLessThanOrEqual(1);
+  });
+  test.each([
+    { args: ["account", "use", "openai", "acct-b"] },
+    { args: ["account", "use", "openai", "main"] },
+    { args: ["account", "use", "openai", "acct-b", "--json"] },
+    { args: ["account", "use", "anthropic", "claude-2"] },
+    { args: ["account", "use", "deepseek", "key-2", "--json"] },
+    { args: ["account", "use", "openai"] },
+  ])("diffs account use output and exit code for $args", async ({ args }) => {
+    const result = await accountParity(args);
+    expect(result.code).toBeLessThanOrEqual(1);
+  });
+  test.each([
+    { args: ["account", "refresh", "openai", "--json"] },
+    { args: ["account", "refresh", "openai"] },
+    { args: ["account", "refresh", "anthropic"] },
+    { args: ["account", "refresh", "anthropic", "--json"] },
+    { args: ["account", "refresh", "meta-muse"] },
+  ])("diffs account refresh output and exit code for $args", async ({ args }) => {
+    const result = await accountParity(args);
+    expect(result.code).toBeLessThanOrEqual(1);
+  });
+  test.each([
+    { args: ["account", "auto-switch", "openai", "on"] },
+    { args: ["account", "auto-switch", "openai", "on", "--json"] },
+    { args: ["account", "auto-switch", "openai", "off"] },
+    { args: ["account", "auto-switch", "openai", "threshold", "65", "--json"] },
+    { args: ["account", "auto-switch", "openai", "status"] },
+    { args: ["account", "auto-switch", "openai", "status", "--json"] },
+    { args: ["account", "auto-switch", "anthropic", "status"] },
+    { args: ["account", "auto-switch", "deepseek", "status"] },
+    { args: ["account", "auto-switch", "openai", "threshold", "300"] },
+    { args: ["account", "auto-switch", "openai", "on", "extra"] },
+  ])("diffs account auto-switch output and exit code for $args", async ({ args }) => {
+    const result = await accountParity(args);
+    expect(result.code).toBeLessThanOrEqual(1);
+  });
+  test.each([
+    { args: ["account", "priority", "openai", "acct-a"] },
+    { args: ["account", "priority", "openai", "acct-a", "--json"] },
+    { args: ["account", "priority", "openai", "acct-c", "+3"] },
+    { args: ["account", "priority", "openai", "acct-c", "reset", "--json"] },
+    { args: ["account", "priority", "openai", "acct-a", "last"] },
+    { args: ["account", "priority", "openai", "acct-a", "bogus"] },
+    { args: ["account", "priority", "anthropic", "acct-a", "1"] },
+  ])("diffs account priority output and exit code for $args", async ({ args }) => {
+    const result = await accountParity(args);
+    expect(result.code).toBeLessThanOrEqual(1);
+  });
+  test.each([
+    { args: ["account", "pause", "openai", "acct-b"] },
+    { args: ["account", "pause", "openai", "acct-b", "--json"] },
+    { args: ["account", "resume", "openai", "acct-b"] },
+    { args: ["account", "pause-exhausted", "openai"] },
+    { args: ["account", "pause-exhausted", "openai", "--json"] },
+  ])("diffs account pause/resume output and exit code for $args", async ({ args }) => {
+    const result = await accountParity(args);
+    expect(result.code).toBeLessThanOrEqual(1);
+  });
+  test.each([
+    { args: ["account", "strategy", "openai"] },
+    { args: ["account", "strategy", "openai", "--json"] },
+    { args: ["account", "strategy", "openai", "balance"] },
+    { args: ["account", "strategy", "openai", "fill", "--json"] },
+    { args: ["account", "strategy", "anthropic"] },
+    { args: ["account", "sticky", "openai"] },
+    { args: ["account", "sticky", "openai", "12"] },
+    { args: ["account", "sticky", "openai", "0"] },
+    { args: ["account", "sticky", "anthropic", "--json"] },
+  ])("diffs account strategy/sticky output and exit code for $args", async ({ args }) => {
+    const result = await accountParity(args);
+    expect(result.code).toBeLessThanOrEqual(1);
+  });
+  test.each([
+    { args: ["account", "alias", "openai", "acct-c", "work-hub"] },
+    { args: ["account", "alias", "openai", "acct-c", "--json"] },
+    { args: ["account", "alias", "openai", "acct-c", "-"] },
+    { args: ["account", "alias", "anthropic", "claude-1", "daily"] },
+    { args: ["account", "alias", "anthropic", "claude-1", "-"] },
+    { args: ["account", "alias", "deepseek", "key-2", "prod2"] },
+  ])("diffs account alias output and exit code for $args", async ({ args }) => {
+    const result = await accountParity(args);
+    expect(result.code).toBeLessThanOrEqual(1);
+  });
+  test.each([
+    { args: ["account", "remove", "openai", "acct-b", "--yes"] },
+    { args: ["account", "remove", "openai", "acct-b", "--yes", "--json"] },
+    { args: ["account", "remove", "openai", "acct-c", "--yes"] },
+    { args: ["account", "remove", "openai", "acct-c", "--yes", "--json"] },
+    { args: ["account", "remove", "anthropic", "claude-2", "--yes"] },
+    { args: ["account", "remove", "deepseek", "key-2", "--yes"] },
+    { args: ["account", "remove", "openai", "acct-b"] },
+    { args: ["account", "remove", "openai", "main", "--yes"] },
+    { args: ["account", "remove", "openai", "missing", "--yes"] },
+  ])("diffs account remove output and exit code for $args", async ({ args }) => {
+    const result = await accountParity(args);
+    expect(result.code).toBeLessThanOrEqual(1);
+  });
+  test.each([
+    { args: ["account", "clear-cooldown", "openai", "acct-c"] },
+    { args: ["account", "clear-cooldown", "openai", "acct-c", "--json"] },
+    { args: ["account", "clear-cooldown", "openai", "acct-a", "--json"] },
+    { args: ["account", "clear-cooldown", "anthropic", "claude-1"] },
+  ])("diffs account clear-cooldown output and exit code for $args", async ({ args }) => {
+    const result = await accountParity(args);
+    expect(result.code).toBeLessThanOrEqual(1);
+  });
 });

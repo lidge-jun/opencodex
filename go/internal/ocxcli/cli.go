@@ -152,6 +152,15 @@ func OwnershipFor(args []string) (Ownership, bool) {
 		}
 		return TypeScriptOwned, true
 	}
+	// account keeps its TypeScript owner per subcommand: the API-routing
+	// subcommands below are Go-native, the rest stays with the TS owner until
+	// each subcommand carries its own oracle (issue #51).
+	if command.Name == "account" && len(args) > 1 {
+		if _, ok := accountRuntimeSubcommands[args[1]]; ok {
+			return GoOwned, true
+		}
+		return TypeScriptOwned, true
+	}
 	// observe keeps its TypeScript owner per subcommand: `usage` shares the Go
 	// usage implementation, everything else stays with the TS owner until each
 	// subcommand carries its own oracle.
@@ -279,6 +288,10 @@ func Run(args []string, deps Deps) int {
 		return runStop(args[1:], deps)
 	case "usage":
 		return runUsage(args[1:], deps)
+	case "account":
+		// OwnershipFor already gated this: only the oracle-covered account
+		// subcommands reach Go; the rest stay TypeScript-owned and delegate.
+		return runAccount(args[1:], deps)
 	case "observe":
 		// Only `observe usage` reaches Go (OwnershipFor already gated this);
 		// other observe subcommands stay TypeScript-owned and never dispatch here.
