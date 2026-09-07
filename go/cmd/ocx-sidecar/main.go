@@ -43,6 +43,8 @@ func run() error {
 			return runLabCheck()
 		case "routingcheck":
 			return runRoutingCheck()
+		case "processstatecheck":
+			return runProcessStateCheck()
 		}
 		return fmt.Errorf("unknown subcommand %q", os.Args[1])
 	}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -42,6 +43,46 @@ func TestReclaimPortRemovesStaleProcessRecords(t *testing.T) {
 	}
 }
 
+func TestReclaimPortKeepsReplacementRuntimeRecords(t *testing.T) {
+	// #34: a replacement start rewrote the records while the stale-owner probe
+	// was in flight; the guarded purge must keep the new runtime's state.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "ocx.pid"), []byte("999999\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "runtime-port.json"), []byte(`{"pid":999999,"port":10101,"hostname":"127.0.0.1"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("loopback listeners unavailable: %v", err)
+	}
+	defer listener.Close()
+	// The replacement runtime rewrites both records during the stale-owner
+	// liveness probe, exactly as a concurrent start would.
+	process := &fakeProcess{alive: false, onAliveProbe: func() {
+		_ = os.WriteFile(filepath.Join(dir, "ocx.pid"), []byte("7\n"), 0o600)
+		_ = os.WriteFile(filepath.Join(dir, "runtime-port.json"), []byte(`{"pid":8,"port":10101,"hostname":"127.0.0.1"}`), 0o600)
+	}}
+	reclaimer := portReclaimer{home: dir, process: process}
+	if err := reclaimer.reclaim(listener.Addr().(*net.TCPAddr).Port); err != nil {
+		t.Fatalf("reclaim against replaced records: %v", err)
+	}
+	// The rewritten pid file names the replacement runtime (pid 7) and must
+	// survive: the stale snapshot (999999) authorized no deletion of it.
+	raw, err := os.ReadFile(filepath.Join(dir, "ocx.pid"))
+	if err != nil || strings.TrimSpace(string(raw)) != "7" {
+		t.Fatalf("replacement pid file lost or altered: contents=%q err=%v", raw, err)
+	}
+	runtimeRaw, err := os.ReadFile(filepath.Join(dir, "runtime-port.json"))
+	if err != nil {
+		t.Fatalf("replacement runtime record removed: %v", err)
+	}
+	if !strings.Contains(string(runtimeRaw), `"pid":8`) {
+		t.Fatalf("replacement runtime record altered: %s", runtimeRaw)
+	}
+}
+
 func TestReclaimPortTerminatesKnownTypeScriptOwner(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "ocx.pid"), []byte("42\n"), 0o600); err != nil {
@@ -73,6 +114,41 @@ func TestReclaimPortRefusesForeignListener(t *testing.T) {
 	}
 	if process.terminated {
 		t.Fatal("foreign process was terminated")
+	}
+}
+
+func TestReclaimPortRefusesReusedPidWhoseCommandOnlySubstringMatches(t *testing.T) {
+	// #34: the OS recycled the recorded PID for a test/builder process whose
+	// command line merely contains ocx-ish substrings. Termination must be
+	// refused even though the pid is alive.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "ocx.pid"), []byte("42\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	process := &fakeProcess{alive: true, command: "bun test C:/work/opencodex/tests/start-guard.test.ts"}
+	reclaimer := portReclaimer{home: dir, process: process}
+	if err := reclaimer.reclaim(10100); err == nil || !strings.Contains(err.Error(), "occupied") {
+		t.Fatalf("reclaim error = %v", err)
+	}
+	if process.terminated {
+		t.Fatal("reused pid was terminated")
+	}
+}
+
+func TestReclaimPortFailsOpenWhenCommandInspectionUnavailable(t *testing.T) {
+	// #34 compatibility: a host where the command line cannot be read keeps
+	// the previous alive-PID behavior instead of wedging reclaim.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "ocx.pid"), []byte("42\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	process := &fakeProcess{alive: true, commandUnavailable: true}
+	reclaimer := portReclaimer{home: dir, process: process}
+	if err := reclaimer.reclaim(10100); err != nil {
+		t.Fatalf("reclaim with unavailable inspection: %v", err)
+	}
+	if !process.terminated {
+		t.Fatal("pid with unreadable command line was not terminated")
 	}
 }
 
@@ -169,17 +245,83 @@ func TestStandaloneServerApiStopDrainsAndReleasesRecords(t *testing.T) {
 }
 
 type fakeProcess struct {
-	alive      bool
-	command    string
-	terminated bool
-	signal     string
+	alive              bool
+	command            string
+	commandUnavailable bool
+	terminated         bool
+	signal             string
+	onAliveProbe       func()
 }
 
-func (p *fakeProcess) Alive(int) bool              { return p.alive }
-func (p *fakeProcess) Command(int) (string, error) { return p.command, nil }
+func (p *fakeProcess) Alive(int) bool {
+	if p.onAliveProbe != nil {
+		p.onAliveProbe()
+	}
+	return p.alive
+}
+func (p *fakeProcess) Command(int) (string, error) {
+	if p.commandUnavailable {
+		return "", errors.New("process command inspection is unavailable on this platform")
+	}
+	return p.command, nil
+}
 func (p *fakeProcess) Terminate(_ int, signal string) error {
 	p.terminated = true
 	p.signal = signal
 	p.alive = false
 	return nil
+}
+
+func TestRunStopRefusesForeignReusedPidWithoutSignaling(t *testing.T) {
+	// #34: runtime-port.json names a PID the OS recycled for this test binary
+	// (command line "go test ...", not an ocx start command). Stop must refuse
+	// to signal it and preserve the record for the actual owner/operator.
+	home := t.TempDir()
+	t.Setenv("OPENCODEX_HOME", home)
+	record, err := json.Marshal(RuntimeState{PID: int64(os.Getpid()), Port: 10100, Hostname: "127.0.0.1", AttestationSecret: "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "runtime-port.json"), record, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "ocx.pid"), []byte(fmt.Sprintf("%d\n", os.Getpid())), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	code := runStop(nil, Deps{Version: "2.42.0", Stdout: &out, Stderr: &stderr, ReadRuntime: ReadRuntime})
+	if code != ExitFailure {
+		t.Fatalf("stop exit = %d, want failure; stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "refusing to stop it") {
+		t.Fatalf("stop stderr missing refusal: %q", stderr.String())
+	}
+	// A readable foreign process is not ours to clean up. Preserve both
+	// records so the actual owner/operator can inspect or remove them.
+	if _, statErr := os.Stat(filepath.Join(home, "runtime-port.json")); statErr != nil {
+		t.Fatalf("runtime record was removed on refusal: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, "ocx.pid")); statErr != nil {
+		t.Fatalf("pid record was removed on refusal: %v", statErr)
+	}
+}
+
+func TestRunStopClearsStaleRecordForDeadPid(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("OPENCODEX_HOME", home)
+	record, err := json.Marshal(RuntimeState{PID: 999999, Port: 10100, Hostname: "127.0.0.1", AttestationSecret: "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "runtime-port.json"), record, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	code := runStop(nil, Deps{Version: "2.42.0", Stdout: &out, Stderr: &stderr, ReadRuntime: ReadRuntime})
+	if code != ExitOK || !strings.Contains(out.String(), "stale record") {
+		t.Fatalf("stop dead record = code %d out %q stderr %q", code, out.String(), stderr.String())
+	}
+	if _, statErr := os.Stat(filepath.Join(home, "runtime-port.json")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("stale runtime record kept: %v", statErr)
+	}
 }

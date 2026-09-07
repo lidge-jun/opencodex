@@ -15,7 +15,7 @@ import (
 // that asynchronous probe is moved.
 func doctorLiveProxyPID() int64 {
 	pid := readStatusPIDFile()
-	if pid > 0 && doctorProcessAlive(int(pid)) {
+	if pid > 0 {
 		return pid
 	}
 	return 0

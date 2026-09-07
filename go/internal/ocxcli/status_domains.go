@@ -309,15 +309,7 @@ func readStatusPIDFile() int64 {
 	if err != nil {
 		return 0
 	}
-	raw, err := os.ReadFile(dir + string(os.PathSeparator) + "ocx.pid")
-	if err != nil {
-		return 0
-	}
-	pid, err := strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64)
-	if err != nil || pid <= 0 {
-		return 0
-	}
-	return pid
+	return readIdentityCheckedPID(filepath.Join(dir, "ocx.pid"), osProcessInspector{})
 }
 
 // CollectStatusDomains mirrors status's no-live-proxy branch. It is a
@@ -333,16 +325,38 @@ func CollectStatusDomains(deps StatusDomainDeps) StatusDomains {
 	pid := deps.ReadPID()
 	port, hostname := cfg.ListenTarget()
 	source := "config"
-	liveRuntime := false
-	if runtime, err := deps.ReadRuntime(); err == nil && pid > 0 && runtime.PID == pid {
+	var runtimeRecord *StatusRuntimeRecord
+	if runtime, err := deps.ReadRuntime(); err == nil {
+		runtimeCopy := runtime
+		runtimeRecord = &runtimeCopy
 		port, hostname, source = runtime.Port, runtime.Hostname, "runtime"
-		liveRuntime = true
 	}
 	client := &http.Client{Timeout: 800 * time.Millisecond}
 	if deps.HTTPClient != nil {
 		client = deps.HTTPClient
 	}
 	health := probeStatusHealth(port, hostname, client)
+	liveRuntime := false
+	if source == "runtime" && health.OK && runtimeRecord != nil && (!health.PIDPresent || health.PID == runtimeRecord.PID) {
+		liveRuntime = true
+		if health.PIDPresent {
+			pid = health.PID
+		} else {
+			pid = 0
+		}
+	} else if source == "runtime" {
+		port, hostname = cfg.ListenTarget()
+		source = "config"
+		runtimeRecord = nil
+		health = probeStatusHealth(port, hostname, client)
+	}
+	if source == "config" && health.OK {
+		if health.PIDPresent {
+			pid = health.PID
+		} else {
+			pid = 0
+		}
+	}
 	var pidValue *int64
 	if pid > 0 {
 		pidValue = &pid
@@ -367,13 +381,17 @@ func CollectStatusDomains(deps StatusDomainDeps) StatusDomains {
 		proxyVersion = health.Version
 	}
 	healthMessage := health.Message
-	if health.OK && liveRuntime {
-		healthMessage = "ok (pid " + strconv.FormatInt(pid, 10) + ")"
+	if health.OK && source == "runtime" && liveRuntime {
+		pidText := "unknown"
+		if health.PIDPresent {
+			pidText = strconv.FormatInt(pid, 10)
+		}
+		healthMessage = "ok (pid " + pidText + ")"
 	}
 	return StatusDomains{
 		SchemaVersion: 1,
 		Proxy: StatusProxyDomain{
-			Running: pid > 0 && health.OK,
+			Running: (source == "runtime" && liveRuntime) || (source == "config" && health.OK),
 			PID:     pidValue,
 			Health:  StatusHealthDomain{OK: health.OK, URL: health.URL, Message: healthMessage},
 		},

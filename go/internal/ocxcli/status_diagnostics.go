@@ -28,12 +28,13 @@ type StatusRuntimeRecord struct {
 
 // StatusHealth is the public, secret-free healthz projection used by status.
 type StatusHealth struct {
-	OK      bool
-	URL     string
-	Message string
-	PID     int64
-	Version string
-	Uptime  float64
+	OK         bool
+	URL        string
+	Message    string
+	PID        int64
+	PIDPresent bool
+	Version    string
+	Uptime     float64
 }
 
 // StatusProbe is the shared, minimal liveness evidence required by the future
@@ -152,6 +153,7 @@ func probeStatusHealth(port int, hostname string, client *http.Client) StatusHea
 		return result
 	}
 	result.OK, result.PID = true, int64(pid)
+	_, result.PIDPresent = body["pid"]
 	versionText := ""
 	if versionOK {
 		result.Version = version

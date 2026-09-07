@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -35,12 +36,9 @@ type processInspector interface {
 type osProcessInspector struct{}
 
 func (osProcessInspector) Alive(pid int) bool { return doctorProcessAlive(pid) }
+
 func (osProcessInspector) Command(pid int) (string, error) {
-	if runtimeGOOS() == "linux" {
-		raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
-		return strings.ReplaceAll(string(raw), "\x00", " "), err
-	}
-	return "", errors.New("process command inspection is unavailable on this platform")
+	return readProcessCommandLine(pid)
 }
 func (osProcessInspector) Terminate(pid int, signal string) error {
 	if signal != "TERM" {
@@ -53,8 +51,8 @@ func (osProcessInspector) Terminate(pid int, signal string) error {
 	return process.Signal(syscall.SIGTERM)
 }
 
-var runtimeGOOS = func() string { return runtimeGOOSValue }
-var runtimeGOOSValue = "linux"
+// runtimeGOOS is a test seam for platform-branched process inspection.
+var runtimeGOOS = func() string { return runtime.GOOS }
 
 type portReclaimer struct {
 	home    string
@@ -65,7 +63,13 @@ func (r portReclaimer) reclaim(port int) error {
 	if port < 1 {
 		return nil
 	}
-	pid := readRecordedPID(filepath.Join(r.home, "ocx.pid"))
+	pidPath := filepath.Join(r.home, "ocx.pid")
+	runtimePath := filepath.Join(r.home, "runtime-port.json")
+	pid := int(readPidFileValue(pidPath))
+	// Snapshot both records BEFORE the liveness probe: a replacement runtime
+	// can rewrite them while the probe is in flight, and the purge below is
+	// authorized only by the exact values observed here (#34).
+	runtimeRecordPid := readRuntimePortSnapshotForGuard(runtimePath)
 	if pid == 0 {
 		if listenerAvailable(port) {
 			return nil
@@ -73,26 +77,38 @@ func (r portReclaimer) reclaim(port int) error {
 		return fmt.Errorf("port %d is occupied by a process that is not the recorded OpenCodex runtime", port)
 	}
 	if !r.process.Alive(pid) {
-		return removeRuntimeRecords(r.home)
+		// Stale by liveness: purge only the exact records snapshotted above,
+		// so a replacement runtime that started mid-check keeps its state.
+		removePidIfValueIs(pidPath, int64(pid))
+		removeRuntimePortIfPidIs(runtimePath, runtimeRecordPid)
+		return nil
 	}
-	command, err := r.process.Command(pid)
-	if err != nil || !isKnownTypeScriptRuntime(command) {
-		return fmt.Errorf("port %d is occupied by a process that is not a reclaimable TypeScript OpenCodex runtime", port)
+	command, commandErr := r.process.Command(pid)
+	if !isOcxStartCommandLine(command) {
+		if commandErr == nil {
+			// A readable command line that is not an ocx start command means
+			// the PID was recycled: refuse to touch it (#34).
+			return fmt.Errorf("port %d is occupied by a process that is not a reclaimable OpenCodex runtime", port)
+		}
+		// Command inspection unavailable: fail open to the previous
+		// alive-PID behavior (#34 compatibility for locked-down hosts).
 	}
 	if err := r.process.Terminate(pid, "TERM"); err != nil {
-		return fmt.Errorf("stop stale TypeScript OpenCodex runtime %d: %w", pid, err)
+		return fmt.Errorf("stop stale OpenCodex runtime %d: %w", pid, err)
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for r.process.Alive(pid) && time.Now().Before(deadline) {
 		time.Sleep(25 * time.Millisecond)
 	}
 	if r.process.Alive(pid) {
-		return fmt.Errorf("TypeScript OpenCodex runtime %d did not exit; refusing to steal port %d", pid, port)
+		return fmt.Errorf("OpenCodex runtime %d did not exit; refusing to steal port %d", pid, port)
 	}
 	if !listenerAvailable(port) {
-		return fmt.Errorf("port %d remains occupied after TypeScript OpenCodex runtime stopped", port)
+		return fmt.Errorf("port %d remains occupied after OpenCodex runtime stopped", port)
 	}
-	return removeRuntimeRecords(r.home)
+	removePidIfValueIs(pidPath, int64(pid))
+	removeRuntimePortIfPidIs(runtimePath, runtimeRecordPid)
+	return nil
 }
 
 func listenerAvailable(port int) bool {
@@ -103,28 +119,15 @@ func listenerAvailable(port int) bool {
 	_ = l.Close()
 	return true
 }
-func readRecordedPID(path string) int {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return 0
+
+// readRuntimePortSnapshotForGuard reads the pid the snapshot guard should
+// compare against. An unreadable record is represented by zero, matching the
+// TypeScript null snapshot so malformed state can be purged when unchanged.
+func readRuntimePortSnapshotForGuard(path string) int64 {
+	if record, err := readStatusRuntimeRecordAt(path); err == nil {
+		return record.PID
 	}
-	value, err := strconv.Atoi(strings.TrimSpace(string(raw)))
-	if err != nil || value < 1 {
-		return 0
-	}
-	return value
-}
-func removeRuntimeRecords(home string) error {
-	for _, name := range []string{"ocx.pid", "runtime-port.json"} {
-		if err := os.Remove(filepath.Join(home, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-	}
-	return nil
-}
-func isKnownTypeScriptRuntime(command string) bool {
-	normalized := strings.ToLower(strings.ReplaceAll(command, "\\", "/"))
-	return strings.Contains(normalized, "src/cli/index.ts") || strings.Contains(normalized, "src/cli.ts") || (strings.Contains(normalized, "opencodex") && strings.Contains(normalized, " start"))
+	return 0
 }
 
 type standaloneServer struct {
@@ -165,7 +168,7 @@ func newStandaloneServer(listen, version string) (*standaloneServer, error) {
 	server.http = &http.Server{Handler: server.handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second}
 	if err := server.writeRuntime(); err != nil {
 		_ = listener.Close()
-		_ = removeRuntimeRecords(home)
+		_ = removeRuntimeRecordsFor(home, int64(server.pid))
 		return nil, err
 	}
 	return server, nil
@@ -232,20 +235,27 @@ func listenHost(addr net.Addr) string {
 	return strings.Trim(host, "[]")
 }
 
+// writeRuntime publishes both state files byte-compatibly with TypeScript:
+// ocx.pid is exactly the decimal pid with no trailing newline (writePid in
+// src/config/process-state.ts), runtime-port.json is two-space-indented JSON
+// with one trailing newline. Both go through the atomic temp/rename writer so
+// a crash mid-write can never publish a torn pid file.
 func (s *standaloneServer) writeRuntime() error {
-	if err := os.WriteFile(filepath.Join(s.home, "ocx.pid"), []byte(strconv.Itoa(s.pid)+"\n"), 0o600); err != nil {
+	if err := writeStateFileAtomic(filepath.Join(s.home, "ocx.pid"), []byte(strconv.Itoa(s.pid))); err != nil {
 		return err
 	}
 	raw, err := json.MarshalIndent(RuntimeState{PID: int64(s.pid), Port: s.port, Hostname: s.hostname, AttestationSecret: s.secret}, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(s.home, "runtime-port.json"), append(raw, '\n'), 0o600)
+	return writeStateFileAtomic(filepath.Join(s.home, "runtime-port.json"), append(raw, '\n'))
 }
 func (s *standaloneServer) Serve() error { return s.http.Serve(s.listener) }
 func (s *standaloneServer) Close(ctx context.Context) error {
 	err := s.http.Shutdown(ctx)
-	_ = removeRuntimeRecords(s.home)
+	// Guarded by this server's own pid: a replacement runtime that already
+	// rewrote the records must not lose them to our shutdown sweep (#34).
+	_ = removeRuntimeRecordsFor(s.home, int64(s.pid))
 	return err
 }
 
@@ -342,10 +352,18 @@ func runStop(args []string, deps Deps) int {
 		fmt.Fprintln(deps.Stderr, err)
 		return ExitFailure
 	}
-	if !(osProcessInspector{}).Alive(int(state.PID)) {
-		_ = removeRuntimeRecords(home)
+	inspector := osProcessInspector{}
+	if !inspector.Alive(int(state.PID)) {
+		_ = removeRuntimeRecordsFor(home, state.PID)
 		fmt.Fprintf(deps.Stdout, "No proxy is running (stale record for PID %d removed).\n", state.PID)
 		return ExitOK
+	}
+	if command, commandErr := inspector.Command(int(state.PID)); commandErr == nil && !isOcxStartCommandLine(command) {
+		// #34: the PID is alive but no longer names an OpenCodex runtime —
+		// the OS recycled it. Signaling it would kill an unrelated process.
+		fmt.Fprintf(deps.Stderr, "Recorded PID %d is alive but is not an OpenCodex runtime; refusing to stop it.\n", state.PID)
+		fmt.Fprintln(deps.Stderr, "Stop the actual proxy (see 'ocx status'), or remove the stale record manually.")
+		return ExitFailure
 	}
 	client := &http.Client{Timeout: 10 * time.Second}
 	host := strings.TrimSpace(state.Hostname)
@@ -372,14 +390,14 @@ func runStop(args []string, deps Deps) int {
 		}
 	}
 	deadline := time.Now().Add(8 * time.Second)
-	for (osProcessInspector{}).Alive(int(state.PID)) && time.Now().Before(deadline) {
+	for inspector.Alive(int(state.PID)) && time.Now().Before(deadline) {
 		time.Sleep(50 * time.Millisecond)
 	}
-	if (osProcessInspector{}).Alive(int(state.PID)) {
+	if inspector.Alive(int(state.PID)) {
 		fmt.Fprintf(deps.Stderr, "Proxy (PID %d) did not exit after stop request.\n", state.PID)
 		return ExitFailure
 	}
-	_ = removeRuntimeRecords(home)
+	_ = removeRuntimeRecordsFor(home, state.PID)
 	fmt.Fprintf(deps.Stdout, "Proxy (PID %d) stopped.\n", state.PID)
 	return ExitOK
 }
