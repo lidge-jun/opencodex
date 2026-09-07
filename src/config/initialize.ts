@@ -1,5 +1,5 @@
 import {
-  closeSync, constants, fchmodSync, fstatSync, linkSync, lstatSync,
+  closeSync, fchmodSync, fstatSync, linkSync, lstatSync,
   openSync, unlinkSync, writeFileSync,
 } from "node:fs";
 import { dirname } from "node:path";
@@ -92,7 +92,7 @@ export function publishInitialConfigNoReplace(
   let hardLinkUnavailable = false;
   let residualTemp = false;
   try {
-    fd = openSync(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
+    fd = openSync(temp, "wx", 0o600);
     (io.harden ?? hardenInitialConfig)(fd, temp, target);
     verifyPrivateTemp(fd, temp);
     (io.write ?? ((descriptor: number, value: string) => writeFileSync(descriptor, value, { encoding: "utf8" })))(fd, bytes);

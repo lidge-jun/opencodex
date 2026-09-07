@@ -50,6 +50,19 @@ hardening, `verifyPrivateTemp`, the single `linkSync` publication with its
 `EEXIST`/`collided` and `hardLinkUnavailable` handling, and the
 descriptor-owned `removeOwnedTemp` cleanup are all unchanged.
 
+## Out of scope: the same pattern under `src/lab/`
+
+An independent scan found three more exclusive opens sharing this combination:
+`src/lab/ledger/store.ts:153` and `:185` (recovery mutex, ledger lock) and
+`src/lab/public/private-file.ts:209` (private publication temp). They deserve the
+same portability follow-up, but Lab is an opt-in subsystem off the core request
+path, so they stay out of this track rather than widening a config-surface fix.
+
+Two further matches are not exclusive opens and must not be swept in:
+`src/codex/native-main-lock-file.ts:89` and `src/lab/fabric/scratch.ts:416`. The
+read/write sites in `src/lab/artifacts/secure-fs.ts` need individual treatment because
+`"wx"` would drop read access.
+
 ## Verification
 
 Repository CI on the stack tip only. Local suite, typecheck, and build:

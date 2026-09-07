@@ -644,6 +644,18 @@ describe("atomic secret temp writer portability", () => {
   });
 });
 
+describe("initial config temp writer portability", () => {
+  test("initial config publication uses Bun-portable exclusive creation", () => {
+    // publishInitialConfigNoReplace carries the same Bun/Windows exposure as the
+    // atomic writers above: the numeric O_* combination lost its creation bit, so
+    // first-run `ocx init` failed before it could publish config.json. Exclusive
+    // creation is what makes the added O_TRUNC harmless — an existing temp name
+    // (or a symlink planted at one) fails the open instead of being truncated.
+    const src = readFileSync(repoPath("src", "config", "initialize.ts"), "utf8");
+    expect(src.match(/openSync\(temp, "wx", 0o600\)/g)).toHaveLength(1);
+  });
+});
+
 describe("diagnostics sanitization contract", () => {
   test("HardenResult diagnostics field is a plain string when present", () => {
     const filePath = join(testDir, "diag-test.json");
