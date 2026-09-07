@@ -4660,6 +4660,7 @@ async function handleResponsesInner(
     // rejection is sticky for the whole turn, set from every parsed payload on the inspection side.
     let inspectionSawUndeclaredTool = false;
     let inspectedTerminal: ResponsesTerminalStatus | null = null;
+    let inspectedCompletionSeen = false;
     const passiveQuotaObserved = hasPassiveAccountQuota(route.providerName)
       && route.provider.authMode === "oauth";
     const noteInspectedPayload = (payload: unknown) => {
@@ -4729,7 +4730,11 @@ async function handleResponsesInner(
         return;
       }
       rememberPassthroughResponse?.(restoredResponse);
-      if (inspectedTerminal === null || inspectedTerminal === "completed") {
+      const firstCompletion = !inspectedCompletionSeen;
+      inspectedCompletionSeen = true;
+      if (firstCompletion && (inspectedTerminal === null || inspectedTerminal === "completed")) {
+        // A model-less first completion permanently declines recall; later terminal
+        // frames are hidden by the client boundary and cannot supply its identity.
         // Native inspection sees the pre-rewrite model. Only an actual terminal
         // model can seed recall; an absent model never falls back to the pick.
         if (typeof response.model === "string" && response.model.trim()) {

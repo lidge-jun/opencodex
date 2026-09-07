@@ -584,6 +584,51 @@ describe("server combo failover 030 activation matrix", () => {
     }
   }
 
+  for (const streamMode of ["legacy-tee", "eager-relay"] as const) {
+    for (const recordTerminalOutcomes of [true, false]) {
+      for (const firstModel of [undefined, ""] as const) {
+        test(`native ${streamMode} ignores hidden completion after ${firstModel === undefined ? "missing" : "empty"} model with recording ${recordTerminalOutcomes}`, async () => {
+          const seed = serve(() => Response.json(responsesSuccess("A", "m1")));
+          const upstream = serve(() => {
+            const first = responsesSuccess("first", "ignored");
+            if (firstModel === undefined) delete first.model;
+            else first.model = firstModel;
+            const events = [
+              { type: "response.output_text.delta", delta: "B", item_id: "msg_b", output_index: 0, content_index: 0 },
+              { type: "response.completed", response: first },
+              { type: "response.completed", response: responsesSuccess("hidden", "final-b") },
+            ];
+            return new Response(events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""), {
+              headers: { "content-type": "text/event-stream" },
+            });
+          });
+          const config = comboConfig({
+            a: provider("openai-responses", baseUrl(seed), "key-a"),
+            b: provider("openai-responses", baseUrl(upstream), "key-b"),
+          });
+          config.streamMode = streamMode;
+          config.combos = {
+            alpha: { targets: [{ provider: "a", model: "m1" }] },
+            beta: { targets: [{ provider: "b", model: "m2" }] },
+          };
+          const headers = { session_id: "first-terminal-recall" };
+          const lane = sessionLaneIdFromRequest(new Headers(headers));
+          await (await post(config, { model: "combo/alpha" }, {}, headers)).text();
+          expect(recallComboForLane(config, lane, "m1")).toBe("alpha");
+          const completedModels: string[] = [];
+          const response = await post(config, { model: "combo/beta", stream: true }, {
+            recordTerminalOutcomes, onResponseComplete: model => { completedModels.push(model); },
+          }, headers);
+          const wire = await response.text();
+          expect(wire).not.toContain("final-b");
+          expect(completedModels).toEqual([]);
+          expect(recallComboForLane(config, lane, "m1")).toBe("alpha");
+          expect(recallComboForLane(config, lane, "final-b")).toBeUndefined();
+        });
+      }
+    }
+  }
+
   test("native output before cancellation preserves A and cannot record late B completion", async () => {
     const seed = serve(() => Response.json(responsesSuccess("A", "m1")));
     const held = heldNativeTerminal({ type: "response.completed", response: responsesSuccess("B", "final-b") });
