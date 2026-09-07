@@ -632,6 +632,18 @@ describe("icacls executable authority", () => {
   });
 });
 
+describe("atomic secret temp writer portability", () => {
+  test("sync and async secret temp writers use Bun-portable exclusive creation", async () => {
+    // Bun on Windows misinterpreted the equivalent numeric O_* combination as
+    // ENOENT, so every pid/config/oauth temp write failed during ocx start
+    // and on management-API config saves. Keep both writers on the portable
+    // exclusive-write spelling ("wx" keeps O_EXCL; 0o600 keeps the private
+    // mode) so the O_CREAT bit can never be dropped again.
+    const src = readFileSync(repoPath("src", "config", "atomic-write.ts"), "utf8");
+    expect(src.match(/openSync\(path, "wx", 0o600\)/g)).toHaveLength(2);
+  });
+});
+
 describe("diagnostics sanitization contract", () => {
   test("HardenResult diagnostics field is a plain string when present", () => {
     const filePath = join(testDir, "diag-test.json");
