@@ -293,6 +293,12 @@ ocx codex-shim status
 ocx codex-shim uninstall
 ```
 
+:::note[Windows 토큰 환경]
+새로 생성된 Windows CMD 및 PowerShell shim은 실행 후 호출자의 `OPENCODEX_API_AUTH_TOKEN`을 원래 상태로 복원합니다. Codex와 자식 프로세스는 여전히 토큰을 상속할 수 있습니다.
+
+OpenCodex를 업데이트한 뒤 기존 Windows shim에 이 동작을 적용하려면 `ocx codex-shim uninstall`을 실행한 다음 `ocx codex-shim install`로 다시 설치하세요. 일반 업데이트는 정상인 Windows shim을 다시 작성하지 않습니다.
+:::
+
 :::tip[서비스와 shim]
 항상 켜져 있는 백그라운드 프록시에는 `ocx service`를 사용합니다(권장). 데몬 없이 가볍게 필요할
 때만 시작하려면 `ocx codex-shim`을 사용합니다. 이 경우 프록시는 `codex`를 실행할 때만 시작됩니다.

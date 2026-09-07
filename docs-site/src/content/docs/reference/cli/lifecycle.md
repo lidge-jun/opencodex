@@ -440,6 +440,12 @@ ocx codex-shim status
 ocx codex-shim uninstall
 ```
 
+:::note[Windows token environment]
+Newly generated Windows CMD and PowerShell shims restore the caller's `OPENCODEX_API_AUTH_TOKEN` after execution. Codex and its child processes can still inherit the token.
+
+After updating OpenCodex, recreate an existing Windows shim with `ocx codex-shim uninstall` followed by `ocx codex-shim install` to obtain this behavior. An ordinary update does not rewrite a healthy Windows shim.
+:::
+
 :::tip[Service vs Shim]
 Use `ocx service` for an always-on background proxy (recommended). Use `ocx codex-shim` for
 lightweight, on-demand startup without a daemon — the proxy starts only when `codex` is launched.
