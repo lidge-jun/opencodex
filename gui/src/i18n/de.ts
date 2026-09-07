@@ -1876,6 +1876,7 @@ export const de: Record<TKey, string> = {
   "modal.badge.direct": "Direct",
   "modal.badge.pool": "Pool",
   "modal.badge.free": "Kostenlos",
+  "modal.badge.sponsor": "Sponsor",
   "modal.invalidPreset": "Diese integrierte Anbietervorlage ist unvollständig. Starten Sie den Proxy neu und versuchen Sie es erneut.",
   "modal.freeTierTitle": "Kostenloser Tarif",
   "modal.freeTierDefault": "Kein API-Schlüssel nötig. Funktioniert sofort.",

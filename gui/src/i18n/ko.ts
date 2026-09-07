@@ -1915,6 +1915,7 @@ export const ko: Record<TKey, string> = {
   "modal.badge.direct": "Direct",
   "modal.badge.pool": "풀",
   "modal.badge.free": "무료",
+  "modal.badge.sponsor": "스폰서",
   "modal.invalidPreset": "내장 프로바이더 설정이 완전하지 않습니다. 프록시를 다시 시작한 뒤 재시도하세요.",
   "modal.freeTierTitle": "무료 티어",
   "modal.freeTierDefault": "API 키가 필요 없습니다. 바로 사용할 수 있습니다.",

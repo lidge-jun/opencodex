@@ -1106,6 +1106,7 @@ export const fr: Record<TKey, string> = {
   "modal.badge.direct": "Direct",
   "modal.badge.pool": "Groupe",
   "modal.badge.free": "Gratuit",
+  "modal.badge.sponsor": "Sponsor",
   "modal.invalidPreset": "Ce préréglage de fournisseur intégré est incomplet. Redémarrez le proxy et réessayez.",
   "modal.freeTierTitle": "Offre gratuite",
   "modal.freeTierDefault": "Aucune clé API requise. Fonctionne immédiatement.",

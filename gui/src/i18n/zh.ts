@@ -1896,6 +1896,7 @@ export const zh: Record<TKey, string> = {
   "modal.badge.direct": "直连",
   "modal.badge.pool": "账户池",
   "modal.badge.free": "免费",
+  "modal.badge.sponsor": "赞助商",
   "modal.invalidPreset": "此内置提供方预设不完整。请重启代理后重试。",
   "modal.freeTierTitle": "免费层级",
   "modal.freeTierDefault": "无需 API 密钥，开箱即用。",

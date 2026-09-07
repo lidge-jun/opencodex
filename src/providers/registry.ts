@@ -175,6 +175,13 @@ export interface ProviderRegistryEntry {
   staticHeaders?: Record<string, string>;
   modelSuffixBracketStrip?: boolean;
   featured?: boolean;
+  /**
+   * Paid provider sponsorship under SPONSORS.md. `main` is reserved for model developers,
+   * `standard` for relays and gateways. The picker pins sponsor rows first (alphabetical among
+   * themselves) and labels them; nothing else reads this field. Routing, failover, quota, and
+   * defaults never consult it — that boundary is what SPONSORS.md promises users.
+   */
+  sponsor?: { tier: "main" | "standard"; url: string };
   dashboardPreset?: boolean;
   note?: string;
   dashboardUrl?: string;

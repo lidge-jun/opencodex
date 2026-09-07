@@ -1122,6 +1122,7 @@ export const tr: Record<TKey, string> = {
   "modal.badge.direct": "Doğrudan",
   "modal.badge.pool": "Havuz",
   "modal.badge.free": "Ücretsiz",
+  "modal.badge.sponsor": "Sponsor",
   "modal.invalidPreset": "Bu yerleşik sağlayıcı ayarı eksik.",
   "modal.freeTierTitle": "Ücretsiz katman",
   "modal.freeTierDefault": "API anahtarı gerekmez. Doğrudan çalışır.",

@@ -1103,6 +1103,7 @@ export const ru: Record<TKey, string> = {
   "modal.badge.direct": "Прямой",
   "modal.badge.pool": "Пул",
   "modal.badge.free": "Бесплатно",
+  "modal.badge.sponsor": "Спонсор",
   "modal.invalidPreset": "Этот встроенный пресет провайдера неполный. Перезапустите прокси и попробуйте ещё раз.",
   "modal.freeTierTitle": "Бесплатный тариф",
   "modal.freeTierDefault": "API-ключ не нужен. Работает из коробки.",

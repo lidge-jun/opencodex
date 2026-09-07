@@ -1048,6 +1048,7 @@ export const ja: Record<TKey, string> = {
   "modal.badge.direct": "ダイレクト",
   "modal.badge.pool": "プール",
   "modal.badge.free": "無料",
+  "modal.badge.sponsor": "スポンサー",
   "modal.invalidPreset": "この組み込みプロバイダープリセットは不完全です。プロキシを再起動してもう一度お試しください。",
   "modal.freeTierTitle": "無料枠",
   "modal.freeTierDefault": "API キー不要です。そのまま利用できます。",

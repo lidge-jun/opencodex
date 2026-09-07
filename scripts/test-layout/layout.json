@@ -1156,6 +1156,7 @@
     "sidecar-tracker.test.ts": "vision",
     "skill-ocx.test.ts": "ci-workflows",
     "slug-codec.test.ts": "codex-integration",
+    "sponsor-presets.test.ts": "providers",
     "sse-client-frame-bounds.test.ts": "responses",
     "sse-decoder.test.ts": "responses",
     "sse-failed-tail.test.ts": "responses",

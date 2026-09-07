@@ -901,6 +901,7 @@ export const zhTW: Record<TKey, string> = {
   "modal.badge.direct": "Direct",
   "modal.badge.pool": "帳號池",
   "modal.badge.free": "免費",
+  "modal.badge.sponsor": "贊助商",
   "modal.invalidPreset": "此內建供應商預設不完整。請重新啟動代理後重試。",
   "modal.freeTierTitle": "免費層級",
   "modal.freeTierDefault": "無需 API 金鑰，開箱即用。",

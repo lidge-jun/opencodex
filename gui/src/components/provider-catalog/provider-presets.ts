@@ -28,6 +28,9 @@ export interface CatalogPreset {
   keyOptional?: boolean;
   /** Free pricing — may still require an API key (e.g. NVIDIA NIM). */
   freeTier?: boolean;
+  /** Sponsor tier (SPONSORS.md). Sponsor rows are pinned to the top of their tab and chipped. */
+  sponsor?: "main" | "standard";
+  sponsorUrl?: string;
   /**
    * Endpoint picker (e.g. Qwen Cloud). Choice without `baseUrl` = Custom (show text field).
    */
@@ -67,4 +70,21 @@ export function filterPresets(presets: CatalogPreset[], query: string): CatalogP
   const q = query.trim().toLowerCase();
   if (!q) return presets;
   return presets.filter(p => p.label.toLowerCase().includes(q) || p.id.toLowerCase().includes(q));
+}
+
+const SPONSOR_RANK: Record<NonNullable<CatalogPreset["sponsor"]>, number> = { main: 0, standard: 1 };
+
+/**
+ * Sponsor rows first — Main before Standard, alphabetical by label within a tier — then the
+ * caller's order untouched. Stable, so usage ranking still decides the non-sponsor tail.
+ * Alphabetical among sponsors is deliberate: it is the one order no sponsor can buy.
+ */
+export function pinSponsors(presets: CatalogPreset[]): CatalogPreset[] {
+  const sponsors = presets.filter(p => p.sponsor);
+  if (sponsors.length === 0) return presets;
+  sponsors.sort((a, b) =>
+    SPONSOR_RANK[a.sponsor!] - SPONSOR_RANK[b.sponsor!]
+    || a.label.localeCompare(b.label, undefined, { sensitivity: "base" })
+    || a.id.localeCompare(b.id));
+  return [...sponsors, ...presets.filter(p => !p.sponsor)];
 }

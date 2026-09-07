@@ -1133,6 +1133,7 @@ export const en = {
   "modal.badge.direct": "Direct",
   "modal.badge.pool": "Pool",
   "modal.badge.free": "Free",
+  "modal.badge.sponsor": "Sponsor",
   "modal.invalidPreset": "This built-in provider preset is incomplete. Restart the proxy and try again.",
   "modal.freeTierTitle": "Free tier",
   "modal.freeTierDefault": "No API key required. Works out of the box.",
