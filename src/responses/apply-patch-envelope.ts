@@ -22,6 +22,13 @@ const PATCH_BEGIN = "*** Begin Patch";
 const PATCH_END = "*** End Patch";
 const TOP_LEVEL_PATCH_ENVELOPE = /^(\*\*\* Begin Patch(?: \*\*\*)?)(\r?\n)([\s\S]*)(\r?\n)(\*\*\* End Patch(?: \*\*\*)?)(\r?\n)?$/;
 const PATCH_OPERATION_LINE = /^\*\*\* (?:Add|Update|Delete) File: .+$/m;
+const OUTER_MARKDOWN_CODE_FENCE = /^```(?:[a-zA-Z0-9_-]+)?\r?\n([\s\S]*?)\r?\n```$/;
+
+function stripMarkdownCodeFence(text: string): string {
+  const trimmed = text.trim();
+  const match = OUTER_MARKDOWN_CODE_FENCE.exec(trimmed);
+  return match ? match[1] : text;
+}
 
 /** Unwrap the `{input:string}` function-call wrapper used for freeform tools. */
 export function unwrapFreeformToolInput(argumentsText: unknown): string {
@@ -29,13 +36,27 @@ export function unwrapFreeformToolInput(argumentsText: unknown): string {
   try {
     const parsed: unknown = JSON.parse(argumentsText);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      const input = (parsed as { input?: unknown }).input;
-      if (typeof input === "string") return input;
+      const record = parsed as Record<string, unknown>;
+      let candidate: string | undefined;
+      if (typeof record.input === "string") candidate = record.input;
+      else if (typeof record.code === "string") candidate = record.code;
+      else if (typeof record.script === "string") candidate = record.script;
+      else if (typeof record.js === "string") candidate = record.js;
+      else if (typeof record.javascript === "string") candidate = record.javascript;
+      else if (typeof record.command === "string") candidate = record.command;
+      else if (typeof record.cmd === "string") candidate = record.cmd;
+      else if (typeof record.patch === "string") candidate = record.patch;
+      else if (typeof record.content === "string") candidate = record.content;
+      else {
+        const stringProps = Object.values(record).filter((v): v is string => typeof v === "string");
+        if (stringProps.length === 1) candidate = stringProps[0];
+      }
+      if (candidate !== undefined) return stripMarkdownCodeFence(candidate);
     }
   } catch {
     // The string is the freeform body, not nested JSON.
   }
-  return argumentsText;
+  return stripMarkdownCodeFence(argumentsText);
 }
 
 /**
