@@ -213,6 +213,15 @@ provider advertises `supports_websockets = true` only when `"websockets": true`;
 built-in provider may try WebSocket first, and a disabled proxy returns `426` so Codex falls back to
 HTTP/SSE.
 
+If a canonical ChatGPT forward continuation references expired or missing local replay state,
+opencodex returns `previous_response_not_found` before sending anything upstream. Codex's
+WebSocket client recognizes this error and can reconnect with its full retained context,
+including completed tool calls and their results, within its normal stream retry budget. An
+idle task therefore does not need a new task solely because the proxy's one-hour cache expired.
+The cache remains bounded; this does not extend retention or recover history the client no
+longer has. HTTP clients must handle the error explicitly and resend their full context without
+`previous_response_id`. Retrying only the same ID cannot recover missing state.
+
 ### Authless Codex Desktop (opt-in)
 
 In **Dashboard → Overview**, **Open Codex without signing in** controls this existing

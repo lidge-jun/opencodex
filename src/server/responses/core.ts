@@ -3595,14 +3595,16 @@ async function handleResponsesInner(
   // The canonical ChatGPT backend rejects previous_response_id, so a local replay miss leaves no
   // safe way to recover the omitted history. Fail before auth, adapter construction, or upstream
   // I/O instead of stripping the id and silently forwarding a context-free delta (#702).
+  // Codex recognizes previous_response_not_found on WebSocket errors and reconnects with its
+  // full input. A generic invalid_request_error instead terminates the task after cache expiry.
   if (
     hasUnexpandedPreviousResponse
     && isCanonicalOpenAiForwardProvider(route.provider)
   ) {
     return formatErrorResponse(
       400,
-      "invalid_request_error",
-      "OpenAI forward continuation state is unavailable or expired; start a new session instead of reusing this previous_response_id.",
+      "previous_response_not_found",
+      "OpenAI forward continuation state is unavailable or expired; resend the full conversation without previous_response_id.",
     );
   }
 

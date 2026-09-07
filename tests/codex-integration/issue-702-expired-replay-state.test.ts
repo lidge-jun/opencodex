@@ -21,7 +21,7 @@ import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
-import { SERVER_BUDGET_MS } from "../helpers/test-budget";
+import { INTERNAL_DEADLINE_MS, SERVER_BUDGET_MS } from "../helpers/test-budget";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const originalFetch = globalThis.fetch;
@@ -102,6 +102,46 @@ function completedSse(responseId: string, text: string): string {
     "",
     "",
   ].join("\n");
+}
+
+async function openResponseSocket(url: URL, headers: Record<string, string>): Promise<WebSocket> {
+  const target = new URL("/v1/responses", url);
+  target.protocol = "ws:";
+  const socket = new WebSocket(target, { headers } as unknown as string[]);
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      socket.close();
+      reject(new Error("response socket did not open"));
+    }, INTERNAL_DEADLINE_MS);
+    socket.onopen = () => { clearTimeout(timer); resolve(); };
+    socket.onerror = () => { clearTimeout(timer); reject(new Error("response socket failed to open")); };
+  });
+  return socket;
+}
+
+async function sendSocketTurn(socket: WebSocket, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    const finish = (error?: Error, frame?: Record<string, unknown>) => {
+      clearTimeout(timer);
+      socket.onmessage = socket.onclose = socket.onerror = null;
+      if (error) reject(error);
+      else resolve(frame!);
+    };
+    const timer = setTimeout(() => finish(new Error("response socket did not reach a terminal event")), INTERNAL_DEADLINE_MS);
+    socket.onclose = () => finish(new Error("response socket closed before its terminal event"));
+    socket.onerror = () => finish(new Error("response socket failed"));
+    socket.onmessage = event => {
+      try {
+        const frame = JSON.parse(String(event.data));
+        if (["error", "response.completed", "response.failed", "response.incomplete"].includes(frame.type)) {
+          finish(undefined, frame);
+        }
+      } catch (error) {
+        finish(error instanceof Error ? error : new Error(String(error)));
+      }
+    };
+    socket.send(JSON.stringify({ type: "response.create", ...body }));
+  });
 }
 
 async function waitForRecordedResponseState(): Promise<ResponseStateMetrics> {
@@ -364,10 +404,85 @@ describe("Issue #702 expired forward replay state", () => {
       error: {
         message: expect.stringMatching(/continuation state.*expired/i),
         type: "invalid_request_error",
-        code: "invalid_request_error",
+        code: "previous_response_not_found",
       },
     });
   });
+
+  test.each(["expired", "missing"] as const)("%s forward state lets a WebSocket client reconnect and replay full tool history", async mode => {
+    const upstreamRequests: Record<string, unknown>[] = [];
+    const realNow = Date.now;
+    let server: ReturnType<typeof startServer> | null = null;
+    let socket: WebSocket | null = null;
+    const toolCall = {
+      type: "function_call", id: "fc_issue_702", call_id: "call_issue_702",
+      name: "lookup", arguments: '{"key":"historical"}', status: "completed",
+    };
+    const toolResult = {
+      type: "function_call_output", call_id: "call_issue_702", output: "historical tool result",
+    };
+    const history = [inputMessage(HISTORICAL_USER_SENTINEL), toolCall];
+    const delta = [toolResult, inputMessage(CURRENT_USER_SENTINEL)];
+    try {
+      if (mode === "expired") {
+        Date.now = () => realNow() - EXPIRED_AGE_MS;
+        rememberResponseState(
+          { input: [history[0]], store: false },
+          { id: FIRST_RESPONSE_ID, status: "completed", output: [toolCall] },
+          undefined,
+          { force: true },
+        );
+        Date.now = realNow;
+        expect(responseStateMetrics().oldestAgeMs).toBeGreaterThan(REPLAY_TTL_MS);
+      }
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        if (url.hostname === "chatgpt.com" && url.pathname === "/backend-api/codex/responses") {
+          upstreamRequests.push(JSON.parse(String(init?.body)));
+          return new Response(completedSse("resp_issue_702_recovered", "recovered with full history"), {
+            headers: { "content-type": "text/event-stream" },
+          });
+        }
+        return originalFetch(input, init);
+      }) as typeof fetch;
+      saveConfig({ ...forwardConfig(), websockets: true });
+      server = startServer(0);
+      const headers = {
+        authorization: `Bearer ${fakeChatGptJwt({ chatgpt_account_id: "acct-issue-702" })}`,
+        "chatgpt-account-id": "acct-issue-702",
+      };
+      socket = await openResponseSocket(server.url, headers);
+      const rejected = await sendSocketTurn(socket, {
+        model: "gpt-5.5", previous_response_id: FIRST_RESPONSE_ID, input: delta, store: false,
+      });
+      expect(rejected).toMatchObject({
+        type: "error", status: 400,
+        error: { type: "invalid_request_error", code: "previous_response_not_found" },
+      });
+      expect(upstreamRequests).toHaveLength(0);
+
+      // Codex recognizes this code, discards its incremental socket state, and reconnects
+      // with its complete input. The rejected delta must never be forwarded on its own.
+      socket.close();
+      socket = await openResponseSocket(server.url, headers);
+      const recovered = await sendSocketTurn(socket, {
+        model: "gpt-5.5", input: [...history, ...delta], store: false,
+        tools: [{ type: "function", name: "lookup", parameters: { type: "object" } }],
+      });
+      expect(recovered).toMatchObject({ type: "response.completed", response: { id: "resp_issue_702_recovered" } });
+      expect(upstreamRequests).toHaveLength(1);
+      expect(upstreamRequests[0]!.previous_response_id).toBeUndefined();
+      // The canonical forward adapter removes item ids, but must preserve the call/result
+      // identity and every input item exactly once when the client supplies full history.
+      const { id: _itemId, ...forwardedToolCall } = toolCall;
+      expect(upstreamRequests[0]!.input).toEqual([history[0], forwardedToolCall, ...delta]);
+    } finally {
+      Date.now = realNow;
+      globalThis.fetch = originalFetch;
+      socket?.close();
+      await server?.stop(true);
+    }
+  }, SERVER_BUDGET_MS);
 
   test("forward mode expands fresh replay state before continuing upstream", async () => {
     const scenario = await runForwardScenario("fresh");
