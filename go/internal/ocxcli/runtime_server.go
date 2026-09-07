@@ -134,6 +134,7 @@ type standaloneServer struct {
 	home     string
 	pid      int
 	port     int
+	hostname string
 	secret   string
 	version  string
 	started  time.Time
@@ -159,11 +160,12 @@ func newStandaloneServer(listen, version string) (*standaloneServer, error) {
 		_ = listener.Close()
 		return nil, err
 	}
-	server := &standaloneServer{listener: listener, home: home, pid: os.Getpid(), port: port, secret: base64.RawURLEncoding.EncodeToString(secretRaw), version: version, started: time.Now()}
+	server := &standaloneServer{listener: listener, home: home, pid: os.Getpid(), port: port, hostname: listenHost(listener.Addr()), secret: base64.RawURLEncoding.EncodeToString(secretRaw), version: version, started: time.Now()}
 	server.handler = server.routes()
 	server.http = &http.Server{Handler: server.handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second}
 	if err := server.writeRuntime(); err != nil {
 		_ = listener.Close()
+		_ = removeRuntimeRecords(home)
 		return nil, err
 	}
 	return server, nil
@@ -175,21 +177,28 @@ func (s *standaloneServer) routes() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/healthz":
-			w.Header().Set("Content-Type", "application/json")
+			if r.Method != http.MethodGet {
+				http.NotFound(w, r)
+				return
+			}
 			if challenge := r.Header.Get(attestationChallengeHeader); challenge != "" {
 				w.Header().Set(attestationProofHeader, managementauth.CreateLocalAttestationProof(s.secret, challenge, int64(s.pid), s.port))
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "service": "opencodex", "version": s.version, "uptime": time.Since(s.started).Seconds(), "pid": s.pid, "port": s.port})
+			writeRuntimeJSON(w, http.StatusOK, Health{Status: "ok", Service: "opencodex", Version: s.version, Uptime: time.Since(s.started).Seconds(), PID: int64(s.pid), Port: s.port})
 		case "/readyz":
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{"service": "opencodex", "version": s.version, "uptime": time.Since(s.started).Seconds(), "pid": s.pid, "port": s.port, "status": "ready"})
+			if r.Method != http.MethodGet {
+				http.NotFound(w, r)
+				return
+			}
+			writeRuntimeJSON(w, http.StatusOK, readiness{Service: "opencodex", Version: s.version, Uptime: time.Since(s.started).Seconds(), PID: int64(s.pid), Port: s.port, Status: "ready"})
+		case "/readyz/":
+			http.NotFound(w, r)
 		case "/api/stop":
 			if r.Method != http.MethodPost {
 				http.NotFound(w, r)
 				return
 			}
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+			writeRuntimeJSON(w, http.StatusOK, map[string]any{"ok": true})
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
@@ -204,11 +213,29 @@ func (s *standaloneServer) routes() http.Handler {
 		}
 	})
 }
+
+func writeRuntimeJSON(w http.ResponseWriter, status int, payload any) {
+	w.Header().Set("Content-Type", "application/json")
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	w.WriteHeader(status)
+	_, _ = w.Write(raw)
+}
+
+func listenHost(addr net.Addr) string {
+	host, _, err := net.SplitHostPort(addr.String())
+	if err != nil || host == "" || host == "0.0.0.0" || host == "::" {
+		return "127.0.0.1"
+	}
+	return strings.Trim(host, "[]")
+}
 func (s *standaloneServer) writeRuntime() error {
 	if err := os.WriteFile(filepath.Join(s.home, "ocx.pid"), []byte(strconv.Itoa(s.pid)+"\n"), 0o600); err != nil {
 		return err
 	}
-	raw, err := json.MarshalIndent(RuntimeState{PID: int64(s.pid), Port: s.port, Hostname: "127.0.0.1", AttestationSecret: s.secret}, "", "  ")
+	raw, err := json.MarshalIndent(RuntimeState{PID: int64(s.pid), Port: s.port, Hostname: s.hostname, AttestationSecret: s.secret}, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -271,6 +298,7 @@ func serveUntilSignal(server *standaloneServer, stderr io.Writer) int {
 	go func() { done <- server.Serve() }()
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(signals)
 	select {
 	case <-signals:
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -319,7 +347,11 @@ func runStop(args []string, deps Deps) int {
 		return ExitOK
 	}
 	client := &http.Client{Timeout: 10 * time.Second}
-	stopURL := fmt.Sprintf("http://%s/api/stop", net.JoinHostPort(state.Hostname, strconv.Itoa(state.Port)))
+	host := strings.TrimSpace(state.Hostname)
+	if host == "" || host == "0.0.0.0" || host == "::" || host == "[::]" {
+		host = "127.0.0.1"
+	}
+	stopURL := fmt.Sprintf("http://%s/api/stop", net.JoinHostPort(strings.Trim(host, "[]"), strconv.Itoa(state.Port)))
 	request, requestErr := http.NewRequest(http.MethodPost, stopURL, nil)
 	graceful := false
 	if requestErr == nil {

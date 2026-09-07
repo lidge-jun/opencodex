@@ -199,6 +199,11 @@ func TestVersionAndRegistry(t *testing.T) {
 func TestOwnershipMapMatchesDispatch(t *testing.T) {
 	for _, command := range Commands {
 		for _, name := range append([]string{command.Name}, command.Aliases...) {
+			// Lifecycle commands own a real listener/process and intentionally block
+			// until a signal; ownership is asserted above without launching them.
+			if name == "start" || name == "stop" {
+				continue
+			}
 			t.Run(name, func(t *testing.T) {
 				var delegated []string
 				deps := depsFor(RuntimeState{}, &bytes.Buffer{}, &bytes.Buffer{})
