@@ -8,10 +8,11 @@ phase is the evidence phase.
 
 1. `bun run build:gui` — the service serves `gui/dist`, so an unbuilt change is
    invisible no matter how green the tests are.
-2. `ocx service restart` — picks up the server-side `observed` flag. Confirm a new
-   pid and fresh uptime on `/healthz`, and that the configured port is unchanged. The service
-   is the user's own; restart it, never repoint or reconfigure it.
-3. `curl /api/provider-quotas` with the admin token — the meta-muse row must now
+2. Load the rebuilt code in the isolated scratch instance and confirm its identity
+   and fresh uptime on `/healthz`. The completed isolation record supersedes the
+   original `ocx service restart` plan; do not restart, repoint or reconfigure the
+   user's working proxy.
+3. Query the scratch instance's `/api/provider-quotas` with its admin token — the meta-muse row must now
    carry `"observed": true`. This is the wire-level proof, checked before the UI so a
    blank screen can be attributed correctly.
 

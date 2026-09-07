@@ -76,6 +76,7 @@ config save, provider add/remove. There is no operator-initiated path. The
   `bun x tsc --noEmit`, `bun run lint:gui` only.
 - Push with `--no-verify`; branch `codex/260904-provider-quota-refresh`; target `dev`.
 - A GUI-mentioning PR requires a screenshot in the description (`enforce-target`).
-- The live proxy is the user's working service. Read it, restart it
-  only when a rebuild must be picked up, never repoint or reconfigure it.
+- Verification must use an isolated scratch instance. Do not restart, repoint or
+  reconfigure the user's working proxy. The completed isolation record supersedes
+  the original working-service restart plan.
 - `refresh=1` must never cause a passive provider to spend an inference turn.
