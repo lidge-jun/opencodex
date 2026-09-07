@@ -1539,8 +1539,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelDiscovery: {
       // Resolves against effectiveBaseUrl (registry baseUrl .../v1) to the same
       // canonical endpoint https://inference-api.nousresearch.com/v1/models.
+      // Nous returns a mixed paid/free catalog whose JSON can exceed 256 KiB;
+      // keep the provider-specific limit below the process-wide 4 MiB ceiling.
       path: "models",
-      maxResponseBytes: 262_144,
+      maxResponseBytes: 1_048_576,
       maxModels: 512,
     },
     note: "Nous Research subscription gateway. OAuth device login with your own Portal account; mixed paid + :free models discovered live (fallback seed 2026-08-10: tencent/hy3:free, poolside/laguna-s-2.1:free, stepfun/step-3.7-flash:free, poolside/laguna-xs-2.1:free).",
