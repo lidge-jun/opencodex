@@ -198,4 +198,74 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
     testHome = mkdtempSync(join(tmpdir(), "ocx-go-cli-parity-"));
     expectParity(args);
   });
+
+  // usage is Go-owned (ADR-0008 post-flip seam batch 1); the TS CLI still runs
+  // its own implementation, so the differential compares both against the same
+  // mocked /api/usage payload. The fixture server answers /healthz with the
+  // attested identity both runtimes' live-proxy discovery probes before they
+  // trust runtime-port.json, and /api/usage with a canned payload.
+  function startUsageFixture(payload: string, status = 200): void {
+    testHome = mkdtempSync(join(tmpdir(), "ocx-go-usage-parity-"));
+    testServer = Bun.serve({ port: 0, fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === "/healthz") {
+        const challenge = request.headers.get("x-opencodex-attestation-challenge") ?? "";
+        const headers = challenge ? { "x-opencodex-attestation-proof": createLocalAttestationProof(secret, challenge, process.pid, testServer!.port) } : {};
+        return Response.json({ status: "ok", service: "opencodex", version: "2.42.0", uptime: 1, pid: process.pid, port: testServer!.port }, { headers });
+      }
+      return new Response(payload, { status, headers: { "content-type": "application/json" } });
+    }});
+    writeFileSync(join(testHome, "runtime-port.json"), JSON.stringify({ pid: process.pid, port: testServer.port, hostname: "127.0.0.1", attestationSecret: secret }));
+  }
+  const usagePayload = JSON.stringify({
+    range: "today",
+    surface: "all",
+    since: 1756000000000,
+    summary: { requests: 1447, totalTokens: 178521375, inputTokens: 4489102, outputTokens: 1283441, cachedInputTokens: 172748832, estimatedCostUsd: 12.3456, unpricedRequests: 0, unmeteredRequests: 0 },
+    providers: [{ provider: "xai", requests: 1447, totalTokens: 178521375, estimatedCostUsd: 12.3456 }],
+    models: [{ provider: "xai", model: "grok-4.6", requests: 1447, totalTokens: 178521375, estimatedCostUsd: 12.3456 }],
+    days: [{ date: "2026-08-22", requests: 1447, totalTokens: 178521375, estimatedCostUsd: 12.3456 }],
+    accounts: [],
+  });
+  test.each([
+    { args: ["usage"] },
+    { args: ["usage", "--json"] },
+    { args: ["usage", "--range", "7d"] },
+    { args: ["usage", "--provider", "xai", "--json"] },
+    { args: ["observe", "usage", "--json"] },
+  ])("diffs Go-owned usage output and exit code for $args", async ({ args }) => {
+    startUsageFixture(usagePayload);
+    // spawnSync blocks Bun's event loop, which starves the fixture server the
+    // same way the #43 drill hit; live-fixture rows drive both CLIs async.
+    const ts = await runTsAsync(args);
+    const go = await runGoAsync(args);
+    expect(go).toEqual(ts);
+    expect(ts).toMatchObject({ code: 0, stderr: "" });
+  });
+  test.each([
+    { args: ["usage", "--range", "nope"] },
+    { args: ["usage", "--surface", "beard"] },
+    { args: ["usage", "--range"] },
+    { args: ["usage", "extra"] },
+  ])("diffs usage argument validation for $args", ({ args }) => {
+    testHome = mkdtempSync(join(tmpdir(), "ocx-go-usage-parity-"));
+    expect(expectParity(args)).toMatchObject({ code: 2 });
+  });
+  test("diffs usage against a non-JSON error body and its exit code", async () => {
+    startUsageFixture("nope", 500);
+    const ts = await runTsAsync(["usage"]);
+    const go = await runGoAsync(["usage"]);
+    expect(go).toEqual(ts);
+    expect(ts).toMatchObject({ code: 1 });
+  });
+  test("diffs usage help in both spellings", () => {
+    testHome = mkdtempSync(join(tmpdir(), "ocx-go-usage-parity-"));
+    expect(expectParity(["help", "usage"]));
+    expect(expectParity(["usage", "--help"]));
+  });
+  test("diffs usage when no proxy is running", () => {
+    testHome = mkdtempSync(join(tmpdir(), "ocx-go-usage-parity-"));
+    expect(expectParity(["usage"])).toMatchObject({ code: 1 });
+    expect(expectParity(["observe", "usage"])).toMatchObject({ code: 1 });
+  });
 });

@@ -84,7 +84,9 @@ var Commands = []Command{
 	{Name: "inspect", Usage: "ocx inspect <sub>", Summary: "Inspect effective state.", Owner: TypeScriptOwned},
 	{Name: "route", Usage: "ocx route <sub>", Summary: "Manage routing.", Owner: TypeScriptOwned},
 	{Name: "logs", Usage: "ocx logs [filters]", Summary: "Read logs.", Owner: TypeScriptOwned},
-	{Name: "usage", Usage: "ocx usage", Summary: "Report usage.", Owner: TypeScriptOwned},
+	// usage is Go-owned (the /api/usage read plus its renderer); observe keeps
+	// its other subcommands TypeScript-owned until each carries an oracle.
+	{Name: "usage", Usage: "ocx usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--json]", Summary: "Alias of ocx observe usage.", Owner: GoOwned},
 	{Name: "storage", Usage: "ocx storage <sub>", Summary: "Manage storage.", Owner: TypeScriptOwned},
 	{Name: "memory", Usage: "ocx memory [--json]", Summary: "Inspect memory.", Owner: TypeScriptOwned},
 	{Name: "api-key", Usage: "ocx api-key <sub>", Summary: "Manage API keys.", Owner: TypeScriptOwned},
@@ -149,6 +151,12 @@ func OwnershipFor(args []string) (Ownership, bool) {
 			return owner, true
 		}
 		return TypeScriptOwned, true
+	}
+	// observe keeps its TypeScript owner per subcommand: `usage` shares the Go
+	// usage implementation, everything else stays with the TS owner until each
+	// subcommand carries its own oracle.
+	if command.Name == "observe" && len(args) > 1 && args[1] == "usage" {
+		return GoOwned, true
 	}
 	return command.Owner, true
 }
@@ -267,6 +275,16 @@ func Run(args []string, deps Deps) int {
 		return runStart(args[1:], deps)
 	case "stop":
 		return runStop(args[1:], deps)
+	case "usage":
+		return runUsage(args[1:], deps)
+	case "observe":
+		// Only `observe usage` reaches Go (OwnershipFor already gated this);
+		// other observe subcommands stay TypeScript-owned and never dispatch here.
+		if len(args) > 1 && args[1] == "usage" {
+			return runUsage(args[2:], deps)
+		}
+		fmt.Fprintf(deps.Stderr, "Unimplemented Go-owned command: %s\n", args[0])
+		return ExitFailure
 	default:
 		// The ownership registry above and this switch must be reconciled by
 		// TestOwnershipMapMatchesDispatch; this is defensive for future edits.
@@ -316,6 +334,12 @@ func printSubcommandHelp(name string, deps Deps) int {
 		fmt.Fprint(deps.Stdout, "Usage: ocx ready [--json] [--wait [--timeout <seconds>]]\n\nCheck post-sync readiness. Exits 0 only when ready.\n\nExact unauthenticated GET /readyz returns HTTP 200 when ready, or 503 with Retry-After: 1 for pending or failed.\nIts sanitized HTTP identity is {service, version, uptime, pid, port, status}; /healthz is separate liveness, not readiness.\nDefault is a single identity-checked /readyz probe; old proxies without /readyz fail closed as unreachable.\n--wait polls until ready or timeout, but exits immediately on terminal failed (default 45s, max 300s).\n--timeout requires --wait and accepts a positive integer (1..300).\n--json emits {ready, status, pid, port}; status is one of ready|pending|failed|unreachable.\nInvalid or unknown arguments exit 64. Not-ready, pending, failed, timeout, and unreachable exit 1.\n")
 	case "models":
 		fmt.Fprint(deps.Stdout, modelsUsage+"\nCustom models:\n  "+modelAddUsage+"\n  "+modelRemoveUsage+"\n  Usage: ocx models list-custom [--json]\n\nRuntime subcommands (live, edit, enable, disable, provider, selected, preset, new-policy, new-arrivals, context, shadow) retain the TypeScript management API owner during the incremental takeover.\n")
+	case "usage":
+		for _, command := range Commands {
+			if command.Name == "usage" {
+				fmt.Fprintf(deps.Stdout, "Usage: %s\n\n%s\n", command.Usage, command.Summary)
+			}
+		}
 	case "config":
 		fmt.Fprint(deps.Stdout, configHelp)
 	default:
