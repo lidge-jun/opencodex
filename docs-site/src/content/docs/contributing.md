@@ -42,6 +42,12 @@ bun run prepare:package           # refresh package launchers/assets
 `origin/dev`, then local `dev`. It reports that ref and the exact `git merge-base HEAD <ref>`
 commit, then passes the merge-base SHA to Bun.
 
+If a test lane times out, the runner prints the stdout and stderr it has already
+captured and exits with code 124. After a process exits, captured pipes have a
+one-second drain limit so a descendant holding a pipe open cannot stall the runner.
+Incomplete capture is reported explicitly and does not count as a successful run,
+even if the direct child exited with code 0.
+
 Tests are Bun tests in domain directories that mirror `src/`: `tests/server/`, `tests/providers/`,
 `tests/adapters/openai/`, `tests/cli/` and so on. `scripts/test-layout/layout.json` is the map
 and `tests/test-layout.test.ts` enforces it, so a new test goes into its domain directory and gets
