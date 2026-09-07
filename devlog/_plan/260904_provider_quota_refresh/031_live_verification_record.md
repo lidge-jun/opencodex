@@ -7,7 +7,7 @@ built GUI. Screenshots in `assets/`.
 
 Verification ran against an isolated scratch instance. The existing proxy used a
 separate checkout and was left untouched; its process identity and increasing
-uptime were confirmed afterwards. The scratch home was moved to Trash when
+uptime were confirmed afterward. The scratch home was moved to Trash when
 verification finished.
 
 ## Wire evidence
