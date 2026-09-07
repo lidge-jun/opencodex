@@ -457,10 +457,14 @@ What does carry the token into a Codex process:
 
 - the shim installed by `ocx codex-shim install` (reads the token file at launch; the supported path
   for Codex started from shells, Desktop, cron, or another service);
-- exporting `OPENCODEX_API_AUTH_TOKEN` yourself in the process that starts Codex — a shell profile,
-  the cron line, or an `Environment=`/`EnvironmentFile=` on the systemd unit that launches
-  **Codex** (not the proxy). Point it at the existing token file; do not copy the value into
-  `config.toml`.
+- a dedicated launcher that reads the existing owner-only token file, sets
+  `OPENCODEX_API_AUTH_TOKEN` for the Codex invocation, and immediately executes Codex. This avoids
+  leaving the token in the parent shell or exposing it to later unrelated commands; Codex's own
+  child processes may still inherit it.
+
+Do not export this bearer token from a shell startup file or copy it into `config.toml`. The
+`service-api-token` file contains the raw token, not `NAME=value` assignments, so it cannot be used
+directly as a systemd `EnvironmentFile=`.
 
 What does not: an `EnvironmentFile=` or `OCX_API_TOKEN_FILE` on `opencodex-proxy.service`. Those
 configure the proxy process only and never flow into an independently launched `codex exec`.
@@ -469,7 +473,7 @@ A Codex upgrade that replaces the launcher removes the shim; the next ordinary `
 it (see above), but a `codex exec` that runs before that fails. `ocx doctor` reports this exact
 state under "Codex env_key launch readiness" (env_key configured, variable unset, shim missing or
 unhealthy, token file present) with the repair command, and never prints the token. Reading the token
-file directly from Codex is not something Codex supports, so there is no OpenCodex directive for it.
+file is not part of the injected `env_key` contract; the launching process must supply that variable.
 
 ### `ocx tray <install|start|stop|status|uninstall|remove> [--json] [--no-start]`
 
