@@ -225,6 +225,27 @@ describe("Anthropic vision executor", () => {
     expect(result).toEqual({ text: "first second" });
   });
 
+  test("an unterminated frame cannot buffer the stream without bound", async () => {
+    // A sidecar that never emits a frame separator: without a cap the parser accumulates the
+    // whole response in memory before it can fold anything.
+    let produced = 0;
+    let cancelled = false;
+    const chunk = new TextEncoder().encode(`data: {"filler":"${"x".repeat(64 * 1024)}"}`);
+    const body = new ReadableStream<Uint8Array>({
+      pull(c) {
+        if (produced > 8 * 1024 * 1024) { c.close(); return; }
+        produced += chunk.byteLength;
+        c.enqueue(chunk);
+      },
+      cancel() { cancelled = true; },
+    });
+    const out = await parseAnthropicVisionSSE(new Response(body, { status: 200 }));
+    expect(cancelled).toBe(true);
+    // The cap stops the read long before the producer would have finished on its own.
+    expect(produced).toBeLessThan(1024 * 1024);
+    expect(out.text).toBe("");
+  });
+
   test("malformed and terminal-error streams degrade to explicit errors", async () => {
     const malformed = await parseAnthropicVisionSSE(sseResponse(["{not-json", { type: "message_stop" }]));
     expect(malformed.text).toBe("");
