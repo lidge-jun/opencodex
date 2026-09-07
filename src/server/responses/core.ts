@@ -15,6 +15,7 @@ import { nativeContextLimits } from "../../codex/catalog";
 import { describeUpstreamConnectFailure } from "./upstream-error";
 import type { CodexWsQuotaObserver } from "./codex-ws-metadata";
 import { applyAccountQuotaFromUpstreamHeaders as applyCapturedCodexQuota } from "../../codex/quota";
+import { isCodexAccountGenerationLive } from "../../codex/account-store";
 import { isCodexWsQuotaObservedResponse } from "./ws-upstream";
 import {
   multiAgentGuidanceEnabled,
@@ -1004,8 +1005,12 @@ export function usesCodexForwardPoolAuth(
 function codexWsQuotaObserver(authCtx: CodexAuthContext, provider: OcxProviderConfig): CodexWsQuotaObserver | undefined {
   if (!isCanonicalOpenAiForwardProvider(provider) || !usesCodexForwardPoolAuth(authCtx, provider)) return undefined;
   const { accountId, writerGeneration } = authCtx;
+  const credentialGeneration = authCtx.kind === "pool" ? authCtx.generation : undefined;
   const mainWriter = authCtx.kind === "main-pool" ? authCtx.mainQuotaWriter : undefined;
-  return headers => applyCapturedCodexQuota(accountId, headers, writerGeneration, mainWriter);
+  return headers => {
+    if (credentialGeneration !== undefined && !isCodexAccountGenerationLive(accountId, credentialGeneration)) return;
+    applyCapturedCodexQuota(accountId, headers, writerGeneration, mainWriter);
+  };
 }
 
 export function preAuthUpstreamHostCircuitKey(

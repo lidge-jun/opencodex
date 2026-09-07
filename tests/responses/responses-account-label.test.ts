@@ -190,6 +190,65 @@ describe("Responses account usage attribution", () => {
     }
   });
 
+  test("late WS quota from a replaced pool credential cannot repopulate cleared state", async () => {
+    const originalWebSocket = globalThis.WebSocket;
+    let releaseFinalQuota!: () => void;
+    const finalQuotaAllowed = new Promise<void>(resolve => { releaseFinalQuota = resolve; });
+    try {
+      await withPoolHome(async () => {
+        savePoolCredential("pool-ws-replaced");
+        class MetadataSocket {
+          listeners = new Map<string, Array<(event: unknown) => void>>();
+          constructor() { queueMicrotask(() => this.emit("open", {})); }
+          addEventListener(type: string, listener: (event: unknown) => void) {
+            this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
+          }
+          removeEventListener(type: string, listener: (event: unknown) => void) {
+            this.listeners.set(type, (this.listeners.get(type) ?? []).filter(value => value !== listener));
+          }
+          emit(type: string, event: unknown) {
+            for (const listener of this.listeners.get(type) ?? []) listener(event);
+          }
+          send() {
+            const payload = (value: unknown) => this.emit("message", { data: JSON.stringify(value) });
+            queueMicrotask(() => {
+              payload({ type: "codex.rate_limits", rate_limits: {
+                primary: { used_percent: 10, window_minutes: 10080 },
+              } });
+              payload({ type: "response.created", response: { id: "quota-response" } });
+              void finalQuotaAllowed.then(() => {
+                payload({ type: "codex.rate_limits", rate_limits: {
+                  primary: { used_percent: 100, window_minutes: 10080 },
+                } });
+                payload({ type: "response.completed", response: { id: "quota-response", status: "completed", output: [] } });
+              });
+            });
+          }
+          close() { this.emit("close", {}); }
+        }
+        globalThis.WebSocket = MetadataSocket as unknown as typeof WebSocket;
+        globalThis.fetch = (async () => { throw new Error("unexpected HTTP request"); }) as typeof fetch;
+        const response = await handleResponses(new Request("http://localhost/v1/responses", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: "gpt-5.5", input: "hello", stream: true }),
+        }), poolConfig(["pool-ws-replaced"]), { model: "", provider: "" }, {
+          codexWsRuntimeIdentity: "1.4.0",
+        });
+        expect(getAccountQuota("pool-ws-replaced")?.weeklyPercent).toBe(10);
+
+        savePoolCredential("pool-ws-replaced");
+        clearAccountQuota("pool-ws-replaced");
+        releaseFinalQuota();
+        await response.text();
+
+        expect(getAccountQuota("pool-ws-replaced")).toBeNull();
+      });
+    } finally {
+      releaseFinalQuota();
+      globalThis.WebSocket = originalWebSocket;
+    }
+  });
+
   test("main-pool and legacy added accounts carry their effective labels", async () => {
     await withPoolHome(async home => {
       writeFileSync(join(home, "auth.json"), JSON.stringify({
