@@ -11,6 +11,7 @@ import {
   LOOPBACK_API_KEY_PLACEHOLDER,
   SCHEMA_REQUIRED_OUTPUT_BUDGET,
   buildClientConfig,
+  buildClientContribution,
   buildClientConfigText,
   isExportClientId,
   normalizeExportModels,
@@ -316,6 +317,7 @@ describe("Pi serializer (accept criterion 2)", () => {
     expect(provider.api).toBe("openai-completions");
     expect(provider.apiKey).toBe(LOOPBACK_API_KEY_PLACEHOLDER);
     expect(provider.compat?.sendSessionAffinityHeaders).toBe(true);
+    expect(buildClientContribution("pi", ctx()).fragments[0]!.value).toEqual(provider);
   });
 
   test("cost is omitted on every entry — zeros would assert routed models are free", () => {

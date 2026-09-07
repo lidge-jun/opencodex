@@ -37,18 +37,14 @@ function context(): ExportContext {
 }
 
 describe("Prime Agent client config", () => {
-  /**
-   * The load-bearing claim of this client: Prime Agent is the pi coding agent
-   * under a different brand, so it reads the SAME models.json contract rather
-   * than a lookalike. Locking the two documents together is what keeps that
-   * claim true — if a future Pi-only change diverges, this fails here instead
-   * of silently shipping Prime users a config their agent rejects.
-   */
-  test("generates byte-for-byte the document Pi generates", () => {
-    const prime = buildClientConfigText("prime", context());
-    const pi = buildClientConfigText("pi", context());
-    expect(prime.format).toBe("json");
-    expect(prime.text).toBe(pi.text);
+  test("shares Pi's model contract without opting Prime into session headers", () => {
+    const prime = buildClientConfig("prime", context()) as PiGeneratedConfig;
+    const pi = buildClientConfig("pi", context()) as PiGeneratedConfig;
+    expect(pi.providers[OPENCODE_PROVIDER_ID]!.compat).toEqual({ sendSessionAffinityHeaders: true });
+    delete pi.providers[OPENCODE_PROVIDER_ID]!.compat;
+    expect(prime).toEqual(pi);
+    expect(buildClientContribution("prime", context()).fragments[0]!.value)
+      .toEqual(prime.providers[OPENCODE_PROVIDER_ID]);
   });
 
   test("adds only providers.opencodex, wired to the loopback proxy", () => {
