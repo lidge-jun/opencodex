@@ -695,6 +695,7 @@ export interface PiProviderBlock {
   baseUrl: string;
   api: string;
   apiKey: string;
+  compat?: { sendSessionAffinityHeaders: boolean };
   models: PiModelEntry[];
 }
 
@@ -859,6 +860,7 @@ function buildPiClientConfig(ctx: ExportContext): PiGeneratedConfig {
         baseUrl: ctx.baseUrl,
         api: PI_API_DIALECT,
         apiKey: LOOPBACK_API_KEY_PLACEHOLDER,
+        compat: { sendSessionAffinityHeaders: true },
         models,
       },
     },

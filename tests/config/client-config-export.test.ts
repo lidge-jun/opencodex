@@ -315,6 +315,7 @@ describe("Pi serializer (accept criterion 2)", () => {
     expect(provider.baseUrl).toBe(BASE_URL);
     expect(provider.api).toBe("openai-completions");
     expect(provider.apiKey).toBe(LOOPBACK_API_KEY_PLACEHOLDER);
+    expect(provider.compat?.sendSessionAffinityHeaders).toBe(true);
   });
 
   test("cost is omitted on every entry — zeros would assert routed models are free", () => {
@@ -899,7 +900,7 @@ describe("EXPORT_CLIENTS registry", () => {
 `);
   });
 
-  test("pi bytes are unchanged, to the last newline", () => {
+  test("pi bytes include session affinity, to the last newline", () => {
     const built = buildClientConfigText("pi", ctx({ config: cfg() }));
     expect(built.format).toBe("json");
     expect(built.text).toBe(`{
@@ -908,6 +909,9 @@ describe("EXPORT_CLIENTS registry", () => {
       "baseUrl": "http://127.0.0.1:10100/v1",
       "api": "openai-completions",
       "apiKey": "opencodex-loopback",
+      "compat": {
+        "sendSessionAffinityHeaders": true
+      },
       "models": [
         {
           "id": "anthropic/claude-opus-5",

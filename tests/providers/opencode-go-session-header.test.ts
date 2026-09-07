@@ -3,6 +3,7 @@ import { providerConfigSeed } from "../../src/providers/derive";
 import { resolveOpenCodeGoTransport } from "../../src/providers/opencode-go-transport";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
 import { handleResponses } from "../../src/server/responses/core";
+import { handleChatCompletions } from "../../src/server/chat-completions";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 
 const MUSE_MODEL = "muse-spark-1.3-contributor";
@@ -52,6 +53,8 @@ async function captureRequest(input: {
   model?: string;
   child?: string;
   provider?: OcxProviderConfig;
+  nativeChat?: boolean;
+  headers?: Record<string, string>;
 } = {}): Promise<{ url: string; headers: Headers }> {
   const providerName = input.providerName ?? "opencode-go";
   const model = input.model ?? MUSE_MODEL;
@@ -65,7 +68,15 @@ async function captureRequest(input: {
   const config = {
     providers: { [providerName]: input.provider ?? opencodeGo() },
   } as unknown as OcxConfig;
-  const response = await handleResponses(
+  const response = input.nativeChat ? await handleChatCompletions(
+    new Request("http://localhost/v1/chat/completions", {
+      method: "POST",
+      headers: input.headers ?? codexHeaders(input.child),
+      body: JSON.stringify({ model: `${providerName}/${model}`, messages: [{ role: "user", content: "ping" }], stream: false }),
+    }),
+    config,
+    { model: "", provider: "" },
+  ) : await handleResponses(
     new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: codexHeaders(input.child),
@@ -77,6 +88,7 @@ async function captureRequest(input: {
   );
 
   expect(response.status).toBe(200);
+  await response.text();
   expect(requests).toHaveLength(1);
   return requests[0]!;
 }
@@ -84,6 +96,44 @@ async function captureRequest(input: {
 describe("OpenCode Go session affinity (#3344)", () => {
   const originalFetch = globalThis.fetch;
   afterEach(() => { globalThis.fetch = originalFetch; });
+
+  test("native Chat ingress preserves stable Go affinity and separates conversations", async () => {
+    const provider = opencodeGo();
+    const input = { nativeChat: true, model: "omen-alpha", provider };
+    const first = await captureRequest(input);
+    const continued = await captureRequest(input);
+    const sibling = await captureRequest({ ...input, child: "child-thread-b" });
+    expect(first.url).toBe("https://opencode.ai/zen/go/v1/chat/completions");
+    expect(first.headers.get(SESSION_HEADER)).toMatch(/^ocx_[0-9a-f]{32}$/);
+    expect(continued.headers.get(SESSION_HEADER)).toBe(first.headers.get(SESSION_HEADER));
+    expect(sibling.headers.get(SESSION_HEADER)).not.toBe(first.headers.get(SESSION_HEADER));
+    expect(provider.headers?.[SESSION_HEADER]).toBeUndefined();
+  });
+
+  test("native Chat honors configured session headers on renamed Go providers", async () => {
+    const captured = await captureRequest({
+      nativeChat: true, model: "omen-alpha", providerName: "renamed-go",
+      provider: opencodeGo({ headers: { "X-OpenCode-Session": "operator-session" } }),
+    });
+    expect(captured.headers.get(SESSION_HEADER)).toBe("operator-session");
+  });
+
+  test("uses a Pi session header without Codex headers on native and bridged Chat", async () => {
+    const headers = { "content-type": "application/json", "x-opencode-session": "pi-conversation-a" };
+    const chat = await captureRequest({ nativeChat: true, model: "omen-alpha", headers });
+    const bridged = await captureRequest({ nativeChat: true, model: MUSE_MODEL, headers });
+    expect(chat.headers.get(SESSION_HEADER)).toMatch(/^ocx_[0-9a-f]{32}$/);
+    expect(chat.headers.get(SESSION_HEADER)).not.toContain("pi-conversation-a");
+    expect(bridged.headers.get(SESSION_HEADER)).toBe(chat.headers.get(SESSION_HEADER));
+  });
+
+  test("native Chat does not send Go affinity to an unrelated destination", async () => {
+    const captured = await captureRequest({
+      nativeChat: true, model: "omen-alpha", providerName: "custom-go",
+      provider: opencodeGo({ baseUrl: "https://opencode.ai.evil.test/zen/go/v1" }),
+    });
+    expect(captured.headers.has(SESSION_HEADER)).toBe(false);
+  });
 
   test("sends one stable opaque session header on Responses and Chat wires", async () => {
     const responses = await captureRequest({ model: MUSE_MODEL });

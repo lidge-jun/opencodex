@@ -379,6 +379,16 @@ free-experimentation model.
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
 | …and more | opencode zen, Vercel AI Gateway, Venice, NanoGPT, Synthetic, Qianfan, Alibaba, Parallel, ZenMux, LiteLLM |
 
+**OpenCode Go** requires a stable session identifier for routing. OpenCodex derives
+its Go session header from Codex thread/session headers, or from a client's
+`x-opencode-session` header when Codex headers are absent. This applies to direct
+Chat Completions requests and requests bridged to Responses. Clients must keep the
+identifier stable within a conversation and distinct across conversations; requests
+without a session identifier cannot receive automatic session affinity.
+Generated Pi provider configurations enable `compat.sendSessionAffinityHeaders`
+so Pi sends its per-session identity to the proxy. Existing manually managed Pi
+configurations can set this option on their `opencodex` provider as well.
+
 **OpenCode Zen** (`opencode-zen`) and the keyless **OpenCode Free** preset share
 `https://opencode.ai/zen/v1`. Free models on that gateway often hit a short-window burst
 limit around 15–20 requests/minute (community-measured; OpenCode does not publish RPM).

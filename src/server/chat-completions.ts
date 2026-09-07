@@ -25,6 +25,8 @@ import { estimateTokens } from "../lib/token-estimate";
 import { NoEligiblePolicyCandidateError, UnknownRoutingPolicyError, routeModel } from "../router";
 import { evidenceFromBody } from "../routing/request-evidence";
 import { resolveWireProtocolOverride } from "./adapter-resolve";
+import { resolveOpenCodeGoTransport } from "../providers/opencode-go-transport";
+import { normalizeLogConversationId, sessionLaneIdFromRequest } from "./request-log-conversation";
 import type { OcxConfig } from "../types";
 import { readJsonRequestBody } from "./request-decompress";
 import {
@@ -136,6 +138,8 @@ async function handleChatCompletionsWithBudget(
   let chatNativeRoute: ReturnType<typeof routeModel> | null = null;
   try {
     const route = routeModel(config, chatBody.model as string, evidenceFromBody(chatBody));
+    route.provider = resolveOpenCodeGoTransport(route.provider,
+      sessionLaneIdFromRequest(req.headers) ?? normalizeLogConversationId(req.headers.get("x-opencode-session")));
     // Settle the wire once so every branch below reads the adapter this model will
     // actually use, not the provider-wide default (#404).
     route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, "chat");
@@ -237,6 +241,9 @@ async function handleChatCompletionsWithBudget(
     return chatCompletionsErrorResponse(400, CODEX_RESERVE_HELPER_UNSUPPORTED_MESSAGE, "invalid_request_error");
   }
   const headers = new Headers({ "content-type": "application/json" });
+  // Internal bridge metadata; the Go resolver scopes and hashes it before upstream use.
+  const openCodeSession = req.headers.get("x-opencode-session");
+  if (openCodeSession) headers.set("x-opencode-session", openCodeSession);
   for (const name of FORWARD_HEADERS) {
     if (name === "authorization" && !directRoute) continue;
     const value = req.headers.get(name);

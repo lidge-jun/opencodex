@@ -2304,7 +2304,8 @@ async function applyFinalRouteRequestNormalization(args: {
 
   // Settle the wire once so logging, fast-mode, auth, and sidecars read the adapter
   // this request will actually use (#404).
-  route.provider = resolveOpenCodeGoTransport(route.provider, sessionLaneIdFromRequest(req.headers));
+  route.provider = resolveOpenCodeGoTransport(route.provider,
+    sessionLaneIdFromRequest(req.headers) ?? normalizeLogConversationId(req.headers.get("x-opencode-session")));
   route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire);
   if (preserveAnthropicResponseModel) parsed._responseModelId = responseModelId;
   logCtx.model = route.modelId;
