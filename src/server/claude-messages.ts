@@ -36,7 +36,7 @@ import { resolveWireProtocolOverride } from "./adapter-resolve";
 import type { OcxConfig } from "../types";
 import { readJsonRequestBody } from "./request-decompress";
 import { addFinalRequestLog, httpStatusForRequestLogTerminal, recordFirstOutput, type RequestLogContext, type RequestLogEntry } from "./request-log";
-import { conversationIdFromClaudeMetadata, sessionLaneIdFromRequest } from "./request-log-conversation";
+import { conversationIdFromClaudeMetadata, normalizeLogConversationId, sessionLaneIdFromRequest } from "./request-log-conversation";
 import { responseWithDeferredRequestLog } from "./relay";
 import { handleResponses } from "./responses";
 import {
@@ -861,8 +861,13 @@ async function handleClaudeMessagesWithBudget(
     if (session) headers.set("x-opencode-session", session);
   }
   const hasExplicitGoSession = opencodeGoRoute
-    && (sessionLaneIdFromRequest(headers) !== undefined || headers.has("x-opencode-session"));
-  if ((nativeRoute || opencodeGoRoute) && !hasExplicitGoSession) {
+    && (sessionLaneIdFromRequest(headers) !== undefined
+      || normalizeLogConversationId(headers.get("x-opencode-session")) !== undefined);
+  const synthesizeGoSession = opencodeGoRoute && !hasExplicitGoSession
+    && isRec(anthropicBody)
+    && conversationIdFromClaudeMetadata(isRec(anthropicBody.metadata) ? anthropicBody.metadata : undefined) !== undefined;
+  // Go can also use the Responses adapter; its eligibility gate must win on both wires.
+  if (opencodeGoRoute ? synthesizeGoSession : nativeRoute) {
     // ChatGPT-backend prompt-cache affinity rides the session_id HEADER (codex
     // clients always send their session uuid; devlog 090 follow-up: body-level
     // prompt_cache_key alone still yielded cached_tokens:0). Claude Code never sends
