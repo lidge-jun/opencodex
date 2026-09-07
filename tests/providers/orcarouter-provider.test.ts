@@ -77,8 +77,8 @@ describe("OrcaRouter dual authentication", () => {
     expect(deriveProviderPresets().find(row => row.id === "orcarouter-oauth")).toMatchObject({ auth: "oauth" });
     expect(formatProviderDisplayName("orcarouter", englishT)).toBe("OrcaRouter - API");
     expect(formatProviderDisplayName("orcarouter-oauth", englishT)).toBe("OrcaRouter - Auth");
-    expect(providerIconSrc("orcarouter")).toBe("/provider-icons/orcarouter.png");
-    expect(providerIconSrc("orcarouter-oauth")).toBe("/provider-icons/orcarouter.png");
+    expect(providerIconSrc("orcarouter")).toBe("/provider-icons/orcarouter.svg");
+    expect(providerIconSrc("orcarouter-oauth")).toBe("/provider-icons/orcarouter.svg");
   });
 
   test("discovers the live chat catalog with bounded declarative filtering", () => {
