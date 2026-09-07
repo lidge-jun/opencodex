@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter } from "../../../src/adapters/openai-chat";
+import { createResponsesPassthroughAdapter } from "../../../src/adapters/openai-responses";
 import { PROVIDER_REGISTRY } from "../../../src/providers/registry";
 import { routeModel } from "../../../src/router";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "../../../src/adapters/tool-catalog-nudge";
@@ -243,3 +244,47 @@ describe("K3 Codex compatibility benchmark (Phase 1)", () => {
     });
   });
 });
+  describe("Moonshot Responses API endpoint (China .cn)", () => {
+    const MOONSHOT_CN_PROVIDER: OcxProviderConfig = {
+      adapter: "openai-responses",
+      baseUrl: "https://api.moonshot.cn/v1",
+      apiKey: "sk-moonshot-test",
+      authMode: "key",
+      statelessResponses: true,
+      preserveResponsesReasoningContent: true,
+    };
+
+    test("routes to https://api.moonshot.cn/v1/responses with Bearer token", () => {
+      const adapter = createResponsesPassthroughAdapter(MOONSHOT_CN_PROVIDER);
+      const req = adapter.buildRequest({
+        modelId: "kimi-k3",
+        context: { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+        stream: true,
+        options: {},
+        _rawBody: {
+          model: "kimi-k3",
+          input: [{ role: "user", content: [{ type: "input_text", text: "hello" }] }],
+          previous_response_id: "resp_stale_123",
+        },
+      }, { translatorBudget: { observeExternallyCapped: () => () => {} } as never });
+
+      expect(req.url).toBe("https://api.moonshot.cn/v1/responses");
+      expect(req.headers["Authorization"]).toBe("Bearer sk-moonshot-test");
+      expect(req.headers["Content-Type"]).toBe("application/json");
+
+      const body = JSON.parse(req.body) as Record<string, unknown>;
+      expect(body.model).toBe("kimi-k3");
+      // statelessResponses drops previous_response_id and pins store: false
+      expect(body.previous_response_id).toBeUndefined();
+      expect(body.store).toBe(false);
+    });
+
+    test("registry moonshot provider uses openai-responses and has China .cn choice", () => {
+      const entry = PROVIDER_REGISTRY.find(p => p.id === "moonshot");
+      expect(entry).toBeDefined();
+      expect(entry!.adapter).toBe("openai-responses");
+      expect(entry!.statelessResponses).toBe(true);
+      expect(entry!.baseUrlChoices?.find(c => c.id === "china")?.baseUrl).toBe("https://api.moonshot.cn/v1");
+      expect(entry!.models).toContain("kimi-k3");
+    });
+  });
