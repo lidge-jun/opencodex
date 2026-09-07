@@ -87,4 +87,26 @@ describe("streaming citation marker filter (#3150)", () => {
     const filter = createCitationMarkerFilter();
     expect(filter.push(`visible now ${S}cite`)).toBe("visible now ");
   });
+
+  test("an unterminated span past the bound is released instead of retained", () => {
+    // A backend that opens a span and never closes it must not make the filter accumulate
+    // the rest of the response, which every later delta would then re-scan.
+    const filter = createCitationMarkerFilter();
+    let out = filter.push(`kept ${S}cite`);
+    expect(out).toBe("kept ");
+    for (let i = 0; i < 5_000; i += 1) out += filter.push("x");
+
+    // Everything after the malformed START is emitted verbatim, so nothing is lost, and
+    // flush() has nothing left to release.
+    expect(out).toBe(`kept ${S}cite${"x".repeat(5_000)}`);
+    expect(filter.flush()).toBe("");
+  });
+
+  test("a later START still opens a valid span after a released malformed one", () => {
+    const filter = createCitationMarkerFilter();
+    let out = filter.push(`a${S}${"y".repeat(5_000)}`);
+    out += filter.push(`${S}cite${P}turn1view0${E} tail`);
+    expect(out).toBe(`a${S}${"y".repeat(5_000)} tail`);
+    expect(filter.flush()).toBe("");
+  });
 });

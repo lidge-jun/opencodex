@@ -69,12 +69,24 @@ export interface CitationMarkerFilter {
 }
 
 /**
+ * Upper bound on the text withheld for one unterminated START.
+ *
+ * A real span is `cite` plus a few turn-scoped ids, so it is far under this. Without a
+ * bound, a backend that emits a START and never terminates it makes `held` grow for the
+ * whole response, and every later delta re-scans that accumulated prefix.
+ */
+const MAX_STREAMING_MARKER_SPAN_LENGTH = 4_096;
+
+/**
  * Streaming filter.
  *
  * A marker can straddle a delta boundary — `\uE200cite` in one chunk and the rest in the
  * next — so a stateless per-delta strip would emit the tail of a span it never recognized.
  * This holds back the text from an unterminated START and releases it once the END arrives
  * (removed) or the stream ends (verbatim, so nothing the model actually said is lost).
+ *
+ * A span that grows past `MAX_STREAMING_MARKER_SPAN_LENGTH` is malformed ordinary text, so
+ * it is released verbatim instead of withheld; a later START can still open a valid span.
  */
 export function createCitationMarkerFilter(): CitationMarkerFilter {
   // Text from an open START that has not been terminated yet.
@@ -87,6 +99,11 @@ export function createCitationMarkerFilter(): CitationMarkerFilter {
       if (start === -1) return stripCitationMarkers(combined);
       const endAfterStart = combined.indexOf(CITATION_MARKER_END, start + 1);
       if (endAfterStart !== -1) return stripCitationMarkers(combined);
+      // Over the bound: this is not a citation span we will ever close. Emit it verbatim
+      // so neither the retained text nor the per-delta rescan grows without limit.
+      if (combined.length - start > MAX_STREAMING_MARKER_SPAN_LENGTH) {
+        return stripCitationMarkers(combined.slice(0, start)) + combined.slice(start);
+      }
       // The trailing span is still open: emit everything before it, hold the rest.
       held = combined.slice(start);
       return stripCitationMarkers(combined.slice(0, start));
