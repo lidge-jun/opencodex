@@ -455,8 +455,7 @@ exports it into Codex's environment closes the gap.
 
 Use the maintained shim installed by `ocx codex-shim install`. It reads the owner-only token file
 at launch and supplies the variable to Codex; this is the supported path for Codex started from
-shells, Desktop, cron, or another service. Loading it in the shim does not export it back to the
-parent shell; Codex's own child processes may still inherit it.
+shells, Desktop, cron, or another service. Codex's own child processes may still inherit it.
 
 Do not export this bearer token from a shell startup file or copy it into `config.toml`. The
 `service-api-token` file contains the raw token, not `NAME=value` assignments, so it cannot be used
