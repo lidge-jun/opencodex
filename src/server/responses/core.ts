@@ -60,6 +60,10 @@ import {
   sameProviderContinuationOwner,
 } from "../../responses/provider-continuation";
 import {
+  rememberComboForLane,
+  recallComboForLane,
+} from "./combo-session-recall";
+import {
   comboRouteDecisionTrace,
   NoEligiblePolicyCandidateError,
   routeCompactionModel,
@@ -2788,6 +2792,11 @@ export async function handleComboResponses(
       (logCtx.attempts ??= []).push(attempt);
       attemptRetained = true;
       noteComboSuccess(comboId, combo, pick.target, pick.writerGeneration);
+      rememberComboForLane(
+        sessionLaneIdFromRequest(req.headers),
+        comboId,
+        pick.target.model,
+      );
       Object.assign(logCtx, childLog, {
         requestedModel,
         model: requestedModel,
@@ -3108,6 +3117,26 @@ async function handleResponsesInner(
         : {}),
       effort: comboEffortRow.effort,
     };
+  }
+  // A combo switch mid-session leaves Codex sending the bare native model of
+  // the new combo's target in the compaction request (#3886). Rewrite it to
+  // the remembered combo selector BEFORE comboIdFromRawBody reads model, so
+  // the combo dispatch and failover path engage. Only fires for compaction
+  // requests (compaction_trigger present in input) whose model is bare (no
+  // provider/ prefix) and exactly matches the combo target last served on
+  // this session lane.
+  if (!options.comboAttempt && body && typeof body === "object" && !Array.isArray(body)) {
+    const rawModel = (body as { model?: unknown }).model;
+    const rawInput = (body as { input?: unknown }).input;
+    const isCompactionTrigger = Array.isArray(rawInput)
+      && rawInput.some((item: unknown) =>
+        typeof item === "object" && item !== null && (item as { type?: string }).type === "compaction_trigger");
+    if (typeof rawModel === "string" && !rawModel.includes("/") && isCompactionTrigger) {
+      const recalledComboId = recallComboForLane(sessionLaneIdFromRequest(req.headers), rawModel);
+      if (recalledComboId) {
+        (body as Record<string, unknown>).model = `combo/${recalledComboId}`;
+      }
+    }
   }
   const comboId = !options.comboAttempt ? comboIdFromRawBody(body, config) : null;
   if (comboId && Object.hasOwn(config.combos ?? {}, comboId)) {

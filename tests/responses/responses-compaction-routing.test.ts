@@ -35,6 +35,7 @@ import { supportsNativeResponsesCompactEndpoint } from "../../src/providers/open
 import type { RequestLogContext } from "../../src/server/request-log";
 import { acquireNativeMainProfileDrain, tryAdmitTurn } from "../../src/server/lifecycle";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import { clearComboRecallForTests } from "../../src/server/responses/combo-session-recall";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const originalFetch = globalThis.fetch;
@@ -1690,6 +1691,278 @@ describe("compact alternate-account attempt (#913)", () => {
         authSpy.mockRestore();
       }
     });
+  });
+});
+
+describe("compaction combo recall after combo switch (#3891)", () => {
+  afterEach(() => clearComboRecallForTests());
+
+  function comboTestConfig(): OcxConfig {
+    return {
+      defaultProvider: "gw",
+      providers: {
+        gw: {
+          adapter: "openai-chat",
+          baseUrl: "https://gw-primary.example/v1",
+          authMode: "key",
+          apiKey: "key-gw",
+          models: ["gpt-5.6-terra"],
+        },
+        alt: {
+          adapter: "openai-chat",
+          baseUrl: "https://gw-alt.example/v1",
+          authMode: "key",
+          apiKey: "key-alt",
+          models: ["gpt-5.6-luna"],
+        },
+      },
+      combos: {
+        terra: { strategy: "failover", targets: [{ provider: "gw", model: "gpt-5.6-terra" }] },
+      },
+    } as unknown as OcxConfig;
+  }
+
+  function chatCompletionPayload(text: string): Record<string, unknown> {
+    return {
+      choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 10, completion_tokens: 5 },
+    };
+  }
+
+  // The routed compact turn dispatches combo children as SSE (stream is forced
+  // when route.combo is set), so streaming-capable mocks answer the chat wire.
+  function chatStreamResponse(text: string): Response {
+    return new Response([
+      `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: text }, finish_reason: null }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n`,
+      "data: [DONE]\n\n",
+    ].join(""), { headers: { "content-type": "text/event-stream" } });
+  }
+
+  test("bare native model after combo switch routes through the remembered combo", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+      calls.push({ url: String(url), body: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown> });
+      return jsonResponse(chatCompletionPayload("handoff summary"));
+    }) as typeof fetch;
+
+    const config = comboTestConfig();
+    const laneHeaders = { "session_id": "lane-combo-recall" };
+
+    // Step 1: an ordinary combo turn succeeds, populating the recall map.
+    const comboRes = await handleResponses(
+      compactionRequest({ model: "combo/terra", stream: false, input: "hello" }, undefined, laneHeaders),
+      config,
+      { model: "", provider: "" },
+    );
+    expect(comboRes.status).toBe(200);
+
+    // Step 2: compaction arrives with the bare native model on the same lane.
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const res = await handleResponses(
+      compactionRequest(baseCompactionBody({ model: "gpt-5.6-terra" }), undefined, laneHeaders),
+      config,
+      logCtx,
+    );
+
+    expect(res.status).toBe(200);
+    expect(logCtx.provider).toBe("combo");
+    expect(logCtx.comboId).toBe("terra");
+    expect(logCtx.requestedModel).toBe("combo/terra");
+    const json = await res.json() as { output?: Array<{ type?: string }> };
+    expect((json.output ?? []).filter(item => item.type === "compaction").length).toBe(1);
+  });
+
+  test("v1 /responses/compact takes the same recall path", async () => {
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const request = new Request(input, init);
+      const body = await request.json() as { stream?: boolean };
+      return body.stream === true
+        ? chatStreamResponse("handoff summary")
+        : jsonResponse(chatCompletionPayload("handoff summary"));
+    }) as typeof fetch;
+
+    const config = comboTestConfig();
+    const laneHeaders = { "session_id": "lane-compact-recall" };
+
+    const comboRes = await handleResponses(
+      compactionRequest({ model: "combo/terra", stream: false, input: "hello" }, undefined, laneHeaders),
+      config,
+      { model: "", provider: "" },
+    );
+    expect(comboRes.status).toBe(200);
+
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const compactRes = await handleResponsesCompact(
+      compactionRequest(baseCompactionBody({ model: "gpt-5.6-terra" }), undefined, laneHeaders),
+      config,
+      logCtx,
+    );
+
+    expect(compactRes.status).toBe(200);
+    expect(logCtx.provider).toBe("combo");
+  });
+
+  test("a different lane does not borrow the remembered combo", async () => {
+    globalThis.fetch = (async () => jsonResponse(chatCompletionPayload("handoff summary"))) as typeof fetch;
+
+    const config = comboTestConfig();
+
+    // Populate recall on lane A.
+    await handleResponses(
+      compactionRequest({ model: "combo/terra", stream: false, input: "hello" }, undefined, { "session_id": "lane-A" }),
+      config,
+      { model: "", provider: "" },
+    );
+
+    // Compaction on lane B: the bare model should NOT be rewritten to the combo.
+    // It falls through to the compaction default-provider fallback (#2901) and lands on gw.
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const res = await handleResponses(
+      compactionRequest(baseCompactionBody({ model: "gpt-5.6-terra" }), undefined, { "session_id": "lane-B" }),
+      config,
+      logCtx,
+    );
+
+    expect(res.status).toBe(200);
+    expect(logCtx.provider).toBe("gw");
+    expect(logCtx.comboId).toBeUndefined();
+  });
+
+  test("a non-matching bare model is not rewritten", async () => {
+    globalThis.fetch = (async () => jsonResponse(chatCompletionPayload("handoff summary"))) as typeof fetch;
+
+    const config = comboTestConfig();
+    const laneHeaders = { "session_id": "lane-no-match" };
+
+    await handleResponses(
+      compactionRequest({ model: "combo/terra", stream: false, input: "hello" }, undefined, laneHeaders),
+      config,
+      { model: "", provider: "" },
+    );
+
+    // Bare model "gpt-5.6-luna" does not match terra combo target "gpt-5.6-terra".
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const res = await handleResponses(
+      compactionRequest(baseCompactionBody({ model: "gpt-5.6-luna" }), undefined, laneHeaders),
+      config,
+      logCtx,
+    );
+
+    expect(res.status).toBe(200);
+    expect(logCtx.provider).toBe("gw");
+    expect(logCtx.comboId).toBeUndefined();
+  });
+
+  test("recall routes before the bare model can 404 without an openai provider", async () => {
+    // Maintainer review: with no canonical openai row, the bare model dies in
+    // routeCompactionModel before any combo logic unless the recall rewrite
+    // also reaches the routed identity, not only the raw body model.
+    const config = {
+      defaultProvider: "openai",
+      providers: {
+        gw: {
+          adapter: "openai-chat",
+          baseUrl: "https://gw-primary.example/v1",
+          authMode: "key",
+          apiKey: "key-gw",
+          models: ["gpt-5.6-terra"],
+        },
+      },
+      combos: {
+        terra: { strategy: "failover", targets: [{ provider: "gw", model: "gpt-5.6-terra" }] },
+      },
+    } as unknown as OcxConfig;
+    const bodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const request = new Request(input, init);
+      const body = await request.json() as Record<string, unknown>;
+      bodies.push(body);
+      return body.stream === true
+        ? chatStreamResponse("handoff summary")
+        : jsonResponse(chatCompletionPayload("handoff summary"));
+    }) as typeof fetch;
+
+    const laneHeaders = { "session_id": "lane-recall-404" };
+    const comboRes = await handleResponses(
+      compactionRequest({ model: "combo/terra", stream: false, input: "hello" }, undefined, laneHeaders),
+      config,
+      { model: "", provider: "" },
+    );
+    expect(comboRes.status).toBe(200);
+
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const res = await handleResponsesCompact(
+      compactionRequest(baseCompactionBody({ model: "gpt-5.6-terra" }), undefined, laneHeaders),
+      config,
+      logCtx,
+    );
+
+    expect(res.status).toBe(200);
+    expect(logCtx.provider).toBe("combo");
+    expect(logCtx.comboId).toBe("terra");
+    // The internal combo turn goes out streaming through the combo dispatch.
+    expect(bodies[1]!.stream).toBe(true);
+    await res.text();
+  });
+
+  test("recall keeps a native-compact target on the combo /responses path", async () => {
+    // CodeRabbit review: the recalled target itself can live on a provider
+    // that supports the native /responses/compact endpoint. Without the
+    // routed identity sync, the bare model would go straight to the native
+    // compact endpoint and bypass combo dispatch entirely.
+    const config = {
+      defaultProvider: "openai-apikey",
+      providers: {
+        "openai-apikey": {
+          adapter: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          authMode: "key",
+          apiKey: "test-key",
+        },
+      },
+      combos: {
+        terra: { strategy: "failover", targets: [{ provider: "openai-apikey", model: "gpt-5.6-terra" }] },
+      },
+    } as unknown as OcxConfig;
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const request = new Request(input, init);
+      if (request.url.endsWith("/responses/compact")) {
+        return Response.json({ detail: "Not Found" }, { status: 404 });
+      }
+      calls.push({ url: request.url, body: await request.json() as Record<string, unknown> });
+      return calls.at(-1)!.body.stream === true
+        ? sseResponse([{ type: "response.completed", response: completedPayload("handoff summary") }])
+        : jsonResponse(completedPayload("handoff summary"));
+    }) as typeof fetch;
+
+    const laneHeaders = { "session_id": "lane-recall-native" };
+    const comboRes = await handleResponses(
+      compactionRequest({ model: "combo/terra", stream: false, input: "hello" }, undefined, laneHeaders),
+      config,
+      { model: "", provider: "" },
+    );
+    expect(comboRes.status).toBe(200);
+
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const res = await handleResponsesCompact(
+      compactionRequest(baseCompactionBody({ model: "gpt-5.6-terra" }), undefined, laneHeaders),
+      config,
+      logCtx,
+    );
+
+    expect(res.status).toBe(200);
+    expect(logCtx.provider).toBe("combo");
+    expect(logCtx.comboId).toBe("terra");
+    // Both upstream calls take the plain /responses path; the native compact
+    // endpoint (which this provider supports) must never be hit.
+    expect(calls.map(call => call.url)).toEqual([
+      "https://api.openai.com/v1/responses",
+      "https://api.openai.com/v1/responses",
+    ]);
+    expect(calls[1]!.body.stream).toBe(true);
+    await res.text();
   });
 });
 
