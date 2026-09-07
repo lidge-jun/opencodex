@@ -12,6 +12,29 @@ afterEach(() => {
 });
 
 describe("codex warmup", () => {
+  test("regression: failed streams never publish completion metadata", async () => {
+    let publications = 0;
+    globalThis.fetch = (async () => sseResponse('data: {"type":"response.failed"}\n\n')) as typeof fetch;
+    await expect(warmCodexAccount({ accessToken: "fixture", chatgptAccountId: "fixture",
+      onCompleted: () => { publications += 1; },
+    })).rejects.toMatchObject({ code: "stream_failed" });
+    expect(publications).toBe(0);
+  });
+
+  test("regression: metadata publication failure never retries completed inference", async () => {
+    let requests = 0;
+    let publications = 0;
+    globalThis.fetch = (async () => {
+      requests += 1;
+      return sseResponse('data: {"type":"response.completed"}\n\n');
+    }) as typeof fetch;
+    await expect(warmCodexAccount({ accessToken: "fixture", chatgptAccountId: "fixture",
+      onCompleted: () => { publications += 1; throw new Error("fixture metadata failure"); },
+    })).resolves.toBeUndefined();
+    expect(publications).toBe(1);
+    expect(requests).toBe(1);
+  });
+
   test("posts a minimal gpt-5.4-mini Responses stream request and accepts response.completed", async () => {
     let body: Record<string, unknown> | undefined;
     let auth: string | null = null;

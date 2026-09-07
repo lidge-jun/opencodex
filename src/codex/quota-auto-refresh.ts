@@ -51,6 +51,7 @@ export interface CodexQuotaAutoRefreshRunDeps {
 
 let inFlight: Promise<void> | null = null;
 
+/** Report upstream window availability separately from persisted spending intent. */
 export function codexQuotaAutoRefreshStatus(
   config: OcxConfig,
   accountId: string,
@@ -66,6 +67,7 @@ export function codexQuotaAutoRefreshStatus(
   };
 }
 
+/** Select retained, enabled boundaries newer than both durable and in-memory completions. */
 export function dueCodexQuotaAutoRefreshWindows(
   config: OcxConfig,
   accountId: string,
@@ -145,17 +147,20 @@ function rememberWindows(config: OcxConfig, accountId: string, quota: StoredAcco
   }
 }
 
+/** Load metadata recovery only when an opted-in account actually needs a probe. */
 async function refreshQuota(config: OcxConfig, accountId: string): Promise<void> {
   const { refreshCodexQuotaForActivation } = await import("./auth-api");
   await refreshCodexQuotaForActivation(config, accountId);
 }
 
+/** Keep billable main-account work behind the current pause, reauth and hard-lock policy. */
 function mainWarmupRestricted(config: OcxConfig): boolean {
   return isMainAccountHardLocked(config)
     || isCodexAccountPaused(config, MAIN_CODEX_ACCOUNT_ID)
     || isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
 }
 
+/** Warm the exact account and fence quota/reauth publication to the dispatched credential. */
 async function warmAccount(config: OcxConfig, accountId: string): Promise<void | false> {
   const writerGeneration = captureConfigGeneration();
   if (accountId !== MAIN_CODEX_ACCOUNT_ID) {
@@ -207,6 +212,7 @@ async function warmAccount(config: OcxConfig, accountId: string): Promise<void |
   }
 }
 
+/** Patch completion markers without replacing concurrent account-setting changes. */
 function persistCompleted(
   config: OcxConfig,
   accountId: string,
@@ -232,6 +238,7 @@ function persistCompleted(
   }
 }
 
+/** Retry failed marker persistence without sending another billable warmup. */
 function retryPendingMarkers(
   config: OcxConfig,
   persist: NonNullable<CodexQuotaAutoRefreshRunDeps["persistCompleted"]>,
@@ -247,6 +254,7 @@ function retryPendingMarkers(
   }
 }
 
+/** Coalesce sweeps, refresh stale metadata and activate due accounts with bounded concurrency. */
 export async function runCodexQuotaAutoRefresh(
   config: OcxConfig,
   now = Date.now(),
@@ -266,6 +274,7 @@ export async function runCodexQuotaAutoRefresh(
       MAIN_CODEX_ACCOUNT_ID,
       ...(config.codexAccounts ?? []).filter(isSelectableCodexPoolAccount).map(account => account.id),
     ];
+    /** Recheck spending authorization after asynchronous metadata work. */
     const eligible = (accountId: string) => {
       const setting = config.codexQuotaAutoRefresh?.[accountId];
       const provider = config.providers[OPENAI_CODEX_PROVIDER_ID];
@@ -314,6 +323,7 @@ export async function runCodexQuotaAutoRefresh(
   return inFlight;
 }
 
+/** Attach activation to the shared minute sweep and return its owner-scoped cleanup. */
 export function registerCodexQuotaAutoRefreshWorker(config: OcxConfig): () => void {
   return registerStateSweepAfterTick({
     name: "codex-quota-auto-refresh",
@@ -321,6 +331,7 @@ export function registerCodexQuotaAutoRefreshWorker(config: OcxConfig): () => vo
   });
 }
 
+/** Clear scheduling and single-flight state between isolated test cases. */
 export function resetCodexQuotaAutoRefreshForTests(): void {
   inFlight = null;
   resetCodexQuotaAutoRefreshStateForTests();

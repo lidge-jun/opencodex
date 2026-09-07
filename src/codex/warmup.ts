@@ -215,6 +215,7 @@ async function drainWarmupSse(body: ReadableStream<Uint8Array>, signal: AbortSig
   }
 }
 
+/** Bound one inference attempt and publish metadata only after a successful terminal event. */
 async function tryWarmup(options: CodexWarmupOptions, model: string): Promise<void> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > MAX_TIMEOUT_MS) {

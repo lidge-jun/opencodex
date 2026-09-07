@@ -60,6 +60,10 @@ account before the request is forwarded upstream. The rule is intentionally spli
   This is separate from reset-window routing: routing chooses an account for incoming work, while
   activation sends one request to a specific opted-in account only after its own reset is due.
 
+**Downgrade note:** Before running an older version, remove only `nextFiveHourResetAt` and
+`nextWeeklyResetAt` from automatic activation settings. Older strict readers reject these new
+fields and can disable the entire activation settings block.
+
 ## Sub-agent model selection
 
 On a fresh install, `subagentModels` features `gpt-6-astra`, the GPT-5.6 Sol/Terra/Luna trio, and

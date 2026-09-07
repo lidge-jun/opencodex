@@ -7,6 +7,7 @@ export const retryAfterByAccount = new Map<string, number>();
 export const scheduledByAccount = new Map<string, CodexQuotaAutoRefreshWindows>();
 export const quotaRefreshAfterByAccount = new Map<string, number>();
 
+/** Drop every activation record when its account is removed. */
 export function forgetCodexQuotaAutoRefreshAccount(accountId: string): void {
   completedByAccount.delete(accountId);
   retryAfterByAccount.delete(accountId);
@@ -14,6 +15,7 @@ export function forgetCodexQuotaAutoRefreshAccount(accountId: string): void {
   quotaRefreshAfterByAccount.delete(accountId);
 }
 
+/** Clear the dependency-free activation bookkeeping for isolated tests. */
 export function resetCodexQuotaAutoRefreshStateForTests(): void {
   completedByAccount.clear();
   retryAfterByAccount.clear();
