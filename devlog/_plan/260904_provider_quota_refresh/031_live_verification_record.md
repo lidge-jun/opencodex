@@ -1,7 +1,7 @@
 # Live verification record — 2026-09-04
 
 Both defects were reproduced and then confirmed fixed against a running proxy serving the
-built GUI. Screenshots in `assets/`.
+built GUI. The observations below preserve that historical verification.
 
 ## Isolation
 
@@ -43,12 +43,13 @@ The refresh control was exercised, not merely rendered:
 - Accounts tab (pooled OAuth provider): the control appears beside
   `Add account` and reported `Quotas refreshed` after a real forced read.
 
-## Assets
+## Capture retention
 
-| File | Content |
-|---|---|
-| `010_meta_usage_quota.png` | Muse Code → Usage with both windows and the refresh control |
-| `020_usage_refresh_result.png` | the same tab after a click, showing the success status |
+The Accounts and Usage captures were subsequently removed from the current tree.
+Both came from a real operator profile; retaining either surface is unnecessary
+for the behavioral evidence above. This applies the same retention rule to both
+surfaces without claiming that the Usage captures were independently cleared of
+personal information. Git history is unchanged.
 
 ## CI (PR #3448, head 232afdd97)
 
