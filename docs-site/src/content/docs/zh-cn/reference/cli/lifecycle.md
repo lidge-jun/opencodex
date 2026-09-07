@@ -209,6 +209,12 @@ ocx codex-shim status
 ocx codex-shim uninstall
 ```
 
+:::note[Windows 令牌环境]
+新生成的 Windows CMD 和 PowerShell shim 会在执行后恢复调用方原有的 `OPENCODEX_API_AUTH_TOKEN` 状态。Codex 及其子进程仍可能继承令牌。
+
+更新 OpenCodex 后，如需让现有 Windows shim 采用此行为，请先运行 `ocx codex-shim uninstall`，再运行 `ocx codex-shim install` 重新安装。常规更新不会重写正常的 Windows shim。
+:::
+
 :::tip[Service vs Shim]
 将 `ocx service` 用于始终在线的后台代理（推荐）。将 `ocx codex-shim` 用于无需守护进程的轻量按需启动——代理只会在启动 `codex` 时运行。
 :::
