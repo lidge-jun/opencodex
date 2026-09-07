@@ -28,7 +28,6 @@ Shots to capture into `devlog/_plan/260904_provider_quota_refresh/assets/`:
 |------|---------|
 | `010_meta_usage_quota.png` | meta-muse → Usage tab with both windows and the observation age |
 | `020_usage_refresh_button.png` | the Usage rate-limits header with its refresh control |
-| `030_accounts_refresh_button.png` | the Accounts tab refresh control for an OAuth provider |
 | `040_refresh_result.png` | the post-click success status |
 
 Aside writes under `~/.aside/u/0/`; Codex copies the files into the repository. Every

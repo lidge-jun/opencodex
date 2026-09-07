@@ -5,16 +5,10 @@ built GUI. Screenshots in `assets/`.
 
 ## Isolation
 
-The user's own proxy runs on port 10100 from
-`/Users/jun/Developer/new/700_projects/opencodex` under launchd — a different checkout
-from this worktree, so restarting it would NOT have loaded this change, and repointing it
-is out of bounds. Verification therefore ran on a scratch instance:
-
-- `OPENCODEX_HOME` = a `mktemp -d` directory holding only `config.json` (three providers),
-  `auth.json`, and `provider-account-quota-cache.json` copied from the real home.
-- port 10399, started with `bun run src/cli/index.ts start --port 10399` from this worktree.
-- Port 10100 was confirmed untouched afterwards: same pid 73184, uptime still climbing.
-- The scratch home was moved to Trash when finished.
+Verification ran against an isolated scratch instance. The existing proxy used a
+separate checkout and was left untouched; its process identity and increasing
+uptime were confirmed afterwards. The scratch home was moved to Trash when
+verification finished.
 
 ## Wire evidence
 
@@ -46,7 +40,7 @@ The refresh control was exercised, not merely rendered:
 
 - Usage tab: clicking `Refresh quotas` produced `status: "Quotas refreshed"` and the age
   line re-derived from `5h ago` to `6h ago` — the read really happened.
-- Accounts tab (anthropic, three pooled accounts): the control appears beside
+- Accounts tab (pooled OAuth provider): the control appears beside
   `Add account` and reported `Quotas refreshed` after a real forced read.
 
 ## Assets
@@ -55,8 +49,6 @@ The refresh control was exercised, not merely rendered:
 |---|---|
 | `010_meta_usage_quota.png` | Muse Code → Usage with both windows and the refresh control |
 | `020_usage_refresh_result.png` | the same tab after a click, showing the success status |
-| `030_accounts_refresh_button.png` | Accounts tab control for a pooled OAuth provider |
-| `040_accounts_refresh_result.png` | Accounts tab after a click |
 
 ## CI (PR #3448, head 232afdd97)
 
