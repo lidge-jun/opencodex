@@ -1,8 +1,10 @@
 # 001 — Subagent opinions (independent, read-only, dev @ 664d80c76)
 
-Three reviewers were dispatched in parallel with the same packet (evidence pack in `assets/`,
-full source access, no edits, no suites, no proxy mutation). Model requested → model that
-answered (as self-reported in the REVIEWER line):
+Three reviewers were dispatched in parallel with the same temporary evidence packet and full
+source access (no edits, no suites, no proxy mutation). The packet was subsequently removed from
+the current tree. Filenames remain below only to preserve the reviewers' original reasoning.
+Model requested → model
+that answered (as self-reported in the REVIEWER line):
 
 | # | Requested | Answered as | Agent | Status |
 |---|---|---|---|---|
