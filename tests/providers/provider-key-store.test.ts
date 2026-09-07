@@ -156,6 +156,37 @@ describe("store / restore", () => {
     expect(probeProviderKeychain().available).toBe(false);
   });
 
+  test("restore refuses a reference to another provider's keychain account", () => {
+    const { store, factory } = fakeKeychain();
+    setProviderKeychainEntryFactoryForTests(factory);
+    const config = loadConfig();
+    config.providers.other = { adapter: "openai-chat", baseUrl: "https://other.example/v1", apiKey: POOL_SECRET };
+    expect(storeProviderKeyInKeychain(config, "other")).toEqual({ ok: true, moved: 1 });
+    expect(config.providers.other!.apiKey).toBe("keychain:other");
+
+    // Point "relay" at the account "other" owns. Restore would otherwise read that secret,
+    // write it into relay's config as plaintext, and delete the owner's keychain item.
+    config.providers.relay!.apiKey = "keychain:other";
+    const result = restoreProviderKeyFromKeychain(config, "relay");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.status).toBe(400);
+
+    expect(config.providers.relay!.apiKey).toBe("keychain:other");
+    expect(readFileSync(join(testDir, "config.json"), "utf8")).not.toContain(POOL_SECRET);
+    // The real owner's secret is still in the keychain and still resolves for that provider.
+    expect(store.size).toBe(1);
+    expect(resolveProviderApiKey(config.providers.other!.apiKey)).toBe(POOL_SECRET);
+  });
+
+  test("restore still accepts a provider's own active and pool accounts", () => {
+    const { factory } = fakeKeychain();
+    setProviderKeychainEntryFactoryForTests(factory);
+    const config = loadConfig();
+    config.providers.relay!.apiKeyPool = [{ id: "a1", key: SECRET }, { id: "b2", key: POOL_SECRET }];
+    expect(storeProviderKeyInKeychain(config, "relay")).toEqual({ ok: true, moved: 2 });
+    expect(restoreProviderKeyFromKeychain(config, "relay")).toEqual({ ok: true, restored: 2 });
+  });
+
   test("management route: GET reports store kind, POST store/restore round-trips", async () => {
     const { factory } = fakeKeychain();
     setProviderKeychainEntryFactoryForTests(factory);
@@ -192,4 +223,3 @@ describe("store / restore", () => {
     }
   });
 });
-
