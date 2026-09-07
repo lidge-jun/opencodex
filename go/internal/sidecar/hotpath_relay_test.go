@@ -2,7 +2,9 @@ package sidecar
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -518,5 +520,109 @@ func TestDirectRelayBodyBound(t *testing.T) {
 	}
 	if got := rec.Body.String(); !bytes.Contains([]byte(got), []byte("exceeded the safe body limit")) {
 		t.Fatalf("body = %s", got)
+	}
+}
+
+func TestRelayResponsesSSEPreservesCanonicalRawFrameBytes(t *testing.T) {
+	input := ": upstream keepalive\r\n\r\nevent: response.completed\r\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\r\n\r\n"
+	rec := httptest.NewRecorder()
+	if err := relayResponsesSSEWithFlush(rec, strings.NewReader(input), responseRepairPipeline{}); err != nil {
+		t.Fatal(err)
+	}
+	want := input + "data: [DONE]\n\n"
+	if got := rec.Body.String(); got != want {
+		t.Fatalf("raw canonical stream changed\n got: %q\nwant: %q", got, want)
+	}
+}
+
+func TestRelayResponsesSSEReportsFirstTerminalAndDoneOnce(t *testing.T) {
+	input := "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\ndata: [DONE]\n\ndata: {\"type\":\"response.failed\"}\n\n"
+	var got []ResponsesSSETerminal
+	done := 0
+	cancel := 0
+	rec := httptest.NewRecorder()
+	err := relayResponsesSSEWithFlush(rec, strings.NewReader(input), responseRepairPipeline{}, ResponsesSSERelayOptions{
+		OnTerminal: func(outcome ResponsesSSETerminal) { got = append(got, outcome) },
+		OnCancel:   func() { cancel++ },
+		OnDone:     func() { done++ },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Status != ResponsesSSECompleted || got[0].Synthetic {
+		t.Fatalf("terminal outcomes = %#v, want one upstream completed outcome", got)
+	}
+	if cancel != 0 || done != 1 {
+		t.Fatalf("cancel=%d done=%d, want 0 and 1", cancel, done)
+	}
+	if !strings.Contains(rec.Body.String(), "data: [DONE]") || strings.Contains(rec.Body.String(), "response.failed") {
+		t.Fatalf("client body crossed terminal boundary: %q", rec.Body.String())
+	}
+}
+
+func TestRelayResponsesSSECleanEOFReportsSyntheticIncomplete(t *testing.T) {
+	var got []ResponsesSSETerminal
+	done := 0
+	rec := httptest.NewRecorder()
+	err := relayResponsesSSEWithFlush(rec, strings.NewReader("data: {\"type\":\"response.created\"}\n\n"), responseRepairPipeline{}, ResponsesSSERelayOptions{
+		OnTerminal: func(outcome ResponsesSSETerminal) { got = append(got, outcome) },
+		OnDone:     func() { done++ },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Status != ResponsesSSEIncomplete || !got[0].Synthetic {
+		t.Fatalf("terminal outcomes = %#v, want one synthetic incomplete outcome", got)
+	}
+	if done != 1 || !strings.Contains(rec.Body.String(), "adapter_eof") {
+		t.Fatalf("done=%d body=%q, want one cleanup and adapter_eof", done, rec.Body.String())
+	}
+}
+
+type responsesSSEErrorReader struct {
+	data []byte
+	done bool
+}
+
+func (r *responsesSSEErrorReader) Read(p []byte) (int, error) {
+	if !r.done {
+		r.done = true
+		return copy(p, r.data), errors.New("upstream reset")
+	}
+	return 0, errors.New("upstream reset")
+}
+
+func TestRelayResponsesSSEReadErrorReportsSyntheticFailure(t *testing.T) {
+	var got []ResponsesSSETerminal
+	rec := httptest.NewRecorder()
+	err := relayResponsesSSEWithFlush(rec, &responsesSSEErrorReader{data: []byte("data: {\"type\":\"response.created\"}\n\n")}, responseRepairPipeline{}, ResponsesSSERelayOptions{
+		OnTerminal: func(outcome ResponsesSSETerminal) { got = append(got, outcome) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Status != ResponsesSSEFailed || got[0].HTTPStatus != http.StatusBadGateway || !got[0].Synthetic {
+		t.Fatalf("terminal outcomes = %#v, want synthetic failed 502", got)
+	}
+}
+
+func TestRelayResponsesSSECancellationSuppressesSyntheticFailure(t *testing.T) {
+	ctx, cancelContext := context.WithCancel(context.Background())
+	cancelContext()
+	cancel := 0
+	terminals := 0
+	done := 0
+	rec := httptest.NewRecorder()
+	err := relayResponsesSSEWithFlush(rec, strings.NewReader("data: {\"type\":\"response.created\"}\n\n"), responseRepairPipeline{}, ResponsesSSERelayOptions{
+		Context:    ctx,
+		OnTerminal: func(ResponsesSSETerminal) { terminals++ },
+		OnCancel:   func() { cancel++ },
+		OnDone:     func() { done++ },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if terminals != 0 || cancel != 1 || done != 1 {
+		t.Fatalf("terminals=%d cancel=%d done=%d, want 0,1,1", terminals, cancel, done)
 	}
 }

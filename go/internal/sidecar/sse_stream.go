@@ -29,17 +29,28 @@ var adapterEOFIncompletePayload = []byte("{\"type\":\"response.incomplete\",\"re
 // Atomic increment keeps independently relayed streams race-free.
 var syntheticSSEItemOrdinal atomic.Int64
 
+// ResponsesSSETerminalStatus is the first protocol terminal observed in a
+// Responses stream.
+type ResponsesSSETerminalStatus string
+
+const (
+	ResponsesSSECompleted  ResponsesSSETerminalStatus = "completed"
+	ResponsesSSEFailed     ResponsesSSETerminalStatus = "failed"
+	ResponsesSSEIncomplete ResponsesSSETerminalStatus = "incomplete"
+)
+
 // ResponsesSSEStream incrementally frames, repairs, and terminal-bounds one
 // Responses SSE stream. Feed accepts arbitrary transport chunks; its output
 // contains only complete client-dispatchable SSE events. Finish must be called
 // once on clean upstream EOF to dispatch an unterminated final event and, if
 // no Responses terminal was observed, synthesize adapter_eof plus [DONE].
 type ResponsesSSEStream struct {
-	buffer      []byte
-	terminal    bool
-	done        bool
-	pendingDone []sseFrame
-	pipeline    responseRepairPipeline
+	buffer         []byte
+	terminal       bool
+	terminalStatus string
+	done           bool
+	pendingDone    []sseFrame
+	pipeline       responseRepairPipeline
 }
 
 type sseFrame struct {
@@ -60,6 +71,14 @@ func NewResponsesSSEStream(pipeline ...responseRepairPipeline) *ResponsesSSEStre
 // TerminalSeen reports whether a response.completed, response.failed, or
 // response.incomplete event crossed the client boundary.
 func (s *ResponsesSSEStream) TerminalSeen() bool { return s.terminal }
+
+// TerminalStatus reports the first Responses terminal status, or an empty
+// string before a terminal. A failed/incomplete payload is intentionally not
+// reclassified here: callers that need provider-specific policy can inspect
+// the raw payload branch independently.
+func (s *ResponsesSSEStream) TerminalStatus() ResponsesSSETerminalStatus {
+	return ResponsesSSETerminalStatus(s.terminalStatus)
+}
 
 // DoneSeen reports whether upstream supplied any [DONE] data event. A [DONE]
 // before a Responses terminal is held until a terminal arrives.
@@ -160,6 +179,7 @@ func (s *ResponsesSSEStream) processFrame(out *bytes.Buffer, frame sseFrame) {
 	out.Write(frame.delimiter)
 	if hasData && responsesSSETerminal(payload) {
 		s.terminal = true
+		s.terminalStatus = responsesSSETerminalStatus(payload)
 		for _, pending := range s.pendingDone {
 			out.Write(pending.block)
 			out.Write(pending.delimiter)
@@ -329,12 +349,25 @@ func backfillSSEOutputItem(item *jsonwire.Value, slot, inferredStatus string) bo
 }
 
 func responsesSSETerminal(payload []byte) bool {
+	return responsesSSETerminalStatus(payload) != ""
+}
+
+func responsesSSETerminalStatus(payload []byte) string {
 	event, err := jsonwire.Parse(payload)
 	if err != nil || event.Kind() != jsonwire.Object {
-		return false
+		return ""
 	}
 	typeName, _ := stringMember(event, "type")
-	return typeName == "response.completed" || typeName == "response.failed" || typeName == "response.incomplete"
+	switch typeName {
+	case "response.completed":
+		return "completed"
+	case "response.failed":
+		return "failed"
+	case "response.incomplete":
+		return "incomplete"
+	default:
+		return ""
+	}
 }
 
 func replaceSSEDataPayload(block, payload []byte) []byte {
