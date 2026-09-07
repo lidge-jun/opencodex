@@ -1297,8 +1297,14 @@ printf '%s\\n' child-codex
   });
 
   for (const shell of ["cmd", "powershell", "pwsh"] as const) {
-    for (const callerToken of shell === "cmd" ? [undefined, "caller-token"] : [undefined, "", "caller-token"]) {
-      test.skipIf(process.platform !== "win32")(`Windows ${shell} shim restores the caller token (${callerToken === undefined ? "missing" : callerToken === "" ? "empty" : "explicit token, bypass"})`, () => {
+    const cases = [
+      { callerToken: undefined, bypass: false, label: "missing" },
+      ...(shell === "cmd" ? [] : [{ callerToken: "", bypass: false, label: "empty" }]),
+      { callerToken: "caller-token", bypass: false, label: "explicit token, ensure" },
+      { callerToken: "caller-token", bypass: true, label: "explicit token, bypass" },
+    ];
+    for (const { callerToken, bypass, label } of cases) {
+      test.skipIf(process.platform !== "win32")(`Windows ${shell} shim restores the caller token (${label})`, () => {
         const dir = mkdtempSync(join(tmpdir(), "ocx-shim-token-scope-"));
         const oldHome = process.env.OPENCODEX_HOME;
         try {
@@ -1324,7 +1330,7 @@ printf '%s\\n' child-codex
           const env = shimChildEnv({
             OPENCODEX_HOME: dir,
             OPENCODEX_API_AUTH_TOKEN: callerToken ?? "",
-            OCX_SHIM_BYPASS: callerToken ? "1" : "",
+            OCX_SHIM_BYPASS: bypass ? "1" : "",
           });
           if (callerToken === undefined) delete env.OPENCODEX_API_AUTH_TOKEN;
           const result = shell === "cmd"
@@ -1337,7 +1343,7 @@ printf '%s\\n' child-codex
             "result:37",
             ...(shell === "cmd" ? [] : ["presence-preserved:True"]),
           ]);
-          expect(existsSync(ensureLog)).toBe(!callerToken);
+          expect(existsSync(ensureLog)).toBe(!bypass);
         } finally {
           if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
           else process.env.OPENCODEX_HOME = oldHome;
@@ -1348,34 +1354,52 @@ printf '%s\\n' child-codex
   }
 
   for (const failurePhase of ["ensure", "Codex"]) {
-    test.skipIf(process.platform !== "win32")(`Windows PowerShell shim restores the caller token when ${failurePhase} throws`, () => {
-      const dir = mkdtempSync(join(tmpdir(), "ocx-shim-token-error-"));
-      const oldHome = process.env.OPENCODEX_HOME;
-      try {
-        process.env.OPENCODEX_HOME = dir;
-        const wrapperPath = join(dir, "codex.ps1");
-        const ensurePath = join(dir, "throw.ps1");
-        const driverPath = join(dir, "driver.ps1");
-        const realPath = join(dir, "codex-real.ps1");
-        writeFileSync(join(dir, "service-api-token"), "file-token\n");
-        writeFileSync(ensurePath, failurePhase === "ensure" ? "throw 'fixture ensure failure'\n" : "exit 19\n");
-        writeFileSync(realPath, "throw 'fixture Codex failure'\n");
-        writeFileSync(wrapperPath, `\uFEFF${buildWindowsPowerShellCodexShim(realPath, ensurePath, "unused.ts", "process")}`);
-        writeFileSync(driverPath, `\uFEFF$ErrorActionPreference = 'Stop'\ntry { & '${wrapperPath.replace(/'/g, "''")}' exec } catch { "error:$($_.Exception.Message)" }\n"after:$env:OPENCODEX_API_AUTH_TOKEN"\n`);
-        for (const executable of ["powershell.exe", "pwsh.exe"]) {
-          const result = spawnSync(executable, ["-NoProfile", "-NonInteractive", "-File", driverPath], {
-            env: shimChildEnv({ OPENCODEX_HOME: dir, OPENCODEX_API_AUTH_TOKEN: "", OCX_SHIM_BYPASS: "" }),
-            encoding: "utf8", timeout: INTERNAL_DEADLINE_MS, windowsHide: true,
-          });
-          expect(result.status, result.stderr).toBe(0);
-          expect(result.stdout.trim().split(/\r?\n/)).toEqual([`error:fixture ${failurePhase} failure`, "after:"]);
-        }
-      } finally {
-        if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
-        else process.env.OPENCODEX_HOME = oldHome;
-        removeTreeWithRetry(dir);
+    for (const executable of ["powershell.exe", "pwsh.exe"]) {
+      for (const callerToken of [undefined, "", "caller-token"]) {
+        test.skipIf(process.platform !== "win32")(`Windows ${executable} shim restores ${callerToken === undefined ? "missing" : callerToken === "" ? "empty" : "explicit"} caller token when ${failurePhase} throws`, () => {
+          const dir = mkdtempSync(join(tmpdir(), "ocx-shim-token-error-"));
+          const oldHome = process.env.OPENCODEX_HOME;
+          try {
+            process.env.OPENCODEX_HOME = dir;
+            const wrapperPath = join(dir, "codex.ps1");
+            const ensurePath = join(dir, "throw.ps1");
+            const driverPath = join(dir, "driver.ps1");
+            const realPath = join(dir, "codex-real.ps1");
+            writeFileSync(join(dir, "service-api-token"), "file-token\n");
+            writeFileSync(ensurePath, failurePhase === "ensure" ? "throw 'fixture ensure failure'\n" : "exit 19\n");
+            writeFileSync(realPath, "throw 'fixture Codex failure'\n");
+            writeFileSync(wrapperPath, `\uFEFF${buildWindowsPowerShellCodexShim(realPath, ensurePath, "unused.ts", "process")}`);
+            const emptyToken = callerToken === "" ? "$env:OPENCODEX_API_AUTH_TOKEN = ''\n" : "";
+            writeFileSync(driverPath, `\uFEFF$ErrorActionPreference = 'Stop'\n${emptyToken}$beforePresence = Test-Path Env:\\OPENCODEX_API_AUTH_TOKEN\ntry { & '${wrapperPath.replace(/'/g, "''")}' exec } catch { "error:$($_.Exception.Message)" }\n"after:$env:OPENCODEX_API_AUTH_TOKEN"\n"presence-preserved:$($beforePresence -eq (Test-Path Env:\\OPENCODEX_API_AUTH_TOKEN))"\n`);
+            const env = shimChildEnv({ OPENCODEX_HOME: dir, OPENCODEX_API_AUTH_TOKEN: callerToken ?? "", OCX_SHIM_BYPASS: "" });
+            if (callerToken === undefined) delete env.OPENCODEX_API_AUTH_TOKEN;
+            const result = spawnSync(executable, ["-NoProfile", "-NonInteractive", "-File", driverPath], {
+              env, encoding: "utf8", timeout: INTERNAL_DEADLINE_MS, windowsHide: true,
+            });
+            expect(result.error).toBeUndefined();
+            expect(result.status, result.stderr).toBe(0);
+            expect(result.stdout.trim().split(/\r?\n/)).toEqual([
+              `error:fixture ${failurePhase} failure`, `after:${callerToken ?? ""}`, "presence-preserved:True",
+            ]);
+
+            // A failed process must complete, rather than satisfy the check through a timeout.
+            writeFileSync(driverPath, `\uFEFF$ErrorActionPreference = 'Stop'\n& '${wrapperPath.replace(/'/g, "''")}' exec\n`);
+            const uncaught = spawnSync(executable, ["-NoProfile", "-NonInteractive", "-File", driverPath], {
+              env, encoding: "utf8", timeout: INTERNAL_DEADLINE_MS, windowsHide: true,
+            });
+            expect(uncaught.error).toBeUndefined();
+            expect(uncaught.signal).toBeNull();
+            expect(typeof uncaught.status, uncaught.stderr).toBe("number");
+            expect(uncaught.status, uncaught.stderr).not.toBe(0);
+            expect(uncaught.stderr).toContain(`fixture ${failurePhase} failure`);
+          } finally {
+            if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+            else process.env.OPENCODEX_HOME = oldHome;
+            removeTreeWithRetry(dir);
+          }
+        }, SPAWN_BUDGET_MS);
       }
-    }, SPAWN_BUDGET_MS);
+    }
   }
 
   test("Unix shim skips ocx startup only for Codex management commands", () => {
