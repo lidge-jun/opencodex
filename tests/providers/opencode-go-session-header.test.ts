@@ -176,6 +176,12 @@ describe("OpenCode Go session affinity (#3344)", () => {
         });
         expect(captured.url).toBe(url);
         expect(captured.headers.get(SESSION_HEADER)).toBe("ocx_a89540229ef781fd5f7adf92a711b436");
+        const invalidLane = await captureRequest({
+          claude: true, model, metadataUserId: "user_test_account__session_conversation-a",
+          headers: { "content-type": "application/json", session_id: session },
+        });
+        expect(invalidLane.url).toBe(url);
+        expect(invalidLane.headers.get(SESSION_HEADER)).toBe("ocx_a89540229ef781fd5f7adf92a711b436");
       }
     });
 

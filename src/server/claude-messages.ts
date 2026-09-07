@@ -876,7 +876,7 @@ async function handleClaudeMessagesWithBudget(
     // but ONLY for a real per-session key (metadata.user_id). The system-hash fallback
     // key is shared across Desktop conversations, and a shared session_id's backend
     // semantics are unproven (audit 133 R2#3): body prompt_cache_key only there.
-    if (cacheKeySource === "metadata" && !headers.has("session_id") && typeof internalBody.prompt_cache_key === "string") {
+    if (cacheKeySource === "metadata" && (synthesizeGoSession || !headers.has("session_id")) && typeof internalBody.prompt_cache_key === "string") {
       headers.set("session_id", uuidFromHex(internalBody.prompt_cache_key));
     }
   }
