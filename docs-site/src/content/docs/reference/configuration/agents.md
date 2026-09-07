@@ -75,9 +75,9 @@ loudly when the installed Codex build does not know the flag yet.
 ## Roster and guidance
 
 The effective v2 roster is the configured, picker-visible, priority-sorted first five models that
-are compatible with v2 and present in the injected catalog. V2 eligibility treats an explicit `"v2"`,
-`null`, or absent upstream pin as eligible; a real `"v1"` pin is excluded. Excluded entries remain in
-configuration so they can become eligible later.
+are present in the injected catalog and are not explicitly marked `"disabled"`. An explicit `"v2"`
+pin supports recursive workers; `"v1"`, `null`, and absent pins remain eligible as leaf workers.
+Excluded entries remain in configuration so they can become eligible later.
 
 Surface detection uses tool shape. A namespaced `spawn_agent` with `send_input`, `resume_agent`, or
 `close_agent` is v1. A flat `spawn_agent` with `send_message`, `followup_task`, `interrupt_agent`, or
@@ -88,9 +88,19 @@ message only when a preferred model, eligible roster, or fallback chain exists. 
 has a 700-character budget and drops the roster first if necessary. Guidance is deduplicated across
 replay prefixes and inserted before a trailing `compaction_trigger`.
 
-`injectionModel` and `injectionEffort` are advisory unless native-default sync is enabled. The built-in
-v2 text asks Codex to pass supported model/effort overrides to `spawn_agent` with
-`fork_turns: "none"`. A custom `injectionPrompt` substitutes missing values with an empty string.
+Both built-in v2 subagent guidance and custom `injectionPrompt` bodies use
+`<opencodex_subagent_guidance>`, separate from Codex's native `<multi_agent_mode>` messages.
+Built-in text reports the resolved preferred model, roster, and fallback chain without prescribing
+delegation, model overrides, or `fork_turns`. Custom bodies retain their placeholder substitution
+and content. `injectionModel` and `injectionEffort` remain advisory unless native-default sync is
+enabled; missing custom placeholder values are still replaced with an empty string.
+
+Replay deduplication compares the latest exact text in each tag family. When both values use the
+new proxy family, switching custom guidance back to the built-in form appends the current value;
+intervening native mode changes do not duplicate unchanged proxy guidance. Existing native and
+legacy-tagged history is preserved. This wrapper change does not identify the author of old
+messages or revoke prior instructions. Mixed-version histories cannot be classified from the
+legacy tag alone, and transition detection across such histories is not guaranteed.
 
 ## Native Codex default sync
 
