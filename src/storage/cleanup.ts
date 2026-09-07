@@ -1913,6 +1913,8 @@ export function executeArchivedCleanup(options: ExecuteCleanupOptions): CleanupR
     return !matchedPaths.has(candidate.relPath) || threadByRelPath.has(candidate.relPath);
   });
   if (candidates.length === 0) {
+    removeStageIfEmpty(stageDir, []);
+    removeEmptyTrashRoot(codexHome);
     return {
       ok: true,
       mode,

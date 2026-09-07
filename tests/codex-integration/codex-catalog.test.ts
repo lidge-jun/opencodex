@@ -7122,6 +7122,21 @@ describe("Codex reasoning-effort capability clamp", () => {
   });
 });
 
+test("provider-configured cap applies to discovered window and does not get overwritten by discovery", () => {
+  const resolved = applyProviderConfigHints("prov", {
+    adapter: "openai-chat",
+    baseUrl: "https://prov.test/v1",
+    modelContextWindows: { "disco-model": 100_000 },
+  }, {
+    provider: "prov",
+    id: "disco-model",
+    contextWindow: 200_000,
+  }, 150_000);
+
+  expect(resolved.contextWindow).toBe(100_000);
+  expect(resolved.contextCap).toBe(150_000);
+});
+
 describe("auto_review_model configuration (#1225)", () => {
   test("applyAutoReviewModelOverride sets auto_review_model_override across all entries", () => {
     const { applyAutoReviewModelOverride } = require("../../src/codex/catalog/sync");

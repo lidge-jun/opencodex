@@ -1049,7 +1049,7 @@ export function resolveComboCatalogMember(
     const hinted = prov && isModelVisionSidecarConsumer(prov, existing.id)
       ? applyProviderConfigHints(target.provider, prov, existing, contextCap, metadataModelIdCaseFold)
       : existing;
-    const capped = applyProviderContextCap(existing.contextWindow, contextCap);
+    const capped = applyProviderContextCap(hinted.contextWindow, contextCap);
     if (capped === undefined || capped === existing.contextWindow) {
       return withFallbackMetadata(hinted);
     }

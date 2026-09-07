@@ -594,6 +594,8 @@ describe("executeArchivedCleanup", () => {
     expect(result.count).toBe(0);
     expect(result.skippedReferencedPaths).toEqual(["archived_sessions/rollout-old.jsonl"]);
     expect(existsSync(join(home, "archived_sessions", "rollout-old.jsonl"))).toBe(true);
+    // Stage dir should not remain when no candidates are selected.
+    expect(existsSync(join(home, ".trash"))).toBe(false);
   });
 
   test("skips paginated history_mode threads", () => {
@@ -605,6 +607,8 @@ describe("executeArchivedCleanup", () => {
     expect(result.ok).toBe(true);
     expect(result.count).toBe(0);
     expect(result.skippedReferencedPaths).toEqual(["archived_sessions/rollout-old.jsonl"]);
+    // Ensure the trash root has been removed when nothing was staged.
+    expect(existsSync(join(home, ".trash"))).toBe(false);
   });
 
   test("deletes safe candidates while skipping referenced history", () => {
