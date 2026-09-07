@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/lidge-jun/opencodex/go/internal/jsonwire"
 )
 
 // repairGolden is one row of the committed golden file. The expected bytes are
@@ -81,6 +83,27 @@ func TestRepairResponsesJSONEmptyStringIDReplacesInPlace(t *testing.T) {
 	want := `{"id":"r","status":"completed","output":[{"type":"message","id":"msg_ocx_0","content":[{"type":"output_text","text":"hi","annotations":[]}],"status":"completed"}]}`
 	if string(out) != want {
 		t.Fatalf("got  %s\nwant %s", out, want)
+	}
+}
+
+func TestImageAliasesFromRequestIncludesAdditionalToolsGroups(t *testing.T) {
+	root, err := jsonwire.Parse([]byte(`{"tools":[],"input":[{"type":"additional_tools","tools":[{"type":"function","name":"image_gen.create"}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliases := imageAliasesFromRequest(root)
+	alias, ok := aliases["image_gen__create"]
+	if !ok || alias.name != "create" || alias.namespace != "image_gen" {
+		t.Fatalf("aliases = %#v, want grouped image-gen alias", aliases)
+	}
+}
+
+func TestResponseRepairPipelinePreservesOpenAIResponseModel(t *testing.T) {
+	input := []byte(`{"model":"upstream-model","output":[]}`)
+	pipeline := responseRepairPipeline{}
+	out, changed := pipeline.repairJSON(input)
+	if string(out) != string(input) || changed {
+		t.Fatalf("pipeline changed ordinary model response: got %q changed=%v", out, changed)
 	}
 }
 

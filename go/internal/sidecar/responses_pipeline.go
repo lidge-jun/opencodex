@@ -190,22 +190,38 @@ func (p responseRepairPipeline) repairReasoningItem(v *jsonwire.Value) bool {
 
 func imageAliasesFromRequest(root *jsonwire.Value) map[string]imageAlias {
 	out := map[string]imageAlias{}
-	tools := root.Find("tools")
-	if tools == nil || tools.Kind() != jsonwire.Array {
-		return out
-	}
-	for _, tool := range tools.Elements() {
-		if tool == nil || tool.Kind() != jsonwire.Object {
-			continue
+	collect := func(tools *jsonwire.Value) {
+		if tools == nil || tools.Kind() != jsonwire.Array {
+			return
 		}
-		name, ok := stringMember(tool, "name")
-		if !ok {
-			continue
-		}
-		if strings.HasPrefix(name, "image_gen.") && len(name) > len("image_gen.") {
+		for _, tool := range tools.Elements() {
+			if tool == nil || tool.Kind() != jsonwire.Object {
+				continue
+			}
+			typeName, _ := stringMember(tool, "type")
+			if typeName != "function" {
+				continue
+			}
+			name, ok := stringMember(tool, "name")
+			if !ok || !strings.HasPrefix(name, "image_gen.") || len(name) <= len("image_gen.") {
+				continue
+			}
 			local := strings.TrimPrefix(name, "image_gen.")
 			out[name] = imageAlias{name: local, namespace: "image_gen"}
 			out["image_gen__"+local] = imageAlias{name: local, namespace: "image_gen"}
+		}
+	}
+	collect(root.Find("tools"))
+	input := root.Find("input")
+	if input != nil && input.Kind() == jsonwire.Array {
+		for _, item := range input.Elements() {
+			if item == nil || item.Kind() != jsonwire.Object {
+				continue
+			}
+			typeName, _ := stringMember(item, "type")
+			if typeName == "additional_tools" {
+				collect(item.Find("tools"))
+			}
 		}
 	}
 	return out

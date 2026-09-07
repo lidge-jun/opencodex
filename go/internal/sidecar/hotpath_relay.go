@@ -28,6 +28,7 @@ package sidecar
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -37,6 +38,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/lidge-jun/opencodex/go/internal/config"
 	"github.com/lidge-jun/opencodex/go/internal/jsonwire"
@@ -749,12 +751,17 @@ func doDirectRelay(w http.ResponseWriter, r *http.Request, cfg Config, plan *rel
 		w.WriteHeader(upstreamResp.StatusCode)
 		if upstreamResp.StatusCode >= 200 && upstreamResp.StatusCode < 300 && strings.Contains(strings.ToLower(contentType), "text/event-stream") {
 			requestRoot, _ := jsonwire.Parse(body)
-			pipeline := responseRepairPipeline{modelID: plan.modelID, reasoning: plan.reasoning}
+			// The admitted provider class is openai-responses/azure. The TS
+			// response-model rewrite is Anthropic-only (_responseModelId is set
+			// only on anthropic routes in core.ts), so preserve upstream model
+			// metadata here rather than rewriting ordinary OpenAI model aliases.
+			// plan.modelID still drives routing and the model-fallthrough plan.
+			pipeline := responseRepairPipeline{reasoning: plan.reasoning}
 			if requestRoot != nil {
 				pipeline.imageAliases = imageAliasesFromRequest(requestRoot)
 			}
 			configureStatefulResponseRepairs(&pipeline, plan.provider, requestRoot)
-			if err := relayResponsesSSEWithFlush(w, upstreamResp.Body, pipeline); err != nil {
+			if err := relayResponsesSSEWithFlush(w, upstreamResp.Body, pipeline, ResponsesSSERelayOptions{Context: r.Context()}); err != nil {
 				fmt.Fprintf(os.Stderr, "ocx-sidecar: relay stream write: %v\n", err)
 			}
 		} else if err := streamCopyWithFlush(w, upstreamResp.Body); err != nil {
@@ -788,7 +795,9 @@ func doDirectRelay(w http.ResponseWriter, r *http.Request, cfg Config, plan *rel
 			// the backfill changed nothing or the body is not a JSON object, so
 			// assigning unconditionally preserves raw-bytes relay parity.
 			requestRoot, _ := jsonwire.Parse(body)
-			pipeline := responseRepairPipeline{modelID: plan.modelID, reasoning: plan.reasoning}
+			// Same Anthropic-only model-rewrite policy as the SSE relay above:
+			// openai-responses/azure keep their upstream model metadata.
+			pipeline := responseRepairPipeline{reasoning: plan.reasoning}
 			if requestRoot != nil {
 				pipeline.imageAliases = imageAliasesFromRequest(requestRoot)
 			}
@@ -814,18 +823,213 @@ func configureStatefulResponseRepairs(pipeline *responseRepairPipeline, provider
 	}
 }
 
+// ResponsesSSETerminal is the outcome observed by the relay's independent raw
+// inspection branch. HTTPStatus is non-zero only for a synthetic transport
+// failure (502); Synthetic distinguishes adapter EOF/read-reset outcomes from
+// an upstream Responses terminal.
+type ResponsesSSETerminal struct {
+	Status     ResponsesSSETerminalStatus
+	HTTPStatus int
+	Synthetic  bool
+}
+
+// ResponsesSSERelayOptions controls lifecycle reporting without changing the
+// client-facing byte relay. The raw inspection callback runs before the relay
+// checks cancellation for a delivered chunk, so a terminal in the same read
+// wins over a client disconnect. OnDone is called exactly once.
+type ResponsesSSERelayOptions struct {
+	Context        context.Context
+	OnTerminal     func(ResponsesSSETerminal)
+	OnCancel       func()
+	OnDone         func()
+	DrainTimeout   time.Duration
+	DrainByteLimit int64
+}
+
+const (
+	defaultResponsesSSEDrainTimeout = 15 * time.Second
+	defaultResponsesSSEDrainBytes   = 32 * 1024 * 1024
+)
+
+// relayLifecycle owns callback finality for one stream. Keeping it separate
+// from ResponsesSSEStream lets the raw inspector and client repair branch
+// share terminal state without either branch mutating the other's payload.
+type relayLifecycle struct {
+	options   ResponsesSSERelayOptions
+	terminal  bool
+	cancelled bool
+	done      bool
+}
+
+func (l *relayLifecycle) terminalOutcome(outcome ResponsesSSETerminal) {
+	if l.terminal || l.cancelled {
+		return
+	}
+	l.terminal = true
+	if l.options.OnTerminal != nil {
+		l.options.OnTerminal(outcome)
+	}
+}
+
+func (l *relayLifecycle) cancel() {
+	if l.terminal || l.cancelled {
+		return
+	}
+	l.cancelled = true
+	if l.options.OnCancel != nil {
+		l.options.OnCancel()
+	}
+}
+
+func (l *relayLifecycle) finish() {
+	if l.done {
+		return
+	}
+	l.done = true
+	if l.options.OnDone != nil {
+		l.options.OnDone()
+	}
+}
+
+func responsesSSEContextDone(ctx context.Context) bool {
+	return ctx != nil && ctx.Err() != nil
+}
+
+func responsesSSEDrainLimits(options ResponsesSSERelayOptions) (time.Duration, int64) {
+	timeout := options.DrainTimeout
+	if timeout <= 0 {
+		timeout = defaultResponsesSSEDrainTimeout
+	}
+	limit := options.DrainByteLimit
+	if limit <= 0 {
+		limit = defaultResponsesSSEDrainBytes
+	}
+	return timeout, limit
+}
+
+// drainResponsesSSEAfterCancel keeps consuming only the raw inspection branch
+// for a bounded window. A terminal observed during the drain wins over client
+// cancellation; otherwise the cancellation callback fires once and no
+// synthetic failed outcome is produced.
+func drainResponsesSSEAfterCancel(src io.Reader, inspector *ResponsesSSEStream, lifecycle *relayLifecycle, options ResponsesSSERelayOptions) {
+	if lifecycle.terminal {
+		return
+	}
+	timeout, byteLimit := responsesSSEDrainLimits(options)
+	deadline := time.Now().Add(timeout)
+	buf := make([]byte, 32*1024)
+	var drained int64
+	for drained < byteLimit && time.Now().Before(deadline) {
+		remaining := byteLimit - drained
+		readBuffer := buf
+		if int64(len(readBuffer)) > remaining {
+			readBuffer = readBuffer[:remaining]
+		}
+		n, err := src.Read(readBuffer)
+		if n > 0 {
+			drained += int64(n)
+			observeResponsesSSEChunk(inspector, lifecycle, readBuffer[:n])
+			if lifecycle.terminal {
+				return
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+	lifecycle.cancel()
+}
+
+// observeResponsesSSEChunk feeds raw upstream bytes to the inspection branch.
+// Inspection errors are isolated from client delivery: an oversized or
+// malformed inspection frame must not corrupt the bytes the client receives.
+func observeResponsesSSEChunk(inspector *ResponsesSSEStream, lifecycle *relayLifecycle, chunk []byte) {
+	if lifecycle.terminal || len(chunk) == 0 {
+		return
+	}
+	if _, err := inspector.Feed(chunk); err != nil {
+		fmt.Fprintf(os.Stderr, "ocx-sidecar: SSE inspection feed: %v\n", err)
+		return
+	}
+	if inspector.TerminalSeen() {
+		lifecycle.terminalOutcome(ResponsesSSETerminal{Status: inspector.TerminalStatus()})
+	}
+}
+
+func finishResponsesSSEInspection(inspector *ResponsesSSEStream, lifecycle *relayLifecycle, cleanEOF bool, cancelled bool) {
+	if lifecycle.terminal {
+		return
+	}
+	if cleanEOF {
+		if _, err := inspector.Finish(); err != nil {
+			fmt.Fprintf(os.Stderr, "ocx-sidecar: SSE inspection finish: %v\n", err)
+		}
+		if inspector.TerminalSeen() {
+			lifecycle.terminalOutcome(ResponsesSSETerminal{Status: inspector.TerminalStatus()})
+			return
+		}
+		if !cancelled {
+			lifecycle.terminalOutcome(ResponsesSSETerminal{Status: ResponsesSSEIncomplete, Synthetic: true})
+		}
+		return
+	}
+	if _, err := inspector.FinishPartial(); err != nil {
+		fmt.Fprintf(os.Stderr, "ocx-sidecar: SSE inspection partial finish: %v\n", err)
+	}
+	if inspector.TerminalSeen() {
+		lifecycle.terminalOutcome(ResponsesSSETerminal{Status: inspector.TerminalStatus()})
+		return
+	}
+	if cancelled {
+		lifecycle.cancel()
+		return
+	}
+	lifecycle.terminalOutcome(ResponsesSSETerminal{Status: ResponsesSSEFailed, HTTPStatus: http.StatusBadGateway, Synthetic: true})
+}
+
+// closeOnResponsesSSEContextCancel closes a parked upstream body when the
+// client request is cancelled. Closing the body is the Go equivalent of the
+// TypeScript reader.cancel wake-up and prevents a leaked read goroutine.
+func closeOnResponsesSSEContextCancel(ctx context.Context, src io.Reader) func() {
+	closer, ok := src.(io.Closer)
+	if ctx == nil || !ok {
+		return func() {}
+	}
+	stop := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = closer.Close()
+		case <-stop:
+		}
+	}()
+	return func() { close(stop) }
+}
+
 // relayResponsesSSEWithFlush feeds upstream transport chunks through the
 // Responses field-backfill and terminal boundary, flushing each emitted block.
 // It stops reading after the first terminal so a gateway cannot append frames
-// after completion and hold the client request open.
-func relayResponsesSSEWithFlush(w http.ResponseWriter, src io.Reader, pipeline responseRepairPipeline) error {
-	stream := NewResponsesSSEStream(pipeline)
+// after completion and hold the client request open. Raw chunks are inspected
+// before the client-facing repair branch, and lifecycle callbacks are final.
+func relayResponsesSSEWithFlush(w http.ResponseWriter, src io.Reader, pipeline responseRepairPipeline, options ...ResponsesSSERelayOptions) error {
+	var opts ResponsesSSERelayOptions
+	if len(options) > 0 {
+		opts = options[0]
+	}
+	lifecycle := &relayLifecycle{options: opts}
+	clientStream := NewResponsesSSEStream(pipeline)
+	rawInspector := NewResponsesSSEStream()
+	stopCancelWatcher := closeOnResponsesSSEContextCancel(opts.Context, src)
+	defer stopCancelWatcher()
+	defer lifecycle.finish()
+
 	flusher, canFlush := w.(http.Flusher)
 	write := func(out []byte) error {
 		if len(out) == 0 {
 			return nil
 		}
 		if _, err := w.Write(out); err != nil {
+			lifecycle.cancel()
 			return err
 		}
 		if canFlush {
@@ -837,47 +1041,61 @@ func relayResponsesSSEWithFlush(w http.ResponseWriter, src io.Reader, pipeline r
 	for {
 		n, readErr := src.Read(buf)
 		if n > 0 {
-			out, err := stream.Feed(buf[:n])
+			chunk := append([]byte(nil), buf[:n]...)
+			// Inspect before checking cancellation: a terminal delivered in the
+			// same read wins over a client disconnect.
+			observeResponsesSSEChunk(rawInspector, lifecycle, chunk)
+			out, err := clientStream.Feed(chunk)
 			if err != nil {
 				return err
 			}
 			if err := write(out); err != nil {
 				return err
 			}
-			if stream.TerminalSeen() {
-				tail, err := stream.Finish()
+			if clientStream.TerminalSeen() {
+				if !lifecycle.terminal {
+					lifecycle.terminalOutcome(ResponsesSSETerminal{Status: clientStream.TerminalStatus()})
+				}
+				tail, err := clientStream.Finish()
 				if err != nil {
 					return err
 				}
 				return write(tail)
 			}
+			if responsesSSEContextDone(opts.Context) {
+				drainResponsesSSEAfterCancel(src, rawInspector, lifecycle, opts)
+				return nil
+			}
 		}
 		if readErr == io.EOF {
-			out, err := stream.Finish()
+			out, err := clientStream.Finish()
 			if err != nil {
 				return err
 			}
 			if err := write(out); err != nil {
 				return err
 			}
+			finishResponsesSSEInspection(rawInspector, lifecycle, true, false)
 			return nil
 		}
 		if readErr != nil {
-			partial, err := stream.FinishPartial()
+			partial, err := clientStream.FinishPartial()
 			if err != nil {
 				return err
 			}
 			if err := write(partial); err != nil {
 				return err
 			}
-			if stream.TerminalSeen() {
-				if !stream.DoneSeen() {
+			finishResponsesSSEInspection(rawInspector, lifecycle, false, responsesSSEContextDone(opts.Context))
+			if clientStream.TerminalSeen() {
+				if !clientStream.DoneSeen() {
 					return write([]byte("data: [DONE]\n\n"))
 				}
 				return nil
 			}
-			// Go read errors have different text from Bun's fetch errors. Keep
-			// the documented static TS fallback envelope for byte-stable tails.
+			if lifecycle.cancelled || lifecycle.terminal {
+				return nil
+			}
 			return write([]byte("\n\nevent: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"type\":\"upstream_error\",\"code\":\"upstream_reset\",\"message\":\"Upstream stream terminated unexpectedly\"},\"last_error\":{\"type\":\"upstream_error\",\"code\":\"upstream_reset\",\"message\":\"Upstream stream terminated unexpectedly\"}}}\n\ndata: [DONE]\n\n"))
 		}
 	}
