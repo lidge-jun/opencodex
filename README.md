@@ -106,16 +106,15 @@ See [SPONSORS.md](./SPONSORS.md).
 
 <!-- sponsors:main — one banner, model developers only; empty until a Main sponsor signs -->
 
-<!-- sponsors:standard — one row per sponsor, in order of signing. Uncomment the table with the first row:
+<!-- sponsors:standard — one row per sponsor, in order of signing -->
 <table>
 <tbody>
 <tr>
-<td width="180"><a href="SPONSOR_URL"><img src="https://raw.githubusercontent.com/lidge-jun/opencodex/main/assets/sponsors/SPONSOR.png" alt="SPONSOR" width="150"></a></td>
-<td>Thanks to SPONSOR for sponsoring this project! BLURB</td>
+<td width="180"><a href="https://www.orcarouter.ai/?utm_source=opencodex&utm_medium=readme"><img src="https://raw.githubusercontent.com/lidge-jun/opencodex/main/assets/sponsors/orcarouter.png" alt="OrcaRouter" width="150"></a></td>
+<td>Thanks to <a href="https://www.orcarouter.ai/?utm_source=opencodex&utm_medium=readme">OrcaRouter</a> for sponsoring this project! OrcaRouter is one OpenAI-compatible AI gateway for production AI: adaptive routing that grades every prompt and sends it to the model that clears your bar, automatic failover, routing rules as code, zero-markup provider pricing with prompt caching, and guardrails, an agent firewall, and request logs on every call across 200+ models. Pick <code>OrcaRouter</code> in the Add provider picker or run <code>ocx provider select orcarouter</code>; <code>orcarouter/auto</code> is the adaptive router.</td>
 </tr>
 </tbody>
 </table>
--->
 
 ---
 

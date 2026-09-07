@@ -333,6 +333,13 @@ preserves those requested tiers; any backend-specific normalization remains Clin
 available in the Cline IDE/CLI, not through the API; `minimax/minimax-m2.5` is the documented API
 free-experimentation model.
 
+**OrcaRouter** ([sponsor](https://github.com/lidge-jun/opencodex/blob/main/SPONSORS.md)) is an
+OpenAI-compatible gateway at `https://api.orcarouter.ai/v1` with vendor-namespaced model ids
+(`openai/gpt-5.5`, `anthropic/claude-opus-4.8`, `deepseek/deepseek-v4-pro`, ...) and an adaptive
+router, `orcarouter/auto`, that grades each prompt and picks the model. Create a key in the
+[OrcaRouter console](https://www.orcarouter.ai/console); the preset pins the row near the top of the
+Add provider picker and marks it as a sponsor, and nothing else about routing or defaults changes.
+
 | Provider | Base URL |
 | --- | --- |
 | **OpenAI (API key)** | `https://api.openai.com/v1` |
