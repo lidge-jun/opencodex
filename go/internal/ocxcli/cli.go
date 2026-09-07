@@ -64,7 +64,9 @@ var Commands = []Command{
 	{Name: "sync-cache", Usage: "ocx sync-cache [--restart-codex]", Summary: "Refresh the model cache.", Owner: TypeScriptOwned},
 	{Name: "status", Usage: "ocx status", Summary: "Check proxy status.", Owner: GoOwned},
 	{Name: "doctor", Usage: "ocx doctor", Summary: "Diagnose the environment.", Owner: GoOwned},
-	{Name: "debug", Usage: "ocx debug <scope>", Summary: "Manage debug settings.", Owner: TypeScriptOwned},
+	// The debug family is Go-owned: every scope writes /api/debug settings and
+	// reads the buffered /api/debug log streams through the running proxy.
+	{Name: "debug", Usage: "ocx debug <provider|usage|injection|claude> <on|off|status|reset|logs [-f]>", Summary: "Show or toggle runtime provider, usage, injection, and Claude debug capture.", Owner: GoOwned},
 	{Name: "login", Usage: "ocx login <provider>", Summary: "Log in to a provider.", Owner: TypeScriptOwned},
 	{Name: "logout", Usage: "ocx logout <provider>", Summary: "Log out from a provider.", Owner: TypeScriptOwned},
 	{Name: "gui", Usage: "ocx gui", Summary: "Open the dashboard.", Owner: TypeScriptOwned},
@@ -89,12 +91,18 @@ var Commands = []Command{
 	{Name: "usage", Usage: "ocx usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--json]", Summary: "Alias of ocx observe usage.", Owner: GoOwned},
 	{Name: "storage", Usage: "ocx storage <sub>", Summary: "Manage storage.", Owner: TypeScriptOwned},
 	{Name: "memory", Usage: "ocx memory [--json]", Summary: "Inspect memory.", Owner: TypeScriptOwned},
-	{Name: "api-key", Usage: "ocx api-key <sub>", Summary: "Manage API keys.", Owner: TypeScriptOwned},
-	{Name: "access", Usage: "ocx access <sub>", Summary: "Manage external access.", Owner: TypeScriptOwned},
+	// access/api-key share one Go implementation (api-key dispatches as
+	// `access key`); both mutate admission keys through /api/keys and read the
+	// external endpoint surface.
+	{Name: "access", Usage: "ocx access <key|endpoints|models|test> ...", Summary: "Manage OpenCodex admission API keys and inspect external endpoints.", Owner: GoOwned},
+	{Name: "api-key", Usage: "ocx api-key <list|create|rotate|remove> ...", Summary: "Alias of ocx access key.", Owner: GoOwned},
 	{Name: "export", Usage: "ocx export --client <id>", Summary: "Export client configuration.", Owner: TypeScriptOwned},
 	{Name: "integration", Usage: "ocx integration client <sub>", Summary: "Manage integrations.", Owner: TypeScriptOwned},
 	{Name: "grok", Usage: "ocx grok <sub>", Summary: "Manage Grok Build.", Owner: TypeScriptOwned},
-	{Name: "system", Usage: "ocx system <sub>", Summary: "Manage runtime settings.", Owner: TypeScriptOwned},
+	// The full system family is Go-owned except codex-cli-update, which stays a
+	// TypeScript-owned subcommand seam: it is a read-only local Codex install
+	// inspection (no management API, no proxy), unlike every other system verb.
+	{Name: "system", Usage: "ocx system <status|settings|startup|diagnostics|sync|codex-app-server|codex-restart|update|codex-cli-update> ...", Summary: "Manage headless runtime settings, startup, sync, diagnostics, OpenCodex updates, and read-only Codex CLI inspection.", Owner: GoOwned},
 	// The full config family is Go-owned: reads project through the schema
 	// normalizer and writes share the SQLite generation transaction.
 	{Name: "config", Usage: "ocx config <sub>", Summary: "Manage configuration.", Owner: GoOwned},
@@ -150,6 +158,13 @@ func OwnershipFor(args []string) (Ownership, bool) {
 		if owner, ok := configRuntimeSubcommands[args[1]]; ok {
 			return owner, true
 		}
+		return TypeScriptOwned, true
+	}
+	// system owns every subcommand except codex-cli-update, which is a read-only
+	// local Codex install inspection outside the management plane (no proxy, no
+	// API); it stays with the TypeScript owner until that inspection carries its
+	// own oracle.
+	if command.Name == "system" && len(args) > 1 && args[1] == "codex-cli-update" {
 		return TypeScriptOwned, true
 	}
 	// observe keeps its TypeScript owner per subcommand: `usage` shares the Go
@@ -285,6 +300,14 @@ func Run(args []string, deps Deps) int {
 		}
 		fmt.Fprintf(deps.Stderr, "Unimplemented Go-owned command: %s\n", args[0])
 		return ExitFailure
+	case "debug":
+		return runDebug(args[1:], deps)
+	case "access":
+		return runAccess(args[1:], deps)
+	case "api-key":
+		return runApiKey(args[1:], deps)
+	case "system":
+		return runSystem(args[1:], deps)
 	default:
 		// The ownership registry above and this switch must be reconciled by
 		// TestOwnershipMapMatchesDispatch; this is defensive for future edits.
@@ -340,6 +363,14 @@ func printSubcommandHelp(name string, deps Deps) int {
 				fmt.Fprintf(deps.Stdout, "Usage: %s\n\n%s\n", command.Usage, command.Summary)
 			}
 		}
+	case "debug":
+		fmt.Fprint(deps.Stdout, debugFamilyHelp)
+	case "access":
+		fmt.Fprint(deps.Stdout, accessFamilyHelp)
+	case "api-key":
+		fmt.Fprint(deps.Stdout, apiKeyFamilyHelp)
+	case "system":
+		fmt.Fprint(deps.Stdout, systemFamilyHelp)
 	case "config":
 		fmt.Fprint(deps.Stdout, configHelp)
 	default:
