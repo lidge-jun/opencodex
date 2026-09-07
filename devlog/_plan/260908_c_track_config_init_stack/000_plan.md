@@ -77,4 +77,3 @@ repository CI against the tip plus read-only inspection.
 DONE requires: tip CI success on its exact head SHA against a current `dev`
 base, tip merged into `dev` proven by fetched ancestry and tree comparison,
 source PRs resolved with credit intact, and #3893 closed.
-

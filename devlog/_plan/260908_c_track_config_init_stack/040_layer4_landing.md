@@ -60,4 +60,3 @@ trailer and content comparison are the credit and delivery evidence.
 If the tip's CI fails, fix the responsible layer and cascade the rebase upward
 (`DEV-STACK-02`) before re-running CI on the new tip head. Do not open or merge
 a lower layer independently to bypass a red tip.
-
