@@ -387,6 +387,25 @@ jobs:
           npm view @bitkyc08/opencodex versions dist-tags --json || true
           exit 1
 
+      # ADR-0008 increment 7 (#41): the Go binary is the release runtime. Build the
+      # static cross-platform artifacts and attach them to the GitHub Release; the
+      # npm package remains the source distribution channel, but every release tag
+      # now ships a TypeScript-free single-binary artifact.
+      - name: Setup Go for single-binary artifacts
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go/go.mod
+          cache: false
+
+      - name: Build Go single-binary release artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p .tmp/go-release
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            scripts/build-go-release-artifact.sh "$target" ".tmp/go-release"
+          done
+          ls -la .tmp/go-release
+
       - name: Create GitHub release
         if: ${{ inputs.dry-run != true }}
         env:
@@ -422,3 +441,15 @@ jobs:
 
           gh release create "$release_tag" --target "$GITHUB_SHA" --title "$release_tag" \
             --notes-file "$notes_file" ${prerelease_flag:+$prerelease_flag}
+
+      - name: Attach Go artifacts to release
+        if: ${{ inputs.dry-run != true }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          release_tag="v${RELEASE_VERSION}"
+          for artifact in .tmp/go-release/ocx-*; do
+            gh release upload "$release_tag" "$artifact" --clobber
+          done
