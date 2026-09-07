@@ -39,7 +39,7 @@ test("every enumerated top-level deletion writer records config rebase provenanc
 });
 
 test("record child deletions use field-scoped rebase provenance", () => {
-  const source = readFileSync(join(import.meta.dir, "..", "src/codex/account-auto-switch.ts"), "utf8");
+  const source = readFileSync(join(import.meta.dir, "..", "..", "src/codex/account-auto-switch.ts"), "utf8");
   expect(source).toContain(
     "deleteConfigObjectChildKey(config, \"codexAccountAutoSwitchThresholds\", accountId)",
   );
