@@ -445,7 +445,7 @@ Use `ocx service` for an always-on background proxy (recommended). Use `ocx code
 lightweight, on-demand startup without a daemon — the proxy starts only when `codex` is launched.
 :::
 
-#### Token injection without the shim
+#### Token injection into Codex
 
 On a non-loopback bind the injected provider carries `env_key = "OPENCODEX_API_AUTH_TOKEN"`. That
 line tells Codex which variable to read; it does not create it. Codex refuses to start a request
@@ -453,14 +453,10 @@ when the variable is missing (`Missing environment variable: OPENCODEX_API_AUTH_
 proxy is never reached. The value lives in `$OPENCODEX_HOME/service-api-token`; only a process that
 exports it into Codex's environment closes the gap.
 
-What does carry the token into a Codex process:
-
-- the shim installed by `ocx codex-shim install` (reads the token file at launch; the supported path
-  for Codex started from shells, Desktop, cron, or another service);
-- a dedicated launcher that reads the existing owner-only token file, sets
-  `OPENCODEX_API_AUTH_TOKEN` for the Codex invocation, and immediately executes Codex. This avoids
-  leaving the token in the parent shell or exposing it to later unrelated commands; Codex's own
-  child processes may still inherit it.
+Use the maintained shim installed by `ocx codex-shim install`. It reads the owner-only token file
+at launch and supplies the variable to Codex; this is the supported path for Codex started from
+shells, Desktop, cron, or another service. Loading it in the shim does not export it back to the
+parent shell; Codex's own child processes may still inherit it.
 
 Do not export this bearer token from a shell startup file or copy it into `config.toml`. The
 `service-api-token` file contains the raw token, not `NAME=value` assignments, so it cannot be used
