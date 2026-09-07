@@ -44,9 +44,9 @@ const (
 // the handler answer 404 for a non-POST request (the same allowlist shape as
 // the write-relay routes) instead of letting ServeMux synthesise a 405 that
 // would probe the seam's existence.
-func mountDataPlaneSeam(mux *http.ServeMux, cfg Config) {
+func mountDataPlaneSeam(mux *http.ServeMux, cfg Config, tracker *ShutdownTracker) {
 	mux.HandleFunc("/v1/responses", func(w http.ResponseWriter, r *http.Request) {
-		dataPlaneSeam(w, r, cfg)
+		dataPlaneSeam(w, r, cfg, tracker)
 	})
 }
 
@@ -55,7 +55,7 @@ func mountDataPlaneSeam(mux *http.ServeMux, cfg Config) {
 // that does not carry the parent request token: the sidecar must never invent
 // a public data-plane listener of its own, and while the seam is mounted the
 // in-process front door remains the only way a request reaches it.
-func dataPlaneSeam(w http.ResponseWriter, r *http.Request, cfg Config) {
+func dataPlaneSeam(w http.ResponseWriter, r *http.Request, cfg Config, tracker *ShutdownTracker) {
 	if cfg.RequestToken == "" || !managementauth.EqualSecret(r.Header.Get(SidecarRequestHeader), cfg.RequestToken) {
 		http.NotFound(w, r)
 		return
@@ -64,6 +64,13 @@ func dataPlaneSeam(w http.ResponseWriter, r *http.Request, cfg Config) {
 		http.NotFound(w, r)
 		return
 	}
+	lease, admitted := tracker.Register(r.Context())
+	if !admitted {
+		writeDrainingResponse(w)
+		return
+	}
+	defer lease.Release()
+	r = r.WithContext(lease.Context())
 
 	parent, ok := privateParentBridgeURL(cfg.ParentURL, DataPlaneBridgePath)
 	if !ok || cfg.BridgeToken == "" {

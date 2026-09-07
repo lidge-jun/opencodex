@@ -49,6 +49,9 @@ export const GO_SIDECAR_REQUEST_TOKEN_ENV = "OCX_SIDECAR_REQUEST_TOKEN";
 /** HMAC secret for parent-admission claims on Go-owned write routes. */
 export const GO_SIDECAR_WRITE_RELAY_SECRET_ENV = "OCX_SIDECAR_WRITE_RELAY_SECRET";
 
+/** Graceful drain budget forwarded to the Go child in milliseconds. */
+export const GO_SIDECAR_SHUTDOWN_TIMEOUT_ENV = "OCX_SIDECAR_SHUTDOWN_TIMEOUT_MS";
+
 /** Readiness marker the Go binary prints on stdout after binding. */
 export const GO_SIDECAR_READY_PREFIX = "ocx-sidecar-ready";
 
@@ -83,6 +86,8 @@ export type GoSidecarSupervisorConfig = {
   bridgeToken: string;
   requestToken: string;
   writeRelaySecret: string;
+  /** Graceful drain timeout shared with the TypeScript front door. */
+  shutdownTimeoutMs?: number;
   /** Mints a proof bound to one admitted write's method, path and body bytes. */
   createWriteRelayHeaders?: (request: {
     method: string;
@@ -377,6 +382,7 @@ export function activateGoSidecar(
         [GO_SIDECAR_BRIDGE_TOKEN_ENV]: liveStateBridge.bridgeToken,
         [GO_SIDECAR_REQUEST_TOKEN_ENV]: liveStateBridge.requestToken,
         [GO_SIDECAR_WRITE_RELAY_SECRET_ENV]: liveStateBridge.writeRelaySecret,
+        [GO_SIDECAR_SHUTDOWN_TIMEOUT_ENV]: String(liveStateBridge.shutdownTimeoutMs ?? 5000),
       },
     });
   } catch (error) {
