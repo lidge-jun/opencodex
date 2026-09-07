@@ -110,12 +110,16 @@ sponsors keep their rate. Ask on [X](https://x.com/claudeebum),
 
 <!-- sponsors:main — one banner, model developers only; empty until a Main sponsor signs -->
 
-<!-- sponsors:standard — one row per sponsor, in order of signing -->
+<!-- sponsors:standard — one row per sponsor, in order of signing. Uncomment the table with the first row:
 <table>
 <tbody>
-<!-- sponsor rows -->
+<tr>
+<td width="180"><a href="SPONSOR_URL"><img src="https://raw.githubusercontent.com/lidge-jun/opencodex/main/assets/sponsors/SPONSOR.png" alt="SPONSOR" width="150"></a></td>
+<td>Thanks to SPONSOR for sponsoring this project! BLURB</td>
+</tr>
 </tbody>
 </table>
+-->
 
 ---
 
@@ -231,6 +235,7 @@ see the [installation docs](https://opencodex.me/getting-started/installation/).
 - **Sub-agents on any model** — feature routed models in Codex's sub-agent picker, with v1/v2
   surface control and fallback chains. See the
   [sub-agent guide](https://opencodex.me/guides/sub-agent-surface/).
+<!-- sponsors:main-first-mention -->
 - **Log in once, skip the API key** — OAuth for xAI, Anthropic, and Kimi; or forward
   `codex login`, paste a key, or use `${ENV_VAR}` references.
 - **Web search & vision sidecars** — non-OpenAI models get real web search and image understanding
@@ -283,6 +288,7 @@ full-slash form keeps working too. Details: [model routing docs](https://opencod
 
 ## Providers & adapters
 
+<!-- sponsors:main-first-mention -->
 OpenAI (ChatGPT login or API key), Anthropic, Google Gemini, xAI, Kimi, Azure OpenAI, Ollama
 (local + Cloud), Cursor (experimental), and every OpenAI-compatible endpoint — plus DeepSeek,
 Groq, OpenRouter, Together, Fireworks, Cerebras, Mistral, Hugging Face, NVIDIA NIM, MiniMax,

@@ -6,6 +6,10 @@ This page is the public rule set: what a sponsor gets, who qualifies for which t
 ask. It is written so that a sponsor, a contributor, and a user reading the README all see the
 same terms.
 
+"Sponsor" here means a paying provider sponsor. It is unrelated to the `maintainer-sponsored`
+label in [`MAINTAINERS.md`](./MAINTAINERS.md), which is about a maintainer vouching for a
+contributor's change to a restricted surface.
+
 Sponsorship buys placement and maintenance attention. It never buys a change in routing behavior,
 a default model, a weaker security default, or an exception to the review policy in
 [`MAINTAINERS.md`](./MAINTAINERS.md). A sponsored preset goes through the same registry
@@ -27,7 +31,8 @@ part does not change. A Main sponsor additionally receives:
 - The single banner slot above the sponsor table in the README (one at a time; see
   [Placement](#placement)).
 - First mention in the README login and provider lines (the "Log in once" OAuth paragraph and
-  the Providers & adapters summary) and priority ordering in the built-in provider picker.
+  the Providers & adapters summary, both marked with a `sponsors:main-first-mention` comment)
+  and priority ordering in the built-in provider picker.
 - Everything in the Standard tier below.
 
 ### Standard — relays, gateways, and API resellers
@@ -42,7 +47,8 @@ sponsor receives:
   policy. A second-language blurb (for example Chinese) may run alongside the English one.
 - A built-in provider preset (`ocx provider select <id>`) shipped in a public npm release,
   listed near the top of the provider picker in the dashboard and CLI and marked as a sponsor
-  there.
+  there. (The registry field and picker ordering that back this land with the first sponsor
+  preset; today the picker follows registry order.)
 - A detailed entry on the [providers page](https://opencodex.me/guides/providers/) of the docs
   site.
 - Maintenance: if a release breaks the preset or its adapter, the maintainer fixes it; issues
@@ -56,8 +62,9 @@ details, so it is on screen before a first-time visitor scrolls. Inside the sect
 1. One Main banner (empty until a Main sponsor signs).
 2. The Standard table, one row per sponsor, in order of signing date.
 
-The translated READMEs under [`readme/`](./readme) link to this page instead of duplicating
-the section, so a sponsor change is one edit in English.
+The translated READMEs under [`readme/`](./readme) carry one linking line right after their
+own quick-start block instead of duplicating the section, so a sponsor change is one edit in
+English.
 
 ## Pricing
 
