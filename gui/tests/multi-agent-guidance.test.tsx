@@ -65,7 +65,7 @@ function props(overrides: Partial<Props> = {}): Props {
     guidanceEnabled: false,
     syncCodexDefaults: true,
     onSave: (patch) => { requests.push(patch); },
-    ultraMode: { enabled: false, hintText: null, multiAgentV2Enabled: false, multiAgentMode: "default" },
+    ultraMode: { enabled: false, hintText: null, recommendation: null, multiAgentV2Enabled: false, multiAgentMode: "default" },
     fallback: [],
     fallbackPollMs: 60000,
     fallbackBusy: false,
@@ -149,4 +149,33 @@ test("sends model clearing through the shared save path", async () => {
   });
 
   expect(requests).toEqual([{ model: null, effort: "high" }]);
+});
+
+test("a recommendation-only refresh preserves the draft until Restore is chosen", async () => {
+  const current = props({
+    ultraMode: {
+      enabled: true, hintText: "stored custom", multiAgentV2Enabled: true, multiAgentMode: "v2",
+      recommendation: { text: "old recommendation", revision: "old" },
+    },
+    onUltraModeSave: patch => { requests.push(patch); },
+  });
+  await mount(current);
+  const textarea = host.querySelector<HTMLTextAreaElement>(".swi-ultra-mode-editor textarea")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(testWindow.HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "unsaved custom draft");
+    textarea.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+    textarea.dispatchEvent(new testWindow.Event("change", { bubbles: true }));
+  });
+  await act(async () => {
+    root!.render(<LanguageProvider><SubagentDelegationSection {...current} ultraMode={{
+      ...current.ultraMode, recommendation: { text: "new recommendation", revision: "new" },
+    }} /></LanguageProvider>);
+  });
+  expect(textarea.value).toBe("unsaved custom draft");
+  expect(requests).toHaveLength(0);
+  const restore = [...host.querySelectorAll<HTMLButtonElement>(".swi-ultra-mode-editor button")]
+    .find(button => button.textContent?.trim() === "Restore preset")!;
+  await act(async () => { restore.click(); });
+  expect(textarea.value).toBe("new recommendation");
+  expect(requests).toHaveLength(0);
 });

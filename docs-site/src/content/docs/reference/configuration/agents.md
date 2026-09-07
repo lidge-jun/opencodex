@@ -45,19 +45,32 @@ Mode changes apply to new sessions. `maxConcurrentThreadsPerSession` is a `PUT /
 `config.json` key; `ocx v2 threads <n>` writes `max_concurrent_threads_per_session` under
 `[features.multi_agent_v2]` in Codex's `$CODEX_HOME/config.toml` after v2 is enabled.
 
-**Ultra mode** (the Subagents dashboard toggle, `PUT /api/v2` field
-`multiAgentModeHintText`, and `ocx v2 mode-hint`) writes
+**Always proactive delegation** in Subagents → Advanced (formerly **Ultra mode**) changes the
+delegation trigger without changing reasoning effort. Its preset preserves user instructions,
+authority boundaries, task scope, and tool rules. The dashboard toggle, `PUT /api/v2` field
+`multiAgentModeHintText`, and `ocx v2 mode-hint` write
 `features.multi_agent_v2.multi_agent_mode_hint_text` in Codex's
 `$CODEX_HOME/config.toml`. The CLI `ocx v2 mode-hint` command persists this key even
-when `multi_agent_v2` is disabled; it does not toggle the feature. The hint overrides
-codex-rs's effort-derived multi-agent policy, so any model and any reasoning effort
-receives the Proactive delegation prompt; it does **not** change reasoning effort.
+when `multi_agent_v2` is disabled; it does not toggle the feature. The hint replaces
+codex-rs's effort-derived multi-agent policy when that native surface is active.
 A `null` value removes the key so the effort-derived policy (ultra = proactive,
 otherwise explicit) resumes; empty or whitespace-only values are rejected because a
 present empty override would suppress even the ultra-derived Proactive message. The
-Subagents dashboard's Ultra mode **on** toggle requires both the native feature and
+Subagents dashboard's **Always proactive delegation** toggle requires both the native feature and
 an explicit v2 surface (`multiAgentMode: "v2"`, equivalent to `ocx v2 mode v2`);
 `ocx v2 on` alone does not satisfy that dashboard gate.
+
+`GET` and `PUT /api/v2` also return `multiAgentModeHintRecommendation: { text, revision }`.
+The dashboard uses this server-provided text when enabling or restoring the preset, with no
+hardcoded fallback. If an older server omits the recommendation or returns a malformed value,
+preset installation and restoration are unavailable; editing or clearing an existing custom hint
+remains available. **Restore preset** changes only the local draft; **Save** persists it.
+
+Reading settings, unrelated updates, and upgrades do not migrate a stored hint. Only an explicit
+hint update that matches either of the two recognized legacy OpenCodex presets byte-for-byte is
+replaced with the current recommendation. Other valid custom text, including whitespace variants,
+is preserved byte-for-byte. Mode-hint support is still checked before writing, and changes apply
+to new Codex sessions.
 
 The management API exposes `GET`/`PUT /api/v2`, `/api/injection-model`, `/api/effort-caps`,
 `/api/subagent-models`, and `/api/subagent-model-fallback`. Injection-model updates are partial;

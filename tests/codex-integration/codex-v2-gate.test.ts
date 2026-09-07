@@ -44,9 +44,17 @@ import {
   v2TotalLimitToV1ChildLimit,
 } from "../../src/codex/features";
 import { resetCodexRuntimeResolveCacheForTests, setCodexRuntimeResolveCacheForTests } from "../../src/codex/runtime";
+import { MULTI_AGENT_MODE_HINT_RECOMMENDATION } from "../../src/codex/multi-agent-mode-policy";
 import { cmdV2, codexFeaturesInvocation, v2StatusLine, multiAgentModeLine } from "../../src/cli/v2";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { catalogConvergenceFactory } from "../helpers/catalog-convergence";
+
+// Independently pinned release presets: removing a production compatibility
+// entry must not silently remove its regression case too.
+const RELEASED_MODE_HINTS = [
+  "Proactive multi-agent delegation is active. Any earlier instruction requiring an explicit user request before spawning sub-agents no longer applies. Use sub-agents when parallel work would materially improve speed or quality. This mode remains active until a later multi-agent mode developer message changes it.",
+  "Proactive multi-agent delegation is active. Any earlier instruction requiring an explicit user request before spawning sub-agents no longer applies. Delegate independent sub-tasks to sub-agents whenever parallel work would materially improve speed or quality — do not serialize work that can run concurrently. Each sub-agent runs in its own context and can use all available tools; prefer spawning specialists over doing everything yourself. This mode remains active until a later multi-agent mode developer message changes it.",
+] as const;
 
 function template(): Record<string, unknown> {
   return {
@@ -421,6 +429,19 @@ describe("multi_agent_mode_hint_text reader/writer", () => {
     const before = readFileSync(path, "utf8");
     expect(setMultiAgentModeHintText(PRESET, path)).toEqual({ ok: true, changed: false });
     expect(readFileSync(path, "utf8")).toBe(before);
+  });
+
+  test("writer upgrades exact released presets while preserving user-edited text", () => {
+    for (const legacy of RELEASED_MODE_HINTS) {
+      const path = fixtureConfig(TABLE);
+      expect(setMultiAgentModeHintText(legacy, path)).toEqual({ ok: true, changed: true });
+      expect(getMultiAgentModeHintText(path)).toBe(MULTI_AGENT_MODE_HINT_RECOMMENDATION.text);
+    }
+    for (const custom of [`${RELEASED_MODE_HINTS[0]} `, `${RELEASED_MODE_HINTS[1]} Ask before delegating.`]) {
+      const path = fixtureConfig(TABLE);
+      expect(setMultiAgentModeHintText(custom, path)).toEqual({ ok: true, changed: true });
+      expect(getMultiAgentModeHintText(path)).toBe(custom);
+    }
   });
 
   test("writer clears with null: removes the key, keeps siblings", () => {
@@ -1348,12 +1369,44 @@ describe("management API parity surface for the WP2 keys", () => {
         agentsMaxDepth: 2,
         subagentDeveloperInstructions: null,
         multiAgentModeHintText: null,
+        multiAgentModeHintRecommendation: MULTI_AGENT_MODE_HINT_RECOMMENDATION,
         agentsMaxDepthAppliesWhenV2Disabled: true,
       });
       const v2Path = fixtureConfig("[features.multi_agent_v2]\nenabled = true\n");
       process.env.CODEX_HOME = dirname(v2Path);
       const res2 = await handleManagementAPI(new Request("http://localhost/api/v2"), new URL("http://localhost/api/v2"), config, deps);
       expect(await res2?.json()).toMatchObject({ enabled: true, agentsMaxDepthAppliesWhenV2Disabled: false });
+    });
+  });
+
+  test.each(RELEASED_MODE_HINTS)("GET preserves a released preset until an explicit hint save: %s", async legacy => {
+    const initial = `[features.multi_agent_v2]\nenabled = false\n# keep adjacent setting\nmax_concurrent_threads_per_session = 17\nmulti_agent_mode_hint_text = ${JSON.stringify(legacy)}\n`;
+    await withConfig(initial, async (path, deps) => {
+      const before = readFileSync(path, "utf8");
+      const get = await handleManagementAPI(new Request("http://localhost/api/v2"), new URL("http://localhost/api/v2"), config, deps);
+      expect(await get?.json()).toMatchObject({
+        multiAgentModeHintText: legacy,
+        multiAgentModeHintRecommendation: MULTI_AGENT_MODE_HINT_RECOMMENDATION,
+      });
+      expect(readFileSync(path, "utf8")).toBe(before);
+
+      const unrelated = await handleManagementAPI(put({ agentsEnabled: false }), new URL("http://localhost/api/v2"), config, deps);
+      expect(unrelated?.status).toBe(200);
+      expect(getMultiAgentModeHintText(path)).toBe(legacy);
+
+      const saved = await handleManagementAPI(put({ multiAgentModeHintText: legacy }), new URL("http://localhost/api/v2"), config, deps);
+      expect(saved?.status).toBe(200);
+      expect(await saved?.json()).toMatchObject({
+        multiAgentModeHintText: MULTI_AGENT_MODE_HINT_RECOMMENDATION.text,
+        multiAgentModeHintRecommendation: MULTI_AGENT_MODE_HINT_RECOMMENDATION,
+      });
+      expect(getMultiAgentModeHintText(path)).toBe(MULTI_AGENT_MODE_HINT_RECOMMENDATION.text);
+      expect(readFileSync(path, "utf8")).toContain("# keep adjacent setting");
+      expect(getMaxConcurrentThreads(path)).toBe(17);
+
+      const after = readFileSync(path, "utf8");
+      expect(setMultiAgentModeHintText(legacy, path)).toEqual({ ok: true, changed: false });
+      expect(readFileSync(path, "utf8")).toBe(after);
     });
   });
 

@@ -38,6 +38,7 @@ import { AtomicWriteResidualTempError, AtomicWriteSecretResidualError, atomicWri
 import { forgetEphemeralSecretPath } from "../lib/windows-secret-acl";
 import { CODEX_CONFIG_PATH } from "./paths";
 import { resolveAndPersistCodexRuntime } from "./runtime";
+import { canonicalizeOpenCodexModeHint } from "./multi-agent-mode-policy";
 
 /** Upstream codex-rs feature key: allow `request_user_input` in Default mode. */
 export const DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY = "default_mode_request_user_input";
@@ -1091,7 +1092,8 @@ export function setMultiAgentModeHintText(value: string | null, configPath?: str
       };
     }
   }
-  return setV2StringField("multi_agent_mode_hint_text", value, configPath);
+  const canonicalValue = value === null ? null : canonicalizeOpenCodexModeHint(value);
+  return setV2StringField("multi_agent_mode_hint_text", canonicalValue, configPath);
 }
 
 export const MODE_HINT_CAPABILITY_CACHE_MAX_ENTRIES = 8;
