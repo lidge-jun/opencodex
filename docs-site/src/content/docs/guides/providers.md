@@ -347,6 +347,14 @@ router, `orcarouter/auto`, that grades each prompt and picks the model. Create a
 [OrcaRouter console](https://www.orcarouter.ai/console); the preset pins the row near the top of the
 Add provider picker and marks it as a sponsor, and nothing else about routing or defaults changes.
 
+**PackyCode** ([sponsor](https://github.com/lidge-jun/opencodex/blob/main/SPONSORS.md)) is an API
+relay for Claude Code, Codex, Gemini and more. The preset targets their OpenAI-compatible Chat
+Completions endpoint, `https://cf.api.fan/v1`, with live model discovery narrowed to what your
+token group allows (`gpt-5.5` and `gpt-5.1-codex` are seeded). Register at
+[packyapi.com](https://www.packyapi.com/register?aff=k5KT) and create a Codex-group token; the preset
+pins the row near the top of the Add provider picker and marks it as a sponsor, and nothing else about
+routing or defaults changes.
+
 | Provider | Base URL |
 | --- | --- |
 | **OpenAI (API key)** | `https://api.openai.com/v1` |
@@ -370,6 +378,7 @@ Add provider picker and marks it as a sponsor, and nothing else about routing or
 | Baseten Model APIs | `https://inference.baseten.co/v1` |
 | Command Code | `https://api.commandcode.ai/provider/v1` |
 | OrcaRouter | `https://api.orcarouter.ai/v1` |
+| PackyCode | `https://cf.api.fan/v1` |
 | Meta Model API | `https://api.meta.ai/v1` |
 | Meta Muse Code (CLI credential) | `https://api.meta.ai/v1` |
 | SambaNova Cloud | `https://api.sambanova.ai/v1` |

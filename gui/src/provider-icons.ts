@@ -69,6 +69,7 @@ const PROVIDER_ICON_ALIASES: Record<string, string> = {
   novita: "novita.svg",
   orcarouter: "orcarouter.svg",
   "orcarouter-oauth": "orcarouter.svg",
+  packycode: "packycode.svg",
   parallel: "parallel.svg",
   sambanova: "sambanova.svg",
   scaleway: "scaleway.svg",

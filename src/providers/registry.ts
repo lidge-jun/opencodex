@@ -1941,6 +1941,25 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     note: "OpenAI-compatible adaptive router. Models and multimodal capabilities are discovered live from the public chat catalog. Use the OrcaRouter account entry for PKCE login.",
   },
   {
+    // PackyCode: API relay (packyapi.com) for Claude Code, Codex, Gemini and more. Codex traffic
+    // uses the OpenAI-compatible host from their Codex/Kimi Code guides (docs.packyapi.com):
+    // https://cf.api.fan/v1 — GET /v1/models answers 401 without a key, so the host is live and
+    // discovery narrows to what the key's token group allows. Model ids are bare OpenAI-style
+    // ids (the Codex token group lists gpt-5.5 / gpt-5.1-codex).
+    // Standard sponsor under SPONSORS.md; the dashboardUrl carries their affiliate code.
+    id: "packycode", label: "PackyCode", adapter: "openai-chat", baseUrl: "https://cf.api.fan/v1",
+    authKind: "key", dashboardUrl: "https://www.packyapi.com/register?aff=k5KT",
+    sponsor: { tier: "standard", url: "https://www.packyapi.com/register?aff=k5KT" },
+    defaultModel: "gpt-5.5",
+    models: ["gpt-5.5", "gpt-5.1-codex"],
+    liveModels: true,
+    // New key preset: opt into collision preservation so a row named `packycode` that a user
+    // points at a different PackyCode host keeps its own destination instead of being pulled
+    // back onto the Codex endpoint below.
+    preserveCustomDestination: true,
+    note: "API relay for Claude Code, Codex, Gemini and more. Create a Codex-group token at packyapi.com; live discovery lists what the token group allows.",
+  },
+  {
     // BizRouter: Korean enterprise LLM gateway (api.bizrouter.ai). Model ids are
     // vendor-namespaced (`<vendor>/<model>`) and pass through to the upstream as-is.
     // Live-verified 2026-07-24: /v1/chat/completions accepts the `tools` field and
