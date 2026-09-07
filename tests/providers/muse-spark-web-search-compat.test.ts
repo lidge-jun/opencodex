@@ -35,6 +35,12 @@ const META_PROVIDER = {
   baseUrl: "https://api.meta.ai/v1",
 };
 
+const META_PATH_PROVIDER = {
+  ...ZEN_PROVIDER,
+  baseUrl: "https://api.meta.ai",
+  responsesPath: "/v1/responses",
+};
+
 /** A Codex web_search declaration exactly as `hosted_spec.rs` emits it for TextAndImage. */
 function webSearchTool(): Record<string, unknown> {
   return {
@@ -219,7 +225,14 @@ describe("#2617/#3378 Muse Spark web_search compatibility", () => {
     }
   });
 
-  test("direct Meta preserves its web_search fields at both tool positions", () => {
+  /**
+   * #3456 scoped the guard to OpenCode Zen/Go URLs on the assumption that
+   * `https://api.meta.ai/v1` accepted Codex's extra web_search fields. Direct
+   * Meta still 400s `tools[].search_content_types` on ordinary `web_search`
+   * (live 2026-09-07 against muse-spark-1.3-contributor). Same model-id set,
+   * same field drop, same preview preservation.
+   */
+  test("direct Meta strips rejected web_search fields at both tool positions", () => {
     const body = buildForProvider(META_PROVIDER, "muse-spark-1.3-contributor", {
       tools: [webSearchTool()],
       input: [{ type: "additional_tools", tools: [webSearchTool()] }],
@@ -228,8 +241,29 @@ describe("#2617/#3378 Muse Spark web_search compatibility", () => {
     const item = (body.input as Array<Record<string, unknown>>)[0]!;
     const nested = (item.tools as Array<Record<string, unknown>>)[0]!;
     for (const declaration of [tool, nested]) {
-      expect(declaration.search_content_types).toEqual(["text", "image"]);
-      expect(declaration.indexed_web_access).toBe(true);
+      expect(declaration.type).toBe("web_search");
+      expect(declaration.search_context_size).toBe("medium");
+      expect(Object.hasOwn(declaration, "search_content_types")).toBe(false);
+      expect(Object.hasOwn(declaration, "indexed_web_access")).toBe(false);
     }
+  });
+
+  test("direct Meta keeps the field on web_search_preview", () => {
+    const body = buildForProvider(META_PROVIDER, "muse-spark-1.3-contributor", {
+      tools: [{ ...webSearchTool(), type: "web_search_preview" }],
+    });
+    const tool = toolsOf(body)[0]!;
+    expect(tool.type).toBe("web_search_preview");
+    expect(tool.search_content_types).toEqual(["text", "image"]);
+    expect(tool.indexed_web_access).toBe(true);
+  });
+
+  test("split Meta baseUrl and responsesPath derives the same strict destination", () => {
+    const body = buildForProvider(META_PATH_PROVIDER, "muse-spark-1.3-contributor", {
+      tools: [webSearchTool()],
+    });
+    const tool = toolsOf(body)[0]!;
+    expect(Object.hasOwn(tool, "search_content_types")).toBe(false);
+    expect(Object.hasOwn(tool, "indexed_web_access")).toBe(false);
   });
 });
