@@ -3,6 +3,7 @@ package ocxcli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/lidge-jun/opencodex/go/internal/managementauth"
 )
 
 func TestReclaimPortRemovesStaleProcessRecords(t *testing.T) {
@@ -97,15 +100,44 @@ func TestStandaloneServerOwnsListenerDashboardHealthAndGoRoutes(t *testing.T) {
 	}
 	ready := httptest.NewRecorder()
 	server.handler.ServeHTTP(ready, httptest.NewRequest(http.MethodGet, "/readyz", nil))
-	if ready.Code != http.StatusOK || !strings.Contains(ready.Body.String(), "\"status\":\"ready\"") {
-		t.Fatalf("ready = %d %s", ready.Code, ready.Body.String())
+	if ready.Code != http.StatusOK || ready.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf("ready headers = %d %q", ready.Code, ready.Header().Get("Content-Type"))
+	}
+	var readyBody map[string]any
+	if err := json.Unmarshal(ready.Body.Bytes(), &readyBody); err != nil {
+		t.Fatalf("decode ready = %v", err)
+	}
+	if readyBody["service"] != "opencodex" || readyBody["version"] != "9.9.9" || readyBody["status"] != "ready" {
+		t.Fatalf("ready body = %#v", readyBody)
+	}
+	if pid, ok := readyBody["pid"].(float64); !ok || int64(pid) != int64(server.pid) {
+		t.Fatalf("ready pid = %#v, want %d", readyBody["pid"], server.pid)
+	}
+	if port, ok := readyBody["port"].(float64); !ok || int(port) != server.port {
+		t.Fatalf("ready port = %#v, want %d", readyBody["port"], server.port)
+	}
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodHead} {
+		rejected := httptest.NewRecorder()
+		server.handler.ServeHTTP(rejected, httptest.NewRequest(method, "/readyz", nil))
+		if rejected.Code != http.StatusNotFound {
+			t.Fatalf("%s /readyz = %d, want 404", method, rejected.Code)
+		}
+	}
+	trailing := httptest.NewRecorder()
+	server.handler.ServeHTTP(trailing, httptest.NewRequest(http.MethodGet, "/readyz/", nil))
+	if trailing.Code != http.StatusNotFound {
+		t.Fatalf("GET /readyz/ = %d, want 404", trailing.Code)
 	}
 	raw, err := os.ReadFile(filepath.Join(home, "runtime-port.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), "\"pid\"") || !strings.Contains(string(raw), "\"attestationSecret\"") {
-		t.Fatalf("runtime record = %s", raw)
+	var state RuntimeState
+	if err := json.Unmarshal(raw, &state); err != nil {
+		t.Fatalf("decode runtime record: %v", err)
+	}
+	if state.PID != int64(server.pid) || state.Port != server.port || state.Hostname != "127.0.0.1" || !managementauth.IsAttestationSecret(state.AttestationSecret) {
+		t.Fatalf("runtime record = %#v", state)
 	}
 }
 
