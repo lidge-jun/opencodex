@@ -441,7 +441,7 @@ describe("registry-owned provider model discovery", () => {
       process.env.OPENCODEX_HOME = credentialHome;
       clearModelCache("nous");
       await saveCredential("nous", {
-        access: "nous-discovery-fixture-access",
+        access: "access-token-nous-discovery-fixture",
         refresh: "nous-discovery-fixture-refresh",
         expires: Date.now() + 3_600_000,
       });
@@ -472,7 +472,7 @@ describe("registry-owned provider model discovery", () => {
         fetches += 1;
         expect(String(input)).toBe("https://inference-api.nousresearch.com/v1/models");
         expect(init?.method ?? "GET").toBe("GET");
-        expect(new Headers(init?.headers).get("authorization")).toBe("Bearer nous-discovery-fixture-access");
+        expect(new Headers(init?.headers).get("authorization")).toBe("Bearer access-token-nous-discovery-fixture");
         return new Response(payload, { headers: { "content-type": "application/json" } });
       }) as typeof fetch;
       const config = withStubbedProviderFetch<OcxConfig>({

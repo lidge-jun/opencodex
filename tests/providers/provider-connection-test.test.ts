@@ -331,11 +331,11 @@ describe("POST /api/providers/test (WP040 connectivity probe)", () => {
       fetches += 1;
       expect(String(input)).toBe("https://inference-api.nousresearch.com/v1/models");
       expect(init?.method ?? "GET").toBe("GET");
-      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer nous-probe-fixture-access");
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer access-token-nous-probe-fixture");
       return new Response(payload, { headers: { "content-type": "application/json" } });
     }) as typeof fetch;
     await saveCredential("nous", {
-      access: "nous-probe-fixture-access",
+      access: "access-token-nous-probe-fixture",
       refresh: "nous-probe-fixture-refresh",
       expires: Date.now() + 3_600_000,
     });
