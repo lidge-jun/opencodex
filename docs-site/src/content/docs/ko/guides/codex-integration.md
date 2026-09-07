@@ -40,6 +40,61 @@ loopback `openai_base_url` 형태에서만 쓰이고, 그 키와 함께 제거�
 
 프록시는 기본적으로 포트 `10100`에서 듣고 `POST /v1/responses`, `POST /v1/responses/compact`, `POST /v1/images/generations`, `POST /v1/images/edits`, `GET /v1/models`, `GET /healthz`, 그리고 `/api/*` 관리 표면을 제공합니다.
 
+### 실험적 컨텍스트 관리 (Codex 0.153+)
+
+지원되는 ChatGPT 계정에서는 Codex의 `config.toml`에 다음 설정을 추가합니다.
+기존 `[features]` 테이블이 있으면 그 안에 병합하세요.
+
+```toml
+[features]
+context_management.experimental_mode = true
+```
+
+기본 내장 loopback 통합에서는 다음 `ocx sync` 또는 프록시 시작 시 관리되는 루트
+`openai_base_url`이 `http://127.0.0.1:10100/backend-api/codex`로 바뀝니다. Codex는 이 경로를
+확인한 뒤 `new_context`, history, notes 도구를 활성화합니다. 동기화 후 새 Codex 세션을
+시작하세요. 이 기능은 명시적으로 켜야 하며, 사용자 소유 URL과 원격 사용자 지정 provider
+주입은 변경하지 않습니다. 컨텍스트 창이나 압축 한도를 덮어쓰지 않습니다.
+
+이 backend 접두사는 Responses WebSocket 업그레이드를 포함한 기존 데이터 경로의 별칭입니다.
+원래 `/v1` 경로와 realtime sideband 오버라이드도 유지됩니다. 열 개의 네이티브
+`alpha/history/v2/*`, `alpha/notes/v2/*` POST 엔드포인트는 `openai-responses` 어댑터와 정식
+ChatGPT forward 목적지를 사용하는 내장 `openai` provider로만 전달합니다. Direct는 현재
+호출자/메인 로그인을, Pool은 선택된 Codex 계정을 사용합니다. `openai-apikey`는 설정된 API
+키를 사용하는 별도 경로이며 이 비공개 엔드포인트를 지원하지 않습니다. 사용자 지정 또는
+비정식 Responses provider는 이 컨텍스트 relay의 후보가 아니며 Codex 계정 자격 증명을
+전달받지 않습니다.
+
+호출자 헤더는 공통 Codex forward 허용 목록으로 제한됩니다. `authorization`,
+`chatgpt-account-id`, 승인된 OpenAI beta, originator, session 및 Codex 프로토콜 메타데이터와
+추가 헤더 `x-openai-encrypted-tool-arguments`, `x-openai-tool-output-truncation-policy`만
+전달합니다. 쿠키 등 임의 헤더는 전달하지 않습니다. 프록시 데이터 키를 bearer로 사용하면
+선택된 Codex 자격 증명으로 교체하며, Direct에서는 저장된 메인 로그인을 사용합니다.
+자격 증명이 없으면 전달 전에 실패합니다. 프록시 인증 자격 증명은 upstream으로 보내지
+않습니다. 암호화된 인수, 응답 본문, upstream 오류 상태는 보존합니다.
+
+성공한 ChatGPT 모델 응답은 루트 세션을 실제로 처리한 계정을 크기가 제한된 프로세스 로컬
+소유권 레지스트리에 기록합니다. History와 notes는 현재 활성 계정이 바뀌어도 명시적으로
+선택된 계정을 포함해 기록된 소유 계정을 사용합니다. 저장된 계정의 토큰은 같은 실제 계정에
+한해 갱신할 수 있으며, 다른 실제 계정으로 교체되면 거부합니다. Direct 호출자 소유 세션은
+호출자 자격 증명을 유지하며 프록시 bearer로 인계할 수 없습니다. 서버 측 history를 계정 간에
+이동하는 기능은 아닙니다.
+
+소유권이 없거나 만료, 제거, 충돌 또는 재시작으로 소실된 경우 계정 선택이나 upstream 요청
+전에 HTTP 409를 반환합니다. 현재 활성 계정으로 추측하지 않습니다. 기존 세션에서는 기능을
+켜거나 컨텍스트를 초기화하기 전에 체크포인트 또는 지속적으로 보관할 요약을 먼저 저장하세요.
+기능을 켜도 이전 history나 notes를 소급해서 채우지 않으며, 소유권이 새로 확인되어도 이전
+backend 콘텐츠가 존재한다는 뜻은 아닙니다. 재시작 후에는 성공한 모델 요청으로 소유권을
+확립한 뒤 컨텍스트 도구를 사용하고, 소유권이 충돌하면 새 세션을 시작하세요.
+
+기존 모델 affinity, cooldown 및 재시도 규칙은 변경하지 않습니다. Notes 쓰기를 포함한
+컨텍스트 요청은 자동 재시도하지 않으며, ChatGPT forward 요청에 같은 키를 사용한 429
+재시도를 추가하지 않습니다. History 트래픽은 모델의 quota-recovery probe를 점유하거나
+완료 처리하지 않습니다.
+
+끄려면 실험 설정을 삭제하거나 `false`로 바꾼 뒤 `ocx sync`를 실행하고 새 세션을 시작하세요.
+관리되는 루트 URL은 `/v1`로 돌아갑니다.
+
 ### 내장 이미지 생성 (`image_gen`)
 
 Codex의 내장 `image_gen` 도구는 `/v1/responses`를 거치지 않습니다. codex-rs 확장은 채팅과 같은 ChatGPT bearer 인증을 사용해서 `{base_url}/images/generations`를 직접 POST하며, 참조 이미지가 붙어 있으면 `/images/edits`를 POST합니다. 주입된 `base_url`이 opencodex를 가리키므로, 프록시가 이 호출을 OpenAI upstream으로 전달합니다.

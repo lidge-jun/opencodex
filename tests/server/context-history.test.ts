@@ -1,18 +1,26 @@
 // mock.module replacements require file isolation (bun test --isolate).
 import { describe, test, expect, mock, beforeEach, afterAll } from "bun:test";
+import type { CodexAuthContext } from "../../src/codex/auth-context";
+import { recordContextSessionOwner, clearContextSessionOwnersForTests } from "../../src/codex/context-owner";
+import type { DataPlaneAdmission } from "../../src/server/auth-cors";
 import type { OcxConfig } from "../../src/types";
 import type { RequestLogContext } from "../../src/server/request-log";
 
-type Selection = { headers: Headers; mode: string; options: { modelId: string } };
+type Selection = { headers: Headers; mode: string; options: { modelId: string; admission?: DataPlaneAdmission; substituteMainCredentialForDirect?: boolean; accountId?: string; requestScopedMainCredential?: boolean } };
 let selection: Selection | undefined;
 const config: OcxConfig = { port: 0, defaultProvider: "openai", providers: {} };
 const logContext = (): RequestLogContext => ({ model: "context_history", provider: "" });
 let materialized: { config: OcxConfig; modelId: string } | undefined;
 let materializationError: Error | undefined;
+let materializationOptions: { admission?: DataPlaneAdmission; substituteMainCredential?: boolean } | undefined;
+let outgoingBearer = "test-only";
+let outgoingAccount = "test-only";
+let accountMode = "pool";
 let validated=0;
 let probe=false;let released=0;let directError=false;
 const errors = {
   CodexAccountCooldownError: class extends Error {},
+  CodexMainSubstitutionUnavailableError: class extends Error {},
   CodexDirectAuthenticationError: class extends Error {},
   CodexAuthContextError: class extends Error {},
   CodexMainProfileDrainingError: class extends Error {},
@@ -24,28 +32,43 @@ mock.module("../../src/codex/auth-context",()=>({
   resolveCodexAuthContext:async(headers: Headers, _config: OcxConfig, mode: string, options: Selection["options"])=>{selection={headers,mode,options};if(directError)throw new errors.CodexDirectAuthenticationError();return {kind:"pool",accountId:"test-account",...(probe?{probeLeaseId:"test-probe"}:{})};},
   isCodexAuthContextUsable:()=>true,
   releaseCodexAuthContextProbeLease:()=>{released++;},
+  materializeCodexUpstreamAuth: (_headers: Headers, _auth: unknown, options: { config: OcxConfig; modelId: string; admission?: DataPlaneAdmission; substituteMainCredential?: boolean }) => {
+    materializationOptions = options;
+    materialized = { config: options.config, modelId: options.modelId };
+    if (materializationError) throw materializationError;
+    return new Headers({ authorization: `Bearer ${outgoingBearer}`, "chatgpt-account-id": outgoingAccount });
+  },
   headersForCodexAuthContext:(_headers: Headers, _auth: unknown, selectedConfig: OcxConfig, modelId: string) => {
     materialized = { config: selectedConfig, modelId };
     if (materializationError) throw materializationError;
-    return new Headers({ authorization: "Bearer test-only", "chatgpt-account-id": "test-only" });
+    return new Headers({ authorization: "Bearer test-only", "chatgpt-account-id": outgoingAccount });
   },
   cooldownErrorResponse:()=>new Response("cooldown",{status:429}),
   codexMainProfileDrainingResponse:()=>new Response("draining",{status:503}),
 }));
 const realRouting = await import("../../src/codex/routing");
 mock.module("../../src/codex/routing",()=>({...realRouting, formatCodexProviderForLog:()=>"openai-test"}));
-mock.module("../../src/providers/openai-sidecar",()=>({listOpenAiForwardSidecarCandidates:()=>[{providerName:"openai",provider:{baseUrl:"https://chatgpt.com/backend-api/codex"},accountMode:"pool"}]}));
+mock.module("../../src/providers/openai-sidecar",()=>({listOpenAiForwardSidecarCandidates:()=>[{providerName:"openai",provider:{baseUrl:"https://chatgpt.com/backend-api/codex"},accountMode}]}));
 class ForwardAdmissionCredentialError extends Error {}
-mock.module("../../src/server/auth-cors",()=>({ForwardAdmissionCredentialError,validateForwardAdmissionCredential:(h:Headers)=>{validated++;if(!h.has("authorization"))throw new ForwardAdmissionCredentialError("test credential missing");}}));
+mock.module("../../src/server/auth-cors",()=>({ForwardAdmissionCredentialError,validateForwardAdmissionCredential:(h:Headers)=>{validated++;if(!h.has("authorization") || h.get("authorization") === "Bearer ocx_data_test_admission")throw new ForwardAdmissionCredentialError("test credential missing");}}));
 mock.module("../../src/server/responses",()=>({codexLogAccountId:()=>"test",decodeRequestErrorResponse:()=>new Response("invalid json",{status:400})}));
 mock.module("../../src/server/lifecycle",()=>({codexAccountSelectionForTurn:()=>()=>undefined}));
 const { handleContextHistory, contextSelectionHeaders } = await import("../../src/server/context-history");
+const destination = "https://chatgpt.com/backend-api/codex";
+function seedOwner(sessionId: string, kind: "stored" | "caller" = "stored", account = "test-only", now?: number) {
+  const auth = kind === "caller" ? { kind: "main", accountId: null } : {
+    kind: "pool", accountId: "test-account", chatgptAccountId: account,
+    accessToken: "test-only", generation: 1, writerGeneration: 0,
+  };
+  recordContextSessionOwner(new Headers({ "session-id": sessionId }), destination,
+    auth as CodexAuthContext, new Headers({ authorization: "Bearer test-only", "chatgpt-account-id": account }), false, now);
+}
 const originalFetch=globalThis.fetch;
 function setFetch(handler: (input: string | URL | Request, init?: RequestInit) => Promise<Response>): void {
   globalThis.fetch = Object.assign(handler, { preconnect: originalFetch.preconnect });
 }
-afterAll(()=>{globalThis.fetch=originalFetch;mock.restore();});
-beforeEach(()=>{globalThis.fetch=originalFetch;materialized=undefined;materializationError=undefined;selection=undefined;validated=0;probe=false;released=0;directError=false;});
+afterAll(()=>{clearContextSessionOwnersForTests();globalThis.fetch=originalFetch;mock.restore();});
+beforeEach(()=>{clearContextSessionOwnersForTests();for (const id of ["root", "root-test", "s"]) seedOwner(id);outgoingAccount="test-only";globalThis.fetch=originalFetch;materialized=undefined;materializationError=undefined;selection=undefined;validated=0;materializationOptions=undefined;outgoingBearer="test-only";accountMode="pool";probe=false;released=0;directError=false;});
 
 describe("context relay contract",()=>{
   test("selects root shared lane but sends original body and protocol headers",async()=>{
@@ -56,7 +79,7 @@ describe("context relay contract",()=>{
     const r=await handleContextHistory(req,config,logContext(),"alpha/notes/v2/write_file");
     expect(r.status).toBe(200);expect(r.headers.get("x-request-id")).toBe("req-test");
     expect(materialized).toEqual({ config, modelId: "context_history" });
-    expect(validated).toBe(1);expect(selection?.mode).toBe("pool");expect(selection?.options.modelId).toBe("context_history");
+    expect(validated).toBeGreaterThanOrEqual(1);expect(selection?.mode).toBe("pool");expect(selection?.options.modelId).toBe("context_history");
     expect(selection?.headers.get("session-id")).toBe("root-test");expect(selection?.headers.get("thread-id")).toBe("root-test");expect(selection?.headers.get("x-codex-parent-thread-id")).toBeNull();
     expect(JSON.parse(String(sent.body))).toEqual(body);expect(new Headers(sent.headers).has("session-id")).toBe(false);
     expect(new Headers(sent.headers).get("x-openai-encrypted-tool-arguments")).toBe("true");expect(sent.redirect).toBe("manual");
@@ -144,4 +167,115 @@ test("credential materialization rechecks hardlocks and maps auth errors", async
     expect(materialized).toEqual({ config, modelId: "context_history" });
   }
   expect(calls).toBe(0);
+});
+
+
+const bearerAdmission: DataPlaneAdmission = { kind: "configured", keyId: "synthetic-key", source: "bearer" };
+const admissionHeaders = { authorization: "Bearer ocx_data_test_admission" };
+
+test("bearer-admitted context validates the body before selecting credentials", async () => {
+  const response = await handleContextHistory(contextRequest("{}", admissionHeaders), config, logContext(), "alpha/notes/v2/read_file", undefined, bearerAdmission);
+  expect(response.status).toBe(400);
+  expect(await response.text()).toContain("context.session_id");
+  expect(selection).toBeUndefined();
+});
+
+test("stored ownership remains fixed across current Direct and Pool settings", async () => {
+  let calls = 0;
+  setFetch(async (_url, init) => {
+    calls++;
+    expect(new Headers(init?.headers).get("authorization")).toBe("Bearer test-only");
+    return new Response("{}");
+  });
+  for (const mode of ["direct", "pool"]) {
+    accountMode = mode;
+    const response = await handleContextHistory(contextRequest('{"context":{"session_id":"root"}}', admissionHeaders), config, logContext(), "alpha/notes/v2/read_file", undefined, bearerAdmission);
+    expect(response.status).toBe(200);
+    expect(selection?.mode).toBe("pool");
+    expect(selection?.options.accountId).toBe("test-account");
+    expect(selection?.options.admission).toEqual(bearerAdmission);
+    expect(selection?.options.substituteMainCredentialForDirect).toBe(true);
+    expect(materializationOptions?.admission).toEqual(bearerAdmission);
+    expect(materializationOptions?.substituteMainCredential).toBe(true);
+  }
+  expect(calls).toBe(2);
+});
+
+test("proxy credentials cannot escape materialization or bypass non-bearer rejection", async () => {
+  let calls = 0;
+  setFetch(async () => { calls++; return new Response("unexpected"); });
+  outgoingBearer = "ocx_data_test_admission";
+  const body = '{"context":{"session_id":"root"}}';
+  const response = await handleContextHistory(contextRequest(body, admissionHeaders), config, logContext(), "alpha/notes/v2/read_file", undefined, bearerAdmission);
+  expect(response.status).toBe(401);
+  expect(materialized).toBeDefined();
+  for (const admission of [undefined, { kind: "environment", source: "dedicated" } as const, { kind: "loopback", source: "loopback" } as const]) {
+    selection = undefined;
+    expect((await handleContextHistory(contextRequest(body, admissionHeaders), config, logContext(), "alpha/notes/v2/read_file", undefined, admission)).status).toBe(401);
+    expect(selection).toBeUndefined();
+  }
+  expect(calls).toBe(0);
+});
+
+
+test("missing usable stored credentials fail before upstream I/O in bearer mode", async () => {
+  let calls = 0;
+  setFetch(async () => { calls++; return new Response("unexpected"); });
+  for (const mode of ["direct", "pool"]) {
+    accountMode = mode;
+    materializationError = mode === "direct"
+      ? new errors.CodexMainSubstitutionUnavailableError()
+      : new errors.CodexPoolAuthenticationError();
+    const response = await handleContextHistory(contextRequest('{"context":{"session_id":"root"}}', admissionHeaders), config, logContext(), "alpha/notes/v2/read_file", undefined, bearerAdmission);
+    expect(response.status).toBe(401);
+    expect(materializationOptions?.substituteMainCredential).toBe(true);
+  }
+  expect(calls).toBe(0);
+});
+
+
+test("unknown, expired and conflicting owners fail before selecting or sending", async () => {
+  let calls = 0;
+  setFetch(async () => { calls++; return new Response("unexpected"); });
+  for (const state of ["unknown", "expired", "conflicting"]) {
+    clearContextSessionOwnersForTests();
+    if (state === "expired") seedOwner("root", "stored", "test-only", Date.now() - 25 * 60 * 60_000);
+    if (state === "conflicting") { seedOwner("root"); seedOwner("root", "stored", "other-account"); }
+    expect((await handleContextHistory(contextRequest('{"context":{"session_id":"root"}}'), config, logContext(), "alpha/notes/v2/read_file")).status).toBe(409);
+    expect(selection).toBeUndefined();
+  }
+  expect(calls).toBe(0);
+});
+
+test("stored token refresh is accepted but physical account replacement is refused", async () => {
+  let calls = 0;
+  setFetch(async () => { calls++; return new Response("{}"); });
+  outgoingBearer = "refreshed-test-token";
+  const body = '{"context":{"session_id":"root"}}';
+  expect((await handleContextHistory(contextRequest(body), config, logContext(), "alpha/notes/v2/read_file")).status).toBe(200);
+  outgoingAccount = "replacement-account";
+  expect((await handleContextHistory(contextRequest(body), config, logContext(), "alpha/notes/v2/read_file")).status).toBe(409);
+  expect(calls).toBe(1);
+});
+
+test("caller owner uses Direct request credentials and cannot authorize proxy-bearer substitution", async () => {
+  clearContextSessionOwnersForTests(); seedOwner("root", "caller");
+  let calls = 0;
+  setFetch(async () => { calls++; return new Response("{}"); });
+  const body = '{"context":{"session_id":"root"}}';
+  expect((await handleContextHistory(contextRequest(body), config, logContext(), "alpha/notes/v2/read_file")).status).toBe(200);
+  expect(selection?.mode).toBe("direct");
+  expect(selection?.options.requestScopedMainCredential).toBe(true);
+  expect(selection?.options.accountId).toBeUndefined();
+  expect(materializationOptions?.substituteMainCredential).toBe(false);
+  selection = undefined;
+  expect((await handleContextHistory(contextRequest(body, admissionHeaders), config, logContext(), "alpha/notes/v2/read_file", undefined, bearerAdmission)).status).toBe(409);
+  expect(selection).toBeUndefined(); expect(calls).toBe(1);
+});
+
+test("a context root conflicting with protocol headers is rejected without selection", async () => {
+  const response = await handleContextHistory(contextRequest('{"context":{"session_id":"root"}}', {
+    authorization: "Bearer test", "session-id": "another-root",
+  }), config, logContext(), "alpha/notes/v2/read_file");
+  expect(response.status).toBe(409); expect(selection).toBeUndefined();
 });

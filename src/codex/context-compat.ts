@@ -25,7 +25,13 @@ export function codexCompatibleUrl(rawUrl: string): URL {
 
 /** Change only marker-managed built-in routing, and only with an explicit context opt-in. */
 export function contextCompatibleBaseLine(content: string, line: string): string {
-  const parsed = Bun.TOML.parse(content) as {features?: {context_management?: {experimental_mode?: boolean}}};
+  let parsed: {features?: {context_management?: {experimental_mode?: boolean}}};
+  try {
+    parsed = Bun.TOML.parse(content) as typeof parsed;
+  } catch {
+    // Injection tolerates incomplete user config; malformed TOML is not an opt-in.
+    return line;
+  }
   if (parsed.features?.context_management?.experimental_mode !== true) return line;
   const match = /^openai_base_url = "([^"]+)"$/.exec(line);
   if (!match) return line;

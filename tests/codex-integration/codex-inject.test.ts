@@ -705,3 +705,16 @@ test('feature disabled and user-owned routing remain intact',()=>{
  const managed=`${OCX_SECTION_MARKER}\nopenai_base_url = "http://127.0.0.1:10100/v1"\n[features]\ncontext_management.experimental_mode = false\n`;
  expect(setRootOpenaiBaseUrl(managed,10100).content).toBe(managed);
 });
+
+
+test("malformed TOML preserves user routing and does not enable context injection", () => {
+  const target = { baseUrl: "http://127.0.0.1:10100/v1", requiresAdmissionToken: false, tokenEnv: "OPENCODEX_API_AUTH_TOKEN" as const };
+  for (const malformed of ['model = "unterminated', '[features]\ncontext_management.experimental_mode = true\nbroken = [']) {
+    const userOwned = `openai_base_url = "https://example.invalid/v1"\n${malformed}\n`;
+    const managed = `${OCX_SECTION_MARKER}\nopenai_base_url = "http://127.0.0.1:10100/v1"\n${malformed}\n`;
+    for (const inject of [(source: string) => setRootOpenaiBaseUrl(source, 10100), (source: string) => setRootOpenaiBaseUrl(source, target)]) {
+      expect(inject(userOwned)).toEqual({ content: userOwned, keptUserBaseUrl: true });
+      expect(inject(managed)).toEqual({ content: managed, keptUserBaseUrl: false });
+    }
+  }
+});

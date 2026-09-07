@@ -2,10 +2,11 @@
 import { formatErrorResponse } from "../bridge";
 import {
   CodexAccountCooldownError, CodexAuthContextError, CodexMainProfileDrainingError, CodexDirectAuthenticationError,
-  CodexPoolAuthenticationError, CodexThreadAffinityExpiredError,
+  CodexPoolAuthenticationError, CodexThreadAffinityExpiredError, CodexMainSubstitutionUnavailableError,
   codexMainProfileDrainingResponse, cooldownErrorResponse,
-  headersForCodexAuthContext, isCodexAuthContextUsable, resolveCodexAuthContext, releaseCodexAuthContextProbeLease,
+  materializeCodexUpstreamAuth, isCodexAuthContextUsable, resolveCodexAuthContext, releaseCodexAuthContextProbeLease,
 } from "../codex/auth-context";
+import { getContextSessionOwner, contextSessionOwnerMatches } from "../codex/context-owner";
 import { contextEndpoint } from "../codex/context-compat";
 import { formatCodexProviderForLog } from "../codex/routing";
 import { listOpenAiForwardSidecarCandidates } from "../providers/openai-sidecar";
@@ -13,7 +14,7 @@ import { signalWithTimeout } from "../lib/abort";
 import { readBoundedResponseBytes } from "../lib/bounded-body";
 import type { AdmissionLease } from "../lib/admission";
 import type { OcxConfig } from "../types";
-import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "./auth-cors";
+import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential, type DataPlaneAdmission } from "./auth-cors";
 import { readJsonRequestBody } from "./request-decompress";
 import { codexLogAccountId, decodeRequestErrorResponse } from "./responses";
 import { codexAccountSelectionForTurn } from "./lifecycle";
@@ -36,12 +37,14 @@ export function contextSelectionHeaders(headers: Headers, sessionId: string): He
 
 export async function handleContextHistory(
   req: Request, config: OcxConfig, logCtx: RequestLogContext,
-  endpoint: string, turnAdmissionLease?: AdmissionLease,
+  endpoint: string, turnAdmissionLease?: AdmissionLease, admission?: DataPlaneAdmission,
 ): Promise<Response> {
   if (!contextEndpoint("/v1/" + endpoint) || req.method !== "POST") {
     return formatErrorResponse(404, "not_found", "Unknown context endpoint");
   }
-  try { validateForwardAdmissionCredential(req.headers, config); }
+  // Only a trusted listener admission authorizes replacing a proxy bearer with Codex auth.
+  const substituteMainCredential = admission?.source === "bearer";
+  try { if (!substituteMainCredential) validateForwardAdmissionCredential(req.headers, config); }
   catch (err) {
     if (err instanceof ForwardAdmissionCredentialError) return formatErrorResponse(401, "authentication_error", err.message);
     throw err;
@@ -55,12 +58,25 @@ export async function handleContextHistory(
   }
   const candidate = listOpenAiForwardSidecarCandidates(config)[0];
   if (!candidate) return formatErrorResponse(400, "invalid_request_error", "History and notes require the native ChatGPT forward provider");
+  const rootHeader = req.headers.get("x-codex-parent-thread-id")?.trim() || req.headers.get("session-id")?.trim();
+  if (rootHeader && rootHeader !== sessionId) {
+    return formatErrorResponse(409, "context_account_unavailable", "Context root does not match this request");
+  }
+  const owner = getContextSessionOwner(sessionId, candidate.provider.baseUrl);
+  if (!owner || owner.ambiguous || (owner.kind === "caller" && substituteMainCredential)) {
+    return formatErrorResponse(409, "context_account_unavailable",
+      "Context account ownership is unavailable; start a new session and preserve needed state before resetting context");
+  }
   let authContext: Awaited<ReturnType<typeof resolveCodexAuthContext>>;
   const headers = new Headers(candidate.provider.headers);
   try {
-    authContext = await resolveCodexAuthContext(contextSelectionHeaders(req.headers, sessionId), config, candidate.accountMode, {
-      // Non-Spark context tools share the ordinary model quota/affinity scope, not legacy.
+    authContext = await resolveCodexAuthContext(contextSelectionHeaders(req.headers, sessionId), config, owner.kind === "stored" ? "pool" : "direct", {
+      // Resolve the proven physical owner as an explicit account. Context operations
+      // never create affinity, rotate on quota, or inspect file-main for a caller owner.
       modelId: "context_history",
+      ...(owner.kind === "stored" ? { accountId: owner.accountId } : { requestScopedMainCredential: true }),
+      admission,
+      substituteMainCredentialForDirect: substituteMainCredential,
       beginCodexAccountSelection: codexAccountSelectionForTurn(turnAdmissionLease),
     });
     if (authContext.kind !== "main" && authContext.probeLeaseId) {
@@ -72,14 +88,26 @@ export async function handleContextHistory(
     logCtx.provider = formatCodexProviderForLog(candidate.providerName, codexLogAccountId(authContext), config);
     // Materialization rechecks the current account policy after async selection.
     // Synthetic lane IDs are local selection metadata, never upstream headers.
-    for (const [key, value] of headersForCodexAuthContext(req.headers, authContext, config, "context_history")) {
+    for (const [key, value] of materializeCodexUpstreamAuth(req.headers, authContext, {
+      config, modelId: "context_history", admission, substituteMainCredential,
+    })) {
       headers.set(key, value);
     }
+    // Recheck actual wire identity after async selection/materialization. A replaced
+    // account slot or login must not receive another physical account's history.
+    const currentOwner = getContextSessionOwner(sessionId, candidate.provider.baseUrl);
+    if (!currentOwner || currentOwner.kind !== owner.kind
+      || !contextSessionOwnerMatches(owner, headers) || !contextSessionOwnerMatches(currentOwner, headers)) {
+      return formatErrorResponse(409, "context_account_unavailable", "Context account identity changed; start a new session");
+    }
+    // Check the assembled outbound headers, including configured provider headers.
+    validateForwardAdmissionCredential(headers, config);
   } catch (err) {
     if (err instanceof CodexAccountCooldownError) return cooldownErrorResponse(err);
     if (err instanceof CodexMainProfileDrainingError) return codexMainProfileDrainingResponse();
     if (err instanceof CodexThreadAffinityExpiredError) return formatErrorResponse(409, "invalid_request_error", "Codex thread account affinity expired; start a new session");
-    if (err instanceof CodexAuthContextError || err instanceof CodexPoolAuthenticationError || err instanceof CodexDirectAuthenticationError) {
+    if (err instanceof CodexAuthContextError || err instanceof CodexPoolAuthenticationError || err instanceof CodexDirectAuthenticationError
+      || err instanceof CodexMainSubstitutionUnavailableError || err instanceof ForwardAdmissionCredentialError) {
       return formatErrorResponse(401, "authentication_error", "Selected Codex account is unavailable or needs reauthentication");
     }
     throw err;

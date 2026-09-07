@@ -77,15 +77,39 @@ is needed or added.
 The backend prefix aliases the existing data-plane routes, including Responses WebSocket
 upgrades. The original `/v1` routes and the realtime sideband override remain available. The
 proxy also relays the ten native `alpha/history/v2/*` and `alpha/notes/v2/*` POST endpoints
-through the configured ChatGPT forward provider. Encrypted arguments, tool-output policy
-headers, response bodies, and upstream error statuses are preserved. These private endpoints
-are not implemented by other model providers or the OpenAI API-key route.
+through the built-in `openai` provider with the `openai-responses` adapter and canonical
+ChatGPT forward destination. Direct uses the current caller/main login; Pool selects a Codex
+account. `openai-apikey` uses its configured API key, and custom or noncanonical Responses
+providers are not candidates for this context relay and receive no Codex-account credentials
+from it. These private endpoints are not implemented by other model providers or the OpenAI
+API-key route.
 
-Pool/Direct account selection is unchanged. History requests use their root
-`context.session_id` to recover the same local account-affinity lane as the root model request;
-this does not migrate server-side history between accounts. An automatic account change or
-a proxy restart can therefore affect continuity. Notes writes are not automatically retried,
-and history traffic does not consume or settle a model quota-recovery probe.
+Caller headers are restricted to the shared Codex forward allowlist: `authorization`,
+`chatgpt-account-id`, and approved OpenAI beta, originator, session, and Codex protocol metadata.
+The context relay additionally forwards `x-openai-encrypted-tool-arguments` and
+`x-openai-tool-output-truncation-policy`; arbitrary caller headers such as cookies are not
+forwarded. A proxy data-plane key presented as a bearer is replaced with the selected Codex
+credential (the stored main login in Direct); missing credentials fail before forwarding.
+Proxy admission credentials never go upstream. Encrypted arguments, response bodies, and
+upstream error statuses are preserved.
+
+A successful ChatGPT model response records the root session's actual serving account in a
+bounded, process-local ownership registry. History and notes use that recorded owner, including
+an explicitly selected account, even when the current active account changes. Stored-account token
+refresh may continue for the same physical account; a replaced account identity is rejected.
+Direct caller-owned sessions keep the caller credential and cannot be taken over by a proxy bearer.
+This does not migrate server-side history between accounts.
+
+Unknown, expired, evicted, conflicting, or restart-lost ownership returns HTTP 409 before account
+selection or upstream I/O. The relay does not guess from the current active account. Existing
+sessions should save a checkpoint or other durable summary before enabling the feature or resetting
+context. Enabling it does not backfill earlier history or notes, and a new ownership observation
+does not prove that older backend content exists. After a restart, establish ownership with a
+successful model request before using context tools; start a new session when ownership conflicts.
+
+Existing model affinity, cooldown, and retry rules are unchanged. Context requests are not
+automatically retried, including notes writes; ChatGPT forward requests do not use same-key 429
+replay. History traffic does not consume or settle a model quota-recovery probe.
 
 To disable the feature, remove the experimental key (or set it to `false`), run `ocx sync`,
 and start a new Codex session. The managed root base returns to `/v1`.

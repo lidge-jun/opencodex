@@ -1846,7 +1846,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           ...admissionFields(admission),
         };
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
-          const response = await handleContextHistory(req, config, logCtx, contextEndpoint(url.pathname)!, turnAdmissionLease);
+          const response = await handleContextHistory(req, config, logCtx, contextEndpoint(url.pathname)!, turnAdmissionLease, admission);
           addFinalRequestLog(requestId, start, logCtx, response.status,
             response.status === 499 ? { closeReason: "client_cancel" } : undefined);
           return withCors(response, req, policy);
