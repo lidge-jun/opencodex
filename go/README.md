@@ -27,6 +27,11 @@ material only. This is a fresh codebase.
   `-ldflags` and embeds the Vite dashboard build, and the
   `go-release-artifacts.yml` workflow verifies every release target with the
   same script before `release.yml` attaches the binaries to a release tag.
+  The upgrade-in-place + rollback drill (ticket #43) runs the release-shaped
+  binary against the real TypeScript CLI on a shared home
+  (`tests/go-upgrade-rollback-drill.test.ts`): TS start → Go start reclaims
+  the port with the TS-settled config left byte-identical, Go stop releases
+  the home, and TS start takes it back with no reconfiguration.
 - `internal/sidecar` — the handler plus its unit tests. The JSON key order and
   number formatting of each payload are part of the byte contract with the Bun
   differential oracle (`tests/go-sidecar-parity.test.ts`).
