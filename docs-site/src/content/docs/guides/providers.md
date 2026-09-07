@@ -382,7 +382,11 @@ free-experimentation model.
 **OpenCode Go** requires a stable session identifier for routing. OpenCodex derives
 its Go session header from Codex thread/session headers, or from a client's
 `x-opencode-session` header when Codex headers are absent. This applies to direct
-Chat Completions requests and requests bridged to Responses. Clients must keep the
+Chat Completions requests and requests bridged to Responses. Even an `ocx_`-prefixed
+inbound value is treated as client input and
+hashed into Go affinity; the internal bridge carries the original value, so native
+Chat, bridged Chat, and Responses derive the same result. Explicit provider-config
+session headers are operator overrides and are sent unchanged. Clients must keep the
 identifier stable within a conversation and distinct across conversations; requests
 without a session identifier cannot receive automatic session affinity.
 Generated Pi provider configurations enable `compat.sendSessionAffinityHeaders`
