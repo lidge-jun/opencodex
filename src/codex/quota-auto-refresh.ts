@@ -1,5 +1,5 @@
 import { mutatePersistedConfig } from "../config";
-import { registerStateSweepAfterTick } from "../lib/state-store-sweeper";
+import { captureConfigGeneration, registerStateSweepAfterTick } from "../lib/state-store-sweeper";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 import { normalizeResetAt } from "../providers/quota-wire";
 import { providerCodexAccountMode } from "../providers/registry";
@@ -7,17 +7,20 @@ import type { OcxConfig } from "../types";
 import { isSelectableCodexPoolAccount } from "./account-id";
 import { reconcileMainCodexAccountRuntimeState } from "./account-lifecycle";
 import { isCodexAccountPaused } from "./account-pause";
-import { isAccountNeedsReauth } from "./account-runtime-state";
-import { getValidCodexToken } from "./account-store";
+import { isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
+import { getValidCodexToken, isCodexAccountGenerationLive } from "./account-store";
+import { codexAccountLogLabel } from "./account-label";
 import { getMainAccountToken, getValidMainAccountToken, MAIN_CODEX_ACCOUNT_ID } from "./main-account";
 import { isMainAccountHardLocked } from "./main-account-hard-lock";
 import { tryAcquireNativeMainProfileClaim } from "./native-main-admission";
 import { withNativeMainSharedClaim } from "./native-main-claim";
 import { resolveNativeProfileContext } from "./native-profile-store";
-import { getAccountQuota, type StoredAccountQuota } from "./quota";
-import { warmCodexAccount } from "./warmup";
+import { captureMainQuotaWriter } from "./main-account-cache";
+import { applyAccountQuotaFromUpstreamHeaders, getAccountQuota, type StoredAccountQuota } from "./quota";
+import { CodexWarmupError, codexWarmupFailureReason, warmCodexAccount } from "./warmup";
 import {
-  completedByAccount, retryAfterByAccount, resetCodexQuotaAutoRefreshStateForTests,
+  completedByAccount, retryAfterByAccount, scheduledByAccount, quotaRefreshAfterByAccount,
+  resetCodexQuotaAutoRefreshStateForTests,
   type CodexQuotaAutoRefreshWindows,
 } from "./quota-auto-refresh-state";
 export type { CodexQuotaAutoRefreshWindows } from "./quota-auto-refresh-state";
@@ -36,6 +39,7 @@ export interface CodexQuotaAutoRefreshStatus {
 
 export interface CodexQuotaAutoRefreshRunDeps {
   getQuota?: (accountId: string) => StoredAccountQuota | null;
+  refreshQuota?: (config: OcxConfig, accountId: string) => Promise<void>;
   /** Only false means skipped; existing void callbacks still report a successful warmup. */
   warmAccount?: (config: OcxConfig, accountId: string) => Promise<void | false>;
   persistCompleted?: (
@@ -69,27 +73,81 @@ export function dueCodexQuotaAutoRefreshWindows(
   now: number,
   completed = completedByAccount.get(accountId),
 ): CodexQuotaAutoRefreshWindows | null {
-  if (!quota) return null;
   const saved = config.codexQuotaAutoRefresh?.[accountId];
+  const scheduled = scheduledByAccount.get(accountId) ?? (
+    saved?.nextFiveHourResetAt !== undefined || saved?.nextWeeklyResetAt !== undefined
+      ? { fiveHour: saved.nextFiveHourResetAt, weekly: saved.nextWeeklyResetAt } : undefined
+  );
   const due: CodexQuotaAutoRefreshWindows = {};
-  const shortResetAt = normalizeResetAt(quota.shortResetAt);
-  const weeklyResetAt = normalizeResetAt(quota.weeklyResetAt);
+  const shortResetAt = normalizeResetAt(scheduled ? scheduled.fiveHour : quota?.shortResetAt);
+  const weeklyResetAt = normalizeResetAt(scheduled ? scheduled.weekly : quota?.weeklyResetAt);
   if (saved?.fiveHour === true
-    && quota.shortWindowSeconds === FIVE_HOUR_WINDOW_SECONDS
+    && (scheduled?.fiveHour !== undefined || saved.nextFiveHourResetAt !== undefined
+      || quota?.shortWindowSeconds === FIVE_HOUR_WINDOW_SECONDS)
     && shortResetAt !== undefined
     && shortResetAt <= now
-    && normalizeResetAt(saved.lastFiveHourResetAt) !== shortResetAt
-    && normalizeResetAt(completed?.fiveHour) !== shortResetAt) {
+    && shortResetAt > (normalizeResetAt(saved.lastFiveHourResetAt) ?? -1)
+    && shortResetAt > (normalizeResetAt(completed?.fiveHour) ?? -1)) {
     due.fiveHour = shortResetAt;
   }
   if (saved?.weekly === true
     && weeklyResetAt !== undefined
     && weeklyResetAt <= now
-    && normalizeResetAt(saved.lastWeeklyResetAt) !== weeklyResetAt
-    && normalizeResetAt(completed?.weekly) !== weeklyResetAt) {
+    && weeklyResetAt > (normalizeResetAt(saved.lastWeeklyResetAt) ?? -1)
+    && weeklyResetAt > (normalizeResetAt(completed?.weekly) ?? -1)) {
     due.weekly = weeklyResetAt;
   }
   return due.fiveHour === undefined && due.weekly === undefined ? null : due;
+}
+
+/** Retain the earliest uncompleted observation, including across process restarts. */
+function rememberWindows(config: OcxConfig, accountId: string, quota: StoredAccountQuota | null): void {
+  const saved = config.codexQuotaAutoRefresh?.[accountId];
+  if (!saved) return;
+  const completed = completedByAccount.get(accountId);
+  const previous = scheduledByAccount.get(accountId) ?? {
+    fiveHour: normalizeResetAt(saved.nextFiveHourResetAt),
+    weekly: normalizeResetAt(saved.nextWeeklyResetAt),
+  };
+  const next: CodexQuotaAutoRefreshWindows = {};
+  for (const window of ["fiveHour", "weekly"] as const) {
+    if (!saved[window]) continue;
+    const done = normalizeResetAt(completed?.[window]
+      ?? (window === "fiveHour" ? saved.lastFiveHourResetAt : saved.lastWeeklyResetAt));
+    const observed = normalizeResetAt(window === "fiveHour"
+      ? quota?.shortWindowSeconds === FIVE_HOUR_WINDOW_SECONDS ? quota.shortResetAt : undefined
+      : quota?.weeklyResetAt);
+    const candidates = [normalizeResetAt(previous[window]), observed]
+      .filter((value): value is number => value !== undefined && (done === undefined || value > done));
+    if (candidates.length) next[window] = Math.min(...candidates);
+  }
+  scheduledByAccount.set(accountId, next);
+  if (normalizeResetAt(saved.nextFiveHourResetAt) === next.fiveHour
+    && normalizeResetAt(saved.nextWeeklyResetAt) === next.weekly) return;
+  try {
+    const outcome = mutatePersistedConfig(persisted => {
+      const current = persisted.codexQuotaAutoRefresh?.[accountId];
+      if (!current) return { changed: false, value: null };
+      const setting = { ...current };
+      // A settings change that raced this sweep remains authoritative.
+      delete setting.nextFiveHourResetAt;
+      delete setting.nextWeeklyResetAt;
+      if (current.fiveHour && next.fiveHour !== undefined) setting.nextFiveHourResetAt = next.fiveHour;
+      if (current.weekly && next.weekly !== undefined) setting.nextWeeklyResetAt = next.weekly;
+      persisted.codexQuotaAutoRefresh = { ...persisted.codexQuotaAutoRefresh, [accountId]: setting };
+      return { changed: true, value: setting };
+    });
+    if (outcome.status !== "unavailable" && outcome.value) {
+      config.codexQuotaAutoRefresh = { ...config.codexQuotaAutoRefresh, [accountId]: outcome.value };
+    }
+  } catch {
+    // Keep the in-memory deadline and retry its narrow persistence on the next tick.
+  }
+}
+
+async function refreshQuota(config: OcxConfig, accountId: string): Promise<void> {
+  const { refreshCodexQuotaForActivation } = await import("./auth-api");
+  await refreshCodexQuotaForActivation(config, accountId);
 }
 
 function mainWarmupRestricted(config: OcxConfig): boolean {
@@ -99,8 +157,23 @@ function mainWarmupRestricted(config: OcxConfig): boolean {
 }
 
 async function warmAccount(config: OcxConfig, accountId: string): Promise<void | false> {
+  const writerGeneration = captureConfigGeneration();
   if (accountId !== MAIN_CODEX_ACCOUNT_ID) {
-    await warmCodexAccount(await getValidCodexToken(accountId));
+    const token = await getValidCodexToken(accountId);
+    if (isCodexAccountPaused(config, accountId) || isAccountNeedsReauth(accountId)) return false;
+    try {
+      await warmCodexAccount({ ...token, onCompleted: headers => {
+        if (isCodexAccountGenerationLive(accountId, token.generation)) {
+          applyAccountQuotaFromUpstreamHeaders(accountId, headers, writerGeneration);
+        }
+      } });
+    } catch (error) {
+      if (error instanceof CodexWarmupError && error.status === 401) {
+        markAccountNeedsReauth(accountId, writerGeneration, token.generation);
+      }
+      throw error;
+    }
+    if (!isCodexAccountGenerationLive(accountId, token.generation)) return false;
     return;
   }
   const lease = tryAcquireNativeMainProfileClaim();
@@ -116,7 +189,18 @@ async function warmAccount(config: OcxConfig, accountId: string): Promise<void |
       if (!token || token.accessToken !== prepared.accessToken
         || token.chatgptAccountId !== prepared.chatgptAccountId) return false;
       if (mainWarmupRestricted(config)) return false;
-      await warmCodexAccount(token);
+      const writer = captureMainQuotaWriter(token.chatgptAccountId);
+      try {
+        await warmCodexAccount({ ...token, onCompleted: headers => {
+          if (writer) applyAccountQuotaFromUpstreamHeaders(accountId, headers, writerGeneration, writer);
+        } });
+      } catch (error) {
+        if (error instanceof CodexWarmupError && error.status === 401
+          && getMainAccountToken()?.accessToken === token.accessToken) {
+          markAccountNeedsReauth(accountId, writerGeneration);
+        }
+        throw error;
+      }
     });
   } finally {
     lease.release();
@@ -175,30 +259,54 @@ export async function runCodexQuotaAutoRefresh(
   const quotaFor = deps.getQuota ?? getAccountQuota;
   const warm = deps.warmAccount ?? warmAccount;
   const persist = deps.persistCompleted ?? persistCompleted;
+  const refresh = deps.refreshQuota ?? refreshQuota;
   inFlight = (async () => {
     retryPendingMarkers(config, persist);
     const accountIds = [
       MAIN_CODEX_ACCOUNT_ID,
       ...(config.codexAccounts ?? []).filter(isSelectableCodexPoolAccount).map(account => account.id),
     ];
-    const due = accountIds.flatMap(accountId => {
-      if (isCodexAccountPaused(config, accountId)
-        || isAccountNeedsReauth(accountId)
-        || (accountId === MAIN_CODEX_ACCOUNT_ID && isMainAccountHardLocked(config))
-        || (retryAfterByAccount.get(accountId) ?? 0) > now) return [];
-      const windows = dueCodexQuotaAutoRefreshWindows(config, accountId, quotaFor(accountId), now);
-      return windows ? [{ accountId, windows }] : [];
-    });
-    for (let index = 0; index < due.length; index += CONCURRENCY) {
-      await Promise.all(due.slice(index, index + CONCURRENCY).map(async ({ accountId, windows }) => {
+    const eligible = (accountId: string) => {
+      const setting = config.codexQuotaAutoRefresh?.[accountId];
+      const provider = config.providers[OPENAI_CODEX_PROVIDER_ID];
+      return provider?.disabled !== true && isCanonicalOpenAiForwardProvider(provider)
+        && providerCodexAccountMode(OPENAI_CODEX_PROVIDER_ID, provider) === "pool"
+        && (accountId === MAIN_CODEX_ACCOUNT_ID || config.codexAccounts?.some(
+          account => account.id === accountId && isSelectableCodexPoolAccount(account)))
+        && (setting?.fiveHour === true || setting?.weekly === true)
+        && !isCodexAccountPaused(config, accountId) && !isAccountNeedsReauth(accountId)
+        && !(accountId === MAIN_CODEX_ACCOUNT_ID && isMainAccountHardLocked(config));
+    };
+    for (let index = 0; index < accountIds.length; index += CONCURRENCY) {
+      await Promise.all(accountIds.slice(index, index + CONCURRENCY).map(async accountId => {
+        if (!eligible(accountId)) return;
+        // Capture before WHAM can move an idle window's reset into the future.
+        rememberWindows(config, accountId, quotaFor(accountId));
+        const quota = quotaFor(accountId);
+        if ((!quota || now - quota.updatedAt >= RETRY_MS)
+          && (quotaRefreshAfterByAccount.get(accountId) ?? 0) <= now) {
+          quotaRefreshAfterByAccount.set(accountId, now + RETRY_MS);
+          try { await refresh(config, accountId); } catch { /* Retry metadata at the bounded cadence. */ }
+        }
+        if (!eligible(accountId)) return;
+        rememberWindows(config, accountId, quotaFor(accountId));
+        if ((retryAfterByAccount.get(accountId) ?? 0) > now) return;
+        const windows = dueCodexQuotaAutoRefreshWindows(config, accountId, quotaFor(accountId), now);
+        if (!windows) return;
         try {
           if (await warm(config, accountId) === false) return;
           retryAfterByAccount.delete(accountId);
           const completed = { ...completedByAccount.get(accountId), ...windows };
           completedByAccount.set(accountId, completed);
           persist(config, accountId, completed);
-        } catch {
+          rememberWindows(config, accountId, quotaFor(accountId));
+        } catch (error) {
           retryAfterByAccount.set(accountId, now + RETRY_MS);
+          const account = config.codexAccounts?.find(candidate => candidate.id === accountId);
+          const label = account ? codexAccountLogLabel(account) : "main";
+          console.warn(`[codex-quota-auto-refresh] ${label}: ${codexWarmupFailureReason(error)}; ${
+            isAccountNeedsReauth(accountId) ? "reauthentication required" : "retry in five minutes"
+          }`);
         }
       }));
     }

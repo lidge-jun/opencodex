@@ -4,13 +4,19 @@ export type CodexQuotaAutoRefreshWindows = { fiveHour?: number; weekly?: number 
 
 export const completedByAccount = new Map<string, CodexQuotaAutoRefreshWindows>();
 export const retryAfterByAccount = new Map<string, number>();
+export const scheduledByAccount = new Map<string, CodexQuotaAutoRefreshWindows>();
+export const quotaRefreshAfterByAccount = new Map<string, number>();
 
 export function forgetCodexQuotaAutoRefreshAccount(accountId: string): void {
   completedByAccount.delete(accountId);
   retryAfterByAccount.delete(accountId);
+  scheduledByAccount.delete(accountId);
+  quotaRefreshAfterByAccount.delete(accountId);
 }
 
 export function resetCodexQuotaAutoRefreshStateForTests(): void {
   completedByAccount.clear();
   retryAfterByAccount.clear();
+  scheduledByAccount.clear();
+  quotaRefreshAfterByAccount.clear();
 }

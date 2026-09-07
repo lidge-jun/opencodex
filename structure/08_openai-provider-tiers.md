@@ -75,7 +75,12 @@ plan-relevant window is freshly confirmed at exactly 100%; unknown and failed re
 `codexQuotaAutoRefresh` is a separate default-off spending intent. For each explicitly enabled
 account/window, the one-minute state sweep compares the cached upstream reset timestamp, sends the
 existing minimal non-stored warmup through that exact account once the timestamp is due, then
-field-patches the completed timestamp; the next normal quota poll reports the activated window.
+field-patches the completed timestamp. The next observed reset boundary is also retained in
+`nextFiveHourResetAt` / `nextWeeklyResetAt` until completed; later idle-window metadata cannot
+postpone it. Successful warmups publish quota headers under the captured credential/identity fence.
+For opted-in accounts only, stale metadata is refreshed at most once per five minutes through
+the existing WHAM recovery path, independently of dashboard traffic or reset notifications.
+Inference 401s quarantine the rejected credential; failures log an opaque label and safe reason.
 Paused or reauthentication-required
 accounts are skipped, simultaneous 5-hour/weekly resets share one warmup, transient failures retry
 after five minutes, and account deletion removes its setting and completion markers.

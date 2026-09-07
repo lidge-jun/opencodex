@@ -1835,6 +1835,21 @@ export async function listCodexAuthAccountsSnapshot(
   };
 }
 
+/** One opted-in account's metadata; reuse the bounded WHAM 401 recovery and generation fence. */
+export async function refreshCodexQuotaForActivation(config: OcxConfig, accountId: string): Promise<void> {
+  if (accountId === MAIN_CODEX_ACCOUNT_ID) {
+    await fetchMainAccountInfoAttempt(true, 1, undefined, false, false);
+    return;
+  }
+  const account = configuredPoolAccount(config, accountId);
+  if (!account) return;
+  const writerGeneration = captureConfigGeneration();
+  const result = await fetchPoolAccountQuota(accountId, true, account.plan);
+  if (result.needsReauth && result.credentialGeneration !== undefined) {
+    markAccountNeedsReauth(accountId, writerGeneration, result.credentialGeneration);
+  }
+}
+
 export async function listCodexAuthAccounts(config: OcxConfig, forceRefresh = false): Promise<CodexAuthAccountDto[]> {
   return (await listCodexAuthAccountsSnapshot(config, forceRefresh)).accounts;
 }

@@ -723,6 +723,9 @@ export interface OcxConfig {
     /** Upstream reset timestamps already activated, retained across restarts. */
     lastFiveHourResetAt?: number;
     lastWeeklyResetAt?: number;
+    /** Observed boundaries retained until activation, even if an idle upstream clock moves. */
+    nextFiveHourResetAt?: number;
+    nextWeeklyResetAt?: number;
   }>;
   /**
    * Selection order per account id, higher used earlier; absent = 0. Keyed by id
