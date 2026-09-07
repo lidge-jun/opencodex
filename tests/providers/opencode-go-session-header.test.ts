@@ -4,6 +4,7 @@ import { resolveOpenCodeGoTransport } from "../../src/providers/opencode-go-tran
 import { getProviderRegistryEntry } from "../../src/providers/registry";
 import { handleResponses } from "../../src/server/responses/core";
 import { handleChatCompletions } from "../../src/server/chat-completions";
+import { handleClaudeMessages } from "../../src/server/claude-messages";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 
 const MUSE_MODEL = "muse-spark-1.3-contributor";
@@ -25,7 +26,14 @@ function codexHeaders(child = "child-thread-a"): Record<string, string> {
   };
 }
 
-function upstreamResponse(url: string): Response {
+function upstreamResponse(url: string, stream = false): Response {
+  if (stream && url.endsWith("/chat/completions")) {
+    return new Response([
+      `data: ${JSON.stringify({ choices: [{ index: 0, delta: { role: "assistant", content: "ok" } }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } })}\n\n`,
+      "data: [DONE]\n\n",
+    ].join(""), { headers: { "content-type": "text/event-stream" } });
+  }
   if (url.endsWith("/responses")) {
     return Response.json({
       id: "resp_opencode_go_session",
@@ -54,6 +62,8 @@ async function captureRequest(input: {
   child?: string;
   provider?: OcxProviderConfig;
   nativeChat?: boolean;
+  claude?: boolean;
+  metadataUserId?: string;
   headers?: Record<string, string>;
 } = {}): Promise<{ url: string; headers: Headers }> {
   const providerName = input.providerName ?? "opencode-go";
@@ -62,13 +72,26 @@ async function captureRequest(input: {
   globalThis.fetch = (async (requestInput: RequestInfo | URL, init?: RequestInit) => {
     const url = String(requestInput);
     requests.push({ url, headers: new Headers(init?.headers) });
-    return upstreamResponse(url);
+    return upstreamResponse(url, input.claude);
   }) as typeof fetch;
 
   const config = {
     providers: { [providerName]: input.provider ?? opencodeGo() },
   } as unknown as OcxConfig;
-  const response = input.nativeChat ? await handleChatCompletions(
+  const response = input.claude ? await handleClaudeMessages(
+    new Request("http://localhost/v1/messages", {
+      method: "POST",
+      headers: input.headers ?? { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: `${providerName}/${model}`, max_tokens: 64, stream: false,
+        system: "A shared system prompt is not a conversation identifier.",
+        messages: [{ role: "user", content: "ping" }],
+        ...(input.metadataUserId ? { metadata: { user_id: input.metadataUserId } } : {}),
+      }),
+    }),
+    config,
+    { model: "", provider: "" },
+  ) : input.nativeChat ? await handleChatCompletions(
     new Request("http://localhost/v1/chat/completions", {
       method: "POST",
       headers: input.headers ?? codexHeaders(input.child),
@@ -96,6 +119,70 @@ async function captureRequest(input: {
 describe("OpenCode Go session affinity (#3344)", () => {
   const originalFetch = globalThis.fetch;
   afterEach(() => { globalThis.fetch = originalFetch; });
+
+  test("Claude metadata gives stable Go affinity across turns and distinct conversations", async () => {
+    const input = { claude: true, model: CHAT_MODEL, metadataUserId: "user_test_account__session_conversation-a" };
+    const first = await captureRequest(input);
+    const continued = await captureRequest(input);
+    const next = await captureRequest({ ...input, metadataUserId: "user_test_account__session_conversation-b" });
+    expect(first.url).toBe("https://opencode.ai/zen/go/v1/chat/completions");
+    expect(first.headers.get(SESSION_HEADER)).toMatch(/^ocx_[0-9a-f]{32}$/);
+    expect(continued.headers.get(SESSION_HEADER)).toBe(first.headers.get(SESSION_HEADER));
+    expect(next.headers.get(SESSION_HEADER)).not.toBe(first.headers.get(SESSION_HEADER));
+    expect(first.headers.get(SESSION_HEADER)).not.toContain("conversation-a");
+  });
+
+  test("Claude recognizes renamed canonical Go destinations and omits shared system affinity", async () => {
+    const input = { claude: true, model: CHAT_MODEL, providerName: "renamed-go" };
+    const metadata = await captureRequest({ ...input, metadataUserId: "user_test_account__session_conversation-a" });
+    const desktop = await captureRequest(input);
+    expect(metadata.headers.get(SESSION_HEADER)).toMatch(/^ocx_[0-9a-f]{32}$/);
+    expect(desktop.headers.has(SESSION_HEADER)).toBe(false);
+  });
+
+  test("Claude explicit Go header precedes metadata and matches native Chat affinity", async () => {
+    const headers = { "content-type": "application/json", [SESSION_HEADER]: "client-session-a" };
+    const claude = await captureRequest({ claude: true, model: CHAT_MODEL, headers, metadataUserId: "different-metadata-session" });
+    const chat = await captureRequest({ nativeChat: true, model: CHAT_MODEL, headers });
+    expect(claude.headers.get(SESSION_HEADER)).toBe("ocx_516d593899f34b7baca2db37c7b0c8c5");
+    expect(claude.headers.get(SESSION_HEADER)).toBe(chat.headers.get(SESSION_HEADER));
+  });
+
+  test("Claude affinity survives per-model Responses wire selection", async () => {
+    const input = { claude: true, metadataUserId: "user_test_account__session_conversation-a" };
+    const chat = await captureRequest({ ...input, model: CHAT_MODEL });
+    const responses = await captureRequest({ ...input, model: MUSE_MODEL });
+    expect(responses.url).toBe("https://opencode.ai/zen/go/v1/responses");
+    expect(responses.headers.get(SESSION_HEADER)).toBe(chat.headers.get(SESSION_HEADER));
+    const explicit = await captureRequest({
+      ...input, model: MUSE_MODEL,
+      headers: { "content-type": "application/json", [SESSION_HEADER]: "client-session-a" },
+    });
+    expect(explicit.headers.get(SESSION_HEADER)).toBe("ocx_516d593899f34b7baca2db37c7b0c8c5");
+  });
+
+  test("Claude preserves explicit session lanes and operator header precedence", async () => {
+    for (const laneHeader of ["session_id", "session-id", "thread-id"]) {
+      const headers = { "content-type": "application/json", [laneHeader]: "native-client-session", [SESSION_HEADER]: "different-fallback" };
+      const input = { claude: true, model: CHAT_MODEL, headers, metadataUserId: "different-metadata-session" };
+      const claude = await captureRequest(input);
+      const native = await captureRequest({ model: CHAT_MODEL, headers });
+      expect(claude.headers.get(SESSION_HEADER)).toBe(native.headers.get(SESSION_HEADER));
+      const operator = await captureRequest({ ...input, provider: opencodeGo({ headers: { "X-OpenCode-Session": "operator-session" } }) });
+      expect(operator.headers.get(SESSION_HEADER)).toBe("operator-session");
+    }
+  });
+
+  test("Claude does not add Go affinity to custom or lookalike destinations", async () => {
+    for (const baseUrl of ["https://custom.example/v1", "https://opencode.ai.evil.test/zen/go/v1"]) {
+      const captured = await captureRequest({
+        claude: true, model: CHAT_MODEL, providerName: "custom-go",
+        provider: opencodeGo({ baseUrl }), metadataUserId: "user_test_account__session_conversation-a",
+        headers: { "content-type": "application/json", [SESSION_HEADER]: "client-session-a" },
+      });
+      expect(captured.headers.has(SESSION_HEADER)).toBe(false);
+    }
+  });
 
   test("native Chat ingress preserves stable Go affinity and separates conversations", async () => {
     const provider = opencodeGo();
