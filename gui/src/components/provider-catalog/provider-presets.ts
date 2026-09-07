@@ -6,7 +6,7 @@
  * predicates), search filtering, and deterministic sorting. No React, no fetch.
  */
 
-import { providerTier, type ProviderTier, type WorkspaceProvider } from "../../provider-workspace/catalog";
+import { providerTier, type ProviderTier, type WorkspaceProvider, type WorkspaceItem } from "../../provider-workspace/catalog";
 import type { ProviderPayload } from "../../provider-payload";
 
 /** Row shape returned by GET /api/provider-presets (mirrors DerivedProviderPreset). */
@@ -37,6 +37,21 @@ export interface CatalogPreset {
   baseUrlChoices?: Array<{ id: string; label: string; baseUrl?: string }>;
   codexAccountMode?: "direct" | "pool";
   provider?: ProviderPayload;
+}
+
+/** A configured name alone cannot identify a sponsor after its endpoint is edited. */
+export function matchingWorkspacePreset(item: WorkspaceItem, presets: CatalogPreset[]): CatalogPreset | undefined {
+  const endpoint = (value: string) => {
+    try {
+      const url = new URL(value.trim());
+      if (url.username || url.password || url.search || url.hash) return undefined;
+      return `${url.origin}${url.pathname.replace(/\/+$/, "")}`;
+    } catch { return undefined; }
+  };
+  const base = endpoint(item.baseUrl);
+  if (!base) return undefined;
+  return presets.find(preset => preset.id === item.name && preset.adapter === item.adapter
+    && endpoint(preset.baseUrl) === base);
 }
 
 /**

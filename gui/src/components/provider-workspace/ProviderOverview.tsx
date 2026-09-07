@@ -13,6 +13,8 @@ import type { AccountQuotaReading, ProviderUsageTotals } from "./types";
 import { authModeLabel } from "./ProviderRail";
 import type { ProviderUpdatePatch, ProviderUpdateResult } from "./types";
 import ProviderCurrentQuota from "./ProviderCurrentQuota";
+import type { CatalogPreset } from "../provider-catalog/provider-presets";
+import ProviderSponsor from "./ProviderSponsor";
 
 type ConnectionTestResult = {
   applicable?: boolean;
@@ -30,12 +32,13 @@ type ConnectionTestState = {
 };
 
 export default function ProviderOverview({
-  item, usageTotals, quotaReport, currentQuotaReading, onRefreshQuota, oauthEmail, oauth,
+  item, preset, usageTotals, quotaReport, currentQuotaReading, onRefreshQuota, oauthEmail, oauth,
   apiBase, connectionIdentity,
   onEditSettings, onViewUsage, onUpdateProvider,
   onReauthenticate, onCancelLogin, reauthBusy = false,
 }: {
   item: WorkspaceItem;
+  preset?: CatalogPreset;
   usageTotals?: ProviderUsageTotals;
   quotaReport?: ProviderQuotaReportView;
   currentQuotaReading?: AccountQuotaReading;
@@ -140,6 +143,8 @@ export default function ProviderOverview({
       ? (connectionResult.message || t("pws.connectionOk"))
       : (connectionResult?.error || t("pws.connectionFailed"));
   return (
+    <>
+    <ProviderSponsor item={item} preset={preset} />
     <div className="pws-overview-layout">
       <div className="pws-overview-main">
       <section className="pws-section" aria-label={t("pws.connection")}>
@@ -166,12 +171,6 @@ export default function ProviderOverview({
             <dt>{t("modal.defaultModel")}</dt>
             <dd>{item.defaultModel ?? <span className="muted">—</span>}</dd>
           </div>
-          {item.note && (
-            <div className="pws-kv-row">
-              <dt>{t("pws.cell.note")}</dt>
-              <dd className="muted">{item.note}</dd>
-            </div>
-          )}
         </dl>
         {apiBase && (
           <div className="row" style={{ marginTop: 12, alignItems: "center" }}>
@@ -250,6 +249,7 @@ export default function ProviderOverview({
           </div>
         )}
       </section>
+      <NotesSection item={item} onUpdateProvider={onUpdateProvider} />
       </div>
 
       <aside className="pws-overview-sidebar">
@@ -280,9 +280,9 @@ export default function ProviderOverview({
       </section>
 
       <ProviderCurrentQuota key={`${item.name}:${connectionIdentity ?? ""}`} report={quotaReport} reading={currentQuotaReading} onRefreshQuota={onRefreshQuota} />
-      <NotesSection item={item} onUpdateProvider={onUpdateProvider} />
       </aside>
     </div>
+    </>
   );
 }
 

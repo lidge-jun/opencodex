@@ -6,6 +6,13 @@ description: Every way opencodex authenticates and talks to an LLM provider — 
 A **provider** is one upstream LLM endpoint plus how to reach it: an adapter, a base URL, an auth
 mode, and an optional model list. Providers live under `providers` in `~/.opencodex/config.json`.
 
+The dashboard provider Overview separates connection details, account usage and editable notes.
+Notes appear once, below the connection and authentication sections. Supported sponsor presets
+also show a short introduction, a Sponsor label and links to the provider's site or console.
+These links preserve the preset's referral parameters. Sponsor information is shown only when
+the configured provider name, adapter and endpoint match the preset; it never changes routing,
+account selection or defaults.
+
 ## OpenAI account modes
 
 | Provider id | Use | Credential/account rule |
