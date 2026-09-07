@@ -850,6 +850,8 @@
 }
 
 .pws-detail-tab {
+  flex-shrink: 0;
+  white-space: nowrap;
   appearance: none;
   background: none;
   border: none;
