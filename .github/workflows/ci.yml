@@ -451,7 +451,7 @@ jobs:
           done
 
       - name: Differential oracles
-        run: bun test --timeout 60000 tests/go-sidecar-parity.test.ts tests/go-cli-parity.test.ts
+        run: bun test --timeout 60000 tests/go-sidecar-parity.test.ts tests/go-cli-parity.test.ts tests/go-upgrade-rollback-drill.test.ts
 
   # Everything that is not the suite: type safety, privacy, lint, build, smoke.
   # One runner, once per push. Splitting these across the shards would repeat a
