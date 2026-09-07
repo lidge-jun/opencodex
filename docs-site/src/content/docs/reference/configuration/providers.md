@@ -116,6 +116,10 @@ published long-context bands on `openai` and `openai-apikey`. The two Daybreak B
 follow the Sol API reference. These are comparison estimates, not invoices or credit-balance
 predictions. Explicit provider/model price overrides still take precedence.
 
+## Provider namespace aliases
+
+Providers can expose a built-in shorthand, such as `agy` for `google-antigravity`. A configured provider name or explicit alias claims that shorthand case-insensitively; a different provider's built-in shorthand is then suppressed in both catalog names and alias routing. For example, configuring a provider named `agy` keeps Google's models under `google-antigravity/<model>`, while `agy/<model>` selects the configured provider. Canonical provider names still require an exact case match, and unrecognized prefixes retain the existing model-routing fallback.
+
 ## Provider entries (`OcxProviderConfig`)
 
 | Field | Type | Meaning |

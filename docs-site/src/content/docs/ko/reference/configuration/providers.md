@@ -66,6 +66,10 @@ managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정
 
 `openaiProviderTierVersion: 2`는 현재의 단일 공급자 투영을 표시합니다. 출시된 v1 설정을 마이그레이션하기 전에 opencodex는 `config.json.pre-openai-tiers-v2.bak`를 만들고, 기존에 다른 백업이 있더라도 덮어쓰지 않으며, 알려진 레거시 네임스페이스 지정 선택 id를 bare id로 다시 씁니다.
 
+## 공급자 네임스페이스 별칭
+
+공급자는 `google-antigravity`의 `agy`처럼 기본 축약 이름을 제공할 수 있습니다. 설정된 공급자 이름이나 명시적 별칭이 대소문자 구분 없이 그 이름을 사용하면, 다른 공급자의 기본 축약 이름은 카탈로그 표시와 별칭 라우팅 모두에서 비활성화됩니다. 예를 들어 `agy`라는 공급자를 설정하면 Google 모델은 `google-antigravity/<model>`로 표시되고, `agy/<model>`는 설정된 공급자를 선택합니다. 정식 공급자 이름은 계속 대소문자가 정확히 일치해야 하며, 인식되지 않는 접두사는 기존 모델 라우팅의 대체 경로를 따릅니다.
+
 ## 공급자 항목 (`OcxProviderConfig`)
 
 | 필드 | 타입 | 의미 |
