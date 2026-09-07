@@ -77,12 +77,15 @@ var Commands = []Command{
 	{Name: "provider", Usage: "ocx provider <sub>", Summary: "Inspect configured providers.", Owner: GoOwned},
 	{Name: "account", Usage: "ocx account <sub>", Summary: "Manage accounts.", Owner: TypeScriptOwned},
 	{Name: "models", Usage: "ocx models [--provider <name>] [--json]", Summary: "List configured models.", Owner: GoOwned},
-	{Name: "alias", Usage: "ocx alias <sub>", Summary: "Manage aliases.", Owner: TypeScriptOwned},
-	{Name: "combo", Usage: "ocx combo <sub>", Summary: "Manage combo routing.", Owner: TypeScriptOwned},
+	// alias/combo/route form the config-routing slice (issue #49): Go owns the
+	// management-plane clients that read and write the routing subsections of
+	// the config file (aliases, combos, routing profiles) against a live proxy.
+	{Name: "alias", Usage: "ocx alias <sub>", Summary: "Manage aliases.", Owner: GoOwned},
+	{Name: "combo", Usage: "ocx combo <sub>", Summary: "Manage combo routing.", Owner: GoOwned},
 	{Name: "agent", Usage: "ocx agent <sub>", Summary: "Manage agents.", Owner: TypeScriptOwned},
 	{Name: "observe", Usage: "ocx observe <sub>", Summary: "Inspect runtime observations.", Owner: TypeScriptOwned},
 	{Name: "inspect", Usage: "ocx inspect <sub>", Summary: "Inspect effective state.", Owner: TypeScriptOwned},
-	{Name: "route", Usage: "ocx route <sub>", Summary: "Manage routing.", Owner: TypeScriptOwned},
+	{Name: "route", Usage: "ocx route <sub>", Summary: "Manage routing.", Owner: GoOwned},
 	{Name: "logs", Usage: "ocx logs [filters]", Summary: "Read logs.", Owner: TypeScriptOwned},
 	// usage is Go-owned (the /api/usage read plus its renderer); observe keeps
 	// its other subcommands TypeScript-owned until each carries an oracle.
@@ -277,6 +280,12 @@ func Run(args []string, deps Deps) int {
 		return runStop(args[1:], deps)
 	case "usage":
 		return runUsage(args[1:], deps)
+	case "alias":
+		return runAlias(args[1:], deps)
+	case "combo":
+		return runCombo(args[1:], deps)
+	case "route":
+		return runRoute(args[1:], deps)
 	case "observe":
 		// Only `observe usage` reaches Go (OwnershipFor already gated this);
 		// other observe subcommands stay TypeScript-owned and never dispatch here.
@@ -340,6 +349,12 @@ func printSubcommandHelp(name string, deps Deps) int {
 				fmt.Fprintf(deps.Stdout, "Usage: %s\n\n%s\n", command.Usage, command.Summary)
 			}
 		}
+	case "alias":
+		fmt.Fprint(deps.Stdout, "Usage: ocx alias <list|set|rm|defaults> ...\n\nManage short provider and model names.\n")
+	case "combo":
+		fmt.Fprint(deps.Stdout, "Usage: ocx combo <list|show|set|remove> ...\n\nManage combo virtual models and routing strategies.\n\nAlias hierarchy: ocx route combo ...\nUse --targets provider/model[:weight],provider/model[:weight].\n")
+	case "route":
+		fmt.Fprint(deps.Stdout, "Usage: ocx route combo <list|show|set|remove> ...\n\nManage routing features; combo is currently the supported routing resource.\n")
 	case "config":
 		fmt.Fprint(deps.Stdout, configHelp)
 	default:
