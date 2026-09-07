@@ -108,7 +108,9 @@ export function resolveProviderEgress(context: ProviderEgressContext): ProviderE
   }
   const parsed = parseExplicitProxyUrl(providerName, trimmed, purpose);
   const target = egressRequestUrl(context.url);
-  if (target === null) return { kind: "inherit" };
+  if (target === null) {
+    return egressFailure(providerName, "target URL is not parseable", purpose);
+  }
   const proxyUrl = parsed.toString();
   return { kind: "proxy", proxyUrl: proxyUrl, routeKey: providerEgressRouteKey(proxyUrl) };
 }

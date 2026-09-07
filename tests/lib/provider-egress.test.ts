@@ -124,9 +124,11 @@ describe("provider egress contract", () => {
     expect(egress.kind).toBe("proxy");
   });
 
-  test("unparseable request URLs keep legacy behavior", () => {
+  test("explicit provider proxy fails closed when the request URL is unparseable", () => {
     clearProxyEnv();
-    expect(resolveProviderEgress({ providerName: "xai", provider: holder("http://127.0.0.1:7897"), url: "not a url" })).toEqual({ kind: "inherit" });
+    expect(() =>
+      resolveProviderEgress({ providerName: "xai", provider: holder("http://127.0.0.1:7897"), url: "not a url" })
+    ).toThrow(InvalidProviderEgressError);
   });
 
   test("invalid explicit proxy still fails closed when the request URL is unparseable", () => {
