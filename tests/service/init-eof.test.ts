@@ -173,6 +173,55 @@ describe("ocx init piped stdin (#754)", () => {
     } finally { await stop(proc); }
   }, 30_000);
 
+  test.each(["permissions", "link", "link-residue"])("publication recovery guidance reaches the CLI (%s)", async failure => {
+    const home = makeHome();
+    const backup = join(home, "config.json.pre-openai-tiers-v2.bak");
+    writeFileSync(backup, "preserve backup on publication failure");
+    const bootstrap = `
+      import { mock } from "bun:test";
+      const configApi = { ...await import("./src/config.ts") };
+      const failure = ${JSON.stringify(failure)};
+      const io = failure === "permissions"
+        ? { harden() { throw new Error("private permission detail"); } }
+        : {
+            link() { throw Object.assign(new Error("private link detail"), { code: "EPERM" }); },
+            ...(failure === "link-residue" ? { unlink() { throw new Error("private cleanup detail"); } } : {}),
+          };
+      mock.module("./src/config.ts", () => ({
+        ...configApi,
+        initializePersistedConfigIfMissing(config) {
+          return configApi.initializePersistedConfigIfMissing(config, io);
+        },
+      }));
+      const { runInit } = await import("./src/cli/init.ts");
+      await runInit();
+    `;
+    const proc = launch(home, "init", bootstrap);
+    const stderr = new Response(proc.stderr).text();
+    try {
+      await reachPortPrompt(proc);
+      proc.stdin.write("21001\n");
+      await proc.stdin.flush();
+      const stdout = remainingOutput(proc.stdout);
+      expect(await proc.exited).toBe(1);
+      const diagnostic = await stderr;
+      expect(diagnostic).toContain("OPENCODEX_HOME");
+      expect(diagnostic).toContain("ocx init");
+      expect(diagnostic).not.toMatch(/fixture-init-key|private (permission|link|cleanup) detail/);
+      if (failure === "permissions") {
+        expect(diagnostic).toContain("permissions could not be secured");
+        expect(diagnostic).not.toContain("Config may already exist");
+      } else {
+        expect(diagnostic).toContain("hard-link publication");
+        expect(diagnostic).toContain("Config may already exist; inspect it before retrying");
+      }
+      expect(diagnostic.includes("A temporary file could not be removed")).toBe(failure === "link-residue");
+      expect(await stdout).not.toMatch(/Inject into|autostart shim|Setup complete/);
+      expect(existsSync(join(home, "config.json"))).toBe(false);
+      expect(readFileSync(backup, "utf8")).toBe("preserve backup on publication failure");
+    } finally { await stop(proc); }
+  }, 30_000);
+
   // Windows process.kill does not deliver a POSIX SIGINT to readline.
   test.skipIf(process.platform === "win32")("SIGINT settles a pending prompt without creating config", async () => {
     const home = makeHome();

@@ -230,22 +230,38 @@ test("exclusive temp collision does not remove or modify somebody else's file", 
 
 test("failed hardening occurs before candidate bytes are written", () => {
   let wrote = false;
-  expect(() => initializePersistedConfigIfMissing(config(), {
-    harden(_fd, temp) {
-      expect(readFileSync(temp, "utf8")).toBe("");
-      throw new Error("ACL denied");
-    },
-    write() { wrote = true; },
-  })).toThrow(InitialConfigPublicationError);
+  let linked = false;
+  let failure: unknown;
+  try {
+    initializePersistedConfigIfMissing(config(), {
+      harden(_fd, temp) {
+        expect(readFileSync(temp, "utf8")).toBe("");
+        throw new Error("private ACL failure detail");
+      },
+      write() { wrote = true; },
+      link() { linked = true; },
+    });
+  } catch (error) { failure = error; }
+  expect(failure).toBeInstanceOf(InitialConfigPublicationError);
+  expect((failure as Error).message).toContain("permissions could not be secured");
+  expect((failure as Error).message).toContain("OPENCODEX_HOME");
+  expect((failure as Error).message).not.toContain("private ACL failure detail");
+  expect(failure).toMatchObject({ publication: "not-published", hardLinkUnavailable: false, residualTemp: false });
   expect(wrote).toBe(false);
+  expect(linked).toBe(false);
   expect(existsSync(getConfigPath())).toBe(false);
   expect(initTemps()).toEqual([]);
 });
 
 test("partial write failure removes only the unpublished temporary name", () => {
-  expect(() => initializePersistedConfigIfMissing(config(), {
-    write(fd, bytes) { writeFileSync(fd, bytes.slice(0, 10)); throw new Error("disk full"); },
-  })).toThrow(InitialConfigPublicationError);
+  let failure: unknown;
+  try {
+    initializePersistedConfigIfMissing(config(), {
+      write(fd, bytes) { writeFileSync(fd, bytes.slice(0, 10)); throw new Error("disk full"); },
+    });
+  } catch (error) { failure = error; }
+  expect(failure).toBeInstanceOf(InitialConfigPublicationError);
+  expect((failure as Error).message).toBe("Initial config publication did not finish.");
   expect(existsSync(getConfigPath())).toBe(false);
   expect(initTemps()).toEqual([]);
 });
@@ -259,6 +275,10 @@ test.each(["EOPNOTSUPP", "ENOTSUP", "ENOSYS", "EXDEV", "EPERM"])("unsupported/de
   } catch (error) {
     expect(error).toBeInstanceOf(InitialConfigPublicationError);
     expect((error as InitialConfigPublicationError).hardLinkUnavailable).toBe(true);
+    expect((error as Error).message).toContain("OPENCODEX_HOME");
+    expect((error as Error).message).toContain("private file permissions");
+    expect((error as Error).message).not.toContain("do not print raw error");
+    expect((error as Error).message).not.toContain("permissions could not be secured");
   }
   expect(existsSync(getConfigPath())).toBe(false);
   expect(initTemps()).toEqual([]);
