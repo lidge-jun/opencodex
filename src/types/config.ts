@@ -469,8 +469,8 @@ export interface OcxConfig {
    */
   syncCodexSubagentDefaults?: boolean;
   /**
-   * Optional reasoning effort the delegation prompt tells the agent to pass in spawn_agent calls
-   * (`reasoning_effort` argument). Only meaningful while `injectionModel` is set; validated against
+   * Optional reasoning effort reported as advisory metadata in v2 sub-agent guidance.
+   * It does not prescribe spawn overrides. Only meaningful while `injectionModel` is set; validated against
    * the Codex ladder (src/reasoning-effort.ts CODEX_REASONING_LEVELS) at the API boundary.
    */
   injectionEffort?: string;
