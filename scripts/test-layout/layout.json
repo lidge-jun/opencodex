@@ -389,6 +389,7 @@
     "cline-pass-reasoning-efforts.test.ts": "providers",
     "cline-provider.test.ts": "providers",
     "cline-writer.test.ts": "clients",
+    "command-code-client.test.ts": "clients",
     "closed-pr-branch-cleanup.test.ts": "ci-workflows",
     "codebuddy-adapter.test.ts": "providers",
     "codebuddy-protocol.test.ts": "providers",
