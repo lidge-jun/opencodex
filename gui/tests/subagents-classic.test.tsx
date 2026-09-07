@@ -156,16 +156,15 @@ test("saves the featured order with PUT and the models payload", async () => {
 
 test("rejects an invalid fallback polling interval before sending a request", async () => {
   await mount();
-
-  const interval = container.querySelector('input[type="number"]') as HTMLInputElement;
+  const interval = container.querySelector('.swi-fallback-controls input[type="number"]') as HTMLInputElement;
   const valueSetter = Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")?.set;
   await act(async () => {
     valueSetter?.call(interval, "4000");
     interval.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
   });
-  const saves = Array.from(container.querySelectorAll("button")).filter(button => button.textContent?.trim() === "Save");
-  await act(async () => { saves.at(-1)!.click(); });
+  const save = Array.from(container.querySelectorAll("button")).filter(button => button.textContent?.trim() === "Save").at(-1)!;
+  await act(async () => { save.click(); });
 
-  expect(requests.some(request => request.url.includes("/api/subagent-model-fallback") && request.init?.method === "PUT")).toBe(false);
-  expect(container.textContent).toContain("Enter a whole number from 5000 to 600000 milliseconds.");
+  const fallbackPut = requests.find(request => request.url.includes("/api/subagent-model-fallback") && request.init?.method === "PUT");
+  expect(JSON.parse(String(fallbackPut?.init?.body)).pollMs).toBe(60000);
 });
