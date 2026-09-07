@@ -450,19 +450,21 @@ lightweight, on-demand startup without a daemon — the proxy starts only when `
 On a non-loopback bind the injected provider carries `env_key = "OPENCODEX_API_AUTH_TOKEN"`. That
 line tells Codex which variable to read; it does not create it. Codex refuses to start a request
 when the variable is missing (`Missing environment variable: OPENCODEX_API_AUTH_TOKEN`), and the
-proxy is never reached. The value lives in `$OPENCODEX_HOME/service-api-token`; only a process that
-exports it into Codex's environment closes the gap.
+proxy is never reached. The value lives in `$OPENCODEX_HOME/service-api-token`; the launching process
+must supply it in Codex's environment.
 
-Use the maintained shim installed by `ocx codex-shim install`. It reads the token file created by OpenCodex
-at launch and supplies the variable to Codex; this is the supported path for Codex started from
-shells, Desktop, cron, or another service. Codex's own child processes may still inherit it.
+Use the maintained shim installed by `ocx codex-shim install`. When the launching context resolves
+this shim, it reads the token file created by OpenCodex and supplies the variable to Codex.
+Desktop, cron, and service launches must use a PATH or launcher path that selects the shim;
+installation does not configure those environments automatically. Codex's own child processes
+may still inherit the token.
 
 Do not export this bearer token from a shell startup file or copy it into `config.toml`. The
 `service-api-token` file contains the raw token, not `NAME=value` assignments, so it cannot be used
 directly as a systemd `EnvironmentFile=`.
 
-What does not: an `EnvironmentFile=` or `OCX_API_TOKEN_FILE` on `opencodex-proxy.service`. Those
-configure the proxy process only and never flow into an independently launched `codex exec`.
+An `EnvironmentFile=` or `OCX_API_TOKEN_FILE` on `opencodex-proxy.service` configures the proxy process
+only and never flows into an independently launched `codex exec`.
 
 A Codex upgrade that replaces the launcher removes the shim; the next ordinary `ocx` command restores
 it (see above), but a `codex exec` that runs before that fails. `ocx doctor` reports this exact

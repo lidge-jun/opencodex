@@ -298,6 +298,18 @@ ocx codex-shim uninstall
 때만 시작하려면 `ocx codex-shim`을 사용합니다. 이 경우 프록시는 `codex`를 실행할 때만 시작됩니다.
 :::
 
+#### Codex에 토큰 주입
+
+루프백이 아닌 주소에 바인딩하면 주입된 공급자에 `env_key = "OPENCODEX_API_AUTH_TOKEN"`이 포함됩니다. 이 줄은 Codex가 읽을 변수를 지정할 뿐, 변수를 생성하지는 않습니다. 변수가 없으면 Codex는 요청 시작을 거부하며(`Missing environment variable: OPENCODEX_API_AUTH_TOKEN`), 요청은 프록시에 도달하지 않습니다. 값은 `$OPENCODEX_HOME/service-api-token`에 저장되며, 실행을 시작하는 프로세스가 Codex의 환경에 이 값을 제공해야 합니다.
+
+`ocx codex-shim install`로 설치되는 shim을 사용하세요. 실행 환경에서 이 shim이 선택되면 OpenCodex가 생성한 토큰 파일을 읽고 Codex에 변수를 제공합니다. 데스크톱, cron, 서비스에서 실행할 때는 shim을 선택하는 PATH 또는 실행기 경로를 사용해야 합니다. 설치 과정에서 이러한 환경이 자동으로 구성되지는 않습니다. Codex 자체의 자식 프로세스도 토큰을 상속할 수 있습니다.
+
+이 Bearer 토큰을 셸 시작 파일에서 내보내거나 `config.toml`에 복사하지 마세요. `service-api-token` 파일에는 `NAME=value` 형식의 대입문이 아닌 토큰 원문이 들어 있으므로 systemd의 `EnvironmentFile=`로 직접 사용할 수 없습니다.
+
+`opencodex-proxy.service`의 `EnvironmentFile=` 또는 `OCX_API_TOKEN_FILE`은 프록시 프로세스만 구성하며, 별도로 실행된 `codex exec`에 전달되지 않습니다.
+
+실행기를 교체하는 Codex 업그레이드는 shim을 제거합니다. 다음 일반 `ocx` 명령이 shim을 복원하지만(위 내용 참조), 그보다 먼저 실행되는 `codex exec`는 실패합니다. `ocx doctor`는 이 상태(env_key 구성됨, 변수 미설정, shim 누락 또는 비정상, 토큰 파일 존재)를 "Codex env_key launch readiness" 항목에서 복구 명령과 함께 보고하며, 토큰은 출력하지 않습니다. 토큰 파일 읽기는 주입된 `env_key`의 계약에 포함되지 않습니다. 실행을 시작하는 프로세스가 해당 변수를 제공해야 합니다.
+
 ### `ocx tray <install|start|stop|status|uninstall|remove> [--json] [--no-start]`
 
 Windows 상태 트레이 아이콘을 설치하고 제어합니다. Windows 로그인 시 시작되며, 프록시를 원클릭으로
