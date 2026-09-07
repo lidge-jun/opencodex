@@ -65,8 +65,8 @@ var Commands = []Command{
 	{Name: "status", Usage: "ocx status", Summary: "Check proxy status.", Owner: GoOwned},
 	{Name: "doctor", Usage: "ocx doctor", Summary: "Diagnose the environment.", Owner: GoOwned},
 	{Name: "debug", Usage: "ocx debug <scope>", Summary: "Manage debug settings.", Owner: TypeScriptOwned},
-	{Name: "login", Usage: "ocx login <provider>", Summary: "Log in to a provider.", Owner: TypeScriptOwned},
-	{Name: "logout", Usage: "ocx logout <provider>", Summary: "Log out from a provider.", Owner: TypeScriptOwned},
+	{Name: "login", Usage: "ocx login <provider>", Summary: "OAuth or API-key login for a provider.", Owner: TypeScriptOwned},
+	{Name: "logout", Usage: "ocx logout <provider>", Summary: "Remove a stored provider login.", Owner: GoOwned},
 	{Name: "gui", Usage: "ocx gui", Summary: "Open the dashboard.", Owner: TypeScriptOwned},
 	{Name: "update", Usage: "ocx update [--tag <tag>]", Summary: "Update OpenCodex.", Owner: TypeScriptOwned},
 	{Name: "restart", Usage: "ocx restart", Summary: "Restart the proxy.", Owner: TypeScriptOwned},
@@ -259,6 +259,8 @@ func Run(args []string, deps Deps) int {
 		return runCodexShim(args[1:], deps)
 	case "health":
 		return runHealth(args[1:], deps)
+	case "logout":
+		return runLogout(args[1:], deps)
 	case "ready":
 		return runReady(args[1:], deps)
 	case "models":
@@ -337,6 +339,12 @@ func printSubcommandHelp(name string, deps Deps) int {
 	case "usage":
 		for _, command := range Commands {
 			if command.Name == "usage" {
+				fmt.Fprintf(deps.Stdout, "Usage: %s\n\n%s\n", command.Usage, command.Summary)
+			}
+		}
+	case "logout":
+		for _, command := range Commands {
+			if command.Name == "logout" {
 				fmt.Fprintf(deps.Stdout, "Usage: %s\n\n%s\n", command.Usage, command.Summary)
 			}
 		}

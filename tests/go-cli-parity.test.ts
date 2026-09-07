@@ -268,4 +268,102 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
     expect(expectParity(["usage"])).toMatchObject({ code: 1 });
     expect(expectParity(["observe", "usage"])).toMatchObject({ code: 1 });
   });
+
+  // logout is Go-owned (issue #51 slice). The TS CLI still runs its own
+  // handler, so the differential runs the same argv through both CLIs on the
+  // same fresh home and compares stdout/stderr/exit code plus the resulting
+  // auth.json bytes (the on-disk credential store both owners rewrite).
+  const authFixtureJSON = (extra: Record<string, unknown> = {}) => JSON.stringify({
+    openai: {
+      activeAccountId: "acct-1",
+      accounts: [
+        { id: "acct-1", credential: { access: "tok-1", refresh: "ref-1", expires: 1756000000000 } },
+        { id: "acct-2", credential: { access: "tok-2", refresh: "ref-2", expires: 1756000000000 } },
+      ],
+    },
+    xai: {
+      activeAccountId: "one",
+      accounts: [{ id: "one", credential: { access: "xa", refresh: "xr", expires: 1756000000000 } }],
+    },
+    ...extra,
+  });
+  function writeAuthFixture(home: string, extra: Record<string, unknown> = {}): void {
+    writeFileSync(join(home, "auth.json"), authFixtureJSON(extra) + "\n");
+  }
+  // Both CLIs rewrite auth.json on a logout, so compare the byte state each
+  // owner leaves behind from the identical fixture.
+  async function logoutParity(args: string[], extra: Record<string, unknown> = {}): Promise<Result> {
+    const tsHome = mkdtempSync(join(tmpdir(), "ocx-go-logout-ts-"));
+    const goHome = mkdtempSync(join(tmpdir(), "ocx-go-logout-go-"));
+    try {
+      writeAuthFixture(tsHome, extra);
+      writeAuthFixture(goHome, extra);
+      const ts = await runTsAsync(args, tsHome);
+      const go = await runGoAsync(args, goHome);
+      expect(go).toEqual(ts);
+      const tsStore = await Bun.file(join(tsHome, "auth.json")).text();
+      const goStore = await Bun.file(join(goHome, "auth.json")).text();
+      expect(goStore).toBe(tsStore);
+      return ts;
+    } finally {
+      if (existsSync(tsHome)) removeTreeWithRetry(tsHome);
+      if (existsSync(goHome)) removeTreeWithRetry(goHome);
+    }
+  }
+  test.each([
+    { args: ["help", "logout"] },
+    { args: ["logout", "--help"] },
+  ])("diffs logout help contracts for $args", ({ args }) => {
+    testHome = mkdtempSync(join(tmpdir(), "ocx-go-logout-parity-"));
+    expect(expectParity(args)).toMatchObject({ code: 0, stderr: "" });
+  });
+  test.each([
+    { args: ["logout"], reason: "missing provider" },
+    { args: ["logout", "--bogus"], reason: "unknown option --bogus" },
+    { args: ["logout", "openai", "xai"], reason: "too many arguments" },
+    { args: ["logout", "-j"], reason: "unknown option -j" },
+    { args: ["logout", "bad provider"], reason: "not a valid provider name: bad provider" },
+    { args: ["logout", "constructor"], reason: "not a valid provider name: constructor" },
+  ])("diffs logout argument validation for $args", async ({ args }) => {
+    testHome = mkdtempSync(join(tmpdir(), "ocx-go-logout-parity-"));
+    const ts = await runTsAsync(args);
+    const go = await runGoAsync(args);
+    expect(go).toEqual(ts);
+    expect(ts).toMatchObject({ code: 2, stdout: "" });
+  });
+  test.each([
+    { args: ["logout", "nonexistent"] },
+    { args: ["logout", "nonexistent", "--json"] },
+  ])("diffs logout not-found for $args", async ({ args }) => {
+    testHome = mkdtempSync(join(tmpdir(), "ocx-go-logout-parity-"));
+    const result = await logoutParity(args);
+    expect(result).toMatchObject({ code: 4 });
+  });
+  test("diffs logout not-found on a store-less home", async () => {
+    testHome = mkdtempSync(join(tmpdir(), "ocx-go-logout-parity-"));
+    const ts = await runTsAsync(["logout", "nonexistent"]);
+    const go = await runGoAsync(["logout", "nonexistent"]);
+    expect(go).toEqual(ts);
+  });
+  test("diffs logout of a non-active account promoting the next one", async () => {
+    const result = await logoutParity(["logout", "openai"]);
+    expect(result).toMatchObject({ code: 0, stderr: "" });
+    expect(result.stdout).toBe("Logged out of openai.\n");
+  });
+  test.each([
+    { args: ["logout", "xai"] },
+    { args: ["logout", "xai", "--json"] },
+  ])("diffs logout of the last account for $args", async ({ args }) => {
+    const result = await logoutParity(args);
+    expect(result).toMatchObject({ code: 0 });
+  });
+  test("diffs logout normalizing a legacy single-credential row", async () => {
+    const extra = {
+      anthropic: { access: "legacy-access", refresh: "legacy-refresh", expires: 1756000000000, email: "Legacy@Example.com" },
+    };
+    const result = await logoutParity(["logout", "anthropic"], extra);
+    expect(result).toMatchObject({ code: 0, stdout: "Logged out of anthropic.\n" });
+    // The whole file is normalised on the rewrite: untouched openai/xai rows
+    // survive in the same normalised shape from both owners.
+  });
 });
