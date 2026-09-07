@@ -3280,6 +3280,13 @@ describe("codex-auth API", () => {
           config,
         );
         expect(retried!.status).toBe(200);
+        const replayed = await handleCodexAuthAPI(
+          consumeRequest({ accountId: "pool-alias", operationId: OTHER_OP_ID }),
+          new URL("http://localhost/api/codex-auth/reset-credits/consume"),
+          config,
+        );
+        expect(replayed!.status).toBe(200);
+        expect(await replayed!.json()).toEqual({ code: "reset", replayed: true });
         expect(upstream.redeemRequestIds).toEqual([OP_ID, OP_ID]);
       } finally {
         globalThis.fetch = previousFetch;
