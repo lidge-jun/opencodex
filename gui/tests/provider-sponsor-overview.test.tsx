@@ -27,11 +27,14 @@ function render(preset?: CatalogPreset, item = configured(orca)) {
 
 test("sponsor is matched by id, adapter and complete endpoint, tolerating trailing slash", () => {
   const item = configured(orca);
+  const credentialEndpoint = new URL(item.baseUrl);
+  credentialEndpoint.username = "fixture-user";
+  credentialEndpoint.password = "fixture-password";
   expect(matchingWorkspacePreset({ ...item, baseUrl: `${item.baseUrl}/` }, [orca])).toBe(orca);
   for (const changed of [
     { name: "renamed" }, { adapter: "anthropic" }, { baseUrl: "https://other.example/v1" },
     { baseUrl: "https://api.orcarouter.ai/v2" }, { baseUrl: `${item.baseUrl}?key=secret` },
-    { baseUrl: "https://user:password@api.orcarouter.ai/v1" }, { baseUrl: "invalid" },
+    { baseUrl: credentialEndpoint.href }, { baseUrl: "invalid" },
   ]) {
     expect(matchingWorkspacePreset({ ...item, ...changed }, [orca])).toBeUndefined();
     expect(render(orca, { ...item, ...changed })).toBe("");
