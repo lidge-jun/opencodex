@@ -48,6 +48,15 @@ const DEVLOG_PUBLICATION_PROOF_TOKEN = ["sk-", "liveKeyShaped9", "x8w7v6u5", "t4
 const DEVLOG_PUBLICATION_PROOF_HOME_USERNAME = ["someone", "else"].join("");
 const DEVLOG_PUBLICATION_PROOF_EMAIL = ["stranger", "third-party.example.org"].join("@");
 
+/**
+ * The sponsorship contact address published on purpose. It is the one email the project
+ * WANTS in the tree, and only in the two files that carry the sponsor rule set. Anywhere
+ * else — a devlog note, a test fixture, a comment — the same address still fails, because
+ * there it would be a leak of contact data rather than a published channel.
+ */
+const SPONSORSHIP_CONTACT_EMAIL = ["jun", "lidgeai.com"].join("@");
+const SPONSORSHIP_CONTACT_FILES = new Set(["SPONSORS.md", "README.md"]);
+
 function gitLsFiles(): string[] {
   const result = Bun.spawnSync(["git", "ls-files"], { stdout: "pipe", stderr: "pipe" });
   if (!result.success) {
@@ -85,6 +94,7 @@ function lineAt(text: string, index: number): string {
 function isAllowedEmail(file: string, email: string): boolean {
   if (file === "scripts/privacy-scan.ts" && email === "a@b.com") return true;
   if (file === DEVLOG_PUBLICATION_PROOF_FILE && email === DEVLOG_PUBLICATION_PROOF_EMAIL) return true;
+  if (SPONSORSHIP_CONTACT_FILES.has(file) && email.toLowerCase() === SPONSORSHIP_CONTACT_EMAIL) return true;
   const domain = email.split("@").at(1)?.toLowerCase() ?? "";
   if (domain === "example.test" || domain === "example.com" || domain === "test.com" || domain.endsWith(".test")) {
     return true;

@@ -119,6 +119,8 @@ mais les commandes sans interface comme `ocx provider add` et `ocx combo set` co
 > La CLI masque cette invite lors des exécutions pilotées par un agent et l'API les refuse avec
 > `403 agent_consent_required`.
 
+Sponsors : deux niveaux (Main pour les développeurs de modèles, Standard pour les relais et passerelles), tarifs sur demande — voir [SPONSORS.md](../SPONSORS.md).
+
 ## Plateformes prises en charge
 
 | Système d'exploitation | État | Gestionnaire de services |

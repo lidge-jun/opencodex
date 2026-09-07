@@ -16,6 +16,24 @@ import { scanText } from "../../scripts/privacy-scan";
 /** Assembled at runtime so this file contains no secret-shaped literal of its own. */
 const canary = ["LLM", "1".repeat(16), "c".repeat(27)].join("|");
 
+/** The published sponsorship contact, assembled so this file carries no bare address. */
+const sponsorContact = ["jun", "lidgeai.com"].join("@");
+
+describe("privacy scan: sponsorship contact address", () => {
+  test("is allowed only in the two files that publish it", () => {
+    const line = `Email: ${sponsorContact}`;
+    expect(scanText("SPONSORS.md", line).filter(f => f.kind === "email")).toEqual([]);
+    expect(scanText("README.md", line).filter(f => f.kind === "email")).toEqual([]);
+  });
+
+  test("still fails everywhere else", () => {
+    const line = `Email: ${sponsorContact}`;
+    for (const file of ["readme/README.ko.md", "devlog/_plan/x/000.md", "src/example.ts", "docs-site/src/content/docs/index.mdx"]) {
+      expect(scanText(file, line).some(f => f.kind === "email")).toBe(true);
+    }
+  });
+});
+
 describe("privacy scan: Meta API keys", () => {
   test("flags a Meta-shaped key in a tracked file", () => {
     const findings = scanText("src/example.ts", `const key = "${canary}";`);

@@ -68,6 +68,8 @@ ocx init      # etkileşimli kurulum: ~/.opencodex/config.json yazar ve Codex'i 
 
 > **opencodex yükleyen veya çalıştıran ajanlar:** [`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md) dosyasını okuyun. Etkileşimli bir `ocx start` bu depoya yıldız verilip verilmeyeceğini bir kez sorabilir — bu kullanıcının kararıdır, asla ajanın değil. CLI, ajan kaynaklı çalıştırmalarda istemi bastırır ve API bunları `403 agent_consent_required` ile reddeder.
 
+Sponsorlar: iki kademe (model geliştiricileri için Main, relay ve gateway'ler için Standard), fiyat için iletişime geçin — bkz. [SPONSORS.md](../SPONSORS.md).
+
 ## Desteklenen platformlar
 
 | İşletim Sistemi | Durum | Servis Yöneticisi |

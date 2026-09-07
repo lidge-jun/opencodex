@@ -99,6 +99,26 @@ account exclusion, affinity expiry, or 401/403 and 429 recovery can rebind them.
 selection order when one of them — usually your Codex Desktop login — should only be reached for
 once the others are drained.
 
+### Sponsors
+
+Sponsors keep the proxy maintained across every upstream protocol change. Two tiers, one
+[rule set](./SPONSORS.md): **Main** is reserved for model developers and takes the banner
+below; **Standard** is for relays and gateways and takes a table row plus a built-in preset near
+the top of the provider picker. Pricing is by inquiry and rises after 20,000 stars — early
+sponsors keep their rate. Ask on [X](https://x.com/claudeebum),
+[Discord](https://discord.gg/JEaPEtkHwh) (`#sponsors`), or jun@lidgeai.com.
+
+<!-- sponsors:main — one banner, model developers only; empty until a Main sponsor signs -->
+
+<!-- sponsors:standard — one row per sponsor, in order of signing -->
+<table>
+<tbody>
+<!-- sponsor rows -->
+</tbody>
+</table>
+
+---
+
 <details>
 <summary>Docker Compose</summary>
 
