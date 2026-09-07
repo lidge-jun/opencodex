@@ -1,13 +1,15 @@
-/** Match the Go destination, including user-renamed provider entries. */
-export function isOpenCodeGo(baseUrl: string): boolean {
-  try {
-    const url = new URL(baseUrl);
-    return url.origin === "https://opencode.ai" && url.pathname.replace(/\/+$/, "") === "/zen/go/v1";
-  } catch { return false; }
-}
-
-/** Public Responses rejects Codex's private agent_message variant, even with plaintext content. */
-export function normalizeOpenCodeGoAgentMessages(body: unknown): unknown {
+/**
+ * `agent_message` is Codex's private multi-agent input item: it exists only in the ChatGPT
+ * Codex backend's schema. Codex replays every sub-agent reply in the history it sends, so
+ * once a thread has used sub-agents, a routed Responses destination answers the whole body
+ * with `422 unknown item type "agent_message"` and every later turn of that thread fails the
+ * same way. Rewrite the item as the public user message it already is.
+ *
+ * Genuine ciphertext and unknown part types keep their existing fail-closed path: the
+ * encrypted v2 task surface owns those, through `unreadable_encrypted_agent_task` and the
+ * opt-in recovery route. Providers using `authMode: "forward"` never reach this function.
+ */
+export function normalizeRoutedAgentMessages(body: unknown): unknown {
   if (!body || typeof body !== "object" || Array.isArray(body)) return body;
   const record = body as Record<string, unknown>;
   if (!Array.isArray(record.input)) return body;
