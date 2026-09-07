@@ -242,6 +242,13 @@ alone never opt a gateway in.
 and before the `/v1/*` guard. Unknown `/v1/*` paths return JSON 404 errors instead of falling through
 to GUI static serving.
 
+Combo compaction recall uses accepted completed-response callbacks to record the final client-visible
+model and originating combo target. The existing child callback gate defers publication until an
+attempt is accepted and drops discarded/failed attempts. Both compaction entry points preserve
+explicit configured selectors before consulting bounded lane state. The existing state-store
+reconciliation owns removal of obsolete targets and generation fencing; core imports no registration
+composition root or Lab code. Recall retains routing identity only, never account credentials.
+
 [Decision Log]
 - 목적과 의도: Complete Cursor turns at the protocol terminal instead of waiting for a separate HTTP-body EOF that may never arrive.
 - 기존 구현 및 제약 조건: Cursor can send turnEnded followed by a clean Connect END_STREAM envelope while RunSSE remains open or later closes through an abort-shaped transport error. The adapter logged the clean envelope but did not settle its terminal owner, so a completed-looking turn could remain open until the Responses stall watchdog.
