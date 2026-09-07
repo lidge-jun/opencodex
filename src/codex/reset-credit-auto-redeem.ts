@@ -158,7 +158,7 @@ export function createResetCreditAutoRedeemer(deps: AutoRedeemDeps): ResetCredit
   };
 
   const retryJournal = (error: unknown): void => {
-    const cause = error instanceof ConfigMutationLockError ? error.cause : undefined;
+    const cause = error instanceof ConfigMutationLockError ? error.cause : error;
     const code = cause && typeof cause === "object" && "code" in cause ? String(cause.code) : "";
     const busy = code === "SQLITE_BUSY" || code === "SQLITE_LOCKED"
       || (cause instanceof Error && /database (?:is|table is) locked/i.test(cause.message));
