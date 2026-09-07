@@ -81,6 +81,40 @@ const CHAT_PASSTHROUGH_FIELDS = [
   "web_search_options",
 ] as const;
 
+/**
+ * Kimi K3 (k3 / k3[1m], api.kimi.com coding endpoint) selectors that receive a short
+ * compatibility appendix in the system prompt. The appendix is APPENDED after Codex's
+ * original instructions and the shared tool-catalog nudge; nothing the client sent is
+ * replaced, truncated, or rewritten. It teaches the wire shapes the openai-chat adapter
+ * actually produces for this provider (freeform tools lowered to single-string
+ * functions, namespaced wire names, code-mode exec helpers) so K3 stops hallucinating
+ * unavailable tools or stopping after the first tool result.
+ *
+ * Scoped to the exact coding-endpoint host + K3 model ids: the Moonshot pay-as-you-go
+ * API (api.moonshot.*) and other providers on api.kimi.com must not receive K3-specific
+ * guidance, and non-K3 Kimi ids (k2.x) keep the historical behavior.
+ */
+const KIMI_K3_APPENDIX_HOSTNAMES = new Set(["api.kimi.com"]);
+
+function isKimiK3AppendixTarget(provider: OcxProviderConfig, modelId: string): boolean {
+  if (!KIMI_K3_APPENDIX_HOSTNAMES.has(new URL(provider.baseUrl).hostname)) return false;
+  const wireId = provider.modelSuffixBracketStrip ? stripBracketedModelSuffix(modelId) : modelId;
+  return wireId === "k3";
+}
+
+function kimiK3CompatibilityAppendix(): string {
+  return [
+    "Kimi K3 compatibility notes (keep all prior instructions; these only refine tool usage):",
+    "Every tool declared in this request is a real, executable capability provided by the host. When any tool is available, prefer actually calling it over describing steps or asking the user to run commands, and never claim you cannot use a tool that is present.",
+    "Freeform tools (exec, apply_patch) arrive as function tools whose single argument is a string field named input. Pass the entire body as that string. For apply_patch, the input string must begin exactly with `*** Begin Patch` and end with `*** End Patch`; each marker line is three asterisks, one space, the two words, then end of line with no further asterisks.",
+    "Namespaced tools use a double-underscore wire name formed as <namespace>__<name>. Call exactly the names listed in this turn's tool catalog; names that appear only inside descriptions, instructions, or nested helper APIs are not additional top-level tools.",
+    "When exec is Codex code mode, its input is JavaScript evaluated in a V8 isolate. Shell, file read, file edit, and deferred MCP or app helpers are called INSIDE that body as await tools.<name>(...), discovered from the isolate global ALL_TOOLS; absence from the top-level catalog does not mean a helper is unavailable. Use exec for programmatic orchestration and structured data processing when it is the listed tool that fits.",
+    "Inspect before edit: read the relevant file or state before modifying it. Prefer targeted patches or edits over rewriting whole files. After modifying code, run the relevant tests or checks when a tool that can run them is available.",
+    "Batch independent read-only tool calls in a single turn when the runtime supports it; independent calls have no ordering dependency. Sequential calls are for steps that depend on a previous result.",
+    "A tool result is new information to act on, not the end of the task. If a tool call fails because its arguments were rejected, correct the arguments based on the error message and call the tool again. Continue the original task to completion across as many tool rounds as needed; finish only when the user's request is actually satisfied.",
+  ].join(" ");
+}
+
 function openAIChatTransport(provider: OcxProviderConfig): {
   url: string;
   headers: Record<string, string>;
@@ -728,6 +762,8 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
     ...(context.systemPrompt ?? []),
     ...developerSystemParts,
     ...(toolCatalogNudge ? [toolCatalogNudge] : []),
+    // K3-only appendix: appended, never replacing Codex's original instructions.
+    ...(isKimiK3AppendixTarget(provider, parsed.modelId) ? [kimiK3CompatibilityAppendix()] : []),
   ];
   if (systemParts.length > 0) {
     const wireModelId = provider.modelSuffixBracketStrip

@@ -1486,6 +1486,11 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     noPenaltyModels: KIMI_LOCKED_PARAMETER_MODELS,
     autoToolChoiceOnlyModels: KIMI_AUTO_TOOL_CHOICE_ONLY_MODELS,
     preserveReasoningContentModels: KIMI_THINKING_MODELS,
+    // 260908 K3 live canary (Codex code mode): k3 completes multi-step tool loops
+    // (read -> patch -> test -> inspect -> repair) with multiple tool calls per turn,
+    // so advertise the parallel capability bit and stop pinning the wire field off.
+    // Evidence: devlog/_plan/260908_k3_codex_compat/ (this unit).
+    parallelToolCalls: true,
   },
   {
     id: "kiro",
