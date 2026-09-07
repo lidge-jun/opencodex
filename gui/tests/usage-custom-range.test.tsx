@@ -155,7 +155,7 @@ for (const connected of [false, true]) {
 }
 
 test("America/Santiago midnight DST retains final-day activity and tooltip", async () => {
-  if (process.env.OCX_USAGE_SANTIAGO_CHILD !== "1" && process.env.TZ !== "America/Santiago") {
+  if (process.env.OCX_USAGE_SANTIAGO_CHILD !== "1") {
     // Restoring an absent TZ can change Bun's effective timezone on Windows.
     // Start the DST case in its timezone without mutating this suite's clock.
     const timezone = { present: Object.hasOwn(process.env, "TZ"), value: process.env.TZ };
