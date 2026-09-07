@@ -1,3 +1,4 @@
+import { sessionLaneIdFromRequest } from "../../src/server/request-log-conversation";
 import { afterEach, beforeEach, describe, expect, mock, setDefaultTimeout, test } from "bun:test";
 import { logsFromApiBody } from "../helpers/logs-api";
 import { managementFetch as fetch, ManagementRequest as Request } from "../helpers/management-auth";
@@ -508,7 +509,7 @@ describe("server combo failover 030 activation matrix", () => {
           const headers = { session_id: "terminal-recall" };
           const a = await post(config, { model: "combo/alpha" }, {}, headers);
           expect(await a.json()).toMatchObject({ status: "completed", model: "m1" });
-          expect(recallComboForLane(config, "terminal-recall", "m1")).toBe("alpha");
+          expect(recallComboForLane(config, sessionLaneIdFromRequest(new Headers({ session_id: "terminal-recall" })), "m1")).toBe("alpha");
           const models: string[] = [];
           const completed = deferred();
           const b = await post(config, { model: "combo/beta", stream }, {
@@ -520,11 +521,11 @@ describe("server combo failover 030 activation matrix", () => {
             const expected = wire === "native" ? "final-b" : "m2";
             expect(body).toContain(`"model":"${expected}"`);
             expect(models).toEqual([expected]);
-            expect(recallComboForLane(config, "terminal-recall", expected)).toBe("beta");
-            expect(recallComboForLane(config, "terminal-recall", "m1")).toBeUndefined();
+            expect(recallComboForLane(config, sessionLaneIdFromRequest(new Headers({ session_id: "terminal-recall" })), expected)).toBe("beta");
+            expect(recallComboForLane(config, sessionLaneIdFromRequest(new Headers({ session_id: "terminal-recall" })), "m1")).toBeUndefined();
           } else {
             expect(models).toEqual([]);
-            expect(recallComboForLane(config, "terminal-recall", "m1")).toBe("alpha");
+            expect(recallComboForLane(config, sessionLaneIdFromRequest(new Headers({ session_id: "terminal-recall" })), "m1")).toBe("alpha");
           }
         });
       }
@@ -574,10 +575,10 @@ describe("server combo failover 030 activation matrix", () => {
         if (scenario === "completed") {
           await within(completed.promise);
           expect(models).toEqual(["final-b"]);
-          expect(recallComboForLane(config, "native-sticky", "final-b")).toBe("beta");
+          expect(recallComboForLane(config, sessionLaneIdFromRequest(new Headers({ session_id: "native-sticky" })), "final-b")).toBe("beta");
         } else {
           expect(models).toEqual([]);
-          expect(recallComboForLane(config, "native-sticky", "m1")).toBe("alpha");
+          expect(recallComboForLane(config, sessionLaneIdFromRequest(new Headers({ session_id: "native-sticky" })), "m1")).toBe("alpha");
         }
       });
     }
@@ -601,12 +602,12 @@ describe("server combo failover 030 activation matrix", () => {
     const response = await post(config, { model: "combo/beta", stream: true }, {
       abortSignal: abort.signal, onResponseComplete: model => models.push(model),
     }, headers);
-    expect(recallComboForLane(config, "cancel-recall", "m1")).toBe("alpha");
+    expect(recallComboForLane(config, sessionLaneIdFromRequest(new Headers({ session_id: "cancel-recall" })), "m1")).toBe("alpha");
     abort.abort();
     held.release();
     await response.text().catch(() => undefined);
     expect(models).toEqual([]);
-    expect(recallComboForLane(config, "cancel-recall", "m1")).toBe("alpha");
+    expect(recallComboForLane(config, sessionLaneIdFromRequest(new Headers({ session_id: "cancel-recall" })), "m1")).toBe("alpha");
   });
 
   test("a held completed response cannot resurrect recall across combo delete and recreate", async () => {
@@ -642,8 +643,8 @@ describe("server combo failover 030 activation matrix", () => {
     held.release();
     await response.text();
     await within(completed.promise);
-    expect(recallComboForLane(config, "recreated-recall", "m1")).toBe("alpha");
-    expect(recallComboForLane(config, "recreated-recall", "final-b")).toBeUndefined();
+    expect(recallComboForLane(config, sessionLaneIdFromRequest(new Headers({ session_id: "recreated-recall" })), "m1")).toBe("alpha");
+    expect(recallComboForLane(config, sessionLaneIdFromRequest(new Headers({ session_id: "recreated-recall" })), "final-b")).toBeUndefined();
   });
 
   for (const media of ["image", "video"] as const) {
@@ -667,7 +668,7 @@ describe("server combo failover 030 activation matrix", () => {
       expect(tools).toContain(media === "image" ? "image_gen" : "video_gen");
       expect(frames.some(frame => frame.event === "response.completed")).toBe(true);
       expect(models).toEqual(["m1"]);
-      expect(recallComboForLane(config, "media-recall", "m1")).toBe("free");
+      expect(recallComboForLane(config, sessionLaneIdFromRequest(new Headers({ session_id: "media-recall" })), "m1")).toBe("free");
     });
   }
 
@@ -1849,7 +1850,7 @@ describe("server combo failover 030 activation matrix", () => {
     expect(modelHits.map(hit => hit.model)).toEqual(["m1", "m2"]);
     expect(modelHits.every(hit => hit.hasWebTool)).toBe(true);
     expect(models).toEqual(["m2"]);
-    expect(recallComboForLane(config, "web-search-recall", "m2")).toBe("free");
+    expect(recallComboForLane(config, sessionLaneIdFromRequest(new Headers({ session_id: "web-search-recall" })), "m2")).toBe("free");
   });
 
   test("context 400 stops while exhausted retryable targets return the sanitized last status", async () => {
@@ -3165,8 +3166,8 @@ describe("server combo failover 030 activation matrix", () => {
     await within(finalized.promise);
     await within(completed.promise);
     expect(models).toEqual(["final-b"]);
-    expect(recallComboForLane(config, "hop-recall", "final-b")).toBe("free");
-    expect(recallComboForLane(config, "hop-recall", "m1")).toBeUndefined();
+    expect(recallComboForLane(config, sessionLaneIdFromRequest(new Headers({ session_id: "hop-recall" })), "final-b")).toBe("free");
+    expect(recallComboForLane(config, sessionLaneIdFromRequest(new Headers({ session_id: "hop-recall" })), "m1")).toBeUndefined();
     expect(statuses).toEqual(["completed"]);
     expect(cancels).toBe(0);
     expect(snapshots).toHaveLength(1);
