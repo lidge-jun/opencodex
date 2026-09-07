@@ -217,6 +217,50 @@ describe("provider and model aliases", () => {
       routeReason: "explicit-provider-namespace",
     });
   });
+  test.each(["agy", "AgY"])("canonical provider name %s suppresses a colliding built-in alias", async canonicalName => {
+    const c = {
+      port: 10100,
+      defaultProvider: "google-antigravity",
+      providers: {
+        [canonicalName]: {
+          adapter: "openai-chat",
+          baseUrl: "https://custom.test/v1",
+          models: ["gemini-3.8-flash"],
+          liveModels: false,
+        },
+        "google-antigravity": {
+          adapter: "google",
+          baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+          authMode: "oauth",
+          models: ["gemini-3.8-flash"],
+          liveModels: false,
+        },
+      },
+    } as unknown as OcxConfig;
+
+    const models = await gatherRoutedModels(c);
+    const googleModel = models.find(m => m.provider === "google-antigravity" && m.id === "gemini-3.8-flash")!;
+    expect(googleModel.providerAlias).toBeNull();
+
+    const [googleEntry] = buildCatalogEntries(null, [], [googleModel]);
+    expect(googleEntry!.display_name).toBe("google-antigravity/gemini-3.8-flash");
+    expect(routeModel(c, googleEntry!.display_name)).toMatchObject({
+      providerName: "google-antigravity",
+      modelId: "gemini-3.8-flash",
+    });
+    expect(routeModel(c, `${canonicalName}/gemini-3.8-flash`)).toMatchObject({
+      providerName: canonicalName,
+      modelId: "gemini-3.8-flash",
+    });
+
+    // Canonical names stay case-sensitive. A case variant must not activate the
+    // claimed registry alias; preserve the unknown slash-id default fallback.
+    expect(routeModel({ ...c, defaultProvider: canonicalName }, "AGY/gemini-3.8-flash")).toMatchObject({
+      providerName: canonicalName,
+      modelId: "AGY/gemini-3.8-flash",
+      routeReason: "default-provider",
+    });
+  });
   test("static gather (liveModels: false) suppresses agy when other provider explicitly owns it", async () => {
     const c = {
       port: 10100,
