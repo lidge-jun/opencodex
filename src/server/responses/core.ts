@@ -4661,12 +4661,24 @@ async function handleResponsesInner(
     let inspectionSawUndeclaredTool = false;
     let inspectedTerminal: ResponsesTerminalStatus | null = null;
     let inspectedCompletionSeen = false;
+    let firstTerminalAllowsRecall = false;
     const passiveQuotaObserved = hasPassiveAccountQuota(route.providerName)
       && route.provider.authMode === "oauth";
     const noteInspectedPayload = (payload: unknown) => {
       // First terminal stays authoritative even in metadata-only inspection, which
       // intentionally continues parsing after a failed/incomplete terminal.
-      inspectedTerminal ??= terminalStatusFromParsed(payload);
+      const terminal = terminalStatusFromParsed(payload);
+      if (inspectedTerminal === null && terminal !== null) {
+        inspectedTerminal = terminal;
+        // The client boundary accepts a terminal by event type, even without a
+        // response object. Such a terminal must permanently decline recall.
+        if (terminal === "completed" && payload && typeof payload === "object"
+          && "response" in payload && payload.response && typeof payload.response === "object"
+          && !Array.isArray(payload.response) && "model" in payload.response) {
+          firstTerminalAllowsRecall = typeof payload.response.model === "string"
+            && payload.response.model.trim().length > 0;
+        }
+      }
       // Meta reports subscription usage ONLY as an in-stream event; there is no endpoint
       // to poll (003 §E probed 17 paths, all 404). Observed here rather than behind a
       // dedicated inspector handler because onParsedPayload already reaches every
@@ -4732,7 +4744,7 @@ async function handleResponsesInner(
       rememberPassthroughResponse?.(restoredResponse);
       const firstCompletion = !inspectedCompletionSeen;
       inspectedCompletionSeen = true;
-      if (firstCompletion && (inspectedTerminal === null || inspectedTerminal === "completed")) {
+      if (firstCompletion && (inspectedTerminal === null || firstTerminalAllowsRecall)) {
         // A model-less first completion permanently declines recall; later terminal
         // frames are hidden by the client boundary and cannot supply its identity.
         // Native inspection sees the pre-rewrite model. Only an actual terminal
