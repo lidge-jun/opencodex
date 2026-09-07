@@ -17,6 +17,7 @@ import {
   parseGeneratedNotes,
   rewriteTakeoverCredits,
   sanitizeCommitText,
+  stripPrEnforcementPrefix,
 } from "./release-notes";
 
 export type AssociatedPullRequest = {
@@ -232,7 +233,7 @@ function renderReleaseNotes(input: {
   const commits = input.entries.filter((entry): entry is CommitChange => entry.kind === "commit");
 
   for (const pr of prs) {
-    changelog.push(`- #${pr.number} ${pr.title.trim()} @${pr.author || "unknown"}`);
+    changelog.push(`- #${pr.number} ${stripPrEnforcementPrefix(pr.title)} @${pr.author || "unknown"}`);
   }
   for (const commit of commits) {
     const short = commit.sha.slice(0, 8);

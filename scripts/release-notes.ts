@@ -546,7 +546,7 @@ export function parseGeneratedNotes(body: string): ReleaseNoteCategory[] {
 const CONVENTIONAL_COMMIT_PREFIX =
   /^(?:feat|fix|docs|chore|refactor|perf|test|build|ci|style|revert|merge|release)(?:\(([^)]+)\))?:\s*(.+)$/i;
 
-function stripPrEnforcementPrefix(title: string): string {
+export function stripPrEnforcementPrefix(title: string): string {
   const text = title.trim();
   const prefix = "[WRONG BRANCH] ";
   return text.startsWith(prefix) ? text.slice(prefix.length).trim() : text;
