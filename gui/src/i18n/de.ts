@@ -135,6 +135,8 @@ export const de: Record<TKey, string> = {
   "lang.nativeName": "Deutsch",
   "provider.name.commandCodeAuth": "Command Code - Auth",
   "provider.name.commandCodeApi": "Command Code - API",
+  "provider.name.orcaRouterApi": "OrcaRouter - API",
+  "provider.name.orcaRouterAuth": "OrcaRouter - Authentifizierung",
   "provider.name.volcengine": "Volcengine Ark",
   "provider.name.volcengineCodingPlan": "Volcengine Ark Coding-Tarif",
   "provider.name.volcengineAgentPlan": "Volcengine Ark Agent-Tarif",

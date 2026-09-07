@@ -18,6 +18,7 @@ export function AddProviderOAuthPane({
   manualCodeMsg,
   manualCodeOk,
   onRequestLogin,
+  onCancelLogin,
   onUseApiKeyInstead,
   onManualCodeChange,
   onSubmitManualCode,
@@ -36,6 +37,7 @@ export function AddProviderOAuthPane({
   manualCodeMsg: string;
   manualCodeOk: boolean;
   onRequestLogin: (providerId: string) => void;
+  onCancelLogin: (providerId: string) => void;
   onUseApiKeyInstead: () => void;
   onManualCodeChange: (value: string) => void;
   onSubmitManualCode: (providerId: string) => void;
@@ -83,6 +85,11 @@ export function AddProviderOAuthPane({
           {t("modal.useApiKeyInstead")}
         </button>
         <div style={{ flex: 1 }} />
+        {oauthBusy && preset.oauthProvider && (
+          <button type="button" className="btn btn-ghost" onClick={() => onCancelLogin(preset.oauthProvider!)}>
+            {t("common.cancel")}
+          </button>
+        )}
         <button type="button" className="btn btn-ghost" onClick={onBack}>{t("modal.back")}</button>
       </div>
     </div>

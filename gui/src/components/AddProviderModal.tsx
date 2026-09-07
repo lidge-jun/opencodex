@@ -197,7 +197,11 @@ export default function AddProviderModal({
     }
   };
 
-  const { loginOAuth, submitManualCode: submitManualCodeApi } = useAddProviderOAuth({ apiBase, t, aliveRef, onAdded });
+  const {
+    cancelLoginOAuth,
+    loginOAuth,
+    submitManualCode: submitManualCodeApi,
+  } = useAddProviderOAuth({ apiBase, t, aliveRef, onAdded });
 
   const oauthSetters = {
     setOauthBusy: (busy: boolean) => dispatch({ type: "set-oauth-busy", busy }),
@@ -287,12 +291,17 @@ export default function AddProviderModal({
               manualCodeMsg={manualCodeMsg}
               manualCodeOk={manualCodeOk}
               onRequestLogin={requestLoginOAuth}
+              onCancelLogin={providerId => { void cancelLoginOAuth(providerId, oauthSetters, preset.label); }}
               onUseApiKeyInstead={() => {
+                if (oauthBusy && preset.oauthProvider) void cancelLoginOAuth(preset.oauthProvider, oauthSetters, preset.label);
                 dispatch({ type: "use-api-key-instead", form: { ...form, authMode: "key" } });
               }}
               onManualCodeChange={code => dispatch({ type: "set-manual-code", code })}
               onSubmitManualCode={providerId => { void submitManualCode(providerId); }}
-              onBack={() => dispatch({ type: "back" })}
+              onBack={() => {
+                if (oauthBusy && preset.oauthProvider) void cancelLoginOAuth(preset.oauthProvider, oauthSetters, preset.label);
+                dispatch({ type: "back" });
+              }}
             />
           ) : (
             <AddProviderFormPane

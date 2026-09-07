@@ -140,6 +140,8 @@ export const ja: Record<TKey, string> = {
   "lang.nativeName": "日本語",
   "provider.name.commandCodeAuth": "Command Code - Auth",
   "provider.name.commandCodeApi": "Command Code - API",
+  "provider.name.orcaRouterApi": "OrcaRouter - API",
+  "provider.name.orcaRouterAuth": "OrcaRouter - 認証",
   "provider.name.volcengine": "Volcengine Ark",
   "provider.name.volcengineCodingPlan": "Volcengine Ark コーディングプラン",
   "provider.name.volcengineAgentPlan": "Volcengine Ark エージェントプラン",

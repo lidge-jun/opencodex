@@ -140,6 +140,8 @@ export const ru: Record<TKey, string> = {
   "lang.nativeName": "Русский",
   "provider.name.commandCodeAuth": "Command Code - Auth",
   "provider.name.commandCodeApi": "Command Code - API",
+  "provider.name.orcaRouterApi": "OrcaRouter — API",
+  "provider.name.orcaRouterAuth": "OrcaRouter — авторизация",
   "provider.name.volcengine": "Volcengine Ark",
   "provider.name.volcengineCodingPlan": "Volcengine Ark — тариф Coding",
   "provider.name.volcengineAgentPlan": "Volcengine Ark — тариф Agent",

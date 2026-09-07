@@ -135,6 +135,8 @@ export const zh: Record<TKey, string> = {
   "lang.nativeName": "中文",
   "provider.name.commandCodeAuth": "Command Code - Auth",
   "provider.name.commandCodeApi": "Command Code - API",
+  "provider.name.orcaRouterApi": "OrcaRouter - API",
+  "provider.name.orcaRouterAuth": "OrcaRouter - 授权",
   "provider.name.volcengine": "火山方舟",
   "provider.name.volcengineCodingPlan": "火山方舟编程套餐",
   "provider.name.volcengineAgentPlan": "火山方舟智能体套餐",

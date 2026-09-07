@@ -72,6 +72,8 @@ export const tr: Record<TKey, string> = {
   "lang.nativeName": "Türkçe",
   "provider.name.commandCodeAuth": "Command Code - Auth",
   "provider.name.commandCodeApi": "Command Code - API",
+  "provider.name.orcaRouterApi": "OrcaRouter - API",
+  "provider.name.orcaRouterAuth": "OrcaRouter - Kimlik Doğrulama",
   "provider.name.volcengine": "Volcengine Ark",
   "provider.name.volcengineCodingPlan": "Volcengine Ark Coding Plan",
   "provider.name.volcengineAgentPlan": "Volcengine Ark Agent Plan",

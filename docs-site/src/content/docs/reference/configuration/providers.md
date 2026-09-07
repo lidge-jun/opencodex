@@ -409,6 +409,13 @@ API-key providers may hold a literal key or an environment reference. OAuth prov
 credential store populated by `ocx login`; subscription-backed Claude Code launch behavior is
 configured under [`claudeCode.authMode`](/reference/configuration/server/#claude-code).
 
+OrcaRouter exposes both forms explicitly: `orcarouter` is the manual API-key provider and
+`orcarouter-oauth` runs browser consent with S256 PKCE, then stores the returned durable API key as
+an account credential. The public defaults intentionally split authentication
+(`https://www.orcarouter.ai`) from inference (`https://api.orcarouter.ai/v1`). Set
+`ORCAROUTER_BASE_URL` before the first account login for a one-origin self-hosted deployment, or use
+`ORCAROUTER_AUTH_BASE_URL` and `ORCAROUTER_API_BASE_URL` for separate origins.
+
 ## Provider diagnostic outbound safety
 
 Dashboard connection tests and live model discovery use a bounded GET-only transport. Without an

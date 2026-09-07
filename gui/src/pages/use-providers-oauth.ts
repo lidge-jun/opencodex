@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import type { TFn } from "../i18n/shared";
 import { readJsonIfOk } from "../fetch-json";
 import { openBrowserRequestField } from "../oauth-open-browser-pref";
@@ -45,6 +45,7 @@ export function useProvidersOAuth({
 }) {
   const oauthLoginGenerationRef = useRef<Map<string, number> | null>(null);
   if (oauthLoginGenerationRef.current === null) oauthLoginGenerationRef.current = new Map();
+  const activeLoginGenerationsRef = useRef(new Map<string, number>());
 
   const bumpLoginGeneration = useCallback((provider: string) => {
     const gen = (oauthLoginGenerationRef.current!.get(provider) ?? 0) + 1;
@@ -52,25 +53,51 @@ export function useProvidersOAuth({
     return gen;
   }, []);
 
+  const cancelServerLogin = useCallback(async (provider: string) => {
+    await fetch(`${apiBase}/api/oauth/login/cancel`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider }),
+      keepalive: true,
+    }).catch(() => undefined);
+  }, [apiBase]);
+
+  useEffect(() => {
+    const cancelActiveLogins = (clearUi: boolean) => {
+      const active = [...activeLoginGenerationsRef.current];
+      activeLoginGenerationsRef.current.clear();
+      for (const [provider, generation] of active) {
+        if (oauthLoginGenerationRef.current!.get(provider) === generation) bumpLoginGeneration(provider);
+        if (clearUi) {
+          setBusy(current => current === provider ? null : current);
+          setLoginInfo(current => current?.provider === provider ? null : current);
+        }
+        void cancelServerLogin(provider);
+      }
+    };
+    const onPageHide = () => cancelActiveLogins(true);
+    window.addEventListener("pagehide", onPageHide);
+    return () => {
+      window.removeEventListener("pagehide", onPageHide);
+      cancelActiveLogins(false);
+    };
+  }, [bumpLoginGeneration, cancelServerLogin, setBusy, setLoginInfo]);
+
   const cancelLoginOAuth = useCallback(async (provider: string) => {
     const gen = bumpLoginGeneration(provider);
-    try {
-      await fetch(`${apiBase}/api/oauth/login/cancel`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider }),
-      });
-    } catch { /* ignore */ }
+    activeLoginGenerationsRef.current.delete(provider);
+    await cancelServerLogin(provider);
     if (!aliveRef.current) return;
     if (oauthLoginGenerationRef.current!.get(provider) === gen) {
       setBusy(current => current === provider ? null : current);
       setLoginInfo(current => current?.provider === provider ? null : current);
     }
     notify(t("prov.loginCancelled", { provider: oauthLabel(provider) }), false);
-  }, [aliveRef, apiBase, bumpLoginGeneration, notify, setBusy, setLoginInfo, t]);
+  }, [aliveRef, bumpLoginGeneration, cancelServerLogin, notify, setBusy, setLoginInfo, t]);
 
   const loginOAuth = async (provider: string, addAccount = false, accountId?: string) => {
     const generation = bumpLoginGeneration(provider);
+    activeLoginGenerationsRef.current.set(provider, generation);
     const reauthTargetId = accountId?.trim() || undefined;
     setBusy(provider);
     setStatus("");
@@ -175,19 +202,19 @@ export function useProvidersOAuth({
         }
       }
       if (!finished && oauthLoginGenerationRef.current!.get(provider) === generation && aliveRef.current) {
-        await fetch(`${apiBase}/api/oauth/login/cancel`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ provider }),
-        }).catch(() => {});
+        await cancelServerLogin(provider);
         notify(t("prov.loginTimeout", { provider: oauthLabel(provider) }), false);
         setLoginInfo(null);
       }
     } catch {
       if (oauthLoginGenerationRef.current!.get(provider) === generation) {
+        await cancelServerLogin(provider);
         notify(t("prov.loginRequestFail", { provider: oauthLabel(provider) }), false);
       }
     } finally {
+      if (activeLoginGenerationsRef.current.get(provider) === generation) {
+        activeLoginGenerationsRef.current.delete(provider);
+      }
       if (aliveRef.current && oauthLoginGenerationRef.current!.get(provider) === generation) setBusy(null);
     }
   };

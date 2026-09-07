@@ -3705,6 +3705,7 @@ async function handleResponsesInner(
     || route.providerName === "github-copilot"
     || route.providerName === "kiro"
     || route.providerName === "google-antigravity"
+    || route.providerName === "orcarouter-oauth"
   ) && route.provider.authMode === "oauth";
   let sentOAuthSnapshot: OAuthAccessSnapshot | undefined;
   let replayOAuthCredentialSnapshot: Pick<OAuthAccessSnapshot, "accountId" | "generation"> | undefined;

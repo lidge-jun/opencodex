@@ -88,8 +88,9 @@ files or a raw network capture.
 
 ### `ocx login <provider>`
 
-Start the provider's registered login flow. OAuth providers open a browser and store auto-refreshed
-credentials under `~/.opencodex/`; API-key login providers open their key dashboard, prompt for the
+Start the provider's registered login flow. OAuth-style account providers open a browser and store
+credentials under `~/.opencodex/` (refreshable tokens rotate automatically; durable key grants such
+as OrcaRouter are reused until the provider revokes them); API-key login providers open their key dashboard, prompt for the
 key, validate it when possible, and save the resulting provider config. The command prints the
 currently accepted OAuth and API-key provider ids when the name is missing or unknown.
 
@@ -101,6 +102,8 @@ account pool (Reauthenticate) or the headless `ocx account reauth` flow instead.
 ```bash
 ocx login xai
 ocx login anthropic
+ocx login orcarouter-oauth # browser consent + S256 PKCE
+ocx login orcarouter       # paste an existing API key
 ```
 
 OAuth reauthentication preserves operator settings such as model selections, pricing overrides,

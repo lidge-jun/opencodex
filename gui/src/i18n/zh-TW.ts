@@ -2044,6 +2044,8 @@ export const zhTW: Record<TKey, string> = {
   "lang.nativeName": "繁體中文",
   "provider.name.commandCodeAuth": "Command Code - Auth",
   "provider.name.commandCodeApi": "Command Code - API",
+  "provider.name.orcaRouterApi": "OrcaRouter - API",
+  "provider.name.orcaRouterAuth": "OrcaRouter - 授權",
   "routing.title": "路由智能 (beta)",
   "routing.subtitle": "策略設定檔、試運行評估，以及有來源依據的路由分析。",
   "routing.loadFailed": "無法載入路由資料",

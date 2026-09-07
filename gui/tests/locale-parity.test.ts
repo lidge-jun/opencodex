@@ -136,6 +136,7 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   // Provider proper nouns kept in English
   "provider.name.commandCodeAuth",
   "provider.name.commandCodeApi",
+  "provider.name.orcaRouterApi",
   // Routing analytics identifiers and short labels
   "routing.revision",
   "routing.unavailable",

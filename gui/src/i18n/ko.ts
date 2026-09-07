@@ -135,6 +135,8 @@ export const ko: Record<TKey, string> = {
   "lang.nativeName": "한국어",
   "provider.name.commandCodeAuth": "Command Code - Auth",
   "provider.name.commandCodeApi": "Command Code - API",
+  "provider.name.orcaRouterApi": "OrcaRouter - API",
+  "provider.name.orcaRouterAuth": "OrcaRouter - 인증",
   "provider.name.volcengine": "Volcengine Ark",
   "provider.name.volcengineCodingPlan": "Volcengine Ark 코딩 플랜",
   "provider.name.volcengineAgentPlan": "Volcengine Ark 에이전트 플랜",

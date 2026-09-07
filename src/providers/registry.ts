@@ -1122,6 +1122,45 @@ const CLINE_PASS_MODELS = [
   "cline-pass/qwen3.7-max",
   "cline-pass/qwen3.7-plus",
 ];
+
+const ORCAROUTER_MODEL_DISCOVERY: ProviderModelDiscoverySpec = {
+  path: "models",
+  query: { capability: "chat" },
+  maxResponseBytes: 512 * 1024,
+  maxModels: 512,
+  filter: {
+    anyOf: [{
+      path: ["supported_endpoint_types"],
+      containsAny: ["openai", "openai-response", "anthropic", "gemini"],
+      caseInsensitive: true,
+    }],
+    noneOf: [{
+      path: ["supported_endpoint_types"],
+      containsAny: ["image-generation", "openai-video", "jina-rerank"],
+      caseInsensitive: true,
+    }],
+  },
+};
+// Preserve the previously verified cold-start catalog. Live discovery remains authoritative
+// when it succeeds, but a temporary catalog outage must not erase the provider's known-good
+// selectors from the picker. `orcarouter/auto` is intentionally retained here even though the
+// public catalog did not enumerate it at the latest verification (2026-09-07).
+const ORCAROUTER_MODELS = [
+  "openai/gpt-5.5",
+  "anthropic/claude-opus-4.8",
+  "google/gemini-3.5-flash",
+  "deepseek/deepseek-v4-pro",
+  "orcarouter/auto",
+];
+const ORCAROUTER_TEXT_ONLY_MODELS = ["deepseek/deepseek-v4-pro"];
+const ORCAROUTER_MODEL_REASONING_EFFORTS = {
+  // Live /models currently exposes ids and modalities, not the accepted reasoning ladder.
+  "openai/gpt-5.5": ["low", "medium", "high", "xhigh"],
+  "deepseek/deepseek-v4-pro": deepseekThinkingEffortsFor("deepseek/deepseek-v4-pro"),
+};
+const ORCAROUTER_MODEL_REASONING_EFFORT_MAP = {
+  "deepseek/deepseek-v4-pro": deepseekReasoningMapFor("deepseek/deepseek-v4-pro"),
+};
 const CLINE_PASS_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "cline-pass/glm-5.3": 1_048_576,
   "cline-pass/glm-5.3-flash": 1_048_576,
@@ -1359,6 +1398,25 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     defaultMaxOutputTokens: 64_000,
     // The proprietary generate wire has no verified per-request serialization flag.
     parallelToolCalls: false,
+  },
+  {
+    id: "orcarouter-oauth",
+    label: "OrcaRouter - Auth",
+    adapter: "openai-chat",
+    baseUrl: "https://api.orcarouter.ai/v1",
+    authKind: "oauth",
+    oauthId: "orcarouter-oauth",
+    featured: true,
+    allowBaseUrlOverride: true,
+    defaultModel: "openai/gpt-5.5",
+    models: ORCAROUTER_MODELS,
+    liveModels: true,
+    modelDiscovery: ORCAROUTER_MODEL_DISCOVERY,
+    noVisionModels: ORCAROUTER_TEXT_ONLY_MODELS,
+    modelReasoningEfforts: ORCAROUTER_MODEL_REASONING_EFFORTS,
+    modelReasoningEffortMap: ORCAROUTER_MODEL_REASONING_EFFORT_MAP,
+    preserveReasoningContentModels: ORCAROUTER_TEXT_ONLY_MODELS,
+    note: "Connect your OrcaRouter account with OAuth 2.0 + PKCE; the issued API key is stored in OpenCodex's existing credential store.",
   },
   {
     id: "anthropic",
@@ -1834,37 +1892,23 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     note: "Cline usage-billing API: one key, 100+ models, OpenRouter-style ids. Promotional free models are IDE/CLI-only per Cline docs; minimax/minimax-m2.5 is the documented API free experimentation model.",
   },
   {
-    // OrcaRouter: OpenAI-compatible adaptive router (api.orcarouter.ai). Model ids are
-    // vendor-namespaced (`<vendor>/<model>`) and pass through to the upstream as-is.
-    // The default pins a tool-capable model; the adaptive `orcarouter/auto` router is also
-    // selectable. Live-verified 2026-07-20: /v1/chat/completions accepts the `tools` field
-    // and routes to a function-calling-capable upstream.
-    id: "orcarouter", label: "OrcaRouter", adapter: "openai-chat", baseUrl: "https://api.orcarouter.ai/v1",
+    // OrcaRouter: OpenAI-compatible adaptive router (api.orcarouter.ai). The public live
+    // catalog is authoritative; model ids and input modalities are never maintained here.
+    id: "orcarouter", label: "OrcaRouter - API", adapter: "openai-chat", baseUrl: "https://api.orcarouter.ai/v1",
     authKind: "key", dashboardUrl: "https://www.orcarouter.ai/console",
+    // The catalog is public, so a successful /models probe cannot validate a submitted key.
+    apiKeyValidation: "unknown",
     defaultModel: "openai/gpt-5.5",
-    models: [
-      "openai/gpt-5.5",
-      "anthropic/claude-opus-4.8",
-      "google/gemini-3.5-flash",
-      "deepseek/deepseek-v4-pro",
-      "orcarouter/auto",
-    ],
-    // Text-only models → the vision sidecar describes images instead.
-    noVisionModels: ["deepseek/deepseek-v4-pro"],
-    // Reasoning/temperature behavior verified live 2026-07-20 against api.orcarouter.ai:
-    // - openai/gpt-5.5 accepts reasoning_effort none|low|medium|high|xhigh but rejects `max` (400),
-    //   so advertise up to xhigh and let mapReasoningEffort clamp a `max`/`ultra` request to xhigh.
-    // - deepseek/deepseek-v4-pro mirrors the direct-DeepSeek wiring (thinking-effort map +
-    //   reasoning_content history replay) so the namespaced selection behaves identically.
-    // - temperature is accepted by every seeded model (gpt-5.5, claude-opus-4.8, deepseek-v4-pro all
-    //   returned 200), so no noTemperatureModels entry is warranted here.
-    modelReasoningEfforts: {
-      "openai/gpt-5.5": ["low", "medium", "high", "xhigh"],
-      "deepseek/deepseek-v4-pro": deepseekThinkingEffortsFor("deepseek/deepseek-v4-pro"),
-    },
-    modelReasoningEffortMap: { "deepseek/deepseek-v4-pro": deepseekReasoningMapFor("deepseek/deepseek-v4-pro") },
-    preserveReasoningContentModels: ["deepseek/deepseek-v4-pro"],
-    note: "OpenAI-compatible adaptive router. Default is a tool-capable model; orcarouter/auto (adaptive routing) is also selectable. Full catalog: https://www.orcarouter.ai/models",
+    models: ORCAROUTER_MODELS,
+    liveModels: true,
+    modelDiscovery: ORCAROUTER_MODEL_DISCOVERY,
+    // Catalog discovery owns WHICH models exist. These entries only retain verified
+    // request-shaping facts that the upstream catalog does not currently publish.
+    noVisionModels: ORCAROUTER_TEXT_ONLY_MODELS,
+    modelReasoningEfforts: ORCAROUTER_MODEL_REASONING_EFFORTS,
+    modelReasoningEffortMap: ORCAROUTER_MODEL_REASONING_EFFORT_MAP,
+    preserveReasoningContentModels: ORCAROUTER_TEXT_ONLY_MODELS,
+    note: "OpenAI-compatible adaptive router. Models and multimodal capabilities are discovered live from the public chat catalog. Use the OrcaRouter account entry for PKCE login.",
   },
   {
     // BizRouter: Korean enterprise LLM gateway (api.bizrouter.ai). Model ids are

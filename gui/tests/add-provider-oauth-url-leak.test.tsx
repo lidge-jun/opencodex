@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act } from "react";
+import { act, useEffect, useRef, useState } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
+import { useT } from "../src/i18n/shared";
 import AddProviderModal from "../src/components/AddProviderModal";
 import { OAUTH_LOGIN_POLL_INTERVAL_MS } from "../src/components/use-add-provider-oauth";
+import { useProvidersOAuth } from "../src/pages/use-providers-oauth";
+import type { OAuthAccount, OAuthStatus } from "../src/pages/providers-shared";
 
 /**
  * The add-provider OAuth pane renders the authorization URL so a user whose
@@ -25,6 +28,7 @@ let root: Root | null = null;
 let originalFetch: typeof globalThis.fetch;
 let pendingLogins: Array<(url: string) => void> = [];
 let oauthStatus: { loggedIn: boolean; error?: string } = { loggedIn: false };
+let cancelledProviders: string[] = [];
 
 const PRESETS = [
   { id: "claude", label: "Claude", adapter: "anthropic", baseUrl: "https://api.anthropic.com", auth: "oauth", oauthProvider: "claude" },
@@ -46,6 +50,7 @@ beforeEach(() => {
 
   pendingLogins = [];
   oauthStatus = { loggedIn: false };
+  cancelledProviders = [];
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
     value: async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -58,6 +63,11 @@ beforeEach(() => {
         return await new Promise<Response>((resolve) => {
           pendingLogins.push((authUrl: string) => resolve(Response.json({ url: authUrl })));
         });
+      }
+      if (url.pathname === "/api/oauth/login/cancel" && (init?.method ?? "GET") === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { provider?: string };
+        if (body.provider) cancelledProviders.push(body.provider);
+        return Response.json({ ok: true, cancelled: true });
       }
       if (url.pathname === "/api/oauth/status") return Response.json(oauthStatus);
       return Response.json({});
@@ -92,6 +102,68 @@ async function mountModal(onAdded: (name: string) => void = () => {}) {
     );
   });
   await act(async () => { await new Promise((r) => setTimeout(r, 40)); });
+}
+
+function ProvidersOAuthHarness() {
+  const t = useT();
+  const aliveRef = useRef(true);
+  const startedRef = useRef(false);
+  const [accountSets, setAccountSets] = useState<Record<string, { activeAccountId: string | null; accounts: OAuthAccount[] }>>({});
+  const [busy, setBusy] = useState<string | null>(null);
+  const [, setStatus] = useState("");
+  const [loginInfo, setLoginInfo] = useState<{ provider: string; url?: string; instructions?: string; deviceCode?: string } | null>(null);
+  const [, setOauthStatus] = useState<Record<string, OAuthStatus>>({});
+
+  useEffect(() => () => { aliveRef.current = false; }, []);
+  const { loginOAuth } = useProvidersOAuth({
+    apiBase: "",
+    t,
+    aliveRef,
+    accountSets,
+    setAccountSets,
+    setBusy,
+    setStatus,
+    setLoginInfo,
+    setOauthStatus,
+    notify: () => {},
+    fetchConfig: async () => {},
+    fetchOauth: async () => {},
+    fetchAccountSets: async () => undefined,
+    fetchProviderQuotas: async () => {},
+    bumpModelsRefresh: () => {},
+  });
+
+  useEffect(() => {
+    if (startedRef.current) return;
+    startedRef.current = true;
+    void loginOAuth("orcarouter-oauth");
+  }, [loginOAuth]);
+  return (
+    <>
+      <span data-testid="oauth-busy">{busy ?? "idle"}</span>
+      <span data-testid="oauth-login-info">{loginInfo?.url ?? "no-login-info"}</span>
+      <button
+        type="button"
+        disabled={busy === "orcarouter-oauth"}
+        onClick={() => { void loginOAuth("orcarouter-oauth"); }}
+      >
+        Log in again
+      </button>
+    </>
+  );
+}
+
+async function mountProvidersOAuthHarness() {
+  const { createRoot } = await import("react-dom/client");
+  await act(async () => {
+    root = createRoot(host);
+    root.render(
+      <LanguageProvider>
+        <ProvidersOAuthHarness />
+      </LanguageProvider>,
+    );
+    await new Promise((r) => setTimeout(r, 20));
+  });
 }
 
 function clickByText(fragment: string) {
@@ -139,6 +211,148 @@ test("the in-flight provider's own authorization URL does render", async () => {
   });
 
   expect(host.querySelector(".login-url-block-text")?.textContent).toBe(A_URL);
+});
+
+test("unmounting the add-provider modal cancels its in-flight OAuth login", async () => {
+  await mountModal();
+
+  clickByText("Claude");
+  await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+  clickByText("Log in with Claude");
+  await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+  await act(async () => {
+    pendingLogins.shift()?.(A_URL);
+    await new Promise((r) => setTimeout(r, 20));
+  });
+
+  const current = root!;
+  await act(async () => { current.unmount(); });
+  root = null;
+  await new Promise((r) => setTimeout(r, 20));
+
+  expect(cancelledProviders).toEqual(["claude"]);
+});
+
+test("leaving the providers page cancels its in-flight account login", async () => {
+  await mountProvidersOAuthHarness();
+  await act(async () => {
+    pendingLogins.shift()?.(A_URL);
+    await new Promise((r) => setTimeout(r, 20));
+  });
+
+  const current = root!;
+  await act(async () => { current.unmount(); });
+  root = null;
+  await new Promise((r) => setTimeout(r, 20));
+
+  expect(cancelledProviders).toEqual(["orcarouter-oauth"]);
+});
+
+test("pagehide cancels an account login and allows another login after bfcache restore", async () => {
+  await mountProvidersOAuthHarness();
+  await act(async () => {
+    pendingLogins.shift()?.(A_URL);
+    await new Promise((r) => setTimeout(r, 20));
+  });
+
+  expect(host.querySelector('[data-testid="oauth-busy"]')?.textContent).toBe("orcarouter-oauth");
+  expect(host.querySelector('[data-testid="oauth-login-info"]')?.textContent).toBe(A_URL);
+  await act(async () => {
+    win.dispatchEvent(new win.Event("pagehide"));
+    await new Promise((r) => setTimeout(r, 20));
+  });
+
+  expect(cancelledProviders).toEqual(["orcarouter-oauth"]);
+  expect(host.querySelector('[data-testid="oauth-busy"]')?.textContent).toBe("idle");
+  expect(host.querySelector('[data-testid="oauth-login-info"]')?.textContent).toBe("no-login-info");
+  const loginAgain = Array.from(host.querySelectorAll("button")).find(button => button.textContent?.includes("Log in again"));
+  expect(loginAgain?.disabled).toBe(false);
+  await act(async () => {
+    loginAgain?.dispatchEvent(new win.MouseEvent("click", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 20));
+  });
+  expect(pendingLogins).toHaveLength(1);
+});
+
+test("pagehide clears the add-provider OAuth hint and allows another login", async () => {
+  await mountModal();
+  clickByText("Claude");
+  await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+  clickByText("Log in with Claude");
+  await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+  await act(async () => {
+    pendingLogins.shift()?.(A_URL);
+    await new Promise((r) => setTimeout(r, 20));
+  });
+
+  expect(host.querySelector(".login-url-block-text")?.textContent).toBe(A_URL);
+  await act(async () => {
+    win.dispatchEvent(new win.Event("pagehide"));
+    await new Promise((r) => setTimeout(r, 20));
+  });
+
+  expect(cancelledProviders).toEqual(["claude"]);
+  expect(host.querySelector(".login-url-block-text")).toBeNull();
+  const loginAgain = Array.from(host.querySelectorAll("button")).find(button => button.textContent?.includes("Log in with Claude"));
+  expect(loginAgain?.disabled).toBe(false);
+  await act(async () => {
+    loginAgain?.dispatchEvent(new win.MouseEvent("click", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 20));
+  });
+  expect(pendingLogins).toHaveLength(1);
+});
+
+test("the add-provider OAuth pane can cancel an in-flight login", async () => {
+  await mountModal();
+
+  clickByText("Claude");
+  await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+  clickByText("Log in with Claude");
+  await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+  await act(async () => {
+    pendingLogins.shift()?.(A_URL);
+    await new Promise((r) => setTimeout(r, 20));
+  });
+
+  await act(async () => {
+    clickByText("Cancel");
+    await new Promise((r) => setTimeout(r, 20));
+  });
+
+  expect(cancelledProviders).toEqual(["claude"]);
+  expect(host.textContent).toContain("Claude login cancelled");
+});
+
+test("timing out an add-provider OAuth login releases the server login", async () => {
+  const realSetTimeout = globalThis.setTimeout;
+  const timeoutSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
+    callback: (...args: unknown[]) => void,
+    delay?: number,
+    ...args: unknown[]
+  ) => {
+    if (delay === OAUTH_LOGIN_POLL_INTERVAL_MS) {
+      queueMicrotask(() => callback(...args));
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }
+    return realSetTimeout(callback, delay, ...args);
+  }) as typeof setTimeout);
+
+  try {
+    await mountModal();
+    clickByText("Claude");
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    clickByText("Log in with Claude");
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    await act(async () => {
+      pendingLogins.shift()?.(A_URL);
+      await new Promise((r) => setTimeout(r, 40));
+    });
+
+    expect(cancelledProviders).toEqual(["claude"]);
+    expect(host.textContent).toContain("timed out");
+  } finally {
+    timeoutSpy.mockRestore();
+  }
 });
 
 test("a late URL for an abandoned provider cannot overwrite the one already shown", async () => {

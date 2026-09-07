@@ -73,6 +73,8 @@ export const en = {
   "lang.nativeName": "English",
   "provider.name.commandCodeAuth": "Command Code - Auth",
   "provider.name.commandCodeApi": "Command Code - API",
+  "provider.name.orcaRouterApi": "OrcaRouter - API",
+  "provider.name.orcaRouterAuth": "OrcaRouter - Auth",
   "provider.name.volcengine": "Volcengine Ark",
   "provider.name.volcengineCodingPlan": "Volcengine Ark Coding Plan",
   "provider.name.volcengineAgentPlan": "Volcengine Ark Agent Plan",

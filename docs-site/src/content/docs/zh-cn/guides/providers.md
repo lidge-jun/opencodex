@@ -75,8 +75,9 @@ ChatGPT 透传目录也会加入 GPT-5.6 Sol/Terra/Luna 的裸 slug（`gpt-5.6-s
 
 ## 2. 账号登录（OAuth）
 
-有八个提供商预设使用 OAuth 登录，另加通过实验性非官方设备流桥接的 GitHub Copilot。
-opencodex 会把凭据存入 `~/.opencodex/auth.json` 并自动刷新。登录 CLI 也接受 `chatgpt`：
+有九个提供商预设使用 OAuth 登录，另加通过实验性非官方设备流桥接的 GitHub Copilot。
+opencodex 会把凭据存入 `~/.opencodex/auth.json`：可刷新的令牌会自动轮换；OrcaRouter
+这类持久密钥会复用到提供商撤销为止。登录 CLI 也接受 `chatgpt`：
 它会获取一份 ChatGPT 凭据，并创建一个 `forward` 模式的提供商条目。
 
 ```bash
@@ -88,6 +89,7 @@ ocx login kiro         # 导入 kiro-cli 凭据（支持令牌回退）
 ocx login google-antigravity
 ocx login cursor       # 独立的 Cursor PKCE 登录
 ocx login command-code # Command Code 浏览器 OAuth（或导入 ~/.commandcode/auth.json）
+ocx login orcarouter-oauth # OrcaRouter 浏览器授权 + PKCE
 ocx login github-copilot  # GitHub 设备流 → Copilot 令牌（Copilot Pro/Business）
 ocx login chatgpt      # 独立的 ChatGPT OAuth 登录
 ocx logout <provider>
@@ -102,6 +104,7 @@ ocx logout <provider>
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 首次登录会导入已安装并已登录的 Kiro CLI 会话（Unix 使用 `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`；Windows PowerShell 使用 `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`；然后运行 `kiro-cli login`）。**添加账户**会先退出 `kiro-cli`，再启动新的浏览器登录，从而切换 `kiro-cli` 自身使用的账户，并保存账户范围的配置文件元数据。现有 OpenCodex 账户会保留；如果取消或失败，则恢复之前的 `kiro-cli` 会话。 |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | 通过 Cloud Code Assist 协议使用 Google OAuth。实时发现调用已认证的 CCA `v1internal:fetchAvailableModels` 端点，并仅发布当前登录账户可用的 agent 模型；维护中的目录仍作为回退。 |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 实验性 PKCE 登录、带可选 HTTP/1.1 兼容路径的 HTTP/2 传输，以及按账号筛选的模型发现。 |
+| `orcarouter-oauth` | `openai-chat` | `https://api.orcarouter.ai/v1` | 浏览器授权与密钥交换走 `https://www.orcarouter.ai` + S256 PKCE。交换结果是用户自己的普通 `sk-orca-…` API key，保存在现有凭据库中并持续复用，直到被撤销。 |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 实验性。GitHub 设备流 + `copilot_internal` 交换（VS Code OAuth 客户端）。需要有效的 Copilot 订阅；不是官方第三方 API。 |
 
 Google Antigravity 账户和提供方的配额查询（包括模型列表回退）使用固定的 Google 计量端点。这些目标支持透明 Fake-IP DNS，同时保留 TLS 验证、重定向拒绝和私有地址检查。自定义 base URL 仅改变模型请求，不改变配额目标；`NO_PROXY` 仍使用直连策略。
@@ -262,6 +265,28 @@ inference key 可从 [Vultr Console](https://my.vultr.com) 的订阅概览复制
 `ocx login command-code` 支持通过浏览器进行 OAuth 登录（现有 Command Code CLI 用户还可选择从
 `~/.commandcode/auth.json` 导入本地 CLI 凭据）；模型目录按账户隔离，并在登录后从经过认证的发现
 端点获取。聊天请求使用已配置的 bearer 密钥。密钥可在 [Command Code Studio](https://commandcode.ai/studio/) 创建。
+
+**OrcaRouter 认证与模型发现：**可用 `ocx login orcarouter-oauth` 走浏览器一键授权，
+也可用 `ocx login orcarouter` 粘贴已有 API key。PKCE 流程会先监听本机回环端口，为每次登录
+生成新的 S256 challenge 和 state；授权页使用 `https://www.orcarouter.ai/auth`，并通过
+`https://www.orcarouter.ai/api/v1/auth/keys` 交换一次性 code，再把返回的
+用户自有 key 保存到 `~/.opencodex/auth.json`；手填 key 仍使用项目原有的 provider key 存储。
+两种模式都访问 `https://api.orcarouter.ai/v1`，并使用 `capability=chat` 实时发现模型；图片生成、
+视频和 rerank 条目会被排除，模型返回的 input modalities 决定 Codex 是否允许图片附件。
+由于模型目录本身是公开的，手填 key 时会诚实显示“无法验证”，不会把公开目录的 200 响应误当成
+密钥有效证明。
+
+单域名自托管环境可在第一次 PKCE 登录前设置统一 origin；推理地址会从同一个 origin 派生：
+
+```bash
+ORCAROUTER_BASE_URL=https://router.example ocx login orcarouter-oauth
+```
+
+若自托管环境也分离登录域名与 API 域名，可分别设置 `ORCAROUTER_AUTH_BASE_URL` 和
+`ORCAROUTER_API_BASE_URL`。
+
+该值必须是 HTTPS origin（本地开发可使用 HTTP loopback），且不能包含用户名密码、query 或 fragment。
+若 relay 返回 `401`，重新运行登录即可；OrcaRouter 签发的是长期 API key，不存在 refresh-token grant。
 
 **Command Code 配额：**仪表盘和 `ocx account refresh` 会在规范主机 `https://api.commandcode.ai` 上探测 `/alpha/billing/credits` 窗口（5 小时和每周）。OAuth 预设 (`command-code`) 使用已保存的账户 bearer；Provider-API 密钥预设 (`commandcode`) 使用当前配置的有效密钥。用户改写后的仿冒 base URL 不会被探测。当 Command Code 同时返回周期消耗时，剩余的 monthly / purchased / free credits 会显示为 USD 窗口。
 

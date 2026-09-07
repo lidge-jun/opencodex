@@ -759,6 +759,7 @@
   "opencode-go-session-header.test.ts": "providers",
   "opencode-zen-deepseek-reasoning.test.ts": "providers",
   "opencode-zen-rate-limit.test.ts": "providers",
+  "orcarouter-provider.test.ts": "providers",
   "openrouter-provider-routing.test.ts": "providers",
   "optional-shutdown-hooks.test.ts": "lib",
   "outbound-body-guard.test.ts": "server",

@@ -737,7 +737,7 @@ describe("provider registry parity", () => {
     // Registry order. Both OAuth entries (anthropic, google-antigravity) are gated by
     // providerSecureTransportConfigError; the rest are key/local providers that never send a
     // subscription bearer to the override.
-    expect(optedIn.map(entry => entry.id)).toEqual(["anthropic", "google-antigravity", "ollama", "vllm", "lm-studio", "moonshot", "qwen-cloud", "alibaba", "alibaba-token-plan-intl", "litellm"]);
+    expect(optedIn.map(entry => entry.id)).toEqual(["orcarouter-oauth", "anthropic", "google-antigravity", "ollama", "vllm", "lm-studio", "moonshot", "qwen-cloud", "alibaba", "alibaba-token-plan-intl", "litellm"]);
     for (const entry of optedIn) {
       expect(providerConfigSeed(entry)).not.toHaveProperty("allowBaseUrlOverride");
     }
@@ -962,7 +962,7 @@ describe("provider registry parity", () => {
   test("GUI preset projection preserves current featured set plus key catalog and custom", () => {
     const featured = deriveFeaturedProviderIds();
     expect(featured).toEqual([
-      "openai", "xai", "command-code", "anthropic", "anthropic-apikey", "kimi", "nous", "openai-apikey", "umans", "opencode-go", "openrouter",
+      "openai", "xai", "command-code", "orcarouter-oauth", "anthropic", "anthropic-apikey", "kimi", "nous", "openai-apikey", "umans", "opencode-go", "openrouter",
       "groq", "google", "azure-openai", "ollama", "vllm", "lm-studio", "opencode-free",
       "mimo-free",
     ]);
