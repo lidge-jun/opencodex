@@ -1,6 +1,7 @@
 import { decodeEventStream } from "../lib/eventstream-decoder";
 import { estimateTokens } from "../lib/token-estimate";
 import { debugProviderDiagnostic } from "../lib/debug";
+import { isDebugEnabled } from "../lib/debug-settings";
 import { resolveKiroApiRegion, resolveKiroRequestProfile } from "../oauth/kiro";
 import { KIRO_MODEL_CONTEXT_WINDOWS, normalizeKiroModelId } from "../providers/kiro-models";
 import { modelRecordValue } from "../reasoning-effort";
@@ -2114,17 +2115,21 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
     const rawContextInputEstimate = estimateKiroPayloadInputTokens(built.payload, parsed.modelId);
     const contextInputEstimate = calibrateKiroEstimate(built.conversationId, rawContextInputEstimate);
     const body = JSON.stringify(built.payload);
-    debugProviderDiagnostic("kiro", "request", {
-      region,
-      requestedModel: parsed.modelId,
-      completionMode: built.completionMode,
-      bodyBytes: new TextEncoder().encode(body).length,
-      messageCount: kiroPayloadMessages(parsed).length,
-      toolCount: parsed.context.tools?.length ?? 0,
-      hasProfileArn: Boolean(profileArn),
-      wireClient,
-      hasPreviousResponseId: Boolean(parsed.previousResponseId),
-    });
+    // Every field below is evaluated before the call, so an unguarded call re-encodes the
+    // whole request body on each request even when provider debug is off. Gate the details.
+    if (isDebugEnabled()) {
+      debugProviderDiagnostic("kiro", "request", {
+        region,
+        requestedModel: parsed.modelId,
+        completionMode: built.completionMode,
+        bodyBytes: new TextEncoder().encode(body).length,
+        messageCount: kiroPayloadMessages(parsed).length,
+        toolCount: parsed.context.tools?.length ?? 0,
+        hasProfileArn: Boolean(profileArn),
+        wireClient,
+        hasPreviousResponseId: Boolean(parsed.previousResponseId),
+      });
+    }
     return {
       request: {
         url: kiroRuntimeEndpoint(provider, region),
