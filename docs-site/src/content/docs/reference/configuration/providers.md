@@ -923,13 +923,15 @@ their previous behavior. See the
 [ordering migration note](/guides/model-ordering/#migration-note-native-ids-in-existing-orders).
 `modelDisplayNames` on a provider controls readable labels without changing wire ids.
 
-## OpenCode Go session and agent messages
+## Routed agent messages
 
-With the [`openai-responses` adapter](/reference/adapters/#openai-responses) and
-base URL `https://opencode.ai/zen/go/v1`, plaintext Codex `agent_message` items
-become user messages when `authMode` is not `"forward"` (for example, `"key"`).
-Providers using `authMode: "forward"` retain these items unchanged. This conversion is scoped to that destination, including
-renamed provider entries; other Responses destinations keep their input unchanged.
+With the [`openai-responses` adapter](/reference/adapters/#openai-responses), plaintext
+Codex `agent_message` items become user messages when `authMode` is not `"forward"`
+(for example, `"key"`). Providers using `authMode: "forward"` retain these items unchanged.
+`agent_message` is private to the ChatGPT Codex backend, so any routed destination that
+receives one answers the whole request with
+`422 unknown item type "agent_message"`; Codex replays sub-agent history on every
+subsequent turn, so the thread keeps failing until the item is converted.
 Author and recipient remain explicit text metadata, and the content parts are preserved.
 Encrypted and unknown content is not normalized; native encrypted tasks still require the
 separate opt-in [task recovery](/reference/configuration/agents/#encrypted-v2-task-recovery).
@@ -948,6 +950,6 @@ current tail message (ignoring trailing `compaction_trigger` or `additional_tool
 It does not batch-recover unseen historical messages; those remain unchanged. A cache miss
 or expiry does not extend the history-recovery contract.
 
-Sender and recipient on Go Responses are context for the receiving model, not a new
+Sender and recipient on routed Responses are context for the receiving model, not a new
 machine-readable routing protocol. Tool routing continues to use the existing collaboration
 contracts.

@@ -154,6 +154,23 @@ function serializedOutboundWithEncryptedAgentMessage(): string {
   return JSON.stringify({ model: "model-a", input: agentMessageReplayInput() });
 }
 
+/**
+ * What a routed destination receives on the retry: recovery has replaced the undecryptable
+ * part with an omission marker, which leaves the item entirely plaintext, so the adapter
+ * converts it into the public user message a routed Responses schema can accept.
+ */
+function recoveredAgentMessage(): Record<string, unknown> {
+  return {
+    type: "message",
+    role: "user",
+    content: [
+      { type: "input_text", text: 'Agent message {"author":"/root/child_task","recipient":"/root"}' },
+      { type: "input_text", text: "Message Type: MESSAGE\nTask name: /root\nSender: /root/child_task\nPayload:" },
+      { type: "input_text", text: "[encrypted content omitted]" },
+    ],
+  };
+}
+
 function config(): OcxConfig {
   return {
     defaultProvider: "first",
@@ -550,15 +567,7 @@ describe("opaque blob recovery through /v1/responses", () => {
 
     expect(outbound).toHaveLength(4);
     const retriedInput = outbound.at(3)?.input as Array<Record<string, unknown>> | undefined;
-    expect(retriedInput?.at(0)).toEqual({
-      type: "agent_message",
-      author: "/root/child_task",
-      recipient: "/root",
-      content: [
-        { type: "input_text", text: "Message Type: MESSAGE\nTask name: /root\nSender: /root/child_task\nPayload:" },
-        { type: "input_text", text: "[encrypted content omitted]" },
-      ],
-    });
+    expect(retriedInput?.at(0)).toEqual(recoveredAgentMessage());
     expect(retriedInput?.at(1)).toEqual(agentMessageReplayInput().at(1));
     expect(logCtx.activeAttempt?.recoveryKinds).toEqual(["transient-5xx", "opaque-blob-rejection"]);
   });
@@ -580,15 +589,7 @@ describe("opaque blob recovery through /v1/responses", () => {
     expect(body).not.toContain(FUNCTION_OUTPUT_DECRYPT_MESSAGE);
     expect(outbound).toHaveLength(2);
     const retriedInput = outbound.at(1)?.input as Array<Record<string, unknown>> | undefined;
-    expect(retriedInput?.at(0)).toEqual({
-      type: "agent_message",
-      author: "/root/child_task",
-      recipient: "/root",
-      content: [
-        { type: "input_text", text: "Message Type: MESSAGE\nTask name: /root\nSender: /root/child_task\nPayload:" },
-        { type: "input_text", text: "[encrypted content omitted]" },
-      ],
-    });
+    expect(retriedInput?.at(0)).toEqual(recoveredAgentMessage());
   });
 
   test("recovers a zero-output error-event decrypt failure before client relay", async () => {
@@ -608,15 +609,7 @@ describe("opaque blob recovery through /v1/responses", () => {
     expect(body).not.toContain(FUNCTION_OUTPUT_DECRYPT_MESSAGE);
     expect(outbound).toHaveLength(2);
     const retriedInput = outbound.at(1)?.input as Array<Record<string, unknown>> | undefined;
-    expect(retriedInput?.at(0)).toEqual({
-      type: "agent_message",
-      author: "/root/child_task",
-      recipient: "/root",
-      content: [
-        { type: "input_text", text: "Message Type: MESSAGE\nTask name: /root\nSender: /root/child_task\nPayload:" },
-        { type: "input_text", text: "[encrypted content omitted]" },
-      ],
-    });
+    expect(retriedInput?.at(0)).toEqual(recoveredAgentMessage());
   });
 
   for (const streamMode of ["legacy-tee", "eager-relay"] as const) {
@@ -751,15 +744,7 @@ describe("opaque blob recovery through /v1/responses", () => {
     expect(body).not.toContain(FUNCTION_OUTPUT_DECRYPT_MESSAGE);
     expect(outbound).toHaveLength(2);
     const retriedInput = outbound.at(1)?.input as Array<Record<string, unknown>> | undefined;
-    expect(retriedInput?.at(0)).toEqual({
-      type: "agent_message",
-      author: "/root/child_task",
-      recipient: "/root",
-      content: [
-        { type: "input_text", text: "Message Type: MESSAGE\nTask name: /root\nSender: /root/child_task\nPayload:" },
-        { type: "input_text", text: "[encrypted content omitted]" },
-      ],
-    });
+    expect(retriedInput?.at(0)).toEqual(recoveredAgentMessage());
   });
 
   test("absent Content-Type decrypt stream does not recover a non-stream request", async () => {
