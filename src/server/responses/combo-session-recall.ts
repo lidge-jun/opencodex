@@ -1,42 +1,41 @@
-/**
- * Session-scoped recall of the last successful combo selection (#3891).
- *
- * When Codex compacts a conversation that was switched to a different combo
- * mid-session, it sends the *bare native model* of the new combo's first
- * target (e.g. "gpt-5.6-terra") rather than the combo/<id> selector it
- * uses for ordinary turns. Without recall, that bare model hits the router
- * and fails with 404 ("requires the canonical openai provider") because no
- * canonical route exists for it.
- *
- * This module remembers, per session lane, which combo last served a
- * successful turn and what its concrete target model was. The compaction
- * entry points then rewrite a bare model back to the remembered
- * combo/<id> selector only when the bare model exactly matches the
- * remembered combo target, so explicit provider/model selectors and
- * unrelated models are never touched.
- */
+/** Process-local recall of the last completed combo response on an explicit session lane. */
+import { getCombo, targetKey } from "../../combos/types";
+import { captureConfigGeneration, type GenerationContext } from "../../lib/state-store-sweeper";
+import type { OcxConfig, OcxComboTarget } from "../../types";
 
 interface ComboRecallEntry {
   comboId: string;
-  targetModel: string;
+  target: Pick<OcxComboTarget, "provider" | "model">;
+  responseModel: string;
   at: number;
 }
 
-/** Bounded map: stale entries are dropped, oldest evicted at capacity. */
 const RECALL_CAPACITY = 256;
 const RECALL_TTL_MS = 30 * 60 * 1000;
-
 const recall = new Map<string, ComboRecallEntry>();
+let lastReconciledGeneration = 0;
+let liveOwners: Pick<GenerationContext, "comboIds" | "comboTargets" | "providerNames"> | undefined;
+
+function ownsEntry(context: Pick<GenerationContext, "comboIds" | "comboTargets" | "providerNames">, entry: ComboRecallEntry): boolean {
+  return context.comboIds.has(entry.comboId)
+    && context.providerNames.has(entry.target.provider)
+    && context.comboTargets.has(`${entry.comboId}::${targetKey(entry.target)}`);
+}
 
 export function rememberComboForLane(
   lane: string | undefined,
   comboId: string,
-  targetModel: string,
+  target: Pick<OcxComboTarget, "provider" | "model">,
+  responseModel: string,
+  writerGeneration: number,
 ): void {
-  if (!lane || !comboId || !targetModel) return;
-  // Delete-then-set keeps insertion order fresh for eviction.
+  if (!lane || !comboId || !responseModel.trim()) return;
+  // Reject even a same-named recreated owner: its previous in-flight turn is obsolete.
+  if (writerGeneration < Math.max(lastReconciledGeneration, captureConfigGeneration())) return;
+  const entry = { comboId, target: { provider: target.provider, model: target.model }, responseModel, at: Date.now() };
+  if (liveOwners && !ownsEntry(liveOwners, entry)) return;
   recall.delete(lane);
-  recall.set(lane, { comboId, targetModel, at: Date.now() });
+  recall.set(lane, entry);
   while (recall.size > RECALL_CAPACITY) {
     const oldest = recall.keys().next().value;
     if (oldest === undefined) break;
@@ -44,28 +43,47 @@ export function rememberComboForLane(
   }
 }
 
-/**
- * Returns the remembered combo id when the incoming bare model exactly
- * matches the combo target that last succeeded on this lane. Returns
- * undefined for explicit provider selectors, stale lanes, and
- * non-matching models: those keep ordinary routing.
- */
 export function recallComboForLane(
+  config: OcxConfig,
   lane: string | undefined,
   model: string,
 ): string | undefined {
-  if (!lane || !model) return undefined;
+  if (!lane || !model || model.includes("/")) return undefined;
   const entry = recall.get(lane);
   if (!entry) return undefined;
-  if (Date.now() - entry.at > RECALL_TTL_MS) {
+  const combo = getCombo(config, entry.comboId);
+  const provider = config.providers[entry.target.provider];
+  if (Date.now() - entry.at >= RECALL_TTL_MS
+    || !Object.hasOwn(config.providers, entry.target.provider)
+    || !provider || provider.disabled === true
+    || !combo?.targets.some(target => targetKey(target) === targetKey(entry.target))) {
     recall.delete(lane);
     return undefined;
   }
-  if (entry.targetModel !== model) return undefined;
-  return entry.comboId;
+  return entry.responseModel === model ? entry.comboId : undefined;
 }
 
-/** Test-only: clear all recall state. */
+export function reconcileComboRecall(context: GenerationContext): number {
+  if (context.generation <= lastReconciledGeneration) return 0;
+  lastReconciledGeneration = context.generation;
+  liveOwners = {
+    comboIds: new Set(context.comboIds),
+    comboTargets: new Set(context.comboTargets),
+    providerNames: new Set(context.providerNames),
+  };
+  let removed = 0;
+  for (const [lane, entry] of recall) {
+    if (!ownsEntry(context, entry) || Date.now() - entry.at >= RECALL_TTL_MS) {
+      recall.delete(lane);
+      removed += 1;
+    }
+  }
+  return removed;
+}
+
+/** Test-only reset, alongside the combo rotation/cooldown resets. */
 export function clearComboRecallForTests(): void {
   recall.clear();
+  lastReconciledGeneration = 0;
+  liveOwners = undefined;
 }

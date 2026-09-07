@@ -35,7 +35,8 @@ import { supportsNativeResponsesCompactEndpoint } from "../../src/providers/open
 import type { RequestLogContext } from "../../src/server/request-log";
 import { acquireNativeMainProfileDrain, tryAdmitTurn } from "../../src/server/lifecycle";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
-import { clearComboRecallForTests } from "../../src/server/responses/combo-session-recall";
+import { clearComboRecallForTests, recallComboForLane, rememberComboForLane } from "../../src/server/responses/combo-session-recall";
+import { captureConfigGeneration } from "../../src/lib/state-store-sweeper";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const originalFetch = globalThis.fetch;
@@ -947,6 +948,71 @@ describe("compact alternate-account attempt (#913)", () => {
       else process.env.OPENCODEX_HOME = previousOpencodexHome;
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = previousCodexHome;
+    });
+  }
+
+  for (const version of ["v1", "v2"] as const) {
+    test(`${version} recalled native combo reselects the current account and respects admission refusal`, async () => {
+      await withPoolEnv("ocx-combo-recall-account-", async config => {
+        clearComboRecallForTests();
+        config.combos = { native: { targets: [{ provider: "openai", model: "gpt-5.5" }] } };
+        config.codexAccountNamespaces = { side: "pool-a" };
+        const headers = { session_id: "account-recall" };
+        const accounts: Array<string | null> = [];
+        // Fix the selected account deterministically while retaining the real credential
+        // and admission owner; an explicit namespace still owns its account selection.
+        const resolver = authContextModule.resolveCodexAuthContext;
+        const authSpy = spyOn(authContextModule, "resolveCodexAuthContext").mockImplementation(
+          (incoming, liveConfig, mode, options = {}) => resolver(incoming, liveConfig, mode, {
+            ...options, accountId: options.accountId ?? liveConfig.activeCodexAccountId,
+          }),
+        );
+        globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+          const request = new Request(input, init);
+          accounts.push(request.headers.get("chatgpt-account-id"));
+          const body = await request.json() as { input?: Array<{ type?: string }> };
+          if (request.url.endsWith("/responses/compact")) {
+            return jsonResponse({ output: [{ type: "compaction", encrypted_content: "native-recall-ciphertext" }] });
+          }
+          const compact = Array.isArray(body.input) && body.input.some(item => item.type === "compaction_trigger");
+          return sseResponse([{ type: "response.completed", response: {
+            ...completedPayload("native answer"), model: "gpt-5.5",
+            ...(compact ? { output: [{ type: "compaction", encrypted_content: "native-recall-ciphertext" }] } : {}),
+          } }]);
+        }) as typeof fetch;
+        try {
+          let complete!: () => void;
+          const completed = new Promise<void>(resolve => { complete = resolve; });
+          const seed = await handleResponses(compactionRequest({ model: "combo/native", stream: true, input: "hello" }, undefined, headers),
+            config, { model: "", provider: "" }, { onResponseComplete: complete });
+          await seed.text();
+          await completed;
+          expect(recallComboForLane(config, "account-recall", "gpt-5.5")).toBe("native");
+          config.activeCodexAccountId = "pool-b";
+          const compact = version === "v1" ? handleResponsesCompact : handleResponses;
+          const log: RequestLogContext = { model: "", provider: "" };
+          const response = await compact(compactionRequest(baseCompactionBody({ model: "gpt-5.5", stream: true }), undefined, headers), config, log);
+          expect(response.status).toBe(200);
+          await response.text();
+          expect(log.comboId).toBe("native");
+          expect(accounts).toEqual(["pool_acc_a", "pool_acc_b"]);
+
+          const explicitLog: RequestLogContext = { model: "", provider: "" };
+          const explicit = await compact(compactionRequest(baseCompactionBody({ model: "side/gpt-5.5", stream: true }), undefined, headers), config, explicitLog);
+          expect(explicit.status).toBe(200);
+          await explicit.text();
+          expect(explicitLog.comboId).toBeUndefined();
+          expect(accounts.at(-1)).toBe("pool_acc_a");
+          const sends = accounts.length;
+          authSpy.mockRejectedValue(new authContextModule.CodexMainProfileDrainingError());
+          const refused = await compact(compactionRequest(baseCompactionBody({ model: "gpt-5.5", stream: true }), undefined, headers), config, { model: "", provider: "" });
+          expect(refused.status).toBe(503);
+          expect(accounts).toHaveLength(sends);
+        } finally {
+          authSpy.mockRestore();
+          clearComboRecallForTests();
+        }
+      });
     });
   }
 
@@ -1933,8 +1999,8 @@ describe("compaction combo recall after combo switch (#3891)", () => {
       }
       calls.push({ url: request.url, body: await request.json() as Record<string, unknown> });
       return calls.at(-1)!.body.stream === true
-        ? sseResponse([{ type: "response.completed", response: completedPayload("handoff summary") }])
-        : jsonResponse(completedPayload("handoff summary"));
+        ? sseResponse([{ type: "response.completed", response: { ...completedPayload("handoff summary"), model: "gpt-5.6-terra" } }])
+        : jsonResponse({ ...completedPayload("handoff summary"), model: "gpt-5.6-terra" });
     }) as typeof fetch;
 
     const laneHeaders = { "session_id": "lane-recall-native" };
@@ -1964,6 +2030,147 @@ describe("compaction combo recall after combo switch (#3891)", () => {
     expect(calls[1]!.body.stream).toBe(true);
     await res.text();
   });
+
+  function installRecallChatFixture(): void {
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const body = await new Request(input, init).json() as { stream?: boolean };
+      return body.stream ? chatStreamResponse("summary") : jsonResponse(chatCompletionPayload("answer"));
+    }) as typeof fetch;
+  }
+
+  async function seedRecall(config: OcxConfig, lane: string | undefined = "recall-lane"): Promise<void> {
+    const response = await handleResponses(compactionRequest(
+      { model: "combo/terra", stream: false, input: "hello" }, undefined,
+      lane ? { session_id: lane } : {},
+    ), config, { model: "", provider: "" });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ status: "completed", model: "gpt-5.6-terra" });
+  }
+
+  for (const version of ["v1", "v2"] as const) {
+    const compact = version === "v1" ? handleResponsesCompact : handleResponses;
+    const dispatch = async (config: OcxConfig, model: string, lane: string | undefined = "recall-lane") => {
+      const log: RequestLogContext = { model: "", provider: "" };
+      const response = await compact(compactionRequest(baseCompactionBody({ model }), undefined,
+        lane ? { session_id: lane } : {}), config, log);
+      expect(response.status).toBe(200);
+      await response.text();
+      return log;
+    };
+
+    test(`${version} explicit bare nativeAlias beats a different remembered combo`, async () => {
+      installRecallChatFixture();
+      const config = comboTestConfig();
+      config.combos!.explicit = {
+        alias: "gpt-5.6-terra", nativeAlias: true,
+        targets: [{ provider: "alt", model: "gpt-5.6-luna" }],
+      };
+      await seedRecall(config);
+      expect(recallComboForLane(config, "recall-lane", "gpt-5.6-terra")).toBe("terra");
+      const log = await dispatch(config, "gpt-5.6-terra");
+      expect(log.comboId).toBe("explicit");
+      expect(log.resolvedModel).toBe("gpt-5.6-luna");
+    });
+
+    test(`${version} explicit provider and combo selectors beat recall`, async () => {
+      installRecallChatFixture();
+      const config = comboTestConfig();
+      config.combos!.explicit = { targets: [{ provider: "alt", model: "gpt-5.6-luna" }] };
+      await seedRecall(config);
+      expect((await dispatch(config, "alt/gpt-5.6-luna")).provider).toBe("alt");
+      expect((await dispatch(config, "combo/explicit")).comboId).toBe("explicit");
+    });
+
+    for (const mutation of ["delete", "rename", "replace-target", "delete-provider", "disable-provider"] as const) {
+      test(`${version} ${mutation} invalidates remembered ownership before fallback`, async () => {
+        installRecallChatFixture();
+        const config = comboTestConfig();
+        await seedRecall(config);
+        // The default is distinct from the original target and remains usable.
+        config.defaultProvider = "alt";
+        if (mutation === "rename") config.combos!.renamed = config.combos!.terra!;
+        if (mutation === "delete" || mutation === "rename") delete config.combos!.terra;
+        if (mutation === "replace-target") config.combos!.terra!.targets = [{ provider: "alt", model: "gpt-5.6-luna" }];
+        if (mutation === "delete-provider") delete config.providers.gw;
+        if (mutation === "disable-provider") config.providers.gw!.disabled = true;
+        const log = await dispatch(config, "gpt-5.6-terra");
+        expect(log.comboId).toBeUndefined();
+        expect(log.provider).toBe("alt");
+      });
+    }
+
+    test(`${version} missing and sibling lanes cannot borrow a completed selection`, async () => {
+      installRecallChatFixture();
+      const config = comboTestConfig();
+      await seedRecall(config);
+      expect((await dispatch(config, "gpt-5.6-terra", "sibling")).comboId).toBeUndefined();
+      // Empty lane explicitly omits the header (undefined would use the helper default).
+      expect((await dispatch(config, "gpt-5.6-terra", "")).comboId).toBeUndefined();
+      clearComboRecallForTests();
+      await seedRecall(config, "");
+      expect((await dispatch(config, "gpt-5.6-terra")).comboId).toBeUndefined();
+    });
+
+    test(`${version} recall expires at thirty minutes and evicts the oldest of 257 lanes`, async () => {
+      installRecallChatFixture();
+      const config = comboTestConfig();
+      let now = 100_000;
+      const clock = spyOn(Date, "now").mockImplementation(() => now);
+      try {
+        await seedRecall(config);
+        now += 30 * 60 * 1000 - 1;
+        expect(recallComboForLane(config, "recall-lane", "gpt-5.6-terra")).toBe("terra");
+        now += 1;
+        expect((await dispatch(config, "gpt-5.6-terra")).comboId).toBeUndefined();
+        const target = { provider: "gw", model: "gpt-5.6-terra" };
+        for (let index = 0; index < 257; index += 1) {
+          rememberComboForLane(`lane-${index}`, "terra", target, "gpt-5.6-terra", captureConfigGeneration());
+        }
+        expect((await dispatch(config, "gpt-5.6-terra", "lane-0")).comboId).toBeUndefined();
+        expect((await dispatch(config, "gpt-5.6-terra", "lane-1")).comboId).toBe("terra");
+        expect((await dispatch(config, "gpt-5.6-terra", "lane-256")).comboId).toBe("terra");
+      } finally {
+        clock.mockRestore();
+      }
+    });
+
+    test(`${version} virtual Pro target recalls the emitted base model`, async () => {
+      const config = comboTestConfig();
+      config.providers["openai-apikey"] = {
+        adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", authMode: "key", apiKey: "test-key",
+      };
+      config.combos!.terra!.targets = [{ provider: "openai-apikey", model: "gpt-5.6-terra-pro" }];
+      const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+      globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+        const request = new Request(input, init);
+        const body = await request.json() as Record<string, unknown>;
+        calls.push({ url: request.url, body });
+        const completed = { ...completedPayload("summary"), model: "gpt-5.6-terra" };
+        return body.stream ? sseResponse([{ type: "response.completed", response: completed }]) : jsonResponse(completed);
+      }) as typeof fetch;
+      await seedRecall(config);
+      expect(calls[0]!.body).toMatchObject({ model: "gpt-5.6-terra", reasoning: { mode: "pro" } });
+      expect(recallComboForLane(config, "recall-lane", "gpt-5.6-terra-pro")).toBeUndefined();
+      expect((await dispatch(config, "gpt-5.6-terra")).comboId).toBe("terra");
+      expect(calls.every(call => call.url.endsWith("/responses"))).toBe(true);
+    });
+
+    test(`${version} recalled combo resolves the current key rather than retaining a credential`, async () => {
+      const config = comboTestConfig();
+      const auth: Array<string | null> = [];
+      globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+        const request = new Request(input, init);
+        auth.push(request.headers.get("authorization"));
+        const body = await request.json() as { stream?: boolean };
+        return body.stream ? chatStreamResponse("summary") : jsonResponse(chatCompletionPayload("answer"));
+      }) as typeof fetch;
+      await seedRecall(config);
+      config.providers.gw!.apiKey = "key-current";
+      expect((await dispatch(config, "gpt-5.6-terra")).comboId).toBe("terra");
+      expect(auth).toEqual(["Bearer key-gw", "Bearer key-current"]);
+    });
+  }
+
 });
 
 test("a no-eligible policy compact request persists the evaluation trace", async () => {

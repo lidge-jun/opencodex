@@ -18,6 +18,7 @@ import {
   comboIdFromRawBody,
   concreteComboRequestBody,
   getCombo,
+  resolveComboId,
   isComboTargetInCooldown,
   NoAvailableComboTargetsError,
   noteComboSuccess,
@@ -544,13 +545,11 @@ export async function handleResponsesCompact(
   // this the log would lose which id the client actually asked for.
   const compactRequestedModel = compactFastRow ? compactFastRow.baseId + "--fast" : raw.model;
 
-  // A combo switch mid-session leaves Codex sending the bare native model of
-  // the new combo's target on the compact endpoint (#3891). Rewrite it to the
-  // remembered combo selector so the combo failover path engages. Only fires
-  // for bare models (no provider/ prefix) that exactly match the combo target
-  // last served on this session lane.
-  if (typeof compactModel === "string" && !compactModel.includes("/") && !compactFastRow) {
-    const recalledComboId = recallComboForLane(sessionLaneIdFromRequest(req.headers), compactModel);
+  // Recall the last completed client-visible bare model after a combo switch (#3891).
+  // Configured selectors take precedence over this implicit session hint.
+  if (typeof compactModel === "string" && !compactModel.includes("/") && !compactFastRow
+    && !resolveComboId(config, compactModel)) {
+    const recalledComboId = recallComboForLane(config, sessionLaneIdFromRequest(req.headers), compactModel);
     if (recalledComboId) {
       (raw as Record<string, unknown>).model = `combo/${recalledComboId}`;
       // Keep the routed identity in sync: the bare model can 404 outright (no
