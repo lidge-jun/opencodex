@@ -716,6 +716,21 @@ describe("GitHub Actions hardening", () => {
     expect(serviceLookup).toContain("[0].url // \"\"");
     expect(serviceLookup).not.toContain("--arg");
 
+    // The Go release-artifact gate is required for the exact SHA before a
+    // release may attach Go binaries, mirroring the ci.yml requirement above.
+    const goGateLookup = workflow
+      .split('go_gate_url="$(')[1]?.split('\n          )"')[0];
+    expect(goGateLookup).toBeDefined();
+    expect(goGateLookup).toContain("--workflow go-release-artifacts.yml");
+    expect(goGateLookup).toContain('--branch "${GITHUB_REF#refs/heads/}"');
+    expect(goGateLookup).toContain('--commit "$GITHUB_SHA"');
+    expect(goGateLookup).toContain("--event push");
+    expect(goGateLookup).toContain("--json conclusion,url");
+    expect(goGateLookup).toContain("select(.conclusion == \"success\")");
+    expect(goGateLookup).toContain("[0].url // \"\"");
+    expect(goGateLookup).not.toContain("--arg");
+    expect(goGateLookup).not.toContain("$branch");
+
     // Dry-run first by default; tokenless trusted publishing only.
     expect(workflow).toMatch(/dry-run:[\s\S]*?default: true/);
     expect(workflow).not.toContain("secrets.NPM_TOKEN");
@@ -832,6 +847,128 @@ describe("GitHub Actions hardening", () => {
       .split("- name: Require successful Cross-platform CI for this commit")[1]!
       .split(/\n {6}- name:/)[0]!;
     expect(ciGateStep).toContain("--merged HEAD");
+  });
+
+  test("go release artifact gate verifies the exact release targets and stays least-privilege", async () => {
+    // Ticket #42 (ADR-0008 increment 7): the Go binary is the release runtime,
+    // so release.yml attaches ocx binaries that CI has verified through the
+    // same script. These pins keep that gate honest: active triggers, bounded
+    // and unprivileged, verifying every release target with the one script the
+    // release path consumes.
+    const workflow = await readText(".github/workflows/go-release-artifacts.yml");
+    const gate = Bun.YAML.parse(workflow) as {
+      on?: Record<string, unknown>;
+      permissions?: Record<string, string>;
+      jobs?: Record<string, { needs?: string | string[]; "timeout-minutes"?: number } | undefined>;
+    };
+
+    // Not dispatch-only: it must run where the release path can rely on it.
+    expect(gate.on?.["pull_request"]).toBeDefined();
+    const push = gate.on?.["push"] as { branches?: string[]; paths?: string[] } | undefined;
+    expect(push?.branches).toEqual(["main", "preview", "dev"]);
+    // The push trigger and the paths-filter share one allowlist. package.json
+    // is the version authority the -ldflags stamp reads, so the release commit
+    // that bumps it must re-run the gate (ci.yml's allowlist carries it for the
+    // same reason). Pin the entire list on both paths so they cannot drift.
+    const gatePaths = [
+      ".github/workflows/go-release-artifacts.yml",
+      ".github/workflows/release.yml",
+      "go/**",
+      "package.json",
+      "scripts/build-go-release-artifact.sh",
+      "scripts/sync-go-embedded-dashboard.sh",
+    ];
+    expect([...(push?.paths ?? [])].sort()).toEqual(gatePaths);
+    expect(gate.on?.["workflow_dispatch"]).toBeDefined();
+
+    expect(gate.permissions).toEqual({ contents: "read" });
+    expect(workflow).toContain("group: go-release-artifacts-${{ github.ref }}");
+    expect(workflow).toContain("cancel-in-progress: true");
+    expect(workflow).not.toMatch(/uses:\s+\S+@(?:v\d+|main|master)\b/);
+
+    // The paths-filter `changes` job gates the expensive jobs, same as ci.yml;
+    // a skipped job reports success where a skipped workflow would leave a
+    // check pending forever.
+    const changesJob = gate.jobs?.changes as {
+      outputs?: Record<string, string>;
+      permissions?: Record<string, string>;
+      steps?: { with?: Record<string, string> }[];
+    } | undefined;
+    expect(changesJob?.outputs?.go).toBe("${{ steps.scope.outputs.go }}");
+    expect(changesJob?.permissions).toEqual({ contents: "read", "pull-requests": "read" });
+    expect(changesJob?.["timeout-minutes"]).toBe(5);
+
+    const filterStep = changesJob?.steps?.find(step => step.with?.filters);
+    const areaFilters = Bun.YAML.parse(String(filterStep?.with?.filters ?? "")) as {
+      go?: string[];
+    };
+    expect([...(areaFilters.go ?? [])].sort()).toEqual(gatePaths);
+
+    const scopeCondition = "github.event_name != 'pull_request' || needs.changes.outputs.go == 'true'";
+    const verifyJob = gate.jobs?.["verify-go-runtime"] as { needs?: string; if?: string } | undefined;
+    const buildJob = gate.jobs?.["build-release-artifact"] as { needs?: string; if?: string } | undefined;
+    expect(`${verifyJob?.needs}`).toBe("changes");
+    expect(`${verifyJob?.if}`).toBe(scopeCondition);
+    expect(Array.isArray(buildJob?.needs)).toBe(true);
+    expect((buildJob?.needs as string[] | undefined)?.sort()).toEqual(["changes", "verify-go-runtime"]);
+    expect(`${buildJob?.if}`).toBe(scopeCondition);
+
+    // Every release target is exercised through the same script release.yml
+    // runs, and each matrix row asserts its binary format so a cgo leak or a
+    // missing build tag fails here instead of on a release tag.
+    const buildRun = workflow
+      .split("- name: Cross-compile static ocx release candidate")[1]!
+      .split(/\n {6}- name:/)[0]!;
+    expect(buildRun).toContain("scripts/build-go-release-artifact.sh");
+    expect(buildRun).not.toContain("${{ inputs."); // no dispatch-input interpolation into shell
+    for (const target of ["linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64", "windows/amd64"]) {
+      expect(workflow).toContain(`- target: ${target}`);
+    }
+    expect(count(workflow, "Upload candidate")).toBe(1);
+    expect(workflow).toContain("ELF 64-bit");
+    expect(workflow).toContain("Mach-O");
+    expect(workflow).toContain("PE32+");
+
+    // The verify job smokes the linux candidate exactly the way a release
+    // consumes it: static ELF plus a version stamp proven by running the binary
+    // from a directory with no package.json.
+    const smokeRun = workflow
+      .split("- name: Build and smoke-test the Linux release artifact")[1]!
+      .split(/\n {6}- name:/)[0]!;
+    expect(smokeRun).toContain("scripts/build-go-release-artifact.sh linux/amd64");
+    expect(smokeRun).toContain("opencodex ");
+    expect(smokeRun).toContain("--version");
+    expect(smokeRun).toContain("ELF 64-bit");
+  });
+
+  test("release workflow builds Go artifacts before creating the release and attaches them", async () => {
+    // The release path and the artifact gate must consume the same builder.
+    // release.yml's Go steps (added with the #41 flip) build every release
+    // target before the tag exists and upload the binaries to it afterwards.
+    const workflow = await readText(".github/workflows/release.yml");
+
+    const buildStep = workflow
+      .split("- name: Build Go single-binary release artifacts")[1]!
+      .split(/\n {6}- name:/)[0]!;
+    expect(buildStep).toContain("scripts/build-go-release-artifact.sh");
+    // The step iterates the five release targets through the shared builder.
+    expect(buildStep).toContain(
+      "for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do",
+    );
+
+    const createIndex = workflow.indexOf("- name: Create GitHub release");
+    const attachIndex = workflow.indexOf("- name: Attach Go artifacts to release");
+    const buildIndex = workflow.indexOf("- name: Build Go single-binary release artifacts");
+    expect(buildIndex).toBeGreaterThan(-1);
+    expect(createIndex).toBeGreaterThan(buildIndex);
+    expect(attachIndex).toBeGreaterThan(createIndex);
+
+    const attachStep = workflow
+      .split("- name: Attach Go artifacts to release")[1]!
+      .split(/\n {6}- name:/)[0]!;
+    expect(attachStep).toContain("gh release upload");
+    expect(attachStep).toContain("--clobber");
+    expect(attachStep).toContain(".tmp/go-release/ocx-*");
   });
 
   /**

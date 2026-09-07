@@ -19,8 +19,14 @@ material only. This is a fresh codebase.
   route's volatile-field declaration) live in
   `src/server/management/route-registry.ts`, and the single forwarding branch
   in `src/server/management-api.ts` reads them before asking the sidecar.
-- `cmd/ocx` — the Go CLI scaffold (ticket #35). It currently provides
-  version, help, and identity-attested local health / ready transport commands.
+- `cmd/ocx` — the Go CLI scaffold (ticket #35) grown into the release
+  runtime: version, help, identity-attested local health / ready transport
+  commands, `start`/`stop` (flip, #41), and the embedded dashboard. Release
+  builds of `./cmd/ocx` are the TypeScript-free single-binary artifact (ticket
+  #42): `scripts/build-go-release-artifact.sh` stamps the package version via
+  `-ldflags` and embeds the Vite dashboard build, and the
+  `go-release-artifacts.yml` workflow verifies every release target with the
+  same script before `release.yml` attaches the binaries to a release tag.
 - `internal/sidecar` — the handler plus its unit tests. The JSON key order and
   number formatting of each payload are part of the byte contract with the Bun
   differential oracle (`tests/go-sidecar-parity.test.ts`).

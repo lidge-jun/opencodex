@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Build one static Go ocx release candidate. This is a staging-only helper for
-# #42: release.ts remains the release authority until #40 makes this artifact
-# the complete single-binary distribution.
+# Build one static Go ocx release candidate (ADR-0008 increment 7, ticket #42).
+# The Go binary is the release runtime: this is the single artifact builder used
+# by both .github/workflows/go-release-artifacts.yml (which verifies every
+# release target) and release.yml (which attaches the built binaries to the
+# release tag). release.ts remains the npm release authority; this script builds
+# the companion TypeScript-free distribution artifact.
 set -euo pipefail
 
 usage() {

@@ -244,6 +244,28 @@ jobs:
 
           echo "Cross-platform CI passed for ${GITHUB_SHA}: ${ci_url}"
 
+          # ADR-0008 increment 7 (#42): the Go binary is the release runtime,
+          # and the go-release-artifacts gate verifies the exact binaries this
+          # workflow attaches. Require its successful push run for this SHA the
+          # same way ci.yml is required above — a release must never attach
+          # artifacts CI has not proven.
+          go_gate_url="$(
+            gh run list \
+              --workflow go-release-artifacts.yml \
+              --branch "${GITHUB_REF#refs/heads/}" \
+              --commit "$GITHUB_SHA" \
+              --event push \
+              --limit 10 \
+              --json conclusion,url \
+              --jq '[.[] | select(.conclusion == "success")][0].url // ""'
+          )"
+          if [ -z "$go_gate_url" ]; then
+            echo "::error::No successful Go release artifact gate run found for ${GITHUB_SHA} on ${GITHUB_REF#refs/heads/} (push event). Wait for the promotion run to pass before releasing."
+            gh run list --workflow go-release-artifacts.yml --commit "$GITHUB_SHA" --limit 10 || true
+            exit 1
+          fi
+          echo "Go release artifact gate passed for ${GITHUB_SHA}: ${go_gate_url}"
+
           # Service baseline (lineage-relative): merged tags only, so the
           # changed-files gate compares against the last release actually
           # reachable from this commit. The release-notes baseline below uses the
@@ -387,9 +409,11 @@ jobs:
           npm view @bitkyc08/opencodex versions dist-tags --json || true
           exit 1
 
-      # ADR-0008 increment 7 (#41): the Go binary is the release runtime. Build the
-      # static cross-platform artifacts and attach them to the GitHub Release; the
-      # npm package remains the source distribution channel, but every release tag
+      # ADR-0008 increment 7: the Go binary is the release runtime. #41 flipped
+      # the runtime to Go and added these steps; #42 added the go-release-artifacts
+      # gate above that verifies every release target through the same script, so
+      # a release only attaches binaries CI has proven build static. The npm
+      # package remains the source distribution channel, but every release tag
       # now ships a TypeScript-free single-binary artifact.
       - name: Setup Go for single-binary artifacts
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5

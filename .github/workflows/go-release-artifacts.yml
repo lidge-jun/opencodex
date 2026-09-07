@@ -1,8 +1,34 @@
-name: Go release artifact scaffold
+name: Go release artifact gate
 
+# Ticket #42: the Go binary is the release runtime (ADR-0008 increment 7), so
+# the release path must build the same static cross-platform artifact CI has
+# verified. #40 proved the artifact embeds every runtime asset (dashboard, CLI,
+# identity); this workflow is that verification. It builds the exact release
+# artifact via scripts/build-go-release-artifact.sh — the same script release.yml
+# runs when it attaches ocx binaries to a release tag — and smokes the result.
+# release.yml's own artifact build/attach steps (added with the #41 flip) remain
+# the producer; this workflow is the gate that keeps the producer honest.
 on:
-  # This workflow deliberately stays outside the release path until #40 proves
-  # that the Go artifact embeds every runtime asset required by a clean host.
+  # No base-branch filter on purpose (mirrors ci.yml): GitHub matches
+  # `branches:` against the BASE ref, which would silently exclude stacked child
+  # PRs. The `changes` job below is the real scope gate; a skipped job reports
+  # success, where a skipped *workflow* would leave its check pending forever.
+  pull_request: {}
+  # Pinned to the integration lines (mirrors ci.yml): the release path lives on
+  # main/preview, and dev is where the work queues before promotion.
+  push:
+    branches: [main, preview, dev]
+    paths:
+      # package.json is the version authority the artifact's -ldflags stamp
+      # reads, so a release commit (which bumps it) must re-run the gate even
+      # when no Go file changed — the same reason ci.yml's push allowlist
+      # carries package.json.
+      - "package.json"
+      - "go/**"
+      - "scripts/build-go-release-artifact.sh"
+      - "scripts/sync-go-embedded-dashboard.sh"
+      - ".github/workflows/go-release-artifacts.yml"
+      - ".github/workflows/release.yml"
   workflow_dispatch:
 
 permissions:
@@ -13,10 +39,70 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Same paths-filter shape as ci.yml's `changes` job: on a pull request the
+  # filter decides whether the expensive verification jobs need to run, and the
+  # validation step fails the job (rather than producing a malformed output)
+  # when the filter misbehaves.
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      go: ${{ steps.scope.outputs.go }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Detect changed Go release surface
+        id: filter
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        with:
+          # Mirrors the push trigger's path allowlist above; keep the two in
+          # sync. On `pull_request` the action uses the PR's own file list; on a
+          # branch push it means "compare against the previous commit on this
+          # branch".
+          base: ${{ github.ref }}
+          filters: |
+            go:
+              - 'package.json'
+              - 'go/**'
+              - 'scripts/build-go-release-artifact.sh'
+              - 'scripts/sync-go-embedded-dashboard.sh'
+              - '.github/workflows/go-release-artifacts.yml'
+              - '.github/workflows/release.yml'
+
+      - name: Assert the scope output is usable
+        id: scope
+        shell: bash
+        env:
+          GO_SCOPE: ${{ steps.filter.outputs.go }}
+        run: |
+          set -euo pipefail
+          case "$GO_SCOPE" in
+            true|false)
+              printf 'go=%s\n' "$GO_SCOPE" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              printf '::error::changes.outputs.go was %q, expected true or false\n' "$GO_SCOPE"
+              exit 1
+              ;;
+          esac
+
   verify-go-runtime:
     name: verify Go runtime
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
+    env:
+      # The release artifact is built static per ADR-0008; the build script sets
+      # the same flag, and this job keeps go build/vet/test consistent with it.
+      CGO_ENABLED: "0"
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -36,35 +122,61 @@ jobs:
         run: |
           set -euo pipefail
           cd go
-          CGO_ENABLED=0 go build -buildvcs=false ./...
+          go build -buildvcs=false ./...
           go vet ./...
           go test ./...
 
-      - name: Smoke test Linux release candidate
+      - name: Build and smoke-test the Linux release artifact
+        # The release path stamps the package version with -ldflags, so the
+        # smoke runs the built candidate from a directory with no package.json:
+        # only a real stamp prints the exact version. The file check asserts
+        # the binary is genuinely static — CGO_ENABLED=0 plus a cgo-free
+        # platform surface is what makes the release artifact self-contained.
         run: |
           set -euo pipefail
           scripts/build-go-release-artifact.sh linux/amd64 .tmp/go-release/linux-amd64
-          .tmp/go-release/linux-amd64/ocx-linux-amd64 --version
+          candidate="$GITHUB_WORKSPACE/.tmp/go-release/linux-amd64/ocx-linux-amd64"
+          test -x "$candidate" || { echo "::error::release artifact is not executable: $candidate"; exit 1; }
+          file "$candidate" | tee /dev/stderr | grep -qE "ELF 64-bit.*statically linked" || { echo "::error::linux/amd64 artifact is not a static ELF binary"; exit 1; }
+
+          expected="opencodex $(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$GITHUB_WORKSPACE/package.json" | head -n 1)"
+          actual="$(cd /tmp && exec "$candidate" --version)"
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::artifact --version printed ${actual@Q}, expected ${expected@Q} (ldflags stamp missing or stale)"
+            exit 1
+          fi
+          echo "release artifact identity: $actual"
 
   build-release-artifact:
     name: build ${{ matrix.target }}
-    needs: verify-go-runtime
+    needs: [changes, verify-go-runtime]
+    if: github.event_name != 'pull_request' || needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: linux/amd64
             artifact: ocx-linux-amd64
+            format: ELF 64-bit
+            arch: x86-64
           - target: linux/arm64
             artifact: ocx-linux-arm64
+            format: ELF 64-bit
+            arch: aarch64
           - target: darwin/amd64
             artifact: ocx-darwin-amd64
+            format: Mach-O
+            arch: x86_64
           - target: darwin/arm64
             artifact: ocx-darwin-arm64
+            format: Mach-O
+            arch: arm64
           - target: windows/amd64
             artifact: ocx-windows-amd64
+            format: PE32+
+            arch: x86-64
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -80,8 +192,31 @@ jobs:
       - name: Setup project Bun for embedded dashboard
         uses: ./.github/actions/setup-project-bun
 
-      - name: Cross-compile static ocx candidate
-        run: scripts/build-go-release-artifact.sh '${{ matrix.target }}' dist
+      # Matrix values reach shell via env (repo convention: generated command
+      # input is a trust boundary — ci.yml passes TEST_SHARD the same way).
+      - name: Cross-compile static ocx release candidate
+        env:
+          TARGET: ${{ matrix.target }}
+        run: scripts/build-go-release-artifact.sh "$TARGET" dist
+
+      - name: Verify the artifact format
+        # A platform-specific dependency that leaks cgo (or a build tag
+        # mistake) would surface here as a dynamic binary or a missing file,
+        # exactly where the release path would have shipped it. ELF rows also
+        # assert the static link; `file` describes Mach-O/PE32+ consistently
+        # enough that the format tag plus architecture is the reliable check.
+        env:
+          EXPECTED_FORMAT: ${{ matrix.format }}
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          description="$(file dist/ocx-*)"
+          echo "$description"
+          echo "$description" | grep -F "$EXPECTED_FORMAT" >/dev/null || { echo "::error::artifact format mismatch, wanted ${EXPECTED_FORMAT}"; exit 1; }
+          echo "$description" | grep -F "$EXPECTED_ARCH" >/dev/null || { echo "::error::artifact architecture mismatch, wanted ${EXPECTED_ARCH}"; exit 1; }
+          case "$EXPECTED_FORMAT" in
+            ELF*) echo "$description" | grep -F "statically linked" >/dev/null || { echo "::error::ELF artifact is not statically linked"; exit 1; } ;;
+          esac
 
       - name: Upload candidate
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
