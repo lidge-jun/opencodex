@@ -130,6 +130,27 @@ describe("parseAnthropicSidecarSSE", () => {
     expect(out.error).toBeDefined();
   });
 
+  test("an unterminated frame cannot buffer the stream without bound", async () => {
+    // A sidecar that never emits a frame separator: without a cap the parser would accumulate
+    // the whole stream in memory before it could fold anything.
+    let produced = 0;
+    let cancelled = false;
+    const chunk = new TextEncoder().encode(`data: {"filler":"${"x".repeat(64 * 1024)}"}`);
+    const body = new ReadableStream<Uint8Array>({
+      pull(c) {
+        if (produced > 8 * 1024 * 1024) { c.close(); return; }
+        produced += chunk.byteLength;
+        c.enqueue(chunk);
+      },
+      cancel() { cancelled = true; },
+    });
+    const out = await parseAnthropicSidecarSSE(new Response(body, { status: 200 }));
+    expect(cancelled).toBe(true);
+    // The cap stops the read long before the producer would have finished on its own.
+    expect(produced).toBeLessThan(1024 * 1024);
+    expect(out.text).toBe("");
+  });
+
   test("empty results (content:[]) with answer text is a success, not an error", async () => {
     const res = sseResponse([
       { type: "content_block_start", index: 0, content_block: { type: "web_search_tool_result", tool_use_id: "srvtoolu_3", content: [] } },

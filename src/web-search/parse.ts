@@ -193,7 +193,7 @@ function fromOutputArray(output: OutputItem[], seen: Set<string>): WebSearchResu
   return { text, sources };
 }
 
-function cancelReaderWithoutWaiting(
+export function cancelReaderWithoutWaiting(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   reason: string,
 ): void {
