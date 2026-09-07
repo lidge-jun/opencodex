@@ -49,8 +49,8 @@ type Command struct {
 
 var Commands = []Command{
 	{Name: "setup", Aliases: []string{"init"}, Usage: "ocx setup", Summary: "Interactive setup.", Owner: TypeScriptOwned},
-	{Name: "start", Usage: "ocx start [--port <port>]", Summary: "Start the proxy.", Owner: TypeScriptOwned},
-	{Name: "stop", Usage: "ocx stop", Summary: "Stop the proxy.", Owner: TypeScriptOwned},
+	{Name: "start", Usage: "ocx start [--port <port>]", Summary: "Start the proxy.", Owner: GoOwned},
+	{Name: "stop", Usage: "ocx stop", Summary: "Stop the proxy.", Owner: GoOwned},
 	{Name: "restore", Aliases: []string{"eject"}, Usage: "ocx restore [back]", Summary: "Restore native Codex configuration.", Owner: TypeScriptOwned},
 	{Name: "recover-history", Usage: "ocx recover-history --legacy-openai --yes", Summary: "Recover legacy history.", Owner: TypeScriptOwned},
 	{Name: "uninstall", Aliases: []string{"remove"}, Usage: "ocx uninstall", Summary: "Remove OpenCodex integration.", Owner: TypeScriptOwned},
@@ -263,6 +263,10 @@ func Run(args []string, deps Deps) int {
 		return runStatus(args[1:], deps)
 	case "doctor":
 		return RunDoctorCommand(args[1:], deps.Stdout, deps.Stderr, DoctorCommandDeps{})
+	case "start":
+		return runStart(args[1:], deps)
+	case "stop":
+		return runStop(args[1:], deps)
 	default:
 		// The ownership registry above and this switch must be reconciled by
 		// TestOwnershipMapMatchesDispatch; this is defensive for future edits.

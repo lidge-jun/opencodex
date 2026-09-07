@@ -1,4 +1,4 @@
-//go:build !windows && !darwin
+//go:build darwin
 
 package ocxcli
 
@@ -13,11 +13,12 @@ func doctorOwnedByCurrentUser(info os.FileInfo) bool {
 }
 
 // doctorSameFullFileIdentity matches the POSIX dev/inode/size/mtime/ctime
-// evidence TypeScript validates immediately before recovery rename.
+// evidence TypeScript validates immediately before recovery rename. Darwin's
+// syscall.Stat_t spells the timestamp fields *spec rather than the Linux *t.
 func doctorSameFullFileIdentity(left, right os.FileInfo) bool {
 	a, aok := left.Sys().(*syscall.Stat_t)
 	b, bok := right.Sys().(*syscall.Stat_t)
 	return aok && bok && a.Dev == b.Dev && a.Ino == b.Ino && a.Size == b.Size &&
-		a.Mtim.Sec == b.Mtim.Sec && a.Mtim.Nsec == b.Mtim.Nsec &&
-		a.Ctim.Sec == b.Ctim.Sec && a.Ctim.Nsec == b.Ctim.Nsec
+		a.Mtimespec.Sec == b.Mtimespec.Sec && a.Mtimespec.Nsec == b.Mtimespec.Nsec &&
+		a.Ctimespec.Sec == b.Ctimespec.Sec && a.Ctimespec.Nsec == b.Ctimespec.Nsec
 }
