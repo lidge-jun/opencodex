@@ -1016,7 +1016,19 @@ export function resolveComboCatalogMember(
       && fallback?.inputModalities !== undefined;
     const addReasoning = member.reasoningEfforts === undefined
       && fallback?.reasoningEfforts !== undefined;
-    if (!addMaxInput && !addMaxOutput && !adjustAutoCompact && !addModalities && !addReasoning) return member;
+    // A sidecar-covered member is advertised image-capable on its own provider row
+    // (applyProviderConfigHints), but complete discovery rows reach this resolver
+    // un-hinted, so the combo intersection saw the raw text-only declaration and one
+    // blind member collapsed the whole combo to text-only — the Codex app then blocks
+    // attachments client-side before the sidecar can run. Mirror the direct-row
+    // advertisement here so derivation intersects the modalities the runtime serves.
+    const modalitiesAfterFallback = addModalities
+      ? [...fallback!.inputModalities!]
+      : member.inputModalities;
+    const addSidecarImage = prov !== undefined
+      && isModelVisionSidecarConsumer(prov, member.id)
+      && !(modalitiesAfterFallback ?? ["text"]).includes("image");
+    if (!addMaxInput && !addMaxOutput && !adjustAutoCompact && !addModalities && !addReasoning && !addSidecarImage) return member;
     return {
       ...member,
       // Never claim a larger input budget than the window, and prefer the model's own
@@ -1026,6 +1038,7 @@ export function resolveComboCatalogMember(
       ...(adjustAutoCompact && autoCompactTokenLimit !== undefined ? { autoCompactTokenLimit } : {}),
       ...(addModalities ? { inputModalities: [...fallback!.inputModalities!] } : {}),
       ...(addReasoning ? { reasoningEfforts: [...fallback!.reasoningEfforts!] } : {}),
+      ...(addSidecarImage ? { inputModalities: [...(modalitiesAfterFallback ?? ["text"]), "image"] } : {}),
     };
   };
 

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { applyProviderConfigHints, gatherRoutedModels } from "../../src/codex/catalog";
+import { applyProviderConfigHints, gatherRoutedModels, resolveComboCatalogMember } from "../../src/codex/catalog";
 import { clearModelCache } from "../../src/codex/model-cache";
 import type { OcxProviderConfig } from "../../src/types";
 import { deriveComboCatalogModel } from "../../src/codex/catalog";
@@ -389,6 +389,71 @@ describe("vision-capable provider models feed combo modalities", () => {
       [memberA, memberB],
     );
     expect(derived?.inputModalities).toEqual(["text", "image"]);
+  });
+
+  test("a sidecar-covered discovery row no longer collapses combo image advertising", () => {
+    // The real call site resolves members through resolveComboCatalogMember, and complete
+    // discovery rows arrive WITHOUT the config hint that rewrites direct provider rows.
+    // The /planners combo hit exactly this: sidecar-covered DeepSeek rows kept their raw
+    // text-only modalities at derivation, so combo/planners advertised text-only and the
+    // Codex app blocked pasted images before the sidecar could run.
+    const blind = {
+      provider: "azu-lab1",
+      id: "DeepSeek-V4-Pro",
+      contextWindow: 128_000,
+      inputModalities: ["text"],
+    } as CatalogModel;
+    const covered = new Map([
+      ["azu-lab1", {
+        adapter: "openai-chat",
+        baseUrl: "https://azu-lab1.example/v1",
+        noVisionModels: ["DeepSeek-V4-Pro"],
+      } as OcxProviderConfig],
+    ]);
+    const resolved = resolveComboCatalogMember(
+      { provider: "azu-lab1", model: "DeepSeek-V4-Pro" },
+      new Map([["azu-lab1/DeepSeek-V4-Pro", blind]]),
+      covered,
+    );
+    expect(resolved?.inputModalities).toEqual(["text", "image"]);
+
+    const targets = [
+      { provider: "azu-lab1", model: "DeepSeek-V4-Pro" },
+      { provider: "azu-lab2", model: "gpt-5.6-terra" },
+    ];
+    const members = [
+      resolved!,
+      {
+        provider: "azu-lab2",
+        id: "gpt-5.6-terra",
+        contextWindow: 200_000,
+        inputModalities: ["text", "image"],
+      } as CatalogModel,
+    ];
+    const derived = deriveComboCatalogModel(
+      "planners",
+      { targets, defaultEffort: "high" } as never,
+      members,
+    );
+    expect(derived?.inputModalities).toEqual(["text", "image"]);
+
+    // combo.imageInput: "disabled" still strips image from the advertised modalities.
+    const disabled = deriveComboCatalogModel(
+      "planners",
+      { targets, defaultEffort: "high", imageInput: "disabled" } as never,
+      members,
+    );
+    expect(disabled?.inputModalities).toEqual(["text"]);
+
+    // Providers without sidecar coverage stay untouched (identity preserved).
+    expect(resolveComboCatalogMember(
+      { provider: "azu-lab1", model: "DeepSeek-V4-Pro" },
+      new Map([["azu-lab1/DeepSeek-V4-Pro", blind]]),
+      new Map([["azu-lab1", {
+        adapter: "openai-chat",
+        baseUrl: "https://azu-lab1.example/v1",
+      } as OcxProviderConfig]]),
+    )).toBe(blind);
   });
 });
 
