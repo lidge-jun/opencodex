@@ -447,4 +447,34 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
     expect(go).toEqual(ts);
     expect(ts).toMatchObject({ code: 1 });
   }, 20000);
+  test.each([
+    { args: ["debug"], code: 0 },
+    { args: ["debug", "provider", "status"], code: 1 },
+    { args: ["debug", "provider", "on"], code: 1 },
+    { args: ["debug", "usage", "logs"], code: 1 },
+    { args: ["access"], code: 1 },
+    { args: ["access", "key", "list"], code: 1 },
+    { args: ["access", "test", "grok-1"], code: 1 },
+    { args: ["api-key"], code: 1 },
+    { args: ["api-key", "list"], code: 1 },
+    { args: ["system"], code: 1 },
+    { args: ["system", "status"], code: 1 },
+    { args: ["system", "settings"], code: 1 },
+    { args: ["system", "sync"], code: 1 },
+    { args: ["system", "update", "check"], code: 1 },
+    { args: ["system", "update", "status", "up-1"], code: 1 },
+  ])("diffs management family output with no live proxy for $args", ({ args, code }) => {
+    // A schema-valid config pinned to an unroutable port (9) makes the
+    // no-proxy path deterministic instead of probing whatever occupies the
+    // default port on this machine; both runtimes must print the same
+    // "Proxy is not running" failure (and debug's env-default help at 0).
+    testHome = mkdtempSync(join(tmpdir(), "ocx-go-mgmt-noproxy-"));
+    writeFileSync(join(testHome, "config.json"), JSON.stringify({ port: 9, providers: { fixture: { adapter: "openai-chat", baseUrl: "https://example.test/v1", apiKey: "secret-key" } }, defaultProvider: "fixture" }));
+    const result = expectParity(args);
+    expect(result).toMatchObject({ code });
+    if (args[0] === "debug" && args.length === 1) {
+      expect(result.stdout).toContain("Proxy is not running — env defaults for the next start:");
+      expect(result.stderr).toBe("");
+    }
+  });
 });
