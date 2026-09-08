@@ -689,6 +689,7 @@
     "gui-static.test.ts": "gui",
     "health-scoring.test.ts": "server",
     "history-migration-guardian.test.ts": "codex-integration",
+    "history-ocx-compaction-recovery.test.ts": "codex-integration",
     "hyperbolic-provider.test.ts": "providers",
     "identity-neutralize.test.ts": "adapters",
     "init-backup-cleanup.test.ts": "service",

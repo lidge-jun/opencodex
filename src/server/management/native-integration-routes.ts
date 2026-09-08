@@ -366,13 +366,14 @@ async function handleCodexToggle(ctx: ManagementContext): Promise<Response> {
       }
     }
     const { restoreNativeCodexAsync } = await import("../../codex/inject");
+    const { OCX_NATIVE_REPLAY_RECOVERY_NOTE } = await import("../../responses/compaction");
     const restored = await restoreNativeCodexAsync({ revalidateDesiredState: true });
     return jsonResponse({
       ok: true, clientId: "codex", changed: durable && persisted.status === "committed",
       state: restored.success ? "absent" : "unsafe",
       desiredEnabled: enabled,
       message: restored.success
-        ? "Codex restored to its native path; the proxy is still serving other clients"
+        ? `Codex restored to its native path; the proxy is still serving other clients. ${OCX_NATIVE_REPLAY_RECOVERY_NOTE}`
         : `Codex intent saved, but restoring the native path did not complete: ${restored.message}`,
       ...(restored.success
         ? (durable ? {} : { reason: "not_durable" })

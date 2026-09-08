@@ -53,6 +53,10 @@ Récupération explicite destinée aux anciennes versions de développement qui 
 
 Il s'agit d'un réétiquetage large et destructif : chaque fil contenant un message utilisateur et actuellement marqué `opencodex` passe à `openai`, `exec` est normalisé en `cli` et l'indicateur d'événement est activé. L'historique légitime d'un fournisseur dédié est également concerné. Sauvegardez l'état et n'exécutez la commande que si vous souhaitez cette portée complète.
 
+### `ocx recover-history --ocx-compaction <thread-id> --yes`
+
+Réparez l'historique d'une tâche compactée par un fournisseur routé avant de la reprendre avec Codex natif. La commande sélectionne exactement une tâche par UUID, enregistre d'abord une sauvegarde privée octet par octet, puis convertit uniquement l'état de compaction `ocx1:` propre à OpenCodeX en résumé ordinaire relisible par Codex natif. Le contenu chiffré natif et les autres tâches restent inchangés. Fermez la tâche sélectionnée avant d'exécuter la commande ; toute modification simultanée du rollout interrompt la récupération sans remplacer le fichier.
+
 ### `ocx uninstall` · `ocx remove`
 
 Arrête le service et le proxy, supprime le service et le shim Codex, rétablit le fonctionnement natif de Codex, puis supprime la configuration locale d’opencodex uniquement si toutes les étapes de restauration ont réussi. `remove` est un alias de `uninstall`. Le nettoyage de la configuration exige les métadonnées de propriété créées par une installation récente ; les répertoires anciens ou partagés sont conservés.

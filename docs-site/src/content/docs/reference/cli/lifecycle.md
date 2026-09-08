@@ -81,6 +81,15 @@ changed to `openai`, `exec` is normalized to `cli`, and the event marker is set.
 legitimate dedicated-provider history. Back up the state and run it only when that full scope is
 intended.
 
+### `ocx recover-history --ocx-compaction <thread-id> --yes`
+
+Repair one thread that was compacted through a routed provider before resuming it through native
+Codex. The command reads the exact thread selected by UUID, saves a private byte-for-byte backup,
+then converts only OpenCodeX-owned `ocx1:` compaction state into a plain summary that native Codex
+can replay. Native encrypted content and other threads are left unchanged. Close the selected
+thread before running the command; a concurrent rollout change makes recovery stop without
+replacing the file.
+
 ### `ocx uninstall` · `ocx remove`
 
 Stop the service and proxy, remove the service and Codex shim, restore native Codex, then remove

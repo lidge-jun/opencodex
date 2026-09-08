@@ -75,6 +75,10 @@ ocx eject back
 thread를 `openai`로 바꾸고, `exec`를 `cli`로 정규화하며 event marker를 설정합니다. 정상적인
 dedicated-provider history도 포함됩니다. 상태를 백업하고 이 전체 범위를 의도한 경우에만 실행하세요.
 
+### `ocx recover-history --ocx-compaction <thread-id> --yes`
+
+라우팅된 provider를 통해 압축된 작업을 native Codex에서 다시 열기 전에 해당 기록을 복구합니다. 이 명령은 UUID로 정확히 하나의 작업을 선택하고 비공개 바이트 단위 백업을 저장한 뒤, OpenCodeX가 소유한 `ocx1:` 압축 상태만 native Codex가 재생할 수 있는 일반 요약으로 변환합니다. native 암호화 콘텐츠와 다른 작업은 변경하지 않습니다. 실행 전에 선택한 작업을 닫으십시오. 처리 중 rollout이 변경되면 파일을 교체하지 않고 복구를 중단합니다.
+
 ### `ocx uninstall` · `ocx remove`
 
 서비스와 프록시를 중지하고, 서비스와 Codex shim을 제거한 뒤, 기본 Codex를 복원합니다. 그 다음

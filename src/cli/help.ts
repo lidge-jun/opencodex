@@ -33,6 +33,8 @@ Usage:
   ocx restore back            Re-point codex at the running proxy (undo restore)
   ocx recover-history --legacy-openai --yes
                                Force all user-message opencodex rows to OpenAI (legacy recovery)
+  ocx recover-history --ocx-compaction <thread-id> --yes
+                               Back up and make one ocx1-compacted thread replayable by native Codex
   ocx uninstall               Remove service/shim/config and restore native Codex (alias: remove)
   ocx service [sub]           Run as a background service (default: install/update/start)
   ocx codex-shim <sub>        Auto-start proxy when \`codex\` launches (install|status|uninstall|remove)
