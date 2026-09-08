@@ -467,7 +467,7 @@ describe("self-unloading manager refusal (#4023)", () => {
     // prevents exactly this returned early for every non-Windows platform.
     const { installedServiceRespawnRisk } = await import("../../src/service");
     expect(installedServiceRespawnRisk(() => ({ status: "absent" }) as never, "darwin", {
-      env: { OCX_SERVICE: "1" },
+      env: { OCX_SERVICE: "1", OCX_SERVICE_MANAGED: "1" },
       exists: () => true,
     })).toBe("self-unload");
   });
@@ -475,14 +475,14 @@ describe("self-unloading manager refusal (#4023)", () => {
   test("linux systemd is exempted identically and gets the same answer", async () => {
     const { installedServiceRespawnRisk } = await import("../../src/service");
     expect(installedServiceRespawnRisk(() => ({ status: "absent" }) as never, "linux", {
-      env: { OCX_SERVICE: "1" },
+      env: { OCX_SERVICE: "1", OCX_SERVICE_MANAGED: "1" },
       exists: () => true,
     })).toBe("self-unload");
   });
 
   test("a manually started proxy is unaffected, even with a service installed", async () => {
-    // OCX_SERVICE is set by the plist/unit only. Without it this process is not the
-    // managed job, so no unload can reach it and the inline stop stays available.
+    // Only the plist and unit write OCX_SERVICE_MANAGED. Without it this process is not
+    // the managed job, so no unload can reach it and the inline stop stays available.
     const { installedServiceRespawnRisk } = await import("../../src/service");
     expect(installedServiceRespawnRisk(() => ({ status: "absent" }) as never, "darwin", {
       env: {},
@@ -493,7 +493,7 @@ describe("self-unloading manager refusal (#4023)", () => {
   test("the managed job with no service definition on disk is not at risk", async () => {
     const { installedServiceRespawnRisk } = await import("../../src/service");
     expect(installedServiceRespawnRisk(() => ({ status: "absent" }) as never, "darwin", {
-      env: { OCX_SERVICE: "1" },
+      env: { OCX_SERVICE: "1", OCX_SERVICE_MANAGED: "1" },
       exists: () => false,
     })).toBe("none");
   });
@@ -508,7 +508,25 @@ describe("self-unloading manager refusal (#4023)", () => {
     expect(installedServiceRespawnRisk(() => ({ status: "absent" }) as never, "win32")).toBe("none");
   });
 
-  test("the route refuses a self-unload before the manager is touched", () => {
+  
+  test("a proxy spawned by an ensure path is not the managed job", async () => {
+    // Both `ocx claude` and `ocx opencode` set OCX_SERVICE=1 on their detached child to
+    // borrow its routing-preservation meaning (src/cli/claude.ts, src/cli/opencode.ts),
+    // so that variable cannot identify the managed job. A user with the service installed
+    // but stopped, running one of those commands, must keep a working dashboard Stop.
+    const { installedServiceRespawnRisk } = await import("../../src/service");
+    expect(installedServiceRespawnRisk(() => ({ status: "absent" }) as never, "darwin", {
+      env: { OCX_SERVICE: "1" },
+      exists: () => true,
+    })).toBe("none");
+    expect(installedServiceRespawnRisk(() => ({ status: "absent" }) as never, "linux", {
+      env: { OCX_SERVICE: "1" },
+      exists: () => true,
+    })).toBe("none");
+  });
+
+
+test("the route refuses a self-unload before the manager is touched", () => {
     const source = readFileSync(repoPath("src", "server", "management-api.ts"), "utf8");
     const from = source.indexOf('"/api/stop"');
     const handler = source.slice(from, source.indexOf("/api/codex-auth/", from));

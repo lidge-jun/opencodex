@@ -16,6 +16,13 @@ import { restoreNativeCodex, restoreNativeCodexAsync } from "./codex/inject";
 import { stripGrokConfig } from "./grok/inject";
 import { isWslRuntime, resolveCodexHomeDir, type CodexHomeDeps } from "./codex/home";
 import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV, durableBunRuntime } from "./lib/bun-runtime";
+
+/**
+ * Written only by the launchd plist and the systemd unit. `OCX_SERVICE=1` cannot stand in
+ * for it: `ocx claude` and `ocx opencode` set that on the proxies they spawn to borrow its
+ * routing-preservation meaning, so a proxy carrying it is not necessarily the managed job.
+ */
+export const SERVICE_MANAGED_ENV = "OCX_SERVICE_MANAGED";
 import type { BunRuntimeSource, DurableBunRuntime } from "./lib/bun-runtime";
 import { isProcessAlive, stopProxy } from "./lib/process-control";
 import { serviceApiTokenFilePath } from "./lib/service-secrets";
@@ -508,6 +515,11 @@ export function buildPlist(
   const opencodexHome = process.env.OPENCODEX_HOME?.trim();
   const envLines = [
     `    <key>OCX_SERVICE</key><string>1</string>`,
+    // OCX_SERVICE alone cannot identify the managed job: `ocx claude` and `ocx opencode`
+    // also set it on the proxies they spawn, to borrow its routing-preservation meaning
+    // (src/cli/index.ts preserveRouting). Only the wrapper writes this second marker, so
+    // the dashboard-stop refusal below can tell a real launchd job from an ordinary child.
+    `    <key>${SERVICE_MANAGED_ENV}</key><string>1</string>`,
     ...(launcher ? [] : [
       `    <key>${BUN_RUNTIME_SOURCE_ENV}</key><string>${bunRuntimeSource}</string>`,
       `    <key>${BUN_RUNTIME_PATH_ENV}</key><string>${plistString(bun)}</string>`,
@@ -3328,6 +3340,7 @@ export function buildUnit(
   const opencodexHome = systemdEnvironmentAssignment("OPENCODEX_HOME", process.env.OPENCODEX_HOME?.trim());
   const envLines = [
     systemdEnvironmentAssignment("OCX_SERVICE", "1"),
+    systemdEnvironmentAssignment(SERVICE_MANAGED_ENV, "1"),
     ...(launcher ? [] : [
       systemdEnvironmentAssignment(BUN_RUNTIME_SOURCE_ENV, bunRuntimeSource),
       systemdEnvironmentAssignment(BUN_RUNTIME_PATH_ENV, bun),
@@ -3876,7 +3889,10 @@ export function installedServiceRespawnRisk(
   // the proxy from the outside and owns the teardown through its receipt.
   if (platform !== "win32") {
     const env = io.env ?? process.env;
-    if (env.OCX_SERVICE !== "1") return "none";
+    // Discriminate on the wrapper-only marker, not on OCX_SERVICE: `ocx claude` and
+    // `ocx opencode` set OCX_SERVICE=1 on the proxies they spawn (for preserveRouting),
+    // and refusing their dashboard stop would break a proxy that no manager supervises.
+    if (env[SERVICE_MANAGED_ENV] !== "1") return "none";
     const exists = io.exists ?? existsSync;
     if (platform === "darwin") return exists(plistPath()) ? "self-unload" : "none";
     if (platform === "linux") return exists(unitPath()) ? "self-unload" : "none";
