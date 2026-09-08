@@ -109,9 +109,11 @@ var deferredSurfaces = []TSDeferral{
 	},
 	{
 		Kind: WholeCommand, Name: "login",
-		Reason: "Interactive browser/TTY OAuth device flow; no headless byte-diff oracle " +
-			"without a live upstream OAuth round-trip.",
-		Track: "no ticket: needs an interactive-flow oracle",
+		Reason: "The key-authenticated openai-chat slice (issue #57) is Go-owned through " +
+			"the keyLoginProviders table; the remaining login surface — kiro's import-first " +
+			"OAuth, anthropic/google key logins, and unknown names — is interactive with no " +
+			"headless byte-diff oracle and stays with the TypeScript owner.",
+		Track: "waxiangzi/opencodex#57 (key slice) + no ticket for the OAuth remainder",
 	},
 	{
 		Kind: WholeCommand, Name: "opencode",

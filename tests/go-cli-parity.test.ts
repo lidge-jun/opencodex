@@ -5651,5 +5651,69 @@ describe.skipIf(!goAvailable || goCLI === null)(
         expect(ts.code).toBe(0);
       });
     });
+
+    describe("ocx login key slice (issue #57)", () => {
+      // The key-login flow is interactive (dashboard banner + readline) but its
+      // non-interactive aborts are oracle-able end to end: the namespace-
+      // collision preflight exits before any browser/key read, and the empty-key
+      // abort exits before validation (the openUrl spawn is fire-and-forget and
+      // swallows headless ENOENT). Both produce zero network traffic, so the TS
+      // reference and the Go binary diff cleanly in isolated homes.
+      const keyHomes: string[] = [];
+      afterEach(() => {
+        for (const home of keyHomes.splice(0))
+          if (existsSync(home)) removeTreeWithRetry(home);
+      });
+      function freshKeyHome(extra?: Record<string, unknown>): string {
+        const home = mkdtempSync(join(tmpdir(), "ocx-go-login-parity-"));
+        keyHomes.push(home);
+        // A valid config (providers + defaultProvider) so the TS loadConfig
+        // repair path never fires: repair warnings are loadConfig semantics,
+        // not login behavior, and the Go binary does not reproduce them.
+        const cfg: Record<string, unknown> = {
+          providers: {
+            fixture: {
+              adapter: "openai-chat",
+              baseUrl: "https://example.test/v1",
+              apiKey: "secret-key",
+              defaultModel: "fixture-model",
+            },
+          },
+          defaultProvider: "fixture",
+        };
+        if (extra) Object.assign(cfg, extra);
+        writeFileSync(join(home, "config.json"), JSON.stringify(cfg));
+        return home;
+      }
+      test.each([
+        { provider: "zai" },
+        { provider: "zhipu-bigmodel-coding" },
+      ])(
+        "namespace collision aborts identically for $provider",
+        async ({ provider }) => {
+          const home = freshKeyHome({
+            codexAccountNamespaces: { [provider]: "@main" },
+          });
+          const ts = await runTsAsyncInput(["login", provider], null, home);
+          const go = await runGoAsyncInput(["login", provider], null, home);
+          expect(go).toEqual(ts);
+          expect(ts.code).toBe(1);
+          expect(ts.stderr).toContain(
+            "provider name must not collide with a configured Codex account namespace",
+          );
+        },
+      );
+      test.each([
+        { provider: "zai" },
+        { provider: "zhipu-bigmodel-coding" },
+      ])("empty key aborts identically for $provider", async ({ provider }) => {
+        const home = freshKeyHome();
+        const ts = await runTsAsyncInput(["login", provider], "\n", home);
+        const go = await runGoAsyncInput(["login", provider], "\n", home);
+        expect(go).toEqual(ts);
+        expect(ts.code).toBe(1);
+        expect(ts.stderr).toContain("No key entered.");
+      });
+    });
   },
 );

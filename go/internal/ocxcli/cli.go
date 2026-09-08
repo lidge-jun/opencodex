@@ -235,6 +235,17 @@ func OwnershipFor(args []string) (Ownership, bool) {
 		}
 		return TypeScriptOwned, true
 	}
+	// login keeps its TypeScript owner at the top level; only a name in the
+	// Go key-login table (issue #57, openai-chat key slice) routes to Go. Every
+	// other provider — the kiro OAuth import-first flow, anthropic/google key
+	// logins, and unknown names — keeps the TypeScript owner so its usage-error
+	// bytes stay byte-identical.
+	if command.Name == "login" && len(args) > 1 {
+		if _, ok := keyLoginProviders[args[1]]; ok {
+			return GoOwned, true
+		}
+		return TypeScriptOwned, true
+	}
 	// account keeps its TypeScript owner per subcommand: the API-routing,
 	// pool, and OAuth device-flow subcommands below are Go-native, the rest
 	// stays with the TS owner until each subcommand carries its own oracle
@@ -343,6 +354,12 @@ type Deps struct {
 	ReadRuntime    func() (RuntimeState, error)
 	HTTPClient     *http.Client
 	Challenge      func() (string, error)
+	// Stdin overrides the process stdin for commands that read interactive
+	// input (key login); a pipe that is not a TTY reads without the prompt.
+	Stdin io.Reader
+	// OpenURL replaces the platform opener (openBrowser) so tests can stub the
+	// dashboard launch; nil means the real opener runs.
+	OpenURL func(string)
 	// Delegate runs a TypeScript-owned lifecycle command.  It is deliberately
 	// injected: these commands own OS registrations and Codex launch paths, and
 	// the Go command must preserve both their transaction and their exact output.
@@ -364,6 +381,12 @@ func defaults(d Deps) Deps {
 	}
 	if d.Challenge == nil {
 		d.Challenge = CreateChallenge
+	}
+	if d.Stdin == nil {
+		d.Stdin = os.Stdin
+	}
+	if d.OpenURL == nil {
+		d.OpenURL = openBrowser
 	}
 	if d.Delegate == nil {
 		d.Delegate = DelegateToTypeScript
@@ -425,6 +448,11 @@ func Run(args []string, deps Deps) int {
 		return runHealth(args[1:], deps)
 	case "logout":
 		return runLogout(args[1:], deps)
+	case "login":
+		// OwnershipFor already gated this: only a provider in the Go key-login
+		// table reaches Go; the OAuth / other-adapter / unknown names stay
+		// TypeScript-owned and delegate at the gate above.
+		return runLogin(args[1:], deps)
 	case "ready":
 		return runReady(args[1:], deps)
 	case "models":
