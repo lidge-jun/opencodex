@@ -310,9 +310,16 @@ func readSummaryArrayLine(label string, array *jsonwire.Value) string {
 		}
 	}
 	if scalar {
+		// Array.prototype.join renders null/undefined elements as empty strings
+		// ([1, null, 2].join(", ") === "1, , 2"), which is different from
+		// String(null); the summary renderer must keep that join behaviour.
 		parts := make([]string, 0, len(elements))
 		for _, element := range elements {
-			parts = append(parts, readJSString(element))
+			if element.Kind() == jsonwire.Null {
+				parts = append(parts, "")
+			} else {
+				parts = append(parts, readJSString(element))
+			}
 		}
 		joined := strings.Join(parts, ", ")
 		if joined == "" {

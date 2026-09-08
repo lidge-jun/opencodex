@@ -44,7 +44,7 @@ async function runGoAsync(args: string[], home = testHome): Promise<Result> {
 function expectParity(args: string[]): Result { const ts = runTs(args); const go = runGo(args); expect(go).toEqual(ts); return ts; }
 function normalizeHealthPid(result: Result): Result {
   if (!result.stdout.startsWith("Proxy healthy") && !result.stdout.startsWith("{\"ok\":true")) return result;
-  return { ...result, stdout: result.stdout.replace(/PID (?:null|\d+)/, "PID <pid>").replace(/\"pid\":(?:null|\d+)/, '"pid":<pid>') };
+  return { ...result, stdout: result.stdout.replace(/PID (?:null|\d+)/, "PID <pid>").replace(/"pid":(?:null|\d+)/, '"pid":<pid>') };
 }
 afterEach(async () => { testServer?.stop(true); testServer = undefined; delete process.env.OPENCODEX_HOME; if (testHome && existsSync(testHome)) removeTreeWithRetry(testHome); testHome = ""; });
 function startAttestedFixture(status: "ready" | "pending" | "failed"): void {
@@ -260,8 +260,10 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
   });
   test("diffs usage help in both spellings", () => {
     testHome = mkdtempSync(join(tmpdir(), "ocx-go-usage-parity-"));
-    expect(expectParity(["help", "usage"]));
-    expect(expectParity(["usage", "--help"]));
+    const helpTs = expectParity(["help", "usage"]);
+    expect(helpTs).toMatchObject({ code: 0, stderr: "" });
+    const flagTs = expectParity(["usage", "--help"]);
+    expect(flagTs).toMatchObject({ code: 0, stderr: "" });
   });
   test("diffs usage when no proxy is running", () => {
     testHome = mkdtempSync(join(tmpdir(), "ocx-go-usage-parity-"));
@@ -295,7 +297,7 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
       { requestId: "ocx-1111111111", timestamp: 1788818801331, provider: "fixture", model: "fixture-model", status: 502, durationMs: 344, conversationId: "conv-abc-123" },
       { createdAt: "2026-08-22T10:00:00Z", provider: "xai", model: "grok-4.6", statusCode: 200 },
     ] } },
-    "/api/system/memory": { body: { pid: 4242, bunVersion: "1.3.14", platform: "linux", uptimeSeconds: 123.456, rss: 104857600, heapUsed: 33554432, observedMetric: "rss", jscHeap: { heapSize: 33554432, objectCount: 1024 }, responseState: { count: 0 }, appOwnedBytes: { budgetBytes: 268435456, stores: { a: { b: 1 } }, observedInFlight: [1, 2, 3] }, streamMode: "auto", eagerRelay: null, watchdog: { warnThresholdBytes: 4294967296, samples: [1, 2] }, isDraining: false } },
+    "/api/system/memory": { body: { pid: 4242, bunVersion: "1.3.14", platform: "linux", uptimeSeconds: 123.456, rss: 104857600, heapUsed: 33554432, observedMetric: "rss", jscHeap: { heapSize: 33554432, objectCount: 1024 }, responseState: { count: 0 }, appOwnedBytes: { budgetBytes: 268435456, stores: { a: { b: 1 } }, observedInFlight: [1, 2, 3] }, streamMode: "auto", eagerRelay: null, watchdog: { warnThresholdBytes: 4294967296, samples: [1, 2] }, isDraining: false, freeHeapRatioHistory: [0.5, null, 0.4] } },
     "/api/request-history/req-1/route-decision": { body: { requestId: "req-1", routeDecision: { version: 1, decisionId: "d1", candidates: [{ provider: "fixture", eligible: true }] }, attemptSequence: [] } },
     "/api/config": { body: { port: 10100, defaultProvider: "fixture", codexAutoStart: true, providers: { fixture: { adapter: "openai-chat", hasApiKey: true } }, tiers: null } },
     "/api/catalog": { body: { models: [{ slug: "fixture-model", display_name: "Fixture", visibility: "list", service_tiers: [{ id: "priority", name: "Fast" }] }], source: "catalog" } },

@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/lidge-jun/opencodex/go/internal/jsonwire"
 )
 
 // The fixture payloads mirror the canned routes in tests/go-cli-parity.test.ts
@@ -18,7 +20,7 @@ import (
 
 const logsFixturePayload = `{"timeZone":"Asia/Shanghai","total":2,"logs":[{"requestId":"ocx-1111111111","timestamp":1788818801331,"provider":"fixture","model":"fixture-model","status":502,"durationMs":344,"conversationId":"conv-abc-123"},{"createdAt":"2026-08-22T10:00:00Z","provider":"xai","model":"grok-4.6","statusCode":200}]}`
 
-const memoryFixturePayload = `{"pid":4242,"bunVersion":"1.3.14","platform":"linux","uptimeSeconds":123.456,"rss":104857600,"heapUsed":33554432,"observedMetric":"rss","jscHeap":{"heapSize":33554432,"objectCount":1024},"responseState":{"count":0},"appOwnedBytes":{"budgetBytes":268435456,"stores":{"a":{"b":1}},"observedInFlight":[1,2,3]},"streamMode":"auto","eagerRelay":null,"watchdog":{"warnThresholdBytes":4294967296,"samples":[1,2]},"isDraining":false}`
+const memoryFixturePayload = `{"pid":4242,"bunVersion":"1.3.14","platform":"linux","uptimeSeconds":123.456,"rss":104857600,"heapUsed":33554432,"observedMetric":"rss","jscHeap":{"heapSize":33554432,"objectCount":1024},"responseState":{"count":0},"appOwnedBytes":{"budgetBytes":268435456,"stores":{"a":{"b":1}},"observedInFlight":[1,2,3]},"streamMode":"auto","eagerRelay":null,"watchdog":{"warnThresholdBytes":4294967296,"samples":[1,2]},"isDraining":false,"freeHeapRatioHistory":[0.5,null,0.4]}`
 
 const routeDecisionFixturePayload = `{"requestId":"req-1","routeDecision":{"version":1,"decisionId":"d1","candidates":[{"provider":"fixture","eligible":true}]},"attemptSequence":[]}`
 
@@ -100,7 +102,7 @@ func TestMemoryOutputMatchesTypeScriptFixture(t *testing.T) {
 	if code != 0 || stderr != "" {
 		t.Fatalf("memory = code %d stderr %q", code, stderr)
 	}
-	want := "pid: 4242\nbunVersion: 1.3.14\nplatform: linux\nuptimeSeconds: 123.456\nrss: 104857600\nheapUsed: 33554432\nobservedMetric: rss\njscHeap.heapSize: 33554432\njscHeap.objectCount: 1024\nresponseState.count: 0\nappOwnedBytes.budgetBytes: 268435456\nappOwnedBytes.stores: [object Object]\nappOwnedBytes.observedInFlight: 1, 2, 3\nstreamMode: auto\neagerRelay: -\nwatchdog.warnThresholdBytes: 4294967296\nwatchdog.samples: 1, 2\nisDraining: false\n"
+	want := "pid: 4242\nbunVersion: 1.3.14\nplatform: linux\nuptimeSeconds: 123.456\nrss: 104857600\nheapUsed: 33554432\nobservedMetric: rss\njscHeap.heapSize: 33554432\njscHeap.objectCount: 1024\nresponseState.count: 0\nappOwnedBytes.budgetBytes: 268435456\nappOwnedBytes.stores: [object Object]\nappOwnedBytes.observedInFlight: 1, 2, 3\nstreamMode: auto\neagerRelay: -\nwatchdog.warnThresholdBytes: 4294967296\nwatchdog.samples: 1, 2\nisDraining: false\nfreeHeapRatioHistory: 0.5, , 0.4\n"
 	if stdout != want {
 		t.Fatalf("memory stdout = %q, want %q", stdout, want)
 	}
@@ -115,7 +117,7 @@ func TestMemoryJSONMatchesStringifyIndent(t *testing.T) {
 		"{\n  \"pid\": 4242,\n",
 		"  \"uptimeSeconds\": 123.456,\n",
 		"  \"eagerRelay\": null,\n",
-		"  \"isDraining\": false\n}\n",
+		"  \"freeHeapRatioHistory\": [\n    0.5,\n    null,\n    0.4\n  ]\n}\n",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("memory --json missing %q:\n%s", want, stdout)
@@ -176,6 +178,22 @@ func TestLogsExplainMatchesTypeScriptFixture(t *testing.T) {
 		if stdout != want {
 			t.Fatalf("%v stdout = %q, want %q", argv, stdout, want)
 		}
+	}
+}
+
+func TestReadSummaryJoinNullAndEmptyElements(t *testing.T) {
+	// summaryLines renders scalar arrays with Array.prototype.join semantics:
+	// null/undefined elements become empty strings ([1, null, 2] → "1, , 2",
+	// [null] → "none"), verified against the TS oracle in src/cli/runtime-api.ts.
+	payload := `{"a":[1,null,2],"b":[],"c":["","x"],"d":[null],"e":[[2,3]],"f":["a",true,0]}`
+	body, err := jsonwire.Parse([]byte(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(readSummaryLines(body), "\n")
+	want := "a: 1, , 2\nb: none\nc: , x\nd: none\ne: 1 item(s)\nf: a, true, 0"
+	if got != want {
+		t.Fatalf("summary join = %q, want %q", got, want)
 	}
 }
 
