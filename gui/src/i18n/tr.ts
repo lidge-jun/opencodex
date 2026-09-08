@@ -999,6 +999,7 @@ export const tr: Record<TKey, string> = {
   "storage.cleanup.confirmPermanent": "Kalıcı Olarak Sil",
   "storage.cleanup.doneQuarantine": "{count} dosya karantinaya alındı ({size}).",
   "storage.cleanup.donePermanent": "{count} dosya kalıcı olarak silindi ({size}).",
+  "storage.cleanup.skippedReferenced": "Başvurulan {count} dosya atlandı.",
   "storage.cleanup.previewFailed": "Önizleme başarısız oldu.",
   "storage.cleanup.cleanupFailed": "Temizleme başarısız oldu.",
   "storage.cleanup.err.codex_busy": "Codex state.sqlite dosyasını kullanıyor.",

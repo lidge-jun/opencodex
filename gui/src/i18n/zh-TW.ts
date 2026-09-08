@@ -788,6 +788,7 @@ export const zhTW: Record<TKey, string> = {
   "storage.cleanup.confirmPermanent": "永久刪除",
   "storage.cleanup.doneQuarantine": "已隔離 {count} 個檔案（{size}）。",
   "storage.cleanup.donePermanent": "已永久刪除 {count} 個檔案（{size}）。",
+  "storage.cleanup.skippedReferenced": "已略過 {count} 個被參照的檔案。",
   "storage.cleanup.previewFailed": "預覽失敗。",
   "storage.cleanup.cleanupFailed": "清理失敗。",
   "storage.cleanup.err.codex_busy": "Codex 正在使用 state.sqlite — 請退出 Codex 後重試。",

@@ -986,6 +986,7 @@ export const fr: Record<TKey, string> = {
   "storage.cleanup.confirmPermanent": "Supprimer définitivement",
   "storage.cleanup.doneQuarantine": "{count} fichier(s) mis en quarantaine ({size}).",
   "storage.cleanup.donePermanent": "{count} fichier(s) supprimé(s) définitivement ({size}).",
+  "storage.cleanup.skippedReferenced": "{count} fichier(s) référencé(s) ignoré(s).",
   "storage.cleanup.previewFailed": "Échec de l’aperçu.",
   "storage.cleanup.cleanupFailed": "Échec du nettoyage.",
   "storage.cleanup.err.codex_busy": "Codex utilise state.sqlite — réessayez après avoir quitté Codex.",

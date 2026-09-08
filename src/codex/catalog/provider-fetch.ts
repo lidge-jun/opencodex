@@ -954,16 +954,21 @@ function comboMemberVendorMetadata(provider: string, modelId: string): ModelMeta
  */
 function vendorMetadataComboFallback(target: { provider: string; model: string }): ComboCatalogMemberFallback | undefined {
   const metadataProvider = resolveMetadataProvider(target.provider);
-  const metadata = metadataProvider ? comboMemberVendorMetadata(metadataProvider, target.model) : undefined;
+  // Custom OpenAI-compatible routes commonly retain the canonical OpenAI model id
+  // while using a provider name that has no metadata alias. Reuse only its effort
+  // ladder below; context/modality rows remain provider-owned.
+  const metadata = metadataProvider
+    ? comboMemberVendorMetadata(metadataProvider, target.model)
+    : comboMemberVendorMetadata("openai", target.model);
   if (!metadata) return undefined;
   return {
-    ...(typeof metadata.contextWindow === "number" && metadata.contextWindow > 0
+    ...(metadataProvider && typeof metadata.contextWindow === "number" && metadata.contextWindow > 0
       ? { contextWindow: metadata.contextWindow }
       : {}),
-    ...(typeof metadata.maxTokens === "number" && metadata.maxTokens > 0
+    ...(metadataProvider && typeof metadata.maxTokens === "number" && metadata.maxTokens > 0
       ? { maxOutputTokens: metadata.maxTokens }
       : {}),
-    ...(Array.isArray(metadata.input) && metadata.input.length > 0
+    ...(metadataProvider && Array.isArray(metadata.input) && metadata.input.length > 0
       ? { inputModalities: [...metadata.input] }
       : {}),
     ...(metadata.reasoning === true ? { reasoningEfforts: [...ROUTED_COMBO_MEMBER_REASONING_EFFORTS] } : {}),
@@ -1040,15 +1045,21 @@ export function resolveComboCatalogMember(
     && typeof existing.contextWindow === "number"
     && existing.contextWindow > 0
   ) {
-    const capped = applyProviderContextCap(existing.contextWindow, contextCap);
+    // Live discovery can explicitly say text-only even when configured routing
+    // supplies a vision sidecar. Apply the same provider hints used for thin
+    // rows before deriving a combo from this complete row.
+    const hinted = prov && isModelVisionSidecarConsumer(prov, existing.id)
+      ? applyProviderConfigHints(target.provider, prov, existing, contextCap, metadataModelIdCaseFold)
+      : existing;
+    const capped = applyProviderContextCap(hinted.contextWindow, contextCap);
     if (capped === undefined || capped === existing.contextWindow) {
-      return withFallbackMetadata(existing);
+      return withFallbackMetadata(hinted);
     }
-    const maxInput = typeof existing.maxInputTokens === "number" && existing.maxInputTokens > 0
-      ? Math.min(existing.maxInputTokens, capped)
+    const maxInput = typeof hinted.maxInputTokens === "number" && hinted.maxInputTokens > 0
+      ? Math.min(hinted.maxInputTokens, capped)
       : Math.min(fallback?.maxInputTokens ?? capped, capped);
     return withFallbackMetadata({
-      ...existing,
+      ...hinted,
       contextWindow: capped,
       maxInputTokens: maxInput,
       contextCap,

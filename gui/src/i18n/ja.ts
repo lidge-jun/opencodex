@@ -925,6 +925,7 @@ export const ja: Record<TKey, string> = {
   "storage.cleanup.confirmPermanent": "完全に削除",
   "storage.cleanup.doneQuarantine": "{count} 件を隔離しました（{size}）。",
   "storage.cleanup.donePermanent": "{count} 件を完全削除しました（{size}）。",
+  "storage.cleanup.skippedReferenced": "参照されている {count} 件をスキップしました。",
   "storage.cleanup.previewFailed": "プレビューに失敗しました。",
   "storage.cleanup.cleanupFailed": "クリーンアップに失敗しました。",
   "storage.cleanup.err.codex_busy": "Codex が state.sqlite を使用中です — Codex を終了して再試行してください。",

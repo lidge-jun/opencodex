@@ -980,6 +980,7 @@ export const ru: Record<TKey, string> = {
   "storage.cleanup.confirmPermanent": "Удалить навсегда",
   "storage.cleanup.doneQuarantine": "В карантин: {count} файл(ов) ({size}).",
   "storage.cleanup.donePermanent": "Удалено навсегда: {count} файл(ов) ({size}).",
+  "storage.cleanup.skippedReferenced": "Пропущено файлов, на которые ссылается история: {count}.",
   "storage.cleanup.previewFailed": "Не удалось выполнить предпросмотр.",
   "storage.cleanup.cleanupFailed": "Не удалось выполнить очистку.",
   "storage.cleanup.err.codex_busy": "Codex использует state.sqlite — закройте Codex и повторите попытку.",

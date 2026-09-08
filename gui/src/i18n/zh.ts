@@ -1797,6 +1797,7 @@ export const zh: Record<TKey, string> = {
   "storage.cleanup.confirmPermanent": "永久删除",
   "storage.cleanup.doneQuarantine": "已隔离 {count} 个文件（{size}）。",
   "storage.cleanup.donePermanent": "已永久删除 {count} 个文件（{size}）。",
+  "storage.cleanup.skippedReferenced": "已跳过 {count} 个被引用的文件。",
   "storage.cleanup.previewFailed": "预览失败。",
   "storage.cleanup.cleanupFailed": "清理失败。",
   "storage.cleanup.err.codex_busy": "Codex 正在使用 state.sqlite — 请退出 Codex 后重试。",
