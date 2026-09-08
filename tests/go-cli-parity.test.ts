@@ -13,7 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { delimiter as pathDelimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createLocalAttestationProof } from "../src/lib/local-management-attestation";
 import { removeTreeWithRetry } from "./helpers/remove-tree";
@@ -5652,6 +5652,187 @@ describe.skipIf(!goAvailable || goCLI === null)(
       });
     });
 
+    describe.skipIf(process.platform === "win32")(
+      "v2 write verbs (issue #56 v2b)",
+      () => {
+        // The write verbs spawn the upstream `codex features` CLI through a
+        // fake shim on PATH. The shim is a bash script, which also makes the
+        // mode-hint probe take its non-native (null → allow) branch exactly
+        // like a wrapper install; win32 has no shell-shim oracle, so these
+        // rows are skipped there (same convention as the tray rows).
+        //
+        // Every fixture turns the Codex integration OFF
+        // (clientIntegrations.codex:false) so the trailing catalog resync
+        // takes sync.ts's silent desired-disabled branch — that is the only
+        // resync state whose bytes are deterministic on any machine, and it
+        // keeps these rows independent of a real catalog/proxy.
+        const v2bHomes: string[] = [];
+        afterEach(() => {
+          for (const home of v2bHomes.splice(0))
+            if (existsSync(home)) removeTreeWithRetry(home);
+        });
+        const v2Shim =
+          [
+            '#!/usr/bin/env bash',
+            'if [ "${1:-}" = "--version" ]; then echo "codex 0.47.0"; exit 0; fi',
+            'if [ "${1:-}" = "features" ]; then',
+            '  f="${CODEX_HOME:-$HOME/.codex}/config.toml"',
+            '  case "${2:-}" in',
+            "    enable) sed -i '0,/enabled = false/s//enabled = true/' \"$f\" ;;",
+            "    disable) sed -i '0,/enabled = true/s//enabled = false/' \"$f\" ;;",
+            '  esac',
+            '  exit 0',
+            'fi',
+            'exit 1',
+          ].join("\n") + "\n";
+        function v2bFixture(extra: string, toml: string) {
+          const home = mkdtempSync(join(tmpdir(), "ocx-go-v2b-home-"));
+          const codexHome = mkdtempSync(join(tmpdir(), "ocx-go-v2b-codex-"));
+          const shimDir = mkdtempSync(join(tmpdir(), "ocx-go-v2b-shim-"));
+          v2bHomes.push(home, codexHome, shimDir);
+          const cfg: Record<string, unknown> = {
+            clientIntegrations: { codex: false },
+            providers: {
+              fixture: {
+                adapter: "openai-chat",
+                baseUrl: "https://example.test/v1",
+                apiKey: "secret-key",
+                defaultModel: "fixture-model",
+                models: ["fixture-model"],
+                contextWindow: 128000,
+              },
+            },
+            defaultProvider: "fixture",
+          };
+          if (extra) Object.assign(cfg, JSON.parse(extra));
+          writeFileSync(join(home, "config.json"), JSON.stringify(cfg));
+          writeFileSync(join(codexHome, "config.toml"), toml);
+          const shim = join(shimDir, "codex");
+          writeFileSync(shim, v2Shim);
+          chmodSync(shim, 0o755);
+          return { home, codexHome, shimDir };
+        }
+        function runTsV2(args: Argv, f: ReturnType<typeof v2bFixture>): Result {
+          const result = Bun.spawnSync(
+            [process.execPath, "src/cli/index.ts", ...args],
+            {
+              cwd: repoRoot,
+              env: {
+                ...process.env,
+                OPENCODEX_HOME: f.home,
+                CODEX_HOME: f.codexHome,
+                PATH: f.shimDir + pathDelimiter + (process.env.PATH ?? ""),
+              },
+              stdout: "pipe",
+              stderr: "pipe",
+            },
+          );
+          return {
+            code: result.exitCode,
+            stdout: new TextDecoder().decode(result.stdout),
+            stderr: new TextDecoder().decode(result.stderr),
+          };
+        }
+        function runGoV2(args: Argv, f: ReturnType<typeof v2bFixture>): Result {
+          const result = Bun.spawnSync([ensureGoBinary(), ...args], {
+            cwd: repoRoot,
+            env: {
+              ...process.env,
+              OPENCODEX_HOME: f.home,
+              CODEX_HOME: f.codexHome,
+              PATH: f.shimDir + pathDelimiter + (process.env.PATH ?? ""),
+            },
+            stdout: "pipe",
+            stderr: "pipe",
+          });
+          return {
+            code: result.exitCode,
+            stdout: new TextDecoder().decode(result.stdout),
+            stderr: new TextDecoder().decode(result.stderr),
+          };
+        }
+        function expectV2Parity(args: Argv, extra: string, toml: string) {
+          const ts = runTsV2(args, v2bFixture(extra, toml));
+          const go = runGoV2(args, v2bFixture(extra, toml));
+          expect(go).toEqual(ts);
+          return ts;
+        }
+        const withModeV2KeepNative =
+          '{"multiAgentMode":"v2","keepNativeChatGptOnV1":true}';
+        const withKeepNative = '{"keepNativeChatGptOnV1":true}';
+        test.each([
+          { args: ["v2", "on"] as const, extra: "", toml: "" },
+          {
+            args: ["v2", "on"] as const,
+            extra: "",
+            toml: "[features.multi_agent_v2]\nenabled = true\n",
+          },
+          {
+            args: ["v2", "off"] as const,
+            extra: "",
+            toml: "[features.multi_agent_v2]\nenabled = true\n",
+          },
+          { args: ["v2", "off"] as const, extra: "", toml: "" },
+          { args: ["v2", "threads", "12"] as const, extra: "", toml: "" },
+          {
+            args: ["v2", "threads", "12"] as const,
+            extra: "",
+            toml: "[features.multi_agent_v2]\nenabled = true\n",
+          },
+          { args: ["v2", "threads", "3"] as const, extra: "", toml: "" },
+          { args: ["v2", "mode", "v1"] as const, extra: "", toml: "" },
+          {
+            args: ["v2", "mode", "v2"] as const,
+            extra: "",
+            toml: "[features.multi_agent_v2]\nenabled = false\n",
+          },
+          {
+            args: ["v2", "mode", "default"] as const,
+            extra: '{"multiAgentMode":"v1"}',
+            toml: "",
+          },
+          { args: ["v2", "keep-native-v1", "on"] as const, extra: "", toml: "" },
+          {
+            args: ["v2", "keep-native-v1", "on"] as const,
+            extra: withModeV2KeepNative,
+            toml: "[features.multi_agent_v2]\nenabled = true\n",
+          },
+          { args: ["v2", "keep-native-v1", "off"] as const, extra: withKeepNative, toml: "" },
+          { args: ["v2", "mode-hint", "reply in klingon"] as const, extra: "", toml: "" },
+          {
+            args: ["v2", "mode-hint", "--clear"] as const,
+            extra: "",
+            toml: '[features.multi_agent_v2]\nmulti_agent_mode_hint_text = "same"\n',
+          },
+          {
+            args: ["v2", "mode-hint", "same"] as const,
+            extra: "",
+            toml: '[features.multi_agent_v2]\nmulti_agent_mode_hint_text = "same"\n',
+          },
+          { args: ["v2"] as const, extra: "", toml: "" },
+        ])("diffs ocx $args", ({ args, extra, toml }) => {
+          const ts = expectV2Parity(args, extra, toml);
+          expect(ts.code).toBe(0);
+        });
+        test.each([
+          { args: ["v2", "bogus"] as const },
+          { args: ["v2", "mode"] as const },
+          { args: ["v2", "mode", "v3"] as const },
+          { args: ["v2", "mode", "  "] as const },
+          { args: ["v2", "keep-native-v1", "maybe"] as const },
+          { args: ["v2", "threads"] as const },
+          { args: ["v2", "threads", "abc"] as const },
+          { args: ["v2", "threads", "0"] as const },
+          { args: ["v2", "mode-hint"] as const },
+          { args: ["v2", "mode-hint", "  "] as const },
+        ])("diffs error bytes for ocx $args", ({ args }) => {
+          const ts = expectV2Parity(args, "", "");
+          expect(ts.code).toBe(1);
+          expect(ts.stdout).toBe("");
+        });
+      },
+    );
+
     describe("ocx login key slice (issue #57)", () => {
       // The key-login flow is interactive (dashboard banner + readline) but its
       // non-interactive aborts are oracle-able end to end: the namespace-
@@ -5685,10 +5866,7 @@ describe.skipIf(!goAvailable || goCLI === null)(
         writeFileSync(join(home, "config.json"), JSON.stringify(cfg));
         return home;
       }
-      test.each([
-        { provider: "zai" },
-        { provider: "zhipu-bigmodel-coding" },
-      ])(
+      test.each([{ provider: "zai" }, { provider: "zhipu-bigmodel-coding" }])(
         "namespace collision aborts identically for $provider",
         async ({ provider }) => {
           const home = freshKeyHome({
@@ -5703,17 +5881,17 @@ describe.skipIf(!goAvailable || goCLI === null)(
           );
         },
       );
-      test.each([
-        { provider: "zai" },
-        { provider: "zhipu-bigmodel-coding" },
-      ])("empty key aborts identically for $provider", async ({ provider }) => {
-        const home = freshKeyHome();
-        const ts = await runTsAsyncInput(["login", provider], "\n", home);
-        const go = await runGoAsyncInput(["login", provider], "\n", home);
-        expect(go).toEqual(ts);
-        expect(ts.code).toBe(1);
-        expect(ts.stderr).toContain("No key entered.");
-      });
+      test.each([{ provider: "zai" }, { provider: "zhipu-bigmodel-coding" }])(
+        "empty key aborts identically for $provider",
+        async ({ provider }) => {
+          const home = freshKeyHome();
+          const ts = await runTsAsyncInput(["login", provider], "\n", home);
+          const go = await runGoAsyncInput(["login", provider], "\n", home);
+          expect(go).toEqual(ts);
+          expect(ts.code).toBe(1);
+          expect(ts.stderr).toContain("No key entered.");
+        },
+      );
     });
   },
 );

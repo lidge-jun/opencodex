@@ -106,12 +106,12 @@ var Commands = []Command{
 	// in-place self-replace, so no hermetic byte-diff oracle can drive it.
 	{Name: "update", Usage: "ocx update [--tag <tag>]", Summary: "Update OpenCodex.", Owner: TypeScriptOwned},
 	{Name: "restart", Usage: "ocx restart", Summary: "Restart the proxy.", Owner: GoOwned},
-	// v2 keeps the TypeScript owner (issue #56): only the `status` read verb
-	// is carved out to Go (v2_command.go); the write verbs (on/off/mode/
-	// threads/keep-native-v1/mode-hint) edit the upstream Codex config.toml
-	// through the features.ts engine plus the codex features CLI, and are
-	// gated by OwnershipFor before this command table is consulted.
-	{Name: "v2", Usage: "ocx v2 <sub>", Summary: "Manage the v2 surface.", Owner: TypeScriptOwned},
+	// v2 is Go-owned (issue #56): the read surface (`status`) landed in slice
+	// v2a (v2_command.go); slice v2b adds the write verbs (on/off/mode/
+	// threads/keep-native-v1/mode-hint) that edit the upstream Codex
+	// config.toml through the ported features.ts engine plus the `codex
+	// features` CLI, and mirror the cmdV2 terminal text byte-for-byte.
+	{Name: "v2", Usage: "ocx v2 <sub>", Summary: "Manage the v2 surface.", Owner: GoOwned},
 	{Name: "health", Usage: "ocx health [--json]", Summary: "Verify the local proxy identity and report health.", Owner: GoOwned},
 	{Name: "capabilities", Usage: "ocx capabilities [--json] [--mutating-only] [--route <path>]", Summary: "List the declared CLI capabilities and the management routes they drive.", Owner: GoOwned},
 	{Name: "ready", Usage: "ocx ready [--json] [--wait [--timeout <s>]]", Summary: "Verify readiness.", Owner: GoOwned},
@@ -314,10 +314,9 @@ func OwnershipFor(args []string) (Ownership, bool) {
 	if command.Name == "connect" && len(args) > 1 && args[1] == "status" {
 		return GoOwned, true
 	}
-	// v2 status is Go-owned (the local config.toml read surface, issue #56
-	// slice v2a); the write verbs (on/off/mode/threads/keep-native-v1/mode-hint)
-	// mutate config.toml through the features.ts editing engine plus the
-	// upstream `codex features` CLI and stay TypeScript-owned until v2b.
+	// v2 is fully Go-owned (issue #56): slice v2a brought the `status` read
+	// surface (v2_command.go) and slice v2b the write verbs, so no gate remains
+	// and the whole command table resolves to GoOwned below.
 	if command.Name == "v2" && len(args) > 1 && args[1] == "status" {
 		return GoOwned, true
 	}
@@ -496,13 +495,9 @@ func Run(args []string, deps Deps) int {
 		fmt.Fprintf(deps.Stderr, "Unimplemented Go-owned command: %s\n", args[0])
 		return ExitFailure
 	case "v2":
-		// Only `v2 status` reaches Go (OwnershipFor already gated this); the
-		// write verbs stay TypeScript-owned and never dispatch here.
-		if len(args) > 1 && args[1] == "status" {
-			return runV2Status(args[2:], deps)
-		}
-		fmt.Fprintf(deps.Stderr, "Unimplemented Go-owned command: %s\n", args[0])
-		return ExitFailure
+		// The whole v2 family is Go-owned (issue #56); runV2 dispatches the
+		// status read and every write verb.
+		return runV2(args[1:], deps)
 	case "disconnect":
 		return runClientDisconnect(args[1:], deps)
 	case "gui":

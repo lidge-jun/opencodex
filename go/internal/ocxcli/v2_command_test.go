@@ -254,19 +254,28 @@ func TestV2StatusGolden(t *testing.T) {
 	}
 }
 
-// TestV2StatusOwnership gates the carve-out: `v2 status` dispatches natively,
-// the bare surface and every write verb stay with the TypeScript owner.
+// TestV2StatusOwnership pins the whole-command flip (issue #56 slice v2b):
+// every `v2` surface — the bare form, status, and the write verbs — resolves
+// to GoOwned; the deferral ledger no longer lists a v2 entry.
 func TestV2StatusOwnership(t *testing.T) {
-	if owner, known := OwnershipFor([]string{"v2", "status"}); !known || owner != GoOwned {
-		t.Fatalf("v2 status ownership = %q, %t; want GoOwned", owner, known)
-	}
-	for _, verb := range []string{"on", "off", "mode", "threads", "keep-native-v1", "mode-hint", "bogus"} {
-		argv := []string{"v2"}
-		if verb != "" {
-			argv = append(argv, verb)
+	for _, argv := range [][]string{
+		{"v2"},
+		{"v2", "status"},
+		{"v2", "on"},
+		{"v2", "off"},
+		{"v2", "mode", "v1"},
+		{"v2", "threads", "4"},
+		{"v2", "keep-native-v1", "on"},
+		{"v2", "mode-hint", "hi"},
+		{"v2", "bogus"},
+	} {
+		if owner, known := OwnershipFor(argv); !known || owner != GoOwned {
+			t.Fatalf("%v ownership = %q, %t; want GoOwned", argv, owner, known)
 		}
-		if owner, known := OwnershipFor(argv); !known || owner != TypeScriptOwned {
-			t.Fatalf("%v ownership = %q, %t; want TypeScriptOwned", argv, owner, known)
+	}
+	for _, d := range deferredSurfaces {
+		if d.Name == "v2" {
+			t.Fatalf("deferral ledger still lists v2: %+v", d)
 		}
 	}
 }

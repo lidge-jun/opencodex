@@ -23,8 +23,8 @@ import (
 const (
 	keyNamespaceCollisionError = "provider name must not collide with a configured Codex account namespace"
 	keyValidationElapsed       = "   validating… "
-	keyAddedPrefix            = "✅ "
-	keyAddedSuffix            = " added. Try: ocx sync"
+	keyAddedPrefix             = "✅ "
+	keyAddedSuffix             = " added. Try: ocx sync"
 )
 
 var keyBaseURLPlaceholder = regexp.MustCompile(`\{[^}]*\}`)
