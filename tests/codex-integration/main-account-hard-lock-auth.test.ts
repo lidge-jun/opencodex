@@ -143,12 +143,14 @@ afterEach(() => {
 describe("main quota policy at native admission", () => {
   test.each(["owned-99", "owned-98", "foreign", "unknown", "recovery", "second-listener",
     "invalid-access-token", "invalid-account-id", "invalid-id-token", "mismatched-identity", "renewed-listener",
-    "stage-retry", "manual-recovery", "stale-sweep", "retained-unknown-binding"] as const)(
+    "stage-retry", "manual-recovery", "stale-sweep", "retained-unknown-binding",
+    "conflicting-token-identities", "owned-opaque-99"] as const)(
     "fresh startup restores durable main policy only after owned recovery (%s)", scenario => {
       const restoredId = scenario === "recovery" ? "hard-lock-recovered-main" : accountId;
-      const restoredBearer = `header.${Buffer.from(JSON.stringify({ exp: tokenExpiry,
+      const restoredBearer = scenario === "owned-opaque-99" ? "opaque-owned-startup-bearer" : `header.${Buffer.from(JSON.stringify({ exp: tokenExpiry,
         ...(["renewed-listener", "manual-recovery", "stale-sweep"].includes(scenario) ? { startupTokenRevision: 1 } : {}),
-        "https://api.openai.com/auth": { chatgpt_account_id: restoredId } })).toString("base64url")}.signature`;
+        "https://api.openai.com/auth": { chatgpt_account_id: scenario === "conflicting-token-identities"
+          ? "hard-lock-conflicting-access-account" : restoredId } })).toString("base64url")}.signature`;
       const quota = { weeklyPercent: scenario === "owned-98" ? 98 : 99, updatedAt: Date.now() - 7 * 60 * 60_000 };
       const identityKey = createHash("sha256").update("opencodex-main-quota-v1\0").update(restoredId).digest("hex");
       if (scenario.startsWith("invalid-") || scenario === "mismatched-identity") {
@@ -157,6 +159,12 @@ describe("main quota policy at native admission", () => {
           account_id: scenario === "invalid-account-id" ? { invalid: true }
             : scenario === "mismatched-identity" ? "conflicting-physical-account" : accountId,
           ...(scenario === "invalid-id-token" ? { id_token: 17 } : {}),
+        } }));
+      }
+      if (scenario === "conflicting-token-identities" || scenario === "owned-opaque-99") {
+        writeFileSync(join(home, "auth.json"), JSON.stringify({ tokens: {
+          access_token: restoredBearer, account_id: accountId,
+          ...(scenario === "conflicting-token-identities" ? { id_token: bearer() } : {}),
         } }));
       }
       writeFileSync(join(home, "config.json"), JSON.stringify({
@@ -184,9 +192,10 @@ describe("main quota policy at native admission", () => {
       expect(result.listeners[0].tokenReads).toBe(0);
       expect(result.unexpectedNetwork).toEqual([]);
       expect(result.policyReadsPinned).toBe(true);
-      expect(result.beforePrimaryUpstreamCalls).toBe(scenario === "retained-unknown-binding" ? 2 : 0);
+      expect(result.beforePrimaryUpstreamCalls).toBe(scenario === "retained-unknown-binding" ? 3 : 0);
       const unowned = scenario === "foreign" || scenario === "unknown";
-      const unverified = scenario.startsWith("invalid-") || scenario === "mismatched-identity";
+      const unverified = scenario.startsWith("invalid-") || scenario === "mismatched-identity"
+        || scenario === "conflicting-token-identities";
       if (unowned) {
         expect(result.firstAdmission.admitted).toBe(true);
         expect(result.after.tokenReads).toBe(0);
@@ -240,7 +249,8 @@ describe("main quota policy at native admission", () => {
         expect(result.originalResponse.status).toBe(200);
       }
       if (scenario === "retained-unknown-binding") {
-        expect(result.retainedUnknown.map((entry: { kind: string }) => entry.kind)).toEqual(["malformed", "conflicting"]);
+        expect(result.retainedUnknown.map((entry: { kind: string }) => entry.kind))
+          .toEqual(["malformed", "conflicting", "conflicting-tokens"]);
         for (const entry of result.retainedUnknown) {
           expect(entry.observed).toMatchObject({ matched: true, policy: quota });
           expect(entry.main).toMatchObject({ status: 429, hardLockError: true });

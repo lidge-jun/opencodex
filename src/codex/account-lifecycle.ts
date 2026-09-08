@@ -89,8 +89,12 @@ export function initializeMainAccountPolicyBinding(authPath: string): boolean {
   if (typeof tokens.access_token !== "string" || !tokens.access_token
     || typeof tokens.account_id !== "string" || !tokens.account_id) return false;
   if (tokens.id_token != null && typeof tokens.id_token !== "string") return false;
-  const accountId = extractAccountId(tokens.id_token, tokens.access_token) ?? (tokens.account_id || null);
-  if (!accountId || accountId !== tokens.account_id) return false;
+  const accountId = tokens.account_id;
+  // An owned file may contain an opaque bearer, but every decoded identity must agree.
+  const idTokenAccountId = extractAccountId(tokens.id_token);
+  const accessTokenAccountId = extractAccountId(undefined, tokens.access_token);
+  if ((idTokenAccountId !== undefined && idTokenAccountId !== accountId)
+    || (accessTokenAccountId !== undefined && accessTokenAccountId !== accountId)) return false;
   const previousAccountId = observedMainChatgptAccountId;
   observedMainChatgptAccountId = accountId;
   if (previousAccountId !== undefined && previousAccountId !== accountId) purgeMainCodexAccountRuntimeState();

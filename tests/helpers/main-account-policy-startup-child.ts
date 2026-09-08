@@ -5,7 +5,8 @@ import { join } from "node:path";
 interface Fixture {
   scenario: "owned-99" | "owned-98" | "foreign" | "unknown" | "recovery" | "second-listener"
     | "invalid-access-token" | "invalid-account-id" | "invalid-id-token" | "mismatched-identity" | "renewed-listener"
-    | "stage-retry" | "manual-recovery" | "stale-sweep" | "retained-unknown-binding";
+    | "stage-retry" | "manual-recovery" | "stale-sweep" | "retained-unknown-binding"
+    | "conflicting-token-identities" | "owned-opaque-99";
   accountId: string;
   bearer: string;
   originalAccountId: string;
@@ -247,9 +248,10 @@ try {
   if (fixture.scenario === "retained-unknown-binding") {
     await waitForNativeMainStartupGate();
     retainedUnknown = [];
-    for (const kind of ["malformed", "conflicting"] as const) {
+    for (const kind of ["malformed", "conflicting", "conflicting-tokens"] as const) {
       writeFileSync(manager.context.authPath, kind === "malformed" ? "{" : JSON.stringify({ tokens: {
         access_token: otherBearer, account_id: fixture.accountId,
+        ...(kind === "conflicting-tokens" ? { id_token: fixture.bearer } : {}),
       } }));
       servers.push(start());
       await waitForNativeMainStartupGate();
