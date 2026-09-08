@@ -205,6 +205,15 @@ func TestOwnershipMapMatchesDispatch(t *testing.T) {
 				continue
 			}
 			t.Run(name, func(t *testing.T) {
+				// sync/sync-cache decide from the ambient config and Codex home, so
+				// isolate them from a developer's real ~/.opencodex / ~/.codex: a
+				// readable catalog or config.toml there would route the run to the
+				// TS refresh engine (which is a Go-native state split, not an
+				// ownership delegation), and this test only asserts ownership.
+				if name == "sync" || name == "sync-cache" {
+					t.Setenv("OPENCODEX_HOME", t.TempDir())
+					t.Setenv("CODEX_HOME", t.TempDir())
+				}
 				var delegated []string
 				deps := depsFor(RuntimeState{}, &bytes.Buffer{}, &bytes.Buffer{})
 				deps.Delegate = func(args []string) (int, error) {

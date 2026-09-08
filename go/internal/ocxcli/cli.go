@@ -60,8 +60,8 @@ var Commands = []Command{
 	{Name: "ensure", Usage: "ocx ensure", Summary: "Ensure the proxy is running.", Owner: TypeScriptOwned},
 	{Name: "connect", Usage: "ocx connect <url>", Summary: "Connect to a remote hub.", Owner: TypeScriptOwned},
 	{Name: "disconnect", Usage: "ocx disconnect", Summary: "Disconnect from a remote hub.", Owner: TypeScriptOwned},
-	{Name: "sync", Usage: "ocx sync [--restart-codex]", Summary: "Sync provider models.", Owner: TypeScriptOwned},
-	{Name: "sync-cache", Usage: "ocx sync-cache [--restart-codex]", Summary: "Refresh the model cache.", Owner: TypeScriptOwned},
+	{Name: "sync", Usage: "ocx sync [--restart-codex] [--restart-desktop-app]", Summary: "Fetch provider models and inject them into Codex config.", Owner: GoOwned},
+	{Name: "sync-cache", Usage: "ocx sync-cache [--restart-codex] [--restart-desktop-app]", Summary: "Refresh Codex's model cache from the active catalog.", Owner: GoOwned},
 	{Name: "status", Usage: "ocx status", Summary: "Check proxy status.", Owner: GoOwned},
 	{Name: "doctor", Usage: "ocx doctor", Summary: "Diagnose the environment.", Owner: GoOwned},
 	{Name: "debug", Usage: "ocx debug <scope>", Summary: "Manage debug settings.", Owner: TypeScriptOwned},
@@ -241,6 +241,10 @@ func Run(args []string, deps Deps) int {
 		// Deliberately undocumented while start/service remain TypeScript-owned.
 		// This release smoke command proves the embedded artifact independently.
 		return runEmbeddedDashboard(args[1:], deps)
+	case "__catalog-khold":
+		// Deliberately undocumented test seam used by the sync-cache parity
+		// oracle to hold the K catalog write lock from the Go binary.
+		return runCatalogKHold(args[1:], deps)
 	case "--version", "-v", "version":
 		fmt.Fprintf(deps.Stdout, "opencodex %s\n", deps.Version)
 		return ExitOK
@@ -269,6 +273,10 @@ func Run(args []string, deps Deps) int {
 		return runConfig(args[1:], deps)
 	case "status":
 		return runStatus(args[1:], deps)
+	case "sync":
+		return runSync(args[1:], deps)
+	case "sync-cache":
+		return runSyncCache(args[1:], deps)
 	case "doctor":
 		return RunDoctorCommand(args[1:], deps.Stdout, deps.Stderr, DoctorCommandDeps{})
 	case "start":
@@ -340,6 +348,10 @@ func printSubcommandHelp(name string, deps Deps) int {
 				fmt.Fprintf(deps.Stdout, "Usage: %s\n\n%s\n", command.Usage, command.Summary)
 			}
 		}
+	case "sync":
+		fmt.Fprint(deps.Stdout, syncHelpText)
+	case "sync-cache":
+		fmt.Fprint(deps.Stdout, syncCacheHelpText)
 	case "config":
 		fmt.Fprint(deps.Stdout, configHelp)
 	default:

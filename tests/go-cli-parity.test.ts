@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,6 +33,49 @@ function runTs(args: string[], home = testHome): Result {
 function runGo(args: string[], home = testHome): Result {
   const result = Bun.spawnSync([goCLI!, ...args], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
   return { code: result.exitCode, stdout: new TextDecoder().decode(result.stdout), stderr: new TextDecoder().decode(result.stderr) };
+}
+// sync/sync-cache decide from CODEX_HOME as well; these runners drive both CLIs
+// against the same pair of fresh homes exactly like a real invocation would.
+function runTsAt(args: string[], home: string, codexHome: string): Result {
+  const result = Bun.spawnSync([process.execPath, "src/cli/index.ts", ...args], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home, CODEX_HOME: codexHome }, stdout: "pipe", stderr: "pipe" });
+  return { code: result.exitCode, stdout: new TextDecoder().decode(result.stdout), stderr: new TextDecoder().decode(result.stderr) };
+}
+function runGoAt(args: string[], home: string, codexHome: string): Result {
+  const result = Bun.spawnSync([goCLI!, ...args], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home, CODEX_HOME: codexHome }, stdout: "pipe", stderr: "pipe" });
+  return { code: result.exitCode, stdout: new TextDecoder().decode(result.stdout), stderr: new TextDecoder().decode(result.stderr) };
+}
+function removeKLock(codexHome: string): void {
+  // Best-effort: drop the K lock database this Codex home hashes to so the
+  // suite does not accumulate per-run artifacts under the runtime root.
+  try {
+    const uid = process.getuid?.();
+    if (uid === undefined) return;
+    const digest = createHash("sha256").update(codexHome).digest("hex");
+    const db = join(tmpdir(), `opencodex-runtime-v1-${uid}`, "catalog-write-locks", `${digest}.sqlite`);
+    rmSync(db, { force: true });
+  } catch { /* cleanup is best-effort */ }
+}
+function syncFixtureConfig(codexIntegration: boolean): string {
+  return JSON.stringify({
+    providers: {
+      fixture: {
+        adapter: "openai-chat",
+        baseUrl: "https://example.test/v1",
+        apiKey: "secret-key",
+        defaultModel: "fixture-model",
+        models: ["fixture-model", "second"],
+        contextWindow: 128000,
+      },
+    },
+    defaultProvider: "fixture",
+    ...(codexIntegration ? {} : { clientIntegrations: { codex: false } }),
+  });
+}
+function syncRowHomes(): { home: string; codexHome: string } {
+  const home = mkdtempSync(join(tmpdir(), "ocx-go-sync-parity-"));
+  const codexHome = mkdtempSync(join(tmpdir(), "ocx-go-sync-codex-"));
+  writeFileSync(join(home, "config.json"), syncFixtureConfig(true));
+  return { home, codexHome };
 }
 async function runTsAsync(args: string[], home = testHome): Promise<Result> {
   const child = Bun.spawn([process.execPath, "src/cli/index.ts", ...args], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
@@ -268,4 +312,175 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
     expect(expectParity(["usage"])).toMatchObject({ code: 1 });
     expect(expectParity(["observe", "usage"])).toMatchObject({ code: 1 });
   });
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // sync / sync-cache are Go-owned (issue #50). Both CLIs run in the same pair
+  // of fresh homes so the deterministic catalog-refresh flows produce identical
+  // bytes; the TS CLI runs first and the Go CLI second over whatever the TS run
+  // left (each flow is idempotent over the planted catalog).
+  test.each([
+    { args: ["help", "sync"] },
+    { args: ["sync", "--help"] },
+    { args: ["help", "sync-cache"] },
+    { args: ["sync-cache", "--help"] },
+  ])("diffs sync help contracts for $args", ({ args }) => {
+    testHome = mkdtempSync(join(tmpdir(), "ocx-go-sync-parity-"));
+    expectParity(args);
+  });
+  test.each([
+    { name: "integration ON with no config.toml", integration: true, toml: false, code: 1 },
+    { name: "integration OFF with a missing custom catalog path", integration: false, toml: true, code: 0 },
+  ])("diffs native terminal ocx sync flows: $name", ({ integration, toml, code }) => {
+    const { home, codexHome } = syncRowHomes();
+    writeFileSync(join(home, "config.json"), syncFixtureConfig(integration));
+    if (toml) writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "/nonexistent/custom-catalog.json"\n');
+    try {
+      const ts = runTsAt(["sync"], home, codexHome);
+      const go = runGoAt(["sync"], home, codexHome);
+      expect(go).toEqual(ts);
+      expect(ts.code).toBe(code);
+    } finally {
+      removeKLock(codexHome);
+      if (existsSync(home)) removeTreeWithRetry(home);
+      if (existsSync(codexHome)) removeTreeWithRetry(codexHome);
+    }
+  });
+  test.each([
+    { name: "mismatched client present without role", config: syncFixtureConfig(true).replace(/}$/, ',"client":{"apiKeyId":"k"}}'), code: 1 },
+    { name: "invalid runtimeRole", config: syncFixtureConfig(true).replace(/}$/, ',"runtimeRole":"weird"}'), code: 1 },
+  ])("diffs client-state refusal flows for $name", ({ config, code }) => {
+    const { home, codexHome } = syncRowHomes();
+    writeFileSync(join(home, "config.json"), config);
+    try {
+      const ts = runTsAt(["sync"], home, codexHome);
+      const go = runGoAt(["sync"], home, codexHome);
+      expect(go).toEqual(ts);
+      expect(ts.code).toBe(code);
+    } finally {
+      if (existsSync(home)) removeTreeWithRetry(home);
+      if (existsSync(codexHome)) removeTreeWithRetry(codexHome);
+    }
+  });
+  test.each([
+    { args: ["sync-cache"] },
+    { args: ["sync-cache", "--json"] },
+  ])("diffs ocx sync-cache with no catalog for $args", ({ args }) => {
+    const { home, codexHome } = syncRowHomes();
+    try {
+      const ts = runTsAt(args, home, codexHome);
+      const go = runGoAt(args, home, codexHome);
+      expect(go).toEqual(ts);
+      expect(ts).toMatchObject({ code: 0 });
+    } finally {
+      removeKLock(codexHome);
+      if (existsSync(home)) removeTreeWithRetry(home);
+      if (existsSync(codexHome)) removeTreeWithRetry(codexHome);
+    }
+  });
+  test.each([
+    { args: ["sync-cache"] },
+    { args: ["sync-cache", "--json"] },
+    { args: ["sync-cache", "--restart-codex"] },
+  ])("diffs ocx sync-cache with a planted catalog for $args", async ({ args }) => {
+    const { home, codexHome } = syncRowHomes();
+    writeFileSync(join(codexHome, "opencodex-catalog.json"), JSON.stringify({ models: [{ slug: "fixture-model", display_name: "Fixture", context_window: 128000 }] }));
+    try {
+      const ts = runTsAt(args, home, codexHome);
+      const afterTS = existsSync(join(codexHome, "models_cache.json")) ? await fileText(join(codexHome, "models_cache.json")) : null;
+      const go = runGoAt(args, home, codexHome);
+      const afterGo = existsSync(join(codexHome, "models_cache.json")) ? await fileText(join(codexHome, "models_cache.json")) : null;
+      expect(go).toEqual(ts);
+      expect(ts).toMatchObject({ code: 0 });
+      // The Go rewrite must leave the same bytes the TS CLI wrote (rollback contract).
+      expect(afterGo).toBe(afterTS);
+    } finally {
+      removeKLock(codexHome);
+      if (existsSync(home)) removeTreeWithRetry(home);
+      if (existsSync(codexHome)) removeTreeWithRetry(codexHome);
+    }
+  });
+  test("diffs ocx sync-cache --restart-desktop-app outside Windows", () => {
+    const { home, codexHome } = syncRowHomes();
+    writeFileSync(join(codexHome, "opencodex-catalog.json"), JSON.stringify({ models: [{ slug: "fixture-model" }] }));
+    try {
+      const ts = runTsAt(["sync-cache", "--restart-desktop-app"], home, codexHome);
+      const go = runGoAt(["sync-cache", "--restart-desktop-app"], home, codexHome);
+      expect(go).toEqual(ts);
+    } finally {
+      removeKLock(codexHome);
+      if (existsSync(home)) removeTreeWithRetry(home);
+      if (existsSync(codexHome)) removeTreeWithRetry(codexHome);
+    }
+  });
+  test.each([
+    { args: ["sync-cache"] },
+    { args: ["sync-cache", "--json"] },
+  ])("diffs ocx sync-cache failure taxonomy for $args", ({ args }) => {
+    const { home, codexHome } = syncRowHomes();
+    writeFileSync(join(codexHome, "opencodex-catalog.json"), "not-json{");
+    try {
+      const ts = runTsAt(args, home, codexHome);
+      const go = runGoAt(args, home, codexHome);
+      expect(go).toEqual(ts);
+      expect(ts.code).toBe(1);
+    } finally {
+      removeKLock(codexHome);
+      if (existsSync(home)) removeTreeWithRetry(home);
+      if (existsSync(codexHome)) removeTreeWithRetry(codexHome);
+    }
+  });
+  test.skipIf(process.platform !== "linux")("diffs contended catalog-write-lock behavior", async () => {
+    const { home, codexHome } = syncRowHomes();
+    writeFileSync(join(codexHome, "opencodex-catalog.json"), JSON.stringify({ models: [{ slug: "fixture-model" }] }));
+    let holder: ReturnType<typeof Bun.spawn> | undefined;
+    try {
+      holder = Bun.spawn([goCLI!, "__catalog-khold"], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home, CODEX_HOME: codexHome }, stdout: "pipe", stderr: "pipe" });
+      const reader = holder.stdout.getReader();
+      let heldOutput = "";
+      for (let i = 0; i < 300; i++) {
+        const chunk = await Promise.race([reader.read(), Bun.sleep(100).then(() => null)]);
+        if (!chunk) continue;
+        if (chunk.value) heldOutput += new TextDecoder().decode(chunk.value);
+        if (chunk.done || heldOutput.includes("HOLDING")) break;
+      }
+      expect(heldOutput).toContain("HOLDING");
+      const ts = runTsAt(["sync-cache"], home, codexHome);
+      const tsJSON = runTsAt(["sync-cache", "--json"], home, codexHome);
+      const go = runGoAt(["sync-cache"], home, codexHome);
+      const goJSON = runGoAt(["sync-cache", "--json"], home, codexHome);
+      expect(ts).toMatchObject({ code: 0, stdout: "Another process owns the catalog write; cache sync skipped.\n" });
+      expect(go).toEqual(ts);
+      expect(goJSON).toEqual(tsJSON);
+      expect(tsJSON.stdout).toContain('"reason": "busy"');
+    } finally {
+      holder?.kill();
+      await holder?.exited.catch(() => undefined);
+      removeKLock(codexHome);
+      if (existsSync(home)) removeTreeWithRetry(home);
+      if (existsSync(codexHome)) removeTreeWithRetry(codexHome);
+    }
+  });
+  test("writes byte-identical models_cache from the same catalog in both runtimes", async () => {
+    const catalog = JSON.stringify({ models: [{ slug: "gpt-5.5-codex", display_name: "Quo\"te", context_window: 128000, price: 1e21, tiny: 1e-7, nested: { a: [1, 2.5], b: null } }] });
+    const tsHome = mkdtempSync(join(tmpdir(), "ocx-go-sync-cache-ts-"));
+    const tsCodex = mkdtempSync(join(tmpdir(), "ocx-go-sync-codex-ts-"));
+    const goHome = mkdtempSync(join(tmpdir(), "ocx-go-sync-cache-go-"));
+    const goCodex = mkdtempSync(join(tmpdir(), "ocx-go-sync-codex-go-"));
+    try {
+      for (const home of [tsHome, goHome]) writeFileSync(join(home, "config.json"), syncFixtureConfig(true));
+      writeFileSync(join(tsCodex, "opencodex-catalog.json"), catalog);
+      writeFileSync(join(goCodex, "opencodex-catalog.json"), catalog);
+      const ts = runTsAt(["sync-cache"], tsHome, tsCodex);
+      const go = runGoAt(["sync-cache"], goHome, goCodex);
+      expect(go).toEqual(ts);
+      const tsCache = await fileText(join(tsCodex, "models_cache.json"));
+      const goCache = await fileText(join(goCodex, "models_cache.json"));
+      expect(goCache).toBe(tsCache);
+    } finally {
+      removeKLock(tsCodex);
+      removeKLock(goCodex);
+      for (const dir of [tsHome, tsCodex, goHome, goCodex]) if (existsSync(dir)) removeTreeWithRetry(dir);
+    }
+  });
+  async function fileText(path: string): Promise<string> { return new TextDecoder().decode(await Bun.file(path).arrayBuffer()); }
 });
