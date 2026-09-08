@@ -37,7 +37,7 @@ import {
 } from "../../responses/reasoning-replay-cache";
 import { awaitThoughtSignatureDurability, thoughtSignatureReplaySalt } from "../../responses/thought-signature-replay";
 import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractCompactUserMessages } from "../../responses/compaction";
-import { FORWARD_HEADERS, sanitizeReasoningInputContent } from "../../adapters/openai-responses";
+import { FORWARD_HEADERS, sanitizeReasoningInputContent, repairUnidentifiedToolOutputItems } from "../../adapters/openai-responses";
 import { XaiToolSchemaCompatibilityError } from "../../adapters/xai-tool-schema";
 import {
   copyPreviousResponseReplayProvenance,
@@ -3222,6 +3222,7 @@ async function handleResponsesInner(
   let parsed: OcxParsedRequest;
   let toolBridgeMaps: ReturnType<typeof buildToolBridgeMaps>;
   try {
+    body = repairUnidentifiedToolOutputItems(body, { preserveExternalTaskEnvelopes: true }) as typeof body;
     parsed = parseRequest(body);
     parsed._promptCacheKeyIsSharedCohort = options.promptCacheKeyIsSharedCohort;
     // Captured before any parser mutates it, so both grammars see the client's id.
@@ -3538,6 +3539,7 @@ async function handleResponsesInner(
       );
       if (!unreadableEncryptedAgentTask) {
         try {
+          body = repairUnidentifiedToolOutputItems(body, { preserveExternalTaskEnvelopes: true }) as typeof body;
           const reparsed = parseRequest(body);
           const kept: Array<keyof OcxParsedRequest> = [
             "_previousResponseInputExpanded",
@@ -6096,7 +6098,9 @@ async function handleResponsesInner(
           || (message as { toolCallId: string }).toolCallId.length === 0),
     );
     if (unpaired) {
-      // Never interpolate the tool output: this message reaches the client and the logs.
+      // Ordinary missing/empty call_id items are rewritten before parseRequest.
+      // Anything still unpaired here is envelope-shaped or otherwise unrepairable:
+      // fail closed without interpolating the tool output into a client-visible message.
       return formatErrorResponse(
         400,
         "invalid_request_error",

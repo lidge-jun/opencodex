@@ -2576,11 +2576,19 @@ describe("unpaired tool result boundary (#3259)", () => {
     },
   } as unknown as OcxConfig);
 
-  test("a translating adapter rejects a call_id-less tool result with 400 and sends nothing upstream", async () => {
-    let fetches = 0;
-    globalThis.fetch = (async () => {
-      fetches += 1;
-      throw new Error("the guard must reject before any upstream request");
+  test("a translating adapter converts a call_id-less tool result into user context", async () => {
+    const bodies: string[] = [];
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      bodies.push(String(init?.body ?? ""));
+      return jsonResponse({
+        id: "msg_1",
+        type: "message",
+        role: "assistant",
+        model: "claude",
+        content: [{ type: "text", text: "ok" }],
+        stop_reason: "end_turn",
+        usage: { input_tokens: 1, output_tokens: 1 },
+      });
     }) as typeof fetch;
 
     const res = await handleResponses(
@@ -2589,19 +2597,25 @@ describe("unpaired tool result boundary (#3259)", () => {
       { model: "", provider: "" },
     );
 
-    expect(res.status).toBe(400);
-    const json = await res.json() as { error?: { message?: string; type?: string; code?: string } };
-    expect(json.error?.message).toBe("tool result requires a non-empty string call_id");
-    expect(json.error?.type).toBe("invalid_request_error");
-    expect(json.error?.code).toBe("invalid_request_error");
-    // The tool output itself must never be interpolated into a client-visible message.
-    expect(JSON.stringify(json)).not.toContain("bootstrap result");
-    expect(fetches).toBe(0);
+    expect(res.status).toBe(200);
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toContain("bootstrap result");
+    expect(bodies[0]).not.toContain("undefined");
   });
 
-  test("an empty-string call_id is rejected identically (it can never pair)", async () => {
-    globalThis.fetch = (async () => {
-      throw new Error("the guard must reject before any upstream request");
+  test("an empty-string call_id is converted identically (it can never pair)", async () => {
+    const bodies: string[] = [];
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      bodies.push(String(init?.body ?? ""));
+      return jsonResponse({
+        id: "msg_1",
+        type: "message",
+        role: "assistant",
+        model: "claude",
+        content: [{ type: "text", text: "ok" }],
+        stop_reason: "end_turn",
+        usage: { input_tokens: 1, output_tokens: 1 },
+      });
     }) as typeof fetch;
 
     const res = await handleResponses(
@@ -2609,7 +2623,34 @@ describe("unpaired tool result boundary (#3259)", () => {
       anthropicConfig(),
       { model: "", provider: "" },
     );
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(200);
+    expect(bodies).toHaveLength(1);
+  });
+
+  test("a call_id-less tool_search_output is converted into user context", async () => {
+    const bodies: string[] = [];
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      bodies.push(String(init?.body ?? ""));
+      return jsonResponse({
+        id: "msg_1",
+        type: "message",
+        role: "assistant",
+        model: "claude",
+        content: [{ type: "text", text: "ok" }],
+        stop_reason: "end_turn",
+        usage: { input_tokens: 1, output_tokens: 1 },
+      });
+    }) as typeof fetch;
+
+    const res = await handleResponses(
+      compactionRequest(unpairedBody({ type: "tool_search_output", status: "failed" })),
+      anthropicConfig(),
+      { model: "", provider: "" },
+    );
+    expect(res.status).toBe(200);
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toContain("failed");
+    expect(bodies[0]).not.toContain("undefined");
   });
 
   test("a paired tool result on the same translating route still reaches the upstream", async () => {

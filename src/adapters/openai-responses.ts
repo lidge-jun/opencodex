@@ -1014,14 +1014,31 @@ function annotateEmptyResponsesToolOutputs(body: unknown, enabled: boolean): unk
  * call lives behind `previous_response_id`, so ordinary orphan repair cannot run universally.
  * A missing or empty `call_id`, however, cannot identify stored state on any destination.
  */
-function repairUnidentifiedToolOutputItems(body: unknown): unknown {
+export function repairUnidentifiedToolOutputItems(
+  body: unknown,
+  options?: { preserveExternalTaskEnvelopes?: boolean },
+): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
   let changed = false;
   const input = body.input.map(item => {
-    if (!isPlainObject(item)
-      || (item.type !== "function_call_output" && item.type !== "custom_tool_call_output")
-      || (typeof item.call_id === "string" && item.call_id.length > 0)) {
+    if (!isPlainObject(item)) return item;
+    const isToolOutput = item.type === "function_call_output" || item.type === "custom_tool_call_output" || item.type === "tool_search_output";
+    if (!isToolOutput) return item;
+    const hasValidCallId = typeof item.call_id === "string" && item.call_id.length > 0;
+    if (hasValidCallId) return item;
+    // Translating parse-time repair must leave Codex external-task envelopes alone so
+    // the parser can admit complete ones and fail closed on invalid ones. Passthrough
+    // still converts the raw item because it never reads parsed messages.
+    if (options?.preserveExternalTaskEnvelopes && "id" in item && "name" in item && "namespace" in item) {
       return item;
+    }
+    if (item.type === "tool_search_output") {
+      changed = true;
+      return {
+        type: "message",
+        role: "user",
+        content: orphanedToolOutputContent(item.error || item.status || "tool_search"),
+      };
     }
     if (!isRepairableToolOutput(item.output)) return item;
     changed = true;
