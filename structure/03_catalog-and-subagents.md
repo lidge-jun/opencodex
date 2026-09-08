@@ -475,7 +475,10 @@ custom `injectionPrompt` bodies. The built-in text reports the resolved preferre
 effort, roster and fallback chain without prescribing delegation, spawn overrides or
 `fork_turns`. Custom bodies retain their placeholder behavior. The guidance switch and
 catalog-state gates still apply; stale or unknown catalog state suppresses proxy guidance.
-V1 retains its `<multi_agent_mode>` proactive text at `max` or `ultra`.
+V1 uses the shared `MULTI_AGENT_MODE_HINT_RECOMMENDATION.text` inside `<multi_agent_mode>`
+at `max` or `ultra`. Only the separate explicit delegation-request trigger changes; user,
+authority, task-scope and collaboration-tool rules remain applicable. This is guidance,
+not an enforcement mechanism or a change to native settings or tool access.
 
 Replay deduplication compares the latest exact generated developer text separately for
 each tag family, preserving built-in → custom → built-in transitions without duplicating

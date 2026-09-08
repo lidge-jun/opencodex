@@ -94,8 +94,9 @@ rehberlik yalnızca tercih edilen bir model, uygun kadro veya geri dönüş zinc
 istem oluşturmak için yeterlidir; yalın bir değer benzersiz şekilde
 çözümlenemezse `{{model}}` boş bir dizeye genişler.
 
-v1'de opencodex yalnızca `max` veya `ultra` çabada yukarı akış tarzı proaktif
-yetkilendirme rehberliğini enjekte eder. v1'de tercih edilen bir model, kadro,
+v1'de opencodex, yalnızca `max` veya `ultra` çaba düzeylerinde v2'nin önerilen ön ayarıyla aynı proaktif görev devri metnini enjekte eder.
+Yalnızca tetikleme koşulu değişir: ayrıca görev devri talep edilmesi gerekmez; kullanıcı talimatları, yetkiler, görev kapsamı ve iş birliği araçlarının kuralları geçerliliğini korur.
+v1'de tercih edilen bir model, kadro,
 geri dönüş listesi veya özel istem eklemez.
 
 Varsayılan olarak kapalı olan `syncCodexSubagentDefaults` seçeneği rehberlikten

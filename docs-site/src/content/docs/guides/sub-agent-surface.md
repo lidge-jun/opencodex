@@ -99,8 +99,10 @@ when a preferred model, eligible roster, or fallback chain resolves. A configure
 is sufficient to render a custom prompt; if a bare value cannot resolve uniquely, `{{model}}`
 expands to an empty string.
 
-On v1, opencodex injects only the upstream-style proactive delegation guidance at `max` or `ultra`
-effort. It does not add a preferred model, roster, fallback list, or custom prompt on v1.
+On v1, opencodex injects the same proactive delegation guidance as the v2 recommended preset only
+at `max` or `ultra` effort. Only the delegation trigger changes: no separate delegation request is
+needed; user instructions, authority, task scope, and collaboration-tool rules still apply.
+It does not add a preferred model, roster, fallback list, or custom prompt on v1.
 
 The default-off `syncCodexSubagentDefaults` option is separate from guidance. When opencodex owns
 active Codex routing, sync or restart can write the selected values as marker-owned
