@@ -27,10 +27,10 @@ const comboUsage = `Usage:
 const comboStrategiesError = "--strategy must be failover, round-robin, random, least-used, or reset-window"
 
 type comboRow struct {
-	id       string
-	idOK     bool
-	model    string
-	modelOK  bool
+	id                 string
+	idOK               bool
+	model              string
+	modelOK            bool
 	imageInputDisabled bool
 }
 
@@ -103,12 +103,9 @@ func runComboList(args []string, deps Deps) int {
 	if len(rest) != 0 {
 		return routingUsageError(deps, routingUnexpectedArgs(rest), comboUsage)
 	}
-	value, rawText, status, err := routingRoundTrip(deps, http.MethodGet, "/api/combos", nil)
-	if err == nil {
-		err = routingErrorFromRoundTrip(value, rawText, status)
-	}
+	value, rawText, err := routingDo(deps, http.MethodGet, "/api/combos", nil)
 	if err != nil {
-		return routingReportError(deps, err.(routingAPIError))
+		return routingReportErrorFrom(deps, err)
 	}
 	rows := comboListRows(value)
 	var lines []string
@@ -142,12 +139,9 @@ func runComboShow(args []string, deps Deps) int {
 	if len(rest) != 0 {
 		return routingUsageError(deps, routingUnexpectedArgs(rest), comboUsage)
 	}
-	value, rawText, status, err := routingRoundTrip(deps, http.MethodGet, "/api/combos", nil)
-	if err == nil {
-		err = routingErrorFromRoundTrip(value, rawText, status)
-	}
+	value, _, err := routingDo(deps, http.MethodGet, "/api/combos", nil)
 	if err != nil {
-		return routingReportError(deps, err.(routingAPIError))
+		return routingReportErrorFrom(deps, err)
 	}
 	if row := comboRowForID(value, id); row != nil {
 		// printData without human lines prints the row as JSON even without
@@ -258,12 +252,9 @@ func runComboSet(args []string, deps Deps) int {
 	if renameFromGiven {
 		existingKey = renameFrom
 	}
-	current, rawText, status, getErr := routingRoundTrip(deps, http.MethodGet, "/api/combos", nil)
-	if getErr == nil {
-		getErr = routingErrorFromRoundTrip(current, rawText, status)
-	}
-	if getErr != nil {
-		return routingReportError(deps, getErr.(routingAPIError))
+	current, rawText, err := routingDo(deps, http.MethodGet, "/api/combos", nil)
+	if err != nil {
+		return routingReportErrorFrom(deps, err)
 	}
 	for _, row := range comboListRows(current) {
 		if row.id == existingKey && row.imageInputDisabled {
@@ -275,12 +266,9 @@ func runComboSet(args []string, deps Deps) int {
 		fmt.Fprintln(deps.Stderr, "Error: "+encodeErr.Error())
 		return ExitFailure
 	}
-	value, rawText, status, putErr := routingRoundTrip(deps, http.MethodPut, "/api/combos", encoded)
-	if putErr == nil {
-		putErr = routingErrorFromRoundTrip(value, rawText, status)
-	}
-	if putErr != nil {
-		return routingReportError(deps, putErr.(routingAPIError))
+	value, rawText, err := routingDo(deps, http.MethodPut, "/api/combos", encoded)
+	if err != nil {
+		return routingReportErrorFrom(deps, err)
 	}
 	routingPrintData(deps, value, rawText, jsonOutput, []string{"Saved combo " + id + "."})
 	return ExitOK
@@ -411,12 +399,9 @@ func runComboRemove(args []string, deps Deps) int {
 		return routingUsageError(deps, routingUnexpectedArgs(rest), comboUsage)
 	}
 	path := "/api/combos?id=" + routingEncodePathComponent(id)
-	value, rawText, status, err := routingRoundTrip(deps, http.MethodDelete, path, nil)
-	if err == nil {
-		err = routingErrorFromRoundTrip(value, rawText, status)
-	}
+	value, rawText, err := routingDo(deps, http.MethodDelete, path, nil)
 	if err != nil {
-		return routingReportError(deps, err.(routingAPIError))
+		return routingReportErrorFrom(deps, err)
 	}
 	routingPrintData(deps, value, rawText, jsonOutput, []string{"Removed combo " + id + "."})
 	return ExitOK

@@ -16,6 +16,7 @@ package ocxcli
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -165,6 +166,32 @@ func routingRoundTrip(deps Deps, method, path string, body []byte) (*jsonwire.Va
 // usage_command.go port of the same helper).
 func routingResponseMessage(body *jsonwire.Value, rawText string, status int) string {
 	return usageResponseMessage(body, rawText, status)
+}
+
+// routingDo runs one management request and folds a non-2xx response into the
+// RuntimeApiError taxonomy, so call sites never repeat the status check that
+// runtimeRequest centralizes on the TypeScript side. Discovery and transport
+// failures already surface as routingAPIError from routingRoundTrip.
+func routingDo(deps Deps, method, path string, body []byte) (*jsonwire.Value, string, error) {
+	value, rawText, status, err := routingRoundTrip(deps, method, path, body)
+	if err == nil {
+		err = routingErrorFromRoundTrip(value, rawText, status)
+	}
+	return value, rawText, err
+}
+
+// routingReportErrorFrom reports any error a routingDo call returned through
+// the taxonomy (routingReportError picks the exit code from the status). An
+// unknown error kind — a future call site adding a non-taxonomy error without
+// updating this helper — degrades to the generic failure instead of panicking
+// on a type assertion.
+func routingReportErrorFrom(deps Deps, err error) int {
+	var apiErr routingAPIError
+	if errors.As(err, &apiErr) {
+		return routingReportError(deps, apiErr)
+	}
+	fmt.Fprintln(deps.Stderr, "Error: "+err.Error())
+	return ExitFailure
 }
 
 // routingReportError mirrors a RuntimeApiError reaching runCliAction: the

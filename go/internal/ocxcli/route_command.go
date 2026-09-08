@@ -133,12 +133,9 @@ func runRoutePolicyList(args []string, deps Deps) int {
 	if len(rest) != 0 {
 		return routingUsageError(deps, routingUnexpectedArgs(rest), routePolicyUsage)
 	}
-	value, rawText, status, err := routingRoundTrip(deps, http.MethodGet, "/api/routing-profiles", nil)
-	if err == nil {
-		err = routingErrorFromRoundTrip(value, rawText, status)
-	}
+	value, rawText, err := routingDo(deps, http.MethodGet, "/api/routing-profiles", nil)
 	if err != nil {
-		return routingReportError(deps, err.(routingAPIError))
+		return routingReportErrorFrom(deps, err)
 	}
 	rows := profileRows(value)
 	var lines []string
@@ -170,12 +167,9 @@ func runRoutePolicyShow(args []string, deps Deps) int {
 	if len(rest) != 0 {
 		return routingUsageError(deps, routingUnexpectedArgs(rest), routePolicyUsage)
 	}
-	value, rawText, status, err := routingRoundTrip(deps, http.MethodGet, "/api/routing-profiles", nil)
-	if err == nil {
-		err = routingErrorFromRoundTrip(value, rawText, status)
-	}
+	value, _, err := routingDo(deps, http.MethodGet, "/api/routing-profiles", nil)
 	if err != nil {
-		return routingReportError(deps, err.(routingAPIError))
+		return routingReportErrorFrom(deps, err)
 	}
 	for _, row := range profileRows(value) {
 		if row.id == id {
@@ -228,12 +222,9 @@ func runRoutePolicyDryRun(args []string, deps Deps) int {
 		fmt.Fprintln(deps.Stderr, "Error: "+encodeErr.Error())
 		return ExitFailure
 	}
-	value, rawText, status, roundErr := routingRoundTrip(deps, http.MethodPost, "/api/routing-profiles/dry-run", encoded)
-	if roundErr == nil {
-		roundErr = routingErrorFromRoundTrip(value, rawText, status)
-	}
-	if roundErr != nil {
-		return routingReportError(deps, roundErr.(routingAPIError))
+	value, rawText, err := routingDo(deps, http.MethodPost, "/api/routing-profiles/dry-run", encoded)
+	if err != nil {
+		return routingReportErrorFrom(deps, err)
 	}
 	// The policy commands always print the decision as JSON, --json or not.
 	routingPrintData(deps, value, rawText, jsonOutput, nil)

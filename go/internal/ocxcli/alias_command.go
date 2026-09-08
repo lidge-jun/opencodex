@@ -76,12 +76,9 @@ func runAliasList(args []string, jsonOutput bool, deps Deps) int {
 	if len(rest) != 0 {
 		return routingUsageError(deps, routingUnexpectedArgs(rest), aliasUsage)
 	}
-	value, rawText, status, err := routingRoundTrip(deps, http.MethodGet, "/api/aliases", nil)
-	if err == nil {
-		err = routingErrorFromRoundTrip(value, rawText, status)
-	}
+	value, rawText, err := routingDo(deps, http.MethodGet, "/api/aliases", nil)
 	if err != nil {
-		return routingReportError(deps, err.(routingAPIError))
+		return routingReportErrorFrom(deps, err)
 	}
 	lines := aliasLines(value)
 	if len(lines) == 0 {
@@ -151,12 +148,9 @@ func runAliasDefaults(args []string, jsonOutput bool, deps Deps) int {
 		fmt.Fprintln(deps.Stderr, "Error: "+encodeErr.Error())
 		return ExitFailure
 	}
-	value, rawText, status, roundErr := routingRoundTrip(deps, http.MethodPut, "/api/default-aliases", encoded)
-	if roundErr == nil {
-		roundErr = routingErrorFromRoundTrip(value, rawText, status)
-	}
-	if roundErr != nil {
-		return routingReportError(deps, roundErr.(routingAPIError))
+	value, rawText, err := routingDo(deps, http.MethodPut, "/api/default-aliases", encoded)
+	if err != nil {
+		return routingReportErrorFrom(deps, err)
 	}
 	scope := " globally"
 	if providerGiven {
@@ -222,12 +216,9 @@ func routingAliasWrite(deps Deps, path string, body *jsonwire.Value, jsonOutput 
 		fmt.Fprintln(deps.Stderr, "Error: "+encodeErr.Error())
 		return ExitFailure
 	}
-	value, rawText, status, err := routingRoundTrip(deps, http.MethodPut, path, encoded)
-	if err == nil {
-		err = routingErrorFromRoundTrip(value, rawText, status)
-	}
+	value, rawText, err := routingDo(deps, http.MethodPut, path, encoded)
 	if err != nil {
-		return routingReportError(deps, err.(routingAPIError))
+		return routingReportErrorFrom(deps, err)
 	}
 	routingPrintData(deps, value, rawText, jsonOutput, []string{line})
 	return ExitOK
