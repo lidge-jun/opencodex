@@ -11,6 +11,8 @@ import {
 } from "../../src/server/sse-payload-rewrite";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 import { relaySseWithFailedTail } from "../../src/server/relay";
+import { demaskGuardrailsText, maskGuardrailsText } from "../../src/guardrails/placeholders";
+import { guardrailsSseDemaskRewrite } from "../../src/guardrails/sse-demask";
 
 function streamFromText(text: string): ReadableStream<Uint8Array> {
   const chunk = new TextEncoder().encode(text);
@@ -282,6 +284,55 @@ describe("SSE payload rewrite composition", () => {
     await expect(reader.read()).rejects.toBe(failure);
     expect(budget.snapshot().currentBytes).toBe(0);
     budget.dispose();
+  });
+
+  test("source errors deliver the held Guardrails masked flush before the original error", async () => {
+    const secret = "synthetic-private-value";
+    const masked = maskGuardrailsText(secret, [{
+      ruleId: "synthetic.secret", dataType: 1, placeholderType: "SECRET",
+      start: 0, end: secret.length, value: secret,
+    }]);
+    const delta = `data: ${JSON.stringify({
+      type: "response.output_text.delta", item_id: "message-held", output_index: 0,
+      content_index: 0, delta: masked.maskedText,
+    })}`;
+    const guard = guardrailsSseDemaskRewrite(masked.state, payload => demaskGuardrailsText(payload, masked.state));
+    const failure = new Error("synthetic source failure after held restoration");
+    const budget = createTestTranslatorBudget();
+    let reads = 0;
+    let heldBlocks = 0;
+    let disposals = 0;
+    const source = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (reads++ === 0) controller.enqueue(new TextEncoder().encode(`${delta}\n\n`));
+        else controller.error(failure);
+      },
+    });
+    const rewrite = Object.assign((block: string) => {
+      const output = guard(block);
+      expect(output).toEqual([]);
+      heldBlocks++;
+      return output;
+    }, {
+      flush: () => guard.flush?.() ?? [],
+      dispose: () => { disposals++; guard.dispose?.(); },
+    });
+    const reader = relaySseWithBlockRewrite(source, rewrite, budget).getReader();
+    try {
+      const first = await reader.read();
+      expect(heldBlocks).toBe(1);
+      expect(first.done).toBe(false);
+      const wire = new TextDecoder().decode(first.value);
+      expect(wire).toBe(`${delta}\n\n`);
+      expect(wire).not.toContain(secret);
+      await expect(reader.read()).rejects.toBe(failure);
+      expect(disposals).toBe(1);
+      expect(guard.flush?.()).toEqual([]);
+      expect(budget.snapshot().currentBytes).toBe(0);
+    } finally {
+      reader.releaseLock();
+      budget.dispose();
+    }
   });
   test.each(["resolve", "reject"] as const)(
     "surfaces a rewrite failure before tee cancellation can %s",

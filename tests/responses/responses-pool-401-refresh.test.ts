@@ -1078,6 +1078,27 @@ describe("stored pool 401 replay then encrypted combo recovery", () => {
     expect(snapshot).not.toContain(payload.id!);
   });
 
+  test("stored replay returns recovered Guardrails capacity failure without a backup send", async () => {
+    writeWorkAndOtherAccounts();
+    const headers = codexHeaders();
+    const cfg = encryptedRecoveryComboConfig({ extraCanonical: true });
+    cfg.guardrails = { enabled: true, mode: "enforce", failurePolicy: "block" };
+    const harness = installHarness({
+      responseForSend: (authorization, _sendNumber, url) => storedReplay401(authorization, url),
+      recovery: () => new Response(recoverySse("r".repeat(140 * 1024)), {
+        headers: { "content-type": "text/event-stream" },
+      }),
+    });
+    const response = await postEncryptedCombo(cfg, headers);
+    expect(harness.refreshes).toEqual(["refresh-grant"]);
+    expect(harness.sends).toEqual(["Bearer rejected-access", "Bearer refreshed-access"]);
+    expect(harness.recoveryAuths).toEqual([headers.get("authorization")]);
+    expect(harness.backupBodies).toHaveLength(0);
+    expect(harness.canonicalAliasSends).toBe(0);
+    expect(response.status).toBe(413);
+    expect(await response.json()).toMatchObject({ error: { code: "guardrails_capacity_exceeded" } });
+  });
+
   test("skips another canonical alias before the independently routed backup", async () => {
     writeWorkAndOtherAccounts();
     const headers = codexHeaders();

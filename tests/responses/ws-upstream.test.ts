@@ -524,6 +524,7 @@ describe("handleResponses Codex WS relay selection", () => {
   // `blockRewrites`, so observing its transformation is what proves
   // `clientBlockRewrite !== undefined`, hence `needsClientRewrite === true`.
   test("the registered rewrite chain transforms the client stream, so needsClientRewrite is true", async () => {
+    installFake(ws => ws.close());
     const upstreamEvent = {
       type: "response.completed",
       response: {
@@ -553,6 +554,8 @@ describe("handleResponses Codex WS relay selection", () => {
       .map(line => JSON.parse(line.slice("data: ".length)))
       .find(event => event.type === "response.completed");
 
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(FakeWebSocket.instances[0]!.closed).toBe(true);
     expect(payload).toBeDefined();
     // Absent on the wire, present to the client: the chain ran.
     expect(payload.response.output[0].content[0]).toHaveProperty("annotations");

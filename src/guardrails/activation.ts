@@ -12,6 +12,7 @@ type DeepReadonly<T> = T extends (...args: never[]) => unknown
       : T;
 
 export type CapturedGuardrailsPolicy = DeepReadonly<OcxGuardrailsConfig>;
+const disabledPolicy: CapturedGuardrailsPolicy = Object.freeze({ enabled: false });
 
 const defaultRuntimeModuleLoader = (): Promise<GuardrailsRuntimeModule> => import("./runtime");
 let runtimeModuleLoader = defaultRuntimeModuleLoader;
@@ -30,13 +31,13 @@ function runtimePolicyConfig(captured: CapturedGuardrailsPolicy): OcxGuardrailsC
   return captured as OcxGuardrailsConfig;
 }
 
-/** Capture enabled Guardrails intent once, detached from later live-config mutations. */
+/** Capture Guardrails intent, including disabled admission, independently of later live config. */
 export function captureGuardrailsPolicy(
   config: OcxConfig,
-): CapturedGuardrailsPolicy | undefined {
+): CapturedGuardrailsPolicy {
   return config.guardrails?.enabled === true
     ? deepFreeze(structuredClone(config.guardrails))
-    : undefined;
+    : disabledPolicy;
 }
 
 /**
@@ -47,7 +48,7 @@ export function guardrailsPolicyProtectsProvider(
   captured: CapturedGuardrailsPolicy | undefined,
   providerId: string | undefined,
 ): boolean {
-  if (!captured) return false;
+  if (captured?.enabled !== true) return false;
   if (captured.providerScope?.mode !== "selected") return true;
   if (providerId === undefined || !isValidGuardrailsProviderId(providerId)) return true;
   return captured.providerScope.providerIds.includes(providerId);

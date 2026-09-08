@@ -2,8 +2,9 @@ import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { handleChatCompletions } from "../../src/server/chat-completions";
 import { handleResponsesCompact, clearCompactHandoffRoutesForTests } from "../../src/server/responses/compact";
 import { translatorObservedBufferSnapshot } from "../../src/lib/translator-budget";
-import { clearGuardrailsCompactContinuationsForTests } from "../../src/guardrails/compact-continuations";
-import { clearGuardrailsContinuationsForTests } from "../../src/guardrails/continuations";
+import { clearGuardrailsCompactContinuationsForTests, retainGuardrailsCompactContinuation } from "../../src/guardrails/compact-continuations";
+import { clearGuardrailsContinuationsForTests, createGuardrailsContinuationScope } from "../../src/guardrails/continuations";
+import { sessionLaneIdFromRequest } from "../../src/server/request-log-conversation";
 import { clearResponseStateForTests, rememberResponseState } from "../../src/responses/state";
 import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
@@ -11,6 +12,7 @@ import { resetAgentTaskRecoveryState } from "../../src/server/responses/agent-ta
 import { codexHeaders, encryptedInput, fakeChatGptJwt, post, providerResponse, recoverySse, routedConfig } from "../helpers/agent-task-recovery";
 import { INTERNAL_DEADLINE_MS, SERVER_BUDGET_MS } from "../helpers/test-budget";
 import { clearComboTargetCooldowns } from "../../src/combos/failover";
+import { setGuardrailsRuntimeModuleLoaderForTests } from "../../src/guardrails/activation";
 import type { OcxConfig } from "../../src/types";
 
 setDefaultTimeout(15_000);
@@ -20,6 +22,7 @@ const PLACEHOLDER = "<STRIPE_ACCESS_TOKEN_1>";
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  setGuardrailsRuntimeModuleLoaderForTests();
   clearGuardrailsCompactContinuationsForTests();
   clearGuardrailsContinuationsForTests();
   clearCompactHandoffRoutesForTests();
@@ -107,9 +110,15 @@ test.each(["completed", "incomplete", "disabled", "excluded"] as const)(
   },
 );
 
-test.each(["enforced", "excluded"] as const)("native compact 404 retains captured %s policy through hot reload", async mode => {
+test.each(["enforced", "excluded", "disabled"] as const)("native compact 404 retains captured %s policy through hot reload", async mode => {
   const cfg = config();
   if (mode === "excluded") cfg.guardrails!.providerScope = { mode: "selected", providerIds: ["elsewhere"] };
+  if (mode === "disabled") cfg.guardrails = { enabled: false };
+  let runtimeLoads = 0;
+  if (mode !== "enforced") setGuardrailsRuntimeModuleLoaderForTests(async () => {
+    runtimeLoads++;
+    throw new Error("Excluded or disabled admission must not load RE2");
+  });
   const token = mode === "enforced" ? PLACEHOLDER : SECRET;
   const calls: Array<{ url: string; body: string }> = [];
   globalThis.fetch = (async (input, init) => {
@@ -133,6 +142,66 @@ test.each(["enforced", "excluded"] as const)("native compact 404 retains capture
   }
   expect(result).toContain(token);
   if (mode === "enforced") expect(result).not.toContain(SECRET);
+  expect(runtimeLoads).toBe(0);
+});
+
+test.each(["mixed", "all-excluded"] as const)("unchecked-first compact combo uses whole-combo %s admission", async scope => {
+  const cfg = config();
+  cfg.providers = Object.fromEntries(["unchecked", "checked"].map(name => [name, {
+    adapter: "openai-chat" as const, baseUrl: `https://${name}.example/v1`, apiKey: "synthetic-key",
+  }]));
+  cfg.defaultProvider = "unchecked";
+  cfg.combos = { compact: { strategy: "failover", targets: [
+    { provider: "unchecked", model: "model" }, { provider: "checked", model: "model" },
+  ] } };
+  cfg.guardrails!.providerScope = { mode: "selected", providerIds: scope === "mixed" ? ["checked"] : [] };
+  let runtimeLoads = 0;
+  if (scope === "all-excluded") setGuardrailsRuntimeModuleLoaderForTests(async () => {
+    runtimeLoads++;
+    throw new Error("An all-excluded combo must not load RE2");
+  });
+  const token = scope === "mixed" ? PLACEHOLDER : SECRET;
+  const calls: Array<{ host: string; body: string }> = [];
+  globalThis.fetch = (async (input, init) => {
+    const host = new URL(String(input)).hostname;
+    calls.push({ host, body: String(init?.body) });
+    if (host === "unchecked.example") return Response.json({ error: { message: "candidate unavailable" } }, { status: 404 });
+    const frames = [
+      { index: 0, delta: { role: "assistant", content: `summary ${token}` }, finish_reason: null },
+      { index: 0, delta: {}, finish_reason: "stop" },
+    ].map(choice => `data: ${JSON.stringify({
+      id: "chatcmpl-compact-scope", object: "chat.completion.chunk", model: "model", choices: [choice],
+    })}\n\n`).join("");
+    return new Response(`${frames}data: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } });
+  }) as typeof fetch;
+  const compactRequest = new Request("http://localhost/v1/responses/compact", {
+    method: "POST", headers: { "content-type": "application/json", session_id: "guardrails-compact-scope" },
+    body: JSON.stringify({ model: "combo/compact", input: [{ role: "user", content: SECRET }] }),
+  });
+  const response = await handleResponsesCompact(compactRequest, cfg, { model: "", provider: "", admissionKind: "loopback" });
+  for (const call of calls) {
+    expect(call.body).toContain(token);
+    if (scope === "mixed") expect(call.body).not.toContain(SECRET);
+  }
+  expect(calls.map(call => call.host)).toEqual(["unchecked.example", "checked.example"]);
+  expect(response.status).toBe(200);
+  const payload = await response.json() as { output: unknown[] };
+  const retained = retainGuardrailsCompactContinuation(payload.output, createGuardrailsContinuationScope(
+    "loopback", undefined, sessionLaneIdFromRequest(compactRequest.headers),
+  ));
+  try {
+    if (scope === "mixed") {
+      expect(retained?.state.replacements).toEqual(expect.arrayContaining([
+        expect.objectContaining({ original: SECRET, placeholder: PLACEHOLDER }),
+      ]));
+    } else expect(retained).toBeUndefined();
+  } finally {
+    retained?.release();
+  }
+  const result = JSON.stringify(payload);
+  expect(result).toContain(`summary ${token}`);
+  if (scope === "mixed") expect(result).not.toContain(SECRET);
+  expect(runtimeLoads).toBe(0);
 });
 
 test.each(["xai/grok-4.5", "combo/recovery", "combo/native-recovery"])("cached encrypted-task recovery is rescanned before every %s send", async model => {
@@ -197,6 +266,35 @@ test.each(["block", "passthrough"] as const)("combo recovered-task capacity fail
     expect(bodies[0]).toContain(SECRET);
     expect(bodies[0]).not.toContain(PLACEHOLDER);
   }
+});
+
+test("native combo failure returns the recovered Guardrails capacity error before routed dispatch", async () => {
+  const cfg = routedConfig();
+  cfg.guardrails = { enabled: true, mode: "enforce", failurePolicy: "block" };
+  cfg.combos = { recovery: { strategy: "failover", targets: [
+    { provider: "openai", model: "gpt-5.5" }, { provider: "xai", model: "grok-4.5" },
+  ] } };
+  let nativeSends = 0;
+  let recoveries = 0;
+  let routedSends = 0;
+  globalThis.fetch = (async (input, init) => {
+    if (!String(input).includes("chatgpt.com")) {
+      routedSends++;
+      return providerResponse();
+    }
+    if (String(init?.body).includes("capture_assignment")) {
+      recoveries++;
+      return new Response(recoverySse("r".repeat(140 * 1024)), { headers: { "content-type": "text/event-stream" } });
+    }
+    nativeSends++;
+    return Response.json({ error: { message: "model is not enabled for this account", code: "model_not_found" } }, { status: 401 });
+  }) as typeof fetch;
+  const response = await post(cfg, "combo/recovery", encryptedInput(), codexHeaders());
+  expect(nativeSends).toBe(1);
+  expect(recoveries).toBe(1);
+  expect(routedSends).toBe(0);
+  expect(response.status).toBe(413);
+  expect(await response.json()).toMatchObject({ error: { code: "guardrails_capacity_exceeded" } });
 });
 
 async function openSocket(url: URL): Promise<WebSocket> {
