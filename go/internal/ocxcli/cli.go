@@ -71,6 +71,13 @@ var Commands = []Command{
 	// bound pairing-grant capability the dashboard uses, and the bare command
 	// opens the dashboard URL of the attested live proxy.
 	{Name: "gui", Usage: "ocx gui", Summary: "Open the dashboard.", Owner: GoOwned},
+	// update and v2 stay TypeScript-owned (issue #54 remainder, recorded):
+	// `ocx update` performs a network release fetch + in-place self-replace, so
+	// no hermetic byte-diff oracle can drive it; `ocx v2` reads AND writes the
+	// upstream Codex config.toml (feature toggles, threads, subagent
+	// instructions) and resyncs the catalog through the live proxy, so a Go
+	// port would need a byte-exact TOML reader/writer plus a catalog oracle
+	// before a flip could claim parity. Both are a documented follow-up batch.
 	{Name: "update", Usage: "ocx update [--tag <tag>]", Summary: "Update OpenCodex.", Owner: TypeScriptOwned},
 	{Name: "restart", Usage: "ocx restart", Summary: "Restart the proxy.", Owner: TypeScriptOwned},
 	{Name: "v2", Usage: "ocx v2 <sub>", Summary: "Manage the v2 surface.", Owner: TypeScriptOwned},
@@ -102,6 +109,18 @@ var Commands = []Command{
 	// normalizer and writes share the SQLite generation transaction.
 	{Name: "config", Usage: "ocx config <sub>", Summary: "Manage configuration.", Owner: GoOwned},
 	{Name: "lab", Usage: "ocx lab <sub>", Summary: "Inspect Compatibility Lab.", Owner: TypeScriptOwned},
+	// claude and opencode stay TypeScript-owned (issue #54 remainder, recorded):
+	// both are launchers, but unlike mcode/mmx their launch env is assembled by
+	// whole auth/credential subsystems - claude resolves subscription vs
+	// proxy-auth mode (src/claude/auth-detect + auth-mode, launcher-context
+	// parent-env provenance, gateway-cache refresh, agents-inject writes under
+	// ~/.claude) and opencode merges V1/V2 runtime provider blocks into a
+	// project JSONC config with a live model catalog. A byte-faithful port
+	// would need every one of those subsystems plus a live-server oracle; an
+	// approximate env assembly would silently break real subscription auth,
+	// which is a release blocker under MAINTAINERS review rules, so they stay
+	// on the TypeScript side as a dedicated follow-up batch until a parity
+	// harness for the auth/env surface exists.
 	{Name: "claude", Usage: "ocx claude [args...]", Summary: "Launch Claude Code.", Owner: TypeScriptOwned},
 	{Name: "opencode", Usage: "ocx opencode [args...]", Summary: "Launch opencode.", Owner: TypeScriptOwned},
 	// The MiniMax and ZCode families are Go-owned (issue #54 launcher slice):
