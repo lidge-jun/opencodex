@@ -44,6 +44,7 @@ const (
 type Command struct {
 	Name, Usage, Summary string
 	Aliases              []string
+	Details              []string
 	Owner                Ownership
 }
 
@@ -81,14 +82,18 @@ var Commands = []Command{
 	{Name: "combo", Usage: "ocx combo <sub>", Summary: "Manage combo routing.", Owner: TypeScriptOwned},
 	{Name: "agent", Usage: "ocx agent <sub>", Summary: "Manage agents.", Owner: TypeScriptOwned},
 	{Name: "observe", Usage: "ocx observe <sub>", Summary: "Inspect runtime observations.", Owner: TypeScriptOwned},
-	{Name: "inspect", Usage: "ocx inspect <sub>", Summary: "Inspect effective state.", Owner: TypeScriptOwned},
+	// The management-read aliases logs/memory/inspect are Go-owned (issue #45):
+	// they project local state through the management API with byte-identical
+	// output and keep the runtime-api error taxonomy. observe's own spellings
+	// and usage stay on their existing owners until each carries its own oracle.
+	{Name: "inspect", Usage: "ocx inspect <config|catalog|routing-analytics|pacing|key-providers|codex-prompt|client-config|star|windows-tray> ...", Summary: "Read effective config, catalog, analytics, pacing, and the generated client-config snippet.", Details: []string{"`inspect star` reads the repository star status only. Starring uses your GitHub identity and is available from the dashboard alone."}, Owner: GoOwned},
 	{Name: "route", Usage: "ocx route <sub>", Summary: "Manage routing.", Owner: TypeScriptOwned},
-	{Name: "logs", Usage: "ocx logs [filters]", Summary: "Read logs.", Owner: TypeScriptOwned},
+	{Name: "logs", Usage: "ocx logs [filters] [--follow] [--json|--jsonl]", Summary: "Alias of ocx observe logs.", Owner: GoOwned},
 	// usage is Go-owned (the /api/usage read plus its renderer); observe keeps
 	// its other subcommands TypeScript-owned until each carries an oracle.
 	{Name: "usage", Usage: "ocx usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--json]", Summary: "Alias of ocx observe usage.", Owner: GoOwned},
 	{Name: "storage", Usage: "ocx storage <sub>", Summary: "Manage storage.", Owner: TypeScriptOwned},
-	{Name: "memory", Usage: "ocx memory [--json]", Summary: "Inspect memory.", Owner: TypeScriptOwned},
+	{Name: "memory", Usage: "ocx memory [--json]", Summary: "Alias of ocx observe memory.", Owner: GoOwned},
 	{Name: "api-key", Usage: "ocx api-key <sub>", Summary: "Manage API keys.", Owner: TypeScriptOwned},
 	{Name: "access", Usage: "ocx access <sub>", Summary: "Manage external access.", Owner: TypeScriptOwned},
 	{Name: "export", Usage: "ocx export --client <id>", Summary: "Export client configuration.", Owner: TypeScriptOwned},
@@ -156,6 +161,15 @@ func OwnershipFor(args []string) (Ownership, bool) {
 	// usage implementation, everything else stays with the TS owner until each
 	// subcommand carries its own oracle.
 	if command.Name == "observe" && len(args) > 1 && args[1] == "usage" {
+		return GoOwned, true
+	}
+	// `logs` reads its listing/explain surfaces natively, but the index
+	// maintenance subcommands operate the request-history SQLite directly with
+	// no management-API surface; they keep the TypeScript owner.
+	if command.Name == "logs" && len(args) > 1 {
+		if args[1] == "rebuild-index" || args[1] == "index-status" {
+			return TypeScriptOwned, true
+		}
 		return GoOwned, true
 	}
 	return command.Owner, true
@@ -285,6 +299,12 @@ func Run(args []string, deps Deps) int {
 		}
 		fmt.Fprintf(deps.Stderr, "Unimplemented Go-owned command: %s\n", args[0])
 		return ExitFailure
+	case "logs":
+		return runLogs(args[1:], deps)
+	case "memory":
+		return runMemory(args[1:], deps)
+	case "inspect":
+		return runInspect(args[1:], deps)
 	default:
 		// The ownership registry above and this switch must be reconciled by
 		// TestOwnershipMapMatchesDispatch; this is defensive for future edits.
@@ -334,12 +354,8 @@ func printSubcommandHelp(name string, deps Deps) int {
 		fmt.Fprint(deps.Stdout, "Usage: ocx ready [--json] [--wait [--timeout <seconds>]]\n\nCheck post-sync readiness. Exits 0 only when ready.\n\nExact unauthenticated GET /readyz returns HTTP 200 when ready, or 503 with Retry-After: 1 for pending or failed.\nIts sanitized HTTP identity is {service, version, uptime, pid, port, status}; /healthz is separate liveness, not readiness.\nDefault is a single identity-checked /readyz probe; old proxies without /readyz fail closed as unreachable.\n--wait polls until ready or timeout, but exits immediately on terminal failed (default 45s, max 300s).\n--timeout requires --wait and accepts a positive integer (1..300).\n--json emits {ready, status, pid, port}; status is one of ready|pending|failed|unreachable.\nInvalid or unknown arguments exit 64. Not-ready, pending, failed, timeout, and unreachable exit 1.\n")
 	case "models":
 		fmt.Fprint(deps.Stdout, modelsUsage+"\nCustom models:\n  "+modelAddUsage+"\n  "+modelRemoveUsage+"\n  Usage: ocx models list-custom [--json]\n\nRuntime subcommands (live, edit, enable, disable, provider, selected, preset, new-policy, new-arrivals, context, shadow) retain the TypeScript management API owner during the incremental takeover.\n")
-	case "usage":
-		for _, command := range Commands {
-			if command.Name == "usage" {
-				fmt.Fprintf(deps.Stdout, "Usage: %s\n\n%s\n", command.Usage, command.Summary)
-			}
-		}
+	case "usage", "logs", "memory", "inspect":
+		return printRegistrySubcommandHelp(name, deps)
 	case "config":
 		fmt.Fprint(deps.Stdout, configHelp)
 	default:
@@ -348,6 +364,23 @@ func printSubcommandHelp(name string, deps Deps) int {
 		return ExitFailure
 	}
 	return ExitOK
+}
+
+// printRegistrySubcommandHelp renders one Commands entry the way TypeScript's
+// printSubcommandUsage does: Usage line, blank line, summary, then any details
+// each preceded by a blank line (registry.ts entries, help.ts:113).
+func printRegistrySubcommandHelp(name string, deps Deps) int {
+	for _, command := range Commands {
+		if command.Name != name {
+			continue
+		}
+		fmt.Fprintf(deps.Stdout, "Usage: %s\n\n%s\n", command.Usage, command.Summary)
+		for _, detail := range command.Details {
+			fmt.Fprintf(deps.Stdout, "\n%s\n", detail)
+		}
+		return ExitOK
+	}
+	return ExitFailure
 }
 func runHealth(args []string, deps Deps) int {
 	jsonOutput := false
