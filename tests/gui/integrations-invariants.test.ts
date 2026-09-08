@@ -111,6 +111,7 @@ describe("the client registries cannot drift apart", () => {
 
   test("source preservation and cross-process locking are registry capabilities", () => {
     expect(INTEGRATION_CLIENTS.omp.sourcePreservingYaml?.path).toEqual(["providers", "opencodex"]);
+    expect(INTEGRATION_CLIENTS.hermes.sourcePreservingYaml?.path).toEqual(["providers", "opencodex"]);
     expect(INTEGRATION_CLIENTS.dsh.sourcePreservingYaml?.path).toEqual([
       "llm-pi-ai", "providers", "opencodex",
     ]);
@@ -649,7 +650,6 @@ describe("the base URL is composed, never interpolated", () => {
     ];
     for (const [hostname, expected] of cases) {
       const configPath = installClient("hermes");
-      writeFileSync(configPath, "providers: {}\n");
       const result = applyIntegration({
         clientId: "hermes", models: MODELS, port: 10100,
         config: { ...CONFIG, hostname } as OcxConfig,
@@ -673,14 +673,14 @@ describe("a restore never launders a foreign edit into owned content", () => {
      * made the state read `current`, and disable then deleted the user's own
      * field as if it were ours.
      */
-    const configPath = installClient("hermes");
+    const configPath = installClient("gajae");
     writeFileSync(configPath, "providers:\n  mine:\n    api: http://keep-me\n");
     const write = {
-      clientId: "hermes" as const, models: MODELS, config: CONFIG, port: 10100,
+      clientId: "gajae" as const, models: MODELS, config: CONFIG, port: 10100,
       env: TEST_ENV, home, store,
     };
     expect(applyIntegration(write).ok).toBe(true);
-    const applyOp = store.listOperations("hermes")[0]!.opId;
+    const applyOp = store.listOperations("gajae")[0]!.opId;
 
     // The user edits the file by hand, adding something of their own.
     const edited = `${readFileSync(configPath, "utf8")}user_field: mine\n`;
@@ -688,7 +688,7 @@ describe("a restore never launders a foreign edit into owned content", () => {
 
     // Confirmed drift-restore back to the applied bytes; the edit is snapshotted.
     expect(restoreIntegration({ ...write, opId: applyOp, confirmDrift: true }).ok).toBe(true);
-    const restoreOp = store.listOperations("hermes")[0]!.opId;
+    const restoreOp = store.listOperations("gajae")[0]!.opId;
 
     // Undo that restore: the user's edited bytes come back.
     expect(restoreIntegration({ ...write, opId: restoreOp, confirmDrift: true }).ok).toBe(true);
@@ -696,7 +696,7 @@ describe("a restore never launders a foreign edit into owned content", () => {
 
     // The record no longer describes these bytes, so the state is conflict…
     const status = readIntegrationState({
-      clientId: "hermes", models: MODELS, config: CONFIG, port: 10100,
+      clientId: "gajae", models: MODELS, config: CONFIG, port: 10100,
       env: TEST_ENV, home, store,
     });
     expect(status.state).toBe("conflict");
@@ -717,9 +717,9 @@ describe("the store's own root stays tidy", () => {
      * catches is a new bookkeeping file appearing without anyone deciding it
      * should exist.
      */
-    writeFileSync(installClient("hermes"), "providers: {}\n");
+    writeFileSync(installClient("gajae"), "providers: {}\n");
     const write = {
-      clientId: "hermes" as const, models: MODELS, config: CONFIG, port: 10100,
+      clientId: "gajae" as const, models: MODELS, config: CONFIG, port: 10100,
       env: TEST_ENV, home, store,
     };
     expect(applyIntegration(write).ok).toBe(true);

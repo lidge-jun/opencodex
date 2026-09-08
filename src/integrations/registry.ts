@@ -190,6 +190,7 @@ export const INTEGRATION_CLIENTS: Record<IntegrationClientId, IntegrationClientS
     id: "hermes",
     configPath: (env = process.env, home = homedir()) => hermesConfigPath(env, home),
     detectDir: (env = process.env, home = homedir()) => hermesHomeDir(env, home),
+    sourcePreservingYaml: { path: ["providers", "opencodex"] },
   },
   openclaw: {
     id: "openclaw",

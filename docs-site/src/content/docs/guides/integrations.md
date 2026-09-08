@@ -172,11 +172,11 @@ normalized. The exception is something JSON cannot rewrite exactly — a non-fin
 number like `1e999`, a number a rewrite would round (a very large integer, or one
 so small it collapses to zero), `-0`, the same key written twice in one object, or nesting deeper
 than 1000 levels — which locks the switch instead, so nothing is silently changed or dropped.
-**OMP** is unaffected by sibling edits too, for a different reason: its writer
-patches only its own `providers.opencodex` range byte-wise, so the rest of the
+**OMP, DSH and Hermes** are unaffected by sibling edits too, for a different reason: their writers
+patch only their own managed provider ranges byte-wise, so the rest of the
 file is never rewritten. For the remaining formats that can carry comments
-(Hermes, OpenClaw, Kimi Code, Gajae Code, MiniMax Code, Raycast — YAML, JSON5 and TOML
-written as whole documents), or
+(OpenClaw, Kimi Code, Gajae Code, MiniMax Code, Raycast — JSON5 and TOML
+written as whole documents, or generic YAML without source preservation), or
 whenever our own entries were edited, the switch locks and disable refuses rather
 than guessing which edits were yours.
 
@@ -192,7 +192,7 @@ parse, or one whose structure we cannot reason about, still refuses.
 
 **Formatting is generally not preserved.** Applying parses a config and writes it back
 out, so JSON, JSON5 and TOML may be reformatted and comments in JSON5 or TOML are lost.
-OMP and DSH are the exceptions: their YAML writers patch only `providers.opencodex` and
+OMP, DSH and Hermes are the exceptions: their YAML writers patch only `providers.opencodex` and
 `llm-pi-ai.providers.opencodex`, respectively, preserving
 unrelated provider comments and formatting byte-for-byte. If that exact source range
 cannot be identified safely, the operation refuses instead. For other clients, use
