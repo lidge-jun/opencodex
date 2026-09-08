@@ -5576,6 +5576,55 @@ describe.skipIf(!goAvailable || goCLI === null)(
           extra: "",
           toml: "[features]\nmulti_agent_v2 = { enabled = true, max_concurrent_threads_per_session = 3 }\n",
         },
+        {
+          // Review-fix shapes: per-key features.ts readers are not uniform —
+          // `[agents]` readers are parse-first (underscores visible) while the
+          // concurrent-limit and string scanners stayed line-based. These rows
+          // pin the mirrored behavior byte-for-byte.
+          name: "hash inside basic string",
+          extra: "",
+          toml: "[features.multi_agent_v2]\nenabled = true\nsubagent_developer_instructions = \"ping #duty\"\n",
+        },
+        {
+          name: "hash inside literal string",
+          extra: "",
+          toml: "[features.multi_agent_v2]\nenabled = true\nmulti_agent_mode_hint_text = 'hint #value'\n",
+        },
+        {
+          name: "literal apostrophe truncation",
+          extra: "",
+          toml: "[features.multi_agent_v2]\nenabled = true\nmulti_agent_mode_hint_text = 'it''s here'\n",
+        },
+        {
+          name: "string field inside inline table",
+          extra: "",
+          toml: "[features]\nmulti_agent_v2 = { enabled = true, max_concurrent_threads_per_session = 4, subagent_developer_instructions = \"inline #hint\" }\n",
+        },
+        {
+          name: "dotted enabled form",
+          extra: "",
+          toml: "[features]\nmulti_agent_v2.enabled = true\n",
+        },
+        {
+          name: "underscore digits in agents.max_threads",
+          extra: "",
+          toml: "[agents]\nmax_threads = 1_000\n",
+        },
+        {
+          name: "underscore digits in max_depth read as unset",
+          extra: "",
+          toml: "[agents]\nmax_depth = 2_000\n",
+        },
+        {
+          name: "underscore digits in concurrent limit read as unset",
+          extra: "",
+          toml: "[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 3_000\n",
+        },
+        {
+          name: "U+ and u+ escapes",
+          extra: "",
+          toml: "[features.multi_agent_v2]\nenabled = true\nsubagent_developer_instructions = \"\\U0001F600 hi — \\u4F60\\u597D\"\n",
+        },
       ])("diffs ocx v2 status for $name", ({ extra, toml }) => {
         const home = mkdtempSync(join(tmpdir(), "ocx-go-v2-parity-"));
         const codexHome = mkdtempSync(join(tmpdir(), "ocx-go-v2-codex-"));

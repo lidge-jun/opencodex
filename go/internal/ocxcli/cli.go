@@ -101,15 +101,16 @@ var Commands = []Command{
 	// bound pairing-grant capability the dashboard uses, and the bare command
 	// opens the dashboard URL of the attested live proxy.
 	{Name: "gui", Usage: "ocx gui", Summary: "Open the dashboard.", Owner: GoOwned},
-	// update and v2 stay TypeScript-owned (issue #54 remainder; follow-up:
+	// update stays TypeScript-owned (issue #54 remainder; follow-up:
 	// waxiangzi/opencodex#56): `ocx update` performs a network release fetch +
-	// in-place self-replace, so no hermetic byte-diff oracle can drive it; `ocx
-	// v2` reads AND writes the upstream Codex config.toml (feature toggles,
-	// threads, subagent instructions) and resyncs the catalog through the live
-	// proxy, so a Go port would need a byte-exact TOML reader/writer plus a
-	// catalog oracle before a flip could claim parity.
+	// in-place self-replace, so no hermetic byte-diff oracle can drive it.
 	{Name: "update", Usage: "ocx update [--tag <tag>]", Summary: "Update OpenCodex.", Owner: TypeScriptOwned},
 	{Name: "restart", Usage: "ocx restart", Summary: "Restart the proxy.", Owner: GoOwned},
+	// v2 keeps the TypeScript owner (issue #56): only the `status` read verb
+	// is carved out to Go (v2_command.go); the write verbs (on/off/mode/
+	// threads/keep-native-v1/mode-hint) edit the upstream Codex config.toml
+	// through the features.ts engine plus the codex features CLI, and are
+	// gated by OwnershipFor before this command table is consulted.
 	{Name: "v2", Usage: "ocx v2 <sub>", Summary: "Manage the v2 surface.", Owner: TypeScriptOwned},
 	{Name: "health", Usage: "ocx health [--json]", Summary: "Verify the local proxy identity and report health.", Owner: GoOwned},
 	{Name: "capabilities", Usage: "ocx capabilities [--json] [--mutating-only] [--route <path>]", Summary: "List the declared CLI capabilities and the management routes they drive.", Owner: GoOwned},

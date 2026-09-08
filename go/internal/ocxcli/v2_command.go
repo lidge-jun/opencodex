@@ -6,16 +6,17 @@ package ocxcli
 // engine until v2b; OwnershipFor gates them out before this file runs.
 //
 // Oracle boundary (ADR-0009): the TypeScript reader prefers a full
-// Bun.TOML.parse and falls back to the line scanners ported here. The Go side
+// Bun.TOML.parse and falls back to the line scanners mirrored here. The Go side
 // has no TOML parser, so it implements only the line scanners. The T1 parity
 // rows therefore cover config.toml shapes where the two readers agree —
-// dedicated `[features.multi_agent_v2]` tables, `[features]` boolean and inline
-// forms, and `[agents]` scalars. Documents only a full TOML parse can read
+// dedicated `[features.multi_agent_v2]` tables, `[features]` boolean, dotted
+// (multi_agent_v2.enabled) and inline forms, single-line basic/literal strings
+// including `#` inside the value and `\U` escapes, and `[agents]` scalars with
+// underscore digit separators. Documents only a full TOML parse can read
 // correctly (quoted headers, values spanning lines inside a table, multiline
-// strings) stay on the TypeScript-owned side until v2b.
+// strings, arrays) stay on the TypeScript-owned side until v2b.
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -26,7 +27,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Codex config.toml location (port of src/codex/features.ts activeCodexConfigPath)
+// Codex config.toml location (mirror of src/codex/features.ts activeCodexConfigPath)
 // ---------------------------------------------------------------------------
 
 // codexConfigTomlPath resolves CODEX_HOME (env or ~/.codex) to its config.toml.
@@ -65,7 +66,7 @@ func readCodexConfigToml() (string, bool) {
 }
 
 // ---------------------------------------------------------------------------
-// Line-based TOML scanners (port of src/codex/features.ts tomlTableBody,
+// Line-based TOML scanners (mirror of src/codex/features.ts tomlTableBody,
 // tomlBoolInBody, and the readers that consume them)
 // ---------------------------------------------------------------------------
 
@@ -113,8 +114,32 @@ func tomlBoolInBody(body, key string) (bool, bool) {
 	return m[1] == "true", true
 }
 
-// tomlIntInBody matches a whole-line `key = <digits>` and returns the value.
+// tomlIntInBody matches a whole-line `key = <digits>` (underscores allowed,
+// as in upstream 1_000) and returns the value.
 func tomlIntInBody(body, key string) (int64, bool) {
+	re := regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(key) + `\s*=\s*(-?[\d_]+)\s*(?:#.*)?$`)
+	m := re.FindStringSubmatch(body)
+	if m == nil {
+		return 0, false
+	}
+	return parseInt(strings.ReplaceAll(m[1], "_", ""))
+}
+
+// tomlIntInBodyNoUnderscore mirrors the TS line scanners that stayed on plain
+// `\d+` (getMaxConcurrentThreads) — underscore separators read as unset there.
+func tomlIntInBodyNoUnderscore(body, key string) (int64, bool) {
+	re := regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(key) + `\s*=\s*(\d+)\s*(?:#.*)?$`)
+	m := re.FindStringSubmatch(body)
+	if m == nil {
+		return 0, false
+	}
+	return parseInt(m[1])
+}
+
+// tomlIntInBodySigned matches a whole-line `key = <signed digits>` with no
+// underscore separators — the shape of the features.ts scanners that never
+// went parse-first (getAgentsMaxDepth, which admits negatives but not `_`).
+func tomlIntInBodySigned(body, key string) (int64, bool) {
 	re := regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(key) + `\s*=\s*(-?\d+)\s*(?:#.*)?$`)
 	m := re.FindStringSubmatch(body)
 	if m == nil {
@@ -132,29 +157,62 @@ func parseInt(text string) (int64, bool) {
 	return value, true
 }
 
+// codexV2Sections captures where a multi_agent_v2 feature configuration can
+// live, resolved once instead of re-locating the tables in every key lookup:
+// the dedicated `[features.multi_agent_v2]` table body, the whole `[features]`
+// body, and the content of an inline `multi_agent_v2 = { … }` entry under
+// `[features]`. A missing table is distinct from an empty one.
+type codexV2Sections struct {
+	dedicated    string
+	hasDedicated bool
+	features     string
+	inline       string // content inside multi_agent_v2 = { … } under [features]
+}
+
+func readCodexV2Sections(content string, ok bool) codexV2Sections {
+	var s codexV2Sections
+	if !ok {
+		return s
+	}
+	s.dedicated, s.hasDedicated = tomlTableBody(content, "features.multi_agent_v2")
+	features, hasFeatures := tomlTableBody(content, "features")
+	if !hasFeatures {
+		return s
+	}
+	s.features = features
+	if m := regexp.MustCompile(`(?m)^\s*multi_agent_v2\s*=\s*\{([^}]*)\}`).FindStringSubmatch(features); m != nil {
+		s.inline = m[1]
+	}
+	return s
+}
+
 // codexMultiAgentV2Enabled reports whether config.toml enables the
-// multi_agent_v2 feature. Ports multiAgentV2EnabledFromConfigText's fallback
+// multi_agent_v2 feature. Mirrors multiAgentV2EnabledFromConfigText's fallback
 // path (the Bun.TOML.parse preference has no Go equivalent): dedicated
 // `[features.multi_agent_v2]` table with `enabled`, then `[features]` boolean
 // or inline-table forms. Missing file/key -> false.
 func codexMultiAgentV2Enabled(content string, ok bool) bool {
-	if !ok {
-		return false
-	}
-	if body, ok := tomlTableBody(content, "features.multi_agent_v2"); ok {
-		if enabled, ok := tomlBoolInBody(body, "enabled"); ok {
+	s := readCodexV2Sections(content, ok)
+	if s.hasDedicated {
+		enabled, ok := tomlBoolInBody(s.dedicated, "enabled")
+		if ok {
 			return enabled
 		}
 		return false
 	}
-	if body, ok := tomlTableBody(content, "features"); ok {
-		if enabled, ok := tomlBoolInBody(body, "multi_agent_v2"); ok {
+	if s.features != "" {
+		if enabled, ok := tomlBoolInBody(s.features, "multi_agent_v2"); ok {
 			return enabled
 		}
-		inline := regexp.MustCompile(`(?m)^\s*multi_agent_v2\s*=\s*\{([^}]*)\}`)
-		if m := inline.FindStringSubmatch(body); m != nil {
+		// Dotted form: `[features] multi_agent_v2.enabled = true` parses to the
+		// same nested value; the line scanners treat it as a sub-table line.
+		dotted := regexp.MustCompile(`(?m)^\s*multi_agent_v2\.enabled\s*=\s*(true|false)\s*(?:#.*)?$`)
+		if dm := dotted.FindStringSubmatch(s.features); dm != nil {
+			return dm[1] == "true"
+		}
+		if s.inline != "" {
 			enabled := regexp.MustCompile(`enabled\s*=\s*(true|false)`)
-			if em := enabled.FindStringSubmatch(m[1]); em != nil {
+			if em := enabled.FindStringSubmatch(s.inline); em != nil {
 				return em[1] == "true"
 			}
 		}
@@ -163,7 +221,7 @@ func codexMultiAgentV2Enabled(content string, ok bool) bool {
 }
 
 // agentsMaxThreads / agentsEnabled / agentsMaxDepth read the legacy `[agents]`
-// table (ports of getAgentsMaxThreads / getAgentsEnabled / getAgentsMaxDepth).
+// table (mirrors of getAgentsMaxThreads / getAgentsEnabled / getAgentsMaxDepth).
 // maxDepth is bounded to the upstream i32 range and negative values are valid.
 
 func codexAgentsBody(content string, ok bool) (string, bool) {
@@ -209,7 +267,10 @@ func codexAgentsMaxDepth(content string, ok bool) (int64, bool) {
 	if !bodyOK {
 		return 0, false
 	}
-	value, found := tomlIntInBody(body, "max_depth")
+	// getAgentsMaxDepth in features.ts is scanner-only (plain `-?\d+`, no
+	// parse-first refactor like getAgentsMaxThreads), so underscore digit
+	// separators read as unset there — mirrored here.
+	value, found := tomlIntInBodySigned(body, "max_depth")
 	if !found || value < -2147483648 || value > 2147483647 {
 		return 0, false
 	}
@@ -217,32 +278,32 @@ func codexAgentsMaxDepth(content string, ok bool) (int64, bool) {
 }
 
 // codexMaxConcurrentThreads reads `features.multi_agent_v2.max_concurrent_
-// threads_per_session` from either the dedicated or inline-table form.
+// threads_per_session` from either the dedicated or inline-table form. The TS
+// reader for THIS key is still line-scanner-only (features.ts
+// getMaxConcurrentThreads, unlike the `[agents]` readers, never went through
+// the parse-first refactor), so it cannot see underscore digit separators —
+// the Go side mirrors that shape: `max_concurrent_threads_per_session =
+// 3_000` reads as unset on both sides.
 func codexMaxConcurrentThreads(content string, ok bool) (int64, bool) {
-	if !ok {
-		return 0, false
-	}
-	if body, ok := tomlTableBody(content, "features.multi_agent_v2"); ok {
-		if value, found := tomlIntInBody(body, "max_concurrent_threads_per_session"); found && value >= 1 {
+	s := readCodexV2Sections(content, ok)
+	if s.hasDedicated {
+		if value, found := tomlIntInBodyNoUnderscore(s.dedicated, "max_concurrent_threads_per_session"); found && value >= 1 {
 			return value, true
 		}
 		return 0, false
 	}
-	if features, ok := tomlTableBody(content, "features"); ok {
-		inline := regexp.MustCompile(`(?m)^\s*multi_agent_v2\s*=\s*\{([^}]*)\}`)
-		if m := inline.FindStringSubmatch(features); m != nil {
-			entry := regexp.MustCompile(`(?:^|,)\s*max_concurrent_threads_per_session\s*=\s*(\d+)\s*(?:,|$)`)
-			if em := entry.FindStringSubmatch(m[1]); em != nil {
-				if value, err := parseInt(em[1]); err {
-					return value, value >= 1
-				}
+	if s.inline != "" {
+		entry := regexp.MustCompile(`(?:^|,)\s*max_concurrent_threads_per_session\s*=\s*(\d+)\s*(?:,|$)`)
+		if em := entry.FindStringSubmatch(s.inline); em != nil {
+			if value, err := parseInt(em[1]); err {
+				return value, value >= 1
 			}
 		}
 	}
 	return 0, false
 }
 
-// Thread-limit translation across the root-agent slot (port of features.ts
+// Thread-limit translation across the root-agent slot (mirror of features.ts
 // v1ChildLimitToV2TotalLimit / v2TotalLimitToV1ChildLimit): upstream counts the
 // root agent inside the V2 total but not inside the legacy `[agents]` limit.
 const maxTranslatableV1ChildLimit = 1_000_000
@@ -281,30 +342,84 @@ func codexLogicalMaxThreads(content string, ok bool) (int64, bool) {
 
 // codexV2StringField reads a single-line string field under
 // features.multi_agent_v2 (dedicated table or inline `[features]` form).
-// Supports basic ("…") and literal ('…') strings; multiline and quoted-key
-// shapes are outside the v2a oracle boundary and read as unset.
+// Supports basic ("…") and literal ('…') strings with quote-aware token
+// scanning: a `#` inside a string is data, not a comment, and basic strings
+// may escape their quote. Multiline and quoted-key shapes are outside the v2a
+// oracle boundary and read as unset.
 func codexV2StringField(key, content string, ok bool) (string, bool) {
 	if !ok {
 		return "", false
 	}
 	readEntry := func(body string) (string, bool) {
-		re := regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(key) + `\s*=\s*(.+?)\s*(?:#.*)?$`)
-		m := re.FindStringSubmatch(body)
-		if m == nil {
+		// Locate `key =` (whole line in a table body, or a comma-separated
+		// entry inside an inline table) and slice the value token with a
+		// quote-aware scanner; decodeTomlStringToken then rejects anything
+		// that is not a supported single-line string form.
+		re := regexp.MustCompile(`(?m)(?:^|,\s*)` + regexp.QuoteMeta(key) + `\s*=\s*`)
+		loc := re.FindStringIndex(body)
+		if loc == nil {
 			return "", false
 		}
-		return decodeTomlStringToken(strings.TrimSpace(m[1]))
-	}
-	if body, ok := tomlTableBody(content, "features.multi_agent_v2"); ok {
-		return readEntry(body)
-	}
-	if features, ok := tomlTableBody(content, "features"); ok {
-		inline := regexp.MustCompile(`(?m)^\s*multi_agent_v2\s*=\s*\{([^}]*)\}`)
-		if m := inline.FindStringSubmatch(features); m != nil {
-			return readEntry(m[1])
+		token, found := scanTomlValueToken(body[loc[1]:])
+		if !found {
+			return "", false
 		}
+		return decodeTomlStringToken(token)
+	}
+	s := readCodexV2Sections(content, ok)
+	if s.hasDedicated {
+		return readEntry(s.dedicated)
+	}
+	if s.inline != "" {
+		return readEntry(s.inline)
 	}
 	return "", false
+}
+
+// scanTomlValueToken slices a single-line TOML value token from text, which
+// starts immediately after the `=` of an assignment. Basic strings scan to
+// their closing quote honouring backslash escapes, literal strings to their
+// closing quote honouring `”` doubling; a `#` or end of line/entry after the
+// closing quote is left to the caller. Anything else (bare scalars) is
+// reported as not-found — no string field can legally hold one.
+func scanTomlValueToken(text string) (string, bool) {
+	text = strings.TrimLeft(text, " \t")
+	if text == "" {
+		return "", false
+	}
+	switch text[0] {
+	case '\'':
+		// Multiline literal (`'''…'''`) is outside the v2a oracle boundary;
+		// scanning it as single-line would misread the doubled quote.
+		if strings.HasPrefix(text, "'''") {
+			return "", false
+		}
+		// Mirror the TS scanner (scanTomlValueEnd): a literal string ends at
+		// the FIRST following single quote — `''` is not folded into an
+		// escaped apostrophe by the reader, so `'it''s here'` reads as `it`.
+		if close := strings.IndexByte(text[1:], '\''); close >= 0 {
+			return text[:close+2], true
+		}
+		return "", false
+	case '"':
+		// Multiline basic (`"""…"""`) is outside the v2a oracle boundary.
+		if strings.HasPrefix(text, "\"\"\"") {
+			return "", false
+		}
+		// Basic string: honour backslash escapes while hunting the close.
+		for i := 1; i < len(text); i++ {
+			if text[i] == '\\' {
+				i++
+				continue
+			}
+			if text[i] == '"' {
+				return text[:i+1], true
+			}
+		}
+		return "", false
+	default:
+		return "", false
+	}
 }
 
 // decodeTomlStringToken decodes a basic or literal TOML single-line string.
@@ -312,7 +427,8 @@ func decodeTomlStringToken(token string) (string, bool) {
 	if len(token) < 2 {
 		return "", false
 	}
-	// Literal single-line string: no escapes.
+	// Literal single-line string: no escapes; the TS scanner ends the token
+	// at the first following quote, so the body carries no doubled quotes.
 	if token[0] == '\'' && token[len(token)-1] == '\'' {
 		return token[1 : len(token)-1], true
 	}
@@ -353,6 +469,16 @@ func decodeTomlStringToken(token string) (string, bool) {
 				}
 				out.WriteRune(r)
 				i += 4
+			case 'U':
+				if i+8 >= len(body) {
+					return "", false
+				}
+				var r rune
+				if _, err := fmt.Sscanf(body[i+1:i+9], "%08x", &r); err != nil {
+					return "", false
+				}
+				out.WriteRune(r)
+				i += 8
 			default:
 				return "", false
 			}
@@ -382,18 +508,11 @@ func opencodexConfigStringField(key string) (string, bool) {
 
 // opencodexConfigBoolField reads a top-level boolean key from the raw config
 // document (the ordered loader keeps string nodes readable but exposes no bool
-// accessor); absent or non-boolean -> false.
+// accessor); absent or non-boolean -> false. Reuses the BOM-aware raw reader
+// shared with the client-state surface rather than parsing the file afresh.
 func opencodexConfigBoolField(key string) bool {
-	path, err := config.Path()
-	if err != nil {
-		return false
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return false
-	}
-	var doc map[string]any
-	if err := json.Unmarshal(raw, &doc); err != nil {
+	doc, ok := readRawTopLevelConfig()
+	if !ok {
 		return false
 	}
 	value, ok := doc[key].(bool)

@@ -118,6 +118,95 @@ func TestV2StatusGolden(t *testing.T) {
 				"subagent_developer_instructions: (unset — children inherit)\n" +
 				"multi_agent_mode_hint_text: (unset — effort-derived policy: ultra=proactive, else explicit)\n",
 		},
+		// Review-fix contract (247c9e490 follow-up): per-key reader shapes in
+		// features.ts are NOT uniform — the `[agents]` readers went parse-first
+		// (underscore separators visible) while getMaxConcurrentThreads and the
+		// string-field scanner stayed line-based. These rows pin the mirrored
+		// Go behavior; each expected text is the TS CLI's byte output.
+		{
+			name: "hash inside basic string is data not comment",
+			toml: "[features.multi_agent_v2]\nenabled = true\nsubagent_developer_instructions = \"ping #duty\"\n",
+			want: "multi_agent_v2: ON — global V2 override active\n" + unset +
+				"agents.max_depth: (unset — upstream default 1) (V1-only — ignored while multi_agent_v2 is enabled)\n" +
+				"subagent_developer_instructions: \"ping #duty\"\n" +
+				"multi_agent_mode_hint_text: (unset — effort-derived policy: ultra=proactive, else explicit)\n",
+		},
+		{
+			name: "hash inside literal string is data not comment",
+			toml: "[features.multi_agent_v2]\nenabled = true\nmulti_agent_mode_hint_text = 'hint #value'\n",
+			want: "multi_agent_v2: ON — global V2 override active\n" + unset +
+				"agents.max_depth: (unset — upstream default 1) (V1-only — ignored while multi_agent_v2 is enabled)\n" +
+				"subagent_developer_instructions: (unset — children inherit)\n" +
+				"multi_agent_mode_hint_text: \"hint #value\"\n",
+		},
+		{
+			// TS scanTomlValueEnd ends a literal at the FIRST following quote —
+			// no `''` folding — so `'it''s here'` reads as `it`. Mirrored.
+			name: "literal apostrophe truncates at first quote",
+			toml: "[features.multi_agent_v2]\nenabled = true\nmulti_agent_mode_hint_text = 'it''s here'\n",
+			want: "multi_agent_v2: ON — global V2 override active\n" + unset +
+				"agents.max_depth: (unset — upstream default 1) (V1-only — ignored while multi_agent_v2 is enabled)\n" +
+				"subagent_developer_instructions: (unset — children inherit)\n" +
+				"multi_agent_mode_hint_text: \"it\"\n",
+		},
+		{
+			name: "hash inside inline table string field",
+			toml: "[features]\nmulti_agent_v2 = { enabled = true, max_concurrent_threads_per_session = 4, subagent_developer_instructions = \"inline #hint\" }\n",
+			want: "multi_agent_v2: ON — global V2 override active\n" +
+				"multi_agent_mode: default — upstream model pins respected (sol/terra=v2, luna=v1, rest=codex flag)\n" +
+				"keep_native_chatgpt_on_v1: OFF\n" +
+				"max_threads: 4\n" +
+				"agents.enabled: (unset — upstream default true)\n" +
+				"agents.max_depth: (unset — upstream default 1) (V1-only — ignored while multi_agent_v2 is enabled)\n" +
+				"subagent_developer_instructions: \"inline #hint\"\n" +
+				"multi_agent_mode_hint_text: (unset — effort-derived policy: ultra=proactive, else explicit)\n",
+		},
+		{
+			name: "dotted multi_agent_v2.enabled form",
+			toml: "[features]\nmulti_agent_v2.enabled = true\n",
+			want: "multi_agent_v2: ON — global V2 override active\n" + unset +
+				"agents.max_depth: (unset — upstream default 1) (V1-only — ignored while multi_agent_v2 is enabled)\n" +
+				"subagent_developer_instructions: (unset — children inherit)\n" +
+				"multi_agent_mode_hint_text: (unset — effort-derived policy: ultra=proactive, else explicit)\n",
+		},
+		{
+			name: "underscore digits in parse-first agents.max_threads",
+			toml: "[agents]\nmax_threads = 1_000\n",
+			want: "multi_agent_v2: OFF — model catalog pins and defaults decide the surface\n" +
+				"multi_agent_mode: default — upstream model pins respected (sol/terra=v2, luna=v1, rest=codex flag)\n" +
+				"keep_native_chatgpt_on_v1: OFF\n" +
+				"max_threads: 1000\n" +
+				"agents.enabled: (unset — upstream default true)\n" +
+				"agents.max_depth: (unset — upstream default 1)\n" +
+				"subagent_developer_instructions: (unset — children inherit)\n" +
+				"multi_agent_mode_hint_text: (unset — effort-derived policy: ultra=proactive, else explicit)\n",
+		},
+		{
+			// getAgentsMaxDepth is scanner-only in features.ts — underscores
+			// invisible there — unlike parse-first getAgentsMaxThreads.
+			name: "underscore digits in scanner-only agents.max_depth read as unset",
+			toml: "[agents]\nmax_depth = 2_000\n",
+			want: "multi_agent_v2: OFF — model catalog pins and defaults decide the surface\n" + unset +
+				"agents.max_depth: (unset — upstream default 1)\n" +
+				"subagent_developer_instructions: (unset — children inherit)\n" +
+				"multi_agent_mode_hint_text: (unset — effort-derived policy: ultra=proactive, else explicit)\n",
+		},
+		{
+			name: "underscore digits in scanner-only concurrent limit read as unset",
+			toml: "[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 3_000\n",
+			want: "multi_agent_v2: ON — global V2 override active\n" + unset +
+				"agents.max_depth: (unset — upstream default 1) (V1-only — ignored while multi_agent_v2 is enabled)\n" +
+				"subagent_developer_instructions: (unset — children inherit)\n" +
+				"multi_agent_mode_hint_text: (unset — effort-derived policy: ultra=proactive, else explicit)\n",
+		},
+		{
+			name: "U+ and u+ escapes decode",
+			toml: "[features.multi_agent_v2]\nenabled = true\nsubagent_developer_instructions = \"\\U0001F600 hi — \\u4F60\\u597D\"\n",
+			want: "multi_agent_v2: ON — global V2 override active\n" + unset +
+				"agents.max_depth: (unset — upstream default 1) (V1-only — ignored while multi_agent_v2 is enabled)\n" +
+				"subagent_developer_instructions: \"😀 hi — 你好\"\n" +
+				"multi_agent_mode_hint_text: (unset — effort-derived policy: ultra=proactive, else explicit)\n",
+		},
 	}
 
 	for _, tc := range cases {
