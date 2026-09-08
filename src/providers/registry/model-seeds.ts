@@ -910,3 +910,46 @@ export const CLINE_PASS_TEXT_ONLY_MODELS = CLINE_PASS_MODALITY_KNOWN_MODELS.filt
 export const CLINE_PASS_MODEL_INPUT_MODALITIES: Record<string, string[]> = Object.fromEntries(
   CLINE_PASS_MODALITY_KNOWN_MODELS.map(id => [id, CLINE_PASS_IMAGE_MODELS.has(id) ? ["text", "image"] : ["text"]]),
 );
+
+// Opper seed: bare *pool* names. A pool is every provider Opper serves that model through; Opper
+// picks the route per request. Each name is the `.model` of a `pooled: true` entry in the public
+// catalogue (https://api.opper.ai/v3/models?limit=2000, checked 2026-09-14); `vendor/model` ids
+// (anthropic/claude-sonnet-4-6) pin one route and stay valid, they are just not seeded.
+export const OPPER_MODELS = [
+  "claude-sonnet-4-6",
+  "claude-opus-5",
+  "gpt-5.5",
+  "gpt-5.4-mini",
+  "gemini-3.8-flash",
+  "deepseek-v4-pro",
+  "kimi-k3",
+  "mistral-large-2512",
+];
+// Smallest value across each pool's members in the public catalogue, capped at the lab model's own
+// limit (kimi-k3 output); live discovery owns which models exist.
+export const OPPER_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+  "claude-sonnet-4-6": 1_000_000,
+  "claude-opus-5": 1_000_000,
+  "gpt-5.5": 1_050_000,
+  "gpt-5.4-mini": 400_000,
+  "gemini-3.8-flash": 1_048_576,
+  "deepseek-v4-pro": 1_000_000,
+  "kimi-k3": 1_048_576,
+  "mistral-large-2512": 256_000,
+};
+export const OPPER_MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
+  "claude-sonnet-4-6": 64_000,
+  "claude-opus-5": 128_000,
+  "gpt-5.5": 128_000,
+  "gpt-5.4-mini": 128_000,
+  "gemini-3.8-flash": 65_536,
+  "deepseek-v4-pro": 65_536,
+  "kimi-k3": 131_072,
+  "mistral-large-2512": 8_192,
+};
+// Pools whose members do not all accept image input (deepseek-v4-pro: no member does; kimi-k3: the
+// sference route is text-only), so the shared modality set is text.
+export const OPPER_TEXT_ONLY_MODELS = ["deepseek-v4-pro", "kimi-k3"];
+export const OPPER_MODEL_INPUT_MODALITIES: Record<string, string[]> = Object.fromEntries(
+  OPPER_MODELS.map(id => [id, OPPER_TEXT_ONLY_MODELS.includes(id) ? ["text"] : ["text", "image"]]),
+);
