@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { clampNumberDraft } from "../clamp-draft";
 import { useT } from "../i18n/shared";
 import { NumberStepper } from "./NumberStepper";
@@ -26,8 +26,7 @@ export default function AccountAutoSwitchControl({
   const enabled = override !== null;
   const [draft, setDraft] = useState(String(override ?? globalThreshold));
   const hint = t("accountPool.autoSwitchHint");
-  // eslint-disable-next-line local-i18n/no-hardcoded-ui-strings -- element id suffix, not UI text
-  const hintId = `${inputId}-hint`;
+  const hintId = useId();
 
   const commit = async () => {
     const trimmed = draft.trim();
