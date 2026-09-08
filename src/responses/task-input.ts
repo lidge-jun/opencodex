@@ -20,9 +20,29 @@ function supportedBlock(value: unknown): value is TaskInputBlock {
   return value.detail === undefined || (typeof value.detail === "string" && imageDetails.has(value.detail));
 }
 
+/**
+ * Does this item carry a pairing key? A tool result is paired by `call_id`; a seed is not.
+ *
+ * Presence of the FIELD is not presence of a KEY (#3807). Codex desktop seeds a sub-agent
+ * thread with a lone `function_call_output` that some client builds emit with an explicit
+ * `call_id: null` or `""` rather than omitting it. Those values can never pair with a
+ * `function_call`, so treating them as a paired result sent the item to the guard in
+ * core.ts and answered 400 for a turn that is really external task input.
+ *
+ * A wrong-typed key (number, object) is NOT relaxed: that is malformed input rather than
+ * the absent-pairing seed shape, and it keeps the #3259 rejection.
+ */
+function hasPairingKey(item: Record<string, unknown>): boolean {
+  if (!("call_id" in item)) return false;
+  const callId = item.call_id;
+  if (callId === null) return false;
+  if (typeof callId === "string") return callId.trim().length > 0;
+  return true;
+}
+
 /** Recognize Codex external task input without repairing ordinary orphaned tool results. */
 export function externalTaskInputContent(item: unknown): string | OcxContentPart[] | undefined {
-  if (!isObj(item) || item.type !== "function_call_output" || "call_id" in item) return undefined;
+  if (!isObj(item) || item.type !== "function_call_output" || hasPairingKey(item)) return undefined;
   if (!nonBlank(item.id) || !nonBlank(item.name) || !nonBlank(item.namespace)) return undefined;
   const output = item.output;
   if (typeof output === "string") return nonBlank(output) ? output : undefined;
