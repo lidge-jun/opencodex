@@ -59,7 +59,11 @@ var Commands = []Command{
 	{Name: "tray", Usage: "ocx tray <sub>", Summary: "Manage the Windows status tray.", Owner: TypeScriptOwned},
 	{Name: "ensure", Usage: "ocx ensure", Summary: "Ensure the proxy is running.", Owner: TypeScriptOwned},
 	{Name: "connect", Usage: "ocx connect <url>", Summary: "Connect to a remote hub.", Owner: TypeScriptOwned},
-	{Name: "disconnect", Usage: "ocx disconnect", Summary: "Disconnect from a remote hub.", Owner: TypeScriptOwned},
+	// connect keeps its TypeScript owner per subcommand: `status` shares the Go
+	// client-state implementation below, while connect/rotate/revoke stay
+	// TypeScript-owned until the hub machine-API + config-injection transaction
+	// carries its own oracle. disconnect is fully Go-owned (local teardown).
+	{Name: "disconnect", Usage: "ocx disconnect", Summary: "Disconnect from a remote hub.", Owner: GoOwned},
 	{Name: "sync", Usage: "ocx sync [--restart-codex]", Summary: "Sync provider models.", Owner: TypeScriptOwned},
 	{Name: "sync-cache", Usage: "ocx sync-cache [--restart-codex]", Summary: "Refresh the model cache.", Owner: TypeScriptOwned},
 	{Name: "status", Usage: "ocx status", Summary: "Check proxy status.", Owner: GoOwned},
@@ -156,6 +160,12 @@ func OwnershipFor(args []string) (Ownership, bool) {
 	// usage implementation, everything else stays with the TS owner until each
 	// subcommand carries its own oracle.
 	if command.Name == "observe" && len(args) > 1 && args[1] == "usage" {
+		return GoOwned, true
+	}
+	// connect status is Go-owned (the local client-state read); the rest of the
+	// connect family delegates to its TypeScript owner until each subcommand
+	// carries its own oracle.
+	if command.Name == "connect" && len(args) > 1 && args[1] == "status" {
 		return GoOwned, true
 	}
 	return command.Owner, true
@@ -277,6 +287,16 @@ func Run(args []string, deps Deps) int {
 		return runStop(args[1:], deps)
 	case "usage":
 		return runUsage(args[1:], deps)
+	case "connect":
+		// Only `connect status` reaches Go (OwnershipFor already gated this);
+		// connect/rotate/revoke stay TypeScript-owned and never dispatch here.
+		if len(args) > 1 && args[1] == "status" {
+			return runConnectStatus(args[2:], deps)
+		}
+		fmt.Fprintf(deps.Stderr, "Unimplemented Go-owned command: %s\n", args[0])
+		return ExitFailure
+	case "disconnect":
+		return runClientDisconnect(args[1:], deps)
 	case "observe":
 		// Only `observe usage` reaches Go (OwnershipFor already gated this);
 		// other observe subcommands stay TypeScript-owned and never dispatch here.
@@ -342,6 +362,12 @@ func printSubcommandHelp(name string, deps Deps) int {
 		}
 	case "config":
 		fmt.Fprint(deps.Stdout, configHelp)
+	case "disconnect":
+		// Registry text (src/cli/registry.ts disconnect entry); the family's
+		// surface now dispatches natively so help no longer delegates.
+		fmt.Fprintln(deps.Stdout, "Usage: ocx disconnect [--keep-catalog] [--json]")
+		fmt.Fprintln(deps.Stdout)
+		fmt.Fprintln(deps.Stdout, "Restore local client state offline and clear the remote-hub connection.")
 	default:
 		fmt.Fprintf(deps.Stderr, "Unknown command: %s\n", name)
 		printHelp(deps.Stdout)
