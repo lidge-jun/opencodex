@@ -80,15 +80,18 @@ var Commands = []Command{
 	{Name: "provider", Usage: "ocx provider <sub>", Summary: "Inspect configured providers.", Owner: GoOwned},
 	{Name: "account", Usage: "ocx account <sub>", Summary: "Manage accounts.", Owner: TypeScriptOwned},
 	{Name: "models", Usage: "ocx models [--provider <name>] [--json]", Summary: "List configured models.", Owner: GoOwned},
-	{Name: "alias", Usage: "ocx alias <sub>", Summary: "Manage aliases.", Owner: TypeScriptOwned},
-	{Name: "combo", Usage: "ocx combo <sub>", Summary: "Manage combo routing.", Owner: TypeScriptOwned},
+	// alias/combo/route form the config-routing slice (issue #49): Go owns the
+	// management-plane clients that read and write the routing subsections of
+	// the config file (aliases, combos, routing profiles) against a live proxy.
+	{Name: "alias", Usage: "ocx alias <sub>", Summary: "Manage aliases.", Owner: GoOwned},
+	{Name: "combo", Usage: "ocx combo <sub>", Summary: "Manage combo routing.", Owner: GoOwned},
 	{Name: "agent", Usage: "ocx agent <status|injection|effort|subagents|fallback|sidecar> ...", Summary: "Manage headless multi-agent, roster, effort, injection, and sidecar settings.", Owner: GoOwned},
 	{Name: "observe", Usage: "ocx observe <logs|usage|storage|memory|debug|claude-inbound|injection> ...", Summary: "Inspect proxy requests, usage, storage, memory, and debug data.", Owner: GoOwned},
 	// The management-read aliases logs/memory/inspect are Go-owned (issue #45):
 	// they project local state through the management API with byte-identical
 	// output and keep the runtime-api error taxonomy.
 	{Name: "inspect", Usage: "ocx inspect <config|catalog|routing-analytics|pacing|key-providers|codex-prompt|client-config|star|windows-tray> ...", Summary: "Read effective config, catalog, analytics, pacing, and the generated client-config snippet.", Details: []string{"`inspect star` reads the repository star status only. Starring uses your GitHub identity and is available from the dashboard alone."}, Owner: GoOwned},
-	{Name: "route", Usage: "ocx route <sub>", Summary: "Manage routing.", Owner: TypeScriptOwned},
+	{Name: "route", Usage: "ocx route <sub>", Summary: "Manage routing.", Owner: GoOwned},
 	{Name: "logs", Usage: "ocx logs [filters] [--follow] [--json|--jsonl]", Summary: "Alias of ocx observe logs.", Owner: GoOwned},
 	// usage is Go-owned (the /api/usage read plus its renderer); observe's
 	// request-history indexer actions (`logs rebuild-index` / `logs index-status`)
@@ -340,6 +343,12 @@ func Run(args []string, deps Deps) int {
 		return runUsage(args[1:], deps)
 	case "capabilities":
 		return runCapabilities(args[1:], deps)
+	case "alias":
+		return runAlias(args[1:], deps)
+	case "combo":
+		return runCombo(args[1:], deps)
+	case "route":
+		return runRoute(args[1:], deps)
 	case "observe":
 		// rebuild-index / index-status never dispatch here (OwnershipFor gates
 		// them to TypeScriptOwned and delegates first); the indexer actions stay
@@ -446,6 +455,12 @@ func printSubcommandHelp(name string, deps Deps) int {
 		fmt.Fprint(deps.Stdout, integrationHelp)
 	case "lab":
 		fmt.Fprint(deps.Stdout, labHelp)
+	case "alias":
+		fmt.Fprint(deps.Stdout, "Usage: ocx alias <list|set|rm|defaults> ...\n\nManage short provider and model names.\n")
+	case "combo":
+		fmt.Fprint(deps.Stdout, "Usage: ocx combo <list|show|set|remove> ...\n\nManage combo virtual models and routing strategies.\n\nAlias hierarchy: ocx route combo ...\nUse --targets provider/model[:weight],provider/model[:weight].\n")
+	case "route":
+		fmt.Fprint(deps.Stdout, "Usage: ocx route combo <list|show|set|remove> ...\n\nManage routing features; combo is currently the supported routing resource.\n")
 	case "config":
 		fmt.Fprint(deps.Stdout, configHelp)
 	default:
