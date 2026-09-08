@@ -336,6 +336,9 @@ function mergeAccountQuota(
   }
 
   if (snapshotHasCustom(quota)) next.customWindows = quota.customWindows;
+  // Ordinary response headers omit model-specific windows reported by WHAM.
+  // Absence is a partial update; an explicit list (including []) still replaces it.
+  else if (existing?.customWindows !== undefined) next.customWindows = existing.customWindows;
 
   if (quota.resetCredits !== undefined) next.resetCredits = quota.resetCredits;
   else if (existing?.resetCredits !== undefined) next.resetCredits = existing.resetCredits;

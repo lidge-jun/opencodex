@@ -1,11 +1,55 @@
 import { describe, expect, it } from "bun:test";
 import {
   clearAccountQuota,
+  applyAccountQuotaFromUpstreamHeaders,
+  getAccountQuota,
   parseUpstreamQuotaHeaders,
   parseUsageQuota,
   setAccountQuotaFromParsed,
 } from "../../src/codex/quota";
 import { codexPoolQuotaEvidence } from "../../src/routing/quota";
+
+describe("Spark quota survives partial header updates", () => {
+  it("keeps the WHAM Spark window when an ordinary response updates standard quota", () => {
+    clearAccountQuota();
+    const refreshed = parseUsageQuota({
+      rate_limit: { primary_window: { used_percent: 20, limit_window_seconds: 604_800 } },
+      additional_rate_limits: [{
+        limit_name: "GPT-5.3-Codex-Spark",
+        rate_limit: { primary_window: { used_percent: 30, reset_at: 2_000_000_000, limit_window_seconds: 604_800 } },
+      }],
+    });
+    setAccountQuotaFromParsed("spark-partial", refreshed);
+    applyAccountQuotaFromUpstreamHeaders("spark-partial", new Headers({
+      "x-codex-primary-used-percent": "21",
+      "x-codex-primary-window-minutes": "10080",
+    }));
+    expect(getAccountQuota("spark-partial")?.weeklyPercent).toBe(21);
+    expect(getAccountQuota("spark-partial")?.customWindows).toEqual(refreshed?.customWindows);
+  });
+
+  it("replaces custom windows when supplied, including an explicit empty list", () => {
+    clearAccountQuota();
+    setAccountQuotaFromParsed("spark-replace", {
+      customWindows: [{ label: "GPT-5.3-Codex-Spark Weekly", percent: 30 }],
+    });
+    const replacement = [{ label: "GPT-5.3-Codex-Spark Weekly", percent: 0, resetAt: 2_000_000_000 }];
+    setAccountQuotaFromParsed("spark-replace", { customWindows: replacement });
+    expect(getAccountQuota("spark-replace")?.customWindows).toEqual(replacement);
+    setAccountQuotaFromParsed("spark-replace", { weeklyPercent: 21, customWindows: [] });
+    expect(getAccountQuota("spark-replace")?.customWindows).toEqual([]);
+  });
+
+  it("does not carry custom windows across an account cache clear", () => {
+    clearAccountQuota();
+    setAccountQuotaFromParsed("spark-clear", {
+      customWindows: [{ label: "GPT-5.3-Codex-Spark Weekly", percent: 30 }],
+    });
+    clearAccountQuota("spark-clear");
+    setAccountQuotaFromParsed("spark-clear", { weeklyPercent: 21 });
+    expect(getAccountQuota("spark-clear")?.customWindows).toBeUndefined();
+  });
+});
 
 /**
  * The two quota parsers, pinned against each other.
@@ -109,4 +153,3 @@ describe("routing headroom accounts for the burst window", () => {
     expect(evidence.headroom).toBeLessThanOrEqual(0.05);
   });
 });
-
