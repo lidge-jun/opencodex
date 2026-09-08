@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -10,13 +11,44 @@ import {
   verifyGuardrailsProvenance,
 } from "../../scripts/guardrails-provenance";
 import { repoRoot } from "../helpers/repo-root";
+import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 const ROOT = repoRoot();
 const RULES_DIR = join(ROOT, "src", "guardrails", "rules");
 
+test("YAML parser reports deep collection stack exhaustion as YAMLParseError", () => {
+  // A bounded Node stack makes the npm parser regression independent of Bun's larger stack.
+  const source = `
+    const { parse, YAMLParseError } = require(process.argv[1]);
+    const results = ["sequence", "mapping"].map(collection => {
+      const open = collection === "sequence" ? "[" : "{a:";
+      const close = collection === "sequence" ? "]" : "}";
+      let failure;
+      try { parse(open.repeat(5000) + "1" + close.repeat(5000)); }
+      catch (error) { failure = error; }
+      return { collection, yamlParseError: failure instanceof YAMLParseError, rangeError: failure instanceof RangeError };
+    });
+    console.log(JSON.stringify(results));
+  `;
+  const output = execFileSync("node", ["--stack-size=512", "-e", source, join(ROOT, "node_modules", "yaml")], {
+    encoding: "utf8",
+    timeout: INTERNAL_DEADLINE_MS,
+    windowsHide: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const results: unknown = JSON.parse(output);
+  expect(results).toEqual([
+    { collection: "sequence", yamlParseError: true, rangeError: false },
+    { collection: "mapping", yamlParseError: true, rangeError: false },
+  ]);
+}, SPAWN_BUDGET_MS);
+
 test("Guardrails vendors pinned donor assets with complete distribution notices", () => {
   const provenancePath = join(RULES_DIR, "provenance.json");
   expect(existsSync(provenancePath)).toBe(true);
+  expect(createHash("sha256").update(readFileSync(provenancePath)).digest("hex")).toBe(
+    "a835bfa0c7f0ff6e33f3466198121c5185a375d95d989106f1ede07237abf402",
+  );
   expect(existsSync(join(RULES_DIR, "provenance.schema.json"))).toBe(true);
   const provenance = verifyGuardrailsProvenance(ROOT);
   expect(provenance.donor).toMatchObject({
@@ -29,10 +61,10 @@ test("Guardrails vendors pinned donor assets with complete distribution notices"
     configSha256: "e163e53b9e7e8a8511e77271e2b323ed057759542a6d988258afe3a1fa329caf",
   });
   expect(provenance.runtimeDependencies.find(dependency => dependency.name === "yaml")).toMatchObject({
-    version: "2.8.1",
-    sourceCommit: "1dc3c3ba06971613d0bcb772da4711ca25343dac",
-    npmTarballSha1: "1870aa02b631f7e8328b93f8bc574fac5d6c4d79",
-    npmIntegrity: "sha512-lcYcMxX2PO9XMGvAJkJ3OsNMw+/7FKes7/hgerGUYWIoWu5j/+YQqcZr5JnPZWzOsEBgMbSbiSTn/dv/69Mkpw==",
+    version: "2.8.3",
+    sourceCommit: "ce14587484822bffb0f7d31aefedcaf2dc0d0387",
+    npmTarballSha1: "a0d6bd2efb3dd03c59370223701834e60409bd7d",
+    npmIntegrity: "sha512-AvbaCLOO2Otw/lW5bmh9d/WEdcDFdQp2Z2ZUH3pX9U2ihyUY0nvLv7J6TrWowklRGPYbB/IuIMfYgxaCPg5Bpg==",
   });
 
   for (const asset of provenance.assets) {
@@ -121,6 +153,7 @@ test("published package declares the Guardrails runtime and license materials", 
     files?: string[];
   };
   expect(packageJson.dependencies?.["re2-wasm"]).toBe("1.0.2");
+  expect(packageJson.dependencies?.yaml).toBe("2.8.3");
   expect(packageJson.files).toEqual(expect.arrayContaining([
     "src",
     "THIRD_PARTY_NOTICES.md",

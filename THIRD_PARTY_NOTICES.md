@@ -81,13 +81,13 @@ Original NOTICE attribution:
 ## yaml runtime dependency
 
 - Disposition: direct runtime dependency, not bundled in the OpenCodex tarball.
-- npm package: `yaml@2.8.1`.
-- Source repository and tag: `eemeli/yaml@v2.8.1`.
+- npm package: `yaml@2.8.3`.
+- Source repository and tag: `eemeli/yaml@v2.8.3`.
 - npm integrity:
-  `sha512-lcYcMxX2PO9XMGvAJkJ3OsNMw+/7FKes7/hgerGUYWIoWu5j/+YQqcZr5JnPZWzOsEBgMbSbiSTn/dv/69Mkpw==`.
+  `sha512-AvbaCLOO2Otw/lW5bmh9d/WEdcDFdQp2Z2ZUH3pX9U2ihyUY0nvLv7J6TrWowklRGPYbB/IuIMfYgxaCPg5Bpg==`.
 - Installed path: dependency-owned `node_modules/yaml`; not copied into the
   OpenCodex package tarball.
-- License source path at tag `v2.8.1`: `LICENSE`; ISC, Copyright Eemeli Aro.
+- License source path at tag `v2.8.3`: `LICENSE`; ISC, Copyright Eemeli Aro.
   Distributed full text: `LICENSES/yaml-ISC.txt`.
 
 ## RE2 and node-re2 attribution

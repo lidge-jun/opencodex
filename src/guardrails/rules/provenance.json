@@ -122,13 +122,13 @@
     },
     {
       "name": "yaml",
-      "version": "2.8.1",
+      "version": "2.8.3",
       "disposition": "dependency-only",
       "sourceRepository": "https://github.com/eemeli/yaml",
-      "sourceTag": "v2.8.1",
-      "sourceCommit": "1dc3c3ba06971613d0bcb772da4711ca25343dac",
-      "npmIntegrity": "sha512-lcYcMxX2PO9XMGvAJkJ3OsNMw+/7FKes7/hgerGUYWIoWu5j/+YQqcZr5JnPZWzOsEBgMbSbiSTn/dv/69Mkpw==",
-      "npmTarballSha1": "1870aa02b631f7e8328b93f8bc574fac5d6c4d79",
+      "sourceTag": "v2.8.3",
+      "sourceCommit": "ce14587484822bffb0f7d31aefedcaf2dc0d0387",
+      "npmIntegrity": "sha512-AvbaCLOO2Otw/lW5bmh9d/WEdcDFdQp2Z2ZUH3pX9U2ihyUY0nvLv7J6TrWowklRGPYbB/IuIMfYgxaCPg5Bpg==",
+      "npmTarballSha1": "a0d6bd2efb3dd03c59370223701834e60409bd7d",
       "licenseSpdx": "ISC",
       "licenseSourcePath": "LICENSE",
       "distributedLicensePath": "LICENSES/yaml-ISC.txt",
@@ -141,7 +141,7 @@
   "distributionFiles": [
     {
       "path": "THIRD_PARTY_NOTICES.md",
-      "sha256": "1c556faccf3e806c1e24226187fa910f1cbce6e31de34f54d04b8d7a26e8456f"
+      "sha256": "73f99f4ada7f4086373f0f32be3cfcda3ff8ef73ccb581bbf2ebc22b7c5da156"
     },
     {
       "path": "src/guardrails/rules/provenance.schema.json",

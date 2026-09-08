@@ -9,7 +9,7 @@ const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const SHA1_PATTERN = /^[a-f0-9]{40}$/;
 const COMMIT_PATTERN = /^[a-f0-9]{40}$/;
 const EXPECTED_PROVENANCE_SHA256 =
-  "636e00ca79202171e021be7989dc71dd4ef57ddc420137db4eddd9ea6aba903e";
+  "a835bfa0c7f0ff6e33f3466198121c5185a375d95d989106f1ede07237abf402";
 const PROVENANCE_PATH = "src/guardrails/rules/provenance.json";
 const PROVENANCE_SCHEMA_PATH = "src/guardrails/rules/provenance.schema.json";
 const PROVENANCE_SCHEMA_ID = "https://opencodex.me/schemas/guardrails-provenance-v2.json";
@@ -274,18 +274,18 @@ function validatePinnedSources(provenance: GuardrailsProvenance): void {
     "embedded Google RE2 commit drifted from the reviewed snapshot",
   );
   const yaml = provenance.runtimeDependencies.find(dependency => dependency.name === "yaml");
-  assert(yaml?.version === "2.8.1", "provenance must pin yaml@2.8.1");
+  assert(yaml?.version === "2.8.3", "provenance must pin yaml@2.8.3");
   assert(
-    yaml.sourceCommit === "1dc3c3ba06971613d0bcb772da4711ca25343dac",
+    yaml.sourceCommit === "ce14587484822bffb0f7d31aefedcaf2dc0d0387",
     "yaml source commit drifted from the reviewed snapshot",
   );
   assert(
     yaml.npmIntegrity
-      === "sha512-lcYcMxX2PO9XMGvAJkJ3OsNMw+/7FKes7/hgerGUYWIoWu5j/+YQqcZr5JnPZWzOsEBgMbSbiSTn/dv/69Mkpw==",
+      === "sha512-AvbaCLOO2Otw/lW5bmh9d/WEdcDFdQp2Z2ZUH3pX9U2ihyUY0nvLv7J6TrWowklRGPYbB/IuIMfYgxaCPg5Bpg==",
     "yaml npm integrity drifted from the reviewed snapshot",
   );
   assert(
-    yaml.npmTarballSha1 === "1870aa02b631f7e8328b93f8bc574fac5d6c4d79",
+    yaml.npmTarballSha1 === "a0d6bd2efb3dd03c59370223701834e60409bd7d",
     "yaml npm tarball SHA-1 drifted from the reviewed snapshot",
   );
 }
