@@ -56,7 +56,9 @@ Dashboard 上的 **Sub-agent delegation** 控件管理三个相关设置：
 
 内置的 v2 指引有 700 字符预算。如果会超出预算，opencodex 会优先删除 roster，而不是截断核心 spawn 指令。内置指引仅在首选模型、可用 roster 或 fallback chain 解析成功时触发。只要配置了 `injectionModel`，自定义提示词就会触发；如果未限定的值无法唯一解析，`{{model}}` 会替换为空字符串。
 
-在 v1 上，opencodex 只会在 `max` 或 `ultra` effort 下注入上游风格的主动委派指引。它不会在 v1 上额外添加首选模型、roster、fallback list 或自定义提示词。
+在 v1 上，opencodex 只在 `max` 或 `ultra` 推理强度下注入与 v2 推荐预设相同的主动委派指引。
+仅改变委派的触发条件：不再需要单独提出委派请求；用户指示以及权限、任务范围和协作工具规则仍然适用。
+它不会在 v1 上额外添加首选模型、roster、fallback list 或自定义提示词。
 
 默认关闭的 `syncCodexSubagentDefaults` 选项与指引是分开的。当 opencodex 拥有活跃的 Codex 路由时，同步或重启可以把所选值写入 Codex TOML 中带标记的 `[agents] default_subagent_model` 和 `default_subagent_reasoning_effort` 条目。opencodex 只会更新或移除带有其标记的字段。如果任一目标字段属于用户，整对值会保持不变，而不会部分写入；含糊不清的 TOML 会在不写入的情况下被拒绝。外部 provider 管理器和用户拥有的根路由也仍然具有最终权威。
 

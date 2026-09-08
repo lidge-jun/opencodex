@@ -8,6 +8,7 @@ import {
 } from "../../config";
 import { parseRequest } from "../../responses/parser";
 import { externalTaskInputContent } from "../../responses/task-input";
+import { MULTI_AGENT_MODE_HINT_RECOMMENDATION } from "../../codex/multi-agent-mode-policy";
 import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractCompactUserMessages } from "../../responses/compaction";
 import { FORWARD_HEADERS, sanitizeReasoningInputContent } from "../../adapters/openai-responses";
 import { expandPreviousResponseInput, previousResponseProviderState, rememberResponseState } from "../../responses/state";
@@ -233,13 +234,7 @@ export function buildToolBridgeMaps(parsed: OcxParsedRequest, budget?: Translato
 
 
 
-export const PROACTIVE_MULTI_AGENT_MODE_TEXT = [
-  "Proactive multi-agent delegation is active.",
-  "Any earlier instruction requiring an explicit user request before spawning sub-agents no longer applies.",
-  "Delegate independent sub-tasks to sub-agents whenever parallel work would materially improve speed or quality — do not serialize work that can run concurrently.",
-  "Each sub-agent runs in its own context and can use all available tools; prefer spawning specialists over doing everything yourself.",
-  "This mode remains active until a later multi-agent mode developer message changes it.",
-].join(" ");
+export const PROACTIVE_MULTI_AGENT_MODE_TEXT = MULTI_AGENT_MODE_HINT_RECOMMENDATION.text;
 
 const OPENCODEX_SUBAGENT_GUIDANCE_OPEN_TAG = "<opencodex_subagent_guidance>";
 const OPENCODEX_SUBAGENT_GUIDANCE_CLOSE_TAG = "</opencodex_subagent_guidance>";
@@ -491,8 +486,8 @@ export async function multiAgentGuidanceText(
   }
 
   const effort = parsed.options.reasoning;
-  // v1 keeps only the upstream-parity behavior: Proactive text at the top tier
-  // (ultra arrives as max on the wire). No designation/roster payload here.
+  // v1 changes only the delegation trigger at the top tier; other rules still apply.
+  // Ultra arrives as max on the wire. No designation/roster payload here.
   if (effort !== "max" && effort !== "ultra") return null;
   return `<multi_agent_mode>${PROACTIVE_MULTI_AGENT_MODE_TEXT}</multi_agent_mode>`;
 }
