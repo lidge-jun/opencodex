@@ -5583,7 +5583,7 @@ describe.skipIf(!goAvailable || goCLI === null)(
           // pin the mirrored behavior byte-for-byte.
           name: "hash inside basic string",
           extra: "",
-          toml: "[features.multi_agent_v2]\nenabled = true\nsubagent_developer_instructions = \"ping #duty\"\n",
+          toml: '[features.multi_agent_v2]\nenabled = true\nsubagent_developer_instructions = "ping #duty"\n',
         },
         {
           name: "hash inside literal string",
@@ -5598,7 +5598,7 @@ describe.skipIf(!goAvailable || goCLI === null)(
         {
           name: "string field inside inline table",
           extra: "",
-          toml: "[features]\nmulti_agent_v2 = { enabled = true, max_concurrent_threads_per_session = 4, subagent_developer_instructions = \"inline #hint\" }\n",
+          toml: '[features]\nmulti_agent_v2 = { enabled = true, max_concurrent_threads_per_session = 4, subagent_developer_instructions = "inline #hint" }\n',
         },
         {
           name: "dotted enabled form",
@@ -5623,7 +5623,7 @@ describe.skipIf(!goAvailable || goCLI === null)(
         {
           name: "U+ and u+ escapes",
           extra: "",
-          toml: "[features.multi_agent_v2]\nenabled = true\nsubagent_developer_instructions = \"\\U0001F600 hi — \\u4F60\\u597D\"\n",
+          toml: '[features.multi_agent_v2]\nenabled = true\nsubagent_developer_instructions = "\\U0001F600 hi — \\u4F60\\u597D"\n',
         },
       ])("diffs ocx v2 status for $name", ({ extra, toml }) => {
         const home = mkdtempSync(join(tmpdir(), "ocx-go-v2-parity-"));
