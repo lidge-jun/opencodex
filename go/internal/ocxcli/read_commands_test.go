@@ -406,3 +406,63 @@ func TestReadCommandHelpsMatchRegistry(t *testing.T) {
 		}
 	}
 }
+
+func TestFollowLogSeenTrimKeepsNewestInsertionOrder(t *testing.T) {
+	// TS follow mode rebuilds its dedupe Set from [...seen].slice(-2500) once it
+	// passes 5000 unique rows; the Go tracker must keep the same insertion order
+	// so a row still inside the rolling /api/logs window is never reprinted.
+	tracker := newFollowLogSeen()
+	for i := 0; i < followLogTrimAt+200; i++ {
+		if !tracker.add(fmt.Sprintf("k-%d", i)) {
+			t.Fatalf("first insert of k-%d rejected", i)
+		}
+	}
+	if tracker.add("k-0") {
+		t.Fatal("repeat insert must be rejected")
+	}
+	if len(tracker.order) != followLogTrimAt+200 || len(tracker.seen) != followLogTrimAt+200 {
+		t.Fatalf("pre-trim size = %d/%d", len(tracker.order), len(tracker.seen))
+	}
+	tracker.trim()
+	wantSize := followLogKeep
+	if len(tracker.order) != wantSize || len(tracker.seen) != wantSize {
+		t.Fatalf("post-trim size = %d/%d, want %d", len(tracker.order), len(tracker.seen), wantSize)
+	}
+	if tracker.order[0] != "k-2700" || tracker.order[wantSize-1] != "k-5199" {
+		t.Fatalf("trim kept the wrong tail: first=%q last=%q", tracker.order[0], tracker.order[wantSize-1])
+	}
+	if !tracker.seen["k-2700"] || tracker.seen["k-2699"] {
+		t.Fatal("trim boundary kept/dropped the wrong key")
+	}
+	// A row dropped by the trim is eligible to be printed again (it was out of
+	// the window), which must re-insert it at the newest end.
+	if !tracker.add("k-2699") {
+		t.Fatal("dropped key must be re-insertable")
+	}
+	if len(tracker.order) != wantSize+1 {
+		t.Fatalf("re-insert grew the window to %d, want %d", len(tracker.order), wantSize+1)
+	}
+	if tracker.order[len(tracker.order)-1] != "k-2699" {
+		t.Fatal("re-inserted key must land at the newest end")
+	}
+}
+
+func TestReadJSONEmptyBodyPrintsNull(t *testing.T) {
+	// A 2xx empty body parses to JS null in the TS runtime (only non-empty text
+	// is parsed), so printData emits JSON.stringify(null) = "null"; a non-JSON
+	// body prints the quoted text instead.
+	var out bytes.Buffer
+	if err := writeUsageJSON(&out, nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != "null\n" {
+		t.Fatalf("empty body JSON = %q, want %q", out.String(), "null\n")
+	}
+	out.Reset()
+	if err := writeUsageJSON(&out, nil, "not json"); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != "\"not json\"\n" {
+		t.Fatalf("non-JSON body JSON = %q, want %q", out.String(), "\"not json\"\n")
+	}
+}

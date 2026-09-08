@@ -518,6 +518,51 @@ func readTemplateLiteral(row *jsonwire.Value, key string) string {
 // OwnershipFor routes rebuild-index/index-status to the TypeScript owner, so
 // only the read listing and explain can reach this dispatch; a defensive
 // delegation mirrors the models family for direct callers.
+// Follow-mode dedupe windows, mirrored from observe.ts logs(): the Set keeps
+// every seen row key, and a >5000-key poll trims to the most recently
+// inserted 2500.
+const (
+	followLogTrimAt = 5000
+	followLogKeep   = 2500
+)
+
+// followLogSeen keeps the follow-mode dedupe set insertion-ordered, exactly
+// like the TS Set in observe.ts logs(): add reports whether the key was new
+// (and stores it), and trim drops the OLDEST keys when the window overflows.
+// A plain-map trim would drop an arbitrary half of the keys, so a row still
+// inside the rolling /api/logs window could be reprinted after a trim.
+type followLogSeen struct {
+	order []string
+	seen  map[string]bool
+}
+
+func newFollowLogSeen() *followLogSeen {
+	return &followLogSeen{seen: map[string]bool{}}
+}
+
+// add stores key once and reports whether it was new (false for a repeat).
+func (tracker *followLogSeen) add(key string) bool {
+	if tracker.seen[key] {
+		return false
+	}
+	tracker.seen[key] = true
+	tracker.order = append(tracker.order, key)
+	return true
+}
+
+// trim drops the oldest keys when the window overflows followLogTrimAt,
+// keeping the most recent followLogKeep, mirroring
+// `if (seen.size > 5_000) seen = new Set([...seen].slice(-2_500))`.
+func (tracker *followLogSeen) trim() {
+	if len(tracker.order) <= followLogTrimAt {
+		return
+	}
+	for _, key := range tracker.order[:len(tracker.order)-followLogKeep] {
+		delete(tracker.seen, key)
+	}
+	tracker.order = append([]string(nil), tracker.order[len(tracker.order)-followLogKeep:]...)
+}
+
 func runLogs(args []string, deps Deps) int {
 	rest := append([]string(nil), args...)
 	if len(rest) > 0 && rest[0] == "explain" {
@@ -584,7 +629,7 @@ func runLogs(args []string, deps Deps) int {
 		conversationParam = &value
 	}
 	queryString := readLogsQuery(providerParam, modelParam, statusParam, conversationParam, limit)
-	seen := map[string]bool{}
+	followSeen := newFollowLogSeen()
 	for {
 		body, rawText, statusCode, fetchErr := fetchRead(deps, "/api/logs"+queryString)
 		if fetchErr != nil {
@@ -597,12 +642,8 @@ func runLogs(args []string, deps Deps) int {
 			return readReadJSON(deps, body, rawText)
 		}
 		for _, row := range readLogRows(body) {
-			if follow {
-				key := readRowKey(row)
-				if seen[key] {
-					continue
-				}
-				seen[key] = true
+			if follow && !followSeen.add(readRowKey(row)) {
+				continue
 			}
 			if jsonl {
 				encoded, encodeErr := row.Encode()
@@ -618,21 +659,7 @@ func runLogs(args []string, deps Deps) int {
 		if !follow {
 			return 0
 		}
-		if len(seen) > 5000 {
-			next := map[string]bool{}
-			keys := make([]string, 0, len(seen))
-			for key := range seen {
-				keys = append(keys, key)
-			}
-			start := len(keys) - 2500
-			if start < 0 {
-				start = 0
-			}
-			for _, key := range keys[start:] {
-				next[key] = true
-			}
-			seen = next
-		}
+		followSeen.trim()
 		time.Sleep(1 * time.Second)
 	}
 }

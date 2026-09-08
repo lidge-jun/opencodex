@@ -707,6 +707,13 @@ func formatUsageReportLines(view usageReportView) []string {
 // escaping and number rules (jsonwire), then a trailing newline (console.log).
 func writeUsageJSON(w io.Writer, body *jsonwire.Value, rawText string) error {
 	if body == nil {
+		if rawText == "" {
+			// Empty 2xx body: the TS runtime parses only non-empty text, so the
+			// body stays JS null and JSON.stringify(null) prints `null` — not the
+			// quoted empty string a non-JSON body would print.
+			_, err := fmt.Fprintln(w, "null")
+			return err
+		}
 		// Non-JSON body: JSON.stringify(text) is a quoted string.
 		quoted, err := jsonwire.EncodeString(rawText)
 		if err != nil {

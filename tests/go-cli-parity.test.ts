@@ -25,23 +25,26 @@ const goCLI = goAvailable ? buildGoCLI() : null;
 let testHome = "";
 let testServer: ReturnType<typeof Bun.serve> | undefined;
 type Result = { code: number; stdout: string; stderr: string };
-function runTs(args: string[], home = testHome): Result {
+// bun:test's test.each supplies readonly tuple rows; accept them so an argv
+// row can be handed straight to a runner without a cast.
+type Argv = readonly string[];
+function runTs(args: Argv, home = testHome): Result {
   const result = Bun.spawnSync([process.execPath, "src/cli/index.ts", ...args], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
   return { code: result.exitCode, stdout: new TextDecoder().decode(result.stdout), stderr: new TextDecoder().decode(result.stderr) };
 }
-function runGo(args: string[], home = testHome): Result {
+function runGo(args: Argv, home = testHome): Result {
   const result = Bun.spawnSync([goCLI!, ...args], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
   return { code: result.exitCode, stdout: new TextDecoder().decode(result.stdout), stderr: new TextDecoder().decode(result.stderr) };
 }
-async function runTsAsync(args: string[], home = testHome): Promise<Result> {
+async function runTsAsync(args: Argv, home = testHome): Promise<Result> {
   const child = Bun.spawn([process.execPath, "src/cli/index.ts", ...args], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
   return { code: await child.exited, stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text() };
 }
-async function runGoAsync(args: string[], home = testHome): Promise<Result> {
+async function runGoAsync(args: Argv, home = testHome): Promise<Result> {
   const child = Bun.spawn([goCLI!, ...args], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
   return { code: await child.exited, stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text() };
 }
-function expectParity(args: string[]): Result { const ts = runTs(args); const go = runGo(args); expect(go).toEqual(ts); return ts; }
+function expectParity(args: Argv): Result { const ts = runTs(args); const go = runGo(args); expect(go).toEqual(ts); return ts; }
 function normalizeHealthPid(result: Result): Result {
   if (!result.stdout.startsWith("Proxy healthy") && !result.stdout.startsWith("{\"ok\":true")) return result;
   return { ...result, stdout: result.stdout.replace(/PID (?:null|\d+)/, "PID <pid>").replace(/"pid":(?:null|\d+)/, '"pid":<pid>') };
@@ -53,7 +56,8 @@ function startAttestedFixture(status: "ready" | "pending" | "failed"): void {
     const path = new URL(request.url).pathname;
     if (path === "/healthz") {
       const challenge = request.headers.get("x-opencodex-attestation-challenge") ?? "";
-      const headers = challenge ? { "x-opencodex-attestation-proof": createLocalAttestationProof(secret, challenge, process.pid, testServer!.port) } : {};
+      const proof = challenge ? createLocalAttestationProof(secret, challenge, process.pid, testServer!.port as number) : null;
+      const headers: Record<string, string> = proof ? { "x-opencodex-attestation-proof": proof } : {};
       return Response.json({ status: "ok", service: "opencodex", version: "2.42.0", uptime: 1, pid: process.pid, port: testServer!.port }, { headers });
     }
     if (path === "/readyz") return Response.json({ status, service: "opencodex", version: "2.42.0", uptime: 1, pid: process.pid, port: testServer!.port }, { status: status === "ready" ? 200 : 503 });
@@ -210,7 +214,8 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
       const path = new URL(request.url).pathname;
       if (path === "/healthz") {
         const challenge = request.headers.get("x-opencodex-attestation-challenge") ?? "";
-        const headers = challenge ? { "x-opencodex-attestation-proof": createLocalAttestationProof(secret, challenge, process.pid, testServer!.port) } : {};
+        const proof = challenge ? createLocalAttestationProof(secret, challenge, process.pid, testServer!.port as number) : null;
+        const headers: Record<string, string> = proof ? { "x-opencodex-attestation-proof": proof } : {};
         return Response.json({ status: "ok", service: "opencodex", version: "2.42.0", uptime: 1, pid: process.pid, port: testServer!.port }, { headers });
       }
       return new Response(payload, { status, headers: { "content-type": "application/json" } });
@@ -276,13 +281,15 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
   // management routes. The fixture server answers /healthz with the attested
   // identity both runtimes probe before trusting runtime-port.json, and each
   // /api/… path with the canned payload below (or the raw body/status given).
-  function startReadsFixture(routes: Record<string, { status?: number; body?: unknown; raw?: string }>): void {
+  type RouteFixture = { status?: number; body?: unknown; raw?: string };
+  function startReadsFixture(routes: Record<string, RouteFixture>): void {
     testHome = mkdtempSync(join(tmpdir(), "ocx-go-reads-parity-"));
     testServer = Bun.serve({ port: 0, fetch(request) {
       const path = new URL(request.url).pathname;
       if (path === "/healthz") {
         const challenge = request.headers.get("x-opencodex-attestation-challenge") ?? "";
-        const headers = challenge ? { "x-opencodex-attestation-proof": createLocalAttestationProof(secret, challenge, process.pid, testServer!.port) } : {};
+        const proof = challenge ? createLocalAttestationProof(secret, challenge, process.pid, testServer!.port as number) : null;
+        const headers: Record<string, string> = proof ? { "x-opencodex-attestation-proof": proof } : {};
         return Response.json({ status: "ok", service: "opencodex", version: "2.42.0", uptime: 1, pid: process.pid, port: testServer!.port }, { headers });
       }
       const route = routes[path];
@@ -346,6 +353,10 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
     { args: ["inspect", "nope"] }, { args: ["inspect", "client-config"] }, { args: ["inspect", "client-config", "--client"] },
     { args: ["inspect", "codex-prompt", "--text", "--json"] }, { args: ["inspect", "codex-prompt", "extra"] },
     { args: ["inspect", "pacing", "--name"] }, { args: ["inspect", "--bogus"] },
+    // rejectArgs must redact secret-option values before reporting leftovers
+    // (runtime-api.ts SECRET_OPTIONS); a regression here would echo the
+    // credential to stderr.
+    { args: ["logs", "--token", "supersecret"] }, { args: ["memory", "--admin-token", "supersecret"] },
   ])("diffs logs/memory/inspect argument validation for $args", ({ args }) => {
     testHome = mkdtempSync(join(tmpdir(), "ocx-go-reads-parity-"));
     expect(expectParity(args)).toMatchObject({ code: 2 });
@@ -362,7 +373,11 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
     { args: ["inspect", "config"], routes: { "/api/config": { status: 401, body: { error: "bad key", hint: "run ocx auth login" } } }, code: 1 },
     { args: ["inspect", "codex-prompt", "--text"], routes: { "/api/codex-prompt/text": { status: 503, raw: "gateway down" } }, code: 1 },
     { args: ["inspect", "star"], routes: { "/api/github/star": { status: 418, body: { detail: "teapot", message: "I'm a teapot" } } }, code: 1 },
-  ])("diffs logs/memory/inspect management error output and exit code for $args", async ({ args, routes, code }) => {
+    { args: ["inspect", "catalog"], routes: { "/api/catalog": { status: 409, body: { error: "catalog busy", hint: "retry after sync" } } }, code: 5 },
+    // A 2xx empty body parses to JS null (only non-empty text is parsed), so
+    // --json re-emits JSON.stringify(null) = "null" in both CLIs.
+    { args: ["memory", "--json"], routes: { "/api/system/memory": { status: 200, raw: "" } }, code: 0 },
+  ] as Array<{ args: readonly string[]; routes: Record<string, RouteFixture>; code: number }>)("diffs logs/memory/inspect management error output and exit code for $args", async ({ args, routes, code }) => {
     startReadsFixture(routes);
     const ts = await runTsAsync(args);
     const go = await runGoAsync(args);
