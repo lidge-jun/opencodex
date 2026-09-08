@@ -84,6 +84,32 @@ func TestAccessKeyListHumanMatchesTSGolden(t *testing.T) {
 	}
 }
 
+// TestSystemCodexCliUpdateCarveOutStaysTypeScriptOwned mirrors the models
+// runtime-subcommand seam: system owns every verb except codex-cli-update,
+// which is a read-only local Codex install inspection that must keep
+// delegating to the TypeScript CLI (no management plane, no proxy).
+func TestSystemCodexCliUpdateCarveOutStaysTypeScriptOwned(t *testing.T) {
+	for _, args := range [][]string{
+		{"system", "codex-cli-update"},
+		{"system", "codex-cli-update", "check"},
+		{"system", "codex-cli-update", "check", "--json"},
+	} {
+		if got, known := OwnershipFor(args); !known || got != TypeScriptOwned {
+			t.Fatalf("OwnershipFor(%v) = %q, %t; want typescript-owned, true", args, got, known)
+		}
+	}
+	for _, args := range [][]string{
+		{"system", "settings"},
+		{"system", "status", "--json"},
+		{"system", "codex-restart", "--yes"},
+		{"system", "update", "check"},
+	} {
+		if got, known := OwnershipFor(args); !known || got != GoOwned {
+			t.Fatalf("OwnershipFor(%v) = %q, %t; want go-owned, true", args, got, known)
+		}
+	}
+}
+
 func TestApiKeyAliasRunsAccessKeyList(t *testing.T) {
 	server, state := mgmtFixtureServer(t, func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, mgmtKeysEnvelope)
