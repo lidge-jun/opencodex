@@ -346,6 +346,45 @@ func TestRunSyncCacheDesktopRestartFlagNonWindows(t *testing.T) {
 	}
 }
 
+func TestRunSyncCacheRefusesUnsafeExistingLockDB(t *testing.T) {
+	// The K database, once created by a prior acquisition, must keep mode 0600
+	// and our uid: TS reports unsafe-path (never repairing) and skips the write.
+	if windowsOS() {
+		t.Skip("uid/mode gate is POSIX-only in the TS owner")
+	}
+	openHome, codexHome := syncTestEnv(t)
+	syncWriteConfig(t, openHome, syncConfigON())
+	writeFileTest(t, filepath.Join(codexHome, "opencodex-catalog.json"), `{"models":[{"slug":"m1"}]}`)
+	var firstOut, firstErr bytes.Buffer
+	if code := Run([]string{"sync-cache"}, depsFor(RuntimeState{}, &firstOut, &firstErr)); code != ExitOK {
+		t.Fatalf("first sync-cache = %d stderr=%q", code, firstErr.String())
+	}
+	db, err := resolveCatalogWriteDatabasePath(codexHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(db, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := Run([]string{"sync-cache"}, depsFor(RuntimeState{}, &out, &errOut)); code != ExitFailure {
+		t.Fatalf("second sync-cache = %d, want 1", code)
+	}
+	if want := "Cache refresh did not complete (unavailable). The Codex model cache was not rewritten.\n"; errOut.String() != want {
+		t.Fatalf("stderr = %q, want %q", errOut.String(), want)
+	}
+	var outJSON, errJSON bytes.Buffer
+	if code := Run([]string{"sync-cache", "--json"}, depsFor(RuntimeState{}, &outJSON, &errJSON)); code != ExitFailure {
+		t.Fatalf("json code=%d", code)
+	}
+	if !strings.Contains(outJSON.String(), "\"outcome\": \"unavailable\"") || !strings.Contains(outJSON.String(), "\"reason\": \"unsafe-path\"") {
+		t.Fatalf("json stdout = %q, want unavailable/unsafe-path", outJSON.String())
+	}
+	if !syncPathExists(filepath.Join(codexHome, "models_cache.json")) {
+		t.Fatal("second run must not have written the cache")
+	}
+}
+
 func TestShouldSyncCodexOnStartDecisions(t *testing.T) {
 	cases := []struct {
 		name string

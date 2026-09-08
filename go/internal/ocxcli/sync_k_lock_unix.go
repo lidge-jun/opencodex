@@ -25,17 +25,51 @@ import (
 // drives must make the TS CLI observe contention.
 const sqliteReservedByte int64 = 0x400001FF
 
-// acquireCatalogWriteLock opens (creating) the K database with the same
-// 0600/uid semantics TS applies and takes the reserved-byte write lock. The
-// returned release function drops the lock and closes the file.
+// acquireCatalogWriteLock mirrors the TS acquisition sequence
+// (withCatalogWriteSerialization): an existing K database must already be a
+// regular file owned by the effective uid with mode 0600 — TS never repairs a
+// misconfigured database, it reports unsafe-path and skips the write. A missing
+// database is created 0600 and chmodded after creation. The lock itself is the
+// SQLite reserved-byte write lock; the returned release function drops it and
+// closes the file.
 func acquireCatalogWriteLock(databasePath string) (func(), error) {
-	file, err := os.OpenFile(databasePath, os.O_RDWR|os.O_CREATE, 0o600)
+	absent := false
+	if info, err := os.Lstat(databasePath); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return nil, errCatalogWriteUnsafe
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || uint64(stat.Uid) != uint64(os.Geteuid()) || (info.Mode().Perm()&0o777) != 0o600 {
+			return nil, errCatalogWriteUnsafe
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	} else {
+		absent = true
+	}
+
+	mode := os.O_RDWR
+	if absent {
+		mode |= os.O_CREATE
+	}
+	file, err := os.OpenFile(databasePath, mode, 0o600)
 	if err != nil {
 		return nil, err
 	}
-	if info, err := file.Stat(); err == nil && info.Mode().Perm() != 0o600 {
+	if absent {
 		_ = file.Chmod(0o600)
 	}
+	// Re-verify after open: the path must still be the plain file we opened and
+	// must not have been swapped for a symlink (samePathIdentity on realpath).
+	if info, err := os.Lstat(databasePath); err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		_ = file.Close()
+		return nil, errCatalogWriteUnsafe
+	}
+	if real, err := filepath.EvalSymlinks(databasePath); err != nil || real != databasePath {
+		_ = file.Close()
+		return nil, errCatalogWriteUnsafe
+	}
+
 	lock := unix.Flock_t{Type: unix.F_WRLCK, Whence: 0, Start: sqliteReservedByte, Len: 1}
 	if err := unix.FcntlFlock(file.Fd(), unix.F_SETLK, &lock); err != nil {
 		_ = file.Close()

@@ -84,6 +84,12 @@ type syncClientConnectionState struct {
 	reason string
 }
 
+// readSyncRawConfig mirrors rawTopLevelConfig in src/client/state.ts: the file
+// must parse to a JSON object (a top-level null/array is unreadable, matching
+// the TS `typeof parsed === "object" && !Array.isArray(parsed)` test). A
+// missing file and an unparseable one are deliberately not distinguished here;
+// readSyncClientState decides which one is "disconnected" vs "invalid" by
+// checking existence, exactly like diagnostics.source does in TS.
 func readSyncRawConfig() (map[string]any, bool) {
 	path, err := config.Path()
 	if err != nil {
@@ -93,11 +99,15 @@ func readSyncRawConfig() (map[string]any, bool) {
 	if err != nil {
 		return nil, false
 	}
-	decoded := make(map[string]any)
-	if json.Unmarshal(bytesTrimBOM(raw), &decoded) != nil {
+	var value any
+	if json.Unmarshal(bytesTrimBOM(raw), &value) != nil {
 		return nil, false
 	}
-	return decoded, true
+	object, ok := value.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	return object, true
 }
 
 func bytesTrimBOM(raw []byte) []byte {
@@ -142,28 +152,20 @@ func readSyncClientState() syncClientConnectionState {
 	}
 	_, hasClient := raw["client"]
 	role, hasRole := stringKey(raw, "runtimeRole")
-	rolePresent := false
+	// TS: any present non-null runtimeRole that is not one of the three roles is
+	// invalid — including a non-string value, which hasRole reports as absent.
 	if value, present := raw["runtimeRole"]; present && value != nil {
-		rolePresent = true
-		if !hasRole {
+		if !hasRole || (role != "standalone" && role != "hub" && role != "client") {
 			return syncClientConnectionState{kind: "invalid", reason: "config.json.runtimeRole is invalid"}
 		}
 	}
-	if hasRole || rolePresent {
-		if role != "standalone" && role != "hub" && role != "client" {
-			return syncClientConnectionState{kind: "invalid", reason: "config.json.runtimeRole is invalid"}
-		}
-	}
-	_ = hasRole
-	if !hasClient && (role == "" || role == "standalone") {
-		// role "" covers both absent and non-string (a non-string runtimeRole was
-		// already rejected above when the key is present).
-		if _, present := raw["runtimeRole"]; !present || role == "standalone" {
+	if !hasClient {
+		// A hub is a server role, not a broken client: without client state it
+		// simply is not connected. role == "" here means runtimeRole is absent
+		// (a present empty string was already rejected as invalid above).
+		if role == "" || role == "standalone" || role == "hub" {
 			return syncClientConnectionState{kind: "disconnected"}
 		}
-	}
-	if !hasClient && role == "hub" {
-		return syncClientConnectionState{kind: "disconnected"}
 	}
 	if !hasClient || role != "client" {
 		if hasClient {
@@ -329,7 +331,7 @@ func syncCatalogConfigDir() string {
 	return dir
 }
 
-func catalogBackupPathFor(codexHome, catalogPath string) string {
+func catalogBackupPathFor(catalogPath string) string {
 	normalized := filepath.Clean(catalogPath)
 	if runtime.GOOS == "windows" {
 		normalized = strings.ToLower(normalized)
@@ -350,7 +352,7 @@ func syncDerivableOnDiskSource(codexHome, catalogPath string) bool {
 	if active, _ := readCatalog(catalogPath); active != nil {
 		return true
 	}
-	if _, ok := readCatalog(catalogBackupPathFor(codexHome, catalogPath)); ok {
+	if _, ok := readCatalog(catalogBackupPathFor(catalogPath)); ok {
 		return true
 	}
 	if isDefaultCodexCatalogPath(codexHome, catalogPath) {
@@ -373,10 +375,10 @@ func syncPathExists(path string) bool {
 // ocx sync runner (src/cli/dispatch.ts "sync" + src/codex/sync.ts).
 
 func runSync(args []string, deps Deps) int {
-	restartCodex := syncHasArg(args, "--restart-codex")
-	_ = restartCodex // app-server restart is handled after a real write only.
-	syncHasArg(args, "--restart-desktop-app")
-
+	// --restart-codex / --restart-desktop-app only affect the post-write
+	// app-server / desktop-app handling, which runs on the TS refresh engine for
+	// the states that reach runSync's delegation branch. The flags are consumed
+	// there (runSync passes args through verbatim); no parsing is needed here.
 	state := readSyncClientState()
 	if state.kind == "invalid" || state.kind == "mismatched" {
 		fmt.Fprintf(deps.Stderr, "Client state is %s: %s\n", state.kind, state.reason)
@@ -476,19 +478,16 @@ func runSyncCache(args []string, deps Deps) int {
 	kind, reason, wrote := withCatalogWriteSerialization(codexHome, func() bool {
 		return invalidateCodexModelsCacheWithPermit(codexHome, true)
 	})
-	jsonSafeLog := deps.Stderr
-	humanLog := deps.Stdout
-	_ = jsonSafeLog
 
 	// Only warn/restart when models_cache was actually rewritten from a readable
 	// catalog; --json keeps every post-write notice on stderr beside the envelope.
 	if kind == "completed" && wrote {
 		afterCatalogWriteHandleAppServers(deps, restartCodex, cacheJSON)
 		if restartDesktopApp {
-			handleSyncDesktopAppRestart(deps, cacheJSON)
+			handleSyncDesktopAppRestart(deps)
 		}
 	} else if desiredDisabled && !cacheJSON {
-		fmt.Fprintln(humanLog, syncCacheOffNoWrite)
+		fmt.Fprintln(deps.Stdout, syncCacheOffNoWrite)
 	}
 
 	contended := kind == "unavailable" && reason == "busy"
@@ -498,9 +497,9 @@ func runSyncCache(args []string, deps Deps) int {
 	if cacheJSON {
 		syncPrintCacheEnvelope(deps.Stdout, ok, wrote, contended, noCatalog, kind, reason, desiredDisabled, codexHome)
 	} else if contended {
-		fmt.Fprintln(humanLog, syncCacheBusy)
+		fmt.Fprintln(deps.Stdout, syncCacheBusy)
 	} else if noCatalog {
-		fmt.Fprintln(humanLog, syncCacheNoCatalog)
+		fmt.Fprintln(deps.Stdout, syncCacheNoCatalog)
 	} else if !ok {
 		fmt.Fprintf(deps.Stderr, "Cache refresh did not complete (%s). %s\n", kind, syncCacheWroteNot)
 	}
@@ -682,30 +681,13 @@ func atomicWriteJSON(path, content string) error {
 	return os.Rename(tempName, path)
 }
 
-func formatStaleCodexAppServerWarning(processes []codexAppServerProcess) string {
-	pids := make([]string, 0, len(processes))
-	for _, process := range processes {
-		pids = append(pids, strconv.Itoa(process.pid))
-	}
-	suffix := ""
-	if len(processes) > 1 {
-		suffix = "s"
-	}
-	return "WARNING: " + strconv.Itoa(len(processes)) + " Codex app-server process(es) still running (PID" + suffix + ": " + strings.Join(pids, ", ") + "). " +
-		"Disk catalog/cache were updated, but Codex may keep showing the old model list until those processes restart. " +
-		"Re-run with `ocx sync --restart-codex` (or `ocx sync-cache --restart-codex`) to send SIGTERM only to matching app-server processes. " +
-		"On Windows the desktop app itself may also need a full restart (`ocx sync --restart-desktop-app`). " +
-		"Active turns may be interrupted."
-}
-
-func handleSyncDesktopAppRestart(deps Deps, toStderr bool) {
+func handleSyncDesktopAppRestart(deps Deps) {
 	// restartCodexDesktopApp resolves windows_only outside win32 before any
 	// process work, so this branch is byte-identical to TS on every non-Windows
 	// host; the Windows desktop-app restart itself is not ported. The message is
 	// an error both for the human logger and under --json (jsonSafeLog), so it
 	// always lands on stderr.
 	fmt.Fprintln(deps.Stderr, syncCacheDesktopWindowsOnly)
-	_ = toStderr
 }
 
 func syncHasArg(args []string, flag string) bool {
@@ -722,7 +704,7 @@ func syncHasArg(args []string, flag string) bool {
 // write lock, prints a ready marker, and holds it until killed. It lets the
 // differential harness prove that BOTH the TypeScript CLI and the Go binary
 // observe a contended catalog write and report busy.
-func runCatalogKHold(args []string, deps Deps) int {
+func runCatalogKHold(deps Deps) int {
 	codexHome, err := syncCodexHome()
 	if err != nil {
 		fmt.Fprintln(deps.Stderr, err)
@@ -750,17 +732,13 @@ func runCatalogKHold(args []string, deps Deps) int {
 // ─────────────────────────────────────────────────────────────────────────────
 // K write-lock (src/codex/catalog-write-serialization.ts).
 
-type syncSerializationOutcome struct {
-	kind   string // completed | unavailable
-	reason string // busy | unsafe-path (unavailable only)
-}
-
-var errCatalogWriteBusy = errors.New("catalog write lock is held by another process")
-
 // withCatalogWriteSerialization acquires K for one canonical CODEX_HOME and
 // runs write while it is held, mirroring the TS outcome vocabulary. The write
 // callback performs no provider or subprocess work, exactly like its TS
 // counterpart (sync-cache's callback only parses files and writes the cache).
+var errCatalogWriteBusy = errors.New("catalog write lock is held by another process")
+var errCatalogWriteUnsafe = errors.New("catalog write lock database is unsafe")
+
 func withCatalogWriteSerialization(canonicalCodexHome string, write func() bool) (kind, reason string, value bool) {
 	databasePath, err := resolveCatalogWriteDatabasePath(canonicalCodexHome)
 	if err != nil {
@@ -771,6 +749,9 @@ func withCatalogWriteSerialization(canonicalCodexHome string, write func() bool)
 	if err != nil {
 		if errors.Is(err, errCatalogWriteBusy) {
 			return "unavailable", "busy", false
+		}
+		if errors.Is(err, errCatalogWriteUnsafe) {
+			return "unavailable", "unsafe-path", false
 		}
 		return "unavailable", "database", false
 	}

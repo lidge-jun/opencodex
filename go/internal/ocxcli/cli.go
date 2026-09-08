@@ -244,7 +244,7 @@ func Run(args []string, deps Deps) int {
 	case "__catalog-khold":
 		// Deliberately undocumented test seam used by the sync-cache parity
 		// oracle to hold the K catalog write lock from the Go binary.
-		return runCatalogKHold(args[1:], deps)
+		return runCatalogKHold(deps)
 	case "--version", "-v", "version":
 		fmt.Fprintf(deps.Stdout, "opencodex %s\n", deps.Version)
 		return ExitOK

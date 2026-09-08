@@ -250,6 +250,22 @@ func codexAppServerAlive(pid int) bool {
 // real catalog/cache write, or SIGTERM them when --restart-codex was passed.
 // In a fixture environment no Codex app-server process is running, so both the
 // warn and restart branches are silent there.
+func formatStaleCodexAppServerWarning(processes []codexAppServerProcess) string {
+	pids := make([]string, 0, len(processes))
+	for _, process := range processes {
+		pids = append(pids, strconv.Itoa(process.pid))
+	}
+	suffix := ""
+	if len(processes) > 1 {
+		suffix = "s"
+	}
+	return "WARNING: " + strconv.Itoa(len(processes)) + " Codex app-server process(es) still running (PID" + suffix + ": " + strings.Join(pids, ", ") + "). " +
+		"Disk catalog/cache were updated, but Codex may keep showing the old model list until those processes restart. " +
+		"Re-run with `ocx sync --restart-codex` (or `ocx sync-cache --restart-codex`) to send SIGTERM only to matching app-server processes. " +
+		"On Windows the desktop app itself may also need a full restart (`ocx sync --restart-desktop-app`). " +
+		"Active turns may be interrupted."
+}
+
 func afterCatalogWriteHandleAppServers(deps Deps, restartCodex, toStderr bool) {
 	logOut := deps.Stdout
 	logErr := deps.Stderr

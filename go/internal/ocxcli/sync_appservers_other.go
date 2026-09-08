@@ -8,10 +8,6 @@ package ocxcli
 // environment and diverges only when a real Codex app-server process is
 // running on macOS/Windows during a catalog write.
 
-import (
-	"errors"
-)
-
 type codexAppServerProcess struct {
 	pid         int
 	commandLine string
@@ -19,14 +15,6 @@ type codexAppServerProcess struct {
 
 func listCodexAppServerProcesses() []codexAppServerProcess {
 	return nil
-}
-
-func codexAppServerSignal(pid int) error {
-	return errors.New("codex app-server signalling is not supported on this platform")
-}
-
-func codexAppServerAlive(pid int) bool {
-	return false
 }
 
 // afterCatalogWriteHandleAppServers is a no-op outside Linux: no Codex
