@@ -357,6 +357,14 @@ export async function executeComboResponses(
   // adoption below must never replace it with a concrete child route trace.
   logCtx.routeDecision = comboRouteDecisionTrace(config, comboId, pick, requestedModel);
 
+  const originalReasoning = body && typeof body === "object" && !Array.isArray(body)
+    ? (body as { reasoning?: unknown }).reasoning
+    : undefined;
+  const originalRequestedEffort = originalReasoning && typeof originalReasoning === "object" && !Array.isArray(originalReasoning)
+    && typeof (originalReasoning as { effort?: unknown }).effort === "string"
+    ? (originalReasoning as { effort: string }).effort
+    : undefined;
+
   let lastFailure: Response | null = null;
   // Dispatched targets, not attempted picks: it indexes the declared target list so the clamp
   // below can tell how many targets are still entitled to a send.
@@ -407,6 +415,7 @@ export async function executeComboResponses(
       comboDefaultEffort(config, comboId),
       supportedLadderFor({ provider: targetRoute.provider, modelId: targetRoute.modelId }),
       combo.reasoningEffortMode,
+      combo.defaultEffortMode,
     );
     const childHeaders = buildComboChildHeaders(req.headers);
     const childRequest = new Request(req.url, {
@@ -425,6 +434,10 @@ export async function executeComboResponses(
       config.providers[pick.target.provider]!.adapter,
     );
     childLog.activeAttempt = attempt;
+    if (originalRequestedEffort !== undefined) {
+      childLog.requestedEffort = originalRequestedEffort;
+      attempt.requestedEffort = originalRequestedEffort;
+    }
     let attemptRetained = false;
     const retainCancelledAttempt = (): void => {
       if (attemptRetained) return;
@@ -499,6 +512,10 @@ export async function executeComboResponses(
         onNativePassthroughCancel: callbackGate.onCancel,
         onResponseComplete: callbackGate.onResponseComplete,
       });
+      if (originalRequestedEffort !== undefined) {
+        childLog.requestedEffort = originalRequestedEffort;
+        attempt.requestedEffort = originalRequestedEffort;
+      }
     } catch (error) {
       callbackGate.discard();
       if (options.abortSignal?.aborted) {
