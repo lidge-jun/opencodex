@@ -103,7 +103,9 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const current = await runtimeRequest<{ combos?: ComboRow[] }>("/api/combos", {}, deps);
   const existing = (current.combos ?? []).find(row => row.id === (renameFrom ?? id));
   if (existing?.imageInput === "disabled") combo.imageInput = "disabled";
-  if (effortMode === undefined && existing?.defaultEffortMode === "force") combo.defaultEffortMode = "force";
+  if (effortMode === undefined && existing?.defaultEffortMode === "force") {
+    combo.defaultEffortMode = effort === "-" ? "fallback" : "force";
+  }
   const result = await runtimeRequest("/api/combos", {
     method: "PUT",
     body: JSON.stringify({ id, combo, ...(renameFrom ? { renameFrom } : {}) }),
