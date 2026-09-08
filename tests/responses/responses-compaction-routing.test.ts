@@ -1,3 +1,4 @@
+import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 import { sessionLaneIdFromRequest } from "../../src/server/request-log-conversation";
 /**
  * Issue #422: a Responses-shaped wire does not imply support for Codex's private
@@ -956,6 +957,8 @@ describe("compact alternate-account attempt (#913)", () => {
     test(`${version} recalled native combo reselects the current account and respects admission refusal`, async () => {
       await withPoolEnv("ocx-combo-recall-account-", async config => {
         clearComboRecallForTests();
+        clearComboSelectionState();
+        clearComboTargetCooldowns();
         config.combos = { native: { targets: [{ provider: "openai", model: "gpt-5.5" }] } };
         config.codexAccountNamespaces = { side: "pool-a" };
         const headers = { session_id: "account-recall" };
@@ -981,37 +984,54 @@ describe("compact alternate-account attempt (#913)", () => {
             ...(compact ? { output: [{ type: "compaction", encrypted_content: "native-recall-ciphertext" }] } : {}),
           } }]);
         }) as typeof fetch;
+        const client = new AbortController();
+        let completionTimer: ReturnType<typeof setTimeout> | undefined;
         try {
           let complete!: () => void;
           const completed = new Promise<void>(resolve => { complete = resolve; });
-          const seed = await handleResponses(compactionRequest({ model: "combo/native", stream: true, input: "hello" }, undefined, headers),
-            config, { model: "", provider: "" }, { onResponseComplete: complete });
-          await seed.text();
-          await completed;
+          const seedWork = (async () => {
+            const seed = await handleResponses(compactionRequest({ model: "combo/native", stream: true, input: "hello" }, client.signal, headers),
+              config, { model: "", provider: "" }, { onResponseComplete: complete, abortSignal: client.signal });
+            expect(seed.status).toBe(200);
+            await seed.text();
+            await completed;
+          })();
+          await Promise.race([
+            seedWork,
+            new Promise<never>((_, reject) => {
+              completionTimer = setTimeout(() => reject(new Error("native combo seed did not complete")), 10_000);
+            }),
+          ]);
+          clearTimeout(completionTimer);
+          completionTimer = undefined;
           expect(recallComboForLane(config, sessionLaneIdFromRequest(new Headers({ session_id: "account-recall" })), "gpt-5.5")).toBe("native");
           config.activeCodexAccountId = "pool-b";
           const compact = version === "v1" ? handleResponsesCompact : handleResponses;
           const log: RequestLogContext = { model: "", provider: "" };
-          const response = await compact(compactionRequest(baseCompactionBody({ model: "gpt-5.5", stream: true }), undefined, headers), config, log);
+          const response = await compact(compactionRequest(baseCompactionBody({ model: "gpt-5.5", stream: true }), client.signal, headers), config, log);
           expect(response.status).toBe(200);
           await response.text();
           expect(log.comboId).toBe("native");
           expect(accounts).toEqual(["pool_acc_a", "pool_acc_b"]);
 
           const explicitLog: RequestLogContext = { model: "", provider: "" };
-          const explicit = await compact(compactionRequest(baseCompactionBody({ model: "side/gpt-5.5", stream: true }), undefined, headers), config, explicitLog);
+          const explicit = await compact(compactionRequest(baseCompactionBody({ model: "side/gpt-5.5", stream: true }), client.signal, headers), config, explicitLog);
           expect(explicit.status).toBe(200);
           await explicit.text();
           expect(explicitLog.comboId).toBeUndefined();
           expect(accounts.at(-1)).toBe("pool_acc_a");
           const sends = accounts.length;
           authSpy.mockRejectedValue(new authContextModule.CodexMainProfileDrainingError());
-          const refused = await compact(compactionRequest(baseCompactionBody({ model: "gpt-5.5", stream: true }), undefined, headers), config, { model: "", provider: "" });
+          const refused = await compact(compactionRequest(baseCompactionBody({ model: "gpt-5.5", stream: true }), client.signal, headers), config, { model: "", provider: "" });
           expect(refused.status).toBe(503);
           expect(accounts).toHaveLength(sends);
         } finally {
+          if (completionTimer !== undefined) clearTimeout(completionTimer);
+          client.abort();
           authSpy.mockRestore();
           clearComboRecallForTests();
+          clearComboSelectionState();
+          clearComboTargetCooldowns();
         }
       });
     });
