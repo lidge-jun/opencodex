@@ -1,0 +1,84 @@
+# OpenCodex-authored supplemental rules.
+# Copyright (c) OpenCodex contributors.
+# SPDX-License-Identifier: MIT
+#
+# This file is original OpenCodex work. It supplements, but is not copied from
+# or included in the provenance hashes of, the pinned Cloud.ru donor assets.
+
+guardrails_regex_rules:
+  - data_type: 1
+    group_priority: 90
+    name: CREDENTIALS
+    display_name: "Учетные данные"
+    description: "Контекстные password, secret и private-key assignments"
+    rules:
+      - rule_id: opencodex.credentials.password-assignment
+        name: opencodex.credentials.password-assignment
+        regex: >-
+          (?i)(?:^|[\x60\r\n\t ,{])["']?(?:(?:[a-z0-9]+[_-])*(?:passwords?|passwds?|pwds?)|пароль)["']?\s*[:=>{]+\s*(?:"([^"\\\r\n]{6,})"|'([^'\\\r\n]{6,})'|`([^`\\\r\n]{6,})`|([^\x60\s,;}\]\r\n]{6,}))
+        keywords: [password, passwd, pwd, пароль]
+        masking:
+          capture_groups: [1, 2, 3, 4]
+          placeholder: OPENCODEX_PASSWORD
+
+      - rule_id: opencodex.credentials.secret-assignment
+        name: opencodex.credentials.secret-assignment
+        regex: >-
+          (?i)(?:^|[\x60\r\n\t ,{])["']?(?:[a-z0-9]+[_-])*(?:secret(?:[_-]?keys?)?|hmac[_-]?(?:secret|key)|signing[_-]?(?:secret|key)|secret[_-]?access[_-]?key)["']?\s*[:=]\s*(?:"([^"\\\r\n]{8,})"|'([^'\\\r\n]{8,})'|`([^`\\\r\n]{8,})`|([^\x60\s,;}\]\r\n]{8,}))
+        keywords: [secret, hmac, signing]
+        masking:
+          capture_groups: [1, 2, 3, 4]
+          placeholder: OPENCODEX_SECRET
+
+      - rule_id: opencodex.credentials.private-key-assignment
+        name: opencodex.credentials.private-key-assignment
+        regex: >-
+          (?i)(?:^|[\x60\r\n\t ,{])["']?(?:(?:[a-z0-9]+[_-])*private[_ -]?keys?|(?:vpn|wireguard|wg)?privatekeys?)["']?\s*[:=]\s*(?:"([^"\\\r\n]{32,})"|'([^'\\\r\n]{32,})'|`([^`\\\r\n]{32,})`|([A-Za-z0-9_+/=-]{32,}))
+        keywords: [private_key, private-key, privatekey, "private key"]
+        masking:
+          capture_groups: [1, 2, 3, 4]
+          placeholder: OPENCODEX_PRIVATE_KEY
+
+  - data_type: 2
+    group_priority: 100
+    name: API_KEYS
+    display_name: "API-ключи"
+    description: "Контекстные API-key assignments"
+    rules:
+      - rule_id: opencodex.api-keys.assignment
+        name: opencodex.api-keys.assignment
+        regex: >-
+          (?i)(?:^|[\x60\r\n\t ,{])["']?(?:(?:[a-z0-9]+[_-])*(?:api[_-]?keys?|apikeys?)|api[ _-]*ключ|ключ[ _-]*api)["']?\s*[:=]\s*(?:"([^"\\\r\n]{8,})"|'([^'\\\r\n]{8,})'|`([^`\\\r\n]{8,})`|([^\x60\s,;}\]\r\n]{8,}))
+        keywords: [api_key, api-key, apikey, "api key", "api ключ", "ключ api"]
+        masking:
+          capture_groups: [1, 2, 3, 4]
+          placeholder: OPENCODEX_API_KEY
+
+  - data_type: 5
+    group_priority: 80
+    name: PII
+    display_name: "Персональные данные"
+    description: "ASCII email с punycode-доменом"
+    rules:
+      - rule_id: opencodex.pii.email-punycode
+        name: opencodex.pii.email-punycode
+        regex: >-
+          (?:^|[^\w\\])([A-Za-z0-9._%+\-]+@(?:[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?\.)+xn--[A-Za-z0-9](?:[A-Za-z0-9\-]{0,57}[A-Za-z0-9])?)\b
+        validators: [email_ascii]
+        masking:
+          capture_groups: [1]
+          placeholder: OPENCODEX_EMAIL_IDN
+
+  - data_type: 1
+    group_priority: 90
+    name: CREDENTIAL_URLS
+    display_name: "URL с учетными данными"
+    description: "Контекстные URI с userinfo для инфраструктурных протоколов"
+    rules:
+      - rule_id: opencodex.credentials.infrastructure-uri-userinfo
+        name: opencodex.credentials.infrastructure-uri-userinfo
+        regex: >-
+          (?i)\b((?:ssh|sftp|smtp|smtps|imap|imaps|ldap|ldaps|kafka|socks(?:4a?|5h?))://[A-Za-z0-9._~%+-]+:[^@\s\x60'"<>{}\[\]]{3,}@(?:[A-Za-z0-9._~%:\-\[\]]+|<[A-Za-z0-9._~%:-]{1,128}>)(?::\d{1,5})?(?:/[^\s\x60'"<>{}\[\]]*)?)(?:[\x60'"\s,;.!?:#()\[\]{}]|$)
+        masking:
+          capture_groups: [1]
+          placeholder: OPENCODEX_URL_WITH_CREDS

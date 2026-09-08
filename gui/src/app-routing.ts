@@ -12,6 +12,7 @@ export type Page =
   | "usage"
   | "storage"
   | "codex-set"
+  | "guardrails"
   | "integrations";
 
 export const VALID_PAGES = new Set<Page>([
@@ -24,6 +25,7 @@ export const VALID_PAGES = new Set<Page>([
   "usage",
   "storage",
   "codex-set",
+  "guardrails",
   "integrations",
 ]);
 
@@ -68,6 +70,14 @@ export const DASHBOARD_TAB_HASHES = ["dashboard/providers", "dashboard/models"] 
  */
 export const MODELS_TAB_HASHES = ["models/combos", "models/routing", "models/compatibility"] as const;
 
+/** Guardrails owns five workspace tabs; Overview uses the bare `#guardrails` hash. */
+export const GUARDRAILS_TAB_HASHES = [
+  "guardrails/rules",
+  "guardrails/tester",
+  "guardrails/activity",
+  "guardrails/settings",
+] as const;
+
 /**
  * `#dashboard/update` is an action deep link, not a tab: the sidebar update button uses
  * it to open the maintenance update dialog over the Overview section. It is listed as a
@@ -108,6 +118,7 @@ export function hashBelongsToPage(rawHash: string, page: Page): boolean {
     || (page === "logs" && rawHash === "logs/debug")
     || (page === "codex-set" && rawHash === "codex-set/prompt")
     || (page === "models" && (MODELS_TAB_HASHES as readonly string[]).includes(rawHash))
+    || (page === "guardrails" && (GUARDRAILS_TAB_HASHES as readonly string[]).includes(rawHash))
     || (page === "dashboard"
       && (rawHash === DASHBOARD_UPDATE_HASH || (DASHBOARD_TAB_HASHES as readonly string[]).includes(rawHash)))
     || (page === "integrations"

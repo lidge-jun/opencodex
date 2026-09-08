@@ -1,4 +1,4 @@
-import type { TranslatorBudget } from "../lib/translator-budget";
+import { isTranslatorBudgetExceededError, type TranslatorBudget } from "../lib/translator-budget";
 
 /**
  * Shared client-facing SSE payload rewrite shell.
@@ -21,6 +21,8 @@ export type SsePayloadRewrite = (payload: string) => string;
  */
 export type SseBlockRewrite = ((block: string) => readonly string[]) & {
   dispose?: () => void;
+  /** Emit retained blocks before EOF/error teardown. Must be idempotent. */
+  flush?: () => readonly string[];
 };
 
 /** Adapt a payload rewrite to the block contract (replace only on change). */
@@ -49,6 +51,22 @@ export function composeSseBlockRewrites(...rewrites: SseBlockRewrite[]): SseBloc
   // Child disposal is part of the contract: one idempotent disposer for the
   // whole chain, so relay teardown never leaks a nested collector.
   let disposed = false;
+  composed.flush = () => {
+    const emitted: string[] = [];
+    for (let index = 0; index < active.length; index += 1) {
+      const flushed = active[index]!.flush?.() ?? [];
+      for (const block of flushed) {
+        let blocks: readonly string[] = [block];
+        for (const downstream of active.slice(index + 1)) {
+          const next: string[] = [];
+          for (const current of blocks) next.push(...downstream(current));
+          blocks = next;
+        }
+        emitted.push(...blocks);
+      }
+    }
+    return emitted;
+  };
   composed.dispose = () => {
     if (disposed) return;
     disposed = true;
@@ -61,7 +79,7 @@ export function composeSseBlockRewrites(...rewrites: SseBlockRewrite[]): SseBloc
 
 /** Split one complete SSE event block while retaining its original blank-line delimiter. */
 export function nextSseBlock(buffer: string): { block: string; delimiter: string; rest: string } | null {
-  const match = buffer.match(/\r?\n\r?\n/);
+  const match = buffer.match(/(?:\r\n|\r|\n)(?:\r\n|\r|\n)/);
   if (!match || match.index === undefined) return null;
   return {
     block: buffer.slice(0, match.index),
@@ -73,7 +91,7 @@ export function nextSseBlock(buffer: string): { block: string; delimiter: string
 /** Join all data lines from one SSE event according to the event-stream field rules. */
 export function sseDataPayload(block: string): string | null {
   const data: string[] = [];
-  for (const line of block.split(/\r?\n/)) {
+  for (const line of block.split(/\r\n|\r|\n/)) {
     if (!line.startsWith("data:")) continue;
     const value = line.slice(5);
     data.push(value.startsWith(" ") ? value.slice(1) : value);
@@ -83,8 +101,8 @@ export function sseDataPayload(block: string): string | null {
 
 /** Replace an SSE event's data field while preserving non-data fields and newline style. */
 export function replaceSseDataPayload(block: string, payload: string): string {
-  const newline = block.includes("\r\n") ? "\r\n" : "\n";
-  const lines = block.split(/\r?\n/);
+  const newline = block.includes("\r\n") ? "\r\n" : block.includes("\r") ? "\r" : "\n";
+  const lines = block.split(/\r\n|\r|\n/);
   const rewritten: string[] = [];
   let replaced = false;
   for (const line of lines) {
@@ -135,64 +153,176 @@ export function relaySseWithBlockRewrite(
   translatorBudget: TranslatorBudget,
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
-  const decoder = new TextDecoder();
+  const fatalDecoder = new TextDecoder("utf-8", { fatal: true });
   const encoder = new TextEncoder();
-  let buffer = "";
-  let bufferBytes = 0;
+  let buffer = new Uint8Array();
+  let bufferOffset = 0;
+  let bufferLength = 0;
   // Relays have several independent teardown paths; disposal is exactly once.
   let disposed = false;
   let cancelled = false;
+  let rawPassthrough = false;
+  let deferredError: unknown;
   const disposeRewrite = (): void => {
     if (disposed) return;
     disposed = true;
     try { rewrite.dispose?.(); } catch { /* teardown must not throw */ }
   };
 
-  const appendBuffer = (fragment: string): void => {
-    if (!fragment) return;
-    const nextBytes = bufferBytes + encoder.encode(fragment).byteLength;
-    const reservation = translatorBudget.reserveTransient(nextBytes, { kind: "live_transient" });
+  const appendBuffer = (fragment: Uint8Array): void => {
+    if (fragment.byteLength === 0) return;
+    if (bufferLength + fragment.byteLength <= buffer.byteLength) {
+      buffer.set(fragment, bufferLength);
+      bufferLength += fragment.byteLength;
+      return;
+    }
+    const activeLength = bufferLength - bufferOffset;
+    if (activeLength + fragment.byteLength <= buffer.byteLength) {
+      buffer.copyWithin(0, bufferOffset, bufferLength);
+      bufferOffset = 0;
+      bufferLength = activeLength;
+      buffer.set(fragment, bufferLength);
+      bufferLength += fragment.byteLength;
+      return;
+    }
+    const requiredBytes = activeLength + fragment.byteLength;
+    const nextCapacity = Math.max(
+      requiredBytes,
+      buffer.byteLength === 0
+        ? requiredBytes
+        : buffer.byteLength + Math.max(1, Math.floor(buffer.byteLength / 2)),
+    );
+    const reservation = translatorBudget.reserveTransient(nextCapacity, { kind: "live_transient" });
     try {
-      buffer += fragment;
+      const next = new Uint8Array(nextCapacity);
+      next.set(buffer.subarray(bufferOffset, bufferLength));
+      next.set(fragment, activeLength);
+      const previousCapacity = buffer.byteLength;
+      buffer = next;
+      bufferOffset = 0;
+      bufferLength = requiredBytes;
       reservation.commitRetained();
-      translatorBudget.releaseRetained(bufferBytes, { kind: "live_transient" });
-      bufferBytes = nextBytes;
+      translatorBudget.releaseRetained(previousCapacity, { kind: "live_transient" });
     } catch (error) {
       reservation.release();
       throw error;
     }
   };
 
-  const replaceBuffer = (next: string): void => {
-    const nextBytes = encoder.encode(next).byteLength;
-    const reservation = translatorBudget.reserveTransient(nextBytes, { kind: "live_transient" });
-    reservation.commitRetained();
-    buffer = next;
-    translatorBudget.releaseRetained(bufferBytes, { kind: "live_transient" });
-    bufferBytes = nextBytes;
+  const enqueueBytes = (
+    controller: ReadableStreamDefaultController<Uint8Array>,
+    bytes: Uint8Array,
+  ): void => {
+    const reservation = translatorBudget.reserveTransient(bytes.byteLength, { kind: "live_transient" });
+    try {
+      reservation.commitRetained();
+      controller.enqueue(bytes);
+      translatorBudget.releaseRetained(bytes.byteLength, { kind: "live_transient" });
+    } catch (error) {
+      reservation.release();
+      throw error;
+    }
   };
 
   const enqueueText = (
     controller: ReadableStreamDefaultController<Uint8Array>,
     text: string,
+  ): void => enqueueBytes(controller, encoder.encode(text));
+
+  const enqueueRetainedBytes = (
+    controller: ReadableStreamDefaultController<Uint8Array>,
+    bytes: Uint8Array,
   ): void => {
-    const bytes = encoder.encode(text).byteLength;
+    try {
+      controller.enqueue(bytes);
+    } finally {
+      translatorBudget.releaseRetained(bytes.byteLength, { kind: "live_transient" });
+    }
+  };
+
+  const releaseBuffer = (): void => {
+    translatorBudget.releaseRetained(buffer.byteLength, { kind: "live_transient" });
+    buffer = new Uint8Array();
+    bufferOffset = 0;
+    bufferLength = 0;
+  };
+
+  const detachBufferedRange = (start: number, end: number): Uint8Array => {
+    const bytes = Math.max(0, end - start);
     const reservation = translatorBudget.reserveTransient(bytes, { kind: "live_transient" });
     try {
-      const encoded = encoder.encode(text);
+      const detached = buffer.slice(start, end);
       reservation.commitRetained();
-      controller.enqueue(encoded);
-      translatorBudget.releaseRetained(bytes, { kind: "live_transient" });
+      releaseBuffer();
+      return detached;
     } catch (error) {
       reservation.release();
       throw error;
     }
   };
 
-  const releaseBuffer = (): void => {
-    translatorBudget.releaseRetained(bufferBytes, { kind: "live_transient" });
-    buffer = "";
-    bufferBytes = 0;
+  const newlineLengthAt = (bytes: Uint8Array, index: number): number => {
+    if (bytes[index] === 0x0a) return 1;
+    if (bytes[index] !== 0x0d) return 0;
+    return bytes[index + 1] === 0x0a ? 2 : 1;
+  };
+
+  const nextByteBlock = (): {
+    blockEnd: number;
+    blockStart: number;
+    delimiterEnd: number;
+    delimiterStart: number;
+  } | null => {
+    for (let index = bufferOffset; index < bufferLength; index += 1) {
+      const firstLength = newlineLengthAt(buffer, index);
+      if (firstLength === 0) continue;
+      const secondLength = newlineLengthAt(buffer, index + firstLength);
+      if (secondLength === 0) {
+        index += firstLength - 1;
+        continue;
+      }
+      return {
+        blockStart: bufferOffset,
+        blockEnd: index,
+        delimiterStart: index,
+        delimiterEnd: index + firstLength + secondLength,
+      };
+    }
+    return null;
+  };
+
+  const delimiterText = (delimiter: Uint8Array): string => {
+    try {
+      return fatalDecoder.decode(delimiter);
+    } catch {
+      return "\n\n";
+    }
+  };
+
+  const enterRawPassthrough = (
+    controller: ReadableStreamDefaultController<Uint8Array>,
+    raw: Uint8Array,
+    delimiter: string,
+    rawIsRetained = false,
+  ): number => {
+    let retainedPending = rawIsRetained;
+    try {
+      const flushed = rewrite.flush?.() ?? [];
+      for (const block of flushed) enqueueText(controller, `${block}${delimiter}`);
+      disposeRewrite();
+      rawPassthrough = true;
+      if (rawIsRetained) {
+        retainedPending = false;
+        enqueueRetainedBytes(controller, raw);
+      } else {
+        enqueueBytes(controller, raw);
+      }
+      return flushed.length + 1;
+    } finally {
+      if (retainedPending) {
+        translatorBudget.releaseRetained(raw.byteLength, { kind: "live_transient" });
+      }
+    }
   };
 
   const emitProcessedBlocks = (
@@ -200,30 +330,66 @@ export function relaySseWithBlockRewrite(
     flushFinal = false,
   ): number => {
     let emitted = 0;
-    let next: { block: string; delimiter: string; rest: string } | null;
-    while ((next = nextSseBlock(buffer))) {
-      replaceBuffer(next.rest);
-      for (const outBlock of rewrite(next.block)) {
-        enqueueText(controller, outBlock + next.delimiter);
+    let next: ReturnType<typeof nextByteBlock>;
+    while ((next = nextByteBlock())) {
+      const blockBytes = buffer.subarray(next.blockStart, next.blockEnd);
+      const delimiterBytes = buffer.subarray(next.delimiterStart, next.delimiterEnd);
+      bufferOffset = next.delimiterEnd;
+      let block: string;
+      try {
+        block = fatalDecoder.decode(blockBytes);
+      } catch {
+        const delimiter = delimiterText(delimiterBytes);
+        const raw = detachBufferedRange(next.blockStart, bufferLength);
+        return emitted + enterRawPassthrough(controller, raw, delimiter, true);
+      }
+      const delimiter = delimiterText(delimiterBytes);
+      for (const outBlock of rewrite(block)) {
+        enqueueText(controller, outBlock + delimiter);
         emitted += 1;
       }
     }
-    if (flushFinal && buffer.length > 0) {
-      const tailBlocks = rewrite(buffer);
+    if (flushFinal && bufferLength > bufferOffset) {
+      let tail: string;
+      try {
+        tail = fatalDecoder.decode(buffer.subarray(bufferOffset, bufferLength));
+      } catch {
+        const raw = detachBufferedRange(bufferOffset, bufferLength);
+        return emitted + enterRawPassthrough(controller, raw, "\n\n", true);
+      }
+      const tailBlocks = rewrite(tail);
       // A trailing fragment has no delimiter of its own; multiple emitted
       // blocks must still be framed as separate events (#893 review).
-      const tailDelimiter = buffer.includes("\r\n") ? "\r\n\r\n" : "\n\n";
+      const tailDelimiter = tail.includes("\r\n") ? "\r\n\r\n" : tail.includes("\r") ? "\r\r" : "\n\n";
       for (let i = 0; i < tailBlocks.length; i++) {
         enqueueText(controller, tailBlocks[i]! + (i < tailBlocks.length - 1 ? tailDelimiter : ""));
         emitted += 1;
       }
       releaseBuffer();
+    } else if (bufferOffset === bufferLength) {
+      releaseBuffer();
     }
     return emitted;
   };
 
+  const emitRewriteFlush = (
+    controller: ReadableStreamDefaultController<Uint8Array>,
+    delimiter = "\n\n",
+  ): number => {
+    const blocks = rewrite.flush?.() ?? [];
+    for (const block of blocks) enqueueText(controller, `${block}${delimiter}`);
+    return blocks.length;
+  };
+
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
+      if (deferredError !== undefined) {
+        const error = deferredError;
+        deferredError = undefined;
+        disposeRewrite();
+        controller.error(error);
+        return;
+      }
       try {
         // A network chunk is not an SSE-event boundary. Bun may not issue a
         // second pull after a fulfilled pull enqueues nothing, so keep reading
@@ -236,23 +402,59 @@ export function relaySseWithBlockRewrite(
           // after its disposal (#893 review).
           if (cancelled) return;
           if (done) {
-            appendBuffer(decoder.decode());
             emitProcessedBlocks(controller, true);
+            if (!rawPassthrough) emitRewriteFlush(controller);
             releaseBuffer();
             disposeRewrite();
             controller.close();
             return;
           }
-          appendBuffer(decoder.decode(value, { stream: true }));
+          if (rawPassthrough) {
+            enqueueBytes(controller, value);
+            return;
+          }
+          appendBuffer(value);
           if (emitProcessedBlocks(controller) > 0) return;
         }
       } catch (error) {
-        releaseBuffer();
-        disposeRewrite();
-        // Cancelling one tee branch waits for its sibling. Surface the failure
-        // now so downstream can abort upstream and release the inspection branch.
+        // One tee branch cannot wait for its sibling before surfacing failure.
         void reader.cancel(error).catch(() => {});
-        controller.error(error);
+        if (isTranslatorBudgetExceededError(error)) {
+          releaseBuffer();
+          disposeRewrite();
+          controller.error(error);
+          return;
+        }
+        let bufferedText = "";
+        try { bufferedText = fatalDecoder.decode(buffer.subarray(bufferOffset, bufferLength)); } catch { /* malformed tail */ }
+        const delimiter = bufferedText.includes("\r\n") ? "\r\n\r\n" : bufferedText.includes("\r") ? "\r\r" : "\n\n";
+        let bufferedTail: Uint8Array = new Uint8Array();
+        try {
+          bufferedTail = detachBufferedRange(bufferOffset, bufferLength);
+        } catch {
+          releaseBuffer();
+        }
+        let retainedTailPending = true;
+        try {
+          const flushed = emitRewriteFlush(controller, delimiter);
+          if (bufferedTail.byteLength > 0) {
+            retainedTailPending = false;
+            enqueueRetainedBytes(controller, bufferedTail);
+          }
+          if (flushed > 0 || bufferedTail.byteLength > 0) {
+            deferredError = error;
+            return;
+          }
+          disposeRewrite();
+          controller.error(error);
+        } catch (flushError) {
+          disposeRewrite();
+          controller.error(flushError);
+        } finally {
+          if (retainedTailPending) {
+            translatorBudget.releaseRetained(bufferedTail.byteLength, { kind: "live_transient" });
+          }
+        }
       }
     },
     cancel(reason) {

@@ -11,6 +11,10 @@ import { resetVisionDescriptionCache, stripImagesInPlace } from "../../src/visio
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
+import {
+  clearGuardrailsTelemetryForTests,
+  guardrailsActivity,
+} from "../../src/guardrails/telemetry";
 
 // Issue #88: text-only input models (DeepSeek, ...) get "eyes" — the vision sidecar describes
 // attached images via a vision-capable forward model and replaces them with text BEFORE the main
@@ -31,6 +35,7 @@ beforeEach(() => {
   process.env.OPENCODEX_HOME = testDir;
   globalThis.fetch = originalFetch;
   resetVisionDescriptionCache();
+  clearGuardrailsTelemetryForTests();
 });
 
 afterEach(() => {
@@ -48,16 +53,20 @@ afterEach(() => {
 
 const PNG_DATA_URL = "data:image/png;base64,aGVsbG8taW1hZ2UtYnl0ZXM=";
 const CAPTION = "A red square logo with the word OPENCODEX in white monospace text.";
+const SIDECAR_SECRET = "sk_live_abcdefghijklmnopqrstuvwx";
 
 /** Fake ChatGPT forward backend: answers /responses with an SSE caption stream. */
-function serveSidecar(onRequest: (req: Request, bodyText: string) => void) {
+function serveSidecar(
+  onRequest: (req: Request, bodyText: string) => void,
+  caption = CAPTION,
+) {
   return Bun.serve({
     hostname: "127.0.0.1", port: 0,
     async fetch(req) {
       const bodyText = await req.text();
       onRequest(req, bodyText);
       const sse = [
-        `data: ${JSON.stringify({ type: "response.output_text.delta", delta: CAPTION })}`,
+        `data: ${JSON.stringify({ type: "response.output_text.delta", delta: caption })}`,
         "",
         "data: [DONE]",
         "", "",
@@ -164,7 +173,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
       sidecarAuth = req.headers.get("authorization");
       sidecarAccount = req.headers.get("chatgpt-account-id");
       sidecarPath = new URL(req.url).pathname;
-    });
+    }, `${CAPTION} ${SIDECAR_SECRET}`);
     globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
       const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       const url = new URL(requestUrl);
@@ -192,6 +201,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
           codexAccountMode: "direct",
         },
       },
+      guardrails: { enabled: true, mode: "enforce", failurePolicy: "block" },
     } as OcxConfig;
     saveConfig(config);
     const server = startServer(0);
@@ -218,8 +228,147 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
 
       // The text-only upstream saw the caption, not the image bytes.
       expect(upstreamBody).toContain(CAPTION);
+      expect(upstreamBody).toContain("<STRIPE_ACCESS_TOKEN_1>");
+      expect(upstreamBody).not.toContain(SIDECAR_SECRET);
       expect(upstreamBody).not.toContain("aGVsbG8taW1hZ2UtYnl0ZXM=");
       expect(upstreamBody).not.toContain("image_url");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("late Guardrails vision failure rolls back every staged placeholder in passthrough mode", async () => {
+    const token = (index: number): string =>
+      `sk_live_${index.toString(36).padStart(24, "a")}`;
+    const initialSecrets = Array.from({ length: 4_080 }, (_, index) => token(index));
+    const captionSecrets = Array.from({ length: 100 }, (_, index) => token(10_000 + index));
+    const caption = captionSecrets.join(" ");
+    let upstreamBody = "";
+    let sidecarHits = 0;
+    upstream = serveUpstream(body => { upstreamBody = body; });
+    sidecar = serveSidecar(() => { sidecarHits += 1; }, caption);
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const requestUrl = typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+      const url = new URL(requestUrl);
+      const prefix = "/backend-api/codex";
+      if (url.hostname === "chatgpt.com" && url.pathname.startsWith(prefix)) {
+        return originalFetch(new URL(`${url.pathname.slice(prefix.length)}${url.search}`, sidecar!.url), init);
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+    const config: OcxConfig = {
+      port: 0,
+      hostname: "127.0.0.1",
+      defaultProvider: "textonly",
+      openaiProviderTierVersion: 2,
+      providers: {
+        textonly: {
+          adapter: "openai-chat",
+          baseUrl: `http://127.0.0.1:${upstream.port}/v1`,
+          allowPrivateNetwork: true,
+          apiKey: "key-alpha-000111222333",
+          noVisionModels: ["blind-model"],
+        },
+        openai: {
+          adapter: "openai-responses",
+          authMode: "forward",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          codexAccountMode: "direct",
+        },
+      },
+      guardrails: { enabled: true, mode: "enforce", failurePolicy: "passthrough" },
+    } as OcxConfig;
+    saveConfig(config);
+    const server = startServer(0);
+    try {
+      const auth = fakeChatGptJwt({ chatgpt_account_id: "acct-vision-guardrails" });
+      const body = baseRequest("textonly/blind-model");
+      body.input[0]!.content = [
+        { type: "input_text", text: initialSecrets.slice(0, 2_040).join(" ") },
+        { type: "input_text", text: initialSecrets.slice(2_040).join(" ") },
+        { type: "input_image", image_url: PNG_DATA_URL },
+      ];
+      const response = await fetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${auth}`,
+          "chatgpt-account-id": "acct-vision-guardrails",
+        },
+        body: JSON.stringify(body),
+      });
+
+      expect(response.status).toBe(200);
+      expect(sidecarHits).toBe(1);
+      expect(upstreamBody).toContain(initialSecrets[0]!);
+      expect(upstreamBody).toContain(captionSecrets[0]!);
+      expect(upstreamBody).not.toContain("<STRIPE_ACCESS_TOKEN_");
+    } finally {
+      await server.stop(true);
+    }
+  }, 30_000);
+
+  test("ordinary vision sidecar failures are not reported as Guardrails failures", async () => {
+    upstream = serveUpstream(() => {});
+    sidecar = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: () => new Response("vision unavailable", { status: 502 }),
+    });
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const requestUrl = typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+      const url = new URL(requestUrl);
+      const prefix = "/backend-api/codex";
+      if (url.hostname === "chatgpt.com" && url.pathname.startsWith(prefix)) {
+        return originalFetch(new URL(`${url.pathname.slice(prefix.length)}${url.search}`, sidecar!.url), init);
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+    const config: OcxConfig = {
+      port: 0,
+      hostname: "127.0.0.1",
+      defaultProvider: "textonly",
+      openaiProviderTierVersion: 2,
+      providers: {
+        textonly: {
+          adapter: "openai-chat",
+          baseUrl: `http://127.0.0.1:${upstream.port}/v1`,
+          allowPrivateNetwork: true,
+          apiKey: "key-alpha-000111222333",
+          noVisionModels: ["blind-model"],
+        },
+        openai: {
+          adapter: "openai-responses",
+          authMode: "forward",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          codexAccountMode: "direct",
+        },
+      },
+      guardrails: { enabled: true, mode: "enforce", failurePolicy: "block" },
+    } as OcxConfig;
+    saveConfig(config);
+    const server = startServer(0);
+    try {
+      const auth = fakeChatGptJwt({ chatgpt_account_id: "acct-vision-failure" });
+      const response = await fetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${auth}`,
+          "chatgpt-account-id": "acct-vision-failure",
+        },
+        body: JSON.stringify(baseRequest("textonly/blind-model")),
+      });
+      expect(await response.text()).not.toContain("guardrails_scan_failed");
+      expect(guardrailsActivity({ result: "blocked" }).events).toHaveLength(0);
     } finally {
       await server.stop(true);
     }

@@ -2502,6 +2502,7 @@ describe("opencodex config defaults", () => {
     expect(isValidProviderName("openrouter/custom")).toBe(false);
     expect(isValidProviderName("__proto__")).toBe(false);
     expect(isValidProviderName("constructor")).toBe(false);
+    expect(isValidProviderName("anthropic-native")).toBe(false);
   });
 
   test("persists an explicit Codex account selector map without adding one to defaults", () => {

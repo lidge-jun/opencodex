@@ -112,6 +112,9 @@ export interface RequestLogContext {
   usageDebugBodyKind?: UsageDebugBodyKind;
   usageDebugBodySample?: string;
   usageDebugContentType?: string;
+  /** A Guardrails-enforced turn may restore sensitive text before a downstream transport logger sees it.
+   * Keep structural usage/status extraction, but never retain response or error text for this turn. */
+  sensitiveDataProtectionActive?: boolean;
   /** Route adapter type ("cursor"/"kiro"/"anthropic"/…): drives estimated-usage detection
    *  independent of the user-chosen provider NAME (devlog 130 B2). */
   providerAdapter?: string;
@@ -736,6 +739,7 @@ export function inspectResponseLogJson(logCtx: RequestLogContext, text: string):
     logCtx.activeTierMetadata?.markResponseUnparseable();
     /* body may not be JSON; request log metadata is best-effort only */
   }
+  if (logCtx.sensitiveDataProtectionActive) return;
   captureUpstreamError(logCtx, text);
   if (isUsageDebugEnabled() && logCtx.usageDebugBodyKind === undefined) {
     logCtx.usageDebugBodyKind = "json";
@@ -765,6 +769,7 @@ export function inspectResponseLogSsePayloadParsed(
   const sseAlreadyMarked = logCtx.usageDebugBodyKind === "sse";
   if (parsed !== undefined) applyResponseLogMetadata(logCtx, parsed);
   else logCtx.activeTierMetadata?.markResponseUnparseable();
+  if (logCtx.sensitiveDataProtectionActive) return;
   captureUpstreamErrorParsed(logCtx, payload, parsed);
   if (debugEnabled) {
     if (!sseAlreadyMarked) {

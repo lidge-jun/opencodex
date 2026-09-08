@@ -143,6 +143,14 @@ async function handleQuotaResetRoutesOnDemand(ctx: ManagementContext): Promise<R
   return handleQuotaResetRoutes(ctx);
 }
 
+async function handleGuardrailsRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/guardrails")) return null;
+  const { handleGuardrailsRoutes } = await import("./management/guardrails-routes");
+  const response = await handleGuardrailsRoutes(ctx);
+  response?.headers.set("Cache-Control", "no-store");
+  return response;
+}
+
 export async function handleManagementAPI(
   req: Request,
   url: URL,
@@ -238,6 +246,7 @@ export async function handleManagementAPI(
     routed = handleSessionRoutes(ctx)
     ??     (await handleConfigRoutes(ctx))
     ??     (await handleStorageLogGuardRoutes(ctx))
+    ??     (await handleGuardrailsRoutesOnDemand(ctx))
     ??     (await handleLogsUsageRoutes(ctx))
     ??     (await handleRequestHistoryRoutes(ctx))
     ??     (await handleQuotaResetRoutesOnDemand(ctx))

@@ -1,6 +1,6 @@
 ---
 title: Web Dashboard
-description: The opencodex GUI for proxy health, providers, models, delegation guidance, auth pools, usage, and logs.
+description: The opencodex GUI for proxy health, providers, models, Guardrails, delegation guidance, auth pools, usage, and logs.
 ---
 
 opencodex ships a local web dashboard (a Vite/React app under `gui/`) served from the proxy. It is the
@@ -91,6 +91,7 @@ badge or the version value to read the full value.
 | **Codex Auth** | Add ChatGPT/Codex pool accounts, select the next-session account, refresh 5h / weekly / 30d quotas, enable or disable quota auto-switch, set its 1–100% threshold, and configure transient-failure failover. |
 | **Subagents** | Feature up to five bare native or namespaced routed models in the `spawn_agent` override list. |
 | **Models** | Toggle native GPT and routed models, set provider allowlists and context caps, choose v1/base/v2, and configure the v2 thread limit. Configured providers stay visible as zero-model groups when discovery is off or returns no rows. |
+| **Guardrails** | Opt in to Guardrails, choose `detect` or `enforce`, choose the safe scanner-failure policy and data types, enable/disable built-in rule IDs, and create/edit/delete bounded local custom rules. |
 | **Logs** | Auto-refresh recent requests with tokens, requested effort and (when available) effective outbound effort, resolved model, provider, status, request id, duration, and error details. The detail view includes the exact reasoning wire field when the adapter emits one. Filter by opaque conversation/session id (when the client sends one) to total tokens and estimated list-price cost for the currently loaded Logs ring. |
 | **Usage / Debug** | Inspect token-usage coverage and trends, or enable opt-in provider transport and usage-extraction diagnostics. |
 | **Storage** | Read-only CODEX_HOME disk breakdown (sessions, archives, DBs, attachments). Optional archived cleanup: preview the oldest N%, then quarantine to `CODEX_HOME/.trash` (default) or permanently delete behind an explicit checkbox. **Auto-cleanup policy** is opt-in and **default OFF** (`storageCleanupPolicy.enabled`); configure threshold/target/schedule/mode on the Storage page, or trigger **Run now**. Quarantined entries can be restored from the Storage page (JSONL + threads). Active sessions stay read-only. Cleanup and restore are refused while Codex holds the newest/active `state_*.sqlite` locked. |
@@ -130,8 +131,10 @@ the surface selector. These controls do not query historical records beyond the 
 There is a single layout, so there is no layout switch to configure. Dashboard sections are
 addressable instead: `#dashboard` opens Overview, and `#dashboard/providers` and
 `#dashboard/models` open the other two. Reload, bookmark, and Back all keep the section you were
-on. **Logs** works the same way with `#logs` and `#logs/debug`. An older `#providers/workspace`
-bookmark now lands on `#providers`.
+on. **Logs** works the same way with `#logs` and `#logs/debug`; **Guardrails** is `#guardrails`.
+Its Rules, Tester, Activity, and Settings tabs use `#guardrails/rules`, `#guardrails/tester`,
+`#guardrails/activity`, and `#guardrails/settings`. An older `#providers/workspace` bookmark now
+lands on `#providers`.
 
 Cost values in **Logs** and **Usage** are API list-price equivalents calculated from reported tokens.
 For a custom usage interval, the server must confirm the exact requested start and end times.
@@ -156,6 +159,30 @@ it is not substituted for a missing current-account reading. Unsupported lookup,
 observation yet, loading, failed lookup with last-known values, and measured zero are separate
 states. **Quota check completed** means the read settled—not that a passive observation became
 new or that every upstream measurement was refreshed.
+
+## Guardrails
+
+Open **Guardrails** in the sidebar to configure sensitive-data placeholders. The initial state is
+off, so the first switch is an explicit opt-in. Use **detect** to confirm that scanning is compatible
+with your traffic without changing it; use **enforce** to replace supported textual values before an
+outbound provider call and restore matching placeholders in the successful reply to the same client.
+
+The five-tab workspace provides an operational Overview, rule management, a non-persistent Tester
+served by the current OpenCodex Management API, bounded metadata-only Activity, and Settings.
+Tester samples are never sent to an LLM provider, but in connected mode they can traverse the
+configured OpenCodex hub; use synthetic values only. The workspace deliberately shows only
+built-in rule metadata, IDs, and source; it never displays the bundled regex matchers. Custom rules
+are local declarative RE2 rules, and a failed save keeps the last active configuration.
+
+Settings also controls provider coverage. All current and future providers are protected by
+default. Clearing a provider switches to selected-provider mode and requires a consequence
+confirmation; unchecked providers receive unchanged request text. Removed IDs are marked as not
+configured, and a selection containing no active configured provider is reported as
+**No providers protected** rather than ordinary reduced coverage.
+
+See the [Guardrails guide](/guides/guardrails/) for the complete workflow and the
+[Guardrails configuration reference](/reference/configuration/#guardrails-sensitive-data-placeholders)
+for the precise transport, continuation, and logging boundary.
 
 ## Model visibility
 
@@ -317,6 +344,8 @@ The GUI is a thin client over the proxy's JSON management API. Useful endpoints 
 | `POST /api/sync` | Rebuild the shared model catalog and stale the Codex model cache. |
 | `GET /api/update/check` · `POST /api/update/run` · `GET /api/update/status` | Check, run, and monitor self-update jobs. Worker PIDs are persisted so a crashed job recovers automatically; legacy no-PID jobs recover after ten minutes. |
 | `GET` / `PUT /api/sidecar-settings` | Read or set search/vision sidecar model settings. |
+| `GET /api/guardrails` · `PUT /api/guardrails/settings` | Read or update the effective Guardrails settings. |
+| `GET /api/guardrails/catalog` · `GET` / `POST /api/guardrails/rules` · `PUT` / `DELETE /api/guardrails/rules/:ruleId` | List built-in metadata and manage bounded local custom rules. |
 | `GET` / `PUT /api/injection-model` | Read or set the shared sub-agent model/effort selection and the independent guidance/native-default switches. |
 | `GET` / `PUT /api/v2` | Read or set the surface mode, Codex feature flag, and v2 thread limit. |
 | `GET /api/providers` · `POST /api/providers` · `PATCH /api/providers?name=...` · `DELETE /api/providers?name=...` | List, add/replace, enable/disable, set the default, or remove providers. `PATCH` uses standalone `{ "setDefault": true }` on an enabled provider; `POST` may include `setDefault` when creating/replacing (also enabled-only). Deleting the current default reassigns to the first remaining enabled provider when one exists; otherwise the API returns `409` with `code: "last_provider"` and keeps the current default. |

@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
+import { sessionLaneIdFromRequest } from "../../src/server/request-log-conversation";
 import { buildResponsesWsData } from "../../src/server/ws-bridge";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -249,6 +250,21 @@ describe("the Responses WebSocket handshake", () => {
     const payload = buildResponsesWsData(headers, { kind: "configured", keyId: "second-key", source: "dedicated" });
     expect(payload.admission).toEqual({ kind: "configured", keyId: "second-key", source: "dedicated" });
     expect(payload.headers).toBe(headers);
+  });
+
+  test("the upgrade payload retains a bounded lane for a large WS thread id", () => {
+    const rawThreadId = "w".repeat(4_096);
+    const headers = new Headers({ "thread-id": rawThreadId });
+    const lane = sessionLaneIdFromRequest(headers);
+    const payload = buildResponsesWsData(
+      headers,
+      { kind: "configured", keyId: "second-key", source: "dedicated" },
+      undefined,
+      lane,
+    );
+
+    expect(payload.sessionLaneId).toMatch(/^[0-9a-f]{32}$/);
+    expect(JSON.stringify(payload.sessionLaneId)).not.toContain(rawThreadId);
   });
 
   // The phase-2 guard that asserted no telemetry symbols existed yet has served

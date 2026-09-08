@@ -4,6 +4,7 @@ import * as oauthModule from "../../src/oauth";
 mock.module("../../src/oauth", () => ({ ...oauthModule, getValidAccessToken: async () => "vision-cache-token" }));
 
 import { parseRequest } from "../../src/responses/parser";
+import { MAX_GUARDRAILS_SCANNABLE_LEAF_BYTES } from "../../src/guardrails/scanner";
 import type { OcxConfig, OcxContentPart, OcxProviderConfig } from "../../src/types";
 import {
   describeImagesInPlace,
@@ -239,6 +240,144 @@ describe("vision description cache and per-turn cap", () => {
       await describeImagesInPlace(parsed([{ type: "input_image", image_url: DATA_B }]), plan(), new Headers({ authorization: "Bearer test" }));
     }
     expect(calls).toBe(4);
+  });
+
+  test("sanitized and plaintext targets share one vision call without cross-restoration", async () => {
+    let calls = 0;
+    const literal = "<STRIPE_ACCESS_TOKEN_1>";
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return openaiSse(literal);
+    }) as typeof fetch;
+    const protectedRequest = parsed([{ type: "input_image", image_url: DATA_A }]);
+    const plaintextRequest = structuredClone(protectedRequest);
+
+    await describeImagesInPlace(
+      protectedRequest,
+      plan(),
+      new Headers({ authorization: "Bearer test" }),
+      undefined,
+      undefined,
+      undefined,
+      () => "<VISION_TEXT_1>",
+      plaintextRequest,
+    );
+
+    expect(calls).toBe(1);
+    expect(textParts(protectedRequest).join("\n")).toContain("<VISION_TEXT_1>");
+    expect(textParts(plaintextRequest).join("\n")).toContain(literal);
+  });
+
+  test("sanitizes a description before truncation without exposing a split secret prefix", async () => {
+    const secret = "sk_live_abcdefghijklmnopqrstuvwx";
+    globalThis.fetch = (async () => openaiSse(`${"x".repeat(1_995)}${secret}`)) as typeof fetch;
+    const protectedRequest = parsed([{ type: "input_image", image_url: DATA_A }]);
+    const plaintextRequest = structuredClone(protectedRequest);
+
+    await describeImagesInPlace(
+      protectedRequest,
+      plan(),
+      new Headers({ authorization: "Bearer test" }),
+      undefined,
+      undefined,
+      undefined,
+      text => text.replaceAll(secret, "<STRIPE_ACCESS_TOKEN_1>"),
+      plaintextRequest,
+    );
+
+    expect(textParts(protectedRequest).join("\n")).not.toContain("sk_li");
+    expect(textParts(plaintextRequest).join("\n")).toContain("sk_li");
+  });
+
+  test("bounds oversized routed vision output before invoking the Guardrails sanitizer", async () => {
+    const oversized = "x".repeat(MAX_GUARDRAILS_SCANNABLE_LEAF_BYTES * 2);
+    let sanitizerBytes = 0;
+    globalThis.fetch = (async () => Response.json({
+      choices: [{ message: { content: oversized } }],
+    })) as typeof fetch;
+    const protectedRequest = parsed([{ type: "input_image", image_url: DATA_A }]);
+    const plaintextRequest = structuredClone(protectedRequest);
+
+    await describeImagesInPlace(
+      protectedRequest,
+      plan({
+        backend: "routed",
+        forwardSidecar: undefined,
+        routedModel: "routed/vision",
+        routedConfig: { port: 0 },
+      }),
+      new Headers({ authorization: "Bearer test" }),
+      undefined,
+      undefined,
+      undefined,
+      text => {
+        sanitizerBytes = new TextEncoder().encode(text).byteLength;
+        return text;
+      },
+      plaintextRequest,
+    );
+
+    expect(sanitizerBytes).toBe(MAX_GUARDRAILS_SCANNABLE_LEAF_BYTES);
+    expect(textParts(protectedRequest).join("\n")).toContain("…[description truncated]");
+    expect(textParts(plaintextRequest).join("\n")).toContain("…[description truncated]");
+  });
+
+  test("Anthropic's earlier response bound reaches Guardrails as a sanitized error", async () => {
+    const oversized = "x".repeat(MAX_GUARDRAILS_SCANNABLE_LEAF_BYTES * 2);
+    const sanitizerInputs: string[] = [];
+    globalThis.fetch = (async () => anthropicSse(oversized)) as typeof fetch;
+    const protectedRequest = parsed([{ type: "input_image", image_url: DATA_A }]);
+    const plaintextRequest = structuredClone(protectedRequest);
+
+    await describeImagesInPlace(
+      protectedRequest,
+      plan({
+        backend: "anthropic",
+        forwardSidecar: undefined,
+        anthropicSidecar: {
+          providerName: "anthropic-bounded-sanitizer",
+          provider: anthropicProvider,
+        },
+      }),
+      new Headers({ authorization: "Bearer test" }),
+      undefined,
+      undefined,
+      undefined,
+      text => {
+        sanitizerInputs.push(text);
+        return "<VISION_ERROR_1>";
+      },
+      plaintextRequest,
+    );
+
+    expect(sanitizerInputs).toEqual(["anthropic vision sidecar produced no description"]);
+    expect(textParts(protectedRequest).join("\n")).toContain("<VISION_ERROR_1>");
+    expect(textParts(plaintextRequest).join("\n")).toContain(sanitizerInputs[0]!);
+    for (const request of [protectedRequest, plaintextRequest]) {
+      expect(textParts(request).join("\n")).not.toContain("x".repeat(50));
+    }
+  });
+
+  test("sanitizes vision-sidecar error text while preserving the plaintext rollback twin", async () => {
+    const detail = "private-error-marker";
+    globalThis.fetch = (async () => new Response(detail, { status: 503 })) as typeof fetch;
+    const protectedRequest = parsed([{ type: "input_image", image_url: DATA_A }]);
+    const plaintextRequest = structuredClone(protectedRequest);
+
+    await describeImagesInPlace(
+      protectedRequest,
+      plan(),
+      new Headers({ authorization: "Bearer test" }),
+      undefined,
+      undefined,
+      undefined,
+      text => text.replaceAll(detail, "<VISION_ERROR_1>"),
+      plaintextRequest,
+    );
+
+    expect(textParts(protectedRequest).join("\n")).toContain("<VISION_ERROR_1>");
+    expect(textParts(protectedRequest).join("\n")).not.toContain(detail);
+    expect(textParts(plaintextRequest).join("\n")).toContain(detail);
   });
 
   test("error outcome reaches the caller unchanged and does not mutate the cache", async () => {

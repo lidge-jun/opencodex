@@ -15,7 +15,7 @@ import { repoRoot as resolveRepoRoot } from "../helpers/repo-root";
  * reader is otherwise likely to "simplify" it back:
  *
  * 1. SOURCE -> REGISTRY. Every `(method, path)` pair resolvable from source must be
- *    declared. Catches an added route. Cannot see the 18 routes registered by regex,
+ *    declared. Catches an added route. Cannot see the 21 routes registered by regex,
  *    `endsWith`, `slice`, prefix decode, or a path constant.
  * 2. REGISTRY -> SOURCE. Every declared literal route's path must appear in its declared
  *    owner file. Catches a typo or a stale declaration. Cannot hold for the 18
@@ -57,6 +57,15 @@ const moduleOf = (file: string): string => file.replace(/^src\//, "").replace(/\
 const key = (method: string, path: string): string => `${method} ${path}`;
 
 describe("management route registry reconciliation", () => {
+  test("every method and path pair is declared exactly once", () => {
+    const counts = new Map<string, number>();
+    for (const route of MANAGEMENT_ROUTES) {
+      const routeKey = key(route.method, route.path);
+      counts.set(routeKey, (counts.get(routeKey) ?? 0) + 1);
+    }
+    expect([...counts].filter(([, count]) => count !== 1)).toEqual([]);
+  });
+
   test("every route resolvable from source is declared in the registry", () => {
     const declared = new Set(MANAGEMENT_ROUTES.map(r => key(r.method, r.path)));
     const undeclared: string[] = [];

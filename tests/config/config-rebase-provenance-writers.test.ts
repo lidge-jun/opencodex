@@ -21,6 +21,7 @@ const writerContracts: Record<string, string[]> = {
   "src/codex/desired-state.ts": ["clientIntegrations"],
   "src/providers/provider-id-rewrite.ts": ["customModels"],
   "src/cli/v2.ts": ["multiAgentMode", "keepNativeChatGptOnV1"],
+  "src/guardrails/config-coordinator.ts": ["guardrails"],
 };
 
 test("every enumerated top-level deletion writer records config rebase provenance", () => {

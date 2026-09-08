@@ -16,7 +16,7 @@
  *
  * Reconciliation lives in `tests/server/management-route-registry.test.ts`, which resolves
  * `(method, path)` pairs from source and fails loudly on a route whose method it cannot
- * determine. Adding a route without declaring it here fails that test.
+ * determine. Adding a route without declaring it, or declaring one twice, fails that test.
  */
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD";
@@ -79,6 +79,13 @@ export interface ManagementRoute {
   readonly mechanism?: NonLiteralMechanism;
   readonly exempt?: RouteExemption;
 }
+
+const GUARDRAILS_CLI_DEFERRED: RouteExemption = {
+  reason: "deferred-verb",
+  why: "This contribution is dashboard and Management API first; one complete non-interactive Guardrails CLI surface is deferred rather than represented by ocx gui.",
+  owner: "guardrails-cli-parity",
+  ownerDoc: "docs-site/src/content/docs/guides/guardrails.md",
+};
 
 
 /** Every reachable management route. */
@@ -183,6 +190,17 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "PUT", path: "/api/settings", module: "server/management/config-routes", mutates: true },
   { method: "PUT", path: "/api/shadow-call-settings", module: "server/management/config-routes", mutates: true },
   { method: "PUT", path: "/api/sidecar-settings", module: "server/management/config-routes", mutates: true },
+  // server/management/guardrails-routes
+  { method: "GET", path: "/api/guardrails", module: "server/management/guardrails-routes", mutates: false, exempt: GUARDRAILS_CLI_DEFERRED },
+  { method: "GET", path: "/api/guardrails/activity", module: "server/management/guardrails-routes", mutates: false, exempt: GUARDRAILS_CLI_DEFERRED },
+  { method: "GET", path: "/api/guardrails/catalog", module: "server/management/guardrails-routes", mutates: false, exempt: GUARDRAILS_CLI_DEFERRED },
+  { method: "GET", path: "/api/guardrails/export", module: "server/management/guardrails-routes", mutates: false, exempt: GUARDRAILS_CLI_DEFERRED },
+  { method: "GET", path: "/api/guardrails/rules", module: "server/management/guardrails-routes", mutates: false, exempt: GUARDRAILS_CLI_DEFERRED },
+  { method: "GET", path: "/api/guardrails/settings", module: "server/management/guardrails-routes", mutates: false, exempt: GUARDRAILS_CLI_DEFERRED },
+  { method: "POST", path: "/api/guardrails/import", module: "server/management/guardrails-routes", mutates: true, exempt: GUARDRAILS_CLI_DEFERRED },
+  { method: "POST", path: "/api/guardrails/rules", module: "server/management/guardrails-routes", mutates: true, exempt: GUARDRAILS_CLI_DEFERRED },
+  { method: "POST", path: "/api/guardrails/test", module: "server/management/guardrails-routes", mutates: false, exempt: GUARDRAILS_CLI_DEFERRED },
+  { method: "PUT", path: "/api/guardrails/settings", module: "server/management/guardrails-routes", mutates: true, exempt: GUARDRAILS_CLI_DEFERRED },
   // server/management/integration-routes
   { method: "GET", path: "/api/client-integrations", module: "server/management/integration-routes", mutates: false },
   { method: "GET", path: "/api/client-integrations/journal", module: "server/management/integration-routes", mutates: false },
@@ -332,6 +350,9 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "PUT", path: "/api/client-integrations/{clientId}", module: "server/management/integration-routes", mutates: true, mechanism: "prefix-decode" },
   { method: "GET", path: "/api/request-history/{id}", module: "server/management/request-history-routes", mutates: false, mechanism: "slice" },
   { method: "GET", path: "/api/request-history/{id}/route-decision", module: "server/management/request-history-routes", mutates: false, mechanism: "ends-with" },
+  { method: "DELETE", path: "/api/guardrails/rules/{ruleId}", module: "server/management/guardrails-routes", mutates: true, mechanism: "slice", exempt: GUARDRAILS_CLI_DEFERRED },
+  { method: "PUT", path: "/api/guardrails/rules/{ruleId}", module: "server/management/guardrails-routes", mutates: true, mechanism: "slice", exempt: GUARDRAILS_CLI_DEFERRED },
+  { method: "PUT", path: "/api/guardrails/rules/{ruleId}/enabled", module: "server/management/guardrails-routes", mutates: true, mechanism: "regex", exempt: GUARDRAILS_CLI_DEFERRED },
   { method: "PUT", path: "/api/providers/{provider}/alias", module: "server/management/model-routes", mutates: true, mechanism: "regex" },
   { method: "PUT", path: "/api/providers/{provider}/model-aliases", module: "server/management/model-routes", mutates: true, mechanism: "regex" },
   { method: "GET", path: "/api/providers/{provider}/model-costs", module: "server/management/model-routes", mutates: false, mechanism: "regex" },

@@ -110,6 +110,108 @@ Routing has its own ordered resolution rules; see [Routing](/reference/configura
 - [Server and runtime](/reference/configuration/server/) — listener and remote access, admission keys,
   timeouts, storage, sidecars, startup behavior, and shadow calls.
 
+## Guardrails: sensitive-data placeholders
+
+`guardrails` is disabled by default. Enabling it makes opencodex scan supported textual request fields
+for the Responses, Chat Completions, Anthropic Messages/token-count, and Responses compact paths.
+In `enforce` mode, detected values are replaced before an outbound provider call with per-turn placeholders such as
+`<STRIPE_ACCESS_TOKEN_1>`. Exact placeholders, plus bounded normalized variants produced by a
+model, are restored in a successful JSON, SSE, or Responses-over-WebSocket reply only for the
+original client and only in non-executable assistant prose. Normalization is limited to ASCII case,
+hyphen-versus-underscore separators, embedded ASCII whitespace, and leading zeroes in the numeric
+suffix; the candidate token remains capped at 256 UTF-16 code units.
+Function/tool arguments, Anthropic `tool_use` input, and shell/computer/tool-search actions remain
+masked even in the client-facing response.
+
+Response restoration is bounded and fail-safe. Successful responses that cannot be classified as
+JSON or SSE, malformed JSON/UTF-8, and JSON bodies above 32 MiB are returned with placeholders still
+masked and produce a metadata-only demask warning; opencodex never partially restores such output.
+
+Images, binary data, and unsupported opaque values are left unchanged. Guardrails is a transport
+privacy control, not a general DLP system: it cannot prevent a model from independently inferring or
+rephrasing information that was otherwise available to it.
+
+Each semantic text leaf is capped at 128 KiB and the aggregate logical turn at 2 MiB. A separate
+128 MiB regex-work budget multiplies UTF-8 bytes by the number of rules that actually execute after
+keyword prefiltering. Crossing any limit follows `failurePolicy` for the entire request; opencodex
+never sends a partially masked body.
+
+```json
+{
+  "guardrails": {
+    "enabled": true,
+    "mode": "enforce",
+    "failurePolicy": "block",
+    "providerScope": { "mode": "all" },
+    "enabledDataTypes": [1, 2, 3, 4, 5, 6],
+    "keywordPrefilterEnabled": false
+  }
+}
+```
+
+| Field | Meaning and default |
+| --- | --- |
+| `enabled` | Explicit opt-in. Only `true` activates the scanner; absence and `false` leave existing traffic unchanged. |
+| `mode` | `enforce` (default) replaces detected values on the provider-facing request and restores issued placeholders in eligible response prose. `detect` scans the request but preserves the baseline provider wire payload produced by normal protocol translation and leaves the provider response unchanged; it does not protect upstream data or persist the request for Responses replay. |
+| `failurePolicy` | `block` (default) rejects a request when the scanner cannot process it safely, including a traversal limit. `passthrough` may send that request unchanged instead and records a high-severity metadata event. It is an explicit fail-open policy, not a rule-match policy. |
+| `providerScope` | Optional closed object. Omitted or `{ "mode": "all" }` protects every current and future provider. `{ "mode": "selected", "providerIds": ["openai", "anthropic-native"] }` protects only those canonical provider IDs. Selected mode requires a non-empty, unique list of valid IDs. `anthropic-native` is reserved for the built-in native Anthropic path and cannot name a configured provider. |
+| `enabledDataTypes` | Optional non-empty subset of the numeric categories below; omitted means all six. |
+| `disabledBuiltinRuleIds` | Optional built-in rule IDs to disable. Obtain IDs from `GET /api/guardrails/catalog`; the endpoint does not disclose matchers. |
+| `customRules` | Up to 100 declarative local rules. Rule IDs match `^[a-z0-9_.-]{1,128}$`, patterns are RE2-compatible and at most 4096 UTF-8 bytes, and placeholder types match `^[A-Z][A-Z0-9_]{0,63}$`. Executable plugins are not supported. |
+| `keywordPrefilterEnabled` | Optional recall-preserving performance prefilter, off by default. It skips only built-in rules whose parsed RE2 expression proves that every match contains a declared keyword; custom and unproven rules always execute. |
+
+| Value | Data type |
+| --- | --- |
+| `1` | Credentials |
+| `2` | API keys |
+| `3` | Access tokens |
+| `4` | IP addresses |
+| `5` | Personal data |
+| `6` | Custom |
+
+Changes made through the dashboard or Management API are validated and compiled before the active
+runtime snapshot is replaced. An invalid custom pattern or conflicting rule leaves the previous
+configuration and scanner in place.
+
+Provider scope is evaluated from the canonical routed provider ID. `anthropic-native` identifies
+the native Anthropic credential path; routed `anthropic` remains a separate provider. Policy-fallback
+attempts are evaluated by concrete provider. A combo is unprotected only when all targets are
+excluded; a mixed combo remains protected as one logical turn. A protected continuation cannot
+resume through an unchecked provider and receives HTTP `409 guardrails_policy_changed` before
+upstream I/O.
+
+If startup finds a malformed optional `guardrails` section, opencodex warns and ignores it when the
+section was not explicitly enabled. A malformed section containing `enabled: true` preserves that
+opt-in by falling back to the built-in `enforce`/`block` policy. Unrelated provider/account
+configuration is preserved in both cases. Live writes are strict and fail without changing the
+active or persisted registry.
+
+### Continuations and telemetry boundary
+
+When a Responses request uses `previous_response_id`, the placeholder mapping is retained only in
+process memory for up to one hour, with bounded entry count and memory. It is keyed to a normalized
+continuation lane derived from `x-codex-parent-thread-id`, `thread-id`, or
+`session_id`/`session-id`, plus the admission identity. A parent and a more specific child/session
+ID are paired when both are present. Configured credentials use their key ID;
+environment admission is one process-wide identity; loopback relies on the local-process trust
+boundary. Unscoped, cross-thread, or cross-key requests never inherit a mapping. It is never
+written to the ordinary response replay cache or its snapshots. After a restart or expiry, resend the
+full text rather than relying on a prior placeholder being restored.
+
+An enforced continuation can resume after enforce rules or settings change: existing mappings keep
+their original expiry, while new values use the current enforce registry. Switching the continuation
+to detect, disabled, or an unchecked provider returns HTTP `409` with code
+`guardrails_policy_changed`; start a new session before weakening the policy. Compact output stays masked and inherits its mapping only through an
+in-memory, scope-bound fingerprint of the exact returned compact artifact.
+
+For an enforced turn, request logs and usage-debug capture retain structural metadata such as token
+counts and status, but not response bodies or upstream error text. This prevents a downstream
+WebSocket or debug logger from retaining values restored for the client.
+
+Use the [Guardrails Management API](/reference/management-api/#guardrails) for automation or the
+[Guardrails guide](/guides/guardrails/) for the dashboard workflow, protocol coverage, and
+non-covered payloads.
+
 ## Keep secrets out of the file
 
 Prefer `${ENV_VAR}` references for API keys. Literal `apiKey`, `apiKeyPool[].key`, and `apiKeys[].key`

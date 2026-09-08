@@ -254,6 +254,69 @@ export interface OcxConfigRebaseProvenance {
   deletedTopLevelKeys: string[];
 }
 
+export type OcxGuardrailsDataType = 1 | 2 | 3 | 4 | 5 | 6;
+export type OcxGuardrailsMode = "enforce" | "detect";
+export type OcxGuardrailsFailurePolicy = "block" | "passthrough";
+export type OcxGuardrailsProviderScope =
+  | { mode: "all" }
+  | { mode: "selected"; providerIds: string[] };
+export type OcxGuardrailsValidator =
+  | "luhn"
+  | "snils"
+  | "inn_person"
+  | "inn_org"
+  | "ogrn"
+  | "ogrnip"
+  | "iban_mod97"
+  | "email_ascii"
+  | "payment_card"
+  | "payment_card_no_luhn"
+  | "entropy"
+  | "banlist"
+  | "ip_v4"
+  | "ip_v6"
+  | "ip_public"
+  | "ip_private";
+
+export interface OcxGuardrailsMasking {
+  captureGroups: number[];
+  placeholderType: string;
+}
+
+/** Persisted declarative rule: no executable validator/plugin/code is accepted. */
+export interface OcxGuardrailsCustomRule {
+  ruleId: string;
+  name: string;
+  dataType: OcxGuardrailsDataType;
+  group: string;
+  groupPriority: number;
+  displayName: string;
+  description: string;
+  regex: string;
+  minLength?: number;
+  keywords: string[];
+  entropy?: number;
+  banlist: string[];
+  validators: OcxGuardrailsValidator[];
+  masking: OcxGuardrailsMasking;
+}
+
+/**
+ * Durable intent for the sensitive-data guardrail. Absence is the canonical
+ * disabled state so existing installations make no new outbound-data claim.
+ */
+export interface OcxGuardrailsConfig {
+  enabled?: boolean;
+  mode?: OcxGuardrailsMode;
+  failurePolicy?: OcxGuardrailsFailurePolicy;
+  /** Absence is the fail-safe, backward-compatible "all providers" default. */
+  providerScope?: OcxGuardrailsProviderScope;
+  enabledDataTypes?: OcxGuardrailsDataType[];
+  disabledBuiltinRuleIds?: string[];
+  customRules?: OcxGuardrailsCustomRule[];
+  keywordPrefilterEnabled?: boolean;
+}
+
 export type OcxRuntimeRole = "standalone" | "hub" | "client";
 
 export interface OcxHubConfig {
@@ -411,6 +474,8 @@ export interface OcxConfig {
    * one key at a time rather than widening a shared union.
    */
   clientIntegrations?: OcxClientIntegrationsConfig;
+  /** Sensitive-data filtering intent. */
+  guardrails?: OcxGuardrailsConfig;
   /** Aside account-backed profile synchronization; individual overrides survive bulk refresh. */
   asideProfileSync?: {
     allProfiles?: boolean;

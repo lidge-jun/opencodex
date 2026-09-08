@@ -19,6 +19,11 @@ import type {
   performCodexRestart,
   readCodexAppServerState,
 } from "../../codex/app-server-restart-service";
+import type {
+  mutateAndAdoptGuardrailsConfig,
+  mutateAndAdoptGuardrailsCustomRule,
+} from "../../guardrails/config-coordinator";
+import type { guardrailsBuiltinRuleCatalog } from "../../guardrails/registry";
 
 export interface ManagementApiDeps {
   /** Isolates automatic owned-client writes in route tests. */
@@ -39,6 +44,12 @@ export interface ManagementApiDeps {
    * OPENCODEX_HOME (incident: devlog 260730.../070).
    */
   saveConfigPreservingClaudeCode?: (config: OcxConfig) => void;
+  /** Guardrails persistence seam; route tests must not write the developer's live config. */
+  mutateAndAdoptGuardrailsConfig?: typeof mutateAndAdoptGuardrailsConfig;
+  /** Atomic custom-rule seam; kept separate so test fixtures never write real config. */
+  mutateAndAdoptGuardrailsCustomRule?: typeof mutateAndAdoptGuardrailsCustomRule;
+  /** Bundled Guardrails catalog seam for deterministic asset-failure route tests. */
+  guardrailsBuiltinRuleCatalog?: typeof guardrailsBuiltinRuleCatalog;
   /**
    * Catalog seam for the Grok toggle (WP2, devlog 260803_integrations_toggle_all
    * Rev 3 N2). Production leaves this unset and the route dynamic-imports the

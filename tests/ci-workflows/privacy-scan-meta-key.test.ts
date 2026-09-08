@@ -11,7 +11,11 @@
  * detector was deleted.
  */
 import { describe, expect, test } from "bun:test";
-import { scanText } from "../../scripts/privacy-scan";
+import { readFileSync } from "node:fs";
+import {
+  scanText,
+  scanTextWithFileExemptions,
+} from "../../scripts/privacy-scan";
 
 /** Assembled at runtime so this file contains no secret-shaped literal of its own. */
 const canary = ["LLM", "1".repeat(16), "c".repeat(27)].join("|");
@@ -53,6 +57,24 @@ describe("privacy scan: Meta API keys", () => {
 
   test("a Bearer header carrying one is still caught", () => {
     const findings = scanText("src/example.ts", `Authorization: Bearer ${canary}`);
+    expect(findings.length).toBeGreaterThan(0);
+  });
+
+  test("a public-attribution exemption stops applying after any file mutation", () => {
+    const file = "LICENSES/yaml-ISC.txt";
+    const text = readFileSync(file, "utf8");
+    expect(scanTextWithFileExemptions(file, text)).toHaveLength(0);
+
+    const findings = scanTextWithFileExemptions(file, `${text}\n`);
+    expect(findings.some(finding => finding.kind === "email")).toBe(true);
+  });
+
+  test("a synthetic-fixture exemption stops applying after any file mutation", () => {
+    const file = "tests/fixtures/guardrails-donor-rule-cases.json";
+    const text = readFileSync(file, "utf8");
+    expect(scanTextWithFileExemptions(file, text)).toHaveLength(0);
+
+    const findings = scanTextWithFileExemptions(file, `${text}\n`);
     expect(findings.length).toBeGreaterThan(0);
   });
 });

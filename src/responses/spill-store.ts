@@ -27,7 +27,7 @@ import {
   windowsSecretAclApplies,
 } from "../lib/windows-secret-acl";
 import { isValidProviderContinuationOwner } from "./provider-continuation";
-import type { OcxProviderContinuationState } from "../types";
+import type { OcxGuardrailsResponseMarker, OcxProviderContinuationState } from "../types";
 
 export const RESPONSE_SPILL_VERSION = 1;
 export const RESPONSE_SPILL_DIR_NAME = "responses-state-spill";
@@ -57,6 +57,7 @@ export interface ResponseSpillPayload {
    */
   providerOutputStart?: number;
   providers?: OcxProviderContinuationState;
+  guardrails?: OcxGuardrailsResponseMarker;
 }
 
 export interface ResponseSpillRef {
@@ -462,6 +463,7 @@ function serializedSpill(
     items: state.items,
     ...(state.providerOutputStart !== undefined ? { providerOutputStart: state.providerOutputStart } : {}),
     ...(state.providers ? { providers: state.providers } : {}),
+    ...(state.guardrails ? { guardrails: state.guardrails } : {}),
   };
   const serialized = JSON.stringify(payload);
   if (serialized === undefined) throw new Error("Response spill serialization failed");
@@ -515,7 +517,7 @@ function validPayload(value: unknown, responseId: string): value is ResponseSpil
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const payload = value as Record<string, unknown>;
   const keys = Object.keys(payload);
-  if (keys.some(key => !["version", "responseId", "createdAt", "clientThreadId", "items", "providerOutputStart", "providers"].includes(key))) return false;
+  if (keys.some(key => !["version", "responseId", "createdAt", "clientThreadId", "items", "providerOutputStart", "providers", "guardrails"].includes(key))) return false;
   if (payload.version !== 1 || payload.responseId !== responseId) return false;
   if (typeof payload.createdAt !== "number" || !Number.isFinite(payload.createdAt)) return false;
   if (payload.clientThreadId !== undefined
@@ -537,6 +539,14 @@ function validPayload(value: unknown, responseId: string): value is ResponseSpil
       if (provider === "__ocxOwner") continue;
       if (!providerState || typeof providerState !== "object" || Array.isArray(providerState)) return false;
     }
+  }
+  if (payload.guardrails !== undefined) {
+    if (!payload.guardrails || typeof payload.guardrails !== "object" || Array.isArray(payload.guardrails)) return false;
+    const marker = payload.guardrails as Record<string, unknown>;
+    if (Object.keys(marker).some(key => !["enforced", "policyRevision"].includes(key))
+      || marker.enforced !== true
+      || typeof marker.policyRevision !== "string"
+      || !/^[0-9a-f]{64}$/.test(marker.policyRevision)) return false;
   }
   return true;
 }

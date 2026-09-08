@@ -1,4 +1,5 @@
 import type { Server } from "bun";
+import { randomUUID } from "node:crypto";
 import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse, type ResponsesTerminalStatus } from "../../bridge";
 import {
   getConfigPath,
@@ -9,6 +10,26 @@ import { parseRequest } from "../../responses/parser";
 import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractCompactUserMessages } from "../../responses/compaction";
 import { FORWARD_HEADERS, sanitizeReasoningInputContent } from "../../adapters/openai-responses";
 import { expandPreviousResponseInput, previousResponseProviderState, rememberResponseState } from "../../responses/state";
+import {
+  admitGuardrailsRuntime,
+  guardrailsFailureCode,
+  guardrailsFailureStatus,
+  isGuardrailsCapacityError,
+  maskLocalCompactionArtifacts,
+  prepareGuardrailsTurn,
+  type GuardrailsTurn,
+} from "../../guardrails/turn";
+import {
+  captureGuardrailsPolicy,
+  guardrailsPolicyProtectsProvider,
+  type CapturedGuardrailsPolicy,
+} from "../../guardrails/activation";
+import {
+  rememberGuardrailsCompactContinuation,
+  retainGuardrailsCompactContinuation,
+} from "../../guardrails/compact-continuations";
+import { createGuardrailsContinuationScope } from "../../guardrails/continuations";
+import { recordGuardrailsEvent, recordGuardrailsTurn } from "../../guardrails/telemetry";
 import { NoEligiblePolicyCandidateError, routeCompactionModel } from "../../router";
 import { evidenceFromBody } from "../../routing/request-evidence";
 import {
@@ -145,6 +166,7 @@ import { codexAuthContextLogLabel } from "../../codex/account-label";
 import {
   codexAccountGatedCanonicalWireModel,
   decodeRequestErrorResponse,
+  guardrailsAdmissionProviderId,
   handleResponses,
   preAuthUpstreamHostCircuitKey,
   upstreamHostCircuitOpenResponse,
@@ -214,6 +236,16 @@ function compactHandoffRoute(req: Request, previousModel: string, now = Date.now
 }
 
 export interface HandleResponsesCompactOptions {
+  /** Immutable policy captured before the first provider attempt. */
+  guardrailsCapturedPolicy?: CapturedGuardrailsPolicy;
+  /** Provider classification that owns the complete compact fallback chain. */
+  guardrailsProviderScopeAnchor?: string;
+  /** Internal recursive handoff; preserves one immutable Guardrails turn across model fallback. */
+  guardrailsFallback?: {
+    expiresAt?: number;
+    lineageId: string;
+    turn: GuardrailsTurn;
+  };
   nativeMainRefreshDependencies?: NativeMainRefreshDependencies;
   /** Release the listener's idle guard only after the complete request body is accepted. */
   onRequestBodyRead?: () => void;
@@ -510,8 +542,6 @@ export async function bufferCompactResponse(
   }
 }
 
-
-
 export async function handleResponsesCompact(
   req: Request,
   config: OcxConfig,
@@ -520,6 +550,8 @@ export async function handleResponsesCompact(
   admission?: DataPlaneAdmission,
   options: HandleResponsesCompactOptions = {},
 ): Promise<Response> {
+  const capturedGuardrailsPolicy = options.guardrailsCapturedPolicy
+    ?? captureGuardrailsPolicy(config);
   let body: unknown;
   try {
     body = await readJsonRequestBody(req);
@@ -529,10 +561,11 @@ export async function handleResponsesCompact(
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     return formatErrorResponse(400, "invalid_request_error", "Invalid compaction request body");
   }
-  const raw = body as { model?: unknown; input?: unknown };
+  let raw = body as { model?: unknown; input?: unknown };
   if (typeof raw.model !== "string" || raw.model.length === 0) {
     return formatErrorResponse(400, "invalid_request_error", "compaction request requires a model");
   }
+  const requestedModel = raw.model;
   options.onRequestBodyRead?.();
   // Correct the IDENTITY before routing, or the synthetic id does not route at all. Held in
   // a local rather than written back to `raw.model`: assigning to the property widens it out
@@ -572,13 +605,161 @@ export async function handleResponsesCompact(
     route = routeCompactionModel(config, compactModel, evidenceFromBody(raw));
   } catch (err) {
     if (err instanceof NoEligiblePolicyCandidateError) {
-      // Persist the evaluation trace (per-candidate exclusions + the
-      // no-eligible reason) so a failed compact policy request stays
-      // auditable, matching the other request handlers.
       logCtx.routeDecision = err.trace;
     }
     return formatErrorResponse(404, "invalid_request_error", err instanceof Error ? err.message : String(err));
   }
+  const guardrailsProviderScopeAnchor = guardrailsAdmissionProviderId(config, raw, {
+    guardrailsCapturedPolicy: capturedGuardrailsPolicy,
+    guardrailsProviderScopeAnchor: options.guardrailsProviderScopeAnchor,
+  }, route.providerName);
+  if (options.guardrailsProviderScopeAnchor !== undefined
+    && !guardrailsPolicyProtectsProvider(
+      capturedGuardrailsPolicy,
+      options.guardrailsProviderScopeAnchor,
+    )
+    && guardrailsPolicyProtectsProvider(capturedGuardrailsPolicy, route.providerName)) {
+    return formatErrorResponse(
+      409,
+      "guardrails_policy_changed",
+      "The compact fallback provider requires Guardrails protection. Start a new request instead of crossing provider protection scopes.",
+    );
+  }
+  let guardrailsAdmission;
+  try {
+    guardrailsAdmission = options.guardrailsFallback
+      ? {
+          lease: undefined,
+          passthroughFailure: false,
+          snapshot: options.guardrailsFallback.turn.snapshot,
+        }
+      : await admitGuardrailsRuntime(
+          config,
+          "compact",
+          guardrailsProviderScopeAnchor,
+          capturedGuardrailsPolicy,
+        );
+  } catch (error) {
+    recordGuardrailsEvent({
+      surface: "compact",
+      mode: capturedGuardrailsPolicy?.mode ?? "enforce",
+      result: "blocked",
+      registryGeneration: 0,
+      count: 1,
+      categoryIds: [],
+      ruleIds: [],
+      latencyMs: 0,
+      severity: "warning",
+    });
+    return formatErrorResponse(
+      guardrailsFailureStatus(error),
+      guardrailsFailureCode(error),
+      isGuardrailsCapacityError(error)
+        ? "Compaction request exceeds the Guardrails processing limit"
+        : "Guardrails could not safely initialize for this compaction request",
+    );
+  }
+  const guardrailsLease = guardrailsAdmission.lease;
+  const guardrailsSnapshot = guardrailsAdmission.snapshot;
+  let compactContinuationLease: ReturnType<typeof retainGuardrailsCompactContinuation>;
+  let guardrailsBypassed = guardrailsAdmission.passthroughFailure;
+  try {
+  const compactScope = createGuardrailsContinuationScope(
+    logCtx.admissionKind,
+    logCtx.apiKeyId,
+    sessionLaneIdFromRequest(req.headers),
+  );
+  compactContinuationLease = options.guardrailsFallback
+    ? undefined
+    : retainGuardrailsCompactContinuation(raw.input, compactScope);
+  const guardrailsLineageId = options.guardrailsFallback?.lineageId
+    ?? compactContinuationLease?.lineageId
+    ?? randomUUID();
+  if (compactContinuationLease && (!guardrailsSnapshot || guardrailsSnapshot.mode !== "enforce")) {
+    return formatErrorResponse(
+      409,
+      "guardrails_policy_changed",
+      "This compact state was protected by Guardrails enforce mode. Start a new session before using detect or disabled mode.",
+    );
+  }
+  let guardrailsTurn: GuardrailsTurn | undefined = options.guardrailsFallback?.turn;
+  const rememberProtectedCompactOutput = (items: unknown[]): void => {
+    if (guardrailsTurn?.mode !== "enforce") return;
+    const retained = rememberGuardrailsCompactContinuation({
+      expiresAt: options.guardrailsFallback?.expiresAt ?? compactContinuationLease?.expiresAt,
+      items,
+      lineageId: guardrailsLineageId,
+      policyRevision: guardrailsTurn.snapshot.policyRevision,
+      scope: compactScope,
+      state: guardrailsTurn.state,
+    });
+    if (retained.status !== "stored" && retained.status !== "duplicate" && retained.status !== "invalid") {
+      console.warn(`[opencodex] Guardrails compact mapping was not retained (${retained.status})`);
+    }
+  };
+  if (!guardrailsBypassed && guardrailsSnapshot && !guardrailsTurn) {
+    const unmaskedBody = structuredClone(body);
+    const guardrailsStartedAt = performance.now();
+    try {
+    const prepared = await prepareGuardrailsTurn(
+      config,
+      "responses",
+      body,
+      compactContinuationLease?.state,
+      guardrailsSnapshot,
+    );
+    body = prepared.body;
+    raw = body as { model?: unknown; input?: unknown };
+    guardrailsTurn = prepared.turn;
+    if (guardrailsTurn) {
+      const protectedCompaction = maskLocalCompactionArtifacts(body, guardrailsTurn);
+      body = protectedCompaction.body;
+      raw = body as { model?: unknown; input?: unknown };
+      guardrailsTurn = protectedCompaction.turn;
+      recordGuardrailsTurn("compact", guardrailsTurn, performance.now() - guardrailsStartedAt);
+    }
+    } catch (error) {
+    if (guardrailsSnapshot?.failurePolicy !== "passthrough") {
+      recordGuardrailsEvent({
+        surface: "compact",
+        mode: guardrailsSnapshot?.mode ?? "enforce",
+        result: "blocked",
+        registryGeneration: guardrailsSnapshot?.generation ?? 0,
+        count: 1,
+        categoryIds: [],
+        ruleIds: [],
+        latencyMs: performance.now() - guardrailsStartedAt,
+        severity: "warning",
+      });
+      const status = isGuardrailsCapacityError(error) ? 413 : 400;
+      return formatErrorResponse(
+        status,
+        guardrailsFailureCode(error),
+        status === 413
+          ? "Compaction request exceeds the Guardrails processing limit"
+          : "Guardrails could not safely process the compaction request",
+      );
+    }
+    console.warn(`[opencodex] guardrails compact processing failed in passthrough mode: ${error instanceof Error ? error.name : "unknown"}`);
+    recordGuardrailsEvent({
+      surface: "compact",
+      mode: guardrailsSnapshot?.mode ?? "enforce",
+      result: "passthrough",
+      registryGeneration: guardrailsSnapshot?.generation ?? 0,
+      count: 1,
+      categoryIds: [],
+      ruleIds: [],
+      latencyMs: performance.now() - guardrailsStartedAt,
+      severity: "high",
+    });
+    body = unmaskedBody;
+    raw = body as { model?: unknown; input?: unknown };
+    guardrailsTurn = undefined;
+    guardrailsBypassed = true;
+    }
+  }
+  if (guardrailsSnapshot || guardrailsBypassed) logCtx.sensitiveDataProtectionActive = true;
+
   const selectedModelId = route.modelId;
   // Derive from the RESOLVED route model, not the caller's raw string. An account-qualified
   // selector like `side/gpt-daybreak-blue-latest` does not match the gated map — `slugsEquivalent`
@@ -1084,10 +1265,22 @@ export async function handleResponsesCompact(
     // request log; the routed branch gets the same through handleResponses. The
     // synthetic buffer errors are not upstream bodies and stay uninspected.
     if (buffered.ok) {
-      inspectResponseLogJson(logCtx, await buffered.clone().text());
+      const compactText = await buffered.clone().text();
+      inspectResponseLogJson(logCtx, compactText);
+      if (guardrailsTurn?.mode === "enforce") {
+        try {
+          const compactJson = JSON.parse(compactText) as { output?: unknown };
+          if (Array.isArray(compactJson.output)) {
+            rememberProtectedCompactOutput(compactJson.output);
+          }
+        } catch {
+          // Upstream JSON validation remains the caller's responsibility; a malformed
+          // success body simply cannot establish a trusted compact fingerprint.
+        }
+      }
       forgetCompactHandoffRoute(req);
     } else if (quotaFailure && !storedPool401ReplayAttempted) {
-      const fallbackModel = compactHandoffRoute(req, raw.model);
+      const fallbackModel = compactHandoffRoute(req, requestedModel);
       if (fallbackModel && !req.signal.aborted) {
         const fallbackReq = new Request(req.url, {
           method: "POST",
@@ -1096,15 +1289,36 @@ export async function handleResponsesCompact(
           signal: req.signal,
         });
         try {
+          const fallbackOptions: HandleResponsesCompactOptions = {
+            ...options,
+            guardrailsCapturedPolicy: capturedGuardrailsPolicy,
+            guardrailsProviderScopeAnchor,
+            ...(guardrailsTurn?.mode === "enforce"
+              ? {
+                  guardrailsFallback: {
+                    expiresAt: options.guardrailsFallback?.expiresAt
+                      ?? compactContinuationLease?.expiresAt,
+                    lineageId: guardrailsLineageId,
+                    turn: guardrailsTurn,
+                  },
+                }
+              : {}),
+          };
           const fallback = await handleResponsesCompact(
             fallbackReq,
             config,
             logCtx,
             turnAdmissionLease,
             admission,
-            options,
+            fallbackOptions,
           );
           if (fallback.ok || fallback.status === 499) return fallback;
+          if (fallback.status === 409) {
+            const payload = await fallback.clone().json().catch(() => undefined) as
+              | { error?: { code?: unknown } }
+              | undefined;
+            if (payload?.error?.code === "guardrails_policy_changed") return fallback;
+          }
           await fallback.body?.cancel().catch(() => undefined);
         } catch {
           // The previous-model rejection is the authoritative failure when the
@@ -1143,7 +1357,16 @@ export async function handleResponsesCompact(
     headers: internalHeaders,
     body: JSON.stringify(internalBody),
   });
-  const response = await handleResponses(internalReq, config, logCtx, { abortSignal: req.signal, turnAdmissionLease, ...(admission ? { admission } : {}) });
+  const response = await handleResponses(internalReq, config, logCtx, {
+    abortSignal: req.signal,
+    turnAdmissionLease,
+    ...(admission ? { admission } : {}),
+    guardrailsTurn,
+    guardrailsSnapshot,
+    guardrailsCapturedPolicy: capturedGuardrailsPolicy,
+    guardrailsProviderScopeAnchor,
+    guardrailsPassthroughFailure: guardrailsBypassed,
+  });
   if (!response.ok) return response;
   let json: { output?: unknown[]; status?: unknown; error?: unknown };
   if (response.headers.get("content-type")?.includes("text/event-stream")) {
@@ -1213,7 +1436,8 @@ export async function handleResponsesCompact(
     const result = new Response(JSON.stringify({ output: compactionItems }), {
       headers: { "Content-Type": "application/json" },
     });
-    rememberCompactHandoffRoute(req, raw.model);
+    rememberProtectedCompactOutput(compactionItems);
+    rememberCompactHandoffRoute(req, requestedModel);
     return result;
   }
   const encrypted = compactionItems[0]!.encrypted_content;
@@ -1224,6 +1448,11 @@ export async function handleResponsesCompact(
   }
   const summary = decoded;
   const output = buildCompactV1Output(extractCompactUserMessages(inputItems), summary);
-  rememberCompactHandoffRoute(req, raw.model);
+  rememberProtectedCompactOutput(output);
+  rememberCompactHandoffRoute(req, requestedModel);
   return new Response(JSON.stringify({ output }), { headers: { "Content-Type": "application/json" } });
+  } finally {
+    compactContinuationLease?.release();
+    guardrailsLease?.release();
+  }
 }

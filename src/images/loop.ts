@@ -209,8 +209,13 @@ function extractIterationThinking(events: AdapterEvent[]): OcxThinkingContent[] 
   return parts;
 }
 
-function jsonError(status: number, message: string): Response {
-  return new Response(JSON.stringify({ error: { message, type: "upstream_error", code: null } }), {
+function jsonError(
+  status: number,
+  message: string,
+  errorType = "upstream_error",
+  code: string | null = null,
+): Response {
+  return new Response(JSON.stringify({ error: { message, type: errorType, code } }), {
     status,
     headers: { "Content-Type": "application/json" },
   });
@@ -219,7 +224,12 @@ function jsonError(status: number, message: string): Response {
 /** Hard provider/parse failure inside an iteration. The eager first iteration converts it to a
  *  non-2xx jsonError; later (already-streaming) iterations surface it as an in-stream error event. */
 class LoopError extends Error {
-  constructor(readonly status: number, message: string) {
+  constructor(
+    readonly status: number,
+    message: string,
+    readonly errorType?: string,
+    readonly code?: string,
+  ) {
     super(message);
     this.name = "LoopError";
   }
@@ -243,6 +253,11 @@ export interface ImageBridgeDeps {
   onAttemptSend?: (recovery?: AttemptRecoveryKind) => void;
   /** Called after each upstream request is built (parity with web-search / normal path). */
   onRequestBuilt?: (request: AdapterRequest) => void;
+  /** Prepare only loop-added messages immediately before each outbound model build. */
+  beforeIterationBuild?: (
+    messages: OcxMessage[],
+    addedFromIndex: number,
+  ) => void | { code: string; errorType: string; message: string; status: number };
   abortSignal?: AbortSignal;
   onFirstOutput?: () => void;
   /** Max image-generation rounds before forcing a final answer. Defaults to 3; clamped to [0, 10]. */
@@ -337,6 +352,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
   };
 
   const messages: OcxMessage[] = [...parsed.context.messages];
+  let preparedMessageCount = messages.length;
   const allTools = parsed.context.tools ?? [];
   // Merge tool names from both plans for event scanning.
   const mediaToolNames = new Set<string>();
@@ -388,6 +404,16 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
    * restart) before the `on429` key rotation.
    */
   const prepareIterationEvents = async function* (forceFinal: boolean): AsyncGenerator<AdapterEvent, IterationResponse> {
+    const preparationFailure = deps.beforeIterationBuild?.(messages, preparedMessageCount);
+    if (preparationFailure) {
+      throw new LoopError(
+        preparationFailure.status,
+        preparationFailure.message,
+        preparationFailure.errorType,
+        preparationFailure.code,
+      );
+    }
+    preparedMessageCount = messages.length;
     const iterParsed: OcxParsedRequest = {
       ...parsed,
       stream: true,
@@ -686,7 +712,9 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       firstPrepared = await prepareIterationDrained(maxRounds <= 0);
     } catch (e) {
       if (abortSignal) abortSignal.removeEventListener("abort", linkAbort);
-      if (e instanceof LoopError) return jsonError(e.status, e.message);
+      if (e instanceof LoopError) {
+        return jsonError(e.status, e.message, e.errorType, e.code ?? null);
+      }
       throw e;
     }
   }
@@ -933,6 +961,8 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
               type: "error",
               message: e instanceof LoopError ? e.message : (e instanceof Error ? e.message : String(e)),
               ...(e instanceof LoopError ? { status: e.status } : {}),
+              ...(e instanceof LoopError && e.errorType ? { errorType: e.errorType } : {}),
+              ...(e instanceof LoopError && e.code ? { code: e.code } : {}),
               ...(hiddenUsage ? { usage: hiddenUsage } : {}),
             };
           }

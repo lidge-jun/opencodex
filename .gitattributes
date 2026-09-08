@@ -8,3 +8,7 @@
 *.ico binary
 *.zip binary
 *.gz binary
+
+# This vendored donor asset is intentionally byte-identical to its pinned source,
+# including two trailing-space lines. Keep whitespace diagnostics enabled elsewhere.
+src/guardrails/rules/guardrails_regex_rules.yaml -whitespace

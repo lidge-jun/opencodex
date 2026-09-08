@@ -258,6 +258,10 @@ describe("headless GUI parity CLI", () => {
       ["/api/diagnostics", "ocx system"],
       ["/api/effort", "ocx agent"],
       ["/api/grok", "ocx grok"],
+      // Guardrails is deliberately configured from its Dashboard screen. Its
+      // granular rule editor has no useful non-interactive equivalent yet, so
+      // exposing a raw CLI transport would bypass the designed safety affordance.
+      ["/api/guardrails", "(none — GUI-only Guardrails configuration surface)"],
       ["/api/injection", "ocx agent"],
       ["/api/keys", "ocx access"],
       ["/api/keys/rotate", "ocx access key rotate"],

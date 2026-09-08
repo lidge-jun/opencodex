@@ -307,6 +307,12 @@ export interface OcxProviderContinuationState {
   [provider: string]: Record<string, unknown> | undefined;
 }
 
+/** Safe persisted continuation metadata. Never contains placeholder mappings or originals. */
+export interface OcxGuardrailsResponseMarker {
+  enforced: true;
+  policyRevision: string;
+}
+
 export type AdapterEvent =
   | { type: "heartbeat" }
   | { type: "text_delta"; text: string; phase?: OcxMessagePhase }

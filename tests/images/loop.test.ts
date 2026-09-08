@@ -3,7 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ProviderAdapter, IncomingMeta } from "../../src/adapters/base";
-import type { AdapterEvent, OcxParsedRequest } from "../../src/types";
+import {
+  extendGuardrailsTurnText,
+  prepareGuardrailsTurn,
+} from "../../src/guardrails/turn";
+import type { AdapterEvent, OcxConfig, OcxParsedRequest } from "../../src/types";
 import type { ImageBridgePlan, ImageCallResult } from "../../src/images/types";
 import type { ImageBridgeDeps } from "../../src/images/loop";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
@@ -161,6 +165,79 @@ describe("runWithImageBridge", () => {
       { ok: true, model: "grok-imagine-image-quality", prompt: "a cat", files: ["/test/img.png"], count: 1, markdown: "![image](/test/img.png)" },
     );
     expect(sse).toContain("Here is your image");
+  });
+
+  test("loop-added media results are prepared before the next model round", async () => {
+    const secret = "sk_live_abcdefghijklmnopqrstuvwx";
+    const builtMessages: string[] = [];
+    const prepared = await prepareGuardrailsTurn(
+      {
+        guardrails: { enabled: true, mode: "enforce", failurePolicy: "block" },
+      } as OcxConfig,
+      "responses",
+      { input: "initial" },
+    );
+    let turn = prepared.turn!;
+    streamQueue = [
+      [...imageCallEvents],
+      [{ type: "text_delta", text: "safe result" }, { type: "done" }],
+    ];
+    fulfillResult = {
+      ok: false,
+      model: "grok-imagine-image-quality",
+      prompt: "a cat",
+      files: [],
+      count: 0,
+      error: `sidecar returned ${secret}`,
+    };
+    const response = await runWithImageBridge({
+      parsed: makeParsed(),
+      adapter: {
+        ...mockAdapter,
+        buildRequest: async request => {
+          builtMessages.push(JSON.stringify(request.context.messages));
+          return { url: "https://test/v1/chat", method: "POST", headers: {}, body: "{}" };
+        },
+      },
+      plan,
+      beforeIterationBuild: (messages, addedFromIndex) => {
+        for (const message of messages.slice(addedFromIndex)) {
+          if (message.role === "toolResult" && typeof message.content === "string") {
+            const next = extendGuardrailsTurnText(message.content, turn);
+            message.content = next.text;
+            turn = next.turn;
+          }
+        }
+      },
+    });
+    await response.text();
+
+    expect(builtMessages).toHaveLength(2);
+    expect(builtMessages[1]).toContain("<STRIPE_ACCESS_TOKEN_1>");
+    expect(builtMessages[1]).not.toContain(secret);
+  });
+
+  test("Guardrails preparation failures preserve policy error type and code", async () => {
+    const response = await runWithImageBridge({
+      parsed: makeParsed(),
+      adapter: mockAdapter,
+      plan,
+      beforeIterationBuild: () => ({
+        status: 413,
+        errorType: "invalid_request_error",
+        code: "guardrails_capacity_exceeded",
+        message: "Media tool results exceed the Guardrails processing limit",
+      }),
+    });
+
+    expect(response.status).toBe(413);
+    expect(await response.json()).toEqual({
+      error: {
+        message: "Media tool results exceed the Guardrails processing limit",
+        type: "invalid_request_error",
+        code: "guardrails_capacity_exceeded",
+      },
+    });
   });
 
   test("fulfillImageCall error → model responds about failure", async () => {

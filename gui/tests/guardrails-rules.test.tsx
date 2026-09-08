@@ -1,0 +1,491 @@
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { Window } from "happy-dom";
+import { act } from "react";
+import type { Root } from "react-dom/client";
+import { LanguageProvider } from "../src/i18n/provider";
+import { GuardrailsRulesPanel } from "../src/pages/guardrails/rules-panel";
+import type {
+  GuardrailsCustomRule,
+  GuardrailsImportPreview,
+  GuardrailsRuleSummary,
+  GuardrailsRules,
+} from "../src/pages/guardrails/types";
+
+const globals = [
+  "document",
+  "window",
+  "navigator",
+  "localStorage",
+  "IS_REACT_ACT_ENVIRONMENT",
+] as const;
+let previousGlobals: Record<(typeof globals)[number], unknown>;
+let testWindow: Window;
+let root: Root | null = null;
+let host: HTMLDivElement;
+
+beforeEach(() => {
+  previousGlobals = Object.fromEntries(
+    globals.map(key => [key, Reflect.get(globalThis, key)]),
+  ) as typeof previousGlobals;
+  testWindow = new Window({ url: "http://localhost/#guardrails/rules" });
+  Object.defineProperties(globalThis, {
+    document: { configurable: true, value: testWindow.document },
+    window: { configurable: true, value: testWindow },
+    navigator: { configurable: true, value: testWindow.navigator },
+    localStorage: { configurable: true, value: testWindow.localStorage },
+  });
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
+    .IS_REACT_ACT_ENVIRONMENT = true;
+  host = document.createElement("div");
+  document.body.append(host);
+});
+
+afterEach(async () => {
+  if (root) {
+    const mounted = root;
+    await act(async () => { mounted.unmount(); });
+    root = null;
+  }
+  testWindow.close();
+  for (const key of globals) {
+    Object.defineProperty(globalThis, key, {
+      configurable: true,
+      value: previousGlobals[key],
+    });
+  }
+});
+
+function rule(index: number): GuardrailsRuleSummary {
+  return {
+    ruleId: `rule-${String(index).padStart(3, "0")}`,
+    dataType: 1,
+    group: "CREDENTIALS",
+    displayName: `Rule ${index}`,
+    description: `Rule ${index} description`,
+    source: "manual",
+    enabled: true,
+    custom: false,
+  };
+}
+
+const DATA: GuardrailsRules = {
+  revision: "rev-1",
+  rules: Array.from({ length: 55 }, (_, index) => rule(index + 1)),
+  builtinRuleCount: 55,
+  customRuleCount: 0,
+  customRules: [],
+};
+
+async function mount(overrides: {
+  data?: GuardrailsRules;
+  onBulk?: (ruleIds: string[], enabled: boolean) => void;
+  onImport?: (bundle: unknown, mode: "merge" | "replace", returnFocus: HTMLElement | null) => void;
+  onImportError?: (error: unknown) => void;
+  onSave?: (rule: GuardrailsCustomRule, editingId: string | null) => Promise<void>;
+  onTestDraft?: (rule: GuardrailsCustomRule) => void;
+  importPreview?: GuardrailsImportPreview | null;
+} = {}) {
+  const { createRoot } = await import("react-dom/client");
+  await act(async () => {
+    root = createRoot(host);
+    root.render(
+      <LanguageProvider>
+        <GuardrailsRulesPanel
+          data={overrides.data ?? DATA}
+          pending={false}
+          onToggle={() => {}}
+          onBulk={overrides.onBulk ?? (() => {})}
+          onSave={overrides.onSave ?? (async () => {})}
+          onTestDraft={overrides.onTestDraft ?? (() => {})}
+          onDelete={() => {}}
+          onExport={() => {}}
+          onImport={overrides.onImport ?? (() => {})}
+          importPreview={overrides.importPreview ?? null}
+          onApplyImport={() => {}}
+          onCancelImport={() => {}}
+          onImportError={overrides.onImportError ?? (() => {})}
+        />
+      </LanguageProvider>,
+    );
+  });
+}
+
+function button(label: string): HTMLButtonElement {
+  return [...host.querySelectorAll<HTMLButtonElement>("button")]
+    .find(candidate => candidate.textContent?.trim() === label)!;
+}
+
+test("built-in rule labels use the active locale instead of bundled Russian metadata", async () => {
+  await mount({
+    data: {
+      revision: "rev-localized",
+      rules: [
+        {
+          ruleId: "opencodex.credentials.password-assignment",
+          dataType: 1,
+          group: "CREDENTIALS",
+          displayName: "Учетные данные",
+          description: "Контекстные password assignments",
+          source: "opencodex",
+          enabled: true,
+          custom: false,
+        },
+        {
+          ruleId: "opencodex.credentials.infrastructure-uri-userinfo",
+          dataType: 1,
+          group: "CREDENTIAL_URLS",
+          displayName: "URL с учетными данными",
+          description: "Контекстные URI",
+          source: "opencodex",
+          enabled: true,
+          custom: false,
+        },
+      ],
+      builtinRuleCount: 2,
+      customRuleCount: 0,
+      customRules: [],
+    },
+  });
+
+  expect(host.textContent).toContain("Credentials");
+  expect(host.textContent).toContain("Credential URLs");
+  expect(host.textContent).not.toContain("Учетные данные");
+  expect(host.textContent).not.toContain("URL с учетными данными");
+  expect(host.querySelector<HTMLButtonElement>(
+    'button[aria-label*="opencodex.credentials.password-assignment"]',
+  )).not.toBeNull();
+});
+
+test("custom group headings keep the configured group instead of repeating a rule label", async () => {
+  const customRule: GuardrailsCustomRule = {
+    ruleId: "custom.group-label",
+    name: "Group label fixture",
+    dataType: 6,
+    group: "LOCAL SECRETS",
+    groupPriority: 0,
+    displayName: "Synthetic token",
+    description: "Test-only custom rule",
+    regex: "synthetic_[a-z]+",
+    keywords: [],
+    banlist: [],
+    validators: [],
+    masking: { captureGroups: [], placeholderType: "SYNTHETIC_TOKEN" },
+  };
+  await mount({
+    data: {
+      revision: "rev-custom-group",
+      rules: [{
+        ruleId: customRule.ruleId,
+        dataType: customRule.dataType,
+        group: customRule.group,
+        displayName: customRule.displayName,
+        description: customRule.description,
+        source: "custom",
+        enabled: true,
+        custom: true,
+      }],
+      builtinRuleCount: 0,
+      customRuleCount: 1,
+      customRules: [customRule],
+    },
+  });
+
+  expect(host.querySelector(".guardrails-rule-group")?.textContent).toBe("LOCAL SECRETS");
+  expect(host.querySelector(".guardrails-rule-row strong")?.textContent).toBe("Synthetic token");
+  expect(host.querySelector<HTMLButtonElement>(
+    'button[aria-label="Edit rule: Synthetic token (custom.group-label)"]',
+  )).not.toBeNull();
+  expect(host.querySelector<HTMLButtonElement>(
+    'button[aria-label="Delete rule: Synthetic token (custom.group-label)"]',
+  )).not.toBeNull();
+});
+
+test("paginates fifty rules and keeps the remaining five reachable", async () => {
+  await mount();
+  expect(host.querySelectorAll(".guardrails-rule-row")).toHaveLength(50);
+  expect(host.textContent).toContain("Page 1 of 2");
+
+  await act(async () => { button("Next").click(); });
+  expect(host.querySelectorAll(".guardrails-rule-row")).toHaveLength(5);
+  expect(host.textContent).toContain("Page 2 of 2");
+});
+
+test("bulk action emits all filtered built-in IDs once", async () => {
+  const calls: Array<{ ids: string[]; enabled: boolean }> = [];
+  await mount({
+    onBulk: (ids, enabled) => calls.push({ ids, enabled }),
+  });
+
+  await act(async () => { button("Disable 55").click(); });
+  expect(calls).toHaveLength(1);
+  expect(calls[0]?.enabled).toBe(false);
+  expect(calls[0]?.ids).toEqual(DATA.rules.map(item => item.ruleId));
+});
+
+test("custom rule form exposes only functional matching controls", async () => {
+  await mount();
+  await act(async () => { button("Add rule").click(); });
+
+  const labels = [...host.querySelectorAll<HTMLElement>(".field-label")]
+    .map(label => label.textContent?.trim());
+  expect(labels).not.toContain("Group priority");
+  expect(labels).not.toContain("Keywords");
+  const minimumLength = [...host.querySelectorAll<HTMLLabelElement>("label")]
+    .find(label => label.textContent?.includes("Minimum length"))
+    ?.querySelector<HTMLInputElement>("input");
+  expect(minimumLength?.max).toBe(String(128 * 1024));
+});
+
+test("invalid JSON import is reported without invoking import", async () => {
+  const errors: unknown[] = [];
+  let imports = 0;
+  await mount({
+    onImport: () => { imports += 1; },
+    onImportError: error => errors.push(error),
+  });
+
+  const input = host.querySelector<HTMLInputElement>('input[type="file"]')!;
+  const file = new testWindow.File(["{"], "broken.json", { type: "application/json" });
+  Object.defineProperty(input, "files", { configurable: true, value: [file] });
+  await act(async () => {
+    input.dispatchEvent(new testWindow.Event("change", { bubbles: true }));
+    await new Promise(resolve => setTimeout(resolve, 5));
+  });
+
+  expect(imports).toBe(0);
+  expect(errors).toHaveLength(1);
+  expect(errors[0]).toBeInstanceOf(SyntaxError);
+});
+
+test("oversized import is rejected before JSON parsing", async () => {
+  const errors: unknown[] = [];
+  let imports = 0;
+  await mount({
+    onImport: () => { imports += 1; },
+    onImportError: error => errors.push(error),
+  });
+
+  const input = host.querySelector<HTMLInputElement>('input[type="file"]')!;
+  const file = new testWindow.File(
+    [new Uint8Array(4 * 1024 * 1024 + 1)],
+    "oversized.json",
+    { type: "application/json" },
+  );
+  Object.defineProperty(input, "files", { configurable: true, value: [file] });
+  await act(async () => {
+    input.dispatchEvent(new testWindow.Event("change", { bubbles: true }));
+  });
+
+  expect(imports).toBe(0);
+  expect(errors).toHaveLength(1);
+  expect((errors[0] as Error).message).toContain("4 MiB");
+});
+
+test("Replace preview highlights every security-setting weakening", async () => {
+  await mount({
+    importPreview: {
+      ok: true,
+      dryRun: true,
+      mode: "replace",
+      createCount: 0,
+      unchangedCount: 0,
+      replaceCount: 0,
+      conflicts: [],
+      securityDiff: {
+        weakensProtection: true,
+        requiresReview: true,
+        enabled: { before: true, after: false, changed: true, weakening: true },
+        mode: { before: "enforce", after: "detect", changed: true, weakening: true },
+        failurePolicy: {
+          before: "block",
+          after: "passthrough",
+          changed: true,
+          weakening: true,
+        },
+        providerScope: {
+          before: { mode: "all" },
+          after: { mode: "selected", providerIds: ["openai"] },
+          addedProviderIds: ["openai"],
+          removedProviderIds: [],
+          changed: true,
+          weakening: true,
+        },
+        enabledDataTypes: {
+          before: [1, 2, 3, 4, 5, 6],
+          after: [1, 2],
+          added: [],
+          removed: [3, 4, 5, 6],
+          changed: true,
+          weakening: true,
+        },
+        disabledBuiltinRules: {
+          beforeCount: 0,
+          afterCount: 1,
+          newlyDisabledCount: 1,
+          reenabledCount: 0,
+          changed: true,
+          weakening: true,
+        },
+        customRules: {
+          beforeCount: 2,
+          afterCount: 1,
+          addedCount: 0,
+          removedCount: 1,
+          changedDefinitionCount: 1,
+          changedRuleIds: ["custom.changed"],
+          removedRuleIds: ["custom.removed"],
+          changed: true,
+          weakening: true,
+          requiresReview: true,
+        },
+        keywordPrefilterEnabled: {
+          before: false,
+          after: true,
+          changed: true,
+          weakening: false,
+        },
+      },
+    },
+  });
+
+  expect(host.textContent).toContain("Selected (1): openai");
+
+  expect(host.querySelector(".notice-warn")?.textContent).toContain("reduces protection");
+  expect(host.textContent).toContain("Traffic protection: On → Off");
+  expect(host.textContent).toContain("Mode: Enforce masking → Detect only");
+  expect(host.textContent).toContain("Failure handling: Block request → Pass through request");
+  expect(host.textContent).toContain("Provider coverage: All providers → Selected (1)");
+  expect(host.textContent).toContain("Enabled data types: 6 → 2");
+  expect(host.textContent).toContain("No longer covered: Access tokens, IP addresses, Personal data, Custom");
+  expect(host.textContent).toContain(
+    "Disabled built-in rules: 0 → 1 (newly disabled: 1, re-enabled: 0)",
+  );
+  expect(host.textContent).toContain("Custom rules: 2 → 1 (removed: 1, changed: 1)");
+  expect(host.textContent).toContain("Changed rule definitions: custom.changed");
+  expect(host.textContent).toContain("Removed rule IDs: custom.removed");
+  expect(host.textContent).toContain("Keyword prefilter: Off → On");
+  expect(host.querySelectorAll(".badge-amber")).toHaveLength(7);
+  const keywordPrefilterRow = [...host.querySelectorAll("li")]
+    .find(row => row.textContent?.includes("Keyword prefilter: Off → On"));
+  expect(keywordPrefilterRow?.querySelector(".badge-amber")).toBeNull();
+});
+
+test("capture group commas remain editable and parse only on submit", async () => {
+  const saved: GuardrailsCustomRule[] = [];
+  await mount({ onSave: async rule => { saved.push(rule); } });
+  const captureInput = [...host.querySelectorAll<HTMLLabelElement>("label")]
+    .find(label => label.textContent?.includes("Capture groups"))
+    ?.querySelector("input");
+  expect(captureInput).toBeDefined();
+  const setInputValue = (value: string) => {
+    Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!
+      .set!.call(captureInput, value);
+    captureInput!.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+  };
+
+  await act(async () => {
+    setInputValue("1,");
+  });
+  expect(captureInput!.value).toBe("1,");
+  await act(async () => {
+    setInputValue("1, 2");
+  });
+  await act(async () => {
+    captureInput!.closest("form")!.dispatchEvent(
+      new testWindow.Event("submit", { bubbles: true, cancelable: true }),
+    );
+  });
+
+  expect(saved).toHaveLength(1);
+  expect(saved[0]?.masking.captureGroups).toEqual([1, 2]);
+
+  await act(async () => {
+    setInputValue("1, bad, 2");
+    captureInput!.closest("form")!.dispatchEvent(
+      new testWindow.Event("submit", { bubbles: true, cancelable: true }),
+    );
+  });
+  expect(saved).toHaveLength(1);
+  expect(captureInput!.getAttribute("aria-invalid")).toBe("true");
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain("positive integer");
+});
+
+test("successful custom rule creation resets the form", async () => {
+  await mount({ onSave: async () => {} });
+  await act(async () => { button("Add rule").click(); });
+
+  const ruleId = [...host.querySelectorAll<HTMLLabelElement>("label")]
+    .find(label => label.textContent?.includes("Rule ID"))
+    ?.querySelector<HTMLInputElement>("input");
+  const name = [...host.querySelectorAll<HTMLLabelElement>("label")]
+    .find(label => label.textContent?.includes("Rule name"))
+    ?.querySelector<HTMLInputElement>("input");
+  const displayName = [...host.querySelectorAll<HTMLLabelElement>("label")]
+    .find(label => label.textContent?.includes("Display name"))
+    ?.querySelector<HTMLInputElement>("input");
+  const regex = [...host.querySelectorAll<HTMLLabelElement>("label")]
+    .find(label => label.textContent?.includes("RE2 pattern"))
+    ?.querySelector<HTMLInputElement>("input");
+  const placeholder = [...host.querySelectorAll<HTMLLabelElement>("label")]
+    .find(label => label.textContent?.includes("Placeholder type"))
+    ?.querySelector<HTMLInputElement>("input");
+  const setValue = (input: HTMLInputElement | undefined, value: string) => {
+    Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!
+      .set!.call(input, value);
+    input!.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+  };
+
+  await act(async () => {
+    setValue(ruleId, "custom.reset");
+    setValue(name, "Reset fixture");
+    setValue(displayName, "Reset fixture");
+    setValue(regex, "reset_[a-z]+");
+    setValue(placeholder, "RESET");
+  });
+  await act(async () => {
+    ruleId!.closest("form")!.dispatchEvent(
+      new testWindow.Event("submit", { bubbles: true, cancelable: true }),
+    );
+    await Promise.resolve();
+  });
+
+  expect(ruleId?.value).toBe("");
+  expect(host.textContent).not.toContain("Cancel");
+});
+
+test("custom rule draft can be tested without saving it", async () => {
+  const tested: GuardrailsCustomRule[] = [];
+  let saves = 0;
+  await mount({
+    onSave: async () => { saves += 1; },
+    onTestDraft: rule => tested.push(rule),
+  });
+  const inputFor = (labelText: string) => [...host.querySelectorAll<HTMLLabelElement>("label")]
+    .find(label => label.textContent?.includes(labelText))
+    ?.querySelector<HTMLInputElement>("input");
+  const setValue = (input: HTMLInputElement | undefined, value: string) => {
+    Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!
+      .set!.call(input, value);
+    input!.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+  };
+
+  await act(async () => {
+    setValue(inputFor("Rule ID"), "custom.test-draft");
+    setValue(inputFor("Rule name"), "Draft fixture");
+    setValue(inputFor("Display name"), "Draft fixture");
+    setValue(inputFor("RE2 pattern"), "draft_[a-z]+");
+    setValue(inputFor("Placeholder type"), "DRAFT_SECRET");
+  });
+  const testDraft = [...host.querySelectorAll<HTMLButtonElement>("button")]
+    .find(candidate => candidate.textContent?.includes("Scan")
+      && candidate.textContent.includes("Draft"))!;
+  await act(async () => { testDraft.click(); });
+
+  expect(saves).toBe(0);
+  expect(tested).toHaveLength(1);
+  expect(tested[0]).toMatchObject({
+    ruleId: "custom.test-draft",
+    regex: "draft_[a-z]+",
+    masking: { captureGroups: [], placeholderType: "DRAFT_SECRET" },
+  });
+});

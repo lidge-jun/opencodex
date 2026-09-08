@@ -33,6 +33,7 @@ import {
   awaitResponseSpillPublicationTailForTests,
   markBodyNonPersistable,
   previousResponseConversationId,
+  previousResponseGuardrailsMarker,
   previousResponseProviderState,
   previousResponseReplayFailure,
   previousResponseReplayPrefixLength,
@@ -69,6 +70,8 @@ import {
   writeResponseSpillDurably,
 } from "../../src/responses/spill-store";
 import { adapterNeedsForcedContinuation, injectDeveloperMessage } from "../../src/server/responses";
+import { prepareGuardrailsTurn } from "../../src/guardrails/turn";
+import type { OcxConfig } from "../../src/types";
 import { watchdogMs } from "../helpers/ci-watchdog";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -2825,6 +2828,57 @@ describe("Responses previous_response_id state", () => {
       { role: "user", content: "next" },
     ]);
     expect(previousResponseConversationId(first.id as string)).toBe("cursor_conv_9");
+  });
+
+  test("persists only masked Guardrails state and the safe marker across restart", async () => {
+    const originalSecret = "sk_live_abcdefghijklmnopqrstuvwx";
+    const prepared = await prepareGuardrailsTurn({
+      guardrails: {
+        enabled: true,
+        mode: "enforce",
+        failurePolicy: "block",
+      },
+    } as OcxConfig, "responses", {
+      model: "gpt-5.5",
+      input: originalSecret,
+    });
+    const protectedBody = prepared.body as { input: string; model: string };
+    const policyRevision = prepared.turn!.snapshot.policyRevision;
+    expect(protectedBody.input).toBe("<STRIPE_ACCESS_TOKEN_1>");
+    setResponseStateByteCapForTests(512);
+    rememberResponseState(
+      protectedBody,
+      fixedResponse("resp_guardrails_marker", [{
+        type: "message",
+        role: "assistant",
+        content: `<STRIPE_ACCESS_TOKEN_1>${"x".repeat(8_000)}`,
+      }]),
+      undefined,
+      {
+        clientThreadId: "task-guardrails",
+        guardrails: { enforced: true, policyRevision },
+      },
+    );
+    await flushResponseState();
+
+    const snapshot = readFileSync(join(home, "responses-state.json"), "utf8");
+    const spillPayloads = spillFileNames(home)
+      .map(name => readFileSync(join(responseSpillDirectory(home), name), "utf8"))
+      .join("\n");
+    expect(spillPayloads.length).toBeGreaterThan(0);
+    for (const persisted of [snapshot, spillPayloads]) {
+      expect(persisted).not.toContain(originalSecret);
+      expect(persisted).not.toContain("\"replacements\"");
+    }
+    expect(`${snapshot}\n${spillPayloads}`).toContain(policyRevision);
+    expect(`${snapshot}\n${spillPayloads}`).toContain("<STRIPE_ACCESS_TOKEN_1>");
+
+    clearResponseStateMemoryForTests();
+    expect(previousResponseGuardrailsMarker("resp_guardrails_marker", "task-guardrails")).toEqual({
+      enforced: true,
+      policyRevision,
+    });
+    expect(previousResponseGuardrailsMarker("resp_guardrails_marker", "task-other")).toBeUndefined();
   });
 
   test("recovers only old response-state temps owned by dead processes", () => {

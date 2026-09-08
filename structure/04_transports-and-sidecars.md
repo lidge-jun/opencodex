@@ -1670,6 +1670,55 @@ not retried.
 - 다른 대안 대신 이 방식을 선택한 이유: Replaying after output can duplicate text or tools, full-turn buffering destroys streaming and grows memory, and making every 410 retryable hides caller/application errors.
 - 장점, 단점 및 영향: Zero-output provider failures can reach a healthy target with ordered receipts and cooldown; ambiguous or oversized pre-output streams keep the current fail-closed behavior instead of consuming unbounded memory.
 ```
+## Guardrails provider-scoped admission
+
+The proposed staged-review [integration contract](guardrails-integration-contract.md)
+maps these hooks to protocol/failure behavior and regression tests. Its design-freeze
+status requires maintainer confirmation; the smaller core-only draft activates no traffic protection.
+
+Guardrails captures enabled policy intent synchronously before a caller body is read, but delays
+registry activation until routing can supply a canonical `RouteResult.providerName`. An absent
+provider scope and `{ mode: "all" }` are equivalent. Selected scope activates only for listed
+provider IDs; a known excluded provider returns before the dynamic runtime import, while an unknown
+or invalid identity remains fail-safe protected. Native Anthropic traffic uses the stable synthetic
+ID `anthropic-native`.
+
+Chat, Anthropic Messages, token count, and compact resolve their provider before masking. Responses
+uses an early route-only classification and verifies the final route again before auth or upstream
+I/O. If an initially excluded route changes to a protected provider, the request fails locally with
+`409 guardrails_policy_changed` rather than forwarding raw text. A protected logical turn keeps its
+mapping across later same-request routing work. A combo whose every physical target is excluded
+stays unprotected; a mixed combo is conservatively protected as one logical turn. Policy fallback
+captures one immutable policy, provider-scope anchor, masked body, and placeholder mapping. Each
+concrete retry re-enters core with that same protected state; an excluded-to-protected retry returns
+409 before upstream I/O.
+
+Protected continuation markers remain fail-closed: a previous enforce mapping cannot resume through
+an excluded provider. Provider IDs and scope metadata are safe routing policy; placeholder mappings
+and originals remain process-memory-only.
+
+[Decision Log]
+- 목적과 의도: Allow operators to exclude selected providers without weakening protected routes or loading the scanner for known excluded traffic.
+- 기존 구현 및 제약 조건: Guardrails admission happened before routing, while combo, policy, and subagent fallback can settle a physical provider later.
+- 검토한 주요 대안: Scope by requested model/display name; compile globally then skip scanning; remask between mixed fallback attempts; capture intent first and activate by canonical provider.
+- 선택한 방식: Two-phase immutable policy capture plus provider-aware runtime admission, conservative mixed-combo pinning, and a final-route fail-closed check.
+- 다른 대안 대신 이 방식을 선택한 이유: Canonical provider IDs are stable, excluded traffic avoids RE2 failure/cost, and no raw payload crosses into a route that requires protection.
+- 장점, 단점 및 영향: Direct provider control is precise and continuation-safe; mixed combos remain protected as one turn, and an excluded-to-protected late fallback returns 409 instead of retrying raw.
+
+## Guardrails terminal-gated stream restoration
+
+Guardrails may restore an issued placeholder only in eligible assistant prose. For HTTP/SSE and the
+client-facing Responses WebSocket bridge, the first block that changes from masked to restored starts
+a bounded terminal gate. The gate retains the original masked blocks alongside their rewritten forms
+and preserves event order. It releases rewritten blocks only after `response.completed`, Chat
+`[DONE]`, or Anthropic `message_stop`. A failed or incomplete terminal, malformed data, premature
+EOF, demask-capacity failure, or the combined 2 MiB / 4096-block staging limit releases the original
+masked blocks and disables further restoration for that stream. Blocks emitted before restoration
+remain live, so Guardrails does not turn ordinary streams into full-response buffering.
+
+JSON and streaming failure classification share `src/guardrails/response-envelope.ts`; transport
+code must not introduce a separate interpretation of failed, incomplete, cancelled, or errored
+provider envelopes.
 
 ## Transport inventory
 

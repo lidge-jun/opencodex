@@ -98,3 +98,50 @@ test("clicking the action invokes onConfirm", async () => {
   await act(async () => { container.querySelector<HTMLButtonElement>(".modal-actions .btn-primary")!.click(); });
   expect(confirms).toBe(1);
 });
+
+test("failed confirmation stays open, shows the error, and allows retry", async () => {
+  await mount({ onConfirm: async () => { throw new Error("write failed"); } });
+  const action = container.querySelector<HTMLButtonElement>(".modal-actions .btn-primary")!;
+  await act(async () => {
+    action.click();
+    await Promise.resolve();
+  });
+
+  expect(container.querySelector("dialog")?.open).toBe(true);
+  expect(container.querySelector(".notice-err")?.textContent).toContain("write failed");
+  expect(action.disabled).toBe(false);
+});
+
+test("pending confirmation blocks duplicate submit and dismissal", async () => {
+  let confirms = 0;
+  let closes = 0;
+  let resolveConfirm: (() => void) | undefined;
+  const pending = new Promise<void>(resolve => { resolveConfirm = resolve; });
+  const dialog = await mount({
+    onClose: () => { closes += 1; },
+    onConfirm: () => {
+      confirms += 1;
+      return pending;
+    },
+  });
+  const action = container.querySelector<HTMLButtonElement>(".modal-actions .btn-primary")!;
+  await act(async () => {
+    action.click();
+    action.click();
+    await Promise.resolve();
+  });
+  expect(confirms).toBe(1);
+  expect(action.disabled).toBe(true);
+
+  const WindowEvent = (testWindow as unknown as { Event: typeof Event }).Event;
+  await act(async () => {
+    dialog.dispatchEvent(new WindowEvent("cancel", { bubbles: false, cancelable: true }));
+    container.querySelector<HTMLButtonElement>(".modal-backdrop-dismiss")!.click();
+  });
+  expect(closes).toBe(0);
+
+  await act(async () => {
+    resolveConfirm?.();
+    await pending;
+  });
+});

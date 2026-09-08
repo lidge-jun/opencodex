@@ -35,6 +35,7 @@ on:
       - "tests/**"
       - "scripts/**"
       - "gui/**"
+      - "docs-site/**"
       - "assets/**"
       - ".gitattributes"
       - ".npmignore"
@@ -43,6 +44,8 @@ on:
       - "tsconfig.json"
       - "README.md"
       - "LICENSE"
+      - "THIRD_PARTY_NOTICES.md"
+      - "LICENSES/**"
       - ".github/workflows/ci.yml"
       - ".github/workflows/release.yml"
       - ".github/workflows/enforce-pr-target.yml"
@@ -154,6 +157,7 @@ jobs:
       # step. A missing or malformed filter output must fail this job instead
       # of silently making every expensive job skip.
       ci: ${{ steps.scope.outputs.ci }}
+      docs: ${{ steps.scope.outputs.docs }}
       gui: ${{ steps.filter.outputs.gui }}
       packaging: ${{ steps.filter.outputs.packaging }}
     steps:
@@ -193,6 +197,7 @@ jobs:
               - 'tests/**'
               - 'scripts/**'
               - 'gui/**'
+              - 'docs-site/**'
               - 'assets/**'
               - '.gitattributes'
               - '.npmignore'
@@ -201,12 +206,17 @@ jobs:
               - 'tsconfig.json'
               - 'README.md'
               - 'LICENSE'
+              - 'THIRD_PARTY_NOTICES.md'
+              - 'LICENSES/**'
               - '.github/workflows/ci.yml'
               - '.github/workflows/release.yml'
               - '.github/workflows/enforce-pr-target.yml'
               - '.github/workflows/stale-needs-info.yml'
             gui:
               - 'gui/**'
+            docs:
+              - 'docs-site/**'
+              - '.github/workflows/ci.yml'
             # Everything that ends up inside `npm pack`, or that decides what
             # does. `src/**` belongs here because package.json ships `src` and
             # bin/ocx.mjs executes it: without that entry an ordinary source PR
@@ -226,13 +236,18 @@ jobs:
               - '.gitattributes'
               - 'README.md'
               - 'LICENSE'
+              - 'THIRD_PARTY_NOTICES.md'
+              - 'LICENSES/**'
+              - 'scripts/guardrails-provenance.ts'
               - 'scripts/prepare-package.ts'
+              - 'scripts/verify-guardrails-package.ts'
 
       - name: Assert the scope output is usable
         id: scope
         shell: bash
         env:
           CI_SCOPE: ${{ steps.filter.outputs.ci }}
+          DOCS_SCOPE: ${{ steps.filter.outputs.docs }}
         run: |
           set -euo pipefail
           case "$CI_SCOPE" in
@@ -241,6 +256,15 @@ jobs:
               ;;
             *)
               printf '::error::changes.outputs.ci was %q, expected true or false\n' "$CI_SCOPE"
+              exit 1
+              ;;
+          esac
+          case "$DOCS_SCOPE" in
+            true|false)
+              printf 'docs=%s\n' "$DOCS_SCOPE" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              printf '::error::changes.outputs.docs was %q, expected true or false\n' "$DOCS_SCOPE"
               exit 1
               ;;
           esac
@@ -471,6 +495,29 @@ jobs:
 
       - name: CLI help smoke
         run: bun run src/cli/index.ts help
+
+  docs-build:
+    name: docs build
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
+
+      - name: Install documentation dependencies
+        working-directory: docs-site
+        run: bun install --frozen-lockfile
+
+      - name: Build documentation
+        working-directory: docs-site
+        run: bun run build
 
   platform-macos:
     name: macos ${{ matrix.shard }}/2
@@ -979,6 +1026,9 @@ jobs:
       - name: Build package assets
         run: npm run build:gui
 
+      - name: Verify Guardrails package assets and WASM scanner
+        run: npx --no-install bun scripts/verify-guardrails-package.ts
+
       - name: Pack
         shell: bash
         run: npm pack --json > pack.json
@@ -1015,7 +1065,7 @@ jobs:
     # direct dependencies only, so a failing `select-windows-runner` would
     # otherwise reach this gate as nothing at all while its dependents report
     # `skipped` — which the gate is required to read as a deliberate skip.
-    needs: [changes, select-windows-runner, test, storage-policy, api-usage, gates, platform-macos, macos-control, platform-windows, keyring-smoke, docker-smoke, npm-global-smoke]
+    needs: [changes, select-windows-runner, test, storage-policy, api-usage, gates, docs-build, platform-macos, macos-control, platform-windows, keyring-smoke, docker-smoke, npm-global-smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

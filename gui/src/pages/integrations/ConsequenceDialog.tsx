@@ -25,17 +25,18 @@ export default function ConsequenceDialog({
   copy,
   onConfirm,
   onClose,
+  titleId = "integration-consequence-dialog-title",
 }: {
   copy: ConsequenceCopy;
   onConfirm: () => Promise<void> | void;
   onClose: () => void;
+  titleId?: string;
 }) {
   const t = useT();
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const pendingRef = useRef(false);
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
-  const titleId = "integration-consequence-dialog-title";
-
   useEffect(() => {
     const dialog = dialogRef.current;
     if (dialog && !dialog.open) dialog.showModal();
@@ -44,20 +45,22 @@ export default function ConsequenceDialog({
 
   const handleCancel = useCallback((event: React.SyntheticEvent) => {
     event.preventDefault();
-    if (!pending) onClose();
-  }, [onClose, pending]);
+    if (!pendingRef.current) onClose();
+  }, [onClose]);
 
   const confirm = useCallback(async () => {
-    if (pending) return;
+    if (pendingRef.current) return;
+    pendingRef.current = true;
     setPending(true);
     setFailure(null);
     try {
       await onConfirm();
     } catch (error) {
+      pendingRef.current = false;
       setFailure(error instanceof Error ? error.message : t("integrations.error.generic"));
       setPending(false);
     }
-  }, [onConfirm, pending, t]);
+  }, [onConfirm, t]);
 
   const slots: ReactNode[] = [
     <CopySlot key="changes" copyKey={copy.changesKey} vars={copy.vars} />,
@@ -80,7 +83,7 @@ export default function ConsequenceDialog({
         className="modal-backdrop-dismiss"
         aria-label={t("common.close")}
         tabIndex={-1}
-        onClick={() => { if (!pending) onClose(); }}
+        onClick={() => { if (!pendingRef.current) onClose(); }}
       />
       <div className="modal-card integration-consequence-dialog" role="document">
         <div className="modal-head">

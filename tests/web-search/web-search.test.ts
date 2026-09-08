@@ -459,6 +459,92 @@ test("issue #2885 — Zhipu-shaped web-search routing preserves the provider HTT
   expect(routedProtocol).toBe("http1.1");
 });
 
+test("Guardrails masks secrets introduced by web-search before the second provider request", async () => {
+  const secret = "sk_live_abcdefghijklmnopqrstuvwx";
+  const routedBodies: string[] = [];
+  let pass = 0;
+  const routedProvider = {
+    adapter: "openai-chat",
+    baseUrl: "https://routed.test/v1",
+    apiKey: "routed-key",
+    fetch: (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      routedBodies.push(String(init?.body ?? ""));
+      pass += 1;
+      if (pass === 1) {
+        return new Response(
+          `data: ${JSON.stringify({
+            choices: [{
+              delta: {
+                tool_calls: [{
+                  index: 0,
+                  id: "call_guardrails_search",
+                  type: "function",
+                  function: {
+                    name: "web_search",
+                    arguments: JSON.stringify({ query: "current docs" }),
+                  },
+                }],
+              },
+            }],
+          })}\n\n`
+          + 'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n'
+          + "data: [DONE]\n\n",
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      }
+      return new Response(
+        'data: {"choices":[{"delta":{"content":"done"},"finish_reason":null}]}\n\n'
+        + 'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n'
+        + "data: [DONE]\n\n",
+        { headers: { "content-type": "text/event-stream" } },
+      );
+    }) as typeof fetch,
+  } satisfies OcxProviderConfig & { fetch: typeof fetch };
+  const cfg: OcxConfig = {
+    port: 10100,
+    defaultProvider: "routed",
+    providers: {
+      routed: routedProvider,
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "direct",
+      },
+    },
+    guardrails: { enabled: true, mode: "enforce", failurePolicy: "block" },
+  };
+  globalThis.fetch = (async () => new Response(
+    `event: response.output_text.delta\ndata: ${JSON.stringify({
+      type: "response.output_text.delta",
+      delta: `search result ${secret}`,
+    })}\n\n`
+    + 'event: response.completed\ndata: {"type":"response.completed"}\n\n',
+    { headers: { "content-type": "text/event-stream" } },
+  )) as typeof fetch;
+
+  const response = await handleResponses(new Request("http://localhost/v1/responses", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${fakeChatGptJwt({ chatgpt_account_id: "acct-guardrails-search" })}`,
+      "chatgpt-account-id": "acct-guardrails-search",
+    },
+    body: JSON.stringify({
+      model: "routed/model",
+      input: "Search current docs",
+      stream: true,
+      tools: [{ type: "web_search" }],
+    }),
+  }), cfg, { model: "", provider: "" });
+
+  expect(response.status).toBe(200);
+  await collectSse(response.body!);
+  expect(routedBodies).toHaveLength(2);
+  expect(routedBodies[1]).toContain("<STRIPE_ACCESS_TOKEN_1>");
+  expect(routedBodies[1]).not.toContain(secret);
+});
+
 test("web-search adapters receive the provider-scoped fetch executor", async () => {
   let routedProtocol: string | undefined;
   const pinnedProvider = {
@@ -2651,4 +2737,3 @@ describe("connection-reset recovery parity on the web-search legs", () => {
     expect(typeof attempts[1]!.body).toBe("string");
   });
 });
-

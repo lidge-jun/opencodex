@@ -518,12 +518,15 @@ describe("GitHub Actions hardening", () => {
       ".npmignore",
       "Dockerfile",
       "LICENSE",
+      "LICENSES/**",
       "README.md",
+      "THIRD_PARTY_NOTICES.md",
       "assets/**",
       "bin/**",
       "bun.lock",
       "compose.yaml",
       "docker/**",
+      "docs-site/**",
       "gui/**",
       "package.json",
       "scripts/**",
@@ -556,13 +559,16 @@ describe("GitHub Actions hardening", () => {
       step => step.name === "Assert the scope output is usable",
     );
     expect(changesJob?.outputs?.ci).toBe("${{ steps.scope.outputs.ci }}");
+    expect(changesJob?.outputs?.docs).toBe("${{ steps.scope.outputs.docs }}");
     expect(scopeStep?.id).toBe("scope");
     expect(scopeStep?.shell).toBe("bash");
     expect(scopeStep?.env?.CI_SCOPE).toBe("${{ steps.filter.outputs.ci }}");
+    expect(scopeStep?.env?.DOCS_SCOPE).toBe("${{ steps.filter.outputs.docs }}");
     expect(scopeStep?.run).not.toContain("${{");
     expect(scopeStep?.run).toContain('case "$CI_SCOPE" in');
     expect(scopeStep?.run).toContain("true|false)");
     expect(scopeStep?.run).toContain(`printf 'ci=%s\\n' "$CI_SCOPE" >> "$GITHUB_OUTPUT"`);
+    expect(scopeStep?.run).toContain(`printf 'docs=%s\\n' "$DOCS_SCOPE" >> "$GITHUB_OUTPUT"`);
     expect(scopeStep?.run).toContain("exit 1");
     const filterIndex = changesJob?.steps?.findIndex(step => step.id === "filter") ?? -1;
     const scopeIndex = changesJob?.steps?.findIndex(step => step.id === "scope") ?? -1;
@@ -578,6 +584,46 @@ describe("GitHub Actions hardening", () => {
     const macosControlIf = ci.jobs?.["macos-control"] as { needs?: string; if?: string } | undefined;
     expect(macosControlIf?.needs).toBe("changes");
     expect(macosControlIf?.if).toBe("github.event_name == 'workflow_dispatch'");
+
+    const docsFilter = (Bun.YAML.parse(String(filterStep?.with?.filters ?? "")) as {
+      docs?: string[];
+    }).docs ?? [];
+    expect(docsFilter.sort()).toEqual([
+      ".github/workflows/ci.yml",
+      "docs-site/**",
+    ]);
+    const docsJob = ci.jobs?.["docs-build"] as {
+      needs?: string;
+      if?: string;
+      steps?: Array<{
+        name?: string;
+        run?: string;
+        uses?: string;
+        "working-directory"?: string;
+      }>;
+    } | undefined;
+    expect(docsJob?.needs).toBe("changes");
+    expect(docsJob?.if).toBe("needs.changes.outputs.docs == 'true'");
+    const docsSteps = docsJob?.steps ?? [];
+    expect(docsSteps.some(step =>
+      step.name === "Install documentation dependencies"
+      && step["working-directory"] === "docs-site"
+      && step.run === "bun install --frozen-lockfile"
+    )).toBe(true);
+    expect(docsSteps.some(step =>
+      step.name === "Build documentation"
+      && step["working-directory"] === "docs-site"
+      && step.run === "bun run build"
+    )).toBe(true);
+  });
+
+  test("Guardrails package verifier has a bounded pinned-source retry budget", async () => {
+    const verifier = await readText("scripts/verify-guardrails-package.ts");
+    expect(verifier).toContain("const PINNED_SOURCE_ATTEMPTS = 2;");
+    expect(verifier).toContain("const PINNED_SOURCE_TIMEOUT_MS = 10_000;");
+    expect(verifier).toContain("attempt <= PINNED_SOURCE_ATTEMPTS");
+    expect(verifier).toContain("AbortSignal.timeout(PINNED_SOURCE_TIMEOUT_MS)");
+    expect(verifier).not.toContain("AbortSignal.timeout(30_000)");
   });
 
   test("Docker smoke executes the source-build lifecycle and gates its result", async () => {
@@ -662,13 +708,17 @@ describe("GitHub Actions hardening", () => {
       ".npmignore",
       ".gitattributes",
       "LICENSE",
+      "LICENSES/**",
       "README.md",
+      "THIRD_PARTY_NOTICES.md",
       "assets/**",
       "bin/**",
       "bun.lock",
       "gui/**",
       "package.json",
+      "scripts/guardrails-provenance.ts",
       "scripts/prepare-package.ts",
+      "scripts/verify-guardrails-package.ts",
       "src/**",
     ].sort());
 
@@ -677,7 +727,7 @@ describe("GitHub Actions hardening", () => {
     // aggregate while silently skipping the packaging verification.
     const ciPatterns = (Bun.YAML.parse(filters) as { ci?: string[] }).ci ?? [];
     for (const pattern of packaging) {
-      if (pattern === "scripts/prepare-package.ts") continue; // covered by scripts/**
+      if (pattern.startsWith("scripts/") && ciPatterns.includes("scripts/**")) continue;
       expect(`${pattern}:${ciPatterns.includes(pattern)}`).toBe(`${pattern}:true`);
     }
   });

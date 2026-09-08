@@ -1,6 +1,16 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
+import {
+  clearGuardrailsContinuationsForTests,
+  createGuardrailsContinuationScope,
+  retainGuardrailsContinuation,
+} from "../../src/guardrails/continuations";
+import {
+  clearResponseStateForTests,
+  expandPreviousResponseInput,
+} from "../../src/responses/state";
 import { warnAgentTaskRecoveryStartup } from "../../src/server";
+import { handleResponses } from "../../src/server/responses/core";
 import {
   discardEncryptedAgentTaskRecovery,
   recoverEncryptedAgentTask,
@@ -29,11 +39,15 @@ import {
 describe("agent task recovery (opt-in, default off)", () => {
   beforeEach(() => {
     resetAgentTaskRecoveryState();
+    clearGuardrailsContinuationsForTests();
+    clearResponseStateForTests();
   });
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
     resetAgentTaskRecoveryState();
+    clearGuardrailsContinuationsForTests();
+    clearResponseStateForTests();
   });
 
   for (const messageType of ["NEW_TASK", "MESSAGE"] as const) {
@@ -456,6 +470,65 @@ describe("agent task recovery (opt-in, default off)", () => {
     expect(forwardedBodies[1]).not.toContain(FERNET_TASK);
     expect(forwardedBodies[1].match(/Message Type: NEW_TASK/g)).toHaveLength(1);
   });
+
+  test("late Guardrails passthrough recovery rolls back the whole turn and persists no continuation", async () => {
+    const secret = "sk_live_abcdefghijklmnopqrstuvwx";
+    const recoveredAssignment = "r".repeat(140 * 1024);
+    const input = encryptedInput() as Array<{ content: Array<Record<string, unknown>> }>;
+    input.unshift({
+      type: "message",
+      role: "user",
+      content: [{
+        type: "input_text",
+        text: secret,
+      }],
+    });
+    const fetchedUrls: string[] = [];
+    let providerBody = "";
+    globalThis.fetch = (async (request, init) => {
+      fetchedUrls.push(String(request));
+      if (String(request).includes("chatgpt.com")) {
+        return new Response(recoverySse(recoveredAssignment), {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        });
+      }
+      providerBody = String(init?.body ?? "");
+      return providerResponse();
+    }) as typeof fetch;
+    const config = routedConfig();
+    config.guardrails = { enabled: true, mode: "enforce", failurePolicy: "passthrough" };
+    const headers = codexHeaders("acct-caller", {
+      "x-codex-parent-thread-id": "guardrails-recovery-thread",
+    });
+    const request = new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...Object.fromEntries(headers) },
+      body: JSON.stringify({ model: "xai/grok-4.5", input, stream: false }),
+    });
+
+    const response = await handleResponses(
+      request,
+      config,
+      { model: "", provider: "", admissionKind: "loopback" },
+    );
+
+    expect(response.status).toBe(200);
+    expect(fetchedUrls.some(url => url.includes("chatgpt.com/backend-api/codex/responses")))
+      .toBe(true);
+    expect(providerBody).toContain(secret);
+    expect(providerBody).toContain(recoveredAssignment.slice(0, 128));
+    expect(providerBody).not.toContain("<STRIPE_ACCESS_TOKEN_");
+    const replay = { previous_response_id: "resp_routed", input: "next" };
+    expect(expandPreviousResponseInput(replay, "guardrails-recovery-thread")).toBe(replay);
+    const scope = createGuardrailsContinuationScope(
+      "loopback",
+      undefined,
+      "guardrails-recovery-thread",
+    );
+    expect(retainGuardrailsContinuation("resp_routed", scope)).toBeUndefined();
+    // Cold RE2 compilation is part of this real-registry integration, not its assertions.
+  }, 15_000);
 
   test("charges namespaced tool bridge maps only once across recovery reparse", async () => {
     const recoveryRequests: Request[] = [];

@@ -27,10 +27,10 @@ test("every row maps one-to-one onto a page", () => {
   const navBlock = src.slice(src.indexOf("const NAV: NavEntry[] = ["), src.indexOf("];", src.indexOf("const NAV: NavEntry[] = [")));
   const ids = [...navBlock.matchAll(/\{ id: "([^"]+)"/g)].map(m => m[1]);
 
-  // The exact nine, in order. A count alone would pass if a row were swapped for
+  // The exact ten, in order. A count alone would pass if a row were swapped for
   // another, and Routing folding into Models is precisely that kind of change.
   expect(ids).toEqual([
-    "dashboard", "codex-set", "providers", "models", "subagents",
+    "dashboard", "codex-set", "providers", "models", "guardrails", "subagents",
     "logs", "usage", "storage", "integrations",
   ]);
   // No two rows share a page id, which is what made the correction helper necessary.
