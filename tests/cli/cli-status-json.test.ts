@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from "node:fs";
@@ -711,13 +711,15 @@ describe("status reports stale process records end to end", () => {
    * discard port 9 is conventionally unused but not guaranteed, and if anything answers
    * on it the probe is accepted rather than refused and these fixtures invert.
    */
-  let freePort = 9;
-  beforeAll(async () => {
+  async function allocateFreePort(): Promise<number> {
     const probe = createServer();
     await new Promise<void>(resolve => { probe.listen(0, "127.0.0.1", () => resolve()); });
-    freePort = (probe.address() as AddressInfo).port;
+    const port = (probe.address() as AddressInfo).port;
     await new Promise<void>(resolve => { probe.close(() => resolve()); });
-  });
+    return port;
+  }
+  let freePort: number;
+  beforeEach(async () => { freePort = await allocateFreePort(); });
 
   test("a dead owner record surfaces in --json and in human output", () => {
     const home = mkdtempSync(join(tmpdir(), "ocx-stale-json-"));
@@ -787,10 +789,14 @@ describe("status reports stale process records end to end", () => {
     await new Promise<void>(resolve => { occupied.listen(0, "127.0.0.1", () => resolve()); });
     const occupiedPort = (occupied.address() as AddressInfo).port;
     try {
+      // Allocate after the listener is bound: it can reuse the port released by
+      // beforeEach, so that earlier number no longer proves a refused endpoint.
+      const recordedPort = await allocateFreePort();
+      expect(recordedPort).not.toBe(occupiedPort);
       const pid = findDeadPid();
       writeFileSync(join(home, "config.json"), JSON.stringify({ port: occupiedPort, codexAutoStart: false }), "utf8");
       writeFileSync(join(home, "ocx.pid"), String(pid), "utf8");
-      writeFileSync(join(home, "runtime-port.json"), JSON.stringify({ pid, port: freePort, hostname: "127.0.0.1" }), "utf8");
+      writeFileSync(join(home, "runtime-port.json"), JSON.stringify({ pid, port: recordedPort, hostname: "127.0.0.1" }), "utf8");
 
       const parsed = JSON.parse(runStatusJson(home).stdout) as { proxy?: { staleProcessState?: unknown } };
       expect(parsed.proxy?.staleProcessState).toBe(true);
