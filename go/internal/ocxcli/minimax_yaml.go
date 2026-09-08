@@ -17,7 +17,8 @@ import (
 	"strings"
 )
 
-// yamlFlowValue is the parsed value tree: map[string]any, []any, string, or nil.
+// yamlFlowParser walks the text one byte at a time; the parsed value tree is
+// map[string]any, []any, string, or nil.
 type yamlFlowParser struct {
 	text string
 	pos  int

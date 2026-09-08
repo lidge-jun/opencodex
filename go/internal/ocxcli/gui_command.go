@@ -45,6 +45,16 @@ const (
 	guiPairRequestMS   = 10_000
 )
 
+// pairingHTTPClient mirrors the TS pairing flow's 10 s abort window
+// (AbortSignal.timeout(10_000) in src/cli/gui-pair-client.ts). Discovery and
+// the readiness probes may keep the fast 750 ms default client, but the two
+// pairing hops (attestation healthz + grant POST) must tolerate a management
+// plane that answers in up to 10 s; the transport is shared so loopback
+// behavior stays identical.
+func pairingHTTPClient(deps Deps) *http.Client {
+	return &http.Client{Timeout: guiPairRequestMS * time.Millisecond, Transport: deps.HTTPClient.Transport}
+}
+
 // guiHelp mirrors the registry-derived help the TypeScript CLI prints for
 // `ocx help gui` / `ocx gui --help` (printSubcommandUsage).
 const guiHelp = "Usage: ocx gui [pair --origin <browser-origin> [--json]]\n\nOpen the opencodex dashboard or create a secret single-use remote pairing grant.\n\nPairing requires an explicit allowed --origin; there is no localhost or config-derived default.\nThe printed grant is secret, single-use, short-lived, and must not be persisted.\n"
@@ -278,12 +288,13 @@ func requestGuiPairingGrant(state RuntimeState, browserOrigin string, deps Deps)
 	if err != nil {
 		return nil, "transport"
 	}
+	pairingClient := pairingHTTPClient(deps)
 	request, err := http.NewRequest(http.MethodGet, baseURL(state)+"/healthz", nil)
 	if err != nil {
 		return nil, "transport"
 	}
 	request.Header.Set(attestationChallengeHeader, challenge)
-	response, err := deps.HTTPClient.Do(request)
+	response, err := pairingClient.Do(request)
 	if err != nil {
 		return nil, "transport"
 	}
@@ -327,7 +338,7 @@ func requestGuiPairingGrant(state RuntimeState, browserOrigin string, deps Deps)
 	pairRequest.Header.Set("x-opencodex-gui-pair-expires-at", strconv.FormatInt(expiresAt, 10))
 	pairRequest.Header.Set("x-opencodex-gui-pair-origin", browserOrigin)
 	pairRequest.Header.Set("x-opencodex-gui-pair-capability", capabilityToken)
-	pairResponse, err := deps.HTTPClient.Do(pairRequest)
+	pairResponse, err := pairingClient.Do(pairRequest)
 	if err != nil {
 		return nil, "transport"
 	}

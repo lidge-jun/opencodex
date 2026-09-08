@@ -460,7 +460,11 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
       });
     }
   });
-  test("diffs gui pairing success output against the fixture", async () => {
+  // These pairing rows trust a POSIX `/bin/sh` lookalike whose cmdline carries
+  // `ocx start`; the TS verifyPidIdentity gate is token-based on POSIX. The
+  // win32 CI leg (workflow_dispatch-only today) would need a cmd-based
+  // lookalike, so the rows skip there instead of silently failing.
+  test.skipIf(process.platform === "win32")("diffs gui pairing success output against the fixture", async () => {
     spawnOcxLookalike();
     startOpsFixture();
     writeHubConfig();
@@ -470,7 +474,7 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
     expect(go).toEqual(ts);
     expect(ts).toMatchObject({ code: 0, stderr: "Pairing grants are secret, single-use, and expire quickly. Do not save them.\n" });
   });
-  test("diffs gui pairing JSON success output against the fixture", async () => {
+  test.skipIf(process.platform === "win32")("diffs gui pairing JSON success output against the fixture", async () => {
     spawnOcxLookalike();
     startOpsFixture();
     writeHubConfig();
