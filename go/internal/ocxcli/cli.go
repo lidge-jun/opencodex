@@ -51,6 +51,12 @@ var Commands = []Command{
 	{Name: "setup", Aliases: []string{"init"}, Usage: "ocx setup", Summary: "Interactive setup.", Owner: TypeScriptOwned},
 	{Name: "start", Usage: "ocx start [--port <port>]", Summary: "Start the proxy.", Owner: GoOwned},
 	{Name: "stop", Usage: "ocx stop", Summary: "Stop the proxy.", Owner: GoOwned},
+	// restore / recover-history / uninstall stay TypeScript-owned by design: they
+	// run the Codex write coordinator, the async history job, platform service
+	// managers, and live-proxy/model sync — open sets whose bytes are
+	// non-deterministic (integrations/*.json `at`/`txId`), so no byte-parity
+	// oracle exists. Record:
+	// devlog/_plan/260908_go_flip_restore_uninstall_boundary/010_boundary_record.md
 	{Name: "restore", Aliases: []string{"eject"}, Usage: "ocx restore [back]", Summary: "Restore native Codex configuration.", Owner: TypeScriptOwned},
 	{Name: "recover-history", Usage: "ocx recover-history --legacy-openai --yes", Summary: "Recover legacy history.", Owner: TypeScriptOwned},
 	{Name: "uninstall", Aliases: []string{"remove"}, Usage: "ocx uninstall", Summary: "Remove OpenCodex integration.", Owner: TypeScriptOwned},
