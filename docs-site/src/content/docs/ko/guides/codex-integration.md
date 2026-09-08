@@ -250,7 +250,9 @@ ChatGPT 계정을 Codex account pool에 추가하면, opencodex는 이를 저장
 
 ## 네이티브 Codex 복원
 
-opencodex는 절대 사용자를 가두지 않습니다. **`ocx stop`은 네이티브 Codex로 완전히 되돌리는 단일 명령입니다**. proxy를 중지하고, 설치된 background service가 있으면 그것도 중지한 뒤, 주입된 모든 라인과 라우팅된 catalog 항목을 제거해서 plain `codex`가 opencodex가 처음부터 없었던 것처럼 정확히 동작하게 합니다:
+`ocx stop`은 proxy와 설치된 background service를 중지한 뒤 네이티브 Codex 복원을 시도합니다. OpenCodex 소유로 확인된 라우팅 항목을 제거하며, 설정 파일을 안전하게 복구할 수 없으면 미완료로 보고합니다.
+
+현재 config 또는 profile이 저장된 원본과 다르고 해당 파일의 주입 상태 해시가 저널에 없으면, 자동 snapshot 복원은 두 파일과 저널을 변경하지 않고 검토용으로 남깁니다. 이미 원본과 같은 파일은 다시 쓰지 않습니다. 기존 라우팅 설정의 재주입도 이 불확실한 원본을 사용하지 않으며, 네이티브 설정에서는 새 snapshot을 만들 수 있습니다. [자세한 복구 규칙](/guides/codex-integration/#recovery-without-injection-hashes)을 참고하세요.
 
 ```bash
 ocx stop       # stop the proxy + service, restore native Codex

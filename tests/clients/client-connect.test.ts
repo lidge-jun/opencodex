@@ -580,6 +580,7 @@ function runConnectedStateScenario(mode: "sync-401" | "sync-503" | "disconnect-c
   const fingerprint = createHash("sha256").update(token).digest("hex");
   const catalog = '{"models":[]}';
   const catalogFingerprint = createHash("sha256").update(catalog).digest("base64url");
+  const injected = 'model_provider = "opencodex"\n';
   const isDisconnect = mode === "disconnect-conflict" || mode === "disconnect-process-journal";
   const selectedClients = isDisconnect ? ["codex"] : ["claude"];
   writeFileSync(join(opencodexHome, "config.json"), JSON.stringify({
@@ -604,13 +605,15 @@ function runConnectedStateScenario(mode: "sync-401" | "sync-503" | "disconnect-c
   writeFileSync(join(opencodexHome, "service-api-token"), `${token}\n`, { mode: 0o600 });
   writeFileSync(join(codexHome, "opencodex-catalog.json"), catalog, "utf8");
   writeFileSync(join(codexHome, "config.toml"), isDisconnect
-    ? 'model_provider = "opencodex"\n'
+    ? injected
     : 'model_provider = "openai"\n', "utf8");
   if (mode === "disconnect-conflict") {
     writeFileSync(join(codexHome, "opencodex-journal.json"), JSON.stringify({
       version: 1,
       originalConfig: Buffer.from('model_provider = "openai"\n').toString("base64"),
       originalProfile: null,
+      injectedConfigHash: createHash("sha256").update(injected).digest("hex"),
+      injectedProfileHash: null,
       owner: { kind: "client", apiKeyId: "different-key" },
       pid: 999_999,
       timestamp: "2026-08-28T00:00:00.000Z",
@@ -625,6 +628,8 @@ function runConnectedStateScenario(mode: "sync-401" | "sync-503" | "disconnect-c
       version: 1,
       originalConfig: Buffer.from('model_provider = "openai"\n').toString("base64"),
       originalProfile: null,
+      injectedConfigHash: createHash("sha256").update(injected).digest("hex"),
+      injectedProfileHash: null,
       owner: { kind: "process", pid: 999_999 },
       pid: 999_999,
       timestamp: "2026-08-28T00:00:00.000Z",
@@ -977,6 +982,8 @@ function runDesktopLifecycleScenario(mode: string) {
             fs.writeFileSync(path.join(process.env.CODEX_HOME, "config.toml"), 'model_provider = "opencodex"');
             fs.writeFileSync(journal.JOURNAL_PATH, JSON.stringify({ version: 1,
               originalConfig: Buffer.from('model_provider = "openai"').toString("base64"), originalProfile: null,
+              injectedConfigHash: hash(fs.readFileSync(path.join(process.env.CODEX_HOME, "config.toml"), "utf8")),
+              injectedProfileHash: null,
               owner: { kind: "client", apiKeyId: owner.apiKeyId },
             }));
             const actualRestore = journal.restoreJournalState;

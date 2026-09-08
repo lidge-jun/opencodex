@@ -385,10 +385,9 @@ d'actualisation `chatgpt` vaut `proactive` et si `tokenGuardian.codexWarmupEnabl
 
 ## Restauration de Codex natif
 
-opencodex ne vous enferme jamais dans sa configuration. **`ocx stop` est l'unique commande qui restaure
-entièrement Codex natif** : elle arrête le proxy et le service d'arrière-plan s'il est installé, puis supprime
-toutes les lignes injectées et toutes les entrées routées du catalogue. La commande `codex` fonctionne alors
-exactement comme si opencodex n'avait jamais été installé :
+`ocx stop` arrête le proxy et le service d'arrière-plan installé, puis tente de restaurer Codex natif. OpenCodex retire les éléments de routage dont il peut vérifier la propriété et signale une restauration incomplète si les fichiers de configuration ne peuvent pas être récupérés en toute sécurité.
+
+Si la configuration ou le profil actuel diffère de l'original sauvegardé et que le journal ne contient pas le hash de l'état injecté de ce fichier, la récupération automatique conserve les deux fichiers et le journal sans les modifier. Un fichier déjà identique à son original n'est pas réécrit. La réinjection d'une configuration routée refuse aussi cet état incertain ; une configuration native peut créer un nouvel instantané. Voir les [règles de récupération](/guides/codex-integration/#recovery-without-injection-hashes).
 
 ```bash
 ocx stop       # stop the proxy + service, restore native Codex

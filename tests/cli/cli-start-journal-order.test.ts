@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -81,6 +82,8 @@ function arrangeRecoverableJournal(fx: Fixture): { original: string; injected: s
     version: 1,
     originalConfig: Buffer.from(original).toString("base64"),
     originalProfile: null,
+    injectedConfigHash: createHash("sha256").update(injected).digest("hex"),
+    injectedProfileHash: null,
     pid: 999_999,
     timestamp: new Date().toISOString(),
   }));
@@ -181,6 +184,8 @@ describe("start and ensure journal ownership (#1230)", () => {
         version: 1,
         originalConfig: Buffer.from(original).toString("base64"),
         originalProfile: null,
+        injectedConfigHash: createHash("sha256").update(injected).digest("hex"),
+        injectedProfileHash: null,
         owner: { kind: "client", apiKeyId: "client-key-1" },
         pid: 999_999,
         timestamp: new Date().toISOString(),
