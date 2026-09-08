@@ -10,7 +10,7 @@ import {
 import type { NormalizedComboConfig } from "./combos/types";
 import { hasOwnProvider } from "./config/provider-name";
 import { providerUsesKeyAuthOverride, resolveProviderApiKey } from "./providers/key-store";
-import { captureProviderApiKeySelection } from "./providers/api-key-selection";
+import { captureProviderApiKeySelection } from "./providers/api-key-selection-capture";
 import { assertProviderDestinationAllowed } from "./lib/destination-policy";
 import { redactSecretString, redactUrlForLog } from "./lib/redact";
 import {
