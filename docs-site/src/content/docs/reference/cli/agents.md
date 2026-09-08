@@ -39,6 +39,7 @@ Inspect or change main and subagent reasoning-effort caps through the live proxy
 configuration when no proxy is available. Cap values are `low`, `medium`, `high`, `xhigh`, `max`,
 and `ultra`; `-` clears the selected cap. `none` and `minimal` are not cap levels and are rejected
 before probing the proxy or submitting an update, including when another option in the same command is valid.
+They remain valid for `--injection`, which sets the separate injection effort rather than a cap.
 
 ```bash
 ocx effort status --json

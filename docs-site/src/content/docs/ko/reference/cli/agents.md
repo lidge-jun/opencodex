@@ -22,6 +22,7 @@ ocx agent subagents set ark/model-a,openai/gpt-5.5
 프록시가 없으면 로컬 설정을 사용합니다. 상한은 `low`, `medium`, `high`, `xhigh`, `max`,
 `ultra`이고, `-`는 해당 상한을 해제합니다. `none`과 `minimal`은 상한 단계가 아니므로 같은
 명령의 다른 옵션이 유효하더라도 프록시 탐색이나 설정 변경 요청 전에 거부됩니다.
+두 값은 상한이 아닌 별도의 injection effort를 설정하는 `--injection`에서는 그대로 사용할 수 있습니다.
 
 ```bash
 ocx effort status --json
