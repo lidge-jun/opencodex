@@ -84,6 +84,94 @@ test("usage workspace i18n keys exist in every locale", async () => {
     expect(dict).toContain('"usage.scope.machine":');
     expect(dict).toContain('"usage.scope.hub":');
     expect(dict).toContain('"usage.hubOffline":');
+    expect(dict).toContain('"usage.col.apiListPrice":');
+    expect(dict).toContain('"usage.cost.excluded":');
+  }
+});
+
+test("Usage breakdown tables show priced totals and excluded requests without calling them free", async () => {
+  const globalKeys = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT", "ResizeObserver"] as const;
+  const previous = Object.fromEntries(globalKeys.map(key => [key, Reflect.get(globalThis, key)]));
+  const originalFetch = globalThis.fetch;
+  const testWindow = new Window({ url: "http://localhost/" });
+  Object.defineProperties(globalThis, {
+    document: { configurable: true, value: testWindow.document },
+    window: { configurable: true, value: testWindow },
+    navigator: { configurable: true, value: testWindow.navigator },
+    localStorage: { configurable: true, value: testWindow.localStorage },
+  });
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  class ResizeObserverStub {
+    constructor(_callback: ResizeObserverCallback) {}
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  Object.defineProperty(globalThis, "ResizeObserver", { configurable: true, value: ResizeObserverStub });
+  Object.defineProperty(testWindow, "ResizeObserver", { configurable: true, value: ResizeObserverStub });
+  clearClientResourceStoresForTests();
+  globalThis.fetch = (async () => Response.json({
+    range: "30d",
+    surface: "all",
+    since: null,
+    generatedAt: Date.now(),
+    summary: {
+      requests: 4,
+      measuredRequests: 4,
+      reportedRequests: 4,
+      unreportedRequests: 0,
+      unsupportedRequests: 0,
+      estimatedRequests: 0,
+      inputTokens: 100,
+      outputTokens: 50,
+      cachedInputTokens: 0,
+      reasoningOutputTokens: 0,
+      totalTokens: 150,
+      coverageRatio: 1,
+    },
+    days: [],
+    models: [
+      { provider: "priced", model: "priced-model", requests: 1, measuredRequests: 1, reportedRequests: 1, estimatedRequests: 0, totalTokens: 100, inputTokens: 50, outputTokens: 50, estimatedCostUsd: 1.25, pricedRequests: 1, unpricedRequests: 0, shareRatio: 2 / 3 },
+      { provider: "unpriced", model: "unpriced-model", requests: 3, measuredRequests: 3, reportedRequests: 3, estimatedRequests: 0, totalTokens: 50, inputTokens: 50, outputTokens: 0, pricedRequests: 0, unpricedRequests: 3, shareRatio: 1 / 3 },
+    ],
+    providers: [
+      { provider: "priced", requests: 1, measuredRequests: 1, reportedRequests: 1, estimatedRequests: 0, totalTokens: 100, estimatedCostUsd: 1.25, pricedRequests: 1, unpricedRequests: 0, shareRatio: 2 / 3 },
+      { provider: "unpriced", requests: 3, measuredRequests: 3, reportedRequests: 3, estimatedRequests: 0, totalTokens: 50, pricedRequests: 0, unpricedRequests: 3, shareRatio: 1 / 3 },
+    ],
+    historyTruncated: false,
+    truncatedPrefixBytes: 0,
+    entriesTruncated: false,
+    entriesDropped: 0,
+  })) as typeof fetch;
+
+  const container = document.createElement("div");
+  document.body.append(container);
+  const { createRoot } = await import("react-dom/client");
+  const root = createRoot(container);
+  try {
+    await act(async () => {
+      root.render(createElement(LanguageProvider, null, createElement(Usage, { apiBase: "http://usage-list-price-test" })));
+    });
+    const deadline = Date.now() + 1_000;
+    while (!(container.textContent ?? "").includes("(3 requests excluded)")) {
+      if (Date.now() >= deadline) throw new Error("Usage list-price cells did not render");
+      await act(async () => {
+        await new Promise<void>(resolve => testWindow.setTimeout(resolve, 10));
+      });
+    }
+
+    expect(container.textContent).toContain("~$1.2500");
+    expect(container.textContent).toContain("~$0.0000 (3 requests excluded)");
+    expect([...container.querySelectorAll("th")].filter(cell => cell.textContent === "API list-price")).toHaveLength(2);
+  } finally {
+    await act(async () => { root.unmount(); });
+    container.remove();
+    globalThis.fetch = originalFetch;
+    clearClientResourceStoresForTests();
+    testWindow.close();
+    for (const key of globalKeys) {
+      Object.defineProperty(globalThis, key, { configurable: true, value: previous[key] });
+    }
   }
 });
 

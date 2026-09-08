@@ -67,6 +67,11 @@ interface UsageModel {
   totalTokens: number;
   inputTokens: number;
   outputTokens: number;
+  /** API list-price estimate for the priced portion of this row. */
+  estimatedCostUsd?: number;
+  pricedRequests?: number;
+  /** Requests excluded from the estimate because price or usable usage is unavailable. */
+  unpricedRequests?: number;
   shareRatio: number;
 }
 
@@ -77,6 +82,11 @@ interface UsageProvider {
   reportedRequests: number;
   estimatedRequests: number;
   totalTokens: number;
+  /** API list-price estimate for the priced portion of this row. */
+  estimatedCostUsd?: number;
+  pricedRequests?: number;
+  /** Requests excluded from the estimate because price or usable usage is unavailable. */
+  unpricedRequests?: number;
   shareRatio: number;
 }
 
@@ -107,6 +117,30 @@ interface UsageResponse extends UsageReadMetadata {
 
 function formatPct(ratio: number): string {
   return `${Math.round(ratio * 100)}%`;
+}
+
+type UsageCostRow = Pick<UsageModel, "estimatedCostUsd" | "pricedRequests" | "unpricedRequests">;
+
+/**
+ * Newer proxies return the per-row coverage fields even when every request is
+ * unpriced. Older proxies have none of them, so keep their cells unavailable
+ * rather than making an unknown amount look like a free request.
+ */
+function UsageListPrice({ row, locale, t }: { row: UsageCostRow; locale: Locale; t: TFn }) {
+  const hasPriceData = row.estimatedCostUsd !== undefined
+    || row.pricedRequests !== undefined
+    || row.unpricedRequests !== undefined;
+  if (!hasPriceData) return <span className="muted">—</span>;
+
+  const excludedRequests = row.unpricedRequests ?? 0;
+  return (
+    <>
+      <span className="mono">{formatUsdEstimate(row.estimatedCostUsd ?? 0, locale)}</span>
+      {excludedRequests > 0 && (
+        <span className="muted text-caption"> {t("usage.cost.excluded", { count: excludedRequests })}</span>
+      )}
+    </>
+  );
 }
 
 // Stable per-model bar color: hash the provider/model id to a hue so the same model keeps its color
@@ -662,6 +696,7 @@ function UsageModelsTable({
             <th className="num">{t("usage.col.requests")}</th>
             <th className="num">{t("usage.col.measured")}</th>
             <th className="num">{t("usage.col.tokens")}</th>
+            <th className="num" title={t("usage.cost.disclaimer")}>{t("usage.col.apiListPrice")}</th>
             <th>{t("usage.col.share")}</th>
           </tr>
         </thead>
@@ -673,6 +708,7 @@ function UsageModelsTable({
               <td className="num">{model.requests}</td>
               <td className="num">{model.measuredRequests}</td>
               <td className="num mono">{formatTokens(model.totalTokens, locale)}</td>
+              <td className="num"><UsageListPrice row={model} locale={locale} t={t} /></td>
               <td><div className="usage-bar"><div className="usage-bar-fill" style={{ width: `${Math.round(model.shareRatio * 100)}%` }} /></div></td>
             </tr>
           ))}
@@ -723,6 +759,7 @@ function UsageProvidersTable({
             <th className="num">{t("usage.col.requests")}</th>
             <th className="num">{t("usage.col.measured")}</th>
             <th className="num">{t("usage.col.tokens")}</th>
+            <th className="num" title={t("usage.cost.disclaimer")}>{t("usage.col.apiListPrice")}</th>
             <th>{t("usage.col.share")}</th>
           </tr>
         </thead>
@@ -733,6 +770,7 @@ function UsageProvidersTable({
               <td className="num">{provider.requests}</td>
               <td className="num">{provider.measuredRequests}</td>
               <td className="num mono">{formatTokens(provider.totalTokens, locale)}</td>
+              <td className="num"><UsageListPrice row={provider} locale={locale} t={t} /></td>
               <td><div className="usage-bar"><div className="usage-bar-fill" style={{ width: `${Math.round(provider.shareRatio * 100)}%` }} /></div></td>
             </tr>
           ))}
