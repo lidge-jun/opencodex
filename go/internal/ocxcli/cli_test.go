@@ -199,9 +199,11 @@ func TestVersionAndRegistry(t *testing.T) {
 func TestOwnershipMapMatchesDispatch(t *testing.T) {
 	for _, command := range Commands {
 		for _, name := range append([]string{command.Name}, command.Aliases...) {
-			// Lifecycle commands own a real listener/process and intentionally block
-			// until a signal; ownership is asserted above without launching them.
-			if name == "start" || name == "stop" {
+			// Lifecycle and launch commands own a real listener/process and
+			// intentionally block or spawn (browser/external CLI/detached start)
+			// until a signal or child exit; ownership is asserted above without
+			// launching them. gui/mcode/mmx join start/stop for the same reason.
+			if name == "start" || name == "stop" || name == "gui" || name == "mcode" || name == "mmx" {
 				continue
 			}
 			t.Run(name, func(t *testing.T) {

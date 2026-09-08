@@ -67,7 +67,10 @@ var Commands = []Command{
 	{Name: "debug", Usage: "ocx debug <scope>", Summary: "Manage debug settings.", Owner: TypeScriptOwned},
 	{Name: "login", Usage: "ocx login <provider>", Summary: "Log in to a provider.", Owner: TypeScriptOwned},
 	{Name: "logout", Usage: "ocx logout <provider>", Summary: "Log out from a provider.", Owner: TypeScriptOwned},
-	{Name: "gui", Usage: "ocx gui", Summary: "Open the dashboard.", Owner: TypeScriptOwned},
+	// gui is Go-owned (issue #54 ops slice): `ocx gui pair` drives the same
+	// bound pairing-grant capability the dashboard uses, and the bare command
+	// opens the dashboard URL of the attested live proxy.
+	{Name: "gui", Usage: "ocx gui", Summary: "Open the dashboard.", Owner: GoOwned},
 	{Name: "update", Usage: "ocx update [--tag <tag>]", Summary: "Update OpenCodex.", Owner: TypeScriptOwned},
 	{Name: "restart", Usage: "ocx restart", Summary: "Restart the proxy.", Owner: TypeScriptOwned},
 	{Name: "v2", Usage: "ocx v2 <sub>", Summary: "Manage the v2 surface.", Owner: TypeScriptOwned},
@@ -101,9 +104,13 @@ var Commands = []Command{
 	{Name: "lab", Usage: "ocx lab <sub>", Summary: "Inspect Compatibility Lab.", Owner: TypeScriptOwned},
 	{Name: "claude", Usage: "ocx claude [args...]", Summary: "Launch Claude Code.", Owner: TypeScriptOwned},
 	{Name: "opencode", Usage: "ocx opencode [args...]", Summary: "Launch opencode.", Owner: TypeScriptOwned},
-	{Name: "mcode", Usage: "ocx mcode [args...]", Summary: "Launch MiniMax Code.", Owner: TypeScriptOwned},
-	{Name: "mmx", Usage: "ocx mmx text <sub> [args]", Summary: "Launch MiniMax CLI.", Owner: TypeScriptOwned},
-	{Name: "zcode", Usage: "ocx zcode [sub]", Summary: "Connect ZCode.", Owner: TypeScriptOwned},
+	// The MiniMax and ZCode families are Go-owned (issue #54 launcher slice):
+	// mcode/mmx wire the loopback proxy then exec the external CLI with
+	// inherited stdio, and zcode is a thin alias of the client-integration
+	// management-API surface (handleZcodeCommand -> handleClientIntegrationCommand).
+	{Name: "mcode", Usage: "ocx mcode [args...]", Summary: "Launch MiniMax Code.", Owner: GoOwned},
+	{Name: "mmx", Usage: "ocx mmx text <sub> [args]", Summary: "Launch MiniMax CLI.", Owner: GoOwned},
+	{Name: "zcode", Usage: "ocx zcode [sub]", Summary: "Connect ZCode.", Owner: GoOwned},
 }
 
 // commandForName resolves canonical command names and aliases from Commands.
@@ -277,6 +284,14 @@ func Run(args []string, deps Deps) int {
 		return runStop(args[1:], deps)
 	case "usage":
 		return runUsage(args[1:], deps)
+	case "gui":
+		return runGuiCommand(args[1:], deps)
+	case "mcode":
+		return runMcode(args[1:], deps)
+	case "mmx":
+		return runMmx(args[1:], deps)
+	case "zcode":
+		return runZcodeCommand(args[1:], deps)
 	case "observe":
 		// Only `observe usage` reaches Go (OwnershipFor already gated this);
 		// other observe subcommands stay TypeScript-owned and never dispatch here.
@@ -340,6 +355,14 @@ func printSubcommandHelp(name string, deps Deps) int {
 				fmt.Fprintf(deps.Stdout, "Usage: %s\n\n%s\n", command.Usage, command.Summary)
 			}
 		}
+	case "gui":
+		fmt.Fprint(deps.Stdout, guiHelp)
+	case "mcode":
+		fmt.Fprint(deps.Stdout, mcodeHelp)
+	case "mmx":
+		fmt.Fprint(deps.Stdout, mmxHelp)
+	case "zcode":
+		fmt.Fprint(deps.Stdout, zcodeHelp)
 	case "config":
 		fmt.Fprint(deps.Stdout, configHelp)
 	default:
