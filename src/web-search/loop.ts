@@ -3,7 +3,7 @@ import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxProviderConfig, Ocx
 import { namespacedToolName, toolChoiceToolPredicate } from "../types";
 import { cloneProviderOpaqueToolCallMetadata } from "../responses/provider-opaque-metadata";
 import type { AttemptRecoveryKind } from "../usage/log";
-import { bridgeToResponsesSSE } from "../bridge";
+import { bridgeToResponsesSSE, diagnoseAdapterEvent, type BridgeDiagnosticContext } from "../bridge";
 import { runWebSearch, type SidecarOutcome, type SidecarOutcomeRecorder, type SidecarSettings } from "./executor";
 import { runAnthropicWebSearch } from "./anthropic-executor";
 import { runXaiWebSearch, type XaiSearchOptions } from "./xai-executor";
@@ -323,6 +323,8 @@ export interface WebSearchLoopDeps {
   retryOn429Policy?: Required<RateLimitRetryPolicy> | null;
   /** Called only when the final bridged Responses stream reaches completed or incomplete. */
   onCompletedResponse?: (response: Record<string, unknown>) => void;
+  /** Internal, opt-in structural stream diagnostics shared with the final bridge. */
+  diagnostic?: BridgeDiagnosticContext;
 }
 
 /**
@@ -613,6 +615,10 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         inactivityTimeoutMs: routedModelStallTimeoutMs,
         translatorBudget,
       })) {
+        if (deps.diagnostic) {
+          deps.diagnostic.adapterName = prepared.responseAdapter.name;
+          diagnoseAdapterEvent(deps.diagnostic, event);
+        }
         if (event.type === "heartbeat") yield event;
         // Kiro's explicit-completion protocol marks ordinary assistant text as commentary while
         // it performs a bounded final-answer retry. That text is safe to surface immediately and
@@ -908,6 +914,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       ...(deps.onFirstOutput ? { onFirstOutput: deps.onFirstOutput } : {}),
       ...(deps.onUsage ? { onUsage: deps.onUsage } : {}),
       ...(deps.onCompletedResponse ? { onCompletedResponse: deps.onCompletedResponse } : {}),
+      ...(deps.diagnostic ? { diagnostic: deps.diagnostic } : {}),
     },
   );
   return new Response(sse, { headers: SSE_HEADERS });

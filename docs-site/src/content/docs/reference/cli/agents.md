@@ -173,6 +173,9 @@ ocx debug usage on|off|status|reset
 ocx debug usage logs [-f|--follow]
 ```
 
+Provider debug also records structural adapter/bridge stream events: sequence, attempt and recovery labels, byte counts, and process-local HMAC fingerprints. Text, reasoning, tool arguments, queries, and provider state are not included in these stream diagnostic records. Fingerprints change after a proxy restart; disable provider debug after collecting a reproduction.
+
+
 With no scope, `ocx debug` prints usage and, when the proxy is stopped, the next-start environment
 defaults. Provider debug defaults from `OCX_DEBUG=1` (legacy `OCX_DEBUG_FRAMES=1` also works); usage
 debug defaults from `OPENCODEX_USAGE_DEBUG=1`.
