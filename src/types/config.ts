@@ -753,7 +753,7 @@ export interface OcxConfig {
    */
   codexAccountPickerEnabled?: boolean;
   /**
-   * Show the GPT-5.3-Codex-Spark weekly window on Codex quota surfaces. Default false.
+   * Show the GPT-5.3-Codex-Spark 5-hour and weekly windows on Codex quota surfaces. Default false.
    *
    * Spark is a single-model window that reads 0% for most operators, and on a multi-account
    * pool it doubles the bar count for information almost nobody acts on. Hidden by default and

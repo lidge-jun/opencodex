@@ -9,6 +9,7 @@ import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const SPARK = "GPT-5.3-Codex-Spark Weekly";
+const SPARK_SHORT = "GPT-5.3-Codex-Spark 5h";
 const originalHome = process.env.OPENCODEX_HOME;
 let home = "";
 
@@ -33,7 +34,7 @@ afterEach(() => {
 });
 
 /**
- * Codex Spark is a single-model weekly window. It reads 0% for most operators and, on a
+ * Codex Spark is a single-model quota with 5-hour and weekly windows. It reads 0% for most operators and, on a
  * multi-account pool, doubles the bar count on every card for information almost nobody acts
  * on — so it is hidden unless the operator asks for it.
  *
@@ -46,7 +47,10 @@ describe("Codex Spark quota visibility", () => {
     saveConfig(baseConfig());
     const stored = {
       weeklyPercent: 11,
-      customWindows: [{ label: SPARK, percent: 33, resetAt: 3 }],
+      customWindows: [
+        { label: SPARK_SHORT, percent: 33, resetAt: 2 },
+        { label: SPARK, percent: 34, resetAt: 3 },
+      ],
       updatedAt: Date.now(),
     };
     const projected = withSparkVisibility(stored);
@@ -54,7 +58,7 @@ describe("Codex Spark quota visibility", () => {
     // saying the same thing on the wire.
     expect(projected.customWindows).toBeUndefined();
     // The source object is untouched — routing and capacity still see the window.
-    expect(stored.customWindows).toHaveLength(1);
+    expect(stored.customWindows).toHaveLength(2);
     expect(projected.weeklyPercent).toBe(11);
   });
 
@@ -62,17 +66,26 @@ describe("Codex Spark quota visibility", () => {
     saveConfig(baseConfig(true));
     loadConfig();
     const projected = withSparkVisibility({
-      customWindows: [{ label: SPARK, percent: 33, resetAt: 3 }],
+      customWindows: [
+        { label: SPARK_SHORT, percent: 33, resetAt: 2 },
+        { label: SPARK, percent: 34, resetAt: 3 },
+      ],
       updatedAt: Date.now(),
     });
-    expect(projected.customWindows).toEqual([{ label: SPARK, percent: 33, resetAt: 3 }]);
+    expect(projected.customWindows).toEqual([
+      { label: SPARK_SHORT, percent: 33, resetAt: 2 },
+      { label: SPARK, percent: 34, resetAt: 3 },
+    ]);
   });
 
   test("an explicit false hides it", () => {
     saveConfig(baseConfig(false));
     loadConfig();
     const projected = withSparkVisibility({
-      customWindows: [{ label: SPARK, percent: 33 }],
+      customWindows: [
+        { label: SPARK_SHORT, percent: 33 },
+        { label: SPARK, percent: 34 },
+      ],
       updatedAt: Date.now(),
     });
     expect(projected.customWindows).toBeUndefined();
@@ -87,6 +100,7 @@ describe("Codex Spark quota visibility", () => {
       customWindows: [
         { label: "First-party models", percent: 40 },
         { label: "API usage", percent: 12 },
+        { label: SPARK_SHORT, percent: 32 },
         { label: SPARK, percent: 33 },
         { label: "Fable", percent: 7 },
         { label: "Total subscription credits", percent: 90 },
@@ -112,4 +126,3 @@ describe("Codex Spark quota visibility", () => {
     expect(withSparkVisibility(null)).toBeNull();
   });
 });
-

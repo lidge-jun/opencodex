@@ -241,12 +241,15 @@ function codexAccountPersistenceConflict(
 }
 
 /**
- * The exact label `parseUsageQuota` emits for the Codex Spark window (quota.ts).
+ * The exact labels `parseUsageQuota` emits for the Codex Spark windows (quota.ts).
  * Matching on the label rather than on "is a custom window" is load-bearing: the same array
  * carries Cursor's First-party models / API usage, Anthropic's Fable / Opus / Sonnet,
  * Antigravity's Gem / Cla, Kimi's subscription credits and a dozen dynamic provider meters.
  */
-const CODEX_SPARK_WINDOW_LABEL = "GPT-5.3-Codex-Spark Weekly";
+const CODEX_SPARK_WINDOW_LABELS = new Set([
+  "GPT-5.3-Codex-Spark 5h",
+  "GPT-5.3-Codex-Spark Weekly",
+]);
 
 /**
  * Drop the Spark window unless the operator asked for it (default hidden).
@@ -264,7 +267,7 @@ export function withSparkVisibility<T extends Omit<StoredAccountQuota, "updatedA
 ): T {
   if (!quota?.customWindows?.length) return quota;
   if (loadConfig().showCodexSparkQuota === true) return quota;
-  const kept = quota.customWindows.filter(window => window.label !== CODEX_SPARK_WINDOW_LABEL);
+  const kept = quota.customWindows.filter(window => !CODEX_SPARK_WINDOW_LABELS.has(window.label));
   if (kept.length === quota.customWindows.length) return quota;
   // An empty list is dropped rather than serialized: an absent field and an empty array should
   // not be two different ways of saying "no custom windows" on the wire.

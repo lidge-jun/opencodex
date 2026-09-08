@@ -795,6 +795,10 @@ export function parseUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuot
   });
   const sparkWindows = [spark?.rate_limit?.primary_window, spark?.rate_limit?.secondary_window]
     .filter((window): window is WhamUsageWindow => !!window);
+  const sparkShort = sparkWindows.find(window => {
+    const percent = normalizeUsagePercent(window.used_percent);
+    return percent !== undefined && isExplicitShortWindow(window);
+  });
   const sparkWeekly = sparkWindows.find(window => {
     const percent = normalizeUsagePercent(window.used_percent);
     const seconds = window.limit_window_seconds;
@@ -803,16 +807,19 @@ export function parseUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuot
       && !isExplicitMonthlyWindow(window)
       && (seconds === undefined || seconds >= WEEKLY_WINDOW_MIN_SECONDS);
   });
-  const sparkPercent = normalizeUsagePercent(sparkWeekly?.used_percent);
-  if (sparkPercent !== undefined) {
-    const sparkWindow: { label: string; percent: number; resetAt?: number } = {
-      label: "GPT-5.3-Codex-Spark Weekly",
-      percent: sparkPercent,
-    };
-    const resetAt = normalizeResetAt(sparkWeekly?.reset_at);
+  const sparkCustomWindows: Array<{ label: string; percent: number; resetAt?: number }> = [];
+  for (const [label, window] of [
+    ["GPT-5.3-Codex-Spark 5h", sparkShort],
+    ["GPT-5.3-Codex-Spark Weekly", sparkWeekly],
+  ] as const) {
+    const percent = normalizeUsagePercent(window?.used_percent);
+    if (percent === undefined) continue;
+    const sparkWindow: { label: string; percent: number; resetAt?: number } = { label, percent };
+    const resetAt = normalizeResetAt(window?.reset_at);
     if (resetAt !== undefined) sparkWindow.resetAt = resetAt;
-    quota.customWindows = [sparkWindow];
+    sparkCustomWindows.push(sparkWindow);
   }
+  if (sparkCustomWindows.length > 0) quota.customWindows = sparkCustomWindows;
   if (resetCredits !== undefined) quota.resetCredits = resetCredits;
 
   return hasKnownQuotaValue(quota) || resetCredits !== undefined ? quota : null;
