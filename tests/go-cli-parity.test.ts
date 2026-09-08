@@ -17,7 +17,7 @@ function buildGoCLI(): string {
   const dir = mkdtempSync(join(tmpdir(), "ocx-go-cli-"));
   const binary = join(dir, process.platform === "win32" ? "ocx.exe" : "ocx");
   const result = Bun.spawnSync(["go", "build", "-o", binary, "./cmd/ocx"], { cwd: join(repoRoot, "go"), env: { ...process.env, CGO_ENABLED: "0" }, stdout: "pipe", stderr: "pipe" });
-  if (result.exitCode !== 0) throw new Error("go build ./cmd/ocx failed: " + new TextDecoder().decode(result.stderr));
+  if (result.exitCode !== 0) throw new Error(`go build ./cmd/ocx failed: ${new TextDecoder().decode(result.stderr)}`);
   return binary;
 }
 const goAvailable = goToolchainAvailable();
@@ -25,6 +25,7 @@ const goCLI = goAvailable ? buildGoCLI() : null;
 let testHome = "";
 let testServer: ReturnType<typeof Bun.serve> | undefined;
 let testLookalike: ReturnType<typeof Bun.spawn> | undefined;
+let testLookalikeDir = "";
 // The healthz body pid must satisfy the TS runtime's cmdline-identity gate for
 // gui pairing (verifyPidIdentity). zcode rows never verify, so they keep the
 // test process pid; gui rows swap in an ocx-start lookalike process.
@@ -67,9 +68,9 @@ async function runGoEnvAsync(args: string[], env: Record<string, string>): Promi
 function expectParity(args: string[]): Result { const ts = runTs(args); const go = runGo(args); expect(go).toEqual(ts); return ts; }
 function normalizeHealthPid(result: Result): Result {
   if (!result.stdout.startsWith("Proxy healthy") && !result.stdout.startsWith("{\"ok\":true")) return result;
-  return { ...result, stdout: result.stdout.replace(/PID (?:null|\d+)/, "PID <pid>").replace(/\"pid\":(?:null|\d+)/, '"pid":<pid>') };
+  return { ...result, stdout: result.stdout.replace(/PID (?:null|\d+)/, "PID <pid>").replace(/"pid":(?:null|\d+)/, '"pid":<pid>') };
 }
-afterEach(async () => { testServer?.stop(true); testServer = undefined; testLookalike?.kill("SIGTERM"); testLookalike = undefined; fixturePid = process.pid; delete process.env.OPENCODEX_HOME; if (testHome && existsSync(testHome)) removeTreeWithRetry(testHome); testHome = ""; });
+afterEach(async () => { testServer?.stop(true); testServer = undefined; testLookalike?.kill("SIGTERM"); testLookalike = undefined; fixturePid = process.pid; if (testLookalikeDir && existsSync(testLookalikeDir)) removeTreeWithRetry(testLookalikeDir); testLookalikeDir = ""; delete process.env.OPENCODEX_HOME; if (testHome && existsSync(testHome)) removeTreeWithRetry(testHome); testHome = ""; });
 function startAttestedFixture(status: "ready" | "pending" | "failed"): void {
   testHome = mkdtempSync(join(tmpdir(), "ocx-go-cli-parity-"));
   testServer = Bun.serve({ port: 0, fetch(request) {
@@ -396,6 +397,16 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
       if (url.pathname === "/api/client-integrations/zcode") return new Response(JSON.stringify({ clientId: "zcode", state: "enabled", installed: true }), { headers: { "content-type": "application/json" } });
       if (url.pathname === "/api/client-integrations/journal") return new Response(journal, { headers: { "content-type": "application/json" } });
       if (url.pathname === "/api/client-integrations/restore" && request.method === "POST") {
+        const opId = (JSON.parse(await request.text()) as { opId?: string }).opId ?? "";
+        if (opId === "op-2") {
+          // A real refusal body: the server states WHY under reason and WHAT TO
+          // DO under hint; both CLIs compose it through responseMessage.
+          return Response.json({
+            error: "Backup for op-2 has expired and cannot be restored.",
+            reason: "snapshot-expired",
+            hint: "Re-enable the integration to create a fresh backup, then restore again.",
+          }, { status: 409 });
+        }
         return Response.json({ message: "Restored." });
       }
       return new Response("not found", { status: 404 });
@@ -406,6 +417,7 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
   // gate (word "ocx" and the token "start") so gui pairing trusts its pid.
   function spawnOcxLookalike(): void {
     const dir = mkdtempSync(join(tmpdir(), "ocx-go-lookalike-"));
+    testLookalikeDir = dir;
     const shim = join(dir, "ocx");
     writeFileSync(shim, "#!/bin/sh\ntrap 'exit 0' TERM INT\nwhile :; do sleep 1; done\n", { mode: 0o755 });
     const child = Bun.spawn(["/bin/sh", shim, "start", "--port", "39999"], { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
@@ -434,11 +446,19 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
     { args: ["zcode", "journal", "--json"] },
     { args: ["zcode", "restore", "--op", "op-1", "--confirm-drift"] },
     { args: ["zcode", "restore", "--op", "op-1", "--confirm-drift", "--json"] },
+    { args: ["zcode", "restore", "--op", "op-2", "--confirm-drift"] },
+    { args: ["zcode", "restore", "--op", "op-2", "--confirm-drift", "--json"] },
   ])("diffs Go-owned zcode output against the fixture for $args", async ({ args }) => {
     startOpsFixture();
     const ts = await runTsAsync(args);
     const go = await runGoAsync(args);
     expect(go).toEqual(ts);
+    if (args.includes("op-2")) {
+      expect(go).toMatchObject({
+        code: 5,
+        stderr: "Error: Backup for op-2 has expired and cannot be restored.\nreason: snapshot-expired\nhint: Re-enable the integration to create a fresh backup, then restore again.\n",
+      });
+    }
   });
   test("diffs gui pairing success output against the fixture", async () => {
     spawnOcxLookalike();
@@ -476,9 +496,12 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
     startOpsFixture();
     // Loopback config so the launcher trusts the fixture (complete so the TS
     // loader emits no repair notice); mcode config.yaml lives under
-    // $HOME/.minimax, so HOME is redirected to the scratch home. The fixture
-    // server serves both CLIs, so the rows run async (a blocking spawnSync
-    // would starve the fixture event loop).
+    // $HOME/.minimax, so HOME is redirected to the scratch home. The file uses
+    // the canonical BLOCK form that client-integration enable actually writes
+    // (src/integrations/serialize.ts), so the oracle guards the real shape the
+    // TS writer emits, not a flow-only artifact. The fixture server serves
+    // both CLIs, so the rows run async (a blocking spawnSync would starve the
+    // fixture event loop).
     writeFileSync(join(testHome, "config.json"), JSON.stringify({
       hostname: "127.0.0.1",
       port: 10100,
@@ -487,17 +510,51 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
     }));
     const mcodeHome = mkdtempSync(join(tmpdir(), "ocx-go-mcode-home-"));
     mkdirSync(join(mcodeHome, ".minimax"), { recursive: true });
-    writeFileSync(join(mcodeHome, ".minimax", "config.yaml"), `{custom_provider: {opencodex: {options: {baseURL: http://127.0.0.1:${testServer!.port}}}}}\n`);
+    writeFileSync(join(mcodeHome, ".minimax", "config.yaml"), [
+      "theme: dark",
+      "custom_provider:",
+      "  opencodex:",
+      "    name: OpenCodex managed provider",
+      "    models: {}",
+      "    options:",
+      `      baseURL: http://127.0.0.1:${testServer!.port}`,
+      "",
+    ].join("\n"));
     const emptyPath = mkdtempSync(join(tmpdir(), "ocx-go-empty-path-"));
-    const env = parityEnv(testHome);
-    env.HOME = mcodeHome;
-    env.PATH = emptyPath;
-    const tsResult = await runTsEnvAsync(["mcode"], env);
-    const goResult = await runGoEnvAsync(["mcode"], env);
-    expect(goResult).toEqual(tsResult);
-    expect(tsResult).toMatchObject({ code: 1, stderr: `✅ MiniMax Code wired to http://127.0.0.1:${testServer!.port}; select custom_provider:opencodex/<model> in MCode.\n❌ \`mcode\` CLI not found. Install MiniMax Code first: https://github.com/MiniMax-AI/minimax-code\n` });
-    removeTreeWithRetry(mcodeHome);
-    removeTreeWithRetry(emptyPath);
+    try {
+      const env = parityEnv(testHome);
+      env.HOME = mcodeHome;
+      env.PATH = emptyPath;
+      const tsResult = await runTsEnvAsync(["mcode"], env);
+      const goResult = await runGoEnvAsync(["mcode"], env);
+      expect(goResult).toEqual(tsResult);
+      expect(tsResult).toMatchObject({ code: 1, stderr: `✅ MiniMax Code wired to http://127.0.0.1:${testServer!.port}; select custom_provider:opencodex/<model> in MCode.\n❌ \`mcode\` CLI not found. Install MiniMax Code first: https://github.com/MiniMax-AI/minimax-code\n` });
+    } finally {
+      removeTreeWithRetry(mcodeHome);
+      removeTreeWithRetry(emptyPath);
+    }
+  });
+  test("diffs the mmx wiring lane and its ENOENT spawn against the fixture", async () => {
+    startOpsFixture();
+    writeFileSync(join(testHome, "config.json"), JSON.stringify({
+      hostname: "127.0.0.1",
+      port: 10100,
+      providers: { fixture: { adapter: "openai-chat", baseUrl: "https://example.test/v1", apiKey: "k" } },
+      defaultProvider: "fixture",
+    }));
+    // An empty PATH forces the ENOENT lane on both sides (no mmx binary to
+    // exec); the fixture serves both CLIs so the rows run async.
+    const emptyPath = mkdtempSync(join(tmpdir(), "ocx-go-empty-path-"));
+    try {
+      const env = parityEnv(testHome);
+      env.PATH = emptyPath;
+      const tsResult = await runTsEnvAsync(["mmx", "text", "chat"], env);
+      const goResult = await runGoEnvAsync(["mmx", "text", "chat"], env);
+      expect(goResult).toEqual(tsResult);
+      expect(tsResult).toMatchObject({ code: 1, stderr: `✅ MiniMax CLI text bridged to http://127.0.0.1:${testServer!.port}/v1/messages.\n❌ \`mmx\` CLI not found. Install it first: npm install -g mmx-cli\n` });
+    } finally {
+      removeTreeWithRetry(emptyPath);
+    }
   });
   test("diffs mcode informational passthrough on a missing CLI", () => {
     testHome = mkdtempSync(join(tmpdir(), "ocx-go-mcode-parity-"));

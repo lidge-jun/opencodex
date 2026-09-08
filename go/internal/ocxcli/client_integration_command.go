@@ -123,7 +123,9 @@ func actionWriter(isErr bool) io.Writer {
 // runtimeApiRequest mirrors runtimeRequest/runtimeBaseUrl: locate the live proxy
 // and issue the management request with the same admin-token headers. The body
 // is returned as a jsonwire tree (document order and V8 number literals kept)
-// plus the raw text for the non-JSON lane.
+// plus the raw text for the non-JSON lane. Like fetchUsageReport, rawText is
+// set only when the body was not valid JSON (runtimeRequest keeps the text in
+// that case), so runtimeResponseMessage's raw lane never sees a parsed body.
 func runtimeApiRequest(deps Deps, path string, method string, requestBody []byte) (*jsonwire.Value, string, int, error) {
 	deps = defaults(deps)
 	state, found := liveProxyEndpoint(deps)
@@ -155,51 +157,26 @@ func runtimeApiRequest(deps Deps, path string, method string, requestBody []byte
 	if readErr != nil {
 		return nil, "", 503, &cliAPIError{message: "Management API is unreachable: " + readErr.Error(), status: 503}
 	}
-	var value *jsonwire.Value
-	if len(bytes.TrimSpace(raw)) > 0 {
-		var parseErr error
-		value, parseErr = jsonwire.Parse(raw)
-		if parseErr != nil {
-			return nil, string(raw), response.StatusCode, nil
+	value, parseErr := jsonwire.Parse(raw)
+	if parseErr != nil {
+		// Non-JSON body: runtimeRequest keeps the text and responseMessage's
+		// raw lane prints it; a non-2xx status still fails the request.
+		if response.StatusCode < 200 || response.StatusCode > 299 {
+			return nil, "", response.StatusCode, &cliAPIError{message: runtimeResponseMessage(nil, string(raw), response.StatusCode), status: response.StatusCode}
 		}
+		return nil, string(raw), response.StatusCode, nil
 	}
 	if response.StatusCode < 200 || response.StatusCode > 299 {
-		message := runtimeResponseMessage(value, string(raw), response.StatusCode)
-		return nil, "", response.StatusCode, &cliAPIError{message: message, status: response.StatusCode}
+		return nil, "", response.StatusCode, &cliAPIError{message: runtimeResponseMessage(value, "", response.StatusCode), status: response.StatusCode}
 	}
 	return value, "", response.StatusCode, nil
 }
 
 // runtimeResponseMessage mirrors responseMessage in src/cli/runtime-api.ts.
+// It shares the implementation with usageResponseMessage (the same TS function
+// backs both owners), so a responseMessage edit upstream lands in one Go spot.
 func runtimeResponseMessage(body *jsonwire.Value, rawText string, status int) string {
-	if strings.TrimSpace(rawText) != "" {
-		return truncateRunes(strings.TrimSpace(rawText), 400)
-	}
-	if body == nil || body.Kind() != jsonwire.Object {
-		return fmt.Sprintf("Management request failed (%d)", status)
-	}
-	primary := ""
-	for _, key := range []string{"error", "message", "detail"} {
-		if field := body.Find(key); field != nil && field.Kind() == jsonwire.String {
-			if trimmed := strings.TrimSpace(field.String()); trimmed != "" {
-				primary = trimmed
-				break
-			}
-		}
-	}
-	if primary == "" {
-		primary = fmt.Sprintf("Management request failed (%d)", status)
-	}
-	parts := []string{primary}
-	for _, key := range []string{"reason", "hint"} {
-		if field := body.Find(key); field != nil && field.Kind() == jsonwire.String {
-			trimmed := strings.TrimSpace(field.String())
-			if trimmed != "" && trimmed != primary {
-				parts = append(parts, key+": "+trimmed)
-			}
-		}
-	}
-	return truncateRunes(strings.Join(parts, "\n"), 1200)
+	return usageResponseMessage(body, rawText, status)
 }
 
 // takeRuntimeOption mirrors takeOption: `--flag value`, rejecting a missing or

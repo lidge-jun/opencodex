@@ -10,9 +10,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 // mmxChildOwnedEnvKeys mirrors MMX_CHILD_OWNED_ENV_KEYS: any inherited spelling
@@ -45,7 +48,7 @@ func mmxBuildEnv(base []string, baseURL string, configDir string) []string {
 func runMmx(args []string, deps Deps) int {
 	deps = defaults(deps)
 	if standaloneInformational(args, "mmx") {
-		return spawnLauncherClient("mmx", args, nil, mmxInstallHint)
+		return spawnLauncherClient("mmx", args, nil, mmxInstallHint, deps.Stderr, nil)
 	}
 	if unsafe := mmxUnsafeOverride(args); unsafe != "" {
 		fmt.Fprintf(deps.Stderr, "❌ %s is not accepted by ocx mmx because it could bypass the proxy or expose a caller credential.\n", unsafe)
@@ -100,7 +103,44 @@ func runMmx(args []string, deps Deps) int {
 	env := mmxBuildEnv(os.Environ(), "http://127.0.0.1:"+strconv.Itoa(bridge.port()), configDir)
 	upstream := "http://" + probeHost(state.Hostname) + ":" + strconv.Itoa(state.Port)
 	fmt.Fprintf(deps.Stderr, "✅ MiniMax CLI text bridged to %s/v1/messages.\n", upstream)
-	code := spawnLauncherClient("mmx", args, env, mmxInstallHint)
+	code := spawnLauncherClient("mmx", args, env, mmxInstallHint, deps.Stderr, installMmxSignalForwarder)
 	cleanup()
 	return code
+}
+
+// installMmxSignalForwarder ports installMmxTerminationHandlers (minimax.ts):
+// while the mmx child is live, a wrapper SIGINT/SIGTERM is forwarded to the
+// child instead of terminating the wrapper mid-cleanup, so the child exits, the
+// bridge stops and the isolated temp config is removed by the caller's
+// deferred cleanup — mirroring TS, which keeps running until the child's death
+// and maps a signaled child to exit 1.
+func installMmxSignalForwarder(child *exec.Cmd) func() {
+	signals := make(chan os.Signal, 2)
+	stopped := make(chan struct{})
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		for {
+			select {
+			case sig := <-signals:
+				if child.Process == nil {
+					continue
+				}
+				if osRuntime == "windows" {
+					// Process.Signal only supports Kill on win32; the TS wrapper
+					// uses taskkill /T /F, approximated here as a direct kill.
+					_ = child.Process.Kill()
+				} else if unixSignal, ok := sig.(syscall.Signal); ok {
+					_ = child.Process.Signal(unixSignal)
+				} else {
+					_ = child.Process.Kill()
+				}
+			case <-stopped:
+				return
+			}
+		}
+	}()
+	return func() {
+		signal.Stop(signals)
+		close(stopped)
+	}
 }

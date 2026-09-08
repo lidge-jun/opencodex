@@ -11,7 +11,6 @@ package ocxcli
 
 import (
 	"encoding/json"
-	"io"
 	"net"
 	"net/http"
 	"strconv"
@@ -106,8 +105,30 @@ func (b *mmxTextBridge) serve(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 	w.WriteHeader(response.StatusCode)
+	// Anthropic messages stream SSE chunks through the proxy. net/http buffers
+	// writes up to its internal chunk size, so without an explicit flush the
+	// first tokens would sit in the buffer while the TS bridge streams them
+	// through untouched; flush after the headers and after every read.
+	flusher, canFlush := w.(http.Flusher)
+	if canFlush {
+		flusher.Flush()
+	}
 	if response.Body != nil {
-		_, _ = io.Copy(w, response.Body)
+		buffer := make([]byte, 32*1024)
+		for {
+			n, readErr := response.Body.Read(buffer)
+			if n > 0 {
+				if _, writeErr := w.Write(buffer[:n]); writeErr != nil {
+					return
+				}
+				if canFlush {
+					flusher.Flush()
+				}
+			}
+			if readErr != nil {
+				return
+			}
+		}
 	}
 }
 

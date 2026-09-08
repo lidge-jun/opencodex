@@ -103,6 +103,60 @@ func TestMcodeYamlBaseURL(t *testing.T) {
 	}
 }
 
+// TestMcodeYamlBlockForm guards the canonical serialize.ts shape: the real
+// config.yaml written by client-integration enable is a nested BLOCK map, not
+// the single-line flow form, so the launcher must read the destination scalar
+// out of indented YAML (with richer sibling subtrees, comments, quoting and
+// CRLF) exactly as Bun.YAML.parse does on the TS side.
+func TestMcodeYamlBlockForm(t *testing.T) {
+	canonical := "theme: dark\n" +
+		"custom_provider:\n" +
+		"  opencodex:\n" +
+		"    name: OpenCodex managed provider\n" +
+		"    models: {}\n" +
+		"    options:\n" +
+		"      baseURL: http://127.0.0.1:10100\n"
+	if got := mcodeOpenCodexBaseURL(canonical); got != "http://127.0.0.1:10100" {
+		t.Fatalf("block baseURL = %q", got)
+	}
+
+	// A realistic MiniMax Code file: quoted destination with a trailing comment,
+	// a nested models subtree with a scalar block sequence, CRLF line endings.
+	withSequence := "custom_provider:\r\n" +
+		"  opencodex:\r\n" +
+		"    models:\r\n" +
+		"      openai/gpt-5.6-sol:\r\n" +
+		"        limit:\r\n" +
+		"          context: 922000\r\n" +
+		"        thinking:\r\n" +
+		"          effortOptions:\r\n" +
+		"            - low\r\n" +
+		"            - medium\r\n" +
+		"    options:\r\n" +
+		"      baseURL: \"http://127.0.0.1:10100\" # loopback only\r\n"
+	if got := mcodeOpenCodexBaseURL(withSequence); got != "http://127.0.0.1:10100" {
+		t.Fatalf("block with sibling sequence baseURL = %q", got)
+	}
+
+	// A deeper indentation style (four spaces) and a quoted single-line key/value.
+	fourSpace := "custom_provider:\n" +
+		"    opencodex:\n" +
+		"        options:\n" +
+		"            baseURL: 'http://127.0.0.1:2024'\n"
+	if got := mcodeOpenCodexBaseURL(fourSpace); got != "http://127.0.0.1:2024" {
+		t.Fatalf("four-space block baseURL = %q", got)
+	}
+
+	// Block-form documents without the destination still read as not connected.
+	missing := "custom_provider:\n  opencodex:\n    options:\n      region: global\n"
+	if got := mcodeOpenCodexBaseURL(missing); got != "" {
+		t.Fatalf("block without baseURL = %q, want empty", got)
+	}
+	if got := mcodeOpenCodexBaseURL("theme: dark\n"); got != "" {
+		t.Fatalf("unrelated block = %q, want empty", got)
+	}
+}
+
 // launcherGateConfig writes a complete config so the TS loader would not repair
 // it; the non-loopback hostname stops the launcher before any proxy discovery.
 func launcherGateConfig(t *testing.T, home string, hostname string) {

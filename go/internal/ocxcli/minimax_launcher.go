@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -146,10 +147,15 @@ func mmxUnsafeOverride(argv []string) string {
 }
 
 // spawnLauncherClient spawns the external CLI with inherited stdio, exactly
-// like the TS spawnClient: ENOENT prints the install hint and exits 1, signal
-// exits map to 1, and cmd.exe's 9009 on win32 also prints the hint. env=nil
-// inherits the current process environment.
-func spawnLauncherClient(command string, args []string, env []string, installHint string) int {
+// like the TS spawnClient: ENOENT prints the install hint (through the Deps
+// writer) and exits 1, signal exits map to 1, and cmd.exe's 9009 on win32 also
+// prints the hint. env=nil inherits the current process environment. onStart,
+// when non-nil, is invoked after a successful start (it may install signal
+// forwarding) and its returned stop hook runs after the child exits.
+func spawnLauncherClient(command string, args []string, env []string, installHint string, stderr io.Writer, onStart func(child *exec.Cmd) func()) int {
+	if stderr == nil {
+		stderr = os.Stderr
+	}
 	file, argv, options := launcherCommandInvocation(command, args)
 	child := exec.Command(file, argv...)
 	child.Stdin = os.Stdin
@@ -157,17 +163,24 @@ func spawnLauncherClient(command string, args []string, env []string, installHin
 	child.Stderr = os.Stderr
 	child.Env = env
 	if options.windowsVerbatimArguments {
-		child.Args = append([]string{file}, argv...)
+		applyWindowsCommandLine(child, file, argv)
 	}
 	if err := child.Start(); err != nil {
 		if errors.Is(err, exec.ErrNotFound) {
-			fmt.Fprintln(os.Stderr, installHint)
+			fmt.Fprintln(stderr, installHint)
 		} else {
-			fmt.Fprintf(os.Stderr, "❌ Failed to launch %s: %s\n", command, err.Error())
+			fmt.Fprintf(stderr, "❌ Failed to launch %s: %s\n", command, err.Error())
 		}
 		return ExitFailure
 	}
+	var stop func()
+	if onStart != nil {
+		stop = onStart(child)
+	}
 	err := child.Wait()
+	if stop != nil {
+		stop()
+	}
 	if err == nil {
 		return ExitOK
 	}
@@ -178,7 +191,7 @@ func spawnLauncherClient(command string, args []string, env []string, installHin
 			return ExitFailure
 		}
 		if osRuntime == "windows" && exitErr.ExitCode() == 9009 {
-			fmt.Fprintln(os.Stderr, installHint)
+			fmt.Fprintln(stderr, installHint)
 		}
 		return exitErr.ExitCode()
 	}
@@ -403,7 +416,7 @@ func ensureLauncherProxy(cfg launcherConfig, deps Deps) (RuntimeState, bool) {
 // runMcode ports cmdMcode.
 func runMcode(args []string, deps Deps) int {
 	if standaloneInformational(args, "mcode") {
-		return spawnLauncherClient("mcode", args, nil, mcodeInstallHint)
+		return spawnLauncherClient("mcode", args, nil, mcodeInstallHint, deps.Stderr, nil)
 	}
 	cfg := readLauncherConfig()
 	if !isLoopbackHostname(cfg.hostname) {
@@ -439,5 +452,5 @@ func runMcode(args []string, deps Deps) int {
 		return 2
 	}
 	fmt.Fprintf(deps.Stderr, "✅ MiniMax Code wired to %s; select custom_provider:opencodex/<model> in MCode.\n", expected)
-	return spawnLauncherClient("mcode", args, nil, mcodeInstallHint)
+	return spawnLauncherClient("mcode", args, nil, mcodeInstallHint, deps.Stderr, nil)
 }
