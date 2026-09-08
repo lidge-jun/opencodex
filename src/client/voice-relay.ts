@@ -1,4 +1,5 @@
 import type { Server, ServerWebSocket } from "bun";
+import { timingSafeEqual } from "node:crypto";
 import { readBoundedResponseBytes } from "../lib/bounded-body";
 import { clearableDeadline } from "../lib/abort";
 import {
@@ -7,6 +8,7 @@ import {
   sanitizeStandaloneRealtimeQuery,
   type LiveSidebandTarget,
 } from "../server/live";
+import { hasProxyAdmissionSecretShape } from "../server/auth-cors";
 import type { OcxClientConnectionConfig } from "../types";
 import { readServiceApiTokenState } from "../lib/service-secrets";
 import { assertNoClientDisconnectPending, readClientConnectionState } from "./state";
@@ -84,6 +86,23 @@ function relayHeaders(source: Headers, names: readonly string[]): Headers {
     if (value !== null) output.set(name, value);
   }
   return output;
+}
+
+function secretEquals(actual: string, expected: string): boolean {
+  const actualBytes = Buffer.from(actual);
+  const expectedBytes = Buffer.from(expected);
+  return actualBytes.byteLength === expectedBytes.byteLength
+    && timingSafeEqual(actualBytes, expectedBytes);
+}
+
+function removeRelayAdmissionBearer(headers: Headers, connectedToken: string): void {
+  const match = headers.get("authorization")?.match(/^Bearer\s+(.+)$/i);
+  const bearer = match?.[1]?.trim();
+  if (!bearer) return;
+  if (secretEquals(bearer, connectedToken)
+    || hasProxyAdmissionSecretShape(bearer)) {
+    headers.delete("authorization");
+  }
 }
 
 function localAuthorityAllowed(req: Request, port: number): boolean {
@@ -191,6 +210,7 @@ async function relayHttp(req: Request, url: URL, credential: VoiceRelayCredentia
   if (body instanceof Response) return body;
   if (!(options.connectionCheck ?? credentialStillOwned)(credential)) return jsonError(409, "voice_relay_connection_changed");
   const headers = relayHeaders(req.headers, HTTP_REQUEST_HEADERS);
+  removeRelayAdmissionBearer(headers, credential.token);
   headers.set("x-opencodex-api-key", credential.token);
   const connect = clearableDeadline(options.connectTimeoutMs ?? VOICE_RELAY_CONNECT_TIMEOUT_MS, lifetime);
   let response: Response;
@@ -354,6 +374,7 @@ export function startVoiceRelay(options: VoiceRelayOptions = {}): VoiceRelayHand
         || wsTarget.style === "realtime-query");
       if (wsAllowed && wsTarget) {
         const headers = relayHeaders(req.headers, WS_REQUEST_HEADERS);
+        removeRelayAdmissionBearer(headers, credential.token);
         headers.set("x-opencodex-api-key", credential.token);
         if (bunServer.upgrade(req, { data: {
           upstreamUrl: upstreamUrl(credential.connection.serverUrl, new URL(sanitizedWebSocketPath(url, wsTarget), url), true),

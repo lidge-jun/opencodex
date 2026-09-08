@@ -446,11 +446,16 @@ export function isManagementAdmissionSecret(token: string): boolean {
   return !!actual && secretEquals(actual, configuredAdminAuthToken());
 }
 
+/** Whether `token` has a minted OpenCodex admission-secret shape. */
+export function hasProxyAdmissionSecretShape(token: string): boolean {
+  return /^ocx_(?:data|admin|session)_/.test(token) || /^ocx_[0-9a-f]{40}$/.test(token);
+}
+
 /** Whether `token` is one of the proxy's own admission secrets and must never reach an upstream. */
 export function isProxyAdmissionSecret(token: string, config: OcxConfig): boolean {
   const actual = token.trim();
   if (!actual) return false;
-  if (/^ocx_(?:data|admin|session)_/.test(actual) || /^ocx_[0-9a-f]{40}$/.test(actual)) return true;
+  if (hasProxyAdmissionSecretShape(actual)) return true;
   return isDataPlaneAdmissionSecret(actual, config) || isManagementAdmissionSecret(actual);
 }
 

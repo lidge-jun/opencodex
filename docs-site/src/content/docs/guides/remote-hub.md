@@ -314,6 +314,10 @@ by a call-ID WebSocket join. Add `--allow-standalone` for a client that opens a 
 without first creating a WebRTC call. Unrelated API routes and browser-origin requests are not
 general-purpose forwarding surfaces.
 
+The listener trusts local processes on the client machine. While it is running, another local
+process can use the allowed voice routes through the connected hub credential, although the
+credential itself is never returned to the caller. Stop the relay when remote voice is not in use.
+
 The relay exits if its saved connection or credential changes. After disconnect or key rotation,
 restore the voice settings or restart the relay against the intended connection. It never repairs
 pairing or rotates keys itself.

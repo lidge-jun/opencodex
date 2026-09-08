@@ -4,8 +4,9 @@ import { mkdtempSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { saveConfig } from "../../src/config";
+import { getDefaultConfig, saveConfig } from "../../src/config";
 import { writeServiceApiTokenFile } from "../../src/lib/service-secrets";
+import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "../../src/server/auth-cors";
 import {
   loadVoiceRelayCredential,
   startVoiceRelay,
@@ -19,6 +20,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const servers: Array<{ stop(force?: boolean): void | Promise<void> }> = [];
 const previousHome = process.env.OPENCODEX_HOME;
+const NATIVE_OAUTH_BEARER = ["Bearer", "native-oauth-access-token"].join(" ");
 
 afterEach(async () => {
   for (const server of servers.splice(0).reverse()) await server.stop(true);
@@ -26,7 +28,7 @@ afterEach(async () => {
   else process.env.OPENCODEX_HOME = previousHome;
 });
 
-function connected(serverUrl: string): VoiceRelayCredential {
+function connected(serverUrl: string, token = "ocx_data_fixture-secret"): VoiceRelayCredential {
   const connection: OcxClientConnectionConfig = {
     serverUrl,
     managementUrl: serverUrl,
@@ -41,7 +43,7 @@ function connected(serverUrl: string): VoiceRelayCredential {
     priorCatalog: "",
     catalogSyncedAt: "2026-09-08T00:00:00.000Z",
   };
-  return { connection, token: "ocx_data_fixture-secret" };
+  return { connection, token };
 }
 
 function ws(url: string, headers: Record<string, string> = {}): WebSocket {
@@ -71,6 +73,18 @@ function rawMessage(socket: WebSocket): Promise<string | ArrayBuffer> {
     const timer = setTimeout(() => reject(new Error("websocket message timeout")), 5_000);
     socket.addEventListener("message", event => { clearTimeout(timer); resolve(event.data as string | ArrayBuffer); }, { once: true });
   });
+}
+
+function liveForwardingGuard(headers: Headers, config: ReturnType<typeof getDefaultConfig>): Response | null {
+  try {
+    validateForwardAdmissionCredential(headers, config);
+    return null;
+  } catch (error) {
+    if (error instanceof ForwardAdmissionCredentialError) {
+      return Response.json({ error: { type: "authentication_error", message: error.message } }, { status: 401 });
+    }
+    throw error;
+  }
 }
 
 describe("remote hub voice relay", () => {
@@ -123,6 +137,59 @@ describe("remote hub voice relay", () => {
       path: "/v1/realtime/calls?intent=quicksilver", method: "POST",
       key: "ocx_data_fixture-secret", authorization: "Bearer caller-secret", body: "offer",
     }]);
+  }, SERVER_BUDGET_MS);
+
+  test("HTTP removes hub admission bearers before the real forwarding guard", async () => {
+    const connectedToken = "legacy-connected-token";
+    const config = getDefaultConfig();
+    config.apiKeys = [{ id: "voice-relay", name: "voice relay", key: connectedToken }];
+    const seen: Array<{ authorization: string | null; key: string | null; account: string | null }> = [];
+    const hub = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const rejected = liveForwardingGuard(req.headers, config);
+        if (rejected) return rejected;
+        seen.push({
+          authorization: req.headers.get("authorization"),
+          key: req.headers.get("x-opencodex-api-key"),
+          account: req.headers.get("chatgpt-account-id"),
+        });
+        return new Response("answer", { status: 201 });
+      },
+    });
+    servers.push(hub);
+    const relay = startVoiceRelay({
+      port: 0,
+      credential: connected(hub.url.origin, connectedToken),
+      connectionCheck: () => true,
+    });
+    servers.push({ stop: () => relay.stop() });
+
+    const admissionBearers = [
+      connectedToken,
+      `ocx_data_${"a".repeat(40)}`,
+      `ocx_admin_${"b".repeat(40)}`,
+      `ocx_session_${"c".repeat(40)}`,
+      `ocx_${"d".repeat(40)}`,
+    ];
+    for (const bearer of admissionBearers) {
+      const response = await fetch(`${relay.origin}/v1/live`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${bearer}` },
+        body: "offer",
+      });
+      expect(response.status).toBe(201);
+    }
+    const oauth = await fetch(`${relay.origin}/v1/live`, {
+      method: "POST",
+      headers: { Authorization: NATIVE_OAUTH_BEARER, "ChatGPT-Account-ID": "acct-1" },
+      body: "offer",
+    });
+    expect(oauth.status).toBe(201);
+    expect(seen).toEqual([
+      ...admissionBearers.map(() => ({ authorization: null, key: connectedToken, account: null })),
+      { authorization: NATIVE_OAUTH_BEARER, key: connectedToken, account: "acct-1" },
+    ]);
   }, SERVER_BUDGET_MS);
 
   test("wrong methods, prefix variants, Host, and browser Origin fail before hub I/O", async () => {
@@ -217,6 +284,62 @@ describe("remote hub voice relay", () => {
     socket.close();
     for (let i = 0; i < 50 && !hubClosed; i += 1) await Bun.sleep(10);
     expect(hubClosed).toBe(true);
+  }, SERVER_BUDGET_MS);
+
+  test("WebSocket removes hub admission bearers before the real forwarding guard", async () => {
+    const connectedToken = "legacy-connected-token";
+    const config = getDefaultConfig();
+    config.apiKeys = [{ id: "voice-relay", name: "voice relay", key: connectedToken }];
+    const seen: Array<{ authorization: string | null; key: string | null; account: string | null }> = [];
+    const hub = Bun.serve({
+      port: 0,
+      fetch(req, server) {
+        const rejected = liveForwardingGuard(req.headers, config);
+        if (rejected) return rejected;
+        seen.push({
+          authorization: req.headers.get("authorization"),
+          key: req.headers.get("x-opencodex-api-key"),
+          account: req.headers.get("chatgpt-account-id"),
+        });
+        if (server.upgrade(req, { data: {} })) return;
+        return new Response("upgrade failed", { status: 426 });
+      },
+      websocket: { open(socket) { socket.send("ready"); } },
+    });
+    servers.push(hub);
+    const relay = startVoiceRelay({
+      port: 0,
+      credential: connected(hub.url.origin, connectedToken),
+      connectionCheck: () => true,
+    });
+    servers.push({ stop: () => relay.stop() });
+
+    const admissionBearers = [
+      connectedToken,
+      `ocx_data_${"a".repeat(40)}`,
+      `ocx_admin_${"b".repeat(40)}`,
+      `ocx_session_${"c".repeat(40)}`,
+      `ocx_${"d".repeat(40)}`,
+    ];
+    for (const bearer of admissionBearers) {
+      const socket = ws(`${relay.origin.replace(/^http/, "ws")}/v1/live/call_1`, {
+        Authorization: `Bearer ${bearer}`,
+      });
+      await opened(socket);
+      expect(await message(socket)).toBe("ready");
+      socket.close();
+    }
+    const oauth = ws(`${relay.origin.replace(/^http/, "ws")}/v1/live/call_1`, {
+      Authorization: NATIVE_OAUTH_BEARER,
+      "ChatGPT-Account-ID": "acct-1",
+    });
+    await opened(oauth);
+    expect(await message(oauth)).toBe("ready");
+    oauth.close();
+    expect(seen).toEqual([
+      ...admissionBearers.map(() => ({ authorization: null, key: connectedToken, account: null })),
+      { authorization: NATIVE_OAUTH_BEARER, key: connectedToken, account: "acct-1" },
+    ]);
   }, SERVER_BUDGET_MS);
 
   test("WebSocket handshake timeout closes a connecting upstream peer", async () => {
