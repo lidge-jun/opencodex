@@ -8,6 +8,8 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  copyFileSync,
+  rmSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -19,7 +21,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { Database } from "bun:sqlite";
 
@@ -130,11 +132,41 @@ class Fixture {
   readonly lockAllowlist: string[];
   readonly serviceManagerEnv: Record<string, string>;
   readonly serviceManagerPreloadPath: string | undefined;
+  readonly powerShellCacheEnv: Record<string, string> = {};
   readonly children: Array<ReturnType<typeof Bun.spawn>> = [];
 
   constructor() {
     for (const path of [this.codex, this.ocx, this.homeA, this.homeB, this.userprofileA, this.userprofileB, this.runtime, this.provider]) {
       mkdirSync(path, { recursive: true, mode: 0o700 });
+    }
+    try {
+      if (process.platform === "win32") {
+        // Fresh child profiles otherwise repeatedly rebuild PowerShell's command cache.
+        // Seed one owned copy per fixture; children must never update the parent cache.
+        const cache = join(this.root, "module-analysis-cache");
+        this.powerShellCacheEnv.PSModuleAnalysisCachePath = cache;
+        const source = Object.entries(process.env).find(([key]) =>
+          key.toLowerCase() === "psmoduleanalysiscachepath")?.[1];
+        if (source && isAbsolute(source)) {
+          try {
+            const before = lstatSync(source);
+            if (before.isFile() && !before.isSymbolicLink()) {
+              copyFileSync(source, cache);
+              if (lstatSync(cache).size !== before.size) rmSync(cache, { force: true });
+            }
+          } catch (error) {
+            const code = (error as NodeJS.ErrnoException).code;
+            if (code !== "ENOENT" && code !== "ESTALE") {
+              throw new Error("Composed fixture could not read or copy the PowerShell module cache");
+            }
+            rmSync(cache, { force: true });
+          }
+        }
+      }
+    } catch (error) {
+      // Construction precedes registration in roots, so afterEach cannot own this cleanup.
+      rmSync(this.root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      throw error;
     }
     this.lockPath = resolveCodexCoordinatorDatabasePath(resolveEffectiveUserIdentity(), realpathSync.native(this.codex));
     this.lockAllowlist = [this.lockPath, `${this.lockPath}-journal`, `${this.lockPath}-wal`, `${this.lockPath}-shm`];
@@ -155,6 +187,7 @@ class Fixture {
     // Do not inherit ambient homes or proxy configuration.  `process.execPath`
     // is absolute, so a PATH is intentionally unnecessary for CLI children.
     return {
+      ...this.powerShellCacheEnv,
       HOME: home,
       USERPROFILE: userprofile,
       // Windows os.homedir() follows USERPROFILE, while POSIX follows HOME.

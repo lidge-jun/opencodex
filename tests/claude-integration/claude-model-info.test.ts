@@ -44,6 +44,22 @@ describe("anthropic-flavor ModelInfo discovery entries (devlog 130 B4b)", () => 
     expect(info!.capabilities.effort.max.supported).toBe(true);
   });
 
+  test("readable Fable rows keep base and 1M selections distinct in Claude Code", () => {
+    const infos = buildAnthropicModelInfos([], [{
+      provider: "anthropic",
+      id: "claude-fable-5-1",
+      contextWindow: 1_000_000,
+      maxInputTokens: 1_000_000,
+    }], undefined, "readable");
+
+    expect(infos.map(info => info.id)).toEqual([
+      "claude-fable-5-1",
+      "claude-ocx-native--claude-fable-5-1[1m]",
+    ]);
+    expect(infos[1]!.display_name).toBe("claude-fable-5-1 (anthropic) · 1M");
+    expect(infos[1]!.max_input_tokens).toBe(1_000_000);
+  });
+
   test("native effective ladder only advertises clamp-identity rungs (audit R4#1)", () => {
     for (const slug of ["gpt-5.5", "gpt-5.4", "gpt-5.6-sol"]) {
       for (const rung of nativeEffectiveLadder(slug)) {
@@ -172,5 +188,31 @@ describe("anthropic-flavor ModelInfo discovery entries (devlog 130 B4b)", () => 
     // Default style stays hashed (desktop contract untouched).
     const hashed = buildAnthropicModelInfos(["gpt-5.6-sol"], [], auto);
     expect(hashed.map(i => i.id).some(id => id.startsWith("claude-ocx-"))).toBe(false);
+  });
+});
+
+
+describe("saved picker order changes groups after identity selection", () => {
+  test.each(["readable", "desktop3p"] as const)("%s keeps native and featured groups, metadata and siblings", idStyle => {
+    const models = [
+      { provider: "p", id: "featured", contextWindow: 1_000_000, reasoningEfforts: ["high"] },
+      { provider: "p", id: "a", contextWindow: 1_000_000, reasoningEfforts: ["high"] },
+      { provider: "p", id: "b", contextWindow: 1_000_000, reasoningEfforts: ["high"] },
+    ];
+    const alias = (provider: string, id: string) => `${provider}-${id}`;
+    const before = buildAnthropicModelInfos(["gpt-5.5"], models, undefined, idStyle, alias, undefined, false, () => true);
+    const after = buildAnthropicModelInfos(["gpt-5.5"], models, undefined, idStyle, alias, undefined, false, () => true,
+      { modelPickerOrder: ["p/b", "p/a", "p/featured"], featured: ["p/featured"] });
+    expect(after.filter(row => !row.id.includes("[1m]") && !row.id.endsWith("--fast")).map(row => row.display_name))
+      .toEqual(["gpt-5.5 (native)", "featured (p)", "b (p)", "a (p)"]);
+    expect(after.toSorted((a, b) => a.id.localeCompare(b.id))).toEqual(before.toSorted((a, b) => a.id.localeCompare(b.id)));
+    const b = after.findIndex(row => row.display_name === "b (p)");
+    expect(after.slice(b, b + 3).map(row => row.display_name)).toEqual(["b (p)", "b (p) · 1M", "b (p) · Fast"]);
+  });
+  test("a saved sort never changes the first-wins alias collision mapping", () => {
+    const models = [{ provider: "p", id: "a" }, { provider: "p", id: "b" }];
+    const result = buildAnthropicModelInfos([], models, undefined, "desktop3p", () => "collision", undefined, false, undefined,
+      { modelPickerOrder: ["p/b", "p/a"] });
+    expect(result.map(row => [row.id, row.display_name])).toEqual([["collision", "a (p)"]]);
   });
 });

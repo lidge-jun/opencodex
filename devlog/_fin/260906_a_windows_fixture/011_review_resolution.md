@@ -1,0 +1,3 @@
+# Fixture review correction
+
+Independent implementation reviewer found that full flush settlement includes later snapshot I/O, which could hide an incorrect first-tail drain return. Accepted: the ordering test now starts the existing drain-only helper before appending the second publication and observes its settlement independently. Both drain and full-flush promises attach rejection handlers immediately and are joined during cleanup. Existing publication, replay and zero-fallback assertions remain. No production changes. A remote first-tail mutation must fail this direct drain oracle before completion.

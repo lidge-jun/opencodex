@@ -88,6 +88,52 @@ Anthropic。若任一提供方请求头包含代理准入密钥，该密钥会�
 可以设置 `claudeCode.nativePassthrough: false` 来禁用；也可以通过
 `claudeCode.anthropicBaseUrl` 指向其他位置。
 
+## 连接远程 hub 的 Claude Desktop
+
+已连接的机器运行 `ocx claude desktop apply` 或 `ocx claude desktop` 时，会读取 hub 的
+Desktop 快照，将 hub origin 和 hub 发放的完整模型 ID 原样写入本机 Desktop 配置，不再本地
+生成别名。static/hybrid 模式也复制模型列表；discovery-only 模式使用 hub origin，不嵌入列表。
+
+Desktop 配置、模型家族分组及默认值由 hub 管理。在 hub 上修改后，请在客户端重新应用，
+并在 Desktop 中重新选择模型。以前只在客户端生成的别名也需要重新应用、重新选择，不会自动
+迁移。`show`、本地编辑和 import/export 仍只操作本地配置。连接期间不支持
+`ocx claude desktop import <path> --apply`，会在保存前拒绝；不带 `--apply` 的 import 仍是本地操作。
+
+读取使用现有连接的数据访问凭证，不需要管理员令牌，也不上传配置。旧版 hub 不支持快照、
+响应无效或 Desktop 列表为空时，应用会失败，不会改用本地目录或回环地址。
+请更新或配置 hub 后重新应用。
+
+本次别名修改不解决 [#3719](https://github.com/lidge-jun/opencodex/issues/3719) 中独立的 `thinking` / `redacted_thinking` 重放与提示缓存请求。
+只有代理接入凭证不会启用原生 Anthropic 透传，但经过转换的 Anthropic 路由仍可使用提示缓存。
+重放保真和缓存命中率对比仍是独立工作。
+
+### 密钥轮换、恢复与断开连接
+
+密钥轮换和恢复会同步更新本地连接凭证与该连接管理的 Desktop 配置中的密钥，无需为了迁移
+密钥而手动重新 apply。模型 ID、家族分组、默认值及当前配置选择都会保留；轮换不会重新选中
+管理配置，也不会启用已关闭的集成。CLI JSON 的 `rotation: "committed"` 表示新密钥已生效，
+`rotation: "rolled_back"` 表示保留或恢复了旧密钥，不代表新密钥已提交或旧密钥已撤销。
+结果不确定或恢复未完成时，不会报告轮换成功。
+
+首次连接应用会保存原先的管理设置和选择，用于恢复；后续 apply 和轮换不会覆盖这份初始记录。
+`ocx disconnect` 恢复连接管理的设置，同时保留用户新增字段和其他配置。只有管理配置仍被选中
+时才恢复之前的选择；用户后来选择的其他有效配置保持不变。新建配置若已包含用户新增内容，
+会保留为可读取的标准模式，而不是删除这些内容。`--keep-catalog` 保留的是目录，不是 Desktop
+连接密钥。
+
+没有原始记录的旧管理配置，只要能明确确认属于当前 hub 和已识别的连接密钥，就能迁移。
+apply、轮换/恢复或直接 disconnect 均可处理，无需新参数或事先重新 apply。系统会警告：
+之前的设置未记录，断开连接时将使用标准模式。只移除连接拥有的网关设置，保留用户字段和
+另行选择的有效配置；结果标为标准回退，而非恢复原始设置。
+
+管理字段冲突、无法识别的凭证或损坏的恢复记录会保留并报告，不会覆盖。中断的清理仅针对
+同一连接继续，不会删除新连接，也不会在恢复未完成时声称完成。断开前先完成待处理的密钥
+轮换恢复；重试断开时保持原来的目录保留选项。
+
+应用、轮换/恢复或恢复设置后，请完全退出并重新打开 Claude Desktop。修改磁盘文件不会替换
+运行中应用持有的密钥，也不会自动退出或重启应用。断开在本地完成，不会自动撤销 hub 密钥或
+删除外部副本；如有需要，请另行在 hub 撤销。
+
 ## /model 选择器（“From gateway”）
 每个条目带有诚实的显示名（如 `gemini-3-pro (gemini)`），并以官方 ModelInfo 形态附带模型能力
 信息（推理强度梯度、thinking 类型），使 Claude Desktop 的第三方网关模式能够启用推理强度选择
@@ -111,9 +157,15 @@ opencodex 会将已路由模型公开为稳定且可逆的别名：
 user-agent 会获得易读的 CLI 形式，其他客户端会获得 Desktop 哈希形式。两种别名族都会永久
 保持可解码——以任一形式保存在 `settings.json` 中的模型都能继续工作。
 
-如果 Claude Desktop 底部的选择器没有切换已运行 3P 对话的模型，请在该对话中使用
-`/model <id>`。OpenCodex 无法读取选择器状态，只会路由每个请求实际携带的模型 ID；可在
-**Logs → requestedModel** 中确认结果。
+如果 Claude Desktop 底部的选择器没有切换正在进行的 3P 对话的模型，可以尝试
+`/model <id>`，但在受影响的 Desktop 版本中，这种变通方法也可能失败。
+[Issue #3782](https://github.com/lidge-jun/opencodex/issues/3782) 报告称，在 Windows 上使用
+Claude Desktop 1.46388.4 时，无论通过底部选择器还是 `/model` 更改模型，对话都会继续使用
+最初的模型。该报告并未确定是哪个客户端组件或路由组件导致了这一行为。
+
+也可以尝试在 OpenCodex 的 Claude Desktop 配置档案中选择所需的默认模型，重新应用配置档案，
+然后开始新对话。这是一项排查步骤，不保证能解决问题。OpenCodex 无法读取选择器状态，
+而是根据每个请求携带的模型 ID 进行路由。请在 **Logs → requestedModel** 中确认客户端实际发送的内容。
 
 **别名语法规则：**provider 不得包含 `/` 或 `--`，也不得等于 `native`。
 不含 `/` 或 `~` 的普通 model ID 继续使用 v1 前缀 `claude-ocx-…`。包含 `/` 或 `~` 的 model ID
@@ -125,6 +177,14 @@ v1 别名按字面解码（历史上 model ID 中包含的两字符序列 `~s` /
 
 **模型解析顺序：**移除 `[1m]` 标记 → 解码易读别名 → 解码 Desktop 哈希别名 →
 `modelMap` 精确匹配 → 移除日期后的匹配（移除 `-20250514`）→ 透传。
+
+<a id="desktop-alias-resolution"></a>
+
+无法解析的日期型 Desktop ID 也可能是发现结果中缺失的真实原生模型 ID。现有信息不足以
+解析该 ID 时，Messages 和 count-tokens 返回 HTTP 503 及固定错误 `desktop_model_mapping_unavailable`；这并不证明
+模型无效。未知的旧版哈希别名仍返回 HTTP 400。两种情况都不会去除日期或回退到其他路由。
+已知 ID、已注册映射、精确 `modelMap` 匹配及已识别的真实原生 ID 保持原有处理方式。
+请刷新模型发现或重新应用已连接 hub 的配置后再试；仅重试本身不能保证解决。
 
 每个条目都带有类似 `gemini-3-pro (gemini)` 的显示名称，以及官方 `ModelInfo` 结构中的完整
 模型能力（推理强度阶梯、思考类型）。真正的 Anthropic 模型在两个界面上都保留其规范 ID。
@@ -217,6 +277,8 @@ opencodex 会在**已路由**请求中将该技能内容替换为一个短占位
 
 查找顺序：发现别名 → 精确 ID → 移除日期后缀的 ID（`-20250514`）→ 透传。
 
+拒绝规则见 [Desktop 别名解析](#desktop-alias-resolution)。
+
 ## Sidecar 矩阵：Web Search 与图像理解
 
 不同路由模型拥有的托管工具和图像能力并不相同。opencodex 会在主模型回答前补齐这些能力：
@@ -288,11 +350,13 @@ Claude Code 的 `/effort` 设置会完整保留并传递给适配器：
 | Assistant 文本 | `output_text` |
 | Assistant `tool_use` | `function_call`（`input` → JSON 字符串化的 `arguments`） |
 | 用户 `tool_result` | `function_call_output`（`is_error` → `[tool error]` 前缀） |
-| 重放 `thinking` / `redacted_thinking` | 丢弃 |
+| 重放 `thinking` / `redacted_thinking` | `reasoning` 项；签名和脱敏载荷保存在有界 `ocxr1` 信封中 |
 | Function 工具 | `{type: "function"}`（`web_search*` → `{type: "web_search"}`） |
 | `tool_choice` | `auto`→`auto`，`none`→`none`，`any`→`required`，指定函数→`{type:"function",name}`，托管 WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |
+
+在预期的 Anthropic 适配器上，保留未隐藏的签名块（包括空 thinking）和不透明的 redacted 块。`hideThinkingSummary` 策略不变：不会向 Claude 客户端公开本地隐藏的签名文本，尚未证明经过此隐藏边界的无损重放。旧版组合信封在流式文本发出后无法恢复原始块顺序。`claudeCode.compatibility: "enforce"` 仍拒绝 thinking 重放。这不证明真实 Anthropic 接受请求或缓存命中改善；[#3719](https://github.com/lidge-jun/opencodex/issues/3719) 仍未关闭。
 
 **错误情况（400）：**JSON 格式错误；缺少/空的 `model`；缺少/空的 `messages`；不支持的
 role；`tool_result` 缺少 `tool_use_id`；`tool_use` 缺少 id/name；指定名称的 `tool_choice`
@@ -305,7 +369,8 @@ role；`tool_result` 缺少 `tool_use_id`；`tool_use` 缺少 id/name；指定�
 | `response.created` | `message_start` + `ping` |
 | 心跳 | `ping` |
 | 文本增量 | `content_block_start` → `content_block_delta`（文本）→ `content_block_stop` |
-| 推理摘要/文本 | 带合成签名的 `thinking` 块 |
+| 推理摘要/文本 | 带重放签名或有界 `ocxr1` 回退信封的 `thinking` 块 |
+| 脱敏推理 | 从推理信封重放的 `redacted_thinking` 块 |
 | Function-call 帧 | 带 `input_json_delta` 的 `tool_use` 块 |
 | 终止事件 | `message_delta` → `message_stop` |
 | 在终止事件前 EOF | 502 风格的 `api_error` |

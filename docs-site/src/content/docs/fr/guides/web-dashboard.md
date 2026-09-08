@@ -57,6 +57,14 @@ gestionnaire de mots de passe.
 | **Stockage** | Consultez en lecture seule la répartition du disque de CODEX_HOME — sessions, archives, bases de données et pièces jointes. Pour le nettoyage facultatif des archives, prévisualisez les N % les plus anciennes, puis placez-les en quarantaine dans `CODEX_HOME/.trash` (par défaut) ou supprimez-les définitivement après avoir coché une case explicite. **La stratégie de nettoyage automatique** est facultative et **désactivée par défaut** (`storageCleanupPolicy.enabled`) ; configurez son seuil, sa cible, sa planification et son mode sur la page **Stockage**, ou lancez **Exécuter maintenant**. Les entrées mises en quarantaine peuvent être restaurées depuis cette page (JSONL et fils). Les sessions actives restent en lecture seule. Le nettoyage et la restauration sont refusés tant que Codex verrouille le fichier `state_*.sqlite` le plus récent ou actif. |
 | **Arrêter** | Arrêtez proprement le proxy et le service d'arrière-plan installé, restaurez Codex natif et quittez (`POST /api/stop`). Sur Windows avec le backend Planificateur de tâches, le tableau de bord refuse et vous demande d'exécuter `ocx stop` : le wrapper peut relancer le proxy après la fin de la tâche, et seul un stop exécuté hors du proxy peut vérifier cette fenêtre de redémarrage avant de restaurer votre configuration client. Rien n'est modifié en cas de refus. |
 
+### Filtrer les requêtes
+
+Les filtres combinent interface, requêtes interceptées, fournisseur, modèle exact, statut, période, vitesse et identifiant de conversation dans le journal chargé. Les choix incluent les tentatives de repli ; les modèles ignorent la casse et les espaces externes, sans correspondance partielle. Un choix disparu revient à Tous.
+
+Les périodes de 15 minutes, une heure et un jour évoluent toutes les 30 secondes dans l’onglet Logs, même sans actualisation automatique. La vitesse mesure les jetons de sortie par seconde sur toute la durée : moins de 15, de 15 à moins de 50, ou au moins 50 ; les valeurs indisponibles sont exclues quand ce filtre est actif. Réussite : 2xx ; erreur : 4xx/5xx.
+
+Le compteur compare les résultats au total chargé ; la réinitialisation restaure toutes les lignes. Aucun résultat diffère d’un journal vide. Flèches et Home/End pilotent le sélecteur d’interface. Aucun historique au-delà du journal chargé n’est interrogé.
+
 ### Liens directs vers une section
 
 Il n'existe qu'une seule mise en page, donc aucun commutateur de disposition n'est à configurer. Les sections
@@ -75,6 +83,27 @@ Les commutateurs de la page **Modèles** reflètent la visibilité Codex finale 
 uniquement si la liste d'autorisation de son fournisseur l'inclut — ou si aucune liste n'est définie — et
 s'il n'est pas désactivé. Activer un modèle réconcilie atomiquement les deux filtres ; **Tout activer** efface
 la liste d'autorisation du fournisseur afin que les modèles découverts ultérieurement soient eux aussi actifs.
+
+### Gérer les modèles dans l’espace fournisseur
+
+Dans l’onglet **Modèles** d’un fournisseur, **Supprimer** retire la définition personnalisée
+stockée. Le modèle natif ou découvert sous-jacent peut alors réapparaître ; le nombre de modèles
+peut donc rester identique. **Masquer** change uniquement la visibilité dans le catalogue, sans
+supprimer la définition ni modifier la politique de routage direct. **Gérer la visibilité dans
+Modèles** ouvre la page **Modèles** pour rétablir la visibilité, même si l’onglet du fournisseur
+ne contient plus aucune ligne.
+
+**Ajouter** enregistre une définition personnalisée sans effacer un masquage existant ni les
+règles de sélection du fournisseur. Un modèle enregistré peut donc rester masqué. Si le modèle
+est déjà connu, gérez sa visibilité dans **Modèles**. Un enregistrement confirmé reste valable
+même si l’actualisation du catalogue échoue : suivez le message d’actualisation au lieu d’ajouter
+le modèle à nouveau. Si la modification n’est pas confirmée, actualisez l’état des modèles avant
+de réessayer.
+
+Le compteur du fournisseur indique le nombre d’entrées uniques non désactivées dans l’inventaire
+courant renvoyé par le serveur, avant recherche ou limitation de l’affichage. Il ne mesure ni la
+liste d’autorisation ni les résultats de découverte en direct et ne prouve pas l’origine d’une
+entrée. Les badges de sélection et les informations de découverte restent distincts.
 
 ## Sélecteur de délégation et routage des créations de sous-agents
 
@@ -176,7 +205,7 @@ L'interface graphique est un client léger de l'API JSON de gestion du proxy. Pa
 | `PUT /api/codex-auth/active` · `PUT /api/codex-auth/auto-switch` · `PUT /api/codex-auth/failover` | Sélectionner le compte de la prochaine requête et configurer le routage du pool. |
 | `GET /api/codex-auth/active` · `PUT /api/codex-auth/accounts/priority` | Lire le compte effectif — notamment `pinned` et le compte désigné par `pinnedAccountId` — et définir l'ordre de sélection d'un compte. |
 | `POST /api/codex-auth/login` · `GET /api/codex-auth/login-status` | Ajouter un compte au groupe au moyen d’une connexion dans le navigateur. |
-| `GET /api/logs?tail=50&limit=20&offset=0&provider=...&status=5xx` | Lire les métadonnées des requêtes récentes avec des filtres facultatifs de fin de journal, de fournisseur et d'état exact ou par classe. Avec `limit`/`offset`, la pagination remonte depuis la ligne la plus récente (`offset=0` renvoie la dernière page). Forme de la réponse : `{ timeZone, total, logs }`, où `total` est le nombre de lignes filtrées avant pagination. |
+| `GET /api/logs?tail=50&limit=20&offset=0&provider=...&status=5xx` | Lire les métadonnées des requêtes récentes avec des filtres facultatifs de fin de journal, de fournisseur et d'état exact ou par classe. Avec `limit`/`offset`, la pagination remonte depuis la ligne la plus récente (`offset=0` renvoie la dernière page). Forme de la réponse : `{ timeZone, generatedAt, total, logs }`, où `total` est le nombre de lignes filtrées avant pagination. |
 | `GET` / `PUT /api/subagent-models` | Lire ou définir les cinq modèles de remplacement `spawn_agent` mis en avant. |
 | `POST /api/stop` | Arrêter le proxy et le service, restaurer Codex natif et quitter. Refusé avec `respawnable_service` sur le backend Planificateur de tâches Windows, et avec `service_state_unknown` lorsque cet état ne peut pas être lu ; rien n'est modifié dans les deux cas. |
 

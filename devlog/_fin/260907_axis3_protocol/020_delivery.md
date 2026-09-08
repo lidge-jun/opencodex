@@ -1,0 +1,15 @@
+# Publish and deliver verified manual chain
+
+Prerequisite: wp1 accepted-source review and successful final-head remote validation, or source-grounded defer outcome. Publish ordinary PRs targeting dev then the parent branch, using every repository template section. Bodies name source PRs, own layer-only diff, exact final combined CI evidence and explicit lower-layer CI deferral per owner instruction. Do not attest local CI. Preserve original contributor trailers in commits; admin merge with merge commits preserves their identity.
+
+Read live native-stack membership and head/base identity before merge. Never register a native stack. Parent merges to dev first; retain its branch, retarget child to dev, verify current head and ancestry. If integration tree changes materially, refresh final combined CI before landing. Use --admin and --match-head-commit exact guard. Do not merge into the parent branch by mistake. Refresh origin/dev and prove each merge SHA ancestor. Close superseded source PRs only after equivalent fix is actually landed, with credit and replacement link. Keep #3807 and #3719 open if real reproduction/cache acceptance remains unmet. No release or deployment.
+
+Record final PR URLs, source-to-delivery mapping, commit authors/trailers, CI run and exact SHA, review verdicts, remaining limitations and preserved dirty-work evidence. No fabricated status checks. Completion: every candidate has an honest disposition, accepted work is landed, unresolved diagnostics explicitly deferred under user direction.
+
+## Delivery revalidation
+
+Previous D: all 24 real GitHub runtime producer jobs succeeded at final9b5b670db; same-head remote Bun1.4 full suite20897pass18skip0fail, focused405pass, docs build pass. Aggregate ci is still queued; do not claim the workflow complete or manufacture a status. Its only operation is combining those passed producer results. Maintainer explicitly authorized admin merge, and live dev rules expose no required_status_checks rule. Delivery may use the actual completed producer evidence with aggregation status explicitly disclosed; never waive an unrun or failed runtime producer.
+
+Carry late source docs #3815 through221353662: eight outbound redacted-reasoning table rows in the same eight locales. Prepared docs-only68d90aa37 has runtime/test trees identical to9b and remote docs build passed. After three runtime PRs land bottom-up, bring this docs-only tail and a final delivery record into a fourth ordinary PR. MOVE the completed owning unit from devlog/_plan/260907_axis3_protocol to devlog/_fin/260907_axis3_protocol and NEW021_delivery.md with actual merge/CI/source-credit evidence and deferred issues. No new runtime tests: exact code-tree equality plus docs build/hygiene are the applicable checks.
+
+Refresh dev and membership before each guarded admin merge; compare merged runtime tree with tested9b. Any unrelated concurrent dev change requires integration review and appropriate renewed evidence. Original #3815 and #3816 close only after their full carried changes (including docs tail) are landed. #3807 and #3719 remain open for the already recorded limits.

@@ -1,0 +1,5 @@
+# Final macOS verification repairs
+
+C4 spec-satisfaction repair of Unix probe cleanup classification. Consume the already reviewed replay-fixture commit7ff811ced to keep caller identity stable in the shared verification baseline. Main owns this new foundation PR below the two remaining A layers. No local suite/typecheck/build; all execution uses isolated remote Bun1.4.0 and CI. Existing GitHub/SSH identities and own branches only; no account/service/release changes. The only live processes exercised are temporary launchers created by the regression fixture. No additional termination signals or widened permissions are authorized. A2h checkpoint reassesses progress; no token/cost cap was specified. Detailed OS traces stay in ignored scratch.
+
+Goal: initial EPERM during an already-owned probe-group teardown does not prevent bounded observation of that group's disappearance. Success still requires an observed ESRCH. Persistent permission uncertainty or live groups continue to refuse installation and restore the launcher. Keep the existing one-second cleanup bound, one SIGKILL attempt, diagnostic sanitation and rollback guarantees.

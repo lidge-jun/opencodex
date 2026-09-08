@@ -37,6 +37,24 @@ describe("models runtime subcommand dispatch (#3094)", () => {
     expect(isModelsRuntimeSubcommand("new-arrivals")).toBe(true);
   });
 
+  test("price and set-price are routed through the runtime dispatcher", async () => {
+    expect(isModelsRuntimeSubcommand("price")).toBe(true);
+    expect(isModelsRuntimeSubcommand("set-price")).toBe(true);
+    const methods: string[] = [];
+    const deps = {
+      baseUrl: "http://127.0.0.1:1",
+      fetchImpl: async (_url: string | URL | Request, init?: RequestInit) => {
+        methods.push(init?.method ?? "GET");
+        return Response.json(init?.method === "PUT"
+          ? { provider: "dispatch-test", modelId: "model", cost: null, ok: true }
+          : { provider: "dispatch-test", modelCosts: {} });
+      },
+    };
+    expect(await handleModelsRuntimeCommand("price", ["dispatch-test/model"], deps)).toBe(0);
+    expect(await handleModelsRuntimeCommand("set-price", ["dispatch-test/model", "--auto"], deps)).toBe(0);
+    expect(methods).toEqual(["GET", "PUT"]);
+  });
+
   test("handleModels routes exactly the shared set to the runtime module", () => {
     // Reading the source keeps this honest without booting the CLI: the dispatch must
     // consult the shared predicate rather than re-listing names inline.
@@ -54,4 +72,3 @@ describe("models runtime subcommand dispatch (#3094)", () => {
     expect(new Set(MODELS_RUNTIME_SUBCOMMANDS).size).toBe(MODELS_RUNTIME_SUBCOMMANDS.length);
   });
 });
-

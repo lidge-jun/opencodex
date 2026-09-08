@@ -111,13 +111,20 @@ Inspect proxy requests, usage, storage, memory, and debug data. The direct alias
 | Alias | Equivalent resource |
 | --- | --- |
 | `ocx logs [filters] [--follow] [--json|--jsonl]` | `ocx observe logs` |
-| `ocx usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--json]` | `ocx observe usage` |
+| `ocx usage [--range <today|1d|7d|30d|all>] [--since <timestamp> --until <timestamp>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--json]` | `ocx observe usage` |
 | `ocx storage [--json]` | `ocx observe storage` |
 | `ocx memory [--json]` | `ocx observe memory` |
 
 ```bash
 ocx observe usage --range 30d --json
+ocx usage --since 2026-09-01T09:00:00Z --until 2026-09-01T10:59:59.999Z --json
 ```
+
+`--since` and `--until` must be supplied together. They accept integer epoch milliseconds or
+full ISO datetimes with an explicit timezone, include both endpoints, and override `--range`.
+Invalid or reversed bounds fail before the request. Human output prints the requested interval;
+`--json` includes `customWindow`, `since`, and `until`. Existing surface/provider/model filters
+still apply. These commands query the running proxy; they do not provide offline reports.
 
 `--range today` (alias `1d`) reports the current local day. `--provider` and
 `--model` narrow the report to one upstream target — distinct from
@@ -207,7 +214,7 @@ Manage and apply the Grok Build model fence.
 
 ## Client config export
 
-### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside>`
+### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast>`
 
 Print a client config wired to the running proxy. The command serializes the
 `opencodex` provider block — base URL, model list, and the client's credential
@@ -218,7 +225,7 @@ models Codex can currently see.
 
 | Flag | Action |
 | --- | --- |
-| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh\|mcode\|zcode\|prime\|aside>` | Required. Selects the client config dialect. |
+| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh\|mcode\|zcode\|prime\|aside\|raycast>` | Required. Selects the client config dialect. |
 | `--json` | Print the generated document as JSON on stdout for scripts. This is JSON even when the selected client's native format is YAML, TOML, or JSON5. |
 | `--out <path>` | Write the client's native config format to `<path>`. Refuses to replace an existing file. |
 | `--force` | Allow `--out` to replace an existing file. |
@@ -248,6 +255,7 @@ client applies its own defaults for those).
 | `zcode` | `~/.zcode/v2/config.json` (`ZCODE_DATA_DIR` wins when set; a relative value is refused) | `config.json` | none — loopback placeholder |
 | `prime` | `~/.prime/agent/models.json` (`PRIME_AGENT_CODING_AGENT_DIR` wins when set; a relative value is refused) | `prime-models.json` | none — loopback placeholder |
 | `aside` | `~/.aside/u/<account>/models.json` for the account Aside's own `accounts.json` names as current; an unreadable manifest is refused rather than defaulting to an account | `aside-models.json` | none — loopback placeholder |
+| `raycast` | `~/.config/raycast/ai/providers.yaml` on macOS and Windows alike (Raycast does not honor `XDG_CONFIG_HOME`) | `raycast-providers.yaml` | none — loopback only, no `api_keys` entry is written |
 
 The managed DSH export requires DSH 0.1.0-rc.6 or newer and owns only
 `llm-pi-ai.providers.opencodex`. DSH hot reloads that provider; the user's default model and
@@ -259,6 +267,15 @@ This is load-bearing because both clients resolve `apiKey` while building their 
 hide the whole provider when an existing config contains an unset env reference. The proxy never
 checks the generated placeholder on loopback. OMP supports provider-level headers, but this initial
 integration deliberately remains loopback-only; remote `x-opencodex-api-key` wiring is deferred.
+
+The Raycast export is a standalone `providers.yaml` document with one `id: opencodex` element
+in the `providers` sequence: `name: OpenCodex`, the proxy's `/v1` base URL, and every routed model
+with its `abilities` (`tools` and `system_message` always supported, `vision` from the catalog's
+input modalities, `reasoning_effort` when the model has an effort ladder, `temperature` off for
+reasoning models). Custom Providers is a Raycast Pro feature, and Raycast watches the file, so a
+saved change takes effect without a restart. The format is documented at
+[manual.raycast.com/ai/custom-providers](https://manual.raycast.com/ai/custom-providers). No
+`api_keys` entry is written, so this export is loopback-only and a non-loopback bind is refused.
 
 The MCode, ZCode and Prime exports are loopback-only for the same reason and likewise carry the
 `opencodex-loopback` placeholder rather than a real credential. Prime Agent reads the same

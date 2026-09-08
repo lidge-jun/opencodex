@@ -6,7 +6,17 @@ import {
   unlinkSync,
 } from "node:fs";
 import { hostname } from "node:os";
-import { atomicWriteFile, loadConfig } from "../config";
+import { atomicWriteFile, loadConfig, withConfigMutationLockSync } from "../config";
+import { claudeDesktopIntegrationEnabledNow } from "../codex/desired-state";
+import {
+  inspectRemoteDesktopStore, readDesktopDisconnectReceipt, writeDesktopDisconnectReceipt,
+  replaceRemoteDesktopCredential, restoreRemoteDesktopStore, finishRemoteDesktopCleanup,
+  type DesktopDisconnectReceipt, type DesktopRemoteOwner, type DesktopStoreResult,
+} from "../claude/desktop-remote-store";
+import {
+  withClientLifecycle, withClientLifecycleSync,
+  type ClientLifecycleHeld, type ClientLifecycleLockDeps,
+} from "./lifecycle-lock";
 import { invalidateCodexModelsCache } from "../codex/catalog/sync";
 import {
   injectCodexConfig,
@@ -55,6 +65,7 @@ import {
   clearClientConnection,
   commitClientConnection,
   readClientConnectionState,
+  assertNoClientDisconnectPending, assertClientConnectionUnchanged, sameClientConnectionOwner,
 } from "./state";
 
 class RotationRecoveryRequiredError extends Error {
@@ -77,6 +88,7 @@ export interface ConnectOptions {
 export interface ClientConnectDeps {
   fetchImpl?: typeof fetch;
   now?: () => Date;
+  lifecycleLockDeps?: ClientLifecycleLockDeps;
 }
 
 export interface RotateClientOptions {
@@ -178,168 +190,278 @@ async function rotationAuthority(
   return { kind: "gui-session", value: session };
 }
 
-function clearRotationState(
+export type ClientRotationResult = OcxClientConnectionConfig & {
+  rotationOutcome: "committed" | "rolled_back";
+};
+
+function desktopOwner(connection: OcxClientConnectionConfig): DesktopRemoteOwner {
+  return { serverUrl: connection.serverUrl, apiKeyId: connection.apiKeyId, connectedAt: connection.connectedAt };
+}
+
+function requireDesktopResult(result: DesktopStoreResult): Extract<DesktopStoreResult, { ok: true }> {
+  if (!result.ok) throw new Error(`desktop_lifecycle_${result.reason}`);
+  return result;
+}
+
+function assertRotationCandidates(
   connection: OcxClientConnectionConfig,
-  tokenFingerprint: string,
-): OcxClientConnectionConfig {
-  const next = { ...connection, tokenFingerprint };
-  delete next.pendingOperation;
-  commitClientConnection(next);
-  return next;
+  currentFingerprint: string,
+  backupFingerprint: string,
+): void {
+  assertClientConnectionUnchanged(connection);
+  const current = readServiceApiTokenState();
+  const backup = readTokenBackupState();
+  if (current.kind !== "present" || backup.kind !== "present"
+    || current.fingerprint !== currentFingerprint || backup.fingerprint !== backupFingerprint) {
+    throw new RotationRecoveryRequiredError("rotation token generations changed; preserve recovery files");
+  }
+}
+
+function alignDesktopCredential(
+  held: ClientLifecycleHeld,
+  connection: OcxClientConnectionConfig,
+  previousFingerprint: string,
+  token: { token: string; fingerprint: string },
+): void {
+  withConfigMutationLockSync(() => {
+    assertClientConnectionUnchanged(connection);
+    const current = readServiceApiTokenState();
+    if (current.kind !== "present" || current.fingerprint !== token.fingerprint) {
+      throw new Error("client_token_changed");
+    }
+    if (inspectRemoteDesktopStore(desktopOwner(connection)).kind === "absent") return;
+    let result: DesktopStoreResult;
+    if (!claudeDesktopIntegrationEnabledNow()) {
+      result = restoreRemoteDesktopStore(held, {
+        owner: desktopOwner(connection), knownTokenFingerprints: [connection.tokenFingerprint, current.fingerprint],
+      });
+    } else {
+      result = replaceRemoteDesktopCredential(held, {
+        owner: desktopOwner(connection), expectedTokenFingerprint: previousFingerprint, replacementKey: current.token,
+      });
+      if (!result.ok && !result.changed && result.reason === "conflict" && previousFingerprint !== current.fingerprint) {
+        // Recovery may find Desktop already on the chosen generation while only
+        // service-api-token needed rollback. Retry that exact, freshly proven
+        // current generation; never retry a partial write or an unsafe artifact.
+        result = replaceRemoteDesktopCredential(held, {
+          owner: desktopOwner(connection), expectedTokenFingerprint: current.fingerprint, replacementKey: current.token,
+        });
+      }
+    }
+    requireDesktopResult(result);
+  });
+}
+
+function finalizeRotation(
+  held: ClientLifecycleHeld,
+  connection: OcxClientConnectionConfig,
+  previousFingerprint: string,
+  token: { token: string; fingerprint: string },
+  rotationOutcome: ClientRotationResult["rotationOutcome"],
+): ClientRotationResult {
+  try {
+    alignDesktopCredential(held, connection, previousFingerprint, token);
+    return withConfigMutationLockSync(() => {
+      assertClientConnectionUnchanged(connection);
+      const current = readServiceApiTokenState();
+      if (current.kind !== "present" || current.fingerprint !== token.fingerprint) throw new Error("client_token_changed");
+      const next = { ...connection, tokenFingerprint: token.fingerprint };
+      delete next.pendingOperation;
+      commitClientConnection(next);
+      removeOrphanTokenBackup();
+      // Outcome is an API result only, never a persisted client configuration field.
+      return { ...next, rotationOutcome };
+    });
+  } catch {
+    throw new RotationRecoveryRequiredError("rotation local finalization is incomplete; preserve recovery files");
+  }
 }
 
 async function recoverRotationWithAuthority(
+  held: ClientLifecycleHeld,
   connection: OcxClientConnectionConfig,
   authority: { kind: "admin"; value: Uint8Array } | { kind: "gui-session"; value: ConnectGuiSession },
   deps: ClientConnectDeps,
-): Promise<OcxClientConnectionConfig> {
-  const pending = connection.pendingOperation;
-  if (!pending || pending.oldKeyBackupPath !== serviceApiTokenBackupPath()) {
-    throw new RotationRecoveryRequiredError("rotation recovery state is missing or invalid");
-  }
-  const current = readServiceApiTokenState();
-  const backup = readTokenBackupState();
-  if (current.kind !== "present" || backup.kind !== "present") {
-    throw new RotationRecoveryRequiredError(
-      "rotation recovery requires owner-only current and .prev token files; preserve both and rerun ocx connect rotate with transient authority",
-    );
-  }
-  let currentAccepted: boolean;
-  let backupAccepted: boolean;
+): Promise<ClientRotationResult> {
   try {
-    [currentAccepted, backupAccepted] = await Promise.all([
+    const pending = connection.pendingOperation;
+    if (!pending || pending.oldKeyBackupPath !== serviceApiTokenBackupPath()) throw new Error("invalid rotation marker");
+    const current = readServiceApiTokenState();
+    const backup = readTokenBackupState();
+    if (current.kind !== "present" || backup.kind !== "present" || backup.fingerprint !== connection.tokenFingerprint) {
+      throw new Error("rotation recovery generations are unavailable");
+    }
+    const assertFresh = () => withConfigMutationLockSync(() => assertRotationCandidates(connection, current.fingerprint, backup.fingerprint));
+    assertFresh();
+    if (current.fingerprint === backup.fingerprint) {
+      // A crash after the marker but before replacement leaves two copies of OLD.
+      // Their equal successful probes must never commit an uninstalled new hub key.
+      if (!await probeClientKeyId(connection.serverUrl, backup.token, connection.apiKeyId, { fetchImpl: deps.fetchImpl })) {
+        throw new Error("old generation not admitted");
+      }
+      assertFresh();
+      await abortClientKeyRotation(connection.managementUrl, authority, connection.apiKeyId, pending.rotationId, { fetchImpl: deps.fetchImpl });
+      if (!await probeClientKeyId(connection.serverUrl, backup.token, connection.apiKeyId, { fetchImpl: deps.fetchImpl })) {
+        throw new Error("old generation not admitted after abort");
+      }
+      assertFresh();
+      return finalizeRotation(held, connection, backup.fingerprint, backup, "rolled_back");
+    }
+    const [currentAccepted, backupAccepted] = await Promise.all([
       probeClientKeyId(connection.serverUrl, current.token, connection.apiKeyId, { fetchImpl: deps.fetchImpl }),
       probeClientKeyId(connection.serverUrl, backup.token, connection.apiKeyId, { fetchImpl: deps.fetchImpl }),
     ]);
+    assertFresh();
+    if (currentAccepted && backupAccepted) {
+      alignDesktopCredential(held, connection, backup.fingerprint, current);
+      await commitClientKeyRotation(connection.managementUrl, authority, connection.apiKeyId, pending.rotationId, { fetchImpl: deps.fetchImpl });
+      assertFresh();
+      return finalizeRotation(held, connection, backup.fingerprint, current, "committed");
+    }
+    if (currentAccepted && !backupAccepted) {
+      return finalizeRotation(held, connection, backup.fingerprint, current, "committed");
+    }
+    if (!currentAccepted && backupAccepted) {
+      // Remote abort is confirmed before either local credential is rolled back.
+      await abortClientKeyRotation(connection.managementUrl, authority, connection.apiKeyId, pending.rotationId, { fetchImpl: deps.fetchImpl });
+      assertFresh();
+      const restored = withConfigMutationLockSync(() => restoreTokenBackup(pending.oldKeyBackupPath));
+      return finalizeRotation(held, connection, current.fingerprint, { token: backup.token, fingerprint: restored.fingerprint }, "rolled_back");
+    }
+    throw new Error("both generations rejected");
   } catch (error) {
-    throw new RotationRecoveryRequiredError(
-      "rotation recovery could not establish both key admissions; preserve service-api-token and .prev",
-      { cause: error },
-    );
+    if (error instanceof RotationRecoveryRequiredError) throw error;
+    throw new RotationRecoveryRequiredError("rotation recovery could not settle admission and Desktop state; preserve current and backup tokens");
   }
-  if (currentAccepted && backupAccepted) {
-    await commitClientKeyRotation(connection.managementUrl, authority, connection.apiKeyId, pending.rotationId, { fetchImpl: deps.fetchImpl });
-    const next = clearRotationState(connection, current.fingerprint);
-    removeOrphanTokenBackup();
-    return next;
-  }
-  if (currentAccepted && !backupAccepted) {
-    const next = clearRotationState(connection, current.fingerprint);
-    removeOrphanTokenBackup();
-    return next;
-  }
-  if (!currentAccepted && backupAccepted) {
-    const restored = restoreTokenBackup(pending.oldKeyBackupPath);
-    await abortClientKeyRotation(connection.managementUrl, authority, connection.apiKeyId, pending.rotationId, { fetchImpl: deps.fetchImpl });
-    const next = clearRotationState(connection, restored.fingerprint);
-    removeOrphanTokenBackup();
-    return next;
-  }
-  throw new RotationRecoveryRequiredError(
-    "both rotation candidates were rejected; preserve service-api-token and .prev and repair admission from the hub",
-  );
 }
 
 export async function recoverPendingClientRotation(
   options: RotateClientOptions,
   deps: ClientConnectDeps = {},
-): Promise<OcxClientConnectionConfig> {
+): Promise<ClientRotationResult> {
   try {
-    const state = readClientConnectionState();
-    if (state.kind !== "connected" || !state.value.pendingOperation) {
-      throw new Error("no pending client key rotation to recover");
-    }
-    const authority = await rotationAuthority(state.value, options, deps);
-    return await recoverRotationWithAuthority(state.value, authority, deps);
-  } finally {
-    releaseCredential(options.credential);
-  }
+    return await withClientLifecycle(async held => {
+      assertNoClientDisconnectPending();
+      const state = readClientConnectionState();
+      if (state.kind !== "connected" || !state.value.pendingOperation) throw new Error("no pending client key rotation to recover");
+      const authority = await rotationAuthority(state.value, options, deps);
+      assertClientConnectionUnchanged(state.value);
+      return recoverRotationWithAuthority(held, state.value, authority, deps);
+    }, deps.lifecycleLockDeps);
+  } finally { releaseCredential(options.credential); }
 }
 
 export async function rotateConnectedClientKey(
   options: RotateClientOptions,
   deps: ClientConnectDeps = {},
-): Promise<OcxClientConnectionConfig> {
+): Promise<ClientRotationResult> {
+  try {
+    return await withClientLifecycle(held => rotateConnectedClientKeyHeld(held, options, deps), deps.lifecycleLockDeps);
+  } finally { releaseCredential(options.credential); }
+}
+
+async function rotateConnectedClientKeyHeld(
+  held: ClientLifecycleHeld,
+  options: RotateClientOptions,
+  deps: ClientConnectDeps,
+): Promise<ClientRotationResult> {
   let connection: OcxClientConnectionConfig | null = null;
   let authority: { kind: "admin"; value: Uint8Array } | { kind: "gui-session"; value: ConnectGuiSession } | null = null;
   let started: { rotationId: string; key: string; createdAt: string } | null = null;
   let markerPersisted = false;
+  let backupCreated = false;
+  let hubCommitted = false;
   try {
+    assertNoClientDisconnectPending();
     const state = readClientConnectionState();
-    if (state.kind !== "connected") throw new Error(`connect rotate is available only while connected (${state.kind})`);
+    if (state.kind !== "connected") throw new Error("connect rotate is available only while connected");
     connection = state.value;
-    authority = await rotationAuthority(connection, options, deps);
-    if (connection.pendingOperation) return await recoverRotationWithAuthority(connection, authority, deps);
     const current = readServiceApiTokenState();
-    if (current.kind !== "present" || current.fingerprint !== connection.tokenFingerprint) {
-      throw new Error(current.kind === "unsafe" ? current.reason : "connected service token ownership changed");
+    if (current.kind !== "present") throw new Error("connected service token unavailable");
+    if (!connection.pendingOperation) {
+      if (current.fingerprint !== connection.tokenFingerprint) throw new Error("connected service token ownership changed");
+      const desktop = inspectRemoteDesktopStore(desktopOwner(connection));
+      if (["conflict", "unsafe", "pending"].includes(desktop.kind)) throw new Error("desktop_lifecycle_recovery_required");
+      // Establish legacy fallback ownership and reject edited projections BEFORE hub issuance.
+      alignDesktopCredential(held, connection, current.fingerprint, current);
+      withConfigMutationLockSync(() => {
+        assertClientConnectionUnchanged(connection!);
+        const orphan = readTokenBackupState();
+        if (orphan.kind === "unsafe") throw new Error("service token backup is unsafe");
+        if (orphan.kind === "present") removeOrphanTokenBackup();
+      });
     }
-    writeTokenBackup(current.fingerprint);
+    authority = await rotationAuthority(connection, options, deps);
+    assertClientConnectionUnchanged(connection);
+    if (connection.pendingOperation) return recoverRotationWithAuthority(held, connection, authority, deps);
+    withConfigMutationLockSync(() => {
+      assertClientConnectionUnchanged(connection!);
+      writeTokenBackup(current.fingerprint);
+    });
+    backupCreated = true;
     const rotation = await startClientKeyRotation(connection.managementUrl, authority, connection.apiKeyId, { fetchImpl: deps.fetchImpl });
     started = { rotationId: rotation.rotationId, key: rotation.key, createdAt: rotation.createdAt };
     const marked: OcxClientConnectionConfig = {
       ...connection,
-      pendingOperation: {
-        kind: "rotate",
-        rotationId: rotation.rotationId,
-        newKeyIssuedAt: rotation.createdAt,
-        oldKeyBackupPath: serviceApiTokenBackupPath(),
-      },
+      pendingOperation: { kind: "rotate", rotationId: rotation.rotationId, newKeyIssuedAt: rotation.createdAt, oldKeyBackupPath: serviceApiTokenBackupPath() },
     };
-    commitClientConnection(marked);
+    withConfigMutationLockSync(() => {
+      assertClientConnectionUnchanged(connection!);
+      commitClientConnection(marked);
+    });
     connection = marked;
     markerPersisted = true;
-    const replacement = replaceServiceApiTokenFile(rotation.key);
+    const replacement = withConfigMutationLockSync(() => {
+      assertRotationCandidates(connection!, current.fingerprint, current.fingerprint);
+      return replaceServiceApiTokenFile(rotation.key);
+    });
+    alignDesktopCredential(held, connection, current.fingerprint, { token: rotation.key, fingerprint: replacement.fingerprint });
     if (!await probeClientKeyId(connection.serverUrl, rotation.key, connection.apiKeyId, { fetchImpl: deps.fetchImpl })) {
       throw new Error("new client key admission probe was refused");
     }
+    withConfigMutationLockSync(() => assertRotationCandidates(connection!, replacement.fingerprint, current.fingerprint));
     try {
       await commitClientKeyRotation(connection.managementUrl, authority, connection.apiKeyId, rotation.rotationId, { fetchImpl: deps.fetchImpl });
     } catch {
-      return await recoverRotationWithAuthority(connection, authority, deps);
+      return await recoverRotationWithAuthority(held, connection, authority, deps);
     }
-    const next = clearRotationState(connection, replacement.fingerprint);
-    removeOrphanTokenBackup();
-    return next;
+    hubCommitted = true;
+    return finalizeRotation(held, connection, current.fingerprint, { token: rotation.key, fingerprint: replacement.fingerprint }, "committed");
   } catch (error) {
-    if (error instanceof RotationRecoveryRequiredError) throw error;
+    if (error instanceof RotationRecoveryRequiredError || hubCommitted) {
+      throw error instanceof RotationRecoveryRequiredError ? error : new RotationRecoveryRequiredError("committed rotation requires local recovery");
+    }
     if (connection && authority && started) {
-      if (markerPersisted && connection.pendingOperation) {
-        try {
-          // Abort FIRST, restore second.
-          //
-          // The old order restored the local token and then asked the hub to abort. If that
-          // abort failed transiently the process was left holding the old key locally while
-          // the hub still had a pending rotation for the new one — two sides disagreeing
-          // about which generation is current, with the failure surfaced only as "rollback
-          // was incomplete". Confirming the hub's state first means the local file is only
-          // rewound once the authority that decides it has agreed.
-          await abortClientKeyRotation(connection.managementUrl, authority, connection.apiKeyId, started.rotationId, { fetchImpl: deps.fetchImpl });
-          const restored = restoreTokenBackup(connection.pendingOperation.oldKeyBackupPath);
-          clearRotationState(connection, restored.fingerprint);
-          removeOrphanTokenBackup();
-        } catch (recoveryError) {
-          // Both candidates and the pending marker stay on disk. Recovery cannot tell which
-          // generation is authoritative without the hub, so it preserves the evidence and
-          // names the command that carries the authority to ask.
-          throw new RotationRecoveryRequiredError(
-            "rotation rollback was incomplete; preserve service-api-token and .prev and rerun ocx connect rotate with transient authority",
-            { cause: recoveryError },
-          );
+      try {
+        await abortClientKeyRotation(connection.managementUrl, authority, connection.apiKeyId, started.rotationId, { fetchImpl: deps.fetchImpl });
+        if (markerPersisted && connection.pendingOperation) {
+          const beforeRestore = readServiceApiTokenState();
+          const backup = readTokenBackupState();
+          if (beforeRestore.kind !== "present" || backup.kind !== "present") throw new Error("rotation rollback token unavailable");
+          withConfigMutationLockSync(() => {
+            assertRotationCandidates(connection!, beforeRestore.fingerprint, backup.fingerprint);
+            restoreTokenBackup(connection!.pendingOperation!.oldKeyBackupPath);
+          });
+          finalizeRotation(held, connection, beforeRestore.fingerprint, backup, "rolled_back");
+        } else {
+          withConfigMutationLockSync(() => {
+            assertClientConnectionUnchanged(connection!);
+            if (backupCreated) removeOrphanTokenBackup();
+          });
         }
-      } else {
-        try { await abortClientKeyRotation(connection.managementUrl, authority, connection.apiKeyId, started.rotationId, { fetchImpl: deps.fetchImpl }); }
-        finally { removeOrphanTokenBackup(); }
+      } catch {
+        throw new RotationRecoveryRequiredError("rotation rollback was incomplete; preserve current and backup tokens");
       }
-    } else {
-      const backup = readTokenBackupState();
-      if (backup.kind === "present") removeOrphanTokenBackup();
+    } else if (backupCreated && connection) {
+      withConfigMutationLockSync(() => {
+        assertClientConnectionUnchanged(connection!);
+        removeOrphanTokenBackup();
+      });
     }
     throw error;
   } finally {
     if (started) started.key = "";
     authority = null;
-    releaseCredential(options.credential);
   }
 }
 
@@ -354,6 +476,16 @@ async function cleanupIssuedKey(
     return null;
   } catch {
     return `Hub cleanup could not revoke client key ${issuedId}; revoke it from Integrations → API Keys.`;
+  }
+}
+
+function assertConnectingState(expectedTokenFingerprint?: string): void {
+  assertNoClientDisconnectPending();
+  if (readClientConnectionState().kind !== "disconnected") throw new Error("client_connection_changed");
+  const token = readServiceApiTokenState();
+  if (expectedTokenFingerprint === undefined ? token.kind !== "absent"
+    : token.kind !== "present" || token.fingerprint !== expectedTokenFingerprint) {
+    throw new Error("client_token_changed");
   }
 }
 
@@ -376,17 +508,11 @@ export async function connectClient(
     if (options.selectedClients.length < 1 || new Set(options.selectedClients).size !== options.selectedClients.length) {
       throw new Error("at least one unique connected client is required");
     }
-    const state = readClientConnectionState();
-    if (state.kind !== "disconnected") {
-      const detail = state.kind === "connected" ? "already connected" : state.reason;
-      throw new Error(`connect refused: client state is ${state.kind} (${detail})`);
-    }
-    const externalProvider = currentExternalCodexModelProvider();
-    if (externalProvider) throw new Error(`connect refused: external Codex provider ${externalProvider} owns config.toml`);
-    const tokenState = readServiceApiTokenState();
-    if (tokenState.kind !== "absent") {
-      throw new Error(tokenState.kind === "unsafe" ? tokenState.reason : "connect refused: service token file already exists");
-    }
+    withClientLifecycleSync(() => withConfigMutationLockSync(() => {
+      assertConnectingState();
+      const externalProvider = currentExternalCodexModelProvider();
+      if (externalProvider) throw new Error("connect refused: an external Codex provider owns config.toml");
+    }), deps.lifecycleLockDeps);
 
     const ready = await fetchHubReady(serverUrl, { fetchImpl: deps.fetchImpl });
     if (ready.status !== "ready") throw new Error(`hub is not ready (${ready.status})`);
@@ -405,16 +531,23 @@ export async function connectClient(
     }
     issued = await issueClientKey(managementUrl, cleanupCredential, clientKeyName(), { fetchImpl: deps.fetchImpl });
 
-    priorCatalog = catalogSnapshot();
-    const persisted = writeServiceApiTokenFile(issued.key);
+    const initialFiles = withClientLifecycleSync(() => withConfigMutationLockSync(() => {
+      assertConnectingState();
+      return { prior: catalogSnapshot(), persisted: writeServiceApiTokenFile(issued!.key) };
+    }), deps.lifecycleLockDeps);
+    priorCatalog = initialFiles.prior;
+    const persisted = initialFiles.persisted;
     tokenFingerprint = persisted.fingerprint;
 
     const catalog = await downloadClientCatalog(serverUrl, issued.key, {
       fetchImpl: deps.fetchImpl,
       timeoutMs: options.catalogTimeoutMs,
     });
-    atomicWriteFile(DEFAULT_CATALOG_PATH, catalog.body);
-    writtenCatalogFingerprint = sha256(catalog.body);
+    writtenCatalogFingerprint = withClientLifecycleSync(() => withConfigMutationLockSync(() => {
+      assertConnectingState(persisted.fingerprint);
+      atomicWriteFile(DEFAULT_CATALOG_PATH, catalog.body);
+      return sha256(catalog.body);
+    }), deps.lifecycleLockDeps);
 
     const config = loadConfig();
     const target = routingTarget(serverUrl);
@@ -424,6 +557,7 @@ export async function connectClient(
       routingTarget: target,
       catalogPath: DEFAULT_CATALOG_PATH,
       journalOwner: { kind: "client", apiKeyId: issued.id },
+      beforeClientWrite: () => assertConnectingState(persisted.fingerprint),
     });
     if (!preflight.success) throw new Error(preflight.message);
 
@@ -432,6 +566,7 @@ export async function connectClient(
         routingTarget: target,
         catalogPath: DEFAULT_CATALOG_PATH,
         journalOwner: { kind: "client", apiKeyId: issued.id },
+        beforeClientWrite: () => assertConnectingState(persisted.fingerprint),
       });
       if (!injected.success || injected.status === "skipped") throw new Error(injected.message);
       injectionCommitted = true;
@@ -456,8 +591,11 @@ export async function connectClient(
       priorCatalog: priorCatalog.kind === "file" ? Buffer.from(priorCatalog.body, "utf8").toString("base64") : "",
       catalogSyncedAt: now,
     };
-    commitClientConnection(connection);
-    committed = true;
+    withClientLifecycleSync(() => withConfigMutationLockSync(() => {
+      assertConnectingState(persisted.fingerprint);
+      commitClientConnection(connection);
+      committed = true;
+    }), deps.lifecycleLockDeps);
     return connection;
   } catch (error) {
     const rollbackFailures: string[] = [];
@@ -465,13 +603,18 @@ export async function connectClient(
       const restored = restoreJournalState();
       if (!restored.complete) rollbackFailures.push("Codex journal restore was partial");
     }
-    if (priorCatalog && writtenCatalogFingerprint && !restoreCatalogSnapshot(priorCatalog, writtenCatalogFingerprint)) {
-      rollbackFailures.push("catalog rollback did not match the written artifact");
-    }
-    if (tokenFingerprint) {
-      const removed = removeServiceApiTokenFileIfOwned(tokenFingerprint);
-      if (removed === "changed") rollbackFailures.push("service token changed during rollback");
-    }
+    try {
+      withClientLifecycleSync(() => withConfigMutationLockSync(() => {
+        assertNoClientDisconnectPending();
+        if (priorCatalog && writtenCatalogFingerprint && !restoreCatalogSnapshot(priorCatalog, writtenCatalogFingerprint)) {
+          rollbackFailures.push("catalog rollback did not match the written artifact");
+        }
+        if (tokenFingerprint) {
+          const removed = removeServiceApiTokenFileIfOwned(tokenFingerprint);
+          if (removed === "changed") rollbackFailures.push("service token changed during rollback");
+        }
+      }), deps.lifecycleLockDeps);
+    } catch { rollbackFailures.push("client cleanup ownership unavailable"); }
     let remoteCleanup: string | null = null;
     if (issued && cleanupCredential && managementUrl) {
       remoteCleanup = await cleanupIssuedKey(managementUrl, cleanupCredential, issued.id, deps);
@@ -498,50 +641,60 @@ export async function syncConnectedClient(
   _options: { restartCodex?: boolean } = {},
   deps: ClientConnectDeps = {},
 ): Promise<{ catalogWritten: boolean; cacheSynced: boolean; injected: boolean; stale: boolean }> {
-  const state = readClientConnectionState();
-  if (state.kind !== "connected") throw new Error(`connected sync refused: client state is ${state.kind}`);
-  const token = readServiceApiTokenState();
-  if (token.kind !== "present" || token.fingerprint !== state.value.tokenFingerprint) {
-    throw new Error(token.kind === "absent" ? "connected service token is missing" : "connected service token ownership changed");
-  }
-
-  let catalogWritten = false;
+  const initial = withClientLifecycleSync(() => withConfigMutationLockSync(() => {
+    assertNoClientDisconnectPending();
+    const state = readClientConnectionState();
+    if (state.kind !== "connected" || state.value.pendingOperation) throw new Error("client_sync_unavailable");
+    const token = readServiceApiTokenState();
+    if (token.kind !== "present" || token.fingerprint !== state.value.tokenFingerprint) throw new Error("client_token_changed");
+    return { connection: state.value, token };
+  }), deps.lifecycleLockDeps);
+  let downloaded: Awaited<ReturnType<typeof downloadClientCatalog>> | undefined;
   let stale = false;
-  let next = state.value;
   try {
-    const downloaded = await downloadClientCatalog(state.value.serverUrl, token.token, {
-      fetchImpl: deps.fetchImpl,
-    });
-    atomicWriteFile(DEFAULT_CATALOG_PATH, downloaded.body);
-    catalogWritten = true;
-    const now = (deps.now ?? (() => new Date()))().toISOString();
-    next = {
-      ...state.value,
-      catalogFingerprint: createHash("sha256").update(downloaded.body).digest("base64url"),
-      catalogSyncedAt: now,
-    };
-    commitClientConnection(next);
+    downloaded = await downloadClientCatalog(initial.connection.serverUrl, initial.token.token, { fetchImpl: deps.fetchImpl });
   } catch (error) {
     const transient = error instanceof HubClientError
       && (error.code === "unreachable" || (error.status !== undefined && error.status >= 500));
     if (!transient) throw error;
-    validLocalCatalog();
     stale = true;
   }
-
+  const next = withClientLifecycleSync(() => withConfigMutationLockSync(() => {
+    assertClientConnectionUnchanged(initial.connection);
+    const token = readServiceApiTokenState();
+    if (token.kind !== "present" || token.fingerprint !== initial.token.fingerprint) throw new Error("client_token_changed");
+    if (!downloaded) { validLocalCatalog(); return initial.connection; }
+    atomicWriteFile(DEFAULT_CATALOG_PATH, downloaded.body);
+    const updated = {
+      ...initial.connection,
+      catalogFingerprint: createHash("sha256").update(downloaded.body).digest("base64url"),
+      catalogSyncedAt: (deps.now ?? (() => new Date()))().toISOString(),
+    };
+    commitClientConnection(updated);
+    return updated;
+  }), deps.lifecycleLockDeps);
+  // Read-only: injection invokes this while N/C are held. Acquiring L here would invert C→L.
+  const beforeClientWrite = () => {
+    assertClientConnectionUnchanged(next);
+    const token = readServiceApiTokenState();
+    if (next.pendingOperation || token.kind !== "present" || token.fingerprint !== next.tokenFingerprint) throw new Error("client_token_changed");
+  };
   let injected = false;
   if (next.selectedClients.includes("codex")) {
     const config = loadConfig();
     const result = await injectCodexConfig(config.port, { ...config, syncResumeHistory: false }, {
-      routingTarget: routingTarget(next.serverUrl),
-      catalogPath: DEFAULT_CATALOG_PATH,
-      journalOwner: { kind: "client", apiKeyId: next.apiKeyId },
+      routingTarget: routingTarget(next.serverUrl), catalogPath: DEFAULT_CATALOG_PATH,
+      journalOwner: { kind: "client", apiKeyId: next.apiKeyId }, beforeClientWrite,
     });
     if (!result.success || result.status === "skipped") throw new Error(result.message);
     injected = true;
   }
-  const cacheSynced = invalidateCodexModelsCache({ allowWhenDesiredDisabled: true });
-  return { catalogWritten, cacheSynced, injected, stale };
+  const cacheSynced = withClientLifecycleSync(() => {
+    beforeClientWrite();
+    // Cache invalidation acquires K itself (N -> K -> C); never call it while C is held.
+    return invalidateCodexModelsCache({ allowWhenDesiredDisabled: true });
+  }, deps.lifecycleLockDeps);
+  return { catalogWritten: downloaded !== undefined, cacheSynced, injected, stale };
 }
 
 /**
@@ -573,70 +726,168 @@ function restorePriorCatalog(connection: OcxClientConnectionConfig): "removed" |
   }
 }
 
+const DISCONNECT_PHASES: readonly DesktopDisconnectReceipt["phase"][] = [
+  "prepared", "desktop_restored", "catalog_settled", "removing_token", "token_removed", "clearing_connection", "connection_cleared", "complete",
+];
+
+function disconnectAtLeast(receipt: DesktopDisconnectReceipt, phase: DesktopDisconnectReceipt["phase"]): boolean {
+  return DISCONNECT_PHASES.indexOf(receipt.phase) >= DISCONNECT_PHASES.indexOf(phase);
+}
+
+function catalogIsRecordedPrior(connection: OcxClientConnectionConfig, snapshot: CatalogSnapshot): boolean {
+  return snapshot.kind === "file" && !!connection.priorCatalog
+    && snapshot.fingerprint === sha256(Buffer.from(connection.priorCatalog, "base64").toString("utf8"));
+}
+
+function preflightDisconnectCatalog(connection: OcxClientConnectionConfig, keepCatalog: boolean): void {
+  const snapshot = catalogSnapshot();
+  if (!keepCatalog && snapshot.kind === "file"
+    && !catalogMatchesFingerprint(snapshot.body, connection.catalogFingerprint)
+    && !catalogIsRecordedPrior(connection, snapshot)) throw new Error("client_catalog_ownership_changed");
+}
+
+function catalogAfterState(): NonNullable<DesktopDisconnectReceipt["catalogAfter"]> {
+  const snapshot = catalogSnapshot();
+  return snapshot.kind === "absent" ? { kind: "absent" } : { kind: "file", fingerprint: snapshot.fingerprint };
+}
+
+function verifyDisconnectCatalog(receipt: DesktopDisconnectReceipt): void {
+  if (!receipt.catalogAfter || JSON.stringify(catalogAfterState()) !== JSON.stringify(receipt.catalogAfter)) {
+    throw new Error("client_catalog_changed_during_disconnect");
+  }
+}
+
+function restoreConnectedCodex(connection: OcxClientConnectionConfig): void {
+  if (!connection.selectedClients.includes("codex")) return;
+  const owner = journalOwner();
+  if (owner && owner.kind === "client" && owner.apiKeyId !== connection.apiKeyId) {
+    throw new Error("disconnect refused: Codex journal ownership conflicts with the connected key");
+  }
+  if (owner !== null) {
+    if (!restoreJournalState().complete) throw new Error("disconnect refused: Codex journal restore was partial");
+  } else if (isCodexRoutingInjected()) {
+    throw new Error("disconnect refused: Codex routing is injected but no journal records the original state");
+  }
+}
+
 export async function disconnectClient(
-  options: { keepCatalog?: boolean } = {},
+  options: { keepCatalog?: boolean; expectedOwner?: DesktopRemoteOwner } = {},
+  deps: Pick<ClientConnectDeps, "lifecycleLockDeps"> = {},
 ): Promise<{
-  restored: boolean;
-  tokenRemoved: boolean;
-  /** True when the catalog no longer holds remote bytes: removed outright or overwritten. */
-  catalogRemoved: boolean;
-  /** True only when a recorded pre-connect catalog was written back. */
-  catalogRestored: boolean;
-  apiKeyId: string;
+  restored: boolean; tokenRemoved: boolean; catalogRemoved: boolean; catalogRestored: boolean; apiKeyId: string;
+  desktopRestoration?: "owned_projection" | "standard_fallback" | "selection_preserved";
+  restartRequired: boolean;
 }> {
-  const state = readClientConnectionState();
-  if (state.kind !== "connected") throw new Error(`disconnect refused: client state is ${state.kind}`);
-  const token = readServiceApiTokenState();
-  if (token.kind !== "present" || token.fingerprint !== state.value.tokenFingerprint) {
-    throw new Error(token.kind === "absent" ? "disconnect refused: service token is missing" : "disconnect refused: service token ownership changed");
-  }
-
-  let restored = true;
-  if (state.value.selectedClients.includes("codex")) {
-    const owner = journalOwner();
-    // A journal owned by this client key is ours, obviously. A journal owned by a PROCESS is
-    // also ours to unwind: it is what `ocx start` leaves behind, and connecting on top of it
-    // never transfers ownership — writeJournal() declines to overwrite a journal whose
-    // config is already injected, so the process owner survives into the connected state.
-    //
-    // Treating that as a conflict stranded the normal "start, then connect" path: disconnect
-    // refused, and nothing the operator could do would satisfy the check. The genuine
-    // conflict is a journal owned by a DIFFERENT client key, which is the one case where
-    // restoring would unwind somebody else's routing.
-    if (
-      owner === null
-      || owner.kind === "process"
-      || owner.apiKeyId === state.value.apiKeyId
-    ) {
-      if (owner !== null) restored = restoreJournalState().complete;
-      else if (isCodexRoutingInjected()) {
-        // Injected routing with no journal at all: there is no recorded baseline to restore,
-        // so unwinding would be a guess about what the config looked like before.
-        throw new Error("disconnect refused: Codex routing is injected but no journal records the original state");
-      }
-    } else {
-      throw new Error("disconnect refused: Codex journal ownership conflicts with the connected key");
+  const keepCatalog = options.keepCatalog === true;
+  const prepared = withClientLifecycleSync(held => withConfigMutationLockSync(() => {
+    const read = readDesktopDisconnectReceipt();
+    if (read.kind === "unsafe") throw new Error("client_disconnect_receipt_unsafe");
+    const state = readClientConnectionState();
+    const previous = read.kind === "valid" ? read.value : null;
+    const observedOwner = state.kind === "connected" ? desktopOwner(state.value) : previous?.owner;
+    if (options.expectedOwner && (!observedOwner || !sameClientConnectionOwner(observedOwner, options.expectedOwner))) {
+      throw new Error("client_disconnect_expected_owner_changed");
     }
-    if (!restored) throw new Error("disconnect refused: Codex journal restore was partial");
+    let receipt = previous;
+    let connection: OcxClientConnectionConfig | null = null;
+    if (state.kind === "connected") {
+      connection = state.value;
+      if (connection.pendingOperation) throw new Error("client_rotation_recovery_required");
+      if (receipt?.phase === "complete" && !sameClientConnectionOwner(receipt.owner, connection)) receipt = null;
+      if (receipt && !sameClientConnectionOwner(receipt.owner, connection)) throw new Error("client_disconnect_owner_changed");
+      if (receipt?.phase === "complete") throw new Error("client_disconnect_completed_owner_reappeared");
+      const token = readServiceApiTokenState();
+      const expectedFingerprint = receipt?.tokenFingerprint ?? connection.tokenFingerprint;
+      if (connection.tokenFingerprint !== expectedFingerprint
+        || (token.kind === "present" ? token.fingerprint !== expectedFingerprint
+          : token.kind !== "absent" || !receipt || !disconnectAtLeast(receipt, "removing_token"))) {
+        throw new Error("client_token_changed");
+      }
+      if (!receipt) {
+        const desktop = inspectRemoteDesktopStore(desktopOwner(connection));
+        if (desktop.kind === "unsafe" || desktop.kind === "conflict") throw new Error("desktop_lifecycle_unsafe");
+        preflightDisconnectCatalog(connection, keepCatalog);
+        receipt = { version: 1, owner: desktopOwner(connection), tokenFingerprint: connection.tokenFingerprint, keepCatalog, phase: "prepared" };
+        writeDesktopDisconnectReceipt(held, previous, receipt);
+      }
+    } else if (state.kind !== "disconnected" || !receipt || !disconnectAtLeast(receipt, "clearing_connection")) {
+      throw new Error("disconnect refused: no recoverable connected state");
+    }
+    if (!receipt || receipt.keepCatalog !== keepCatalog) throw new Error("client_disconnect_options_changed");
+    return { receipt, connection };
+  }), deps.lifecycleLockDeps);
+
+  // The prepared receipt blocks even a sync queued for its actual N/C injection commit.
+  // Codex-only restore MUST stay outside L; it never invokes Desktop cleanup.
+  if (prepared.connection && !disconnectAtLeast(prepared.receipt, "desktop_restored")) {
+    restoreConnectedCodex(prepared.connection);
   }
 
-  const tokenRemoval = removeServiceApiTokenFileIfOwned(state.value.tokenFingerprint);
-  if (tokenRemoval === "changed") throw new Error("disconnect refused: service token changed before removal");
-  let catalogRemoval: "removed" | "restored" | "absent" | "changed" = "absent";
-  if (!options.keepCatalog) {
-    catalogRemoval = restorePriorCatalog(state.value);
-    if (catalogRemoval === "changed") throw new Error("disconnect refused: catalog ownership changed");
-  }
-  if (clearClientConnection(state.value.apiKeyId) !== "committed") {
-    throw new Error("disconnect refused: client state changed before final commit");
-  }
-  return {
-    restored,
-    tokenRemoved: tokenRemoval === "removed",
-    catalogRemoved: catalogRemoval === "removed" || catalogRemoval === "restored",
-    catalogRestored: catalogRemoval === "restored",
-    apiKeyId: state.value.apiKeyId,
-  };
+  return withClientLifecycleSync(held => withConfigMutationLockSync(() => {
+    const read = readDesktopDisconnectReceipt();
+    if (read.kind !== "valid" || JSON.stringify(read.value) !== JSON.stringify(prepared.receipt)) {
+      throw new Error("client_disconnect_receipt_changed");
+    }
+    let receipt = read.value;
+    const state = readClientConnectionState();
+    let connection: OcxClientConnectionConfig | null = null;
+    if (state.kind === "connected") {
+      if (!sameClientConnectionOwner(state.value, receipt.owner) || state.value.pendingOperation
+        || state.value.tokenFingerprint !== receipt.tokenFingerprint) throw new Error("client_disconnect_owner_changed");
+      connection = state.value;
+    } else if (state.kind !== "disconnected" || !disconnectAtLeast(receipt, "clearing_connection")) {
+      throw new Error("client_disconnect_owner_changed");
+    }
+    const token = readServiceApiTokenState();
+    if (token.kind === "present" ? token.fingerprint !== receipt.tokenFingerprint
+      : token.kind !== "absent" || !disconnectAtLeast(receipt, "removing_token")) throw new Error("client_token_changed");
+    const advance = (phase: DesktopDisconnectReceipt["phase"], fields: Partial<DesktopDisconnectReceipt> = {}) => {
+      const next = { ...receipt, ...fields, phase };
+      writeDesktopDisconnectReceipt(held, receipt, next);
+      receipt = next;
+    };
+    let desktop: Extract<DesktopStoreResult, { ok: true }>;
+    if (!disconnectAtLeast(receipt, "desktop_restored")) {
+      desktop = requireDesktopResult(restoreRemoteDesktopStore(held, {
+        owner: receipt.owner, knownTokenFingerprints: [receipt.tokenFingerprint],
+      }));
+      advance("desktop_restored", desktop.fingerprint ? { desktopAfterFingerprint: desktop.fingerprint } : {});
+    } else {
+      // A retry after token/config removal must verify the completed projection,
+      // not invoke a mutator that needs the now-removed connection credential.
+      const inspected = inspectRemoteDesktopStore(receipt.owner);
+      if (inspected.kind !== "restored" && !(inspected.kind === "absent"
+        && (!receipt.desktopAfterFingerprint || receipt.phase === "complete"))) {
+        throw new Error("desktop_disconnect_after_state_changed");
+      }
+      desktop = { ok: true, changed: false, status: inspected.kind === "absent" ? "absent" : "restored",
+        restartRequired: receipt.desktopAfterFingerprint !== undefined };
+    }
+    if (!disconnectAtLeast(receipt, "catalog_settled")) {
+      if (!connection) throw new Error("client_disconnect_catalog_context_missing");
+      preflightDisconnectCatalog(connection, keepCatalog);
+      const snapshot = catalogSnapshot();
+      if (!keepCatalog && snapshot.kind !== "absent" && !catalogIsRecordedPrior(connection, snapshot)) {
+        if (restorePriorCatalog(connection) === "changed") throw new Error("client_catalog_ownership_changed");
+      }
+      advance("catalog_settled", { catalogAfter: catalogAfterState() });
+    } else verifyDisconnectCatalog(receipt);
+    if (!disconnectAtLeast(receipt, "removing_token")) advance("removing_token");
+    const tokenRemoval = removeServiceApiTokenFileIfOwned(receipt.tokenFingerprint);
+    if (tokenRemoval === "changed") throw new Error("client_token_changed");
+    if (!disconnectAtLeast(receipt, "token_removed")) advance("token_removed");
+    if (!disconnectAtLeast(receipt, "clearing_connection")) advance("clearing_connection");
+    if (clearClientConnection(receipt.owner) === "conflict") throw new Error("client_disconnect_owner_changed");
+    if (!disconnectAtLeast(receipt, "connection_cleared")) advance("connection_cleared");
+    requireDesktopResult(finishRemoteDesktopCleanup(held, receipt.owner));
+    if (receipt.phase !== "complete") advance("complete");
+    return {
+      restored: true, tokenRemoved: tokenRemoval === "removed",
+      catalogRemoved: !keepCatalog, catalogRestored: !keepCatalog && receipt.catalogAfter?.kind === "file",
+      apiKeyId: receipt.owner.apiKeyId, restartRequired: desktop.restartRequired,
+      ...(desktop.restoration ? { desktopRestoration: desktop.restoration } : {}),
+    };
+  }), deps.lifecycleLockDeps);
 }
 
 export async function revokeConnectedClientKey(
@@ -644,11 +895,13 @@ export async function revokeConnectedClientKey(
   deps: ClientConnectDeps = {},
 ): Promise<{ apiKeyId: string }> {
   try {
-    const state = readClientConnectionState();
-    if (state.kind !== "connected") throw new Error("connect revoke is available only while connected");
-    await revokeClientKey(state.value.managementUrl, credential, state.value.apiKeyId, { fetchImpl: deps.fetchImpl });
-    return { apiKeyId: state.value.apiKeyId };
-  } finally {
-    credential.value.fill(0);
-  }
+    return await withClientLifecycle(async () => {
+      assertNoClientDisconnectPending();
+      const state = readClientConnectionState();
+      if (state.kind !== "connected" || state.value.pendingOperation) throw new Error("connect revoke requires a settled connection");
+      await revokeClientKey(state.value.managementUrl, credential, state.value.apiKeyId, { fetchImpl: deps.fetchImpl });
+      assertClientConnectionUnchanged(state.value);
+      return { apiKeyId: state.value.apiKeyId };
+    }, deps.lifecycleLockDeps);
+  } finally { credential.value.fill(0); }
 }

@@ -141,6 +141,36 @@ test("per-surface id style: ?ids= wins, claude-code UA gets readable, unknown UA
   }
 });
 
+test("Codex discovery bounds proven custom Astra before any disk sync and preserves a gateway namesake", async () => {
+  const config = configWithStaticModels();
+  config.providers.openai = {
+    adapter: "openai-responses",
+    baseUrl: "https://chatgpt.com/backend-api/codex",
+    authMode: "forward",
+    liveModels: false,
+  };
+  config.providers.YYLJ = { adapter: "openai-chat", baseUrl: "https://gateway.example.test/v1", liveModels: false, models: ["gpt-6-astra"] };
+  config.customModels = ["openai", "YYLJ"].map(provider => ({
+    id: `${provider}-astra`, provider, modelId: "gpt-6-astra",
+    reasoningEfforts: ["none", "minimal", "low"], defaultReasoningEffort: "minimal",
+  }));
+  saveConfig(config);
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/models?client_version=0.153.4", server.url));
+    expect(response.status).toBe(200);
+    const catalog = await response.json() as { models: Array<{ slug: string; supported_reasoning_levels: Array<{ effort: string }>; default_reasoning_level?: string }> };
+    const canonical = catalog.models.find(row => row.slug === "openai/gpt-6-astra");
+    expect(canonical?.supported_reasoning_levels.map(level => level.effort)).toEqual(["low"]);
+    expect(canonical?.default_reasoning_level).toBe("low");
+    const gateway = catalog.models.find(row => row.slug === "YYLJ/gpt-6-astra");
+    expect(gateway?.supported_reasoning_levels.map(level => level.effort)).toEqual(["none", "minimal", "low", "max", "ultra"]);
+    expect(gateway?.default_reasoning_level).toBe("minimal");
+  } finally {
+    await server.stop(true);
+  }
+});
+
 test("OpenAI list shape and Codex catalog shape stay unchanged", async () => {
   saveConfig(configWithStaticModels());
   const server = startServer(0);

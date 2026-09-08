@@ -24,6 +24,32 @@ export interface OAuthAccount extends AccountQuotaReading {
   healthAction?: string;
 }
 export interface ApiKeyEntry extends AccountQuotaReading { id: string; label?: string; masked: string; active: boolean }
+export interface AccountSelectionTarget { provider: string; kind: "oauth" | "api-key" }
+
+function selectionRows<T extends { id: string; active: boolean }>(rows: T[], id: string | null | undefined): T[] {
+  return id === undefined ? rows : rows.map(row => ({ ...row, active: row.id === id }));
+}
+
+/** An invalidation read changes membership/selection, not quota probe state. */
+function mergeRosterRows<T extends QuotaRow>(rows: T[], previous: T[]): T[] {
+  const prior = new Map(previous.map(row => [row.id, row]));
+  return mergeQuotaRows(rows, previous, false).map(row => supportsQuotaRead(row) ? {
+    ...row,
+    quotaPending: prior.get(row.id)?.quotaPending ?? false,
+    quotaUnavailable: prior.get(row.id)?.quotaUnavailable ?? false,
+  } : row);
+}
+
+/** A probe started before a newer roster may update quota only on surviving IDs. */
+function mergeLateQuotaRows<T extends QuotaRow>(rows: T[], enriched: T[]): T[] {
+  const byId = new Map(enriched.map(row => [row.id, row]));
+  return rows.map(row => {
+    const incoming = byId.get(row.id);
+    if (!incoming || incoming.quotaMode !== row.quotaMode) return row;
+    const quota = mergeQuotaRows([incoming], [row], true)[0];
+    return { ...row, quota: quota.quota, quotaPending: quota.quotaPending, quotaUnavailable: quota.quotaUnavailable };
+  });
+}
 
 type QuotaRow = AccountQuotaReading & { id: string };
 const supportsQuotaRead = (row: AccountQuotaReading) => row.quotaMode === "probe" || row.quotaMode === "passive";
@@ -47,8 +73,9 @@ function mergeQuotaRows<T extends QuotaRow>(rows: T[], previous: T[], enriched: 
   });
 }
 
-function unavailableQuotaRows<T extends QuotaRow>(rows: T[]): T[] {
-  return rows.map(row => supportsQuotaRead(row)
+function unavailableQuotaRows<T extends QuotaRow>(rows: T[], attempted?: T[]): T[] {
+  const attemptedModes = attempted && new Map(attempted.map(row => [row.id, row.quotaMode]));
+  return rows.map(row => supportsQuotaRead(row) && (!attemptedModes || attemptedModes.get(row.id) === row.quotaMode)
     ? { ...row, quotaUnavailable: true, quotaPending: false }
     : row);
 }
@@ -91,12 +118,18 @@ export function useProviderAccountPools(deps: {
   const [addingKeyFor, setAddingKeyFor] = useState<string | null>(null);
   const [newKeyValue, setNewKeyValue] = useState("");
   const accountRequestGenerationRef = useRef<Record<string, number>>({});
+  const rosterGenerationRef = useRef<Record<string, number>>({});
+  const quotaGenerationRef = useRef<Record<string, number>>({});
+  const selectionMutationsRef = useRef(new Map<string, symbol>());
   const requestsRef = useRef(new Set<AbortController>());
   const mountedRef = useRef(true);
   const serverRef = useRef(apiBase);
   useEffect(() => {
     const generations = accountRequestGenerationRef.current;
     const requests = requestsRef.current;
+    const rosterGenerations = rosterGenerationRef.current;
+    const quotaGenerations = quotaGenerationRef.current;
+    const mutations = selectionMutationsRef.current;
     mountedRef.current = true;
     const serverChanged = serverRef.current !== apiBase;
     serverRef.current = apiBase;
@@ -109,6 +142,9 @@ export function useProviderAccountPools(deps: {
     return () => {
       mountedRef.current = false;
       for (const key of Object.keys(generations)) generations[key] += 1;
+      for (const key of Object.keys(rosterGenerations)) rosterGenerations[key] += 1;
+      for (const key of Object.keys(quotaGenerations)) quotaGenerations[key] += 1;
+      mutations.clear();
       for (const controller of requests) controller.abort();
       requests.clear();
     };
@@ -119,8 +155,11 @@ export function useProviderAccountPools(deps: {
   const keyPoolsKeyRef = useRef<string | null>(null);
   const switchingAccountRef = useRef<{ provider: string; accountId: string } | null>(null);
 
-  const readRoster = useCallback(async <T,>(url: string): Promise<T> => {
+  const readRoster = useCallback(async <T,>(url: string, signal?: AbortSignal): Promise<T> => {
     const bounded = createBoundedFetch(20_000);
+    const abort = () => bounded.controller.abort();
+    if (signal?.aborted) abort();
+    signal?.addEventListener("abort", abort, { once: true });
     requestsRef.current.add(bounded.controller);
     try {
       const response = await fetch(url, { signal: bounded.signal });
@@ -130,6 +169,7 @@ export function useProviderAccountPools(deps: {
       return data;
     } finally {
       bounded.clear();
+      signal?.removeEventListener("abort", abort);
       requestsRef.current.delete(bounded.controller);
     }
   }, []);
@@ -146,7 +186,10 @@ export function useProviderAccountPools(deps: {
       const key = `oauth:${provider}`;
       const generation = (accountRequestGenerationRef.current[key] ?? 0) + 1;
       accountRequestGenerationRef.current[key] = generation;
+      const rosterGeneration = (rosterGenerationRef.current[key] ?? 0) + 1;
+      rosterGenerationRef.current[key] = rosterGeneration;
       const currentRequest = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase && accountRequestGenerationRef.current[key] === generation;
+      const currentRoster = () => currentRequest() && rosterGenerationRef.current[key] === rosterGeneration;
       const url = `${apiBase}/api/oauth/accounts?provider=${encodeURIComponent(provider)}`;
       try {
         // Cheap local read first so account switch / reauth / remove controls appear
@@ -154,32 +197,39 @@ export function useProviderAccountPools(deps: {
         const data = await readRoster<{ activeAccountId?: string | null; accounts?: OAuthAccount[] }>(url);
         if (!Array.isArray(data.accounts)) throw new Error("Invalid account roster");
         if (!currentRequest()) return false;
-        const rows = data.accounts;
-        setAccountSets(current => currentRequest() ? { ...current, [provider]: {
+        const rows = selectionRows(data.accounts, data.activeAccountId);
+        setAccountSets(current => currentRoster() ? { ...current, [provider]: {
           activeAccountId: data.activeAccountId ?? null,
           accounts: mergeQuotaRows(rows, current[provider]?.accounts ?? [], false),
         } } : current);
-        setAccountLoadStates(current => currentRequest() ? { ...current, [provider]: "ready" } : current);
+        setAccountLoadStates(current => currentRoster() ? { ...current, [provider]: "ready" } : current);
         if (!rows.some(supportsQuotaRead)) return true;
 
         const enrich = async (): Promise<boolean> => {
+          // Manual selection invalidates roster reads, not a per-ID quota probe already sent.
+          const quotaGeneration = (quotaGenerationRef.current[key] ?? 0) + 1;
+          quotaGenerationRef.current[key] = quotaGeneration;
+          const currentQuota = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase
+            && quotaGenerationRef.current[key] === quotaGeneration;
           try {
             const quotaData = await readRoster<{ activeAccountId?: string | null; accounts?: OAuthAccount[] }>(`${url}&quota=1${refresh ? "&refresh=1" : ""}`);
             if (!Array.isArray(quotaData.accounts)) throw new Error("Invalid account quota roster");
-            if (!currentRequest()) return false;
-            const enriched = quotaData.accounts;
-            setAccountSets(current => currentRequest() ? {
+            if (!currentQuota()) return false;
+            const enriched = selectionRows(quotaData.accounts, quotaData.activeAccountId);
+            setAccountSets(current => !currentQuota() ? current : !currentRoster() ? {
+              ...current, [provider]: { ...current[provider], accounts: mergeLateQuotaRows(current[provider]?.accounts ?? [], enriched) },
+            } : {
               ...current,
               [provider]: {
-                activeAccountId: quotaData.activeAccountId ?? data.activeAccountId ?? null,
+                activeAccountId: quotaData.activeAccountId === undefined ? data.activeAccountId ?? null : quotaData.activeAccountId,
                 accounts: mergeQuotaRows(enriched, current[provider]?.accounts ?? [], true),
               },
-            } : current);
+            });
             return !enriched.some(row => row.quotaUnavailable === true);
           } catch {
-            if (!currentRequest()) return false;
-            setAccountSets(current => currentRequest() && current[provider] ? {
-              ...current, [provider]: { ...current[provider], accounts: unavailableQuotaRows(current[provider].accounts) },
+            if (!currentQuota()) return false;
+            setAccountSets(current => currentQuota() && current[provider] ? {
+              ...current, [provider]: { ...current[provider], accounts: unavailableQuotaRows(current[provider].accounts, rows) },
             } : current);
             return false;
           }
@@ -188,9 +238,9 @@ export function useProviderAccountPools(deps: {
         void enrich();
         return true;
       } catch {
-        if (!currentRequest()) return false;
-        setAccountLoadStates(current => currentRequest() ? { ...current, [provider]: "error" } : current);
-        setAccountSets(current => currentRequest() && current[provider] ? {
+        if (!currentRoster()) return false;
+        setAccountLoadStates(current => currentRoster() ? { ...current, [provider]: "error" } : current);
+        setAccountSets(current => currentRoster() && current[provider] ? {
           ...current, [provider]: { ...current[provider], accounts: unavailableQuotaRows(current[provider].accounts) },
         } : current);
         return false;
@@ -205,29 +255,42 @@ export function useProviderAccountPools(deps: {
       const key = `key:${name}`;
       const generation = (accountRequestGenerationRef.current[key] ?? 0) + 1;
       accountRequestGenerationRef.current[key] = generation;
+      const rosterGeneration = (rosterGenerationRef.current[key] ?? 0) + 1;
+      rosterGenerationRef.current[key] = rosterGeneration;
       const currentRequest = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase && accountRequestGenerationRef.current[key] === generation;
+      const currentRoster = () => currentRequest() && rosterGenerationRef.current[key] === rosterGeneration;
       const url = `${apiBase}/api/providers/keys?name=${encodeURIComponent(name)}`;
       const failed = () => {
-        if (currentRequest()) setKeyPools(current => currentRequest()
+        if (currentRoster()) setKeyPools(current => currentRoster()
           ? { ...current, [name]: unavailableQuotaRows(current[name] ?? []) } : current);
         return false;
       };
       try {
-        const data = await readRoster<{ keys?: ApiKeyEntry[] }>(url);
+        const data = await readRoster<{ activeId?: string | null; keys?: ApiKeyEntry[] }>(url);
         if (!Array.isArray(data.keys)) throw new Error("Invalid key roster");
         if (!currentRequest()) return false;
-        const rows = data.keys;
-        setKeyPools(current => currentRequest() ? { ...current, [name]: mergeQuotaRows(rows, current[name] ?? [], false) } : current);
+        const rows = selectionRows(data.keys, data.activeId);
+        setKeyPools(current => currentRoster() ? { ...current, [name]: mergeQuotaRows(rows, current[name] ?? [], false) } : current);
         if (!rows.some(supportsQuotaRead)) return true;
         const enrich = async (): Promise<boolean> => {
+          const quotaGeneration = (quotaGenerationRef.current[key] ?? 0) + 1;
+          quotaGenerationRef.current[key] = quotaGeneration;
+          const currentQuota = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase
+            && quotaGenerationRef.current[key] === quotaGeneration;
           try {
-            const data = await readRoster<{ keys?: ApiKeyEntry[] }>(`${url}&quota=1${refresh ? "&refresh=1" : ""}`);
+            const data = await readRoster<{ activeId?: string | null; keys?: ApiKeyEntry[] }>(`${url}&quota=1${refresh ? "&refresh=1" : ""}`);
             if (!Array.isArray(data.keys)) throw new Error("Invalid key quota roster");
-            if (!currentRequest()) return false;
-            const enriched = data.keys;
-            setKeyPools(current => currentRequest() ? { ...current, [name]: mergeQuotaRows(enriched, current[name] ?? [], true) } : current);
+            if (!currentQuota()) return false;
+            const enriched = selectionRows(data.keys, data.activeId);
+            setKeyPools(current => currentQuota() ? { ...current, [name]: currentRoster()
+              ? mergeQuotaRows(enriched, current[name] ?? [], true)
+              : mergeLateQuotaRows(current[name] ?? [], enriched) } : current);
             return !enriched.some(row => row.quotaUnavailable === true);
-          } catch { return failed(); }
+          } catch {
+            if (currentQuota()) setKeyPools(current => currentQuota()
+              ? { ...current, [name]: unavailableQuotaRows(current[name] ?? [], rows) } : current);
+            return false;
+          }
         };
         if (refresh) return await enrich();
         void enrich();
@@ -237,22 +300,88 @@ export function useProviderAccountPools(deps: {
     return results.every(Boolean);
   }, [apiBase, aliveRef, readRoster]);
 
+  const refreshAccountRosters = useCallback(async (target?: AccountSelectionTarget, signal?: AbortSignal): Promise<boolean> => {
+    if (!aliveRef.current || !mountedRef.current || serverRef.current !== apiBase || signal?.aborted) return false;
+    const targets: AccountSelectionTarget[] = target ? [target] : Object.entries(config?.providers ?? {}).flatMap<AccountSelectionTarget>(([provider, p]) =>
+      p.authMode === "oauth" && provider !== "openai" ? [{ provider, kind: "oauth" as const }]
+        : p.hasApiKey && p.authMode !== "oauth" && p.authMode !== "forward" ? [{ provider, kind: "api-key" as const }] : []);
+    const results = await Promise.all(targets.map(async ({ provider, kind }) => {
+      const key = `${kind === "oauth" ? "oauth" : "key"}:${provider}`;
+      // PUT settlement always reconciles, including events received while it is pending.
+      if (selectionMutationsRef.current.has(key)) return false;
+      const generation = (rosterGenerationRef.current[key] ?? 0) + 1;
+      rosterGenerationRef.current[key] = generation;
+      const currentRequest = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase
+        && !signal?.aborted && rosterGenerationRef.current[key] === generation && !selectionMutationsRef.current.has(key);
+      try {
+        if (kind === "oauth") {
+          const data = await readRoster<{ activeAccountId?: string | null; accounts?: OAuthAccount[] }>(
+            `${apiBase}/api/oauth/accounts?provider=${encodeURIComponent(provider)}`, signal);
+          if (!Array.isArray(data.accounts) || !currentRequest()) return false;
+          const rows = selectionRows(data.accounts, data.activeAccountId);
+          setAccountSets(current => currentRequest() ? { ...current, [provider]: {
+            activeAccountId: data.activeAccountId === undefined ? rows.find(row => row.active)?.id ?? null : data.activeAccountId,
+            accounts: mergeRosterRows(rows, current[provider]?.accounts ?? []),
+          } } : current);
+          setAccountLoadStates(current => currentRequest() ? { ...current, [provider]: "ready" } : current);
+        } else {
+          const data = await readRoster<{ activeId?: string | null; keys?: ApiKeyEntry[] }>(
+            `${apiBase}/api/providers/keys?name=${encodeURIComponent(provider)}`, signal);
+          if (!Array.isArray(data.keys) || !currentRequest()) return false;
+          const rows = selectionRows(data.keys, data.activeId);
+          setKeyPools(current => currentRequest() ? { ...current, [provider]: mergeRosterRows(rows, current[provider] ?? []) } : current);
+        }
+        return true;
+      } catch {
+        // A missed invalidation read does not change quota health; recovery retries it.
+        return false;
+      }
+    }));
+    return results.every(Boolean);
+  }, [aliveRef, apiBase, config, readRoster]);
+
+  const invalidateSelectionReads = (provider: string, kind: AccountSelectionTarget["kind"]) => {
+    const key = `${kind === "oauth" ? "oauth" : "key"}:${provider}`;
+    accountRequestGenerationRef.current[key] = (accountRequestGenerationRef.current[key] ?? 0) + 1;
+    rosterGenerationRef.current[key] = (rosterGenerationRef.current[key] ?? 0) + 1;
+    // The independent quota generation still owns pending/error flags for surviving IDs.
+    return key;
+  };
+
   const switchAccount = async (provider: string, account: OAuthAccount) => {
     if (account.active || account.needsReauth || switchingAccountRef.current) return;
     const target = { provider, accountId: account.id };
     switchingAccountRef.current = target;
     setSwitchingAccount(target);
+    const key = invalidateSelectionReads(provider, "oauth");
+    const mutation = Symbol();
+    selectionMutationsRef.current.set(key, mutation);
+    const currentMutation = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase && selectionMutationsRef.current.get(key) === mutation;
     const label = oauthAccountDisplayLabel(accountSets[provider]?.accounts ?? [account], account, t);
     try {
       const res = await fetch(`${apiBase}/api/oauth/accounts/active`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider, accountId: account.id }) });
+      if (!currentMutation()) return;
       if (!res.ok) { notify(t("prov.accountSwitchFail"), false); return; }
-      const refreshed = await fetchAccountSets([provider]);
+      const result = await res.json().catch(() => ({})) as { activeAccountId?: string | null };
+      if (!currentMutation()) return;
+      invalidateSelectionReads(provider, "oauth");
+      const selected = result.activeAccountId === undefined ? account.id : result.activeAccountId;
+      setAccountSets(current => current[provider] ? { ...current, [provider]: {
+        ...current[provider], activeAccountId: selected, accounts: selectionRows(current[provider].accounts, selected),
+      } } : current);
+      selectionMutationsRef.current.delete(key);
+      const refreshed = await refreshAccountRosters({ provider, kind: "oauth" });
       await Promise.all([fetchOauth(), fetchProviderQuotas(true)]);
       if (!refreshed) { notify(t("pws.accountsLoadFailed"), false); return; }
       notify(t("prov.accountSwitched", { email: label }), true);
     } catch {
-      notify(t("prov.accountSwitchFail"), false);
+      if (currentMutation()) notify(t("prov.accountSwitchFail"), false);
     } finally {
+      if (currentMutation()) {
+        invalidateSelectionReads(provider, "oauth");
+        selectionMutationsRef.current.delete(key);
+        void refreshAccountRosters({ provider, kind: "oauth" });
+      }
       if (switchingAccountRef.current?.provider === target.provider && switchingAccountRef.current.accountId === target.accountId) {
         switchingAccountRef.current = null;
         if (aliveRef.current) setSwitchingAccount(null);
@@ -261,15 +390,34 @@ export function useProviderAccountPools(deps: {
   };
 
   const switchApiKey = async (provider: string, entry: ApiKeyEntry) => {
-    if (entry.active) return;
-    const res = await fetch(`${apiBase}/api/providers/keys/active`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: provider, id: entry.id }) });
-    if (res.ok) {
+    if (entry.active || selectionMutationsRef.current.has(`key:${provider}`)) return;
+    const key = invalidateSelectionReads(provider, "api-key");
+    const mutation = Symbol();
+    selectionMutationsRef.current.set(key, mutation);
+    const currentMutation = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase && selectionMutationsRef.current.get(key) === mutation;
+    try {
+      const res = await fetch(`${apiBase}/api/providers/keys/active`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: provider, id: entry.id }) });
+      if (!currentMutation()) return;
+      if (!res.ok) {
+        const failure = await res.json().catch(() => ({})) as { error?: string };
+        if (currentMutation()) notify(failure.error || t("prov.keySwitchFail"), false);
+        return;
+      }
+      const data = await res.json().catch(() => ({})) as { activeId?: string | null };
+      if (!currentMutation()) return;
+      invalidateSelectionReads(provider, "api-key");
+      const selected = data.activeId === undefined ? entry.id : data.activeId;
+      setKeyPools(current => current[provider] ? { ...current, [provider]: selectionRows(current[provider], selected) } : current);
       notify(t("prov.keySwitched", { key: entry.label ?? entry.masked }), true);
-      void fetchKeyPools(Object.keys(keyPools));
       void fetchProviderQuotas(true);
-    } else {
-      const data = await res.json().catch(() => ({}));
-      notify(data.error || t("prov.keySwitchFail"), false);
+    } catch {
+      if (currentMutation()) notify(t("prov.keySwitchFail"), false);
+    } finally {
+      if (currentMutation()) {
+        invalidateSelectionReads(provider, "api-key");
+        selectionMutationsRef.current.delete(key);
+        void refreshAccountRosters({ provider, kind: "api-key" });
+      }
     }
   };
 
@@ -382,7 +530,7 @@ export function useProviderAccountPools(deps: {
   return {
     accountSets, accountLoadStates, switchingAccount, openAccounts, keyPools, addingKeyFor, newKeyValue,
     setAccountSets, setAccountLoadStates, setSwitchingAccount, setOpenAccounts, setKeyPools, setAddingKeyFor, setNewKeyValue,
-    fetchAccountSets, fetchKeyPools, switchAccount, switchApiKey, removeApiKey, addApiKeyValue, addApiKey, editCredentialAlias, removeAccount,
+    fetchAccountSets, fetchKeyPools, refreshAccountRosters, switchAccount, switchApiKey, removeApiKey, addApiKeyValue, addApiKey, editCredentialAlias, removeAccount,
     oauthCardProviders, keyCardProviders, activeAccountNeedsReauth,
   };
 }

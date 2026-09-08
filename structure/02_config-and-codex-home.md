@@ -20,6 +20,24 @@ $CODEX_HOME/.opencodex-native-main-profiles/
 Never assume macOS-only paths. Windows, service installs, and app-launched Codex can all depend on
 the resolved `CODEX_HOME`.
 
+The source-built Docker image explicitly keeps `CODEX_HOME=/home/bun/.codex` separate
+from `OPENCODEX_HOME=/home/bun/.opencodex`. Compose persists them in `codex-state` and
+`ocx-state` respectively, retaining a read-only root. The image creates owner-only
+writable homes for `bun`; existing volume ownership and permissions are not repaired.
+The catalog resolver is unchanged; a writable empty home is not a materialized catalog.
+
+[Decision Log]
+- 목적과 의도: Make the container's catalog location persistent and writable without changing native home semantics.
+- 기존 구현 및 제약 조건: Compose persisted only the OCX home, leaving Codex state on a read-only root; both products use incompatible auth.json formats.
+- 검토한 주요 대안: Merge the homes, nest Codex under an existing volume with a new startup initializer, or persist the existing separate Codex home.
+- 선택한 방식: Add a separate codex-state volume and create both owner-only directories in the image.
+- 다른 대안 대신 이 방식을 선택한 이유: It preserves existing paths, avoids credential-file collisions, and works when an older ocx-state volume hides the image's seeded directory tree.
+- 장점, 단점 및 영향: Two volumes must be backed up, but no automatic credential migration or runtime resolver change is needed. Catalog import/materialization remains an explicit prerequisite.
+
+`docker compose down` retains both volumes. `docker compose down --volumes` deletes
+both `ocx-state` and `codex-state`, including their credentials and catalog/state;
+treat it as destructive, not as an upgrade or restart command.
+
 Service install-state ownership uses this same resolver. In WSL, an unset `CODEX_HOME` may resolve
 to the single discoverable Windows Desktop home; recording Linux `~/.codex` instead would make a
 later repair or uninstall look foreign even though the service and runtime were started from the
@@ -126,6 +144,12 @@ Storage cleanup run metadata uses the field-scoped persisted-config mutation pat
 Worker cannot restore unrelated API keys or provider settings from a snapshot read before the lock.
 If that metadata write is unavailable after cleanup has already completed, the job retains the
 cleanup outcome and exposes a bounded persistence error instead of relabeling the run as a Worker failure.
+
+Cleanup manifests and satellite backups share the stage-local atomic publisher: an exclusive
+private temporary file is fully written and file-synced before the existing Windows-tolerant
+rename replaces the destination. Handled publication failures retain the previous record;
+directory syncing remains best-effort. This does not make a partial permanent purge reversible:
+restore still fails closed when a recorded logical entry has no surviving file.
 
 Windows secret-file hardening resolves the effective token SID through an absolute, trusted
 PowerShell path before granting the owner and removing inherited broad ACL entries. The normal
@@ -249,6 +273,23 @@ to snapshot persistence instead of relying on the progress argument alone.
 
 ### OpenCodex home and live process state
 
+`initializePersistedConfigIfMissing` in `src/config.ts` is the create-only path consumed by
+`src/cli/init.ts`. It rechecks absence under the existing config-mutation lock and publishes through
+`src/config/initialize.ts`: a private descriptor is hardened before secret bytes are written, then
+linked without replacing an occupied destination. Existing invalid or unsafe entries are preserved.
+The initializer never truncates a staged inode or rolls back by unlinking the destination; cleanup
+only removes its own temporary name. Unsupported/denied links and incomplete cleanup fail explicitly,
+and publication followed by a later failure can leave a complete config or private residue. Ordinary
+`saveConfig` replacement behavior remains unchanged. This protects init-time config bytes, not a
+foreign winner's ownership under future uninstall; the existing ownership manifest and global CLI
+shim preflight keep their separate contracts.
+
+Initial publication diagnostics distinguish required permission-hardening failures from denied
+hard-link publication without exposing raw filesystem causes. Both identify `OPENCODEX_HOME`
+as the supported-location recovery path; uncertain publication and cleanup warnings remain in
+the CLI. The quickstart documents inspection before retry, private-permission requirements,
+and fresh-location examples. Diagnostics do not introduce a fallback or alter file I/O ordering.
+
 `src/config/paths.ts` is the single owner of `OPENCODEX_HOME` expansion and resolution. It exposes
 the config directory and `config.json` path and retains the existing cache rule: a relative home is
 resolved once for each distinct raw environment value, so a later working-directory change cannot
@@ -260,7 +301,7 @@ identity, and snapshot-guarded removal. `RuntimePortState.attestationSecret` rem
 owner-only state and is validated before a record is returned. `src/config.ts` re-exports the same
 symbols for compatibility, but new lifecycle-only callers import the process-state leaf directly.
 
-Both config and process-state writes use `src/config/atomic-write.ts`. The leaf preserves the shared
+Replacing config and process-state writes use `src/config/atomic-write.ts`. The leaf preserves the shared
 process-wide temp sequence, symlink target resolution, real-home test guard, owner manifest,
 Windows ACL hardening, scrub-before-unlink failure path, and explicit residual-temp errors. A caller
 must not replace it with a local temp-and-rename shortcut.

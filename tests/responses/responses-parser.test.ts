@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { buildResponseJSON } from "../../src/bridge";
 import { parseRequest } from "../../src/responses/parser";
+import { externalTaskInputContent } from "../../src/responses/task-input";
 import { buildTools } from "../../src/responses/parser-tools";
 import { parseTextFormat } from "../../src/responses/parser-text-format";
 import { buildToolBridgeMaps } from "../../src/server/responses";
@@ -933,6 +934,221 @@ describe("unpaired tool result boundary (#3259)", () => {
     expect(() => parseRequest(delegationHistory({
       type: "brand_new_item_2027", foo: 1,
     }))).not.toThrow();
+  });
+});
+
+describe("external task-input envelopes (#3735)", () => {
+  const parseFrozen = (input: unknown[], extra: Record<string, unknown> = {}) => {
+    const body = Object.freeze({
+      model: "test-model",
+      ...extra,
+      input: Object.freeze(input.map((item) => Object.freeze(item as object))),
+    });
+    const before = JSON.stringify(body);
+    const parsed = parseRequest(body);
+    expect(parsed._rawBody).toBe(body);
+    expect(JSON.stringify(body)).toBe(before);
+    return parsed;
+  };
+
+  test.each([
+    {
+      name: "arbitrary metadata names preserve output whitespace",
+      item: {
+        type: "function_call_output",
+        id: "rsrc.1",
+        name: "Launch Task",
+        namespace: "agent.workspace",
+        output: "  keep  ",
+      },
+      content: "  keep  ",
+    },
+    {
+      name: "ordered text and original image keep order and map detail to high",
+      item: {
+        type: "function_call_output",
+        id: "img_1",
+        name: "view",
+        namespace: "tools",
+        output: [
+          { type: "input_text", text: "caption" },
+          { type: "input_image", image_url: "https://example.com/a.png", detail: "original" },
+        ],
+      },
+      content: [
+        { type: "text", text: "caption" },
+        { type: "image", imageUrl: "https://example.com/a.png", detail: "high" },
+      ],
+    },
+    {
+      name: "output_text normalizes through input content parts",
+      item: {
+        type: "function_call_output",
+        id: "txt_1",
+        name: "note",
+        namespace: "ns",
+        output: [{ type: "output_text", text: "from output_text" }],
+      },
+      content: "from output_text",
+    },
+  ])("$name", ({ item, content }) => {
+    const parsed = parseFrozen([item]);
+    expect(parsed.context.messages).toMatchObject([{ role: "user", content }]);
+    expect(parsed.context.messages.some((message) => message.role === "toolResult")).toBe(false);
+  });
+
+  test("complete metadata with a valid call_id stays a tool result", () => {
+    const parsed = parseFrozen([{
+      type: "function_call_output",
+      call_id: "call_keep",
+      id: "task_1",
+      name: "Launch Task",
+      namespace: "agent.workspace",
+      output: "ok",
+    }]);
+    expect(parsed.context.messages).toMatchObject([{
+      role: "toolResult",
+      toolCallId: "call_keep",
+      content: "ok",
+    }]);
+  });
+
+  test.each([
+    { name: "missing id", item: { type: "function_call_output", name: "n", namespace: "ns", output: "ok" } },
+    { name: "blank id", item: { type: "function_call_output", id: "  ", name: "n", namespace: "ns", output: "ok" } },
+    { name: "missing name", item: { type: "function_call_output", id: "i", namespace: "ns", output: "ok" } },
+    { name: "blank name", item: { type: "function_call_output", id: "i", name: "", namespace: "ns", output: "ok" } },
+    { name: "missing namespace", item: { type: "function_call_output", id: "i", name: "n", output: "ok" } },
+    { name: "blank namespace", item: { type: "function_call_output", id: "i", name: "n", namespace: "\t", output: "ok" } },
+    { name: "empty call_id", item: { type: "function_call_output", call_id: "", id: "i", name: "n", namespace: "ns", output: "ok" } },
+    { name: "null call_id", item: { type: "function_call_output", call_id: null, id: "i", name: "n", namespace: "ns", output: "ok" } },
+    { name: "number call_id", item: { type: "function_call_output", call_id: 1, id: "i", name: "n", namespace: "ns", output: "ok" } },
+    { name: "custom_tool_call_output", item: { type: "custom_tool_call_output", id: "i", name: "n", namespace: "ns", output: "ok" } },
+    {
+      name: "encrypted-only",
+      item: {
+        type: "function_call_output",
+        id: "i",
+        name: "n",
+        namespace: "ns",
+        output: [{ type: "encrypted_content", encrypted_content: "blob" }],
+      },
+    },
+    {
+      name: "mixed unsupported",
+      item: {
+        type: "function_call_output",
+        id: "i",
+        name: "n",
+        namespace: "ns",
+        output: [
+          { type: "input_text", text: "visible" },
+          { type: "encrypted_content", encrypted_content: "blob" },
+        ],
+      },
+    },
+    {
+      name: "malformed text",
+      item: {
+        type: "function_call_output",
+        id: "i",
+        name: "n",
+        namespace: "ns",
+        output: [{ type: "input_text", text: 1 }],
+      },
+    },
+    {
+      name: "malformed image",
+      item: {
+        type: "function_call_output",
+        id: "i",
+        name: "n",
+        namespace: "ns",
+        output: [{ type: "input_image", image_url: 1 }],
+      },
+    },
+    {
+      name: "invalid detail",
+      item: {
+        type: "function_call_output",
+        id: "i",
+        name: "n",
+        namespace: "ns",
+        output: [{ type: "input_image", image_url: "https://example.com/a.png", detail: "ultra" }],
+      },
+    },
+    {
+      name: "file_id-only image",
+      item: {
+        type: "function_call_output",
+        id: "i",
+        name: "n",
+        namespace: "ns",
+        output: [{ type: "input_image", file_id: "file-1" }],
+      },
+    },
+    { name: "blank output", item: { type: "function_call_output", id: "i", name: "n", namespace: "ns", output: "   " } },
+    { name: "empty output", item: { type: "function_call_output", id: "i", name: "n", namespace: "ns", output: "" } },
+    { name: "empty array", item: { type: "function_call_output", id: "i", name: "n", namespace: "ns", output: [] } },
+  ])("$name stays off the user path", ({ item }) => {
+    const parsed = parseFrozen([item]);
+    expect(parsed.context.messages.some((message) => message.role === "user")).toBe(false);
+    expect(parsed.context.messages.some((message) => message.role === "toolResult")).toBe(true);
+  });
+
+  test("own and inherited call_id properties are helper-ineligible", () => {
+    const base = {
+      type: "function_call_output",
+      id: "task_1",
+      name: "n",
+      namespace: "ns",
+      output: "ok",
+    };
+    expect(externalTaskInputContent(base)).toBe("ok");
+    expect(externalTaskInputContent({ ...base, call_id: undefined })).toBeUndefined();
+    expect(externalTaskInputContent(Object.assign(Object.create({ call_id: "proto" }), base))).toBeUndefined();
+  });
+
+  test("previous_response_id with only a valid envelope starts continuation at 0", () => {
+    const parsed = parseFrozen([{
+      type: "function_call_output",
+      id: "task_1",
+      name: "Launch Task",
+      namespace: "agent.workspace",
+      output: "next task",
+    }], { previous_response_id: "resp_1" });
+    expect(parsed._continuationConversationMessageIndex).toBe(0);
+    expect(parsed.context.messages).toMatchObject([{ role: "user", content: "next task" }]);
+  });
+
+  test("reasoning before a valid envelope does not leak into a later assistant", () => {
+    const parsed = parseFrozen([
+      {
+        type: "reasoning",
+        id: "rs_stale",
+        summary: [{ type: "summary_text", text: "stale thinking" }],
+      },
+      {
+        type: "function_call_output",
+        id: "task_1",
+        name: "Launch Task",
+        namespace: "agent.workspace",
+        output: "next task",
+      },
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "done" }],
+      },
+    ]);
+    expect(parsed.context.messages).toMatchObject([
+      { role: "user", content: "next task" },
+      { role: "assistant", content: [{ type: "text", text: "done" }] },
+    ]);
+    const assistant = parsed.context.messages.find((message) => message.role === "assistant");
+    expect(assistant && "content" in assistant ? assistant.content : []).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "thinking", thinking: "stale thinking" })]),
+    );
   });
 });
 

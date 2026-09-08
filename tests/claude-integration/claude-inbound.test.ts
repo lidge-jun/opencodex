@@ -5,6 +5,9 @@ import { repoPath } from "../helpers/repo-root";
 import { AnthropicRequestError, anthropicToResponsesBody, anthropicToResponsesTranslation, effortForThinkingBudget, extractOcxEffortDirective, resolveInboundModel } from "../../src/claude/inbound";
 import { parseRequest } from "../../src/responses/parser";
 import { responsesRequestSchema } from "../../src/responses/schema";
+import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-responses";
+import { withTestTranslatorBudget } from "../helpers/translator-budget";
+import type { OcxProviderConfig } from "../../src/types";
 
 // Full Claude Code-shaped request: system array, tool cycle, image, thinking, options.
 function claudeCodeRequest(): Record<string, unknown> {
@@ -80,16 +83,17 @@ describe("claude inbound translation", () => {
     expect(tools[0]).toEqual({
       type: "function", name: "Read", description: "Read a file",
       parameters: { type: "object", properties: { file_path: { type: "string" } }, required: ["file_path"] },
+      strict: false,
     });
     expect(tools[1]).toEqual({ type: "web_search" });
 
     const input = body.input as Record<string, any>[];
-    // user text, assistant text (thinking dropped), function_call, function_call_output, user tail
-    expect(input.map(i => i.type ?? i.role)).toEqual(["message", "message", "function_call", "function_call_output", "message"]);
-    expect(input[1].content).toEqual([{ type: "output_text", text: "Reading it now." }]);
-    expect(input[2]).toMatchObject({ call_id: "toolu_01", name: "Read", arguments: JSON.stringify({ file_path: "/README.md" }) });
-    expect(input[3]).toMatchObject({ call_id: "toolu_01", output: [{ type: "input_text", text: "# hello" }] });
-    const tail = input[4].content as Record<string, any>[];
+    // user text, reasoning, assistant text, function_call, function_call_output, user tail
+    expect(input.map(i => i.type ?? i.role)).toEqual(["message", "reasoning", "message", "function_call", "function_call_output", "message"]);
+    expect(input[2].content).toEqual([{ type: "output_text", text: "Reading it now." }]);
+    expect(input[3]).toMatchObject({ call_id: "toolu_01", name: "Read", arguments: JSON.stringify({ file_path: "/README.md" }) });
+    expect(input[4]).toMatchObject({ call_id: "toolu_01", output: [{ type: "input_text", text: "# hello" }] });
+    const tail = input[5].content as Record<string, any>[];
     expect(tail[0]).toEqual({ type: "input_text", text: "now summarize" });
     expect(tail[1]).toEqual({ type: "input_image", image_url: "data:image/png;base64,aWc=" });
   });
@@ -643,4 +647,98 @@ test("inbound leaves preserve the tool_choice error identity and avoid facade ba
     expect(readFileSync(repoPath("src", "claude", leaf), "utf8"))
       .not.toMatch(/from\s+["']\.\/inbound["']/);
   }
+});
+
+
+/**
+ * #3922: Anthropic enables strict tool use by setting strict: true, while Responses
+ * reads an omitted strict as permission to normalize the schema into strict mode.
+ * Translating without the field therefore made every optional input_schema parameter
+ * behave as required upstream, so a call that omitted one failed. The translated tool
+ * now carries the source intent, and the value has to survive to the serialized wire
+ * body rather than only to the translator's return.
+ */
+describe("#3922 translated tools carry the source strict intent", () => {
+  const schema = {
+    type: "object",
+    properties: {
+      prompt: { type: "string" },
+      isolation: { type: "string", enum: ["worktree", "remote"] },
+      options: { type: "object", properties: { enabled: { type: "boolean" } } },
+    },
+    required: ["prompt"],
+    additionalProperties: false,
+  };
+  const request = (tool: Record<string, unknown>) => ({
+    model: "openai/gpt-5.4",
+    max_tokens: 32,
+    messages: [{ role: "user", content: "Run a local agent." }],
+    tools: [tool],
+  });
+  const agent = (extra: Record<string, unknown> = {}) => ({
+    name: "Agent", description: "Run an agent", input_schema: schema, ...extra,
+  });
+  const translatedTool = (tool: Record<string, unknown>) =>
+    (anthropicToResponsesBody(request(tool)).tools as Record<string, unknown>[])[0]!;
+
+  test("an omitted strict becomes an explicit false instead of an implicit strict request", () => {
+    expect(translatedTool(agent()).strict).toBe(false);
+  });
+
+  test("an explicit strict survives in both directions", () => {
+    expect(translatedTool(agent({ strict: true })).strict).toBe(true);
+    expect(translatedTool(agent({ strict: false })).strict).toBe(false);
+  });
+
+  test("a non-boolean strict cannot opt the tool into strict mode", () => {
+    expect(translatedTool(agent({ strict: "true" })).strict).toBe(false);
+  });
+
+  test("the source input_schema is forwarded unchanged", () => {
+    for (const extra of [{}, { strict: true }, { strict: false }]) {
+      const tool = agent(extra);
+      // Compare against a detached copy: the expected value must not be the very
+      // object under test, or an in-place mutation would move both sides together.
+      const expectedSchema = structuredClone(tool.input_schema);
+      expect(translatedTool(tool).parameters).toEqual(expectedSchema);
+      expect(tool.input_schema).toEqual(expectedSchema);
+    }
+  });
+
+  test("hosted web_search gains no strict field", () => {
+    const body = anthropicToResponsesBody(request({ type: "web_search_20250305", name: "web_search" }));
+    expect((body.tools as Record<string, unknown>[])[0]).toEqual({ type: "web_search" });
+  });
+
+  test("strict intent and schema survive into the serialized Responses body", async () => {
+    // parsed._rawBody is the translator's own object, so reading it back proves
+    // nothing about the wire. Build the actual outbound request instead.
+    const adapter = withTestTranslatorBudget(createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      authMode: "key",
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "test-key",
+    } as OcxProviderConfig));
+
+    for (const [tool, expected] of [
+      [agent(), false],
+      [agent({ strict: true }), true],
+      [agent({ strict: false }), false],
+    ] as const) {
+      const expectedSchema = structuredClone(tool.input_schema);
+      const parsed = parseRequest({ ...anthropicToResponsesBody(request(tool)), model: "gpt-5.4" });
+      expect(parsed.context.tools?.[0]?.strict).toBe(expected);
+
+      const outbound = await adapter.buildRequest(parsed);
+      try {
+        const wire = JSON.parse(String(outbound.body)) as { tools: { strict?: boolean; parameters?: unknown }[] };
+        expect(wire.tools).toHaveLength(1);
+        expect(wire.tools[0]?.strict).toBe(expected);
+        expect(wire.tools[0]?.parameters).toEqual(expectedSchema);
+        expect(tool.input_schema).toEqual(expectedSchema);
+      } finally {
+        outbound.releaseBodyObservation?.();
+      }
+    }
+  });
 });

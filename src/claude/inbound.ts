@@ -4,19 +4,21 @@
  * Design (devlog/260711_claude_inbound/010, 003_evidence.md):
  *  - translate-and-replay: the produced body MUST pass the real responsesRequestSchema
  *    parse so routing/OAuth/pool/failover are inherited unchanged.
- *  - thinking/redacted_thinking blocks on replay are DROPPED (v1 policy) — routed
- *    providers carry reasoning in Responses items/ocxr1 envelopes instead.
+ *  - thinking/redacted_thinking replay is preserved in Responses reasoning items;
+ *    signatures and redacted payloads travel in bounded ocxr1 envelopes.
  *  - thinking.budget_tokens is NEVER forwarded raw; it maps to an effort tier.
  *  - top_k is accepted and silently dropped (no Responses equivalent, CCR parity).
  */
 import type { OcxClaudeCodeConfig } from "../types";
 import { createHash } from "node:crypto";
 
-export { AnthropicRequestError } from "./inbound-records";
+export { AnthropicRequestError, DesktopModelMappingUnavailableError } from "./inbound-records";
 export { resolveInboundModel, effortForThinkingBudget, effortFromOutputConfig, extractOcxRouteDirective, extractOcxEffortDirective } from "./inbound-model-options";
 import { AnthropicRequestError, isRec, type Rec } from "./inbound-records";
 import { resolveInboundModel, effortForThinkingBudget, effortFromOutputConfig, formatFromOutputConfig } from "./inbound-model-options";
 import { systemToInstructions, toolsToResponses, toolChoiceToResponses } from "./inbound-content-options";
+import { decodeReasoningEnvelope, encodeReasoningEnvelope, OCX_REASONING_PREFIX } from "../responses/reasoning-envelope";
+import { createTranslatorBudget, type TranslatorBudget } from "../lib/translator-budget";
 
 
 
@@ -209,7 +211,7 @@ function userMessageToItems(content: unknown, input: Rec[], elide: SkillElisionC
   pushUserMessage(input, pending);
 }
 
-function assistantMessageToItems(content: unknown, input: Rec[]): void {
+function assistantMessageToItems(content: unknown, input: Rec[], budget: TranslatorBudget): void {
   if (typeof content === "string") {
     if (content.length > 0) input.push({ type: "message", role: "assistant", content: [{ type: "output_text", text: content }] });
     return;
@@ -234,9 +236,31 @@ function assistantMessageToItems(content: unknown, input: Rec[]): void {
         input.push({ type: "function_call", call_id: raw.id, name: raw.name, arguments: JSON.stringify(raw.input ?? {}) });
         break;
       }
-      case "thinking":
-      case "redacted_thinking":
-        break; // v1 policy: dropped on replay (003 evidence — safe for routed providers)
+      case "thinking": {
+        flush();
+        const thinking = typeof raw.thinking === "string" ? raw.thinking : "";
+        const signature = typeof raw.signature === "string" ? raw.signature : "";
+        if (signature.startsWith(OCX_REASONING_PREFIX)) {
+          const owned = decodeReasoningEnvelope(signature, budget);
+          if (!owned) throw new AnthropicRequestError("malformed ocxr1 reasoning signature");
+          if (Object.hasOwn(owned, "sig")) throw new AnthropicRequestError("OpenCodex reasoning continuity cannot be replayed as an Anthropic signature");
+        }
+        const encrypted = signature.length === 0 ? undefined : signature.startsWith(OCX_REASONING_PREFIX) ? signature : encodeReasoningEnvelope({ sig: signature }, budget);
+        if (encrypted) budget.chargeRetained(2 * encrypted.length, { kind: "reasoning" });
+        if (thinking.length === 0 && !encrypted) break;
+        input.push({ type: "reasoning", id: `rs_${crypto.randomUUID().replace(/-/g, "")}`, summary: thinking.length > 0 ? [{ type: "summary_text", text: thinking }] : [], ...(encrypted ? { encrypted_content: encrypted } : {}) });
+        break;
+      }
+      case "redacted_thinking": {
+        flush();
+        const data = typeof raw.data === "string" ? raw.data : "";
+        if (data.length > 0) {
+          const encrypted = encodeReasoningEnvelope({ red: [data] }, budget);
+          budget.chargeRetained(2 * encrypted.length, { kind: "reasoning" });
+          input.push({ type: "reasoning", id: `rs_${crypto.randomUUID().replace(/-/g, "")}`, summary: [], encrypted_content: encrypted });
+        }
+        break;
+      }
       default:
         break;
     }
@@ -276,7 +300,16 @@ export function anthropicToResponsesBody(raw: unknown, cc?: OcxClaudeCodeConfig)
  * OUT-OF-BODY tuple (audit 133 R3#1 — an in-body marker would leak upstream through
  * the native Responses forward and 400).
  */
-export function anthropicToResponsesTranslation(raw: unknown, cc?: OcxClaudeCodeConfig): ClaudeInboundTranslation {
+export function anthropicToResponsesTranslation(raw: unknown, cc?: OcxClaudeCodeConfig, budget?: TranslatorBudget): ClaudeInboundTranslation {
+  const activeBudget = budget ?? createTranslatorBudget();
+  try {
+    return translateAnthropicRequest(raw, cc, activeBudget);
+  } finally {
+    if (!budget) activeBudget.dispose();
+  }
+}
+
+function translateAnthropicRequest(raw: unknown, cc: OcxClaudeCodeConfig | undefined, budget: TranslatorBudget): ClaudeInboundTranslation {
   if (!isRec(raw)) throw new AnthropicRequestError("request body must be a JSON object");
   if (typeof raw.model !== "string" || raw.model.length === 0) {
     throw new AnthropicRequestError("model is required");
@@ -297,7 +330,7 @@ export function anthropicToResponsesTranslation(raw: unknown, cc?: OcxClaudeCode
   for (const msg of raw.messages) {
     if (!isRec(msg)) throw new AnthropicRequestError("each message must be an object");
     if (msg.role === "user") userMessageToItems(msg.content, input, elide);
-    else if (msg.role === "assistant") assistantMessageToItems(msg.content, input);
+    else if (msg.role === "assistant") assistantMessageToItems(msg.content, input, budget);
     else if (msg.role === "system") {
       const text = systemMessageText(msg.content);
       if (text.length > 0) systemParts.push(text);

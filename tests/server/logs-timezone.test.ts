@@ -9,7 +9,7 @@ const config = { providers: [] } as unknown as OcxConfig;
  * #725: the dashboard rendered request-log timestamps in the BROWSER's zone, so a proxy
  * running in KST viewed from a UTC browser reported every request nine hours off.
  *
- * The zone is on /api/settings and also on the /api/logs envelope (`{ timeZone, total, logs }`,
+ * The zone is on /api/settings and also on the /api/logs envelope (`{ timeZone, generatedAt, total, logs }`,
  * #726). Consumers that still need the row list go through `logsFromApiBody`.
  */
 describe("log timestamp timezone (#725)", () => {
@@ -24,16 +24,23 @@ describe("log timestamp timezone (#725)", () => {
     expect(() => new Intl.DateTimeFormat("en-US", { timeZone: body.timeZone as string })).not.toThrow();
   });
 
-  test("/api/logs envelope includes a usable timeZone", async () => {
+  test("/api/logs envelope includes the proxy clock and a usable timeZone", async () => {
     const url = new URL("http://localhost/api/logs");
+    const before = Date.now();
     const response = await handleManagementAPI(new Request(url), url, config);
+    const after = Date.now();
     expect(response?.status).toBe(200);
     const body = await response!.json() as {
       timeZone?: unknown;
+      generatedAt?: unknown;
       total?: unknown;
       logs?: unknown;
     };
     expect(typeof body.timeZone).toBe("string");
+    expect(typeof body.generatedAt).toBe("number");
+    expect(Number.isFinite(body.generatedAt)).toBe(true);
+    expect(body.generatedAt as number).toBeGreaterThanOrEqual(before);
+    expect(body.generatedAt as number).toBeLessThanOrEqual(after);
     expect(typeof body.total).toBe("number");
     expect(Array.isArray(body.logs)).toBe(true);
     expect(() => new Intl.DateTimeFormat("en-US", { timeZone: body.timeZone as string })).not.toThrow();

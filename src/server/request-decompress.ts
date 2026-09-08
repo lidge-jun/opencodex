@@ -27,14 +27,39 @@ export class UnsupportedContentEncodingError extends Error {
   }
 }
 
+export type BodySizeMeasurement =
+  | "declared_wire"
+  | "observed_wire_lower_bound"
+  | "decoded_exact"
+  | "decoded_lower_bound";
+
 export class DecompressedBodyTooLargeError extends Error {
-  constructor(readonly bytes: number, limit: number = MAX_DECOMPRESSED_BODY_BYTES) {
-    super(`Decompressed request body exceeds ${limit} bytes`);
+  readonly measurement: BodySizeMeasurement | null;
+
+  constructor(
+    readonly bytes: number,
+    readonly limit: number = MAX_DECOMPRESSED_BODY_BYTES,
+    measurement: BodySizeMeasurement | null = null,
+  ) {
+    // Legacy callers supply no provenance. Only fixed categories and finite
+    // numbers may reach the public message, including calls from untyped code.
+    const category = measurement === "declared_wire" || measurement === "observed_wire_lower_bound"
+      || measurement === "decoded_exact" || measurement === "decoded_lower_bound"
+      ? measurement : null;
+    const suffix = category !== null && Number.isFinite(bytes) && bytes >= 0
+      && Number.isFinite(limit) && limit >= 0
+      ? ` [measurement=${category}; bytes=${bytes}]` : "";
+    super(`Decompressed request body exceeds ${Number.isFinite(limit) ? limit : "unknown"} bytes${suffix}`);
+    this.measurement = category;
   }
 }
 
-function assertBodySizeWithinLimit(body: Uint8Array, maxBytes: number): Uint8Array {
-  if (body.byteLength > maxBytes) throw new DecompressedBodyTooLargeError(body.byteLength, maxBytes);
+function assertBodySizeWithinLimit(
+  body: Uint8Array,
+  maxBytes: number,
+  measurement: BodySizeMeasurement = "decoded_exact",
+): Uint8Array {
+  if (body.byteLength > maxBytes) throw new DecompressedBodyTooLargeError(body.byteLength, maxBytes, measurement);
   return body;
 }
 
@@ -112,7 +137,7 @@ async function readRequestBodyBytesCapped(
       if (!value || value.byteLength === 0) continue;
 
       if (value.byteLength > maxBytes - retainedBytes) {
-        const error = new DecompressedBodyTooLargeError(retainedBytes + value.byteLength, maxBytes);
+        const error = new DecompressedBodyTooLargeError(retainedBytes + value.byteLength, maxBytes, "observed_wire_lower_bound");
         cancel(error);
         throw error;
       }
@@ -173,7 +198,8 @@ export function decodeRequestBody(
     else throw new UnsupportedContentEncodingError(encoding);
   } catch (err) {
     if ((err as NodeJS.ErrnoException | null)?.code === "ERR_BUFFER_TOO_LARGE") {
-      throw new DecompressedBodyTooLargeError(maxBytes + 1, maxBytes);
+      // Inflation stopped at the cap; the full decoded size was never measured.
+      throw new DecompressedBodyTooLargeError(maxBytes + 1, maxBytes, "decoded_lower_bound");
     }
     throw err;
   }
@@ -198,7 +224,7 @@ export async function readBoundedJsonRequestBody(
   // Reject an honest oversized declaration before reading. Missing, malformed,
   // and dishonest declarations remain bounded by the streaming reader below.
   if (declaredLength !== null && declaredLength > maxBytes) {
-    const error = new DecompressedBodyTooLargeError(declaredLength, maxBytes);
+    const error = new DecompressedBodyTooLargeError(declaredLength, maxBytes, "declared_wire");
     cancelStreamWithoutWaiting(req.body, error);
     throw error;
   }
@@ -211,7 +237,7 @@ export async function readBoundedJsonRequestBody(
   } finally {
     releaseReservation?.();
   }
-  assertBodySizeWithinLimit(raw, maxBytes);
+  assertBodySizeWithinLimit(raw, maxBytes, "observed_wire_lower_bound");
   const releaseRaw = budget?.observeAcceptedRequestCopy(raw.byteLength);
   let releaseDecoded: (() => void) | undefined;
   let releaseText: (() => void) | undefined;

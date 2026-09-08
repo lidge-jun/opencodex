@@ -1,96 +1,98 @@
-# 040 — Provider model removal and static default-only catalog retention
+# 040 — Provider model deletion, visibility and static default-only sync
 
-Class: C3 catalog/UI composition; the existing management mutation and deletion portions require C4 review care. This is one future PABCD cycle after 030. The source's two capabilities share the catalog-management delivery unit; keep their commits independently reviewable and their tests in this layer.
+Class C3 with C4 review for model identity and management mutations. Active P baseline: `67fdf24eb6e661f4d9e84aaa86a4eb39c6f3ba58` (2026-09-06 KST), including the verified ordering/Lab landing `76356176c` and D Cursor description preservation. Source #3659 remains OPEN at `ff4e5cd5352b9c1bd05e3de0091f3483ca130be5`; all five original commits are by gqchen <276851182@qq.com>. This active contract supersedes conflicting proposals in the historical source appendix. The source patch authority is the actual merge base `6585e6a70f42be8b6c81ff20d4fa0f39f7da03db`; target snapshot `af50c6d3` is not a valid substitute. Current independent preparation found no need for a new endpoint, store, dependency or visual redesign.
 
-## Outcome and necessity
+The previous ordering cycle is complete. The new implementation stays in bound f80e on `codex/lane-b-04-management`. User authorization includes no-verify pushes, admin merges and immediate source closure after verified dev inclusion. No local tests, suites, typechecks or builds; execution is isolated remote or hosted CI. No release/deployment, global account or service changes.
 
-Provider rows expose Hide for discovered models and Delete for persisted custom models. Both remove the row from the visible catalog and provider count across reload, using existing custom-model and visibility APIs. Static `liveModels:false` providers with no explicit models publish configured `defaultModel` plus retainModels, without discovery/auth refresh. No new delete API, persistence store, pricing editor, global model-order UI or deployment is needed.
+## Accepted behavior
 
-## Current owners and callers
+Delete removes one stored custom definition by stable ID. It sends exactly one DELETE and never an automatic visibility PUT. A native or discovered counterpart can return and keep the inventory count unchanged. Hide sends exactly one visibility PUT using a confirmed server row. Add saves a definition and preserves independent visibility/selection policy. No permanent browser tombstone survives a refresh. The existing Models page is the recovery surface for hidden rows, including when the provider tab is empty.
 
-- `src/codex/catalog/provider-fetch.ts:1489-1550`: `fetchProviderModelsWithAuth` returns forward-auth rows before static seeding. Extend the existing Vertex seed union with `seedStaticDefault`; the static return precedes OAuth/network. Preserve the forward exception and authoritative empty live-result behavior.
-- `src/server/management/shared.ts:182-193`: `fetchAllModels` calls canonical gather and may finish initial selection. `/api/selected-models` at `model-routes.ts:787` intentionally returns the FULL unfiltered available map plus selected/live provenance. Add a separate disabled map; do not prefilter available and break selection consumers.
-- `gui/src/provider-workspace/usage.ts:22-75` parses maps/counts. Add a defensive `parseDisabledModels`, provider map type, and subtract hidden ids when counting; retain complete available arrays.
-- `ProviderWorkspaceShell.tsx:188-194,559` owns refresh, counts and detail data; `Providers.tsx:454-466` passes data; `ProviderDetails.tsx:289-300` passes it into `ProviderModels`. Both detail and child have `key={item.name}`, preventing cross-provider transient-state leakage on selection.
-- `gui/src/components/provider-workspace/ProviderModels.tsx:38-155` owns custom GET/add and filtered rows. Retain stable persisted IDs, combine server disabled ids with optimistic removals, parse successful POST's returned id, and refresh after each operation.
-- `gui/src/model-visibility.ts:66` already owns request serialization. Reuse `putModelVisibility`; do not make another client.
-- `src/server/management/model-routes.ts:528-645,652-695,770-781` owns visibility, custom create and DELETE. Trace returned `catalogRefresh`, persisted disabled keys, and next GET. User-visible Hide changes catalog presentation, not direct-routing permission, per `structure/03_catalog-and-subagents.md:14-16`.
+The frontend consumes existing /api/models DTOs once per parent refresh alongside the full /api/selected-models response. It does not add disabled to selected-models or introduce another identity classifier. Existing full available, selected and liveModelCounts retain their meanings. The only production backend change is the source static-default seed plus any narrowly demonstrated regression repair approved in this cycle.
 
-## Focused implementation deltas
+## Planned interfaces and owners
 
-```diff
- const seedVertexDefault = /* existing Vertex predicate */;
-+const seedStaticDefault = prov.liveModels === false
-+  && (prov.models?.length ?? 0) === 0
-+  && Boolean(prov.defaultModel);
- const configuredIds = [...new Set([
--  ...(seedVertexDefault && prov.defaultModel ? [prov.defaultModel] : []),
-+  ...((seedVertexDefault || seedStaticDefault) && prov.defaultModel ? [prov.defaultModel] : []),
-   ...(prov.models ?? []),
-   ...(prov.retainModels ?? []),
- ])];
-```
+- Reuse type-only ModelRow from gui/src/pages/models-shared.ts. Add a strict row-array boundary parser/grouping beside current provider-workspace helpers, with dedicated model-inventory module if size warrants. Validate nonblank provider/id/namespaced, boolean disabled and optional native/custom/pending flags, plus nonblank customId for custom rows. Invalid destructive identity fails the whole refresh. Preserve raw strings; use Map/null-prototype records and namespaced uniqueness.
+- ProviderWorkspaceShell owns one paired read per refresh epoch. Adopt both successful responses together; do not claim cross-endpoint transactional consistency. Maintain a current refresh key/revision and the revision of the adopted snapshot. Invalidate readiness immediately on retry, external refresh or mutation reconciliation; deferred effect loading alone is insufficient. Keep cancellation/generation rejection and use existing bounded fetch conventions.
+- Pass modelRows: ModelRow[] | null and refresh revision/readiness through DetailSlotData, Providers, ProviderDetails and keyed ProviderModels. null is unavailable; [] is a successful empty projection. Add onOpenModels from Providers using existing navigateHash("models").
+- ProviderModels refreshes its full custom-definition GET whenever the parent revision changes, and records the successful ownership revision. Controls require a current row snapshot and current custom ownership, no load error, no pending mutation and matching customId/provider/modelId for Delete. Refetch both resources after success, failure or an ambiguous response. Successful ownership GET must not erase unresolved mutation feedback.
+- On confirmed snapshots, render non-disabled DTOs; key chips, copy and busy state by namespaced. Identical raw labels with distinct selectors are disambiguated using namespaced. An unavailable snapshot may retain old/read-only fallback data; successful empty must not insert configured/default/native rows. Pending/unknown identity has no mutation action.
+- Rail count uses the full unique non-disabled DTO inventory before query or render cap. Detail search/truncation count is separately understood. An allowlist badge does not change inventory count, and native selection does not borrow a routed same-raw-id badge. Full available/provenance stay separate.
+- Delete custom records only; other confirmed rows Hide with row.provider, row.id and row.native === true. Block both handlers and all buttons on the shared busy/readiness condition. Do not infer native from provider name or substitute Hide when custom ownership is unavailable.
+- Preserve existing Add duplicate/encoded-collision checks using full raw configured/discovered/custom inputs. Do not newly reject a valid native override solely because a native DTO has the same raw id. Existing hidden custom definitions remain duplicates and use Models to restore visibility. Validate POST 201 identity and stable ID before adoption. Saved, saved-but-hidden, refresh-pending and unconfirmed-save outcomes are distinct; no automatic POST retry or implicit unhide.
 
-Keep metadata derivation and ordered deduplication; explicit nonempty models must not start importing an unrelated default. Preserve the existing forward return and no-network static branch.
+## Source carry disposition
 
-```diff
- const available: Record<string, string[]> = {};
--for (const m of models) (available[m.provider] ??= []).push(m.id);
-+const disabled: Record<string, string[]> = {};
-+for (const m of models) {
-+  (available[m.provider] ??= []).push(m.id);
-+  if ((config.disabledModels ?? []).some(slug => slugEquals(slug, m.provider, m.id)))
-+    (disabled[m.provider] ??= []).push(m.id);
-+}
--return jsonResponse({ selected, available, liveModelCounts });
-+return jsonResponse({ selected, available, disabled, liveModelCounts });
-```
+Preserve gqchen <276851182@qq.com> in the carry commit and Co-authored-by trailer. Carry the static default-only patch, source UI controls/icons/locales and docs with adaptation. Omit the source selected-models disabled-map API hunk and its redundant parser/prop chain. Replace source Delete-then-Hide and raw-ID tombstones with the contract above. Preserve the complete historical source appendix as evidence, explicitly superseded where it conflicts with this amendment. Refresh the screenshot from the actual amended UI; the source image is historical.
 
-This is the public source delta, not the final acceptance of its OpenAI behavior. Before implementing it, main must reconcile native/manual identity with 010 (#3653), as specified in the private review report. Preserve separate selected and live-count semantics throughout prop wiring.
+## Verification required before completion
 
-```diff
--const [customModelIds, setCustomModelIds] = useState<string[]>([]);
-+type CustomModelRef = { id?: string; modelId: string };
-+const [customModels, setCustomModels] = useState<CustomModelRef[]>([]);
-+const customModelIds = useMemo(() => customModels.map(model => model.modelId), [customModels]);
-+const hiddenSet = useMemo(() => new Set([...disabledModels, ...removedModelIds]), [disabledModels, removedModelIds]);
-```
+- GUI exact request counts for cancel/Delete/Hide; custom-only delete/re-add/remount; native and discovered replacement after Delete; raw/encoded and account-qualified collisions; invalid DTO/native/custom metadata; pending rows; failed custom GET; three-resource refresh readiness with reversed responses, external custom-ID replacement and provider switch; malformed/ambiguous POST reconciliation without repeat writes; independent hidden/allowlist state preserved; empty and 300+ inventories; recovery link visible in empty state; counts match the canonical pre-search inventory.
+- Actual management DELETE→GET round trips, preserving native/routed/account hides and existing validation. No new management write semantics or relaxation.
+- Static omitted/empty models + default + retain union/dedupe, explicit list precedence, no default/no lists, forward early return, successful-empty live discovery; no extra network activity in static cases.
+- Independent C4 source/security review and final UI/code review. Actual isolated compiled GUI with synthetic API state, screenshots and remount/error evidence. Root/GUI focused checks, typecheck, docs build and exact-head hosted functional CI. No local suite/test/typecheck/build.
+- Update English and translations for static seeding and the amended Delete/Hide meaning, and the existing source of truth. Do not document an unimplemented disabled-map API.
 
-Render a separate action button after the existing copy-id button and badges. Persisted custom ID selects Delete/Trash/customDeleteConfirm; discovered-only rows select Hide/EyeOff/hideConfirm. Disable concurrent operations, preserve keyboard/aria labels, show errors, and refresh on failed or successful mutation. The appendix includes the complete public source behavior, including custom DELETE followed by visibility PUT. That sequence needs acceptance amendments before carrying; do not claim it is transactional or silently hide partial failure.
+Obtain an independent full plan audit before B. One B implements this management slice only; Fable remains a separate later cycle. Preserve the original patch below as historical source evidence, not current implementation instructions.
 
-## Activation and CI test matrix
+## Concrete component contract and file inventory
 
-| Test path | Trigger | Required observation |
-|---|---|---|
-| `tests/codex-integration/codex-catalog.test.ts` | `liveModels:false`, omitted/empty models and default only | Exactly one default routed model; fetch counter zero; same result with retain union/deduplication |
-| Same | Nonempty explicit models + different default; no default/no lists; forward auth; valid empty live discovery | Explicit list wins; truly empty stays empty; forward native policy unchanged; no failed-live default injection into authoritative empty result |
-| Same | Config contains disabled provider/model | Shared `filterCatalogVisibleModels` removes only matching provider id; raw/encoded contract unchanged |
-| `tests/server/model-discovery-management-api.test.ts` | GET selected models with one disabled and an unrelated provider key | Full available still returned; disabled scoped to provider; selected/live provenance unchanged |
-| Same + `tests/codex-integration/model-visibility-management-api.test.ts` | Native OpenAI, manual OpenAI, raw/encoded id and unavailable/default fallback across hide/reload | Exact identity scopes match 010 and disabled state survives refresh; add cross-layer regression before readiness |
-| `gui/tests/provider-model-custom-add.test.tsx` | Discovered Hide confirmation, cancellation, network/server failure | One scoped PUT on confirm, zero on cancel; row/count changes only on success; readable failure and retry |
-| Same | Persisted custom row overlaps discovered row; delete success and visibility success/failure | Stable id used for DELETE; overlap stays hidden after remount on full success; partial failure is visible and recoverable, no false rollback claim |
-| Same | Custom-only row delete→add same id; native/manual OpenAI deletion; add returns malformed JSON | Add can actually restore usable visible row, native/manual target correct, no success message on invalid payload |
-| Same + existing workspace tests | Old response missing disabled, malformed maps, switching provider while request pending | Parser defaults safe; counts and selected membership remain distinct; provider switch cannot hide the next provider's same-named row |
+The parent passes `modelRows: ModelRow[] | null`, `modelRevision: string` and `modelRowsReady: boolean` through its existing detail chain. `modelRevision` represents the current API base, external refresh token and local retry epoch. The adopted parent snapshot carries its own revision; readiness requires equality. The child custom-record load is keyed by the same revision and separately records successful ownership observation. A revision mismatch disables actions immediately, even before deferred loading effects run. Mutation start has an immediate single-flight guard; parent and ownership reconciliation must finish before that guard reopens. Failed/old reads cannot certify a new revision.
 
-Source tests explicitly cover default-only no-fetch, shared hidden filter, GET disabled map, count filtering, custom stable-id request sequence, visibility failure, Hide copy, native flag, and hidden rows. Cancellation, DELETE failure, custom-only re-add, native/manual overlap and true reload against management state need explicit added assertions. Existing mocks returning success for all PUT bodies do not prove API acceptance.
+The existing fetch owner gains cancellation and generation checks without a new cache/store. Reuse `readJsonOrThrow` and the shared `putModelVisibility`. Mutation responses must be read and their confirmed-save versus catalog-refresh status distinguished. Never treat abort/transport loss as a rollback. The UI keeps previous display under loading/error treatment where appropriate and has a retry path. When the removed focused chip disappears, return focus to a stable search/recovery control without stealing focus from a user who moved elsewhere.
 
-CI-only focused command: `bun test tests/server/model-discovery-management-api.test.ts tests/codex-integration/model-visibility-management-api.test.ts tests/codex-integration/codex-catalog.test.ts`; GUI: `cd gui && bun test tests/provider-model-custom-add.test.tsx tests/model-visibility.test.tsx`. Do not execute either locally. The main CI suite includes these paths and source import consumers, per verifier section.
+| Action | Exact paths and ownership |
+| --- | --- |
+| MODIFY | `src/codex/catalog/provider-fetch.ts`: static default seed and adjacent comment, preserving forward/static/live boundaries. |
+| ADD | `gui/src/provider-workspace/model-inventory.ts`: strict existing-DTO parser, provider grouping/count projection, and narrowly needed custom-response identity parsing; no network or second native classifier. Search existing owners before each helper. |
+| ADD | `gui/src/components/provider-workspace/ProviderModelChip.tsx`: focused existing chip markup with accessible copy/Delete/Hide controls; authority remains in ProviderModels. This keeps its stateful parent below the 400-line limit. |
+| MODIFY | `gui/src/components/provider-workspace/ProviderWorkspaceShell.tsx`: paired parent reads, revision-bound snapshot/readiness, canonical inventory counts and props. |
+| MODIFY | `gui/src/pages/Providers.tsx`, `gui/src/components/provider-workspace/ProviderDetails.tsx`: pass rows/revision/readiness and existing Models navigation. Preserve keyed provider mounts. |
+| MODIFY | `gui/src/components/provider-workspace/ProviderModels.tsx`: stable custom ownership, revision readiness, disjoint one-request mutations, confirmed identity, feedback/reconciliation, canonical row view and Add policy. No session-long removed-ID set. |
+| MODIFY | `gui/src/icons.tsx`: source EyeOff utility icon, preserving existing icon grammar. |
+| MODIFY | `gui/src/i18n/{en,de,fr,ja,ko,ru,tr,zh,zh-TW}.ts`: every displayed new label/outcome/confirmation across all nine files; retain D Logs keys. Use existing keys where their meaning fits. |
+| MODIFY | `gui/tests/provider-model-custom-add.test.tsx`: preserve Add coverage, update realistic DTO/revision fixtures and the native override/ambiguous-save cases. |
+| ADD | `gui/tests/provider-model-management.test.tsx`: stateful server-backed Delete/Hide/reload/recovery and asynchronous readiness/focus cases. |
+| ADD | `gui/tests/provider-model-inventory.test.ts`: malformed DTO/identity, namespace collisions, unique inventory counts and successful-empty semantics. GUI tests are outside the root layout registry. |
+| MODIFY | Existing workspace/Providers tests that render the touched chain: update their paired endpoint fixtures and verify counts/provenance. Only actual affected callers, found by search, are changed. |
+| MODIFY | `tests/codex-integration/codex-catalog.test.ts`: static-default/retain/explicit/forward/live-empty behavior and no-network oracles. |
+| MODIFY | `tests/codex-integration/model-visibility-management-api.test.ts`: actual custom DELETE then GET restoration/identity, independent hide state and unchanged target validation. |
+| OMIT source hunk | `src/server/management/model-routes.ts`, `gui/src/provider-workspace/usage.ts`, `tests/server/model-discovery-management-api.test.ts`: do not add the proposed disabled-map API/parser/assertion; existing response and helper meanings stay intact. |
+| MODIFY | The source's provider-reference and codex-integration guide changes in English plus fr/ja/ko/ru/tr/zh-cn/zh-tw: static seeding and existing visibility policy. |
+| MODIFY | `docs-site/src/content/docs/{,fr/,ja/,ko/,ru/,tr/,zh-cn/,zh-tw/}guides/web-dashboard.md`: Delete definition versus Hide, count semantics and existing Models recovery; retain D Logs descriptions. |
+| MODIFY | `structure/03_catalog-and-subagents.md`: ordered static seed union and provider-workspace inventory/identity/Delete/Hide contract. No direct-routing permission change. |
+| REPLACE artifact | `docs-site/public/pr-screenshots/3659-provider-model-removal.png`: capture the actual amended UI in isolated compiled QA; the source image is historical. Add only necessary state/viewport evidence. |
 
-## Documentation and visual acceptance
+Canonical count is unique non-disabled projected inventory before search and the 300-chip cap. SelectedModels remains a routed allowlist badge; native rows do not borrow a routed same-ID selection. A successful empty DTO never activates raw fallback. Native-only DTO raw IDs must not newly enter Add's duplicate set; preserve the pre-existing configured/discovered/custom and encoded-collision validation. Custom/native equal raw IDs remain distinct namespaced chips where both are projected.
 
-- Modify English plus fr/ja/ko/ru/tr/zh-cn/zh-tw provider reference and codex-integration troubleshooting: static rows are models ∪ retainModels, plus default only when models empty/omitted; still subject to existing selection/visibility and forward-provider behavior. Exact path inventory follows.
-- All nine GUI locale modules gain `models.hide` and `models.hideConfirm`; English is TKey owner. Preserve other lanes' locale additions; never replace whole locale files.
-- Source adds `docs-site/public/pr-screenshots/3659-provider-model-removal.png` (blob prefix `dafe828720`), but textual patch has only a binary marker. A screenshot must be read or refreshed from a CI-built isolated app, showing Delete versus Hide, confirmation, count change, reload and an error state. The binary was NOT visually inspected by this researcher; source presence is not UI validation.
-- Proposed SoT MODIFY `structure/03_catalog-and-subagents.md` adjacent to provider discovery paragraph: “Static catalogs use the ordered union of configured models and retainModels, seeding defaultModel only when the explicit models list is empty. Provider workspace removal uses stable custom ids for deletion and the shared visibility contract for hiding discovered rows. Hide changes catalog visibility without blocking direct routing.” Main owns the later C-phase edit.
-- Proposed MODIFY `docs-site/src/content/docs/reference/management-api.md` in `/api/selected-models` response description: add provider-scoped `disabled: Record<string,string[]>` alongside existing available/selected/liveModelCounts, documenting ids and keeping available unfiltered. This source PR omits that API-contract doc; coordinate with 010/020 edits rather than drop the additive field.
+## Design and verification contract
 
-## Dependency and readiness decisions
+Keep the existing wrapping chip layout, typography, tokens and icons. Delete confirmation explicitly says it removes the custom definition and may reveal an underlying model. Hide confirmation explains catalog visibility and preserves direct routing policy. Keep an always-visible, keyboard-accessible Models recovery action, including empty/after-Hide/error states. No hidden panel, new deep-link protocol, additional permission flow or visual redesign.
 
-010 (#3653) establishes native/manual OpenAI target discrimination. 020 preserves context selection. 030 establishes effort/order behavior. 040 must build on their combined verified tree: its `model-routes.ts` edit shares 010's owner, and it shares catalog test/provider-reference files with 030. Lane D's Logs changes overlap all locale files, so integrate locale keys hunk-by-hunk.
+Final GUI checks run on the remote exact branch: `cd gui && bun test --isolate tests`, `bun run lint`, `bun run lint:i18n`, `bun run build`. Root focused checks include catalog, model-discovery management, model-visibility API and the import-connected set; source-oracle/subprocess paths are explicitly covered. Root typecheck/privacy and docs build run remotely. Hosted exact-head Linux/macOS functional CI and actual target composition remain merge gates; final all-Windows dispatch remains in 060.
 
-The public source corrected earlier Hide/Delete wording and added a native target flag; do not repeat the old stale finding as if no fix exists. Main must resolve remaining composition and partial-failure acceptance items in `.tmp/lane-b/plan-catalog-management-review.md`, then amend this plan before B. This is not merge-ready from historical focused passes. CI approvals, exact-head reviews and docs-build coverage remain unproven here.
+Browser QA uses the actual remotely compiled dashboard with an isolated synthetic management state. Capture desktop and narrow Korean layouts plus: custom-only deletion/re-add, custom/native and custom/live restoration, independent Hide and remount, existing Models recovery, error/ambiguous-save and pending-ownership states. Observe requests and resulting rows/counts; screenshots alone do not prove persistence. No real provider accounts, global proxy or deployment are touched.
 
-## Source and baseline
+Delegation after A: main owns source carry/static seed/branch/FSM/PR integration; frontend writer owns the component/helper chain; separate GUI test writer owns behavioral fixtures; catalog/API worker owns backend regression cases; docs worker owns translations and public guides; independent reviewer owns C4 identity/security and final source audit; remote QA owns exact-head execution and browser evidence. Workers inherit the model and may delegate bounded subwork; no worker mutates main FSM or pushes/merges.
+
+## Reviewable PR layers within this work phase
+
+Use two dependent PRs for the two capabilities in source #3659. This is one management work-phase/PABCD cycle, not the Fable cycle. Layer 1 (`codex/lane-b-04-static-default`) carries static default seeding, source catalog regressions and static-provider documentation. Layer 2 (`codex/lane-b-04-management`) builds on layer 1 and contains the canonical DTO workspace, Delete/Hide controls, UI/API regression coverage, translations and rendered evidence. Both preserve gqchen attribution. The UI layer remains one coherent interaction contract; its larger regression matrix is necessary to review the three asynchronous resources and identity boundaries together.
+
+Main commits and publishes the static parent before switching the same bound checkout to its UI child, then delegates UI writers. No branch movement occurs under a running test/build. Verification for both prepared heads is collected in C; land the reviewed stack bottom-up (or a separately audited verified composition), retarget children before parent cleanup, and close original #3659 only after both capabilities are verified on dev. No source closure is claimed for the partial static landing.
+
+## Structural decision and dependency map
+
+The pressure is adding trusted row actions and refresh state to the existing 276-line ProviderModels while preserving a single server identity owner. Current edges are `ProviderWorkspaceShell -> usage/report`, `Providers -> ProviderDetails -> ProviderModels -> report/slug-codec`; `/api/models` identity comes from `src/server/management/model-rows.ts -> catalog/config`. The new parser is an HTTP read boundary, not a second identity policy.
+
+Chosen edges: the parent and child import the colocated pure `provider-workspace/model-inventory.ts`; its ModelRow dependency is type-only from `pages/models-shared.ts`. ProviderModels imports the colocated ProviderModelChip; that leaf uses existing icons/i18n and receives callbacks, never fetches or chooses authority. No barrel/public export, runtime server-to-GUI import, shared mutable store or backend layering change is introduced. Blast radius is this provider-workspace feature and its existing prop/test callers.
+
+The source disabled-map alternative is rejected because it duplicates native/custom identity policy and misses fallback/native state. Putting every new parser, state transition and chip into ProviderModels is rejected because it mixes response validation, authority and markup while approaching the 400-line boundary. The selected split leaves operation/state ownership visible in the existing parent/child. Existing component fetch conventions are retained rather than adding a query-library dependency or migrating unrelated server/cache ownership. Verify the paired read cost, no duplicate per-row request, exact prop callers, strict boundary parsing, focus and state generations in the planned remote tests/browser QA.
+
+## Historical source snapshot and full source patch
+
+Everything below is the original roadmap snapshot and public upstream diff. Its superseded two-write removal, disabled-map API, unconditional native inference and always-decrement count are not accepted implementation requirements. Active requirements are above.
+
 
 Read on 2026-09-06 KST in `/Users/jun/.codex/worktrees/f80e/opencodex` at `81871b3fa7034250b8d5ba2cbbfde44e40f0e69c`. Pinned source: [PR #3659](https://github.com/lidge-jun/opencodex/pull/3659), head `ff4e5cd5352b9c1bd05e3de0091f3483ca130be5`, source base `af50c6d3451078a7d298b044c08fd2684c9e8eeb`. Inputs are captured `.tmp/lane-b/3659.json` and `.patch`; no claim of a fresh remote status check is made. `git show -s` independently confirmed the head commit author below.
 

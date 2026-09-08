@@ -28,27 +28,30 @@ const HOUR = 60 * 60_000;
 
 let captured: QuotaResetEvent[] = [];
 
-/** Let the seams' lazy import() chains settle. */
+/** Join the writer's ordered observation/forget chain, including cold imports. */
 async function settle(): Promise<void> {
-  for (let index = 0; index < 6; index += 1) await Promise.resolve();
-  await new Promise(resolve => setTimeout(resolve, 5));
+  await flushQuotaObservationsForTests();
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  await settle();
   captured = [];
   resetQuotaResetStoreForTests();
   resetQuotaResetNotifyCacheForTests();
   resetQuotaResetPollerForTests();
   clearAccountQuota();
+  await settle();
   setQuotaResetSink(event => {
     captured.push(event);
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await settle();
   setQuotaResetSink(null);
   resetQuotaResetPollerForTests();
   clearAccountQuota();
+  await settle();
 });
 
 describe("codex quota seam", () => {

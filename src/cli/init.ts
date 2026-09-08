@@ -3,24 +3,44 @@ import { modelSelectionGuidance } from "./model-selection-guidance";
 import { initializeProviderModelSelection } from "../providers/initial-model-selection";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { injectCodexConfig } from "../codex/inject";
-import { classifyOpenAiTierBackup, getConfigPath, getDefaultConfig, isValidProviderName, preserveOpenAiTierRollbackSnapshot, saveConfig } from "../config";
+import { classifyOpenAiTierBackup, ConfigMutationLockError, getConfigPath, getDefaultConfig, initializePersistedConfigIfMissing, isValidProviderName, observeInitialConfigState, preserveOpenAiTierRollbackSnapshot } from "../config";
+import { InitialConfigPublicationError } from "../config/initialize";
+import { redactUserPath } from "../lib/redact";
 import { enrichProviderFromCatalog } from "../oauth/key-providers";
 import { deriveInitProviders } from "../providers/derive";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 
-function createPrompt(): { ask(question: string): Promise<string>; close(): void } {
+class InitCancelledError extends Error {
+  constructor(readonly exitCode: 1 | 130) {
+    super(exitCode === 130 ? "Setup cancelled." : "stdin reached EOF while waiting for input. Re-run `ocx init` in an interactive terminal.");
+  }
+}
+
+function createPrompt(): { ask(question: string): Promise<string>; throwIfCancelled(): void; close(): void } {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   let closed = false;
-  rl.on("close", () => { closed = true; });
+  let cancellation: InitCancelledError | undefined;
+  const onInterrupt = () => {
+    cancellation = new InitCancelledError(130);
+    rl.close();
+  };
+  rl.on("SIGINT", onInterrupt);
+  process.on("SIGINT", onInterrupt);
+  rl.on("close", () => {
+    closed = true;
+    cancellation ??= new InitCancelledError(1);
+    process.off("SIGINT", onInterrupt);
+    rl.off("SIGINT", onInterrupt);
+  });
   return {
     ask(question: string): Promise<string> {
       return new Promise((resolve, reject) => {
         if (closed) {
-          reject(new Error("stdin closed before the prompt could be answered"));
+          reject(cancellation ?? new InitCancelledError(1));
           return;
         }
         const onClose = () => {
-          reject(new Error("stdin reached EOF while waiting for input"));
+          reject(cancellation ?? new InitCancelledError(1));
         };
         rl.once("close", onClose);
         rl.question(question, answer => {
@@ -28,6 +48,9 @@ function createPrompt(): { ask(question: string): Promise<string>; close(): void
           resolve(answer);
         });
       });
+    },
+    throwIfCancelled() {
+      if (cancellation) throw cancellation;
     },
     close() {
       if (!closed) rl.close();
@@ -88,7 +111,18 @@ export function cleanupOpenAiTierBackupAfterInit(configPath = getConfigPath()): 
 }
 
 export async function runInit(): Promise<void> {
+  const initial = observeInitialConfigState();
+  if (initial === "exists") {
+    console.log(`Keeping existing config at ${redactUserPath(getConfigPath())}. Use \`ocx config\` or the dashboard to update it.`);
+    return;
+  }
+  if (initial === "invalid") {
+    console.error(`Cannot initialize ${redactUserPath(getConfigPath())}: existing config is invalid, unreadable, or not a regular file. It has been preserved.`);
+    process.exitCode = 1;
+    return;
+  }
   const prompt = createPrompt();
+  let configCreated = false;
   try {
     console.log("\n🔧 opencodex (ocx) setup\n");
 
@@ -171,7 +205,14 @@ export async function runInit(): Promise<void> {
       modelDiscovery: { newModelPolicy: "off" },
     };
 
-    saveConfig(config);
+    prompt.throwIfCancelled();
+    const outcome = initializePersistedConfigIfMissing(config);
+    if (outcome !== "created") {
+      console.error("Config appeared or changed while setup was running; keeping it and stopping setup.");
+      process.exitCode = 1;
+      return;
+    }
+    configCreated = true;
     // Init writes a fresh config, so a stale pre-migration backup from a previous
     // installation would make the next `ocx start` crash on a stale-backup
     // collision (issue #257). But only a STALE backup (unparseable, or already a
@@ -179,23 +220,34 @@ export async function runInit(): Promise<void> {
     // valid pre-migration (v1) config is a user-intentional rollback point and is
     // preserved by renaming it out of the collision path (sol review 260722).
     cleanupOpenAiTierBackupAfterInit();
-    console.log(`\n✅ Config saved to ~/.opencodex/config.json`);
+    console.log(`\n✅ Config saved to ${redactUserPath(getConfigPath())}`);
     if (oauthHint) console.log(`🔐 Authenticate this provider with:  ocx login ${providerName}`);
 
     const injectAnswer = await prompt.ask("Inject into Codex config.toml? [Y/n]: ");
+    prompt.throwIfCancelled();
     if (injectAnswer.trim().toLowerCase() !== "n") {
       console.log("Fetching available models from provider...");
-      const result = await injectCodexConfig(port, config);
+      const result = await injectCodexConfig(port, config, {
+        beforeClientWrite: () => prompt.throwIfCancelled(),
+      }).catch(error => {
+        // The injection/lock boundary may wrap the guard's cancellation error.
+        prompt.throwIfCancelled();
+        throw error;
+      });
+      prompt.throwIfCancelled();
       console.log(result.success ? `✅ ${result.message}` : `⚠️  ${result.message}`);
     }
 
     const shimAnswer = await prompt.ask("Install Codex autostart shim? [Y/n]: ");
+    prompt.throwIfCancelled();
     if (shimAnswer.trim().toLowerCase() !== "n") {
       try {
         const { installCodexShim } = await import("../codex/shim");
+        prompt.throwIfCancelled();
         const result = installCodexShim();
         console.log(result.installed ? `✅ ${result.message}` : `⚠️  ${result.message}`);
       } catch (err) {
+        if (err instanceof InitCancelledError) throw err;
         console.log(`⚠️  Codex autostart shim skipped: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
@@ -203,13 +255,18 @@ export async function runInit(): Promise<void> {
     console.log(`\n🚀 Setup complete! Run 'ocx start' to start the proxy.`);
     for (const line of modelSelectionGuidance(providerName)) console.log(line);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (/stdin (closed|reached EOF)/i.test(message)) {
-      console.error(`\n❌ ${message}. Re-run \`ocx init\` in an interactive terminal.`);
+    if (error instanceof InitCancelledError) {
+      console.error(`\n❌ ${error.message}${configCreated ? " The created config has been kept." : ""}`);
+      process.exitCode = error.exitCode;
+    } else {
+      const message = error instanceof InitialConfigPublicationError
+        ? `${error.message}${error.publication !== "not-published" ? " Config may already exist; inspect it before retrying." : ""}${error.residualTemp ? " A temporary file could not be removed; inspect the config directory." : ""}`
+        : error instanceof ConfigMutationLockError
+          ? "Config initialization could not acquire its write lock. Retry when the other config operation finishes."
+          : `Setup did not finish.${configCreated ? " The created config has been kept." : " Check the config directory and setup inputs before retrying."}`;
+      console.error(`\n❌ ${message}`);
       process.exitCode = 1;
-      return;
     }
-    throw error;
   } finally {
     prompt.close();
   }

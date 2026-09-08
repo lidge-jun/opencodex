@@ -61,6 +61,8 @@ export interface ProviderFetchOptions {
   onCodexWsQuota?: CodexWsQuotaObserver;
   /** Synchronous admission at actual credential dispatch, after pacing/backoff. */
   beforeDispatch?: (headers: Headers) => void;
+  /** Revalidate/rebuild a queued request at its physical send boundary, after pacing. */
+  dispatchOverride?: (input: Parameters<typeof globalThis.fetch>[0], init: RequestInit, execute: typeof globalThis.fetch) => Promise<Response>;
 }
 
 export function providerFetch(
@@ -75,7 +77,10 @@ export function providerFetch(
   const httpFetch = Object.assign(
     async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
       options.beforeDispatch?.(new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)));
-      return base(input, { ...withUpstreamHttpVersion(input, init, provider), timeout: 0 });
+      const dispatchInit = { ...withUpstreamHttpVersion(input, init, provider), timeout: 0 };
+      return options.dispatchOverride
+        ? options.dispatchOverride(input, dispatchInit, base)
+        : base(input, dispatchInit);
     },
     { preconnect },
   ) as typeof globalThis.fetch;

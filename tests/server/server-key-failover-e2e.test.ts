@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { saveConfig } from "../../src/config";
+import { loadConfig, saveConfig } from "../../src/config";
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
 import { deriveXaiConvId } from "../../src/providers/xai-transport";
 import { clearReasoningReplayCacheForTests } from "../../src/responses/reasoning-replay-cache";
@@ -10,6 +10,11 @@ import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { managementFetch } from "../helpers/management-auth";
+import { resetProviderRequestPacingForTest, setProviderRequestPacingRuntimeForTest, waitForProviderRequestSlot } from "../../src/providers/request-pacing";
+import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../../src/providers/api-key-selection";
+import { routedProviderConfig } from "../../src/router";
+import type { OcxProviderTransport } from "../../src/providers/xai-transport";
 
 let testDir = "";
 let previousHome: string | undefined;
@@ -38,6 +43,137 @@ afterEach(() => {
 });
 
 describe("server 429 key failover (end-to-end)", () => {
+  test("physical key selection rejects disabled, removed, and changed-auth providers", () => {
+    const provider = { adapter: "openai-chat", baseUrl: "https://example.test/v1", authMode: "key", apiKey: "synthetic-first" } as const;
+    const config = { providers: { current: { ...provider } } } as unknown as OcxConfig;
+    const routed = routedProviderConfig("current", config.providers.current);
+    expect(providerApiKeySelectionIsCurrent(config, "current", routed)).toBe(true);
+    // A model-level wire override does not change which key was selected.
+    expect(providerApiKeySelectionIsCurrent(config, "current", { ...routed, adapter: "openai-responses" })).toBe(true);
+    for (const replacement of [{ ...provider, disabled: true }, { ...provider, authMode: "oauth" }, { ...provider, apiKey: undefined }]) {
+      config.providers.current = replacement as OcxConfig["providers"][string];
+      expect(providerApiKeySelectionIsCurrent(config, "current", routed)).toBe(false);
+      expect(resolveCurrentProviderApiKeyTransport(config, "current", routed)).toBeNull();
+    }
+    delete config.providers.current;
+    expect(providerApiKeySelectionIsCurrent(config, "current", routed)).toBe(false);
+    expect(resolveCurrentProviderApiKeyTransport(config, "current", routed)).toBeNull();
+  });
+
+  test("physical transport refresh keeps its executor and affinity but takes current static headers", () => {
+    const config = { providers: { current: {
+      adapter: "openai-chat", baseUrl: "https://example.test/v1", authMode: "key", apiKey: "synthetic-first",
+      headers: { "x-old-static": "old" }, apiKeySelectionRevision: "first-revision",
+    } } } as unknown as OcxConfig;
+    const executor = (async () => Response.json({})) as typeof fetch;
+    const routed: OcxProviderTransport = {
+      ...routedProviderConfig("current", config.providers.current), fetch: executor,
+      headers: { "x-old-static": "old", "x-opencode-session": "runtime-session" },
+    };
+    config.providers.current = { ...config.providers.current, apiKey: "synthetic-second",
+      apiKeySelectionRevision: "second-revision", headers: { "x-new-static": "new" },
+    };
+    expect(providerApiKeySelectionIsCurrent(config, "current", routed)).toBe(false);
+    const current = resolveCurrentProviderApiKeyTransport(config, "current", routed) as OcxProviderTransport;
+    expect(current.apiKey).toBe("synthetic-second");
+    expect(current.fetch).toBe(executor);
+    expect(current.headers).toEqual({ "x-new-static": "new", "x-opencode-session": "runtime-session" });
+    expect(providerApiKeySelectionIsCurrent(config, "current", current)).toBe(true);
+  });
+
+  test("native Chat rebuilds a queued request after a manual key selection during pacing", async () => {
+    let now = 0;
+    let resumePacing: (() => void) | undefined;
+    const queued = Promise.withResolvers<void>();
+    setProviderRequestPacingRuntimeForTest({
+      now: () => now,
+      setTimer(callback, delayMs) {
+        resumePacing = () => { now += delayMs; callback(); };
+        queued.resolve();
+        return callback;
+      },
+      clearTimer() {},
+      enqueueMicrotask: queueMicrotask,
+    });
+    const seen: Headers[] = [];
+    upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(req) {
+      seen.push(new Headers(req.headers));
+      return Response.json({ id: "chatcmpl-paced", object: "chat.completion",
+        choices: [{ index: 0, message: { role: "assistant", content: "current selection" }, finish_reason: "stop" }],
+      });
+    } });
+    const config = { port: 0, hostname: "127.0.0.1", defaultProvider: "paced", providers: { paced: {
+      adapter: "openai-chat", baseUrl: `http://127.0.0.1:${upstream.port}/v1`, allowPrivateNetwork: true,
+      authMode: "key", apiKey: "synthetic-first", headers: { "x-static-test": "retained" },
+      apiKeyPool: [{ id: "first", key: "synthetic-first" }, { id: "second", key: "synthetic-second" }],
+      requestPacing: { enabled: true, minIntervalMs: 100 },
+    } } } as OcxConfig;
+    saveConfig(config);
+    const server = startServer(0);
+    const abort = new AbortController();
+    try {
+      await waitForProviderRequestSlot("paced", config.providers.paced);
+      const pending = fetch(new URL("/v1/chat/completions", server.url), {
+        method: "POST", headers: { "content-type": "application/json" }, signal: abort.signal,
+        body: JSON.stringify({ model: "paced/test", stream: false, messages: [{ role: "user", content: "hello" }] }),
+      });
+      await queued.promise;
+      expect(seen).toHaveLength(0);
+      const selected = await managementFetch(new URL("/api/providers/keys/active", server.url), {
+        method: "PUT", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "paced", id: "second" }),
+      });
+      expect(selected.status).toBe(200);
+      await selected.text();
+      resumePacing!();
+      const response = await pending;
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain("current selection");
+      expect(seen.map(headers => headers.get("authorization"))).toEqual(["Bearer synthetic-second"]);
+      expect(seen[0]!.get("x-static-test")).toBe("retained");
+    } finally {
+      abort.abort();
+      await server.stop(true);
+      resetProviderRequestPacingForTest();
+    }
+  });
+
+  test.each(["responses", "chat/completions"])("%s carries the configured env-key identity through 429 recovery", async inbound => {
+    const seen: string[] = [];
+    process.env.OCX_SELECTION_E2E_KEY = "synthetic-env-first";
+    upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(req) {
+      seen.push(req.headers.get("authorization") ?? "");
+      if (seen.length === 1) return Response.json({ error: { message: "rate limited" } }, { status: 429 });
+      return Response.json({ id: "chatcmpl-env", object: "chat.completion",
+        choices: [{ index: 0, message: { role: "assistant", content: "recovered" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      });
+    } });
+    saveConfig({ port: 0, hostname: "127.0.0.1", defaultProvider: "pooled", providers: { pooled: {
+      adapter: "openai-chat", baseUrl: `http://127.0.0.1:${upstream.port}/v1`, allowPrivateNetwork: true,
+      authMode: "key", apiKey: "${OCX_SELECTION_E2E_KEY}", apiKeyPool: [
+        { id: "first", key: "${OCX_SELECTION_E2E_KEY}" }, { id: "second", key: "synthetic-second" },
+      ],
+    } } } as OcxConfig);
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL(`/v1/${inbound}`, server.url), {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "pooled/test", stream: false,
+          ...(inbound === "responses" ? { input: "hello" } : { messages: [{ role: "user", content: "hello" }] }),
+        }),
+      });
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain("recovered");
+      expect(seen).toEqual(["Bearer synthetic-env-first", "Bearer synthetic-second"]);
+      expect(loadConfig().providers.pooled.apiKey).toBe("synthetic-second");
+      expect(loadConfig().providers.pooled._apiKeyAttempt).toBeUndefined();
+    } finally {
+      await server.stop(true);
+      delete process.env.OCX_SELECTION_E2E_KEY;
+    }
+  });
+
   test("xAI API-key rotation preserves cache affinity and never adds OAuth CLI headers", async () => {
     const originalFetch = globalThis.fetch;
     const promptCacheKey = "codex-session-high-entropy-429-e2e";

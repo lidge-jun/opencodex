@@ -44,7 +44,7 @@ export class RuntimeApiError extends Error {
 
 export async function runtimeBaseUrl(deps: RuntimeApiDeps = {}): Promise<string> {
   if (deps.baseUrl) return deps.baseUrl.replace(/\/$/, "");
-  const live = await findLiveProxy();
+  const live = await (deps.findLiveProxy ?? findLiveProxy)();
   if (!live) throw new RuntimeApiError("Proxy is not running. Start it with: ocx start", 503, null);
   return `http://${probeHostname(live.hostname)}:${live.port}`;
 }
@@ -79,7 +79,12 @@ function responseMessage(body: unknown, status: number): string {
   if (reason && reason !== primary) parts.push(`reason: ${reason}`);
   const hint = stringField(record, "hint");
   if (hint && hint !== primary) parts.push(`hint: ${hint}`);
-  return parts.join("\n").slice(0, 1200);
+  const snapshotPath = stringField(record, "snapshotPath");
+  const recovery = [
+    ...(snapshotPath ? [`Backup: ${snapshotPath.slice(0, 32768)}`] : []),
+    ...(record.residual === true ? ["Automatic recovery did not finish; check the client configuration before retrying."] : []),
+  ];
+  return [parts.join("\n").slice(0, 1200), ...recovery].join("\n");
 }
 
 export async function runtimeRequest<T = unknown>(

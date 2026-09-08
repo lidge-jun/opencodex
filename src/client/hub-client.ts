@@ -1,6 +1,8 @@
 import { MAX_REMOTE_CATALOG_BYTES } from "../server/catalog-download";
 import { readBoundedResponseBytes } from "../lib/bounded-body";
 import { clearableDeadline } from "../lib/abort";
+import type { Desktop3pModelEntry } from "../claude/desktop-3p";
+import { assertDesktop3pModelsValid } from "../claude/desktop-3p-guard";
 
 /**
  * A pairing grant may cross loopback or authenticated HTTPS, and nothing else.
@@ -30,6 +32,8 @@ import {
 const READY_BODY_LIMIT = 64 * 1024;
 const MANAGEMENT_BODY_LIMIT = 128 * 1024;
 const DEFAULT_TIMEOUT_MS = 5_000;
+const DESKTOP_SNAPSHOT_MAX_BYTES = 1024 * 1024;
+const DESKTOP_SNAPSHOT_MAX_ENTRIES = 2000;
 
 export type OneTimeConnectCredential =
   | { kind: "admin"; value: Uint8Array }
@@ -97,6 +101,7 @@ async function fetchBounded(
     });
     headerDeadline?.clear();
     if (response.status >= 300 && response.status < 400 && response.status !== 304) {
+      try { await response.body?.cancel(); } catch { /* best effort */ }
       throw new HubClientError("redirect_refused", "Hub request redirect was refused", response.status);
     }
     return response;
@@ -115,6 +120,7 @@ async function boundedText(
 ): Promise<string> {
   const declared = Number(response.headers.get("content-length") ?? "0");
   if (Number.isFinite(declared) && declared > maxBytes) {
+    try { await response.body?.cancel(); } catch { /* best effort */ }
     throw new HubClientError("body_too_large", "Hub response exceeded the allowed size", response.status);
   }
   const result = await readBoundedResponseBytes(response, {
@@ -463,6 +469,81 @@ export async function downloadClientCatalog(
   validateRemoteCatalog(parsed);
   const keyId = response.headers.get("x-opencodex-key-id")?.trim() || undefined;
   return { kind: "fresh", body, ...(keyId ? { keyId } : {}) };
+}
+
+function desktopSnapshotModels(value: unknown): Desktop3pModelEntry[] {
+  const invalid = () => new HubClientError("desktop_snapshot_invalid", "Hub Desktop model snapshot was invalid");
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw invalid();
+  const raw = value as Record<string, unknown>;
+  if (raw.version !== 1) {
+    throw new HubClientError("desktop_snapshot_unsupported", "Hub Desktop model snapshot format is unsupported");
+  }
+  if (!Array.isArray(raw.models) || raw.models.length > DESKTOP_SNAPSHOT_MAX_ENTRIES) throw invalid();
+  const models: Desktop3pModelEntry[] = raw.models.map((row: unknown) => {
+    if (!row || typeof row !== "object" || Array.isArray(row)) throw invalid();
+    const entry = row as Record<string, unknown>;
+    const family = entry.anthropicFamilyTier;
+    if (typeof entry.name !== "string" || typeof entry.labelOverride !== "string"
+      || (family !== "opus" && family !== "fable" && family !== "sonnet" && family !== "haiku")
+      || (Object.hasOwn(entry, "isFamilyDefault") && typeof entry.isFamilyDefault !== "boolean")
+      || (Object.hasOwn(entry, "supports1m") && entry.supports1m !== true)
+      || (Object.hasOwn(entry, "prefer1m") && entry.prefer1m !== true)) throw invalid();
+    return {
+      name: entry.name,
+      labelOverride: entry.labelOverride,
+      anthropicFamilyTier: family,
+      ...(typeof entry.isFamilyDefault === "boolean" ? { isFamilyDefault: entry.isFamilyDefault } : {}),
+      ...(entry.supports1m === true ? { supports1m: true as const } : {}),
+      ...(entry.prefer1m === true ? { prefer1m: true as const } : {}),
+    };
+  });
+  try { assertDesktop3pModelsValid(models); } catch { throw invalid(); }
+  return models;
+}
+
+export async function downloadDesktop3pModels(
+  serverUrl: string,
+  admissionToken: string,
+  options: { timeoutMs?: number; fetchImpl?: typeof fetch } = {},
+): Promise<{ version: 1; models: Desktop3pModelEntry[] }> {
+  const origin = normalizeHubOrigin(serverUrl);
+  if (!isPairingTransportPermitted(origin)) {
+    throw new HubClientError("insecure_http_refused", "Desktop model snapshots require HTTPS or loopback HTTP");
+  }
+  try {
+    // Keep fetchBounded's total request deadline active through body consumption;
+    // continuous progress must not extend a small Desktop snapshot download indefinitely.
+    const response = await fetchBounded(options.fetchImpl ?? fetch, `${origin}/v1/models?ids=desktop&format=desktop-config`, {
+      method: "GET",
+      headers: new Headers({
+        Accept: "application/json",
+        "anthropic-version": "2023-06-01",
+        "x-opencodex-api-key": admissionToken,
+      }),
+    }, options.timeoutMs);
+    if (!response.ok || response.status === 304) {
+      try { await response.body?.cancel(); } catch { /* best effort */ }
+      throw new HubClientError(`desktop_snapshot_http_${response.status}`, "Hub Desktop model snapshot request failed", response.status);
+    }
+    if (!jsonCompatibleContentType(response)) {
+      try { await response.body?.cancel(); } catch { /* best effort */ }
+      throw new HubClientError("desktop_snapshot_invalid", "Hub Desktop model snapshot was invalid");
+    }
+    const body = await boundedText(response, DESKTOP_SNAPSHOT_MAX_BYTES, {
+      inactivityTimeoutMs: safeTimeout(options.timeoutMs),
+    });
+    return { version: 1, models: desktopSnapshotModels(parseJson(body, "desktop_snapshot_invalid")) };
+  } catch (error) {
+    // Existing low-level errors can carry a cause containing remote JSON or fetch details.
+    // Expose only the fixed category/message, never that cause or a remote field value.
+    if (error instanceof HubClientError) {
+      const message = error.code === "desktop_snapshot_invalid" ? "Hub Desktop model snapshot was invalid"
+        : error.code === "desktop_snapshot_unsupported" ? "Hub Desktop model snapshot format is unsupported"
+          : "Hub Desktop model snapshot request failed";
+      throw new HubClientError(error.code, message, error.status);
+    }
+    throw new HubClientError("unreachable", "Hub Desktop model snapshot request did not complete");
+  }
 }
 
 export async function probeClientKeyId(

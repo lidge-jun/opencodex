@@ -57,3 +57,9 @@ GitHub operations stay sequential. Bottom-up merge commits preserve ancestry; if
 - A #3568 and B #3571 share layout manifests and provider docs; preserve both additions.
 
 Independent review findings involving security stay in ignored scratch space. Public plans describe the already-public source changes, never unpublished vulnerability analysis.
+
+## Owner steering and verification checkpoints
+
+The owner explicitly authorized admin merges during execution. Once a child PR is open, land a verified parent with `--admin --merge`, prove dev ancestry and immediately close its completed source work; retain/retarget the child before any parent-ref cleanup. The final landing cycle reconciles all outcomes rather than delaying every already-ready parent until the end.
+
+An implementation preparation cycle may close after the exact-head functional CI jobs (Linux/macOS full tests, typecheck, GUI tests and privacy), independent review and applicable remote GUI/docs checks pass. Queued aggregate packaging/keyring jobs remain explicit PR merge gates; do not claim them passed or merge before resolving required checks. This allows the next stack layer to be prepared while ancillary jobs queue, without weakening final verification or source-closure requirements.

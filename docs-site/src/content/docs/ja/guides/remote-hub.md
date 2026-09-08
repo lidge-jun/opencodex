@@ -60,6 +60,28 @@ OAuth は `POST /api/oauth/login` で開始し、コールバックできない�
 
 ## Docker とトラブルシューティング
 
+ロールバック時も両方のボリュームとマウント先を維持してください。既存ボリュームの所有者や権限は自動修復されません。Compose を使わない場合の名前付きマウントと独自の状態パスについては、[正本ガイド](/guides/remote-hub/#docker-compose)を参照してください。
+
+状態は二つのボリュームに分けて永続化します。`ocx-state` は
+`OPENCODEX_HOME=/home/bun/.opencodex`、`codex-state` は
+`CODEX_HOME=/home/bun/.codex` に対応します。両製品の `auth.json` は形式が
+異なるため、ホームを同じディレクトリにしないでください。読み取り専用の
+ルートでも、この二つのホームは書き込み可能です。
+
+カタログは自動生成されません。認証付き `/v1/catalog` の確認前に、有効な
+`/home/bun/.codex/opencodex-catalog.json` を生成または取り込んでください。
+空のホームでは `catalog_not_found` の 404 が正常です。アップグレードは既存の
+`ocx-state` を保持して `codex-state` を追加しますが、ファイルは自動移行しません。
+以前 `.opencodex` に置いたカタログはバックアップし、カタログだけを所有者限定の
+権限で移してください。`auth.json` を相互に上書きしないでください。
+`CODEX_HOME` を変更する場合は、そのディレクトリ自体を書き込み可能なボリュームに
+マウントし、既定のカタログを `${CODEX_HOME}/opencodex-catalog.json` に置きます。
+`model_catalog_json` で別のファイルを指定した場合は、その解決先も永続化します。
+カスタム構成は、明示的な移行が完了するまで環境変数とボリュームの対応を維持します。
+`docker compose down` は両ボリュームを保持しますが、`docker compose down --volumes`
+は `ocx-state` と `codex-state` の両方を削除し、認証情報・使用履歴・データキー・
+Codex の状態とカタログも失われます。更新や再起動の代わりに使わないでください。
+
 公式 Docker イメージはありませんが、リポジトリには digest 固定の Bun イメージをローカルビルドするための、管理された `Dockerfile` と `compose.yaml` があります。初回起動前にデータキーを stdin から一度だけ初期化します。キーは表示されず、`ocx-state` ボリューム内に所有者限定の権限で保存されます。
 
 ホストに Git と Bun が必要です。イメージをビルドするたびに、Git 管理下のソースから正規のマニフェストを生成し、生成後はビルドまでソースを変更しないでください。生成 JSON は Git に追加せず、`.git` は Docker コンテキストから除外します。ホスト側は既定で `127.0.0.1` にバインドします。リモート公開は `OPENCODEX_BIND_ADDRESS=<LANまたはTailscaleのIP> docker compose up -d` で明示的に指定し、`0.0.0.0` は全インターフェースを公開します。ファイアウォールと認証付き TLS/tailnet フロントエンドで保護してください。

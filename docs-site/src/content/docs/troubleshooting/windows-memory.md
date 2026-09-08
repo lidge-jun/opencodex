@@ -57,7 +57,22 @@ runtime the leak itself remains an upstream problem:
   time show whether failures are accumulating or recovering in the same process.
   The last failure is a fixed privacy-safe class such as `EACCES`, `ENOSPC`,
   `ETIMEDOUT`, or `EACLRETRYEXHAUSTED`; raw error messages and filesystem paths
-  are never returned. These diagnostics stay on the authenticated management
+  are never returned. `spillLastWriteFailureOrigin` adds a fixed origin or null:
+  `retry_returned_timeout` means the existing second spill attempt returned a
+  timeout; `timeout_memo_refusal` means the ACL helper refused through its
+  remembered timeout state. Other failures use null. The cumulative
+  `spillAclRetryReturnedTimeouts` and `spillAclTimeoutMemoRefusals` count terminal
+  failed publications, not individual ACL commands or transient first attempts.
+  Success clears the failure streak but retains the last failure fields and
+  cumulative counts; a later unrelated failure sets the last origin to null.
+  These values are process-local, so compare snapshots from the same process.
+  Neither origin identifies an OS command: the attempt budget can expire before
+  a command starts, and an optional compliance inspection can run before a memo
+  refusal. A separate process succeeding does not prove that the live process's
+  memo recovered. These observations do not add retries, clear memos, weaken
+  required ACLs, or automatically restart the service.
+
+  These diagnostics stay on the authenticated management
   endpoint and are intentionally absent from `/healthz`, which remains a liveness
   signal. The dashboard's **Memory observability** card renders the memory and
   continuation-size fields from this endpoint and offers a confirm-gated

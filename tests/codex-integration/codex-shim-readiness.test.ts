@@ -11,9 +11,16 @@ import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { codexShimReadinessWarnings } from "../../src/cli/codex-shim-readiness";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 const repoRoot = dirname(fileURLToPath(new URL("../../package.json", import.meta.url)));
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
+// This case proves a real install followed by advisory collection, not startup latency.
+const SHIM_INSTALL_CHILD_MS = process.platform === "win32" ? SPAWN_BUDGET_MS : undefined;
+const SHIM_INSTALL_CLEANUP_MS = 5_000;
+const SHIM_INSTALL_CASE_MS = SHIM_INSTALL_CHILD_MS === undefined
+  ? 10_000
+  : SHIM_INSTALL_CHILD_MS + SHIM_INSTALL_CLEANUP_MS;
 
 const ready = {
   routingKind: "native" as const,
@@ -169,13 +176,18 @@ describe("Codex shim install readiness", () => {
           PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
         },
         encoding: "utf8",
+        timeout: SHIM_INSTALL_CHILD_MS,
+        killSignal: "SIGKILL",
       });
 
+      if (result.error || result.signal !== null) {
+        throw new Error(`Shim install fixture did not complete: error=${result.error?.name ?? "none"} signal=${result.signal ?? "none"}`);
+      }
       expect(result.status).toBe(0);
       expect(result.stdout).toStartWith("⚠️  Codex autostart shim installed");
       expect(result.stderr).toContain("Codex routing could not be verified");
     } finally {
       removeTreeWithRetry(root);
     }
-  }, 10_000);
+  }, SHIM_INSTALL_CASE_MS);
 });

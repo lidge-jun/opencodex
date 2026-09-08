@@ -1,0 +1,3 @@
+# Recovery layer P refresh
+
+Consume 030 above prepared WS parent10fbda2e0. Original #3568 remains open at036a9321788464fdf33a387c9f44a834a844bdc1; carry all three voiys commits in order. No catalog/effort hunks from #3571. Add the planned cache exact-expiry/no-TTL-extension and canonical-Go conversion negatives, with a scoped inherited worker owning only the named three regression files after original carry. Main owns production integration, author commits and review. Runtime correction: isolated checks now invoke repository node_modules/.bin/bun and assert package.json dependencies.bun=1.4.0 before any execution. Full per-head CI remains mandatory before landing. #3661 remains partial, with no automatic close reference.

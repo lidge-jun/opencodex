@@ -6,8 +6,8 @@
  * that a missing body is attributed to the right cause, because the dialog shows
  * that attribution to a user as an explanation.
  */
-import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync} from "node:fs";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -41,7 +41,30 @@ async function waitUntil(predicate: () => boolean, detail: string): Promise<void
   }
 }
 
+function requireProcessId(value: number): number {
+  if (!Number.isSafeInteger(value) || value <= 0) throw new Error("invalid published process id");
+  return value;
+}
+
+function readPublishedPid(path: string): number | undefined {
+  if (!existsSync(path)) return undefined;
+  const value = readFileSync(path, "utf8").trim();
+  if (!/^\d+$/.test(value)) throw new Error("invalid published process id");
+  return requireProcessId(Number(value));
+}
+
+async function waitForPublishedPid(path: string, detail: string): Promise<number> {
+  let pid: number | undefined;
+  await waitUntil(() => (pid = readPublishedPid(path)) !== undefined, detail);
+  return pid!;
+}
+
+function publishPidSource(path: string): string {
+  return `const fs = require("node:fs"); const marker = ${JSON.stringify(path)}; const temporary = marker + "." + process.pid + ".tmp"; fs.writeFileSync(temporary, String(process.pid)); fs.renameSync(temporary, marker);`;
+}
+
 function isProcessAlive(pid: number): boolean {
+  requireProcessId(pid);
   try {
     process.kill(pid, 0);
     return true;
@@ -59,6 +82,33 @@ function root(): string {
 afterEach(async () => {
   await resetPromptTextProbeForTests();
   while (lifecycleRoots.length) removeTreeWithRetry(lifecycleRoots.pop()!);
+});
+
+test("PID markers are invisible until complete atomic publication", () => {
+  const marker = join(root(), "pid.txt");
+  const temporary = marker + ".tmp";
+  writeFileSync(temporary, "12");
+  expect(readPublishedPid(marker)).toBeUndefined();
+  writeFileSync(temporary, String(process.pid));
+  renameSync(temporary, marker);
+  expect(readPublishedPid(marker)).toBe(process.pid);
+});
+
+test("malformed published PIDs never reach the process liveness check", () => {
+  const marker = join(root(), "pid.txt");
+  const kill = spyOn(process, "kill");
+  try {
+    for (const value of ["", "0", "-1", "1.5", "9007199254740992", "12junk"]) {
+      writeFileSync(marker, value);
+      expect(() => readPublishedPid(marker)).toThrow("invalid published process id");
+    }
+    for (const pid of [0, -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(() => isProcessAlive(pid)).toThrow("invalid published process id");
+    }
+    expect(kill).not.toHaveBeenCalled();
+  } finally {
+    kill.mockRestore();
+  }
 });
 
 describe("section extraction", () => {
@@ -184,21 +234,21 @@ describe("prompt probe process lifecycle", () => {
     const pidPath = join(dir, "pid.txt");
     const overlapPath = join(dir, "overlap.txt");
     const hangingSource = [
-      `require("node:fs").writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));`,
+      publishPidSource(pidPath),
       "setInterval(() => {}, 1_000);",
     ].join("");
     setPromptTextProbeCommandForTests({ binary: process.execPath, args: ["-e", hangingSource] });
     const controller = new AbortController();
     const hanging = probePromptText(5_000, controller.signal);
-    await waitUntil(() => existsSync(pidPath), "hanging child pid");
-    const pid = Number(readFileSync(pidPath, "utf8"));
+    const pid = await waitForPublishedPid(pidPath, "hanging child pid");
     expect(isProcessAlive(pid)).toBe(true);
 
     controller.abort();
     expect((await hanging).detail).toBe("prompt probe cancelled");
 
     const replacementSource = [
-      `const fs = require("node:fs"); const pid = Number(fs.readFileSync(${JSON.stringify(pidPath)}, "utf8"));`,
+      `const fs = require("node:fs"); const rawPid = fs.readFileSync(${JSON.stringify(pidPath)}, "utf8").trim(); const pid = Number(rawPid);`,
+      "if (!/^\\d+$/.test(rawPid) || !Number.isSafeInteger(pid) || pid <= 0) throw new Error(\"invalid published process id\");",
       "let priorProbeAlive = true;",
       "try { process.kill(pid, 0); } catch { priorProbeAlive = false; }",
       `if (priorProbeAlive) fs.writeFileSync(${JSON.stringify(overlapPath)}, "overlap");`,
@@ -220,34 +270,52 @@ describe("prompt probe process lifecycle", () => {
     await waitUntil(() => !isProcessAlive(pid), "cancelled child exit");
   });
 
-  test("admission stays occupied between child exit and close handling", async () => {
+  async function exerciseCloseBoundary(injectFailure: boolean): Promise<void> {
     const pidPath = join(root(), "exited-parent-pid.txt");
     let releaseClose!: () => void;
     setPromptTextProbeCloseBarrierForTests(new Promise<void>(resolve => { releaseClose = resolve; }));
-    const delayedCloseSource = [
-      `const fs = require("node:fs");`,
-      `fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));`,
-      `process.stdout.write(${JSON.stringify(VALID_PROBE_OUTPUT)});`,
-    ].join("");
-    setPromptTextProbeCommandForTests({ binary: process.execPath, args: ["-e", delayedCloseSource] });
-    const first = probePromptText(2_000);
-    await waitUntil(() => existsSync(pidPath), "exit-close parent pid");
-    const pid = Number(readFileSync(pidPath, "utf8"));
-    await waitUntil(() => !isProcessAlive(pid), "probe parent exit");
+    let first: ReturnType<typeof probePromptText> | undefined;
+    try {
+      const delayedCloseSource = [
+        publishPidSource(pidPath),
+        `process.stdout.write(${JSON.stringify(VALID_PROBE_OUTPUT)});`,
+      ].join("");
+      setPromptTextProbeCommandForTests({ binary: process.execPath, args: ["-e", delayedCloseSource] });
+      first = probePromptText(2_000);
+      const pid = await waitForPublishedPid(pidPath, "exit-close parent pid");
+      await waitUntil(() => !isProcessAlive(pid), "probe parent exit");
+      if (injectFailure) throw new Error("fixture assertion failure before close release");
 
+      setPromptTextProbeCommandForTests({
+        binary: process.execPath,
+        args: ["-e", `process.stdout.write(${JSON.stringify(VALID_PROBE_OUTPUT)})`],
+      });
+      const blockedBeforeClose = await probePromptText(2_000);
+      expect(blockedBeforeClose.ok).toBe(false);
+      expect(blockedBeforeClose.detail).toBe("another prompt probe is still finishing; retry shortly");
+      expect(promptTextProbeSpawnAttemptsForTests()).toBe(1);
+      releaseClose();
+      expect((await first).ok).toBe(true);
+      const afterClose = await probePromptText(2_000);
+      expect(afterClose.ok).toBe(true);
+      expect(promptTextProbeSpawnAttemptsForTests()).toBe(2);
+    } finally {
+      releaseClose();
+      try { if (first) await first; } finally { await resetPromptTextProbeForTests(); }
+    }
+  }
+
+  test("admission stays occupied between child exit and close handling", async () => {
+    await exerciseCloseBoundary(false);
+  });
+
+  test("a failure before close release leaves the probe reusable", async () => {
+    await expect(exerciseCloseBoundary(true)).rejects.toThrow("fixture assertion failure before close release");
     setPromptTextProbeCommandForTests({
       binary: process.execPath,
       args: ["-e", `process.stdout.write(${JSON.stringify(VALID_PROBE_OUTPUT)})`],
     });
-    const blockedBeforeClose = await probePromptText(2_000);
-
-    expect(blockedBeforeClose.ok).toBe(false);
-    expect(blockedBeforeClose.detail).toBe("another prompt probe is still finishing; retry shortly");
+    expect((await probePromptText(2_000)).ok).toBe(true);
     expect(promptTextProbeSpawnAttemptsForTests()).toBe(1);
-    releaseClose();
-    expect((await first).ok).toBe(true);
-    const afterClose = await probePromptText(2_000);
-    expect(afterClose.ok).toBe(true);
-    expect(promptTextProbeSpawnAttemptsForTests()).toBe(2);
   });
 });

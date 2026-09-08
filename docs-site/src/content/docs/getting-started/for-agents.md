@@ -34,8 +34,10 @@ second terminal:
 ocx init
 ```
 
-The wizard writes `$OPENCODEX_HOME/config.json` (normally
-`~/.opencodex/config.json`). It can also inject the proxy address into Codex's `config.toml` and
+The wizard creates `$OPENCODEX_HOME/config.json` (normally
+`~/.opencodex/config.json`) only if it is missing. Rerunning init keeps an existing config; it has
+no force/overwrite flag. Invalid or concurrently created config is preserved and setup stops.
+It can also inject the proxy address into Codex's `config.toml` and
 install the optional Codex autostart shim. `ocx init` never starts the proxy. For a fully
 non-interactive setup, configure providers with `ocx provider add` as shown below instead of driving
 the wizard.

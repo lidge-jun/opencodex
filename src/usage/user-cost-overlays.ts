@@ -13,19 +13,23 @@
  * must not churn the version (see refreshUserCostOverlays). The configured
  * provider-name set is part of the change identity: adding or removing a
  * provider changes which names may collapse to a label base in the resolver,
- * so it bumps the version even when no overlay row changed.
+ * so it bumps the version even when no overlay row changed. Exact selectable
+ * Codex IDs and effective log labels also participate in that identity.
  *
  * Display-time estimation only — these rows never affect billing.
  */
 import type { OcxConfig, OcxProviderConfig, ProviderCostOverlay } from "../types";
 import { MAX_COST4_RATE, type ExpectedPriceOverlay } from "./expected-prices";
 import { redactSecretString } from "../lib/redact";
+import { isSelectableCodexPoolAccount, MAIN_CODEX_ACCOUNT_ID } from "../codex/account-id";
+import { codexAccountLogLabel } from "../codex/account-label";
 
 const EMPTY: readonly ExpectedPriceOverlay[] = [];
 
 let active: readonly ExpectedPriceOverlay[] = EMPTY;
 let activeSignature = "";
 let activeConfigured = new Set<string>();
+let activeAccountProviders = codexAccountProviders([]);
 let version = 0;
 let preservedDiskOnlyProviders: Record<string, OcxProviderConfig> | null = null;
 
@@ -52,6 +56,24 @@ const preservationOwnerStates = new Set<PreservationOwnerState>();
 
 function providerNames(config: OcxConfig): Set<string> {
   return new Set(Object.keys(config.providers ?? {}));
+}
+
+/** Exact config-owned identities only; aliases and generic OAuth stores are not authority. */
+function codexAccountProviders(accounts: OcxConfig["codexAccounts"]): Map<string, string> {
+  const identities = new Set(["main", MAIN_CODEX_ACCOUNT_ID]);
+  for (const account of accounts ?? []) {
+    if (!isSelectableCodexPoolAccount(account)) continue;
+    identities.add(account.id);
+    identities.add(codexAccountLogLabel(account));
+  }
+  const mapping = new Map<string, string>();
+  for (const identity of identities) {
+    mapping.set(identity, "openai");
+    for (const provider of ["openai", "chatgpt", "openai-multi"]) {
+      mapping.set(`${provider}-${identity}`, "openai");
+    }
+  }
+  return mapping;
 }
 
 /** Register one active live-config owner. Multiple server leases may share one config object. */
@@ -289,12 +311,17 @@ export function refreshUserCostOverlays(config: OcxConfig): void {
   // removing a provider (even one without an overlay) changes which names are
   // allowed to collapse to a label base, so the resolver memo and the
   // /api/usage summary cache must be invalidated on that change as well.
+  // Sort effective account identities so account order, aliases and plan
+  // metadata do not churn caches; add/remove/label changes still invalidate.
   const configuredNames = Object.keys(providers ?? {}).sort();
-  const signature = `${JSON.stringify(configuredNames)}\u0000${JSON.stringify(rows)}`;
+  const accountProviders = codexAccountProviders(config.codexAccounts);
+  const accountEntries = [...accountProviders].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+  const signature = `${JSON.stringify(configuredNames)}\u0000${JSON.stringify(rows)}\u0000${JSON.stringify(accountEntries)}`;
   if (signature === activeSignature) return;
   activeSignature = signature;
   active = rows;
   activeConfigured = new Set(configuredNames);
+  activeAccountProviders = accountProviders;
   version++;
 }
 
@@ -303,7 +330,7 @@ export function activeUserCostOverlays(): readonly ExpectedPriceOverlay[] {
   return active;
 }
 
-/** Monotonic version bumped on every refresh; used by the estimator memo key. */
+/** Monotonic version bumped on pricing-identity changes; used by the estimator memo key. */
 export function userCostOverlayVersion(): number {
   return version;
 }
@@ -311,4 +338,9 @@ export function userCostOverlayVersion(): number {
 /** Configured provider names from the last refresh (pricing-namespace identity). */
 export function activeConfiguredProviders(): ReadonlySet<string> {
   return activeConfigured;
+}
+
+/** Account pricing identities built at refresh, without reading credential stores. */
+export function activeAccountPricingProviders(): ReadonlyMap<string, string> {
+  return activeAccountProviders;
 }

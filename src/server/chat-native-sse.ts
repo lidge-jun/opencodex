@@ -61,7 +61,7 @@ function normalizedChunk(value: Rec, requestedModel: string): Rec {
   };
 }
 
-export function jsonCompletionSse(value: Rec, requestedModel: string): string {
+export function jsonCompletionSse(value: Rec, requestedModel: string, budget?: TranslatorBudget): string {
   const id = typeof value.id === "string" ? value.id : `chatcmpl-${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
   const created = typeof value.created === "number" ? value.created : Math.floor(Date.now() / 1000);
   const model = requestedModel;
@@ -77,11 +77,12 @@ export function jsonCompletionSse(value: Rec, requestedModel: string): string {
   }];
   const delta: Rec = {};
   if (typeof message.content === "string" && message.content.length > 0) delta.content = message.content;
+  if (typeof message.refusal === "string") delta.refusal = message.refusal;
   if (typeof message.reasoning_content === "string" && message.reasoning_content.length > 0) {
     delta.reasoning_content = message.reasoning_content;
   }
   if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
-    delta.tool_calls = message.tool_calls.map((tool, index) => isRec(tool) ? { index, ...tool } : tool);
+    delta.tool_calls = message.tool_calls.filter(isRec).map((tool, index) => ({ ...tool, index }));
   }
   if (Object.keys(delta).length > 0) {
     frames.push({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta, finish_reason: null }] });
@@ -94,7 +95,26 @@ export function jsonCompletionSse(value: Rec, requestedModel: string): string {
     choices: [{ index: 0, delta: {}, finish_reason: typeof choice.finish_reason === "string" ? choice.finish_reason : "stop" }],
     ...(value.usage !== undefined ? { usage: value.usage } : {}),
   });
-  return `${frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join("")}data: [DONE]\n\n`;
+  // Keep the frame strings charged while the joined body is allocated. The final
+  // string and Response's UTF-8 body coexist until response ownership ends.
+  const scope = { kind: "live_transient" as const };
+  let frameBytes = 0;
+  const serialized: string[] = [];
+  try {
+    for (const frame of frames) {
+      const text = `data: ${JSON.stringify(frame)}\n\n`;
+      const bytes = Buffer.byteLength(text);
+      budget?.chargeRetained(bytes, scope);
+      frameBytes += bytes;
+      serialized.push(text);
+    }
+    const done = "data: [DONE]\n\n";
+    const outputBytes = frameBytes + Buffer.byteLength(done);
+    budget?.chargeRetained(outputBytes * 2, scope);
+    return serialized.join("") + done;
+  } finally {
+    budget?.releaseRetained(frameBytes, scope);
+  }
 }
 
 interface NativeChatSseOptions {

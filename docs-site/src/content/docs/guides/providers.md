@@ -95,9 +95,10 @@ The ChatGPT passthrough catalog also layers in the bare GPT-5.6 Sol/Terra/Luna s
 
 ## 2. Account login (OAuth)
 
-Eight provider presets use OAuth login — plus GitHub Copilot via an experimental unofficial
+Provider presets can use account login — including GitHub Copilot via an experimental unofficial
 device-flow bridge. opencodex stores their credentials in
-`~/.opencodex/auth.json` and refreshes them automatically. `chatgpt` is also accepted by the login
+`~/.opencodex/auth.json`; refreshable tokens are refreshed automatically, while durable keys are
+reused until the provider revokes them. `chatgpt` is also accepted by the login
 CLI; it acquires a ChatGPT credential while creating a `forward`-mode provider entry.
 
 ```bash
@@ -109,6 +110,7 @@ ocx login kiro         # import kiro-cli credentials (or token fallback)
 ocx login google-antigravity
 ocx login cursor       # standalone Cursor PKCE login
 ocx login command-code # Command Code browser OAuth (or import ~/.commandcode/auth.json)
+ocx login orcarouter-oauth # OrcaRouter browser consent + PKCE
 ocx login github-copilot  # GitHub device flow → Copilot token (Copilot Pro/Business)
 ocx login chatgpt      # standalone ChatGPT OAuth login
 ocx logout <provider>
@@ -123,7 +125,11 @@ ocx logout <provider>
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | Initial login imports the installed, signed-in `kiro-cli` session (on Unix, install with `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`; on Windows PowerShell, use `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`; then run `kiro-cli login`). **Add account** logs `kiro-cli` out, starts a fresh browser login that switches the account used by `kiro-cli`, and stores account-scoped profile metadata. Existing OpenCodex accounts are preserved, and cancellation or failure restores the previous `kiro-cli` session. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth over the Cloud Code Assist wire. Live discovery uses CCA's authenticated `v1internal:fetchAvailableModels` endpoint and publishes the agent models available to the signed-in account; the maintained catalog remains the fallback. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | Experimental PKCE login, live HTTP/2 transport with an opt-in HTTP/1.1 compatibility path, and account-filtered model discovery. |
+| `orcarouter-oauth` | `openai-chat` | `https://api.orcarouter.ai/v1` | Browser consent and key exchange use `https://www.orcarouter.ai` with S256 PKCE. The returned user-owned `sk-orca-…` API key is stored in the existing credential store and reused until revoked. |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | Experimental. GitHub device flow + `copilot_internal` exchange (VS Code OAuth client). Requires an active Copilot subscription; not an official third-party API. |
+
+Google Antigravity account and provider quota probes use fixed Google accounting endpoints, including the models fallback. They support transparent Fake-IP DNS for those destinations while retaining TLS verification, redirect rejection and private-address checks. A custom provider base URL changes model requests, not quota destinations; `NO_PROXY` continues to select the direct-route policy.
+
 
 After a terminal Nous refresh failure, run `ocx login nous` to reauthenticate.
 
@@ -349,6 +355,7 @@ free-experimentation model.
 | Vultr Serverless Inference | `https://api.vultrinference.com/v1` |
 | Baseten Model APIs | `https://inference.baseten.co/v1` |
 | Command Code | `https://api.commandcode.ai/provider/v1` |
+| OrcaRouter | `https://api.orcarouter.ai/v1` |
 | Meta Model API | `https://api.meta.ai/v1` |
 | Meta Muse Code (CLI credential) | `https://api.meta.ai/v1` |
 | SambaNova Cloud | `https://api.sambanova.ai/v1` |
@@ -364,6 +371,7 @@ free-experimentation model.
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
 | Z.AI (GLM Coding) | `https://api.z.ai/api/coding/paas/v4` |
 | Zhipu AI (BigModel) | `https://open.bigmodel.cn/api/paas/v4` |
+| BigModel Coding Plan (Responses, static roster) | `https://open.bigmodel.cn/api/v1` |
 | Qwen Cloud | Token plan (default): `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` · Pay as you go: `https://dashscope.aliyuncs.com/compatible-mode/v1` · or Custom |
 | Tencent Cloud Coding Plan | `https://api.lkeap.cloud.tencent.com/coding/v3` |
 | SiliconFlow | `https://api.siliconflow.cn/v1` |
@@ -374,6 +382,22 @@ free-experimentation model.
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
 | …and more | opencode zen, Vercel AI Gateway, Venice, NanoGPT, Synthetic, Qianfan, Alibaba, Parallel, ZenMux, LiteLLM |
+
+**OpenCode Go** requires a stable session identifier for routing. OpenCodex derives
+its Go session header from Codex thread/session headers, or from a client's
+`x-opencode-session` header when Codex headers are absent. This applies to direct
+Chat Completions requests and requests bridged to Responses. Even an `ocx_`-prefixed
+inbound value is treated as client input and
+hashed into Go affinity; the internal bridge carries the original value, so native
+Chat, bridged Chat, and Responses derive the same result. Explicit provider-config
+session headers are operator overrides and are sent unchanged. Clients must keep the
+identifier stable within a conversation and distinct across conversations; requests
+without a session identifier cannot receive automatic session affinity.
+Generated Pi provider configurations enable `compat.sendSessionAffinityHeaders`
+so Pi sends its per-session identity to the proxy. Existing manually managed Pi
+configurations can set this option on their `opencodex` provider as well.
+Pi can omit session affinity when `cacheRetention` is `none`; enable cache retention
+when a stable upstream session is required.
 
 **OpenCode Zen** (`opencode-zen`) and the keyless **OpenCode Free** preset share
 `https://opencode.ai/zen/v1`. Free models on that gateway often hit a short-window burst
@@ -444,6 +468,49 @@ account-scoped and comes from the authenticated discovery endpoint after login. 
 preset (`commandcode`) uses the active configured Bearer key for chat requests; the OAuth preset
 (`command-code`) uses the stored account bearer for authenticated discovery and chat. Create
 Provider-API keys at [Command Code Studio](https://commandcode.ai/studio/).
+
+**OrcaRouter authentication and discovery.** Choose either `ocx login orcarouter-oauth` for
+one-click browser authorization or `ocx login orcarouter` to paste an existing API key. The PKCE
+flow starts a loopback listener first, sends a fresh S256 challenge and state to
+`https://www.orcarouter.ai/auth`, exchanges the single-use code at
+`https://www.orcarouter.ai/api/v1/auth/keys`, and stores the returned user-owned key in
+`~/.opencodex/auth.json`. The manual-key preset continues to use the normal provider key store.
+Both modes route to `https://api.orcarouter.ai/v1` and discover the public live catalog with
+`capability=chat`; non-chat media/rerank rows are excluded, and reported input modalities control
+whether Codex offers image attachments. Because the catalog itself is public, manual key setup
+reports validation as unknown instead of accepting that response as proof that the key works.
+
+For a one-origin self-hosted deployment, set the shared origin before the first PKCE login; the saved
+inference URL is derived from the same origin:
+
+```bash
+ORCAROUTER_BASE_URL=https://router.example ocx login orcarouter-oauth
+```
+
+For a split self-hosted deployment, set `ORCAROUTER_API_BASE_URL` and
+`ORCAROUTER_AUTH_BASE_URL` separately.
+
+The value must be an HTTPS origin (or HTTP loopback for local development) with no credentials,
+query, or fragment. Before the first login to a loopback/private self-hosted endpoint, explicitly
+allow that destination in your `~/.opencodex/config.json` provider row. For example, merge this
+entry into the existing `providers` object for a local development server:
+
+```json
+{
+  "orcarouter-oauth": {
+    "adapter": "openai-chat",
+    "baseUrl": "http://127.0.0.1:9999/v1",
+    "authMode": "oauth",
+    "allowPrivateNetwork": true
+  }
+}
+```
+
+Then run `ORCAROUTER_BASE_URL=http://127.0.0.1:9999 ocx login orcarouter-oauth`.
+Login preserves this explicit consent; setting the URL alone never enables private-network access.
+Without the opt-in, destination validation rejects inference and model discovery for that endpoint.
+This requirement concerns the provider endpoint; the browser callback listener needs no such opt-in.
+Re-run the login after a relay `401`; OrcaRouter keys are durable and do not have a refresh-token grant.
 
 **Meta Model API (`meta-model`).** Muse Spark on Meta's own OpenAI-compatible endpoint,
 served over `/v1/responses`. Create a key in
@@ -579,9 +646,43 @@ negative, or internally inconsistent billing totals produce no report rather tha
 > interactive coding tools only. General API automation, custom application backends, and
 > non-interactive batch use are prohibited and may cause the plan key to be suspended.
 
-> **Two GLM routes:** `zai` is the Z.AI international coding-plan subscription; `zhipu-bigmodel`
+> **GLM billing routes:** `zai` is the Z.AI international coding-plan subscription; `zhipu-bigmodel`
 > is Zhipu's domestic BigModel pay-as-you-go endpoint. Different hosts, different keys, different
 > billing — a key issued for one will not authenticate against the other.
+
+### BigModel Coding Plan over Responses
+
+Select **Zhipu AI — BigModel Coding Plan (Responses)** (`zhipu-bigmodel-responses`)
+for the `openai-responses` endpoint `https://open.bigmodel.cn/api/v1`. This is separate
+from `zhipu-bigmodel-coding`, which uses Chat Completions at `/api/coding/paas/v4`.
+
+The preset uses a **static roster** (`liveModels: false`) taken from the
+[official BigModel Codex example](https://docs.bigmodel.cn/cn/coding-plan/tool/codex.md):
+
+| Model | Context tokens | Upstream selectable effort | Default effort | Reasoning summaries |
+| --- | ---: | --- | --- | --- |
+| `glm-5.3` | 1,048,576 | `low`, `high`, `max` | `max` | Supported |
+| `glm-5-turbo` | 204,800 | None (empty list) | `max` | Supported |
+
+Both entries declare upstream text-only input. The Codex catalog advertises text and
+image because opencodex's existing vision sidecar can describe images for text-only
+models. Image handling requires an available, enabled vision sidecar; this does not
+declare native BigModel image support.
+
+The default model is `glm-5.3`; Responses reasoning content is preserved on replay.
+The existing Codex export adds its compatibility
+`ultra` tier to GLM-5.3 and omits Turbo's default-effort field because Turbo has no
+selectable ladder; the provider metadata still records `max` for both models.
+For Turbo, outgoing Responses requests omit `reasoning.effort`, including a caller's
+`max` or `ultra`, while preserving requested reasoning summaries. This leaves effort
+selection to the upstream default; opencodex does not inject a selectable or wire `max`.
+
+The example's `models.json` is a local catalog file, not a documented HTTP model-list
+response. This preset does not perform live model discovery. `glm-5.3-flash` is not
+seeded here because its exact Responses metadata is not verified. An existing custom
+provider with the same name keeps its configured destination and metadata.
+CLI key login also skips the undocumented `/models` probe and reports validation as
+unknown; successful key authentication is established by a subsequent inference request.
 
 ### Multiple API keys
 
@@ -620,13 +721,19 @@ A provider is included when opencodex has a matching wire adapter, **not** based
 (AI Studio, Vertex, and Antigravity/Cloud Code Assist modes), `azure` / `azure-openai`, `kiro`, and
 `cursor`. A proprietary API without one of these implementations, such as native Amazon Bedrock,
 is not supported directly.
+
+Provider configuration selects the adapter; upstream transport selection is separate. Eligible
+Responses traffic can use WSS with [explicit proxy routing](/reference/proxy-formats/#json-and-sse-output).
+Invalid or unsupported WebSocket proxy settings fall back to HTTP/SSE, which uses Bun's HTTP
+proxy rules rather than the WSS-specific `ALL_PROXY` fallback.
+
 **GitHub Copilot** is an OAuth provider (`ocx login github-copilot`) that exchanges a GitHub
 device-flow login for a short-lived Copilot API token — not a pasted API key. **GitLab Duo** remains
 a key/subscription-token gateway on its OpenAI-compatible endpoint. **Cloudflare AI
 Gateway** needs your account + gateway ids filled into the URL.
 
-Copilot fronts a mixed-wire catalog: its GPT-5 family (`gpt-5.3-codex`, `gpt-5.4`,
-`gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`) rejects
+Copilot fronts a mixed-wire catalog: the following models (`gpt-5.3-codex`, `gpt-5.4`,
+`gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`) reject
 `/chat/completions` for agent traffic, so opencodex routes those models over the
 Responses API by built-in default while every other Copilot model stays on chat
 completions. The precedence is: hard wire pin → your explicit

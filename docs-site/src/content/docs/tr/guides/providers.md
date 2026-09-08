@@ -138,6 +138,9 @@ ocx logout <saglayici>
 | `cursor` | `cursor` | `https://api2.cursor.sh` | Deneysel PKCE girişi, canlı HTTP/2 aktarımı ve hesap filtreli model keşfi. |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | Deneysel. GitHub cihaz akışı + `copilot_internal` değişimi (VS Code OAuth istemcisi). Aktif bir Copilot aboneliği gerektirir; resmi bir üçüncü taraf API değildir. |
 
+Google Antigravity hesap ve sağlayıcı kota sorguları, model listesine geri dönüş dahil sabit Google uç noktalarını kullanır. Bu hedefler için şeffaf Fake-IP DNS desteklenirken TLS doğrulaması, yönlendirme reddi ve özel adres kontrolleri korunur. Özel base URL yalnızca model isteklerini değiştirir; `NO_PROXY` doğrudan bağlantı politikasını korur.
+
+
 Uç bir Nous yenileme hatasından sonra yeniden kimlik doğrulamak için `ocx login
 nous` çalıştırın.
 
@@ -352,6 +355,7 @@ yalnızca Cline IDE/CLI içinde mevcuttur; `minimax/minimax-m2.5` belgelenmiş A
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
 | Z.AI (GLM Kodlama) | `https://api.z.ai/api/coding/paas/v4` |
 | Zhipu AI (BigModel) | `https://open.bigmodel.cn/api/paas/v4` |
+| [BigModel Coding Plan — Responses (statik model listesi)](/guides/providers/#bigmodel-coding-plan-over-responses) | `https://open.bigmodel.cn/api/v1` |
 | Qwen Cloud | Token planı (varsayılan): `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` · Kullandıkça öde: `https://dashscope.aliyuncs.com/compatible-mode/v1` · veya Özel |
 | Tencent Cloud Coding Plan | `https://api.lkeap.cloud.tencent.com/coding/v3` |
 | SiliconFlow | `https://api.siliconflow.cn/v1` |
@@ -534,7 +538,7 @@ tutarsız faturalandırma toplamları yanıltıcı bir çubuk yerine hiçbir rap
 
 > **Tencent Cloud Coding Plan kullanım kısıtlaması:** Tencent bu aboneliği yalnızca etkileşimli kodlama araçları için belgeler. Genel API otomasyonu, özel uygulama arka uçları ve etkileşimsiz toplu kullanım yasaktır ve plan anahtarının askıya alınmasına neden olabilir.
 
-> **İki GLM rotası:** `zai`, Z.AI uluslararası kodlama planı aboneliğidir; `zhipu-bigmodel`, Zhipu'nun yerel BigModel kullandıkça öde uç noktasıdır. Farklı ana bilgisayarlar, farklı anahtarlar, farklı faturalandırma — biri için verilen bir anahtar diğerine karşı kimlik doğrulaması yapmaz.
+> **GLM faturalandırma rotaları:** `zai`, Z.AI uluslararası kodlama planı aboneliğidir; `zhipu-bigmodel`, Zhipu'nun yerel BigModel kullandıkça öde uç noktasıdır. Farklı ana bilgisayarlar, farklı anahtarlar, farklı faturalandırma — biri için verilen bir anahtar diğerine karşı kimlik doğrulaması yapmaz.
 
 ### Birden fazla API anahtarı
 
@@ -585,8 +589,8 @@ login github-copilot`). **GitLab Duo**, OpenAI uyumlu uç noktasında bir
 anahtar/abonelik belirteci ağ geçidi olarak kalır. **Cloudflare AI Gateway**,
 URL'ye doldurulan hesap + ağ geçidi kimliklerinize ihtiyaç duyar.
 
-Copilot karma hatlı bir katalog sunar: GPT-5 ailesi (`gpt-5.3-codex`, `gpt-5.4`,
-`gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`) ajan
+Copilot karma hatlı bir katalog sunar: modeller (`gpt-5.3-codex`, `gpt-5.4`,
+`gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`) ajan
 trafiği için `/chat/completions`'ı reddeder, bu nedenle opencodex yerleşik
 varsayılan olarak bu modelleri Responses API üzerinden yönlendirirken diğer tüm
 Copilot modelleri sohbet tamamlamalarında kalır. Öncelik sırası: sabit hat

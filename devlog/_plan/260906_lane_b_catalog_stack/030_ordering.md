@@ -4,7 +4,7 @@ Class: C3 cross-module catalog contract. One future PABCD cycle consumes this do
 
 ## Outcome and necessity
 
-Configured canonical `opencode-go` efforts survive generation and retained sync without injected max/ultra. A nonblank bare catalog id in `modelPickerOrder` opts into complete-picker display ordering; exact ids outrank raw/encoded equivalents. Routed-only and empty configurations retain legacy behavior. Display sorting must leave the natural five-candidate subagent roster unchanged. Existing `applyReasoningLevels`, `slugEquivalenceKey`, `SPAWN_PRIORITY_FIELD`, and observed-state merge own these behaviors; reuse them, with no new catalog engine or provider roster.
+Configured canonical `opencode-go` efforts survive generation and retained sync without injected max/ultra. A nonblank bare catalog id in `modelPickerOrder` opts into complete-picker display ordering; exact ids outrank raw/encoded equivalents. Routed-only and empty configurations retain legacy behavior. Display sorting must leave OpenCodex's natural-priority guidance candidates unchanged. Native Codex advertisements are a separate consumer and may follow the changed display order. Existing `applyReasoningLevels`, `slugEquivalenceKey`, `SPAWN_PRIORITY_FIELD`, and observed-state merge own these behaviors; reuse them, with no new catalog engine or provider roster.
 
 ## Current owners and amendment anchors
 
@@ -47,7 +47,7 @@ Repeat at retained sync. Complete ordering preserves `entry[SPAWN_PRIORITY_FIELD
 | NEW `tests/codex-integration/catalog-full-picker-order.test.ts` | Bare native id + Go routed ids, then apply twice | Specified complete display order; unchanged stored natural ranks and byte-equivalent repeated result |
 | Same | Empty, whitespace-only, routed-only, raw slash upstream id plus encoded id | Legacy behavior; no whitespace activation; exact rank wins equivalence and no suffix aliasing |
 | Same | Start full order, switch to empty/routed-only during provider outage; change featured order, promote/demote; zero/two selectors and nonzero picker index | Healthy and degraded rows agree on both display and spawn rank; second merge is stable; input snapshot unmutated |
-| Same plus existing `codex-v2-gate.test.ts` | Change picker only while retaining configured subagent roster; use v2 eligibility | Same five candidates and valid exact Go effort membership |
+| Same plus existing `codex-v2-gate.test.ts` | Change picker only while retaining configured subagent roster; use v2 eligibility | Same five OpenCodex guidance candidates and valid exact Go effort membership |
 | Existing `tests/codex-integration/codex-catalog.test.ts` | Existing normalization/recovery fixtures | Existing native Reserve/exact ladders and account rows retain their contracts; align assertions only for intentional Go tier change |
 | Existing `tests/test-layout.test.ts`, `tests/test-layout-tooling.test.ts` | NEW file registration | Both explicit layout map and expected fixture contain both file names in codex-integration |
 
@@ -663,3 +663,17 @@ index 114c699eaf..8dba5cfb55 100644
    "catalog-oauth-observation.test.ts": "codex-integration",
 
 ````
+
+## Consuming P refresh
+
+Parent preparation head is 29f98462c4a63cf217347c26668733169fd65736. Source #3571 remains OPEN at 0a935c5694229760c8c1cd5a62072107d8ae6696, and its full patch passes applicability on this parent. All four non-merge source commits identify voiys <matej2714@gmail.com>. The existing modelPickerOrder field survives config loading through the established root passthrough schema; no new persistence field is introduced. Preserve providerContextCapValues from 020.
+
+The initial roadmap listed source English/French edits, but six other existing model-ordering guides also contain the legacy native-order contract. MODIFY docs-site/src/content/docs/{ja,ko,ru,tr,zh-cn,zh-tw}/guides/model-ordering.md with the same complete-order opt-in, exact/equivalent matching, unchanged spawn roster and existing-list migration warning. Do not create new locales or alter unrelated routing semantics. The runtime/template output remains separately verified from any native client capture; a synthetic rendering must never be described as an actual client capture.
+
+Delegation: main carries the final source diff and owns SoT/commits; catalog worker supplies caller-level coverage and a captured generated-list comparison; docs worker owns the six translated guides; independent code reviewer checks priorities/retained paths; remote verifier uses isolated exact-head tests/docs plus a native client capture if the installed client can be run safely with synthetic state. No local test/build/typecheck and no real personal proxy/account calls. Final merge gates remain unchanged.
+
+## C evidence-driven contract clarification
+
+The independent native-consumer audit distinguishes three concepts: OpenCodex natural-priority guidance (must remain unchanged), native advertised five (can follow changed display priority), and exact-name override eligibility (not restricted to the advertised five). This preserves the already-recorded #1649 design while correcting the earlier unqualified wording. No wire rewriting or native-client patch is added. The source appendix above remains an immutable record of the original PR and is not a current universal native-advertisement guarantee.
+
+Native source d2d5b702 (local upstream checkout, not claimed to match binary0.153.4) shows both V1/exposedV2 using native priority; current valid generated before/after data demonstrates the expected displacement. The actual0.153.4 capture proves picker/data consumption only until a separate toolspec capture is obtained. V1 has no OCX preferred-roster injection; V2 guidance is conditional on catalog state. New production-writer fixture failures remain blockers for the natural-guidance criterion and cannot be waived by this wording correction.

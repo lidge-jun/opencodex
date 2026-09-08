@@ -17,6 +17,7 @@ import {
   type OpenclawGeneratedConfig,
 } from "../../src/clients/config-export";
 import { serializeDocument } from "../../src/integrations/serialize";
+import { readPath } from "../../src/integrations/state";
 import type { OcxConfig } from "../../src/types";
 
 /**
@@ -159,14 +160,11 @@ describe("contributions describe what a writer would own", () => {
 
   test("every client's fragments point at real entries in its own document", () => {
     for (const clientId of EXPORT_CLIENT_IDS) {
-      const document = buildClientConfig(clientId, ctx()) as Record<string, unknown>;
+      const document = buildClientConfig(clientId, ctx());
       for (const fragment of EXPORT_CLIENTS[clientId].buildContribution(ctx()).fragments) {
-        let cursor: unknown = document;
-        for (const key of fragment.path) {
-          expect(cursor && typeof cursor === "object").toBe(true);
-          cursor = (cursor as Record<string, unknown>)[key];
-        }
-        expect(cursor).toEqual(fragment.value);
+        // Read through the writer's own segment grammar: Raycast's path holds
+        // a `[id=opencodex]` selector into a sequence, not a map key.
+        expect(readPath(document, fragment.path)).toEqual(fragment.value);
       }
     }
   });

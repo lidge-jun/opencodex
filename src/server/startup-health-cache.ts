@@ -50,6 +50,23 @@ export interface StartupHealthCacheDeps {
   ) => Promise<StartupHealth | null>;
 }
 
+/**
+ * Return the last completed probe immediately and refresh it in the background.
+ *
+ * Settings are consumed by several dashboard controls. They must not block on a
+ * Windows service-manager probe; the dedicated /api/startup-health route owns
+ * the fresh, bounded diagnostic read.
+ */
+export function getStartupHealthSnapshot(
+  config: Pick<OcxConfig, "codexAutoStart">,
+  deps: StartupHealthCacheDeps = {},
+): StartupHealth {
+  const now = deps.now ?? Date.now;
+  if (cached && now() - cached.timestamp < CACHE_TTL_MS) return cached.value;
+  refreshInBackground(config, deps);
+  return cached ? markStartupHealthDiagnosticStale(cached.value) : conservativeFallback(config);
+}
+
 export function markStartupHealthDiagnosticStale(value: StartupHealth): StartupHealth {
   if (!value.localRoutingDependency) return { ...value, diagnosticStale: true };
   return {
@@ -134,15 +151,20 @@ function refreshInBackground(
 ): void {
   if (inflight) return;
   const startedGeneration = generation;
-  const probe = (deps.probe ?? runProbe)(config).then(value => {
-    if (startedGeneration === generation) {
-      cached = { timestamp: (deps.now ?? Date.now)(), value };
-    }
-    return value;
-  });
-  inflight = probe.finally(() => {
-    if (inflight === probe || startedGeneration === generation) inflight = null;
-  });
+  const probe: Promise<StartupHealth> = Promise.resolve()
+    .then(() => (deps.probe ?? runProbe)(config))
+    .then(value => {
+      if (startedGeneration === generation) {
+        cached = { timestamp: (deps.now ?? Date.now)(), value };
+      }
+      return value;
+    })
+    .catch(() => cached ? markStartupHealthDiagnosticStale(cached.value) : conservativeFallback(config))
+    .finally(() => {
+      // An invalidated probe must never clear the newer generation's flight.
+      if (inflight === probe) inflight = null;
+    });
+  inflight = probe;
 }
 
 /** Stale-while-revalidate: service-manager probes never hold open a model/UI request. */

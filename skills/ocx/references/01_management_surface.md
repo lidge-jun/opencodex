@@ -28,6 +28,22 @@ These answer in the CLI head and never reach the proxy, so they work with nothin
 
 Safe to run at any time; none of these change state.
 
+### `ocx models price`
+
+Read the saved manual price for an exact provider/model selector.
+
+| Method | Route |
+|---|---|
+| GET | `/api/providers/{provider}/model-costs` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit provider, modelId, and cost (null for automatic pricing). |
+
+JSON mode: `envelope`.
+
+- The provider must be configured; everything after the first slash is the exact upstream model ID.
+
 ### `ocx status`
 
 Proxy status, injection state, and version skew between this CLI and the running proxy.
@@ -67,6 +83,7 @@ Drives no management route.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the provider list as JSON. |
+| `--jsonl` | boolean | Emit one configured provider per JSON line. |
 
 JSON mode: `envelope`.
 
@@ -115,6 +132,8 @@ Token and estimated-cost report over a time range.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--range` | string | today | 1d | 7d | 30d | all |
+| `--since` | string | Inclusive start: epoch milliseconds or full ISO datetime with timezone; requires --until and overrides --range. |
+| `--until` | string | Inclusive end: epoch milliseconds or full ISO datetime with timezone; requires --since. |
 | `--provider` | string | Restrict to one provider. |
 | `--model` | string | Restrict to one model id. |
 | `--json` | boolean | Emit the usage report as JSON. |
@@ -352,6 +371,27 @@ JSON mode: `payload`.
 
 Each of these writes. Check the flags column before running one unattended.
 
+### `ocx models set-price`
+
+Save four manual USD-per-1M-token rates, or restore automatic pricing for one model.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/providers/{provider}/model-costs` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--input` | number | Input rate; required unless --auto is used. |
+| `--output` | number | Output rate; required unless --auto is used. |
+| `--cache-read` | number | Cache read rate; defaults to 0. |
+| `--cache-write` | number | Cache write rate; defaults to 0. |
+| `--auto` | boolean | Remove this model's override; cannot be combined with rates. |
+| `--json` | boolean | Emit the saved price or reset result as JSON. |
+
+JSON mode: `payload`.
+
+- Uses the exact upstream model ID after the first slash. Omitted cache rates default to zero; sibling model prices are preserved.
+
 ### `ocx connect rotate`
 
 Rotate the connected client's data key against the hub, with commit and abort.
@@ -583,6 +623,51 @@ JSON mode: `payload`.
 - The list renders per-client state, installed, and desired columns; a blocked disable is named rather than left silent.
 - Each client has its own route because a toggle rewrites that client's own config file.
 
+### `ocx integration client`
+
+Inspect and toggle Aside profile catalogs, read their history, and restore a selected profile operation.
+
+| Method | Route |
+|---|---|
+| GET | `/api/client-integrations/aside/profiles` |
+| PUT | `/api/client-integrations/aside/profiles` |
+| GET | `/api/client-integrations/aside/profiles/{profileId}` |
+| PUT | `/api/client-integrations/aside/profiles/{profileId}` |
+| GET | `/api/client-integrations/aside/profiles/journal` |
+| GET | `/api/client-integrations/aside/profiles/{profileId}/journal` |
+| POST | `/api/client-integrations/aside/profiles/{profileId}/restore` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--client` | string | Select the file integration; use aside for profile controls. |
+| `--profile` | number | Select one registered Aside account; omitted toggles affect all profiles. |
+| `--op` | string | Operation ID for restore. |
+| `--confirm-drift` | boolean | Explicitly allow restore to replace subsequent edits. |
+| `--overwrite-conflict` | boolean | Explicitly allow enable to replace a conflicting provider block. |
+| `--json` | boolean | Emit the profile state, history, or mutation result as JSON. |
+
+JSON mode: `payload`.
+
+- Use status/show/list, history/journal, enable/disable, or restore after integration client.
+- These declarations cover the dedicated Aside profile paths; existing generic client routes retain their separate parity inventory.
+
+### `ocx sync`
+
+Synchronize client catalogs, including Aside profiles through the running server's mutation owner.
+
+| Method | Route |
+|---|---|
+| POST | `/api/client-integrations/aside/sync` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--restart-codex` | boolean | Restart Codex app-servers after a catalog or cache write. |
+| `--restart-desktop-app` | boolean | Restart the Codex desktop app after a catalog or cache write. |
+
+JSON mode: `none`.
+
+- The Aside refresh uses the live server; other catalog synchronization also performs local work.
+
 ### `ocx agent request-user-input`
 
 Show or set whether default mode may ask the operator a question mid-task.
@@ -602,6 +687,6 @@ JSON mode: `payload`.
 
 ## Counts
 
-- declared capabilities: 33
-- of those, state-changing: 13
+- declared capabilities: 37
+- of those, state-changing: 16
 - head-resolved invocations: 2

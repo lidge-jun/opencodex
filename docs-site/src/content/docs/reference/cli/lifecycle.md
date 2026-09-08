@@ -88,6 +88,19 @@ are left in place.
 
 ### `ocx status [--json]`
 
+Status and `ocx doctor` compare this CLI's version with the running proxy. If the CLI is newer,
+restart the proxy using the intended current installation; for a background service, run
+`ocx service repair` (`ocx service restart` is an alias). If the proxy is newer, upgrade the CLI
+or resolve `PATH` to the intended installation. These diagnostics do not repair the service or
+change whether requests are allowed.
+
+Identical version strings and the `unknown` / `0.0.0` placeholders suppress the warning, as does
+an absent proxy version. Doctor does not report placeholders as a confirmed match. Different
+strings still produce a neutral warning when they cannot be strictly parsed as SemVer or differ
+only in build metadata; neither side is called older. Versions are not trimmed and a leading `v`
+is not normalized. JSON exposes the same advice in `versionSkew`, whose fields remain
+`cliVersion`, `proxyVersion`, `skewed`, and `warning`.
+
 Print a read-only diagnostic summary: proxy PID, `/healthz` reachability, dashboard URL, config path,
 default provider, Codex autostart setting, service state, shim state, and the redacted effective Codex
 home. Only the explicit, high-confidence Windows Orca runtime-home signature adds an actionable App-home
@@ -261,9 +274,10 @@ bundled Bun paths are deliberately rediscovered after upgrades instead of being 
 Definitions installed before this change still carry the old versioned paths and cannot migrate
 themselves — once the old executable is deleted, no opencodex code runs to fix it. Run
 `ocx service repair` once after upgrading; after that, each service start follows the launcher.
-An already-running proxy is not replaced by an external upgrade: restart the service (or run
-`ocx service repair`) so the new build serves, and treat a CLI/proxy version mismatch warning as
-exactly that signal.
+An already-running proxy is not replaced by an external upgrade: when the installed CLI is newer
+than the running proxy, restart the service (or run `ocx service repair`) so the new build serves.
+If the proxy is newer instead, check the CLI installation and `PATH` as described under
+[`ocx status`](#ocx-status---json).
 
 | Subcommand | Action |
 | --- | --- |
@@ -426,36 +440,43 @@ ocx codex-shim status
 ocx codex-shim uninstall
 ```
 
+:::note[Windows token environment]
+Newly generated Windows CMD and PowerShell shims restore the caller's `OPENCODEX_API_AUTH_TOKEN` after execution. Codex and its child processes can still inherit the token.
+
+After updating OpenCodex, recreate an existing Windows shim with `ocx codex-shim uninstall` followed by `ocx codex-shim install` to obtain this behavior. An ordinary update does not rewrite a healthy Windows shim.
+:::
+
 :::tip[Service vs Shim]
 Use `ocx service` for an always-on background proxy (recommended). Use `ocx codex-shim` for
 lightweight, on-demand startup without a daemon — the proxy starts only when `codex` is launched.
 :::
 
-#### Token injection without the shim
+#### Token injection into Codex
 
 On a non-loopback bind the injected provider carries `env_key = "OPENCODEX_API_AUTH_TOKEN"`. That
 line tells Codex which variable to read; it does not create it. Codex refuses to start a request
 when the variable is missing (`Missing environment variable: OPENCODEX_API_AUTH_TOKEN`), and the
-proxy is never reached. The value lives in `$OPENCODEX_HOME/service-api-token`; only a process that
-exports it into Codex's environment closes the gap.
+proxy is never reached. The value lives in `$OPENCODEX_HOME/service-api-token`; the launching process
+must supply it in Codex's environment.
 
-What does carry the token into a Codex process:
+Use the maintained shim installed by `ocx codex-shim install`. When the launching context resolves
+this shim, it reads the token file created by OpenCodex and supplies the variable to Codex.
+Desktop, cron, and service launches must use a PATH or launcher path that selects the shim;
+installation does not configure those environments automatically. Codex's own child processes
+may still inherit the token.
 
-- the shim installed by `ocx codex-shim install` (reads the token file at launch; the supported path
-  for Codex started from shells, Desktop, cron, or another service);
-- exporting `OPENCODEX_API_AUTH_TOKEN` yourself in the process that starts Codex — a shell profile,
-  the cron line, or an `Environment=`/`EnvironmentFile=` on the systemd unit that launches
-  **Codex** (not the proxy). Point it at the existing token file; do not copy the value into
-  `config.toml`.
+Do not export this bearer token from a shell startup file or copy it into `config.toml`. The
+`service-api-token` file contains the raw token, not `NAME=value` assignments, so it cannot be used
+directly as a systemd `EnvironmentFile=`.
 
-What does not: an `EnvironmentFile=` or `OCX_API_TOKEN_FILE` on `opencodex-proxy.service`. Those
-configure the proxy process only and never flow into an independently launched `codex exec`.
+An `EnvironmentFile=` or `OCX_API_TOKEN_FILE` on `opencodex-proxy.service` configures the proxy process
+only and never flows into an independently launched `codex exec`.
 
 A Codex upgrade that replaces the launcher removes the shim; the next ordinary `ocx` command restores
 it (see above), but a `codex exec` that runs before that fails. `ocx doctor` reports this exact
 state under "Codex env_key launch readiness" (env_key configured, variable unset, shim missing or
 unhealthy, token file present) with the repair command, and never prints the token. Reading the token
-file directly from Codex is not something Codex supports, so there is no OpenCodex directive for it.
+file is not part of the injected `env_key` contract; the launching process must supply that variable.
 
 ### `ocx tray <install|start|stop|status|uninstall|remove> [--json] [--no-start]`
 

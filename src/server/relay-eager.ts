@@ -29,6 +29,7 @@ import {
   createSseTerminalOutputBoundary,
   doneFrame,
   failedTailFrame,
+  upstreamErrorTailFrame,
 } from "./relay";
 import {
   nextSseBlock,
@@ -63,7 +64,7 @@ export type EagerRelayHooks = {
   /** True once inspection has reported a protocol terminal (inspector.reported). */
   sawTerminal: () => boolean;
   /** Record a synthetic terminal (caller decides incomplete vs failed-502). */
-  onSynthetic: (kind: "incomplete" | "failed") => void;
+  onSynthetic: (kind: "incomplete" | "failed", reason?: "upstream_error") => void;
   /** Client cancelled and NO terminal arrived within the drain bounds. */
   onClientCancel: () => void;
   /** Exactly once, after the producer fully stops (unregisterTurn parity). */
@@ -81,6 +82,8 @@ export type EagerRelayOptions = {
   postCancelDrainMs?: number;
   /** Post-cancel discard-drain byte bound. Default 32 MiB. */
   postCancelDrainBytes?: number;
+  /** Last known upstream failure to preserve when EOF would otherwise become adapter_eof. */
+  upstreamError?: string;
   /** Injectable clock for tests. */
   now?: () => number;
 };
@@ -239,6 +242,7 @@ export function relaySseEagerBounded(
 
   const producer = async () => {
     let syntheticKind: "incomplete" | "failed" | null = null;
+    let syntheticReason: "upstream_error" | undefined;
     let deliveryFallbackSent = false;
     let priorRewriteFailure = false;
     let priorRewriteError: unknown;
@@ -303,12 +307,17 @@ export function relaySseEagerBounded(
           } else if (!hooks.sawTerminal() && canDeliver()) {
             // A clean 200 EOF without a Responses terminal must be visible to
             // Codex as one incomplete turn, followed by the normal sentinel.
-            queuedBytes += adapterEofFrame.byteLength + terminalSentinel.byteLength;
+            const upstreamError = terminalBoundary.upstreamError() ?? opts?.upstreamError;
+            const upstreamErrorFrame = upstreamError === undefined
+              ? adapterEofFrame
+              : upstreamErrorTailFrame(terminalEncoder, upstreamError);
+            queuedBytes += upstreamErrorFrame.byteLength + terminalSentinel.byteLength;
             try {
-              controllerRef?.enqueue(adapterEofFrame);
+              controllerRef?.enqueue(upstreamErrorFrame);
               controllerRef?.enqueue(terminalSentinel);
             } catch { /* client already gone */ }
-            syntheticKind = "incomplete";
+            syntheticKind = upstreamError === undefined ? "incomplete" : "failed";
+            syntheticReason = upstreamError === undefined ? undefined : "upstream_error";
           }
           break;
         }
@@ -449,7 +458,10 @@ export function relaySseEagerBounded(
         frameBufferBytes = 0;
       }
       terminalBoundary.dispose();
-      if (syntheticKind && canDeliver()) hooks.onSynthetic(syntheticKind);
+      if (syntheticKind && canDeliver()) {
+        if (syntheticReason === undefined) hooks.onSynthetic(syntheticKind);
+        else hooks.onSynthetic(syntheticKind, syntheticReason);
+      }
       if (cancelled && !hooks.sawTerminal()) {
         hooks.onClientCancel();
       }

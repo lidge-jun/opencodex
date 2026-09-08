@@ -1,4 +1,5 @@
 import { readJsonIfOk } from "../../fetch-json";
+import { parseAsideProfileStatus, parseAsideProfileOutcomes, type AsideProfileOutcome } from "./aside-profile-contract";
 
 export const FILE_INTEGRATION_CLIENTS = [
   "opencode",
@@ -13,6 +14,7 @@ export const FILE_INTEGRATION_CLIENTS = [
   "zcode",
   "prime",
   "aside",
+  "raycast",
 ] as const;
 
 export type FileIntegrationClientId = (typeof FILE_INTEGRATION_CLIENTS)[number];
@@ -24,6 +26,7 @@ export type IntegrationReason =
   | "foreign-edit"
   | "unowned-key"
   | "blocked-container"
+  | "ambiguous-selector"
   | "unresolvable-path";
 
 export type IntegrationRefusalReason =
@@ -35,6 +38,19 @@ export type IntegrationRefusalReason =
   | "snapshot_expired"
   | "write_failed";
 
+export type RaycastPlan = "pro" | "free" | "unknown";
+
+/**
+ * Raycast's app-side facts, sent only on `/api/client-integrations/raycast`.
+ * Custom Providers is a Pro feature, so a `current` file can still be one
+ * Raycast ignores — this is what lets the page say so instead of showing green.
+ */
+export interface RaycastInstall {
+  plan: RaycastPlan;
+  appPath: string | null;
+  aiDirPresent: boolean;
+}
+
 export interface IntegrationStatus {
   clientId: FileIntegrationClientId;
   state: IntegrationState;
@@ -45,6 +61,10 @@ export interface IntegrationStatus {
   reason?: IntegrationReason;
   snapshotCount: number;
   retentionDegraded: boolean;
+  /** Aside's explicit account-backed profile scope and desired sync state. */
+  profileId?: number;
+  enabled?: boolean;
+  raycast?: RaycastInstall;
 }
 
 export interface IntegrationStateListEnvelope {
@@ -65,6 +85,7 @@ export interface IntegrationJournalRow {
    * available as the undo entry point.
    */
   deletable: boolean;
+  profileId?: number;
 }
 
 export interface IntegrationJournalEnvelope {
@@ -78,9 +99,10 @@ export interface IntegrationMutationResult {
   state: IntegrationState;
   opId?: string;
   message: string;
+  profileId?: number;
 }
 
-export type IntegrationToggleResult = IntegrationMutationResult;
+export type IntegrationToggleResult = IntegrationMutationResult & { results?: AsideProfileOutcome[] };
 export type IntegrationRestoreResult = IntegrationMutationResult;
 /** Kept as the shared name consumed by the page surfaces. */
 export type IntegrationMutationEnvelope = IntegrationMutationResult;
@@ -115,6 +137,7 @@ export interface IntegrationErrorEnvelope {
   residual?: boolean;
   validClients?: readonly FileIntegrationClientId[];
   hint?: string;
+  results?: AsideProfileOutcome[];
 }
 
 export type IntegrationErrorBody = IntegrationErrorEnvelope | IntegrationRefusalEnvelope;
@@ -202,6 +225,21 @@ async function readResponse<T>(response: Response): Promise<T> {
   return body;
 }
 
+export { readResponse as readIntegrationResponse };
+
+function profilePath(profileId: number): string {
+  if (!Number.isSafeInteger(profileId) || profileId < 0) throw new IntegrationApiError(400, { code: "invalid_aside_profile" });
+  return `/api/client-integrations/aside/profiles/${profileId}`;
+}
+
+function clientPath(client: FileIntegrationClientId, profileId?: number): string {
+  if (profileId !== undefined) {
+    if (client !== "aside") throw new IntegrationApiError(400, { code: "invalid_aside_profile" });
+    return profilePath(profileId);
+  }
+  return client === "aside" ? "/api/client-integrations/aside/profiles" : `/api/client-integrations/${encodeURIComponent(client)}`;
+}
+
 export async function loadIntegrationStates(apiBase: string, signal?: AbortSignal) {
   return readResponse<IntegrationStateListEnvelope>(
     await fetch(`${apiBase}/api/client-integrations`, { signal }),
@@ -212,21 +250,34 @@ export async function loadIntegrationState(
   apiBase: string,
   client: FileIntegrationClientId,
   signal?: AbortSignal,
+  profileId?: number,
 ) {
-  return readResponse<IntegrationStatus>(
-    await fetch(`${apiBase}/api/client-integrations/${encodeURIComponent(client)}`, { signal }),
+  const result = await readResponse<IntegrationStatus>(
+    await fetch(`${apiBase}${clientPath(client, profileId)}`, { signal }),
   );
+  if (profileId !== undefined) {
+    const parsed = parseAsideProfileStatus(result);
+    if (!parsed || parsed.profileId !== profileId) throw new IntegrationApiError(502, { code: "invalid_aside_profile_response" });
+    return parsed;
+  }
+  return result;
 }
 
 export async function loadIntegrationJournal(
   apiBase: string,
   client?: FileIntegrationClientId,
   signal?: AbortSignal,
+  profileId?: number,
 ) {
-  const query = client ? `?client=${encodeURIComponent(client)}` : "";
-  return readResponse<IntegrationJournalEnvelope>(
-    await fetch(`${apiBase}/api/client-integrations/journal${query}`, { signal }),
+  if (profileId !== undefined && client !== "aside") throw new IntegrationApiError(400, { code: "invalid_aside_profile" });
+  const path = client === "aside" ? `${clientPath(client, profileId)}/journal`
+    : `/api/client-integrations/journal${client ? `?client=${encodeURIComponent(client)}` : ""}`;
+  const result = await readResponse<IntegrationJournalEnvelope>(
+    await fetch(`${apiBase}${path}`, { signal }),
   );
+  if (profileId !== undefined && (!Array.isArray(result.operations)
+    || result.operations.some(row => row.clientId !== "aside" || row.profileId !== profileId))) throw new IntegrationApiError(502, { code: "invalid_aside_profile_response" });
+  return result;
 }
 
 export async function toggleIntegration(
@@ -239,15 +290,27 @@ export async function toggleIntegration(
    * existing call site can acquire it, and a caller has to name it.
    */
   overwriteConflict?: boolean,
+  profileId?: number,
 ) {
-  return readResponse<IntegrationToggleResult>(
-    await fetch(`${apiBase}/api/client-integrations/${encodeURIComponent(client)}`, {
+  const result = await readResponse<IntegrationToggleResult | { ok: false; message?: string; results?: unknown }>(
+    await fetch(`${apiBase}${clientPath(client, profileId)}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(overwriteConflict === true ? { enabled, overwriteConflict: true } : { enabled }),
       signal,
     }),
   );
+  const outcomes = result.results === undefined ? undefined : parseAsideProfileOutcomes(result.results);
+  if (client === "aside" && result.results !== undefined && (!outcomes
+    || result.ok !== outcomes.every(row => row.ok))) {
+    throw new IntegrationApiError(502, { code: "invalid_aside_profile_response" });
+  }
+  if (result.ok !== true) throw new IntegrationApiError(207, {
+    code: client === "aside" ? "aside_profile_partial" : "integration_mutation_failed", message: result.message,
+    results: outcomes ?? undefined,
+  });
+  if (profileId !== undefined && result.profileId !== profileId) throw new IntegrationApiError(502, { code: "invalid_aside_profile_response" });
+  return { ...result, ...(outcomes ? { results: outcomes } : {}) };
 }
 
 export async function restoreIntegration(
@@ -255,15 +318,18 @@ export async function restoreIntegration(
   opId: string,
   confirmDrift = false,
   signal?: AbortSignal,
+  profileId?: number,
 ) {
-  return readResponse<IntegrationRestoreResult>(
-    await fetch(`${apiBase}/api/client-integrations/restore`, {
+  const result = await readResponse<IntegrationRestoreResult>(
+    await fetch(`${apiBase}${profileId === undefined ? "/api/client-integrations/restore" : `${profilePath(profileId)}/restore`}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ opId, confirmDrift }),
       signal,
     }),
   );
+  if (profileId !== undefined && result.profileId !== profileId) throw new IntegrationApiError(502, { code: "invalid_aside_profile_response" });
+  return result;
 }
 
 /**
@@ -277,18 +343,22 @@ export async function deleteJournalEntry(
   apiBase: string,
   opId: string,
   signal?: AbortSignal,
+  profileId?: number,
 ) {
-  return readResponse<{
+  const result = await readResponse<{
     ok: true;
     opId: string;
     clientId: FileIntegrationClientId;
     snapshotRemoved: boolean;
+    profileId?: number;
   }>(
-    await fetch(`${apiBase}/api/client-integrations/journal?opId=${encodeURIComponent(opId)}`, {
+    await fetch(`${apiBase}${profileId === undefined ? "/api/client-integrations/journal" : `${profilePath(profileId)}/journal`}?opId=${encodeURIComponent(opId)}`, {
       method: "DELETE",
       signal,
     }),
   );
+  if (profileId !== undefined && result.profileId !== profileId) throw new IntegrationApiError(502, { code: "invalid_aside_profile_response" });
+  return result;
 }
 
 /*

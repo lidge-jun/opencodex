@@ -8,7 +8,10 @@
  * flipped the wire back, so the end-to-end cases assert the captured upstream URL —
  * the externally observable wire. Pattern mirrors tests/providers/deepseek-inbound-wire.test.ts.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import * as oauth from "../../../src/oauth";
+import { fetchProviderModels } from "../../../src/codex/catalog/provider-fetch";
+import { clearModelCache } from "../../../src/codex/model-cache";
 import { providerConfigSeed } from "../../../src/providers/derive";
 import { getProviderRegistryEntry } from "../../../src/providers/registry";
 import { resolveWireProtocolOverride } from "../../../src/server/adapter-resolve";
@@ -23,11 +26,42 @@ const RESPONSES_ONLY = [
   "gpt-5.6-luna",
   "gpt-5.6-sol",
   "gpt-5.6-terra",
+  "gpt-6-astra",
+  "grok-4.5",
+  "grok-4.6",
+  "mai-code-1.1-flash",
+  "mai-code-1-flash-picker",
 ] as const;
 
 const CHAT_SERVED = ["gpt-4o", "gpt-4.1", "gpt-4.1-mini", "claude-sonnet-4", "gemini-2.5-pro", "gpt-5-mini"] as const;
 
 const INBOUNDS = ["responses", "chat", "anthropic"] as const;
+const DISCOVERY_ONLY = ["gpt-6-astra", "grok-4.5", "grok-4.6", "mai-code-1.1-flash", "mai-code-1-flash-picker"];
+
+describe("Copilot discovery-only models do not widen the cold-start seed", () => {
+  for (const authMode of ["key", "oauth"] as const) {
+    test(`${authMode} discovery exposes new models but failure retains the configured seed`, async () => {
+      const auth = spyOn(oauth, "resolveModelsAuthToken").mockResolvedValue("test-token");
+      const original = globalThis.fetch;
+      const provider = { ...providerConfigSeed(getProviderRegistryEntry("github-copilot")!), authMode, apiKey: "test-token" };
+      try {
+        clearModelCache("github-copilot");
+        globalThis.fetch = (async () => Response.json({ data: DISCOVERY_ONLY.map(id => ({ id })) })) as typeof fetch;
+        const live = await fetchProviderModels("github-copilot", { ...provider, fetch: globalThis.fetch } as OcxProviderConfig, 0);
+        expect(live.map(model => model.id).sort()).toEqual([...DISCOVERY_ONLY].sort());
+        clearModelCache("github-copilot");
+        globalThis.fetch = (async () => new Response("unavailable", { status: 503 })) as typeof fetch;
+        const fallback = await fetchProviderModels("github-copilot", { ...provider, fetch: globalThis.fetch } as OcxProviderConfig, 0);
+        expect(fallback.map(model => model.id).sort()).toEqual([...provider.models!].sort());
+        for (const model of DISCOVERY_ONLY) expect(fallback.some(row => row.id === model)).toBe(false);
+      } finally {
+        globalThis.fetch = original;
+        auth.mockRestore();
+        clearModelCache("github-copilot");
+      }
+    });
+  }
+});
 
 function copilotProvider(): OcxProviderConfig {
   // The entry's allowKeyAuthOverride lets tests use key auth instead of live OAuth.
@@ -57,13 +91,15 @@ describe("Copilot chat-served models stay on the provider chat wire", () => {
 });
 
 describe("explicit modelAdapters beat the registry default in both directions", () => {
-  test("opt-out: a listed Responses-default model pinned back to chat", () => {
-    const provider = { ...copilotProvider(), modelAdapters: { "gpt-5.4": "openai-chat" } };
-    for (const inbound of INBOUNDS) {
-      expect(resolveWireProtocolOverride("github-copilot", "gpt-5.4", provider, inbound).adapter)
-        .toBe("openai-chat");
-    }
-  });
+  for (const model of RESPONSES_ONLY) {
+    test(`opt-out: ${model} pinned back to chat`, () => {
+      const provider = { ...copilotProvider(), modelAdapters: { [model]: "openai-chat" } };
+      for (const inbound of INBOUNDS) {
+        expect(resolveWireProtocolOverride("github-copilot", model, provider, inbound).adapter)
+          .toBe("openai-chat");
+      }
+    });
+  }
 
   test("opt-in: an unlisted model mapped to Responses (the gpt-5.4-nano escape hatch)", () => {
     const provider = { ...copilotProvider(), modelAdapters: { "gpt-5.4-nano": "openai-responses" } };
@@ -81,13 +117,15 @@ describe("explicit modelAdapters beat the registry default in both directions", 
 });
 
 describe("the registry default is isolated to the copilot provider", () => {
-  test("a same-named model on another provider is untouched", () => {
-    const other: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://example.com/v1", apiKey: "sk-test" };
-    for (const inbound of INBOUNDS) {
-      expect(resolveWireProtocolOverride("some-custom", "gpt-5.4", other, inbound).adapter)
-        .toBe("openai-chat");
-    }
-  });
+  for (const model of RESPONSES_ONLY) {
+    test(`${model} on another provider is untouched`, () => {
+      const other: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://example.com/v1", apiKey: "sk-test" };
+      for (const inbound of INBOUNDS) {
+        expect(resolveWireProtocolOverride("some-custom", model, other, inbound).adapter)
+          .toBe("openai-chat");
+      }
+    });
+  }
 
   test("resolution preserves credentials and base URL through the copy", () => {
     const resolved = resolveWireProtocolOverride("github-copilot", "gpt-5.4", copilotProvider(), "responses");
@@ -142,6 +180,14 @@ describe("the wire default survives the handleResponses replay", () => {
     expect(url).toContain("/responses");
     expect(url).not.toContain("/chat/completions");
   });
+
+  for (const model of ["gpt-6-astra", "grok-4.5", "grok-4.6", "mai-code-1.1-flash", "mai-code-1-flash-picker"]) {
+    for (const inbound of INBOUNDS) {
+      test(`${model} reaches /responses on ${inbound} inbound replay`, async () => {
+        expect(await drive(model, inbound)).toBe("https://api.githubcopilot.com/v1/responses");
+      });
+    }
+  }
 
   test("gpt-4o still reaches /chat/completions", async () => {
     expect(await drive("gpt-4o", "responses")).toBe("https://api.githubcopilot.com/chat/completions");

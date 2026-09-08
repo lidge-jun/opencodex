@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { readBoundedToken } from "../../docker/bootstrap-token";
 import { verifyCompatibilitySnapshot } from "../../docker/verify-compatibility";
 import type { CompatibilityVersionManifest } from "../../scripts/generate-compatibility-version";
+import type { SerializedCatalog } from "../../src/server/catalog-download";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
 
@@ -39,6 +42,33 @@ describe("container token bootstrap", () => {
 });
 
 describe("container deployment contract", () => {
+  test("persists separate OCX and Codex homes under the read-only root", () => {
+    const compose = Bun.YAML.parse(readFileSync(repoPath("compose.yaml"), "utf8")) as {
+      services: { hub: {
+        environment: Record<string, string>; volumes: string[]; read_only: boolean;
+        security_opt: string[]; cap_drop: string[];
+      } };
+      volumes: Record<string, unknown>;
+    };
+    const hub = compose.services.hub;
+    expect(hub.environment?.CODEX_HOME).toBe("/home/bun/.codex");
+    expect(hub.read_only).toBe(true);
+    expect(hub.volumes).toContain("ocx-state:/home/bun/.opencodex");
+    expect(hub.volumes).toContain("codex-state:/home/bun/.codex");
+    expect(Object.hasOwn(compose.volumes, "ocx-state")).toBe(true);
+    expect(Object.hasOwn(compose.volumes, "codex-state")).toBe(true);
+    expect(hub.security_opt).toContain("no-new-privileges:true");
+    expect(hub.cap_drop).toContain("ALL");
+
+    const runtime = readFileSync(repoPath("Dockerfile"), "utf8").split(" AS runtime")[1]!;
+    expect(runtime).toContain("OPENCODEX_HOME=/home/bun/.opencodex");
+    expect(runtime).toContain("CODEX_HOME=/home/bun/.codex");
+    expect(runtime).toContain("OCX_SERVICE=1");
+    expect(runtime).toContain("install -d -m 0700 -o bun -g bun /home/bun/.opencodex /home/bun/.codex");
+    expect(runtime).toContain('VOLUME ["/home/bun/.opencodex", "/home/bun/.codex"]');
+    expect(runtime).toContain("USER bun");
+  });
+
   test("publishes only the data port with loopback and explicit bind overrides", () => {
     const compose = Bun.YAML.parse(readFileSync(repoPath("compose.yaml"), "utf8")) as {
       services: { hub: { ports: string[] } };
@@ -80,6 +110,93 @@ const abcDigest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f2001
 
 afterEach(() => {
   for (const dir of snapshotDirs.splice(0)) removeTreeWithRetry(dir);
+});
+
+function catalogHomeFixture(codexDirectory = "codex-state") {
+  const root = mkdtempSync(join(tmpdir(), "ocx-container-catalog-"));
+  snapshotDirs.push(root);
+  const ocxHome = join(root, "ocx-state");
+  const codexHome = join(root, codexDirectory);
+  mkdirSync(ocxHome, { mode: 0o700 });
+  mkdirSync(codexHome, { mode: 0o700 });
+  const ocxAuth = '{"fixture":"ocx-oauth-store"}';
+  const codexAuth = '{"fixture":"native-codex-store"}';
+  writeFileSync(join(ocxHome, "auth.json"), ocxAuth, { mode: 0o600 });
+  writeFileSync(join(codexHome, "auth.json"), codexAuth, { mode: 0o600 });
+  const moduleUrl = pathToFileURL(repoPath("src/server/catalog-download.ts")).href;
+  const script = `
+    const { serializePersistedCatalog } = await import(${JSON.stringify(moduleUrl)});
+    process.stdout.write(JSON.stringify(await serializePersistedCatalog()));
+  `;
+  const read = (): SerializedCatalog => {
+    // A fresh process keeps import-time home constants out of the parent test runner.
+    const result = spawnSync(process.execPath, ["--eval", script], {
+      cwd: repoPath(),
+      env: { ...process.env, HOME: root, USERPROFILE: root,
+        OPENCODEX_HOME: ocxHome, CODEX_HOME: codexHome },
+      encoding: "utf8",
+      timeout: 15000,
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(readFileSync(join(ocxHome, "auth.json"), "utf8")).toBe(ocxAuth);
+    expect(readFileSync(join(codexHome, "auth.json"), "utf8")).toBe(codexAuth);
+    return JSON.parse(result.stdout);
+  };
+  return { root, ocxHome, codexHome, read };
+}
+
+function fixtureCatalog(slug: string) {
+  return { models: [{ slug, display_name: "Fixture", description: "fixture", priority: 1,
+    visibility: "list", base_instructions: "Fixture", input_modalities: ["text"] }] };
+}
+
+describe("container catalog home selection", () => {
+  test("reads only the Codex-home catalog across fresh processes without changing auth stores", () => {
+    const fixture = catalogHomeFixture();
+    const catalog = fixtureCatalog("fixture/codex-home");
+    expect(fixture.read().body).toBeNull();
+    writeFileSync(join(fixture.ocxHome, "opencodex-catalog.json"), JSON.stringify(fixtureCatalog("fixture/ocx-home")), { mode: 0o600 });
+    expect(fixture.read().body).toBeNull();
+    writeFileSync(join(fixture.codexHome, "opencodex-catalog.json"), JSON.stringify(catalog), { mode: 0o600 });
+    const serialized = fixture.read();
+    expect(JSON.parse(serialized.body!)).toEqual(catalog);
+    expect(serialized.bytes).toBe(Buffer.byteLength(JSON.stringify(catalog), "utf8"));
+    expect(serialized.etag).toMatch(/^"[0-9a-f]{64}"$/);
+    // This proves a disk reread, not Docker volume initialization or container recreation.
+    expect(fixture.read()).toEqual(serialized);
+  }, 60000);
+
+  test("uses a custom Codex home containing spaces", () => {
+    const fixture = catalogHomeFixture("custom codex state");
+    const catalog = fixtureCatalog("fixture/custom-home");
+    writeFileSync(join(fixture.codexHome, "opencodex-catalog.json"), JSON.stringify(catalog), { mode: 0o600 });
+    expect(JSON.parse(fixture.read().body!)).toEqual(catalog);
+  }, 60000);
+
+  for (const selection of ["relative", "absolute"] as const) {
+    test(`honors a ${selection} catalog override without falling back when it is absent`, () => {
+      const fixture = catalogHomeFixture();
+      const selectedPath = selection === "relative"
+        ? join(fixture.codexHome, "catalogs", "custom.json")
+        : join(fixture.root, "external catalog.json");
+      mkdirSync(dirname(selectedPath), { recursive: true, mode: 0o700 });
+      const configuredPath = selection === "relative" ? "catalogs/custom.json" : selectedPath;
+      writeFileSync(join(fixture.codexHome, "config.toml"), `model_catalog_json = ${JSON.stringify(configuredPath)}\n`, { mode: 0o600 });
+      writeFileSync(join(fixture.codexHome, "opencodex-catalog.json"), JSON.stringify(fixtureCatalog("fixture/default")), { mode: 0o600 });
+      const catalog = fixtureCatalog(`fixture/${selection}`);
+      writeFileSync(selectedPath, JSON.stringify(catalog), { mode: 0o600 });
+      expect(JSON.parse(fixture.read().body!)).toEqual(catalog);
+      unlinkSync(selectedPath);
+      expect(fixture.read().body).toBeNull();
+    }, 60000);
+  }
+
+  test("returns no catalog for malformed selected JSON without modifying auth stores", () => {
+    const fixture = catalogHomeFixture();
+    writeFileSync(join(fixture.codexHome, "opencodex-catalog.json"), "not JSON", { mode: 0o600 });
+    expect(fixture.read().body).toBeNull();
+  }, 60000);
 });
 
 function compatibilitySnapshot() {

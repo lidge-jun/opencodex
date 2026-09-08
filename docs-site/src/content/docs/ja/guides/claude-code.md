@@ -94,6 +94,59 @@ hook を削除します。Claude Desktop は独立した profile を使用し、
 `claudeCode.nativePassthrough: false` でオフにでき、`claudeCode.anthropicBaseUrl` で別のアドレスを
 指定できます。
 
+## リモートハブに接続した Claude Desktop
+
+接続中のマシンで `ocx claude desktop apply` または `ocx claude desktop` を実行すると、
+ハブの Desktop スナップショットを取得し、ハブの origin と発行済みモデル ID をそのまま
+ローカル Desktop 設定に書き込みます。ローカルの別名は生成しません。static/hybrid は
+モデル一覧もコピーし、discovery-only は一覧を埋め込まずハブの origin を使います。
+
+プロファイル、ファミリー、デフォルトはハブ側で管理します。ハブで変更してからクライアントで
+再適用し、Desktop でモデルを選び直してください。以前クライアントだけで作成した別名も
+再適用・再選択が必要です。`show`、ローカル編集、import/export はローカル設定だけを扱います。
+接続中の `ocx claude desktop import <path> --apply` は未対応で、保存前に拒否します。
+`--apply` なしの import はローカル操作のままです。
+
+取得には既存の接続のデータ用認証情報を使い、管理者トークンもプロファイルのアップロードも
+不要です。古いハブが未対応の場合、不正な応答や空の Desktop 一覧の場合は適用に失敗します。
+ローカル一覧やループバック URL への代替は行いません。ハブを更新・設定して再適用してください。
+
+この別名変更では、[#3719](https://github.com/lidge-jun/opencodex/issues/3719) の `thinking` / `redacted_thinking` 再送とプロンプトキャッシュの
+別件は修正しません。プロキシの接続認証だけではネイティブ Anthropic パススルーは有効に
+なりませんが、変換された Anthropic ルートでもキャッシュは利用できます。再送の保持と
+キャッシュヒットの比較は別の作業です。
+
+### キーのローテーション、復旧、切断
+
+キーのローテーションと復旧では、ローカル接続の認証情報とともに接続管理下の Desktop
+プロファイルのキーも更新します。キー移行のための手動再適用は不要です。モデル ID、
+ファミリー、デフォルト、現在のプロファイル選択は維持し、管理プロファイルの再選択や無効な
+統合の再有効化は行いません。CLI JSON の `rotation: "committed"` は新しいキーが有効に
+なったことを示します。`rotation: "rolled_back"` は以前のキーを保持または復元したことを
+示し、新しいキーの確定や以前のキーの失効を意味しません。不確実・未完了の復旧は成功として
+報告しません。
+
+最初の接続中の適用で、復元対象の元の管理設定と選択を保存します。再適用やキー更新で
+この最初の記録を置き換えません。`ocx disconnect` は接続が管理する設定を復元し、ユーザーが
+追加したフィールドや他のプロファイルを保持します。管理プロファイルがまだ選択されている
+場合だけ元の選択に戻し、その後選んだ別の有効なプロファイルは変更しません。新規プロファイルに
+ユーザー設定が追加されていれば削除せず、読み込み可能な標準モードで残します。
+`--keep-catalog` が保持するのはカタログであり、Desktop の接続キーではありません。
+
+元の設定記録がない旧管理プロファイルも、現在のハブと認識済みの接続キーへの所属が明確なら
+移行できます。apply、ローテーション・復旧、直接の disconnect で処理でき、新しいフラグや
+事前の再適用は不要です。元の設定が未記録のため切断時に標準モードを使うという警告を表示します。
+接続所有のゲートウェイ設定だけを除去し、ユーザーフィールドと別の有効な選択は保持します。
+この結果は元の復元ではなく標準モードへのフォールバックとして報告します。
+
+管理設定の競合、不明な認証情報、破損した復元記録は上書きせず報告します。中断した処理は
+同じ接続について再開でき、新しい接続を消したり復元前に完了と報告したりしません。
+切断前に保留中のキー復旧を完了し、切断を再試行するときは同じカタログ保持設定を使ってください。
+
+適用、ローテーション・復旧、復元後は Claude Desktop を完全に終了して開き直してください。
+ディスク上の更新では実行中のアプリが保持するキーは変わらず、自動終了・再起動もしません。
+ローカルの切断はハブのキーや外部コピーを自動失効・削除しません。必要ならハブで別途失効させてください。
+
 ## /model ピッカー("From gateway")
 
 Claude Code 2.1.129 以降は `GET /v1/models?limit=1000` でゲートウェイモデルを探し、デフォルトの `/model`
@@ -110,9 +163,18 @@ Claude Code 2.1.129 以降は `GET /v1/models?limit=1000` でゲートウェイ�
 提供します。両系列は継続してデコードできるため、どちらの形式でも `settings.json` に保存したモデルは
 引き続き動作します。
 
-Claude Desktop のフッターピッカーで実行中の 3P 会話のモデルが切り替わらない場合は、その会話で
-`/model <id>` を使用してください。OpenCodex はピッカーの状態を直接参照できず、各リクエストに
-含まれるモデル ID をルーティングします。結果は **Logs → requestedModel** で確認できます。
+Claude Desktop のフッターピッカーで実行中の 3P 会話のモデルが切り替わらない場合は、
+`/model <id>` を試せますが、影響を受ける Desktop ビルドではこの回避策も失敗することがあります。
+[Issue #3782](https://github.com/lidge-jun/opencodex/issues/3782) では、Windows 上の
+Claude Desktop 1.46388.4 で、フッターピッカーと `/model` のどちらで変更しても、会話が最初の
+モデルを使い続けると報告されています。この報告だけでは、クライアントやルーティングのどの
+コンポーネントがこの動作の原因なのかは確定できません。
+
+OpenCodex の Claude Desktop プロファイルで希望するデフォルトモデルを選択し、プロファイルを
+再適用して、新しい会話を開始することも試せます。これはトラブルシューティングの手順であり、
+解決を保証するものではありません。OpenCodex はピッカーの状態を参照できず、各リクエストに
+含まれるモデル ID をルーティングします。クライアントが何を送信しているかは
+**Logs → requestedModel** で確認してください。
 
 **エイリアス構文ルール:** provider には `/` や `--` を含められず `native` と同じでもいけません。
 `/` も `~` も含まない plain な model ID は v1 接頭辞 `claude-ocx-…` のままです。`/` または `~` を含む
@@ -125,6 +187,14 @@ v2 エイリアスはエスケープを展開します。読みやすい形式�
 
 **モデル解決順序:** `[1m]` 標識の削除 → 読みやすいエイリアスのデコード → Desktop ハッシュエイリアスのデコード →
 `modelMap` の完全一致 → 日付を削除した値との一致(`-20250514` 削除) → パススルー順です。
+
+解決できない日付形式の Desktop ID は、モデル検出に含まれていない実際のネイティブモデル
+かもしれません。判断材料が足りず ID を解決できない場合、Messages と count-tokens は固定エラー
+`desktop_model_mapping_unavailable`と HTTP 503 を返します。これはモデルが無効だという判定ではありません。
+不明な旧ハッシュ別名は引き続き HTTP 400 で拒否します。どちらも日付を除去したり別ルートへ
+フォールバックしたりしません。既知の ID、登録済みマッピング、正確な `modelMap` 一致、
+認識済みの実ネイティブ ID の処理は変わりません。モデル検出を更新するか接続先ハブの
+プロファイルを再適用してから試してください。再試行だけで解決する保証はありません。
 
 各項目には `gemini-3-pro (gemini)` のような表示名と公式 `ModelInfo` 形式の完全なモデル能力
 (推論負荷段階、thinking 型)が含まれます。実際の Anthropic モデルは両画面で正式 ID を維持します。
@@ -221,6 +291,14 @@ Anthropic パススルーはそのまま維持します。
 
 照合順序: 検索エイリアス → 完全一致 ID → 日付接尾辞を削除した ID(`-20250514`) → パススルー順です。
 
+解決できない日付形式の Desktop ID は、モデル検出に含まれていない実際のネイティブモデル
+かもしれません。判断材料が足りず ID を解決できない場合、Messages と count-tokens は固定エラー
+`desktop_model_mapping_unavailable`と HTTP 503 を返します。これはモデルが無効だという判定ではありません。
+不明な旧ハッシュ別名は引き続き HTTP 400 で拒否します。どちらも日付を除去したり別ルートへ
+フォールバックしたりしません。既知の ID、登録済みマッピング、正確な `modelMap` 一致、
+認識済みの実ネイティブ ID の処理は変わりません。モデル検出を更新するか接続先ハブの
+プロファイルを再適用してから試してください。再試行だけで解決する保証はありません。
+
 ## サイドカーマトリクス: ウェブ検索と画像理解
 
 ルーティングモデルごとに使えるホスト型ツールと画像サポート範囲が異なります。opencodex はメインモデルが
@@ -299,11 +377,13 @@ Claude Code の `/effort` 設定はアダプターでも維持されます。
 | Assistant テキスト | `output_text` |
 | Assistant `tool_use` | `function_call`(`input` → JSON 文字列に変換した `arguments`) |
 | ユーザー `tool_result` | `function_call_output`(`is_error` → `[tool error]` 接頭辞) |
-| `thinking` / `redacted_thinking` 再生 | 破棄 |
+| `thinking` / `redacted_thinking` 再生 | シグネチャと秘匿ペイロードを境界付き `ocxr1` エンベロープに保持した `reasoning` 項目 |
 | Function ツール | `{type: "function"}`(`web_search*` → `{type: "web_search"}`) |
 | `tool_choice` | `auto`→`auto`、`none`→`none`、`any`→`required`、名前指定関数→`{type:"function",name}`、ホスト型 WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |
+
+意図した Anthropic アダプターでは、非表示でない署名付きブロック（空の thinking を含む）と不透明な redacted ブロックを保持します。`hideThinkingSummary` は変更しません。ローカルで隠した署名付きテキストは Claude クライアントに公開せず、この非表示境界での無損失再生は未確認です。旧形式の結合エンベロープは、テキスト送信後に元のブロック順を復元できません。`claudeCode.compatibility: "enforce"` は引き続き thinking 再生を拒否します。実際の Anthropic 受理やキャッシュ改善の証明ではなく、[#3719](https://github.com/lidge-jun/opencodex/issues/3719) は未解決です。
 
 **エラー条件(400):** 不正な JSON、欠落または空の `model`、欠落または空の `messages`、未サポートの
 role、`tool_use_id` のない `tool_result`、id/name のない `tool_use`、name のない名前指定 `tool_choice` です。
@@ -315,7 +395,8 @@ role、`tool_use_id` のない `tool_result`、id/name のない `tool_use`、na
 | `response.created` | `message_start` + `ping` |
 | Heartbeat | `ping` |
 | テキスト delta | `content_block_start` → `content_block_delta`(text) → `content_block_stop` |
-| 推論要約/テキスト | 合成シグネチャ付きの `thinking` ブロック |
+| 推論要約/テキスト | 再生されたシグネチャ、または境界付き `ocxr1` フォールバックを持つ `thinking` ブロック |
+| 秘匿化された推論 | 推論エンベロープから再生される `redacted_thinking` ブロック |
 | Function-call フレーム | `input_json_delta` を持つ `tool_use` ブロック |
 | 終了イベント | `message_delta` → `message_stop` |
 | 終了前に EOF | 502 形式 `api_error` |

@@ -4,7 +4,9 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, saveConfig, writePid, writeRuntimePort } from "../../src/config";
-import { upsertOAuthProvider } from "../../src/oauth";
+import { OAUTH_PROVIDERS, runLogin, upsertOAuthProvider } from "../../src/oauth";
+import { getAccountSet, saveCredential } from "../../src/oauth/store";
+import { clearGenericFailoverHealth, preferredInitialAccount } from "../../src/oauth/generic-account-failover";
 import {
   commitKeyLoginProvider,
   notifyRunningProxy,
@@ -59,6 +61,89 @@ afterEach(() => {
 });
 
 describe("CLI OAuth live-update credential preservation", () => {
+  test("Antigravity login emits the new active account's bearer and project without proactive preference", async () => {
+    const providerName = "google-antigravity";
+    const cfg: OcxConfig = {
+      port: 0,
+      hostname: "127.0.0.1",
+      defaultProvider: providerName,
+      oauthAccountFailover: { enabled: false },
+      providers: {
+        [providerName]: {
+          ...structuredClone(OAUTH_PROVIDERS[providerName]!.providerConfig),
+          project: "project-a",
+          liveModels: false,
+          oauthAccountFailover: { enabled: false },
+        },
+      },
+    };
+    saveConfig(cfg);
+    await saveCredential(providerName, {
+      access: "access-a", refresh: "refresh-a", expires: Date.now() + 3_600_000,
+      accountId: "account-a", projectId: "project-a",
+    });
+    const accountA = getAccountSet(providerName)!.activeAccountId;
+    const originalLogin = OAUTH_PROVIDERS[providerName]!.login;
+    const originalFetch = globalThis.fetch;
+    const emitted: Array<{ bearer: string | null; project: unknown }> = [];
+    let server: ReturnType<typeof startServer> | undefined;
+    try {
+      OAUTH_PROVIDERS[providerName]!.login = async () => ({
+        access: "access-b", refresh: "refresh-b", expires: Date.now() + 3_600_000,
+        accountId: "account-b", projectId: "project-b",
+      });
+      globalThis.fetch = (async (input, init) => {
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        if (url.hostname === "127.0.0.1" || url.hostname === "localhost") return originalFetch(input, init);
+        if (url.origin !== "https://daily-cloudcode-pa.googleapis.com"
+          || !["/v1internal:generateContent", "/v1internal:streamGenerateContent"].includes(url.pathname)) {
+          throw new Error("Unexpected external request in CCA login regression");
+        }
+        const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+        const body = typeof init?.body === "string" ? init.body : input instanceof Request ? await input.clone().text() : "";
+        emitted.push({ bearer: headers.get("authorization"), project: (JSON.parse(body) as { project?: unknown }).project });
+        const payload = {
+          response: {
+            candidates: [{ content: { role: "model", parts: [{ text: "account-b response" }] }, finishReason: "STOP" }],
+            usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 },
+          },
+        };
+        return url.searchParams.get("alt") === "sse"
+          ? new Response(`data: ${JSON.stringify(payload)}\n\n`, { headers: { "content-type": "text/event-stream" } })
+          : Response.json(payload);
+      }) as typeof globalThis.fetch;
+
+      await runLogin(providerName, {}, { forceLogin: true });
+      const accounts = getAccountSet(providerName)!;
+      expect(accounts.activeAccountId).not.toBe(accountA);
+      expect(accounts.accounts.find(account => account.id === accounts.activeAccountId)?.credential.accountId).toBe("account-b");
+      clearGenericFailoverHealth(providerName);
+      const persisted = loadConfig();
+      expect(persisted.providers[providerName]!.oauthAccountFailover?.enabled).toBe(false);
+      expect(preferredInitialAccount(persisted, providerName)).toBeNull();
+
+      server = startServer(0);
+      const response = await originalFetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "google-antigravity/gemini-3.8-flash", input: "hello", stream: false }),
+      });
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain("account-b response");
+      // One successful initial dispatch: no 401 or reactive rotation can repair a bad pair.
+      expect(emitted).toEqual([{ bearer: "Bearer access-b", project: "project-b" }]);
+      expect(persisted.providers[providerName]!.project).toBeUndefined();
+    } finally {
+      try {
+        await server?.stop(true);
+      } finally {
+        globalThis.fetch = originalFetch;
+        OAUTH_PROVIDERS[providerName]!.login = originalLogin;
+        clearGenericFailoverHealth(providerName);
+      }
+    }
+  }, 15_000);
+
   test("does not post provider credentials when a legacy health listener has no verified pid", async () => {
     const receivedPaths: string[] = [];
     let healthProbeCount = 0;

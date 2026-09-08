@@ -1,10 +1,10 @@
 ---
 title: Integrations
-description: Connect opencodex to OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, Gajae Code, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent and Aside from the dashboard — one switch per client, with a backup taken before every write.
+description: Connect opencodex to OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, Gajae Code, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside and Raycast from the dashboard — one switch per client, with a backup taken before every write.
 ---
 
 The **Integrations** tab writes opencodex's provider block into a client's own config
-file, and removes it again. Twelve clients work this way, each with a switch:
+file, and removes it again. Thirteen clients work this way, each with a switch:
 
 | Client | Config file | Format | When the change takes effect | Credential |
 |---|---|---|---|---|
@@ -20,6 +20,11 @@ file, and removes it again. Twelve clients work this way, each with a switch:
 | Prime Agent | `~/.prime/agent/models.json` | JSON | new sessions | loopback placeholder |
 | ZCode | `~/.zcode/v2/config.json` | JSON | on restart | loopback placeholder |
 | Aside | `~/.aside/u/<account>/models.json` | JSON | after fully quitting and reopening Aside | loopback placeholder |
+| Raycast | `~/.config/raycast/ai/providers.yaml` | YAML | immediately on save — Raycast watches the file | none — loopback only |
+
+Generated catalogs include only enabled models from each provider selection. This applies to both
+downloads and managed integrations, including Pi and Aside. The management model list still shows
+the full roster so you can enable additional models.
 
 The managed OpenCode integration owns two fragments: `provider.opencodex` (opencode V1) and
 `providers.opencodex` (opencode V2). Only the V2 block carries the per-model reasoning-effort
@@ -48,16 +53,58 @@ disagree about which file is meant. Its managed block owns only
 stay untouched. Prime Agent reads `models.json` when a session starts, so start
 a new session after connecting it.
 
-Aside is per-account: its state lives under `~/.aside/u/<account>/` and opencodex
-writes the catalog of whichever account Aside's own `accounts.json` names as
-current. If that manifest is missing or unreadable the integration refuses rather
-than guessing an account, because a guess on a multi-account machine would write
-into a different account's catalog. Its managed block owns only
-`providers.opencodex`, so your other Aside providers stay untouched.
+Aside keeps a separate model catalog for each registered profile, including local profiles. OpenCodex lists
+all registered profiles, including local profiles, and can synchronize them together or control
+one profile at a time. Switching an integration never changes Aside's active account. A prior
+Aside connection enables all profiles by default; individual exclusions survive later syncs.
 
 One caveat specific to Aside: the running app rewrites `models.json` itself, so
 fully quit and reopen Aside after applying, the same way Claude Desktop needs a
 restart. Aside's block is loopback-only and never carries a real credential.
+
+The managed Raycast integration supports **macOS and Windows**. Custom Providers
+is a **Raycast Pro** feature: on a free plan the file is still written, but
+`ocx integration client status --client raycast` and the Integrations page report
+a warning, because Raycast will not read it. On macOS or Windows, open Raycast →
+Settings → AI → **Reveal Providers Config** once so the `ai` folder exists.
+On these supported platforms, opencodex uses that folder as its install signal
+and reports the client as not installed until it exists. Linux is unsupported,
+even if the folder exists.
+
+The status field `aiDirPresent` reports only whether `~/.config/raycast/ai` exists,
+independently of whether the Raycast app is installed or the platform is supported.
+It does not prove that Raycast is installed or usable. The CLI prints `plan` on a
+separate line and adds the macOS/Windows setup instruction when `aiDirPresent` is
+false; `--json` preserves the raw status, including the nested `raycast` block.
+Raycast reads `~/.config/raycast/ai/providers.yaml` on macOS and Windows alike and
+does not honor `XDG_CONFIG_HOME`, so that path is not relocatable.
+
+The managed block is one element, `id: opencodex`, in the file's `providers`
+sequence: `name: OpenCodex`, `base_url: http://<host>:<port>/v1`, and every
+routed model with its `abilities` — the exporter sets `tools` and `system_message` to
+`true` as a client-export convention, `vision` follows the catalog's input modalities, `reasoning_effort`
+is set when the model has an effort ladder, and `temperature` is turned off for
+reasoning models. Other providers in the file are preserved, and disable removes
+only the OpenCodex element. Raycast picks up the change as soon as the file is
+saved, no restart needed; the models appear in Raycast's model picker grouped
+under **OpenCodex**. Raycast supports optional `api_keys`, but OpenCodex intentionally
+omits them and refuses non-loopback or admission-authenticated targets; this integration
+cannot supply OpenCodex's required admission header.
+
+The macOS private preference is only an advisory Pro hint; Windows never reads it and
+reports the plan as unknown. Plan detection does not authorize or block a write.
+The export metadata has no authoritative tool-support flag, so `tools: true` does not
+prove every routed model supports tools. Vision and effort flags follow catalog metadata;
+turning temperature off for an effort ladder is conservative export behavior.
+Provider values are preserved; YAML formatting and comments are not guaranteed to survive.
+The format is documented at
+[manual.raycast.com/ai/custom-providers](https://manual.raycast.com/ai/custom-providers).
+
+Raycast CLI exports and dashboard downloads use the running server's destination and
+admission policy, including a configured unauthenticated loopback listener. `ocx ensure`
+does not refresh Raycast from its saved configuration snapshot: that can differ from the
+running server. Server startup and explicit sync remain the catalog refresh paths.
+
 
 Cursor has a tab but is not one of these switches. Regular Cursor calls custom endpoints from
 its own backend, so a loopback proxy is unreachable without a public tunnel, and Cursor's
@@ -128,7 +175,7 @@ than 1000 levels — which locks the switch instead, so nothing is silently chan
 **OMP** is unaffected by sibling edits too, for a different reason: its writer
 patches only its own `providers.opencodex` range byte-wise, so the rest of the
 file is never rewritten. For the remaining formats that can carry comments
-(Hermes, OpenClaw, Kimi Code, Gajae Code, MiniMax Code — YAML, JSON5 and TOML
+(Hermes, OpenClaw, Kimi Code, Gajae Code, MiniMax Code, Raycast — YAML, JSON5 and TOML
 written as whole documents), or
 whenever our own entries were edited, the switch locks and disable refuses rather
 than guessing which edits were yours.
@@ -214,9 +261,27 @@ ocx integration client enable --client mcode
 ocx mcode
 ```
 
-Once connected, `ocx sync` also refreshes the owned MCode block with current context
-windows and reasoning-effort ladders. It leaves missing, foreign-edited, unsafe, and
-never-owned blocks untouched; re-enable explicitly when you intend to reconnect one.
+Once connected, `ocx sync` and `POST /api/sync` refresh owned MCode, Pi, Aside, and
+Raycast catalogs with the current model selection, context windows, and reasoning-effort
+ladders. Proxy startup refreshes an owned Raycast catalog. Changes to model visibility,
+provider selection, or presets also refresh connected Pi, Aside, and Raycast catalogs.
+Missing, foreign-edited, or unsafe blocks stay untouched, as do previously owned blocks
+you removed manually.
+An enabled Aside profile is an exception to the usual owned-only refresh: if its account
+directory exists and it has never had an owned block, sync may create its first block when
+that slot is empty. A prior Aside connection enables this behavior for all registered
+profiles by default. Sync does not create missing account directories or replace manual blocks.
+A refused or overlapping refresh is reported separately for each client. Start a new Pi
+session or fully quit and reopen Aside to load the updated file.
+Aside refresh requires a [compatible running proxy](#aside-profile-controls).
+
+If Models reports **“Model selection saved”** together with a client-refresh warning, the
+selection is already saved; one or more client files could not be updated. The warning names
+the affected client and Aside profile, when applicable, and explains the refusal. Open
+**Integrations** to inspect that client or profile before starting a new session. Resolve the
+reported issue, then retry `ocx sync`; an overlapping operation must finish first. If the
+warning includes a backup path or says recovery did not finish, inspect that recovery state
+before retrying. A successful selection save alone does not confirm client-file recovery.
 
 The separate MiniMax platform CLI (`mmx`) is not a file-toggle integration. Its text
 commands use MiniMax's Anthropic-compatible endpoint, so OpenCodex provides a
@@ -241,3 +306,39 @@ decision to make.
 Client details were verified against each project's own configuration format; see the
 research notes in `devlog/_fin/260802_client_toggle_api/002_client_toggle_matrix.md`
 for what was checked and when.
+
+## Aside profile controls
+
+Aside profile controls and the Aside refresh performed by `ocx sync` require a running
+ocx proxy that supports the Aside profile APIs. Updating the CLI alone does not update an
+already-running proxy. If the proxy is unavailable or too old, the Aside operation cannot
+complete; the CLI never falls back to writing Aside profile files locally.
+
+Upgrade the ocx installation used by the proxy, then restart the proxy (or start it if it
+is stopped). Retry `ocx sync` or the profile command. After the profile files update
+successfully, fully quit and reopen Aside so it loads the new catalogs.
+
+```bash
+ocx integration client status --client aside --json
+ocx integration client enable --client aside
+ocx integration client disable --client aside --profile 1
+ocx integration client history --client aside --profile 1
+ocx integration client restore --client aside --profile 1 --op <opId>
+```
+
+The profile number is the account ID shown by the status command. Omitting `--profile` on an
+Aside toggle applies the desired state to every registered profile. A per-profile change leaves
+siblings unchanged. Desired sync settings are saved before file changes; actual state and any
+refusal are reported for each profile. A partial bulk result is not an all-applied success and
+the CLI exits nonzero. Undo restores the selected profile's synchronization intent as well as
+its file, so a later sync does not silently reverse Undo.
+
+The [profile API](/reference/management-api/#aside-profile-controls) returns HTTP 200 for a
+successful bulk operation and HTTP 207 with `ok: false` if any profile refuses. Inspect every
+entry in `results`: successful profiles are not rolled back when another fails. Desired
+settings remain saved, so retry after addressing the affected profile rather than assuming
+the entire change failed. If saving those settings fails, no profile files are changed.
+
+Each profile has separate ownership and history. Existing user edits, unsafe paths and linked
+catalogs are refused; the existing explicit overwrite and drift-confirmation controls remain
+available. Fully quit and reopen Aside to load changed model files.

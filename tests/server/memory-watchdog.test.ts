@@ -196,6 +196,9 @@ describe("GET /api/system/memory", () => {
 	        spillWriteStatus: "initial" | "healthy" | "degraded";
 	        spillWriteConsecutiveFailures: number;
 	        spillLastWriteFailureCode: string | null;
+	        spillLastWriteFailureOrigin: string | null;
+	        spillAclRetryReturnedTimeouts: number;
+	        spillAclTimeoutMemoRefusals: number;
 	        spillLastWriteFailureAt: number | null;
 	        spillLastWriteSuccessAt: number | null;
 	        replayScopeMismatchDrops: number;
@@ -221,11 +224,12 @@ describe("GET /api/system/memory", () => {
     // responseState is a scalar-only continuation-store attribution block: numbers plus fixed
     // enum/null fields (no paths, messages, tokens, or account identifiers).
     // The exact count is pinned on purpose: a new field must be reviewed for privacy safety
-    // before it reaches this surface. 17 after #3522 added spill-write health diagnostics.
-    expect(Object.keys(body.responseState)).toHaveLength(17);
+    // before it reaches this surface. 20 after #3522 added failure origins and counters.
+    expect(Object.keys(body.responseState)).toHaveLength(20);
     const {
       spillWriteStatus,
       spillLastWriteFailureCode,
+      spillLastWriteFailureOrigin,
       spillLastWriteFailureAt,
       spillLastWriteSuccessAt,
       ...numericResponseState
@@ -233,6 +237,9 @@ describe("GET /api/system/memory", () => {
     expect(Object.values(numericResponseState)
       .every(value => typeof value === "number" && Number.isFinite(value))).toBe(true);
     expect(["initial", "healthy", "degraded"]).toContain(spillWriteStatus);
+    expect(spillLastWriteFailureOrigin === null || [
+      "retry_returned_timeout", "timeout_memo_refusal",
+    ].includes(spillLastWriteFailureOrigin)).toBe(true);
     expect(spillLastWriteFailureCode === null || [
       "EACLRETRYEXHAUSTED", "ETIMEDOUT", "EACCES", "ENOSPC", "EFBIG",
       "EIO", "ECAPACITY", "ELOOP", "EUNKNOWN",

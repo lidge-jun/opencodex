@@ -546,8 +546,14 @@ export function parseGeneratedNotes(body: string): ReleaseNoteCategory[] {
 const CONVENTIONAL_COMMIT_PREFIX =
   /^(?:feat|fix|docs|chore|refactor|perf|test|build|ci|style|revert|merge|release)(?:\(([^)]+)\))?:\s*(.+)$/i;
 
+export function stripPrEnforcementPrefix(title: string): string {
+  const text = title.trim();
+  const prefix = "[WRONG BRANCH] ";
+  return text.startsWith(prefix) ? text.slice(prefix.length).trim() : text;
+}
+
 export function cleanPrTitle(title: string, prNumber: number | null = null): { scope: string | null; text: string } {
-  let text = title.trim();
+  let text = stripPrEnforcementPrefix(title);
   let scope: string | null = null;
   const prefix = CONVENTIONAL_COMMIT_PREFIX.exec(text);
   if (prefix) {
@@ -689,7 +695,7 @@ export function renderReleaseNotes(input: {
       changelog.push(`Full Changelog: https://github.com/${repo}/compare/${from}...${to}`, "");
     }
     for (const pr of allPrs) {
-      changelog.push(`- #${pr.number} ${pr.title.trim()} @${pr.author}`);
+      changelog.push(`- #${pr.number} ${stripPrEnforcementPrefix(pr.title)} @${pr.author}`);
     }
     parts.push(changelog.join("\n"));
   }

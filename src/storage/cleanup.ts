@@ -30,11 +30,11 @@ import {
   writeSync,
   chmodSync,
 } from "node:fs";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { Database } from "bun:sqlite";
 import { resolveCodexHomeDir } from "../codex/home";
 import { readThreadFieldsFromRollout } from "../codex/history-provider";
-import { renameAtomicFile } from "../config";
+import { renameAtomicFile } from "../lib/windows-atomic-replace";
 
 export const ARCHIVED_SESSIONS_DIR = "archived_sessions";
 export const TRASH_DIR = ".trash";
@@ -115,9 +115,35 @@ function chmodPrivatePath(path: string, mode: number): void {
   try { chmodSync(path, mode); } catch { /* best-effort (e.g. Windows ACLs) */ }
 }
 
-function writePrivateFile(path: string, content: string): void {
-  writeFileSync(path, content, "utf8");
-  chmodPrivatePath(path, 0o600);
+/** Publish complete stage metadata without truncating the last recovery record. */
+function writePrivateFile(
+  path: string,
+  content: string,
+  beforeRename?: (temporaryPath: string, targetPath: string) => void,
+): void {
+  const temporaryPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  let descriptor: number | undefined;
+  let created = false;
+  try {
+    descriptor = openSync(temporaryPath, "wx", 0o600);
+    created = true;
+    writeFileSync(descriptor, content, "utf8");
+    fsyncSync(descriptor);
+    closeSync(descriptor);
+    descriptor = undefined;
+    chmodPrivatePath(temporaryPath, 0o600);
+    beforeRename?.(temporaryPath, path);
+    renameAtomicFile(temporaryPath, path, undefined, "storage-cleanup");
+    chmodPrivatePath(path, 0o600);
+    fsyncDirectoryBestEffort(dirname(path));
+  } finally {
+    if (descriptor !== undefined) {
+      try { closeSync(descriptor); } catch { /* preserve publication failure */ }
+    }
+    if (created) {
+      try { unlinkSync(temporaryPath); } catch { /* renamed or cleanup unavailable */ }
+    }
+  }
 }
 
 function chunkIds(ids: string[], chunkSize: number): string[][] {
@@ -812,7 +838,6 @@ interface ReconcileTestHooks {
 const SATELLITE_BACKUP_FILE = "satellite-backup.json";
 /** Marks an incomplete restore so retries can accept dest files and resume metadata. */
 const RESTORE_PENDING_FILE = "restore-pending.json";
-let _satelliteBackupSeq = 0;
 
 type StagedFile = { from: string; to: string; relPath: string };
 
@@ -1070,34 +1095,11 @@ function writeSatelliteBackup(
   if (options?.failWrite) throw new Error("test_fail_satellite_backup_write");
   const dest = join(stageDir, SATELLITE_BACKUP_FILE);
   const replacing = existsSync(dest);
-  const tmp = join(stageDir, `${SATELLITE_BACKUP_FILE}.${process.pid}.${++_satelliteBackupSeq}.tmp`);
-  const payload = Buffer.from(JSON.stringify(backup), "utf8");
-  const fd = openSync(tmp, "w", 0o600);
-  try {
-    let offset = 0;
-    while (offset < payload.length) {
-      offset += writeSync(fd, payload, offset, payload.length - offset, null);
+  writePrivateFile(dest, JSON.stringify(backup), () => {
+    if (options?.failReplaceBeforeRename && replacing) {
+      throw new Error("test_fail_satellite_backup_replace");
     }
-    fsyncSync(fd);
-  } catch (error) {
-    try { closeSync(fd); } catch { /* */ }
-    try { unlinkSync(tmp); } catch { /* */ }
-    throw error;
-  }
-  closeSync(fd);
-  chmodPrivatePath(tmp, 0o600);
-  if (options?.failReplaceBeforeRename && replacing) {
-    try { unlinkSync(tmp); } catch { /* */ }
-    throw new Error("test_fail_satellite_backup_replace");
-  }
-  try {
-    renameAtomicFile(tmp, dest, undefined, "storage-cleanup");
-  } catch (error) {
-    try { unlinkSync(tmp); } catch { /* */ }
-    throw error;
-  }
-  chmodPrivatePath(dest, 0o600);
-  fsyncDirectoryBestEffort(stageDir);
+  });
 }
 
 function clearSatelliteBackup(stageDir: string): void {
@@ -1734,6 +1736,12 @@ export interface ExecuteCleanupOptions {
   /** Test-only failure injection for atomicity regressions. */
   _test?: {
     failManifestWrite?: boolean;
+    /** Observe the complete temp and prior destination before publication. Never serialized. */
+    beforeManifestReplace?: (
+      temporaryPath: string,
+      targetPath: string,
+      phase: "staging" | "pre-commit" | "purge-incomplete",
+    ) => void;
     failPurgeBasenames?: string[];
     failRollbackBasenames?: string[];
     blockStageDestBasenames?: string[];
@@ -1752,14 +1760,14 @@ export interface ExecuteCleanupOptions {
 /** Serializable cleanup test hooks allowed on the management API wire. */
 export type CleanupWireTestHooks = Omit<
   NonNullable<ExecuteCleanupOptions["_test"]>,
-  "afterSatelliteMutations" | "beforeReconcileLock"
+  "afterSatelliteMutations" | "beforeReconcileLock" | "beforeManifestReplace"
 >;
 
 function isStringArray(v: unknown): v is string[] {
   return Array.isArray(v) && v.every(e => typeof e === "string");
 }
 
-/** Pick only allowlisted serializable hooks; drops function hooks (afterSatelliteMutations, beforeReconcileLock) and unknown keys. */
+/** Pick only allowlisted serializable hooks; drops all function hooks and unknown keys. */
 export function pickWireCleanupTestHooks(raw: unknown): CleanupWireTestHooks | undefined {
   if (!raw || typeof raw !== "object") return undefined;
   const o = raw as Record<string, unknown>;
@@ -1911,6 +1919,9 @@ export function executeArchivedCleanup(options: ExecuteCleanupOptions): CleanupR
         entries: manifestEntries,
         ...extra,
       }, null, 2),
+      (temporaryPath, targetPath) => options._test?.beforeManifestReplace?.(
+        temporaryPath, targetPath, extra.staging ? "staging" : "pre-commit",
+      ),
     );
   };
 
@@ -1999,6 +2010,9 @@ export function executeArchivedCleanup(options: ExecuteCleanupOptions): CleanupR
             }))
             .filter(entry => entry.physicalRelPaths.length > 0),
         }, null, 2),
+        (temporaryPath, targetPath) => options._test?.beforeManifestReplace?.(
+          temporaryPath, targetPath, "purge-incomplete",
+        ),
       );
     } catch { /* best-effort: the pre-commit manifest is still on disk */ }
     return {

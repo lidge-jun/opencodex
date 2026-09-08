@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, jest, test } from "bun:test";
 import { bridgeToResponsesSSE, buildResponseJSON } from "../../src/bridge";
 import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction } from "../../src/adapters/openai-responses";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
@@ -15,9 +15,184 @@ import {
 } from "../../src/responses/compaction";
 import type { AdapterEvent } from "../../src/types";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
+import { bufferCompactResponse, COMPACT_RESPONSE_MAX_BYTES } from "../../src/server/responses/compact";
 
 const createResponsesPassthroughAdapter = (...args: Parameters<typeof createResponsesPassthroughAdapterProduction>) =>
   withTestTranslatorBudget(createResponsesPassthroughAdapterProduction(...args));
+
+// These non-concurrent tests scope Bun's fake timers like responses/ws-upstream.test.ts.
+// The real bounded-body reader and idleDeadline run; upstream pull acknowledgements
+// synchronize chunk consumption before advancing time, without sleeps or mocking either helper.
+async function withCompactBodyClock(run: () => Promise<void>): Promise<void> {
+  jest.useFakeTimers();
+  try {
+    await run();
+    expect(jest.getTimerCount()).toBe(0);
+  } finally {
+    jest.clearAllTimers();
+    jest.useRealTimers();
+  }
+}
+
+function compactBodySource(onCancel?: () => void) {
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  let nextRead = Promise.withResolvers<void>();
+  const cancellationReasons: unknown[] = [];
+  let ended = false;
+  const body = new ReadableStream<Uint8Array>({
+    start(value) { controller = value; },
+    pull() { nextRead.resolve(); },
+    cancel(reason) {
+      ended = true;
+      cancellationReasons.push(reason);
+      onCancel?.();
+      // A deadline must return even if the upstream's cancellation cleanup never finishes.
+      return new Promise<void>(() => {});
+    },
+  }, { highWaterMark: 0 });
+  return {
+    body, cancellationReasons,
+    waitingForRead: () => nextRead.promise,
+    async send(bytes: Uint8Array) {
+      await nextRead.promise;
+      nextRead = Promise.withResolvers<void>();
+      controller.enqueue(bytes);
+      await nextRead.promise;
+    },
+    close() { if (!ended) { ended = true; controller.close(); } },
+  };
+}
+
+describe("native compact response body deadline", () => {
+  test("headers followed by silence expire at the default 300 seconds without waiting for cancel", () => withCompactBodyClock(async () => {
+    const source = compactBodySource();
+    const pending = bufferCompactResponse(new Response(source.body), new AbortController().signal);
+    try {
+      await source.waitingForRead();
+      jest.advanceTimersByTime(299_999);
+      expect(jest.getTimerCount()).toBe(1);
+      expect(source.cancellationReasons).toHaveLength(0);
+      jest.advanceTimersByTime(1);
+      const response = await pending;
+      expect(response.status).toBe(504);
+      expect(await response.json()).toMatchObject({ error: { type: "upstream_stall_timeout", code: "upstream_stall_timeout" } });
+      expect(source.cancellationReasons).toHaveLength(1);
+      expect(source.cancellationReasons[0]).toBeInstanceOf(DOMException);
+      expect((source.cancellationReasons[0] as DOMException).name).toBe("TimeoutError");
+      expect(source.body.locked).toBe(false);
+    } finally { source.close(); await pending; }
+  }));
+
+  test("nonempty chunks rearm the deadline and success preserves exact bytes and header hints", () => withCompactBodyClock(async () => {
+    const source = compactBodySource();
+    const expected = new Uint8Array([0, 255, 128, 195, 40]);
+    const pending = bufferCompactResponse(new Response(source.body, {
+      status: 201, statusText: "Compact ready",
+      headers: {
+        "content-type": "application/octet-stream", "content-length": "999",
+        "retry-after": "42", "x-codex-primary-reset-at": "1900000000",
+        "x-codex-secondary-reset-at": "1900000001", "x-codex-tertiary-reset-at": "1900000002",
+        location: "/compact-result", "set-cookie": "ignored=1", "transfer-encoding": "chunked",
+      },
+    }), new AbortController().signal, 2);
+    try {
+      await source.waitingForRead();
+      for (let i = 0; i < expected.length; i++) {
+        jest.advanceTimersByTime(1_500);
+        await source.send(expected.subarray(i, i + 1));
+      }
+      source.close();
+      const response = await pending;
+      expect(response.status).toBe(201);
+      expect(response.statusText).toBe("Compact ready");
+      expect(new Uint8Array(await response.arrayBuffer())).toEqual(expected);
+      expect(Object.fromEntries(response.headers)).toEqual({
+        "content-type": "application/octet-stream", "retry-after": "42",
+        "x-codex-primary-reset-at": "1900000000", "x-codex-secondary-reset-at": "1900000001",
+        "x-codex-tertiary-reset-at": "1900000002", location: "/compact-result",
+      });
+      expect(source.cancellationReasons).toHaveLength(0);
+      expect(source.body.locked).toBe(false);
+    } finally { source.close(); await pending; }
+  }));
+
+  test("empty chunks do not rearm the byte inactivity deadline", () => withCompactBodyClock(async () => {
+    const source = compactBodySource();
+    const pending = bufferCompactResponse(new Response(source.body), new AbortController().signal, 2);
+    try {
+      await source.waitingForRead();
+      jest.advanceTimersByTime(1_000);
+      await source.send(new Uint8Array(0));
+      jest.advanceTimersByTime(999);
+      expect(source.cancellationReasons).toHaveLength(0);
+      jest.advanceTimersByTime(1);
+      expect((await pending).status).toBe(504);
+      expect(source.cancellationReasons).toHaveLength(1);
+      expect(source.body.locked).toBe(false);
+    } finally { source.close(); await pending; }
+  }));
+
+  for (const idleAlsoFires of [false, true]) {
+    test(`client cancellation unblocks a pending read and wins over idle expiry (${idleAlsoFires})`, () => withCompactBodyClock(async () => {
+      const client = new AbortController();
+      // Abort during the timeout's source-cleanup callback, before the wrapper
+      // classifies its result. Advancing fake time can already flush promises.
+      const source = compactBodySource(idleAlsoFires ? () => client.abort(new Error("client stopped")) : undefined);
+      const pending = bufferCompactResponse(new Response(source.body), client.signal, 2);
+      try {
+        await source.waitingForRead();
+        if (idleAlsoFires) jest.advanceTimersByTime(2_000);
+        else client.abort(new Error("client stopped"));
+        const response = await pending;
+        expect(client.signal.aborted).toBe(true);
+        expect(response.status).toBe(499);
+        expect(await response.json()).toMatchObject({ error: { code: "client_cancelled" } });
+        expect(source.cancellationReasons).toHaveLength(1);
+        expect(source.body.locked).toBe(false);
+      } finally { source.close(); await pending; }
+    }));
+  }
+
+  test("cancellation after a completed timeout does not retroactively replace its 504", () => withCompactBodyClock(async () => {
+    const source = compactBodySource();
+    const client = new AbortController();
+    const pending = bufferCompactResponse(new Response(source.body), client.signal, 2);
+    try {
+      await source.waitingForRead();
+      jest.advanceTimersByTime(2_000);
+      const response = await pending;
+      expect(response.status).toBe(504);
+      client.abort(new Error("late cancellation"));
+      expect(response.status).toBe(504);
+      expect(source.cancellationReasons).toHaveLength(1);
+    } finally { source.close(); await pending; }
+  }));
+
+  test("declared and observed oversize bodies retain the 32 MiB limit without waiting for cancel", () => withCompactBodyClock(async () => {
+    for (const declared of [true, false]) {
+      let cancelled = 0;
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) { controller.enqueue(new Uint8Array(COMPACT_RESPONSE_MAX_BYTES + 1)); },
+        cancel() { cancelled++; return new Promise<void>(() => {}); },
+      }, { highWaterMark: 0 });
+      const response = await bufferCompactResponse(new Response(body, {
+        headers: declared ? { "content-length": String(COMPACT_RESPONSE_MAX_BYTES + 1) } : {},
+      }), new AbortController().signal, 2);
+      expect(response.status).toBe(502);
+      expect(await response.json()).toMatchObject({ error: { code: "compact_response_too_large" } });
+      expect(cancelled).toBe(1);
+      expect(body.locked).toBe(false);
+    }
+    const atLimit = new Uint8Array(COMPACT_RESPONSE_MAX_BYTES);
+    atLimit[atLimit.length - 1] = 255;
+    const response = await bufferCompactResponse(new Response(atLimit), new AbortController().signal, 2);
+    expect(response.status).toBe(200);
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    expect(bytes.byteLength).toBe(COMPACT_RESPONSE_MAX_BYTES);
+    expect(bytes[0]).toBe(0);
+    expect(bytes[bytes.length - 1]).toBe(255);
+  }));
+});
 
 async function* replay(events: AdapterEvent[]): AsyncGenerator<AdapterEvent> {
   for (const event of events) yield event;

@@ -455,6 +455,20 @@ describe("rewriteTakeoverCredits", () => {
 });
 
 describe("cleanPrTitle", () => {
+  test("removes the enforcement marker before extracting scope and sentence casing", () => {
+    expect(cleanPrTitle("  [WRONG BRANCH] chore(release): promote validated 2.45.0 to main (#3813)  ", 3813)).toEqual({
+      scope: "release",
+      text: "Promote validated 2.45.0 to main",
+    });
+  });
+
+  test.each([
+    ["[Preview] chore(release): keep this marker", "[Preview] chore(release): keep this marker"],
+    ["fix: document [WRONG BRANCH] markers", "Document [WRONG BRANCH] markers"],
+    ["[WRONG BRANCH]ish: keep this title", "[WRONG BRANCH]ish: keep this title"],
+  ])("preserves meaningful title text: %s", (title, text) => {
+    expect(cleanPrTitle(title).text).toBe(text);
+  });
   test("strips conventional prefix, keeps scope, and sentence-cases the title", () => {
     expect(cleanPrTitle("feat(providers): add Baseten Model APIs preset", 653)).toEqual({
       scope: "providers",
@@ -488,6 +502,55 @@ describe("cleanPrTitle", () => {
 });
 
 describe("renderReleaseNotes", () => {
+  test.each(["delta", "carried"])("removes the bot marker from summaries and full changelogs (%s)", source => {
+    const body = [
+      "## What's Changed",
+      "### Chores",
+      "* [WRONG BRANCH] chore(release): promote validated 2.45.0 to main by @lidge-jun in https://github.com/lidge-jun/opencodex/pull/3813",
+    ].join("\n");
+    const notes = renderReleaseNotes({
+      npmMetadata: "",
+      ...(source === "delta" ? { deltaPrNotes: body } : { carriedPreviewNotes: [
+        "## Chores", "",
+        "- [WRONG BRANCH] chore(release): promote validated 2.45.0 to main (#3813)", "",
+        "## Changelog", "",
+        "- #3813 [WRONG BRANCH] chore(release): promote validated 2.45.0 to main @lidge-jun",
+      ].join("\n") }),
+    });
+    expect(notes).toBe([
+      "## Chores", "",
+      "- Promote validated 2.45.0 to main (#3813)", "",
+      "## Changelog", "",
+      "- #3813 chore(release): promote validated 2.45.0 to main @lidge-jun", "",
+    ].join("\n"));
+  });
+
+  test("groups a bot-prefixed title with ordinary titles of the same scope", () => {
+    const notes = renderReleaseNotes({
+      npmMetadata: "",
+      deltaPrNotes: [
+        "## What's Changed", "### Chores",
+        "* [WRONG BRANCH] chore(release): promote verified version by @maintainer in https://github.com/lidge-jun/opencodex/pull/10",
+        "* chore(release): update notes by @contributor in https://github.com/lidge-jun/opencodex/pull/11",
+      ].join("\n"),
+    });
+    expect(notes).toContain("- Release: Promote verified version; Update notes (#10, #11)");
+    expect(notes).toContain("- #10 chore(release): promote verified version @maintainer");
+    expect(notes).toContain("- #11 chore(release): update notes @contributor");
+    expect(notes).not.toContain("[WRONG BRANCH]");
+  });
+
+  test.each([
+    "[Preview] chore(release): retain the preview marker",
+    "fix: document [WRONG BRANCH] markers (#99)",
+    "[WRONG BRANCH]ish: retain this title",
+  ])("preserves meaningful full-changelog title text: %s", title => {
+    const notes = renderReleaseNotes({
+      npmMetadata: "",
+      deltaPrNotes: `## What's Changed\n### Chores\n* ${title} by @contributor in https://github.com/lidge-jun/opencodex/pull/12`,
+    });
+    expect(notes).toContain(`- #12 ${title} @contributor`);
+  });
   const carried = [
     "<!-- Release notes generated using configuration in .github/release.yml at abc -->",
     "",

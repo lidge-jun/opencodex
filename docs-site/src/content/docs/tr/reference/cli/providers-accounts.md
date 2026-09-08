@@ -16,7 +16,7 @@ bir ad hem `--adapter` hem de `--base-url` gerektirir.
 
 | Alt komut | Desteklenen bayraklar | Eylem |
 | --- | --- | --- |
-| `list` | `--json` | Yapılandırılmış sağlayıcıları ve kalan kayıt defteri girdilerini listeleyin. |
+| `list` | `--json`, `--jsonl` | Yapılandırılmış sağlayıcıları ve kalan kayıt defteri girdilerini listeleyin. `--jsonl`, yapılandırılmış her sağlayıcı için satır başına bir JSON nesnesi üretir. |
 | `add <ad>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | Bir kayıt defteri/özel sağlayıcı ekleyin. `--force` üzerine yazar; `--sync`, insan çıktısı modunda çalışan bir proxy'yi yeniler. |
 | `edit <ad>` | sağlayıcı alan bayrakları, `--headers <json>`, `--json` | Anahtar havuzlarını değiştirmeden doğrulanmış canlı sağlayıcı alanlarını düzenleyin. `--headers` özel istek başlıklarını birleştirir; temizlemek için `{}` veya `-` iletin. |
 | `test <ad>` | `--json` | Gerçek yukarı akış model uç noktasını araştırın. |
@@ -30,6 +30,7 @@ bir ad hem `--adapter` hem de `--base-url` gerektirir.
 
 ```bash
 ocx provider list --json
+ocx provider list --jsonl
 ocx provider test ark
 ocx provider add anthropic --api-key sk-ant-... --set-default --sync
 ocx provider add local-dev --adapter openai-chat --base-url http://localhost:11434/v1
@@ -37,6 +38,8 @@ ocx provider show anthropic --json
 ocx models --provider anthropic --json
 ocx models live --provider ark --json
 ```
+
+`--jsonl` yalnızca yapılandırılmış sağlayıcıları, her satırda bir JSON nesnesi olacak şekilde yazar. Her nesne, `--json` çıktısındaki `configured` dizisinin bir öğesiyle aynı alanları içerir; `registryCount` özeti eklenmez. Betikler nesneleri satır satır işleyebilir. `--json` ve `--jsonl` birlikte kullanılamaz.
 
 :::caution[Özel başlıklar bir kimlik bilgisi kanalı değildir]
 `--headers`, gizli olmayan istek meta verileri içindir — yönlendirme ipuçları,
@@ -229,13 +232,11 @@ eşleşen null veya eski bir rapora düşer (çıkış 0).
 
 ### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
 
-Yalnızca `openai` Codex hesap havuzunu denetler. `on` %80'i ayarlar, `off` %0'ı
-ayarlar, `status` geçerli değeri okur ve `threshold <n>` 0 ile 100 arasında bir
-tamsayı kabul eder. Diğer sağlayıcılar ve geçersiz değerler 1 ile çıkar.
-`--json` şunu döndürür:
+`openai` Codex havuzunun eşiğini yönetir veya genel OAuth havuzunun eşiğini kaydeder. `on` %80, `off` %0 kaydeder; `threshold <n>` 0–100 kabul eder. Genel havuz eşikleri şu anda uygulanmaz: kayıt işlemi eşik tabanlı geçişi, sağlayıcının etkinlik ayarını veya 429 hatasından sonraki otomatik hesap değişimini etkilemez. Genel havuz çıktısı sunucunun doğruladığı değerleri kullanır. Genel havuzlarda `poolEnabled`, kaydedilmiş sağlayıcı ayarıdır (`null` belirtilmemiş demektir); devralınmış etkin durumu göstermez. `inert: true`, eşiğin uygulanmadığını belirtir; yetenek bilinmiyorsa `enabled: true` bildirilmez. API anahtarlı sağlayıcılar, Anthropic ve geçersiz değerler reddedilir.
 
 ```text
-{ provider, autoSwitchThreshold: number, enabled: boolean }
+openai: { provider, autoSwitchThreshold: number, enabled: boolean }
+generic OAuth: { provider, autoSwitchThreshold: number | null, enabled: boolean, poolEnabled: boolean | null, inert: true | null }
 ```
 
 ### `ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`

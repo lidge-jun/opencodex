@@ -1,0 +1,33 @@
+# Logs review corrections: focus and proxy-relative windows
+
+## Loop specification
+
+Archetype: bounded correctness repair (C3). Trigger: #3712 review threads PRRT_kwDOS-0Gi86fmmdd and PRRT_kwDOS-0Gi86fmpGe. Goal: keyboard Reset returns focus to a stable selected surface control; relative windows use the proxy clock despite browser wall-clock skew. Non-goals: changing log history, server-side filtering, auth, URLs, or UI layout. Verifier: rendered GUI cases, real management envelope test, pinned remote typecheck/root/GUI checks plus browser activation. Stop: candidate verified; final logs-proof/c-2 still require dev integration and hosted CI. Memory: this042 and ignored receipts. Failed gates stay open. Main reclaims a delegated packet after two distinct worker failures; new scopes require a P amendment.
+
+Prior D accepted the Cursor guidance candidate92f848e8, with final c-4 shipping still open. These parent Logs findings stopped the admin merge before any mutation. Build the correction on Logs248177c9, preserve the child3715 commit, then merge the corrected parent into that child. Do not rewrite either original author history. Existing screenshots describe the unchanged layout; browser verification adds reset-focus and a deliberately skewed synthetic proxy clock.
+
+## Grounded owners and changes
+
+- `src/server/management/logs-usage-routes.ts` GET /api/logs already returns an envelope with timeZone,total,logs (older array support remains in the GUI). Add `generatedAt: Date.now()` in that envelope. It is the proxy epoch milliseconds sampled while preparing the response. No headers/auth/CORS or existing fields change.
+- `tests/server/logs-timezone.test.ts`: real handleManagementAPI response must include a finite generatedAt between pre/post request wall-clock samples and still carry logs/total/timeZone. Do not mirror the implementation in a fake formatter.
+- `gui/src/pages/Logs.tsx`: capture valid numeric generatedAt on successful logs reads and anchor it to browser performance.now at receipt. The filter clock advances from server epoch plus monotonic elapsed time, not browser Date.now. New samples resynchronize the anchor. An aborted/stale response must not change the clock; clear/replace the anchor when apiBase/resourceKey changes. Network failures keep the last accepted anchor. Legacy arrays/envelopes lacking a usable timestamp preserve the existing browser-clock fallback until a server sample exists; do not pretend old servers supply precision they lack. Poll backoff remains separate.
+- Small pure clock logic may live in `gui/src/pages/logs-clock.ts` if that keeps the large page readable; no generic clock framework. Document creation (generatedAt), serialization (envelope), validation/deserialization (finite nonnegative number), and consumers (relative-window timer and immediate selection) in the helper/page. Timezone formatting still uses timeZone independently.
+- `gui/src/pages/logs-filter-bar.tsx`: the Reset click handler first performs the existing state reset, then restores focus to the stable All surface radio with a component-owned ref; avoid document-global queries or per-render focus stealing. Pointer and keyboard activation share the handler. The surface control remains mounted and selected after reset; no permanently disabled toolbar or layout expansion.
+- `gui/tests/logs-auto-refresh.test.tsx` and `logs-filter-bar.test.ts`: actual rendered Reset activation verifies document.activeElement points to All after reset and the filters/default rows are restored. Add generatedAt envelope fixtures for browser clocks ahead AND behind by hours; a fresh row stays in15m while an older row is excluded. Advance the monotonic clock without network/with auto-refresh OFF to expire the row. A browser wall-clock jump after sampling must not shift the window. Cover fresh sample resync, malformed/legacy fallback, API-base switch and aborted late response not poisoning the active clock. Existing rollover/hash/timer tests remain meaningful, adapting their clock seam where required. A small logs-clock.test.ts is allowed for pure fallback validation; the skew acceptance must exercise rendered Logs.
+- `docs-site/src/content/docs/guides/web-dashboard.md`, Korean counterpart and `structure/05_gui-and-management-api.md`: explain proxy-clock windows and stable reset focus, with older-proxy fallback stated accurately. Other translations must not contradict the source; no new untranslated UI strings are needed.
+
+## Activation matrix
+
+1. Apply a filter, focus Reset, activate it with keyboard: button can disappear but focus lands on selected All; subsequent navigation continues within the stable surface group. Also click Reset and verify focus.
+2. Browser Date.now is six hours ahead, then six hours behind proxy generatedAt. Fifteen-minute window still selects only the same fresh proxy row; all-time remains unaffected.
+3. Pause auto refresh, advance monotonic30s tick past a relative cutoff: old row expires with no fetch. Change browser wall-clock separately: rows do not jump.
+4. Later successful server sample updates the anchor. A failed or aborted request cannot replace it; a different apiBase cannot inherit the previous server epoch. Legacy/malformed metadata uses documented fallback, never NaN windows.
+5. Real management API returns generatedAt in the request time interval and preserves the envelope shape. Existing metrics/authorization tests remain green.
+
+## Delegation and verification
+
+Main owns server route/test, docs, Git/CI/FSM and native browser QA. Inherited Huygens owns only the GUI page/filter bar/optional clock helper and the corresponding GUI tests. Nash audits before B; independent implementation review follows. All application test/typecheck/lint/build commands run remotely; no local suite. Remote GUI checks include all GUI tests, lint/i18n/build, plus root typecheck/full suite and docs build. Final receipts state any queued GitHub jobs explicitly rather than marking them passed.
+
+## Check-phase React Doctor correction
+
+A cold pinned0.9.11 scan with the actual6005 base available reported two concrete diagnostics: rollover selection was adjusted in a post-render effect, and the rendered filter-bar test assigned an external observer during render. Move reconciliation into acceptance of the latest valid log response, preserving permanent reset when an identity disappears and current spelling when it remains. Keep component rendering pure by observing test state from an effect/event. No rule suppression is planned. Re-run the cold changed-scope scan before the regression suites. The earlier same-head hosted success is retained as an observed run result; it is not evidence that these diagnostics were absent.

@@ -92,6 +92,15 @@ import {
   grokSyncFailureMessage,
   reconcileEnsureDesiredIntegrations,
 } from "./ensure-desired-integrations";
+import { refreshOwnedCatalogIntegrations } from "../integrations/catalog-refresh";
+import { loadExportModels } from "../server/management/model-rows";
+
+import { removeOwnedConfigAfterDesktopCleanup } from "./uninstall-client-state";
+import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
+import { selfLaunchArgv } from "../lib/self-launch-argv";
+import { initializeNodeLauncherContext } from "./launcher-context";
+import { createLocalAttestationSecret } from "../lib/local-management-attestation";
+import { MEMORY_DRAIN_RESTART_MS, REPLACEMENT_READY_TIMEOUT_MS } from "../lib/system-restart-contract";
 
 /**
  * A failed shell-hook reconcile is not cosmetic: a stale hook keeps sourcing
@@ -105,13 +114,25 @@ function reportShellHookFailure(result: { state: "installed" | "absent" | "faile
   console.warn("   Check ~/.zshrc for the '# opencodex claude-env hook' block.");
 }
 
-
-import { removeOwnedConfigState } from "../lib/config-ownership";
-import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
-import { selfLaunchArgv } from "../lib/self-launch-argv";
-import { initializeNodeLauncherContext } from "./launcher-context";
-import { createLocalAttestationSecret } from "../lib/local-management-attestation";
-import { MEMORY_DRAIN_RESTART_MS, REPLACEMENT_READY_TIMEOUT_MS } from "../lib/system-restart-contract";
+async function refreshOwnedRaycastCatalog(
+  config: ReturnType<typeof loadConfig>,
+  port: number,
+): Promise<void> {
+  try {
+    const outcomes = await refreshOwnedCatalogIntegrations({
+      models: () => loadExportModels(config),
+      config,
+      port,
+    }, ["raycast"]);
+    for (const outcome of outcomes) {
+      if (!outcome.ok) {
+        console.error(`⚠️  Raycast integration was not refreshed: ${outcome.reason}`);
+      }
+    }
+  } catch (error) {
+    console.error(`⚠️  Raycast integration was not refreshed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
 
 initializeNodeLauncherContext();
 
@@ -459,8 +480,8 @@ async function handleStart(options: { block?: boolean } = {}) {
   reportShellHookFailure(reconcileShellHook(systemEnv.injected));
   await maybeShowStarPrompt(); // once-only Yes/No GitHub-star prompt on first interactive start
   // Codex sync owns the ready/failed verdict, but its successful transition is
-  // deferred until the best-effort Claude roster reconciliation settles. This
-  // keeps /readyz closed across both startup writes without making an optional
+  // deferred until the best-effort Claude roster and Desktop registry settle. This
+  // keeps /readyz closed across startup initialization without making an optional
   // Claude integration failure prevent the proxy from starting.
   const startupSync = await reconcileClientStartupBeforeReady(
     readinessGate,
@@ -468,8 +489,32 @@ async function handleStart(options: { block?: boolean } = {}) {
     () => systemEnv.injected
       ? Promise.resolve(null)
       : syncClaudeAgentDefsAtProxyStartup(config, port),
+    async () => {
+      try {
+        const { fetchAllModels } = await import("../server/management-api");
+        const { desktopVisibleNativeSlugs } = await import("../codex/catalog");
+        const { resolveCodexModelEntitlements } = await import("../codex/model-entitlements");
+        const { buildDesktopDiscoveryInputs } = await import("../claude/desktop-discovery-inputs");
+        const [models, modelEntitlements] = await Promise.all([
+          fetchAllModels(config),
+          resolveCodexModelEntitlements(config, { clientVersion: null }),
+        ]);
+        const inputs = buildDesktopDiscoveryInputs({
+          config, models, modelEntitlements,
+          desktopNativeCandidates: desktopVisibleNativeSlugs(config),
+        });
+        buildDesktop3pRegistry(
+          inputs.nativeSlugs, inputs.routedModels,
+          config.claudeCode?.desktopProfile, inputs.nativeContextCap,
+        );
+      } catch {
+        // Best-effort; model discovery can rebuild it. Never reflect credential or provider errors.
+        console.warn("[opencodex] Claude Desktop model registry could not be initialized at startup.");
+      }
+    },
   );
   if (!startupSync.ran) console.log("   Codex integration OFF; startup left Codex native.");
+  await refreshOwnedRaycastCatalog(config, port);
   // #1046: one warning per startup, after BOTH writes. The server's cache
   // invalidation happens first and the catalog sync second, so the mtime is only
   // final here — and neither write site warns on its own, or a boot that hits
@@ -482,17 +527,6 @@ async function handleStart(options: { block?: boolean } = {}) {
   if (!currentExternalCodexModelProvider() && !shouldInjectApiAuthHeader(config) && config.syncResumeHistory !== false) {
     historyGuardian = startHistoryMigrationGuardian();
   }
-  // Build Desktop 3P alias registry so inbound claude-opus-4-8-{code} aliases (and legacy claude-opus-4-{code}) decode correctly.
-  try {
-    const { fetchAllModels } = await import("../server/management-api");
-    const { visibleNativeSlugs, filterCatalogVisibleModels } = await import("../codex/catalog");
-    const models = filterCatalogVisibleModels(await fetchAllModels(config), config);
-    buildDesktop3pRegistry(
-      [...visibleNativeSlugs(config)],
-      models.map(m => ({ provider: m.provider, id: m.id, contextWindow: m.contextWindow })),
-      config.claudeCode?.desktopProfile,
-    );
-  } catch { /* best-effort — registry rebuilds on first /v1/models call */ }
   // Grok Build auto-registration: additive fenced block in ~/.grok/config.toml so an installed
   // grok CLI can pick opencodex-routed models without manual config. No-op when ~/.grok is
   // absent or the bind is non-loopback; removed again by stop/eject/uninstall/shutdown.
@@ -546,6 +580,9 @@ async function handleEnsure(options: { existingIsSuccess?: boolean } = {}): Prom
         return null;
       });
       if (synced?.status === "skipped") console.log("   Codex integration OFF; startup left Codex native.");
+      // Do not refresh Raycast from saved config here: live bind/admission and
+      // secondary-listener settings may differ. Explicit sync or server startup
+      // owns catalog refresh; ensure must not overwrite a working destination.
       // Ensure env file exists for already-running proxy (may have been deleted or pre-dates this feature).
       const systemEnv = await injectSystemEnv(live.port, config).catch(() => ({ injected: false }));
       reportShellHookFailure(reconcileShellHook(systemEnv.injected));
@@ -590,6 +627,8 @@ async function handleEnsure(options: { existingIsSuccess?: boolean } = {}): Prom
     return null;
   });
   if (synced?.status === "skipped") console.log("   Codex integration OFF; startup left Codex native.");
+  // The child performs Raycast refresh with its actual startup config. The
+  // parent's pre-spawn snapshot is not authoritative for a client-file write.
   // The child opens /healthz before its best-effort roster reconcile. Await the same idempotent
   // operation in the parent so `ocx ensure` cannot report success while stale ocx-*.md files are
   // still observable. Always use the live port, including fallback-port starts.
@@ -1268,8 +1307,8 @@ async function handleUninstall() {
   }
 
   if (failures.length === 0) {
-    await runStep("opencodex config removed", () => {
-      const result = removeOwnedConfigState(getConfigDir());
+    await runStep("opencodex config removed", async () => {
+      const result = await removeOwnedConfigAfterDesktopCleanup(observed);
       if (result.status === "absent") return false;
       if (result.status === "removed") return true;
       const residual = result.residualPaths.length > 0

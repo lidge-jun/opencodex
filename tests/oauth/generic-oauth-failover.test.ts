@@ -71,6 +71,45 @@ async function seed(count: number, offset = 0): Promise<string[]> {
 }
 
 describe("#2568 generic OAuth account failover", () => {
+  for (const provider of ["xai", "cursor", "kimi", "github-copilot", "google-antigravity", "nous", "kiro", "meta-muse"]) {
+    test(`manual selection owns healthy dispatch for ${provider}, with pool off or on`, async () => {
+      for (const accountId of ["selected", "spare"]) {
+        await saveCredential(provider, {
+          access: `synthetic-${accountId}`, refresh: `refresh-${accountId}`,
+          expires: Date.now() + 3_600_000, accountId,
+        });
+      }
+      const ids = getAccountSet(provider)!.accounts.map(a => a.id);
+      await setActiveAccount(provider, ids[0]!);
+      setCachedProviderAccountQuotaForTests(provider, ids[0]!, { weeklyPercent: 30, updatedAt: Date.now() });
+      setCachedProviderAccountQuotaForTests(provider, ids[1]!, { weeklyPercent: 11, updatedAt: Date.now() });
+      for (const enabled of [undefined, false, true]) {
+        const cfg = { providers: { [provider]: { ...OAUTH_PROVIDER,
+          ...(enabled === undefined ? {} : { oauthAccountFailover: { enabled } }),
+        } } } as OcxConfig;
+        expect(preferredInitialAccount(cfg, provider)).toBeNull();
+      }
+      clearAccountQuotaCache(provider);
+    });
+  }
+
+  test("proactive exhaustion avoidance requires explicit pool enablement", async () => {
+    const [selected, spare] = await seed(2);
+    await setActiveAccount("xai", selected!);
+    setCachedProviderAccountQuotaForTests("xai", selected!, { weeklyPercent: 100, updatedAt: Date.now() });
+    setCachedProviderAccountQuotaForTests("xai", spare!, { weeklyPercent: 11, updatedAt: Date.now() });
+    expect(preferredInitialAccount(config(), "xai")).toBeNull();
+    expect(preferredInitialAccount(config(false), "xai")).toBeNull();
+    expect(preferredInitialAccount(config(true), "xai")).toBe(spare);
+  });
+
+  test("unknown selected quota is not permission to replace the account", async () => {
+    const [selected, spare] = await seed(2);
+    await setActiveAccount("xai", selected!);
+    setCachedProviderAccountQuotaForTests("xai", spare!, { weeklyPercent: 11, updatedAt: Date.now() });
+    expect(preferredInitialAccount(config(true), "xai")).toBeNull();
+  });
+
   test("two logged-in accounts rotate with NO configuration at all (#2568d)", async () => {
     // The reported workflow: three xAI accounts are logged in, the active one hits its limit, and
     // the operator never went looking for a toggle. Presence is the consent signal.
@@ -145,7 +184,7 @@ describe("#2568 generic OAuth account failover", () => {
     const ids = await seed(2);
     await setActiveAccount("xai", ids[0]!);
     clearGenericFailoverHealth("xai");
-    setCachedProviderAccountQuotaForTests("xai", ids[0]!, { fiveHourPercent: 99 });
+    setCachedProviderAccountQuotaForTests("xai", ids[0]!, { fiveHourPercent: 100 });
     setCachedProviderAccountQuotaForTests("xai", ids[1]!, { fiveHourPercent: 1 });
 
     expect(preferredInitialAccount(config(false, true), "xai")).toBe(ids[1]);
@@ -390,8 +429,11 @@ describe("sidecar on429 wiring", () => {
     // to the configured account's project — #2841 in its original shape.
     const start = coreSource.indexOf("const preferredAccountId =");
     expect(start).toBeGreaterThan(-1);
-    const region = coreSource.slice(start, start + 6000);
-    expect(region).toContain("usedPreferredAccount && resolved.projectId");
+    const end = coreSource.indexOf("\n  route.provider = resolveProviderTransport(", start);
+    expect(end).toBeGreaterThan(start);
+    const region = coreSource.slice(start, end);
+    expect(region).toContain("project: resolved.projectId");
+    expect(region).not.toContain("!route.provider.project");
     // A project-less preferred account falls BACK to the ordinary active-account resolution
     // rather than erroring: a preference must never turn a working request into a failure,
     // and Antigravity tolerates project discovery failing, so an account with no project is

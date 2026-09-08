@@ -1,16 +1,17 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { buildCatalogEntries } from "../../src/codex/catalog";
 import { CURSOR_NO_VISION_MODELS } from "../../src/adapters/cursor/discovery";
 import { getModelMetadata, resolveMetadataProvider } from "../../src/generated/model-metadata";
 import { buildInitProviders } from "../../src/cli/init";
 import { OAUTH_PROVIDERS } from "../../src/oauth";
-import { enrichProviderFromCatalog, KEY_LOGIN_PROVIDERS } from "../../src/oauth/key-providers";
+import { enrichProviderFromCatalog, KEY_LOGIN_PROVIDERS, validateApiKey } from "../../src/oauth/key-providers";
 import {
   deriveFeaturedProviderIds,
   deriveInitProviders,
   deriveJawcodeAliases,
   deriveKeyLoginMap,
   deriveProviderPresets,
+  enrichProviderFromRegistry,
   providerConfigSeed,
 } from "../../src/providers/derive";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
@@ -33,7 +34,7 @@ function nativeTemplate(): Record<string, unknown> {
 const EXPECTED_KEY_PROVIDER_IDS = [
   "anthropic-apikey", "openai-apikey", "meta-model", "umans", "opencode-go", "neuralwatt", "openrouter", "cline-pass", "cline", "orcarouter", "bizrouter", "groq", "google", "google-vertex", "azure-openai",
   "deepseek", "cerebras", "chutes", "deepinfra", "hyperbolic", "nscale", "vultr", "baseten", "commandcode", "sambanova", "nebius", "digitalocean", "scaleway", "featherless", "novita", "together", "fireworks", "firepass", "moonshot",
-  "huggingface", "nvidia", "venice", "zai", "zhipu-bigmodel", "zhipu-bigmodel-coding", "nanogpt", "synthetic", "siliconflow", "qwen-cloud", "tencent-coding-plan",
+  "huggingface", "nvidia", "venice", "zai", "zhipu-bigmodel", "zhipu-bigmodel-coding", "zhipu-bigmodel-responses", "nanogpt", "synthetic", "siliconflow", "qwen-cloud", "tencent-coding-plan",
   "volcengine", "volcengine-coding-plan", "volcengine-agent-plan", "qianfan", "alibaba", "alibaba-token-plan", "alibaba-token-plan-intl", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
   "minimax", "minimax-cn", "kimi-code", "opencode-zen", "vercel-ai-gateway",
   "opencode-free", "xiaomi", "xiaomi-mimo", "kilo", "mimo-free", "mimo", "cloudflare-ai-gateway", "cloudflare-workers-ai", "gitlab-duo",
@@ -440,6 +441,104 @@ describe("provider registry parity", () => {
     expect(glm53Entry?.default_reasoning_level).toBe("max");
   });
 
+  test("BigModel Responses exports only the officially documented static Codex models", () => {
+    // Independent oracle: https://docs.bigmodel.cn/cn/coding-plan/tool/codex.md,
+    // local models.json example checked 2026-09-07; not an authenticated /models response.
+    const id = "zhipu-bigmodel-responses";
+    const registry = PROVIDER_REGISTRY.find(entry => entry.id === id)!;
+    expect(registry).toMatchObject({
+      adapter: "openai-responses",
+      baseUrl: "https://open.bigmodel.cn/api/v1",
+      authKind: "key",
+      defaultModel: "glm-5.3",
+      models: ["glm-5.3", "glm-5-turbo"],
+      liveModels: false,
+      preserveCustomDestination: true,
+      preserveResponsesReasoningContent: true,
+    });
+    expect(registry.modelDiscovery).toBeUndefined();
+    expect(registry.preserveReasoningContentModels).toBeUndefined();
+    const upstreamModalities = { "glm-5.3": ["text"], "glm-5-turbo": ["text"] };
+    expect(registry.modelInputModalities).toEqual(upstreamModalities);
+    expect(KEY_LOGIN_PROVIDERS[id]).toMatchObject({
+      models: ["glm-5.3", "glm-5-turbo"], liveModels: false, apiKeyValidation: "unknown",
+    });
+    const provider = providerConfigSeed(registry);
+    enrichProviderFromRegistry(id, provider);
+    expect(provider.liveModels).toBe(false);
+    expect(provider.preserveResponsesReasoningContent).toBe(true);
+    const models = provider.models!.map(modelId => applyProviderConfigHints(id, provider, {
+      provider: id, id: modelId,
+    }));
+    // The official upstream declaration stays text-only. Catalog hints add image for the
+    // existing vision sidecar (vision/eligibility.ts), not native BigModel image support.
+    expect(provider.modelInputModalities).toEqual(upstreamModalities);
+    expect(models).toMatchObject([
+      { id: "glm-5.3", contextWindow: 1_048_576, reasoningEfforts: ["low", "high", "max"],
+        defaultReasoningEffort: "max", supportsReasoningSummaries: true, inputModalities: ["text", "image"] },
+      { id: "glm-5-turbo", contextWindow: 204_800, reasoningEfforts: [],
+        defaultReasoningEffort: "max", supportsReasoningSummaries: true, inputModalities: ["text", "image"] },
+    ]);
+    const entries = buildCatalogEntries(nativeTemplate(), [], models);
+    for (const [modelId, window, efforts] of [
+      ["glm-5.3", 1_048_576, ["low", "high", "max", "ultra"]],
+      ["glm-5-turbo", 204_800, []],
+    ] as const) {
+      const entry = entries.find(row => row.slug === `${id}/${modelId}`);
+      expect(entry).toMatchObject({
+        context_window: window, supports_reasoning_summaries: true,
+        input_modalities: ["text", "image"],
+      });
+      // Existing export policy adds a compatibility ultra tier and omits the default
+      // for empty ladders. The provider/CatalogModel defaults above remain official max.
+      expect(entry?.default_reasoning_level).toBe(modelId === "glm-5-turbo" ? undefined : "max");
+      expect((entry?.supported_reasoning_levels as Array<{ effort: string }>).map(row => row.effort))
+        .toEqual([...efforts]);
+    }
+    expect(entries.some(entry => String(entry.slug).includes("glm-5.3-flash"))).toBe(false);
+  });
+
+  test("BigModel Responses key login does not probe an undocumented models endpoint", async () => {
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(async () => new Response(null, { status: 403 }));
+    try {
+      const id = "zhipu-bigmodel-responses";
+      expect(await validateApiKey(id, KEY_LOGIN_PROVIDERS[id], "test-bigmodel-key")).toBe("unknown");
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  test("BigModel Responses name collisions preserve custom transport and metadata", () => {
+    const id = "zhipu-bigmodel-responses";
+    // Exercise both a different destination on the same wire and the canonical URL on
+    // another wire. Neither may acquire this preset's transport or per-model defaults.
+    for (const transport of [
+      { adapter: "openai-responses", baseUrl: "https://custom.example.test/api/v1" },
+      { adapter: "openai-chat", baseUrl: "https://open.bigmodel.cn/api/v1" },
+    ]) {
+      const provider: OcxProviderConfig = {
+        ...transport, authMode: "key", apiKey: "test-custom-key", liveModels: true,
+        models: ["glm-5.3"], modelContextWindows: { "glm-5.3": 32_768 },
+        modelReasoningEfforts: { "glm-5.3": ["medium"] },
+        modelDefaultReasoningEfforts: { "glm-5.3": "medium" },
+        modelSupportsReasoningSummaries: { "glm-5.3": false },
+      };
+      const enriched = structuredClone(provider);
+      enrichProviderFromRegistry(id, enriched);
+      expect(enriched).toEqual(provider);
+      const config: OcxConfig = { port: 10100, defaultProvider: id, providers: { [id]: provider } };
+      const routed = routeModel(config, `${id}/glm-5.3`);
+      expect(routed.provider).toMatchObject(provider);
+      expect(routed.provider.modelContextWindows).toEqual({ "glm-5.3": 32_768 });
+      expect(routed.provider.modelReasoningEfforts).toEqual({ "glm-5.3": ["medium"] });
+      expect(routed.provider.modelDefaultReasoningEfforts).toEqual({ "glm-5.3": "medium" });
+      expect(routed.provider.modelSupportsReasoningSummaries).toEqual({ "glm-5.3": false });
+      expect(routed.provider.preserveResponsesReasoningContent).toBeUndefined();
+      expect(routed.modelId).toBe("glm-5.3");
+    }
+  });
+
   test("Anthropic API-key provider mirrors the OAuth entry's models on the key flow", () => {
     const anthropicOauth = PROVIDER_REGISTRY.find(entry => entry.id === "anthropic");
     expect(KEY_LOGIN_PROVIDERS["anthropic-apikey"]).toMatchObject({
@@ -638,7 +737,7 @@ describe("provider registry parity", () => {
     // Registry order. Both OAuth entries (anthropic, google-antigravity) are gated by
     // providerSecureTransportConfigError; the rest are key/local providers that never send a
     // subscription bearer to the override.
-    expect(optedIn.map(entry => entry.id)).toEqual(["anthropic", "google-antigravity", "ollama", "vllm", "lm-studio", "moonshot", "qwen-cloud", "alibaba", "alibaba-token-plan-intl", "litellm"]);
+    expect(optedIn.map(entry => entry.id)).toEqual(["orcarouter-oauth", "anthropic", "google-antigravity", "ollama", "vllm", "lm-studio", "moonshot", "qwen-cloud", "alibaba", "alibaba-token-plan-intl", "litellm"]);
     for (const entry of optedIn) {
       expect(providerConfigSeed(entry)).not.toHaveProperty("allowBaseUrlOverride");
     }
@@ -863,7 +962,7 @@ describe("provider registry parity", () => {
   test("GUI preset projection preserves current featured set plus key catalog and custom", () => {
     const featured = deriveFeaturedProviderIds();
     expect(featured).toEqual([
-      "openai", "xai", "command-code", "anthropic", "anthropic-apikey", "kimi", "nous", "openai-apikey", "umans", "opencode-go", "openrouter",
+      "openai", "xai", "command-code", "orcarouter-oauth", "anthropic", "anthropic-apikey", "kimi", "nous", "openai-apikey", "umans", "opencode-go", "openrouter",
       "groq", "google", "azure-openai", "ollama", "vllm", "lm-studio", "opencode-free",
       "mimo-free",
     ]);
@@ -948,6 +1047,7 @@ describe("provider registry parity", () => {
       "minimax-cn": "minimax",
       "zhipu-bigmodel": "zai",
       "zhipu-bigmodel-coding": "zai",
+      "zhipu-bigmodel-responses": "zai",
     });
     expect(resolveMetadataProvider("gemini")).toBe("google");
     expect(resolveMetadataProvider("minimax-cn")).toBe("minimax");

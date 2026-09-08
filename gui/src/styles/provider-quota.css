@@ -101,3 +101,18 @@
   color: var(--amber);
   font-size: 12px;
 }
+
+/* Long subscription labels and reset/value text need separate rows in narrow cards. */
+.quota-compact { container: quota-compact / inline-size; }
+@container quota-compact (max-width: 440px) {
+  .quota-row--credits {
+    grid-template-columns: max-content max-content minmax(0, 1fr) max-content;
+    row-gap: 4px;
+  }
+  .quota-row--credits .quota-label { grid-column: 1 / -1; grid-row: 1; }
+  .quota-row--credits .quota-reset-label { grid-column: 1; grid-row: 2; }
+  .quota-row--credits .quota-reset-day { grid-column: 2; grid-row: 2; }
+  .quota-row--credits .quota-reset-time { grid-column: 3 / -1; grid-row: 2; }
+  .quota-row--credits .bar { grid-column: 1 / 4; grid-row: 3; }
+  .quota-row--credits .quota-val { grid-column: 4; grid-row: 3; white-space: nowrap; }
+}

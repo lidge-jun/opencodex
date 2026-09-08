@@ -1,18 +1,26 @@
 import { CodexStaleBanner } from "../components/codex-stale-banner";
+import ModelPickerOrderEditor from "../components/ModelPickerOrderEditor";
+import ModelDisplayNameDialog from "../components/ModelDisplayNameDialog";
+import ModelPriceDialog from "../components/ModelPriceDialog";
 import { fetchCodexAppServerState } from "../codex-app-server-state";
 import type { AppServerStateOutcome } from "../codex-app-server-state";
 import { useCodexRestart } from "../use-codex-restart";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Switch, Notice, EmptyState, Select, Tooltip } from "../ui";
 import { IconChevron, IconBoxes, IconInfo, IconCheck, IconAlert, IconRefresh, IconPencil } from "../icons";
 import { useT } from "../i18n/shared";
 import type { TFn, TKey } from "../i18n/shared";
 import { modelLabel } from "../model-display";
-import { formatNamespacedModelId, formatProviderDisplayName, providerDisplaySlug } from "../provider-icons";
+import { formatProviderDisplayName, providerDisplaySlug } from "../provider-icons";
 import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
+import { describeIntegrationRefusalParts } from "./integrations/refusal-copy";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { setClientResourceData } from "../client-resource";
-import { createBoundedFetch } from "../bounded-fetch";
+import { createBoundedFetch, type BoundedFetch } from "../bounded-fetch";
+import {
+  isModelPickerUsage, isPickerOrderSaved, isPickerOrderSettings, modelPickerOrder, modelPickerOrderMode,
+  type ModelPickerOrderMode, type PickerOrderSettings, type PickerOrderSaved, type ModelPickerUsage,
+} from "../model-picker-order";
 import { startVisibilityPoll } from "../visibility-poll";
 import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
@@ -37,6 +45,8 @@ import {
   fetchSelectedModels,
   modelVisible,
   putModelVisibility,
+  clientCatalogRefreshFailures,
+  type ClientCatalogRefreshFailure,
   shouldApplyLoadGeneration,
   type ProviderModelMap,
   type ModelVisibilityScope,
@@ -51,8 +61,6 @@ import {
   fmtK,
   NATIVE_CAP_OPTIONS,
   NATIVE_CAP_OPTION_SET,
-  NATIVE_GPT56_DEFAULT_WINDOW,
-  NATIVE_GPT56_OPT_IN_WINDOW,
   PAGE,
   readCollapsedProviders,
   THREAD_OPTION_SET,
@@ -75,6 +83,7 @@ type CachedModelsPage = {
   selectedModels: ProviderModelMap;
   disabled: string[];
   contextCaps: Record<string, number>;
+  contextCapValues?: Record<string, number>;
   contextCapValue: number;
 };
 
@@ -140,26 +149,48 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
     return () => { appServerMounted.current = false; };
   }, []);
 
-  const reloadAppServerState = useCallback((signal?: AbortSignal) => {
-    void fetchCodexAppServerState(apiBase, { signal }).then(outcome => {
-      if (signal?.aborted || !appServerMounted.current) return;
+  const appServerRead = useRef<BoundedFetch | null>(null);
+  const appServerReadGeneration = useRef(0);
+  const appServerReadBase = useRef(apiBase);
+  const cancelAppServerRead = useCallback(() => {
+    appServerReadGeneration.current++;
+    appServerRead.current?.controller.abort();
+    appServerRead.current?.clear();
+    appServerRead.current = null;
+  }, []);
+  const reloadAppServerState = useCallback(async () => {
+    // An old restart callback must not start an A read after the page moved to B.
+    if (!appServerMounted.current || appServerReadBase.current !== apiBase) return;
+    cancelAppServerRead();
+    const generation = appServerReadGeneration.current;
+    const bounded = createBoundedFetch(15_000);
+    appServerRead.current = bounded;
+    try {
+      const outcome = await fetchCodexAppServerState(apiBase, { signal: bounded.signal });
+      if (bounded.signal.aborted || !appServerMounted.current
+        || appServerReadBase.current !== apiBase || generation !== appServerReadGeneration.current
+        || appServerRead.current !== bounded) return;
       setAppServerState(outcome.state);
-    });
-  }, [apiBase]);
+    } finally {
+      // The observation owns its deadline until settlement, independently of PUT.
+      bounded.clear();
+      if (appServerRead.current === bounded) appServerRead.current = null;
+    }
+  }, [apiBase, cancelAppServerRead]);
 
   // onSettled, not a per-button callback: the sidebar control knows nothing about
   // this page, and a restart succeeding there must still clear the banner here.
   const { restarting: codexRestarting, restart: handleCodexRestart } = useCodexRestart(apiBase, {
-    onSettled: () => reloadAppServerState(),
+    onSettled: () => { void reloadAppServerState(); },
   });
 
   useEffect(() => {
-    // Once on mount, on apiBase change, and when a restart settles anywhere in the
-    // app (restartEpoch) — never a timer.
-    const controller = new AbortController();
-    reloadAppServerState(controller.signal);
-    return () => controller.abort();
-  }, [reloadAppServerState, restartEpoch]);
+    // Once on mount/base change or restart completion, never on a timer.
+    appServerReadBase.current = apiBase;
+    setAppServerState(null);
+    void reloadAppServerState();
+    return cancelAppServerRead;
+  }, [apiBase, cancelAppServerRead, reloadAppServerState, restartEpoch]);
 
 
 
@@ -213,7 +244,49 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
   const [search, setSearch] = useState<Record<string, string>>({});
   const [limit, setLimit] = useState<Record<string, number>>({});
   const [contextCaps, setContextCaps] = useState<Record<string, number>>(() => cached?.contextCaps ?? {});
+  const [contextCapValues, setContextCapValues] = useState<Record<string, number>>(() => cached?.contextCapValues ?? {});
   const [contextCapValue, setContextCapValue] = useState(() => cached?.contextCapValue ?? 350_000);
+  const pickerCacheKey = `${cacheKey}:picker-order`;
+  const cachedPicker = useMemo(() => {
+    const value = readSessionListCache<unknown>(pickerCacheKey);
+    return isPickerOrderSettings(value) ? value : undefined;
+  }, [pickerCacheKey]);
+  const [pickerDraft, setPickerDraft] = useState<ModelPickerOrderMode | null>(null);
+  const [pickerBusy, setPickerBusy] = useState(false);
+  const pickerFlight = useRef<BoundedFetch | null>(null);
+  const pickerGeneration = useRef(0);
+  const pickerResource = useDataSurface<PickerOrderSettings>(
+    pickerCacheKey, [apiBase],
+    useCallback(async (signal: AbortSignal) => {
+      const response = await fetch(`${apiBase}/api/subagent-models`, { signal });
+      const data = await readJsonOrThrow<unknown>(response);
+      if (!isPickerOrderSettings(data)) throw new Error("picker settings payload missing");
+      if (signal.aborted) throw new Error("picker settings request aborted");
+      writeSessionListCache(pickerCacheKey, data);
+      return data;
+    }, [apiBase, pickerCacheKey]),
+    { isEmpty: () => false, enabled: catalogActive, deadlineMs: 15_000, initialData: cachedPicker },
+  );
+  const pickerSettings = pickerResource.state.data;
+  const pickerMode = pickerDraft ?? modelPickerOrderMode(
+    pickerSettings?.pickerAvailable ?? [], pickerSettings?.pickerOrder ?? [], pickerSettings?.pickerOrderMode,
+  );
+  useLayoutEffect(() => {
+    pickerGeneration.current++;
+    setPickerDraft(null);
+    setPickerBusy(false);
+    return () => {
+      pickerGeneration.current++;
+      pickerFlight.current?.controller.abort();
+      pickerFlight.current?.clear();
+      pickerFlight.current = null;
+      cancelAppServerRead();
+    };
+  }, [apiBase, catalogActive, cancelAppServerRead]);
+  useLayoutEffect(() => {
+    // Pin inferred Custom before any late GET can switch mode and unmount its draft.
+    if (catalogActive && pickerDraft === null && pickerMode === "custom") setPickerDraft("custom");
+  }, [catalogActive, pickerDraft, pickerMode]);
   const [customCap, setCustomCap] = useState("");
   const [showCustom, setShowCustom] = useState(false);
   const [providerCapCustomOpen, setProviderCapCustomOpen] = useState<Record<string, boolean>>({});
@@ -222,6 +295,7 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
   const [collapsed, setCollapsed] = useState<Set<string>>(() => initialCollapsed ?? new Set());
   const needsDefaultCollapseRef = useRef(initialCollapsed === null);
   const [status, setStatus] = useState("");
+  const [integrationFailures, setIntegrationFailures] = useState<ClientCatalogRefreshFailure[]>([]);
   const [ok, setOk] = useState(false);
   // Feedback generation: a repeated identical message (same success string, same validation
   // error) must still re-arm the toast timer. Clearing `status` alone is not enough — a
@@ -244,6 +318,7 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
   }, [status, ok, feedbackGen]);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
+  const catalogMutationRef = useRef(false);
   const loadGenerationRef = useRef(0);
   const loadPendingRef = useRef(false);
   // multi_agent_v2 / ultra gate. null = endpoint unavailable (older proxy build) -> section hidden.
@@ -263,6 +338,24 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
   const [showThreadsCustom, setShowThreadsCustom] = useState(false);
   const [v2HelpOpen, setV2HelpOpen] = useState(false);
   const [customModalOpen, setCustomModalOpen] = useState(false);
+  const [displayNameModel, setDisplayNameModel] = useState<ModelRow | null>(null);
+  const [priceModel, setPriceModel] = useState<ModelRow | null>(null);
+  const priceTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const [displayNameSaving, setDisplayNameSaving] = useState(false);
+  const [displayNameRequestError, setDisplayNameRequestError] = useState<string | null>(null);
+  const [displayNameRecovery, setDisplayNameRecovery] = useState<{
+    value: string | null | undefined;
+    confirmed: boolean;
+  } | null>(null);
+  const [displayNameCurrentPending, setDisplayNameCurrentPending] = useState(false);
+  const displayNameRequestRef = useRef<BoundedFetch | null>(null);
+  const displayNameSavingRef = useRef(false);
+  useEffect(() => () => {
+    displayNameRequestRef.current?.controller.abort();
+    displayNameRequestRef.current?.clear();
+    displayNameRequestRef.current = null;
+  }, []);
+  const displayNameTriggerRef = useRef<HTMLButtonElement | null>(null);
 
   const reloadAliases = useCallback(async (signal?: AbortSignal) => {
     const response = await fetch(`${apiBase}/api/aliases`, { signal });
@@ -428,6 +521,7 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
       selectedModels: selectionData,
       disabled: [...nextDisabled],
       contextCaps: capsData.caps ?? {},
+      contextCapValues: capsData.values ?? capsData.caps ?? {},
       contextCapValue: nextCapValue,
     } satisfies CachedModelsPage;
     writeSessionListCache(cacheKey, next);
@@ -447,6 +541,7 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
     setSelectedModels(next.selectedModels);
     setContextCapValue(next.contextCapValue);
     setContextCaps(next.contextCaps);
+    setContextCapValues(next.contextCapValues ?? next.contextCaps);
   }, []);
 
   const catalogResource = useDataSurface<CachedModelsPage>(
@@ -468,17 +563,18 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
   );
   const catalogState = catalogResource.state;
 
-  const load = useCallback(async (force = false): Promise<boolean> => {
+  const load = useCallback(async (force = false, signal?: AbortSignal): Promise<boolean> => {
     if (loadPendingRef.current && !force) return false;
     loadPendingRef.current = true;
     const generation = ++loadGenerationRef.current;
     try {
-      const next = await fetchCatalog(new AbortController().signal);
+      const next = await fetchCatalog(signal ?? new AbortController().signal);
       if (!shouldApplyLoadGeneration(generation, loadGenerationRef.current)) return false;
       applyCatalog(next);
       // Follow-up mutation refreshes retain their existing awaitable contract while publishing
       // the result through the same shared store used by the initial catalog subscription.
       setClientResourceData(cacheKey, next);
+      pickerResource.refresh();
       return true;
     } catch {
       return false;
@@ -487,7 +583,119 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
         loadPendingRef.current = false;
       }
     }
-  }, [applyCatalog, cacheKey, fetchCatalog]);
+  }, [applyCatalog, cacheKey, fetchCatalog, pickerResource.refresh]);
+
+  const finishDisplayNameEdit = useCallback(() => {
+    const trigger = displayNameTriggerRef.current;
+    setDisplayNameModel(null);
+    setDisplayNameRequestError(null);
+    setDisplayNameRecovery(null);
+    setDisplayNameCurrentPending(false);
+    window.setTimeout(() => {
+      if (trigger?.isConnected) trigger.focus();
+    }, 0);
+  }, []);
+
+  const closeDisplayNameEdit = useCallback(() => {
+    if (!displayNameSavingRef.current) finishDisplayNameEdit();
+  }, [finishDisplayNameEdit]);
+
+  // undefined retries only the read after a confirmed write or an unknown outcome.
+  const saveDisplayName = useCallback(async (displayName: string | null | undefined) => {
+    const model = displayNameModel;
+    if (!model || displayNameSavingRef.current) return;
+    const bounded = createBoundedFetch(60_000);
+    displayNameRequestRef.current = bounded;
+    displayNameSavingRef.current = true;
+    setDisplayNameSaving(true);
+    setDisplayNameRequestError(null);
+    // A failed convergence retry cannot invalidate an earlier persistence receipt
+    // for the same value. Editing the draft clears recovery and starts a new intent.
+    let confirmed = displayNameRecovery?.confirmed === true
+      && (displayName === undefined || displayName === displayNameRecovery.value);
+    let receivedReceipt = displayName === undefined;
+    let refreshOnly = displayName === undefined;
+    try {
+      if (displayName !== undefined) {
+        const response = await fetch(
+          `${apiBase}/api/providers/${encodeURIComponent(model.provider)}/model-display-names`,
+          {
+            method: "PUT",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ modelId: model.id, displayName }),
+            signal: bounded.signal,
+          },
+        );
+        // The route can persist the value and return 503 when catalog convergence fails.
+        // Keep that receipt instead of throwing away saved:true with the error body.
+        type DisplayNameReceipt = {
+          saved?: boolean;
+          error?: string;
+          displayName?: string;
+          displayNameOverride?: string | null;
+          displayNameSource?: ModelRow["displayNameSource"];
+        };
+        const result: DisplayNameReceipt | undefined = response.ok
+          ? await readJsonOrThrow<DisplayNameReceipt>(response, t("models.displayNameSaveFailed"))
+          : await response.json();
+        bounded.signal.throwIfAborted();
+        if (!result || typeof result !== "object" || Array.isArray(result)
+          || (!response.ok && result.saved !== true && typeof result.error !== "string")) {
+          throw new Error(t("models.displayNameSaveFailed"));
+        }
+        receivedReceipt = true;
+        const receiptConfirmed = response.ok || result.saved === true;
+        confirmed = confirmed || receiptConfirmed;
+        if (receiptConfirmed) {
+          const override = result.displayNameOverride === null ? undefined
+            : result.displayNameOverride ?? displayName ?? undefined;
+          const fields: Pick<ModelRow, "displayName" | "displayNameOverride" | "displayNameSource"> = {
+            displayName: result.displayName ?? override,
+            displayNameOverride: override,
+            displayNameSource: result.displayNameSource ?? (override ? "operator" : undefined),
+          };
+          setModels(current => current.map(row => row.namespaced === model.namespaced ? { ...row, ...fields } : row));
+          setDisplayNameModel({ ...model, ...fields });
+          // A saved:true reset receipt omits the provider's effective fallback label.
+          setDisplayNameCurrentPending(fields.displayName === undefined);
+        }
+        if (!response.ok) {
+          throw new Error(result.error || t("models.displayNameSaveFailed"));
+        }
+        refreshOnly = true;
+      }
+      if (!await load(true, bounded.signal)) throw new Error(t("models.loadFail"));
+      bounded.signal.throwIfAborted();
+      publishFeedback(true, confirmed
+        ? t(displayName === null || (displayName === undefined && displayNameRecovery?.value === null)
+          ? "models.displayNameResetDone" : "models.displayNameSaved")
+        : t("models.displayNameReloaded"));
+      finishDisplayNameEdit();
+    } catch (error) {
+      if (displayNameRequestRef.current !== bounded) return;
+      // A dropped connection or unreadable body can hide a committed write just
+      // like a timeout. Reconcile by reading; never replay an unchanged old draft.
+      const unknownOutcome = !receivedReceipt || bounded.signal.aborted;
+      if (unknownOutcome && !confirmed) setDisplayNameCurrentPending(true);
+      setDisplayNameRecovery(confirmed || unknownOutcome || refreshOnly
+        ? { value: refreshOnly || unknownOutcome ? undefined : displayName, confirmed }
+        : null);
+      setDisplayNameRequestError(confirmed
+        ? t("models.displayNameSavedRefreshFailed")
+        : unknownOutcome || refreshOnly
+          ? t("models.displayNameOutcomeUnknown")
+          : error instanceof Error && error.message
+            ? error.message
+            : t("models.displayNameSaveFailed"));
+    } finally {
+      bounded.clear();
+      if (displayNameRequestRef.current === bounded) {
+        displayNameRequestRef.current = null;
+        displayNameSavingRef.current = false;
+        setDisplayNameSaving(false);
+      }
+    }
+  }, [apiBase, displayNameModel, displayNameRecovery, finishDisplayNameEdit, load, t]);
 
   // Shadow/v2 controls must not wait on the models catalog (live discovery can be slow).
   useEffect(() => {
@@ -698,6 +906,8 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
     targets: ModelVisibilityTarget[],
     enabled: boolean,
   ) => {
+    if (catalogMutationRef.current) return;
+    catalogMutationRef.current = true;
     ++loadGenerationRef.current;
     setBusy(true);
     busyRef.current = true;
@@ -706,6 +916,10 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
     try {
       const response = await putModelVisibility(apiBase, scope, provider, targets, enabled);
       if (!response.ok) errorKey = "models.saveFailed";
+      else {
+        const failures = clientCatalogRefreshFailures(await response.json());
+        if (failures !== undefined) setIntegrationFailures(failures);
+      }
     } catch {
       errorKey = "models.networkError";
     } finally {
@@ -719,10 +933,11 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
       }
       setBusy(false);
       busyRef.current = false;
+      catalogMutationRef.current = false;
     }
   };
 
-  const toggleProviderCap = async (provider: string, nativeGroup = false) => {
+  const toggleProviderCap = async (provider: string) => {
     setBusy(true);
     busyRef.current = true;
     setStatus("");
@@ -733,13 +948,12 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
       const r = await fetch(`${apiBase}/api/provider-context-caps`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(enabled && nativeGroup
-          ? { provider, enabled, value: NATIVE_GPT56_OPT_IN_WINDOW }
-          : { provider, enabled }),
+        body: JSON.stringify({ provider, enabled }),
       });
       try {
         const data = await readJsonOrThrow<ProviderContextCapsResponse>(r, t("models.capSaveFailed"));
         setContextCaps(data?.caps ?? {});
+        setContextCapValues(data?.values ?? data?.caps ?? {});
         setOk(true);
         setStatus(t("models.capApplied"));
         await load(true);
@@ -784,6 +998,7 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
         const data = await readJsonOrThrow<ProviderContextCapsResponse>(r, t("models.capSaveFailed"));
         if (typeof data?.value === "number" && Number.isFinite(data.value) && data.value > 0) setContextCapValue(data.value);
         setContextCaps(data?.caps ?? {});
+        setContextCapValues(data?.values ?? data?.caps ?? {});
         setOk(true);
         setStatus(t("models.capApplied"));
         await load(true);
@@ -828,7 +1043,7 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
   const onSelectProviderCap = (provider: string, raw: string) => {
     if (raw === CUSTOM_OPTION) {
       setProviderCapCustomOpen(prev => ({ ...prev, [provider]: true }));
-      setProviderCapCustomDraft(prev => ({ ...prev, [provider]: String(contextCaps[provider] ?? contextCapValue) }));
+      setProviderCapCustomDraft(prev => ({ ...prev, [provider]: String(contextCaps[provider] ?? contextCapValues[provider] ?? contextCapValue) }));
       return;
     }
     setProviderCapCustomOpen(prev => ({ ...prev, [provider]: false }));
@@ -966,8 +1181,11 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
   };
 
   const applyPreset = async (provider: string, mode: "preset" | "all") => {
-    if (presetBusy) return;
+    if (catalogMutationRef.current) return;
+    catalogMutationRef.current = true;
     setPresetBusy(provider);
+    setBusy(true);
+    busyRef.current = true;
     try {
       const bounded = createBoundedFetch(30_000);
       const r = await fetch(`${apiBase}/api/model-presets`, {
@@ -976,12 +1194,15 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
         body: JSON.stringify({ provider, mode }),
         signal: bounded.signal,
       });
-      const res = await readJsonIfOk<{ fallback?: string; selected?: string[] }>(r) ?? {};
+      const res = await readJsonOrThrow<{ fallback?: string; selected?: string[]; clientIntegrations?: unknown }>(r, t("models.saveFailed"));
+      if (!res) throw new Error(t("models.saveFailed"));
       if (res.fallback === "preset-empty") {
         // Never silently narrow to nothing: the server kept the previous selection, so say so
         // rather than showing a success that changed nothing.
         publishFeedback(false, t("models.presetEmpty", { provider }));
       } else {
+        const failures = clientCatalogRefreshFailures(res);
+        if (failures !== undefined) setIntegrationFailures(failures);
         publishFeedback(true, mode === "all"
           ? t("models.presetClearedToast", { provider })
           : t("models.presetAppliedToast", { provider, count: String(res.selected?.length ?? 0) }));
@@ -991,6 +1212,9 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
       publishFeedback(false, error instanceof Error ? error.message : String(error));
     } finally {
       setPresetBusy(null);
+      setBusy(false);
+      busyRef.current = false;
+      catalogMutationRef.current = false;
     }
   };
 
@@ -1176,18 +1400,8 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
     const recentForProvider = modelDiscovery?.recentArrivals[provider] ?? [];
     const recentIds = new Set(recentForProvider.map(row => row.id));
     const capOn = contextCaps[provider] !== undefined;
-    const providerCap = contextCaps[provider] ?? contextCapValue;
-    // With the cap off, `providerCap` is only the value a future toggle would apply — for the
-    // native group that is the 350k default, which says nothing true about what Codex sees.
-    // The honest number there is the largest window the rows actually advertise.
-    const widestRowWindow = rows.reduce<number | undefined>((widest, row) => {
-      const window = typeof row.contextWindow === "number" && row.contextWindow > 0 ? row.contextWindow : undefined;
-      if (window === undefined) return widest;
-      return widest === undefined || window > widest ? window : widest;
-    }, undefined);
-    const capDisplayValue = capOn
-      ? providerCap
-      : (nativeProviderGroup ? NATIVE_GPT56_DEFAULT_WINDOW : (widestRowWindow ?? providerCap));
+    // Show the value the next enable will actually use, including a remembered selection.
+    const capDisplayValue = contextCaps[provider] ?? contextCapValues[provider] ?? contextCapValue;
     // The native group offers only the three windows GPT-5.6 actually has contracts for
     // (272k live, 372k legacy, 1.05M measured); routed providers keep the generic ladder.
     // The set has to follow the list, or a saved value outside it loses its option.
@@ -1281,7 +1495,7 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
                // control — a provider with nothing to curate would show a dead switch.
                const preset = presets[provider];
                if (!preset) return null;
-               const busyHere = presetBusy === provider;
+               const busyHere = busy || presetBusy !== null;
                const stale = preset.mode === "custom"
                  && preset.appliedVersion !== undefined
                  && preset.appliedVersion < preset.availableVersion;
@@ -1348,7 +1562,7 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
                   screen-reader user was not told this governs the context window.
                   The number belongs to the adjacent Select, which is where a value
                   goes (020_control_affordances.md). */}
-              <Switch on={capOn} onClick={() => toggleProviderCap(provider, nativeProviderGroup)} disabled={busy} label={t("models.contextCapLabel")} showLabel />
+              <Switch on={capOn} onClick={() => toggleProviderCap(provider)} disabled={busy} label={t("models.contextCapLabel")} showLabel />
               {/* Always rendered, disabled when the cap is off. A cap-off provider used to
                   drop this control entirely, which is the defect the user reported: openai
                   showed 1.05M and anthropic showed nothing, so the two rows started at
@@ -1463,13 +1677,52 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
                      <Switch on={!off} onClick={() => void applyVisibility("models", provider, [{ id: m.id, native: m.native === true }], off)} disabled={busy || m.initialSelectionPending} label={m.native ? m.id : m.namespaced} />
                      {m.initialSelectionPending && <span className="models-chip muted" role="status">{t("models.initialSelectionPending")}</span>}
                      {aliases.models[provider]?.[m.id] && <strong className="mono text-control">{aliases.models[provider][m.id].alias}</strong>}
-                      <code className="mono text-control" style={{ color: off ? "var(--faint)" : "var(--text)", textDecoration: off ? "line-through" : "none" }}>{m.native ? modelLabel(m.id) : formatNamespacedModelId(m.namespaced, t)}</code>
+                     <span className="models-model-identity">
+                       <code className="mono text-control" style={{ color: off ? "var(--faint)" : "var(--text)", textDecoration: off ? "line-through" : "none" }}>{m.native ? modelLabel(m.id) : m.namespaced}</code>
+                       {!m.native && m.displayName?.trim() && m.displayName.trim() !== m.namespaced && (
+                         <span className="models-model-friendly text-caption">{m.displayName.trim()}</span>
+                       )}
+                     </span>
                      {aliases.models[provider]?.[m.id]?.source === "builtin" && <span className="models-chip muted text-caption">{t("models.aliasAuto")}</span>}
                      <button type="button" className="btn btn-ghost btn-sm" aria-label={t("models.editModelAlias")} title={t("models.editModelAlias")} onClick={() => void saveModelAlias(provider, m.id)}><IconPencil style={{ width: 13, height: 13 }} /></button>
+                     {!m.native && !m.custom && (
+                       <button
+                         type="button"
+                         className="btn btn-ghost btn-sm text-caption models-display-name-trigger"
+                         aria-haspopup="dialog"
+                         aria-label={t("models.displayNameActionLabel", { model: m.namespaced })}
+                         onClick={event => {
+                           displayNameTriggerRef.current = event.currentTarget;
+                           setDisplayNameRequestError(null);
+                           setDisplayNameRecovery(null);
+                           setDisplayNameCurrentPending(false);
+                           setDisplayNameModel(m);
+                         }}
+                       >
+                         {t("models.displayNameAction")}
+                       </button>
+                     )}
                      {m.custom && (
                        <span className="models-chip muted mono text-caption">
                          {t("models.customBadge")}
                        </span>
+                     )}
+                     {!m.native && m.provider !== "combo" && (
+                       <>
+                         {m.manualPricing === true && <span className="models-chip muted text-caption">{t("pricing.override.badge")}</span>}
+                         <button
+                           type="button"
+                           className="btn btn-ghost btn-sm text-caption models-display-name-trigger"
+                           aria-haspopup="dialog"
+                           aria-label={t("pricing.override.actionLabel", { model: m.namespaced })}
+                           onClick={event => {
+                             priceTriggerRef.current = event.currentTarget;
+                             setPriceModel(m);
+                           }}
+                         >
+                           {t("pricing.override.action")}
+                         </button>
+                       </>
                      )}
                      {!m.custom && recentIds.has(m.id) && <span className="badge badge-amber">{t("models.newBadge")}</span>}
                      {m.contextCapped && <span className="models-chip muted mono text-caption">{t("models.contextCappedValue", { value: fmtK(m.contextCap ?? contextCapValue) })}</span>}
@@ -1579,6 +1832,64 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
   const visibleGroups = selectedProvider
     ? groups.filter(group => group.provider === selectedProvider)
     : groups;
+
+  const acceptPickerOrder = (data: PickerOrderSaved & { catalogRefresh?: unknown }, custom = false) => {
+    // A receipt proves only the saved fields. No old chosen/available snapshot is promoted.
+    const next: PickerOrderSettings = { pickerOrder: data.pickerOrder, pickerOrderMode: data.pickerOrderMode, pickerAvailable: [] };
+    setClientResourceData(pickerCacheKey, next);
+    writeSessionListCache(pickerCacheKey, next);
+    if (custom) setPickerDraft("custom");
+    pickerResource.refresh();
+    const refresh = data.catalogRefresh;
+    const converged = refresh !== null && typeof refresh === "object"
+      && "status" in refresh && refresh.status === "committed"
+      && "degraded" in refresh && refresh.degraded === false;
+    publishFeedback(converged, t(converged ? "models.pickerOrder.saved" : "models.pickerOrder.pending"));
+    void reloadAppServerState();
+  };
+
+  const savePickerOrder = async () => {
+    if (pickerFlight.current || !pickerSettings || pickerResource.state.showError || pickerMode === "custom") return;
+    const owner = pickerGeneration.current;
+    const mode = pickerMode;
+    const available = pickerSettings.pickerAvailable;
+    const bounded = createBoundedFetch(15_000);
+    pickerFlight.current = bounded;
+    setPickerBusy(true);
+    const owns = () => pickerGeneration.current === owner && pickerFlight.current === bounded;
+    const current = () => owns() && !bounded.signal.aborted;
+    try {
+      let usage: ModelPickerUsage[] = [];
+      if (mode === "most-used") {
+        const response = await fetch(`${apiBase}/api/usage?range=all&surface=all`, { signal: bounded.signal });
+        if (!current()) return;
+        const payload = await readJsonOrThrow<{ models?: unknown }>(response, t("models.pickerOrder.usageFailed"));
+        if (!current()) return;
+        if (!isModelPickerUsage(payload?.models)) throw new Error(t("models.pickerOrder.usageFailed"));
+        usage = payload.models;
+      }
+      if (!current()) return;
+      const order = modelPickerOrder(mode, available, usage, models);
+      const response = await fetch(`${apiBase}/api/subagent-models`, {
+        method: "PUT", headers: { "Content-Type": "application/json" }, signal: bounded.signal,
+        body: JSON.stringify({ pickerOrder: order, pickerOrderMode: mode === "default" ? null : mode }),
+      });
+      if (!current()) return;
+      const data = await readJsonOrThrow<unknown>(response, t("models.saveFailed"));
+      if (!isPickerOrderSaved(data) || !("ok" in data) || data.ok !== true) throw new Error(t("models.saveFailed"));
+      if (!current()) return;
+      acceptPickerOrder({ pickerOrder: data.pickerOrder, pickerOrderMode: data.pickerOrderMode,
+        catalogRefresh: "catalogRefresh" in data ? data.catalogRefresh : undefined });
+      setPickerDraft(null);
+    } catch (error) {
+      if (owns()) {
+        publishFeedback(false, error instanceof Error ? error.message : t("models.networkError"));
+      }
+    } finally {
+      bounded.clear();
+      if (owns()) { pickerFlight.current = null; setPickerBusy(false); }
+    }
+  };
 
   const controlsBlock = (
     <>
@@ -1738,6 +2049,38 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
         <Switch on={allCapped} onClick={setAll} disabled={busy} label={t("models.setAll")} />
         <span className="muted text-label leading-body">{t("models.setAllHint", { value: fmtK(contextCapValue) })}</span>
       </div>
+
+      <div className="row models-cap-row" aria-busy={pickerBusy || pickerResource.state.refreshing}>
+        <span className="muted text-control">{t("models.pickerOrder.label")}</span>
+        <Select
+          value={pickerMode}
+          options={[
+            { value: "default", label: t("models.pickerOrder.default") },
+            { value: "alphabetical", label: t("models.pickerOrder.alphabetical") },
+            { value: "provider", label: t("models.pickerOrder.provider") },
+            { value: "most-used", label: t("models.pickerOrder.mostUsed") },
+            { value: "custom", label: t("models.pickerOrder.custom") },
+          ]}
+          onChange={value => setPickerDraft(value as ModelPickerOrderMode)}
+          disabled={pickerBusy || !pickerSettings || pickerResource.state.showError}
+          label={t("models.pickerOrder.label")}
+        />
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => void savePickerOrder()}
+          disabled={pickerBusy || !pickerSettings || pickerResource.state.showError || pickerMode === "custom"
+            || (pickerMode !== "default" && pickerSettings.pickerAvailable.length === 0)}>
+          {t(pickerBusy ? "models.pickerOrder.applying" : "models.pickerOrder.apply")}
+        </button>
+        {pickerResource.state.showError && <>
+          <span role="alert">{t("models.pickerOrder.loadFailed")}</span>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => pickerResource.refresh()}>
+            {t("models.pickerOrder.retry")}
+          </button>
+        </>}
+        <span className="muted text-label leading-body">{t("models.pickerOrder.hint")}</span>
+      </div>
+      {pickerMode === "custom" && <ModelPickerOrderEditor key={apiBase} apiBase={apiBase} active={catalogActive}
+        identities={models} onBusyChange={setPickerBusy} onAccepted={data => acceptPickerOrder(data, true)} />}
+
 
       {(() => {
         const customCount = models.filter(m => m.custom).length;
@@ -2130,6 +2473,17 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
       )}
       {/* Keep the last-good catalog interactive but make a failed revalidation explicit. */}
       {catalogState.showError && <Notice tone="err">{t("models.loadFail")}</Notice>}
+      {integrationFailures.length > 0 && <div className="models-integration-warning">
+        <Notice tone="warn">
+          {t("models.integrationRefreshWarning")}
+          <ul>{integrationFailures.map(row => <li key={`${row.client}:${row.profileId ?? "all"}`}>
+            {row.client}{row.profileId === undefined ? "" : `:${row.profileId}`}: {describeIntegrationRefusalParts(t, {
+              clientId: row.client, message: row.reason === "integration_mutation_busy" ? t("integrations.error.busy") : row.reason,
+              reason: row.refusalReason, snapshotPath: row.snapshotPath, residual: row.residual,
+            })}
+          </li>)}</ul>
+        </Notice>
+      </div>}
       <div className="models-workspace-root" aria-busy={catalogState.refreshing || undefined}>
         <aside className="models-workspace-rail" aria-label={t("nav.models")}>
           <div className="models-workspace-rail-header">
@@ -2325,6 +2679,36 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
           </ErrorBoundary>
         )}
       </div>
+
+      {displayNameModel && (
+        <ModelDisplayNameDialog
+          model={displayNameModel}
+          saving={displayNameSaving}
+          requestError={displayNameRequestError}
+          currentNamePending={displayNameCurrentPending}
+          mutationOutcomeUnknown={displayNameRecovery?.confirmed === false}
+          onRetry={displayNameRecovery ? () => void saveDisplayName(displayNameRecovery.value) : undefined}
+          onEdit={() => setDisplayNameRecovery(null)}
+          onSave={value => void saveDisplayName(value)}
+          onReset={() => void saveDisplayName(null)}
+          onClose={closeDisplayNameEdit}
+        />
+      )}
+      {priceModel && (
+        <ModelPriceDialog
+          key={`${apiBase}/${priceModel.namespaced}`}
+          model={priceModel}
+          apiBase={apiBase}
+          onRefresh={signal => load(true, signal)}
+          onClose={() => {
+            const trigger = priceTriggerRef.current;
+            setPriceModel(null);
+            window.setTimeout(() => {
+              if (trigger?.isConnected) trigger.focus();
+            }, 0);
+          }}
+        />
+      )}
     </>
   );
 

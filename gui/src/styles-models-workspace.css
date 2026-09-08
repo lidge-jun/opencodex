@@ -647,3 +647,11 @@
     justify-content: flex-start;
   }
 }
+.models-integration-warning { overflow-wrap: anywhere; }
+
+.picker-order-editor { margin-block: 12px; }
+.picker-order-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.picker-order-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding-block: 4px; }
+.picker-order-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.picker-order-actions { display: inline-flex; flex-shrink: 0; gap: 2px; }
+.picker-order-row .cwi-target-grip:disabled { cursor: default; opacity: 0.5; }

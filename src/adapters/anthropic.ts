@@ -1118,9 +1118,14 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                 break;
               }
               case "content_block_start": {
-                const block = data.content_block as { type: string; id?: string; name?: string; data?: string } | undefined;
+                const block = data.content_block as { type: string; id?: string; name?: string; data?: string; thinking?: string } | undefined;
                 if (!block) break;
                 currentBlockType = block.type;
+                if (block.type === "thinking") {
+                  // Preserve even a display:omitted block boundary. The bridge can then
+                  // distinguish consecutive empty signed blocks from signature updates.
+                  yield { type: "thinking_delta", thinking: typeof block.thinking === "string" ? block.thinking : "" };
+                }
                 if (block.type === "tool_use") {
                   currentToolCallId = usableToolUseId(block.id);
                   currentToolCallName = toolNames.fromWire(block.name ?? "");
@@ -1151,8 +1156,8 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                   // later text blocks independent.
                   yield { type: "thinking_delta", thinking: delta.reasoning };
                 } else if (delta.type === "signature_delta" && typeof delta.signature === "string" && (currentBlockType === "thinking" || currentBlockType === "reasoning")) {
-                  // Arrives once, just before the thinking block's content_block_stop; block-scoped
-                  // so a stray signature on a non-thinking block can never be captured.
+                  // Anthropic SDKs replace the signature with this value. Forward updates
+                  // within the block; the bridge closes on the next semantic boundary.
                   yield { type: "thinking_signature", signature: delta.signature };
                 } else if (delta.type === "input_json_delta" && typeof delta.partial_json === "string" && currentBlockType === "tool_use") {
                   // Forwarded immediately: the bridge maps each delta to a client-visible

@@ -201,6 +201,12 @@ metadata，使用 Codex 的 `low | medium | high | xhigh | max | ultra` 檔位�
 歷史編碼成上游 function tool，再於 Codex 看見前將串流 function-call lifecycle 還原成
 `custom_tool_call`。原生 OpenAI forward 路由與受支援的 `apply_patch` custom tool 維持不變。
 
+路由的 code-mode 回合也會在首次呼叫前收到主機對巢狀輔助工具的規則：`tools.apply_patch`
+接收一個字串，開頭與結尾必須是沒有額外包裝的獨立補丁標記行；isolate 中沒有 `import`，長時間執行的
+命令透過 `write_stdin` 輪詢。如果原生路由 Responses、Kiro 或 Cursor 路徑上的 code-mode exec
+結果仍包含主機的某則失敗訊息，opencodex 會附加一行提示，指出對應規則。這項變更不會重寫模型的
+程式碼或補丁文字。
+
 所選 provider 必須支援 function/tool calling。不支援 tool call 的純文字 provider 無法使用 `exec`、
 Browser 或 Computer Use。原生 OpenAI 列保留上游 tool mode 不變。
 
@@ -266,8 +272,12 @@ OpenCodex 直接注入路由，請先將 Codex 切回內建 `openai` provider，
    已發現模型。不在 allowlist 中的 id 永遠不會進入目錄。
 2. **`disabledModels`（頂層）**：會同時從目錄與 `/v1/models` 隱藏模型，並把裸原生 GPT slug 設為
    `visibility: "hide"`。
-3. **`liveModels: false` 且 `models` 為空**：當即時探索關閉，且 `models` 為空或省略時，opencodex
-   不會為該 provider 暴露任何路由模型。
+3. **`liveModels: false`** — `liveModels: false` 時，若 `models` 為空或省略，初始列表先加入已設定的 `defaultModel`，
+   再加入 `retainModels`，重複 ID 僅保留首次出現的位置。若明確設定了非空 `models`，則按
+   `models`、`retainModels` 順序建立，不會自動加入另一個 `defaultModel`；仍可將該模型明確寫入
+   `models` 或 `retainModels`。這些欄位均未提供 ID 時，初始列表為空。此順序不保證最終選擇器的顯示順序。
+   `selectedModels`、`disabledModels` 與供應商停用規則仍然適用。`authMode: "forward"` 保留原有獨立分支，
+   不使用此靜態路由列表。這些規則不改變即時探索失敗時的後備行為。
 4. **Cursor `GetUsableModels`**：Cursor adapter 透過 protobuf `GetUsableModels` RPC 探索模型，而不是
    `/models`，所以 Cursor 端變更可獨立改變可見 id。
 5. **cache 與 `ocx sync`**：即時目錄約快取五分鐘（`modelCacheTtlMs`，預設 `300000`）。執行

@@ -33,6 +33,7 @@ import {
 } from "../../src/codex/quota";
 import { repoPath, repoRoot } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 let testDir: string;
 let previousHome: string | undefined;
@@ -307,8 +308,12 @@ describe("main policy quota durability and lifecycle", () => {
         console.log(JSON.stringify({ before, other, legacy: getAccountQuota("__main__"), policy: getMainPolicyQuota(),
           credentialMatches: matchesMainQuotaCredential("fixture-bearer-a", "fixture-main-a") }));
       `;
+      // The fresh process is the restart oracle, including its module startup.
+      // Probe 34053484372 retained all assertions and caught an identity-guard
+      // mutation with this Windows budget; the previous 10s killed a healthy 12s delay.
       const child = Bun.spawnSync({
-        cmd: [process.execPath, "--eval", script], cwd: repoRoot(), env: process.env, timeout: 10_000,
+        cmd: [process.execPath, "--eval", script], cwd: repoRoot(), env: process.env,
+        timeout: process.platform === "win32" ? SPAWN_BUDGET_MS - INTERNAL_DEADLINE_MS : 10_000,
       });
       expect(child.exitCode).toBe(0);
       const result = JSON.parse(child.stdout.toString());
@@ -317,7 +322,7 @@ describe("main policy quota durability and lifecycle", () => {
       expect(result.legacy).toBeNull();
       expect(result.policy).toEqual(quota);
       expect(result.credentialMatches).toBe(false);
-    });
+    }, SPAWN_BUDGET_MS);
   }
 
   test("unrelated persistence hydrates and retains policy after legacy TTL expiry", () => {

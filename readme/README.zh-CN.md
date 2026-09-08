@@ -124,6 +124,8 @@ npm 警告里给出的缩写命令缺少包名，会把当前目录重新安装�
 
 </details>
 
+赞助：两个级别（Main 面向模型开发商，Standard 面向中转 / 网关），价格请咨询 — 见 [SPONSORS.md](../SPONSORS.md)。
+
 ## 亮点
 
 - **在 Codex 中使用任意 LLM。** 5 种协议 adapter 覆盖 Anthropic Messages、Google Gemini、Azure、OpenAI Responses 直通，以及所有 OpenAI 兼容 Chat Completions 端点 —— 即开箱即用的 **40+ provider**。

@@ -334,40 +334,57 @@ jobs:
           }
 
       - name: Publish (or dry-run)
+        id: publication
         env:
           DRY_RUN: ${{ inputs.dry-run }}
           NPM_DIST_TAG: ${{ inputs.tag }}
         run: |
+          set -euo pipefail
           if [ "$DRY_RUN" = "true" ]; then
             echo "::notice::DRY RUN — building + packing, not publishing"
             npm run prepublishOnly
             npm pack --dry-run
           else
             npm publish --tag "$NPM_DIST_TAG" --access public
+            echo "published=true" >> "$GITHUB_OUTPUT"
           fi
 
-      # Confirm the registry actually has the new version (real publishes only).
+      # Publication is acknowledged before registry reads, which can lag or fail.
+      # Recover only observation failures in this run; never retry npm publish.
       - name: Post-publish registry smoke
-        if: ${{ inputs.dry-run != true }}
+        id: registry-smoke
+        if: ${{ inputs.dry-run != true && steps.publication.outputs.published == 'true' }}
         env:
           RELEASE_VERSION: ${{ inputs.version }}
+          PUBLISHED: ${{ steps.publication.outputs.published }}
         run: |
-          for attempt in $(seq 1 30); do
-            if VERSION=$(npm view "@bitkyc08/opencodex@${RELEASE_VERSION}" version 2>/dev/null); then
+          set -euo pipefail
+          test "$PUBLISHED" = "true" || {
+            echo "::error::No successful publication receipt; refusing registry recovery"
+            exit 1
+          }
+          pkg_name="$(node -p "require('./package.json').name")"
+          for attempt in $(seq 1 6); do
+            if VERSION=$(timeout --kill-after=2s 10s npm view "${pkg_name}@${RELEASE_VERSION}" version --fetch-retries=0 --fetch-timeout=8000 2>/dev/null); then
+              if [ "$VERSION" != "$RELEASE_VERSION" ]; then
+                echo "::error::Registry returned an unexpected version; refusing to create a release"
+                exit 1
+              fi
               echo "registry version=$VERSION"
-              test "$VERSION" = "$RELEASE_VERSION"
-              npm dist-tag ls @bitkyc08/opencodex
+              echo "verification=verified" >> "$GITHUB_OUTPUT"
+              echo "Registry verified ${pkg_name}@${RELEASE_VERSION}." >> "$GITHUB_STEP_SUMMARY"
+              timeout --kill-after=2s 10s npm dist-tag ls "$pkg_name" --fetch-retries=0 --fetch-timeout=8000 || echo "::warning::Could not read npm dist-tags; exact version was verified"
               exit 0
             fi
-            echo "::notice::@bitkyc08/opencodex@${RELEASE_VERSION} not visible in npm registry yet (attempt $attempt/30)"
-            sleep 10
+            echo "::notice::Registry lookup not confirmed (attempt $attempt/6)"
+            if [ "$attempt" -lt 6 ]; then sleep 5; fi
           done
-          echo "::error::npm registry smoke failed after 30 attempts"
-          npm view @bitkyc08/opencodex versions dist-tags --json || true
-          exit 1
+          echo "verification=pending" >> "$GITHUB_OUTPUT"
+          echo "::warning::npm publish succeeded, but registry verification remains pending; continuing GitHub release creation without republishing"
+          echo "Publication acknowledged for ${pkg_name}@${RELEASE_VERSION}; registry verification pending after bounded reads. Inspect the registry before announcing availability. Do not republish this version." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Create GitHub release
-        if: ${{ inputs.dry-run != true }}
+        if: ${{ inputs.dry-run != true && steps.publication.outputs.published == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}

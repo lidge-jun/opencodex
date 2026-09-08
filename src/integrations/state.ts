@@ -12,6 +12,7 @@ import { ClientPathError, EXPORT_CLIENTS, opencodeProxyBaseUrl, type ExportModel
 import type { OcxConfig } from "../types";
 import { PARSE_FAILED, loadTarget, parseConfig, type IntegrationIO } from "./config-io";
 import { SNAPSHOT_RETENTION } from "./journal";
+import { AmbiguousSelectorError, parseSegment, selectIndex, type PathSegment } from "./merge";
 import { canonicalContribution, fingerprint, semanticContribution, type OwnershipRecord } from "./ownership";
 import {
   protectedContributionFingerprint,
@@ -35,6 +36,7 @@ export type StateReason =
   | "unowned-key"
   /** A container we would have to write through holds a non-object value. */
   | "blocked-container"
+  | "ambiguous-selector"
   /** A path selector we cannot resolve, e.g. a relative OPENCLAW_CONFIG_PATH. */
   | "unresolvable-path";
 
@@ -52,11 +54,41 @@ export interface IntegrationStatus {
   retentionDegraded: boolean;
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function assertNever(segment: never): never {
+  throw new Error(`unknown path segment ${JSON.stringify(segment)}`);
+}
+
+/** The element a selector names, or `undefined` when none matches. */
+function selectElement(items: readonly unknown[], segment: PathSegment & { kind: "select" }): unknown {
+  return items[selectIndex(items, segment.field, segment.value)];
+}
+
+/**
+ * Same segment grammar as `setPath`: a plain key reads through a record, a
+ * `[field=value]` selector reads through an array. Because the classifier and
+ * the writer share this one function, status and mutation cannot disagree
+ * about which element is ours.
+ */
 export function readPath(doc: unknown, path: readonly string[]): unknown {
   let cursor: unknown = doc;
-  for (const key of path) {
-    if (typeof cursor !== "object" || cursor === null || Array.isArray(cursor)) return undefined;
-    cursor = (cursor as Record<string, unknown>)[key];
+  for (const raw of path) {
+    const segment = parseSegment(raw);
+    switch (segment.kind) {
+      case "key":
+        if (!isPlainRecord(cursor)) return undefined;
+        cursor = cursor[segment.key];
+        break;
+      case "select":
+        if (!Array.isArray(cursor)) return undefined;
+        cursor = selectElement(cursor, segment);
+        break;
+      default:
+        return assertNever(segment);
+    }
     if (cursor === undefined) return undefined;
   }
   return cursor;
@@ -82,10 +114,35 @@ export function blockedContainerPath(
   doc: unknown,
   contribution: ManagedContribution,
 ): readonly string[] | null {
+  /*
+   * What a segment needs the value it walks through to BE: a record for a key,
+   * an array for a selector. `typeof null === "object"`, so null is excluded
+   * by both checks rather than walking straight into the dereference below.
+   */
+  const holds = (segment: PathSegment, value: unknown): boolean => {
+    switch (segment.kind) {
+      case "key":
+        return isPlainRecord(value);
+      case "select":
+        return Array.isArray(value);
+      default:
+        return assertNever(segment);
+    }
+  };
+  const step = (segment: PathSegment, value: unknown): unknown => {
+    switch (segment.kind) {
+      case "key":
+        return (value as Record<string, unknown>)[segment.key];
+      case "select":
+        return selectElement(value as readonly unknown[], segment);
+      default:
+        return assertNever(segment);
+    }
+  };
   for (const fragment of contribution.fragments) {
     let cursor: unknown = doc;
     for (let depth = 0; depth < fragment.path.length - 1; depth += 1) {
-      const key = fragment.path[depth]!;
+      const segment = parseSegment(fragment.path[depth]!);
       /*
        * ONLY `undefined` means absent. A missing file parses as `{}`, so an
        * absent prefix reads `undefined` — but a parsed `null` is a value the
@@ -94,14 +151,10 @@ export function blockedContainerPath(
        * "successful" apply.
        */
       if (cursor === undefined) break;
-      // `typeof null === "object"`, so null has to be named explicitly or it
-      // walks straight into the dereference below.
-      if (cursor === null || typeof cursor !== "object" || Array.isArray(cursor)) {
-        return fragment.path.slice(0, depth);
-      }
-      const next = (cursor as Record<string, unknown>)[key];
+      if (!holds(segment, cursor)) return fragment.path.slice(0, depth);
+      const next = step(segment, cursor);
       if (next === undefined) break;
-      if (typeof next !== "object" || next === null || Array.isArray(next)) {
+      if (!holds(parseSegment(fragment.path[depth + 1]!), next)) {
         return fragment.path.slice(0, depth + 1);
       }
       cursor = next;
@@ -239,8 +292,24 @@ export function classifyIntegration(input: {
    * Checked BEFORE `absent`: our leaf is missing in exactly this case, so the
    * absent branch would authorize an apply that replaces the user's value.
    */
-  if (blockedContainerPath(input.parsed, input.contribution)) {
-    return { state: "unsafe", reason: "blocked-container" };
+  try {
+    if (blockedContainerPath(input.parsed, input.contribution)) {
+      return { state: "unsafe", reason: "blocked-container" };
+    }
+    // Check every selector before presence/fingerprint short-circuits, including
+    // paths an older ownership record may remove during refresh or disable.
+    const paths = [
+      ...input.contribution.fragments.map(fragment => fragment.path),
+      ...(input.record?.fragmentPaths ?? []),
+    ];
+    for (const path of paths) {
+      if (Array.isArray(path) && path.every(key => typeof key === "string")) {
+        readPath(input.parsed, path);
+      }
+    }
+  } catch (error) {
+    if (!(error instanceof AmbiguousSelectorError)) throw error;
+    return { state: "unsafe", reason: "ambiguous-selector" };
   }
   if (!hasOurFragments(input.parsed, input.contribution)) return { state: "absent" };
 
@@ -352,6 +421,8 @@ export interface IntegrationStateInput {
   /** The whole integration state store, bound to one root. */
   store?: IntegrationStateStore;
   io?: IntegrationIO;
+  /** Internal explicit profile target; never accepted as a caller-provided path. */
+  resolvedPaths?: { configPath: string; detectDir: string };
 }
 
 export function exportContextOf(input: {
@@ -431,7 +502,7 @@ export function readIntegrationState(input: IntegrationStateInput): IntegrationS
   try {
     // One resolution for both, so a client whose paths come from mutable state
     // cannot report one account's install beside another account's config path.
-    const paths = resolveIntegrationPaths(input.clientId, input.env, input.home);
+    const paths = input.resolvedPaths ?? resolveIntegrationPaths(input.clientId, input.env, input.home);
     configPath = paths.configPath;
     installed = io.statKind(paths.detectDir) === "dir";
   } catch (error) {

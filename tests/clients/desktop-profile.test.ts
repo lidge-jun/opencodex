@@ -7,6 +7,7 @@ import {
   reconcileDesktopProfile,
   renderDesktopProfile,
   setDesktopFamilyDefault,
+  validDateAlias,
   type DesktopProfileModel,
 } from "../../src/claude/desktop-profile";
 
@@ -17,6 +18,31 @@ const models: DesktopProfileModel[] = [
 ];
 
 describe("Claude Desktop profile", () => {
+  test("recognizes only valid dates in the emitted managed namespace", () => {
+    expect(validDateAlias("claude-opus-4-8-20260101")).toBe(true);
+    expect(validDateAlias("claude-opus-4-8-20261231")).toBe(true);
+    for (const id of ["claude-opus-4-8-20260229", "claude-opus-4-8-20261301", "claude-opus-4-8-20250101", "claude-haiku-4-5-20260101"]) {
+      expect(validDateAlias(id)).toBe(false);
+    }
+  });
+
+  test("keeps every hidden assignment and reserves its date for newly added routes", () => {
+    const assignments: ReturnType<typeof emptyDesktopProfile>["assignments"] = {};
+    for (let day = 1; day <= 364; day++) {
+      const date = new Date(Date.UTC(2026, 0, day)).toISOString().slice(0, 10).replaceAll("-", "");
+      assignments[`hidden/model-${day}`] = { family: "opus", alias: `claude-opus-4-8-${date}` };
+    }
+    const profile = parseDesktopProfile({
+      version: 1,
+      assignments,
+      defaults: { opus: "hidden/model-1", fable: null, sonnet: null, haiku: null },
+    });
+    const next = reconcileDesktopProfile(profile, [{ route: "new/model", label: "New" }]);
+    for (const [route, assignment] of Object.entries(assignments)) expect(next.assignments[route]).toEqual(assignment);
+    expect(next.assignments["new/model"]!.alias).toBe("claude-opus-4-8-20261231");
+    expect(profile.assignments["new/model"]).toBeUndefined();
+  });
+
   test("reconciles new routes into Opus with stable unique date aliases", () => {
     const first = reconcileDesktopProfile(undefined, models);
     const second = reconcileDesktopProfile(first, [...models].reverse());

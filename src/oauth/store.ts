@@ -23,12 +23,13 @@ import { getConfigDir, atomicWriteFile, backupInvalidConfig, hardenConfigDir, ha
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { MAX_PENDING_OAUTH_MUTATIONS } from "../lib/translator-budget";
+import { publishAccountSelection } from "../lib/account-selection-events";
 import {
   captureConfigGeneration,
   type GenerationContext,
 } from "../lib/state-store-sweeper";
 import { validateCopilotApiBaseUrl } from "./github-copilot";
-import type { OAuthCredentialSource, OAuthCredentials, ProviderAccount, ProviderAccountSet } from "./types";
+import type { OAuthAccountSelection, OAuthCredentialSource, OAuthCredentials, ProviderAccount, ProviderAccountSet } from "./types";
 
 export type AuthStore = Record<string, ProviderAccountSet>;
 
@@ -536,7 +537,15 @@ function normalizeAccountSet(raw: unknown): { set: ProviderAccountSet | null; wa
     const active = typeof candidate.activeAccountId === "string" && accounts.some(a => a.id === candidate.activeAccountId)
       ? candidate.activeAccountId
       : accounts[0]!.id;
-    return { set: { activeAccountId: active, accounts }, wasLegacy: false };
+    const set: ProviderAccountSet = { activeAccountId: active, accounts };
+    // Healing a dangling active id invalidates its old selection generation. Reads stay
+    // deterministic; only the serialized writer creates new revisions.
+    if (active === candidate.activeAccountId
+      && typeof candidate.selectionRevision === "string"
+      && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(candidate.selectionRevision)) {
+      set.selectionRevision = candidate.selectionRevision;
+    }
+    return { set, wasLegacy: false };
   }
   // Legacy single-credential value.
   const cred = normalizeCredential(raw);
@@ -670,9 +679,35 @@ function serializeMutation<T>(work: () => Promise<T>, retainedValues: readonly u
 export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValues: readonly unknown[] = [], options?: { waitMs?: number; assertBeforePersist?: () => void }):Promise<T>{return serializeMutation(async()=>{const guard=await createOAuthFileLock({path:getAuthStoreLockPath(),staleAfterMs:30000}).acquire();try{
     const { store, hadLegacy } = loadAuthStoreInternal();
     if (hadLegacy) backupLegacyOnce();
+    const selections = new Map(Object.entries(store).map(([provider, set]) => [provider, {
+      set,
+      accountId: set.activeAccountId,
+      revision: set.selectionRevision,
+      accountIds: set.accounts.map(account => account.id),
+    }]));
     const result = await fn(store);
     options?.assertBeforePersist?.();
+    const changedProviders: string[] = [];
+    for (const provider of new Set([...selections.keys(), ...Object.keys(store)])) {
+      const before = selections.get(provider);
+      const after = store[provider];
+      if (!after) {
+        if (before) changedProviders.push(provider);
+        continue;
+      }
+      const replaced = before?.set !== after;
+      const removed = before?.accountIds.some(id => !after.accounts.some(account => account.id === id));
+      if (replaced || removed || before?.accountId !== after.activeAccountId) {
+        // Replacement/rollback must never restore a previous generation. A common
+        // selection commit already assigned its revision before forming its result.
+        if (replaced || before?.revision === after.selectionRevision) after.selectionRevision = randomUUID();
+      }
+      if (!before || before.accountId !== after.activeAccountId || before.revision !== after.selectionRevision) {
+        changedProviders.push(provider);
+      }
+    }
     persist(store);
+    for (const provider of changedProviders) publishAccountSelection(provider, "oauth");
     return result;
   }finally{guard.release();}}, retainedValues, options?.waitMs);
 }
@@ -700,6 +735,8 @@ export async function saveCredential(
   if (!safe) return;
   await mutateStore(store => {
     const set = store[provider];
+    // Login explicitly selects an account, including a re-login to the same slot.
+    if (set) set.selectionRevision = randomUUID();
     const identity = safe.accountId ?? safe.email;
     if (!set || SINGLE_SLOT_PROVIDERS.has(provider)) {
       const id = newAccountId(safe);
@@ -876,13 +913,60 @@ export async function saveAccountCredential(
   }, [provider, accountId, safe], { assertBeforePersist: opts.assertBeforePersist });
 }
 
-export async function setActiveAccount(provider: string, accountId: string): Promise<boolean> {
+function accountSelection(set: ProviderAccountSet): OAuthAccountSelection {
+  return {
+    accountId: set.activeAccountId,
+    ...(set.selectionRevision !== undefined ? { revision: set.selectionRevision } : {}),
+  };
+}
+
+export function captureOAuthAccountSelection(provider: string): OAuthAccountSelection | null {
+  const set = getAccountSet(provider);
+  return set ? accountSelection(set) : null;
+}
+
+/**
+ * Shared manual/automatic selection owner. An expected snapshot marks an automatic
+ * proposal: validating an unchanged selection preserves its revision. An unconditional
+ * (manual) selection always advances it, even when reselecting the current account.
+ */
+export async function commitOAuthAccountSelection(
+  provider: string,
+  accountId: string,
+  options: {
+    expectedSelection?: OAuthAccountSelection;
+    expectedCredentialGeneration?: string;
+    requireUsableAccount?: boolean;
+  } = {},
+): Promise<OAuthAccountSelection | null> {
+  // Snapshot caller-owned options before waiting for the serialized writer.
+  const expected = options.expectedSelection ? { ...options.expectedSelection } : undefined;
+  const { expectedCredentialGeneration, requireUsableAccount } = options;
+  const valid = (set: ProviderAccountSet): boolean => {
+    if (expected && (set.activeAccountId !== expected.accountId || set.selectionRevision !== expected.revision)) return false;
+    const account = set.accounts.find(account => account.id === accountId);
+    if (!account || (requireUsableAccount && account.needsReauth === true)) return false;
+    return expectedCredentialGeneration === undefined || credentialGeneration(account.credential) === expectedCredentialGeneration;
+  };
+  if (expected?.accountId === accountId) {
+    // Ordinary admission is one synchronous read/validation, with no await, writer
+    // queue, or persistence. A changed selection must still take the guarded writer.
+    const set = getAccountSet(provider);
+    return set && valid(set) ? accountSelection(set) : null;
+  }
   return await mutateStore(store => {
     const set = store[provider];
-    if (!set || !set.accounts.some(a => a.id === accountId)) return false;
-    set.activeAccountId = accountId;
-    return true;
-  }, [provider, accountId]);
+    if (!set || !valid(set)) return null;
+    if (!expected || set.activeAccountId !== accountId) {
+      set.activeAccountId = accountId;
+      set.selectionRevision = randomUUID();
+    }
+    return accountSelection(set);
+  }, [provider, accountId, expected, expectedCredentialGeneration]);
+}
+
+export async function setActiveAccount(provider: string, accountId: string): Promise<boolean> {
+  return (await commitOAuthAccountSelection(provider, accountId)) !== null;
 }
 
 export async function setAccountAlias(provider: string, accountId: string, alias: string | undefined): Promise<boolean> {

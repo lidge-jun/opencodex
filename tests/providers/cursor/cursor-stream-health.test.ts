@@ -12,6 +12,7 @@ import {
 import { encodeConnectFrame } from "../../../src/adapters/cursor/framing";
 import { createLiveCursorTransport } from "../../../src/adapters/cursor/live-transport";
 import { createTestTranslatorBudget } from "../../helpers/translator-budget";
+import { isolationBudgetMs, watchdogMs } from "../../helpers/ci-watchdog";
 import type { CursorRunRequest, CursorServerMessage } from "../../../src/adapters/cursor/types";
 
 /**
@@ -99,7 +100,11 @@ function runRequest(): CursorRunRequest {
   } as CursorRunRequest;
 }
 
-async function drain(baseUrl: string, knobs: { streamSilenceFailMs?: number; streamHeartbeatOnlyFailMs?: number }): Promise<{
+async function drain(
+  baseUrl: string,
+  knobs: { streamSilenceFailMs?: number; streamHeartbeatOnlyFailMs?: number },
+  onFirstText?: () => void,
+): Promise<{
   messages: CursorServerMessage[];
   failure?: Error;
 }> {
@@ -112,7 +117,14 @@ async function drain(baseUrl: string, knobs: { streamSilenceFailMs?: number; str
   const messages: CursorServerMessage[] = [];
   let failure: Error | undefined;
   try {
-    for await (const message of transport.run(runRequest())) messages.push(message);
+    for await (const message of transport.run(runRequest())) {
+      messages.push(message);
+      if (message.type === "text" && onFirstText) {
+        const notify = onFirstText;
+        onFirstText = undefined;
+        notify();
+      }
+    }
   } catch (err) {
     failure = err instanceof Error ? err : new Error(String(err));
   } finally {
@@ -122,6 +134,15 @@ async function drain(baseUrl: string, knobs: { streamSilenceFailMs?: number; str
 }
 
 describe("Cursor inbound stream-health watchdog (T04)", () => {
+  // Scale once: the load helper applies a floor, so scaling each deadline separately
+  // would collapse the two clocks to the same value in CI.
+  const silenceMs = isolationBudgetMs(1_000);
+  const heartbeatOnlyMs = 2 * silenceMs;
+  const progressDurationMs = 3 * silenceMs;
+  // Include the existing two-second first-frame allowance and leave time for cleanup.
+  const fixtureLimitMs = 4 * silenceMs + 2_000;
+  const timeoutMs = Math.max(watchdogMs(15_000), fixtureLimitMs + silenceMs);
+
   test("silence after the first frame fails the turn with the stall error", async () => {
     await withH2Server(stream => {
       stream.on("error", () => {});
@@ -140,27 +161,24 @@ describe("Cursor inbound stream-health watchdog (T04)", () => {
       stream.on("error", () => {});
       stream.respond({ ":status": 200, "content-type": "application/connect+proto" });
       stream.write(Buffer.from(textDeltaFrame("hi")));
-      // 40ms, not 100ms.
-      //
-      // The silence clock below is 400ms, so a 100ms ping left a margin of four
-      // ticks: miss three in a row and the SILENCE watchdog fires first, which
-      // is a different error and a green-looking bug report. That is exactly what
-      // happened on the v2.41.0 macOS runner -- the assertion wanted
-      // "heartbeat-only" and got "no inbound frames for 1s before turnEnded".
-      //
-      // Nothing about the behaviour under test needs a slow ping: the point is
-      // that heartbeats reset the silence clock and do NOT reset the
-      // heartbeat-only clock. A tighter interval tests the same two clocks with
-      // ten ticks of margin instead of four.
+      // Frequent heartbeats/checkpoints keep the silence clock fresh while the
+      // longer heartbeat-only clock must still expire under a loaded test runner.
       const ping = setInterval(() => {
         try {
           stream.write(Buffer.from(heartbeatFrame()));
           stream.write(Buffer.from(checkpointFrame()));
         } catch { clearInterval(ping); }
       }, 40);
-      stream.on("close", () => clearInterval(ping));
+      const limit = setTimeout(() => stream.close(), fixtureLimitMs);
+      stream.on("close", () => {
+        clearInterval(ping);
+        clearTimeout(limit);
+      });
     }, async baseUrl => {
-      const { failure } = await drain(baseUrl, { streamSilenceFailMs: 400, streamHeartbeatOnlyFailMs: 900 });
+      const { failure } = await drain(baseUrl, {
+        streamSilenceFailMs: silenceMs,
+        streamHeartbeatOnlyFailMs: heartbeatOnlyMs,
+      });
       expect(failure).toBeDefined();
       // Assert on the message, and say which watchdog won when the wrong one does.
       // A bare toContain here reported only the expected substring, which reads as
@@ -168,35 +186,50 @@ describe("Cursor inbound stream-health watchdog (T04)", () => {
       // silence watchdog fired first on a loaded runner.
       expect(failure!.message).toContain("heartbeat-only");
     });
-  }, 15_000);
+  }, timeoutMs);
 
   test("meaningful frames keep resetting both clocks; turnEnded finishes cleanly", async () => {
+    let firstTextReceivedAt: number | undefined;
+    let completedProgressSpan = false;
     await withH2Server(stream => {
       stream.on("error", () => {});
       stream.respond({ ":status": 200, "content-type": "application/connect+proto" });
+      stream.write(Buffer.from(textDeltaFrame("part-0")));
+      const latestEndAt = performance.now() + fixtureLimitMs;
       let count = 0;
       const tick = setInterval(() => {
         count += 1;
         try {
-          if (count < 6) {
-            stream.write(Buffer.from(textDeltaFrame(`part-${count}`)));
-          } else {
+          const now = performance.now();
+          const progressComplete = firstTextReceivedAt !== undefined
+            && now - firstTextReceivedAt >= progressDurationMs;
+          if (progressComplete || now >= latestEndAt) {
+            completedProgressSpan = progressComplete;
             stream.write(Buffer.from(turnEndedFrame()));
             stream.end();
             clearInterval(tick);
+          } else {
+            stream.write(Buffer.from(textDeltaFrame(`part-${count}`)));
           }
-        } catch { clearInterval(tick); }
-      }, 150);
+        } catch {
+          clearInterval(tick);
+          stream.destroy();
+        }
+      }, 100);
       stream.on("close", () => clearInterval(tick));
     }, async baseUrl => {
-      // Each 150ms text delta must reset the 400ms silence clock: six ticks ≈ 900ms total,
-      // far past a NON-resetting 400ms deadline.
-      const { messages, failure } = await drain(baseUrl, { streamSilenceFailMs: 400, streamHeartbeatOnlyFailMs: 10_000 });
+      // Observe progress for 3S after receipt: both non-resetting deadlines (S and 2S)
+      // would expire before turnEnded, even when the first text reaches us late.
+      const { messages, failure } = await drain(baseUrl, {
+        streamSilenceFailMs: silenceMs,
+        streamHeartbeatOnlyFailMs: heartbeatOnlyMs,
+      }, () => { firstTextReceivedAt = performance.now(); });
       expect(failure).toBeUndefined();
+      expect(completedProgressSpan).toBe(true);
       expect(messages.some(message => message.type === "text")).toBe(true);
       expect(messages.some(message => message.type === "done")).toBe(true);
     });
-  }, 15_000);
+  }, timeoutMs);
 
   test("turnEnded disarms the watchdog even when the server holds the stream open", async () => {
     await withH2Server(stream => {

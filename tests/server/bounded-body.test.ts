@@ -1,7 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import {
 	BOUNDED_BODY_MAX_BYTES,
 	boundedBodyBufferGrowthsForTests,
+	boundedBodyDecodeFailure,
 	readBoundedResponseBytes,
 	readBoundedResponseBody,
 } from "../../src/lib/bounded-body";
@@ -21,6 +22,65 @@ function responseFromChunks(...chunks: Uint8Array[]): Response {
 }
 
 describe("readBoundedResponseBody", () => {
+	test("only actual decoder exceptions carry the decode discriminator", async () => {
+		for (const bytes of [new Uint8Array([0xff]), new Uint8Array([0xe2, 0x82])]) {
+			let caught: unknown;
+			try { await readBoundedResponseBody(responseFromChunks(bytes), { fatalUtf8: true }); }
+			catch (error) { caught = error; }
+			expect(caught).toBeInstanceOf(TypeError);
+			expect(boundedBodyDecodeFailure(caught)).toBe("invalid_utf8");
+		}
+		const readerError = new TypeError("private-reader-error");
+		const response = new Response(new ReadableStream({ pull(controller) { controller.error(readerError); } }));
+		let caught: unknown;
+		try { await readBoundedResponseBody(response, { fatalUtf8: true }); }
+		catch (error) { caught = error; }
+		expect(caught).toBe(readerError);
+		expect(boundedBodyDecodeFailure(caught)).toBeUndefined();
+	});
+
+	test("fatal UTF-8 abort retains the exact caller reason without a decode mark", async () => {
+		const caller = new AbortController();
+		const reason = new TypeError("private-caller-error");
+		const pending = readBoundedResponseBody(new Response(new ReadableStream({})), { signal: caller.signal, fatalUtf8: true });
+		caller.abort(reason);
+		let caught: unknown;
+		try { await pending; } catch (error) { caught = error; }
+		expect(caught).toBe(reason);
+		expect(boundedBodyDecodeFailure(caught)).toBeUndefined();
+	});
+
+	test.each([0, 1])("fatal timeout flush retains deadline origin %s and cancels without waiting", async deadline => {
+		const callbacks: Array<() => void> = [];
+		const timers = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void) => {
+			callbacks.push(callback);
+			return 0 as unknown as ReturnType<typeof setTimeout>;
+		}) as typeof setTimeout);
+		let stalled!: () => void;
+		const ready = new Promise<void>(resolve => { stalled = resolve; });
+		let pulls = 0;
+		let cancelled = false;
+		const response = new Response(new ReadableStream<Uint8Array>({
+			pull(controller) {
+				if (pulls++ === 0) controller.enqueue(new Uint8Array([0xe2, 0x82]));
+				else { stalled(); return new Promise<void>(() => {}); }
+			},
+			cancel() { cancelled = true; return new Promise<void>(() => {}); },
+		}, { highWaterMark: 0 }));
+		try {
+			const pending = readBoundedResponseBody(response, { fatalUtf8: true });
+			await ready;
+			callbacks[deadline === 0 ? 0 : callbacks.length - 1]!();
+			let caught: unknown;
+			try { await pending; } catch (error) { caught = error; }
+			expect(caught).toBeInstanceOf(TypeError);
+			expect(boundedBodyDecodeFailure(caught)).toBe("timeout");
+			expect(cancelled).toBe(true);
+		} finally {
+			timers.mockRestore();
+		}
+	});
+
 	test("the bounded JSON caller allows a full total deadline for its first byte", () => {
 		expect(UPSTREAM_JSON_BODY_READ_OPTIONS.firstByteTimeoutMs)
 			.toBe(UPSTREAM_JSON_BODY_READ_OPTIONS.totalTimeoutMs);

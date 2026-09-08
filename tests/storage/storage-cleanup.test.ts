@@ -8,6 +8,7 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
   unlinkSync,
   utimesSync,
   writeFileSync,
@@ -20,6 +21,7 @@ import {
   listArchivedCandidates,
   listTrashEntries,
   normalizeArchivedRolloutPath,
+  pickWireCleanupTestHooks,
   previewArchivedCleanup,
   previewExactArchivedCleanup,
   restoreTrashEntry,
@@ -647,6 +649,127 @@ describe("executeArchivedCleanup", () => {
     db.close();
     expect(ids).toContain("told");
   });
+
+  test("initial manifest publication failure preserves originals and removes its private temp", () => {
+    home = buildHome();
+    const observed: Array<{ priorExists: boolean; next: string; mode: number }> = [];
+    const result = runWithDigest(50, "quarantine", home, {
+      now: 881,
+      _test: {
+        beforeManifestReplace: (temporaryPath, targetPath, phase) => {
+          if (phase !== "staging") return;
+          observed.push({
+            priorExists: existsSync(targetPath),
+            next: readFileSync(temporaryPath, "utf8"),
+            mode: statSync(temporaryPath).mode & 0o777,
+          });
+          throw new Error("injected_manifest_publication_failure");
+        },
+      },
+    });
+    // Assert outside the production catch: an assertion inside the hook could be swallowed.
+    expect(observed).toHaveLength(1);
+    expect(observed[0]!.priorExists).toBe(false);
+    expect(JSON.parse(observed[0]!.next).staging).toBe(true);
+    if (process.platform !== "win32") expect(observed[0]!.mode).toBe(0o600);
+    expect(result.error).toBe("fs_failed");
+    expect(existsSync(join(home, ".trash", "881"))).toBe(false);
+    expect(readFileSync(join(home, "archived_sessions", "rollout-old.jsonl"), "utf8")).toBe("OLD".repeat(10));
+    const db = new Database(join(home, "state_5.sqlite"), { readonly: true });
+    expect(db.query("SELECT id FROM threads WHERE id = 'told'").get()).toBeTruthy();
+    db.close();
+    expect(pickWireCleanupTestHooks({
+      beforeManifestReplace: () => {}, failManifestWrite: true,
+    })).toEqual({ failManifestWrite: true });
+  }, STORE_BUDGET_MS);
+
+  test("failed pre-delete replacement leaves the prior manifest intact during publication and restorable", () => {
+    home = buildHome();
+    let stagingBytes = "";
+    const observed: Array<{ prior: string; next: string }> = [];
+    const result = runWithDigest(50, "quarantine", home, {
+      now: 882,
+      _test: {
+        failRollbackBasenames: ["rollout-old.jsonl"],
+        beforeManifestReplace: (temporaryPath, targetPath, phase) => {
+          if (phase === "staging") stagingBytes = readFileSync(temporaryPath, "utf8");
+          if (phase !== "pre-commit") return;
+          observed.push({ prior: readFileSync(targetPath, "utf8"), next: readFileSync(temporaryPath, "utf8") });
+          throw new Error("injected_manifest_publication_failure");
+        },
+      },
+    });
+    expect(observed).toHaveLength(1);
+    expect(observed[0]!.prior).toBe(stagingBytes);
+    expect(JSON.parse(observed[0]!.prior).staging).toBe(true);
+    expect(JSON.parse(observed[0]!.next).staging).toBeUndefined();
+    expect(result.error).toBe("fs_failed");
+    expect(result.trashDir).toBe(".trash/882");
+    const stage = join(home, ".trash", "882");
+    expect(readFileSync(join(stage, "manifest.json"), "utf8")).toBe(stagingBytes);
+    expect(readFileSync(join(stage, "rollout-old.jsonl"), "utf8")).toBe("OLD".repeat(10));
+    expect(readdirSync(stage).filter(name => name.endsWith(".tmp"))).toEqual([]);
+    const db = new Database(join(home, "state_5.sqlite"), { readonly: true });
+    expect(db.query("SELECT id FROM threads WHERE id = 'told'").get()).toBeTruthy();
+    db.close();
+    const restored = restoreTrashEntry(".trash/882", { codexHome: home });
+    expect(restored.ok).toBe(true);
+    expect(restored.count).toBe(1);
+    expect(readFileSync(join(home, "archived_sessions", "rollout-old.jsonl"), "utf8")).toBe("OLD".repeat(10));
+  }, STORE_BUDGET_MS);
+
+  test.each([false, true])("failed post-purge manifest replacement preserves prior bytes (partial=%s)", partial => {
+    home = buildHome();
+    let preCommitBytes = "";
+    const observed: Array<{ prior: string; next: string }> = [];
+    const result = runWithDigest(100, "permanent", home, {
+      now: 883,
+      _test: {
+        failPurgeBasenames: partial
+          ? ["rollout-mid.jsonl"]
+          : ["rollout-old.jsonl", "rollout-mid.jsonl", "rollout-new.jsonl"],
+        beforeManifestReplace: (temporaryPath, targetPath, phase) => {
+          if (phase === "pre-commit") preCommitBytes = readFileSync(temporaryPath, "utf8");
+          if (phase !== "purge-incomplete") return;
+          observed.push({ prior: readFileSync(targetPath, "utf8"), next: readFileSync(temporaryPath, "utf8") });
+          throw new Error("injected_manifest_publication_failure");
+        },
+      },
+    });
+    expect(observed).toHaveLength(1);
+    expect(observed[0]!.prior).toBe(preCommitBytes);
+    expect(JSON.parse(observed[0]!.next).purgeIncomplete).toBe(true);
+    expect(JSON.parse(observed[0]!.next).entries).toHaveLength(partial ? 1 : 3);
+    expect(result.error).toBe("fs_failed");
+    const stage = join(home, ".trash", "883");
+    expect(readFileSync(join(stage, "manifest.json"), "utf8")).toBe(preCommitBytes);
+    expect(readdirSync(stage).filter(name => name.endsWith(".tmp"))).toEqual([]);
+    const dbBefore = new Database(join(home, "state_5.sqlite"), { readonly: true });
+    const rowsBefore = dbBefore.query("SELECT id FROM threads ORDER BY id").all();
+    dbBefore.close();
+    expect(rowsBefore).toEqual([{ id: "active" }]);
+    const stageBefore = readdirSync(stage).sort();
+    const restored = restoreTrashEntry(".trash/883", { codexHome: home });
+    if (partial) {
+      // A wholly purged old entry still fails closed; valid JSON is not full recovery.
+      expect(restored.error).toBe("fs_failed");
+      expect(restored.restoredPaths).toEqual([]);
+      expect(readdirSync(stage).sort()).toEqual(stageBefore);
+      expect(readFileSync(join(stage, "rollout-mid.jsonl"), "utf8")).toBe("MID".repeat(20));
+      expect(existsSync(join(home, "archived_sessions", "rollout-old.jsonl"))).toBe(false);
+      const dbAfter = new Database(join(home, "state_5.sqlite"), { readonly: true });
+      expect(dbAfter.query("SELECT id FROM threads ORDER BY id").all()).toEqual(rowsBefore);
+      dbAfter.close();
+    } else {
+      expect(restored.ok).toBe(true);
+      expect(restored.count).toBe(3);
+      const dbAfter = new Database(join(home, "state_5.sqlite"), { readonly: true });
+      expect(dbAfter.query("SELECT id FROM threads ORDER BY id").all()).toEqual([
+        { id: "active" }, { id: "tmid" }, { id: "tnew" }, { id: "told" },
+      ]);
+      dbAfter.close();
+    }
+  }, { timeout: STORE_BUDGET_MS });
 
   test("rename-back failure keeps staged file and reports relative trashDir", () => {
     home = buildHome();

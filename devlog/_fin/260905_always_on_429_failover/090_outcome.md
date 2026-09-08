@@ -18,7 +18,7 @@ the tree rather than against the plan — the plan's own criteria were satisfied
 Two were defects the fix itself created (#3499, #3503), three were surfaces still describing the
 old contract (#3517, #3520, #3523), one closed the structural gap that let this unit ship two
 subset-rotator loops (#3512), and one cleaned up after a collision with concurrent maintainer
-work (#3526). All are recorded in `091`.
+work (#3526). The runtime post-merge findings and CI lessons are recorded in `091`.
 
 ## What changed
 

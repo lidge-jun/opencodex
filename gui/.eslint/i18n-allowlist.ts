@@ -59,6 +59,9 @@ export function isTechnicalLiteral(value: string): boolean {
   // Version prefix / unit tokens
   if (TECHNICAL_UNITS.has(trimmed)) return true;
 
+  // Internal Models session-cache suffix, never rendered as user-facing copy.
+  if (trimmed === ":picker-order") return true;
+
   // Absolute/relative URLs and localhost endpoints
   if (/^https?:\/\//i.test(trimmed)) return true;
   if (/^https?:\/\/[^\s]+$/i.test(trimmed)) return true;

@@ -163,3 +163,135 @@ describe("the consent boundary is stated, not implied", () => {
     expect(recipes).toContain("get approval");
   });
 });
+
+describe("access-key recipes keep plaintext outside agent sessions", () => {
+  // CLI oracle: access.ts removes one --json before checking exact commit/abort tokens.
+  // These canonical spellings are case-sensitive; commit-old-id is a start, not a commit.
+  const secretBearingAccessKeyCommand =
+    /\b(?:ocx|opencodex)(?:\.(?:exe|mjs|cmd|ps1))?["']?\s+(?:access\s+keys?|api-key)\s+(?:create\b|rotate\b(?!\s+(?:--json\s+)?(?:commit|abort)(?=\s|$)))/gm;
+  const secretBearingManagementRequest =
+    /(?:(?:\bPOST\b|(?:--request|-X|-Method)\s+["']?POST["']?|method\s*:\s*["']POST["'])[^\n]{0,240}\/api\/keys(?:\/rotate)?(?=$|[\s"'?#])|\/api\/keys(?:\/rotate)?(?=$|[\s"'?#])[^\n]{0,240}(?:\bPOST\b|(?:--request|-X|-Method)\s+["']?POST["']?|method\s*:\s*["']POST["']))/gim;
+
+  /**
+   * Early warning for literal recipes in ordinary fences and single-backtick spans.
+   * Not a shell/JS parser: implicit POSTs, dynamic calls, alternate Markdown and
+   * arbitrary multiline requests remain outside this bounded detector.
+   */
+  function secretBearingCommandsInCode(text: string): string[] {
+    const spans: string[] = [];
+    const prose = text.replace(/```[^\n]*\n([\s\S]*?)```/g, (_all: string, body: string) => {
+      spans.push(body);
+      return "";
+    });
+    for (const span of prose.matchAll(/`([^`\n]+)`/g)) spans.push(span[1]!);
+    const matches: string[] = [];
+    for (const span of spans) {
+      const executable = span.replace(/(?:\\|`|\^)\r?\n\s*/g, " ");
+      matches.push(...Array.from(executable.matchAll(secretBearingAccessKeyCommand), match => match[0]));
+      matches.push(...Array.from(executable.matchAll(secretBearingManagementRequest), match => match[0]));
+    }
+    return matches;
+  }
+
+  test("all key aliases reject creation/start and preserve non-secret commit/abort", () => {
+    for (const binary of ["ocx", "opencodex"]) {
+      for (const group of ["access key", "access keys", "api-key"]) {
+        const prefix = `${binary} ${group}`;
+        for (const action of [
+          "create rotated", "create rotated --json",
+          "rotate old-id", "rotate old-id --json", "rotate --json old-id",
+        ]) {
+          const command = `${prefix} ${action}`;
+          expect(secretBearingCommandsInCode("```bash\n" + command + "\n```"), command).toHaveLength(1);
+        }
+        for (const operation of ["commit", "abort"]) {
+          for (const args of [
+            `${operation} old-id rotation-id`,
+            `${operation} old-id rotation-id --json`,
+            `--json ${operation} old-id rotation-id`,
+          ]) {
+            const command = `${prefix} rotate ${args}`;
+            expect(secretBearingCommandsInCode("```bash\n" + command + "\n```"), command).toEqual([]);
+          }
+          const start = `${prefix} rotate --json ${operation}-old-id`;
+          expect(secretBearingCommandsInCode("`" + start + "`"), start).toHaveLength(1);
+        }
+      }
+    }
+  });
+
+  test("wrappers, shell continuations and inline examples cannot hide literal commands", () => {
+    for (const command of [
+      "& ocx access keys create rotated --json",
+      "command ocx access key create rotated",
+      "env ocx api-key rotate old-id",
+      "& 'C:\\Tools\\opencodex.exe' api-key rotate old-id",
+      "node /opt/bin/ocx.mjs access key create rotated",
+      "ocx.cmd access key create rotated",
+      "& './opencodex.ps1' access keys rotate old-id",
+      "ocx access key \\\n  create rotated --json",
+      "ocx access key `\r\n  create rotated --json",
+      "ocx access key ^\n  rotate old-id",
+      "ocx access key rotate COMMIT",
+    ]) {
+      expect(secretBearingCommandsInCode("```bash\n" + command + "\n```"), command).toHaveLength(1);
+    }
+    expect(secretBearingCommandsInCode("Run `ocx api-key create rotated --json` next.")).toHaveLength(1);
+    expect(secretBearingCommandsInCode("Do not run `ocx api-key create rotated --json`.")).toHaveLength(1);
+    expect(secretBearingCommandsInCode("Creation under `ocx access key` returns plaintext.")).toEqual([]);
+  });
+
+  test("explicit management POST recipes are detected without banning commit or abort", () => {
+    for (const route of ["/api/keys", "/api/keys/rotate"]) {
+      for (const command of [
+        `POST ${route}`,
+        `curl -X POST http://127.0.0.1:3000${route}`,
+        `curl 'http://127.0.0.1:3000${route}?source=recipe' --request POST`,
+        `curl --request POST \\\n  'http://127.0.0.1:3000${route}#example'`,
+        `Invoke-RestMethod http://127.0.0.1:3000${route} -Method Post`,
+        `Invoke-WebRequest -Method Post http://127.0.0.1:3000${route}`,
+        `fetch('${route}', { method: 'POST' })`,
+      ]) {
+        expect(secretBearingCommandsInCode("```text\n" + command + "\n```"), command).toHaveLength(1);
+      }
+    }
+    expect(secretBearingCommandsInCode("Run `POST /api/keys` next.")).toHaveLength(1);
+    for (const command of [
+      "ocx access key list --json",
+      "ocx access key remove old-id --yes --json",
+      "ocx connect rotate --admin-token-stdin --json",
+      "curl -X POST http://127.0.0.1:3000/api/keys/rotate/commit",
+      "curl -X DELETE http://127.0.0.1:3000/api/keys/rotate",
+      "curl -X DELETE http://127.0.0.1:3000/api/keys",
+      "curl http://127.0.0.1:3000/api/keys\ncurl -X POST http://127.0.0.1:3000/api/keys/rotate/commit",
+    ]) {
+      expect(secretBearingCommandsInCode("```bash\n" + command + "\n```"), command).toEqual([]);
+    }
+    expect(secretBearingCommandsInCode("| POST | `/api/keys/rotate` |")).toEqual([]);
+  });
+
+  test("the original unsafe recipe is detected and every shipped page is scanned", () => {
+    const original = "```bash\nocx access key list --json\nocx access key create rotated --json\n"
+      + "ocx access key remove <old-id> --yes --json\nocx access key list --json\n```";
+    expect(secretBearingCommandsInCode(original)).toHaveLength(1);
+    for (const file of ["SKILL.md", ...REFERENCES.map(ref => join("references", ref))]) {
+      expect(secretBearingCommandsInCode(read(file)), file).toEqual([]);
+    }
+  });
+
+  test("guidance distinguishes configuration confirmation from revocation authority", () => {
+    // Documentation presence/order only: these assertions do not prove agent behavior.
+    const skill = readFileSync(SKILL, "utf8");
+    const recipes = read("references/03_recipes.md");
+    for (const text of [skill, recipes]) {
+      expect(text).toMatch(/outside the agent\s+session/);
+      expect(text).toMatch(/configuration confirmation is not (?:revocation )?approval/i);
+      expect(text).toMatch(/existing explicit\s+approval for that exact revocation remains valid/);
+    }
+    const approvalAt = recipes.indexOf("separate explicit revocation approval");
+    expect(approvalAt).toBeGreaterThanOrEqual(0);
+    for (const command of ["ocx access key rotate commit", "ocx access key remove"]) {
+      expect(recipes.indexOf(command)).toBeGreaterThan(approvalAt);
+    }
+  });
+});

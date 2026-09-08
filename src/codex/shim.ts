@@ -961,14 +961,20 @@ function unixProcessGroupAlive(groupId: number): boolean {
 }
 
 function terminateUnixProcessGroup(groupId: number): void {
+  let permissionError: unknown;
   try {
     process.kill(-groupId, "SIGKILL");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EPERM") permissionError = error;
+    else if (code !== "ESRCH") throw error;
   }
+  // A concurrently exiting group can briefly reject a second signal. Only
+  // observed disappearance clears that uncertainty; never send another signal.
   const deadline = Date.now() + CODEX_SHIM_INSTALL_PROBE_EXIT_TIMEOUT_MS;
   while (Date.now() < deadline && unixProcessGroupAlive(groupId)) Bun.sleepSync(10);
   if (unixProcessGroupAlive(groupId)) {
+    if (permissionError) throw permissionError;
     throw new Error(`Codex shim install probe process group ${groupId} did not terminate`);
   }
 }
@@ -1063,6 +1069,7 @@ export function buildWindowsCodexShim(realCodexPath: string, bunPath: string, cl
   const valueOptionChecks = CODEX_GLOBAL_OPTIONS_WITH_VALUE.map(option => `if /I "%~1"=="${option}" goto skip_option_value`).join("\r\n");
   return `@echo off\r
 rem ${SHIM_MARKER}\r
+setlocal\r
 ${windowsBatchSet("OCX_REAL_CODEX", realCodexPath)}\r
 ${windowsBatchSet("OCX_BUN", bunPath)}\r
 ${windowsBatchSet("OCX_CLI", cliPath)}\r
@@ -1109,6 +1116,9 @@ export function buildWindowsPowerShellCodexShim(realCodexPath: string, bunPath: 
   const tokenFile = serviceApiTokenFilePath();
   return `#!/usr/bin/env pwsh
 # ${SHIM_MARKER}
+$hadApiAuthToken = Test-Path Env:\\OPENCODEX_API_AUTH_TOKEN
+$priorApiAuthToken = $env:OPENCODEX_API_AUTH_TOKEN
+try {
 if (-not $env:OPENCODEX_API_AUTH_TOKEN -and (Test-Path -LiteralPath ${psString(tokenFile)})) {
   $env:OPENCODEX_API_AUTH_TOKEN = (Get-Content -Raw -LiteralPath ${psString(tokenFile)}).Trim()
 }
@@ -1141,7 +1151,12 @@ if (-not $skipEnsure) {
   }
 }
 & ${psString(realCodexPath)} @args
-exit $LASTEXITCODE
+$codexExitCode = $LASTEXITCODE
+} finally {
+  if ($hadApiAuthToken) { $env:OPENCODEX_API_AUTH_TOKEN = $priorApiAuthToken }
+  else { Remove-Item Env:\\OPENCODEX_API_AUTH_TOKEN -ErrorAction SilentlyContinue }
+}
+exit $codexExitCode
 `;
 }
 

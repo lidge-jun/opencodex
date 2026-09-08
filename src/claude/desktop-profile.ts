@@ -83,7 +83,7 @@ function isRealAnthropicRoute(route: string): boolean {
   return route.startsWith("anthropic/claude-");
 }
 
-function validDateAlias(alias: string): boolean {
+export function validDateAlias(alias: string): boolean {
   const match = DATE_ALIAS.exec(alias);
   if (!match) return false;
   const year = Number(match[1]!.slice(0, 4));

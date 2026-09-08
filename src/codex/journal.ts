@@ -161,13 +161,13 @@ export function markJournalInjectedState(
  * survives such a rewrite, so restore can still prove the URL is ours -- and, just as
  * importantly, prove that a DIFFERENT URL is not.
  */
-export function journaledInjectedOpenaiBaseUrl(): string | null {
-  return readJournal()?.injectedOpenaiBaseUrl ?? null;
+export function journaledInjectedOpenaiBaseUrl(options: { readOnly?: boolean } = {}): string | null {
+  return readJournal(options.readOnly !== true)?.injectedOpenaiBaseUrl ?? null;
 }
 
 /** The root `experimental_realtime_ws_base_url` the last injection wrote, or null. */
-export function journaledInjectedRealtimeWsBaseUrl(): string | null {
-  return readJournal()?.injectedRealtimeWsBaseUrl ?? null;
+export function journaledInjectedRealtimeWsBaseUrl(options: { readOnly?: boolean } = {}): string | null {
+  return readJournal(options.readOnly !== true)?.injectedRealtimeWsBaseUrl ?? null;
 }
 
 /** The catalog path the last injection wrote to, or null when none was recorded. */
@@ -179,14 +179,14 @@ export function removeJournal(): void {
   try { unlinkSync(JOURNAL_PATH); } catch { /* ignore */ }
 }
 
-function readJournal(): Journal | null {
+function readJournal(cleanInvalid = true): Journal | null {
   if (!existsSync(JOURNAL_PATH)) return null;
   try {
     const journal = JSON.parse(readFileSync(JOURNAL_PATH, "utf-8")) as Journal;
     if (journal.version !== 1) throw new Error("unknown version");
     return journal;
   } catch {
-    removeJournal();
+    if (cleanInvalid) removeJournal();
     return null;
   }
 }

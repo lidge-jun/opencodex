@@ -14,6 +14,7 @@ import { handleManagementAPI } from "../../src/server/management-api";
 import {
   setIntegrationMutationFlightTestHooks,
   setIntegrationPathTestHooks,
+  setRaycastDetectTestHook,
 } from "../../src/server/management/integration-routes";
 import type { OcxConfig } from "../../src/types";
 import { catalogConvergenceFactory } from "../helpers/catalog-convergence";
@@ -245,10 +246,17 @@ describe("GET /api/client-integrations", () => {
     // The route must read through the SAME store the caller bound, or a test
     // that isolates writes still reads the developer's real snapshots.
     const models = await exportModels();
-    expect(body.clients).toEqual(INTEGRATION_CLIENT_IDS.map(clientId =>
+    expect(body.clients.filter(client => client.clientId !== "aside")).toEqual(INTEGRATION_CLIENT_IDS.filter(clientId => clientId !== "aside").map(clientId =>
       JSON.parse(JSON.stringify(readIntegrationState({
         clientId, models, config, port: 10100, store, env: routeEnv, home,
       })))));
+    // Aside now returns an aggregate even when this fixture has no account manifest.
+    expect(body.clients.find(client => client.clientId === "aside")).toEqual({
+      clientId: "aside", configPath: join(home, ".aside", "u"),
+      profiles: [], total: 0, enabledCount: 0, appliedCount: 0, allEnabled: false,
+      state: "unsafe", installed: false, reason: "unresolvable-path",
+      snapshotCount: -1, retentionDegraded: true, error: expect.any(String),
+    });
     expect(text).not.toContain(REAL_LOOKING_KEY);
   });
 
@@ -266,6 +274,31 @@ describe("GET /api/client-integrations", () => {
     expect(body.configPath).toBe(hermesConfigPath());
     // A read is a read: it appends nothing.
     expect(store.listOperations()).toHaveLength(before);
+  });
+
+  test("the raycast envelope carries the plan block; every other client's does not", async () => {
+    // Stubbed: the real detector spawns `defaults` and would report the
+    // developer's own subscription.
+    setRaycastDetectTestHook(() => ({ appPath: "/Applications/Raycast.app", aiDirPresent: false, plan: "free" }));
+    try {
+      const raycast = await api("/api/client-integrations/raycast");
+      expect(raycast.status).toBe(200);
+      const body = await raycast.json() as { clientId: string; raycast?: { plan: string; appPath: string | null; aiDirPresent: boolean } };
+      expect(body.clientId).toBe("raycast");
+      expect(body.raycast).toEqual({ appPath: "/Applications/Raycast.app", aiDirPresent: false, plan: "free" });
+
+      installHermes();
+      const hermes = await api("/api/client-integrations/hermes");
+      expect(hermes.status).toBe(200);
+      expect("raycast" in (await hermes.json() as Record<string, unknown>)).toBe(false);
+
+      // The collection read describes files, not apps: no client gets the block there.
+      const list = await api("/api/client-integrations");
+      const { clients } = await list.json() as { clients: Array<Record<string, unknown>> };
+      expect(clients.some(client => "raycast" in client)).toBe(false);
+    } finally {
+      setRaycastDetectTestHook(null);
+    }
   });
 });
 

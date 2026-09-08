@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleManagementAPI } from "../../src/server/management-api";
+import { writeDesktop3pConfig, removeDesktop3pStandardPivot } from "../../src/claude/desktop-3p";
 import { setIntegrationEnabled } from "../../src/codex/desired-state";
 import { MANAGEMENT_JSON_BODY_MAX_BYTES } from "../../src/server/management/body";
 import type { ManagementApiDeps } from "../../src/server/management/context";
@@ -32,7 +33,12 @@ async function dispatch(path: string, init?: RequestInit, deps: ManagementApiDep
   return handleManagementAPI(new Request(url, {
     ...init,
     headers: { Host: url.host, ...(init?.headers ?? {}) },
-  }), url, inputConfig, deps);
+  }), url, inputConfig, {
+    writeDesktop3pConfig: (port, slugs, models, key, mode, profile, cap) =>
+      writeDesktop3pConfig(port, slugs, models, key, mode, profile, cap, { lockPath: join(root, "lifecycle.sqlite") }),
+    removeDesktop3pStandardPivot: options => removeDesktop3pStandardPivot({ ...options, lifecycleLockDeps: { lockPath: join(root, "lifecycle.sqlite") } }),
+    ...deps,
+  });
 }
 
 async function toggle(enabled: boolean, deps: ManagementApiDeps = {}) {

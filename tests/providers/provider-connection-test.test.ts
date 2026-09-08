@@ -316,6 +316,40 @@ describe("POST /api/providers/test (WP040 connectivity probe)", () => {
     });
   });
 
+  test("Nous probe accepts 390 synthetic paid/free rows above 256 KiB (#3939)", async () => {
+    const payload = JSON.stringify({
+      data: Array.from({ length: 390 }, (_, index) => ({
+        id: index === 0 ? "tencent/hy3:free" : `vendor/model-${index}`,
+        metadata: { description: "x".repeat(1_400) },
+      })),
+    });
+    const bytes = new TextEncoder().encode(payload).byteLength;
+    expect(bytes).toBeGreaterThan(262_144);
+    expect(bytes).toBeLessThan(1_048_576);
+    let fetches = 0;
+    globalThis.fetch = (async (input, init) => {
+      fetches += 1;
+      expect(String(input)).toBe("https://inference-api.nousresearch.com/v1/models");
+      expect(init?.method ?? "GET").toBe("GET");
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer access-token-nous-probe-fixture");
+      return new Response(payload, { headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    await saveCredential("nous", {
+      access: "access-token-nous-probe-fixture",
+      refresh: "nous-probe-fixture-refresh",
+      expires: Date.now() + 3_600_000,
+    });
+    const config = baseConfig({
+      nous: { ...structuredClone(OAUTH_PROVIDERS.nous!.providerConfig) },
+    });
+
+    const { status, body } = await probe(config, "nous");
+
+    expect(status).toBe(200);
+    expect(fetches).toBe(1);
+    expect(body).toMatchObject({ ok: true, models: 390 });
+  });
+
   test("Google's models-array response shape is accepted (x-goog-api-key path)", async () => {
     let requestedUrl = "";
     globalThis.fetch = (async (input: RequestInfo | URL) => {

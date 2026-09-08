@@ -184,6 +184,9 @@ export function projectStoredOAuthAccountHealth(
     needsReauth: account.needsReauth === true,
     reauthReason: account.needsReauth === true ? "refresh_failed" : undefined,
     cooldownUntilMs: anthropicSnap?.cooldownUntil,
+    // Same mapping as the Codex pool's `cooldownReasonFromSource`: only a Retry-After is
+    // request-rate throttling. A reset-derived cooldown means a usage window is spent, which
+    // is quota, and reporting it as a rate limit would tell the operator to retry shortly.
     cooldownReason: anthropicSnap?.cooldownSource === "retry-after" ? "rate_limit" : anthropicSnap ? "quota" : undefined,
     warningReason: detectOAuthWarning(provider, account, opts.observeOnly === true, now),
     now,

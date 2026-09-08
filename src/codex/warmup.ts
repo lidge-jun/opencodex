@@ -22,6 +22,8 @@ export interface CodexWarmupOptions {
   chatgptAccountId: string;
   model?: string;
   timeoutMs?: number;
+  /** Publish quota headers only after a completed inference, never on a failed stream. */
+  onCompleted?: (headers: Headers) => void;
 }
 
 const CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses";
@@ -213,6 +215,7 @@ async function drainWarmupSse(body: ReadableStream<Uint8Array>, signal: AbortSig
   }
 }
 
+/** Bound one inference attempt and publish metadata only after a successful terminal event. */
 async function tryWarmup(options: CodexWarmupOptions, model: string): Promise<void> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > MAX_TIMEOUT_MS) {
@@ -263,6 +266,8 @@ async function tryWarmup(options: CodexWarmupOptions, model: string): Promise<vo
 
     try {
       await drainWarmupSse(body, signal);
+      // Metadata publication must not turn completed inference into another billable retry.
+      try { options.onCompleted?.(res.headers); } catch { /* The caller can refresh metadata later. */ }
     } finally {
       try {
         void body.cancel().catch(() => {});

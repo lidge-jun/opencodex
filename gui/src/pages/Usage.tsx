@@ -10,6 +10,7 @@ import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
 import { SectionTabs } from "../components/section-tabs";
 import { sectionAnchorId } from "../section-anchors";
+import { parseUsageTimeRange, type UsageRangeError, type UsageTimeWindow } from "../usage-time-range";
 
 type Range = "all" | "30d" | "7d";
 type UsageSurface = "all" | "codex" | "claude" | "grok";
@@ -75,10 +76,14 @@ interface UsageProvider {
   shareRatio: number;
 }
 
+class UsageWindowMismatchError extends Error {}
+
 interface UsageResponse {
   range: Range;
   surface: UsageSurface;
   since: number | null;
+  until?: number;
+  customWindow?: boolean;
   generatedAt: number;
   summary: UsageSummaryTotals;
   days: UsageDay[];
@@ -156,20 +161,54 @@ interface HeatmapCell {
   dayOfWeek: number;
 }
 
-function buildHeatmap(days: UsageDay[]): { weeks: HeatmapCell[][]; months: { label: string; col: number }[]; buckets: number[] } {
+function buildHeatmap(days: UsageDay[], customWindow = false): { weeks: HeatmapCell[][]; months: { label: string; col: number }[]; buckets: number[] } {
   const buckets = quantileBuckets(days.map(d => d.totalTokens));
+  const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  if (customWindow) {
+    const weeks: HeatmapCell[][] = [];
+    const months: { label: string; col: number }[] = [];
+    let week: HeatmapCell[] = [];
+    let weekStart: number | undefined;
+    let previousMonth = -1;
+    let lastMonthCol = -4;
+    const pad = (length: number) => {
+      while (week.length < length) week.push({ date: "", requests: 0, totalTokens: 0, level: 0, dayOfWeek: week.length });
+    };
+    // The server already supplied the bounded civil dates. Local midnight stepping
+    // can retain a shifted hour across DST and omit the final day of the report.
+    for (const day of days) {
+      const [year, month, date] = day.date.split("-").map(Number);
+      const calendar = new Date(Date.UTC(year, month - 1, date));
+      const weekday = calendar.getUTCDay();
+      const nextWeekStart = calendar.getTime() - weekday * 86_400_000;
+      if (weekStart !== nextWeekStart) {
+        if (week.length > 0) { pad(7); weeks.push(week); }
+        week = [];
+        weekStart = nextWeekStart;
+      }
+      const monthIndex = calendar.getUTCMonth();
+      if (monthIndex !== previousMonth && weeks.length - lastMonthCol >= 4) {
+        months.push({ label: monthNames[monthIndex], col: weeks.length });
+        previousMonth = monthIndex;
+        lastMonthCol = weeks.length;
+      }
+      pad(weekday);
+      week.push({ date: day.date, requests: day.requests, totalTokens: day.totalTokens,
+        level: bucketLevel(day.totalTokens, buckets), dayOfWeek: weekday });
+    }
+    if (week.length > 0) { pad(7); weeks.push(week); }
+    return { weeks, months, buckets };
+  }
   const dayMap = new Map(days.map(d => [d.date, d]));
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const start = new Date(today);
   start.setDate(start.getDate() - 364);
-  // Align to Sunday
   start.setDate(start.getDate() - start.getDay());
 
   const weeks: HeatmapCell[][] = [];
   const months: { label: string; col: number }[] = [];
-  const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   let lastMonthCol = -4;
   let prevMonthIdx = -1;
   let week: HeatmapCell[] = [];
@@ -214,7 +253,7 @@ function UsageFilters({
   t,
 }: {
   surface: UsageSurface;
-  range: Range;
+  range: Range | null;
   onSurface: (surface: UsageSurface) => void;
   onRange: (range: Range) => void;
   t: TFn;
@@ -378,7 +417,7 @@ function UsageHeatmapPanel({
   locale,
   t,
 }: {
-  range: Range;
+  range: Range | null;
   heatmap: ReturnType<typeof buildHeatmap>;
   weekBars: UsageDay[];
   locale: Locale;
@@ -671,7 +710,7 @@ function UsageWorkspaceBody({
   modelQuery: string;
   onModelQuery: (query: string) => void;
   sortedProviders: UsageProvider[];
-  range: Range;
+  range: Range | null;
   locale: Locale;
   t: TFn;
 }) {
@@ -762,31 +801,56 @@ export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBas
   const [surface, setSurface] = useState<UsageSurface>("all");
   const [scope, setScope] = useState<UsageScope>("machine");
   const [modelQuery, setModelQuery] = useState("");
+  const [draftWindow, setDraftWindow] = useState({ since: "", until: "" });
+  const [customWindow, setCustomWindow] = useState<UsageTimeWindow | null>(null);
+  const [rangeError, setRangeError] = useState<UsageRangeError | null>(null);
+  const since = customWindow?.since;
+  const until = customWindow?.until;
+
+  const clearCustomWindow = () => {
+    setCustomWindow(null);
+    setDraftWindow({ since: "", until: "" });
+    setRangeError(null);
+  };
+  const selectRange = (next: Range) => {
+    setRange(next);
+    clearCustomWindow();
+  };
 
   const loadUsage = useCallback(async (signal: AbortSignal): Promise<UsageResponse> => {
     const query = new URLSearchParams({ range, surface });
     if (connected && scope === "machine" && apiKeyId) query.set("apiKeyId", apiKeyId);
+    if (since !== undefined && until !== undefined) {
+      query.set("since", String(since));
+      query.set("until", String(until));
+    }
     const response = await fetch(`${apiBase}/api/usage?${query}`, { signal });
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`.trim());
     const next = await response.json() as UsageResponse;
-    writeHeldUsage(apiBase, range, surface, connected, scope, apiKeyId, next);
+    // HTTP 200 alone does not prove an older daemon honored the custom bounds.
+    if (since !== undefined && (next?.customWindow !== true || next.since !== since || next.until !== until)) {
+      throw new UsageWindowMismatchError();
+    }
+    if (since === undefined) writeHeldUsage(apiBase, range, surface, connected, scope, apiKeyId, next);
     return next;
-  }, [apiBase, apiKeyId, connected, range, scope, surface]);
+  }, [apiBase, apiKeyId, connected, range, scope, surface, since, until]);
 
-  const resourceKey = usageCacheKey(apiBase, range, surface, connected, scope, apiKeyId);
-  const cached = readHeldUsage(apiBase, range, surface, connected, scope, apiKeyId);
+  const presetKey = usageCacheKey(apiBase, range, surface, connected, scope, apiKeyId);
+  const resourceKey = customWindow ? JSON.stringify([presetKey, since, until]) : presetKey;
+  // Arbitrary custom windows belong only to the subscription-scoped resource store.
+  const cached = customWindow ? null : readHeldUsage(apiBase, range, surface, connected, scope, apiKeyId);
   // Range and surface identify different reports, so the key changes with both. That prevents
   // a force-loading dependency revalidation from ever showing a previous report as this one.
   const resource = useDataSurface<UsageResponse>(
     resourceKey,
-    [apiBase, apiKeyId, connected, range, scope, surface],
+    [apiBase, apiKeyId, connected, range, scope, surface, since, until],
     loadUsage,
     { isEmpty: () => false, initialData: cached ?? undefined },
   );
   const { state } = resource;
   const data = state.data ?? cached ?? null;
 
-  const heatmap = useMemo(() => buildHeatmap(data?.days ?? []), [data?.days]);
+  const heatmap = useMemo(() => buildHeatmap(data?.days ?? [], !!customWindow), [data?.days, customWindow]);
   const weekBars = useMemo(() => lastSevenDays(data?.days ?? []), [data?.days]);
   const activeDays = useMemo(() => (data?.days ?? []).filter(d => d.requests > 0).length, [data?.days]);
   const filteredModels = useMemo(() => {
@@ -810,9 +874,57 @@ export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBas
     <>
       <div className="page-head usage-head">
         <h2 id="usage-page-title">{t("usage.title")}</h2>
-        <UsageFilters surface={surface} range={range} onSurface={setSurface} onRange={setRange} t={t} />
+        <UsageFilters surface={surface} range={customWindow ? null : range} onSurface={setSurface} onRange={selectRange} t={t} />
       </div>
       <p className="page-sub">{t("usage.subtitle")}</p>
+      <form aria-label={t("usage.range.custom")} noValidate onSubmit={event => {
+        event.preventDefault();
+        const result = parseUsageTimeRange(draftWindow.since, draftWindow.until);
+        if (result.ok === false) {
+          setRangeError(result.error);
+          return;
+        }
+        setRangeError(null);
+        setCustomWindow(result.window);
+      }}>
+        <div className="usage-filters">
+          <label>
+            <span className="field-label">{t("usage.range.start")}</span>
+            <input className="input" type="datetime-local" step="60" required
+              value={draftWindow.since}
+              aria-invalid={rangeError !== null}
+              aria-describedby={rangeError ? "usage-range-help usage-range-error" : "usage-range-help"}
+              onChange={event => {
+                const value = event.currentTarget.value;
+                setDraftWindow(current => ({ ...current, since: value }));
+                setRangeError(null);
+              }} />
+          </label>
+          <label>
+            <span className="field-label">{t("usage.range.end")}</span>
+            <input className="input" type="datetime-local" step="60" required
+              value={draftWindow.until}
+              aria-invalid={rangeError !== null}
+              aria-describedby={rangeError ? "usage-range-help usage-range-error" : "usage-range-help"}
+              onChange={event => {
+                const value = event.currentTarget.value;
+                setDraftWindow(current => ({ ...current, until: value }));
+                setRangeError(null);
+              }} />
+          </label>
+          <button type="submit" className="btn btn-primary btn-sm">{t("usage.range.apply")}</button>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={clearCustomWindow}>{t("usage.range.clear")}</button>
+        </div>
+        <p id="usage-range-help" className="muted text-caption">{t("usage.range.help")}</p>
+        {rangeError && <p id="usage-range-error" role="alert" className="notice notice-err">{t(`usage.range.${rangeError}`)}</p>}
+        {customWindow && <p className="muted text-control" role="status">{(() => {
+          const formatter = new Intl.DateTimeFormat(locale, {
+            year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+            second: "2-digit", fractionalSecondDigits: 3, timeZoneName: "short",
+          });
+          return t("usage.range.applied", { start: formatter.format(customWindow.since), end: formatter.format(customWindow.until) });
+        })()}</p>}
+      </form>
       {/*
         Only shown when connected. Naming the source is a two-plane concept: it answers
         "which store served these numbers", and that question only exists once there are
@@ -834,7 +946,9 @@ export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBas
         <DataSurfaceSkeleton label={t("usage.loading")} rows={5} />
       ) : state.kind === "failed-cold" ? (
         <Notice tone="err">
-          {connected ? t("usage.hubOffline") : state.error instanceof Error ? `${t("usage.loadError")} ${state.error.message}` : t("usage.loadError")}{" "}
+          {state.error instanceof UsageWindowMismatchError
+            ? `${t("usage.loadError")} ${t("dash.codexRestartMalformed")}`
+            : connected ? t("usage.hubOffline") : state.error instanceof Error ? `${t("usage.loadError")} ${state.error.message}` : t("usage.loadError")}{" "}
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => resource.refresh()}>
             {t("common.retry")}
           </button>
@@ -869,7 +983,7 @@ export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBas
             modelQuery={modelQuery}
             onModelQuery={setModelQuery}
             sortedProviders={sortedProviders}
-            range={range}
+            range={customWindow ? null : range}
             locale={locale}
             t={t}
           />

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { shouldInjectApiAuthHeader } from "../../codex/loopback-target";
 
 /**
  * Codex parses a catalog entry's `input_modalities` as a closed enum, and one out-of-enum
@@ -84,6 +85,8 @@ import {
   multiAgentGuidanceEnabled,
   providerBaseUrlConfigError,
   providerHeadersConfigError,
+  providerModelCostsConfigError,
+  sanitizeModelCostsForDisplay,
   saveConfigPreservingClaudeCode,
 } from "../../config";
 import {
@@ -97,6 +100,7 @@ import {
 } from "../../oauth";
 import { removeCredential } from "../../oauth/store";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
+import { redactSecretString } from "../../lib/redact";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets } from "../../providers/derive";
 import { providerCodexAccountMode } from "../../providers/registry";
@@ -127,7 +131,7 @@ import {
   setDebugSettings,
   type DebugFlag,
 } from "../../lib/debug-settings";
-import type { OcxClaudeCodeConfig, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../../types";
+import type { OcxClaudeCodeConfig, OcxConfig, OcxCustomModel, OcxProviderConfig, ProviderCostOverlay } from "../../types";
 import { drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
@@ -183,6 +187,17 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
   // bypass this seam with a dynamic config import — doing so replaced a user's
   // ~/.opencodex/config.json with the `existing-uuid` test fixture.
   const persistConfig = deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode;
+  const convergeVisibleCatalogs = async () => {
+    const catalogRefresh = await convergeCodexCatalog();
+    const refresh = deps.refreshOwnedCatalogIntegrations
+      ?? (await import("../../integrations/catalog-refresh")).refreshOwnedCatalogIntegrations;
+    const clientIntegrations = await refresh({
+      config,
+      port: Number(url.port) || config.port,
+      models: () => loadExportModels(config),
+    });
+    return { catalogRefresh, clientIntegrations };
+  };
 
   if (url.pathname === "/api/model-discovery" && req.method === "GET") {
     const providers = Object.fromEntries(Object.entries(config.providers).map(([name, provider]) => [
@@ -357,6 +372,67 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     return jsonResponse(await listManagementModelRows(config));
   }
 
+  const modelCostsMatch = url.pathname.match(/^\/api\/providers\/([^/]+)\/model-costs$/);
+  if (modelCostsMatch && (req.method === "GET" || req.method === "PUT")) {
+    let name: string;
+    try { name = decodeURIComponent(modelCostsMatch[1]!); } catch { return jsonResponse({ error: "invalid provider encoding" }, 400); }
+    if (!hasOwnProvider(config.providers, name)) {
+      return jsonResponse({ error: "provider not found" }, 404, req, config);
+    }
+    if (req.method === "GET") {
+      const provider = config.providers[name]!;
+      return jsonResponse({ provider: name, modelCosts: sanitizeModelCostsForDisplay(provider.modelCosts) ?? {} }, 200, req, config);
+    }
+    let body: unknown;
+    try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (!isPlainRecord(body) || !isValidModelDiscoveryModelId(body.modelId)
+      || !Object.hasOwn(body, "cost")
+      || Object.keys(body).some(key => key !== "modelId" && key !== "cost")) {
+      return jsonResponse({ error: "only a valid modelId and cost object or null are allowed" }, 400, req, config);
+    }
+    const modelId = body.modelId;
+    if (redactSecretString(modelId) !== modelId) {
+      return jsonResponse({ error: "modelId cannot be displayed safely" }, 400, req, config);
+    }
+    const submitted = { [modelId]: body.cost };
+    const validationError = body.cost === null ? null : providerModelCostsConfigError(submitted);
+    if (validationError) return jsonResponse({ error: validationError }, 400, req, config);
+    // Copy only validated rate fields; never echo a secret-shaped model key that the
+    // shared display boundary suppresses. Model IDs remain exact, including slashes.
+    const cost = body.cost === null ? null : sanitizeModelCostsForDisplay(submitted)?.[modelId];
+    if (cost === undefined) return jsonResponse({ error: "modelId cannot be displayed safely" }, 400, req, config);
+
+    // Body parsing yields: a concurrent provider PATCH can replace the row or remove it.
+    // Resolve ownership again and keep the merge/save synchronous on the current row.
+    if (!hasOwnProvider(config.providers, name)) {
+      return jsonResponse({ error: "provider not found" }, 404, req, config);
+    }
+    const provider = config.providers[name]!;
+    const hadModelCosts = Object.hasOwn(provider, "modelCosts");
+    const previousModelCosts = provider.modelCosts;
+    const nextModelCosts = Object.assign(
+      Object.create(null) as Record<string, ProviderCostOverlay>,
+      previousModelCosts ?? {},
+    );
+    if (cost === null) delete nextModelCosts[modelId];
+    else nextModelCosts[modelId] = cost;
+    const mergedError = providerModelCostsConfigError(nextModelCosts);
+    if (mergedError) return jsonResponse({ error: mergedError }, 400, req, config);
+    // Keep even an empty map until persistence reconciles individual model keys.
+    // Deleting the property would also delete prices another writer added on disk.
+    provider.modelCosts = nextModelCosts;
+    try {
+      // The persistence owner refreshes usage overlays after its atomic write.
+      // Price-only edits do not change routing or require catalog convergence.
+      persistConfig(config);
+    } catch (error) {
+      if (hadModelCosts) provider.modelCosts = previousModelCosts;
+      else delete provider.modelCosts;
+      throw error;
+    }
+    return jsonResponse({ ok: true, provider: name, modelId, cost }, 200, req, config);
+  }
+
   const displayNameMatch = url.pathname.match(/^\/api\/providers\/([^/]+)\/model-display-names$/);
   if (displayNameMatch && req.method === "PUT") {
     let name: string;
@@ -469,6 +545,13 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
       if (!(error instanceof ClientPathError)) throw error;
       return jsonResponse({ error: error.message }, 400, req, config);
     }
+    if (requested === "raycast" && shouldInjectApiAuthHeader(config)) {
+      return jsonResponse({
+        error: "Raycast export requires an unauthenticated loopback destination; this listener requires an admission header Raycast cannot supply.",
+        reason: "non_loopback",
+      }, 400, req, config);
+    }
+    const baseUrl = opencodeProxyBaseUrl(Number(url.port) || config.port, config.hostname, config);
     let models: ExportModel[];
     try {
       // The ONE loader every export surface uses. It carries the visibility
@@ -488,7 +571,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
       );
     }
     const built = buildClientConfigText(requested, {
-      baseUrl: opencodeProxyBaseUrl(Number(url.port) || config.port, config.hostname),
+      baseUrl,
       models,
       config,
     });
@@ -518,8 +601,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     const disabled = Array.isArray(body.models) ? body.models.filter((m): m is string => typeof m === "string") : [];
     config.disabledModels = disabled;
     persistConfig(config);
-    const catalogRefresh = await convergeCodexCatalog();
-    return jsonResponse({ ok: true, disabled, catalogRefresh });
+    return jsonResponse({ ok: true, disabled, ...await convergeVisibleCatalogs() });
   }
 
   // One user-facing visibility switch spans two persisted filters: a provider allowlist and the
@@ -644,8 +726,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
 
     config.disabledModels = disabled;
     persistConfig(config);
-    const catalogRefresh = await convergeCodexCatalog();
-    return jsonResponse({ ok: true, scope, provider, enabled: body.enabled, disabled, catalogRefresh });
+    return jsonResponse({ ok: true, scope, provider, enabled: body.enabled, disabled, ...await convergeVisibleCatalogs() });
   }
 
   if (url.pathname === "/api/custom-models" && req.method === "GET") {
@@ -855,7 +936,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
       delete target.selectedModels;
       delete target.modelPreset;
       persistConfig(config);
-      return jsonResponse({ ok: true, provider, mode, selected: [], catalogRefresh: await convergeCodexCatalog() });
+      return jsonResponse({ ok: true, provider, mode, selected: [], ...await convergeVisibleCatalogs() });
     }
     if (mode === "custom") {
       // Keep whatever is selected; only the marker changes, so a user can pin their edits
@@ -900,7 +981,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
       mode: "preset",
       appliedVersion: preset.version,
       selected: presetIds,
-      catalogRefresh: await convergeCodexCatalog(),
+      ...await convergeVisibleCatalogs(),
     });
   }
   if (url.pathname === "/api/selected-models" && req.method === "PUT") {
@@ -924,8 +1005,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     // re-materialize over it afterwards.
     markModelPresetDiverged(config.providers[provider]);
     persistConfig(config);
-    const catalogRefresh = await convergeCodexCatalog();
-    return jsonResponse({ ok: true, provider, selected: models, catalogRefresh });
+    return jsonResponse({ ok: true, provider, selected: models, ...await convergeVisibleCatalogs() });
   }
   return null;
 }

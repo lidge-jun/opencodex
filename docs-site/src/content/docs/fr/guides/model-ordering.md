@@ -23,7 +23,7 @@ priorités `i * N + j`, où `j` est la position du sélecteur en base zéro ; un
 sont déplacées hors de ces groupes de sélecteurs. Codex continue de n’annoncer que les cinq premières
 lignes visibles dans le sélecteur.
 
-Les priorités sans sélecteur pertinentes sont :
+Sans ordre global du sélecteur, les priorités sans sélecteur pertinentes sont :
 
 | Entrée du catalogue | Priorité | Source |
 | --- | --- : | --- |
@@ -113,7 +113,7 @@ Utilisez `subagentModels` pour choisir et ordonner les premiers modèles que Cod
 `spawn_agent`. La page **Sous-agents** du tableau de bord peut réorganiser les identifiants natifs non
 qualifiés et les identifiants routés. Utilisez `ocx agent subagents set` ou modifiez la configuration
 OpenCodex pour définir des choix exacts de la forme `<selector>/<native-openai-model>` ; le tableau de bord
-ne les répertorie pas et les omet s’il enregistre la liste. Configurez au maximum cinq identifiants. Avec
+conserve ces identifiants déjà enregistrés, même indisponibles. Configurez au maximum cinq identifiants. Avec
 des sélecteurs de compte, un choix natif non qualifié peut se décliner en plusieurs lignes de catalogue
 qualifiées par sélecteur ; les choix configurés et les lignes annoncées ne correspondent donc pas
 nécessairement un à un.
@@ -134,11 +134,55 @@ au-delà de ce bloc mis en avant :
 Les lignes routées indiquées apparaissent dans l’ordre configuré. Une ligne absente du tableau conserve sa
 priorité normale et reste donc devant la bande d’affichage de `modelPickerOrder` ; indiquez toutes les
 lignes routées dont vous souhaitez contrôler l’ordre relatif. Une ligne également présente dans
-`subagentModels` conserve sa priorité de mise en avant. `modelPickerOrder` ne réorganise ni les lignes
-natives non qualifiées ni celles qualifiées par un compte ; utilisez `subagentModels` pour celles-ci.
+`subagentModels` conserve sa priorité de mise en avant. Une liste contenant uniquement des identifiants
+routés conserve la position normale des lignes natives.
 
-`modelPickerOrder` ne modifie jamais l’ensemble des candidats de `spawn_agent`. Il change uniquement la
-priorité visible par Codex dans le sélecteur, tandis qu’OpenCodex conserve la priorité naturelle de chaque
-ligne déplacée pour la sélection des sous-agents. `disabledModels` et `selectedModels` de chaque fournisseur
+Pour ordonner tout le sélecteur, incluez un identifiant natif non qualifié :
+
+```json
+{
+  "modelPickerOrder": ["gpt-5.6-sol", "opencode-go/glm-5.3"]
+}
+```
+
+Les lignes indiquées apparaissent d’abord dans l’ordre du tableau, puis les lignes absentes
+selon leur priorité naturelle. La correspondance est exacte : `gpt-5.6-sol` et
+`openai/gpt-5.6-sol` désignent deux lignes distinctes. Pour une ligne qualifiée par un compte,
+indiquez son identifiant complet, sélecteur inclus. Les formes brute et encodée du même
+identifiant routé sont acceptées, avec priorité aux correspondances exactes. Les entrées
+vides sont ignorées.
+
+### Migration : identifiants natifs dans les listes existantes
+
+Auparavant, les identifiants natifs dans `modelPickerOrder` étaient ignorés. Une liste
+existante contenant un identifiant natif non qualifié ordonne désormais tout le sélecteur,
+y compris les lignes mises en avant. Supprimez ces identifiants pour conserver l’ancien
+comportement limité aux lignes routées. Les listes absentes, vides ou uniquement routées
+conservent leur comportement ; le calcul des candidats pour les consignes d’OpenCodex selon les priorités naturelles reste inchangé.
+
+`modelPickerOrder` préserve le calcul d’OpenCodex qui retient jusqu’à cinq candidats préférés
+pour les consignes aux sous-agents, selon leur priorité naturelle. Chaque ligne déplacée conserve
+cette priorité séparément de son `priority` natif ; changer uniquement l’ordre du sélecteur ne doit
+pas modifier ce calcul. Cela ne restreint pas l’admissibilité d’un modèle désigné par son nom exact :
+la liste annoncée n’est pas une liste d’autorisation. Les contraintes d’authentification, de modèle,
+d’effort et de backend restent applicables.
+
+Codex natif utilise le `priority` natif pour annoncer les cinq premiers modèles admissibles et
+visibles dans le sélecteur via `spawn_agent`, en V1 et en V2 lorsque les substitutions de modèle
+sont exposées. Ces cinq modèles peuvent donc changer avec l’ordre du sélecteur, même si les
+candidats préférés d’OpenCodex restent identiques. La V1 ne reçoit aucune injection de liste
+préférée d’OpenCodex. La V2 peut recevoir en plus des consignes fondées sur les priorités naturelles
+si l’état du catalogue client le permet ; ces consignes ne réordonnent pas la liste annoncée par
+l’outil natif.
+
+`disabledModels` et `selectedModels` de chaque fournisseur
 restent des champs de visibilité, pas des contrôles d’ordre. Il n’existe aucun paramètre distinct
 `modelOrder`, `providerOrder` ou de carte de priorité.
+
+## Préréglages du sélecteur
+
+Dans **Models**, choisissez Par défaut, A–Z par modèle, Par fournisseur ou Instantané des usages, puis appliquez l’ordre. Les identifiants routés actuellement disponibles et `modelPickerOrderMode` (`alphabetical`, `provider`, `most-used`) sont enregistrés. Les usages conservés sont lus une seule fois lors de l’application ; un rechargement ou un changement de modèles ne recalcule rien. Un ordre personnalisé ou natif complet reste intact jusqu’à une application explicite. Par défaut efface les deux champs même sans modèle disponible.
+
+`GET/PUT /api/subagent-models` conserve les choix enregistrés désactivés ou absents dans `chosen` et `available` ; `pickerAvailable` contient les identifiants routés admissibles. Models envoie `pickerOrder` et `pickerOrderMode`, jamais `models`. Une sauvegarde du roster seul conserve l’ordre. Entrée invalide ou échec de sauvegarde préserve l’état précédent.
+
+Les plages prioritaires et natives restent en place. Les préréglages affectent le catalogue Codex et les groupes routés de la découverte Claude, sans modifier le préfixe natif Claude ni les profils Desktop explicites ou la propriété des alias. Les rangs de guidage OpenCodex et les réglages de repli sont conservés ; les cinq choix annoncés nativement par Codex et le défaut recommandé peuvent changer. Aucun client n’est redémarré ; une actualisation peut rester en attente et nécessiter de rouvrir le client.

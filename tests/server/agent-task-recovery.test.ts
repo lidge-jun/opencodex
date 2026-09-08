@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import {
   clearGuardrailsContinuationsForTests,
@@ -11,7 +11,14 @@ import {
 } from "../../src/responses/state";
 import { warnAgentTaskRecoveryStartup } from "../../src/server";
 import { handleResponses } from "../../src/server/responses/core";
-import { resetAgentTaskRecoveryState } from "../../src/server/responses/agent-task-recovery";
+import {
+  discardEncryptedAgentTaskRecovery,
+  recoverEncryptedAgentTask,
+  recoverEncryptedAgentTaskWithResult,
+  resetAgentTaskRecoveryState,
+  restoreCachedEncryptedAgentTasks,
+  type AgentTaskRecoveryFailureReason,
+} from "../../src/server/responses/agent-task-recovery";
 import { agentTaskRecoveryWaiterCountForTests } from "../../src/server/responses/agent-task-recovery-cache";
 import {
   agentMessage,
@@ -41,6 +48,159 @@ describe("agent task recovery (opt-in, default off)", () => {
     resetAgentTaskRecoveryState();
     clearGuardrailsContinuationsForTests();
     clearResponseStateForTests();
+  });
+
+  for (const messageType of ["NEW_TASK", "MESSAGE"] as const) {
+    test(`typed ${messageType} recovery preserves boolean, replay and discard contracts`, async () => {
+      const req = new Request("http://localhost/v1/responses", { headers: codexHeaders() });
+      const config = routedConfig();
+      const context = { parentThreadId: "parent-diagnostics" };
+      const input = () => agentMessage([
+        { type: "input_text", text: ROUTING_ENVELOPE.replace("NEW_TASK", messageType) },
+        { type: "encrypted_content", encrypted_content: FERNET_TASK },
+      ]);
+      let fetches = 0;
+      globalThis.fetch = (async () => {
+        fetches += 1;
+        return new Response(recoverySse("Recovered diagnostic fixture."));
+      }) as typeof fetch;
+
+      const typedInput = input();
+      expect(await recoverEncryptedAgentTaskWithResult(req, typedInput, {}, config, context))
+        .toEqual({ recovered: true });
+      const booleanInput = input();
+      expect(await recoverEncryptedAgentTask(req, booleanInput, {}, config, context)).toBe(true);
+      expect(booleanInput).toEqual(typedInput);
+      expect(typedInput).toEqual([{
+        type: "message", role: "user", content: [
+          { type: "input_text", text: ROUTING_ENVELOPE.replace("NEW_TASK", messageType) },
+          { type: "input_text", text: "Recovered diagnostic fixture." },
+        ],
+      }]);
+      const replay = input();
+      expect(restoreCachedEncryptedAgentTasks(req, replay, config, context)).toBe(1);
+      expect(replay).toEqual(typedInput);
+      expect(fetches).toBe(1);
+
+      const otherType = agentMessage([
+        { type: "input_text", text: ROUTING_ENVELOPE.replace("NEW_TASK", messageType === "MESSAGE" ? "NEW_TASK" : "MESSAGE") },
+        { type: "encrypted_content", encrypted_content: FERNET_TASK },
+      ]);
+      expect(restoreCachedEncryptedAgentTasks(req, otherType, config, context)).toBe(0);
+      discardEncryptedAgentTaskRecovery(req, input(), config, context);
+      expect(restoreCachedEncryptedAgentTasks(req, input(), config, context)).toBe(0);
+      expect(fetches).toBe(1);
+    });
+  }
+
+  const failedRecoveries: Array<[string, () => Response, AgentTaskRecoveryFailureReason]> = [
+    ["HTTP 401", () => new Response("private-error", { status: 401 }), "recovery_http_rejected"],
+    ["HTTP 403", () => new Response("private-error", { status: 403 }), "recovery_http_rejected"],
+    ["HTTP 429", () => new Response("private-error", { status: 429 }), "recovery_http_rejected"],
+    ["fetch TypeError", () => { throw new TypeError("private-error"); }, "recovery_transport_error"],
+    ["unowned TimeoutError", () => { throw new DOMException("private-error", "TimeoutError"); }, "recovery_transport_error"],
+    ["reader TypeError", () => new Response(new ReadableStream({
+      pull(controller) { controller.error(new TypeError("private-reader-error")); },
+    })), "recovery_transport_error"],
+    ["invalid UTF-8", () => new Response(new Uint8Array([0xff])), "recovery_invalid_output"],
+    ["trailing UTF-8", () => new Response(new Uint8Array([0xe2, 0x82])), "recovery_invalid_output"],
+    ["oversized body", () => new Response(new Uint8Array(4 * 1024 * 1024 + 1)), "recovery_invalid_output"],
+    ["invalid arguments", () => new Response(recoverySse("task").replace('{\\"assignment\\":\\"task\\"}', '{broken')), "recovery_invalid_output"],
+    ["HTTP 503", () => new Response("raw-error-sentinel", { status: 503 }), "recovery_http_rejected"],
+    ["network exception", () => { throw new Error("raw-error-sentinel"); }, "recovery_transport_error"],
+    ["malformed SSE", () => new Response("data: {not-json}\n\n"), "recovery_invalid_output"],
+    ["missing completion", () => new Response(recoverySse("payload-sentinel").split("data: {\"type\":\"response.completed\"")[0]), "recovery_invalid_output"],
+    ["conflicting assignment", () => new Response(recoverySse("payload-sentinel") + recoveryCompletedSse("other-payload-sentinel")), "recovery_invalid_output"],
+    ["failed terminal", () => new Response(recoverySse("payload-sentinel") + 'data: {"type":"response.failed","response":{"error":{"message":"raw-error-sentinel"}}}\n\n'), "recovery_invalid_output"],
+    ["incomplete terminal", () => new Response(recoverySse("payload-sentinel") + 'data: {"type":"response.incomplete"}\n\n'), "recovery_invalid_output"],
+    ["bare error", () => new Response(recoverySse("payload-sentinel") + 'data: {"type":"error","error":{"message":"raw-error-sentinel"}}\n\n'), "recovery_invalid_output"],
+    // Exact-case events are also used by the pinned official Codex source. Recovery's
+    // additional completed-status requirement remains deliberately stricter.
+    ["mixed-case completion", () => new Response(recoverySse("payload-sentinel").replace("response.completed", "Response.Completed")), "recovery_invalid_output"],
+    ["mixed-case status", () => new Response(recoverySse("payload-sentinel").replace('"status":"completed"', '"status":"Completed"')), "recovery_invalid_output"],
+    ["missing status", () => new Response(recoverySse("payload-sentinel").replace('"status":"completed",', "")), "recovery_invalid_output"],
+    ["ciphertext assignment", () => new Response(recoverySse(FERNET_TASK)), "recovery_invalid_output"],
+  ];
+  for (const [name, response, reason] of failedRecoveries) {
+    test(`typed recovery classifies ${name} and preserves false without retrying`, async () => {
+      const req = new Request("http://localhost/v1/responses", { headers: codexHeaders() });
+      const config = routedConfig();
+      let fetches = 0;
+      globalThis.fetch = (async () => { fetches += 1; return response(); }) as typeof fetch;
+      const input = encryptedInput();
+      const original = structuredClone(input);
+      expect(await recoverEncryptedAgentTaskWithResult(req, input, {}, config))
+        .toEqual({ recovered: false, reason });
+      expect(input).toEqual(original);
+      expect(fetches).toBe(1);
+      expect(restoreCachedEncryptedAgentTasks(req, encryptedInput(), config)).toBe(0);
+      expect(await recoverEncryptedAgentTask(req, input, {}, config)).toBe(false);
+      expect(fetches).toBe(2); // One request per explicit invocation; no internal retry.
+      expect(input).toEqual(original);
+    });
+  }
+
+  test.each(["pending", "rejecting"] as const)("HTTP refusal does not await %s body cancellation", async mode => {
+    let cancels = 0;
+    let reads = 0;
+    let releaseCancel: (() => void) | undefined;
+    const cancellation = new Promise<void>(resolve => { releaseCancel = resolve; });
+    globalThis.fetch = (async () => new Response(new ReadableStream({
+      pull() { reads++; },
+      cancel() {
+        cancels++;
+        return mode === "pending" ? cancellation : Promise.reject(new Error("private-cancel-error"));
+      },
+    }, { highWaterMark: 0 }), { status: 503 })) as typeof fetch;
+    try {
+      const result = await recoverEncryptedAgentTaskWithResult(
+        new Request("http://localhost/v1/responses", { headers: codexHeaders() }), encryptedInput(), {}, routedConfig(),
+      );
+      expect(result).toEqual({ recovered: false, reason: "recovery_http_rejected" });
+      expect(cancels).toBe(1);
+      expect(reads).toBe(0);
+    } finally {
+      releaseCancel?.();
+    }
+  });
+
+  test.each(["headers", "body", "caller"] as const)("owned deadline classification at %s preserves cancellation precedence", async site => {
+    const callbacks: Array<() => void> = [];
+    const timers = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void) => {
+      callbacks.push(callback);
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout);
+    const caller = new AbortController();
+    let started!: () => void;
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    let fetches = 0;
+    globalThis.fetch = ((_, init) => {
+      fetches++;
+      if (site === "body") return Promise.resolve(new Response(new ReadableStream({
+        pull(controller) {
+          controller.enqueue(new Uint8Array([0xe2, 0x82]));
+          started();
+          return new Promise<void>(() => {});
+        },
+      }, { highWaterMark: 0 })));
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+        started();
+      });
+    }) as typeof fetch;
+    try {
+      const pending = recoverEncryptedAgentTaskWithResult(
+        new Request("http://localhost/v1/responses", { headers: codexHeaders() }), encryptedInput(), {}, routedConfig(),
+        { abortSignal: caller.signal },
+      );
+      await ready;
+      callbacks[0]!(); // Fire the owned deadline without wall-clock sleeps.
+      if (site === "caller") caller.abort(new TypeError("private-caller-error"));
+      expect(await pending).toEqual({ recovered: false, reason: site === "caller" ? "caller_cancelled" : "recovery_timeout" });
+      expect(fetches).toBe(1);
+    } finally {
+      timers.mockRestore();
+    }
   });
 
   test("keeps the disabled fail-fast response byte-identical to the absent feature", async () => {
@@ -152,10 +312,11 @@ describe("agent task recovery (opt-in, default off)", () => {
       encryptedInput(),
       codexHeaders(),
     );
-    const json = await response.json() as { error?: { code?: string } };
+    const json = await response.json() as { error?: { code?: string; recovery_reason?: string } };
 
     expect(response.status).toBe(400);
     expect(json.error?.code).toBe("unreadable_encrypted_agent_task");
+    expect(json.error?.recovery_reason).toBe("recovery_invalid_output");
     expect(fetchedUrls.length).toBeGreaterThan(0);
     expect(fetchedUrls[0]).toContain("chatgpt.com/backend-api/codex");
   });
@@ -765,7 +926,7 @@ describe("agent task recovery (opt-in, default off)", () => {
     expect(fetchedUrls).toHaveLength(1);
     expect(fetchedUrls[0]).toContain("chatgpt.com/backend-api/codex/responses");
     expect(await response.json()).toMatchObject({
-      error: { code: "unreadable_encrypted_agent_task" },
+      error: { code: "unreadable_encrypted_agent_task", recovery_reason: "recovery_transport_error" },
     });
   });
 });

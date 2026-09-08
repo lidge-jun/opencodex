@@ -1,14 +1,17 @@
-import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
+import { describe, expect, spyOn, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, posix, win32 } from "node:path";
 import {
   changedSelectionFailure,
+  captureTestOutput,
   createIsolatedTestEnvironment,
   ensureGuiDependencies,
   inspectChangedRun,
   resolveBunTestArgs,
   resolveBunTestPlan,
+  runTestLane,
   selectChangedComparisonRef,
   SERIAL_FULL_SUITE_FILES,
 } from "../../scripts/test";
@@ -19,6 +22,7 @@ import {
   resolveDefaultTestRunLockPath,
   resolveInheritedTestRunLock,
   resolveWrappedTestRunLockPath,
+  TEST_RUN_ID_ENV,
   TEST_RUN_LOCK_PATH_ENV,
   TEST_RUN_LOCK_TOKEN_ENV,
   TEST_RUN_NO_QUEUE_ENV,
@@ -30,6 +34,7 @@ import {
   windowsIdentityPowerShellSpawnOptionsForTests,
 } from "../../src/codex/user-identity";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 
 function runGit(cwd: string, ...args: string[]): string {
@@ -94,6 +99,150 @@ function initChangedRunFixture(): { cwd: string; base: string } {
   const base = commitFixture(cwd, "base.txt", "base\n", "base");
   return { cwd, base };
 }
+
+describe("test runner captured output", () => {
+  test("preserves both streams and UTF-8 characters split across chunks", async () => {
+    const bytes = new TextEncoder().encode("before 한글 after\n");
+    const stdout = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes.slice(0, 8));
+        controller.enqueue(bytes.slice(8));
+        controller.close();
+      },
+    });
+    const stderr = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("diagnostic\n"));
+        controller.close();
+      },
+    });
+    expect(await captureTestOutput(stdout, stderr).finish(1_000)).toEqual({
+      stdout: "before 한글 after\n", stderr: "diagnostic\n", complete: true,
+    });
+  });
+
+  test.each(["pending", "rejected"] as const)(
+    "bounds an open pipe even when cancellation is %s",
+    async cancellation => {
+      let controller!: ReadableStreamDefaultController<Uint8Array>;
+      let cancelled = false;
+      const stdout = new ReadableStream<Uint8Array>({
+        start(value) {
+          controller = value;
+          value.enqueue(new TextEncoder().encode("retained prefix\n"));
+        },
+        cancel() {
+          cancelled = true;
+          return cancellation === "pending"
+            ? new Promise<void>(() => {})
+            : Promise.reject(new Error("fixture cancellation failure"));
+        },
+      });
+      const stderr = new ReadableStream<Uint8Array>({ start(value) { value.close(); } });
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const result = await Promise.race([
+          captureTestOutput(stdout, stderr).finish(20),
+          new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), 2_000); }),
+        ]);
+        expect(result).toEqual({ stdout: "retained prefix\n", stderr: "", complete: false });
+        expect(cancelled).toBe(true);
+      } finally {
+        clearTimeout(timer);
+        try { controller.close(); } catch { /* cancellation already closed it */ }
+      }
+    },
+  );
+
+  test("retains a prefix when reading the pipe fails", async () => {
+    let reads = 0;
+    const stdout = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (reads++ === 0) controller.enqueue(new TextEncoder().encode("before error\n"));
+        else controller.error(new Error("fixture read failure"));
+      },
+    });
+    const stderr = new ReadableStream<Uint8Array>({ start(controller) { controller.close(); } });
+    expect(await captureTestOutput(stdout, stderr).finish(1_000)).toEqual({
+      stdout: "before error\n", stderr: "", complete: false,
+    });
+  });
+
+  test("an exited child with an open pipe reports incomplete capture instead of success", async () => {
+    let cancelled = false;
+    const stdout = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode("partial output\n")); },
+      cancel() { cancelled = true; },
+    });
+    const stderr = new ReadableStream<Uint8Array>({ start(controller) { controller.close(); } });
+    const spawn = spyOn(Bun, "spawn").mockReturnValue({
+      pid: 0,
+      stdout,
+      stderr,
+      exited: Promise.resolve(0),
+      kill() { throw new Error("the fixture child already exited"); },
+    } as unknown as ReturnType<typeof Bun.spawn>);
+    const emitted: string[] = [];
+    try {
+      const pending = runTestLane(
+        { label: "open pipe fixture", args: [], timeoutMs: 2_000 },
+        "capture-fixture",
+        undefined,
+        true,
+        { stdout: value => { emitted.push(value); }, stderr: value => { emitted.push(value); } },
+      );
+      // Only the synchronous spawn is mocked; no other test or later subprocess uses it.
+      spawn.mockRestore();
+      expect(await pending).toEqual({ exitCode: 1, output: "partial output\n\n" });
+      expect(emitted).toEqual(["partial output\n"]);
+      expect(cancelled).toBe(true);
+    } finally {
+      spawn.mockRestore();
+    }
+  });
+
+  test.each(["pass", "fail", "timeout"] as const)(
+    "returns and prints a %s lane's output exactly once",
+    async outcome => {
+      const root = mkdtempSync(join(tmpdir(), "opencodex-capture-lane-"));
+      const fixture = join(root, "capture.test.ts");
+      const stdout: string[] = [];
+      const stderr: string[] = [];
+      writeFileSync(fixture, `
+        import { test } from "bun:test";
+        test("capture fixture", async () => {
+          process.stdout.write("OCX_CAPTURE_STDOUT_MARKER\\n");
+          process.stderr.write("OCX_CAPTURE_STDERR_MARKER\\n");
+          ${outcome === "timeout" ? "await new Promise(() => {});" : ""}
+          ${outcome === "fail" ? 'throw new Error("fixture assertion failure");' : ""}
+        }, 60_000);
+      `);
+      try {
+        const runId = process.env[TEST_RUN_ID_ENV]!;
+        const result = await runTestLane(
+          { label: "capture fixture", args: [fixture], timeoutMs: INTERNAL_DEADLINE_MS },
+          runId,
+          resolveInheritedTestRunLock({ wrappedRunId: runId, env: process.env }),
+          true,
+          { stdout: value => { stdout.push(value); }, stderr: value => { stderr.push(value); } },
+        );
+        expect(result.exitCode).toBe(outcome === "timeout" ? 124 : outcome === "fail" ? 1 : 0);
+        expect(result.output).toContain("OCX_CAPTURE_STDOUT_MARKER\n");
+        expect(result.output).toContain("OCX_CAPTURE_STDERR_MARKER\n");
+        // A failed Bun assertion may quote the fixture source containing the marker.
+        // Count emitted marker lines, not mentions inside the error's code frame.
+        expect(stdout.join("").split(/\r?\n/).filter(line => line === "OCX_CAPTURE_STDOUT_MARKER"))
+          .toHaveLength(1);
+        expect(stderr.join("").split(/\r?\n/).filter(line => line === "OCX_CAPTURE_STDERR_MARKER"))
+          .toHaveLength(1);
+        expect(result.output).toBe(stdout.join("") + "\n" + stderr.join(""));
+      } finally {
+        removeTreeWithRetry(root);
+      }
+    },
+    { timeout: SPAWN_BUDGET_MS },
+  );
+});
 
 describe("test runner isolation", () => {
   test("redirects user homes to a disposable root", () => {
@@ -655,6 +804,60 @@ describe("bun test user lock", () => {
     expect(lockPath).toBeUndefined();
     expect(resolveCalls).toBe(0);
   });
+
+  test.if(process.platform === "win32" && process.env[TEST_RUN_NO_QUEUE_ENV] !== "1")(
+    "nested Windows Bun tests inherit the acquired live lock and refuse an incomplete capability",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "opencodex-nested-test-"));
+      try {
+        const lockPath = process.env[TEST_RUN_LOCK_PATH_ENV];
+        expect(Boolean(lockPath && process.env[TEST_RUN_LOCK_TOKEN_ENV] && process.env[TEST_RUN_ID_ENV])).toBe(true);
+        const ownerBefore = readFileSync(join(lockPath!, "owner.json"), "utf8");
+        const fixture = join(root, "nested.test.ts");
+        writeFileSync(fixture, `
+          import { test } from "bun:test";
+          import { readFileSync, existsSync } from "node:fs";
+          import { join } from "node:path";
+          test("nested lock receipt", () => {
+            const path = process.env.OCX_TEST_RUN_LOCK_PATH;
+            const owner = JSON.parse(readFileSync(join(path, "owner.json"), "utf8"));
+            console.log(JSON.stringify({ nestedLockReceipt: {
+              samePath: path === ${JSON.stringify(lockPath)},
+              sameRun: owner.runId === ${JSON.stringify(process.env[TEST_RUN_ID_ENV])},
+              sameToken: owner.token === process.env.OCX_TEST_RUN_LOCK_TOKEN,
+              member: existsSync(join(path, "members", process.pid + "-" + owner.token)),
+              preloadRan: process.env.OCX_TEST_PRELOAD_PID === String(process.pid),
+              guardArmed: process.env.OCX_TEST_HOME_GUARD === "1",
+            } }));
+          });
+        `);
+        const args = ["test", "--preload", repoPath("tests/preload.ts"), fixture];
+        const child = spawnSync(process.execPath, args, {
+          cwd: root, env: { ...process.env }, encoding: "utf8", timeout: INTERNAL_DEADLINE_MS,
+        });
+        // Keep process diagnostics bounded and never render the owner token or child output.
+        expect(child.status).toBe(0);
+        const marker = child.stdout.split("\n").find(line => line.startsWith('{"nestedLockReceipt":'));
+        expect(marker ? JSON.parse(marker).nestedLockReceipt : null).toEqual({
+          samePath: true, sameRun: true, sameToken: true, member: true, preloadRan: true, guardArmed: true,
+        });
+        expect(readFileSync(join(lockPath!, "owner.json"), "utf8") === ownerBefore).toBe(true);
+
+        const incomplete = { ...process.env };
+        delete incomplete[TEST_RUN_LOCK_TOKEN_ENV];
+        const refused = spawnSync(process.execPath, args, {
+          cwd: root, env: incomplete, encoding: "utf8", timeout: INTERNAL_DEADLINE_MS,
+        });
+        expect(refused.status).toBe(1);
+        expect(refused.stderr.includes("capability is incomplete")).toBe(true);
+        expect(refused.stdout.includes('{"nestedLockReceipt":')).toBe(false);
+        expect(readFileSync(join(lockPath!, "owner.json"), "utf8") === ownerBefore).toBe(true);
+      } finally {
+        removeTreeWithRetry(root);
+      }
+    },
+    { timeout: SPAWN_BUDGET_MS },
+  );
 
   test("falls back from an unsafe XDG root to a validated mode-0700 UID directory", () => {
     if (process.platform === "win32" || typeof process.getuid !== "function") return;

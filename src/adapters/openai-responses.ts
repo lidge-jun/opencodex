@@ -1,3 +1,6 @@
+import { normalizeRoutedAgentMessages } from "./routed-agent-messages";
+import { normalizeOpenCodeGoAdditionalTools } from "./opencode-go-additional-tools";
+import { isXaiResponsesDestination } from "../providers/xai-transport";
 import { createHash } from "node:crypto";
 import type { IncomingMeta, ProviderAdapter } from "./base";
 import { namespacedToolName, type AdapterEvent, type OcxParsedRequest, type OcxProviderConfig, type OcxUsage, type TierDecision } from "../types";
@@ -629,6 +632,13 @@ function mapRoutedResponsesReasoningEffort(
   if (provider.authMode === "forward") return body;
   if (configuredReasoningEfforts(provider, modelId) === undefined) return body;
   if (!isPlainObject(body) || !isPlainObject(body.reasoning)) return body;
+  const declaredEfforts = modelRecordValue(provider.modelReasoningEfforts, modelId) ?? provider.reasoningEfforts;
+  // An explicitly empty ladder means no effort control, not no reasoning output.
+  // Omit only effort so the upstream default applies; unknown/non-rankable ladders stay untouched.
+  if (declaredEfforts?.length === 0 && Object.hasOwn(body.reasoning, "effort")) {
+    const { effort: _effort, ...reasoning } = body.reasoning;
+    return { ...body, reasoning: Object.keys(reasoning).length > 0 ? reasoning : undefined };
+  }
   const requested = body.reasoning.effort;
   if (typeof requested !== "string") return body;
 
@@ -2116,7 +2126,9 @@ export function stripOpenAiOnlyWebSearchFields(body: unknown): unknown {
  */
 const MUSE_SPARK_WEB_SEARCH_STRICT_MODELS = new Set([
   "muse-spark-1.3-contributor",
+  "muse-spark-1.3-contributor-free",
   "muse-spark-1.2-contributor",
+  "muse-spark-1.2-contributor-free",
 ]);
 
 const MUSE_SPARK_WEB_SEARCH_STRICT_RESPONSE_URLS = new Set([
@@ -2355,6 +2367,9 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         parsed._rawBody,
         forward || parsed._previousResponseInputExpanded === true,
       );
+      if (!forward) outBody = normalizeRoutedAgentMessages(outBody, {
+        allowStringContent: isXaiResponsesDestination(provider),
+      });
       outBody = mapRoutedResponsesReasoningEffort(outBody, provider, parsed.modelId);
       // stripPreviousResponseId() intentionally returns its input on a no-op. Detach before the
       // tier write so a force-fast/default decision can never mutate parsed._rawBody.
@@ -2427,7 +2442,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         // Codex 0.147 emits private namespace tool groups, while public/third-party Responses
         // gateways accept only flat tool variants. Run after custom/tool-search lowering so
         // namespace children already carry their final public kind before they are promoted.
-        const rewritten = rewriteRoutedNamespaceToolsForUpstream(outBody);
+        const rewritten = rewriteRoutedNamespaceToolsForUpstream(outBody, convertedRoutedCustomToolNames);
         outBody = rewritten.body;
         convertedRoutedNamespaceToolAliases = rewritten.aliases;
         // Preserve xAI's cached-only fail-closed semantics and image-search mapping before the
@@ -2443,6 +2458,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         // Last, so promoted namespace children are also cleared of Codex-private fields.
         outBody = stripCanonicalOnlyToolFields(outBody, provider.supportsOpenAiWebSearchToolFields === false);
       }
+      if (!forward) outBody = normalizeOpenCodeGoAdditionalTools(outBody, url);
       // Same predicate as the routedCompaction gate in handleResponses(): an authMode check would
       // let a noncanonical custom forward provider skip this rewrite while the server still routes
       // it as a summarizer turn (#422). The compaction body build removes the tool surface and must
@@ -2492,6 +2508,13 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         parsed.modelId,
       );
       if (isCanonicalOpenAiForwardProvider(provider)) {
+        // Spark closes Responses Lite streams before a terminal completion. Select compatibility
+        // from the final wire model so aliases cannot leave the caller or a static header enabled.
+        if (isPlainObject(finalBody) && finalBody.model === "gpt-5.3-codex-spark") {
+          for (const name of Object.keys(headers)) {
+            if (name.toLowerCase() === CODEX_RESPONSES_LITE_HEADER) delete headers[name];
+          }
+        }
         const routingHeaders = new Headers(headers);
         applyCodexRoutingHint(routingHeaders, finalBody);
         // Static headers may use mixed casing. Remove every stale spelling
@@ -2544,6 +2567,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       let snapshot = "";
       let usage: OcxUsage | undefined;
       let compactionEncryptedContent: string | undefined;
+      let completedSeen = false;
       for await (const event of decodeServerSentEvents(response.body, { translatorBudget: budget })) {
         let payload: unknown;
         try { payload = JSON.parse(event.data); } catch { continue; }
@@ -2578,6 +2602,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
             return;
           case "response.completed":
             {
+              completedSeen = true;
               const responsePayload = isPlainObject(payload.response) ? payload.response : undefined;
               const output = Array.isArray(responsePayload?.output) ? responsePayload.output : [];
               const compaction = output.find(item => isPlainObject(item) && item.type === "compaction");
@@ -2617,6 +2642,18 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
               }
             }
             break;
+        }
+        // Buffered text is still upstream progress, but gateway keepalives are not.
+        // Yield after accounting, directly to the consumer: no progress queue or content leak.
+        if (
+          !completedSeen
+          && (payload.type === "response.output_text.delta"
+            || payload.type === "response.reasoning_summary_text.delta"
+            || payload.type === "response.reasoning_text.delta")
+          && typeof payload.delta === "string"
+          && payload.delta.length > 0
+        ) {
+          yield { type: "heartbeat" };
         }
       }
       // Gateways differ in which of these they emit; prefer the authoritative

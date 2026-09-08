@@ -1122,6 +1122,45 @@ const CLINE_PASS_MODELS = [
   "cline-pass/qwen3.7-max",
   "cline-pass/qwen3.7-plus",
 ];
+
+const ORCAROUTER_MODEL_DISCOVERY: ProviderModelDiscoverySpec = {
+  path: "models",
+  query: { capability: "chat" },
+  maxResponseBytes: 512 * 1024,
+  maxModels: 512,
+  filter: {
+    anyOf: [{
+      path: ["supported_endpoint_types"],
+      containsAny: ["openai", "openai-response", "anthropic", "gemini"],
+      caseInsensitive: true,
+    }],
+    noneOf: [{
+      path: ["supported_endpoint_types"],
+      containsAny: ["image-generation", "openai-video", "jina-rerank"],
+      caseInsensitive: true,
+    }],
+  },
+};
+// Preserve the previously verified cold-start catalog. Live discovery remains authoritative
+// when it succeeds, but a temporary catalog outage must not erase the provider's known-good
+// selectors from the picker. `orcarouter/auto` is intentionally retained here even though the
+// public catalog did not enumerate it at the latest verification (2026-09-07).
+const ORCAROUTER_MODELS = [
+  "openai/gpt-5.5",
+  "anthropic/claude-opus-4.8",
+  "google/gemini-3.5-flash",
+  "deepseek/deepseek-v4-pro",
+  "orcarouter/auto",
+];
+const ORCAROUTER_TEXT_ONLY_MODELS = ["deepseek/deepseek-v4-pro"];
+const ORCAROUTER_MODEL_REASONING_EFFORTS = {
+  // Live /models currently exposes ids and modalities, not the accepted reasoning ladder.
+  "openai/gpt-5.5": ["low", "medium", "high", "xhigh"],
+  "deepseek/deepseek-v4-pro": deepseekThinkingEffortsFor("deepseek/deepseek-v4-pro"),
+};
+const ORCAROUTER_MODEL_REASONING_EFFORT_MAP = {
+  "deepseek/deepseek-v4-pro": deepseekReasoningMapFor("deepseek/deepseek-v4-pro"),
+};
 const CLINE_PASS_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "cline-pass/glm-5.3": 1_048_576,
   "cline-pass/glm-5.3-flash": 1_048_576,
@@ -1361,6 +1400,25 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     parallelToolCalls: false,
   },
   {
+    id: "orcarouter-oauth",
+    label: "OrcaRouter - Auth",
+    adapter: "openai-chat",
+    baseUrl: "https://api.orcarouter.ai/v1",
+    authKind: "oauth",
+    oauthId: "orcarouter-oauth",
+    featured: true,
+    allowBaseUrlOverride: true,
+    defaultModel: "openai/gpt-5.5",
+    models: ORCAROUTER_MODELS,
+    liveModels: true,
+    modelDiscovery: ORCAROUTER_MODEL_DISCOVERY,
+    noVisionModels: ORCAROUTER_TEXT_ONLY_MODELS,
+    modelReasoningEfforts: ORCAROUTER_MODEL_REASONING_EFFORTS,
+    modelReasoningEffortMap: ORCAROUTER_MODEL_REASONING_EFFORT_MAP,
+    preserveReasoningContentModels: ORCAROUTER_TEXT_ONLY_MODELS,
+    note: "Connect your OrcaRouter account with OAuth 2.0 + PKCE; the issued API key is stored in OpenCodex's existing credential store.",
+  },
+  {
     id: "anthropic",
     label: "Anthropic Claude",
     adapter: "anthropic",
@@ -1481,8 +1539,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelDiscovery: {
       // Resolves against effectiveBaseUrl (registry baseUrl .../v1) to the same
       // canonical endpoint https://inference-api.nousresearch.com/v1/models.
+      // Nous returns a mixed paid/free catalog whose JSON can exceed 256 KiB;
+      // keep the provider-specific limit below the process-wide 4 MiB ceiling.
       path: "models",
-      maxResponseBytes: 262_144,
+      maxResponseBytes: 1_048_576,
       maxModels: 512,
     },
     note: "Nous Research subscription gateway. OAuth device login with your own Portal account; mixed paid + :free models discovered live (fallback seed 2026-08-10: tencent/hy3:free, poolside/laguna-s-2.1:free, stepfun/step-3.7-flash:free, poolside/laguna-xs-2.1:free).",
@@ -1616,6 +1676,9 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // Zen Go can close a Chat stream after a fully assembled function call without sending
     // finish_reason or [DONE] (#2260). The adapter still rejects incomplete argument JSON.
     openaiChatEofTolerance: true,
+    // Go rejects reasoning.encrypted_content with previous_response_id (#3838).
+    // Use explicit replay history and the existing stateless Responses policy.
+    statelessResponses: true,
     /* [Decision Log]
     - 목적과 의도: Route the exact models OpenCode Go documents on the Responses endpoint — GPT 5.6 Luna, Grok 4.6, and Muse Spark Contributor (#2617).
     - 기존 구현 및 제약 조건: The provider is mixed-wire but its provider-wide `openai-chat` adapter sent Luna to `/chat/completions`; explicit user `modelAdapters` entries must remain authoritative.
@@ -1834,37 +1897,23 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     note: "Cline usage-billing API: one key, 100+ models, OpenRouter-style ids. Promotional free models are IDE/CLI-only per Cline docs; minimax/minimax-m2.5 is the documented API free experimentation model.",
   },
   {
-    // OrcaRouter: OpenAI-compatible adaptive router (api.orcarouter.ai). Model ids are
-    // vendor-namespaced (`<vendor>/<model>`) and pass through to the upstream as-is.
-    // The default pins a tool-capable model; the adaptive `orcarouter/auto` router is also
-    // selectable. Live-verified 2026-07-20: /v1/chat/completions accepts the `tools` field
-    // and routes to a function-calling-capable upstream.
-    id: "orcarouter", label: "OrcaRouter", adapter: "openai-chat", baseUrl: "https://api.orcarouter.ai/v1",
+    // OrcaRouter: OpenAI-compatible adaptive router (api.orcarouter.ai). The public live
+    // catalog is authoritative; model ids and input modalities are never maintained here.
+    id: "orcarouter", label: "OrcaRouter - API", adapter: "openai-chat", baseUrl: "https://api.orcarouter.ai/v1",
     authKind: "key", dashboardUrl: "https://www.orcarouter.ai/console",
+    // The catalog is public, so a successful /models probe cannot validate a submitted key.
+    apiKeyValidation: "unknown",
     defaultModel: "openai/gpt-5.5",
-    models: [
-      "openai/gpt-5.5",
-      "anthropic/claude-opus-4.8",
-      "google/gemini-3.5-flash",
-      "deepseek/deepseek-v4-pro",
-      "orcarouter/auto",
-    ],
-    // Text-only models → the vision sidecar describes images instead.
-    noVisionModels: ["deepseek/deepseek-v4-pro"],
-    // Reasoning/temperature behavior verified live 2026-07-20 against api.orcarouter.ai:
-    // - openai/gpt-5.5 accepts reasoning_effort none|low|medium|high|xhigh but rejects `max` (400),
-    //   so advertise up to xhigh and let mapReasoningEffort clamp a `max`/`ultra` request to xhigh.
-    // - deepseek/deepseek-v4-pro mirrors the direct-DeepSeek wiring (thinking-effort map +
-    //   reasoning_content history replay) so the namespaced selection behaves identically.
-    // - temperature is accepted by every seeded model (gpt-5.5, claude-opus-4.8, deepseek-v4-pro all
-    //   returned 200), so no noTemperatureModels entry is warranted here.
-    modelReasoningEfforts: {
-      "openai/gpt-5.5": ["low", "medium", "high", "xhigh"],
-      "deepseek/deepseek-v4-pro": deepseekThinkingEffortsFor("deepseek/deepseek-v4-pro"),
-    },
-    modelReasoningEffortMap: { "deepseek/deepseek-v4-pro": deepseekReasoningMapFor("deepseek/deepseek-v4-pro") },
-    preserveReasoningContentModels: ["deepseek/deepseek-v4-pro"],
-    note: "OpenAI-compatible adaptive router. Default is a tool-capable model; orcarouter/auto (adaptive routing) is also selectable. Full catalog: https://www.orcarouter.ai/models",
+    models: ORCAROUTER_MODELS,
+    liveModels: true,
+    modelDiscovery: ORCAROUTER_MODEL_DISCOVERY,
+    // Catalog discovery owns WHICH models exist. These entries only retain verified
+    // request-shaping facts that the upstream catalog does not currently publish.
+    noVisionModels: ORCAROUTER_TEXT_ONLY_MODELS,
+    modelReasoningEfforts: ORCAROUTER_MODEL_REASONING_EFFORTS,
+    modelReasoningEffortMap: ORCAROUTER_MODEL_REASONING_EFFORT_MAP,
+    preserveReasoningContentModels: ORCAROUTER_TEXT_ONLY_MODELS,
+    note: "OpenAI-compatible adaptive router. Models and multimodal capabilities are discovered live from the public chat catalog. Use the OrcaRouter account entry for PKCE login.",
   },
   {
     // BizRouter: Korean enterprise LLM gateway (api.bizrouter.ai). Model ids are
@@ -2175,6 +2224,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     liveModels: true,
     preserveCustomDestination: true,
     defaultModel: "deepseek/deepseek-v4-flash",
+    promptCacheKey: true,
     // The default is also the cold-start seed: live discovery failure must not empty the catalog
     // for a freshly configured provider with no stale cache (issue #308 pattern).
     models: ["deepseek/deepseek-v4-flash"],
@@ -2542,6 +2592,37 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // No liveModels: the same reasoning as the pay-as-you-go row — an unverified live claim
     // yields an empty picker at runtime.
     note: "Domestic BigModel Coding Plan endpoint (open.bigmodel.cn)",
+  },
+  // Narrowed carry of #3641: the official Codex example declares a local static catalog,
+  // not an HTTP /models contract. Keep Responses separate from the Chat endpoint above.
+  // Source: https://docs.bigmodel.cn/cn/coding-plan/tool/codex.md (checked 2026-09-07).
+  {
+    id: "zhipu-bigmodel-responses",
+    label: "Zhipu AI — BigModel Coding Plan (Responses)",
+    baseUrl: "https://open.bigmodel.cn/api/v1",
+    adapter: "openai-responses",
+    authKind: "key",
+    dashboardUrl: "https://bigmodel.cn/console/usercenter/apikeys",
+    defaultModel: "glm-5.3",
+    models: ["glm-5.3", "glm-5-turbo"],
+    liveModels: false,
+    // The local Codex catalog does not establish an authenticated HTTP /models contract.
+    apiKeyValidation: "unknown",
+    jawcodeBundle: "zai",
+    // A pre-existing same-named custom provider must retain its destination and key boundary.
+    preserveCustomDestination: true,
+    modelContextWindows: { "glm-5.3": 1_048_576, "glm-5-turbo": 204_800 },
+    modelInputModalities: { "glm-5.3": ["text"], "glm-5-turbo": ["text"] },
+    modelReasoningEfforts: {
+      "glm-5.3": ZAI_GLM_53_REASONING_EFFORTS,
+      // Explicitly empty: Turbo must not inherit the generic selectable effort ladder.
+      "glm-5-turbo": [],
+    },
+    modelDefaultReasoningEfforts: { "glm-5.3": "max", "glm-5-turbo": "max" },
+    modelSupportsReasoningSummaries: { "glm-5.3": true, "glm-5-turbo": true },
+    // Responses replay uses this provider-level flag, not the Chat-path model list.
+    preserveResponsesReasoningContent: true,
+    note: "Domestic BigModel Coding Plan Responses endpoint; static model roster",
   },
   { id: "nanogpt", label: "NanoGPT", baseUrl: "https://nano-gpt.com/api/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://nano-gpt.com/api" },
   { id: "synthetic", label: "Synthetic", baseUrl: "https://api.synthetic.new/openai/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://synthetic.new" },
@@ -3049,6 +3130,11 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       "gpt-5.6-luna": "openai-responses",
       "gpt-5.6-sol": "openai-responses",
       "gpt-5.6-terra": "openai-responses",
+      "gpt-6-astra": "openai-responses",
+      "grok-4.5": "openai-responses",
+      "grok-4.6": "openai-responses",
+      "mai-code-1.1-flash": "openai-responses",
+      "mai-code-1-flash-picker": "openai-responses",
     },
     note: "Experimental unofficial Copilot bridge. Logs in via GitHub device flow using the public VS Code OAuth client id, then exchanges for a short-lived Copilot API token (copilot_internal). Requires an active Copilot subscription. GitHub may tighten or revoke this path; do not send confidential material you would not paste into Copilot Chat.",
   },

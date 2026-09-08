@@ -16,7 +16,7 @@
  */
 import { getAccountSet } from "./store";
 import { getValidAccessSnapshotForAccount, type OAuthAccessSnapshot } from "./index";
-import { exhaustedCooldownMs, hasHeadroomEvidence, rankAccountsByHeadroom } from "./account-quota-rank";
+import { exhaustedCooldownMs, hasHeadroomEvidence, isAccountQuotaExhausted, rankAccountsByHeadroom } from "./account-quota-rank";
 import { parseRetryAfterMs } from "../combos/failover";
 import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 import type { OcxConfig, OcxProviderConfig } from "../types";
@@ -61,28 +61,11 @@ interface PresenceEntry {
   readAt: number;
 }
 
-/**
- * Ordered roster plus the active id, for the pre-dispatch preference.
- *
- * Same reasoning as the presence cache: `getAccountSet` reads through `loadAuthStore`,
- * which chmods and re-parses the whole credential file on every call. Selection needs the
- * ORDER and the active id, which the presence count cannot supply, so it gets its own
- * TTL-bounded row. Ids and an active pointer only — never a credential.
- */
-interface RosterEntry {
-  ids: string[];
-  activeId: string | null;
-  readAt: number;
-}
-
 /** Process-local, like the Anthropic pool's: a restart is allowed to forget a cooldown. */
 const health = new Map<string, AccountHealth>();
 
 /** Provider -> recent eligible-account count. TTL-bounded; never holds credential material. */
 const presence = new Map<string, PresenceEntry>();
-
-/** Provider -> recently read roster. TTL-bounded; never holds credential material. */
-const roster = new Map<string, RosterEntry>();
 
 const healthKey = (provider: string, accountId: string) => `${provider}\u0000${accountId}`;
 
@@ -116,24 +99,6 @@ function eligibleAccountCount(providerName: string, now: number): number {
   const eligible = set ? set.accounts.filter(account => account.needsReauth !== true).length : 0;
   presence.set(providerName, { eligible, readAt: now });
   return eligible;
-}
-
-/**
- * Roster ids and the active pointer, read at most once per TTL window.
- *
- * `needsReauth` accounts are excluded for the same reason the presence count excludes
- * them: a revoked credential cannot serve the request we are about to send.
- */
-function cachedRoster(providerName: string, now: number): { ids: string[]; activeId: string | null } {
-  const cached = roster.get(providerName);
-  if (cached && now >= cached.readAt && now - cached.readAt < PRESENCE_CACHE_TTL_MS) {
-    return { ids: cached.ids, activeId: cached.activeId };
-  }
-  const set = getAccountSet(providerName);
-  const ids = set ? set.accounts.filter(a => a.needsReauth !== true).map(a => a.id) : [];
-  const activeId = set?.activeAccountId ?? null;
-  roster.set(providerName, { ids, activeId, readAt: now });
-  return { ids, activeId };
 }
 
 /**
@@ -192,8 +157,7 @@ function isProactivePreferenceEnabled(config: OcxConfig, providerName: string, n
   if (typeof perProvider === "boolean") {
     return perProvider && hasFailoverAccountQuorum(providerName, now);
   }
-  if (config.oauthAccountFailover?.enabled === false) return false;
-  return hasFailoverAccountQuorum(providerName, now);
+  return config.oauthAccountFailover?.enabled === true && hasFailoverAccountQuorum(providerName, now);
 }
 
 /** Accounts that may serve traffic right now: not cooled, not flagged for reauth. */
@@ -240,8 +204,6 @@ export function rotateGenericOAuthAccountOn429(
   // A rotation means the roster in use just changed; do not answer the next activation question
   // from a count read before the failure.
   presence.delete(providerName);
-  // Same for the selection roster: the next request must not pick from a pre-failure read.
-  roster.delete(providerName);
   // Deterministic: start after the failed account so repeated 429s walk the roster instead of
   // hammering whichever id happens to sort first. The ring is built BEFORE ranking — ranking
   // the store's own order would change which account a quota-less provider rotates to.
@@ -289,12 +251,18 @@ export function preferredInitialAccount(
   // The PROACTIVE predicate, not the reactive one: this steers a request upstream has not
   // refused, so `oauthAccountFailover.enabled: false` must still be able to refuse it.
   if (!isProactivePreferenceEnabled(config, providerName, now)) return null;
-  // This runs on the initial resolution of EVERY request, and `loadAuthStore` has no
-  // cache: each call chmods the config dir, chmods the secret, reads the whole file and
-  // normalizes it (store.ts:136-151). So the store is consulted at most ONCE here, behind
-  // the same TTL the presence check uses, and never at all for a single-account provider.
-  const { ids: order, activeId: active } = cachedRoster(providerName, now);
+  // Read the same authoritative selection the management writer commits. Caching the
+  // active id separately would delay manual selection and account removal.
+  const selected = getAccountSet(providerName);
+  if (!selected) return null;
+  const active = selected.activeAccountId;
+  const order = selected.accounts.filter(account => account.needsReauth !== true).map(account => account.id);
   if (order.length < 2) return null;
+
+  const activeRow = selected.accounts.find(account => account.id === active);
+  if (activeRow && activeRow.needsReauth !== true
+    && !isCooled(providerName, activeRow.id, now)
+    && !isAccountQuotaExhausted(providerName, activeRow.id)) return null;
 
   // Evidence is required BEFORE eligibility narrows the field. Without this, a provider
   // with no quota data at all could still be redirected: cool the active account with a
@@ -318,11 +286,8 @@ export function preferredInitialAccount(
   const best = rankAccountsByHeadroom(providerName, candidates)[0] ?? null;
   // Nothing to do when the ranking agrees with the account we would have used anyway.
   //
-  // The roster may be up to PRESENCE_CACHE_TTL_MS old, so this answer is a PREFERENCE the
-  // caller must be able to abandon: it resolves the account with `requireUsableAccount`,
-  // which rejects a removed or reauth-flagged account inside the store read it was already
-  // performing, and falls back to the active account. Validating here instead would mean a
-  // second uncached read of the credential file on every redirected request.
+  // A proposal still needs guarded selection commit after credential resolution: a
+  // removal, reauth verdict, or manual choice can arrive during that await.
   return best && best !== active ? best : null;
 }
 
@@ -341,7 +306,6 @@ export function genericFailoverRetryAfterSeconds(providerName: string, now = Dat
 
 /** Test seam and manual-recovery hook. */
 export function forgetGenericFailoverRoster(providerName: string): void {
-  roster.delete(providerName);
   presence.delete(providerName);
 }
 
@@ -350,11 +314,9 @@ export function clearGenericFailoverHealth(providerName?: string): void {
   if (!providerName) {
     health.clear();
     presence.clear();
-    roster.clear();
     return;
   }
   presence.delete(providerName);
-  roster.delete(providerName);
   for (const key of [...health.keys()]) {
     if (key.startsWith(`${providerName}\u0000`)) health.delete(key);
   }

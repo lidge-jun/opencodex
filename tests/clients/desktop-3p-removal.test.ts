@@ -1,4 +1,7 @@
-import { expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { saveConfig, readConfigDiagnostics } from "../../src/config";
+import type { OcxConfig } from "../../src/types";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -6,8 +9,39 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import {
   inspectDesktop3pConfigLibrary,
-  removeDesktop3pStandardPivot,
+  removeDesktop3pStandardPivot as removeDesktop3pStandardPivotProduction,
 } from "../../src/claude/desktop-3p";
+
+let previousHome: string | undefined;
+let fixtureHome: string;
+beforeEach(() => {
+  previousHome = process.env.OPENCODEX_HOME;
+  fixtureHome = mkdtempSync(join(tmpdir(), "ocx-desktop-remove-home-"));
+  process.env.OPENCODEX_HOME = fixtureHome;
+  saveConfig({ port: 10100, defaultProvider: "test", providers: { test: { adapter: "openai-chat", baseUrl: "http://127.0.0.1:1/v1", allowPrivateNetwork: true, liveModels: false, models: ["fixture-model"] } }, clientIntegrations: { "claude-desktop": false } } as OcxConfig);
+  expect(readConfigDiagnostics().source).toBe("file");
+  expect(readConfigDiagnostics().config.clientIntegrations?.["claude-desktop"]).toBe(false);
+});
+afterEach(() => {
+  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = previousHome;
+  removeTreeWithRetry(fixtureHome);
+});
+
+function removeDesktop3pStandardPivot(options: NonNullable<Parameters<typeof removeDesktop3pStandardPivotProduction>[0]> = {}) {
+  const library = options.env?.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
+  if (!library) throw new Error("Desktop removal fixture must supply its library path");
+  const previousLibrary = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
+  process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = library;
+  try {
+    return removeDesktop3pStandardPivotProduction({
+      ...options, lifecycleLockDeps: { lockPath: join(fixtureHome, "locks", "desktop.sqlite") },
+    });
+  } finally {
+    if (previousLibrary === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
+    else process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = previousLibrary;
+  }
+}
 
 function envFor(path: string): NodeJS.ProcessEnv {
   return { ...process.env, OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR: path };

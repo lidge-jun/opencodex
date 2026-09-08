@@ -1237,10 +1237,12 @@ test("sideband relay preserves multibyte UTF-8 frames byte-identically in both d
 // The env-gated frame forensic log (OCX_LIVE_FRAME_LOG) records per-frame metadata and
 // U+FFFD presence without writing full payloads — the attribution tool for multibyte
 // transcript corruption reports.
-test("sideband frame log records direction, kind, and U+FFFD context without full payloads", async () => {
+test("sideband frame log preserves delivery without recording damaged or clean text", async () => {
   const frameLogPath = join(TEST_DIR, "frames.jsonl");
+  const previousFrameLog = process.env.OCX_LIVE_FRAME_LOG;
   process.env.OCX_LIVE_FRAME_LOG = frameLogPath;
   const FFFD_TEXT = "가볍게 ��기핼봐요";
+  const received: string[] = [];
 
   const upstream = Bun.serve({
     port: 0,
@@ -1293,7 +1295,8 @@ test("sideband frame log records direction, kind, and U+FFFD context without ful
       client.addEventListener("open", () => {
         client.send("clean-frame");
       });
-      client.addEventListener("message", () => {
+      client.addEventListener("message", event => {
+        received.push(String(event.data));
         acks += 1;
         if (acks >= 2) {
           clearTimeout(timer);
@@ -1316,20 +1319,67 @@ test("sideband frame log records direction, kind, and U+FFFD context without ful
     expect(u2cFffd).toBeDefined();
     expect(u2cFffd.kind).toBe("text");
     expect(u2cFffd.bytes).toBeGreaterThan(0);
-    expect(u2cFffd.context).toContain("�");
+    expect(received).toContain(FFFD_TEXT);
     expect(c2uClean).toBeDefined();
     expect(c2uClean.fffd).toBe(false);
-    // Full payloads must never be logged — only short FFFD context excerpts.
+    // Even a short damaged transcript must not be persisted as diagnostic context.
     for (const line of lines) {
+      expect(Object.keys(line).sort()).toEqual(["bytes", "dir", "fffd", "kind", "ts"]);
       expect(JSON.stringify(line)).not.toContain("clean-frame");
+      expect(JSON.stringify(line)).not.toContain(FFFD_TEXT);
     }
 
     client.close();
   } finally {
-    delete process.env.OCX_LIVE_FRAME_LOG;
+    if (previousFrameLog === undefined) delete process.env.OCX_LIVE_FRAME_LOG;
+    else process.env.OCX_LIVE_FRAME_LOG = previousFrameLog;
     globalThis.WebSocket = RealWebSocket;
     await server.stop(true);
     await upstream.stop(true);
+  }
+});
+
+test("frame diagnostics retain only metadata for text, binary, and bounded views", async () => {
+  const { logLiveSidebandFrame } = await import("../../src/server/live");
+  const previousFrameLog = process.env.OCX_LIVE_FRAME_LOG;
+  const frameLogPath = join(TEST_DIR, "frame-metadata.jsonl");
+  const damagedText = "private-voice-�";
+  const encoded = new TextEncoder().encode(damagedText);
+  const padded = new TextEncoder().encode("�safe�");
+  const frames: Array<{ data: unknown; kind: string; bytes: number; fffd: boolean }> = [
+    { data: damagedText, kind: "text", bytes: 17, fffd: true },
+    { data: encoded.buffer, kind: "binary", bytes: 17, fffd: true },
+    { data: Buffer.from(encoded), kind: "binary", bytes: 17, fffd: true },
+    // Replacement characters outside this view must not affect the flag or byte count.
+    { data: new Uint8Array(padded.buffer, 3, 4), kind: "binary", bytes: 4, fffd: false },
+    { data: new DataView(padded.buffer, 3, 4), kind: "binary", bytes: 4, fffd: false },
+    { data: "한글", kind: "text", bytes: 6, fffd: false },
+    { data: new Uint8Array([0xff]), kind: "binary", bytes: 1, fffd: true },
+  ];
+  try {
+    process.env.OCX_LIVE_FRAME_LOG = frameLogPath;
+    for (const frame of frames) logLiveSidebandFrame("u2c", frame.data);
+    logLiveSidebandFrame("c2u", { privateText: damagedText });
+    const raw = readFileSync(frameLogPath, "utf8");
+    const records = raw.trim().split("\n").map(line => JSON.parse(line));
+    expect(records).toHaveLength(frames.length);
+    records.forEach((record, index) => {
+      const expected = frames[index]!;
+      expect(record).toEqual({
+        ts: expect.any(String), dir: "u2c", kind: expected.kind,
+        bytes: expected.bytes, fffd: expected.fffd,
+      });
+      expect(Number.isNaN(Date.parse(record.ts))).toBe(false);
+    });
+    for (const content of [damagedText, "safe", "한글", "�"]) expect(raw).not.toContain(content);
+    delete process.env.OCX_LIVE_FRAME_LOG;
+    logLiveSidebandFrame("c2u", damagedText);
+    expect(readFileSync(frameLogPath, "utf8")).toBe(raw);
+    process.env.OCX_LIVE_FRAME_LOG = TEST_DIR;
+    expect(() => logLiveSidebandFrame("c2u", damagedText)).not.toThrow();
+  } finally {
+    if (previousFrameLog === undefined) delete process.env.OCX_LIVE_FRAME_LOG;
+    else process.env.OCX_LIVE_FRAME_LOG = previousFrameLog;
   }
 });
 

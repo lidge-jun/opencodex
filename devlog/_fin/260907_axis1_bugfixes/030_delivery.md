@@ -1,0 +1,7 @@
+# wp2: hosted proof and manual-stack landing
+
+Publish task-owned branches with --no-verify. Standard PR template, source links, truthful skipped-local/lower-CI disclosure and contributor trailers. Lower layers use [skip ci], final cumulative head runs existing Cross-platform CI; never modify shared workflow filters or fabricate checks. On final failure inspect failing jobs, fix owned defects, and only then use lower CI to localize ambiguity. Leave unrelated/unresolvable slices unmerged with evidence.
+
+Before admin merge: source/security review findings resolved, final CI SHA/run pinned, current PR head and manual membership inspected. Record owner-authorized admin review/lower-CI exception. Merge bottom-up with original commits preserved; do not delete parent branches while children depend on them. Retarget child to dev after parent landing. Reconcile concurrent dev before claiming final integrated proof. Verify every merge SHA is ancestor of refreshed origin/dev. Close #3809 only after its accepted replacement scope lands; keep #3661 open for multipart/retry and #3464 open if broader original acceptance remains unresolved. No release/deploy.
+
+Final full platform evidence uses workflow_dispatch ci.yml on the final cumulative branch, because ordinary PR CI excludes the Windows runtime job. Cancel only duplicate task-owned PR CI runs; skipped/cancelled runs are not passing evidence.

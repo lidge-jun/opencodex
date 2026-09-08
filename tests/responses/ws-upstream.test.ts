@@ -1,8 +1,12 @@
-import { afterEach, describe, expect, jest, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, jest, test } from "bun:test";
 import { providerFetch } from "../../src/server/responses/fetch-helpers";
 import { handleResponses } from "../../src/server/responses";
 import { isEagerRelaySseResponse } from "../../src/server/relay";
 import { isWin32EagerRewrite } from "../../src/lib/bun-stream-caps";
+import { fetchWithTransientRetry } from "../../src/lib/upstream-retry";
+import { codexWsExchange } from "../../src/server/responses/codex-ws-exchange";
+import { CodexWsSession } from "../../src/server/responses/codex-ws-session";
+import { prepareCodexWsRequest } from "../../src/server/responses/codex-ws-request";
 import { CodexWsMetadata, CODEX_WS_METADATA_MAX_BYTES, CODEX_WS_METADATA_MAX_VALUE_BYTES } from "../../src/server/responses/codex-ws-metadata";
 import {
   bunSupportsBoundedCodexWsRelay,
@@ -11,6 +15,7 @@ import {
   codexWsUpstreamFetch as rawCodexWsUpstreamFetch,
   currentBunRuntimeIdentity,
   isCodexWsUpstreamResponse,
+  isCodexWsQuotaObservedResponse,
   MAX_CODEX_WS_CREATE_FRAME_BYTES,
   MAX_CODEX_WS_FRAME_BYTES,
   MAX_CODEX_WS_QUEUE_BYTES,
@@ -162,18 +167,24 @@ describe("shouldUseCodexWsUpstream", () => {
 });
 
 type Listener = (event: unknown) => void;
+type FakeWebSocketOptions = {
+  headers?: Record<string, string>;
+  proxy?: string;
+};
 
 /** Minimal scriptable stand-in for Bun's WebSocket. */
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
   static script: (ws: FakeWebSocket) => void = () => {};
   url: string;
+  options?: FakeWebSocketOptions;
   sent: string[] = [];
   closed = false;
   listeners = new Map<string, Listener[]>();
 
-  constructor(url: string) {
+  constructor(url: string, options?: FakeWebSocketOptions) {
     this.url = url;
+    this.options = options;
     FakeWebSocket.instances.push(this);
     queueMicrotask(() => FakeWebSocket.script(this));
   }
@@ -205,12 +216,23 @@ class FakeWebSocket {
 
 const RealWebSocket = globalThis.WebSocket;
 const RealFetch = globalThis.fetch;
+const PROXY_ENV_KEYS = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy"] as const;
+let savedProxyEnv: Record<string, string | undefined>;
+
+beforeEach(() => {
+  savedProxyEnv = Object.fromEntries(PROXY_ENV_KEYS.map(key => [key, process.env[key]]));
+  for (const key of PROXY_ENV_KEYS) delete process.env[key];
+});
 
 afterEach(() => {
   globalThis.WebSocket = RealWebSocket;
   globalThis.fetch = RealFetch;
   FakeWebSocket.instances = [];
   FakeWebSocket.script = () => {};
+  for (const key of PROXY_ENV_KEYS) delete process.env[key];
+  for (const key of PROXY_ENV_KEYS) {
+    if (savedProxyEnv[key] !== undefined) process.env[key] = savedProxyEnv[key];
+  }
 });
 
 function installFake(script: (ws: FakeWebSocket) => void) {
@@ -613,6 +635,41 @@ describe("codexWsUpstreamFetch", () => {
     expect(text).not.toContain("must-not-leak");
   });
 
+  test("passes the selected proxy without changing handshake headers", async () => {
+    process.env.HTTPS_PROXY = "http://proxy.example:8080";
+    installFake(ws => {
+      ws.emit("open", {});
+      ws.emit("message", { data: JSON.stringify({ type: "response.completed", response: {} }) });
+    });
+
+    await codexWsUpstreamFetch(CODEX_URL, streamingInit(), (() => {
+      throw new Error("fallback must not run");
+    }) as unknown as typeof fetch);
+
+    const options = FakeWebSocket.instances[0]!.options;
+    expect(options?.proxy).toBe("http://proxy.example:8080");
+    expect(options?.headers?.authorization).toBe("Bearer test");
+    expect(options?.headers?.["openai-beta"]).toContain("responses_websockets");
+    expect(options?.headers?.["content-type"]).toBeUndefined();
+  });
+
+  test.each([
+    ["unsupported protocol", "socks5://proxy.example:1080"],
+    ["invalid URL", "not a proxy URL"],
+  ])("falls back once without dialing for an %s", async (_label, proxy) => {
+    process.env.HTTPS_PROXY = proxy;
+    const sentinel = new Response("sse-fallback");
+    let fallbackCalls = 0;
+    const response = await codexWsUpstreamFetch(CODEX_URL, streamingInit(), (async () => {
+      fallbackCalls += 1;
+      return sentinel;
+    }) as typeof fetch);
+
+    expect(response).toBe(sentinel);
+    expect(fallbackCalls).toBe(1);
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
   test("relays event frames as an SSE response and sends one response.create frame", async () => {
     installFake(ws => {
       ws.emit("open", {});
@@ -673,9 +730,283 @@ describe("codexWsUpstreamFetch", () => {
     expect(FakeWebSocket.instances[0].closed).toBe(true);
   });
 
+  describe("wrapped create refusals", () => {
+    const refusal = { type: "error", status_code: 429, error: {
+      type: "usage_limit_reached", message: "The usage limit has been reached", plan_type: "plus", resets_at: 1_800_000_000,
+    } };
+    const emit = (ws: FakeWebSocket, payload: Record<string, unknown>) =>
+      ws.emit("message", { data: JSON.stringify(payload, null, 2) });
+
+    async function receive(payload: Record<string, unknown>, prelude: Record<string, unknown>[] = [],
+      url = CODEX_URL, onQuota?: (headers: Headers) => void) {
+      installFake(ws => {
+        ws.emit("open", {});
+        for (const event of prelude) emit(ws, event);
+        emit(ws, payload);
+        ws.emit("close", { code: 1000, reason: "normal" });
+      });
+      let attempts = 0;
+      let fallbacks = 0;
+      const response = await fetchWithTransientRetry(() => {
+        attempts++;
+        return rawCodexWsUpstreamFetch(url, streamingInit(), (async () => {
+          fallbacks++;
+          throw new Error("a sent create must not be resent over HTTP");
+        }) as typeof fetch, BOUNDED_WS_RUNTIME, onQuota);
+      }, {});
+      const ws = FakeWebSocket.instances.at(-1)!;
+      expect(attempts).toBe(1);
+      expect(fallbacks).toBe(0);
+      expect(ws.sent).toHaveLength(1);
+      expect(ws.closed).toBe(true);
+      expect([...ws.listeners.values()].every(listeners => listeners.length === 0)).toBe(true);
+      return response;
+    }
+
+    // Independent oracle: openai/codex d2d5b702, responses_websocket.rs:1016-1064
+    // explicitly accepts numeric window-minutes as the HTTP header string "15".
+    test.each(["status", "status_code"])("returns %s 429 as bounded HTTP JSON with scalar quota headers", async field => {
+      const { status_code, ...frame } = refusal;
+      const response = await receive({ ...frame, [field]: status_code, headers: {
+        "X-Codex-Primary-Used-Percent": "100.0", "X-Codex-Primary-Window-Minutes": 15,
+        "X-Codex-Primary-Reset-At": 1_800_000_000, "X-Codex-Credits-Has-Credits": true,
+        "Retry-After": 60, "X-Request-Id": "fixture-request",
+        "x-codex-extra-secondary-used-percent": "25", "x-ratelimit-remaining-requests": 0,
+      } });
+      expect(response.status).toBe(429);
+      expect(response.headers.get("content-type")).toBe("application/json");
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("x-codex-primary-used-percent")).toBe("100.0");
+      expect(response.headers.get("x-codex-primary-window-minutes")).toBe("15");
+      expect(response.headers.get("x-codex-primary-reset-at")).toBe("1800000000");
+      expect(response.headers.get("x-codex-credits-has-credits")).toBe("true");
+      expect(response.headers.get("retry-after")).toBe("60");
+      expect(response.headers.get("x-request-id")).toBe("fixture-request");
+      expect(response.headers.get("x-codex-extra-secondary-used-percent")).toBe("25");
+      expect(response.headers.get("x-ratelimit-remaining-requests")).toBe("0");
+      expect(isCodexWsUpstreamResponse(response)).toBe(false);
+      expect(isCodexWsQuotaObservedResponse(response)).toBe(false);
+      expect(await response.json()).toEqual({ error: refusal.error });
+    });
+
+    test.each([400, 401, 402, 403, 404, 408, 499])("preserves a precommit HTTP %i refusal", async status_code => {
+      const response = await receive({ ...refusal, status_code });
+      expect(response.status).toBe(status_code);
+      expect(await response.json()).toEqual({ error: refusal.error });
+    });
+
+    test.each([
+      { status_code: undefined }, { status_code: null }, { status_code: "429" }, { status_code: true },
+      { status_code: 429.5 }, { status_code: 399 }, { status_code: 500 }, { status_code: 502 },
+      { status_code: 503 }, { status_code: 599 }, { status_code: 429, status: 429 },
+      { status_code: 502, status: 429 }, { status_code: null, status: 401 },
+      { status_code: "bad", status: 401 }, { error: [] }, { error: "refused" },
+      { error: { code: 42 } }, { error: { message: false } }, { headers: [] }, { headers: "bad" },
+      { stream_id: "another-stream" },
+    ])("keeps an ineligible wrapper on SSE without outer retry: %j", async fields => {
+      const response = await receive({ ...refusal, ...fields });
+      expect(response.status).toBe(200);
+      expect(isCodexWsUpstreamResponse(response)).toBe(true);
+      expect(await response.text()).toContain("event: error\ndata: ");
+    });
+
+    test.each([undefined, null, {}])("handles an optional error object: %j", async error => {
+      const response = await receive({ ...refusal, error, headers: null });
+      expect(response.status).toBe(429);
+      expect(await response.json()).toEqual({ error: error ?? {
+        type: "upstream_error", message: "Upstream rejected the request",
+      } });
+    });
+
+    test("drops injection, credentials, framing and connection-nominated metadata", async () => {
+      const forbidden = ["Authorization", "Proxy-Authorization", "Cookie", "Set-Cookie", "Content-Length",
+        "Content-Encoding", "Transfer-Encoding", "Keep-Alive", "Proxy-Connection", "TE", "Trailer", "Upgrade",
+        "Content-Range", "Content-Location", "ETag", "Last-Modified", "Digest", "Content-MD5",
+        "Access-Control-Allow-Origin", "Location", "WWW-Authenticate", "x-codex-private-token"];
+      const error = { message: "refusal\r\nX-Injected: body text only" };
+      const response = await receive({ ...refusal, error, headers: {
+        ...Object.fromEntries(forbidden.map(name => [name, "must-not-leak"])),
+        "Content-Type": "text/html", "Cache-Control": "public, max-age=3600",
+        Connection: "Retry-After, X-Codex-Primary-Used-Percent, content-type, cache-control",
+        connection: "X-Request-Id", "Retry-After": "60", "X-Request-Id": "must-not-leak",
+        "x-codex-primary-used-percent": "100", "x-codex-secondary-used-percent": "99",
+        "x-ratelimit-bad name": "invalid", "x-ratelimit-crlf": "ok\r\nSet-Cookie: injected",
+        "x-ratelimit-nul": "bad\0value", "x-ratelimit-nonbyte": "漢字",
+        "x-ratelimit-array": [1], "x-ratelimit-object": { value: 1 }, "x-ratelimit-null": null,
+        "X-RateLimit-Remaining": "2", "x-ratelimit-remaining": "3",
+      } }, [{ type: "codex.response.metadata", headers: {
+        "retry-after": "10", "x-request-id": "prelude-request", "x-codex-primary-used-percent": "30",
+      } }]);
+      expect(response.status).toBe(429);
+      expect(Object.fromEntries(response.headers)).toEqual({
+        "cache-control": "no-store", "content-type": "application/json",
+        "x-codex-secondary-used-percent": "99", "x-ratelimit-remaining": "3",
+      });
+      expect(await response.json()).toEqual({ error });
+    });
+
+    test("merges prelude quota with refusal updates without replaying the observer", async () => {
+      const observations: string[] = [];
+      const response = await receive({ ...refusal, headers: { "x-codex-primary-used-percent": 100 } }, [
+        { type: "codex.rate_limits", rate_limits: {
+          primary: { used_percent: 30, window_minutes: 15, reset_at: 1_800_000_000 },
+          secondary: { used_percent: 40, window_minutes: 10080, reset_at: 1_900_000_000 },
+        } },
+        { type: "codex.response.metadata", headers: { "x-models-etag": "prelude-catalog" } },
+      ], CODEX_URL, headers => observations.push(headers.get("x-codex-primary-used-percent")!));
+      expect(response.status).toBe(429);
+      expect(response.headers.get("x-codex-primary-used-percent")).toBe("100");
+      expect(response.headers.has("x-codex-primary-window-minutes")).toBe(false);
+      expect(response.headers.has("x-codex-primary-reset-at")).toBe(false);
+      expect(response.headers.get("x-codex-secondary-used-percent")).toBe("40");
+      expect(response.headers.get("x-codex-secondary-reset-at")).toBe("1900000000");
+      expect(response.headers.get("x-models-etag")).toBe("prelude-catalog");
+      expect(observations).toEqual(["30"]);
+      expect(isCodexWsQuotaObservedResponse(response)).toBe(false);
+      expect(await response.json()).toEqual({ error: refusal.error });
+    });
+
+    const boundedHeaders = (count: number, value = "1") =>
+      Object.fromEntries(Array.from({ length: count }, (_, i) => [`x-ratelimit-fixture-${i}`, value]));
+    const quotaFamilies = (count: number) => Object.fromEntries(
+      Array.from({ length: count }, (_, i) => [`x-codex-family-${i}-primary-used-percent`, "1"]));
+    test.each([
+      ["value", { "x-models-etag": "x".repeat(4096) }, true],
+      ["value overflow", { "x-models-etag": "x".repeat(4097) }, false],
+      ["UTF-8 value", { "x-models-etag": "é".repeat(2048) }, true],
+      ["UTF-8 overflow", { "x-models-etag": "é".repeat(2049) }, false],
+      ["header count", boundedHeaders(128), true], ["header count overflow", boundedHeaders(129), false],
+      ["families", quotaFamilies(16), true], ["family overflow", quotaFamilies(17), false],
+      ["total bytes", boundedHeaders(8, "x".repeat(3990)), true],
+      ["total byte overflow", boundedHeaders(8, "x".repeat(4096)), false],
+    ] as Array<[string, Record<string, string>, boolean]>)("enforces metadata budget: %s", async (_name, headers, accepted) => {
+      const response = await receive({ ...refusal, headers });
+      if (accepted) {
+        expect(response.status).toBe(429);
+        for (const [name, value] of Object.entries(headers)) expect(response.headers.get(name)).toBe(value);
+        expect(await response.json()).toEqual({ error: refusal.error });
+      } else {
+        expect(response.status).toBe(200);
+        expect(isCodexWsUpstreamResponse(response)).toBe(true);
+        await expect(response.text()).rejects.toThrow("metadata");
+      }
+    });
+
+    test("bounds the cumulative prelude and rejection metadata even when updates replace values", async () => {
+      const response = await receive({ ...refusal, headers: boundedHeaders(5, "x".repeat(4096)) }, [
+        { type: "codex.response.metadata", headers: boundedHeaders(4, "y".repeat(4096)) },
+      ]);
+      expect(response.status).toBe(200);
+      await expect(response.text()).rejects.toThrow("metadata");
+    });
+
+    test.each([
+      ["response.created", 429], ["response.output_text.delta", 429],
+      ["response.in_progress", 429], ["response.created", 502],
+    ] as Array<[string, number]>)(
+      "does not convert or retry a refusal after %s (status %i)", async (type, status_code) => {
+        const response = await receive({ ...refusal, status_code }, [{ type, response: { id: "r1" }, delta: "output" }]);
+        expect(response.status).toBe(200);
+        const text = await response.text();
+        expect(text).toContain(`event: ${type}`);
+        expect(text).toContain("event: error");
+        expect(response.headers.has("cache-control")).toBe(false);
+      });
+
+    test.each(["websocket_connection_limit_reached", "previous_response_not_found"])(
+      "does not add native special-code reconnect for %s", async code => {
+        const response = await receive({ type: "error", error: { code } });
+        expect(response.status).toBe(200);
+        expect(await response.text()).toContain(code);
+      });
+
+    test("keeps noncanonical providers on the stream path", async () => {
+      const response = await receive(refusal, [], "https://gateway.example/v1/responses");
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain("event: error");
+    });
+
+    test.each([CODEX_URL, "https://gateway.example/v1/responses"])(
+      "settles synchronous error/send-throw/close races and detaches deadlines for %s", async url => {
+        jest.useFakeTimers();
+        const abort = new AbortController();
+        let fallbacks = 0;
+        try {
+          installFake(ws => {
+            ws.send = data => {
+              ws.sent.push(data);
+              emit(ws, refusal);
+              throw new Error("send threw after a response was received");
+            };
+            ws.emit("open", {});
+          });
+          const response = await rawCodexWsUpstreamFetch(url, { ...streamingInit(), signal: abort.signal },
+            (async () => { fallbacks++; throw new Error("unexpected fallback"); }) as typeof fetch, BOUNDED_WS_RUNTIME);
+          const ws = FakeWebSocket.instances.at(-1)!;
+          abort.abort(new Error("late abort"));
+          ws.emit("error", {});
+          emit(ws, { type: "codex.rate_limits", rate_limits: { primary: { used_percent: 10 } } });
+          ws.emit("close", {});
+          jest.advanceTimersByTime(CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS + 10_000);
+          expect(response.status).toBe(url === CODEX_URL ? 429 : 200);
+          if (url === CODEX_URL) expect(await response.json()).toEqual({ error: refusal.error });
+          else expect(await response.text()).toContain("event: error");
+          expect(ws.sent).toHaveLength(1);
+          expect(ws.closed).toBe(true);
+          expect(fallbacks).toBe(0);
+          expect([...ws.listeners.values()].every(listeners => listeners.length === 0)).toBe(true);
+        } finally { jest.useRealTimers(); }
+      });
+
+    test.each([false, true])("disposes a retained socket; correlation precedes conversion (foreign stream: %s)", async foreign => {
+      installFake(ws => {
+        ws.emit("open", {});
+        emit(ws, { type: "response.created", response: { id: "completed-first" } });
+        emit(ws, { type: "response.completed", response: { id: "completed-first", status: "completed" } });
+      });
+      const init = streamingInit();
+      const prepared = prepareCodexWsRequest(CODEX_URL, init)!;
+      const session = new CodexWsSession("wss://chatgpt.com/backend-api/codex/responses", prepared.headers, true);
+      let fallbacks = 0;
+      const options = { session, url: CODEX_URL, init, prepared, sseFallback: (async () => {
+        fallbacks++;
+        throw new Error("retained create must not fall back");
+      }) as typeof fetch };
+      try {
+        expect(session.reserve()).toBe(true);
+        await (await codexWsExchange(options)).text();
+        expect(session.reused).toBe(true);
+        expect(session.closed).toBe(false);
+        const ws = FakeWebSocket.instances.at(-1)!;
+        let terminations = 0;
+        Object.assign(ws, { terminate: () => { terminations++; } });
+        ws.send = data => { ws.sent.push(data); emit(ws, { ...refusal, ...(foreign ? { stream_id: "foreign" } : {}) }); };
+        expect(session.reserve()).toBe(true);
+        const response = await codexWsExchange(options);
+        if (foreign) {
+          expect(response.status).toBe(200);
+          await expect(response.text()).rejects.toThrow("identity mismatch");
+        } else {
+          expect(response.status).toBe(429);
+          expect(isCodexWsUpstreamResponse(response)).toBe(false);
+          expect(await response.json()).toEqual({ error: refusal.error });
+        }
+        expect(ws.sent).toHaveLength(2);
+        expect(ws.closed).toBe(true);
+        expect(terminations).toBe(1);
+        expect(session.closed).toBe(true);
+        expect(session.busy).toBe(false);
+        expect(session.hasCompleted("completed-first")).toBe(false);
+        expect(session.reserve()).toBe(false);
+        expect(fallbacks).toBe(0);
+        expect([...ws.listeners.values()].every(listeners => listeners.length === 0)).toBe(true);
+      } finally { session.dispose(); }
+    });
+  });
+
   test.each(["error", "response.completed"])("multiline upstream %s JSON remains one valid SSE data value", async type => {
     const payload = type === "error"
-      ? { type, status: 400, error: { type: "invalid_request_error", message: "fixture refusal" } }
+      ? { type, error: { type: "invalid_request_error", message: "fixture refusal" } }
       : { type, response: { id: "pretty-response", status: "completed", output: [] } };
     installFake(ws => {
       ws.emit("open", {});
@@ -742,6 +1073,7 @@ describe("codexWsUpstreamFetch", () => {
   });
 
   test("falls back to the HTTP fetch when the upgrade is rejected before open", async () => {
+    process.env.HTTPS_PROXY = "http://proxy.example:8080";
     installFake(ws => ws.close());
     const sentinel = new Response("sse-fallback", { status: 429 });
     let fallbackCalls = 0;
@@ -754,6 +1086,7 @@ describe("codexWsUpstreamFetch", () => {
     expect(response).toBe(sentinel);
     expect(isCodexWsUpstreamResponse(response)).toBe(false);
     expect(fallbackCalls).toBe(1);
+    expect(FakeWebSocket.instances[0]!.options?.proxy).toBe("http://proxy.example:8080");
   });
 
   test("falls back to the HTTP fetch when the upgrade deadline elapses without open or close", async () => {
@@ -888,15 +1221,17 @@ describe("codexWsUpstreamFetch", () => {
   });
 
   test("preserves caller headers on the handshake without fabricating an originator", async () => {
-    const seen: Record<string, string>[] = [];
+    process.env.HTTPS_PROXY = "http://proxy.example:8080";
+    process.env.NO_PROXY = "chatgpt.com:443";
+    const seen: FakeWebSocketOptions[] = [];
     FakeWebSocket.script = ws => {
       ws.emit("open", {});
       ws.emit("message", { data: JSON.stringify({ type: "response.completed", response: {} }) });
     };
     class HeaderCapturingWebSocket extends FakeWebSocket {
-      constructor(url: string, options?: { headers?: Record<string, string> }) {
-        super(url);
-        seen.push(options?.headers ?? {});
+      constructor(url: string, options?: FakeWebSocketOptions) {
+        super(url, options);
+        seen.push(options ?? {});
       }
     }
     globalThis.WebSocket = HeaderCapturingWebSocket as unknown as typeof WebSocket;
@@ -905,18 +1240,19 @@ describe("codexWsUpstreamFetch", () => {
     await codexWsUpstreamFetch(CODEX_URL, streamingInit(), fallback);
     // Without a caller originator none is invented: pool/forward traffic must
     // not impersonate Codex CLI (metadata-integrity contract).
-    expect(seen[0].originator).toBeUndefined();
-    expect(seen[0]["openai-beta"]).toContain("responses_websockets");
-    expect(seen[0].authorization).toBe("Bearer test");
+    expect(seen[0].proxy).toBeUndefined();
+    expect(seen[0].headers?.originator).toBeUndefined();
+    expect(seen[0].headers?.["openai-beta"]).toContain("responses_websockets");
+    expect(seen[0].headers?.authorization).toBe("Bearer test");
     // HTTP body-framing headers do not belong on a WS handshake.
-    expect(seen[0]["content-type"]).toBeUndefined();
+    expect(seen[0].headers?.["content-type"]).toBeUndefined();
 
     // A genuine caller originator is forwarded verbatim.
     await codexWsUpstreamFetch(CODEX_URL, {
       ...streamingInit(),
       headers: { ...streamingInit().headers as Record<string, string>, originator: "codex_cli_rs" },
     }, fallback);
-    expect(seen[1].originator).toBe("codex_cli_rs");
+    expect(seen[1].headers?.originator).toBe("codex_cli_rs");
   });
 
   test("aborting before open rejects like an aborted fetch", async () => {
@@ -1282,6 +1618,8 @@ describe("oversized Codex create frames", () => {
   });
 
   test("dials the configured provider's own wss URL for an opt-in upstream", async () => {
+    process.env.HTTPS_PROXY = "http://proxy.example:8080";
+    process.env.NO_PROXY = "sub2api.example.com:443";
     installFake(ws => {
       ws.emit("open", {});
       ws.emit("message", { data: JSON.stringify({ type: "response.completed", response: { id: "r-ws" } }) });
@@ -1294,6 +1632,7 @@ describe("oversized Codex create frames", () => {
     );
     expect(FakeWebSocket.instances).toHaveLength(1);
     expect(FakeWebSocket.instances[0]!.url).toBe("wss://sub2api.example.com/v1/responses");
+    expect(FakeWebSocket.instances[0]!.options?.proxy).toBeUndefined();
     expect(response.headers.get("content-type")).toContain("text/event-stream");
     expect(await response.text()).toContain("response.completed");
   });

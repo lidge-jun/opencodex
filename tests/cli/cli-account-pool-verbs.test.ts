@@ -349,10 +349,83 @@ describe("generic OAuth pool-settings contract (#695)", () => {
     const calls: Captured[] = [];
     const out = capture();
     try {
-      expect(await cmdAutoSwitch(["google-antigravity", "threshold", "90"], genericDeps(() => ({ json: { ok: true, autoSwitchThreshold: 90 } }), calls))).toBe(0);
+      expect(await cmdAutoSwitch(["google-antigravity", "threshold", "90"], genericDeps(() => ({ json: { ok: true, autoSwitchThreshold: 90, enabled: true, inert: true } }), calls))).toBe(0);
     } finally { out.restore(); }
     expect(calls[0]).toMatchObject({ method: "PUT", path: "/api/oauth/accounts/pool", body: { provider: "google-antigravity", autoSwitchThreshold: 90 } });
-    expect(out.lines.join("\n")).toContain("threshold 90%");
+    expect(out.lines.join("\n")).toContain("stored threshold 90%");
+    expect(out.lines.join("\n")).toContain("inactive");
+    expect(out.lines.join("\n")).not.toContain("auto-switch: on");
+  });
+
+  test("generic status preserves configured pool state without claiming an inert threshold is active", async () => {
+    for (const poolEnabled of [true, false, null]) {
+      const calls: Captured[] = [];
+      const out = capture();
+      try {
+        expect(await cmdAutoSwitch(["google-antigravity", "status", "--json"], genericDeps(() => ({
+          json: { kind: "generic", enabled: poolEnabled, autoSwitchThreshold: 90, inert: true },
+        }), calls))).toBe(0);
+      } finally { out.restore(); }
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({ method: "GET", path: "/api/oauth/accounts/pool?provider=google-antigravity" });
+      expect(JSON.parse(out.lines.join("\n"))).toEqual({
+        provider: "google-antigravity", autoSwitchThreshold: 90, enabled: false, poolEnabled, inert: true,
+      });
+    }
+  });
+
+  test("generic writes report the confirmed DTO, not the requested threshold", async () => {
+    const calls: Captured[] = [];
+    const out = capture();
+    try {
+      expect(await cmdAutoSwitch(["google-antigravity", "on", "--json"], genericDeps(() => ({
+        json: { ok: true, enabled: null, autoSwitchThreshold: null, inert: true },
+      }), calls))).toBe(0);
+    } finally { out.restore(); }
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.body).toEqual({ provider: "google-antigravity", autoSwitchThreshold: 80 });
+    expect(JSON.parse(out.lines.join("\n"))).toEqual({
+      provider: "google-antigravity", autoSwitchThreshold: null, enabled: false, poolEnabled: null, inert: true,
+    });
+  });
+
+  test("generic missing or malformed capability stays unknown rather than enabled", async () => {
+    for (const json of [null, [], {}, { enabled: "true", autoSwitchThreshold: "90", inert: "false" },
+      { enabled: true, autoSwitchThreshold: 90 }, { enabled: true, autoSwitchThreshold: 101, inert: false },
+      { enabled: true, autoSwitchThreshold: 90, inert: false }]) {
+      const out = capture();
+      try {
+        expect(await cmdAutoSwitch(["google-antigravity", "status", "--json"], genericDeps(() => ({ json }), []))).toBe(0);
+      } finally { out.restore(); }
+      const result = JSON.parse(out.lines.join("\n"));
+      expect(result.enabled).toBe(false);
+      expect(result.autoSwitchThreshold === null || result.autoSwitchThreshold === 90).toBe(true);
+    }
+  });
+
+  test("a successful generic write with a null body reports unknown settings", async () => {
+    const calls: Captured[] = [];
+    const out = capture();
+    try {
+      expect(await cmdAutoSwitch(["google-antigravity", "off", "--json"], genericDeps(() => ({ json: null }), calls))).toBe(0);
+    } finally { out.restore(); }
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.body).toEqual({ provider: "google-antigravity", autoSwitchThreshold: 0 });
+    expect(JSON.parse(out.lines.join("\n"))).toEqual({
+      provider: "google-antigravity", autoSwitchThreshold: null, enabled: false, poolEnabled: null, inert: null,
+    });
+  });
+
+  test("an inert zero threshold remains distinct from an unset threshold", async () => {
+    for (const autoSwitchThreshold of [0, null]) {
+      const out = capture();
+      try {
+        expect(await cmdAutoSwitch(["google-antigravity", "status", "--json"], genericDeps(() => ({
+          json: { enabled: true, autoSwitchThreshold, inert: true },
+        }), []))).toBe(0);
+      } finally { out.restore(); }
+      expect(JSON.parse(out.lines.join("\n"))).toMatchObject({ autoSwitchThreshold, enabled: false, inert: true });
+    }
   });
 
   test("api-key providers are still refused before any request", async () => {

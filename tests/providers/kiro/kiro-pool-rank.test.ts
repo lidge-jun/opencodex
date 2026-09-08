@@ -143,7 +143,7 @@ describe("pre-dispatch account preference", () => {
     authMode: "oauth",
   } as unknown as OcxProviderConfig;
 
-  const config = { providers: { xai: OAUTH_PROVIDER } } as unknown as OcxConfig;
+  const config = { providers: { xai: OAUTH_PROVIDER }, oauthAccountFailover: { enabled: true } } as unknown as OcxConfig;
   const originalHome = process.env.OPENCODEX_HOME;
   let home: string;
 
@@ -159,7 +159,7 @@ describe("pre-dispatch account preference", () => {
     return getAccountSet(providerName)?.accounts.map(a => a.id) ?? [];
   }
 
-  test("the account with more headroom is chosen before the first request", async () => {
+  test("an enabled pool avoids a known-exhausted selected account", async () => {
     home = mkdtempSync(join(tmpdir(), "ocx-predispatch-"));
     process.env.OPENCODEX_HOME = home;
     clearGenericFailoverHealth();
@@ -167,7 +167,7 @@ describe("pre-dispatch account preference", () => {
     try {
       const ids = await seedAccounts(2);
       await setActiveAccount("xai", ids[0]!);
-      setCachedProviderAccountQuotaForTests("xai", ids[0]!, { monthlyPercent: 95, updatedAt: Date.now() });
+      setCachedProviderAccountQuotaForTests("xai", ids[0]!, { monthlyPercent: 100, updatedAt: Date.now() });
       setCachedProviderAccountQuotaForTests("xai", ids[1]!, { monthlyPercent: 5, updatedAt: Date.now() });
       expect(preferredInitialAccount(config, "xai")).toBe(ids[1]);
     } finally {
@@ -365,14 +365,7 @@ describe("pre-dispatch account preference", () => {
     }
   });
 
-  test("neither a redirecting nor a non-redirecting selection touches the credential store", async () => {
-    // loadAuthStore chmods the config dir, chmods the secret, and re-parses the whole
-    // credential file on every call — and this runs on the initial resolution of EVERY
-    // request. The steady state of this feature is a pool where one account consistently
-    // ranks higher, so the REDIRECTING path must be cached too — validating the winner here
-    // would put a second uncached read in front of every such request. Deleting the store
-    // proves it: an uncached path could not answer at all. Staleness is caught at
-    // resolution instead, inside a store read the resolver already performs.
+  test("removing the credential store invalidates an earlier selection proposal", async () => {
     home = mkdtempSync(join(tmpdir(), "ocx-predispatch-"));
     process.env.OPENCODEX_HOME = home;
     clearGenericFailoverHealth();
@@ -381,11 +374,11 @@ describe("pre-dispatch account preference", () => {
       const ids = await seedAccounts(2);
       await setActiveAccount("xai", ids[0]!);
       // Redirecting: the other account holds more headroom on every call.
-      setCachedProviderAccountQuotaForTests("xai", ids[0]!, { monthlyPercent: 95, updatedAt: Date.now() });
+      setCachedProviderAccountQuotaForTests("xai", ids[0]!, { monthlyPercent: 100, updatedAt: Date.now() });
       setCachedProviderAccountQuotaForTests("xai", ids[1]!, { monthlyPercent: 5, updatedAt: Date.now() });
       expect(preferredInitialAccount(config, "xai")).toBe(ids[1]);
       rmSync(join(home, "auth.json"), { force: true });
-      for (let i = 0; i < 4; i++) expect(preferredInitialAccount(config, "xai")).toBe(ids[1]);
+      for (let i = 0; i < 4; i++) expect(preferredInitialAccount(config, "xai")).toBeNull();
 
       // Non-redirecting: the active account already ranks best.
       setCachedProviderAccountQuotaForTests("xai", ids[0]!, { monthlyPercent: 5, updatedAt: Date.now() });
@@ -412,15 +405,14 @@ describe("pre-dispatch account preference", () => {
     try {
       const ids = await seedAccounts(2);
       await setActiveAccount("xai", ids[0]!);
-      setCachedProviderAccountQuotaForTests("xai", ids[0]!, { monthlyPercent: 95, updatedAt: Date.now() });
+      setCachedProviderAccountQuotaForTests("xai", ids[0]!, { monthlyPercent: 100, updatedAt: Date.now() });
       setCachedProviderAccountQuotaForTests("xai", ids[1]!, { monthlyPercent: 5, updatedAt: Date.now() });
       expect(preferredInitialAccount(config, "xai")).toBe(ids[1]);
 
       await removeAccount("xai", ids[1]!);
-      // Selection is a cached PREFERENCE, so it may still name the removed account...
-      expect(preferredInitialAccount(config, "xai")).toBe(ids[1]);
-      // ...and resolution is where that is caught. The request path absorbs this throw and
-      // falls back to the active account.
+      // Selection reads the authoritative roster; a removed target is never proposed.
+      expect(preferredInitialAccount(config, "xai")).toBeNull();
+      // The credential resolver independently rejects the removed identity.
       await expect(
         getValidAccessSnapshotForAccount("xai", ids[1]!, { requireUsableAccount: true }),
       ).rejects.toThrow();
@@ -446,11 +438,12 @@ describe("pre-dispatch account preference", () => {
     try {
       const ids = await seedAccounts(2);
       await setActiveAccount("xai", ids[0]!);
-      setCachedProviderAccountQuotaForTests("xai", ids[0]!, { monthlyPercent: 95, updatedAt: Date.now() });
+      setCachedProviderAccountQuotaForTests("xai", ids[0]!, { monthlyPercent: 100, updatedAt: Date.now() });
       setCachedProviderAccountQuotaForTests("xai", ids[1]!, { monthlyPercent: 5, updatedAt: Date.now() });
       expect(preferredInitialAccount(config, "xai")).toBe(ids[1]);
 
       await markAccountNeedsReauth("xai", ids[1]!, true);
+      expect(preferredInitialAccount(config, "xai")).toBeNull();
       // An ordinary resolve SUCCEEDS — the credential is still readable — which is exactly
       // why the flag must be checked inside the resolver rather than trusted to throw.
       await expect(getValidAccessSnapshotForAccount("xai", ids[1]!)).resolves.toBeDefined();

@@ -1660,6 +1660,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       let bufferBytes = 0;
       interface PendingToolCall {
         key: string;
+        indexKey?: string;
         id: string;
         name: string;
         args: string;
@@ -1848,17 +1849,29 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
               const rawId = rawToolCall.id;
               const idDelta = typeof rawId === "string" ? rawId : "";
               const rawIndex = rawToolCall.index;
+              // Only missing/null indexes are absent; every claimed index must be valid.
+              // Unsafe integers can collapse distinct wire indexes onto the same JS number.
+              // Reject before an alias can bind or any pending call can consume the fragment.
+              if (rawIndex !== undefined && rawIndex !== null
+                  && (typeof rawIndex !== "number"
+                    || !Number.isSafeInteger(rawIndex)
+                    || rawIndex < 0)) {
+                return yield* terminateWithError({
+                  ...invalidToolCallsEvent(rawToolCalls, "stream", pendingUsage),
+                  message: "upstream response contained invalid tool calls (invalid index)",
+                });
+              }
 
-              // Resolve the pending call BEFORE judging the fields. Some OpenAI-compatible
+              // Resolve the pending call BEFORE judging repeated string fields. Some OpenAI-compatible
               // streamers repeat an already-sent field as a non-string placeholder on a
               // continuation delta; judging first meant the whole stream died with a 502 even
               // though the value being repeated was already held in canonical form.
-              const key = typeof rawIndex === "number"
-                ? `i:${rawIndex}`
-                : idDelta
-                  ? `id:${idDelta}`
-                  : pendingToolCalls[pendingToolCalls.length - 1]?.key;
+              const indexKey = typeof rawIndex === "number" ? `i:${rawIndex}` : undefined;
+              const key = indexKey ?? (idDelta
+                ? `id:${idDelta}`
+                : pendingToolCalls[pendingToolCalls.length - 1]?.key);
               let call = key !== undefined ? pendingToolCalls.find(c => c.key === key) : undefined;
+              if (!call && indexKey !== undefined) call = pendingToolCalls.find(c => c.indexKey === indexKey);
               if (!call && idDelta) call = pendingToolCalls.find(c => c.id === idDelta);
               if (!call) {
                 call = {
@@ -1872,6 +1885,10 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
                 pendingToolCalls.push(call);
                 budget.openCall(call.key);
               }
+              // An ID-only call may learn its index from a later ID+index fragment. Retain that
+              // alias without changing the key that owns its argument budget. Only the first
+              // observed index binds: a repeated ID on a different index must not alias both.
+              if (indexKey !== undefined && call.indexKey === undefined) call.indexKey = indexKey;
 
               // Tolerance is per FIELD, keyed on that field's own provenance. A canonical name
               // says nothing about whether `arguments` was ever sent as a string, so it cannot

@@ -1,4 +1,7 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import * as proxyLiveness from "../../src/server/proxy-liveness";
+import * as cliHelp from "../../src/cli/help";
+import { getDefaultConfig } from "../../src/config";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -32,6 +35,7 @@ import {
 } from "../../src/lib/local-management-capability";
 import { findDeadPid } from "../helpers/dead-pid";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { STORE_BUDGET_MS } from "../helpers/test-budget";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-doctor-test");
 const TEST_CODEX_HOME = join(TEST_DIR, "codex");
@@ -778,6 +782,63 @@ describe("doctor abandoned response-state temps", () => {
     expect(lines).not.toContain("retried automatically");
     expect(lines).toContain("re-run this command");
   });
+});
+
+describe("doctor version skew projection", () => {
+  test.each([
+    ["2.42.0", "2.10.1-preview.20260805", "the running proxy is older"],
+    ["2.35.0", "2.36.1", "this ocx on PATH is older"],
+    ["2.43.0", "2.43.0", "ok ocx 2.43.0 matches the running proxy"],
+    ["2.43.0+a", "2.43.0+b", "neither can be identified as older"],
+    ["v2.43.0", "2.43.0", "neither can be identified as older"],
+    ["2.43.0", "unknown", null],
+    ["unknown", "2.43.0", null],
+    ["2.43.0", "0.0.0", null],
+    ["0.0.0", "0.0.0", null],
+    ["unknown", "unknown", null],
+    ["2.43.0", undefined, null],
+  ] as const)("projects CLI %s / proxy %s without false matches", async (cli, proxy, expected) => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-doctor-skew-"));
+    const codexHome = join(home, "codex");
+    const previousHome = process.env.OPENCODEX_HOME;
+    const previousCodexHome = process.env.CODEX_HOME;
+    const previousExitCode = process.exitCode;
+    const restore: Array<() => void> = [];
+    try {
+      // Runtime history diagnostics resolve and stat an explicit CODEX_HOME.
+      mkdirSync(codexHome, { recursive: true });
+      process.env.OPENCODEX_HOME = home;
+      process.env.CODEX_HOME = codexHome;
+      writeFileSync(join(home, "config.json"), JSON.stringify({ ...getDefaultConfig(), port: 9, codexAutoStart: false }));
+      const logged: string[] = [];
+      const log = spyOn(console, "log").mockImplementation((...args: unknown[]) => { logged.push(args.map(String).join(" ")); });
+      restore.push(() => log.mockRestore());
+      const version = spyOn(cliHelp, "packageVersion").mockReturnValue(cli);
+      restore.push(() => version.mockRestore());
+      // Other doctor sections probe upstream health; this diagnostic fixture must stay offline.
+      const fetch = spyOn(globalThis, "fetch").mockImplementation(async () => new Response(null, { status: 503 }));
+      restore.push(() => fetch.mockRestore());
+      const proxyInfo: proxyLiveness.LiveProxy = {
+        pid: null, port: 9, hostname: "127.0.0.1", source: "config", ...(proxy === undefined ? {} : { version: proxy }),
+      };
+      const live = spyOn(proxyLiveness, "findLiveProxy").mockResolvedValue(proxyInfo);
+      restore.push(() => live.mockRestore());
+      await runDoctor([]);
+      const output = logged.join("\n");
+      if (expected !== null) expect(output).toContain(expected);
+      else expect(output).not.toContain("does not match the running proxy");
+      if (cli !== "2.43.0" || proxy !== "2.43.0") expect(output).not.toContain("matches the running proxy");
+      if (expected === "the running proxy is older") expect(output).toContain("ocx service repair");
+    } finally {
+      for (const cleanup of restore.reverse()) cleanup();
+      process.exitCode = previousExitCode;
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+      removeTreeWithRetry(home);
+    }
+  }, STORE_BUDGET_MS);
 });
 
 describe("doctor reclaim wiring (end to end)", () => {

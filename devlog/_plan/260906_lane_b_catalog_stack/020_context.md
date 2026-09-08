@@ -634,3 +634,7 @@ index 35a7924ebe..36bf70be57 100644
 +  expect(loadConfig().providerContextCaps?.openai).toBe(350_000);
 +});
 ```
+
+## Consuming P refresh
+
+Source #3654 remains OPEN at 8facdb0d8c10109701015c0f6109fc67b1d9dd3c. Full binary-preserving patch applicability passes on verified visibility head e556cc9f7. The actual persistence field is providerContextCapValues. Preserve the prior visibility tests and all translated API paragraphs. A confirmed its config overlap is documentation-only; the executable proxy resolver changes live elsewhere. Owner admin steering and preparation-vs-merge gates are recorded in 000.

@@ -44,7 +44,7 @@ export function DashboardEffortCapPanel({ apiBase, d }: { apiBase: string; d: Da
   if (!maModeResolved || maMode === "v1") return null;
 
   return (
-    <div className="panel">
+    <div className="panel dash-effort-panel">
       <div className="injection-head">
         <span className="injection-label" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
           {t("dash.effortCapLabel")}
@@ -62,56 +62,58 @@ export function DashboardEffortCapPanel({ apiBase, d }: { apiBase: string; d: Da
             <IconInfo width={13} height={13} aria-hidden="true" />
           </button>
         </span>
-        <Select
-          value={effortCap}
-          options={[
-            { value: "", label: t("dash.effortCapNone") },
-            ...EFFORT_CAP_LEVELS.map(e => ({ value: e, label: e })),
-          ]}
-          onChange={async (v) => {
-            if (effortCapSaving) return;
-            setEffortCapSaving(true);
-            try {
-              const res = await fetch(`${apiBase}/api/effort-caps`, {
-                method: "PUT",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ effortCap: v || null }),
-              });
-              const data = await requireJson<{ ok: boolean; effortCap?: string | null; subagentEffortCap?: string | null }>(res);
-              setEffortCap(data.effortCap ?? "");
-              setSubagentEffortCap(data.subagentEffortCap ?? "");
-            } catch { /* ignore */ }
-            finally { setEffortCapSaving(false); }
-          }}
-          disabled={effortCapSaving}
-          label={t("dash.effortCapLabel")}
-          align="right"
-        />
-        <Select
-          value={subagentEffortCap}
-          options={[
-            { value: "", label: t("dash.effortCapNone") },
-            ...EFFORT_CAP_LEVELS.map(e => ({ value: e, label: e })),
-          ]}
-          onChange={async (v) => {
-            if (effortCapSaving) return;
-            setEffortCapSaving(true);
-            try {
-              const res = await fetch(`${apiBase}/api/effort-caps`, {
-                method: "PUT",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ subagentEffortCap: v || null }),
-              });
-              const data = await requireJson<{ ok: boolean; effortCap?: string | null; subagentEffortCap?: string | null }>(res);
-              setEffortCap(data.effortCap ?? "");
-              setSubagentEffortCap(data.subagentEffortCap ?? "");
-            } catch { /* ignore */ }
-            finally { setEffortCapSaving(false); }
-          }}
-          disabled={effortCapSaving}
-          label={t("dash.subagentEffortCapLabel")}
-          align="right"
-        />
+        <div className="dash-effort-controls">
+          <Select
+            value={effortCap}
+            options={[
+              { value: "", label: t("dash.effortCapNone") },
+              ...EFFORT_CAP_LEVELS.map(e => ({ value: e, label: e })),
+            ]}
+            onChange={async (v) => {
+              if (effortCapSaving) return;
+              setEffortCapSaving(true);
+              try {
+                const res = await fetch(`${apiBase}/api/effort-caps`, {
+                  method: "PUT",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ effortCap: v || null }),
+                });
+                const data = await requireJson<{ ok: boolean; effortCap?: string | null; subagentEffortCap?: string | null }>(res);
+                setEffortCap(data.effortCap ?? "");
+                setSubagentEffortCap(data.subagentEffortCap ?? "");
+              } catch { /* ignore */ }
+              finally { setEffortCapSaving(false); }
+            }}
+            disabled={effortCapSaving}
+            label={t("dash.effortCapLabel")}
+            align="right"
+          />
+          <Select
+            value={subagentEffortCap}
+            options={[
+              { value: "", label: t("dash.effortCapNone") },
+              ...EFFORT_CAP_LEVELS.map(e => ({ value: e, label: e })),
+            ]}
+            onChange={async (v) => {
+              if (effortCapSaving) return;
+              setEffortCapSaving(true);
+              try {
+                const res = await fetch(`${apiBase}/api/effort-caps`, {
+                  method: "PUT",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ subagentEffortCap: v || null }),
+                });
+                const data = await requireJson<{ ok: boolean; effortCap?: string | null; subagentEffortCap?: string | null }>(res);
+                setEffortCap(data.effortCap ?? "");
+                setSubagentEffortCap(data.subagentEffortCap ?? "");
+              } catch { /* ignore */ }
+              finally { setEffortCapSaving(false); }
+            }}
+            disabled={effortCapSaving}
+            label={t("dash.subagentEffortCapLabel")}
+            align="right"
+          />
+        </div>
       </div>
     </div>
   );
@@ -161,7 +163,7 @@ export function DashboardInjectionPanel({ d }: { apiBase: string; d: Dash }) {
 
 export function DashboardMaintenancePanel({ d }: { d: Dash }) {
   const {
-    t, runSync, syncing, updateTriggerRef, openUpdateDialog, updateLoading, updateOpen,
+    t, runSync, syncing, settingsSaving, updateTriggerRef, openUpdateDialog, updateLoading, updateOpen,
     syncResult, syncError, updateJob, reconnecting, clearSyncFeedback,
   } = d;
   const syncHoldsWarning = !!syncResult && (
@@ -209,7 +211,7 @@ export function DashboardMaintenancePanel({ d }: { d: Dash }) {
             <div className="muted text-control dash-sync-hint">{t("dash.syncModelsHint")}</div>
           </div>
           <div className="maintenance-actions">
-            <button type="button" className="btn btn-ghost btn-sm" onClick={handleRunSync} disabled={syncing}>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={handleRunSync} disabled={syncing || settingsSaving}>
               <IconRefresh className={syncing ? "spin-icon" : undefined} /> {syncing ? t("dash.syncing") : t("dash.syncRun")}
             </button>
             <button
@@ -436,7 +438,7 @@ function VisionAdvancedPopover({ t, open, triggerRef, onClose, maxValue, maxInva
 
 export function DashboardSidecarPanels({ d }: { d: Dash }) {
   const {
-    t, settings, settingsSaving, toggleCodexAutoStart,
+    t, settings, settingsSaving, syncing, toggleCodexAutoStart, toggleCodexDesktopAuthless,
     sidecar, sidecarSaving, sidecarModels, visionModels, models, saveSidecar,
     shadowCall, shadowCallSaving, shadowCallHelpTriggerRef, shadowCallHelpOpen, setShadowCallHelpOpen, saveShadowCall,
   } = d;
@@ -494,9 +496,29 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
             type="button"
             className={`switch ${settings?.codexAutoStart ?? true ? "on" : ""}`}
             onClick={toggleCodexAutoStart}
-            disabled={!settings || settingsSaving}
+            disabled={!settings || settingsSaving || syncing}
             aria-label={t("dash.codexAutoStart")}
             aria-pressed={settings?.codexAutoStart ?? true}
+          >
+            <span className="knob" />
+          </button>
+        </div>
+      </div>
+
+      <div className="panel">
+        <div className="spread">
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="font-semibold">{t("dash.codexDesktopAuthless")}</div>
+            <div className="muted setting-hint">{t("dash.codexDesktopAuthlessHint")}</div>
+            {settings?.catalogRefreshPending && <div className="muted setting-hint" role="status">{t("codexAuth.catalogRefreshPending")}</div>}
+          </div>
+          <button
+            type="button"
+            className={`switch ${settings?.codexDesktopAuthless ?? false ? "on" : ""}`}
+            onClick={toggleCodexDesktopAuthless}
+            disabled={!settings || settingsSaving || syncing}
+            aria-label={t("dash.codexDesktopAuthless")}
+            aria-pressed={settings?.codexDesktopAuthless ?? false}
           >
             <span className="knob" />
           </button>
@@ -625,7 +647,7 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
 
       <div className="panel" aria-busy={!shadowCall || undefined}>
         <div className="spread" style={{ alignItems: "center" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div className="dash-shadow-label" style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span className="font-semibold">{t("dash.shadowCallIntercept")}</span>
             <button
               ref={shadowCallHelpTriggerRef}
@@ -642,7 +664,7 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
             </button>
             <code className="muted text-caption">{`⚠ ${shadowSourceModelBadge(shadowCall?.sourceModels)}`}</code>
           </div>
-          <div className="setting-controls" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div className="setting-controls dash-shadow-controls">
             <button
               type="button"
               className={`switch ${shadowCall?.enabled ? "on" : ""}`}

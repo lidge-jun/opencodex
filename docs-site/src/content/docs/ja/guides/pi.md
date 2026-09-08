@@ -23,6 +23,9 @@ ocx export --client pi
       "baseUrl": "http://127.0.0.1:10100/v1",
       "api": "openai-completions",
       "apiKey": "$OPENCODEX_API_KEY",
+      "compat": {
+        "sendSessionAffinityHeaders": true
+      },
       "models": [
         {
           "id": "anthropic/claude-opus-5",
@@ -36,6 +39,8 @@ ocx export --client pi
   }
 }
 ```
+
+生成される Pi プロバイダーでは `compat.sendSessionAffinityHeaders` が有効です。設定をマージしたり手動で編集したりする際も、このフラグを保持してください。Pi が送る安定したセッション識別子から、OpenCodex が正規の OpenCode Go 接続先用の affinity を生成します。`cacheRetention` が `none` の場合、Pi は識別子を送信しないことがあります。
 
 モデル ID はプロキシの正規セレクターであるため、ルーティングされたモデルは `provider/model` (`anthropic/claude-opus-5`) として表示され、ネイティブ OpenAI スラグはプレフィックスなし (`gpt-5.6-sol`) のままになります。 `name` サフィックス (`(anthropic)`、`(native)`、`(routed)`) により、異なるアップストリームの 2 つの同じ名前のモデルが Pi のピッカーで区別できるようになります。
 

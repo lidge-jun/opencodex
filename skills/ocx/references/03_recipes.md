@@ -1,6 +1,7 @@
 # Recipes
 
-Each sequence below was run against a live proxy. Every command named here exists; where the
+The original sequences below were run against a live proxy; the Aside profile sequence was
+verified through an isolated live management handler and the production CLI. Every command named here exists; where the
 obvious-sounding command does *not* exist, that is called out rather than left as a trap.
 
 Preflight for all of them:
@@ -93,20 +94,61 @@ Read `accounts[]`. Two things to respect:
 `providers[]` and `models[]` carry `estimatedCostUsd`. Costs are estimates; `estimateReasons` in the
 log rows tells you why (for example `usage_estimated`, `expected_price_overlay`).
 
-## 5. Rotate an access key and confirm it went quiet
+## 5. Prepare an access-key rotation without exposing the new key
 
 ```bash
 ocx access key list --json
-ocx access key create rotated --json          # the plaintext key is in THIS response only
-ocx access key remove <old-id> --yes --json
-ocx access key list --json                    # the old id is gone; check usage on the rest
 ```
 
-Note the argument style: `create <name>` and `remove <id>` are **positionals**, not `--label` and
-`--id`. `remove` also refuses without `--yes`.
+Creating a key or starting a rotation returns a one-time plaintext credential in both text and
+JSON output. **Do not perform either operation in an agent session**, including through the
+aliases, executable wrappers, or management POST routes named in
+[Secret-bearing commands](../SKILL.md#secret-bearing-commands). Ask the user to perform that step
+in a terminal outside the agent session, configure and verify the replacement, and report only
+configuration confirmation and the non-secret key/rotation IDs. Never ask for the key itself.
 
-The list carries per-key usage, so a key whose count stops advancing is genuinely unused. The
-plaintext key appears once, in the `create` response, and is never retrievable again.
+Configuration confirmation is not revocation approval. Identify the existing key ID and obtain
+separate explicit revocation approval before taking either path below. An existing explicit
+approval for that exact revocation remains valid; do not ask again for the same action and ID.
+
+For an in-place rotation, commit the pending replacement on the same ID:
+
+```bash
+ocx access key rotate commit <id> <rotation-id> --json
+```
+
+For a separately created replacement, remove only the old ID:
+
+```bash
+ocx access key remove <old-id> --yes --json
+```
+
+After the command succeeds, inspect the matching result:
+
+```bash
+ocx access key list --json
+```
+
+For an in-place rotation, the same ID remains and `pendingRotation` disappears. For a separately
+created replacement, the old ID disappears. The list alone does not prove the replacement accepts
+traffic; use the user's successful connection verification as that evidence. `remove <id>` is
+positional, not `--id`, and refuses without `--yes`.
+
+To cancel a pending rotation, with authority to discard the replacement:
+
+```bash
+ocx access key rotate abort <id> <rotation-id> --json
+```
+
+Abort retains the old credential and removes the pending replacement. Re-list to inspect pending
+state. On stale, mismatched, or expired rotation IDs, or an uncertain commit result, inspect
+non-secret state and report the refusal or uncertainty. Do not start another rotation, delete the
+entry, or retrieve a secret as automatic recovery. Missing pending state alone is not proof of a
+successful commit: expiry and abort also clear it.
+
+The list carries per-key usage. A count that stops advancing shows no recorded new usage in that
+observation window; it does not prove no client still needs the key. Creation and rotation-start
+return the plaintext once; list does not return the full plaintext.
 
 An `ambiguous` footer on the list means two configured keys share an id, so per-key totals do not
 exist for them — do not attribute usage to either.
@@ -115,6 +157,7 @@ exist for them — do not attribute usage to either.
 
 ```bash
 ocx provider list --json
+ocx provider list --jsonl                   # one configured provider per line
 ocx provider add <name> --json                # registry providers auto-configure by name
 ocx provider test <name> --json
 ocx provider set-default <name> --json
@@ -205,3 +248,23 @@ Two absences are also expected and are not defects:
 provider sets `liveModels: false` deliberately — its authenticated roster includes image and voice
 models this Responses-agent provider cannot drive — so the absence of a live probe is a design
 decision, not a broken connection.
+
+## Aside profiles
+
+These commands and the Aside refresh in `ocx sync` require a compatible running ocx proxy.
+There is no local profile-file fallback when the server is unavailable or too old. Follow
+the [proxy upgrade, restart, and retry sequence](https://opencodex.me/guides/integrations/#aside-profile-controls),
+then fully quit and reopen Aside after its profile files update successfully.
+
+```bash
+ocx integration client status --client aside --json
+ocx integration client enable --client aside
+ocx integration client disable --client aside --profile 1
+ocx integration client history --client aside --profile 1
+ocx integration client restore --client aside --profile 1 --op <opId>
+```
+
+Read `profiles[]` to find numeric profile IDs. No profile selector means a bulk toggle; an
+explicit selector affects only that registered profile. Sync intent and actual file state
+are distinct, so inspect each result after a partial bulk operation. The CLI returns nonzero
+for a partial refusal. Never use the overwrite or drift flags merely to suppress a refusal.

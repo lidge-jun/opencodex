@@ -38,6 +38,7 @@ import { getConfigPath, saveConfig } from "../../src/config";
 import { CODEX_FORWARD_BASE_URL } from "../../src/providers/openai-tiers";
 import type { OcxConfig } from "../../src/types";
 import { setBundledCatalogCacheForTests } from "../../src/codex/catalog/bundled";
+import { catalogEntryEfforts } from "../../src/codex/catalog/effort";
 import {
   resetCodexRuntimeResolveCacheForTests,
   setCodexRuntimeResolveCacheForTests,
@@ -575,6 +576,35 @@ test("convergence preserves only provider-local degraded rows", async () => {
   expect(models.some(entry => entry.slug === "empty/stale")).toBe(false);
   expect(models.some(entry => entry.slug === "removed/ghost")).toBe(false);
   expect(models.some(entry => entry.slug === "external/vendor-model")).toBe(true);
+});
+
+test.each([
+  { efforts: ["none", "minimal", "low"], expected: ["low"], defaultEffort: "low" },
+  { efforts: ["none", "minimal"], expected: ["low"], defaultEffort: "low" },
+  { efforts: [], expected: [], defaultEffort: undefined },
+])("observed convergence bounds canonical custom efforts $efforts without reviving stale max", async fixture => {
+  seedObservedRuntimeSupport(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
+  const nextConfig = config(false);
+  nextConfig.customModels = [{
+    id: "astra-custom",
+    provider: "openai",
+    modelId: "gpt-6-astra",
+    reasoningEfforts: fixture.efforts,
+    defaultReasoningEffort: "minimal",
+  }];
+  writeCatalog([nativeEntry(), {
+    ...generatedRoutedEntry("openai/gpt-6-astra"),
+    opencodex_catalog_kind: "custom-model-v1",
+    supported_reasoning_levels: [{ effort: "minimal", description: "Stale" }, { effort: "max", description: "Stale max" }],
+    default_reasoning_level: "minimal",
+  }]);
+  for (let pass = 0; pass < 2; pass++) {
+    const catalog = await convergeCatalog(nextConfig);
+    const row = catalog.models?.find(entry => entry.slug === "openai/gpt-6-astra");
+    expect(row ? catalogEntryEfforts(row) : undefined).toEqual(fixture.expected);
+    expect(row?.default_reasoning_level).toBe(fixture.defaultEffort);
+    if (fixture.expected.length === 0) expect(row).not.toHaveProperty("default_reasoning_level");
+  }
 });
 
 function legacyCustomDeletionConfig(): OcxConfig {

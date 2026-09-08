@@ -27,6 +27,9 @@ ocx export --client pi
       "baseUrl": "http://127.0.0.1:10100/v1",
       "api": "openai-completions",
       "apiKey": "$OPENCODEX_API_KEY",
+      "compat": {
+        "sendSessionAffinityHeaders": true
+      },
       "models": [
         {
           "id": "anthropic/claude-opus-5",
@@ -40,6 +43,8 @@ ocx export --client pi
   }
 }
 ```
+
+В создаваемой конфигурации Pi включён `compat.sendSessionAffinityHeaders`. Сохраняйте этот флаг при объединении или ручном редактировании провайдера: Pi передаёт стабильный идентификатор сессии, из которого OpenCodex формирует affinity для канонического OpenCode Go. При `cacheRetention: none` Pi может не передавать идентификатор.
 
 Id моделей — это канонические селекторы прокси, поэтому маршрутизируемые модели появляются как
 `provider/model` (`anthropic/claude-opus-5`), а нативные slug OpenAI остаются без префикса

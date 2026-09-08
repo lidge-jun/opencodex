@@ -212,13 +212,28 @@ export async function readBoundedResponseBytes(
 	}
 }
 
-function decodeUtf8(chunks: readonly Uint8Array[], fatal: boolean): string {
+// Mark only exceptions thrown by our decoder, preserving their identity and TypeError contract.
+// Timeout-path flushing may fail too; retain that origin so callers do not lose the deadline.
+const decodeFailures = new WeakMap<object, "invalid_utf8" | "timeout">();
+
+export function boundedBodyDecodeFailure(error: unknown): "invalid_utf8" | "timeout" | undefined {
+	return error !== null && typeof error === "object" ? decodeFailures.get(error) : undefined;
+}
+
+function decodeUtf8(chunks: readonly Uint8Array[], fatal: boolean, timedOut = false): string {
 	const decoder = new TextDecoder("utf-8", { fatal });
-	let text = "";
-	for (const chunk of chunks) text += decoder.decode(chunk, { stream: true });
-	// Flush an incomplete trailing UTF-8 sequence deterministically.
-	text += decoder.decode();
-	return text;
+	try {
+		let text = "";
+		for (const chunk of chunks) text += decoder.decode(chunk, { stream: true });
+		// Flush an incomplete trailing UTF-8 sequence deterministically.
+		text += decoder.decode();
+		return text;
+	} catch (error) {
+		if (error !== null && typeof error === "object") {
+			decodeFailures.set(error, timedOut ? "timeout" : "invalid_utf8");
+		}
+		throw error;
+	}
 }
 
 /**
@@ -297,7 +312,7 @@ export async function readBoundedResponseBody(
 					"TimeoutError",
 				);
 				return {
-					text: decodeUtf8([retained.subarray(0, retainedBytes)], options.fatalUtf8 === true),
+					text: decodeUtf8([retained.subarray(0, retainedBytes)], options.fatalUtf8 === true, true),
 					truncated: true,
 					timedOut: true,
 					totalTimedOut: outcome === TOTAL_TIMEOUT,

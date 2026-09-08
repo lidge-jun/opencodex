@@ -57,6 +57,8 @@ beforeEach(() => {
     configurable: true,
     value: async (input: string) => {
       const url = String(input);
+      if (url.endsWith("/api/models")) return Response.json([]);
+      if (url.endsWith("/api/selected-models")) return Response.json({ selected: {}, available: {}, liveModelCounts: {} });
       if (!url.includes("/api/provider-quotas")) {
         return { ok: true, status: 200, json: async () => ({}), text: async () => "{}" } as unknown as Response;
       }

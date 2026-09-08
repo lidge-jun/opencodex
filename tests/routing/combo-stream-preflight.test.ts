@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import {
   comboStreamPayloadCommitsOutput,
   preflightComboStreamResponse,
@@ -12,6 +12,41 @@ const sse = (...payloads: unknown[]): Response => new Response(
 );
 
 const preflightChunkLimit = Math.max(1, Math.ceil(MAX_CLIENT_SSE_FRAME_BYTES / 1024));
+
+function prefixThenReadError(prefix: Uint8Array, error: Error): {
+  response: Response;
+  cancelSpy: () => ReturnType<typeof spyOn> | undefined;
+} {
+  let sentPrefix = false;
+  let cancelSpy: ReturnType<typeof spyOn> | undefined;
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (!sentPrefix) {
+        sentPrefix = true;
+        controller.enqueue(prefix);
+        return;
+      }
+      return Promise.reject(error);
+    },
+  });
+  const originalGetReader = stream.getReader.bind(stream);
+  stream.getReader = (() => {
+    const reader = originalGetReader();
+    cancelSpy = spyOn(reader, "cancel");
+    return reader;
+  }) as ReadableStream<Uint8Array>["getReader"];
+  return {
+    response: new Response(stream, { headers: { "content-type": "text/event-stream" } }),
+    cancelSpy: () => cancelSpy,
+  };
+}
+
+const createdPrefix = new TextEncoder().encode(`data: ${JSON.stringify({
+  type: "response.created",
+  response: { id: "r1", status: "in_progress" },
+})}
+
+`);
 
 describe("combo stream preflight", () => {
   test("keeps only lifecycle preamble replayable and treats unknown output conservatively", () => {
@@ -256,4 +291,176 @@ describe("combo stream preflight", () => {
     });
     expect(JSON.stringify(body)).not.toContain("provider_trace_id");
   });
+
+  const DECRYPT_REJECTION =
+    "Encrypted function output content could not be decrypted or decoded.";
+
+  const exactDecryptRetryable = (payload: unknown): boolean => {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+    const event = payload as {
+      type?: unknown;
+      message?: unknown;
+      error?: { message?: unknown };
+      response?: { error?: { message?: unknown } };
+    };
+    if (event.type !== "error" && event.type !== "response.failed" && event.type !== "response.incomplete") {
+      return false;
+    }
+    const message = event.error?.message
+      ?? event.response?.error?.message
+      ?? (event.type === "error" ? event.message : undefined);
+    return message === DECRYPT_REJECTION;
+  };
+
+  test("default 2-arg preflight commits a bare error, including exact decrypt, and preserves bytes", async () => {
+    expect(comboStreamPayloadCommitsOutput({ type: "error" })).toBe(true);
+    for (const payload of [
+      { type: "error", message: "unrelated upstream busy" },
+      { type: "error", message: DECRYPT_REJECTION },
+      { type: "error", error: { message: DECRYPT_REJECTION } },
+    ]) {
+      const source = sse(
+        { type: "response.created", response: { id: "r1", status: "in_progress" } },
+        payload,
+      );
+      const expected = await source.clone().text();
+      const result = await preflightComboStreamResponse(source, { model: "m1", provider: "a" });
+      expect(result.kind).toBe("accepted");
+      expect(await result.response.text()).toBe(expected);
+    }
+  });
+
+  test("explicit 3-arg decrypt predicate converts a pre-output bare error into a failed terminal", async () => {
+    const source = sse(
+      { type: "response.created", response: { id: "r1", status: "in_progress" } },
+      { type: "error", message: DECRYPT_REJECTION },
+    );
+    const original = await source.clone().text();
+    const result = await preflightComboStreamResponse(
+      source,
+      { model: "m1", provider: "a" },
+      exactDecryptRetryable,
+    );
+
+    expect(result.kind).toBe("failed");
+    expect(result.response.status).toBe(502);
+    expect(result.response.headers.get("content-type")).toContain("application/json");
+    expect(await result.response.text()).not.toBe(original);
+  });
+
+  test("an unrelated error followed by a matching failed terminal does not retry", async () => {
+    const source = sse(
+      { type: "response.created", response: { id: "r1", status: "in_progress" } },
+      { type: "error", message: "unrelated upstream busy" },
+      {
+        type: "response.failed",
+        response: {
+          status: "failed",
+          error: { type: "server_error", message: DECRYPT_REJECTION },
+        },
+      },
+    );
+    const expected = await source.clone().text();
+    const result = await preflightComboStreamResponse(
+      source,
+      { model: "m1", provider: "a" },
+      exactDecryptRetryable,
+    );
+
+    expect(result.kind).toBe("accepted");
+    expect(await result.response.text()).toBe(expected);
+  });
+
+  test("output before a decrypt bare error does not retry", async () => {
+    const source = sse(
+      { type: "response.created", response: { id: "r1", status: "in_progress" } },
+      { type: "response.output_text.delta", delta: "visible" },
+      { type: "error", message: DECRYPT_REJECTION },
+    );
+    const expected = await source.clone().text();
+    const result = await preflightComboStreamResponse(
+      source,
+      { model: "m1", provider: "a" },
+      exactDecryptRetryable,
+    );
+
+    expect(result.kind).toBe("accepted");
+    expect(await result.response.text()).toBe(expected);
+  });
+
+  test("default missing content-type is refused, and allowMissingContentType accepts only an absent type", async () => {
+    const payloads = [
+      { type: "response.created", response: { id: "r1", status: "in_progress" } },
+      { type: "error", message: DECRYPT_REJECTION },
+    ];
+    const body = payloads.map(payload => "data: " + JSON.stringify(payload) + "\n\n").join("");
+    const encoded = () => new TextEncoder().encode(body);
+    const missingTypeResponse = () => {
+      const headers = new Headers();
+      headers.delete("content-type");
+      const response = new Response(encoded(), { headers });
+      response.headers.delete("content-type");
+      return response;
+    };
+
+    const missing = missingTypeResponse();
+    expect(missing.headers.get("content-type")).toBeNull();
+    const missingDefault = await preflightComboStreamResponse(missing, { model: "m1", provider: "a" });
+    expect(missingDefault.kind).toBe("accepted");
+    expect(await missingDefault.response.text()).toBe(body);
+
+    const allowedMissingSource = missingTypeResponse();
+    expect(allowedMissingSource.headers.get("content-type")).toBeNull();
+    const allowedMissing = await preflightComboStreamResponse(
+      allowedMissingSource,
+      { model: "m1", provider: "a" },
+      exactDecryptRetryable,
+      { allowMissingContentType: true },
+    );
+    expect(allowedMissing.kind).toBe("failed");
+    expect(allowedMissing.response.status).toBe(502);
+
+    for (const contentType of ["application/json", "text/plain"]) {
+      const source = new Response(encoded(), { headers: { "content-type": contentType } });
+      const result = await preflightComboStreamResponse(
+        source,
+        { model: "m1", provider: "a" },
+        exactDecryptRetryable,
+        { allowMissingContentType: true },
+      );
+      expect(result.kind).toBe("accepted");
+      expect(await result.response.text()).toBe(body);
+    }
+  });
+
+  test("default reader.read rejection still throws and does not cancel the reader", async () => {
+    const readError = new Error("preflight-read-reset");
+    const source = prefixThenReadError(createdPrefix, readError);
+    await expect(preflightComboStreamResponse(source.response, { model: "m1", provider: "a" }))
+      .rejects.toBe(readError);
+    expect(source.cancelSpy()).toBeDefined();
+    expect(source.cancelSpy()!.mock.calls).toHaveLength(0);
+  });
+
+  test("replayReadErrors accepts a reconstructed prefix and the same reader.read error", async () => {
+    const readError = new Error("preflight-read-reset");
+    const source = prefixThenReadError(createdPrefix, readError);
+    const result = await preflightComboStreamResponse(
+      source.response,
+      { model: "m1", provider: "a" },
+      undefined,
+      { replayReadErrors: true },
+    );
+    expect(result.kind).toBe("accepted");
+    expect(source.cancelSpy()).toBeDefined();
+    expect(source.cancelSpy()!.mock.calls).toHaveLength(0);
+    const reader = result.response.body!.getReader();
+    const first = await reader.read();
+    expect(first.done).toBe(false);
+    expect(first.value).toEqual(createdPrefix);
+    await expect(reader.read()).rejects.toBe(readError);
+    expect(source.cancelSpy()).toBeDefined();
+    expect(source.cancelSpy()!.mock.calls).toHaveLength(0);
+  });
+
 });

@@ -6,6 +6,8 @@ import type { CodexAccount } from "./accounts";
  * /v1/messages surface, the `ocx claude` launcher, and the GUI Claude page.
  */
 export interface OcxClaudeCodeConfig {
+  /** Opt-in translated Messages admission; unset keeps legacy behavior. Native passthrough is exempt. */
+  compatibility?: "shadow" | "enforce";
   /** Kill switch for the /v1/messages inbound (GUI "Claude ON" toggle). Default: enabled. */
   enabled?: boolean;
   /**
@@ -474,6 +476,13 @@ export interface OcxConfig {
   clientIntegrations?: OcxClientIntegrationsConfig;
   /** Sensitive-data filtering intent. */
   guardrails?: OcxGuardrailsConfig;
+  /** Aside account-backed profile synchronization; individual overrides survive bulk refresh. */
+  asideProfileSync?: {
+    allProfiles?: boolean;
+    profiles?: Record<string, boolean>;
+    /** Stable provenance for the one legacy root ownership record, or no root owner. */
+    legacyProfileId?: number | null;
+  };
   /**
    * Up to 5 Codex-facing catalog ids to feature first. Values may be bare catalog ids,
    * exact account-qualified "<selector>/<native-openai-model>" ids, or routed
@@ -484,19 +493,19 @@ export interface OcxConfig {
   /** One-time featured-roster upgrade marker; later user ordering is preserved. */
   subagentModelsVersion?: number;
   /**
-   * Optional full picker ordering for the Codex model catalog, independent of the
-   * 5-slot `subagentModels` spawn_agent cap. DISPLAY-ONLY: it controls the visual order of
-   * the Codex model picker for large routed catalogs (10-20+ models) that would otherwise sort
-   * arbitrarily and reshuffle on every rebuild. Values are routed `<provider>/<model>` catalog
-   * slugs (matched by exact slug or `provider/id`); native OpenAI passthrough rows and
-   * account-qualified native rows are not reordered (order native rows via `subagentModels`).
-   * Listed routed rows appear in array order; rows not listed keep their normal display order.
-   * `subagentModels`-featured rows keep their top position. When unset or empty, catalog
-   * priority is unchanged. This changes ONLY what the user sees in the picker: the spawn_agent
-   * candidate set is derived from each row's natural priority and is provably unaffected, even
-   * when every routed row is listed (see opencodex_spawn_priority / effectiveSubagentRoster).
+   * Display-only order for the Codex picker, independent of subagentModels.
+   * Routed-only lists order non-featured routed rows; featured and native rows keep
+   * their normal positions. Including a bare native id opts into ordering the complete
+   * picker: listed ids appear first in array order, followed by unlisted rows in their
+   * natural priority order. Exact catalog ids take precedence over equivalent raw/encoded
+   * routed ids; empty entries are ignored. The separate natural priority used by
+   * OpenCodex guidance is preserved. Native Codex's advertised five follow display
+   * priority and may change; exact-name override eligibility is not restricted by that list.
+   * Unset or empty leaves catalog priorities unchanged.
    */
   modelPickerOrder?: string[];
+  /** Saved preset provenance; snapshots are not recomputed during catalog discovery. */
+  modelPickerOrderMode?: "alphabetical" | "provider" | "most-used";
   /**
    * Priority-ordered fallback models for spawned sub-agents. When the requested
    * model is quota-exhausted or recently failed, opencodex rewrites the child
@@ -525,8 +534,8 @@ export interface OcxConfig {
    */
   syncCodexSubagentDefaults?: boolean;
   /**
-   * Optional reasoning effort the delegation prompt tells the agent to pass in spawn_agent calls
-   * (`reasoning_effort` argument). Only meaningful while `injectionModel` is set; validated against
+   * Optional reasoning effort reported as advisory metadata in v2 sub-agent guidance.
+   * It does not prescribe spawn overrides. Only meaningful while `injectionModel` is set; validated against
    * the Codex ladder (src/reasoning-effort.ts CODEX_REASONING_LEVELS) at the API boundary.
    */
   injectionEffort?: string;
@@ -569,7 +578,7 @@ export interface OcxConfig {
   streamMode?: "auto" | "legacy-tee" | "eager-relay";
   /**
    * Custom override for the injected v2 multi-agent guidance body (the text inside
-   * the <multi_agent_mode> tags). After guidance is enabled and the v2 surface and
+   * the <opencodex_subagent_guidance> tags). After guidance is enabled and the v2 surface and
    * catalog-state gates pass, a configured injectionModel is sufficient to render it;
    * otherwise an eligible roster or fallback is required. Placeholders: `{{model}}` -> the
    * effective preferred model for the request (a bare native model is account-qualified
@@ -600,6 +609,8 @@ export interface OcxConfig {
    * set, the lower one wins for sub-agents. See src/server/effort-policy.ts.
    */
   subagentEffortCap?: string;
+  /** Global model effort overrides, after provider model/wide pins; none means omission. */
+  modelPinnedEfforts?: Record<string, string>;
   /**
    * Models hidden from Codex discovery without blocking direct proxy calls. Routed provider ids
    * are excluded from the catalog + /v1/models entirely. Account-qualified native ids hide only
@@ -668,8 +679,10 @@ export interface OcxConfig {
    * so absence is the only default state this feature has.
    */
   quotaResetNotify?: OcxQuotaResetNotifyConfig;
-  /** Provider-level Codex-visible context caps. Values only lower known model context windows. */
+  /** Active provider context limits; native long windows remain within their supported ceilings. */
   providerContextCaps?: Record<string, number>;
+  /** Last selected provider caps; retained while a cap is switched off. Not an active limit. */
+  providerContextCapValues?: Record<string, number>;
   /** Global Codex-visible context cap value (tokens). Falls back to DEFAULT_PROVIDER_CONTEXT_CAP. */
   contextCapValue?: number;
   /** Bind hostname. Default "127.0.0.1" (loopback only). Set "0.0.0.0" to expose on all interfaces. */
@@ -777,6 +790,9 @@ export interface OcxConfig {
     /** Upstream reset timestamps already activated, retained across restarts. */
     lastFiveHourResetAt?: number;
     lastWeeklyResetAt?: number;
+    /** Observed boundaries retained until activation, even if an idle upstream clock moves. */
+    nextFiveHourResetAt?: number;
+    nextWeeklyResetAt?: number;
   }>;
   /**
    * Selection order per account id, higher used earlier; absent = 0. Keyed by id
@@ -873,10 +889,10 @@ export interface OcxConfig {
    * provider has 2 or more eligible stored accounts, the same consent rule an `apiKeyPool` of
    * two keys already applies, and a single account remains a strict no-op.
    *
-   * What `enabled: false` still refuses is the PRE-DISPATCH preference: steering a request
-   * upstream has not refused toward the account with more known headroom. That moves a healthy
-   * request, so it stays a real choice. `providers.<name>.oauthAccountFailover` overrides this
-   * per provider in either direction; reactive 429 rotation remains presence-driven.
+   * Proactive avoidance of an exhausted selected account requires `enabled: true`.
+   * A healthy selected account retains priority; an unknown quota is not exhaustion.
+   * `providers.<name>.oauthAccountFailover` overrides this per provider in either direction.
+   * Reactive 429 rotation remains presence-driven even when proactive routing is disabled.
    */
   oauthAccountFailover?: {
     enabled?: boolean;

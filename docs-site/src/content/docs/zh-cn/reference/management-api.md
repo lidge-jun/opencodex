@@ -191,6 +191,14 @@ Authorization: Bearer <admin-token>
 | `GET, PUT /api/provider-context-caps` | 读取或更新全局、全部 provider，或单个 provider 的上下文上限 | 400 请求无效；404 未知 provider |
 | `GET /api/provider-presets` | 返回从运行时注册表派生的 GUI provider 预设 | — |
 
+上下文上限响应包含 `caps`（当前有效的上限）和 `values`（关闭后仍保留的最后选择值）。
+开启提供商的上限时，如果未指定 `value`，则恢复其选择值；首次开启时使用全局 `contextCapValue`。
+OpenAI 也遵循此规则：开关不会选择特殊的 922k 模式。有效上限约束每个原生窗口；支持长上下文的模型
+只能扩展到该模型支持的上限。
+`{ "value": 600000, "setAll": true }` 修改全局值，并且只更新已开启的上限；上限已关闭的提供商保留
+自己的选择值，供之后开启时恢复。不带 `value` 的 `{ "setAll": true }` 会按当前全局值开启所有
+已配置提供商的上限，并替换保存的选择值。关闭上限不会清除选择值，重新加载后仍保留，但不会将其作为限制应用。
+
 `provider_has_dependent_combos` 是一个安全屏障：在删除 provider 之前，先移除或编辑依赖它的 combos。
 
 ### 侧边栏与基于同意的动作

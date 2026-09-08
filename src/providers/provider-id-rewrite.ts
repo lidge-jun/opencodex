@@ -112,14 +112,16 @@ export function rewriteProviderReferences(config: OcxConfig, from: string, to: s
 
   // Keys. `providerContextCaps` is KEYED by provider id — a prefix rewrite would
   // silently orphan the cap — and a destination key may already be occupied.
-  const caps = config.providerContextCaps;
-  if (caps && Object.hasOwn(caps, from)) {
-    if (Object.hasOwn(caps, to)) {
-      collisions.push(`providerContextCaps.${to}`);
-    } else {
-      caps[to] = caps[from]!;
-      delete caps[from];
-      changed += 1;
+  for (const field of ["providerContextCaps", "providerContextCapValues"] as const) {
+    const caps = config[field];
+    if (caps && Object.hasOwn(caps, from)) {
+      if (Object.hasOwn(caps, to)) {
+        collisions.push(`${field}.${to}`);
+      } else {
+        caps[to] = caps[from]!;
+        delete caps[from];
+        changed += 1;
+      }
     }
   }
 

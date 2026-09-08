@@ -59,7 +59,15 @@ export interface ProviderAccount {
 /** auth.json value per provider: N accounts + which one requests use. */
 export interface ProviderAccountSet {
   activeAccountId: string;
+  /** Opaque selection generation; absent in legacy stores, independent of token refresh. */
+  selectionRevision?: string;
   accounts: ProviderAccount[];
+}
+
+/** Non-secret snapshot used to condition a selection on the choice that started a request. */
+export interface OAuthAccountSelection {
+  accountId: string;
+  revision?: string;
 }
 
 export interface OAuthController {

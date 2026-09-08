@@ -8,7 +8,8 @@ import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/iso
 import { catalogConvergenceFactory } from "../helpers/catalog-convergence";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { ManagementRequest as Request } from "../helpers/management-auth";
-import { listManagementModelRows } from "../../src/server/management/model-rows";
+import { listManagementModelRows, type ManagementModelRow } from "../../src/server/management/model-rows";
+import { routedSlug } from "../../src/providers/slug-codec";
 
 const TEST_DIR = join(import.meta.dir, `.tmp-model-visibility-management-${process.pid}`);
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
@@ -502,4 +503,187 @@ test("manual OpenAI visibility preserves the pending-selection error contract", 
   }
   expect((await putWithConfig({ scope: "invalid", provider: "openai", targets: [], enabled: true }, config)).status).toBe(400);
   expect(config).toEqual(before);
+});
+
+describe("provider workspace custom-model API round trips", () => {
+  async function request(method: "GET" | "POST" | "DELETE", path: string, body?: unknown): Promise<Response> {
+    const url = new URL(path, "http://localhost");
+    const response = await handleManagementAPI(new Request(url, {
+      method,
+      ...(body === undefined ? {} : {
+        headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+      }),
+    }), url, loadConfig(), {
+      createManagementConvergeCodex: catalogConvergenceFactory(() => { refreshes += 1; }),
+    });
+    if (!response) throw new Error(`management route was not handled: ${path}`);
+    return response;
+  }
+
+  async function createCustom(provider: string, modelId: string): Promise<string> {
+    const response = await request("POST", "/api/custom-models", { provider, modelId });
+    expect(response.status).toBe(201);
+    const created = await response.json() as { id: string; provider: string; modelId: string };
+    expect(created.provider).toBe(provider);
+    expect(created.modelId).toBe(modelId);
+    expect(typeof created.id).toBe("string");
+    expect(created.id.length).toBeGreaterThan(0);
+    return created.id;
+  }
+
+  async function readRows(): Promise<ManagementModelRow[]> {
+    const response = await request("GET", "/api/models");
+    expect(response.status).toBe(200);
+    return await response.json() as ManagementModelRow[];
+  }
+
+  async function readCustoms(): Promise<Array<{ id: string; provider: string; modelId: string }>> {
+    const response = await request("GET", "/api/custom-models");
+    expect(response.status).toBe(200);
+    return await response.json() as Array<{ id: string; provider: string; modelId: string }>;
+  }
+
+  test("custom-only DELETE then POST creates a new stable id without clearing hides or allowlists", async () => {
+    const provider = "google-antigravity";
+    const modelId = "workspace-custom-only";
+    const config = loadConfig();
+    config.providers["other-static"] = {
+      adapter: "openai-chat", baseUrl: "https://other.example.test/v1", liveModels: false,
+      models: [], selectedModels: ["other-selected"],
+    };
+    config.disabledModels!.push(routedSlug(provider, modelId), routedSlug("other-static", modelId));
+    saveConfig(config);
+    const hidden = [...loadConfig().disabledModels!];
+    const selected = [...loadConfig().providers[provider].selectedModels!];
+    const otherProvider = structuredClone(loadConfig().providers["other-static"]);
+    const firstId = await createCustom(provider, modelId);
+    const otherId = await createCustom("other-static", modelId);
+    const otherBefore = (await readRows()).find(row => row.customId === otherId);
+    expect(otherBefore).toBeDefined();
+
+    expect((await request("DELETE", `/api/custom-models/${encodeURIComponent(firstId)}`)).status).toBe(200);
+    expect((await readCustoms()).map(row => row.id)).toEqual([otherId]);
+    const afterDelete = await readRows();
+    expect(afterDelete.some(row => row.provider === provider && row.id === modelId)).toBe(false);
+    expect(afterDelete.find(row => row.customId === otherId)).toEqual(otherBefore);
+
+    const secondId = await createCustom(provider, modelId);
+    expect(secondId).not.toBe(firstId);
+    const reopened = (await readRows()).find(row => row.customId === secondId);
+    expect(reopened?.namespaced).toBe(routedSlug(provider, modelId));
+    expect(reopened?.disabled).toBe(true);
+    expect((await readCustoms()).filter(row => row.provider === provider).map(row => row.id)).toEqual([secondId]);
+    expect(loadConfig().disabledModels).toEqual(hidden);
+    expect(loadConfig().providers[provider].selectedModels).toEqual(selected);
+    expect(loadConfig().providers["other-static"]).toEqual(otherProvider);
+    expect((await readRows()).find(row => row.customId === otherId)).toEqual(otherBefore);
+    expect(refreshes).toBe(4); // Three explicit POSTs and one DELETE; GETs never converge.
+  });
+
+  test.each([
+    { bareHidden: false, routedHidden: true },
+    { bareHidden: true, routedHidden: false },
+    { bareHidden: true, routedHidden: true },
+  ])("DELETE restores native identity with independent hides %j", async ({ bareHidden, routedHidden }) => {
+    const modelId = "gpt-5.5";
+    const config = loadConfig();
+    config.providers.openai = {
+      adapter: "openai-responses", authMode: "forward", liveModels: false,
+      baseUrl: "https://chatgpt.com/backend-api/codex", selectedModels: ["manual-selection"],
+    };
+    config.disabledModels!.push(
+      ...(bareHidden ? [modelId] : []),
+      ...(routedHidden ? [routedSlug("openai", modelId)] : []),
+    );
+    saveConfig(config);
+    const hidden = [...loadConfig().disabledModels!];
+    const selected = [...loadConfig().providers.openai.selectedModels!];
+    const manualId = await createCustom("openai", modelId);
+    const otherId = await createCustom("google-antigravity", modelId);
+    const before = await readRows();
+    const manual = before.filter(row => row.provider === "openai" && row.id === modelId);
+    expect(manual).toHaveLength(1);
+    expect(manual[0]!.customId).toBe(manualId);
+    expect(manual[0]!.namespaced).toBe(routedSlug("openai", modelId));
+    expect(manual[0]!.disabled).toBe(routedHidden);
+    const otherBefore = before.find(row => row.customId === otherId);
+    expect(otherBefore).toBeDefined();
+
+    expect((await request("DELETE", `/api/custom-models/${encodeURIComponent(manualId)}`)).status).toBe(200);
+    expect((await readCustoms()).map(row => row.id)).toEqual([otherId]);
+    const after = await readRows();
+    const native = after.filter(row => row.provider === "openai" && row.id === modelId);
+    expect(native).toHaveLength(1);
+    expect(native[0]!.native).toBe(true);
+    expect(native[0]!.customId).toBeUndefined();
+    expect(native[0]!.namespaced).toBe(modelId);
+    expect(native[0]!.disabled).toBe(bareHidden);
+    expect(after.find(row => row.customId === otherId)).toEqual(otherBefore);
+    expect(loadConfig().disabledModels).toEqual(hidden);
+    expect(loadConfig().providers.openai.selectedModels).toEqual(selected);
+    expect(refreshes).toBe(3);
+
+    // A deleted manual identity must not remain a valid non-native OpenAI visibility target.
+    const persistedBeforeInvalid = loadConfig();
+    expect((await put({ scope: "models", provider: "openai", targets: [{ id: modelId }], enabled: false })).status).toBe(400);
+    expect((await request("DELETE", `/api/custom-models/${encodeURIComponent(manualId)}`)).status).toBe(404);
+    expect(loadConfig()).toEqual(persistedBeforeInvalid);
+    expect(refreshes).toBe(3);
+  });
+
+  test("DELETE of a custom override reveals its static provider row without hiding it", async () => {
+    const provider = "google-antigravity";
+    const modelId = "claude-sonnet-4-6";
+    const hidden = [...loadConfig().disabledModels!];
+    const selected = [...loadConfig().providers[provider].selectedModels!];
+    const id = await createCustom(provider, modelId);
+    const before = (await readRows()).filter(row => row.provider === provider);
+    expect(before.filter(row => row.id === modelId).map(row => row.customId)).toEqual([id]);
+    expect((await request("DELETE", `/api/custom-models/${encodeURIComponent(id)}`)).status).toBe(200);
+    const after = (await readRows()).filter(row => row.provider === provider);
+    const restored = after.filter(row => row.id === modelId);
+    expect(restored).toHaveLength(1);
+    expect(restored[0]!.customId).toBeUndefined();
+    expect(restored[0]!.namespaced).toBe(routedSlug(provider, modelId));
+    expect(restored[0]!.disabled).toBe(false);
+    expect(after).toHaveLength(before.length);
+    expect(await readCustoms()).toEqual([]);
+    expect(loadConfig().disabledModels).toEqual(hidden);
+    expect(loadConfig().providers[provider].selectedModels).toEqual(selected);
+    expect(refreshes).toBe(2);
+  });
+
+  test("DELETE of a qualified custom override preserves the independent account-native identity", async () => {
+    const config = loadConfig();
+    config.providers.openai = {
+      adapter: "openai-responses", authMode: "forward", liveModels: false,
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    };
+    config.codexAccountNamespaces = { desktop: "@main" };
+    config.codexAccountPickerEnabled = true;
+    const accountModel = "gpt-5.5-account-fixture";
+    const qualifiedId = `desktop/${accountModel}`;
+    config.customModels = [{ id: "qualified-custom", provider: "openai", modelId: qualifiedId }];
+    config.disabledModels!.push(qualifiedId, routedSlug("openai", qualifiedId));
+    saveConfig(config);
+    writeFileSync(join(isolatedCodexHome!.path, "models_cache.json"), JSON.stringify({ models: [{
+      slug: accountModel, supported_in_api: true, visibility: "list",
+      base_instructions: "You are Codex.", comp_hash: null, shell_type: "unified_exec",
+      supported_reasoning_levels: [{ effort: "medium" }], model_messages: {},
+    }] }));
+    const hidden = [...loadConfig().disabledModels!];
+    const before = (await readRows()).filter(row => row.id === qualifiedId);
+    expect(before).toHaveLength(2);
+    const nativeBefore = before.find(row => row.native === true);
+    expect(nativeBefore?.namespaced).toBe(qualifiedId);
+    expect(nativeBefore?.disabled).toBe(true);
+    expect(before.find(row => row.customId === "qualified-custom")?.namespaced).toBe(routedSlug("openai", qualifiedId));
+
+    expect((await request("DELETE", "/api/custom-models/qualified-custom")).status).toBe(200);
+    expect(await readCustoms()).toEqual([]);
+    expect((await readRows()).filter(row => row.id === qualifiedId)).toEqual([nativeBefore!]);
+    expect(loadConfig().disabledModels).toEqual(hidden);
+    expect(loadConfig().codexAccountNamespaces).toEqual({ desktop: "@main" });
+    expect(refreshes).toBe(1);
+  });
 });

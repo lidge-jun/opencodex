@@ -25,11 +25,16 @@ RUN cd gui && bun run build
 FROM ${BUN_IMAGE} AS runtime
 WORKDIR /home/bun/app
 
+# Docker supervises this foreground process; retain routed state on stop/recreate.
+# This uses the existing service lifecycle mode and does not install a service manager.
 ENV NODE_ENV=production \
+    OCX_SERVICE=1 \
     OPENCODEX_HOME=/home/bun/.opencodex \
+    CODEX_HOME=/home/bun/.codex \
     OCX_API_TOKEN_FILE=/home/bun/.opencodex/service-api-token
 
-RUN install -d -m 0700 -o bun -g bun /home/bun/.opencodex
+# These homes have incompatible auth.json formats; persist them without combining them.
+RUN install -d -m 0700 -o bun -g bun /home/bun/.opencodex /home/bun/.codex
 COPY --chown=bun:bun --chmod=0600 docker/config.json /home/bun/.opencodex/config.json
 
 COPY --from=build --chown=bun:bun /home/bun/app/package.json ./package.json
@@ -46,7 +51,7 @@ COPY --from=build --chown=bun:bun /home/bun/app/gui/dist ./gui/dist
 USER bun
 RUN ["bun", "docker/verify-compatibility.ts"]
 RUN ["bun", "-e", "import { readOpenCodexCompatibilityVersion } from './src/routing/compatibility/version.ts'; if (!/^[0-9a-f]{64}$/.test(readOpenCodexCompatibilityVersion() ?? '')) throw new Error('Missing or invalid generated compatibility manifest');"]
-VOLUME ["/home/bun/.opencodex"]
+VOLUME ["/home/bun/.opencodex", "/home/bun/.codex"]
 EXPOSE 10100
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

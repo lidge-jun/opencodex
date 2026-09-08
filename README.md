@@ -11,7 +11,7 @@ Two commands, and every one of them runs any LLM you point it at.</p>
 
 ```bash
 npm install -g @bitkyc08/opencodex
-ocx start        # proxy + dashboard on localhost:10100
+ocx start
 ```
 
 <table>
@@ -78,14 +78,49 @@ account while existing threads stay pinned to the account that started them.
 
 ## Quick start
 
-### For humans
+### Personal install
 
 ```bash
 npm install -g @bitkyc08/opencodex   # Node 18+; the Bun runtime is bundled automatically
-ocx start                            # or `ocx service` to run it in the background
+ocx start                         # proxy + dashboard on localhost:10100
 ```
 
-### Docker Compose
+Use `ocx service` to run it in the background.
+
+Open **http://localhost:10100** and configure everything in the web dashboard — add providers
+(40+ built-ins, or any OpenAI-compatible endpoint), pick models, manage accounts. `ocx gui`
+re-opens the dashboard at any time.
+It can also manage a **ChatGPT account pool** for Codex auth. Add multiple ChatGPT / Codex accounts,
+refresh their 5h / weekly / 30d quota in the dashboard. Under quota routing, new sessions can use
+the lowest-usage healthy account; round-robin and fill-first use their own policies. Existing Codex
+threads normally retain affinity to the account that started them, so long SSH, tmux, or
+mobile-connected sessions do not jump accounts mid-conversation — but quota re-evaluation, failover,
+account exclusion, affinity expiry, or 401/403 and 429 recovery can rebind them. Give the accounts a
+selection order when one of them — usually your Codex Desktop login — should only be reached for
+once the others are drained.
+
+### Sponsors
+
+Sponsors keep opencodex maintained across every upstream protocol change. Interested?
+See [SPONSORS.md](./SPONSORS.md).
+
+<!-- sponsors:main — one banner, model developers only; empty until a Main sponsor signs -->
+
+<!-- sponsors:standard — one row per sponsor, in order of signing. Uncomment the table with the first row:
+<table>
+<tbody>
+<tr>
+<td width="180"><a href="SPONSOR_URL"><img src="https://raw.githubusercontent.com/lidge-jun/opencodex/main/assets/sponsors/SPONSOR.png" alt="SPONSOR" width="150"></a></td>
+<td>Thanks to SPONSOR for sponsoring this project! BLURB</td>
+</tr>
+</tbody>
+</table>
+-->
+
+---
+
+<details>
+<summary>Docker Compose</summary>
 
 The repository ships a digest-pinned, non-root Compose build. With Git and Bun installed on the
 host, generate the canonical compatibility manifest before every image build, then initialize
@@ -116,6 +151,8 @@ image, Compose file, environment, or shell arguments. See the
 [Remote Hub deployment guide](https://opencodex.me/guides/remote-hub/#docker-compose) for provider
 setup, authenticated acceptance checks, remote management, and rollback.
 
+</details>
+
 <details>
 <summary>Install from source (latest dev)</summary>
 
@@ -143,19 +180,8 @@ they reach the npm package.
 
 </details>
 
-Open **http://localhost:10100** and configure everything in the web dashboard — add providers
-(40+ built-ins, or any OpenAI-compatible endpoint), pick models, manage accounts. `ocx gui`
-re-opens the dashboard at any time.
-It can also manage a **ChatGPT account pool** for Codex auth. Add multiple ChatGPT / Codex accounts,
-refresh their 5h / weekly / 30d quota in the dashboard. Under quota routing, new sessions can use
-the lowest-usage healthy account; round-robin and fill-first use their own policies. Existing Codex
-threads normally retain affinity to the account that started them, so long SSH, tmux, or
-mobile-connected sessions do not jump accounts mid-conversation — but quota re-evaluation, failover,
-account exclusion, affinity expiry, or 401/403 and 429 recovery can rebind them. Give the accounts a
-selection order when one of them — usually your Codex Desktop login — should only be reached for
-once the others are drained.
-
-### For agents
+<details>
+<summary>For agents</summary>
 
 ```bash
 npm install -g @bitkyc08/opencodex
@@ -171,6 +197,8 @@ when it is unreachable). `ocx status` / `ocx doctor` / `ocx health` report the r
 > [`AGENTS_INSTALL.md`](./AGENTS_INSTALL.md). An interactive `ocx start` may ask once whether to
 > star this repository — that is the user's decision, never an agent's. The CLI suppresses the
 > prompt for agent-driven runs and the API refuses them with `403 agent_consent_required`.
+
+</details>
 
 ## Supported platforms
 
@@ -203,6 +231,7 @@ see the [installation docs](https://opencodex.me/getting-started/installation/).
 - **Sub-agents on any model** — feature routed models in Codex's sub-agent picker, with v1/v2
   surface control and fallback chains. See the
   [sub-agent guide](https://opencodex.me/guides/sub-agent-surface/).
+<!-- sponsors:main-first-mention -->
 - **Log in once, skip the API key** — OAuth for xAI, Anthropic, and Kimi; or forward
   `codex login`, paste a key, or use `${ENV_VAR}` references.
 - **Web search & vision sidecars** — non-OpenAI models get real web search and image understanding
@@ -255,6 +284,7 @@ full-slash form keeps working too. Details: [model routing docs](https://opencod
 
 ## Providers & adapters
 
+<!-- sponsors:main-first-mention -->
 OpenAI (ChatGPT login or API key), Anthropic, Google Gemini, xAI, Kimi, Azure OpenAI, Ollama
 (local + Cloud), Cursor (experimental), and every OpenAI-compatible endpoint — plus DeepSeek,
 Groq, OpenRouter, Together, Fireworks, Cerebras, Mistral, Hugging Face, NVIDIA NIM, MiniMax,

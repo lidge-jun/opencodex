@@ -52,6 +52,15 @@ describe("citation marker stripping (#3150)", () => {
     expect(stripCitationMarkers(`a${P}b`)).toBe(`a${P}b`);
     expect(stripCitationMarkers(`a${E}b`)).toBe(`a${E}b`);
   });
+
+  test("a malformed START before a later valid span is kept, not paired with that span's END", () => {
+    // Whole-string stripping must agree with the streaming filter: the malformed prefix
+    // survives and only the real span is removed (bridge re-strips the accumulated text
+    // for output_text.done, so any disagreement would make done != concatenated deltas).
+    const malformed = `${S}${"y".repeat(5_000)}`;
+    expect(stripCitationMarkers(`a${malformed}${S}cite${P}turn1view0${E} tail`)).toBe(`a${malformed} tail`);
+    expect(stripCitationMarkers(`a${S}cite${S}cite${P}turn1view0${E}b`)).toBe(`a${S}citeb`);
+  });
 });
 
 describe("streaming citation marker filter (#3150)", () => {
@@ -86,5 +95,59 @@ describe("streaming citation marker filter (#3150)", () => {
     // Streaming must stay streaming: only the unterminated span is withheld.
     const filter = createCitationMarkerFilter();
     expect(filter.push(`visible now ${S}cite`)).toBe("visible now ");
+  });
+
+  test("an unterminated span past the bound is released instead of retained", () => {
+    // A backend that opens a span and never closes it must not make the filter accumulate
+    // the rest of the response, which every later delta would then re-scan.
+    const filter = createCitationMarkerFilter();
+    let out = filter.push(`kept ${S}cite`);
+    expect(out).toBe("kept ");
+    for (let i = 0; i < 5_000; i += 1) out += filter.push("x");
+
+    // Everything after the malformed START is emitted verbatim, so nothing is lost, and
+    // flush() has nothing left to release.
+    expect(out).toBe(`kept ${S}cite${"x".repeat(5_000)}`);
+    expect(filter.flush()).toBe("");
+  });
+
+  test("a later START still opens a valid span after a released malformed one", () => {
+    const filter = createCitationMarkerFilter();
+    let out = filter.push(`a${S}${"y".repeat(5_000)}`);
+    out += filter.push(`${S}cite${P}turn1view0${E} tail`);
+    expect(out).toBe(`a${S}${"y".repeat(5_000)} tail`);
+    expect(filter.flush()).toBe("");
+  });
+
+  test("an oversized malformed span survives a later valid marker in the same delta", () => {
+    const filter = createCitationMarkerFilter();
+    const malformed = `${S}${"y".repeat(5_000)}`;
+    expect(filter.push(`a${span}${malformed}${S}cite${P}turn1view0${E} tail`))
+      .toBe(`a${malformed} tail`);
+    expect(filter.flush()).toBe("");
+  });
+
+  test("concatenated streaming output equals whole-string stripping for every chunking", () => {
+    // The bridge emits deltas through the filter and then re-strips the accumulated text for
+    // output_text.done / output_item.done, so the two contracts must produce identical text.
+    const malformed = `${S}${"y".repeat(5_000)}`;
+    const inputs = [
+      `a${span}${malformed}${S}cite${P}turn1view0${E} tail`,
+      `kept ${S}cite${"x".repeat(5_000)}`,
+      `a${S}cite${S}cite${P}turn1view0${E}b`,
+      `a${span}b${S}cite${P}turn2view0${E}c`,
+      // An over-bound span that is eventually terminated: the streaming filter has already
+      // released it verbatim, so whole-string stripping must keep it too.
+      `late ${S}${"z".repeat(4_096)}${E} end`,
+      // Exactly at the bound (4096 chars START..END inclusive) is still a span.
+      `edge ${S}${"z".repeat(4_094)}${E} end`,
+    ];
+    for (const input of inputs) {
+      for (const size of [1, 7, 4_097, input.length]) {
+        const chunks: string[] = [];
+        for (let i = 0; i < input.length; i += size) chunks.push(input.slice(i, i + size));
+        expect(drain(chunks)).toBe(stripCitationMarkers(input));
+      }
+    }
   });
 });

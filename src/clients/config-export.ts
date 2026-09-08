@@ -37,6 +37,8 @@ export type { OmpModelEntry, OmpProviderBlock, OmpGeneratedConfig } from "./conf
 export type { ZcodeModelEntry, ZcodeProviderBlock, ZcodeGeneratedConfig } from "./config-export/zcode";
 export type { DshReasoningEffort, DshWireReasoningEffort, DshModelEntry, DshProviderBlock, DshGeneratedConfig } from "./config-export/dsh";
 export type { McodeProviderBlock, McodeModelEntry, McodeGeneratedConfig } from "./config-export/mcode";
+export type { RaycastAbility, RaycastAbilityName, RaycastModelEntry, RaycastProviderEntry, RaycastGeneratedConfig } from "./config-export/raycast";
+export { buildRaycastClientConfig, summarizeRaycast, buildRaycastContribution } from "./config-export/raycast";
 
 import type { OpencodeLaunchEnv, OpencodeCatalogModel, ExportContext, PiModelEntry, ManagedContribution, ManagedFragment, ExportClientId, ExportClientSpec } from "./config-export/contracts";
 import { OPENCODE_API_KEY_ENV_REF, OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG, OPENCODE_CONFIG_SCHEMA, OPENCODE_PROVIDER_ID, PI_API_DIALECT, LOOPBACK_API_KEY_PLACEHOLDER, HERMES_API_KEY_ENV_REF, OPENCLAW_API_KEY_ENV_REF, GAJAE_API_KEY_ENV, OPENCODE_API_KEY_ENV, HERMES_API_KEY_ENV, OPENCLAW_API_KEY_ENV } from "./config-export/constants";
@@ -45,6 +47,7 @@ import { buildOmpClientConfig, summarizeOmp, buildOmpContribution } from "./conf
 import { buildDshClientConfig, summarizeDsh, buildDshContribution } from "./config-export/dsh";
 import { buildMcodeClientConfig, summarizeMcode, buildMcodeContribution } from "./config-export/mcode";
 import { buildZcodeClientConfig, summarizeZcode, buildZcodeContribution } from "./config-export/zcode";
+import { buildRaycastClientConfig, summarizeRaycast, buildRaycastContribution } from "./config-export/raycast";
 
 
 
@@ -533,6 +536,22 @@ export function asideConfigPath(env: OpencodeLaunchEnv = process.env, home: stri
   return join(asideAccountDir(env, home), "models.json");
 }
 
+/**
+ * Raycast's Custom Providers directory. Raycast hard-codes
+ * `~/.config/raycast/ai` on macOS AND Windows: it neither honors
+ * `XDG_CONFIG_HOME` nor ships a variable of its own that relocates the file, so
+ * unlike `opencodeGlobalConfigPath` there is no override to mirror and the env
+ * parameter exists only to keep the resolver signature uniform with the rest.
+ */
+export function raycastAiDir(_env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  return join(home, ".config", "raycast", "ai");
+}
+
+/** The providers file Raycast watches (manual.raycast.com/ai/custom-providers). */
+export function raycastConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  return join(raycastAiDir(env, home), "providers.yaml");
+}
+
 /** Endpoint plus admission, identical for the V1 `options` and V2 `settings` field. */
 function opencodeProviderConnection(baseURL: string, config: OcxConfig): OpencodeProviderConnection {
   const options: OpencodeProviderConnection = { baseURL };
@@ -676,6 +695,7 @@ export interface PiProviderBlock {
   baseUrl: string;
   api: string;
   apiKey: string;
+  compat?: { sendSessionAffinityHeaders: boolean };
   models: PiModelEntry[];
 }
 
@@ -797,7 +817,7 @@ export interface GajaeGeneratedConfig {
  * model. The rest of this contract (omitting `cost`) is still ours rather than
  * a claim about Pi's acceptance.
  */
-function buildPiClientConfig(ctx: ExportContext): PiGeneratedConfig {
+function buildPiClientConfig(ctx: ExportContext, sendSessionAffinityHeaders = false): PiGeneratedConfig {
   const models: PiModelEntry[] = [];
   for (const model of normalizeExportModels(ctx.models)) {
     // Text is the one modality every routed model supports; anything richer must come
@@ -840,6 +860,7 @@ function buildPiClientConfig(ctx: ExportContext): PiGeneratedConfig {
         baseUrl: ctx.baseUrl,
         api: PI_API_DIALECT,
         apiKey: LOOPBACK_API_KEY_PLACEHOLDER,
+        ...(sendSessionAffinityHeaders ? { compat: { sendSessionAffinityHeaders: true } } : {}),
         models,
       },
     },
@@ -1012,7 +1033,7 @@ function buildOpencodeContribution(ctx: ExportContext): ManagedContribution {
 }
 
 function buildPiContribution(ctx: ExportContext): ManagedContribution {
-  const doc = buildPiClientConfig(ctx);
+  const doc = buildPiClientConfig(ctx, true);
   return singleFragment("pi", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
 }
 
@@ -1108,7 +1129,7 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     destination: env => piConfigPath(env),
     apiKeyEnv: "",
     exportHint: "Pi reads a non-secret placeholder from models.json; loopback needs no key.",
-    build: buildPiClientConfig,
+    build: ctx => buildPiClientConfig(ctx, true),
     format: "json",
     summarize: summarizePi,
     buildContribution: buildPiContribution,
@@ -1257,6 +1278,23 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     // The observed provider block has exactly four keys and none is `headers`,
     // so the dedicated admission header has nowhere to live and a non-loopback
     // bind would generate a config that 401s.
+    loopbackOnly: true,
+  },
+  raycast: {
+    id: "raycast",
+    // Not a bare `providers.yaml`: same Downloads-folder collision argument as
+    // `aside-models.json`.
+    filename: "raycast-providers.yaml",
+    destination: env => raycastConfigPath(env),
+    apiKeyEnv: "",
+    exportHint: "Raycast reads providers.yaml with no api_keys entry; loopback needs no key.",
+    build: buildRaycastClientConfig,
+    format: "yaml",
+    summarize: summarizeRaycast,
+    buildContribution: buildRaycastContribution,
+    // Raycast's provider entry has no header field, and its `api_keys` value
+    // is read literally (no env interpolation), so the only way to admit a
+    // remote bind would be a plaintext secret on disk. Refuse instead.
     loopbackOnly: true,
   },
 };

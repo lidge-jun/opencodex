@@ -43,13 +43,22 @@ export function globalContextCapValue(config: Pick<OcxConfig, "contextCapValue">
   return isValidContextCap(value) ? Math.floor(value) : DEFAULT_PROVIDER_CONTEXT_CAP;
 }
 
+/** Active caps win over remembered values from an earlier switch-off. */
+export function selectedProviderContextCaps(config: Pick<OcxConfig, "providerContextCaps" | "providerContextCapValues">): Record<string, number> {
+  return { ...providerContextCaps({ providerContextCaps: config.providerContextCapValues }), ...providerContextCaps(config) };
+}
+
 export function setProviderContextCap(config: OcxConfig, provider: string, enabled: boolean, value?: number): void {
   const next = providerContextCaps(config);
+  const selected = selectedProviderContextCaps(config);
   if (enabled) {
-    next[provider] = isValidContextCap(value) ? Math.floor(value) : globalContextCapValue(config);
+    const remembered = Object.hasOwn(selected, provider) ? selected[provider] : undefined;
+    next[provider] = isValidContextCap(value) ? Math.floor(value) : (isValidContextCap(remembered) ? remembered : globalContextCapValue(config));
+    selected[provider] = next[provider];
   } else {
     delete next[provider];
   }
+  if (Object.keys(selected).length > 0) config.providerContextCapValues = selected;
   if (Object.keys(next).length > 0) config.providerContextCaps = next;
   else deleteConfigTopLevelKey(config, "providerContextCaps");
 }
@@ -66,18 +75,33 @@ export function setGlobalContextCapValue(config: OcxConfig, value: number, apply
   if (!applyToAll) return;
   const caps = providerContextCaps(config);
   for (const provider of Object.keys(caps)) caps[provider] = next;
-  if (Object.keys(caps).length > 0) config.providerContextCaps = caps;
+  if (Object.keys(caps).length > 0) {
+    config.providerContextCaps = caps;
+    config.providerContextCapValues = { ...selectedProviderContextCaps(config), ...caps };
+  }
 }
 
 /** Enable the cap for every named provider at the current value, or clear all caps. */
 export function setAllProviderContextCaps(config: OcxConfig, providerNames: string[], enabled: boolean): void {
+  const selected = selectedProviderContextCaps(config);
   if (!enabled) {
+    if (Object.keys(selected).length > 0) config.providerContextCapValues = selected;
     deleteConfigTopLevelKey(config, "providerContextCaps");
     return;
   }
   const value = globalContextCapValue(config);
   const next: Record<string, number> = {};
-  for (const name of providerNames) next[name] = value;
+  for (const name of providerNames) { next[name] = value; selected[name] = value; }
+  if (Object.keys(selected).length > 0) config.providerContextCapValues = selected;
   if (Object.keys(next).length > 0) config.providerContextCaps = next;
   else deleteConfigTopLevelKey(config, "providerContextCaps");
+}
+
+/** Provider removal clears both the active limit and its remembered selection. */
+export function forgetProviderContextCap(config: OcxConfig, provider: string): void {
+  setProviderContextCap(config, provider, false);
+  const values = { ...config.providerContextCapValues };
+  delete values[provider];
+  if (Object.keys(values).length > 0) config.providerContextCapValues = values;
+  else deleteConfigTopLevelKey(config, "providerContextCapValues");
 }

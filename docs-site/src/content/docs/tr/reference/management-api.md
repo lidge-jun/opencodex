@@ -233,6 +233,17 @@ döndürülmez.
 | `GET, PUT /api/provider-context-caps` | Küresel, tüm sağlayıcılar veya tek sağlayıcı bağlam sınırlarını okuyun veya güncelleyin | 400 geçersiz istek; 404 bilinmeyen sağlayıcı |
 | `GET /api/provider-presets` | Çalışma zamanı kayıt defterinden türetilen GUI sağlayıcı önayarlarını döndürün | — |
 
+Bağlam sınırı yanıtı `caps` (etkin sınırlar) ve `values` (devre dışıyken de saklanan son seçimler)
+alanlarını içerir. Sağlayıcının sınırını `value` olmadan etkinleştirmek seçimini geri yükler;
+ilk etkinleştirmede genel `contextCapValue` kullanılır. Bu kural OpenAI için de geçerlidir:
+anahtar özel bir 922k modu seçmez. Etkin sınır tüm yerel pencereleri sınırlar; uzun bağlamı
+destekleyen modeller yalnızca kendi desteklenen üst sınırlarına kadar genişletilebilir.
+`{ "value": 600000, "setAll": true }`, genel değeri ve yalnızca etkin sınırları günceller.
+Sınırı kapalı olan sağlayıcılar, daha sonra yeniden etkinleştirildiğinde kullanılacak seçimlerini korur.
+`value` olmadan `{ "setAll": true }`, yapılandırılmış tüm sağlayıcıların sınırlarını geçerli genel
+değerle etkinleştirir ve saklanan seçimlerini değiştirir. Devre dışı bırakmak seçimi silmez;
+yeniden yüklemeden sonra da saklar, ancak bir sınır olarak uygulamaz.
+
 `provider_has_dependent_combos` bir güvenlik engelidir: sağlayıcılarını silmeden
 önce bağımlı komboları kaldırın veya düzenleyin.
 

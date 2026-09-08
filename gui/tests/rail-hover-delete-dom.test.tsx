@@ -49,7 +49,9 @@ beforeEach(() => {
     configurable: true,
     value: async (url: string, init?: RequestInit) => {
       requests.push(`${init?.method ?? "GET"} ${String(url)}`);
-      return { ok: true, json: async () => ({}) } as unknown as Response;
+      if (String(url).endsWith("/api/models")) return Response.json([]);
+      if (String(url).endsWith("/api/selected-models")) return Response.json({ selected: {}, available: {}, liveModelCounts: {} });
+      return Response.json({});
     },
   });
 
@@ -111,7 +113,6 @@ async function mountShell() {
           onSelect={(name) => selected.push(name)}
           onRemoveProvider={(name) => removed.push(name)}
           onAddProvider={() => {}}
-          modelsLoadFailed={false}
           detail={() => null}
         />
       </LanguageProvider>,

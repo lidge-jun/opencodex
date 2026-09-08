@@ -86,6 +86,15 @@ const HASH_PINNED_SYNTHETIC_FIXTURES = new Map<string, string>([
   ],
 ]);
 
+/**
+ * The sponsorship contact address published on purpose. It is the one email the project
+ * WANTS in the tree, and only in the two files that carry the sponsor rule set. Anywhere
+ * else — a devlog note, a test fixture, a comment — the same address still fails, because
+ * there it would be a leak of contact data rather than a published channel.
+ */
+const SPONSORSHIP_CONTACT_EMAIL = ["jun", "lidgeai.com"].join("@");
+const SPONSORSHIP_CONTACT_FILES = new Set(["SPONSORS.md", "README.md"]);
+
 function gitLsFiles(): string[] {
   const result = Bun.spawnSync(["git", "ls-files"], { stdout: "pipe", stderr: "pipe" });
   if (!result.success) {
@@ -125,6 +134,7 @@ function isAllowedEmail(file: string, email: string, fileSha256: string): boolea
   if (pinned?.sha256 === fileSha256 && pinned.emails.has(email)) return true;
   if (file === "scripts/privacy-scan.ts" && email === "a@b.com") return true;
   if (file === DEVLOG_PUBLICATION_PROOF_FILE && email === DEVLOG_PUBLICATION_PROOF_EMAIL) return true;
+  if (SPONSORSHIP_CONTACT_FILES.has(file) && email.toLowerCase() === SPONSORSHIP_CONTACT_EMAIL) return true;
   const domain = email.split("@").at(1)?.toLowerCase() ?? "";
   if (domain === "example.test" || domain === "example.com" || domain === "test.com" || domain.endsWith(".test")) {
     return true;

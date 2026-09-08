@@ -1,12 +1,12 @@
 ---
 name: ocx
-description: Drive a running opencodex (`ocx`) proxy from the CLI — account pools, provider routing, model catalog, usage and cost attribution, request logs, access keys, storage cleanup, and the management API. Use when a task involves controlling or inspecting an opencodex proxy rather than editing the opencodex codebase. Triggers: ocx, opencodex, proxy control, account pool, pause account, pool strategy, provider routing, usage report, cost attribution, access key, request log, conversation trace, storage cleanup, management API.
+description: "Drive a running opencodex (`ocx`) proxy from the CLI — account pools, provider routing, model catalog, usage and cost attribution, request logs, access keys, storage cleanup, and the management API. Use when a task involves controlling or inspecting an opencodex proxy rather than editing the opencodex codebase. Triggers: ocx, opencodex, proxy control, account pool, pause account, pool strategy, provider routing, usage report, cost attribution, access key, request log, conversation trace, storage cleanup, management API."
 ---
 
 # Operating `ocx`
 
 `ocx` controls a locally running opencodex proxy. The CLI covers the dashboard's operational
-surface, with one consent exception (starring) recorded under Consent below. `ocx capabilities`
+surface, subject to Consent and Secret-bearing commands below. `ocx capabilities`
 lists the *declared* index, not every verb.
 
 Be precise about the gap, because guessing costs you more than reading: the capability index below
@@ -89,6 +89,27 @@ starring would be useful, say so and let the user decide.
 
 The same boundary covers the session-gated `/api/codex-prompt` writes: read them with
 `ocx inspect codex-prompt`, and leave the writes to the dashboard.
+
+## Secret-bearing commands
+
+**Do not create an access key or start an access-key rotation from an agent session.**
+This covers the create and rotation-start operations under `ocx access key`,
+`ocx access keys`, and `ocx api-key`, their `opencodex` equivalents and executable
+wrappers, and direct POST requests to `/api/keys` and `/api/keys/rotate`.
+Both text and JSON responses contain a one-time plaintext data-plane credential,
+which can enter the agent transcript. Ask the user to perform that step in a
+human-operated terminal outside the agent session, configure and verify the
+replacement, and report only confirmation plus non-secret key/rotation IDs.
+Never ask for the plaintext key in chat or offer a pipe, redirection, or API
+workaround to perform the secret-returning step inside the agent session.
+
+Configuration confirmation is not approval to revoke the existing credential.
+Identify the existing key ID and obtain separate explicit revocation approval
+before committing an in-place rotation or removing an old, separately replaced key.
+An existing explicit approval for that exact revocation remains valid; setup
+confirmation alone does not supply it. Commit and abort return no plaintext key,
+but still require authority for their state changes. Follow
+[recipe 5](references/03_recipes.md#5-prepare-an-access-key-rotation-without-exposing-the-new-key).
 
 ## Destructive verbs
 

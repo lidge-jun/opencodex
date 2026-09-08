@@ -10,7 +10,7 @@ import { getMainAccountHardLockStatus } from "../../src/codex/main-account-hard-
 import { setMainAccountPlan } from "../../src/codex/main-account";
 import * as mainAccount from "../../src/codex/main-account";
 import * as nativeClaim from "../../src/codex/native-main-claim";
-import { clearAccountQuota, flushQuotaObservationsForTests, setAccountQuotaFromParsed } from "../../src/codex/quota";
+import { clearAccountQuota, flushQuotaObservationsForTests, getAccountQuota, getMainPolicyQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
 import { resetCodexQuotaAutoRefreshForTests, runCodexQuotaAutoRefresh, type CodexQuotaAutoRefreshWindows } from "../../src/codex/quota-auto-refresh";
 import { getNativeMainProfileRequestCount, resetLifecycleDrainStateForTests } from "../../src/server/lifecycle";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
@@ -23,6 +23,7 @@ const RESET_SECONDS = 1_700_000_000;
 const RESET_MILLISECONDS = 1_700_000_000_000;
 const responsesUrl = "https://chatgpt.com/backend-api/codex/responses";
 const tokenUrl = "https://auth.openai.com/oauth/token";
+const whamUrl = "https://chatgpt.com/backend-api/wham/usage";
 let home: string;
 let previousHome: string | undefined;
 let previousCodexHome: string | undefined;
@@ -71,7 +72,7 @@ function installFetch(handler: (url: string, init?: RequestInit) => Promise<Resp
   const calls: string[] = [];
   globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
     calls.push(String(input));
-    expect([tokenUrl, responsesUrl]).toContain(String(input));
+    expect([tokenUrl, responsesUrl, whamUrl]).toContain(String(input));
     expect(getNativeMainProfileRequestCount()).toBe(1);
     return handler(String(input), init);
   }, { preconnect: previousFetch.preconnect });
@@ -137,6 +138,92 @@ afterEach(async () => {
 });
 
 describe("quota auto-refresh native-main admission", () => {
+  test("stale metadata prepares an expired main token before WHAM and activation", async () => {
+    const cfg = config();
+    writeMain(bearer(true));
+    const cached = getAccountQuota(MAIN);
+    if (!cached) throw new Error("Expected cached main quota");
+    cached.updatedAt = now - 300_000;
+    const fresh = bearer();
+    const calls = installFetch(async (url, init) => {
+      if (url === tokenUrl) {
+        return Response.json({ access_token: fresh, refresh_token: "fixture-rotated", expires_in: 86_400 });
+      }
+      expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${fresh}`);
+      if (url === whamUrl) return Response.json({ plan_type: "plus", rate_limit: {
+        primary_window: { used_percent: 0, limit_window_seconds: 18_000, reset_at: RESET_SECONDS },
+        secondary_window: { used_percent: 0, limit_window_seconds: 604_800, reset_at: RESET_SECONDS },
+      } });
+      return completedResponse();
+    });
+    await runCodexQuotaAutoRefresh(cfg, now, { persistCompleted: recordMarkers });
+    expect(calls).toEqual([tokenUrl, whamUrl, responsesUrl]);
+    expect(isAccountNeedsReauth(MAIN)).toBe(false);
+    expect(cfg.codexQuotaAutoRefresh?.[MAIN]?.lastFiveHourResetAt).toBe(RESET_MILLISECONDS);
+    expect(getNativeMainProfileRequestCount()).toBe(0);
+  });
+
+  test.each(["bearer", "workspace", "missing"] as const)(
+    "%s replacement during main SSE cannot publish old quota or completion markers", async change => {
+      const cfg = config();
+      const entered = deferred<void>();
+      let controller!: ReadableStreamDefaultController<Uint8Array>;
+      const calls = installFetch(async () => new Response(new ReadableStream<Uint8Array>({
+        start(value) { controller = value; },
+        pull() { entered.resolve(); },
+      }), { headers: {
+        "content-type": "text/event-stream",
+        "x-codex-primary-used-percent": "0",
+        "x-codex-primary-window-minutes": "300",
+        "x-codex-primary-reset-at": String(RESET_SECONDS + 18_000),
+      } }));
+      const run = runCodexQuotaAutoRefresh(cfg, now, { persistCompleted: recordMarkers });
+      try {
+        await Promise.race([entered.promise, run.then(() => { throw new Error("SSE was never reached"); })]);
+        const workspace = change === "workspace" ? "fixture-replacement-workspace" : accountId;
+        if (change === "missing") writeFileSync(join(home, "auth.json"), "{}");
+        else writeMain("fixture-replacement-token", workspace);
+        reconcileMainCodexAccountRuntimeState();
+        const writer = captureMainQuotaWriter(workspace);
+        if (!writer) throw new Error("Expected current quota owner");
+        setAccountQuotaFromParsed(MAIN, { shortPercent: 77, shortWindowSeconds: 18_000,
+          shortResetAt: RESET_SECONDS + 900 }, undefined, writer);
+        const quotaBefore = { ...getAccountQuota(MAIN) };
+        const policyBefore = { ...getMainPolicyQuota() };
+        controller.enqueue(new TextEncoder().encode('data: {"type":"response.completed"}\n\n'));
+        controller.close();
+        await run;
+        expect(calls).toEqual([responsesUrl]);
+        expect(getAccountQuota(MAIN)).toEqual(quotaBefore);
+        expect(getMainPolicyQuota()).toEqual(policyBefore);
+        expect(cfg.codexQuotaAutoRefresh?.[MAIN]?.lastFiveHourResetAt).toBeUndefined();
+        expect(cfg.codexQuotaAutoRefresh?.[MAIN]?.lastWeeklyResetAt).toBeUndefined();
+        expect(isAccountNeedsReauth(MAIN)).toBe(false);
+        expect(getNativeMainProfileRequestCount()).toBe(0);
+      } finally {
+        try { controller?.close(); } catch { /* Already closed after completion. */ }
+        await run;
+      }
+    },
+  );
+
+  test("late main 401 cannot quarantine a replacement credential", async () => {
+    const cfg = config();
+    const entered = deferred<void>();
+    const response = deferred<Response>();
+    installFetch(async () => { entered.resolve(); return response.promise; });
+    const run = runCodexQuotaAutoRefresh(cfg, now, { persistCompleted: recordMarkers });
+    try {
+      await Promise.race([entered.promise, run.then(() => { throw new Error("Inference was never reached"); })]);
+      writeMain("fixture-replacement-token");
+      response.resolve(new Response("{}", { status: 401 }));
+      await run;
+      expect(isAccountNeedsReauth(MAIN)).toBe(false);
+      expect(cfg.codexQuotaAutoRefresh?.[MAIN]?.lastWeeklyResetAt).toBeUndefined();
+      expect(getNativeMainProfileRequestCount()).toBe(0);
+    } finally { response.resolve(new Response("{}", { status: 401 })); await run; }
+  });
+
   test("owned reconciliation activates retained99 before token preparation when current identity was not observed", async () => {
     const cfg = config();
     const writer = captureMainQuotaWriter(accountId);

@@ -11,6 +11,7 @@
 import type { CatalogModel } from "../../codex/catalog";
 import {
   catalogModelSlug,
+  filterCatalogVisibleModels,
   accountBoundNativeOpenAiSlugsBySelector,
   nativeDefaultReasoningEffort,
   NATIVE_OPENAI_MODELS,
@@ -45,6 +46,7 @@ export type ManagementModelRow = Partial<CatalogModel> & {
   native?: boolean;
   custom?: boolean;
   customId?: string;
+  manualPricing?: boolean;
   fastRowAvailable?: boolean;
   displayNameOverride?: string;
   displayNameSource?: "operator" | "provider" | "fallback";
@@ -180,8 +182,12 @@ export async function listManagementModelRows(
   for (const row of rows) knownIds.add(row.namespaced);
   return rows.map(row => {
     const pending = initialModelSelectionPending(config.providers[row.provider]);
+    const modelCosts = Object.hasOwn(config.providers, row.provider)
+      ? config.providers[row.provider]?.modelCosts : undefined;
     return {
       ...row,
+      ...(!row.native && modelCosts !== undefined && Object.hasOwn(modelCosts, row.id)
+        ? { manualPricing: true } : {}),
       ...(pending ? { disabled: true, initialSelectionPending: true } : {}),
       fastRowAvailable: !row.disabled && !pending
         && !knownIds.has(fastRowId(row.namespaced)) && catalogFastRowEligible(config, row),
@@ -217,5 +223,8 @@ export function toExportModel(row: ManagementModelRow): ExportModel {
  */
 export async function loadExportModels(config: OcxConfig): Promise<ExportModel[]> {
   const rows = await listManagementModelRows(config);
-  return rows.filter(row => !row.disabled).map(toExportModel);
+  // Management deliberately lists the full roster so hidden models can be enabled.
+  // A client picker must also honor the provider selection, not just its blocklist.
+  const visibleRouted = new Set(filterCatalogVisibleModels(rows.filter(row => !row.native), config));
+  return rows.filter(row => !row.disabled && (row.native || visibleRouted.has(row))).map(toExportModel);
 }

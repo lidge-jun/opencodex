@@ -27,6 +27,9 @@ export line, and how many models carry authoritative context limits.
       "baseUrl": "http://127.0.0.1:10100/v1",
       "api": "openai-completions",
       "apiKey": "$OPENCODEX_API_KEY",
+      "compat": {
+        "sendSessionAffinityHeaders": true
+      },
       "models": [
         {
           "id": "anthropic/claude-opus-5",
@@ -40,6 +43,8 @@ export line, and how many models carry authoritative context limits.
   }
 }
 ```
+
+Generated Pi providers enable `compat.sendSessionAffinityHeaders`. Keep this flag when merging or manually editing the provider: Pi supplies a stable session identity and OpenCodex derives canonical OpenCode Go affinity from it. Pi may omit the identity when `cacheRetention` is `none`.
 
 Model ids are the proxy's canonical selectors, so routed models appear as `provider/model`
 (`anthropic/claude-opus-5`) and native OpenAI slugs stay unprefixed (`gpt-5.6-sol`). The `name`

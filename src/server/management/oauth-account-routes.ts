@@ -129,6 +129,11 @@ function validateKeyName(
 export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, syncClaudeAgentDefsBestEffort } = ctx;
 
+  if (url.pathname === "/api/accounts/events" && req.method === "GET") {
+    const { accountSelectionStream } = await import("./account-selection-stream");
+    return accountSelectionStream(req, () => ctx.sessionControl?.isCurrent(req, config) === true);
+  }
+
   // Which providers support real OAuth login (drives the GUI's "Log in with …" buttons).
   if (url.pathname === "/api/oauth/providers" && req.method === "GET") {
     return jsonResponse({ providers: listOAuthProviders() });
@@ -320,6 +325,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (!body.accountId) return jsonResponse({ error: "missing accountId" }, 400);
     const { setActiveAccount } = await import("../../oauth/store");
     if (!(await setActiveAccount(provider, body.accountId))) return jsonResponse({ error: "account not found" }, 404);
+    const { forgetGenericFailoverRoster } = await import("../../oauth/generic-account-failover");
+    forgetGenericFailoverRoster(provider);
     if (provider === "anthropic") {
       const { resetAnthropicRoutingForManualSelection } = await import("../../oauth/anthropic-routing");
       resetAnthropicRoutingForManualSelection(body.accountId);

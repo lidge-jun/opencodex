@@ -88,7 +88,21 @@
   margin-top: 3px;
   max-width: 72ch;
   line-height: 1.5;
+  overflow-wrap: anywhere;
 }
+
+.swi-ultra-mode-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: start;
+}
+
+.swi-ultra-mode-textarea {
+  min-width: 0;
+  width: 100%;
+}
+
+.swi-ultra-mode-editor > button { justify-self: end; }
 
 .swi-delegation-controls {
   display: flex;
@@ -574,4 +588,19 @@
       max-height: calc(round(down, min(272px, 44vh) + 4px, var(--swi-row-step)) - 4px);
     }
   }
+}
+
+
+/* Fallback targets keep their identifiers readable next to row actions. */
+.swi-fallback-controls { display: flex; flex-direction: column; align-items: stretch; gap: var(--space-2); flex: 1 1 55%; min-width: 0; }
+.swi-fallback-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.swi-fallback-model { min-width: 0; overflow-wrap: anywhere; }
+.swi-fallback-model .setting-hint { display: block; }
+.swi-fallback-actions { display: inline-flex; flex-shrink: 0; }
+.swi-fallback-controls > .btn { align-self: flex-end; }
+@media (max-width: 640px) {
+  .swi-fallback-editor { flex-direction: column; }
+  .swi-fallback-controls { width: 100%; }
+  .swi-ultra-mode-editor { grid-template-columns: minmax(0, 1fr) auto; }
+  .swi-ultra-mode-textarea { grid-column: 1 / -1; }
 }

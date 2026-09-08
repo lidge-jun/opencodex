@@ -79,7 +79,7 @@ Those controls still have no owner, so there is no image-publish workflow or off
 
 | Workflow | Trigger | Purpose |
 | --- | --- | --- |
-| `.github/workflows/ci.yml` | `pull_request` to `main`/`dev`, `push` to `main`/`preview`/`dev`, or manual dispatch when runtime/package paths change | Cross-platform runtime/package quality gate. Linux runs the suite as four parallel shards (`test 1/4`–`4/4`) plus a consolidated `gates` job; macOS runs the full suite. Windows runs the full suite only on a `push` to `main`/`preview` or a manual dispatch — it is the shipping boundary, not the pull-request lane, because it was last to finish in every sampled run at roughly three times the Linux median. The aggregate `ci` job asserts `platform-windows` actually succeeded on those boundary events rather than accepting a skip. `npm-global-smoke` always remains GitHub-hosted because it mutates the global package prefix. |
+| `.github/workflows/ci.yml` | Any `pull_request`; runtime/package `push` to `main`/`preview`/`dev`; manual dispatch | Linux runs four suite shards plus `gates`; macOS runs two shards. Windows runs six shards only on manual dispatch with `lane=all` (or empty), not on push events. Aggregate `ci` accepts an intentional Windows skip, so release evidence must inspect all six actual job results on the exact publish SHA. `npm-global-smoke` remains GitHub-hosted because it mutates the global package prefix. |
 | `.github/workflows/dev-version-bump.yml` | Manual dispatch with an intended version and `pre-move` or `repair` mode | Opens the reviewed pull request that moves `dev` past a release target. The default `pre-move` mode runs before promotion and publication; explicit `repair` mode retains the post-publish catch-up path. It is neither called by `release.yml` nor triggered by publication. |
 | `.github/workflows/release.yml` | Manual dispatch only | npm publish/dry-run workflow. It requires successful Cross-platform CI for the exact `GITHUB_SHA`, requires `dev` to outrank the target, then checks the target against the freshly fetched global tag set before publish or dry-run. |
 | `.github/workflows/deploy-docs.yml` | `push` to `main` touching `docs-site/**` or the workflow, or manual dispatch | Build and publish the Astro/Starlight docs site to GitHub Pages. |
@@ -155,7 +155,11 @@ exists so the repository-shape source of truth does not omit the shape of its ow
 `.github/CODEOWNERS` declares default reviewers and repeats ownership for authentication, repository
 automation, release, and governance paths where an explicit security review is required. GitHub
 repository settings remain the source of truth for actual account permissions and protected-branch
-enforcement.
+enforcement. For `dev`, a current maintainer with live `maintain` or `admin` access can
+explicitly integrate a PR without a second maintainer approval. The optional merge-review
+helper validates this actor/base exception separately from its default contributor-approval
+path; it does not certify CI or security review. The PR-only bypass leaves direct pushes,
+force-pushes and deletion blocked. `main` and `preview` retain their existing review rules.
 
 [Decision Log]
 - 목적과 의도: Make project ownership and review authority discoverable without exposing credentials or treating a documentation file as an access-control mechanism.
@@ -213,15 +217,19 @@ separate channel-aware invariant and release-note baseline design.
 
 ### Release notes
 
-Release notes are rendered OpenAI-Codex-style by `scripts/release-notes.ts render` inside
-`.github/workflows/release.yml`: `## New Features` / `## Bug Fixes` / `## Documentation` /
-`## Chores` / `## Other Changes` sections with prefix-free, scope-grouped summary bullets
-(`- Providers: Add X; Add Y (#1, #2)`), followed by a `## Changelog` section listing every PR
-as `- #N <title> @author`; when a comparison baseline exists, that section also includes a
-compare link. Carried preview changelogs and the since-preview delta feed the same renderer,
-so stable notes are the aggregate of their preview train. The raw commit dump is
-intentionally gone — non-PR commits stay reachable via the Full Changelog compare link when
-that link is available.
+The release workflow invokes `scripts/build-release-changelog.ts`, which builds notes from
+the actual Git range and uses generated PR notes as enrichment. Its categorized summaries
+contain one bullet per PR or direct commit, followed by `## Changelog` entries retaining PR
+titles and authors or sanitized direct-commit text. A comparison baseline adds a compare link.
+Preview notes are incremental; stable notes cover the range since the previous stable tag.
+The standalone `scripts/release-notes.ts render` command retains its separate scope-grouped
+summary and carried-preview rendering behavior.
+
+Both renderers strip the exact leading `[WRONG BRANCH]` marker followed by one ASCII space
+from PR summary bullets and full-changelog titles. Other bracketed text is preserved.
+Summary bullets remove conventional commit prefixes; PR changelog entries keep those prefixes,
+PR numbers, and author attribution. This normalization does not change category selection,
+direct-commit coverage, or PR-target enforcement.
 
 The deterministic renderer produces the structure but not curated prose. Maintainers who want
 the OpenAI-style grouped summaries can run the optional local polish step against the rendered
@@ -277,8 +285,12 @@ preview has closed that stable patch line.
 ## Cross-platform CI
 
 `.github/workflows/ci.yml` is the ordinary quality gate for runtime/package changes. Linux runs
-the suite in four shards with a separate `gates` job, macOS runs it whole, and Windows runs whole
-but only at the shipping boundary (`push` to `main`/`preview`, or manual dispatch). Each lane runs:
+the suite in four shards with a separate `gates` job, and macOS runs it in two shards. Windows
+runs the full suite in six shards only on manual `workflow_dispatch` with `lane=all` (or an
+empty lane). Pushes to `dev`, `main` and `preview` do not activate that Windows matrix. A
+release that requires Windows proof must dispatch it for the exact publish SHA and inspect
+all six successful jobs; an aggregate green `ci` check can include a deliberate Windows skip.
+Across the jobs, the workflow runs:
 
 ```bash
 bun install --frozen-lockfile

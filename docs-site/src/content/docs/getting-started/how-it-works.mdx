@@ -50,9 +50,19 @@ account before the request is forwarded upstream. The rule is intentionally spli
   its minimal non-stored account warmup request through the exact account whose window is due,
   coalesces simultaneous windows into one request, and durably persists both reset timestamps to
   prevent duplicate work after restarts. Paused accounts and accounts
-  requiring reauthentication are skipped; the next normal quota poll reports the activated window.
+  requiring reauthentication are skipped. Activation captures successful response quota headers;
+  opted-in idle accounts also refresh stale quota metadata at most once every five minutes,
+  without needing an open dashboard. Observed reset boundaries are retained across restarts
+  until completed, so a moving idle-window timestamp cannot erase a pending activation.
+  Metadata refresh uses the existing bounded authentication recovery; an inference 401 marks
+  the rejected credential for reauthentication instead of repeatedly spending retries on it.
+  Failures log only an opaque account label and a status-only reason.
   This is separate from reset-window routing: routing chooses an account for incoming work, while
   activation sends one request to a specific opted-in account only after its own reset is due.
+
+**Downgrade note:** Before running an older version, remove only `nextFiveHourResetAt` and
+`nextWeeklyResetAt` from automatic activation settings. Older strict readers reject these new
+fields and can disable the entire activation settings block.
 
 ## Sub-agent model selection
 

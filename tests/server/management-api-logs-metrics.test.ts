@@ -7,6 +7,7 @@ import { usageLogPath } from "../../src/usage/log";
 import {
   addRequestLog,
   clearRequestLogsForTests,
+  evictOldestRequestLogForBudget,
   getRequestLogEntries,
   type RequestLogEntry,
 } from "../../src/server/request-log";
@@ -14,6 +15,30 @@ import type { OcxConfig } from "../../src/types";
 import { buildRouteDecisionTrace } from "../../src/routing/trace";
 import { summarizeUsage } from "../../src/usage/summary";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { refreshUserCostOverlays } from "../../src/usage/user-cost-overlays";
+
+interface LogPollEnvelope {
+  logs: Array<Record<string, unknown>>;
+  cursor: string;
+  reset: boolean;
+  generatedAt: number;
+  timeZone: string;
+  total: number;
+}
+
+async function readLogPoll(query = "", cursor?: string): Promise<LogPollEnvelope> {
+  const url = new URL(`http://localhost/api/logs?${query}`);
+  if (cursor) url.searchParams.set("cursor", cursor);
+  const before = Date.now();
+  const response = await handleManagementAPI(new Request(url), url, config);
+  expect(response?.status).toBe(200);
+  const body = await response!.json() as LogPollEnvelope;
+  expect(body.generatedAt).toBeGreaterThanOrEqual(before);
+  expect(body.generatedAt).toBeLessThanOrEqual(Date.now());
+  expect(body.timeZone).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
+  expect(typeof body.cursor).toBe("string");
+  return body;
+}
 
 const config = { providers: [] } as unknown as OcxConfig;
 
@@ -294,3 +319,115 @@ describe("GET /api/logs display metrics", () => {
   });
 });
 import { ManagementRequest as Request } from "../helpers/management-auth";
+
+
+describe("GET /api/logs snapshot polling", () => {
+  beforeEach(() => clearRequestLogsForTests());
+
+  test("poll application equals full reads across append, nested live mutation, eviction and clear", async () => {
+    let accepted: Array<Record<string, unknown>> = [];
+    let cursor: string | undefined;
+    const check = async (reset: boolean, deltaLength: number) => {
+      const poll = await readLogPoll("limit=2000", cursor);
+      expect(poll.reset).toBe(reset);
+      expect(poll.logs).toHaveLength(deltaLength);
+      accepted = !cursor || poll.reset ? poll.logs : [...accepted, ...poll.logs];
+      const snapshot = await readLogPoll("limit=2000");
+      expect(accepted).toEqual(snapshot.logs);
+      expect(poll.total).toBe(snapshot.total);
+      cursor = poll.cursor;
+    };
+    await check(false, 0);
+    addRequestLog(baseEntry({ requestId: "older", usage: { inputTokens: 10, outputTokens: 5 } }));
+    await check(false, 1);
+    await check(false, 0);
+    addRequestLog(baseEntry({ requestId: "newest", firstOutputMs: 4 }));
+    await check(false, 1);
+    getRequestLogEntries()[0]!.usage!.outputTokens = 15;
+    await check(true, 2);
+    getRequestLogEntries()[1]!.status = 500;
+    delete getRequestLogEntries()[1]!.firstOutputMs;
+    await check(true, 2);
+    getRequestLogEntries()[0]!.attempts = [{
+      ordinal: 1, provider: "anthropic", model: "claude-3-haiku-20240307", adapter: "anthropic",
+      status: 200, durationMs: 50, sendCount: 1, recoveryKinds: [], usageStatus: "reported",
+      usage: { inputTokens: 10, outputTokens: 5 },
+    }];
+    await check(true, 2);
+    getRequestLogEntries()[0]!.attempts![0]!.usage!.outputTokens = 20;
+    await check(true, 2);
+    // The newest cursor anchor survives this real memory-budget eviction.
+    evictOldestRequestLogForBudget();
+    await check(true, 1);
+    clearRequestLogsForTests();
+    await check(true, 0);
+    await check(false, 0);
+  });
+
+  test("pagination/filter changes and shifted windows reset against the full filtered snapshot", async () => {
+    for (const [requestId, provider] of [["a", "anthropic"], ["b", "openai"], ["c", "anthropic"]] as const) {
+      addRequestLog(baseEntry({ requestId, provider }));
+    }
+    let query = "provider=anthropic&limit=1&offset=1";
+    const initial = await readLogPoll(query);
+    expect(initial.logs.map(row => row.requestId)).toEqual(["a"]);
+    expect(initial.total).toBe(2);
+    addRequestLog(baseEntry({ requestId: "d", provider: "anthropic" }));
+    let poll = await readLogPoll(query, initial.cursor);
+    expect(poll.reset).toBe(true);
+    expect(poll.logs).toEqual((await readLogPoll(query)).logs);
+    expect(poll.logs.map(row => row.requestId)).toEqual(["c"]);
+    expect(poll.total).toBe(3);
+    for (const changed of ["provider=openai&limit=1", "tail=2&limit=1", "model=absent", "status=5xx", "conversation=absent"]) {
+      query = changed;
+      poll = await readLogPoll(query, poll.cursor);
+      const full = await readLogPoll(query);
+      expect(poll.reset).toBe(true);
+      expect(poll.logs).toEqual(full.logs);
+      expect(poll.total).toBe(full.total);
+    }
+    const filtered = await readLogPoll("provider=openai");
+    addRequestLog(baseEntry({ requestId: "not-in-filter", provider: "anthropic" }));
+    expect(await readLogPoll("provider=openai", filtered.cursor))
+      .toMatchObject({ logs: [], reset: false, cursor: filtered.cursor, total: 1 });
+  });
+
+  test("display-time cost changes reset even when raw entries are unchanged", async () => {
+    const priceConfig: OcxConfig = { port: 0, defaultProvider: "fixture", providers: { fixture: {
+      adapter: "openai-chat", baseUrl: "https://example.test/v1", models: ["fixture-model"],
+      modelCosts: { "fixture-model": { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 } },
+    } } };
+    try {
+      refreshUserCostOverlays(priceConfig);
+      addRequestLog(baseEntry({ provider: "fixture", model: "fixture-model", usage: { inputTokens: 100, outputTokens: 10 } }));
+      const initial = await readLogPoll();
+      const rawBefore = structuredClone(getRequestLogEntries());
+      priceConfig.providers.fixture!.modelCosts!["fixture-model"]!.output = 20;
+      refreshUserCostOverlays(priceConfig);
+      const changed = await readLogPoll("", initial.cursor);
+      expect(changed.reset).toBe(true);
+      expect(changed.logs[0]!.displayMetrics).not.toEqual(initial.logs[0]!.displayMetrics);
+      expect(changed.logs).toEqual((await readLogPoll()).logs);
+      expect(getRequestLogEntries()).toEqual(rawBefore);
+    } finally {
+      refreshUserCostOverlays(config);
+    }
+  });
+
+  test("legacy cursors reset; invalid cursors return generic errors without reflecting input", async () => {
+    addRequestLog(baseEntry({ requestId: "private-row" }));
+    const legacy = Buffer.from(JSON.stringify({ v: 1, t: 1, id: "private-row" })).toString("base64url");
+    const poll = await readLogPoll("provider=anthropic", legacy);
+    expect(poll.reset).toBe(true);
+    const payload = Buffer.from(poll.cursor, "base64url").toString();
+    expect(payload).not.toContain("private-row");
+    expect(payload).not.toContain("anthropic");
+    for (const cursor of ["", "private-invalid-cursor", "x".repeat(513)]) {
+      const url = new URL("http://localhost/api/logs");
+      url.searchParams.set("cursor", cursor);
+      const response = await handleManagementAPI(new Request(url), url, config);
+      expect(response?.status).toBe(400);
+      expect(await response!.json()).toEqual({ error: { code: "invalid_cursor", message: "invalid cursor" } });
+    }
+  });
+});

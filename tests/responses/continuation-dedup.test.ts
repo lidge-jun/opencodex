@@ -310,9 +310,17 @@ describe("replay overlap: contracts held elsewhere", () => {
   });
 
   test("the skip counter is not published on the memory surface", () => {
-    // /api/system/memory pins exactly 17 privacy-reviewed scalar fields. The five
-    // spill-health additions are enums, counters, or timestamps — never error text.
-    expect(Object.keys(responseStateMetrics())).toHaveLength(17);
+    // Pin the reviewed public fields, not just their count: no replay-skip
+    // counter or arbitrary diagnostic may replace a permitted field unnoticed.
+    expect(Object.keys(responseStateMetrics()).sort()).toEqual([
+      "count", "residentCount", "spillStubCount", "tombstoneCount",
+      "totalBytes", "spillPayloadBytes", "largestBytes", "oldestAgeMs",
+      "spillWrites", "spillWriteFailures", "spillReadFailures",
+      "spillWriteStatus", "spillWriteConsecutiveFailures",
+      "spillLastWriteFailureCode", "spillLastWriteFailureOrigin",
+      "spillAclRetryReturnedTimeouts", "spillAclTimeoutMemoRefusals",
+      "spillLastWriteFailureAt", "spillLastWriteSuccessAt", "replayScopeMismatchDrops",
+    ].sort());
   });
 
   test("clearing state for tests resets the skip counter", () => {

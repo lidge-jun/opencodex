@@ -109,6 +109,80 @@ describe("ocx provider", () => {
     }
   });
 
+  test("provider list --jsonl matches JSON configured records with escaped model values", () => {
+    const escapedModel = 'model-"quoted"\\path\nnext\r\ttab-한글';
+    const { dir } = freshConfig({
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+        },
+        "custom.models-1": {
+          adapter: "openai-chat",
+          baseUrl: "https://models.example.test/v1",
+          defaultModel: escapedModel,
+          models: ["plain-model", escapedModel],
+        },
+      },
+      defaultProvider: "custom.models-1",
+    });
+    try {
+      const result = runCli(["provider", "list", "--jsonl"], { OPENCODEX_HOME: dir });
+      const json = runCli(["provider", "list", "--json"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      expect(json.status).toBe(0);
+      // Keep every physical line: embedded newlines must be escaped, and only
+      // the final record terminator may produce an empty split element.
+      const lines = result.stdout.split(/\r?\n/);
+      expect(lines.pop()).toBe("");
+      expect(lines).toHaveLength(2);
+      const records = lines.map(line => JSON.parse(line));
+      const envelope = JSON.parse(json.stdout);
+      expect(records).toEqual(envelope.configured);
+      expect(envelope.registryCount).toBeGreaterThan(0);
+      expect(records).toEqual([
+        {
+          name: "openai",
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+          defaultModel: null,
+          isDefault: false,
+          source: "registry",
+          models: [],
+        },
+        {
+          name: "custom.models-1",
+          adapter: "openai-chat",
+          baseUrl: "https://models.example.test/v1",
+          authMode: "key",
+          defaultModel: escapedModel,
+          isDefault: true,
+          source: "custom",
+          models: ["plain-model", escapedModel],
+        },
+      ]);
+    } finally {
+      removeTreeWithRetry(dir);
+    }
+  });
+
+  test.each([
+    ["--json", "--jsonl"],
+    ["--jsonl", "--json"],
+  ])("provider list rejects %s %s without stdout", (first, second) => {
+    const { dir } = freshConfig();
+    try {
+      const result = runCli(["provider", "list", first, second], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("Use only one of --json or --jsonl");
+    } finally {
+      removeTreeWithRetry(dir);
+    }
+  });
+
   test("provider add registry provider seeds config", () => {
     const { dir } = freshConfig();
     try {

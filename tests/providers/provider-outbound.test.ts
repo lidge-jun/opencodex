@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { mkdtempSync} from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import type { ProviderOutboundDependencies } from "../../src/lib/provider-outbound";
 import { PROXY_ENV_KEYS } from "../../src/lib/proxy-env";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { fixturePath, repoRoot } from "../helpers/repo-root";
 
 const proxyKeys = PROXY_ENV_KEYS.flatMap(key => [key, key.toLowerCase()]);
 const originalProxyEnv = Object.fromEntries(proxyKeys.map(key => [key, process.env[key]]));
@@ -427,6 +429,27 @@ describe("#3462 Mihomo IPv6 fake-IP admission is gated on the scheme-matched pro
   const ULA = "fdfe:dcba:9876::7e";
   const target = "https://opencode.ai/zen/v1/models";
 
+  test("canonical IPv6-only TUN transport preserves pinning and rejects unsafe DNS answers", async () => {
+    const childDir = mkdtempSync(join(tmpdir(), "ocx-mihomo-test-"));
+    const childTest = join(childDir, "mihomo.test.ts");
+    // Builtin module mocks are activated by Bun's test loader, not plain bun execution.
+    writeFileSync(childTest, `import { test } from "bun:test";\ntest("Mihomo matrix", async () => { await import(${JSON.stringify(pathToFileURL(fixturePath("provider-outbound-mihomo.ts")).href)}); });\n`);
+    try {
+      const child = Bun.spawn([process.execPath, "test", childTest], {
+        cwd: repoRoot(), env: { ...process.env }, stdout: "pipe", stderr: "pipe",
+      });
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+      ]);
+      if (exitCode !== 0) throw new Error(`Mihomo fixture exited ${exitCode}: ${stderr}`);
+      const result = stdout.split(/\r?\n/).find(line => line.startsWith("MIHOMO_RESULT="));
+      expect(result).toBeDefined();
+      expect(JSON.parse(result!.slice("MIHOMO_RESULT=".length))).toEqual({ ipv6Pinned: 6, proxyBound: 2, denied: 54 });
+    } finally {
+      removeTreeWithRetry(childDir);
+    }
+  });
+
   async function run(env: Record<string, string>, opts: { admit: boolean }) {
     for (const key of proxyKeys) delete process.env[key];
     for (const [k, v] of Object.entries(env)) process.env[k] = v;
@@ -500,6 +523,23 @@ describe("#3462 Mihomo IPv6 fake-IP admission is gated on the scheme-matched pro
     const { resolveOptions, fetchInits } = await run({}, { admit: false });
     expect(resolveOptions).toEqual([{ allowMihomoIpv6FakeIp: false }]);
     expect(fetchInits).toHaveLength(0);
+  });
+
+  test("canonical destination without proxy env: admitted under TUN transparentFakeIpException", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
+    const resolveOptions: Captured[] = [];
+    const { dependencies, captured } = directDependencies(new Response(null, { status: 200 }));
+    dependencies.isCanonicalUrl = (name, url) => name === "opencode-go" && url === target;
+    dependencies.resolveAddresses = mock(async (_url: string, options?: Captured) => {
+      resolveOptions.push({ allowMihomoIpv6FakeIp: options?.allowMihomoIpv6FakeIp });
+      return { hostname: "opencode.ai", addresses: [{ address: ULA, family: 6 }, { address: "198.18.0.1", family: 4 }], privateNetwork: false };
+    }) as ProviderOutboundDependencies["resolveAddresses"];
+
+    const response = await providerOutboundGet("opencode-go", { baseUrl: "https://opencode.ai/zen/v1" }, target, {}, dependencies);
+    expect(response.status).toBe(200);
+    expect(resolveOptions).toEqual([{ allowMihomoIpv6FakeIp: true }]);
+    expect(captured.address).toBe("198.18.0.1");
   });
 });
 

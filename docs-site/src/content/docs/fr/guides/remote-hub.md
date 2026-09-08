@@ -60,6 +60,27 @@ La rotation garde les deux clés valides sous le même `apiKeyId` pendant dix mi
 
 ## Docker, retour arrière et dépannage
 
+Lors d'un retour arrière, conservez les deux volumes et leurs points de montage. Les droits des volumes existants ne sont pas corrigés automatiquement. Consultez le [guide canonique](/guides/remote-hub/#docker-compose) pour les montages nommés hors Compose et les chemins d'état personnalisés.
+
+Deux volumes distincts conservent l'état : `ocx-state` pour
+`OPENCODEX_HOME=/home/bun/.opencodex` et `codex-state` pour
+`CODEX_HOME=/home/bun/.codex`. Leurs fichiers `auth.json` ont des formats incompatibles :
+ne fusionnez pas ces répertoires. Ils restent accessibles en écriture malgré la racine en lecture seule.
+
+Le catalogue n'est pas généré automatiquement. Avant de tester `/v1/catalog` avec authentification,
+créez ou importez un fichier valide dans `/home/bun/.codex/opencodex-catalog.json`.
+Un répertoire vide renvoie normalement 404 `catalog_not_found`. Une mise à jour conserve
+`ocx-state` et ajoute `codex-state`, sans déplacer les fichiers. Sauvegardez tout catalogue
+précédemment placé dans `.opencodex`, puis transférez seulement ce catalogue avec des permissions
+réservées au propriétaire ; ne remplacez pas un `auth.json` par celui de l'autre produit.
+Si vous redéfinissez `CODEX_HOME`, montez ce répertoire exact en écriture et placez le catalogue
+par défaut dans `${CODEX_HOME}/opencodex-catalog.json`. Si `model_catalog_json` désigne un autre
+fichier, son chemin résolu doit aussi être persistant. Conservez les variables et montages
+personnalisés jusqu'à la fin d'une migration explicite.
+`docker compose down` conserve les deux volumes ; `docker compose down --volumes` supprime
+`ocx-state` et `codex-state`, avec les identifiants, l'historique d'utilisation, la clé de données,
+l'état et le catalogue Codex. Ce n'est pas une commande de mise à jour ou de redémarrage.
+
 Il n’existe pas d’image Docker officielle, mais le dépôt fournit un `Dockerfile` et un `compose.yaml` maintenus pour construire localement une image Bun épinglée par digest. Initialisez une seule fois la clé de données via stdin ; elle est enregistrée avec des permissions réservées au propriétaire dans le volume `ocx-state` et n’est jamais affichée.
 
 Installez Git et Bun sur l’hôte. Avant chaque construction, générez le manifeste canonique depuis les sources suivies par Git, sans modifier les sources entre la génération et la construction. Le JSON généré reste non suivi ; `.git` est exclu du contexte Docker. Le port hôte est lié à `127.0.0.1` par défaut. Pour un accès distant, utilisez explicitement `OPENCODEX_BIND_ADDRESS=<IP-LAN-ou-Tailscale> docker compose up -d` ; `0.0.0.0` expose toutes les interfaces. Protégez cet accès par un pare-feu et un frontal TLS/tailnet authentifié.

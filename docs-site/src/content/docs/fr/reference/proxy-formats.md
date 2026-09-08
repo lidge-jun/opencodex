@@ -28,7 +28,7 @@ doit choisir parmi plusieurs cibles.
 | OpenAI Chat Completions | `POST /v1/chat/completions` | `chat.completion` JSON | `chat.completion.chunk` SSE se terminant par `[DONE]` |
 | Anthropic Messages | `POST /v1/messages` | Anthropic `message` JSON | Anthropic Messages SSE |
 | Comptage des jetons Anthropic | `POST /v1/messages/count_tokens` | `{ "input_tokens": number }` | Sans objet |
-| Découverte de modèles | `GET /v1/models` | L'un des trois contrats du catalogue | Sans objet |
+| Découverte de modèles | `GET /v1/models` | Catalogue ou instantané Desktop explicite | Sans objet |
 | Voix et temps réel | `POST /v1/live`, `POST /v1/realtime/calls` | Réponse de création d'appel relayée | Une bande latérale séparée WebSocket relaie les trames dans les deux sens |
 | Compactage des réponses | `POST /v1/responses/compact` | Historique de remplacement JSON | Sans objet |
 
@@ -227,16 +227,48 @@ estimation documentée du contenu du système, des messages et des outils et ret
 { "input_tokens": 123 }
 ```
 
+Un ID Desktop de forme datée non résolu peut aussi être un véritable modèle natif absent de
+la découverte. Messages et count-tokens renvoient HTTP 503 avec l’erreur fixe `desktop_model_mapping_unavailable` lorsque les informations disponibles ne permettent pas de résoudre cet ID ; cela ne
+prouve pas que le modèle est invalide. Les anciens alias de type hash inconnus restent rejetés
+avec HTTP 400. Aucun des deux cas ne retire la date ni ne choisit une autre route. Les ID connus,
+les correspondances enregistrées et les entrées exactes de `modelMap`, dont les véritables ID
+natifs reconnus, conservent leur traitement. Actualisez la découverte ou réappliquez le profil du
+hub connecté avant de réessayer ; une simple nouvelle tentative ne garantit pas la résolution.
+
 ## `GET /v1/models`
 
-Le même itinéraire dessert trois clients qui attendent des enveloppes de catalogue incompatibles.
-La variante Anthropic est prioritaire, sauf si `client_version` est également présent.
+Sans `format=desktop-config`, les contrats de catalogue ordinaires sont les suivants :
 
 | Contrat | Déclencheur | Forme de niveau supérieur | Comportement de l’identifiant du modèle |
 | --- | --- | --- | --- |
 | Anthropic liste des modèles | `anthropic-version` en-tête ou `?flavor=anthropic`, sans `client_version` | `{ "data": [...] }` avec Anthropic entrées d'informations sur le modèle | Claude Code reçoit des identifiants lisibles ; Desktop peut recevoir sa famille d'alias spécifique au profil |
 | Codex catalogue | `client_version` paramètre de requête | `{ "models": [...] }` | Les entrées natives et routées contiennent les champs de catalogue Codex les plus riches, la visibilité, l'effort, WebSocket et les métadonnées multi-agents |
 | Liste simple OpenAI | Ni l'un ni l'autre déclencheur | `{ "object": "list", "data": [...] }` | Les identifiants natifs visibles sont nus ; les identifiants routés sont des alias ou `provider/model` |
+
+### Instantané de configuration Desktop
+
+`GET /v1/models?ids=desktop&format=desktop-config` sélectionne explicitement le snapshot
+Desktop, indépendamment du user-agent. La réponse est `{ "version": 1, "models": [...] }`
+avec `Cache-Control: no-store`. Le client envoie `Accept: application/json`,
+`anthropic-version: 2023-06-01` et ses identifiants existants d'accès aux données, sans jeton
+administrateur ni envoi de profil. Les entrées sont les modèles de configuration Desktop émis
+par le hub, pas les lignes du catalogue Codex.
+
+Avec `ids=cli` ou un paramètre `client_version`, ce format renvoie HTTP 400. Sans le sélecteur
+de format, les contrats ordinaires ci-dessus restent inchangés. Si Claude est désactivé,
+`{ "version": 1, "models": [] }` indique l'indisponibilité à Desktop apply, qui n'écrit aucun
+profil de remplacement. Un ancien hub renvoyant un catalogue ordinaire au lieu de la version 1
+n'est pas pris en charge ; aucun identifiant local de secours n'est généré.
+
+Le snapshot reste une lecture de modèles, pas une API de rotation ou d'envoi de profil.
+Migration des clés Desktop, récupération et déconnexion utilisent le cycle de vie client existant.
+La rotation conserve modèles et sélection ; le champ CLI `rotation` distingue `committed` et
+`rolled_back`. La déconnexion restaure les paramètres gérés ou signale un repli standard pour un
+ancien profil reconnu, en préservant champs utilisateur et choix valides ultérieurs. Conflits et
+récupération incomplète empêchent de déclarer l'opération terminée. Redémarrez Desktop pour lire
+les changements ; la déconnexion ne révoque pas automatiquement la clé du hub.
+Voir [le guide Desktop](/fr/guides/claude-code/). Relecture thinking et cache restent dans
+[#3719](https://github.com/lidge-jun/opencodex/issues/3719).
 
 ## `POST /v1/live` et bande latérale en temps réel
 

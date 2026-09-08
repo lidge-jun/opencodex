@@ -3,6 +3,7 @@ import {
   barWidth,
   buildQuotaRows,
   formatResetFuture,
+  isCustomQuotaWindowIncomplete,
   isQuotaExhausted,
   isQuotaWarn,
   maxQuotaUtilisation,
@@ -69,6 +70,102 @@ describe("buildQuotaRows (WP070)", () => {
     expect(rows.map(r => r.label)).toEqual(["quota.totalSubscriptionCredits"]);
   });
 
+  test("direct creditsUsd renders Total subscription credits with resetAt", () => {
+    const reported = quota({
+      creditsUsd: { used: 89.96, limit: 90, remaining: 0.04, percent: 99.96, expiresAt: 1790430938000 },
+    });
+    expect(buildQuotaRows(reported, null, t)).toEqual([{
+      customLabel: "Total subscription credits",
+      label: "quota.totalSubscriptionCredits",
+      limitLabel: "quota.totalSubscriptionCredits",
+      percent: 99.96,
+      resetAt: 1790430938000,
+    }]);
+    expect(maxQuotaUtilisation(reported)).toBe(99.96);
+  });
+
+  test("zero direct credit usage remains a row without an invented expiry", () => {
+    const reported = quota({
+      creditsUsd: { used: 0, limit: 100, remaining: 100, percent: 0 },
+    });
+    const rows = buildQuotaRows(reported, null, t);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.customLabel).toBe("Total subscription credits");
+    expect(rows[0]?.percent).toBe(0);
+    expect(rows[0]?.resetAt).toBeUndefined();
+    expect(maxQuotaUtilisation(reported)).toBe(0);
+  });
+
+  test("subscription credits rank after monthly and before other custom windows", () => {
+    const rows = buildQuotaRows(quota({
+      fiveHourPercent: 10,
+      weeklyPercent: 40,
+      monthlyPercent: 70,
+      customWindows: [
+        { label: "Gem", percent: 1 },
+        { label: "API usage", percent: 55 },
+        { label: "First-party models", percent: 25 },
+      ],
+      creditsUsd: { used: 80, limit: 100, remaining: 20, percent: 80 },
+    }), null, t);
+    expect(rows.map(r => r.limitLabel)).toEqual([
+      "quota.fiveHourLimit",
+      "quota.weeklyLimit",
+      "quota.cursorFirstParty",
+      "quota.cursorApiUsage",
+      "quota.monthlyLimit",
+      "quota.totalSubscriptionCredits",
+      "Gem",
+    ]);
+  });
+
+  test.each(["Total subscription credits", "  TOTAL SUBSCRIPTION CREDITS  "])(
+    "direct creditsUsd does not duplicate the canonical custom window: %s",
+    label => {
+      const customOnly = quota({ customWindows: [{ label, percent: 25, resetAt: 1790430938000 }] });
+      const withDirect = quota({
+        ...customOnly,
+        creditsUsd: { used: 99, limit: 100, remaining: 1, percent: 99, expiresAt: 1790517338000 },
+      });
+      for (const reported of [customOnly, withDirect]) {
+        expect(buildQuotaRows(reported, null, t)).toEqual([{
+          customLabel: "Total subscription credits",
+          label: "quota.totalSubscriptionCredits",
+          limitLabel: "quota.totalSubscriptionCredits",
+          percent: 25,
+          resetAt: 1790430938000,
+        }]);
+      }
+    },
+  );
+
+  test("unrelated credit windows keep their raw identity and do not suppress direct credits", () => {
+    const reported = quota({
+      customWindows: [
+        { label: "API credits", percent: 20 },
+        { label: "  Gem  ", percent: 10 },
+      ],
+      creditsUsd: { used: 50, limit: 100, remaining: 50, percent: 50 },
+    });
+    const rows = buildQuotaRows(reported, null, t);
+    expect(rows.map(r => r.label)).toEqual(["quota.totalSubscriptionCredits", "API credits", "  Gem  "]);
+    expect(rows.map(r => r.customLabel)).toEqual(["Total subscription credits", "API credits", "  Gem  "]);
+    expect(maxQuotaUtilisation(reported)).toBe(50);
+  });
+
+  test.each(["go", "free"])("30-day plan %s retains direct credits after normalization", plan => {
+    const rows = buildQuotaRows(quota({
+      shortPercent: 10,
+      shortWindowSeconds: 5 * 60 * 60,
+      weeklyPercent: 30,
+      monthlyPercent: 60,
+      customWindows: [{ label: "Total subscription credits", percent: 99 }],
+      creditsUsd: { used: 80, limit: 100, remaining: 20, percent: 80 },
+    }), plan, t);
+    expect(rows.map(r => r.limitLabel)).toEqual(["quota.monthlyLimit", "quota.totalSubscriptionCredits"]);
+    expect(rows.map(r => r.percent)).toEqual([60, 80]);
+  });
+
   test("null and empty quotas produce no rows; 30-day plans strip to monthly", () => {
     expect(buildQuotaRows(null, null, t)).toEqual([]);
     expect(buildQuotaRows(quota({}), null, t)).toEqual([]);
@@ -93,6 +190,51 @@ describe("maxQuotaUtilisation", () => {
       fiveHourPercent: 10,
       customWindows: [{ label: "x", percent: 95 }],
     }))).toBe(95);
+    expect(maxQuotaUtilisation(quota({
+      fiveHourPercent: 0,
+      weeklyPercent: 0,
+      creditsUsd: { used: 90, limit: 90, remaining: 0, percent: 100 },
+    }))).toBe(100);
+  });
+
+  test.each(["Total subscription credits", " total subscription credits "])(
+    "subscription-credit urgency follows the visible custom window: %s",
+    label => {
+      expect(maxQuotaUtilisation(quota({
+        customWindows: [{ label, percent: 25 }],
+        creditsUsd: { used: 99, limit: 100, remaining: 1, percent: 99 },
+      }))).toBe(25);
+    },
+  );
+});
+
+describe("isCustomQuotaWindowIncomplete", () => {
+  test("canonical subscription rows retain raw-label coverage metadata", () => {
+    const rows = buildQuotaRows(quota({
+      customWindows: [{ label: "  TOTAL SUBSCRIPTION CREDITS  ", percent: 25 }],
+    }), null, t);
+    expect(rows[0]?.customLabel).toBe("Total subscription credits");
+    expect(isCustomQuotaWindowIncomplete(
+      rows[0]?.customLabel,
+      new Set(["API credits", "  TOTAL SUBSCRIPTION CREDITS  "]),
+    )).toBe(true);
+    expect(isCustomQuotaWindowIncomplete(
+      " total subscription credits ",
+      new Set(["Total subscription credits"]),
+    )).toBe(true);
+  });
+
+  test("absent and unrelated coverage does not mark a subscription row incomplete", () => {
+    expect(isCustomQuotaWindowIncomplete(undefined, new Set(["Total subscription credits"]))).toBe(false);
+    expect(isCustomQuotaWindowIncomplete("Total subscription credits")).toBe(false);
+    expect(isCustomQuotaWindowIncomplete("Total subscription credits", new Set())).toBe(false);
+    expect(isCustomQuotaWindowIncomplete("Total subscription credits", new Set(["API credits"]))).toBe(false);
+  });
+
+  test("unknown window coverage preserves exact raw-label matching", () => {
+    expect(isCustomQuotaWindowIncomplete("  Gem  ", new Set(["  Gem  "]))).toBe(true);
+    expect(isCustomQuotaWindowIncomplete("  Gem  ", new Set(["Gem"]))).toBe(false);
+    expect(isCustomQuotaWindowIncomplete("Gem", new Set(["gem"]))).toBe(false);
   });
 });
 

@@ -72,14 +72,9 @@ test("every provider keeps its window readable with the cap switched off", async
   // slot is occupied on every card (040_cap_cluster_and_occupied_slot.md), which makes the
   // property this test protects strictly wider than it was.
   expect(src).not.toContain("{(capOn || nativeProviderGroup) && (");
-  // With the cap off the stored value is only what a future toggle would apply — the 350k
-  // default — so the display falls back to the widest window the rows actually advertise.
-  // Matched as separate fragments because the expression is wrapped across lines now, and
-  // it grew a native branch: with the cap off the native group shows its default window
-  // rather than the widest advertised row. A single-line literal pinned the formatting
-  // instead of the behaviour and broke on the reflow that introduced that branch.
-  expect(src).toContain("const capDisplayValue = capOn");
-  expect(src).toContain("nativeProviderGroup ? NATIVE_GPT56_DEFAULT_WINDOW : (widestRowWindow ?? providerCap)");
+  // The disabled select previews the persisted choice or global default used by enable.
+  expect(src).toContain("contextCaps[provider] ?? contextCapValues[provider] ?? contextCapValue");
+  expect(src).not.toContain("value: NATIVE_GPT56_OPT_IN_WINDOW");
   // The select is inert until the cap is actually on: showing a number is not the same as
   // offering to change one.
   expect(src).toContain("disabled={busy || !capOn}");

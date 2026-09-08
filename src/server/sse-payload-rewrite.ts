@@ -1,4 +1,4 @@
-import type { TranslatorBudget } from "../lib/translator-budget";
+import { isTranslatorBudgetExceededError, type TranslatorBudget } from "../lib/translator-budget";
 
 /**
  * Shared client-facing SSE payload rewrite shell.
@@ -417,6 +417,14 @@ export function relaySseWithBlockRewrite(
           if (emitProcessedBlocks(controller) > 0) return;
         }
       } catch (error) {
+        // One tee branch cannot wait for its sibling before surfacing failure.
+        void reader.cancel(error).catch(() => {});
+        if (isTranslatorBudgetExceededError(error)) {
+          releaseBuffer();
+          disposeRewrite();
+          controller.error(error);
+          return;
+        }
         let bufferedText = "";
         try { bufferedText = fatalDecoder.decode(buffer.subarray(bufferOffset, bufferLength)); } catch { /* malformed tail */ }
         const delimiter = bufferedText.includes("\r\n") ? "\r\n\r\n" : bufferedText.includes("\r") ? "\r\r" : "\n\n";
@@ -425,7 +433,6 @@ export function relaySseWithBlockRewrite(
           bufferedTail = detachBufferedRange(bufferOffset, bufferLength);
         } catch {
           releaseBuffer();
-          try { await reader.cancel(error); } catch { /* already closed */ }
           const flushed = emitRewriteFlush(controller, delimiter);
           if (flushed > 0) {
             deferredError = error;
@@ -436,7 +443,6 @@ export function relaySseWithBlockRewrite(
           return;
         }
         let retainedTailPending = true;
-        try { await reader.cancel(error); } catch { /* already closed */ }
         try {
           const flushed = emitRewriteFlush(controller, delimiter);
           if (bufferedTail.byteLength > 0) {

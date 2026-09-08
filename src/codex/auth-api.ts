@@ -105,6 +105,7 @@ import {
   type MainAccountInfo,
 } from "./main-account-cache";
 export { clearMainAccountInfoCache } from "./main-account-cache";
+import type { CodexQuotaRefreshOutcome } from "./quota-refresh-outcome";
 import { getMainAccountHardLockStatus, type MainAccountHardLockStatus } from "./main-account-hard-lock";
 import { observeMainReserveRevocation } from "./reserve-availability";
 import { maskEmail } from "../lib/privacy";
@@ -777,6 +778,10 @@ async function readMainAuthErrorCode(resp: Response): Promise<unknown> {
 
 interface MainAccountInfoFetchResult {
   info: MainAccountInfo;
+  /** Ephemeral result of this attempt, omitted when no WHAM request was made. */
+  quotaRefresh?: CodexQuotaRefreshOutcome;
+  /** Internal dispatch fence for diagnostics only; never copied into a public DTO or cache. */
+  quotaRefreshGeneration?: number;
   /** Whether this attempt safely inspected the physical native-main credential. */
   credentialChecked: boolean;
   /** Meaningful only when credentialChecked is true. */
@@ -792,12 +797,16 @@ interface MainAccountInfoFetchResult {
 export interface MainAccountInfoSnapshot {
   info: MainAccountInfo;
   mainIdentityGeneration: number;
+  quotaRefresh?: CodexQuotaRefreshOutcome;
 }
 
 export async function fetchMainAccountInfoSnapshot(forceRefresh = false): Promise<MainAccountInfoSnapshot> {
   const result = await fetchMainAccountInfoAttempt(forceRefresh, 1);
   return {
     info: result.info,
+    ...(result.quotaRefresh && result.quotaRefreshGeneration !== undefined
+      && isMainAccountIdentityGenerationLive(result.quotaRefreshGeneration)
+      ? { quotaRefresh: result.quotaRefresh } : {}),
     mainIdentityGeneration: result.identityGeneration ?? captureMainAccountIdentityGeneration(),
   };
 }
@@ -900,34 +909,55 @@ async function fetchMainAccountInfoWhileOwned(
     ? observeMainQuotaCredential(tokens.access_token, tokens.account_id)
     : undefined;
   const mainQuotaCredentialGeneration = getMainQuotaCredentialGeneration();
+  // Keep diagnostics separate from authentication and freshness policy. Never serialize errors.
+  const quotaSignal = AbortSignal.timeout(WHAM_REQUEST_TIMEOUT_MS);
+  let quotaPhase: "request" | "body" | "decode" | "publish" = "request";
+  let quotaRefreshGeneration = captureMainAccountIdentityGeneration();
   try {
     const resp = await fetch("https://chatgpt.com/backend-api/wham/usage", {
       headers: { Authorization: `Bearer ${tokens.access_token}`, "ChatGPT-Account-Id": tokens.account_id },
-      signal: AbortSignal.timeout(WHAM_REQUEST_TIMEOUT_MS),
+      signal: quotaSignal,
     });
+    quotaPhase = "publish";
     if (!resp.ok) {
       const terminalAuthFailure = await isTerminalMainAuthResponse(resp, isMainAccountTokenVerifiablyLive());
       const retried = await retryMainAccountInfoIfIdentityChanged(requestAccountId, retriesRemaining, nativeMainLease, explicitRefresh);
       if (retried) return retried;
       if (terminalAuthFailure) {
+        // Account for this attempt's own synchronous invalidation, never prior external drift.
+        const diagnosticStillLive = isMainAccountIdentityGenerationLive(quotaRefreshGeneration);
         clearMainAccountInfoCache();
+        if (diagnosticStillLive) quotaRefreshGeneration = captureMainAccountIdentityGeneration();
         markAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID, writerGeneration);
       }
-      return { info: EMPTY_MAIN_ACCOUNT_INFO, credentialChecked: true, hasCredential: true };
+      return {
+        info: EMPTY_MAIN_ACCOUNT_INFO, credentialChecked: true, hasCredential: true,
+        quotaRefresh: { status: "http_error", httpStatus: resp.status },
+        quotaRefreshGeneration,
+      };
     }
+    quotaPhase = "body";
     const data = (await resp.json()) as WhamUsageResponse;
+    quotaPhase = "publish";
     const retried = await retryMainAccountInfoIfIdentityChanged(requestAccountId, retriesRemaining, nativeMainLease, explicitRefresh);
     if (retried) return retried;
+    quotaPhase = "decode";
+    if (data === null || typeof data !== "object" || Array.isArray(data)) {
+      throw new Error("Invalid WHAM usage object");
+    }
+    quotaPhase = "publish";
     // A delayed response from a replaced bearer cannot revoke a newer Reserve grant,
     // even in the same workspace or after an A→B→A credential transition.
     if (mainQuotaCredentialGeneration === getMainQuotaCredentialGeneration()
       && matchesMainQuotaCredential(tokens.access_token, tokens.account_id)) {
       observeMainReserveRevocation(data, mainQuotaWriter);
     }
+    quotaPhase = "decode";
     const plan = nonEmptyPlan(data.plan_type) ?? nonEmptyPlan(cached?.plan) ?? nonEmptyPlan(getMainAccountPlan());
     const usage = { ...data, ...(plan ? { plan_type: plan } : {}) };
     const quota = parseUsageQuota(usage);
     const policyQuota = parseMainPolicyUsageQuota(usage);
+    quotaPhase = "publish";
     const freshResetCredits = quota?.resetCredits;
     // Tag the count with the identity it was read from, so a later response that omits the
     // summary can restore the badge without ever crossing an account boundary.
@@ -957,14 +987,26 @@ async function fetchMainAccountInfoWhileOwned(
     }
     return {
       info: result,
+      quotaRefresh: { status: quota ? "ok" : "not_reported" },
+      quotaRefreshGeneration,
       credentialChecked: true,
       hasCredential: true,
       ...(quota ? { freshQuota: quota } : {}),
       ...(freshResetCredits !== undefined ? { freshResetCredits } : {}),
     };
-  } catch {
+  } catch (error) {
     const retried = await retryMainAccountInfoIfIdentityChanged(requestAccountId, retriesRemaining, nativeMainLease, explicitRefresh);
-    return retried ?? { info: EMPTY_MAIN_ACCOUNT_INFO, credentialChecked: true, hasCredential: true };
+    if (retried) return retried;
+    let status: CodexQuotaRefreshOutcome["status"] = "internal_error";
+    if ((quotaPhase === "request" || quotaPhase === "body") && quotaSignal.aborted) status = "timeout";
+    else if (quotaPhase === "request") status = "network_error";
+    else if (quotaPhase === "body") status = error instanceof SyntaxError ? "invalid_response" : "network_error";
+    else if (quotaPhase === "decode") status = "invalid_response";
+    return {
+      info: EMPTY_MAIN_ACCOUNT_INFO, credentialChecked: true, hasCredential: true,
+      quotaRefresh: { status },
+      quotaRefreshGeneration,
+    };
   }
 }
 
@@ -1061,6 +1103,7 @@ export interface CodexAuthAccountDto {
   healthSummary: string;
   healthAction?: string;
   quotaProbeSkipped?: true;
+  quotaRefresh?: CodexQuotaRefreshOutcome;
   mainAccountHardLock?: MainAccountHardLockStatus;
 }
 
@@ -1769,6 +1812,9 @@ export async function listCodexAuthAccountsSnapshot(
     id: MAIN_CODEX_ACCOUNT_ID,
     email: maskEmail(mainInfo.email) ?? "Codex App login",
     plan: mainInfo.plan,
+    ...(mainSnapshotLive && mainResult.quotaRefresh && mainResult.quotaRefreshGeneration !== undefined
+      && isMainAccountIdentityGenerationLive(mainResult.quotaRefreshGeneration)
+      ? { quotaRefresh: mainResult.quotaRefresh } : {}),
     logLabel: "main",
     isMain: true,
     paused: isCodexAccountPaused(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),
@@ -1787,6 +1833,42 @@ export async function listCodexAuthAccountsSnapshot(
       ? fetchedMainGeneration
       : captureMainAccountIdentityGeneration(),
   };
+}
+
+/** One opted-in account's metadata; reuse the bounded WHAM 401 recovery and generation fence. */
+export async function refreshCodexQuotaForActivation(config: OcxConfig, accountId: string): Promise<void> {
+  if (accountId === MAIN_CODEX_ACCOUNT_ID) {
+    const lease = tryAcquireNativeMainProfileClaim();
+    if (!lease) return;
+    try {
+      reconcileMainCodexAccountRuntimeState();
+      if (isAccountNeedsReauth(accountId)) return;
+      const identityGeneration = captureMainAccountIdentityGeneration();
+      const writerGeneration = captureConfigGeneration();
+      try {
+        // Refresh may need an exclusive claim; prepare before WHAM takes its shared claim.
+        if (!await getValidMainAccountToken({ preserveReauth: true })) return;
+      } catch (error) {
+        if (error instanceof MainAccountTokenRefreshError && error.reason === "reauth"
+          && isMainAccountIdentityGenerationLive(identityGeneration)) {
+          markAccountNeedsReauth(accountId, writerGeneration);
+        }
+        return;
+      }
+      if (isAccountNeedsReauth(accountId)) return;
+      await fetchMainAccountInfoAttempt(true, 1, lease, false, false);
+    } finally {
+      lease.release();
+    }
+    return;
+  }
+  const account = configuredPoolAccount(config, accountId);
+  if (!account) return;
+  const writerGeneration = captureConfigGeneration();
+  const result = await fetchPoolAccountQuota(accountId, true, account.plan);
+  if (result.needsReauth && result.credentialGeneration !== undefined) {
+    markAccountNeedsReauth(accountId, writerGeneration, result.credentialGeneration);
+  }
 }
 
 export async function listCodexAuthAccounts(config: OcxConfig, forceRefresh = false): Promise<CodexAuthAccountDto[]> {
@@ -2259,7 +2341,7 @@ export async function handleCodexAuthAPI(
       const operation = await withResetCreditAuth(getRuntimeConfig(config), accountId, async auth => {
         // The ledger keys manual operations by the *physical* ChatGPT account, which is
         // only known after the auth wrapper resolves credentials. Open here, not earlier.
-        const identity = requestedOperationId === undefined
+        let identity = requestedOperationId === undefined
           ? undefined
           : {
             accountId,
@@ -2295,6 +2377,7 @@ export async function handleCodexAuthAPI(
             return response;
           }
           // Canonical id, which an alias join may map to an earlier caller id.
+          identity = { ...identity, operationId: opened.operationId };
           idempotencyKey = opened.operationId;
         } else {
           idempotencyKey = crypto.randomUUID();

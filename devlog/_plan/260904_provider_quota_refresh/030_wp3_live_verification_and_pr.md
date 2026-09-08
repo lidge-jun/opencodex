@@ -8,32 +8,34 @@ phase is the evidence phase.
 
 1. `bun run build:gui` — the service serves `gui/dist`, so an unbuilt change is
    invisible no matter how green the tests are.
-2. `ocx service restart` — picks up the server-side `observed` flag. Confirm a new
-   pid and fresh uptime on `/healthz`, and that the port is still 10100. The service
-   is the user's own; restart it, never repoint or reconfigure it.
-3. `curl /api/provider-quotas` with the admin token — the meta-muse row must now
+2. Load the rebuilt code in the isolated scratch instance and confirm its identity
+   and fresh uptime on `/healthz`. The completed isolation record supersedes the
+   original `ocx service restart` plan; do not restart, repoint or reconfigure the
+   user's working proxy.
+3. Query the scratch instance's `/api/provider-quotas` with its admin token — the meta-muse row must now
    carry `"observed": true`. This is the wire-level proof, checked before the UI so a
    blank screen can be attributed correctly.
 
-## Browser verification (`aside-jun`, CLI repl on the signed-in profile)
+## Browser verification (aside CLI repl on the signed-in profile)
 
 The dashboard is loopback and needs no login, so `aside repl` is the right surface:
 one invocation is one session, it throws on a bad path instead of skipping, and the
 screenshots land as real files. A whole inspect-act-verify flow must fit in a single
 invocation because bindings do not persist between calls.
 
-Shots to capture into `devlog/_plan/260904_provider_quota_refresh/assets/`:
+The planned capture set covered the Usage quota display, the Usage and Accounts
+refresh controls, and the post-click success state. The completed record in
+`031_live_verification_record.md` preserves the observed outcomes.
 
-| File | Content |
-|------|---------|
-| `010_meta_usage_quota.png` | meta-muse → Usage tab with both windows and the observation age |
-| `020_usage_refresh_button.png` | the Usage rate-limits header with its refresh control |
-| `030_accounts_refresh_button.png` | the Accounts tab refresh control for an OAuth provider |
-| `040_refresh_result.png` | the post-click success status |
+Those live captures were subsequently removed from the current tree under one
+retention rule for both surfaces: account and usage screenshots from a real
+operator profile are unnecessary once the behavioral evidence is recorded in
+text. The planned filename list is also retired; it differed from the delivered
+filenames and must not be treated as an asset inventory.
 
-Aside writes under `~/.aside/u/0/`; Codex copies the files into the repository. Every
-`aside` invocation runs under `perl -e 'alarm shift; exec @ARGV' 300` because macOS
-has no `timeout` and the bare spelling exits 127 without ever starting the run.
+The plan required each `aside` invocation to run under
+`perl -e 'alarm shift; exec @ARGV' 300` because macOS has no `timeout` and the bare
+spelling exits 127 without starting the run.
 
 ## Push and PR
 

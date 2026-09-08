@@ -5,7 +5,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getConfigPath, saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
-import { findAvailablePort } from "../../src/server/ports";
 import type { OcxConfig } from "../../src/types";
 import { serveGuiFile, serveSessionBootstrap } from "../../src/server/gui-static";
 import { isProxyAdmissionSecret } from "../../src/server/auth-cors";
@@ -114,6 +113,37 @@ function hubConfig(publicOrigin = "https://hub.example.test"): OcxConfig {
     remoteGui: { allowedTailscaleUsers: ["alice@example.test"] },
     corsAllowOrigins: ["https://dashboard.example.test"],
   };
+}
+
+/** Keep real ingress/handlers while the kernel allocates both ports at the actual bind. */
+async function startEphemeralHubServer(deps: Parameters<typeof startServer>[1]) {
+  const nativeServe = Bun.serve.bind(Bun);
+  const listeners: Array<ReturnType<typeof Bun.serve>> = [];
+  const hostnames: unknown[] = [];
+  const serveSpy = spyOn(Bun, "serve").mockImplementation((options) => {
+    const listener = nativeServe({ ...options, port: 0 } as Parameters<typeof Bun.serve>[0]);
+    listeners.push(listener);
+    hostnames.push("hostname" in options ? options.hostname : undefined);
+    return listener;
+  });
+  try {
+    let server: ReturnType<typeof startServer>;
+    try {
+      server = startServer(0, deps);
+    } finally {
+      // startServer is synchronous; restore before requests or any awaited cleanup.
+      serveSpy.mockRestore();
+    }
+    expect(listeners).toHaveLength(2);
+    expect(listeners[0]).toBe(server);
+    expect(hostnames).toEqual(["0.0.0.0", "127.0.0.1"]);
+    const managementPort = listeners[1]?.port;
+    if (!managementPort || managementPort === server.port) throw new Error("expected distinct live ingress ports");
+    return { server, managementPort };
+  } catch (error) {
+    await Promise.allSettled(listeners.map(async listener => { await listener.stop(true); }));
+    throw error;
+  }
 }
 
 function websocketHandshakeOpens(url: URL, token: string): Promise<boolean> {
@@ -978,17 +1008,15 @@ describe("management and data-plane credential separation", () => {
   });
 
   test("the live listener trusts Tailscale identity only on hub management ingress", async () => {
-    const managementPort = await findAvailablePort(0, "127.0.0.1");
-    const publicPort = await findAvailablePort(0, "127.0.0.1", { reservedPort: managementPort });
     const config = hubConfig();
     config.hub = {
       ...config.hub,
-      managementIngress: { enabled: true, port: managementPort },
+      managementIngress: { enabled: true, port: 10101 },
     };
     saveConfig(config);
     const state = initializeManagementAuthState(config);
     if (!state.available) throw new Error("expected management auth state");
-    const server = startServer(publicPort, { managementAuthState: state });
+    const { server, managementPort } = await startEphemeralHubServer({ managementAuthState: state });
     const headers = { Host: "hub.example.test", "Tailscale-User-Login": "alice@example.test" };
     try {
       const spoofedPublic = await fetch(new URL("/opencodex-session", server.url), { headers });
@@ -1164,15 +1192,13 @@ describe("management and data-plane credential separation", () => {
   });
 
   test("the management ingress preserves the one-use pairing exchange contract", async () => {
-    const managementPort = await findAvailablePort(0, "127.0.0.1");
-    const publicPort = await findAvailablePort(0, "127.0.0.1", { reservedPort: managementPort });
     const config = hubConfig();
-    config.hub = { ...config.hub, managementIngress: { enabled: true, port: managementPort } };
+    config.hub = { ...config.hub, managementIngress: { enabled: true, port: 10101 } };
     saveConfig(config);
     const state = initializeManagementAuthState(config);
     if (!state.available) throw new Error("expected management auth state");
     const created = createGuiPairingGrant("https://dashboard.example.test", config, state);
-    const server = startServer(publicPort, { managementAuthState: state });
+    const { server, managementPort } = await startEphemeralHubServer({ managementAuthState: state });
     const url = `http://127.0.0.1:${managementPort}/opencodex-session`;
     const headers = {
       Host: "hub.example.test",
@@ -1626,3 +1652,63 @@ describe("codex app-server restart routes ride the management gate", () => {
     }
   });
 });
+
+
+test("log cursors remain behind management admission and origin gates", async () => {
+  const config = remoteConfig();
+  saveConfig(config);
+  const state = initializeManagementAuthState(config);
+  if (!state.available) throw new Error("expected management auth state");
+  const server = startServer(0, { managementAuthState: state });
+  const origin = server.url.origin;
+  const token = "ocx_session_log_cursor_test";
+  state.sessions.set(token, {
+    serverOrigin: origin, browserOrigin: origin, csrfToken: "csrf-log-test",
+    expiresAt: Date.now() + 60_000, issuance: "loopback",
+  });
+  const adminHeaders = { "x-opencodex-api-key": "admin-secret" };
+  const acceptedHeaders: HeadersInit[] = [adminHeaders, {
+    Origin: origin, "x-opencodex-api-key": token, "x-opencodex-gui-origin": origin,
+  }];
+  try {
+    const initial = await fetch(new URL("/api/logs", server.url), { headers: adminHeaders });
+    expect(initial.status).toBe(200);
+    const body = await initial.json() as { cursor: string };
+    expect(typeof body.cursor).toBe("string");
+    for (const suffix of ["", `?cursor=${body.cursor}`, "?cursor=malformed"]) {
+      const url = new URL(`/api/logs${suffix}`, server.url);
+      for (const credential of [undefined, "data-secret", "wrong-admin"]) {
+        const response = await fetch(url, { headers: credential ? { "x-opencodex-api-key": credential } : {} });
+        expect(response.status).toBe(401);
+        expect(await response.json()).toEqual({ error: "opencodex admin token required" });
+      }
+      const foreign = await fetch(url, { headers: { ...adminHeaders, Origin: "https://attacker.test" } });
+      expect(foreign.status).toBe(403);
+      await foreign.text();
+      for (const headers of acceptedHeaders) {
+        const allowed = await fetch(url, { headers });
+        expect(allowed.status).toBe(suffix.includes("malformed") ? 400 : 200);
+        await allowed.text();
+      }
+    }
+  } finally {
+    await server.stop(true);
+  }
+}, SERVER_BUDGET_MS);
+
+test("unavailable management authority rejects log cursors before parsing", async () => {
+  saveConfig(remoteConfig());
+  const server = startServer(0, { managementAuthState: { available: false, reason: "fixture unavailable" } });
+  try {
+    const legacy = Buffer.from(JSON.stringify({ v: 1, t: 1, id: "fixture" })).toString("base64url");
+    for (const suffix of ["", `?cursor=${legacy}`, "?cursor=malformed"]) {
+      const response = await fetch(new URL(`/api/logs${suffix}`, server.url), {
+        headers: { "x-opencodex-api-key": "admin-secret" },
+      });
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({ error: "management API unavailable" });
+    }
+  } finally {
+    await server.stop(true);
+  }
+}, SERVER_BUDGET_MS);

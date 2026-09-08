@@ -64,6 +64,23 @@ or grant account entitlement. The separately billed
 `openai-apikey/daybreak-blue-latest` API row is a different route and its 1,050,000 / 922,000 limits
 are never copied into the Codex-login row.
 
+For custom Astra and Daybreak rows on that canonical `openai` Codex-forward destination,
+explicit `reasoningEfforts` are bounded by the model's pinned Codex capabilities. A custom
+`["none", "minimal", "low"]` becomes `["low"]` in the catalog; a nonempty list with no
+supported values also falls back to the native default as a single choice. An explicit `[]`
+stays empty and has no advertised default. A declared default is retained only if it belongs to
+the resulting list; otherwise the native default is used when present, then the first surviving
+choice. Stored custom configuration is unchanged, and repeated syncs do not add `max` back to a
+narrow custom list.
+
+This requires the exact provider, destination, and capability-backed model identity. An arbitrary
+gateway such as `YYLJ/gpt-6-astra` does not inherit native capabilities from its name. Its explicit
+custom ladder continues to override discovered provider metadata under the normal routed rules.
+Codex's native Astra `ultra` choice is retained: it is a client delegation mode converted to a
+supported wire effort, distinct from the [API model's effort list](https://developers.openai.com/api/docs/models/gpt-6-astra).
+Catalog normalization does not rewrite existing thread settings or establish support for a
+particular installed Desktop version.
+
 When the `codexAccountNamespaces` map is empty, account-qualified picker rows are off. If
 `codexAccountPickerEnabled` is omitted with a non-empty map, they are treated as enabled for
 backward compatibility. Set it to `false` to hide generated qualified rows and restore bare native

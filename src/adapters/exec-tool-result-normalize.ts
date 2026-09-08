@@ -116,6 +116,93 @@ export const CODE_MODE_RESULT_ECHO_SENTENCE =
   "Nothing in the isolate is echoed automatically: a bare trailing `await tools.<name>(...)` or final expression value is DISCARDED, and the cell reports empty output. Pass anything you need to read to `text(...)` (or `notify(...)`) in the same cell — for example `text(JSON.stringify(await tools.exec_command({cmd: 'ls'})))` — and treat an empty result as your own missing `text(...)` call rather than a failed command or lost context.";
 
 /**
+ * Host rules a routed model most often breaks on its first code-mode edit or wait, stated BEFORE
+ * the call. Wording tracks the Codex host (0.153.2), probed live on 2026-09-07: a non-string
+ * argument to `apply_patch` throws "expects a string input"; a body whose first line is not the
+ * bare marker (decorated `*** Begin Patch ***`, a code fence, prose) throws "The first line of the
+ * patch must be '*** Begin Patch'" — surrounding newlines are tolerated; ES imports throw
+ * "Unsupported import in exec"; a command that outlives `yield_time_ms` returns `session_id` for
+ * `write_stdin` polling. xai/grok-4.6 hit the first two, abandoned apply_patch for heredoc writes,
+ * blocked a turn in a shell sleep loop, and died once on an import. None of that is repairable in
+ * the proxy (devlog/_plan/260905_apply_patch_envelope_gap/010 MODE B); it is a contract the proxy
+ * had not stated.
+ */
+export const CODE_MODE_HOST_CONTRACT_SENTENCE =
+  "Host contract for the nested helpers: `tools.apply_patch(patch)` takes exactly one string, never an object such as `{input: ...}`; the patch text opens with the bare marker line `*** Begin Patch` and closes with the bare marker line `*** End Patch`, written without a code fence, prose, or extra asterisks on those lines (blank lines or indentation around the markers are tolerated; a decorated or missing marker is rejected). The isolate has no `import`, `require`, or module loader; use the globals the exec tool description lists (for example `tools`, `text`, `notify`, `store`/`load`, `ALL_TOOLS`). For a command that may outlive `yield_time_ms`, let `tools.exec_command` return a `session_id` and poll it on later calls with `tools.write_stdin({session_id, chars: \"\"})` instead of blocking a shell in a sleep loop.";
+
+/**
+ * Post-hoc half of the host contract: the four host strings a routed model reads inside a
+ * non-error exec result, each paired with the rule it broke. Matched case-insensitively because
+ * the host writes "Unsupported import in exec: <spec>" while Cursor's earlier marker was
+ * lowercase; one table, one owner, so this text and the pre-call sentence cannot drift.
+ */
+export const CODE_MODE_HOST_FAILURE_GUIDANCE: ReadonlyArray<{ marker: string; guidance: string }> = [
+  {
+    marker: "expects a string input",
+    guidance: "tools.apply_patch takes exactly one string argument; pass the patch text itself, not an object such as {input: ...}.",
+  },
+  {
+    marker: "the first line of the patch must be",
+    guidance: "The patch text must open with the bare marker line `*** Begin Patch`: no code fence, prose, or extra asterisks on that line (blank lines or indentation before it are tolerated).",
+  },
+  {
+    marker: "the last line of the patch must be",
+    guidance: "The patch text must close with the bare marker line `*** End Patch`: no trailing text or extra asterisks on that line (blank lines after it are tolerated).",
+  },
+  {
+    marker: "unsupported import in exec",
+    guidance: "Imports are not available in this exec context; use the injected globals (tools, text, notify, store, load, ALL_TOOLS) instead.",
+  },
+];
+
+/** Prefix of every recovery line this module appends; callers use it to recognise replayed annotations. */
+export const CODE_MODE_HOST_RECOVERY_PREFIX = "[recovery: ";
+
+// Only a leading failure envelope or a complete host diagnostic establishes error context.
+// Do not search for this prefix inside output: successful source reads can quote any of these.
+const CODE_MODE_HOST_ERROR_PREFIX = /^(?:Script failed(?:[ \t]*(?:\r?\n|$)|:)|Script error:|(?:Error|TypeError|SyntaxError):|tool `apply_patch` expects a string input\b|apply_patch verification failed:|Unsupported import in exec:)/i;
+
+/** Namespaces under which Cursor displays Codex's own Responses tools (see cursor/tool-naming.ts). */
+const CODEX_RESPONSES_DISPLAY_NAMESPACES: ReadonlySet<string> = new Set(["opencodex-responses", "mcp__opencodex-responses"]);
+/** Flattened spellings of the same code-mode exec when a client folds the namespace into the name. */
+const CODEX_CODE_MODE_EXEC_ALIASES: ReadonlySet<string> = new Set(["exec", "mcp__opencodex-responses__exec", "mcp_opencodex-responses_exec"]);
+
+/**
+ * The code-mode `exec` tool by NAME — bare, or under Codex's own `opencodex-responses` display
+ * namespace, matched exactly. The four host strings above originate only in that isolate, so flat
+ * shell bridges (`exec_command`, `shell`, …) and every other namespace (`mcp__docker`,
+ * `mcp__foreign-opencodex-responses`) are excluded: an unrelated server's output that quotes the
+ * phrase must not receive Codex guidance. Narrower than `isCodexExecBridgeTool` on purpose; the
+ * empty-output repair keeps the wider gate. Callers that KNOW the catalog shape (Kiro's
+ * `codeModeExecName`, the Responses body gate) add that check on top; this predicate alone cannot
+ * tell a structured tool named `exec` from the freeform one.
+ */
+export function isCodexCodeModeExecResult(toolName?: string, toolNamespace?: string): boolean {
+  if (!toolName) return false;
+  const lower = toolName.toLowerCase();
+  if (toolNamespace !== undefined) return CODEX_RESPONSES_DISPLAY_NAMESPACES.has(toolNamespace) && lower === "exec";
+  return CODEX_CODE_MODE_EXEC_ALIASES.has(lower);
+}
+
+/**
+ * Append a one-line recovery hint when a code-mode exec result starts with a host error context
+ * and carries a known diagnostic. Successful wrappers and unframed phrase quotations pass through.
+ * Returns undefined when the tool/context/marker does not match or a recovery line is already
+ * present (a replayed result must not grow a second one). Never touches error status.
+ */
+export function annotateCodeModeHostFailure(
+  text: string,
+  options: { toolName?: string; toolNamespace?: string } = {},
+): string | undefined {
+  if (!isCodexCodeModeExecResult(options.toolName, options.toolNamespace)) return undefined;
+  if (text.includes(CODE_MODE_HOST_RECOVERY_PREFIX)) return undefined;
+  if (!CODE_MODE_HOST_ERROR_PREFIX.test(text.trimStart())) return undefined;
+  const lower = text.toLowerCase();
+  const hit = CODE_MODE_HOST_FAILURE_GUIDANCE.find(({ marker }) => lower.includes(marker));
+  return hit ? `${text}\n${CODE_MODE_HOST_RECOVERY_PREFIX}${hit.guidance}]` : undefined;
+}
+
+/**
  * Codex exec / shell-bridge tool names (flat and MCP-prefixed display aliases). An empty result
  * here is almost always a code-mode cell that never called text()/notify().
  */

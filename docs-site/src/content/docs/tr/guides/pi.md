@@ -31,6 +31,9 @@ export line, and how many models carry authoritative context limits.
       "baseUrl": "http://127.0.0.1:10100/v1",
       "api": "openai-completions",
       "apiKey": "$OPENCODEX_API_KEY",
+      "compat": {
+        "sendSessionAffinityHeaders": true
+      },
       "models": [
         {
           "id": "anthropic/claude-opus-5",
@@ -44,6 +47,8 @@ export line, and how many models carry authoritative context limits.
   }
 }
 ```
+
+Oluşturulan Pi sağlayıcılarında `compat.sendSessionAffinityHeaders` etkinleştirilir. Sağlayıcıyı birleştirirken veya elle düzenlerken bu ayarı koruyun: Pi sabit bir oturum kimliği gönderir ve OpenCodex bu kimlikten kanonik OpenCode Go hedefi için oturum yakınlığı üretir. `cacheRetention` değeri `none` olduğunda Pi kimliği göndermeyebilir.
 
 Model ids are the proxy's canonical selectors, so routed models appear as
 `provider/model`

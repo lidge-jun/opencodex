@@ -1,0 +1,3 @@
+# Stable replay-fixture caller identity
+
+C2 spec-satisfaction repair of a concrete macOS control failure. Two logical replay conversations generated a new synthetic credential for each request; a second-boundary change made them different callers. Preserve production credential scope and every existing response/cache assertion. Only tests/server/server-agent-task-recovery-replay.test.ts and this numbered unit change. No local tests/typecheck/build; pinned remote Bun1.4 isolated regressions, deterministic old/new control, typecheck and current-head CI before final landing. Owner-authorized no-verify pushes/admin merge remain scoped to A. No credential or service changes. Same session goal/ledger owns this extra mandatory cycle; no completion criteria removed.

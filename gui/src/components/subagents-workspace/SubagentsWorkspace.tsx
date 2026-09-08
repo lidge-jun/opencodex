@@ -32,11 +32,18 @@ import type { DelegationPatch, DelegationModelOption, UltraModePatch, UltraModeS
 
 export interface SubagentsWorkspaceProps {
   available: string[];
+  fallbackAvailable?: string[];
   chosen: string[];
   busy?: boolean;
   onToggle: (m: string) => void;
   onMove: (i: number, dir: -1 | 1) => void;
   onSave: () => void;
+  fallback: string[];
+  fallbackPollMs: number;
+  fallbackBusy: boolean;
+  onFallbackChange: (models: string[]) => void;
+  onFallbackPollMsChange: (pollMs: number) => void;
+  onFallbackSave: () => void;
   delegation: {
     model: string;
     effort: string;
@@ -58,11 +65,13 @@ export const FEATURED_MAX = 5;
 
 export default function SubagentsWorkspace({
   available,
+  fallbackAvailable,
   chosen,
   busy = false,
   onToggle,
   onMove,
   onSave,
+  fallback, fallbackPollMs, fallbackBusy, onFallbackChange, onFallbackPollMsChange, onFallbackSave,
   delegation,
 }: SubagentsWorkspaceProps) {
   const t = useT();
@@ -237,6 +246,13 @@ export default function SubagentsWorkspace({
             onUltraModeSave={delegation.onUltraModeSave}
             ultraLoadFailed={delegation.ultraLoadFailed}
             onUltraModeRetry={delegation.onUltraModeRetry}
+            fallback={fallback}
+            fallbackPollMs={fallbackPollMs}
+            fallbackBusy={fallbackBusy}
+            availableModels={fallbackAvailable ?? available}
+            onFallbackChange={onFallbackChange}
+            onFallbackPollMsChange={onFallbackPollMsChange}
+            onFallbackSave={onFallbackSave}
           />
         </section>
       </div>

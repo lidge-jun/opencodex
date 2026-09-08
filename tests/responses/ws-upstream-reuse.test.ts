@@ -6,6 +6,8 @@ import { prepareCodexWsRequest } from "../../src/server/responses/codex-ws-reque
 
 const URL = "https://chatgpt.com/backend-api/codex/responses";
 const realWebSocket = globalThis.WebSocket;
+const proxyEnvKeys = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy"];
+let savedProxyEnv: Record<string, string | undefined>;
 let sequence = 0;
 
 class Socket extends EventTarget {
@@ -13,7 +15,7 @@ class Socket extends EventTarget {
   static onSend: (socket: Socket, frame: Record<string, unknown>) => void = (socket) => socket.complete();
   readyState = 0;
   frames: Record<string, unknown>[] = [];
-  constructor(readonly url: string) {
+  constructor(readonly url: string, readonly options?: { proxy?: string }) {
     super();
     Socket.all.push(this);
     queueMicrotask(() => { if (this.readyState === 0) { this.readyState = 1; this.dispatchEvent(new Event("open")); } });
@@ -58,7 +60,11 @@ function bodyWith(fields: Record<string, unknown>) {
   options.body = JSON.stringify({ ...JSON.parse(options.body as string), ...fields });
   return options;
 }
-beforeEach(() => { globalThis.WebSocket = Socket as unknown as typeof WebSocket; });
+beforeEach(() => {
+  globalThis.WebSocket = Socket as unknown as typeof WebSocket;
+  savedProxyEnv = Object.fromEntries(proxyEnvKeys.map(key => [key, process.env[key]]));
+  for (const key of proxyEnvKeys) delete process.env[key];
+});
 
 afterEach(() => {
   runOptionalShutdownHooks();
@@ -67,6 +73,25 @@ afterEach(() => {
   Socket.onSend = socket => socket.complete();
   sequence = 0;
   globalThis.WebSocket = realWebSocket;
+  for (const key of proxyEnvKeys) delete process.env[key];
+  for (const key of proxyEnvKeys) {
+    if (savedProxyEnv[key] !== undefined) process.env[key] = savedProxyEnv[key];
+  }
+});
+
+test("proxy changes and NO_PROXY retire the old route while unchanged routes reuse", async () => {
+  for (const proxy of ["http://proxy-a.example:8080", "http://proxy-b.example:8080"]) {
+    process.env.HTTPS_PROXY = proxy;
+    await drain();
+    await drain();
+  }
+  process.env.NO_PROXY = "chatgpt.com:443";
+  await drain();
+  await drain();
+  expect(Socket.all.map(socket => socket.options?.proxy))
+    .toEqual(["http://proxy-a.example:8080", "http://proxy-b.example:8080", undefined]);
+  expect(Socket.all.map(socket => socket.frames.length)).toEqual([2, 2, 2]);
+  expect(Socket.all.map(socket => socket.readyState)).toEqual([3, 3, 1]);
 });
 
 test("same account/thread/turn reuses one socket without trimming either HTTP input", async () => {

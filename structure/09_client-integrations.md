@@ -40,6 +40,22 @@ TOML temporal scalars cannot survive the JSON-cloned merge representation with t
 intact. The common parser refuses documents containing them before either status or mutation
 proceeds, including nested arrays and inline tables. Quoted date strings remain supported.
 
+## Catalog visibility
+
+Management export and CLI export apply the canonical routed catalog visibility filter before
+serialization: provider selections, disabled models, and pending initial selection all constrain
+the client roster. The full management list remains available for selection. Native rows retain
+their existing visibility rules.
+
+## Owned catalog convergence
+
+Visibility, selected-model and preset writes refresh already-owned Pi/Aside contributions after
+persisting the selection. Explicit sync refreshes MCode, Pi and Aside. The shared catalog-refresh
+fan-out loads the filtered roster lazily once, leaves unowned clients alone, and reports each
+refusal independently. Existing coordinated writers retain all no-clobber and ownership checks.
+Implicit refresh operations use distinct flight keys: overlapping desired catalogs return busy
+rather than joining a write of a different catalog and reporting false success.
+
 ## Fast model selectors
 
 The serving proxy resolves `fastRowAvailable` on every management model row, including its
@@ -131,4 +147,78 @@ fingerprint-only tests are supplementary; they cannot prove the status and write
 
 ## Remote connection lifecycle
 
-Remote clients journal and restore native integrations locally while model traffic travels directly to the hub. Catalog writes occur only after protocol negotiation and full remote schema validation. The management relay is launcher-scoped and fixed to the connection's management origin. Claude/Codex launch behavior remains integration-scoped. Key rotation uses `pendingOperation` plus `.prev`; disconnect restores locally without hub-side revocation or usage mirroring.
+Remote clients journal and restore native integrations locally while model traffic travels directly to the hub. Catalog writes occur only after protocol negotiation and full remote schema validation. The management relay is launcher-scoped and fixed to the connection's management origin. Claude/Codex launch behavior remains integration-scoped. Key rotation and recovery align both the local connection credential and the connection-owned Desktop profile before reporting completion. Disconnect restores owned Desktop settings and native integrations locally without automatic hub-key revocation or usage mirroring. Interrupted cleanup remains recoverable for the same connection; conflicts prevent a full-cleanup claim.
+
+## Connected Claude Desktop profiles
+
+Connected `ocx claude desktop apply` reads the hub's Desktop snapshot and writes the hub origin
+and exact hub-issued IDs to the local Desktop configuration. Static/hybrid embed the entries;
+discovery-only keeps discovery on the hub. The hub owns family assignments and defaults; local
+show/edit/import/export operations do not manage that profile. After hub changes or historical
+client-only aliases, apply again and reselect the model. Connected `import --apply` is explicitly
+unsupported and refuses before saving the import.
+
+`src/claude/desktop-discovery-inputs.ts` owns the shared Desktop discovery projection used by
+startup registry initialization and server discovery. `src/server/index.ts` exposes the explicit
+`GET /v1/models?ids=desktop&format=desktop-config` snapshot, shaped as `{version:1,models:[...]}`
+and sent with `Cache-Control: no-store`. `src/client/hub-client.ts` downloads it with the existing
+data credential; `src/cli/claude-desktop.ts` selects connected apply, and `src/claude/desktop-3p.ts`
+writes the resulting local Desktop configuration. No admin token, hub-profile upload or local
+alias regeneration is part of this flow. Unsupported old hubs, invalid snapshots and unavailable
+Desktop models fail apply without a local-catalog or loopback fallback.
+
+Date-shaped Desktop IDs can overlap genuine native model IDs. When available discovery and
+mapping evidence cannot resolve one, Messages and count-tokens return HTTP 503 with the fixed
+`desktop_model_mapping_unavailable` error rather than classifying it as invalid. Unknown legacy hash aliases
+remain HTTP 400; neither case reaches date-stripping or fallback routing. Known/registered IDs,
+exact operator mappings and recognized native IDs keep their existing handling. Discovery refresh
+or reapplying the connected hub profile may supply the missing mapping; retry alone does not
+guarantee resolution.
+
+The remote-alias slice does not change thinking/redacted-thinking replay or prompt-cache
+behavior. Those remain the separate request tracked in #3719; proxy admission alone does not
+establish native Anthropic passthrough or imply that translated Anthropic caching is disabled.
+
+### Desktop ownership across the connection lifecycle
+
+`src/claude/desktop-remote-store.ts` owns the first protected restoration baseline and the
+connection-owned Desktop fields. `src/cli/claude-desktop.ts` handles connected apply, while
+`src/client/connect.ts` coordinates key rotation/recovery and disconnect. Reapply and rotation retain the original
+baseline. Restoration merges into current user fields, preserves unrelated profiles, and restores
+the previous selection only while the managed profile is still selected. A later valid user
+selection is not changed. A newly created profile with user additions is retained in readable
+standard mode instead of deleting those additions.
+
+A proven legacy current-hub/recognized-key profile without an original baseline can be adopted
+by apply, rotation/recovery or direct disconnect without a new flag or prerequisite reapply.
+Its explicit standard-fallback outcome is distinct from original restoration: only owned gateway
+settings are removed, with user fields and independent valid selection preserved. Unknown keys,
+changed managed fields or damaged restoration records remain conflicts, not permission to capture
+new originals or overwrite user data.
+
+Rotation changes credentials without changing model IDs, family/default choices or selecting the
+managed profile again. The CLI reports `rotation: "committed"` only for the new active generation;
+`rotation: "rolled_back"` means the previous generation was retained/restored and must not claim
+revocation of that previous key. Incomplete recovery keeps the operation unresolved. Disconnect
+restores Desktop even with `--keep-catalog`; retries preserve the original catalog choice and must
+not clear a newer connection. Authorized uninstall completes or resumes owned Desktop cleanup
+before removing OpenCodex state, and preserves recovery state when cleanup conflicts or fails.
+
+These guarantees concern files on disk. Fully quitting and reopening Desktop is required after
+apply, rotation/recovery or restoration; there is no automatic process restart or guarantee that
+a running app discarded a key. Local disconnect does not revoke the hub key or remove arbitrary
+external copies. Model-list snapshot version 1 remains a read-only contract, not a new lifecycle
+or profile-upload API. Thinking replay and prompt caching remain separate in #3719.
+
+## Aside profile ownership
+
+Aside discovery projects only registered numeric account IDs, labels and current status. Catalog
+paths derive from the configured root/u/id, never from browser profilePath. Guarded filesystem
+identity and IO apply to status and writes; internal resolved path pairs survive async freezing.
+
+`asideProfileSync` owns desired all-profile defaults and per-profile overrides. The legacy
+connection defaults all profiles on; explicit per-profile changes materialize that default and
+pin one legacy root owner before changing it. Sibling stores remain independent. Policy saves
+precede coordinated writes under one scoped flight, and actual file state/refusals remain
+separate. Restore reconciles target intent from validated snapshot ownership without changing
+sibling policy. Profile journal views retain source-store provenance for older legacy entries.

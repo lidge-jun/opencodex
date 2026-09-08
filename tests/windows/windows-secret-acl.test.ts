@@ -376,6 +376,42 @@ describe("opt-in existing ACL proof", () => {
     expect(calls).toEqual([[target]]);
   });
 
+  test("async compliance inspection can precede a memo refusal or an existing compliant success", async () => {
+    const target = join(testDir, "memo-compliance.json");
+    writeFileSync(target, "secret");
+    let clock = 0;
+    setNowForTests(() => clock);
+    setAsyncWindowsPrincipalRunnerForTests(async () => success(`${ownerSid}\n${ownerName}\n`));
+    seedIdentity();
+    delete process.env.OPENCODEX_ACL_VERIFY_EXISTING;
+    setAsyncIcaclsRunnerForTests(async () => {
+      clock += 100;
+      return { success: false, exitCode: null, timedOut: true, stdout: "" };
+    });
+    try {
+      await expect(hardenSecretPathAsync(target, { required: true, deadlineMs: 100 }))
+        .rejects.toMatchObject({ code: "ETIMEDOUT" });
+      await expect(hardenSecretPathAsync(target, { required: true, deadlineMs: 100, retryTimedOutOnce: true }))
+        .rejects.toMatchObject({ code: "ETIMEDOUT" });
+      process.env.OPENCODEX_ACL_VERIFY_EXISTING = "1";
+      const calls: string[][] = [];
+      let compliant = false;
+      setAsyncIcaclsRunnerForTests(async args => {
+        calls.push(args);
+        return success(compliant ? `${target} ${ownerName}:(F)\r\n` : "unverified");
+      });
+      await expect(hardenSecretPathAsync(target, { required: true, deadlineMs: 100 }))
+        .rejects.toMatchObject({ code: "EACLRETRYEXHAUSTED", aclFailureOrigin: "timeout_memo_refusal" });
+      expect(calls).toEqual([[target]]); // Inspection ran, but no grant was launched.
+      compliant = true;
+      await expect(hardenSecretPathAsync(target, { required: true, deadlineMs: 100 })).resolves.toEqual({ ok: true });
+      expect(calls).toEqual([[target], [target]]);
+      expect(timedOutSecretPathCountForTests()).toBe(1); // Existing proof did not clear the memo.
+    } finally {
+      setNowForTests(null);
+    }
+  });
+
   test("an inherited owner ACE falls through to the mutation sequence", () => {
     const target = join(testDir, "inherited.json");
     writeFileSync(target, "secret");
@@ -593,6 +629,30 @@ describe("icacls executable authority", () => {
     const src = readFileSync(repoPath("src", "lib", "windows-secret-acl.ts"), "utf8");
     expect(src).toContain("resolveTrustedWindowsIcaclsExe");
     expect(src).not.toMatch(/Bun\.spawn(?:Sync)?\(\["icacls\.exe"/);
+  });
+});
+
+describe("atomic secret temp writer portability", () => {
+  test("sync and async secret temp writers use Bun-portable exclusive creation", async () => {
+    // Bun on Windows misinterpreted the equivalent numeric O_* combination as
+    // ENOENT, so every pid/config/oauth temp write failed during ocx start
+    // and on management-API config saves. Keep both writers on the portable
+    // exclusive-write spelling ("wx" keeps O_EXCL; 0o600 keeps the private
+    // mode) so the O_CREAT bit can never be dropped again.
+    const src = readFileSync(repoPath("src", "config", "atomic-write.ts"), "utf8");
+    expect(src.match(/openSync\(path, "wx", 0o600\)/g)).toHaveLength(2);
+  });
+});
+
+describe("initial config temp writer portability", () => {
+  test("initial config publication uses Bun-portable exclusive creation", () => {
+    // publishInitialConfigNoReplace carries the same Bun/Windows exposure as the
+    // atomic writers above: the numeric O_* combination lost its creation bit, so
+    // first-run `ocx init` failed before it could publish config.json. Exclusive
+    // creation is what makes the added O_TRUNC harmless — an existing temp name
+    // (or a symlink planted at one) fails the open instead of being truncated.
+    const src = readFileSync(repoPath("src", "config", "initialize.ts"), "utf8");
+    expect(src.match(/openSync\(temp, "wx", 0o600\)/g)).toHaveLength(1);
   });
 });
 
@@ -1014,7 +1074,7 @@ describe("async hardenSecretPath (issue #612)", () => {
     expect(timedOutSecretPathCountForTests()).toBe(0);
   });
 
-  test("the explicit timeout recovery cannot be consumed more than once", async () => {
+  test.each(["sync", "async"] as const)("%s timeout origin distinguishes memo refusal without another recovery", async lane => {
     // Pinned: this asserts recovery CARDINALITY. At the 30s default the first call would
     // succeed on its internal retry and the cardinality claim would never be exercised.
     process.env.OPENCODEX_ACL_TIMEOUT_MS = "5000";
@@ -1022,27 +1082,43 @@ describe("async hardenSecretPath (issue #612)", () => {
     let now = 0;
     let grantCalls = 0;
     setNowForTests(() => now);
-    setAsyncIcaclsRunnerForTests(async args => {
+    const runner = (args: string[]): IcaclsResult => {
       if (args.includes("/grant:r")) grantCalls += 1;
       now += 5_000;
       return timeout;
-    });
+    };
+    setIcaclsRunnerForTests(runner);
+    setAsyncIcaclsRunnerForTests(async args => runner(args));
+    const identity = { ...ok, stdout: "S-1-5-21-1-2-3-1001\nocx-test\n" };
+    setWindowsPrincipalRunnerForTests(() => identity);
+    setAsyncWindowsPrincipalRunnerForTests(async () => identity);
+    const harden = async (retryTimedOutOnce = false) => lane === "sync"
+      ? hardenSecretPath(target, { required: true, retryTimedOutOnce })
+      : hardenSecretPathAsync(target, { required: true, retryTimedOutOnce });
 
-    await expect(hardenSecretPathAsync(target, { required: true })).rejects.toMatchObject({
-      code: "ETIMEDOUT",
-    });
-    await expect(hardenSecretPathAsync(target, {
-      required: true,
-      retryTimedOutOnce: true,
-    })).rejects.toMatchObject({ code: "ETIMEDOUT" });
-    const callsAfterRecovery = grantCalls;
-    await expect(hardenSecretPathAsync(target, {
-      required: true,
-      retryTimedOutOnce: true,
-    })).rejects.toMatchObject({ code: "EACLRETRYEXHAUSTED" });
-    expect(grantCalls).toBe(callsAfterRecovery);
-    expect(grantCalls).toBe(2);
-    expect(timedOutSecretPathCountForTests()).toBe(1);
+    try {
+      const first = await harden().catch(error => error);
+      expect(first).toMatchObject({ code: "ETIMEDOUT" });
+      expect(first).not.toHaveProperty("aclFailureOrigin");
+      await expect(harden()).rejects.toMatchObject({
+        code: "ETIMEDOUT", aclFailureOrigin: "timeout_memo_refusal",
+      });
+      expect(grantCalls).toBe(1);
+      const recovery = await harden(true).catch(error => error);
+      expect(recovery).toMatchObject({ code: "ETIMEDOUT" });
+      expect(recovery).not.toHaveProperty("aclFailureOrigin");
+      const callsAfterRecovery = grantCalls;
+      await expect(harden(true)).rejects.toMatchObject({
+        code: "EACLRETRYEXHAUSTED", aclFailureOrigin: "timeout_memo_refusal",
+      });
+      expect(grantCalls).toBe(callsAfterRecovery);
+      expect(grantCalls).toBe(2);
+      expect(timedOutSecretPathCountForTests()).toBe(1);
+    } finally {
+      setWindowsPrincipalRunnerForTests(null);
+      setAsyncWindowsPrincipalRunnerForTests(null);
+      resetWindowsPrincipalForTests();
+    }
   });
 
   test("optional timeout memo does not poison a later required harden of the same path", () => {

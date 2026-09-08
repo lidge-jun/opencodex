@@ -1157,11 +1157,11 @@ export async function runDoctor(args: string[] = []): Promise<void> {
   // No extra probe -- findLiveProxy already carried the version back.
   {
     const { packageVersion } = await import("./help");
-    const { computeVersionSkew } = await import("./version-skew");
+    const { computeVersionSkew, isConfirmedVersionMatch } = await import("./version-skew");
     const skew = computeVersionSkew(packageVersion(), live?.version);
     if (skew.skewed && skew.warning) {
       console.log(`!! ${skew.warning}`);
-    } else if (skew.proxyVersion !== null) {
+    } else if (isConfirmedVersionMatch(skew)) {
       console.log(`ok ocx ${skew.cliVersion} matches the running proxy`);
     }
   }

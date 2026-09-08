@@ -1,0 +1,7 @@
+# Lane C release train roadmap
+
+Satisfy-spec HOTL, explicitly delegated by release-train main task. Goal: prepare five manual dependent PRs for main-session landing. No merge/release/publish/main/preview changes; no local tests, typecheck, build or install. All such checks NOT RUN. Remote Cross-platform CI dispatch lane=all at top head is the verifier. Stop after exact-head green CI, Astra review verdicts, screenshots, credit and SHA handoff; unresolved material blockers are reported with evidence. No user-specified token/cost/time bound. Tools: local scoped git/files, gh read/PR/push/CI, Astra explorer audits and browser inspection. New security findings stay in .tmp/lane-c. Main owns config-routes.ts; no edits there. Escalate cross-owner collisions; reclaim delegated slices after two distinct worker failures.
+
+Dependency order: roadmap → 3839 → 3841 → 3863 → 3860 → 3252/1533 → top CI and handoff. Lower-layer commit subjects include [skip ci]; stack:null. Every carry uses cherry-pick -x and source PR author Co-authored-by. Existing configuration field contracts are reused. Rollback is revert of a layer with descendant cascade, within main-authorized integration. Current source and read-only git/gh are evidence; no claimed local execution of product verifiers. Public original diffs are recorded in decade documents; private audit notes stay in scratch.
+
+Main steering: all gui/src/i18n/*.ts are append-only multiwriter; C adds namespaced keys at feature-section ends, never edits/deletes existing keys. Final cascade resolves append collisions.

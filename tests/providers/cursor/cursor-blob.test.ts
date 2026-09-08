@@ -1702,6 +1702,87 @@ describe("Cursor bounded blob store", () => {
     resetCursorBlobStateForTests();
     expect(cursorBlobMetrics()).toMatchObject({ count: 0, totalBytes: 0, localBytes: 0, pinnedBytes: 0 });
   });
+
+  test("fresh blob inserts accumulate class bytes across remote and local entries", () => {
+    const originalNow = Date.now;
+    let now = 1_000;
+    Date.now = () => now;
+    try {
+      setCursorBlobLimitsForTests({ ttlMs: 50, maxEntryBytes: 8, maxTotalBytes: 64 });
+      const remoteId = sha256(bytes("rem"));
+      setBlobReply(remoteId, bytes("rem"));
+      expect(cursorBlobMetrics()).toMatchObject({
+        count: 1,
+        totalBytes: 3,
+        keyBytes: 66,
+        localBytes: 0,
+        pinnedBytes: 3 + 66,
+        oldestAt: null,
+      });
+      expect(cursorBlobRetainedStoreSnapshot()).toMatchObject({
+        count: 1,
+        bytes: 3 + 66,
+        evictableBytes: 0,
+        pinnedBytes: 3 + 66,
+        oldestAt: null,
+      });
+      now = 1_001;
+      const localId = storeCursorBlob(bytes("loc"));
+      expect(cursorBlobMetrics()).toMatchObject({
+        count: 2,
+        totalBytes: 6,
+        keyBytes: 132,
+        localBytes: 3,
+        pinnedBytes: 3 + 66,
+        oldestAt: 1_001,
+      });
+      expect(cursorBlobRetainedStoreSnapshot()).toMatchObject({
+        count: 2,
+        bytes: 6 + 132,
+        evictableBytes: 3 + 66,
+        pinnedBytes: 3 + 66,
+        oldestAt: 1_001,
+      });
+      expectBlobHit(remoteId, bytes("rem"));
+      expectBlobHit(localId, bytes("loc"));
+      expect(cursorBlobStoreDebugSnapshotForTests().map(row => row.provenance).sort()).toEqual([
+        "local-regenerated",
+        "remote-setBlobArgs",
+      ]);
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
+  test("releasing an expired pin still TTL-purges that row on the next write", () => {
+    const originalNow = Date.now;
+    let now = 100;
+    Date.now = () => now;
+    try {
+      setCursorBlobLimitsForTests({ ttlMs: 10, maxEntryBytes: 8, maxTotalBytes: 64, maxEntries: 8 });
+      const scope = createCursorBlobRequestScope();
+      const pinnedId = sha256(bytes("pin"));
+      setBlobReply(pinnedId, bytes("pin"), 1, scope);
+      sealCursorBlobRequestScope(scope);
+      now = 105;
+      const liveId = sha256(bytes("live"));
+      setBlobReply(liveId, bytes("live"));
+      now = 111;
+      releaseCursorBlobRequestScope(scope);
+      const laterId = sha256(bytes("new"));
+      setBlobReply(laterId, bytes("new"));
+      // Observe before getBlob can lazily delete an expired entry itself.
+      expect(cursorBlobMetrics()).toMatchObject({ count: 2, totalBytes: 7, keyBytes: 132 });
+      expect(cursorBlobRetainedStoreSnapshot()).toMatchObject({
+        count: 2, bytes: 7 + 132, pinnedBytes: 7 + 132, evictableBytes: 0,
+      });
+      expectBlobMiss(pinnedId);
+      expectBlobHit(liveId, bytes("live"));
+      expectBlobHit(laterId, bytes("new"));
+    } finally {
+      Date.now = originalNow;
+    }
+  });
 });
 
 describe("Cursor blob ID key channel bounds", () => {

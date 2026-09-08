@@ -114,6 +114,12 @@ The ordering is not ceremony. If the old key died at issuance, a client that had
 received the new key would be disconnected — and a disconnected client cannot be given a
 new key. So the contract is: apply the new key, verify the connection, then commit.
 
+Raw access-key creation and rotation-start return plaintext and belong outside the agent
+session; follow [recipe 5](03_recipes.md#5-prepare-an-access-key-rotation-without-exposing-the-new-key)
+for the human handoff and separate revocation approval. The managed `ocx connect rotate`
+flow returns non-secret status and is a distinct command, not permission to invoke the raw
+secret-returning endpoint from an agent tool.
+
 The token backup (`<tokenfile>.prev`) is not deleted while a rotation is in flight, and
 commits only once both sides are confirmed to have accepted.
 

@@ -90,13 +90,17 @@ Le routage et la visibilité dans le catalogue sont deux mécanismes distincts :
   catalogue et `/v1/models` sont restreintes.
 - `provider.disabled: true` retire ce fournisseur de la découverte du catalogue. Les requêtes explicites
   `provider/model` échouent, et les recherches dans `defaultModel` et `models[]` l'ignorent.
-- `providerContextCaps` applique des plafonds de contexte visibles par Codex, fournisseur par fournisseur.
-  `contextCapValue` est la valeur par défaut du tableau de bord (350 000 par défaut), mais n'a aucun effet à
-  lui seul tant qu'un fournisseur ne figure pas dans `providerContextCaps`. La modification de la valeur dans
-  le tableau de bord réaffecte tous les fournisseurs activés uniquement lorsque l'option « appliquer à tous les
-  fournisseurs routés » est activée ; sinon, chaque fournisseur conserve son propre plafond. Un plafond peut
-  seulement réduire une fenêtre de contexte connue : il ne peut ni l'augmenter ni modifier la limite réelle du
-  modèle en amont.
+- `providerContextCaps` définit les plafonds de contexte visibles par Codex pour chaque fournisseur.
+  `contextCapValue` est la valeur par défaut du tableau de bord (350 000) ; elle n’applique aucun
+  plafond tant que le fournisseur ne figure pas dans `providerContextCaps`. Modifier cette valeur
+  ne met à jour les plafonds actifs que si « appliquer à tous les fournisseurs routés » est activé ;
+  sinon, chaque fournisseur conserve son plafond. Les fenêtres ordinaires connues ne peuvent
+  qu’être réduites ; les modèles natifs prenant en charge une fenêtre longue peuvent être étendus
+  jusqu’à leur propre plafond pris en charge, sans modifier la limite réelle du modèle en amont.
+  Désactiver un plafond conserve sa sélection dans `providerContextCapValues`, même après
+  rechargement ; le réactiver restaure cette sélection. Une sélection mémorisée n’impose aucune
+  limite tant que le plafond est désactivé. `{ "setAll": true }` sans `value` active tous les
+  fournisseurs configurés à la valeur globale actuelle et remplace leurs sélections mémorisées.
 
 ```json
 {

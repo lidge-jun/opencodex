@@ -112,6 +112,9 @@ ocx logout <provider>
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 實驗性 PKCE 登入、即時 HTTP/2 transport 與按帳號篩選的模型探索。 |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 實驗性。GitHub device flow + `copilot_internal` exchange（VS Code OAuth client）。需要有效 Copilot 訂閱；不是官方第三方 API。 |
 
+Google Antigravity 帳戶與供應商的配額查詢（包括模型清單備援）使用固定的 Google 計量端點。這些目標支援透明 Fake-IP DNS，同時保留 TLS 驗證、重新導向拒絕與私有位址檢查。自訂 base URL 只改變模型請求，不改變配額目標；`NO_PROXY` 仍使用直連政策。
+
+
 終端 Nous refresh 失敗後，執行 `ocx login nous` 重新認證。
 
 對 canonical Kimi Coding Plan preset（`kimi` 帳號登入與 `kimi-code` API key），opencodex 只會把 caller
@@ -270,6 +273,7 @@ IDE／CLI，不透過 API；`minimax/minimax-m2.5` 是文件列出的 API 免費
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
 | Z.AI (GLM Coding) | `https://api.z.ai/api/coding/paas/v4` |
 | Zhipu AI (BigModel) | `https://open.bigmodel.cn/api/paas/v4` |
+| [BigModel Coding Plan — Responses (靜態模型清單)](/guides/providers/#bigmodel-coding-plan-over-responses) | `https://open.bigmodel.cn/api/v1` |
 | Qwen Cloud | Token plan（預設）：`https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` · pay as you go：`https://dashscope.aliyuncs.com/compatible-mode/v1` · 或 Custom |
 | Tencent Cloud Coding Plan | `https://api.lkeap.cloud.tencent.com/coding/v3` |
 | SiliconFlow | `https://api.siliconflow.cn/v1` |
@@ -415,7 +419,7 @@ quota probe 只會把 active key 傳送到 canonical A6API host，並拒絕 redi
 > **Tencent Cloud Coding Plan 使用限制：** Tencent 文件將此訂閱限定為互動式 coding tool。一般 API
 > automation、自訂 application backend 與非互動 batch 使用都被禁止，並可能造成 plan key 被停用。
 
-> **兩條 GLM 路徑：** `zai` 是 Z.AI 國際 Coding Plan 訂閱；`zhipu-bigmodel` 是智譜國內 BigModel
+> **GLM 計費路徑：** `zai` 是 Z.AI 國際 Coding Plan 訂閱；`zhipu-bigmodel` 是智譜國內 BigModel
 > pay-as-you-go endpoint。兩者 host、key 與 billing 都不同；其中一邊發出的 key 無法在另一邊通過認證。
 
 ### 多個 API 金鑰
@@ -456,8 +460,8 @@ Antigravity／Cloud Code Assist 模式）、`azure` / `azure-openai`、`kiro`、
 短效 Copilot API token，不是貼上 API key。**GitLab Duo** 仍是使用 OpenAI-compatible endpoint 的
 key／subscription-token gateway。**Cloudflare AI Gateway** 需要在 URL 填入 account 與 gateway id。
 
-Copilot 的 catalog 混合多種 wire：GPT-5 family（`gpt-5.3-codex`、`gpt-5.4`、`gpt-5.4-mini`、
-`gpt-5.5`、`gpt-5.6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`）會拒絕 agent traffic 的
+Copilot 的 catalog 混合多種 wire：模型（`gpt-5.3-codex`、`gpt-5.4`、`gpt-5.4-mini`、
+`gpt-5.5`、`gpt-5.6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`）會拒絕 agent traffic 的
 `/chat/completions`，因此 opencodex 會依內建預設把這些模型路由到 Responses API；其他 Copilot 模型
 仍使用 chat completions。優先順序為：hard wire pin → 你明確設定的
 [`modelAdapters`](/zh-tw/reference/configuration/providers/) → registry default → provider-wide adapter。

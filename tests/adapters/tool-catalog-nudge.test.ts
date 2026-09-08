@@ -4,7 +4,7 @@ import {
   buildNonOpenAIToolCatalogNudgeFromNames,
   shouldInjectNonOpenAIToolCatalogNudge,
 } from "../../src/adapters/tool-catalog-nudge";
-import { CODE_MODE_RESULT_ECHO_SENTENCE, EMPTY_EXEC_OUTPUT_MESSAGE } from "../../src/adapters/exec-tool-result-normalize";
+import { CODE_MODE_HOST_CONTRACT_SENTENCE, CODE_MODE_RESULT_ECHO_SENTENCE, EMPTY_EXEC_OUTPUT_MESSAGE } from "../../src/adapters/exec-tool-result-normalize";
 import type { OcxTool } from "../../src/types";
 
 describe("non-OpenAI tool catalog nudge", () => {
@@ -80,6 +80,10 @@ describe("non-OpenAI tool catalog nudge", () => {
     expect(note).toContain("OpenCodex does not rewrite JavaScript inside exec");
     expect(note).toContain("Nested `tools.apply_patch(input)` is host-executed");
     expect(note).not.toContain("call the listed parent tool and use those helpers only inside that tool's input");
+    // The host contract rides the same code-mode branch as the echo rule (Grok 2026-09-07).
+    expect(note).toContain(CODE_MODE_HOST_CONTRACT_SENTENCE);
+    expect(note).toContain("takes exactly one string");
+    expect(note).toContain("write_stdin({session_id, chars: \"\"})");
   });
 
   test("keeps the generic nested-helper parent-tool rule when exec is not listed", () => {
@@ -88,6 +92,7 @@ describe("non-OpenAI tool catalog nudge", () => {
     expect(note).toContain("call the listed parent tool and use those helpers only inside that tool's input");
     expect(note).not.toContain("is Codex code mode");
     expect(note).not.toContain("tools.ALL_TOOLS");
+    expect(note).not.toContain("Host contract for the nested helpers");
   });
 
   test("detects a wire-renamed exec as code mode", () => {

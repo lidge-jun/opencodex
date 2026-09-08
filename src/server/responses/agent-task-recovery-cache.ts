@@ -2,6 +2,20 @@ const MAX_CACHE_BYTES = 8 * 1024 * 1024;
 const MAX_CONCURRENT_RECOVERIES = 32;
 const CACHE_TTL_MS = 15 * 60 * 1000;
 
+export type AgentTaskRecoveryResolutionFailureReason =
+  | "recovery_unavailable"
+  | "caller_cancelled"
+  | "recovery_http_rejected"
+  | "recovery_timeout"
+  | "recovery_aborted"
+  | "recovery_transport_error"
+  | "recovery_invalid_output";
+
+/** Shared flights carry bounded failures; only successful plaintext enters the cache. */
+export type AgentTaskRecoveryResolution =
+  | { readonly recovered: true; readonly assignment: string }
+  | { readonly recovered: false; readonly reason: AgentTaskRecoveryResolutionFailureReason };
+
 interface RecoveryCacheEntry {
   assignment: string;
   bytes: number;
@@ -11,7 +25,7 @@ interface RecoveryCacheEntry {
 
 interface RecoveryFlight {
   controller: AbortController;
-  promise: Promise<string | null>;
+  promise: Promise<AgentTaskRecoveryResolution>;
   waiters: number;
   settled: boolean;
 }
@@ -63,7 +77,7 @@ function insertRecoveryCacheEntry(key: string, assignment: string, maxEntries: n
 function startRecoveryFlight(
   key: string,
   maxEntries: number,
-  request: (signal: AbortSignal) => Promise<string | null>,
+  request: (signal: AbortSignal) => Promise<AgentTaskRecoveryResolution>,
 ): RecoveryFlight | null {
   const active = RECOVERY_FLIGHTS.get(key);
   if (active) return active;
@@ -72,15 +86,15 @@ function startRecoveryFlight(
   const controller = new AbortController();
   const flight: RecoveryFlight = {
     controller,
-    promise: Promise.resolve(null),
+    promise: Promise.resolve({ recovered: false, reason: "recovery_unavailable" }),
     waiters: 0,
     settled: false,
   };
   flight.promise = request(controller.signal)
-    .then((assignment) => {
-      if (!assignment || controller.signal.aborted) return null;
-      insertRecoveryCacheEntry(key, assignment, maxEntries);
-      return assignment;
+    .then((result): AgentTaskRecoveryResolution => {
+      if (controller.signal.aborted) return { recovered: false, reason: "recovery_aborted" };
+      if (result.recovered) insertRecoveryCacheEntry(key, result.assignment, maxEntries);
+      return result;
     })
     .finally(() => {
       flight.settled = true;
@@ -93,14 +107,14 @@ function startRecoveryFlight(
 async function waitForRecoveryFlight(
   flight: RecoveryFlight,
   abortSignal?: AbortSignal,
-): Promise<string | null> {
-  if (abortSignal?.aborted) return null;
+): Promise<AgentTaskRecoveryResolution> {
+  if (abortSignal?.aborted) return { recovered: false, reason: "caller_cancelled" };
   flight.waiters += 1;
   let onAbort: (() => void) | undefined;
   try {
     if (!abortSignal) return await flight.promise;
-    const cancelled = new Promise<null>((resolve) => {
-      onAbort = () => resolve(null);
+    const cancelled = new Promise<AgentTaskRecoveryResolution>((resolve) => {
+      onAbort = () => resolve({ recovered: false, reason: "caller_cancelled" });
       abortSignal.addEventListener("abort", onAbort, { once: true });
       if (abortSignal.aborted) onAbort();
     });
@@ -120,12 +134,27 @@ export async function resolveCachedAgentTaskRecovery(
   request: (signal: AbortSignal) => Promise<string | null>,
   abortSignal?: AbortSignal,
 ): Promise<string | null> {
-  if (abortSignal?.aborted) return null;
+  const result = await resolveCachedAgentTaskRecoveryWithResult(key, maxEntries, async signal => {
+    const assignment = await request(signal);
+    return assignment
+      ? { recovered: true, assignment }
+      : { recovered: false, reason: "recovery_unavailable" };
+  }, abortSignal);
+  return result.recovered ? result.assignment : null;
+}
+
+export async function resolveCachedAgentTaskRecoveryWithResult(
+  key: string,
+  maxEntries: number,
+  request: (signal: AbortSignal) => Promise<AgentTaskRecoveryResolution>,
+  abortSignal?: AbortSignal,
+): Promise<AgentTaskRecoveryResolution> {
+  if (abortSignal?.aborted) return { recovered: false, reason: "caller_cancelled" };
   sweepRecoveryCache(Date.now(), maxEntries);
   const cached = RECOVERY_CACHE.get(key)?.assignment;
-  if (cached) return cached;
+  if (cached) return { recovered: true, assignment: cached };
   const flight = startRecoveryFlight(key, maxEntries, request);
-  return flight ? waitForRecoveryFlight(flight, abortSignal) : null;
+  return flight ? waitForRecoveryFlight(flight, abortSignal) : { recovered: false, reason: "recovery_unavailable" };
 }
 
 export function discardCachedAgentTaskRecovery(key: string): void {
@@ -148,4 +177,15 @@ export function agentTaskRecoveryWaiterCountForTests(): number {
 
 export function agentTaskRecoveryCacheSnapshotForTests(): { entries: number; bytes: number } {
   return { entries: RECOVERY_CACHE.size, bytes: recoveryCacheBytes };
+}
+
+/** Read an existing recovery without starting a request or extending its lifetime. */
+export function cachedAgentTaskRecovery(key: string): string | null {
+  const entry = RECOVERY_CACHE.get(key);
+  if (!entry) return null;
+  if (entry.expiresAt <= Date.now()) {
+    deleteRecoveryCacheEntry(key, entry);
+    return null;
+  }
+  return entry.assignment;
 }

@@ -1335,7 +1335,8 @@ function modelInputModalities(
     item.input_modalities
       ?? item.modalities
       ?? metadata?.input_modalities
-      ?? capabilityRecord?.input_modalities,
+      ?? capabilityRecord?.input_modalities
+      ?? plainRecord(item.architecture)?.input_modalities,
     8,
     24,
   )?.filter(value => (
@@ -1506,11 +1507,14 @@ async function fetchProviderModelsWithAuth(
     && prov.googleMode === "vertex"
     && (prov.models?.length ?? 0) === 0
     && Boolean(prov.defaultModel);
-  // Ordered dedupe union: Vertex seed, then `models`, then `retainModels`. `configured` is the
+  const seedStaticDefault = prov.liveModels === false
+    && (prov.models?.length ?? 0) === 0
+    && Boolean(prov.defaultModel);
+  // Ordered dedupe union: implicit default seed, then `models`, then `retainModels`. `configured` is the
   // single seed for the static path, the degraded fallback, drop diagnostics, and provider hints,
   // so a retain-only id must enter here or it never exists to be retained (#1690).
   const configuredIds = [...new Set([
-    ...(seedVertexDefault && prov.defaultModel ? [prov.defaultModel] : []),
+    ...((seedVertexDefault || seedStaticDefault) && prov.defaultModel ? [prov.defaultModel] : []),
     ...(prov.models ?? []),
     ...(prov.retainModels ?? []),
   ])];
@@ -1563,9 +1567,8 @@ async function fetchProviderModelsWithAuth(
     : resolveAuth.resolve(name, prov));
   const apiKey = auth.apiKey;
   // A configured default is a real callable selector and must remain discoverable when a
-  // compatible provider's live /models request fails (issue #308). Keep this separate from the
-  // explicit static list: `liveModels: false` + empty `models[]` intentionally publishes zero
-  // rows, while a failed live discovery may degrade to the default selector.
+  // compatible provider's live /models request fails (issue #308). Static providers already seed
+  // their default selector above when no explicit model list exists.
   const failedDiscoveryConfigured = configured.length > 0 || !prov.defaultModel || prov.adapter !== "anthropic"
     ? configured
     : [{
@@ -2128,6 +2131,31 @@ async function gatherRoutedModelsWithAuth(
   return models;
 }
 
+/** Bound a proven Codex-forward custom row without changing its stored configuration. */
+function boundCustomNativeReasoning(
+  model: CatalogModel,
+  allowed: readonly string[],
+  nativeDefault: string | undefined,
+): CatalogModel {
+  if (allowed.length === 0 || model.reasoningEfforts === undefined) return model;
+  const bounded = { ...model };
+  if (model.reasoningEfforts.length === 0) {
+    bounded.reasoningEfforts = [];
+    delete bounded.defaultReasoningEffort;
+    return bounded;
+  }
+  const declared = new Set(model.reasoningEfforts);
+  const surviving = [...new Set(allowed)].filter(effort => declared.has(effort));
+  const fallback = nativeDefault && allowed.includes(nativeDefault) ? nativeDefault : allowed[0]!;
+  // A nonempty but incompatible declaration is not an explicit no-reasoning setting.
+  bounded.reasoningEfforts = surviving.length > 0 ? surviving : [fallback];
+  bounded.defaultReasoningEffort = model.defaultReasoningEffort
+    && bounded.reasoningEfforts.includes(model.defaultReasoningEffort)
+    ? model.defaultReasoningEffort
+    : bounded.reasoningEfforts.includes(fallback) ? fallback : bounded.reasoningEfforts[0]!;
+  return bounded;
+}
+
 async function gatherRoutedModelsUncached(
   config: OcxConfig,
   capture: GatherFlightCapture,
@@ -2392,7 +2420,7 @@ async function gatherRoutedModelsUncached(
       ...(typeof supportsReasoningSummaries === "boolean" ? { supportsReasoningSummaries } : {}),
       // Native-alias defaults apply only where the custom row declares nothing: the explicit
       // spreads below must win (later in object order), so a stored `[]` stays empty and a
-      // declared ladder is never replaced by the alias's native ladder.
+      // declared ladder is narrowed to proven native capabilities after the merge below.
       ...(codexForwardNativeCapabilityAlias
         ? {
           codexForwardNativeCapabilityAlias: true,
@@ -2407,7 +2435,8 @@ async function gatherRoutedModelsUncached(
         : {}),
       // Explicit custom-row ladder wins over the inherited provider row below: the merge only
       // gap-fills, so a stored `[]` (explicit "no reasoning") or a declared ladder is kept
-      // verbatim instead of being replaced by the replaced row's metadata.
+      // instead of being replaced by that row's metadata. Only proven native aliases are
+      // bounded against their own capability source after the merge.
       ...(Array.isArray(cm.reasoningEfforts) ? { reasoningEfforts: [...cm.reasoningEfforts] } : {}),
       ...(cm.defaultReasoningEffort ? { defaultReasoningEffort: cm.defaultReasoningEffort } : {}),
       ...(typeof supportsServiceTier === "boolean" ? { supportsServiceTier } : {}),
@@ -2460,22 +2489,25 @@ async function gatherRoutedModelsUncached(
       ...(base.codexToolMode === undefined && replaced.codexToolMode !== undefined ? { codexToolMode: replaced.codexToolMode } : {}),
       ...(base.capabilities === undefined && replaced.capabilities !== undefined ? { capabilities: replaced.capabilities } : {}),
     } : base;
+    const reasoningBounded = codexForwardNativeCapabilityAlias
+      ? boundCustomNativeReasoning(merged, nativeReasoningEfforts(cm.modelId), nativeAliasDefaultEffort)
+      : merged;
     // Vision-sidecar coverage only: when the enriched provider's shared predicate matches
     // noVisionModels or text-without-image modelInputModalities, advertise image input so the
     // Codex app lets images reach the sidecar (#349/#344). Deliberately NOT the full
     // applyProviderConfigHints pass — custom rows are a
     // user override, so their explicit contextWindow / inputModalities / reasoning fields must be
     // preserved verbatim (the hint pass would cap context and overwrite modalities from registry).
-    const mergedContext = typeof merged.contextWindow === "number" && merged.contextWindow > 0
-      ? merged.contextWindow
+    const mergedContext = typeof reasoningBounded.contextWindow === "number" && reasoningBounded.contextWindow > 0
+      ? reasoningBounded.contextWindow
       : undefined;
-    const boundedMergedMaxInput = typeof merged.maxInputTokens === "number" && merged.maxInputTokens > 0
-      ? (mergedContext !== undefined ? Math.min(merged.maxInputTokens, mergedContext) : merged.maxInputTokens)
+    const boundedMergedMaxInput = typeof reasoningBounded.maxInputTokens === "number" && reasoningBounded.maxInputTokens > 0
+      ? (mergedContext !== undefined ? Math.min(reasoningBounded.maxInputTokens, mergedContext) : reasoningBounded.maxInputTokens)
       : undefined;
     const mergedWithHardBounds = boundedMergedMaxInput !== undefined
-      && boundedMergedMaxInput !== merged.maxInputTokens
-      ? { ...merged, maxInputTokens: boundedMergedMaxInput }
-      : merged;
+      && boundedMergedMaxInput !== reasoningBounded.maxInputTokens
+      ? { ...reasoningBounded, maxInputTokens: boundedMergedMaxInput }
+      : reasoningBounded;
     const mergedSoftCandidates = [mergedWithHardBounds.autoCompactTokenLimit, configuredAutoCompact]
       .filter((value): value is number => typeof value === "number" && value > 0);
     const mergedWithAutoCompact: CatalogModel = mergedContext !== undefined && mergedSoftCandidates.length > 0

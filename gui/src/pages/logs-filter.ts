@@ -116,11 +116,14 @@ export function filterLogs<T extends FilterableLogEntry>(
         || log.status > 599)) return false;
 
     const logAttempts = attempts(log);
+    // Model options represent complete identities from the current log snapshot. Match
+    // selections exactly (case/whitespace-insensitive), while the standalone
+    // logMatchesModelQuery helper retains its free-text substring semantics.
     if (modelQuery && ![
       normalized(log.model),
       normalized(log.resolvedModel),
       ...logAttempts.map(attempt => normalized(attempt.model)),
-    ].some(value => value?.includes(modelQuery))) return false;
+    ].some(value => value === modelQuery)) return false;
 
     if (providerQuery && ![
       normalized(log.provider),

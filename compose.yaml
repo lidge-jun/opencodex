@@ -9,10 +9,14 @@ services:
       target: runtime
     init: true
     read_only: true
+    environment:
+      # A custom CODEX_HOME also requires a matching writable volume target below.
+      CODEX_HOME: /home/bun/.codex
     ports:
       - "${OPENCODEX_BIND_ADDRESS:-127.0.0.1}:${OPENCODEX_PORT:-10100}:10100"
     volumes:
       - ocx-state:/home/bun/.opencodex
+      - codex-state:/home/bun/.codex
     tmpfs:
       - /tmp:size=64m,mode=1777
     security_opt:
@@ -24,3 +28,4 @@ services:
 
 volumes:
   ocx-state:
+  codex-state:

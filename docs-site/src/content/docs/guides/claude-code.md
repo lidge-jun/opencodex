@@ -27,9 +27,18 @@ rotation does not protect against provider enforcement.
 
 Operational contract when enabled:
 
-- Upstream **429** cools that account using `Retry-After` when present (else a default backoff),
-  clears its affinities, and may rotate to another eligible account within the same request
-  (bounded).
+- Upstream **429** cools that account, clears its affinities, and may rotate to another eligible
+  account within the same request (bounded). The cooldown uses a usable `Retry-After` when present,
+  otherwise the latest valid reset time among windows Anthropic marks `rejected`, including
+  weekly windows. Valid upstream deadlines are not shortened to a fixed cooldown ceiling.
+  A refusal with no usable deadline falls back to a 60-second default backoff.
+- Responses report the serving account's 5-hour and weekly utilization, and whichever of those
+  two the response carries is recorded for that account — each window independently, and a
+  refusal counts as well as a success. Usage-aware selection works from ordinary traffic,
+  without waiting for a dashboard poll. Headers preserve model-specific quota windows and do
+  not postpone usage probes or clear a failed usage probe's unavailable status. Measurements
+  whose known reset time has passed are discarded as unknown, including retained model-specific
+  windows. Values without a known reset are preserved; missing data is never reported as zero usage.
 - Affinity is **process-local** (lost on proxy restart).
 - **401/403** credential failures quarantine the account (`needsReauth`) so it is excluded from
   selection until re-authenticated.
@@ -139,6 +148,8 @@ is temporarily unavailable, the first available route in that family is used unt
 
 You can also manage the same profile from the command line:
 
+The profile-editing instructions below describe the local profile. Connected remote apply is described separately below.
+
 ```bash
 ocx claude desktop [apply]
 ocx claude desktop show [--json]
@@ -217,6 +228,66 @@ dedicated proxy admission header is valid. This also means the
 Disable with `claudeCode.nativePassthrough: false`; point elsewhere with
 `claudeCode.anthropicBaseUrl`.
 
+## Claude Desktop on a connected remote hub
+
+When this machine is connected to a hub, `ocx claude desktop apply` (or `ocx claude desktop`)
+uses the hub's Desktop model snapshot. It writes the connected hub origin and the hub-issued
+model IDs into the local Desktop configuration without generating replacement aliases locally.
+Static and hybrid modes copy the snapshot entries; discovery-only mode uses the hub origin
+without embedding the model list.
+
+The hub owns the Desktop profile, family assignments and defaults. Change those on the hub,
+then apply again on the connected client and reselect the model in Desktop. Old aliases created
+only on the client require reapply/reselection; they are not automatically migrated. Local `show`,
+profile edits, and import/export remain local views and operations, not hub-profile management.
+While connected, `ocx claude desktop import <path> --apply` is unsupported and refuses the import
+before saving. Import without `--apply` remains local.
+
+Apply reads the snapshot using the existing connection's data credential. It needs no admin token
+and uploads no profile. If the hub is too old to support the snapshot, the response is invalid,
+or no Desktop models are available, apply fails without substituting a local catalog or loopback
+origin. Upgrade/configure the hub and apply again.
+
+This alias change does not fix the separate `thinking` / `redacted_thinking` replay and prompt-cache
+request in [#3719](https://github.com/lidge-jun/opencodex/issues/3719). Proxy admission alone does not enable native Anthropic passthrough; translated
+Anthropic routes can still use prompt caching. Replay fidelity and cache-hit comparisons remain
+separate work.
+
+### Key rotation, recovery and disconnect
+
+Key rotation and recovery update the credential stored in the connection-owned Desktop profile
+alongside the local connection credential. No manual Desktop reapply is required just to migrate
+the key. Existing model IDs, family/default choices and the user's current profile selection are
+preserved; rotation does not select the managed profile again or re-enable a disabled integration.
+CLI JSON `rotation: "committed"` means the new key is active. `rotation: "rolled_back"` means the
+previous key was retained or restored, not that a new key was committed or the previous key revoked.
+Uncertain or incomplete recovery is reported as such, rather than as successful rotation.
+
+The first connected apply records the prior managed settings and selection for restoration.
+Repeated apply and key rotation retain that original baseline. `ocx disconnect` restores the
+connection-owned settings while preserving current user-added fields and unrelated profiles.
+The previous selection is restored only if the managed profile is still selected; a later valid
+user selection stays selected. A newly created profile with user additions is retained in readable
+standard mode instead of deleting those additions. `--keep-catalog` keeps the catalog, not the
+Desktop connection credential.
+
+For an older managed profile without an original record, OpenCodex can migrate it when it
+unambiguously belongs to the current hub and a recognized connection key. Apply, rotation/recovery
+or direct disconnect can handle this case without a new flag or prerequisite reapply. A warning
+explains that disconnect will use standard mode because the previous settings were not recorded.
+That fallback removes only the connection-owned gateway settings, preserves user fields and a
+separate valid selection, and is reported as standard fallback, not original restoration.
+
+Conflicting managed fields, unrecognized credentials or damaged restoration records are preserved
+and reported for resolution. Interrupted cleanup can resume for the same connection; it does not
+clear a newer connection or claim completion while restoration remains incomplete. Finish pending
+rotation recovery before starting disconnect, and retain the same catalog choice when retrying it.
+
+Fully quit and reopen Claude Desktop after apply, rotation/recovery or restoration: changing files
+does not replace a credential already held by the running app. OpenCodex does not kill/restart the
+app automatically. Disconnect works locally without automatically revoking the hub key or erasing
+arbitrary external copies; revoke separately on the hub if desired.
+
 ## The /model picker ("From gateway")
 
 Claude Code 2.1.129+ discovers gateway models via `GET /v1/models?limit=1000` and lists them in
@@ -238,8 +309,16 @@ canonical ids. The synthetic 2026 date is an internal slot, not a release date. 
 and `claude-ocx-<provider>--<model>` ids from older configs still resolve.
 
 If Claude Desktop's footer picker does not change the model for an already-running 3P
-conversation, use `/model <id>` in that conversation. OpenCodex cannot observe picker state; it
-routes the model id carried by each request. Confirm the result under **Logs → requestedModel**.
+conversation, you can try `/model <id>`, but this workaround may also fail on affected Desktop
+builds. [Issue #3782](https://github.com/lidge-jun/opencodex/issues/3782) reports that on Windows
+with Claude Desktop 1.46388.4, the conversation continues using its initial model after both
+footer-picker and `/model` changes. The report does not establish which client or routing
+component causes the behavior.
+
+You can also try selecting the intended default model in the OpenCodex Claude Desktop profile,
+reapplying the profile, and starting a new conversation. This is a troubleshooting step, not a
+guaranteed fix. OpenCodex cannot observe picker state; it routes the model id carried by each
+request. Confirm what the client sends under **Logs → requestedModel**.
 
 Models with an authoritative 1M context window get an extra `…[1m]` picker row: selecting it makes
 Claude Code account a full 1M context for that model (auto-compaction stays on) — the proxy strips
@@ -260,6 +339,16 @@ express fall back to the hashed alias. Model ids MAY contain `--` (resolution sp
 
 **Model resolution order:** `[1m]` marker stripped → readable alias decoded → Desktop hashed
 alias decoded → `modelMap` exact match → date-stripped match (`-20250514` removed) → passthrough.
+
+<a id="desktop-alias-resolution"></a>
+
+An unresolved date-shaped Desktop ID can also be a genuine native model missing from discovery.
+Messages and count-tokens return HTTP 503 with the fixed `desktop_model_mapping_unavailable` error when the available
+evidence cannot resolve that ID; this does not establish that the model is invalid. Unknown legacy
+hash aliases still return HTTP 400. Neither case strips the date or falls back to another route.
+Known IDs, registered mappings and exact `modelMap` matches keep their existing behavior, including
+recognized real native IDs. Refresh model discovery or reapply the connected hub profile before
+trying again; retrying alone does not guarantee resolution.
 
 Each entry carries a display name like `gemini-3-pro (gemini)`, plus full model capabilities
 (reasoning-effort ladder, thinking types) in the official `ModelInfo` shape. Real Anthropic models
@@ -359,6 +448,8 @@ entirely). The stub keeps tool call/result pairing intact.
 
 Lookup order: discovery alias → exact id → id with date suffix stripped (`-20250514`) → passthrough.
 
+See [Desktop alias resolution](#desktop-alias-resolution) for the rejection policy.
+
 ## Sidecar matrix: web search and image understanding
 
 Routed models do not all have the same hosted tools or image support. opencodex fills those gaps
@@ -439,11 +530,13 @@ The proxy translates every Anthropic Messages API request into the Codex Respons
 | Assistant text | `output_text` |
 | Assistant `tool_use` | `function_call` (`input` → JSON-stringified `arguments`) |
 | User `tool_result` | `function_call_output` (`is_error` → `[tool error]` prefix) |
-| `thinking` / `redacted_thinking` replay | Dropped |
+| `thinking` / `redacted_thinking` replay | `reasoning` items with bounded `ocxr1` envelopes for signatures and redacted payloads |
 | Function tools | `{type: "function"}` (`web_search*` → `{type: "web_search"}`) |
 | `tool_choice` | `auto`→`auto`, `none`→`none`, `any`→`required`, named function→`{type:"function",name}`, hosted WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |
+
+Replay preserves non-hidden signed blocks (including empty thinking) and opaque redacted blocks on the intended Anthropic adapter. `hideThinkingSummary` remains unchanged: locally hidden signed text is not exposed to Claude clients, and lossless replay through that hidden Claude boundary is not established. Older combined reasoning envelopes cannot recover original block order once streaming text has been emitted. `claudeCode.compatibility: "enforce"` still rejects thinking replay. This does not establish live Anthropic acceptance or cache-hit improvements; [#3719](https://github.com/lidge-jun/opencodex/issues/3719) remains open.
 
 **Error cases (400):** malformed JSON; missing/empty `model`; missing/empty `messages`; unsupported
 role; `tool_result` without `tool_use_id`; `tool_use` without id/name; named `tool_choice` without
@@ -456,7 +549,8 @@ name.
 | `response.created` | `message_start` + `ping` |
 | Heartbeat | `ping` |
 | Text deltas | `content_block_start` → `content_block_delta` (text) → `content_block_stop` |
-| Reasoning summary/text | `thinking` block with synthetic signature |
+| Reasoning summary/text | `thinking` block with the replayed signature, or a bounded `ocxr1` fallback envelope |
+| Redacted reasoning | `redacted_thinking` blocks replayed from the reasoning envelope |
 | Function-call frames | `tool_use` block with `input_json_delta` |
 | Terminal event | `message_delta` → `message_stop` |
 | EOF before terminal | 502-style `api_error` |

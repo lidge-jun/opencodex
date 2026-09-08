@@ -45,19 +45,32 @@ Mode changes apply to new sessions. `maxConcurrentThreadsPerSession` is a `PUT /
 `config.json` key; `ocx v2 threads <n>` writes `max_concurrent_threads_per_session` under
 `[features.multi_agent_v2]` in Codex's `$CODEX_HOME/config.toml` after v2 is enabled.
 
-**Ultra mode** (the Subagents dashboard toggle, `PUT /api/v2` field
-`multiAgentModeHintText`, and `ocx v2 mode-hint`) writes
+**Always proactive delegation** in Subagents → Advanced (formerly **Ultra mode**) changes the
+delegation trigger without changing reasoning effort. Its preset preserves user instructions,
+authority boundaries, task scope, and tool rules. The dashboard toggle, `PUT /api/v2` field
+`multiAgentModeHintText`, and `ocx v2 mode-hint` write
 `features.multi_agent_v2.multi_agent_mode_hint_text` in Codex's
 `$CODEX_HOME/config.toml`. The CLI `ocx v2 mode-hint` command persists this key even
-when `multi_agent_v2` is disabled; it does not toggle the feature. The hint overrides
-codex-rs's effort-derived multi-agent policy, so any model and any reasoning effort
-receives the Proactive delegation prompt; it does **not** change reasoning effort.
+when `multi_agent_v2` is disabled; it does not toggle the feature. The hint replaces
+codex-rs's effort-derived multi-agent policy when that native surface is active.
 A `null` value removes the key so the effort-derived policy (ultra = proactive,
 otherwise explicit) resumes; empty or whitespace-only values are rejected because a
 present empty override would suppress even the ultra-derived Proactive message. The
-Subagents dashboard's Ultra mode **on** toggle requires both the native feature and
+Subagents dashboard's **Always proactive delegation** toggle requires both the native feature and
 an explicit v2 surface (`multiAgentMode: "v2"`, equivalent to `ocx v2 mode v2`);
 `ocx v2 on` alone does not satisfy that dashboard gate.
+
+`GET` and `PUT /api/v2` also return `multiAgentModeHintRecommendation: { text, revision }`.
+The dashboard uses this server-provided text when enabling or restoring the preset, with no
+hardcoded fallback. If an older server omits the recommendation or returns a malformed value,
+preset installation and restoration are unavailable; editing or clearing an existing custom hint
+remains available. **Restore preset** changes only the local draft; **Save** persists it.
+
+Reading settings, unrelated updates, and upgrades do not migrate a stored hint. Only an explicit
+hint update that matches either of the two recognized legacy OpenCodex presets byte-for-byte is
+replaced with the current recommendation. Other valid custom text, including whitespace variants,
+is preserved byte-for-byte. Mode-hint support is still checked before writing, and changes apply
+to new Codex sessions.
 
 The management API exposes `GET`/`PUT /api/v2`, `/api/injection-model`, `/api/effort-caps`,
 `/api/subagent-models`, and `/api/subagent-model-fallback`. Injection-model updates are partial;
@@ -75,9 +88,9 @@ loudly when the installed Codex build does not know the flag yet.
 ## Roster and guidance
 
 The effective v2 roster is the configured, picker-visible, priority-sorted first five models that
-are compatible with v2 and present in the injected catalog. V2 eligibility treats an explicit `"v2"`,
-`null`, or absent upstream pin as eligible; a real `"v1"` pin is excluded. Excluded entries remain in
-configuration so they can become eligible later.
+are present in the injected catalog and are not explicitly marked `"disabled"`. An explicit `"v2"`
+pin supports recursive workers; `"v1"`, `null`, and absent pins remain eligible as leaf workers.
+Excluded entries remain in configuration so they can become eligible later.
 
 Surface detection uses tool shape. A namespaced `spawn_agent` with `send_input`, `resume_agent`, or
 `close_agent` is v1. A flat `spawn_agent` with `send_message`, `followup_task`, `interrupt_agent`, or
@@ -88,9 +101,19 @@ message only when a preferred model, eligible roster, or fallback chain exists. 
 has a 700-character budget and drops the roster first if necessary. Guidance is deduplicated across
 replay prefixes and inserted before a trailing `compaction_trigger`.
 
-`injectionModel` and `injectionEffort` are advisory unless native-default sync is enabled. The built-in
-v2 text asks Codex to pass supported model/effort overrides to `spawn_agent` with
-`fork_turns: "none"`. A custom `injectionPrompt` substitutes missing values with an empty string.
+Both built-in v2 subagent guidance and custom `injectionPrompt` bodies use
+`<opencodex_subagent_guidance>`, separate from Codex's native `<multi_agent_mode>` messages.
+Built-in text reports the resolved preferred model, roster, and fallback chain without prescribing
+delegation, model overrides, or `fork_turns`. Custom bodies retain their placeholder substitution
+and content. `injectionModel` and `injectionEffort` remain advisory unless native-default sync is
+enabled; missing custom placeholder values are still replaced with an empty string.
+
+Replay deduplication compares the latest exact text in each tag family. When both values use the
+new proxy family, switching custom guidance back to the built-in form appends the current value;
+intervening native mode changes do not duplicate unchanged proxy guidance. Existing native and
+legacy-tagged history is preserved. This wrapper change does not identify the author of old
+messages or revoke prior instructions. Mixed-version histories cannot be classified from the
+legacy tag alone, and transition detection across such histories is not guaranteed.
 
 ## Native Codex default sync
 
@@ -117,8 +140,9 @@ opencodex skips disabled, unroutable, unhealthy, cooling-down, or quota-threshol
 availability snapshot is cached for `subagentModelFallbackPollMs`. Encrypted child tasks restrict
 the chain to canonical native ChatGPT targets plus direct key-auth Responses routes explicitly
 trusted with `allowEncryptedV2AgentTasks: true`; if none can consume the encrypted payload, the
-request fails instead of routing unreadable ciphertext elsewhere. Combo routing remains
-canonical-native-only.
+request fails instead of routing unreadable ciphertext elsewhere. Combo routing first tries an
+available canonical native target; when none is selectable and `agentTaskRecovery` is enabled,
+an encrypted `NEW_TASK` is recovered once before routed combo dispatch.
 
 ```json
 {
@@ -203,9 +227,13 @@ Enable this only when the additional authenticated request, quota use, plaintext
 and private-backend dependency are acceptable. Prefer a native ChatGPT child or v1 heterogeneous
 delegation when they are not.
 
-This recovery path applies to direct-routed children. At most 32 recovery requests can be active at
-once; additional misses fail closed. Combo routing keeps its existing native-only filter for
-encrypted tasks and does not invoke recovery.
+This recovery path applies to direct-routed children and encrypted combo `NEW_TASK` spawns. At
+most 32 recovery requests can be active at once; additional misses fail closed. A combo with an
+available canonical native target still sends ciphertext directly; recovery runs only when no
+native target is selectable. After a stored Pool account's refresh and same-account replay are
+exhausted, recovery can use the incoming caller credential for one available routed target without
+trying another native account. Policy refusals remain terminal. Failed recovery, exhausted targets,
+or unavailable targets still fail closed without forwarding ciphertext to a routed provider.
 
 ## Effort caps
 
@@ -221,3 +249,29 @@ apply. `max` and `ultra` are accepted, while the dashboard offers `low` through 
 
 For a beginner-oriented explanation of v1, default, and v2 behavior, see
 [Sub-agent surfaces](/guides/sub-agent-surface/).
+
+## Global model effort pins
+
+The optional root `modelPinnedEfforts` map fills or overrides incoming effort choices when
+neither a provider model pin nor a provider-wide pin is configured. For example:
+
+```json
+{
+  "modelPinnedEfforts": {
+    "example-provider/example-model": "high"
+  }
+}
+```
+
+Lookup checks the final selector before provider-prefix normalization, then the qualified
+`provider/model` destination, then its bare upstream model ID. Original combo aliases and
+synthetic effort-row selector IDs are not global pin keys; configure the concrete destination.
+Synthetic-row effort and combo defaults are preserved as the effective input before pinning.
+Each selected destination resolves its own pin, then applicable caps and wire normalization.
+Compaction requests are exempt. `none` means effort omission and provider-default behavior,
+not guaranteed reasoning disablement.
+
+`GET /api/effort-caps` includes the map. `PUT /api/effort-caps` accepts `modelPinnedEfforts`
+alongside the existing caps: omitted fields stay unchanged, `null` clears the map, and a map
+entry set to `null` or `""` deletes only that key. Invalid combined updates leave both caps
+and pins unchanged. Saving a pin does not alter the featured subagent roster.

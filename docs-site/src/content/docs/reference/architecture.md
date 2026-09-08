@@ -200,3 +200,50 @@ The internal model lives in `types.ts`: `OcxParsedRequest`, `OcxContext`, the `O
 `OcxContentPart` (text / image), `OcxToolCall`, `OcxTool`, `AdapterEvent`, and the config types
 (`OcxConfig`, `OcxProviderConfig`). Two helpers are widely used: `namespacedToolName()` and
 `modelInList()` (tolerant `:size`-tag matching for `noVisionModels` / `noReasoningModels`).
+
+
+### Incomplete quota terminals
+
+A native forward response that ends with quota or rate-limit evidence in an
+`incomplete` terminal records account quota failure and spawn-fallback health.
+Structured `incomplete_details.reason` and error codes are accepted without a
+message; ordinary output-limit, filtering, steering and stall incompletes do not
+cool an account. Cyber-policy classification retains precedence. The terminal is
+not replayed after output, and fixed-account request selection remains fixed.
+
+Remote compact requests can buffer their response for longer than the server's
+request-idle timeout. That listener timeout is disabled after the request body is
+accepted; client cancellation and upstream operation deadlines still apply.
+
+Buffered routed compaction treats nonempty text and reasoning deltas as progress
+without exposing partial summary text. Comments, empty deltas and gateway
+keepalives do not reset the adapter-event stall watchdog. The default stall
+timeout stays 300 seconds; encrypted compaction content is preserved unchanged.
+
+Native compact response buffering also enforces a body-byte inactivity deadline
+using `stallTimeoutSec` (300 seconds by default). Nonempty chunks reset that
+deadline; a stalled body returns HTTP 504, client cancellation retains HTTP 499,
+and cleanup does not wait for a stuck upstream cancellation promise. The 32 MiB
+response ceiling and the original body bytes are preserved.
+
+A canonical upstream WebSocket refused-create error can become an HTTP 4xx only
+before the response is committed and after stream correlation checks. Permitted
+quota headers are bounded and rebuilt without upstream framing headers; the JSON
+response is not cacheable. Post-commit and 5xx errors keep the no-resend path.
+
+When encrypted agent-task recovery refuses a routed task, its existing 400 error
+can include a bounded `recovery_reason`: `unsupported_envelope`,
+`admission_denied`, `recovery_unavailable`, `caller_cancelled`, `input_changed`,
+`recovery_http_rejected`, `recovery_timeout`, `recovery_aborted`,
+`recovery_transport_error`, or `recovery_invalid_output`.
+HTTP rejection requires an observed non-success response. Invalid output includes
+invalid UTF-8, oversized bodies, malformed or incomplete recovery streams, and
+invalid or conflicting assignments. A caller's cancellation takes precedence over
+an owned deadline, which takes precedence over decode/transport failures.
+`recovery_aborted` describes a shared recovery cancelled independently of that caller.
+Shared-flight waiters receive the same underlying failure unless individually cancelled;
+only successful plaintext is cached. Diagnostics contain no upstream error or payload text.
+The field is omitted when no classified recovery result exists, and existing combo
+branches that return the original target failure keep that response.
+`recovery_unavailable` includes cache/singleflight capacity and does not prove an
+upstream request was attempted. No retry or broader envelope acceptance is enabled.

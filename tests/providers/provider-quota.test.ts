@@ -13,6 +13,7 @@ import { saveCredential } from "../../src/oauth/store";
 import {
   clearProviderQuotaCache,
   fetchProviderQuotaReports,
+  isCanonicalAntigravityQuotaUrl,
   parseOllamaCloudQuota,
   parseXaiCreditsResponse,
   QUOTA_RESPONSE_MAX_BYTES,
@@ -21,7 +22,10 @@ import {
   setProviderQuotaBeforePublishForTests,
 } from "../../src/providers/quota";
 import type { OcxConfig } from "../../src/types";
+import { PROXY_ENV_KEYS } from "../../src/lib/proxy-env";
 import { repoPath } from "../helpers/repo-root";
+const proxyKeys = PROXY_ENV_KEYS.flatMap(key => [key, key.toLowerCase()]);
+const originalProxyEnv = Object.fromEntries(proxyKeys.map(key => [key, process.env[key]]));
 const originalFetch = globalThis.fetch;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
 const previousCodexHome = process.env.CODEX_HOME;
@@ -75,6 +79,7 @@ function testConfig(): OcxConfig {
 }
 
 beforeEach(() => {
+  for (const key of proxyKeys) delete process.env[key];
   opencodexHome = mkdtempSync(join(tmpdir(), "ocx-quota-"));
   codexHome = mkdtempSync(join(tmpdir(), "codex-quota-"));
   process.env.OPENCODEX_HOME = opencodexHome;
@@ -90,6 +95,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  for (const key of proxyKeys) {
+    if (originalProxyEnv[key] === undefined) delete process.env[key];
+    else process.env[key] = originalProxyEnv[key];
+  }
   globalThis.fetch = originalFetch;
   clearAccountQuota();
   clearProviderQuotaCache();
@@ -203,15 +212,39 @@ describe("fetchProviderQuotaReports", () => {
     await saveCredential("google-antigravity", { access: "agy-access-secret", refresh: "agy-refresh-secret", expires: Date.now() + 3600_000, projectId: "agy-project-secret" });
     await saveCredential("kimi", { access: "kimi-access-secret", refresh: "kimi-refresh-secret", expires: Date.now() + 3600_000 });
 
-    // The Antigravity summary probe is pinned to Google's host through the provider-outbound
-    // transport and never touches globalThis.fetch; without this seam the test would make a
-    // real network request. A 404 here exercises the fetchAvailableModels fallback below.
+    const seen: { url: string; authorization?: string; body?: string }[] = [];
+    // Both Antigravity accounting requests use the pinned transport. Keep the
+    // summary unavailable so this fixture still exercises the models fallback.
     setAntigravityAccountQuotaTransportForTests({
       resolveAddresses: async () => ({ hostname: "daily-cloudcode-pa.googleapis.com", addresses: [{ address: "142.250.0.1", family: 4 }], privateNetwork: false }),
-      pinnedPost: async () => new Response("not found", { status: 404 }),
+      pinnedPost: async (url, _pinned, body, _signal, options) => {
+        seen.push({ url, authorization: new Headers(options?.headers).get("authorization") ?? undefined, body });
+        if (url === "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels") {
+          return new Response(JSON.stringify({
+            models: {
+              "gemini-3.6-flash-medium": {
+                displayName: "Gemini 3.6 Flash (Medium)",
+                quotaInfo: { remainingFraction: 0.64, resetTime: "2026-07-05T14:00:00Z" },
+              },
+              "claude-sonnet-4.6": {
+                displayName: "Claude Sonnet",
+                quotaInfoByTier: {
+                  sonnet: { remainingFraction: 0.21, resetTime: "2026-07-05T15:00:00Z" },
+                },
+              },
+              autocomplete: {
+                displayName: "Autocomplete",
+                quotaInfo: { remainingFraction: 0.01, resetTime: "2026-07-05T16:00:00Z" },
+              },
+            },
+            rawProject: "agy-project-secret",
+            rawToken: "agy-access-secret",
+          }), { status: 200, headers: { "content-type": "application/json" } });
+        }
+        return new Response("not found", { status: 404 });
+      },
     });
 
-    const seen: { url: string; authorization?: string; body?: string }[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const headers = init?.headers as Record<string, string> | undefined;
@@ -256,28 +289,6 @@ describe("fetchProviderQuotaReports", () => {
             totalPercentUsed: 30,
           },
           billingCycleEnd: "2026-08-01T00:00:00.000Z",
-        }), { status: 200, headers: { "content-type": "application/json" } });
-      }
-      if (url === "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels") {
-        return new Response(JSON.stringify({
-          models: {
-            "gemini-3.6-flash-medium": {
-              displayName: "Gemini 3.6 Flash (Medium)",
-              quotaInfo: { remainingFraction: 0.64, resetTime: "2026-07-05T14:00:00Z" },
-            },
-            "claude-sonnet-4.6": {
-              displayName: "Claude Sonnet",
-              quotaInfoByTier: {
-                sonnet: { remainingFraction: 0.21, resetTime: "2026-07-05T15:00:00Z" },
-              },
-            },
-            autocomplete: {
-              displayName: "Autocomplete",
-              quotaInfo: { remainingFraction: 0.01, resetTime: "2026-07-05T16:00:00Z" },
-            },
-          },
-          rawProject: "agy-project-secret",
-          rawToken: "agy-access-secret",
         }), { status: 200, headers: { "content-type": "application/json" } });
       }
       if (url === "https://api.kimi.com/coding/v1/usages") {
@@ -3076,6 +3087,205 @@ describe("fetchProviderQuotaReports", () => {
     expect(result.reports).toEqual([]);
     // The redirect short-circuits the summary probe; the redirect target is never fetched.
     expect(posted).toEqual(["https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"]);
+  });
+
+  describe("Google Antigravity canonical quota transport (#3781)", () => {
+    const summaryUrl = "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary";
+    const modelsUrl = "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels";
+    const summaryBody = JSON.stringify({ groups: [{ displayName: "Gemini", buckets: [{ window: "5h", remainingFraction: 0.6 }] }] });
+    const modelsBody = JSON.stringify({ models: { gemini: { quotaInfo: { remainingFraction: 0.75 } } } });
+    const publicAddress = { hostname: "daily-cloudcode-pa.googleapis.com", addresses: [{ address: "142.250.0.1", family: 4 }], privateNetwork: false };
+    let plainFetchCalls: string[];
+
+    function config(baseUrl = "https://daily-cloudcode-pa.googleapis.com"): OcxConfig {
+      return {
+        defaultProvider: "google-antigravity",
+        providers: { "google-antigravity": { adapter: "google", authMode: "oauth", baseUrl, allowPrivateNetwork: true } },
+      } as OcxConfig;
+    }
+
+    beforeEach(async () => {
+      await saveCredential("google-antigravity", {
+        access: "agy-canonical-access", refresh: "agy-canonical-refresh", expires: Date.now() + 3600_000, projectId: "agy-canonical-project",
+      });
+      plainFetchCalls = [];
+      globalThis.fetch = (async (input) => {
+        plainFetchCalls.push(String(input));
+        throw new Error("unexpected quota-owned raw fetch");
+      }) as typeof fetch;
+    });
+
+    test("canonical proof accepts only the two exact Google accounting URLs", () => {
+      for (const url of [summaryUrl, modelsUrl]) {
+        expect(isCanonicalAntigravityQuotaUrl("google-antigravity", url)).toBe(true);
+        expect(isCanonicalAntigravityQuotaUrl("custom", url)).toBe(false);
+        for (const candidate of [
+          "", "not a URL", url.replace("https:", "http:"),
+          url.replace(".googleapis.com", ".googleapis.com.evil.example"),
+          url.replace("daily-cloudcode-pa", "cloudcode-pa"),
+          url.replace("https://", "https://user:pass@"),
+          url.replace(".com/", ".com:443/"), url.replace(".com/", ".com:8443/"),
+          url.replace("https://", "HTTPS://"), `${url}/`, `${url}/extra`,
+          `${url}?token=secret`, `${url}#fragment`, ` ${url}`,
+          url.replace("v1internal:", "v1internal%3A"),
+          url.replace("v1internal:", "prefix/v1internal:"),
+          "https://daily-cloudcode-pa.googleapis.com/v1internal:other",
+          "https://198.18.0.1/v1internal:fetchAvailableModels",
+          "https://127.0.0.1/v1internal:fetchAvailableModels",
+          "https://169.254.169.254/v1internal:fetchAvailableModels",
+        ]) expect(isCanonicalAntigravityQuotaUrl("google-antigravity", candidate)).toBe(false);
+      }
+    });
+
+    for (const fallback of [false, true]) {
+      test(`production proof survives reset for Fake-IP ${fallback ? "fallback" : "summary"}`, async () => {
+        const resolved: Array<{ url: string; benchmark?: boolean; private?: boolean; mihomo?: boolean }> = [];
+        const posted: Array<{ url: string; address: string; tls?: boolean; auth: string | null; body: string; signal: boolean }> = [];
+        setAntigravityAccountQuotaTransportForTests({ isCanonicalUrl: () => false });
+        setAntigravityAccountQuotaTransportForTests(null);
+        // Resolver/pinned-only overrides must retain the production canonical proof.
+        setAntigravityAccountQuotaTransportForTests({
+          resolveAddresses: async (url, options) => {
+            const policy = typeof options === "object" ? options : undefined;
+            resolved.push({ url, benchmark: policy?.allowBenchmarkAddresses, private: policy?.allowPrivateNetwork, mihomo: policy?.allowMihomoIpv6FakeIp });
+            if (!policy?.allowBenchmarkAddresses) throw new Error("benchmark address rejected");
+            return { ...publicAddress, addresses: [{ address: "198.18.56.214", family: 4 }] };
+          },
+          pinnedPost: async (url, pinned, body, signal, options) => {
+            posted.push({ url, address: pinned.address, tls: options?.rejectUnauthorized, auth: new Headers(options?.headers).get("authorization"), body, signal: signal instanceof AbortSignal });
+            if (url === summaryUrl && fallback) return new Response(null, { status: 404 });
+            return new Response(url === summaryUrl ? summaryBody : modelsBody);
+          },
+        });
+        const result = await fetchProviderQuotaReports(config(), true);
+        const urls = fallback ? [summaryUrl, modelsUrl] : [summaryUrl];
+        expect(resolved).toEqual(urls.map(url => ({ url, benchmark: true, private: false, mihomo: true })));
+        expect(posted).toEqual(urls.map(url => ({ url, address: "198.18.56.214", tls: true, auth: "Bearer agy-canonical-access", body: JSON.stringify({ project: "agy-canonical-project" }), signal: true })));
+        expect(result.reports[0]?.source).toBe(fallback ? "google-antigravity:fetchAvailableModels" : "google-antigravity:retrieveUserQuotaSummary");
+        expect(result.reports[0]?.quota.customWindows).toEqual([{ label: "Gem", percent: fallback ? 25 : 40 }]);
+        expect(plainFetchCalls).toEqual([]);
+      });
+    }
+
+    for (const baseUrl of ["https://custom.example/v1", "http://127.0.0.1:1/", "https://169.254.169.254/", "https://daily-cloudcode-pa.googleapis.com.evil.example/"]) {
+      test(`models fallback ignores configured destination ${baseUrl}`, async () => {
+        const resolved: Array<{ url: string; private?: boolean }> = [];
+        const posted: string[] = [];
+        setAntigravityAccountQuotaTransportForTests({
+          resolveAddresses: async (url, options) => {
+            resolved.push({ url, private: typeof options === "object" ? options?.allowPrivateNetwork : undefined });
+            return publicAddress;
+          },
+          pinnedPost: async (url) => {
+            posted.push(url);
+            return url === summaryUrl ? new Response(null, { status: 404 }) : new Response(modelsBody);
+          },
+        });
+        const result = await fetchProviderQuotaReports(config(baseUrl), true);
+        expect(result.reports[0]?.quota.customWindows).toEqual([{ label: "Gem", percent: 25 }]);
+        expect(resolved).toEqual([{ url: summaryUrl, private: false }, { url: modelsUrl, private: false }]);
+        expect(posted).toEqual([summaryUrl, modelsUrl]);
+        expect(plainFetchCalls).toEqual([]);
+      });
+    }
+
+    for (const noProxy of ["daily-cloudcode-pa.googleapis.com", "*"]) {
+      test(`NO_PROXY ${noProxy} keeps benchmark DNS blocked`, async () => {
+        process.env.NO_PROXY = noProxy;
+        const admitted: Array<boolean | undefined> = [];
+        let posted = 0;
+        setAntigravityAccountQuotaTransportForTests({
+          resolveAddresses: async (_url, options) => {
+            const allow = typeof options === "object" ? options?.allowBenchmarkAddresses : undefined;
+            admitted.push(allow);
+            if (!allow) throw new Error("benchmark address rejected");
+            return publicAddress;
+          },
+          pinnedPost: async () => { posted += 1; return new Response(summaryBody); },
+        });
+        expect((await fetchProviderQuotaReports(config(), true)).reports).toEqual([]);
+        expect(admitted).toEqual([false, false]);
+        expect(posted).toBe(0);
+        expect(plainFetchCalls).toEqual([]);
+      });
+    }
+
+    test("resolved-address policy rejection cannot escape to raw fallback fetch", async () => {
+      // The real classifier's mixed-address cases live in destination-policy-resolved.test.ts;
+      // this checks that quota cannot bypass its rejection through a second transport.
+      const resolved: string[] = [];
+      let posted = 0;
+      setAntigravityAccountQuotaTransportForTests({
+        resolveAddresses: async url => { resolved.push(url); throw new Error("provider URL resolves to metadata"); },
+        pinnedPost: async () => { posted += 1; return new Response(modelsBody); },
+      });
+      expect((await fetchProviderQuotaReports(config("https://custom.example"), true)).reports).toEqual([]);
+      expect(resolved).toEqual([summaryUrl, modelsUrl]);
+      expect(posted).toBe(0);
+      expect(plainFetchCalls).toEqual([]);
+    });
+
+    for (const summary of ["{}", "invalid JSON"]) {
+      test(`unusable summary ${summary} falls back through the fixed models transport`, async () => {
+        const posted: string[] = [];
+        setAntigravityAccountQuotaTransportForTests({
+          resolveAddresses: async () => publicAddress,
+          pinnedPost: async url => {
+            posted.push(url);
+            return new Response(url === summaryUrl ? summary : modelsBody);
+          },
+        });
+        const result = await fetchProviderQuotaReports(config(), true);
+        expect(result.reports[0]?.quota.customWindows).toEqual([{ label: "Gem", percent: 25 }]);
+        expect(posted).toEqual([summaryUrl, modelsUrl]);
+        expect(plainFetchCalls).toEqual([]);
+      });
+    }
+
+    for (const status of [200, 500]) {
+      test(`unusable models payload with HTTP ${status} produces no fabricated quota`, async () => {
+        const posted: string[] = [];
+        setAntigravityAccountQuotaTransportForTests({
+          resolveAddresses: async () => publicAddress,
+          pinnedPost: async url => {
+            posted.push(url);
+            return url === summaryUrl ? new Response(null, { status: 404 }) : new Response("invalid JSON", { status });
+          },
+        });
+        expect((await fetchProviderQuotaReports(config(), true)).reports).toEqual([]);
+        expect(posted).toEqual([summaryUrl, modelsUrl]);
+        expect(plainFetchCalls).toEqual([]);
+      });
+    }
+
+    for (const status of [302, 307, 308, 401, 403]) {
+      test(`summary ${status} terminates without a models request`, async () => {
+        const posted: string[] = [];
+        setAntigravityAccountQuotaTransportForTests({
+          resolveAddresses: async () => publicAddress,
+          pinnedPost: async url => { posted.push(url); return new Response(null, { status, headers: { location: modelsUrl } }); },
+        });
+        expect((await fetchProviderQuotaReports(config(), true)).reports).toEqual([]);
+        expect(posted).toEqual([summaryUrl]);
+        expect(plainFetchCalls).toEqual([]);
+      });
+    }
+
+    for (const status of [302, 307, 308]) {
+      test(`models ${status} does not follow even a same-host redirect`, async () => {
+        const posted: string[] = [];
+        setAntigravityAccountQuotaTransportForTests({
+          resolveAddresses: async () => publicAddress,
+          pinnedPost: async url => {
+            posted.push(url);
+            return url === summaryUrl ? new Response(null, { status: 404 }) : new Response(null, { status, headers: { location: summaryUrl } });
+          },
+        });
+        expect((await fetchProviderQuotaReports(config(), true)).reports).toEqual([]);
+        expect(posted).toEqual([summaryUrl, modelsUrl]);
+        expect(plainFetchCalls).toEqual([]);
+      });
+    }
   });
 
   test("Ollama Cloud maps 5-hour session and weekly windows from /api/usage (legacy plan)", async () => {

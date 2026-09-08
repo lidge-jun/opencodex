@@ -4,7 +4,12 @@ import { createAnthropicAdapter as createAnthropicAdapterProduction } from "../.
 import { parseRequest } from "../../../src/responses/parser";
 import { encodeReasoningEnvelope, decodeReasoningEnvelope, OCX_REASONING_PREFIX } from "../../../src/responses/reasoning-envelope";
 import type { AdapterEvent, OcxProviderConfig, OcxThinkingContent } from "../../../src/types";
-import { withTestTranslatorBudget } from "../../helpers/translator-budget";
+import { createTestTranslatorBudget, withTestTranslatorBudget } from "../../helpers/translator-budget";
+
+import { anthropicToResponsesBody } from "../../../src/claude/inbound";
+import { collectAnthropicMessage, responsesSseToAnthropicSse, responsesJsonToAnthropicMessage } from "../../../src/claude/outbound";
+import { createGoogleAdapter } from "../../../src/adapters/google";
+import { sanitizeReasoningInputContent } from "../../../src/adapters/openai-responses";
 
 const createAnthropicAdapter = (...args: Parameters<typeof createAnthropicAdapterProduction>) =>
   withTestTranslatorBudget(createAnthropicAdapterProduction(...args));
@@ -127,11 +132,11 @@ describe("bridge ocxr1 envelope emission", () => {
       ...baseEvents,
     ], "claude-x");
     const output = response.output as Record<string, unknown>[];
-    const reasoning = output.find(i => i.type === "reasoning");
-    expect(reasoning).toBeDefined();
-    const env = decodeReasoningEnvelope(reasoning!.encrypted_content as string);
-    expect(env?.sig).toBe("RealSig1234567890==");
-    expect(env?.red).toEqual(["RED1"]);
+    const reasoning = output.filter(i => i.type === "reasoning");
+    expect(reasoning.map(item => decodeReasoningEnvelope(item.encrypted_content as string))).toEqual([
+      { red: ["RED1"] },
+      { sig: "RealSig1234567890==" },
+    ]);
   });
 
   test("redacted-only turn still emits an envelope reasoning item (SSE)", async () => {
@@ -324,5 +329,176 @@ describe("passthrough scrub of ocxr1 envelopes", () => {
     const req = await adapter.buildRequest(parseRequest(body));
     expect(req.body ?? "").not.toContain(OCX_REASONING_PREFIX);
     expect(req.body ?? "").toContain('"rs_1"'); // reasoning item itself survives
+  });
+});
+
+
+describe("Claude / Responses / intended Anthropic replay fidelity", () => {
+  // Synthetic fixtures prove transport fidelity only, never upstream signature validity.
+  const first = { type: "thinking", thinking: "first\nexact", signature: "FirstSyntheticSignature123456==" };
+  const second = { type: "thinking", thinking: "second", signature: "SecondSyntheticSignature123456==" };
+  const empty = { type: "thinking", thinking: "", signature: "EmptySyntheticSignature123456==" };
+  const before = { type: "redacted_thinking", data: "opaque-before" };
+  const middle = { type: "redacted_thinking", data: "opaque-middle" };
+  const after = { type: "redacted_thinking", data: "opaque-after" };
+  const tool = { type: "tool_use", id: "toolu_replay", name: "lookup", input: { q: "x" } };
+  const cases = [
+    { name: "consecutive signed blocks", blocks: [first, second, tool] },
+    { name: "opaque blocks in source order", blocks: [before, first, middle, second, after, tool] },
+    { name: "empty signed block", blocks: [empty, tool] },
+    { name: "consecutive empty signed blocks", blocks: [empty, { ...empty, signature: "OtherEmptySyntheticSignature123456==" }, tool] },
+    { name: "redacted-only tool turn", blocks: [before, after, tool] },
+  ];
+
+  for (const fixture of cases) {
+    for (const streaming of [true, false]) {
+      test(`${fixture.name}: ${streaming ? "SSE" : "JSON"} full chain preserves exact blocks`, async () => {
+        const adapter = createAnthropicAdapter(provider, "none");
+        let events: AdapterEvent[];
+        if (streaming) {
+          const frames = [frame("message_start", { message: { usage: { input_tokens: 1, output_tokens: 0 } } })];
+          fixture.blocks.forEach((block, index) => {
+            frames.push(frame("content_block_start", { index, content_block: block.type === "thinking"
+              ? { type: "thinking", thinking: "", signature: "" }
+              : block.type === "tool_use" ? { ...tool, input: {} } : block }));
+            if ("thinking" in block) {
+              // Omitted thinking has no thinking_delta on the actual wire.
+              if (block.thinking) frames.push(frame("content_block_delta", { index, delta: { type: "thinking_delta", thinking: block.thinking } }));
+              frames.push(frame("content_block_delta", { index, delta: { type: "signature_delta", signature: block.signature } }));
+            } else if (block.type === "tool_use") {
+              frames.push(frame("content_block_delta", { index, delta: { type: "input_json_delta", partial_json: JSON.stringify(tool.input) } }));
+            }
+            frames.push(frame("content_block_stop", { index }));
+          });
+          frames.push(frame("message_delta", { delta: { stop_reason: "tool_use" }, usage: { output_tokens: 1 } }), frame("message_stop", {}));
+          events = await collect(adapter.parseStream(sseResponse(frames)));
+        } else {
+          events = await adapter.parseResponse!(new Response(JSON.stringify({
+            id: "msg_fixture", type: "message", role: "assistant", model: "claude-x",
+            content: fixture.blocks, stop_reason: "tool_use", usage: { input_tokens: 1, output_tokens: 1 },
+          })));
+        }
+        let message: Record<string, unknown>;
+        if (streaming) {
+          async function* upstream() { yield* events; }
+          const budget = createTestTranslatorBudget();
+          message = await collectAnthropicMessage(responsesSseToAnthropicSse(
+            bridgeToResponsesSSE(upstream(), "claude-x"), "claude-x", { translatorBudget: budget },
+          ), "claude-x", budget);
+        } else {
+          message = responsesJsonToAnthropicMessage(buildResponseJSON(events, "claude-x"), "claude-x");
+        }
+        expect(message.content).toEqual(fixture.blocks);
+        const parsed = parseRequest(anthropicToResponsesBody({
+          model: "anthropic/claude-x", messages: [
+            { role: "user", content: "question" },
+            { role: "assistant", content: message.content },
+            { role: "user", content: [{ type: "tool_result", tool_use_id: tool.id, content: "result" }] },
+          ],
+        }));
+        const request = await adapter.buildRequest(parsed);
+        const replay = JSON.parse(request.body as string) as { messages: Array<{ role: string; content: unknown }> };
+        expect(replay.messages).toEqual([
+          { role: "user", content: "question" },
+          { role: "assistant", content: fixture.blocks },
+          { role: "user", content: [{ type: "tool_result", tool_use_id: tool.id, content: "result" }] },
+        ]);
+      });
+    }
+  }
+
+  test("signature updates replace rather than concatenate, across heartbeats", async () => {
+    // Both official SDKs assign signature_delta.signature instead of appending it:
+    // anthropic-sdk-typescript/src/lib/MessageStream.ts and
+    // anthropic-sdk-python/src/anthropic/lib/streaming/_messages.py.
+    const adapter = createAnthropicAdapter(provider);
+    const events = await collect(adapter.parseStream(sseResponse([
+      frame("content_block_start", { index: 0, content_block: { type: "thinking", thinking: "", signature: "" } }),
+      frame("content_block_delta", { index: 0, delta: { type: "thinking_delta", thinking: "first" } }),
+      frame("content_block_delta", { index: 0, delta: { type: "signature_delta", signature: "old" } }),
+      ": heartbeat\n\n",
+      frame("content_block_delta", { index: 0, delta: { type: "signature_delta", signature: "FirstSyntheticSignature123456==" } }),
+      frame("content_block_stop", { index: 0 }),
+      frame("content_block_start", { index: 1, content_block: { type: "thinking", thinking: "", signature: "" } }),
+      frame("content_block_delta", { index: 1, delta: { type: "thinking_delta", thinking: "second" } }),
+      frame("content_block_delta", { index: 1, delta: { type: "signature_delta", signature: "SecondSyntheticSignature123456==" } }),
+      frame("content_block_stop", { index: 1 }),
+      frame("message_stop", {}),
+    ])));
+    async function* upstream() { yield* events; }
+    const streamed = sseItems(await drainSse(bridgeToResponsesSSE(upstream(), "claude-x")));
+    const buffered = buildResponseJSON(events, "claude-x").output as Record<string, unknown>[];
+    for (const items of [streamed, buffered]) {
+      expect(items.map(item => ({ summary: item.summary, envelope: decodeReasoningEnvelope(item.encrypted_content as string) }))).toEqual([
+        { summary: [{ type: "summary_text", text: "first" }], envelope: { sig: "FirstSyntheticSignature123456==" } },
+        { summary: [{ type: "summary_text", text: "second" }], envelope: { sig: "SecondSyntheticSignature123456==" } },
+      ]);
+    }
+  });
+
+  test("signed/opaque-only assistant turns survive a user boundary and end of input", () => {
+    for (const continuation of [[], [{ role: "user", content: "next" }]]) {
+      const parsed = parseRequest(anthropicToResponsesBody({ model: "anthropic/claude-x", messages: [
+        { role: "assistant", content: [empty, before, after] }, ...continuation,
+      ] }));
+      const assistant = parsed.context.messages.find(message => message.role === "assistant");
+      expect(assistant?.content).toEqual([
+        expect.objectContaining({ type: "thinking", thinking: "", signature: empty.signature }),
+        expect.objectContaining({ type: "thinking", thinking: "", redacted: [before.data] }),
+        expect.objectContaining({ type: "thinking", thinking: "", redacted: [after.data] }),
+      ]);
+    }
+  });
+
+  test("locally hidden signed text remains exact on Responses replay without being exposed to Claude", async () => {
+    const events: AdapterEvent[] = [
+      { type: "thinking_delta", thinking: "hidden exact\ntext" },
+      { type: "thinking_signature", signature: first.signature },
+      { type: "text_delta", text: "answer" },
+      { type: "done", usage: { inputTokens: 1, outputTokens: 1 } },
+    ];
+    async function* upstream() { yield* events; }
+    const items = sseItems(await drainSse(bridgeToResponsesSSE(upstream(), "claude-x", undefined, undefined, undefined, undefined, 2000, { hideThinkingSummary: true })));
+    const response = buildResponseJSON(events, "claude-x", { hideThinkingSummary: true });
+    for (const output of [items, response.output as Record<string, unknown>[]]) {
+      const reasoning = output.find(item => item.type === "reasoning")!;
+      expect(reasoning.summary).toEqual([]);
+      expect(decodeReasoningEnvelope(reasoning.encrypted_content as string)).toEqual({ sig: first.signature, txt: "hidden exact\ntext" });
+      const request = await createAnthropicAdapter(provider, "none").buildRequest(parseRequest({ model: "anthropic/claude-x", input: output }));
+      const replay = JSON.parse(request.body as string) as { messages: Array<{ content: unknown }> };
+      expect(replay.messages[0].content).toEqual([
+        { type: "thinking", thinking: "hidden exact\ntext", signature: first.signature },
+        { type: "text", text: "answer" },
+      ]);
+      // Deliberate existing limitation: no new signed carrier and no hidden-text disclosure.
+      expect(JSON.stringify(responsesJsonToAnthropicMessage({ output }, "claude-x"))).not.toContain("hidden exact");
+    }
+    expect(() => anthropicToResponsesBody({ model: "m", messages: [{ role: "assistant", content: [
+      { type: "thinking", thinking: "", signature: encodeReasoningEnvelope({ sig: first.signature, txt: "hidden exact" }) },
+    ] }] })).toThrow(/continuity/);
+  });
+
+  test("explicitly empty signed envelope text does not fall back to a different summary", () => {
+    const parsed = parseRequest({ model: "m", input: [
+      { type: "reasoning", summary: [{ type: "summary_text", text: "different summary" }], encrypted_content: encodeReasoningEnvelope({ sig: empty.signature, txt: "" }) },
+    ] });
+    expect(parsed.context.messages[0]?.content).toEqual([
+      { type: "thinking", thinking: "", signature: empty.signature },
+    ]);
+  });
+
+  test("opaque Anthropic payloads do not become Google signatures or native Responses encryption", async () => {
+    const body = anthropicToResponsesBody({ model: "google/gemini-test", messages: [
+      { role: "assistant", content: [empty, before, tool] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: tool.id, content: "result" }] },
+    ] });
+    const google = withTestTranslatorBudget(createGoogleAdapter({ adapter: "google", baseUrl: "https://generativelanguage.googleapis.com", apiKey: "synthetic" }));
+    const request = await google.buildRequest(parseRequest(body));
+    for (const output of [request.body as string, JSON.stringify(sanitizeReasoningInputContent(body))]) {
+      expect(output).not.toContain(empty.signature);
+      expect(output).not.toContain(before.data);
+      expect(output).not.toContain("ocxr1:");
+    }
+    expect(parseRequest({ model: "m", input: [{ type: "reasoning", summary: [], encrypted_content: "native-opaque" }] }).context.messages).toEqual([]);
   });
 });

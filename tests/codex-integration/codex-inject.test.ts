@@ -31,8 +31,8 @@ describe("Codex config injection", () => {
   });
 
   describe("authless Codex Desktop opt-in (#1107)", () => {
-    test("default target on loopback stays Design B and byte-identical", () => {
-      const target = standaloneCodexRoutingTarget(10100, {});
+    test.each([undefined, false])("disabled preference %s on loopback stays Design B and byte-identical", (codexDesktopAuthless) => {
+      const target = standaloneCodexRoutingTarget(10100, { codexDesktopAuthless });
       expect(target.desktopAuthless).toBeUndefined();
       expect(buildProfileFile(target, null)).toBe(buildProfileFile(10100, null));
       expect(buildProviderTableBlock(target)).toContain("requires_openai_auth = true");

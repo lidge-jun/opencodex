@@ -1,7 +1,6 @@
 # Provider quota refresh affordance + Meta usage visibility
 
-Unit opened 2026-09-04. Two defects reported against the live Providers dashboard
-on `http://localhost:10100/#providers`:
+Unit opened 2026-09-04. Two defects reported against the live Providers dashboard:
 
 1. Only the Codex account pool has a "Refresh quotas" button. Every other provider
    — anthropic, xai, cursor, google-antigravity, meta-muse — offers the operator no
@@ -9,7 +8,7 @@ on `http://localhost:10100/#providers`:
 2. Meta Muse shows no quota on the provider Usage tab even though the proxy has an
    observation for it.
 
-## Evidence gathered at P (live proxy, port 10100, v2.42.0, pid 73184)
+## Evidence gathered at P (live proxy, v2.42.0)
 
 `GET /api/provider-quotas` returns six reports, and `meta-muse` is one of them:
 
@@ -77,6 +76,7 @@ config save, provider add/remove. There is no operator-initiated path. The
   `bun x tsc --noEmit`, `bun run lint:gui` only.
 - Push with `--no-verify`; branch `codex/260904-provider-quota-refresh`; target `dev`.
 - A GUI-mentioning PR requires a screenshot in the description (`enforce-target`).
-- The live proxy on port 10100 is the user's working service. Read it, restart it
-  only when a rebuild must be picked up, never repoint or reconfigure it.
+- Verification must use an isolated scratch instance. Do not restart, repoint or
+  reconfigure the user's working proxy. The completed isolation record supersedes
+  the original working-service restart plan.
 - `refresh=1` must never cause a passive provider to spend an inference turn.

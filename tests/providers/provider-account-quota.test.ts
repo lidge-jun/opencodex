@@ -15,6 +15,7 @@ import {
   supportsPerAccountQuota,
   providerOAuthAccountQuotaMode,
 } from "../../src/providers/quota";
+import { PROXY_ENV_KEYS } from "../../src/lib/proxy-env";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const originalFetch = globalThis.fetch;
@@ -32,9 +33,11 @@ async function seedTwoAccounts(): Promise<void> {
 }
 
 function usageBody(fiveHour: number, sevenDay: number): string {
+  // These tests exercise current account measurements, not expired historical windows.
+  const now = Date.now();
   return JSON.stringify({
-    five_hour: { utilization: fiveHour, resets_at: "2026-07-05T12:00:00Z" },
-    seven_day: { utilization: sevenDay, resets_at: "2026-07-08T12:00:00Z" },
+    five_hour: { utilization: fiveHour, resets_at: new Date(now + 5 * 60 * 60_000).toISOString() },
+    seven_day: { utilization: sevenDay, resets_at: new Date(now + 7 * 24 * 60 * 60_000).toISOString() },
   });
 }
 
@@ -681,7 +684,21 @@ describe("google-antigravity per-account quota (#1082)", () => {
     });
   }
 
-  afterEach(() => setAntigravityAccountQuotaTransportForTests(null));
+  const proxyKeys = PROXY_ENV_KEYS.flatMap(key => [key, key.toLowerCase()]);
+  const originalProxyEnv = Object.fromEntries(proxyKeys.map(key => [key, process.env[key]]));
+  const summaryUrl = "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary";
+  const modelsUrl = "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels";
+
+  beforeEach(() => {
+    for (const key of proxyKeys) delete process.env[key];
+  });
+  afterEach(() => {
+    setAntigravityAccountQuotaTransportForTests(null);
+    for (const key of proxyKeys) {
+      if (originalProxyEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = originalProxyEnv[key];
+    }
+  });
 
   test("probes each account with its own bearer and project id on the fixed Google host using retrieveUserQuotaSummary", async () => {
     const expires = Date.now() + 60 * 60_000;
@@ -747,6 +764,95 @@ describe("google-antigravity per-account quota (#1082)", () => {
     expect(windows(idB)).toEqual(["Gem=3", "Cla=9"]);
     expect(byId[idA]!.quota!.customWindows![0]!.resetAt).toBeDefined();
   });
+
+  for (const fallback of [false, true]) {
+    test(`Fake-IP ${fallback ? "models fallback" : "summary"} keeps each account bearer and project separate`, async () => {
+      const expires = Date.now() + 3600_000;
+      await saveCredential("google-antigravity", { access: "agy-first", refresh: "r1", expires, projectId: "proj-first", accountId: "agy-a", email: "a@example.com" });
+      await saveCredential("google-antigravity", { access: "agy-second", refresh: "r2", expires, projectId: "proj-second", accountId: "agy-b", email: "b@example.com" });
+      let plainFetchCalls = 0;
+      globalThis.fetch = (async () => { plainFetchCalls += 1; throw new Error("unexpected raw quota fetch"); }) as typeof fetch;
+      const resolved: Array<{ url: string; benchmark?: boolean; private?: boolean; mihomo?: boolean }> = [];
+      const posted: Array<{ url: string; auth: string | null; project: string; address: string; tls?: boolean; signal: boolean }> = [];
+      setAntigravityAccountQuotaTransportForTests(null);
+      setAntigravityAccountQuotaTransportForTests({
+        resolveAddresses: async (url, options) => {
+          const policy = typeof options === "object" ? options : undefined;
+          resolved.push({ url, benchmark: policy?.allowBenchmarkAddresses, private: policy?.allowPrivateNetwork, mihomo: policy?.allowMihomoIpv6FakeIp });
+          if (!policy?.allowBenchmarkAddresses) throw new Error("benchmark address rejected");
+          return { hostname: "daily-cloudcode-pa.googleapis.com", addresses: [{ address: "198.18.56.214", family: 4 }], privateNetwork: false };
+        },
+        pinnedPost: async (url, pinned, body, signal, options) => {
+          const auth = new Headers(options?.headers).get("authorization");
+          posted.push({ url, auth, project: String(JSON.parse(body).project), address: pinned.address, tls: options?.rejectUnauthorized, signal: signal instanceof AbortSignal });
+          if (url === summaryUrl && fallback) return new Response(null, { status: 404 });
+          const [gem, cla]: [number, number] = auth === "Bearer agy-first" ? [0.86, 0.38] : [0.97, 0.91];
+          return new Response(url === summaryUrl ? antigravitySummaryBody(gem, cla) : antigravityBody(gem, cla));
+        },
+      });
+      const rows = await fetchProviderAccountQuotas("google-antigravity");
+      const urls = fallback ? [summaryUrl, modelsUrl] : [summaryUrl];
+      expect(resolved).toHaveLength(urls.length * 2);
+      expect(posted).toHaveLength(urls.length * 2);
+      for (const url of urls) {
+        expect(resolved.filter(row => row.url === url)).toEqual([
+          { url, benchmark: true, private: false, mihomo: true },
+          { url, benchmark: true, private: false, mihomo: true },
+        ]);
+      }
+      for (const [auth, project] of [["Bearer agy-first", "proj-first"], ["Bearer agy-second", "proj-second"]]) {
+        expect(posted.filter(row => row.auth === auth)).toEqual(urls.map(url => ({ url, auth, project, address: "198.18.56.214", tls: true, signal: true })));
+      }
+      const byId = Object.fromEntries(rows.map(row => [row.accountId, row]));
+      expect(byId[idFor("a@example.com")]?.quota?.customWindows?.map(w => w.percent)).toEqual(fallback ? [14, 62] : [14, 14, 62, 62]);
+      expect(byId[idFor("b@example.com")]?.quota?.customWindows?.map(w => w.percent)).toEqual(fallback ? [3, 9] : [3, 3, 9, 9]);
+      expect(plainFetchCalls).toBe(0);
+    });
+  }
+
+  test("NO_PROXY denial preserves an unavailable account row without sending its bearer", async () => {
+    await saveCredential("google-antigravity", { access: "agy-first", refresh: "r1", expires: Date.now() + 3600_000, projectId: "proj-first", accountId: "agy-a", email: "a@example.com" });
+    process.env.no_proxy = "daily-cloudcode-pa.googleapis.com";
+    const admitted: Array<boolean | undefined> = [];
+    let posted = 0;
+    let plainFetchCalls = 0;
+    globalThis.fetch = (async () => { plainFetchCalls += 1; throw new Error("unexpected raw quota fetch"); }) as typeof fetch;
+    setAntigravityAccountQuotaTransportForTests({
+      resolveAddresses: async (_url, options) => {
+        const allow = typeof options === "object" ? options?.allowBenchmarkAddresses : undefined;
+        admitted.push(allow);
+        if (!allow) throw new Error("benchmark address rejected");
+        return { hostname: "daily-cloudcode-pa.googleapis.com", addresses: [{ address: "198.18.56.214", family: 4 }], privateNetwork: false };
+      },
+      pinnedPost: async () => { posted += 1; return new Response(antigravitySummaryBody(0.5, 0.5)); },
+    });
+    expect(await fetchProviderAccountQuotas("google-antigravity")).toEqual([{ accountId: idFor("a@example.com"), quota: null, unavailable: true }]);
+    expect(admitted).toEqual([false, false]);
+    expect(posted).toBe(0);
+    expect(plainFetchCalls).toBe(0);
+  });
+
+  for (const status of [302, 307, 308, 401, 403]) {
+    for (const fallback of [false, true]) {
+      test(`account ${fallback ? "models" : "summary"} ${status} returns unavailable without following Location`, async () => {
+        await saveCredential("google-antigravity", { access: "agy-first", refresh: "r1", expires: Date.now() + 3600_000, projectId: "proj-first", accountId: "agy-a", email: "a@example.com" });
+        const posted: string[] = [];
+        let plainFetchCalls = 0;
+        globalThis.fetch = (async () => { plainFetchCalls += 1; throw new Error("unexpected raw quota fetch"); }) as typeof fetch;
+        setAntigravityAccountQuotaTransportForTests({
+          resolveAddresses: async () => ({ hostname: "daily-cloudcode-pa.googleapis.com", addresses: [{ address: "142.250.0.1", family: 4 }], privateNetwork: false }),
+          pinnedPost: async url => {
+            posted.push(url);
+            if (url === summaryUrl && fallback) return new Response(null, { status: 404 });
+            return new Response(null, { status, headers: { location: "https://daily-cloudcode-pa.googleapis.com/redirect-target" } });
+          },
+        });
+        expect(await fetchProviderAccountQuotas("google-antigravity")).toEqual([{ accountId: idFor("a@example.com"), quota: null, unavailable: true }]);
+        expect(posted).toEqual(fallback ? [summaryUrl, modelsUrl] : [summaryUrl]);
+        expect(plainFetchCalls).toBe(0);
+      });
+    }
+  }
 
   test("a rejected destination never receives a bearer; the row is unavailable, not 0%", async () => {
     const expires = Date.now() + 60 * 60_000;

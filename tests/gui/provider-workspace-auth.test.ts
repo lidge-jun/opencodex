@@ -82,13 +82,18 @@ async function providersPageSeam(): Promise<string> {
 describe("workspace account integration seam", () => {
   test("passes account state and handlers into provider details", async () => {
     const source = await providersPageSeam();
+    const page = await Bun.file("gui/src/pages/Providers.tsx").text();
+    // Additional type imports must not obscure the runtime hook binding and its caller.
+    const poolBindings = page.match(/import\s*\{([^}]+)\}\s*from\s*["']\.\.\/hooks\/useProviderAccountPools["']/)?.[1];
+    expect(poolBindings?.split(",").map(binding => binding.trim())).toContain("useProviderAccountPools");
+    expect(page).toContain("const pools = useProviderAccountPools({");
     expect(source).toContain("accountLoadState={accountLoadStates[item.name]");
     expect(source).toContain("switchingAccountId={switchingAccount?.provider === item.name");
     expect(source).toContain("onRetryAccounts: async provider => { await fetchAccountSets([provider]); }");
     expect(source).toContain("key={item.name}");
     expect(source).toContain("switchingAccountRef.current");
-    expect(source).toContain("const refreshed = await fetchAccountSets([provider])");
-    expect(source).toContain("if (!refreshed)");
+    expect(source).toContain('const refreshed = await refreshAccountRosters({ provider, kind: "oauth" })');
+    expect(source).toContain('if (!refreshed) { notify(t("pws.accountsLoadFailed"), false); return; }');
   });
 
   test("owns an accessible dynamic account panel instead of nesting auth in Settings", async () => {
@@ -163,7 +168,10 @@ describe("workspace account integration seam", () => {
     expect(page).toContain("accountId: reauthTargetId, reauth: true");
     expect(page).toContain("prov.reauthIdentityMismatch");
     expect(page).toContain("oauthLoginGenerationRef");
-    expect(page).toContain("/api/oauth/login/cancel");
+    expect(page).toContain('from "../oauth-cancellation-barrier"');
+    expect(page).toContain("cancelOAuthLogin(apiBase, provider)");
+    const cancellation = await Bun.file("gui/src/oauth-cancellation-barrier.ts").text();
+    expect(cancellation).toContain("/api/oauth/login/cancel");
     expect(page).toContain("deviceCode");
     // The device-code widget is now owned by the shared login-hint component so
     // every login surface renders the same one. The panel's obligation is to

@@ -16,6 +16,122 @@ import { isUnresolvedRequestedModel } from "../../src/usage/model-identity";
 
 const FIXED_NOW = Date.UTC(2026, 5, 28, 12, 0, 0);
 
+describe("custom usage windows", () => {
+  test("Pacific/Apia skipped day still reaches the preceding existing calendar date", () => {
+    const previous = process.env.TZ;
+    process.env.TZ = "Pacific/Apia";
+    try {
+      const start = new Date(2011, 11, 29, 12).getTime();
+      const end = new Date(2011, 11, 31, 12).getTime();
+      expect(new Date(2011, 11, 30, 0).getDate()).toBe(31);
+      const accumulator = createUsageSummaryAccumulator({ window: { since: start, until: end } });
+      accumulator.add(entry({ ts: start, requestId: "before-skip" }));
+      accumulator.add(entry({ ts: end, requestId: "after-skip" }));
+      const summary = accumulator.summarize("all", end);
+      expect(summary.days.map(day => day.date)).toEqual(["2011-12-29", "2011-12-31"]);
+      expect(summary.days.map(day => day.requests)).toEqual([1, 1]);
+      expect(summary.summary.requests).toBe(2);
+    } finally {
+      if (previous === undefined) delete process.env.TZ;
+      else process.env.TZ = previous;
+    }
+  });
+
+  const since = new Date(2026, 1, 10, 12, 0, 0, 123).getTime();
+  const until = since + 3_600_000;
+
+  test("includes both intraday endpoints before attribution and retains whole-log snapshot", () => {
+    for (const mode of ["exact", "row-unique"] as const) {
+      const accumulator = createUsageSummaryAccumulator({ mode, window: { since, until } });
+      for (const ts of [since - 1, since, until, until + 1]) {
+        accumulator.add(entry({ ts, usageStatus: "reported", usage: { inputTokens: 10, outputTokens: 5 }, accountLogLabel: "main" }));
+      }
+      const result = accumulator.summarize("today", FIXED_NOW, "codex");
+      expect(result).toMatchObject({ range: "today", customWindow: true, since, until, generatedAt: FIXED_NOW });
+      expect(result.summary).toMatchObject({ requests: 2, inputTokens: 20, outputTokens: 10 });
+      expect(result.days).toHaveLength(1);
+      expect(result.days[0]).toMatchObject({ date: "2026-02-10", requests: 2 });
+      expect(result.accounts[0]).toMatchObject({ accountLogLabel: "main", requests: 2 });
+      expect(result.filter).toBeUndefined();
+      expect(accumulator.snapshotWindow).toEqual({ start: since - 1, end: until + 1 });
+    }
+  });
+
+  test("same-instant windows survive caller mutation and independent incremental clones", () => {
+    const window = { since, until: since };
+    const accumulator = createUsageSummaryAccumulator({ window, mode: "row-unique" });
+    window.since = 0;
+    window.until = FIXED_NOW;
+    accumulator.add(entry({ ts: since }));
+    const clone = accumulator.clone();
+    clone.add(entry({ ts: since, requestId: "second" }));
+    clone.add(entry({ ts: since + 1 }));
+    expect(accumulator.summarize("all", FIXED_NOW).summary.requests).toBe(1);
+    expect(clone.summarize("7d", FIXED_NOW)).toMatchObject({
+      customWindow: true, since, until: since, summary: { requests: 2 },
+    });
+    expect(accumulator.snapshotWindow.end).toBe(since);
+    expect(clone.snapshotWindow.end).toBe(since + 1);
+  });
+
+  test("empty grids use exact local calendar days across DST and include endpoint midnight", () => {
+    for (const [year, month, day, expected] of [
+      [2026, 2, 7, ["2026-03-07", "2026-03-08", "2026-03-09"]],
+      [2026, 9, 31, ["2026-10-31", "2026-11-01", "2026-11-02"]],
+    ] as const) {
+      const window = {
+        since: new Date(year, month, day, 23, 59).getTime(),
+        until: new Date(year, month, day + 2, 0, 0).getTime(),
+      };
+      const accumulator = createUsageSummaryAccumulator({ window });
+      const result = accumulator.summarize("30d", FIXED_NOW);
+      expect(result.days.map(row => row.date)).toEqual([...expected]);
+      expect(result.days.every(row => row.requests === 0)).toBe(true);
+      expect(result.summary.requests).toBe(0);
+      expect(result.since).toBe(window.since);
+      expect(result.until).toBe(window.until);
+      expect(accumulator.snapshotWindow).toEqual({ start: null, end: null });
+    }
+  });
+
+  test("caps only the chart at 366 calendar days ending at until", () => {
+    const window = { since: new Date(2020, 0, 1, 12).getTime(), until: new Date(2026, 0, 1, 12).getTime() };
+    const accumulator = createUsageSummaryAccumulator({ window });
+    accumulator.add(entry({ ts: window.since }));
+    accumulator.add(entry({ ts: window.until }));
+    const result = accumulator.summarize("today", FIXED_NOW);
+    expect(result.summary.requests).toBe(2);
+    expect(result.days).toHaveLength(366);
+    expect(result.days[0]?.date).toBe("2025-01-01");
+    expect(result.days.at(-1)?.date).toBe("2026-01-01");
+    expect(result.days.reduce((sum, row) => sum + row.requests, 0)).toBe(1);
+  });
+
+  test("custom calendar order remains chronological across expanded ISO years", () => {
+    const accumulator = createUsageSummaryAccumulator({ window: {
+      since: new Date(9999, 11, 31, 12).getTime(), until: new Date(10000, 0, 1, 12).getTime(),
+    } });
+    expect(accumulator.summarize("all", FIXED_NOW).days.map(day => day.date))
+      .toEqual(["9999-12-31", "10000-01-01"]);
+  });
+
+  test("window filtering preserves preset cost attribution for the same retained rows", () => {
+    const rows = [since - 1, since, until, until + 1].map(ts => entry({
+      ts, provider: "anthropic", model: "claude-3-haiku-20240307", usageStatus: "reported",
+      usage: { inputTokens: 100, outputTokens: 50 },
+    }));
+    const accumulator = createUsageSummaryAccumulator({ window: { since, until }, mode: "row-unique" });
+    rows.forEach(row => accumulator.add(row));
+    const result = accumulator.summarize("today", FIXED_NOW);
+    const baseline = summarizeUsage(rows.slice(1, 3), "all", until);
+    expect(result.summary.estimatedCostUsd).toBeGreaterThan(0);
+    expect(result.summary).toEqual(baseline.summary);
+    expect(result.models).toEqual(baseline.models);
+    expect(result.providers).toEqual(baseline.providers);
+    expect(result.days[0]?.estimatedCostUsd).toBeCloseTo(result.summary.estimatedCostUsd, 10);
+  });
+});
+
 function entry(overrides: Partial<PersistedUsageEntry> & { ts: number }): PersistedUsageEntry {
   const { ts, ...rest } = overrides;
   return {

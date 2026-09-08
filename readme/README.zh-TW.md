@@ -111,6 +111,8 @@ npm 警告給的縮寫指令少了套件名，會把目前目錄重裝進去，
 
 </details>
 
+贊助：兩個級別（Main 面向模型開發商，Standard 面向中轉 / 閘道），價格請洽詢 — 見 [SPONSORS.md](../SPONSORS.md)。
+
 ## 亮點
 
 - **在 Codex 中使用任意 LLM。** 5 種協議 adapter 覆蓋 Anthropic Messages、Google Gemini、Azure、OpenAI Responses 直通，以及一切 OpenAI 相容 Chat Completions 端點 —— 即開箱即用的 **40+ provider**。

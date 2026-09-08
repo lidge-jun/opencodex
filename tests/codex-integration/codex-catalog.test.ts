@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync} from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { codexAccountGatedCanonicalWireModel } from "../../src/server/responses/core";
@@ -8,7 +8,7 @@ import { isGpt56NativeSlug } from "../../src/codex/catalog/effort";
 import { nativeOpenAiContextTier, nativeOpenAiMaxInputTokens } from "../../src/codex/catalog";
 import { shouldUpgradeToUpstreamEntry } from "../../src/codex/catalog/metadata";
 import { applyNativeVisibility, augmentRoutedModelsWithMetadata, augmentRoutedModelsWithRegistryOpenAiApiRows, buildCatalogEntries, buildComboCatalogOmission, catalogModelSlug, clampCatalogModelsToCodexSupport, clampEntryToCodexSupportedEfforts, clampedDefaultEffort, CODEX_ACCOUNT_BOUND_CATALOG_KIND, CODEX_NATIVE_ALIAS_CATALOG_KIND, comboCatalogOmissionReason, deriveComboCatalogModel, exactComboCatalogSlugs, filterCatalogVisibleModels, filterSupportedNativeSlugs, gatherRoutedModels as gatherRoutedModelsDirect, isDatedVariantId, isMediaGenerationModelId, loadBundledCodexCatalog, materializeBundledCodexCatalog, mergeCatalogEntriesForSync, NATIVE_DAYBREAK_BLUE_MODEL, NATIVE_GPT6_ASTRA_MODEL, NATIVE_OPENAI_MODELS, nativeDefaultReasoningEffort, nativeInputModalities, nativeOpenAiCapabilitySourceSlug, nativeOpenAiContextWindow, nativeReasoningEfforts, normalizeRoutedCatalogEntry, resetCatalogRuntimeStateForTests, resetOpenAiApiCatalogWarningStateForTests, resolveComboCatalogMember, shouldExposeRoutedModel, upstreamNativeEntry } from "../../src/codex/catalog";
-import { applyProviderConfigHints, mergeConfiguredModelsIntoLiveCatalog } from "../../src/codex/catalog/provider-fetch";
+import { applyProviderConfigHints, fetchProviderModels, mergeConfiguredModelsIntoLiveCatalog } from "../../src/codex/catalog/provider-fetch";
 import {
   CODEX_CUSTOM_MODEL_CATALOG_KIND,
   CODEX_PROVIDER_MODEL_CATALOG_KIND,
@@ -36,24 +36,34 @@ import {
   setCached,
   type ProviderModelDiscoveryStatus,
 } from "../../src/codex/model-cache";
-import type { OcxConfig } from "../../src/types";
+import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { COMBO_NAMESPACE } from "../../src/combos";
 import type { NormalizedComboConfig } from "../../src/combos/types";
 import { enrichProviderFromRegistry, providerConfigSeed } from "../../src/providers/derive";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
+import { providerMatchesRegistryTransportWithStaticGuards } from "../../src/providers/static-model-discovery";
 import { enrichProviderFromCatalog } from "../../src/oauth/key-providers";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { OAUTH_PROVIDERS } from "../../src/oauth";
 import {
+  catalogEntryEfforts,
   clampCatalogModelsToObservedCodexSupport,
   supportedCodexReasoningEffortsFromObservedCatalog,
 } from "../../src/codex/catalog/effort";
 import {
   CANONICAL_NATIVE_CATALOG_CONTENT_POLICY,
   mergeCatalogEntriesFromObservedState,
+  syncCatalogModels,
   type ObservedCatalogMergeInput,
 } from "../../src/codex/catalog/sync";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { saveConfig } from "../../src/config";
+import { SUBAGENT_MODELS_VERSION } from "../../src/config/subagent-models";
+import { captureCatalogAdmissionSnapshot } from "../../src/codex/catalog-admission";
+import { convergeCodexCatalog } from "../../src/codex/convergence";
+import { resetCodexRuntimeResolveCacheForTests } from "../../src/codex/runtime";
+import { resolveCodexCatalogSerializationDatabasePath, resolveEffectiveUserIdentity } from "../../src/codex/user-identity";
+import { CODEX_FORWARD_BASE_URL } from "../../src/providers/openai-tiers";
 
 const originalFetch = globalThis.fetch;
 
@@ -597,6 +607,18 @@ describe("combo catalog capability intersection", () => {
       .toEqual([provider]);
     expect(filterCatalogVisibleModels([provider], config(["vendor/deepseek-v4-flash"])))
       .toEqual([]);
+  });
+
+  test("filters dashboard-hidden provider models before catalog sync", () => {
+    const models = [
+      { provider: "vendor", id: "visible-model" },
+      { provider: "vendor", id: "hidden-model" },
+    ];
+
+    expect(filterCatalogVisibleModels(models, {
+      disabledModels: ["vendor/hidden-model"],
+      providers: { vendor: {} },
+    })).toEqual([{ provider: "vendor", id: "visible-model" }]);
   });
 
   test("repairs a provider row after its shadowing combo alias is disabled", () => {
@@ -3031,7 +3053,207 @@ function mergeObservedForTest(
   });
 }
 
+// Exercise both production callers: removing either caller's nativeDisplayNames argument
+// must fail the persisted-label assertion, even if the pure merge tests still pass.
+test.each(["retained", "convergence"] as const)("%s persists and restores native labels through the catalog writer", async writer => {
+  const envKeys = ["CODEX_HOME", "OPENCODEX_HOME", "CODEX_CLI_PATH"] as const;
+  const previousEnv = envKeys.map(key => process.env[key]);
+  const previousFetch = globalThis.fetch;
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-native-label-writer-")));
+  const codexHome = join(root, "codex");
+  const catalogPath = join(codexHome, "custom-catalog.json");
+  let fetchCalls = 0;
+  try {
+    mkdirSync(codexHome);
+    mkdirSync(join(root, "ocx"));
+    process.env.CODEX_HOME = codexHome;
+    process.env.OPENCODEX_HOME = join(root, "ocx");
+    writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "custom-catalog.json"\n');
+    const catalog = { models: [{ ...nativeTemplate(), slug: "gpt-5.6-sol", display_name: "Fixture Sol" }] };
+    // Reuse the executable-fixture protocol from catalog-full-picker-order.test.ts so
+    // admission and a forced runtime refresh observe the same version and bundled rows.
+    const script = join(root, "fixture-codex.js");
+    writeFileSync(script, [
+      'if (process.argv.includes("--version")) console.log("codex-cli 0.145.0");',
+      `else process.stdout.write(${JSON.stringify(JSON.stringify(catalog))});`,
+    ].join("\n"));
+    if (process.platform === "win32") {
+      process.env.CODEX_CLI_PATH = join(root, "fixture-codex.cmd");
+      writeFileSync(process.env.CODEX_CLI_PATH, `@echo off\r\n"${process.execPath}" "${script}" %*\r\n`);
+    } else {
+      process.env.CODEX_CLI_PATH = join(root, "fixture-codex");
+      const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+      writeFileSync(process.env.CODEX_CLI_PATH, `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(script)} "$@"\n`);
+      chmodSync(process.env.CODEX_CLI_PATH, 0o755);
+    }
+    resetCatalogRuntimeStateForTests();
+    resetCodexRuntimeResolveCacheForTests();
+    resetCodexModelEntitlementCacheForTests();
+    expect(loadBundledCodexCatalog()?.models?.[0]?.slug).toBe("gpt-5.6-sol");
+    writeFileSync(catalogPath, JSON.stringify(catalog));
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      throw new Error("native label writer fixture must not make a network request");
+    }) as typeof fetch;
+    const config: OcxConfig = {
+      port: 10100, defaultProvider: "openai",
+      subagentModels: [], subagentModelsVersion: SUBAGENT_MODELS_VERSION,
+      providers: {
+        openai: { adapter: "openai-responses", baseUrl: CODEX_FORWARD_BASE_URL, authMode: "forward" },
+      },
+    };
+    const write = async (labels?: Record<string, string>) => {
+      if (labels) config.providers.openai!.modelDisplayNames = labels;
+      else delete config.providers.openai!.modelDisplayNames;
+      saveConfig(config);
+      if (writer === "convergence") {
+        const result = await convergeCodexCatalog(captureCatalogAdmissionSnapshot(config), {
+          action: "converge", scope: "catalog", reason: "management-mutation", mode: "explicit", deadlineMs: 5_000,
+        });
+        expect(result.catalogRefresh.status).toBe("committed");
+      } else {
+        const result = await syncCatalogModels(config);
+        expect(result.path).toBe(catalogPath);
+        expect(result.skippedReason).toBeUndefined();
+      }
+      return (JSON.parse(readFileSync(catalogPath, "utf8")) as { models: Record<string, unknown>[] }).models;
+    };
+    const original = await write();
+    const renamed = await write({ "gpt-5.6-sol": "Custom Sol" });
+    const renamedBytes = readFileSync(catalogPath, "utf8");
+    const native = renamed.find(row => row.slug === "gpt-5.6-sol")!;
+    expect(native.display_name).toBe("Custom Sol");
+    expect(native.opencodex_native_display_name).toEqual({
+      slug: "gpt-5.6-sol", original: "Fixture Sol", applied: "Custom Sol",
+    });
+    const { opencodex_native_display_name: marker, ...withoutMarker } = native;
+    expect(marker).toBeDefined();
+    expect({ ...withoutMarker, display_name: "Fixture Sol" })
+      .toEqual(original.find(row => row.slug === "gpt-5.6-sol")!);
+    expect(await write({ "gpt-5.6-sol": "Custom Sol" })).toEqual(renamed);
+    expect(readFileSync(catalogPath, "utf8")).toBe(renamedBytes);
+    expect((await write({ "gpt-5.6-sol": "Changed Sol" })).find(row => row.slug === "gpt-5.6-sol")?.display_name)
+      .toBe("Changed Sol");
+    expect(await write()).toEqual(original);
+    expect(fetchCalls).toBe(0);
+  } finally {
+    try {
+      const database = resolveCodexCatalogSerializationDatabasePath(resolveEffectiveUserIdentity(), codexHome);
+      for (const suffix of ["", "-journal", "-wal", "-shm"]) rmSync(`${database}${suffix}`, { force: true });
+    } finally {
+      globalThis.fetch = previousFetch;
+      envKeys.forEach((key, index) => {
+        const value = previousEnv[index];
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      });
+      resetCatalogRuntimeStateForTests();
+      resetCodexRuntimeResolveCacheForTests();
+      resetCodexModelEntitlementCacheForTests();
+      removeTreeWithRetry(root);
+    }
+  }
+}, 30_000);
+
 describe("Codex catalog routed normalization", () => {
+  test("reapplies native display names after repeated catalog merges without changing model metadata", () => {
+    const input = {
+      catalogModels: [{ ...nativeTemplate(), slug: "gpt-5.6-sol" }],
+      routedEntries: [],
+    };
+    const original = mergeObservedForTest(input);
+    const labels = { "gpt-5.6-sol": "GPT 5.6 Sol" };
+    const renamed = mergeObservedForTest({ ...input, nativeDisplayNames: labels });
+    const row = renamed.find(entry => entry.slug === "gpt-5.6-sol")!;
+    expect(row.display_name).toBe("GPT 5.6 Sol");
+    expect({ ...row, display_name: undefined, opencodex_native_display_name: undefined }).toEqual({
+      ...original.find(entry => entry.slug === "gpt-5.6-sol"), display_name: undefined,
+    });
+    const regenerated = mergeObservedForTest({
+      ...input, catalogModels: renamed, nativeDisplayNames: labels,
+    });
+    expect(regenerated.find(entry => entry.slug === "gpt-5.6-sol")?.display_name).toBe("GPT 5.6 Sol");
+    const changed = mergeObservedForTest({
+      ...input, catalogModels: regenerated,
+      nativeDisplayNames: { "gpt-5.6-sol": "  Sol 5.6  " },
+    });
+    expect(changed.find(entry => entry.slug === "gpt-5.6-sol")?.display_name).toBe("Sol 5.6");
+    expect(JSON.stringify(regenerated)).toBe(JSON.stringify(renamed));
+    for (const nativeDisplayNames of [undefined, {}, { "gpt-5.6-sol": "   " }]) {
+      const restored = mergeObservedForTest({ ...input, catalogModels: changed, nativeDisplayNames });
+      expect(restored).toEqual(original);
+    }
+  });
+
+  test("native display names preserve external label changes when clearing the overlay", () => {
+    const renamed = mergeObservedForTest({
+      catalogModels: [{ ...nativeTemplate(), slug: "gpt-5.6-sol" }], routedEntries: [],
+      nativeDisplayNames: { "gpt-5.6-sol": "Custom Sol" },
+    });
+    renamed.find(entry => entry.slug === "gpt-5.6-sol")!.display_name = "Updated upstream Sol";
+    const restored = mergeObservedForTest({ catalogModels: renamed, routedEntries: [] });
+    const row = restored.find(entry => entry.slug === "gpt-5.6-sol")!;
+    expect(row.display_name).toBe("Updated upstream Sol");
+    expect(row.opencodex_native_display_name).toBeUndefined();
+  });
+
+  test("native display names preserve pinned metadata upgrades and restore pinned names", () => {
+    for (const slug of ["gpt-5.6-sol", "gpt-6-astra"]) {
+      const input = { catalogModels: [{ ...nativeTemplate(), slug, display_name: slug }], routedEntries: [] };
+      const original = mergeObservedForTest(input);
+      const renamed = mergeObservedForTest({ ...input, nativeDisplayNames: { [slug]: "Custom name" } });
+      expect(renamed.find(entry => entry.slug === slug)?.display_name).toBe("Custom name");
+      expect(mergeObservedForTest({ catalogModels: renamed, routedEntries: [] })).toEqual(original);
+    }
+  });
+
+  test("clearing a native label keeps Astra external edits subject to pinned metadata normalization", () => {
+    const original = mergeObservedForTest({
+      catalogModels: [{ ...nativeTemplate(), slug: "gpt-6-astra", display_name: "gpt-6-astra" }],
+      routedEntries: [],
+    });
+    const renamed = mergeObservedForTest({
+      catalogModels: original, routedEntries: [],
+      nativeDisplayNames: { "gpt-6-astra": "Custom Astra" },
+    });
+    const external = JSON.parse(JSON.stringify(renamed)) as Record<string, unknown>[];
+    const astra = external.find(entry => entry.slug === "gpt-6-astra")!;
+    astra.display_name = "External Astra name";
+    astra.context_window = 123;
+    const restored = mergeObservedForTest({ catalogModels: external, routedEntries: [] });
+    const row = restored.find(entry => entry.slug === "gpt-6-astra")!;
+    expect(row).toEqual(original.find(entry => entry.slug === "gpt-6-astra")!);
+    expect(row.display_name).not.toBe("External Astra name");
+    expect(row.context_window).toBe(272_000);
+    expect(row.opencodex_native_display_name).toBeUndefined();
+    expect(astra.display_name).toBe("External Astra name");
+    expect(astra.opencodex_native_display_name).toBeDefined();
+  });
+
+  test("native display names do not leak overlay markers through catalog templates", () => {
+    const template = {
+      ...nativeTemplate(),
+      opencodex_native_display_name: { slug: "gpt-5.6-sol", original: "Sol", applied: "Custom" },
+    };
+    const entries = buildCatalogEntries(template, ["gpt-5.5"], [{ provider: "local", id: "qwen3-coder" }]);
+    expect(entries.length).toBeGreaterThanOrEqual(2);
+    for (const entry of entries) expect(entry.opencodex_native_display_name).toBeUndefined();
+    expect(template.opencodex_native_display_name).toBeDefined();
+  });
+
+  test("native display names do not relabel a routed combo occupying a native slug", () => {
+    const routed = {
+      ...nativeTemplate(), slug: "gpt-5.6-sol", display_name: "My combo",
+      owned_by: "combo", description: "Routed via opencodex → combo (combo).",
+      opencodex_catalog_kind: CODEX_NATIVE_ALIAS_CATALOG_KIND,
+    };
+    const rows = mergeObservedForTest({
+      catalogModels: [], routedEntries: [routed],
+      nativeDisplayNames: { "gpt-5.6-sol": "GPT 5.6 Sol" },
+    });
+    expect(rows.find(entry => entry.slug === "gpt-5.6-sol")?.display_name).toBe("My combo");
+  });
+
   test("pending re-registration cannot recover ON rows from a degraded old catalog", () => {
     const old = { ...nativeTemplate(), slug: "vendor/model-0", owned_by: "vendor", opencodex_catalog_kind: CODEX_PROVIDER_MODEL_CATALOG_KIND };
     const input = {
@@ -3691,6 +3913,114 @@ describe("Codex catalog routed normalization", () => {
     expect(astra?.base_instructions).not.toContain("daybreak");
   });
 
+  const nativeCustomEffortCases: Array<{
+    name: string;
+    efforts?: string[];
+    defaultEffort?: string;
+    expected: string[];
+    expectedDefault?: string;
+  }> = [
+    { name: "legacy sentinels", efforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max"], defaultEffort: "minimal", expected: ["low", "medium", "high", "xhigh", "max"], expectedDefault: "low" },
+    { name: "native default", expected: ["low", "medium", "high", "xhigh", "max", "ultra"], expectedDefault: "low" },
+    { name: "empty declaration", efforts: [], defaultEffort: "minimal", expected: [] },
+    { name: "no compatible rung", efforts: ["none", "minimal"], defaultEffort: "minimal", expected: ["low"], expectedDefault: "low" },
+    { name: "narrow subset", efforts: ["low"], defaultEffort: "high", expected: ["low"], expectedDefault: "low" },
+    { name: "valid explicit default", efforts: ["high", "medium", "high"], defaultEffort: "high", expected: ["medium", "high"], expectedDefault: "high" },
+    { name: "first survivor default", efforts: ["high", "medium"], defaultEffort: "minimal", expected: ["medium", "high"], expectedDefault: "medium" },
+    { name: "Ultra mode", efforts: ["minimal", "ultra"], defaultEffort: "minimal", expected: ["ultra"], expectedDefault: "ultra" },
+  ];
+
+  test.each(nativeCustomEffortCases)("canonical custom Astra bounds $name through gather/build/merge", async fixture => {
+    globalThis.fetch = (() => { throw new Error("canonical forward discovery must not fetch"); }) as typeof fetch;
+    const config = withStubbedProviderFetch<OcxConfig>({
+      port: 10100,
+      defaultProvider: "openai",
+      providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", codexAccountMode: "pool" } },
+      customModels: [{
+        id: "astra-effort",
+        provider: "openai",
+        modelId: "gpt-6-astra",
+        ...(fixture.efforts !== undefined ? { reasoningEfforts: fixture.efforts } : {}),
+        ...(fixture.defaultEffort !== undefined ? { defaultReasoningEffort: fixture.defaultEffort } : {}),
+      }],
+    });
+    const beforeConfig = JSON.stringify(config);
+    const beforeNative = JSON.stringify(upstreamNativeEntry("gpt-6-astra"));
+    const models = await gatherRoutedModelsDirect(config);
+    const custom = models.find(row => row.provider === "openai" && row.id === "gpt-6-astra");
+    expect(custom?.codexForwardNativeCapabilityAlias).toBe(true);
+    expect(custom?.reasoningEfforts).toEqual(fixture.expected);
+    expect(custom?.defaultReasoningEffort).toBe(fixture.expectedDefault);
+
+    const entries = buildCatalogEntries(nativeTemplate(), [], models);
+    const first = mergeCatalogEntriesForSync([], entries, new Map(), [], false);
+    const second = mergeCatalogEntriesForSync(first, buildCatalogEntries(nativeTemplate(), [], models), new Map(), [], false);
+    // Another model's sentinels make the legacy union permissive: it cannot mask this bug.
+    const observed = { models: [{
+      slug: "other-model",
+      supported_reasoning_levels: ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].map(effort => ({ effort })),
+    }] };
+    const beforeObserved = JSON.stringify(observed);
+    for (const projection of [entries, first, second]) {
+      clampCatalogModelsToObservedCodexSupport(projection, supportedCodexReasoningEffortsFromObservedCatalog(observed));
+      const row = projection.find(entry => entry.slug === "openai/gpt-6-astra");
+      expect(row ? catalogEntryEfforts(row) : undefined).toEqual(fixture.expected);
+      expect(row?.default_reasoning_level).toBe(fixture.expectedDefault);
+      expect(row?.use_responses_lite).toBe(true);
+      expect(row?.multi_agent_reasoning_effort).toBe("xhigh");
+      if (fixture.expected.length === 0) expect(row).not.toHaveProperty("default_reasoning_level");
+    }
+    expect(JSON.stringify(config)).toBe(beforeConfig);
+    expect(JSON.stringify(upstreamNativeEntry("gpt-6-astra"))).toBe(beforeNative);
+    expect(JSON.stringify(observed)).toBe(beforeObserved);
+  });
+
+  test.each([
+    { name: "YYLJ", adapter: "openai-responses", baseUrl: "https://gateway.example.test/v1", authMode: "key", modelId: "gpt-6-astra" },
+    { name: "openai", adapter: "openai-responses", baseUrl: "https://gateway.example.test/v1", authMode: "forward", modelId: "gpt-6-astra" },
+    { name: "openai", adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "key", modelId: "gpt-6-astra" },
+    { name: "openai", adapter: "openai-chat", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "key", modelId: "gpt-6-astra" },
+    { name: "openai-apikey", adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", authMode: "key", modelId: "gpt-6-astra" },
+    { name: "openai", adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", modelId: "gpt-unproven" },
+  ] satisfies Array<{ name: string; adapter: OcxProviderConfig["adapter"]; baseUrl: string; authMode: OcxProviderConfig["authMode"]; modelId: string }>)(
+    "custom $name/$modelId does not infer native effort capability from $baseUrl / $authMode / $adapter",
+    async fixture => {
+      const models = await gatherRoutedModels({
+        port: 10100,
+        defaultProvider: fixture.name,
+        providers: { [fixture.name]: { adapter: fixture.adapter, baseUrl: fixture.baseUrl, authMode: fixture.authMode, liveModels: false, models: [fixture.modelId] } },
+        customModels: [{ id: "unproven", provider: fixture.name, modelId: fixture.modelId, displayName: "Astra", reasoningEfforts: ["none", "minimal", "low"], defaultReasoningEffort: "minimal" }],
+      });
+      const custom = models.find(row => row.provider === fixture.name && row.id === fixture.modelId);
+      expect(custom?.codexForwardNativeCapabilityAlias).toBeUndefined();
+      expect(custom?.reasoningEfforts).toEqual(["none", "minimal", "low"]);
+      expect(custom?.defaultReasoningEffort).toBe("minimal");
+      const entries = buildCatalogEntries(nativeTemplate(), [], models);
+      const row = entries.find(entry => entry.slug === `${fixture.name}/${fixture.modelId}`);
+      expect(row ? catalogEntryEfforts(row) : undefined)
+        .toEqual(["none", "minimal", "low", "max", "ultra"]);
+    },
+  );
+
+  test("fresh none-only custom rows keep their ladder while retained provider rows still gain max", async () => {
+    const models = await gatherRoutedModels({
+      port: 10100,
+      defaultProvider: "custom-provider",
+      providers: { "custom-provider": { adapter: "openai-chat", baseUrl: "https://example.invalid/v1", liveModels: false } },
+      customModels: [{ id: "none-only", provider: "custom-provider", modelId: "none-only", reasoningEfforts: ["none"] }],
+    });
+    const entries = buildCatalogEntries(nativeTemplate(), [], models);
+    const retained = { ...nativeTemplate(), slug: "foreign/model", supported_reasoning_levels: [{ effort: "low", description: "Low" }] };
+    const stale = { ...entries[0]!, slug: "custom-provider/deleted" };
+    const merged = mergeCatalogEntriesForSync([retained, stale], entries, new Map(), [], false);
+    expect(merged.find(row => row.slug === "custom-provider/none-only")?.supported_reasoning_levels)
+      .toEqual(entries[0]!.supported_reasoning_levels);
+    const foreign = merged.find(row => row.slug === "foreign/model");
+    expect(foreign ? catalogEntryEfforts(foreign) : undefined)
+      .toEqual(["low", "max"]);
+    expect(merged.some(row => row.slug === "custom-provider/deleted")).toBe(false);
+  });
+
   test("Astra refresh repairs only built-in speed text and does not leak native effort", () => {
     const pinned = upstreamNativeEntry(NATIVE_GPT6_ASTRA_MODEL)!;
     expect(pinned.service_tiers).toEqual([{ id: "priority", name: "Fast", description: "2x speed, increased usage" }]);
@@ -3758,6 +4088,7 @@ describe("Codex catalog routed normalization", () => {
         // not overwrite it — otherwise the catalog would advertise reasoning the user
         // explicitly disabled for this row.
         reasoningEfforts: [],
+        defaultReasoningEffort: "minimal",
       }],
     });
     const model = models.find(row => row.provider === "openai" && row.id === NATIVE_DAYBREAK_BLUE_MODEL);
@@ -4029,7 +4360,7 @@ describe("Codex catalog routed normalization", () => {
     expect(routed?.supports_search_tool).toBe(true);
   });
 
-  test("liveModels false uses configured provider models without fetching", async () => {
+  test("liveModels false uses the explicit and retained union instead of another default without fetching", async () => {
     clearModelCache("static-provider");
     const originalFetch = globalThis.fetch;
     let fetchCalls = 0;
@@ -4046,6 +4377,8 @@ describe("Codex catalog routed normalization", () => {
             authMode: "key",
             liveModels: false,
             models: ["alpha", "beta"],
+            defaultModel: "unlisted-default",
+            retainModels: ["beta", "retained", "retained"],
           },
         },
       });
@@ -4054,11 +4387,148 @@ describe("Codex catalog routed normalization", () => {
       expect(models.map(m => `${m.provider}/${m.id}`)).toEqual([
         "static-provider/alpha",
         "static-provider/beta",
+        "static-provider/retained",
       ]);
     } finally {
       globalThis.fetch = originalFetch;
       clearModelCache("static-provider");
     }
+  });
+
+  test("liveModels false uses the default model when no static list is configured", async () => {
+    const originalFetch = globalThis.fetch;
+    let fetchCalls = 0;
+    globalThis.fetch = (() => {
+      fetchCalls += 1;
+      throw new Error("fetch should not be called");
+    }) as typeof fetch;
+    try {
+      const models = await gatherRoutedModels({
+        providers: {
+          "static-default": {
+            baseUrl: "https://example.invalid/v1",
+            adapter: "openai-chat",
+            authMode: "key",
+            liveModels: false,
+            defaultModel: "only-model",
+          },
+        },
+      });
+
+      expect(fetchCalls).toBe(0);
+      expect(models.map(m => `${m.provider}/${m.id}`)).toEqual([
+        "static-default/only-model",
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+      clearModelCache("static-default");
+    }
+  });
+
+  test.each([
+    { label: "omitted", models: undefined },
+    { label: "empty", models: [] as string[] },
+  ])("static $label models deduplicate default and retain ids before either OAuth resolver", async ({ models: configuredModels }) => {
+    const oauth = await import("../../src/oauth");
+    const resolveToken = spyOn(oauth, "resolveModelsAuthToken")
+      .mockRejectedValue(new Error("static catalogs must not resolve or refresh OAuth"));
+    const resolveSnapshot = spyOn(oauth, "getValidAccessTokenSnapshot")
+      .mockRejectedValue(new Error("static catalogs must not refresh Cloud Code Assist OAuth"));
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      throw new Error("static catalogs must not make a network request");
+    }) as typeof fetch;
+    try {
+      for (const adapter of ["openai-chat", "google"] as const) {
+        const provider = `static-oauth-${adapter}`;
+        const outcomes: Array<{ provider: string; state: "authoritative" | "degraded" }> = [];
+        const models = await gatherRoutedModels({
+          providers: {
+            [provider]: {
+              adapter, baseUrl: "https://static-oauth.example.test/v1", authMode: "oauth",
+              ...(adapter === "google" ? { googleMode: "cloud-code-assist" as const } : {}),
+              liveModels: false,
+              ...(configuredModels === undefined ? {} : { models: configuredModels }),
+              defaultModel: "default-only",
+              retainModels: ["retained", "default-only", "retained"],
+            },
+          },
+        }, { providerModelOutcomes: outcomes });
+        expect(models.map(model => `${model.provider}/${model.id}`))
+          .toEqual([`${provider}/default-only`, `${provider}/retained`]);
+        expect(outcomes).toEqual([{ provider, state: "authoritative" }]);
+      }
+      expect(resolveToken).not.toHaveBeenCalled();
+      expect(resolveSnapshot).not.toHaveBeenCalled();
+      expect(fetchCalls).toBe(0);
+    } finally {
+      resolveToken.mockRestore();
+      resolveSnapshot.mockRestore();
+    }
+  });
+
+  test("static empty models without a default or retained ids remain authoritatively empty", async () => {
+    const provider = "static-empty-unregistered";
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      throw new Error("empty static catalogs must not make a network request");
+    }) as typeof fetch;
+    const outcomes: Array<{ provider: string; state: "authoritative" | "degraded" }> = [];
+    const models = await gatherRoutedModels({
+      providers: {
+        [provider]: {
+          adapter: "openai-chat", baseUrl: "https://static-empty.example.test/v1",
+          authMode: "key", liveModels: false,
+          models: [],
+        },
+      },
+    }, { providerModelOutcomes: outcomes });
+    expect(models).toEqual([]);
+    expect(outcomes).toEqual([{ provider, state: "authoritative" }]);
+    expect(fetchCalls).toBe(0);
+  });
+
+  test.each([false, true])("forward auth bypasses default/static seeds with liveModels=%s", async liveModels => {
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      throw new Error("forward model discovery must not request an upstream catalog");
+    }) as typeof fetch;
+    const config = withStubbedProviderFetch({ providers: {
+      "forward-static-fixture": {
+        adapter: "openai-responses", authMode: "forward" as const,
+        baseUrl: "https://forward-static.example.test/v1", liveModels,
+        models: [], defaultModel: "forward-default", retainModels: ["forward-retained"],
+      },
+    } });
+    expect(await fetchProviderModels("forward-static-fixture", config.providers["forward-static-fixture"], 0)).toEqual([]);
+    expect(fetchCalls).toBe(0);
+  });
+
+  test("successful empty live discovery never activates the default-only failure fallback", async () => {
+    const provider = "live-empty-default";
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      return Response.json({ data: [] });
+    }) as typeof fetch;
+    const config = { providers: {
+      [provider]: {
+        adapter: "anthropic", baseUrl: "https://live-empty.example.test/v1",
+        authMode: "key" as const, apiKey: "fixture-key", liveModels: true,
+        defaultModel: "failure-fallback-only",
+      },
+    } };
+    for (let read = 0; read < 2; read += 1) {
+      const outcomes: Array<{ provider: string; state: "authoritative" | "degraded" }> = [];
+      expect(await gatherRoutedModels(config, { providerModelOutcomes: outcomes })).toEqual([]);
+      expect(outcomes).toEqual([{ provider, state: "authoritative" }]);
+    }
+    expect(fetchCalls).toBe(1);
+    expect(getStaleCached(provider)).toEqual([]);
+    expect(getProviderDiscoveryStatus(provider)).toEqual({ status: "ok" });
   });
 
   test("Google Antigravity honors an explicit static catalog and suppresses stale discovery", async () => {
@@ -5175,21 +5645,56 @@ describe("Codex catalog routed normalization", () => {
     expect(slugs).toEqual(["opencode-go/glm-5.2"]);
   });
 
-  test("liveModels false with no models exposes no augmented provider rows", async () => {
+  test.each([
+    { label: "omitted", models: undefined },
+    { label: "empty", models: [] as string[] },
+  ])("static Go $label models expose only the inherited default, not the metadata roster", async ({ models: configuredModels }) => {
+    const provider: OcxProviderConfig = {
+      adapter: "openai-chat", baseUrl: "https://opencode-go.test/v1", apiKey: "sk-test",
+      liveModels: false,
+      ...(configuredModels === undefined ? {} : { models: configuredModels }),
+    };
+    // Go keeps the registry's historical name-based ownership even with this fixture URL.
+    // This was never a genuinely default-less provider after capture-time enrichment.
+    expect(providerMatchesRegistryTransportWithStaticGuards("opencode-go", provider)).toBe(true);
+    const enriched = structuredClone(provider);
+    enrichProviderFromRegistry("opencode-go", enriched);
+    expect(enriched.defaultModel).toBe("kimi-k2.7-code");
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      throw new Error("static inherited defaults must not request upstream models");
+    }) as typeof fetch;
     const outcomes: Array<{ provider: string; state: "authoritative" | "degraded" }> = [];
-    const models = await gatherRoutedModels({
-      providers: {
-        "opencode-go": {
-          adapter: "openai-chat",
-          baseUrl: "https://opencode-go.test/v1",
-          apiKey: "sk-test",
-          liveModels: false,
-        },
-      },
-    }, { providerModelOutcomes: outcomes });
-
-    expect(models).toEqual([]);
+    const models = await gatherRoutedModels({ providers: { "opencode-go": provider } }, { providerModelOutcomes: outcomes });
+    expect(models.map(model => `${model.provider}/${model.id}`)).toEqual(["opencode-go/kimi-k2.7-code"]);
     expect(outcomes).toEqual([{ provider: "opencode-go", state: "authoritative" }]);
+    expect(fetchCalls).toBe(0);
+  });
+
+  test.each([
+    { label: "omitted", models: undefined },
+    { label: "empty", models: [] as string[] },
+  ])("custom MiMo $label models remain empty without an effective default", async ({ models: configuredModels }) => {
+    const provider: OcxProviderConfig = {
+      adapter: "mimo-free", baseUrl: "https://mimo-custom.example.test/v1", authMode: "key",
+      liveModels: false,
+      ...(configuredModels === undefined ? {} : { models: configuredModels }),
+    };
+    expect(providerMatchesRegistryTransportWithStaticGuards("mimo-free", provider)).toBe(false);
+    const enriched = structuredClone(provider);
+    enrichProviderFromRegistry("mimo-free", enriched);
+    expect(enriched.defaultModel).toBeUndefined();
+    expect(enriched.models).toEqual(configuredModels);
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      throw new Error("empty custom static providers must not request upstream models");
+    }) as typeof fetch;
+    const outcomes: Array<{ provider: string; state: "authoritative" | "degraded" }> = [];
+    expect(await gatherRoutedModels({ providers: { "mimo-free": provider } }, { providerModelOutcomes: outcomes })).toEqual([]);
+    expect(outcomes).toEqual([{ provider: "mimo-free", state: "authoritative" }]);
+    expect(fetchCalls).toBe(0);
   });
 
   test("anthropic sonnet 4.6 keeps the upstream 1M context window", () => {
@@ -5445,11 +5950,11 @@ describe("Codex catalog routed normalization", () => {
     const expected = [
       { slug: "deepseek/deepseek-v4-flash", efforts: ["low", "high", "max", "ultra"] },
       { slug: "deepseek/deepseek-v4-pro", efforts: ["low", "high", "max", "ultra"] },
-      { slug: "opencode-go/deepseek-v4-flash", efforts: ["low", "high", "max", "ultra"] },
-      { slug: "opencode-go/deepseek-v4-pro", efforts: ["low", "high", "max", "ultra"] },
-      { slug: "opencode-go/glm-5.2", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
-      { slug: "opencode-go/glm-5.1", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
-      { slug: "opencode-go/glm-5", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
+      { slug: "opencode-go/deepseek-v4-flash", efforts: ["low", "high", "max"] },
+      { slug: "opencode-go/deepseek-v4-pro", efforts: ["low", "high", "max"] },
+      { slug: "opencode-go/glm-5.2", efforts: ["low", "medium", "high", "xhigh", "max"] },
+      { slug: "opencode-go/glm-5.1", efforts: ["low", "medium", "high", "xhigh", "max"] },
+      { slug: "opencode-go/glm-5", efforts: ["low", "medium", "high", "xhigh", "max"] },
       { slug: "zai/glm-5.2", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
       { slug: "zai/glm-5.2[1m]", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
       { slug: "zhipu-bigmodel/glm-4.6", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },

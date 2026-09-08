@@ -39,6 +39,7 @@ import {
   comboIdFromRawBody,
   concreteComboRequestBody,
   getCombo,
+  resolveComboId,
   isComboTargetInCooldown,
   NoAvailableComboTargetsError,
   noteComboSuccess,
@@ -133,7 +134,8 @@ import type { WsData } from "../ws-bridge";
 import { codexAccountSelectionForTurn, registerTurn, trackStreamLifetime, unregisterTurn } from "../lifecycle";
 import type { AdmissionLease } from "../../lib/admission";
 import { redactSecretString } from "../../lib/redact";
-import { readBoundedResponseBody } from "../../lib/bounded-body";
+import { readBoundedResponseBytes } from "../../lib/bounded-body";
+import { resolveStallTimeoutSec } from "../../stall-timeout";
 import { isRateLimitOrQuotaFailureMessage } from "../../lib/errors";
 import { supportedLadderFor } from "../effort-policy";
 import {
@@ -172,6 +174,7 @@ import {
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel } from "./fetch-helpers";
 import { mapCodexAuthContextErrorToResponse, nativeMainRefreshFailureResponse } from "./codex-auth-error";
 import { sessionLaneIdFromRequest } from "../request-log-conversation";
+import { recallComboForLane } from "./combo-session-recall";
 
 export const COMPACT_RESPONSE_MAX_BYTES = 32 * 1024 * 1024;
 
@@ -243,6 +246,8 @@ export interface HandleResponsesCompactOptions {
     turn: GuardrailsTurn;
   };
   nativeMainRefreshDependencies?: NativeMainRefreshDependencies;
+  /** Release the listener's idle guard only after the complete request body is accepted. */
+  onRequestBodyRead?: () => void;
 }
 
 export function compactResponseTooLargeError(): Response {
@@ -495,43 +500,45 @@ function compactResponseHeaders(upstream: Response): Headers {
   return headers;
 }
 
-export async function bufferCompactResponse(upstream: Response, signal: AbortSignal): Promise<Response> {
-  const reader = upstream.body?.getReader();
+export async function bufferCompactResponse(
+  upstream: Response,
+  signal: AbortSignal,
+  stallTimeoutSec?: number,
+): Promise<Response> {
   const headers = compactResponseHeaders(upstream);
-  if (!reader) return new Response(null, { status: upstream.status, statusText: upstream.statusText, headers });
-  const declaredLength = Number(upstream.headers.get("content-length"));
-  if (Number.isFinite(declaredLength) && declaredLength > COMPACT_RESPONSE_MAX_BYTES) {
-    await reader.cancel("compact_response_too_large").catch(() => undefined);
-    return compactResponseTooLargeError();
-  }
-  const chunks: Uint8Array[] = [];
-  let total = 0;
   try {
-    while (true) {
-      if (signal.aborted) {
-        await reader.cancel(signal.reason).catch(() => undefined);
-        return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
-      }
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > COMPACT_RESPONSE_MAX_BYTES) {
-        await reader.cancel("compact_response_too_large").catch(() => undefined);
-        return compactResponseTooLargeError();
-      }
-      chunks.push(value);
+    if (signal.aborted) {
+      // No reader is attached yet. Cancellation must not wait for a broken source's cleanup.
+      void upstream.body?.cancel(signal.reason).catch(() => undefined);
+      return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
     }
-  } catch {
+    if (!upstream.body) return new Response(null, { status: upstream.status, statusText: upstream.statusText, headers });
+    const declaredLength = Number(upstream.headers.get("content-length"));
+    if (Number.isFinite(declaredLength) && declaredLength > COMPACT_RESPONSE_MAX_BYTES) {
+      void upstream.body.cancel("compact_response_too_large").catch(() => undefined);
+      return compactResponseTooLargeError();
+    }
+    // Header admission has finished; only non-empty body chunks re-arm this deadline.
+    // The raw reader preserves bytes and cancels/releases without awaiting source cleanup.
+    const result = await readBoundedResponseBytes(upstream, {
+      signal,
+      maxBytes: COMPACT_RESPONSE_MAX_BYTES,
+      inactivityTimeoutMs: resolveStallTimeoutSec(stallTimeoutSec) * 1_000,
+    });
     if (signal.aborted) return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
+    if (result.oversized) return compactResponseTooLargeError();
+    return new Response(result.bytes, { status: upstream.status, statusText: upstream.statusText, headers });
+  } catch (error) {
+    if (signal.aborted) return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
+    if (error instanceof DOMException && error.name === "TimeoutError") {
+      return Response.json({ error: {
+        message: "Compact response body stalled",
+        type: "upstream_stall_timeout",
+        code: "upstream_stall_timeout",
+      } }, { status: 504 });
+    }
     return formatErrorResponse(502, "upstream_error", "Failed to read compact response");
   }
-  const body = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return new Response(body, { status: upstream.status, statusText: upstream.statusText, headers });
 }
 
 export async function handleResponsesCompact(
@@ -558,16 +565,33 @@ export async function handleResponsesCompact(
     return formatErrorResponse(400, "invalid_request_error", "compaction request requires a model");
   }
   const requestedModel = raw.model;
+  options.onRequestBodyRead?.();
   // Correct the IDENTITY before routing, or the synthetic id does not route at all. Held in
   // a local rather than written back to `raw.model`: assigning to the property widens it out
   // of the `string` narrowing the guard above just established.
   const compactFastRow = parseFastOnlyRowId(config, () => raw.model as string);
-  const compactModel = compactFastRow ? compactFastRow.baseId : raw.model;
+  let compactModel = compactFastRow ? compactFastRow.baseId : raw.model;
   if (compactFastRow) (raw as Record<string, unknown>).model = compactModel;
   // The client's own selector, kept for the request log: `raw.model` is rewritten to the
   // base id above, and logCtx.requestedModel is assigned from it further down, so without
   // this the log would lose which id the client actually asked for.
   const compactRequestedModel = compactFastRow ? compactFastRow.baseId + "--fast" : raw.model;
+
+  // Recall the last completed client-visible bare model after a combo switch (#3891).
+  // Configured selectors take precedence over this implicit session hint.
+  if (typeof compactModel === "string" && !compactModel.includes("/") && !compactFastRow
+    && !resolveComboId(config, compactModel)) {
+    const recalledComboId = recallComboForLane(config, sessionLaneIdFromRequest(req.headers), compactModel);
+    if (recalledComboId) {
+      (raw as Record<string, unknown>).model = `combo/${recalledComboId}`;
+      // Keep the routed identity in sync: the bare model can 404 outright (no
+      // canonical openai provider) or resolve straight onto a native-compact
+      // provider, both bypassing combo failover. The combo selector resolves
+      // through tryPickComboModel, whose route.combo skips the native compact
+      // endpoint.
+      compactModel = `combo/${recalledComboId}`;
+    }
+  }
 
   let route;
   try {
@@ -1215,7 +1239,7 @@ export async function handleResponsesCompact(
       upstream.headers.get("x-codex-secondary-reset-at"),
       upstream.headers.get("x-codex-tertiary-reset-at"),
     ].filter(Boolean);
-    const buffered = await bufferCompactResponse(upstream, req.signal);
+    const buffered = await bufferCompactResponse(upstream, req.signal, config.stallTimeoutSec);
     const bufferedErrorText = buffered.ok
       ? ""
       : await buffered.clone().text().catch(() => "");
@@ -1299,7 +1323,8 @@ export async function handleResponsesCompact(
         }
       }
     }
-    return buffered;
+    // A native compact 404 falls back to a regular Responses compaction turn.
+    if (buffered.status !== 404) return buffered;
     } finally {
       releaseUpstreamHostAdmission(compactHostAdmissionLease);
       releaseCodexAuthContextProbeLease(authCtx);
@@ -1316,7 +1341,7 @@ export async function handleResponsesCompact(
     // the completed event back into the v1 compact JSON contract below. Combo-dispatched
     // turns also go out as SSE: failover can land on a canonical child that rejects a
     // non-streaming turn, and every combo-capable provider already serves streaming traffic.
-    stream: accountGatedCompactWireModel || route.combo ? true : false,
+    stream: isCanonicalOpenAiForwardProvider(route.provider) || accountGatedCompactWireModel || route.combo ? true : false,
     input: [...inputItems, { type: "compaction_trigger" }],
   };
   const internalHeaders = new Headers({ "content-type": "application/json" });

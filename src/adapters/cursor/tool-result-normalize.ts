@@ -10,9 +10,12 @@
  */
 
 import {
+  CODE_MODE_HOST_RECOVERY_PREFIX,
   EMPTY_EXEC_OUTPUT_MESSAGE,
   EMPTY_EXEC_OUTPUT_REGEX,
   FAILED_EXEC_OUTPUT_MESSAGE,
+  annotateCodeModeHostFailure,
+  isCodexCodeModeExecResult,
   isFailedEmptyExecWrapper,
   isCodexExecBridgeTool,
 } from "../exec-tool-result-normalize";
@@ -83,7 +86,13 @@ export interface NormalizedToolResultText {
  */
 export function normalizeCursorToolResultText(
   text: string,
-  options: { toolName?: string; toolNamespace?: string; isError?: boolean } = {},
+  options: {
+    toolName?: string;
+    toolNamespace?: string;
+    isError?: boolean;
+    /** True only when the request's visible catalog is Codex code mode. */
+    codeMode?: boolean;
+  } = {},
 ): NormalizedToolResultText {
   const isError = options.isError === true;
   const computerUse = isNodeReplOrComputerUseTool(options.toolName, options.toolNamespace);
@@ -104,7 +113,18 @@ export function normalizeCursorToolResultText(
       changed: true,
     };
   }
-  if (!isError) {
+  // Replayed guidance and successful wrappers must not enter the legacy substring matcher.
+  if (text.includes(CODE_MODE_HOST_RECOVERY_PREFIX)
+    || /^(?:Script completed|Command finished|Execution finished)\b/.test(text.trimStart())) {
+    return { text, isError, changed: false };
+  }
+  // The request's visible catalog establishes provenance; the name alone also matches structured
+  // exec tools. Host guidance preserves Cursor's original error status.
+  if (options.codeMode === true && isCodexCodeModeExecResult(options.toolName, options.toolNamespace)) {
+    const hostFailure = annotateCodeModeHostFailure(text, options);
+    if (hostFailure !== undefined) return { text: hostFailure, isError, changed: true };
+  }
+  if (computerUse && !isError) {
     for (const { marker, guidance } of RUNTIME_FAILURE_GUIDANCE) {
       if (text.includes(marker)) {
         return { text: `${text}\n[recovery: ${guidance}]`, isError: true, changed: true };

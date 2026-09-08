@@ -22,6 +22,9 @@ import {
   recordFirstOutput,
   requestLogEntryFromPersistedUsage,
   sealRequestAttemptIdentity,
+  recordAttemptCredentialSource,
+  inspectResponseLogSsePayload,
+  httpStatusForRequestLogTerminal,
   type RequestLogContext,
 } from "../../src/server/request-log";
 import { handleResponses } from "../../src/server/responses";
@@ -37,6 +40,7 @@ import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { decodeRequestLogCursor, selectRequestLogPoll } from "../../src/server/request-log-cursor";
 
 async function* replayAdapterEvents(events: AdapterEvent[]): AsyncGenerator<AdapterEvent> {
   for (const event of events) yield event;
@@ -56,6 +60,163 @@ function log(overrides: Partial<RequestLogEntry>): RequestLogEntry {
 }
 
 describe("request log metadata", () => {
+  test("Claude evidence is normalized before direct ring ingress and cannot be mutated afterwards", () => {
+    const previousHome = process.env.OPENCODEX_HOME;
+    const home = mkdtempSync(join(tmpdir(), "ocx-claude-log-"));
+    process.env.OPENCODEX_HOME = home;
+    clearRequestLogsForTests();
+    try {
+      const raw = JSON.parse('{"decision":"shadow","featureCodes":["documents","unknown_beta","private-header"],"reason":"private-reason"}');
+      addRequestLog(log({ claudeCompatibility: raw }));
+      raw.featureCodes.length = 0;
+      raw.reason = "changed";
+      const expected = { decision: "shadow", featureCodes: ["documents", "unknown_beta"], reason: "shadow: would reject: documents" };
+      expect(getRequestLogEntries()[0]?.claudeCompatibility).toEqual(expected);
+      expect(readUsageEntries()[0]?.claudeCompatibility).toEqual(expected);
+      const finalized: RequestLogEntry[] = [];
+      addFinalRequestLog("claude-final", 1, { model: "test", provider: "mock",
+        claudeCompatibility: JSON.parse('{"decision":"shadow","featureCodes":["documents"],"reason":"private-final"}') },
+      200, { closeReason: "non_stream" }, row => finalized.push(row));
+      expect(finalized).toHaveLength(1);
+      expect(finalized[0].claudeCompatibility).toEqual({
+        decision: "shadow", featureCodes: ["documents"], reason: "shadow: would reject: documents",
+      });
+    } finally {
+      clearRequestLogsForTests();
+      resetUsageReadCacheForTests();
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      removeTreeWithRetry(home);
+    }
+  });
+
+  test("custom hydration normalizes Claude evidence and ignores malformed optional rows", () => {
+    clearRequestLogsForTests();
+    const raw: PersistedUsageEntry[] = [
+      { ...log({ requestId: "legacy" }) },
+      { ...log({ requestId: "shadow" }), claudeCompatibility: JSON.parse('{"decision":"shadow","featureCodes":["documents","private-header"],"reason":"private-reason"}') },
+      { ...log({ requestId: "malformed" }), claudeCompatibility: JSON.parse('{"decision":"shadow","featureCodes":null,"reason":"private-reason"}') },
+    ];
+    try {
+      expect(hydrateRequestLogsFromDisk(() => raw)).toBe(3);
+      expect(getRequestLogEntries().map(row => row.claudeCompatibility)).toEqual([
+        undefined, { decision: "shadow", featureCodes: ["documents"], reason: "shadow: would reject: documents" }, undefined,
+      ]);
+      raw[1].claudeCompatibility!.featureCodes.length = 0;
+      expect(getRequestLogEntries()[1]?.claudeCompatibility?.featureCodes).toEqual(["documents"]);
+      expect(hydrateRequestLogsFromDisk(() => raw)).toBe(0);
+      expect(JSON.stringify(getRequestLogEntries())).not.toContain("private-");
+    } finally { clearRequestLogsForTests(); }
+  });
+  test("incomplete quota evidence preserves an explicit HTTP 402 message", () => {
+    const log: RequestLogContext = { model: "gpt-test", provider: "openai" };
+    inspectResponseLogSsePayload(log, JSON.stringify({
+      type: "response.incomplete",
+      response: { incomplete_details: { message: "402" } },
+    }));
+    expect(log.terminalHttpStatus).toBe(402);
+    expect(httpStatusForRequestLogTerminal("incomplete", log)).toBe(402);
+  });
+
+  test("normal structured incomplete reason wins over quota-like display text", () => {
+    const log: RequestLogContext = { model: "gpt-test", provider: "openai" };
+    inspectResponseLogSsePayload(log, JSON.stringify({
+      type: "response.incomplete",
+      response: { incomplete_details: { reason: "max_output_tokens", message: "Token usage limit reached" } },
+    }));
+    expect(log.terminalHttpStatus).toBeUndefined();
+    expect(log.terminalIncompleteReason).toBe("max_output_tokens");
+  });
+
+  for (const error of [
+    { type: "authentication_error", message: "Usage limit lookup requires renewed authentication" },
+    { code: "invalid_api_key", message: "Usage limit unavailable for this credential" },
+  ]) {
+    test(`structured auth failure wins over quota wording: ${JSON.stringify(error)}`, () => {
+      const failed: RequestLogContext = { model: "gpt-test", provider: "openai" };
+      inspectResponseLogSsePayload(failed, JSON.stringify({ type: "response.failed", response: { error } }));
+      expect(failed.terminalHttpStatus).toBe(401);
+      const incomplete: RequestLogContext = { model: "gpt-test", provider: "openai" };
+      inspectResponseLogSsePayload(incomplete, JSON.stringify({ type: "response.incomplete", response: { error } }));
+      expect(incomplete.terminalHttpStatus).toBeUndefined();
+    });
+  }
+
+  test("upstream credential attribution requires the resolved canonical xAI transport", () => {
+    const attempt = beginRequestAttempt(1, "xai", "grok-test", "openai-chat");
+    const oauth = { adapter: "openai-chat", authMode: "oauth" as const, baseUrl: "https://cli-chat-proxy.grok.com/v1" };
+    recordAttemptCredentialSource(attempt, "xai", oauth);
+    expect(attempt.credentialSource).toBe("grok-oauth");
+    for (const baseUrl of ["https://api.x.ai/v1", "https://proxy.example/v1", "http://cli-chat-proxy.grok.com/v1",
+      "https://cli-chat-proxy.grok.com:8443/v1", Object.assign(new URL(oauth.baseUrl), { username: "test" }).href,
+      "https://cli-chat-proxy.grok.com/v1?credential=canary", "https://cli-chat-proxy.grok.com/v2", "invalid"]) {
+      recordAttemptCredentialSource(attempt, "xai", { ...oauth, baseUrl });
+      expect(attempt.credentialSource).toBeUndefined();
+    }
+    recordAttemptCredentialSource(attempt, "xai", oauth);
+    recordAttemptCredentialSource(attempt, "custom", oauth);
+    expect(attempt.credentialSource).toBeUndefined();
+    recordAttemptCredentialSource(attempt, "xai", { ...oauth, authMode: "key", baseUrl: "https://api.x.ai/v1" });
+    expect(attempt.credentialSource).toBe("xai-api-key");
+    recordAttemptCredentialSource(attempt, "xai", { ...oauth, authMode: "key" });
+    expect(attempt.credentialSource).toBeUndefined();
+  });
+
+  test("seal same identity preserves credentialSource; provider or adapter change clears it", () => {
+    const attempt = beginRequestAttempt(1, "xai", "grok-test", "openai-chat");
+    recordAttemptCredentialSource(attempt, "xai", {
+      adapter: "openai-chat", authMode: "key", baseUrl: "https://api.x.ai/v1",
+    });
+    expect(attempt.credentialSource).toBe("xai-api-key");
+    sealRequestAttemptIdentity(attempt, "xai", "openai-chat");
+    expect(attempt.credentialSource).toBe("xai-api-key");
+    expect(attempt.provider).toBe("xai");
+    expect(attempt.adapter).toBe("openai-chat");
+
+    sealRequestAttemptIdentity(attempt, "custom", "openai-chat");
+    expect(attempt.credentialSource).toBeUndefined();
+    expect(attempt.provider).toBe("custom");
+
+    recordAttemptCredentialSource(attempt, "xai", {
+      adapter: "openai-chat", authMode: "key", baseUrl: "https://api.x.ai/v1",
+    });
+    attempt.provider = "xai";
+    expect(attempt.credentialSource).toBe("xai-api-key");
+    sealRequestAttemptIdentity(attempt, "xai", "openai-responses");
+    expect(attempt.credentialSource).toBeUndefined();
+    expect(attempt.adapter).toBe("openai-responses");
+  });
+
+  test("recordAttemptCredentialSource fourth adapterName rejects unsupported even when config adapter is openai-chat", () => {
+    const attempt = beginRequestAttempt(1, "xai", "grok-test", "openai-chat");
+    recordAttemptCredentialSource(attempt, "xai", {
+      adapter: "openai-chat", authMode: "key", baseUrl: "https://api.x.ai/v1",
+    }, "anthropic");
+    expect(attempt.credentialSource).toBeUndefined();
+  });
+
+  test("combo logging keeps credential provenance on physical attempts only", () => {
+    const a = beginRequestAttempt(1, "xai", "grok-test", "openai-chat");
+    const b = beginRequestAttempt(2, "openai", "gpt-test", "openai-responses");
+    recordAttemptCredentialSource(a, "xai", {
+      adapter: "openai-chat", authMode: "oauth", baseUrl: "https://cli-chat-proxy.grok.com/v1",
+    });
+    noteAttemptSend(a, undefined);
+    finishRequestAttempt(a, 503, 1, { inputTokens: 4, outputTokens: 1 });
+    noteAttemptSend(b, undefined);
+    const entries: RequestLogEntry[] = [];
+    addFinalRequestLog("mixed-combo", Date.now(), {
+      provider: "openai", model: "gpt-test", requestedModel: "combo/test", comboId: "test",
+      providerAdapter: "openai-responses", attempts: [a, b], activeAttempt: b,
+      usage: { inputTokens: 10, outputTokens: 2 },
+    }, 200, undefined, entry => entries.push(entry));
+    expect(entries[0]?.totalTokens).toBe(17);
+    expect(entries[0]?.attempts?.[0]?.credentialSource).toBe("grok-oauth");
+    expect(entries[0]?.attempts?.[0]?.totalTokens).toBe(5);
+    expect(entries[0]?.attempts?.[1]?.credentialSource).toBeUndefined();
+    expect(entries[0]).not.toHaveProperty("credentialSource");
+  });
+
   test("creates one ordinary attempt after the final adapter is resolved", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async () => Response.json({
@@ -1730,5 +1891,99 @@ describe("request log restart hydrate", () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+
+describe("request log snapshot cursor", () => {
+  const epoch = "a".repeat(32);
+  const query = new URLSearchParams("limit=2000");
+  const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+
+  test("codec bounds and canonical encoding reject malformed or type-confused input", () => {
+    const poll = selectRequestLogPoll([], query, null, epoch);
+    const payload = JSON.parse(Buffer.from(poll.cursor, "base64url").toString());
+    expect(decodeRequestLogCursor(poll.cursor)).toEqual(payload);
+    for (const raw of ["", "!", "a".repeat(513), `${poll.cursor}=`, ` ${poll.cursor}`,
+      encode(null), encode([]), encode({ ...payload, v: 3 }), encode({ ...payload, n: -1 }),
+      encode({ ...payload, n: 2001 }), encode({ ...payload, n: 0.5 }), encode({ ...payload, n: "0" }),
+      encode({ ...payload, h: "x".repeat(64) }), encode({ ...payload, q: null }),
+      encode({ ...payload, e: "short" }), encode({ ...payload, extra: true }),
+      encode({ v: 1, t: -1, id: "row" }), encode({ v: 1, t: 1, id: "" }),
+      encode({ v: 1, t: "1", id: "row" }), encode({ v: 1, t: 1, id: "x".repeat(257) })]) {
+      expect(decodeRequestLogCursor(raw)).toBeNull();
+    }
+    const legacy = decodeRequestLogCursor(encode({ v: 1, t: 1, id: "row" }));
+    expect(legacy).toEqual({ v: 1, t: 1, id: "row" });
+    expect(selectRequestLogPoll([], query, legacy, epoch).reset).toBe(true);
+  });
+
+  test("stable empty and populated snapshots produce empty deltas, appends preserve repeated IDs", () => {
+    const empty = selectRequestLogPoll([], query, null, epoch);
+    expect(empty.reset).toBe(false);
+    expect(selectRequestLogPoll([], query, decodeRequestLogCursor(empty.cursor), epoch)).toEqual(empty);
+    const rows = [log({ requestId: "same" })];
+    const first = selectRequestLogPoll(rows, query, decodeRequestLogCursor(empty.cursor), epoch);
+    expect(first.logs).toEqual(rows);
+    const cursor = decodeRequestLogCursor(first.cursor);
+    expect(selectRequestLogPoll(rows, query, cursor, epoch)).toEqual({ ...first, logs: [] });
+    rows.push(log({ requestId: "same", status: 500 }));
+    expect(selectRequestLogPoll(rows, query, cursor, epoch)).toMatchObject({ logs: [rows[1]], reset: false });
+  });
+
+  test("in-place older/newest/nested changes, field removal, reorder and eviction reset the whole window", () => {
+    const original = [
+      log({ requestId: "older", usage: { inputTokens: 10, outputTokens: 5 }, firstOutputMs: 3 }),
+      log({ requestId: "newest" }),
+    ];
+    const cursor = decodeRequestLogCursor(selectRequestLogPoll(original, query, null, epoch).cursor);
+    const mutations: Array<(rows: RequestLogEntry[]) => void> = [
+      rows => { rows[0]!.status = 500; },
+      rows => { rows[1]!.durationMs = 22; },
+      rows => { rows[0]!.usage!.outputTokens = 6; },
+      rows => { delete rows[0]!.firstOutputMs; },
+      rows => { rows[0] = log({ requestId: "replacement" }); },
+      rows => { rows.reverse(); },
+      rows => { rows.shift(); },
+      rows => { rows.length = 0; },
+    ];
+    for (const mutate of mutations) {
+      const rows = structuredClone(original);
+      mutate(rows);
+      expect(selectRequestLogPoll(rows, query, cursor, epoch)).toMatchObject({ logs: rows, reset: true });
+    }
+    // Same hydrated IDs and values do not make an old process cursor valid.
+    expect(selectRequestLogPoll(original, query, cursor, "b".repeat(32)))
+      .toMatchObject({ logs: original, reset: true });
+  });
+
+  test("query identity ignores cursor and parameter ordering but binds filters and pagination", () => {
+    const rows = [log({ requestId: "private-row", conversationId: "private-conversation" })];
+    const first = selectRequestLogPoll(rows, new URLSearchParams("provider=private-provider&limit=1"), null, epoch);
+    const cursor = decodeRequestLogCursor(first.cursor);
+    const raw = Buffer.from(first.cursor, "base64url").toString();
+    for (const value of ["private-row", "private-conversation", "private-provider"]) expect(raw).not.toContain(value);
+    expect(selectRequestLogPoll(rows, new URLSearchParams(`limit=1&cursor=${first.cursor}&provider=private-provider`), cursor, epoch).logs)
+      .toEqual([]);
+    for (const changed of ["provider=other&limit=1", "provider=private-provider&limit=2", "provider=private-provider&limit=1&offset=1"]) {
+      expect(selectRequestLogPoll(rows, new URLSearchParams(changed), cursor, epoch).reset).toBe(true);
+    }
+    const duplicated = selectRequestLogPoll(rows, new URLSearchParams("provider=a&provider=b"), null, epoch);
+    expect(selectRequestLogPoll(rows, new URLSearchParams("provider=b&provider=a"), decodeRequestLogCursor(duplicated.cursor), epoch).reset)
+      .toBe(true);
+  });
+
+  test("a full-window rollover resets; a stale fingerprint cannot suppress current rows", () => {
+    const rows = Array.from({ length: 2000 }, (_, index) => log({ requestId: `row-${index}`, timestamp: 2000 - index }));
+    const initial = selectRequestLogPoll(rows, query, null, epoch);
+    const cursor = decodeRequestLogCursor(initial.cursor);
+    expect(cursor).toMatchObject({ v: 2, n: 2000 });
+    rows.shift();
+    rows.push(log({ requestId: "new", timestamp: 0 }));
+    expect(selectRequestLogPoll(rows, query, cursor, epoch)).toMatchObject({ logs: rows, reset: true });
+    const payload = JSON.parse(Buffer.from(initial.cursor, "base64url").toString());
+    const stale = decodeRequestLogCursor(encode({ ...payload, h: "0".repeat(64) }));
+    expect(stale).not.toBeNull();
+    expect(selectRequestLogPoll(rows, query, stale, epoch)).toMatchObject({ logs: rows, reset: true });
   });
 });

@@ -60,6 +60,30 @@ Döndürme sırasında eski ve yeni anahtar aynı `apiKeyId` altında en fazla o
 
 ## Docker ve sorun giderme
 
+Geri alırken iki volume'u ve bağlama yollarını koruyun. Mevcut volume sahipliği ve izinleri otomatik düzeltilmez. Compose dışındaki adlandırılmış bağlamalar ve özel durum yolları için [ana kılavuza](/guides/remote-hub/#docker-compose) bakın.
+
+Durum iki ayrı kalıcı volume'da tutulur: `ocx-state`,
+`OPENCODEX_HOME=/home/bun/.opencodex` yoluna; `codex-state` ise
+`CODEX_HOME=/home/bun/.codex` yoluna bağlanır. İki ürünün `auth.json` biçimleri
+uyumsuzdur; bu dizinleri birleştirmeyin. Kök dosya sistemi salt okunur olsa da
+bu iki volume yazılabilir durumda kalır.
+
+Katalog otomatik oluşturulmaz. Kimlik doğrulamalı `/v1/catalog` kontrolünden önce
+`/home/bun/.codex/opencodex-catalog.json` konumunda geçerli bir katalog oluşturun
+veya içe aktarın. Boş dizinde 404 `catalog_not_found` beklenen sonuçtur. Güncelleme
+mevcut `ocx-state` volume'unu korur ve `codex-state` ekler; dosyaları otomatik taşımaz.
+Önceden `.opencodex` içine konmuş kataloğu yedekleyin ve yalnızca katalog dosyasını,
+sadece sahibine erişim veren izinlerle taşıyın. Bir ürünün `auth.json` dosyasını
+diğerininkiyle değiştirmeyin. `CODEX_HOME` özelleştirilirse bu dizinin tam yolunu
+yazılabilir bir volume'a bağlayın ve varsayılan kataloğu
+`${CODEX_HOME}/opencodex-catalog.json` konumuna koyun. `model_catalog_json` başka
+bir dosya seçiyorsa çözümlenen yol da kalıcı olmalıdır. Açık bir taşıma tamamlanana
+kadar mevcut özel ortam ve volume eşlemesini koruyun.
+`docker compose down` iki volume'u da korur; `docker compose down --volumes` hem
+`ocx-state` hem `codex-state` ile birlikte kimlik bilgilerini, kullanım geçmişini,
+veri anahtarını ve Codex durumunu/kataloğunu siler. Güncelleme veya yeniden başlatma
+yerine kullanılmamalıdır.
+
 Resmî Docker imajı yoktur; ancak depo, digest ile sabitlenmiş Bun imajını yerelde oluşturmak için bakımı yapılan bir `Dockerfile` ve `compose.yaml` sağlar. İlk başlatmadan önce veri anahtarını stdin üzerinden bir kez başlatın; anahtar yazdırılmaz ve `ocx-state` volume içinde yalnızca sahibinin okuyabileceği izinlerle saklanır.
 
 Host üzerinde Git ve Bun gereklidir. Her imaj derlemesinden önce Git tarafından izlenen kaynaklardan kanonik manifesti üretin ve derleme bitene kadar kaynakları değiştirmeyin. Üretilen JSON dosyasını Git'e eklemeyin; `.git` Docker bağlamının dışında kalır. Host portu varsayılan olarak `127.0.0.1` adresine bağlanır. Uzak erişim için açıkça `OPENCODEX_BIND_ADDRESS=<LAN-veya-Tailscale-IP> docker compose up -d` kullanın; `0.0.0.0` tüm arayüzleri açar. Erişimi güvenlik duvarı ve kimlik doğrulamalı TLS/tailnet ön ucu ile koruyun.

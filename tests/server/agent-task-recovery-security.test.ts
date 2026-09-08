@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { resetAgentTaskRecoveryState } from "../../src/server/responses/agent-task-recovery";
 import {
+  discardEncryptedAgentTaskRecovery,
+  recoverEncryptedAgentTask,
+  recoverEncryptedAgentTaskWithResult,
+  resetAgentTaskRecoveryState,
+  restoreCachedEncryptedAgentTasks,
+} from "../../src/server/responses/agent-task-recovery";
+import {
+  agentMessage,
   codexHeaders,
   encryptedInput,
   fakeChatGptJwt,
@@ -22,6 +29,55 @@ describe("agent task recovery security", () => {
     globalThis.fetch = originalFetch;
     Date.now = realDateNow;
     resetAgentTaskRecoveryState();
+  });
+
+  test("diagnoses unsupported envelopes before admission without exposing their content", async () => {
+    const req = new Request("http://localhost/v1/responses"); // No credentials.
+    let fetches = 0;
+    globalThis.fetch = (async () => { fetches += 1; throw new Error("must-not-fetch"); }) as typeof fetch;
+    const header = { type: "input_text", text: ROUTING_ENVELOPE };
+    const encrypted = { type: "encrypted_content", encrypted_content: FERNET_TASK };
+    const inputs = [
+      agentMessage([header, encrypted, encrypted]),
+      agentMessage([header, { ...encrypted, encrypted_content: FERNET_TASK.slice(0, 50) },
+        { ...encrypted, encrypted_content: FERNET_TASK.slice(50) }]),
+      agentMessage([{ ...header, text: ROUTING_ENVELOPE.replace("NEW_TASK", "new_task") }, encrypted]),
+      encryptedInput({ ciphertext: "unsupported-ciphertext-sentinel" }),
+    ];
+    for (const input of inputs) {
+      const original = structuredClone(input);
+      expect(await recoverEncryptedAgentTaskWithResult(req, input, {}, routedConfig()))
+        .toEqual({ recovered: false, reason: "unsupported_envelope" });
+      expect(await recoverEncryptedAgentTask(req, input, {}, routedConfig())).toBe(false);
+      expect(input).toEqual(original);
+    }
+    expect(fetches).toBe(0);
+  });
+
+  test("typed admission denial cannot read or discard an authenticated cached assignment", async () => {
+    const req = new Request("http://localhost/v1/responses", { headers: codexHeaders() });
+    const config = routedConfig();
+    let fetches = 0;
+    globalThis.fetch = (async () => {
+      fetches += 1;
+      return new Response(recoverySse("private-assignment-sentinel"));
+    }) as typeof fetch;
+    expect(await recoverEncryptedAgentTaskWithResult(req, encryptedInput(), {}, config))
+      .toEqual({ recovered: true });
+
+    const deniedHeaders = codexHeaders();
+    deniedHeaders.set("chatgpt-account-id", "mismatched-account-sentinel");
+    const denied = new Request(req.url, { headers: deniedHeaders });
+    const input = encryptedInput();
+    const original = structuredClone(input);
+    expect(await recoverEncryptedAgentTaskWithResult(denied, input, {}, config))
+      .toEqual({ recovered: false, reason: "admission_denied" });
+    expect(await recoverEncryptedAgentTask(denied, input, {}, config)).toBe(false);
+    expect(restoreCachedEncryptedAgentTasks(denied, input, config)).toBe(0);
+    discardEncryptedAgentTaskRecovery(denied, input, config);
+    expect(input).toEqual(original);
+    expect(restoreCachedEncryptedAgentTasks(req, encryptedInput(), config)).toBe(1);
+    expect(fetches).toBe(1);
   });
 
   test("uses only the fixed ChatGPT endpoint and forwards only allowlisted credentials", async () => {

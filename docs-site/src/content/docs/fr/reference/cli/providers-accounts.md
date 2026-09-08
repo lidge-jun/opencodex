@@ -14,7 +14,7 @@ Gestion des fournisseurs non interactive. Les entrées de registre sont classée
 
 | Sous-commande | Drapeaux pris en charge | Actions |
 | --- | --- | --- |
-| `list` | `--json` | Répertoriez les fournisseurs configurés et les entrées de registre restantes. |
+| `list` | `--json`, `--jsonl` | Répertoriez les fournisseurs configurés et les entrées de registre restantes. `--jsonl` émet un objet JSON par fournisseur configuré et par ligne. |
 | `add <name>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | Ajoutez un fournisseur registry/custom. `--force` écrase ; `--sync` actualise un proxy en cours d'exécution en mode sortie humaine. |
 | `edit <name>` | indicateurs de champ du fournisseur, `--headers <json>`, `--json` | Modifiez les champs de fournisseur en direct validés sans remplacer les pools de clés. `--headers` fusionne les en-têtes de requête personnalisés ; passez `{}` ou `-` pour les effacer. |
 | `test <name>` | `--json` | Sondez le véritable point de terminaison du modèle en amont. |
@@ -28,6 +28,7 @@ Gestion des fournisseurs non interactive. Les entrées de registre sont classée
 
 ```bash
 ocx provider list --json
+ocx provider list --jsonl
 ocx provider test ark
 ocx provider add anthropic --api-key sk-ant-... --set-default --sync
 ocx provider add local-dev --adapter openai-chat --base-url http://localhost:11434/v1
@@ -35,6 +36,8 @@ ocx provider show anthropic --json
 ocx models --provider anthropic --json
 ocx models live --provider ark --json
 ```
+
+`--jsonl` écrit uniquement les fournisseurs configurés, un objet JSON par ligne. Chaque objet contient les mêmes champs qu’un élément du tableau `configured` de `--json`, sans le résumé `registryCount`. Les scripts peuvent traiter les objets ligne par ligne. `--json` et `--jsonl` ne peuvent pas être combinés.
 
 :::caution[Les en-têtes personnalisés ne sont pas un canal d'identification]
 `--headers` est destiné aux métadonnées de requête non secrètes : conseils de routage, locataire ou
@@ -203,12 +206,11 @@ renvoient 1 ; une sonde de quota en amont qui échoue ou expire produit plutôt 
 
 ### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
 
-Contrôle uniquement le groupe de comptes Codex `openai`. `on` règle 80 %, `off` règle 0 %, `status` lit la
-valeur actuelle et `threshold <n>` accepte un entier de 0 à 100. Les autres fournisseurs et les valeurs
-invalides entraînent le code de sortie 1. `--json` renvoie :
+Contrôle le seuil du pool Codex `openai`, ou enregistre celui d’un pool OAuth générique. `on` enregistre 80 %, `off` 0 % et `threshold <n>` accepte 0–100. Les seuils génériques sont actuellement inactifs : leur sauvegarde ne change ni le basculement par seuil, ni l’activation du fournisseur, ni la rotation réactive après une erreur 429. Pour les pools génériques, les sorties utilisent la réponse confirmée du serveur. Pour un pool générique, `poolEnabled` est le réglage enregistré (`null` signifie non spécifié), pas l’état effectif hérité. `inert: true` indique que le seuil ne s’applique pas ; une capacité inconnue ne produit jamais `enabled: true`. Les fournisseurs à clé API, Anthropic et les valeurs invalides sont refusés.
 
 ```text
-{ provider, autoSwitchThreshold: number, enabled: boolean }
+openai: { provider, autoSwitchThreshold: number, enabled: boolean }
+generic OAuth: { provider, autoSwitchThreshold: number | null, enabled: boolean, poolEnabled: boolean | null, inert: true | null }
 ```
 
 ### `ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`

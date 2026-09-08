@@ -17,7 +17,10 @@ import {
   acquireTestRunLock,
   resolveBareTestRunIdentity,
   resolveInheritedTestRunLock,
+  resolveWrappedTestRunLockPath,
   TEST_RUN_ID_ENV,
+  TEST_RUN_LOCK_PATH_ENV,
+  TEST_RUN_LOCK_TOKEN_ENV,
 } from "../scripts/test-run-lock";
 import { rmSync } from "node:fs";
 
@@ -77,16 +80,25 @@ const inheritedLock = resolveInheritedTestRunLock({
   env: process.env,
 });
 process.env[TEST_RUN_ID_ENV] = runId;
-await acquireTestRunLock({
+// A bare Windows run also parents nested Bun tests. Resolve its validated path
+// once, then pass the complete capability to descendants just as the wrapper does.
+const lockPath = inheritedLock?.lockPath
+  ?? (process.platform === "win32" ? resolveWrappedTestRunLockPath() : undefined);
+const runLock = await acquireTestRunLock({
   runId,
   ownerPid: bareIdentity.ownerPid,
-  lockPath: inheritedLock?.lockPath,
-  validatedRuntimePath: inheritedLock !== undefined,
+  lockPath,
+  validatedRuntimePath: lockPath !== undefined,
   joinExistingOwnerToken: inheritedLock?.ownerToken,
   onWait: owner => console.warn(
     `[test] bare Bun worker ${process.pid} is waiting for test run${owner ? ` pid ${owner.pid}` : ""} to release the user lock.`,
   ),
 });
+
+if (process.platform === "win32" && lockPath && runLock.owner) {
+  process.env[TEST_RUN_LOCK_PATH_ENV] = lockPath;
+  process.env[TEST_RUN_LOCK_TOKEN_ENV] = runLock.owner.token;
+}
 
 // Clean up only the root this preload created. The `bun run test` wrapper owns its own.
 process.on("exit", () => {

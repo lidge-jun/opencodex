@@ -441,6 +441,18 @@ describe("cap composition with downstream clamps", () => {
 });
 
 describe("/api/effort-caps", () => {
+  // Management writes validate the entire config, unlike the pure policy helpers above.
+  function makeApiConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
+    return makeConfig({
+      defaultProvider: "effort-fixture",
+      providers: { "effort-fixture": {
+        adapter: "openai-chat",
+        baseUrl: "https://effort.example.invalid/v1",
+      } },
+      ...overrides,
+    });
+  }
+
   function isolatedHome(): void {
     tempHome = mkdtempSync(join(tmpdir(), "ocx-effort-caps-"));
     process.env.OPENCODEX_HOME = tempHome;
@@ -459,7 +471,7 @@ describe("/api/effort-caps", () => {
 
   test("PUT sets both caps; GET surfaces them with the ladder", async () => {
     isolatedHome();
-    const config = makeConfig();
+    const config = makeApiConfig();
     const putRes = await put(config, { effortCap: "high", subagentEffortCap: "medium" });
     expect(await putRes.json()).toEqual({ ok: true, effortCap: "high", subagentEffortCap: "medium" });
     expect(config.effortCap).toBe("high");
@@ -476,7 +488,7 @@ describe("/api/effort-caps", () => {
 
   test("absent key unchanged; null clears; invalid ladder value -> 400", async () => {
     isolatedHome();
-    const config = makeConfig({ effortCap: "high", subagentEffortCap: "medium" });
+    const config = makeApiConfig({ effortCap: "high", subagentEffortCap: "medium" });
     const keep = await put(config, { subagentEffortCap: "low" });
     expect(keep.status).toBe(200);
     expect(config.effortCap).toBe("high");

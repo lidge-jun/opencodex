@@ -23,6 +23,9 @@ ocx export --client pi
       "baseUrl": "http://127.0.0.1:10100/v1",
       "api": "openai-completions",
       "apiKey": "$OPENCODEX_API_KEY",
+      "compat": {
+        "sendSessionAffinityHeaders": true
+      },
       "models": [
         {
           "id": "anthropic/claude-opus-5",
@@ -36,6 +39,8 @@ ocx export --client pi
   }
 }
 ```
+
+產生的 Pi 供應商設定會啟用 `compat.sendSessionAffinityHeaders`。合併或手動編輯供應商時請保留此設定：Pi 提供穩定的工作階段識別碼，OpenCodex 據此為標準 OpenCode Go 目標產生工作階段親和識別碼。當 `cacheRetention` 為 `none` 時，Pi 可能不傳送識別碼。
 
 模型 id 是代理的規範選擇器，因此路由模型顯示為 `provider/model`（`anthropic/claude-opus-5`），而原生 OpenAI slug 保持無前綴（`gpt-5.6-sol`）。`name` 後綴 — `(anthropic)`、`(native)`、`(routed)` — 正是讓來自不同上游的兩個同名模型在 Pi 的 picker 中可區分的關鍵。
 

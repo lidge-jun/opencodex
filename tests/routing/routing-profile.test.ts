@@ -476,6 +476,67 @@ describe("routing profiles (RI-04)", () => {
     expect(body.candidates?.[1]).toMatchObject({ provider: "b", eligible: false });
   });
 
+  for (const unavailable of ["missing", "disabled"] as const) {
+    test.each(["allow", "penalize", "exclude"] as const)(
+      `API dry-run excludes ${unavailable} provider under %s unknown policy`,
+      async capability => {
+        const config = baseConfig({
+          providers: {
+            local: { adapter: "openai-chat", baseUrl: "http://127.0.0.1:11434/v1", allowPrivateNetwork: true },
+          },
+          defaultProvider: "local",
+          routingProfiles: {
+            guarded: {
+              candidates: [
+                { provider: unavailable, model: "local-model" },
+                { provider: "local", model: "local-model" },
+              ],
+              require: {},
+              unknownEvidence: { capability },
+            },
+          },
+        });
+        if (unavailable === "disabled") {
+          config.providers.disabled = { ...config.providers.local!, disabled: true };
+        }
+        for (const withSibling of [true, false]) {
+          if (!withSibling) config.routingProfiles!.guarded!.candidates.pop();
+          const req = new ManagementRequest("http://localhost/api/routing-profiles/dry-run", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            // No synthetic candidates: exercise the same assembly as runtime routing.
+            body: JSON.stringify({ profile: "guarded", evidence: {} }),
+          });
+          const response = await handleManagementAPI(req, new URL(req.url), config, {
+            refreshCodexCatalog: async () => {},
+          });
+          expect(response).not.toBeNull();
+          expect(response!.status).toBe(200);
+          const body = await response!.json() as {
+            selectedIndex: number | null;
+            candidates: Array<{
+              provider: string;
+              eligible: boolean;
+              requirements: unknown[];
+              exclusions: Array<{ code: string }>;
+            }>;
+          };
+          expect(body.selectedIndex).toBe(withSibling ? 1 : null);
+          expect(body.candidates).toHaveLength(withSibling ? 2 : 1);
+          expect(body.candidates[0]).toMatchObject({
+            provider: unavailable,
+            eligible: false,
+            requirements: [],
+            exclusions: [{ code: "route-unavailable" }],
+          });
+          if (withSibling) {
+            expect(body.candidates[1]).toMatchObject({ provider: "local", eligible: true });
+          }
+        }
+      },
+    );
+  }
+
   test("API dry-run mirrors live codex cooldown for openai candidates", async () => {
     const { clearCodexUpstreamHealth, recordCodexUpstreamOutcome } = await import("../../src/codex/routing");
     clearCodexUpstreamHealth();

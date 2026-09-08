@@ -1,5 +1,6 @@
-import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { describe, expect, spyOn, test } from "bun:test";
+import * as childProcess from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { clearModelCache } from "../../src/codex/model-cache";
@@ -16,6 +17,7 @@ import {
   buildOpencodeProviderBlockFromCatalog,
   buildOpencodeProviderBlocksFromCatalog,
   buildOpencodeV2ProviderBlock,
+  cmdOpencode,
   fetchOpencodeProxyModels,
   isOpencodeRuntimeConfigError,
   mergeOpencodeRuntimeConfig,
@@ -33,6 +35,7 @@ import {
   serializeOpencodeRuntimeConfig,
 } from "../../src/cli/opencode";
 import type { OcxConfig } from "../../src/types";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 function cfg(extra?: Partial<OcxConfig>): OcxConfig {
   return {
@@ -235,6 +238,69 @@ describe("ocx opencode proxy model catalog", () => {
   const ENV_KEY = "OCX_TEST_OPENCODE_PROXY_ONLY_KEY";
   const RESOLVED = "proxy-only-resolved-key";
   const PROVIDER = "proxyenv";
+
+  test("the first launcher reads selection persisted during /api/models before building both provider blocks", async () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-opencode-discovery-selection-"));
+    const envKeys = ["OPENCODEX_HOME", "CODEX_HOME", "XDG_CONFIG_HOME", OPENCODE_CONFIG_CONTENT_ENV];
+    const previous = Object.fromEntries(envKeys.map(key => [key, process.env[key]]));
+    const configPath = join(home, "config.json");
+    const pending = cfg({
+      defaultProvider: "pending", fastRows: false,
+      providers: { pending: {
+        adapter: "openai-chat", baseUrl: "https://fixture.example.test/v1", liveModels: false,
+        models: ["chosen", "other"],
+        initialModelSelection: { version: 1, registrationId: crypto.randomUUID(), status: "pending" },
+      } },
+    });
+    const ready = structuredClone(pending);
+    ready.providers.pending!.initialModelSelection!.status = "ready";
+    ready.providers.pending!.selectedModels = ["chosen"];
+    const rows = ["chosen", "other"].map(id => ({ provider: "pending", id, namespaced: `pending/${id}` }));
+    expect(opencodeCatalogFromProxyRows(rows, pending)).toEqual([]);
+    const liveness = await import("../../src/server/proxy-liveness");
+    const finder = spyOn(liveness, "findLiveProxy").mockResolvedValue({
+      port: 10123, hostname: "127.0.0.1", pid: null, source: "config",
+    });
+    const fetcher = spyOn(globalThis, "fetch").mockImplementation(async input => {
+      expect(String(input)).toBe("http://127.0.0.1:10123/api/models");
+      expect(JSON.parse(readFileSync(configPath, "utf8")).providers.pending.initialModelSelection.status).toBe("pending");
+      writeFileSync(configPath, JSON.stringify(ready));
+      return Response.json(rows);
+    });
+    let inline = "";
+    // Exercise cmdOpencode through env construction without launching an installed
+    // OpenCode or proxy process. All config reads still use the actual temp files.
+    const spawn = spyOn(childProcess, "spawn").mockImplementation((...args) => {
+      inline = args[2]?.env?.[OPENCODE_CONFIG_CONTENT_ENV] ?? "";
+      const child = new childProcess.ChildProcess();
+      queueMicrotask(() => child.emit("exit", 0, null));
+      return child;
+    });
+    const stderr = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      process.env.OPENCODEX_HOME = home;
+      process.env.CODEX_HOME = join(home, "codex");
+      process.env.XDG_CONFIG_HOME = join(home, "xdg");
+      delete process.env[OPENCODE_CONFIG_CONTENT_ENV];
+      mkdirSync(process.env.CODEX_HOME);
+      writeFileSync(configPath, JSON.stringify(pending));
+      expect(await cmdOpencode([])).toBe(0);
+      expect(finder).toHaveBeenCalledTimes(1);
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(spawn).toHaveBeenCalledTimes(1);
+      const injected = JSON.parse(inline);
+      expect(Object.keys(injected.provider.opencodex.models)).toEqual(["pending/chosen"]);
+      expect(Object.keys(injected.providers.opencodex.models)).toEqual(["pending/chosen"]);
+      expect(pending.providers.pending!.initialModelSelection!.status).toBe("pending");
+    } finally {
+      finder.mockRestore(); fetcher.mockRestore(); spawn.mockRestore(); stderr.mockRestore();
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      removeTreeWithRetry(home);
+    }
+  });
 
   test("uses /api/models namespaced selectors and resolves env-backed provider keys only in the proxy", async () => {
     const originalFetch = globalThis.fetch;

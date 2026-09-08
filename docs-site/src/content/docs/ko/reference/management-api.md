@@ -194,6 +194,15 @@ Authorization: Bearer <admin-token>
 | `GET, PUT /api/provider-context-caps` | 전역, 모든 provider, 또는 하나의 provider context cap을 읽거나 업데이트합니다 | 400 잘못된 요청; 404 알 수 없는 provider |
 | `GET /api/provider-presets` | 런타임 registry에서 파생된 GUI provider preset을 반환합니다 | — |
 
+컨텍스트 상한 응답에는 `caps`(활성 상한)와 `values`(꺼도 유지되는 마지막 선택값)가 포함됩니다.
+`value` 없이 공급자의 상한을 켜면 선택값을 복원하고, 처음 켤 때는 전역 `contextCapValue`를 씁니다.
+OpenAI도 같은 규칙을 따르며, 스위치를 켠다고 별도의 922k 모드가 선택되지는 않습니다.
+활성 상한은 모든 네이티브 윈도에 적용됩니다. 장문 컨텍스트를 지원하는 모델은 해당 모델의 지원 상한까지만
+확장할 수 있습니다. `{ "value": 600000, "setAll": true }`는 전역 값과 활성 상한만 갱신합니다.
+상한이 꺼진 공급자는 선택값을 유지하고, 나중에 켜면 그 값을 복원합니다.
+`value` 없이 `{ "setAll": true }`를 보내면 설정된 모든 공급자의 상한을 현재 전역 값으로 켜고,
+저장된 선택값도 바꿉니다. 상한을 꺼도 선택값은 다시 불러온 뒤까지 유지되지만 제한으로 적용되지는 않습니다.
+
 `provider_has_dependent_combos`는 안전 장치입니다. provider를 삭제하기 전에 종속된 combo를 제거하거나 수정하십시오.
 
 ### 사이드바 및 동의가 필요한 작업

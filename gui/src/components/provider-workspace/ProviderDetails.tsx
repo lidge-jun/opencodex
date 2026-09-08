@@ -13,6 +13,7 @@ import { ProviderIcon } from "./ProviderRail";
 import { Switch } from "../../ui";
 import { IconChevron, IconTrash } from "../../icons";
 import ProviderOverview from "./ProviderOverview";
+import type { ModelRow } from "../../pages/models-shared";
 import ProviderModels from "./ProviderModels";
 import ProviderUsage from "./ProviderUsage";
 import ProviderAuthPanel from "./ProviderAuthPanel";
@@ -32,6 +33,10 @@ export default function ProviderDetails({
   availableModels,
   hasLiveModels,
   selectedModels,
+  modelRows,
+  modelRevision,
+  modelRowsReady,
+  onOpenModels,
   modelsLoading,
   modelsLoadFailed,
   onRetryModels,
@@ -65,6 +70,10 @@ export default function ProviderDetails({
   /** Server-reported live-catalog provenance; see filterModels(). */
   hasLiveModels: boolean;
   selectedModels: string[];
+  modelRows: ModelRow[] | null;
+  modelRevision: string;
+  modelRowsReady: boolean;
+  onOpenModels: () => void;
   modelsLoading?: boolean;
   modelsLoadFailed?: boolean;
   onRetryModels?: () => void;
@@ -293,6 +302,10 @@ export default function ProviderDetails({
             availableModels={availableModels}
             hasLiveModels={hasLiveModels}
             selectedModels={selectedModels}
+            modelRows={modelRows}
+            modelRevision={modelRevision}
+            modelRowsReady={modelRowsReady}
+            onOpenModels={onOpenModels}
             modelsLoading={modelsLoading}
             modelsLoadFailed={modelsLoadFailed}
             needsReauth={

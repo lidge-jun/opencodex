@@ -86,6 +86,24 @@ ocx connect rotate --admin-token-stdin
 
 ## Docker
 
+롤백할 때도 두 볼륨과 마운트 경로를 유지하세요. 기존 볼륨의 소유권과 권한은 자동으로 복구되지 않습니다. Compose 없이 실행할 때의 named volume 지정과 별도 상태 경로는 [영문 기준 가이드](/guides/remote-hub/#docker-compose)를 참고하세요.
+
+상태는 두 볼륨에 분리해 보관합니다. `ocx-state`는
+`OPENCODEX_HOME=/home/bun/.opencodex`, `codex-state`는
+`CODEX_HOME=/home/bun/.codex`에 연결됩니다. 두 제품의 `auth.json` 형식이 다르므로
+홈을 같은 폴더로 합치지 마세요. 루트 파일 시스템이 read-only여도 이 두 홈은 쓰기 가능합니다.
+
+카탈로그는 자동 생성되지 않습니다. 인증된 `/v1/catalog` 검사 전에 유효한
+`/home/bun/.codex/opencodex-catalog.json`을 생성하거나 가져와야 합니다.
+빈 홈에서 `catalog_not_found` 404는 정상입니다. 업그레이드는 기존 `ocx-state`를
+유지하고 `codex-state`를 추가하지만 파일을 자동 이동하지 않습니다. 이전 우회 설정으로
+`.opencodex`에 둔 카탈로그는 백업한 뒤 카탈로그만 owner-only 권한으로 옮기세요.
+두 제품의 `auth.json`을 서로 덮어쓰면 안 됩니다. 사용자 지정 `CODEX_HOME`은 그 정확한
+디렉터리를 쓰기 가능한 볼륨에 연결하고, 기본 카탈로그를
+`${CODEX_HOME}/opencodex-catalog.json`에 준비해야 합니다. `model_catalog_json`으로
+별도 파일을 지정했다면 그 경로도 영속 보관하세요. 명시적 이전이 완료되기 전까지는
+기존 사용자 지정 환경 변수와 볼륨 경로의 대응을 유지하세요.
+
 opencodex는 공식 컨테이너 이미지를 배포하지 않지만, 저장소 루트의 `Dockerfile`과 `compose.yaml`로 digest가 고정된 소스 이미지를 직접 빌드할 수 있습니다. 최초 실행 전에 데이터 키를 stdin으로 초기화하세요. 키는 출력되지 않으며 `ocx-state` 볼륨의 owner-only `service-api-token`에 저장됩니다.
 
 호스트에 Git과 Bun이 필요합니다. 이미지를 빌드할 때마다 Git이 추적하는 소스로 정식 매니페스트를 생성하고, 생성부터 빌드 사이에는 소스를 변경하지 마세요. 생성된 JSON은 Git에 추가하지 않으며 `.git`은 Docker 컨텍스트에서 제외됩니다. 호스트 포트는 기본적으로 `127.0.0.1`에 바인딩됩니다. 원격 공개는 `OPENCODEX_BIND_ADDRESS=<LAN-또는-Tailscale-IP> docker compose up -d`로 명시적으로 선택하며, `0.0.0.0`은 모든 인터페이스에 공개합니다. 방화벽과 인증된 TLS/tailnet 프런트엔드로 보호하세요.
@@ -101,11 +119,11 @@ openssl rand -hex 32 | docker compose run --rm -T hub bun run docker/bootstrap-t
 docker compose up -d
 ```
 
-이미지는 non-root `bun` 사용자로 실행되고 루트 파일 시스템은 read-only이며 공개 포트는 `10100` 하나뿐입니다. 토큰을 `ARG`, `ENV`, `COPY`, Compose YAML, 이미지 기록, 명령행에 넣지 마세요. Docker socket, 호스트 홈, Codex 홈, SSH agent, 프로바이더 키도 마운트하지 마세요. 컨테이너 안의 `127.0.0.1:10101` 관리 포트는 같은 네트워크 네임스페이스의 TLS/tailnet 프런트엔드로만 연결하고 직접 publish하지 마세요.
+이미지는 non-root `bun` 사용자로 실행되고 루트 파일 시스템은 read-only이며 공개 포트는 `10100` 하나뿐입니다. 토큰을 `ARG`, `ENV`, `COPY`, Compose YAML, 이미지 기록, 명령행에 넣지 마세요. Docker socket, 호스트의 홈이나 Codex 홈, SSH agent, 프로바이더 키도 마운트하지 마세요. 컨테이너 안의 `127.0.0.1:10101` 관리 포트는 같은 네트워크 네임스페이스의 TLS/tailnet 프런트엔드로만 연결하고 직접 publish하지 마세요.
 
 컨테이너 healthcheck의 `/healthz`가 통과한 뒤 `/readyz`, 인증된 `/v1/catalog`, 실제 모델 응답을 별도로 확인하세요.
 
-`docker compose down`은 `ocx-state` 볼륨을 보존합니다. `docker compose down --volumes`는 설정, OAuth 인증 정보, 사용량 기록, 데이터 키를 함께 삭제하므로 파괴적 작업으로 취급하세요.
+`docker compose down`은 `ocx-state`와 `codex-state`를 모두 보존합니다. `docker compose down --volumes`는 두 볼륨을 모두 삭제하여 설정, OAuth 인증 정보, 사용량 기록, 데이터 키, Codex 상태와 카탈로그를 지웁니다. 업그레이드나 재시작 대신 사용하지 마세요.
 
 ## 롤백과 문제 해결
 

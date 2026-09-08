@@ -14,7 +14,7 @@
  */
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../types";
 import { modelInList } from "../types";
-import { codexEffortRank, configuredReasoningEfforts, isCodexReasoningEffort, modelRecordValue } from "../reasoning-effort";
+import { codexEffortRank, configuredReasoningEfforts, isCodexReasoningEffort, isDeclaredReasoningEffort, modelRecordValue } from "../reasoning-effort";
 import { catalogModelEfforts } from "../codex/catalog";
 
 /**
@@ -187,4 +187,186 @@ export function applyEffortCap(
   parsed.options.reasoning = resolved;
   if (raw?.reasoning && typeof raw.reasoning === "object") raw.reasoning.effort = resolved;
   return { from: requested, to: resolved, subagent };
+}
+
+/**
+ * Resolve any pinned reasoning effort configured for this model or provider.
+ * Priority order:
+ * 1. Provider model-specific pinned effort (`provider.modelPinnedReasoningEfforts[modelId]`)
+ * 2. Provider-wide pinned effort (`provider.pinnedReasoningEffort`)
+ * 3. Global config model-specific pinned effort (`config.modelPinnedEfforts[modelId]`)
+ * Global keys try the final pre-namespace selector, provider-qualified destination,
+ * then bare destination, using modelRecordValue's exact/family/case-fold semantics.
+ * The caller removes synthetic effort rows and combo selectors before this boundary.
+ *
+ * Returns undefined when no valid pinned effort tier is configured.
+ */
+export function resolvePinnedEffort(
+  route: { provider: OcxProviderConfig; modelId: string; providerName?: string },
+  parsedModelId?: string,
+  config?: OcxConfig,
+): string | undefined {
+  const prov = route.provider;
+  const rawProvModel = modelRecordValue(prov.modelPinnedReasoningEfforts, route.modelId)
+    ?? (parsedModelId ? modelRecordValue(prov.modelPinnedReasoningEfforts, parsedModelId) : undefined);
+  if (rawProvModel && isDeclaredReasoningEffort(rawProvModel)) {
+    return rawProvModel;
+  }
+  if (prov.pinnedReasoningEffort && isDeclaredReasoningEffort(prov.pinnedReasoningEffort)) {
+    return prov.pinnedReasoningEffort;
+  }
+  if (config?.modelPinnedEfforts) {
+    const rawGlobal = (parsedModelId ? modelRecordValue(config.modelPinnedEfforts, parsedModelId) : undefined)
+      ?? (route.providerName ? modelRecordValue(config.modelPinnedEfforts, `${route.providerName}/${route.modelId}`) : undefined)
+      ?? modelRecordValue(config.modelPinnedEfforts, route.modelId);
+    if (rawGlobal && isDeclaredReasoningEffort(rawGlobal)) {
+      return rawGlobal;
+    }
+  }
+  return undefined;
+}
+
+interface EffortSnapshot {
+  selector: string;
+  providerName: string;
+  modelId: string;
+  reasoningPresent: boolean;
+  reasoning: OcxParsedRequest["options"]["reasoning"];
+  rawEffortPresent: boolean;
+  rawEffort: unknown;
+}
+
+const effortSnapshots = new WeakMap<OcxParsedRequest, EffortSnapshot>();
+
+/** Capture effective synthetic/combo defaults before final model namespace rewriting.
+ * A different destination restores effort alone; intervening summary/options edits survive.
+ * Credential retries do not change the destination and retain their existing decision.
+ */
+export function prepareEffortNormalization(
+  parsed: OcxParsedRequest,
+  route: { providerName: string; modelId: string },
+): string {
+  const raw = parsed._rawBody as { reasoning?: Record<string, unknown> } | undefined;
+  const previous = effortSnapshots.get(parsed);
+  if (!previous) {
+    effortSnapshots.set(parsed, {
+      selector: parsed.modelId,
+      providerName: route.providerName,
+      modelId: route.modelId,
+      reasoningPresent: Object.hasOwn(parsed.options, "reasoning"),
+      reasoning: parsed.options.reasoning,
+      rawEffortPresent: !!raw?.reasoning && Object.hasOwn(raw.reasoning, "effort"),
+      rawEffort: raw?.reasoning?.effort,
+    });
+    return parsed.modelId;
+  }
+  if (previous.providerName === route.providerName && previous.modelId === route.modelId) {
+    return previous.selector;
+  }
+  if (previous.reasoningPresent) parsed.options.reasoning = previous.reasoning;
+  else delete parsed.options.reasoning;
+  if (raw && previous.rawEffortPresent) {
+    if (!raw.reasoning || typeof raw.reasoning !== "object") raw.reasoning = {};
+    raw.reasoning.effort = previous.rawEffort;
+  } else if (raw?.reasoning && typeof raw.reasoning === "object") {
+    delete raw.reasoning.effort;
+  }
+  // An unchanged wire model is the previous destination, not a new requested alias.
+  previous.selector = parsed.modelId === previous.modelId || parsed.modelId === previous.selector
+    ? `${route.providerName}/${route.modelId}`
+    : parsed.modelId;
+  previous.providerName = route.providerName;
+  previous.modelId = route.modelId;
+  return previous.selector;
+}
+
+/**
+ * Detect collaboration surface for a native chat request body.
+ * Mirrors Responses collabSurface behavior across function and custom tool representations.
+ */
+export function chatCollabSurface(chatBody: Record<string, unknown>): "v1" | "v2" | null {
+  if (!Array.isArray(chatBody.tools)) return null;
+  let namespacedSpawn = false;
+  let flatSpawn = false;
+  let v1Only = false;
+  let v2Only = false;
+  for (const raw of chatBody.tools) {
+    if (!raw || typeof raw !== "object") continue;
+    const tool = raw as Record<string, unknown>;
+    let name = "";
+    let namespace: string | undefined = undefined;
+    if (tool.type === "function" && tool.function && typeof tool.function === "object") {
+      const fn = tool.function as Record<string, unknown>;
+      name = typeof fn.name === "string" ? fn.name : "";
+    } else if (tool.type === "custom" && tool.custom && typeof tool.custom === "object") {
+      const cust = tool.custom as Record<string, unknown>;
+      name = typeof cust.name === "string" ? cust.name : "";
+    } else if (typeof tool.name === "string") {
+      name = tool.name;
+    }
+    if (typeof tool.namespace === "string") namespace = tool.namespace;
+    if (name === "spawn_agent") {
+      if (namespace) namespacedSpawn = true;
+      else flatSpawn = true;
+    } else if (name === "send_input" || name === "resume_agent" || name === "close_agent") {
+      v1Only = true;
+    } else if (name === "send_message" || name === "followup_task" || name === "interrupt_agent" || name === "list_agents") {
+      v2Only = true;
+    }
+  }
+  if (!namespacedSpawn && !flatSpawn) return null;
+  if (namespacedSpawn && flatSpawn) return null;
+  if (v1Only && v2Only) return null;
+  if (v1Only) return "v1";
+  if (v2Only) return "v2";
+  return namespacedSpawn ? "v1" : "v2";
+}
+
+/**
+ * Apply effortCap to a native chat completions body when admitted by the collaboration gate.
+ */
+export function applyChatEffortCap(
+  chatBody: Record<string, unknown>,
+  headers: Headers,
+  config: OcxConfig,
+  supported?: readonly string[] | undefined,
+): { from: string; to: string; subagent: boolean } | null {
+  const subagent = isThreadSpawnRequest(headers);
+  const cap = effortCapFor(config, subagent);
+  if (!cap) return null;
+  const resolved = resolveCappedEffort(cap, supported);
+  const requested = typeof chatBody.reasoning_effort === "string" ? chatBody.reasoning_effort : undefined;
+  if (resolved === null) {
+    if (!requested) return null;
+    delete chatBody.reasoning_effort;
+    return { from: requested, to: "none", subagent };
+  }
+  if (!requested || !isCodexReasoningEffort(requested)) return null;
+  if (codexEffortRank(requested) <= codexEffortRank(resolved)) return null;
+  chatBody.reasoning_effort = resolved;
+  return { from: requested, to: resolved, subagent };
+}
+
+export function applyPinnedEffort(
+  parsed: OcxParsedRequest,
+  route: { provider: OcxProviderConfig; modelId: string; providerName?: string },
+  config?: OcxConfig,
+  selector = effortSnapshots.get(parsed)?.selector ?? parsed.modelId,
+): { from: string | undefined; to: string } | null {
+  if (parsed._compactionRequest === true) return null;
+  const pinned = resolvePinnedEffort(route, selector, config);
+  if (!pinned) return null;
+  const requested = parsed.options.reasoning;
+  const raw = parsed._rawBody as { reasoning?: { effort?: string } } | undefined;
+  const targetEffort = pinned === "none" ? undefined : pinned;
+  parsed.options.reasoning = targetEffort;
+  if (targetEffort) {
+    if (raw && typeof raw === "object") {
+      if (!raw.reasoning || typeof raw.reasoning !== "object") raw.reasoning = {};
+      raw.reasoning.effort = targetEffort;
+    }
+  } else if (raw?.reasoning && typeof raw.reasoning === "object") {
+    delete raw.reasoning.effort;
+  }
+  return { from: requested, to: pinned };
 }

@@ -27,6 +27,9 @@ d’exportation de la variable d’environnement et le nombre de modèles dotés
       "baseUrl": "http://127.0.0.1:10100/v1",
       "api": "openai-completions",
       "apiKey": "$OPENCODEX_API_KEY",
+      "compat": {
+        "sendSessionAffinityHeaders": true
+      },
       "models": [
         {
           "id": "anthropic/claude-opus-5",
@@ -40,6 +43,8 @@ d’exportation de la variable d’environnement et le nombre de modèles dotés
   }
 }
 ```
+
+Les fournisseurs Pi générés activent `compat.sendSessionAffinityHeaders`. Conservez ce réglage lors de la fusion ou de la modification manuelle du fournisseur : Pi transmet un identifiant de session stable, dont OpenCodex dérive l’affinité pour la destination canonique OpenCode Go. Pi peut omettre cet identifiant lorsque `cacheRetention` vaut `none`.
 
 Les identifiants de modèle sont les sélecteurs canoniques du proxy : les modèles routés apparaissent donc sous la forme `provider/model`
 (`anthropic/claude-opus-5`) et les slugs natifs OpenAI restent sans préfixe (`gpt-5.6-sol`). Le `name`

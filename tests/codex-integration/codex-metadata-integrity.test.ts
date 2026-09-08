@@ -208,6 +208,35 @@ describe("Codex request transport metadata", () => {
     expect(new Headers(dropped.headers).get(hintHeader)).toBe("model=gpt-5.6-sol");
   });
 
+  test("canonical adapter drops Lite only for the Spark wire model", async () => {
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex",
+      headers: { "X-OpenAI-Internal-Codex-Responses-Lite": "true" },
+    });
+
+    for (const [model, incomingLite, expectedLite] of [
+      ["gpt-5.3-codex-spark", "true", null],
+      ["gpt-5.3-codex-spark", undefined, null],
+      ["gpt-5.6-sol", "true", "true"],
+    ] as const) {
+      const parsed = minimalParsed();
+      parsed.modelId = model;
+      parsed._rawBody = { model, input: [], stream: true };
+      const incoming = new Headers();
+      if (incomingLite !== undefined) incoming.set(liteHeader, incomingLite);
+      const request = await adapter.buildRequest(parsed, {
+        headers: incoming,
+      });
+      expect(new Headers(request.headers).get(liteHeader)).toBe(expectedLite);
+    }
+
+    const routed = minimalParsed();
+    routed.modelId = "spark-alias";
+    routed._rawBody = { model: "gpt-5.3-codex-spark", input: [], stream: true };
+    const request = await adapter.buildRequest(routed, { headers: new Headers({ [liteHeader]: "true" }) });
+    expect(new Headers(request.headers).get(liteHeader)).toBeNull();
+  });
+
   test("noncanonical adapters neither forward caller Lite nor synthesize a routing hint", async () => {
     for (const authMode of ["forward", "key"] as const) {
       const adapter = createResponsesPassthroughAdapter({

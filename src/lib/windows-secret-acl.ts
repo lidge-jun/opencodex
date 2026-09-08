@@ -715,18 +715,22 @@ function sanitizedAclError(diagnostics: string, cause: unknown): NodeJS.ErrnoExc
   return error;
 }
 
-function previousTimeoutError(retryConsumed: boolean): NodeJS.ErrnoException {
+type TimeoutMemoRefusalError = NodeJS.ErrnoException & {
+  aclFailureOrigin: "timeout_memo_refusal";
+};
+
+function previousTimeoutError(retryConsumed: boolean): TimeoutMemoRefusalError {
   if (retryConsumed) {
     const error = new Error(
       "ACL hardening skipped — the previous timeout recovery was already consumed",
     ) as NodeJS.ErrnoException;
     error.code = "EACLRETRYEXHAUSTED";
-    return error;
+    return Object.assign(error, { aclFailureOrigin: "timeout_memo_refusal" as const });
   }
-  return sanitizedAclError(
+  return Object.assign(sanitizedAclError(
     "ACL hardening skipped — previous attempt timed out",
     Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }),
-  );
+  ), { aclFailureOrigin: "timeout_memo_refusal" as const });
 }
 
 /** Consume, but never reset, the single explicit recovery attempt for this key. */

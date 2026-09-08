@@ -242,6 +242,13 @@ alone never opt a gateway in.
 and before the `/v1/*` guard. Unknown `/v1/*` paths return JSON 404 errors instead of falling through
 to GUI static serving.
 
+Combo compaction recall uses accepted completed-response callbacks to record the final client-visible
+model and originating combo target. The existing child callback gate defers publication until an
+attempt is accepted and drops discarded/failed attempts. Both compaction entry points preserve
+explicit configured selectors before consulting bounded lane state. The existing state-store
+reconciliation owns removal of obsolete targets and generation fencing; core imports no registration
+composition root or Lab code. Recall retains routing identity only, never account credentials.
+
 [Decision Log]
 - 목적과 의도: Complete Cursor turns at the protocol terminal instead of waiting for a separate HTTP-body EOF that may never arrive.
 - 기존 구현 및 제약 조건: Cursor can send turnEnded followed by a clean Connect END_STREAM envelope while RunSSE remains open or later closes through an abort-shaped transport error. The adapter logged the clean envelope but did not settle its terminal owner, so a completed-looking turn could remain open until the Responses stall watchdog.
@@ -330,6 +337,34 @@ whole result is examined; populated text, image/file parts, unpaired results, sh
 compaction and OpenAI-operated destinations are untouched. This does not rewrite valid JavaScript
 or reconstruct output that the code-mode host never emitted.
 
+Routed code-mode turns also carry the host contract for the nested helpers, stated in the same three
+injection sites as the result-emission rule (shared catalog nudge, Cursor code-mode guidance, native
+routed Responses instructions): `tools.apply_patch` takes one string that opens and closes with the
+bare patch marker lines (blank lines or indentation around them are tolerated; a decorated or missing
+marker is rejected), the isolate has no `import`/`require`, and a command that outlives
+`yield_time_ms` is polled through `write_stdin` with empty `chars` rather than a shell sleep loop.
+When a code-mode exec result still carries one of the host's failure strings ("expects a string
+input", "The first line of the patch must be", "The last line of the patch must be", "Unsupported
+import in exec"), the native routed Responses, Kiro, and Cursor result paths append a one-line
+recovery hint naming the broken rule; flat shell bridges and foreign MCP namespaces are never
+annotated, Responses and Kiro additionally require the request's verified code-mode catalog, Cursor
+matches the exact `exec` name under its `opencodex-responses` provider without catalog context, and
+Cursor's error classification and Kiro's whitespace and failed-wrapper grouping are unchanged. Both
+halves live in `src/adapters/exec-tool-result-normalize.ts`
+so the pre-call and post-hoc wording cannot drift. This guidance and annotation change rewrites
+neither the model's JavaScript nor its patch payload; the existing name-alias delimiter
+normalization in `src/responses/code-mode-helper-compat.ts` is unchanged, and the host still rejects a
+malformed call exactly as before. Anthropic, Google, OpenAI-chat and command-code result paths
+have no exec-result seam today and are not annotated.
+
+[Decision Log]
+- 목적과 의도: Stop routed models from abandoning `apply_patch` after the Codex host rejects an object argument or a decorated marker, and from blocking a turn in a shell sleep loop when the host offers `session_id` polling.
+- 기존 구현 및 제약 조건: The shared nudge, Cursor guidance and native Responses instructions already carry the result-emission rule from `exec-tool-result-normalize.ts`, but none stated the helper's argument type, the marker rule, the import ban, or the polling protocol; `260905_apply_patch_envelope_gap` refused to rewrite JavaScript bodies (MODE B), so payload repair is off the table.
+- 검토한 주요 대안: Repair the argument shape inside the proxy (rejected: same body ambiguity as MODE B and it turns a rejected write into a performed one); Cursor-only guidance (rejected: the incident was native routed Responses on xAI); annotate every adapter's tool results (rejected: Anthropic/Google/OpenAI-chat/command-code have no exec-result seam and would need a new one).
+- 선택한 방식: One pre-call sentence and one marker→recovery table in the module that already owns the echo pair; inject the sentence at the three existing code-mode sites; annotate at the three existing exec-result seams with an exec-gated, idempotent helper that never changes error status.
+- 다른 대안 대신 이 방식을 선택한 이유: The safe repair for a host contract the model broke is to state it before the call and name it after the failure; keeping both halves in one file is what keeps them consistent.
+- 장점, 단점 및 영향: Code-mode system prompts grow by roughly 600 characters on routed turns; OpenAI destinations, flat catalogs and compaction requests are untouched. An exec result that legitimately prints one of the four phrases gains a recovery line, which is additive text and never an error flip. On Cursor, a structured tool literally named `exec` whose output quotes one of those phrases would also gain that line. The effect on the live Grok defect rate is unmeasured until a re-probe.
+
 [Decision Log]
 - 목적과 의도: Keep Codex hosted web search usable on xAI's public Responses endpoint without forwarding private OpenAI-only fields that xAI rejects.
 - 기존 구현 및 제약 조건: Codex emits `external_web_access`, `search_context_size`, `search_content_types`, and `user_location`; xAI documents a live-only `web_search` tool with domain filters and image flags, while Codex cached mode explicitly forbids external access.
@@ -338,12 +373,54 @@ or reconstruct output that the code-mode host never emitted.
 - 다른 대안 대신 이 방식을 선택한 이유: One-field stripping exposes the next schema mismatch and turning `external_web_access:false` into xAI live search widens the caller's network policy; destination scoping leaves custom gateways and canonical OpenAI byte-shape native.
 - 장점, 단점 및 영향: Grok 4.5/4.6 no longer fail every default Codex turn with an unsupported-argument 400; live search remains available when explicitly enabled, while cached search degrades to no hosted search on xAI rather than silently going live.
 
+### xAI string agent-message continuation
+
+`normalizeRoutedAgentMessages` owns raw Responses `agent_message` lowering. Its existing
+nonempty all-readable array behavior remains shared by non-forward destinations. The optional
+`allowStringContent` argument defaults to false and is enabled only by the non-forward adapter
+call when `isXaiResponsesDestination` recognizes HTTPS `api.x.ai` or `cli-chat-proxy.grok.com`
+on the standard port. A nonblank string becomes one `input_text` part with the original text;
+the same author/recipient attribution is retained and the private transport item id is removed.
+
+This addresses readable child-result delivery (#3907), not scheduling or decryption. Blank,
+malformed, ciphertext-only and mixed unknown/encrypted content retains the existing fail-closed
+path. Forward destinations never enable the option. The parser and encrypted-task recovery
+owners are unchanged, and no broad content-schema validation or adapter-wide string conversion
+is introduced. Mocked server fixtures cover parent, child, and parent-result continuation over
+SSE and JSON while preserving actual tool-call/result pairs.
+
 OpenCode Go documents `gpt-5.6-luna` on `/zen/go/v1/responses` while sibling models use its Chat or
 Anthropic endpoints. The built-in preset therefore selects `openai-responses` only for Luna and
 keeps the provider-wide `openai-chat` default for other non-pinned models. This endpoint correction
 does not set `modelResponsesUpstreamStreaming`: client `stream: true` remains real upstream
 streaming until a current-runtime reproduction justifies a separate bounded-JSON compatibility
 policy.
+
+Go's non-forward Responses request path moves valid `additional_tools` wrappers into top-level
+`tools` through `src/adapters/opencode-go-additional-tools.ts`. Placement runs after existing
+custom/search/namespace lowering and before code-mode, compaction and final hosted-tool pruning.
+It does not recalculate wire identities or response aliases. The matcher reads the constructed
+send URL, resolving it with URL semantics, and requires HTTPS `opencode.ai`, the standard port
+and exact `/zen/go/v1/responses`. Normal and endpoint-inclusive bases or split `responsesPath`
+configurations agree; a custom path resolving to Zen or elsewhere does not acquire Go placement.
+Credentials, query, fragment, foreign hosts and other resource paths are excluded. The existing
+URL constructor canonicalizes trailing base slashes before this check. Malformed wrappers remain unchanged and
+the shared mixed-ciphertext agent-message gate remains fail-closed.
+
+The canonical `opencode-go` registry entry defaults to `statelessResponses: true` because Go
+rejects reasoning ciphertext combined with `previous_response_id` (#3838). Existing derive
+logic fills absent values and preserves explicit false; renamed custom configurations receive
+no new destination-based migration. The existing stateless pass sets `store: false`, removes
+stored continuation parameters, and repairs orphan calls/results without claiming execution
+success. A local replay-cache hit supplies history; a miss cannot reconstruct it, so callers
+must resend complete history without `previous_response_id`. This flag also enables the existing
+visible content-to-summary rewrite for SSE and JSON; summary-channel items and opaque reasoning
+blobs keep their existing response handling. The shared recording callback applies the same
+reasoning rewrite under the exact client-visible predicate before caching output, after tool
+restoration and function normalization. This keeps full-content replay fingerprints comparable
+for both full-history-plus-ID and delta continuations without weakening identity checks. Hidden
+summaries and opaque blobs keep their existing cache representation. It does not change streaming selection or Chat
+model routes. Go fixtures cover Luna, Grok and Muse against both response formats.
 
 The canonical OpenCode Go transport also derives `x-opencode-session` from the existing hashed
 session lane before per-model wire selection. One conversation keeps one opaque affinity value
@@ -393,6 +470,25 @@ Native passthrough SSE has TWO shapes, selected per request in
   inspection side-effect set (shared `createSseInspector` factory in `relay.ts`)
   including the #44 late-terminal semantics.
 
+Both client readers also retain a bounded, redacted message from a bare upstream
+`error` event. If EOF arrives without a real Responses terminal, they synthesize
+one `response.failed` with that message instead of replacing it with `adapter_eof`.
+The delivering reader owns this evidence; an asynchronous tee inspection branch
+cannot reliably supply it before EOF. Inspection independently applies the same
+bare-error rule when EOF arrives, so account health records failure instead of
+clearing avoidance as if the turn had succeeded. Existing real terminals and
+caller cancellation retain precedence on both branches. Native recovery preflight
+also preserves a rejected body reader and its bounded prefix for the normal
+mid-stream failure path; it does not turn that rejection into a decrypt retry.
+
+Native Responses may rebuild once when encrypted function/custom-tool output or
+agent-message content receives the exact known decrypt rejection before output
+commits. Recovery replaces only encrypted parts with an omission marker, preserves
+the raw request object used by continuation persistence guards, and uses the same
+adapter and cancellation path. A missing Content-Type is allowed only under the
+existing successful streaming condition. Default combo preflight classification
+is unchanged; only the native recovery caller supplies the exact error predicate.
+
 Both shapes carry the inbound caller-abort signal separately from the turn/shutdown
 controller. A caller-driven read rejection is 499/client_cancel without pool penalty;
 a genuine upstream reset remains synthetic 502. An already received terminal, including
@@ -435,7 +531,7 @@ These are transport-fidelity guarantees, not a provider-billing guarantee.
 
 Eligible complete-input creates can retain a canonical upstream socket within
 one selected account, credential, thread and turn. Model/tier and immutable
-handshake headers must also match. Turn-state and turn-metadata headers are
+handshake headers and the selected outbound proxy must also match. Turn-state and turn-metadata headers are
 projected into their same-name per-frame metadata slots; explicit body values win.
 The pool retains at most 32 sockets, expires idle sockets after 30 seconds, and
 retires a socket after five minutes or 32 successful exchanges (after active work
@@ -644,7 +740,11 @@ the upgrade with 426 so Codex falls back to HTTP cleanly.
 
 That setting controls the client-facing upgrade only. The transparent upstream
 ChatGPT WS optimization described above is selected independently and still
-returns the same downstream SSE contract.
+returns the same downstream SSE contract. Its WSS route checks NO_PROXY first, then selects the
+first non-empty HTTPS_PROXY, https_proxy, ALL_PROXY, or all_proxy value. HTTP_PROXY alone does not
+route WSS. Unsupported or malformed selected proxy values skip the WebSocket attempt and use the
+existing SSE path immediately; they never fall through to a lower-priority proxy or direct WebSocket
+egress. HTTP/SSE fallback retains Bun fetch's own proxy rules, which do not consult ALL_PROXY.
 
 The endpoint handles `response.create`, ignores `response.processed`, supports warmup
 `generate: false`, and feeds the same request pipeline as HTTP/SSE.
@@ -828,6 +928,26 @@ dominated by the routed-model stall clock),
 with seam heartbeats between bounded units. None of these clocks is a total generation deadline.
 
 ## Reasoning and tool-result compatibility
+
+Kiro groups only consecutive original-message tool results whose raw call ID exactly matches
+the originating call. Its wire-ID map retains the original ID privately so replacement or
+truncation collisions cannot join unrelated results. Every non-tool message ends the group,
+including a reasoning-only assistant omitted from the Kiro turns. Group finalization preserves
+single-result normalization, ordered meaningful raw text and whitespace in multi-result output,
+failure text, image order and sticky error status. Empty hints are applied once for an entirely
+text-empty group, not once per chunk; local grouping state never enters the wire payload.
+
+`src/responses/task-input.ts` recognizes complete external Codex task-input envelopes
+before translated Responses adapters: `function_call_output`, no `call_id` property,
+nonblank `id`/`name`/`namespace`, and fully representable nonempty text/image output.
+`parser.ts` emits a user turn, clears pending reasoning and includes that turn in the
+existing continuation conversation-boundary calculation. The metadata is structural,
+not authentication. Unknown/opaque/malformed parts reject the entire conversion;
+ordinary missing/empty tool call ids retain the existing translated-route 400 guard.
+Native passthrough and compaction retain raw-body handling. The leaf reuses the input
+content converter after validation and imports no optional subsystem.
+Stateful developer-guidance injection reuses that validator for its raw insertion
+boundary, so parsed messages and stored raw history retain the same task/guidance order.
 
 Native OpenAI passthrough sanitizes routed reasoning history so `reasoning` input items do not send
 non-empty `content` arrays to upstream models that reject them. Chat Completions bridging repairs
@@ -1132,6 +1252,35 @@ Grounded in the open-sourced official client (xai-org/grok-build); unit + eviden
   `fetchWithHeaderTimeout` takes an executor so provider fetch wrappers stay inside the
   timeout race.
 
+The generated Grok client marker also enables a client-facing sparse-terminal repair for native
+Responses streams. Grok Build renders text deltas immediately but derives its durable assistant
+turn from `response.completed.response.output`; an OpenAI-compatible stream may instead place the
+complete items in `response.output_item.done` and finish with an explicit empty output array. For
+that marked client only, OpenCodex uses a terminal-only tracker: it retains bounded, contiguous,
+unique and semantically valid raw completed items, then backfills a missing or empty terminal
+snapshot. It never promotes locally synthesized or merely repaired items. Unmarked callers continue
+to treat an explicit empty array as authoritative. Within this marked client-facing repair,
+malformed, gapped, oversized, contradictory, failed, or incomplete streams stay fail-closed.
+
+[Decision Log]
+- 목적과 의도: Prevent Grok Build from classifying a visibly streamed answer as empty and replaying
+  the same billable turn when the terminal snapshot is sparse.
+- 기존 구현 및 제약 조건: OpenCodex already reconstructed missing terminal output for provider
+  opt-ins, but preserved explicit empty arrays; Grok Build discarded ordinary completed-item events
+  when constructing its final conversation response.
+- 검토한 주요 대안: Change every caller's empty-array semantics; accept a turn merely because a
+  text delta was visible; reuse the provider's broader lifecycle synthesis; add a strict repair at
+  the generated Grok client boundary.
+- 선택한 방식: Use the existing generated client marker to opt Grok into a terminal-only repair and
+  backfill only from unique, contiguous, bounded real done items whose raw semantics are valid.
+- 다른 대안 대신 이 방식을 선택한 이유: A global rewrite would alter valid provider semantics,
+  while accepting deltas without durable items would leave persistence and continuation empty. The
+  marker is already the client-specific compatibility boundary; keeping the provider repair separate
+  also prevents synthesized or permissively normalized items from overriding an explicit empty terminal.
+- 장점, 단점 및 영향: Grok receives one durable completed answer without a paid retry; ordinary
+  clients remain byte-semantics compatible. The proxy retains bounded item state for marked streams
+  and intentionally refuses ambiguous reconstruction.
+
 ## Kiro client parallel-tool hint
 
 Kiro's wire remains serialized even when an OpenAI Responses client sends
@@ -1229,6 +1378,46 @@ upstream failures, never successful partial completions. Provider-controlled str
 messages are redacted before either JSON or SSE reaches the client. The native path uses the same
 request-attempt logging, reset retry, same-key 429 replay, key rotation, usage extraction, and
 request-signal cancellation contracts as routed Responses transport.
+
+## Chat streaming client with a JSON upstream result
+
+The translated inbound path in `src/server/chat-completions.ts` may receive a complete JSON
+Responses result even when the Chat client requested SSE. Its synthetic stream reuses
+`responsesJsonToChatCompletion` as the semantic authority: converted text, reasoning, available
+refusal content, tool calls, finish reason, and usage must survive this final delivery conversion.
+Tool calls gain their array-order stream `index`; the stream retains one assistant-role frame,
+one terminal choice, and one `[DONE]`. Both native and translated JSON fallbacks share
+`jsonCompletionSse`; its temporary frame strings and final body ownership are charged to the
+existing translator budget. Known incomplete limits take precedence over tool finish reasons;
+unmapped incomplete boundaries remain errors. The existing response-body lifecycle owns translation-budget
+release on consumption or cancellation. Actual upstream SSE and native Chat bypass this fallback.
+
+[Decision Log]
+- 목적과 의도: Keep tool execution and incomplete-response detection working when a streaming client receives a JSON upstream result.
+- 기존 구현 및 제약 조건: The existing fallback copied only text and forced `stop`, despite the JSON converter already retaining tool calls, reasoning, and incomplete status.
+- 검토한 주요 대안: Duplicate Responses parsing in the emitter; perform another inference request; preserve the already-converted Chat completion.
+- 선택한 방식: Copy supported converted message fields into one delta, assign tool-call stream indexes, and retain the converted finish reason.
+- 다른 대안 대신 이 방식을 선택한 이유: One conversion authority prevents the streaming fallback from drifting from non-streaming semantics without changing routing or retry behavior.
+- 장점, 단점 및 영향: No additional upstream request or dependency; this remains buffered delivery, not token-by-token upstream streaming. Handler regressions cover tools, reasoning, length, ordinary and empty completions, and budget release.
+
+### Chat refusal projection
+
+`src/chat/outbound.ts` keeps Responses refusal parts separate from ordinary content. JSON output
+and the stream collector expose nullable `message.refusal`; `jsonCompletionSse` preserves it as
+`delta.refusal`, while the native SSE relay remains opaque. The translated live stream keys refusal
+state by raw `output_index` / `content_index`, validates present item IDs as correlation constraints,
+and emits buffered parts in that order only at a valid completed/incomplete terminal. Deltas append;
+equal, empty, absent, and shorter-prefix snapshots preserve existing text; extending snapshots add
+only new text. Non-string or contradictory snapshots fail with a content-free typed error.
+
+The existing turn budget accounts for refusal text and map metadata, including empty entries, and
+releases that state on terminal, failure, or cancellation. Pending role/tool/refusal/finish/`[DONE]`
+frames form one terminal batch: all serialized strings and encoded frames must be admitted before
+any batch frame is enqueued. Admission failure releases the batch and refusal state, cancels upstream,
+and emits only the bounded overflow error. Collector processing failures cancel their reader before
+releasing its lock, so upstream translation cannot continue after failed JSON collection. The outer
+response finalizer continues to own retained response bytes. These are projection rules, not new
+refusal policy or changes to ordinary content/tool semantics.
 
 ## Parallel tool calls (default-on for chat providers)
 
@@ -1339,6 +1528,23 @@ Unsupported constraints remain in `description` as model guidance instead of dis
 - 장점, 단점 및 영향: Both OpenAI-shaped input surfaces gain native Anthropic schema enforcement and unsupported intent remains visible to the model; the copied subset must track upstream SDK changes, description-carried constraints are guidance rather than hard validation, and the root-reference fix is an intentional divergence to keep definitions reachable.
 
 ## Reasoning display parity (hideThinkingSummary)
+
+Reasoning-envelope serialization uses preflight byte sizing and transient reservations before
+creating JSON, UTF-8, or base64 copies. Encoding also admits the matching decode projection, so
+a successfully encoded standalone envelope fits the standalone decoder's limit. Callers retain
+ownership of returned values; the helper releases only its temporary reservation. Inbound
+Anthropic translation carries one budget across all assistant blocks and accounts for retained
+envelopes until the response lifecycle disposes it. Standalone translation owns a temporary
+budget and disposes it on success or failure. Final translated-request sizing uses plain-JSON
+measurement rather than allocating a serialized copy just to measure it.
+
+[Decision Log]
+- 목적과 의도: Keep reasoning replay bounded while preserving opaque values exactly.
+- 기존 구현 및 제약 조건: Reasoning continuity needs JSON/base64 envelopes, and existing callers already own retained accounting and typed overflow handling.
+- 검토한 주요 대안: Per-field truncation, an independent fixed field limit, or shared transient admission plus cumulative inbound ownership.
+- 선택한 방식: Reserve conservative copy projections in the envelope helpers and use the existing request budget across inbound blocks.
+- 다른 대안 대신 이 방식을 선택한 이유: Truncation changes signed values; one field limit does not describe aggregate ownership. Existing budget errors retain the established HTTP and stream error contracts.
+- 장점, 단점 및 영향: Normal replay is unchanged; envelope admission includes copy overhead and is stricter than a raw-string length ceiling. These are translator accounting limits, not a process-wide RSS guarantee.
 
 `hideThinkingSummary` (request reasoning summary absent/"none" — the routed catalog default) is
 honored by BOTH reasoning paths: anthropic `thinking_delta` AND raw `reasoning_raw_delta`
@@ -1528,7 +1734,7 @@ surface is listed here so a maintainer can find the owner without grepping:
 | Hosted search relay | `src/server/search.ts` | Direct relay; distinct from the web-search sidecar loop below. |
 | Image/video generation loop | `src/images/loop.ts`, `src/images/plan.ts`, `src/images/fulfill.ts`, `src/images/xai-client.ts`, `src/images/xai-video-client.ts`, `src/images/artifacts.ts` | A provider-returned image URL is downloaded into a local artifact once, then served locally; warnings stay URL-free because provider CDN URLs may embed credentials. |
 | GitHub Copilot | `src/providers/xai-transport.ts` (`resolveProviderTransport`), `src/providers/github-copilot-transport.ts` | `resolveProviderTransport` selects the Copilot transport when the routed provider name is `github-copilot`; the Copilot module then resolves its headers and base URL, and the registry seeds the provider row and model fallback. |
-| API-key pools | `src/providers/key-failover.ts` | A 429 rotates the active key and records a cooldown; `provider.apiKey` keeps mirroring the active entry so routing stays single-key. |
+| API-key pools | `src/providers/api-key-selection.ts`, `src/providers/key-failover.ts` | A 429 rotates the active key and records a cooldown; `provider.apiKey` keeps mirroring the active entry so routing stays single-key. |
 | OAuth account failover | `src/oauth/generic-account-failover.ts`, `src/oauth/anthropic-routing.ts` | Reactive pre-output 429 recovery is presence-driven with 2+ eligible accounts. Pool and `oauthAccountFailover` flags govern proactive routing, not the reactive retry: a disabled Anthropic pool recovers through quota ordering rather than its dormant strategy, and a per-provider `enabled` beats the global default in either direction. |
 | Alibaba regions | `src/providers/alibaba-region-backup.ts`, `src/providers/alibaba-region-migration.ts`, `src/providers/alibaba-region-startup.ts` | Region migration backs up before rewriting and is idempotent across restarts. |
 | Discovery and quota | `src/providers/model-discovery.ts`, `src/providers/quota.ts` | Discovery rejects a response over 4 MiB or past 2,000 raw rows before caching it. |
@@ -1546,6 +1752,42 @@ tool-result batch through the existing image preparation and selected-context ow
 shares the 12-image active cap. Bounded source labels are emitted in active user-action text so
 root pruning cannot erase attachment provenance; the same text participates in token estimation.
 Native Composer/MCP behavior and text-only historical replay remain unchanged.
+
+## Chat streamed tool-call identity
+
+`src/adapters/openai-chat.ts` retains a call's first observed non-negative safe integer
+index as an alias when the call started by ID. Every present, non-null index must
+be a number in that range: strings (including numeric and empty strings), booleans,
+objects, arrays, negative numbers, fractions and unsafe integers terminate the stream
+before any key, alias, ID or last-call matching. `Number.MAX_SAFE_INTEGER` is accepted;
+larger integers are rejected because distinct wire literals can parse to the same number.
+The invalid-index error releases all pending call reservations without emitting
+those calls or a successful completion; invalid indexes are never treated as absent.
+Only missing and null indexes are absent-index placeholders. Repeated ID, name and
+argument string-field tolerance retains its existing rules.
+
+For valid indexes, lookup preserves direct-key precedence, then index alias, then
+ID fallback. The initial key continues to own all translator budget reservations
+and release; learning an alias creates no additional owner. Unassociated index-only
+fragments are not guessed onto pending ID-only calls.
+`tests/adapters/openai/openai-chat-parallel-stream.test.ts` covers late aliases,
+parallel/colliding identities, distinct unsafe raw JSON index literals, the maximum
+safe-integer boundary, invalid index types, missing/null continuations and UTF-8
+byte-limit boundaries.
+
+## Cursor executable tool schema ownership
+
+`src/adapters/cursor/tool-schemas.ts` owns advertised and argument-normalization
+schemas; `tool-definitions.ts` remains the public facade and protobuf encoder.
+Advertisement and normalization intentionally differ for shell bridges: Cursor may
+emit `cmd`, while the declared Responses contract decides whether it becomes
+`command`. Both paths preserve execution-control fields. Freeform tools use one
+required string `input` in a closed object, retaining that tool's string-valued
+input description from the parser (including patch-envelope guidance). Other input
+constraints cannot widen the canonical shape. Bare shell bridge names are rejected
+on the freeform path.
+Namespaced tools do not acquire bare-shell behavior. Regression coverage lives in
+`tests/providers/cursor/cursor-tool-definitions.test.ts`.
 
 ## Sidecars
 
@@ -1567,3 +1809,76 @@ On the OpenAI path there is one deterministic `openai` sidecar candidate and its
 owns credential selection; API-key OpenAI is not a ChatGPT forward sidecar candidate.
 
 Sidecar failures must degrade to text markers or skipped capability, not abort the main request.
+
+### Grok snapshot module ownership
+
+The client-specific tracker lives in `grok-responses-snapshot-repair.ts`; the
+provider-opt-in tracker remains in `responses-snapshot-repair.ts`. Their unchanged
+object guard, JSON block encoder and retained-item shape live in the dependency-
+free `responses-snapshot-codec.ts`. Core imports each tracker directly. No existing
+snapshot export moves, and neither tracker imports the core dispatcher. The Grok
+marker selects compatibility behavior and conveys no authenticated client identity.
+
+Manual and automatic OAuth/API-key selection commit through their shared selection owners before
+dispatch. Selection revisions fence stale retries and reselection; request identity includes the
+actual committed account/key. Generic proactive selection is opt-in and preserves a healthy active
+account, while reactive429 recovery remains enabled even with the pool off. Post-commit selection
+events immediately invalidate dashboard roster state; see`05_gui-and-management-api.md`.
+
+
+### Incomplete quota terminals
+
+A native forward response that ends with quota or rate-limit evidence in an
+`incomplete` terminal records account quota failure and spawn-fallback health.
+Structured `incomplete_details.reason` and error codes are accepted without a
+message; ordinary output-limit, filtering, steering and stall incompletes do not
+cool an account. Cyber-policy classification retains precedence. The terminal is
+not replayed after output, and fixed-account request selection remains fixed.
+
+Remote compact requests release the server request-idle timeout only after a complete
+JSON object with a valid model has been read. Partial or invalid uploads retain
+the listener guard; admitted compaction then uses the upstream operation's own
+deadlines and client cancellation.
+
+Buffered routed compaction treats nonempty text and reasoning deltas as progress
+without exposing partial summary text. Comments, empty deltas and gateway
+keepalives do not reset the adapter-event stall watchdog. The default stall
+timeout stays 300 seconds; encrypted compaction content is preserved unchanged.
+
+Native compact response buffering also enforces a body-byte inactivity deadline
+using `stallTimeoutSec` (300 seconds by default). Nonempty chunks reset that
+deadline; a stalled body returns HTTP 504, client cancellation retains HTTP 499,
+and cleanup does not wait for a stuck upstream cancellation promise. The 32 MiB
+response ceiling and the original body bytes are preserved.
+
+A canonical upstream WebSocket refused-create error can become an HTTP 4xx only
+before the response is committed and after stream correlation checks. Permitted
+quota headers are bounded and rebuilt without upstream framing headers; the JSON
+response is not cacheable. Post-commit and 5xx errors keep the no-resend path.
+
+When encrypted agent-task recovery refuses a routed task, its existing 400 error
+can include a bounded `recovery_reason`: `unsupported_envelope`,
+`admission_denied`, `recovery_unavailable`, `caller_cancelled`, `input_changed`,
+`recovery_http_rejected`, `recovery_timeout`, `recovery_aborted`,
+`recovery_transport_error`, or `recovery_invalid_output`.
+HTTP rejection requires an observed non-success response. Invalid output includes
+invalid UTF-8, oversized bodies, malformed or incomplete recovery streams, and
+invalid or conflicting assignments. A caller's cancellation takes precedence over
+an owned deadline, which takes precedence over decode/transport failures.
+`recovery_aborted` describes a shared recovery cancelled independently of that caller.
+Shared-flight waiters receive the same underlying failure unless individually cancelled;
+only successful plaintext is cached. Diagnostics contain no upstream error or payload text.
+The field is omitted when no classified recovery result exists, and existing combo
+branches that return the original target failure keep that response.
+`recovery_unavailable` includes cache/singleflight capacity and does not prove an
+upstream request was attempted. No retry or broader envelope acceptance is enabled.
+
+## Voice diagnostic metadata
+
+`src/server/live.ts` owns optional `OCX_LIVE_FRAME_LOG` diagnostics for both sideband directions.
+The JSONL schema contains only `ts`, `dir`, `kind`, `bytes`, and `fffd`. It never stores frame
+content or transcript excerpts, and logging failures do not affect transparent frame delivery.
+Binary detection decodes only the supplied buffer view; malformed UTF-8 can itself produce U+FFFD,
+so the flag does not identify the peer responsible for corruption. Existing diagnostic files are
+not rewritten. Audio devices, WebRTC media negotiation, captions and spoken handoff delivery remain
+client responsibilities.

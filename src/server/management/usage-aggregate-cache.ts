@@ -14,6 +14,7 @@ import {
   type UsageSummaryAccumulator,
 } from "../../usage/summary";
 import { userCostOverlayVersion } from "../../usage/user-cost-overlays";
+import type { UsageTimeWindow } from "../../usage/time-range";
 
 import {
   cacheApiKeyUsageFromRollup,
@@ -263,7 +264,8 @@ export async function getFilteredUsageAggregate(filter: {
   provider?: string | null;
   model?: string | null;
   apiKeyId?: string | null;
-}): Promise<UsageAggregateResult> {
+}, window?: UsageTimeWindow): Promise<UsageAggregateResult> {
+  const fixedWindow = window ? Object.freeze({ ...window }) : undefined;
   const normalizedFilter = {
     provider: normalizeFilterValue(filter.provider),
     model: normalizeFilterValue(filter.model),
@@ -273,11 +275,13 @@ export async function getFilteredUsageAggregate(filter: {
     normalizedFilter.provider,
     normalizedFilter.model,
     normalizedFilter.apiKeyId,
+    fixedWindow?.since ?? null,
+    fixedWindow?.until ?? null,
   ]);
   const existing = filteredFlights.get(key);
   if (existing) return existing;
 
-  const flight = refreshFilteredAggregate(key, normalizedFilter);
+  const flight = refreshFilteredAggregate(key, normalizedFilter, fixedWindow);
   filteredFlights.set(key, flight);
   try {
     return await flight;
@@ -316,12 +320,13 @@ function publishFilteredAggregate(
 async function rebuildFilteredAggregate(
   key: string,
   filter: NormalizedUsageFilter,
+  window?: UsageTimeWindow,
 ): Promise<UsageAggregateResult> {
   let lastError: unknown;
   for (let attempt = 0; attempt < MAX_REBUILD_ATTEMPTS; attempt += 1) {
     const overlayVersion = userCostOverlayVersion();
     const timeZone = currentTimeZone();
-    const accumulator = createUsageSummaryAccumulator({ filter, mode: "row-unique" });
+    const accumulator = createUsageSummaryAccumulator({ filter, mode: "row-unique", window });
     try {
       const scan = await scanUsageLedgerCooperatively({ onEntry: entry => accumulator.add(entry) });
       if (scan.oversizedRows > 0) throw new Error("usage ledger contains an oversized row");
@@ -345,6 +350,7 @@ async function appendFilteredAggregate(
   key: string,
   state: RetainedUsageAggregate,
   filter: NormalizedUsageFilter,
+  window?: UsageTimeWindow,
 ): Promise<UsageAggregateResult> {
   pinnedAggregates.add(state);
   let rebuildAfterUnpin = false;
@@ -384,28 +390,29 @@ async function appendFilteredAggregate(
     pinnedAggregates.delete(state);
     trimRetainedFilteredAggregates();
   }
-  if (rebuildAfterUnpin) return rebuildFilteredAggregate(key, filter);
+  if (rebuildAfterUnpin) return rebuildFilteredAggregate(key, filter, window);
   throw new Error("filtered usage append did not settle");
 }
 
 async function refreshFilteredAggregate(
   key: string,
   filter: NormalizedUsageFilter,
+  window?: UsageTimeWindow,
 ): Promise<UsageAggregateResult> {
   const state = retainedFilteredAggregates.get(key);
-  if (!state) return rebuildFilteredAggregate(key, filter);
+  if (!state) return rebuildFilteredAggregate(key, filter, window);
   const observed = currentUsageLogRevision();
   const overlayVersion = userCostOverlayVersion();
   const timeZone = currentTimeZone();
   if (requiresRebuild(state, observed, overlayVersion, timeZone)) {
     retainedFilteredAggregates.delete(key);
-    return rebuildFilteredAggregate(key, filter);
+    return rebuildFilteredAggregate(key, filter, window);
   }
   if (state.revisionKey === usageLogRevisionKey(observed)) {
     state.retainedAt = Date.now();
     return resultFrom(state, "unchanged");
   }
-  return appendFilteredAggregate(key, state, filter);
+  return appendFilteredAggregate(key, state, filter, window);
 }
 
 export function usageAggregateRetainedStats(): UsageAggregateRetainedStats {

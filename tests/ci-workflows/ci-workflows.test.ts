@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
+import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   SCRIPT_BINDINGS,
   callsTo,
@@ -118,7 +121,7 @@ describe("GitHub Actions hardening", () => {
     expect(ci.jobs?.["macos-control"]?.["timeout-minutes"]).toBe(30);
     // Higher than the Linux shards on purpose: at 15 the Windows leg cancelled a
     // shard mid-suite, which reports as neither pass nor fail (#2152).
-    expect(ci.jobs?.["platform-windows"]?.["timeout-minutes"]).toBe(25);
+    expect(ci.jobs?.["platform-windows"]?.["timeout-minutes"]).toBe(30);
     expect(ci.jobs?.["keyring-smoke"]?.["timeout-minutes"]).toBe(8);
     // Same lesson as the Windows shards above, one job later: at 8 the Windows leg
     // spent ~7 minutes installing dependencies and was cancelled at the wall before
@@ -238,13 +241,18 @@ describe("GitHub Actions hardening", () => {
     expect(hasExactShellCommand(gatesGuiRun, "cd gui && bun test --isolate tests")).toBe(true);
     expect(hasExactShellCommand(gatesGuiRun, "cd gui && bun test tests")).toBe(false);
 
-    // macOS is the unsharded control for every CI-relevant change. It may skip
+    // macOS shards cover every CI-relevant change. They may skip
     // only when the shared path filter says the entire expensive suite is out of
     // scope (for example a docs-site-only PR).
-    const macosSteps = (ci.jobs?.["platform-macos"] as { steps?: { run?: string }[] })?.steps ?? [];
+    const macosSteps = (ci.jobs?.["platform-macos"] as { steps?: { name?: string; env?: Record<string, string>; run?: string }[] })?.steps ?? [];
     // The 60s per-test ceiling is part of the pinned shape: dropping it silently
     // restores the timing-flake class this lane kept surfacing.
-    expect(macosSteps.some(step => step.run?.includes("bun test --isolate --timeout 60000 tests --shard=${{ matrix.shard }}/2"))).toBe(true);
+    const macosTestStep = macosSteps.find(step => step.name === "Test");
+    expect(macosTestStep?.env?.MACOS_TEST_SHARD).toBe("${{ matrix.shard }}");
+    expect(hasShellCommandHead(macosTestStep?.run, 'bun test --isolate --timeout 60000 "$@"')).toBe(true);
+    expect(hasExactShellCommand(macosTestStep?.run, 'run_macos_suite tests "--shard=$MACOS_TEST_SHARD/2" "${ignore_args[@]}"')).toBe(true);
+    expect(hasExactShellCommand(macosTestStep?.run, 'run_macos_suite --parallel=1 "./tests/$file"')).toBe(true);
+    expect(macosTestStep?.run).toContain('import { SERIAL_FULL_SUITE_FILES } from "./scripts/test.ts"');
     const macosShards = (ci.jobs?.["platform-macos"] as {
       strategy?: { "fail-fast"?: boolean; matrix?: { shard?: number[] } };
     })?.strategy;
@@ -258,7 +266,7 @@ describe("GitHub Actions hardening", () => {
     // `scripts/ci/run-bun-test-batches.sh`. Two ways to break this silently:
     // drop the crash-signature guard so an assertion failure gets retried into
     // green, or let the retry loop swallow a repeated crash. Pin both.
-    const macosTestRun = macosSteps.find(step => step.run?.includes("bun test --isolate --timeout 60000 tests --shard=${{ matrix.shard }}/2"))?.run ?? "";
+    const macosTestRun = macosTestStep?.run ?? "";
     // Actions invokes multiline `run:` blocks with `bash -e`. The retry loop
     // must disable errexit before the crash-prone command or exit 133 aborts
     // the step before PIPESTATUS can be inspected and the retry can run.
@@ -501,12 +509,14 @@ describe("GitHub Actions hardening", () => {
     // allowlist. PRs always create the workflow and aggregate check; this list
     // decides whether the costly jobs run. Pin the entire list on both paths.
     const ciPaths = [
+      ".dockerignore",
       ".gitattributes",
       ".github/workflows/ci.yml",
       ".github/workflows/enforce-pr-target.yml",
       ".github/workflows/release.yml",
       ".github/workflows/stale-needs-info.yml",
       ".npmignore",
+      "Dockerfile",
       "LICENSE",
       "LICENSES/**",
       "README.md",
@@ -515,6 +525,8 @@ describe("GitHub Actions hardening", () => {
       "bin/**",
       "bun.lock",
       "docs-site/**",
+      "compose.yaml",
+      "docker/**",
       "gui/**",
       "package.json",
       "scripts/**",
@@ -564,7 +576,7 @@ describe("GitHub Actions hardening", () => {
     expect(scopeIndex).toBeGreaterThan(filterIndex);
 
     const scopedCondition = "github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'";
-    for (const jobName of ["test", "storage-policy", "gates", "platform-macos", "keyring-smoke"]) {
+    for (const jobName of ["test", "storage-policy", "gates", "platform-macos", "keyring-smoke", "docker-smoke"]) {
       const job = ci.jobs?.[jobName] as { needs?: string; if?: string } | undefined;
       expect(`${jobName}:${job?.needs}`).toBe(`${jobName}:changes`);
       expect(`${jobName}:${job?.if}`).toBe(`${jobName}:${scopedCondition}`);
@@ -612,6 +624,34 @@ describe("GitHub Actions hardening", () => {
     expect(verifier).toContain("attempt <= PINNED_SOURCE_ATTEMPTS");
     expect(verifier).toContain("AbortSignal.timeout(PINNED_SOURCE_TIMEOUT_MS)");
     expect(verifier).not.toContain("AbortSignal.timeout(30_000)");
+  });
+
+  test("Docker smoke executes the source-build lifecycle and gates its result", async () => {
+    const ci = Bun.YAML.parse(await readText(".github/workflows/ci.yml")) as {
+      jobs?: Record<string, {
+        "runs-on"?: string;
+        "timeout-minutes"?: number;
+        "continue-on-error"?: boolean;
+        needs?: string[];
+        permissions?: Record<string, string>;
+        steps?: Array<{ name?: string; run?: string; if?: string; "continue-on-error"?: boolean }>;
+      }>;
+    };
+    const smoke = ci.jobs?.["docker-smoke"];
+    expect(smoke?.["runs-on"]).toBe("ubuntu-latest");
+    expect(smoke?.["timeout-minutes"]).toBe(20);
+    expect(smoke?.["continue-on-error"]).toBeUndefined();
+    expect(smoke?.permissions).toBeUndefined(); // Inherits workflow contents:read.
+    const execution = smoke?.steps?.find(step =>
+      hasExactShellCommand(step.run, "bun scripts/ci/docker-smoke.ts"));
+    expect(execution).toBeDefined();
+    expect(execution?.if).toBeUndefined();
+    expect(execution?.["continue-on-error"]).toBeUndefined();
+    expect(ci.jobs?.ci?.needs).toContain("docker-smoke");
+    const typecheck = ci.jobs?.gates?.steps?.find(step => step.name === "Typecheck");
+    expect(hasExactShellCommand(typecheck?.run,
+      "bun x tsc --ignoreConfig --noEmit --strict --target ESNext --module ESNext --moduleResolution bundler --types bun-types --skipLibCheck scripts/ci/docker-smoke.ts",
+    )).toBe(true);
   });
 
   test("cross-platform CI keeps the GUI lint and build gates", async () => {
@@ -5526,4 +5566,113 @@ describe("gui exhaustive-deps suppression stays scoped and effective", () => {
     // reappears, the config route has been misunderstood.
     expect(models).not.toContain("react-doctor-disable-next-line");
   });
+});
+
+
+interface PublicationStep { name: string; id?: string; if?: string; run?: string; env?: Record<string, string> }
+async function publicationSteps(): Promise<PublicationStep[]> {
+  const yaml = Bun.YAML.parse(await readText(".github/workflows/release.yml")) as {
+    jobs: { publish: { steps: PublicationStep[] } };
+  };
+  return yaml.jobs.publish.steps;
+}
+
+test("release recovery requires same-run publication and preserves successful-step gating", async () => {
+  const steps = await publicationSteps();
+  const publish = steps.find(step => step.name === "Publish (or dry-run)")!;
+  const smoke = steps.find(step => step.name === "Post-publish registry smoke")!;
+  const release = steps.find(step => step.name === "Create GitHub release")!;
+  expect(publish.id).toBe("publication");
+  expect(smoke.id).toBe("registry-smoke");
+  expect(smoke.env?.PUBLISHED).toBe("${{ steps.publication.outputs.published }}");
+  for (const step of [smoke, release]) {
+    expect(step.if).toBe("${{ inputs.dry-run != true && steps.publication.outputs.published == 'true' }}");
+  }
+  expect(steps.indexOf(publish)).toBeLessThan(steps.indexOf(smoke));
+  expect(steps.indexOf(smoke)).toBeLessThan(steps.indexOf(release));
+});
+
+// This executes the ubuntu-latest release job's Bash, not the Windows runtime.
+// Structural workflow guards above still execute on every platform.
+test.skipIf(process.platform === "win32")("release shell recovers only unverified reads after acknowledged publication", async () => {
+  const steps = await publicationSteps();
+  const publish = steps.find(step => step.name === "Publish (or dry-run)")!.run!;
+  const smoke = steps.find(step => step.name === "Post-publish registry smoke")!.run!;
+  const scenarios = [
+    { mode: "match", dry: false, status: 0, receipt: true, verification: "verified", reads: 1 },
+    { mode: "delayed", dry: false, status: 0, receipt: true, verification: "verified", reads: 3 },
+    { mode: "unavailable", dry: false, status: 0, receipt: true, verification: "pending", reads: 6 },
+    { mode: "timeout", dry: false, status: 0, receipt: true, verification: "pending", reads: 6 },
+    { mode: "wrong", dry: false, status: 1, receipt: true, verification: "", reads: 1 },
+    { mode: "empty", dry: false, status: 1, receipt: true, verification: "", reads: 1 },
+    { mode: "dist-failure", dry: false, status: 0, receipt: true, verification: "verified", reads: 1 },
+    { mode: "publish-failure", dry: false, status: 23, receipt: false, verification: "", reads: 0 },
+    { mode: "match", dry: true, status: 0, receipt: false, verification: "", reads: 0 },
+    { mode: "missing-receipt", dry: false, status: 1, receipt: false, verification: "", reads: 0 },
+  ];
+  for (const scenario of scenarios) {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-publication-"));
+    const output = join(dir, "output");
+    const summary = join(dir, "summary");
+    const calls = join(dir, "calls");
+    for (const path of [output, summary, calls]) writeFileSync(path, "");
+    const prelude = String.raw`
+      node() { echo "@fixture/renamed"; }
+      npm() {
+        echo "$*" >> "$CALLS"
+        case "$1" in
+          publish) [ "$SCENARIO" != "publish-failure" ] || return 23 ;;
+          view)
+            count=$(cat "$COUNTER" 2>/dev/null || echo 0)
+            count=$((count + 1)); echo "$count" > "$COUNTER"
+            case "$SCENARIO" in
+              unavailable) return 1 ;;
+              timeout) return 124 ;;
+              delayed) [ "$count" -ge 3 ] || return 1 ;;
+              wrong) echo 0.0.0; return 0 ;;
+              empty) return 0 ;;
+            esac
+            echo "$RELEASE_VERSION" ;;
+          dist-tag) [ "$SCENARIO" != "dist-failure" ] || return 1 ;;
+        esac
+      }
+      timeout() {
+        # The wrapper is stubbed, but its production process bounds are asserted.
+        [ "$1" = "--kill-after=2s" ] && [ "$2" = "10s" ] || return 99
+        shift 2; "$@"
+      }
+      sleep() { echo "sleep $*" >> "$CALLS"; }
+    `;
+    try {
+      const script = prelude + (scenario.mode === "missing-receipt" ? "" : publish) + '\n'
+        + (scenario.dry ? "" : `PUBLISHED=$(sed -n 's/^published=//p' "$GITHUB_OUTPUT")\n${smoke}`);
+      const child = Bun.spawn(["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script], {
+        env: { ...process.env, SCENARIO: scenario.mode, DRY_RUN: String(scenario.dry),
+          NPM_DIST_TAG: "latest", RELEASE_VERSION: "9.8.7", GITHUB_OUTPUT: output,
+          GITHUB_STEP_SUMMARY: summary, CALLS: calls, COUNTER: join(dir, "counter") },
+        stdin: "ignore", stdout: "pipe", stderr: "pipe",
+      });
+      const [status, stdout, stderr] = await Promise.all([
+        child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+      ]);
+      expect({ scenario: scenario.mode, status, stderr }).toEqual({ scenario: scenario.mode, status: scenario.status, stderr: "" });
+      const receipt = readFileSync(output, "utf8");
+      const log = readFileSync(calls, "utf8").trim().split("\n");
+      expect(receipt.includes("published=true")).toBe(scenario.receipt);
+      expect(receipt.includes("verification=")).toBe(scenario.verification !== "");
+      if (scenario.verification) expect(receipt).toContain(`verification=${scenario.verification}`);
+      const reads = log.filter(line => line.startsWith("view "));
+      expect(reads).toHaveLength(scenario.reads);
+      for (const read of reads) expect(read).toBe("view @fixture/renamed@9.8.7 version --fetch-retries=0 --fetch-timeout=8000");
+      const tags = log.filter(line => line.startsWith("dist-tag "));
+      expect(tags).toEqual(scenario.verification === "verified"
+        ? ["dist-tag ls @fixture/renamed --fetch-retries=0 --fetch-timeout=8000"] : []);
+      expect(log.filter(line => line.startsWith("publish "))).toHaveLength(scenario.dry || scenario.mode === "missing-receipt" ? 0 : 1);
+      if (scenario.verification === "pending") {
+        expect(stdout).toContain("::warning::npm publish succeeded");
+        expect(readFileSync(summary, "utf8")).toContain("registry verification pending");
+        expect(log.filter(line => line === "sleep 5")).toHaveLength(5);
+      }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
 });

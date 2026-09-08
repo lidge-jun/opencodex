@@ -188,6 +188,215 @@ describe("routed Responses custom-tool compatibility", () => {
     rewrite.dispose?.();
   });
 
+  test.each([
+    { label: "native raw exec", native: true, name: "exec", input: DECORATED_PATCH },
+    { label: "native wrapped exec", native: true, name: "exec", input: WRAPPED_DECORATED_PATCH },
+    { label: "native pretty wrapper", native: true, name: "exec", input: JSON.stringify({ input: DECORATED_PATCH }, null, 2) },
+    { label: "native escaped-key wrapper", native: true, name: "exec", input: `{ "\\u0069nput": ${JSON.stringify(DECORATED_PATCH)} }` },
+    { label: "function apply_patch wrapper alias", native: false, name: "apply_patch", input: WRAPPED_DECORATED_PATCH },
+  ])("holds fragmented $label previews and completes with executable patch input", async ({ native, name, input }) => {
+    const budget = createTestTranslatorBudget();
+    const rewrite = createRoutedCustomToolRestoreBlockRewrite(
+      new Set(["exec"]), budget, new Set(), new Set(["exec"]),
+    );
+    const id = native ? "ctc_patch_lifecycle" : "fc_patch_lifecycle";
+    const item = { type: native ? "custom_tool_call" : "function_call", id, call_id: "call_patch_lifecycle", name };
+    const payloadKey = native ? "input" : "arguments";
+    const eventPrefix = native ? "response.custom_tool_call_input" : "response.function_call_arguments";
+    // Independent oracle: do not compute expected source with the production compiler.
+    const expected = `const result = await tools.apply_patch(${JSON.stringify(CANONICAL_PATCH)});\ntext(result);`;
+    try {
+      const added = rewrite(frame("response.output_item.added", {
+        output_index: 0, item: { ...item, [payloadKey]: "", status: "in_progress" },
+      }));
+      expect(added).toHaveLength(1);
+      expect(dataPayload(added[0]!).item).toMatchObject({
+        type: "custom_tool_call", id: "ctc_patch_lifecycle", call_id: item.call_id, name: "exec", input: "",
+      });
+      // Split both the JSON wrapper and patch markers, including escaped newlines.
+      for (const delta of input) {
+        expect(rewrite(frame(`${eventPrefix}.delta`, { output_index: 0, item_id: id, delta }))).toEqual([]);
+      }
+      expect(budget.snapshot().currentBytes).toBeGreaterThan(0);
+      const inputDone = rewrite(frame(`${eventPrefix}.done`, {
+        output_index: 0, item_id: id, [payloadKey]: input,
+      }));
+      expect(inputDone).toHaveLength(1);
+      expect(dataPayload(inputDone[0]!)).toMatchObject({
+        type: "response.custom_tool_call_input.done", item_id: "ctc_patch_lifecycle", input: expected,
+      });
+      if (native) expect(budget.snapshot().currentBytes).toBe(0);
+      const completedItem = { ...item, [payloadKey]: input, status: "completed" };
+      const itemDone = rewrite(frame("response.output_item.done", { output_index: 0, item: completedItem }));
+      expect(itemDone).toHaveLength(1);
+      expect(dataPayload(itemDone[0]!).item).toMatchObject({
+        type: "custom_tool_call", id: "ctc_patch_lifecycle", call_id: item.call_id, name: "exec", input: expected,
+      });
+      expect(dataPayload(itemDone[0]!).item).not.toHaveProperty("arguments");
+      expect(budget.snapshot().currentBytes).toBe(0);
+      const terminal = rewrite(frame("response.completed", {
+        response: { id: "resp_patch_lifecycle", status: "completed", output: [completedItem] },
+      }));
+      expect(terminal).toHaveLength(1);
+      const response = dataPayload(terminal[0]!).response as { output: Array<Record<string, unknown>> };
+      expect(response.output).toHaveLength(1);
+      expect(response.output[0]).toMatchObject({
+        type: "custom_tool_call", id: "ctc_patch_lifecycle", call_id: item.call_id, name: "exec", input: expected,
+      });
+      expect(response.output[0]).not.toHaveProperty("arguments");
+      // Execute the client-consumed terminal item once, not each redundant representation.
+      const calls: unknown[] = [];
+      const output: unknown[] = [];
+      const run = new Function("tools", "text", `return (async () => { ${response.output[0]!.input} })();`);
+      await run({ apply_patch: async (patch: unknown) => { calls.push(patch); return "patched"; } },
+        (value: unknown) => output.push(value));
+      expect(calls).toEqual([CANONICAL_PATCH]);
+      expect(output).toEqual(["patched"]);
+      expect(budget.snapshot().currentBytes).toBe(0);
+    } finally {
+      rewrite.dispose?.();
+    }
+  });
+
+  test.each([
+    { label: "raw item.done without input.done", input: DECORATED_PATCH, started: true, itemDone: true },
+    { label: "wrapped item.done without input.done", input: WRAPPED_DECORATED_PATCH, started: true, itemDone: true },
+    { label: "terminal after held deltas without either done event", input: WRAPPED_DECORATED_PATCH, started: true, itemDone: false },
+    { label: "raw terminal-only", input: DECORATED_PATCH, started: false, itemDone: false },
+    { label: "wrapped terminal-only", input: WRAPPED_DECORATED_PATCH, started: false, itemDone: false },
+  ])("repairs native exec at $label completion", ({ input, started, itemDone }) => {
+    const budget = createTestTranslatorBudget();
+    const rewrite = createRoutedCustomToolRestoreBlockRewrite(
+      new Set(["exec"]), budget, new Set(), new Set(["exec"]),
+    );
+    const item = { type: "custom_tool_call", id: "ctc_missing_done", call_id: "call_missing_done", name: "exec" };
+    const expected = `const result = await tools.apply_patch(${JSON.stringify(CANONICAL_PATCH)});\ntext(result);`;
+    try {
+      if (started) {
+        rewrite(frame("response.output_item.added", {
+          output_index: 0, item: { ...item, input: "", status: "in_progress" },
+        }));
+        // The authoritative item must win even when only a prefix was previewed upstream.
+        expect(rewrite(frame("response.custom_tool_call_input.delta", {
+          output_index: 0, item_id: item.id, delta: input.slice(0, 12),
+        }))).toEqual([]);
+        expect(budget.snapshot().currentBytes).toBeGreaterThan(0);
+      }
+      if (itemDone) {
+        const done = rewrite(frame("response.output_item.done", {
+          output_index: 0, item: { ...item, input, status: "completed" },
+        }));
+        expect(done).toHaveLength(1);
+        expect(dataPayload(done[0]!).item).toEqual({ ...item, input: expected, status: "completed" });
+        expect(budget.snapshot().currentBytes).toBe(0);
+      }
+      const terminal = rewrite(frame("response.completed", {
+        response: { id: "resp_missing_done", status: "completed", output: [{ ...item, input, status: "completed" }] },
+      }));
+      expect(terminal).toHaveLength(1);
+      expect(dataPayload(terminal[0]!).response).toMatchObject({
+        status: "completed", output: [{ ...item, input: expected, status: "completed" }],
+      });
+      expect(budget.snapshot().currentBytes).toBe(0);
+    } finally {
+      rewrite.dispose?.();
+    }
+  });
+
+  test.each([
+    { label: "arbitrary JavaScript mentioning a patch", name: "exec", input: `const patch = ${JSON.stringify(DECORATED_PATCH)};\ntext(patch);` },
+    { label: "JavaScript block with an ambiguous brace prefix", name: "exec", input: '{ const value = "literal"; text(value); }' },
+    { label: "unrelated custom JSON input", name: "render_diagram", input: '{"input":"literal"}' },
+    { label: "incomplete patch envelope", name: "exec", input: "*** Begin Patch ***\n*** Add File: note.txt\n+unfinished" },
+    { label: "envelope without an operation", name: "exec", input: "*** Begin Patch ***\nnot an operation\n*** End Patch ***" },
+    { label: "flat exec catalog", name: "exec", input: DECORATED_PATCH, flat: true },
+    { label: "foreign exec namespace", name: "exec", input: DECORATED_PATCH, namespace: "mcp" },
+    { label: "foreign helper namespace", name: "apply_patch", input: DECORATED_PATCH, namespace: "mcp" },
+  ])("preserves native $label across completion boundaries", ({ name, input, ...options }) => {
+    const namespace = "namespace" in options ? options.namespace : undefined;
+    const flat = "flat" in options && options.flat;
+    const names = new Set(["exec", "render_diagram", "mcp__exec", "mcp__apply_patch"]);
+    const rewrite = createRoutedCustomToolRestoreBlockRewrite(
+      names, undefined, new Set(), new Set([...names, ...(flat ? ["exec_command"] : [])]),
+    );
+    const item = {
+      type: "custom_tool_call", id: "ctc_preserved", call_id: "call_preserved", name,
+      ...(namespace ? { namespace } : {}),
+    };
+    try {
+      rewrite(frame("response.output_item.added", {
+        output_index: 0, item: { ...item, input: "", status: "in_progress" },
+      }));
+      let preview = "";
+      for (const delta of input) {
+        for (const block of rewrite(frame("response.custom_tool_call_input.delta", {
+          output_index: 0, item_id: item.id, delta,
+        }))) {
+          const payload = dataPayload(block);
+          expect(payload.type).toBe("response.custom_tool_call_input.delta");
+          expect(typeof payload.delta).toBe("string");
+          preview += payload.delta;
+          expect(input.startsWith(preview)).toBe(true);
+        }
+      }
+      // Ordinary JS and unrelated tools retain progressive input; ambiguous exec may be held.
+      if (input.startsWith("const ") || name === "render_diagram") expect(preview).toBe(input);
+      const inputDone = rewrite(frame("response.custom_tool_call_input.done", {
+        output_index: 0, item_id: item.id, input,
+      }));
+      expect(inputDone).toHaveLength(1);
+      expect(dataPayload(inputDone[0]!)).toMatchObject({ type: "response.custom_tool_call_input.done", input });
+      const completedItem = { ...item, input, status: "completed" };
+      const itemDone = rewrite(frame("response.output_item.done", { output_index: 0, item: completedItem }));
+      expect(itemDone).toHaveLength(1);
+      expect(dataPayload(itemDone[0]!).item).toEqual(completedItem);
+      const terminal = rewrite(frame("response.completed", {
+        response: { id: "resp_preserved", status: "completed", output: [completedItem] },
+      }));
+      expect(terminal).toHaveLength(1);
+      expect(dataPayload(terminal[0]!).response).toEqual({
+        id: "resp_preserved", status: "completed", output: [completedItem],
+      });
+    } finally {
+      rewrite.dispose?.();
+    }
+  });
+
+  test.each(["failed", "incomplete", "dispose"])("releases held native exec input on %s without synthesizing success", outcome => {
+    const budget = createTestTranslatorBudget();
+    const rewrite = createRoutedCustomToolRestoreBlockRewrite(
+      new Set(["exec"]), budget, new Set(), new Set(["exec"]),
+    );
+    try {
+      rewrite(frame("response.output_item.added", {
+        output_index: 0,
+        item: { type: "custom_tool_call", id: "ctc_cancelled", call_id: "call_cancelled", name: "exec", input: "", status: "in_progress" },
+      }));
+      expect(rewrite(frame("response.custom_tool_call_input.delta", {
+        output_index: 0, item_id: "ctc_cancelled", delta: WRAPPED_DECORATED_PATCH,
+      }))).toEqual([]);
+      expect(budget.snapshot().currentBytes).toBeGreaterThan(0);
+      if (outcome === "dispose") {
+        expect(rewrite.dispose?.()).toBeUndefined();
+      } else {
+        const terminal = frame(`response.${outcome}`, {
+          response: { id: "resp_cancelled", status: outcome, output: [] },
+        });
+        expect(rewrite(terminal)).toEqual([terminal]);
+      }
+      expect(budget.snapshot().currentBytes).toBe(0);
+      // Late provider bytes cannot reopen a cancelled collector or flush a successful item.
+      const lateDelta = frame("response.custom_tool_call_input.delta", {
+        output_index: 0, item_id: "ctc_cancelled", delta: "late",
+      });
+      expect(rewrite(lateDelta)).toEqual([lateDelta]);
+      rewrite.dispose?.();
+      expect(budget.snapshot().currentBytes).toBe(0);
+    } finally {
+      rewrite.dispose?.();
+    }
+  });
+
   test("restores streamed exec_command arguments through unified exec", () => {
     const rewrite = createRoutedCustomToolRestoreBlockRewrite(
       new Set(["exec"]),

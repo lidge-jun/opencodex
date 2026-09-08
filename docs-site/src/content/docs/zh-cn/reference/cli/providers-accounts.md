@@ -14,7 +14,7 @@ description: 提供方配置、凭据、配额，以及模型目录命令。
 
 | 子命令 | 支持的标志 | 操作 |
 | --- | --- | --- |
-| `list` | `--json` | 列出已配置的提供方以及剩余的注册表条目。 |
+| `list` | `--json`, `--jsonl` | 列出已配置的提供方以及剩余的注册表条目。 `--jsonl` 为每个已配置的提供方输出一行 JSON 对象。 |
 | `add <name>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | 添加一个注册表/自定义提供方。`--force` 会覆盖；`--sync` 会在有人类输出模式运行的代理上刷新配置。 |
 | `edit <name>` | 提供方字段标志，`--headers <json>`，`--json` | 在不替换密钥池的情况下，编辑经过校验的在线提供方字段。`--headers` 会合并自定义请求头；传入 `{}` 或 `-` 可清空。 |
 | `test <name>` | `--json` | 探测真实的上游模型端点。 |
@@ -28,6 +28,7 @@ description: 提供方配置、凭据、配额，以及模型目录命令。
 
 ```bash
 ocx provider list --json
+ocx provider list --jsonl
 ocx provider test ark
 ocx provider add anthropic --api-key sk-ant-... --set-default --sync
 ocx provider add local-dev --adapter openai-chat --base-url http://localhost:11434/v1
@@ -35,6 +36,8 @@ ocx provider show anthropic --json
 ocx models --provider anthropic --json
 ocx models live --provider ark --json
 ```
+
+`--jsonl` 仅输出已配置的提供方，每行一个 JSON 对象。每个对象的字段与 `--json` 输出中 `configured` 数组的元素相同，不包含 `registryCount` 汇总。脚本可以逐行处理这些对象。`--json` 与 `--jsonl` 不能同时使用。
 
 :::caution[自定义请求头不是凭据通道]
 `--headers` 用于非机密的请求元数据 —— 路由提示、租户或项目选择器、追踪 ID 等。它不是
@@ -169,12 +172,11 @@ token，也不是简单重读账号列表。`--json` 返回
 
 ### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
 
-只控制 `openai` 的 Codex 账号池。`on` 会设为 80%，`off` 会设为 0%，`status` 会读取
-当前值，而 `threshold <n>` 接受 0 到 100 之间的整数。其他提供方和无效值都会以 1
-退出。`--json` 返回：
+控制 `openai` Codex 账户池阈值，或保存通用 OAuth 账户池阈值。`on` 保存 80%，`off` 保存 0%，`threshold <n>` 接受 0–100。通用池的阈值目前不参与运行；保存阈值不会启用阈值切换、改变提供方启用设置或禁用 429 错误后的轮换。通用池的查询和修改结果使用服务器确认值。通用池的 `poolEnabled` 是已保存的提供方设置，`null` 表示未指定，并不代表继承后的实际状态。`inert: true` 表示阈值未应用；能力未知时也不会报告 `enabled: true`。API 密钥提供方、Anthropic 和无效值会被拒绝。
 
 ```text
-{ provider, autoSwitchThreshold: number, enabled: boolean }
+openai: { provider, autoSwitchThreshold: number, enabled: boolean }
+generic OAuth: { provider, autoSwitchThreshold: number | null, enabled: boolean, poolEnabled: boolean | null, inert: true | null }
 ```
 
 ### `ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`

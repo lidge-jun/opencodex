@@ -4,6 +4,26 @@ export interface ModelVisibilityTarget { id: string; native?: boolean; }
 
 export type ModelVisibilityScope = "models" | "provider";
 
+export interface ClientCatalogRefreshFailure {
+  client: string; profileId?: number; reason?: string; refusalReason?: string;
+  snapshotPath?: string; residual?: boolean;
+}
+
+/** Selection persistence and client-file refresh have separate success outcomes. */
+export function clientCatalogRefreshFailures(body: unknown): ClientCatalogRefreshFailure[] | undefined {
+  // Missing outcomes (old servers or preset-empty fallback) do not prove recovery.
+  if (!isRecord(body) || !Array.isArray(body.clientIntegrations)) return undefined;
+  return body.clientIntegrations.filter((row): row is Record<string, unknown> => isRecord(row) && row.ok === false)
+    .map(row => ({
+      client: typeof row.client === "string" ? row.client : "",
+      ...(Number.isSafeInteger(row.profileId) && (row.profileId as number) >= 0 ? { profileId: row.profileId as number } : {}),
+      ...(typeof row.reason === "string" ? { reason: row.reason } : {}),
+      ...(typeof row.refusalReason === "string" ? { refusalReason: row.refusalReason } : {}),
+      ...(typeof row.snapshotPath === "string" ? { snapshotPath: row.snapshotPath } : {}),
+      ...(row.residual === true ? { residual: true } : {}),
+    }));
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

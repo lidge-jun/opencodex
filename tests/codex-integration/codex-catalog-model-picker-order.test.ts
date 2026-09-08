@@ -3,6 +3,7 @@ import {
   buildCatalogEntriesFromObservedState,
   effectiveSubagentRoster,
   MAX_SPAWN_AGENT_MODEL_OVERRIDES,
+  orderForModelPicker,
 } from "../../src/codex/catalog/sync";
 import type { CatalogModel } from "../../src/types";
 
@@ -144,10 +145,9 @@ describe("modelPickerOrder (#1649)", () => {
     expect(candidateSlugs).not.toContain("jd-chat/kimi-k3");
   });
 
-  // Documents the scope boundary raised in review: modelPickerOrder targets routed
-  // <provider>/<model> rows only. A bare native slug listed here must NOT reorder its native
-  // passthrough row (native ordering goes through subagentModels).
-  test("a bare native slug in modelPickerOrder does not reorder its native row", () => {
+  // This is the pure builder, before the complete-order pass performed by the wrapper/merge.
+  // Its legacy routed pass leaves native ranks alone; full ordering is tested separately.
+  test("the builder leaves a bare native row unchanged before the complete-order pass", () => {
     const entries = buildCatalogEntriesFromObservedState({
       template: template() as never,
       gptSlugs: ["gpt-5.5", "gpt-5.4"],
@@ -202,5 +202,27 @@ describe("modelPickerOrder (#1649)", () => {
     // The candidate SET (membership) is identical regardless of display reordering.
     expect([...withOrder].sort()).toEqual([...baseline].sort());
     expect(withOrder.length).toBe(MAX_SPAWN_AGENT_MODEL_OVERRIDES);
+  });
+});
+
+
+describe("routed picker projection preserves existing priority bands", () => {
+  const rows = ["a", "b", "c", "d"].map(id => ({ provider: "p", id }));
+  test("featured and unlisted rows precede the listed band without mutating input", () => {
+    const before = structuredClone(rows);
+    expect(orderForModelPicker(rows, ["p/d", "p/b", "p/a"], ["p/a"]).map(row => row.id))
+      .toEqual(["a", "c", "d", "b"]);
+    expect(rows).toEqual(before);
+    expect(orderForModelPicker(rows, []).map(row => row.id)).toEqual(["a", "b", "c", "d"]);
+  });
+  test("complete order may move featured display rows but uses exact before equivalent ids", () => {
+    const slashRows = [{ provider: "p", id: "team/model" }, { provider: "p", id: "other" }];
+    expect(orderForModelPicker(slashRows,
+      ["gpt-5.5", "p/team-model", "p/other", "p/team/model"], ["p/other"]).map(row => row.id))
+      .toEqual(["team/model", "other"]);
+  });
+  test("native alias keeps its natural band for routed-only orders", () => {
+    const alias = { provider: "combo", id: "native", alias: "native/model", nativeAlias: true };
+    expect(orderForModelPicker([...rows, alias], ["native/model", "p/d", "p/c", "p/b", "p/a"])[0]).toBe(alias);
   });
 });

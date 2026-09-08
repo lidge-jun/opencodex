@@ -1,6 +1,7 @@
 import type { TKey } from "../../i18n/shared";
 import { IntegrationApiError, type IntegrationRefusalEnvelope } from "./integration-api";
 import { NativeApiError, type NativeRefusalEnvelope } from "./native-api";
+import type { AsideProfileOutcome } from "./aside-profile-contract";
 
 /**
  * Envelopes the server sends that are NOT writer refusals.
@@ -13,6 +14,8 @@ const CODE_KEYS: Record<string, TKey> = {
   integration_mutation_busy: "integrations.error.busy",
   integration_journal_newest_protected: "integrations.rollback.deleteNewest",
   integration_operation_not_found: "integrations.rollback.deleteGone",
+  aside_profile_partial: "integrations.aside.partial",
+  invalid_aside_profile_response: "integrations.aside.loadError",
 };
 
 /**
@@ -88,6 +91,13 @@ export function describeRefusal(
 
   const refusal = refusalOf(error);
   if (!refusal) {
+    if (error instanceof IntegrationApiError && "results" in error.body && error.body.results?.length) {
+      const failures = error.body.results.filter(row => !row.ok).map(row => {
+        const detail = describeAsideProfileOutcome(t, row);
+        return `${t("integrations.aside.profile", { id: String(row.profileId) })}: ${detail}`;
+      });
+      return [t("integrations.aside.partial"), ...failures].join("\n");
+    }
     const code = error instanceof IntegrationApiError ? String(error.body.code ?? "") : "";
     const known = CODE_KEYS[code];
     if (known) return t(known);
@@ -95,7 +105,18 @@ export function describeRefusal(
       ? error.message
       : fallback ?? t("integrations.error.generic");
   }
-  const message = LOCALIZED_REASONS.has(refusal.reason)
+  return describeIntegrationRefusalParts(t, refusal);
+}
+
+export function describeAsideProfileOutcome(t: Translate, row: AsideProfileOutcome): string {
+  return describeIntegrationRefusalParts(t, { clientId: "aside", message: row.message ?? row.reason,
+    reason: row.refusalReason ?? row.reason, snapshotPath: row.snapshotPath, residual: row.residual });
+}
+
+export function describeIntegrationRefusalParts(t: Translate, refusal: {
+  reason?: string; message?: string; clientId: string; snapshotPath?: string; residual?: boolean;
+}): string {
+  const message = LOCALIZED_REASONS.has(refusal.reason ?? "")
     ? t(reasonKey(refusal.reason), { client: refusal.clientId })
     : refusal.message || t(reasonKey(refusal.reason));
   if (refusal.snapshotPath) {
@@ -106,6 +127,7 @@ export function describeRefusal(
       { message, path: refusal.snapshotPath },
     );
   }
+  if (refusal.residual) return t("integrations.error.residualNoSnapshot", { message });
   return refusal.reason === "conflict" || refusal.reason === "unsafe"
     ? `${t(reasonKey(refusal.reason))} ${message}`
     : message;

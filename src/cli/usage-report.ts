@@ -24,6 +24,8 @@ interface UsageReportInput {
   range?: string;
   surface?: string;
   since?: number | null;
+  until?: number;
+  customWindow?: boolean;
   summary?: {
     requests?: number;
     totalTokens?: number;
@@ -90,7 +92,10 @@ function table(header: string[], rows: string[][]): string[] {
 }
 
 function describeScope(data: UsageReportInput): string {
-  const parts = [`Usage — ${data.range ?? "?"}`];
+  const interval = data.customWindow && typeof data.since === "number" && typeof data.until === "number"
+    ? `custom ${new Date(data.since).toISOString()} to ${new Date(data.until).toISOString()} (inclusive)`
+    : data.range ?? "?";
+  const parts = [`Usage — ${interval}`];
   if (data.surface && data.surface !== "all") parts.push(`surface=${data.surface}`);
   if (data.filter?.provider) parts.push(`provider=${data.filter.provider}`);
   if (data.filter?.model) parts.push(`model=${data.filter.model}`);

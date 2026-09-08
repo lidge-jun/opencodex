@@ -10,8 +10,8 @@ export class CodexWsSession {
   private readonly completedIds = new Set<string>();
 
   constructor(url: string, headers: Record<string, string>, readonly retainable = false,
-    private readonly changed: () => void = () => {}) {
-    this.socket = new WebSocket(url, { headers } as unknown as string[]);
+    private readonly changed: () => void = () => {}, proxy?: string) {
+    this.socket = new WebSocket(url, { headers, ...(proxy ? { proxy } : {}) } as unknown as string[]);
     this.socket.addEventListener("open", this.onOpen);
     this.socket.addEventListener("message", this.onIdleMessage);
     this.socket.addEventListener("close", this.onClose);

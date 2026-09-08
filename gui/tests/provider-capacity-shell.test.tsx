@@ -164,6 +164,8 @@ beforeEach(() => {
       const url = String(input);
       if (url.includes("/api/provider-quotas") && rejectQuotaFetch) throw new Error("quota unavailable");
       if (url.includes("/api/provider-quotas") && quotaFetchOverride) return quotaFetchOverride();
+      if (url.endsWith("/api/models")) return Response.json([]);
+      if (url.endsWith("/api/selected-models")) return Response.json({ selected: {}, available: {}, liveModelCounts: {} });
       const body = url.includes("/api/provider-quotas") ? quotaPayload : {};
       return quotaResponse(body);
     },
@@ -297,7 +299,6 @@ test("a cancelled superseded quota rejection cannot rewrite state or session cac
 });
 
 test("all-stale response renders coverage only without a numeric fallback", async () => {
-  const old = Date.now() - 31 * 60_000;
   quotaPayload = {
     reports: [{
       provider: "openai",

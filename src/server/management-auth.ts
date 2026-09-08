@@ -251,10 +251,26 @@ export function issueGuiSession(
 
 export interface ManagementSessionControl {
   revokeCurrent(req: Request): boolean;
+  /** Revalidate a long-lived request against current authority, without cached admission or renewal. */
+  isCurrent(req: Request, config: OcxConfig): boolean;
 }
 
 export function createManagementSessionControl(state: ManagementAuthState): ManagementSessionControl {
   return {
+    isCurrent(req: Request, config: OcxConfig): boolean {
+      if (!state.available) return false;
+      const credential = requestManagementCredential(req);
+      if (!credential) return false;
+      if (equalSecret(credential, state.token)) return true;
+      const session = state.sessions.get(credential);
+      if (!session) return false;
+      // Reuse the full origin/expiry/CSRF predicate against the current record, but
+      // isolate its sliding-expiry mutation: SSE heartbeats are not browser activity.
+      return authorizeGuiSessionRequest(req, config, {
+        sessions: new Map([[credential, { ...session }]]),
+        pairingGrants: state.pairingGrants,
+      }).ok;
+    },
     revokeCurrent(req: Request): boolean {
       if (!state.available) return false;
       const credential = requestManagementCredential(req);

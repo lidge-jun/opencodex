@@ -22,7 +22,7 @@ Responses 表示是橋接的中心。原生相容的路由可跳過部分轉譯�
 | OpenAI Chat Completions | `POST /v1/chat/completions` | `chat.completion` JSON | `chat.completion.chunk` SSE，以 `[DONE]` 結束 |
 | Anthropic Messages | `POST /v1/messages` | Anthropic `message` JSON | Anthropic Messages SSE |
 | Anthropic token 計數 | `POST /v1/messages/count_tokens` | `{ "input_tokens": number }` | 不適用 |
-| 模型探索 | `GET /v1/models` | 三種目錄契約之一 | 不適用 |
+| 模型探索 | `GET /v1/models` | 目錄或明確指定的 Desktop 快照 | 不適用 |
 | 語音與 Realtime | `POST /v1/live`, `POST /v1/realtime/calls` | 中繼的 call-creation 回應 | 一個獨立的 sideband WebSocket 雙向中繼 frame |
 | Responses compaction | `POST /v1/responses/compact` | 取代歷史 JSON | 不適用 |
 
@@ -150,15 +150,40 @@ Responses 表示是橋接的中心。原生相容的路由可跳過部分轉譯�
 { "input_tokens": 123 }
 ```
 
+無法解析的日期型 Desktop ID 也可能是探索結果中缺少的真實原生模型 ID。現有資訊不足以
+解析該 ID 時，Messages 和 count-tokens 回傳 HTTP 503 及固定錯誤 `desktop_model_mapping_unavailable`；這不代表
+模型無效。未知的舊版雜湊別名仍回傳 HTTP 400。兩種情況都不會移除日期或回退到其他路由。
+已知 ID、已註冊映射、精確 `modelMap` 匹配及已識別的真實原生 ID 維持原有處理方式。
+請重新整理模型探索或重新套用已連接 hub 的設定後再試；僅重試本身不能保證解決。
+
 ## `GET /v1/models`
 
-相同路由服務三個期待不相容目錄封裝的客戶端。除非也存在 `client_version`，否則 Anthropic flavor 勝出。
+未指定 `format=desktop-config` 時，使用以下一般目錄契約：
 
 | 契約 | 觸發 | 頂層結構 | 模型 id 行為 |
 | --- | --- | --- | --- |
 | Anthropic 模型清單 | `anthropic-version` 標頭或 `?flavor=anthropic`，無 `client_version` | `{ "data": [...] }` 含 Anthropic model-info 項目 | Claude Code 收到可讀 id；Desktop 可收到其設定檔專屬的別名家族 |
 | Codex 目錄 | `client_version` query 參數 | `{ "models": [...] }` | 原生與路由項目帶有更豐富的 Codex 目錄欄位、可見性、effort、WebSocket 與多代理中繼資料 |
 | 普通 OpenAI 清單 | 無觸發 | `{ "object": "list", "data": [...] }` | 可見的原生 id 為裸 id；路由 id 為別名或 `provider/model` |
+
+### Desktop 設定快照
+
+`GET /v1/models?ids=desktop&format=desktop-config` 明確選擇 Desktop 快照，不依賴
+user-agent。回應為 `{ "version": 1, "models": [...] }`，帶有 `Cache-Control: no-store`。
+客戶端送出 `Accept: application/json`、`anthropic-version: 2023-06-01` 及現有資料存取憑證；
+不需要管理員權杖，也不上傳設定檔。項目是 hub 發出的 Desktop 設定模型，不是 Codex 目錄列。
+
+此格式與 `ids=cli` 或任何 `client_version` 一起使用時回傳 HTTP 400。未指定格式時，上述一般
+契約維持不變。Claude 關閉時回傳 `{ "version": 1, "models": [] }`；已連接的 Desktop apply
+會視為無法使用，不寫入替代設定。回傳一般目錄而非版本 1 的舊 hub 不受支援，客戶端不會改用
+本機產生的 ID。
+
+快照仍是唯讀模型清單，不是金鑰輪換或設定檔上傳 API。Desktop 金鑰移轉、復原與中斷由既有
+客戶端連線流程處理。輪換保留模型項目和選擇；CLI 的 `rotation` 區分 `committed` 與
+`rolled_back`。中斷會還原管理設定，或對已確認的舊設定檔回報標準回退，同時保留使用者欄位和
+後來有效的選擇。衝突或未完成的復原不會標為完成。需要重新啟動 Desktop 才會讀取磁碟變更；
+中斷不會自動撤銷 hub 金鑰。參見 [Desktop 指南](/zh-tw/guides/claude-code/)。
+thinking 重播與提示快取仍由獨立的 [#3719](https://github.com/lidge-jun/opencodex/issues/3719) 跟進。
 
 ## `POST /v1/live` 與 Realtime sideband
 

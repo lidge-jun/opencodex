@@ -15,7 +15,7 @@
 | `src/config/process-state.ts` | Owns `ocx.pid`, `runtime-port.json`, cheap liveness, full command-line identity verification, and snapshot-guarded cleanup. |
 | `src/server/ports.ts` | Owns bind availability and ephemeral-port selection. Temporary probes dispose accepted peers and wait for listener close before reporting success. |
 | `src/cli/status.ts` / `src/cli/status-probes.ts` | Status snapshot assembly and the shared read-only health/stale-process probes used by status and doctor. Probe evidence keeps recorded-port choice, before/after snapshots and per-call timer cleanup together. |
-| `src/router.ts` | Provider/model selection before adapter dispatch. |
+| `src/router.ts` | Provider/model selection before adapter dispatch. Policy execution and ordinary management dry-run share effective-provider capability evidence; unresolved, missing, and disabled providers are excluded before scoring. |
 | `src/types.ts` | Shared config, parsed request, adapter, and event types. |
 | `src/reasoning-effort.ts` | Codex reasoning-level definitions (`low`/`medium`/`high`/`xhigh`), per-model effort mapping, and catalog effort sanitization. |
 | `src/codex/shim.ts` | Codex autostart shim: replaces the `codex` binary with a wrapper that auto-starts the proxy on demand. It skips startup for management subcommands even when value-taking global flags precede the subcommand, and transactionally restores complete, stable external launcher replacements without a watcher or PATH rediscovery. |
@@ -165,6 +165,22 @@ destination, and key boundary instead of being silently canonicalized onto the n
 OAuth presets resolve discovery against the same canonical registry transport as normal routing
 before any adapter-specific transport override, so a stale configured `baseUrl` cannot receive an
 OAuth bearer token.
+
+The BigModel Coding Plan Responses preset uses the separately documented
+`https://open.bigmodel.cn/api/v1` transport and a static catalog. Its provider row
+disables live discovery: a local Codex `models.json` example does not establish an
+authenticated HTTP models endpoint. Its static context and reasoning metadata are
+kept in the canonical registry, including an explicit empty selectable effort
+ladder for `glm-5-turbo`.
+
+Raycast is a managed client export, not an upstream model provider. Its YAML
+contribution owns only the unique `providers/[id=opencodex]` entry, with the
+existing manifest and fingerprint checks protecting user-owned provider values.
+Ambiguous selector matches and incompatible containers cannot be adopted or
+mutated. Catalog refresh uses the existing owned-integration activation check;
+an unowned client remains disconnected. OpenCodex omits Raycast API-key fields
+and exports only to eligible local targets. Pro detection is an advisory hint,
+not an authentication or entitlement decision.
 
 ## Remote Hub hardening ownership
 

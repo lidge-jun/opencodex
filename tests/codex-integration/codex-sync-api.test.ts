@@ -19,7 +19,13 @@ const TEST_HOME = join(TEST_DIR, "home");
 const repoRoot = resolveRepoRoot();
 const COMPETING_OFF_REAP_MS = 5_000;
 const COMPETING_OFF_BOOT_MS = SPAWN_BUDGET_MS - COMPETING_OFF_REAP_MS;
-const COMPETING_OFF_CHILD_MS = 2 * COMPETING_OFF_BOOT_MS + COMPETING_OFF_REAP_MS;
+// Windows preparation performs real identity/admission preflight before discovery.
+// Reserve that work separately: CI observed 52.7s before the flip could even start.
+// The second process still keeps its original boot and reap limits.
+const COMPETING_OFF_PREPARATION_MS = process.platform === "win32"
+  ? 2 * COMPETING_OFF_BOOT_MS
+  : COMPETING_OFF_BOOT_MS;
+const COMPETING_OFF_CHILD_MS = COMPETING_OFF_PREPARATION_MS + COMPETING_OFF_BOOT_MS + COMPETING_OFF_REAP_MS;
 const COMPETING_OFF_TEST_MS = COMPETING_OFF_CHILD_MS + COMPETING_OFF_REAP_MS;
 let prevCodexHome: string | undefined;
 let prevOpenCodexHome: string | undefined;

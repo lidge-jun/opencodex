@@ -109,6 +109,111 @@ afterEach(() => {
 });
 
 describe("GET /api/usage", () => {
+  test("custom bounds override presets while preserving surface, filters and accounts", async () => {
+    const since = new Date(2026, 1, 10, 12).getTime();
+    const until = since + 3_600_000;
+    const rows = [
+      { timestamp: since - 1, apiKeyId: "Key-A" },
+      { timestamp: since, apiKeyId: "Key-A" },
+      { timestamp: until, apiKeyId: "key-a" },
+      { timestamp: since + 1, apiKeyId: "Key-A", surface: "claude" },
+      { timestamp: until + 1, apiKeyId: "Key-A" },
+    ].map((row, index) => ({
+      requestId: `custom-${index}`, provider: "openai", model: "gpt-5.5", accountLogLabel: "main",
+      status: 200, durationMs: 1, usageStatus: "reported", usage: { inputTokens: 10, outputTokens: 5 },
+      totalTokens: 15, ...row,
+    }));
+    writeFileSync(join(testDir, "usage.jsonl"), rows.map(row => JSON.stringify(row)).join("\n") + "\n");
+    const server = startServer(0);
+    try {
+      const preset = await (await fetch(new URL("/api/usage?range=all", server.url))).json();
+      const params = new URLSearchParams({ range: "today", since: new Date(since).toISOString(), until: String(until), surface: "codex" });
+      const before = Date.now();
+      const response = await fetch(new URL(`/api/usage?${params}`, server.url));
+      expect(response.status).toBe(200);
+      const custom = await response.json();
+      expect(custom).toMatchObject({ range: "today", surface: "codex", customWindow: true, since, until });
+      expect(custom.generatedAt).toBeGreaterThanOrEqual(before);
+      expect(custom.generatedAt).toBeLessThanOrEqual(Date.now());
+      expect(custom.summary.requests).toBe(2);
+      expect(custom.days).toHaveLength(1);
+      expect(custom.days[0].requests).toBe(2);
+      expect(custom.accounts[0]).toMatchObject({ accountLogLabel: "main", requests: 2 });
+      expect(custom.filter).toBeUndefined();
+      expect(custom.snapshotWindowStart).toBe(since - 1);
+      expect(custom.snapshotWindowEnd).toBe(until + 1);
+      params.set("apiKeyId", "Key-A");
+      const byKey = await (await fetch(new URL(`/api/usage?${params}`, server.url))).json();
+      expect(byKey.summary.requests).toBe(1);
+      expect(byKey.accounts[0].requests).toBe(1);
+      expect(byKey.filter).toMatchObject({ apiKeyId: "Key-A", matched: true });
+      params.set("provider", "OpenAI");
+      params.set("model", "GPT-5.5");
+      const combined = await (await fetch(new URL(`/api/usage?${params}`, server.url))).json();
+      expect(combined.filter).toMatchObject({ provider: "openai", model: "gpt-5.5", apiKeyId: "Key-A", matched: true });
+      expect(combined.summary.requests).toBe(1);
+      expect(combined.accounts).toEqual([]);
+      params.set("since", String(until));
+      const noMatch = await (await fetch(new URL(`/api/usage?${params}`, server.url))).json();
+      expect(noMatch.summary.requests).toBe(0);
+      expect(noMatch.filter.matched).toBe(false);
+      const after = await (await fetch(new URL("/api/usage?range=all", server.url))).json();
+      expect(after.summary).toEqual(preset.summary);
+      expect(after.summary.requests).toBe(5);
+      expect(after.customWindow).toBeUndefined();
+      expect(after.until).toBeUndefined();
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("rejects invalid custom bounds with 400 before scanning", async () => {
+    const scanSpy = spyOn(usageLedgerScannerModule, "scanUsageLedgerCooperatively");
+    const server = startServer(0);
+    try {
+      for (const query of [
+        "since=0", "until=0", "since=&until=1", "since=2&until=1", "since=-1&until=1",
+        "since=0&until=8640000000000001", "since=0&until=9007199254740992",
+        "since=0&until=2026-02-30T12:00:00Z", "since=0&until=2026-09-01T12:00:00",
+        "since=0&until=2026-09-01T12:00:00.0001Z",
+      ]) {
+        const response = await fetch(new URL(`/api/usage?${query}`, server.url));
+        expect(response.status).toBe(400);
+        expect((await response.json()).error).toBeTruthy();
+      }
+      expect(scanSpy).not.toHaveBeenCalled();
+    } finally {
+      scanSpy.mockRestore();
+      await server.stop(true);
+    }
+  });
+
+  test("empty custom history and read failures retain the requested interval", async () => {
+    const server = startServer(0);
+    const url = new URL("/api/usage?range=today&since=0&until=0", server.url);
+    try {
+      const empty = await (await fetch(url)).json();
+      expect(empty).toMatchObject({ customWindow: true, since: 0, until: 0, summary: { requests: 0 } });
+      expect(empty.days).toHaveLength(1);
+      expect(empty.error).toBeUndefined();
+      const scanSpy = spyOn(usageLedgerScannerModule, "scanUsageLedgerCooperatively")
+        .mockRejectedValue(new Error("fixture scan failure"));
+      try {
+        // A distinct key forces a fresh custom scan.
+        url.searchParams.set("until", "1");
+        const response = await fetch(url);
+        expect(response.status).toBe(200); // existing Usage UI reads the error field
+        expect(await response.json()).toMatchObject({
+          range: "today", customWindow: true, since: 0, until: 1, error: "read_failed",
+        });
+      } finally {
+        scanSpy.mockRestore();
+      }
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("concurrent cold requests share one base-ledger scan", async () => {
     writeFixture(Date.now());
     const originalScan = usageLedgerScannerModule.scanUsageLedgerCooperatively;

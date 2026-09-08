@@ -55,9 +55,13 @@ OpenAI 的 bare `gpt-*` 使用單一 `openai` provider。`codexAccountMode` 在 
   目錄和 `/v1/models` 輸出的模型範圍。
 - `provider.disabled: true` 會把該供應商排除在目錄發現之外。顯式 `provider/model` 請求會失敗，
   `defaultModel` / `models[]` 掃描也會跳過它。
-- `providerContextCaps` 為各供應商設定 Codex 可見的上下文上限。`contextCapValue` 是儀表板共用的值，
-  預設為 350,000；但只有 `providerContextCaps` 中列出了供應商時才會生效。上限只能降低已知上下文，
-  不會把它調高，也不會改變上游模型的實際限制。
+- `providerContextCaps` 為各供應商設定 Codex 可見的上下文上限。`contextCapValue` 是儀表板的預設值，
+  預設為 350,000；僅設定此值不會套用上限，供應商必須列在 `providerContextCaps` 中才會生效。
+  勾選「套用至所有路由供應商」後，修改儀表板值只會更新已啟用的上限；未勾選時，各供應商保留自己的上限。
+  一般已知視窗只能縮小；支援長視窗的原生模型可以擴展到該模型支援的上限，但不會改變上游模型的實際限制。
+  停用上限後，選擇值儲存在 `providerContextCapValues` 中，重新載入後仍保留；再次啟用時恢復該選擇值。
+  停用期間不會將儲存值套用為限制。不帶 `value` 的 `{ "setAll": true }` 會以目前全域值啟用所有
+  已設定供應商的上限，並取代其儲存的選擇值。
 
 ```json
 {

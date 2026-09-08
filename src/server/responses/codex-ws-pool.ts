@@ -25,7 +25,7 @@ function digest(input: unknown): string {
 }
 
 /** Identity comes from the selected outgoing request, never a model label or caller hint. */
-export function codexWsReuseIdentity(url: string, headers: Record<string, string>, frameText: string): CodexWsReuseIdentity | null {
+export function codexWsReuseIdentity(url: string, headers: Record<string, string>, frameText: string, proxy?: string): CodexWsReuseIdentity | null {
   if (url !== CODEX_RESPONSES_HTTP_URL) return null;
   let body: unknown;
   try { body = JSON.parse(frameText); } catch { return null; }
@@ -52,7 +52,7 @@ export function codexWsReuseIdentity(url: string, headers: Record<string, string
   const scope = digest([url, account, thread, turn]);
   const lite = metadata.ws_request_header_x_openai_internal_codex_responses_lite;
   if (lite !== undefined && lite !== "true" && lite !== "false") return null;
-  return { scope, key: digest([scope, authorization, body.model, body.service_tier ?? null, lite ?? null, immutable]) };
+  return { scope, key: digest([scope, authorization, body.model, body.service_tier ?? null, lite ?? null, immutable, proxy ?? null]) };
 }
 
 interface Entry { identity: CodexWsReuseIdentity; session: CodexWsSession; createdAt: number; idleAt: number; retired: boolean }
@@ -75,7 +75,7 @@ export class CodexWsPool {
     this.maxAgeMs = options.maxAgeMs ?? CODEX_WS_POOL_MAX_AGE_MS;
   }
 
-  acquire(identity: CodexWsReuseIdentity, url: string, headers: Record<string, string>): CodexWsSession | null {
+  acquire(identity: CodexWsReuseIdentity, url: string, headers: Record<string, string>, proxy?: string): CodexWsSession | null {
     this.sweep();
     for (const entry of this.entries.values()) {
       if (entry.identity.scope !== identity.scope || entry.identity.key === identity.key) continue;
@@ -94,7 +94,7 @@ export class CodexWsPool {
       this.remove(oldest);
     }
     const createdAt = this.now();
-    const session = new CodexWsSession(url, headers, true, () => this.changed(entry));
+    const session = new CodexWsSession(url, headers, true, () => this.changed(entry), proxy);
     const entry: Entry = { identity, session, createdAt, idleAt: createdAt, retired: false };
     session.reserve();
     this.entries.set(identity.key, entry);

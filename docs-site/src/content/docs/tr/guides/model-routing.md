@@ -102,15 +102,16 @@ Yönlendirme ve katalog görünürlüğü ayrı kontrollerdir:
 - `provider.disabled: true`, bu sağlayıcıyı katalog keşfinden kaldırır. Açık
   `sağlayıcı/model` istekleri başarısız olur ve `defaultModel` / `models[]`
   taramaları bunu atlar.
-- `providerContextCaps`, sağlayıcı başına Codex tarafından görülebilen bağlam
-  sınırlarını uygular. `contextCapValue` kontrol paneli varsayılanıdır
-  (varsayılan olarak 350.000), ancak bir sağlayıcı `providerContextCaps` içinde
-  yer alana kadar tek başına hiçbir şey yapmaz. Kontrol paneli değerini
-  değiştirmek, yalnızca "tüm yönlendirilen sağlayıcılara uygula" açık olduğunda
-  etkinleştirilmiş her sağlayıcıyı yeniden yönlendirir; aksi takdirde her
-  sağlayıcı kendi sınırını korur. Sınırlar yalnızca bilinen bir bağlam
-  penceresini düşürür; asla bir pencereyi yükseltmez veya yukarı akış modelinin
-  gerçek sınırını değiştirmez.
+- `providerContextCaps`, sağlayıcı başına Codex tarafından görülebilen bağlam sınırlarını belirler.
+  `contextCapValue`, kontrol panelinin varsayılan değeridir (350.000); sağlayıcı `providerContextCaps`
+  içinde bulunmadıkça tek başına sınır uygulamaz. Kontrol paneli değerini değiştirmek, yalnızca
+  "tüm yönlendirilen sağlayıcılara uygula" açıkken etkin sınırları günceller; aksi halde her sağlayıcı
+  kendi sınırını korur. Bilinen normal pencereler yalnızca küçültülebilir; uzun pencereyi destekleyen
+  yerel modeller kendi desteklenen üst sınırlarına kadar genişletilebilir. Yukarı akış modelinin
+  gerçek sınırı değişmez. Sınır kapatıldığında seçim `providerContextCapValues` içinde saklanır
+  ve yeniden yüklemeden sonra da korunur. Yeniden açıldığında bu seçim geri yüklenir; kapalıyken
+  saklanan değer bir sınır uygulamaz. `value` olmadan `{ "setAll": true }`, yapılandırılmış tüm
+  sağlayıcıların sınırlarını geçerli genel değerle etkinleştirir ve saklanan seçimlerini değiştirir.
 
 ```json
 {

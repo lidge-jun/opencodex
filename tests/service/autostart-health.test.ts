@@ -3,7 +3,7 @@ import { deriveStartupHealth, formatStartupRoutingDetail, startupHealthSummary }
 import { unusedProxyWarningLines } from "../../src/cli/status";
 import { classifyCodexRouting, hasInjectedCodexRouting } from "../../src/codex/inject";
 import { handleManagementAPI } from "../../src/server/management-api";
-import { getCachedStartupHealth, invalidateStartupHealthCache, markStartupHealthDiagnosticStale } from "../../src/server/startup-health-cache";
+import { getCachedStartupHealth, getStartupHealthSnapshot, invalidateStartupHealthCache, markStartupHealthDiagnosticStale } from "../../src/server/startup-health-cache";
 import type { OcxConfig } from "../../src/types";
 
 const base = {
@@ -275,6 +275,89 @@ describe("Codex startup health", () => {
 
     releaseProbe(deriveStartupHealth({ ...base, routingKind: "native" }));
     await pendingProbe;
+    invalidateStartupHealthCache();
+  });
+
+  test("settings snapshot starts a probe without waiting for it", async () => {
+    invalidateStartupHealthCache();
+    let releaseProbe!: (value: ReturnType<typeof deriveStartupHealth>) => void;
+    const pendingProbe = new Promise<ReturnType<typeof deriveStartupHealth>>(resolve => {
+      releaseProbe = resolve;
+    });
+
+    const health = getStartupHealthSnapshot(
+      { codexAutoStart: true },
+      { probe: async () => pendingProbe },
+    );
+
+    expect(health.diagnosticStale).toBe(true);
+    releaseProbe(deriveStartupHealth({ ...base, routingKind: "native" }));
+    await pendingProbe;
+    invalidateStartupHealthCache();
+  });
+
+  test("snapshot preserves fresh protection and returns expired protection before a controlled probe settles", async () => {
+    invalidateStartupHealthCache();
+    let now = 1_000;
+    const config = { codexAutoStart: true };
+    const protectedHealth = deriveStartupHealth({ ...base, serviceInstalled: true, serviceViable: true, serviceEnabled: true, serviceRunning: true });
+    await getCachedStartupHealth(config, { now: () => now, probe: async () => protectedHealth, waitForProbe: probe => probe });
+    let calls = 0;
+    let release!: (value: typeof protectedHealth) => void;
+    const pending = new Promise<typeof protectedHealth>(resolve => { release = resolve; });
+    const deps = { now: () => now, probe: () => { calls += 1; return pending; }, waitForProbe: (probe: Promise<typeof protectedHealth>) => probe };
+    expect(getStartupHealthSnapshot(config, deps)).toBe(protectedHealth);
+    expect(calls).toBe(0);
+    now += 30_000;
+    const snapshot = getStartupHealthSnapshot(config, deps);
+    expect(snapshot).toMatchObject({ diagnosticStale: true, status: "at-risk", rebootSafe: false });
+    // Snapshot has returned while the manually controlled probe remains unresolved.
+    expect(getStartupHealthSnapshot(config, deps)).toEqual(snapshot);
+    const fresh = getCachedStartupHealth(config, deps);
+    const replacement = deriveStartupHealth({ ...base, routingKind: "custom-remote" });
+    release(replacement);
+    expect(await fresh).toBe(replacement);
+    expect(calls).toBe(1);
+    invalidateStartupHealthCache();
+  });
+
+  test.each(["reject", "throw"])("detached snapshot probe handles %s and permits a later retry", async (failure) => {
+    invalidateStartupHealthCache();
+    const config = { codexAutoStart: true };
+    const failed = getStartupHealthSnapshot(config, { probe: () => {
+      if (failure === "throw") throw new Error("controlled probe failure");
+      return Promise.reject(new Error("controlled probe failure"));
+    } });
+    expect(failed.diagnosticStale).toBe(true);
+    const settled = await getCachedStartupHealth(config, { waitForProbe: probe => probe });
+    expect(settled.diagnosticStale).toBe(true);
+    const replacement = deriveStartupHealth({ ...base, routingKind: "native" });
+    expect(await getCachedStartupHealth(config, { probe: async () => replacement, waitForProbe: probe => probe })).toBe(replacement);
+    invalidateStartupHealthCache();
+  });
+
+  test("invalidated probe cannot replace or clear a newer flight", async () => {
+    invalidateStartupHealthCache();
+    const config = { codexAutoStart: true };
+    type Health = ReturnType<typeof deriveStartupHealth>;
+    let oldRelease!: (value: Health) => void;
+    let newRelease!: (value: Health) => void;
+    const oldProbe = new Promise<Health>(resolve => { oldRelease = resolve; });
+    const newProbe = new Promise<Health>(resolve => { newRelease = resolve; });
+    getStartupHealthSnapshot(config, { probe: () => oldProbe });
+    const oldWait = getCachedStartupHealth(config, { waitForProbe: probe => probe });
+    invalidateStartupHealthCache();
+    getStartupHealthSnapshot(config, { probe: () => newProbe });
+    const newer = getCachedStartupHealth(config, { waitForProbe: probe => probe });
+    oldRelease(deriveStartupHealth(base));
+    await oldWait;
+    let spuriousCalls = 0;
+    getStartupHealthSnapshot(config, { probe: async () => { spuriousCalls += 1; return deriveStartupHealth(base); } });
+    const expected = deriveStartupHealth({ ...base, routingKind: "native" });
+    newRelease(expected);
+    expect(await newer).toBe(expected);
+    expect(getStartupHealthSnapshot(config)).toBe(expected);
+    expect(spuriousCalls).toBe(0);
     invalidateStartupHealthCache();
   });
 });

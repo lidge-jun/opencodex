@@ -46,16 +46,21 @@ describe("rich Logs filtering", () => {
     expect(filterLogs(logs, DEFAULT_LOG_FILTER_STATE, NOW)).toEqual(logs);
   });
 
-  test("matches requested, resolved, and attempted models by substring", () => {
+  test("matches complete requested, resolved, and attempted model identities", () => {
     const attemptOnly = [{
       id: "attempt-only",
       model: "requested-model",
       attempts: [{ model: "fallback-only" }],
     }];
-    expect(filterLogs(logs, { ...DEFAULT_LOG_FILTER_STATE, model: "reliable" }, NOW).map(row => row.id)).toEqual(["claude"]);
-    expect(filterLogs(logs, { ...DEFAULT_LOG_FILTER_STATE, model: "SONNET-4.6" }, NOW).map(row => row.id)).toEqual(["claude"]);
-    expect(filterLogs(logs, { ...DEFAULT_LOG_FILTER_STATE, model: "terra" }, NOW).map(row => row.id)).toEqual(["codex"]);
+    expect(filterLogs(logs, { ...DEFAULT_LOG_FILTER_STATE, model: "claude-sonnet-4.6" }, NOW).map(row => row.id)).toEqual(["claude"]);
+    expect(filterLogs(logs, { ...DEFAULT_LOG_FILTER_STATE, model: "GPT-5.6-TERRA" }, NOW).map(row => row.id)).toEqual(["codex"]);
+    expect(filterLogs(logs, { ...DEFAULT_LOG_FILTER_STATE, model: "reliable" }, NOW).map(row => row.id)).toEqual([]);
     expect(filterLogs(attemptOnly, { ...DEFAULT_LOG_FILTER_STATE, model: "fallback-only" }, NOW).map(row => row.id)).toEqual(["attempt-only"]);
+  });
+
+  test("does not treat a stale or partial model selection as a substring query", () => {
+    expect(filterLogs(logs, { ...DEFAULT_LOG_FILTER_STATE, model: "terra" }, NOW)).toEqual([]);
+    expect(filterLogs(logs, { ...DEFAULT_LOG_FILTER_STATE, model: "gpt-5.6-terra-old" }, NOW)).toEqual([]);
   });
 
   test("matches the selected provider on the row or any attempt", () => {
@@ -138,4 +143,39 @@ describe("rich Logs filtering", () => {
     expect(hasActiveLogFilters({ ...DEFAULT_LOG_FILTER_STATE, minTokPerSec: 1 })).toBe(true);
     expect(hasActiveLogFilters({ ...DEFAULT_LOG_FILTER_STATE, conversationId: "  conv  " })).toBe(true);
   });
+});
+
+test.each([
+  ["15m", 15 * 60_000], ["1h", 60 * 60_000], ["24h", 24 * 60 * 60_000],
+] as const)("relative window %s includes its lower boundary and expires it as time advances", (timeWindow, duration) => {
+  const rows = [
+    { id: "before", timestamp: NOW - duration - 1 },
+    { id: "boundary", timestamp: NOW - duration },
+    { id: "inside", timestamp: NOW - duration + 1 },
+    { id: "invalid", timestamp: Number.NaN },
+  ];
+  const filters = { ...DEFAULT_LOG_FILTER_STATE, timeWindow };
+  expect(filterLogs(rows, filters, NOW).map(row => row.id)).toEqual(["boundary", "inside"]);
+  expect(filterLogs(rows, filters, NOW + 1).map(row => row.id)).toEqual(["inside"]);
+});
+
+test("speed buckets separate values immediately below and at both boundaries", () => {
+  const rows = [14.99, 15, 49.99, 50].map(value => ({
+    id: String(value), displayMetrics: { tokPerSecond: { kind: "value" as const, value } },
+  }));
+  expect(filterLogs(rows, { ...DEFAULT_LOG_FILTER_STATE, maxTokPerSec: 15 }).map(row => row.id)).toEqual(["14.99"]);
+  expect(filterLogs(rows, { ...DEFAULT_LOG_FILTER_STATE, minTokPerSec: 15, maxTokPerSec: 50 }).map(row => row.id))
+    .toEqual(["15", "49.99"]);
+  expect(filterLogs(rows, { ...DEFAULT_LOG_FILTER_STATE, minTokPerSec: 50 }).map(row => row.id)).toEqual(["50"]);
+});
+
+test("exact model choices distinguish prefix siblings and compose with a provider on another attempt", () => {
+  const rows = [
+    { id: "exact", model: "model-a", provider: "openai" },
+    { id: "sibling", model: "model-a-plus", provider: "openai" },
+    { id: "resolved", model: "requested", resolvedModel: " MODEL-A ", provider: "openai" },
+    { id: "attempt", attempts: [{ model: "model-a", provider: "first" }, { model: "other", provider: "openai" }] },
+  ];
+  expect(filterLogs(rows, { ...DEFAULT_LOG_FILTER_STATE, model: "model-a", provider: "openai" }).map(row => row.id))
+    .toEqual(["exact", "resolved", "attempt"]);
 });

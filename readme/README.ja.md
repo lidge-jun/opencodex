@@ -104,6 +104,8 @@ ocx init      # interactive setup: writes ~/.opencodex/config.json and wires Cod
 > 明示的な同意が得られた場合にのみ実行し、明示的な拒否はそれで確定なので二度と持ち出さないでください。
 
 
+スポンサー: Main（モデル開発元向け）と Standard（リレー / ゲートウェイ向け）の 2 ティア、料金は問い合わせ制 — [SPONSORS.md](../SPONSORS.md) を参照。
+
 ## プロバイダーを追加
 
 最も簡単な方法はウェブダッシュボードを使うことです。

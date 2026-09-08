@@ -23,7 +23,7 @@ priorities `i * N + j`, where `j` is the selector's zero-based position; a route
 rows are moved outside those selector groups. Codex still advertises only the first five
 picker-visible rows.
 
-The relevant no-selector priorities are:
+Without complete-picker ordering, the relevant no-selector priorities are:
 
 | Catalog entry | Priority | Source |
 | --- | ---: | --- |
@@ -112,8 +112,7 @@ have expanded into selector-qualified groups.
 Use `subagentModels` to choose and order the leading models that Codex also advertises to
 `spawn_agent`. The dashboard's **Sub-agents** page can reorder bare native and routed ids. Use
 `ocx agent subagents set` or edit the opencodex configuration for exact
-`<selector>/<native-openai-model>` choices; the dashboard does not list those choices and omits them
-if it saves the roster. Use at most five configured ids. With account selectors, one bare native
+`<selector>/<native-openai-model>` choices; the dashboard retains those ids once saved, including choices currently unavailable. Use at most five configured ids. With account selectors, one bare native
 choice can expand into multiple selector-qualified catalog rows, so configured choices and
 advertised rows are not necessarily one-to-one.
 
@@ -133,10 +132,70 @@ featured block:
 Listed routed rows appear in the configured order. A routed row omitted from the array keeps its
 normal priority, so it remains ahead of the `modelPickerOrder` display band; list every routed row
 whose relative position you want to control. A row also present in `subagentModels` keeps its
-featured priority. Bare native and account-qualified native rows are not reordered by
-`modelPickerOrder`; use `subagentModels` for those rows.
+featured priority. With a routed-only list, native rows keep their normal positions.
 
-`modelPickerOrder` never changes the `spawn_agent` candidate set. It changes only the
-Codex-visible picker priority while opencodex retains each moved row's natural priority for
-sub-agent selection. `disabledModels` and each provider's `selectedModels` remain visibility fields,
+To order the complete picker, include a bare native id:
+
+```json
+{
+  "modelPickerOrder": ["gpt-5.6-sol", "opencode-go/glm-5.3"]
+}
+```
+
+Listed rows appear first in array order, followed by unlisted rows in natural priority
+order. Matching uses exact catalog ids: `gpt-5.6-sol` and `openai/gpt-5.6-sol` are separate
+rows. Raw and encoded spellings of the same routed id are also accepted, with exact
+matches taking precedence. Empty entries are ignored. Account-qualified rows need
+their selector-qualified id in the list.
+
+### Migration note: native ids in existing orders
+
+Previously, native ids in `modelPickerOrder` were ignored. An existing list containing
+a bare native id now activates complete-picker ordering, including featured rows.
+Remove bare native ids to keep the previous routed-only behavior. Unset, empty and
+routed-only lists retain their behavior; OpenCodex's natural-priority guidance candidate calculation is unchanged.
+
+`modelPickerOrder` preserves OpenCodex's natural-priority calculation of up to five preferred
+candidates for subagent guidance. Each moved row retains its natural priority separately from
+its native `priority`; changing picker order alone must not change that OpenCodex calculation.
+It does not restrict eligibility for an exact-name model override: the native advertised list
+is not an allowlist, and existing authentication, model/effort and backend constraints still apply.
+
+Native Codex uses native `priority` to select the first five eligible picker-visible models
+advertised by `spawn_agent` on V1 and on V2 when model overrides are exposed. Those advertised
+five may therefore change with picker order, even when OpenCodex's preferred candidates remain
+unchanged. V1 receives no OpenCodex preferred-roster injection. V2 may additionally receive
+OpenCodex's natural-priority guidance when the client catalog state permits; that guidance does
+not reorder the native tool's advertised list.
+
+`disabledModels` and each provider's `selectedModels` remain visibility fields,
 not ordering controls. There is no separate `modelOrder`, `providerOrder`, or priority-map setting.
+
+## Dashboard picker presets
+
+On **Models**, choose **Default**, **A–Z by model**, **Group by provider**, or **Most used snapshot**, then **Apply order**. This saves the currently visible routed ids and `modelPickerOrderMode` (`alphabetical`, `provider`, or `most-used`). Most used reads all retained usage once when applied; reloads restore the snapshot without fetching usage again. New or removed models do not automatically recompute it. A manually saved order, including a complete/native order, remains untouched until you explicitly apply a replacement. Default clears both picker fields, even when no routed models are available.
+
+The controls use `GET/PUT /api/subagent-models`: `chosen` and `available` retain saved roster choices, including disabled or missing models; `pickerAvailable` contains only eligible routed catalog ids. The Models page sends `pickerOrder` and `pickerOrderMode`, never `models`. Roster-only saves preserve picker settings. Invalid combined updates and failed persistence leave the previous picker/roster state intact.
+
+Routed-only presets keep the existing featured/native priority bands. They affect the Codex catalog and Claude discovery's routed groups; Claude's native prefix and explicit Desktop profile/alias ownership remain unchanged. OpenCodex guidance ranks and configured fallback settings are preserved, but native Codex's advertised five and recommended default can change with display priority. Saving does not restart clients; a catalog refresh may remain pending, and clients holding an old catalog may need reopening.
+
+
+### Custom routed order
+
+Choose **Custom order** on Models to load a fresh routed snapshot. Drag a movable row before
+another row, or use its Up/Down buttons, then **Save draft**. Featured routed rows stay at the
+front in their configured rank and cannot move. Native rows are not shown; this is not a preview
+of the complete native picker. Surviving saved rows keep their relative order and new candidates
+follow the current candidate list. Every save sends the complete routed list, without changing
+the featured roster.
+
+An order containing bare native ids remains protected until you explicitly apply a routed preset
+or Default. Selecting a different option alone does not replace it. Unknown featured state blocks
+editing. Before saving, the editor checks a fresh snapshot; changes preserve your draft and block
+saving until **Reload and discard draft** loads current settings. Request failures retain the
+draft. Accepted saves can still have a pending catalog refresh; reload before editing again.
+
+The editor also requires an unambiguous model identity for every routed candidate. If the model
+catalog is incomplete, refresh the Models page before editing; reloading picker settings alone
+cannot restore missing catalog identities. Featured choices are matched exactly without trimming;
+duplicate choices use their last configured position, and canonical ids take precedence over raw ids.

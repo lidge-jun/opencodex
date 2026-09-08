@@ -8,6 +8,7 @@ import { runningProxyUpdateHeaders } from "../oauth/login-cli";
 import { isPublicOAuthProvider } from "../oauth/index";
 import { getProviderRegistryEntry, providerCodexAccountMode } from "../providers/registry";
 import type { OcxConfig } from "../types";
+import { projectCodexQuotaRefreshOutcome, type CodexQuotaRefreshOutcome } from "../codex/quota-refresh-outcome";
 
 export type AccountType = "codex" | "oauth" | "api-key";
 
@@ -24,6 +25,7 @@ export interface AccountRow {
   /** Codex pool selection order, higher used earlier. Absent where ordering does not apply. */
   priority?: number;
   quota?: CodexQuotaDto | null;
+  quotaRefresh?: CodexQuotaRefreshOutcome;
   /**
    * Whether the pool is holding this account out of rotation.
    *
@@ -237,6 +239,7 @@ interface CodexAccountDto {
   needsReauth?: boolean;
   priority?: number;
   quota?: CodexQuotaDto | null;
+  quotaRefresh?: unknown;
   paused?: boolean;
 }
 
@@ -299,7 +302,10 @@ export async function fetchCodexRows(
     needsReauth: a.needsReauth,
     priority: typeof a.priority === "number" ? a.priority : 0,
     paused: a.paused === true,
-    ...(includeQuota ? { quota: projectQuota(a.quota) } : {}),
+    ...(includeQuota ? {
+      quota: projectQuota(a.quota),
+      quotaRefresh: projectCodexQuotaRefreshOutcome(a.quotaRefresh),
+    } : {}),
   }));
   return { rows, activeId, autoSwitchThreshold, status: 200 };
 }

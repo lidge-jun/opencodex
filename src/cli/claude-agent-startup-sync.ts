@@ -10,7 +10,7 @@ export interface ClaudeAgentStartupSyncDeps {
 }
 
 /**
- * Keep the public readiness gate pending until both startup reconciliations have settled.
+ * Keep readiness pending until the roster and optional Desktop registry have settled.
  *
  * The Codex sync remains the authority for ready versus failed. Claude roster repair is
  * deliberately best-effort (#2200), but readiness must not become observable between the
@@ -22,6 +22,7 @@ export async function reconcileClientStartupBeforeReady<T>(
   readinessGate: ReadinessGate,
   syncCodex: (deferredGate: ReadinessGate) => Promise<T>,
   syncClaudeRoster: () => Promise<unknown>,
+  syncDesktopRegistry?: () => Promise<unknown>,
 ): Promise<T> {
   let codexReady = false;
   const deferredGate: ReadinessGate = {
@@ -32,6 +33,7 @@ export async function reconcileClientStartupBeforeReady<T>(
 
   const result = await syncCodex(deferredGate);
   await syncClaudeRoster();
+  await syncDesktopRegistry?.();
   if (codexReady) readinessGate.markReady();
   return result;
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { useKeyedClientResource } from "../client-resource";
 import { replaceHash } from "../hash-routing";
 import { useI18n } from "../i18n/shared";
@@ -70,6 +70,55 @@ type CachedOverview = {
 
 type MaMode = "v1" | "default" | "v2";
 
+type CodexPreference = "codexAutoStart" | "codexDesktopAuthless";
+type DashboardSettingsState = {
+  settings: SettingsData | null;
+  beforeSave: SettingsData | null;
+};
+type DashboardSettingsAction =
+  | { type: "polled"; settings: SettingsData }
+  | { type: "save-started"; key: CodexPreference; value: boolean }
+  | { type: "save-succeeded"; key: CodexPreference; settings: SettingsData }
+  | { type: "save-failed" }
+  | { type: "save-finished" }
+  | { type: "applied" };
+
+// Own both server snapshots and the local save/apply transaction. A poll has no
+// application receipt and must not overwrite a preference while it is being saved.
+function dashboardSettingsReducer(state: DashboardSettingsState, action: DashboardSettingsAction): DashboardSettingsState {
+  switch (action.type) {
+    case "polled":
+      if (state.beforeSave) return state;
+      return {
+        ...state,
+        settings: {
+          ...action.settings,
+          catalogRefreshPending: state.settings?.catalogRefreshPending === true || action.settings.catalogRefreshPending,
+        },
+      };
+    case "save-started":
+      if (!state.settings || state.beforeSave) return state;
+      return { beforeSave: state.settings, settings: { ...state.settings, [action.key]: action.value } };
+    case "save-succeeded":
+      if (!state.settings || !state.beforeSave) return state;
+      return {
+        ...state,
+        settings: {
+          ...state.settings,
+          [action.key]: action.settings[action.key],
+          catalogRefreshPending: action.key === "codexDesktopAuthless" ? true : state.settings.catalogRefreshPending,
+          startupHealth: action.settings.startupHealth ?? state.settings.startupHealth,
+        },
+      };
+    case "save-failed":
+      return state.beforeSave ? { ...state, settings: state.beforeSave } : state;
+    case "save-finished":
+      return { ...state, beforeSave: null };
+    case "applied":
+      return state.settings ? { ...state, settings: { ...state.settings, catalogRefreshPending: false } } : state;
+  }
+}
+
 export function groupDashboardModels(models: ModelInfo[]): Array<[string, ModelInfo[]]> {
   const groups = new Map<string, ModelInfo[]>();
   for (const model of models) {
@@ -114,14 +163,18 @@ export function useDashboardData(apiBase: string) {
   const [startupHealth, setStartupHealth] = useState<StartupHealthStatus | null>(() => cachedStartup);
   const [providers, setProviders] = useState<ProviderInfo[]>(() => cachedOverview?.providers ?? []);
   const [models, setModels] = useState<ModelInfo[]>([]);
-  const [settings, setSettings] = useState<SettingsData | null>(() => cachedControls?.settings ?? null);
+  const [settingsState, dispatchSettings] = useReducer(dashboardSettingsReducer, {
+    settings: cachedControls?.settings ?? null,
+    beforeSave: null,
+  });
+  const { settings } = settingsState;
+  const settingsSaving = settingsState.beforeSave !== null;
   const [sidecar, setSidecar] = useState<SidecarData | null>(() => cachedControls?.sidecar ?? null);
   const [shadowCall, setShadowCall] = useState<ShadowCallData | null>(() => cachedControls?.shadowCall ?? null);
   const [usage30d, setUsage30d] = useState<UsageSummary30d | null>(() => cachedUsage);
   const [sidecarSaving, setSidecarSaving] = useState(false);
   const [shadowCallSaving, setShadowCallSaving] = useState(false);
   const [modelsLoading, setModelsLoading] = useState(false);
-  const [settingsSaving, setSettingsSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [maMode, setMaMode] = useState<MaMode>(() => cachedMaMode ?? "default");
  const [maBusy, setMaBusy] = useState(false);
@@ -361,7 +414,9 @@ export function useDashboardData(apiBase: string) {
   useEffect(() => {
     const data = settingsPoll.data;
     if (!data) return;
-    if (data.settings !== undefined) setSettings(data.settings);
+    if (data.settings !== undefined) {
+      dispatchSettings({ type: "polled", settings: data.settings });
+    }
     // Latest-wins: only seed from settings when no newer dedicated probe has committed
     // while this settings poll was in flight. Always merge against the live ref.
     if (
@@ -373,14 +428,15 @@ export function useDashboardData(apiBase: string) {
       startupHealthRef.current = merged;
       if (merged) writeSessionListCache(`${STARTUP_CACHE_PREFIX}${apiBase}`, merged);
     }
-    if (data.settings !== undefined) {
-      const prev = readSessionListCache<CachedControls>(controlsCacheKey(apiBase)) ?? {};
-      writeSessionListCache(controlsCacheKey(apiBase), {
-        ...prev,
-        settings: data.settings,
-      });
-    }
   }, [settingsPoll.data, apiBase]);
+
+  // Cache the merged UI state, including preference saves and successful applies.
+  // Raw GET settings cannot replace the local application receipt on a revisit.
+  useEffect(() => {
+    if (!settings) return;
+    const prev = readSessionListCache<CachedControls>(controlsCacheKey(apiBase)) ?? {};
+    writeSessionListCache(controlsCacheKey(apiBase), { ...prev, settings });
+  }, [settings, apiBase]);
 
   useEffect(() => {
     if (usagePoll.data !== undefined) {
@@ -607,29 +663,32 @@ export function useDashboardData(apiBase: string) {
     finally { setInjectionSaving(false); }
   };
 
-  const toggleCodexAutoStart = async () => {
-    if (!settings || settingsSaving) return;
-    const next = !settings.codexAutoStart;
-    setSettingsSaving(true);
+  const toggleCodexSetting = async (key: CodexPreference) => {
+    if (!settings || settingsSaving || syncing) return;
+    const next = !(settings[key] ?? (key === "codexAutoStart"));
     settingsMutationInFlightRef.current = true;
-    setSettings({ ...settings, codexAutoStart: next });
+    dispatchSettings({ type: "save-started", key, value: next });
     try {
       const res = await fetch(`${apiBase}/api/settings`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ codexAutoStart: next }),
+        body: JSON.stringify({ [key]: next }),
       });
-      const data = await requireJson<{ codexAutoStart: boolean; startupHealth?: SettingsData["startupHealth"] }>(res, "save failed");
+      const data = await requireJson<SettingsData>(res, "save failed");
       settingsMutationEpochRef.current += 1;
-      setSettings(prev => prev ? { ...prev, codexAutoStart: data.codexAutoStart, startupHealth: data.startupHealth ?? prev.startupHealth } : prev);
+      dispatchSettings({ type: "save-succeeded", key, settings: data });
+      if (key === "codexDesktopAuthless") await runSync();
     } catch {
-      setSettings(prev => prev ? { ...prev, codexAutoStart: !next } : prev);
+      dispatchSettings({ type: "save-failed" });
       setError(true);
     } finally {
       settingsMutationInFlightRef.current = false;
-      setSettingsSaving(false);
+      dispatchSettings({ type: "save-finished" });
     }
   };
+
+  const toggleCodexAutoStart = () => toggleCodexSetting("codexAutoStart");
+  const toggleCodexDesktopAuthless = () => toggleCodexSetting("codexDesktopAuthless");
 
   // Clears the sync result/error in this hook. The dashboard toast owns its own dismissal
   // timer but must publish the dismissal here: syncResult/syncError live above the dashboard
@@ -649,6 +708,9 @@ export function useDashboardData(apiBase: string) {
       const res = await fetch(`${apiBase}/api/sync`, { method: "POST" });
       const data = await requireJson<SyncResult & { projectConfigGrouped?: ProjectCodexConfigGroup[] }>(res, "sync failed");
       setSyncResult(data);
+      if (data.ok && data.status === "applied") {
+        dispatchSettings({ type: "applied" });
+      }
       if (data.projectConfigGrouped) setProjectConfigWarnings(data.projectConfigGrouped);
     } catch (err) {
       setSyncError(err instanceof Error ? err.message : String(err));
@@ -789,7 +851,7 @@ export function useDashboardData(apiBase: string) {
     effortCapHelpTriggerRef, updateTriggerRef, maHelpTriggerRef, shadowCallHelpTriggerRef,
     effortCapHelpDialogRef, updateDialogRef, maHelpDialogRef, shadowCallHelpDialogRef,
     filteredGroups, sidecarModels, visionModels,
-    saveSidecar, saveShadowCall, switchMaMode, toggleCodexAutoStart, runSync, clearSyncFeedback,
+    saveSidecar, saveShadowCall, switchMaMode, toggleCodexAutoStart, toggleCodexDesktopAuthless, runSync, clearSyncFeedback,
     fetchUpdateCheck, closeUpdateDialog, openUpdateDialog, changeUpdateChannel, runUpdate,
   };
 }

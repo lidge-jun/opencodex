@@ -10,6 +10,7 @@ import { createHash } from "node:crypto";
 import { saveConfigPreservingClaudeCode } from "../config";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import type { AccountQuotaFields } from "./quota-types";
+import { commitProviderApiKeySelection } from "./api-key-selection";
 
 export interface ProviderApiKeyInfo extends AccountQuotaFields {
   id: string;
@@ -85,28 +86,33 @@ export function addProviderApiKey(config: OcxConfig, name: string, key: string, 
   if (typeof key !== "string" || !key.trim()) return { error: "key is required" };
   const trimmed = sanitizeApiKeyValue(key);
   if (!trimmed) return { error: "key must not include line breaks" };
-  const pool = ensurePool(provider);
   const id = apiKeyPoolEntryId(trimmed);
-  const existing = pool.find(e => e.id === id);
-  if (existing) {
-    if (label?.trim()) existing.label = label.trim();
-  } else {
-    pool.push({ id, key: trimmed, ...(label?.trim() ? { label: label.trim() } : {}), addedAt: Date.now() });
-  }
-  provider.apiKey = trimmed;
-  saveConfigPreservingClaudeCode(config);
-  return { id };
+  const committed = commitProviderApiKeySelection(config, name, fresh => {
+    const pool = ensurePool(fresh);
+    const existing = pool.find(e => e.id === id);
+    if (existing) {
+      if (label?.trim()) existing.label = label.trim();
+    } else {
+      pool.push({ id, key: trimmed, ...(label?.trim() ? { label: label.trim() } : {}), addedAt: Date.now() });
+    }
+    fresh.apiKey = trimmed;
+    return { changed: true, selectionChanged: true, value: id };
+  });
+  return committed.status === "committed" ? { id } : { error: "provider selection unavailable" };
 }
 
 /** Switch the ACTIVE key (mirrors into `provider.apiKey`). Persists config. */
 export function setActiveProviderApiKey(config: OcxConfig, name: string, id: string): boolean {
-  const provider = config.providers[name];
-  if (!provider || !isKeyAuthProvider(provider)) return false;
-  const entry = ensurePool(provider).find(e => e.id === id);
-  if (!entry) return false;
-  provider.apiKey = entry.key;
-  saveConfigPreservingClaudeCode(config);
-  return true;
+  const committed = commitProviderApiKeySelection(config, name, provider => {
+    const entry = provider.apiKeyPool?.find(e => e.id === id)
+      ?? (!provider.apiKeyPool?.length && provider.apiKey && apiKeyPoolEntryId(provider.apiKey) === id
+        ? { id, key: provider.apiKey } : undefined);
+    if (!entry) return { changed: false, value: false };
+    ensurePool(provider);
+    provider.apiKey = entry.key;
+    return { changed: true, selectionChanged: true, value: true };
+  });
+  return committed.status === "committed" && committed.value;
 }
 
 /** Rename a key slot without changing its id, secret, or active routing state. */
@@ -123,18 +129,19 @@ export function setProviderApiKeyLabel(config: OcxConfig, name: string, id: stri
 
 /** Remove one key; removing the active one promotes the first remaining. Persists config. */
 export function removeProviderApiKey(config: OcxConfig, name: string, id: string): boolean {
-  const provider = config.providers[name];
-  if (!provider || !isKeyAuthProvider(provider)) return false;
-  const pool = ensurePool(provider);
-  const entry = pool.find(e => e.id === id);
-  if (!entry) return false;
-  provider.apiKeyPool = pool.filter(e => e.id !== id);
-  if (provider.apiKey === entry.key) {
-    const next = provider.apiKeyPool[0];
-    if (next) provider.apiKey = next.key;
-    else delete provider.apiKey;
-  }
-  if (provider.apiKeyPool.length === 0) delete provider.apiKeyPool;
-  saveConfigPreservingClaudeCode(config);
-  return true;
+  const committed = commitProviderApiKeySelection(config, name, provider => {
+    const pool = provider.apiKeyPool?.length ? provider.apiKeyPool
+      : provider.apiKey ? [{ id: apiKeyPoolEntryId(provider.apiKey), key: provider.apiKey }] : [];
+    const entry = pool.find(e => e.id === id);
+    if (!entry) return { changed: false, value: false };
+    provider.apiKeyPool = pool.filter(e => e.id !== id);
+    if (provider.apiKey === entry.key) {
+      const next = provider.apiKeyPool[0];
+      if (next) provider.apiKey = next.key;
+      else delete provider.apiKey;
+    }
+    if (provider.apiKeyPool.length === 0) delete provider.apiKeyPool;
+    return { changed: true, value: true };
+  });
+  return committed.status === "committed" && committed.value;
 }

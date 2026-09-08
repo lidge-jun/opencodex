@@ -287,6 +287,16 @@ export function restoreRoutedCustomCalls(
       const helper = aliased && sourceInput !== ""
         ? item.name
         : resolveCodeModeHelperName(undefined, targetName, sourceInput, itemNamespace, declaredNames);
+      // Native custom input is already the tool's raw grammar. Only a recognized
+      // helper/envelope may reinterpret it; a JSON-looking native body is not a wrapper.
+      if (item.type === "custom_tool_call" && !aliased && !helper) {
+        const input = repairNames.has(wireName) && typeof sourceInput === "string"
+          ? normalizeApplyPatchDelimiters(sourceInput)
+          : sourceInput;
+        return input !== sourceInput
+          ? { value: { ...item, input }, changed: true }
+          : { value: item, changed: false };
+      }
       const restored: Record<string, unknown> = {
         ...item,
         type: "custom_tool_call",

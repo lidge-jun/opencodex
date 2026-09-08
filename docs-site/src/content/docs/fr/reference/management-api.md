@@ -220,6 +220,18 @@ fournisseurs ne sont pas renvoyés aux clients du tableau de bord.
 | `GET, PUT /api/provider-context-caps` | Lire ou mettre à jour les plafonds de contexte globaux, communs à tous les fournisseurs ou propres à un fournisseur | 400 requête invalide ; 404 fournisseur inconnu |
 | `GET /api/provider-presets` | Renvoyer les préréglages de fournisseur de l'interface graphique dérivés du registre d'exécution | — |
 
+La réponse des plafonds de contexte comprend `caps` (limites actives) et `values` (dernières
+sélections, conservées après désactivation). Activer un fournisseur sans `value` restaure sa
+sélection, ou utilise la valeur globale `contextCapValue` lors de la première activation.
+Cela vaut aussi pour OpenAI : le commutateur ne sélectionne pas un mode spécial à 922k.
+Un plafond actif borne chaque fenêtre native ; les modèles prenant en charge un contexte long
+peuvent être étendus uniquement jusqu’à leur propre plafond pris en charge.
+`{ "value": 600000, "setAll": true }` modifie la valeur globale et uniquement les plafonds actifs ;
+les fournisseurs dont le plafond est désactivé conservent leur sélection pour une réactivation ultérieure.
+`{ "setAll": true }` sans `value` active tous les fournisseurs configurés à la valeur globale
+actuelle et remplace leurs sélections mémorisées. La désactivation conserve la sélection,
+même après rechargement, sans l’appliquer comme limite.
+
 `provider_has_dependent_combos` est une barrière de sécurité : supprimez ou modifiez les combinaisons dépendantes avant de
 supprimer leur fournisseur.
 

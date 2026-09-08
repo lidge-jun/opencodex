@@ -27,6 +27,8 @@ export interface OwnedIntegrationRefreshInput {
   home?: string;
   store?: IntegrationStateStore;
   io?: IntegrationIO;
+  /** Internal profile target selected before entering the coordinated writer. */
+  resolvedPaths?: { configPath: string; detectDir: string };
 }
 
 export interface OwnedIntegrationRefreshOutcome {
@@ -34,6 +36,11 @@ export interface OwnedIntegrationRefreshOutcome {
   readonly ok: boolean;
   readonly changed?: boolean;
   readonly reason?: string;
+  readonly profileId?: number;
+  readonly refusalReason?: string;
+  readonly state?: string;
+  readonly snapshotPath?: string;
+  readonly residual?: boolean;
 }
 
 /**
@@ -59,7 +66,9 @@ export async function refreshOwnedIntegration(
   const bound = { ...rest, models, store };
   const result = await runIntegrationMutationFlight(
     input.clientId,
-    "refresh",
+    // Separate catalog snapshots must not inherit another refresh's success.
+    // The shared flight owner returns busy for overlapping operations instead.
+    `refresh:${crypto.randomUUID()}`,
     input.io?.now ?? Date.now,
     () => refreshIntegrationCoordinated(bound, options),
   );
@@ -70,5 +79,8 @@ export async function refreshOwnedIntegration(
         changed: result.changed,
         ...(result.state === "absent" ? { reason: result.message } : {}),
       }
-    : { client: input.clientId, ok: false, reason: result.message };
+    : { client: input.clientId, ok: false, reason: result.message, refusalReason: result.reason, state: result.state,
+        ...(result.snapshotPath ? { snapshotPath: result.snapshotPath } : {}),
+        ...(result.residual ? { residual: true } : {}),
+      };
 }

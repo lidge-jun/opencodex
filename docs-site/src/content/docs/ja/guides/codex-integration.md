@@ -147,6 +147,14 @@ Codex の `exec` custom-tool grammar を受け付けない key-auth Responses pr
 `custom_tool_call` へ復元します。ネイティブ OpenAI の forward routing と、対応済みの `apply_patch` custom tool は
 変更されません。
 
+ルーティングされた code-mode のターンには、最初の呼び出し前に、ネストされたヘルパーに関する
+ホストの規則も伝えられます。`tools.apply_patch` は、装飾を付けないパッチマーカー行で始まり、
+同様のマーカー行で終わる単一の文字列を受け取ります。isolate では `import` を使用できず、
+長時間実行されるコマンドは `write_stdin` でポーリングします。ネイティブのルーティング済み Responses、
+Kiro、または Cursor の経路で、code-mode の exec 結果にホストの失敗メッセージがまだ含まれている場合、
+opencodex は該当する規則を示す 1 行のヒントを追加します。この変更でモデルのコードやパッチのテキストを
+書き換えることはありません。
+
 選択した provider は function/tool calling をサポートしている必要があります。tool call に対応しない text-only
 provider では `exec`、Browser、Computer Use は使用できません。ネイティブ OpenAI の項目は上流の tool mode を
 そのまま維持します。
@@ -197,8 +205,14 @@ ocx sync-cache
 空または省略すると、検出されたすべてのモデルが公開されます。ホワイトリストにない ID はカタログに到達しません。
 2. **`disabledModels`** (トップレベル) — カタログと `/v1/models` の両方からモデルを非表示にし、反転します
 裸のネイティブ GPT スラッグを `visibility: "hide"` にします。
-3. **`liveModels: false` と空の `models`** — ライブ検出がオフで、`models` が空の場合、または
-省略すると、opencodex はそのプロバイダーのルーティング モデルを公開しません。
+3. **`liveModels: false`** — `liveModels: false` で `models` が空または省略されている場合、初期一覧には設定済みの
+   `defaultModel`、`retainModels` の順で ID を追加し、重複は最初の出現だけを残します。
+   空でない `models` が明示されている場合は、`models`、`retainModels` の順になり、別の
+   `defaultModel` を暗黙に追加しません。そのモデルも `models` または `retainModels` に明示すれば
+   含められます。どのフィールドにも ID がなければ初期一覧は空です。この順序は最終的なピッカーの
+   表示順を保証しません。`selectedModels`、`disabledModels`、プロバイダーの無効化は引き続き適用されます。
+   `authMode: "forward"` は別の分岐を維持し、このルーティング用の静的一覧を使いません。
+   これらの規則はライブ検出失敗時のフォールバックを変更しません。
 4. **Cursor `GetUsableModels`** — Cursor アダプターはその protobuf を通じてモデルを検出します。
 `/models` ではなく `GetUsableModels` RPC であるため、カーソル側の変更により、他のプロバイダーとは独立して表示される ID が変更される可能性があります。
 5. **キャッシュと `ocx sync`** - ライブ カタログは約 5 分間キャッシュされます (`modelCacheTtlMs`、

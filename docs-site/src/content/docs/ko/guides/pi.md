@@ -27,6 +27,9 @@ ocx export --client pi
       "baseUrl": "http://127.0.0.1:10100/v1",
       "api": "openai-completions",
       "apiKey": "$OPENCODEX_API_KEY",
+      "compat": {
+        "sendSessionAffinityHeaders": true
+      },
       "models": [
         {
           "id": "anthropic/claude-opus-5",
@@ -40,6 +43,8 @@ ocx export --client pi
   }
 }
 ```
+
+생성된 Pi provider에는 `compat.sendSessionAffinityHeaders`가 활성화됩니다. provider를 병합하거나 직접 수정할 때 이 설정을 유지하세요. Pi가 안정적인 세션 식별자를 보내면 OpenCodex가 이를 바탕으로 정규 OpenCode Go 대상의 affinity를 계산합니다. `cacheRetention`이 `none`이면 Pi가 식별자를 보내지 않을 수 있습니다.
 
 모델 id는 프록시의 정규 선택자이므로, 라우팅된 모델은 `provider/model`
 (`anthropic/claude-opus-5`) 형태로 나타나고, 네이티브 OpenAI slug는 접두사 없이

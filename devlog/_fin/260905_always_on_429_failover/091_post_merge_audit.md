@@ -67,14 +67,37 @@ The post-merge run on `dev` then showed `ci failure`, which was a genuinely alar
 out. It turned out to be cancellation by the maintainer's next merge two minutes later, not a
 real failure — every job read `cancelled`, not `failure`.
 
-**Rule:** verify with the check-runs API and require zero `null` conclusions, not a pass count:
+**Rule:** use the exact head SHA, require every expected aggregate or policy gate by name, and
+also require zero non-terminal check runs. A missing check is not success. Paginate before treating
+the returned set as complete:
 
 ```bash
-gh api repos/<owner>/<repo>/commits/<sha>/check-runs \
-  --jq '[.check_runs[] | .conclusion] | group_by(.) | map({(.[0]//"null"): length}) | add'
+set -o pipefail
+gh api --paginate repos/<owner>/<repo>/commits/<sha>/check-runs \
+  | jq -se '
+      [.[].check_runs[]] as $runs
+      | ["ci", "enforce-target", "hygiene", "react-doctor"] as $expected
+      | ($expected - [
+          $runs[]
+          | select(.status == "completed" and .conclusion == "success")
+          | .name
+        ]) as $missing
+      | [
+          $runs[]
+          | select(.status != "completed" or .conclusion == null)
+          | .name
+        ] as $pending
+      | if ($missing | length) == 0 and ($pending | length) == 0
+        then {ready: true, expected: $expected}
+        else error("missing=\($missing) pending=\($pending)")
+        end'
 ```
 
-A clean result looks like `{"skipped":3,"success":24}` — no `null` key at all.
+A clean result is `{"ready":true,...}` with exit status 0. This does not replace review-policy
+checks such as confirming the approval belongs to the same head. Every `$expected` value is an
+exact Checks API `.check_runs[].name`, not a workflow title or workflow-run name. If those required
+check-run names change, update this list with the policy; silently accepting an absent name
+recreates the original bug.
 
 The near-miss paid for itself: sweeping `dev` afterwards found a real defect. #3511 and #3513
 landed concurrently, one moving `anthropic-quorum-cache.test.ts` into `tests/routing/` and the
