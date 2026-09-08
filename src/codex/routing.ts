@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { saveConfigPreservingClaudeCode } from "../config";
-import { isCodexAccountGenerationLive, readCodexAccountRecord } from "./account-store";
+import { isCodexAccountGenerationLive, readCodexAccountRecord, type CodexRefreshProvenance } from "./account-store";
 import { codexAccountLogLabel } from "./account-label";
 import { NATIVE_RESERVE_MODEL } from "./catalog/native-models";
 import { isCodexAccountPaused } from "./account-pause";
@@ -642,6 +642,80 @@ export function claimDueCodexQuotaRecoveryProbes(
   });
 }
 
+type CooldownRecoveryLease = Pick<CodexQuotaRecoveryProbeClaim,
+  "accountId" | "scope" | "leaseId" | "cooldownGeneration">;
+
+export type ManualResetCooldownClaim =
+  | { kind: "pool"; probe: CodexQuotaRecoveryProbeClaim }
+  | { kind: "main"; probe: CooldownRecoveryLease };
+
+function manualResetAccountEligible(config: OcxConfig, accountId: string): boolean {
+  return !isCodexAccountPaused(config, accountId) && !isAccountNeedsReauth(accountId)
+    && (accountId === MAIN_CODEX_ACCOUNT_ID
+      || (config.codexAccounts ?? []).some(account => account.id === accountId && isSelectableCodexPoolAccount(account)));
+}
+
+/** Explicit reset bypasses probe pacing, never another owner's lease or quota scope. */
+export function claimManualResetCooldowns(
+  config: OcxConfig,
+  accountId: string,
+  now = Date.now(),
+  expectedPoolGeneration?: number,
+): ManualResetCooldownClaim[] {
+  if (!manualResetAccountEligible(config, accountId)) return [];
+  const record = accountId === MAIN_CODEX_ACCOUNT_ID ? undefined : readCodexAccountRecord(accountId);
+  if (accountId !== MAIN_CODEX_ACCOUNT_ID && (!record?.credential || record.deletedAt != null)) return [];
+  if (record && expectedPoolGeneration !== undefined && record.generation !== expectedPoolGeneration) return [];
+  const claims: ManualResetCooldownClaim[] = [];
+  for (const scope of [undefined, "shared"] as const) {
+    const health = scope ? scopedHealthFor(accountId, scope) : upstreamHealth.get(accountId);
+    if (!health || health.cooldownSource !== "reset-derived" || health.probeLeaseId !== undefined
+      || !Number.isFinite(health.cooldownUntil) || !(health.cooldownUntil! > now)) continue;
+    const leaseId = randomUUID();
+    const cooldownGeneration = health.cooldownGeneration ?? 0;
+    const next = { ...health, probeLeaseId: leaseId, probeLeaseGeneration: cooldownGeneration, lastProbeAt: now };
+    if (scope) setScopedHealth(accountId, scope, next);
+    else upstreamHealth.set(accountId, next);
+    const probe = { accountId, scope, leaseId, cooldownGeneration };
+    claims.push(record ? { kind: "pool", probe: {
+      ...probe, credentialGeneration: record.generation, credentialReplacedAt: record.replacedAt,
+    } } : { kind: "main", probe });
+  }
+  return claims;
+}
+
+export type ManualResetRefreshLineage = Readonly<{
+  fromGeneration: number;
+  toGeneration: number;
+  provenance: CodexRefreshProvenance;
+}>;
+
+type ManualResetQuotaProof = CodexQuotaRecoveryProbeProof & {
+  refreshLineage?: ManualResetRefreshLineage;
+};
+
+/** Main proof is checked by the already-owned auth operation, never by a Pool record. */
+export function settleManualResetCooldown(
+  config: OcxConfig,
+  claim: ManualResetCooldownClaim,
+  recovered: boolean,
+  proof: ManualResetQuotaProof = {},
+  now = Date.now(),
+): boolean {
+  if (!recovered) return settleCooldownRecoveryLease(claim.probe, false, now);
+  const eligible = manualResetAccountEligible(config, claim.probe.accountId);
+  if (claim.kind === "main") return settleCooldownRecoveryLease(claim.probe, eligible, now);
+  const lineage = proof.refreshLineage;
+  // Equal wall-clock replacement stamps do not establish ancestry. Manual +1
+  // recovery additionally needs the actual forced-refresh result for this edge.
+  const ownedGeneration = proof.credentialGeneration === claim.probe.credentialGeneration
+    || (proof.credentialGeneration === claim.probe.credentialGeneration + 1
+      && lineage?.fromGeneration === claim.probe.credentialGeneration
+      && lineage.toGeneration === proof.credentialGeneration
+      && (lineage.provenance === "self-refresh" || lineage.provenance === "joined-lineage"));
+  return settleCodexQuotaRecoveryProbe(claim.probe, eligible && ownedGeneration, proof, now);
+}
+
 /** Settle one background recovery claim without mutating account-wide outcome state. */
 export function settleCodexQuotaRecoveryProbe(
   claim: CodexQuotaRecoveryProbeClaim,
@@ -665,9 +739,16 @@ export function settleCodexQuotaRecoveryProbe(
       : proofGeneration === claim.credentialGeneration + 1
         && currentRecord?.replacedAt === claim.credentialReplacedAt
         && isCodexAccountGenerationLive(claim.accountId, proofGeneration));
-  const fenced = (health.cooldownGeneration ?? 0) === claim.cooldownGeneration
-    && (health.probeLeaseGeneration ?? 0) === claim.cooldownGeneration
-    && generationFenced;
+  return settleCooldownRecoveryLease(claim, recovered && generationFenced, now);
+}
+
+function settleCooldownRecoveryLease(claim: CooldownRecoveryLease, recovered: boolean, now: number): boolean {
+  const health = claim.scope ? scopedHealthFor(claim.accountId, claim.scope) : upstreamHealth.get(claim.accountId);
+  if (!health || health.probeLeaseId !== claim.leaseId) return false;
+  const fenced = (claim.scope === undefined || claim.scope === "shared")
+    && health.cooldownSource === "reset-derived"
+    && (health.cooldownGeneration ?? 0) === claim.cooldownGeneration
+    && (health.probeLeaseGeneration ?? 0) === claim.cooldownGeneration;
   if (!recovered || !fenced) {
     const released = withProbeLeaseReleased(health, now);
     if (claim.scope) setScopedHealth(claim.accountId, claim.scope, released);

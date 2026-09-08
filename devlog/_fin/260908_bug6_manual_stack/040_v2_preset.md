@@ -1,5 +1,7 @@
 # wp4: server-owned proactive preset carry
 
+Historical phase record. Delivery is complete; see [071](071_delivery.md) and [072](072_final_proof.md) for terminal evidence.
+
 Depends on wp3. Carry PR #3951 at db502d486c8d8de80c0143fcfd6f86238d1ce917 with its contributor trailer. All local product commands are NOT RUN.
 
  make the server own proactive preset recommendations

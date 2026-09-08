@@ -479,6 +479,24 @@ requests with the original ID or a known alias replay the stored result without 
 consume request. A previously unseen ID supplied after settlement starts a new explicit
 redemption; clients retrying an existing action should keep its ID.
 
+After a confirmed manual `reset`, OpenCodex checks fresh usage for that same account
+and can reconcile its eligible pre-existing shared reset-derived cooldown immediately.
+Paused accounts, accounts requiring reauthentication and cooldowns already owned by an
+in-flight probe remain excluded from this recovery; their cooldowns are retained. Usage
+started before the reset, incomplete or exhausted usage, a changed account, and a newer
+quota failure do not qualify. Older main-account usage responses cannot replace a newer
+published observation. If usage needs credential refresh, recovery requires that refresh's
+confirmed lineage; an externally replaced credential does not qualify merely because it
+belongs to the same account. Explicit `Retry-After`, Spark/Reserve cooldowns, pause
+settings, pins and the selected account are preserved. `already_redeemed` and durable
+replay do not prove a new reset and do not gain this recovery behavior.
+
+A failed or busy usage refresh after a confirmed `reset` or `already_redeemed` does not
+turn the completed consumption into an error: the response remains HTTP 200 with its
+consume `code`, omitting `remaining` when no fresh count was obtained. This response
+confirms the consume outcome, not that the account is now routable. Refresh usage to
+check availability; do not consume another credit to retry a failed usage refresh.
+
 If a new account config row is saved but credential setup cannot finish, OAuth `login-status` reports
 `status: "error"` with
 `code: "codex_credential_persistence_failed"`, `accountId`, `needsReauth: true`, and optional

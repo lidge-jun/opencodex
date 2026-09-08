@@ -1,5 +1,7 @@
 # wp1: Go compatibility residuals
 
+Historical phase record. Delivery is complete; see [071](071_delivery.md) and [072](072_final_proof.md) for terminal evidence.
+
 Depends on wp0. C3 with independent boundary review. Source PR #3838 head `d84e5a80a5e40a65462a0466d82cdcec463a847e`; baseline dev `9e1468d4b7a41b498ed2aca98507ada2c741afea`. #3942 already landed the generic array agent-message normalizer. Reimplement the remaining Go behavior on current owners; do not restore the removed `opencode-go.ts` or duplicate namespace logic.
 
 ## Main decisions

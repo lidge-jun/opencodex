@@ -1,5 +1,7 @@
 # wp2: xAI string child-result continuation
 
+Historical phase record. Delivery is complete; see [071](071_delivery.md) and [072](072_final_proof.md) for terminal evidence.
+
 Depends on wp1 current outbound placement and full-history regression controls. C3. Issue #3907 posts string `agent_message.content`; #3942 already implements arrays for all non-forward destinations. Scope is the string residual only.
 
 ## File changes

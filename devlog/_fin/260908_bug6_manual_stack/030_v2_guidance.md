@@ -1,5 +1,7 @@
 # wp3: V2 guidance carry
 
+Historical phase record. Delivery is complete; see [071](071_delivery.md) and [072](072_final_proof.md) for terminal evidence.
+
 Depends on wp2 in the owner-requested manual chain. Carry PR #3944 at 6fb0fc6f1d34c77b98a74fe817e5bd90063a7d1a with both original commits and contributor trailer. Local product verification is NOT RUN.
 
  separate proxy routing metadata from native policy

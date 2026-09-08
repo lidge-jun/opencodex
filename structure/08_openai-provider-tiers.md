@@ -72,6 +72,20 @@ requests keep their captured credential. An all-paused pool fails closed.
 The dashboard's bulk pause action refreshes all account quotas and mutates only accounts whose
 plan-relevant window is freshly confirmed at exactly 100%; unknown and failed refreshes are skipped.
 
+A confirmed manual reset-credit consumption may immediately reconcile that account's
+eligible pre-existing ordinary reset-derived cooldown after a complete, non-exhausted usage
+observation started after the reset. Paused or reauthentication-required accounts and
+cooldowns held by another in-flight probe remain excluded; their cooldowns are retained.
+Recovery owns the specific cooldown and authenticates
+main and added Pool accounts through their respective credential contracts. Main usage
+publication keeps the latest successfully published observation authoritative. Pool recovery
+across a credential refresh requires the actual self/joined refresh lineage, not matching
+replacement timestamps. It preserves
+newer failures, independent Spark/Reserve scopes, explicit Retry-After, pause, pin and
+selection state. Replay and `already_redeemed` are not new-reset evidence. Failed usage
+recovery leaves the cooldown in place and preserves the confirmed consume success;
+retrying usage must not require another credit.
+
 `codexQuotaAutoRefresh` is a separate default-off spending intent. For each explicitly enabled
 account/window, the one-minute state sweep compares the cached upstream reset timestamp, sends the
 existing minimal non-stored warmup through that exact account once the timestamp is due, then
