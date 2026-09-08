@@ -12,6 +12,7 @@ import {
   describeOutboundBodyRefusal,
 } from "./outbound-body-guard";
 import { nativeContextLimits } from "../../codex/catalog";
+import { isDeclaredReasoningEffort } from "../../reasoning-effort";
 import { describeUpstreamConnectFailure } from "./upstream-error";
 import type { CodexWsQuotaObserver } from "./codex-ws-metadata";
 import { applyAccountQuotaFromUpstreamHeaders as applyCapturedCodexQuota } from "../../codex/quota";
@@ -2681,10 +2682,22 @@ export async function handleComboResponses(
   const originalReasoning = body && typeof body === "object" && !Array.isArray(body)
     ? (body as { reasoning?: unknown }).reasoning
     : undefined;
-  const originalRequestedEffort = originalReasoning && typeof originalReasoning === "object" && !Array.isArray(originalReasoning)
-    && typeof (originalReasoning as { effort?: unknown }).effort === "string"
-    ? (originalReasoning as { effort: string }).effort
+  const originalRequestedEffortValue = originalReasoning && typeof originalReasoning === "object" && !Array.isArray(originalReasoning)
+    ? (originalReasoning as { effort?: unknown }).effort
     : undefined;
+  const originalRequestedEffort = typeof originalRequestedEffortValue === "string"
+    && isDeclaredReasoningEffort(originalRequestedEffortValue)
+    ? originalRequestedEffortValue
+    : undefined;
+  const restoreOriginalRequestedEffort = (childLog: RequestLogContext): void => {
+    if (originalRequestedEffort === undefined) return;
+    const normalizedRequestedEffort = childLog.requestedEffort;
+    const transitionIndex = normalizedRequestedEffort?.indexOf("->") ?? -1;
+    childLog.requestedEffort = transitionIndex >= 0
+      ? `${originalRequestedEffort}${normalizedRequestedEffort!.slice(transitionIndex)}`
+      : originalRequestedEffort;
+    recordAttemptRequestedEffort(childLog);
+  };
   let lastFailure: Response | null = null;
   while (pick) {
     if (options.abortSignal?.aborted) return clientCancelledResponse();
@@ -2720,7 +2733,7 @@ export async function handleComboResponses(
     childLog.activeAttempt = attempt;
     if (originalRequestedEffort !== undefined) {
       childLog.requestedEffort = originalRequestedEffort;
-      attempt.requestedEffort = originalRequestedEffort;
+      recordAttemptRequestedEffort(childLog);
     }
     let attemptRetained = false;
     const retainCancelledAttempt = (): void => {
@@ -2793,10 +2806,7 @@ export async function handleComboResponses(
         onNativePassthroughCancel: callbackGate.onCancel,
         onResponseComplete: callbackGate.onResponseComplete,
       });
-      if (originalRequestedEffort !== undefined) {
-        childLog.requestedEffort = originalRequestedEffort;
-        attempt.requestedEffort = originalRequestedEffort;
-      }
+      restoreOriginalRequestedEffort(childLog);
     } catch (error) {
       callbackGate.discard();
       if (options.abortSignal?.aborted) {

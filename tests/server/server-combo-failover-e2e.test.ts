@@ -2896,6 +2896,69 @@ describe("server combo failover 030 activation matrix", () => {
     expect(efforts).toEqual(["max", "medium"]);
   });
 
+  for (const chatEffort of [
+    { name: "reasoning_effort", body: { reasoning_effort: "medium" } },
+    { name: "reasoning.effort", body: { reasoning: { effort: "medium" } } },
+  ] as const) {
+    test(`Chat ${chatEffort.name} force-default routes through the combo and records normalized wire telemetry`, async () => {
+      const upstreamBodies: Array<{ provider: string; body: Record<string, unknown> }> = [];
+      const a = serve(async request => {
+        upstreamBodies.push({ provider: "a", body: await request.json() as Record<string, unknown> });
+        return chatStream("forced chat");
+      });
+      const config = comboConfig({
+        a: provider("openai-chat", baseUrl(a), "key-a", {
+          reasoningEfforts: ["low", "medium", "high", "max"],
+        }),
+      }, undefined, {
+        defaultEffort: "max",
+        defaultEffortMode: "force",
+      });
+      saveConfig(config);
+      const server = startServer(0);
+      try {
+        const response = await fetch(new URL("/v1/chat/completions", server.url), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: "combo/free",
+            messages: [{ role: "user", content: "hello" }],
+            stream: false,
+            ...chatEffort.body,
+          }),
+        });
+        expect(response.status).toBe(200);
+        expect(await response.text()).toContain("forced chat");
+        expect(upstreamBodies).toEqual([
+          { provider: "a", body: expect.objectContaining({ model: "m1", reasoning_effort: "max" }) },
+        ]);
+
+        const { log, usage } = await latestAttemptReceipts(config);
+        for (const receipt of [log, usage]) {
+          expect(receipt).toMatchObject({
+            provider: "combo",
+            model: "combo/free",
+            requestedEffort: "medium",
+            effectiveEffort: "max",
+            reasoningWireField: "reasoning_effort",
+            reasoningWireValue: "max",
+            routeDecision: { routeKind: "combo" },
+            attempts: [{
+              provider: "a",
+              model: "m1",
+              requestedEffort: "medium",
+              effectiveEffort: "max",
+              reasoningWireField: "reasoning_effort",
+              reasoningWireValue: "max",
+            }],
+          });
+        }
+      } finally {
+        await server.stop(true);
+      }
+    });
+  }
+
   test("backup noReasoningModels removes the fresh combo default", async () => {
     const a = serve(() => Response.json({ error: { message: "retry" } }, { status: 503 }));
     let backupBody: Record<string, unknown> | undefined;
