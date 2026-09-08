@@ -852,6 +852,39 @@ export function getCodexQuotaHealthSnapshot(
   };
 }
 
+/**
+ * Capture the ordinary reset-derived cooldowns before an authenticated manual reset.
+ * The caller must prove a new reset and fresh recovery for the same credential identity.
+ * Object identity fences newer failures and delete/recreate ABA without claiming a probe
+ * lease or changing selection state while the reset is in flight.
+ */
+export function captureCodexResetCreditCooldown(accountId: string): (recovered: boolean) => boolean {
+  const shared = scopedHealthFor(accountId, "shared");
+  const account = upstreamHealth.get(accountId);
+  let settled = false;
+  return recovered => {
+    if (settled) return false;
+    settled = true;
+    if (!recovered) return false;
+    let cleared = false;
+    if (shared?.cooldownSource === "reset-derived" && scopedHealthFor(accountId, "shared") === shared) {
+      deleteScopedHealth(accountId, "shared");
+      cleared = true;
+    }
+    if (account?.cooldownSource === "reset-derived" && upstreamHealth.get(accountId) === account) {
+      const {
+        cooldownUntil: _until, cooldownSince: _since, cooldownSource: _source,
+        probeLeaseId: _lease, probeLeaseGeneration: _leaseGeneration, ...rest
+      } = account;
+      upstreamHealth.set(accountId, {
+        ...rest, cooldownGeneration: (account.cooldownGeneration ?? 0) + 1, lastProbeAt: Date.now(),
+      });
+      cleared = true;
+    }
+    return cleared;
+  };
+}
+
 export function isCodexAccountInCooldown(accountId: string, now = Date.now()): boolean {
   return getCodexAccountCooldownUntil(accountId, now) !== null;
 }

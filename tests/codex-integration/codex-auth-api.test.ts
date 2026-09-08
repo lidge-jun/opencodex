@@ -33,6 +33,7 @@ import { openManualResetCreditOperation } from "../../src/codex/reset-credit-ope
 import {
   clearCodexUpstreamHealth,
   clearThreadAccountMap,
+  getCodexQuotaHealthSnapshot,
   getCodexUpstreamHealth,
   recordCodexUpstreamOutcome,
   resetCodexRoutingForManualSelection,
@@ -972,13 +973,23 @@ describe("codex-auth API", () => {
     }
   });
 
-  test("busy pool-quota probe maps reset-credit refresh to 503 server_busy with Retry-After 1", async () => {
+  test("busy pool-quota reconciliation preserves a confirmed reset and the prior cooldown", async () => {
     const config = makeConfig();
     seedPoolAccount(config, { id: "quota-reset-busy", email: "busy@example.test" });
+    recordCodexUpstreamOutcome(config, "quota-reset-busy", 429, {
+      modelId: "gpt-6-astra", resetAt: Date.now() + 600_000, fixedAccount: true,
+    });
+    const cooldown = getCodexQuotaHealthSnapshot("quota-reset-busy", "shared");
+    expect(cooldown).not.toBeNull();
     const cleanup = seedCodexAuthAdmissionForTests({ quotaFlights: 16 });
-    globalThis.fetch = (async (input: RequestInfo | URL) => String(input).includes("/consume")
-      ? Response.json({ code: "reset" })
-      : previousFetch(input)) as typeof fetch;
+    let consumeCalls = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      if (String(input).includes("/consume")) {
+        consumeCalls += 1;
+        return Response.json({ code: "reset" });
+      }
+      throw new Error("Busy quota reconciliation must not dispatch a usage request");
+    }) as typeof fetch;
     try {
       const req = new Request("http://localhost/api/codex-auth/reset-credits/consume", {
         method: "POST",
@@ -986,9 +997,11 @@ describe("codex-auth API", () => {
         body: JSON.stringify({ accountId: "quota-reset-busy" }),
       });
       const response = await handleCodexAuthAPI(req, new URL(req.url), config);
-      expect(response?.status).toBe(503);
-      expect(response?.headers.get("Retry-After")).toBe("1");
-      expect(await response?.json()).toMatchObject({ code: "server_busy" });
+      expect(response?.status).toBe(200);
+      expect(response?.headers.get("Retry-After")).toBeNull();
+      expect(await response?.json()).toEqual({ code: "reset" });
+      expect(consumeCalls).toBe(1);
+      expect(getCodexQuotaHealthSnapshot("quota-reset-busy", "shared")).toEqual(cooldown);
     } finally {
       cleanup();
     }
@@ -2717,6 +2730,338 @@ describe("codex-auth API", () => {
     });
   });
 
+  for (const accountKind of ["main", "pool"] as const) {
+    test(`reset-credit success reconciles only the prior shared cooldown for ${accountKind}`, async () => {
+      const accountId = accountKind === "main" ? MAIN_CODEX_ACCOUNT_ID : "reset-recovery-pool";
+      const config = makeConfig({ activeCodexAccountPinned: accountId, pausedCodexAccountIds: [accountId] });
+      if (accountKind === "main") {
+        writeFileSync(join(TEST_CODEX_HOME, "auth.json"), JSON.stringify({
+          tokens: {
+            access_token: jwtWithExp(Math.floor(Date.now() / 1000) + 3600),
+            account_id: "acct-reset-recovery-main",
+          },
+        }));
+        reconcileMainCodexAccountRuntimeState();
+      } else {
+        seedPoolAccount(config, { id: accountId, email: "reset-recovery@example.test", plan: "pro" });
+      }
+      const now = Date.now();
+      for (const modelId of ["gpt-6-astra", "gpt-5.3-codex-spark", "gpt-reserve"]) {
+        recordCodexUpstreamOutcome(config, accountId, 429, {
+          now, modelId, resetAt: now + 10 * 60_000, fixedAccount: true,
+        });
+      }
+      expect(getCodexQuotaHealthSnapshot(accountId, "shared")).toMatchObject({ cooldownSource: "reset-derived" });
+      const sparkBefore = getCodexQuotaHealthSnapshot(accountId, "spark");
+      expect(sparkBefore).not.toBeNull();
+      const reserveBefore = getCodexQuotaHealthSnapshot(accountId, "reserve");
+      expect(reserveBefore).not.toBeNull();
+      let consumeCalls = 0;
+      let usageCalls = 0;
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/backend-api/wham/rate-limit-reset-credits/consume")) {
+          consumeCalls += 1;
+          return Response.json({ code: "reset" });
+        }
+        if (url.endsWith("/backend-api/wham/usage")) {
+          usageCalls += 1;
+          return Response.json({
+            email: "reset-recovery@example.test",
+            plan_type: "pro",
+            rate_limit: {
+              primary_window: { used_percent: 0, limit_window_seconds: 18000, reset_at: Math.floor(now / 1000) + 18000 },
+              secondary_window: { used_percent: 0, limit_window_seconds: 604800, reset_at: Math.floor(now / 1000) + 604800 },
+            },
+            rate_limit_reset_credits: { available_count: 1 },
+          });
+        }
+        throw new Error(`Unexpected request in reset recovery fixture: ${url}`);
+      }) as typeof fetch;
+      const req = new Request("http://localhost/api/codex-auth/reset-credits/consume", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ accountId }),
+      });
+      const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+      expect(resp!.status).toBe(200);
+      expect(await resp!.json()).toEqual({ code: "reset", remaining: 1 });
+      expect({ consumeCalls, usageCalls }).toEqual({ consumeCalls: 1, usageCalls: 1 });
+      expect(getAccountQuota(accountId)?.weeklyPercent).toBe(0);
+      expect(getCodexQuotaHealthSnapshot(accountId, "shared")).toBeNull();
+      expect(getCodexQuotaHealthSnapshot(accountId, "spark")).toEqual(sparkBefore);
+      expect(getCodexQuotaHealthSnapshot(accountId, "reserve")).toEqual(reserveBefore);
+      expect(config.activeCodexAccountPinned).toBe(accountId);
+      expect(config.pausedCodexAccountIds).toEqual([accountId]);
+    });
+  }
+
+  test("reset-credit recovery cannot clear the replacement main identity cooldown", async () => {
+    const accountId = MAIN_CODEX_ACCOUNT_ID;
+    const config = makeConfig({ activeCodexAccountPinned: accountId });
+    const now = Date.now();
+    const writeIdentity = (id: string) => {
+      writeFileSync(join(TEST_CODEX_HOME, "auth.json"), JSON.stringify({
+        tokens: { access_token: jwtWithExp(Math.floor(now / 1000) + 3600), account_id: id },
+      }));
+      reconcileMainCodexAccountRuntimeState();
+    };
+    const recordCooldown = () => recordCodexUpstreamOutcome(config, accountId, 429, {
+      now, modelId: "gpt-6-astra", resetAt: now + 600_000, fixedAccount: true,
+    });
+    writeIdentity("acct-reset-main-before");
+    recordCooldown();
+    let replacement: ReturnType<typeof getCodexQuotaHealthSnapshot> = null;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/backend-api/wham/rate-limit-reset-credits/consume")) {
+        return Response.json({ code: "reset" });
+      }
+      if (url.endsWith("/backend-api/wham/usage")) {
+        writeIdentity("acct-reset-main-after");
+        recordCooldown();
+        replacement = getCodexQuotaHealthSnapshot(accountId, "shared");
+        return Response.json({
+          plan_type: "pro", rate_limit_reset_credits: { available_count: 1 },
+          rate_limit: { secondary_window: { used_percent: 0, limit_window_seconds: 604800, reset_at: Math.floor(now / 1000) + 604800 } },
+        });
+      }
+      throw new Error(`Unexpected request in main reset identity fixture: ${url}`);
+    }) as typeof fetch;
+    const req = new Request("http://localhost/api/codex-auth/reset-credits/consume", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ accountId }),
+    });
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+    expect(resp!.status).toBe(200);
+    expect(await resp!.json()).toEqual({ code: "reset" });
+    expect(replacement).not.toBeNull();
+    expect(getCodexQuotaHealthSnapshot(accountId, "shared")).toEqual(replacement);
+  });
+
+  for (const scenario of [
+    "already-redeemed", "incomplete", "quota-error", "new-failure", "recreated",
+    "credential-replaced", "retry-after", "consume-failed",
+  ] as const) {
+    test(`reset-credit recovery preserves a cooldown on ${scenario}`, async () => {
+      const accountId = "reset-recovery-preserve";
+      const config = makeConfig({ activeCodexAccountPinned: accountId });
+      seedPoolAccount(config, { id: accountId, email: "preserve@example.test", plan: "pro" });
+      const now = Date.now();
+      const recordCooldown = () => recordCodexUpstreamOutcome(config, accountId, 429, {
+        now: Date.now(), modelId: "gpt-6-astra", fixedAccount: true,
+        ...(scenario === "retry-after" ? { retryAfter: "600" } : { resetAt: now + 10 * 60_000 }),
+      });
+      recordCooldown();
+      let expected = getCodexQuotaHealthSnapshot(accountId, "shared");
+      expect(expected).not.toBeNull();
+      let usageCalls = 0;
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/backend-api/wham/rate-limit-reset-credits/consume")) {
+          if (scenario === "credential-replaced") {
+            saveCodexAccountCredential(accountId, {
+              accessToken: "access-replacement", refreshToken: "refresh-replacement",
+              expiresAt: now + 3600_000, chatgptAccountId: "acct-replacement",
+            });
+          }
+          return scenario === "consume-failed" ? new Response("unavailable", { status: 500 })
+            : Response.json({ code: scenario === "already-redeemed" ? "already_redeemed" : "reset" });
+        }
+        if (url.endsWith("/backend-api/wham/usage")) {
+          usageCalls += 1;
+          if (scenario === "new-failure" || scenario === "recreated") {
+            if (scenario === "recreated") clearCodexUpstreamHealth();
+            recordCooldown();
+            expected = getCodexQuotaHealthSnapshot(accountId, "shared");
+          }
+          if (scenario === "quota-error") return new Response("unavailable", { status: 500 });
+          return Response.json({
+            plan_type: "pro", rate_limit_reset_credits: { available_count: 1 },
+            ...(scenario === "incomplete" ? {} : {
+              rate_limit: { secondary_window: { used_percent: 0, limit_window_seconds: 604800, reset_at: Math.floor(now / 1000) + 604800 } },
+            }),
+          });
+        }
+        throw new Error(`Unexpected request in reset recovery fixture: ${url}`);
+      }) as typeof fetch;
+      const req = new Request("http://localhost/api/codex-auth/reset-credits/consume", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ accountId }),
+      });
+      const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+      expect(resp!.status).toBe(scenario === "consume-failed" ? 500 : 200);
+      if (scenario !== "consume-failed") {
+        expect(await resp!.json()).toMatchObject({ code: scenario === "already-redeemed" ? "already_redeemed" : "reset" });
+      }
+      expect(usageCalls).toBe(scenario === "consume-failed" ? 0 : 1);
+      expect(getCodexQuotaHealthSnapshot(accountId, "shared")).toEqual(expected);
+    });
+  }
+
+  test("reset-credit recovery drains a pre-reset observation before reading recovered quota", async () => {
+    const accountId = "reset-recovery-flight";
+    const config = makeConfig({ activeCodexAccountPinned: accountId });
+    seedPoolAccount(config, { id: accountId, email: "flight@example.test", plan: "pro" });
+    const now = Date.now();
+    recordCodexUpstreamOutcome(config, accountId, 429, {
+      now, modelId: "gpt-6-astra", resetAt: now + 600_000, fixedAccount: true,
+    });
+    let releaseOld!: (value: Response) => void;
+    let markStarted!: () => void;
+    let markReset!: () => void;
+    const started = new Promise<void>(resolve => { markStarted = resolve; });
+    const reset = new Promise<void>(resolve => { markReset = resolve; });
+    const old = new Promise<Response>(resolve => { releaseOld = resolve; });
+    const events: string[] = [];
+    let usageCalls = 0;
+    const usage = (percent: number) => Response.json({
+      plan_type: "pro", rate_limit_reset_credits: { available_count: 1 },
+      rate_limit: { secondary_window: { used_percent: percent, limit_window_seconds: 604800, reset_at: Math.floor(now / 1000) + 604800 } },
+    });
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/backend-api/wham/rate-limit-reset-credits/consume")) {
+        events.push("reset"); markReset(); return Response.json({ code: "reset" });
+      }
+      if (url.endsWith("/backend-api/wham/usage")) {
+        usageCalls += 1;
+        events.push(`usage-${usageCalls}`);
+        if (usageCalls === 1) { markStarted(); return old; }
+        return usage(0);
+      }
+      throw new Error(`Unexpected request in reset recovery fixture: ${url}`);
+    }) as typeof fetch;
+    const oldRefresh = listCodexAuthAccounts(config, true);
+    let consumed: ReturnType<typeof handleCodexAuthAPI> | undefined;
+    try {
+      await started;
+      const req = new Request("http://localhost/api/codex-auth/reset-credits/consume", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ accountId }),
+      });
+      consumed = handleCodexAuthAPI(req, new URL(req.url), config);
+      await reset;
+      expect(getCodexQuotaHealthSnapshot(accountId, "shared")).not.toBeNull();
+      events.push("release-old");
+      releaseOld(usage(100));
+      await oldRefresh;
+      const resp = await consumed;
+      expect(await resp!.json()).toEqual({ code: "reset", remaining: 1 });
+      expect(events).toEqual(["usage-1", "reset", "release-old", "usage-2"]);
+      expect(getAccountQuota(accountId)?.weeklyPercent).toBe(0);
+      expect(getCodexQuotaHealthSnapshot(accountId, "shared")).toBeNull();
+    } finally {
+      releaseOld(usage(100));
+      await Promise.allSettled([oldRefresh, ...(consumed ? [consumed] : [])]);
+    }
+  });
+
+  test("reset-credit recovery drains all old credential-generation observations", async () => {
+    const accountId = "reset-recovery-multiple-flights";
+    const config = makeConfig({ activeCodexAccountPinned: accountId });
+    seedPoolAccount(config, { id: accountId, email: "multiple@example.test", plan: "pro" });
+    const now = Date.now();
+    recordCodexUpstreamOutcome(config, accountId, 429, {
+      now, modelId: "gpt-6-astra", resetAt: now + 600_000, fixedAccount: true,
+    });
+    function pending<T>() {
+      let resolve!: (value: T) => void;
+      const promise = new Promise<T>(r => { resolve = r; });
+      return { promise, resolve };
+    }
+    const first = pending<Response>();
+    const second = pending<Response>();
+    const replay = pending<Response>();
+    const starts = [pending<void>(), pending<void>(), pending<void>()];
+    const resetStarted = pending<void>();
+    let usageCalls = 0;
+    let consumeCalls = 0;
+    const usage = (percent: number) => Response.json({
+      plan_type: "pro", rate_limit_reset_credits: { available_count: 1 },
+      rate_limit: { secondary_window: { used_percent: percent, limit_window_seconds: 604800, reset_at: Math.floor(now / 1000) + 604800 } },
+    });
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/backend-api/wham/rate-limit-reset-credits/consume")) {
+        consumeCalls += 1; resetStarted.resolve(); return Response.json({ code: "reset" });
+      }
+      if (url.endsWith("/backend-api/wham/usage")) {
+        const index = usageCalls++;
+        starts[index]?.resolve();
+        return [first.promise, second.promise, replay.promise][index] ?? usage(0);
+      }
+      throw new Error(`Unexpected request in reset recovery fixture: ${url}`);
+    }) as typeof fetch;
+    const oldFirst = listCodexAuthAccounts(config, true);
+    let oldSecond: ReturnType<typeof listCodexAuthAccounts> | undefined;
+    let consumed: ReturnType<typeof handleCodexAuthAPI> | undefined;
+    try {
+      await starts[0]!.promise;
+      saveCodexAccountCredential(accountId, {
+        accessToken: "access-current-flight", refreshToken: "refresh-current-flight",
+        expiresAt: now + 3600_000, chatgptAccountId: `acct-${accountId}`,
+      });
+      oldSecond = listCodexAuthAccounts(config, true);
+      await starts[1]!.promise;
+      // The first flight adopts the replacement generation and now overlaps the second.
+      first.resolve(new Response("expired", { status: 401 }));
+      await starts[2]!.promise;
+      const req = new Request("http://localhost/api/codex-auth/reset-credits/consume", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ accountId }),
+      });
+      let settled = false;
+      consumed = handleCodexAuthAPI(req, new URL(req.url), config).then(value => { settled = true; return value; });
+      await resetStarted.promise;
+      replay.resolve(usage(0));
+      await oldFirst;
+      expect(settled).toBe(false);
+      expect(usageCalls).toBe(3);
+      second.resolve(usage(0));
+      await oldSecond;
+      const resp = await consumed;
+      expect(await resp!.json()).toEqual({ code: "reset", remaining: 1 });
+      expect({ consumeCalls, usageCalls }).toEqual({ consumeCalls: 1, usageCalls: 4 });
+      expect(getAccountQuota(accountId)?.weeklyPercent).toBe(0);
+      expect(getCodexQuotaHealthSnapshot(accountId, "shared")).toBeNull();
+    } finally {
+      first.resolve(usage(0)); second.resolve(usage(0)); replay.resolve(usage(0));
+      await Promise.allSettled([oldFirst, ...(oldSecond ? [oldSecond] : []), ...(consumed ? [consumed] : [])]);
+    }
+  });
+
+  test("reset-credit durable replay preserves a cooldown recorded after the reset", async () => {
+    const accountId = "reset-recovery-replayed";
+    const config = makeConfig();
+    seedPoolAccount(config, { id: accountId, email: "replayed@example.test", plan: "pro" });
+    const now = Date.now();
+    let consumeCalls = 0;
+    let usageCalls = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/backend-api/wham/rate-limit-reset-credits/consume")) {
+        consumeCalls += 1; return Response.json({ code: "reset" });
+      }
+      if (url.endsWith("/backend-api/wham/usage")) {
+        usageCalls += 1; return Response.json({
+          plan_type: "pro", rate_limit_reset_credits: { available_count: 1 },
+          rate_limit: { secondary_window: { used_percent: 0, limit_window_seconds: 604800, reset_at: Math.floor(now / 1000) + 604800 } },
+        });
+      }
+      throw new Error(`Unexpected request in reset recovery fixture: ${url}`);
+    }) as typeof fetch;
+    const request = () => new Request("http://localhost/api/codex-auth/reset-credits/consume", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ accountId, operationId: "d102d6c4-e2c1-4c42-9e40-63e6ef559703" }),
+    });
+    const first = request();
+    expect(await (await handleCodexAuthAPI(first, new URL(first.url), config))!.json()).toMatchObject({ code: "reset" });
+    recordCodexUpstreamOutcome(config, accountId, 429, {
+      now, modelId: "gpt-6-astra", resetAt: now + 600_000, fixedAccount: true,
+    });
+    const expected = getCodexQuotaHealthSnapshot(accountId, "shared");
+    const second = request();
+    expect(await (await handleCodexAuthAPI(second, new URL(second.url), config))!.json()).toEqual({ code: "reset", replayed: true });
+    expect({ consumeCalls, usageCalls }).toEqual({ consumeCalls: 1, usageCalls: 1 });
+    expect(getCodexQuotaHealthSnapshot(accountId, "shared")).toEqual(expected);
+  });
+
   test("reset-credit consume rejects invalid account ids before credential lookup", async () => {
     const req = new Request("http://localhost/api/codex-auth/reset-credits/consume", {
       method: "POST",
@@ -3046,6 +3391,46 @@ describe("codex-auth API", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  test.each(["reset", "already_redeemed"] as const)("first main reset-credit %s returns fresh remaining without a prior account lookup", async code => {
+    writeFileSync(join(TEST_CODEX_HOME, "auth.json"), JSON.stringify({
+      tokens: {
+        access_token: jwtWithExp(Math.floor(Date.now() / 1000) + 3600),
+        account_id: `acct-first-main-${code}`,
+      },
+    }));
+    let consumeCalls = 0;
+    let usageCalls = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/backend-api/wham/rate-limit-reset-credits/consume")) {
+        consumeCalls += 1;
+        return Response.json({ code, remaining: 99 });
+      }
+      if (url.endsWith("/backend-api/wham/usage")) {
+        usageCalls += 1;
+        return Response.json({
+          email: "first-main@example.test", plan_type: "pro",
+          rate_limit: {
+            primary_window: { used_percent: 0, limit_window_seconds: 18000 },
+            secondary_window: { used_percent: 0, limit_window_seconds: 604800 },
+          },
+          rate_limit_reset_credits: { available_count: 1 },
+        });
+      }
+      throw new Error("Unexpected request in first main reset fixture");
+    }) as typeof fetch;
+
+    const req = new Request("http://localhost/api/codex-auth/reset-credits/consume", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ accountId: MAIN_CODEX_ACCOUNT_ID }),
+    });
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), makeConfig());
+    expect(resp!.status).toBe(200);
+    expect(await resp!.json()).toEqual({ code, remaining: 1 });
+    expect(consumeCalls).toBe(1);
+    expect(usageCalls).toBe(1);
   });
 
   test("reset-credit consume returns remaining from fresh main WHAM credits", async () => {

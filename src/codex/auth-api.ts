@@ -39,6 +39,7 @@ import {
   setCodexAccountPriority,
 } from "./account-priority";
 import {
+  captureCodexResetCreditCooldown,
   claimDueCodexQuotaRecoveryProbes,
   clearCodexAccountCooldown,
   clearThreadAccountMapForAccount,
@@ -1417,6 +1418,7 @@ async function fetchPoolAccountQuota(
   forceRefresh = false,
   configuredPlan?: string,
   getValidToken: typeof getValidCodexToken = getValidCodexToken,
+  joinExisting = true,
 ): Promise<PoolQuotaResult> {
   const existing = getAccountQuota(accountId);
   if (!forceRefresh && existing && Date.now() - existing.updatedAt < POOL_CACHE_TTL) {
@@ -1431,6 +1433,13 @@ async function fetchPoolAccountQuota(
   // replacement credential with the same pool id start its own request.
   const record = readCodexAccountRecord(accountId);
   const flights = poolQuotaRefreshInFlight.get(accountId);
+  if (!joinExisting && flights?.size) {
+    // Credential transitions can leave several old flights, including one that
+    // later adopts the current generation. Drain the entire pre-reset set so
+    // none can be joined as fresh evidence or overwrite the new quota cache.
+    await Promise.allSettled([...flights].map(flight => flight.promise));
+    return fetchPoolAccountQuota(accountId, true, configuredPlan, getValidToken);
+  }
   const current = flights && [...flights].find(flight => {
     const generation = flight.state.resolvedCredentialGeneration
       ?? flight.state.startCredentialGeneration;
@@ -2382,6 +2391,11 @@ export async function handleCodexAuthAPI(
         } else {
           idempotencyKey = crypto.randomUUID();
         }
+        // Establish a first main identity while the native claim is held, before capturing its generation.
+        if (auth.isMain) reconcileMainCodexAccountRuntimeState();
+        const recoverCooldown = captureCodexResetCreditCooldown(accountId);
+        const resetMainGeneration = auth.isMain ? captureMainAccountIdentityGeneration() : undefined;
+        const resetPoolRecord = auth.isMain ? undefined : readCodexAccountRecord(accountId);
         let resp: Response;
         try {
           resp = await fetch(
@@ -2428,16 +2442,39 @@ export async function handleCodexAuthAPI(
         // Do not fall back to a preserved cached resetCredits (failed/omitted refresh).
         if (result.code === "reset" || result.code === "already_redeemed") {
           let freshResetCredits: number | undefined;
-          if (auth.isMain) {
-            ({ freshResetCredits } = await fetchMainAccountInfoAttempt(
-              true,
-              1,
-              auth.nativeMainLease,
-              auth.nativeMainSharedClaimHeld === true,
-            ));
-          } else {
-            const account = configuredPoolAccount(getRuntimeConfig(config), accountId);
-            ({ freshResetCredits } = await fetchPoolAccountQuota(accountId, true, account?.plan));
+          try {
+            if (auth.isMain) {
+              // Main force refresh starts its own WHAM request while the native claim is held.
+              const fresh = await fetchMainAccountInfoAttempt(
+                true, 1, auth.nativeMainLease, auth.nativeMainSharedClaimHeld === true,
+              );
+              const sameIdentity = resetMainGeneration !== undefined
+                && fresh.identityGeneration === resetMainGeneration
+                && isMainAccountIdentityGenerationLive(resetMainGeneration)
+                && getMainChatgptAccountId() === auth.chatgptAccountId;
+              freshResetCredits = sameIdentity ? fresh.freshResetCredits : undefined;
+              recoverCooldown(result.code === "reset" && sameIdentity
+                && isCompleteCodexQuotaRecoverySnapshot(fresh.freshQuota ?? null, fresh.info.plan));
+            } else {
+              const account = configuredPoolAccount(getRuntimeConfig(config), accountId);
+              // A flight already running when the reset completes cannot prove post-reset recovery.
+              const fresh = await fetchPoolAccountQuota(accountId, true, account?.plan,
+                getValidCodexToken, result.code !== "reset");
+              const currentRecord = readCodexAccountRecord(accountId);
+              const generation = fresh.freshCredentialGeneration;
+              const sameCredential = resetPoolRecord != null && generation !== undefined
+                && resetPoolRecord.credential?.chatgptAccountId === auth.chatgptAccountId
+                && currentRecord?.credential?.chatgptAccountId === auth.chatgptAccountId
+                && currentRecord.replacedAt === resetPoolRecord.replacedAt
+                && (generation === resetPoolRecord.generation || generation === resetPoolRecord.generation + 1)
+                && isCodexAccountGenerationLive(accountId, generation);
+              freshResetCredits = sameCredential ? fresh.freshResetCredits : undefined;
+              recoverCooldown(result.code === "reset" && sameCredential
+                && isCompleteCodexQuotaRecoverySnapshot(fresh.freshQuota ?? null, fresh.freshPlan ?? account?.plan));
+            }
+          } catch {
+            // The credit is already spent. Failed reconciliation must not invite another spend.
+            recoverCooldown(false);
           }
           return jsonResponse({
             code: result.code,

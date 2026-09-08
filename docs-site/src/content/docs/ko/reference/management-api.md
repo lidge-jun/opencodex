@@ -253,6 +253,14 @@ OpenAI도 같은 규칙을 따르며, 스위치를 켠다고 별도의 922k 모�
 | `POST /api/codex-auth/login/cancel` | Codex 로그인 흐름을 취소합니다 | — |
 | `GET /api/codex-auth/login-status` | 흐름 또는 account 로그인 상태를 조회합니다. 새 계정 완료 시 복구가 필요할 때만 `catalogRefreshPending: true`를 포함합니다. | 알 수 없는 흐름은 `expired`로 보고되며, 활성 흐름이 없으면 `idle`로 보고됩니다 |
 
+수동 리셋에서 `code: "reset"`을 받은 뒤, 같은 계정의 새롭고 완전한 사용량 조회로 복구가 확인되면
+그 계정에 남아 있던 일반 `reset-derived` 대기만 해제합니다. main과 추가 계정 모두 적용되며,
+리셋 전에 시작된 조회는 복구 근거로 사용하지 않습니다. 새 오류, 명시적 `Retry-After`,
+Spark/Reserve 제한, 고정 선택과 일시정지는 유지합니다. `already_redeemed`나 저장된 결과 재생은
+대기를 해제하지 않습니다. 리셋 성공 후 조회가 바쁘거나 실패하거나 계정이 바뀌면 확인된 성공
+코드를 반환하고 대기는 유지합니다. 같은 계정의 신선한 크레딧 수를 확인하지 못하면 `remaining`은
+생략합니다. 사용량 조회를 재시도하기 위해 크레딧을 다시 소비하지 마십시오.
+
 새 account의 config row는 저장되었지만 credential setup을 완료하지 못하면 OAuth `login-status`는
 `status: "error"`를 보고하며
 `code: "codex_credential_persistence_failed"`, `accountId`, `needsReauth: true`, 필요한 경우

@@ -434,6 +434,15 @@ requests with the original ID or a known alias replay the stored result without 
 consume request. A previously unseen ID supplied after settlement starts a new explicit
 redemption; clients retrying an existing action should keep its ID.
 
+A manual reset returning `code: "reset"` reconciles that account's prior ordinary
+`reset-derived` cooldown only after a new, complete usage reading confirms recovery for the same
+identity. This applies to main and added accounts. A usage request already running before the reset
+cannot supply that evidence. Newer failures, explicit `Retry-After`, Spark/Reserve limits, pins and
+pauses are preserved. `already_redeemed` and durable replay do not clear cooldowns.
+If the reset is confirmed but usage reconciliation is busy, fails or changes identity, the API keeps
+the confirmed success code and leaves the cooldown intact; it omits `remaining` when no fresh
+same-identity credit count is available. Do not consume another credit just to retry that read.
+
 If a new account config row is saved but credential setup cannot finish, OAuth `login-status` reports
 `status: "error"` with
 `code: "codex_credential_persistence_failed"`, `accountId`, `needsReauth: true`, and optional

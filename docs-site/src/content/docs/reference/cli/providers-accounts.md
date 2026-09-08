@@ -440,6 +440,12 @@ security find-generic-password -w openrouter | ocx account add-key openrouter --
 Inspect Codex reset credits for an account. Consuming a credit is destructive and requires both
 `--consume` and `--yes`.
 
+After a confirmed new reset, a fresh complete usage reading for the same account can clear its
+prior ordinary quota cooldown. Other limits and newer failures remain intact. If that reading
+cannot complete, the confirmed reset still succeeds and may omit the remaining credit count;
+retry the account usage refresh without consuming another credit. See the
+[management API reset contract](/reference/management-api/#codex-authentication-delegation).
+
 ### `ocx account main <subcommand>`
 
 Manage named native Codex main-login profiles without changing OpenCodex account-pool routing:
