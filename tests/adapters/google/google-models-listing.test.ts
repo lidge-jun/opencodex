@@ -330,7 +330,7 @@ describe("buildModelsRequest anthropic routing", () => {
 });
 
 describe("google models listing via catalog", () => {
-  test("treats a { models } 2xx shape as malformed and degrades to the static seed", async () => {
+  test("publishes generateContent models from the native models envelope", async () => {
     clearModelCache("google");
     const warning = spyOn(console, "warn").mockImplementation(() => {});
     const seen: { url: string; headers: Record<string, string> }[] = [];
@@ -338,8 +338,9 @@ describe("google models listing via catalog", () => {
       seen.push({ url: String(input), headers: (init?.headers ?? {}) as Record<string, string> });
       return new Response(JSON.stringify({
         models: [
-          { name: "models/gemini-3-pro", inputTokenLimit: 1048576, supportedGenerationMethods: ["generateContent", "countTokens"] },
+          { name: "models/gemini-3-pro", inputTokenLimit: 1048576, outputTokenLimit: 65536, supportedGenerationMethods: ["generateContent", "countTokens"] },
           { name: "models/text-embedding-004", supportedGenerationMethods: ["embedContent"] },
+          { name: "models/gemini-missing-methods" },
           { name: "models/gemini-3-flash", inputTokenLimit: 1048576, supportedGenerationMethods: ["generateContent"] },
         ],
       }), { status: 200, headers: { "content-type": "application/json" } });
@@ -356,12 +357,13 @@ describe("google models listing via catalog", () => {
       expect(seen).toHaveLength(1);
       expect(seen[0].url).toBe("https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000");
       expect(seen[0].headers["x-goog-api-key"]).toBe("gk-123");
-      const ids = models.filter(m => m.provider === "google").map(m => m.id);
-      expect(ids).toEqual(["gemini-3.1-pro-preview", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash"]);
-      expect(ids).not.toContain("gemini-3-pro");
-      expect(ids).not.toContain("gemini-3-flash");
-      expect(getStaleCached("google")).toBeNull();
-      expect(warning.mock.calls.flat().join(" ")).toContain("google");
+      const live = models.filter(m => m.provider === "google");
+      expect(live.map(m => m.id)).toEqual(["gemini-3-flash", "gemini-3-pro"]);
+      expect(live.find(m => m.id === "gemini-3-pro")).toMatchObject({
+        contextWindow: 1_048_576,
+        maxInputTokens: 1_048_576,
+        maxOutputTokens: 65_536,
+      });
     } finally {
       warning.mockRestore();
     }

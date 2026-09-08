@@ -77,6 +77,7 @@ import {
   type ProviderModelsApiItem,
   type ResolvedProviderModelDiscovery,
 } from "../../providers/model-discovery";
+import { extractGoogleAiStudioModelItems } from "../../providers/google-ai-studio-model-discovery";
 import { applyConfiguredHeadersLast, fetchOllamaShowEnrichment, ollamaShowEnrichable } from "../../providers/ollama-show";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
 import { createAdmissionGate, ResourceAdmissionError, type AdmissionMetrics } from "../../lib/admission";
@@ -1807,7 +1808,9 @@ async function fetchProviderModelsWithAuth(
       markProviderDiscoveryOk(name, live.length);
       return observed(withConfiguredRetention(forCache, { warnDrops: true }), "authoritative");
     }
-    const extracted = extractProviderModelItems(bounded.value, discovery);
+    const extracted = effectiveGoogleMode(name, prov) === "ai-studio"
+      ? extractGoogleAiStudioModelItems(bounded.value, discovery.maxModels)
+      : extractProviderModelItems(bounded.value, discovery);
     if (!extracted.ok) {
       const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "invalid_response" });
       const diagnostic: Record<ModelDiscoveryResponseFailure, string> = {

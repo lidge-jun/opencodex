@@ -46,12 +46,12 @@ import { deriveProviderPresets, providerConfigSeed } from "../../providers/deriv
 import { initializeProviderModelSelection } from "../../providers/initial-model-selection";
 import { effectiveGoogleMode, providerCodexAccountMode, providerMatchesRegistryTransport } from "../../providers/registry";
 import {
-  extractModelEnvelopeRows,
   extractProviderModelItems,
   isRegistryModelDiscoveryUrl,
   readBoundedDiscoveryJson,
   resolveProviderModelDiscovery,
 } from "../../providers/model-discovery";
+import { extractGoogleAiStudioModelItems } from "../../providers/google-ai-studio-model-discovery";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
 import { clearKeyCooldowns } from "../../providers/key-failover";
@@ -1403,17 +1403,11 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       if (antigravity && !ccaModels) {
         return jsonResponse({ ok: false, latencyMs, error: "upstream CCA model discovery returned an unexpected shape" });
       }
-      // OpenAI-style lists (and Together top-level arrays) use the same validation/dedupe/filter
-      // as catalog discovery. Google's /v1beta/models uses `models[].name` and remains a
-      // connectivity-only count because it is not an authoritative catalog source.
-      const record = bounded.value !== null && typeof bounded.value === "object" && !Array.isArray(bounded.value)
-        ? bounded.value as Record<string, unknown>
-        : undefined;
       const extracted = ccaModels
         ? undefined
-        : Array.isArray(bounded.value) || Array.isArray(record?.data)
-        ? extractProviderModelItems(bounded.value, discovery)
-        : extractModelEnvelopeRows(bounded.value, discovery.maxModels, ["models"]);
+        : effectiveGoogleMode(name, prov) === "ai-studio"
+          ? extractGoogleAiStudioModelItems(bounded.value, discovery.maxModels)
+          : extractProviderModelItems(bounded.value, discovery);
       if (extracted && !extracted.ok) {
         return jsonResponse({
           ok: false,
@@ -1423,7 +1417,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
             : "upstream /models returned an unexpected shape",
         });
       }
-      const models = ccaModels?.length ?? ("items" in extracted! ? extracted!.items.length : extracted!.rows.length);
+      const models = ccaModels?.length ?? extracted?.items.length ?? 0;
       return jsonResponse({
         ok: true,
         latencyMs,
