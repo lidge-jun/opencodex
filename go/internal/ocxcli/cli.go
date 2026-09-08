@@ -64,12 +64,18 @@ var Commands = []Command{
 	{Name: "codex-shim", Usage: "ocx codex-shim <sub>", Summary: "Manage the Codex autostart shim.", Owner: TypeScriptOwned},
 	{Name: "tray", Usage: "ocx tray <sub>", Summary: "Manage the Windows status tray.", Owner: TypeScriptOwned},
 	{Name: "ensure", Usage: "ocx ensure", Summary: "Ensure the proxy is running.", Owner: TypeScriptOwned},
-	{Name: "connect", Usage: "ocx connect <url>", Summary: "Connect to a remote hub.", Owner: TypeScriptOwned},
 	// connect keeps its TypeScript owner per subcommand: `status` shares the Go
 	// client-state implementation below, while connect/rotate/revoke stay
 	// TypeScript-owned until the hub machine-API + config-injection transaction
 	// carries its own oracle. disconnect is fully Go-owned (local teardown).
-	{Name: "disconnect", Usage: "ocx disconnect", Summary: "Disconnect from a remote hub.", Owner: GoOwned},
+	// Usage/Summary mirror the TypeScript registry entries verbatim so any future
+	// render of this surface map cannot drift from `ocx help disconnect`.
+	{Name: "connect", Usage: "ocx connect <url> [--management-url <url>] (--pairing-code-stdin | --admin-token-stdin) [--clients codex,claude] [--management-transport direct|relay] [--catalog-timeout <seconds>] [--no-sync]", Summary: "Connect this machine to a remote OpenCodex hub without persisting the one-time authority.", Owner: TypeScriptOwned},
+	// connect keeps its TypeScript owner per subcommand: `status` shares the Go
+	// client-state implementation below, while connect/rotate/revoke stay
+	// TypeScript-owned until the hub machine-API + config-injection transaction
+	// carries its own oracle. disconnect is fully Go-owned (local teardown).
+	{Name: "disconnect", Usage: "ocx disconnect [--keep-catalog] [--json]", Summary: "Restore local client state offline and clear the remote-hub connection.", Owner: GoOwned},
 	{Name: "sync", Usage: "ocx sync [--restart-codex]", Summary: "Sync provider models.", Owner: TypeScriptOwned},
 	{Name: "sync-cache", Usage: "ocx sync-cache [--restart-codex]", Summary: "Refresh the model cache.", Owner: TypeScriptOwned},
 	{Name: "status", Usage: "ocx status", Summary: "Check proxy status.", Owner: GoOwned},
@@ -369,11 +375,14 @@ func printSubcommandHelp(name string, deps Deps) int {
 	case "config":
 		fmt.Fprint(deps.Stdout, configHelp)
 	case "disconnect":
-		// Registry text (src/cli/registry.ts disconnect entry); the family's
-		// surface now dispatches natively so help no longer delegates.
-		fmt.Fprintln(deps.Stdout, "Usage: ocx disconnect [--keep-catalog] [--json]")
-		fmt.Fprintln(deps.Stdout)
-		fmt.Fprintln(deps.Stdout, "Restore local client state offline and clear the remote-hub connection.")
+		// The disconnect surface map entry mirrors the TypeScript registry entry
+		// verbatim; render it here so help no longer delegates and the text cannot
+		// drift from the entry used by the ownership tests.
+		for _, command := range Commands {
+			if command.Name == "disconnect" {
+				fmt.Fprintf(deps.Stdout, "Usage: %s\n\n%s\n", command.Usage, command.Summary)
+			}
+		}
 	default:
 		fmt.Fprintf(deps.Stderr, "Unknown command: %s\n", name)
 		printHelp(deps.Stdout)
