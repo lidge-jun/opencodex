@@ -354,10 +354,13 @@ export const SERIAL_FULL_SUITE_FILES = [
   "guardrails/guardrails-scanner.test.ts",
   "guardrails/guardrails-server-e2e.test.ts",
   "images/loop.test.ts",
+  "responses/responses-compaction-routing.test.ts",
   "responses/responses-state.test.ts",
+  "responses/ws-upstream.test.ts",
   "routing/routing-policy-fallback.test.ts",
   "server/agent-task-recovery.test.ts",
   "server/server-management-auth.test.ts",
+  "vision/vision-sidecar-e2e.test.ts",
   "web-search/web-search.test.ts",
 ] as const;
 
