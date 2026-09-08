@@ -174,6 +174,11 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       ...(!Object.hasOwn(requestedCombo, "waitForCooldownMs") && previous?.waitForCooldownMs !== undefined
         ? { waitForCooldownMs: previous.waitForCooldownMs }
         : {}),
+      // The dashboard does not expose this advanced CLI/API policy. Preserve it when
+      // a GUI round-trip omits the field instead of silently downgrading to fallback.
+      ...(!Object.hasOwn(requestedCombo, "defaultEffortMode") && previous?.defaultEffortMode !== undefined
+        ? { defaultEffortMode: previous.defaultEffortMode }
+        : {}),
     };
     const error = comboConfigError(id, effectiveCombo, config.providers, {
       requireEnabledTarget: true,
