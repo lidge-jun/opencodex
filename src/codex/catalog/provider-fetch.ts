@@ -1425,6 +1425,13 @@ export function catalogHintsFromModelsApiItem(providerName: string, item: Provid
       // supplying a recognized field changes behavior (#1797).
       plainRecord(item.meta)?.n_ctx,
       plainRecord(item.meta)?.n_ctx_train,
+      // A chained OpenCodex hub (and other re-serving gateways) reports the per-model
+      // window on the same capability record this function already reads for
+      // `max_output_tokens` below (#4032). Without it every routed row fell through to
+      // the 128k compatibility floor in parsing.ts while local forward rows kept their
+      // real values. Appended after the recognized fields for the same reason as the
+      // llama.cpp entries above: no provider that already resolves changes behavior.
+      capabilityRecord?.context_length,
     );
   const maxInputTokens = positiveSafeInteger(limits?.max_input_tokens, item.max_input_tokens);
   const maxOutputTokens = positiveSafeInteger(

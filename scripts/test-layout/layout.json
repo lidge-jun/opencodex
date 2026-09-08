@@ -267,6 +267,7 @@
     "catalog-cursor-search.test.ts": "codex-integration",
     "catalog-full-picker-order.test.ts": "codex-integration",
     "catalog-go-exact-efforts.test.ts": "codex-integration",
+    "catalog-hub-context-window.test.ts": "codex-integration",
     "catalog-input-modality-enum.test.ts": "codex-integration",
     "catalog-llamacpp-capabilities.test.ts": "codex-integration",
     "catalog-oauth-observation.test.ts": "codex-integration",
