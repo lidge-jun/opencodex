@@ -71,7 +71,25 @@ export function gracefulStopHost(hostname: string | undefined): string {
  */
 export type GracefulStopResult = boolean | "refused";
 
-/** A proxy declined shutdown because a service under another home owns it (HTTP 409). */
+/**
+ * The server's own explanation for the most recent 409, captured so `stopProxy` can report
+ * the real reason. There is more than one: a scheduler wrapper under another home, or the
+ * proxy being the installed service itself (#4023). Module-scoped because
+ * `GracefulStopResult` is a public contract with several callers, and widening it to carry
+ * the text would change every one of them for a message only this file reports.
+ */
+let lastRefusalMessage: string | null = null;
+
+/** The server's explanation for the most recent 409, or `null` when it sent none. */
+export function lastStopRefusalMessage(): string | null {
+  return lastRefusalMessage;
+}
+
+/**
+ * A proxy declined shutdown (HTTP 409). There is more than one reason it can say no — a
+ * scheduler wrapper under another home, or the proxy being the installed service itself
+ * (#4023) — so the server's own message is carried through rather than guessed at.
+ */
 export class ProxyOwnershipRefusedError extends Error {}
 
 /**
@@ -111,7 +129,15 @@ export async function stopProxyGracefully(pid: number, io: GracefulStopIo = {}):
     // would respawn it anyway). That is a policy answer, not a dead endpoint — escalating to
     // SIGTERM here would run the daemon's cleanup and strip shared config out from under the
     // still-running service. Report the refusal instead of forcing.
-    if (res.status === 409) return "refused";
+    if (res.status === 409) {
+      lastRefusalMessage = await res.json()
+        .then(body => {
+          const message = (body as { message?: unknown } | null)?.message;
+          return typeof message === "string" && message.trim() ? message.trim() : null;
+        })
+        .catch(() => null);
+      return "refused";
+    }
     if (!res.ok) return false;
   } catch {
     return false;
@@ -140,8 +166,9 @@ export async function stopProxy(pid: number, io: GracefulStopIo = {}): Promise<b
     // The proxy refused on purpose (foreign service owns it). Forcing would strip shared
     // config while that service keeps the proxy alive.
     throw new ProxyOwnershipRefusedError(
-      "The running proxy refused to stop: a service installed under a different "
-      + "CODEX_HOME/OPENCODEX_HOME owns it. Run the stop from that home.",
+      lastRefusalMessage
+      ?? "The running proxy refused to stop: a service installed under a different "
+        + "CODEX_HOME/OPENCODEX_HOME owns it. Run the stop from that home.",
     );
   }
   if (graceful) {

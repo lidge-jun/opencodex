@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { gracefulStopHost, stopProxyGracefully } from "../../src/lib/process-control";
+import { gracefulStopHost, lastStopRefusalMessage, stopProxyGracefully } from "../../src/lib/process-control";
 
 function okResponse(): Response {
   return new Response(JSON.stringify({ success: true }), { status: 200 });
@@ -105,5 +105,40 @@ describe("stopProxyGracefully", () => {
       env: {},
     });
     expect(noExit).toBe(false);
+  });
+});
+
+describe("409 refusal reporting", () => {
+  test("a refusal carries the server's own reason, not the ownership guess", async () => {
+    // /api/stop answers 409 for more than one reason: a scheduler wrapper under another
+    // home, and (since #4023) the proxy being the installed launchd/systemd job itself.
+    // stopProxy used to report the first of those unconditionally, sending an operator
+    // whose proxy is simply the service to a CODEX_HOME that does not exist.
+    const selfUnload = "This proxy is running as the installed service, so stopping the manager"
+      + " from inside it would end this process before native Codex is restored."
+      + " Run `ocx stop`, which stops the service from outside and completes the restore."
+      + " Nothing was changed.";
+    const result = await stopProxyGracefully(7, {
+      readRuntime: () => ({ port: 10100 }),
+      fetchFn: (async () => new Response(
+        JSON.stringify({ success: false, code: "self_unload_service", message: selfUnload }),
+        { status: 409, headers: { "content-type": "application/json" } },
+      )) as typeof fetch,
+      waitExit: () => true,
+      env: {},
+    });
+    expect(result).toBe("refused");
+    expect(lastStopRefusalMessage()).toBe(selfUnload);
+  });
+
+  test("a 409 with no readable body falls back rather than reporting a stale reason", async () => {
+    const result = await stopProxyGracefully(7, {
+      readRuntime: () => ({ port: 10100 }),
+      fetchFn: (async () => new Response("not json", { status: 409 })) as typeof fetch,
+      waitExit: () => true,
+      env: {},
+    });
+    expect(result).toBe("refused");
+    expect(lastStopRefusalMessage()).toBeNull();
   });
 });
