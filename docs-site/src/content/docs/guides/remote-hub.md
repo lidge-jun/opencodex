@@ -297,6 +297,51 @@ both named volumes and a synthetic catalog survive replacement. This check does 
 real provider account, OAuth callback, custom mount migration, or every CPU architecture; perform
 the authenticated routed-response check above for your deployment.
 
+## Remote client voice
+
+Codex owns microphone capture, playback, and WebRTC media. The hub forwards call creation and
+the realtime control WebSocket, but a remote provider's `x-opencodex-api-key` header is not
+automatically included in those dedicated voice transports. The loopback injection described in
+[Codex integration](/guides/codex-integration/#config-injection) does not solve remote admission.
+
+On an already connected client, the opt-in `ocx voice-relay` command provides a local voice-only
+transport using that client's existing hub data credential. It is a foreground command, not an
+automatically installed service. It does not modify Codex configuration or normal model routing.
+Start it with `ocx voice-relay --port 10111` and keep the process running while using voice.
+The default port is `10111`; it binds only `127.0.0.1` and does not fall back to another port.
+By default it accepts call creation at `POST /v1/live` and `POST /v1/realtime/calls`, followed
+by a call-ID WebSocket join. Add `--allow-standalone` for a client that opens a realtime WebSocket
+without first creating a WebRTC call. Unrelated API routes and browser-origin requests are not
+general-purpose forwarding surfaces.
+
+The relay exits if its saved connection or credential changes. After disconnect or key rotation,
+restore the voice settings or restart the relay against the intended connection. It never repairs
+pairing or rotates keys itself.
+
+Back up the **user-level** Codex config (`$CODEX_HOME/config.toml`, normally
+`~/.codex/config.toml`) and set these root keys **before the first TOML table**, using the relay's
+reported port. This example assumes port `10111`:
+
+```toml
+experimental_realtime_webrtc_call_base_url = "http://127.0.0.1:10111/v1"
+experimental_realtime_ws_base_url = "http://127.0.0.1:10111/v1"
+```
+
+Do not change `openai_base_url`, `model_provider`, or the generated provider table for this
+workaround. Do not put the hub credential in a URL or copy it into these keys. These experimental
+settings require a Codex version that supports them; the WebRTC key affects call creation only,
+and the WebSocket key affects realtime control only. See the
+[upstream config definitions](https://github.com/openai/codex/blob/main/codex-rs/config/src/config_toml.rs).
+
+Fully quit and reopen Codex when no active work would be interrupted. A listening relay or a
+successful hub health check does not prove voice works: start a voice conversation, confirm
+microphone input and spoken output, and verify a voice task handoff separately. The relay does
+not add voice support to clients that lack it or replace the hub's upstream voice authentication.
+
+To roll back, restore only the previous values of these two keys (remove them if previously
+absent), quit and reopen Codex safely, then stop the foreground relay. Preserve unrelated edits
+made since the backup; normal provider routing and hub pairing do not need to be removed.
+
 ## Rollback
 
 Inspect existing Serve mappings before changing them. `tailscale serve reset` removes every mapping

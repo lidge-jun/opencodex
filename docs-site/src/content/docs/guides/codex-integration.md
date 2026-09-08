@@ -49,6 +49,11 @@ current bearer, so the key only keeps the join on the proxy path. It is written 
 `openai_base_url` form, is removed together with it, and a user-owned
 `experimental_realtime_ws_base_url` is never overwritten.
 
+Authenticated remote clients use a different routing form: the provider-table admission header
+does not automatically accompany Codex's dedicated voice transports. Pointing the root voice
+URLs directly at a protected hub is therefore not equivalent to the loopback setup above.
+See [Remote client voice](/guides/remote-hub/#remote-client-voice) for the opt-in local relay.
+
 ### Voice transport and task handoffs
 
 Codex owns the microphone and speaker, WebRTC media negotiation, captions, mute controls, and

@@ -198,6 +198,7 @@
   "client-export-modality-enum.test.ts": "clients",
   "client-fingerprint.test.ts": "clients",
   "client-hub-relay.test.ts": "clients",
+  "client-voice-relay.test.ts": "clients",
   "client-injection-guard.test.ts": "codex-integration",
   "client-lifecycle-lock.test.ts": "clients",
   "client-machine-listener.test.ts": "clients",
