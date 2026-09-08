@@ -392,6 +392,7 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
     { args: ["agent", "effort", "set", "--subagent", "-", "--json"] },
     { args: ["agent", "subagents"] }, { args: ["agent", "subagents", "set", "sub-a,sub-b,sub-a"] },
     { args: ["agent", "subagents", "set", "x,y", "--json"] }, { args: ["agent", "subagents", "clear"] },
+    { args: ["agent", "subagents", "set", "--weird"] },
     { args: ["agent", "roster", "set", "a,b"] },
     { args: ["agent", "fallback"] }, { args: ["agent", "fallback", "set", "f1,f2", "--poll-ms", "120000"] },
     { args: ["agent", "fallback", "clear", "--json"] }, { args: ["agent", "fallback", "set", "--poll-ms", "60000", "--json"] },
@@ -439,7 +440,7 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
   const grokLiveRows = [
     { args: ["grok"] }, { args: ["grok", "show"] },
     { args: ["grok", "apply"] }, { args: ["grok", "apply", "--json"] },
-    { args: ["grok", "exclude", "m1,m2"] }, { args: ["grok", "include", "old-model"] },
+    { args: ["grok", "exclude", "m1,m2"] }, { args: ["grok", "include", "old-model"] }, { args: ["grok", "exclude", "--weird"] },
     { args: ["grok", "set", "g1,g2", "--json"] }, { args: ["grok", "clear"] },
     { args: ["integration", "grok", "status"] }, { args: ["integration", "grok", "set", "z", "--json"] },
   ];

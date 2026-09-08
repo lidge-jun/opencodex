@@ -33,7 +33,9 @@ func agentSubagents(deps Deps, argv []string) error {
 	if action == "clear" {
 		models = []string{}
 	} else if action == "set" {
-		if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		// TypeScript shifts the next token without a dash guard (only --json is
+		// consumed above), so a token such as "--x" is a model, not a flag.
+		if len(args) == 0 {
 			return usageErrorWith("comma-separated subagent models are required", agentUsage)
 		}
 		raw := args[0]

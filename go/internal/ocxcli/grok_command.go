@@ -84,7 +84,10 @@ func runGrok(args []string, deps Deps) int {
 		case "clear":
 			excluded = []string{}
 		case "exclude", "include", "set":
-			if len(argv) == 0 || strings.HasPrefix(argv[0], "-") {
+			// TypeScript takes the next token as the model list without a dash
+			// guard (only --json is consumed above), so a token such as "--x" is
+			// a model, not a flag.
+			if len(argv) == 0 {
 				return usageErrorWith("comma-separated models are required", grokUsage)
 			}
 			raw := argv[0]
