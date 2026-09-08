@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -157,27 +157,19 @@ describe("native profile process probe", () => {
   });
 
   test("kills and settles a timed-out child", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "ocx-native-probe-"));
-    const survived = join(directory, "survived");
-    const script = [
-      `setTimeout(() => require('node:fs').writeFileSync(${JSON.stringify(survived)}, 'alive'), 300);`,
-      "setInterval(() => {}, 1_000);",
-    ].join(" ");
-    try {
-      await expect(executeNativeProcess(process.execPath, ["-e", script], {
-        encoding: "utf8",
-        timeout: 100,
-        maxBuffer: 1024,
-        windowsHide: true,
-        shell: false,
-        killSignal: "SIGKILL",
-      })).rejects.toThrow();
-      await Bun.sleep(600);
-      expect(existsSync(survived)).toBe(false);
-    } finally {
-      removeTreeWithRetry(directory);
-    }
-  });
+    // A child marker races the parent's timeout when its event loop is busy.
+    // Check the observed exit signal instead. Normal exit is a finite fuse, so
+    // disabling the executor timeout fails this assertion without orphaning a child.
+    const script = "setTimeout(() => process.exit(0), 10_000);";
+    await expect(executeNativeProcess(process.execPath, ["-e", script], {
+      encoding: "utf8",
+      timeout: 100,
+      maxBuffer: 1024,
+      windowsHide: true,
+      shell: false,
+      killSignal: "SIGKILL",
+    })).rejects.toMatchObject({ killed: true, signal: "SIGKILL" });
+  }, 15_000);
 
   test("rejects output above the configured byte cap", async () => {
     await expect(executeNativeProcess(process.execPath, [
