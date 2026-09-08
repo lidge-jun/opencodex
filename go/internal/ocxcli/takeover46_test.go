@@ -96,3 +96,32 @@ func TestExportArgumentErrorsAndOfflineProxy(t *testing.T) {
 		t.Fatalf("offline export = %d %q", code, message)
 	}
 }
+
+// json5String must mirror Bun.JSON5.stringify's single-quoted stringifier
+// exactly — parity fixtures only ever see clean identifiers, so the exotic
+// escape surface (NUL, C0 controls, DEL, the JSON-forbidden line separators)
+// is pinned here against observed Bun output instead.
+func TestExportJSON5StringMatchesBunEscapes(t *testing.T) {
+	expect := func(input, want string) {
+		t.Helper()
+		if got := json5String(input); got != want {
+			t.Fatalf("json5String(%q) = %q, want %q", input, got, want)
+		}
+	}
+	expect("O'Brien", `'O\'Brien'`)
+	expect(`say "hi"`, `'say "hi"'`)
+	expect("back\\slash", `'back\\slash'`)
+	expect("tab\there", `'tab\there'`)
+	expect("nl\nhere", `'nl\nhere'`)
+	expect("cr\rx", `'cr\rx'`)
+	expect("vtab\x0bx", `'vtab\vx'`)
+	expect("bell\x07x", `'bell\x07x'`)
+	expect("\x00nul", `'\0nul'`)
+	expect("del\x7fx", `'del\x7fx'`)
+	expect("ctrl\u0001x", `'ctrl\x01x'`)
+	expect("esc\x1bx", `'esc\x1bx'`)
+	expect("ls\u2028ps\u2029", `'ls\u2028ps\u2029'`)
+	expect("中文 🌍", `'中文 🌍'`)
+	expect("endback\\", `'endback\\'`)
+	expect("", `''`)
+}

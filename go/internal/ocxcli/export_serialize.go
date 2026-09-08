@@ -56,6 +56,11 @@ func serializeExportDocument(document *jsonwire.Value, format exportFormat) (str
 var exportIdentifierKeyRe = regexp.MustCompile(`^[A-Za-z_$][A-Za-z0-9_$]*$`)
 
 func json5String(value string) string {
+	// Mirrors Bun.JSON5.stringify's single-quoted stringifier exactly: named
+	// escapes for \b \f \n \r \t \v, \0 for NUL, lowercase \xHH for the
+	// remaining C0 controls plus DEL, \u2028/\u2029 for the JSON-forbidden
+	// line separators, and raw bytes above that (double quotes stay literal
+	// inside the single-quoted span).
 	var b strings.Builder
 	b.WriteByte('\'')
 	for _, character := range value {
@@ -74,9 +79,15 @@ func json5String(value string) string {
 			b.WriteString(`\r`)
 		case '\t':
 			b.WriteString(`\t`)
+		case '\v':
+			b.WriteString(`\v`)
+		case 0:
+			b.WriteString(`\0`)
+		case 0x2028, 0x2029:
+			b.WriteString(fmt.Sprintf(`\u%04x`, character))
 		default:
-			if character < 0x20 {
-				b.WriteString(fmt.Sprintf(`\u%04x`, character))
+			if (character > 0 && character < 0x20) || character == 0x7f {
+				b.WriteString(fmt.Sprintf(`\x%02x`, character))
 			} else {
 				b.WriteRune(character)
 			}

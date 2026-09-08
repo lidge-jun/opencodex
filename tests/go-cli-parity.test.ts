@@ -17,7 +17,7 @@ function buildGoCLI(): string {
   const dir = mkdtempSync(join(tmpdir(), "ocx-go-cli-"));
   const binary = join(dir, process.platform === "win32" ? "ocx.exe" : "ocx");
   const result = Bun.spawnSync(["go", "build", "-o", binary, "./cmd/ocx"], { cwd: join(repoRoot, "go"), env: { ...process.env, CGO_ENABLED: "0" }, stdout: "pipe", stderr: "pipe" });
-  if (result.exitCode !== 0) throw new Error("go build ./cmd/ocx failed: " + new TextDecoder().decode(result.stderr));
+  if (result.exitCode !== 0) throw new Error(`go build ./cmd/ocx failed: ${new TextDecoder().decode(result.stderr)}`);
   return binary;
 }
 const goAvailable = goToolchainAvailable();
@@ -25,26 +25,30 @@ const goCLI = goAvailable ? buildGoCLI() : null;
 let testHome = "";
 let testServer: ReturnType<typeof Bun.serve> | undefined;
 type Result = { code: number; stdout: string; stderr: string };
-function runTs(args: string[], home = testHome): Result {
+function runTs(args: readonly string[], home = testHome): Result {
   const result = Bun.spawnSync([process.execPath, "src/cli/index.ts", ...args], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
   return { code: result.exitCode, stdout: new TextDecoder().decode(result.stdout), stderr: new TextDecoder().decode(result.stderr) };
 }
-function runGo(args: string[], home = testHome): Result {
+function runGo(args: readonly string[], home = testHome): Result {
   const result = Bun.spawnSync([goCLI!, ...args], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
   return { code: result.exitCode, stdout: new TextDecoder().decode(result.stdout), stderr: new TextDecoder().decode(result.stderr) };
 }
-async function runTsAsync(args: string[], home = testHome): Promise<Result> {
+async function runTsAsync(args: readonly string[], home = testHome): Promise<Result> {
   const child = Bun.spawn([process.execPath, "src/cli/index.ts", ...args], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
   return { code: await child.exited, stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text() };
 }
-async function runGoAsync(args: string[], home = testHome): Promise<Result> {
+async function runGoAsync(args: readonly string[], home = testHome): Promise<Result> {
   const child = Bun.spawn([goCLI!, ...args], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
   return { code: await child.exited, stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text() };
 }
-function expectParity(args: string[]): Result { const ts = runTs(args); const go = runGo(args); expect(go).toEqual(ts); return ts; }
+function attestedHeaders(challenge: string, port: number): Record<string, string> {
+  const proof = createLocalAttestationProof(secret, challenge, process.pid, port);
+  return proof === null ? {} : { "x-opencodex-attestation-proof": proof };
+}
+function expectParity(args: readonly string[]): Result { const ts = runTs(args); const go = runGo(args); expect(go).toEqual(ts); return ts; }
 function normalizeHealthPid(result: Result): Result {
   if (!result.stdout.startsWith("Proxy healthy") && !result.stdout.startsWith("{\"ok\":true")) return result;
-  return { ...result, stdout: result.stdout.replace(/PID (?:null|\d+)/, "PID <pid>").replace(/\"pid\":(?:null|\d+)/, '"pid":<pid>') };
+  return { ...result, stdout: result.stdout.replace(/PID (?:null|\d+)/, "PID <pid>").replace(/"pid":(?:null|\d+)/, '"pid":<pid>') };
 }
 afterEach(async () => { testServer?.stop(true); testServer = undefined; delete process.env.OPENCODEX_HOME; if (testHome && existsSync(testHome)) removeTreeWithRetry(testHome); testHome = ""; });
 function startAttestedFixture(status: "ready" | "pending" | "failed"): void {
@@ -53,7 +57,7 @@ function startAttestedFixture(status: "ready" | "pending" | "failed"): void {
     const path = new URL(request.url).pathname;
     if (path === "/healthz") {
       const challenge = request.headers.get("x-opencodex-attestation-challenge") ?? "";
-      const headers = challenge ? { "x-opencodex-attestation-proof": createLocalAttestationProof(secret, challenge, process.pid, testServer!.port) } : {};
+      const headers = attestedHeaders(challenge, testServer!.port!);
       return Response.json({ status: "ok", service: "opencodex", version: "2.42.0", uptime: 1, pid: process.pid, port: testServer!.port }, { headers });
     }
     if (path === "/readyz") return Response.json({ status, service: "opencodex", version: "2.42.0", uptime: 1, pid: process.pid, port: testServer!.port }, { status: status === "ready" ? 200 : 503 });
@@ -210,7 +214,7 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
       const path = new URL(request.url).pathname;
       if (path === "/healthz") {
         const challenge = request.headers.get("x-opencodex-attestation-challenge") ?? "";
-        const headers = challenge ? { "x-opencodex-attestation-proof": createLocalAttestationProof(secret, challenge, process.pid, testServer!.port) } : {};
+        const headers = attestedHeaders(challenge, testServer!.port!);
         return Response.json({ status: "ok", service: "opencodex", version: "2.42.0", uptime: 1, pid: process.pid, port: testServer!.port }, { headers });
       }
       return new Response(payload, { status, headers: { "content-type": "application/json" } });
@@ -260,8 +264,8 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
   });
   test("diffs usage help in both spellings", () => {
     testHome = mkdtempSync(join(tmpdir(), "ocx-go-usage-parity-"));
-    expect(expectParity(["help", "usage"]));
-    expect(expectParity(["usage", "--help"]));
+    expect(expectParity(["help", "usage"])).toMatchObject({ code: 0, stderr: "" });
+    expect(expectParity(["usage", "--help"])).toMatchObject({ code: 0, stderr: "" });
   });
   test("diffs usage when no proxy is running", () => {
     testHome = mkdtempSync(join(tmpdir(), "ocx-go-usage-parity-"));
@@ -328,7 +332,7 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
       const u = new URL(request.url);
       if (u.pathname === "/healthz") {
         const challenge = request.headers.get("x-opencodex-attestation-challenge") ?? "";
-        const headers = challenge ? { "x-opencodex-attestation-proof": createLocalAttestationProof(secret, challenge, process.pid, testServer!.port) } : {};
+        const headers = attestedHeaders(challenge, testServer!.port!);
         return Response.json({ status: "ok", service: "opencodex", version: "2.42.0", uptime: 1, pid: process.pid, port: testServer!.port }, { headers });
       }
       if (u.pathname === "/api/models") {
@@ -337,6 +341,8 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
           { namespaced: "anthropic/claude-sonnet-4-5", provider: "anthropic", id: "claude-sonnet-4-5", displayName: "Claude Sonnet 4.5", displayNameSource: "provider", contextWindow: 200000, inputModalities: ["text", "image"], reasoningEfforts: ["low", "medium", "high"] },
           { namespaced: "fixture/audio-model", provider: "fixture", id: "audio-model", displayName: "Audio Only", displayNameSource: "fallback", contextWindow: 0, inputModalities: ["audio"], reasoningEfforts: ["none"] },
           { namespaced: "fixture/plain", provider: "fixture", id: "plain", displayName: "Plain", displayNameSource: "provider" },
+          { namespaced: "fixture/o-brien", provider: "fixture", id: "o-brien", displayName: "O'Brien \"Wired\" Model", displayNameSource: "provider", contextWindow: 64000 },
+          { namespaced: "fixture/ctrl", provider: "fixture", id: "ctrl", displayName: "Ctrl\u0001\u0007\u001bModel", displayNameSource: "provider" },
         ]);
       }
       if (u.pathname === "/api/logs") {
