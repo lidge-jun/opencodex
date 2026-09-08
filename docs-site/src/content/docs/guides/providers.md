@@ -475,6 +475,11 @@ Chat, bridged Chat, and Responses derive the same result. Explicit provider-conf
 session headers are operator overrides and are sent unchanged. Clients must keep the
 identifier stable within a conversation and distinct across conversations; requests
 without a session identifier cannot receive automatic session affinity.
+For Claude Messages, valid conversation identity in `metadata.user_id` supplies
+the fallback when no usable explicit session identifier exists. This fallback is
+applied to the final Go destination, including random combo selections and fallback
+attempts, rather than the preliminary route. Shared system-prompt cache keys do
+not identify conversations, and Go-specific identity is not sent to non-Go targets.
 Generated Pi provider configurations enable `compat.sendSessionAffinityHeaders`
 so Pi sends its per-session identity to the proxy. Existing manually managed Pi
 configurations can set this option on their `opencodex` provider as well.
