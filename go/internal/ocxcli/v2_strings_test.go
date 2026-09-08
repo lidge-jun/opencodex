@@ -28,9 +28,9 @@ func TestV2StringFieldGolden(t *testing.T) {
 			want:  "[features]\nmulti_agent_v2 = { enabled = true, multi_agent_mode_hint_text = \"hint #x\" }\n",
 		},
 		{
-			name:  "clear dedicated",
-			toml:  "[features.multi_agent_v2]\nenabled = true\nmulti_agent_mode_hint_text = \"old\"\n",
-			want:  "[features.multi_agent_v2]\nenabled = true\n",
+			name: "clear dedicated",
+			toml: "[features.multi_agent_v2]\nenabled = true\nmulti_agent_mode_hint_text = \"old\"\n",
+			want: "[features.multi_agent_v2]\nenabled = true\n",
 		},
 		{
 			name:    "no existing config creates table",

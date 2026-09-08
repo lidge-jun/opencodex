@@ -5673,17 +5673,17 @@ describe.skipIf(!goAvailable || goCLI === null)(
         });
         const v2Shim =
           [
-            '#!/usr/bin/env bash',
+            "#!/usr/bin/env bash",
             'if [ "${1:-}" = "--version" ]; then echo "codex 0.47.0"; exit 0; fi',
             'if [ "${1:-}" = "features" ]; then',
             '  f="${CODEX_HOME:-$HOME/.codex}/config.toml"',
             '  case "${2:-}" in',
             "    enable) sed -i '0,/enabled = false/s//enabled = true/' \"$f\" ;;",
             "    disable) sed -i '0,/enabled = true/s//enabled = false/' \"$f\" ;;",
-            '  esac',
-            '  exit 0',
-            'fi',
-            'exit 1',
+            "  esac",
+            "  exit 0",
+            "fi",
+            "exit 1",
           ].join("\n") + "\n";
         function v2bFixture(extra: string, toml: string) {
           const home = mkdtempSync(join(tmpdir(), "ocx-go-v2b-home-"));
@@ -5791,14 +5791,26 @@ describe.skipIf(!goAvailable || goCLI === null)(
             extra: '{"multiAgentMode":"v1"}',
             toml: "",
           },
-          { args: ["v2", "keep-native-v1", "on"] as const, extra: "", toml: "" },
+          {
+            args: ["v2", "keep-native-v1", "on"] as const,
+            extra: "",
+            toml: "",
+          },
           {
             args: ["v2", "keep-native-v1", "on"] as const,
             extra: withModeV2KeepNative,
             toml: "[features.multi_agent_v2]\nenabled = true\n",
           },
-          { args: ["v2", "keep-native-v1", "off"] as const, extra: withKeepNative, toml: "" },
-          { args: ["v2", "mode-hint", "reply in klingon"] as const, extra: "", toml: "" },
+          {
+            args: ["v2", "keep-native-v1", "off"] as const,
+            extra: withKeepNative,
+            toml: "",
+          },
+          {
+            args: ["v2", "mode-hint", "reply in klingon"] as const,
+            extra: "",
+            toml: "",
+          },
           {
             args: ["v2", "mode-hint", "--clear"] as const,
             extra: "",

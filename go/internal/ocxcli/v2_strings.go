@@ -128,7 +128,7 @@ func setCodexV2StringField(key string, value *string, configPath string) codexEd
 						for insertPos > openIdx+1 && line[insertPos-1] == ' ' {
 							insertPos--
 						}
-						hasEntries := len(strings.TrimSpace(line[openIdx+1 : insertPos])) > 0
+						hasEntries := len(strings.TrimSpace(line[openIdx+1:insertPos])) > 0
 						var insertion string
 						if hasEntries {
 							insertion = ", " + key + " = " + encoded + " "
