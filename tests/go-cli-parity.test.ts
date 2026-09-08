@@ -25,26 +25,26 @@ const goCLI = goAvailable ? buildGoCLI() : null;
 let testHome = "";
 let testServer: ReturnType<typeof Bun.serve> | undefined;
 type Result = { code: number; stdout: string; stderr: string };
-function runTs(args: string[], home = testHome): Result {
+function runTs(args: readonly string[], home = testHome): Result {
   const result = Bun.spawnSync([process.execPath, "src/cli/index.ts", ...args], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
   return { code: result.exitCode, stdout: new TextDecoder().decode(result.stdout), stderr: new TextDecoder().decode(result.stderr) };
 }
-function runGo(args: string[], home = testHome): Result {
+function runGo(args: readonly string[], home = testHome): Result {
   const result = Bun.spawnSync([goCLI!, ...args], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
   return { code: result.exitCode, stdout: new TextDecoder().decode(result.stdout), stderr: new TextDecoder().decode(result.stderr) };
 }
-async function runTsAsync(args: string[], home = testHome): Promise<Result> {
+async function runTsAsync(args: readonly string[], home = testHome): Promise<Result> {
   const child = Bun.spawn([process.execPath, "src/cli/index.ts", ...args], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
   return { code: await child.exited, stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text() };
 }
-async function runGoAsync(args: string[], home = testHome): Promise<Result> {
+async function runGoAsync(args: readonly string[], home = testHome): Promise<Result> {
   const child = Bun.spawn([goCLI!, ...args], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
   return { code: await child.exited, stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text() };
 }
-function expectParity(args: string[]): Result { const ts = runTs(args); const go = runGo(args); expect(go).toEqual(ts); return ts; }
+function expectParity(args: readonly string[]): Result { const ts = runTs(args); const go = runGo(args); expect(go).toEqual(ts); return ts; }
 function normalizeHealthPid(result: Result): Result {
   if (!result.stdout.startsWith("Proxy healthy") && !result.stdout.startsWith("{\"ok\":true")) return result;
-  return { ...result, stdout: result.stdout.replace(/PID (?:null|\d+)/, "PID <pid>").replace(/\"pid\":(?:null|\d+)/, '"pid":<pid>') };
+  return { ...result, stdout: result.stdout.replace(/PID (?:null|\d+)/, "PID <pid>").replace(/"pid":(?:null|\d+)/, '"pid":<pid>') };
 }
 afterEach(async () => { testServer?.stop(true); testServer = undefined; delete process.env.OPENCODEX_HOME; if (testHome && existsSync(testHome)) removeTreeWithRetry(testHome); testHome = ""; });
 function startAttestedFixture(status: "ready" | "pending" | "failed"): void {
@@ -53,7 +53,9 @@ function startAttestedFixture(status: "ready" | "pending" | "failed"): void {
     const path = new URL(request.url).pathname;
     if (path === "/healthz") {
       const challenge = request.headers.get("x-opencodex-attestation-challenge") ?? "";
-      const headers = challenge ? { "x-opencodex-attestation-proof": createLocalAttestationProof(secret, challenge, process.pid, testServer!.port) } : {};
+      const headers: Record<string, string> = {};
+      const pid: number = Number(process.pid);
+      if (challenge) headers["x-opencodex-attestation-proof"] = createLocalAttestationProof(secret, challenge, pid, testServer!.port as number) ?? "";
       return Response.json({ status: "ok", service: "opencodex", version: "2.42.0", uptime: 1, pid: process.pid, port: testServer!.port }, { headers });
     }
     if (path === "/readyz") return Response.json({ status, service: "opencodex", version: "2.42.0", uptime: 1, pid: process.pid, port: testServer!.port }, { status: status === "ready" ? 200 : 503 });
@@ -177,12 +179,47 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
       removeTreeWithRetry(home);
     }
   });
+  // Lifecycle command surfaces flipped in issue #53. `service status`, the
+  // codex-shim read surface, and the ensure/restart autostart-disabled refusal
+  // dispatch natively in the Go binary now, so these rows are a real
+  // differential against the TypeScript implementation. The rows below them
+  // remain TypeScript-owned seams (documented as such) until each carries a
+  // platform oracle; tray is Windows-only and has no Linux oracle.
   test.each([
-    { args: ["service", "status"] }, { args: ["service", "not-a-command"] },
-    { args: ["codex-shim", "status"] }, { args: ["codex-shim", "not-a-command"] },
-    { args: ["tray", "status"] }, { args: ["tray", "not-a-command"] },
+    { args: ["service", "status"] },
+    { args: ["codex-shim", "status"] },
+    { args: ["codex-shim"] },
+  ])("diffs Go-owned lifecycle read output and exit code for $args", ({ args }) => {
+    testHome = mkdtempSync(join(tmpdir(), "ocx-go-cli-parity-"));
+    expectParity(args);
+  });
+  test.each([
+    { args: ["service", "not-a-command"] },
+    { args: ["codex-shim", "not-a-command"] },
+    { args: ["tray", "status"] },
+    { args: ["tray", "not-a-command"] },
   ])("diffs TypeScript-owned lifecycle command output and exit code for $args", ({ args }) => {
     testHome = mkdtempSync(join(tmpdir(), "ocx-go-cli-parity-"));
+    expectParity(args);
+  });
+  // ensure/restart flip to Go-owned for the deterministic no-side-effect
+  // refusal: Codex autostart disabled means the command must not start or
+  // touch a proxy. The seed carries a dead port so restart's not-live probe
+  // never finds a host proxy; the enabled branches stay TypeScript-owned until
+  // an oracle can exercise real spawn/codex mutations.
+  test.each([
+    { args: ["ensure"] },
+    { args: ["restart"] },
+  ])("diffs Go-owned %s autostart-disabled refusal output and exit code", ({ args }) => {
+    testHome = mkdtempSync(join(tmpdir(), "ocx-go-cli-parity-"));
+    writeFileSync(join(testHome, "config.json"), JSON.stringify({
+      port: 42137,
+      providers: {
+        fixture: { adapter: "openai-chat", baseUrl: "https://example.test/v1", apiKey: "secret", defaultModel: "m" },
+      },
+      defaultProvider: "fixture",
+      codexAutoStart: false,
+    }));
     expectParity(args);
   });
   test.each([{ args: ["status"] }, { args: ["status", "--json"] }, { args: ["doctor", "--json"] }])("diffs Go-owned status and doctor output and exit code for $args", ({ args }) => {
@@ -194,6 +231,8 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
     { args: ["tray", "--help"] },
     { args: ["help", "service"] }, { args: ["service", "--help"] },
     { args: ["help", "codex-shim"] }, { args: ["codex-shim", "--help"] },
+    { args: ["help", "ensure"] }, { args: ["ensure", "--help"] },
+    { args: ["help", "restart"] }, { args: ["restart", "--help"] },
   ])("diffs lifecycle help contracts for $args", ({ args }) => {
     testHome = mkdtempSync(join(tmpdir(), "ocx-go-cli-parity-"));
     expectParity(args);
@@ -210,7 +249,9 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
       const path = new URL(request.url).pathname;
       if (path === "/healthz") {
         const challenge = request.headers.get("x-opencodex-attestation-challenge") ?? "";
-        const headers = challenge ? { "x-opencodex-attestation-proof": createLocalAttestationProof(secret, challenge, process.pid, testServer!.port) } : {};
+        const headers: Record<string, string> = {};
+        const pid: number = Number(process.pid);
+        if (challenge) headers["x-opencodex-attestation-proof"] = createLocalAttestationProof(secret, challenge, pid, testServer!.port as number) ?? "";
         return Response.json({ status: "ok", service: "opencodex", version: "2.42.0", uptime: 1, pid: process.pid, port: testServer!.port }, { headers });
       }
       return new Response(payload, { status, headers: { "content-type": "application/json" } });
@@ -260,8 +301,8 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
   });
   test("diffs usage help in both spellings", () => {
     testHome = mkdtempSync(join(tmpdir(), "ocx-go-usage-parity-"));
-    expect(expectParity(["help", "usage"]));
-    expect(expectParity(["usage", "--help"]));
+    expectParity(["help", "usage"]);
+    expectParity(["usage", "--help"]);
   });
   test("diffs usage when no proxy is running", () => {
     testHome = mkdtempSync(join(tmpdir(), "ocx-go-usage-parity-"));

@@ -54,10 +54,19 @@ var Commands = []Command{
 	{Name: "restore", Aliases: []string{"eject"}, Usage: "ocx restore [back]", Summary: "Restore native Codex configuration.", Owner: TypeScriptOwned},
 	{Name: "recover-history", Usage: "ocx recover-history --legacy-openai --yes", Summary: "Recover legacy history.", Owner: TypeScriptOwned},
 	{Name: "uninstall", Aliases: []string{"remove"}, Usage: "ocx uninstall", Summary: "Remove OpenCodex integration.", Owner: TypeScriptOwned},
+	// service stays TypeScript-owned at the top level because a bare `ocx
+	// service` normalizes to install (a real OS registration); its read-only
+	// `status` verb is Go-owned through OwnershipFor below. tray is
+	// Windows-only and keeps its TypeScript owner on every platform (no Linux
+	// platform oracle can exercise its registry/PowerShell verbs).
 	{Name: "service", Usage: "ocx service [sub]", Summary: "Run as a background service.", Owner: TypeScriptOwned},
-	{Name: "codex-shim", Usage: "ocx codex-shim <sub>", Summary: "Manage the Codex autostart shim.", Owner: TypeScriptOwned},
+	{Name: "codex-shim", Usage: "ocx codex-shim <sub>", Summary: "Manage the Codex autostart shim.", Owner: GoOwned},
 	{Name: "tray", Usage: "ocx tray <sub>", Summary: "Manage the Windows status tray.", Owner: TypeScriptOwned},
-	{Name: "ensure", Usage: "ocx ensure", Summary: "Ensure the proxy is running.", Owner: TypeScriptOwned},
+	// ensure/restart are Go-owned: the deterministic no-side-effect refusal
+	// branch (Codex autostart disabled and no proxy to touch) is native, and
+	// the enabled/live branches route to the TypeScript lifecycle owner until
+	// each carries an oracle that can exercise real process/codex mutations.
+	{Name: "ensure", Usage: "ocx ensure", Summary: "Ensure the proxy is running.", Owner: GoOwned},
 	{Name: "connect", Usage: "ocx connect <url>", Summary: "Connect to a remote hub.", Owner: TypeScriptOwned},
 	{Name: "disconnect", Usage: "ocx disconnect", Summary: "Disconnect from a remote hub.", Owner: TypeScriptOwned},
 	{Name: "sync", Usage: "ocx sync [--restart-codex]", Summary: "Sync provider models.", Owner: TypeScriptOwned},
@@ -69,7 +78,7 @@ var Commands = []Command{
 	{Name: "logout", Usage: "ocx logout <provider>", Summary: "Log out from a provider.", Owner: TypeScriptOwned},
 	{Name: "gui", Usage: "ocx gui", Summary: "Open the dashboard.", Owner: TypeScriptOwned},
 	{Name: "update", Usage: "ocx update [--tag <tag>]", Summary: "Update OpenCodex.", Owner: TypeScriptOwned},
-	{Name: "restart", Usage: "ocx restart", Summary: "Restart the proxy.", Owner: TypeScriptOwned},
+	{Name: "restart", Usage: "ocx restart", Summary: "Restart the proxy.", Owner: GoOwned},
 	{Name: "v2", Usage: "ocx v2 <sub>", Summary: "Manage the v2 surface.", Owner: TypeScriptOwned},
 	{Name: "health", Usage: "ocx health [--json]", Summary: "Verify the local proxy identity and report health.", Owner: GoOwned},
 	{Name: "capabilities", Usage: "ocx capabilities [--json]", Summary: "List declared capabilities.", Owner: TypeScriptOwned},
@@ -137,11 +146,21 @@ func OwnershipFor(args []string) (Ownership, bool) {
 			return owner, true
 		}
 	}
+	// codex-shim keeps its mutation verbs (install/uninstall/remove) with the
+	// TypeScript owner — they replace launch wrappers and run rollback
+	// transactions with no safe oracle on any platform yet. The family's bare
+	// surface (usage error) and its `status` read are native.
 	if command.Name == "codex-shim" && len(args) > 1 {
 		if args[1] == "status" {
 			return GoOwned, true
 		}
 		return TypeScriptOwned, true
+	}
+	// service status is the native read (registration + log diagnostics); the
+	// bare command normalizes to install and every other verb mutates the OS
+	// service manager, so those stay with the TypeScript owner.
+	if command.Name == "service" && len(args) > 1 && args[1] == "status" {
+		return GoOwned, true
 	}
 	if command.Name == "config" && len(args) > 1 {
 		if args[1] == "--json" || args[1] == "--source" {
@@ -257,6 +276,14 @@ func Run(args []string, deps Deps) int {
 	switch args[0] {
 	case "codex-shim":
 		return runCodexShim(args[1:], deps)
+	case "service":
+		// OwnershipFor only routes `service status` here (Go-owned read); every
+		// other verb delegates at the gate above and never dispatches to Go.
+		return runServiceStatus(args[1:], deps)
+	case "ensure":
+		return runEnsure(args[1:], deps)
+	case "restart":
+		return runRestart(args[1:], deps)
 	case "health":
 		return runHealth(args[1:], deps)
 	case "ready":
@@ -340,6 +367,12 @@ func printSubcommandHelp(name string, deps Deps) int {
 				fmt.Fprintf(deps.Stdout, "Usage: %s\n\n%s\n", command.Usage, command.Summary)
 			}
 		}
+	case "codex-shim":
+		fmt.Fprint(deps.Stdout, codexShimHelp)
+	case "ensure":
+		fmt.Fprint(deps.Stdout, ensureHelp)
+	case "restart":
+		fmt.Fprint(deps.Stdout, restartHelp)
 	case "config":
 		fmt.Fprint(deps.Stdout, configHelp)
 	default:

@@ -12,9 +12,19 @@ import (
 
 const shimMarker = "opencodex codex autostart shim"
 
-// runCodexShim ports the read-only status operation. State mutation remains
-// delegated because it owns launcher replacement and rollback transactions.
+// runCodexShim implements the Go-owned codex-shim surface: the bare verb and
+// `status` are native, while the mutation verbs (install/uninstall/remove)
+// stay with the TypeScript owner because they replace launch wrappers and run
+// rollback transactions. OwnershipFor gates those mutations to TypeScript at
+// dispatch, so only the bare verb and `status` reach this function through Run;
+// the delegation below is defensive for direct callers and future edits.
 func runCodexShim(args []string, deps Deps) int {
+	if len(args) == 0 {
+		// `ocx codex-shim` with no verb is a native usage error (exit 1), byte-
+		// identical to the TypeScript dispatch's default branch.
+		fmt.Fprintln(deps.Stderr, "Usage: ocx codex-shim <install|status|uninstall|remove>")
+		return ExitFailure
+	}
 	if len(args) != 1 || args[0] != "status" {
 		return runDelegated(append([]string{"codex-shim"}, args...), deps)
 	}
