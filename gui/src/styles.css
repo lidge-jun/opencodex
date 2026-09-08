@@ -2004,7 +2004,6 @@ dialog.modal-overlay::backdrop {
 .codex-account-priority .select-trigger { max-width: 100%; padding: 4px 9px; font-size: var(--text-label); }
 .codex-account-auto-switch { display: flex; align-items: center; gap: 7px; min-width: 0; flex: 0 0 auto; }
 .codex-account-auto-switch-label { font-size: var(--text-label); color: var(--muted); font-weight: var(--weight-medium); white-space: nowrap; }
-.codex-account-auto-switch-inherit { font-size: var(--text-label); color: var(--muted); white-space: nowrap; }
 .codex-account-auto-switch-input-wrap { display: inline-flex; align-items: stretch; position: relative; }
 .codex-account-auto-switch-input { width: 76px; height: 30px; padding: 4px 38px 4px 8px; font-size: var(--text-label); text-align: right; }
 .codex-account-auto-switch-unit { position: absolute; right: 25px; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: var(--text-label); pointer-events: none; }

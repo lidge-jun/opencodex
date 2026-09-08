@@ -1927,7 +1927,6 @@ export const fr: Record<TKey, string> = {
   "accountPool.autoSwitchThreshold": "Seuil personnalisé du compte",
   "accountPool.autoSwitchThresholdAria": "Seuil d’utilisation pour {email}",
   "accountPool.autoSwitchOverrideAria": "Remplacer le seuil d’utilisation global pour {email}",
-  "accountPool.autoSwitchInherit": "Seuil global : {threshold} %",
   "accountPool.autoSwitchHint": "Remplace le seuil global pour ce compte. 0 désactive le changement proactif basé sur l’utilisation depuis ce compte.",
   "accountPool.autoSwitchUpdated": "Seuil d’utilisation mis à jour pour {email}",
   "accountPool.autoSwitchUpdateFailed": "Le seuil d’utilisation de {email} n’a pas pu être enregistré. La dernière valeur confirmée est affichée.",

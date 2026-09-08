@@ -1455,7 +1455,6 @@ export const zh: Record<TKey, string> = {
   "accountPool.autoSwitchThreshold": "自定义账号阈值",
   "accountPool.autoSwitchThresholdAria": "{email} 的使用量阈值",
   "accountPool.autoSwitchOverrideAria": "覆盖 {email} 的全局使用量阈值",
-  "accountPool.autoSwitchInherit": "全局 {threshold}%",
   "accountPool.autoSwitchHint": "覆盖此账号的全局阈值。设为 0 会停用从此账号发起的基于使用量的主动切换。",
   "accountPool.autoSwitchUpdated": "已更新 {email} 的使用量阈值",
   "accountPool.autoSwitchUpdateFailed": "无法保存 {email} 的使用量阈值。当前显示最后确认的值。",

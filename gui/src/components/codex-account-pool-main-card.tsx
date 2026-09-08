@@ -172,7 +172,7 @@ export function CodexAccountPoolMainCard({
               onChange={(priority) => onPriorityChange(mainSwitchEntry, priority)}
             />
             <AccountAutoSwitchControl
-              key={`${mainSwitchEntry.id}:${mainSwitchEntry.autoSwitchThresholdOverride ?? "global"}:${threshold}`}
+              key={`${mainSwitchEntry.id}:${mainSwitchEntry.autoSwitchThresholdOverride ?? "global"}`}
               accountLabel={mainSwitchEntry.email}
               globalThreshold={threshold}
               override={mainSwitchEntry.autoSwitchThresholdOverride}

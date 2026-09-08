@@ -64,6 +64,7 @@ import { CODEX_RESERVE_HELPER_UNSUPPORTED_MESSAGE, isCodexReserveHelperUnsupport
 import type { DataPlaneAdmission } from "../server/auth-cors";
 import { getMainReserveAuthorization, isMainReserveAuthorizationLive, type MainReserveAuthorization } from "./reserve-availability";
 import { UpstreamRetryEvidenceError } from "../lib/upstream-retry";
+import { getEffectiveCodexAutoSwitchThreshold } from "./account-auto-switch";
 
 const CODEX_AFFINITY_COMPONENT_MAX_BYTES = 512;
 const CODEX_APP_AFFINITY_KEY = randomBytes(32);
@@ -77,7 +78,7 @@ const CODEX_APP_AFFINITY_KEY = randomBytes(32);
  * request that already brought its own credential (#3157).
  */
 function requestOwnedMainPinHasQuotaHeadroom(config: OcxConfig): boolean {
-  const threshold = config.autoSwitchThreshold ?? 80;
+  const threshold = getEffectiveCodexAutoSwitchThreshold(config, MAIN_CODEX_ACCOUNT_ID);
   if (threshold <= 0) return true;
   const usage = computeCodexUsageScore(getAccountQuota(MAIN_CODEX_ACCOUNT_ID));
   return usage >= CODEX_UNKNOWN_USAGE_SCORE || usage < threshold;

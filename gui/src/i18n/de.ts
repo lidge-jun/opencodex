@@ -1438,7 +1438,6 @@ export const de: Record<TKey, string> = {
   "accountPool.autoSwitchThreshold": "Benutzerdefinierter Kontoschwellenwert",
   "accountPool.autoSwitchThresholdAria": "Nutzungsschwellenwert für {email}",
   "accountPool.autoSwitchOverrideAria": "Globalen Nutzungsschwellenwert für {email} überschreiben",
-  "accountPool.autoSwitchInherit": "Global {threshold}%",
   "accountPool.autoSwitchHint": "Überschreibt den globalen Schwellenwert für dieses Konto. 0 deaktiviert nutzungsbasiertes proaktives Wechseln von diesem Konto.",
   "accountPool.autoSwitchUpdated": "Nutzungsschwellenwert für {email} aktualisiert",
   "accountPool.autoSwitchUpdateFailed": "Der Nutzungsschwellenwert für {email} konnte nicht gespeichert werden. Der zuletzt bestätigte Wert wird angezeigt.",

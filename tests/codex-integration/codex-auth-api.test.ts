@@ -3920,6 +3920,34 @@ describe("codex-auth API", () => {
     expect(config.codexAccountAutoSwitchThresholds).toEqual({ work: 60 });
   });
 
+  test("PUT /api/codex-auth/auto-switch persists a main-account override", async () => {
+    const config = makeConfig({ autoSwitchThreshold: 95 });
+
+    const resp = await putAccountAutoSwitch(config, {
+      id: MAIN_CODEX_ACCOUNT_ID,
+      threshold: 0,
+    });
+
+    expect(resp.status).toBe(200);
+    expect(await resp.json()).toMatchObject({
+      id: MAIN_CODEX_ACCOUNT_ID,
+      autoSwitchThresholdOverride: 0,
+      autoSwitchThreshold: 0,
+    });
+    expect(config.codexAccountAutoSwitchThresholds).toEqual({
+      [MAIN_CODEX_ACCOUNT_ID]: 0,
+    });
+  });
+
+  test("PUT /api/codex-auth/auto-switch rejects an unknown pool account", async () => {
+    const config = makeConfig({ autoSwitchThreshold: 95 });
+
+    const resp = await putAccountAutoSwitch(config, { id: "missing", threshold: 60 });
+
+    expect(resp.status).toBe(404);
+    expect(config.codexAccountAutoSwitchThresholds).toBeUndefined();
+  });
+
   test("a null account threshold restores global inheritance and drops an empty map", async () => {
     const config = makeConfig({
       autoSwitchThreshold: 95,

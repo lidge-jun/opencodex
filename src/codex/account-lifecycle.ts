@@ -159,6 +159,10 @@ export function deleteCodexAccount(runtimeConfig: OcxConfig, accountId: string):
         saveConfigPreservingClaudeCode(runtimeConfig);
       } catch (error) {
         restoreRuntimeConfig(runtimeConfig, previousConfig);
+        // Child-deletion provenance is intentionally left in its WeakMap: restoring the
+        // threshold makes that tombstone self-suppress on the next prepare pass, and the
+        // next successful writer clears it. If removal is retried first, the same intent
+        // is still correct. No failed save can leak the deletion into persisted config.
         try {
           assertPersistedConfigUnchanged(configPath, previousPersistedConfig);
         } catch {

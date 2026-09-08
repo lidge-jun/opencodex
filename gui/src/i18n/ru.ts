@@ -1928,7 +1928,6 @@ export const ru: Record<TKey, string> = {
   "accountPool.autoSwitchThreshold": "Пользовательский порог аккаунта",
   "accountPool.autoSwitchThresholdAria": "Порог использования для {email}",
   "accountPool.autoSwitchOverrideAria": "Переопределить глобальный порог использования для {email}",
-  "accountPool.autoSwitchInherit": "Глобальный {threshold}%",
   "accountPool.autoSwitchHint": "Переопределяет глобальный порог для этого аккаунта. 0 отключает упреждающее переключение по использованию с этого аккаунта.",
   "accountPool.autoSwitchUpdated": "Порог использования для {email} обновлён",
   "accountPool.autoSwitchUpdateFailed": "Не удалось сохранить порог использования для {email}. Показано последнее подтверждённое значение.",

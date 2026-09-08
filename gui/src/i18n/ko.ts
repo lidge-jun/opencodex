@@ -1474,7 +1474,6 @@ export const ko: Record<TKey, string> = {
   "accountPool.autoSwitchThreshold": "사용자 지정 계정 임계값",
   "accountPool.autoSwitchThresholdAria": "{email}의 사용량 임계값",
   "accountPool.autoSwitchOverrideAria": "{email}의 전역 사용량 임계값 재정의",
-  "accountPool.autoSwitchInherit": "전역 {threshold}%",
   "accountPool.autoSwitchHint": "이 계정의 전역 임계값을 재정의합니다. 0은 이 계정에서 사용량 기반 사전 전환을 비활성화합니다.",
   "accountPool.autoSwitchUpdated": "{email}의 사용량 임계값을 업데이트했습니다",
   "accountPool.autoSwitchUpdateFailed": "{email}의 사용량 임계값을 저장하지 못했습니다. 마지막으로 확인된 값을 표시합니다.",

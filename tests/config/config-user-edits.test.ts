@@ -611,6 +611,19 @@ test("OAuth reconciliation adopts a guarded Claude edit that predates its disk s
   expect(diskConfig().claudeCode).toEqual({ authMode: "proxy" });
 });
 
+test("OAuth reconciliation preserves a cleared account threshold and adopts a disk sibling", () => {
+  const live = loadConfig();
+  live.codexAccountAutoSwitchThresholds = { work: 60 };
+  saveConfig(live);
+  const persistedBaseline = loadConfig();
+
+  writeDiskConfig({ codexAccountAutoSwitchThresholds: { work: 60, side: 70 } });
+  setCodexAccountAutoSwitchThresholdOverride(live, "work", null);
+  reconcileLiveConfigFromDisk(live, persistedBaseline);
+
+  expect(live.codexAccountAutoSwitchThresholds).toEqual({ side: 70 });
+});
+
 test("OAuth reconciliation adopts a modelCosts edit and refreshes the overlay registry", () => {
   const live = loadConfig();
   const persistedBaseline = loadConfig();

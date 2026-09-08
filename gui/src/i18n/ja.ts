@@ -1858,7 +1858,6 @@ export const ja: Record<TKey, string> = {
   "accountPool.autoSwitchThreshold": "カスタムアカウントしきい値",
   "accountPool.autoSwitchThresholdAria": "{email} の使用量しきい値",
   "accountPool.autoSwitchOverrideAria": "{email} のグローバル使用量しきい値を上書き",
-  "accountPool.autoSwitchInherit": "グローバル {threshold}%",
   "accountPool.autoSwitchHint": "このアカウントのグローバルしきい値を上書きします。0 にすると、このアカウントからの使用量ベースの事前切り替えを無効にします。",
   "accountPool.autoSwitchUpdated": "{email} の使用量しきい値を更新しました",
   "accountPool.autoSwitchUpdateFailed": "{email} の使用量しきい値を保存できませんでした。最後に確認された値を表示しています。",

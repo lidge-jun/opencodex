@@ -2004,7 +2004,6 @@ export const en = {
   "accountPool.autoSwitchThreshold": "Custom account threshold",
   "accountPool.autoSwitchThresholdAria": "Usage threshold for {email}",
   "accountPool.autoSwitchOverrideAria": "Override global usage threshold for {email}",
-  "accountPool.autoSwitchInherit": "Global {threshold}%",
   "accountPool.autoSwitchHint": "Overrides the global threshold for this account. 0 disables usage-based proactive switching from this account.",
   "accountPool.autoSwitchUpdated": "Usage threshold updated for {email}",
   "accountPool.autoSwitchUpdateFailed": "Usage threshold for {email} could not be saved. The last confirmed value is shown.",

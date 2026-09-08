@@ -24,6 +24,8 @@ export interface AccountRow {
   needsReauth?: boolean;
   /** Codex pool selection order, higher used earlier. Absent where ordering does not apply. */
   priority?: number;
+  /** Null means the account inherits the global usage-switch threshold. */
+  autoSwitchThresholdOverride?: number | null;
   quota?: CodexQuotaDto | null;
   quotaRefresh?: CodexQuotaRefreshOutcome;
   /**
@@ -238,6 +240,7 @@ interface CodexAccountDto {
   isMain?: boolean;
   needsReauth?: boolean;
   priority?: number;
+  autoSwitchThresholdOverride?: number | null;
   quota?: CodexQuotaDto | null;
   quotaRefresh?: unknown;
   paused?: boolean;
@@ -301,6 +304,9 @@ export async function fetchCodexRows(
     active: a.id === activeId,
     needsReauth: a.needsReauth,
     priority: typeof a.priority === "number" ? a.priority : 0,
+    autoSwitchThresholdOverride: typeof a.autoSwitchThresholdOverride === "number"
+      ? a.autoSwitchThresholdOverride
+      : null,
     paused: a.paused === true,
     ...(includeQuota ? {
       quota: projectQuota(a.quota),

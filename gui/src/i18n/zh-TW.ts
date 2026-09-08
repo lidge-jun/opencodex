@@ -2390,7 +2390,6 @@ export const zhTW: Record<TKey, string> = {
   "accountPool.autoSwitchThreshold": "自訂帳號閾值",
   "accountPool.autoSwitchThresholdAria": "{email} 的使用量閾值",
   "accountPool.autoSwitchOverrideAria": "覆寫 {email} 的全域使用量閾值",
-  "accountPool.autoSwitchInherit": "全域 {threshold}%",
   "accountPool.autoSwitchHint": "覆寫此帳號的全域閾值。設為 0 會停用從此帳號發起的使用量主動切換。",
   "accountPool.autoSwitchUpdated": "已更新 {email} 的使用量閾值",
   "accountPool.autoSwitchUpdateFailed": "無法儲存 {email} 的使用量閾值。目前顯示最後確認的值。",

@@ -3,7 +3,11 @@ import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import CodexAccountPool from "../src/components/CodexAccountPool";
-import type { CodexAccountEntry, CodexAccountPoolController } from "../src/hooks/useCodexAccountPool";
+import type {
+  CodexAccountEntry,
+  CodexAccountLoadObserver,
+  CodexAccountPoolController,
+} from "../src/hooks/useCodexAccountPool";
 import { en } from "../src/i18n/en";
 import { LanguageProvider } from "../src/i18n/provider";
 
@@ -336,6 +340,32 @@ test("custom account threshold uses only the custom number stepper", async () =>
   expect(input).not.toBeNull();
   expect(win.getComputedStyle(input!).appearance).toBe("textfield");
   expect(card.querySelectorAll(".ocx-stepper__btn")).toHaveLength(2);
+});
+
+test("a global threshold refresh preserves an in-progress custom account draft", async () => {
+  const overridden = { ...account, autoSwitchThresholdOverride: 70 };
+  let observer: CodexAccountLoadObserver | null = null;
+  await mountPool(makeController({
+    accounts: [overridden],
+    readLastThreshold: () => 95,
+    subscribeLoadObserver: (next) => {
+      observer = next;
+      return () => {};
+    },
+  }));
+  const input = cardFor("pool@example.test").querySelector<HTMLInputElement>('input[type="number"]')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!
+      .set!.call(input, "75");
+    input.dispatchEvent(new win.Event("input", { bubbles: true }));
+  });
+
+  const startedRevision = observer!.beginActiveRead();
+  await act(async () => {
+    observer!.acceptActiveRead({ autoSwitchThreshold: 80 }, startedRevision);
+  });
+
+  expect(cardFor("pool@example.test").querySelector<HTMLInputElement>('input[type="number"]')!.value).toBe("75");
 });
 
 test("toggle-off wins over a pending edited-threshold blur", async () => {

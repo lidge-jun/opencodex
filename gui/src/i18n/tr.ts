@@ -1947,7 +1947,6 @@ export const tr: Record<TKey, string> = {
   "accountPool.autoSwitchThreshold": "Özel hesap eşiği",
   "accountPool.autoSwitchThresholdAria": "{email} için kullanım eşiği",
   "accountPool.autoSwitchOverrideAria": "{email} için genel kullanım eşiğini geçersiz kıl",
-  "accountPool.autoSwitchInherit": "Genel {threshold}%",
   "accountPool.autoSwitchHint": "Bu hesap için genel eşiği geçersiz kılar. 0, bu hesaptan kullanıma dayalı proaktif geçişi devre dışı bırakır.",
   "accountPool.autoSwitchUpdated": "{email} için kullanım eşiği güncellendi",
   "accountPool.autoSwitchUpdateFailed": "{email} için kullanım eşiği kaydedilemedi. Son onaylanan değer gösteriliyor.",

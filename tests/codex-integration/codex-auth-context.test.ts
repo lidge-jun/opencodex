@@ -1139,6 +1139,7 @@ describe("Codex auth context", () => {
     mainWeeklyPercent: number;
     poolWeeklyPercent: number;
     callerEntitled: boolean;
+    mainThresholdOverride?: number;
   }): Promise<{
     cfg: OcxConfig;
     context: Awaited<ReturnType<typeof resolveCodexAuthContext>>;
@@ -1149,6 +1150,11 @@ describe("Codex auth context", () => {
     cfg.autoSwitchThreshold = 90;
     cfg.activeCodexAccountId = MAIN_CODEX_ACCOUNT_ID;
     cfg.activeCodexAccountPinned = MAIN_CODEX_ACCOUNT_ID;
+    if (options.mainThresholdOverride !== undefined) {
+      cfg.codexAccountAutoSwitchThresholds = {
+        [MAIN_CODEX_ACCOUNT_ID]: options.mainThresholdOverride,
+      };
+    }
     cfg.codexAccountPriorities = {
       [MAIN_CODEX_ACCOUNT_ID]: 0,
       "pool-a": 0,
@@ -1192,6 +1198,19 @@ describe("Codex auth context", () => {
       mainWeeklyPercent: 16,
       poolWeeklyPercent: 100,
       callerEntitled: true,
+    });
+    expect(context).toMatchObject({ kind: "main", accountId: null });
+    expect(directEntitlementChecks).toBe(1);
+    expect(cfg.activeCodexAccountId).toBe(MAIN_CODEX_ACCOUNT_ID);
+    expect(cfg.activeCodexAccountPinned).toBe(MAIN_CODEX_ACCOUNT_ID);
+  });
+
+  test("a zero main-account threshold override preserves a request-owned main pin at full usage", async () => {
+    const { cfg, context, directEntitlementChecks } = await resolveRequestOwnedMainPinCase({
+      mainWeeklyPercent: 100,
+      poolWeeklyPercent: 16,
+      callerEntitled: true,
+      mainThresholdOverride: 0,
     });
     expect(context).toMatchObject({ kind: "main", accountId: null });
     expect(directEntitlementChecks).toBe(1);

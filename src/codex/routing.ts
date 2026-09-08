@@ -2108,7 +2108,7 @@ export function resolveCodexAccountForThreadDetailed(
     ) {
       entry.lastUsedAt = now;
       // Periodic quota re-eval: a long-lived bound thread must still switch when
-      // it crosses autoSwitchThreshold and a strictly-cooler account exists.
+      // it crosses its effective account threshold and a strictly-cooler account exists.
       // Without this the reuse branch returns before applyQuotaAutoSwitch and the
       // thread stays pinned for the full idle TTL (the WSL "never switches" report).
       // Over-threshold pins re-eval immediately so a depleted primary does not keep
