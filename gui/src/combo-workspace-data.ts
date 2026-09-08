@@ -114,6 +114,10 @@ function normalizeReasoningEffortMode(value: unknown): "strict" | "adaptive" {
   return value === "adaptive" ? "adaptive" : "strict";
 }
 
+function normalizeDefaultEffortMode(value: unknown): "fallback" | "force" {
+  return value === "force" ? "force" : "fallback";
+}
+
 export interface ComboItem {
   id: string;
   /** Wire id shown to clients, e.g. combo/free */
@@ -127,6 +131,8 @@ export interface ComboItem {
   strategy: ComboStrategy;
   stickyLimit: number;
   defaultEffort: ComboEffort | null;
+  /** Operator policy; force overrides valid client effort. */
+  defaultEffortMode?: "fallback" | "force";
   imageInput?: "auto" | "disabled";
   /**
    * Picker-ladder policy. `adaptive` lets targets that advertise no effort control drop
@@ -240,6 +246,7 @@ export function parseComboList(payload: unknown): ComboItem[] {
       strategy: normalizeStrategy(r.strategy),
       stickyLimit: normalizeStickyLimit(r.stickyLimit),
       defaultEffort: normalizeDefaultEffort(r.defaultEffort),
+      defaultEffortMode: normalizeDefaultEffortMode(r.defaultEffortMode),
       imageInput: normalizeImageInput(r.imageInput),
       reasoningEffortMode: normalizeReasoningEffortMode(r.reasoningEffortMode),
       targets,
@@ -498,6 +505,7 @@ export function draftEquals(a: ComboItem, b: ComboItem): boolean {
     || a.strategy !== b.strategy
     || a.stickyLimit !== b.stickyLimit
     || a.defaultEffort !== b.defaultEffort
+    || (a.defaultEffortMode ?? "fallback") !== (b.defaultEffortMode ?? "fallback")
     || (a.imageInput ?? "auto") !== (b.imageInput ?? "auto")
     || (a.reasoningEffortMode ?? "strict") !== (b.reasoningEffortMode ?? "strict")
   ) return false;
@@ -516,6 +524,7 @@ export function toPutBody(item: ComboItem, options: { renameFrom?: string } = {}
     strategy: ComboStrategy;
     stickyLimit?: number;
     defaultEffort: ComboEffort | null;
+    defaultEffortMode?: "force";
     imageInput?: "disabled";
     reasoningEffortMode?: "adaptive";
     alias?: string;
@@ -533,6 +542,7 @@ export function toPutBody(item: ComboItem, options: { renameFrom?: string } = {}
         : { provider: target.provider.trim(), model: target.model.trim() }),
       strategy: item.strategy,
       defaultEffort: item.defaultEffort,
+      ...(item.defaultEffortMode === "force" ? { defaultEffortMode: "force" as const } : {}),
       ...(item.imageInput === "disabled" ? { imageInput: "disabled" as const } : {}),
       ...(item.reasoningEffortMode === "adaptive" ? { reasoningEffortMode: "adaptive" as const } : {}),
       ...(item.strategy === "round-robin" ? { stickyLimit: item.stickyLimit } : {}),
@@ -643,6 +653,7 @@ export function emptyDraft(id = ""): ComboItem {
     strategy: "failover",
     stickyLimit: 1,
     defaultEffort: null,
+    defaultEffortMode: "fallback",
     imageInput: "auto",
     reasoningEffortMode: "strict",
     targets: [newComboTarget()],

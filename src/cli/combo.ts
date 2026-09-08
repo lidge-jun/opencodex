@@ -15,7 +15,8 @@ const USAGE = `Usage:
   ocx combo show <id> [--json]
   ocx combo set <id> --targets <provider/model[:weight],...>
       [--strategy <failover|round-robin|random|least-used|reset-window>] [--sticky <1-100>]
-      [--effort <low|medium|high|xhigh|max|ultra|->] [--alias <name|->]
+      [--effort <low|medium|high|xhigh|max|ultra|->] [--effort-mode <fallback|force>]
+      (force overrides valid client effort and can increase cost/latency) [--alias <name|->]
       [--native-alias] [--display-name <label|->]
       [--rename-from <id>] [--json]
   ocx combo remove <id> --yes [--json]`;
@@ -80,6 +81,10 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     if (strategy !== "round-robin") throw new CliUsageError("--sticky applies only to round-robin", USAGE);
   }
   const effort = takeOption(args, "--effort");
+  const effortMode = takeOption(args, "--effort-mode");
+  if (effortMode !== undefined && effortMode !== "fallback" && effortMode !== "force") {
+    throw new CliUsageError("--effort-mode must be fallback or force", USAGE);
+  }
   const alias = takeOption(args, "--alias");
   const nativeAlias = takeFlag(args, "--native-alias");
   const displayName = takeOption(args, "--display-name");
@@ -91,12 +96,14 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     targets: parseTargets(targetsRaw),
   };
   if (effort !== undefined) combo.defaultEffort = effort === "-" ? null : effort;
+  if (effortMode !== undefined) combo.defaultEffortMode = effortMode;
   if (alias !== undefined) combo.alias = alias === "-" ? "" : alias;
   if (nativeAlias) combo.nativeAlias = true;
   if (displayName !== undefined) combo.displayName = displayName === "-" ? "" : displayName;
   const current = await runtimeRequest<{ combos?: ComboRow[] }>("/api/combos", {}, deps);
   const existing = (current.combos ?? []).find(row => row.id === (renameFrom ?? id));
   if (existing?.imageInput === "disabled") combo.imageInput = "disabled";
+  if (effortMode === undefined && existing?.defaultEffortMode === "force") combo.defaultEffortMode = "force";
   const result = await runtimeRequest("/api/combos", {
     method: "PUT",
     body: JSON.stringify({ id, combo, ...(renameFrom ? { renameFrom } : {}) }),

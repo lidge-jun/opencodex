@@ -113,6 +113,7 @@ describe("combo-workspace-data", () => {
         strategy: "failover",
         stickyLimit: 1,
         defaultEffort: null,
+        defaultEffortMode: "fallback",
         imageInput: "auto",
         reasoningEffortMode: "strict",
         targets: [{ provider: "a", model: "m1", weight: 1, clientKey: expect.stringMatching(/^ct-\d+$/) }],
@@ -126,6 +127,7 @@ describe("combo-workspace-data", () => {
         strategy: "round-robin",
         stickyLimit: 4,
         defaultEffort: "high",
+        defaultEffortMode: "fallback",
         imageInput: "auto",
         reasoningEffortMode: "strict",
         targets: [
@@ -267,6 +269,19 @@ describe("combo-workspace-data", () => {
     // Without this the Save button stays disabled after toggling the switch.
     expect(draftEquals(combo(), combo({ reasoningEffortMode: "adaptive" }))).toBe(false);
     expect(draftEquals(combo({ reasoningEffortMode: "strict" }), combo())).toBe(true);
+  });
+
+  test("defaultEffortMode survives parse and serialize while fallback stays sparse", () => {
+    const forced = parseComboList({ combos: [{
+      id: "forced",
+      defaultEffort: "max",
+      defaultEffortMode: "force",
+      targets: [{ provider: "a", model: "m1" }],
+    }] })[0]!;
+    expect(forced.defaultEffortMode).toBe("force");
+    expect(toPutBody(forced).combo.defaultEffortMode).toBe("force");
+    expect(toPutBody(combo()).combo).not.toHaveProperty("defaultEffortMode");
+    expect(draftEquals(combo(), combo({ defaultEffortMode: "force" }))).toBe(false);
   });
 
   test("attention flags zero-target and one-target defensive rows", () => {

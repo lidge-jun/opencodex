@@ -321,6 +321,27 @@ describe("combo request cloning", () => {
     expect(concreteComboRequestBody({ model: "combo/x" }, target, "high", undefined).reasoning).toBeUndefined();
   });
 
+  test("force mode overrides only valid caller effort and resolves independently per target", () => {
+    const raw = { model: "combo/x", reasoning: { effort: "medium", summary: "concise" } };
+    expect(concreteComboRequestBody(raw, target, "max", ["low", "high", "max"], "force").reasoning)
+      .toEqual({ effort: "max", summary: "concise" });
+    expect(concreteComboRequestBody(raw, target, "max", ["low", "high"], "force").reasoning)
+      .toEqual({ effort: "high", summary: "concise" });
+    expect(raw.reasoning).toEqual({ effort: "medium", summary: "concise" });
+  });
+
+  test("force mode fails closed for malformed and unknown capabilities and strips unsupported effort", () => {
+    expect(concreteComboRequestBody(
+      { model: "combo/x", reasoning: { effort: "banana" } }, target, "max", ["max"], "force",
+    ).reasoning).toEqual({ effort: "banana" });
+    expect(concreteComboRequestBody(
+      { model: "combo/x", reasoning: { effort: "medium" } }, target, "max", undefined, "force",
+    ).reasoning).toEqual({ effort: "medium" });
+    expect(concreteComboRequestBody(
+      { model: "combo/x" }, target, "max", [], "force",
+    ).reasoning).toBeUndefined();
+  });
+
   /**
    * #3108: a combo configured for `max` routed to a target whose ladder tops out lower
    * sent NO effort at all, so the provider default applied and the turn ran at `none` —
@@ -1409,8 +1430,10 @@ describe("combo validation and normalization", () => {
     })).toEqual({
       strategy: "failover",
       stickyLimit: 1,
+      cooldownMs: undefined,
       waitForCooldownMs: 0,
       defaultEffort: "high",
+      defaultEffortMode: "fallback",
       reasoningEffortMode: "strict",
       imageInput: "auto",
       alias: null,

@@ -2874,6 +2874,28 @@ describe("server combo failover 030 activation matrix", () => {
     expect(bodies.map(row => row.body.reasoning_effort)).toEqual(["low", "low"]);
   });
 
+  test("force-default raises Hermes-like medium to max while fallback keeps medium", async () => {
+    const efforts: unknown[] = [];
+    const upstream = serve(async request => {
+      const body = await request.json() as Record<string, unknown>;
+      efforts.push(body.reasoning_effort);
+      return chatSuccess("forced", "m1");
+    });
+    const providers = {
+      a: provider("openai-chat", baseUrl(upstream), "key-a", {
+        reasoningEfforts: ["low", "medium", "high", "max"],
+      }),
+    };
+    const forced = comboConfig(providers, undefined, {
+      defaultEffort: "max",
+      defaultEffortMode: "force",
+    });
+    expect((await post(forced, { reasoning: { effort: "medium" } })).status).toBe(200);
+    const fallback = comboConfig(providers, undefined, { defaultEffort: "max" });
+    expect((await post(fallback, { reasoning: { effort: "medium" } })).status).toBe(200);
+    expect(efforts).toEqual(["max", "medium"]);
+  });
+
   test("backup noReasoningModels removes the fresh combo default", async () => {
     const a = serve(() => Response.json({ error: { message: "retry" } }, { status: 503 }));
     let backupBody: Record<string, unknown> | undefined;

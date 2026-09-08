@@ -497,6 +497,17 @@ describe("headless GUI parity CLI", () => {
     });
   });
 
+  test("combo set exposes the opt-in force-default policy", async () => {
+    const runtime = fakeRuntime();
+    expect(await handleComboCommand([
+      "set", "deep", "--targets", "ark/model-a", "--effort", "max", "--effort-mode", "force", "--json",
+    ], runtime.deps)).toBe(0);
+    expect(runtime.requests.find(request => request.method === "PUT")?.body).toMatchObject({
+      id: "deep",
+      combo: { defaultEffort: "max", defaultEffortMode: "force" },
+    });
+  });
+
   test("combo set rejects --sticky outside round-robin instead of dropping it", async () => {
     const runtime = fakeRuntime();
     const errorSpy = spyOn(console, "error").mockImplementation(() => {});

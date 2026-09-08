@@ -254,20 +254,18 @@ instead of growing memory without a bound.
 
 ## Default reasoning effort
 
-`defaultEffort` supplies `reasoning.effort` only when all of these are true:
+`defaultEffort` supplies `reasoning.effort` when the combo has a non-null default and the selected target advertises a compatible effort. By default, `defaultEffortMode: "fallback"` preserves an explicit caller effort. Set `defaultEffortMode: "force"` to make the operator-configured default override a valid caller effort (for example, caller `medium` becomes configured `max`). Force mode can increase cost and latency, is available only through combo configuration/management, and is rejected without `defaultEffort`.
 
-1. the combo has a non-null default;
-2. the caller did not set an effort; and
-3. the selected target's catalog advertises that exact effort.
+Resolution remains capability-safe: the configured effort is lowered to the target's highest compatible rung, an explicitly unsupported target receives no effort control, and an unknown capability never causes an override or injection. Malformed caller effort is not repaired into a valid expensive request.
 
 If the request has no `reasoning` object, opencodex creates one. If `reasoning` exists without an
-`effort` property, it preserves the other fields and adds the default. A caller-provided effort is
-never overwritten.
+`effort` property, it preserves the other fields and adds the default. A valid caller-provided effort
+is overwritten only in explicit `force` mode.
 
-When target capability is unknown or does not include the configured effort, opencodex omits the
-default and leaves the target's own behavior unchanged. Supported values are `low`, `medium`,
-`high`, `xhigh`, `max`, and `ultra`; omit the field or set it to `null` to leave effort entirely to
-the caller and target.
+When target capability is unknown, opencodex leaves the request unchanged. When the target
+explicitly advertises no effort control, opencodex omits the effort. Supported values are `low`,
+`medium`, `high`, `xhigh`, `max`, and `ultra`; omit `defaultEffort` or set it to `null` to leave effort
+entirely to the caller and target.
 
 ### Mixed-capability groups (`reasoningEffortMode`)
 
@@ -414,7 +412,8 @@ Combos are stored in the top-level `combos` object, keyed by combo id:
 | `stickyLimit` | No | `1` | Integer from 1 to 100 successful requests per round-robin selection. Applies only to round-robin. |
 | `cooldownMs` | No | unset → upstream fallback (5 s for request-rate 429 codes `1302`/`1305`, otherwise 60 s) | Integer from 1 to 600000. When set, applies as the per-target cooldown whenever no usable upstream `Retry-After` or Codex reset signal exists, including request-rate 429s; when unset, uses the upstream fallback. |
 | `waitForCooldownMs` | No | `0` | Integer from 0 to 600000. Maximum time to wait for the earliest eligible cooling target before returning `combo_unavailable`; abort cancels the wait. |
-| `defaultEffort` | No | `null` | `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`; applied only when the caller omits effort and the target advertises support. |
+| `defaultEffort` | No | `null` | `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`; resolved against each target's advertised ladder. |
+| `defaultEffortMode` | No | `"fallback"` | `"fallback"` preserves an explicit caller effort. `"force"` overrides valid caller effort with `defaultEffort` and requires a non-null default; it can increase cost and latency. |
 | `reasoningEffortMode` | No | `"strict"` | `"strict"` intersects every known target ladder, so one target advertising no effort control empties the combo's picker. `"adaptive"` excludes those empty ladders from the published intersection. Metadata only; dispatch is unchanged. |
 | `imageInput` | No | `"auto"` | `"auto"` or `"disabled"`. `"auto"` publishes image support only when every target supports images; `"disabled"` forces text-only (drops image from published modalities and rejects image-bearing requests before dispatch). |
 | `alias` | No | none | Optional trimmed public model id; use the alias rules above. An empty value is stored as no alias. |
