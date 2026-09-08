@@ -116,13 +116,6 @@ var deferredSurfaces = []TSDeferral{
 		Track: "waxiangzi/opencodex#57 (key slice) + no ticket for the OAuth remainder",
 	},
 	{
-		Kind: WholeCommand, Name: "opencode",
-		Reason: "Launcher that merges V1/V2 runtime provider blocks into a project JSONC " +
-			"config with a live model catalog; a byte-faithful port needs those subsystems " +
-			"plus a live-server oracle.",
-		Track: "waxiangzi/opencodex#56",
-	},
-	{
 		Kind: WholeCommand, Name: "recover-history",
 		Reason: "Runs the async history job and live-proxy/model sync — open sets whose " +
 			"bytes are non-deterministic, so no byte-parity oracle exists.",

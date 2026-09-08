@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -5841,6 +5841,336 @@ describe.skipIf(!goAvailable || goCLI === null)(
           const ts = expectV2Parity(args, "", "");
           expect(ts.code).toBe(1);
           expect(ts.stdout).toBe("");
+        });
+      },
+    );
+
+    describe.skipIf(process.platform === "win32")(
+      "ocx opencode slice (issue #56)",
+      () => {
+        // Env-capture shim oracle for the launcher lane: a fake `opencode` on
+        // PATH that echoes argv plus the two child-env vars the launcher owns
+        // (OPENCODE_CONFIG_CONTENT, OPENCODEX_OPENCODE_API_KEY) to stdout and
+        // exits 7 when its first arg is `fail`, else 0 — so the captured bytes
+        // are exactly the runtime-config payload and admission key each side
+        // hands the child, compared byte-for-byte between TS and Go. Both sides
+        // run against the SAME fixture server (the launcher never mutates the
+        // home, so no per-side isolation is needed), which keeps the live-port
+        // bytes inside the content identical across the two runs.
+        //
+        // The self-start lane (no live proxy) is excluded: TS spawns a real
+        // detached proxy there, so it is not hermetic; these launcher rows
+        // always start the fixture proxy first. win32 has no shell-shim oracle,
+        // so the rows are skipped there (same convention as the v2b rows).
+        const opencodeShim =
+          [
+            "#!/usr/bin/env bash",
+            "printf 'ARGV:'",
+            'for a in "$@"; do printf " <%s>" "$a"; done',
+            "printf '\\n'",
+            'printf "CONTENT:%s\\n" "$OPENCODE_CONFIG_CONTENT"',
+            'printf "KEY:%s\\n" "$OPENCODEX_OPENCODE_API_KEY"',
+            '[ "${1:-}" = "fail" ] && exit 7',
+            "exit 0",
+          ].join("\n") + "\n";
+        // Fixed /api/models catalog (disabled + duplicate rows dropped) so the
+        // survivor count and every label/variant byte are deterministic; it is
+        // the same fixture the Go golden engine tests freeze at a fixed port.
+        const opencodeCatalogRows = JSON.stringify([
+          {
+            namespaced: "provider2/model-b",
+            provider: "provider2",
+            id: "model-b",
+            contextWindow: 64000,
+            reasoningEfforts: ["low", "high"],
+            displayNameSource: "provider",
+          },
+          {
+            namespaced: "openai/gpt-5.2",
+            provider: "openai",
+            id: "gpt-5.2",
+            native: true,
+            contextWindow: 300000,
+            displayNameSource: "fallback",
+          },
+          {
+            namespaced: "provider1/model-a",
+            provider: "provider1",
+            id: "model-a",
+            displayName: "Model A",
+            displayNameSource: "operator",
+            contextWindow: 128000,
+            defaultReasoningEffort: "high",
+            reasoningEfforts: ["none", "high"],
+          },
+          {
+            namespaced: "disabled/model",
+            provider: "x",
+            id: "model",
+            disabled: true,
+          },
+          {
+            namespaced: "provider1/model-a",
+            provider: "provider1",
+            id: "model-a2",
+          },
+          {
+            namespaced: "noctx/provider",
+            provider: "noctx",
+            id: "provider",
+            reasoningEfforts: [],
+          },
+        ]);
+        const scratchDirs: string[] = [];
+        afterEach(() => {
+          for (const dir of scratchDirs) {
+            if (dir && existsSync(dir)) removeTreeWithRetry(dir);
+          }
+          scratchDirs.length = 0;
+        });
+        let shimDir = "";
+        let emptyPath = "";
+        beforeEach(() => {
+          shimDir = mkdtempSync(join(tmpdir(), "ocx-go-opencode-shim-"));
+          emptyPath = mkdtempSync(join(tmpdir(), "ocx-go-opencode-empty-"));
+          writeFileSync(join(shimDir, "opencode"), opencodeShim);
+          chmodSync(join(shimDir, "opencode"), 0o755);
+        });
+        afterEach(() => {
+          if (shimDir && existsSync(shimDir)) removeTreeWithRetry(shimDir);
+          shimDir = "";
+          if (emptyPath && existsSync(emptyPath))
+            removeTreeWithRetry(emptyPath);
+          emptyPath = "";
+        });
+        function startOpencodeFixture(
+          apiKeys?: unknown,
+          serviceFile?: string,
+        ): void {
+          testHome = mkdtempSync(join(tmpdir(), "ocx-go-opencode-parity-"));
+          const config: Record<string, unknown> = {
+            hostname: "127.0.0.1",
+            port: 10100,
+            providers: {
+              fixture: {
+                adapter: "openai-chat",
+                baseUrl: "https://example.test/v1",
+                apiKey: "k",
+              },
+            },
+            defaultProvider: "fixture",
+          };
+          if (apiKeys !== undefined) config.apiKeys = apiKeys;
+          writeFileSync(join(testHome, "config.json"), JSON.stringify(config));
+          if (serviceFile !== undefined)
+            writeFileSync(join(testHome, "service-api-token"), serviceFile);
+          testServer = Bun.serve({
+            port: 0,
+            fetch(request) {
+              const url = new URL(request.url);
+              if (url.pathname === "/healthz") {
+                const challenge =
+                  request.headers.get("x-opencodex-attestation-challenge") ??
+                  "";
+                const headers = attestedHeaders(challenge, testServer!.port!);
+                return Response.json(
+                  {
+                    status: "ok",
+                    service: "opencodex",
+                    version: "2.42.0",
+                    uptime: 1,
+                    pid: process.pid,
+                    port: testServer!.port,
+                  },
+                  { headers },
+                );
+              }
+              if (url.pathname === "/api/models") {
+                return new Response(opencodeCatalogRows, {
+                  headers: { "content-type": "application/json" },
+                });
+              }
+              return new Response("not found", { status: 404 });
+            },
+          });
+          writeFileSync(
+            join(testHome, "runtime-port.json"),
+            JSON.stringify({
+              pid: process.pid,
+              port: testServer.port,
+              hostname: "127.0.0.1",
+              attestationSecret: secret,
+            }),
+          );
+        }
+        // Rows redirect HOME/XDG_CONFIG_HOME to a scratch dir so the launcher's
+        // informational provider-override scan is deterministic (no real
+        // ~/.config/opencode/opencode.json can leak a ℹ line into pinned
+        // bytes) and neutralize ambient admission vars per row.
+        function opencodeEnv(
+          extra: Record<string, string | undefined>,
+        ): Record<string, string | undefined> {
+          const scratch = mkdtempSync(join(tmpdir(), "ocx-go-opencode-home-"));
+          scratchDirs.push(scratch);
+          const env = parityEnv(testHome);
+          env.HOME = scratch;
+          delete env.XDG_CONFIG_HOME;
+          env.OPENCODEX_API_AUTH_TOKEN = "";
+          env.OCX_API_TOKEN_FILE = "";
+          return Object.assign(env, extra);
+        }
+        function withShim(
+          env: Record<string, string | undefined>,
+        ): Record<string, string | undefined> {
+          env.PATH = shimDir + pathDelimiter + (process.env.PATH ?? "");
+          return env;
+        }
+        async function parityBoth(
+          args: readonly string[],
+          env: Record<string, string | undefined>,
+        ): Promise<Result> {
+          const ts = await runTsEnvAsync(args, env);
+          const go = await runGoEnvAsync(args, env);
+          expect(go).toEqual(ts);
+          return ts;
+        }
+        async function opencodeParity(
+          args: readonly string[],
+          envExtra: Record<string, string | undefined>,
+          withShimOnPath = true,
+        ): Promise<Result> {
+          startOpencodeFixture();
+          const env = opencodeEnv(envExtra);
+          if (withShimOnPath) withShim(env);
+          else env.PATH = emptyPath;
+          return parityBoth(args, env);
+        }
+        const wiredBaseURL = () => `http://127.0.0.1:${testServer!.port}/v1`;
+        const wiredStderr = () =>
+          `✅ opencode wired to ${wiredBaseURL()} — 4 model(s) under provider \`opencodex\`.` +
+          "\n   Your existing opencode config files are left untouched; only the runtime provider blocks are injected.\n";
+        test("diffs the wired lane and env-capture through the shim", async () => {
+          const ts = await opencodeParity(["opencode"], {
+            OPENCODEX_API_AUTH_TOKEN: "env-token",
+          });
+          expect(ts.code).toBe(0);
+          expect(ts.stderr).toBe(wiredStderr());
+          expect(ts.stdout).toContain("ARGV:");
+          expect(ts.stdout).toContain("KEY:env-token");
+          expect(ts.stdout).toContain(`"baseURL":"${wiredBaseURL()}"`);
+          expect(ts.stdout).toContain('"model-b (provider2)"');
+          expect(ts.stdout).toContain('"gpt-5.2 (native)"');
+          expect(ts.stdout).toContain('"Model A (provider1)"');
+          expect(ts.stdout).toContain('"variants"');
+          expect(ts.stdout).not.toContain("disabled/model");
+        });
+        test("diffs argv passthrough", async () => {
+          const ts = await opencodeParity(
+            ["opencode", "run", "--model", "x"],
+            {},
+          );
+          expect(ts.code).toBe(0);
+          expect(ts.stdout).toContain("ARGV: <run> <--model> <x>");
+        });
+        test("diffs child exit-code passthrough (7)", async () => {
+          const ts = await opencodeParity(["opencode", "fail"], {});
+          expect(ts.code).toBe(7);
+        });
+        test("diffs the ENOENT spawn hint on an empty PATH", async () => {
+          const ts = await opencodeParity(["opencode", "run"], {}, false);
+          expect(ts.code).toBe(1);
+          expect(ts.stdout).toBe("");
+          expect(ts.stderr).toBe(
+            wiredStderr() +
+              "❌ `opencode` CLI not found. Install it first: npm install -g opencode-ai\n",
+          );
+        });
+        test("diffs admission-key precedence (service file, config, placeholder)", async () => {
+          for (const row of [
+            {
+              name: "service-file",
+              apiKeys: [
+                {
+                  key: "cfg-key",
+                  id: "cfg-1",
+                  name: "cfg",
+                  createdAt: "2026-01-01T00:00:00.000Z",
+                },
+              ],
+              serviceFile: "file-key\n",
+              key: "file-key",
+            },
+            {
+              name: "config-key",
+              apiKeys: [
+                {
+                  key: "cfg-key",
+                  id: "cfg-1",
+                  name: "cfg",
+                  createdAt: "2026-01-01T00:00:00.000Z",
+                },
+              ],
+              key: "cfg-key",
+            },
+            { name: "placeholder", key: "ocx" },
+          ] as const) {
+            startOpencodeFixture(row.apiKeys as never, row.serviceFile);
+            const env = opencodeEnv({});
+            withShim(env);
+            const ts = await parityBoth(["opencode"], env);
+            expect(ts.code).toBe(0);
+            expect(ts.stdout).toContain(`KEY:${row.key}`);
+          }
+        });
+        test("diffs inherited OPENCODE_CONFIG_CONTENT merge and its errors", async () => {
+          const inherited = JSON.stringify({
+            $schema: "https://custom.test/config.json",
+            theme: "dark",
+            provider: { other: { npm: "x" } },
+            providers: { legacy: { package: "y" } },
+          });
+          const ts = await opencodeParity(["opencode"], {
+            OPENCODE_CONFIG_CONTENT: inherited,
+          });
+          expect(ts.code).toBe(0);
+          expect(ts.stdout).toContain('"theme":"dark"');
+          expect(ts.stdout).toContain('"other":{"npm":"x"}');
+          expect(ts.stdout).toContain('"legacy":{"package":"y"}');
+          // Invalid inherited content fails before the child spawns.
+          const bad = await opencodeParity(["opencode"], {
+            OPENCODE_CONFIG_CONTENT: "{nope",
+          });
+          expect(bad.code).toBe(1);
+          expect(bad.stdout).toBe("");
+          expect(bad.stderr).toContain(
+            "❌ OPENCODE_CONFIG_CONTENT is not valid JSON.",
+          );
+        });
+        test("diffs the provider-override informational line", async () => {
+          const scratch = mkdtempSync(join(tmpdir(), "ocx-go-opencode-ovr-"));
+          scratchDirs.push(scratch);
+          const globalCfg = join(
+            scratch,
+            ".config",
+            "opencode",
+            "opencode.json",
+          );
+          mkdirSync(dirname(globalCfg), { recursive: true });
+          writeFileSync(
+            globalCfg,
+            JSON.stringify({
+              provider: { opencodex: { npm: "@ai-sdk/openai-compatible" } },
+            }),
+          );
+          startOpencodeFixture();
+          const env = opencodeEnv({});
+          env.HOME = scratch;
+          withShim(env);
+          const ts = await parityBoth(["opencode"], env);
+          expect(ts.code).toBe(0);
+          expect(ts.stderr).toContain(
+            `ℹ ${globalCfg} also defines our provider key; the runtime layer from ocx opencode overrides it for this launch.`,
+          );
         });
       },
     );

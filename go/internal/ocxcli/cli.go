@@ -156,20 +156,21 @@ var Commands = []Command{
 	// The read/operator verbs still route to their TypeScript owner through the
 	// labRuntimeSubcommands map until each carries its own parity oracle.
 	{Name: "lab", Usage: "ocx lab <status|verdicts|subjects|subject|observations|events|event|artifacts|artifact|catalog> [options] [--json]", Summary: "Read-only Compatibility Lab projection inspection (local SQLite; no daemon).", Owner: GoOwned},
-	// claude and opencode stay TypeScript-owned (issue #54 remainder; follow-up:
-	// waxiangzi/opencodex#56): both are launchers, but unlike mcode/mmx their
-	// launch env is assembled by whole auth/credential subsystems - claude
-	// resolves subscription vs proxy-auth mode (src/claude/auth-detect +
-	// auth-mode, launcher-context parent-env provenance, gateway-cache refresh,
-	// agents-inject writes under ~/.claude) and opencode merges V1/V2 runtime
-	// provider blocks into a project JSONC config with a live model catalog. A
-	// byte-faithful port would need every one of those subsystems plus a
-	// live-server oracle; an approximate env assembly would silently break real
+	// claude stays TypeScript-owned (issue #54 remainder; follow-up:
+	// waxiangzi/opencodex#56): unlike mcode/mmx, its launch env is assembled by
+	// whole auth/credential subsystems - subscription vs proxy-auth mode
+	// (src/claude/auth-detect + auth-mode), launcher-context parent-env
+	// provenance, gateway-cache refresh, and agents-inject writes under
+	// ~/.claude. A byte-faithful port needs every one of those subsystems plus
+	// a parity harness; an approximate env assembly would silently break real
 	// subscription auth, which is a release blocker under MAINTAINERS review
-	// rules, so they stay on the TypeScript side until a parity harness for the
-	// auth/env surface exists.
+	// rules, so it stays on the TypeScript side until that exists.
+	// opencode is Go-owned (issue #56): runOpencode ports the launcher and the
+	// V1/V2 provider-block merge into the OPENCODE_CONFIG_CONTENT runtime layer,
+	// oracle-checked byte-for-byte against the TS serializer + an env-capture
+	// shim (tests/go-cli-parity.test.ts).
 	{Name: "claude", Usage: "ocx claude [args...]", Summary: "Launch Claude Code.", Owner: TypeScriptOwned},
-	{Name: "opencode", Usage: "ocx opencode [args...]", Summary: "Launch opencode.", Owner: TypeScriptOwned},
+	{Name: "opencode", Usage: "ocx opencode [args...]", Summary: "Launch opencode wired to the proxy (runtime provider config).", Owner: GoOwned},
 	// The MiniMax and ZCode families are Go-owned (issue #54 launcher slice):
 	// mcode/mmx wire the loopback proxy then exec the external CLI with
 	// inherited stdio, and zcode is a thin alias of the client-integration
@@ -498,6 +499,10 @@ func Run(args []string, deps Deps) int {
 		// The whole v2 family is Go-owned (issue #56); runV2 dispatches the
 		// status read and every write verb.
 		return runV2(args[1:], deps)
+	case "opencode":
+		// opencode is Go-owned (issue #56): runOpencode fetches the live
+		// catalog, injects the V1/V2 provider blocks, and spawns opencode.
+		return runOpencode(args[1:], deps)
 	case "disconnect":
 		return runClientDisconnect(args[1:], deps)
 	case "gui":
