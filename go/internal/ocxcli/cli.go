@@ -82,7 +82,7 @@ var Commands = []Command{
 	{Name: "models", Usage: "ocx models [--provider <name>] [--json]", Summary: "List configured models.", Owner: GoOwned},
 	{Name: "alias", Usage: "ocx alias <sub>", Summary: "Manage aliases.", Owner: TypeScriptOwned},
 	{Name: "combo", Usage: "ocx combo <sub>", Summary: "Manage combo routing.", Owner: TypeScriptOwned},
-	{Name: "agent", Usage: "ocx agent <sub>", Summary: "Manage agents.", Owner: TypeScriptOwned},
+	{Name: "agent", Usage: "ocx agent <status|injection|effort|subagents|fallback|sidecar> ...", Summary: "Manage headless multi-agent, roster, effort, injection, and sidecar settings.", Owner: GoOwned},
 	{Name: "observe", Usage: "ocx observe <logs|usage|storage|memory|debug|claude-inbound|injection> ...", Summary: "Inspect proxy requests, usage, storage, memory, and debug data.", Owner: GoOwned},
 	// The management-read aliases logs/memory/inspect are Go-owned (issue #45):
 	// they project local state through the management API with byte-identical
@@ -94,7 +94,7 @@ var Commands = []Command{
 	// request-history indexer actions (`logs rebuild-index` / `logs index-status`)
 	// keep the TypeScript owner because they read the Bun:sqlite index directly.
 	{Name: "usage", Usage: "ocx usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--json]", Summary: "Alias of ocx observe usage.", Owner: GoOwned},
-	{Name: "storage", Usage: "ocx storage <sub>", Summary: "Manage storage.", Owner: TypeScriptOwned},
+	{Name: "storage", Usage: "ocx storage <report|cleanup|trash|policy> ...", Summary: "Storage report, archived-session cleanup, trash restore, and the cleanup policy.", Owner: GoOwned},
 	{Name: "memory", Usage: "ocx memory [--json]", Summary: "Alias of ocx observe memory.", Owner: GoOwned},
 	// access/api-key share one Go implementation (api-key dispatches as
 	// `access key`); both mutate admission keys through /api/keys and read the
@@ -102,8 +102,8 @@ var Commands = []Command{
 	{Name: "access", Usage: "ocx access <key|endpoints|models|test> ...", Summary: "Manage OpenCodex admission API keys and inspect external endpoints.", Owner: GoOwned},
 	{Name: "api-key", Usage: "ocx api-key <list|create|rotate|remove> ...", Summary: "Alias of ocx access key.", Owner: GoOwned},
 	{Name: "export", Usage: "ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside> [--json] [--out <path>] [--force]", Summary: "Print a client config (OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, Gajae Code, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside) wired to the running proxy.", Owner: GoOwned},
-	{Name: "integration", Usage: "ocx integration client <sub>", Summary: "Manage integrations.", Owner: TypeScriptOwned},
-	{Name: "grok", Usage: "ocx grok <sub>", Summary: "Manage Grok Build.", Owner: TypeScriptOwned},
+	{Name: "integration", Usage: "ocx integration <claude|grok|client|native> ...", Summary: "Manage supported client integrations, and the native client toggles.", Owner: GoOwned},
+	{Name: "grok", Usage: "ocx grok <status|exclude|include|set|clear|apply> ...", Summary: "Manage and apply the Grok Build model fence.", Owner: GoOwned},
 	// The full system family is Go-owned except codex-cli-update, which stays a
 	// TypeScript-owned subcommand seam: it is a read-only local Codex install
 	// inspection (no management API, no proxy), unlike every other system verb.
@@ -111,7 +111,10 @@ var Commands = []Command{
 	// The full config family is Go-owned: reads project through the schema
 	// normalizer and writes share the SQLite generation transaction.
 	{Name: "config", Usage: "ocx config <sub>", Summary: "Manage configuration.", Owner: GoOwned},
-	{Name: "lab", Usage: "ocx lab <sub>", Summary: "Inspect Compatibility Lab.", Owner: TypeScriptOwned},
+	// lab is Go-owned at the top level: status is a local SQLite projection read.
+	// The read/operator verbs still route to their TypeScript owner through the
+	// labRuntimeSubcommands map until each carries its own parity oracle.
+	{Name: "lab", Usage: "ocx lab <status|verdicts|subjects|subject|observations|events|event|artifacts|artifact|catalog> [options] [--json]", Summary: "Read-only Compatibility Lab projection inspection (local SQLite; no daemon).", Owner: GoOwned},
 	{Name: "claude", Usage: "ocx claude [args...]", Summary: "Launch Claude Code.", Owner: TypeScriptOwned},
 	{Name: "opencode", Usage: "ocx opencode [args...]", Summary: "Launch opencode.", Owner: TypeScriptOwned},
 	{Name: "mcode", Usage: "ocx mcode [args...]", Summary: "Launch MiniMax Code.", Owner: TypeScriptOwned},
@@ -198,6 +201,21 @@ func OwnershipFor(args []string) (Ownership, bool) {
 	if command.Name == "logs" && len(args) > 1 {
 		if args[1] == "rebuild-index" || args[1] == "index-status" {
 			return TypeScriptOwned, true
+		}
+		return GoOwned, true
+	}
+	// storage owns report/cleanup/trash/policy; `codex-logs` is observe storage
+	// codex-logs spelled through the storage command and stays with the observe
+	// owner until the observe slice flips it.
+	if command.Name == "storage" && len(args) > 1 && args[1] == "codex-logs" {
+		return TypeScriptOwned, true
+	}
+	// lab keeps its operator/read verbs with the TypeScript owner (public
+	// evidence crypto, automation scheduler, manual runs, deeper projection
+	// queries) while `status` and the family surface are Go-owned.
+	if command.Name == "lab" && len(args) > 1 {
+		if owner, ok := labRuntimeSubcommands[args[1]]; ok {
+			return owner, true
 		}
 		return GoOwned, true
 	}
@@ -343,6 +361,16 @@ func Run(args []string, deps Deps) int {
 		return runApiKey(args[1:], deps)
 	case "system":
 		return runSystem(args[1:], deps)
+	case "storage":
+		return runStorage(args[1:], deps)
+	case "agent":
+		return runAgent(args[1:], deps)
+	case "grok":
+		return runGrok(args[1:], deps)
+	case "integration":
+		return runIntegration(args[1:], deps)
+	case "lab":
+		return runLab(args[1:], deps)
 	default:
 		// The ownership registry above and this switch must be reconciled by
 		// TestOwnershipMapMatchesDispatch; this is defensive for future edits.
@@ -408,6 +436,16 @@ func printSubcommandHelp(name string, deps Deps) int {
 		fmt.Fprint(deps.Stdout, apiKeyFamilyHelp)
 	case "system":
 		fmt.Fprint(deps.Stdout, systemFamilyHelp)
+	case "storage":
+		fmt.Fprint(deps.Stdout, storageHelp)
+	case "agent":
+		fmt.Fprint(deps.Stdout, agentHelp)
+	case "grok":
+		fmt.Fprint(deps.Stdout, grokHelp)
+	case "integration":
+		fmt.Fprint(deps.Stdout, integrationHelp)
+	case "lab":
+		fmt.Fprint(deps.Stdout, labHelp)
 	case "config":
 		fmt.Fprint(deps.Stdout, configHelp)
 	default:
