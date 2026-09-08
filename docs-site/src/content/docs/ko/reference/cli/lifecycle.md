@@ -185,6 +185,10 @@ probe이며, `--wait`는 준비 또는 timeout까지 polling하지만 종단 `fa
 해당할 때 서비스 마이그레이션을 설명합니다. 이 진단에 표시되는 경로는 OS 사용자 이름을 마스킹합니다.
 doctor는 복구 힌트를 보여 주지만 직접 적용하지는 않습니다.
 
+프로젝트 설정 진단은 `developer_instructions` 같은 TOML 여러 줄 문자열 안의 공급자 예시를
+무시합니다. 종료 구분자 바로 앞에 이스케이프된 따옴표가 있어도, 문자열이 끝난 뒤의 실제
+공급자 및 프로필 설정은 계속 검사합니다.
+
 **OAuth 안정성** 섹션은 자격 증명 저장소에 쓰기 가능한지, `OPENCODEX_HOME` 아래에 refresh
 single-flight/lock 파일을 만들 수 있는지, 건강하지 않은 OAuth 또는 Codex pool 계정(마스킹된 ID)과
 복구용 `Action:`, 그리고 Codex 전달 경로가 공식 클라이언트 메타데이터를 꾸며 내지 않는다는

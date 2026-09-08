@@ -214,6 +214,10 @@ and pending history migration. The Codex app-home targeting section also detects
 Orca runtime-home mismatch and explains service migration when applicable. Paths shown by this
 diagnostic redact the OS username. Doctor prints repair hints but does not apply them.
 
+Project-config diagnostics ignore provider examples inside TOML multiline strings, including
+`developer_instructions`. Real provider and profile settings after the closing delimiter are still
+checked, even when an escaped quote immediately precedes that delimiter.
+
 The **OAuth reliability** section reports whether credential storage is writable, whether refresh
 single-flight/lock files can be created under `OPENCODEX_HOME`, non-healthy OAuth or Codex pool
 accounts (redacted ids) with a recovery `Action:`, and a static OK that the Codex forward path does
