@@ -315,6 +315,31 @@ See [Configuration](/reference/configuration/#guardrails-sensitive-data-placehol
 
 ## Troubleshooting
 
+### When values stay masked
+
+A placeholder in a reply does not necessarily mean the request failed:
+
+- In tool arguments or compacted machine state, it is intentional. Guardrails
+  never restores executable fields automatically. Do not run a command with a
+  guessed substitution; use the local source of truth for the required value.
+- After a proxy restart, expiry or memory eviction, the mapping is gone.
+  Restarting again or switching protection off will not recover it. Start a new
+  session and provide the necessary source context again through the protected
+  proxy, with Guardrails still enabled for the selected provider. Do not send
+  only the old placeholder, and do not borrow another thread's mapping.
+- After a late stream error, premature disconnect or restoration limit, masked
+  output is the safe fallback. Check the request's completion status and the
+  metadata-only Activity view. Retry only after considering whether the previous
+  tool work had side effects. Do not disable credential rules, select detect
+  mode or enable passthrough just to make the placeholder disappear.
+
+Successful streaming prose may pause from its first restored placeholder until
+the protocol's success terminal. If the turn does not finish successfully,
+Guardrails releases the held text with placeholders instead. Unknown formats
+also receive no speculative restoration. Activity cannot reconstruct originals
+and is cleared on restart; reproduce a problem with synthetic values when
+reporting it.
+
 | Symptom | What to do |
 | --- | --- |
 | A known placeholder remains after restart or a long pause | The in-memory mapping is unavailable. Resend full text in a new turn rather than trying another thread's mapping. |

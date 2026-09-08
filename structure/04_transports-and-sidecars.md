@@ -1672,6 +1672,10 @@ not retried.
 ```
 ## Guardrails provider-scoped admission
 
+The proposed staged-review [integration contract](guardrails-integration-contract.md)
+maps these hooks to protocol/failure behavior and regression tests. Its design-freeze
+status requires maintainer confirmation; the smaller core-only draft activates no traffic protection.
+
 Guardrails captures enabled policy intent synchronously before a caller body is read, but delays
 registry activation until routing can supply a canonical `RouteResult.providerName`. An absent
 provider scope and `{ mode: "all" }` are equivalent. Selected scope activates only for listed

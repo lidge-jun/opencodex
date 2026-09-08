@@ -56,6 +56,23 @@ A ready-for-review PR is the author's claim that the change is complete, underst
   stated. A closed PR can be reopened once the stated reason is resolved, or
   replaced with a clean one.
 
+## Guardrails synthetic test fixtures
+
+Guardrails detector tests intentionally contain non-credential strings shaped
+like provider keys. The donor fixture corpus is pinned by SHA-256 and provenance;
+the local privacy exemption stops applying when its bytes change. During the
+first #4022 fork push on 2026-09-08, GitHub reported 33 pattern matches, including
+duplicate detections. Each displayed match was checked against its historical
+synthetic test source and individually allowed as test data with contributor
+approval. Repository-wide scanning remained unchanged and history was not
+rewritten. This record is not a blanket allowance for `tests/` or future values.
+
+For a new detection, verify its exact value, path and provenance before asking
+the authorized repository owner to accept a test-only exception. Never classify
+an unknown or real credential as test data to unblock a push. Fixture changes,
+their local hash exemptions and upstream-repository allowances require fresh
+review; a fork allowance is not maintainer security sponsorship.
+
 ## Pre-push hook
 
 After cloning, run once to install a local pre-push hook that runs the typecheck,
