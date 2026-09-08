@@ -73,7 +73,7 @@ var Commands = []Command{
 	{Name: "restart", Usage: "ocx restart", Summary: "Restart the proxy.", Owner: TypeScriptOwned},
 	{Name: "v2", Usage: "ocx v2 <sub>", Summary: "Manage the v2 surface.", Owner: TypeScriptOwned},
 	{Name: "health", Usage: "ocx health [--json]", Summary: "Verify the local proxy identity and report health.", Owner: GoOwned},
-	{Name: "capabilities", Usage: "ocx capabilities [--json]", Summary: "List declared capabilities.", Owner: TypeScriptOwned},
+	{Name: "capabilities", Usage: "ocx capabilities [--json] [--mutating-only] [--route <path>]", Summary: "List the declared CLI capabilities and the management routes they drive.", Owner: GoOwned},
 	{Name: "ready", Usage: "ocx ready [--json] [--wait [--timeout <s>]]", Summary: "Verify readiness.", Owner: GoOwned},
 	{Name: "provider", Usage: "ocx provider <sub>", Summary: "Inspect configured providers.", Owner: GoOwned},
 	{Name: "account", Usage: "ocx account <sub>", Summary: "Manage accounts.", Owner: TypeScriptOwned},
@@ -81,22 +81,22 @@ var Commands = []Command{
 	{Name: "alias", Usage: "ocx alias <sub>", Summary: "Manage aliases.", Owner: TypeScriptOwned},
 	{Name: "combo", Usage: "ocx combo <sub>", Summary: "Manage combo routing.", Owner: TypeScriptOwned},
 	{Name: "agent", Usage: "ocx agent <sub>", Summary: "Manage agents.", Owner: TypeScriptOwned},
-	{Name: "observe", Usage: "ocx observe <sub>", Summary: "Inspect runtime observations.", Owner: TypeScriptOwned},
+	{Name: "observe", Usage: "ocx observe <logs|usage|storage|memory|debug|claude-inbound|injection> ...", Summary: "Inspect proxy requests, usage, storage, memory, and debug data.", Owner: GoOwned},
 	// The management-read aliases logs/memory/inspect are Go-owned (issue #45):
 	// they project local state through the management API with byte-identical
-	// output and keep the runtime-api error taxonomy. observe's own spellings
-	// and usage stay on their existing owners until each carries its own oracle.
+	// output and keep the runtime-api error taxonomy.
 	{Name: "inspect", Usage: "ocx inspect <config|catalog|routing-analytics|pacing|key-providers|codex-prompt|client-config|star|windows-tray> ...", Summary: "Read effective config, catalog, analytics, pacing, and the generated client-config snippet.", Details: []string{"`inspect star` reads the repository star status only. Starring uses your GitHub identity and is available from the dashboard alone."}, Owner: GoOwned},
 	{Name: "route", Usage: "ocx route <sub>", Summary: "Manage routing.", Owner: TypeScriptOwned},
 	{Name: "logs", Usage: "ocx logs [filters] [--follow] [--json|--jsonl]", Summary: "Alias of ocx observe logs.", Owner: GoOwned},
-	// usage is Go-owned (the /api/usage read plus its renderer); observe keeps
-	// its other subcommands TypeScript-owned until each carries an oracle.
+	// usage is Go-owned (the /api/usage read plus its renderer); observe's
+	// request-history indexer actions (`logs rebuild-index` / `logs index-status`)
+	// keep the TypeScript owner because they read the Bun:sqlite index directly.
 	{Name: "usage", Usage: "ocx usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--json]", Summary: "Alias of ocx observe usage.", Owner: GoOwned},
 	{Name: "storage", Usage: "ocx storage <sub>", Summary: "Manage storage.", Owner: TypeScriptOwned},
 	{Name: "memory", Usage: "ocx memory [--json]", Summary: "Alias of ocx observe memory.", Owner: GoOwned},
 	{Name: "api-key", Usage: "ocx api-key <sub>", Summary: "Manage API keys.", Owner: TypeScriptOwned},
 	{Name: "access", Usage: "ocx access <sub>", Summary: "Manage external access.", Owner: TypeScriptOwned},
-	{Name: "export", Usage: "ocx export --client <id>", Summary: "Export client configuration.", Owner: TypeScriptOwned},
+	{Name: "export", Usage: "ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside> [--json] [--out <path>] [--force]", Summary: "Print a client config (OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, Gajae Code, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside) wired to the running proxy.", Owner: GoOwned},
 	{Name: "integration", Usage: "ocx integration client <sub>", Summary: "Manage integrations.", Owner: TypeScriptOwned},
 	{Name: "grok", Usage: "ocx grok <sub>", Summary: "Manage Grok Build.", Owner: TypeScriptOwned},
 	{Name: "system", Usage: "ocx system <sub>", Summary: "Manage runtime settings.", Owner: TypeScriptOwned},
@@ -157,11 +157,25 @@ func OwnershipFor(args []string) (Ownership, bool) {
 		}
 		return TypeScriptOwned, true
 	}
-	// observe keeps its TypeScript owner per subcommand: `usage` shares the Go
-	// usage implementation, everything else stays with the TS owner until each
-	// subcommand carries its own oracle.
-	if command.Name == "observe" && len(args) > 1 && args[1] == "usage" {
-		return GoOwned, true
+	// observe dispatches natively for the whole family; only the request-history
+	// indexer actions (`logs rebuild-index` / `logs index-status`) keep the TS
+	// owner, because they read/write the Bun:sqlite index with no management route.
+	if command.Name == "observe" {
+		if len(args) == 1 {
+			return GoOwned, true
+		}
+		switch args[1] {
+		case "usage", "storage", "memory", "debug", "claude-inbound", "injection":
+			return GoOwned, true
+		case "logs":
+			if len(args) > 2 && (args[2] == "rebuild-index" || args[2] == "index-status") {
+				return TypeScriptOwned, true
+			}
+			return GoOwned, true
+		default:
+			// Unknown observe subcommands reproduce the TS CliUsageError natively.
+			return GoOwned, true
+		}
 	}
 	// `logs` reads its listing/explain surfaces natively, but the index
 	// maintenance subcommands operate the request-history SQLite directly with
@@ -291,20 +305,21 @@ func Run(args []string, deps Deps) int {
 		return runStop(args[1:], deps)
 	case "usage":
 		return runUsage(args[1:], deps)
+	case "capabilities":
+		return runCapabilities(args[1:], deps)
 	case "observe":
-		// Only `observe usage` reaches Go (OwnershipFor already gated this);
-		// other observe subcommands stay TypeScript-owned and never dispatch here.
-		if len(args) > 1 && args[1] == "usage" {
-			return runUsage(args[2:], deps)
-		}
-		fmt.Fprintf(deps.Stderr, "Unimplemented Go-owned command: %s\n", args[0])
-		return ExitFailure
+		// rebuild-index / index-status never dispatch here (OwnershipFor gates
+		// them to TypeScriptOwned and delegates first); the indexer actions stay
+		// behind the Bun:sqlite owner seam while every other subcommand runs natively.
+		return runObserve(args[1:], deps)
 	case "logs":
 		return runLogs(args[1:], deps)
 	case "memory":
 		return runMemory(args[1:], deps)
 	case "inspect":
 		return runInspect(args[1:], deps)
+	case "export":
+		return runExport(args[1:], deps)
 	default:
 		// The ownership registry above and this switch must be reconciled by
 		// TestOwnershipMapMatchesDispatch; this is defensive for future edits.
@@ -356,6 +371,12 @@ func printSubcommandHelp(name string, deps Deps) int {
 		fmt.Fprint(deps.Stdout, modelsUsage+"\nCustom models:\n  "+modelAddUsage+"\n  "+modelRemoveUsage+"\n  Usage: ocx models list-custom [--json]\n\nRuntime subcommands (live, edit, enable, disable, provider, selected, preset, new-policy, new-arrivals, context, shadow) retain the TypeScript management API owner during the incremental takeover.\n")
 	case "usage", "logs", "memory", "inspect":
 		return printRegistrySubcommandHelp(name, deps)
+	case "capabilities":
+		fmt.Fprint(deps.Stdout, "Usage: ocx capabilities [--json] [--mutating-only] [--route <path>]\n\nList the declared CLI capabilities and the management routes they drive.\n\nThe machine-readable surface index: start here when driving ocx programmatically instead of parsing help text.\n--route <path> answers the inverse question: which commands drive this management route.\n")
+	case "observe":
+		fmt.Fprint(deps.Stdout, "Usage: ocx observe <logs|usage|storage|memory|debug|claude-inbound|injection> ...\n\nInspect proxy requests, usage, storage, memory, and debug data.\n")
+	case "export":
+		fmt.Fprint(deps.Stdout, "Usage: ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside> [--json] [--out <path>] [--force]\n\nPrint a client config (OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, Gajae Code, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside) wired to the running proxy.\n\n--json prints the generated document as JSON on stdout; use --out for the client's native format.\n--out <path> writes the native config there and refuses to replace an existing file without --force.\nThe config never contains a real key; it carries a documented env reference or a non-secret loopback placeholder.\nThe destination path is printed for merging by hand — ocx never writes your real client config.\n")
 	case "config":
 		fmt.Fprint(deps.Stdout, configHelp)
 	default:

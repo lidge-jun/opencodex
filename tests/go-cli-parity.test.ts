@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,11 +17,20 @@ function buildGoCLI(): string {
   const dir = mkdtempSync(join(tmpdir(), "ocx-go-cli-"));
   const binary = join(dir, process.platform === "win32" ? "ocx.exe" : "ocx");
   const result = Bun.spawnSync(["go", "build", "-o", binary, "./cmd/ocx"], { cwd: join(repoRoot, "go"), env: { ...process.env, CGO_ENABLED: "0" }, stdout: "pipe", stderr: "pipe" });
-  if (result.exitCode !== 0) throw new Error("go build ./cmd/ocx failed: " + new TextDecoder().decode(result.stderr));
+  if (result.exitCode !== 0) throw new Error(`go build ./cmd/ocx failed: ${new TextDecoder().decode(result.stderr)}`);
   return binary;
 }
 const goAvailable = goToolchainAvailable();
-const goCLI = goAvailable ? buildGoCLI() : null;
+// Sibling worktrees sweep /tmp/ocx-go-cli-* between a queued run's build and
+// its first spawn, so the binary is rebuilt lazily whenever it is missing.
+let goCLI = goAvailable ? buildGoCLI() : null;
+function ensureGoBinary(): string {
+  if (goCLI === null || !existsSync(goCLI)) {
+    if (goCLI !== null) removeTreeWithRetry(dirname(goCLI));
+    goCLI = buildGoCLI();
+  }
+  return goCLI;
+}
 let testHome = "";
 let testServer: ReturnType<typeof Bun.serve> | undefined;
 type Result = { code: number; stdout: string; stderr: string };
@@ -33,7 +42,7 @@ function runTs(args: Argv, home = testHome): Result {
   return { code: result.exitCode, stdout: new TextDecoder().decode(result.stdout), stderr: new TextDecoder().decode(result.stderr) };
 }
 function runGo(args: Argv, home = testHome): Result {
-  const result = Bun.spawnSync([goCLI!, ...args], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
+  const result = Bun.spawnSync([ensureGoBinary(), ...args], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
   return { code: result.exitCode, stdout: new TextDecoder().decode(result.stdout), stderr: new TextDecoder().decode(result.stderr) };
 }
 async function runTsAsync(args: Argv, home = testHome): Promise<Result> {
@@ -41,10 +50,15 @@ async function runTsAsync(args: Argv, home = testHome): Promise<Result> {
   return { code: await child.exited, stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text() };
 }
 async function runGoAsync(args: Argv, home = testHome): Promise<Result> {
-  const child = Bun.spawn([goCLI!, ...args], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
+  const child = Bun.spawn([ensureGoBinary(), ...args], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
   return { code: await child.exited, stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text() };
 }
+function attestedHeaders(challenge: string, port: number): Record<string, string> {
+  const proof = createLocalAttestationProof(secret, challenge, process.pid, port);
+  return proof === null ? {} : { "x-opencodex-attestation-proof": proof };
+}
 function expectParity(args: Argv): Result { const ts = runTs(args); const go = runGo(args); expect(go).toEqual(ts); return ts; }
+
 function normalizeHealthPid(result: Result): Result {
   if (!result.stdout.startsWith("Proxy healthy") && !result.stdout.startsWith("{\"ok\":true")) return result;
   return { ...result, stdout: result.stdout.replace(/PID (?:null|\d+)/, "PID <pid>").replace(/"pid":(?:null|\d+)/, '"pid":<pid>') };
@@ -56,8 +70,7 @@ function startAttestedFixture(status: "ready" | "pending" | "failed"): void {
     const path = new URL(request.url).pathname;
     if (path === "/healthz") {
       const challenge = request.headers.get("x-opencodex-attestation-challenge") ?? "";
-      const proof = challenge ? createLocalAttestationProof(secret, challenge, process.pid, testServer!.port as number) : null;
-      const headers: Record<string, string> = proof ? { "x-opencodex-attestation-proof": proof } : {};
+      const headers = attestedHeaders(challenge, testServer!.port!);
       return Response.json({ status: "ok", service: "opencodex", version: "2.42.0", uptime: 1, pid: process.pid, port: testServer!.port }, { headers });
     }
     if (path === "/readyz") return Response.json({ status, service: "opencodex", version: "2.42.0", uptime: 1, pid: process.pid, port: testServer!.port }, { status: status === "ready" ? 200 : 503 });
@@ -214,8 +227,7 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
       const path = new URL(request.url).pathname;
       if (path === "/healthz") {
         const challenge = request.headers.get("x-opencodex-attestation-challenge") ?? "";
-        const proof = challenge ? createLocalAttestationProof(secret, challenge, process.pid, testServer!.port as number) : null;
-        const headers: Record<string, string> = proof ? { "x-opencodex-attestation-proof": proof } : {};
+        const headers = attestedHeaders(challenge, testServer!.port!);
         return Response.json({ status: "ok", service: "opencodex", version: "2.42.0", uptime: 1, pid: process.pid, port: testServer!.port }, { headers });
       }
       return new Response(payload, { status, headers: { "content-type": "application/json" } });
@@ -383,5 +395,216 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
     const go = await runGoAsync(args);
     expect(go).toEqual(ts);
     expect(ts).toMatchObject({ code });
+  });
+
+  // capabilities is Go-owned static data (ADR-0008 issue #46): the whole
+  // surface — human rows, --json envelope, --mutating-only, --route inverse
+  // lookup and its empty/missing-value exit — needs no live proxy.
+  test.each([
+    { args: ["capabilities"] },
+    { args: ["capabilities", "--json"] },
+    { args: ["capabilities", "--mutating-only"] },
+    { args: ["capabilities", "--mutating-only", "--json"] },
+    { args: ["capabilities", "--route", "/api/status"] },
+    { args: ["capabilities", "--route", "/api/nope"] },
+    { args: ["capabilities", "--route", "/api/nope", "--json"] },
+    { args: ["capabilities", "--route"] },
+    { args: ["help", "capabilities"] },
+    { args: ["capabilities", "--help"] },
+  ])("diffs Go-owned capabilities output and exit code for $args", ({ args }) => {
+    testHome = mkdtempSync(join(tmpdir(), "ocx-go-cli-parity-"));
+    expectParity(args);
+  });
+
+  // observe dispatches natively per subcommand (ADR-0008 issue #46); the
+  // rebuild-index / index-status actions read the Bun:sqlite index directly, so
+  // they keep the TypeScript owner at the action level and delegate.
+  test.each([
+    { args: ["observe", "logs", "rebuild-index"] },
+    { args: ["observe", "logs", "index-status"] },
+  ])("diffs TypeScript-owned observe indexer delegation for $args", ({ args }) => {
+    testHome = mkdtempSync(join(tmpdir(), "ocx-go-cli-parity-"));
+    expectParity(args);
+  });
+  test.each([
+    { args: ["observe", "wat"] },
+    { args: ["observe", "logs", "--limit", "0"] },
+    { args: ["observe", "logs", "--json", "--jsonl"] },
+    { args: ["observe", "logs", "--follow", "--json"] },
+    { args: ["observe", "storage", "codex-logs", "protect", "--mode", "wat"] },
+  ])("diffs observe usage validation for $args", ({ args }) => {
+    testHome = mkdtempSync(join(tmpdir(), "ocx-go-cli-parity-"));
+    expect(expectParity(args)).toMatchObject({ code: 2 });
+  });
+  test("diffs observe and export help in both spellings", () => {
+    testHome = mkdtempSync(join(tmpdir(), "ocx-go-cli-parity-"));
+    for (const args of [
+      ["help", "observe"], ["observe", "--help"], ["observe", "logs", "--help"],
+      ["help", "export"], ["export", "--help"], ["export", "--client", "pi", "--help"],
+    ]) {
+      expectParity(args);
+    }
+  });
+
+  // observe + export against one management fixture: logs (all renderers and
+  // filters), explain, memory/debug/claude-inbound/injection summaries, storage
+  // codex-logs actions, and export's twelve client documents. Both CLIs run
+  // async because spawnSync starves the fixture server (the #43 lesson).
+  function startExportFixture(): void {
+    testHome = mkdtempSync(join(tmpdir(), "ocx-go-export-parity-"));
+    testServer = Bun.serve({ port: 0, fetch(request) {
+      const u = new URL(request.url);
+      if (u.pathname === "/healthz") {
+        const challenge = request.headers.get("x-opencodex-attestation-challenge") ?? "";
+        const headers = attestedHeaders(challenge, testServer!.port!);
+        return Response.json({ status: "ok", service: "opencodex", version: "2.42.0", uptime: 1, pid: process.pid, port: testServer!.port }, { headers });
+      }
+      if (u.pathname === "/api/models") {
+        return Response.json([
+          { namespaced: "openai/gpt-5.1-codex", provider: "openai", id: "gpt-5.1-codex", native: true, displayName: "GPT-5.1 Codex", displayNameSource: "provider", contextWindow: 400000, reasoningEfforts: ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"], defaultReasoningEffort: "medium" },
+          { namespaced: "anthropic/claude-sonnet-4-5", provider: "anthropic", id: "claude-sonnet-4-5", displayName: "Claude Sonnet 4.5", displayNameSource: "provider", contextWindow: 200000, inputModalities: ["text", "image"], reasoningEfforts: ["low", "medium", "high"] },
+          { namespaced: "fixture/audio-model", provider: "fixture", id: "audio-model", displayName: "Audio Only", displayNameSource: "fallback", contextWindow: 0, inputModalities: ["audio"], reasoningEfforts: ["none"] },
+          { namespaced: "fixture/plain", provider: "fixture", id: "plain", displayName: "Plain", displayNameSource: "provider" },
+          { namespaced: "fixture/o-brien", provider: "fixture", id: "o-brien", displayName: "O'Brien \"Wired\" Model", displayNameSource: "provider", contextWindow: 64000 },
+          { namespaced: "fixture/ctrl", provider: "fixture", id: "ctrl", displayName: "Ctrl\u0001\u0007\u001bModel", displayNameSource: "provider" },
+        ]);
+      }
+      if (u.pathname === "/api/logs") {
+        const all = [
+          { id: "req-1", timestamp: "2026-09-07T10:00:00.000Z", provider: "anthropic", model: "claude-sonnet-4-5", status: 200, durationMs: 1234.5, conversationId: "convA" },
+          { id: "req-2", timestamp: "2026-09-07T10:00:01.000Z", provider: "openai", model: null, status: 429, conversationId: "" },
+          { id: 3, timestamp: null, createdAt: "2026-09-07T09:00:00.000Z", statusCode: 500, durationMs: 2 },
+          { timestamp: "2026-09-07T08:00:00.000Z", status: 200 },
+        ];
+        const provider = u.searchParams.get("provider");
+        const model = u.searchParams.get("model");
+        const status = u.searchParams.get("status");
+        const conversationId = u.searchParams.get("conversationId");
+        const filtered = all.filter(row => (!provider || row.provider === provider) && (!model || row.model === model) && (!status || String(row.status) === status || String(row.statusCode) === status) && (!conversationId || row.conversationId === conversationId));
+        return Response.json({ timeZone: "UTC", total: filtered.length, logs: filtered });
+      }
+      if (u.pathname === "/api/request-history/req-1/route-decision") {
+        return Response.json({ requestId: "req-1", route: { provider: "anthropic", model: "claude-sonnet-4-5", reason: "match" }, usedFallback: false });
+      }
+      if (u.pathname === "/api/system/memory") return Response.json({ heap: 123456789, heapPeak: 200000000, gc: { count: 42, durationMs: 3.5 }, items: 7 });
+      if (u.pathname === "/api/debug") return Response.json({ debug: true, usage: false, injection: null, claude: { enabled: false }, reset: false });
+      if (u.pathname === "/api/claude/inbound-debug") return Response.json({ enabled: true, entries: [{ ts: 1756000000000, method: "POST", path: "/api/claude/inbound" }] });
+      if (u.pathname === "/api/debug/injection-logs") return Response.json({ after: 0, entries: [{ ts: 1756000000000, kind: "prompt", bytes: 128 }, { ts: 1756000000001, kind: "response", bytes: null }] });
+      if (u.pathname === "/api/storage") return Response.json({ codexLogs: { present: true, files: 12, sizeBytes: 4096 }, sessions: { archived: 3 } });
+      if (u.pathname === "/api/storage/codex-logs") return Response.json({ mode: "compat", protected: true, files: 12 });
+      if (u.pathname === "/api/storage/codex-logs/protect") return Response.json({ mode: "quiet", protected: true });
+      if (u.pathname === "/api/storage/codex-logs/repair" || u.pathname === "/api/storage/codex-logs/compact" || u.pathname === "/api/storage/codex-logs/unprotect") {
+        return Response.json({ ok: true });
+      }
+      return new Response("not found", { status: 404 });
+    }});
+    writeFileSync(join(testHome, "runtime-port.json"), JSON.stringify({ pid: process.pid, port: testServer.port, hostname: "127.0.0.1", attestationSecret: secret }));
+    writeFileSync(join(testHome, "config.json"), JSON.stringify({
+      port: testServer.port,
+      hostname: "127.0.0.1",
+      defaultProvider: "fixture",
+      providers: {
+        openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex" },
+        anthropic: { adapter: "anthropic", baseUrl: "https://api.anthropic.com" },
+        fixture: { adapter: "openai-chat", baseUrl: "https://example.test/v1", apiKey: "k", defaultModel: "plain" },
+      },
+    }));
+  }
+  test.each([
+    { args: ["observe"] }, { args: ["observe", "logs"] }, { args: ["observe", "logs", "--json"] }, { args: ["observe", "logs", "--jsonl"] },
+    { args: ["observe", "logs", "--provider", "anthropic"] }, { args: ["observe", "logs", "--model", "claude-sonnet-4-5"] },
+    { args: ["observe", "logs", "--status", "200"] }, { args: ["observe", "logs", "--conversation", "convA"] },
+    { args: ["observe", "logs", "--status", "429", "--conversation", "x"] }, { args: ["observe", "logs", "--limit", "2"] },
+    { args: ["observe", "logs", "explain", "req-1"] }, { args: ["observe", "logs", "explain", "req-1", "--json"] },
+    { args: ["observe", "memory"] }, { args: ["observe", "memory", "--json"] }, { args: ["observe", "debug"] }, { args: ["observe", "debug", "--json"] },
+    { args: ["observe", "claude-inbound"] }, { args: ["observe", "injection"] }, { args: ["observe", "injection", "--limit", "1"] },
+    { args: ["observe", "storage"] }, { args: ["observe", "storage", "--json"] }, { args: ["observe", "storage", "codex-logs"] },
+    { args: ["observe", "storage", "codex-logs", "status", "--json"] }, { args: ["observe", "storage", "codex-logs", "protect"] },
+    { args: ["observe", "storage", "codex-logs", "protect", "--mode", "quiet", "--json"] }, { args: ["observe", "storage", "codex-logs", "repair"] },
+    { args: ["observe", "storage", "codex-logs", "compact", "--json"] }, { args: ["observe", "storage", "codex-logs", "unprotect", "--json"] },
+  ])("diffs Go-owned observe output and exit code for $args", async ({ args }) => {
+    startExportFixture();
+    const ts = await runTsAsync(args);
+    const go = await runGoAsync(args);
+    expect(go).toEqual(ts);
+    expect(ts).toMatchObject({ code: 0, stderr: "" });
+  });
+  const exportClientIds = ["opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode", "zcode", "prime"];
+  test.each(exportClientIds.flatMap(id => [
+    { args: ["export", "--client", id, "--json"] },
+    { args: ["export", "--client", id] },
+  ]))("diffs Go-owned export output and exit code for $args", async ({ args }) => {
+    startExportFixture();
+    const ts = await runTsAsync(args);
+    const go = await runGoAsync(args);
+    expect(go).toEqual(ts);
+    expect(ts).toMatchObject({ code: 0, stderr: "" });
+  });
+  test("diffs export --json --out and the refusal to clobber", async () => {
+    startExportFixture();
+    const outPath = join(testHome, "written.json");
+    const ts = await runTsAsync(["export", "--client", "pi", "--json", "--out", outPath]);
+    expect(ts).toMatchObject({ code: 0 });
+    // Give Go the same clean slate the TypeScript run just had.
+    if (existsSync(outPath)) removeTreeWithRetry(outPath);
+    const go = await runGoAsync(["export", "--client", "pi", "--json", "--out", outPath]);
+    expect(go).toEqual(ts);
+    const tsRefusal = await runTsAsync(["export", "--client", "pi", "--out", outPath]);
+    const goRefusal = await runGoAsync(["export", "--client", "pi", "--out", outPath]);
+    expect(goRefusal).toEqual(tsRefusal);
+    expect(tsRefusal).toMatchObject({ code: 2 });
+  });
+  test("diffs export --force overwriting an existing --out file", async () => {
+    startExportFixture();
+    const outPath = join(testHome, "forced.json");
+    writeFileSync(outPath, "stale bytes that --force must replace\n");
+    const ts = await runTsAsync(["export", "--client", "pi", "--json", "--out", outPath, "--force"]);
+    expect(ts).toMatchObject({ code: 0 });
+    writeFileSync(outPath, "stale bytes that --force must replace\n");
+    const go = await runGoAsync(["export", "--client", "pi", "--json", "--out", outPath, "--force"]);
+    expect(go).toEqual(ts);
+  });
+  test("diffs export when no proxy is running", () => {
+    testHome = mkdtempSync(join(tmpdir(), "ocx-go-export-parity-"));
+    expect(expectParity(["export", "--client", "pi"])).toMatchObject({ code: 1 });
+  });
+  test("diffs aside export under a fixture home with an account manifest", async () => {
+    startExportFixture();
+    const asideHome = mkdtempSync(join(tmpdir(), "ocx-aside-home-"));
+    mkdirSync(join(asideHome, ".aside", "u", "0"), { recursive: true });
+    writeFileSync(join(asideHome, ".aside", "accounts.json"), JSON.stringify({ currentAccountId: 0 }));
+    const previousHome = process.env.HOME;
+    process.env.HOME = asideHome;
+    try {
+      const ts = await runTsAsync(["export", "--client", "aside", "--json"]);
+      const go = await runGoAsync(["export", "--client", "aside", "--json"]);
+      expect(go).toEqual(ts);
+      expect(ts).toMatchObject({ code: 0, stderr: "" });
+      const tsHuman = await runTsAsync(["export", "--client", "aside"]);
+      const goHuman = await runGoAsync(["export", "--client", "aside"]);
+      expect(goHuman).toEqual(tsHuman);
+      expect(tsHuman).toMatchObject({ code: 0, stderr: "" });
+      // --out is exercised from the same writable HOME; Go gets the clean slate
+      // the TypeScript run consumed, like the pi clobber test.
+      const outPath = join(asideHome, "aside-export.json");
+      const tsOut = await runTsAsync(["export", "--client", "aside", "--json", "--out", outPath]);
+      expect(tsOut).toMatchObject({ code: 0 });
+      if (existsSync(outPath)) removeTreeWithRetry(outPath);
+      const goOut = await runGoAsync(["export", "--client", "aside", "--json", "--out", outPath]);
+      expect(goOut).toEqual(tsOut);
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      removeTreeWithRetry(asideHome);
+    }
+  });
+  test.each([
+    { args: ["export", "--client"] },
+    { args: ["export", "--client", "nope"] },
+    { args: ["export", "extra"] },
+    { args: ["export", "--client", "pi", "--json", "--force", "extra"] },
+  ])("diffs export argument validation for $args", ({ args }) => {
+    testHome = mkdtempSync(join(tmpdir(), "ocx-go-cli-parity-"));
+    expect(expectParity(args)).toMatchObject({ code: 2 });
   });
 });
