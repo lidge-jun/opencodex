@@ -97,7 +97,17 @@ var Commands = []Command{
 	// route; it is Go-owned (issue #51) with a native rewrite that normalises
 	// legacy rows and promotes the next account.
 	{Name: "logout", Usage: "ocx logout <provider>", Summary: "Remove a stored provider login.", Owner: GoOwned},
-	{Name: "gui", Usage: "ocx gui", Summary: "Open the dashboard.", Owner: TypeScriptOwned},
+	// gui is Go-owned (issue #54 ops slice): `ocx gui pair` drives the same
+	// bound pairing-grant capability the dashboard uses, and the bare command
+	// opens the dashboard URL of the attested live proxy.
+	{Name: "gui", Usage: "ocx gui", Summary: "Open the dashboard.", Owner: GoOwned},
+	// update and v2 stay TypeScript-owned (issue #54 remainder; follow-up:
+	// waxiangzi/opencodex#56): `ocx update` performs a network release fetch +
+	// in-place self-replace, so no hermetic byte-diff oracle can drive it; `ocx
+	// v2` reads AND writes the upstream Codex config.toml (feature toggles,
+	// threads, subagent instructions) and resyncs the catalog through the live
+	// proxy, so a Go port would need a byte-exact TOML reader/writer plus a
+	// catalog oracle before a flip could claim parity.
 	{Name: "update", Usage: "ocx update [--tag <tag>]", Summary: "Update OpenCodex.", Owner: TypeScriptOwned},
 	{Name: "restart", Usage: "ocx restart", Summary: "Restart the proxy.", Owner: GoOwned},
 	{Name: "v2", Usage: "ocx v2 <sub>", Summary: "Manage the v2 surface.", Owner: TypeScriptOwned},
@@ -145,11 +155,27 @@ var Commands = []Command{
 	// The read/operator verbs still route to their TypeScript owner through the
 	// labRuntimeSubcommands map until each carries its own parity oracle.
 	{Name: "lab", Usage: "ocx lab <status|verdicts|subjects|subject|observations|events|event|artifacts|artifact|catalog> [options] [--json]", Summary: "Read-only Compatibility Lab projection inspection (local SQLite; no daemon).", Owner: GoOwned},
+	// claude and opencode stay TypeScript-owned (issue #54 remainder; follow-up:
+	// waxiangzi/opencodex#56): both are launchers, but unlike mcode/mmx their
+	// launch env is assembled by whole auth/credential subsystems - claude
+	// resolves subscription vs proxy-auth mode (src/claude/auth-detect +
+	// auth-mode, launcher-context parent-env provenance, gateway-cache refresh,
+	// agents-inject writes under ~/.claude) and opencode merges V1/V2 runtime
+	// provider blocks into a project JSONC config with a live model catalog. A
+	// byte-faithful port would need every one of those subsystems plus a
+	// live-server oracle; an approximate env assembly would silently break real
+	// subscription auth, which is a release blocker under MAINTAINERS review
+	// rules, so they stay on the TypeScript side until a parity harness for the
+	// auth/env surface exists.
 	{Name: "claude", Usage: "ocx claude [args...]", Summary: "Launch Claude Code.", Owner: TypeScriptOwned},
 	{Name: "opencode", Usage: "ocx opencode [args...]", Summary: "Launch opencode.", Owner: TypeScriptOwned},
-	{Name: "mcode", Usage: "ocx mcode [args...]", Summary: "Launch MiniMax Code.", Owner: TypeScriptOwned},
-	{Name: "mmx", Usage: "ocx mmx text <sub> [args]", Summary: "Launch MiniMax CLI.", Owner: TypeScriptOwned},
-	{Name: "zcode", Usage: "ocx zcode [sub]", Summary: "Connect ZCode.", Owner: TypeScriptOwned},
+	// The MiniMax and ZCode families are Go-owned (issue #54 launcher slice):
+	// mcode/mmx wire the loopback proxy then exec the external CLI with
+	// inherited stdio, and zcode is a thin alias of the client-integration
+	// management-API surface (handleZcodeCommand -> handleClientIntegrationCommand).
+	{Name: "mcode", Usage: "ocx mcode [args...]", Summary: "Launch MiniMax Code.", Owner: GoOwned},
+	{Name: "mmx", Usage: "ocx mmx text <sub> [args]", Summary: "Launch MiniMax CLI.", Owner: GoOwned},
+	{Name: "zcode", Usage: "ocx zcode [sub]", Summary: "Connect ZCode.", Owner: GoOwned},
 }
 
 // commandForName resolves canonical command names and aliases from Commands.
@@ -435,6 +461,14 @@ func Run(args []string, deps Deps) int {
 		return ExitFailure
 	case "disconnect":
 		return runClientDisconnect(args[1:], deps)
+	case "gui":
+		return runGuiCommand(args[1:], deps)
+	case "mcode":
+		return runMcode(args[1:], deps)
+	case "mmx":
+		return runMmx(args[1:], deps)
+	case "zcode":
+		return runZcodeCommand(args[1:], deps)
 	case "observe":
 		// rebuild-index / index-status never dispatch here (OwnershipFor gates
 		// them to TypeScriptOwned and delegates first); the indexer actions stay
@@ -568,6 +602,14 @@ func printSubcommandHelp(name string, deps Deps) int {
 		fmt.Fprint(deps.Stdout, ensureHelp)
 	case "restart":
 		fmt.Fprint(deps.Stdout, restartHelp)
+	case "gui":
+		fmt.Fprint(deps.Stdout, guiHelp)
+	case "mcode":
+		fmt.Fprint(deps.Stdout, mcodeHelp)
+	case "mmx":
+		fmt.Fprint(deps.Stdout, mmxHelp)
+	case "zcode":
+		fmt.Fprint(deps.Stdout, zcodeHelp)
 	default:
 		fmt.Fprintf(deps.Stderr, "Unknown command: %s\n", name)
 		printHelp(deps.Stdout)

@@ -59,6 +59,12 @@ function ensureGoBinary(): string {
 }
 let testHome = "";
 let testServer: ReturnType<typeof Bun.serve> | undefined;
+let testLookalike: ReturnType<typeof Bun.spawn> | undefined;
+let testLookalikeDir = "";
+// The healthz body pid must satisfy the TS runtime's cmdline-identity gate for
+// gui pairing (verifyPidIdentity). zcode rows never verify, so they keep the
+// test process pid; gui rows swap in an ocx-start lookalike process.
+let fixturePid = process.pid;
 type Result = { code: number; stdout: string; stderr: string };
 // bun:test's test.each supplies readonly tuple rows; accept them so an argv
 // row can be handed straight to a runner without a cast.
@@ -149,6 +155,42 @@ function expectParity(args: Argv): Result {
   return ts;
 }
 
+// Runners that take a fully custom child env (issue #54): rows that must
+// control PATH or other variables beyond OPENCODEX_HOME (the launcher shim
+// rows) drive both CLIs through these instead of the default home runner.
+async function runTsEnvAsync(
+  args: readonly string[],
+  env: Record<string, string | undefined>,
+): Promise<Result> {
+  const child = Bun.spawn([process.execPath, "src/cli/index.ts", ...args], {
+    cwd: repoRoot,
+    env,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return {
+    code: await child.exited,
+    stdout: await new Response(child.stdout).text(),
+    stderr: await new Response(child.stderr).text(),
+  };
+}
+async function runGoEnvAsync(
+  args: readonly string[],
+  env: Record<string, string | undefined>,
+): Promise<Result> {
+  const child = Bun.spawn([ensureGoBinary(), ...args], {
+    cwd: repoRoot,
+    env,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return {
+    code: await child.exited,
+    stdout: await new Response(child.stdout).text(),
+    stderr: await new Response(child.stderr).text(),
+  };
+}
+
 function normalizeHealthPid(result: Result): Result {
   if (
     !result.stdout.startsWith("Proxy healthy") &&
@@ -165,6 +207,12 @@ function normalizeHealthPid(result: Result): Result {
 afterEach(async () => {
   testServer?.stop(true);
   testServer = undefined;
+  testLookalike?.kill("SIGTERM");
+  testLookalike = undefined;
+  fixturePid = process.pid;
+  if (testLookalikeDir && existsSync(testLookalikeDir))
+    removeTreeWithRetry(testLookalikeDir);
+  testLookalikeDir = "";
   delete process.env.OPENCODEX_HOME;
   delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
   if (testHome && existsSync(testHome)) removeTreeWithRetry(testHome);
@@ -743,6 +791,460 @@ describe.skipIf(!goAvailable || goCLI === null)(
       testHome = mkdtempSync(join(tmpdir(), "ocx-go-usage-parity-"));
       expect(expectParity(["usage"])).toMatchObject({ code: 1 });
       expect(expectParity(["observe", "usage"])).toMatchObject({ code: 1 });
+    });
+
+    // gui/zcode/mcode/mmx are Go-owned (issue #54 ops + launcher slice); each row
+    // diffs the TS owner against the Go implementation for the same argv, home,
+    // and fixture. Rows that would reach a live proxy drive an attested fixture
+    // server; rows that would spawn an external CLI run with a PATH that resolves
+    // the same (missing or shim) `mcode`/`mmx` binary for both sides.
+    test.each([
+      { args: ["help", "gui"] },
+      { args: ["gui", "--help"] },
+      { args: ["help", "zcode"] },
+      { args: ["zcode", "--help"] },
+      { args: ["help", "mcode"] },
+      { args: ["mcode", "--help"] },
+      { args: ["help", "mmx"] },
+      { args: ["mmx", "--help"] },
+    ])("diffs launcher/ops help contracts for $args", ({ args }) => {
+      testHome = mkdtempSync(join(tmpdir(), "ocx-go-ops-parity-"));
+      expectParity(args);
+    });
+    test.each([
+      { args: ["gui", "pair"] },
+      { args: ["gui", "pair", "--origin"] },
+      { args: ["gui", "pair", "--origin", "--json"] },
+      { args: ["gui", "pair", "--origin", "https://x.example "] },
+      { args: ["gui", "dashboard"] },
+    ])("diffs gui pairing usage rejections for $args", ({ args }) => {
+      testHome = mkdtempSync(join(tmpdir(), "ocx-go-gui-parity-"));
+      const result = expectParity(args);
+      expect(result.code).toBe(1);
+    });
+    test("diffs gui pairing gate rejection without hub config", () => {
+      testHome = mkdtempSync(join(tmpdir(), "ocx-go-gui-parity-"));
+      expect(
+        expectParity(["gui", "pair", "--origin", "https://dash.example.test"]),
+      ).toMatchObject({ code: 1 });
+    });
+    test.each([
+      { args: ["zcode", "bogus"] },
+      { args: ["zcode", "--json", "bogus"] },
+      { args: ["zcode", "status", "extra"] },
+      { args: ["zcode", "restore"] },
+      { args: ["zcode", "restore", "--op"] },
+      { args: ["zcode", "disable", "--overwrite-conflict"] },
+    ])("diffs zcode usage rejections for $args", ({ args }) => {
+      testHome = mkdtempSync(join(tmpdir(), "ocx-go-zcode-parity-"));
+      expect(expectParity(args)).toMatchObject({ code: 2 });
+    });
+    test.each([
+      { args: ["mmx", "text", "chat", "--api-key", "hidden"] },
+      { args: ["mmx", "text", "chat", "--base-url=https://x.test"] },
+      { args: ["mmx", "image", "generate", "--prompt", "cat"] },
+      { args: ["mmx", "repl"] },
+    ])("diffs mmx credential and surface rejections for $args", ({ args }) => {
+      testHome = mkdtempSync(join(tmpdir(), "ocx-go-mmx-parity-"));
+      expect(expectParity(args)).toMatchObject({ code: 2 });
+    });
+    function startLoopbackGateHome(): void {
+      testHome = mkdtempSync(join(tmpdir(), "ocx-go-launch-parity-"));
+      // A non-loopback hostname trips the launchers' loopback-only gate before any
+      // proxy discovery, keeping the row hermetic on both runtimes. The config is
+      // complete so the TS loader does not emit a repair notice.
+      writeFileSync(
+        join(testHome, "config.json"),
+        JSON.stringify({
+          hostname: "10.0.0.1",
+          port: 10100,
+          providers: {
+            fixture: {
+              adapter: "openai-chat",
+              baseUrl: "https://example.test/v1",
+              apiKey: "k",
+            },
+          },
+          defaultProvider: "fixture",
+        }),
+      );
+    }
+    test.each([
+      { args: ["mcode"] },
+      { args: ["mcode", "--definitely-not-a-flag"] },
+      { args: ["mmx", "text", "chat"] },
+      { args: ["mmx", "text", "repl", "--verbose"] },
+    ])("diffs launcher loopback-only gate output for $args", ({ args }) => {
+      startLoopbackGateHome();
+      expect(expectParity(args)).toMatchObject({ code: 2 });
+    });
+    function startOpsFixture(): void {
+      testHome = mkdtempSync(join(tmpdir(), "ocx-go-ops-parity-"));
+      const clientRows = JSON.stringify({
+        clients: [
+          { clientId: "zcode", state: "enabled", installed: true },
+          { clientId: "mcode", state: "disabled", installed: false },
+        ],
+      });
+      const journal = JSON.stringify({
+        operations: [
+          {
+            at: "2026-08-22T10:11:12Z",
+            clientId: "zcode",
+            kind: "enable",
+            opId: "op-1",
+          },
+          {
+            at: "2026-08-22T10:12:13Z",
+            clientId: "zcode",
+            kind: "disable",
+            opId: "op-2",
+            snapshot: "expired",
+          },
+        ],
+      });
+      testServer = Bun.serve({
+        port: 0,
+        async fetch(request) {
+          const url = new URL(request.url);
+          if (url.pathname === "/healthz") {
+            const challenge =
+              request.headers.get("x-opencodex-attestation-challenge") ?? "";
+            const headers = challenge
+              ? {
+                  "x-opencodex-attestation-proof": createLocalAttestationProof(
+                    secret,
+                    challenge,
+                    fixturePid,
+                    testServer!.port,
+                  ),
+                }
+              : {};
+            return Response.json(
+              {
+                status: "ok",
+                service: "opencodex",
+                version: "2.42.0",
+                uptime: 1,
+                pid: fixturePid,
+                port: testServer!.port,
+                guiPairCapability: "v1",
+              },
+              { headers },
+            );
+          }
+          if (
+            url.pathname === "/api/gui/pairing-grants" &&
+            request.method === "POST"
+          ) {
+            const origin = request.headers.get("x-opencodex-gui-pair-origin");
+            return Response.json({
+              grant: "ocx_pair_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+              browserOrigin: origin,
+              serverOrigin: `http://127.0.0.1:${testServer!.port}`,
+              expiresAt: 1756000000000,
+            });
+          }
+          if (
+            url.pathname === "/api/client-integrations/zcode" &&
+            request.method === "PUT"
+          ) {
+            const enabled = JSON.parse(await request.text()).enabled === true;
+            return Response.json({
+              message: `zcode ${enabled ? "enabled" : "disabled"}.`,
+            });
+          }
+          if (url.pathname === "/api/client-integrations")
+            return new Response(clientRows, {
+              headers: { "content-type": "application/json" },
+            });
+          if (url.pathname === "/api/client-integrations/zcode")
+            return new Response(
+              JSON.stringify({
+                clientId: "zcode",
+                state: "enabled",
+                installed: true,
+              }),
+              { headers: { "content-type": "application/json" } },
+            );
+          if (url.pathname === "/api/client-integrations/journal")
+            return new Response(journal, {
+              headers: { "content-type": "application/json" },
+            });
+          if (
+            url.pathname === "/api/client-integrations/restore" &&
+            request.method === "POST"
+          ) {
+            const opId =
+              (JSON.parse(await request.text()) as { opId?: string }).opId ??
+              "";
+            if (opId === "op-2") {
+              // A real refusal body: the server states WHY under reason and WHAT TO
+              // DO under hint; both CLIs compose it through responseMessage.
+              return Response.json(
+                {
+                  error: "Backup for op-2 has expired and cannot be restored.",
+                  reason: "snapshot-expired",
+                  hint: "Re-enable the integration to create a fresh backup, then restore again.",
+                },
+                { status: 409 },
+              );
+            }
+            return Response.json({ message: "Restored." });
+          }
+          return new Response("not found", { status: 404 });
+        },
+      });
+      writeFileSync(
+        join(testHome, "runtime-port.json"),
+        JSON.stringify({
+          pid: fixturePid,
+          port: testServer.port,
+          hostname: "127.0.0.1",
+          attestationSecret: secret,
+        }),
+      );
+    }
+    // Spawn a process whose cmdline passes the TS runtime's verifyPidIdentity
+    // gate (word "ocx" and the token "start") so gui pairing trusts its pid.
+    function spawnOcxLookalike(): void {
+      const dir = mkdtempSync(join(tmpdir(), "ocx-go-lookalike-"));
+      testLookalikeDir = dir;
+      const shim = join(dir, "ocx");
+      writeFileSync(
+        shim,
+        "#!/bin/sh\ntrap 'exit 0' TERM INT\nwhile :; do sleep 1; done\n",
+        { mode: 0o755 },
+      );
+      const child = Bun.spawn(["/bin/sh", shim, "start", "--port", "39999"], {
+        stdin: "ignore",
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+      testLookalike = child;
+      fixturePid = child.pid;
+    }
+    function writeHubConfig(): void {
+      writeFileSync(
+        join(testHome, "config.json"),
+        JSON.stringify({
+          runtimeRole: "hub",
+          hub: { managementPublicOrigin: "http://dash.example.test" },
+          hostname: "127.0.0.1",
+          port: 10100,
+          providers: {
+            fixture: {
+              adapter: "openai-chat",
+              baseUrl: "https://example.test/v1",
+              apiKey: "k",
+            },
+          },
+          defaultProvider: "fixture",
+        }),
+      );
+    }
+    test.each([
+      { args: ["zcode"] },
+      { args: ["zcode", "--json"] },
+      { args: ["zcode", "status"] },
+      { args: ["zcode", "enable"] },
+      { args: ["zcode", "enable", "--json"] },
+      { args: ["zcode", "--json", "enable"] },
+      { args: ["zcode", "disable", "--json"] },
+      { args: ["zcode", "history"] },
+      { args: ["zcode", "journal", "--json"] },
+      { args: ["zcode", "restore", "--op", "op-1", "--confirm-drift"] },
+      {
+        args: ["zcode", "restore", "--op", "op-1", "--confirm-drift", "--json"],
+      },
+      { args: ["zcode", "restore", "--op", "op-2", "--confirm-drift"] },
+      {
+        args: ["zcode", "restore", "--op", "op-2", "--confirm-drift", "--json"],
+      },
+    ])(
+      "diffs Go-owned zcode output against the fixture for $args",
+      async ({ args }) => {
+        startOpsFixture();
+        const ts = await runTsAsync(args);
+        const go = await runGoAsync(args);
+        expect(go).toEqual(ts);
+        if (args.includes("op-2")) {
+          expect(go).toMatchObject({
+            code: 5,
+            stderr:
+              "Error: Backup for op-2 has expired and cannot be restored.\nreason: snapshot-expired\nhint: Re-enable the integration to create a fresh backup, then restore again.\n",
+          });
+        }
+      },
+    );
+    // These pairing rows trust a POSIX `/bin/sh` lookalike whose cmdline carries
+    // `ocx start`; the TS verifyPidIdentity gate is token-based on POSIX. The
+    // win32 CI leg (workflow_dispatch-only today) would need a cmd-based
+    // lookalike, so the rows skip there instead of silently failing.
+    test.skipIf(process.platform === "win32")(
+      "diffs gui pairing success output against the fixture",
+      async () => {
+        spawnOcxLookalike();
+        startOpsFixture();
+        writeHubConfig();
+        const args = ["gui", "pair", "--origin", "http://dash.example.test"];
+        const ts = await runTsAsync(args);
+        const go = await runGoAsync(args);
+        expect(go).toEqual(ts);
+        expect(ts).toMatchObject({
+          code: 0,
+          stderr:
+            "Pairing grants are secret, single-use, and expire quickly. Do not save them.\n",
+        });
+      },
+    );
+    test.skipIf(process.platform === "win32")(
+      "diffs gui pairing JSON success output against the fixture",
+      async () => {
+        spawnOcxLookalike();
+        startOpsFixture();
+        writeHubConfig();
+        const args = [
+          "gui",
+          "pair",
+          "--origin",
+          "http://dash.example.test",
+          "--json",
+        ];
+        const ts = await runTsAsync(args);
+        const go = await runGoAsync(args);
+        expect(go).toEqual(ts);
+        expect(ts).toMatchObject({ code: 0, stderr: "" });
+      },
+    );
+    test("diffs gui pairing failure when no proxy is running", () => {
+      startLoopbackGateHome();
+      writeFileSync(
+        join(testHome, "config.json"),
+        JSON.stringify({
+          runtimeRole: "hub",
+          hub: { managementPublicOrigin: "http://dash.example.test" },
+          hostname: "10.0.0.1",
+          port: 10999,
+          providers: {
+            fixture: {
+              adapter: "openai-chat",
+              baseUrl: "https://example.test/v1",
+              apiKey: "k",
+            },
+          },
+          defaultProvider: "fixture",
+        }),
+      );
+      expect(
+        expectParity(["gui", "pair", "--origin", "http://dash.example.test"]),
+      ).toMatchObject({ code: 1 });
+    });
+    test("diffs the mcode wiring lane and its ENOENT spawn against the fixture", async () => {
+      startOpsFixture();
+      // Loopback config so the launcher trusts the fixture (complete so the TS
+      // loader emits no repair notice); mcode config.yaml lives under
+      // $HOME/.minimax, so HOME is redirected to the scratch home. The file uses
+      // the canonical BLOCK form that client-integration enable actually writes
+      // (src/integrations/serialize.ts), so the oracle guards the real shape the
+      // TS writer emits, not a flow-only artifact. The fixture server serves
+      // both CLIs, so the rows run async (a blocking spawnSync would starve the
+      // fixture event loop).
+      writeFileSync(
+        join(testHome, "config.json"),
+        JSON.stringify({
+          hostname: "127.0.0.1",
+          port: 10100,
+          providers: {
+            fixture: {
+              adapter: "openai-chat",
+              baseUrl: "https://example.test/v1",
+              apiKey: "k",
+            },
+          },
+          defaultProvider: "fixture",
+        }),
+      );
+      const mcodeHome = mkdtempSync(join(tmpdir(), "ocx-go-mcode-home-"));
+      mkdirSync(join(mcodeHome, ".minimax"), { recursive: true });
+      writeFileSync(
+        join(mcodeHome, ".minimax", "config.yaml"),
+        [
+          "theme: dark",
+          "custom_provider:",
+          "  opencodex:",
+          "    name: OpenCodex managed provider",
+          "    models: {}",
+          "    options:",
+          `      baseURL: http://127.0.0.1:${testServer!.port}`,
+          "",
+        ].join("\n"),
+      );
+      const emptyPath = mkdtempSync(join(tmpdir(), "ocx-go-empty-path-"));
+      try {
+        const env = parityEnv(testHome);
+        env.HOME = mcodeHome;
+        env.PATH = emptyPath;
+        const tsResult = await runTsEnvAsync(["mcode"], env);
+        const goResult = await runGoEnvAsync(["mcode"], env);
+        expect(goResult).toEqual(tsResult);
+        expect(tsResult).toMatchObject({
+          code: 1,
+          stderr: `✅ MiniMax Code wired to http://127.0.0.1:${testServer!.port}; select custom_provider:opencodex/<model> in MCode.\n❌ \`mcode\` CLI not found. Install MiniMax Code first: https://github.com/MiniMax-AI/minimax-code\n`,
+        });
+      } finally {
+        removeTreeWithRetry(mcodeHome);
+        removeTreeWithRetry(emptyPath);
+      }
+    });
+    test("diffs the mmx wiring lane and its ENOENT spawn against the fixture", async () => {
+      startOpsFixture();
+      writeFileSync(
+        join(testHome, "config.json"),
+        JSON.stringify({
+          hostname: "127.0.0.1",
+          port: 10100,
+          providers: {
+            fixture: {
+              adapter: "openai-chat",
+              baseUrl: "https://example.test/v1",
+              apiKey: "k",
+            },
+          },
+          defaultProvider: "fixture",
+        }),
+      );
+      // An empty PATH forces the ENOENT lane on both sides (no mmx binary to
+      // exec); the fixture serves both CLIs so the rows run async.
+      const emptyPath = mkdtempSync(join(tmpdir(), "ocx-go-empty-path-"));
+      try {
+        const env = parityEnv(testHome);
+        env.PATH = emptyPath;
+        const tsResult = await runTsEnvAsync(["mmx", "text", "chat"], env);
+        const goResult = await runGoEnvAsync(["mmx", "text", "chat"], env);
+        expect(goResult).toEqual(tsResult);
+        expect(tsResult).toMatchObject({
+          code: 1,
+          stderr: `✅ MiniMax CLI text bridged to http://127.0.0.1:${testServer!.port}/v1/messages.\n❌ \`mmx\` CLI not found. Install it first: npm install -g mmx-cli\n`,
+        });
+      } finally {
+        removeTreeWithRetry(emptyPath);
+      }
+    });
+    test("diffs mcode informational passthrough on a missing CLI", () => {
+      testHome = mkdtempSync(join(tmpdir(), "ocx-go-mcode-parity-"));
+      // --help is intercepted as registry help before the launcher; --version is
+      // the passthrough lane. Both sides spawn the same resolved `mcode --version`
+      // binary from the same inherited PATH.
+      const tsResult = runTs(["mcode", "--version"], testHome);
+      const goResult = runGo(["mcode", "--version"], testHome);
+      expect(goResult).toEqual(tsResult);
+    });
+    test("diffs mmx informational passthrough on a missing CLI", () => {
+      testHome = mkdtempSync(join(tmpdir(), "ocx-go-mmx-parity-"));
+      const tsResult = runTs(["mmx", "-v"], testHome);
+      const goResult = runGo(["mmx", "-v"], testHome);
+      expect(goResult).toEqual(tsResult);
     });
 
     // logs/memory/inspect are Go-owned (issue #45 batch): the TS CLI still runs its own
@@ -2270,8 +2772,8 @@ describe.skipIf(!goAvailable || goCLI === null)(
     });
     test("diffs storage help in both spellings", () => {
       testHome = mkdtempSync(join(tmpdir(), "ocx-go-storage-parity-"));
-      expect(expectParity(["help", "storage"]));
-      expect(expectParity(["storage", "--help"]));
+      expect(expectParity(["help", "storage"])).toMatchObject({ code: 0 });
+      expect(expectParity(["storage", "--help"])).toMatchObject({ code: 0 });
     });
     test("diffs storage when no proxy is running", () => {
       testHome = mkdtempSync(join(tmpdir(), "ocx-go-storage-parity-"));
@@ -2810,15 +3312,15 @@ describe.skipIf(!goAvailable || goCLI === null)(
     );
     test("diffs lab help in both spellings", () => {
       testHome = mkdtempSync(join(tmpdir(), "ocx-go-lab-parity-"));
-      expect(expectParity(["help", "lab"]));
-      expect(expectParity(["lab", "--help"]));
+      expect(expectParity(["help", "lab"])).toMatchObject({ code: 0 });
+      expect(expectParity(["lab", "--help"])).toMatchObject({ code: 0 });
     });
 
     test("diffs management-family help in both spellings", () => {
       testHome = mkdtempSync(join(tmpdir(), "ocx-go-family-parity-"));
       for (const name of ["agent", "grok", "integration"]) {
-        expect(expectParity(["help", name]));
-        expect(expectParity([name, "--help"]));
+        expect(expectParity(["help", name])).toMatchObject({ code: 0 });
+        expect(expectParity([name, "--help"])).toMatchObject({ code: 0 });
       }
     });
     test("diffs management-family output when no proxy is running", () => {
@@ -3223,7 +3725,7 @@ describe.skipIf(!goAvailable || goCLI === null)(
       { args: ["route", "policy", "--help"] },
     ])("diffs config-routing help contracts for $args", ({ args }) => {
       testHome = mkdtempSync(join(tmpdir(), "ocx-go-routing-parity-"));
-      expect(expectParity(args));
+      expect(expectParity(args)).toMatchObject({ code: 0 });
     });
     // sync / sync-cache are Go-owned (issue #50). Both CLIs run in the same pair
     // of fresh homes so the deterministic catalog-refresh flows produce identical

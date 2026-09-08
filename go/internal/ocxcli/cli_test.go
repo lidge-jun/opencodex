@@ -199,13 +199,12 @@ func TestVersionAndRegistry(t *testing.T) {
 func TestOwnershipMapMatchesDispatch(t *testing.T) {
 	for _, command := range Commands {
 		for _, name := range append([]string{command.Name}, command.Aliases...) {
-			// Lifecycle commands own a real listener/process and intentionally block
-			// until a signal (start/stop) or spawn/supervise a detached proxy and
-			// touch Codex state (ensure/restart). Running their bare argv in this
-			// unit test would launch real processes against the host home; their
-			// ownership rows are asserted by OwnershipFor/Commands and by focused
-			// tests below without launching them.
-			if name == "start" || name == "stop" || name == "ensure" || name == "restart" {
+			// Lifecycle and launch commands own a real listener/process and
+			// intentionally block or spawn (browser/external CLI/detached start)
+			// until a signal or child exit; ownership is asserted above without
+			// launching them. gui/mcode/mmx join start/stop for the same reason;
+			// ensure/restart supervise a detached proxy and touch Codex state.
+			if name == "start" || name == "stop" || name == "ensure" || name == "restart" || name == "gui" || name == "mcode" || name == "mmx" {
 				continue
 			}
 			t.Run(name, func(t *testing.T) {
