@@ -33,14 +33,19 @@ async function waitForPath(path: string): Promise<void> {
 }
 
 async function waitForOwnedChild(child: ReturnType<typeof Bun.spawn>): Promise<number> {
+  // The child polls for the release marker on a 10 ms sleep, so its exit is bounded by the
+  // filesystem noticing that write plus one Bun teardown. On a loaded Windows runner both
+  // are slower than the 5 s this used to allow: shard 2/6 measured 5858 ms end to end and
+  // reported exit 143, which is this helper's own `kill()`, not a lock defect. Give the
+  // teardown room; a genuine hang still fails, it just takes longer to say so.
   const result = await Promise.race([
     child.exited.then(exitCode => ({ exitCode })),
-    Bun.sleep(5_000).then(() => null),
+    Bun.sleep(30_000).then(() => null),
   ]);
   if (result) return result.exitCode;
   child.kill();
   await child.exited;
-  throw new Error("Timed out waiting for owned config-lock child");
+  throw new Error("Timed out waiting for owned config-lock child after 30s");
 }
 
 beforeEach(() => {
