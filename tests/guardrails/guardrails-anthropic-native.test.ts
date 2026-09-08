@@ -2,15 +2,15 @@ import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { saveConfig } from "../src/config";
-import { startServer } from "../src/server";
-import { handleClaudeMessages } from "../src/server/claude-messages";
-import type { RequestLogContext } from "../src/server/request-log";
-import type { OcxConfig } from "../src/types";
+import { saveConfig } from "../../src/config";
+import { startServer } from "../../src/server";
+import { handleClaudeMessages } from "../../src/server/claude-messages";
+import type { RequestLogContext } from "../../src/server/request-log";
+import type { OcxConfig } from "../../src/types";
 import {
   installIsolatedCodexHome,
   type IsolatedCodexHome,
-} from "./helpers/isolated-codex-home";
+} from "../helpers/isolated-codex-home";
 
 setDefaultTimeout(15_000);
 

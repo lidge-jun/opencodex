@@ -8,9 +8,10 @@ import {
   guardrailsProvenanceSchema,
   parseGuardrailsDonorRuleCases,
   verifyGuardrailsProvenance,
-} from "../scripts/guardrails-provenance";
+} from "../../scripts/guardrails-provenance";
+import { repoRoot } from "../helpers/repo-root";
 
-const ROOT = join(import.meta.dir, "..");
+const ROOT = repoRoot();
 const RULES_DIR = join(ROOT, "src", "guardrails", "rules");
 
 test("Guardrails vendors pinned donor assets with complete distribution notices", () => {

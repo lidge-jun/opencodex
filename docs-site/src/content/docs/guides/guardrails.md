@@ -40,6 +40,9 @@ The first switch is an explicit opt-in. The safe initial settings are:
 Changes apply to newly admitted logical turns. A request or stream that has already started keeps
 the immutable settings and placeholder mapping it began with.
 
+Action feedback appears inline above the section tabs. It can be dismissed with **Close** without
+blocking navigation to another Guardrails section.
+
 ### CLI and Management API
 
 This contribution is dashboard and Management API first. The 13 Guardrails endpoints are

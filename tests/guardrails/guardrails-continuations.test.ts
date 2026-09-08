@@ -9,10 +9,10 @@ import {
   rememberGuardrailsContinuation,
   retainGuardrailsContinuation,
   sweepExpiredGuardrailsContinuations,
-} from "../src/guardrails/continuations";
-import { createGuardrailsRegistry } from "../src/guardrails/registry";
-import { demaskGuardrailsText } from "../src/guardrails/placeholders";
-import { maskResponsesRequestFields } from "../src/guardrails/fields/responses";
+} from "../../src/guardrails/continuations";
+import { createGuardrailsRegistry } from "../../src/guardrails/registry";
+import { demaskGuardrailsText } from "../../src/guardrails/placeholders";
+import { maskResponsesRequestFields } from "../../src/guardrails/fields/responses";
 
 setDefaultTimeout(15_000);
 

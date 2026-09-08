@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { IconLock } from "../icons";
 import { useDataSurface } from "../data-surface";
-import { ToastNotice } from "../ui";
+import { Notice } from "../ui";
 import { useT, type TKey } from "../i18n/shared";
 import ConsequenceDialog from "./integrations/ConsequenceDialog";
 import { GuardrailsActivityPanel } from "./guardrails/activity-panel";
@@ -439,7 +439,12 @@ export default function Guardrails({ apiBase }: { apiBase: string }) {
         {overview && <GuardrailsStatusBadges overview={overview} />}
       </div>
       <p className="page-sub">{t("guardrails.subtitle")}</p>
-      {toast && <ToastNotice tone={toast.tone} onDismiss={() => setToast(null)} dismissLabel={t("common.close")}>{toast.text}</ToastNotice>}
+      {toast && <Notice tone={toast.tone}>
+        <span className="guardrails-notice-content">
+          <span>{toast.text}</span>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setToast(null)}>{t("common.close")}</button>
+        </span>
+      </Notice>}
       <GuardrailsTabStrip tab={tab} onSelect={selectTab} meta={meta} />
 
       {mounted.has("overview") && (

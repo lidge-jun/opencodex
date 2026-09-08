@@ -49,7 +49,7 @@
     "privacy:scan": "bun scripts/privacy-scan.ts",
     "skill:surface": "bun scripts/generate-ocx-skill-surface.ts",
     "skill:surface:check": "bun scripts/generate-ocx-skill-surface.ts --check",
-    "verify:guardrails-assets": "bun test tests/guardrails-assets.test.ts",
+    "verify:guardrails-assets": "bun test tests/guardrails/guardrails-assets.test.ts",
     "verify:guardrails-package": "bun scripts/verify-guardrails-package.ts",
     "benchmark:guardrails": "bun scripts/benchmark-guardrails.ts",
     "generate:model-metadata": "bun scripts/generate-model-metadata.ts",

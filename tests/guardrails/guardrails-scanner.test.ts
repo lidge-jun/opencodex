@@ -1,7 +1,7 @@
 import { expect, setDefaultTimeout, test } from "bun:test";
-import { createGuardrailsRegistry } from "../src/guardrails/registry";
-import { scanGuardrailsText } from "../src/guardrails/scanner";
-import type { GuardrailsCustomRule } from "../src/guardrails/types";
+import { createGuardrailsRegistry } from "../../src/guardrails/registry";
+import { scanGuardrailsText } from "../../src/guardrails/scanner";
+import type { GuardrailsCustomRule } from "../../src/guardrails/types";
 
 setDefaultTimeout(15_000);
 

@@ -12,12 +12,12 @@ import {
   saveConfigPreservingClaudeCode,
   setPersistedConfigMutationBeforeCommitForTests,
   validateConfigCandidate,
-} from "../src/config";
+} from "../../src/config";
 import {
   GuardrailsConfigRevisionConflictError,
   mutateAndAdoptGuardrailsConfig,
-} from "../src/guardrails/config-coordinator";
-import { createBuiltinGuardrailsRegistry } from "../src/guardrails/registry";
+} from "../../src/guardrails/config-coordinator";
+import { createBuiltinGuardrailsRegistry } from "../../src/guardrails/registry";
 import {
   MAX_GUARDRAILS_PROVIDER_IDS,
   applyGuardrailsSettingsPatch,
@@ -25,8 +25,8 @@ import {
   guardrailsConfigEqual,
   parseGuardrailsConfig,
   parseGuardrailsSettingsPatch,
-} from "../src/guardrails/config-schema";
-import { guardrailsPolicyRevision } from "../src/guardrails/runtime";
+} from "../../src/guardrails/config-schema";
+import { guardrailsPolicyRevision } from "../../src/guardrails/runtime";
 
 setDefaultTimeout(15_000);
 

@@ -271,6 +271,8 @@ describe("membership oracle", () => {
     const doc = readFileSync(repoPath("devlog", "_fin", "260905_test_modularization_and_windows", "001_test_inventory.md"), "utf8");
     const expected: Record<string, number> = {};
     for (const m of doc.matchAll(/^#### `tests\/([a-z0-9/-]+)\/` \((\d+)\)\r?$/gm)) expected[m[1]!] = Number(m[2]);
+    // Guardrails joins after the upstream inventory snapshot; retain its own floor.
+    expected.guardrails = 19;
     expect(Object.keys(expected).length).toBeGreaterThan(20);
     expect(Object.keys(histogram).sort()).toEqual(Object.keys(expected).sort());
     const below = Object.entries(expected).filter(([dir, n]) => (histogram[dir] ?? 0) < n).map(([dir, n]) => `${dir}: ${histogram[dir]} < ${n}`);

@@ -235,6 +235,30 @@ describe("SSE payload rewrite composition", () => {
     budget.dispose();
   });
 
+  test("a failed error flush releases retained bytes and disposes the rewriter", async () => {
+    const failure = new Error("synthetic flush failure");
+    const budget = createTestTranslatorBudget();
+    let reads = 0;
+    let disposals = 0;
+    const source = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (reads++ === 0) controller.enqueue(new TextEncoder().encode("data: partial"));
+        else controller.error(new Error("synthetic source failure"));
+      },
+    });
+    const rewrite = Object.assign((block: string) => [block], {
+      flush(): string[] { throw failure; },
+      dispose() { disposals++; },
+    });
+    try {
+      await expect(readAll(relaySseWithBlockRewrite(source, rewrite, budget))).rejects.toBe(failure);
+      expect(disposals).toBe(1);
+      expect(budget.snapshot().currentBytes).toBe(0);
+    } finally {
+      budget.dispose();
+    }
+  });
+
   test("source errors deliver an already-buffered partial tail before the original error", async () => {
     const encoder = new TextEncoder();
     const failure = new Error("synthetic upstream failure");

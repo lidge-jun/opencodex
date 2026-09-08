@@ -3,8 +3,8 @@ import {
   inspectResponseLogJson,
   inspectResponseLogSsePayload,
   type RequestLogContext,
-} from "../src/server/request-log";
-import { resetDebugSettingsForTests, setDebugSettings } from "../src/lib/debug-settings";
+} from "../../src/server/request-log";
+import { resetDebugSettingsForTests, setDebugSettings } from "../../src/lib/debug-settings";
 import {
   clearGuardrailsTelemetryForTests,
   guardrailsActivity,
@@ -14,11 +14,11 @@ import {
   recordGuardrailsTurn,
   recordGuardrailsTurnDelta,
   sweepExpiredGuardrailsActivity,
-} from "../src/guardrails/telemetry";
-import { decideAndRecordGuardrailsLateFailure } from "../src/guardrails/late-failure";
-import { extendGuardrailsTurnText, prepareGuardrailsTurn } from "../src/guardrails/turn";
-import { GuardrailsScanCapacityError } from "../src/guardrails/scanner";
-import type { OcxConfig } from "../src/types";
+} from "../../src/guardrails/telemetry";
+import { decideAndRecordGuardrailsLateFailure } from "../../src/guardrails/late-failure";
+import { extendGuardrailsTurnText, prepareGuardrailsTurn } from "../../src/guardrails/turn";
+import { GuardrailsScanCapacityError } from "../../src/guardrails/scanner";
+import type { OcxConfig } from "../../src/types";
 
 afterEach(() => {
   resetDebugSettingsForTests();

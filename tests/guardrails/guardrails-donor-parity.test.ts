@@ -2,8 +2,8 @@ import { expect, setDefaultTimeout, test } from "bun:test";
 import {
   createBuiltinGuardrailsRegistry,
   scanGuardrailsText,
-} from "../src/guardrails";
-import type { GuardrailsRegistry } from "../src/guardrails/types";
+} from "../../src/guardrails";
+import type { GuardrailsRegistry } from "../../src/guardrails/types";
 
 setDefaultTimeout(15_000);
 
@@ -29,7 +29,7 @@ interface DonorRuleFixture {
 
 test("all 266 built-in rules match their provenance-bound donor fixtures", async () => {
   const fixture = await Bun.file(
-    new URL("./fixtures/guardrails-donor-rule-cases.json", import.meta.url),
+    new URL("../fixtures/guardrails-donor-rule-cases.json", import.meta.url),
   ).json() as DonorRuleFixture;
   expect(fixture).toMatchObject({
     version: 1,

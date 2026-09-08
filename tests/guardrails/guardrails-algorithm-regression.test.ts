@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import {
   createGuardrailsPlaceholderState,
   demaskGuardrailsTextWithDiagnosticsForTests,
-} from "../src/guardrails/placeholders";
+} from "../../src/guardrails/placeholders";
 
 test("placeholder tokenizer work scales linearly on adversarial unterminated input", () => {
   const samples = [64, 128, 256, 512].map(kib => "<".repeat(kib * 1024));

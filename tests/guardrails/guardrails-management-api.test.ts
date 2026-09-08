@@ -1,13 +1,13 @@
 import { expect, setDefaultTimeout, test } from "bun:test";
-import { handleManagementAPI, type ManagementApiDeps } from "../src/server/management-api";
+import { handleManagementAPI, type ManagementApiDeps } from "../../src/server/management-api";
 import {
   clearGuardrailsTelemetryForTests,
   recordGuardrailsEvent,
-} from "../src/guardrails/telemetry";
-import { GuardrailsConfigRevisionConflictError } from "../src/guardrails/config-coordinator";
-import { guardrailsPolicyRevision } from "../src/guardrails/runtime";
-import type { OcxConfig } from "../src/types";
-import { GUARDRAILS_CONFIRMED_MISS_ANALOGS } from "./helpers/guardrails-confirmed-miss-analogs";
+} from "../../src/guardrails/telemetry";
+import { GuardrailsConfigRevisionConflictError } from "../../src/guardrails/config-coordinator";
+import { guardrailsPolicyRevision } from "../../src/guardrails/runtime";
+import type { OcxConfig } from "../../src/types";
+import { GUARDRAILS_CONFIRMED_MISS_ANALOGS } from "../helpers/guardrails-confirmed-miss-analogs";
 
 setDefaultTimeout(15_000);
 

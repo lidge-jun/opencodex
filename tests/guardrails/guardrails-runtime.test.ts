@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import { compileGuardrailsRuntimeSnapshot, leaseGuardrailsRuntimeSnapshot, publishGuardrailsRuntimeSnapshot } from "../src/guardrails/runtime";
-import { scanGuardrailsText } from "../src/guardrails/scanner";
-import type { OcxConfig, OcxGuardrailsConfig } from "../src/types";
+import { compileGuardrailsRuntimeSnapshot, leaseGuardrailsRuntimeSnapshot, publishGuardrailsRuntimeSnapshot } from "../../src/guardrails/runtime";
+import { scanGuardrailsText } from "../../src/guardrails/scanner";
+import type { OcxConfig, OcxGuardrailsConfig } from "../../src/types";
 
 function guardrailsConfig(): OcxGuardrailsConfig {
   return {

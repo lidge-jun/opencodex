@@ -1359,6 +1359,10 @@ export async function handleResponsesCompact(
     turnAdmissionLease,
     ...(admission ? { admission } : {}),
     guardrailsTurn,
+    guardrailsSnapshot,
+    guardrailsCapturedPolicy: capturedGuardrailsPolicy,
+    guardrailsProviderScopeAnchor,
+    guardrailsPassthroughFailure: guardrailsBypassed,
   });
   if (!response.ok) return response;
   let json: { output?: unknown[]; status?: unknown; error?: unknown };

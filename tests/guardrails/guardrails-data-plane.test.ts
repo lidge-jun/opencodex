@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
-import { providerConfigSeed } from "../src/providers/derive";
-import { getProviderRegistryEntry } from "../src/providers/registry";
+import { providerConfigSeed } from "../../src/providers/derive";
+import { getProviderRegistryEntry } from "../../src/providers/registry";
 import {
   GuardrailsOutputCapacityError,
   demaskGuardrailsJsonPayload,
@@ -9,24 +9,24 @@ import {
   prepareGuardrailsTurn,
   rescanGuardrailsResponsesBody,
   restoreGuardrailsResponsesParsedRequest,
-} from "../src/guardrails/turn";
-import { GuardrailsDemaskCapacityError } from "../src/guardrails/placeholders";
-import { guardrailsSseDemaskRewrite } from "../src/guardrails/sse-demask";
-import { clearGuardrailsContinuationsForTests } from "../src/guardrails/continuations";
+} from "../../src/guardrails/turn";
+import { GuardrailsDemaskCapacityError } from "../../src/guardrails/placeholders";
+import { guardrailsSseDemaskRewrite } from "../../src/guardrails/sse-demask";
+import { clearGuardrailsContinuationsForTests } from "../../src/guardrails/continuations";
 import {
   compileGuardrailsRuntimeSnapshot,
   publishGuardrailsRuntimeSnapshot,
-} from "../src/guardrails/runtime";
+} from "../../src/guardrails/runtime";
 import {
   clearGuardrailsTelemetryForTests,
   guardrailsActivity,
-} from "../src/guardrails/telemetry";
-import { expandPreviousResponseInput } from "../src/responses/state";
-import { parseRequest } from "../src/responses/parser";
-import { handleResponses } from "../src/server/responses/core";
-import type { RequestLogContext } from "../src/server/request-log";
-import type { OcxConfig, OcxProviderConfig } from "../src/types";
-import { createTestTranslatorBudget } from "./helpers/translator-budget";
+} from "../../src/guardrails/telemetry";
+import { expandPreviousResponseInput } from "../../src/responses/state";
+import { parseRequest } from "../../src/responses/parser";
+import { handleResponses } from "../../src/server/responses/core";
+import type { RequestLogContext } from "../../src/server/request-log";
+import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import { createTestTranslatorBudget } from "../helpers/translator-budget";
 
 const originalFetch = globalThis.fetch;
 const PLACEHOLDER = "<STRIPE_ACCESS_TOKEN_1>";

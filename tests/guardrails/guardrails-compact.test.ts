@@ -6,19 +6,19 @@ import {
   rememberGuardrailsCompactContinuation,
   retainGuardrailsCompactContinuation,
   sweepExpiredGuardrailsCompactContinuations,
-} from "../src/guardrails/compact-continuations";
-import { createGuardrailsContinuationScope } from "../src/guardrails/continuations";
+} from "../../src/guardrails/compact-continuations";
+import { createGuardrailsContinuationScope } from "../../src/guardrails/continuations";
 import {
   decodeCompactionSummary,
   encodeCompactionSummary,
-} from "../src/responses/compaction";
-import { handleResponses } from "../src/server/responses/core";
+} from "../../src/responses/compaction";
+import { handleResponses } from "../../src/server/responses/core";
 import {
   clearCompactHandoffRoutesForTests,
   handleResponsesCompact,
-} from "../src/server/responses/compact";
-import type { RequestLogContext } from "../src/server/request-log";
-import type { OcxConfig } from "../src/types";
+} from "../../src/server/responses/compact";
+import type { RequestLogContext } from "../../src/server/request-log";
+import type { OcxConfig } from "../../src/types";
 
 const originalFetch = globalThis.fetch;
 

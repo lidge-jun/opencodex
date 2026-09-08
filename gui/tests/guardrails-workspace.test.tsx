@@ -457,6 +457,29 @@ async function uploadImportBundle() {
   });
 }
 
+test("Enable feedback stays inline so Settings needs no toast dismissal", async () => {
+  overview = overviewFixture(false);
+  await mount();
+  const trigger = host.querySelector<HTMLButtonElement>(".guardrails-overview-hero .switch")!;
+  await act(async () => {
+    trigger.click();
+    await new Promise(resolve => setTimeout(resolve, 15));
+  });
+
+  expect(mutations).toEqual([{ body: { enabled: true }, ifMatch: '"rev-1"' }]);
+  const notice = host.querySelector(".guardrails-page > .notice[role=status]");
+  expect(notice?.textContent).toContain("Guardrails settings saved.");
+  expect(document.querySelector(".toast-notice-host")).toBeNull();
+  expect(notice?.nextElementSibling?.querySelector("#guardrails-tab-settings")).not.toBeNull();
+  await openTab("settings");
+  expect(host.querySelector("#guardrails-tab-settings")?.getAttribute("aria-selected")).toBe("true");
+  expect(host.querySelector<HTMLElement>("#guardrails-panel-settings")?.hidden).toBe(false);
+  expect(notice?.isConnected).toBe(true);
+  await act(async () => { namedButton("Close", notice!).click(); });
+  expect(host.querySelector(".guardrails-page > .notice")).toBeNull();
+  expect(host.querySelector("#guardrails-tab-settings")?.getAttribute("aria-selected")).toBe("true");
+});
+
 test("successful disable synchronizes both tabs and returns focus", async () => {
   await mount();
   const trigger = host.querySelector<HTMLButtonElement>(".guardrails-overview-hero .switch")!;

@@ -1,14 +1,15 @@
 import { expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { createGuardrailsRegistry } from "../src/guardrails/registry";
-import { maskAnthropicRequestFields } from "../src/guardrails/fields/anthropic";
-import { maskChatRequestFields } from "../src/guardrails/fields/chat";
+import { createGuardrailsRegistry } from "../../src/guardrails/registry";
+import { maskAnthropicRequestFields } from "../../src/guardrails/fields/anthropic";
+import { maskChatRequestFields } from "../../src/guardrails/fields/chat";
 import {
   maskResponsesRequestFields,
   RESPONSES_GUARDRAILS_ITEM_POLICY,
-} from "../src/guardrails/fields/responses";
-import { GuardrailsScanCapacityError } from "../src/guardrails/scanner";
+} from "../../src/guardrails/fields/responses";
+import { GuardrailsScanCapacityError } from "../../src/guardrails/scanner";
+import { repoPath } from "../helpers/repo-root";
 
 setDefaultTimeout(15_000);
 
@@ -19,8 +20,8 @@ function registry() {
 }
 
 test("Responses parser item kinds have an explicit Guardrails scan-or-skip policy", () => {
-  const parser = readFileSync(resolve(import.meta.dir, "../src/responses/parser.ts"), "utf8");
-  const compaction = readFileSync(resolve(import.meta.dir, "../src/responses/compaction.ts"), "utf8");
+  const parser = readFileSync(repoPath("src/responses/parser.ts"), "utf8");
+  const compaction = readFileSync(repoPath("src/responses/compaction.ts"), "utf8");
   const compactionTypes = compaction.match(
     /const COMPACTION_ITEM_TYPES:[\s\S]+?new Set\(\[([\s\S]+?)\]\);/,
   )?.[1];

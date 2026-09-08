@@ -428,19 +428,11 @@ export function relaySseWithBlockRewrite(
         let bufferedText = "";
         try { bufferedText = fatalDecoder.decode(buffer.subarray(bufferOffset, bufferLength)); } catch { /* malformed tail */ }
         const delimiter = bufferedText.includes("\r\n") ? "\r\n\r\n" : bufferedText.includes("\r") ? "\r\r" : "\n\n";
-        let bufferedTail: Uint8Array;
+        let bufferedTail: Uint8Array = new Uint8Array();
         try {
           bufferedTail = detachBufferedRange(bufferOffset, bufferLength);
         } catch {
           releaseBuffer();
-          const flushed = emitRewriteFlush(controller, delimiter);
-          if (flushed > 0) {
-            deferredError = error;
-            return;
-          }
-          disposeRewrite();
-          controller.error(error);
-          return;
         }
         let retainedTailPending = true;
         try {
@@ -455,6 +447,9 @@ export function relaySseWithBlockRewrite(
           }
           disposeRewrite();
           controller.error(error);
+        } catch (flushError) {
+          disposeRewrite();
+          controller.error(flushError);
         } finally {
           if (retainedTailPending) {
             translatorBudget.releaseRetained(bufferedTail.byteLength, { kind: "live_transient" });

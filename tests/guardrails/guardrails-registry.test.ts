@@ -7,23 +7,23 @@ import {
   GuardrailsRuleCompileError,
   maskGuardrailsText,
   scanGuardrailsText,
-} from "../src/guardrails";
-import { WrappedRE2 } from "../src/guardrails/re2-runtime";
-import { validateGuardrailsCustomRulesCompatibility } from "../src/guardrails/registry";
+} from "../../src/guardrails";
+import { WrappedRE2 } from "../../src/guardrails/re2-runtime";
+import { validateGuardrailsCustomRulesCompatibility } from "../../src/guardrails/registry";
 import {
   MAX_GUARDRAILS_REGEX_INPUT_BYTES,
   MAX_GUARDRAILS_SCANNABLE_LEAF_BYTES,
   createGuardrailsScanBudget,
-} from "../src/guardrails/scanner";
-import { provenGuardrailsPrefilterKeywords } from "../src/guardrails/prefilter";
-import { RE2 } from "../src/guardrails/re2-runtime";
+} from "../../src/guardrails/scanner";
+import { provenGuardrailsPrefilterKeywords } from "../../src/guardrails/prefilter";
+import { RE2 } from "../../src/guardrails/re2-runtime";
 import type {
   CompiledGuardrailsRule,
   GuardrailsCustomRule,
   GuardrailsRegistry,
-} from "../src/guardrails/types";
-import { validateGuardrailsCandidate } from "../src/guardrails/validators";
-import { GUARDRAILS_CONFIRMED_MISS_ANALOGS } from "./helpers/guardrails-confirmed-miss-analogs";
+} from "../../src/guardrails/types";
+import { validateGuardrailsCandidate } from "../../src/guardrails/validators";
+import { GUARDRAILS_CONFIRMED_MISS_ANALOGS } from "../helpers/guardrails-confirmed-miss-analogs";
 
 setDefaultTimeout(15_000);
 

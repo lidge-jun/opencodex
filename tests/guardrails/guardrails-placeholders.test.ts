@@ -6,8 +6,8 @@ import {
   demaskGuardrailsText,
   demaskGuardrailsTextWithDiagnosticsForTests,
   maskGuardrailsText,
-} from "../src/guardrails/placeholders";
-import type { GuardrailsFinding } from "../src/guardrails/types";
+} from "../../src/guardrails/placeholders";
+import type { GuardrailsFinding } from "../../src/guardrails/types";
 
 function finding(input: string, value: string, start: number, placeholderType = "SECRET", ruleId = "test.secret"): GuardrailsFinding {
   return {

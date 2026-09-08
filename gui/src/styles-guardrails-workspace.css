@@ -92,3 +92,4 @@
   .guardrails-import-security li { align-items: flex-start; flex-direction: column; }
   .guardrails-table-scroll-hint { display: block; }
 }
+.guardrails-notice-content { display: inline-flex; align-items: center; gap: 0.75rem; }

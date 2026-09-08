@@ -1,20 +1,21 @@
 import { afterEach, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { repoRoot as resolveRepoRoot } from "../helpers/repo-root";
 import {
   captureGuardrailsPolicy,
   guardrailsPolicyProtectsProvider,
   leaseCapturedGuardrailsRuntimeSnapshot,
   leaseActiveGuardrailsRuntimeSnapshot,
   setGuardrailsRuntimeModuleLoaderForTests,
-} from "../src/guardrails/activation";
-import { guardrailsPolicyRevision } from "../src/guardrails/runtime";
-import { admitGuardrailsRuntime } from "../src/guardrails/turn";
+} from "../../src/guardrails/activation";
+import { guardrailsPolicyRevision } from "../../src/guardrails/runtime";
+import { admitGuardrailsRuntime } from "../../src/guardrails/turn";
 import {
   clearGuardrailsTelemetryForTests,
   guardrailsActivity,
-} from "../src/guardrails/telemetry";
-import type { OcxConfig } from "../src/types";
+} from "../../src/guardrails/telemetry";
+import type { OcxConfig } from "../../src/types";
 
 afterEach(() => {
   setGuardrailsRuntimeModuleLoaderForTests();
@@ -34,7 +35,7 @@ function resolveLocalImport(specifier: string, fromFile: string): string | null 
 }
 
 function firstStaticPackagePath(entry: string, packageName: string): string[] | null {
-  const repoRoot = resolve(dirname(new URL(import.meta.url).pathname), "..");
+  const repoRoot = resolveRepoRoot();
   const start = resolve(repoRoot, entry);
   const previous = new Map<string, string | null>([[start, null]]);
   const queue = [start];
@@ -112,7 +113,7 @@ test("known excluded provider skips the dynamic runtime import", async () => {
   let importCount = 0;
   setGuardrailsRuntimeModuleLoaderForTests(async () => {
     importCount += 1;
-    return import("../src/guardrails/runtime");
+    return import("../../src/guardrails/runtime");
   });
 
   expect(await leaseCapturedGuardrailsRuntimeSnapshot(
@@ -137,7 +138,7 @@ test("unknown or selected provider remains fail-safe protected", async () => {
   let importCount = 0;
   setGuardrailsRuntimeModuleLoaderForTests(async () => {
     importCount += 1;
-    return import("../src/guardrails/runtime");
+    return import("../../src/guardrails/runtime");
   });
 
   expect(guardrailsPolicyProtectsProvider(captured, undefined)).toBe(true);
@@ -176,7 +177,7 @@ test("Guardrails admission keeps one policy generation across the first async im
   });
   setGuardrailsRuntimeModuleLoaderForTests(async () => {
     await importGate;
-    return import("../src/guardrails/runtime");
+    return import("../../src/guardrails/runtime");
   });
 
   const pending = leaseActiveGuardrailsRuntimeSnapshot(config);

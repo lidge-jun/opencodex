@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { prepareGuardrailsLoopMessages } from "../src/guardrails/loop-messages";
-import { clearGuardrailsTelemetryForTests, guardrailsActivity } from "../src/guardrails/telemetry";
-import { prepareGuardrailsTurn, type GuardrailsTurn } from "../src/guardrails/turn";
-import type { OcxConfig, OcxMessage } from "../src/types";
+import { prepareGuardrailsLoopMessages } from "../../src/guardrails/loop-messages";
+import { clearGuardrailsTelemetryForTests, guardrailsActivity } from "../../src/guardrails/telemetry";
+import { prepareGuardrailsTurn, type GuardrailsTurn } from "../../src/guardrails/turn";
+import type { OcxConfig, OcxMessage } from "../../src/types";
 
 const INITIAL_SECRET = "sk_live_abcdefghijklmnopqrstuvwx";
 const LATE_SECRET = "sk_live_zyxwvutsrqponmlkjihgfedc";
