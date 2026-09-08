@@ -530,10 +530,25 @@ describe.skipIf(!goAvailable || goCLI === null)(
         removeTreeWithRetry(home);
       }
     });
+    // Lifecycle command surfaces flipped in issue #53. `service status`, the
+    // codex-shim read surface, and the ensure/restart autostart-disabled refusal
+    // dispatch natively in the Go binary now, so these rows are a real
+    // differential against the TypeScript implementation. The rows below them
+    // remain TypeScript-owned seams (documented as such) until each carries a
+    // platform oracle; tray is Windows-only and has no Linux oracle.
     test.each([
       { args: ["service", "status"] },
-      { args: ["service", "not-a-command"] },
       { args: ["codex-shim", "status"] },
+      { args: ["codex-shim"] },
+    ])(
+      "diffs Go-owned lifecycle read output and exit code for $args",
+      ({ args }) => {
+        testHome = mkdtempSync(join(tmpdir(), "ocx-go-cli-parity-"));
+        expectParity(args);
+      },
+    );
+    test.each([
+      { args: ["service", "not-a-command"] },
       { args: ["codex-shim", "not-a-command"] },
       { args: ["tray", "status"] },
       { args: ["tray", "not-a-command"] },
@@ -541,6 +556,34 @@ describe.skipIf(!goAvailable || goCLI === null)(
       "diffs TypeScript-owned lifecycle command output and exit code for $args",
       ({ args }) => {
         testHome = mkdtempSync(join(tmpdir(), "ocx-go-cli-parity-"));
+        expectParity(args);
+      },
+    );
+    // ensure/restart flip to Go-owned for the deterministic no-side-effect
+    // refusal: Codex autostart disabled means the command must not start or
+    // touch a proxy. The seed carries a dead port so restart's not-live probe
+    // never finds a host proxy; the enabled branches stay TypeScript-owned until
+    // an oracle can exercise real spawn/codex mutations.
+    test.each([{ args: ["ensure"] }, { args: ["restart"] }])(
+      "diffs Go-owned %s autostart-disabled refusal output and exit code",
+      ({ args }) => {
+        testHome = mkdtempSync(join(tmpdir(), "ocx-go-cli-parity-"));
+        writeFileSync(
+          join(testHome, "config.json"),
+          JSON.stringify({
+            port: 42137,
+            providers: {
+              fixture: {
+                adapter: "openai-chat",
+                baseUrl: "https://example.test/v1",
+                apiKey: "secret",
+                defaultModel: "m",
+              },
+            },
+            defaultProvider: "fixture",
+            codexAutoStart: false,
+          }),
+        );
         expectParity(args);
       },
     );
@@ -562,6 +605,10 @@ describe.skipIf(!goAvailable || goCLI === null)(
       { args: ["service", "--help"] },
       { args: ["help", "codex-shim"] },
       { args: ["codex-shim", "--help"] },
+      { args: ["help", "ensure"] },
+      { args: ["ensure", "--help"] },
+      { args: ["help", "restart"] },
+      { args: ["restart", "--help"] },
     ])("diffs lifecycle help contracts for $args", ({ args }) => {
       testHome = mkdtempSync(join(tmpdir(), "ocx-go-cli-parity-"));
       expectParity(args);

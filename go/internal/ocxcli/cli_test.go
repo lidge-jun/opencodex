@@ -200,8 +200,12 @@ func TestOwnershipMapMatchesDispatch(t *testing.T) {
 	for _, command := range Commands {
 		for _, name := range append([]string{command.Name}, command.Aliases...) {
 			// Lifecycle commands own a real listener/process and intentionally block
-			// until a signal; ownership is asserted above without launching them.
-			if name == "start" || name == "stop" {
+			// until a signal (start/stop) or spawn/supervise a detached proxy and
+			// touch Codex state (ensure/restart). Running their bare argv in this
+			// unit test would launch real processes against the host home; their
+			// ownership rows are asserted by OwnershipFor/Commands and by focused
+			// tests below without launching them.
+			if name == "start" || name == "stop" || name == "ensure" || name == "restart" {
 				continue
 			}
 			t.Run(name, func(t *testing.T) {
@@ -477,13 +481,13 @@ func TestLifecycleDelegateFailureIsReported(t *testing.T) {
 	var out, stderr bytes.Buffer
 	deps := depsFor(RuntimeState{}, &out, &stderr)
 	deps.Delegate = func([]string) (int, error) { return 0, errors.New("owner unavailable") }
-	if got := Run([]string{"service", "status"}, deps); got != ExitFailure || stderr.String() != "owner unavailable\n" {
+	if got := Run([]string{"service", "install"}, deps); got != ExitFailure || stderr.String() != "owner unavailable\n" {
 		t.Fatalf("delegate failure = code %d stderr %q", got, stderr.String())
 	}
 }
 
 func TestTypeScriptOwnedFamilyHelpDelegates(t *testing.T) {
-	for _, command := range []string{"codex-shim", "tray"} {
+	for _, command := range []string{"tray"} {
 		t.Run(command, func(t *testing.T) {
 			var out, stderr bytes.Buffer
 			var received []string
@@ -497,6 +501,90 @@ func TestTypeScriptOwnedFamilyHelpDelegates(t *testing.T) {
 			}
 			if want := []string{command, "--help"}; !slices.Equal(received, want) {
 				t.Fatalf("delegated argv = %#v, want %#v", received, want)
+			}
+		})
+	}
+}
+
+func TestNativeLifecycleHelpIsNative(t *testing.T) {
+	for command, want := range map[string]string{
+		"codex-shim": codexShimHelp,
+		"ensure":     ensureHelp,
+		"restart":    restartHelp,
+	} {
+		t.Run(command, func(t *testing.T) {
+			var out, stderr bytes.Buffer
+			deps := depsFor(RuntimeState{}, &out, &stderr)
+			deps.Delegate = func([]string) (int, error) { t.Fatal("lifecycle help delegated"); return 0, nil }
+			if got := Run([]string{"help", command}, deps); got != ExitOK {
+				t.Fatalf("help exit = %d stderr %q", got, stderr.String())
+			}
+			if out.String() != want {
+				t.Fatalf("help = %q, want %q", out.String(), want)
+			}
+		})
+	}
+}
+
+func TestCodexShimBareUsageIsNative(t *testing.T) {
+	var out, stderr bytes.Buffer
+	deps := depsFor(RuntimeState{}, &out, &stderr)
+	deps.Delegate = func([]string) (int, error) { t.Fatal("bare codex-shim delegated"); return 0, nil }
+	if got := Run([]string{"codex-shim"}, deps); got != ExitFailure {
+		t.Fatalf("bare exit = %d", got)
+	}
+	if want := "Usage: ocx codex-shim <install|status|uninstall|remove>\n"; stderr.String() != want {
+		t.Fatalf("stderr = %q, want %q", stderr.String(), want)
+	}
+	if out.String() != "" {
+		t.Fatalf("stdout = %q, want empty", out.String())
+	}
+}
+
+// The ensure/restart autostart-disabled refusal is the Go-owned native branch
+// (issue #53). A disconnected standalone home with codexAutoStart:false must
+// refuse natively without delegating or touching a proxy.
+func TestEnsureAndRestartDisabledRefusalIsNative(t *testing.T) {
+	for _, command := range []string{"ensure", "restart"} {
+		t.Run(command, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("OPENCODEX_HOME", dir)
+			configPath := filepath.Join(dir, "config.json")
+			if err := os.WriteFile(configPath, []byte(`{"port":42137,"providers":{"fixture":{"adapter":"openai-chat","baseUrl":"https://example.test/v1"}},"defaultProvider":"fixture","codexAutoStart":false}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var out, stderr bytes.Buffer
+			deps := depsFor(RuntimeState{}, &out, &stderr)
+			deps.Delegate = func([]string) (int, error) { t.Fatal(command + " refused branch delegated"); return 0, nil }
+			if got := Run([]string{command}, deps); got != ExitOK {
+				t.Fatalf("%s exit = %d stderr=%q", command, got, stderr.String())
+			}
+			if out.String() == "" {
+				t.Fatalf("%s stdout = %q", command, out.String())
+			}
+		})
+	}
+}
+
+// A home configured as a client (or carrying client state / a non-standalone
+// runtimeRole) never starts a local proxy; the TypeScript dispatch prints the
+// authoritative client-mode error, so ensure/restart must delegate there even
+// when autostart is disabled.
+func TestEnsureAndRestartClientHomeDelegates(t *testing.T) {
+	for _, command := range []string{"ensure", "restart"} {
+		t.Run(command, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("OPENCODEX_HOME", dir)
+			configPath := filepath.Join(dir, "config.json")
+			if err := os.WriteFile(configPath, []byte(`{"runtimeRole":"client","client":{"hubUrl":"https://hub.example.test"},"codexAutoStart":false}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var out, stderr bytes.Buffer
+			var received []string
+			deps := depsFor(RuntimeState{}, &out, &stderr)
+			deps.Delegate = func(args []string) (int, error) { received = append([]string(nil), args...); return 17, nil }
+			if got := Run([]string{command}, deps); got != 17 || !slices.Equal(received, []string{command}) {
+				t.Fatalf("%s client home code=%d argv=%#v", command, got, received)
 			}
 		})
 	}

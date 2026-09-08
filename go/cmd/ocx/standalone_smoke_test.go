@@ -30,13 +30,23 @@ func TestStandaloneBinaryServesEmbeddedDashboardWithoutCheckout(t *testing.T) {
 			t.Fatalf("%s: %v %s", args, err, output)
 		}
 	}
-	// The lifecycle owner has intentionally not moved in #40. A standalone binary
-	// must fail with a repairable instruction instead of assuming a checkout/Bun.
+	// service status flipped to Go-owned in #53: a standalone binary now runs
+	// the read natively (no checkout/Bun needed) and reports the registration
+	// state of the isolated test HOME. The remaining TS-owned service verbs
+	// (install/start/stop/...) still need the TypeScript lifecycle owner, so a
+	// standalone binary must fail with a repairable instruction instead of
+	// assuming a checkout/Bun.
 	service := exec.Command(binary, "service", "status")
 	service.Dir, service.Env = clean, env
 	output, err := service.CombinedOutput()
-	if err == nil || !strings.Contains(string(output), "OCX_TYPESCRIPT_CLI") {
+	if err != nil || !strings.Contains(string(output), "❌ ") || !strings.Contains(string(output), "Diagnostics: logs: ") {
 		t.Fatalf("service status error = %v output=%q", err, output)
+	}
+	serviceInstall := exec.Command(binary, "service", "install")
+	serviceInstall.Dir, serviceInstall.Env = clean, env
+	output, err = serviceInstall.CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "OCX_TYPESCRIPT_CLI") {
+		t.Fatalf("service install error = %v output=%q", err, output)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
