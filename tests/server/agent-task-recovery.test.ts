@@ -527,7 +527,8 @@ describe("agent task recovery (opt-in, default off)", () => {
       "guardrails-recovery-thread",
     );
     expect(retainGuardrailsContinuation("resp_routed", scope)).toBeUndefined();
-  });
+    // Cold RE2 compilation is part of this real-registry integration, not its assertions.
+  }, 15_000);
 
   test("charges namespaced tool bridge maps only once across recovery reparse", async () => {
     const recoveryRequests: Request[] = [];

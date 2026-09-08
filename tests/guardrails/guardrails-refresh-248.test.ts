@@ -10,6 +10,7 @@ import { startServer } from "../../src/server";
 import { resetAgentTaskRecoveryState } from "../../src/server/responses/agent-task-recovery";
 import { codexHeaders, encryptedInput, fakeChatGptJwt, post, providerResponse, recoverySse, routedConfig } from "../helpers/agent-task-recovery";
 import { INTERNAL_DEADLINE_MS, SERVER_BUDGET_MS } from "../helpers/test-budget";
+import { clearComboTargetCooldowns } from "../../src/combos/failover";
 import type { OcxConfig } from "../../src/types";
 
 setDefaultTimeout(15_000);
@@ -24,6 +25,7 @@ afterEach(() => {
   clearCompactHandoffRoutesForTests();
   clearResponseStateForTests();
   resetAgentTaskRecoveryState();
+  clearComboTargetCooldowns();
 });
 
 function config(): OcxConfig {
@@ -133,13 +135,21 @@ test.each(["enforced", "excluded"] as const)("native compact 404 retains capture
   if (mode === "enforced") expect(result).not.toContain(SECRET);
 });
 
-test("cached encrypted-task recovery is rescanned before every routed send", async () => {
+test.each(["xai/grok-4.5", "combo/recovery", "combo/native-recovery"])("cached encrypted-task recovery is rescanned before every %s send", async model => {
   const cfg = routedConfig();
+  cfg.combos = { recovery: { strategy: "failover", targets: [{ provider: "xai", model: "grok-4.5" }] } };
+  cfg.combos["native-recovery"] = { strategy: "failover", targets: [
+    { provider: "openai", model: "gpt-5.5" }, { provider: "xai", model: "grok-4.5" },
+  ] };
   cfg.guardrails = { enabled: true, mode: "enforce", failurePolicy: "block" };
   const bodies: string[] = [];
   let recoveries = 0;
+  const headers = codexHeaders();
   globalThis.fetch = (async (input, init) => {
     if (String(input).includes("chatgpt.com")) {
+      if (!String(init?.body).includes("capture_assignment")) {
+        return Response.json({ error: { message: "synthetic native failure" } }, { status: 503 });
+      }
       recoveries++;
       return new Response(recoverySse(`Use ${SECRET}`), { headers: { "content-type": "text/event-stream" } });
     }
@@ -147,7 +157,7 @@ test("cached encrypted-task recovery is rescanned before every routed send", asy
     return providerResponse();
   }) as typeof fetch;
   for (let attempt = 0; attempt < 2; attempt++) {
-    const response = await post(cfg, "xai/grok-4.5", encryptedInput(), codexHeaders());
+    const response = await post(cfg, model, encryptedInput(), headers);
     expect(response.status).toBe(200);
     await response.text();
   }
@@ -156,6 +166,36 @@ test("cached encrypted-task recovery is rescanned before every routed send", asy
   for (const body of bodies) {
     expect(body).toContain(PLACEHOLDER);
     expect(body).not.toContain(SECRET);
+  }
+});
+
+test.each(["block", "passthrough"] as const)("combo recovered-task capacity failure honors %s without partial masking", async failurePolicy => {
+  const cfg = routedConfig();
+  cfg.guardrails = { enabled: true, mode: "enforce", failurePolicy };
+  cfg.combos = { recovery: { strategy: "failover", targets: [{ provider: "xai", model: "grok-4.5" }] } };
+  const bodies: string[] = [];
+  globalThis.fetch = (async (input, init) => {
+    if (String(input).includes("chatgpt.com")) {
+      return new Response(recoverySse("r".repeat(140 * 1024)), { headers: { "content-type": "text/event-stream" } });
+    }
+    bodies.push(String(init?.body));
+    return providerResponse();
+  }) as typeof fetch;
+  const response = await post(cfg, "combo/recovery", [
+    { type: "message", role: "user", content: [{ type: "input_text", text: SECRET }] },
+    ...encryptedInput(),
+  ], codexHeaders());
+  const text = await response.text();
+  if (failurePolicy === "block") {
+    expect(response.status).toBe(413);
+    expect(text).toContain("guardrails_capacity_exceeded");
+    expect(text).not.toContain(SECRET);
+    expect(bodies).toHaveLength(0);
+  } else {
+    expect(response.status).toBe(200);
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toContain(SECRET);
+    expect(bodies[0]).not.toContain(PLACEHOLDER);
   }
 });
 

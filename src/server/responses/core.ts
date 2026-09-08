@@ -352,6 +352,7 @@ import {
   maskLocalCompactionArtifacts,
   prepareGuardrailsTurn,
   rescanGuardrailsResponsesBody,
+  restoreGuardrailsResponsesBody,
   restoreGuardrailsResponsesParsedRequest,
   type GuardrailsTurn,
 } from "../../guardrails/turn";
@@ -2592,7 +2593,7 @@ export async function handleComboResponses(
   // continuation that only references prior images still fails closed when
   // imageInput is disabled (and so targets see the full replayed input).
   const inboundClientThreadId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
-  const body = options.comboBodyPrepared
+  let body = options.comboBodyPrepared
     ? rawBody
     : expandPreviousResponseInput(rawBody, inboundClientThreadId);
   const scopeMismatch = !options.comboBodyPrepared && previousResponseScopeMismatch(body);
@@ -2670,6 +2671,7 @@ export async function handleComboResponses(
     comboPayloadReadable || !unreadableEncryptedAgentTask || canDecryptUnreadableAgentTask(target);
   let encryptedTaskRecoveryAttempted = false;
   let recoveryFailureReason: AgentTaskRecoveryFailureReason | undefined;
+  let guardrailsRecoveryFailure: Response | undefined;
   let storedPool401ReplayDispatched = false;
   const recoverUnreadableEncryptedTask = async (): Promise<boolean> => {
     if (encryptedTaskRecoveryAttempted) return false;
@@ -2717,6 +2719,33 @@ export async function handleComboResponses(
       );
       return false;
     }
+    if (options.guardrailsTurn) {
+      const turn = options.guardrailsTurn;
+      const started = performance.now();
+      try {
+        const rescanned = rescanGuardrailsResponsesBody(body, turn);
+        body = rescanned.body;
+        options.guardrailsTurn = rescanned.turn;
+        recordGuardrailsTurnDelta("responses", rescanned.turn, turn.findings.length, performance.now() - started);
+      } catch (error) {
+        const decision = decideAndRecordGuardrailsLateFailure({
+          error, inboundProtocol: "responses", latencyMs: performance.now() - started, turn,
+        });
+        if (decision.kind === "block") {
+          guardrailsRecoveryFailure = formatErrorResponse(
+            decision.status,
+            decision.code,
+            "Guardrails could not safely process the recovered combo task",
+          );
+          return false;
+        }
+        body = restoreGuardrailsResponsesBody(body, turn);
+        options.guardrailsTurn = undefined;
+        options.guardrailsPassthroughFailure = true;
+      }
+    }
+    markBodyNonPersistable(body);
+    comboReplaySnapshot.sourceBody = body;
     comboPayloadReadable = true;
     comboReplaySnapshot.recoveredPlaintext = true;
     return true;
@@ -2750,6 +2779,7 @@ export async function handleComboResponses(
         : comboUnavailable(comboId);
     }
     if (!(await recoverUnreadableEncryptedTask())) {
+      if (guardrailsRecoveryFailure) return guardrailsRecoveryFailure;
       return options.abortSignal?.aborted
         ? clientCancelledResponse()
         : unreadableEncryptedAgentTaskResponse(recoveryFailureReason);
@@ -2999,6 +3029,10 @@ export async function handleComboResponses(
           pick = recoveredTarget;
           continue;
         }
+        if (guardrailsRecoveryFailure) {
+          void lastFailure.body?.cancel().catch(() => {});
+          return guardrailsRecoveryFailure;
+        }
         if (options.abortSignal?.aborted) return clientCancelledResponse();
       }
       // Keep the spent Pool budget sticky even after a recovered routed child:
@@ -3053,6 +3087,10 @@ export async function handleComboResponses(
         if (recoveredTarget && await recoverUnreadableEncryptedTask()) {
           pick = recoveredTarget;
           continue;
+        }
+        if (guardrailsRecoveryFailure) {
+          void lastFailure.body?.cancel().catch(() => {});
+          return guardrailsRecoveryFailure;
         }
       }
       // Waiting or recovery may have observed cancellation after the check above.

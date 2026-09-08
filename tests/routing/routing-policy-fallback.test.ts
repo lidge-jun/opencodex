@@ -363,7 +363,8 @@ describe("policy candidate fallback", () => {
     expect(upstreamBodies.every(body => body.includes("<STRIPE_ACCESS_TOKEN_1>"))).toBe(true);
     expect(upstreamBodies.every(body => !body.includes(secret))).toBe(true);
     expect(await response.text()).toContain(secret);
-  });
+    // This file's first protected turn compiles the full RE2 registry on cold workers.
+  }, 15_000);
 
   test("excluded policy fallback blocks before a protected candidate receives raw input", async () => {
     const secret = "sk_live_abcdefghijklmnopqrstuvwx";
