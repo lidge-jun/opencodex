@@ -79,6 +79,8 @@ export function reconcileMainCodexAccountRuntimeState(): boolean {
 /**
  * Rebuild the memory-only policy binding from a startup-owned, recovered auth path.
  * The caller holds the native owner and exclusive claim; an incoming bearer is never evidence.
+ * A failed read creates no binding and cannot revoke a prior verified observation or its block.
+ * Only a valid replacement observation or confirmed account transition supersedes that evidence.
  */
 export function initializeMainAccountPolicyBinding(authPath: string): boolean {
   const result = readCodexTokensResult(authPath);

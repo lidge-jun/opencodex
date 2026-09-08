@@ -167,6 +167,9 @@ during that initialization; stored Pool alternatives remain eligible. Foreign/un
 paths neither initialize the binding nor trigger an ownership reprobe from caller-owned admission.
 A new listener with protection enabled rearms the same guarded path on an existing ready lifecycle,
 including when the physical credential was replaced after the earlier listener started.
+Failed initialization creates no new binding. A previously verified same-process binding and its
+safety state remain until a valid replacement observation or confirmed account transition; malformed
+or conflicting input alone is not replacement evidence.
 
 This is not a reservation of the last 1%: already-admitted, parallel, unmatched-keyring, or direct
 upstream traffic can still reach exhaustion. While blocked, main cannot use Luna reserve either.

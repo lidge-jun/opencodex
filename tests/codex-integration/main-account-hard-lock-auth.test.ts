@@ -143,7 +143,7 @@ afterEach(() => {
 describe("main quota policy at native admission", () => {
   test.each(["owned-99", "owned-98", "foreign", "unknown", "recovery", "second-listener",
     "invalid-access-token", "invalid-account-id", "invalid-id-token", "mismatched-identity", "renewed-listener",
-    "stage-retry", "manual-recovery", "stale-sweep"] as const)(
+    "stage-retry", "manual-recovery", "stale-sweep", "retained-unknown-binding"] as const)(
     "fresh startup restores durable main policy only after owned recovery (%s)", scenario => {
       const restoredId = scenario === "recovery" ? "hard-lock-recovered-main" : accountId;
       const restoredBearer = `header.${Buffer.from(JSON.stringify({ exp: tokenExpiry,
@@ -184,6 +184,7 @@ describe("main quota policy at native admission", () => {
       expect(result.listeners[0].tokenReads).toBe(0);
       expect(result.unexpectedNetwork).toEqual([]);
       expect(result.policyReadsPinned).toBe(true);
+      expect(result.beforePrimaryUpstreamCalls).toBe(scenario === "retained-unknown-binding" ? 2 : 0);
       const unowned = scenario === "foreign" || scenario === "unknown";
       const unverified = scenario.startsWith("invalid-") || scenario === "mismatched-identity";
       if (unowned) {
@@ -237,6 +238,16 @@ describe("main quota policy at native admission", () => {
         expect(result.laterRecovery.pending.gate).toMatchObject({ status: "blocked", reason: "recovery-pending" });
         expect(result.laterRecovery.admission).toEqual({ admitted: false, error: "CodexMainProfileDrainingError" });
         expect(result.originalResponse.status).toBe(200);
+      }
+      if (scenario === "retained-unknown-binding") {
+        expect(result.retainedUnknown.map((entry: { kind: string }) => entry.kind)).toEqual(["malformed", "conflicting"]);
+        for (const entry of result.retainedUnknown) {
+          expect(entry.observed).toMatchObject({ matched: true, policy: quota });
+          expect(entry.main).toMatchObject({ status: 429, hardLockError: true });
+          expect(entry.other.status).toBe(200);
+        }
+        expect(result.validReplacement).toMatchObject({ oldMatched: false, newMatched: true, policy: null,
+          old: { status: 200, hardLockError: false } });
       }
     }, SPAWN_BUDGET_MS,
   );

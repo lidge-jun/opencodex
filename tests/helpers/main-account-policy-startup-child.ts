@@ -5,7 +5,7 @@ import { join } from "node:path";
 interface Fixture {
   scenario: "owned-99" | "owned-98" | "foreign" | "unknown" | "recovery" | "second-listener"
     | "invalid-access-token" | "invalid-account-id" | "invalid-id-token" | "mismatched-identity" | "renewed-listener"
-    | "stage-retry" | "manual-recovery" | "stale-sweep";
+    | "stage-retry" | "manual-recovery" | "stale-sweep" | "retained-unknown-binding";
   accountId: string;
   bearer: string;
   originalAccountId: string;
@@ -182,6 +182,11 @@ try {
   const firstAdmission = await admit();
   let heldRecovery: Record<string, unknown> | undefined;
   let laterRecovery: Record<string, unknown> | undefined;
+  let retainedUnknown: Array<Record<string, unknown>> | undefined;
+  let validReplacement: Record<string, unknown> | undefined;
+  const otherAccountId = "hard-lock-verified-other";
+  const otherBearer = `header.${Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 86_400,
+    "https://api.openai.com/auth": { chatgpt_account_id: otherAccountId } })).toString("base64url")}.signature`;
   if (fixture.scenario === "recovery") {
     await recoveryEntered;
     heldRecovery = {
@@ -239,16 +244,38 @@ try {
     laterRecovery = { pending: observe(), admission: await admit() };
     bindingSweep.release();
   }
+  if (fixture.scenario === "retained-unknown-binding") {
+    await waitForNativeMainStartupGate();
+    retainedUnknown = [];
+    for (const kind of ["malformed", "conflicting"] as const) {
+      writeFileSync(manager.context.authPath, kind === "malformed" ? "{" : JSON.stringify({ tokens: {
+        access_token: otherBearer, account_id: fixture.accountId,
+      } }));
+      servers.push(start());
+      await waitForNativeMainStartupGate();
+      retainedUnknown.push({ kind, observed: observe(), main: await wire(),
+        other: await wire(otherBearer, otherAccountId) });
+    }
+  }
   const settled = await waitForNativeMainStartupGate();
   const after = observe();
   const settledAdmission = await admit();
+  const beforePrimaryUpstreamCalls = upstreamCalls;
   const response = await wire();
-  const primaryUpstreamCalls = upstreamCalls;
+  const primaryUpstreamCalls = upstreamCalls - beforePrimaryUpstreamCalls;
   const originalResponse = ["recovery", "renewed-listener", "manual-recovery", "stale-sweep"].includes(fixture.scenario)
     ? await wire(fixture.originalBearer, fixture.originalAccountId) : undefined;
+  if (fixture.scenario === "retained-unknown-binding") {
+    writeFileSync(manager.context.authPath, JSON.stringify({ tokens: { access_token: otherBearer, account_id: otherAccountId } }));
+    servers.push(start());
+    await waitForNativeMainStartupGate();
+    validReplacement = { oldMatched: matchesMainQuotaCredential(fixture.bearer, fixture.accountId),
+      newMatched: matchesMainQuotaCredential(otherBearer, otherAccountId), policy: getMainPolicyQuota(), old: await wire() };
+  }
   console.log("POLICY_STARTUP_RESULT=" + JSON.stringify({
     scenario: fixture.scenario, before, listeners, firstServerSettled, firstAdmission, heldRecovery, laterRecovery,
-    settled, after, settledAdmission, response, primaryUpstreamCalls, originalResponse,
+    retainedUnknown, validReplacement,
+    settled, after, settledAdmission, response, beforePrimaryUpstreamCalls, primaryUpstreamCalls, originalResponse,
     unexpectedNetwork,
     policyReadsPinned: tokenReads.every(path => path === manager.context.authPath),
   }));
