@@ -289,22 +289,22 @@ describe("vision description cache and per-turn cap", () => {
     expect(textParts(plaintextRequest).join("\n")).toContain("sk_li");
   });
 
-  test("bounds oversized vision output before invoking the Guardrails sanitizer", async () => {
+  test("bounds oversized routed vision output before invoking the Guardrails sanitizer", async () => {
     const oversized = "x".repeat(MAX_GUARDRAILS_SCANNABLE_LEAF_BYTES * 2);
     let sanitizerBytes = 0;
-    globalThis.fetch = (async () => anthropicSse(oversized)) as typeof fetch;
+    globalThis.fetch = (async () => Response.json({
+      choices: [{ message: { content: oversized } }],
+    })) as typeof fetch;
     const protectedRequest = parsed([{ type: "input_image", image_url: DATA_A }]);
     const plaintextRequest = structuredClone(protectedRequest);
 
     await describeImagesInPlace(
       protectedRequest,
       plan({
-        backend: "anthropic",
-        forwardProvider: undefined,
-        anthropicSidecar: {
-          providerName: "anthropic-bounded-sanitizer",
-          provider: anthropicProvider,
-        },
+        backend: "routed",
+        forwardSidecar: undefined,
+        routedModel: "routed/vision",
+        routedConfig: { port: 0 },
       }),
       new Headers({ authorization: "Bearer test" }),
       undefined,
@@ -320,6 +320,42 @@ describe("vision description cache and per-turn cap", () => {
     expect(sanitizerBytes).toBe(MAX_GUARDRAILS_SCANNABLE_LEAF_BYTES);
     expect(textParts(protectedRequest).join("\n")).toContain("…[description truncated]");
     expect(textParts(plaintextRequest).join("\n")).toContain("…[description truncated]");
+  });
+
+  test("Anthropic's earlier response bound reaches Guardrails as a sanitized error", async () => {
+    const oversized = "x".repeat(MAX_GUARDRAILS_SCANNABLE_LEAF_BYTES * 2);
+    const sanitizerInputs: string[] = [];
+    globalThis.fetch = (async () => anthropicSse(oversized)) as typeof fetch;
+    const protectedRequest = parsed([{ type: "input_image", image_url: DATA_A }]);
+    const plaintextRequest = structuredClone(protectedRequest);
+
+    await describeImagesInPlace(
+      protectedRequest,
+      plan({
+        backend: "anthropic",
+        forwardSidecar: undefined,
+        anthropicSidecar: {
+          providerName: "anthropic-bounded-sanitizer",
+          provider: anthropicProvider,
+        },
+      }),
+      new Headers({ authorization: "Bearer test" }),
+      undefined,
+      undefined,
+      undefined,
+      text => {
+        sanitizerInputs.push(text);
+        return "<VISION_ERROR_1>";
+      },
+      plaintextRequest,
+    );
+
+    expect(sanitizerInputs).toEqual(["anthropic vision sidecar produced no description"]);
+    expect(textParts(protectedRequest).join("\n")).toContain("<VISION_ERROR_1>");
+    expect(textParts(plaintextRequest).join("\n")).toContain(sanitizerInputs[0]!);
+    for (const request of [protectedRequest, plaintextRequest]) {
+      expect(textParts(request).join("\n")).not.toContain("x".repeat(50));
+    }
   });
 
   test("sanitizes vision-sidecar error text while preserving the plaintext rollback twin", async () => {

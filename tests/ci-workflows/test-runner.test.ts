@@ -1,6 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, posix, win32 } from "node:path";
 import {
@@ -344,6 +344,22 @@ describe("bun test argv", () => {
       expect(lane.args).toContain("--parallel=1");
       expect(lane.args).not.toContain("--parallel=2");
       expect(lane.args).toContain("--only-failures");
+    }
+  });
+
+  test("cold Guardrails files stay covered exactly once outside the parallel lane", () => {
+    const files = readdirSync(repoPath("tests", "guardrails"))
+      .filter(file => file.endsWith(".test.ts"))
+      .map(file => `guardrails/${file}`);
+    files.push("images/loop.test.ts", "responses/responses-state.test.ts",
+      "routing/routing-policy-fallback.test.ts", "server/agent-task-recovery.test.ts",
+      "server/server-management-auth.test.ts", "web-search/web-search.test.ts");
+    const plan = resolveBunTestPlan([]);
+    for (const file of files) {
+      expect(plan[0]!.args.filter(arg => arg === `**/${basename(file)}`)).toHaveLength(1);
+      const lanes = plan.filter(lane => lane.args.includes(`./tests/${file}`));
+      expect(lanes).toHaveLength(1);
+      expect(lanes[0]!.args).toContain("--parallel=1");
     }
   });
 
