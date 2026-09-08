@@ -21,6 +21,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoRoot as resolveRepoRoot } from "../helpers/repo-root";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 import { INTERNAL_DEADLINE_MS } from "../helpers/test-budget";
+import { watchdogMs } from "../helpers/ci-watchdog";
 
 const repoRoot = resolveRepoRoot();
 const sandboxes: Sandbox[] = [];
@@ -367,11 +368,13 @@ for (const publisher of ["convergence", "retained"] as const) {
       port: 0,
       fetch: async request => {
         if (!new URL(request.url).pathname.endsWith("/models")) return new Response("not found", { status: 404 });
-        if (requests++ === 0) {
+        const first = requests++ === 0;
+        if (first) {
           writeFileSync(requested, "requested");
           while (!existsSync(release)) await Bun.sleep(5);
         }
-        return Response.json({ data: [{ id: "race-model" }] });
+        // Distinct snapshots make a stale publish observable in the final catalog.
+        return Response.json({ data: [{ id: first ? "race-model" : "newer-race-model" }] });
       },
     });
     const config = {
@@ -401,24 +404,30 @@ for (const publisher of ["convergence", "retained"] as const) {
       sandbox.children.add(sync);
       const syncResult = captureChildResult(sync);
 
-      await raceBarrier(syncResult, waitForPath(requested, INTERNAL_DEADLINE_MS));
+      // This real child imports the management route before reaching /models.
+      // Keep the CI startup floor, then leave room for the second publisher process.
+      await raceBarrier(syncResult, waitForPath(requested, watchdogMs(INTERNAL_DEADLINE_MS)));
       const published = await runPublisher(sandbox, publisher, config);
       if (published.exitCode !== 0) {
         throw new Error(`${publisher} publisher failed\nstdout=${published.stdout}\nstderr=${published.stderr}`);
       }
       const newer = readFileSync(catalogPath, "utf8");
       expect(newer).not.toBe(initial);
+      const newerSlugs = JSON.parse(newer).models.map((model: { slug: string }) => model.slug);
+      expect(newerSlugs).toContain("fixture/newer-race-model");
+      expect(newerSlugs).not.toContain("fixture/race-model");
 
       writeFileSync(release, "release");
       // Exercise the losing exit branch before the successful caller reads output.
       await sync.exited;
       const { exitCode, stdout, stderr } = await syncResult;
       expect({ exitCode, stdout, stderr }).toMatchObject({ exitCode: 0 });
+      expect(JSON.parse(stdout).status).toBe(200);
       expect(readFileSync(catalogPath, "utf8")).toBe(newer);
     } finally {
       provider.stop(true);
     }
-  }, SPAWN_BUDGET_MS);
+  }, SPAWN_BUDGET_MS * 2);
 }
 
 /**
