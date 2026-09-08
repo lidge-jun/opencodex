@@ -215,10 +215,13 @@ describe("web-search streamed-body progress collector", () => {
     let returned = false;
     const parser: ParseStream = async function* () {
       yield { type: "done", usage: { inputTokens: 1, outputTokens: 2 } };
-      await sleep(20);
+      await sleep(30);
       returned = true;
     };
-    const iterator = parseStreamWithProgress(new Response(chunkStream([])), parser, { inactivityTimeoutMs: 100 });
+    const iterator = parseStreamWithProgress(new Response(chunkStream([])), parser, {
+      inactivityTimeoutMs: 10,
+      postTerminalDrainTimeoutMs: 100,
+    });
     const next = await iterator.next();
     expect(returned).toBe(true);
     expect(next.value).toEqual({ type: "done", usage: { inputTokens: 1, outputTokens: 2 } });
