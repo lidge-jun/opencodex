@@ -11,6 +11,7 @@ package ocxcli
 
 import (
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"strings"
@@ -257,6 +258,8 @@ type accountDeps struct {
 	deps       Deps
 	configRaw  func() map[string]any
 	httpClient *http.Client
+	stdin      io.Reader
+	stdinIsTTY bool
 }
 
 func loadAccountConfigRaw() map[string]any {

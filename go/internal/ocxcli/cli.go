@@ -152,9 +152,11 @@ func OwnershipFor(args []string) (Ownership, bool) {
 		}
 		return TypeScriptOwned, true
 	}
-	// account keeps its TypeScript owner per subcommand: the API-routing
-	// subcommands below are Go-native, the rest stays with the TS owner until
-	// each subcommand carries its own oracle (issue #51).
+	// account keeps its TypeScript owner per subcommand: the API-routing,
+	// pool, and OAuth device-flow subcommands below are Go-native, the rest
+	// stays with the TS owner until each subcommand carries its own oracle
+	// (issue #51). Top-level `ocx login`/`ocx setup` are likewise still
+	// TypeScript-owned (interactive flows; no headless oracle).
 	if command.Name == "account" && len(args) > 1 {
 		if _, ok := accountRuntimeSubcommands[args[1]]; ok {
 			return GoOwned, true

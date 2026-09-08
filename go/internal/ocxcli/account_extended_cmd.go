@@ -49,10 +49,19 @@ func runAccount(args []string, deps Deps) int {
 		return runAccountRemove(rest, acc)
 	case "clear-cooldown":
 		return runAccountClearCooldown(rest, acc)
+	case "login", "reauth", "code", "cancel", "reset-credits":
+		// OAuth device flows against the management API (account-auth.ts):
+		// headless --code - / --no-wait paths are oracle-covered in
+		// go-cli-parity; the poll-until-settled browser flows run the same Go
+		// client with matching 2s cadence.
+		if code, ok := runAccountAuthCommand(sub, rest, acc); ok {
+			return code
+		}
+		return 1
 	default:
-		// account add-key/import/main/login/reauth/code/cancel/reset-credits
-		// stay TypeScript-owned: cli.go gates them before dispatch (they need
-		// stdin, the native-profile staging home, or the device-flow runtime).
+		// account add-key/import/main stay TypeScript-owned: they need piped
+		// stdin I/O shapes or the native CODEX_HOME staging home that have no
+		// Go byte-oracle yet. cli.go gates them before dispatch.
 		reportAccountUsage(acc, accountUsage)
 		return 1
 	}

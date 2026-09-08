@@ -17,7 +17,7 @@ function buildGoCLI(): string {
   const dir = mkdtempSync(join(tmpdir(), "ocx-go-cli-"));
   const binary = join(dir, process.platform === "win32" ? "ocx.exe" : "ocx");
   const result = Bun.spawnSync(["go", "build", "-o", binary, "./cmd/ocx"], { cwd: join(repoRoot, "go"), env: { ...process.env, CGO_ENABLED: "0" }, stdout: "pipe", stderr: "pipe" });
-  if (result.exitCode !== 0) throw new Error("go build ./cmd/ocx failed: " + new TextDecoder().decode(result.stderr));
+  if (result.exitCode !== 0) throw new Error(`go build ./cmd/ocx failed: ${new TextDecoder().decode(result.stderr)}`);
   return binary;
 }
 const goAvailable = goToolchainAvailable();
@@ -25,26 +25,51 @@ const goCLI = goAvailable ? buildGoCLI() : null;
 let testHome = "";
 let testServer: ReturnType<typeof Bun.serve> | undefined;
 type Result = { code: number; stdout: string; stderr: string };
-function runTs(args: string[], home = testHome): Result {
+function runTs(args: readonly string[], home = testHome): Result {
   const result = Bun.spawnSync([process.execPath, "src/cli/index.ts", ...args], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
   return { code: result.exitCode, stdout: new TextDecoder().decode(result.stdout), stderr: new TextDecoder().decode(result.stderr) };
 }
-function runGo(args: string[], home = testHome): Result {
+function runGo(args: readonly string[], home = testHome): Result {
   const result = Bun.spawnSync([goCLI!, ...args], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
   return { code: result.exitCode, stdout: new TextDecoder().decode(result.stdout), stderr: new TextDecoder().decode(result.stderr) };
 }
-async function runTsAsync(args: string[], home = testHome): Promise<Result> {
+async function runTsAsync(args: readonly string[], home = testHome): Promise<Result> {
   const child = Bun.spawn([process.execPath, "src/cli/index.ts", ...args], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
   return { code: await child.exited, stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text() };
 }
-async function runGoAsync(args: string[], home = testHome): Promise<Result> {
+async function runGoAsync(args: readonly string[], home = testHome): Promise<Result> {
   const child = Bun.spawn([goCLI!, ...args], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
   return { code: await child.exited, stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text() };
 }
-function expectParity(args: string[]): Result { const ts = runTs(args); const go = runGo(args); expect(go).toEqual(ts); return ts; }
+/** Async variant that pipes `input` (or empty, when null) to the child's stdin. */
+async function runTsAsyncInput(args: readonly string[], input: string | null, home = testHome): Promise<Result> {
+  const child = Bun.spawn([process.execPath, "src/cli/index.ts", ...args], { cwd: repoRoot, env: parityEnv(home), stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  if (input !== null) child.stdin.write(input);
+  child.stdin.end();
+  return { code: await child.exited, stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text() };
+}
+async function runGoAsyncInput(args: readonly string[], input: string | null, home = testHome): Promise<Result> {
+  const child = Bun.spawn([goCLI!, ...args], { cwd: repoRoot, env: parityEnv(home), stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  if (input !== null) child.stdin.write(input);
+  child.stdin.end();
+  return { code: await child.exited, stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text() };
+}
+/**
+ * A hermetic child env. The account-auth device-flow handlers import
+ * src/codex/paths.ts at module load, which resolves CODEX_HOME eagerly; the
+ * harness sandbox that CODEX_HOME points to can be reaped mid-suite (and is
+ * irrelevant to the stub-proxy flows under test), so drop it and let the
+ * default ~/.codex fall through exactly as it does for every other row.
+ */
+function parityEnv(home: string): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = { ...process.env, OPENCODEX_HOME: home };
+  delete env.CODEX_HOME;
+  return env;
+}
+function expectParity(args: readonly string[]): Result { const ts = runTs(args); const go = runGo(args); expect(go).toEqual(ts); return ts; }
 function normalizeHealthPid(result: Result): Result {
   if (!result.stdout.startsWith("Proxy healthy") && !result.stdout.startsWith("{\"ok\":true")) return result;
-  return { ...result, stdout: result.stdout.replace(/PID (?:null|\d+)/, "PID <pid>").replace(/\"pid\":(?:null|\d+)/, '"pid":<pid>') };
+  return { ...result, stdout: result.stdout.replace(/PID (?:null|\d+)/, "PID <pid>").replace(/"pid":(?:null|\d+)/, '"pid":<pid>') };
 }
 afterEach(async () => { testServer?.stop(true); testServer = undefined; delete process.env.OPENCODEX_HOME; if (testHome && existsSync(testHome)) removeTreeWithRetry(testHome); testHome = ""; });
 function startAttestedFixture(status: "ready" | "pending" | "failed"): void {
@@ -53,7 +78,9 @@ function startAttestedFixture(status: "ready" | "pending" | "failed"): void {
     const path = new URL(request.url).pathname;
     if (path === "/healthz") {
       const challenge = request.headers.get("x-opencodex-attestation-challenge") ?? "";
-      const headers = challenge ? { "x-opencodex-attestation-proof": createLocalAttestationProof(secret, challenge, process.pid, testServer!.port) } : {};
+      const headers = new Headers();
+
+      if (challenge) headers.set("x-opencodex-attestation-proof", createLocalAttestationProof(secret, challenge, process.pid as number, testServer!.port));
       return Response.json({ status: "ok", service: "opencodex", version: "2.42.0", uptime: 1, pid: process.pid, port: testServer!.port }, { headers });
     }
     if (path === "/readyz") return Response.json({ status, service: "opencodex", version: "2.42.0", uptime: 1, pid: process.pid, port: testServer!.port }, { status: status === "ready" ? 200 : 503 });
@@ -210,7 +237,9 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
       const path = new URL(request.url).pathname;
       if (path === "/healthz") {
         const challenge = request.headers.get("x-opencodex-attestation-challenge") ?? "";
-        const headers = challenge ? { "x-opencodex-attestation-proof": createLocalAttestationProof(secret, challenge, process.pid, testServer!.port) } : {};
+        const headers = new Headers();
+
+        if (challenge) headers.set("x-opencodex-attestation-proof", createLocalAttestationProof(secret, challenge, process.pid as number, testServer!.port));
         return Response.json({ status: "ok", service: "opencodex", version: "2.42.0", uptime: 1, pid: process.pid, port: testServer!.port }, { headers });
       }
       return new Response(payload, { status, headers: { "content-type": "application/json" } });
@@ -260,8 +289,8 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
   });
   test("diffs usage help in both spellings", () => {
     testHome = mkdtempSync(join(tmpdir(), "ocx-go-usage-parity-"));
-    expect(expectParity(["help", "usage"]));
-    expect(expectParity(["usage", "--help"]));
+    expect(expectParity(["help", "usage"])).toMatchObject({ code: 0, stderr: "" });
+    expect(expectParity(["usage", "--help"])).toMatchObject({ code: 0, stderr: "" });
   });
   test("diffs usage when no proxy is running", () => {
     testHome = mkdtempSync(join(tmpdir(), "ocx-go-usage-parity-"));
@@ -288,11 +317,11 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
     ...extra,
   });
   function writeAuthFixture(home: string, extra: Record<string, unknown> = {}): void {
-    writeFileSync(join(home, "auth.json"), authFixtureJSON(extra) + "\n");
+    writeFileSync(join(home, "auth.json"), `${authFixtureJSON(extra)}\n`);
   }
   // Both CLIs rewrite auth.json on a logout, so compare the byte state each
   // owner leaves behind from the identical fixture.
-  async function logoutParity(args: string[], extra: Record<string, unknown> = {}): Promise<Result> {
+  async function logoutParity(args: readonly string[], extra: Record<string, unknown> = {}): Promise<Result> {
     const tsHome = mkdtempSync(join(tmpdir(), "ocx-go-logout-ts-"));
     const goHome = mkdtempSync(join(tmpdir(), "ocx-go-logout-go-"));
     try {
@@ -426,7 +455,9 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
       const query = url.searchParams;
       if (path === "/healthz") {
         const challenge = request.headers.get("x-opencodex-attestation-challenge") ?? "";
-        const headers = challenge ? { "x-opencodex-attestation-proof": createLocalAttestationProof(secret, challenge, process.pid, testServer!.port) } : {};
+        const headers = new Headers();
+
+        if (challenge) headers.set("x-opencodex-attestation-proof", createLocalAttestationProof(secret, challenge, process.pid as number, testServer!.port));
         return Response.json({ status: "ok", service: "opencodex", version: "2.42.0", uptime: 1, pid: process.pid, port: testServer!.port }, { headers });
       }
       let body: Record<string, unknown> = {};
@@ -437,7 +468,7 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
         if (request.method === "DELETE") {
           const id = query.get("id") ?? "";
           store.codexAccounts = store.codexAccounts.filter(a => a.id !== id);
-          if (store.codexActiveId === id) store.codexActiveId = store.codexAccounts[0]?.id ?? null;
+          if (store.codexActiveId === id) store.codexActiveId = (store.codexAccounts[0]?.id as string | undefined) ?? null;
           return json({});
         }
         return json({ accounts: store.codexAccounts });
@@ -449,9 +480,9 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
         }
         return json({
           activeCodexAccountId: store.codexActiveId,
-          ...(store.autoSwitch !== null ? { autoSwitchThreshold: store.autoSwitch } : {}),
-          ...(store.strategyMode !== null ? { accountPoolStrategy: store.strategyMode } : {}),
-          ...(store.stickyLimit !== null ? { accountPoolStickyLimit: store.stickyLimit } : {}),
+          ...(store.autoSwitch === null ? {} : { autoSwitchThreshold: store.autoSwitch }),
+          ...(store.strategyMode === null ? {} : { accountPoolStrategy: store.strategyMode }),
+          ...(store.stickyLimit === null ? {} : { accountPoolStickyLimit: store.stickyLimit }),
         });
       }
       if (path === "/api/codex-auth/auto-switch") {
@@ -499,7 +530,7 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
         if (request.method === "DELETE") {
           const id = query.get("id") ?? "";
           pool.accounts = pool.accounts.filter(a => a.id !== id);
-          if (pool.activeId === id) pool.activeId = pool.accounts[0]?.id ?? null;
+          if (pool.activeId === id) pool.activeId = (pool.accounts[0]?.id as string | undefined) ?? null;
           return json({});
         }
         if (request.method === "PUT") {
@@ -536,7 +567,7 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
         if (request.method === "DELETE") {
           const id = query.get("id") ?? "";
           pool.keys = pool.keys.filter(k => k.id !== id);
-          if (pool.activeId === id) pool.activeId = pool.keys[0]?.id ?? null;
+          if (pool.activeId === id) pool.activeId = (pool.keys[0]?.id as string | undefined) ?? null;
           return json({});
         }
         return json({ keys: pool.keys, activeId: pool.activeId });
@@ -559,7 +590,7 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
     }});
     writeFileSync(join(testHome, "runtime-port.json"), JSON.stringify({ pid: process.pid, port: testServer.port, hostname: "127.0.0.1", attestationSecret: secret }));
   }
-  async function accountParity(args: string[], mutate?: (store: AccountStore) => void): Promise<Result> {
+  async function accountParity(args: readonly string[], mutate?: (store: AccountStore) => void): Promise<Result> {
     const boot = () => {
       const store = freshAccountStore();
       if (mutate) mutate(store);
@@ -701,5 +732,103 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
   ])("diffs account clear-cooldown output and exit code for $args", async ({ args }) => {
     const result = await accountParity(args);
     expect(result.code).toBeLessThanOrEqual(1);
+  });
+
+  // ---- ocx account OAuth device flows (issue #51 slice) ------------------
+  // account login/reauth/code/cancel/reset-credits are the headless device
+  // flows against the management proxy (src/cli/account-auth.ts) and are
+  // Go-owned. The success rows use `--code -` (a code piped on stdin, the
+  // documented secret-safe spelling) and `--no-wait` so no 2s poll loop runs;
+  // the fixture answers the login-start, code-submit, cancel and reset-credits
+  // routes and an attested /healthz. Each side boots its own fixture so the
+  // stdin byte stream and the response payloads are identical.
+  function startAuthFixture(login404 = false): void {
+    testHome = mkdtempSync(join(tmpdir(), "ocx-go-auth-parity-"));
+    writeFileSync(join(testHome, "config.json"), JSON.stringify({
+      defaultProvider: "openai",
+      providers: { openai: { adapter: "openai", baseUrl: "https://api.openai.com/v1", authMode: "codex" } },
+    }));
+    const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
+    testServer = Bun.serve({ port: 0, async fetch(request) {
+      const url = new URL(request.url);
+      const path = url.pathname;
+      if (path === "/healthz") {
+        const challenge = request.headers.get("x-opencodex-attestation-challenge") ?? "";
+        const headers = new Headers();
+
+        if (challenge) headers.set("x-opencodex-attestation-proof", createLocalAttestationProof(secret, challenge, process.pid as number, testServer!.port));
+        return Response.json({ status: "ok", service: "opencodex", version: "2.42.0", uptime: 1, pid: process.pid, port: testServer!.port }, { headers });
+      }
+      if (path === "/api/codex-auth/login") {
+        if (login404) return json({ error: "no such codex account pool", reason: "openai is not configured" }, 404);
+        return json({ url: "https://auth.openai.com/device?code=ABCD", deviceCode: "ABCD-EFGH", instructions: "Enter the code on the device page.", flowId: "flow-1" });
+      }
+      if (path === "/api/codex-auth/login/code") {
+        if (login404) return json({ error: "no such codex login flow" }, 404);
+        return json({ ok: true });
+      }
+      if (path === "/api/codex-auth/login/cancel") return json({ ok: true });
+      if (path === "/api/codex-auth/login-status") return json({ status: "pending" });
+      if (path === "/api/oauth/login") {
+        if (login404) return json({ error: "unknown oauth provider \"xai\"" }, 404);
+        return json({ url: "https://console.x.ai/login/callback", instructions: "Sign in at the console.", deviceCode: "XY-99", flowId: "xai-flow" });
+      }
+      if (path === "/api/oauth/login/code") {
+        if (login404) return json({ error: "no such oauth login flow" }, 404);
+        return json({ ok: true });
+      }
+      if (path === "/api/oauth/login/cancel") return json({ ok: true });
+      if (path === "/api/oauth/status") return json({ loggedIn: false });
+      if (path === "/api/codex-auth/reset-credits") return json({ ok: true, accountId: url.searchParams.get("accountId"), available: 2 });
+      if (path === "/api/codex-auth/reset-credits/consume") return json({ ok: true, consumed: 1, remaining: 1 });
+      return json({ error: `no fixture route ${request.method} ${path}` }, 404);
+    }});
+    writeFileSync(join(testHome, "runtime-port.json"), JSON.stringify({ pid: process.pid, port: testServer.port, hostname: "127.0.0.1", attestationSecret: secret }));
+  }
+  async function authFlowParity(args: readonly string[], input: string | null, login404 = false): Promise<Result> {
+    startAuthFixture(login404);
+    const ts = await runTsAsyncInput(args, input);
+    startAuthFixture(login404);
+    const go = await runGoAsyncInput(args, input);
+    expect(go).toEqual(ts);
+    return ts;
+  }
+  test.each([
+    { args: ["account", "login", "openai", "--code", "-", "--no-wait"], input: "SECRET-CODE" },
+    { args: ["account", "login", "openai", "--code", "-", "--no-wait", "--json"], input: "SECRET-CODE" },
+    { args: ["account", "reauth", "openai", "--code", "-", "--no-wait"], input: "SECRET-CODE" },
+    { args: ["account", "login", "xai", "--code", "-", "--no-wait"], input: "SECRET-CODE" },
+    { args: ["account", "login", "xai", "--code", "-", "--no-wait", "--json"], input: "SECRET-CODE" },
+    { args: ["account", "login", "openai", "--device", "--code", "-", "--no-wait", "--json"], input: "SECRET-CODE" },
+    { args: ["account", "code", "xai", "--code", "-"], input: "SECRET" },
+    { args: ["account", "code", "openai", "--flow", "f1", "--code", "-", "--json"], input: "SECRET" },
+    { args: ["account", "cancel", "xai"], input: null },
+    { args: ["account", "cancel", "openai", "--flow", "f1"], input: null },
+    { args: ["account", "reset-credits", "acct-x"], input: null },
+    { args: ["account", "reset-credits", "acct-x", "--json"], input: null },
+    { args: ["account", "reset-credits", "main", "--consume", "--yes", "--json"], input: null },
+  ])("diffs account device-flow success output and exit code for $args", async ({ args, input }) => {
+    const result = await authFlowParity(args, input as string | null);
+    expect(result.code).toBe(0);
+  });
+  test.each([
+    { args: ["account", "login", "xai", "--device"], reason: "--device unsupported" },
+    { args: ["account", "login"], reason: "missing provider" },
+    { args: ["account", "login", "xai", "--id", "acct1"], reason: "--id without --reauth" },
+    { args: ["account", "code"], reason: "missing provider" },
+    { args: ["account", "code", "xai"], reason: "empty code" },
+    { args: ["account", "code", "openai", "--flow", "f1"], reason: "empty code on codex flow" },
+    { args: ["account", "cancel", "xai", "extra"], reason: "unexpected argument" },
+    { args: ["account", "reset-credits", "main", "--consume"], reason: "consume without --yes" },
+  ])("diffs account device-flow usage errors for $args", async ({ args }) => {
+    const result = await authFlowParity(args, null);
+    expect(result).toMatchObject({ code: 2, stdout: "" });
+  });
+  test.each([
+    { args: ["account", "login", "openai", "--code", "-", "--no-wait", "--json"] },
+    { args: ["account", "code", "openai", "--flow", "f1", "--code", "-"] },
+  ])("diffs account device-flow runtime-api error handling for $args", async ({ args }) => {
+    const result = await authFlowParity(args, "SECRET-CODE", true);
+    expect(result).toMatchObject({ code: 4 });
   });
 });
