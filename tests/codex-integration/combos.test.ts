@@ -394,9 +394,9 @@ describe("combo request cloning", () => {
 
   test("force mode overrides only valid caller effort and resolves independently per target", () => {
     const raw = { model: "combo/x", reasoning: { effort: "medium", summary: "concise" } };
-    expect(concreteComboRequestBody(raw, target, "max", ["low", "high", "max"], "force").reasoning)
+    expect(concreteComboRequestBody(raw, target, "max", ["low", "high", "max"], "strict", "force").reasoning)
       .toEqual({ effort: "max", summary: "concise" });
-    expect(concreteComboRequestBody(raw, target, "max", ["low", "high"], "force").reasoning)
+    expect(concreteComboRequestBody(raw, target, "max", ["low", "high"], "strict", "force").reasoning)
       .toEqual({ effort: "high", summary: "concise" });
     expect(raw.reasoning).toEqual({ effort: "medium", summary: "concise" });
   });
@@ -404,20 +404,20 @@ describe("combo request cloning", () => {
   test("force mode rejects missing or invalid direct default efforts", () => {
     const raw = { model: "combo/x", reasoning: { effort: "medium", summary: "concise" } };
     for (const defaultEffort of [null, "turbo" as OcxComboDefaultEffort]) {
-      expect(() => concreteComboRequestBody(raw, target, defaultEffort, ["low", "high"], "force"))
+      expect(() => concreteComboRequestBody(raw, target, defaultEffort, ["low", "high"], "strict", "force"))
         .toThrow("force combo default effort requires a valid defaultEffort");
     }
   });
 
   test("force mode fails closed for malformed and unknown capabilities and strips unsupported effort", () => {
     expect(concreteComboRequestBody(
-      { model: "combo/x", reasoning: { effort: "banana" } }, target, "max", ["max"], "force",
+      { model: "combo/x", reasoning: { effort: "banana" } }, target, "max", ["max"], "strict", "force",
     ).reasoning).toEqual({ effort: "banana" });
     expect(concreteComboRequestBody(
-      { model: "combo/x", reasoning: { effort: "medium" } }, target, "max", undefined, "force",
+      { model: "combo/x", reasoning: { effort: "medium" } }, target, "max", undefined, "strict", "force",
     ).reasoning).toEqual({ effort: "medium" });
     expect(concreteComboRequestBody(
-      { model: "combo/x" }, target, "max", [], "force",
+      { model: "combo/x" }, target, "max", [], "strict", "force",
     ).reasoning).toBeUndefined();
   });
 
@@ -447,6 +447,22 @@ describe("combo request cloning", () => {
     expect(concreteComboRequestBody(
       { model: "combo/x", reasoning: { summary: "concise" } }, target, "max", ["low", "high"],
     ).reasoning).toEqual({ summary: "concise", effort: "high" });
+  });
+
+  test("forced default effort composes with existing strict and adaptive capability modes", () => {
+    const raw = { model: "combo/x", reasoning: { effort: "medium", summary: "concise" }, thinking_budget: 8192 };
+    for (const mode of ["strict", "adaptive"] as const) {
+      expect(concreteComboRequestBody(raw, target, "max", ["low", "high"], mode, "force").reasoning)
+        .toEqual({ effort: "high", summary: "concise" });
+      const unsupported = concreteComboRequestBody(raw, target, "max", [], mode, "force");
+      expect(unsupported.reasoning).toEqual({ summary: "concise" });
+      expect(unsupported.thinking_budget).toBeUndefined();
+    }
+    expect(concreteComboRequestBody(raw, target, "max", undefined, "adaptive", "force").reasoning)
+      .toEqual({ summary: "concise" });
+    expect(concreteComboRequestBody(raw, target, "max", undefined, "strict", "force").reasoning)
+      .toEqual({ effort: "medium", summary: "concise" });
+    expect(raw.reasoning).toEqual({ effort: "medium", summary: "concise" });
   });
 
   test("debug-warns once per unsupported or unknown combo default", () => {
