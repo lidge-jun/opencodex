@@ -437,10 +437,9 @@ olduğunda ve `tokenGuardian.codexWarmupEnabled` true olduğunda çalışır.
 
 ## Yerel Codex'i geri yükleme
 
-opencodex sizi asla tuzağa düşürmez. **`ocx stop`, yerel Codex'e tamamen geri
-dönen tek komuttur** — proxy'yi durdurur, kuruluysa arka plan servisini durdurur
-ve enjekte edilen her satırı ve yönlendirilen katalog girdisini kaldırır,
-böylece düz `codex` sanki opencodex hiç var olmamış gibi tam olarak çalışır:
+`ocx stop`, proxy'yi ve kurulu arka plan servisini durdurur, ardından yerel Codex'i geri yüklemeyi dener. OpenCodex yalnızca sahipliğini doğrulayabildiği yönlendirme öğelerini kaldırır; yapılandırma dosyaları güvenle geri yüklenemiyorsa işlemin tamamlanmadığını bildirir.
+
+Mevcut yapılandırma veya profil kayıtlı özgün içerikten farklıysa ve günlükte o dosyanın enjekte edilmiş durumunun karması yoksa otomatik kurtarma iki dosyayı ve günlüğü değiştirmeden korur. Özgün içerikle zaten aynı olan dosya yeniden yazılmaz. Yönlendirilmiş bir yapılandırmaya yeniden enjeksiyon da bu belirsiz durumu reddeder; yerel yapılandırma yeni bir anlık görüntü oluşturabilir. [Kurtarma kurallarına](/guides/codex-integration/#recovery-without-injection-hashes) bakın.
 
 ```bash
 ocx stop       # proxy'yi + servisi durdurun, yerel Codex'i geri yükleyin

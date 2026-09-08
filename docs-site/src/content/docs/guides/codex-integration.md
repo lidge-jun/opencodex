@@ -605,9 +605,9 @@ off by default; it runs only when Token Guardian is enabled, the `chatgpt` refre
 
 ## Restoring native Codex
 
-opencodex never traps you. **`ocx stop` is the single command that fully reverts to native Codex** — it
-stops the proxy, stops the background service if one is installed, and strips every injected line and
-routed catalog entry so plain `codex` works exactly as if opencodex was never there:
+`ocx stop` stops the proxy and any installed background service, then attempts to restore native Codex. OpenCodex removes verified routing artifacts and reports an incomplete restore when it cannot safely recover configuration files.
+
+Recovery may require manual review when the journal cannot verify the current files; see [recovery without injection hashes](#recovery-without-injection-hashes).
 
 ```bash
 ocx stop       # stop the proxy + service, restore native Codex
@@ -618,6 +618,24 @@ ocx restore back # point plain Codex at the running proxy again
 When opencodex runs as a managed [background service](/reference/cli/#ocx-service), it sets
 `OCX_SERVICE=1` so a service-driven restart does **not** thrash the Codex config — only an explicit
 `ocx stop` / `ocx service stop` restores native Codex.
+
+### Recovery without injection hashes
+
+The journal saves the original `config.toml` and `opencodex.config.toml` plus hashes of the state
+OpenCodex injected. A legacy journal or an interruption before those hashes were recorded cannot
+prove that later file contents belong to OpenCodex. If either file differs from its saved original
+and lacks its own injected-state hash, automatic journal recovery and native restore report failure
+without changing either file or the journal. The saved original remains available for comparison;
+review it alongside the current files before choosing a manual recovery action.
+
+Files already equal to their saved originals are accepted without rewriting them. A missing file
+is distinct from an empty file. Verified injected hashes still allow normal snapshot restoration,
+and later edits in hash-backed configurations retain the existing owned-field cleanup behavior.
+
+Sync and `ocx restore back` also reject an existing routed configuration whose hashless journal
+does not match the pre-injection baseline. This prevents a new injection hash from being attached
+to an older original. A genuinely native configuration can be saved as a fresh baseline before
+injection. Explicit external-provider opt-out behavior is unchanged.
 
 
 ### Sub-agent fallback and V2 compatibility

@@ -328,9 +328,9 @@ body。背景重新驗證是獨立功能，預設關閉；只有啟用 Token Gua
 
 ## 恢復原生 Codex
 
-opencodex 絕不會把你困住。**`ocx stop` 是完整恢復原生 Codex 的單一命令**。它會停止 proxy、停止
-背景服務（若已安裝），並移除所有注入行與路由目錄條目，讓普通的 `codex` 就像從未安裝 opencodex 一樣
-運作：
+`ocx stop` 會停止 proxy 與已安裝的背景服務，然後嘗試恢復原生 Codex。OpenCodex 只移除能確認歸屬的路由設定；若無法安全恢復設定檔，會回報恢復未完成。
+
+若目前的 config 或 profile 與儲存的原始內容不同，且日誌缺少該檔案注入狀態的雜湊值，自動快照恢復會保留兩個檔案及日誌，不做修改。已與原始內容相同的檔案不會重新寫入。對已路由設定再次注入時，也會拒絕使用這種未確認的基準；原生設定可以建立新的快照。詳見[恢復規則](/guides/codex-integration/#recovery-without-injection-hashes)。
 
 ```bash
 ocx stop       # 停止 proxy + service，恢復原生 Codex

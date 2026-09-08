@@ -31,6 +31,7 @@ import {
   resolveEffectiveUserIdentity,
 } from "./user-identity";
 import {
+  hasUnverifiedJournalBaseline,
   markJournalInjectedState,
   journaledInjectedOpenaiBaseUrl,
   journaledInjectedRealtimeWsBaseUrl,
@@ -1149,6 +1150,24 @@ export async function injectCodexConfig(
     };
   }
 
+  const journalBaselineIsNative = (): boolean => {
+    // Value evidence survives an app rewrite that removes the ownership comments.
+    const journaledBaseUrl = journaledInjectedOpenaiBaseUrl({ readOnly: true });
+    const journaledRealtimeWsBaseUrl = journaledInjectedRealtimeWsBaseUrl({ readOnly: true });
+    const looksInjectedByValue =
+      (journaledBaseUrl !== null && rootTomlString(rawContent, "openai_base_url") === journaledBaseUrl)
+      || (journaledRealtimeWsBaseUrl !== null
+        && rootTomlString(rawContent, REALTIME_WS_BASE_URL_KEY) === journaledRealtimeWsBaseUrl);
+    return !hasInjectedCodexRouting(rawContent) && !looksInjectedByValue;
+  };
+  const readCurrentProfile = (): string | null => existsSync(CODEX_PROFILE_PATH)
+    ? readFileSync(CODEX_PROFILE_PATH, "utf-8")
+    : null;
+  const unverifiedJournalMessage = "Codex configuration was not written: the journal has no verified baseline for the current config/profile. Current files and the journal were preserved.";
+  if (!journalBaselineIsNative() && hasUnverifiedJournalBaseline(baselineContent, readCurrentProfile())) {
+    return { success: false, message: unverifiedJournalMessage };
+  }
+
   if (options.validateOnly) {
     return {
       success: true,
@@ -1157,21 +1176,14 @@ export async function injectCodexConfig(
   }
 
   const applyNativeArtifacts = (): void => {
-    // #1798 again: a Codex app rewrite keeps values and drops the ownership comments, so
-    // marker evidence alone would classify our own routed config as the user's native
-    // baseline and replace the real original snapshot. Value evidence from the journal
-    // (the URLs the last injection recorded writing) blocks that misclassification.
-    const journaledBaseUrl = journaledInjectedOpenaiBaseUrl();
-    const journaledRealtimeWsBaseUrl = journaledInjectedRealtimeWsBaseUrl();
-    const looksInjectedByValue =
-      (journaledBaseUrl !== null && rootTomlString(rawContent, "openai_base_url") === journaledBaseUrl)
-      || (journaledRealtimeWsBaseUrl !== null
-        && rootTomlString(rawContent, REALTIME_WS_BASE_URL_KEY) === journaledRealtimeWsBaseUrl);
     writeJournal({
-      currentStateIsNative: !hasInjectedCodexRouting(rawContent) && !looksInjectedByValue,
+      currentStateIsNative: journalBaselineIsNative(),
       configContent: baselineContent,
       owner: options.journalOwner,
     });
+    // A native snapshot may have been refreshed above. An older hashless routed snapshot
+    // must not gain the new injection's hash and later overwrite preserved user edits.
+    if (hasUnverifiedJournalBaseline(baselineContent, readCurrentProfile())) throw new Error(unverifiedJournalMessage);
     atomicWriteFile(CODEX_CONFIG_PATH, content);
     atomicWriteFile(CODEX_PROFILE_PATH, profileContent);
     markJournalInjectedState(content, profileContent, {
@@ -1733,6 +1745,12 @@ export function skippedRestoreEnvelope(success: boolean, message: string): Codex
 function restoreCodexConfigInline(): CodexRestoreConfigResult {
   try {
     const journal = restoreJournalState();
+    if (journal.unverified) {
+      return {
+        state: "failed", changed: false, action: "failed",
+        message: "Codex journal recovery was not verified; current configuration files and the journal were preserved.",
+      };
+    }
     const restored = journal.configRestored
       ? { success: true, message: "Codex config restored from opencodex journal." }
       : removeCodexConfig({ preserveProfile: journal.profileRestored || journal.profileChanged });
