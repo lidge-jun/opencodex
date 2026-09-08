@@ -302,6 +302,13 @@ func OwnershipFor(args []string) (Ownership, bool) {
 	if command.Name == "connect" && len(args) > 1 && args[1] == "status" {
 		return GoOwned, true
 	}
+	// v2 status is Go-owned (the local config.toml read surface, issue #56
+	// slice v2a); the write verbs (on/off/mode/threads/keep-native-v1/mode-hint)
+	// mutate config.toml through the features.ts editing engine plus the
+	// upstream `codex features` CLI and stay TypeScript-owned until v2b.
+	if command.Name == "v2" && len(args) > 1 && args[1] == "status" {
+		return GoOwned, true
+	}
 	return command.Owner, true
 }
 
@@ -456,6 +463,14 @@ func Run(args []string, deps Deps) int {
 		// connect/rotate/revoke stay TypeScript-owned and never dispatch here.
 		if len(args) > 1 && args[1] == "status" {
 			return runConnectStatus(args[2:], deps)
+		}
+		fmt.Fprintf(deps.Stderr, "Unimplemented Go-owned command: %s\n", args[0])
+		return ExitFailure
+	case "v2":
+		// Only `v2 status` reaches Go (OwnershipFor already gated this); the
+		// write verbs stay TypeScript-owned and never dispatch here.
+		if len(args) > 1 && args[1] == "status" {
+			return runV2Status(args[2:], deps)
 		}
 		fmt.Fprintf(deps.Stderr, "Unimplemented Go-owned command: %s\n", args[0])
 		return ExitFailure

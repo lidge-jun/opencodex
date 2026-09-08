@@ -2965,7 +2965,7 @@ describe.skipIf(!goAvailable || goCLI === null)(
       selection: { mode: "fenced" },
     };
     function startGrokFixture(applyMessage?: string): void {
-      startFamilyFixture((path, method) => {
+      startFamilyFixture((path) => {
         if (path === "/api/grok") return jsonResponse(grokState);
         if (path === "/api/grok/apply")
           return jsonResponse(
@@ -5524,6 +5524,83 @@ describe.skipIf(!goAvailable || goCLI === null)(
           compareFiles: true,
         });
       }
+    });
+
+    // v2 status is Go-owned (issue #56 slice v2a); the write verbs
+    // (on/off/mode/threads/keep-native-v1/mode-hint) keep the TypeScript owner
+    // behind the features.ts config-editing engine until v2b. Both CLIs read
+    // the same fresh pair of homes; status is read-only over config.json and
+    // CODEX_HOME/config.toml. The fixture config carries providers so the TS
+    // loadConfig repair path cannot emit its stdout notice.
+    describe("v2 status read surface (issue #56 v2a)", () => {
+      const cleanedV2Homes: string[] = [];
+      afterEach(() => {
+        for (const home of cleanedV2Homes.splice(0)) {
+          if (existsSync(home)) removeTreeWithRetry(home);
+        }
+      });
+      test.each([
+        { name: "empty homes", extra: "", toml: "" },
+        {
+          name: "v2 on dedicated table",
+          extra: "",
+          toml: "[features.multi_agent_v2]\nenabled = true\n",
+        },
+        {
+          name: "v2 on with legacy max_threads warning",
+          extra: "",
+          toml: "[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 4\n\n[agents]\nmax_threads = 8\n",
+        },
+        {
+          name: "v2 off legacy threads",
+          extra: "",
+          toml: "[agents]\nmax_threads = 8\n",
+        },
+        {
+          name: "keep-native conflict under v2",
+          extra: '{"multiAgentMode":"v2","keepNativeChatGptOnV1":true}',
+          toml: "[features.multi_agent_v2]\nenabled = true\n",
+        },
+        {
+          name: "keep-native on with v2 off",
+          extra: '{"multiAgentMode":"v2","keepNativeChatGptOnV1":true}',
+          toml: "",
+        },
+        {
+          name: "string fields",
+          extra: "",
+          toml: "[features.multi_agent_v2]\nenabled = true\nsubagent_developer_instructions = \"reply in haiku\"\nmulti_agent_mode_hint_text = 'hint value'\n",
+        },
+        {
+          name: "inline features table",
+          extra: "",
+          toml: "[features]\nmulti_agent_v2 = { enabled = true, max_concurrent_threads_per_session = 3 }\n",
+        },
+      ])("diffs ocx v2 status for $name", ({ extra, toml }) => {
+        const home = mkdtempSync(join(tmpdir(), "ocx-go-v2-parity-"));
+        const codexHome = mkdtempSync(join(tmpdir(), "ocx-go-v2-codex-"));
+        cleanedV2Homes.push(home, codexHome);
+        const cfg = {
+          providers: {
+            fixture: {
+              adapter: "openai-chat",
+              baseUrl: "https://example.test/v1",
+              apiKey: "secret-key",
+              defaultModel: "fixture-model",
+              models: ["fixture-model"],
+              contextWindow: 128000,
+            },
+          },
+          defaultProvider: "fixture",
+        };
+        if (extra) Object.assign(cfg, JSON.parse(extra));
+        writeFileSync(join(home, "config.json"), JSON.stringify(cfg));
+        if (toml) writeFileSync(join(codexHome, "config.toml"), toml);
+        const ts = runTsAt(["v2", "status"], home, codexHome);
+        const go = runGoAt(["v2", "status"], home, codexHome);
+        expect(go).toEqual(ts);
+        expect(ts.code).toBe(0);
+      });
     });
   },
 );

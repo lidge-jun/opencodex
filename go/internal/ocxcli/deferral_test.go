@@ -134,6 +134,7 @@ func TestFamilyFallbackDelegationRegistered(t *testing.T) {
 	nativeVerbs := map[string][]string{
 		"config":     append(slices.Collect(maps.Keys(configRuntimeSubcommands)), "--json", "--source"),
 		"codex-shim": {"status"},
+		"v2":         {"status"},
 	}
 	for _, d := range deferredSurfaces {
 		if d.Kind != SubcommandSeam || !d.Fallback {

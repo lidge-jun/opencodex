@@ -163,9 +163,12 @@ var deferredSurfaces = []TSDeferral{
 	},
 	{
 		Kind: WholeCommand, Name: "v2",
-		Reason: "Reads AND writes the upstream Codex config.toml (feature toggles, threads, " +
-			"subagent instructions) and resyncs the catalog through the live proxy; a flip " +
-			"needs a byte-exact TOML reader/writer plus a catalog oracle.",
+		Reason: "Bare `ocx v2` defaults to status but keeps the TS owner so both spellings " +
+			"share one oracle; the write verbs (on/off/mode/threads/keep-native-v1/" +
+			"mode-hint) mutate the upstream Codex config.toml through the features.ts " +
+			"editing engine plus the `codex features` CLI and resync the catalog, which " +
+			"a flip would need byte-exact plus a catalog oracle. The `status` read is " +
+			"Go-owned since 2026-09-08 (issue #56 slice v2a); see the v2 SubcommandSeam.",
 		Track: "waxiangzi/opencodex#56",
 	},
 
@@ -245,5 +248,15 @@ var deferredSurfaces = []TSDeferral{
 		Reason: "Read-only local Codex install inspection outside the management plane (no " +
 			"proxy, no API), unlike every other system verb.",
 		Track: "no ticket: needs a local Codex-install inspection oracle",
+	},
+	{
+		Kind: SubcommandSeam, Name: "v2", Fallback: true,
+		Reason: "Every verb except `status` stays with the TypeScript owner: on/off/mode/" +
+			"threads/keep-native-v1/mode-hint edit config.toml through the features.ts " +
+			"engine (atomic + rollback + thread-limit migration) plus the upstream " +
+			"`codex features` CLI, and unknown verbs reproduce the TS usage error " +
+			"natively only after the owner flips. `status` reads config.toml with a " +
+			"line-based scanner whose oracle boundary is declared in v2_command.go.",
+		Track: "waxiangzi/opencodex#56",
 	},
 }
