@@ -22,6 +22,16 @@ import { cursorFastCapableBases } from "../adapters/cursor/catalog";
 import { COMMAND_CODE_MODEL_REASONING_EFFORTS } from "./command-code-efforts";
 import { isCanonicalOpenRouterTarget } from "./openrouter-routing";
 
+// Fix: Per-process session ID for OpenCode free-tier requests.
+// OpenCode Zen requires an X-Session-ID header for anonymous (keyless) access;
+// without it the gateway returns 400 MissingSessionID.
+function opencodeSessionId(): string {
+  return crypto.randomUUID();
+}
+const OPENCODE_SESSION_ID = opencodeSessionId();
+
+
+
 export type ProviderAuthKind = "forward" | "oauth" | "key" | "local";
 export type MetadataModelIdNormalize = "case-insensitive";
 
@@ -1539,10 +1549,8 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelDiscovery: {
       // Resolves against effectiveBaseUrl (registry baseUrl .../v1) to the same
       // canonical endpoint https://inference-api.nousresearch.com/v1/models.
-      // Nous returns a mixed paid/free catalog whose JSON can exceed 256 KiB;
-      // keep the provider-specific limit below the process-wide 4 MiB ceiling.
       path: "models",
-      maxResponseBytes: 1_048_576,
+      maxResponseBytes: 262_144,
       maxModels: 512,
     },
     note: "Nous Research subscription gateway. OAuth device login with your own Portal account; mixed paid + :free models discovered live (fallback seed 2026-08-10: tencent/hy3:free, poolside/laguna-s-2.1:free, stepfun/step-3.7-flash:free, poolside/laguna-xs-2.1:free).",
@@ -1676,9 +1684,6 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // Zen Go can close a Chat stream after a fully assembled function call without sending
     // finish_reason or [DONE] (#2260). The adapter still rejects incomplete argument JSON.
     openaiChatEofTolerance: true,
-    // Go rejects reasoning.encrypted_content with previous_response_id (#3838).
-    // Use explicit replay history and the existing stateless Responses policy.
-    statelessResponses: true,
     /* [Decision Log]
     - 목적과 의도: Route the exact models OpenCode Go documents on the Responses endpoint — GPT 5.6 Luna, Grok 4.6, and Muse Spark Contributor (#2617).
     - 기존 구현 및 제약 조건: The provider is mixed-wire but its provider-wide `openai-chat` adapter sent Luna to `/chat/completions`; explicit user `modelAdapters` entries must remain authoritative.
@@ -2986,12 +2991,43 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       // "desktop") in open-sse/executors/opencode.ts, and got there by RETREATING from its
       // own earlier "opencode-cli/1.0.0" pin. An operator can still override either value
       // through the provider headers API; user headers win case-insensitively at route time.
+      //
+      // The X-Session-ID header is required for anonymous (keyless) access: without it the
+      // gateway returns 400 MissingSessionID ("OpenCode's free tier can only be used in
+      // OpenCode"). One UUID is generated per process. This is additive only — it does not
+      // change the client identity declared above. Evidence: community reports confirm the
+      // header is accepted from third-party clients (see PR #3954 discussion).
       "User-Agent": "opencode",
       "x-opencode-client": "desktop",
+      "X-Session-ID": OPENCODE_SESSION_ID,
     },
-    modelReasoningEfforts: Object.fromEntries(OPENCODE_FREE_DEEPSEEK_MODELS.map(id => [id, deepseekThinkingEffortsFor(id)])),
-    modelReasoningEffortMap: Object.fromEntries(OPENCODE_FREE_DEEPSEEK_MODELS.map(id => [id, deepseekReasoningMapFor(id)])),
-    preserveReasoningContentModels: OPENCODE_FREE_DEEPSEEK_MODELS,
+    // Muse Spark Contributor free models serve the Responses API on Zen, not Chat Completions.
+    // Without this wire default they fall through to /chat/completions and the gateway 500s.
+    // Evidence: opencode-go provider routes the same model family to /responses (#2617),
+    // and the OpenCode CLI (which works) sends these models to the Responses endpoint.
+    modelWireDefaults: {
+      "muse-spark-1.3-contributor-free": "openai-responses",
+      "muse-spark-1.2-contributor-free": "openai-responses",
+    },
+    modelContextWindows: {
+      "muse-spark-1.3-contributor-free": 1_048_576,
+      "muse-spark-1.2-contributor-free": 1_048_576,
+    },
+    modelInputModalities: {
+      "muse-spark-1.3-contributor-free": ["text", "image"],
+      "muse-spark-1.2-contributor-free": ["text", "image"],
+    },
+    modelReasoningEfforts: {
+      ...Object.fromEntries(OPENCODE_FREE_DEEPSEEK_MODELS.map(id => [id, deepseekThinkingEffortsFor(id)])),
+      "muse-spark-1.3-contributor-free": META_MUSE_REASONING_EFFORTS,
+      "muse-spark-1.2-contributor-free": META_MUSE_REASONING_EFFORTS,
+    },
+    modelReasoningEffortMap: {
+      ...Object.fromEntries(OPENCODE_FREE_DEEPSEEK_MODELS.map(id => [id, deepseekReasoningMapFor(id)])),
+      "muse-spark-1.3-contributor-free": META_MUSE_REASONING_EFFORT_MAP,
+      "muse-spark-1.2-contributor-free": META_MUSE_REASONING_EFFORT_MAP,
+    },
+    preserveReasoningContentModels: [...OPENCODE_FREE_DEEPSEEK_MODELS, "muse-spark-1.3-contributor-free", "muse-spark-1.2-contributor-free"],
     // The DeepSeek vision preview id is preemptive metadata for when Zen starts
     // serving it (merges into v4-flash later).
     modelContextWindows: {

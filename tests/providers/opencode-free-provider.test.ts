@@ -33,6 +33,7 @@ describe("opencode-free provider", () => {
     expect(entry?.staticHeaders?.["Authorization"]).toBeUndefined();
     expect(entry?.staticHeaders?.["User-Agent"]).toBe("opencode");
     expect(entry?.staticHeaders?.["x-opencode-client"]).toBe("desktop");
+
   });
 
   test("providerConfigSeed propagates static headers", () => {
