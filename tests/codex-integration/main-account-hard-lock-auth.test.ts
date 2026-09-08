@@ -25,7 +25,7 @@ import {
   observeMainQuotaIdentity,
 } from "../../src/codex/main-account-cache";
 import { clearAccountQuota, getMainPolicyQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
-import { clearCodexUpstreamHealth, clearThreadAccountMap, getCodexUpstreamHealth } from "../../src/codex/routing";
+import { clearCodexUpstreamHealth, clearThreadAccountMap, getCodexUpstreamHealth, getCodexQuotaHealthSnapshot, recordCodexUpstreamOutcome } from "../../src/codex/routing";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar } from "../../src/providers/openai-sidecar";
 import { mapCodexAuthContextErrorToResponse } from "../../src/server/responses/codex-auth-error";
 import { handleResponses } from "../../src/server/responses/core";
@@ -184,6 +184,34 @@ describe("main quota policy at native admission", () => {
       requestScopedMainCredential: true,
     })).rejects.toBeInstanceOf(CodexMainAccountHardLockError);
   });
+
+  for (const percent of [98.99, 99]) {
+    test(`Pool cooldown caller fallback keeps the main ${percent}% policy boundary`, async () => {
+      const cfg = config();
+      addAlternative(cfg);
+      cfg.activeCodexAccountId = "hard-lock-pool";
+      observeMainQuotaCredential(bearer(), accountId);
+      quota(percent);
+      const now = Date.now();
+      recordCodexUpstreamOutcome(cfg, "hard-lock-pool", 429, {
+        now, modelId: "gpt-5.6-terra", resetAt: now + 600_000, fixedAccount: true,
+      });
+      const cooldown = getCodexQuotaHealthSnapshot("hard-lock-pool", "shared");
+      expect(cooldown).not.toBeNull();
+      spyOn(Date, "now").mockReturnValue(now + 1_000);
+      forbidPhysicalReads();
+      const context = resolveCodexAuthContext(caller(), cfg, "pool", {
+        requestScopedMainCredential: true, modelId: "gpt-5.6-terra",
+      });
+      if (percent < 99) {
+        await expect(context).resolves.toMatchObject({ kind: "main", accountId: null });
+      } else {
+        await expect(context).rejects.toBeInstanceOf(CodexMainAccountHardLockError);
+      }
+      expect(cfg.activeCodexAccountId).toBe("hard-lock-pool");
+      expect(getCodexQuotaHealthSnapshot("hard-lock-pool", "shared")).toEqual(cooldown);
+    });
+  }
 
   test("unmatched, spoofed-claim, and conflicting-workspace callers do not inherit main policy", async () => {
     observeMainQuotaCredential(bearer(), accountId);

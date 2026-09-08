@@ -20,6 +20,13 @@ plus `openai-apikey/<model>` for the configured API key. Pool includes main plus
 Direct uses only the caller/main bearer. The routes do not fall back to one another. Shipped v1
 configs migrate to marker 2 and preserve `config.json.pre-openai-tiers-v2.bak` for manual restore.
 
+Within Pool mode, a request carrying a validated native Codex login can use that login when the
+selected stored account is cooling down and no eligible stored alternative or recovery probe is
+available. This also covers a new request blocked before sending, following the same caller
+validation used after an upstream rejection. Existing model-permission and main-account policy
+checks still apply. The fallback preserves the stored account's cooldown and does not persist the
+caller credential as the Pool selection. An exact account binding remains bound to that account.
+
 ## Config injection
 
 `ocx init`, `ocx start`, and `ocx sync` call the injector. On the default loopback bind, it keeps

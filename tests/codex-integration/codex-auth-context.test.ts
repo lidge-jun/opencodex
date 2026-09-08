@@ -55,6 +55,7 @@ import {
   CODEX_QUOTA_PROBE_INTERVAL_MS,
   clearCodexUpstreamHealth,
   clearThreadAccountMap,
+  getCodexQuotaHealthSnapshot,
   recordCodexUpstreamOutcome,
   resetCodexRoutingForManualSelection,
 } from "../../src/codex/routing";
@@ -1260,6 +1261,44 @@ describe("Codex auth context", () => {
       excludeAccountId: MAIN_CODEX_ACCOUNT_ID,
     })).rejects.toThrow("Codex accounts that support this model are currently unavailable");
     expect(directEntitlementChecks).toBe(1);
+  });
+
+  test("a fresh request can reuse caller main after the selected Pool account enters cooldown", async () => {
+    const cfg = { ...config(), autoSwitchThreshold: 0 };
+    const now = 1_800_000_000_000;
+    const originalNow = Date.now;
+    const inbound = new Headers({
+      authorization: "Bearer caller-keyring-token",
+      "chatgpt-account-id": "caller-keyring-account",
+    });
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pool_token", refreshToken: "pool_refresh",
+      expiresAt: now + 24 * 60 * 60_000, chatgptAccountId: "pool_acc",
+    });
+    try {
+      Date.now = () => now;
+      recordCodexUpstreamOutcome(cfg, "pool-a", 429, {
+        now, modelId: "gpt-5.6-terra", resetAt: now + 600_000, fixedAccount: true,
+      });
+      const cooldown = getCodexQuotaHealthSnapshot("pool-a", "shared");
+      expect(cooldown).not.toBeNull();
+      Date.now = () => now + 1_000;
+      const options = { requestScopedMainCredential: true, modelId: "gpt-5.6-terra" };
+      await expect(resolveCodexAuthContext(inbound, cfg, "pool", {
+        ...options, excludeAccountId: "pool-a",
+      })).resolves.toMatchObject({ kind: "main", accountId: null });
+
+      const context = await resolveCodexAuthContext(inbound, cfg, "pool", options);
+      expect(context).toMatchObject({ kind: "main", accountId: null });
+      const forwarded = headersForCodexAuthContext(inbound, context);
+      expect(forwarded.get("authorization")).toBe("Bearer caller-keyring-token");
+      expect(forwarded.get("chatgpt-account-id")).toBe("caller-keyring-account");
+      expect(cfg.activeCodexAccountId).toBe("pool-a");
+      expect(cfg.activeCodexAccountPinned).toBeUndefined();
+      expect(getCodexQuotaHealthSnapshot("pool-a", "shared")).toEqual(cooldown);
+    } finally {
+      Date.now = originalNow;
+    }
   });
 
   test("selects pool auth independently of the routed provider", async () => {

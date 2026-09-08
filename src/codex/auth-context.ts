@@ -885,6 +885,13 @@ export async function resolveCodexAuthContext(
       ? tryAcquireCodexQuotaScopeProbeLease(accountId, probeQuotaScope) ?? undefined
       : tryAcquireCodexQuotaProbeLease(accountId) ?? undefined;
     if (!probeLeaseId) {
+      // The selector can retain the configured Pool account when no stored
+      // alternate is eligible. A validated caller may still serve this request,
+      // just as it can after an upstream rejection, without changing Pool state.
+      if (requestScopedMainCredential && fixedAccountId === undefined
+        && options.excludeAccountId !== MAIN_CODEX_ACCOUNT_ID) {
+        return await resolveCallerOwnedMainContext();
+      }
       throw new CodexAccountCooldownError(accountId, cooldownUntil, cooldown?.cooldownSource, cooldown?.quotaScope);
     }
   }
