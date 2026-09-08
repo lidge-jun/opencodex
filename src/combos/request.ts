@@ -64,11 +64,14 @@ export function concreteComboRequestBody(
 ): Record<string, unknown> {
   const clone = structuredClone(body) as Record<string, unknown>;
   clone.model = `${target.provider}/${target.model}`;
+  if (defaultEffortMode === "force" && (!defaultEffort || !isCodexReasoningEffort(defaultEffort))) {
+    throw new Error("force combo default effort requires a valid defaultEffort");
+  }
   if (targetReasoningEfforts?.length === 0
     || (reasoningEffortMode === "adaptive" && targetReasoningEfforts === undefined)) {
     stripUnsupportedReasoningControls(clone);
   }
-  if (!defaultEffort) return clone;
+  if (!defaultEffort || !isCodexReasoningEffort(defaultEffort)) return clone;
   const reasoning = clone.reasoning;
   const reasoningRecord = reasoning && typeof reasoning === "object" && !Array.isArray(reasoning)
     ? reasoning as Record<string, unknown>
