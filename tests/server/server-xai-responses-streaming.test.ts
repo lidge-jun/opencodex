@@ -12,6 +12,7 @@ import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { SERVER_BUDGET_MS } from "../helpers/test-budget";
 
 const RESPONSES_ENDPOINT = `${XAI_GROK_CLI_BASE_URL}/responses`;
 const encoder = new TextEncoder();
@@ -20,8 +21,34 @@ let testDir = "";
 let previousHome: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 let originalFetch: typeof fetch;
+let activeRoutedCase: { controller: AbortController; settled: Promise<void> } | null = null;
+
+function runRoutedCase(body: (signal: AbortSignal) => Promise<void>): Promise<void> {
+  const controller = new AbortController();
+  const result = body(controller.signal);
+  // Observe the entire body, including its server-stop finally, even after a test timeout.
+  activeRoutedCase = { controller, settled: result.then(() => {}, () => {}) };
+  return result;
+}
+
+async function drainRoutedCase(): Promise<void> {
+  const active = activeRoutedCase;
+  if (!active) return;
+  active.controller.abort(new DOMException("xAI fixture cleanup", "AbortError"));
+  await active.settled;
+  if (activeRoutedCase === active) activeRoutedCase = null;
+}
+
+function startXaiTestServer() {
+  return startServer(0, {
+    // This wire fixture does not exercise native Codex service ownership. Avoid
+    // unrelated Windows service queries and native-main recovery during setup.
+    inspectNativeCodexOwnership: () => ({ ownership: "foreign", reason: "xAI wire fixture" }),
+  });
+}
 
 beforeEach(async () => {
+  if (activeRoutedCase) throw new Error("previous routed-parent fixture has not finished cleanup");
   originalFetch = globalThis.fetch;
   previousHome = process.env.OPENCODEX_HOME;
   isolatedCodexHome = installIsolatedCodexHome("ocx-xai-responses-codex-");
@@ -36,14 +63,15 @@ beforeEach(async () => {
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await drainRoutedCase();
   globalThis.fetch = originalFetch;
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   if (testDir) removeTreeWithRetry(testDir);
-});
+}, SERVER_BUDGET_MS);
 
 function config(): OcxConfig {
   return {
@@ -72,7 +100,43 @@ function sse(payload: unknown): Uint8Array {
 }
 
 describe("xAI OAuth Responses streaming opt-in", () => {
-  test.each([true, false])("continues a routed parent after a string child result (stream=%s)", async stream => {
+  test("routed-case cleanup waits for the entire aborted body finally", async () => {
+    let markFinally!: () => void;
+    const enteredFinally = new Promise<void>(resolve => { markFinally = resolve; });
+    let releaseFinally!: () => void;
+    const finallyGate = new Promise<void>(resolve => { releaseFinally = resolve; });
+    let finallyFinished = false;
+    const running = runRoutedCase(async signal => {
+      try {
+        await new Promise<never>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        });
+      } finally {
+        markFinally();
+        await finallyGate;
+        finallyFinished = true;
+      }
+    });
+    const outcome = running.then(() => null, (error: unknown) => error);
+    let drained = false;
+    const draining = drainRoutedCase().then(() => { drained = true; });
+    try {
+      await enteredFinally;
+      await Promise.resolve();
+      // Awaiting outcome first would hide a drain helper that returned too early.
+      expect(drained).toBe(false);
+      expect(finallyFinished).toBe(false);
+    } finally {
+      releaseFinally();
+      await draining;
+      await outcome;
+    }
+    expect(await outcome).toMatchObject({ name: "AbortError" });
+    expect(finallyFinished).toBe(true);
+    expect(activeRoutedCase).toBeNull();
+  }, SERVER_BUDGET_MS);
+
+  test.each([true, false])("continues a routed parent after a string child result (stream=%s)", stream => runRoutedCase(async signal => {
     const captured: Array<Record<string, unknown>> = [];
     let privateItemRejections = 0;
     const childText = "  Synthetic worker result\nAll requested observations returned.\n ";
@@ -112,9 +176,11 @@ describe("xAI OAuth Responses streaming opt-in", () => {
     }) as typeof fetch;
 
     saveConfig({ ...config(), multiAgentMode: "v2" });
-    const server = startServer(0);
+    const server = startXaiTestServer();
     const send = async (session: string, input: unknown[], parentSession?: string) => {
+      signal.throwIfAborted();
       const response = await originalFetch(new URL("/v1/responses", server.url), {
+        signal,
         method: "POST", headers: { "content-type": "application/json", "session-id": session,
           ...(parentSession ? { "x-codex-parent-thread-id": parentSession } : {}),
         },
@@ -163,7 +229,7 @@ describe("xAI OAuth Responses streaming opt-in", () => {
     } finally {
       await server.stop(true);
     }
-  }, 10_000);
+  }), 10_000);
 
   test("uses the native Responses wire and relays the first delta before completion", async () => {
     let releaseCompletion!: () => void;
@@ -258,7 +324,7 @@ describe("xAI OAuth Responses streaming opt-in", () => {
     }) as typeof fetch;
 
     saveConfig(config());
-    const server = startServer(0);
+    const server = startXaiTestServer();
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     try {
       const response = await originalFetch(new URL("/v1/responses", server.url), {
@@ -373,7 +439,7 @@ describe("xAI OAuth Responses streaming opt-in", () => {
     }) as typeof fetch;
 
     saveConfig(config());
-    const server = startServer(0);
+    const server = startXaiTestServer();
     try {
       const response = await originalFetch(new URL("/v1/responses", server.url), {
         method: "POST",
@@ -468,7 +534,7 @@ describe("xAI OAuth Responses streaming opt-in", () => {
     }) as typeof fetch;
 
     saveConfig(config());
-    const server = startServer(0);
+    const server = startXaiTestServer();
     try {
       const response = await originalFetch(new URL("/v1/responses", server.url), {
         method: "POST",

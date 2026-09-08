@@ -21,6 +21,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoRoot as resolveRepoRoot } from "../helpers/repo-root";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 import { INTERNAL_DEADLINE_MS } from "../helpers/test-budget";
+import { watchdogMs } from "../helpers/ci-watchdog";
 
 const repoRoot = resolveRepoRoot();
 const sandboxes: Sandbox[] = [];
@@ -124,6 +125,21 @@ function sandboxChildEnv(sandbox: Sandbox): Record<string, string> {
   return { ...sandbox.env, ...sandbox.serviceManagerEnv };
 }
 
+interface ChildResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+
+/** One consumer per pipe; barrier diagnostics and final assertions share the result. */
+function captureChildResult(child: ReturnType<typeof Bun.spawn>): Promise<ChildResult> {
+  return Promise.all([
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ]).then(([exitCode, stdout, stderr]) => ({ exitCode, stdout, stderr }));
+}
+
 /**
  * Wait for a child to reach its barrier, failing fast with its output if it exits
  * first. The exit branch is a REJECTING promise, so while the race is pending an
@@ -135,15 +151,29 @@ function sandboxChildEnv(sandbox: Sandbox): Record<string, string> {
  * no-op catch attached up front marks that late rejection handled without
  * changing what the race sees.
  */
-async function raceBarrier(child: ReturnType<typeof Bun.spawn>, barrier: Promise<void>): Promise<void> {
-  const exitedEarly = child.exited.then(async exitCode => {
-    const stdout = await new Response(child.stdout).text();
-    const stderr = await new Response(child.stderr).text();
+async function raceBarrier(result: Promise<ChildResult>, barrier: Promise<void>): Promise<void> {
+  const exitedEarly = result.then(({ exitCode, stdout, stderr }) => {
     throw new Error(`sync exited before provider barrier (${exitCode})\nstdout=${stdout}\nstderr=${stderr}`);
   });
   exitedEarly.catch(() => undefined);
   await Promise.race([barrier, exitedEarly]);
 }
+
+test("barrier diagnostics retain both pipes when the child exits first", async () => {
+  const sandbox = makeSandbox("ocx-retained-early-exit-");
+  const child = Bun.spawn([process.execPath, "--eval", `
+    process.stdout.write("fixture-stdout\\n");
+    process.stderr.write("fixture-stderr\\n");
+    process.exitCode = 7;
+  `], { cwd: repoRoot, env: sandboxChildEnv(sandbox), stdout: "pipe", stderr: "pipe" });
+  sandbox.children.add(child);
+  const result = captureChildResult(child);
+
+  await expect(raceBarrier(result, new Promise<void>(() => {}))).rejects.toThrow(
+    "sync exited before provider barrier (7)\nstdout=fixture-stdout\n\nstderr=fixture-stderr\n",
+  );
+  expect(await result).toEqual({ exitCode: 7, stdout: "fixture-stdout\n", stderr: "fixture-stderr\n" });
+}, SPAWN_BUDGET_MS);
 
 // A `bun --eval` child on a loaded windows-latest shard takes 8-11 s just to boot and
 // reach its marker (runs 33590540220 and 33605898170), so a 10 s wait was the coin flip,
@@ -338,11 +368,13 @@ for (const publisher of ["convergence", "retained"] as const) {
       port: 0,
       fetch: async request => {
         if (!new URL(request.url).pathname.endsWith("/models")) return new Response("not found", { status: 404 });
-        if (requests++ === 0) {
+        const first = requests++ === 0;
+        if (first) {
           writeFileSync(requested, "requested");
           while (!existsSync(release)) await Bun.sleep(5);
         }
-        return Response.json({ data: [{ id: "race-model" }] });
+        // Distinct snapshots make a stale publish observable in the final catalog.
+        return Response.json({ data: [{ id: first ? "race-model" : "newer-race-model" }] });
       },
     });
     const config = {
@@ -370,27 +402,32 @@ for (const publisher of ["convergence", "retained"] as const) {
         console.log(JSON.stringify({ status: response.status, body: await response.json() }));
       `], sandbox.preloadPath)], { cwd: repoRoot, env: sandboxChildEnv(sandbox), stdout: "pipe", stderr: "pipe" });
       sandbox.children.add(sync);
+      const syncResult = captureChildResult(sync);
 
-      await raceBarrier(sync, waitForPath(requested, INTERNAL_DEADLINE_MS));
+      // This real child imports the management route before reaching /models.
+      // Keep the CI startup floor, then leave room for the second publisher process.
+      await raceBarrier(syncResult, waitForPath(requested, watchdogMs(INTERNAL_DEADLINE_MS)));
       const published = await runPublisher(sandbox, publisher, config);
       if (published.exitCode !== 0) {
         throw new Error(`${publisher} publisher failed\nstdout=${published.stdout}\nstderr=${published.stderr}`);
       }
       const newer = readFileSync(catalogPath, "utf8");
       expect(newer).not.toBe(initial);
+      const newerSlugs = JSON.parse(newer).models.map((model: { slug: string }) => model.slug);
+      expect(newerSlugs).toContain("fixture/newer-race-model");
+      expect(newerSlugs).not.toContain("fixture/race-model");
 
       writeFileSync(release, "release");
-      const [exitCode, stdout, stderr] = await Promise.all([
-        sync.exited,
-        new Response(sync.stdout).text(),
-        new Response(sync.stderr).text(),
-      ]);
+      // Exercise the losing exit branch before the successful caller reads output.
+      await sync.exited;
+      const { exitCode, stdout, stderr } = await syncResult;
       expect({ exitCode, stdout, stderr }).toMatchObject({ exitCode: 0 });
+      expect(JSON.parse(stdout).status).toBe(200);
       expect(readFileSync(catalogPath, "utf8")).toBe(newer);
     } finally {
       provider.stop(true);
     }
-  }, SPAWN_BUDGET_MS);
+  }, SPAWN_BUDGET_MS * 2);
 }
 
 /**
@@ -447,8 +484,9 @@ test("a persisted runtime selection moved by another process during the await bl
     console.log(JSON.stringify(await syncCatalogModels(config)));
   `], sandbox.preloadPath)], { cwd: repoRoot, env: sandboxChildEnv(sandbox), stdout: "pipe", stderr: "pipe" });
   sandbox.children.add(sync);
+  const syncResult = captureChildResult(sync);
 
-  await raceBarrier(sync, waitForPath(requested, INTERNAL_DEADLINE_MS));
+  await raceBarrier(syncResult, waitForPath(requested, INTERNAL_DEADLINE_MS));
 
   // Another process selects a different Codex runtime. No catalog byte changes.
   writeFileSync(runtimeStatePath, `${JSON.stringify({
@@ -460,11 +498,8 @@ test("a persisted runtime selection moved by another process during the await bl
   }, null, 2)}\n`);
 
   writeFileSync(release, "release");
-  const [exitCode, stdout, stderr] = await Promise.all([
-    sync.exited,
-    new Response(sync.stdout).text(),
-    new Response(sync.stderr).text(),
-  ]);
+  await sync.exited;
+  const { exitCode, stdout, stderr } = await syncResult;
   expect({ exitCode, stderr }).toMatchObject({ exitCode: 0 });
   expect(JSON.parse(stdout.trim())).toMatchObject({ catalogWritten: false });
   expect(readFileSync(catalogPath, "utf8")).toBe(initial);
