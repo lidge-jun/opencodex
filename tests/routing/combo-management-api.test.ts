@@ -514,6 +514,18 @@ describe("combo management API", () => {
       });
       expect(fallback?.status).toBe(200);
       expect(config.combos?.forced).not.toHaveProperty("defaultEffortMode");
+
+      const restoreForce = await comboApi(config, "PUT", "/api/combos", {
+        id: "forced",
+        combo: { ...VALID_COMBO, defaultEffort: "max", defaultEffortMode: "force" },
+      });
+      expect(restoreForce?.status).toBe(200);
+      const guiRoundTrip = await comboApi(config, "PUT", "/api/combos", {
+        id: "forced",
+        combo: { ...VALID_COMBO, defaultEffort: "high" },
+      });
+      expect(guiRoundTrip?.status).toBe(200);
+      expect(config.combos?.forced).toMatchObject({ defaultEffort: "high", defaultEffortMode: "force" });
     });
   });
 
