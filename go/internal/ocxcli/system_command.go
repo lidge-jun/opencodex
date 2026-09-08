@@ -117,9 +117,6 @@ func systemStatus(argv []string, deps Deps) error {
 		printManagementData(deps, result, "", true, nil)
 		return nil
 	}
-	_ = rawSettings
-	_ = rawStartup
-	_ = rawMemory
 	lines := summaryLines(result)
 	printManagementData(deps, nil, "", false, lines)
 	return nil

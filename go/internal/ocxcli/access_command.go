@@ -28,44 +28,6 @@ const accessUsage = `Usage:
   ocx access models [--json]
   ocx access test <model> [--protocol <chat|responses|messages>] [--json]`
 
-// takeMgmtFlag mirrors takeFlag: remove `flag` from args anywhere and report
-// whether it was present.
-func takeMgmtFlag(args *[]string, flag string) bool {
-	for i, arg := range *args {
-		if arg == flag {
-			*args = append((*args)[:i], (*args)[i+1:]...)
-			return true
-		}
-	}
-	return false
-}
-
-// takeMgmtOption mirrors takeOption: `--flag value`, rejecting a missing value
-// with the exact TypeScript message.
-func takeMgmtOption(args *[]string, flag string) (string, bool, error) {
-	for i, arg := range *args {
-		if arg != flag {
-			continue
-		}
-		if i+1 >= len(*args) || strings.HasPrefix((*args)[i+1], "--") {
-			return "", false, managementCliUsage(fmt.Sprintf("%s requires a value", flag), "")
-		}
-		value := (*args)[i+1]
-		*args = append((*args)[:i], (*args)[i+2:]...)
-		return value, true, nil
-	}
-	return "", false, nil
-}
-
-// rejectMgmtArgs mirrors rejectArgs: a leftover positional is a usage error
-// carrying the command's USAGE block.
-func rejectMgmtArgs(args []string, usage string) error {
-	if len(args) == 0 {
-		return nil
-	}
-	return managementCliUsage("Unexpected argument(s): "+strings.Join(args, " "), usage)
-}
-
 // runAccess implements `ocx access` (and, through runApiKey, `ocx api-key`).
 // argv carries only this command's own arguments.
 func runAccess(args []string, deps Deps) int {
@@ -454,15 +416,6 @@ func usageNumberCell(value *jsonwire.Value) string {
 		}
 	}
 	return "-"
-}
-
-// quoteJSONString encodes one string as a JSON literal via the V8 rules.
-func quoteJSONString(value string) string {
-	raw, err := jsonwire.EncodeString(value)
-	if err != nil {
-		return `""`
-	}
-	return string(raw)
 }
 
 // fieldString returns an object member's string payload, or "" when absent or

@@ -123,10 +123,10 @@ func debugHandleScope(flag debugFlag, actionArgv []string, deps Deps) int {
 		debugPrintScopeStatus(scope, view, deps)
 		return ExitOK
 	case "reset":
+		// TS writes the CLI scope name as the reset value ({reset:"provider"}
+		// for the provider scope); the upstream ternary is pointless too, so
+		// keep the wire value identical without mirroring the dead branch.
 		resetKey := scope
-		if scope == "provider" {
-			resetKey = "provider"
-		}
 		view, code := debugPutSettings(deps, fmt.Sprintf(`{"reset":%s}`, quoteJSONString(resetKey)))
 		if code != ExitOK {
 			return code
@@ -135,7 +135,7 @@ func debugHandleScope(flag debugFlag, actionArgv []string, deps Deps) int {
 		fmt.Fprintf(deps.Stdout, "\nRuntime override cleared for %s; effective value follows env again.\n", scope)
 		return ExitOK
 	case "logs":
-		if scope == "injection" || scope == "claude" {
+		if !flag.hasLogs {
 			if scope == "claude" {
 				fmt.Fprintln(deps.Stderr, "Use: ocx observe claude-inbound")
 			} else {
@@ -154,7 +154,7 @@ func debugHandleScope(flag debugFlag, actionArgv []string, deps Deps) int {
 		}
 		return debugPrintUsageLogs(follow, deps)
 	default:
-		if scope == "injection" || scope == "claude" {
+		if !flag.hasLogs {
 			fmt.Fprintf(deps.Stderr, "Usage: ocx debug %s on|off|status|reset\n", scope)
 		} else {
 			fmt.Fprintf(deps.Stderr, "Usage: ocx debug %s on|off|status|reset|logs [-f]\n", scope)

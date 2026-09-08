@@ -1,7 +1,7 @@
 // Shared management-plane client for the Go-owned headless command families
-// (debug, access/api-key, system). This file ports the exact wire and error
-// semantics of src/cli/runtime-api.ts so a flipped command keeps the same
-// requests, messages, and exit codes as the TypeScript owner:
+// (access/api-key, system). This file ports the exact wire and error semantics
+// of src/cli/runtime-api.ts so a flipped command keeps the same requests,
+// messages, and exit codes as the TypeScript owner:
 //
 //   - live-proxy discovery reuses liveProxyEndpoint (runtime-port first, then
 //     the configured listen port), so writes never bypass the management API
@@ -13,6 +13,11 @@
 //   - Bodies are re-printed exactly like console.log(JSON.stringify(value,
 //     null, 2)): jsonwire preserves document key order and V8 number/string
 //     rules, with a trailing newline from the console.log.
+//
+// The debug family intentionally does NOT use managementRequest: src/cli/debug.ts
+// talks to the proxy with raw fetch and its own error wording ("Failed to read
+// debug settings (N)", no Error: prefix, exit 1), so debug_command.go keeps its
+// own discovery + fetch port to stay byte-identical.
 //
 // The differential harness diffs every Go-owned row against the real TS CLI
 // for the same argv and fixture server, so a drift here fails loudly.
@@ -83,6 +88,8 @@ func reportManagementFailure(deps Deps, err error) int {
 }
 
 // managementCliUsage builds the CliUsageError-equivalent failure.
+// managementCliUsage builds a CliUsageError-equivalent failure (message plus
+// optional USAGE block on stderr, exit 2).
 func managementCliUsage(message, usage string) error {
 	return cliUsageFailure{message: message, usage: usage}
 }
@@ -135,6 +142,11 @@ func managementResponseMessage(body *jsonwire.Value, rawText string, status int)
 // a non-empty rawText means the response was not valid JSON (runtimeRequest
 // keeps the text verbatim in that case). Non-2xx responses surface as an
 // apiFailure whose message is composed from the body.
+// managementRequest performs an authenticated management-plane request and
+// classifies the response exactly like runtimeRequest in src/cli/runtime-api.ts.
+// It returns the parsed body (nil when the body is empty or not JSON), the raw
+// body text, the HTTP status, and an error only for transport/parse failures;
+// a non-2xx status comes back as an error via managementAPIError.
 func managementRequest(deps Deps, method, path, body string) (*jsonwire.Value, string, int, error) {
 	deps = defaults(deps)
 	state, found := liveProxyEndpoint(deps)
@@ -173,4 +185,52 @@ func managementRequest(deps Deps, method, path, body string) (*jsonwire.Value, s
 		return value, "", response.StatusCode, managementAPIError(value, "", response.StatusCode)
 	}
 	return value, "", response.StatusCode, nil
+}
+
+// takeMgmtFlag mirrors takeFlag in src/cli/root.ts: remove `flag` from args
+// anywhere and report whether it was present.
+func takeMgmtFlag(args *[]string, flag string) bool {
+	for i, arg := range *args {
+		if arg == flag {
+			*args = append((*args)[:i], (*args)[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+// takeMgmtOption mirrors takeOption: `--flag value`, rejecting a missing value
+// with the exact TypeScript message.
+func takeMgmtOption(args *[]string, flag string) (string, bool, error) {
+	for i, arg := range *args {
+		if arg != flag {
+			continue
+		}
+		if i+1 >= len(*args) || strings.HasPrefix((*args)[i+1], "--") {
+			return "", false, managementCliUsage(fmt.Sprintf("%s requires a value", flag), "")
+		}
+		value := (*args)[i+1]
+		*args = append((*args)[:i], (*args)[i+2:]...)
+		return value, true, nil
+	}
+	return "", false, nil
+}
+
+// rejectMgmtArgs mirrors rejectArgs: a leftover positional is a usage error
+// carrying the command's USAGE block.
+func rejectMgmtArgs(args []string, usage string) error {
+	if len(args) == 0 {
+		return nil
+	}
+	return managementCliUsage("Unexpected argument(s): "+strings.Join(args, " "), usage)
+}
+
+// quoteJSONString encodes one string as a JSON literal via the V8 rules
+// (jsonwire.EncodeString), shared by every family that builds request bodies.
+func quoteJSONString(value string) string {
+	raw, err := jsonwire.EncodeString(value)
+	if err != nil {
+		return `""`
+	}
+	return string(raw)
 }

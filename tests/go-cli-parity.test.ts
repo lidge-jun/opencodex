@@ -25,35 +25,42 @@ const goCLI = goAvailable ? buildGoCLI() : null;
 let testHome = "";
 let testServer: ReturnType<typeof Bun.serve> | undefined;
 type Result = { code: number; stdout: string; stderr: string };
-function runTs(args: string[], home = testHome): Result {
+function runTs(args: readonly string[], home = testHome): Result {
   const result = Bun.spawnSync([process.execPath, "src/cli/index.ts", ...args], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
   return { code: result.exitCode, stdout: new TextDecoder().decode(result.stdout), stderr: new TextDecoder().decode(result.stderr) };
 }
-function runGo(args: string[], home = testHome): Result {
+function runGo(args: readonly string[], home = testHome): Result {
   const result = Bun.spawnSync([goCLI!, ...args], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
   return { code: result.exitCode, stdout: new TextDecoder().decode(result.stdout), stderr: new TextDecoder().decode(result.stderr) };
 }
-async function runTsAsync(args: string[], home = testHome): Promise<Result> {
+async function runTsAsync(args: readonly string[], home = testHome): Promise<Result> {
   const child = Bun.spawn([process.execPath, "src/cli/index.ts", ...args], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
   return { code: await child.exited, stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text() };
 }
-async function runGoAsync(args: string[], home = testHome): Promise<Result> {
+async function runGoAsync(args: readonly string[], home = testHome): Promise<Result> {
   const child = Bun.spawn([goCLI!, ...args], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
   return { code: await child.exited, stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text() };
 }
-function expectParity(args: string[]): Result { const ts = runTs(args); const go = runGo(args); expect(go).toEqual(ts); return ts; }
+function expectParity(args: readonly string[]): Result { const ts = runTs(args); const go = runGo(args); expect(go).toEqual(ts); return ts; }
 function normalizeHealthPid(result: Result): Result {
   if (!result.stdout.startsWith("Proxy healthy") && !result.stdout.startsWith("{\"ok\":true")) return result;
-  return { ...result, stdout: result.stdout.replace(/PID (?:null|\d+)/, "PID <pid>").replace(/\"pid\":(?:null|\d+)/, '"pid":<pid>') };
+  return { ...result, stdout: result.stdout.replace(/PID (?:null|\d+)/, "PID <pid>").replace(/"pid":(?:null|\d+)/, '"pid":<pid>') };
 }
 afterEach(async () => { testServer?.stop(true); testServer = undefined; delete process.env.OPENCODEX_HOME; delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN; if (testHome && existsSync(testHome)) removeTreeWithRetry(testHome); testHome = ""; });
+// attestedFixtureHeaders answers the findLiveProxy attestation challenge the
+// way the management plane does (proof echoed back when a challenge is sent).
+function attestedFixtureHeaders(challenge: string, port: number): HeadersInit {
+  if (!challenge) return {};
+  const proof = createLocalAttestationProof(secret, challenge, process.pid, port);
+  return { "x-opencodex-attestation-proof": proof ?? "" };
+}
 function startAttestedFixture(status: "ready" | "pending" | "failed"): void {
   testHome = mkdtempSync(join(tmpdir(), "ocx-go-cli-parity-"));
   testServer = Bun.serve({ port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
     if (path === "/healthz") {
       const challenge = request.headers.get("x-opencodex-attestation-challenge") ?? "";
-      const headers = challenge ? { "x-opencodex-attestation-proof": createLocalAttestationProof(secret, challenge, process.pid, testServer!.port) } : {};
+      const headers = attestedFixtureHeaders(challenge, testServer!.port ?? 0);
       return Response.json({ status: "ok", service: "opencodex", version: "2.42.0", uptime: 1, pid: process.pid, port: testServer!.port }, { headers });
     }
     if (path === "/readyz") return Response.json({ status, service: "opencodex", version: "2.42.0", uptime: 1, pid: process.pid, port: testServer!.port }, { status: status === "ready" ? 200 : 503 });
@@ -210,7 +217,7 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
       const path = new URL(request.url).pathname;
       if (path === "/healthz") {
         const challenge = request.headers.get("x-opencodex-attestation-challenge") ?? "";
-        const headers = challenge ? { "x-opencodex-attestation-proof": createLocalAttestationProof(secret, challenge, process.pid, testServer!.port) } : {};
+        const headers = attestedFixtureHeaders(challenge, testServer!.port ?? 0);
         return Response.json({ status: "ok", service: "opencodex", version: "2.42.0", uptime: 1, pid: process.pid, port: testServer!.port }, { headers });
       }
       return new Response(payload, { status, headers: { "content-type": "application/json" } });
@@ -260,8 +267,8 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
   });
   test("diffs usage help in both spellings", () => {
     testHome = mkdtempSync(join(tmpdir(), "ocx-go-usage-parity-"));
-    expect(expectParity(["help", "usage"]));
-    expect(expectParity(["usage", "--help"]));
+    expectParity(["help", "usage"]);
+    expectParity(["usage", "--help"]);
   });
   test("diffs usage when no proxy is running", () => {
     testHome = mkdtempSync(join(tmpdir(), "ocx-go-usage-parity-"));
@@ -281,7 +288,7 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
       const path = url.pathname;
       if (path === "/healthz") {
         const challenge = request.headers.get("x-opencodex-attestation-challenge") ?? "";
-        const headers = challenge ? { "x-opencodex-attestation-proof": createLocalAttestationProof(secret, challenge, process.pid, testServer!.port) } : {};
+        const headers = attestedFixtureHeaders(challenge, testServer!.port ?? 0);
         return Response.json({ status: "ok", service: "opencodex", version: "2.42.0", uptime: 1, pid: process.pid, port: testServer!.port }, { headers });
       }
       const management = path.startsWith("/api/") || path.startsWith("/v1/");
@@ -476,5 +483,18 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
       expect(result.stdout).toContain("Proxy is not running — env defaults for the next start:");
       expect(result.stderr).toBe("");
     }
+  });
+  // system codex-cli-update stays TypeScript-owned behind an OwnershipFor
+  // carve-out (read-only local Codex inspection, no management plane); these
+  // rows exercise the delegated path end-to-end so a regression in the seam
+  // (Go silently taking over the subcommand) fails loudly instead of only
+  // tripping the ownership classification test.
+  test.each([
+    { args: ["system", "codex-cli-update", "check"] },
+    { args: ["system", "codex-cli-update", "check", "--json"] },
+  ])("diffs the delegated system codex-cli-update carve-out for $args", ({ args }) => {
+    testHome = mkdtempSync(join(tmpdir(), "ocx-go-mgmt-noproxy-"));
+    const result = expectParity(args);
+    expect(result).toMatchObject({ code: 0 });
   });
 });
