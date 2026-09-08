@@ -1,31 +1,34 @@
 # 000 — Dashboard inventory (as shipped, v2.42.0, dev @ 664d80c76)
 
-Evidence: `assets/<route>_1440.png` (full page, ko, 1440 px headless Chrome against the live
-proxy), `assets/<route>_text.txt` (visible text), `assets/<route>_interactive.txt` (interactive
-controls with refs, `agbrowse snapshot --interactive`). Storage was captured mid-scan (its skeleton
-is the honest first paint on a 1.6 GB CODEX_HOME) and is inventoried from source.
+This inventory used full-page Korean captures at 1440 px against the live proxy,
+plus visible-text and interactive-control snapshots. Storage was captured mid-scan:
+its skeleton records the first paint, and its full inventory came from source.
+
+The capture pack was removed from the current tree after review. The route,
+control-count, and source inventory below retain the historical conclusions.
+Git history is unchanged.
 
 Counts are from the captures: interactive = controls in the snapshot, words = visible text words.
 
-| Route | Source | Interactive | Words | Screenshot |
-|---|---|---|---|---|
-| Sidebar + top bar | gui/src/App.tsx, components/sidebar-github-row.tsx, styles.css | 22 | — | every capture, left rail |
-| #dashboard (overview) | pages/Dashboard.tsx, dashboard-overview-sections.tsx (669 L), dashboard-dialogs.tsx | 34 | 199 | dashboard_1440.png |
-| #dashboard/providers | same | 18 | — | dashboard_providers_1440.png |
-| #dashboard/models | same | 28 | — | dashboard_models_1440.png |
-| #startup | pages/Startup.tsx (403 L), startup-sections.tsx | 22 | 167 | startup_1440.png |
-| #providers | pages/Providers.tsx, components/provider-workspace/* | 27 | 310 | providers_1440.png |
-| #models | pages/Models.tsx (2329 L) | 135 | 460 | models_1440.png |
-| #models/combos | pages/Combos.tsx, components/combo-workspace-* | 59 | — | models_combos_1440.png |
-| #models/routing | pages/RoutingProfiles.tsx (1139 L) | 28 | — | models_routing_1440.png |
-| #models/compatibility | pages/CompatibilityMatrix.tsx | 27 | — | models_compatibility_1440.png |
-| #subagents | pages/Subagents.tsx, components/subagents-workspace/* | 60 | 232 | subagents_1440.png |
-| #logs | pages/Logs.tsx (1147 L) | 50 | 346 | logs_1440.png |
-| #logs/debug | pages/Debug.tsx, debug-log-viewer.tsx | 24 | — | logs_debug_1440.png |
-| #usage | pages/Usage.tsx (889 L) | 27 | 654 | usage_1440.png |
-| #storage | pages/Storage.tsx (1469 L), components/storage-workspace/* | 16 (skeleton) | — | storage_1440.png |
-| #codex-set | pages/codex-set-multiauth.tsx, codex-set-prompt.tsx, components/codex-set/*, CodexAccountPool.tsx | 51 | 361 | codex-set_1440.png |
-| #integrations | pages/Integrations.tsx, ApiKeys.tsx, Claude*.tsx, Grok.tsx | 86 | 233 | integrations_1440.png |
+| Route | Source | Interactive | Words |
+|---|---|---|---|
+| Sidebar + top bar | gui/src/App.tsx, components/sidebar-github-row.tsx, styles.css | 22 | — |
+| #dashboard (overview) | pages/Dashboard.tsx, dashboard-overview-sections.tsx (669 L), dashboard-dialogs.tsx | 34 | 199 |
+| #dashboard/providers | same | 18 | — |
+| #dashboard/models | same | 28 | — |
+| #startup | pages/Startup.tsx (403 L), startup-sections.tsx | 22 | 167 |
+| #providers | pages/Providers.tsx, components/provider-workspace/* | 27 | 310 |
+| #models | pages/Models.tsx (2329 L) | 135 | 460 |
+| #models/combos | pages/Combos.tsx, components/combo-workspace-* | 59 | — |
+| #models/routing | pages/RoutingProfiles.tsx (1139 L) | 28 | — |
+| #models/compatibility | pages/CompatibilityMatrix.tsx | 27 | — |
+| #subagents | pages/Subagents.tsx, components/subagents-workspace/* | 60 | 232 |
+| #logs | pages/Logs.tsx (1147 L) | 50 | 346 |
+| #logs/debug | pages/Debug.tsx, debug-log-viewer.tsx | 24 | — |
+| #usage | pages/Usage.tsx (889 L) | 27 | 654 |
+| #storage | pages/Storage.tsx (1469 L), components/storage-workspace/* | 16 (skeleton) | — |
+| #codex-set | pages/codex-set-multiauth.tsx, codex-set-prompt.tsx, components/codex-set/*, CodexAccountPool.tsx | 51 | 361 |
+| #integrations | pages/Integrations.tsx, ApiKeys.tsx, Claude*.tsx, Grok.tsx | 86 | 233 |
 
 ## Element-level notes from the captures (main agent's own pass)
 
