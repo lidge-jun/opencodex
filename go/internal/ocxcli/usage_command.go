@@ -414,36 +414,36 @@ type usageCostRow struct {
 }
 
 type usageReportView struct {
-	rangeValue    string
-	rangeOK       bool
-	surface       string
-	surfaceOK     bool
-	filterProvider string
+	rangeValue       string
+	rangeOK          bool
+	surface          string
+	surfaceOK        bool
+	filterProvider   string
 	filterProviderOK bool
-	filterModel   string
-	filterModelOK bool
-	filterMatched bool
-	filterPresent bool
-	comboOverlap  bool
-	requests      float64
-	requestsOK    bool
-	totalTokens   float64
-	tokensOK      bool
-	inputTokens   float64
-	inputOK       bool
-	outputTokens  float64
-	outputOK      bool
-	cachedTokens  float64
-	cachedOK      bool
-	estimatedCost float64
-	costOK        bool
-	unpriced      float64
-	unpricedOK    bool
-	unmetered     float64
-	unmeteredOK   bool
-	providers     []usageCostRow
-	models        []usageCostRow
-	accounts      []usageCostRow
+	filterModel      string
+	filterModelOK    bool
+	filterMatched    bool
+	filterPresent    bool
+	comboOverlap     bool
+	requests         float64
+	requestsOK       bool
+	totalTokens      float64
+	tokensOK         bool
+	inputTokens      float64
+	inputOK          bool
+	outputTokens     float64
+	outputOK         bool
+	cachedTokens     float64
+	cachedOK         bool
+	estimatedCost    float64
+	costOK           bool
+	unpriced         float64
+	unpricedOK       bool
+	unmetered        float64
+	unmeteredOK      bool
+	providers        []usageCostRow
+	models           []usageCostRow
+	accounts         []usageCostRow
 }
 
 func numberField(object *jsonwire.Value, key string) (float64, bool) {
@@ -841,10 +841,10 @@ func runUsage(args []string, deps Deps) int {
 	allowedRanges := append([]string(nil), usageRanges...)
 	allowedRanges = append(allowedRanges, "1d")
 	if !containsString(allowedRanges, rangeValue) {
-		return usageFailure(deps, errors.New("--range must be one of " + strings.Join(usageRanges, ", ") + " (1d aliases today)"))
+		return usageFailure(deps, errors.New("--range must be one of "+strings.Join(usageRanges, ", ")+" (1d aliases today)"))
 	}
 	if !containsString(usageSurfaces, surfaceValue) {
-		return usageFailure(deps, errors.New("--surface must be one of " + strings.Join(usageSurfaces, ", ")))
+		return usageFailure(deps, errors.New("--surface must be one of "+strings.Join(usageSurfaces, ", ")))
 	}
 	if len(rest) > 0 {
 		return usageFailure(deps, usageUnexpectedArgs(rest))
