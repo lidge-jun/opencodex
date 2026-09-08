@@ -300,6 +300,20 @@ export async function handleManagementAPI(
         message: "This proxy is managed by a Task Scheduler wrapper that can respawn it, so the stop must be run by `ocx stop`, which verifies the respawn window. Nothing was changed.",
       }, 409, req, config);
     }
+    if (respawnRisk === "self-unload") {
+      // This proxy IS the launchd/systemd job, so stopping the manager below would
+      // terminate the handler before the shared teardown at the end of this route restores
+      // the native Codex keys — the dashboard Stop button left `openai_base_url`,
+      // `experimental_realtime_ws_base_url` and `model_catalog_json` pointed at a dead
+      // proxy (#4023). Refuse before touching anything, like the Windows branch above.
+      // `ocx stop` is safe because it runs outside this process and owns the teardown
+      // through its receipt, which is why the receipt-backed caller never reaches here.
+      return jsonResponse({
+        success: false,
+        code: "self_unload_service",
+        message: "This proxy is running as the installed service, so stopping the manager from inside it would end this process before native Codex is restored. Run `ocx stop`, which stops the service from outside and completes the restore. Nothing was changed.",
+      }, 409, req, config);
+    }
     if (respawnRisk === "unknown") {
       // Do NOT send them to `ocx stop`: it maps the same unanswerable probe to a stop
       // failure, so that advice would be a loop. The scheduler query itself is what needs

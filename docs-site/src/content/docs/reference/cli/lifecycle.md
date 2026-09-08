@@ -38,6 +38,12 @@ and only a stop running outside the proxy can verify that restart window before 
 your client config — so the dashboard refuses with `respawnable_service`, changes nothing,
 and asks you to run `ocx stop`.
 
+The dashboard also refuses when the proxy is running *as* the installed launchd or systemd
+service. Stopping that manager from inside the proxy would terminate the process before
+native Codex is restored, leaving your client config pointed at a proxy that is gone, so the
+dashboard returns `self_unload_service`, changes nothing, and asks you to run `ocx stop` —
+which stops the service from outside and completes the restore.
+
 ### `ocx restart`
 
 When a proxy is running, ask that exact attested PID and port to restart in place, wait for its

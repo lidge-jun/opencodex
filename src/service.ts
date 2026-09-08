@@ -3860,10 +3860,28 @@ export async function installFreshWindowsSchedulerSafely(
 export function installedServiceRespawnRisk(
   probe: () => WindowsSchedulerTaskProbe = probeWindowsSchedulerTask,
   platform: NodeJS.Platform = process.platform,
-): "none" | "respawnable" | "unknown" {
+  io: { env?: NodeJS.ProcessEnv; exists?: (path: string) => boolean } = {},
+): "none" | "respawnable" | "unknown" | "self-unload" {
   // launchd, systemd and WinSW are down when they report stopped; only the Task Scheduler
   // wrapper survives its task ending (#764).
-  if (platform !== "win32") return "none";
+  //
+  // "Down when they report stopped" answers the RESPAWN question but not the SELF-UNLOAD
+  // one (#4023). When the proxy is itself the managed job, `launchctl unload` /
+  // `systemctl stop` terminate this very process, so the manager stop can kill the request
+  // handler before the shared teardown restores the native Codex config keys — leaving
+  // `openai_base_url`, `experimental_realtime_ws_base_url` and `model_catalog_json`
+  // pointed at a proxy that is gone. Reordering teardown ahead of the manager stop is not
+  // available here: the #3008 contract requires the manager to be proven stopped first.
+  // So refuse, exactly as Windows does, and send the operator to `ocx stop`, which stops
+  // the proxy from the outside and owns the teardown through its receipt.
+  if (platform !== "win32") {
+    const env = io.env ?? process.env;
+    if (env.OCX_SERVICE !== "1") return "none";
+    const exists = io.exists ?? existsSync;
+    if (platform === "darwin") return exists(plistPath()) ? "self-unload" : "none";
+    if (platform === "linux") return exists(unitPath()) ? "self-unload" : "none";
+    return "none";
+  }
   try {
     // `probeWindowsSchedulerTask` returns "unknown" as an ordinary value when its queries
     // fail — it does not throw — so testing for "present" let an unanswerable probe
