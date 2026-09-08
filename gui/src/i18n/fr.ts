@@ -941,6 +941,8 @@ export const fr: Record<TKey, string> = {
   "usage.dayWed": "Mer",
   "usage.dayFri": "Ven",
   "usage.heatmap.tooltipTokens": "{tokens} jetons",
+  "usage.chart.dayDetail": "{date} : {requests} requêtes, {tokens} jetons",
+  "usage.heatmap.keyboardLabel": "Utilisez Haut et Bas pour changer de jour ; Gauche et Droite pour changer de semaine.",
   "usage.heatmap.tooltipRequests": "{requests} requêtes",
   "nav.storage": "Stockage",
   "storage.title": "Stockage",

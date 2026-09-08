@@ -1768,6 +1768,8 @@ export const ko: Record<TKey, string> = {
   "usage.dayWed": "수",
   "usage.dayFri": "금",
   "usage.heatmap.tooltipTokens": "{tokens} 토큰",
+  "usage.chart.dayDetail": "{date}: 요청 {requests}개, 토큰 {tokens}개",
+  "usage.heatmap.keyboardLabel": "위아래 화살표로 하루씩, 좌우 화살표로 일주일씩 이동합니다.",
   "usage.heatmap.tooltipRequests": "{requests} 요청",
 
   "nav.storage": "저장소",

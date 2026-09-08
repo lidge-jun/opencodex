@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useI18n, type TFn, type Locale } from "../i18n/shared";
 import { formatProviderDisplayName } from "../provider-icons";
 import { formatTokens } from "../format-tokens";
@@ -137,6 +138,52 @@ function lastSevenDays(days: UsageDay[]): UsageDay[] {
     cursor.setDate(cursor.getDate() + 1);
   }
   return out;
+}
+
+function formatCalendarDate(date: string, locale: Locale): string {
+  return new Intl.DateTimeFormat(locale, { dateStyle: "medium" }).format(new Date(`${date}T12:00:00`));
+}
+
+function chartTipPosition(rect: DOMRect): CSSProperties {
+  const gutter = 8;
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  const maxWidth = Math.min(240, Math.max(0, viewportWidth - gutter * 2));
+  const left = Math.max(gutter, Math.min(rect.left + rect.width / 2 - maxWidth / 2, viewportWidth - gutter - maxWidth));
+  const above = rect.top - gutter > viewportHeight - rect.bottom - gutter;
+  const vertical = above
+    ? (() => {
+        const bottom = Math.max(gutter, Math.min(viewportHeight - gutter, viewportHeight - rect.top + gutter));
+        return { bottom, maxHeight: Math.max(0, viewportHeight - bottom - gutter) };
+      })()
+    : (() => {
+        const top = Math.max(gutter, Math.min(viewportHeight - gutter, rect.bottom + gutter));
+        return { top, maxHeight: Math.max(0, viewportHeight - top - gutter) };
+      })();
+  return { left, maxWidth, ...vertical };
+}
+
+function UsageChartOverlay({
+  anchor,
+  className,
+  children,
+}: {
+  anchor: DOMRect;
+  className: string;
+  children: ReactNode;
+}) {
+  return createPortal(
+    <div className={`${className} chart-overlay`} role="tooltip" style={chartTipPosition(anchor)}>{children}</div>,
+    document.body,
+  );
+}
+
+function dayDetail(day: Pick<UsageDay, "date" | "requests" | "totalTokens">, locale: Locale, t: TFn): string {
+  return t("usage.chart.dayDetail", {
+    date: formatCalendarDate(day.date, locale),
+    requests: day.requests,
+    tokens: formatTokens(day.totalTokens, locale),
+  });
 }
 
 function quantileBuckets(values: number[]): number[] {
@@ -358,20 +405,33 @@ function UsageSummaryCards({
 }
 
 function WeekDayBars({ weekBars, locale, t }: { weekBars: UsageDay[]; locale: Locale; t: TFn }) {
-  const [hoverDay, setHoverDay] = useState<string | null>(null);
+  const [active, setActive] = useState<{ date: string; anchor: DOMRect } | null>(null);
   const max = Math.max(1, ...weekBars.map(day => day.totalTokens));
+  const activeDay = weekBars.find(day => day.date === active?.date);
+  const show = (day: UsageDay, element: HTMLElement) => {
+    setActive({ date: day.date, anchor: element.getBoundingClientRect() });
+  };
 
   return (
-    <div className="daybars" role="img" aria-label={t("usage.section.heatmap")}>
+    <div className="daybars" role="group" aria-label={t("usage.section.heatmap")}>
       {weekBars.map(day => {
         const percentage = Math.round((day.totalTokens / max) * 100);
-        const label = day.date.slice(5);
+        const label = new Intl.DateTimeFormat(locale, { weekday: "short" }).format(new Date(`${day.date}T12:00:00`));
         return (
-          <div
+          <button
+            type="button"
             key={day.date}
             className="daybar"
-            onMouseEnter={() => setHoverDay(day.date)}
-            onMouseLeave={() => setHoverDay(current => (current === day.date ? null : current))}
+            aria-label={dayDetail(day, locale, t)}
+            onFocus={event => show(day, event.currentTarget)}
+            onBlur={() => setActive(current => current?.date === day.date ? null : current)}
+            onPointerEnter={event => show(day, event.currentTarget)}
+            onPointerDown={event => show(day, event.currentTarget)}
+            onPointerLeave={event => {
+              if (event.pointerType !== "touch" && document.activeElement !== event.currentTarget) {
+                setActive(current => current?.date === day.date ? null : current);
+              }
+            }}
           >
             <div className="daybar-track">
               <div
@@ -390,23 +450,27 @@ function WeekDayBars({ weekBars, locale, t }: { weekBars: UsageDay[]; locale: Lo
                 )}
               </div>
             </div>
-            {hoverDay === day.date && day.totalTokens > 0 && (
-              <div className="daybar-tip" role="tooltip">
-                <div className="daybar-tip-date">{day.date}</div>
-                {day.models.slice(0, 8).map(model => (
-                  <div key={`${model.provider}/${model.model}`} className="daybar-tip-row">
-                    <span className="daybar-tip-swatch" style={{ background: modelColor(model.model, model.provider) }} />
-                    <span className="daybar-tip-name">{modelLabel(model.model)}</span>
-                    <span className="daybar-tip-val">{formatTokens(model.totalTokens, locale)}</span>
-                  </div>
-                ))}
-              </div>
-            )}
             <span className="daybar-count">{formatTokens(day.totalTokens, locale)}</span>
             <span className="daybar-label muted">{label}</span>
-          </div>
+          </button>
         );
       })}
+      {active && activeDay && (
+        <UsageChartOverlay className="daybar-tip" anchor={active.anchor}>
+          <div className="daybar-tip-date">{formatCalendarDate(activeDay.date, locale)}</div>
+          <div className="daybar-tip-row">
+            <span>{t("usage.heatmap.tooltipRequests", { requests: activeDay.requests })}</span>
+            <span className="daybar-tip-val">{t("usage.heatmap.tooltipTokens", { tokens: formatTokens(activeDay.totalTokens, locale) })}</span>
+          </div>
+          {activeDay.models.slice(0, 8).map(model => (
+            <div key={`${model.provider}/${model.model}`} className="daybar-tip-row">
+              <span className="daybar-tip-swatch" style={{ background: modelColor(model.model, model.provider) }} />
+              <span className="daybar-tip-name">{modelLabel(model.model)}</span>
+              <span className="daybar-tip-val">{formatTokens(model.totalTokens, locale)}</span>
+            </div>
+          ))}
+        </UsageChartOverlay>
+      )}
     </div>
   );
 }
@@ -425,7 +489,34 @@ function UsageHeatmapPanel({
   t: TFn;
 }) {
   const heatmapRef = useRef<HTMLDivElement | null>(null);
-  const [hoverCell, setHoverCell] = useState<{ weekIndex: number; dayIndex: number; x: number; y: number } | null>(null);
+  const cells = useMemo(() => heatmap.weeks.flat().filter(cell => cell.date), [heatmap]);
+  const [selectedDate, setSelectedDate] = useState(() => cells.at(-1)?.date ?? "");
+  const [tip, setTip] = useState<{ date: string; anchor: DOMRect } | null>(null);
+  const hintId = useId();
+  const rovingDate = cells.some(cell => cell.date === selectedDate) ? selectedDate : (cells.at(-1)?.date ?? "");
+
+  const selectCell = (cell: HeatmapCell, element: HTMLElement) => {
+    setSelectedDate(cell.date);
+    setTip({ date: cell.date, anchor: element.getBoundingClientRect() });
+  };
+
+  const onCellKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, cell: HeatmapCell) => {
+    const index = cells.findIndex(candidate => candidate.date === cell.date);
+    const offset = event.key === "ArrowUp" ? -1
+      : event.key === "ArrowDown" ? 1
+        : event.key === "ArrowLeft" ? -7
+          : event.key === "ArrowRight" ? 7
+            : 0;
+    if (!offset || index < 0) return;
+    event.preventDefault();
+    const next = cells[Math.max(0, Math.min(cells.length - 1, index + offset))]!;
+    setSelectedDate(next.date);
+    const element = heatmapRef.current?.querySelector<HTMLElement>(`[data-date="${next.date}"]`);
+    if (element) {
+      element.focus();
+      setTip({ date: next.date, anchor: element.getBoundingClientRect() });
+    }
+  };
 
   useEffect(() => {
     const element = heatmapRef.current;
@@ -443,7 +534,7 @@ function UsageHeatmapPanel({
       {range === "7d" ? (
         <WeekDayBars weekBars={weekBars} locale={locale} t={t} />
       ) : (
-        <div className="heatmap" ref={heatmapRef} role="img" aria-labelledby="usage-heatmap-title">
+        <div className="heatmap" ref={heatmapRef}>
           <div className="heatmap-months" style={{ gridTemplateColumns: `28px repeat(${heatmap.weeks.length}, calc(var(--hm-cell) + var(--hm-gap)))` }}>
             <span className="heatmap-day-spacer" />
             {heatmap.months.map(month => (
@@ -454,36 +545,54 @@ function UsageHeatmapPanel({
             <div className="heatmap-days">
               <span /><span>{t("usage.dayMon")}</span><span /><span>{t("usage.dayWed")}</span><span /><span>{t("usage.dayFri")}</span><span />
             </div>
-            <div className="heatmap-grid" style={{ gridTemplateColumns: `repeat(${heatmap.weeks.length}, var(--hm-cell))` }}>
+            <div
+              className="heatmap-grid"
+              role="group"
+              aria-labelledby="usage-heatmap-title"
+              aria-describedby={hintId}
+              style={{ gridTemplateColumns: `repeat(${heatmap.weeks.length}, var(--hm-cell))` }}
+            >
               {heatmap.weeks.map((week, weekIndex) => (
                 <div key={week[0]?.date || `week-${weekIndex}`} className="heatmap-week">
-                  {week.map((cell, dayIndex) => (
-                    <div
-                      key={cell.date || `pad-${weekIndex}-${dayIndex}`}
+                  {week.map((cell, dayIndex) => cell.date ? (
+                    <button
+                      type="button"
+                      key={cell.date}
                       className={`heatmap-cell heatmap-cell-${cell.level}`}
-                      onMouseEnter={event => {
-                        if (!cell.date) return;
-                        const rect = event.currentTarget.getBoundingClientRect();
-                        setHoverCell({ weekIndex, dayIndex, x: rect.left + rect.width / 2, y: rect.top });
+                      data-date={cell.date}
+                      tabIndex={rovingDate === cell.date ? 0 : -1}
+                      aria-label={dayDetail(cell, locale, t)}
+                      onFocus={event => selectCell(cell, event.currentTarget)}
+                      onBlur={() => setTip(current => current?.date === cell.date ? null : current)}
+                      onKeyDown={event => onCellKeyDown(event, cell)}
+                      onPointerEnter={event => selectCell(cell, event.currentTarget)}
+                      onPointerDown={event => selectCell(cell, event.currentTarget)}
+                      onPointerLeave={event => {
+                        if (event.pointerType !== "touch" && document.activeElement !== event.currentTarget) {
+                          setTip(current => current?.date === cell.date ? null : current);
+                        }
                       }}
-                      onMouseLeave={() => setHoverCell(current => (
-                        current?.weekIndex === weekIndex && current.dayIndex === dayIndex ? null : current
-                      ))}
                     />
+                  ) : (
+                    <span key={`pad-${weekIndex}-${dayIndex}`} className="heatmap-cell heatmap-cell-0" aria-hidden="true" />
                   ))}
                 </div>
               ))}
             </div>
           </div>
-          {hoverCell && (() => {
-            const cell = heatmap.weeks[hoverCell.weekIndex]?.[hoverCell.dayIndex];
+          <span id={hintId} className="sr-only">{t("usage.heatmap.keyboardLabel")}</span>
+          <span className="sr-only" aria-live="polite">
+            {cells.find(cell => cell.date === rovingDate) ? dayDetail(cells.find(cell => cell.date === rovingDate)!, locale, t) : ""}
+          </span>
+          {tip && (() => {
+            const cell = cells.find(candidate => candidate.date === tip.date);
             if (!cell?.date) return null;
             return (
-              <div className="heatmap-tip" role="tooltip" style={{ left: hoverCell.x, top: hoverCell.y }}>
-                <div className="heatmap-tip-date">{cell.date}</div>
+              <UsageChartOverlay className="heatmap-tip" anchor={tip.anchor}>
+                <div className="heatmap-tip-date">{formatCalendarDate(cell.date, locale)}</div>
                 <div className="heatmap-tip-val">{t("usage.heatmap.tooltipTokens", { tokens: formatTokens(cell.totalTokens, locale) })}</div>
                 <div className="heatmap-tip-req muted">{t("usage.heatmap.tooltipRequests", { requests: cell.requests })}</div>
-              </div>
+              </UsageChartOverlay>
             );
           })()}
           <div className="heatmap-legend muted">

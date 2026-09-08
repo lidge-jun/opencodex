@@ -752,6 +752,8 @@ export const zhTW: Record<TKey, string> = {
   "usage.dayWed": "三",
   "usage.dayFri": "五",
   "usage.heatmap.tooltipTokens": "{tokens} Token",
+  "usage.chart.dayDetail": "{date}：{requests} 個請求，{tokens} 個 Token",
+  "usage.heatmap.keyboardLabel": "使用上下方向鍵按天移動，使用左右方向鍵按週移動。",
   "usage.heatmap.tooltipRequests": "{requests} 請求",
   "nav.storage": "儲存",
   "storage.title": "儲存",

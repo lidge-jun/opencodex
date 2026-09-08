@@ -932,6 +932,8 @@ export const ru: Record<TKey, string> = {
   "usage.dayWed": "Ср",
   "usage.dayFri": "Пт",
   "usage.heatmap.tooltipTokens": "{tokens} токенов",
+  "usage.chart.dayDetail": "{date}: {requests} запросов, {tokens} токенов",
+  "usage.heatmap.keyboardLabel": "Стрелки вверх и вниз перемещают по дням, влево и вправо — по неделям.",
   "usage.heatmap.tooltipRequests": "{requests} запросов",
 
   "nav.storage": "Хранилище",
