@@ -69,7 +69,9 @@ function multilineCloseIndex(
       backslashes += 1;
     }
     if (backslashes % 2 === 0) break;
-    index = line.indexOf(delimiter, index + delimiter.length);
+    // An escaped quote can overlap the real terminator (backslash plus four quotes).
+    // Keep overlapping candidates instead of skipping the entire rejected delimiter.
+    index = line.indexOf(delimiter, index + 1);
   }
   return index;
 }
