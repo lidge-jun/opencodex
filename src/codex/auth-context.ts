@@ -21,7 +21,7 @@ import {
   isMainAccountTokenLive,
   type NativeMainRefreshDependencies,
 } from "./main-account";
-import { isNativeMainTrafficBlocked, nativeMainStartupGateSnapshot } from "./native-profile-startup";
+import { isMainAccountPolicyBindingPending, isNativeMainTrafficBlocked, nativeMainStartupGateSnapshot } from "./native-profile-startup";
 import type { NativeMainStartupBlockReason } from "./native-profile-startup";
 import {
   codexQuotaScopeForModel,
@@ -598,13 +598,19 @@ export async function resolveCodexAuthContext(
     throw new CodexReserveUnavailableError();
   }
   const fixedAccountId = reserve ? MAIN_CODEX_ACCOUNT_ID : options.accountId;
-  const preserveRequestOwnedMainPin = requestScopedMainCredential
+  const requestOwnedMainPinCandidate = requestScopedMainCredential
     && fixedAccountId === undefined
     && config.activeCodexAccountPinned === MAIN_CODEX_ACCOUNT_ID
     && isEffectiveCodexAccountPinned(config)
     && !policy.pausedCodexAccountIds?.includes(MAIN_CODEX_ACCOUNT_ID)
-    && !(callerMatchesObservedMain(headers) && isMainAccountHardLocked(policy))
     && requestOwnedMainPinHasQuotaHeadroom(config);
+  // During an owned startup, equality cannot be established until recovery and the
+  // memory-only policy binding finish. This read-only fence never probes a foreign home.
+  if (policy.codexMainAccountHardLock === true && requestOwnedMainPinCandidate && isMainAccountPolicyBindingPending()) {
+    throw new CodexMainProfileDrainingError();
+  }
+  const preserveRequestOwnedMainPin = requestOwnedMainPinCandidate
+    && !(callerMatchesObservedMain(headers) && isMainAccountHardLocked(policy));
   if (fixedAccountId !== undefined && options.excludeAccountId !== undefined) {
     throw new Error("Codex auth context cannot select and exclude an account simultaneously");
   }
@@ -612,6 +618,9 @@ export async function resolveCodexAuthContext(
     if (!hasCallerCodexBearer(headers)) throw new CodexDirectAuthenticationError();
     const substituteStoredMain = options.substituteMainCredentialForDirect === true;
     if (!substituteStoredMain) {
+      if (policy.codexMainAccountHardLock === true && isMainAccountPolicyBindingPending()) {
+        throw new CodexMainProfileDrainingError();
+      }
       if (callerMatchesObservedMain(headers)) assertMainAccountPolicy(policy);
       if (reserve) {
         const selected = materializeCodexUpstreamAuth(headers, { kind: "main", accountId: null }, { config: policy });

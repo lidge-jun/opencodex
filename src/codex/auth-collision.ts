@@ -31,12 +31,13 @@ function hasErrnoCode(error: unknown, code: string): boolean {
 /**
  * Reads the Codex CLI credential file and classifies the outcome. Reads once instead of doing an
  * `existsSync` pre-check, so a file replaced between check and read cannot be misread as absent.
+ * An already-owned lifecycle may supply its pinned auth path instead of resolving ambient home.
  * Never returns or logs the raw error or any token material.
  */
-export function readCodexTokensResult(): CodexTokenReadResult {
+export function readCodexTokensResult(authPath = join(resolveCodexHomeDir(), "auth.json")): CodexTokenReadResult {
   let raw: string;
   try {
-    raw = readFileSync(join(resolveCodexHomeDir(), "auth.json"), "utf-8");
+    raw = readFileSync(authPath, "utf-8");
   } catch (error) {
     return { status: hasErrnoCode(error, "ENOENT") ? "missing" : "unreadable" };
   }

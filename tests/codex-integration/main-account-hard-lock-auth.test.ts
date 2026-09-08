@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -33,6 +34,8 @@ import { handleResponsesCompact } from "../../src/server/responses/compact";
 import { setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { helperPath, repoRoot } from "../helpers/repo-root";
+import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 const MAIN = mainAccount.MAIN_CODEX_ACCOUNT_ID;
 const accountId = "hard-lock-main-fixture";
@@ -138,6 +141,106 @@ afterEach(() => {
 });
 
 describe("main quota policy at native admission", () => {
+  test.each(["owned-99", "owned-98", "foreign", "unknown", "recovery", "second-listener",
+    "invalid-access-token", "invalid-account-id", "invalid-id-token", "mismatched-identity", "renewed-listener",
+    "stage-retry", "manual-recovery", "stale-sweep"] as const)(
+    "fresh startup restores durable main policy only after owned recovery (%s)", scenario => {
+      const restoredId = scenario === "recovery" ? "hard-lock-recovered-main" : accountId;
+      const restoredBearer = `header.${Buffer.from(JSON.stringify({ exp: tokenExpiry,
+        ...(["renewed-listener", "manual-recovery", "stale-sweep"].includes(scenario) ? { startupTokenRevision: 1 } : {}),
+        "https://api.openai.com/auth": { chatgpt_account_id: restoredId } })).toString("base64url")}.signature`;
+      const quota = { weeklyPercent: scenario === "owned-98" ? 98 : 99, updatedAt: Date.now() - 7 * 60 * 60_000 };
+      const identityKey = createHash("sha256").update("opencodex-main-quota-v1\0").update(restoredId).digest("hex");
+      if (scenario.startsWith("invalid-") || scenario === "mismatched-identity") {
+        writeFileSync(join(home, "auth.json"), JSON.stringify({ tokens: {
+          access_token: scenario === "invalid-access-token" ? 17 : bearer(),
+          account_id: scenario === "invalid-account-id" ? { invalid: true }
+            : scenario === "mismatched-identity" ? "conflicting-physical-account" : accountId,
+          ...(scenario === "invalid-id-token" ? { id_token: 17 } : {}),
+        } }));
+      }
+      writeFileSync(join(home, "config.json"), JSON.stringify({
+        ...config(), port: 0, hostname: "127.0.0.1", codexMainAccountHardLock: scenario !== "second-listener",
+        providers: { openai: { ...config().providers.openai, codexAccountMode: "direct" } },
+      }));
+      writeFileSync(join(home, "config.toml"), 'model = "gpt-5.6-sol"\n');
+      writeFileSync(join(home, "codex-quota-cache.json"), JSON.stringify({
+        version: 1, quotas: { [MAIN]: quota }, mainPolicyQuota: { identityKey, quota },
+      }));
+      const fixturePath = join(home, "startup-fixture.json");
+      writeFileSync(fixturePath, JSON.stringify({ scenario, accountId: restoredId, bearer: restoredBearer,
+        originalAccountId: accountId, originalBearer: bearer() }));
+      const child = Bun.spawnSync([process.execPath, helperPath("main-account-policy-startup-child.ts")], {
+        cwd: repoRoot(), env: { ...process.env, OCX_POLICY_STARTUP_FIXTURE: fixturePath,
+          HOME: home, USERPROFILE: home, TMP: home, TEMP: home, TMPDIR: home,
+          XDG_RUNTIME_DIR: home, LOCALAPPDATA: join(home, "LocalAppData") },
+        timeout: SPAWN_BUDGET_MS - INTERNAL_DEADLINE_MS, stdout: "pipe", stderr: "pipe",
+      });
+      expect({ exitCode: child.exitCode, signal: child.signalCode, stderr: child.stderr.toString() }).toMatchObject({ exitCode: 0 });
+      const line = child.stdout.toString().split(/\r?\n/).find(value => value.startsWith("POLICY_STARTUP_RESULT="));
+      expect(line).toBeDefined();
+      const result = JSON.parse(line!.slice("POLICY_STARTUP_RESULT=".length));
+      expect(result.before).toMatchObject({ matched: false, policy: null, tokenReads: 0 });
+      expect(result.listeners[0].tokenReads).toBe(0);
+      expect(result.unexpectedNetwork).toEqual([]);
+      expect(result.policyReadsPinned).toBe(true);
+      const unowned = scenario === "foreign" || scenario === "unknown";
+      const unverified = scenario.startsWith("invalid-") || scenario === "mismatched-identity";
+      if (unowned) {
+        expect(result.firstAdmission.admitted).toBe(true);
+        expect(result.after.tokenReads).toBe(0);
+      } else {
+        expect(result.firstAdmission).toEqual({ admitted: false, error: "CodexMainProfileDrainingError" });
+        expect(result.settled.status).toBe("ready");
+      }
+      if (unowned || unverified) {
+        expect(result.after).toMatchObject({ matched: false, policy: null });
+        expect(result.response.status).toBe(200);
+        expect(result.primaryUpstreamCalls).toBe(1);
+      } else {
+        expect(result.after).toMatchObject({ matched: true, policy: quota });
+        expect(result.response.status).toBe(scenario === "owned-98" ? 200 : 429);
+        expect(result.primaryUpstreamCalls).toBe(scenario === "owned-98" ? 1 : 0);
+        if (scenario !== "owned-98") expect(result.response.hardLockError).toBe(true);
+      }
+      if (scenario === "recovery") {
+        expect(result.heldRecovery.observation).toMatchObject({ matched: false, policy: null, tokenReads: 0 });
+        expect(result.heldRecovery.poolFallback).toEqual({ admitted: false, error: "CodexMainProfileDrainingError" });
+        expect(result.heldRecovery.mainPin).toEqual({ admitted: false, error: "CodexMainProfileDrainingError" });
+        expect(result.heldRecovery.storedAlternative).toMatchObject({ admitted: true, kind: "pool" });
+        expect(result.heldRecovery.automaticAlternative).toMatchObject({ admitted: true, kind: "pool" });
+        expect(result.originalResponse.status).toBe(200);
+      }
+      if (scenario === "second-listener") {
+        expect(result.firstServerSettled).toMatchObject({ matched: false, policy: null, tokenReads: 0 });
+      }
+      if (scenario === "second-listener" || scenario === "renewed-listener") {
+        expect(result.listeners).toHaveLength(2);
+        expect(result.listeners[1].tokenReads).toBe(result.firstServerSettled.tokenReads);
+      }
+      if (scenario === "renewed-listener") {
+        expect(result.firstServerSettled).toMatchObject({ matched: false, policy: quota });
+        expect(result.originalResponse.status).toBe(200);
+      }
+      if (scenario === "stage-retry" || scenario === "manual-recovery") {
+        expect(result.laterRecovery.blocked).toMatchObject({ matched: false, policy: null, tokenReads: 0,
+          gate: { status: "blocked", reason: scenario === "stage-retry" ? "stage-cleanup-required" : "manual-recovery" } });
+      }
+      if (scenario === "stage-retry") expect(result.laterRecovery.sweepCalls).toBeGreaterThanOrEqual(2);
+      if (scenario === "manual-recovery") {
+        expect(result.laterRecovery).toMatchObject({ apiStatus: 200, duplicateCompleted: true, joined: true, recoveryCalls: 1 });
+        expect(result.laterRecovery.pending).toMatchObject({ matched: false, tokenReads: 0,
+          gate: { status: "blocked", reason: "recovery-pending" } });
+        expect(result.originalResponse.status).toBe(200);
+      }
+      if (scenario === "stale-sweep") {
+        expect(result.laterRecovery.pending.gate).toMatchObject({ status: "blocked", reason: "recovery-pending" });
+        expect(result.laterRecovery.admission).toEqual({ admitted: false, error: "CodexMainProfileDrainingError" });
+        expect(result.originalResponse.status).toBe(200);
+      }
+    }, SPAWN_BUDGET_MS,
+  );
+
   test("short-only 99 blocks exact main and main-only Pool without probe or reauth", async () => {
     quota(99);
     const cfg = config();

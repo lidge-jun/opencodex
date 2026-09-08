@@ -160,6 +160,14 @@ workspace already observed under native ownership; an unrelated or unmatched key
 is not attributed to stored main and introduces no physical-main read. Credential equality tags
 remain process-local and never enter disk, logs, or management DTOs.
 
+When protection is enabled, owned startup rebuilds this binding from its pinned auth path under
+the native owner and exclusive claim, after journal recovery and stage cleanup, before publishing
+ready. Caller-owned Direct, exact-main, fallback, and main-pin admission stays temporarily fenced
+during that initialization; stored Pool alternatives remain eligible. Foreign/unknown service-home
+paths neither initialize the binding nor trigger an ownership reprobe from caller-owned admission.
+A new listener with protection enabled rearms the same guarded path on an existing ready lifecycle,
+including when the physical credential was replaced after the earlier listener started.
+
 This is not a reservation of the last 1%: already-admitted, parallel, unmatched-keyring, or direct
 upstream traffic can still reach exhaustion. While blocked, main cannot use Luna reserve either.
 Keeping ordinary usage below exhaustion may prevent Reserve activation; the policy never changes
