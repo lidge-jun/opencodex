@@ -3219,7 +3219,7 @@ describe("server combo failover 030 activation matrix", () => {
     expect(statuses).toEqual(["completed"]);
     expect(cancels).toBe(0);
     expect(snapshots).toHaveLength(1);
-    expect(snapshots[0]).toMatchObject({ provider: "combo", model: "combo/free", resolvedModel: "m2" });
+    expect(snapshots[0]).toMatchObject({ provider: "combo", model: "combo/free", resolvedModel: "final-b" });
     for (const field of ["terminalHttpStatus", "terminalIncompleteReason", "terminalErrorCode", "upstreamError"] as const) {
       expect(snapshots[0]![field]).toBeUndefined();
     }
