@@ -829,6 +829,7 @@
     "model-rename-migration.test.ts": "providers",
     "model-selection-guidance.test.ts": "cli",
     "model-visibility-management-api.test.ts": "codex-integration",
+    "models-feedback-callback.test.ts": "gui",
     "models-page-groups.test.ts": "gui",
     "models-workspace-tabs.test.ts": "gui",
     "moonshot-endpoints.test.ts": "providers",
