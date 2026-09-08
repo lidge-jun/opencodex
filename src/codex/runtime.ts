@@ -297,8 +297,16 @@ export function clearPersistedCodexRuntime(deps: ResolveCodexRuntimeDeps = {}): 
   clearCodexRuntimeResolveCache();
   try {
     unlinkSync(codexRuntimeStatePath(configDir));
-  } catch {
-    // Already gone, or not ours to remove. Either way the pin is not authoritative.
+  } catch (error) {
+    // An already-missing file is the success case: the pin is gone, which is the point.
+    // Anything else means the pin SURVIVES and stays authoritative, so every later
+    // resolve re-probes the same dead path — #4035 unfixed, silently. Say so once.
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    if (code === "ENOENT") return;
+    console.warn(
+      `[opencodex] Could not remove the stale Codex runtime pin at ${displayCodexRuntimePath(codexRuntimeStatePath(configDir))}`
+      + ` (${code ?? "unknown error"}). It will be re-probed until the file is removed.`,
+    );
   }
 }
 
@@ -682,7 +690,10 @@ export function resolveAndPersistCodexRuntime(
   // path-does-not-exist rejection, so a present-but-unusable binary is left for the operator.
   else if (result.runtime.source === "fallback" && persistedRuntime?.command) {
     const pinVanished = result.failures.some(
-      failure => sameRuntimeCommand(failure.command, persistedRuntime.command)
+      // Exact comparison, not `sameRuntimeCommand`: that helper lowercases, and on a
+      // case-sensitive filesystem `/plugins/Codex` and `/plugins/codex` are different
+      // files. A missing lowercase path must not retire a live uppercase pin.
+      failure => failure.command.trim() === persistedRuntime.command.trim()
         && failure.reason === PATH_MISSING_REASON,
     );
     if (pinVanished) clearPersistedCodexRuntime(deps);

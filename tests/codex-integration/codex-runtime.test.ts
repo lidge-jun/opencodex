@@ -1040,4 +1040,24 @@ describe("dead configured pin recovery (#4035)", () => {
     });
     expect(loadPersistedCodexRuntime({ configDir })?.command).toBe(weird);
   });
+
+  test("a case-different missing path does not retire a live pin on linux", () => {
+    // sameRuntimeCommand() lowercases, so on a case-sensitive filesystem it reports
+    // /plugins/Codex and /plugins/codex as the same command. They are different files.
+    // If CODEX_CLI_PATH names the missing lowercase one, its PATH_MISSING failure must
+    // not retire the uppercase pin that is still live (review finding on #4035).
+    const configDir = tempConfigDir();
+    const live = join(configDir, "plugins", "Codex");
+    const missing = join(configDir, "plugins", "codex");
+    persistCodexRuntime({ command: live, version: "0.153.0", source: "configured" }, { configDir });
+    resolveAndPersistCodexRuntime({
+      configDir,
+      env: { PATH: "", CODEX_CLI_PATH: missing },
+      platform: "linux",
+      existsSync: (p: string) => String(p) === live,
+      execFileSync: () => "codex-cli 0.153.0",
+    });
+    expect(loadPersistedCodexRuntime({ configDir })?.command).toBe(live);
+  });
+
 });
