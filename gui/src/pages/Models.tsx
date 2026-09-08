@@ -302,11 +302,11 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
   // second identical value bails out of React's state diff, so the old timer would dismiss
   // the new toast early. Every publish bumps the generation.
   const [feedbackGen, setFeedbackGen] = useState(0);
-  const publishFeedback = (nextOk: boolean, message: string) => {
+  const publishFeedback = useCallback((nextOk: boolean, message: string) => {
     setOk(nextOk);
     setStatus(message);
     setFeedbackGen(g => g + 1);
-  };
+  }, []);
   // Transient action feedback as a fixed toast: appearing or auto-clearing it never shifts
   // the workspace below (the old inline Notice pushed the whole model grid down by its
   // height on every apply). The timer itself just clears the status again.
@@ -695,7 +695,7 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
         setDisplayNameSaving(false);
       }
     }
-  }, [apiBase, displayNameModel, displayNameRecovery, finishDisplayNameEdit, load, t]);
+  }, [apiBase, displayNameModel, displayNameRecovery, finishDisplayNameEdit, load, publishFeedback, t]);
 
   // Shadow/v2 controls must not wait on the models catalog (live discovery can be slow).
   useEffect(() => {
