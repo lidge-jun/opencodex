@@ -14,16 +14,11 @@ import (
 // unchanged string escaping.
 func TestEncodePrettyMatchesV8(t *testing.T) {
 	cases := map[string]string{
-		`{"a":{"b":1,"c":[1,2,{"x":"y"}],"e":[]},"d":2,"n":1.0,"big":1e21}`:
-			"{\n  \"a\": {\n    \"b\": 1,\n    \"c\": [\n      1,\n      2,\n      {\n        \"x\": \"y\"\n      }\n    ],\n    \"e\": []\n  },\n  \"d\": 2,\n  \"n\": 1,\n  \"big\": 1e+21\n}",
-		`{"only":{}}`:
-			"{\n  \"only\": {}\n}",
-		`[[],{"z":null}]`:
-			"[\n  [],\n  {\n    \"z\": null\n  }\n]",
-		`{"s":"a\"b\\c\nd\u2028e"}`:
-			"{\n  \"s\": \"a\\\"b\\\\c\\nd\u2028e\"\n}",
-		`{"-0":-0.0,"x":-1.5e-7,"y":0.000001}`:
-			"{\n  \"-0\": 0,\n  \"x\": -1.5e-7,\n  \"y\": 0.000001\n}",
+		`{"a":{"b":1,"c":[1,2,{"x":"y"}],"e":[]},"d":2,"n":1.0,"big":1e21}`: "{\n  \"a\": {\n    \"b\": 1,\n    \"c\": [\n      1,\n      2,\n      {\n        \"x\": \"y\"\n      }\n    ],\n    \"e\": []\n  },\n  \"d\": 2,\n  \"n\": 1,\n  \"big\": 1e+21\n}",
+		`{"only":{}}`:                          "{\n  \"only\": {}\n}",
+		`[[],{"z":null}]`:                      "[\n  [],\n  {\n    \"z\": null\n  }\n]",
+		`{"s":"a\"b\\c\nd\u2028e"}`:            "{\n  \"s\": \"a\\\"b\\\\c\\nd\u2028e\"\n}",
+		`{"-0":-0.0,"x":-1.5e-7,"y":0.000001}`: "{\n  \"-0\": 0,\n  \"x\": -1.5e-7,\n  \"y\": 0.000001\n}",
 	}
 	for payload, want := range cases {
 		value, err := jsonwire.Parse([]byte(payload))

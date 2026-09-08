@@ -1,0 +1,20 @@
+{
+  "id": "b8b6970ec",
+  "name": "启动 ocx 代理测试",
+  "command": "cd /home/ubuntu/github/opencodex && OPENCODEX_HOME=/home/ubuntu/.opencodex bun run src/cli/index.ts start --port 10100 2>&1",
+  "description": "启动 opencodex 代理测试 tencent/glm-5.3-flash provider",
+  "status": "failed",
+  "outputPath": ".pi/tasks/session-374649-374649/b8b6970ec.output",
+  "cwd": "/home/ubuntu/github/opencodex",
+  "startTime": 1788847910996,
+  "endTime": 1788848762282,
+  "exitCode": 1,
+  "signal": null,
+  "pid": 1093868,
+  "bytesWritten": 745,
+  "isAgent": false,
+  "error": "Exited with code 1",
+  "notified": true,
+  "notifyOnCompletion": true,
+  "triggerOnCompletion": true
+}

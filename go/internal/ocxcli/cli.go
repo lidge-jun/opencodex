@@ -52,6 +52,12 @@ var Commands = []Command{
 	{Name: "setup", Aliases: []string{"init"}, Usage: "ocx setup", Summary: "Interactive setup.", Owner: TypeScriptOwned},
 	{Name: "start", Usage: "ocx start [--port <port>]", Summary: "Start the proxy.", Owner: GoOwned},
 	{Name: "stop", Usage: "ocx stop", Summary: "Stop the proxy.", Owner: GoOwned},
+	// restore / recover-history / uninstall stay TypeScript-owned by design: they
+	// run the Codex write coordinator, the async history job, platform service
+	// managers, and live-proxy/model sync — open sets whose bytes are
+	// non-deterministic (integrations/*.json `at`/`txId`), so no byte-parity
+	// oracle exists. Record:
+	// devlog/_plan/260908_go_flip_restore_uninstall_boundary/010_boundary_record.md
 	{Name: "restore", Aliases: []string{"eject"}, Usage: "ocx restore [back]", Summary: "Restore native Codex configuration.", Owner: TypeScriptOwned},
 	{Name: "recover-history", Usage: "ocx recover-history --legacy-openai --yes", Summary: "Recover legacy history.", Owner: TypeScriptOwned},
 	{Name: "uninstall", Aliases: []string{"remove"}, Usage: "ocx uninstall", Summary: "Remove OpenCodex integration.", Owner: TypeScriptOwned},
@@ -59,8 +65,17 @@ var Commands = []Command{
 	{Name: "codex-shim", Usage: "ocx codex-shim <sub>", Summary: "Manage the Codex autostart shim.", Owner: TypeScriptOwned},
 	{Name: "tray", Usage: "ocx tray <sub>", Summary: "Manage the Windows status tray.", Owner: TypeScriptOwned},
 	{Name: "ensure", Usage: "ocx ensure", Summary: "Ensure the proxy is running.", Owner: TypeScriptOwned},
-	{Name: "connect", Usage: "ocx connect <url>", Summary: "Connect to a remote hub.", Owner: TypeScriptOwned},
-	{Name: "disconnect", Usage: "ocx disconnect", Summary: "Disconnect from a remote hub.", Owner: TypeScriptOwned},
+	// connect keeps its TypeScript owner per subcommand: `status` shares the Go
+	// client-state implementation below, while connect/rotate/revoke stay
+	// TypeScript-owned until the hub machine-API + config-injection transaction
+	// carries its own oracle. disconnect is fully Go-owned (local teardown).
+	// Usage/Summary mirror the TypeScript registry entries verbatim so any future
+	// render of this surface map cannot drift from `ocx help disconnect`.
+	{Name: "connect", Usage: "ocx connect <url> [--management-url <url>] (--pairing-code-stdin | --admin-token-stdin) [--clients codex,claude] [--management-transport direct|relay] [--catalog-timeout <seconds>] [--no-sync]", Summary: "Connect this machine to a remote OpenCodex hub without persisting the one-time authority.", Owner: TypeScriptOwned},
+	// disconnect rewrites local client state offline (issue #52): it clears the
+	// remote-hub connection and restores native client config with no
+	// management route, so Go owns the whole surface.
+	{Name: "disconnect", Usage: "ocx disconnect [--keep-catalog] [--json]", Summary: "Restore local client state offline and clear the remote-hub connection.", Owner: GoOwned},
 	{Name: "sync", Usage: "ocx sync [--restart-codex] [--restart-desktop-app]", Summary: "Fetch provider models and inject them into Codex config.", Owner: GoOwned},
 	{Name: "sync-cache", Usage: "ocx sync-cache [--restart-codex] [--restart-desktop-app]", Summary: "Refresh Codex's model cache from the active catalog.", Owner: GoOwned},
 	{Name: "status", Usage: "ocx status", Summary: "Check proxy status.", Owner: GoOwned},
@@ -236,6 +251,12 @@ func OwnershipFor(args []string) (Ownership, bool) {
 		}
 		return GoOwned, true
 	}
+	// connect status is Go-owned (the local client-state read); the rest of the
+	// connect family delegates to its TypeScript owner until each subcommand
+	// carries its own oracle.
+	if command.Name == "connect" && len(args) > 1 && args[1] == "status" {
+		return GoOwned, true
+	}
 	return command.Owner, true
 }
 
@@ -377,6 +398,16 @@ func Run(args []string, deps Deps) int {
 		// OwnershipFor already gated this: only the oracle-covered account
 		// subcommands reach Go; the rest stay TypeScript-owned and delegate.
 		return runAccount(args[1:], deps)
+	case "connect":
+		// Only `connect status` reaches Go (OwnershipFor already gated this);
+		// connect/rotate/revoke stay TypeScript-owned and never dispatch here.
+		if len(args) > 1 && args[1] == "status" {
+			return runConnectStatus(args[2:], deps)
+		}
+		fmt.Fprintf(deps.Stderr, "Unimplemented Go-owned command: %s\n", args[0])
+		return ExitFailure
+	case "disconnect":
+		return runClientDisconnect(args[1:], deps)
 	case "observe":
 		// rebuild-index / index-status never dispatch here (OwnershipFor gates
 		// them to TypeScriptOwned and delegates first); the indexer actions stay
@@ -495,6 +526,15 @@ func printSubcommandHelp(name string, deps Deps) int {
 		fmt.Fprint(deps.Stdout, syncCacheHelpText)
 	case "config":
 		fmt.Fprint(deps.Stdout, configHelp)
+	case "disconnect":
+		// The disconnect surface map entry mirrors the TypeScript registry entry
+		// verbatim; render it here so help no longer delegates and the text cannot
+		// drift from the entry used by the ownership tests.
+		for _, command := range Commands {
+			if command.Name == "disconnect" {
+				fmt.Fprintf(deps.Stdout, "Usage: %s\n\n%s\n", command.Usage, command.Summary)
+			}
+		}
 	default:
 		fmt.Fprintf(deps.Stderr, "Unknown command: %s\n", name)
 		printHelp(deps.Stdout)

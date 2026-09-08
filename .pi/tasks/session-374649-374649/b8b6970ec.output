@@ -1,0 +1,11 @@
+🚀 opencodex proxy running on http://localhost:10100
+   POST /v1/responses → provider translation
+   POST /v1/chat/completions → OpenAI-compatible clients
+   GET  /healthz      → health check
+   GET  /api/*        → management API
+   GET  /             → GUI dashboard
+[opencodex] Codex runtime: /home/[USER]/.bun/bin/codex (version=0.153.4, source=configured)
+   + 16 models appended to Codex catalog (/home/ubuntu/.codex/opencodex-catalog.json)
+
+🛑 Shutting down opencodex proxy...
+⚠️  Native Codex restore failed during shutdown: EPERM: operation not permitted, rename '/home/ubuntu/.codex/config.toml.ocx.1093869.9.tmp' -> '/home/ubuntu/.codex/config.toml' Catalog restored to 11 native model(s) (dropped 16 proxy-routed).
