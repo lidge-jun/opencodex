@@ -9,9 +9,14 @@ package ocxcli
 //
 // WholeCommand entries name top-level commands whose Commands owner is
 // TypeScriptOwned. SubcommandSeam entries name TypeScript-owned verbs inside
-// Go-owned families; a seam with an empty Verbs list covers every
-// TypeScript-owned verb of a map-driven family (models, lab), and a seam with
-// explicit Verbs covers exactly those argv prefixes.
+// Go-owned families and come in three shapes:
+//   - explicit Verbs: exactly those argv prefixes delegate (observe, logs,
+//     storage, system, account, connect);
+//   - empty Verbs without Fallback: every TypeScript-owned verb of the family's
+//     runtime map is registered (models, lab — the test walks the map);
+//   - Fallback: the family's default delegate — every verb outside the
+//     Go-native surface delegates (config's non-map verbs, codex-shim's
+//     non-status verbs).
 
 // DeferralKind distinguishes a whole TypeScript-owned top-level command from a
 // delegated subcommand surface inside a Go-owned family.
@@ -27,23 +32,27 @@ const (
 
 // TSDeferral records one delegated surface.
 type TSDeferral struct {
-	Kind   DeferralKind
-	Name   string   // top-level command name (WholeCommand), or family name (SubcommandSeam)
-	Verbs  []string // SubcommandSeam only: delegated verbs; empty = the family's runtime map
-	Reason string   // why no byte-diff oracle exists for this surface
-	Track  string   // ticket / boundary record that will lift the deferral
+	Kind     DeferralKind
+	Name     string   // top-level command name (WholeCommand), or family name (SubcommandSeam)
+	Verbs    []string // SubcommandSeam only: delegated verbs; empty = map-driven or Fallback
+	Fallback bool     // SubcommandSeam only: family default-delegates verbs outside its Go-native surface
+	Reason   string   // why no byte-diff oracle exists for this surface
+	Track    string   // ticket / boundary record that will lift the deferral
 }
 
 // Surfaces returns the argv prefixes this deferral registers. Verbs may carry
 // a colon-separated sub-path for two-level surfaces (observe logs
-// rebuild-index is written "logs:rebuild-index").
+// rebuild-index is written "logs:rebuild-index"). Fallback seams have no
+// enumerable positive surface and return nil (their negative space is
+// exercised by TestFamilyFallbackDelegationRegistered).
 func (d TSDeferral) Surfaces() [][]string {
 	if d.Kind == WholeCommand {
 		return [][]string{{d.Name}}
 	}
 	if len(d.Verbs) == 0 {
-		// Map-driven family: covered through the runtime map by the test; the
-		// OwnershipFor spot-check uses the family's bare surface which is Go.
+		// Map-driven family (models, lab): covered through the runtime map by the
+		// test. Fallback seams likewise return nil — their negative space is
+		// exercised by TestFamilyFallbackDelegationRegistered.
 		return nil
 	}
 	out := make([][]string, 0, len(d.Verbs))
@@ -169,17 +178,20 @@ var deferredSurfaces = []TSDeferral{
 		Track: "waxiangzi/opencodex#51",
 	},
 	{
-		Kind: SubcommandSeam, Name: "codex-shim",
-		Verbs: []string{"install", "uninstall", "remove"},
-		Reason: "Mutation verbs replace launch wrappers and run rollback transactions with " +
-			"no safe oracle on any platform yet; the bare surface and `status` read are native.",
+		Kind: SubcommandSeam, Name: "codex-shim", Fallback: true,
+		Reason: "Every verb except `status` stays with the TypeScript owner: the " +
+			"mutation verbs (install/uninstall/remove) replace launch wrappers and run " +
+			"rollback transactions with no safe oracle on any platform yet, and unknown " +
+			"verbs reproduce the TS usage error natively on the Go side only after the " +
+			"owner is flipped; the bare surface and `status` read are native.",
 		Track: "no ticket: needs a launch-wrapper oracle",
 	},
 	{
-		Kind: SubcommandSeam, Name: "config",
-		Verbs: nil,
-		Reason: "Unknown config verbs mirror the TS CliUsageError byte-for-byte through the " +
-			"owner; the read/write verbs in configRuntimeSubcommands are all Go-native.",
+		Kind: SubcommandSeam, Name: "config", Fallback: true,
+		Reason: "Verbs outside the native surface (configRuntimeSubcommands plus " +
+			"`--json`/`--source`) stay TypeScript-owned so the unknown-verb CliUsageError " +
+			"bytes stay identical while the family flips; every verb in " +
+			"configRuntimeSubcommands is already Go-native.",
 		Track: "no ticket: needs a config usage-error oracle",
 	},
 	{
@@ -219,18 +231,13 @@ var deferredSurfaces = []TSDeferral{
 		Track: "no ticket: needs a request-history index oracle",
 	},
 	{
-		Kind: SubcommandSeam, Name: "service",
-		Verbs: nil,
-		Reason: "Bare `ocx service` and every verb except `status` mutate the OS service " +
-			"manager and keep the TS owner.",
-		Track: "no ticket: platform-bound (needs an OS service-manager oracle)",
-	},
-	{
 		Kind: SubcommandSeam, Name: "storage",
 		Verbs: []string{"codex-logs"},
-		Reason: "`storage codex-logs` is observe storage codex-logs spelled through the " +
-			"storage command and stays with the observe owner until the observe slice flips it.",
-		Track: "no ticket: follows the observe storage slice",
+		Reason: "`storage codex-logs` spells observe storage codex-logs through the storage " +
+			"alias; the observe family routes that verb natively, but the storage-alias " +
+			"path still delegates to the TS owner until the alias shares observe's native " +
+			"dispatch for it.",
+		Track: "no ticket: follows the observe storage codex-logs path",
 	},
 	{
 		Kind: SubcommandSeam, Name: "system",
