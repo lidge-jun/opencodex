@@ -8,6 +8,7 @@ import { summarizeComboCatalogOmissions, type ComboCatalogOmission } from "./cat
 import { shouldSyncCodexOnStart } from "./desired-state";
 import { admitCodexWrite, type CodexAdmission } from "./admission";
 import type { CodexCatalogSyncOptions } from "./catalog/sync";
+import { resetCodexAppServerCatalogStateCache } from "./app-server-processes";
 
 export interface CodexSyncResult {
   /**
@@ -116,6 +117,10 @@ export async function syncModelsToCodex(
       message: admission.message,
     };
   }
+  // Config injection is a relevant Codex write even when the catalog bytes are unchanged.
+  // Drop cached process evidence before async discovery so a process that appeared since the
+  // last read cannot make native-default guidance report active after this sync.
+  resetCodexAppServerCatalogStateCache();
   const p = port ?? config.port ?? 10100;
   const externalProvider = (deps.currentExternalCodexModelProvider ?? currentExternalCodexModelProvider)();
 

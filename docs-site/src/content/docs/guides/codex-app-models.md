@@ -319,3 +319,5 @@ ocx sync
 
 opencodex rewrites `models_cache.json` with a deliberately stale cache wrapper whenever catalog
 visibility, priority, or metadata changes, so the next Codex model refresh reads the new catalog.
+
+After a catalog or model-cache write, OpenCodex invalidates its cached app-server observation so the next request checks process freshness again. A configuration sync also invalidates the observation when catalog contents are unchanged. This refresh does not restart Codex processes.
