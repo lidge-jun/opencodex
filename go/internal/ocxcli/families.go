@@ -41,6 +41,26 @@ var configRuntimeSubcommands = map[string]Ownership{
 	"get": GoOwned, "set": GoOwned, "unset": GoOwned, "import": GoOwned,
 }
 
+// accountRuntimeSubcommands are the `ocx account` subcommands with a Go-native
+// implementation and a differential oracle (issue #51): the API-routing
+// surface (list/current/use/refresh/auto-switch/alias/rename/priority/pause/
+// resume/pause-exhausted/strategy/sticky/remove/clear-cooldown) and the OAuth
+// device flows (login/reauth/code/cancel/reset-credits), whose deterministic
+// branches (code-from-stdin, --no-wait, runtime 404/409) are oracle rows; the
+// login-status poll loops are ported but only exercised in their --no-wait
+// terminations. Everything else in the family — add-key/import (stdin),
+// main (native CODEX_HOME staging) — stays TypeScript-owned until each
+// surface carries its own oracle. Top-level `ocx login` and `ocx setup` are
+// also still TypeScript-owned: their interactive browser/TTY flows have no
+// headless byte-diff oracle without a live upstream OAuth round-trip.
+var accountRuntimeSubcommands = map[string]struct{}{
+	"list": {}, "current": {}, "use": {}, "refresh": {},
+	"auto-switch": {}, "alias": {}, "rename": {}, "priority": {},
+	"pause": {}, "resume": {}, "pause-exhausted": {},
+	"strategy": {}, "sticky": {}, "remove": {}, "clear-cooldown": {},
+	"login": {}, "reauth": {}, "code": {}, "cancel": {}, "reset-credits": {},
+}
+
 func loadCLIConfig() (map[string]any, error) {
 	loaded, err := config.Load()
 	if err != nil {

@@ -69,7 +69,10 @@ var Commands = []Command{
 	// reads the buffered /api/debug log streams through the running proxy.
 	{Name: "debug", Usage: "ocx debug <provider|usage|injection|claude> <on|off|status|reset|logs [-f]>", Summary: "Show or toggle runtime provider, usage, injection, and Claude debug capture.", Owner: GoOwned},
 	{Name: "login", Usage: "ocx login <provider>", Summary: "Log in to a provider.", Owner: TypeScriptOwned},
-	{Name: "logout", Usage: "ocx logout <provider>", Summary: "Log out from a provider.", Owner: TypeScriptOwned},
+	// logout rewrites the local credential store (auth.json) with no management
+	// route; it is Go-owned (issue #51) with a native rewrite that normalises
+	// legacy rows and promotes the next account.
+	{Name: "logout", Usage: "ocx logout <provider>", Summary: "Remove a stored provider login.", Owner: GoOwned},
 	{Name: "gui", Usage: "ocx gui", Summary: "Open the dashboard.", Owner: TypeScriptOwned},
 	{Name: "update", Usage: "ocx update [--tag <tag>]", Summary: "Update OpenCodex.", Owner: TypeScriptOwned},
 	{Name: "restart", Usage: "ocx restart", Summary: "Restart the proxy.", Owner: TypeScriptOwned},
@@ -168,6 +171,17 @@ func OwnershipFor(args []string) (Ownership, bool) {
 		}
 		if owner, ok := configRuntimeSubcommands[args[1]]; ok {
 			return owner, true
+		}
+		return TypeScriptOwned, true
+	}
+	// account keeps its TypeScript owner per subcommand: the API-routing,
+	// pool, and OAuth device-flow subcommands below are Go-native, the rest
+	// stays with the TS owner until each subcommand carries its own oracle
+	// (issue #51). Top-level `ocx login`/`ocx setup` are likewise still
+	// TypeScript-owned (interactive flows; no headless oracle).
+	if command.Name == "account" && len(args) > 1 {
+		if _, ok := accountRuntimeSubcommands[args[1]]; ok {
+			return GoOwned, true
 		}
 		return TypeScriptOwned, true
 	}
@@ -327,6 +341,8 @@ func Run(args []string, deps Deps) int {
 		return runCodexShim(args[1:], deps)
 	case "health":
 		return runHealth(args[1:], deps)
+	case "logout":
+		return runLogout(args[1:], deps)
 	case "ready":
 		return runReady(args[1:], deps)
 	case "models":
@@ -357,6 +373,10 @@ func Run(args []string, deps Deps) int {
 		return runCombo(args[1:], deps)
 	case "route":
 		return runRoute(args[1:], deps)
+	case "account":
+		// OwnershipFor already gated this: only the oracle-covered account
+		// subcommands reach Go; the rest stay TypeScript-owned and delegate.
+		return runAccount(args[1:], deps)
 	case "observe":
 		// rebuild-index / index-status never dispatch here (OwnershipFor gates
 		// them to TypeScriptOwned and delegates first); the indexer actions stay
@@ -437,7 +457,7 @@ func printSubcommandHelp(name string, deps Deps) int {
 		fmt.Fprint(deps.Stdout, "Usage: ocx ready [--json] [--wait [--timeout <seconds>]]\n\nCheck post-sync readiness. Exits 0 only when ready.\n\nExact unauthenticated GET /readyz returns HTTP 200 when ready, or 503 with Retry-After: 1 for pending or failed.\nIts sanitized HTTP identity is {service, version, uptime, pid, port, status}; /healthz is separate liveness, not readiness.\nDefault is a single identity-checked /readyz probe; old proxies without /readyz fail closed as unreachable.\n--wait polls until ready or timeout, but exits immediately on terminal failed (default 45s, max 300s).\n--timeout requires --wait and accepts a positive integer (1..300).\n--json emits {ready, status, pid, port}; status is one of ready|pending|failed|unreachable.\nInvalid or unknown arguments exit 64. Not-ready, pending, failed, timeout, and unreachable exit 1.\n")
 	case "models":
 		fmt.Fprint(deps.Stdout, modelsUsage+"\nCustom models:\n  "+modelAddUsage+"\n  "+modelRemoveUsage+"\n  Usage: ocx models list-custom [--json]\n\nRuntime subcommands (live, edit, enable, disable, provider, selected, preset, new-policy, new-arrivals, context, shadow) retain the TypeScript management API owner during the incremental takeover.\n")
-	case "usage", "logs", "memory", "inspect":
+	case "usage", "logs", "memory", "inspect", "logout":
 		return printRegistrySubcommandHelp(name, deps)
 	case "capabilities":
 		fmt.Fprint(deps.Stdout, "Usage: ocx capabilities [--json] [--mutating-only] [--route <path>]\n\nList the declared CLI capabilities and the management routes they drive.\n\nThe machine-readable surface index: start here when driving ocx programmatically instead of parsing help text.\n--route <path> answers the inverse question: which commands drive this management route.\n")
