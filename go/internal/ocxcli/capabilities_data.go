@@ -1,8 +1,10 @@
 package ocxcli
 
-// Code generated from src/cli/capabilities.ts by the issue-46 flip; keep in
-// lockstep with the TypeScript capability table (the parity oracle diffs the
-// TS CLI against this data at runtime).
+// capabilities_data.go mirrors the TypeScript capability table in
+// src/cli/capabilities.ts, hand-ported by the issue-46 flip. There is no
+// generator: a future capability change must edit both tables in lockstep, and
+// the parity oracle (tests/go-cli-parity.test.ts capabilities rows) diffs the
+// TS CLI against this data at runtime to catch drift.
 
 // capabilityRoute is one management route a capability drives.
 type capabilityRoute struct{ method, path string }

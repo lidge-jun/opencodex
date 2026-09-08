@@ -21,7 +21,16 @@ function buildGoCLI(): string {
   return binary;
 }
 const goAvailable = goToolchainAvailable();
-const goCLI = goAvailable ? buildGoCLI() : null;
+// Sibling worktrees sweep /tmp/ocx-go-cli-* between a queued run's build and
+// its first spawn, so the binary is rebuilt lazily whenever it is missing.
+let goCLI = goAvailable ? buildGoCLI() : null;
+function ensureGoBinary(): string {
+  if (goCLI === null || !existsSync(goCLI)) {
+    if (goCLI !== null) removeTreeWithRetry(dirname(goCLI));
+    goCLI = buildGoCLI();
+  }
+  return goCLI;
+}
 let testHome = "";
 let testServer: ReturnType<typeof Bun.serve> | undefined;
 type Result = { code: number; stdout: string; stderr: string };
@@ -30,7 +39,7 @@ function runTs(args: readonly string[], home = testHome): Result {
   return { code: result.exitCode, stdout: new TextDecoder().decode(result.stdout), stderr: new TextDecoder().decode(result.stderr) };
 }
 function runGo(args: readonly string[], home = testHome): Result {
-  const result = Bun.spawnSync([goCLI!, ...args], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
+  const result = Bun.spawnSync([ensureGoBinary(), ...args], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
   return { code: result.exitCode, stdout: new TextDecoder().decode(result.stdout), stderr: new TextDecoder().decode(result.stderr) };
 }
 async function runTsAsync(args: readonly string[], home = testHome): Promise<Result> {
@@ -38,7 +47,7 @@ async function runTsAsync(args: readonly string[], home = testHome): Promise<Res
   return { code: await child.exited, stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text() };
 }
 async function runGoAsync(args: readonly string[], home = testHome): Promise<Result> {
-  const child = Bun.spawn([goCLI!, ...args], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
+  const child = Bun.spawn([ensureGoBinary(), ...args], { cwd: repoRoot, env: { ...process.env, OPENCODEX_HOME: home }, stdout: "pipe", stderr: "pipe" });
   return { code: await child.exited, stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text() };
 }
 function attestedHeaders(challenge: string, port: number): Record<string, string> {
@@ -353,8 +362,10 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
           { timestamp: "2026-09-07T08:00:00.000Z", status: 200 },
         ];
         const provider = u.searchParams.get("provider");
+        const model = u.searchParams.get("model");
         const status = u.searchParams.get("status");
-        const filtered = all.filter(row => (!provider || row.provider === provider) && (!status || String(row.status) === status || String(row.statusCode) === status));
+        const conversationId = u.searchParams.get("conversationId");
+        const filtered = all.filter(row => (!provider || row.provider === provider) && (!model || row.model === model) && (!status || String(row.status) === status || String(row.statusCode) === status) && (!conversationId || row.conversationId === conversationId));
         return Response.json({ timeZone: "UTC", total: filtered.length, logs: filtered });
       }
       if (u.pathname === "/api/request-history/req-1/route-decision") {
@@ -385,8 +396,9 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
     }));
   }
   test.each([
-    { args: ["observe", "logs"] }, { args: ["observe", "logs", "--json"] }, { args: ["observe", "logs", "--jsonl"] },
-    { args: ["observe", "logs", "--provider", "anthropic"] }, { args: ["observe", "logs", "--status", "200"] },
+    { args: ["observe"] }, { args: ["observe", "logs"] }, { args: ["observe", "logs", "--json"] }, { args: ["observe", "logs", "--jsonl"] },
+    { args: ["observe", "logs", "--provider", "anthropic"] }, { args: ["observe", "logs", "--model", "claude-sonnet-4-5"] },
+    { args: ["observe", "logs", "--status", "200"] }, { args: ["observe", "logs", "--conversation", "convA"] },
     { args: ["observe", "logs", "--status", "429", "--conversation", "x"] }, { args: ["observe", "logs", "--limit", "2"] },
     { args: ["observe", "logs", "explain", "req-1"] }, { args: ["observe", "logs", "explain", "req-1", "--json"] },
     { args: ["observe", "memory"] }, { args: ["observe", "memory", "--json"] }, { args: ["observe", "debug"] }, { args: ["observe", "debug", "--json"] },
@@ -427,6 +439,16 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
     expect(goRefusal).toEqual(tsRefusal);
     expect(tsRefusal).toMatchObject({ code: 2 });
   });
+  test("diffs export --force overwriting an existing --out file", async () => {
+    startExportFixture();
+    const outPath = join(testHome, "forced.json");
+    writeFileSync(outPath, "stale bytes that --force must replace\n");
+    const ts = await runTsAsync(["export", "--client", "pi", "--json", "--out", outPath, "--force"]);
+    expect(ts).toMatchObject({ code: 0 });
+    writeFileSync(outPath, "stale bytes that --force must replace\n");
+    const go = await runGoAsync(["export", "--client", "pi", "--json", "--out", outPath, "--force"]);
+    expect(go).toEqual(ts);
+  });
   test("diffs export when no proxy is running", () => {
     testHome = mkdtempSync(join(tmpdir(), "ocx-go-export-parity-"));
     expect(expectParity(["export", "--client", "pi"])).toMatchObject({ code: 1 });
@@ -443,6 +465,18 @@ describe.skipIf(!goAvailable || goCLI === null)("Go CLI parity (ADR-0008, ticket
       const go = await runGoAsync(["export", "--client", "aside", "--json"]);
       expect(go).toEqual(ts);
       expect(ts).toMatchObject({ code: 0, stderr: "" });
+      const tsHuman = await runTsAsync(["export", "--client", "aside"]);
+      const goHuman = await runGoAsync(["export", "--client", "aside"]);
+      expect(goHuman).toEqual(tsHuman);
+      expect(tsHuman).toMatchObject({ code: 0, stderr: "" });
+      // --out is exercised from the same writable HOME; Go gets the clean slate
+      // the TypeScript run consumed, like the pi clobber test.
+      const outPath = join(asideHome, "aside-export.json");
+      const tsOut = await runTsAsync(["export", "--client", "aside", "--json", "--out", outPath]);
+      expect(tsOut).toMatchObject({ code: 0 });
+      if (existsSync(outPath)) removeTreeWithRetry(outPath);
+      const goOut = await runGoAsync(["export", "--client", "aside", "--json", "--out", outPath]);
+      expect(goOut).toEqual(tsOut);
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
