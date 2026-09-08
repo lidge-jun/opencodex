@@ -509,7 +509,18 @@ describe("POST /api/stop teardown", () => {
   test("a 409 does not escalate to a forced kill", () => {
     // Escalating would run the daemon's cleanup and strip shared config while the foreign
     // service keeps the proxy alive — the exact hole the ownership gate exists to close.
-    expect(PROCESS_CONTROL_SOURCE).toContain('if (res.status === 409) return "refused"');
+    // The 409 branch may capture the server's reason first (#4023 added a second refusal
+    // cause), but it must still return "refused" without falling through to !res.ok.
+    const stopGracefully = sliceFn(
+      PROCESS_CONTROL_SOURCE,
+      "export async function stopProxyGracefully(",
+      "export async function stopProxy(",
+    );
+    const four09At = stopGracefully.indexOf("res.status === 409");
+    expect(four09At).toBeGreaterThan(-1);
+    expect(stopGracefully.slice(four09At)).toContain('return "refused"');
+    expect(stopGracefully.indexOf('return "refused"', four09At))
+      .toBeLessThan(stopGracefully.indexOf("if (!res.ok) return false;", four09At));
 
     const stopProxyFn = sliceFn(PROCESS_CONTROL_SOURCE, "export async function stopProxy(", "export function killProxy(");
     const refusedAt = stopProxyFn.indexOf('graceful === "refused"');
