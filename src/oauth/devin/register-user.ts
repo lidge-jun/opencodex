@@ -1,8 +1,8 @@
 /**
- * Exchange a Firebase ID token for a long-lived Windsurf API key.
+ * Exchange a Firebase ID token for a long-lived Cognition/Devin API key.
  *
- * This calls the same Connect-RPC endpoint the Windsurf desktop extension uses
- * after the browser sign-in completes:
+ * This calls the same Connect-RPC endpoint the Devin/Pi CLI uses after the
+ * browser sign-in completes:
  *
  *   POST https://register.windsurf.com/exa.seat_management_pb.SeatManagementService/RegisterUser
  *   Content-Type: application/json
@@ -13,35 +13,10 @@
  * matches `exa.seat_management_pb.RegisterUserResponse`:
  *
  *   { api_key, name, api_server_url, redirect_url, team_options[] }
- *
- * Endpoint verified live (returns `{code:"unauthenticated",message:"invalid token ..."}`
- * for a fake token, 200 with the response body for a valid one).
  */
 
 import type { OAuthLoginResult, WindsurfRegion } from './types.js';
-
-/**
- * Polyfill for `AbortSignal.any` — composes multiple signals so the result
- * aborts when ANY input aborts. Built-in in Node ≥20.3 / Bun ≥1.0; we
- * implement the fallback ourselves so the timeout/caller-signal merge
- * works on every runtime our `engines` field permits (Node 18+).
- */
-function anySignal(signals: AbortSignal[]): AbortSignal {
-  const builtin = (AbortSignal as unknown as { any?: (s: AbortSignal[]) => AbortSignal }).any;
-  if (typeof builtin === 'function') return builtin(signals);
-  const controller = new AbortController();
-  const onAbort = (reason: unknown): void => {
-    if (!controller.signal.aborted) controller.abort(reason);
-  };
-  for (const s of signals) {
-    if (s.aborted) {
-      onAbort(s.reason);
-      break;
-    }
-    s.addEventListener('abort', () => onAbort(s.reason), { once: true });
-  }
-  return controller.signal;
-}
+import { anySignal } from '../../lib/abort.js';
 
 interface RegisterUserResponseJson {
   api_key?: string;

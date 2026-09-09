@@ -1,10 +1,11 @@
 /**
- * Devin / Cognition / Windsurf OAuth.
+ * Devin / Cognition OAuth.
  *
- * Login prefers an already-minted long-lived API key from Pi
+ * Login prefers an already-minted long-lived API key from the Devin/Pi CLI
  * (~/.pi/agent/auth.json -> devin.access).
- * Browser fallback opens Windsurf Auth0 with redirect_uri=show-auth-token,
- * then exchanges the pasted Firebase ID token via RegisterUser.
+ * Browser fallback uses the same Auth0 sign-in flow the Pi CLI uses
+ * (windsurf.com/windsurf/signin with redirect_uri=show-auth-token),
+ * then exchanges the pasted Firebase ID token via Cognition's RegisterUser.
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -85,11 +86,11 @@ async function loginDevinBrowser(ctrl: OAuthController, region: WindsurfRegion):
   const url = buildSignInUrl(region);
   ctrl.onAuth?.({
     url,
-    instructions: "Sign in at Windsurf, then paste the on-screen auth token here.",
+    instructions: "Sign in with your Cognition/Devin account, then paste the on-screen auth token here.",
   });
-  ctrl.onProgress?.("Waiting for the pasted Windsurf auth token...");
+  ctrl.onProgress?.("Waiting for the pasted auth token...");
   const pasted = (await ctrl.onManualCodeInput?.())?.trim();
-  if (!pasted) throw new Error("No Windsurf token pasted; cannot complete Devin sign-in.");
+  if (!pasted) throw new Error("No auth token pasted; cannot complete Devin sign-in.");
   const result = await registerUser(pasted, region);
   return {
     ...credentialsFromApiKey(result.apiKey, "oauth"),

@@ -19,6 +19,21 @@ export const DEVIN_STATIC_MODELS = [
   "grok-4-5",
 ] as const;
 
+/** Per-model context windows for Devin/Cognition models. Source: Cognition model catalog. */
+export const DEVIN_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+  "swe-1-7": 256_000,
+  "swe-1-7-lightning": 256_000,
+  "gpt-5-6-sol": 1_050_000,
+  "gpt-5-6-luna": 1_050_000,
+  "gpt-5-6-terra": 1_050_000,
+  "claude-opus-4-8": 200_000,
+  "claude-fable-5": 200_000,
+  "claude-sonnet-5": 200_000,
+  "glm-5-2": 200_000,
+  "kimi-k2-7": 256_000,
+  "grok-4-5": 256_000,
+};
+
 const WANTED_PREFIXES = [
   "swe-1-7",
   "gpt-5-6-sol",

@@ -1,6 +1,7 @@
 import type { CodexAccountMode, FastWire, OcxProviderConfig } from "../types";
 import { fastWireDeclarationError } from "./fastwire";
 import { KIRO_MODELS, KIRO_MODEL_CONTEXT_WINDOWS, KIRO_MODEL_REASONING_EFFORTS } from "./kiro-models";
+import { DEVIN_MODEL_CONTEXT_WINDOWS } from "../adapters/devin/live-models";
 import { ANTIGRAVITY_MODELS, ANTIGRAVITY_MODEL_CONTEXT_WINDOWS, ANTIGRAVITY_MODEL_EFFORTS, ANTIGRAVITY_MODEL_INPUT_MODALITIES } from "./antigravity-models";
 import type { ProviderBaseUrlChoice } from "./base-url-choices";
 import {
@@ -1259,33 +1260,21 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     noVisionModels: [...CURSOR_NO_VISION_MODELS],
   },
   {
-        id: "devin",
-    label: "Devin (Cognition / Windsurf)",
+    id: "devin",
+    label: "Cognition (Devin/Windsurf)",
     adapter: "devin",
     baseUrl: "https://server.codeium.com",
     authKind: "oauth",
     featured: false,
-    dashboardPreset: true,
-    note: "Experimental unofficial Cognition/Windsurf bridge. ocx login devin imports ~/.pi/agent/auth.json when present, otherwise opens Windsurf browser sign-in.",
+    dashboardPreset: false,
+    note: "Experimental unofficial Cognition/Devin bridge. ocx login devin imports ~/.pi/agent/auth.json (the Devin/Pi CLI credential) when present; otherwise falls back to the same Auth0 browser sign-in the Pi CLI uses, exchanging the token via Cognition's RegisterUser.",
     models: ["swe-1-7", "swe-1-7-lightning", "gpt-5-6-sol", "gpt-5-6-luna", "gpt-5-6-terra", "claude-opus-4-8", "claude-fable-5", "claude-sonnet-5", "glm-5-2", "kimi-k2-7", "grok-4-5"],
     liveModels: true,
     defaultModel: "swe-1-7",
-    modelContextWindows: {
-      "swe-1-7": 256000,
-      "swe-1-7-lightning": 256000,
-      "gpt-5-6-sol": 1050000,
-      "gpt-5-6-luna": 1050000,
-      "gpt-5-6-terra": 1050000,
-      "claude-opus-4-8": 200000,
-      "claude-fable-5": 200000,
-      "claude-sonnet-5": 200000,
-      "glm-5-2": 200000,
-      "kimi-k2-7": 256000,
-      "grok-4-5": 256000,
-    },
+    modelContextWindows: DEVIN_MODEL_CONTEXT_WINDOWS,
   },
   {
-id: "xai",
+    id: "xai",
     label: "xAI Grok",
     adapter: "openai-chat",
     baseUrl: "https://api.x.ai/v1",

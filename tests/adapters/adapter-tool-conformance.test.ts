@@ -471,9 +471,10 @@ describe("registry-derived routed tool conformance", () => {
     for (const [adapterId] of adapterDefinitions()) {
       if (TOOL_LESS_ADAPTERS.has(adapterId)) continue;
       const contract = effectiveAdapterContract(adapterId);
-      if (contract.wire === "openai-responses" || contract.wire === "cursor") {
-        // Native Responses passthrough and Cursor's protobuf transport do not use the routed
-        // adapter tool declaration surface exercised by this registry-wide check.
+      if (contract.wire === "openai-responses" || contract.wire === "cursor" || contract.wire === "devin") {
+        // Native Responses passthrough, Cursor's protobuf transport, and Devin's
+        // runTurn-only cloud-direct transport do not use the routed adapter tool
+        // declaration surface exercised by this registry-wide check.
         continue;
       }
       const body = await outbound(adapterId, namespacedCollisionParsed(contract.wire));
@@ -486,7 +487,7 @@ describe("registry-derived routed tool conformance", () => {
     for (const [adapterId] of adapterDefinitions()) {
       if (TOOL_LESS_ADAPTERS.has(adapterId)) continue;
       const contract = effectiveAdapterContract(adapterId);
-      if (contract.wire === "openai-responses" || contract.wire === "cursor") continue;
+      if (contract.wire === "openai-responses" || contract.wire === "cursor" || contract.wire === "devin") continue;
       const parsed = namespacedCollisionParsed(contract.wire);
       // parseRequest rejects this shape for real inbound traffic; keeping the policy mutation here
       // also proves each adapter remains fail-closed when a caller reaches it with a prebuilt AST.
@@ -513,8 +514,8 @@ describe("registry-derived routed tool conformance", () => {
       if (TOOL_LESS_ADAPTERS.has(adapterId)) continue;
       const contract = effectiveAdapterContract(adapterId);
       const driver = TOOL_WIRE_DRIVERS[contract.wire];
-      if (!driver.streamingToolCall || !driver.extractWireToolName) {
-        expect(["openai-responses", "cursor"]).toContain(contract.wire);
+      if (!driver?.streamingToolCall || !driver?.extractWireToolName) {
+        expect(["openai-responses", "cursor", "devin"]).toContain(contract.wire);
         continue;
       }
 

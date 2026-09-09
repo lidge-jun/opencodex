@@ -107,6 +107,7 @@ export function mapOcxToolsToDevin(tools: OcxTool[] | undefined): ToolDef[] | un
 
 export function createDevinAdapter(provider: OcxProviderConfig): ProviderAdapter {
   const cascadeIds = new Map<string, string>();
+  const CASCADE_ID_MAX = 256;
 
   return {
     name: "devin",
@@ -143,6 +144,11 @@ export function createDevinAdapter(provider: OcxProviderConfig): ProviderAdapter
       const threadKey = parsed._clientThreadId || parsed.previousResponseId || "default";
       let cascadeId = cascadeIds.get(threadKey);
       if (!cascadeId) {
+        // Evict oldest entries to bound memory in long-running proxy processes.
+        if (cascadeIds.size >= CASCADE_ID_MAX) {
+          const firstKey = cascadeIds.keys().next().value;
+          if (firstKey) cascadeIds.delete(firstKey);
+        }
         cascadeId = allocateCascadeId();
         cascadeIds.set(threadKey, cascadeId);
       }

@@ -2,23 +2,22 @@
  * Cloud-direct streaming chat. Talks to
  * `server.codeium.com/exa.api_server_pb.ApiServerService/GetChatMessage`
  * with no local language_server in the path. Returns an async iterable of
- * text deltas so the caller can stream straight into opencode's SSE.
+ * CloudChatEvent deltas (text, reasoning, tool calls, usage, finish) so the
+ * caller can stream straight into opencodex's internal AdapterEvent model.
  *
- * What this DOES support today:
+ * What this supports:
  *   - Single- or multi-turn chat using the prompt-and-history pattern the LS
  *     uses (flatten history into one ChatMessagePrompt list)
- *   - All free Windsurf models (swe-1.6, kimi-k2.6) and any model the user's
- *     api_key is entitled to
+ *   - All free Windsurf/Cognition models (swe-1-7, swe-1-7-lightning, etc.)
+ *     and any model the user's api_key is entitled to
  *   - Streaming (uses Connect-streaming envelope, emits deltas as they arrive)
+ *   - Tool definitions (encoded via `encodeToolDef`) and tool-call events
+ *     (tool_call_start, tool_call_args) decoded from the response stream
+ *   - Usage and finish-reason events for terminal completion
  *
- * What this DOES NOT yet support (future work):
- *   - Tools (the GetChatMessage proto has a `tools` field; the opencode plugin
- *     currently runs tool-planning in `src/plugin.ts:planToolCall` against the
- *     local LS — porting that to cloud-direct requires also encoding the tool
- *     definitions in the request and decoding tool_calls from the response)
- *   - Workspace context (open files, cursor position) — chat-only mode
- *
- * Wire-protocol reference: docs/CLOUD_DIRECT.md.
+ * Wire-protocol: Connect-RPC streaming over HTTPS with manual protobuf
+ * encoding (see `wire.ts`). The transport mirrors the upstream pi-devin-auth
+ * cloud-direct client.
  */
 
 import * as crypto from 'crypto';
@@ -34,6 +33,7 @@ import {
 import { buildMetadata } from './metadata.js';
 import { getCachedUserJwt } from './auth.js';
 import { getCachedCatalog, ModelNotAvailableError } from './catalog.js';
+import { anySignal } from '../../../lib/abort.js';
 
 /**
  * Connect-RPC streaming inactivity timeout. If the cloud sends zero bytes
@@ -44,32 +44,6 @@ import { getCachedCatalog, ModelNotAvailableError } from './catalog.js';
 const CLOUD_STREAM_IDLE_MS = 120_000;
 /** Time-to-first-byte timeout. */
 const CLOUD_STREAM_TTFB_MS = 60_000;
-
-/**
- * Compose multiple AbortSignals into a single signal that aborts when ANY
- * input aborts. Uses `AbortSignal.any` when available (Node ≥20.3 / Bun
- * ≥1.0); falls back to a manual implementation for older runtimes that
- * are still in our `engines` range (Node 18.x and early 20.x). The
- * previous `req.signal ?? ttfbSignal` fallback silently picked one signal
- * and dropped the other, defeating either the caller's cancel or the
- * internal timeout.
- */
-function anySignal(signals: AbortSignal[]): AbortSignal {
-  const builtin = (AbortSignal as unknown as { any?: (s: AbortSignal[]) => AbortSignal }).any;
-  if (typeof builtin === 'function') return builtin(signals);
-  const controller = new AbortController();
-  const onAbort = (reason: unknown): void => {
-    if (!controller.signal.aborted) controller.abort(reason);
-  };
-  for (const s of signals) {
-    if (s.aborted) {
-      onAbort(s.reason);
-      break;
-    }
-    s.addEventListener('abort', () => onAbort(s.reason), { once: true });
-  }
-  return controller.signal;
-}
 
 /**
  * Per-(apiKey, host) session/cascade ID cache. Cloud uses these for
@@ -478,9 +452,10 @@ const MAX_TOOL_DESC_LEN = 6998;
  * reorder, extra whitespace) passes. The phrase appears verbatim in Claude
  * Code's built-in TaskOutput tool description.
  *
- * Rewrite the known trigger to a meaning-preserving form. This is a
+ * Rewrite known triggers to meaning-preserving forms. This is a
  * Cognition-specific constraint alongside the length limit above; if
- * Cognition adds more blocklisted phrases, extend this table.
+ * Cognition adds more blocklisted phrases, extend this table and add a
+ * regression test in tests/devin-adapter.test.ts.
  */
 const COGNITION_BLOCKLIST_REWRITES: ReadonlyArray<[RegExp, string]> = [
   [/\bTakes a task_id parameter identifying the task\b/g, "Accepts a task_id parameter identifying the task"],
@@ -1088,6 +1063,18 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
         `Cognition denied this request for model "${req.modelUid}" with the opaque ` +
         `"an internal error occurred" message. This almost always means the model ` +
         `is not enabled for your account/tier — see https://codeium.com/account. ` +
+        `(cloud trace ID: ${trailerError.traceId ?? 'n/a'}; raw message: ${trailerError.message})`;
+      throw new CloudChatError(enriched, trailerError.code, trailerError.traceId);
+    }
+    // Cognition also returns `permission_denied` when a tool description
+    // contains a blocklisted phrase that the sanitizer above did not catch
+    // (e.g. Cognition added a new phrase). Surface a clear message so the
+    // user knows to check tool descriptions rather than suspect auth/tier.
+    if (trailerError.code === 'permission_denied') {
+      const enriched =
+        `Cognition denied this request (permission_denied). If tool descriptions ` +
+        `are present, a blocklisted phrase may have triggered this — see the ` +
+        `COGNITION_BLOCKLIST_REWRITES table in cloud-direct/chat.ts. ` +
         `(cloud trace ID: ${trailerError.traceId ?? 'n/a'}; raw message: ${trailerError.message})`;
       throw new CloudChatError(enriched, trailerError.code, trailerError.traceId);
     }

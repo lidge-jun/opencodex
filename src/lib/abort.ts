@@ -144,3 +144,25 @@ export function cancelBodyOnAbort(body: ReadableStream<Uint8Array> | null, signa
   signal.addEventListener("abort", onAbort, { once: true });
   return () => signal.removeEventListener("abort", onAbort);
 }
+
+/**
+ * Compose multiple AbortSignals into a single signal that aborts when ANY input
+ * aborts. Uses `AbortSignal.any` when available (Node >=20.3 / Bun >=1.0);
+ * falls back to a manual implementation for older runtimes.
+ */
+export function anySignal(signals: AbortSignal[]): AbortSignal {
+  const builtin = (AbortSignal as unknown as { any?: (s: AbortSignal[]) => AbortSignal }).any;
+  if (typeof builtin === "function") return builtin(signals);
+  const controller = new AbortController();
+  const onAbort = (reason: unknown): void => {
+    if (!controller.signal.aborted) controller.abort(reason);
+  };
+  for (const s of signals) {
+    if (s.aborted) {
+      onAbort(s.reason);
+      break;
+    }
+    s.addEventListener("abort", () => onAbort(s.reason), { once: true });
+  }
+  return controller.signal;
+}

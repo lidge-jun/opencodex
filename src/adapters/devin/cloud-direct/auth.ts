@@ -25,33 +25,9 @@
 import * as crypto from 'crypto';
 import { encodeMessage, iterFields } from './wire.js';
 import { buildMetadata } from './metadata.js';
+import { anySignal } from '../../../lib/abort.js';
 
 const DEFAULT_HOST = 'https://server.codeium.com';
-
-/**
- * Polyfill for `AbortSignal.any` — composes multiple signals so the result
- * aborts when ANY input aborts. Built-in in Node ≥20.3 / Bun ≥1.0. Our
- * `engines.node` is `>=18.0.0`, so we ship the fallback ourselves; without
- * it the caller's cancel signal silently disappears on older runtimes
- * (chat-cancel during a `GetUserJwt` mint would keep the network request
- * alive for up to the full 30s timeout).
- */
-function anySignal(signals: AbortSignal[]): AbortSignal {
-  const builtin = (AbortSignal as unknown as { any?: (s: AbortSignal[]) => AbortSignal }).any;
-  if (typeof builtin === 'function') return builtin(signals);
-  const controller = new AbortController();
-  const onAbort = (reason: unknown): void => {
-    if (!controller.signal.aborted) controller.abort(reason);
-  };
-  for (const s of signals) {
-    if (s.aborted) {
-      onAbort(s.reason);
-      break;
-    }
-    s.addEventListener('abort', () => onAbort(s.reason), { once: true });
-  }
-  return controller.signal;
-}
 
 export interface MintedUserJwt {
   jwt: string;
