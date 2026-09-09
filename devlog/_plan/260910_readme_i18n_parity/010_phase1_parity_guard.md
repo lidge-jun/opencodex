@@ -62,6 +62,11 @@ with both tokens.
    A quoted argument without a space stays exact, so `"anthropic/claude-opus-5"` is still
    frozen. This was an audit FAIL: without it the guard would have rejected every correct
    translation.
+   Non-ASCII content counts as prose on the same footing. Japanese and Chinese do not put
+   spaces between words, so the whitespace-only version of this rule read
+   `"このスタックトレースを説明して"` as an identifier and demanded it equal the English sentence.
+   Every token that must stay frozen in these fences is ASCII, so the widening costs nothing.
+   Found by running the guard against the finished Japanese file, not by review.
 5. **Assets** — every asset path referenced in `README.md` (`assets/...`, including the raw
    `githubusercontent` forms) appears in each locale by its repository-relative suffix, so
    `assets/demo.gif` and `../assets/demo.gif` both satisfy it.

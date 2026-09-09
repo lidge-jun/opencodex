@@ -20,7 +20,7 @@ ocx start
 
 ### Claude Code, 어떤 모델이든
 
-선택기는 기본 Claude Code입니다. 뒤에서 도는 두뇌는 아닙니다.
+선택기는 Claude Code 그대로입니다. 뒤에서 도는 두뇌만 다릅니다.
 
 </td>
 <td width="50%">
@@ -85,20 +85,20 @@ npm install -g @bitkyc08/opencodex   # Node 18+; Bun 런타임은 자동으로 �
 ocx start                         # 프록시 + 대시보드: localhost:10100
 ```
 
-`ocx service`로 백그라운드에서 실행합니다.
+백그라운드로 돌리려면 `ocx service`를 쓰세요.
 
-**http://localhost:10100** 웹 대시보드에서 모두 설정합니다. 프로바이더를 추가하고(내장 40개 이상,
-또는 OpenAI 호환 엔드포인트), 모델을 고르고, 계정을 관리합니다. `ocx gui`로 대시보드를 언제든 다시 엽니다.
+**http://localhost:10100**을 열고 웹 대시보드에서 전부 설정하세요. 프로바이더 추가(내장 40개 이상,
+또는 OpenAI 호환 엔드포인트), 모델 선택, 계정 관리까지 모두 여기서 합니다. `ocx gui`로 대시보드를 언제든 다시 엽니다.
 Codex 인증용 **ChatGPT 계정 풀**도 관리합니다. ChatGPT / Codex 계정을 여러 개 넣고, 대시보드에서
 5시간 / 주간 / 30일 쿼터를 갱신합니다. 쿼터 라우팅을 켜면 새 세션은 사용량이 가장 적은 정상 계정을 쓰고,
-round-robin과 fill-first는 각자 정책을 따릅니다. 기존 Codex 스레드는 시작한 계정에 affinity를 유지하는 것이
-기본이라, 긴 SSH·tmux·모바일 세션이 대화 도중에 계정을 바꾸지 않습니다. 다만 쿼터 재평가, failover,
+round-robin과 fill-first는 각자 정책을 따릅니다. 기존 Codex 스레드는 기본적으로 시작한 계정에 붙어
+있어서, 긴 SSH·tmux·모바일 세션이 대화 도중에 계정을 바꾸지 않습니다. 다만 쿼터 재평가, failover,
 계정 제외, affinity 만료, 401/403·429 복구가 일어나면 다시 묶일 수 있습니다. Codex Desktop 로그인처럼
 다른 계정이 소진된 뒤에만 쓰고 싶은 계정이 있으면, 계정에 선택 순서를 지정하세요.
 
 ### 스폰서
 
-opencodex는 업스트림 프로토콜이 바뀔 때마다 스폰서의 지원으로 유지됩니다. 관심이 있으면
+업스트림 프로토콜이 바뀔 때마다 opencodex가 따라갈 수 있는 건 스폰서 덕분입니다. 관심이 있으면
 [SPONSORS.md](../SPONSORS.md)를 확인하세요.
 
 <!-- sponsors:main — one banner, model developers only; empty until a Main sponsor signs -->
@@ -234,8 +234,8 @@ ocx init      # 대화형 설정: ~/.opencodex/config.json을 쓰고 Codex를 �
 - **무슨 일이 일어나는지 보이게** — 대시보드가 프로바이더, OAuth 상태, 모델 선택, cache 토큰 수가
   찍힌 실시간 요청 로그를 보여줍니다.
 - **깔끔한 종료, 잔여물 제로** — `ocx stop`이 Codex를 원래 설정으로 되돌립니다.
-- **유한한 메모리 소유권** — 오래 사는 cache, ring buffer, 프로토콜 변환 저장소마다 유한 cap,
-  바이트 예산, 또는 활성 reconciliation이 있습니다. config를 다시 로드한 뒤 unbounded `Map`이나
+- **한도가 정해진 메모리 소유권** — 오래 사는 cache, ring buffer, 프로토콜 변환 저장소마다 정해진 cap,
+  바이트 예산, 또는 활성 reconciliation이 있습니다. config를 다시 로드한 뒤 상한 없는 `Map`이나
   `Set`은 남지 않습니다.
 
 <details>
@@ -292,7 +292,7 @@ ocx start [--port 10100]       # 포그라운드에서 프록시 시작
 ocx stop                       # 중지 + 네이티브 Codex 복원
 ocx service [install|repair|restart|start|stop|status|uninstall|remove]  # 백그라운드 서비스
 ocx codex-shim install         # `codex`가 뜰 때마다 프록시를 필요 시 시작
-ocx health [--json]            # 프록시 즉시 생존 확인
+ocx health [--json]            # 프록시가 지금 살아 있는지 확인
 ocx ready [--json] [--wait [--timeout <seconds>]]  # 동기화 후 준비 상태 확인
 ocx status                     # 프록시가 실행 중인가?
 ocx gui                        # 웹 대시보드 열기
@@ -303,14 +303,14 @@ ocx v2 <...>                   # 멀티에이전트 v1/v2 표면 제어
 ocx update [--tag preview]     # opencodex 업데이트
 ```
 
-포트를 고정하지 않은 시작은 선호 포트가 사용 중이면 다른 빈 포트를 고를 수 있고, `--port`를 명시한
-시작은 절대 바꾸지 않습니다. 전체 레퍼런스: [CLI 문서](https://opencodex.me/ko/reference/cli/).
+포트를 고정하지 않고 시작하면 선호 포트가 사용 중일 때 다른 빈 포트로 옮겨갈 수 있습니다. `--port`를
+명시하면 절대 옮기지 않습니다. 전체 레퍼런스: [CLI 문서](https://opencodex.me/ko/reference/cli/).
 
 ### 상태 확인과 준비
 
-`GET /healthz`는 프록시의 즉시 생존을 보고합니다. 인증 없는 `GET /readyz`는 동기화 후 준비 상태를
-살균된 JSON identity `{service, version, uptime, pid, port, status}`로 보고합니다. `status`가 `ready`이면
-`200`을 주고, `pending`과 최종 `failed`는 `Retry-After: 1`과 함께 `503`을 줍니다.
+`GET /healthz`는 프록시가 지금 살아 있는지 바로 알려줍니다. 인증이 필요 없는 `GET /readyz`는 동기화가
+끝난 뒤의 준비 상태를 민감 정보를 뺀 JSON identity `{service, version, uptime, pid, port, status}`로
+돌려줍니다. `status`가 `ready`이면 `200`, `pending`과 최종 `failed`는 `Retry-After: 1`과 함께 `503`입니다.
 
 `ocx ready [--json] [--wait [--timeout <seconds>]]`는 기본으로 한 번 probe합니다. `--wait`는 기본 최대
 45초 동안 폴링하되, 최종 `failed`를 보면 즉시 종료합니다. `--timeout <seconds>`는 1–300초 한도를 정하고
@@ -373,16 +373,15 @@ bun run test
 
 **[기여하기](../CONTRIBUTING.md)**를 보세요.
 
-유지보수가 carry하거나 재구현해서 들어왔지만 커밋에 원저자가 안 적힌 기여자 작업은
-**[CREDITS.md](../CREDITS.md)**에 기록됩니다.
+메인테이너가 대신 올리거나 다시 구현해서 들어왔는데 커밋에 원저자가 적히지 않은 기여자 작업은
+**[CREDITS.md](../CREDITS.md)**에 기록해 둡니다.
 
 ## 면책 조항
 
-opencodex는 독립적인 커뮤니티 유지 프로젝트이며, **OpenAI, Anthropic 등 어떤 프로바이더와도 제휴하거나 보증을 받지 않습니다.**
+opencodex는 커뮤니티가 유지하는 독립 프로젝트이며, **OpenAI, Anthropic 등 어떤 프로바이더와도 제휴하거나 보증을 받지 않습니다.**
 
 일부 프로바이더 — 특히 Anthropic (Claude) — 는 서드파티 프록시로 API 트래픽을 라우팅하는 계정을 정지하거나 제한할 수 있습니다. **사용 책임은 본인에게 있습니다 (UAYOR).** 프로바이더를 연결하기 전에 해당 서비스 약관에서 프록시 기반 접근이 허용되는지 확인하세요. opencodex 유지보수자는 업스트림 프로바이더가 취한 계정 조치에 책임을 지지 않습니다.
 
 ## 라이선스
 
 MIT
-

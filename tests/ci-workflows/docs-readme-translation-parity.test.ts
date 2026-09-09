@@ -52,6 +52,7 @@ const ABSOLUTE_URL = /https?:\/\/[^\s"'<>)\]]+/g;
 const ASSET_REFERENCE = /(?:src|href)="([^"]*assets\/[^"]+)"/g;
 const REPO_RELATIVE_LINK = /\]\(\.\/([^)\s]+)\)/g;
 const QUOTED_ARGUMENT = /"[^"\n]*"/g;
+const PROSE_INSIDE_QUOTES = /[\s\u0080-\uFFFF]/;
 const SPONSOR_MARKER = /<!--\s*sponsors:([a-z-]+)/g;
 
 function readNormalized(relative: string): string {
@@ -124,6 +125,11 @@ function fencedBlocks(markdown: string): { lang: string; lines: string[] }[] {
  * so it collapses to a placeholder. A quoted argument without a space is an
  * identifier such as "anthropic/claude-opus-5" and still has to match exactly.
  *
+ * Non-ASCII counts as prose too. Japanese and Chinese do not put spaces between
+ * words, so a whitespace-only rule reads a translated prompt as an identifier and
+ * demands it match the English sentence. Every frozen token here - model ids,
+ * flags, paths, URLs - is ASCII, so widening the rule frees nothing that matters.
+ *
  * The quoted arguments are matched pairwise and classified in a callback. A
  * single pattern for "quoted text containing a space" does not work: on
  * `codex -m "anthropic/claude-opus-5" "Explain this stack trace"` it matches the
@@ -133,7 +139,7 @@ function commandPart(line: string): string {
   const comment = line.indexOf(" #");
   const command = (comment === -1 ? line : line.slice(0, comment)).trimEnd();
   return command.replace(QUOTED_ARGUMENT, (quoted) =>
-    /\s/.test(quoted.slice(1, -1)) ? '"<prose>"' : quoted,
+    PROSE_INSIDE_QUOTES.test(quoted.slice(1, -1)) ? '"<prose>"' : quoted,
   );
 }
 
