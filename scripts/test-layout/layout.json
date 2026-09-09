@@ -786,6 +786,7 @@
     "lab-read-filter-validation.test.ts": "lab",
     "lab-read-surfaces.test.ts": "lab",
     "legacy-shell-compat.test.ts": "responses",
+    "live-service-manager-guard.test.ts": "service",
     "local-management-attestation.test.ts": "server",
     "local-management-capability.test.ts": "server",
     "local-management-direct-transport.test.ts": "server",

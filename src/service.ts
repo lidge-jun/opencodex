@@ -865,7 +865,49 @@ export function resolvedProxyEnv(env: NodeJS.ProcessEnv = process.env): { name: 
 }
 
 function sh(cmd: string): string {
+  assertLiveServiceManagerAllowed(cmd);
   return execSync(cmd, { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
+}
+
+/**
+ * Service-manager invocations that only observe. Everything else changes a job that
+ * launchd or the systemd user manager is running right now.
+ */
+const READ_ONLY_SERVICE_MANAGER = new RegExp(
+  "^(?:launchctl\\s+(?:list|print|print-disabled|blame|managerpid|manageruid)\\b"
+  + "|systemctl\\s+(?:--user\\s+)?(?:show|show-environment|status|is-active|is-enabled|is-failed|cat|list-units|list-unit-files|--version)\\b)",
+);
+
+const SERVICE_MANAGER_COMMAND = /^(?:launchctl|systemctl)\b/;
+
+/**
+ * Refuse to mutate a live service manager from an armed test process.
+ *
+ * The test preload isolates HOME, OPENCODEX_HOME and CODEX_HOME, and that is enough for
+ * anything addressed by path. It is not enough here. `systemctl --user stop
+ * opencodex-proxy.service` is addressed by job NAME and talks to the user manager that is
+ * already running, so it stops the proxy the developer is actually using no matter what
+ * HOME says. `launchctl bootout gui/<uid>/com.opencodex.proxy` has the same shape.
+ *
+ * Windows already had this guard: `querySchtasks` refuses every non-query call while the
+ * test-home guard is armed, after a partially-faked test replaced a real scheduled task
+ * with a launcher inside a temporary test home. macOS and Linux were left without the
+ * equivalent, which means the person most likely to run this suite - someone running
+ * opencodex on the machine they are developing it on - is the person it can disrupt.
+ *
+ * Read-only verbs stay allowed: probing what the manager reports is the whole point of
+ * the diagnostics, and observation cannot take a service down.
+ */
+export function assertLiveServiceManagerAllowed(command: string): void {
+  if (!isTestHomeGuardArmed()) return;
+  const trimmed = command.trim();
+  if (!SERVICE_MANAGER_COMMAND.test(trimmed)) return;
+  if (READ_ONLY_SERVICE_MANAGER.test(trimmed)) return;
+  throw new Error(
+    `refusing to run \`${trimmed}\` from an armed test process: launchd and the systemd user `
+    + "manager address a job by name, not by HOME, so this reaches the service the developer is "
+    + "actually running. Inject the service operation instead of calling the live manager.",
+  );
 }
 
 /**
@@ -887,6 +929,9 @@ export function runLaunchctl(
   deps: { run?: typeof spawnSync } = {},
 ): { ok: boolean; stdout: string; stderr: string; status: number | null } {
   const run = deps.run ?? spawnSync;
+  // Only the real runner is guarded. Tests that inject a spawnSync stand-in are
+  // exercising the parsing, not reaching launchd, and must keep working.
+  if (run === spawnSync) assertLiveServiceManagerAllowed(`launchctl ${args.join(" ")}`);
   const result = run("/bin/launchctl", args, { encoding: "utf8", windowsHide: true });
   // `error` is set when the spawn itself failed (ENOENT off macOS) and `status` is
   // null for a signalled child; neither may be reported as success.
