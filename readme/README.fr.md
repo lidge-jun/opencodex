@@ -372,6 +372,10 @@ les contributeurs dans [`CONTRIBUTING.md`](../CONTRIBUTING.md), et le signalemen
 Signalez les vulnérabilités non divulguées en privé grâce au
 [signalement privé de vulnérabilités de GitHub](https://github.com/lidge-jun/opencodex/security/advisories/new),
 et non dans une issue publique.
+Ce formulaire est le seul canal technique : il n'existe pas d'adresse e-mail de sécurité. Les
+échanges ultérieurs restent dans le signalement privé ; une issue publique peut servir à la
+coordination, jamais aux détails de la vulnérabilité. Accuser réception d'un signalement n'est pas
+le trier, et aucun délai de première réponse n'est promis.
 
 ## Développement
 

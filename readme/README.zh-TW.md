@@ -355,6 +355,8 @@ CLI／設定／管理 API 參考——由 [`docs-site/`](../docs-site) 建置，
 未公開的漏洞請透過
 [GitHub 私人漏洞回報](https://github.com/lidge-jun/opencodex/security/advisories/new)
 私下回報，不要開公開 issue。
+這份表單是唯一的技術管道，沒有安全信箱。後續往來都留在這份私人回報裡；公開 issue 只能用來協調，不能放
+漏洞細節。確認收到回報不等於已經分診，也不承諾首次回應的時限。
 
 ## 開發
 

@@ -373,6 +373,10 @@ Bakımcılar için doğruluk kaynağı notları [`structure/`](../structure) alt
 [`SECURITY.md`](../SECURITY.md) içindedir. Açıklanmamış güvenlik açıklarını herkese açık bir issue
 yerine [GitHub özel güvenlik açığı bildirimi](https://github.com/lidge-jun/opencodex/security/advisories/new)
 üzerinden gizlice bildirin.
+Teknik kanal yalnızca bu formdur; ayrı bir güvenlik e-posta adresi yoktur. Sonraki yazışmalar özel
+bildirimin içinde kalır; herkese açık bir issue yalnızca koordinasyon taşıyabilir, güvenlik açığının
+ayrıntılarını asla. Bildirimin alındığını onaylamak onu incelemekle aynı şey değildir ve ilk yanıt
+için bir süre taahhüt edilmez.
 
 ## Geliştirme
 

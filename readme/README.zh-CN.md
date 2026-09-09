@@ -358,6 +358,8 @@ CLI/配置/管理 API 参考 —— 由 [`docs-site/`](../docs-site) 构建，�
 未公开的漏洞请通过
 [GitHub 私有漏洞报告](https://github.com/lidge-jun/opencodex/security/advisories/new)
 私下报告，不要开公开 issue。
+这个表单是唯一的技术渠道，没有安全邮箱。后续沟通都留在这份私有报告里；公开 issue 只能用来协调，不能放
+漏洞细节。确认收到报告不等于已经分诊，也不承诺首次响应的时限。
 
 ## 开发
 

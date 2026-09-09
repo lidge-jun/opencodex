@@ -357,6 +357,9 @@ npm uninstall -g @bitkyc08/opencodex
 아직 공개되지 않은 취약점은 공개 이슈가 아니라
 [GitHub 비공개 취약점 보고](https://github.com/lidge-jun/opencodex/security/advisories/new)로
 비공개 제보하세요.
+기술 창구는 이 양식뿐이고 보안 전용 메일 주소는 없습니다. 이후 논의도 비공개 보고 안에서 이어가세요.
+공개 이슈에는 일정 조율 정도만 올릴 수 있고 취약점 내용은 올릴 수 없습니다. 접수 확인은 트리아지가
+아니며, 최초 응답 시한도 약속하지 않습니다.
 
 ## 개발
 
