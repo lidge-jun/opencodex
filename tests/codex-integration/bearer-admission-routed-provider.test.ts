@@ -17,6 +17,7 @@ import type { NativeProfileManager } from "../../src/codex/native-profile-manage
 import type { OcxConfig } from "../../src/types";
 import { ownedServiceHomeInspection } from "../helpers/owned-service-home-inspection";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 
 /**
  * Issue #2132: bearer admission must not require a stored ChatGPT credential.
@@ -322,7 +323,9 @@ describe("bearer admission is not reused as a Cursor upstream credential", () =>
 
       const server = startServer(0, { inspectNativeCodexOwnership });
       try {
-        await postResponses(server.url, "cursorcustom/auto");
+        const response = await postResponses(server.url, "cursorcustom/auto");
+        // The runTurn adapter reports its pre-dispatch failure in a Responses terminal.
+        expect(await response.json()).toMatchObject({ status: "failed" });
         expect(capturedAuth).toEqual([]);
       } finally {
         await server.stop(true);
@@ -429,9 +432,10 @@ describe("bearer admission is not reused as a Cursor upstream credential", () =>
 
       const server = await startOwnedServer();
       try {
-        await postChatCompletions(server.url, "cursorcustom/auto", {
+        const response = await postChatCompletions(server.url, "cursorcustom/auto", {
           "x-opencodex-api-key": ADMISSION_SECRET,
         });
+        expect(response.status).not.toBe(200);
         expect(capturedAuth).toEqual([]);
       } finally {
         await server.stop(true);
@@ -459,7 +463,29 @@ describe("bearer admission is not reused as a Cursor upstream credential", () =>
     });
   });
 
-  test("Chat combos never assign one unscoped bearer to a Cursor target", async () => {
+  test.each(["Responses", "Chat"])("%s keeps an explicit OpenAI pair off an unchanged Cursor route", async surface => {
+    await withCursorCaptureServer(async (baseUrl, capturedAuth) => {
+      saveConfig(cursorForwardConfig(baseUrl));
+      writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ tokens: {} }));
+      const server = await startOwnedServer();
+      try {
+        const headers = {
+          "x-opencodex-api-key": ADMISSION_SECRET,
+          authorization: `Bearer ${fakeChatGptJwt({ chatgpt_account_id: "caller-openai" })}`,
+          "chatgpt-account-id": "caller-openai",
+        };
+        const response = surface === "Chat"
+          ? await postChatCompletions(server.url, "cursorcustom/auto", headers)
+          : await postResponses(server.url, "cursorcustom/auto", headers);
+        await response.text();
+        expect(capturedAuth).toEqual([]);
+      } finally {
+        await server.stop(true);
+      }
+    });
+  });
+
+  test.each([false, true])("Chat combos never assign caller auth to a Cursor target (OpenAI pair: %s)", async openAiPair => {
     await withCursorCaptureServer(async (baseUrl, capturedAuth) => {
       const config = cursorForwardConfig(baseUrl);
       config.combos = {
@@ -472,10 +498,12 @@ describe("bearer admission is not reused as a Cursor upstream credential", () =>
 
       const server = await startOwnedServer();
       try {
-        await postChatCompletions(server.url, "combo/free", {
+        const response = await postChatCompletions(server.url, "combo/free", {
           "x-opencodex-api-key": ADMISSION_SECRET,
-          authorization: "Bearer cursor-upstream-token",
+          authorization: `Bearer ${openAiPair ? fakeChatGptJwt({ chatgpt_account_id: "caller-openai" }) : "cursor-upstream-token"}`,
+          ...(openAiPair ? { "chatgpt-account-id": "caller-openai" } : {}),
         });
+        expect(response.status).not.toBe(200);
         expect(capturedAuth).toEqual([]);
       } finally {
         await server.stop(true);
@@ -483,7 +511,7 @@ describe("bearer admission is not reused as a Cursor upstream credential", () =>
     });
   });
 
-  test("Responses combos never assign one unscoped bearer to a Cursor target", async () => {
+  test.each([false, true])("Responses combos never assign caller auth to a Cursor target (OpenAI pair: %s)", async openAiPair => {
     await withCursorCaptureServer(async (baseUrl, capturedAuth) => {
       const config = cursorForwardConfig(baseUrl);
       config.combos = {
@@ -494,10 +522,12 @@ describe("bearer admission is not reused as a Cursor upstream credential", () =>
 
       const server = startServer(0, { inspectNativeCodexOwnership });
       try {
-        await postResponses(server.url, "combo/free", {
+        const response = await postResponses(server.url, "combo/free", {
           "x-opencodex-api-key": ADMISSION_SECRET,
-          authorization: "Bearer cursor-upstream-token",
+          authorization: `Bearer ${openAiPair ? fakeChatGptJwt({ chatgpt_account_id: "caller-openai" }) : "cursor-upstream-token"}`,
+          ...(openAiPair ? { "chatgpt-account-id": "caller-openai" } : {}),
         });
+        expect(response.status).not.toBe(200);
         expect(capturedAuth).toEqual([]);
       } finally {
         await server.stop(true);

@@ -215,7 +215,7 @@ import {
 } from "../auth-cors";
 import type { DataPlaneAdmission } from "../auth-cors";
 import { createTranslatorBudget, isTranslatorBudgetExceededError, type TranslatorBudget } from "../../lib/translator-budget";
-import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
+import { captureExplicitOpenAiCallerAuth, listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ExplicitOpenAiCallerAuth, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
 import { providerConsumesCallerAuthorization } from "../../providers/caller-authorization";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { CODEX_RESERVE_HELPER_UNSUPPORTED_MESSAGE, isCodexReserveHelperUnsupported } from "../../codex/loopback-target";
@@ -1711,6 +1711,10 @@ export interface HandleResponsesOptions {
   stripClaudeMainAuthForNoncanonicalForward?: boolean;
   /** In-memory credential proven by Claude's native-main turn claim; never persist or log. */
   trustedClaudeMainAuth?: { authorization: string; chatgptAccountId?: string };
+  /** Sidecar-only auth captured before route changes; null means no usable original pair. */
+  openAiSidecarAuth?: ExplicitOpenAiCallerAuth | null;
+  /** Original caller-owned native pair; separate from any claimed sidecar enrichment. */
+  nativeCallerAuth?: ExplicitOpenAiCallerAuth | null;
   /** Internal recursion guard; callers outside this module must not set it. */
   comboAttempt?: boolean;
   /** Internal combo handoff for one parent-validated continuation snapshot. */
@@ -2054,6 +2058,27 @@ async function resolveResponsesCodexAuth(
         authInputHeaders.set("chatgpt-account-id", trustedClaudeMainForFinalRoute.chatgptAccountId);
       } else {
         authInputHeaders.delete("chatgpt-account-id");
+      }
+    }
+    // A caller's explicit OpenAI pair may also be used by an optional sidecar on
+    // an unchanged Cursor route. It is not a Cursor token even without a rewrite.
+    if (options.nativeCallerAuth && !isCanonicalOpenAiForwardProvider(route.provider)
+      && providerConsumesCallerAuthorization(route.provider)) {
+      authInputHeaders = new Headers(authInputHeaders);
+      authInputHeaders.delete("authorization");
+      authInputHeaders.delete("chatgpt-account-id");
+    }
+    // An explicit caller-owned OpenAI pair may cross an internal route change only to
+    // the canonical OpenAI transport. Sidecar enrichment grants no primary authority.
+    if (options.nativeCallerAuth && isCanonicalOpenAiForwardProvider(route.provider)) {
+      const nativeHeaders = new Headers({
+        authorization: options.nativeCallerAuth.authorization,
+        "chatgpt-account-id": options.nativeCallerAuth.chatgptAccountId,
+      });
+      if (captureExplicitOpenAiCallerAuth(nativeHeaders, config)) {
+        authInputHeaders = new Headers(authInputHeaders);
+        authInputHeaders.set("authorization", options.nativeCallerAuth.authorization);
+        authInputHeaders.set("chatgpt-account-id", options.nativeCallerAuth.chatgptAccountId);
       }
     }
     // #1686: a caller that proved admission with a BEARER presented one of our own secrets.
@@ -3135,6 +3160,10 @@ export async function handleResponses(
   try {
     const response = await handleResponsesInner(req, config, logCtx, {
       ...options,
+      openAiSidecarAuth: options.openAiSidecarAuth === undefined
+        ? captureExplicitOpenAiCallerAuth(req.headers, config) : options.openAiSidecarAuth,
+      nativeCallerAuth: options.nativeCallerAuth === undefined
+        ? captureExplicitOpenAiCallerAuth(req.headers, config) : options.nativeCallerAuth,
       // Capture before combo replay rebuilds the Request headers; children carry options.
       visionDescribeTerminal: options.visionDescribeTerminal === true
         || req.headers.get("x-opencodex-vision-describe") === "1",
@@ -4370,9 +4399,18 @@ async function handleResponsesInner(
   const needsOpenAiSearch = shouldResolveOpenAiWebSearchSidecar(config, parsed, isPassthrough);
   if (needsOpenAiVision || needsOpenAiSearch) {
     try {
+      // Preserve explicit OpenAI helper auth across route changes without returning it to
+      // primary-provider headers or alternate-main retry. The resolver revalidates scope.
+      const sidecarHeaders = new Headers(req.headers);
+      sidecarHeaders.delete("authorization");
+      sidecarHeaders.delete("chatgpt-account-id");
+      if (options.openAiSidecarAuth) {
+        sidecarHeaders.set("authorization", options.openAiSidecarAuth.authorization);
+        sidecarHeaders.set("chatgpt-account-id", options.openAiSidecarAuth.chatgptAccountId);
+      }
       openAiSidecar = await resolveFirstUsableOpenAiSidecar(
         listOpenAiForwardSidecarCandidates(config),
-        req.headers,
+        sidecarHeaders,
         config,
         {
           admission: options.admission,

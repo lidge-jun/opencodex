@@ -1858,12 +1858,14 @@ describe("server combo failover 030 activation matrix", () => {
   });
 
   test("hosted web-search eager model failure hops through the loop path", async () => {
-    const modelHits: Array<{ model?: string; hasWebTool: boolean }> = [];
+    const modelHits: Array<{ model?: string; hasWebTool: boolean; authorization: string | null; account: string | null }> = [];
     const routed = serve(async request => {
       const body = await request.json() as { model?: string; tools?: Array<{ type?: string }> };
       modelHits.push({
         model: body.model,
         hasWebTool: body.tools?.some(tool => tool.type === "function") ?? false,
+        authorization: request.headers.get("authorization"),
+        account: request.headers.get("chatgpt-account-id"),
       });
       if (body.model === "m1") {
         return Response.json({ error: { message: "loop unavailable" } }, { status: 503 });
@@ -1897,8 +1899,73 @@ describe("server combo failover 030 activation matrix", () => {
     expect(JSON.stringify(await collectSse(response))).toContain("web loop backup");
     expect(modelHits.map(hit => hit.model)).toEqual(["m1", "m2"]);
     expect(modelHits.every(hit => hit.hasWebTool)).toBe(true);
+    expect(modelHits.map(hit => hit.authorization)).toEqual(["Bearer key-a", "Bearer key-b"]);
+    expect(modelHits.every(hit => hit.account === null)).toBe(true);
     expect(models).toEqual(["m2"]);
     expect(recallComboForLane(config, sessionLaneIdFromRequest(new Headers({ session_id: "web-search-recall" })), "m2")).toBe("free");
+  });
+
+  test.each(["valid", "chat-valid", "mismatched-account", "proxy-secret", "joined-proxy-secret", "explicit-null"])("Combo sidecar auth stays off primary wires: %s", async authKind => {
+    const valid = authKind === "valid" || authKind === "chat-valid";
+    const nativeToken = fakeChatGptJwt({ chatgpt_account_id: "acct-scoped-sidecar" });
+    const token = authKind === "proxy-secret" ? `ocx_data_${nativeToken}`
+      : authKind === "joined-proxy-secret" ? `${nativeToken}, Bearer ocx_data_embedded` : nativeToken;
+    const sidecarHits: Array<{ authorization: string | null; account: string | null }> = [];
+    const primaryHits: Array<{ model?: string; authorization: string | null; account: string | null; webTool: boolean }> = [];
+    let requestedSearch = false;
+    const sidecar = serve(request => {
+      sidecarHits.push({ authorization: request.headers.get("authorization"), account: request.headers.get("chatgpt-account-id") });
+      return new Response(
+        'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"synthetic web result"}\n\n'
+          + 'event: response.completed\ndata: {"type":"response.completed","response":{"status":"completed"}}\n\n',
+        { headers: { "content-type": "text/event-stream" } },
+      );
+    });
+    const routed = serve(async request => {
+      const body = await request.json() as { model?: string; tools?: Array<{ type?: string; function?: { name?: string } }> };
+      const tool = body.tools?.find(tool => tool.type === "function")?.function?.name;
+      primaryHits.push({ model: body.model, authorization: request.headers.get("authorization"), account: request.headers.get("chatgpt-account-id"), webTool: !!tool });
+      if (body.model === "m1") return Response.json({ error: { message: "try next model" } }, { status: 503 });
+      if (tool && !requestedSearch) {
+        requestedSearch = true;
+        return new Response(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "call_search", type: "function", function: { name: tool, arguments: '{"query":"synthetic query"}' } }] }, finish_reason: null }] })}\n\n`
+          + 'data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}\n\ndata: [DONE]\n\n',
+        { headers: { "content-type": "text/event-stream" } });
+      }
+      return chatStream("scoped sidecar complete");
+    });
+    globalThis.fetch = (async (input, init) => {
+      const url = new URL(input instanceof globalThis.Request ? input.url : String(input));
+      if (url.origin === "https://chatgpt.com" && url.pathname === "/backend-api/codex/responses") {
+        return originalFetch(sidecar.url, init);
+      }
+      if (url.hostname !== "127.0.0.1" && url.hostname !== "localhost") throw new Error("unexpected external request");
+      return originalFetch(input, init);
+    }) as typeof globalThis.fetch;
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(routed), "key-a"),
+      b: provider("openai-chat", baseUrl(routed), "key-b"),
+      openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "direct" },
+    }, [{ provider: "a", model: "m1" }, { provider: "b", model: "m2" }]);
+    config.webSearchSidecar = { enabled: true, backend: "openai" };
+    const headers = {
+      authorization: `Bearer ${token}`,
+      "chatgpt-account-id": authKind === "mismatched-account" ? "other-account" : "acct-scoped-sidecar",
+    };
+    const response = authKind === "chat-valid"
+      ? await (await import("../../src/server/chat-completions")).handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
+        method: "POST", headers: { "content-type": "application/json", ...headers },
+        body: JSON.stringify({ model: "combo/free", messages: [{ role: "user", content: "search" }], stream: true, tools: [{ type: "web_search" }] }),
+      }), config, { model: "", provider: "" })
+      : await post(config, { stream: true, tools: [{ type: "web_search" }] }, authKind === "explicit-null" ? { openAiSidecarAuth: null } : {}, headers);
+    expect(response.status).toBe(200);
+    expect(JSON.stringify(await collectSse(response))).toContain("scoped sidecar complete");
+    expect(sidecarHits).toEqual(valid
+      ? [{ authorization: `Bearer ${nativeToken}`, account: "acct-scoped-sidecar" }] : []);
+    expect(primaryHits.map(hit => hit.authorization)).toEqual(valid
+      ? ["Bearer key-a", "Bearer key-b", "Bearer key-b"] : ["Bearer key-a", "Bearer key-b"]);
+    expect(primaryHits.every(hit => hit.account === null)).toBe(true);
+    expect(primaryHits.every(hit => hit.webTool === valid)).toBe(true);
   });
 
   test("context 400 stops while exhausted retryable targets return the sanitized last status", async () => {

@@ -5,6 +5,7 @@ import { RequestPacingQueueOverloadError } from "../../src/providers/request-pac
 import type { OcxConfig } from "../../src/types";
 import { beginRequestAttempt, type RequestLogContext } from "../../src/server/request-log";
 import type { RouteDecisionTraceV1 } from "../../src/routing/trace";
+import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import {
   handleResponsesWithPolicyFallback,
   rankPolicyFallbackCandidates,
@@ -47,6 +48,36 @@ function seedAttempt(logCtx: RequestLogContext, provider: string, model: string)
 }
 
 describe("policy candidate fallback", () => {
+  test("policy hops retain only the original sidecar snapshot outside primary headers", async () => {
+    const authorization = `Bearer ${fakeChatGptJwt({ chatgpt_account_id: "sidecar-account" })}`;
+    const initial = request();
+    const headers = new Headers(initial.headers);
+    headers.set("authorization", authorization);
+    headers.set("chatgpt-account-id", "sidecar-account");
+    const log = { model: "", provider: "" } as RequestLogContext;
+    const snapshots: unknown[] = [];
+    const primaryAuth: Array<string | null> = [];
+    const response = await handleResponsesWithPolicyFallback(new Request(initial, { headers }), {
+      port: 0, defaultProvider: "provider-a", providers: {},
+    }, log, {}, {
+      runCore: async (req, _config, context, options) => {
+        snapshots.push(options.openAiSidecarAuth);
+        primaryAuth.push(req.headers.get("authorization"));
+        context.routeDecision = policyTrace();
+        return snapshots.length === 1
+          ? Response.json({ error: { message: "retry next candidate" } }, { status: 503 })
+          : Response.json({ status: "completed" });
+      },
+    });
+    expect(response.status).toBe(200);
+    expect(primaryAuth).toEqual([authorization, null]);
+    expect(snapshots).toEqual([
+      { authorization, chatgptAccountId: "sidecar-account" },
+      { authorization, chatgptAccountId: "sidecar-account" },
+    ]);
+    expect(snapshots[1]).toBe(snapshots[0]);
+  });
+
   test("ranks only eligible untried candidates by score and stable original order", () => {
     const ranked = rankPolicyFallbackCandidates(policyTrace(), new Set(["provider-a\u0000model-a"]));
     expect(ranked.map(candidate => `${candidate.provider}/${candidate.model}`)).toEqual([

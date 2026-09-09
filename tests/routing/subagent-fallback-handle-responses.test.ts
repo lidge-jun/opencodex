@@ -1898,6 +1898,7 @@ describe("account-gated retry entitlement boundary", () => {
     await response.arrayBuffer();
     expect(observed).toEqual([{ authorization: "Bearer pool-a_token", accountId: "pool_acc_a" }]);
     expect(callerRosterReads).toBe(0);
+    expect(entitlementCalls).toBeGreaterThan(1);
     expect(response.status).toBe(400);
   });
 

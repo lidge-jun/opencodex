@@ -4,6 +4,7 @@ import {
   hasUnreadableEncryptedAgentTask,
 } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
+import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 
 const originalFetch = globalThis.fetch;
 
@@ -212,9 +213,13 @@ describe("V2 routed agent-message ciphertext guard", () => {
 
   test("filters a combo to a decrypt-capable native target before dispatch", async () => {
     const fetchedUrls: string[] = [];
+    const nativeToken = fakeChatGptJwt({ chatgpt_account_id: "native-combo-caller" });
+    const forwardedAuth: Array<{ authorization: string | null; account: string | null }> = [];
     let forwardedBody = "";
     globalThis.fetch = (async (input, init) => {
       fetchedUrls.push(String(input));
+      const headers = new Headers(init?.headers);
+      forwardedAuth.push({ authorization: headers.get("authorization"), account: headers.get("chatgpt-account-id") });
       forwardedBody = typeof init?.body === "string" ? init.body : "";
       return Response.json({
         id: "resp_combo_native",
@@ -233,13 +238,14 @@ describe("V2 routed agent-message ciphertext guard", () => {
         { type: "input_text", text: ROUTING_ENVELOPE },
         { type: "encrypted_content", encrypted_content: FERNET_TASK },
       ]),
-      { authorization: "Bearer caller-codex-token" },
+      { authorization: `Bearer ${nativeToken}`, "chatgpt-account-id": "native-combo-caller" },
     );
 
     expect(response.status).toBe(200);
     expect(fetchedUrls).toHaveLength(1);
     expect(fetchedUrls[0]).toContain("chatgpt.com/backend-api/codex");
     expect(fetchedUrls[0]).not.toContain("api.x.ai");
+    expect(forwardedAuth).toEqual([{ authorization: `Bearer ${nativeToken}`, account: "native-combo-caller" }]);
     expect(forwardedBody).toContain(FERNET_TASK);
   });
 
@@ -283,7 +289,11 @@ describe("V2 routed agent-message ciphertext guard", () => {
     ];
     const forwardedModels: string[] = [];
     const forwardedBodies: string[] = [];
+    const nativeToken = fakeChatGptJwt({ chatgpt_account_id: "native-combo-caller" });
+    const forwardedAuth: Array<{ authorization: string | null; account: string | null }> = [];
     globalThis.fetch = (async (_input, init) => {
+      const headers = new Headers(init?.headers);
+      forwardedAuth.push({ authorization: headers.get("authorization"), account: headers.get("chatgpt-account-id") });
       const raw = typeof init?.body === "string" ? init.body : "";
       forwardedBodies.push(raw);
       const parsed = JSON.parse(raw) as { model?: string };
@@ -308,12 +318,13 @@ describe("V2 routed agent-message ciphertext guard", () => {
         { type: "input_text", text: ROUTING_ENVELOPE },
         { type: "encrypted_content", encrypted_content: FERNET_TASK },
       ]),
-      { authorization: "Bearer caller-codex-token" },
+      { authorization: `Bearer ${nativeToken}`, "chatgpt-account-id": "native-combo-caller" },
     );
 
     expect(response.status).toBe(200);
     expect(forwardedModels).toEqual(["gpt-native-primary", "gpt-native-backup"]);
     expect(forwardedBodies).toHaveLength(2);
+    expect(forwardedAuth).toEqual(Array(2).fill({ authorization: `Bearer ${nativeToken}`, account: "native-combo-caller" }));
     expect(forwardedBodies.every(body => body.includes(FERNET_TASK))).toBe(true);
   });
 

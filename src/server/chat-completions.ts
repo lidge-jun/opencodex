@@ -39,6 +39,7 @@ import {
 import { responseWithDeferredRequestLog } from "./relay";
 import { handleResponses } from "./responses";
 import { providerConsumesCallerAuthorization } from "../providers/caller-authorization";
+import { captureExplicitOpenAiCallerAuth } from "../providers/openai-sidecar";
 import type { AdmissionLease } from "../lib/admission";
 import type { DataPlaneAdmission } from "./auth-cors";
 import { tryClaimNativeMainProfileForTurn } from "../codex/native-main-admission";
@@ -242,6 +243,8 @@ async function handleChatCompletionsWithBudget(
     && isCodexReserveHelperUnsupported(config, settledRoute.modelId, logIds?.admission, visionDescribeTerminal)) {
     return chatCompletionsErrorResponse(400, CODEX_RESERVE_HELPER_UNSUPPORTED_MESSAGE, "invalid_request_error");
   }
+  const nativeCallerAuth = captureExplicitOpenAiCallerAuth(req.headers, config);
+  let openAiSidecarAuth = nativeCallerAuth;
   const headers = new Headers({ "content-type": "application/json" });
   // Internal bridge metadata; the Go resolver scopes and hashes it before upstream use.
   const openCodeSession = req.headers.get("x-opencode-session");
@@ -254,7 +257,7 @@ async function handleChatCompletionsWithBudget(
   }
   // Never enrich a caller-auth transport with a credential from another domain.
   // Later shadow/thread rewrites strip credentials at the actual Responses boundary.
-  if (!callerAuthorizationRoute && !routeMayChangeCredentialDomain) {
+  if (!callerAuthorizationRoute) {
     // This enrichment is optional for routed/non-main providers. If native main
     // is fenced, omit it and let auth-context reject only a final physical-main
     // selection while healthy pool/provider routes continue.
@@ -263,8 +266,12 @@ async function handleChatCompletionsWithBudget(
         const { getMainAccountToken } = await import("../codex/main-account");
         const token = getMainAccountToken();
         if (token) {
-          headers.set("authorization", `Bearer ${token.accessToken}`);
-          headers.set("chatgpt-account-id", token.chatgptAccountId);
+          const mainHeaders = new Headers({ authorization: `Bearer ${token.accessToken}`, "chatgpt-account-id": token.chatgptAccountId });
+          openAiSidecarAuth ??= captureExplicitOpenAiCallerAuth(mainHeaders, config);
+          if (!routeMayChangeCredentialDomain) {
+            headers.set("authorization", `Bearer ${token.accessToken}`);
+            headers.set("chatgpt-account-id", token.chatgptAccountId);
+          }
         }
       } catch {
         /* optional */
@@ -303,6 +310,8 @@ async function handleChatCompletionsWithBudget(
     addFinalRequestLog(logIds.requestId, logIds.start, logCtx, status, meta);
   };
   const upstream = await handleResponses(internalReq, config, logCtx, {
+    openAiSidecarAuth,
+    nativeCallerAuth,
     ...(logIds?.turnAdmissionLease ? { turnAdmissionLease: logIds.turnAdmissionLease } : {}),
     // #1686: the Chat surface translates its body and replays here, so the admission fact has
     // to ride along or a bearer-admitted Chat caller would still be refused by Direct.

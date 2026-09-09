@@ -77,21 +77,42 @@ export function listOpenAiForwardSidecarCandidates(config: OcxConfig): OpenAiFor
   }];
 }
 
-function directSidecarHeaders(
-  incomingHeaders: Headers,
-  config: CodexAuthPolicyConfig,
-  admission?: Pick<DataPlaneAdmission, "source">,
-): Headers | undefined {
-  const bearer = incomingHeaders.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
-  if (!bearer) return undefined;
+/** An explicit caller bearer/account pair for canonical OpenAI destinations; never persist. */
+export type ExplicitOpenAiCallerAuth = Readonly<{ authorization: string; chatgptAccountId: string }>;
+
+function explicitSidecarAuth(incomingHeaders: Headers): ExplicitOpenAiCallerAuth | null {
+  // Combined Authorization values must not smuggle a second credential into a snapshot.
+  const bearer = /^Bearer[\t ]+([^\s,]+)$/i.exec(incomingHeaders.get("authorization")?.trim() ?? "")?.[1];
+  if (!bearer) return null;
   const derivedAccountId = extractAccountId(undefined, bearer);
-  if (!derivedAccountId) return undefined;
+  if (!derivedAccountId) return null;
   const requestedAccountId = incomingHeaders.get("chatgpt-account-id")?.trim();
   // JWT payloads are decoded locally but not signature-verified. Requiring the caller's
   // explicit account header, and checking it against the token claim, makes forwarding an
   // intentional ChatGPT-auth operation instead of silently reclassifying any JWT-shaped
   // provider credential as a Codex bearer.
-  if (!requestedAccountId || requestedAccountId !== derivedAccountId) return undefined;
+  if (!requestedAccountId || requestedAccountId !== derivedAccountId) return null;
+  return { authorization: incomingHeaders.get("authorization")!, chatgptAccountId: requestedAccountId };
+}
+
+export function captureExplicitOpenAiCallerAuth(incomingHeaders: Headers, config: OcxConfig): ExplicitOpenAiCallerAuth | null {
+  const auth = explicitSidecarAuth(incomingHeaders);
+  if (!auth) return null;
+  try {
+    validateForwardAdmissionCredential(incomingHeaders, config);
+  } catch (error) {
+    if (error instanceof ForwardAdmissionCredentialError) return null;
+    throw error;
+  }
+  return auth;
+}
+
+function directSidecarHeaders(
+  incomingHeaders: Headers,
+  config: CodexAuthPolicyConfig,
+  admission?: Pick<DataPlaneAdmission, "source">,
+): Headers | undefined {
+  if (!explicitSidecarAuth(incomingHeaders)) return undefined;
   const selected = headersForCodexAuthContext(incomingHeaders, { kind: "main", accountId: null }, config, undefined, admission);
   return selected;
 }
