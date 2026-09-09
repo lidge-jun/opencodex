@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getDefaultConfig, saveConfig } from "../../src/config";
-import { writeServiceApiTokenFile } from "../../src/lib/service-secrets";
+import { replaceServiceApiTokenFile, writeServiceApiTokenFile } from "../../src/lib/service-secrets";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "../../src/server/auth-cors";
 import {
   loadVoiceRelayCredential,
@@ -367,6 +367,68 @@ describe("remote hub voice relay", () => {
     for (let i = 0; i < 50 && pending.terminates === 0; i += 1) await Bun.sleep(2);
     expect(pending.closes).toBeGreaterThan(0);
     expect(pending.terminates).toBeGreaterThan(0);
+  }, SERVER_BUDGET_MS);
+
+  test("persisted credential rotation tears down an active sideband session and releases the listener", async () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-voice-relay-rotation-"));
+    process.env.OPENCODEX_HOME = home;
+    servers.push({ stop: () => removeTreeWithRetry(home) });
+    let hubClosed = false;
+    const seenKeys: Array<string | null> = [];
+    const hub = Bun.serve({
+      port: 0,
+      fetch(req, server) {
+        seenKeys.push(req.headers.get("x-opencodex-api-key"));
+        if (server.upgrade(req, { data: {} })) return;
+        return new Response("upgrade failed", { status: 426 });
+      },
+      websocket: {
+        open(socket) { socket.send("ready"); },
+        close() { hubClosed = true; },
+      },
+    });
+    servers.push(hub);
+    const initialToken = "ocx_data_initial-fixture";
+    const connection = connected(hub.url.origin, initialToken).connection;
+    connection.tokenFingerprint = writeServiceApiTokenFile(initialToken).fingerprint;
+    saveConfig({ port: 10100, providers: {}, defaultProvider: "openai", runtimeRole: "client", client: connection });
+    const relay = startVoiceRelay({
+      port: 0,
+      monitorIntervalMs: 5,
+    });
+    servers.push({ stop: () => relay.stop() });
+    const socket = ws(`${relay.origin.replace(/^http/, "ws")}/v1/live/call_1`);
+    await opened(socket);
+    expect(await message(socket)).toBe("ready");
+    const closed = new Promise<CloseEvent>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("websocket close timeout")), 5_000);
+      socket.addEventListener("close", event => {
+        clearTimeout(timer);
+        resolve(event);
+      }, { once: true });
+    });
+
+    const rotatedToken = "ocx_data_rotated-fixture";
+    connection.tokenFingerprint = replaceServiceApiTokenFile(rotatedToken).fingerprint;
+    expect(await relay.done).toBe("connection_changed");
+    const closeEvent = await closed;
+    expect(closeEvent.code).toBe(1001);
+    expect(closeEvent.reason).toBe("connection_changed");
+    for (let i = 0; i < 50 && !hubClosed; i += 1) await Bun.sleep(10);
+    expect(hubClosed).toBe(true);
+
+    saveConfig({ port: 10100, providers: {}, defaultProvider: "openai", runtimeRole: "client", client: connection });
+    const replacement = startVoiceRelay({
+      port: relay.port,
+      monitorIntervalMs: 5,
+    });
+    servers.push({ stop: () => replacement.stop() });
+    expect(replacement.port).toBe(relay.port);
+    const replacementSocket = ws(`${replacement.origin.replace(/^http/, "ws")}/v1/live/call_2`);
+    await opened(replacementSocket);
+    expect(await message(replacementSocket)).toBe("ready");
+    replacementSocket.close();
+    expect(seenKeys).toEqual([initialToken, rotatedToken]);
   }, SERVER_BUDGET_MS);
 
   test("default credential loader fails closed for missing and mismatched owner state", () => {
