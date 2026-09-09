@@ -25,8 +25,8 @@ describe("live service-manager guard", () => {
   test("refuses every mutating launchctl and systemctl call while armed", () => {
     process.env[GUARD_ENV] = "1";
     const mutations = [
-      "launchctl unload /Users/someone/Library/LaunchAgents/com.opencodex.proxy.plist",
-      "launchctl load -w /Users/someone/Library/LaunchAgents/com.opencodex.proxy.plist",
+      "launchctl unload /tmp/LaunchAgents/com.opencodex.proxy.plist",
+      "launchctl load -w /tmp/LaunchAgents/com.opencodex.proxy.plist",
       "launchctl bootout gui/501/com.opencodex.proxy",
       "launchctl kickstart -k gui/501/com.opencodex.proxy",
       "systemctl --user stop opencodex-proxy.service",
