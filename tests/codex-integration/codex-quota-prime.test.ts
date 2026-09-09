@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test, spyOn } from "bun:test";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -123,6 +123,69 @@ describe("primeCodexPoolQuotas", () => {
     if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previousCodexHome;
     if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
+  });
+
+  test("live failback refreshes inactive quota every five minutes, including after failures", async () => {
+    const config = makeConfig({ codexAccountPriorityFailback: true });
+    seedPoolAccount(config, "p1");
+    saveCodexAccountCredential("p1", {
+      accessToken: "access-p1", refreshToken: "refresh-p1",
+      expiresAt: Date.now() + 86_400_000, chatgptAccountId: "acct-p1",
+    });
+    const originalFetch = globalThis.fetch;
+    let now = Date.now();
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    let calls = 0;
+    let fail = false;
+    try {
+      globalThis.fetch = (async () => {
+        calls += 1;
+        return fail ? new Response("unavailable", { status: 503 }) : whamResponse(0);
+      }) as typeof fetch;
+      await primeCodexPoolQuotas(config, "priority-failback");
+      expect(calls).toBe(1);
+      now += 299_999;
+      await primeCodexPoolQuotas(config, "priority-failback");
+      expect(calls).toBe(1);
+      now += 1;
+      fail = true;
+      await primeCodexPoolQuotas(config, "priority-failback");
+      expect(calls).toBe(2);
+      now += 1;
+      await primeCodexPoolQuotas(config, "priority-failback");
+      expect(calls).toBe(2);
+      now += 300_000;
+      fail = false;
+      await primeCodexPoolQuotas(config, "priority-failback");
+      expect(calls).toBe(3);
+      expect(getAccountQuota("p1")?.weeklyPercent).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+      clock.mockRestore();
+    }
+  });
+
+  test("priority failback also refreshes stale native main quota", async () => {
+    const config = makeConfig({ codexAccountPriorityFailback: true });
+    seedMainAccount();
+    updateAccountQuota(MAIN_CODEX_ACCOUNT_ID, 100);
+    let now = Date.now();
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    let reads = 0;
+    const options = {
+      reconcileMainAccount: () => {},
+      readMainTokens: () => ({ accessToken: "main-access", accountId: "main-account" }),
+      fetchMainInfo: async () => { reads += 1; },
+    };
+    try {
+      await primeCodexPoolQuotas(config, "priority-failback", options);
+      expect(reads).toBe(0);
+      now += 300_001;
+      await primeCodexPoolQuotas(config, "priority-failback", options);
+      expect(reads).toBe(1);
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   test("prime populates stale/unknown pool accounts", async () => {
