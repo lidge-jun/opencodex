@@ -9,3 +9,11 @@ We decided (owner, 2026-09-08):
 3. **Deferral reasons must be cross-checked against the TypeScript code.** The v2 deferral claimed a byte-exact TOML reader/writer was needed; the code writes config.toml only through the upstream `codex features` CLI, so the writer half was overstated. A deferral reason that names a missing primitive must cite the TS-side evidence it was derived from.
 
 **Status**: accepted — supersedes the literal reading of ADR-0008's parity clause. A flip still never lands without its oracle; the difference is which oracle shapes qualify.
+
+**Fork-line addendum (2026-09-09)**: with the #41 cutover the Go binary is the fork's
+release runtime (ADR-0008 status update), so this taxonomy's Bun-dependent list is the
+10 TypeScript-owned commands a standalone Go binary cannot serve natively — they print
+the "needs the TypeScript lifecycle owner" delegation error unless `OCX_TYPESCRIPT_CLI`
+points at the full distribution. The list is the accepted end state on the standalone
+binary, exactly as #2 above intends; ADR-0008 now points here explicitly rather than
+carrying its own superseded parity clause.
