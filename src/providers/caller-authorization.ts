@@ -14,11 +14,14 @@ export function providerConsumesCallerAuthorization(provider: OcxProviderConfig)
 
 /**
  * Capture the caller's Direct credential for a canonical-route restore after an internal
- * rewrite. Only a bearer that PROVABLY belongs to the ChatGPT domain qualifies: a clean
+ * rewrite. This restore is intentionally STRICTER than plain unchanged-route Direct
+ * forwarding: only a bearer that provably belongs to the ChatGPT domain qualifies — a clean
  * single non-proxy JWT carrying a ChatGPT account claim, with any explicit account header
  * matching that claim. An opaque bearer is not captured even with a self-asserted account
  * header: after a shadow/thread rewrite that header cannot distinguish a caller-owned main
- * credential from a foreign source-route token, so that case stays fail-closed.
+ * credential from a foreign source-route token, so that case stays fail-closed. JWT claims
+ * are decoded locally as routing evidence; they are not cryptographic signature
+ * verification, and unchanged-route Direct forwarding is governed by its own legacy rules.
  */
 export function captureCallerDirectAuth(incomingHeaders: Headers, config: OcxConfig): CallerDirectAuth | null {
   const raw = incomingHeaders.get("authorization")?.trim();
