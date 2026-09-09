@@ -159,12 +159,7 @@ Kısaltılmış örnek şekli:
 }
 ```
 
-Gerçek nesne ayrıca `listen` (port, ana bilgisayar adı, çalışma
-zamanı/yapılandırma kaynağı), yapılandırma yükleme tanılamalarını ve paketlenmiş
-Codex eklenti tanılamalarını içerir. JSON şeması yalnızca eklemelidir:
-gelecekteki sürümler alanlar ekleyebilir, ancak mevcut alanlar kararlı
-kalmalıdır. API anahtarlarını, OAuth belirteçlerini, yetkilendirme başlıklarını,
-istek içeriğini, e-postaları ve hesap kimliklerini kasıtlı olarak hariç tutar.
+Gerçek nesne ayrıca `listen` (port, ana bilgisayar adı, çalışma zamanı/yapılandırma kaynağı), yapılandırma yükleme tanılamalarını ve paketlenmiş Codex eklenti tanılamalarını içerir. Bağımsız statik Go artifact için `runtime.source`, `"go-static"` olur; `paths.runtime` çözümlenmiş artifact yoludur (platform bunu çözemiyorsa `"unknown"`) ve `versionSkew.cliVersion` derleme sırasında damgalanan artifact sürümüdür. Bu nedenle örnekteki Bun odaklı `"bundled"` değeri tek geçerli runtime source değildir. JSON şeması yalnızca eklemelidir: gelecekteki sürümler alanlar ekleyebilir, ancak mevcut alanlar kararlı kalmalıdır. API anahtarlarını, OAuth belirteçlerini, yetkilendirme başlıklarını, istek içeriğini, e-postaları ve hesap kimliklerini kasıtlı olarak hariç tutar.
 
 ### `ocx health [--json]`
 

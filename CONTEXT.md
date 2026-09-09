@@ -66,6 +66,10 @@ _Avoid_: PR-size, commit (batches are semantic units, not size buckets).
 The single Go binary that needs no Bun or checkout. Under ADR-0009 the meaning is precise: every oracle-able surface is Go-owned; the rest are an explicit Bun-dependent list.
 _Avoid_: complete, done (both imply a state this repo defines precisely instead of assuming).
 
+**Static release identity**:
+The immutable identity carried by a standalone artifact: its version and runtime source. It is defined at build time (or as the explicit `dev` identity for an unversioned development build) and cannot be overridden at runtime; it is never inferred from the working directory, a checkout, Bun, environment variables, or installation layout. The Go artifact ignores Bun runtime markers. `dev` is observable but is not comparable with release versions: a version-skew comparison with `dev` on either side never diagnoses a mismatch. Its runtime path names the resolved artifact, or `unknown` when the platform cannot resolve it. It varies by actual artifact without changing the shared status JSON shape or schema version.
+_Avoid_: runtime detection, package discovery (both describe environment-dependent observations, not artifact identity).
+
 **Bun-dependent surface**:
 A surface that deliberately keeps the TypeScript owner in the end state — interactive OAuth, OS service managers, Windows tray, network self-replace, coordinator transactions. Recorded per-surface; never a default category.
 _Avoid_: leftovers, exceptions (both imply small or undesirable).

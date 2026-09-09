@@ -114,7 +114,7 @@ Exemple de structure abrégée :
 }
 ```
 
-L’objet réel comprend également `listen` (port, nom d’hôte, source du runtime et de la configuration), les diagnostics de chargement de la configuration et les diagnostics du plug-in Codex intégré. Le schéma JSON est uniquement extensible : de futures versions peuvent ajouter des champs, mais les champs existants doivent rester stables. Les clés d’API, jetons OAuth, en-têtes d’autorisation, contenus de requêtes, adresses électroniques et identités de compte en sont volontairement exclus.
+L’objet réel comprend également `listen` (port, nom d’hôte, source du runtime et de la configuration), les diagnostics de chargement de la configuration et les diagnostics du plug-in Codex intégré. Pour l’artifact Go statique autonome, `runtime.source` vaut `"go-static"` ; `paths.runtime` est le chemin résolu de l’artifact (ou `"unknown"` lorsque la plateforme ne peut pas le résoudre) et `versionSkew.cliVersion` est la version de l’artifact estampillée lors de la compilation. La valeur `"bundled"` orientée Bun de l’exemple n’est donc pas la seule source d’exécution valide. Le schéma JSON est uniquement extensible : de futures versions peuvent ajouter des champs, mais les champs existants doivent rester stables. Les clés d’API, jetons OAuth, en-têtes d’autorisation, contenus de requêtes, adresses électroniques et identités de compte en sont volontairement exclus.
 
 ### `ocx health [--json]`
 

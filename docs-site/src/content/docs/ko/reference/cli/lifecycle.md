@@ -141,10 +141,7 @@ ocx status --json
 }
 ```
 
-실제 객체에는 `listen`(포트, 호스트명, 런타임/설정 소스), 설정 로드 진단, 번들 Codex 플러그인
-진단도 포함됩니다. JSON 스키마는 추가만 허용합니다. 앞으로 버전에서 필드가 추가될 수는 있지만,
-기존 필드는 안정적으로 유지되어야 합니다. 이 스키마는 API 키, OAuth 토큰, Authorization 헤더,
-요청 내용, 이메일, 계정 식별자를 의도적으로 제외합니다.
+실제 객체에는 `listen`(포트, 호스트명, 런타임/설정 소스), 설정 로드 진단, 번들 Codex 플러그인 진단도 포함됩니다. 독립 정적 Go artifact에서는 `runtime.source`가 `"go-static"`이고, `paths.runtime`은 확인된 artifact 경로(플랫폼에서 확인할 수 없으면 `"unknown"`)이며, `versionSkew.cliVersion`은 빌드 시 기록된 artifact 버전입니다. 따라서 예시의 Bun 지향 `"bundled"`는 유일하게 유효한 runtime source가 아닙니다. JSON 스키마는 추가만 허용합니다. 앞으로 버전에서 필드가 추가될 수는 있지만, 기존 필드는 안정적으로 유지되어야 합니다. 이 스키마는 API 키, OAuth 토큰, Authorization 헤더, 요청 내용, 이메일, 계정 식별자를 의도적으로 제외합니다.
 
 ### `ocx health [--json]`
 

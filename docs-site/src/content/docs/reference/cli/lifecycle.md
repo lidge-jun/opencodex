@@ -148,9 +148,13 @@ Abbreviated example shape:
 ```
 
 The real object also includes `listen` (port, hostname, runtime/config source), config load
-diagnostics, and bundled Codex plugin diagnostics. The JSON schema is additive-only: future versions
-may add fields, but existing fields should stay stable. It intentionally excludes API keys, OAuth
-tokens, authorization headers, request content, emails, and account identities.
+diagnostics, and bundled Codex plugin diagnostics. For the standalone static Go artifact,
+`runtime.source` is `"go-static"`; `paths.runtime` is the resolved artifact path (or `"unknown"`
+when the platform cannot resolve it), and `versionSkew.cliVersion` is the build-stamped artifact
+version. The Bun-oriented `"bundled"` value in the example is therefore not the only valid runtime
+source. The JSON schema is additive-only: future versions may add fields, but existing fields should
+stay stable. It intentionally excludes API keys, OAuth tokens, authorization headers, request content,
+emails, and account identities.
 
 ### `ocx health [--json]`
 

@@ -113,7 +113,7 @@ ocx status --json
 }
 ```
 
-真实对象还会包含 `listen`（端口、主机名、运行时/配置来源）、配置加载诊断，以及 bundled Codex 插件诊断。JSON schema 仅允许追加字段：未来版本可能新增字段，但现有字段应保持稳定。它刻意不包含 API keys、OAuth tokens、授权头、请求内容、邮箱和账户身份。
+真实对象还会包含 `listen`（端口、主机名、运行时/配置来源）、配置加载诊断，以及 bundled Codex 插件诊断。对于独立静态 Go artifact，`runtime.source` 为 `"go-static"`；`paths.runtime` 为解析后的 artifact 路径（平台无法解析时为 `"unknown"`），`versionSkew.cliVersion` 为构建时写入的 artifact 版本。因此，示例中的面向 Bun 的 `"bundled"` 并非唯一合法的 runtime source。JSON schema 仅允许追加字段：未来版本可能新增字段，但现有字段应保持稳定。它刻意不包含 API keys、OAuth tokens、授权头、请求内容、邮箱和账户身份。
 
 ### `ocx health [--json]`
 
