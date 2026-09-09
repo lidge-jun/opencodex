@@ -175,6 +175,7 @@ test("Usage breakdown tables distinguish priced zero totals from excluded reques
     const unavailableModelRow = [...container.querySelectorAll("tr")].find(row => row.textContent?.includes("coverage-without-estimate-model"));
     expect(unavailableModelRow?.textContent).toContain("—");
     expect(unavailableModelRow?.textContent).not.toContain("~$0.0000");
+    expect(unavailableModelRow?.textContent).not.toContain("0 requests excluded");
   } finally {
     await act(async () => { root.unmount(); });
     container.remove();

@@ -140,7 +140,9 @@ function UsageListPrice({ row, locale, t }: { row: UsageCostRow; locale: Locale;
     return (
       <>
         <span className="muted">—</span>
-        <span className="muted text-caption"> {t("usage.cost.excluded", { count: excludedRequests })}</span>
+        {excludedRequests > 0 && (
+          <span className="muted text-caption"> {t("usage.cost.excluded", { count: excludedRequests })}</span>
+        )}
       </>
     );
   }
