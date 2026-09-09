@@ -394,7 +394,7 @@ import {
   payloadRewriteAsBlockRewrite,
   relaySseWithBlockRewrite,
 } from "../sse-payload-rewrite";
-import { restoreRoutedCustomCalls, restoreRoutedCustomCallsInJson } from "../../responses/custom-tool-compat";
+import { hasUnmappedRoutedCustomToolOutput, restoreRoutedCustomCalls, restoreRoutedCustomCallsInJson } from "../../responses/custom-tool-compat";
 import { createRoutedCustomToolRestoreBlockRewrite } from "../responses-custom-tool-repair";
 import { collectFunctionCallRepairSchemas, repairFunctionCallsInJson } from "../../responses/function-call-compat";
 import { createResponsesFunctionToolRepairBlockRewrite } from "../responses-function-tool-repair";
@@ -3671,6 +3671,22 @@ async function handleResponsesInner(
       "previous_response_not_found",
       "OpenAI forward continuation state is unavailable or expired; resend the full conversation without previous_response_id.",
     );
+  }
+
+  if (hasUnexpandedPreviousResponse) {
+    const continuationProvider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire);
+    // Stateless destinations cannot resolve the omitted prefix. Stateful destinations may,
+    // but a lowered custom result still needs its call to recover the original wire type.
+    // Native function/custom continuations without lowering keep their upstream-owned state.
+    if (continuationProvider.adapter === "openai-responses"
+      && (continuationProvider.statelessResponses === true
+        || hasUnmappedRoutedCustomToolOutput(parsed._rawBody, continuationProvider.supportsResponsesCustomTools))) {
+      return formatErrorResponse(
+        400,
+        "previous_response_not_found",
+        "Routed continuation requires unavailable local history; resend the full conversation without previous_response_id.",
+      );
+    }
   }
 
   // Captured before normalization: whether the CLIENT asked for SSE. The

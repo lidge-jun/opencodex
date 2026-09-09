@@ -261,6 +261,29 @@ export function rewriteRoutedCustomToolsForUpstream(
   return { body: rewriteForUpstream(body, conversionNames, callIds), names, repairNames };
 }
 
+/**
+ * A delta result has no tool name. Without its call, lowering cannot tell whether it belongs
+ * to a converted function or a native custom tool. Request full replay instead of guessing.
+ */
+export function hasUnmappedRoutedCustomToolOutput(
+  body: unknown,
+  supportsResponsesCustomTools?: boolean,
+): boolean {
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return false;
+  if (collectRoutedCustomToolNames(body, supportsResponsesCustomTools).size === 0) return false;
+  const callIds = new Set<string>();
+  for (const item of body.input) {
+    if (isPlainObject(item)
+      && (item.type === "custom_tool_call" || item.type === "function_call")
+      && typeof item.call_id === "string") callIds.add(item.call_id);
+  }
+  return body.input.some(item => isPlainObject(item)
+    && item.type === "custom_tool_call_output"
+    && typeof item.call_id === "string"
+    && item.call_id.length > 0
+    && !callIds.has(item.call_id));
+}
+
 export function restoreRoutedCustomCalls(
   value: unknown,
   names: ReadonlySet<string>,

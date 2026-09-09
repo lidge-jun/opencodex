@@ -245,6 +245,15 @@ The cache remains bounded; this does not extend retention or recover history the
 longer has. HTTP clients must handle the error explicitly and resend their full context without
 `previous_response_id`. Retrying only the same ID cannot recover missing state.
 
+The same recovery signal applies to routed Responses providers configured with
+`statelessResponses: true`, and to routed requests when a custom tool is lowered to a
+function but a delta result has no local call to establish its original type. Full replay
+preserves the call, result, and reasoning together; opencodex does not guess the result type
+or discard it. Stateful providers can still resolve native function and native-only custom
+continuations themselves. These checks follow the selected wire protocol and tool catalog,
+not the model name. For gateways that cannot resolve stored response IDs, explicitly enable
+`statelessResponses` on that provider; this does not change other providers' defaults.
+
 ### Authless Codex Desktop (opt-in)
 
 In **Dashboard → Overview**, **Open Codex without signing in** controls this existing
