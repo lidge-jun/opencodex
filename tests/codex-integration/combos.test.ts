@@ -910,7 +910,7 @@ describe("combo failure policy and advancement", () => {
     expect(sleeps).toEqual([1_000]);
   });
 
-  test("still filters exhausted quota on a noncanonical forward destination", () => {
+  test("does not infer provider-wide quota from a noncanonical forward row without a credential", () => {
     const now = 50_000;
     const config = baseConfig({
       providers: {
@@ -927,7 +927,8 @@ describe("combo failure policy and advancement", () => {
 
     const pick = pickComboTarget(config, "free", { now });
 
-    expect(pick?.target.provider).toBe("b");
+    // This is quota selection, not proof that this custom forward route can authenticate.
+    expect(pick?.target.provider).toBe("a");
   });
 
   test("retains caller eligibility restrictions for native targets", () => {
@@ -1148,6 +1149,20 @@ describe("deterministic combo selection", () => {
     expect(routeModel(config, "combo/free").routeDecision?.selected).toMatchObject({
       tieBreak: "reset-window",
     });
+  });
+
+  test.each(["oauth", "header", "key-pool"])("reset-window does not rank an inapplicable snapshot: %s", kind => {
+    const now = Date.now();
+    const config = baseConfig({ combos: { free: { strategy: "reset-window", targets: [
+      { provider: "a", model: "m1" }, { provider: "b", model: "m2" },
+    ] } } });
+    setCachedProviderQuotaForTests("a", { updatedAt: now, weeklyResetAt: now + 2_000 });
+    setCachedProviderQuotaForTests("b", { updatedAt: now, weeklyResetAt: now + 1_000 });
+    expect(pickComboTarget(config, "free", { now })?.target.provider).toBe("b");
+    if (kind === "oauth") config.providers.b!.authMode = "oauth";
+    else if (kind === "header") config.providers.b!.headers = { Authorization: "Bearer different-key" };
+    else config.providers.b!.apiKeyPool = [{ id: "one", key: "one" }, { id: "two", key: "two" }];
+    expect(pickComboTarget(config, "free", { now })?.target.provider).toBe("a");
   });
 
   test("reset-window treats elapsed resets as unknown and falls back to configured order", () => {

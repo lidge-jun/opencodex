@@ -218,6 +218,8 @@ kullanılır. Güncel kota verisi bulunmayan hedeflerde ve eşitliklerde
 yapılandırma sırası korunur. `weight` değerleri ve `stickyLimit` bu stratejiyi
 etkilemez.
 
+Bu sıralama ve gönderim öncesi sağlayıcı elemesi, mevcut tek API anahtarının model çıkarımı kullanımının tamamına uygulanan güncel sınırlara dayanır. OAuth veya geçerli hesap özetleri, çağıranın kimlik bilgilerini ileten rotalar, birden fazla anahtar ve kimlik bilgileri ya da hedefi değişmiş anlık görüntüler, bu ön kararda yalnızca görüntüleme amaçlıdır. `Authorization`, `x-api-key` veya `x-goog-api-key` başlıkları kimlik bilgilerini geçersiz kıldığında da aynı kural uygulanır; yalnızca arama veya MCP için olan pencereler hariç tutulur. Uygun hedeflerin hiçbirinde geçerli sıfırlama bilgisi yoksa yapılandırma sırası kullanılır. Hesap seçimi ve yeniden denemelerde normal sınırlar uygulanmaya devam eder.
+
 ## Bir hedef başarısız olduğunda ne olur?
 
 Kombo hataları **atlama (hop)** hataları ve **uç (terminal)** hatalar olarak

@@ -39,7 +39,9 @@ import {
 } from "./quota-wire";
 import {
   clearCachedProviderQuotas,
+  providerQuotaRoutingBinding,
   replaceCachedProviderQuotas,
+  type ProviderQuotaRoutingEvidence,
 } from "./quota-routing-cache";
 import {
   aggregateCodexPoolCapacity,
@@ -103,6 +105,7 @@ const XAI_CREDITS_URL = `${XAI_BILLING_URL}?format=credits`;
 const LAST_GOOD_MAX_AGE_MS = CODEX_CAPACITY_MAX_QUOTA_AGE_MS;
 const nativeMainReportGenerations = new WeakMap<ProviderQuotaReport, number>();
 const accountReportCurrent = new WeakMap<ProviderQuotaReport, () => boolean>();
+const routingEvidence = new WeakMap<ProviderQuotaReport, ProviderQuotaRoutingEvidence>();
 let providerQuotaBeforePublishForTests: (() => void | Promise<void>) | null = null;
 
 /** Test-only seam for identity/config invalidation after probes but before publication. */
@@ -447,7 +450,7 @@ async function fetchA6apiQuota(provider: string, config: OcxProviderConfig): Pro
     ? { expiresAt: normalizedExpiry }
     : {};
   if (unlimited) {
-    return report(provider, "a6api:billing", {
+    return keyReport(provider, "a6api:billing", {
       creditsUsd: {
         used: 0,
         limit: 0,
@@ -458,7 +461,7 @@ async function fetchA6apiQuota(provider: string, config: OcxProviderConfig): Pro
       },
       customWindows: [{ label: "Unlimited API credits", percent: 0 }],
       updatedAt: Date.now(),
-    });
+    }, config, apiKey);
   }
   const limitUsd = firstFinite(subscription, ["hard_limit_usd"]);
   const grantedUnits = firstFinite(token, ["total_granted"]);
@@ -481,7 +484,7 @@ async function fetchA6apiQuota(provider: string, config: OcxProviderConfig): Pro
   const percent = normalizePercent((usedUsd / limitUsd) * 100);
   if (percent === undefined) return TERMINAL_QUOTA_FAILURE;
   const label = `API credits ($${remainingUsd.toFixed(2)} of $${limitUsd.toFixed(2)} remaining)`;
-  return report(provider, "a6api:billing", {
+  return keyReport(provider, "a6api:billing", {
     creditsUsd: {
       used: usedUsd,
       limit: limitUsd,
@@ -491,7 +494,7 @@ async function fetchA6apiQuota(provider: string, config: OcxProviderConfig): Pro
     },
     customWindows: [{ label, percent }],
     updatedAt: Date.now(),
-  });
+  }, config, apiKey);
 }
 
 function parseOpenCodeGoUsageWindow(value: unknown): { percent: number; resetAt?: number } | null {
@@ -539,7 +542,7 @@ async function fetchOpenCodeGoQuota(provider: string, config: OcxProviderConfig)
     } : {}),
     updatedAt: Date.now(),
   };
-  return report(provider, "opencode-go:usage", quota);
+  return keyReport(provider, "opencode-go:usage", quota, config, apiKey);
 }
 
 /**
@@ -583,10 +586,10 @@ async function fetchOpenRouterQuota(provider: string, config: OcxProviderConfig)
   if (percent === undefined) return null;
   const remaining = Math.max(0, limit - used);
   const label = `API credits ($${remaining.toFixed(2)} of $${limit.toFixed(2)} remaining)`;
-  return report(provider, "openrouter:key-info", {
+  return keyReport(provider, "openrouter:key-info", {
     customWindows: [{ label, percent }],
     updatedAt: Date.now(),
-  });
+  }, config, apiKey);
 }
 
 /**
@@ -685,7 +688,7 @@ async function fetchClineQuota(provider: string, config: OcxProviderConfig): Pro
       windows += 1;
     }
   }
-  return windows > 0 ? report(provider, "cline:plan-usage-limits", quota) : null;
+  return windows > 0 ? keyReport(provider, "cline:plan-usage-limits", quota, config, apiKey) : null;
 }
 
 /**
@@ -757,7 +760,7 @@ async function fetchOllamaCloudQuota(provider: string, config: OcxProviderConfig
   }
   const body = asRecord(await readQuotaJson(response));
   const quota = parseOllamaCloudQuota(body);
-  return quota ? report(provider, "ollama-cloud:usage", quota) : null;
+  return quota ? keyReport(provider, "ollama-cloud:usage", quota, config, apiKey) : null;
 }
 
 /**
@@ -887,10 +890,16 @@ async function fetchZaiQuota(provider: string, config: OcxProviderConfig): Promi
     // model window — for example a plan reporting only the monthly MCP `TIME_LIMIT` row.
     // Returning `null` here would preserve the previous token windows for up to 30 minutes
     // and keep quota-aware routing acting on a report the provider has already superseded.
-    return quota ? report(provider, "zai:quota-limit", quota) : AUTHORITATIVE_EMPTY_QUOTA;
+    return quota ? keyReport(provider, "zai:quota-limit", quota, config, apiKey) : AUTHORITATIVE_EMPTY_QUOTA;
   }
   const legacy = parseZaiQuotaLegacyFields(data);
-  return legacy ? report(provider, "zai:quota-limit", legacy) : null;
+  if (!legacy) return null;
+  // The legacy monthly figure also carries MCP usage; it is display evidence, not
+  // proof that model inference is unavailable. Modern TOKEN_LIMIT rows above are scoped.
+  const inferenceQuota = { ...legacy };
+  delete inferenceQuota.monthlyPercent;
+  delete inferenceQuota.monthlyResetAt;
+  return keyReport(provider, "zai:quota-limit", legacy, config, apiKey, inferenceQuota);
 }
 
 /**
@@ -1073,7 +1082,9 @@ async function fetchSyntheticQuota(provider: string, config: OcxProviderConfig):
     quota.customWindows = [...(quota.customWindows ?? []), { label: "Search hourly", percent: searchHourly }];
     windows += 1;
   }
-  return windows > 0 ? report(provider, "synthetic:quotas", quota) : null;
+  const inferenceQuota = { ...quota };
+  delete inferenceQuota.customWindows; // search.hourly does not constrain model inference.
+  return windows > 0 ? keyReport(provider, "synthetic:quotas", quota, config, apiKey, inferenceQuota) : null;
 }
 
 /**
@@ -1183,6 +1194,21 @@ function report(
     updatedAt: quota.updatedAt,
     ...(aggregation ? { aggregation } : {}),
   };
+}
+
+/** Opt in only when these windows apply to inference using the probed credential. */
+function keyReport(
+  provider: string,
+  source: string,
+  quota: ProviderQuota,
+  config: OcxProviderConfig,
+  probedCredential: string,
+  inferenceQuota = quota,
+): ProviderQuotaReport | null {
+  const result = report(provider, source, quota);
+  const binding = providerQuotaRoutingBinding(provider, config, probedCredential);
+  if (result && binding) routingEvidence.set(result, { quota: inferenceQuota, binding });
+  return result;
 }
 
 function tagNativeMainReport(
@@ -1888,7 +1914,7 @@ export function reconcileProviderAccountQuotaRows(context: GenerationContext): n
     const reports = cache.response.reports.filter(report => context.providerNames.has(report.provider));
     removed += cache.response.reports.length - reports.length;
     cache = { ...cache, response: { ...cache.response, reports } };
-    replaceCachedProviderQuotas(reports);
+    replaceCachedProviderQuotas(reports, routingEvidence);
   }
   liveAccountQuotaKeys = new Set(context.oauthAccountKeys);
   liveProviderQuotaKeys = new Set(context.providerNames);
@@ -2317,7 +2343,7 @@ async function fetchKimiQuota(provider: string, config: OcxProviderConfig, acces
   });
   if (!response.ok) return null;
   const quota = parseKimiQuotaPayload(await readQuotaJson(response));
-  return quota ? report(provider, "kimi:usages", quota) : null;
+  return quota ? keyReport(provider, "kimi:usages", quota, config, accessToken) : null;
 }
 
 /**
@@ -2444,7 +2470,7 @@ async function fetchCommandCodeQuota(provider: string, config: OcxProviderConfig
   const fiveHour = parseCommandCodeWindow(limits?.fiveHour);
   const weekly = parseCommandCodeWindow(limits?.weekly);
   const creditsUsd = await fetchCommandCodeSpend(bearer, credits, orgQuery);
-  return report(provider, "command-code:credits", {
+  return keyReport(provider, "command-code:credits", {
     ...(fiveHour ? {
       fiveHourPercent: fiveHour.percent,
       ...(fiveHour.resetAt !== undefined ? { fiveHourResetAt: fiveHour.resetAt } : {}),
@@ -2455,7 +2481,7 @@ async function fetchCommandCodeQuota(provider: string, config: OcxProviderConfig
     } : {}),
     ...(creditsUsd ? { creditsUsd } : {}),
     updatedAt: Date.now(),
-  });
+  }, config, bearer);
 }
 
 /** Cursor included usage via api2.cursor.sh (Bearer from OAuth) — unofficial, may change. */
@@ -2964,7 +2990,9 @@ async function maybeFetchProviderQuota(
     // probe to run — the row is the active account's last in-band observation.
     if (provider.authMode === "oauth" && hasPassiveAccountQuota(name)) return fetchPassiveProviderQuota(name);
     const reader = keyQuotaReaderForProvider(name, provider);
-    return reader ? reader(name, provider) : null;
+    // Keep destination/auth fields bound to the same request as the reader's captured
+    // bearer, even if the live provider object changes while the quota probe awaits.
+    return reader ? reader(name, { ...provider }) : null;
   } catch {
     return null;
   }
@@ -3151,7 +3179,7 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
     ) {
       const reports = response.reports.filter(item => mayCommitProviderQuotaKey(item.provider, writerGeneration));
       cache = { key, ts: Date.now(), response: { ...response, reports } };
-      replaceCachedProviderQuotas(reports);
+      replaceCachedProviderQuotas(reports, routingEvidence);
       notifyProviderQuotaSnapshot(reports, config);
     }
     return response;

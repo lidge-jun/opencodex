@@ -190,6 +190,8 @@ indique la réinitialisation de fenêtre à venir la plus proche (cinq heures, h
 Le fournisseur dont le quota se renouvelle en premier est ainsi sollicité. Les cibles dépourvues de données de quota
 récentes et les égalités conservent l’ordre de configuration. `weight` et `stickyLimit` n’affectent pas cette stratégie.
 
+Ce classement et l’exclusion des fournisseurs avant l’envoi exigent des limites récentes d’inférence de modèles applicables dans leur ensemble à l’unique clé API actuelle. Les résumés OAuth ou du compte courant, les routes transmettant les identifiants de l’appelant, les configurations à plusieurs clés et les instantanés dont les identifiants ou la destination ont changé servent uniquement à l’affichage pour cette décision préalable. Il en va de même lorsque les en-têtes `Authorization`, `x-api-key` ou `x-goog-api-key` remplacent les identifiants ; les fenêtres réservées à la recherche ou à MCP sont exclues. Si aucune cible admissible n’a de réinitialisation applicable, l’ordre de configuration prévaut. La sélection des comptes et les nouvelles tentatives appliquent toujours leurs limites habituelles.
+
 ## Que se passe-t-il lorsqu'une cible échoue
 
 Les échecs d’un combo se répartissent entre ceux qui entraînent un **basculement** et les échecs **terminaux**.

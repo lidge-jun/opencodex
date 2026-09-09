@@ -202,6 +202,8 @@ shows the soonest upcoming window reset (five-hour, weekly, monthly, or custom).
 provider that refreshes first. Targets without fresh quota data, and ties, keep configuration
 order. Weights and `stickyLimit` do not affect this strategy.
 
+This ranking and provider exclusion before dispatch require fresh model-inference limits that apply to the current single API key as a whole. OAuth/current-account summaries, caller-forward routes, multiple keys, and snapshots with changed credentials or destinations are display-only for this early decision. The same applies when `Authorization`, `x-api-key`, or `x-goog-api-key` headers override credentials; search-only and MCP-only windows are excluded. If no eligible target has an applicable reset, configuration order wins. Account selection and retries still enforce their normal limits.
+
 ## What happens when a target fails
 
 Combo failures are divided into **hop** failures and **terminal** failures.

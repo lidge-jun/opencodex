@@ -1,7 +1,6 @@
 import type { OcxComboTarget, OcxConfig } from "../types";
-import { getCachedProviderQuota } from "../providers/quota-routing-cache";
+import { getCachedProviderRoutingQuota } from "../providers/quota-routing-cache";
 import type { ProviderQuota } from "../providers/quota-types";
-import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { sleepWithAbort } from "../lib/upstream-retry";
 import {
   coolComboTarget,
@@ -65,9 +64,7 @@ function targetProviderIsUsable(config: OcxConfig, target: OcxComboTarget, now: 
   if (!Object.hasOwn(config.providers, target.provider)) return false;
   const provider = config.providers[target.provider];
   if (!provider || provider.disabled === true) return false;
-  // Native account selection owns model-scoped quota; a provider summary cannot veto it.
-  return isCanonicalOpenAiForwardProvider(provider)
-    || !cachedProviderQuotaIsExhausted(getCachedProviderQuota(target.provider, now), now);
+  return !cachedProviderQuotaIsExhausted(getCachedProviderRoutingQuota(target.provider, provider, now), now);
 }
 
 function quotaWindowExhausted(percent: number | undefined, resetAt: number | undefined, now: number): boolean {
@@ -181,6 +178,7 @@ function smoothWeightedIndex(
  * unknown (Infinity).
  */
 function resetWindowIndex(
+  config: OcxConfig,
   targets: Required<OcxComboTarget>[],
   eligible: (target: Required<OcxComboTarget>) => boolean,
   now = Date.now(),
@@ -190,7 +188,9 @@ function resetWindowIndex(
   for (let index = 0; index < targets.length; index++) {
     const target = targets[index]!;
     if (!eligible(target)) continue;
-    const remaining = quotaResetRemainingMs(getCachedProviderQuota(target.provider, now), now);
+    const remaining = quotaResetRemainingMs(
+      getCachedProviderRoutingQuota(target.provider, config.providers[target.provider], now), now,
+    );
     // Strict comparison deliberately retains configured order for ties,
     // including the no-snapshot fallback where every value is Infinity.
     if (selected < 0 || remaining < smallestRemaining) {
@@ -276,7 +276,7 @@ export function pickComboTarget(
       }
     }
   } else if (combo.strategy === "reset-window") {
-    targetIndex = resetWindowIndex(combo.targets, eligible, now);
+    targetIndex = resetWindowIndex(config, combo.targets, eligible, now);
   } else {
     targetIndex = combo.targets.findIndex(eligible);
   }

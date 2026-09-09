@@ -1638,6 +1638,35 @@ retried. Guarded paths: the ChatGPT passthrough and generic adapter fetch in
 fallback. Adapters with their own `fetchResponse` (kiro, cursor, google) keep their own retry
 policies; kiro imports the shared abort/sleep helpers from this module.
 
+## Cached quota used by Combo selection
+
+Provider quota reports describe the observed account, model group, or service window; they are
+not automatically proof that every request through the provider is unavailable. Before account
+selection, Combo exclusion and `reset-window` ranking consume only the producer's inference-wide
+subset for the current single API key. Synthetic search windows and legacy ZAI MCP monthly data
+remain display rows, while credential-wide key limits such as the OpenRouter spending cap remain
+eligible for early exclusion.
+
+The producer records this subset in a private WeakMap bound to the provider name, adapter,
+destination and captured probe credential. Publication retains that evidence without adding it
+to report JSON. The cache getter rechecks the live key, effective registry authentication, static
+credential headers, key-pool size and freshness. OAuth/current-account reports, caller-forward
+routes and ambiguous credential scopes cannot rank or veto the provider before its normal
+account selection. Restoring a matching configuration may reuse still-fresh evidence; a new
+credential cannot inherit another key's cap. The same getter controls immediate selection,
+bounded cooldown waiting and reset-window ordering. This does not override explicit eligibility,
+target cooldowns, account admission or response-driven retry rules.
+
+```text
+[Decision Log]
+- 목적과 의도: Keep account-, model- and service-scoped quota from disabling an otherwise usable Combo provider while retaining valid single-key inference caps.
+- 기존 구현 및 제약 조건: The routing cache retained only the display quota and treated any exhausted window as a provider-wide veto before account/key selection.
+- 검토한 주요 대안: Remove quota pruning entirely; infer scope from display labels; or require producer-owned inference scope and current credential binding.
+- 선택한 방식: Publish private scoped evidence with reports and validate it in both provider exclusion and reset-window ranking.
+- 다른 대안 대신 이 방식을 선택한 이유: Display labels cannot prove credential ownership, while deleting the gate would lose valid OpenRouter and other single-key caps.
+- 장점, 단점 및 영향: Scoped/ambiguous reports become unknown for early routing and may require normal dispatch to establish availability; actual account and retry limits remain authoritative.
+```
+
 ## Same-provider combo quota fallback
 
 For a failover combo with multiple models on the same Codex-login OpenAI provider, a pre-stream
