@@ -145,7 +145,7 @@ JSON mode: `payload`.
 
 ### `ocx logs`
 
-Recent request log rows, filterable by provider, model, conversation, and status.
+Recent request log rows, filterable by provider, model, conversation, account, and status.
 
 | Method | Route |
 |---|---|
@@ -156,6 +156,7 @@ Recent request log rows, filterable by provider, model, conversation, and status
 | `--provider` | string | Restrict to one provider, matching failover attempts too. |
 | `--model` | string | Restrict to one model id, matching failover attempts too. |
 | `--conversation` | string | Restrict to one conversation id (`--conversationId` is accepted too). |
+| `--account` | string | Restrict to one account log label (`main`, `p<hex6>`, `o<hex6>`), matching failover attempts too. |
 | `--status` | string | An exact code (429) or a class (5xx). |
 | `--limit` | number | Row cap; defaults to 200. |
 | `--follow` | boolean | Poll for new rows; add --jsonl to emit JSONL. |
@@ -166,6 +167,7 @@ JSON mode: `payload`.
 
 - `--provider` and `--model` both match a failover attempt, so a request is findable by what actually served it, not only by what was asked for.
 - Rows print `conv=<id>` when the entry carries one, so a conversation filter can be told apart from an empty result.
+- Rows print `acct=<label>` when the account is known, so an `--account` filter can be told apart from an empty result.
 - `--follow` deduplicates by row id and cannot be combined with `--json`.
 
 ### `ocx storage report`
@@ -431,6 +433,23 @@ JSON mode: `payload`.
 - `store` verifies every keychain write by read-back before config.json is rewritten with keychain: references; an unavailable keychain refuses with 503 and leaves the file untouched.
 - Headless services usually have no unlocked keychain session; prefer ${ENV_VAR} references there.
 
+### `ocx account refresh`
+
+Refresh account quotas without model validation; pending Codex accounts require dashboard consent.
+
+| Method | Route |
+|---|---|
+| POST | `/api/codex-auth/accounts/refresh` |
+| GET | `/api/provider-quotas` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the refresh result as JSON. |
+
+JSON mode: `payload`.
+
+- CLI/admin-token refreshes only observe usage. After quota recovery, a human must click Refresh quotas in the dashboard to authorize model validation. Do not mint a GUI session to work around this consent boundary.
+
 ### `ocx account pause`
 
 Stop routing new requests to one account in the Codex pool.
@@ -687,6 +706,6 @@ JSON mode: `payload`.
 
 ## Counts
 
-- declared capabilities: 37
-- of those, state-changing: 16
+- declared capabilities: 38
+- of those, state-changing: 17
 - head-resolved invocations: 2

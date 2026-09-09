@@ -38,6 +38,7 @@ One row per line. The fields worth branching on:
 |---|---|
 | `requestId` | pass to `ocx logs explain` |
 | `conversationId` | groups a conversation; also printed as `conv=<id>` in human output |
+| `accountLogLabel` | which account served it (`main`, `p<hex6>`, `o<hex6>`); also printed as `acct=<label>` in human output |
 | `provider` / `model` | what actually served it |
 | `requestedModel` / `requestedAlias` | what the client asked for |
 | `status` / `durationMs` | outcome |
@@ -127,4 +128,3 @@ hint: <what to do>
 Branch on `reason` in those stderr lines, never on the message prose. `--json` does **not** wrap
 API failures in `{error:{type,code,message}}`; `runCliAction` still prints the three-liner on
 stderr and returns 4/5/1. Do not parse stdout for an error envelope that is not there.
-

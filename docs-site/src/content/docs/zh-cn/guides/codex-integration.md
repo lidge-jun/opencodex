@@ -312,12 +312,13 @@ fallback 行为，参见 [Sub-agent Surface](/guides/sub-agent-surface/)。
 
 ## Codex 账号预热
 
-当把一个 ChatGPT 账号加入 Codex 账号池时，opencodex 会在持久化前向 Codex Responses backend
-发送一个小型 streaming 请求来验证它。该请求使用真正的 Responses item 数组
-（`input: [{ type: "message", ... }]`），等待 `response.completed`，并默认使用 `gpt-5.4-mini`。
-如果该模型返回 HTTP 400，则会改用 `gpt-5.5` 重试；结构化的上游错误详情会被展示给用户，但不会暴露
-原始响应正文。后台重新验证是独立功能，默认关闭；只有在启用 Token Guardian、将 `chatgpt` 刷新策略设为
-`proactive`，并且 `tokenGuardian.codexWarmupEnabled` 为 true 时才会运行。
+添加或重新认证账号时，通常会在保存前发送一个小型模型请求并等待 `response.completed`。默认使用 `gpt-5.4-mini`，HTTP 400 时改用 `gpt-5.5` 重试。公开错误仅包含固定分类，不包含原始响应正文。
+
+如果新 OAuth 凭据的已认证用量查询确认5小时、每周或每月额度耗尽，则不调用模型而直接保存账号，显示**等待验证**。重启或刷新令牌也不会使其可用。额度恢复后刷新额度：只有完整的最新用量显示有余额，才会发送一个小型验证请求；请求完成后账号才可用于路由。查询或验证失败将保留等待状态。普通状态轮询不会发送该请求。初次注册时用量未知仍需常规预热验证。
+
+`ocx account refresh openai` 和 `ocx account list openai --quota --refresh` 仅查询用量。模型验证会消耗配额，因此需要用户的仪表板会话：配额恢复后，打开 `ocx gui` 并点击 **Refresh quotas**。无界面主机也需要通过浏览器访问其仪表板；仅凭管理员令牌无法授权验证。暂停的账号可以完成验证，但不会因此恢复或被选中。模型授权错误会一直显示，直到验证或重新登录成功。
+
+后台重新验证是独立功能，默认关闭。它要求 Token Guardian、`openai` 的 `proactive` 刷新策略及 `tokenGuardian.codexWarmupEnabled`，并跳过等待注册验证的账号。
 
 ## 恢复原生 Codex
 

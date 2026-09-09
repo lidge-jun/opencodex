@@ -1,4 +1,4 @@
-import { getCodexAccountCredential } from "./account-store";
+import { readCodexAccountRecord } from "./account-store";
 import { isAccountNeedsReauth } from "./account-runtime-state";
 import {
   MAIN_CODEX_ACCOUNT_ID,
@@ -48,5 +48,6 @@ export function isCodexAccountUsable(
     .some(account => isSelectableCodexPoolAccount(account) && account.id === accountId);
   if (!exists) return false;
   if (isAccountNeedsReauth(accountId)) return false;
-  return !!getCodexAccountCredential(accountId);
+  const record = readCodexAccountRecord(accountId);
+  return !!record?.credential && record.deletedAt == null && !record.codexValidationPending;
 }

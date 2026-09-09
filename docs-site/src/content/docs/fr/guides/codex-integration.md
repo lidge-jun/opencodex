@@ -375,13 +375,13 @@ délégation v1/base/v2 et de ses mécanismes de repli.
 
 ## Préchauffage des comptes Codex
 
-Lorsqu'un compte ChatGPT est ajouté au groupe de comptes Codex, opencodex le vérifie avant de l'enregistrer
-avec une petite requête en streaming vers le service Codex Responses. La requête utilise un véritable tableau
-d'éléments Responses (`input: [{ type: "message", ... }]`), attend `response.completed` et utilise par défaut
-`gpt-5.4-mini`. Si ce modèle renvoie HTTP 400, opencodex réessaie avec `gpt-5.5` ; les détails structurés de
-l'erreur en amont sont affichés sans exposer le corps brut de la réponse. La revalidation en arrière-plan est
-distincte et désactivée par défaut. Elle ne s'exécute que si Token Guardian est actif, si la stratégie
-d'actualisation `chatgpt` vaut `proactive` et si `tokenGuardian.codexWarmupEnabled` vaut true.
+L’ajout ou la réauthentification vérifie normalement le compte avant son enregistrement par une petite requête attendant `response.completed`. Le modèle par défaut est `gpt-5.4-mini`, avec un essai sur `gpt-5.5` en cas de HTTP 400. Les erreurs publiques contiennent des catégories fixes, sans corps de réponse brut.
+
+Si la lecture authentifiée des quotas avec le nouveau jeton OAuth confirme un quota de 5 heures, hebdomadaire ou mensuel épuisé, le compte est enregistré sans appel au modèle et affiche **Validation en attente**. Il reste exclu du routage après un redémarrage ou un renouvellement du jeton. Après récupération du quota, actualisez les quotas : une lecture récente et complète avec de la capacité disponible permet une petite requête de validation. Seule sa réussite active le compte. Tout échec conserve la restriction. Les lectures passives ne déclenchent pas cette requête. Un quota inconnu à l’inscription conserve la vérification habituelle.
+
+`ocx account refresh openai` et `ocx account list openai --quota --refresh` consultent uniquement les quotas. La validation du modèle consomme du quota et nécessite une session humaine du tableau de bord : après récupération, ouvrez `ocx gui` et cliquez sur **Refresh quotas**. Sur un hôte sans interface graphique, accédez à son tableau de bord depuis votre navigateur ; le jeton administrateur seul n’autorise pas la validation. Un compte en pause peut être validé sans être repris ni sélectionné. Les erreurs d’autorisation restent visibles jusqu’à une validation ou une réauthentification réussie.
+
+La revalidation en arrière-plan est distincte et désactivée par défaut. Elle nécessite Token Guardian, la politique `proactive` du fournisseur `openai` et `tokenGuardian.codexWarmupEnabled`, et ignore les comptes dont la validation d’inscription est en attente.
 
 ## Restauration de Codex natif
 

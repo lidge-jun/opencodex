@@ -2099,6 +2099,8 @@ export const zh: Record<TKey, string> = {
   "pws.healthLabel.reauthRequired": "需要重新认证",
   "pws.healthLabel.refreshFailed": "刷新失败",
   "pws.healthLabel.metadataMismatch": "元数据不匹配",
+  "pws.healthLabel.validationPending": "等待验证",
+  "pws.healthSummary.validationPending": "{provider} {account}：已在额度耗尽时注册。额度恢复后，刷新额度将发送一个小型验证请求。验证成功前不会用于路由。",
   "pws.healthLabel.credentialConflict": "凭证冲突",
   "pws.healthSummary.rateLimited": "{provider} {account}：限速至 {until}。在此之前将暂停该账户的路由。",
   "pws.healthSummary.quotaLimited": "{provider} {account}：配额限制至 {until}。在此之前将暂停该账户的路由。",

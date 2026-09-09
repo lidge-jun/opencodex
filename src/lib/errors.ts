@@ -209,6 +209,14 @@ export function classifyError(status: number, type: string, message: string): Oc
   if (type === "input_admission_refused") {
     return { message, type: "invalid_request_error", code: "input_admission_refused" };
   }
+  // A LOCAL inbound admission refusal (#3573) keeps its own code for the same reason as the
+  // preflight refusal above. #4112 gave the UPSTREAM 413 on this surface
+  // `context_length_exceeded`; without a distinct code here a client cannot tell a body the
+  // proxy never read from a turn the provider itself rejected, and only one of the two is
+  // fixed by raising `maxInboundBodyBytes`.
+  if (type === "inbound_body_too_large") {
+    return { message, type: "invalid_request_error", code: "inbound_body_too_large" };
+  }
   if (
     text.includes("context_length_exceeded") ||
     text.includes("context window") ||

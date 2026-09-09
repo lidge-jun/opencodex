@@ -1119,6 +1119,16 @@ export function filterRequestLogs(logs: RequestLogEntry[], params: URLSearchPara
     filtered = filtered.filter(entry => entry.model === model
       || entry.attempts?.some(attempt => attempt.model === model));
   }
+  // #4057: "which account served this request" is the first question asked when one provider
+  // holds several accounts, and until now the only way to answer it was to grep usage.jsonl by
+  // hand. Attempts are matched for the same reason `provider` and `model` match them: when a
+  // request failed over between pool accounts, a search for the account that finally served it
+  // has to find that request, not only the account that first refused it.
+  const account = params.get("account")?.trim();
+  if (account) {
+    filtered = filtered.filter(entry => entry.accountLogLabel === account
+      || entry.attempts?.some(attempt => attempt.accountLogLabel === account));
+  }
   const status = params.get("status")?.trim().toLowerCase();
   if (status) {
     filtered = /^[1-5]xx$/.test(status)

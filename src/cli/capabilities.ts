@@ -220,6 +220,18 @@ export const CAPABILITIES: readonly Capability[] = [
     ],
   },
   {
+    command: ["account", "refresh"],
+    summary: "Refresh account quotas without model validation; pending Codex accounts require dashboard consent.",
+    routes: [
+      { method: "POST", path: "/api/codex-auth/accounts/refresh" },
+      { method: "GET", path: "/api/provider-quotas" },
+    ],
+    flags: [{ name: "--json", value: "boolean", summary: "Emit the refresh result as JSON." }],
+    mutates: true,
+    json: "payload",
+    details: ["CLI/admin-token refreshes only observe usage. After quota recovery, a human must click Refresh quotas in the dashboard to authorize model validation. Do not mint a GUI session to work around this consent boundary."],
+  },
+  {
     command: ["usage"],
     summary: "Token and estimated-cost report over a time range.",
     routes: [{ method: "GET", path: "/api/usage" }],
@@ -307,12 +319,13 @@ export const CAPABILITIES: readonly Capability[] = [
   },
   {
     command: ["logs"],
-    summary: "Recent request log rows, filterable by provider, model, conversation, and status.",
+    summary: "Recent request log rows, filterable by provider, model, conversation, account, and status.",
     routes: [{ method: "GET", path: "/api/logs" }],
     flags: [
       { name: "--provider", value: "string", summary: "Restrict to one provider, matching failover attempts too." },
       { name: "--model", value: "string", summary: "Restrict to one model id, matching failover attempts too." },
       { name: "--conversation", value: "string", summary: "Restrict to one conversation id (`--conversationId` is accepted too)." },
+      { name: "--account", value: "string", summary: "Restrict to one account log label (`main`, `p<hex6>`, `o<hex6>`), matching failover attempts too." },
       { name: "--status", value: "string", summary: "An exact code (429) or a class (5xx)." },
       { name: "--limit", value: "number", summary: "Row cap; defaults to 200." },
       { name: "--follow", value: "boolean", summary: "Poll for new rows; add --jsonl to emit JSONL." },
@@ -324,6 +337,7 @@ export const CAPABILITIES: readonly Capability[] = [
     details: [
       "`--provider` and `--model` both match a failover attempt, so a request is findable by what actually served it, not only by what was asked for.",
       "Rows print `conv=<id>` when the entry carries one, so a conversation filter can be told apart from an empty result.",
+      "Rows print `acct=<label>` when the account is known, so an `--account` filter can be told apart from an empty result.",
       "`--follow` deduplicates by row id and cannot be combined with `--json`.",
     ],
   },

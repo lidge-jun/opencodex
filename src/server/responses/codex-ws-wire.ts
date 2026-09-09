@@ -2,7 +2,7 @@ import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
 // If the 101 never arrives (network black hole), give SSE a chance well before
 // the caller's connect timeout (default 200s) would fire.
 export const UPGRADE_DEADLINE_MS = 10_000;
-export const CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS = 30_000;
+export const CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS = 90_000;
 // Keep the push-based WS transport inside the same memory envelope as the
 // bounded SSE relays that consume this response. Unlike fetch response bodies,
 // a WebSocket cannot be paused when a ReadableStream applies backpressure, so

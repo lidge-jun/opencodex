@@ -35,6 +35,17 @@ runs helper features around provider requests.
 | `visionSidecar?` | `OcxVisionSidecarConfig` | on when usable | Image-description sidecar options. |
 | `images?` | `OcxImagesConfig` | automatic OpenAI selection | Standalone Images relay options for Codex `image_gen`. |
 
+The canonical ChatGPT upstream WebSocket has a fixed 90-second response-prelude deadline,
+measured after sending the create frame. Quota and response-metadata control frames do not
+reset it; the first non-control Responses event ends it. This is not a total generation
+deadline, and neither `connectTimeoutMs` nor `stallTimeoutSec` retunes the 90 seconds
+themselves. That constant is only the WebSocket-specific upper bound: the exchange runs under
+the signal `connectTimeoutMs` (default 200s) aborts, and that abort cancels an already-sent
+create before the prelude timer can fire. A `connectTimeoutMs` below 90 seconds therefore
+ends the wait earlier, so the deadline a request actually gets is the shorter of the two. If
+either expires after sending, the stream fails without an HTTP resend, avoiding duplicate
+inference.
+
 `noProxy` accepts either a comma-separated string or an array. Both forms add entries without
 replacing an inherited `NO_PROXY`:
 

@@ -63,7 +63,11 @@ import { runModelRenameStartupMigration } from "../providers/model-rename-startu
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 import { providerCodexAccountMode } from "../providers/registry";
 import type { StorageCleanupPolicy } from "../types";
-import { MAX_DECOMPRESSED_BODY_BYTES } from "./request-decompress";
+import {
+  MAX_CONFIGURABLE_INBOUND_BODY_BYTES,
+  MIN_CONFIGURABLE_INBOUND_BODY_BYTES,
+  resolveInboundBodyLimitBytes,
+} from "./request-decompress";
 import {
   CodexAccountCooldownError,
   cooldownErrorMessage,
@@ -1023,6 +1027,22 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   let loopbackServer: Server<WsData> | null = null;
   let managementIngressServer: Server<WsData> | null = null;
 
+  // Resolved once, before any listener binds. The clamp is silent inside the resolver so it
+  // stays pure and per-request cheap; the operator is told here instead, once, because a
+  // config value that was quietly reduced is exactly the thing they would otherwise debug
+  // against the wrong limit.
+  const inboundBodyLimitBytes = resolveInboundBodyLimitBytes(config.maxInboundBodyBytes);
+  const requestedInboundBodyLimit = config.maxInboundBodyBytes;
+  if (requestedInboundBodyLimit !== undefined
+    && requestedInboundBodyLimit > 0
+    && requestedInboundBodyLimit !== inboundBodyLimitBytes) {
+    console.warn(
+      `[server] maxInboundBodyBytes=${requestedInboundBodyLimit} is outside the supported range `
+      + `[${MIN_CONFIGURABLE_INBOUND_BODY_BYTES}, ${MAX_CONFIGURABLE_INBOUND_BODY_BYTES}]; `
+      + `using ${inboundBodyLimitBytes} bytes.`,
+    );
+  }
+
   type ServerIngress = "public" | "unauthenticated-loopback" | "hub-management";
   function ingressForServer(requestServer: Server<WsData>): ServerIngress {
     if (requestServer === loopbackServer) return "unauthenticated-loopback";
@@ -1042,7 +1062,10 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     userCostOverlayReconciler = startUserCostOverlayReconciler({ liveConfig: config });
     const serveOptions = {
       idleTimeout: 255,
-      maxRequestBodySize: MAX_DECOMPRESSED_BODY_BYTES,
+      // Bun rejects an oversized body before `fetch` runs, so the listener has to be raised
+      // with the admission limit or the opt-in would do nothing. Fixed at bind time: a live
+      // `maxInboundBodyBytes` edit needs a restart, which the config doc states.
+      maxRequestBodySize: inboundBodyLimitBytes,
       async fetch(req: Request, requestServer: Server<WsData>): Promise<Response> {
       const ingress = ingressForServer(requestServer);
       // The unauthenticated loopback listener (#1102) serves a fixed allowlist and nothing

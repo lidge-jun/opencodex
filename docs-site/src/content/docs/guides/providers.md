@@ -37,6 +37,9 @@ Desktop mode and current credential-bound upstream permission; a catalog entry a
 authorize a request. See [Luna Reserve alongside routed models](/reference/cli/providers-accounts/#luna-reserve-alongside-routed-models)
 for setup, restart order, authorization requirements, and unsupported helpers.
 
+For adding an account with exhausted quota and finishing its deferred validation, see
+[Codex account warmup](/guides/codex-integration/#codex-account-warmup).
+
 ### Providers overview pool capacity
 
 For Codex login in Pool mode, the Providers overview shows a configured-weight estimate of the
@@ -432,6 +435,22 @@ headers. That is separate from the keyless desktop quota OpenCode advertises
 synthetic `Retry-After`; an upstream `Retry-After` still takes precedence. Same-key
 wait-and-retry remains opt-in via [`retryOn429`](/reference/configuration/).
 
+**The keyless `opencode-free` tier is currently closed to third-party clients.** Zen refuses
+any request that arrives without an `x-opencode-session` header, answering with error type
+`MissingSessionID` and the message "OpenCode's free tier can only be used in OpenCode". Presence
+of the header is the entire gate, so a proxy could pass it by inventing a value — opencodex does
+not. Minting a session identifier and a versioned `opencode/<version>` User-Agent is a claim to
+*be* the OpenCode client, and OpenCode publishes no third-party integration contract for this
+keyless tier; an HTTP 200 obtained that way is a bypassed admission check rather than
+permission. opencodex therefore reports the restriction instead of working around it: a request
+to `opencode-free` returns an error explaining the upstream gate and pointing here.
+
+The supported route to the same models is the keyed **`opencode-zen`** provider with an OpenCode
+Zen API key from [opencode.ai/auth](https://opencode.ai/auth). If OpenCode later publishes a
+supported third-party path for the keyless tier, opencodex can follow it; until then the preset
+stays as documentation of the restriction. Upstream terms:
+[opencode.ai/docs/zen](https://opencode.ai/docs/zen/).
+
 Most use the `openai-chat` adapter with a bearer key; a few that expose only an Anthropic-compatible
 endpoint (e.g. **Xiaomi MiMo**) use the `anthropic` adapter (`x-api-key`).
 Volcengine Agent Plan uses its native Responses endpoint through `openai-responses`.
@@ -786,6 +805,24 @@ Use `ocx account list`, `ocx account current`, and `ocx account use` to inspect 
 Codex, OAuth, and API-key pools without opening the dashboard. See the
 [CLI reference](/reference/cli/#ocx-account-subcommand) for commands, JSON output, and
 new-session behavior.
+
+#### Subscription tier in account listings
+
+`ocx account list <provider> --json` and `GET /api/oauth/accounts` report a `plan` field on every
+OAuth account, using the same name and placement as the OpenAI/Codex provider so a consumer can
+read one shape across providers.
+
+The field is always present. It is `null` when the tier is unknown, which is deliberate: an
+**absent** key means the proxy predates this field, while `null` means this version looked and the
+provider did not report a tier. Collapsing the two would let a consumer quietly assume a tier.
+
+For Anthropic the value is `null` today. Its usage endpoint returns quota buckets only — the
+five-hour and seven-day windows, the model-scoped weekly windows, and a `limits` array — and no
+subscription or tier field; the OAuth token response carries only the account id and email. There
+is nothing to map, so nothing is mapped. The tier is also not derivable from the quota it does
+return, because percentages are normalized per account: a Max ×5 seat at 50% is indistinguishable
+from a Max ×20 seat at 50%. If you need weighted pool capacity across mixed Anthropic tiers, keep
+that mapping outside OpenCodex until upstream reports the tier itself.
 
 ### GPT-5.6 preview paths
 

@@ -1097,6 +1097,8 @@ export const zhTW: Record<TKey, string> = {
   "pws.healthLabel.reauthRequired": "需要重新認證",
   "pws.healthLabel.refreshFailed": "重新整理失敗",
   "pws.healthLabel.metadataMismatch": "後設資料不符合",
+  "pws.healthLabel.validationPending": "等待驗證",
+  "pws.healthSummary.validationPending": "{provider} {account}：已在額度耗盡時註冊。額度恢復後，重新整理額度將傳送一個小型驗證請求。驗證成功前不會用於路由。",
   "pws.healthLabel.credentialConflict": "憑證衝突",
   "pws.healthSummary.rateLimited": "{provider} {account}：限速至 {until}。在此之前將暫停該帳號的路由。",
   "pws.healthSummary.quotaLimited": "{provider} {account}：配額限制至 {until}。在此之前將暫停該帳號的路由。",

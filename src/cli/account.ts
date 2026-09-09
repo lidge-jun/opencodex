@@ -99,6 +99,7 @@ function statusText(row: AccountRow): string {
   if (row.paused) parts.push("paused");
   if (row.active) parts.push(row.type === "codex" ? "selected" : "active");
   if (row.needsReauth) parts.push("needs-reauth");
+  if (row.validationPending) parts.push("validation-pending");
   return parts.join(" ");
 }
 

@@ -141,8 +141,10 @@ availability snapshot is cached for `subagentModelFallbackPollMs`. Encrypted chi
 the chain to canonical native ChatGPT targets plus direct key-auth Responses routes explicitly
 trusted with `allowEncryptedV2AgentTasks: true`; if none can consume the encrypted payload, the
 request fails instead of routing unreadable ciphertext elsewhere. Combo routing first tries an
-available canonical native target; when none is selectable and `agentTaskRecovery` is enabled,
-an encrypted `NEW_TASK` is recovered once before routed combo dispatch.
+available canonical native target; when none is selectable or their attempts are exhausted, and
+`agentTaskRecovery` is enabled, an encrypted `NEW_TASK` is recovered once before routed combo
+dispatch. Combo recovery runs only on spawned child turns; the direct routed path also recovers
+on a mid-thread model switch.
 
 ```json
 {
@@ -162,12 +164,16 @@ an encrypted `NEW_TASK` is recovered once before routed combo dispatch.
 
 ## Encrypted v2 task recovery
 
-`agentTaskRecovery` is an experimental compatibility path for a native ChatGPT parent spawning a
-routed v2 child. It is disabled by default. When explicitly enabled and the final routed child task
-contains an otherwise unreadable Fernet payload, opencodex uses a raw Responses passthrough request
-to the fixed `https://chatgpt.com/backend-api/codex/responses` endpoint with forward-mode
-authentication. ChatGPT returns the plaintext assignment through a forced function call; opencodex
-then converts only that task item to a standard user message before routed-provider dispatch.
+`agentTaskRecovery` is an experimental compatibility path for backend-encrypted v2 tasks that reach
+a routed provider. Two request shapes qualify: a native ChatGPT parent spawning a routed v2 child,
+and a live thread switched from a native ChatGPT model to a routed one, whose history replays a
+backend-minted encrypted agent message on every later turn
+([#4089](https://github.com/lidge-jun/opencodex/issues/4089)). It is disabled by default. When
+explicitly enabled and the final routed task contains an otherwise unreadable Fernet payload,
+opencodex uses a raw Responses passthrough request to the fixed
+`https://chatgpt.com/backend-api/codex/responses` endpoint with forward-mode authentication.
+ChatGPT returns the plaintext assignment through a forced function call; opencodex then converts
+only that task item to a standard user message before routed-provider dispatch.
 
 This is not local decryption and does not fix the Codex wire protocol. It depends on undocumented
 ChatGPT backend behavior and may stop working after a backend change. The recovered assignment is

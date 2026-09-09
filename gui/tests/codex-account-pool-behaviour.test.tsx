@@ -218,6 +218,35 @@ test("the controller loads once on mount", async () => {
   expect(seen.current!.loadState).toBe("ready");
 });
 
+test("forced quota reads remain GET unless deferred validation is explicitly requested", async () => {
+  const seen = await mountController();
+  const originalTimeout = AbortSignal.timeout;
+  const deadlines: number[] = [];
+  AbortSignal.timeout = (ms: number) => {
+    deadlines.push(ms);
+    return new AbortController().signal;
+  };
+  try {
+    calls = [];
+    await act(async () => { await seen.current!.load(true); });
+    expect(calls).toContain("GET codex-auth/accounts?refresh=1");
+    expect(calls.some(call => call.startsWith("POST codex-auth/accounts"))).toBe(false);
+    expect(deadlines.at(-1)).toBe(20_000);
+    calls = [];
+    let finishValidation!: () => void;
+    nextAccountsResponseGate = new Promise<void>(resolve => { finishValidation = resolve; });
+    let validation!: Promise<boolean>;
+    await act(async () => { validation = seen.current!.load(true, { validatePending: true }); });
+    expect(calls).toContain("POST codex-auth/accounts/refresh");
+    expect(deadlines.at(-1)).toBeGreaterThan(8_000 + 2 * 30_000);
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 400)); });
+    expect(calls.filter(call => call.includes("codex-auth/accounts"))).toEqual(["POST codex-auth/accounts/refresh"]);
+    await act(async () => { finishValidation(); expect(await validation).toBe(true); });
+  } finally {
+    AbortSignal.timeout = originalTimeout;
+  }
+});
+
 test("the controller joins 30-day usage to accounts by the displayed log label", async () => {
   accounts = [
     { id: "main", email: "main", isMain: true, paused: false, priority: 0, hasCredential: true, quota: null },

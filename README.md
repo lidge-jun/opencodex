@@ -368,6 +368,9 @@ Maintainer source-of-truth notes live under [`structure/`](./structure), contrib
 Report undisclosed vulnerabilities privately through
 [GitHub private vulnerability reporting](https://github.com/lidge-jun/opencodex/security/advisories/new),
 not a public issue.
+That form is the only technical channel — there is no security email. Follow-ups stay in the
+private report itself; a public issue may carry coordination only, never vulnerability details.
+Acknowledging a report is not the same as triaging it, and no first-response target is promised.
 
 ## Development
 

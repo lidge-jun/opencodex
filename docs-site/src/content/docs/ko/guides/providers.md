@@ -231,6 +231,10 @@ Cline IDE/CLI에서만 제공되며 API로는 사용할 수 없습니다. `minim
 **OpenCode Zen**(`opencode-zen`)과 키 없는 **OpenCode Free** 프리셋은
 `https://opencode.ai/zen/v1`을 공유합니다. 그 게이트웨이의 무료 모델은 종종 분당 약 15–20회 요청의 짧은 창 속도 제한에 걸립니다(커뮤니티 측정; OpenCode는 RPM을 공개하지 않음). Zen은 `Retry-After` / `X-RateLimit-*` 헤더 없는 일반 429를 반환할 수 있습니다. 이는 키 없는 데스크톱 할당량(`opencode-free`에서 약 5시간당 Big Pickle/무료 모델 200회)과 별개입니다. Zen이 그런 429에서 `Retry-After`를 생략하면 opencodex는 클라이언트 오류에 안내를 더하고 합성 `Retry-After`를 붙입니다(업스트림 `Retry-After`가 있으면 그것이 우선). 동일 키 대기 재시도는 [`retryOn429`](/ko/reference/configuration/)로 선택합니다.
 
+**키 없는 `opencode-free` 등급은 현재 서드파티 클라이언트에 닫혀 있습니다.** Zen은 `x-opencode-session` 헤더가 없는 요청을 모두 거부하고, 오류 타입 `MissingSessionID`와 "OpenCode's free tier can only be used in OpenCode" 메시지를 돌려줍니다. 관문은 헤더가 있는지만 보기 때문에 프록시가 값을 지어내 통과할 수도 있지만, opencodex는 그렇게 하지 않습니다. 세션 식별자와 버전이 붙은 `opencode/<version>` User-Agent를 만들어 보내는 것은 자신이 OpenCode 클라이언트라고 주장하는 일이고, OpenCode는 이 키 없는 등급에 서드파티 연동 계약을 공개한 적이 없습니다. 그렇게 받아낸 HTTP 200은 허가가 아니라 뚫린 관문일 뿐입니다. 그래서 opencodex는 우회하지 않고 제한을 그대로 알립니다. `opencode-free`로 보낸 요청은 업스트림 관문을 설명하는 오류를 돌려받습니다.
+
+같은 모델로 가는 지원 경로는 [opencode.ai/auth](https://opencode.ai/auth)에서 발급받은 OpenCode Zen API 키를 쓰는 **`opencode-zen`** 프리셋입니다. 나중에 OpenCode가 키 없는 등급의 서드파티 경로를 공개하면 opencodex도 따라갈 수 있고, 그때까지 이 프리셋은 제한을 기록해 두는 역할을 합니다. 업스트림 약관: [opencode.ai/docs/zen](https://opencode.ai/docs/zen/).
+
 대부분은 bearer 키와 함께 `openai-chat` 어댑터를 사용하며, Anthropic 호환 엔드포인트만 노출하는 일부
 (예: **Xiaomi MiMo**)는 `anthropic` 어댑터(`x-api-key`)를 사용합니다.
 Volcengine Agent Plan은 `openai-responses` 어댑터로 네이티브 Responses 엔드포인트를 사용합니다.

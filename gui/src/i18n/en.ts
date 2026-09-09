@@ -1338,6 +1338,8 @@ export const en = {
   "pws.healthLabel.reauthRequired": "Reauthentication required",
   "pws.healthLabel.refreshFailed": "Refresh failed",
   "pws.healthLabel.metadataMismatch": "Metadata mismatch",
+  "pws.healthLabel.validationPending": "Validation pending",
+  "pws.healthSummary.validationPending": "{provider} {account}: registered while quota-limited. After quota recovers, refresh quotas to run a small validation request. Routing stays disabled until it succeeds.",
   "pws.healthLabel.credentialConflict": "Credential conflict",
   "pws.healthSummary.rateLimited": "{provider} {account}: rate limited until {until}. Routing for this account is paused until then.",
   "pws.healthSummary.quotaLimited": "{provider} {account}: quota limited until {until}. Routing for this account is paused until then.",

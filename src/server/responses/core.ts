@@ -102,7 +102,7 @@ import {
 } from "../../lib/errors";
 import { injectionDebugLog } from "../../lib/injection-debug-log";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
-import { enrichOpenCodeZenRateLimitMessage } from "../../providers/opencode-zen-rate-limit";
+import { enrichOpenCodeZenUpstreamMessage } from "../../providers/opencode-zen-rate-limit";
 import { CODE_MODE_EXEC_TOOL_NAME, modelInList, namespacedToolName } from "../../types";
 import type {
   AdapterEvent,
@@ -150,6 +150,11 @@ import {
 } from "../../oauth/generic-account-failover";
 import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
 import { buildWebSearchTool, planWebSearch, runWithWebSearch, shouldResolveOpenAiWebSearchSidecar } from "../../web-search";
+import {
+  createOllamaBridgeExecutor,
+  createPassthroughWebSearchBridgeStream,
+  planPassthroughWebSearchBridge,
+} from "../../web-search/passthrough-bridge";
 import { buildImageTool, buildVideoTool, planImageBridge, planVideoBridge, runWithImageBridge, clampImageMaxRounds, IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME } from "../../images";
 import { describeImagesInPlace, isModelTextOnly, planVisionSidecar, resolveOpenAiVisionModel, shouldResolveOpenAiVisionSidecar, stripImagesInPlace } from "../../vision";
 import { createAdapterEventQueue, preflightAdapterEvents, type AdapterEventQueue } from "../../adapters/run-turn-queue";
@@ -243,7 +248,13 @@ import { hasPassiveAccountQuota, recordAnthropicAccountQuotaFromHeaders, recordP
 import { captureConfigGeneration } from "../../lib/state-store-sweeper";
 import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../../providers/openai-virtual-models";
 import { isUsageDebugEnabled } from "../../usage/debug";
-import { readJsonRequestBody, DecompressedBodyTooLargeError, UnsupportedContentEncodingError } from "../request-decompress";
+import {
+  readJsonRequestBody,
+  describeInboundBodyRefusal,
+  resolveInboundBodyLimitBytes,
+  DecompressedBodyTooLargeError,
+  UnsupportedContentEncodingError,
+} from "../request-decompress";
 import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
 import {
   providerModelResponsesTerminalRepair,
@@ -1608,7 +1619,7 @@ export function decodeRequestErrorResponse(err: unknown, label: string): Respons
     return formatErrorResponse(415, "invalid_request_error", err.message);
   }
   if (err instanceof DecompressedBodyTooLargeError) {
-    return formatErrorResponse(413, "invalid_request_error", err.message);
+    return formatErrorResponse(413, "inbound_body_too_large", describeInboundBodyRefusal(err));
   }
   console.warn(`[${label}] request body decode/parse failed: ${err instanceof Error ? `${err.name}: ${err.message}` : String(err)}`);
   return formatErrorResponse(400, "invalid_request_error", "Invalid JSON body");
@@ -3232,7 +3243,7 @@ async function handleResponsesInner(
   const agentTaskRecovery = agentTaskRecoveryConfig(config);
   let body: unknown;
   try {
-    body = await readJsonRequestBody(req, translatorBudget);
+    body = await readJsonRequestBody(req, translatorBudget, resolveInboundBodyLimitBytes(config.maxInboundBodyBytes));
   } catch (err) {
     if (options.abortSignal?.aborted || req.signal.aborted) {
       return clientCancelledResponse();
@@ -3622,10 +3633,19 @@ async function handleResponsesInner(
   let recoveryFailureReason: AgentTaskRecoveryFailureReason | undefined;
   // Native fallback and explicitly trusted direct Responses routes can consume ciphertext,
   // so recover only after final route selection.
+  //
+  // Deliberately NOT gated on `threadSpawn` (#4089). Switching a live thread from a native
+  // ChatGPT model to a routed provider replays a backend-minted encrypted agent message on every
+  // later turn, and a model switch is not a spawn, so the spawn requirement failed the thread
+  // closed permanently without ever attempting recovery. The trust boundary is
+  // `recoveryAdmission()` in ./agent-task-recovery -- Codex originator, live native ChatGPT
+  // bearer, matching chatgpt-account-id, no inbound API key, no proxy-admission secret -- which
+  // admits only the owner of the session that would be spent. `threadSpawn` narrowed which of
+  // that owner's own requests could use their own session; it kept nobody else out. The combo
+  // gate above keeps its spawn requirement: that path has its own native-target filtering and
+  // per-attempt failover, and the reported defect is on this path.
   if (
     inboundWire === "responses"
-    &&
-    threadSpawn
     && agentTaskRecovery
     && !isCanonicalOpenAiForwardProvider(route.provider)
     && !options.comboAttempt
@@ -5771,15 +5791,60 @@ async function handleResponsesInner(
         route.provider,
         route.modelId,
       );
+      // #3761: opt-in hosted-web-search bridge. Codex always declares the hosted web_search tool,
+      // and this branch relays that declaration on the assumption the destination executes it.
+      // A KEY-auth gateway that does not (Ollama Cloud GLM) answers with a function_call named
+      // web_search that nothing runs, and the undeclared-tool guard below ends the turn. When the
+      // provider opts in, the bridge intercepts that one call, runs the search, continues the
+      // conversation upstream, and hands back ordinary Responses SSE — so every rewrite below,
+      // including the guard itself, still inspects the client-facing stream. Default OFF: without
+      // the opt-in this is one planner call and the relay is byte-identical to before.
+      const webSearchBridgePlan = planPassthroughWebSearchBridge(parsed, route.provider, {
+        isPassthrough: true,
+        stream: parsed.stream === true,
+      });
+      // The bridge wraps the RAW upstream body, so terminal repair below still owns the single
+      // client-facing terminal — the bridge drops the terminal of every intercepted leg.
+      const upstreamSseBody = webSearchBridgePlan
+        ? createPassthroughWebSearchBridgeStream({
+          plan: webSearchBridgePlan,
+          firstLeg: upstreamResponse.body,
+          requestBody: request.body,
+          // Continuation legs replay the same built request with the executed search appended.
+          // The first leg already passed the recovery ladder, the outbound size ceiling, and the
+          // host circuit; a KEY-auth destination has no OAuth refresh to replay on a later leg.
+          send: (continuationBody: string) => fetchWithHeaderTimeout(
+            request.url,
+            { method: request.method, headers: request.headers, body: continuationBody },
+            upstream.signal,
+            connectMs,
+            true,
+            providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              dispatchOverride: oauthDispatch(request),
+              providerName: route.providerName,
+              modelId: route.modelId,
+            }),
+            false,
+          ),
+          execute: createOllamaBridgeExecutor(webSearchBridgePlan, route.provider.apiKey ?? ""),
+          // Appending a search result can push the continuation past the ceiling the first leg
+          // was admitted under, so the same limit is re-applied before every later send.
+          checkOutboundBody: (continuationBody: string) => {
+            const result = checkOutboundBodySize(continuationBody, config.maxUpstreamBodyBytes);
+            return result.admitted ? undefined : describeOutboundBodyRefusal(result);
+          },
+          signal: upstream.signal,
+        })
+        : upstreamResponse.body;
       const passthroughSseBody = terminalRepairPolicy
         ? relayResponsesSseWithTerminalRepair(
-          upstreamResponse.body,
+          upstreamSseBody,
           upstream,
           terminalRepairPolicy,
           translatorBudget,
           options.responsesTerminalRepairScheduler,
         )
-        : upstreamResponse.body;
+        : upstreamSseBody;
       const repairConfig = route.provider.responsesItemIdRepair;
       // Grok Build renders deltas live but reconstructs its durable assistant
       // turn from the completed response snapshot. Native Responses streams
@@ -7497,7 +7562,7 @@ async function handleResponsesInner(
       const message = normalized.cyberPolicy
         ? normalized.message
           ?? (isCyberPolicyCode(normalized.code) ? CYBER_POLICY_FALLBACK_MESSAGE : normalized.safeText)
-        : enrichOpenCodeZenRateLimitMessage(
+        : enrichOpenCodeZenUpstreamMessage(
           `Provider error ${upstreamResponse.status}: ${normalized.safeText}`,
           {
             status: upstreamResponse.status,
@@ -7508,7 +7573,7 @@ async function handleResponsesInner(
             hasApiKey: Boolean(route.provider.apiKey?.trim()),
             upstreamRetryAfter,
             // This recovery path is the HTTP Responses wire; custom runTurn transports
-            // never reach enrichOpenCodeZenRateLimitMessage here.
+            // never reach enrichOpenCodeZenUpstreamMessage here.
             supportsHttpSameKeyRetry: true,
           },
         );

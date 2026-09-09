@@ -706,13 +706,13 @@ Catalog sync makes the selected sub-agent models available to Codex; see [Codex 
 
 ## Codex account warmup
 
-When a ChatGPT account is added to the Codex account pool, opencodex verifies it before persistence
-with a small streaming request to the Codex Responses backend. The request uses a real Responses
-item array (`input: [{ type: "message", ... }]`), waits for `response.completed`, and defaults to
-`gpt-5.4-mini`. If that model returns HTTP 400, it retries with `gpt-5.5`; structured upstream error
-details are surfaced without exposing raw response bodies. Background revalidation is separate and
-off by default; it runs only when Token Guardian is enabled, the `chatgpt` refresh policy is
-`proactive`, and `tokenGuardian.codexWarmupEnabled` is true.
+When a ChatGPT account is added or reauthenticated, OpenCodex normally verifies it before saving with a small streaming request to the Codex Responses backend. It waits for `response.completed`, defaults to `gpt-5.4-mini`, and retries with `gpt-5.5` on HTTP 400. Public errors contain fixed failure categories rather than raw upstream response bodies.
+
+If the new OAuth credential's authenticated usage lookup confirms an exhausted 5-hour, weekly, or monthly quota, the account is saved without this model request and shows **Validation pending**. It cannot serve pool requests, even after a restart or token refresh. Once quota recovers, **Refresh quotas** finishes validation: a fresh, complete usage reading with headroom permits one small model request, and only a completed response enables the account. Failed or incomplete readings and failed validation preserve the restriction. Passive account polling does not trigger deferred validation. Unknown usage during initial registration retains the normal warmup gate.
+
+`ocx account refresh openai` and `ocx account list openai --quota --refresh` only read usage. Model validation spends quota and requires a human dashboard session: open `ocx gui` and click **Refresh quotas** after recovery. For a headless host, access its dashboard from your browser; an admin token alone does not authorize validation. Validation can complete while an account is paused without resuming or selecting it. Model authorization failures remain visible until successful validation or reauthentication clears them.
+
+Background revalidation is separate and off by default. It requires Token Guardian, the `openai` provider's `proactive` refresh policy, and `tokenGuardian.codexWarmupEnabled`. It skips accounts awaiting deferred registration validation.
 
 ## Restoring native Codex
 

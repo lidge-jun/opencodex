@@ -1781,7 +1781,29 @@ export function submitManualLoginCode(provider: string, input: string): { ok: tr
   return { ok: true };
 }
 
-export interface OAuthAccountSummary { id: string; alias?: string; email?: string; active: boolean; needsReauth?: boolean; expiresAt?: number }
+export interface OAuthAccountSummary {
+  id: string;
+  alias?: string;
+  email?: string;
+  active: boolean;
+  needsReauth?: boolean;
+  expiresAt?: number;
+  /**
+   * Subscription tier, mirroring the field the OpenAI/Codex provider reports, so a consumer
+   * weighting a multi-account pool by seat size needs no per-provider branching (#3777).
+   *
+   * Always present and explicitly `null` when the tier is unknown. The distinction matters:
+   * an ABSENT key means the proxy is too old to report a tier at all, while `null` means this
+   * version looked and upstream did not say. Omitting it would make those indistinguishable and
+   * invite a consumer to assume a tier.
+   *
+   * Every OAuth provider reports `null` today. Anthropic's `/api/oauth/usage` returns quota
+   * buckets only — `five_hour`, `seven_day`, the model-scoped weekly windows and `limits[]` —
+   * and carries no subscription/tier field, and its token response carries none either. See
+   * `fetchAnthropicUsageQuota` in `src/providers/quota.ts`.
+   */
+  plan: string | null;
+}
 
 export function getLoginStatus(provider: string): { loggedIn: boolean; email?: string; source?: OAuthCredentials["source"]; error?: string; done: boolean; activeAccountId?: string; accounts?: OAuthAccountSummary[] } {
   const cred = getCredential(provider);
@@ -1794,6 +1816,11 @@ export function getLoginStatus(provider: string): { loggedIn: boolean; email?: s
     active: a.id === set.activeAccountId,
     ...(a.needsReauth ? { needsReauth: true } : {}),
     expiresAt: a.credential.expires,
+    // Explicitly null rather than omitted — see OAuthAccountSummary.plan. No OAuth provider
+    // exposes a subscription tier today, so there is nothing truthful to put here; deriving one
+    // from quota percentages is not possible, because they are normalized per account and a
+    // half-consumed small seat is indistinguishable from a half-consumed large one.
+    plan: null,
   }));
 
   // A stored credential counts as "logged in" when it exists and is not marked for

@@ -1306,6 +1306,8 @@ export const ru: Record<TKey, string> = {
   "pws.healthLabel.reauthRequired": "Требуется повторная аутентификация",
   "pws.healthLabel.refreshFailed": "Ошибка обновления",
   "pws.healthLabel.metadataMismatch": "Несоответствие метаданных",
+  "pws.healthLabel.validationPending": "Ожидает проверки",
+  "pws.healthSummary.validationPending": "{provider} {account}: зарегистрирован с исчерпанной квотой. После её восстановления обновите квоты, чтобы отправить небольшой проверочный запрос. Маршрутизация отключена до успешной проверки.",
   "pws.healthLabel.credentialConflict": "Конфликт учётных данных",
   "pws.healthSummary.rateLimited": "{provider} {account}: ограничение частоты до {until}. Маршрутизация этой учётной записи приостановлена до этого времени.",
   "pws.healthSummary.quotaLimited": "{provider} {account}: квота ограничена до {until}. Маршрутизация этой учётной записи приостановлена до этого времени.",

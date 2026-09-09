@@ -95,6 +95,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "PATCH", path: "/api/codex-auth/pool-strategy", module: "codex/auth-api", mutates: true },
   { method: "POST", path: "/api/codex-auth/accounts", module: "codex/auth-api", mutates: true },
   { method: "POST", path: "/api/codex-auth/accounts/clear-cooldown", module: "codex/auth-api", mutates: true },
+  { method: "POST", path: "/api/codex-auth/accounts/refresh", module: "codex/auth-api", mutates: true },
   { method: "POST", path: "/api/codex-auth/login", module: "codex/auth-api", mutates: true },
   { method: "POST", path: "/api/codex-auth/login/cancel", module: "codex/auth-api", mutates: true },
   { method: "POST", path: "/api/codex-auth/login/code", module: "codex/auth-api", mutates: true },

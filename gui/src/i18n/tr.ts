@@ -1325,6 +1325,8 @@ export const tr: Record<TKey, string> = {
   "pws.healthLabel.reauthRequired": "Yeniden doğrulama gerekli",
   "pws.healthLabel.refreshFailed": "Yenileme başarısız oldu",
   "pws.healthLabel.metadataMismatch": "Meta veri uyuşmazlığı",
+  "pws.healthLabel.validationPending": "Doğrulama bekleniyor",
+  "pws.healthSummary.validationPending": "{provider} {account}: kota tükenmişken kaydedildi. Kota yenilendikten sonra küçük bir doğrulama isteği göndermek için kotaları yenileyin. Başarılı olana kadar yönlendirme kapalı kalır.",
   "pws.healthLabel.credentialConflict": "Kimlik bilgisi çakışması",
   "pws.healthSummary.rateLimited": "{provider} {account}: {until} tarihine kadar oran kısıtlandı.",
   "pws.healthSummary.quotaLimited": "{provider} {account}: {until} tarihine kadar kota kısıtlandı.",

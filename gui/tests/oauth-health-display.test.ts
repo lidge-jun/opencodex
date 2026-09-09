@@ -23,6 +23,12 @@ const t: TFn = ((key: string, vars?: Record<string, string | number>) => {
 }) as TFn;
 
 describe("oauth health badge helpers", () => {
+  test("deferred Codex validation explains quota recovery without requesting reauthentication", () => {
+    const health = { status: "warning" as const, reason: "validation_pending" };
+    expect(formatOAuthHealthLabel(t, health)).toBe("pws.healthLabel.validationPending");
+    expect(formatOAuthHealthSummary(t, "codex", "acct_pending", health)).toBe("pws.healthSummary.validationPending");
+    expect(accountNeedsReauth({ needsReauth: false, health })).toBe(false);
+  });
   test("maps statuses to badge tones and classes", () => {
     expect(oauthHealthBadgeTone("healthy")).toBe("ok");
     expect(oauthHealthBadgeTone("cooldown")).toBe("muted");

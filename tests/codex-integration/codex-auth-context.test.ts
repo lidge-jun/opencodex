@@ -219,6 +219,22 @@ function expiredJwt(): string {
   return `header.${payload}.signature`;
 }
 describe("Codex auth context", () => {
+  test("pending-only pool fallback cannot materialize request authentication", async () => {
+    const cfg = config();
+    cfg.activeCodexAccountId = "pool-a";
+    const credential = { accessToken: "pending-access", refreshToken: "pending-refresh", expiresAt: Date.now() + 3600_000, chatgptAccountId: "pool_acc" };
+    saveCodexAccountCredential("pool-a", credential, { validationPending: true });
+    await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", {
+      primeCodexPoolQuotas: async () => {},
+    })).rejects.toThrow(CodexPoolAuthenticationError);
+    expect(isAccountNeedsReauth("pool-a")).toBe(false);
+
+    // Also reject a context acquired before reauthentication replaced the record.
+    const ctx = { kind: "pool" as const, accountId: "pool-a", generation: 0, writerGeneration: 0,
+      accessToken: "old-access", chatgptAccountId: "pool_acc" };
+    expect(() => materializeCodexUpstreamAuth(new Headers(), ctx)).toThrow("validation is pending");
+    expect(() => applyCodexAuthContextToProvider(cfg.providers.chatgpt!, ctx, "pool")).toThrow("validation is pending");
+  });
   test("main-profile drain routes a non-main pool account without native reads or quota priming", async () => {
     saveCodexAccountCredential("pool-a", {
       accessToken: "pool_token",

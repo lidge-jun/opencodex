@@ -2079,6 +2079,8 @@ export const de: Record<TKey, string> = {
   "pws.healthLabel.reauthRequired": "Erneute Anmeldung erforderlich",
   "pws.healthLabel.refreshFailed": "Aktualisierung fehlgeschlagen",
   "pws.healthLabel.metadataMismatch": "Metadaten stimmen nicht überein",
+  "pws.healthLabel.validationPending": "Validierung ausstehend",
+  "pws.healthSummary.validationPending": "{provider} {account}: mit erschöpftem Kontingent registriert. Aktualisieren Sie nach der Erholung die Kontingente, um eine kleine Validierungsanfrage zu senden. Bis zum Erfolg bleibt das Routing deaktiviert.",
   "pws.healthLabel.credentialConflict": "Anmeldedaten-Konflikt",
   "pws.healthSummary.rateLimited": "{provider} {account}: ratelimited bis {until}. Routing für dieses Konto ist bis dahin pausiert.",
   "pws.healthSummary.quotaLimited": "{provider} {account}: Kontingent begrenzt bis {until}. Routing für dieses Konto ist bis dahin pausiert.",

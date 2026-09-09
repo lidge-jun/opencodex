@@ -425,15 +425,13 @@ Arayüzü](/tr/guides/sub-agent-surface/) sayfasına bakın.
 
 ## Codex hesap ısınması
 
-Codex hesap havuzuna bir ChatGPT hesabı eklendiğinde opencodex, Codex Responses
-arka ucuna küçük bir akış isteği ile kalıcılıktan önce hesabı doğrular. İstek
-gerçek bir Responses öğe dizisi kullanır (`input: [{ type: "message", ... }]`),
-`response.completed` bekler ve varsayılan olarak `gpt-5.4-mini` kullanır. Bu
-model HTTP 400 döndürürse `gpt-5.5` ile yeniden dener; ham yanıt gövdelerini
-açığa çıkarmadan yapılandırılmış yukarı akış hata ayrıntıları ortaya çıkarılır.
-Arka plan yeniden doğrulaması ayrıdır ve varsayılan olarak kapalıdır; yalnızca
-Token Guardian etkinleştirildiğinde, `chatgpt` yenileme politikası `proactive`
-olduğunda ve `tokenGuardian.codexWarmupEnabled` true olduğunda çalışır.
+Hesap ekleme veya yeniden kimlik doğrulama, normalde kaydetmeden önce `response.completed` bekleyen küçük bir model isteğiyle doğrulanır. Varsayılan model `gpt-5.4-mini` olup HTTP 400 durumunda `gpt-5.5` denenir. Genel hatalar ham yanıt gövdesi yerine sabit hata kategorilerini içerir.
+
+Yeni OAuth belirteciyle yapılan kota sorgusu 5 saatlik, haftalık veya aylık kotanın tükendiğini doğrularsa hesap model çağrısı olmadan kaydedilir ve **Doğrulama bekleniyor** gösterilir. Yeniden başlatma veya belirteç yenileme yönlendirmeyi açmaz. Kota geri geldiğinde kotaları yenileyin: kullanılabilir kapasite gösteren eksiksiz güncel veri küçük bir doğrulama isteğine izin verir. Yalnızca tamamlanan yanıt hesabı etkinleştirir. Hatalarda kısıtlama korunur. Pasif sorgulama bu isteği göndermez. İlk kayıtta bilinmeyen kota normal doğrulamayı gerektirir.
+
+`ocx account refresh openai` ve `ocx account list openai --quota --refresh` yalnızca kullanımı okur. Model doğrulaması kota tüketir ve insanın pano oturumunu gerektirir: kota yenilendikten sonra `ocx gui` açıp **Refresh quotas** düğmesine tıklayın. Grafik arayüzü olmayan bir sunucunun panosuna da tarayıcınızdan erişin; yalnızca yönetici belirteci doğrulama yetkisi vermez. Duraklatılmış hesap doğrulanabilir, ancak devam ettirilmez veya seçilmez. Model yetkilendirme hataları başarılı doğrulama veya yeniden girişe kadar görünür kalır.
+
+Arka plan doğrulaması ayrı ve varsayılan olarak kapalıdır. Token Guardian, `openai` için `proactive` yenileme ilkesi ve `tokenGuardian.codexWarmupEnabled` gerektirir; kayıt doğrulaması bekleyen hesapları atlar.
 
 ## Yerel Codex'i geri yükleme
 

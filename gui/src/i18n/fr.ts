@@ -1328,6 +1328,8 @@ export const fr: Record<TKey, string> = {
   "pws.healthLabel.reauthRequired": "Réauthentification requise",
   "pws.healthLabel.refreshFailed": "Actualisation échouée",
   "pws.healthLabel.metadataMismatch": "Métadonnées incompatibles",
+  "pws.healthLabel.validationPending": "Validation en attente",
+  "pws.healthSummary.validationPending": "{provider} {account} : enregistré avec un quota épuisé. Après sa récupération, actualisez les quotas pour envoyer une petite requête de validation. Le routage reste désactivé jusqu’à sa réussite.",
   "pws.healthLabel.credentialConflict": "Conflit d’identifiants",
   "pws.healthSummary.rateLimited": "{provider} {account} : débit limité jusqu’à {until}. Le routage de ce compte est suspendu jusque-là.",
   "pws.healthSummary.quotaLimited": "{provider} {account} : quota limité jusqu’à {until}. Le routage de ce compte est suspendu jusque-là.",

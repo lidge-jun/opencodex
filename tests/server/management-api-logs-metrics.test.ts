@@ -431,3 +431,41 @@ describe("GET /api/logs snapshot polling", () => {
     }
   });
 });
+
+/**
+ * #4057: the account label was persisted on the row and on every attempt long before anything
+ * could read it back. `requestLogDto` carries it only because it spreads the entry — the sibling
+ * projection `requestLogEntryFromPersistedUsage` rebuilds field by field and warns in its own
+ * comment that a field missing there never reaches usage.jsonl. These assertions pin the served
+ * contract so a future field-by-field rewrite of the DTO cannot drop the label silently.
+ */
+describe("GET /api/logs account identity", () => {
+  beforeEach(() => clearRequestLogsForTests());
+
+  test("serves the account label on the row and on each attempt, and filters on it", async () => {
+    addRequestLog(baseEntry({ requestId: "main-row", provider: "openai", accountLogLabel: "main" }));
+    addRequestLog(baseEntry({
+      requestId: "pool-row",
+      provider: "openai",
+      accountLogLabel: "p3f9a1",
+      attempts: [
+        { ordinal: 1, provider: "openai", model: "gpt-test", adapter: "openai-responses", status: 429, durationMs: 4, sendCount: 1, recoveryKinds: [], usageStatus: "unreported", accountLogLabel: "main" },
+        { ordinal: 2, provider: "openai", model: "gpt-test", adapter: "openai-responses", status: 200, durationMs: 6, sendCount: 1, recoveryKinds: [], usageStatus: "reported", accountLogLabel: "p3f9a1" },
+      ],
+    }));
+    addRequestLog(baseEntry({ requestId: "unlabelled-row", provider: "xai" }));
+
+    const all = await readLogPoll("limit=2000");
+    const pool = all.logs.find(row => row.requestId === "pool-row")!;
+    expect(pool.accountLogLabel).toBe("p3f9a1");
+    expect((pool.attempts as Array<Record<string, unknown>>).map(attempt => attempt.accountLogLabel))
+      .toEqual(["main", "p3f9a1"]);
+    expect(all.logs.find(row => row.requestId === "unlabelled-row")!.accountLogLabel).toBeUndefined();
+
+    // The pool row is reachable through the account that REFUSED it as well as the one that
+    // served it, which is what makes the filter usable for quota debugging.
+    expect((await readLogPoll("account=main")).logs.map(row => row.requestId)).toEqual(["main-row", "pool-row"]);
+    expect((await readLogPoll("account=p3f9a1")).logs.map(row => row.requestId)).toEqual(["pool-row"]);
+    expect((await readLogPoll("account=p000000")).logs).toEqual([]);
+  });
+});

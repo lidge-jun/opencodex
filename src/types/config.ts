@@ -802,6 +802,20 @@ export interface OcxConfig {
    */
   maxUpstreamBodyBytes?: number;
   /**
+   * Opt-in ceiling, in bytes, on a decompressed INBOUND data-plane request body (#3573).
+   *
+   * Omitted or 0 = the built-in 256 MiB default. The lever exists because a session on the
+   * 922k-token opt-in window serializes its full history past that default, and the request
+   * that crosses it is Codex's own remote-compaction request — so the session hits 413 on the
+   * one operation that would have shrunk it and cannot recover.
+   *
+   * Bounded on purpose. `resolveInboundBodyLimitBytes()` clamps to
+   * [1 MiB, 512 MiB]; an unbounded inbound cap is a memory DoS because the reader materializes
+   * the body several times over. The Bun listener's own `maxRequestBodySize` is fixed when the
+   * server starts, so raising this takes effect on restart.
+   */
+  maxInboundBodyBytes?: number;
+  /**
    * Opt-in Anthropic OAuth PROACTIVE routing (#294). Default OFF.
    * Sticky session affinity; new sessions may pick lowest known 5h usage.
    * Experimental — see docs and GUI warning before enabling.

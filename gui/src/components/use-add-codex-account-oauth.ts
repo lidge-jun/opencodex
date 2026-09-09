@@ -227,6 +227,7 @@ export function useAddCodexAccountOAuth({
               status: string;
               error?: string;
               catalogRefreshPending?: unknown;
+              validationPending?: unknown;
             }>(stRes);
             if (!aliveRef.current || pollSession.signal.aborted) return;
             if (!st) {

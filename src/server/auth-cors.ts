@@ -6,6 +6,7 @@ import {
   codexAutoStartEnabled,
   modelPreferHostedToolsConfigError,
   providerModelCostsConfigError,
+  providerWebSearchBridgeConfigError,
   requestPacingConfigError,
   retryOn429PolicyConfigError,
   sanitizeModelCostsForDisplay,
@@ -650,6 +651,10 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
   if (requestPacingError) {
     return `provider ${JSON.stringify(redactSecretString(name))} ${requestPacingError}`;
   }
+  const webSearchBridgeError = providerWebSearchBridgeConfigError(raw.webSearchBridge);
+  if (webSearchBridgeError) {
+    return `provider ${JSON.stringify(redactSecretString(name))} ${webSearchBridgeError}`;
+  }
   const upstreamHttpVersionError = upstreamHttpVersionConfigError(raw.upstreamHttpVersion);
   if (upstreamHttpVersionError) {
     return `provider ${JSON.stringify(redactSecretString(name))} ${upstreamHttpVersionError}`;
@@ -847,6 +852,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   xaiResponsesDefaultVersion: "runtime",
   supportsResponsesCustomTools: "editor",
   responsesSnapshotRepair: "editor",
+  webSearchBridge: "editor",
   reasoningEffortMap: "editor",
   modelReasoningEffortMap: "editor",
   reasoningWireFormat: "editor",

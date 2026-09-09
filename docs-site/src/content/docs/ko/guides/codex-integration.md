@@ -252,7 +252,13 @@ catalog sync는 선택된 서브에이전트 모델을 Codex가 쓸 수 있게 �
 
 ## Codex 계정 워밍업
 
-ChatGPT 계정을 Codex account pool에 추가하면, opencodex는 이를 저장하기 전에 Codex Responses backend로 작은 streaming request를 보내 확인합니다. 요청은 실제 Responses item array(`input: [{ type: "message", ... }]`)를 사용하고, `response.completed`를 기다리며, 기본값은 `gpt-5.4-mini`입니다. 그 모델이 HTTP 400을 반환하면 `gpt-5.5`로 다시 시도합니다. 구조화된 upstream error detail은 보여 주되 raw response body는 노출하지 않습니다. background revalidation은 별도 기능이며 기본값은 꺼져 있습니다. Token Guardian이 활성화되고, `chatgpt` refresh policy가 `proactive`이며, `tokenGuardian.codexWarmupEnabled`가 true일 때만 실행됩니다.
+ChatGPT 계정을 추가하거나 재인증할 때 OpenCodex는 일반적으로 저장 전에 작은 모델 요청으로 확인합니다. `gpt-5.4-mini`의 `response.completed`를 기다리며 HTTP 400이면 `gpt-5.5`로 재시도합니다. 오류에는 고정된 실패 분류만 표시하고 원본 응답 본문은 노출하지 않습니다.
+
+새 OAuth 토큰으로 인증된 사용량 조회에서 5시간·주간·월간 한도 소진이 확인되면 모델 요청 없이 계정을 저장하고 **검증 대기**로 표시합니다. 재시작이나 토큰 갱신 후에도 요청에 사용되지 않습니다. 한도 회복 후 **사용량 새로고침**을 실행하면, 여유가 있는 완전한 최신 사용량을 확인한 뒤 작은 모델 요청을 보내고 완료 응답을 받아야 계정을 사용할 수 있습니다. 조회나 검증 실패 시 대기 상태를 유지합니다. 일반적인 화면 상태 조회는 이 모델 요청을 보내지 않습니다. 최초 등록 때 사용량이 불명확하면 기존 워밍업 검증이 필요합니다.
+
+`ocx account refresh openai`와 `ocx account list openai --quota --refresh`는 사용량만 조회합니다. 모델 검증은 할당량을 사용하므로 사람의 대시보드 세션이 필요합니다. 할당량이 복구되면 `ocx gui`를 열고 **Refresh quotas**를 클릭하세요. 헤드리스 호스트도 브라우저에서 해당 대시보드에 접속해야 하며, 관리자 토큰만으로는 검증할 수 없습니다. 일시 정지된 계정도 검증할 수 있지만 일시 정지를 해제하거나 계정을 선택하지는 않습니다. 모델 인증 실패 표시는 검증 또는 재인증에 성공할 때까지 유지됩니다.
+
+별도의 백그라운드 재검증은 기본적으로 꺼져 있습니다. Token Guardian, `openai`의 `proactive` 갱신 정책, `tokenGuardian.codexWarmupEnabled`가 필요하며 등록 검증 대기 계정은 제외합니다.
 
 ## 네이티브 Codex 복원
 

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getConfigPath, saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
+import { readCodexAccountRecord, saveCodexAccountCredential } from "../../src/codex/account-store";
 import type { OcxConfig } from "../../src/types";
 import { serveGuiFile, serveSessionBootstrap } from "../../src/server/gui-static";
 import { isProxyAdmissionSecret } from "../../src/server/auth-cors";
@@ -955,6 +956,67 @@ describe("management and data-plane credential separation", () => {
       expect(html).toContain('name="opencodex-session-server-origin"');
     } finally {
       await server.stop(true);
+    }
+  });
+
+  test("deferred Codex validation requires a same-origin mutation session with CSRF", async () => {
+    const config = remoteConfig();
+    config.hostname = "127.0.0.1";
+    const accountId = "consent-wire";
+    config.codexAccounts = [{ id: accountId, isMain: false, plan: "pro" }];
+    saveConfig(config);
+    saveCodexAccountCredential(accountId, { accessToken: "consent-access", refreshToken: "consent-refresh",
+      expiresAt: Date.now() + 3600_000, chatgptAccountId: "consent-account" }, { validationPending: true });
+    const originalFetch = globalThis.fetch;
+    let warmups = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const target = input instanceof Request ? input.url : String(input);
+      if (target.endsWith("/wham/usage")) return Response.json({ plan_type: "pro",
+        rate_limit: { secondary_window: { used_percent: 12, limit_window_seconds: 604800 } } });
+      if (target.endsWith("/codex/responses")) {
+        warmups++;
+        return new Response('data: {"type":"response.completed"}\n\n');
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+    const server = startServer(0);
+    try {
+      const bootstrap = await fetch(new URL("/opencodex-session", server.url));
+      const html = await bootstrap.text();
+      const token = html.match(/name="opencodex-session-token" content="([^"]+)"/)?.[1];
+      const csrf = html.match(/name="opencodex-session-csrf" content="([^"]+)"/)?.[1];
+      expect(token).toBeDefined();
+      expect(csrf).toBeDefined();
+      const headers = {
+        Origin: server.url.origin,
+        "x-opencodex-api-key": token!,
+        "x-opencodex-gui-origin": server.url.origin,
+      };
+      const url = new URL("/api/codex-auth/accounts/refresh", server.url);
+      const admin = await fetch(url, { method: "POST", headers: {
+        ...headers, "x-opencodex-api-key": "admin-secret", "x-opencodex-csrf-token": csrf!,
+      } });
+      expect(admin.status).toBe(200);
+      expect(warmups).toBe(0);
+      expect(readCodexAccountRecord(accountId)?.codexValidationPending).toBe(true);
+      const missing = await fetch(url, { method: "POST", headers });
+      expect(missing.status).toBe(401);
+      const crossOrigin = await fetch(url, {
+        method: "POST",
+        headers: { ...headers, Origin: "http://attacker.test", "x-opencodex-csrf-token": csrf! },
+      });
+      expect(crossOrigin.status).toBe(401);
+      const allowed = await fetch(url, {
+        method: "POST",
+        headers: { ...headers, "x-opencodex-csrf-token": csrf! },
+      });
+      expect(allowed.status).toBe(200);
+      expect(await allowed.json()).toHaveProperty("accounts");
+      expect(warmups).toBe(1);
+      expect(readCodexAccountRecord(accountId)?.codexValidationPending).toBeUndefined();
+    } finally {
+      await server.stop(true);
+      globalThis.fetch = originalFetch;
     }
   });
 

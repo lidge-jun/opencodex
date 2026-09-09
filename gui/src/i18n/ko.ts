@@ -2118,6 +2118,8 @@ export const ko: Record<TKey, string> = {
   "pws.healthLabel.reauthRequired": "재인증 필요",
   "pws.healthLabel.refreshFailed": "새로고침 실패",
   "pws.healthLabel.metadataMismatch": "메타데이터 불일치",
+  "pws.healthLabel.validationPending": "검증 대기",
+  "pws.healthSummary.validationPending": "{provider} {account}: 사용량 한도가 소진된 상태로 등록되었습니다. 한도 회복 후 사용량을 새로고침하면 소량의 검증 요청을 보냅니다. 성공할 때까지 요청에 사용되지 않습니다.",
   "pws.healthLabel.credentialConflict": "자격 증명 충돌",
   "pws.healthSummary.rateLimited": "{provider} {account}: {until}까지 요청 한도 초과. 그전까지 이 계정 라우팅이 일시 중지됩니다.",
   "pws.healthSummary.quotaLimited": "{provider} {account}: {until}까지 할당량 제한. 그전까지 이 계정 라우팅이 일시 중지됩니다.",

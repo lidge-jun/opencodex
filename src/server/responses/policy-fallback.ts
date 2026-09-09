@@ -1,6 +1,6 @@
 import { comboFailureDecision } from "../../combos/failover";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
-import { readJsonRequestBody } from "../request-decompress";
+import { readJsonRequestBody, resolveInboundBodyLimitBytes } from "../request-decompress";
 import { finishRequestAttempt, type RequestLogContext } from "../request-log";
 import type { OcxConfig } from "../../types";
 import type { RouteCandidateTrace, RouteDecisionTraceV1 } from "../../routing/trace";
@@ -145,7 +145,11 @@ export async function handleResponsesWithPolicyFallback(
   };
   let rawBody: Record<string, unknown> | null = null;
   try {
-    const parsed = await readJsonRequestBody(req.clone());
+    const parsed = await readJsonRequestBody(
+      req.clone(),
+      undefined,
+      resolveInboundBodyLimitBytes(config.maxInboundBodyBytes),
+    );
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) rawBody = parsed as Record<string, unknown>;
   } catch {
     // Core owns the client-facing parse/decompression error.

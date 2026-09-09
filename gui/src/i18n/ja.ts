@@ -1236,6 +1236,8 @@ export const ja: Record<TKey, string> = {
   "pws.healthLabel.reauthRequired": "再認証が必要です",
   "pws.healthLabel.refreshFailed": "更新に失敗しました",
   "pws.healthLabel.metadataMismatch": "メタデータの不一致",
+  "pws.healthLabel.validationPending": "検証待ち",
+  "pws.healthSummary.validationPending": "{provider} {account}: 利用上限に達した状態で登録されました。上限の回復後、使用量を更新すると小さな検証リクエストを送信します。成功するまでリクエストには使用されません。",
   "pws.healthLabel.credentialConflict": "資格情報の競合",
   "pws.healthSummary.rateLimited": "{provider} {account}: {until} までレート制限中です。それまでこのアカウントのルーティングは停止します。",
   "pws.healthSummary.quotaLimited": "{provider} {account}: {until} までクォータ制限中です。それまでこのアカウントのルーティングは停止します。",
