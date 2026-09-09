@@ -140,7 +140,7 @@ afterEach(() => {
 
 describe("provider quota routing state", () => {
   function quotaConfig(name = "openrouter", baseUrl = "https://openrouter.ai/api/v1"): OcxConfig {
-    return { defaultProvider: name, providers: { [name]: {
+    return { port: 10100, defaultProvider: name, providers: { [name]: {
       adapter: "openai-chat", authMode: "key", baseUrl, apiKey: "synthetic-probed-key",
     } } };
   }
@@ -166,6 +166,7 @@ describe("provider quota routing state", () => {
 
   test("projects bound inference state without mutating display reports", async () => {
     const cfg: OcxConfig = {
+      port: 10100,
       defaultProvider: "openrouter",
       providers: {
         openrouter: {
@@ -207,7 +208,10 @@ describe("provider quota routing state", () => {
       const cfg = quotaConfig();
       globalThis.fetch = (async () => Response.json({ data: { limit: 20, limit_remaining: 0 } })) as typeof fetch;
       expect((await readQuota(cfg)).reports[0].routingQuota.state).toBe("exhausted");
-      if (change === "key-pool") cfg.providers.openrouter!.apiKeyPool = ["synthetic-probed-key", "other-key"];
+      if (change === "key-pool") cfg.providers.openrouter!.apiKeyPool = [
+        { id: "primary", key: "synthetic-probed-key" },
+        { id: "secondary", key: "other-key" },
+      ];
       else if (change === "oauth") cfg.providers.openrouter!.authMode = "oauth";
       else cfg.providers.openrouter!.headers = { [change]: "other-credential" };
       const dto = await readQuota(cfg);
@@ -229,7 +233,7 @@ describe("provider quota routing state", () => {
   });
 
   test("search-only and MCP-only display windows have no inference authority", async () => {
-    const cfg: OcxConfig = { defaultProvider: "synthetic", providers: {
+    const cfg: OcxConfig = { port: 10100, defaultProvider: "synthetic", providers: {
       ...quotaConfig("synthetic", "https://api.synthetic.new/v2").providers,
       ...quotaConfig("zai", "https://api.z.ai/api/coding/paas/v4").providers,
     } };
