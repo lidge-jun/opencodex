@@ -56,6 +56,12 @@ with both tokens.
 4. **Commands** — for each `bash`/`powershell` fence, the command part of every line (text
    before an inline ` #` comment, trailing whitespace trimmed) matches the English fence at the
    same index, line for line. Comments stay translatable; commands do not drift.
+   A double-quoted argument containing a space collapses to a placeholder first: the three
+   example prompts in the model-routing block (`"Explain this stack trace"` and friends) are
+   sentences a translator is supposed to translate, and every existing locale already did.
+   A quoted argument without a space stays exact, so `"anthropic/claude-opus-5"` is still
+   frozen. This was an audit FAIL: without it the guard would have rejected every correct
+   translation.
 5. **Assets** — every asset path referenced in `README.md` (`assets/...`, including the raw
    `githubusercontent` forms) appears in each locale by its repository-relative suffix, so
    `assets/demo.gif` and `../assets/demo.gif` both satisfy it.

@@ -609,6 +609,7 @@
     "digitalocean-scaleway-provider.test.ts": "providers",
     "docs-429-failover-claims.test.ts": "ci-workflows",
     "docs-bun-source-requirement.test.ts": "ci-workflows",
+    "docs-readme-translation-parity.test.ts": "ci-workflows",
     "doctor-codex-envkey-readiness.test.ts": "service",
     "doctor-oauth.test.ts": "service",
     "doctor-provider-apikey.test.ts": "service",
