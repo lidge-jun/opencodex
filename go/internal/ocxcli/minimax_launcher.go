@@ -402,7 +402,9 @@ func ensureLauncherProxy(cfg launcherConfig, deps Deps) (RuntimeState, bool) {
 		return state, true
 	}
 	pinPort := strconv.Itoa(cfg.port)
-	spawnDetachedSelf([]string{"start", "--port", pinPort}, deps)
+	if !spawnDetachedSelf([]string{"start", "--port", pinPort}, deps) {
+		return RuntimeState{}, false
+	}
 	deadline := time.Now().Add(8 * time.Second)
 	for time.Now().Before(deadline) {
 		if state, ok := findLauncherProxy(deps); ok {

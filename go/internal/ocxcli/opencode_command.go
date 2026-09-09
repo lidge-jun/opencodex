@@ -59,7 +59,10 @@ func runOpencode(args []string, deps Deps) int {
 		if port < 1 || port > 65535 {
 			port = opencodeDefaultProxyPort
 		}
-		spawnDetachedSelf([]string{"start", "--port", strconv.Itoa(port)}, deps)
+		if !spawnDetachedSelf([]string{"start", "--port", strconv.Itoa(port)}, deps) {
+			fmt.Fprintln(deps.Stderr, "❌ Proxy did not become healthy after starting.")
+			return ExitFailure
+		}
 		deadline := time.Now().Add(8 * time.Second)
 		for time.Now().Before(deadline) {
 			if candidate, ok := liveProxyEndpoint(deps); ok {

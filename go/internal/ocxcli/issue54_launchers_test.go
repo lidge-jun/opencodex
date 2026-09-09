@@ -15,6 +15,25 @@ import (
 )
 
 func TestLauncherArgumentClassification(t *testing.T) {
+	if !isGoTestBinary(os.Args[0]) {
+		t.Fatalf("test executable %q was not recognized as a Go test binary", os.Args[0])
+	}
+	for _, executable := range []string{
+		"/usr/local/bin/ocx",
+		"/usr/local/bin/opencodex",
+		`C:\Program Files\OpenCodex\ocx.exe`,
+	} {
+		if isGoTestBinary(executable) {
+			t.Fatalf("production executable %q was classified as a test binary", executable)
+		}
+	}
+	if !isGoTestBinary(filepath.Join(t.TempDir(), "ocxcli.test")) {
+		t.Fatal("ocxcli.test was not recognized as a Go test binary")
+	}
+	if !isGoTestBinary(filepath.Join(t.TempDir(), "ocxcli.test.exe")) {
+		t.Fatal("ocxcli.test.exe was not recognized as a Go test binary")
+	}
+
 	cases := []struct {
 		client string
 		args   []string
@@ -36,6 +55,12 @@ func TestLauncherArgumentClassification(t *testing.T) {
 		if got := standaloneInformational(tc.args, tc.client); got != tc.want {
 			t.Errorf("standaloneInformational(%v, %s) = %t, want %t", tc.args, tc.client, got, tc.want)
 		}
+	}
+}
+
+func TestSpawnDetachedSelfRejectsGoTestBinary(t *testing.T) {
+	if spawnDetachedSelf([]string{"start"}, Deps{}) {
+		t.Fatal("Go test binary attempted detached self-start")
 	}
 }
 

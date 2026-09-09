@@ -22,6 +22,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -513,7 +514,10 @@ func openGuiDashboard(deps Deps) int {
 		if cfg.port > 0 {
 			argv = append(argv, "--port", strconv.Itoa(cfg.port))
 		}
-		spawnDetachedSelf(argv, deps)
+		if !spawnDetachedSelf(argv, deps) {
+			fmt.Fprintln(deps.Stderr, "❌ Proxy did not become healthy after starting. Not opening the GUI.")
+			return ExitFailure
+		}
 		deadline := time.Now().Add(40 * time.Second)
 		for time.Now().Before(deadline) {
 			if candidate, ok := liveProxyEndpoint(deps); ok {
@@ -546,13 +550,23 @@ func openGuiDashboard(deps Deps) int {
 	return ExitOK
 }
 
-// spawnDetachedSelf spawns this CLI binary detached with inherited stdio
-// ignored, mirroring spawnDetached(selfLaunchArgv(...)) in the TS dispatch.
-func spawnDetachedSelf(argv []string, deps Deps) {
+func isGoTestBinary(executable string) bool {
+	base := strings.ToLower(filepath.Base(executable))
+	return strings.HasSuffix(base, ".test") || strings.HasSuffix(base, ".test.exe")
+}
+
+// spawnDetachedSelf must not recurse into the Go test binary. os.Executable
+// points at ocxcli.test under go test; launching it with start turns a
+// short-lived test child into a long-lived proxy and leaves one high-CPU
+// process behind for every launcher test that misses a live proxy.
+func spawnDetachedSelf(argv []string, deps Deps) bool {
 	deps = defaults(deps)
 	executable, err := os.Executable()
 	if err != nil {
-		return
+		return false
+	}
+	if isGoTestBinary(executable) {
+		return false
 	}
 	command := exec.Command(executable, argv...)
 	command.Stdin = nil
@@ -561,7 +575,9 @@ func spawnDetachedSelf(argv []string, deps Deps) {
 	if err := command.Start(); err == nil {
 		// Release the child so it outlives this process; its stdio is ignored.
 		_ = command.Process.Release()
+		return true
 	}
+	return false
 }
 
 // openBrowser mirrors openUrl: spawn the platform opener detached with stdio

@@ -277,7 +277,9 @@ func claudeEnsureLocalProxy(deps Deps) (int, bool) {
 			port = int(raw)
 		}
 	}
-	spawnDetachedSelf([]string{"start", "--port", strconv.Itoa(port)}, deps)
+	if !spawnDetachedSelf([]string{"start", "--port", strconv.Itoa(port)}, deps) {
+		return 0, false
+	}
 	deadline := time.Now().Add(8 * time.Second)
 	for time.Now().Before(deadline) {
 		if state, ok := liveProxyEndpoint(deps); ok {
