@@ -43,11 +43,21 @@ Out of scope for this unit: merging, releasing, promoting to `main` or `preview`
 
 ## Guard non-vacuity record
 
-Filled during wp2 with the observed red output for each mutation.
+Observed, not predicted.
 
-| Mutation | Expected failure |
+| Mutation | Observed failure |
 |---|---|
-| delete one `## ` section from a locale | skeleton token stream mismatch at index N |
-| change `ocx start` to `ocx run` in a locale fence | command mismatch, fence 1 line 2 |
-| edit `README.md` without refreshing the manifest | freshness failure naming all seven locales |
-| drop a locale from the manifest | registry mismatch naming the orphan file |
+| the seven stale locale files, before the resync | 10 pass / 43 fail, each message naming the locale and the divergence |
+| `sourceSha256` set to a dummy value for ko and ja | freshness failed naming both locales and printing the current README.md hash |
+| `tr` removed from the manifest | registry failed naming the orphan file |
+| a changed model id inside a fence | command parity differs while the translated prompt beside it does not |
+
+## Two guard defects the locales found
+
+Both were found by running the guard against a finished translation, not by review:
+
+- The command-parity rule classified a quoted argument as prose only when it contained a space.
+  Japanese and Chinese do not put spaces between words, so a translated example prompt read as an
+  identifier and had to equal the English sentence. Non-ASCII now counts as prose.
+- The link check required the English fragment on a localized URL, which no localized page has.
+  It now compares the page and leaves the fragment to the locale.

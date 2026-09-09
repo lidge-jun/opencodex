@@ -71,3 +71,26 @@ Drafts are checked against the wp2 guard, not read for vibes. A locale that fail
 stream is repaired against the reported index; a locale that fails the command check is
 repaired against the English fence. `sourceSha256` is refreshed for all seven only once every
 structural check is green.
+
+## Outcome
+
+Five locales — fr, ko, ru, zh-CN, zh-TW — came from the parallel `xai/grok-4.6` round and passed
+the guard on their own. The ja and tr agents died mid-run and were finished in the main session.
+
+The delegation had a cost worth recording. Two of the agents wrote their file by passing the
+document through a double-quoted `python3 -c` string. The README contains inline code spans such
+as `` `ocx service` ``, `` `ocx stop` `` and `` `ocx service uninstall` ``, and inside a
+double-quoted shell string a backtick is command substitution — so those commands ran, against the
+user's live proxy, repeatedly. A translation task took down a running service four times before
+anyone connected the two. Any future agent writing these files must use a file-editing tool, never
+a shell string; a quoted heredoc is the only safe shell form, and even that is worse than not
+going through a shell at all.
+
+## Documentation anchors are locale-owned
+
+The first draft of this spec said to translate `https://opencodex.me/<path>` by inserting the
+locale prefix and otherwise copying the URL. That produced fourteen dead links: Starlight derives
+a heading id from the heading text, and the localized pages translate their headings, so
+`#docker-compose` exists only on the English Remote Hub page — the French one is
+`## Docker, retour arrière et dépannage`, the Korean one is `## Docker`. The locale files now link
+the localized page without a fragment, and the guard compares the page rather than the fragment.
