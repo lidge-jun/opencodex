@@ -13,10 +13,13 @@ export function providerConsumesCallerAuthorization(provider: OcxProviderConfig)
 }
 
 /**
- * Capture the caller's Direct credential with Direct's own predicate: a clean single bearer
- * that is not one of our proxy admission secrets; the account comes from the explicit header
- * or the JWT claim, exactly as materializeCodexUpstreamAuth derives it. Stricter snapshot
- * rules (matching explicit account) belong to the sidecar capture, not to Direct restore.
+ * Capture the caller's Direct credential under the forwardable-bearer predicate
+ * (hasForwardableCodexBearer): a clean single bearer that is not one of our proxy admission
+ * secrets AND carries an account, from the explicit header or the JWT claim. An opaque
+ * account-less bearer is NOT captured: after a shadow/thread rewrite it would replay a
+ * foreign (for example Cursor) token onto the canonical ChatGPT backend, so that case stays
+ * fail-closed. Stricter snapshot rules (matching explicit account) belong to the sidecar
+ * capture, not to Direct restore.
  */
 export function captureCallerDirectAuth(incomingHeaders: Headers, config: OcxConfig): CallerDirectAuth | null {
   const raw = incomingHeaders.get("authorization")?.trim();
@@ -24,8 +27,6 @@ export function captureCallerDirectAuth(incomingHeaders: Headers, config: OcxCon
   if (!bearer || isProxyAdmissionSecret(bearer, config)) return null;
   const accountId = incomingHeaders.get("chatgpt-account-id")?.trim()
     || extractAccountId(undefined, bearer);
-  return {
-    authorization: `Bearer ${bearer}`,
-    ...(accountId ? { chatgptAccountId: accountId } : {}),
-  };
+  if (!accountId) return null;
+  return { authorization: `Bearer ${bearer}`, chatgptAccountId: accountId };
 }
