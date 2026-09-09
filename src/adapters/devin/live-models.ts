@@ -12,7 +12,7 @@ export const DEVIN_STATIC_MODELS = [
   "gpt-5-6-luna",
   "gpt-5-6-terra",
   "claude-opus-4-8",
-  "claude-fable-5",
+  "claude-fable-5-1",
   "claude-sonnet-5",
   "glm-5-2",
   "kimi-k2-7",
@@ -27,7 +27,7 @@ export const DEVIN_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "gpt-5-6-luna": 1_050_000,
   "gpt-5-6-terra": 1_050_000,
   "claude-opus-4-8": 200_000,
-  "claude-fable-5": 200_000,
+  "claude-fable-5-1": 200_000,
   "claude-sonnet-5": 200_000,
   "glm-5-2": 200_000,
   "kimi-k2-7": 256_000,
@@ -40,7 +40,7 @@ const WANTED_PREFIXES = [
   "gpt-5-6-luna",
   "gpt-5-6-terra",
   "claude-opus-4-8",
-  "claude-fable-5",
+  "claude-fable-5-1",
   "claude-sonnet-5",
   "glm-5-2",
   "kimi-k2-7",
@@ -84,7 +84,27 @@ export function filterDevinConfiguredModelsByLiveDiscovery<T extends { id: strin
   liveIds: string[],
 ): T[] {
   const live = new Set(liveIds);
-  const wanted = configured.filter((model) => live.has(model.id) || live.has(model.id.replace(/^devin\//, "")));
+  const liveByBase = new Map<string, string[]>();
+  for (const id of liveIds) {
+    // Group effort-suffixed variants by their base id (e.g. `gpt-5-6-sol-high` → `gpt-5-6-sol`).
+    const parts = id.split("-");
+    if (parts.length > 1) {
+      const base = parts.slice(0, -1).join("-");
+      const list = liveByBase.get(base);
+      if (list) list.push(id); else liveByBase.set(base, [id]);
+    }
+  }
+  const wanted: T[] = [];
+  for (const model of configured) {
+    const id = model.id.replace(/^devin\//, "");
+    if (live.has(id)) {
+      wanted.push(model);
+    } else if (liveByBase.has(id)) {
+      // Base model exists only as effort-suffixed variants; keep the base entry
+      // so the picker stays clean and the adapter appends the effort suffix.
+      wanted.push(model);
+    }
+  }
   if (wanted.length > 0) return wanted;
   return liveIds.map((id) => ({ id }) as T);
 }

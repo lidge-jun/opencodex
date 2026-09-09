@@ -1,8 +1,8 @@
 /**
  * Devin / Cognition / Windsurf adapter.
  *
- * Uses the unofficial cloud-direct Connect-RPC client (GetChatMessage) from
- * pi-devin-auth. OpenCodex injects the OAuth API key onto provider.apiKey
+ * Uses the unofficial cloud-direct Connect-RPC client (GetChatMessage).
+ * OpenCodex injects the OAuth API key onto provider.apiKey
  * before runTurn. This adapter maps OcxContext <-> ChatHistoryItem and
  * streams CloudChatEvent into AdapterEvent.
  */
@@ -12,6 +12,30 @@ import { streamChatEvents, allocateCascadeId, CloudChatError, type ChatHistoryIt
 import { DEVIN_DEFAULT_API_SERVER } from "../oauth/devin";
 
 export const DEVIN_API_SERVER = DEVIN_DEFAULT_API_SERVER;
+
+/**
+ * Models that the Cognition catalog serves without an effort suffix.
+ * All other models require a suffix (e.g. `gpt-5-6-sol-medium`); the adapter
+ * appends the reasoning effort or `medium` as default.
+ */
+const DEVIN_NO_EFFORT_SUFFIX_MODELS = new Set(["swe-1-7", "swe-1-7-lightning", "glm-5-2", "kimi-k2-7"]);
+
+const EFFORT_SUFFIXES = new Set(["low", "medium", "high", "xhigh", "max", "none", "1m", "max-1m", "none-1m", "fast"]);
+
+/**
+ * Resolve the wire model UID. Cognition's catalog lists most models with an
+ * effort suffix (e.g. `gpt-5-6-sol-high`); the base id alone is not accepted.
+ * If the caller passed a base id for a model that requires a suffix, append the
+ * reasoning effort from the request options or default to `medium`.
+ */
+function resolveWireModelUid(modelId: string, reasoningEffort?: string): string {
+  if (DEVIN_NO_EFFORT_SUFFIX_MODELS.has(modelId)) return modelId;
+  // Already suffixed (e.g. `gpt-5-6-sol-high`, `claude-opus-4-8-medium-fast`).
+  const parts = modelId.split("-");
+  if (parts.length > 1 && EFFORT_SUFFIXES.has(parts[parts.length - 1]!)) return modelId;
+  const effort = reasoningEffort && EFFORT_SUFFIXES.has(reasoningEffort) ? reasoningEffort : "medium";
+  return `${modelId}-${effort}`;
+}
 
 export class DevinMissingCredentialError extends Error {
   constructor() {
@@ -153,7 +177,8 @@ export function createDevinAdapter(provider: OcxProviderConfig): ProviderAdapter
         cascadeIds.set(threadKey, cascadeId);
       }
 
-      const modelUid = parsed.modelId.includes("/") ? parsed.modelId.slice(parsed.modelId.lastIndexOf("/") + 1) : parsed.modelId;
+      const rawModelId = parsed.modelId.includes("/") ? parsed.modelId.slice(parsed.modelId.lastIndexOf("/") + 1) : parsed.modelId;
+      const modelUid = resolveWireModelUid(rawModelId, parsed.options.reasoning);
       let openToolId: string | undefined;
       let usage: OcxUsage | undefined;
       let stopReason: string | undefined;

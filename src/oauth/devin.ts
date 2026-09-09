@@ -1,10 +1,10 @@
 /**
  * Devin / Cognition OAuth.
  *
- * Login prefers an already-minted long-lived API key from the Devin/Pi CLI
- * (~/.pi/agent/auth.json -> devin.access).
- * Browser fallback uses the same Auth0 sign-in flow the Pi CLI uses
- * (windsurf.com/windsurf/signin with redirect_uri=show-auth-token),
+ * Login prefers an already-minted long-lived API key from the local Devin
+ * credential store (~/.pi/agent/auth.json -> devin.access).
+ * Browser fallback uses the same Auth0 sign-in flow as the Devin desktop
+ * client (windsurf.com/windsurf/signin with redirect_uri=show-auth-token),
  * then exchanges the pasted Firebase ID token via Cognition's RegisterUser.
  */
 import { homedir } from "node:os";

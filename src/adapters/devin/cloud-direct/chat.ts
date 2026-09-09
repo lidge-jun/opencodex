@@ -16,8 +16,7 @@
  *   - Usage and finish-reason events for terminal completion
  *
  * Wire-protocol: Connect-RPC streaming over HTTPS with manual protobuf
- * encoding (see `wire.ts`). The transport mirrors the upstream pi-devin-auth
- * cloud-direct client.
+ * encoding (see `wire.ts`).
  */
 
 import * as crypto from 'crypto';

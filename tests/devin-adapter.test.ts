@@ -50,7 +50,16 @@ describe("devin adapter", () => {
 
   test("filters configured models by live discovery", () => {
     const configured = DEVIN_STATIC_MODELS.map((id) => ({ id }));
+    // Base models that appear as effort-suffixed variants in the live catalog
+    // are kept (the adapter appends the effort suffix at request time).
     const filtered = filterDevinConfiguredModelsByLiveDiscovery(configured, ["swe-1-7", "claude-opus-4-8-medium"]);
+    expect(filtered.map((row) => row.id)).toEqual(["swe-1-7", "claude-opus-4-8"]);
+  });
+
+  test("drops configured models absent from live discovery", () => {
+    const configured = DEVIN_STATIC_MODELS.map((id) => ({ id }));
+    // A model with no exact match and no effort-suffixed variant is dropped.
+    const filtered = filterDevinConfiguredModelsByLiveDiscovery(configured, ["swe-1-7"]);
     expect(filtered.map((row) => row.id)).toEqual(["swe-1-7"]);
   });
 

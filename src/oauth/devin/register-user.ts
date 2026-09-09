@@ -1,8 +1,8 @@
 /**
  * Exchange a Firebase ID token for a long-lived Cognition/Devin API key.
  *
- * This calls the same Connect-RPC endpoint the Devin/Pi CLI uses after the
- * browser sign-in completes:
+ * This calls the same Connect-RPC endpoint the Devin desktop client uses
+ * after browser sign-in completes:
  *
  *   POST https://register.windsurf.com/exa.seat_management_pb.SeatManagementService/RegisterUser
  *   Content-Type: application/json
