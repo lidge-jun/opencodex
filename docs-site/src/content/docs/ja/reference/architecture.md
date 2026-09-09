@@ -97,6 +97,13 @@ HTTP の境界は `server/index.ts` が担い、Responses データプレーン�
 
 `server/index.ts` はデフォルトで `/v1/responses` を HTTP/SSE で提供します。`websockets` が `false` の状態で Codex が Responses WebSocket アップグレードを試みると、opencodex は `426 upgrade_required` を返し、Codex はそのセッションで HTTP にフォールバックします。`"websockets": true` を設定すると同じエンドポイントがアップグレードを受け入れ WebSocket ブリッジを使います。
 
+最終送信モデルが `gpt-5.3-codex-spark` の場合、canonical ChatGPT 転送は HTTP ヘッダーと
+ネイティブ WS フレームのメタデータの両方で Responses Lite を明示的に無効にします。
+エイリアスで Spark を選択した場合も同様です。Lite の識別値が変わると古いソケットは退役し、
+以後の条件を満たす同じ識別値のリクエストは新しいソケットを再利用できます。他のモデルと
+ゲートウェイの Lite ポリシーは維持されます。不正なネイティブメタデータは引き続き、
+本文を変更せずに HTTP にフォールバックします。
+
 Codex コンテキスト compaction はルーティングされたモデルでも動作します。`server/responses/compact.ts` は
 `POST /v1/responses/compact` を内部ルーティング要約ターンとして扱い、圧縮されたヒストリーを返します。
 `responses/parser.ts` と `bridge.ts` は remote compaction v2 の `compaction_trigger` ターンを扱い、合成 `compaction` 出力項目を正確に 1 つ送ります。

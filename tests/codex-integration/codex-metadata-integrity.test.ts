@@ -208,33 +208,76 @@ describe("Codex request transport metadata", () => {
     expect(new Headers(dropped.headers).get(hintHeader)).toBe("model=gpt-5.6-sol");
   });
 
-  test("canonical adapter drops Lite only for the Spark wire model", async () => {
+  test("canonical adapter disables Spark Lite in HTTP headers and WS metadata without mutating input", async () => {
+    const { prepareCodexWsRequest } = await import("../../src/server/responses/codex-ws-request");
     const adapter = createResponsesPassthroughAdapter({
       adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex",
       headers: { "X-OpenAI-Internal-Codex-Responses-Lite": "true" },
     });
 
     for (const [model, incomingLite, expectedLite] of [
-      ["gpt-5.3-codex-spark", "true", null],
-      ["gpt-5.3-codex-spark", undefined, null],
+      ["gpt-5.3-codex-spark", "true", "false"],
+      ["gpt-5.3-codex-spark", "false", "false"],
+      ["gpt-5.3-codex-spark", undefined, "false"],
       ["gpt-5.6-sol", "true", "true"],
+      ["gpt-5.6-sol", "false", "false"],
+      ["gpt-5.6-sol", undefined, "true"],
     ] as const) {
       const parsed = minimalParsed();
       parsed.modelId = model;
-      parsed._rawBody = { model, input: [], stream: true };
+      parsed._rawBody = { model, input: [], stream: true,
+        client_metadata: { [liteKey]: "true", other: "preserved" } };
+      const before = JSON.stringify(parsed._rawBody);
       const incoming = new Headers();
       if (incomingLite !== undefined) incoming.set(liteHeader, incomingLite);
       const request = await adapter.buildRequest(parsed, {
         headers: incoming,
       });
       expect(new Headers(request.headers).get(liteHeader)).toBe(expectedLite);
+      const prepared = prepareCodexWsRequest(url, { body: request.body, headers: request.headers })!;
+      expect(JSON.parse(prepared.frameText).client_metadata).toEqual({
+        [liteKey]: expectedLite, other: "preserved",
+      });
+      expect(prepared.httpInit.body).toBe(request.body);
+      expect(JSON.stringify(parsed._rawBody)).toBe(before);
+      expect(incoming.get(liteHeader)).toBe(incomingLite ?? null);
     }
 
     const routed = minimalParsed();
     routed.modelId = "spark-alias";
     routed._rawBody = { model: "gpt-5.3-codex-spark", input: [], stream: true };
     const request = await adapter.buildRequest(routed, { headers: new Headers({ [liteHeader]: "true" }) });
-    expect(new Headers(request.headers).get(liteHeader)).toBeNull();
+    expect(new Headers(request.headers).get(liteHeader)).toBe("false");
+    const prepared = prepareCodexWsRequest(url, { body: request.body, headers: request.headers })!;
+    expect(JSON.parse(prepared.frameText).client_metadata[liteKey]).toBe("false");
+
+    routed.modelId = "gpt-5.3-codex-spark";
+    routed._rawBody = { model: "gpt-5.6-sol", input: [], stream: true };
+    const otherWireModel = await adapter.buildRequest(routed, { headers: new Headers({ [liteHeader]: "true" }) });
+    expect(new Headers(otherWireModel.headers).get(liteHeader)).toBe("true");
+  });
+
+  test("Spark disables Lite without configured headers and retains malformed-metadata HTTP fallback", async () => {
+    const { prepareCodexWsRequest } = await import("../../src/server/responses/codex-ws-request");
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex",
+    });
+    for (const client_metadata of [undefined, {}, null, [], { [liteKey]: true }]) {
+      const parsed = minimalParsed();
+      parsed._rawBody = { model: "gpt-5.3-codex-spark", input: [], stream: true,
+        ...(client_metadata === undefined ? {} : { client_metadata }) };
+      const before = JSON.stringify(parsed._rawBody);
+      const request = await adapter.buildRequest(parsed, { headers: new Headers() });
+      expect(new Headers(request.headers).get(liteHeader)).toBe("false");
+      const prepared = prepareCodexWsRequest(url, { body: request.body, headers: request.headers });
+      if (client_metadata === undefined || JSON.stringify(client_metadata) === "{}") {
+        expect(JSON.parse(prepared!.frameText).client_metadata).toEqual({ [liteKey]: "false" });
+      } else {
+        expect(prepared).toBeNull();
+        expect(JSON.parse(request.body).client_metadata).toEqual(client_metadata);
+      }
+      expect(JSON.stringify(parsed._rawBody)).toBe(before);
+    }
   });
 
   test("noncanonical adapters neither forward caller Lite nor synthesize a routing hint", async () => {
@@ -243,7 +286,10 @@ describe("Codex request transport metadata", () => {
         adapter: "openai-responses", authMode, baseUrl: "https://gateway.example/v1",
         headers: { [hintHeader]: "operator-owned" },
       });
-      const request = await adapter.buildRequest(minimalParsed(), {
+      const parsed = minimalParsed();
+      parsed.modelId = "gpt-5.3-codex-spark";
+      parsed._rawBody = { model: parsed.modelId, input: [] };
+      const request = await adapter.buildRequest(parsed, {
         headers: new Headers({ [liteHeader]: "true", [hintHeader]: "caller-owned" }),
       });
       expect(new Headers(request.headers).has(liteHeader)).toBe(false);

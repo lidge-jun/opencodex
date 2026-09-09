@@ -89,6 +89,13 @@ Par défaut, `server/index.ts` sert HTTP/SSE sur `/v1/responses`. Si Codex tente
 
 Indépendamment de ce réglage côté client, les requêtes canoniques transmises à ChatGPT avec `stream: true` à la racine peuvent utiliser le transport WebSocket en amont de Codex avec une version stable de Bun 1.4.0 ou ultérieure. La version intégrée Bun 1.3.14, les préversions et les identités de runtime impossibles à vérifier utilisent HTTP/SSE. Les réponses WS en amont qui réussissent conservent le contrat SSE en aval et contournent `tee()` au moyen d’un relais borné à lecteur unique et avide (4 MiB par trame brute/enveloppée et une file de production de 8 MiB). Le dépassement de la file ferme la connexion en amont et émet en aval un événement terminal `response.failed`, suivi de `[DONE]`.
 
+Pour le modèle sortant final `gpt-5.3-codex-spark`, la transmission canonique à ChatGPT
+désactive explicitement Responses Lite dans l’en-tête HTTP et les métadonnées natives des
+trames WS, même lorsqu’un alias sélectionne Spark. Un changement d’identité Lite retire
+l’ancien socket ; les requêtes admissibles suivantes ayant la même identité peuvent réutiliser
+le nouveau socket. Les autres modèles et passerelles conservent leur politique Lite.
+Des métadonnées natives mal formées entraînent toujours un repli HTTP, sans modifier le corps.
+
 Le compactage du contexte Codex fonctionne avec les modèles routés. `server/responses/compact.ts` traite `POST /v1/responses/compact` en exécutant un tour interne de synthèse routé et en renvoyant un historique compacté, tandis que `responses/parser.ts` et `bridge.ts` traitent les tours de compactage distant v2 `compaction_trigger` en émettant exactement un élément de sortie synthétique `compaction`.
 
 ## Mise en cache et catalogue

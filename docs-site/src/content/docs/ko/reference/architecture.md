@@ -127,6 +127,13 @@ envelope를 각각 4 MiB로 제한하고 8 MiB producer queue 상한이 있는 b
 relay를 거칩니다. queue overflow 시 업스트림을 닫고 downstream에는
 terminal `response.failed` 이벤트와 `[DONE]`을 내보냅니다.
 
+최종 전송 모델이 `gpt-5.3-codex-spark`이면 canonical ChatGPT forward 경로는 HTTP 헤더와
+네이티브 WS 프레임 메타데이터 모두에서 Responses Lite를 명시적으로 끕니다. 별칭으로 Spark를
+선택해도 동일합니다. Lite 식별값이 바뀌면 기존 소켓은 사용을 종료하며, 이후 같은 식별값으로
+재사용 조건을 충족하는 요청은 새 소켓을 재사용할 수 있습니다. 다른 모델과 게이트웨이는 기존
+Lite 정책을 유지합니다. 네이티브 메타데이터 형식이 잘못된 경우에는 본문을 바꾸지 않고
+기존처럼 HTTP로 폴백합니다.
+
 Codex 컨텍스트 compaction은 라우팅된 모델에서도 동작합니다. `server/responses/compact.ts`는
 `POST /v1/responses/compact`를 내부 라우팅 요약 턴으로 처리해 압축된 히스토리를 반환합니다.
 `responses/parser.ts`와 `bridge.ts`는 remote compaction v2의 `compaction_trigger` 턴을 처리해

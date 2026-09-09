@@ -170,6 +170,13 @@ opencodex `426 upgrade_required` döndürür; Codex daha sonra bu oturum için
 HTTP'ye geri döner. `"websockets": true` ayarlandığında aynı uç nokta
 yükseltmeyi kabul eder ve WebSocket köprüsünü kullanır.
 
+Son gönderilen model `gpt-5.3-codex-spark` olduğunda, kanonik ChatGPT iletimi HTTP başlığında
+ve yerel WS çerçevesi meta verilerinde Responses Lite'ı açıkça kapatır; Spark bir takma adla
+seçildiğinde de bu geçerlidir. Lite kimliği değişince eski soket kullanım dışı bırakılır;
+aynı kimliğe sahip sonraki uygun istekler yeni soketi yeniden kullanabilir. Diğer modeller ve
+ağ geçitleri mevcut Lite politikalarını korur. Bozuk yerel meta verilerde, istek gövdesi
+değiştirilmeden HTTP'ye geri dönülmeye devam edilir.
+
 Codex bağlam sıkıştırması yönlendirilen modeller için çalışır.
 `server/responses/compact.ts`, dahili bir yönlendirilen özetleme turu
 çalıştırarak ve sıkıştırılmış geçmişi döndürerek `POST /v1/responses/compact`'ı
@@ -220,4 +227,3 @@ Dahili model `types.ts` içinde yer alır: `OcxParsedRequest`, `OcxContext`,
 `OcxProviderConfig`). İki yardımcı yaygın olarak kullanılır:
 `namespacedToolName()` ve `modelInList()` (`noVisionModels` /
 `noReasoningModels` için toleranslı `:size` etiketi eşleştirmesi).
-

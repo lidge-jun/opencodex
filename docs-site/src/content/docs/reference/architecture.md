@@ -157,6 +157,12 @@ upstream WS responses keep the downstream SSE contract and bypass `tee()` throug
 single-reader relay (4 MiB per raw/enveloped frame and an 8 MiB producer queue). Queue overflow
 closes the upstream and emits a terminal downstream `response.failed` event followed by `[DONE]`.
 
+For the final outgoing model `gpt-5.3-codex-spark`, canonical ChatGPT forwarding explicitly
+disables Responses Lite in both the HTTP header and native WS frame metadata, including when
+an alias selects Spark. A changed Lite identity retires the old socket; subsequent eligible
+requests with the same identity can reuse the new socket. Other models and gateways keep
+their existing Lite policy. Malformed native metadata still falls back to HTTP with its body unchanged.
+
 When a provider rejects a streaming request with HTTP 413 before SSE begins, OpenCodex emits one
 terminal `response.failed` event with `context_length_exceeded` instead of relaying the retryable
 unknown status. This lets Codex stop its reconnect loop and apply its own context-compaction policy
