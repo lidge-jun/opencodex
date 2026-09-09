@@ -54,7 +54,7 @@ import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
 import { recordLiveCursorClaudeModels, recordLiveCursorMaxModeModels } from "../../adapters/cursor/catalog";
 import { fetchQoderModels } from "../../adapters/qoder/live-models";
 import { resolveQoderProfile } from "../../adapters/qoder/profiles";
-import { fetchDevinUsableModels, filterDevinConfiguredModelsByLiveDiscovery } from "../../adapters/devin/live-models";
+import { fetchDevinUsableModels } from "../../adapters/devin/live-models";
 import { isCanonicalOpenAiForwardProvider, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import {
   COMBO_NAMESPACE,
@@ -1667,8 +1667,9 @@ async function fetchProviderModelsWithAuth(
     }
     const liveResult = await fetchDevinUsableModels({ apiKey, baseUrl: prov.baseUrl });
     if (liveResult.ok) {
-      const available = filterDevinConfiguredModelsByLiveDiscovery(configured, liveResult.models);
-      const result = available.length > 0 ? available : configured;
+      // Live catalog is the source of truth — use the discovered base models
+      // directly, not a filtered subset of the static seed.
+      const result = liveResult.models.map((id) => ({ id }) as CatalogModel);
       const forCache = withConfiguredRetention(result, { retainComboTargets: false });
       if (!setCached(name, forCache, Date.now(), cacheGeneration)) {
         return observed(withConfiguredRetention(configured), "degraded");

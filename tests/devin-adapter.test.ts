@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createDevinAdapter, mapOcxMessagesToDevin, mapOcxToolsToDevin } from "../src/adapters/devin";
 import { sanitizeToolDescriptionForCognitionForTests } from "../src/adapters/devin/cloud-direct/chat";
-import { DEVIN_STATIC_MODELS, filterDevinConfiguredModelsByLiveDiscovery } from "../src/adapters/devin/live-models";
+import { DEVIN_STATIC_MODELS, collapseDevinModelUid } from "../src/adapters/devin/live-models";
 import { OAUTH_PROVIDERS } from "../src/oauth";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
 import type { OcxParsedRequest } from "../src/types";
@@ -47,19 +47,17 @@ describe("devin adapter", () => {
     expect(mapOcxToolsToDevin(parsed.context.tools)?.[0]?.name).toBe("lookup");
   });
 
-  test("filters configured models by live discovery", () => {
-    const configured = DEVIN_STATIC_MODELS.map((id) => ({ id }));
-    // Base models that appear as effort-suffixed variants in the live catalog
-    // are kept (the adapter appends the effort suffix at request time).
-    const filtered = filterDevinConfiguredModelsByLiveDiscovery(configured, ["swe-1-7", "claude-opus-4-8-medium"]);
-    expect(filtered.map((row) => row.id)).toEqual(["swe-1-7", "claude-opus-4-8"]);
-  });
-
-  test("drops configured models absent from live discovery", () => {
-    const configured = DEVIN_STATIC_MODELS.map((id) => ({ id }));
-    // A model with no exact match and no effort-suffixed variant is dropped.
-    const filtered = filterDevinConfiguredModelsByLiveDiscovery(configured, ["swe-1-7"]);
-    expect(filtered.map((row) => row.id)).toEqual(["swe-1-7"]);
+  test("collapseDevinModelUid strips effort suffixes to base ids", () => {
+    expect(collapseDevinModelUid("swe-1-7")).toBe("swe-1-7");
+    expect(collapseDevinModelUid("swe-1-7-medium")).toBe("swe-1-7");
+    expect(collapseDevinModelUid("swe-1-7-lightning")).toBe("swe-1-7-lightning");
+    expect(collapseDevinModelUid("swe-1-7-lightning-medium")).toBe("swe-1-7-lightning");
+    expect(collapseDevinModelUid("gpt-5-6-sol-high")).toBe("gpt-5-6-sol");
+    expect(collapseDevinModelUid("gpt-5-6-sol-high-priority")).toBe("gpt-5-6-sol");
+    expect(collapseDevinModelUid("glm-5-2-max-1m")).toBe("glm-5-2");
+    expect(collapseDevinModelUid("claude-opus-4-8-high-fast")).toBe("claude-opus-4-8");
+    expect(collapseDevinModelUid("claude-fable-5-1-high")).toBe("claude-fable-5-1");
+    expect(collapseDevinModelUid("grok-4-5-medium")).toBe("grok-4-5");
   });
 
   test("loginDevin is browser-only (no local import option)", () => {

@@ -9,30 +9,49 @@
 import type { AdapterEvent, OcxAssistantMessage, OcxContentPart, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxTool, OcxToolCall, OcxToolResultMessage, OcxUsage } from "../types";
 import type { IncomingMeta, ProviderAdapter } from "./base";
 import { streamChatEvents, allocateCascadeId, CloudChatError, type ChatHistoryItem, type ToolDef } from "./devin/cloud-direct";
+import { getCachedCatalog } from "./devin/cloud-direct/catalog";
 import { DEVIN_DEFAULT_API_SERVER } from "../oauth/devin";
 
 export const DEVIN_API_SERVER = DEVIN_DEFAULT_API_SERVER;
 
-/**
- * Models that the Cognition catalog serves without an effort suffix.
- * All other models require a suffix (e.g. `gpt-5-6-sol-medium`); the adapter
- * appends the reasoning effort or `medium` as default.
- */
-const DEVIN_NO_EFFORT_SUFFIX_MODELS = new Set(["swe-1-7", "swe-1-7-lightning", "glm-5-2", "kimi-k2-7"]);
-
 const EFFORT_SUFFIXES = new Set(["low", "medium", "high", "xhigh", "max", "none", "1m", "max-1m", "none-1m", "fast"]);
 
-/**
- * Resolve the wire model UID. Cognition's catalog lists most models with an
- * effort suffix (e.g. `gpt-5-6-sol-high`); the base id alone is not accepted.
- * If the caller passed a base id for a model that requires a suffix, append the
- * reasoning effort from the request options or default to `medium`.
- */
-function resolveWireModelUid(modelId: string, reasoningEffort?: string): string {
-  if (DEVIN_NO_EFFORT_SUFFIX_MODELS.has(modelId)) return modelId;
-  // Already suffixed (e.g. `gpt-5-6-sol-high`, `claude-opus-4-8-medium-fast`).
+function hasEffortSuffix(modelId: string): boolean {
   const parts = modelId.split("-");
-  if (parts.length > 1 && EFFORT_SUFFIXES.has(parts[parts.length - 1]!)) return modelId;
+  return parts.length > 1 && EFFORT_SUFFIXES.has(parts[parts.length - 1]!);
+}
+
+/**
+ * Resolve the wire model UID using the live catalog as the source of truth.
+ * Cognition's catalog lists most models with an effort suffix
+ * (e.g. `gpt-5-6-sol-high`); the base id alone is not accepted for those.
+ *
+ * If the catalog is available: use the exact UID when it exists, otherwise
+ * append the reasoning effort (or `medium` default) and pick a variant the
+ * account actually has.
+ *
+ * If the catalog is unavailable (degraded mode): append the effort suffix
+ * for any base id that doesn't already carry one, mirroring the catalog shape.
+ */
+async function resolveWireModelUid(
+  modelId: string,
+  apiKey: string,
+  host: string,
+  reasoningEffort?: string,
+): Promise<string> {
+  if (hasEffortSuffix(modelId)) return modelId;
+  const catalog = await getCachedCatalog(apiKey, host);
+  if (catalog) {
+    if (catalog.byUid.has(modelId)) return modelId;
+    const effort = reasoningEffort && EFFORT_SUFFIXES.has(reasoningEffort) ? reasoningEffort : "medium";
+    const suffixed = `${modelId}-${effort}`;
+    if (catalog.byUid.has(suffixed)) return suffixed;
+    // Fall back to any enabled variant of this base model.
+    for (const uid of catalog.byUid.keys()) {
+      if (uid.startsWith(modelId + "-") && !catalog.byUid.get(uid)?.disabled) return uid;
+    }
+  }
+  // Degraded mode: append the default effort suffix.
   const effort = reasoningEffort && EFFORT_SUFFIXES.has(reasoningEffort) ? reasoningEffort : "medium";
   return `${modelId}-${effort}`;
 }
@@ -178,7 +197,8 @@ export function createDevinAdapter(provider: OcxProviderConfig): ProviderAdapter
       }
 
       const rawModelId = parsed.modelId.includes("/") ? parsed.modelId.slice(parsed.modelId.lastIndexOf("/") + 1) : parsed.modelId;
-      const modelUid = resolveWireModelUid(rawModelId, parsed.options.reasoning);
+      const host = (provider.baseUrl || DEVIN_API_SERVER).replace(/\/$/, "");
+      const modelUid = await resolveWireModelUid(rawModelId, apiKey, host, parsed.options.reasoning);
       let openToolId: string | undefined;
       let usage: OcxUsage | undefined;
       let stopReason: string | undefined;
