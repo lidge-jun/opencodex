@@ -156,6 +156,21 @@ export const CAPABILITIES: readonly Capability[] = [
     ],
   },
   {
+    command: ["voice-relay"],
+    summary: "Run a loopback-only foreground relay for a connected remote hub's realtime voice routes.",
+    routes: [],
+    flags: [
+      { name: "--port", value: "number", summary: "Loopback port; defaults to 10111." },
+      { name: "--allow-standalone", value: "boolean", summary: "Also admit bare /v1/live and /v1/realtime WebSocket sessions." },
+    ],
+    mutates: false,
+    json: "none",
+    details: [
+      "Requires an intact ocx connect record and owner-matching data credential.",
+      "Does not write Codex configuration or install a service; exits when connection ownership changes.",
+    ],
+  },
+  {
     command: ["capabilities"],
     summary: "List the declared CLI capabilities and the management routes they drive.",
     routes: [],

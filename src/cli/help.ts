@@ -42,6 +42,7 @@ Usage:
   ocx ensure                  Ensure the proxy is running and Codex config/cache are current
   ocx connect <url>           Connect this machine to a remote OpenCodex hub (credential via stdin)
   ocx disconnect              Restore local state and clear the hub connection
+  ocx voice-relay [flags]     Foreground loopback relay for connected remote-hub voice
   ocx sync [--restart-codex]  Fetch models from providers and inject into Codex config
   ocx sync-cache [--restart-codex]
                               Refresh Codex's model cache from the active catalog

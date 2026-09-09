@@ -105,6 +105,15 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     summary: "Restore local client state offline and clear the remote-hub connection.",
   },
   {
+    name: "voice-relay",
+    usage: "ocx voice-relay [--port <port>] [--allow-standalone]",
+    summary: "Relay Codex realtime voice to the connected remote hub from a loopback-only foreground listener.",
+    details: [
+      "Defaults to 127.0.0.1:10111 and exits when the connected hub credential changes.",
+      "No Codex config is changed; --allow-standalone additionally admits bare realtime WebSocket sessions.",
+    ],
+  },
+  {
     name: "sync",
     usage: "ocx sync [--restart-codex] [--restart-desktop-app]",
     summary: "Fetch provider models and inject them into Codex config.",

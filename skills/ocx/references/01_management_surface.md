@@ -58,6 +58,22 @@ JSON mode: `envelope`.
 
 - Reads /healthz plus local config; drives no management API route.
 
+### `ocx voice-relay`
+
+Run a loopback-only foreground relay for a connected remote hub's realtime voice routes.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--port` | number | Loopback port; defaults to 10111. |
+| `--allow-standalone` | boolean | Also admit bare /v1/live and /v1/realtime WebSocket sessions. |
+
+JSON mode: `none`.
+
+- Requires an intact ocx connect record and owner-matching data credential.
+- Does not write Codex configuration or install a service; exits when connection ownership changes.
+
 ### `ocx capabilities`
 
 List the declared CLI capabilities and the management routes they drive.
@@ -687,6 +703,6 @@ JSON mode: `payload`.
 
 ## Counts
 
-- declared capabilities: 37
+- declared capabilities: 38
 - of those, state-changing: 16
 - head-resolved invocations: 2
