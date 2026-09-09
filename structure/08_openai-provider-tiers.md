@@ -21,8 +21,8 @@ provider may not fall through to Codex-login credentials.
 Caller credentials stay scoped to the selected physical route. Typed proxy admission survives
 Combo/policy recursion, but raw Authorization and ChatGPT account headers are removed from
 rebuilt requests at those selections or actual shadow/thread-spawn rewrites. An original caller's
-Direct credential — a clean non-proxy bearer, account from the explicit header or the JWT
-claim, exactly the predicate plain Direct forwarding uses — is captured separately and may be
+Direct credential — a clean non-proxy bearer carrying a ChatGPT account claim, with any
+explicit account header matching that claim — is captured separately and may be
 restored only for the final canonical OpenAI route, under the existing Direct/Pool, native-main
 claim, and entitlement rules. The stricter explicit-pair snapshot (JWT with matching account
 header) additionally feeds optional OpenAI sidecars and is also

@@ -13,20 +13,20 @@ export function providerConsumesCallerAuthorization(provider: OcxProviderConfig)
 }
 
 /**
- * Capture the caller's Direct credential under the forwardable-bearer predicate
- * (hasForwardableCodexBearer): a clean single bearer that is not one of our proxy admission
- * secrets AND carries an account, from the explicit header or the JWT claim. An opaque
- * account-less bearer is NOT captured: after a shadow/thread rewrite it would replay a
- * foreign (for example Cursor) token onto the canonical ChatGPT backend, so that case stays
- * fail-closed. Stricter snapshot rules (matching explicit account) belong to the sidecar
- * capture, not to Direct restore.
+ * Capture the caller's Direct credential for a canonical-route restore after an internal
+ * rewrite. Only a bearer that PROVABLY belongs to the ChatGPT domain qualifies: a clean
+ * single non-proxy JWT carrying a ChatGPT account claim, with any explicit account header
+ * matching that claim. An opaque bearer is not captured even with a self-asserted account
+ * header: after a shadow/thread rewrite that header cannot distinguish a caller-owned main
+ * credential from a foreign source-route token, so that case stays fail-closed.
  */
 export function captureCallerDirectAuth(incomingHeaders: Headers, config: OcxConfig): CallerDirectAuth | null {
   const raw = incomingHeaders.get("authorization")?.trim();
   const bearer = /^Bearer[\t ]+([^\s,]+)$/i.exec(raw ?? "")?.[1];
   if (!bearer || isProxyAdmissionSecret(bearer, config)) return null;
-  const accountId = incomingHeaders.get("chatgpt-account-id")?.trim()
-    || extractAccountId(undefined, bearer);
-  if (!accountId) return null;
-  return { authorization: `Bearer ${bearer}`, chatgptAccountId: accountId };
+  const claim = extractAccountId(undefined, bearer);
+  if (!claim) return null;
+  const headerAccount = incomingHeaders.get("chatgpt-account-id")?.trim();
+  if (headerAccount && headerAccount !== claim) return null;
+  return { authorization: `Bearer ${bearer}`, chatgptAccountId: claim };
 }
