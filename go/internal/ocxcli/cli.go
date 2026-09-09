@@ -156,20 +156,16 @@ var Commands = []Command{
 	// The read/operator verbs still route to their TypeScript owner through the
 	// labRuntimeSubcommands map until each carries its own parity oracle.
 	{Name: "lab", Usage: "ocx lab <status|verdicts|subjects|subject|observations|events|event|artifacts|artifact|catalog> [options] [--json]", Summary: "Read-only Compatibility Lab projection inspection (local SQLite; no daemon).", Owner: GoOwned},
-	// claude stays TypeScript-owned (issue #54 remainder; follow-up:
-	// waxiangzi/opencodex#56): unlike mcode/mmx, its launch env is assembled by
-	// whole auth/credential subsystems - subscription vs proxy-auth mode
-	// (src/claude/auth-detect + auth-mode), launcher-context parent-env
-	// provenance, gateway-cache refresh, and agents-inject writes under
-	// ~/.claude. A byte-faithful port needs every one of those subsystems plus
-	// a parity harness; an approximate env assembly would silently break real
-	// subscription auth, which is a release blocker under MAINTAINERS review
-	// rules, so it stays on the TypeScript side until that exists.
-	// opencode is Go-owned (issue #56): runOpencode ports the launcher and the
-	// V1/V2 provider-block merge into the OPENCODE_CONFIG_CONTENT runtime layer,
-	// oracle-checked byte-for-byte against the TS serializer + an env-capture
-	// shim (tests/go-cli-parity.test.ts).
-	{Name: "claude", Usage: "ocx claude [args...]", Summary: "Launch Claude Code.", Owner: TypeScriptOwned},
+	// claude is Go-owned (issue #56): runClaude ports cmdClaude end-to-end —
+	// client-state/selected-client/service-token gates, live-proxy ensure,
+	// context-window fetch, the byte-faithful auth-mode env assembly
+	// (claudeBuildEnv), the gateway-model-cache prewrite and the roster-agent
+	// sync — oracle-checked byte-for-byte against the TS engine probe goldens
+	// (go/internal/ocxcli/claude_engine_test.go) plus the claude parity
+	// describe (tests/go-cli-parity.test.ts). Only the `desktop` and `config`
+	// subcommands stay TypeScript-owned (desktop-3p config writer + the
+	// integration config verb), gated by OwnershipFor below.
+	{Name: "claude", Usage: "ocx claude [args...]", Summary: "Launch Claude Code.", Owner: GoOwned},
 	{Name: "opencode", Usage: "ocx opencode [args...]", Summary: "Launch opencode wired to the proxy (runtime provider config).", Owner: GoOwned},
 	// The MiniMax and ZCode families are Go-owned (issue #54 launcher slice):
 	// mcode/mmx wire the loopback proxy then exec the external CLI with
@@ -320,6 +316,15 @@ func OwnershipFor(args []string) (Ownership, bool) {
 	// and the whole command table resolves to GoOwned below.
 	if command.Name == "v2" && len(args) > 1 && args[1] == "status" {
 		return GoOwned, true
+	}
+	// claude owns every verb except the `desktop` and `config` subcommands,
+	// which stay with the TypeScript owner: claude-desktop writes the Desktop
+	// 3P config and `claude config` is the integration config verb, neither
+	// oracle-covered by the launch slice (issue #56).
+	if command.Name == "claude" && len(args) > 1 {
+		if args[1] == "desktop" || args[1] == "config" {
+			return TypeScriptOwned, true
+		}
 	}
 	return command.Owner, true
 }
@@ -503,6 +508,10 @@ func Run(args []string, deps Deps) int {
 		// opencode is Go-owned (issue #56): runOpencode fetches the live
 		// catalog, injects the V1/V2 provider blocks, and spawns opencode.
 		return runOpencode(args[1:], deps)
+	case "claude":
+		// claude is Go-owned (issue #56): the launcher env assembly + spawn
+		// port; OwnershipFor gates `desktop`/`config` to the TS owner first.
+		return runClaude(args[1:], deps)
 	case "disconnect":
 		return runClientDisconnect(args[1:], deps)
 	case "gui":

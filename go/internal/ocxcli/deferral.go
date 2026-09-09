@@ -94,14 +94,6 @@ var deferredSurfaces = []TSDeferral{
 		Track: "waxiangzi/opencodex#51",
 	},
 	{
-		Kind: WholeCommand, Name: "claude",
-		Reason: "Launcher whose env is assembled by whole auth/credential subsystems " +
-			"(subscription vs proxy-auth mode, launcher-context provenance, gateway-cache, " +
-			"agents-inject); an approximate env assembly would silently break real " +
-			"subscription auth, so a parity harness for the auth/env surface is required first.",
-		Track: "waxiangzi/opencodex#56",
-	},
-	{
 		Kind: WholeCommand, Name: "connect",
 		Reason: "Non-status verbs run the hub machine-API + config-injection transaction, " +
 			"which needs its own oracle; the local client-state `status` read is Go-native.",
@@ -164,6 +156,15 @@ var deferredSurfaces = []TSDeferral{
 		Reason: "Non-runtime account verbs (stdin key import, native CODEX_HOME staging) " +
 			"stay TS until each carries its own oracle.",
 		Track: "waxiangzi/opencodex#51",
+	},
+	{
+		Kind: SubcommandSeam, Name: "claude",
+		Verbs: []string{"desktop", "config"},
+		Reason: "The launch slice is Go-owned (issue #56: client-state gates, env " +
+			"assembly, gateway cache, agents sync); `claude desktop` (Desktop 3P " +
+			"config writer) and `claude config` (integration config verb) stay TS " +
+			"until each carries its own oracle.",
+		Track: "waxiangzi/opencodex#56 (remainder)",
 	},
 	{
 		Kind: SubcommandSeam, Name: "codex-shim", Fallback: true,

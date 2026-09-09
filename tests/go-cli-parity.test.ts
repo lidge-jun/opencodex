@@ -6235,5 +6235,285 @@ describe.skipIf(!goAvailable || goCLI === null)(
         },
       );
     });
+
+    describe("ocx claude slice (issue #56)", () => {
+      // Launcher spawn lanes are oracle-able like the opencode slice: a fake
+      // `claude` on PATH dumps argv plus the child env keys the launcher owns
+      // (ANTHROPIC_*, CLAUDE_CODE_*) and exits 5 when the first arg is
+      // `exit5`, so the captured bytes are exactly the assembled launch env,
+      // compared byte-for-byte between TS and Go against the SAME fixture
+      // proxy (its live port is baked into ANTHROPIC_BASE_URL, so both sides
+      // must observe one fixed port per row). Gate rows (disabled, not
+      // selected, token missing/changed) exit before any spawn or network and
+      // need no proxy. Each side gets its own home because the launcher writes
+      // the gateway cache and the roster agents under HOME; ambient
+      // ANTHROPIC_* / CLAUDE_CODE_* are neutralized so the TS untrusted-env
+      // strip never fires (grill 2026-09-09 decision 3) and the dump is the
+      // assembled bytes, not the parent env. win32 rows are skipped (bash-shim
+      // oracle, same convention as the opencode and v2b rows).
+      let claudeProxy: ReturnType<typeof Bun.serve> | undefined;
+      let claudeShimDir = "";
+      let claudeEmptyPath = "";
+      const claudeDirs: string[] = [];
+      afterEach(() => {
+        claudeProxy?.stop(true);
+        claudeProxy = undefined;
+        if (claudeShimDir && existsSync(claudeShimDir))
+          removeTreeWithRetry(claudeShimDir);
+        claudeShimDir = "";
+        if (claudeEmptyPath && existsSync(claudeEmptyPath))
+          removeTreeWithRetry(claudeEmptyPath);
+        claudeEmptyPath = "";
+        for (const dir of claudeDirs.splice(0))
+          if (dir && existsSync(dir)) removeTreeWithRetry(dir);
+      });
+      const claudeShim =
+        [
+          "#!/usr/bin/env bash",
+          "printf 'ARGV:'",
+          'for a in "$@"; do printf " <%s>" "$a"; done',
+          "printf '\\n'",
+          "env | grep -E '^(ANTHROPIC_|CLAUDE_CODE_)' | LC_ALL=C sort",
+          '[ "${1:-}" = "exit5" ] && exit 5',
+          "exit 0",
+        ].join("\n") + "\n";
+      const claudeFingerprint = (token: string) =>
+        createHash("sha256").update(token).digest("hex");
+      const claudeFixtureModels = JSON.stringify({
+        data: [
+          { id: "claude-sonnet-5", display_name: "claude-sonnet-5" },
+          { id: "anthropic/claude-opus-5", display_name: "claude-opus-5" },
+        ],
+      });
+      function claudeClientState(
+        token: string,
+        selected: string[],
+      ): Record<string, unknown> {
+        return {
+          runtimeRole: "client",
+          client: {
+            serverUrl: "http://127.0.0.1:1",
+            managementUrl: "http://127.0.0.1:1",
+            managementTransport: "direct",
+            selectedClients: selected,
+            tokenEnv: "OPENCODEX_API_AUTH_TOKEN",
+            apiKeyId: "k1",
+            tokenFingerprint: claudeFingerprint(token),
+            protocolVersion: 1,
+            connectedAt: "2026-09-09T00:00:00.000Z",
+          },
+        };
+      }
+      function startClaudeFixture(): void {
+        claudeProxy = Bun.serve({
+          port: 0,
+          fetch(request) {
+            const url = new URL(request.url);
+            if (url.pathname === "/healthz") {
+              const challenge =
+                request.headers.get("x-opencodex-attestation-challenge") ??
+                "";
+              const headers = attestedHeaders(challenge, claudeProxy!.port!);
+              return Response.json(
+                {
+                  status: "ok",
+                  service: "opencodex",
+                  version: "2.42.0",
+                  uptime: 1,
+                  pid: process.pid,
+                  port: claudeProxy!.port,
+                },
+                { headers },
+              );
+            }
+            if (url.pathname === "/api/claude-code") {
+              return Response.json({ contextWindows: {} });
+            }
+            if (url.pathname === "/v1/models") {
+              return Response.json(claudeFixtureModels);
+            }
+            return new Response("not found", { status: 404 });
+          },
+        });
+      }
+      function claudeSideHome(
+        base: Record<string, unknown>,
+      ): string {
+        const home = mkdtempSync(join(tmpdir(), "ocx-go-claude-parity-"));
+        claudeDirs.push(home);
+        const config: Record<string, unknown> = {
+          hostname: "127.0.0.1",
+          port: 10100,
+          providers: {
+            fixture: {
+              adapter: "openai-chat",
+              baseUrl: "https://example.test/v1",
+              apiKey: "k",
+            },
+          },
+          defaultProvider: "fixture",
+        };
+        Object.assign(config, base);
+        writeFileSync(join(home, "config.json"), JSON.stringify(config));
+        mkdirSync(join(home, "codex"), { recursive: true });
+        if (claudeProxy) {
+          writeFileSync(
+            join(home, "runtime-port.json"),
+            JSON.stringify({
+              pid: process.pid,
+              port: claudeProxy.port,
+              hostname: "127.0.0.1",
+              attestationSecret: secret,
+            }),
+          );
+        }
+        return home;
+      }
+      function claudeSideEnv(
+        home: string,
+      ): Record<string, string | undefined> {
+        const scratch = mkdtempSync(join(tmpdir(), "ocx-go-claude-home-"));
+        claudeDirs.push(scratch);
+        const env = parityEnv(home);
+        env.HOME = scratch;
+        env.CODEX_HOME = join(home, "codex");
+        env.CLAUDE_CONFIG_DIR = "";
+        env.OPENCODEX_API_AUTH_TOKEN = "";
+        env.OPENCODEX_ADMIN_AUTH_TOKEN = "";
+        env.OCX_API_TOKEN_FILE = "";
+        for (const key of Object.keys(env)) {
+          if (key.startsWith("ANTHROPIC_") || key.startsWith("CLAUDE_CODE_"))
+            delete env[key];
+        }
+        return env;
+      }
+      type ClaudePathMode = "shim" | "empty" | "inherit";
+      async function claudeBoth(
+        args: readonly string[],
+        baseConfig: Record<string, unknown>,
+        pathMode: ClaudePathMode = "shim",
+        serviceFile?: string,
+      ): Promise<Result> {
+        startClaudeFixture();
+        if (pathMode !== "inherit") {
+          claudeShimDir = mkdtempSync(join(tmpdir(), "ocx-go-claude-shim-"));
+          claudeDirs.push(claudeShimDir);
+          writeFileSync(join(claudeShimDir, "claude"), claudeShim);
+          chmodSync(join(claudeShimDir, "claude"), 0o755);
+          if (pathMode === "empty")
+            claudeEmptyPath = mkdtempSync(
+              join(tmpdir(), "ocx-go-claude-empty-"),
+            );
+        }
+        const run = async (
+          fn: (a: readonly string[], e: Record<string, string | undefined>) => Promise<Result>,
+        ) => {
+          const home = claudeSideHome(baseConfig);
+          if (serviceFile !== undefined)
+            writeFileSync(join(home, "service-api-token"), serviceFile);
+          const env = claudeSideEnv(home);
+          if (pathMode === "shim")
+            env.PATH = claudeShimDir + pathDelimiter + (process.env.PATH ?? "");
+          else if (pathMode === "empty") env.PATH = claudeEmptyPath;
+          return fn(args, env);
+        };
+        const ts = await run(runTsEnvAsync);
+        const go = await run(runGoEnvAsync);
+        expect(go).toEqual(ts);
+        return ts;
+      }
+      test("diffs the disabled gate", async () => {
+        const ts = await claudeBoth(["claude"], {
+          claudeCode: { enabled: false },
+        });
+        expect(ts.code).toBe(1);
+        expect(ts.stdout).toBe("");
+        expect(ts.stderr).toBe(
+          "Claude inbound is disabled (config.claudeCode.enabled=false — flip the Claude ON toggle in the GUI or edit config).\n",
+        );
+      });
+      test("diffs the not-selected gate", async () => {
+        const ts = await claudeBoth(
+          ["claude"],
+          claudeClientState("conn-tok", ["codex"]),
+        );
+        expect(ts.code).toBe(1);
+        expect(ts.stderr).toBe(
+          "Claude is not selected for this remote hub connection.\n",
+        );
+      });
+      test("diffs the connected token-missing gate", async () => {
+        const ts = await claudeBoth(["claude"], claudeClientState("conn-tok", ["claude"]));
+        expect(ts.code).toBe(1);
+        expect(ts.stderr).toBe("Connected service token is missing.\n");
+      });
+      test("diffs the connected token-changed gate", async () => {
+        // The on-disk token's fingerprint does not match the recorded one: the
+        // service token file must exist with a DIFFERENT token (the gates run
+        // before the launch path, so the config home needs the file for the
+        // fingerprint compare to see a mismatch).
+        const home = claudeSideHome(claudeClientState("conn-tok", ["claude"]));
+        writeFileSync(join(home, "service-api-token"), "other-tok");
+        const env = claudeSideEnv(home);
+        env.PATH = claudeEmptyPath; // gates exit before any spawn
+        const ts = await runTsEnvAsync(["claude"], env);
+        const go = await runGoEnvAsync(["claude"], env);
+        expect(go).toEqual(ts);
+        expect(ts.code).toBe(1);
+        expect(ts.stderr).toBe(
+          "Connected service token ownership changed.\n",
+        );
+      });
+      test("diffs the local spawn lane env through the shim", async () => {
+        const ts = await claudeBoth(["claude", "--model", "x"], {
+          apiKeys: [
+            {
+              key: "adm-one",
+              id: "k1",
+              name: "main",
+              createdAt: "2026-01-01T00:00:00.000Z",
+            },
+          ],
+        });
+        expect(ts.code).toBe(0);
+        expect(ts.stdout).toContain("ARGV: <--model> <x>");
+        expect(ts.stdout).toContain("ANTHROPIC_AUTH_TOKEN=adm-one");
+        expect(ts.stdout).toContain(
+          `ANTHROPIC_BASE_URL=http://127.0.0.1:${claudeProxy!.port}`,
+        );
+        expect(ts.stdout).toContain(
+          "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1",
+        );
+        expect(ts.stdout).toContain("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1");
+      });
+      test("diffs the local spawn exit-code passthrough (5)", async () => {
+        const ts = await claudeBoth(["claude", "exit5"]);
+        expect(ts.code).toBe(5);
+      });
+      test("diffs the local ENOENT spawn hint on an empty PATH", async () => {
+        const ts = await claudeBoth(["claude"], {}, "empty");
+        expect(ts.code).toBe(1);
+        expect(ts.stdout).toBe("");
+        // The refresh warning prefix is environment-sensitive (the gateway
+        // cache refresh races the fixture on some hosts); what is pinned is
+        // the byte-identical pair above plus the terminal install hint.
+        expect(ts.stderr).toEndWith(
+          "❌ `claude` CLI not found. Install it first: npm install -g @anthropic-ai/claude-code\n",
+        );
+      });
+      test("diffs the connected spawn lane env through the shim", async () => {
+        // The hub URL (127.0.0.1:1) is unreachable by design, so both sides
+        // emit the same refresh warning before the spawn succeeds.
+        const ts = await claudeBoth(
+          ["claude"],
+          claudeClientState("conn-tok", ["claude"]),
+          "shim",
+          "conn-tok",
+        );
+        expect(ts.code).toBe(0);
+        expect(ts.stdout).toContain("ANTHROPIC_AUTH_TOKEN=conn-tok");
+        expect(ts.stdout).toContain("ANTHROPIC_BASE_URL=http://127.0.0.1:1");
+      });
+    });
   },
 );
