@@ -44,6 +44,26 @@ function upstream413(onHit?: () => void): ReturnType<typeof Bun.serve> {
   return upstreamStatus(413, onHit);
 }
 
+/**
+ * A 413 whose body carries a per-request free-tier cap. `comboFailureDecision` reads that
+ * as target-local and hops, so a combo tries every target and then exhausts, which is the
+ * mapping site this fixture exercises.
+ */
+function freePromptCap413(onHit?: () => void): ReturnType<typeof Bun.serve> {
+  const upstream = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch() {
+      onHit?.();
+      return Response.json({
+        detail: "err_free_prompt_cap: prompt exceeds this tier; echoed private request marker should-not-reach-client",
+      }, { status: 413 });
+    },
+  });
+  upstreams.push(upstream);
+  return upstream;
+}
+
 function provider(
   adapter: "openai-responses" | "openai-chat" | "anthropic",
   upstream: ReturnType<typeof Bun.serve>,
@@ -264,6 +284,51 @@ describe("Responses provider input overflow", () => {
       }
       expect(firstHits).toBe(1);
       expect(secondHits).toBe(0);
+    } finally {
+      await server.stop(true);
+    }
+  });
+  // A 413 carrying `err_free_prompt_cap` is a per-request free-tier cap, so
+  // `comboFailureDecision` hops instead of stopping. Every target then refuses and the
+  // combo falls out of its loop, which is a different mapping site from the "stop" case
+  // above and was still gated on `stream === true` after #4127 (#4149).
+  test.each([true, false])("an exhausted combo classifies a hopping 413 (stream=%s)", async stream => {
+    let firstHits = 0;
+    let secondHits = 0;
+    const first = freePromptCap413(() => { firstHits += 1; });
+    const second = freePromptCap413(() => { secondHits += 1; });
+    const next = config({
+      first: provider("openai-chat", first),
+      second: provider("openai-chat", second),
+    });
+    next.combos = {
+      fallback: {
+        strategy: "failover",
+        targets: [
+          { provider: "first", model: "kimi-k3" },
+          { provider: "second", model: "kimi-k3" },
+        ],
+      },
+    };
+    saveConfig(next);
+    const server = startServer(0);
+    try {
+      const response = await request(String(server.url), "combo/fallback", stream);
+      if (stream) {
+        const failed = await responseFailed(response);
+        expect((failed.error as { code?: string }).code).toBe("context_length_exceeded");
+      } else {
+        expect(response.status).toBe(413);
+        expect(response.headers.get("content-type")).toContain("application/json");
+        expect(await response.json()).toEqual({ error: {
+          message: PROVIDER_INPUT_TOO_LARGE_MESSAGE,
+          type: "invalid_request_error",
+          code: "context_length_exceeded",
+        } });
+      }
+      // Both targets were tried: this is the exhausted path, not the stop path.
+      expect(firstHits).toBe(1);
+      expect(secondHits).toBe(1);
     } finally {
       await server.stop(true);
     }

@@ -2791,6 +2791,10 @@ export async function handleComboResponses(
   logCtx.routeDecision = comboRouteDecisionTrace(config, comboId, pick, requestedModel);
 
   let lastFailure: Response | null = null;
+  // The exhausted-combo mapping below runs outside the loop, where `failure.upstreamCode`
+  // is gone, so carry the loop's own classification decision instead of re-deriving a
+  // weaker one from the status alone (#4149).
+  let lastFailureClassifiesOverflow = false;
   while (pick) {
     if (options.abortSignal?.aborted) return clientCancelledResponse();
     const childLog: RequestLogContext = {
@@ -3003,6 +3007,7 @@ export async function handleComboResponses(
     const classifyOverflow = failure.response.status === 413
       && (wantsStream || (failure.upstreamCode !== "outbound_body_too_large"
         && failure.upstreamCode !== "translation_buffer_limit"));
+    lastFailureClassifiesOverflow = classifyOverflow;
     if (storedPool401ReplayDispatched) {
       if (failureDecision === "hop" && unreadableEncryptedAgentTask && !comboPayloadReadable) {
         const recoveredTarget = await pickWithWait({
@@ -3089,9 +3094,11 @@ export async function handleComboResponses(
   }
   if (
     lastFailure?.status === 413
-    && (rawBody as { stream?: unknown } | null)?.stream === true
+    && lastFailureClassifiesOverflow
   ) {
-    return streamingContextOverflowResponse(requestedModel, options.translatorBudget);
+    return (rawBody as { stream?: unknown } | null)?.stream === true
+      ? streamingContextOverflowResponse(requestedModel, options.translatorBudget)
+      : jsonContextOverflowResponse();
   }
   return lastFailure!;
 }
