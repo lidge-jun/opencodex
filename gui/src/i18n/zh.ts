@@ -33,6 +33,10 @@ export const zh: Record<TKey, string> = {
   "audio.error.network": "连接失败。请检查代理地址。",
   "audio.error.timeout": "请求超时。请重试。",
   "audio.error.protocol": "音频响应格式异常。请检查提供商兼容性。",
+
+  "usage.incomplete": "部分用量记录无法计入。次数、日期和排名仅反映可读取的记录。",
+  "models.pickerOrder.usageIncomplete": "用量历史不完整，无法保存最常用排序。请选择其他排序或先修复历史记录。",
+  "api.attribution.noRecordedUse": "可读取的记录中没有使用记录",
   "models.pickerOrder.label": "模型选择顺序",
   "models.pickerOrder.default": "默认",
   "models.pickerOrder.alphabetical": "按模型名 A–Z",

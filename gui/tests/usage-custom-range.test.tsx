@@ -85,6 +85,25 @@ async function respond(index: number, marker: string, date?: string) {
   await act(async () => { requests[index].resolve(Response.json(report(requests[index], marker, date))); });
 }
 
+test("incomplete usage notice survives held cache and remains visible with no readable rows", async () => {
+  await mount();
+  const partial = { ...report(requests[0], "readable-model"), usageIncomplete: true, usageIncompleteReason: "oversized_rows" };
+  await act(async () => { requests[0].resolve(Response.json(partial)); });
+  expect(container.textContent).toContain("Some usage records could not be included");
+  expect(container.textContent).toContain("readable-model");
+  expect(sessionEntries().some(([, value]) => value?.includes('"usageIncomplete":true'))).toBe(true);
+  await act(async () => { root!.unmount(); });
+  root = undefined;
+  clearClientResourceStoresForTests();
+  await mount();
+  expect(container.textContent).toContain("Some usage records could not be included");
+  await act(async () => { requests[1].resolve(Response.json({ ...partial,
+    summary: { ...partial.summary, requests: 0, totalTokens: 0 }, days: [], models: [],
+  })); });
+  expect(container.textContent).toContain("Some usage records could not be included");
+  expect(container.textContent).not.toContain("readable-model");
+});
+
 const toggle = () => container.querySelector<HTMLButtonElement>(".usage-range-toggle")!;
 const form = () => container.querySelector<HTMLFormElement>('form[aria-label="Custom date range"]')!;
 const startInput = () => form().querySelectorAll<HTMLInputElement>('input[type="datetime-local"]')[0];

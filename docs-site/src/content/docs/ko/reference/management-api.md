@@ -138,6 +138,8 @@ Authorization: Bearer <admin-token>
 | `POST /api/storage/cleanup-policy/run` | 수동 cleanup-policy 실행을 시작합니다 | 409 `already_running`; 500 `cleanup_failed` |
 | `GET /api/storage/cleanup-policy/test-stream` | 테스트 전용 policy stream 훅입니다 | 사용할 수 없으면 404 `not_found` |
 
+행이 기존 파서의 크기 제한을 넘으면 `GET /api/usage`와 `GET /api/keys`는 읽을 수 있는 행의 집계를 유지하고 응답 전체에 `usageIncomplete: true`, `usageIncompleteReason: "oversized_rows"`를 추가합니다. 이 진단은 캐시와 증분 추가에서도 유지되며, 빈 결과나 필터 일치 결과가 없는 경우에도 반환됩니다. 재구축 시에는 다시 계산합니다. 행을 맞추기 위해 공급자·모델·API 키 식별자를 줄이지 않습니다. 플래그가 없다고 모든 기록이 유효했다는 뜻은 아닙니다. `historyTruncated`, `entriesTruncated`, 토큰 측정 커버리지와는 별개입니다.
+
 `models`, `providers`, `days[].models`의 행에도 `cacheHitRate`가 포함됩니다. 이 값은 공급자의 프롬프트 캐시에서
 제공된 입력 토큰의 비율이며 `[0, 1]` 범위로 제한됩니다. 공급자가 캐시 텔레메트리를 보고하지 않았거나 행에 입력
 토큰이 없으면 `0`이 아니라 항상 `null`입니다. "캐시 데이터 없음"과 "실제 적중률 0%"는 서로 다른 사실이며,

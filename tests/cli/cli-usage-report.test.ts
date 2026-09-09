@@ -84,6 +84,24 @@ describe("formatUsageReport", () => {
     expect(JSON.parse(out)).toEqual(malformed);
   });
 
+  test("incomplete usage retains readable totals and warns even with no data or no match", () => {
+    const partial = { usageIncomplete: true, usageIncompleteReason: "oversized_rows" };
+    const out = formatUsageReport(payload(partial) as never).join("\n");
+    expect(out).toContain("WARNING: Usage is incomplete");
+    expect(out).toContain("Requests   1,447");
+    expect(out).toContain("grok-4.6");
+    expect(out.indexOf("WARNING:")).toBeLessThan(out.indexOf("Requests"));
+    const empty = payload({ ...partial, summary: { requests: 0, totalTokens: 0 }, providers: [], models: [], days: [] });
+    expect(formatUsageReport(empty as never).join("\n")).toContain("WARNING: Usage is incomplete");
+    const noMatch = formatUsageReport({ ...empty,
+      filter: { provider: "nope", model: null, matched: false, comboOverlap: false },
+    } as never).join("\n");
+    expect(noMatch).toContain("WARNING: Usage is incomplete");
+    expect(noMatch).toContain("skipped records may contain matches");
+    expect(noMatch).not.toContain("No usage recorded");
+    expect(formatUsageReport(payload() as never).join("\n")).not.toContain("WARNING: Usage is incomplete");
+  });
+
   test("prints per-provider and per-model cost, not an item count", () => {
     const out = formatUsageReport(payload() as never).join("\n");
     expect(out).toContain("~$12.3456");
@@ -168,6 +186,17 @@ describe("formatUsageReport", () => {
 });
 
 describe("ocx usage command", () => {
+  test("incomplete usage succeeds with human warning and unchanged JSON metadata", async () => {
+    const body = payload({ usageIncomplete: true, usageIncompleteReason: "oversized_rows" });
+    const human = await run(["usage"], body);
+    expect(human.code).toBe(0);
+    expect(human.out).toContain("WARNING: Usage is incomplete");
+    expect(human.out).toContain("grok-4.6");
+    const json = await run(["usage", "--json"], body);
+    expect(json.code).toBe(0);
+    expect(JSON.parse(json.out)).toEqual(body);
+  });
+
   test("duplicate, inline and stray custom-bound arguments do not echo credential-shaped values", async () => {
     const secret = "sk-" + "a".repeat(40);
     const errors: string[] = [];

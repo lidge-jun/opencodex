@@ -33,6 +33,10 @@ export const ja: Record<TKey, string> = {
   "audio.error.network": "接続に失敗しました。プロキシのアドレスを確認してください。",
   "audio.error.timeout": "応答がタイムアウトしました。もう一度お試しください。",
   "audio.error.protocol": "音声の応答形式が異なります。プロバイダーの互換性を確認してください。",
+
+  "usage.incomplete": "一部の使用履歴を集計できませんでした。回数、日付、順位は読み取れる記録のみを反映しています。",
+  "models.pickerOrder.usageIncomplete": "使用履歴が不完全なため、使用回数順を保存できません。別の順序を選ぶか、履歴を修復してください。",
+  "api.attribution.noRecordedUse": "読み取れる記録に使用履歴なし",
   "models.pickerOrder.label": "モデル選択順",
   "models.pickerOrder.default": "デフォルト",
   "models.pickerOrder.alphabetical": "モデル名のA–Z順",

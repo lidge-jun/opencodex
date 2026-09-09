@@ -19,6 +19,9 @@ export type ApiKeyUsage =
 export interface ApiKeyUsageSnapshot {
   rollup: Map<string, ApiKeyUsage>;
   historyTruncated?: true;
+  /** Positive evidence of skipped oversized rows; absence is not a completeness guarantee. */
+  usageIncomplete?: true;
+  usageIncompleteReason?: "oversized_rows";
   /**
    * Earliest row carrying a recognized `admissionKind`. A property of the DATA
    * SET, not of a key, so it is singular and lives beside the map: it is what
@@ -223,9 +226,11 @@ export async function readApiKeyUsageRollup(configuredIds: string[], maxReadByte
     const flight = (async (): Promise<ApiKeyUsageSnapshot> => {
       const accumulator = createApiKeyUsageAccumulator(configuredIds, now);
       const scan = await scanUsageLedgerCooperatively({ onEntry: entry => accumulator.add(entry) });
-      if (scan.oversizedRows > 0) throw new Error("usage ledger contains an oversized row");
       return cacheApiKeyUsageFromRollup(
-        accumulator.snapshot(),
+        {
+          ...accumulator.snapshot(),
+          ...(scan.oversizedRows > 0 ? { usageIncomplete: true as const, usageIncompleteReason: "oversized_rows" as const } : {}),
+        },
         configuredIds,
         usageLogIdentityKey(scan.revision),
         scan.revision?.size ?? 0,

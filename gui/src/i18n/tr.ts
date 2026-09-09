@@ -34,6 +34,10 @@ export const tr: Record<TKey, string> = {
   "audio.error.network": "Bağlantı başarısız. Proxy adresini kontrol edin.",
   "audio.error.timeout": "İstek zaman aşımına uğradı. Tekrar deneyin.",
   "audio.error.protocol": "Beklenmeyen ses yanıtı. Sağlayıcı uyumluluğunu kontrol edin.",
+
+  "usage.incomplete": "Bazı kullanım kayıtları dahil edilemedi. Sayılar, tarihler ve sıralamalar yalnızca okunabilir kayıtlara dayanır.",
+  "models.pickerOrder.usageIncomplete": "Kullanım geçmişi eksik olduğundan en çok kullanılan sıralaması kaydedilemiyor. Başka bir sıralama seçin veya önce geçmişi onarın.",
+  "api.attribution.noRecordedUse": "Okunabilir kayıtlarda kullanım yok",
   "models.pickerOrder.label": "Model sırası",
   "models.pickerOrder.default": "Varsayılan",
   "models.pickerOrder.alphabetical": "Model adına göre A–Z",

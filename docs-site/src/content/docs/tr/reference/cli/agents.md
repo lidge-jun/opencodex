@@ -111,6 +111,8 @@ verilerini inceleyin. Doğrudan takma adlar şunlardır:
 ocx observe usage --range 30d --json
 ```
 
+Bazı kullanım kayıtları dahil edilemiyorsa okunabilir çıktı mevcut toplamları koruyarak uyarı gösterir. Satır veya filtre eşleşmesi olmadığında da uyarı görünür; atlanan satırlar eşleşme içerebilir. `--json`, yanıttaki `usageIncomplete` tanısını ve nedenini korur.
+
 ### `ocx debug <provider|usage|injection|claude> <on|off|status|reset|logs [-f]>`
 
 Çalışan proxy'nin yönetim API'si aracılığıyla çalışma zamanı hata ayıklama

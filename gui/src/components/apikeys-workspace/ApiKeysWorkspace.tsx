@@ -26,6 +26,9 @@ import ClientConfigPanel from "./ClientConfigPanel";
 import ApiKeysListPanel from "./ApiKeysListPanel";
 import { DictationPanel, LiveVoicePanel } from "./AudioApiPanel";
 
+import type { UsageReadMetadata } from "../../usage-summary-resource";
+import { UsageIncompleteNotice } from "../usage-incomplete-notice";
+
 export interface ApiKeysWorkspaceProps {
   keys: ApiKeyEntry[];
   /** Management API origin the client-config panel fetches from. */
@@ -35,6 +38,7 @@ export interface ApiKeysWorkspaceProps {
    *  statement from a key whose counters read zero. */
   attributionSince?: string;
   historyTruncated?: boolean;
+  usageMetadata?: UsageReadMetadata;
   authMatrix: ApiAuthMatrixRow[];
   keysLoading: boolean;
   keysLoadFailed: boolean;
@@ -83,6 +87,7 @@ export default function ApiKeysWorkspace({
   active = true,
   attributionSince,
   historyTruncated,
+  usageMetadata,
   authMatrix,
   keysLoading,
   keysLoadFailed,
@@ -402,6 +407,7 @@ export default function ApiKeysWorkspace({
                 </div>
                 <div className="awi-section">
                   <h3 className="awi-section-title">{t("api.attribution.title")}</h3>
+                  <UsageIncompleteNotice data={usageMetadata} />
                   {/* Branch on the DATASET field, not on `usage`: a key with zero
                       requests under a live dataset really was used zero times,
                       which is not the same as having nothing to attribute. */}
@@ -416,17 +422,17 @@ export default function ApiKeysWorkspace({
                         <dd>{selected.usage.requests7d.toLocaleString(localeTag)}</dd>
                       </div>
                       <div className="awi-kv-row">
-                        <dt>{historyTruncated ? t("api.attribution.totalRequestsAvailable") : t("api.attribution.totalRequests")}</dt>
+                        <dt>{historyTruncated || usageMetadata?.usageIncomplete ? t("api.attribution.totalRequestsAvailable") : t("api.attribution.totalRequests")}</dt>
                         <dd>{selected.usage.totalRequests.toLocaleString(localeTag)}</dd>
                       </div>
                       <div className="awi-kv-row">
                         <dt>{t("api.attribution.lastUsed")}</dt>
                         <dd>{selected.usage.lastUsedAt
                           ? formatCreatedDate(selected.usage.lastUsedAt, localeTag)
-                          : t("api.attribution.neverUsed")}</dd>
+                          : t(usageMetadata?.usageIncomplete ? "api.attribution.noRecordedUse" : "api.attribution.neverUsed")}</dd>
                       </div>
                       <div className="awi-kv-row">
-                        <dt>{historyTruncated ? t("api.attribution.sinceAvailable") : t("api.attribution.since")}</dt>
+                        <dt>{historyTruncated || usageMetadata?.usageIncomplete ? t("api.attribution.sinceAvailable") : t("api.attribution.since")}</dt>
                         <dd>{formatCreatedDate(attributionSince, localeTag)}</dd>
                       </div>
                     </dl>
@@ -470,6 +476,7 @@ export default function ApiKeysWorkspace({
                     keysLoading={keysLoading}
                     keysLoadFailed={keysLoadFailed}
                     attributionSince={attributionSince}
+                    usageMetadata={usageMetadata}
                     localeTag={localeTag}
                     busy={mutationPending}
                     onSelect={id => {

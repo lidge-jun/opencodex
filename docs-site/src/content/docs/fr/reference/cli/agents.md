@@ -98,6 +98,8 @@ Inspectez les requêtes de proxy, l’utilisation, le stockage, la mémoire et l
 ocx observe usage --range 30d --json
 ```
 
+Si certains enregistrements ne peuvent pas être inclus, la sortie lisible affiche un avertissement et conserve les totaux lisibles, même sans ligne ou correspondance de filtre. Des lignes ignorées peuvent contenir des correspondances. `--json` préserve le diagnostic `usageIncomplete` et sa raison.
+
 ### `ocx debug <provider|usage|injection|claude> <on|off|status|reset|logs [-f]>`
 
 Lisez ou modifiez les remplacements de débogage d'exécution via la gestion du proxy en cours d'exécution API.

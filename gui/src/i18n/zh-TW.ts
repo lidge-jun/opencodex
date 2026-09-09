@@ -31,6 +31,10 @@ export const zhTW: Record<TKey, string> = {
   "audio.error.network": "連線失敗。請檢查代理位址。",
   "audio.error.timeout": "請求逾時。請再試一次。",
   "audio.error.protocol": "音訊回應格式異常。請檢查供應商相容性。",
+
+  "usage.incomplete": "部分用量記錄無法納入。次數、日期和排名僅反映可讀取的記錄。",
+  "models.pickerOrder.usageIncomplete": "用量歷史不完整，無法儲存最常用排序。請選擇其他排序或先修復歷史記錄。",
+  "api.attribution.noRecordedUse": "可讀取的記錄中沒有使用記錄",
   "models.pickerOrder.label": "模型選擇順序",
   "models.pickerOrder.default": "預設",
   "models.pickerOrder.alphabetical": "依模型名稱 A–Z",

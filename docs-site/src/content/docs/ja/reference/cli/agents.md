@@ -69,6 +69,8 @@ ocx route combo set reliable --targets ark/model-a:2,openai/gpt-5.5
 ocx observe usage --range 30d --json
 ```
 
+一部の使用履歴を集計できない場合、人向けの出力は読み取れる集計値を維持しながら警告を表示します。行がない場合やフィルターに一致しない場合も同様で、除外した行に一致する記録が含まれる可能性があります。`--json` は応答の `usageIncomplete` 診断と理由をそのまま保持します。
+
 ### `ocx debug <provider|usage|injection|claude> <on|off|status|reset|logs [-f]>`
 
 実行中のプロキシの管理 API を通じて、ランタイム デバッグ オーバーライドを読み取りまたは変更します。

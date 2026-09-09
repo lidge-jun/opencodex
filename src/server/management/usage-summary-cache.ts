@@ -2,6 +2,8 @@ import { enforceAppOwnedMemoryBudget, type RetainedStoreSnapshot } from "../../l
 import type { UsageSummary } from "../../usage/summary";
 
 export type CachedUsageSummary = UsageSummary & {
+  usageIncomplete?: true;
+  usageIncompleteReason?: "oversized_rows";
   historyTruncated: boolean;
   truncatedPrefixBytes: number;
   entriesTruncated: boolean;

@@ -33,6 +33,10 @@ export const fr: Record<TKey, string> = {
   "audio.error.network": "Connexion impossible. Vérifiez l’adresse du proxy.",
   "audio.error.timeout": "Délai dépassé. Réessayez.",
   "audio.error.protocol": "Réponse audio inattendue. Vérifiez la compatibilité du fournisseur.",
+
+  "usage.incomplete": "Certains enregistrements d’utilisation n’ont pas pu être inclus. Les comptes, dates et classements reposent uniquement sur les enregistrements lisibles.",
+  "models.pickerOrder.usageIncomplete": "Impossible d’enregistrer l’ordre par utilisation : l’historique est incomplet. Choisissez un autre ordre ou réparez d’abord l’historique.",
+  "api.attribution.noRecordedUse": "Aucune utilisation dans les enregistrements lisibles",
   "models.pickerOrder.label": "Ordre des modèles",
   "models.pickerOrder.default": "Par défaut",
   "models.pickerOrder.alphabetical": "A–Z par modèle",

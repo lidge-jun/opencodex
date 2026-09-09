@@ -191,7 +191,7 @@ by the current window size.
 | `GET /api/debug/usage-logs` | Read bounded usage-debug entries | — |
 | `GET /api/debug/injection-logs` | Read bounded guidance-injection debug entries | — |
 | `GET /api/claude/inbound-debug` | Read Claude inbound debug state and entries | — |
-| `GET /api/usage` | Stream the complete usage ledger into compact aggregates, then incrementally fold verified appends; summarize by preset or inclusive custom window and client surface, with a Codex `accounts` breakdown keyed by stable non-PII log labels | 400 invalid custom bounds; returns an `error: "read_failed"` summary if storage cannot be read |
+| `GET /api/usage` | Scan the usage ledger into compact aggregates of readable rows, then incrementally fold verified appends; summarize by preset or inclusive custom window and client surface, with a Codex `accounts` breakdown keyed by stable non-PII log labels | 400 invalid custom bounds; returns an `error: "read_failed"` summary if storage cannot be read |
 | `GET /api/storage` | Scan Codex storage usage by bucket | Returns an `error: "scan_failed"` payload on scan failure |
 | `POST /api/storage/cleanup/preview` | Preview archived-session cleanup and return a binding digest | 400 `invalid_json` or `invalid_percent` |
 | `POST /api/storage/cleanup` | Quarantine or permanently remove the previewed archived set | 400 invalid input; 409 stale/busy/referenced state; 500 filesystem/database failure |
@@ -201,6 +201,14 @@ by the current window size.
 | `GET, PUT /api/storage/cleanup-policy` | Read or update scheduled cleanup policy and job state | 400 invalid policy |
 | `POST /api/storage/cleanup-policy/run` | Start a manual cleanup-policy run | 409 `already_running`; 500 `cleanup_failed` |
 | `GET /api/storage/cleanup-policy/test-stream` | Test-only policy stream hook | 404 `not_found` when unavailable |
+
+If a scanned row exceeds the existing parser size limit, `GET /api/usage` and `GET /api/keys`
+keep the readable-row aggregates and add `usageIncomplete: true` with
+`usageIncompleteReason: "oversized_rows"` at response level. This diagnostic survives cached
+responses and incremental appends, including empty or unmatched results; a rebuild recalculates it.
+No provider, model, or API-key identifier is shortened to make a row fit. An absent flag is not proof
+that every ledger record was valid. This is separate from `historyTruncated`, `entriesTruncated`,
+and token measurement coverage.
 
 New xAI attempts in `usage.jsonl` include a request-time `credentialSource`: `grok-oauth`
 for the resolved Grok CLI OAuth transport, or `xai-api-key` for the public xAI API key
@@ -214,7 +222,7 @@ The log reports usage, not subscription invoice amounts.
 snapshot on a cold start. It processes fixed 1 MiB chunks and retains compact aggregate state rather
 than every normalized request row. Later refreshes validate the previous line boundary and fold only
 newly appended complete rows. Concurrent callers share the same refresh. Range and surface predicates
-are applied to the complete aggregate, so the former read-byte window and parsed-row cap cannot omit
+are applied to the readable-row aggregate, so the former read-byte window and parsed-row cap cannot omit
 an earlier file prefix from 7-day, 30-day, or all-history totals. `managementUsageMaxReadBytes` remains
 accepted for compatibility with bounded legacy readers, but changing it no longer expands or reduces
 the history summarized by this endpoint.

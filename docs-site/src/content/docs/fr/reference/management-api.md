@@ -155,6 +155,8 @@ Voir [Combos](/fr/guides/combos/) pour les stratégies cibles, les temps de rech
 | `POST /api/storage/cleanup-policy/run` | Démarrer une exécution manuelle de la politique de nettoyage | 409 `already_running` ; 500 `cleanup_failed` |
 | `GET /api/storage/cleanup-policy/test-stream` | Point d'ancrage du flux de stratégie réservé aux tests | 404 `not_found` en cas d'indisponibilité |
 
+Si une ligne dépasse la limite de taille du parseur, `GET /api/usage` et `GET /api/keys` conservent les agrégats lisibles et ajoutent `usageIncomplete: true` avec `usageIncompleteReason: "oversized_rows"` au niveau de la réponse. Ce diagnostic reste présent dans le cache et après les ajouts incrémentaux, même sans résultat ou correspondance ; une reconstruction le recalcule. Les identifiants de fournisseur, de modèle et de clé API ne sont pas raccourcis. L’absence du champ ne prouve pas la validité de toutes les lignes. Ce signal est distinct de `historyTruncated`, `entriesTruncated` et de la couverture de mesure des tokens.
+
 Pour `GET /api/usage?range=30d&surface=codex`, `accounts` contient une ligne par libellé de pool Codex
 observé. Chaque ligne indique `accountLogLabel`, le total de jetons, `usageCoverageRatio` et une valeur facultative
 `estimatedCostUsd` calculée selon les tarifs d'affichage actuellement configurés. Les substitutions `modelCosts` actives de l'utilisateur

@@ -1920,8 +1920,9 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
       if (mode === "most-used") {
         const response = await fetch(`${apiBase}/api/usage?range=all&surface=all`, { signal: bounded.signal });
         if (!current()) return;
-        const payload = await readJsonOrThrow<{ models?: unknown }>(response, t("models.pickerOrder.usageFailed"));
+        const payload = await readJsonOrThrow<{ models?: unknown; usageIncomplete?: unknown }>(response, t("models.pickerOrder.usageFailed"));
         if (!current()) return;
+        if (payload?.usageIncomplete === true) throw new Error(t("models.pickerOrder.usageIncomplete"));
         if (!isModelPickerUsage(payload?.models)) throw new Error(t("models.pickerOrder.usageFailed"));
         usage = payload.models;
       }

@@ -33,6 +33,10 @@ export const ko: Record<TKey, string> = {
   "audio.error.network": "연결에 실패했습니다. 프록시 주소를 확인하세요.",
   "audio.error.timeout": "응답 시간이 초과됐습니다. 다시 시도하세요.",
   "audio.error.protocol": "음성 응답 형식이 맞지 않습니다. 제공자 호환성을 확인하세요.",
+
+  "usage.incomplete": "일부 사용량 기록을 집계하지 못했습니다. 횟수, 날짜, 순위는 읽을 수 있는 기록만 반영합니다.",
+  "models.pickerOrder.usageIncomplete": "사용량 이력이 불완전해 많이 사용한 순서를 저장할 수 없습니다. 다른 순서를 선택하거나 이력을 복구하세요.",
+  "api.attribution.noRecordedUse": "읽을 수 있는 기록에 사용 내역 없음",
   "models.pickerOrder.label": "모델 선택 순서",
   "models.pickerOrder.default": "기본값",
   "models.pickerOrder.alphabetical": "모델 이름순",

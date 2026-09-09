@@ -399,7 +399,7 @@ describe("attribution reaches usage.jsonl", () => {
     }
   });
 
-  test("an oversized usage row cannot seed a partial key rollup", async () => {
+  test.each(["keys-first", "usage-first"])("an oversized usage row preserves an explicitly incomplete key rollup: %s", async order => {
     saveConfig(remoteConfig());
     const now = Date.now();
     const oversized = {
@@ -428,11 +428,21 @@ describe("attribution reaches usage.jsonl", () => {
     writeFileSync(usageLogPath(), `${JSON.stringify(oversized)}\n${JSON.stringify(valid)}\n`);
     const server = startServer(0);
     try {
+      if (order === "usage-first") {
+        const usage = await fetch(new URL("/api/usage?range=all", server.url), {
+          headers: { "x-opencodex-api-key": ADMIN_TOKEN },
+        }).then(res => res.json());
+        expect(usage).toMatchObject({ usageIncomplete: true });
+      }
       const payload = await keysGet(server);
       const keys = payload.keys as Array<Record<string, unknown>>;
       expect((keys.find(key => key.id === "key-one")!.usage as Record<string, number>).totalRequests).toBe(0);
-      expect((keys.find(key => key.id === "key-two")!.usage as Record<string, number>).totalRequests).toBe(0);
-      expect(payload.attributionSince).toBeUndefined();
+      expect((keys.find(key => key.id === "key-two")!.usage as Record<string, number>).totalRequests).toBe(1);
+      expect(payload.attributionSince).toBe(new Date(now).toISOString());
+      expect(payload).toMatchObject({ usageIncomplete: true, usageIncompleteReason: "oversized_rows" });
+      expect(await keysGet(server)).toMatchObject({
+        usageIncomplete: true, usageIncompleteReason: "oversized_rows", attributionSince: payload.attributionSince,
+      });
     } finally {
       await server.stop(true);
     }

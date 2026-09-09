@@ -21,6 +21,8 @@ interface CostRow {
 }
 
 interface UsageReportInput {
+  usageIncomplete?: true;
+  usageIncompleteReason?: "oversized_rows";
   range?: string;
   surface?: string;
   since?: number | null;
@@ -109,11 +111,16 @@ function describeScope(data: UsageReportInput): string {
 export function formatUsageReport(data: UsageReportInput): string[] {
   const summary = data.summary ?? {};
   const lines: string[] = [describeScope(data), ""];
+  if (data.usageIncomplete === true) {
+    lines.push("WARNING: Usage is incomplete; some records could not be included. Totals and rankings reflect readable records only.", "");
+  }
 
   if (data.filter && !data.filter.matched) {
     const what = [data.filter.provider && `provider "${data.filter.provider}"`, data.filter.model && `model "${data.filter.model}"`]
       .filter(Boolean).join(" and ");
-    lines.push(`No usage recorded for ${terminalText(what)} in this range.`);
+    lines.push(data.usageIncomplete === true
+      ? `No matching readable usage records for ${terminalText(what)} in this range; skipped records may contain matches.`
+      : `No usage recorded for ${terminalText(what)} in this range.`);
     lines.push("Check the spelling against `ocx usage --json`, or widen --range.");
     return lines.map(terminalText);
   }

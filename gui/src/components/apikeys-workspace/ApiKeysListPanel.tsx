@@ -9,12 +9,15 @@
  */
 import { useT } from "../../i18n/shared";
 import { formatCreatedDate, type ApiKeyEntry } from "../../pages/api-keys-utils";
+import type { UsageReadMetadata } from "../../usage-summary-resource";
+import { UsageIncompleteNotice } from "../usage-incomplete-notice";
 
 export default function ApiKeysListPanel({
   keys,
   keysLoading,
   keysLoadFailed,
   attributionSince,
+  usageMetadata,
   localeTag,
   busy,
   onSelect,
@@ -24,6 +27,7 @@ export default function ApiKeysListPanel({
   keysLoadFailed: boolean;
   /** Absent means nothing is attributable yet — different from a counter reading zero. */
   attributionSince?: string;
+  usageMetadata?: UsageReadMetadata;
   localeTag?: string;
   /** A mutation is in flight; its result is bound to one key, so navigation waits. */
   busy: boolean;
@@ -39,6 +43,7 @@ export default function ApiKeysListPanel({
         </h3>
       </div>
 
+      <UsageIncompleteNotice data={usageMetadata} />
       {keysLoading ? (
         <div className="api-active-keys-skeleton" role="status" aria-label={t("common.loading")} />
       ) : keys.length === 0 ? (
@@ -83,7 +88,7 @@ export default function ApiKeysListPanel({
                       ? "—"
                       : k.usage.lastUsedAt
                         ? formatCreatedDate(k.usage.lastUsedAt, localeTag)
-                        : t("api.attribution.neverUsed")}
+                        : t(usageMetadata?.usageIncomplete ? "api.attribution.noRecordedUse" : "api.attribution.neverUsed")}
                   </td>
                 </tr>
               ))}

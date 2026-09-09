@@ -7,7 +7,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useKeyedClientResource } from "../../client-resource";
 import { createBoundedFetch } from "../../bounded-fetch";
-import { usageSummary30dResourceKey } from "../../usage-summary-resource";
+import { readUsageMetadata, usageSummary30dResourceKey, type UsageReadMetadata } from "../../usage-summary-resource";
+import { UsageIncompleteNotice } from "../usage-incomplete-notice";
 import { useT } from "../../i18n/shared";
 import { IconFilter, IconSearch, IconBoxes, IconGlobe, IconLock, IconKey, IconTrash } from "../../icons";
 import {
@@ -150,6 +151,9 @@ export default function ProviderWorkspaceShell({
   const [modelsLoadFailed, setModelsLoadFailed] = useState(false);
   const quotasCacheKey = `ocx.providers.quotas.v1:${apiBase}`;
   const usageCacheKey = `ocx.providers.usage.v2:${apiBase}`;
+  const [usageMetadata, setUsageMetadata] = useState<UsageReadMetadata>(() => (
+    readUsageMetadata(readSessionListCache(usageCacheKey))
+  ));
   const [usageTotals, setUsageTotals] = useState<Record<string, ProviderUsageTotals>>(() => (
     readSessionListCache<{ totals: Record<string, ProviderUsageTotals> }>(usageCacheKey)?.totals ?? {}
   ));
@@ -235,7 +239,9 @@ export default function ProviderWorkspaceShell({
       setUsageTotals(byProvider);
       const byProviderModels = buildProviderModelUsage(data.models ?? [], byProvider);
       setUsageModels(byProviderModels);
-      writeSessionListCache(usageCacheKey, { totals: byProvider, models: byProviderModels });
+      const metadata = readUsageMetadata(data);
+      setUsageMetadata(metadata);
+      writeSessionListCache(usageCacheKey, { totals: byProvider, models: byProviderModels, ...metadata });
       setUsageLoading(false);
     }, 0);
     return () => { cancelled = true; window.clearTimeout(timeout); };
@@ -561,6 +567,7 @@ export default function ProviderWorkspaceShell({
         </div>
         </aside>
         <main className="pws-main" aria-label={t("pws.workspaceMainAria")}>
+        {!jsonEditor?.open && <UsageIncompleteNotice data={usageMetadata} />}
         {jsonEditor?.open ? (
           <ProviderJsonEditor
             editor={jsonEditor}

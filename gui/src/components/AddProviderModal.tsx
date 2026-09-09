@@ -1,4 +1,5 @@
-import { usageSummary30dResourceKey } from "../usage-summary-resource";
+import { usageSummary30dResourceKey, type UsageReadMetadata } from "../usage-summary-resource";
+import { UsageIncompleteNotice } from "./usage-incomplete-notice";
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { IconX } from "../icons";
 import { useT } from "../i18n/shared";
@@ -97,7 +98,7 @@ export default function AddProviderModal({
     async (signal) => {
       const res = await fetch(`${apiBase}/api/usage?range=30d`, { signal });
       if (!res.ok) throw new Error(String(res.status));
-      return await res.json() as { providers?: Array<{ provider: string; requests: number }> };
+      return await res.json() as UsageReadMetadata & { providers?: Array<{ provider: string; requests: number }> };
     },
     { deadlineMs: 60_000 }, // shared usage-summary key: all four subscribers raise the deadline together
   );
@@ -270,6 +271,7 @@ export default function AddProviderModal({
           <button type="button" className="btn btn-ghost btn-icon" aria-label={t("common.close")} onClick={onClose}><IconX /></button>
         </div>
 
+        {!preset && <UsageIncompleteNotice data={usagePoll.data} />}
         {!preset ? (
           <ProviderCatalog
             presets={presets}
