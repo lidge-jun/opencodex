@@ -774,7 +774,7 @@ export interface OcxConfig {
   /** Auto-switch threshold (0-100). Default 80. 0 = disabled. */
   autoSwitchThreshold?: number;
   /** New-session account rotation strategy for the Codex pool. Default quota (today's behaviour). */
-  accountPoolStrategy?: OcxAccountPoolRotationStrategy;
+  accountPoolStrategy?: OcxAccountPoolRotationStrategy | "reset-first";
   /** Successful new-session binds retained on one round-robin selection. Default 1; range 1..100. */
   accountPoolStickyLimit?: number;
   /** Consecutive non-2xx upstream responses before switching future new threads. Default 3. 0 = disabled. */

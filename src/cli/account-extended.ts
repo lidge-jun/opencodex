@@ -44,7 +44,7 @@ const EXTENDED_USAGE = `Usage:
   ocx account pause <provider> <id|main> [--json]
   ocx account resume <provider> <id|main> [--json]
   ocx account pause-exhausted <provider> [--json]
-  ocx account strategy <provider> [<quota|round-robin|fill-first>] [--json]
+  ocx account strategy <provider> [<quota|round-robin|fill-first|reset-first>] [--json]
   ocx account sticky <provider> [<1-100>] [--json]
   ocx account remove <provider> <id|main> --yes [--json]
   ocx account clear-cooldown <provider> <id|main> [--json]

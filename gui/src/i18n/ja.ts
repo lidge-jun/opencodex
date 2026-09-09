@@ -1820,6 +1820,8 @@ export const ja: Record<TKey, string> = {
 
   "accountPool.strategy": "ローテーション戦略",
   "accountPool.strategyDesc": "OpenCodex が新規/未紐付けタスクへアカウントを割り当てる方法です。",
+  "accountPool.strategyResetFirst": "リセットが近い順",
+  "accountPool.strategyHintResetFirst": "使用率のしきい値未満のアカウントから、5時間枠または週次枠の次回リセットが最も近いものを優先します。紐付け済みタスクはしきい値到達時または失敗時のみ切り替わります。",
   "accountPool.strategyQuota": "クォータ",
   "accountPool.strategyRoundRobin": "ラウンドロビン",
   "accountPool.strategyFillFirst": "フィルファースト",

@@ -1416,6 +1416,8 @@ export const zh: Record<TKey, string> = {
 
   "accountPool.strategy": "轮换策略",
   "accountPool.strategyDesc": "OpenCodex 如何为新建/未绑定任务分配账号。",
+  "accountPool.strategyResetFirst": "额度即将刷新优先",
+  "accountPool.strategyHintResetFirst": "在低于用量阈值的账号中，优先选择 5 小时或周额度最早刷新的账号。已绑定任务仅在达到阈值或失败时切换。",
   "accountPool.strategyQuota": "配额",
   "accountPool.strategyRoundRobin": "轮询",
   "accountPool.strategyFillFirst": "填满优先",

@@ -1435,6 +1435,8 @@ export const ko: Record<TKey, string> = {
 
   "accountPool.strategy": "로테이션 전략",
   "accountPool.strategyDesc": "OpenCodex가 새 작업/바인딩 없는 작업에 계정을 배정하는 방식입니다.",
+  "accountPool.strategyResetFirst": "가장 가까운 초기화 우선",
+  "accountPool.strategyHintResetFirst": "사용량 임계값 미만인 계정 중 5시간 또는 주간 한도의 다음 초기화가 가장 가까운 계정을 우선합니다. 연결된 작업은 임계값 도달 또는 실패 시에만 전환됩니다.",
   "accountPool.strategyQuota": "할당량",
   "accountPool.strategyRoundRobin": "라운드로빈",
   "accountPool.strategyFillFirst": "필 퍼스트",

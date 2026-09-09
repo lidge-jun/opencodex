@@ -57,9 +57,9 @@ import {
   MAX_ACCOUNT_PRIORITY,
   MIN_ACCOUNT_PRIORITY,
   normalizeAccountPoolStickyLimit,
-  normalizeAccountPoolStrategy,
+  normalizeCodexAccountPoolStrategy,
   parseAccountPoolStickyLimit,
-  parseAccountPoolStrategy,
+  parseCodexAccountPoolStrategy,
   parseAccountPriority,
 } from "./pool-rotation";
 import { checkAccountIdCollision, getMainChatgptAccountId, readCodexTokens, readCodexTokensResult } from "./auth-collision";
@@ -2342,7 +2342,7 @@ export async function handleCodexAuthAPI(
       pinnedAccountId: pinnedCodexAccountId(runtimeConfig) ?? null,
       autoSwitchThreshold: runtimeConfig.autoSwitchThreshold ?? 80,
       upstreamFailoverThreshold: runtimeConfig.upstreamFailoverThreshold ?? 3,
-      accountPoolStrategy: normalizeAccountPoolStrategy(runtimeConfig.accountPoolStrategy),
+      accountPoolStrategy: normalizeCodexAccountPoolStrategy(runtimeConfig.accountPoolStrategy),
       accountPoolStickyLimit: normalizeAccountPoolStickyLimit(runtimeConfig.accountPoolStickyLimit),
     });
   }
@@ -2373,12 +2373,12 @@ export async function handleCodexAuthAPI(
       return jsonResponse({ error: "strategy or stickyLimit required" }, 400);
     }
     const runtimeConfig = getRuntimeConfig(config);
-    let nextStrategy: NonNullable<ReturnType<typeof parseAccountPoolStrategy>> | undefined;
+    let nextStrategy: NonNullable<ReturnType<typeof parseCodexAccountPoolStrategy>> | undefined;
     let nextSticky: NonNullable<ReturnType<typeof parseAccountPoolStickyLimit>> | undefined;
     if (body.strategy !== undefined) {
-      const parsed = parseAccountPoolStrategy(body.strategy);
+      const parsed = parseCodexAccountPoolStrategy(body.strategy);
       if (parsed === null) {
-        return jsonResponse({ error: 'strategy must be one of: quota, round-robin, fill-first' }, 400);
+        return jsonResponse({ error: 'strategy must be one of: quota, round-robin, fill-first, reset-first' }, 400);
       }
       nextStrategy = parsed;
     }
@@ -2394,7 +2394,7 @@ export async function handleCodexAuthAPI(
     saveRuntimeConfig(config, runtimeConfig);
     return jsonResponse({
       ok: true,
-      accountPoolStrategy: normalizeAccountPoolStrategy(runtimeConfig.accountPoolStrategy),
+      accountPoolStrategy: normalizeCodexAccountPoolStrategy(runtimeConfig.accountPoolStrategy),
       accountPoolStickyLimit: normalizeAccountPoolStickyLimit(runtimeConfig.accountPoolStickyLimit),
     });
   }

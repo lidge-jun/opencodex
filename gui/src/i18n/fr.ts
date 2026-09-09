@@ -1891,6 +1891,8 @@ export const fr: Record<TKey, string> = {
   "anthropicPool.off": "Désactivé",
   "accountPool.strategy": "Stratégie de rotation",
   "accountPool.strategyDesc": "Méthode utilisée par OpenCodex pour affecter un compte à une tâche nouvelle/non liée.",
+  "accountPool.strategyResetFirst": "Réinitialisation la plus proche",
+  "accountPool.strategyHintResetFirst": "Parmi les comptes sous le seuil, privilégier la prochaine réinitialisation de 5 heures ou hebdomadaire. Les tâches liées changent au seuil ou en cas d’échec.",
   "accountPool.strategyQuota": "Quota",
   "accountPool.strategyRoundRobin": "Rotation",
   "accountPool.strategyFillFirst": "Remplissage prioritaire",

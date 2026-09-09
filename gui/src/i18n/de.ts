@@ -1399,6 +1399,8 @@ export const de: Record<TKey, string> = {
 
   "accountPool.strategy": "Rotationsstrategie",
   "accountPool.strategyDesc": "Wie OpenCodex einer neuen/ungebundenen Aufgabe ein Konto zuweist.",
+  "accountPool.strategyResetFirst": "Nächste Rücksetzung zuerst",
+  "accountPool.strategyHintResetFirst": "Unterhalb der Nutzungsschwelle wird das Konto mit der nächsten 5-Stunden- oder Wochenrücksetzung bevorzugt. Gebundene Aufgaben wechseln erst an der Schwelle oder bei Fehlern.",
   "accountPool.strategyQuota": "Kontingent",
   "accountPool.strategyRoundRobin": "Round-Robin",
   "accountPool.strategyFillFirst": "Fill-first",

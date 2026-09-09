@@ -4,6 +4,8 @@ import {
   normalizeAccountPriority,
   notePoolRotationSuccess,
   parseAccountPriority,
+  parseAccountPoolStrategy,
+  parseCodexAccountPoolStrategy,
   peekRoundRobinAccount,
   pickRoundRobinAccount,
   selectPriorityTier,
@@ -30,6 +32,7 @@ import {
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/account-id";
 import { clearAccountQuota, updateAccountQuota } from "../../src/codex/auth-api";
+import { setAccountQuotaFromParsed } from "../../src/codex/quota";
 import { getConfigPath } from "../../src/config";
 import type { OcxConfig } from "../../src/types";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
@@ -335,6 +338,75 @@ describe("accountPoolStrategy new-session routing", () => {
     if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previousCodexHome;
     if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
+  });
+
+  test("reset-first is accepted only by the Codex strategy parser", () => {
+    expect(parseCodexAccountPoolStrategy("reset-first")).toBe("reset-first");
+    expect(parseAccountPoolStrategy("reset-first")).toBeNull();
+    expect(parseCodexAccountPoolStrategy("invalid")).toBeNull();
+  });
+
+  test("reset-first compares both windows, previews without writes, and uses the same failover order", () => {
+    const config = makeThreeAccountConfig({ accountPoolStrategy: "reset-first" });
+    const now = Date.now();
+    const seconds = now / 1000;
+    setAccountQuotaFromParsed("a", { weeklyPercent: 10, weeklyResetAt: seconds + 600, shortPercent: 10, shortResetAt: seconds + 300 });
+    setAccountQuotaFromParsed("b", { weeklyPercent: 60, weeklyResetAt: seconds + 100, shortPercent: 20, shortResetAt: seconds + 500 });
+    setAccountQuotaFromParsed("c", { weeklyPercent: 20, weeklyResetAt: seconds + 900, shortPercent: 30, shortResetAt: seconds + 200 });
+    expect(previewCodexAccountForRequest("reset-task", config, now)).toBe("b");
+    expect(config.activeCodexAccountId).toBe("a");
+    expect(getEffectiveActiveCodexAccountId(config)).toBe("a");
+    expect(resolveCodexAccountForThread("reset-task", config, now)).toBe("b");
+    expect(config.activeCodexAccountId).toBe("a");
+    expect(pickAlternateCodexAccount(config, "b", now)).toBe("c");
+  });
+
+  test("reset-first keeps affinity until either window reaches the threshold", () => {
+    const config = makeThreeAccountConfig({ accountPoolStrategy: "reset-first" });
+    const now = Date.now();
+    const seconds = now / 1000;
+    setAccountQuotaFromParsed("a", { weeklyPercent: 10, weeklyResetAt: seconds + 100 });
+    setAccountQuotaFromParsed("b", { weeklyPercent: 20, weeklyResetAt: seconds + 200 });
+    setAccountQuotaFromParsed("c", { weeklyPercent: 30, weeklyResetAt: seconds + 300 });
+    expect(resolveCodexAccountForThread("bound", config, now)).toBe("a");
+    setAccountQuotaFromParsed("b", { weeklyPercent: 20, weeklyResetAt: seconds + 50 });
+    expect(resolveCodexAccountForThread("bound", config, now)).toBe("a");
+    expect(resolveCodexAccountForThread("new", config, now)).toBe("b");
+    setAccountQuotaFromParsed("a", { weeklyPercent: 10, shortPercent: 80, shortResetAt: seconds + 10 });
+    expect(previewCodexAccountForRequest("bound", config, now)).toBe("b");
+    expect(resolveCodexAccountForThread("bound", config, now)).toBe("b");
+    setAccountQuotaFromParsed("b", { weeklyPercent: 80 });
+    expect(resolveCodexAccountForThread("bound", config, now)).toBe("c");
+  });
+
+  test("reset-first ignores past/missing resets and breaks ties by usage", () => {
+    const config = makeThreeAccountConfig({ accountPoolStrategy: "reset-first" });
+    const now = Date.now();
+    setAccountQuotaFromParsed("a", { weeklyPercent: 10, weeklyResetAt: now / 1000 - 1 });
+    setAccountQuotaFromParsed("b", { weeklyPercent: 30, weeklyResetAt: now / 1000 + 20 });
+    setAccountQuotaFromParsed("c", { weeklyPercent: 20, shortPercent: 10, shortResetAt: now / 1000 + 20 });
+    expect(resolveCodexAccountForThread(null, config, now)).toBe("c");
+    expect(resolveCodexAccountForThread(null, config, now + 20_000)).toBe("a");
+    clearAccountQuota();
+    expect(resolveCodexAccountForThread(null, config, now)).toBe("a");
+  });
+
+  test("reset-first preserves priority and availability and honors disabled thresholds", () => {
+    const config = makeThreeAccountConfig({ accountPoolStrategy: "reset-first" });
+    const now = Date.now();
+    setAccountQuotaFromParsed("a", { weeklyPercent: 90, weeklyResetAt: now / 1000 + 10 });
+    setAccountQuotaFromParsed("b", { weeklyPercent: 20, weeklyResetAt: now / 1000 + 20 });
+    setAccountQuotaFromParsed("c", { weeklyPercent: 10, weeklyResetAt: now / 1000 + 30 });
+    expect(resolveCodexAccountForThread(null, config, now)).toBe("b");
+    config.autoSwitchThreshold = 0;
+    expect(resolveCodexAccountForThread(null, config, now)).toBe("a");
+    config.autoSwitchThreshold = 80;
+    setCodexAccountPriority(config, "c", 2);
+    expect(resolveCodexAccountForThread(null, config, now)).toBe("c");
+    expect(pickAlternateCodexAccount(config, "c", now)).toBe("b");
+    setAccountQuotaFromParsed("b", { weeklyPercent: 95 });
+    setAccountQuotaFromParsed("c", { weeklyPercent: 99 });
+    expect(resolveCodexAccountForThread(null, config, now)).toBe("a");
   });
 
   test("round-robin strategy rotates unbound new sessions", () => {

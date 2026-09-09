@@ -32,6 +32,15 @@ export function parseAccountPoolStrategy(raw: unknown): OcxAccountPoolRotationSt
   return null;
 }
 
+/** Codex alone supports ordering by the next quota reset. */
+export function parseCodexAccountPoolStrategy(raw: unknown): OcxAccountPoolRotationStrategy | "reset-first" | null {
+  return raw === "reset-first" ? raw : parseAccountPoolStrategy(raw);
+}
+
+export function normalizeCodexAccountPoolStrategy(raw: unknown): OcxAccountPoolRotationStrategy | "reset-first" {
+  return parseCodexAccountPoolStrategy(raw) ?? DEFAULT_STRATEGY;
+}
+
 /** Strict parse for management APIs — returns null instead of defaulting. */
 export function parseAccountPoolStickyLimit(raw: unknown): number | null {
   if (typeof raw === "number" && Number.isInteger(raw) && raw >= MIN_STICKY_LIMIT && raw <= MAX_STICKY_LIMIT) {

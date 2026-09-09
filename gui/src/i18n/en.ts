@@ -1961,6 +1961,8 @@ export const en = {
 
   "accountPool.strategy": "Rotation strategy",
   "accountPool.strategyDesc": "How OpenCodex assigns an account to a new/unbound task.",
+  "accountPool.strategyResetFirst": "Soonest reset first",
+  "accountPool.strategyHintResetFirst": "Prefer the nearest future 5-hour or weekly reset among accounts below the usage threshold. Bound tasks switch only at the threshold or on failure.",
   "accountPool.strategyQuota": "Quota",
   "accountPool.strategyRoundRobin": "Round-robin",
   "accountPool.strategyFillFirst": "Fill-first",

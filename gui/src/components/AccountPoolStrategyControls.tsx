@@ -8,12 +8,14 @@ import { NumberStepper } from "./NumberStepper";
 import { Select } from "../ui";
 
 const STRATEGY_LABEL_KEYS = {
+  "reset-first": "accountPool.strategyResetFirst",
   quota: "accountPool.strategyQuota",
   "round-robin": "accountPool.strategyRoundRobin",
   "fill-first": "accountPool.strategyFillFirst",
 } as const;
 
 const STRATEGY_HINT_KEYS = {
+  "reset-first": "accountPool.strategyHintResetFirst",
   quota: "accountPool.strategyHintQuota",
   "round-robin": "accountPool.strategyHintRoundRobin",
   "fill-first": "accountPool.strategyHintFillFirst",
@@ -21,6 +23,7 @@ const STRATEGY_HINT_KEYS = {
 
 export interface AccountPoolStrategyControlsProps {
   strategy: AccountPoolStrategy;
+  codex?: boolean;
   stickyDraft: string;
   disabled?: boolean;
   strategySelectId?: string;
@@ -41,6 +44,7 @@ export interface AccountPoolStrategyControlsProps {
  */
 export default function AccountPoolStrategyControls({
   strategy,
+  codex = false,
   stickyDraft,
   disabled = false,
   strategySelectId = "account-pool-strategy",
@@ -50,7 +54,7 @@ export default function AccountPoolStrategyControls({
   onStickyCommit,
 }: AccountPoolStrategyControlsProps) {
   const t = useT();
-  const strategyOptions = ACCOUNT_POOL_STRATEGIES.map((value) => ({
+  const strategyOptions = ACCOUNT_POOL_STRATEGIES.filter(value => codex || value !== "reset-first").map((value) => ({
     value,
     label: t(STRATEGY_LABEL_KEYS[value]),
   }));

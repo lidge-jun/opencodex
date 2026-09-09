@@ -1909,6 +1909,8 @@ export const tr: Record<TKey, string> = {
 
   "accountPool.strategy": "Rotasyon stratejisi",
   "accountPool.strategyDesc": "OpenCodex'in yeni bir göreve nasıl hesap atayacağı.",
+  "accountPool.strategyResetFirst": "En yakın sıfırlama önce",
+  "accountPool.strategyHintResetFirst": "Kullanım eşiğinin altındaki hesaplardan 5 saatlik veya haftalık kotası en erken sıfırlanacak olanı seçer. Bağlı görevler yalnızca eşiğe ulaşınca veya hata durumunda geçiş yapar.",
   "accountPool.strategyQuota": "Kota",
   "accountPool.strategyRoundRobin": "Round-robin",
   "accountPool.strategyFillFirst": "İlk doldurma",

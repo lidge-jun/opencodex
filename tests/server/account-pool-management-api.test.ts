@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleCodexAuthAPI } from "../../src/codex/auth-api";
-import { saveConfig } from "../../src/config";
+import { loadConfig, saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -98,6 +98,22 @@ describe("Codex account pool strategy management API", () => {
     });
     expect(config.accountPoolStrategy).toBe("fill-first");
     expect(config.accountPoolStickyLimit).toBe(7);
+  });
+
+  test("reset-first survives management save and config reload", async () => {
+    const config = makeCodexConfig();
+    const req = new Request("http://localhost/api/codex-auth/pool-strategy", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ strategy: "reset-first" }),
+    });
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+    expect(resp!.status).toBe(200);
+    expect((await resp!.json()).accountPoolStrategy).toBe("reset-first");
+    expect(loadConfig().accountPoolStrategy).toBe("reset-first");
+    const read = new Request("http://localhost/api/codex-auth/active");
+    const active = await handleCodexAuthAPI(read, new URL(read.url), loadConfig());
+    expect((await active!.json()).accountPoolStrategy).toBe("reset-first");
   });
 
   test("PATCH /api/codex-auth/pool-strategy accepts round-robin", async () => {

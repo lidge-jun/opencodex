@@ -90,6 +90,7 @@ describe("account pool strategy helpers", () => {
     expect(normalizeAccountPoolStrategy("quota")).toBe("quota");
     expect(normalizeAccountPoolStrategy("round-robin")).toBe("round-robin");
     expect(normalizeAccountPoolStrategy("fill-first")).toBe("fill-first");
+    expect(normalizeAccountPoolStrategy("reset-first")).toBe("reset-first");
     expect(normalizeAccountPoolStrategy("weighted")).toBe(DEFAULT_ACCOUNT_POOL_STRATEGY);
     expect(normalizeAccountPoolStrategy(undefined)).toBe("quota");
   });
@@ -175,6 +176,19 @@ describe("AccountPoolStrategyControls", () => {
     expect(rr).toContain("Round-robin");
     expect(rr).toContain("New/unbound assignments before rotate");
     expect(rr).toContain('value="2"');
+  });
+
+  test("reset-first renders the dual-window threshold explanation", () => {
+    const markup = renderToStaticMarkup(
+      <LanguageProvider>
+        <AccountPoolStrategyControls codex strategy="reset-first" stickyDraft="1"
+          onStrategyChange={() => {}} onStickyDraftChange={() => {}} onStickyCommit={() => {}} />
+      </LanguageProvider>,
+    );
+    expect(markup).toContain("Soonest reset first");
+    expect(markup).toContain("nearest future 5-hour or weekly reset");
+    expect(markup).toContain("Bound tasks switch only at the threshold or on failure");
+    expect(markup).not.toContain("New/unbound assignments before rotate");
   });
 
   test("renders a canonical setting row: visible name, control beside it, no sr-only label", () => {
