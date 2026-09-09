@@ -550,21 +550,21 @@ A JSON Schema `pattern` written for JavaScript may use Unicode property escapes 
 so a single such pattern on one built-in tool fails every request in the session, not just calls
 to that tool.
 
-To keep those sessions working, the `openai-chat` and `openai-responses` adapter paths omit the
-regexes that use Unicode property escapes when translating tool schemas: a `pattern` value, and a
-`patternProperties` key, which the destination compiles the same way. Everything else on the tool
-is preserved: sibling constraints such as `minLength`, `enum`, or `format`, the `required` list,
-other `patternProperties` entries, and any property a caller happened to name `pattern`. A regex
-that Python can compile, including one using lookaheads, is passed through unchanged.
+To keep ordinary Artifact parameters working, the `openai-chat` and `openai-responses` adapter
+paths omit scalar `pattern` constraints containing Unicode property escapes in ordinary positive
+schema positions. Sibling constraints, `required`, literal data and supported regexes remain.
+A tool implementation must validate its own inputs because an omitted constraint is not enforced
+by this proxy.
 
-A `patternProperties` key is only omitted where doing so cannot narrow the object. Dropping a
-matcher moves the keys it covered to `additionalProperties`, so on an open object those keys stay
-admissible and the tool merely loses a constraint. On a closed object — `additionalProperties:
-false`, `additionalProperties` set to a schema, or `unevaluatedProperties: false` — the same drop
-would forbid or re-constrain those keys, and a dictionary tool whose only matcher was regex-keyed
-would admit nothing once `minProperties` is 1. Such an object is sent exactly as written: a
-destination that compiles ECMA regexes still accepts it, and one that cannot reports the regex
-itself rather than receiving a schema no argument can satisfy.
+`patternProperties` matchers and their value schemas remain unchanged. Removing a matcher can
+change which keys are evaluated by an ancestor's `unevaluatedProperties`, so local openness is
+not enough to prove a safe transformation. Patterns under `not`, `oneOf`, `if`, `contains`,
+`$defs` and `definitions` also remain unchanged: relaxing those subtrees can change negation,
+branch selection, match counts or the meaning of a reference.
+
+The destination validates these preserved schemas. An ECMA-compatible destination can use the
+original regex; a destination that cannot compile it may reject the schema. OpenCodex does not
+silently replace that contract with one that forbids previously valid arguments.
 
 This is normalization on the selected adapter path, not a provider-wide guarantee. Provider
 configuration and authentication are untouched, and a provider on a different adapter is

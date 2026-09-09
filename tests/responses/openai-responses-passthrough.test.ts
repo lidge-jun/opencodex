@@ -1532,6 +1532,35 @@ describe("OpenAI Responses passthrough sanitization", () => {
     expect(body.tools[0]?.parameters).toEqual(parameters);
   });
 
+
+  test.each(["allOf", "not", "oneOf"] as const)("Responses wire preserves composed %s argument constraints", kind => {
+    const matcher = "^\\p{L}+$";
+    const parameters = kind === "allOf" ? {
+      type: "object", minProperties: 1, unevaluatedProperties: false,
+      allOf: [{ patternProperties: { [matcher]: { type: "string" } } }],
+    } : kind === "not" ? {
+      type: "object", required: ["value"],
+      properties: { value: { not: { type: "string", pattern: matcher } } },
+    } : {
+      type: "object", required: ["value"],
+      properties: { value: { oneOf: [{ type: "string", pattern: matcher }, { const: "123" }] } },
+    };
+    const original = JSON.stringify(parameters);
+    // Witnesses are accepted before normalization: {name:"ok"} evaluates its sole key in
+    // allOf; {value:"123"} fails the letter pattern, satisfying not or exactly one branch.
+    expect(new RegExp(matcher, "u").test("name")).toBe(true);
+    expect(new RegExp(matcher, "u").test("123")).toBe(false);
+
+    const request = createResponsesPassthroughAdapter(provider).buildRequest({
+      modelId: "test-model", context: { messages: [] }, stream: true, options: {},
+      _rawBody: { model: "test-model", input: [], tools: [{ type: "function", name: "Composed", parameters }] },
+    }, { headers: new Headers() });
+    const wire = JSON.parse(request.body) as { tools: Array<{ parameters: unknown }> };
+    expect(wire.tools).toHaveLength(1);
+    expect(wire.tools[0].parameters).toEqual(JSON.parse(original));
+    expect(JSON.stringify(parameters)).toBe(original);
+  });
+
   test("model reasoning-summary opt-out strips unsupported delivery fields (#323)", () => {
     const adapter = createResponsesPassthroughAdapter({
       adapter: "openai-responses",
