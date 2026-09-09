@@ -33,6 +33,10 @@ than it saves. Everything else stays NOT RUN and is labelled as such rather than
 
 ## Push and PR
 
+Landed as [#4151](https://github.com/lidge-jun/opencodex/pull/4151), base `dev`, head
+`codex/readme-i18n-parity`, pushed with `--no-verify`. CI dispatched on the pushed head as run
+`34405975400`.
+
 `git push --no-verify -u origin codex/readme-i18n-parity`, then a pull request against `dev`
 — never `main` — with `.github/PULL_REQUEST_TEMPLATE.md` filled: Summary, Verification,
 Checklist. The Verification section carries the table above verbatim, including the NOT RUN
