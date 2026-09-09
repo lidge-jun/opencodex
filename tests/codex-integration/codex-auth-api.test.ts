@@ -134,6 +134,7 @@ async function completeMockCodexOAuth(options: {
   oauthAccountId: string;
   email: string;
   onWarmup: () => void;
+  warmupResponse?: () => Response;
   usageResponse?: () => Response;
   convergeCodexCatalog?: () => Promise<CatalogDisposition>;
 }): Promise<{
@@ -181,7 +182,7 @@ async function completeMockCodexOAuth(options: {
     }
     if (target === "https://chatgpt.com/backend-api/codex/responses") {
       options.onWarmup();
-      return new Response('event: response.completed\ndata: {"type":"response.completed"}\n\n', {
+      return options.warmupResponse?.() ?? new Response('event: response.completed\ndata: {"type":"response.completed"}\n\n', {
         status: 200,
         headers: { "Content-Type": "text/event-stream" },
       });
@@ -5065,6 +5066,89 @@ describe("codex-auth API", () => {
       statusSpy.mockRestore();
       openSpy.mockRestore();
     }
+  });
+
+  test("OAuth creation reports a rate-limited warmup without persisting the account", async () => {
+    const accountId = "warmup-rate-limited";
+    const config = makeConfig();
+    let warmupRequests = 0;
+
+    const result = await completeMockCodexOAuth({
+      config,
+      requestBody: { id: accountId },
+      oauthAccountId: "acct-warmup-rate-limited",
+      email: "warmup-rate-limited@example.test",
+      onWarmup: () => { warmupRequests += 1; },
+      warmupResponse: () => new Response("private upstream quota details", { status: 429 }),
+    });
+
+    expect(result.startStatus).toBe(200);
+    expect(result.state).toMatchObject({
+      status: "error",
+      code: "codex_warmup_rate_limited",
+    });
+    expect(result.state.error).toContain("usage limit");
+    expect(result.state.error).toContain("Retry");
+    expect(JSON.stringify(result.state)).not.toContain("private upstream quota details");
+    expect(warmupRequests).toBe(1);
+    expect(config.codexAccounts).toEqual([]);
+    expect(getCodexAccountCredential(accountId)).toBeNull();
+    expect(readCodexAccountRecord(accountId)).toBeNull();
+  });
+
+  test.each([401, 403])("OAuth creation keeps HTTP %s warmup failures on the authentication path", async status => {
+    const accountId = `warmup-auth-${status}`;
+    const config = makeConfig();
+
+    const result = await completeMockCodexOAuth({
+      config,
+      requestBody: { id: accountId },
+      oauthAccountId: `acct-warmup-auth-${status}`,
+      email: `warmup-auth-${status}@example.test`,
+      onWarmup: () => {},
+      warmupResponse: () => new Response("private upstream auth details", { status }),
+    });
+
+    expect(result.state).toMatchObject({
+      status: "error",
+      code: "codex_warmup_failed",
+    });
+    expect(result.state.error).toContain("Reauthenticate");
+    expect(JSON.stringify(result.state)).not.toContain("private upstream auth details");
+    expect(config.codexAccounts).toEqual([]);
+    expect(getCodexAccountCredential(accountId)).toBeNull();
+  });
+
+  test("OAuth reauth keeps the existing credential when warmup is rate limited", async () => {
+    const accountId = "warmup-rate-limited-reauth";
+    const config = makeConfig({
+      codexAccounts: [{ id: accountId, email: "existing@example.test", isMain: false }],
+    });
+    const existingCredential = {
+      accessToken: "existing-access",
+      refreshToken: "existing-refresh",
+      expiresAt: Date.now() + 60_000,
+      chatgptAccountId: "acct-warmup-rate-limited-reauth",
+    };
+    saveCodexAccountCredential(accountId, existingCredential);
+
+    const result = await completeMockCodexOAuth({
+      config,
+      requestBody: { id: accountId, reauth: true },
+      oauthAccountId: existingCredential.chatgptAccountId,
+      email: "existing@example.test",
+      onWarmup: () => {},
+      warmupResponse: () => new Response("private upstream quota details", { status: 429 }),
+    });
+
+    expect(result.state).toMatchObject({
+      status: "error",
+      code: "codex_warmup_rate_limited",
+    });
+    expect(getCodexAccountCredential(accountId)).toEqual(existingCredential);
+    expect(config.codexAccounts).toEqual([
+      { id: accountId, email: "existing@example.test", isMain: false },
+    ]);
   });
 
   test("OAuth creation rejects a namespace claimed during warmup without persisting", async () => {

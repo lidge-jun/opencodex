@@ -714,6 +714,11 @@ details are surfaced without exposing raw response bodies. Background revalidati
 off by default; it runs only when Token Guardian is enabled, the `chatgpt` refresh policy is
 `proactive`, and `tokenGuardian.codexWarmupEnabled` is true.
 
+An HTTP 429 warmup failure means the request was rate-limited. Check the account's usage limits
+and retry after the limit resets or the temporary restriction clears; signing in again does not
+reset those limits. The account is still not added until warmup succeeds. Authentication failures
+continue to require reauthentication.
+
 ## Restoring native Codex
 
 `ocx stop` stops the proxy and any installed background service, then attempts to restore native Codex. OpenCodex removes verified routing artifacts and reports an incomplete restore when it cannot safely recover configuration files.

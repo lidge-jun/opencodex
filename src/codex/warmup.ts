@@ -43,7 +43,7 @@ async function drainErrorBody(res: Response, signal: AbortSignal): Promise<void>
       fatalUtf8: true,
     });
   } catch (error) {
-    if (signal.aborted) {
+    if (signal.aborted && res.status !== 429) {
       throw new CodexWarmupError("transport", "Codex warmup request failed", {
         cause: error,
       });
