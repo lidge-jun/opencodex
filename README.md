@@ -110,7 +110,7 @@ See [SPONSORS.md](./SPONSORS.md).
 <table>
 <tbody>
 <tr>
-<td width="180"><a href="https://www.orcarouter.ai/?utm_source=opencodex&utm_medium=readme"><img src="https://raw.githubusercontent.com/lidge-jun/opencodex/main/assets/sponsors/orcarouter.png" alt="OrcaRouter" width="150"></a></td>
+<td width="180"><a href="https://www.orcarouter.ai/?utm_source=opencodex&utm_medium=readme"><img src="assets/sponsors/orcarouter.png" alt="OrcaRouter" width="150"></a></td>
 <td>Thanks to <a href="https://www.orcarouter.ai/?utm_source=opencodex&utm_medium=readme">OrcaRouter</a> for sponsoring this project! OrcaRouter is one OpenAI-compatible AI gateway for production AI: adaptive routing that grades every prompt and sends it to the model that clears your bar, automatic failover, routing rules as code, zero-markup provider pricing with prompt caching, and guardrails, an agent firewall, and request logs on every call across 200+ models. Pick <code>OrcaRouter</code> in the Add provider picker or run <code>ocx provider add orcarouter</code>; <code>orcarouter/auto</code> is the adaptive router.</td>
 </tr>
 </tbody>
