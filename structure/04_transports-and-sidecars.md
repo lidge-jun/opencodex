@@ -413,7 +413,10 @@ logic fills absent values and preserves explicit false; renamed custom configura
 no new destination-based migration. The existing stateless pass sets `store: false`, removes
 stored continuation parameters, and repairs orphan calls/results without claiming execution
 success. A local replay-cache hit supplies history; a miss cannot reconstruct it, so callers
-must resend complete history without `previous_response_id`. This flag also enables the existing
+receive `previous_response_not_found` before upstream dispatch and must resend complete history
+without `previous_response_id`. Routed custom-tool lowering also requires this recovery when a
+delta result lacks its call and the original wire type cannot be established. Stateful native
+function and native-only custom continuations retain upstream-owned resolution. This flag also enables the existing
 visible content-to-summary rewrite for SSE and JSON; summary-channel items and opaque reasoning
 blobs keep their existing response handling. The shared recording callback applies the same
 reasoning rewrite under the exact client-visible predicate before caching output, after tool

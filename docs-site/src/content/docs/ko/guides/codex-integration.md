@@ -128,6 +128,15 @@ upstream 요청 전에 `previous_response_not_found`를 반환합니다. Codex W
 `previous_response_id` 없이 전체 컨텍스트를 다시 보내야 합니다. 같은 ID만 재시도해서는
 누락된 상태를 복구할 수 없습니다.
 
+`statelessResponses: true`인 routed Responses provider에도 같은 복구 신호가 적용됩니다.
+또한 routed 경로에서 custom 도구를 function으로 변환하지만 증분 결과에 대응하는
+로컬 호출 기록이 없으면 전체 기록을 요청합니다. 호출, 결과, reasoning을 함께 재생하며
+결과 유형을 추측하거나 버리지 않습니다. 상태를 저장하는 provider의 네이티브 function 및
+네이티브 custom 전용 continuation은 그대로 전달됩니다. 이 검사는 모델명이 아니라 선택된
+wire protocol과 도구 선언을 따릅니다. 저장된 response ID를 복원하지 못하는 gateway에는
+해당 provider의 `statelessResponses`를 명시적으로 활성화하세요. 다른 provider의 기본값은
+바뀌지 않습니다.
+
 ## 스레드 식별자와 대화 기록
 
 기본 loopback 형식은 새 thread에 네이티브 `openai` provider 태그를 유지하므로 일반적인 resume history는 다시 매핑할 필요가 없습니다. sync와 restore는 일치하는 백업 manifest만 적용하여 각 thread의 원래 provider, source, event marker를 정확히 복원합니다. manifest가 없는 `opencodex` row는 변경하지 않으며, legacy 재태깅을 명시적으로 강제하려는 경우에만 `ocx recover-history --legacy-openai --yes`를 사용합니다. 이 명령은 의도적으로 범위가 넓습니다. 사용자 메시지가 있고 현재 `opencodex`로 표시된 모든 thread를 `openai`로 바꾸고, `exec`를 `cli`로 정규화하며 event marker를 설정합니다. 정상적인 dedicated-provider history도 포함됩니다. 상태를 백업하고 이 전체 범위를 의도한 경우에만 사용하세요. non-loopback 전용 provider 모드는 활성 상태일 때만 history를 `opencodex` provider 아래로 미러링하고, 종료할 때는 백업된 메타데이터를 복원합니다. history를 건드리지 않으려면 `syncResumeHistory: false`로 설정하세요.

@@ -938,7 +938,8 @@ representation returned to the client, including the visible content-to-summary 
 echoing full history with `previous_response_id` does not duplicate that history. Hidden-summary
 requests and opaque reasoning blobs retain their existing representation. Cache hits can also
 supply earlier history for delta continuations;
-after a cache miss, resend the complete conversation without `previous_response_id`. Stateless
+after a cache miss, the proxy returns `previous_response_not_found` before upstream dispatch so
+the client can resend the complete conversation without `previous_response_id`. Stateless
 repair labels orphan results and missing tool results; it cannot reconstruct lost history or
 prove whether a missing tool execution succeeded.
 
