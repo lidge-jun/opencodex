@@ -589,6 +589,13 @@ Both modes route to `https://api.orcarouter.ai/v1` and discover the public live 
 whether Codex offers image attachments. Because the catalog itself is public, manual key setup
 reports validation as unknown instead of accepting that response as proof that the key works.
 
+During OrcaRouter browser sign-in (`ocx login orcarouter-oauth`), a successful key-exchange
+response body must be valid UTF-8 JSON no larger than 64 KiB. The request's existing 30-second
+budget covers both the response headers and the full body; oversized or malformed bodies are
+rejected before the key is saved. These limits apply only to the login key exchange, not inference
+request payloads. Scope validation is unchanged: an omitted `scope` is allowed, while an explicitly
+invalid `scope` is rejected.
+
 For a one-origin self-hosted deployment, set the shared origin before the first PKCE login; the saved
 inference URL is derived from the same origin:
 

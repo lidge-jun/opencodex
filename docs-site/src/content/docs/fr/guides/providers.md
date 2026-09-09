@@ -430,6 +430,13 @@ URL de base modifiée ressemblant à l'original n'est jamais sondée. Les crédi
 gratuits restants sont affichés sous forme de fenêtre en USD lorsque Command Code signale également les
 dépenses de la période.
 
+Lors de la connexion à OrcaRouter par navigateur (`ocx login orcarouter-oauth`), le corps d’une
+réponse réussie à l’échange de clé doit être un JSON UTF-8 valide d’au plus 64 KiB. Le délai existant
+de 30 secondes pour cette requête couvre les en-têtes et la réception complète du corps ; tout corps
+trop volumineux ou mal formé est rejeté avant l’enregistrement de la clé. Ces limites concernent
+uniquement l’échange de clé à la connexion, pas les données des requêtes d’inférence. La validation
+de `scope` reste inchangée : son absence est autorisée, mais une valeur explicitement invalide est rejetée.
+
 **Découverte SambaNova Cloud.** Le préréglage lit la liste publique `/v1/models` de SambaNova Cloud depuis
 l'hôte API fixe, préserve les identifiants natifs du fournisseur et limite la découverte à 128 KiB et 128
 lignes brutes. Le catalogue n'étant pas authentifié, le parcours de connexion de la CLI signale que la clé ne

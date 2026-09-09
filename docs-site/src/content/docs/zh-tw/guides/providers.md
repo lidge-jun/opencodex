@@ -364,6 +364,11 @@ endpoint 取得。Chat request 使用設定的 Bearer key。可在
 
 **Command Code 配額。** 儀表板與 `ocx account refresh` 會在正規主機 `https://api.commandcode.ai` 探測 `/alpha/billing/credits` 視窗（5 小時與每週）。OAuth preset (`command-code`) 使用已儲存的帳號 bearer；Provider-API key preset (`commandcode`) 使用目前設定的有效 key。使用者改寫過的仿冒 base URL 不會被探測。當 Command Code 同時回報週期消耗時，剩餘的 monthly / purchased / free credits 會顯示為 USD 視窗。
 
+OrcaRouter 瀏覽器登入（`ocx login orcarouter-oauth`）的金鑰交換成功回應本文必須是不超過
+64 KiB 的有效 UTF-8 JSON。此交換請求原有的 30 秒時限涵蓋回應標頭與完整本文的接收；過大或
+格式錯誤的本文會在儲存金鑰前被拒絕。這些限制只適用於登入時的金鑰交換，不是推論請求酬載的
+限制。`scope` 驗證規則維持不變：允許省略，明確無效的值仍會被拒絕。
+
 **SambaNova Cloud 探索。** preset 從固定 API host 讀取 SambaNova Cloud 公開的 `/v1/models` 列表，保留
 provider-native id，並把 discovery 限制在 128 KiB／128 個 raw row。因 catalog 不需要認證，CLI login
 流程會把 key 回報為 unverifiable，而不會把公開 response 當成有效 key 的證明。Chat request 仍使用
