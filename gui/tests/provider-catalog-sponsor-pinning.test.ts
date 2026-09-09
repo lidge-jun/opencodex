@@ -25,8 +25,9 @@ test("sponsors are pinned first, Main before Standard, alphabetical within a tie
 });
 
 test("alphabetical among sponsors ignores registry position and case", () => {
-  const input = [row("b", "bravo", "standard"), row("a", "Alpha", "standard"), row("c", "Charlie", "standard")];
-  expect(pinSponsors(input).map(p => p.id)).toEqual(["a", "b", "c"]);
+  // Ids run z, y, x against labels bravo, ALPHA, charlie: sorting by id instead of label fails here.
+  const input = [row("z", "bravo", "standard"), row("y", "ALPHA", "standard"), row("x", "charlie", "standard")];
+  expect(pinSponsors(input).map(p => p.id)).toEqual(["y", "z", "x"]);
 });
 
 test("with no sponsors the input order is returned as-is", () => {

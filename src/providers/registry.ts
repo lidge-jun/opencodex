@@ -1429,7 +1429,6 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     authKind: "oauth",
     oauthId: "orcarouter-oauth",
     featured: true,
-    sponsor: { tier: "standard", url: "https://www.orcarouter.ai/?utm_source=opencodex&utm_medium=readme" },
     allowBaseUrlOverride: true,
     defaultModel: "openai/gpt-5.5",
     models: ORCAROUTER_MODELS,

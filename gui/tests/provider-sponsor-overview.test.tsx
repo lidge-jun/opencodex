@@ -42,7 +42,9 @@ test("sponsor is matched by id, adapter and complete endpoint, tolerating traili
   expect(matchingWorkspacePreset(item, [])).toBeUndefined();
 });
 
-test("Orca API and OAuth render disclosed sponsor links, keeping affiliate parameters", () => {
+test("key and OAuth sponsor presets render disclosed links, keeping affiliate parameters", () => {
+  // Only the key-auth `orcarouter` row carries `sponsor` in the registry today, so the oauth
+  // case is the property that an auth mode never suppresses the block — not a second pinned row.
   for (const preset of [orca, { ...orca, id: "orcarouter-oauth", auth: "oauth" as const }]) {
     const html = render(preset, configured(preset));
     expect(html).toContain("pws-sponsor-badge");
