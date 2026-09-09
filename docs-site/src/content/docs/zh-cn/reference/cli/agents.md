@@ -75,7 +75,7 @@ API key，且绝不会回退到 native alias。启用这组兼容选项前，请
 ocx observe usage --range 30d --json
 ```
 
-部分用量记录无法计入时，人类可读输出会保留可读取的总数并显示警告。没有记录或筛选匹配时也会警告，因为被跳过的记录可能包含匹配项。`--json` 原样保留响应中的 `usageIncomplete` 诊断及原因。
+部分用量记录无法计入时，人类可读输出会显示警告，即使没有可读取的记录也是如此。显示的总数仅反映可读取的记录。如果筛选条件没有匹配到可读取的记录，输出将显示警告和提示，而不显示总数行；被跳过的记录可能包含匹配项。`--json` 原样保留响应中的 `usageIncomplete` 诊断及原因。
 
 ### `ocx debug <provider|usage|injection|claude> <on|off|status|reset|logs [-f]>`
 

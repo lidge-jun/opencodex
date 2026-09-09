@@ -98,7 +98,7 @@ Inspectez les requêtes de proxy, l’utilisation, le stockage, la mémoire et l
 ocx observe usage --range 30d --json
 ```
 
-Si certains enregistrements ne peuvent pas être inclus, la sortie lisible affiche un avertissement et conserve les totaux lisibles, même sans ligne ou correspondance de filtre. Des lignes ignorées peuvent contenir des correspondances. `--json` préserve le diagnostic `usageIncomplete` et sa raison.
+Si certains enregistrements ne peuvent pas être inclus, la sortie lisible affiche un avertissement, même sans ligne lisible. Les totaux affichés ne reflètent que les enregistrements lisibles. Si un filtre ne trouve aucune correspondance lisible, la sortie affiche l'avertissement et des indications au lieu des lignes de totaux ; les enregistrements ignorés peuvent contenir des correspondances. `--json` préserve le diagnostic `usageIncomplete` et sa raison.
 
 ### `ocx debug <provider|usage|injection|claude> <on|off|status|reset|logs [-f]>`
 

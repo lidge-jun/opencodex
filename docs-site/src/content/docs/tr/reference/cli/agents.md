@@ -111,7 +111,7 @@ verilerini inceleyin. Doğrudan takma adlar şunlardır:
 ocx observe usage --range 30d --json
 ```
 
-Bazı kullanım kayıtları dahil edilemiyorsa okunabilir çıktı mevcut toplamları koruyarak uyarı gösterir. Satır veya filtre eşleşmesi olmadığında da uyarı görünür; atlanan satırlar eşleşme içerebilir. `--json`, yanıttaki `usageIncomplete` tanısını ve nedenini korur.
+Bazı kullanım kayıtları dahil edilemiyorsa okunabilir çıktı, okunabilir satır olmadığında da uyarı gösterir. Gösterilen toplamlar yalnızca okunabilir kayıtları yansıtır. Filtreyle eşleşen okunabilir kayıt yoksa toplam satırları yerine uyarı ve yönlendirme gösterilir; atlanan kayıtlar eşleşme içerebilir. `--json`, yanıttaki `usageIncomplete` tanısını ve nedenini korur.
 
 ### `ocx debug <provider|usage|injection|claude> <on|off|status|reset|logs [-f]>`
 
