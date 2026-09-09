@@ -10,7 +10,7 @@ Reading this as: a dense local analytics page for a single operator who reads th
 every time and reaches for an explicit interval rarely, in the quiet utilitarian language the rest
 of the dashboard already speaks. Tokens come from `gui/src/styles.css`; nothing new is invented.
 
-```
+```text
 DESIGN_VARIANCE: 3
 MOTION_INTENSITY: 1
 Product density profile: D5
