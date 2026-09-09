@@ -45,7 +45,7 @@ const matcherVectors = [
   "bun C:/tools/bun/install/global/node_modules/@bitkyc08/opencodex/src/cli.ts start",
   "bun C:/tools/bun/install/global/node_modules/@bitkyc08/.opencodex-3f2a/src/cli/index.ts start",
   "opencodex start",
-  "C:/Users/u/AppData/Roaming/npm/ocx.cmd start",
+  "C:/Users/example/AppData/Roaming/npm/ocx.cmd start",
   "/usr/local/bin/ocx start --port 10100",
   "/home/u/.opencodex/bin/opencodex start",
   "bun run src/cli.ts status",
