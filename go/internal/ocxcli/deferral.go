@@ -145,7 +145,10 @@ var deferredSurfaces = []TSDeferral{
 	{
 		Kind: WholeCommand, Name: "update",
 		Reason: "Network release fetch + in-place self-replace; no hermetic byte-diff " +
-			"oracle can drive it.",
+			"oracle can drive it. Permanently Bun-dependent by owner decision " +
+			"(grill 2026-09-09): archived as design, not a flip candidate; a port would " +
+			"re-implement the network/self-replace risk surface for marginal standalone " +
+			"gain. Revisit only with a hermetic release-server harness.",
 		Track: "waxiangzi/opencodex#56",
 	},
 

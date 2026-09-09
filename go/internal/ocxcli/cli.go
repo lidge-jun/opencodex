@@ -101,9 +101,13 @@ var Commands = []Command{
 	// bound pairing-grant capability the dashboard uses, and the bare command
 	// opens the dashboard URL of the attested live proxy.
 	{Name: "gui", Usage: "ocx gui", Summary: "Open the dashboard.", Owner: GoOwned},
-	// update stays TypeScript-owned (issue #54 remainder; follow-up:
-	// waxiangzi/opencodex#56): `ocx update` performs a network release fetch +
-	// in-place self-replace, so no hermetic byte-diff oracle can drive it.
+	// update stays TypeScript-owned by design (owner decision 2026-09-09,
+	// grilling session on the migration close-out): `ocx update` performs a
+	// network release fetch + in-place self-replace, so no hermetic byte-diff
+	// oracle can drive it. It is archived as a permanently Bun-dependent
+	// surface, not a flip candidate — a Go port would re-implement the
+	// network/self-replace risk surface for marginal standalone gain. Revisit
+	// only if a hermetic release-server harness ever exists.
 	{Name: "update", Usage: "ocx update [--tag <tag>]", Summary: "Update OpenCodex.", Owner: TypeScriptOwned},
 	{Name: "restart", Usage: "ocx restart", Summary: "Restart the proxy.", Owner: GoOwned},
 	// v2 is Go-owned (issue #56): the read surface (`status`) landed in slice
