@@ -188,17 +188,33 @@ export async function getCachedUserJwt(apiKey: string, host: string = DEFAULT_HO
   if (cache && cache.apiKey === apiKey && cache.host === host && cache.expiresAt > now + 60) {
     return cache.jwt;
   }
+  // Race the caller's signal against the shared promise so one caller's
+  // cancellation doesn't propagate to unrelated callers sharing the mint.
+  // mintUserJwt has its own MINT_TIMEOUT_MS guard for the shared lifetime.
+  const raceSignal = <T>(p: Promise<T>): Promise<T> =>
+    signal
+      ? Promise.race([
+          p,
+          new Promise<T>((_, reject) => {
+            if (signal.aborted) reject(signal.reason);
+            else signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+          }),
+        ])
+      : p;
   const key = flightKey(apiKey, host);
   const existing = inFlight.get(key);
-  if (existing) return (await existing).jwt;
-  const promise = mintUserJwt(apiKey, host, signal);
+  if (existing) {
+    const minted = await raceSignal(existing);
+    return minted.jwt;
+  }
+  const promise = mintUserJwt(apiKey, host);
   inFlight.set(key, promise);
   // Snapshot the epoch BEFORE awaiting the mint. If clearCachedUserJwt()
   // fires while we're awaiting (logout-during-mint), the epoch changes
   // and we won't repopulate the cache with the just-invalidated JWT.
   const epochAtStart = cacheEpoch;
   try {
-    const minted = await promise;
+    const minted = await raceSignal(promise);
     if (cacheEpoch === epochAtStart) {
       cache = { jwt: minted.jwt, expiresAt: minted.expiresAt, apiKey, host };
     }

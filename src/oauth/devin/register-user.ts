@@ -117,7 +117,6 @@ export async function registerUser(
   }
 
   const apiKey = parsed.api_key;
-  const name = parsed.name;
   // Empty `api_server_url` is normal for single-tenant accounts — the desktop
   // extension's `getApiServerUrl` helper falls back to the configured default
   // when this is empty/missing. We mirror that behavior here.
@@ -132,13 +131,9 @@ export async function registerUser(
       'malformed_response',
     );
   }
-  if (!name) {
-    throw new WindsurfRegistrationError(
-      'RegisterUser returned 200 but name was empty',
-      response.status,
-      'malformed_response',
-    );
-  }
+  // `name` is optional in the response — default it instead of failing login.
+  // src/oauth/devin.ts uses it only as a display label for the account email.
+  const name = parsed.name && parsed.name.length > 0 ? parsed.name : 'Devin account';
 
   return {
     apiKey,

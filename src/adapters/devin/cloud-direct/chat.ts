@@ -43,6 +43,8 @@ import { anySignal } from '../../../lib/abort.js';
 const CLOUD_STREAM_IDLE_MS = 120_000;
 /** Time-to-first-byte timeout. */
 const CLOUD_STREAM_TTFB_MS = 60_000;
+/** Maximum acceptable Connect-RPC frame length (16 MB). */
+const MAX_FRAME_LEN = 16 * 1024 * 1024;
 
 /**
  * Per-(apiKey, host) session/cascade ID cache. Cloud uses these for
@@ -215,6 +217,16 @@ function collapseSystemIntoUser(messages: ChatHistoryItem[]): ChatHistoryItem[] 
       out.push({ role: 'user', content: newContent });
       pendingSystem = [];
     } else {
+      // Flush accumulated system text before any non-system, non-user turn
+      // (assistant / tool) so system instructions keep their leading position
+      // instead of being deferred to a trailing synthesized user message.
+      if (pendingSystem.length > 0) {
+        out.push({
+          role: 'user',
+          content: [{ type: 'text', text: `<system>\n${pendingSystem.join('\n\n')}\n</system>` }],
+        });
+        pendingSystem = [];
+      }
       out.push(m);
     }
   }
@@ -798,8 +810,10 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
   // Best-effort: if the catalog fetch fails (network, auth, schema drift) we
   // pass through to the chat call. The cloud will still surface its own
   // error and the trailer-error path below enriches the message in-place.
+  // Treat an empty catalog (schema drift / unexpected response) as "no catalog"
+  // so chat passes through instead of failing every request.
   const catalog = await getCachedCatalog(req.apiKey, host, req.signal).catch(() => null);
-  if (catalog) {
+  if (catalog && catalog.byUid.size > 0) {
     const entry = catalog.byUid.get(req.modelUid);
     if (!entry) {
       throw new ModelNotAvailableError(req.modelUid, req.modelUid, 'not_listed');
@@ -990,6 +1004,11 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
         if (!header) break;
         const flags = header[0];
         const len = header.readUInt32BE(1);
+        // Cap frame length to prevent memory exhaustion from a corrupt/malicious
+        // length prefix. 16MB is well above any legitimate Connect-RPC frame.
+        if (len > MAX_FRAME_LEN) {
+          throw new CloudChatError(`Connect frame length ${len} exceeds ${MAX_FRAME_LEN} byte cap`);
+        }
         if (queuedBytes < 5 + len) break; // frame still arriving
         drop(5);
         const raw = peek(len) ?? Buffer.alloc(0);

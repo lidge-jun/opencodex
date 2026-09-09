@@ -153,7 +153,7 @@ async function handleChatCompletionsWithBudget(
     if (route.provider.adapter === "openai-responses") {
       directRoute = route.codexAccountMode === "direct";
     }
-    if (route.provider.adapter === "cursor" || route.provider.adapter === "kiro" || route.provider.adapter === "devin") {
+    if (route.provider.adapter === "cursor" || route.provider.adapter === "kiro") {
       const parts: string[] = [];
       if (chatBody.messages !== undefined) parts.push(JSON.stringify(chatBody.messages));
       if (chatBody.tools !== undefined) parts.push(JSON.stringify(chatBody.tools));

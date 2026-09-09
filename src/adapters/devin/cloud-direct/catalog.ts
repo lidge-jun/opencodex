@@ -72,68 +72,19 @@ export interface CacheEntry {
 let cached: CacheEntry | null = null;
 let inFlight: Promise<CacheEntry> | null = null;
 let inFlightKey: string | null = null;
+// Bumped on clearCachedCatalog so an in-flight fetch racing with a clear
+// can't repopulate the cache with a just-invalidated catalog.
+let cacheEpoch = 0;
 
 function flightKey(apiKey: string, host: string): string {
   return `${host}\x1f${apiKey}`;
 }
 
 /**
- * Fetch the cascade model catalog for `(apiKey, host)` and parse the
- * subset of `ClientModelConfig` we care about into a UID-keyed map.
- *
- * Throws on transport/auth failure so the caller can decide whether to fall
- * back to "skip pre-flight". Does NOT throw on an unexpected response body —
- * a malformed catalog returns an empty map, treated the same as "model not
- * listed" by the chat pre-flight.
+ * Parse a GetCascadeModelConfigsResponse buffer into a UID-keyed map.
+ * A malformed catalog returns an empty map.
  */
-async function fetchCatalog(apiKey: string, host: string, signal?: AbortSignal): Promise<CacheEntry> {
-  const userJwt = await getCachedUserJwt(apiKey, host, signal);
-
-  const metadata = buildMetadata({
-    apiKey,
-    userJwt,
-    sessionId: crypto.randomUUID(),
-    requestId: BigInt(Date.now()),
-    triggerId: crypto.randomUUID(),
-  });
-  // GetCascadeModelConfigsRequest { metadata: Metadata }  — Metadata is #1.
-  const reqBody = encodeMessage(1, metadata);
-
-  // Internal 10s timeout so a stalled catalog endpoint can't deadlock chat.
-  // The caller's signal still takes precedence — when they cancel, we cancel.
-  const ac = new AbortController();
-  const timer = setTimeout(
-    () => ac.abort(new Error(`catalog: fetch timeout (${CATALOG_FETCH_TIMEOUT_MS}ms)`)),
-    CATALOG_FETCH_TIMEOUT_MS,
-  );
-  const cleanupOnAbort = signal
-    ? (() => {
-        if (signal.aborted) ac.abort(signal.reason);
-        const fwd = (): void => ac.abort(signal.reason);
-        signal.addEventListener('abort', fwd, { once: true });
-        return () => signal.removeEventListener('abort', fwd);
-      })()
-    : (): void => { /* no caller signal */ };
-
-  let resp: Response;
-  try {
-    resp = await fetch(`${host}/exa.api_server_pb.ApiServerService/GetCascadeModelConfigs`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/proto', 'Connect-Protocol-Version': '1' },
-      body: new Uint8Array(reqBody),
-      signal: ac.signal,
-    });
-  } finally {
-    clearTimeout(timer);
-    cleanupOnAbort();
-  }
-
-  if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(`GetCascadeModelConfigs HTTP ${resp.status}: ${text.slice(0, 200)}`);
-  }
-  const buf = Buffer.from(await resp.arrayBuffer());
-
+function parseCatalogBuffer(buf: Buffer, apiKey: string, host: string): CacheEntry {
   // GetCascadeModelConfigsResponse #1 (repeated ClientModelConfig)
   const byUid = new Map<string, ModelCatalogEntry>();
   for (const f of iterFields(buf)) {
@@ -155,8 +106,64 @@ async function fetchCatalog(apiKey: string, host: string, signal?: AbortSignal):
       byUid.set(modelUid, { modelUid, label: label || modelUid, disabled });
     }
   }
-
   return { byUid, fetchedAt: Date.now(), apiKey, host };
+}
+
+/**
+ * Fetch the cascade model catalog for `(apiKey, host)` and parse the
+ * subset of `ClientModelConfig` we care about into a UID-keyed map.
+ *
+ * Throws on transport/auth failure so the caller can decide whether to fall
+ * back to "skip pre-flight". Does NOT throw on an unexpected response body —
+ * a malformed catalog returns an empty map, treated the same as "model not
+ * listed" by the chat pre-flight.
+ *
+ * Uses only an internal timeout — caller cancellation is handled by
+ * getCachedCatalog racing each caller's signal against the shared promise.
+ */
+async function fetchCatalog(apiKey: string, host: string): Promise<CacheEntry> {
+  const userJwt = await getCachedUserJwt(apiKey, host);
+
+  const metadata = buildMetadata({
+    apiKey,
+    userJwt,
+    sessionId: crypto.randomUUID(),
+    requestId: BigInt(Date.now()),
+    triggerId: crypto.randomUUID(),
+  });
+  // GetCascadeModelConfigsRequest { metadata: Metadata }  — Metadata is #1.
+  const reqBody = encodeMessage(1, metadata);
+
+  // Internal 10s timeout so a stalled catalog endpoint can't deadlock chat.
+  // The shared fetch uses only this internal timeout — caller cancellation is
+  // handled by racing each caller's signal against the shared promise in
+  // getCachedCatalog, so one caller's abort never propagates to unrelated
+  // callers sharing the same in-flight fetch.
+  const ac = new AbortController();
+  const timer = setTimeout(
+    () => ac.abort(new Error(`catalog: fetch timeout (${CATALOG_FETCH_TIMEOUT_MS}ms)`)),
+    CATALOG_FETCH_TIMEOUT_MS,
+  );
+
+  let resp: Response;
+  try {
+    resp = await fetch(`${host}/exa.api_server_pb.ApiServerService/GetCascadeModelConfigs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/proto', 'Connect-Protocol-Version': '1' },
+      body: new Uint8Array(reqBody),
+      signal: ac.signal,
+    });
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`GetCascadeModelConfigs HTTP ${resp.status}: ${text.slice(0, 200)}`);
+    }
+    // Read the body BEFORE clearing the timeout — fetch resolves on headers,
+    // not body completion. A stalled body would otherwise block indefinitely.
+    const buf = Buffer.from(await resp.arrayBuffer());
+    return parseCatalogBuffer(buf, apiKey, host);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -183,20 +190,36 @@ export async function getCachedCatalog(
   }
 
   const key = flightKey(apiKey, host);
+  // Race the caller's signal against the shared promise so one caller's
+  // cancellation doesn't propagate to unrelated callers sharing the fetch.
+  const raceSignal = <T>(p: Promise<T>): Promise<T> =>
+    signal
+      ? Promise.race([
+          p,
+          new Promise<T>((_, reject) => {
+            if (signal.aborted) reject(signal.reason);
+            else signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+          }),
+        ])
+      : p;
+
   if (inFlight && inFlightKey === key) {
     try {
-      return await inFlight;
+      return await raceSignal(inFlight);
     } catch {
       return null;
     }
   }
 
-  const promise = fetchCatalog(apiKey, host, signal);
+  const promise = fetchCatalog(apiKey, host);
   inFlight = promise;
   inFlightKey = key;
+  const epochAtStart = cacheEpoch;
   try {
-    const result = await promise;
-    cached = result;
+    const result = await raceSignal(promise);
+    if (cacheEpoch === epochAtStart) {
+      cached = result;
+    }
     return result;
   } catch {
     return null;
@@ -210,12 +233,15 @@ export async function getCachedCatalog(
 
 /**
  * Drop the cached catalog. Call after logout/account switch so a fresh
- * sign-in doesn't see a previous account's allow-list.
+ * sign-in doesn't see a previous account's allow-list. Bumps the cache
+ * epoch so an in-flight fetch racing with this clear can't repopulate
+ * the cache with the just-invalidated catalog.
  */
 export function clearCachedCatalog(): void {
   cached = null;
   inFlight = null;
   inFlightKey = null;
+  cacheEpoch++;
 }
 
 /**

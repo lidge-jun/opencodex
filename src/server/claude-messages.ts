@@ -809,7 +809,7 @@ async function handleClaudeMessagesWithBudget(
     // request-side estimate so the log's in:0 rows get a floor. NEVER set this for
     // accurate-usage adapters — the request-log merge is max(reported, estimate) and
     // would overwrite real usage (audit 133 R1#7).
-    if (route.provider.adapter === "cursor" || route.provider.adapter === "kiro" || route.provider.adapter === "devin") {
+    if (route.provider.adapter === "cursor" || route.provider.adapter === "kiro") {
       logCtx.usageLogInputTokens = estimateClaudeRequestTokens(anthropicBody as Rec, requestedModel);
     }
     // Effort safety valve (devlog 136 B6, audit 139 R2#2): opus-shaped aliases make

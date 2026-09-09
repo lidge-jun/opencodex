@@ -1669,7 +1669,11 @@ async function fetchProviderModelsWithAuth(
     if (liveResult.ok) {
       // Live catalog is the source of truth — use the discovered base models
       // directly, not a filtered subset of the static seed.
-      const result = liveResult.models.map((id) => ({ id }) as CatalogModel);
+      const result = liveResult.models.map((id) => ({
+        id,
+        provider: name,
+        ...catalogHintsFromProviderConfig(name, prov, id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias),
+      }) as CatalogModel);
       const forCache = withConfiguredRetention(result, { retainComboTargets: false });
       if (!setCached(name, forCache, Date.now(), cacheGeneration)) {
         return observed(withConfiguredRetention(configured), "degraded");
@@ -1677,7 +1681,10 @@ async function fetchProviderModelsWithAuth(
       markProviderDiscoveryOk(name, liveResult.models.length);
       return observed(withConfiguredRetention(forCache), "authoritative");
     }
-    markProviderDiscoveryFailed(name, { reason: liveResult.error === "auth" ? "provider" : "invalid_response" });
+    if (isCurrentCacheGeneration()) {
+      markModelsFetchFailure(name);
+      markProviderDiscoveryFailed(name, { reason: liveResult.error === "auth" ? "provider" : "invalid_response" });
+    }
     const stale = getStaleCached(name);
     return observed(
       withConfiguredRetention(stale ? applyConfigHintsToCachedModels(name, prov, stale) : configured),
