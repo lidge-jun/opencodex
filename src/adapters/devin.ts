@@ -6,7 +6,7 @@
  * before runTurn. This adapter maps OcxContext <-> ChatHistoryItem and
  * streams CloudChatEvent into AdapterEvent.
  */
-import type { AdapterEvent, OcxAssistantMessage, OcxContentPart, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxTool, OcxToolCall, OcxToolResultMessage } from "../types";
+import type { AdapterEvent, OcxAssistantMessage, OcxContentPart, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxTool, OcxToolCall, OcxToolResultMessage, OcxUsage } from "../types";
 import type { IncomingMeta, ProviderAdapter } from "./base";
 import { streamChatEvents, allocateCascadeId, CloudChatError, type ChatHistoryItem, type ToolDef } from "./devin/cloud-direct";
 import { DEVIN_DEFAULT_API_SERVER } from "../oauth/devin";
@@ -149,6 +149,8 @@ export function createDevinAdapter(provider: OcxProviderConfig): ProviderAdapter
 
       const modelUid = parsed.modelId.includes("/") ? parsed.modelId.slice(parsed.modelId.lastIndexOf("/") + 1) : parsed.modelId;
       let openToolId: string | undefined;
+      let usage: OcxUsage | undefined;
+      let stopReason: string | undefined;
 
       const closeOpenTool = () => {
         if (!openToolId) return;
@@ -188,10 +190,26 @@ export function createDevinAdapter(provider: OcxProviderConfig): ProviderAdapter
           }
           if (event.kind === "finish") {
             closeOpenTool();
+            stopReason = event.reason === "length" ? "max_tokens" : event.reason;
+            continue;
+          }
+          if (event.kind === "usage") {
+            const total = event.totalTokens ?? ((event.promptTokens ?? 0) + (event.completionTokens ?? 0));
+            usage = {
+              inputTokens: event.promptTokens ?? 0,
+              outputTokens: event.completionTokens ?? 0,
+              ...(total > 0 ? { totalTokens: total } : {}),
+              ...(event.cachedInputTokens !== undefined ? { cachedInputTokens: event.cachedInputTokens } : {}),
+              ...(event.cacheCreationInputTokens !== undefined ? { cacheCreationInputTokens: event.cacheCreationInputTokens } : {}),
+              ...(event.reasoningTokens !== undefined ? { reasoningOutputTokens: event.reasoningTokens } : {}),
+            };
             continue;
           }
         }
         closeOpenTool();
+        if (!incoming.abortSignal?.aborted) {
+          emit({ type: "done", ...(usage ? { usage } : {}), ...(stopReason ? { stopReason } : {}) });
+        }
       } catch (error) {
         closeOpenTool();
         const message = error instanceof CloudChatError
