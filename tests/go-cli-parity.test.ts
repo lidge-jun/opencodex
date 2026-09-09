@@ -6311,8 +6311,7 @@ describe.skipIf(!goAvailable || goCLI === null)(
             const url = new URL(request.url);
             if (url.pathname === "/healthz") {
               const challenge =
-                request.headers.get("x-opencodex-attestation-challenge") ??
-                "";
+                request.headers.get("x-opencodex-attestation-challenge") ?? "";
               const headers = attestedHeaders(challenge, claudeProxy!.port!);
               return Response.json(
                 {
@@ -6336,9 +6335,7 @@ describe.skipIf(!goAvailable || goCLI === null)(
           },
         });
       }
-      function claudeSideHome(
-        base: Record<string, unknown>,
-      ): string {
+      function claudeSideHome(base: Record<string, unknown>): string {
         const home = mkdtempSync(join(tmpdir(), "ocx-go-claude-parity-"));
         claudeDirs.push(home);
         const config: Record<string, unknown> = {
@@ -6369,9 +6366,7 @@ describe.skipIf(!goAvailable || goCLI === null)(
         }
         return home;
       }
-      function claudeSideEnv(
-        home: string,
-      ): Record<string, string | undefined> {
+      function claudeSideEnv(home: string): Record<string, string | undefined> {
         const scratch = mkdtempSync(join(tmpdir(), "ocx-go-claude-home-"));
         claudeDirs.push(scratch);
         const env = parityEnv(home);
@@ -6406,7 +6401,10 @@ describe.skipIf(!goAvailable || goCLI === null)(
             );
         }
         const run = async (
-          fn: (a: readonly string[], e: Record<string, string | undefined>) => Promise<Result>,
+          fn: (
+            a: readonly string[],
+            e: Record<string, string | undefined>,
+          ) => Promise<Result>,
         ) => {
           const home = claudeSideHome(baseConfig);
           if (serviceFile !== undefined)
@@ -6443,7 +6441,10 @@ describe.skipIf(!goAvailable || goCLI === null)(
         );
       });
       test("diffs the connected token-missing gate", async () => {
-        const ts = await claudeBoth(["claude"], claudeClientState("conn-tok", ["claude"]));
+        const ts = await claudeBoth(
+          ["claude"],
+          claudeClientState("conn-tok", ["claude"]),
+        );
         expect(ts.code).toBe(1);
         expect(ts.stderr).toBe("Connected service token is missing.\n");
       });
@@ -6460,9 +6461,7 @@ describe.skipIf(!goAvailable || goCLI === null)(
         const go = await runGoEnvAsync(["claude"], env);
         expect(go).toEqual(ts);
         expect(ts.code).toBe(1);
-        expect(ts.stderr).toBe(
-          "Connected service token ownership changed.\n",
-        );
+        expect(ts.stderr).toBe("Connected service token ownership changed.\n");
       });
       test("diffs the local spawn lane env through the shim", async () => {
         const ts = await claudeBoth(["claude", "--model", "x"], {
