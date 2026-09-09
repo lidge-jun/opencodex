@@ -1,6 +1,6 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act } from "react";
+import { act, useLayoutEffect } from "react";
 import type { Root } from "react-dom/client";
 import Combos from "../src/pages/Combos";
 import { LanguageProvider } from "../src/i18n/provider";
@@ -203,4 +203,112 @@ test("Combos announces silent revalidation over cached content via aria-busy", a
 
   await act(async () => { root.unmount(); });
   container.remove();
+});
+
+
+test.each(["timer", "visible", "active", "commit-boundary"])("Combos expires a quota block before a new response: %s", async wake => {
+  const { createRoot } = await import("react-dom/client");
+  const startedAt = Date.now();
+  let now = startedAt;
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  const schedule = testWindow.setTimeout.bind(testWindow);
+  const cancel = testWindow.clearTimeout.bind(testWindow);
+  const expiryTimers = new Set<number>();
+  let expire: (() => void) | undefined;
+  const scheduleSpy = spyOn(testWindow, "setTimeout").mockImplementation((callback, delay, ...args) => {
+    const timer = schedule(callback, delay, ...args);
+    if (delay === 123_456 && typeof callback === "function") {
+      expiryTimers.add(timer);
+      expire = () => callback(...args);
+    }
+    return timer;
+  });
+  const cancelSpy = spyOn(testWindow, "clearTimeout").mockImplementation(timer => {
+    expiryTimers.delete(timer);
+    cancel(timer);
+  });
+  const item = { id: "alpha", model: "combo/alpha", strategy: "failover", stickyLimit: 1,
+    targets: [{ provider: "keyed", model: "m1" }] };
+  let quotaFetches = 0;
+  const workspaceFetches = new Map<string, number>();
+  const waitForAbort = (signal: AbortSignal | null | undefined) => new Promise<Response>((_resolve, reject) => {
+    if (signal?.aborted) reject(signal.reason);
+    else signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+  });
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("/api/provider-quotas")) {
+      quotaFetches += 1;
+      if (quotaFetches > 1) return waitForAbort(init?.signal);
+      return Response.json({ reports: [{ provider: "keyed", updatedAt: startedAt,
+        quota: { updatedAt: startedAt, fiveHourPercent: 100 },
+        routingQuota: { state: "exhausted", updatedAt: startedAt, validUntil: startedAt + 123_456 },
+      }] });
+    }
+    const count = (workspaceFetches.get(url) ?? 0) + 1;
+    workspaceFetches.set(url, count);
+    if (count > 1) return waitForAbort(init?.signal);
+    if (url.includes("/api/combos")) return Response.json({ combos: [item] });
+    if (url.includes("/api/config")) return Response.json({ providers: {
+      keyed: { adapter: "openai-chat", authMode: "key", baseUrl: "https://provider.example/v1", defaultModel: "m1" },
+    } });
+    if (url.includes("/api/models")) return Response.json([
+      { provider: "keyed", id: "m1" }, { provider: "combo", id: "alpha" },
+    ]);
+    return new Response(null, { status: 404 });
+  }) as typeof fetch;
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  function ClockBoundary({ active, expireDuringCommit }: { active: boolean; expireDuringCommit: boolean }) {
+    useLayoutEffect(() => {
+      if (expireDuringCommit) now = startedAt + 123_456;
+    }, [expireDuringCommit]);
+    return <LanguageProvider><Combos apiBase={API_BASE} active={active} /></LanguageProvider>;
+  }
+  const render = (active = true, expireDuringCommit = false) =>
+    <ClockBoundary active={active} expireDuringCommit={expireDuringCommit} />;
+  try {
+    await act(async () => { root.render(render()); });
+    await act(async () => { await new Promise<void>(resolve => schedule(resolve, 0)); });
+    const rail = [...container.querySelectorAll<HTMLButtonElement>(".combos-workspace-rail-row")]
+      .find(row => row.querySelector(".combos-workspace-rail-name")?.textContent === "combo/alpha");
+    expect(rail).toBeDefined();
+    await act(async () => { rail!.click(); });
+    await act(async () => { await new Promise<void>(resolve => schedule(resolve, 0)); });
+    const alias = container.querySelector<HTMLInputElement>("#cwi-edit-alias")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!.set!.call(alias, "kept-draft");
+      alias.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+    });
+    expect(container.querySelector<HTMLButtonElement>("#cwi-edit-save")!.disabled).toBe(true);
+    expect(expire).toBeDefined();
+    if (wake === "visible") {
+      Object.defineProperty(testWindow.document, "visibilityState", { configurable: true, value: "hidden" });
+      await act(async () => { testWindow.document.dispatchEvent(new testWindow.Event("visibilitychange")); });
+    } else if (wake === "active" || wake === "commit-boundary") {
+      await act(async () => { root.render(render(false)); });
+    }
+    now = startedAt + 123_456 - (wake === "commit-boundary" ? 1 : 0);
+    await act(async () => {
+      if (wake === "timer") expire!();
+      else if (wake === "visible") {
+        Object.defineProperty(testWindow.document, "visibilityState", { configurable: true, value: "visible" });
+        testWindow.document.dispatchEvent(new testWindow.Event("visibilitychange"));
+      } else root.render(render(true, wake === "commit-boundary"));
+    });
+    if (wake === "commit-boundary") {
+      await act(async () => { await new Promise<void>(resolve => schedule(resolve, 0)); });
+    }
+    expect(container.querySelector<HTMLInputElement>("#cwi-edit-alias")!.value).toBe("kept-draft");
+    expect(container.querySelector<HTMLButtonElement>("#cwi-edit-save")!.disabled).toBe(false);
+    if (wake === "timer") expect(quotaFetches).toBe(1);
+  } finally {
+    await act(async () => { root.unmount(); });
+    container.remove();
+    scheduleSpy.mockRestore();
+    cancelSpy.mockRestore();
+    clock.mockRestore();
+  }
+  expect(expiryTimers.size).toBe(0);
 });

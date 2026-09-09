@@ -1657,6 +1657,15 @@ credential cannot inherit another key's cap. The same getter controls immediate 
 bounded cooldown waiting and reset-window ordering. This does not override explicit eligibility,
 target cooldowns, account admission or response-driven retry rules.
 
+The management quota response projects a separate `routingQuota` from this evidence after each
+probe or cached read, using the current provider row. It contains only a state, observation time
+and `validUntil`; the cached display report and private binding remain unchanged. Known states
+expire after 30 minutes or, for exhaustion, when the dispatch predicate first clears at a reset
+boundary. Multiple windows and USD blockers use that same predicate. The Combo editor uses only
+this projection for quota-based Save/Create blocking and treats missing, invalid or expired
+evidence as unknown. It schedules the rendered expiry even when that deadline passes before
+effects run, rechecks on activation/visibility, and refreshes quota alongside Combo data.
+
 ```text
 [Decision Log]
 - 목적과 의도: Keep account-, model- and service-scoped quota from disabling an otherwise usable Combo provider while retaining valid single-key inference caps.

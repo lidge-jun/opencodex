@@ -3,6 +3,7 @@ import type { OcxProviderConfig } from "../types";
 import type { ProviderQuota, ProviderQuotaReport } from "./quota";
 import { providerUsesKeyAuthOverride, resolveProviderApiKey } from "./key-store";
 import { getProviderRegistryEntry } from "./registry";
+import { PROVIDER_QUOTA_MAX_AGE_MS } from "./quota-types";
 
 export interface ProviderQuotaRoutingEvidence {
   quota: ProviderQuota;
@@ -54,7 +55,7 @@ export function replaceCachedProviderQuotas(
 export function getCachedProviderQuota(
   provider: string,
   now: number,
-  maxAgeMs = 30 * 60_000,
+  maxAgeMs = PROVIDER_QUOTA_MAX_AGE_MS,
 ): ProviderQuota | null {
   const quota = quotaCache.get(provider)?.quota;
   if (!quota) return null;
@@ -67,7 +68,7 @@ export function getCachedProviderRoutingQuota(
   name: string,
   provider: OcxProviderConfig | undefined,
   now: number,
-  maxAgeMs = 30 * 60_000,
+  maxAgeMs = PROVIDER_QUOTA_MAX_AGE_MS,
 ): ProviderQuota | null {
   if (!provider || provider.disabled === true || (provider.authMode ?? "key") !== "key") return null;
   // An active-key report cannot speak for the other keys the dispatcher may select.

@@ -281,9 +281,7 @@ Ouvrez le tableau de bord local et choisissez **Modèles → Combos**. L'espace 
 combos, et son sélecteur de cible exclut les modèles désactivés et les combos imbriqués.
 
 Chaque cible affiche aussi un badge de quota en direct : **Disponible**, **Quota épuisé** ou **Quota inconnu**.
-Enregistrer et Créer ne sont désactivés que lorsque chaque cible activée dispose de preuves fraîches et complètes
-que son quota est épuisé. Les données manquantes, obsolètes, mal formées ou agrégées de façon incomplète restent
-inconnues et ne verrouillent jamais un contrôle. La récupération du quota réactive automatiquement l’action.
+L’éditeur bloque Enregistrer et Créer pour une raison de quota uniquement lorsque chaque cible utilisable dispose d’une confirmation serveur encore valide indiquant que la limite d’inférence liée à ses identifiants configurés est épuisée. Les quotas de compte, de modèle, de recherche et de MCP fournis uniquement à titre d’affichage, ainsi que les informations de routage absentes ou expirées, ne déclenchent pas ce blocage. Le blocage expire à la réinitialisation applicable ou à l’expiration de la validité des données et fait l’objet d’une nouvelle vérification lorsque la page devient active ou visible ; Actualiser recharge à la fois les données des combos et les quotas.
 
 ### CLI
 

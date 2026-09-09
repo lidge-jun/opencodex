@@ -54,6 +54,7 @@ import type {
   ProviderQuota,
   ProviderQuotaCreditsUsd,
   ProviderQuotaWindow,
+  ProviderRoutingQuota,
 } from "./quota-types";
 import {
   clearKiroAccountUsageState,
@@ -139,6 +140,8 @@ export interface ProviderQuotaReport {
   source: string;
   quota: ProviderQuota;
   updatedAt: number;
+  /** Added by the management response projection, never stored on a cached report. */
+  routingQuota?: ProviderRoutingQuota;
   reverseEngineered?: boolean;
   /**
    * The row was OBSERVED in-band on a streaming turn rather than probed.

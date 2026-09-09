@@ -349,10 +349,7 @@ task workflow.
 Open the local dashboard and choose **Models → Combos**. The workspace creates, edits, renames, and removes
 combos, and its target picker excludes disabled models and nested combos.
 
-Each target also shows a live quota badge: **Available**, **Out of quota**, or **Quota unknown**. Save and
-Create are disabled only when every enabled target has fresh, complete evidence that its quota is exhausted.
-Missing, stale, malformed, or incomplete aggregate evidence stays unknown and never locks a control. Polling
-continues while the workspace is visible, so recovery automatically restores the action. The dashboard
+Each target also shows a live quota badge: **Available**, **Out of quota**, or **Quota unknown**. The editor blocks Save and Create for quota only when every usable target has a current server-confirmed exhausted inference limit for its configured credential. Display-only account, model, search and MCP quota, or missing or expired routing evidence, does not cause this block. The block expires at the applicable reset or freshness boundary and is rechecked when the page becomes active or visible; Refresh reloads both Combo data and quota. The dashboard
 editor does not yet expose `cooldownMs` or `waitForCooldownMs`; use the configuration file or management
 API until the follow-up UI work lands.
 

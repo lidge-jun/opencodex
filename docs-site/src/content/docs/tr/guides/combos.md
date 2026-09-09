@@ -312,9 +312,7 @@ hedef seçicisi ise devre dışı bırakılmış modelleri ve iç içe geçmiş 
 hariç tutar.
 
 Her hedef ayrıca canlı bir kota rozeti gösterir: **Kullanılabilir**, **Kota tükendi** veya **Kota bilinmiyor**.
-Kaydet ve Oluştur yalnızca etkin hedeflerin tamamı için kotanın tükendiğini gösteren güncel ve eksiksiz kanıt varsa
-devre dışı bırakılır. Eksik, eski, bozuk veya tamamlanmamış toplu kanıt bilinmiyor olarak kalır ve denetimleri asla
-kilitlemez. Kota yenilendiğinde işlem otomatik olarak yeniden etkinleşir.
+Düzenleyici, kota nedeniyle Kaydet ve Oluştur işlemlerini yalnızca kullanılabilir hedeflerin tümü için yapılandırılmış kimlik bilgisine ait çıkarım sınırının tükendiğini doğrulayan geçerli sunucu bilgisi varsa engeller. Yalnızca görüntüleme amaçlı hesap, model, arama ve MCP kotaları ya da eksik veya süresi dolmuş yönlendirme kanıtları bu engellemeye neden olmaz. Engelleme, ilgili sıfırlama zamanında veya verinin güncellik süresi dolduğunda sona erer ve sayfa etkin ya da görünür olduğunda yeniden kontrol edilir; Yenile, hem kombo verilerini hem de kotaları yeniden yükler.
 
 ### CLI
 
@@ -410,5 +408,4 @@ tam doğrulama mesajını görüntüler.
 Hata hedefe özgü olmaktan ziyade uç (terminal) bir hataydı. Geçersiz girdiyi
 düzeltin, aşırı büyük bir bağlamı azaltın, bir politika reddini işleyin veya
 reddedilen istek kaynağını düzeltin. Kombolar bu durumlar için atlama yapmaz.
-
 
