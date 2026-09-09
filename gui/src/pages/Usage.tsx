@@ -893,13 +893,15 @@ export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBas
             aria-expanded={rangeOpen}
             // The panel is unmounted while closed, so naming it then would leave a dangling IDREF.
             aria-controls={rangeOpen ? "usage-range-panel" : undefined}
-            onClick={() => setRangeOpen(open => {
-              // A validation failure is only legible next to the fields that caused it. Closing
-              // the panel would otherwise park an invisible error on a trigger that looks
-              // untouched, and re-render the alert on reopen for a draft the user walked away from.
-              if (open) setRangeError(null);
-              return !open;
-            })}
+            // A validation failure is only legible next to the fields that caused it. Closing the
+            // panel would otherwise park an invisible error on a trigger that looks untouched, and
+            // re-render the alert on reopen for a draft the user walked away from. The check reads
+            // the rendered value rather than an updater argument: a setState updater has to stay
+            // pure, and this one would fire the second setState twice under StrictMode.
+            onClick={() => {
+              if (rangeOpen) setRangeError(null);
+              setRangeOpen(!rangeOpen);
+            }}
           >
             <span>{t("usage.range.custom")}</span>
             <IconChevron width={12} height={12} aria-hidden="true" className="usage-range-chevron" />
