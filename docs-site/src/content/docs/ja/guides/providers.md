@@ -290,6 +290,13 @@ discovery エンドポイントから取得します。チャットリクエス�
 
 **Command Code の quota:** ダッシュボードと `ocx account refresh` は、正規ホスト `https://api.commandcode.ai` 上の `/alpha/billing/credits` ウィンドウ（5時間と週次）を照会します。OAuth プリセット (`command-code`) は保存済みアカウント bearer を使い、Provider-API キープリセット (`commandcode`) は設定済みの有効キーを使います。ユーザーが編集した類似ホストは照会しません。期間支出が返る場合は、残りの monthly / purchased / free credits を USD ウィンドウとして表示します。
 
+OrcaRouter のブラウザーログイン（`ocx login orcarouter-oauth`）では、キー交換の成功応答本文は
+64 KiB 以下の有効な UTF-8 JSON である必要があります。このキー交換リクエストの既存の
+30 秒制限には、応答ヘッダーと本文全体の受信が含まれ、サイズ超過または不正な本文はキーの
+保存前に拒否されます。この制限はログイン時のキー交換にのみ適用され、推論リクエストの
+ペイロードを制限するものではありません。`scope` の検証規則は変わらず、省略は許可され、
+明示された不正な値は拒否されます。
+
 **SambaNova Cloud の discovery:** preset は固定 API ホスト上の SambaNova Cloud の公開 `/v1/models` 一覧を読み、
 プロバイダー固有の ID を保持し、discovery を 128 KiB と raw 128 行に制限します。カタログは認証不要のため、
 CLI の login flow は公開レスポンスをキーの有効性の証拠にせず、キーを検証不能として報告します。chat リクエストは

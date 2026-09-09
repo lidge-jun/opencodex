@@ -463,6 +463,13 @@ anahtarını kullanır. [Command Code Studio](https://commandcode.ai/studio/)
 
 **Command Code kotası.** Pano ve `ocx account refresh`, kanonik `https://api.commandcode.ai` ana bilgisayarında `/alpha/billing/credits` pencerelerini (5 saat ve haftalık) sorgular. OAuth önayarı (`command-code`) kayıtlı hesap bearer'ını kullanır; Provider-API anahtar önayarı (`commandcode`) etkin yapılandırılmış anahtarı kullanır. Kullanıcının değiştirdiği benzer bir temel URL asla sorgulanmaz. Command Code dönem harcamasını da bildirirse kalan monthly / purchased / free credits USD penceresi olarak gösterilir.
 
+OrcaRouter tarayıcı oturum açma akışında (`ocx login orcarouter-oauth`), anahtar değişimi isteğinin
+başarılı yanıt gövdesi en fazla 64 KiB boyutunda geçerli UTF-8 JSON olmalıdır. Bu isteğin mevcut
+30 saniyelik süresi, yanıt başlıkları ile gövdenin tamamının alınmasını kapsar; sınırı aşan veya bozuk
+gövdeler anahtar kaydedilmeden önce reddedilir. Bu sınırlar yalnızca oturum açma sırasındaki anahtar
+değişimine uygulanır, çıkarım isteği yüklerine uygulanmaz. `scope` doğrulaması değişmez: alanın
+bulunmamasına izin verilir, açıkça geçersiz bir değer ise reddedilir.
+
 **SambaNova Cloud keşfi.** Önayar, sabit API ana bilgisayarından SambaNova
 Cloud'un genel `/v1/models` listesini okur, sağlayıcı yerel kimliklerini korur
 ve keşfi 128 KiB ve 128 ham satırla sınırlar. Katalog kimlik doğrulamasız
