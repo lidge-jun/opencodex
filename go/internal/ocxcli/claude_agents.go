@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	claudeOwnedPrefix    = "ocx-"
+	claudeOwnedPrefix     = "ocx-"
 	claudeGeneratedMarker = "generated-by: opencodex"
 	// defaultSubagentModels mirrors DEFAULT_SUBAGENT_MODELS (src/config.ts).
 	defaultSubagentModels = "gpt-5.5\ngpt-5.6-sol\ngpt-5.6-terra\ngpt-5.6-luna\ngpt-5.4-mini"
@@ -30,9 +30,9 @@ const (
 )
 
 var (
-	claudeInvalidNameRe = regexp.MustCompile(`[^a-z0-9]+`)
+	claudeInvalidNameRe  = regexp.MustCompile(`[^a-z0-9]+`)
 	claudeClaudePrefixRe = regexp.MustCompile(`^(?:claude|anthropic)(?:-|$)`)
-	claudeDateSuffixRe  = regexp.MustCompile(`-\d{8}$`)
+	claudeDateSuffixRe   = regexp.MustCompile(`-\d{8}$`)
 )
 
 type claudeAgentDef struct {
@@ -410,5 +410,3 @@ func claudeInjectAgentDefs(slice *claudeCodeView, subagentModels []string, windo
 	defs := claudeBuildAgentDefs(slice, subagentModels, windows, configDir)
 	return claudeSyncAgentDefs(defs, configDir)
 }
-
-

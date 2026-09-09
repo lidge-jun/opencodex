@@ -64,10 +64,10 @@ func claudeGoldenResult(t *testing.T, scenario map[string]json.RawMessage, key s
 	return raw
 }
 
-func claudeBoolPtr(value bool) *bool              { return &value }
-func claudeInt64Ptr(value int64) *int64           { return &value }
-func claudeFloat64Ptr(value float64) *float64     { return &value }
-func claudeStrPtr(value string) *string           { return &value }
+func claudeBoolPtr(value bool) *bool          { return &value }
+func claudeInt64Ptr(value int64) *int64       { return &value }
+func claudeFloat64Ptr(value float64) *float64 { return &value }
+func claudeStrPtr(value string) *string       { return &value }
 
 // probe config shape: apiKeys + optional overrides/claudeCode.
 type claudeProbeConfig struct {
@@ -168,8 +168,8 @@ func TestClaudeEngineEnvGoldens(t *testing.T) {
 		{
 			name: "local-stale-base-url", cfg: claudeProbeCfg("adm-two"), route: localClaudeRoute(port),
 			base: map[string]string{
-				"ANTHROPIC_BASE_URL":    "http://127.0.0.1:9999",
-				"ANTHROPIC_AUTH_TOKEN":  "adm-two",
+				"ANTHROPIC_BASE_URL":   "http://127.0.0.1:9999",
+				"ANTHROPIC_AUTH_TOKEN": "adm-two",
 			}, seam: claudeAbsentAuthSeam(),
 		},
 		{
@@ -216,9 +216,9 @@ func TestClaudeEngineModelEnvGolden(t *testing.T) {
 
 	windows := map[string]int64{
 		"claude-ocx2-provider--anthropic~sclaude-opus-4-8": 1_500_000,
-		"claude-ocx-native--gpt-5.2":                        372_000,
-		"gpt-5.2":                                           372_000,
-		"claude-opus-4-8-a1b":                               200_000,
+		"claude-ocx-native--gpt-5.2":                       372_000,
+		"gpt-5.2":                                          372_000,
+		"claude-opus-4-8-a1b":                              200_000,
 	}
 	slice := &claudeCodeView{
 		Model: "claude-ocx2-provider--anthropic~sclaude-opus-4-8",

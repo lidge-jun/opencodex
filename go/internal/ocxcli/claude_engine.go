@@ -53,13 +53,13 @@ type claudeEngineDeps struct {
 }
 
 type claudeEngineInput struct {
-	apiKeys              []string
-	claudeCode           *claudeCodeView
-	route                claudeLaunchRoute
-	base                 map[string]string
-	contextWindows       map[string]int64
+	apiKeys                  []string
+	claudeCode               *claudeCodeView
+	route                    claudeLaunchRoute
+	base                     map[string]string
+	contextWindows           map[string]int64
 	allowRootSkipPermissions bool
-	deps                 claudeEngineDeps
+	deps                     claudeEngineDeps
 }
 
 var (

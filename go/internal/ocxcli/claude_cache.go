@@ -56,9 +56,9 @@ func claudeWriteGatewayModelCache(baseURL string, models []claudeGatewayModelRow
 	}
 	path := filepath.Join(cacheDir, "gateway-models.json")
 	payload := struct {
-		BaseURL   string                    `json:"baseUrl"`
-		FetchedAt int64                     `json:"fetchedAt"`
-		Models    []claudeGatewayModelRow   `json:"models"`
+		BaseURL   string                  `json:"baseUrl"`
+		FetchedAt int64                   `json:"fetchedAt"`
+		Models    []claudeGatewayModelRow `json:"models"`
 	}{BaseURL: baseURL, FetchedAt: time.Now().UnixMilli(), Models: usable}
 	data, err := json.Marshal(payload)
 	if err != nil {

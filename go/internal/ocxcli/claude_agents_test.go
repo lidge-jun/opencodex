@@ -35,10 +35,10 @@ func claudeGoldenFiles(t *testing.T, scenario map[string]json.RawMessage) ([][]s
 func TestClaudeAgentDefsGolden(t *testing.T) {
 	scenarios := claudeGoldenScenarios(t)
 	for _, tc := range []struct {
-		name          string
+		name           string
 		subagentModels []string
-		claudeCode    *claudeCodeView
-		settingsModel string
+		claudeCode     *claudeCodeView
+		settingsModel  string
 	}{
 		{name: "agent-defs", subagentModels: []string{"gpt-5.5", "gpt-5.2", "claude-opus-4-8"}, settingsModel: "gpt-5.2"},
 		{name: "agent-defs-effort", subagentModels: []string{"gpt-5.6-terra"},

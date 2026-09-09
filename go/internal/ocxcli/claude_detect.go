@@ -32,15 +32,15 @@ const (
 type claudeAuthSourceID string
 
 const (
-	claudeSourceClaudeJSONOAuth  claudeAuthSourceID = "claude-json-oauth"     // S1
-	claudeSourceCredentialsFile  claudeAuthSourceID = "claude-credentials-file" // S2
-	claudeSourceMacOSKeychain    claudeAuthSourceID = "macos-keychain"        // S3
-	claudeSourceExportedEnv      claudeAuthSourceID = "exported-env"          // S5
+	claudeSourceClaudeJSONOAuth claudeAuthSourceID = "claude-json-oauth"       // S1
+	claudeSourceCredentialsFile claudeAuthSourceID = "claude-credentials-file" // S2
+	claudeSourceMacOSKeychain   claudeAuthSourceID = "macos-keychain"          // S3
+	claudeSourceExportedEnv     claudeAuthSourceID = "exported-env"            // S5
 )
 
 const (
 	// claudeProxyMarker mirrors PROXY_MARKER — the one opencodex-owned dummy token.
-	claudeProxyMarker = "opencodex-proxy"
+	claudeProxyMarker     = "opencodex-proxy"
 	claudeKeychainService = "Claude Code-credentials"
 	// `security` exit code for "the item does not exist": a real absent.
 	claudeKeychainItemNotFound = 44
@@ -68,9 +68,9 @@ type claudeAuthDetectDeps struct {
 }
 
 type claudeAuthDetectResult struct {
-	Presence        claudeAuthPresence
-	FoundBy         claudeAuthSourceID
-	Sources         []claudeAuthSourceResult
+	Presence         claudeAuthPresence
+	FoundBy          claudeAuthSourceID
+	Sources          []claudeAuthSourceResult
 	StaleProxyMarker bool
 }
 
@@ -288,4 +288,3 @@ func claudeResolveAuthMode(claudeCode *claudeCodeView, detection claudeAuthDetec
 		return claudeResolvedAuthMode{MarkerMode: claudeMarkerSubscription, Origin: claudeOriginAutoUnknown, Detection: detection}
 	}
 }
-
