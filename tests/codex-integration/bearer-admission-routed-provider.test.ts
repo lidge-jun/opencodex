@@ -485,6 +485,35 @@ describe("bearer admission is not reused as a Cursor upstream credential", () =>
     });
   });
 
+  test.each(["Responses", "Chat"])("%s never treats a ChatGPT-claimed or combined bearer as a Cursor token", async surface => {
+    const chatGptJwt = fakeChatGptJwt({ chatgpt_account_id: "caller-openai" });
+    const cases: Array<Record<string, string>> = [
+      // A ChatGPT JWT without the matching account header is still the ChatGPT domain.
+      { authorization: `Bearer ${chatGptJwt}` },
+      // A mismatched explicit account does not reclassify the token.
+      { authorization: `Bearer ${chatGptJwt}`, "chatgpt-account-id": "other-account" },
+      // A combined value is not a single Cursor token.
+      { authorization: `Bearer ${chatGptJwt}, Bearer other` },
+    ];
+    for (const extra of cases) {
+      await withCursorCaptureServer(async (baseUrl, capturedAuth) => {
+        saveConfig(cursorForwardConfig(baseUrl));
+        writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ tokens: {} }));
+        const server = await startOwnedServer();
+        try {
+          const headers = { "x-opencodex-api-key": ADMISSION_SECRET, ...extra };
+          const response = surface === "Chat"
+            ? await postChatCompletions(server.url, "cursorcustom/auto", headers)
+            : await postResponses(server.url, "cursorcustom/auto", headers);
+          await response.text();
+          expect(capturedAuth).toEqual([]);
+        } finally {
+          await server.stop(true);
+        }
+      });
+    }
+  });
+
   test.each([false, true])("Chat combos never assign caller auth to a Cursor target (OpenAI pair: %s)", async openAiPair => {
     await withCursorCaptureServer(async (baseUrl, capturedAuth) => {
       const config = cursorForwardConfig(baseUrl);

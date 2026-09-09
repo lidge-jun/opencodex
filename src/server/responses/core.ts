@@ -216,6 +216,7 @@ import {
 import type { DataPlaneAdmission } from "../auth-cors";
 import { createTranslatorBudget, isTranslatorBudgetExceededError, type TranslatorBudget } from "../../lib/translator-budget";
 import { captureExplicitOpenAiCallerAuth, listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ExplicitOpenAiCallerAuth, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
+import { extractAccountId } from "../../oauth/chatgpt";
 import { providerConsumesCallerAuthorization } from "../../providers/caller-authorization";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { CODEX_RESERVE_HELPER_UNSUPPORTED_MESSAGE, isCodexReserveHelperUnsupported } from "../../codex/loopback-target";
@@ -2060,13 +2061,24 @@ async function resolveResponsesCodexAuth(
         authInputHeaders.delete("chatgpt-account-id");
       }
     }
-    // A caller's explicit OpenAI pair may also be used by an optional sidecar on
-    // an unchanged Cursor route. It is not a Cursor token even without a rewrite.
-    if (options.nativeCallerAuth && !isCanonicalOpenAiForwardProvider(route.provider)
+    // A caller-auth transport that is not canonical OpenAI (keyless Cursor) consumes the
+    // caller's Authorization as its own upstream token. Keep that contract only for a clean
+    // single bearer carrying no ChatGPT account claim. A bearer that provably belongs to the
+    // ChatGPT domain, a combined/malformed value, or the captured explicit OpenAI pair is
+    // never a Cursor token, and chatgpt-account-id has no meaning outside the ChatGPT domain.
+    if (!isCanonicalOpenAiForwardProvider(route.provider)
       && providerConsumesCallerAuthorization(route.provider)) {
-      authInputHeaders = new Headers(authInputHeaders);
-      authInputHeaders.delete("authorization");
-      authInputHeaders.delete("chatgpt-account-id");
+      const rawAuth = authInputHeaders.get("authorization")?.trim();
+      const singleBearer = /^Bearer[\t ]+([^\s,]+)$/i.exec(rawAuth ?? "")?.[1];
+      const chatGptClaim = singleBearer ? extractAccountId(undefined, singleBearer) : undefined;
+      const dropBearer = options.nativeCallerAuth != null || chatGptClaim !== undefined
+        || (rawAuth !== undefined && singleBearer === undefined);
+      if (dropBearer || authInputHeaders.has("chatgpt-account-id")) {
+        const scoped = new Headers(authInputHeaders);
+        if (dropBearer) scoped.delete("authorization");
+        scoped.delete("chatgpt-account-id");
+        authInputHeaders = scoped;
+      }
     }
     // An explicit caller-owned OpenAI pair may cross an internal route change only to
     // the canonical OpenAI transport. Sidecar enrichment grants no primary authority.

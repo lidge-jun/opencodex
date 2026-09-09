@@ -25,7 +25,9 @@ single OpenAI bearer with an explicit matching account is captured separately an
 only for the final canonical OpenAI route, after credential validation and under the existing
 Direct/Pool, native-main claim, and entitlement rules. This explicit OpenAI pair is also
 withheld from an unchanged keyless Cursor route; an independently supplied Cursor bearer
-remains supported. Key-auth and noncanonical routes use
+remains supported. A noncanonical caller-auth transport keeps only a clean single bearer with
+no ChatGPT account claim: a bearer carrying a ChatGPT account claim, a combined or malformed
+Authorization value, and the chatgpt-account-id header are withheld from it. Key-auth and noncanonical routes use
 their own configured key or provider-owned OAuth credential. Canonical unqualified `openai`
 forwarding preserves the sanitized caller/main-login bearer in Direct mode and may select a
 stored native credential in Pool mode. An explicit account-qualified sidecar may select its
