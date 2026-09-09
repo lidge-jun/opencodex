@@ -288,7 +288,13 @@ describe("README translation parity", () => {
         const missing = englishUrls.filter((url) => {
           if (url.includes("/assets/")) return false;
           if (url.startsWith("https://opencodex.me/")) {
-            const localized = url.replace(
+            // Compare the page, never the fragment. Starlight derives a heading id
+            // from the heading TEXT, and the localized pages translate their
+            // headings, so #docker-compose exists only on the English page. Pinning
+            // the English fragment would have required every locale to ship a link
+            // that scrolls nowhere.
+            const page = url.split("#")[0] ?? url;
+            const localized = page.replace(
               "https://opencodex.me/",
               `https://opencodex.me/${entry.docsPath}/`,
             );

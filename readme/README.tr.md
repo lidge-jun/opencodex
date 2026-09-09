@@ -152,7 +152,7 @@ derleme bağlamıyla ve kopyalanan çalışma zamanı dosyalarıyla karşılaşt
 Belirteç ve değişken durum `ocx-state` adlı volume içinde kalır; imaja, Compose dosyasına, ortama ya da
 kabuk argümanlarına hiçbir kimlik bilgisi konmaz. Sağlayıcı kurulumu, kimlik doğrulamalı kabul kontrolleri,
 uzaktan yönetim ve geri alma için
-[Remote Hub dağıtım kılavuzuna](https://opencodex.me/tr/guides/remote-hub/#docker-compose) bakın.
+[Remote Hub dağıtım kılavuzuna](https://opencodex.me/tr/guides/remote-hub/) bakın.
 
 </details>
 
@@ -228,7 +228,7 @@ betiklerini engellediyse [kurulum belgelerine](https://opencodex.me/tr/getting-s
   > korunmayı garanti etmez. OpenCodex, sağlayıcı sınırlarını aşmak için ek hesap kullanılmasını ya da hesap
   > kimlik bilgilerinin kişiler arasında paylaşılmasını onaylamaz. Her sağlayıcının güncel koşullarına
   > uymak sizin sorumluluğunuzdadır. Bkz.
-  > [Codex Auth hesap havuzu rehberi](https://opencodex.me/tr/guides/web-dashboard/#codex-auth-and-account-pools)
+  > [Codex Auth hesap havuzu rehberi](https://opencodex.me/tr/guides/web-dashboard/)
   > ve [OpenAI'nin güncel Kullanım Koşulları](https://openai.com/policies/terms-of-use/).
 - **Kombolar** — sağlayıcılar arasında failover ya da ağırlıklı round-robin yapan tek bir sanal model
   kimliği. [Kombo rehberine](https://opencodex.me/tr/guides/combos/) bakın.
@@ -237,7 +237,7 @@ betiklerini engellediyse [kurulum belgelerine](https://opencodex.me/tr/getting-s
   [Alt ajan rehberine](https://opencodex.me/tr/guides/sub-agent-surface/) bakın.
 <!-- sponsors:main-first-mention -->
 - **Bir kez giriş yapın, API anahtarını atlayın** — xAI, Anthropic ve Kimi için OAuth; ya da
-  `codex login` oturumunu iletin, bir anahtar yapıştırın veya ${ENV_VAR} referansları kullanın.
+  `codex login` oturumunu iletin, bir anahtar yapıştırın veya `${ENV_VAR}` referansları kullanın.
 - **Web araması ve görü yardımcıları** — OpenAI dışı modeller, ChatGPT girişiniz üzerinden çalışan bir
   yardımcı süreç sayesinde gerçek web araması ve görsel anlama kazanır.
 - **Ne olup bittiğini görün** — kontrol paneli sağlayıcıları, OAuth durumunu, model seçimini ve önbellek
@@ -401,4 +401,3 @@ Bazı sağlayıcılar — özellikle Anthropic (Claude) — API trafiğini üç�
 ## Lisans
 
 MIT
-

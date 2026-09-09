@@ -154,7 +154,7 @@ Elle vérifie chaque SHA-256 enregistré par rapport au contexte de construction
 
 Le jeton et l'état mutable restent dans le volume nommé `ocx-state` ; aucun secret n'est placé dans
 l'image, le fichier Compose, l'environnement ou les arguments du shell. Consultez le
-[guide de déploiement Remote Hub](https://opencodex.me/fr/guides/remote-hub/#docker-compose) pour la configuration
+[guide de déploiement Remote Hub](https://opencodex.me/fr/guides/remote-hub/) pour la configuration
 des fournisseurs, les contrôles d'acceptation authentifiés, la gestion distante et le rollback.
 
 </details>
@@ -231,7 +231,7 @@ consultez la [documentation d'installation](https://opencodex.me/fr/getting-star
   > sur les comptes. OpenCodex n'encourage pas l'utilisation de comptes supplémentaires pour contourner les limites d'un fournisseur, ni le
   > partage d'identifiants de compte entre personnes. Vous êtes responsable du respect des conditions actuelles de chaque
   > fournisseur. Consultez le
-  > [guide des groupes de comptes Codex Auth](https://opencodex.me/fr/guides/web-dashboard/#codex-auth-and-account-pools)
+  > [guide des groupes de comptes Codex Auth](https://opencodex.me/fr/guides/web-dashboard/)
   > et les [Conditions d'utilisation actuelles d'OpenAI](https://openai.com/policies/terms-of-use/).
 - **Combos** — un identifiant de modèle virtuel avec basculement ou round-robin pondéré entre fournisseurs. Consultez
   le [guide des combos](https://opencodex.me/fr/guides/combos/).
@@ -239,7 +239,7 @@ consultez la [documentation d'installation](https://opencodex.me/fr/getting-star
   [guide des sous-agents](https://opencodex.me/fr/guides/sub-agent-surface/).
 <!-- sponsors:main-first-mention -->
 - **Connectez-vous une fois, oubliez la clé API** — OAuth pour xAI, Anthropic et Kimi ; ou transmettez
-  `codex login`, collez une clé ou utilisez des références ${ENV_VAR}.
+  `codex login`, collez une clé ou utilisez des références `${ENV_VAR}`.
 - **Modules complémentaires de recherche web et de vision** — les modèles non-OpenAI bénéficient d'une véritable recherche web et de la compréhension d'images
   grâce à un module complémentaire utilisant votre connexion ChatGPT.
 - **Voyez ce qui se passe** — le tableau de bord affiche les fournisseurs, l'état OAuth, la sélection des modèles et un
@@ -402,4 +402,3 @@ Certains fournisseurs — notamment Anthropic (Claude) — peuvent suspendre ou 
 ## Licence
 
 MIT
-

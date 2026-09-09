@@ -156,7 +156,7 @@ curl --fail --silent http://127.0.0.1:10100/readyz
 
 Токен и изменяемое состояние живут в именованном томе `ocx-state`; ни одно учётное данное не
 попадает в образ, Compose-файл, окружение или аргументы оболочки. См.
-[руководство по развёртыванию Remote Hub](https://opencodex.me/ru/guides/remote-hub/#docker-compose)
+[руководство по развёртыванию Remote Hub](https://opencodex.me/ru/guides/remote-hub/)
 для настройки провайдеров, аутентифицированных проверок приёмки, удалённого управления и отката.
 
 </details>
@@ -233,7 +233,7 @@ ocx init      # интерактивная настройка: пишет ~/.ope
   > мер, блокировок и других действий в отношении аккаунтов. OpenCodex не одобряет использование
   > дополнительных аккаунтов для обхода лимитов провайдера и совместное использование учётных
   > данных между людьми. Вы отвечаете за соблюдение актуальных условий каждого провайдера. См.
-  > [руководство по пулу аккаунтов Codex Auth](https://opencodex.me/ru/guides/web-dashboard/#codex-auth-and-account-pools)
+  > [руководство по пулу аккаунтов Codex Auth](https://opencodex.me/ru/guides/web-dashboard/)
   > и [актуальные Terms of Use OpenAI](https://openai.com/policies/terms-of-use/).
 - **Combos** — один виртуальный id модели с failover или взвешенным round-robin между
   провайдерами. См. [руководство по combos](https://opencodex.me/ru/guides/combos/).

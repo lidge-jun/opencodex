@@ -1,6 +1,6 @@
 <h3 align="center">make codex open!</h3>
 <p align="center"><b>適用於 OpenAI Codex、Claude Code、Claude Desktop 與 Grok Build 的通用供應商代理</b><br>
-兩條命令，這四個都能跑你指定的任何 LLM。</p>
+兩條命令，這四個就都能跑你指定的任何 LLM。</p>
 
 <p align="center">
   <a href="https://x.com/claudeebum"><img src="https://img.shields.io/badge/%40claudeebum-000000?logo=x&logoColor=white" alt="在 X 上關注 @claudeebum"></a>
@@ -20,7 +20,7 @@ ocx start
 
 ### Claude Code，執行任意模型
 
-選擇器是原廠 Claude Code。背後的大腦不是。
+選擇器還是 Claude Code 原本的，換掉的只是背後的大腦。
 
 </td>
 <td width="50%">
@@ -145,7 +145,7 @@ curl --fail --silent http://127.0.0.1:10100/readyz
 `package.json`、`bun.lock`，以及特別納入的 `scripts/model-metadata.source.json`。
 
 權杖與可變狀態留在名為 `ocx-state` 的 volume；映像、Compose 檔、環境變數或 shell 引數都不會放入憑證。見
-[Remote Hub 部署指南](https://opencodex.me/zh-tw/guides/remote-hub/#docker-compose) 以了解供應商
+[Remote Hub 部署指南](https://opencodex.me/zh-tw/guides/remote-hub/) 以了解供應商
 設定、已認證的驗收檢查、遠端管理與還原。
 
 </details>
@@ -177,7 +177,7 @@ bun run src/cli/index.ts start
 </details>
 
 <details>
-<summary>給 agent</summary>
+<summary>給 agent 使用</summary>
 
 ```bash
 npm install -g @bitkyc08/opencodex
@@ -219,7 +219,7 @@ Bun，Windows 也不需要 WSL。若 npm 攔截了打包執行環境的安裝腳
   > 處置。OpenCodex 不贊成用額外帳號規避供應商限制，也不贊成
   > 在人與人之間共用帳號憑證。你有責任遵守各
   > 供應商的現行條款。見
-  > [Codex Auth 帳號池指南](https://opencodex.me/zh-tw/guides/web-dashboard/#codex-auth-and-account-pools)
+  > [Codex Auth 帳號池指南](https://opencodex.me/zh-tw/guides/web-dashboard/)
   > 與 [OpenAI 現行使用條款](https://openai.com/policies/terms-of-use/)。
 - **Combo** — 一個虛擬模型 id，可在供應商之間 failover 或加權 round-robin。見
   [combo 指南](https://opencodex.me/zh-tw/guides/combos/)。

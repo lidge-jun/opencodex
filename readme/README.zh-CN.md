@@ -1,6 +1,6 @@
 <h3 align="center">make codex open!</h3>
 <p align="center"><b>面向 OpenAI Codex、Claude Code、Claude Desktop 和 Grok Build 的通用提供商代理</b><br>
-两条命令，它们每一个都能运行你指定的任意 LLM。</p>
+两条命令，它们就都能跑你指定的任意 LLM。</p>
 
 <p align="center">
   <a href="https://x.com/claudeebum"><img src="https://img.shields.io/badge/%40claudeebum-000000?logo=x&logoColor=white" alt="在 X 上关注 @claudeebum"></a>
@@ -20,7 +20,7 @@ ocx start
 
 ### Claude Code，运行任意模型
 
-选择器是原装 Claude Code。背后的大脑不是。
+选择器还是 Claude Code 原装的，换掉的只是背后的大脑。
 
 </td>
 <td width="50%">
@@ -148,7 +148,7 @@ curl --fail --silent http://127.0.0.1:10100/readyz
 
 令牌和可变状态留在 `ocx-state` 命名卷中；镜像、Compose 文件、环境或 shell 参数里
 都不会放入任何凭证。提供商配置、经认证的验收检查、远程管理和回滚，见
-[Remote Hub 部署指南](https://opencodex.me/zh-cn/guides/remote-hub/#docker-compose)。
+[Remote Hub 部署指南](https://opencodex.me/zh-cn/guides/remote-hub/)。
 
 </details>
 
@@ -179,7 +179,7 @@ bun run src/cli/index.ts start
 </details>
 
 <details>
-<summary>面向代理</summary>
+<summary>面向 agent</summary>
 
 ```bash
 npm install -g @bitkyc08/opencodex
@@ -220,7 +220,7 @@ Bun，Windows 也不需要 WSL。如果 npm 拦截了捆绑运行时的安装脚
   > **提供商政策说明：** 账户池仅用于路由和运行韧性；它不保证能避开提供商的速率限制、
   > 执法、停用或其他账户处置。OpenCodex 不支持用额外账户规避提供商限制，也不支持
   > 在人与人之间共享账户凭证。你有责任遵守各提供商的现行条款。见
-  > [Codex Auth 账户池指南](https://opencodex.me/zh-cn/guides/web-dashboard/#codex-auth-and-account-pools)
+  > [Codex Auth 账户池指南](https://opencodex.me/zh-cn/guides/web-dashboard/)
   > 以及 [OpenAI 现行使用条款](https://openai.com/policies/terms-of-use/)。
 - **Combos** —— 一个虚拟模型 id，跨提供商做故障转移或加权 round-robin。见
   [combo 指南](https://opencodex.me/zh-cn/guides/combos/)。

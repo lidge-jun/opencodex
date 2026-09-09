@@ -147,7 +147,7 @@ curl --fail --silent http://127.0.0.1:10100/readyz
 
 토큰과 가변 상태는 `ocx-state` named volume에 남습니다. 이미지, Compose 파일, 환경, 셸 인자에는
 자격 증명을 넣지 않습니다. 프로바이더 설정, 인증된 수락 검사, 원격 관리, 롤백은
-[Remote Hub 배포 가이드](https://opencodex.me/ko/guides/remote-hub/#docker-compose)를 보세요.
+[Remote Hub 배포 가이드](https://opencodex.me/ko/guides/remote-hub/)를 보세요.
 
 </details>
 
@@ -219,7 +219,7 @@ ocx init      # 대화형 설정: ~/.opencodex/config.json을 쓰고 Codex를 �
   > 제재, 정지, 기타 계정 조치로부터의 보호를 보장하지 않습니다. OpenCodex는 프로바이더 한도를
   > 우회하려고 추가 계정을 쓰거나, 계정 자격 증명을 사람들끼리 공유하는 행위를 지지하지 않습니다.
   > 각 프로바이더의 현행 약관을 지키는 책임은 사용자에게 있습니다.
-  > [Codex Auth 계정 풀 가이드](https://opencodex.me/ko/guides/web-dashboard/#codex-auth-and-account-pools)와
+  > [Codex Auth 계정 풀 가이드](https://opencodex.me/ko/guides/web-dashboard/)와
   > [OpenAI 이용 약관](https://openai.com/policies/terms-of-use/)을 확인하세요.
 - **Combos** — failover나 가중 round-robin으로 프로바이더를 묶는 가상 모델 id 하나입니다.
   [combo 가이드](https://opencodex.me/ko/guides/combos/)를 확인하세요.

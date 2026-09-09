@@ -152,7 +152,7 @@ tailnet のフロントエンドでアクセスを制限してください。生
 
 トークンと可変状態は `ocx-state` という named volume に残り、イメージ、Compose ファイル、環境変数、
 シェル引数のどこにも認証情報は置かれません。プロバイダーの設定、認証付きの受け入れ確認、リモート管理、
-ロールバックは [Remote Hub デプロイガイド](https://opencodex.me/ja/guides/remote-hub/#docker-compose)
+ロールバックは [Remote Hub デプロイガイド](https://opencodex.me/ja/guides/remote-hub/)
 を参照してください。
 
 </details>
@@ -228,7 +228,7 @@ ocx init      # 対話式セットアップ: ~/.opencodex/config.json を書き�
   > あり、プロバイダーのレート制限、措置、停止その他のアカウント処分から守るものではありません。
   > OpenCodex は、プロバイダーの制限を回避するために追加のアカウントを使うことや、アカウントの認証情報
   > を人と共有することを推奨しません。各プロバイダーの現行の規約を守る責任は利用者にあります。
-  > [Codex Auth とアカウントプールの案内](https://opencodex.me/ja/guides/web-dashboard/#codex-auth-and-account-pools)
+  > [Codex Auth とアカウントプールの案内](https://opencodex.me/ja/guides/web-dashboard/)
   > と [OpenAI の現行利用規約](https://openai.com/policies/terms-of-use/)をご覧ください。
 - **コンボ** — 1 つの仮想モデル ID で、複数プロバイダーにまたがる failover や重み付きラウンドロビンを
   組みます。[コンボガイド](https://opencodex.me/ja/guides/combos/)を参照してください。
@@ -237,7 +237,7 @@ ocx init      # 対話式セットアップ: ~/.opencodex/config.json を書き�
   [サブエージェントガイド](https://opencodex.me/ja/guides/sub-agent-surface/)を参照してください。
 <!-- sponsors:main-first-mention -->
 - **一度ログインすれば API キーは不要** — xAI、Anthropic、Kimi は OAuth に対応します。あるいは
-  `codex login` を転送する、キーを貼り付ける、${ENV_VAR} 参照を使う、のいずれでもかまいません。
+  `codex login` を転送する、キーを貼り付ける、`${ENV_VAR}` 参照を使う、のいずれでもかまいません。
 - **Web 検索とビジョンのサイドカー** — OpenAI 以外のモデルも、ChatGPT ログインの上で動くサイドカーを
   通じて本物の Web 検索と画像理解を使えます。
 - **何が起きているか見える** — ダッシュボードがプロバイダー、OAuth の状態、モデルの選択、そしてキャッシュ
@@ -400,4 +400,3 @@ opencodex はコミュニティが維持する独立したプロジェクトで�
 ## ライセンス
 
 MIT
-
