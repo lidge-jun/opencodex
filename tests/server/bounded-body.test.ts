@@ -461,6 +461,35 @@ describe("readBoundedResponseBody", () => {
 		expect(Array.from(result.bytes)).toEqual(Array.from(expected));
 	});
 
+	test.each(["resolve", "reject", "pending"] as const)(
+		"raw byte pre-aborted reads cancel the original body without waiting: %s", async mode => {
+			const parent = new AbortController();
+			const reason = { code: "stopped-before-read" };
+			const pendingCancel = Promise.withResolvers<void>();
+			const cancellations: unknown[] = [];
+			let pulls = 0;
+			const body = new ReadableStream<Uint8Array>({
+				pull() { pulls++; },
+				cancel(value) {
+					cancellations.push(value);
+					if (mode === "reject") return Promise.reject(new Error("cancel failed"));
+					if (mode === "pending") return pendingCancel.promise;
+				},
+			}, { highWaterMark: 0 });
+			parent.abort(reason);
+			try {
+				await expect(readBoundedResponseBytes(new Response(body), { maxBytes: 5, signal: parent.signal }))
+					.rejects.toBe(reason);
+				expect(cancellations).toHaveLength(1);
+				expect(cancellations[0]).toBe(reason);
+				expect(pulls).toBe(0);
+				expect(body.locked).toBe(false);
+			} finally {
+				pendingCancel.resolve();
+			}
+		},
+	);
+
 	test("raw byte reads discard the prefix and cancel without draining the stream", async () => {
 		let cancelled = false;
 		let tailPulled = false;
