@@ -262,6 +262,8 @@ Responses 系列和 Chat 请求接受专用标头或 Bearer 字段中的代理�
 
 没有密钥且不使用 OAuth 的 Cursor 路由可以使用调用方单独提供的 bearer，但不能使用代理 secret 或自动补充的 ChatGPT main 凭据。Combo/policy 选择以及实际发生的 shadow/thread-spawn 路由改写不会将调用方的原始凭据传递给新目标。规范 OpenAI 路由仅在 JWT 包含 ChatGPT 账户声明，且任何显式账户标头都与该声明匹配时，才可在内部路由变更后恢复调用方的单个非代理密钥 bearer。 向可选的 OpenAI sidecar 转发调用方认证时，需要单个 JWT 以及显式提供且匹配的 `chatgpt-account-id`。即使提供了显式账户标头，opaque bearer 也不会跨路由变更恢复。 除此之外，最终目标必须拥有自己的配置、OAuth 或已保存凭据，否则请求会在本地失败。只有 thread-spawn 标记而没有路由变化时，不会移除凭据。
 
+对于未配置密钥的 Cursor Chat 请求，只有实际计划了 OpenAI 辅助调用且存在规范的 Direct 候选时，才会补充已存储的 main 身份验证。无关的 Cursor 请求不会通过此流程占用 native main，因此不会延迟配置文件切换。辅助调用凭据仍受启动和切换保护限制，并与 Cursor bearer 分离。Pool 及明确指定账号的辅助调用保留现有账号选择。
+
 Claude replay 只会以当前 turn 已取得所有权的内存 snapshot 保留 main 凭据，并且仅在最终目标为规范 ChatGPT 路由时恢复它。
 
 :::caution

@@ -487,6 +487,8 @@ Responses-family and Chat requests accept a proxy key in the dedicated header or
 
 A keyless, non-OAuth Cursor route may use that separate caller bearer, but never a proxy secret or automatic ChatGPT-main enrichment. Combo/policy selection and actual shadow/thread-spawn rewrites do not transfer raw caller credentials to new targets. Canonical OpenAI routing can restore the caller’s single non-proxy bearer after an internal route change only when its JWT carries a ChatGPT account claim and any explicit account header matches that claim. Forwarding caller authentication to optional OpenAI sidecars requires a single JWT and a matching explicit `chatgpt-account-id`. Opaque bearers are not restored across route changes, even with an explicit account header. Otherwise, the final target needs its own configured, OAuth, or stored credential; otherwise it fails locally. A thread-spawn marker alone does not strip credentials.
 
+Chat's optional stored-main enrichment for a keyless Cursor request is deferred until an OpenAI helper is actually planned and a canonical Direct candidate is available. An unrelated Cursor request does not acquire a native-main claim through this enrichment, so it does not delay profile switching. Helper credentials still obey startup and switch fences and remain separate from the Cursor bearer. Pool and account-qualified helpers retain their existing account selection.
+
 Claude replay retains main auth only as a turn-claimed in-memory snapshot and reconstructs it only for a final canonical ChatGPT route.
 
 :::caution

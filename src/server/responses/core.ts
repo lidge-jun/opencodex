@@ -290,6 +290,7 @@ import {
   upstreamErrorMessageFromPayload,
 } from "../../lib/errors";
 import type { AdmissionLease } from "../../lib/admission";
+import { tryClaimNativeMainProfileForTurn as tryClaimStoredSidecarMainProfile } from "../../codex/native-main-admission";
 import { prepareEffortNormalization, supportedLadderFor } from "../effort-policy";
 import { isThreadSpawnRequest } from "../effort-policy";
 import {
@@ -1731,6 +1732,8 @@ export interface HandleResponsesOptions {
   trustedClaudeMainAuth?: { authorization: string; chatgptAccountId?: string };
   /** Sidecar-only auth captured before route changes; null means no usable original pair. */
   openAiSidecarAuth?: ExplicitOpenAiCallerAuth | null;
+  /** Internal Chat bridge permission to obtain claimed stored auth only for a final Direct sidecar. */
+  allowStoredOpenAiSidecarAuth?: boolean;
   /** Original caller-owned native pair; separate from any claimed sidecar enrichment. */
   nativeCallerAuth?: ExplicitOpenAiCallerAuth | null;
   /** Caller Direct credential under Direct\'s own predicate; restored only for the canonical OpenAI final route. */
@@ -4533,21 +4536,42 @@ async function handleResponsesInner(
   }
 
   let openAiSidecar: ResolvedOpenAiForwardSidecar | undefined;
-  const needsOpenAiVision = shouldResolveOpenAiVisionSidecar(config, route.provider, route.modelId, parsed);
-  const needsOpenAiSearch = shouldResolveOpenAiWebSearchSidecar(config, parsed, isPassthrough);
+  const visionDescribeTerminal = options.visionDescribeTerminal === true;
+  const routedCompaction = parsed._compactionRequest === true
+    && !isCanonicalOpenAiForwardProvider(route.provider);
+  const needsOpenAiVision = !visionDescribeTerminal
+    && shouldResolveOpenAiVisionSidecar(config, route.provider, route.modelId, parsed);
+  const needsOpenAiSearch = !routedCompaction && !adapter.runTurn
+    && shouldResolveOpenAiWebSearchSidecar(config, parsed, isPassthrough);
   if (needsOpenAiVision || needsOpenAiSearch) {
     try {
+      const candidates = listOpenAiForwardSidecarCandidates(config);
+      let sidecarAuth = options.openAiSidecarAuth;
+      if (!sidecarAuth && options.allowStoredOpenAiSidecarAuth === true
+        && route.codexAccountId === undefined
+        && candidates.some(candidate => candidate.accountMode === "direct")
+        && tryClaimStoredSidecarMainProfile(options.turnAdmissionLease)) {
+        // Request-local helper authority only: never promote this pair to caller, primary,
+        // or retry credentials. Claim before reading so profile switches remain fenced.
+        try {
+          const { getMainAccountToken } = await import("../../codex/main-account");
+          const token = getMainAccountToken();
+          if (token) sidecarAuth = captureExplicitOpenAiCallerAuth(new Headers({
+            authorization: `Bearer ${token.accessToken}`, "chatgpt-account-id": token.chatgptAccountId,
+          }), config);
+        } catch { /* stored enrichment is optional */ }
+      }
       // Preserve explicit OpenAI helper auth across route changes without returning it to
       // primary-provider headers or alternate-main retry. The resolver revalidates scope.
       const sidecarHeaders = new Headers(req.headers);
       sidecarHeaders.delete("authorization");
       sidecarHeaders.delete("chatgpt-account-id");
-      if (options.openAiSidecarAuth) {
-        sidecarHeaders.set("authorization", options.openAiSidecarAuth.authorization);
-        sidecarHeaders.set("chatgpt-account-id", options.openAiSidecarAuth.chatgptAccountId);
+      if (sidecarAuth) {
+        sidecarHeaders.set("authorization", sidecarAuth.authorization);
+        sidecarHeaders.set("chatgpt-account-id", sidecarAuth.chatgptAccountId);
       }
       openAiSidecar = await resolveFirstUsableOpenAiSidecar(
-        listOpenAiForwardSidecarCandidates(config),
+        candidates,
         sidecarHeaders,
         config,
         {
@@ -4582,7 +4606,6 @@ async function handleResponsesInner(
   // call must never plan another describe. The flag arrives from the Chat
   // surface (whose bridge rebuilds headers) or as the raw header for native
   // Responses callers. Marked + text-only routed model → strip, depth cap 1.
-  const visionDescribeTerminal = options.visionDescribeTerminal === true;
   const visionPlan = visionDescribeTerminal
     ? undefined
     : planVisionSidecar(config, route.provider, route.modelId, parsed, openAiSidecar, {
@@ -4644,8 +4667,6 @@ async function handleResponsesInner(
   // `compaction_trigger` item — only the canonical ChatGPT backend speaks that
   // contract. An API-key gateway would receive the trigger, answer with an ordinary
   // message, and leave Codex fataling on a missing compaction item (#422).
-  const routedCompaction = parsed._compactionRequest === true
-    && !isCanonicalOpenAiForwardProvider(route.provider);
   const commitReasoningReplayServingRoute = (): void => {
     commitReasoningReplayServingIdentity(parsed._reasoningReplayScope);
   };

@@ -304,6 +304,18 @@ describe("web-search sidecar planning", () => {
     expect(shouldResolveOpenAiWebSearchSidecar(config(), parsed, false)).toBe(true);
   });
 
+  test("a forbidden hosted search does not resolve OpenAI auth", () => {
+    for (const toolChoice of ["none", { type: "function", name: "read_file" }]) {
+      const parsed = parseRequest({ model: "routed/model", input: "hi",
+        tools: [{ type: "web_search" }, { type: "function", name: "read_file", parameters: { type: "object" } }],
+        tool_choice: toolChoice,
+      });
+      expect(parsed._webSearch).toBeDefined();
+      expect(shouldResolveOpenAiWebSearchSidecar(config(), parsed, false)).toBe(false);
+      expect(planWebSearch(config(), parsed, false, routedProvider, "model")).toBeUndefined();
+    }
+  });
+
   test("parseRequest stashes hosted web_search while keeping normal tools", () => {
     const parsed = parsedWithWebSearch();
 

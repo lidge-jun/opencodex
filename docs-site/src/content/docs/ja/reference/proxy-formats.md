@@ -249,6 +249,8 @@ Responses 系列と Chat のリクエストは、専用ヘッダーまたは Bea
 
 キーがなく OAuth を使用しない Cursor ルートは、別途指定された呼び出し元 bearer を使用できますが、プロキシ secret や自動補完された ChatGPT main 認証は使用しません。Combo/policy の選択と実際の shadow/thread-spawn ルート変更では、呼び出し元の生の認証情報を新しい対象へ渡しません。正規の OpenAI ルーティングでは、JWT に ChatGPT アカウントの claim が含まれ、明示的なアカウントヘッダーがある場合はその claim と一致するときに限り、内部ルート変更後にプロキシキーではない呼び出し元の単一 bearer を復元できます。 オプションの OpenAI sidecar に呼び出し元の認証を転送するには、単一の JWT とそれに一致する明示的な `chatgpt-account-id` が必要です。Opaque bearer は、明示的なアカウントヘッダーがあっても、ルート変更をまたいで復元されません。 それ以外の最終対象には自身の設定済み・OAuth・保存済み認証情報が必要で、なければローカルで失敗します。ルート変更のない thread-spawn マーカーだけでは認証情報を削除しません。
 
+設定済みキーのない Cursor への Chat リクエストでは、保存済み main 認証による任意の補完を、OpenAI 補助呼び出しが実際に計画され、canonical Direct の候補が利用可能になるまで延期します。無関係な Cursor リクエストはこの経路で native main を占有せず、プロファイル切り替えを遅らせません。補助認証は起動時と切り替え時の保護に従い、Cursor bearer とは分離されます。Pool およびアカウント指定の補助呼び出しは既存のアカウント選択を維持します。
+
 Claude replay は、その turn が所有権を確保した main 認証だけをメモリ内 snapshot に保持し、最終対象が正規の ChatGPT ルートである場合にのみ復元します。
 
 :::caution

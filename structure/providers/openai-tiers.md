@@ -51,6 +51,15 @@ alternate-main retry authentication; the original caller's native snapshot is se
 Optional Chat/Claude stored-main enrichment still requires
 the native-main turn claim.
 
+Chat's noncanonical caller-auth branch passes only an internal permission to resolve stored
+sidecar auth later. Final helper planning checks vision terminal/routed-backend and search
+tool-choice/compaction/runTurn exclusions before requesting a canonical Direct candidate.
+Only that concrete need, without an existing explicit snapshot or exact-account selection,
+can acquire a startup- and drain-fenced native-main claim and read the stored token. The pair
+stays local to sidecar headers; caller, primary, and retry authority are unchanged. Unrelated
+Cursor turns therefore leave native main switchable while their upstream remains active.
+Pool and exact-account sidecars continue through their existing account-selection path.
+
 The two routes also keep separate request-compatibility contracts. The canonical ChatGPT Codex
 forward destination removes public `prompt_cache_options` because that backend rejects the field
 before inference; `prompt_cache_key` remains supported. `openai-apikey` and noncanonical/custom
