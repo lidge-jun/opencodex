@@ -47,6 +47,10 @@ function requestWithCandidate(
   candidate: Pick<RouteCandidateTrace, "provider" | "model">,
 ): Request {
   const headers = new Headers(req.headers);
+  // The next candidate owns a different physical credential domain. Typed
+  // admission and any claimed Claude snapshot stay in caller-owned CoreOptions.
+  headers.delete("authorization");
+  headers.delete("chatgpt-account-id");
   headers.delete("content-encoding");
   headers.delete("content-length");
   headers.set("content-type", "application/json");

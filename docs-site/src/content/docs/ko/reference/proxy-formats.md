@@ -299,16 +299,18 @@ loopback 전용 bind에서는 data-plane admission에 설정된 key가 필요하
 
 | 표면 | Dedicated | Bearer | `x-api-key` |
 | --- | --- | --- | --- |
-| `/v1/responses` HTTP and WebSocket | 필요함 | proxy admission에서는 거부됨 | 거부됨 |
-| `/v1/responses/compact` | 필요함 | proxy admission에서는 거부됨 | 거부됨 |
-| `/v1/chat/completions` | 필요함 | proxy admission에서는 거부됨 | 거부됨 |
+| `/v1/responses` HTTP and WebSocket | 허용됨 | 허용됨 | 거부됨 |
+| `/v1/responses/compact` | 허용됨 | 허용됨 | 거부됨 |
+| `/v1/chat/completions` | 허용됨 | 허용됨 | 거부됨 |
 | `/v1/messages`와 `/v1/messages/count_tokens` | 허용됨 | 허용됨 | 허용됨 |
 | `/v1/models` | 허용됨 | 허용됨 | 허용됨 |
 | `/v1/live`, `/v1/realtime/calls`, 및 sideband joins | 허용됨 | 허용됨 | 허용됨 |
 
-Responses 계열과 Chat 요청은 `Authorization`을 provider 또는 Codex Direct passthrough용으로 예약하므로, remote
-proxy key는 전용 헤더를 사용해야 합니다. Messages와 Realtime 표면은 더 넓은 클라이언트 호환성이 필요하므로
-세 가지 형식을 모두 허용합니다.
+Responses 계열과 Chat 요청은 전용 헤더 또는 Bearer 필드의 프록시 키를 허용합니다. 네이티브 경로에서는 선택한 저장 Codex 자격 증명이 admission bearer를 대체하고, 다른 경로에서는 해당 bearer를 제거합니다. 프록시 키를 upstream 자격 증명으로 사용하지 않습니다. 별도의 provider bearer도 전달하려면 프록시 키는 전용 헤더에 넣으십시오.
+
+키가 없고 OAuth를 쓰지 않는 Cursor 경로는 별도의 호출자 bearer를 사용할 수 있지만, 프록시 secret이나 자동으로 보충한 ChatGPT main 인증은 사용할 수 없습니다. Combo/policy 선택과 실제 shadow/thread-spawn 경로 변경은 호출자의 원본 자격 증명을 새 대상으로 넘기지 않습니다. 최종 대상에는 자체 설정·OAuth·저장 자격 증명이 필요하며, 없으면 로컬에서 실패합니다. thread-spawn 표지만 있고 경로가 바뀌지 않으면 자격 증명을 제거하지 않습니다.
+
+Claude replay는 해당 turn이 소유권을 확보한 main 인증만 메모리 snapshot으로 유지하며, 최종 대상이 정규 ChatGPT 경로일 때만 복원합니다.
 
 :::caution
 data-plane key는 management credential이 아닙니다. management API는 별도의 admin secret을 사용합니다.

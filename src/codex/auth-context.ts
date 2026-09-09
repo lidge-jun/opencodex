@@ -609,8 +609,10 @@ export async function resolveCodexAuthContext(
     throw new Error("Codex auth context cannot select and exclude an account simultaneously");
   }
   const resolveCallerOwnedMainContext = async (): Promise<CodexAuthContext> => {
-    if (!hasCallerCodexBearer(headers)) throw new CodexDirectAuthenticationError();
     const substituteStoredMain = options.substituteMainCredentialForDirect === true;
+    // An internal route change can strip the admission bearer before this point.
+    // Trusted substitution still has to claim and validate stored main below.
+    if (!substituteStoredMain && !hasCallerCodexBearer(headers)) throw new CodexDirectAuthenticationError();
     if (!substituteStoredMain) {
       if (callerMatchesObservedMain(headers)) assertMainAccountPolicy(policy);
       if (reserve) {

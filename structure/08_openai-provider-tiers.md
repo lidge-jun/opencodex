@@ -18,6 +18,16 @@ engine. Direct short-circuits that engine before pool state is read or mutated a
 current caller/main-login bearer. Neither mode may fall through to `openai-apikey`, and the API
 provider may not fall through to Codex-login credentials.
 
+Caller credentials stay scoped to the selected physical route. Typed proxy admission survives
+Combo/policy recursion, but raw Authorization and ChatGPT account headers do not carry across
+those selections or actual shadow/thread-spawn rewrites. The final route resolves its own
+configured, OAuth, or stored credential; a thread-spawn marker without a rewrite preserves the
+caller credential. Bearer admission can still select stored native credentials under the existing
+turn claim. Claude replay may reconstruct its claimed main snapshot only for a final canonical
+ChatGPT target. Alternate-account retry retains the sanitized caller input separately from the
+selected Pool headers, so neither a discarded source bearer nor a Pool token becomes caller-main
+authority during retry.
+
 The two routes also keep separate request-compatibility contracts. The canonical ChatGPT Codex
 forward destination removes public `prompt_cache_options` because that backend rejects the field
 before inference; `prompt_cache_key` remains supported. `openai-apikey` and noncanonical/custom

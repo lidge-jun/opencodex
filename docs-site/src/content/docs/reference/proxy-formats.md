@@ -465,16 +465,18 @@ use the matrix below. “Dedicated” means `X-OpenCodex-API-Key`; the other col
 
 | Surface | Dedicated | Bearer | `x-api-key` |
 | --- | --- | --- | --- |
-| `/v1/responses` HTTP and WebSocket | Required | Rejected for proxy admission | Rejected |
-| `/v1/responses/compact` | Required | Rejected for proxy admission | Rejected |
-| `/v1/chat/completions` | Required | Rejected for proxy admission | Rejected |
+| `/v1/responses` HTTP and WebSocket | Accepted | Accepted | Rejected |
+| `/v1/responses/compact` | Accepted | Accepted | Rejected |
+| `/v1/chat/completions` | Accepted | Accepted | Rejected |
 | `/v1/messages` and `/v1/messages/count_tokens` | Accepted | Accepted | Accepted |
 | `/v1/models` | Accepted | Accepted | Accepted |
 | `/v1/live`, `/v1/realtime/calls`, and sideband joins | Accepted | Accepted | Accepted |
 
-Responses-family and Chat requests reserve `Authorization` for provider or Codex Direct
-passthrough, so a remote proxy key must use the dedicated header. Messages and Realtime surfaces
-need broader client compatibility and therefore accept all three forms.
+Responses-family and Chat requests accept a proxy key in the dedicated header or Bearer field. On native routes, the selected stored Codex credential replaces the admission bearer; on other routes it is removed. It is never an upstream credential. Use the dedicated header when also supplying a separate provider bearer.
+
+A keyless, non-OAuth Cursor route may use that separate caller bearer, but never a proxy secret or automatic ChatGPT-main enrichment. Combo/policy selection and actual shadow/thread-spawn rewrites do not transfer raw caller credentials to new targets. The final target needs its own configured, OAuth, or stored credential; otherwise it fails locally. A thread-spawn marker alone does not strip credentials.
+
+Claude replay retains main auth only as a turn-claimed in-memory snapshot and reconstructs it only for a final canonical ChatGPT route.
 
 :::caution
 Data-plane keys are not management credentials. The management API uses a separate admin secret;

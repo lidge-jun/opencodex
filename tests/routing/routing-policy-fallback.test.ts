@@ -137,16 +137,26 @@ describe("policy candidate fallback", () => {
     const trace = policyTrace();
     const logCtx = { requestedModel: "policy/daily", routeDecision: trace, attempts: [] } as unknown as RequestLogContext;
     const seenModels: string[] = [];
+    const seenAuthorization: Array<string | null> = [];
+    const seenAccountIds: Array<string | null> = [];
     const seenTerminalCodes: Array<string | undefined> = [];
     let bodyAcceptedCount = 0;
 
-    const response = await handleResponsesWithPolicyFallback(request(), {} as OcxConfig, logCtx, {
+    const initialRequest = request();
+    const initialHeaders = new Headers(initialRequest.headers);
+    initialHeaders.set("authorization", "Bearer fixture");
+    initialHeaders.set("chatgpt-account-id", "caller-account");
+    const credentialedRequest = new Request(initialRequest, { headers: initialHeaders });
+
+    const response = await handleResponsesWithPolicyFallback(credentialedRequest, {} as OcxConfig, logCtx, {
       onRequestBodyRead: () => {
         bodyAcceptedCount += 1;
       },
     }, {
       runCore: async (req, _config, childLog, options) => {
         options.onRequestBodyRead?.();
+        seenAuthorization.push(req.headers.get("authorization"));
+        seenAccountIds.push(req.headers.get("chatgpt-account-id"));
         const body = await req.json() as { model: string };
         seenModels.push(body.model);
         seenTerminalCodes.push(childLog.terminalErrorCode);
@@ -170,6 +180,8 @@ describe("policy candidate fallback", () => {
     expect(response.status).toBe(200);
     expect(bodyAcceptedCount).toBe(1);
     expect(seenModels).toEqual(["policy/daily", "provider-b/model-b"]);
+    expect(seenAuthorization).toEqual(["Bearer fixture", null]);
+    expect(seenAccountIds).toEqual(["caller-account", null]);
     expect(seenTerminalCodes).toEqual([undefined, undefined]);
     expect(logCtx.requestedModel).toBe("policy/daily");
     expect(logCtx.routeDecision).toBe(trace);

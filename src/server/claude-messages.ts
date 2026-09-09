@@ -837,6 +837,7 @@ async function handleClaudeMessagesWithBudget(
   }
 
   const headers = new Headers({ "content-type": "application/json" });
+  let trustedClaudeMainAuth: { authorization: string; chatgptAccountId?: string } | undefined;
   for (const name of FORWARD_HEADERS) {
     // The caller's bearer is the proxy admission token (ocx claude placeholder), never a
     // ChatGPT credential — forwarding it upstream turns into {"detail":"Unauthorized"}.
@@ -852,8 +853,13 @@ async function handleClaudeMessagesWithBudget(
     const { getMainAccountToken } = await import("../codex/main-account");
     const token = getMainAccountToken();
     if (token) {
-      headers.set("authorization", `Bearer ${token.accessToken}`);
+      const authorization = `Bearer ${token.accessToken}`;
+      headers.set("authorization", authorization);
       headers.set("chatgpt-account-id", token.chatgptAccountId);
+      trustedClaudeMainAuth = {
+        authorization,
+        ...(token.chatgptAccountId ? { chatgptAccountId: token.chatgptAccountId } : {}),
+      };
     }
   }
   if (opencodeGoRoute) {
@@ -923,6 +929,7 @@ async function handleClaudeMessagesWithBudget(
     // would fire, disagreeing with the pre-flight decision above.
     inboundWire: "anthropic",
     stripClaudeMainAuthForNoncanonicalForward: true,
+    ...(trustedClaudeMainAuth ? { trustedClaudeMainAuth } : {}),
     translatorBudget,
     ...(logIds ? { onFirstOutput: () => recordFirstOutput(logCtx, logIds.start) } : {}),
     onNativePassthroughTerminal: status => finalizeNativeLog(httpStatusForRequestLogTerminal(status, logCtx), { terminalStatus: status, closeReason: "terminal" }),

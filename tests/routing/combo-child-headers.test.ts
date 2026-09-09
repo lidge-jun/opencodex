@@ -17,6 +17,8 @@ describe("combo child request headers", () => {
     const parent = new Request("http://127.0.0.1:10100/v1/responses", {
       method: "POST",
       headers: {
+        authorization: "Bearer fixture",
+        "chatgpt-account-id": "caller-account",
         "content-type": "application/json",
         "content-encoding": "zstd",
       },
@@ -40,6 +42,8 @@ describe("combo child request headers", () => {
     ).rejects.toThrow(/Unknown frame descriptor|Invalid JSON|Unexpected token/i);
 
     const fixedHeaders = buildComboChildHeaders(parent.headers);
+    expect(fixedHeaders.has("authorization")).toBe(false);
+    expect(fixedHeaders.has("chatgpt-account-id")).toBe(false);
     expect(fixedHeaders.has("content-length")).toBe(false);
     expect(fixedHeaders.has("content-encoding")).toBe(false);
     const childDecoded = await readJsonRequestBody(

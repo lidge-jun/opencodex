@@ -234,14 +234,18 @@ API ではありません。Desktop のキー移行・復旧・切断は既存�
 
 |表面 |専用 |ベアラー | `x-api-key` |
 | --- | --- | --- | --- |
-| `/v1/responses` HTTP と WebSocket |必須 |代理入場を拒否されました |拒否されました |
-| `/v1/responses/compact` |必須 |代理入場を拒否されました |拒否されました |
-| `/v1/chat/completions` |必須 |代理入場を拒否されました |拒否されました |
+| `/v1/responses` HTTP と WebSocket | 承認済み | 承認済み |拒否されました |
+| `/v1/responses/compact` | 承認済み | 承認済み |拒否されました |
+| `/v1/chat/completions` | 承認済み | 承認済み |拒否されました |
 | `/v1/messages` および `/v1/messages/count_tokens` |承認済み |承認済み |承認済み |
 | `/v1/models` |承認済み |承認済み |承認済み |
 | `/v1/live`、`/v1/realtime/calls`、および側波帯結合 |承認済み |承認済み |承認済み |
 
-Responses-family および Chat リクエストは、プロバイダーまたは Codex Direct パススルー用に `Authorization` を予約するため、リモート プロキシ キーは専用ヘッダーを使用する必要があります。メッセージとリアルタイム サーフェスは、より広範なクライアント互換性を必要とするため、3 つの形式すべてを受け入れます。
+Responses 系列と Chat のリクエストは、専用ヘッダーまたは Bearer フィールドのプロキシキーを受け付けます。ネイティブルートでは選択された保存済み Codex 認証情報が admission bearer を置き換え、他のルートではその bearer を削除します。プロキシキーを upstream の認証情報として使うことはありません。別の provider bearer も渡す場合は、プロキシキーを専用ヘッダーに設定してください。
+
+キーがなく OAuth を使用しない Cursor ルートは、別途指定された呼び出し元 bearer を使用できますが、プロキシ secret や自動補完された ChatGPT main 認証は使用しません。Combo/policy の選択と実際の shadow/thread-spawn ルート変更では、呼び出し元の生の認証情報を新しい対象へ渡しません。最終対象には自身の設定済み・OAuth・保存済み認証情報が必要で、なければローカルで失敗します。ルート変更のない thread-spawn マーカーだけでは認証情報を削除しません。
+
+Claude replay は、その turn が所有権を確保した main 認証だけをメモリ内 snapshot に保持し、最終対象が正規の ChatGPT ルートである場合にのみ復元します。
 
 :::caution
 データプレーン キーは管理資格情報ではありません。管理 API は別の管理シークレットを使用します。 [管理 API](/reference/management-api/)を参照してください。 1 つのシークレットを両方のプレーンに再利用しないでください。

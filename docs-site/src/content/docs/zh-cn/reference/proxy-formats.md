@@ -247,15 +247,18 @@ Compaction 会为需要缩短长 Responses 会话的客户端返回替换历史�
 
 | 表面 | Dedicated | Bearer | `x-api-key` |
 | --- | --- | --- | --- |
-| `/v1/responses` HTTP 和 WebSocket | 必需 | 被代理准入拒绝 | 被拒绝 |
-| `/v1/responses/compact` | 必需 | 被代理准入拒绝 | 被拒绝 |
-| `/v1/chat/completions` | 必需 | 被代理准入拒绝 | 被拒绝 |
+| `/v1/responses` HTTP 和 WebSocket | 接受 | 接受 | 被拒绝 |
+| `/v1/responses/compact` | 接受 | 接受 | 被拒绝 |
+| `/v1/chat/completions` | 接受 | 接受 | 被拒绝 |
 | `/v1/messages` 和 `/v1/messages/count_tokens` | 接受 | 接受 | 接受 |
 | `/v1/models` | 接受 | 接受 | 接受 |
 | `/v1/live`、`/v1/realtime/calls` 和 sideband join | 接受 | 接受 | 接受 |
 
-Responses 家族和 Chat 请求会把 `Authorization` 留给提供方或 Codex Direct
-透传，因此远程代理密钥必须使用专用头。Messages 和 Realtime 表面需要更广泛的客户端兼容性，因此接受这三种形式。
+Responses 系列和 Chat 请求接受专用标头或 Bearer 字段中的代理密钥。在原生路由上，所选的已保存 Codex 凭据会替换 admission bearer；其他路由会移除该 bearer。代理密钥绝不会用作 upstream 凭据。如果还要提供独立的 provider bearer，请将代理密钥放在专用标头中。
+
+没有密钥且不使用 OAuth 的 Cursor 路由可以使用调用方单独提供的 bearer，但不能使用代理 secret 或自动补充的 ChatGPT main 凭据。Combo/policy 选择以及实际发生的 shadow/thread-spawn 路由改写不会将调用方的原始凭据传递给新目标。最终目标必须拥有自己的配置、OAuth 或已保存凭据，否则请求会在本地失败。只有 thread-spawn 标记而没有路由变化时，不会移除凭据。
+
+Claude replay 只会以当前 turn 已取得所有权的内存 snapshot 保留 main 凭据，并且仅在最终目标为规范 ChatGPT 路由时恢复它。
 
 :::caution
 数据平面密钥不是管理凭证。管理 API 使用单独的 admin secret；

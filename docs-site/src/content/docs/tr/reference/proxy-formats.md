@@ -326,17 +326,18 @@ ve `x-api-key` anlamına gelir.
 
 | Yüzey | Özel | Bearer | `x-api-key` |
 | --- | --- | --- | --- |
-| `/v1/responses` HTTP ve WebSocket | Gerekli | Proxy kabulü için reddedilir | Reddedilir |
-| `/v1/responses/compact` | Gerekli | Proxy kabulü için reddedilir | Reddedilir |
-| `/v1/chat/completions` | Gerekli | Proxy kabulü için reddedilir | Reddedilir |
+| `/v1/responses` HTTP ve WebSocket | Kabul Edilir | Kabul Edilir | Reddedilir |
+| `/v1/responses/compact` | Kabul Edilir | Kabul Edilir | Reddedilir |
+| `/v1/chat/completions` | Kabul Edilir | Kabul Edilir | Reddedilir |
 | `/v1/messages` ve `/v1/messages/count_tokens` | Kabul Edilir | Kabul Edilir | Kabul Edilir |
 | `/v1/models` | Kabul Edilir | Kabul Edilir | Kabul Edilir |
 | `/v1/live`, `/v1/realtime/calls` ve yan bant katılımları | Kabul Edilir | Kabul Edilir | Kabul Edilir |
 
-Responses ailesi ve Sohbet istekleri `Authorization`'ı sağlayıcı veya Codex
-Direct doğrudan geçişi için ayırır, bu nedenle uzak bir proxy anahtarı özel
-başlığı kullanmalıdır. Messages ve Realtime yüzeyleri daha geniş istemci
-uyumluluğuna ihtiyaç duyar ve bu nedenle üç formu da kabul eder.
+Responses ailesi ve Chat istekleri, özel başlıkta veya Bearer alanında bir proxy anahtarını kabul eder. Yerel Codex rotalarında seçilen kayıtlı Codex kimlik bilgisi kabul bearer’ının yerini alır; diğer rotalarda bu bearer kaldırılır. Proxy anahtarı hiçbir zaman upstream kimlik bilgisi olarak kullanılmaz. Ayrı bir sağlayıcı bearer’ı da gönderiyorsanız proxy anahtarını özel başlığa koyun.
+
+Anahtarı olmayan ve OAuth kullanmayan bir Cursor rotası, çağıranın ayrı bearer’ını kullanabilir; proxy sırrını veya otomatik eklenen ChatGPT main kimlik bilgisini kullanamaz. Combo/policy seçimi ve gerçekleşen shadow/thread-spawn rota değişiklikleri, çağıranın ham kimlik bilgilerini yeni hedeflere aktarmaz. Son hedefin kendi yapılandırılmış, OAuth veya kayıtlı kimlik bilgisi bulunmalıdır; aksi hâlde istek yerel olarak başarısız olur. Rota değişmeden yalnızca thread-spawn işaretinin bulunması kimlik bilgilerini kaldırmaz.
+
+Claude replay, main kimlik bilgisini yalnızca ilgili turn tarafından sahipliği alınmış bir bellek snapshot’ında tutar ve yalnızca son hedef kanonik bir ChatGPT rotasıysa geri yükler.
 
 :::caution
 Veri düzlemi anahtarları yönetim kimlik bilgileri değildir. Yönetim API'si ayrı
