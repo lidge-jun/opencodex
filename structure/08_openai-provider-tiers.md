@@ -18,6 +18,39 @@ engine. Direct short-circuits that engine before pool state is read or mutated a
 current caller/main-login bearer. Neither mode may fall through to `openai-apikey`, and the API
 provider may not fall through to Codex-login credentials.
 
+Caller credentials stay scoped to the selected physical route. Typed proxy admission survives
+Combo/policy recursion, but raw Authorization and ChatGPT account headers are removed from
+rebuilt requests at those selections or actual shadow/thread-spawn rewrites. An original caller's
+Direct credential — a clean non-proxy bearer carrying a locally decoded ChatGPT account claim
+(routing evidence, not signature verification), with any explicit account header matching that
+claim — is captured separately and may be
+restored only for the final canonical OpenAI route, under the existing Direct/Pool, native-main
+claim, and entitlement rules. This restore is deliberately stricter than unchanged-route Direct
+forwarding, which keeps its legacy rules. The stricter explicit-pair snapshot (JWT with matching account
+header) additionally feeds optional OpenAI sidecars and is also
+withheld from an unchanged keyless Cursor route; an independently supplied Cursor bearer
+remains supported. A noncanonical caller-auth transport keeps only a clean single bearer with
+no ChatGPT account claim: a bearer carrying a ChatGPT account claim, a combined or malformed
+Authorization value, and the chatgpt-account-id header are withheld from it. Key-auth and noncanonical routes use
+their own configured key or provider-owned OAuth credential. Canonical unqualified `openai`
+forwarding preserves the sanitized caller/main-login bearer in Direct mode and may select a
+stored native credential in Pool mode. An explicit account-qualified sidecar may select its
+stored account even when the provider default is Direct. A thread-spawn marker without a rewrite
+preserves the caller credential. Bearer admission can still select stored native credentials under
+the existing turn claim. Claude replay may reconstruct its claimed main snapshot only for a final canonical
+ChatGPT target. Alternate-account retry retains the sanitized caller input separately from the
+selected Pool headers, so neither a discarded source bearer nor a Pool token becomes caller-main
+authority during retry.
+
+Explicit OpenAI sidecar authentication is retained separately in request-local memory before
+Combo or policy headers are rewritten. Only the canonical sidecar resolver can restore that
+single bearer and matching explicit account pair; it revalidates the existing credential and
+destination rules. A recorded absence is not recaptured from a later provider request, and
+combined Authorization values are rejected. This snapshot never becomes primary-provider or
+alternate-main retry authentication; the original caller's native snapshot is separate.
+Optional Chat/Claude stored-main enrichment still requires
+the native-main turn claim.
+
 The two routes also keep separate request-compatibility contracts. The canonical ChatGPT Codex
 forward destination removes public `prompt_cache_options` because that backend rejects the field
 before inference; `prompt_cache_key` remains supported. `openai-apikey` and noncanonical/custom
@@ -159,6 +192,17 @@ invalidates old evidence. Request-owned bearers are matched only against a crede
 workspace already observed under native ownership; an unrelated or unmatched keyring credential
 is not attributed to stored main and introduces no physical-main read. Credential equality tags
 remain process-local and never enter disk, logs, or management DTOs.
+
+When protection is enabled, owned startup rebuilds this binding from its pinned auth path under
+the native owner and exclusive claim, after journal recovery and stage cleanup, before publishing
+ready. Caller-owned Direct, exact-main, fallback, and main-pin admission stays temporarily fenced
+during that initialization; stored Pool alternatives remain eligible. Foreign/unknown service-home
+paths neither initialize the binding nor trigger an ownership reprobe from caller-owned admission.
+A new listener with protection enabled rearms the same guarded path on an existing ready lifecycle,
+including when the physical credential was replaced after the earlier listener started.
+Failed initialization creates no new binding. A previously verified same-process binding and its
+safety state remain until a valid replacement observation or confirmed account transition; malformed
+or conflicting input alone is not replacement evidence.
 
 This is not a reservation of the last 1%: already-admitted, parallel, unmatched-keyring, or direct
 upstream traffic can still reach exhaustion. While blocked, main cannot use Luna reserve either.

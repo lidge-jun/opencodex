@@ -1604,6 +1604,7 @@ function ccaFetchMock(
       try { parsedBody = JSON.parse(init.body); } catch { /* non-JSON body */ }
     }
     if (url.hostname === "daily-cloudcode-pa.googleapis.com") {
+      expect(init?.redirect).toBe("manual");
       registryHits.push({ url: requestUrl, headers, body: parsedBody });
       return Response.json(payload, { status });
     }
@@ -1620,6 +1621,47 @@ const CCA_CREDENTIAL = {
   expires: Date.now() + 3_600_000,
   projectId: "cca-project-123",
 } as const;
+
+test.each([307, 308])("CCA image transport does not follow a canonical endpoint's %i", async status => {
+  let targetHits = 0;
+  let originHits = 0;
+  const target = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => {
+    targetHits++;
+    return Response.json({ response: { candidates: [] } });
+  } });
+  const origin = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => {
+    originHits++;
+    return new Response("redirect", { status, headers: { location: `http://127.0.0.1:${target.port}/target` } });
+  } });
+  globalThis.fetch = (async (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.hostname === "daily-cloudcode-pa.googleapis.com") {
+      // Map only the canonical URL; pass production init unchanged to the real transport.
+      return originalFetch(`http://127.0.0.1:${origin.port}/cca`, init);
+    }
+    if (url.hostname !== "localhost" && url.hostname !== "127.0.0.1") throw new Error("unexpected external request");
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  saveConfig(ccaConfig());
+  await saveCredential("google-antigravity", { ...CCA_CREDENTIAL });
+  const server = startServer(0);
+  try {
+    const response = await originalFetch(new URL("/v1/images/generations", server.url), {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "synthetic prompt", model: "gpt-image-2" }),
+    });
+    await response.text();
+    expect(targetHits).toBe(0);
+    expect(originHits).toBe(1);
+    expect(response.status).toBe(502);
+    expect(response.headers.get("location")).toBeNull();
+  } finally {
+    globalThis.fetch = originalFetch;
+    await server.stop(true);
+    await origin.stop(true);
+    await target.stop(true);
+  }
+});
 
 test("CCA image fallback generates images via Google Antigravity when no OpenAI upstream exists", async () => {
   const registryHits: CcaFetchRequest[] = [];

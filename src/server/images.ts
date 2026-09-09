@@ -288,6 +288,7 @@ async function tryCcaImageGeneration(
     try {
       upstream = await fetch(`${baseUrl}/v1internal:generateContent`, {
         method: "POST",
+        redirect: "manual",
         headers: {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${token}`,

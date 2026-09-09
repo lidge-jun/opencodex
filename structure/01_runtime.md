@@ -80,6 +80,12 @@ Callers must not replace the latter with the former merely to avoid the Windows 
 probe. Expected-PID and snapshot removal helpers are the TOCTOU boundary when a replacement proxy
 can write new state during a probe.
 
+Port reclamation must honor a rejected OCX verifier result even for a PID captured before stop or
+update. A rejected live holder prevents both termination and TCP-row deletion for that scan; later
+scans may proceed if verification succeeds or the holder exits. The allowlist narrows termination
+eligibility and supplies no identity evidence by itself. This contract uses the existing verifier;
+it does not add process-instance proof or change the classification cache.
+
 [Decision Log]
 - 목적과 의도: Separate proxy process ownership from persisted configuration without changing lifecycle behavior.
 - 기존 구현 및 제약 조건: `src/config.ts` mixed config transactions with cross-platform PID identity, runtime-port attestation, and stale-state cleanup; process writes still require the same config-home and atomic-write protections.

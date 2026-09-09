@@ -205,4 +205,79 @@ describe("streamAborted marker (codex-router #139)", () => {
     expect(row?.status).toBe(499);
     expect(row?.attempts?.[0]?.streamAborted).toBeUndefined();
   });
+
+  test("bare upstream error event at clean EOF meters as 502 without streamAborted", async () => {
+    const { logCtx, attempt } = makeLogCtx();
+    const terminalReported = Promise.withResolvers<void>();
+    const terminals: Array<[string, number | undefined]> = [];
+    // Stream sends a bare { type: "error" } SSE event then closes cleanly (no read error).
+    // The onCleanEof path in consumeForInspection detects the witnessed bare error and
+    // reports failed -- but a semantic EOF is not a body-read reset, so streamAborted is absent.
+    const barePayload = JSON.stringify({ type: "error", message: "provider failed cleanly" });
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(encoder.encode("data: " + barePayload + "\n\n"));
+        controller.close();
+      },
+    });
+    consumeForInspection(
+      body,
+      (status, httpStatusOverride) => {
+        terminals.push([status, httpStatusOverride]);
+        terminalReported.resolve();
+      },
+      undefined,
+      () => {},
+      logCtx,
+    );
+    await terminalReported.promise;
+    expect(terminals).toEqual([["failed", 502]]);
+    expect(attempt.streamAborted).toBeUndefined();
+
+    addFinalRequestLog(
+      "ocx-bare-error-eof",
+      Date.now(),
+      logCtx,
+      httpStatusForRequestLogTerminal("failed", logCtx),
+      { terminalStatus: "failed", closeReason: "terminal" },
+      addRequestLog,
+    );
+    const [row] = readUsageEntries();
+    expect(row?.status).toBe(502);
+    expect(row?.attempts?.[0]?.status).toBe(502);
+    expect(row?.attempts?.[0]?.streamAborted).toBeUndefined();
+  });
+
+  test("read error after a bare upstream error event carries streamAborted", async () => {
+    const { logCtx, attempt } = makeLogCtx();
+    const terminalReported = Promise.withResolvers<void>();
+    const terminals: Array<[string, number | undefined]> = [];
+    // A bare error event arrives, then the body-read itself fails (socket reset).
+    // The read error takes the onReadError path and sets streamAborted.
+    const barePayload = JSON.stringify({ type: "error", message: "pre-reset error" });
+    let reads = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        reads += 1;
+        if (reads === 1) {
+          controller.enqueue(encoder.encode("data: " + barePayload + "\n\n"));
+        } else {
+          controller.error(new Error("socket reset after error event"));
+        }
+      },
+    });
+    consumeForInspection(
+      body,
+      (status, httpStatusOverride) => {
+        terminals.push([status, httpStatusOverride]);
+        terminalReported.resolve();
+      },
+      undefined,
+      () => {},
+      logCtx,
+    );
+    await terminalReported.promise;
+    expect(terminals).toEqual([["failed", 502]]);
+    expect(attempt.streamAborted).toBe(true);
+  });
 });

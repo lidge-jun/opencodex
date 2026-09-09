@@ -542,6 +542,39 @@ Replay preserves non-hidden signed blocks (including empty thinking) and opaque 
 role; `tool_result` without `tool_use_id`; `tool_use` without id/name; named `tool_choice` without
 name.
 
+### Unicode-property patterns in tool schemas
+
+A JSON Schema `pattern` written for JavaScript may use Unicode property escapes such as
+`\p{Cc}` or `\P{L}`. OpenAI-family backends validate `pattern` by compiling it with Python's
+`re`, which does not support those escapes, and a schema they cannot compile is refused whole —
+so a single such pattern on one built-in tool fails every request in the session, not just calls
+to that tool.
+
+To keep those sessions working, the `openai-chat` and `openai-responses` adapter paths omit the
+regexes that use Unicode property escapes when translating tool schemas: a `pattern` value, and a
+`patternProperties` key, which the destination compiles the same way. Everything else on the tool
+is preserved: sibling constraints such as `minLength`, `enum`, or `format`, the `required` list,
+other `patternProperties` entries, and any property a caller happened to name `pattern`. A regex
+that Python can compile, including one using lookaheads, is passed through unchanged.
+
+A `patternProperties` key is only omitted where doing so cannot narrow the object. Dropping a
+matcher moves the keys it covered to `additionalProperties`, so on an open object those keys stay
+admissible and the tool merely loses a constraint. On a closed object — `additionalProperties:
+false`, `additionalProperties` set to a schema, or `unevaluatedProperties: false` — the same drop
+would forbid or re-constrain those keys, and a dictionary tool whose only matcher was regex-keyed
+would admit nothing once `minProperties` is 1. Such an object is sent exactly as written: a
+destination that compiles ECMA regexes still accepts it, and one that cannot reports the regex
+itself rather than receiving a schema no argument can satisfy.
+
+This is normalization on the selected adapter path, not a provider-wide guarantee. Provider
+configuration and authentication are untouched, and a provider on a different adapter is
+unaffected.
+
+It is a compatibility measure, not a claim that every custom OpenAI-compatible backend rejects
+these patterns. What it costs is worth knowing: an omitted regex is not preserved anywhere and is
+not enforced upstream, so a tool implementation should validate its own inputs rather than relying
+on the schema to reject a malformed argument.
+
 ## Outbound translation (Responses → Messages SSE)
 
 | Responses event | Messages SSE |

@@ -14,6 +14,10 @@ opencodex 以多種客戶端方言呈現一個本機代理。Codex 客戶端可�
 
 Responses 表示是橋接的中心。原生相容的路由可跳過部分轉譯並 passthrough 請求，但認證、路由、許可控制與回應安全仍在代理邊界發生。在[設定](/zh-tw/reference/configuration/)中設定監聽器與許可金鑰；當一個公開模型 id 應在多個目標間選擇時使用[組合](/zh-tw/guides/combos/)。
 
+## 上游重新導向
+
+攜帶憑證的模型、圖片、影片和搜尋請求不會自動跟隨 HTTP 重新導向，包括同源重新導向。請設定最終上游 API URL，而非會重新導向的別名。伺服器不會向重新導向目標再次傳送憑證或請求內文。各回應處理路徑保留原有的錯誤處理或轉送行為；原生 Responses 和 compact 路徑仍可向用戶端回傳原始 3xx 與 `Location`。用戶端的重新導向行為與此伺服器傳輸政策屬於不同邊界。
+
 ## 端點概覽
 
 | 客戶端介面 | 端點 | 成功的非串流結果 | 成功的串流或 socket 結果 |
@@ -224,14 +228,18 @@ Compaction 為需要縮短長 Responses 對話的客戶端回傳取代歷史。
 
 | 介面 | 專屬 | Bearer | `x-api-key` |
 | --- | --- | --- | --- |
-| `/v1/responses` HTTP 與 WebSocket | 必填 | 代理許可被拒 | 被拒 |
-| `/v1/responses/compact` | 必填 | 代理許可被拒 | 被拒 |
-| `/v1/chat/completions` | 必填 | 代理許可被拒 | 被拒 |
+| `/v1/responses` HTTP 與 WebSocket | 接受 | 接受 | 被拒 |
+| `/v1/responses/compact` | 接受 | 接受 | 被拒 |
+| `/v1/chat/completions` | 接受 | 接受 | 被拒 |
 | `/v1/messages` 與 `/v1/messages/count_tokens` | 接受 | 接受 | 接受 |
 | `/v1/models` | 接受 | 接受 | 接受 |
 | `/v1/live`、`/v1/realtime/calls` 與 sideband join | 接受 | 接受 | 接受 |
 
-Responses 家族與 Chat 請求為供應商或 Codex Direct passthrough 保留 `Authorization`，因此遠端代理金鑰必須使用專屬標頭。Messages 與 Realtime 介面需要更廣的客戶端相容性，因此接受所有三種形式。
+Responses 系列和 Chat 請求接受專用標頭或 Bearer 欄位中的代理金鑰。在原生路由上，所選的已儲存 Codex 憑證會取代 admission bearer；其他路由會移除該 bearer。代理金鑰絕不會用作 upstream 憑證。如果還要提供獨立的 provider bearer，請將代理金鑰放在專用標頭中。
+
+沒有金鑰且不使用 OAuth 的 Cursor 路由可以使用呼叫端另外提供的 bearer，但不能使用代理 secret 或自動補入的 ChatGPT main 憑證。Combo/policy 選擇及實際發生的 shadow/thread-spawn 路由改寫不會將呼叫端的原始憑證傳遞給新目標。正規 OpenAI 路由僅在 JWT 包含 ChatGPT 帳戶宣告，且任何明確提供的帳戶標頭都與該宣告相符時，才可在內部路由變更後還原呼叫端的單一非代理金鑰 bearer。 將呼叫端驗證轉送至選用的 OpenAI sidecar 時，需要單一 JWT，以及明確提供且相符的 `chatgpt-account-id`。即使明確提供了帳戶標頭，opaque bearer 也不會跨路由變更還原。 除此之外，最終目標必須擁有自己的設定、OAuth 或已儲存憑證，否則請求會在本機失敗。只有 thread-spawn 標記而沒有路由變更時，不會移除憑證。
+
+Claude replay 只會以目前 turn 已取得所有權的記憶體 snapshot 保留 main 憑證，並且僅在最終目標為正規 ChatGPT 路由時還原它。
 
 :::caution
 Data-plane 金鑰不是管理憑證。管理 API 使用獨立的管理秘密；請見[管理 API](/zh-tw/reference/management-api/)。絕不為兩個平面重用同一個秘密。

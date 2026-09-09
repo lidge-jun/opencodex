@@ -12,6 +12,7 @@ import {
   collectConfiguredProxy,
   collectProxyEnv,
   collectRunningProxyEnv,
+  chatgptPublicEndpointHint,
   collectWslDualInstall,
   fetchServiceMemory,
   formatResponseTempLines,
@@ -641,6 +642,42 @@ describe("service memory section (#314 WP4)", () => {
     expect(hint).toContain("ocx service install");
   });
 
+  test("ChatGPT public endpoint hint explains channel latency without claiming a fixed delay", () => {
+    const canonical = { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" };
+    const hint = chatgptPublicEndpointHint({ openai: canonical });
+    expect(hint).toContain("public ChatGPT endpoint");
+    expect(hint).toContain("assumed");
+    expect(hint).toContain("websocket");
+    expect(hint).toContain("both Pool and Direct modes");
+    expect(hint).not.toContain("11s");
+    // The helper classifies configuration; it measures no latency. The copy has
+    // to stay hedged because eligible turns can still fall back to SSE and
+    // local pacing can delay dispatch before any upstream work starts.
+    expect(hint).toContain("fall back");
+    expect(hint).toContain("one possible contributor");
+    expect(chatgptPublicEndpointHint({})).toBeNull();
+    // Resolution, not raw text. The registry entry for the built-in `openai` id has
+    // authKind "forward", so a row that omits `authMode` still forwards to ChatGPT and still
+    // needs the hint. Reading the raw row suppressed it.
+    expect(chatgptPublicEndpointHint({ openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex" } })).not.toBeNull();
+    // Same reason the other way round: the entry is not key-auth-overridable, so writing
+    // `authMode: "key"` on this id does not change where requests go.
+    expect(chatgptPublicEndpointHint({ openai: { adapter: "openai-responses", authMode: "key", baseUrl: "https://chatgpt.com/backend-api/codex" } })).not.toBeNull();
+    // The entry sets no baseUrl override, so a differing URL is discarded and the request
+    // still goes to the canonical endpoint. Describing that route is correct, and a lookalike
+    // host never becomes the destination.
+    expect(chatgptPublicEndpointHint({ openai: { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com.example/v1" } })).not.toBeNull();
+    // Trailing slashes still normalize to the canonical URL.
+    expect(chatgptPublicEndpointHint({ openai: { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex/" } })).not.toBeNull();
+    // A disabled row never routes, so it is not the route in use.
+    expect(chatgptPublicEndpointHint({ openai: { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex", disabled: true } })).toBeNull();
+    // A blank baseUrl is discarded like any other override on this id, so it resolves to the
+    // canonical endpoint and still gets the hint. Resolution has no reachable throw here:
+    // src/router.ts only rejects an unresolved URL when the registry entry allows a baseUrl
+    // override, and the `openai` entry does not.
+    expect(chatgptPublicEndpointHint({ openai: { adapter: "openai-responses", authMode: "forward", baseUrl: "   " } })).not.toBeNull();
+  });
+
   test("proxyDownRestartHint prefers 'ocx service start' when a service is installed", () => {
     const hint = proxyDownRestartHint({ proxyRunning: false, port: 12000, serviceViable: true });
     expect(hint).toContain("ocx service start");
@@ -956,5 +993,21 @@ describe("doctor reports an unclean prior proxy exit", () => {
     await runDoctor([]);
 
     expect(logged.join("\n")).not.toContain("may have exited unexpectedly");
+  });
+
+  test("runDoctor outputs ChatGPT public endpoint hint when the canonical openai provider is configured", async () => {
+    const { writeFileSync } = await import("fs");
+    const { join } = await import("path");
+    writeFileSync(
+      join(tempHome, "config.json"),
+      JSON.stringify({ port: 9, codexAutoStart: false, providers: { openai: { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" } } }),
+      "utf8",
+    );
+
+    await runDoctor([]);
+
+    const output = logged.join("\n");
+    expect(output).toContain("public ChatGPT endpoint");
+    expect(output).toContain("assumed");
   });
 });

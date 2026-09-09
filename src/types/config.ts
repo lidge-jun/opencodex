@@ -694,6 +694,12 @@ export interface OcxConfig {
    */
   codexDesktopAuthless?: boolean;
   /**
+   * Opt into Codex-owned client compaction while keeping OpenCodex routing. On an authenticated
+   * loopback bind, inject the dedicated `opencodex` model provider instead of overriding the
+   * built-in `openai` provider, so Codex does not select native remote compaction. Default off.
+   */
+  codexClientCompaction?: boolean;
+  /**
    * Compatibility mode: temporarily rewrite Codex resume-history metadata while the proxy is active
    * so Codex App can show old OpenAI chats and opencodex-created exec chats under its default
    * interactive-source/provider filters. Default true; originals are backed up and restored by

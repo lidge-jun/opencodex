@@ -6,6 +6,8 @@ import type { OcxConfig } from "../../types";
 import type { RouteCandidateTrace, RouteDecisionTraceV1 } from "../../routing/trace";
 import { handleResponses as handleResponsesCore } from "./core";
 import { requestPacingOverloadResponse } from "./pacing-overload";
+import { captureExplicitOpenAiCallerAuth } from "../../providers/openai-sidecar";
+import { captureCallerDirectAuth } from "../../providers/caller-authorization";
 
 type CoreHandler = typeof handleResponsesCore;
 type CoreOptions = Parameters<CoreHandler>[3];
@@ -47,6 +49,10 @@ function requestWithCandidate(
   candidate: Pick<RouteCandidateTrace, "provider" | "model">,
 ): Request {
   const headers = new Headers(req.headers);
+  // The next candidate owns a different physical credential domain. Typed
+  // admission and any claimed Claude snapshot stay in caller-owned CoreOptions.
+  headers.delete("authorization");
+  headers.delete("chatgpt-account-id");
   headers.delete("content-encoding");
   headers.delete("content-length");
   headers.set("content-type", "application/json");
@@ -119,6 +125,12 @@ export async function handleResponsesWithPolicyFallback(
   let storedPool401ReplayDispatched = false;
   const coreOptions: CoreOptions = {
     ...options,
+    openAiSidecarAuth: options.openAiSidecarAuth === undefined
+      ? captureExplicitOpenAiCallerAuth(req.headers, config) : options.openAiSidecarAuth,
+    nativeCallerAuth: options.nativeCallerAuth === undefined
+      ? captureExplicitOpenAiCallerAuth(req.headers, config) : options.nativeCallerAuth,
+    callerDirectAuth: options.callerDirectAuth === undefined
+      ? captureCallerDirectAuth(req.headers, config) : options.callerDirectAuth,
     ...(options.onRequestBodyRead ? {
       onRequestBodyRead: () => {
         if (requestBodyReadNotified) return;

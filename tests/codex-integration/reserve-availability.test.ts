@@ -3,7 +3,8 @@ import {
   clearMainAccountInfoCache, observeMainQuotaCredential, observeMainQuotaIdentity,
 } from "../../src/codex/main-account-cache";
 import {
-  getMainReserveAuthorization, isMainReserveAuthorizationLive, observeMainReserveRevocation,
+  getMainReserveAuthorization, isMainReserveAuthorizationLive, nativeUserIdClaims,
+  observeMainReserveRevocation,
 } from "../../src/codex/reserve-availability";
 import type { WhamUsageResponse } from "../../src/codex/quota-types";
 
@@ -237,5 +238,33 @@ describe("owned main Reserve capability", () => {
       await Promise.resolve(); await Promise.resolve();
       expect(observed).toBe(0);
     } finally { timer.mockRestore(); response.resolve(Response.json(grant())); }
+  });
+});
+
+describe("native user identity claims", () => {
+  const token = (auth: Record<string, unknown>) =>
+    `fixture.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": auth })).toString("base64url")}.signature`;
+
+  test("precedence stays on the raw claims, so an unusable chatgpt_user_id blocks the fallback", () => {
+    expect(nativeUserIdClaims(token({ chatgpt_user_id: "user-a", user_id: "user-a" })))
+      .toEqual({ userId: "user-a", conflict: false });
+    expect(nativeUserIdClaims(token({ user_id: "user-b" }))).toEqual({ userId: "user-b", conflict: false });
+    // An empty or non-string primary claim selects nothing rather than falling through.
+    expect(nativeUserIdClaims(token({ chatgpt_user_id: "", user_id: "user-c" })))
+      .toEqual({ userId: undefined, conflict: false });
+    expect(nativeUserIdClaims(token({ chatgpt_user_id: 17, user_id: "user-d" })))
+      .toEqual({ userId: undefined, conflict: false });
+  });
+
+  test("two disagreeing encodings report a conflict without changing the selected id", () => {
+    expect(nativeUserIdClaims(token({ chatgpt_user_id: "user-a", user_id: "user-b" })))
+      .toEqual({ userId: "user-a", conflict: true });
+  });
+
+  test("absent, unparseable, and foreign-namespace tokens report nothing", () => {
+    expect(nativeUserIdClaims(token({}))).toEqual({ userId: undefined, conflict: false });
+    expect(nativeUserIdClaims("not-a-token")).toEqual({ userId: undefined, conflict: false });
+    expect(nativeUserIdClaims(`fixture.${Buffer.from(JSON.stringify({ sub: "user-a" })).toString("base64url")}.sig`))
+      .toEqual({ userId: undefined, conflict: false });
   });
 });

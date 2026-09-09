@@ -85,10 +85,13 @@ async function respond(index: number, marker: string, date?: string) {
   await act(async () => { requests[index].resolve(Response.json(report(requests[index], marker, date))); });
 }
 
+const toggle = () => container.querySelector<HTMLButtonElement>(".usage-range-toggle")!;
 const form = () => container.querySelector<HTMLFormElement>('form[aria-label="Custom date range"]')!;
 const startInput = () => form().querySelectorAll<HTMLInputElement>('input[type="datetime-local"]')[0];
 const endInput = () => form().querySelectorAll<HTMLInputElement>('input[type="datetime-local"]')[1];
-const interval = () => form().querySelector('[role="status"]')?.textContent;
+// The applied interval lives beside the trigger rather than inside the panel: collapsing the
+// controls must not hide which window the totals cover.
+const interval = () => container.querySelector('.usage-range-bar [role="status"]')?.textContent;
 const error = () => form().querySelector('[role="alert"]')?.textContent;
 const preset = (name: string) => container.querySelector<HTMLButtonElement>(`button.usage-segmented-btn[aria-label="${name}"]`)!;
 
@@ -97,7 +100,13 @@ async function click(button: HTMLButtonElement) {
   await act(async () => { button.click(); });
 }
 
+// The date fields are behind a closed-by-default disclosure, so every draft starts by opening it.
+async function openRange() {
+  if (toggle().getAttribute("aria-expanded") !== "true") await click(toggle());
+}
+
 async function enter(start: string, end: string) {
+  await openRange();
   await act(async () => {
     for (const [input, value] of [[startInput(), start], [endInput(), end]] as const) {
       Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!.set!.call(input, value);
@@ -356,4 +365,71 @@ test("each preset clears custom, including the retained preset; 7d never replace
   expect(container.querySelector(".daybars")).toBeNull();
   expect(container.querySelectorAll(".heatmap-grid .heatmap-cell")).toHaveLength(7);
   expect(preset("7d").getAttribute("aria-pressed")).toBe("false");
+});
+
+test("the range panel is closed until asked for, and collapsing it keeps the applied interval readable", async () => {
+  await mount();
+  await respond(0, "preset-report-marker");
+  // Closed is the default: a page that opens on a report should not also open on two empty
+  // date fields, and the collapsed panel must leave no tab stops behind.
+  expect(toggle().getAttribute("aria-expanded")).toBe("false");
+  expect(toggle().textContent).toContain("Custom date range");
+  expect(container.querySelector('form[aria-label="Custom date range"]')).toBeNull();
+  expect(container.querySelectorAll('input[type="datetime-local"]')).toHaveLength(0);
+  expect(toggle().className).not.toContain("is-active");
+  // Naming a panel that is not in the document would leave a dangling IDREF.
+  expect(toggle().hasAttribute("aria-controls")).toBe(false);
+
+  await click(toggle());
+  expect(toggle().getAttribute("aria-expanded")).toBe("true");
+  expect(toggle().getAttribute("aria-controls")).toBe(form().id);
+  expect(container.querySelectorAll('input[type="datetime-local"]')).toHaveLength(2);
+  expect(requests).toHaveLength(1);
+
+  await enter("2020-09-15T10:20", "2020-09-15T10:21");
+  await apply();
+  expect(requests[1].url).toBe(`${apiBase}/api/usage?range=30d&surface=all&${boundsQuery}`);
+  await respond(1, "custom-report-marker");
+  const applied = interval();
+  expect(applied).toContain("both inclusive");
+
+  // Collapsing hides the controls, never the state: the interval line and the marked trigger
+  // still say which window produced the numbers below.
+  await click(toggle());
+  expect(toggle().getAttribute("aria-expanded")).toBe("false");
+  expect(container.querySelectorAll('input[type="datetime-local"]')).toHaveLength(0);
+  expect(interval()).toBe(applied);
+  expect(toggle().className).toContain("is-active");
+  expect(container.textContent).toContain("custom-report-marker");
+  expect(requests).toHaveLength(2);
+
+  // Reopening restores the draft that produced the applied window rather than empty fields.
+  await click(toggle());
+  expect(startInput().value).toBe("2020-09-15T10:20");
+  expect(endInput().value).toBe("2020-09-15T10:21");
+  await clear();
+  expect(interval()).toBeUndefined();
+  expect(toggle().className).not.toContain("is-active");
+  expect(startInput().value).toBe("");
+});
+
+test("closing the panel retires a validation error instead of parking it out of sight", async () => {
+  await mount();
+  await respond(0, "held-report-marker");
+  await enter("2020-09-16T10:20", "2020-09-15T10:20");
+  await apply();
+  expect(error()).toContain("The end must");
+  expect(startInput().getAttribute("aria-invalid")).toBe("true");
+  expect(startInput().getAttribute("aria-describedby")).toBe("usage-range-help usage-range-error");
+
+  // The alert only means something beside the fields that produced it, so it does not outlive
+  // the panel — but the draft that produced it does.
+  await click(toggle());
+  await click(toggle());
+  expect(error()).toBeUndefined();
+  expect(startInput().value).toBe("2020-09-16T10:20");
+  expect(startInput().getAttribute("aria-invalid")).toBe("false");
+  expect(startInput().getAttribute("aria-describedby")).toBe("usage-range-help");
+  expect(requests).toHaveLength(1);
+  expect(container.textContent).toContain("held-report-marker");
 });

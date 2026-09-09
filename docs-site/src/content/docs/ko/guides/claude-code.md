@@ -425,6 +425,34 @@ Claude Code의 `/effort` 설정은 어댑터에서도 유지돼요.
 **오류 조건(400):** 잘못된 JSON, 누락되거나 빈 `model`, 누락되거나 빈 `messages`, 지원하지 않는
 role, `tool_use_id` 없는 `tool_result`, id/name 없는 `tool_use`, name 없는 이름 지정 `tool_choice`예요.
 
+### 도구 스키마의 유니코드 속성 패턴
+
+자바스크립트 기준으로 작성한 JSON Schema `pattern`에는 `\p{Cc}`나 `\P{L}` 같은 유니코드 속성
+이스케이프가 들어갈 수 있어요. OpenAI 계열 백엔드는 `pattern`을 파이썬 `re`로 컴파일해 검사하는데
+`re`는 이 이스케이프를 지원하지 않고, 컴파일하지 못한 스키마는 통째로 거절해요. 그래서 내장 도구
+하나에 그런 패턴이 하나만 있어도 그 도구 호출뿐 아니라 세션의 모든 요청이 실패해요.
+
+이 상황을 피하려고 `openai-chat`·`openai-responses` 어댑터 경로는 도구 스키마를 변환할 때 유니코드 속성
+이스케이프를 쓰는 정규식을 빼요. `pattern` 값과, 백엔드가 똑같이 컴파일하는 `patternProperties` 키가
+대상이에요. 나머지는 그대로 둬요. `minLength`·`enum`·`format` 같은 형제 제약, `required` 목록, 다른
+`patternProperties` 항목, 호출자가 마침 `pattern`이라고 이름 붙인 속성 모두 보존해요. 파이썬이 컴파일할
+수 있는 정규식은 lookahead를 쓰더라도 그대로 전달해요.
+
+`patternProperties` 키는 빼도 객체가 좁아지지 않을 때만 빼요. 매처를 빼면 그 매처가 담당하던 키가
+`additionalProperties` 쪽으로 넘어가요. 열린 객체에서는 그 키가 그대로 허용되니 제약 하나만 사라져요.
+반대로 닫힌 객체 — `additionalProperties: false`, `additionalProperties`가 스키마인 경우,
+`unevaluatedProperties: false` — 에서는 같은 조작이 그 키를 금지하거나 다른 제약으로 바꿔 버려요. 매처가
+하나뿐인 사전형 도구라면 `minProperties`가 1일 때 아무 객체도 통과하지 못하게 돼요. 그런 객체는 작성된
+그대로 보내요. ECMA 정규식을 컴파일하는 백엔드는 계속 정상 동작하고, 컴파일하지 못하는 백엔드는 어떤
+인자로도 만족할 수 없는 스키마를 받는 대신 문제의 정규식을 그대로 알려 줘요.
+
+이건 선택된 어댑터 경로에서 일어나는 정규화이지 프로바이더 전체에 대한 보장이 아니에요. 프로바이더 설정과
+인증은 건드리지 않고, 다른 어댑터를 쓰는 프로바이더는 영향을 받지 않아요.
+
+호환성을 위한 조치일 뿐, 모든 OpenAI 호환 백엔드가 이런 패턴을 거절한다고 확인한 건 아니에요. 대가는
+알아 두는 게 좋아요. 빠진 정규식은 어디에도 보존되지 않고 상위에서 강제되지도 않으니, 도구 구현이
+스키마의 거절에 기대지 말고 입력을 직접 검증해야 해요.
+
 ## 출력 변환(Responses → Messages SSE)
 
 | Responses 이벤트 | Messages SSE |

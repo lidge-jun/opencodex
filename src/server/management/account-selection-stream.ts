@@ -3,6 +3,7 @@ import { registerOptionalShutdownHook } from "../../lib/optional-shutdown-hooks"
 
 const MAX_SELECTION_STREAMS = 64;
 const HEARTBEAT_MS = 15_000;
+const STREAM_QUEUE_HIGH_WATER_MARK = 16;
 const encoder = new TextEncoder();
 const connections = new Set<() => void>();
 
@@ -36,9 +37,17 @@ export function accountSelectionStream(request: Request, validate: () => boolean
       const send = (frame: string) => {
         if (closed) return;
         if (!authorized()) {
-          // Error clears queued frames as well, so a revoked consumer cannot drain them.
-          try { controller.error(new DOMException("Management session is no longer authorized", "NotAllowedError")); }
-          finally { close(); }
+          // A revoked consumer must not drain frames queued before revocation: error() is
+          // what discards a non-empty queue. When nothing is queued — the common expired-session
+          // path, including the heartbeat — close() alone terminates quietly, so an expired
+          // dashboard session does not dump an expected DOMException into the server console.
+          // desiredSize equals the high water mark exactly when the queue is empty.
+          if (controller.desiredSize !== null && controller.desiredSize < STREAM_QUEUE_HIGH_WATER_MARK) {
+            try { controller.error(new DOMException("Management session is no longer authorized", "NotAllowedError")); }
+            finally { close(); }
+          } else {
+            close();
+          }
           return;
         }
         // Reconnection sends a ready event, so a slow reader can reconcile without an
@@ -61,7 +70,7 @@ export function accountSelectionStream(request: Request, validate: () => boolean
       heartbeat.unref?.();
     },
     cancel() { cleanup(); },
-  }, { highWaterMark: 16 });
+  }, { highWaterMark: STREAM_QUEUE_HIGH_WATER_MARK });
   return new Response(body, { headers: {
     "Content-Type": "text/event-stream; charset=utf-8",
     "Cache-Control": "no-cache, no-transform",

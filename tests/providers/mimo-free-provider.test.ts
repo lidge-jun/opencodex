@@ -12,6 +12,64 @@ import {
   createMimoFreeAdapter,
 } from "../../src/adapters/mimo-free";
 import type { OcxParsedRequest, OcxProviderConfig } from "../../src/types";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
+
+for (const phase of ["bootstrap", "chat", "401-replay"] as const) test.each([307, 308])(`MiMo ${phase} never follows %i`, async status => {
+  const nativeFetch = globalThis.fetch;
+  const previousHome = process.env.OPENCODEX_HOME;
+  const testHome = mkdtempSync(join(tmpdir(), "ocx-mimo-redirect-"));
+  process.env.OPENCODEX_HOME = testHome;
+  resetMimoClientIdCache();
+  resetMimoJwtCache();
+  let targetHits = 0;
+  let originHits = 0;
+  let chatSends = 0;
+  const observed: Array<RequestRedirect | undefined> = [];
+  const target = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => {
+    targetHits++;
+    return Response.json({ jwt: "redirected", ok: true });
+  } });
+  const origin = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => {
+    originHits++;
+    return new Response("redirect", { status, headers: { location: `http://127.0.0.1:${target.port}/target` } });
+  } });
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    if (url !== MIMO_CHAT_URL && url !== "https://api.xiaomimimo.com/api/free-ai/bootstrap") throw new Error("unexpected external request");
+    observed.push(init?.redirect);
+    if (phase === "401-replay") {
+      if (url.endsWith("/bootstrap")) return Response.json({ jwt: "fresh-token" });
+      if (++chatSends === 1) return new Response("expired", { status: 401 });
+    }
+    // Only remap the canonical URL; do not repair the production redirect option.
+    return nativeFetch(`http://127.0.0.1:${origin.port}/mimo`, init);
+  }) as typeof fetch;
+  let response: Response | undefined;
+  try {
+    if (phase === "bootstrap") await expect(getMimoJwt()).rejects.toThrow(`MiMo bootstrap failed: ${status}`);
+    else {
+      const adapter = createMimoFreeAdapter(providerConfigSeed(PROVIDER_REGISTRY.find(entry => entry.id === "mimo-free")!));
+      response = await adapter.fetchResponse!({ url: MIMO_CHAT_URL, method: "POST", headers: { authorization: "Bearer synthetic-token" }, body: "synthetic prompt" }, {});
+      expect(response.status).toBe(status);
+    }
+    expect(targetHits).toBe(0);
+    expect(originHits).toBe(1);
+    expect(observed).toEqual(phase === "401-replay" ? ["manual", "manual", "manual"] : ["manual"]);
+  } finally {
+    globalThis.fetch = nativeFetch;
+    await response?.body?.cancel();
+    await origin.stop(true);
+    await target.stop(true);
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+    resetMimoClientIdCache();
+    resetMimoJwtCache();
+    removeTreeWithRetry(testHome);
+  }
+});
 
 function minimalRequest(model = "mimo-auto"): OcxParsedRequest {
   return {
@@ -148,7 +206,10 @@ describe("mimo-free JWT cache", () => {
   test("getMimoJwt fetches from bootstrap and caches", async () => {
     const fakeJwt = "header." + Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64") + ".sig";
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = mock(async () => new Response(JSON.stringify({ jwt: fakeJwt }), { status: 200 }));
+    globalThis.fetch = mock(async (_input, init) => {
+      expect(init?.redirect).toBe("manual");
+      return new Response(JSON.stringify({ jwt: fakeJwt }), { status: 200 });
+    });
     try {
       const jwt1 = await getMimoJwt();
       expect(jwt1).toBe(fakeJwt);
@@ -263,6 +324,7 @@ describe("mimo-free auth retry predicate", () => {
     const calls: string[] = [];
     const originalFetch = globalThis.fetch;
     globalThis.fetch = mock(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.redirect).toBe("manual");
       const u = String(url);
       if (u.includes("/bootstrap")) {
         calls.push("bootstrap");

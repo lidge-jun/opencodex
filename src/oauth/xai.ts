@@ -1,4 +1,5 @@
 /** xAI OAuth flow (Grok account login). Ported from jawcode oauth/xai.ts. */
+import { abortError, sleepWithAbort } from "../lib/upstream-retry";
 import { OAuthCallbackFlow, type OAuthCallbackFlowOptions } from "./callback-server";
 import { generatePKCE } from "./pkce";
 import type { LocalTokenImportMode, OAuthController, OAuthCredentials } from "./types";
@@ -11,6 +12,9 @@ const XAI_OAUTH_CALLBACK_PORT = 56121;
 const XAI_OAUTH_CALLBACK_PATH = "/callback";
 const XAI_OAUTH_REFRESH_SKEW_MS = 2 * 60 * 1000;
 const TOKEN_REQUEST_TIMEOUT_MS = 30_000;
+const RETRY_AFTER_MAX_DELAY_MS = 60_000;
+const JITTER_DELAY_CAP_MS = 2_000;
+const XAI_TRUSTED_AUTH_HOSTS = new Set(["auth.x.ai", "accounts.x.ai"]);
 
 export const XAI_LOCAL_CLI_DETACH_WARNING =
   "[oauth:xai] Grok CLI credential was stale; refreshed into OpenCodex ownership. Grok CLI may require login again.";
@@ -45,10 +49,21 @@ function requestSignal(signal: AbortSignal | undefined): AbortSignal {
 }
 
 function validateXaiEndpoint(rawUrl: string): string {
-  const parsed = new URL(rawUrl);
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new Error("xAI OAuth discovery returned an unparseable endpoint URL");
+  }
   const host = parsed.hostname.toLowerCase();
-  if (parsed.protocol !== "https:" || (host !== "x.ai" && !host.endsWith(".x.ai"))) {
-    throw new Error(`xAI OAuth discovery returned an unexpected endpoint: ${rawUrl}`);
+  if (
+    parsed.protocol !== "https:"
+    || parsed.username !== ""
+    || parsed.password !== ""
+    || parsed.port !== ""
+    || !XAI_TRUSTED_AUTH_HOSTS.has(host)
+  ) {
+    throw new Error(`xAI OAuth discovery returned an unexpected endpoint (host: ${host || "none"})`);
   }
   return parsed.toString();
 }
@@ -94,15 +109,135 @@ function getTokenIdentity(accessToken: string, idToken: string | undefined): { a
 
 export class XaiTokenRequestError extends Error { constructor(public readonly status?:number,public readonly oauthError?:string,message="xAI token request failed",options?:{cause?:unknown}){super(message,options);this.name="XaiTokenRequestError";} }
 export interface XaiTokenRetryDeps { sleep?:(ms:number)=>Promise<void>; random?:()=>number }
-function isAbortError(error:unknown):boolean{return error instanceof DOMException&&error.name==="AbortError";}
-function retryDelay(attempt:number,retryAfter:string|null,random:()=>number):number{const base=attempt===1?100:250,j=Math.round(base*(.75+random()*.5)),seconds=retryAfter!==null&&/^\d+$/.test(retryAfter)?Number(retryAfter):0;return Math.min(2000,Math.max(j,seconds*1000));}
-async function readTokenError(response:Response):Promise<XaiTokenRequestError>{let oauthError:string|undefined,detail="";try{const body=await response.json() as {error?:unknown;error_description?:unknown};if(typeof body.error==="string")oauthError=body.error;if(typeof body.error_description==="string")detail=body.error_description;}catch{}const suffix=detail?`: ${detail}`:oauthError?`: ${oauthError}`:"";return new XaiTokenRequestError(response.status,oauthError,`xAI token request failed: ${response.status}${suffix}`);}
+const IMF_FIXDATE_RE = /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), (\d{2}) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{4}) (\d{2}):(\d{2}):(\d{2}) GMT$/i;
+const RFC850_DATE_RE = /^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), (\d{2})-(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-(\d{2}) (\d{2}):(\d{2}):(\d{2}) GMT$/i;
+const ASCTIME_DATE_RE = /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) ( \d|\d{2}) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/i;
+const HTTP_MONTH_INDEX: Record<string, number> = {
+  jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+  jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+};
+
+function parseUtcDateParts(
+  year: number,
+  monthName: string,
+  day: number,
+  hour: number,
+  minute: number,
+  second: number,
+): number | undefined {
+  const month = HTTP_MONTH_INDEX[monthName.toLowerCase()];
+  if (month === undefined) return undefined;
+  const timestamp = Date.UTC(year, month, day, hour, minute, second);
+  const parsed = new Date(timestamp);
+  return parsed.getUTCFullYear() === year
+    && parsed.getUTCMonth() === month
+    && parsed.getUTCDate() === day
+    && parsed.getUTCHours() === hour
+    && parsed.getUTCMinutes() === minute
+    && parsed.getUTCSeconds() === second
+    ? timestamp
+    : undefined;
+}
+
+function parseHttpDateMs(value: string, now: number): number | undefined {
+  const match = IMF_FIXDATE_RE.exec(value);
+  if (match) {
+    return parseUtcDateParts(
+      Number(match[3]), match[2]!, Number(match[1]),
+      Number(match[4]), Number(match[5]), Number(match[6]),
+    );
+  }
+  const rfc850 = RFC850_DATE_RE.exec(value);
+  if (rfc850) {
+    // Two-digit years more than 50 years in the future are in the past (RFC 9110).
+    const currentYear = new Date(now).getUTCFullYear();
+    let year = Math.floor(currentYear / 100) * 100 + Number(rfc850[3]);
+    const candidateTimeOfYear = Date.UTC(
+      2000, HTTP_MONTH_INDEX[rfc850[2]!.toLowerCase()]!, Number(rfc850[1]),
+      Number(rfc850[4]), Number(rfc850[5]), Number(rfc850[6]),
+    );
+    const current = new Date(now);
+    const currentTimeOfYear = Date.UTC(
+      2000, current.getUTCMonth(), current.getUTCDate(),
+      current.getUTCHours(), current.getUTCMinutes(), current.getUTCSeconds(),
+      current.getUTCMilliseconds(),
+    );
+    const yearDelta = year - currentYear;
+    if (yearDelta < -50 || (yearDelta === -50 && candidateTimeOfYear < currentTimeOfYear)) {
+      year += 100;
+    } else if (yearDelta > 50 || (yearDelta === 50 && candidateTimeOfYear > currentTimeOfYear)) {
+      year -= 100;
+    }
+    return parseUtcDateParts(
+      year, rfc850[2]!, Number(rfc850[1]),
+      Number(rfc850[4]), Number(rfc850[5]), Number(rfc850[6]),
+    );
+  }
+  const asctime = ASCTIME_DATE_RE.exec(value);
+  if (!asctime) return undefined;
+  return parseUtcDateParts(
+    Number(asctime[6]), asctime[1]!, Number(asctime[2]),
+    Number(asctime[3]), Number(asctime[4]), Number(asctime[5]),
+  );
+}
+
+function parseRetryAfterMs(retryAfter: string | null): number | undefined {
+  const text = retryAfter?.trim();
+  if (!text) return undefined;
+  if (/^\d+(?:\.\d+)?$/.test(text)) {
+    const ms = Math.ceil(Number(text) * 1000);
+    return ms > 0 ? ms : undefined;
+  }
+  const now = Date.now();
+  const timestamp = parseHttpDateMs(text, now);
+  if (timestamp === undefined) return undefined;
+  const delay = timestamp - now;
+  return delay > 0 ? delay : undefined;
+}
+
+function jitterDelay(attempt: number, random: () => number): number {
+  const base = attempt === 1 ? 100 : 250;
+  return Math.min(JITTER_DELAY_CAP_MS, Math.round(base * (0.75 + random() * 0.5)));
+}
+
+/**
+ * Delay before the next attempt, or undefined when the server asked for a wait
+ * beyond the retry budget — retrying earlier than Retry-After would hammer the
+ * token endpoint, so the caller fails the request instead of clamping.
+ */
+function retryDelay(attempt: number, retryAfter: string | null, random: () => number): number | undefined {
+  const serverMs = parseRetryAfterMs(retryAfter);
+  if (serverMs === undefined) return jitterDelay(attempt, random);
+  return serverMs <= RETRY_AFTER_MAX_DELAY_MS ? serverMs : undefined;
+}
+
+async function sleepAbortable(
+  ms: number,
+  sleep: (ms: number) => Promise<void>,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  if (!signal) return sleep(ms);
+  if (signal.aborted) throw abortError(signal);
+  let onAbort!: () => void;
+  try {
+    await Promise.race([
+      sleep(ms),
+      new Promise<never>((_, reject) => {
+        onAbort = () => reject(abortError(signal));
+        signal.addEventListener("abort", onAbort, { once: true });
+      }),
+    ]);
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
+}
+async function readTokenError(response:Response):Promise<XaiTokenRequestError>{let oauthError:string|undefined,detail="";try{const body=await response.json() as {error?:unknown;error_description?:unknown};if(typeof body.error==="string")oauthError=body.error;if(typeof body.error_description==="string")detail=body.error_description;}catch{/* non-JSON error body: fall through to the generic message */}const suffix=detail?`: ${detail}`:oauthError?`: ${oauthError}`:"";return new XaiTokenRequestError(response.status,oauthError,`xAI token request failed: ${response.status}${suffix}`);}
 export async function postXaiToken(
   tokenEndpoint: string,
   body: Record<string, string>,
   signal?: AbortSignal, deps:XaiTokenRetryDeps={},
 ): Promise<XaiTokenPayload> {
- const sleep=deps.sleep??(ms=>Bun.sleep(ms)),random=deps.random??Math.random;let last:unknown;
+ const sleep=deps.sleep??((ms:number)=>sleepWithAbort(ms,signal)),random=deps.random??Math.random;let last:unknown;
  for(let attempt=1;attempt<=3;attempt++){let response:Response;try{response=await fetch(tokenEndpoint, {
     method: "POST",
     headers: {
@@ -111,7 +246,15 @@ export async function postXaiToken(
     },
     body: new URLSearchParams(body).toString(),
     signal: requestSignal(signal),
-  });}catch(error){if(isAbortError(error)&&signal?.aborted)throw error;last=error;if(attempt===3)throw new XaiTokenRequestError(undefined,undefined,"xAI token request failed: network error",{cause:error});await sleep(retryDelay(attempt,null,random));continue;}if(response.ok)return await response.json() as XaiTokenPayload;const error=await readTokenError(response);last=error;if(!(response.status===429||response.status>=500)||attempt===3)throw error;await sleep(retryDelay(attempt,response.headers.get("retry-after"),random));}throw last;
+  });}catch(error){
+  if(signal?.aborted)throw error;
+  const name=(error as {name?:string}|undefined)?.name;
+  if(name==="AbortError"||name==="TimeoutError")throw error;
+  last=error;
+  if(attempt===3)throw new XaiTokenRequestError(undefined,undefined,"xAI token request failed: network error",{cause:error});
+  await sleepAbortable(jitterDelay(attempt,random),sleep,signal);
+  continue;
+  }if(response.ok)return await response.json() as XaiTokenPayload;const error=await readTokenError(response);last=error;if(!(response.status===429||response.status>=500)||attempt===3)throw error;if(signal?.aborted)throw error;const delay=retryDelay(attempt,response.headers.get("retry-after"),random);if(delay===undefined)throw error;await sleepAbortable(delay,sleep,signal);}throw last;
 }
 
 function credentialsFromTokenPayload(payload: XaiTokenPayload, refreshFallback = ""): OAuthCredentials {

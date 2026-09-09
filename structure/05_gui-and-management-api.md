@@ -319,6 +319,14 @@ and catalog invariants documented in this folder rather than inventing parallel 
 
 ## Dashboard surfaces
 
+Provider Overview consumes the existing shared `add-provider-presets` resource for sponsor
+presentation. `matchingWorkspacePreset` requires the configured id, adapter and normalized
+endpoint to match; a custom endpoint or absent sponsor metadata suppresses the introduction.
+`ProviderSponsor` keeps localized promotional copy and outbound HTTP(S) links separate from
+operator notes. Notes remain complete and editable once in the main column; stats and current
+account quota remain in the side column. This presentation does not write provider configuration
+or participate in routing.
+
 The sidebar exposes eleven pages (`gui/src/App.tsx` `NAV`). Several are workspace shells rather than
 single forms, and the shell pattern is the part worth keeping stable:
 

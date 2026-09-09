@@ -226,6 +226,7 @@ export async function fetchWithAttemptDeadline(
     return await executor(url, {
       ...init,
       headers,
+      redirect: "manual",
       signal: attemptTimeout.signal,
     });
   } finally {

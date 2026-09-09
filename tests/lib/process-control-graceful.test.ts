@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { gracefulStopHost, stopProxyGracefully } from "../../src/lib/process-control";
+import { gracefulStopHost, lastStopRefusalMessage, stopProxyGracefully } from "../../src/lib/process-control";
 
 function okResponse(): Response {
-  return new Response(JSON.stringify({ success: true }), { status: 200 });
+  return new Response(JSON.stringify({ success: true, sharedTeardown: "performed" }), { status: 200 });
 }
 
 describe("gracefulStopHost", () => {
@@ -22,6 +22,63 @@ describe("gracefulStopHost", () => {
 });
 
 describe("stopProxyGracefully", () => {
+  for (const [name, body] of [
+    ["reported restore failure", JSON.stringify({ success: false, sharedTeardown: "performed" })],
+    ["missing teardown result", JSON.stringify({ success: true })],
+    ["unexpected deferral", JSON.stringify({ success: true, sharedTeardown: "deferred" })],
+    ["nonboolean success", JSON.stringify({ success: "true", sharedTeardown: "performed" })],
+    ["empty body", ""],
+    ["invalid JSON", "{broken"],
+    ["null body", "null"],
+    ["array body", "[]"],
+  ]) {
+    test(`process exit does not confirm shared teardown: ${name}`, async () => {
+      const waits: number[] = [];
+      const result = await stopProxyGracefully(4242, {
+        readRuntime: () => ({ port: 10100 }),
+        fetchFn: (async () => new Response(body, { status: 200 })) as typeof fetch,
+        waitExit: pid => { waits.push(pid); return true; },
+        exitTimeoutMs: 1,
+        env: {},
+      });
+      expect(result).toBe("teardown-unconfirmed");
+      expect(waits).toEqual([4242]);
+    });
+  }
+
+  test("requires the assigned deferred response when a receipt nonce was sent", async () => {
+    for (const sharedTeardown of ["deferred", "performed"]) {
+      const result = await stopProxyGracefully(4242, {
+        readRuntime: () => ({ port: 10100 }),
+        fetchFn: (async () => new Response(JSON.stringify({ success: true, sharedTeardown }))) as typeof fetch,
+        waitExit: () => true,
+        deferSharedTeardownNonce: "receipt-nonce",
+        exitTimeoutMs: 1,
+        env: {},
+      });
+      expect(result).toBe(sharedTeardown === "deferred" ? true : "teardown-unconfirmed");
+    }
+  });
+
+  test("an unconfirmed response still requires process exit", async () => {
+    expect(await stopProxyGracefully(4242, {
+      readRuntime: () => ({ port: 10100 }),
+      fetchFn: (async () => new Response(JSON.stringify({ success: false, sharedTeardown: "performed" }))) as typeof fetch,
+      waitExit: () => false,
+      exitTimeoutMs: 1,
+      env: {},
+    })).toBe(false);
+  });
+
+  test("ownership refusal never waits for exit or becomes a teardown retry", async () => {
+    expect(await stopProxyGracefully(4242, {
+      readRuntime: () => ({ port: 10100 }),
+      fetchFn: (async () => new Response("refused", { status: 409 })) as typeof fetch,
+      waitExit: () => { throw new Error("must not wait for a refused stop"); },
+      env: {},
+    })).toBe("refused");
+  });
+
   test("follows the recorded bind hostname when it names a concrete address", async () => {
     const calls: string[] = [];
     await stopProxyGracefully(9, {
@@ -105,5 +162,40 @@ describe("stopProxyGracefully", () => {
       env: {},
     });
     expect(noExit).toBe(false);
+  });
+});
+
+describe("409 refusal reporting", () => {
+  test("a refusal carries the server's own reason, not the ownership guess", async () => {
+    // /api/stop answers 409 for more than one reason: a scheduler wrapper under another
+    // home, and (since #4023) the proxy being the installed launchd/systemd job itself.
+    // stopProxy used to report the first of those unconditionally, sending an operator
+    // whose proxy is simply the service to a CODEX_HOME that does not exist.
+    const selfUnload = "This proxy is running as the installed service, so stopping the manager"
+      + " from inside it would end this process before native Codex is restored."
+      + " Run `ocx stop`, which stops the service from outside and completes the restore."
+      + " Nothing was changed.";
+    const result = await stopProxyGracefully(7, {
+      readRuntime: () => ({ port: 10100 }),
+      fetchFn: (async () => new Response(
+        JSON.stringify({ success: false, code: "self_unload_service", message: selfUnload }),
+        { status: 409, headers: { "content-type": "application/json" } },
+      )) as typeof fetch,
+      waitExit: () => true,
+      env: {},
+    });
+    expect(result).toBe("refused");
+    expect(lastStopRefusalMessage()).toBe(selfUnload);
+  });
+
+  test("a 409 with no readable body falls back rather than reporting a stale reason", async () => {
+    const result = await stopProxyGracefully(7, {
+      readRuntime: () => ({ port: 10100 }),
+      fetchFn: (async () => new Response("not json", { status: 409 })) as typeof fetch,
+      waitExit: () => true,
+      env: {},
+    });
+    expect(result).toBe("refused");
+    expect(lastStopRefusalMessage()).toBeNull();
   });
 });

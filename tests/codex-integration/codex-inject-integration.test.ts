@@ -879,6 +879,202 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(restored).toContain('model = "gpt-5.5"');
   });
 
+  test("client compaction opt-in (#3978): writes an authenticated provider table and returns to Design B", () => {
+    writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
+
+    const enabled = runInject(codexHome, ocxHome, JSON.stringify({ codexClientCompaction: true }));
+    expect(enabled.status).toBe(0);
+    expect(String(JSON.parse(enabled.stdout).message)).toContain("client-side compaction mode");
+    const providerTable = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(providerTable).toContain('model_provider = "opencodex"');
+    expect(providerTable).toContain("[model_providers.opencodex]");
+    expect(providerTable).toContain("requires_openai_auth = true");
+    expect(providerTable).not.toContain("requires_openai_auth = false");
+    // The root override is retained next to the table, which is what keeps threads still tagged
+    // `openai` resolving to this proxy instead of to api.openai.com.
+    expect(providerTable).toContain('openai_base_url = "http://127.0.0.1:10100/v1"');
+
+    expect(runInject(codexHome, ocxHome).status).toBe(0);
+    const designB = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(designB).toContain(DESIGN_B_BLOCK);
+    expect(designB).not.toContain("[model_providers.opencodex]");
+    expect(designB).not.toContain('model_provider = "opencodex"');
+    // Disabling leaves exactly one root override, not the table form's copy plus a new one.
+    expect(designB.match(/openai_base_url/g)?.length).toBe(1);
+  });
+
+  test("client compaction never replaces a user-owned root override", () => {
+    // The retention is marker-owned like every other injected root line. When the user owns
+    // that line, nothing is injected and their destination stands. The guarantee that an
+    // `openai`-tagged thread reaches this proxy therefore holds for the managed override only;
+    // a user pointing the built-in provider elsewhere keeps pointing it there.
+    const userOwned = 'openai_base_url = "https://user.example/v1"\nmodel = "gpt-5.5"\n';
+    writeFileSync(join(codexHome, "config.toml"), userOwned, "utf8");
+
+    const enabled = runInject(codexHome, ocxHome, JSON.stringify({ codexClientCompaction: true }));
+    expect(enabled.status).toBe(0);
+
+    const config = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(config).toContain('openai_base_url = "https://user.example/v1"');
+    expect(config).not.toContain('openai_base_url = "http://127.0.0.1:10100/v1"');
+    expect(config.match(/openai_base_url/g)?.length).toBe(1);
+    // The opt-in itself still applies: new threads default to the proxy provider.
+    expect(config).toContain('model_provider = "opencodex"');
+    expect(config).toContain("[model_providers.opencodex]");
+    // The user's line must never be journaled as ours, or a later restore would strip it.
+    const journal = JSON.parse(readFileSync(join(codexHome, "opencodex-journal.json"), "utf8"));
+    expect(journal.injectedOpenaiBaseUrl).toBeNull();
+
+    // The reported result has to match the file that was just written. The old root-only
+    // warning claimed nothing was injected and told the operator to delete a valid setting,
+    // while the history line claimed those threads still reached the proxy. Both were wrong
+    // for this mixed configuration.
+    const message = String(JSON.parse(enabled.stdout).message);
+    expect(message).toContain("Injected opencodex as default provider");
+    expect(message).not.toContain("Codex routing NOT injected");
+    expect(message).not.toContain("remove your openai_base_url line");
+    expect(message).toContain("left exactly as you set it");
+    expect(message).toContain("follow your own root openai_base_url, not the proxy");
+  });
+
+  test("the managed override keeps reporting proxy routing for existing threads", () => {
+    // Control for the case above: with no user-owned line, opencodex writes the root override
+    // itself, so the proxy claim is accurate and the root-only warning must not appear.
+    writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
+
+    const enabled = runInject(codexHome, ocxHome, JSON.stringify({ codexClientCompaction: true }));
+    expect(enabled.status).toBe(0);
+
+    const config = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(config).toContain('openai_base_url = "http://127.0.0.1:10100/v1"');
+
+    const message = String(JSON.parse(enabled.stdout).message);
+    expect(message).toContain("keep reaching the proxy through the retained openai_base_url override");
+    expect(message).not.toContain("Codex routing NOT injected");
+    expect(message).not.toContain("not the proxy");
+  });
+
+  test("the retained root override is journaled so a comment-dropping rewrite can still restore", () => {
+    writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
+    expect(runInject(codexHome, ocxHome, JSON.stringify({ codexClientCompaction: true })).status).toBe(0);
+
+    // The marker comment is not durable: the app can reserialize config.toml and drop comments,
+    // after which only the journaled value distinguishes our line from a user's (#1798).
+    const journal = JSON.parse(readFileSync(join(codexHome, "opencodex-journal.json"), "utf8"));
+    expect(journal.injectedOpenaiBaseUrl).toBe("http://127.0.0.1:10100/v1");
+
+    const rewritten = readFileSync(join(codexHome, "config.toml"), "utf8")
+      .split("\n").filter(line => !line.startsWith("#")).join("\n");
+    writeFileSync(join(codexHome, "config.toml"), rewritten, "utf8");
+    expect(runRestore(codexHome, ocxHome).status).toBe(0);
+    const restored = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(restored).not.toContain("openai_base_url");
+    expect(restored).not.toContain("[model_providers.opencodex]");
+  });
+
+  test("authless together with client compaction keeps the authless form, root key and all", () => {
+    writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
+    const sessionsDir = join(codexHome, "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    const rolloutPath = join(sessionsDir, "rollout-authless.jsonl");
+    writeFileSync(rolloutPath, `${JSON.stringify({
+      type: "session_meta",
+      payload: { id: "thread-authless", model_provider: "openai" },
+    })}\n`, "utf8");
+    const db = new Database(join(codexHome, "state_5.sqlite"));
+    db.run(`CREATE TABLE threads (
+      id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL, model_provider TEXT NOT NULL,
+      source TEXT, first_user_message TEXT, has_user_event INTEGER
+    )`);
+    db.run("INSERT INTO threads VALUES ('thread-authless', ?, 'openai', 'cli', 'hello', 1)", rolloutPath);
+    db.close();
+
+    const enabled = runInject(codexHome, ocxHome, JSON.stringify({
+      codexClientCompaction: true,
+      codexDesktopAuthless: true,
+    }));
+    expect(enabled.status).toBe(0);
+
+    // Authless is the stronger form and cannot carry the root key, so it keeps its existing
+    // shape: no root override, and resume history is forward-tagged with originals backed up.
+    const config = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(config).toContain("requires_openai_auth = false");
+    expect(config).not.toContain("openai_base_url");
+    const verifier = new Database(join(codexHome, "state_5.sqlite"), { readonly: true });
+    expect(verifier.query("SELECT model_provider FROM threads WHERE id = 'thread-authless'").get())
+      .toEqual({ model_provider: "opencodex" });
+    verifier.close();
+  });
+  test("client compaction opt-in leaves pre-existing ocx1 resume history byte-for-byte unchanged", () => {
+    writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
+    const sessionsDir = join(codexHome, "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    const rolloutPath = join(sessionsDir, "rollout-ocx1.jsonl");
+    const rollout = `${JSON.stringify({
+      type: "compacted",
+      payload: {
+        replacement_history: [{
+          type: "compaction",
+          encrypted_content: "ocx1:cG9ydGFibGUgc3VtbWFyeQ==",
+        }],
+      },
+    })}\n`;
+    writeFileSync(rolloutPath, rollout, "utf8");
+    const db = new Database(join(codexHome, "state_5.sqlite"));
+    db.run(`CREATE TABLE threads (
+      id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL, model_provider TEXT NOT NULL,
+      source TEXT, first_user_message TEXT, has_user_event INTEGER
+    )`);
+    db.run("INSERT INTO threads VALUES ('thread-ocx1', ?, 'opencodex', 'cli', 'hello', 1)", rolloutPath);
+    db.close();
+
+    const enabled = runInject(codexHome, ocxHome, JSON.stringify({ codexClientCompaction: true }));
+    expect(enabled.status).toBe(0);
+    expect(String(JSON.parse(enabled.stdout).message)).toContain("left unchanged");
+    expect(readFileSync(rolloutPath, "utf8")).toBe(rollout);
+    const verifier = new Database(join(codexHome, "state_5.sqlite"), { readonly: true });
+    expect(verifier.query("SELECT model_provider FROM threads WHERE id = 'thread-ocx1'").get())
+      .toEqual({ model_provider: "opencodex" });
+    verifier.close();
+  });
+
+  test("client compaction opt-in keeps existing Design B threads routed without touching history", () => {
+    writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
+    const sessionsDir = join(codexHome, "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    const rolloutPath = join(sessionsDir, "rollout-designb.jsonl");
+    const rollout = `${JSON.stringify({
+      type: "session_meta",
+      payload: { id: "thread-designb", model_provider: "openai" },
+    })}\n`;
+    writeFileSync(rolloutPath, rollout, "utf8");
+    const db = new Database(join(codexHome, "state_5.sqlite"));
+    db.run(`CREATE TABLE threads (
+      id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL, model_provider TEXT NOT NULL,
+      source TEXT, first_user_message TEXT, has_user_event INTEGER
+    )`);
+    db.run("INSERT INTO threads VALUES ('thread-designb', ?, 'openai', 'cli', 'hello', 1)", rolloutPath);
+    db.close();
+
+    const enabled = runInject(codexHome, ocxHome, JSON.stringify({ codexClientCompaction: true }));
+    expect(enabled.status).toBe(0);
+
+    // The thread stays tagged `openai` and its rollout is untouched. It keeps reaching the proxy
+    // because the injection retains the root override next to the provider table, so codex's
+    // built-in `openai` entry still resolves to this proxy. Re-tagging would have been the other
+    // way to keep it routed, but the length-preserving first-line repair cannot grow "openai"
+    // into "opencodex", and codex re-appends that stale first line on its next metadata write.
+    const config = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(config).toContain('model_provider = "opencodex"');
+    expect(config).toContain("[model_providers.opencodex]");
+    expect(config).toContain("openai_base_url");
+    expect(readFileSync(rolloutPath, "utf8")).toBe(rollout);
+    const verifier = new Database(join(codexHome, "state_5.sqlite"), { readonly: true });
+    expect(verifier.query("SELECT model_provider FROM threads WHERE id = 'thread-designb'").get())
+      .toEqual({ model_provider: "openai" });
+    verifier.close();
+  });
+
   test("authless Desktop opt-in never weakens non-loopback admission", () => {
     writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
 

@@ -156,7 +156,9 @@ describe("multiauth accounts API", () => {
       expect(requireManagementAuth(ctx.req, state, ctx.config)).toBeNull(); // Deliberately memoized.
       const pending = reader.read();
       publishAccountSelection("private-provider", "oauth");
-      await expect(pending).rejects.toMatchObject({ name: "NotAllowedError" });
+      // Nothing was queued before revocation, so the stream closes quietly instead of
+      // erroring; the pending read resolves done and the post-revocation frame is never sent.
+      await expect(pending).resolves.toMatchObject({ done: true });
     } finally { await reader.cancel().catch(() => undefined); }
   });
 
@@ -179,7 +181,31 @@ describe("multiauth accounts API", () => {
       session.expiresAt = Date.now() - 1;
       const pending = reader.read();
       tick();
-      await expect(pending).rejects.toMatchObject({ name: "NotAllowedError" });
+      await expect(pending).resolves.toMatchObject({ done: true });
+    } finally {
+      await reader?.cancel().catch(() => undefined);
+      interval.mockRestore();
+    }
+  });
+
+  test("selection stream discards frames queued before revocation instead of draining them", async () => {
+    const { ctx, state, token } = selectionSessionFixture();
+    const interval = spyOn(globalThis, "setInterval");
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    try {
+      const response = await handleOauthAccountRoutes(ctx);
+      expect(response?.status).toBe(200);
+      reader = response!.body!.getReader();
+      expect(new TextDecoder().decode((await reader.read()).value)).toContain("event: ready");
+      // No pending read: this event stays queued in the controller when the session expires.
+      publishAccountSelection("queued-provider", "oauth");
+      state.sessions.get(token)!.expiresAt = Date.now() - 1;
+      const tick = interval.mock.calls.find(call => call[1] === 15_000)?.[0];
+      if (typeof tick !== "function") throw new Error("selection heartbeat not registered");
+      tick();
+      // A non-empty queue still takes the error path: the queued frame is discarded and the
+      // revoked consumer rejects instead of ever draining it.
+      await expect(reader.read()).rejects.toMatchObject({ name: "NotAllowedError" });
     } finally {
       await reader?.cancel().catch(() => undefined);
       interval.mockRestore();

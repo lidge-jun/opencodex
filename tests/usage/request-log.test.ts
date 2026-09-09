@@ -32,6 +32,7 @@ import { bridgeToResponsesSSE } from "../../src/bridge";
 import type { AdapterEvent, OcxConfig, OcxUsage } from "../../src/types";
 import {
   appendUsageEntry,
+  normalizeUsageEntryForTest,
   readUsageEntries,
   resetUsageReadCacheForTests,
   type PersistedUsageEntry,
@@ -443,6 +444,31 @@ describe("request log metadata", () => {
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousHome;
       resetUsageReadCacheForTests();
+      removeTreeWithRetry(home);
+    }
+  });
+
+  test("persists transport finality evidence from the final request log", () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-finality-usage-"));
+    const previousHome = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = home;
+    try {
+      clearRequestLogsForTests();
+      resetUsageReadCacheForTests();
+      addFinalRequestLog("ocx-finality-persist", 1, {
+        model: "gpt-6-astra",
+        provider: "openai",
+        transportPhase: "mid_stream",
+        terminalSource: "synthetic",
+        upstreamError: "synthetic terminal",
+      }, 502, { terminalStatus: "failed", closeReason: "terminal" });
+      expect(getRequestLogEntries()[0]).toMatchObject({ transportPhase: "mid_stream", terminalSource: "synthetic" });
+      expect(readUsageEntries()[0]).toMatchObject({ transportPhase: "mid_stream", terminalSource: "synthetic" });
+    } finally {
+      clearRequestLogsForTests();
+      resetUsageReadCacheForTests();
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
       removeTreeWithRetry(home);
     }
   });
@@ -1760,6 +1786,33 @@ describe("request log metadata", () => {
 });
 
 describe("request log restart hydrate", () => {
+  test("persists and rehydrates transport finality evidence", () => {
+    const persisted = {
+      requestId: "ocx-finality-evidence",
+      timestamp: 1_800_000_000_000,
+      provider: "openai",
+      model: "gpt-6-astra",
+      status: 502,
+      durationMs: 42,
+      usageStatus: "unreported",
+      errorCode: "upstream_server_error",
+      terminalStatus: "failed",
+      closeReason: "terminal",
+      upstreamError: "upstream failed",
+      transportPhase: "mid_stream",
+      terminalSource: "synthetic",
+    } as PersistedUsageEntry;
+
+    expect(normalizeUsageEntryForTest(persisted)).toMatchObject({
+      transportPhase: "mid_stream",
+      terminalSource: "synthetic",
+    });
+    expect(requestLogEntryFromPersistedUsage(persisted)).toMatchObject({
+      transportPhase: "mid_stream",
+      terminalSource: "synthetic",
+    });
+  });
+
   test("projects persisted usage rows into /api/logs entries", () => {
     const persisted: PersistedUsageEntry = {
       requestId: "ocx-revive",

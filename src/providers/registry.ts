@@ -175,6 +175,13 @@ export interface ProviderRegistryEntry {
   staticHeaders?: Record<string, string>;
   modelSuffixBracketStrip?: boolean;
   featured?: boolean;
+  /**
+   * Paid provider sponsorship under SPONSORS.md. `main` is reserved for model developers,
+   * `standard` for relays and gateways. The picker pins sponsor rows first (alphabetical among
+   * themselves) and labels them; nothing else reads this field. Routing, failover, quota, and
+   * defaults never consult it — that boundary is what SPONSORS.md promises users.
+   */
+  sponsor?: { tier: "main" | "standard"; url: string };
   dashboardPreset?: boolean;
   note?: string;
   dashboardUrl?: string;
@@ -1918,6 +1925,9 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     authKind: "key", dashboardUrl: "https://www.orcarouter.ai/console",
     // The catalog is public, so a successful /models probe cannot validate a submitted key.
     apiKeyValidation: "unknown",
+    // Standard sponsor under SPONSORS.md (agreement signed 2026-09-07). Pins the row in the
+    // picker and adds the chip; nothing about routing or defaults changes.
+    sponsor: { tier: "standard", url: "https://www.orcarouter.ai/?utm_source=opencodex&utm_medium=readme" },
     defaultModel: "openai/gpt-5.5",
     models: ORCAROUTER_MODELS,
     liveModels: true,
@@ -1929,6 +1939,25 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelReasoningEffortMap: ORCAROUTER_MODEL_REASONING_EFFORT_MAP,
     preserveReasoningContentModels: ORCAROUTER_TEXT_ONLY_MODELS,
     note: "OpenAI-compatible adaptive router. Models and multimodal capabilities are discovered live from the public chat catalog. Use the OrcaRouter account entry for PKCE login.",
+  },
+  {
+    // PackyCode: API relay (packyapi.com) for Claude Code, Codex, Gemini and more. Codex traffic
+    // uses the OpenAI-compatible host from their Codex/Kimi Code guides (docs.packyapi.com):
+    // https://cf.api.fan/v1 — GET /v1/models answers 401 without a key, so the host is live and
+    // discovery narrows to what the key's token group allows. Model ids are bare OpenAI-style
+    // ids (the Codex token group lists gpt-5.5 / gpt-5.1-codex).
+    // Standard sponsor under SPONSORS.md; the dashboardUrl carries their affiliate code.
+    id: "packycode", label: "PackyCode", adapter: "openai-chat", baseUrl: "https://cf.api.fan/v1",
+    authKind: "key", dashboardUrl: "https://www.packyapi.com/register?aff=k5KT",
+    sponsor: { tier: "standard", url: "https://www.packyapi.com/register?aff=k5KT" },
+    defaultModel: "gpt-5.5",
+    models: ["gpt-5.5", "gpt-5.1-codex"],
+    liveModels: true,
+    // New key preset: opt into collision preservation so a row named `packycode` that a user
+    // points at a different PackyCode host keeps its own destination instead of being pulled
+    // back onto the Codex endpoint below.
+    preserveCustomDestination: true,
+    note: "API relay for Claude Code, Codex, Gemini and more. Create a Codex-group token at packyapi.com; live discovery lists what the token group allows.",
   },
   {
     // BizRouter: Korean enterprise LLM gateway (api.bizrouter.ai). Model ids are

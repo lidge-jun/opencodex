@@ -210,6 +210,7 @@ export async function runAnthropicWebSearch(
       // ignored a bare `Connection: close` (oven-sh/bun#20492).
       recovery => fetch(url, applyUpstreamRecoveryInit({
         method: "POST",
+        redirect: "manual",
         headers,
         body: JSON.stringify(body),
         signal: linkedSignal.signal,

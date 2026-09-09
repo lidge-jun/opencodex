@@ -38,6 +38,9 @@ import {
 } from "./request-log";
 import { responseWithDeferredRequestLog } from "./relay";
 import { handleResponses } from "./responses";
+import { providerConsumesCallerAuthorization } from "../providers/caller-authorization";
+import { captureExplicitOpenAiCallerAuth } from "../providers/openai-sidecar";
+import { captureCallerDirectAuth } from "../providers/caller-authorization";
 import type { AdmissionLease } from "../lib/admission";
 import type { DataPlaneAdmission } from "./auth-cors";
 import { tryClaimNativeMainProfileForTurn } from "../codex/native-main-admission";
@@ -133,7 +136,8 @@ async function handleChatCompletionsWithBudget(
   // it registers (extra_headers, sent verbatim by upstream Grok). Dashboard usage
   // bucketing only — never an auth or billing signal.
   if (req.headers.get("x-opencodex-grok") === "1") logCtx.surface = "grok";
-  let directRoute = false;
+  let callerAuthorizationRoute = false;
+  let routeMayChangeCredentialDomain = false;
   let settledRoute: ReturnType<typeof routeModel> | null = null;
   let chatNativeRoute: ReturnType<typeof routeModel> | null = null;
   try {
@@ -150,9 +154,9 @@ async function handleChatCompletionsWithBudget(
     logCtx.provider = route.providerName;
     logCtx.routeDecision = route.routeDecision;
     settledRoute = route;
-    if (route.provider.adapter === "openai-responses") {
-      directRoute = route.codexAccountMode === "direct";
-    }
+    routeMayChangeCredentialDomain = route.combo !== undefined || route.routeKind === "policy";
+    callerAuthorizationRoute = !routeMayChangeCredentialDomain
+      && providerConsumesCallerAuthorization(route.provider);
     if (route.provider.adapter === "cursor" || route.provider.adapter === "kiro") {
       const parts: string[] = [];
       if (chatBody.messages !== undefined) parts.push(JSON.stringify(chatBody.messages));
@@ -240,17 +244,23 @@ async function handleChatCompletionsWithBudget(
     && isCodexReserveHelperUnsupported(config, settledRoute.modelId, logIds?.admission, visionDescribeTerminal)) {
     return chatCompletionsErrorResponse(400, CODEX_RESERVE_HELPER_UNSUPPORTED_MESSAGE, "invalid_request_error");
   }
+  const nativeCallerAuth = captureExplicitOpenAiCallerAuth(req.headers, config);
+  // Caller-owned only: stored-main enrichment below is sidecar authority, never Direct authority.
+  const callerDirectAuth = captureCallerDirectAuth(req.headers, config);
+  let openAiSidecarAuth = nativeCallerAuth;
   const headers = new Headers({ "content-type": "application/json" });
   // Internal bridge metadata; the Go resolver scopes and hashes it before upstream use.
   const openCodeSession = req.headers.get("x-opencode-session");
   if (openCodeSession) headers.set("x-opencode-session", openCodeSession);
   for (const name of FORWARD_HEADERS) {
-    if (name === "authorization" && !directRoute) continue;
+    if (routeMayChangeCredentialDomain && (name === "authorization" || name === "chatgpt-account-id")) continue;
+    if (name === "authorization" && !callerAuthorizationRoute) continue;
     const value = req.headers.get(name);
     if (value) headers.set(name, value);
   }
-  // Prefer main ChatGPT auth so OpenAI-backed sidecars remain reachable on routed turns.
-  if (!directRoute) {
+  // A noncanonical caller-auth route can use stored main auth only through a sidecar snapshot.
+  // Later shadow/thread rewrites strip primary credentials at the actual Responses boundary.
+  if (!callerAuthorizationRoute || (settledRoute && !isCanonicalOpenAiForwardProvider(settledRoute.provider))) {
     // This enrichment is optional for routed/non-main providers. If native main
     // is fenced, omit it and let auth-context reject only a final physical-main
     // selection while healthy pool/provider routes continue.
@@ -259,8 +269,12 @@ async function handleChatCompletionsWithBudget(
         const { getMainAccountToken } = await import("../codex/main-account");
         const token = getMainAccountToken();
         if (token) {
-          headers.set("authorization", `Bearer ${token.accessToken}`);
-          headers.set("chatgpt-account-id", token.chatgptAccountId);
+          const mainHeaders = new Headers({ authorization: `Bearer ${token.accessToken}`, "chatgpt-account-id": token.chatgptAccountId });
+          openAiSidecarAuth ??= captureExplicitOpenAiCallerAuth(mainHeaders, config);
+          if (!callerAuthorizationRoute && !routeMayChangeCredentialDomain) {
+            headers.set("authorization", `Bearer ${token.accessToken}`);
+            headers.set("chatgpt-account-id", token.chatgptAccountId);
+          }
         }
       } catch {
         /* optional */
@@ -299,6 +313,9 @@ async function handleChatCompletionsWithBudget(
     addFinalRequestLog(logIds.requestId, logIds.start, logCtx, status, meta);
   };
   const upstream = await handleResponses(internalReq, config, logCtx, {
+    openAiSidecarAuth,
+    nativeCallerAuth,
+    callerDirectAuth,
     ...(logIds?.turnAdmissionLease ? { turnAdmissionLease: logIds.turnAdmissionLease } : {}),
     // #1686: the Chat surface translates its body and replays here, so the admission fact has
     // to ride along or a bearer-admitted Chat caller would still be refused by Direct.

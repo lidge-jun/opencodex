@@ -200,6 +200,7 @@ export async function describeImageAnthropic(
     const res = await fetchWithResetRetry(
       recovery => fetch(`${base}/v1/messages`, applyUpstreamRecoveryInit({
         method: "POST",
+        redirect: "manual",
         headers,
         body: JSON.stringify(body),
         signal: linkedSignal.signal,

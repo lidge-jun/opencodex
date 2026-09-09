@@ -25,6 +25,7 @@ import { rewriteRoutedToolSearchForUpstream } from "../responses/tool-search-com
 import { rewriteRoutedNamespaceToolsForUpstream } from "../responses/namespace-tool-compat";
 import { openaiResponsesUrl } from "./openai-responses-url";
 import { normalizeResponsesCodeMode } from "./responses-code-mode";
+import { stripUnicodePropertyPatterns } from "./responses-tool-schema";
 import { injectXaiResponsesXSearch, normalizeXaiResponsesWebSearch } from "./xai-web-search";
 import { EMPTY_TOOL_OUTPUT_ANNOTATION, isWhitespaceOnlyTextPartArray } from "./empty-tool-output-annotation";
 import {
@@ -649,14 +650,18 @@ function mapRoutedResponsesReasoningEffort(
 
 function normalizeFunctionToolSchema(tool: unknown, xaiTarget: boolean): unknown | undefined {
   if (!isPlainObject(tool) || tool.type !== "function") return tool;
+  // Runs for every Responses destination, forward auth included: the ChatGPT backend is where
+  // the `\p{…}` rejection was observed, and it reaches this function through the same seam.
+  const compatible = stripUnicodePropertyPatterns(tool);
+  const source = isPlainObject(compatible) ? compatible : tool;
   if (xaiTarget) {
-    const parameters = normalizeXaiToolParameters(isPlainObject(tool.parameters) ? tool.parameters : {});
-    return parameters === undefined ? undefined : { ...tool, parameters };
+    const parameters = normalizeXaiToolParameters(isPlainObject(source.parameters) ? source.parameters : {});
+    return parameters === undefined ? undefined : { ...source, parameters };
   }
-  if (isPlainObject(tool.parameters) && tool.parameters.type === "object") return tool;
+  if (isPlainObject(source.parameters) && source.parameters.type === "object") return source;
   return {
-    ...tool,
-    parameters: { ...(isPlainObject(tool.parameters) ? tool.parameters : {}), type: "object" },
+    ...source,
+    parameters: { ...(isPlainObject(source.parameters) ? source.parameters : {}), type: "object" },
   };
 }
 

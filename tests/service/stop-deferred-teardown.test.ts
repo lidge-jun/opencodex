@@ -1,13 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stopProxyGracefully } from "../../src/lib/process-control";
 import { performStopTeardown } from "../../src/server/stop-teardown";
 import type { CodexNativeRestoreResult } from "../../src/codex/inject";
+import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../../src/update/stop-contract.mjs";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { repoPath } from "../helpers/repo-root";
+import { fixturePath, repoPath } from "../helpers/repo-root";
 
 /**
  * Behavioural cover for the deferred shared teardown (#3008).
@@ -48,6 +49,82 @@ function restoreResult(success: boolean): CodexNativeRestoreResult {
   } as unknown as CodexNativeRestoreResult;
 }
 
+async function runParentStop(options: { receipt: boolean; response: unknown; restore: CodexNativeRestoreResult; status?: number }) {
+  const child = spawnSync(process.execPath, [fixturePath("parent-stop-runner.ts")], {
+    cwd: repoPath(),
+    env: { ...process.env, OPENCODEX_HOME: home },
+    input: JSON.stringify(options),
+    encoding: "utf8",
+    timeout: 20_000,
+    windowsHide: true,
+  });
+  expect(child.error, child.stderr).toBeUndefined();
+  expect(child.signal, child.stderr).toBeNull();
+  const reportPath = join(home, "parent-stop-result.json");
+  expect(existsSync(reportPath), child.stderr).toBe(true);
+  const report = JSON.parse(readFileSync(reportPath, "utf8")) as {
+    calls: { killed: number; native: number; grok: number; cleared: number; exited: number };
+    urls: string[]; nonce?: string; receiptExists: boolean; unexpectedIo: string[];
+  };
+  expect(report.unexpectedIo, child.stderr).toEqual([]);
+  expect(report.urls, child.stderr).toHaveLength(1);
+  return { ...report, exitCode: child.status, stderr: child.stderr };
+}
+
+describe("parent CLI shared teardown completion", () => {
+  test("receipt failure and unconfirmed child teardown cause real parent restoration without a kill", async () => {
+    const outcome = await runParentStop({ receipt: false,
+      response: { success: false, sharedTeardown: "performed" }, restore: restoreResult(true) });
+    expect(outcome.urls).toEqual(["http://127.0.0.1:10100/api/stop"]);
+    expect(outcome.calls).toMatchObject({ killed: 0, exited: 1, native: 1, grok: 1, cleared: 0 });
+    expect(outcome.exitCode).toBe(0);
+  });
+
+  test("a confirmed performed teardown prevents duplicate parent restoration", async () => {
+    const outcome = await runParentStop({ receipt: false,
+      response: { success: true, sharedTeardown: "performed" }, restore: restoreResult(true) });
+    expect(outcome.calls).toMatchObject({ killed: 0, native: 0, grok: 0 });
+    expect(outcome.exitCode).toBe(0);
+  });
+
+  test("a failed parent restoration leaves its actual receipt outstanding", async () => {
+    const outcome = await runParentStop({ receipt: true,
+      response: { success: false, sharedTeardown: "performed" }, restore: restoreResult(false) });
+    expect(outcome.urls[0]).toContain(`teardownNonce=${outcome.nonce}`);
+    expect(outcome.calls).toMatchObject({ killed: 0, native: 1, grok: 1, cleared: 0 });
+    expect(outcome.exitCode).toBe(1);
+    expect(outcome.receiptExists).toBe(true);
+  });
+
+  test("confirmed deferral leaves restoration and receipt discharge to the parent", async () => {
+    const outcome = await runParentStop({ receipt: true,
+      response: { success: true, sharedTeardown: "deferred" }, restore: restoreResult(true) });
+    expect(outcome.calls).toMatchObject({ killed: 0, native: 1, grok: 1, cleared: 1 });
+    expect(outcome.exitCode).toBe(0);
+    expect(outcome.receiptExists).toBe(false);
+  });
+
+  test("history-only parent failure preserves its distinct exit and discharges restored client state", async () => {
+    const restore = { ...restoreResult(false), artifacts: {
+      config: { state: "restored" }, catalog: { state: "restored" }, history: { state: "failed" },
+    } } as unknown as CodexNativeRestoreResult;
+    const outcome = await runParentStop({ receipt: true,
+      response: { success: false, sharedTeardown: "performed" }, restore });
+    expect(outcome.calls).toMatchObject({ killed: 0, native: 1, grok: 1, cleared: 1 });
+    expect(outcome.exitCode).toBe(STOP_HISTORY_INCOMPLETE_EXIT_CODE);
+    expect(outcome.receiptExists).toBe(false);
+  });
+
+  test("a refused stop keeps the parent from restoring or discharging its receipt", async () => {
+    const outcome = await runParentStop({ receipt: true, status: 409,
+      response: { success: false, message: "Run the stop outside the installed service." }, restore: restoreResult(true) });
+    expect(outcome.calls).toMatchObject({ killed: 0, exited: 0, native: 0, grok: 0, cleared: 0 });
+    expect(outcome.exitCode).toBe(1);
+    expect(outcome.receiptExists).toBe(true);
+    expect(outcome.stderr).toContain("Run the stop outside the installed service.");
+  });
+});
+
 describe("stopProxyGracefully deferral flag", () => {
   test("the default stop asks for no deferral", async () => {
     const urls: string[] = [];
@@ -55,7 +132,7 @@ describe("stopProxyGracefully deferral flag", () => {
       readRuntime: () => ({ port: 10100 }),
       fetchFn: (async (url: string | URL | Request) => {
         urls.push(String(url));
-        return new Response(JSON.stringify({ success: true }), { status: 200 });
+        return new Response(JSON.stringify({ success: true, sharedTeardown: "performed" }), { status: 200 });
       }) as typeof fetch,
       waitExit: () => true,
       env: {},
@@ -69,7 +146,7 @@ describe("stopProxyGracefully deferral flag", () => {
       readRuntime: () => ({ port: 10100 }),
       fetchFn: (async (url: string | URL | Request) => {
         urls.push(String(url));
-        return new Response(JSON.stringify({ success: true }), { status: 200 });
+        return new Response(JSON.stringify({ success: true, sharedTeardown: "deferred" }), { status: 200 });
       }) as typeof fetch,
       waitExit: () => true,
       env: {},
@@ -88,7 +165,7 @@ describe("stopProxyGracefully deferral flag", () => {
       runtimeEndpoint: { hostname: "127.0.0.1", port: 10100 },
       fetchFn: (async (url: string | URL | Request) => {
         urls.push(String(url));
-        return new Response(JSON.stringify({ success: true }), { status: 200 });
+        return new Response(JSON.stringify({ success: true, sharedTeardown: "performed" }), { status: 200 });
       }) as typeof fetch,
       waitExit: () => true,
       env: {},

@@ -210,11 +210,14 @@ import {
 import {
   ForwardAdmissionCredentialError,
   hasForwardableCodexBearer,
+  isProxyAdmissionSecret,
   validateForwardAdmissionCredential,
 } from "../auth-cors";
 import type { DataPlaneAdmission } from "../auth-cors";
 import { createTranslatorBudget, isTranslatorBudgetExceededError, type TranslatorBudget } from "../../lib/translator-budget";
-import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
+import { captureExplicitOpenAiCallerAuth, listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ExplicitOpenAiCallerAuth, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
+import { inspectChatGptDomainClaim } from "../../oauth/chatgpt";
+import { captureCallerDirectAuth, providerConsumesCallerAuthorization, type CallerDirectAuth } from "../../providers/caller-authorization";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { CODEX_RESERVE_HELPER_UNSUPPORTED_MESSAGE, isCodexReserveHelperUnsupported } from "../../codex/loopback-target";
 import { providerContextCap } from "../../providers/context-cap";
@@ -1121,7 +1124,8 @@ export async function shouldRetryCodexPoolAccountQuota(
 }
 
 interface CodexPoolAccountRetryArgs {
-  req: Request;
+  /** Sanitized caller input, before any selected Pool credential was materialized. */
+  callerAuthHeaders: Headers;
   config: OcxConfig;
   route: { providerName: string; modelId: string; provider: OcxProviderConfig };
   parsed: OcxParsedRequest;
@@ -1287,7 +1291,7 @@ async function retryCodexPoolOnAlternateAccount(
   args: CodexPoolAccountRetryArgs,
 ): Promise<CodexPoolAccountRetryResult> {
   const {
-    req, config, route, parsed, logCtx, options, firstAuthCtx, firstResponse,
+    callerAuthHeaders, config, route, parsed, logCtx, options, firstAuthCtx, firstResponse,
     outcomeStatus, upstream, connectMs, passthroughEstimate, stream,
   } = args;
   const inboundWire = options.inboundWire ?? "responses";
@@ -1321,7 +1325,7 @@ async function retryCodexPoolOnAlternateAccount(
   }
   try {
     retryAuthCtx ??= await resolveCodexAuthContext(
-        req.headers,
+        callerAuthHeaders,
         config,
         "pool",
         {
@@ -1329,7 +1333,7 @@ async function retryCodexPoolOnAlternateAccount(
           admission: options.admission,
           codexAuthPolicy: options.codexAuthPolicy,
           modelId: route.modelId,
-          requestScopedMainCredential: hasForwardableCodexBearer(req.headers, config),
+          requestScopedMainCredential: hasForwardableCodexBearer(callerAuthHeaders, config),
           beginCodexAccountSelection: codexAccountSelectionForTurn(options.turnAdmissionLease),
           resolveCodexModelEntitlements: entitlementResolver,
         },
@@ -1399,7 +1403,7 @@ async function retryCodexPoolOnAlternateAccount(
   // Only a combo reset-derived outcome is deferred. Retry-After, defaults, and
   // ordinary requests must block the first account before the alternate send.
   if (!deferFirstOutcome) recordFirstOutcome();
-  const retryHeaders = headersForCodexAuthContext(req.headers, retryAuthCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission);
+  const retryHeaders = headersForCodexAuthContext(callerAuthHeaders, retryAuthCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission);
   const retryProvider = applyCodexAuthContextToProvider(
     stripCodexRuntimeProviderFields(route.provider),
     retryAuthCtx,
@@ -1703,9 +1707,17 @@ export interface HandleResponsesOptions {
   /**
    * Claude replay may add native-main auth so OpenAI sidecars remain available.
    * Strip only that internal credential when the final route is a noncanonical
-   * forward destination; final routing can differ from Claude's preflight route.
+   * forward/caller-auth destination; final routing can differ from Claude's preflight route.
    */
   stripClaudeMainAuthForNoncanonicalForward?: boolean;
+  /** In-memory credential proven by Claude's native-main turn claim; never persist or log. */
+  trustedClaudeMainAuth?: { authorization: string; chatgptAccountId?: string };
+  /** Sidecar-only auth captured before route changes; null means no usable original pair. */
+  openAiSidecarAuth?: ExplicitOpenAiCallerAuth | null;
+  /** Original caller-owned native pair; separate from any claimed sidecar enrichment. */
+  nativeCallerAuth?: ExplicitOpenAiCallerAuth | null;
+  /** Caller Direct credential under Direct\'s own predicate; restored only for the canonical OpenAI final route. */
+  callerDirectAuth?: CallerDirectAuth | null;
   /** Internal recursion guard; callers outside this module must not set it. */
   comboAttempt?: boolean;
   /** Internal combo handoff for one parent-validated continuation snapshot. */
@@ -1925,6 +1937,9 @@ export function createChildPassthroughCallbackGate(options: HandleResponsesOptio
 
 export function buildComboChildHeaders(parentHeaders: HeadersInit): Headers {
   const childHeaders = new Headers(parentHeaders);
+  // A provisional caller credential is not authoritative for a Combo child.
+  childHeaders.delete("authorization");
+  childHeaders.delete("chatgpt-account-id");
   // Combo children re-serialize already-decoded JSON. Keeping transport metadata from
   // the parent would make the child decoder treat plain JSON as compressed bytes.
   childHeaders.delete("content-length");
@@ -2009,7 +2024,7 @@ function canPassThroughEncryptedV2AgentTask(
 }
 
 type ResponsesAuthResolution =
-  | { ok: true; authCtx: CodexAuthContext; headers: Headers; substituteMainCredential: boolean }
+  | { ok: true; authCtx: CodexAuthContext; headers: Headers; callerAuthHeaders: Headers; substituteMainCredential: boolean }
   | { ok: false; response: Response };
 
 /**
@@ -2021,8 +2036,75 @@ async function resolveResponsesCodexAuth(
   config: OcxConfig,
   route: RouteResult,
   options: HandleResponsesOptions,
+  credentialDomainWasRewritten = false,
 ): Promise<ResponsesAuthResolution> {
   try {
+    const routeMayChangeCredentialDomain = options.comboAttempt === true
+      || route.routeKind === "policy"
+      || credentialDomainWasRewritten;
+    const trustedClaudeMainForFinalRoute = options.stripClaudeMainAuthForNoncanonicalForward === true
+      && isCanonicalOpenAiForwardProvider(route.provider)
+      ? options.trustedClaudeMainAuth : undefined;
+    let authInputHeaders = req.headers;
+    // Route-changing recursion retains typed admission, never an unscoped raw
+    // caller credential. Bearer admission is substituted or stripped below.
+    if (routeMayChangeCredentialDomain && options.admission?.source !== "bearer"
+      && !trustedClaudeMainForFinalRoute) {
+      authInputHeaders = new Headers(req.headers);
+      authInputHeaders.delete("authorization");
+      authInputHeaders.delete("chatgpt-account-id");
+    }
+    if (trustedClaudeMainForFinalRoute) {
+      authInputHeaders = new Headers(authInputHeaders);
+      authInputHeaders.set("authorization", trustedClaudeMainForFinalRoute.authorization);
+      if (trustedClaudeMainForFinalRoute.chatgptAccountId) {
+        authInputHeaders.set("chatgpt-account-id", trustedClaudeMainForFinalRoute.chatgptAccountId);
+      } else {
+        authInputHeaders.delete("chatgpt-account-id");
+      }
+    }
+    // A caller-auth transport that is not canonical OpenAI (keyless Cursor) consumes the
+    // caller's Authorization as its own upstream token. Keep that contract only for a clean
+    // single bearer with NO ChatGPT-domain marker. A bearer marked for the ChatGPT domain —
+    // whether its marker is valid or malformed/conflicting — a combined/malformed value, or
+    // the captured explicit OpenAI pair is never a Cursor token; a foreign JWT carrying only
+    // a generic organizations claim is not ChatGPT-marked and keeps the legacy contract.
+    // chatgpt-account-id has no meaning outside the ChatGPT domain.
+    if (!isCanonicalOpenAiForwardProvider(route.provider)
+      && providerConsumesCallerAuthorization(route.provider)) {
+      const rawAuth = authInputHeaders.get("authorization")?.trim();
+      const singleBearer = /^Bearer[\t ]+([^\s,]+)$/i.exec(rawAuth ?? "")?.[1];
+      const domainClaim = singleBearer ? inspectChatGptDomainClaim(singleBearer) : { kind: "absent" as const };
+      const dropBearer = options.nativeCallerAuth != null || domainClaim.kind !== "absent"
+        || (rawAuth !== undefined && singleBearer === undefined);
+      if (dropBearer || authInputHeaders.has("chatgpt-account-id")) {
+        const scoped = new Headers(authInputHeaders);
+        if (dropBearer) scoped.delete("authorization");
+        scoped.delete("chatgpt-account-id");
+        authInputHeaders = scoped;
+      }
+    }
+    // The caller's own Direct credential may cross an internal route change only to the
+    // canonical OpenAI transport, under a predicate deliberately STRICTER than plain
+    // unchanged-route Direct forwarding: a clean non-proxy bearer whose ChatGPT-domain
+    // marker is valid, with any explicit account header matching that marker. Unchanged
+    // routes keep their legacy rules; sidecar enrichment grants no primary authority.
+    if (options.callerDirectAuth && isCanonicalOpenAiForwardProvider(route.provider)) {
+      const directHeaders = new Headers({
+        authorization: options.callerDirectAuth.authorization,
+        ...(options.callerDirectAuth.chatgptAccountId
+          ? { "chatgpt-account-id": options.callerDirectAuth.chatgptAccountId } : {}),
+      });
+      if (captureCallerDirectAuth(directHeaders, config)) {
+        authInputHeaders = new Headers(authInputHeaders);
+        authInputHeaders.set("authorization", options.callerDirectAuth.authorization);
+        if (options.callerDirectAuth.chatgptAccountId) {
+          authInputHeaders.set("chatgpt-account-id", options.callerDirectAuth.chatgptAccountId);
+        } else {
+          authInputHeaders.delete("chatgpt-account-id");
+        }
+      }
+    }
     // #1686: a caller that proved admission with a BEARER presented one of our own secrets.
     // Refusing it here is what made the codex-cli `env_key` contract unusable against Direct.
     // Admitting it is only safe because the stored main credential is substituted below, so
@@ -2046,15 +2128,16 @@ async function resolveResponsesCodexAuth(
     // no-ChatGPT-login install keeps working.
     const substituteMainCredential = options.admission?.source === "bearer"
       && (route.codexAccountMode !== undefined || isCanonicalOpenAiForwardProvider(route.provider));
+    const stripAuthorization = options.admission?.source === "bearer" && !substituteMainCredential;
     const requestScopedMainCredential = route.codexAccountMode !== undefined
       && !substituteMainCredential
-      && hasForwardableCodexBearer(req.headers, config);
+      && hasForwardableCodexBearer(authInputHeaders, config);
     if (route.codexAccountMode === "direct" && !substituteMainCredential) {
-      validateForwardAdmissionCredential(req.headers, config);
+      validateForwardAdmissionCredential(authInputHeaders, config);
     }
     let authCtx: CodexAuthContext;
     if (route.codexAccountMode) {
-      authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode, {
+      authCtx = await resolveCodexAuthContext(authInputHeaders, config, route.codexAccountMode, {
         admission: options.admission,
         codexAuthPolicy: options.codexAuthPolicy,
         accountId: route.codexAccountId,
@@ -2090,7 +2173,7 @@ async function resolveResponsesCodexAuth(
     // (custom-named canonical-forward providers must retain the same protection).
     const mainPolicyConfig = isCanonicalOpenAiForwardProvider(route.provider)
       ? options.codexAuthPolicy ?? config : undefined;
-    const headers = await materializeCodexUpstreamAuthAsync(req.headers, authCtx, {
+    const headers = await materializeCodexUpstreamAuthAsync(authInputHeaders, authCtx, {
       admission: options.admission,
       config: mainPolicyConfig,
       modelId: route.modelId,
@@ -2109,10 +2192,27 @@ async function resolveResponsesCodexAuth(
         response: formatErrorResponse(401, "authentication_error", "Selected Codex account needs reauthentication"),
       };
     }
+    if (stripAuthorization) {
+      headers.delete("authorization");
+      headers.delete("chatgpt-account-id");
+    }
+    if (providerConsumesCallerAuthorization(route.provider) && options.admission?.source !== undefined
+      && options.admission.source !== "loopback") {
+      validateForwardAdmissionCredential(headers, config);
+    } else {
+      // Even adapters that ignore caller auth must not retain a proxy secret for
+      // a later internal hop or a future transport change.
+      const bearer = headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
+      if (bearer && isProxyAdmissionSecret(bearer, config)) {
+        headers.delete("authorization");
+        headers.delete("chatgpt-account-id");
+      }
+    }
     return {
       ok: true,
       authCtx,
       headers,
+      callerAuthHeaders: new Headers(authInputHeaders),
       substituteMainCredential,
     };
   } catch (err) {
@@ -3084,6 +3184,12 @@ export async function handleResponses(
   try {
     const response = await handleResponsesInner(req, config, logCtx, {
       ...options,
+      openAiSidecarAuth: options.openAiSidecarAuth === undefined
+        ? captureExplicitOpenAiCallerAuth(req.headers, config) : options.openAiSidecarAuth,
+      nativeCallerAuth: options.nativeCallerAuth === undefined
+        ? captureExplicitOpenAiCallerAuth(req.headers, config) : options.nativeCallerAuth,
+      callerDirectAuth: options.callerDirectAuth === undefined
+        ? captureCallerDirectAuth(req.headers, config) : options.callerDirectAuth,
       // Capture before combo replay rebuilds the Request headers; children carry options.
       visionDescribeTerminal: options.visionDescribeTerminal === true
         || req.headers.get("x-opencodex-vision-describe") === "1",
@@ -3332,6 +3438,7 @@ async function handleResponsesInner(
   logCtx.configuredSpeedLabel = requestLogSpeedLabel(logCtx.configuredServiceTier);
 
   let route: RouteResult;
+  let credentialDomainWasRewritten = false;
   try {
     // A `compaction_trigger` turn may name a bare native model the operator has
     // no canonical OpenAI route for (#2901). Only the initial compaction route
@@ -3353,6 +3460,7 @@ async function handleResponsesInner(
       } catch { /* Native Codex helper calls remain OpenAI-owned without an enabled OpenAI route. */ }
       const targetRoute = resolveRoute(_sci.model);
       if (shouldInterceptShadowCall(parsed.modelId, _sci.sourceModels, sourceIdentity, targetRoute)) {
+        credentialDomainWasRewritten = true;
         const _sciOriginal = parsed.modelId;
         parsed.modelId = _sci.model;
         if (parsed._rawBody && typeof parsed._rawBody === "object") {
@@ -3484,6 +3592,7 @@ async function handleResponsesInner(
     if (fallback?.to && !slugsEquivalent(fallback.to, route.modelId)) {
       try {
         route = routeModel(config, fallback.to, evidenceFromBody(parsed._rawBody));
+        credentialDomainWasRewritten = true;
         logCtx.routeDecision = route.routeDecision;
       } catch (err) {
         if (err instanceof NoAvailableComboTargetsError) {
@@ -3620,6 +3729,7 @@ async function handleResponsesInner(
           if (fallback?.to && !slugsEquivalent(fallback.to, route.modelId)) {
             try {
               route = routeModel(config, fallback.to, evidenceFromBody(parsed._rawBody));
+              credentialDomainWasRewritten = true;
               logCtx.routeDecision = route.routeDecision;
             } catch (err) {
               if (err instanceof NoAvailableComboTargetsError) {
@@ -3742,11 +3852,13 @@ async function handleResponsesInner(
   }
 
   let substituteMainCredential = false;
+  let callerAuthHeaders: Headers;
   {
-    const finalAuth = await resolveResponsesCodexAuth(req, config, route, options);
+    const finalAuth = await resolveResponsesCodexAuth(req, config, route, options, credentialDomainWasRewritten);
     if (!finalAuth.ok) return finalAuth.response;
     authCtx = finalAuth.authCtx;
     selectedForwardHeaders = finalAuth.headers;
+    callerAuthHeaders = finalAuth.callerAuthHeaders;
     substituteMainCredential = finalAuth.substituteMainCredential;
   }
 
@@ -4036,7 +4148,8 @@ async function handleResponsesInner(
           const ownsBearer = snapshot !== undefined
             && sentHeaders?.get("authorization") === `Bearer ${snapshot.accessToken}`
             && !sentHeaders?.has("x-api-key");
-          const response = await fetchImpl(destination, dispatchInit);
+          // Reselection can choose a provider override instead of the supplied executor.
+          const response = await fetchImpl(destination, { ...dispatchInit, redirect: "manual" });
           // Observe each physical response before retries replace it. The binding belongs to
           // this dispatch, so a manual switch cannot file A's headers against B. Header
           // overrides and credential replacement make ownership unprovable: skip those writes.
@@ -4223,9 +4336,9 @@ async function handleResponsesInner(
   );
   let adapterProvider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire);
   const stripClaudeMainAuth = options.stripClaudeMainAuthForNoncanonicalForward === true
-    && adapterProvider.adapter === "openai-responses"
-    && adapterProvider.authMode === "forward"
-    && !isCanonicalOpenAiForwardProvider(adapterProvider);
+    && !isCanonicalOpenAiForwardProvider(adapterProvider)
+    && ((adapterProvider.adapter === "openai-responses" && adapterProvider.authMode === "forward")
+      || providerConsumesCallerAuthorization(adapterProvider));
   if (stripClaudeMainAuth) {
     releaseCodexAuthContextProbeLease(authCtx);
     authCtx = { kind: "main", accountId: null };
@@ -4313,9 +4426,18 @@ async function handleResponsesInner(
   const needsOpenAiSearch = shouldResolveOpenAiWebSearchSidecar(config, parsed, isPassthrough);
   if (needsOpenAiVision || needsOpenAiSearch) {
     try {
+      // Preserve explicit OpenAI helper auth across route changes without returning it to
+      // primary-provider headers or alternate-main retry. The resolver revalidates scope.
+      const sidecarHeaders = new Headers(req.headers);
+      sidecarHeaders.delete("authorization");
+      sidecarHeaders.delete("chatgpt-account-id");
+      if (options.openAiSidecarAuth) {
+        sidecarHeaders.set("authorization", options.openAiSidecarAuth.authorization);
+        sidecarHeaders.set("chatgpt-account-id", options.openAiSidecarAuth.chatgptAccountId);
+      }
       openAiSidecar = await resolveFirstUsableOpenAiSidecar(
         listOpenAiForwardSidecarCandidates(config),
-        req.headers,
+        sidecarHeaders,
         config,
         {
           admission: options.admission,
@@ -5400,7 +5522,7 @@ async function handleResponsesInner(
         // justify because this flag already produced the identical result.
         const storedReplaySpent = codex401ReplayKind === "stored";
         const retry = await retryCodexPoolOnAlternateAccount({
-          req,
+          callerAuthHeaders,
           config,
           route,
           parsed,

@@ -1617,6 +1617,38 @@ describe("relaySseEagerBounded — error paths", () => {
     expect(rec.synthetics).toEqual([]);
     expect(rec.dones).toBe(1);
   });
+
+  test("(090-13) bare upstream error event at clean EOF passes upstream_error reason to onSynthetic", async () => {
+    // A { type: "error" } bare error SSE frame arrives, then the upstream closes cleanly.
+    // The relay emits an upstreamErrorTailFrame rather than an adapterEofIncompleteFrame.
+    // onSynthetic must receive reason="upstream_error" so callers can distinguish a semantic
+    // upstream failure from a plain body-read reset (which carries no reason argument).
+    const up = controlledUpstream();
+    const syntheticCalls: Array<[string, string | undefined]> = [];
+    const rec090 = { dones: 0 };
+    const inspector090 = createSseInspector({});
+    const hooks090: EagerRelayHooks = {
+      inspectChunk: c => inspector090.feed(c),
+      finishInspection: () => inspector090.finish(),
+      disposeInspection: () => inspector090.dispose(),
+      sawTerminal: () => inspector090.reported(),
+      onSynthetic: (kind, reason) => syntheticCalls.push([kind, reason]),
+      onClientCancel: () => {},
+      onDone: () => { rec090.dones += 1; },
+    };
+    const relayed = relaySseEagerBounded(up.stream, new AbortController(), hooks090);
+    const bareErrorPayload = JSON.stringify({ type: "error", message: "provider stream failed" });
+    up.push(sse(bareErrorPayload));
+    up.close();
+    const out = await readAll(relayed);
+    await settle();
+
+    expect(out.match(/event: response\.failed/g)?.length).toBe(1);
+    expect(out).not.toContain("response.incomplete");
+    expect(out).toContain("provider stream failed");
+    expect(syntheticCalls).toEqual([["failed", "upstream_error"]]);
+    expect(rec090.dones).toBe(1);
+  });
 });
 
 describe("createSseInspector — extraction locks (h)", () => {

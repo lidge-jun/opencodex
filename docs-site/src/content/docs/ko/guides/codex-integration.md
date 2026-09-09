@@ -7,6 +7,12 @@ opencodex는 Codex가 읽는 두 가지, 즉 설정(`$CODEX_HOME/config.toml`, �
 
 프록시는 bare `openai` Codex 로그인 경로 하나와 Pool(기본) 및 Direct 계정 모드, 그리고 설정된 API 키용 `openai-apikey/<model>`을 제공합니다. Pool은 메인 계정과 추가된 계정을 포함하고, Direct는 호출자/메인 bearer만 사용합니다. 경로들은 서로 fallback하지 않습니다. shipped v1 config는 marker 2로 이관되며, 수동 복원을 위해 `config.json.pre-openai-tiers-v2.bak`를 보존합니다.
 
+Pool 모드에서는 선택된 저장 계정이 쿨다운 중이고 사용 가능한 다른 저장 계정이나 복구 probe가
+없을 때, 요청에 포함된 검증된 native Codex 로그인을 사용할 수 있습니다. 상류 거절 후 재시도와
+같은 호출자 검증을 적용하므로, 전송 전에 막힌 새 요청도 이 경로를 사용할 수 있습니다. 기존 모델
+권한과 main 계정 정책 검사는 유지됩니다. 이 fallback은 저장 계정의 쿨다운을 해제하거나 호출자
+인증을 Pool 선택으로 저장하지 않습니다. 특정 계정에 정확히 고정된 요청은 그 계정에 계속 묶입니다.
+
 ## 설정 주입
 
 `ocx init`, `ocx start`, `ocx sync`는 모두 인젝터를 호출합니다. 기본 loopback 바인드에서는 Codex의 빌트인 `openai` 프로바이더 id를 그대로 유지한 채, 그 프로바이더가 opencodex를 바라보게 합니다.

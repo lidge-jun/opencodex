@@ -379,6 +379,42 @@ describe("PUT /api/settings", () => {
     expect(bad!.status).toBe(400);
   });
 
+  test("codexClientCompaction (#3978): absent reports false, changes converge once, and disable deletes the key", async () => {
+    const config = baseConfig();
+    const absent = await (await getSettings(config))!.json() as { codexClientCompaction?: boolean };
+    expect(absent.codexClientCompaction).toBe(false);
+
+    let convergences = 0;
+    let saved: OcxConfig | undefined;
+    const on = await putSettings(config, { codexClientCompaction: true }, {
+      saveConfigPreservingClaudeCode: next => { saved = next; },
+      createManagementConvergeCodex: catalogConvergenceFactory(() => { convergences += 1; }),
+    });
+    expect(on!.status).toBe(200);
+    expect(await on!.json()).toMatchObject({ codexClientCompaction: true });
+    expect(saved?.codexClientCompaction).toBe(true);
+    expect(convergences).toBe(1);
+
+    const same = await putSettings(config, { codexClientCompaction: true }, {
+      saveConfigPreservingClaudeCode: () => {},
+      createManagementConvergeCodex: catalogConvergenceFactory(() => { convergences += 1; }),
+    });
+    expect(same!.status).toBe(200);
+    expect(convergences).toBe(1);
+
+    const off = await putSettings(config, { codexClientCompaction: false }, {
+      saveConfigPreservingClaudeCode: next => { saved = next; },
+      createManagementConvergeCodex: catalogConvergenceFactory(() => { convergences += 1; }),
+    });
+    expect(off!.status).toBe(200);
+    expect(await off!.json()).toMatchObject({ codexClientCompaction: false });
+    expect(Object.hasOwn(saved!, "codexClientCompaction")).toBe(false);
+    expect(convergences).toBe(2);
+
+    const bad = await putSettings(config, { codexClientCompaction: "yes" });
+    expect(bad!.status).toBe(400);
+  });
+
   test("account-picker disable does not initialize an empty namespace map", async () => {
     const config = baseConfig();
     let convergences = 0;
