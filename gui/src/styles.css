@@ -2508,6 +2508,45 @@ button.prov-account-row.active { cursor: default; }
 /* Top-align with Storage: centering against the taller filter chips dropped the "Usage" title. */
 .usage-head { flex-wrap: wrap; align-items: flex-start; }
 .usage-filters { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+/* Custom range: a disclosure, not a second filter row. It reuses the chip language of the
+   segmented presets above it so the page reads as one control area, and the panel is
+   `width: max-content` because a four-control form stretched to 1200px is what made the old
+   flex-end row look like a stray band across the page. */
+.usage-range { display: grid; justify-items: start; gap: 8px; margin: 10px 0 4px; }
+.usage-range-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; max-width: 100%; }
+.usage-range-toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  min-height: var(--control-sm); padding: 4px 12px;
+  border: 1px solid var(--border); border-radius: var(--radius-pill);
+  background: var(--surface); color: var(--muted);
+  font: inherit; font-size: var(--text-label); font-weight: var(--weight-medium);
+  white-space: nowrap; cursor: pointer;
+  transition: color var(--motion-fast), background var(--motion-fast), border-color var(--motion-fast);
+}
+.usage-range-toggle:hover { background: var(--raised); color: var(--text); }
+.usage-range-toggle[aria-expanded="true"] { color: var(--text); }
+.usage-range-toggle.is-active { border-color: var(--accent); color: var(--text); }
+.usage-range-chevron { flex: 0 0 auto; transition: transform var(--motion-fast); }
+.usage-range-toggle[aria-expanded="true"] .usage-range-chevron { transform: rotate(90deg); }
+.usage-range-applied { margin: 0; min-width: 0; }
+.usage-range-panel {
+  display: grid; gap: 10px; width: max-content; max-width: 100%;
+  padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+/* `align-items: end` is the fix for the old row: a label+input stack is twice the height of a
+   `btn-sm`, so centering left Apply and Clear floating beside the middle of the fields.
+   Every track is `auto` on purpose. A fixed 200px cap does not survive contact with a
+   `datetime-local` control: its intrinsic minimum is about 206px in Chrome at this font size,
+   and it grows again for locales whose date format is longer than `mm/dd/yyyy`. The fields
+   then overflow their tracks and eat the gap, which is the exact rhythm defect this block
+   exists to fix. */
+.usage-range-fields { display: grid; grid-template-columns: repeat(4, auto); justify-content: start; align-items: end; gap: 8px; }
+.usage-range-field { display: grid; gap: 4px; min-width: 0; }
+.usage-range-field .field-label { margin: 0; }
+.usage-range-fields .input { height: var(--control-md); padding-block: 0; }
+.usage-range-action { min-height: var(--control-md); }
+.usage-range-panel > p { margin: 0; }
 .usage-segmented { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-pill); padding: 2px; gap: 2px; background: var(--surface); }
 .usage-segmented-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: none; background: transparent; color: var(--muted); padding: 4px 12px; border-radius: var(--radius-pill); cursor: pointer; font: inherit; white-space: nowrap; }
 .usage-segmented-btn.active { background: var(--raised); color: var(--text); font-weight: var(--weight-semibold); }
@@ -2529,6 +2568,11 @@ button.prov-account-row.active { cursor: default; }
 
 @media (max-width: 640px) {
   .usage-source-btn .usage-source-label-collapsible { display: none; }
+  /* Two 200px columns plus both actions stop fitting a phone content width; the panel takes
+     the full row and every control keeps the same height it has on desktop. */
+  .usage-range-panel { width: 100%; }
+  .usage-range-fields { grid-template-columns: minmax(0, 1fr); }
+  .usage-range-action { width: 100%; }
 }
 
 @media (max-width: 360px) {
