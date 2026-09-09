@@ -22,6 +22,8 @@ description: 多代理界面、委派引导、首选模型、回退链、原生�
 | `effortCap?` | `string` | — | 对符合条件的 v2 主轮次和标记的派生子轮次设置硬上限。接受 `low` 到 `ultra`。 |
 | `subagentEffortCap?` | `string` | — | 仅针对派生子轮次的额外上限。两个上限同时适用时，较低者生效。 |
 
+即使没有设置模型 effort pin，符合条件的原生 Chat Completions 轮次也会应用配置的上限。符合条件的 v2 主轮次使用 `effortCap`；带有派生子轮次标记的请求使用适用的主轮次和子轮次上限中的较低值。显式 `multiAgentMode: "v1"` 和 compaction 维护请求不应用上限。上限只会降低或省略显式 effort；应用 pin 或上限改变值时，才会映射为提供方的传输值。未应用 pin 且未被上限改写的原生调用方值保留原始写法。
+
 通过仪表板或 `ocx v2 status|on|off|mode <v1|default|v2>|threads <n>` 管理该界面。模式变更会应用于新会话。`maxConcurrentThreadsPerSession` 是 `PUT /api/v2` 字段，不是 `config.json` 键；`ocx v2 threads <n>` 会在启用 v2 后，将 `max_concurrent_threads_per_session` 写入 Codex 的 `$CODEX_HOME/config.toml` 中的 `[features.multi_agent_v2]` 下。
 
 管理 API 公开 `GET`/`PUT /api/v2`、`/api/injection-model`、`/api/effort-caps`、`/api/subagent-models` 和 `/api/subagent-model-fallback`。injection-model 更新是部分更新；自定义 prompt 是该 API 上的 `prompt` 字段。

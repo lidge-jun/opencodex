@@ -25,6 +25,8 @@ kontrol eder.
 | `subagentEffortCap?` | `string` | — | Yalnızca oluşturulan çocuk turları için ek tavan. Her iki sınır da geçerli olduğunda daha düşük olan kazanır. |
 | `agentTaskRecovery?` | `object` | — | Yönlendirilen sağlayıcılara gönderilen arka uçta şifrelenmiş v2 görevleri için deneysel isteğe bağlı kurtarma. `enabled: true` olmadıkça devre dışıdır; bkz. [Şifrelenmiş v2 görev kurtarma](#sifrelenmis-v2-gorev-kurtarma). |
 
+Yapılandırılmış effort sınırları, model effort sabitlemesi olmasa da uygun yerel Chat Completions turlarına uygulanır. Uygun v2 ana turları `effortCap` değerini, işaretlenmiş çocuk turları ise geçerli ana ve çocuk sınırlarının düşük olanını kullanır. Açık `multiAgentMode: "v1"` ayarı ve compaction bakım turları bu sınırlardan muaftır. Sınır yalnızca açık effort değerini düşürür veya kaldırır; sağlayıcının iletim değerine eşleme, sabitleme uygulandığında veya sınır değeri değiştirdiğinde yapılır. Sabitleme uygulanmayan ve sınır tarafından yeniden yazılmayan yerel çağıran değerleri özgün yazımını korur.
+
 Arayüzü kontrol paneli veya `ocx v2 status|on|off|mode <v1|default|v2>|threads
 <n>|mode-hint <metin|--clear>` ile yönetin. Mod değişiklikleri yeni oturumlara
 uygulanır. `maxConcurrentThreadsPerSession`, bir `config.json` anahtarı değil,

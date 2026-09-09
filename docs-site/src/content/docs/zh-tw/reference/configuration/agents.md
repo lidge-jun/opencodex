@@ -21,6 +21,8 @@ Agent 設定控制要廣告哪個 Codex 協作介面，以及 opencodex 如何�
 | `effortCap?` | `string` | — | 合格 v2 主回合與標記的生成子回合的硬性上限。接受 `low` 到 `ultra`。 |
 | `subagentEffortCap?` | `string` | — | 僅針對生成子回合的額外上限。當兩個上限都適用時，取較低者。 |
 
+即使沒有設定模型 effort pin，符合條件的原生 Chat Completions 回合也會套用設定的上限。符合條件的 v2 主回合使用 `effortCap`；帶有生成子回合標記的請求使用適用的主回合與子回合上限中的較低值。明確的 `multiAgentMode: "v1"` 與 compaction 維護請求不套用上限。上限只會降低或省略明確指定的 effort；套用 pin 或上限改變值時，才會對應為供應商的傳輸值。未套用 pin 且未被上限改寫的原生呼叫端值保留原始寫法。
+
 使用儀表板或 `ocx v2 status|on|off|mode <v1|default|v2>|threads <n>` 管理介面。模式變更套用於新 session。`maxConcurrentThreadsPerSession` 是 `PUT /api/v2` 欄位，不是 `config.json` key；`ocx v2 threads <n>` 在啟用 v2 後，將 `max_concurrent_threads_per_session` 寫入 Codex 的 `$CODEX_HOME/config.toml` 中 `[features.multi_agent_v2]` 之下。
 
 管理 API 暴露 `GET`/`PUT /api/v2`、`/api/injection-model`、`/api/effort-caps`、`/api/subagent-models` 與 `/api/subagent-model-fallback`。注入模型更新為部分更新；自訂 prompt 是該 API 的 `prompt` 欄位。
