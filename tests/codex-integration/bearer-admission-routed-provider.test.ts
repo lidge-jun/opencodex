@@ -4,6 +4,7 @@ import http2 from "node:http2";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
+import { clearComboTargetCooldowns } from "../../src/combos/failover";
 import { startServer } from "../../src/server";
 import { noteSubagentModelFailure, resetSubagentModelFallbackStateForTests } from "../../src/codex/subagent-model-fallback";
 import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
@@ -44,6 +45,7 @@ let ocxHome = "";
 let codexHome = "";
 let routedAuth: Array<string | null> = [];
 let nativeAuth: Array<string | null> = [];
+let nativeAccountIds: Array<string | null> = [];
 
 const ADMISSION_SECRET = "ocx_data_2132secret";
 const ROUTED_KEY = "sk-routed-provider-key";
@@ -149,6 +151,7 @@ async function withCursorCaptureServer<T>(
 }
 
 beforeEach(() => {
+  clearComboTargetCooldowns();
   resetSubagentModelFallbackStateForTests();
   delete process.env.OPENCODEX_CURSOR_TEST_TOKEN;
   ocxHome = mkdtempSync(join(tmpdir(), "ocx-2132-home-"));
@@ -158,6 +161,7 @@ beforeEach(() => {
   delete process.env.OPENCODEX_API_AUTH_TOKEN;
   routedAuth = [];
   nativeAuth = [];
+  nativeAccountIds = [];
   globalThis.fetch = (async (input, init) => {
     const raw = input instanceof Request ? input.url : String(input);
     const url = new URL(raw);
@@ -174,6 +178,7 @@ beforeEach(() => {
     }
     if (url.hostname === "chatgpt.com" || url.hostname === "api.openai.com") {
       nativeAuth.push(headers.get("authorization"));
+      nativeAccountIds.push(headers.get("chatgpt-account-id"));
       return Response.json({ id: "resp_2132", object: "response", status: "completed", output: [] });
     }
     return originalFetch(input, init);
@@ -182,6 +187,7 @@ beforeEach(() => {
 
 afterEach(() => {
   closeRequestHistoryIndex();
+  clearComboTargetCooldowns();
   resetSubagentModelFallbackStateForTests();
   if (previousCursorTestToken === undefined) delete process.env.OPENCODEX_CURSOR_TEST_TOKEN;
   else process.env.OPENCODEX_CURSOR_TEST_TOKEN = previousCursorTestToken;
@@ -477,7 +483,12 @@ describe("bearer admission is not reused as a Cursor upstream credential", () =>
         const response = surface === "Chat"
           ? await postChatCompletions(server.url, "cursorcustom/auto", headers)
           : await postResponses(server.url, "cursorcustom/auto", headers);
-        await response.text();
+        if (surface === "Responses") {
+          expect(await response.json()).toMatchObject({ status: "failed" });
+        } else {
+          expect(response.status).not.toBe(200);
+          await response.text();
+        }
         expect(capturedAuth).toEqual([]);
       } finally {
         await server.stop(true);
@@ -587,8 +598,8 @@ describe("bearer admission is not reused as a Cursor upstream credential", () =>
     }
   });
 
-  test.each(["jwt-only", "jwt-with-account"])(
-    "a dedicated-admission Responses combo still forwards the caller ChatGPT bearer (%s) to its final Direct target",
+  test.each(["jwt-only", "jwt-with-account", "opaque-with-account", "jwt-mismatched-account"])(
+    "a dedicated-admission Responses combo scopes caller auth (%s) to its final Direct target",
     async form => {
       const config = mixedConfig();
       config.combos = {
@@ -596,17 +607,28 @@ describe("bearer admission is not reused as a Cursor upstream credential", () =>
       };
       saveConfig(config);
       writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ tokens: {} }));
-      const callerJwt = fakeChatGptJwt({ chatgpt_account_id: "caller-openai" });
+      const callerBearer = form === "opaque-with-account"
+        ? "opaque-caller-direct-token"
+        : fakeChatGptJwt({ chatgpt_account_id: "caller-openai" });
 
       const server = await startOwnedServer();
       try {
         const response = await postResponses(server.url, "combo/native", {
           "x-opencodex-api-key": ADMISSION_SECRET,
-          authorization: `Bearer ${callerJwt}`,
-          ...(form === "jwt-with-account" ? { "chatgpt-account-id": "caller-openai" } : {}),
+          authorization: `Bearer ${callerBearer}`,
+          ...(form !== "jwt-only" ? { "chatgpt-account-id": form === "jwt-mismatched-account" ? "other-account" : "caller-openai" } : {}),
         });
-        expect(response.status).toBe(200);
-        expect(nativeAuth).toEqual([`Bearer ${callerJwt}`]);
+        const body = await response.json() as { status?: string };
+        if (form === "jwt-only" || form === "jwt-with-account") {
+          expect(response.status).toBe(200);
+          expect(body).toMatchObject({ status: "completed" });
+          expect(nativeAuth).toEqual([`Bearer ${callerBearer}`]);
+          expect(nativeAccountIds).toEqual(["caller-openai"]);
+        } else {
+          expect(response.status >= 400 || body.status === "failed").toBe(true);
+          expect(nativeAuth).toEqual([]);
+          expect(nativeAccountIds).toEqual([]);
+        }
       } finally {
         await server.stop(true);
       }

@@ -1868,7 +1868,8 @@ describe("account-gated retry entitlement boundary", () => {
     expect(entitlementCalls).toBe(3);
   });
 
-  test("a shadow rewrite cannot resurrect the source bearer on an alternate-main retry", async () => {
+  test.each(["absent", "present"])("a shadow rewrite cannot restore an opaque source bearer (explicit account: %s)", async accountHeader => {
+    const hasAccount = accountHeader === "present";
     const now = 1_800_000_000_000;
     Date.now = () => now;
     installPoolCredential("pool-a", "pool_acc_a", now);
@@ -1894,7 +1895,10 @@ describe("account-gated retry entitlement boundary", () => {
         return entitlementCalls === 1 ? entitlementSnapshot({ "pool-a": [model] })
           : entitlementSnapshot({ "pool-a": ["gpt-5.6-sol"] });
       },
-    }, { authorization: "Bearer source-route-token", "chatgpt-account-id": "source-route-account" });
+    }, {
+      authorization: "Bearer source-route-token",
+      ...(hasAccount ? { "chatgpt-account-id": "source-route-account" } : {}),
+    });
     await response.arrayBuffer();
     expect(observed).toEqual([{ authorization: "Bearer pool-a_token", accountId: "pool_acc_a" }]);
     expect(callerRosterReads).toBe(0);

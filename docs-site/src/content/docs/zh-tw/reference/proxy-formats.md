@@ -233,7 +233,7 @@ Compaction 為需要縮短長 Responses 對話的客戶端回傳取代歷史。
 
 Responses 系列和 Chat 請求接受專用標頭或 Bearer 欄位中的代理金鑰。在原生路由上，所選的已儲存 Codex 憑證會取代 admission bearer；其他路由會移除該 bearer。代理金鑰絕不會用作 upstream 憑證。如果還要提供獨立的 provider bearer，請將代理金鑰放在專用標頭中。
 
-沒有金鑰且不使用 OAuth 的 Cursor 路由可以使用呼叫端另外提供的 bearer，但不能使用代理 secret 或自動補入的 ChatGPT main 憑證。Combo/policy 選擇及實際發生的 shadow/thread-spawn 路由改寫不會將呼叫端的原始憑證傳遞給新目標。單一 OpenAI Bearer JWT 與明確提供且相符的 `chatgpt-account-id` 組成的憑證對，在 Combo/policy 路由後仍可用於正規 OpenAI 目標或 sidecar，但絕不會用於 Cursor 驗證。除此之外，最終目標必須擁有自己的設定、OAuth 或已儲存憑證，否則請求會在本機失敗。只有 thread-spawn 標記而沒有路由變更時，不會移除憑證。
+沒有金鑰且不使用 OAuth 的 Cursor 路由可以使用呼叫端另外提供的 bearer，但不能使用代理 secret 或自動補入的 ChatGPT main 憑證。Combo/policy 選擇及實際發生的 shadow/thread-spawn 路由改寫不會將呼叫端的原始憑證傳遞給新目標。正規 OpenAI 路由僅在 JWT 包含 ChatGPT 帳戶宣告，且任何明確提供的帳戶標頭都與該宣告相符時，才可在內部路由變更後還原呼叫端的單一非代理金鑰 bearer。 將呼叫端驗證轉送至選用的 OpenAI sidecar 時，需要單一 JWT，以及明確提供且相符的 `chatgpt-account-id`。即使明確提供了帳戶標頭，opaque bearer 也不會跨路由變更還原。 除此之外，最終目標必須擁有自己的設定、OAuth 或已儲存憑證，否則請求會在本機失敗。只有 thread-spawn 標記而沒有路由變更時，不會移除憑證。
 
 Claude replay 只會以目前 turn 已取得所有權的記憶體 snapshot 保留 main 憑證，並且僅在最終目標為正規 ChatGPT 路由時還原它。
 

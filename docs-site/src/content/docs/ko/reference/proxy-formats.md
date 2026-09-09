@@ -308,7 +308,7 @@ loopback 전용 bind에서는 data-plane admission에 설정된 key가 필요하
 
 Responses 계열과 Chat 요청은 전용 헤더 또는 Bearer 필드의 프록시 키를 허용합니다. 네이티브 경로에서는 선택한 저장 Codex 자격 증명이 admission bearer를 대체하고, 다른 경로에서는 해당 bearer를 제거합니다. 프록시 키를 upstream 자격 증명으로 사용하지 않습니다. 별도의 provider bearer도 전달하려면 프록시 키는 전용 헤더에 넣으십시오.
 
-키가 없고 OAuth를 쓰지 않는 Cursor 경로는 별도의 호출자 bearer를 사용할 수 있지만, 프록시 secret이나 자동으로 보충한 ChatGPT main 인증은 사용할 수 없습니다. Combo/policy 선택과 실제 shadow/thread-spawn 경로 변경은 호출자의 원본 자격 증명을 새 대상으로 넘기지 않습니다. 단일 OpenAI Bearer JWT와 일치하는 명시적 `chatgpt-account-id` 쌍은 Combo/policy 라우팅 후에도 정규 OpenAI 대상이나 sidecar에서 사용할 수 있지만 Cursor 인증에는 사용하지 않습니다. 그 외의 최종 대상에는 자체 설정·OAuth·저장 자격 증명이 필요하며, 없으면 로컬에서 실패합니다. thread-spawn 표지만 있고 경로가 바뀌지 않으면 자격 증명을 제거하지 않습니다.
+키가 없고 OAuth를 쓰지 않는 Cursor 경로는 별도의 호출자 bearer를 사용할 수 있지만, 프록시 secret이나 자동으로 보충한 ChatGPT main 인증은 사용할 수 없습니다. Combo/policy 선택과 실제 shadow/thread-spawn 경로 변경은 호출자의 원본 자격 증명을 새 대상으로 넘기지 않습니다. 정규 OpenAI 라우팅은 JWT에 ChatGPT 계정 claim이 포함되어 있고 명시적 계정 헤더가 있으면 그 claim과 일치하는 경우에만, 내부 경로 변경 후 프록시 키가 아닌 호출자의 단일 bearer를 복원할 수 있습니다. 선택적 OpenAI sidecar에 호출자 인증을 전달하려면 단일 JWT와 이에 일치하는 명시적 `chatgpt-account-id`가 필요합니다. Opaque bearer는 명시적 계정 헤더가 있어도 경로 변경을 거쳐 복원되지 않습니다. 그 외의 최종 대상에는 자체 설정·OAuth·저장 자격 증명이 필요하며, 없으면 로컬에서 실패합니다. thread-spawn 표지만 있고 경로가 바뀌지 않으면 자격 증명을 제거하지 않습니다.
 
 Claude replay는 해당 turn이 소유권을 확보한 main 인증만 메모리 snapshot으로 유지하며, 최종 대상이 정규 ChatGPT 경로일 때만 복원합니다.
 
