@@ -516,7 +516,12 @@ describe("bearer admission is not reused as a Cursor upstream credential", () =>
           const response = surface === "Chat"
             ? await postChatCompletions(server.url, "cursorcustom/auto", headers)
             : await postResponses(server.url, "cursorcustom/auto", headers);
-          await response.text();
+          if (surface === "Responses") {
+            expect(await response.json()).toMatchObject({ status: "failed" });
+          } else {
+            expect(response.status).not.toBe(200);
+            await response.text();
+          }
           expect(capturedAuth).toEqual([]);
         } finally {
           await server.stop(true);
