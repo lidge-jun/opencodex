@@ -10,9 +10,13 @@ import { coerceIntegerToolArguments } from "./lib/tool-argument-integers";
 import {
   adapterFailureFromMessage,
   classifyError,
+  clientStatusForClassifiedError,
   cyberPolicyErrorType,
   CYBER_POLICY_ERROR_CODE,
   isCyberPolicyCode,
+  isPlanUsageCapMessage,
+  isUsageLimitCode,
+  USAGE_LIMIT_ERROR_CODE,
   type OcxErrorPayload,
 } from "./lib/errors";
 import { redactSecretString } from "./lib/redact";
@@ -164,7 +168,11 @@ function adapterFailureFromEvent(event: Extract<AdapterEvent, { type: "error" }>
     error.code = CYBER_POLICY_ERROR_CODE;
     error.type = cyberPolicyErrorType(event.errorType);
     httpStatus = 400;
+  } else if (isPlanUsageCapMessage(error.message) || isUsageLimitCode(error.code)) {
+    error.code = USAGE_LIMIT_ERROR_CODE;
+    error.type = USAGE_LIMIT_ERROR_CODE;
   }
+  httpStatus = clientStatusForClassifiedError(httpStatus, error.code);
   return { httpStatus, error };
 }
 
@@ -2138,10 +2146,11 @@ export function formatErrorResponse(
     error.code = CYBER_POLICY_ERROR_CODE;
     error.type = cyberPolicyErrorType(type);
   }
-  const finalStatus = error.code === CYBER_POLICY_ERROR_CODE ? 400 : status;
+  const finalStatus = clientStatusForClassifiedError(status, error.code);
   const headers = new Headers({ "Content-Type": "application/json" });
   const retryAfter = options?.retryAfter?.trim();
   if (error.code !== CYBER_POLICY_ERROR_CODE
+    && error.code !== USAGE_LIMIT_ERROR_CODE
     && retryAfter
     && retryAfter.length > 0
     && retryAfter.length <= 128) {

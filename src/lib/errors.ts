@@ -176,29 +176,108 @@ export function isClientClosedMessage(text: string): boolean {
   );
 }
 
+export const USAGE_LIMIT_ERROR_CODE = "usage_limit_exceeded";
+
+const PROVIDER_ERROR_PREFIX = /^Provider error \d+:\s*/u;
+
+function nestedErrorMessage(parsed: unknown): string | undefined {
+  if (typeof parsed === "string") {
+    const trimmed = parsed.trim();
+    return trimmed || undefined;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+  const record = parsed as Record<string, unknown>;
+  const error = record.error;
+  if (typeof error === "string" && error.trim()) return error.trim();
+  if (error && typeof error === "object" && !Array.isArray(error)) {
+    const nested = (error as Record<string, unknown>).message;
+    if (typeof nested === "string" && nested.trim()) return nested.trim();
+  }
+  if (typeof record.message === "string" && record.message.trim()) return record.message.trim();
+  return undefined;
+}
+
+/**
+ * OpenCodex wraps upstream bodies as `Provider error N: …`, and combo/chat paths can
+ * wrap that envelope again. Codex retries HTTP 429 before the user ever sees the
+ * inner text, so classification and the client message must use the innermost reason.
+ */
+export function unwrapNestedProviderErrorMessage(message: string): string {
+  let current = message.trim();
+  for (let depth = 0; depth < 4; depth++) {
+    const stripped = current.replace(PROVIDER_ERROR_PREFIX, "").trim();
+    if (stripped === current) break;
+    // Empty bodies have no inner reason; keep the status-bearing wrapper so Codex
+    // still sees that the upstream returned HTTP 429 rather than a bare "(empty body)".
+    if (!stripped || stripped === "(empty body)") break;
+    if (
+      (stripped.startsWith("{") && stripped.endsWith("}"))
+      || (stripped.startsWith("[") && stripped.endsWith("]"))
+    ) {
+      try {
+        const inner = nestedErrorMessage(JSON.parse(stripped) as unknown);
+        if (inner) {
+          current = inner;
+          continue;
+        }
+      } catch {
+        return stripped;
+      }
+    }
+    return stripped;
+  }
+  return current;
+}
+
+/** Hard plan/quota windows (Zhipu 5h cap, Codex usage-limit UI), not per-minute throttling. */
+export function isPlanUsageCapMessage(message: string): boolean {
+  if (message.includes("使用上限")) return true;
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("usage_limit_exceeded")
+    || lower.includes("hit your usage limit")
+    || lower.includes("hourly usage limit")
+    || /\b5\s*-?\s*hours? usage (?:limit|cap)\b/.test(lower)
+  );
+}
+
+export function isUsageLimitCode(code: string | null | undefined): boolean {
+  return code === USAGE_LIMIT_ERROR_CODE;
+}
+
+/** Codex retries HTTP 429 before showing the body; usage caps must leave that path. */
+export function clientStatusForClassifiedError(
+  status: number,
+  code: string | null | undefined,
+): number {
+  if (isCyberPolicyCode(code) || isUsageLimitCode(code)) return 400;
+  return status;
+}
+
 export function classifyError(status: number, type: string, message: string): OcxErrorPayload {
-  const text = message.toLowerCase();
+  const displayMessage = unwrapNestedProviderErrorMessage(message);
+  const text = displayMessage.toLowerCase();
   if (type === "previous_response_not_found") {
-    return { message, type: "invalid_request_error", code: "previous_response_not_found" };
+    return { message: displayMessage, type: "invalid_request_error", code: "previous_response_not_found" };
   }
   // Preserve explicit cancel types used by compact/combo JSON errors; unify message-inferred
   // client closes (web-search abort text) onto client_closed_request for /api/logs.
   if (type === "client_cancelled") {
-    return { message, type: "client_cancelled", code: "client_cancelled" };
+    return { message: displayMessage, type: "client_cancelled", code: "client_cancelled" };
   }
   if (
     status === 499 ||
     type === "client_closed_request" ||
     isClientClosedMessage(text)
   ) {
-    return { message, type: "invalid_request_error", code: "client_closed_request" };
+    return { message: displayMessage, type: "invalid_request_error", code: "client_closed_request" };
   }
   // Codex only shows the dedicated cyber UI when error.code === "cyber_policy".
   // The public wire does not establish invalid_request_error as the canonical type, so
   // message-only classification keeps the dedicated identity instead of inventing one.
   // Structured callers re-apply their real upstream type with cyberPolicyErrorType().
   if (type === CYBER_POLICY_ERROR_CODE || isCyberPolicyMessage(text)) {
-    return { message, type: CYBER_POLICY_ERROR_CODE, code: CYBER_POLICY_ERROR_CODE };
+    return { message: displayMessage, type: CYBER_POLICY_ERROR_CODE, code: CYBER_POLICY_ERROR_CODE };
   }
   // A LOCAL preflight refusal keeps its own code (#1524). The message necessarily says
   // "context window" -- that is what it is refusing on -- so the generic remap below would
@@ -207,7 +286,7 @@ export function classifyError(status: number, type: string, message: string): Oc
   // fit", theirs means "the request is impossible", so collapsing them ended the chain at
   // the first candidate that was merely too small.
   if (type === "input_admission_refused") {
-    return { message, type: "invalid_request_error", code: "input_admission_refused" };
+    return { message: displayMessage, type: "invalid_request_error", code: "input_admission_refused" };
   }
   if (
     text.includes("context_length_exceeded") ||
@@ -216,7 +295,7 @@ export function classifyError(status: number, type: string, message: string): Oc
     text.includes("maximum context") ||
     text.includes("too many tokens")
   ) {
-    return { message, type: "invalid_request_error", code: "context_length_exceeded" };
+    return { message: displayMessage, type: "invalid_request_error", code: "context_length_exceeded" };
   }
   // "Cursor resource limit exceeded" is emitted only for explicit request-size overflow
   // details (isCursorRequestTooLargeDetail in cursor-errors.ts); "Cursor context limit
@@ -224,16 +303,19 @@ export function classifyError(status: number, type: string, message: string): Oc
   // quota-style resource exhaustion arrives as "Cursor rate limit exceeded" and falls
   // through to 429 below.
   if (text.includes("cursor resource limit exceeded")) {
-    return { message, type: "invalid_request_error", code: "tool_catalog_too_large" };
+    return { message: displayMessage, type: "invalid_request_error", code: "tool_catalog_too_large" };
   }
   if (text.includes("cursor context limit exceeded")) {
-    return { message, type: "invalid_request_error", code: "context_length_exceeded" };
+    return { message: displayMessage, type: "invalid_request_error", code: "context_length_exceeded" };
   }
   // The Cursor adapter's classified rate-limit prefix is authoritative: its DETAIL may echo
   // quota wording ("... quota exhausted") that would otherwise hit the insufficient_quota
   // branch below and break the planned retry-with-backoff contract (WP3 review blocker 1).
   if (text.includes("cursor rate limit exceeded")) {
-    return { message, type: "rate_limit_error", code: "rate_limit_exceeded" };
+    return { message: displayMessage, type: "rate_limit_error", code: "rate_limit_exceeded" };
+  }
+  if (isPlanUsageCapMessage(displayMessage) || type === USAGE_LIMIT_ERROR_CODE) {
+    return { message: displayMessage, type: USAGE_LIMIT_ERROR_CODE, code: USAGE_LIMIT_ERROR_CODE };
   }
   if (
     text.includes("insufficient_quota") ||
@@ -243,7 +325,7 @@ export function classifyError(status: number, type: string, message: string): Oc
     text.includes("monthly quota exceeded") ||
     text.includes("daily quota exceeded")
   ) {
-    return { message, type: "insufficient_quota", code: "insufficient_quota" };
+    return { message: displayMessage, type: "insufficient_quota", code: "insufficient_quota" };
   }
   if (
     status === 429 ||
@@ -255,15 +337,15 @@ export function classifyError(status: number, type: string, message: string): Oc
     text.includes("throttlingexception") ||
     text.includes("throttling")
   ) {
-    return { message, type: "rate_limit_error", code: "rate_limit_exceeded" };
+    return { message: displayMessage, type: "rate_limit_error", code: "rate_limit_exceeded" };
   }
   if (type === "origin_rejected") {
-    return { message, type: "invalid_request_error", code: "origin_rejected" };
+    return { message: displayMessage, type: "invalid_request_error", code: "origin_rejected" };
   }
   // Local ACL setup failures can contain provider-like auth wording (for example
   // "access denied" or "authentication") but represent unavailable infrastructure.
   if (status === 503 && isLocalAclHardeningMessage(text)) {
-    return { message, type: "server_error", code: "upstream_server_error" };
+    return { message: displayMessage, type: "server_error", code: "upstream_server_error" };
   }
   // HTTP 401 and explicit auth failures are authoritative even when provider text
   // also advertises an upgrade or subscription.
@@ -272,30 +354,30 @@ export function classifyError(status: number, type: string, message: string): Oc
     type === "authentication_error" ||
     isAuthenticationMessage(text)
   ) {
-    return { message, type: "authentication_error", code: "invalid_api_key" };
+    return { message: displayMessage, type: "authentication_error", code: "invalid_api_key" };
   }
   // An explicit permission enum must not acquire a more specific inferred reason.
   if (type === "PERMISSION_DENIED" || text.includes("permission_denied")) {
-    return { message, type: "permission_error", code: "permission_denied" };
+    return { message: displayMessage, type: "permission_error", code: "permission_denied" };
   }
   // Location denials outrank generic permission / subscription wording, but never an
   // authoritative 5xx. Message-only adapter terminals arrive here with inferred 403.
   if (status < 500 && (type === "location_not_supported" || isLocationUnsupportedMessage(text))) {
-    return { message, type: "permission_error", code: "location_not_supported" };
+    return { message: displayMessage, type: "permission_error", code: "location_not_supported" };
   }
   // Subscription labels are valid only in a known permission context.
   if (
     (status === 403 || type === "permission_error") &&
     isSubscriptionGateMessage(text)
   ) {
-    return { message, type: "permission_error", code: "subscription_required" };
+    return { message: displayMessage, type: "permission_error", code: "subscription_required" };
   }
   if (
     status === 403 ||
     type === "permission_error" ||
     isPermissionMessage(text)
   ) {
-    return { message, type: "permission_error", code: "permission_denied" };
+    return { message: displayMessage, type: "permission_error", code: "permission_denied" };
   }
   if (
     status === 503 ||
@@ -305,7 +387,7 @@ export function classifyError(status: number, type: string, message: string): Oc
   ) {
     // Codex recognizes "server_is_overloaded" and applies retry-after backoff
     // (responses.rs is_server_overloaded_error); generic "upstream_server_error" is not recognized.
-    return { message, type: "server_error", code: "server_is_overloaded" };
+    return { message: displayMessage, type: "server_error", code: "server_is_overloaded" };
   }
   if (
     text.includes("validationexception") ||
@@ -317,21 +399,17 @@ export function classifyError(status: number, type: string, message: string): Oc
     text.includes("wrong region") ||
     text.includes("invalid region")
   ) {
-    return { message, type: "invalid_request_error", code: "invalid_request_error" };
+    return { message: displayMessage, type: "invalid_request_error", code: "invalid_request_error" };
   }
   if (status >= 500) {
-    return { message, type: "server_error", code: "upstream_server_error" };
+    return { message: displayMessage, type: "server_error", code: "upstream_server_error" };
   }
   if (status === 400 || type === "invalid_request_error") {
-    return { message, type: "invalid_request_error", code: "invalid_request_error" };
+    return { message: displayMessage, type: "invalid_request_error", code: "invalid_request_error" };
   }
-  return { message, type, code: type || null };
+  return { message: displayMessage, type, code: type || null };
 }
 
-/**
- * True when a provider failure should participate in rate-limit / quota health blocking.
- * Reuses {@link classifyError} so generic 429 wording and quota phrases stay aligned.
- */
 export function isRateLimitOrQuotaFailureMessage(message: string): boolean {
   const normalized = String(message ?? "").trim();
   if (!normalized) return false;
@@ -344,11 +422,13 @@ export function isRateLimitOrQuotaFailureMessage(message: string): boolean {
     || classified.code === "rate_limit_exceeded"
     || classified.type === "insufficient_quota"
     || classified.code === "insufficient_quota"
+    || classified.type === USAGE_LIMIT_ERROR_CODE
+    || classified.code === USAGE_LIMIT_ERROR_CODE
   ) {
     return true;
   }
   // Retained quota cue used by subagent health before classifyError covered it.
-  return normalized.toLowerCase().includes("usage limit");
+  return normalized.toLowerCase().includes("usage limit") || normalized.includes("使用上限");
 }
 
 /** Best-effort parse of a retry delay embedded in an upstream error message. */
@@ -369,11 +449,15 @@ export function parseRetryAfterFromMessage(message: string): number | undefined 
 
 /** Infer HTTP status from adapter terminal error text (provider-agnostic keyword matching). */
 export function inferHttpStatusFromAdapterMessage(message: string): number {
-  const lower = message.toLowerCase();
+  const display = unwrapNestedProviderErrorMessage(message);
+  const lower = display.toLowerCase();
   // Client aborts (e.g. mid web-search loop) must not look like upstream 502s in /api/logs.
   if (isClientClosedMessage(lower)) return 499;
   // Codex Transport maps cyber_policy only on HTTP 400 (SSE is code-based).
   if (isCyberPolicyMessage(lower)) return 400;
+  // Plan/quota windows must not look like retryable 429s — Codex retries those
+  // and replaces the upstream reason with "exceeded retry limit".
+  if (isPlanUsageCapMessage(display)) return 400;
   // See classifyError: this prefix now only means explicit request-size overflow (400);
   // quota-style Cursor resource exhaustion carries the rate-limit prefix and maps to 429.
   if (lower.includes("cursor resource limit exceeded")) return 400;
@@ -431,10 +515,10 @@ export function inferHttpStatusFromAdapterMessage(message: string): number {
 /** Map an adapter terminal error message to HTTP status + classified Codex error payload. */
 export function adapterFailureFromMessage(message: string): { httpStatus: number; error: OcxErrorPayload } {
   const httpStatus = inferHttpStatusFromAdapterMessage(message);
-  let finalMessage = message;
+  let finalMessage = unwrapNestedProviderErrorMessage(message);
   const retryAfterSeconds = parseRetryAfterFromMessage(message);
-  if (retryAfterSeconds && !/please try again in /i.test(message)) {
-    finalMessage = `${message} Please try again in ${retryAfterSeconds}s.`;
+  if (retryAfterSeconds && !/please try again in /i.test(finalMessage)) {
+    finalMessage = `${finalMessage} Please try again in ${retryAfterSeconds}s.`;
   }
   const errorType = httpStatus === 499
     ? "client_closed_request"
@@ -449,9 +533,10 @@ export function adapterFailureFromMessage(message: string): { httpStatus: number
             : httpStatus === 400
               ? "invalid_request_error"
               : "upstream_error";
+  const error = classifyError(httpStatus, errorType, finalMessage);
   return {
-    httpStatus,
-    error: classifyError(httpStatus, errorType, finalMessage),
+    httpStatus: clientStatusForClassifiedError(httpStatus, error.code),
+    error,
   };
 }
 
@@ -473,6 +558,7 @@ export function httpStatusFromTerminalError(error: {
     error.code === "permission_denied" ||
     error.code === "subscription_required"
   ) return 403;
+  if (error.type === USAGE_LIMIT_ERROR_CODE || error.code === USAGE_LIMIT_ERROR_CODE) return 400;
   if (error.type === "insufficient_quota" || error.code === "insufficient_quota") return 429;
   if (error.type === "server_error" && error.code === "server_is_overloaded") return 503;
   // Client-closed messages often arrive as invalid_request_error after classifyError; check message

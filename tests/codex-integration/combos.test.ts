@@ -794,6 +794,10 @@ describe("combo failure policy and advancement", () => {
     expect(comboFailureDecision(410, "gone", { code: "model_retired" })).toBe("hop");
     expect(comboFailureDecision(499, "client cancelled")).toBe("stop");
     expect(comboFailureDecision(422, "invalid_api_key")).toBe("hop");
+    expect(comboFailureDecision(429, "已达到 5 小时使用上限，2026-09-09 18:56:03 后可继续使用。")).toBe("hop");
+    expect(comboFailureDecision(400, "已达到 5 小时使用上限，2026-09-09 18:56:03 后可继续使用。", {
+      code: "usage_limit_exceeded",
+    })).toBe("hop");
     // #1524: a LOCAL input-admission refusal means "this candidate cannot fit the request",
     // not "the request is impossible". The next candidate may have a larger context window,
     // so the chain must continue instead of ending at the first incompatible target.

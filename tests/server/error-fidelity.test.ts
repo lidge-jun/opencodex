@@ -96,6 +96,28 @@ describe("error fidelity", () => {
       type: "insufficient_quota",
       code: "insufficient_quota",
     });
+    const zhipuCap = "已达到 5 小时使用上限，2026-09-09 18:56:03 后可继续使用。";
+    expect(classifyError(429, "rate_limit_error", `Provider error 429: ${JSON.stringify({
+      error: { message: `Provider error 429: ${zhipuCap}`, type: "upstream_error", code: null },
+    })}`)).toMatchObject({
+      message: zhipuCap,
+      type: "usage_limit_exceeded",
+      code: "usage_limit_exceeded",
+    });
+  });
+
+  test("formatErrorResponse unwraps Zhipu usage-cap 429s so Codex shows the upstream reason", async () => {
+    const zhipuCap = "已达到 5 小时使用上限，2026-09-09 18:56:03 后可继续使用。";
+    const response = formatErrorResponse(429, "upstream_error", `Provider error 429: ${zhipuCap}`);
+    expect(response.status).toBe(400);
+    expect(response.headers.get("Retry-After")).toBeNull();
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        message: zhipuCap,
+        type: "usage_limit_exceeded",
+        code: "usage_limit_exceeded",
+      },
+    });
   });
 
   test("formatErrorResponse returns OpenAI-compatible classified error envelope", async () => {

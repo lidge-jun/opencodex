@@ -1,5 +1,5 @@
 import { parseResetCooldownMs } from "../codex/routing";
-import { classifyError, isCyberPolicyCode } from "../lib/errors";
+import { classifyError, isCyberPolicyCode, isPlanUsageCapMessage, USAGE_LIMIT_ERROR_CODE } from "../lib/errors";
 import type { OcxComboTarget } from "../types";
 import { targetKey } from "./types";
 import {
@@ -27,6 +27,7 @@ const QUOTA_LIMIT_CODES = new Set([
   "1320",
   "1321",
   "insufficient_quota",
+  USAGE_LIMIT_ERROR_CODE,
 ]);
 const TRANSIENT_REQUEST_RATE_CODES = new Set(["1302", "1305"]);
 const IMF_FIXDATE_RE = /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), (\d{2}) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{4}) (\d{2}):(\d{2}):(\d{2}) GMT$/i;
@@ -166,6 +167,7 @@ export function isTransientRequestRateLimit(input: {
     text.includes("usage limit reached")
     || text.includes("insufficient_quota")
     || text.includes("quota exhausted")
+    || isPlanUsageCapMessage(input.message ?? "")
   ) {
     return false;
   }
@@ -471,6 +473,7 @@ export function comboFailureDecision(
     "subscription_required",
     "invalid_api_key",
     "insufficient_quota",
+    USAGE_LIMIT_ERROR_CODE,
     "payment_required",
     "billing_error",
     "insufficient_balance",

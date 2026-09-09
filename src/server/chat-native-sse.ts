@@ -1,5 +1,5 @@
 import { chatCompletionsErrorBody } from "../chat/outbound";
-import { classifyError, cyberPolicyErrorType, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode } from "../lib/errors";
+import { classifyError, clientStatusForClassifiedError, cyberPolicyErrorType, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
 import {
   isTranslatorBudgetExceededError,
@@ -249,12 +249,13 @@ export function nativeChatSse(
       if (isCyberPolicyCode(error.code) || classified.code === CYBER_POLICY_ERROR_CODE) {
         classified.code = CYBER_POLICY_ERROR_CODE;
         classified.type = cyberPolicyErrorType(error.type);
-      } else if (error.code !== undefined && error.code !== null) {
+      } else if (error.code !== undefined && error.code !== null && classified.code == null) {
         classified.code = error.code;
       }
-      const safe = chatCompletionsErrorBody(status, classified.message, classified.type, classified.code);
+      const clientStatus = clientStatusForClassifiedError(status, classified.code);
+      const safe = chatCompletionsErrorBody(clientStatus, classified.message, classified.type, classified.code);
       enqueue(controller, replaceSseDataPayload(block, JSON.stringify(safe)) + delimiter);
-      settle(isCyberPolicyCode(classified.code) ? 400 : status, classified.message);
+      settle(clientStatus, classified.message);
       try { void reader.cancel(new Error(classified.message)).catch(() => {}); } catch { /* already closed */ }
       controller.close();
       return;

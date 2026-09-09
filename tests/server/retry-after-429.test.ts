@@ -37,6 +37,13 @@ describe("resolveClientRetryAfter (#507)", () => {
     })).toBeUndefined();
   });
 
+  test("does not invent Retry-After for Zhipu 5-hour usage-cap 429s", () => {
+    expect(resolveClientRetryAfter({
+      status: 429,
+      message: "已达到 5 小时使用上限，2026-09-09 18:56:03 后可继续使用。",
+    })).toBeUndefined();
+  });
+
   test("does not invent Retry-After for non-429 statuses", () => {
     expect(resolveClientRetryAfter({
       status: 503,
@@ -218,5 +225,21 @@ describe("consumeComboFailure Retry-After separation (#507 review)", () => {
     const failure = await consumeComboFailure(upstream);
     expect(failure.response.headers.get("Retry-After")).toBe("45");
     expect(failure.retryAfter).toBe("45");
+  });
+
+  test("Zhipu 5-hour usage-cap 429 surfaces the upstream reason and does not look retryable", async () => {
+    const zhipuCap = "已达到 5 小时使用上限，2026-09-09 18:56:03 后可继续使用。";
+    const upstream = new Response(JSON.stringify({
+      error: { message: zhipuCap, type: "upstream_error", code: null },
+    }), { status: 429 });
+    const failure = await consumeComboFailure(upstream);
+    expect(failure.response.status).toBe(400);
+    expect(failure.response.headers.get("Retry-After")).toBeNull();
+    const json = await failure.response.json() as { error?: { message?: string; code?: string; type?: string } };
+    expect(json.error).toMatchObject({
+      message: zhipuCap,
+      type: "usage_limit_exceeded",
+      code: "usage_limit_exceeded",
+    });
   });
 });

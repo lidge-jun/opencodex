@@ -18,7 +18,7 @@ import {
   responsesJsonToChatCompletion,
   responsesSseToChatCompletionsSse,
 } from "../chat/outbound";
-import { classifyError, cyberPolicyErrorType, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode } from "../lib/errors";
+import { classifyError, clientStatusForClassifiedError, cyberPolicyErrorType, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
 import { resolveClientRetryAfter } from "../lib/retry-after";
 import { estimateTokens } from "../lib/token-estimate";
@@ -367,8 +367,8 @@ async function handleChatCompletionsWithBudget(
     } else if (upstreamCode !== undefined && upstreamCode !== null && classified.code == null) {
       classified.code = upstreamCode;
     }
-    const status = isCyberPolicyCode(classified.code) ? 400 : upstream.status;
-    const retryAfter = isCyberPolicyCode(classified.code)
+    const status = clientStatusForClassifiedError(upstream.status, classified.code);
+    const retryAfter = isCyberPolicyCode(classified.code) || classified.code === "usage_limit_exceeded"
       ? undefined
       : resolveClientRetryAfter({
         status: upstream.status,
@@ -464,8 +464,8 @@ async function handleChatCompletionsWithBudget(
     return finishJson(chatCompletionsErrorResponse(
       classified.code === "translation_buffer_limit"
         ? 502
-        : isCyberPolicyCode(classified.code) ? 400 : 502,
-      message,
+        : clientStatusForClassifiedError(502, classified.code),
+      classified.message,
       classified.type,
       classified.code,
     ));

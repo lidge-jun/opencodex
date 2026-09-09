@@ -10,6 +10,7 @@ import { applyChatEffortCap, chatCollabSurface, effortCapAppliesTo, resolvePinne
 import { mapReasoningEffort } from "../reasoning-effort";
 import {
   classifyError,
+  clientStatusForClassifiedError,
   cyberPolicyErrorType,
   CYBER_POLICY_ERROR_CODE,
   isCyberPolicyCode,
@@ -454,8 +455,8 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
     } else if (upstreamCode !== undefined && upstreamCode !== null && classified.code == null) {
       classified.code = upstreamCode;
     }
-    const status = isCyberPolicyCode(classified.code) ? 400 : response.status;
-    const retryAfter = isCyberPolicyCode(classified.code)
+    const status = clientStatusForClassifiedError(response.status, classified.code);
+    const retryAfter = isCyberPolicyCode(classified.code) || classified.code === "usage_limit_exceeded"
       ? undefined
       : resolveClientRetryAfter({
         status: response.status,

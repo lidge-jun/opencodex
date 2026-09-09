@@ -15,6 +15,18 @@ describe("adapterFailureFromMessage", () => {
     });
   });
 
+  test("maps Zhipu 5-hour usage-cap text to 400 usage_limit_exceeded", () => {
+    const message = "Provider error 429: 已达到 5 小时使用上限，2026-09-09 18:56:03 后可继续使用。";
+    expect(adapterFailureFromMessage(message)).toMatchObject({
+      httpStatus: 400,
+      error: {
+        message: "已达到 5 小时使用上限，2026-09-09 18:56:03 后可继续使用。",
+        type: "usage_limit_exceeded",
+        code: "usage_limit_exceeded",
+      },
+    });
+  });
+
   test("parses retry-after hints from upstream text", () => {
     const message = "rate limit exceeded: try again in 12.5 seconds";
     expect(parseRetryAfterFromMessage(message)).toBe(13);
