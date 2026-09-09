@@ -7,6 +7,7 @@ import type { RouteCandidateTrace, RouteDecisionTraceV1 } from "../../routing/tr
 import { handleResponses as handleResponsesCore } from "./core";
 import { requestPacingOverloadResponse } from "./pacing-overload";
 import { captureExplicitOpenAiCallerAuth } from "../../providers/openai-sidecar";
+import { captureCallerDirectAuth } from "../../providers/caller-authorization";
 
 type CoreHandler = typeof handleResponsesCore;
 type CoreOptions = Parameters<CoreHandler>[3];
@@ -128,6 +129,8 @@ export async function handleResponsesWithPolicyFallback(
       ? captureExplicitOpenAiCallerAuth(req.headers, config) : options.openAiSidecarAuth,
     nativeCallerAuth: options.nativeCallerAuth === undefined
       ? captureExplicitOpenAiCallerAuth(req.headers, config) : options.nativeCallerAuth,
+    callerDirectAuth: options.callerDirectAuth === undefined
+      ? captureCallerDirectAuth(req.headers, config) : options.callerDirectAuth,
     ...(options.onRequestBodyRead ? {
       onRequestBodyRead: () => {
         if (requestBodyReadNotified) return;

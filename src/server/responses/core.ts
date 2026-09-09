@@ -217,7 +217,7 @@ import type { DataPlaneAdmission } from "../auth-cors";
 import { createTranslatorBudget, isTranslatorBudgetExceededError, type TranslatorBudget } from "../../lib/translator-budget";
 import { captureExplicitOpenAiCallerAuth, listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ExplicitOpenAiCallerAuth, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
 import { extractAccountId } from "../../oauth/chatgpt";
-import { providerConsumesCallerAuthorization } from "../../providers/caller-authorization";
+import { captureCallerDirectAuth, providerConsumesCallerAuthorization, type CallerDirectAuth } from "../../providers/caller-authorization";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { CODEX_RESERVE_HELPER_UNSUPPORTED_MESSAGE, isCodexReserveHelperUnsupported } from "../../codex/loopback-target";
 import { providerContextCap } from "../../providers/context-cap";
@@ -1716,6 +1716,8 @@ export interface HandleResponsesOptions {
   openAiSidecarAuth?: ExplicitOpenAiCallerAuth | null;
   /** Original caller-owned native pair; separate from any claimed sidecar enrichment. */
   nativeCallerAuth?: ExplicitOpenAiCallerAuth | null;
+  /** Caller Direct credential under Direct\'s own predicate; restored only for the canonical OpenAI final route. */
+  callerDirectAuth?: CallerDirectAuth | null;
   /** Internal recursion guard; callers outside this module must not set it. */
   comboAttempt?: boolean;
   /** Internal combo handoff for one parent-validated continuation snapshot. */
@@ -2080,17 +2082,24 @@ async function resolveResponsesCodexAuth(
         authInputHeaders = scoped;
       }
     }
-    // An explicit caller-owned OpenAI pair may cross an internal route change only to
-    // the canonical OpenAI transport. Sidecar enrichment grants no primary authority.
-    if (options.nativeCallerAuth && isCanonicalOpenAiForwardProvider(route.provider)) {
-      const nativeHeaders = new Headers({
-        authorization: options.nativeCallerAuth.authorization,
-        "chatgpt-account-id": options.nativeCallerAuth.chatgptAccountId,
+    // The caller's own Direct credential may cross an internal route change only to the
+    // canonical OpenAI transport, under the same predicate plain Direct forwarding uses:
+    // a clean non-proxy bearer, account from the explicit header or the JWT claim.
+    // Sidecar enrichment grants no primary authority.
+    if (options.callerDirectAuth && isCanonicalOpenAiForwardProvider(route.provider)) {
+      const directHeaders = new Headers({
+        authorization: options.callerDirectAuth.authorization,
+        ...(options.callerDirectAuth.chatgptAccountId
+          ? { "chatgpt-account-id": options.callerDirectAuth.chatgptAccountId } : {}),
       });
-      if (captureExplicitOpenAiCallerAuth(nativeHeaders, config)) {
+      if (captureCallerDirectAuth(directHeaders, config)) {
         authInputHeaders = new Headers(authInputHeaders);
-        authInputHeaders.set("authorization", options.nativeCallerAuth.authorization);
-        authInputHeaders.set("chatgpt-account-id", options.nativeCallerAuth.chatgptAccountId);
+        authInputHeaders.set("authorization", options.callerDirectAuth.authorization);
+        if (options.callerDirectAuth.chatgptAccountId) {
+          authInputHeaders.set("chatgpt-account-id", options.callerDirectAuth.chatgptAccountId);
+        } else {
+          authInputHeaders.delete("chatgpt-account-id");
+        }
       }
     }
     // #1686: a caller that proved admission with a BEARER presented one of our own secrets.
@@ -3176,6 +3185,8 @@ export async function handleResponses(
         ? captureExplicitOpenAiCallerAuth(req.headers, config) : options.openAiSidecarAuth,
       nativeCallerAuth: options.nativeCallerAuth === undefined
         ? captureExplicitOpenAiCallerAuth(req.headers, config) : options.nativeCallerAuth,
+      callerDirectAuth: options.callerDirectAuth === undefined
+        ? captureCallerDirectAuth(req.headers, config) : options.callerDirectAuth,
       // Capture before combo replay rebuilds the Request headers; children carry options.
       visionDescribeTerminal: options.visionDescribeTerminal === true
         || req.headers.get("x-opencodex-vision-describe") === "1",

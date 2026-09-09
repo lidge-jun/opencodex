@@ -587,6 +587,32 @@ describe("bearer admission is not reused as a Cursor upstream credential", () =>
     }
   });
 
+  test.each(["jwt-only", "jwt-with-account"])(
+    "a dedicated-admission Responses combo still forwards the caller ChatGPT bearer (%s) to its final Direct target",
+    async form => {
+      const config = mixedConfig();
+      config.combos = {
+        native: { strategy: "failover", targets: [{ provider: "openai", model: "gpt-5.6-luna" }] },
+      };
+      saveConfig(config);
+      writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ tokens: {} }));
+      const callerJwt = fakeChatGptJwt({ chatgpt_account_id: "caller-openai" });
+
+      const server = await startOwnedServer();
+      try {
+        const response = await postResponses(server.url, "combo/native", {
+          "x-opencodex-api-key": ADMISSION_SECRET,
+          authorization: `Bearer ${callerJwt}`,
+          ...(form === "jwt-with-account" ? { "chatgpt-account-id": "caller-openai" } : {}),
+        });
+        expect(response.status).toBe(200);
+        expect(nativeAuth).toEqual([`Bearer ${callerJwt}`]);
+      } finally {
+        await server.stop(true);
+      }
+    },
+  );
+
   test("Chat thread-spawn fallback never carries the provisional Cursor bearer into Direct", async () => {
     await withCursorCaptureServer(async (baseUrl, capturedAuth) => {
       const config = cursorForwardConfig(baseUrl);
