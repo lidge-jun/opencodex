@@ -69,6 +69,7 @@ interface UsageModel {
   outputTokens: number;
   /** API list-price estimate for the priced portion of this row. */
   estimatedCostUsd?: number;
+  /** Requests included in the API list-price estimate. */
   pricedRequests?: number;
   /** Requests excluded from the estimate because price or usable usage is unavailable. */
   unpricedRequests?: number;
@@ -84,6 +85,7 @@ interface UsageProvider {
   totalTokens: number;
   /** API list-price estimate for the priced portion of this row. */
   estimatedCostUsd?: number;
+  /** Requests included in the API list-price estimate. */
   pricedRequests?: number;
   /** Requests excluded from the estimate because price or usable usage is unavailable. */
   unpricedRequests?: number;
@@ -122,9 +124,10 @@ function formatPct(ratio: number): string {
 type UsageCostRow = Pick<UsageModel, "estimatedCostUsd" | "pricedRequests" | "unpricedRequests">;
 
 /**
- * Newer proxies return the per-row coverage fields even when every request is
- * unpriced. Older proxies have none of them, so keep their cells unavailable
- * rather than making an unknown amount look like a free request.
+ * Renders a row's API list-price estimate with explicit pricing coverage.
+ * Newer proxies return the coverage fields even when every request is
+ * unpriced; older proxies have none of them, so their cells stay unavailable
+ * rather than making an unknown amount look free.
  */
 function UsageListPrice({ row, locale, t }: { row: UsageCostRow; locale: Locale; t: TFn }) {
   const hasPriceData = row.estimatedCostUsd !== undefined
