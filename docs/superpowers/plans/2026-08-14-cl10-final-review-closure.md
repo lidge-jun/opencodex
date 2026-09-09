@@ -22,10 +22,17 @@ A direct same-publisher bundle revocation whose target bundle is absent is norma
 
 The closure is protected by focused tests that require:
 
-- live lock contention to return `community_cache_busy` in under 500 ms;
+- live lock contention to throw `community_cache_busy` synchronously without running protected work;
 - the management community endpoint to return `503` plus `Retry-After: 1` for that contention;
+- both rejection paths to preserve the existing owner bytes and lock directory identity;
 - oversized locally-originated community copies to be removed during sensitive purge;
 - hardlinked locally-originated cache pathnames to be removed while a peer hardlink survives; and
 - missing direct revocation bundle targets to return stable `revocation_target` errors.
+
+The contention tests originally required completion in under 500 ms. That wall-clock criterion
+included filesystem and management-route work and could fail under shared CI load before checking
+the actual response contract. Verification now checks synchronous refusal and ownership preservation
+under the normal test deadline. This changes the test oracle, not the fail-fast/no-polling runtime
+contract above, and does not establish a new response-time SLA.
 
 Exact-head GitHub Actions success is required before this closure is considered verified. PR #1510 must remain open and unmerged during this review cycle.
