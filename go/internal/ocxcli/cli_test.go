@@ -510,6 +510,12 @@ func TestNativeLifecycleHelpIsNative(t *testing.T) {
 		"codex-shim": codexShimHelp,
 		"ensure":     ensureHelp,
 		"restart":    restartHelp,
+		"start":      startHelp,
+		"stop":       stopHelp,
+		"v2":         v2Help,
+		"provider":   providerHelp,
+		"claude":     claudeHelp,
+		"opencode":   opencodeHelp,
 	} {
 		t.Run(command, func(t *testing.T) {
 			var out, stderr bytes.Buffer

@@ -659,6 +659,18 @@ func printSubcommandHelp(name string, deps Deps) int {
 		fmt.Fprint(deps.Stdout, ensureHelp)
 	case "restart":
 		fmt.Fprint(deps.Stdout, restartHelp)
+	case "start":
+		fmt.Fprint(deps.Stdout, startHelp)
+	case "stop":
+		fmt.Fprint(deps.Stdout, stopHelp)
+	case "v2":
+		fmt.Fprint(deps.Stdout, v2Help)
+	case "provider":
+		fmt.Fprint(deps.Stdout, providerHelp)
+	case "claude":
+		fmt.Fprint(deps.Stdout, claudeHelp)
+	case "opencode":
+		fmt.Fprint(deps.Stdout, opencodeHelp)
 	case "gui":
 		fmt.Fprint(deps.Stdout, guiHelp)
 	case "mcode":
