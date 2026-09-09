@@ -427,9 +427,8 @@ declarations do not grant approval or change execution policy.
 **Targets:** Cognition's `exa.api_server_pb.ApiServerService/GetChatMessage` over HTTPS Connect
 streaming at `server.codeium.com`.
 **Auth:** Devin/Cognition API key from `provider.apiKey` or the forwarded authorization header.
-Login imports `~/.pi/agent/auth.json` (the local Devin credential) when present; otherwise falls
-back to Auth0 browser sign-in, exchanging the Firebase ID token via
-`SeatManagementService.RegisterUser`.
+Login opens Auth0 browser sign-in, then exchanges the Firebase ID token via
+`SeatManagementService.RegisterUser` for a long-lived API key.
 
 - Uses `runTurn` rather than the ordinary fetch/parse path. Requests and server events are encoded
   with manual protobuf framing in `devin/cloud-direct/wire.ts`; the ordinary `buildRequest` /

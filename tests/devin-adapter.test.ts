@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { createDevinAdapter, mapOcxMessagesToDevin, mapOcxToolsToDevin } from "../src/adapters/devin";
 import { sanitizeToolDescriptionForCognitionForTests } from "../src/adapters/devin/cloud-direct/chat";
 import { DEVIN_STATIC_MODELS, filterDevinConfiguredModelsByLiveDiscovery } from "../src/adapters/devin/live-models";
-import { importLocalPiDevinAuth } from "../src/oauth/devin";
 import { OAUTH_PROVIDERS } from "../src/oauth";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
 import type { OcxParsedRequest } from "../src/types";
@@ -63,10 +62,11 @@ describe("devin adapter", () => {
     expect(filtered.map((row) => row.id)).toEqual(["swe-1-7"]);
   });
 
-  test("imports the local Pi Devin token when present", async () => {
-    const cred = await importLocalPiDevinAuth();
-    expect(cred?.access.startsWith("devin-session-token$") || cred?.access.startsWith("sk-ws-") || typeof cred?.access === "string").toBe(true);
-    expect(cred?.source).toBe("local-cli");
+  test("loginDevin is browser-only (no local import option)", () => {
+    // The devin OAuth entry must not accept importLocal/forceLogin opts —
+    // login is always the Auth0 browser flow.
+    const entry = OAUTH_PROVIDERS.devin;
+    expect(entry.login.length).toBeLessThanOrEqual(1);
   });
 
   test("rewrites the Cognition blocklist trigger phrase in tool descriptions", () => {

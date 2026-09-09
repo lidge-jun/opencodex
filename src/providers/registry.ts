@@ -1267,7 +1267,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     authKind: "oauth",
     featured: false,
     dashboardPreset: false,
-    note: "Experimental unofficial Cognition/Devin bridge. ocx login devin imports ~/.pi/agent/auth.json (the local Devin credential) when present; otherwise falls back to Auth0 browser sign-in, exchanging the token via Cognition's RegisterUser.",
+    note: "Experimental unofficial Cognition/Devin bridge. ocx login devin opens Auth0 browser sign-in, then exchanges the token via Cognition's RegisterUser for a long-lived API key.",
     models: ["swe-1-7", "swe-1-7-lightning", "gpt-5-6-sol", "gpt-5-6-luna", "gpt-5-6-terra", "claude-opus-4-8", "claude-fable-5-1", "claude-sonnet-5", "glm-5-2", "kimi-k2-7", "grok-4-5"],
     liveModels: true,
     defaultModel: "swe-1-7",

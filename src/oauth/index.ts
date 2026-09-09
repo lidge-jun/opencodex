@@ -310,7 +310,7 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
     defaultModel: oauthDefaultModel("cursor"),
   },
   devin: {
-    login: (ctrl, opts) => loginDevin(ctrl, { importLocal: opts?.forceLogin ? "off" : "fallback", forceLogin: opts?.forceLogin }),
+    login: (ctrl) => loginDevin(ctrl),
     refresh: refreshDevinToken,
     providerConfig: oauthConfig("devin"),
     defaultModel: oauthDefaultModel("devin"),

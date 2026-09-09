@@ -39,7 +39,7 @@ function resolveWireModelUid(modelId: string, reasoningEffort?: string): string 
 
 export class DevinMissingCredentialError extends Error {
   constructor() {
-    super("Devin live transport requires a Devin API key. Run ocx login devin (imports ~/.pi/agent/auth.json by default).");
+    super("Devin live transport requires a Devin API key. Run ocx login devin to sign in with your Cognition/Devin account.");
     this.name = "DevinMissingCredentialError";
   }
 }

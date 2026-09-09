@@ -1,26 +1,18 @@
 /**
  * Devin / Cognition OAuth.
  *
- * Login prefers an already-minted long-lived API key from the local Devin
- * credential store (~/.pi/agent/auth.json -> devin.access).
- * Browser fallback uses the same Auth0 sign-in flow as the Devin desktop
- * client (windsurf.com/windsurf/signin with redirect_uri=show-auth-token),
- * then exchanges the pasted Firebase ID token via Cognition's RegisterUser.
+ * Login opens the Auth0 browser sign-in flow (windsurf.com/windsurf/signin
+ * with redirect_uri=show-auth-token), then exchanges the pasted Firebase ID
+ * token via Cognition's RegisterUser for a long-lived API key.
  */
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { LocalTokenImportMode, OAuthController, OAuthCredentials } from "./types";
+import type { OAuthController, OAuthCredentials } from "./types";
 import { DEFAULT_REGION, type WindsurfRegion } from "./devin/types";
 import { registerUser } from "./devin/register-user";
 
 const ONE_YEAR_MS = 365 * 24 * 60 * 60 * 1000;
 const DEFAULT_API_SERVER = "https://server.codeium.com";
 export const DEVIN_DEFAULT_API_SERVER = DEFAULT_API_SERVER;
-
-function shouldImportLocal(mode: LocalTokenImportMode | undefined): boolean {
-  return mode !== "off";
-}
 
 function decodeJwtPayload(token: string): Record<string, unknown> | undefined {
   const parts = token.split(".");
@@ -54,23 +46,6 @@ function credentialsFromApiKey(apiKey: string, source: OAuthCredentials["source"
   };
 }
 
-interface PiDevinAuthSlot { type?: unknown; access?: unknown; refresh?: unknown; expires?: unknown }
-
-export async function importLocalPiDevinAuth(signal?: AbortSignal): Promise<OAuthCredentials | undefined> {
-  if (signal?.aborted) {
-    throw signal.reason ?? new DOMException("Devin login aborted", "AbortError");
-  }
-  let parsed: { devin?: PiDevinAuthSlot };
-  try {
-    parsed = JSON.parse(await Bun.file(join(homedir(), ".pi", "agent", "auth.json")).text()) as { devin?: PiDevinAuthSlot };
-  } catch {
-    return undefined;
-  }
-  const access = parsed.devin?.access;
-  if (typeof access !== "string" || access.trim().length === 0) return undefined;
-  return credentialsFromApiKey(access.trim(), "local-cli");
-}
-
 function buildSignInUrl(region: WindsurfRegion): string {
   const params = new URLSearchParams({
     response_type: "token",
@@ -99,21 +74,7 @@ async function loginDevinBrowser(ctrl: OAuthController, region: WindsurfRegion):
   };
 }
 
-export async function loginDevin(
-  ctrl: OAuthController,
-  opts?: { importLocal?: LocalTokenImportMode; forceLogin?: boolean },
-): Promise<OAuthCredentials> {
-  const importLocal = opts?.forceLogin ? "off" : (opts?.importLocal ?? "fallback");
-  if (shouldImportLocal(importLocal)) {
-    const local = await importLocalPiDevinAuth(ctrl.signal);
-    if (local) {
-      ctrl.onProgress?.("Imported Devin API key from ~/.pi/agent/auth.json");
-      return local;
-    }
-    if (importLocal === "only") {
-      throw new Error("No Devin token found at ~/.pi/agent/auth.json.");
-    }
-  }
+export async function loginDevin(ctrl: OAuthController): Promise<OAuthCredentials> {
   return loginDevinBrowser(ctrl, DEFAULT_REGION);
 }
 
@@ -131,4 +92,3 @@ export async function refreshDevinToken(
   }
   throw new Error("Devin API keys do not refresh. Run ocx login devin again.");
 }
-
