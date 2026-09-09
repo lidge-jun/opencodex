@@ -27,13 +27,13 @@ type StatusConfigDiagnostic struct {
 // testable. In particular, commands continue to delegate to TypeScript while
 // this evidence is compared with its output.
 type StatusDomainDeps struct {
-	ReadConfig     func() StatusConfigDiagnostic
-	ReadPID        func() int64
-	ReadRuntime    func() (StatusRuntimeRecord, error)
-	ReadBunRuntime func() StatusBunRuntime
-	CLIVersion     string
-	HTTPClient     *http.Client
-	Extra          StatusExtraDeps
+	ReadConfig          func() StatusConfigDiagnostic
+	ReadPID             func() int64
+	ReadRuntime         func() (StatusRuntimeRecord, error)
+	ReadArtifactRuntime func() StatusArtifactRuntime
+	CLIVersion          string
+	HTTPClient          *http.Client
+	Extra               StatusExtraDeps
 }
 
 // StatusDomains is the ordered JSON projection for the status domains Go has
@@ -87,11 +87,10 @@ type StatusPathsDomain struct {
 	Runtime string `json:"runtime"`
 }
 
-// StatusBunRuntime is the durable runtime provenance status emits. It is a
-// dependency so tests can compare the projection against the exact Bun process
-// that ran the TypeScript oracle; a Go process otherwise has a different exec
-// path by construction.
-type StatusBunRuntime struct {
+// StatusArtifactRuntime is the standalone Go artifact identity status emits.
+// It is a dependency so release-identity tests can exercise resolution failures
+// without making status depend on the working directory or Bun runtime markers.
+type StatusArtifactRuntime struct {
 	Path        string
 	Source      string
 	OverrideEnv *string
@@ -174,97 +173,31 @@ func defaultStatusDomainDeps(deps StatusDomainDeps) StatusDomainDeps {
 	if deps.ReadRuntime == nil {
 		deps.ReadRuntime = ReadStatusRuntime
 	}
-	if deps.ReadBunRuntime == nil {
-		deps.ReadBunRuntime = ReadStatusBunRuntime
+	if deps.ReadArtifactRuntime == nil {
+		deps.ReadArtifactRuntime = ReadStatusArtifactRuntime
 	}
 	if deps.CLIVersion == "" {
-		deps.CLIVersion = readStatusPackageVersion()
+		deps.CLIVersion = "dev"
 	}
 	return deps
 }
 
-// readStatusPackageVersion follows packageVersion's failure contract. The Go
-// diagnostic may run from a built artifact with no checkout nearby, where an
-// unknown version is safer than inventing a mismatch.
-func readStatusPackageVersion() string {
-	dir, err := os.Getwd()
-	if err != nil {
-		return "unknown"
-	}
-	for {
-		raw, readErr := os.ReadFile(filepath.Join(dir, "package.json"))
-		if readErr == nil {
-			var manifest struct {
-				Version any `json:"version"`
-			}
-			if json.Unmarshal(raw, &manifest) == nil {
-				if version, ok := manifest.Version.(string); ok {
-					return version
-				}
-			}
-			return "unknown"
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "unknown"
-		}
-		dir = parent
-	}
+// ReadStatusArtifactRuntime reports the Go artifact identity. Its result is
+// intentionally independent of cwd, checkout files, Bun, and runtime markers.
+func ReadStatusArtifactRuntime() StatusArtifactRuntime {
+	return readStatusArtifactRuntime(os.Executable)
 }
 
-// ReadStatusBunRuntime mirrors status's runtime provenance shape for a native
-// Go process. A trusted launcher marker must name this executable; otherwise
-// the running executable is the only honest process runtime to report.
-func ReadStatusBunRuntime() StatusBunRuntime {
-	if bundled := statusBundledBunRuntime(); bundled != "" {
-		return StatusBunRuntime{Path: bundled, Source: "bundled"}
-	}
-	path, err := os.Executable()
+func readStatusArtifactRuntime(executable func() (string, error)) StatusArtifactRuntime {
+	path, err := executable()
 	if err != nil || path == "" {
-		path = os.Args[0]
+		return StatusArtifactRuntime{Path: "unknown", Source: "go-static"}
 	}
-	path = filepath.Clean(path)
-	source := "process"
-	if recordedSource := strings.TrimSpace(os.Getenv("OCX_BUN_RUNTIME_SOURCE")); (recordedSource == "override" || recordedSource == "bundled" || recordedSource == "process") && sameStatusRuntimePath(strings.TrimSpace(os.Getenv("OCX_BUN_RUNTIME_PATH")), path) {
-		source = recordedSource
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil || resolved == "" {
+		return StatusArtifactRuntime{Path: "unknown", Source: "go-static"}
 	}
-	var overrideEnv *string
-	if source == "override" {
-		value := "OPENCODEX_BUN_PATH"
-		overrideEnv = &value
-	}
-	return StatusBunRuntime{Path: path, Source: source, OverrideEnv: overrideEnv}
-}
-
-func statusBundledBunRuntime() string {
-	dir, err := os.Getwd()
-	if err != nil {
-		return ""
-	}
-	for {
-		candidate := filepath.Join(dir, "node_modules", "bun", "bin", "bun.exe")
-		if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() {
-			return candidate
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return ""
-		}
-		dir = parent
-	}
-}
-
-func sameStatusRuntimePath(left, right string) bool {
-	if left == "" || right == "" {
-		return false
-	}
-	canonical := func(path string) string {
-		if resolved, err := filepath.EvalSymlinks(path); err == nil {
-			return resolved
-		}
-		return filepath.Clean(path)
-	}
-	return canonical(left) == canonical(right)
+	return StatusArtifactRuntime{Path: filepath.Clean(resolved), Source: "go-static"}
 }
 
 // ComputeStatusVersionSkew is a direct projection of computeVersionSkew.
@@ -276,7 +209,7 @@ func ComputeStatusVersionSkew(cliVersion, proxyVersion string) StatusVersionSkew
 		value := proxyVersion
 		proxy = &value
 	}
-	skewed := proxy != nil && cliVersion != "unknown" && cliVersion != "0.0.0" && proxyVersion != "unknown" && proxyVersion != "0.0.0" && cliVersion != proxyVersion
+	skewed := proxy != nil && cliVersion != "unknown" && cliVersion != "0.0.0" && cliVersion != "dev" && proxyVersion != "unknown" && proxyVersion != "0.0.0" && proxyVersion != "dev" && cliVersion != proxyVersion
 	if !skewed {
 		return StatusVersionSkewDomain{CLIVersion: cliVersion, ProxyVersion: proxy}
 	}
@@ -374,7 +307,7 @@ func CollectStatusDomains(deps StatusDomainDeps) StatusDomains {
 	if pathsConfig != "" {
 		pathsPID = filepath.Join(filepath.Dir(pathsConfig), "ocx.pid")
 	}
-	bunRuntime := deps.ReadBunRuntime()
+	artifactRuntime := deps.ReadArtifactRuntime()
 	extra := CollectStatusExtraDomains(diagnostic, deps.Extra)
 	proxyVersion := ""
 	if health.OK {
@@ -400,9 +333,9 @@ func CollectStatusDomains(deps StatusDomainDeps) StatusDomains {
 		Paths: StatusPathsDomain{
 			Config:  pathsConfig,
 			PID:     pathsPID,
-			Runtime: bunRuntime.Path,
+			Runtime: artifactRuntime.Path,
 		},
-		Runtime:         StatusRuntimeDomain{Source: bunRuntime.Source, OverrideEnv: bunRuntime.OverrideEnv},
+		Runtime:         StatusRuntimeDomain{Source: artifactRuntime.Source, OverrideEnv: artifactRuntime.OverrideEnv},
 		CodexAutostart:  extra.CodexAutostart,
 		Startup:         extra.Startup,
 		DefaultProvider: extra.DefaultProvider,

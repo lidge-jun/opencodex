@@ -69,7 +69,7 @@ func runStatus(args []string, deps Deps) int {
 		fmt.Fprintln(deps.Stderr, "Usage: ocx status [--json]")
 		return ExitFailure
 	}
-	status := CollectStatusCommand(StatusCommandDeps{})
+	status := CollectStatusCommand(StatusCommandDeps{Domains: StatusDomainDeps{CLIVersion: deps.Version}})
 	if wantsJSON {
 		encoder := json.NewEncoder(deps.Stdout)
 		encoder.SetIndent("", "  ")

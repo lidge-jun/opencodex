@@ -79,43 +79,30 @@ func statusDomainBytes(t *testing.T, full []byte) []byte {
 		t.Fatalf("compact status oracle: %v; output=%s", err, full)
 	}
 	var status struct {
-		SchemaVersion   json.RawMessage `json:"schemaVersion"`
-		Proxy           json.RawMessage `json:"proxy"`
-		Dashboard       json.RawMessage `json:"dashboard"`
-		Listen          json.RawMessage `json:"listen"`
-		Paths           json.RawMessage `json:"paths"`
-		Runtime         json.RawMessage `json:"runtime"`
+		SchemaVersion json.RawMessage `json:"schemaVersion"`
+		Proxy         json.RawMessage `json:"proxy"`
+		Dashboard     json.RawMessage `json:"dashboard"`
+		Listen        json.RawMessage `json:"listen"`
+		Paths         struct {
+			Config json.RawMessage `json:"config"`
+			PID    json.RawMessage `json:"pid"`
+		} `json:"paths"`
 		CodexAutostart  json.RawMessage `json:"codexAutostart"`
 		Startup         json.RawMessage `json:"startup"`
 		DefaultProvider json.RawMessage `json:"defaultProvider"`
 		Config          json.RawMessage `json:"config"`
 		Connection      json.RawMessage `json:"connection"`
-		VersionSkew     json.RawMessage `json:"versionSkew"`
 	}
 	if err := json.Unmarshal(compact.Bytes(), &status); err != nil {
 		t.Fatalf("decode status oracle: %v; output=%s", err, compact.Bytes())
 	}
+	// Artifact identity is intentionally runtime-specific: Go reports its static
+	// artifact while TypeScript reports Bun provenance. Mask it before retaining
+	// byte-level parity for every cross-runtime status domain.
 	return []byte(fmt.Sprintf(
-		`{"schemaVersion":%s,"proxy":%s,"dashboard":%s,"listen":%s,"paths":%s,"runtime":%s,"codexAutostart":%s,"startup":%s,"defaultProvider":%s,"config":%s,"connection":%s,"versionSkew":%s}`,
-		status.SchemaVersion, status.Proxy, status.Dashboard, status.Listen, status.Paths, status.Runtime, status.CodexAutostart, status.Startup, status.DefaultProvider, status.Config, status.Connection, status.VersionSkew,
+		`{"schemaVersion":%s,"proxy":%s,"dashboard":%s,"listen":%s,"paths":{"config":%s,"pid":%s,"runtime":"<artifact-identity>"},"runtime":{"source":"<artifact-identity>"},"codexAutostart":%s,"startup":%s,"defaultProvider":%s,"config":%s,"connection":%s,"versionSkew":"<artifact-identity>"}`,
+		status.SchemaVersion, status.Proxy, status.Dashboard, status.Listen, status.Paths.Config, status.Paths.PID, status.CodexAutostart, status.Startup, status.DefaultProvider, status.Config, status.Connection,
 	))
-}
-
-func statusOracleRuntime(t *testing.T, full []byte) StatusBunRuntime {
-	t.Helper()
-	var status struct {
-		Paths struct {
-			Runtime string `json:"runtime"`
-		} `json:"paths"`
-		Runtime struct {
-			Source      string  `json:"source"`
-			OverrideEnv *string `json:"overrideEnv"`
-		} `json:"runtime"`
-	}
-	if err := json.Unmarshal(full, &status); err != nil {
-		t.Fatalf("decode status runtime oracle: %v", err)
-	}
-	return StatusBunRuntime{Path: status.Paths.Runtime, Source: status.Runtime.Source, OverrideEnv: status.Runtime.OverrideEnv}
 }
 
 func runTypeScriptDoctorProxyHint(t *testing.T, input DoctorProxyDownInput) string {
@@ -722,15 +709,14 @@ func TestStatusDomainsMatchTypeScriptOracleForConfigFallback(t *testing.T) {
 	oracle := runTypeScriptStatusJSON(t, home)
 	want := statusDomainBytes(t, oracle)
 	got, err := json.Marshal(CollectStatusDomains(StatusDomainDeps{
-		ReadPID:        func() int64 { return 0 },
-		ReadRuntime:    func() (StatusRuntimeRecord, error) { return StatusRuntimeRecord{}, errors.New("missing") },
-		ReadBunRuntime: func() StatusBunRuntime { return statusOracleRuntime(t, oracle) },
-		HTTPClient:     &http.Client{Timeout: 800 * time.Millisecond},
+		ReadPID:     func() int64 { return 0 },
+		ReadRuntime: func() (StatusRuntimeRecord, error) { return StatusRuntimeRecord{}, errors.New("missing") },
+		HTTPClient:  &http.Client{Timeout: 800 * time.Millisecond},
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != string(want) {
+	if got := statusDomainBytes(t, got); string(got) != string(want) {
 		t.Fatalf("domain bytes\\n got: %s\\nwant: %s", got, want)
 	}
 }
@@ -760,15 +746,14 @@ func TestStatusDomainsMatchTypeScriptOracleForDefaultAndMalformedConfig(t *testi
 			oracle := runTypeScriptStatusJSON(t, home)
 			want := statusDomainBytes(t, oracle)
 			got, err := json.Marshal(CollectStatusDomains(StatusDomainDeps{
-				ReadPID:        func() int64 { return 0 },
-				ReadRuntime:    func() (StatusRuntimeRecord, error) { return StatusRuntimeRecord{}, errors.New("missing") },
-				ReadBunRuntime: func() StatusBunRuntime { return statusOracleRuntime(t, oracle) },
-				HTTPClient:     &http.Client{Timeout: 800 * time.Millisecond},
+				ReadPID:     func() int64 { return 0 },
+				ReadRuntime: func() (StatusRuntimeRecord, error) { return StatusRuntimeRecord{}, errors.New("missing") },
+				HTTPClient:  &http.Client{Timeout: 800 * time.Millisecond},
 			}))
 			if err != nil {
 				t.Fatal(err)
 			}
-			if string(got) != string(want) {
+			if got := statusDomainBytes(t, got); string(got) != string(want) {
 				t.Fatalf("domain bytes\\n got: %s\\nwant: %s", got, want)
 			}
 		})
@@ -789,14 +774,13 @@ func TestStatusDomainsMatchTypeScriptOracleForDashboardPathRuntimeAndVersionSkew
 	oracle := runTypeScriptStatusJSON(t, home)
 	want := statusDomainBytes(t, oracle)
 	got, err := json.Marshal(CollectStatusDomains(StatusDomainDeps{
-		ReadPID:        func() int64 { return 0 },
-		ReadRuntime:    func() (StatusRuntimeRecord, error) { return StatusRuntimeRecord{}, errors.New("missing") },
-		ReadBunRuntime: func() StatusBunRuntime { return statusOracleRuntime(t, oracle) },
+		ReadPID:     func() int64 { return 0 },
+		ReadRuntime: func() (StatusRuntimeRecord, error) { return StatusRuntimeRecord{}, errors.New("missing") },
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != string(want) {
+	if got := statusDomainBytes(t, got); string(got) != string(want) {
 		t.Fatalf("domain bytes\n got: %s\nwant: %s", got, want)
 	}
 }
@@ -824,14 +808,13 @@ func TestStatusDomainsMatchTypeScriptOracleForAutostartAndConnection(t *testing.
 			oracle := runTypeScriptStatusJSON(t, home)
 			want := statusDomainBytes(t, oracle)
 			got, err := json.Marshal(CollectStatusDomains(StatusDomainDeps{
-				ReadPID:        func() int64 { return 0 },
-				ReadRuntime:    func() (StatusRuntimeRecord, error) { return StatusRuntimeRecord{}, errors.New("missing") },
-				ReadBunRuntime: func() StatusBunRuntime { return statusOracleRuntime(t, oracle) },
+				ReadPID:     func() int64 { return 0 },
+				ReadRuntime: func() (StatusRuntimeRecord, error) { return StatusRuntimeRecord{}, errors.New("missing") },
 			}))
 			if err != nil {
 				t.Fatal(err)
 			}
-			if string(got) != string(want) {
+			if got := statusDomainBytes(t, got); string(got) != string(want) {
 				t.Fatalf("domain bytes\n got: %s\nwant: %s", got, want)
 			}
 		})
@@ -870,13 +853,12 @@ func TestStatusDomainsMatchTypeScriptOracleForLiveVersionSkew(t *testing.T) {
 		ReadRuntime: func() (StatusRuntimeRecord, error) {
 			return StatusRuntimeRecord{PID: int64(os.Getpid()), Port: port, Hostname: "127.0.0.1"}, nil
 		},
-		ReadBunRuntime: func() StatusBunRuntime { return statusOracleRuntime(t, oracle) },
-		CLIVersion:     "2.42.0",
+		CLIVersion: "2.42.0",
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != string(want) {
+	if got := statusDomainBytes(t, got); string(got) != string(want) {
 		t.Fatalf("domain bytes\n got: %s\nwant: %s", got, want)
 	}
 }

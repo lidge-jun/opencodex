@@ -56,7 +56,7 @@ func TestStatusCommandAssemblyJSONMatchesTypeScriptOracle(t *testing.T) {
 			t.Setenv("CODEX_HOME", filepath.Join(home, "codex"))
 			t.Setenv("CODEX_CLI_PATH", runtimePath)
 			oracle := runTypeScriptStatusJSON(t, home)
-			if got := marshalStatusCommandOracle(t, oracle); got != string(oracle) {
+			if got := maskStatusArtifactIdentity(t, marshalStatusCommandOracle(t, oracle)); got != maskStatusArtifactIdentity(t, string(oracle)) {
 				t.Fatalf("%s full JSON differs from TypeScript oracle\nGo:\n%s\nTypeScript:\n%s", scenario.name, got, oracle)
 			}
 		})
@@ -86,9 +86,20 @@ func TestStatusCommandTextMatchesTypeScriptOracleForUnavailableCodexHealth(t *te
 	if code := Run([]string{"status"}, Deps{Stdout: &out, Stderr: &stderr}); code != ExitOK {
 		t.Fatalf("native status exit = %d, stderr=%s", code, stderr.String())
 	}
-	if out.String() != result {
-		t.Fatalf("text status differs from TypeScript oracle\\nGo:\\n%s\\nTypeScript:\\n%s", out.String(), result)
+	if got, want := maskStatusArtifactIdentityText(out.String()), maskStatusArtifactIdentityText(result); got != want {
+		t.Fatalf("text status differs from TypeScript oracle outside artifact identity\nGo:\n%s\nTypeScript:\n%s", got, want)
 	}
+}
+
+func maskStatusArtifactIdentityText(value string) string {
+	var lines []string
+	for _, line := range strings.Split(value, "\n") {
+		if strings.HasPrefix(line, "   Runtime: ") || strings.HasPrefix(line, "   Runtime source: ") {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func TestStatusMalformedConfigWritesTypeScriptCompatibleBackup(t *testing.T) {
@@ -124,24 +135,7 @@ func TestStatusMalformedConfigWritesTypeScriptCompatibleBackup(t *testing.T) {
 
 func marshalStatusCommandOracle(t *testing.T, oracle []byte) string {
 	t.Helper()
-	var runtime struct {
-		Paths struct {
-			Runtime string `json:"runtime"`
-		} `json:"paths"`
-		Runtime struct {
-			Source      string  `json:"source"`
-			OverrideEnv *string `json:"overrideEnv"`
-		} `json:"runtime"`
-	}
-	if err := json.Unmarshal(oracle, &runtime); err != nil {
-		t.Fatal(err)
-	}
-	value := CollectStatusCommand(StatusCommandDeps{Domains: StatusDomainDeps{
-		CLIVersion: "2.42.0",
-		ReadBunRuntime: func() StatusBunRuntime {
-			return StatusBunRuntime{Path: runtime.Paths.Runtime, Source: runtime.Runtime.Source, OverrideEnv: runtime.Runtime.OverrideEnv}
-		},
-	}})
+	value := CollectStatusCommand(StatusCommandDeps{Domains: StatusDomainDeps{CLIVersion: "2.42.0"}})
 	var output bytes.Buffer
 	encoder := json.NewEncoder(&output)
 	encoder.SetIndent("", "  ")
@@ -149,6 +143,25 @@ func marshalStatusCommandOracle(t *testing.T, oracle []byte) string {
 		t.Fatal(err)
 	}
 	return output.String()
+}
+
+func maskStatusArtifactIdentity(t *testing.T, raw string) string {
+	t.Helper()
+	var value map[string]any
+	if err := json.Unmarshal([]byte(raw), &value); err != nil {
+		t.Fatal(err)
+	}
+	paths := value["paths"].(map[string]any)
+	paths["runtime"] = "<artifact-identity>"
+	runtime := value["runtime"].(map[string]any)
+	runtime["source"] = "<artifact-identity>"
+	delete(runtime, "overrideEnv")
+	value["versionSkew"] = "<artifact-identity>"
+	masked, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(masked) + "\n"
 }
 
 func runTypeScriptStatusCommandText(t *testing.T, repo, home string) string {
