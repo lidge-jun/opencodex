@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -56,6 +56,13 @@ function registryEntry(id: "orcarouter" | "orcarouter-oauth") {
   const entry = PROVIDER_REGISTRY.find(row => row.id === id);
   if (!entry) throw new Error(`missing ${id} registry entry`);
   return entry;
+}
+
+function keyResponseBytes(size: number): Uint8Array {
+  const payload = { key: "sk-orca-boundary-test", user_id: "user-boundary", padding: "" };
+  const encoder = new TextEncoder();
+  const overhead = encoder.encode(JSON.stringify(payload)).byteLength;
+  return encoder.encode(JSON.stringify({ ...payload, padding: "x".repeat(size - overhead) }));
 }
 
 /** Keep the callback listener and PKCE exchange real; replace only the upstream response. */
@@ -240,6 +247,153 @@ describe("OrcaRouter dual authentication", () => {
     expect(message).toBe("OrcaRouter key exchange failed with HTTP 403");
     expect(message).not.toContain(secretErrorBody);
     expect(message).not.toContain(verifier);
+  });
+
+  test("accepts key exchange JSON exactly at the 64 KiB cap", async () => {
+    const bytes = keyResponseBytes(65_536);
+    const response = new Response(bytes);
+    globalThis.fetch = (async () => response) as typeof fetch;
+    const flow = new OrcaRouterOAuthFlow({});
+    await flow.generateAuthUrl("state", "http://127.0.0.1:51733/callback");
+    expect(bytes.byteLength).toBe(65_536);
+    await expect(flow.exchangeToken("code", "state", "ignored"))
+      .resolves.toMatchObject({ access: "sk-orca-boundary-test", accountId: "user-boundary" });
+    expect(response.body!.locked).toBe(false);
+  });
+
+  test("rejects key exchange JSON over the 64 KiB cap", async () => {
+    const response = new Response(keyResponseBytes(65_537));
+    globalThis.fetch = (async () => response) as typeof fetch;
+    const flow = new OrcaRouterOAuthFlow({});
+    await flow.generateAuthUrl("state", "http://127.0.0.1:51733/callback");
+    await expect(flow.exchangeToken("code", "state", "ignored"))
+      .rejects.toThrow("OrcaRouter key exchange response exceeded the 65536-byte limit");
+    expect(response.body!.locked).toBe(false);
+  });
+
+  test("stops an oversized open key body without draining its tail", async () => {
+    let pulls = 0;
+    let cancels = 0;
+    const response = new Response(new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls++;
+        if (pulls === 1) controller.enqueue(keyResponseBytes(65_536));
+        else if (pulls === 2) controller.enqueue(new Uint8Array([0x20]));
+        // No EOF: reaching the byte ceiling must settle without waiting for a tail.
+      },
+      cancel() { cancels++; },
+    }, { highWaterMark: 0 }));
+    globalThis.fetch = (async () => response) as typeof fetch;
+    const flow = new OrcaRouterOAuthFlow({});
+    await flow.generateAuthUrl("state", "http://127.0.0.1:51733/callback");
+    await expect(flow.exchangeToken("code", "state", "ignored"))
+      .rejects.toThrow("OrcaRouter key exchange response exceeded the 65536-byte limit");
+    expect(pulls).toBe(2);
+    expect(cancels).toBe(1);
+    expect(response.body!.locked).toBe(false);
+  });
+
+  test("rejects malformed UTF-8 inside otherwise valid key JSON", async () => {
+    const encoder = new TextEncoder();
+    const bytes = new Uint8Array([
+      ...encoder.encode('{"key":"sk-orca-utf8-test","user_id":"user-utf8","ignored":"'),
+      0xff,
+      ...encoder.encode('"}'),
+    ]);
+    globalThis.fetch = (async () => new Response(bytes)) as typeof fetch;
+    const flow = new OrcaRouterOAuthFlow({});
+    await flow.generateAuthUrl("state", "http://127.0.0.1:51733/callback");
+    await expect(flow.exchangeToken("code", "state", "ignored"))
+      .rejects.toThrow("OrcaRouter key exchange returned invalid JSON");
+  });
+
+  test("aborts before key body consumption without accepting credentials", async () => {
+    const abort = new AbortController();
+    const reason = { code: "login-stopped-after-headers" };
+    let pulls = 0;
+    const cancellations: unknown[] = [];
+    const response = new Response(new ReadableStream<Uint8Array>({
+      pull(controller) { pulls++; controller.enqueue(keyResponseBytes(128)); controller.close(); },
+      cancel(value) { cancellations.push(value); },
+    }, { highWaterMark: 0 }));
+    globalThis.fetch = (async () => { abort.abort(reason); return response; }) as typeof fetch;
+    const flow = new OrcaRouterOAuthFlow({ signal: abort.signal });
+    await flow.generateAuthUrl("state", "http://127.0.0.1:51733/callback");
+    await expect(flow.exchangeToken("code", "state", "ignored")).rejects.toBe(reason);
+    expect(cancellations).toHaveLength(1);
+    expect(cancellations[0]).toBe(reason);
+    expect(pulls).toBe(0);
+    expect(response.body!.locked).toBe(false);
+  });
+
+  test("preserves a caller abort during key body consumption", async () => {
+    const abort = new AbortController();
+    const reason = { code: "login-stopped-during-body" };
+    const started = Promise.withResolvers<void>();
+    let cancelledWith: unknown;
+    const response = new Response(new ReadableStream<Uint8Array>({
+      pull() { started.resolve(); },
+      cancel(value) { cancelledWith = value; },
+    }, { highWaterMark: 0 }));
+    globalThis.fetch = (async () => response) as typeof fetch;
+    const flow = new OrcaRouterOAuthFlow({ signal: abort.signal });
+    await flow.generateAuthUrl("state", "http://127.0.0.1:51733/callback");
+    const exchange = flow.exchangeToken("code", "state", "ignored");
+    void exchange.catch(() => undefined);
+    await started.promise;
+    abort.abort(reason);
+    await expect(exchange).rejects.toBe(reason);
+    expect(cancelledWith).toBe(reason);
+    expect(response.body!.locked).toBe(false);
+  });
+
+  test("shares one 30-second request deadline across key headers and body", async () => {
+    const deadline = new AbortController();
+    const reason = new DOMException("fixture deadline", "TimeoutError");
+    const budgets: number[] = [];
+    const timeout = spyOn(AbortSignal, "timeout").mockImplementation(ms => {
+      budgets.push(ms);
+      return deadline.signal;
+    });
+    const started = Promise.withResolvers<void>();
+    let cancelledWith: unknown;
+    const response = new Response(new ReadableStream<Uint8Array>({
+      pull() { started.resolve(); },
+      cancel(value) { cancelledWith = value; },
+    }, { highWaterMark: 0 }));
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      expect(init?.signal).toBe(deadline.signal);
+      return response;
+    }) as typeof fetch;
+    try {
+      const flow = new OrcaRouterOAuthFlow({});
+      await flow.generateAuthUrl("state", "http://127.0.0.1:51733/callback");
+      const exchange = flow.exchangeToken("code", "state", "ignored");
+      void exchange.catch(() => undefined);
+      await started.promise;
+      deadline.abort(reason);
+      await expect(exchange).rejects.toBe(reason);
+      expect(budgets).toEqual([30_000]);
+      expect(cancelledWith).toBe(reason);
+      expect(response.body!.locked).toBe(false);
+    } finally {
+      timeout.mockRestore();
+      deadline.abort(reason);
+    }
+  });
+
+  test("does not reflect key body read failures into login errors", async () => {
+    const secret = ["sk", "orca", "body-failure-canary"].join("-");
+    globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) { controller.error(new Error(secret)); },
+    }))) as typeof fetch;
+    const flow = new OrcaRouterOAuthFlow({});
+    await flow.generateAuthUrl("state", "http://127.0.0.1:51733/callback");
+    const error = await flow.exchangeToken("code", "state", "ignored").catch(error => error);
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).toBe("OrcaRouter key exchange returned invalid JSON");
+    expect(error.cause).toBeUndefined();
+    expect(error.message).not.toContain(secret);
   });
 
   test("completes the real callback with documented key/user_id and no response scope", async () => {
