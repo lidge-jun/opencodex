@@ -3,6 +3,8 @@ import { Window } from "happy-dom";
 import { act, createElement } from "react";
 import { clearClientResourceStoresForTests } from "../src/client-resource";
 import { LanguageProvider } from "../src/i18n/provider";
+import { interpolate } from "../src/i18n/shared";
+import { ru } from "../src/i18n/ru";
 import Usage from "../src/pages/Usage";
 
 test("Usage renders every section in one scrollable column with a sticky strip", async () => {
@@ -89,7 +91,7 @@ test("usage workspace i18n keys exist in every locale", async () => {
   }
 });
 
-test("Usage breakdown tables show priced totals and excluded requests without calling them free", async () => {
+test("Usage breakdown tables distinguish priced zero totals from excluded requests", async () => {
   const globalKeys = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT", "ResizeObserver"] as const;
   const previous = Object.fromEntries(globalKeys.map(key => [key, Reflect.get(globalThis, key)]));
   const originalFetch = globalThis.fetch;
@@ -116,9 +118,9 @@ test("Usage breakdown tables show priced totals and excluded requests without ca
     since: null,
     generatedAt: Date.now(),
     summary: {
-      requests: 4,
-      measuredRequests: 4,
-      reportedRequests: 4,
+      requests: 5,
+      measuredRequests: 5,
+      reportedRequests: 5,
       unreportedRequests: 0,
       unsupportedRequests: 0,
       estimatedRequests: 0,
@@ -132,10 +134,12 @@ test("Usage breakdown tables show priced totals and excluded requests without ca
     days: [],
     models: [
       { provider: "priced", model: "priced-model", requests: 1, measuredRequests: 1, reportedRequests: 1, estimatedRequests: 0, totalTokens: 100, inputTokens: 50, outputTokens: 50, estimatedCostUsd: 1.25, pricedRequests: 1, unpricedRequests: 0, shareRatio: 2 / 3 },
+      { provider: "zero-priced", model: "zero-priced-model", requests: 1, measuredRequests: 1, reportedRequests: 1, estimatedRequests: 0, totalTokens: 0, inputTokens: 0, outputTokens: 0, estimatedCostUsd: 0, pricedRequests: 1, unpricedRequests: 0, shareRatio: 0 },
       { provider: "unpriced", model: "unpriced-model", requests: 3, measuredRequests: 3, reportedRequests: 3, estimatedRequests: 0, totalTokens: 50, inputTokens: 50, outputTokens: 0, pricedRequests: 0, unpricedRequests: 3, shareRatio: 1 / 3 },
     ],
     providers: [
       { provider: "priced", requests: 1, measuredRequests: 1, reportedRequests: 1, estimatedRequests: 0, totalTokens: 100, estimatedCostUsd: 1.25, pricedRequests: 1, unpricedRequests: 0, shareRatio: 2 / 3 },
+      { provider: "zero-priced", requests: 1, measuredRequests: 1, reportedRequests: 1, estimatedRequests: 0, totalTokens: 0, estimatedCostUsd: 0, pricedRequests: 1, unpricedRequests: 0, shareRatio: 0 },
       { provider: "unpriced", requests: 3, measuredRequests: 3, reportedRequests: 3, estimatedRequests: 0, totalTokens: 50, pricedRequests: 0, unpricedRequests: 3, shareRatio: 1 / 3 },
     ],
     historyTruncated: false,
@@ -153,7 +157,7 @@ test("Usage breakdown tables show priced totals and excluded requests without ca
       root.render(createElement(LanguageProvider, null, createElement(Usage, { apiBase: "http://usage-list-price-test" })));
     });
     const deadline = Date.now() + 1_000;
-    while (!(container.textContent ?? "").includes("(3 requests excluded)")) {
+    while (!(container.textContent ?? "").includes("— (3 requests excluded)")) {
       if (Date.now() >= deadline) throw new Error("Usage list-price cells did not render");
       await act(async () => {
         await new Promise<void>(resolve => testWindow.setTimeout(resolve, 10));
@@ -161,7 +165,8 @@ test("Usage breakdown tables show priced totals and excluded requests without ca
     }
 
     expect(container.textContent).toContain("~$1.2500");
-    expect(container.textContent).toContain("~$0.0000 (3 requests excluded)");
+    expect(container.textContent).toContain("~$0.0000");
+    expect(container.textContent).toContain("— (3 requests excluded)");
     expect([...container.querySelectorAll("th")].filter(cell => cell.textContent === "API list-price")).toHaveLength(2);
   } finally {
     await act(async () => { root.unmount(); });
@@ -172,6 +177,12 @@ test("Usage breakdown tables show priced totals and excluded requests without ca
     for (const key of globalKeys) {
       Object.defineProperty(globalThis, key, { configurable: true, value: previous[key] });
     }
+  }
+});
+
+test("Russian excluded-request caption stays grammatical for common counts", () => {
+  for (const count of [1, 2, 5, 21]) {
+    expect(interpolate(ru["usage.cost.excluded"], { count })).toBe(`(${count} исключено)`);
   }
 });
 

@@ -133,6 +133,14 @@ function UsageListPrice({ row, locale, t }: { row: UsageCostRow; locale: Locale;
   if (!hasPriceData) return <span className="muted">—</span>;
 
   const excludedRequests = row.unpricedRequests ?? 0;
+  if (row.estimatedCostUsd === undefined && excludedRequests > 0) {
+    return (
+      <>
+        <span className="muted">—</span>
+        <span className="muted text-caption"> {t("usage.cost.excluded", { count: excludedRequests })}</span>
+      </>
+    );
+  }
   return (
     <>
       <span className="mono">{formatUsdEstimate(row.estimatedCostUsd ?? 0, locale)}</span>

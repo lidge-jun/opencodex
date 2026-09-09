@@ -146,6 +146,8 @@ upgrade and restart that proxy before retrying. Resetting a manual model price a
 model, preserving other rates saved independently.
 The **Usage** Models and Providers tables show the estimated priced portion for each row; any
 requests without a matching price or usable usage are counted as excluded beside that amount.
+A row with only excluded requests shows an em dash rather than a zero-dollar estimate; a displayed
+zero-dollar value is therefore a confirmed priced estimate.
 These are not billing receipts or evidence of an actual charge; subscription usage or provider credits
 may apply instead.
 
