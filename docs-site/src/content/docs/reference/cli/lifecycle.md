@@ -203,7 +203,10 @@ Run read-only environment and connectivity diagnostics: state paths and filesyst
 installs, proxy environment/config, ChatGPT reachability, Codex plugin and project-config warnings,
 and pending history migration. The Codex app-home targeting section also detects the narrow Windows
 Orca runtime-home mismatch and explains service migration when applicable. Paths shown by this
-diagnostic redact the OS username. Doctor prints repair hints but does not apply them.
+diagnostic redact the OS username. Proxy reporting separates the current doctor process, the
+effective `config.proxy` setting, and the running proxy process when Linux `/proc/<pid>/environ`
+is readable; it reports only set/unset state and never prints proxy values. Doctor prints repair
+hints but does not apply them.
 
 The **OAuth reliability** section reports whether credential storage is writable, whether refresh
 single-flight/lock files can be created under `OPENCODEX_HOME`, non-healthy OAuth or Codex pool

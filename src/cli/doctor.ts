@@ -405,6 +405,10 @@ export function collectWslDualInstall(deps: WslDualInstallDeps = {}): WslDualIns
 export type ProxyEnvRow = { key: string; present: boolean };
 export type EnvMap = Record<string, string | undefined>;
 
+const PARSED_PROXY_ENV_KEYS = new Set(
+  PROXY_ENV_KEYS.flatMap(key => [key, key.toLowerCase()]),
+);
+
 function ownEnvValue(env: EnvMap, name: string): string | undefined {
   return Object.hasOwn(env, name) ? env[name] : undefined;
 }
@@ -540,7 +544,11 @@ export function parseProcessEnvBlock(content: string): EnvMap {
     if (!entry) continue;
     const separator = entry.indexOf("=");
     if (separator <= 0) continue;
-    env[entry.slice(0, separator)] = entry.slice(separator + 1);
+    const name = entry.slice(0, separator);
+    if (!PARSED_PROXY_ENV_KEYS.has(name)) continue;
+    // Keep only the presence bit. `/proc/<pid>/environ` may contain credentials
+    // in proxy URLs and unrelated secrets in other environment variables.
+    if (entry.slice(separator + 1).trim()) env[name] = "1";
   }
   return env;
 }

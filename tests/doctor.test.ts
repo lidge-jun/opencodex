@@ -268,33 +268,28 @@ describe("doctor", () => {
     const env = parseProcessEnvBlock([
       "HTTP_PROXY=http://user:secret@proxy.example.test:8080",
       "NO_PROXY=localhost,127.0.0.1",
+      "UNRELATED_SECRET=do-not-retain",
       "",
     ].join("\0"));
 
+    expect(env).toEqual({ HTTP_PROXY: "1", NO_PROXY: "1" });
+    expect(JSON.stringify(env)).not.toContain("secret");
+    expect(JSON.stringify(env)).not.toContain("do-not-retain");
     const rows = collectProxyEnv(env);
     expect(rows.find(r => r.key === "HTTP_PROXY")!.present).toBe(true);
     expect(rows.find(r => r.key === "NO_PROXY")!.present).toBe(true);
-    expect(JSON.stringify(rows)).not.toContain("secret");
   });
 
-  test("parseProcessEnvBlock stores prototype-like names as own keys", () => {
-    const names = [
-      "toString",
-      "valueOf",
-      "constructor",
-      "hasOwnProperty",
-      "__proto__",
-      "isPrototypeOf",
-      "propertyIsEnumerable",
-      "toLocaleString",
-    ];
-    const env = parseProcessEnvBlock(names.map(name => `${name}=set-${name}`).join("\0"));
+  test("parseProcessEnvBlock ignores unrelated and empty environment entries", () => {
+    const env = parseProcessEnvBlock([
+      "__proto__=set-proto",
+      "constructor=set-constructor",
+      "HTTP_PROXY=",
+      "https_proxy=http://proxy.example.test:8080",
+    ].join("\0"));
 
     expect(Object.getPrototypeOf(env)).toBeNull();
-    for (const name of names) {
-      expect(Object.hasOwn(env, name)).toBe(true);
-      expect(env[name]).toBe(`set-${name}`);
-    }
+    expect(env).toEqual({ https_proxy: "1" });
   });
 
   test("collectRunningProxyEnv separates no pid, unreadable pid env, and pid env presence", () => {
