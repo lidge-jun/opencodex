@@ -4662,6 +4662,10 @@ describe("GET /v1/models Codex client-version account-picker projection", () => 
         const slugs = payload.models.map(model => model.slug);
         const reserve = payload.models.find(model => model.slug === `main/${reserveModel}`);
         expect(reserve !== undefined && reserve.visibility !== "hide").toBe(expected);
+        if (disabledModels.length > 0) {
+          expect(reserve).toBeDefined();
+          expect(reserve!.visibility).toBe("hide");
+        }
         expect(slugs).not.toContain(`side/${reserveModel}`);
         expect(slugs).not.toContain(reserveModel);
       } finally {
