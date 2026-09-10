@@ -23,15 +23,7 @@ export function resolveBlockedModelRedirect(
   if (!config?.blockedModelRedirects || typeof config.blockedModelRedirects !== "object") {
     return undefined;
   }
-  if (config.blockedModelRedirects[modelId] !== undefined) {
-    return config.blockedModelRedirects[modelId];
-  }
-  const slash = modelId.indexOf("/");
-  if (slash > 0) {
-    const bare = modelId.slice(slash + 1);
-    return config.blockedModelRedirects[bare];
-  }
-  return undefined;
+  return config.blockedModelRedirects[modelId];
 }
 
 /**

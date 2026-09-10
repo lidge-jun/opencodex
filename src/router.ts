@@ -34,7 +34,7 @@ import {
 } from "./providers/openai-tiers";
 import { decodeRoutedModelIdOrThrow, encodeRoutedModelId } from "./providers/slug-codec";
 import { resolveModelAlias } from "./providers/default-aliases";
-import { resolveBlockedModelRedirect, resolveBlockedModelRedirectChain } from "./lib/shadow-call";
+import { resolveBlockedModelRedirectChain } from "./lib/shadow-call";
 import { getStaleCached } from "./codex/model-cache";
 import { codexAccountNamespaceEntries } from "./codex/account-namespaces";
 import {
@@ -557,26 +557,6 @@ function routeResult(
   routeKind: RouteDecisionKind,
   routeReason: string,
 ): RouteResult {
-  const redirect = resolveBlockedModelRedirectChain(config, modelId);
-  if (redirect.redirected && config) {
-    const targetRoute = routeModelInternal(config, redirect.targetModel, true);
-    return {
-      ...targetRoute,
-      routeReason: "blocked-model-redirect",
-      ...(targetRoute.routeDecision
-        ? {
-            routeDecision: {
-              ...targetRoute.routeDecision,
-              requestedModel: modelId,
-              selected: {
-                ...targetRoute.routeDecision.selected,
-                reason: "blocked-model-redirect",
-              },
-            },
-          }
-        : {}),
-    };
-  }
   const codexAccountMode = providerCodexAccountMode(providerName, provider);
   return {
     providerName,
@@ -627,13 +607,38 @@ function comboRouteCandidates(
   });
 }
 
+function wrapRedirectedRoute(
+  targetRoute: RouteResult,
+  requestedModel: string,
+): RouteResult {
+  const routeDecision = targetRoute.routeDecision
+    ? {
+        ...targetRoute.routeDecision,
+        requestedModel,
+        selected: {
+          ...targetRoute.routeDecision.selected,
+          reason: "blocked-model-redirect",
+        },
+      }
+    : undefined;
+  return {
+    ...targetRoute,
+    routeReason: "blocked-model-redirect",
+    ...(routeDecision ? { routeDecision } : {}),
+  };
+}
+
 function routeModelInternal(
   config: OcxConfig,
   modelId: string,
   bypassCombos: boolean,
   policyEvidence?: PolicyRequestEvidence,
   allowCompactionNativeFallback = false,
+  depth = 0,
 ): RouteResult {
+  if (depth > 5) {
+    throw new Error(`routeModel exceeded maximum redirect depth (5) for model: ${modelId}`);
+  }
   const slash = modelId.indexOf("/");
   // Policy namespace is system-reserved: an explicit `policy/<id>` or a
   // configured profile alias executes the policy evaluator and routes the
@@ -659,7 +664,7 @@ function routeModelInternal(
     }
     const selected = evaluation.candidates[evaluation.selectedIndex]!;
     const concrete = `${selected.provider}/${selected.model}`;
-    const routed = routeModelInternal(config, concrete, true);
+    const routed = routeModelInternal(config, concrete, true, undefined, false, depth + 1);
     return {
       ...routed,
       routeKind: "policy" as const,
@@ -672,6 +677,10 @@ function routeModelInternal(
     const binding = codexAccountNamespaceEntries(config)
       .find(([candidate]) => candidate === namespace);
     if (binding) {
+      const fullRedirect = resolveBlockedModelRedirectChain(config, modelId);
+      if (fullRedirect.redirected) {
+        return wrapRedirectedRoute(routeModelInternal(config, fullRedirect.targetModel, bypassCombos, policyEvidence, allowCompactionNativeFallback, depth + 1), modelId);
+      }
       const nativeModelId = modelId.slice(slash + 1);
       const redirect = resolveBlockedModelRedirectChain(config, nativeModelId);
       const effectiveNativeModelId = redirect.targetModel;
@@ -716,22 +725,9 @@ function routeModelInternal(
       bypassCombos,
       policyEvidence,
       allowCompactionNativeFallback,
+      depth + 1,
     );
-    const routeDecision = targetRoute.routeDecision
-      ? {
-          ...targetRoute.routeDecision,
-          requestedModel: modelId,
-          selected: {
-            ...targetRoute.routeDecision.selected,
-            reason: "blocked-model-redirect",
-          },
-        }
-      : undefined;
-    return {
-      ...targetRoute,
-      routeReason: "blocked-model-redirect",
-      ...(routeDecision ? { routeDecision } : {}),
-    };
+    return wrapRedirectedRoute(targetRoute, modelId);
   }
 
   if (!bypassCombos && !preservesPhysicalComboProvider(config)) {
@@ -740,7 +736,7 @@ function routeModelInternal(
       const concrete = `${combo.target.provider}/${combo.target.model}`;
       // The selected target is already a concrete provider/model reference. Resolve it without
       // consulting combo aliases again, otherwise an alias that shadows the target can recurse.
-      const routed = routeModelInternal(config, concrete, true, undefined);
+      const routed = routeModelInternal(config, concrete, true, undefined, false, depth + 1);
       return { ...routed, combo, routeKind: "combo" as const, routeReason: "combo-pick" };
     }
   }
@@ -810,6 +806,18 @@ function routeModelInternal(
       const nativeModel = known.includes(decoded)
         ? decoded
         : resolveModelAlias(config, prov, known, requestedModel) ?? decoded;
+      const providerQualifiedId = `${provName}/${nativeModel}`;
+      const qualifiedRedirect = resolveBlockedModelRedirectChain(config, providerQualifiedId);
+      if (qualifiedRedirect.redirected) {
+        return wrapRedirectedRoute(routeModelInternal(
+          config,
+          qualifiedRedirect.targetModel,
+          bypassCombos,
+          policyEvidence,
+          allowCompactionNativeFallback,
+          depth + 1,
+        ), modelId);
+      }
       return routeResult(
         config,
         provName,
@@ -886,6 +894,18 @@ function routeModelInternal(
   }
   if (aliasMatches[0]) {
     const match = aliasMatches[0];
+    const effectiveAliasRedirect = resolveBlockedModelRedirectChain(config, match.model);
+    if (effectiveAliasRedirect.redirected) {
+      const targetRoute = routeModelInternal(
+        config,
+        effectiveAliasRedirect.targetModel,
+        bypassCombos,
+        policyEvidence,
+        allowCompactionNativeFallback,
+        depth + 1,
+      );
+      return wrapRedirectedRoute(targetRoute, modelId);
+    }
     return routeResult(config, match.provider, config.providers[match.provider], match.model, "explicit-provider", "model-alias");
   }
 

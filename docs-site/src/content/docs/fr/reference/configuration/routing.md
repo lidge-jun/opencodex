@@ -31,11 +31,14 @@ Les fournisseurs désactivés sont exclus. Un espace de noms explicite qui dési
 
 ### Redirections des modèles bloqués
 
-`blockedModelRedirects` est un `Record<string, string>` facultatif de premier niveau associant des remplacements exacts d’identifiants de modèle résolus ; il est non défini par défaut. Il s’applique après l’ordre de résolution ci-dessus : une correspondance conserve la route du fournisseur et du compte déjà sélectionnée, ne remplace que l’identifiant du modèle en amont et enregistre le motif de routage `blocked-model-redirect`. L’omission de la clé ne modifie pas le routage.
+`blockedModelRedirects` est un `Record<string, string>` facultatif de premier niveau définissant les remplacements d'identifiants de modèle, non défini par défaut. Lorsqu'un modèle entrant correspond à une clé, il est redirigé vers le modèle de substitution cible. Les modèles cibles peuvent être résolus au sein du même fournisseur ou réacheminés vers un autre fournisseur (par exemple `google-antigravity/gemini-3.8-flash-high`), avec prise en charge des redirections en chaîne multi-sauts (jusqu'à une profondeur maximale de 5 sauts avec détection de boucle). Le motif de routage est enregistré sous `blocked-model-redirect`. L'omission de la clé ne modifie pas le routage.
 
 ```json
 {
-  "blockedModelRedirects": { "gpt-5.6-terra": "gpt-5.6-luna" }
+  "blockedModelRedirects": {
+    "gpt-5.6-terra": "gpt-5.6-luna",
+    "gpt-5.6-anon": "google-antigravity/gemini-3.8-flash-high"
+  }
 }
 ```
 
@@ -169,3 +172,4 @@ CLI : `ocx logs explain <request-id>`, `ocx logs rebuild-index`, `ocx logs index
 
 `routingProfiles` est facultatif et uniquement additif : les fichiers de configuration existants continuent de se charger sans modification. Les anciennes lignes de `usage.jsonl` dépourvues de `routeDecision` continuent d’être analysées sans modification. L’index d’historique peut être supprimé : la suppression de `routing-history.sqlite` déclenche sa reconstruction automatique à partir de `usage.jsonl` lors de la requête suivante ; `ocx logs
 rebuild-index` force cette reconstruction. Ce système n’ajuste automatiquement ni les poids, ni les budgets, ni les ensembles de candidats.
+

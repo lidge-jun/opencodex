@@ -36,14 +36,19 @@ more than one provider, so use explicit namespaces when a bare model could be am
 
 ### Blocked-model redirects
 
-`blockedModelRedirects` is an optional top-level `Record<string, string>` of exact resolved
-model-id replacements, unset by default. It runs **after** the resolution order above: a match
-keeps the provider and account route already selected, replaces only the upstream model id, and
-records the route reason `blocked-model-redirect`. Omitting the key leaves routing unchanged.
+`blockedModelRedirects` is an optional top-level `Record<string, string>` of exact model-id
+replacements, unset by default. When an incoming model matches a key, it is redirected to the
+target replacement model. Target models can resolve to the same provider or re-route across providers
+(e.g. `google-antigravity/gemini-3.8-flash-high`), with multi-hop chained redirects supported (up to
+a maximum depth of 5 hops with cycle detection). The route reason is recorded as
+`blocked-model-redirect`. Omitting the key leaves routing unchanged.
 
 ```json
 {
-  "blockedModelRedirects": { "gpt-5.6-terra": "gpt-5.6-luna" }
+  "blockedModelRedirects": {
+    "gpt-5.6-terra": "gpt-5.6-luna",
+    "gpt-5.6-anon": "google-antigravity/gemini-3.8-flash-high"
+  }
 }
 ```
 
@@ -264,3 +269,4 @@ The history index is disposable - deleting `routing-history.sqlite` triggers
 an automatic rebuild from `usage.jsonl` on the next query; `ocx logs
 rebuild-index` forces one. Nothing in this system auto-tunes weights,
 budgets, or candidate sets.
+
