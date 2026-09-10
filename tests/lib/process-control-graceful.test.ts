@@ -224,7 +224,7 @@ describe("409 refusal reporting", () => {
     expect(lastStopRefusalCode()).toBeNull();
   });
 
-  test("a bodyless refusal falls back to its code, never to an ownership claim", async () => {
+  test("a refusal without a message falls back by code, never to an ownership claim", async () => {
     const refusalFor = async (code: string | null): Promise<string> => {
       const body = code === null ? "not json" : JSON.stringify({ success: false, code });
       try {
@@ -264,23 +264,22 @@ describe("409 refusal reporting", () => {
     }
   });
 
-  test("overlapping refusals each keep their own cause", async () => {
-    // Reading the reason from module state would let the second stop overwrite the first
-    // one's cause before it is read, so the earlier caller reports a refusal it never got.
-    let releaseFirst: (() => void) | null = null;
-    const firstReached = new Promise<void>(resolve => { releaseFirst = resolve; });
-
-    const refusalOf = (code: string, gate?: Promise<void>) => async (): Promise<string> => {
+  test("concurrent refusals each keep their own cause", async () => {
+    // Reading the reason from module state lets one stop publish its refusal and a second
+    // overwrite it before the first continuation consumes it. Starting both together is
+    // what actually reproduces that: verified against the pre-fix global handoff, where
+    // this schedule fails with the first call throwing the second's cause
+    // ("...it is the installed service itself..." for the respawnable_service stop).
+    // A schedule that lets one call finish entirely before resuming the other does NOT
+    // discriminate — the parked call republishes its own globals last and passes either way.
+    const refusalOf = (code: string) => async (): Promise<string> => {
       try {
         await stopProxy(process.pid, {
           readRuntime: () => ({ port: 10100 }),
-          fetchFn: (async () => {
-            if (gate) await gate;
-            return new Response(JSON.stringify({ success: false, code }), {
-              status: 409,
-              headers: { "content-type": "application/json" },
-            });
-          }) as typeof fetch,
+          fetchFn: (async () => new Response(JSON.stringify({ success: false, code }), {
+            status: 409,
+            headers: { "content-type": "application/json" },
+          })) as typeof fetch,
           waitExit: () => { throw new Error("must not wait for a refused stop"); },
           env: {},
         });
@@ -291,13 +290,15 @@ describe("409 refusal reporting", () => {
       throw new Error("stopProxy must throw on a refusal");
     };
 
-    // The first call parks inside fetch until the second has already resolved and written
-    // its own code, which is exactly the interleaving module-scoped state cannot survive.
-    const first = refusalOf("respawnable_service", firstReached)();
-    const second = await refusalOf("self_unload_service")();
-    releaseFirst?.();
-
-    expect(await first).toContain("respawn");
-    expect(second).toContain("installed service itself");
+    // Repeated because the interleaving is scheduler-dependent; the pre-fix code fails on
+    // the first iteration, but a single run would be a weak guard against reintroduction.
+    for (let i = 0; i < 20; i++) {
+      const [respawnable, selfUnload] = await Promise.all([
+        refusalOf("respawnable_service")(),
+        refusalOf("self_unload_service")(),
+      ]);
+      expect(respawnable).toContain("respawn");
+      expect(selfUnload).toContain("installed service itself");
+    }
   });
 });
