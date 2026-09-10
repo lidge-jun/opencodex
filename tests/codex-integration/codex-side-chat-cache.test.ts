@@ -407,3 +407,19 @@ test("unknown stream settings and malformed known options still prevent parent r
     expect(result.body.stream_options).toEqual(options);
   }
 });
+
+
+test.each(["developer", "user"])("extra inherited %s items remain an unmatched suffix of a verified prefix", role => {
+  const cache = seeded();
+  const extra = message(role, "Additional reference history");
+  const raw = body("child", [...history, extra, boundary, message("user", "Child question")]);
+  const before = structuredClone(raw);
+  const result = cache.prepare(raw, headers("child", "parent"));
+  expect(result.body.prompt_cache_key).toBe("parent");
+  expect(result.matchedItems).toBe(history.length);
+  expect(result.body.input).toEqual([...history, extra, message("developer", SIDE_CHAT_BOUNDARY), boundary, message("user", "Child question")]);
+  expect(raw).toEqual(before);
+  const changedPrefix = structuredClone(raw);
+  changedPrefix.input[1] = message("user", "Different parent question");
+  expect(cache.prepare(changedPrefix, headers("child", "parent")).reason).toBe("input-prefix-change");
+});
