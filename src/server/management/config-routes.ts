@@ -468,15 +468,30 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     if (body.codexAccountPickerModels !== undefined && body.codexAccountPickerModels !== null && !isCodexAccountPickerModels(body.codexAccountPickerModels)) {
       return jsonResponse({ error: "codexAccountPickerModels must map public account selectors to arrays of bare native model ids" }, 400);
     }
+    let selectedAccountModels: Record<string, string[]> | undefined;
+    let initializedPickerNamespaces: OcxConfig["codexAccountNamespaces"];
     if (body.codexAccountPickerModels !== undefined && body.codexAccountPickerModels !== null) {
-      const available = new Map(accountPickerSettings(config).codexAccountPickerOptions
-        .map(option => [option.selector, new Set(option.models)]));
-      if (Object.keys(body.codexAccountPickerModels as Record<string, string[]>).some(selector => !available.has(selector))) {
-        return jsonResponse({ error: "Unknown Codex account selector" }, 400);
+      const choices = { ...config };
+      if (body.codexAccountPickerEnabled === true) {
+        choices.codexAccountPickerEnabled = true;
+        if (initializeDefaultCodexAccountNamespaces(choices)) {
+          initializedPickerNamespaces = choices.codexAccountNamespaces;
+        }
       }
-      if (Object.entries(body.codexAccountPickerModels as Record<string, string[]>)
-        .some(([selector, models]) => models.some(model => !available.get(selector)?.has(model)))) {
-        return jsonResponse({ error: "Model is not available for this Codex account selector" }, 400);
+      const available = new Map(accountPickerSettings(choices).codexAccountPickerOptions
+        .map(option => [option.selector, new Set(option.models)]));
+      selectedAccountModels = {};
+      for (const [selector, models] of Object.entries(body.codexAccountPickerModels as Record<string, string[]>)) {
+        const candidates = available.get(selector);
+        if (!candidates) {
+          // Deleted accounts retain their bindings; discard stale display choices on save.
+          if (Object.hasOwn(choices.codexAccountNamespaces ?? {}, selector)) continue;
+          return jsonResponse({ error: "Unknown Codex account selector" }, 400);
+        }
+        if (models.some(model => !candidates.has(model))) {
+          return jsonResponse({ error: "Model is not available for this Codex account selector" }, 400);
+        }
+        selectedAccountModels[selector] = models;
       }
     }
     if (body.showCodexSparkQuota !== undefined && typeof body.showCodexSparkQuota !== "boolean") {
@@ -570,14 +585,15 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       }
       if (body.codexAccountPickerEnabled === true) {
         config.codexAccountPickerEnabled = true;
-        initializeDefaultCodexAccountNamespaces(config);
+        if (initializedPickerNamespaces) config.codexAccountNamespaces = initializedPickerNamespaces;
+        else initializeDefaultCodexAccountNamespaces(config);
       } else if (body.codexAccountPickerEnabled === false) {
         config.codexAccountPickerEnabled = false;
       }
       if (body.codexAccountPickerModels === null) {
         deleteConfigTopLevelKey(config, "codexAccountPickerModels");
       } else if (body.codexAccountPickerModels !== undefined) {
-        config.codexAccountPickerModels = structuredClone(body.codexAccountPickerModels as Record<string, string[]>);
+        config.codexAccountPickerModels = structuredClone(selectedAccountModels!);
       }
       if (typeof body.oauthOpenBrowser === "boolean") {
         config.oauthOpenBrowser = body.oauthOpenBrowser;

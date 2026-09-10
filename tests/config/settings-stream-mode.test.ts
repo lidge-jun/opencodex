@@ -735,3 +735,47 @@ test("o-series account model preferences survive config validation and persisten
   saveConfig(config);
   expect(loadConfig().codexAccountPickerModels).toEqual(config.codexAccountPickerModels);
 });
+
+
+test("first enable and selected models save atomically with generated selectors", async () => {
+  const config = baseConfig();
+  const response = await putSettings(config, { codexAccountPickerEnabled: true, codexAccountPickerModels: { main: ["gpt-5.5"] } }, {
+    saveConfigPreservingClaudeCode: saveConfig,
+    createManagementConvergeCodex: catalogConvergenceFactory(() => {}),
+  });
+  expect(response!.status).toBe(200);
+  expect(config.codexAccountNamespaces).toEqual({ main: "@main" });
+  expect(loadConfig().codexAccountPickerModels).toEqual({ main: ["gpt-5.5"] });
+});
+
+test("invalid atomic selection does not initialize selectors or write settings", async () => {
+  const config = baseConfig();
+  const before = structuredClone(config);
+  let writes = 0;
+  const response = await putSettings(config, { codexAccountPickerEnabled: true, codexAccountPickerModels: { main: ["gpt-not-real"] } }, {
+    saveConfigPreservingClaudeCode: () => { writes++; },
+  });
+  expect(response!.status).toBe(400);
+  expect(config).toEqual(before);
+  expect(writes).toBe(0);
+});
+
+test("saving after account removal prunes stale choices, including a restored draft", async () => {
+  const config = baseConfig();
+  config.codexAccountPickerEnabled = true;
+  config.codexAccountNamespaces = { main: "@main", removed: "deleted-pool" };
+  config.codexAccounts = [];
+  const draft = { main: ["gpt-5.5"], removed: ["gpt-5.5"] };
+  config.codexAccountPickerModels = structuredClone(draft);
+  const deps: ManagementApiDeps = { saveConfigPreservingClaudeCode: saveConfig, createManagementConvergeCodex: catalogConvergenceFactory(() => {}) };
+  for (const restore of [false, true]) {
+    if (restore) await putSettings(config, { codexAccountPickerModels: null }, deps);
+    const response = await putSettings(config, { codexAccountPickerModels: draft }, deps);
+    expect(response!.status).toBe(200);
+    expect(config.codexAccountPickerModels).toEqual({ main: ["gpt-5.5"] });
+    expect(loadConfig().codexAccountPickerModels).toEqual({ main: ["gpt-5.5"] });
+    expect(config.codexAccountNamespaces.removed).toBe("deleted-pool");
+  }
+  const response = await putSettings(config, { codexAccountPickerModels: { unknown: ["gpt-5.5"] } }, deps);
+  expect(response!.status).toBe(400);
+});

@@ -151,8 +151,13 @@ export function fastRowBases(config: OcxConfig): (id: string) => boolean {
   if (shouldIncludeAccountBoundNativeOpenAi(config)) {
     // An EMPTY observed-entry list on purpose: the default argument reads the Codex models
     // cache and catalog from disk. The empty form still seeds every selector with the native
-    // model set, and anything publishable is in UPSTREAM_NATIVE_ENTRIES anyway.
-    for (const [selector, slugs] of accountBoundNativeOpenAiSlugsBySelector(config, [])) {
+    // model set, and anything publishable is in UPSTREAM_NATIVE_ENTRIES anyway. The picker
+    // selection is display-only: exact account routing still accepts every native base, so it
+    // must not make a previously-issued `<selector>/<native>--fast` selector unparsable.
+    for (const [selector, slugs] of accountBoundNativeOpenAiSlugsBySelector({
+      ...config,
+      codexAccountPickerModels: undefined,
+    }, [])) {
       for (const slug of slugs) bases.add(`${selector}/${slug}`);
     }
   }
