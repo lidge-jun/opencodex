@@ -8,7 +8,12 @@ We decided (owner, 2026-09-08):
 2. **Completion definition.** "100% differential parity" means every oracle-able surface passes its oracle. Surfaces that cannot be oracle-able form an explicit Bun-dependent list — the accepted end state, not an accident. The seam-removal target (#55) is re-scoped to shrink the ledger down to that list.
 3. **Deferral reasons must be cross-checked against the TypeScript code.** The v2 deferral claimed a byte-exact TOML reader/writer was needed; the code writes config.toml only through the upstream `codex features` CLI, so the writer half was overstated. A deferral reason that names a missing primitive must cite the TS-side evidence it was derived from.
 
-**Status**: accepted — supersedes the literal reading of ADR-0008's parity clause. A flip still never lands without its oracle; the difference is which oracle shapes qualify.
+**Status**: superseded for the `ocx-go` line by ADR-0010. The oracle taxonomy
+(T1–T5, "flip never lands without its oracle") still governs how a surface is
+accepted, but the "Bun-dependent list is the accepted end state" reading is
+retired: `ocx-go` never delegates, and every non-native surface is an explicit
+native-unsupported entry in the migration ledger. This ADR remains the historical
+record for the legacy `ocx` compatibility binary.
 
 **Fork-line addendum (2026-09-09)**: with the #41 cutover the Go binary is the fork's
 release runtime (ADR-0008 status update), so this taxonomy's Bun-dependent list is the
