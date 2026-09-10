@@ -372,7 +372,7 @@ describe("Claude Desktop 3P models", () => {
     const models = generateDesktop3pModels(["gpt-5.6-sol"], routed, profile);
     const luna = models.find(model => model.labelOverride.includes("Luna"));
     expect(luna).toMatchObject({ anthropicFamilyTier: "haiku", isFamilyDefault: true, supports1m: true });
-    expect(luna?.name).toMatch(/^claude-opus-4-8-2026\d{4}$/);
+    expect(luna?.name).toMatch(/^claude-opus-4-8-20\d{6}$/);
     expect(resolveDesktop3pAlias(luna!.name)).toBe("cursor/gpt-5.6-luna");
   });
 
