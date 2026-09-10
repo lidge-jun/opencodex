@@ -94,7 +94,23 @@ function entryParts(entry: string, config: OcxConfig): { alias: string; id: stri
   return { alias: claudeCodeNativeAlias(entry), id: entry, provider: "native" };
 }
 
-export function buildClaudeAgentDefs(config: OcxConfig, windows: Record<string, number>, configDir = claudeConfigDir()): ClaudeAgentDef[] {
+export function buildClaudeAgentDefs(
+  config: OcxConfig,
+  windows: Record<string, number>,
+  configDir = claudeConfigDir(),
+  /**
+   * The roster to generate defs from, overriding local `config.subagentModels` (#4236).
+   *
+   * A connected client's local roster is whatever it had before it joined the hub — on a fresh
+   * client, the five native defaults — while the hub's featured roster is the list that
+   * actually routes. Passing it in keeps this function pure and keeps the override visible at
+   * the call site instead of hidden behind a config read.
+   *
+   * Undefined preserves today's behaviour exactly, including "unset means the defaults, an
+   * explicit `[]` means none".
+   */
+  rosterOverride?: readonly string[],
+): ClaudeAgentDef[] {
   const blockedSkills = effectiveBlockedSkillNames(config.claudeCode);
   const blockedSkillsFor = (model: string): readonly string[] => {
     const unmarked = stripOneMillionMarker(model);
@@ -137,7 +153,8 @@ export function buildClaudeAgentDefs(config: OcxConfig, windows: Record<string, 
 
   // Default roster applies only when the field is UNSET — an explicit [] is
   // respected (audit 071 #6: an upgraded config must not lose the default five).
-  const roster = config.subagentModels === undefined ? DEFAULT_SUBAGENT_MODELS : config.subagentModels;
+  const roster = rosterOverride
+    ?? (config.subagentModels === undefined ? DEFAULT_SUBAGENT_MODELS : config.subagentModels);
   for (const entry of roster.slice(0, 5)) {
     if (typeof entry !== "string" || entry.trim() === "") continue;
     const { alias, id, provider } = entryParts(entry.trim(), config);
@@ -260,13 +277,20 @@ export function syncClaudeAgentDefs(defs: readonly ClaudeAgentDef[], configDir =
 }
 
 /** Launch-time hook: gate + build + sync in one call (used by ocx claude and systemEnv). */
-export function injectClaudeAgentDefs(config: OcxConfig, windows: Record<string, number>, configDir?: string): string[] | null {
+export function injectClaudeAgentDefs(
+  config: OcxConfig,
+  windows: Record<string, number>,
+  configDir?: string,
+  /** Hub-sourced roster on a connected client; see `buildClaudeAgentDefs`. */
+  rosterOverride?: readonly string[],
+): string[] | null {
   if (config.claudeCode?.enabled === false || config.claudeCode?.injectAgents === false) {
     // Disabled: prune verified-owned files so stale definitions stop loading
-    // in future sessions (audit 071 #3).
+    // in future sessions (audit 071 #3). The roster override is irrelevant here by
+    // construction: there is nothing to build.
     return syncClaudeAgentDefs([], configDir);
   }
-  return syncClaudeAgentDefs(buildClaudeAgentDefs(config, windows, configDir), configDir);
+  return syncClaudeAgentDefs(buildClaudeAgentDefs(config, windows, configDir, rosterOverride), configDir);
 }
 /**
  * Dispatcher directive appended to every ocx-* description. The ocx-route body

@@ -98,6 +98,8 @@ Inspectez les requêtes de proxy, l’utilisation, le stockage, la mémoire et l
 ocx observe usage --range 30d --json
 ```
 
+Si certains enregistrements ne peuvent pas être inclus, la sortie lisible affiche un avertissement, même sans ligne lisible. Les totaux affichés ne reflètent que les enregistrements lisibles. Si un filtre ne trouve aucune correspondance lisible, la sortie affiche l'avertissement et des indications au lieu des lignes de totaux ; les enregistrements ignorés peuvent contenir des correspondances. `--json` préserve le diagnostic `usageIncomplete` et sa raison.
+
 ### `ocx debug <provider|usage|injection|claude> <on|off|status|reset|logs [-f]>`
 
 Lisez ou modifiez les remplacements de débogage d'exécution via la gestion du proxy en cours d'exécution API.
@@ -164,7 +166,7 @@ Gérez et appliquez la clôture du modèle Grok Build.
 
 ## Exportation de la configuration client
 
-### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast>`
+### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast|omo>`
 
 Imprimez une configuration client connectée au proxy en cours d'exécution. La commande sérialise le
 bloc fournisseur `opencodex` — URL de base, liste de modèles et référence d’identifiant du client
@@ -175,7 +177,7 @@ les modèles Codex peuvent actuellement voir.
 
 | Option | Actions |
 | --- | --- |
-| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh\|mcode\|zcode\|prime\|aside\|raycast>` | Requis. Sélectionne le dialecte de configuration client. |
+| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh\|mcode\|zcode\|prime\|aside\|raycast\|omo>` | Requis. Sélectionne le dialecte de configuration client. |
 | `--json` | Imprimez le document généré en tant que JSON sur la sortie standard pour les scripts. Il s'agit de JSON même lorsque le format natif du client sélectionné est YAML, TOML ou JSON5. |
 | `--out <path>` | Écrivez le format de configuration natif du client dans `<path>`. Refuse de remplacer un fichier existant. |
 | `--force` | Autoriser `--out` à remplacer un fichier existant. |
@@ -205,7 +207,9 @@ propres valeurs par défaut à ces lignes.
 | `mcode` | `~/.minimax/config.yaml` (`MINIMAX_DATA_DIR`, puis l'ancien `MAVIS_DATA_DIR`, l'emportent une fois définis ; une valeur relative est refusée) | `mcode-config.yaml` | aucun — espace réservé de bouclage |
 | `zcode` | `~/.zcode/v2/config.json` (`ZCODE_DATA_DIR` l'emporte une fois défini ; une valeur relative est refusée) | `config.json` | aucun — espace réservé de bouclage |
 | `prime` | `~/.prime/agent/models.json` (`PRIME_AGENT_CODING_AGENT_DIR` l'emporte une fois défini ; une valeur relative est refusée) | `prime-models.json` | aucun — espace réservé de bouclage |
+| `aside` | `~/.aside/u/<account>/models.json` pour le compte que le fichier `accounts.json` d'Aside désigne comme courant ; un manifeste illisible est refusé plutôt que de retomber sur un compte | `aside-models.json` | aucun — espace réservé de bouclage |
 | `raycast` | `~/.config/raycast/ai/providers.yaml`, sur macOS comme sur Windows (Raycast n'honore pas `XDG_CONFIG_HOME`) | `raycast-providers.yaml` | aucun — bouclage uniquement, aucune entrée `api_keys` n'est écrite |
+| `omo` | `~/.omo/agent/models.json` (`OMO_CODING_AGENT_DIR`, puis `SENPI_CODING_AGENT_DIR`, puis `PI_CODING_AGENT_DIR` l'emportent dans cet ordre une fois définis ; une valeur relative est refusée) | `omo-models.json` | aucun — espace réservé de bouclage |
 
 L'exportation Raycast est un document `providers.yaml` autonome contenant un seul élément `id: opencodex`
 dans la séquence `providers` : `name: OpenCodex`, l'URL de base `/v1` du proxy et chaque modèle routé avec
@@ -241,8 +245,8 @@ le proxy se lie au-delà du bouclage ; voir
 [Accès à distance](/fr/reference/configuration/server/#accès-à-distance) pour savoir comment les clés d'admission sont délivrées. Clés pour
 les fournisseurs en amont eux-mêmes sont une chose entièrement distincte, configurée par
 [Fournisseurs](/fr/guides/providers/).
-Gajae est l'exception : `OPENCODEX_GAJAE_API_KEY` remplit ses informations d'identification de fournisseur à partir du
-environnement, mais son schéma ne peut pas envoyer l'en-tête d'admission à distance, donc le Gajae généré
+gjc est l'exception : `OPENCODEX_GAJAE_API_KEY` remplit ses informations d'identification de fournisseur à partir du
+environnement, mais son schéma ne peut pas envoyer l'en-tête d'admission à distance, donc l'intégration gjc générée
 l'intégration reste uniquement en boucle.
 
 La même charge utile est servie par `GET /api/client-config` et rendue sur l'onglet API du tableau de bord, donc
@@ -253,6 +257,8 @@ le CLI, l’API, et le GUI utilisent les mêmes octets.
 ### `ocx system <status|settings|startup|diagnostics|sync|codex-app-server|codex-restart|update|codex-cli-update> ...`
 
 Gérez les paramètres d'exécution sans tête, le démarrage, la synchronisation, les diagnostics et les mises à jour.
+
+`ocx system codex-restart --yes` redémarre les serveurs d'application Codex et quitte puis relance entièrement l'application Codex Desktop, via le même module que `ocx sync --restart-codex`. Lorsque le proxy lui-même s'exécute dans l'application Codex, la commande refuse avec un message actionnable au lieu de promettre un transfert qu'elle ne peut pas mener à bien.
 
 ```bash
 ocx system settings --stream-mode eager-relay

@@ -1,0 +1,376 @@
+# Subagents And Multi-Agent Surface
+
+Encrypted-task and fallback request handling follow the Responses
+[core module ownership](transports/responses.md#core-module-ownership). This surface retains its existing behavior.
+
+## Plaintext V2 agent messages
+
+`src/responses/plaintext-v2-agent-messages.ts` owns the experimental, configuration-only
+`plaintextV2AgentMessages` request compiler and response restoration. The default is unset;
+only explicit true on Responses ingress to the final canonical ChatGPT forward route activates it.
+A default top-level collaboration catalog is required. The compiler preserves caller objects,
+aliases the namespace and three message functions, and removes only their true encryption marker.
+Declaration/reference collisions refuse the whole rewrite without changing the request.
+
+`src/adapters/openai-responses.ts` returns request-local alias capabilities. The Responses core
+refreshes them after every request rebuild and restores JSON, SSE and WebSocket identities after
+snapshot repair. Malformed, conflicting, unsupported or over-limit responses fail closed without
+retrying the model. Raw stream inspection cannot publish plaintext continuation state: only
+restored client blocks reach its dedicated bounded collector. Foreign namespaces and opaque
+argument/metadata values remain unchanged; the empty encrypted-function-args marker is preserved.
+
+Startup warns that task text can remain in Codex history, selected-provider requests and local
+response/debug state. This is application-level plaintext over HTTPS, depends on undocumented
+upstream behavior, and does not decrypt existing tasks or replace authenticated recovery.
+
+Restored calls and selectors carry an explicit collaboration namespace and unqualified child name.
+Codex treats qualified names literally and defaults absent namespaces to functions. Only child
+declarations inherit their restored namespace container; the compiler never invents an empty
+encryption marker when the upstream omitted it or returned a nonempty marker.
+
+Shared parsing and streaming follow the [request-copy](transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](transports/responses.md#passthrough-sse-stream-shapes-314).
+
+## Multi-agent surface mode (3-state)
+
+`OcxConfig.multiAgentMode` controls the `multi_agent_version` field stamped on catalog entries:
+
+| Mode | Behavior |
+| --- | --- |
+| `"v1"` | Force ALL entries to `multi_agent_version = "v1"` — overrides upstream pins (sol/terra included). |
+| `"default"` | Respect upstream model pins (sol/terra=v2, luna=v1, others=null → codex feature flag decides). On sync, stale forced values are cleared and upstream pins restored. |
+| `"v2"` | Force ALL entries to `multi_agent_version = "v2"` — overrides upstream pins (luna included). |
+
+The override is applied as a final pass in both `buildCatalogEntries` (live `/v1/models` path) and
+`mergeCatalogEntriesForSync` (on-disk sync), AFTER all normalization and visibility processing. This
+ensures `normalizeRoutedCatalogEntry` (which deletes `multi_agent_version` from routed entries) does
+not clobber the forced value.
+
+`getDefaultConfig()` (`src/config/proxy-env.ts`) writes `multiAgentMode: "v1"` explicitly, using the version
+constant from `src/config/multi-agent-surface.ts`, so v1 is the install default while a v2
+native-to-routed child task is undeliverable ciphertext. The repair and salvage merges in
+`src/config/diagnostics.ts` pin `multiAgentMode` and `multiAgentSurfaceAdvisoryVersion` to the stored
+document, because spreading the defaults underneath would repair an unrelated missing field
+into a surface change its operator never made.
+An absent key still means `"default"`, because selecting base deletes the key — absence cannot be
+read as "never configured". An install that predates that change is therefore not rewritten; it is
+asked once. `multiAgentSurfaceAdvisoryRequired()` is true while the resolved mode is not v1 and
+the stored `multiAgentSurfaceAdvisoryVersion` is below `MULTI_AGENT_SURFACE_ADVISORY_VERSION`, and
+only the operator answering the dashboard notice writes that version.
+
+CLI: `ocx v2 mode v1|default|v2`. GUI: segmented control on the Models page. API: `GET/PUT /api/v2`
+with `multiAgentMode` field.
+
+The `multi_agent_v2` feature flag and the logical maximum thread count are separate from
+`multiAgentMode` (`src/codex/features.ts`): the mode decides which surface Codex advertises, while
+the flag and thread count decide what the native runtime allows.
+
+`keepNativeChatGptOnV1` makes mode `v2` a catalog-driven hybrid: OpenCodex disables the global
+`multi_agent_v2` override because codex-rs resolves that override before a model row's explicit
+`multi_agent_version`. Native ChatGPT rows then select v1 from the catalog and routed rows select
+v2. An explicit attempt to enable the global flag while the hybrid pin is active is rejected.
+
+### What the five-model `spawn_agent` window is, and how V1 differs from V2
+
+`MAX_SPAWN_AGENT_MODEL_OVERRIDES = 5` (mirrored in `src/codex/catalog/subagent-roster.ts`) is **not** a
+subagent concurrency limit and **not** an eligibility limit. Upstream uses it in exactly two
+places: the model list rendered into the `spawn_agent` tool description
+(`multi_agents_spec.rs:789`) and the "Available models:" suggestions in an unknown-model error
+(`multi_agents_common.rs:448`, inside the `ok_or_else` closure that runs only *after* the lookup
+already failed). The success path `find_spawn_agent_model_name` (`:431-442`) scans the whole
+catalog with neither the cap nor a `show_in_picker` filter, so a model outside the advertised
+five is still accepted when named exactly.
+
+Three different numbers, often conflated:
+
+| Quantity | Value | Source |
+| --- | --- | --- |
+| Models **advertised** as overrides | `min(5, picker-visible eligible rows)` | `multi_agents_spec.rs:785-790` |
+| Models **eligible** as targets | no numeric cap (only `"disabled"` is excluded, and only on V2) | `multi_agents_common.rs:36-42` |
+| **Concurrent** subagents | V1 6 children (root excluded); V2 total 4 including root → 3 children | `config/mod.rs:211-212`, `:1497-1506` |
+
+**The cap is the same 5 on both surfaces, but the window's contents are not.** The eligibility
+filter runs *before* `.take(5)`, and it behaves differently per surface: on a V1 call
+`model_supports_multi_agent_backend` short-circuits true for every row (including `disabled`
+ones), while a V2 call drops `Some(Disabled)` first — which lets a later row move into the five.
+Same catalog, different advertised list:
+
+| # | Model | pin | V1 advertises | V2 advertises |
+| ---: | --- | --- | :---: | :---: |
+| 1 | `v2-a` | `v2` | ✅ | ✅ |
+| 2 | `disabled-a` | `disabled` | ✅ | — |
+| 3 | `v1-a` | `v1` | ✅ | ✅ |
+| 4 | `null-a` | absent | ✅ | ✅ |
+| 5 | `v2-b` | `v2` | ✅ | ✅ |
+| 6 | `disabled-b` | `disabled` | — | — |
+| 7 | `null-b` | absent | — | ✅ |
+
+opencodex already matches this: `effectiveSubagentRoster` filters with
+`surface !== "v2" || isEligibleV2SubagentEntry(entry)`, so the V1 path skips the eligibility
+filter exactly as upstream does. opencodex also injects no roster on V1
+(`src/server/responses/collaboration.ts` emits only proactive text at the top effort tier), so
+the upstream tool description remains the authority there.
+
+Two further V1/V2 differences worth knowing: the list gate is
+`hide_agent_type_model_reasoning` on V1 (hard-coded `false` at registration, so V1 always
+advertises) but `expose_spawn_agent_model_overrides` on V2 (default `true`; when false the list
+is omitted *and* the `model`/`reasoning_effort` schema fields are removed). And V2's
+`hide_spawn_agent_metadata` defaults true, which removes `service_tier`.
+
+`modelPickerOrder` (#1649) separates **OpenCodex guidance** from native advertisement.
+`SPAWN_PRIORITY_FIELD` preserves the natural priority used by `effectiveSubagentRoster`, so
+OpenCodex's preferred/guidance candidate calculation stays independent of display order.
+Native Codex ignores that private field: its advertised five on V1 and exposed V2 follow the
+native `priority` and may change when the picker is reordered. Exact-name override lookup is
+not restricted to those five advertised rows. V1 receives no OpenCodex preferred-roster
+injection; V2 can additionally receive natural-priority guidance when its catalog state permits.
+The helper tests pin guidance behavior, not native tool-description equivalence.
+
+A nonblank bare id in `modelPickerOrder` opts into complete-picker display ordering. Exact
+ids take precedence over raw/encoded equivalents; routed-only and empty lists keep the legacy
+ordering behavior. This does not change the separate `opencodex_spawn_priority` contract.
+Retained rows recompute their natural ranks from the current featured roster and account-selector
+stride before display order is applied, so a discovery outage cannot preserve an obsolete
+featured or picker rank. Canonical `opencode-go` rows retain their configured reasoning ladder
+and provider-scoped context metadata both when generated and when merged from retained catalog
+state; `deepseek-v4.1-flash` therefore keeps its 1,048,576-token window, while synthetic max/ultra
+choices are not added to that provider's declared ladder.
+The first-party DeepSeek `deepseek-flash` row declares native `text` and `image` input and therefore
+does not require the vision sidecar by default; explicit `noVisionModels` or text-only declarations
+remain authoritative. First-party `deepseek-chat`, `deepseek-reasoner`, and `deepseek-v4-flash`
+remain sidecar-backed by default. Zen routes are unchanged and unprobed in this update.
+
+Full derivation with per-line citations: `devlog/_plan/260816_codexrs_multiagent_v2_and_history_perf/013_five_cap_v1_vs_v2.md`.
+
+## Multipart encrypted task recovery
+
+`src/server/responses/agent-task-recovery.ts` admits at most 32 consecutive, individually complete
+Fernet-shaped parts with a combined 2 MiB ciphertext limit. Every encrypted slot must belong to
+that run. The existing credential admission precedes cache access; the cache key includes an
+unambiguous ordered sequence. One fixed-endpoint request forwards separate parts, and assignment
+replacement compares the complete original item snapshot before splicing the run. Recovery output
+is model-transcribed plaintext, not cryptographic fidelity proof, and no internal outage retry is added.
+
+`src/server/responses/encrypted-payload.ts` uses bounded concatenation only to recognize otherwise
+unreadable split-token shapes. The sanitizer preserves just those fragment objects and continues
+normalizing independent plaintext slots. Detection never authorizes reconstruction or recovery;
+other fragment layouts and mixed readable content retain their documented residual boundaries.
+
+## Routed agent-message ciphertext egress
+
+Two questions about an `agent_message` were asked in two places, and the gap between them was
+open. `hasUnreadableEncryptedAgentTask` asks whether the CURRENT worker task can be read and
+inspects only the tail item; `normalizeRoutedAgentMessages` asks whether EVERY part can be lowered
+onto a public message and forwards the private item verbatim when one cannot. An item mixing
+`input_text` with `encrypted_content` is readable by the first measure and unlowerable by the
+second, so it passed the guard, kept its private type through the raw Responses passthrough, and
+left the process as backend ciphertext plus an item type only the Codex backend declares. The
+destination answered `422 unknown item type "agent_message"` after the bytes were already sent.
+Position was incidental: a replayed child result sits mid-history, where a tail-only scan cannot
+see it, and the tail is exposed the same way once it is mixed.
+
+The repair already existed reactively. `prepareOpaqueBlobRecovery` replaces an undecryptable part
+with `[encrypted content omitted]`, which leaves the item lowerable, and it ran after an upstream
+rejection. A destination that cannot accept the private item under any circumstances was never
+going to answer that request, so the round trip only served to send the ciphertext.
+`stripAgentMessageCiphertextInPlace` in `src/server/responses/encrypted-payload.ts` applies the
+same repair before dispatch, and `src/server/responses/core.ts` runs it against the final route,
+after `expandPreviousResponseInput`, after the sanitizer has rewritten plaintext parked in
+encrypted slots, and after encrypted-task recovery has had its chance to produce real plaintext
+instead of a marker.
+
+The two kinds of slot are judged differently, because they carry different guarantees. An
+`encrypted_content` slot holds ciphertext by definition, so it is stripped whatever it holds:
+demanding a well-formed token there would reopen the same defect one payload later, since a
+truncated token, a standard-base64 blob carrying `+` or `/`, an unexpected version byte, or a run
+past the recovery size limits would each keep the item and forward the bytes. A text part carries
+no such guarantee, so it is matched strictly -- embedded runs that validate as Fernet, or a whole
+slot with the Fernet wire shape, which is the version prefix, the base64url alphabet and a
+canonical length of at least 100 divisible by four. Adjacent text fragments are joined before that
+test, so a token split across slots is still caught. `looksLikeBackendCiphertext` is deliberately
+NOT used on text: it is length >= 64 over a character class that a SHA-256 digest matches exactly
+at 64 characters, and replacing a digest a child deliberately printed would delete readable content
+to protect bytes that were never secret. Other item types are untouched: reasoning and
+function-output blobs keep the reactive opaque-blob recovery, which still rescues a destination
+that merely failed to decrypt something it was entitled to read, and which stays reachable for the
+canonical backend and for explicitly trusted routes.
+
+The repair resolves the same wire override the adapter is built from rather than restating routing
+policy, and runs for `openai-responses` whenever the destination is not the canonical Codex
+backend. `authMode: "forward"` is deliberately not that test: it describes how this proxy treats
+credentials, not who answers, and a forward-configured gateway at another origin receives the
+ciphertext like any third party. Only `isCanonicalOpenAiForwardProvider` is exempt, because it
+alone minted these bytes and can read them. The wire override matters for the reported destination,
+where the provider row names the Chat wire and a registry model default moves the model onto
+Responses. Translated wires are untouched because `inputContentParts` drops an encrypted part
+instead of forwarding it, and `canPassThroughEncryptedV2AgentTask` keeps an explicitly trusted
+route exempt. Combo children run the repair themselves: `concreteComboRequestBody` gives each
+target its own `structuredClone` and its own concrete route, so a sibling's repair is invisible to
+them and a target resolving to a routed Responses wire would otherwise send what the parent's own
+dispatch no longer does.
+
+Nothing here decrypts, and the tail NEW_TASK envelope keeps `unreadable_encrypted_agent_task` and
+its opt-in recovery unchanged: an unreadable current task still fails closed rather than reaching a
+child with a marker where its assignment should be. An `agent_message` carrying unknown parts but
+no ciphertext still reaches the wire unchanged and still draws the destination's own 422, which is
+a compatibility gap rather than an egress one. Covered by
+`tests/server/v2-agent-message-failfast.test.ts`.
+
+## Subagents
+
+New non-OAuth provider registrations carry `initialModelSelection` with a unique
+registration identity. Until reliable live/static discovery completes, public
+catalogs and model candidates withhold those providers' models; the provider itself
+stays active. At 20 or more canonical Models switch rows, initialization appends
+all corresponding disabled selectors once. Existing registrations and later manual
+choices are not reinitialized. OAuth/ChatGPT forwarding is exempt using the same
+usable-key override predicate as routing. Display aliases do not add switch rows.
+
+`src/providers/initial-model-selection-runtime.ts` commits the decision against a
+matching registration/inventory snapshot before catalog authority is captured.
+Ordinary management discovery also completes it with Codex integration OFF. The
+final catalog merge fences pending retained rows, including delete/re-add recovery.
+Raw management rows remain visible as pending/OFF. Config listener bindings are
+excluded from inventory identity because live and persisted bindings may differ.
+
+Codex `spawn_agent` advertises only the highest-priority first five picker-visible catalog rows.
+Use at most five configured `subagentModels` ids; they may contain bare catalog ids, routed
+`provider/model` ids, or exact account-qualified `<selector>/<native-openai-model>` ids. The
+dashboard offers bare native and routed choices; exact account-qualified choices are configured
+through `ocx agent subagents set` or the opencodex configuration. Retired native rows are
+excluded by the [shared catalog](catalog.md#shared-catalog); saved user choices are not rewritten
+by that retirement. Quota fallback retains independent shared/Reserve evidence.
+
+When account selectors are active, one featured bare native id expands into a complete selector row
+group. Catalog priorities use the selector count as a stride so each group stays together without
+widening Codex's five-row advertisement window. Fresh defaults are Astra, Sol, Terra, Luna, 5.5.
+Startup upgrades unmarked rosters once: prepend `gpt-6-astra`, retain the first four unique
+non-Astra choices, then move retained bare `gpt-5.5` last. The old fifth choice is dropped;
+an unmarked empty list becomes Astra only, and an unset list receives the fresh defaults.
+`subagentModelsVersion: 1` records completion, so later user edits (including an empty list or
+removing Astra) persist. The migration rebases on the latest disk config under the existing
+mutation lock; failed persistence degrades to an in-memory roster for that run without a stale
+whole-config overwrite. Existing disabled-model visibility rules remain unchanged.
+
+Quota-aware fallback walks a configured chain when the featured model is exhausted, probing
+availability on a bounded interval (default 60 s, `src/codex/subagent-model-fallback.ts`). It rewrites
+the requested model id only; effort remains owned by the caps described under
+[Ultra reasoning level](catalog.md#ultra-reasoning-level).
+
+`injectionModel` and `injectionEffort` are shared selections with two independent consumers.
+`multiAgentGuidanceEnabled` controls only OpenCodex-authored delegation guidance.
+`syncCodexSubagentDefaults` is a separate, default-off opt-in that applies the selected values to
+Codex's native `[agents]` defaults on sync/restart for newly created Codex tasks when OpenCodex owns
+the active Codex routing; external user-managed provider configs remain untouched. It does not itself
+cause delegation. The TOML edit owns only marker-tagged values, preserves existing unmarked
+user-owned `[agents]` defaults rather than overwriting them, and rejects ambiguous table shapes
+without changing the file.
+
+V2 proxy guidance uses `<opencodex_subagent_guidance>` for both built-in metadata and
+custom `injectionPrompt` bodies. The built-in text reports the resolved preferred model,
+effort, roster and fallback chain without prescribing delegation, spawn overrides or
+`fork_turns`. Custom bodies retain their placeholder behavior. The guidance switch and
+catalog-state gates still apply; stale or unknown catalog state suppresses proxy guidance.
+V1 uses the shared `MULTI_AGENT_MODE_HINT_RECOMMENDATION.text` inside `<multi_agent_mode>`
+at `max` or `ultra`. Only the separate explicit delegation-request trigger changes; user,
+authority, task-scope and collaboration-tool rules remain applicable. This is guidance,
+not an enforcement mechanism or a change to native settings or tool access.
+
+Replay deduplication compares the latest exact generated developer text separately for
+each tag family, preserving built-in → custom → built-in transitions without duplicating
+unchanged proxy metadata after a native policy change. Native and legacy-tagged history
+remain intact: tags do not establish historical authorship or revoke old instructions,
+and mixed-version transition detection is not guaranteed.
+
+The native mode hint is separate from proxy guidance and native `[agents]` defaults.
+`src/codex/multi-agent-mode-policy.ts` owns the proactive recommendation; the dashboard
+obtains it from `/api/v2` rather than maintaining its own preset. An explicit dashboard,
+API or CLI hint write passes through `setMultiAgentModeHintText`, which replaces only
+the two byte-exact released OpenCodex presets with the current recommendation. Other
+valid custom text, including whitespace variants, is preserved. Reads, unrelated writes
+and upgrades do not migrate stored hints. The writer retains its native capability check
+and stores only `features.multi_agent_v2.multi_agent_mode_hint_text` in Codex TOML;
+`null` removes that key. The hint affects new native Codex sessions when their v2 surface
+is active, without changing reasoning effort or the proxy guidance switch.
+
+Claude Code `ocx-*` agent definitions consume the same effective `claudeCode.blockedSkills` policy
+as inbound bundle elision. When the list is non-empty (default: `claude-api`), generated definitions
+whose marker-stripped model resolves to a routed id receive a preventive instruction not to invoke
+those skills. Direct `provider/model` selectors are routed even when their inbound resolution is
+identity. The only unguarded `ocx-self` case is an identity-resolved `claude|anthropic` model while
+native passthrough is enabled; `modelMap` claims and `nativePassthrough:false` restore the guard. The
+guard avoids creating oversized skill messages before the proxy can intervene; inbound elision remains
+the fallback if a client still sends a blocked bundle. An explicit empty list disables both routed-model
+behaviors.
+
+> Decision record: [ADR-0027](decisions/ADR-0027-subagents.md)
+
+### Saved picker presets
+
+The Models page saves routed snapshots in `modelPickerOrder` and records their origin in
+`modelPickerOrderMode` (`alphabetical`, `provider`, `most-used`). Mode is UI provenance, not a
+catalog sorting policy: catalog writers consume the saved array. Routed-only featured/native
+bands and complete-picker natural-rank preservation remain as described above. Public
+`buildCatalogEntries` accepts the order as its final argument and applies the complete-order
+pass after building. On-disk convergence retains its existing post-merge final pass.
+
+Claude ModelInfo ordering receives optional `{ modelPickerOrder, featured }` after `fastRows`.
+It orders routed output groups after alias deduplication, preserving the collision winner and
+base/1M/Fast siblings. Native groups and explicit Desktop profile ownership are unchanged.
+Native Codex advertisements still follow display priority; private guidance ranks do not freeze them.
+
+Codex display-cache expiry, retained main-policy evidence, and reset history follow the
+[quota cache contract](providers/openai-tiers.md#quota-cache-and-short-window-history).
+
+Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger.
+
+Connected CLI usage follows the [client-scoped hub usage contract](gui-and-management-api.md#usage-accounting); local management and account data remain separate.
+
+Remote Workspace uses a separate, explicitly enabled server surface with structural WebSocket callbacks and awaited per-server cleanup; [its contract](remote-workspace.md) owns that integration.
+
+Listener startup diagnostics follow [the runtime lifecycle contract](runtime.md#lifecycle); malformed optional listener blocks follow [config loading](config.md#config-surface).
+Chat helper admission in `src/server/responses/core.ts` follows the
+[deferred stored-main contract](providers/openai-tiers.md): only a needed Direct OpenAI helper
+claims stored main, after terminal vision, routed vision and search exclusions.
+
+Subagent automatic pool preview returns no candidate when all pool plans are excluded; explicit account-qualified models retain the [selection-policy distinction](providers/openai-tiers.md#automatic-pool-plan-exclusions).
+
+Provider-level Combo eligibility uses explicit inference evidence for the current single credential; account-specific admission remains separate. See [scoped provider quota](runtime.md#scoped-provider-quota-for-combo-selection).
+
+The management quota DTO keeps Combo editing aligned with scoped inference evidence;
+see [Combo editor routing quota](gui-and-management-api.md#combo-editor-routing-quota).
+
+Optional Codex transport-hint suppression is scoped to canonical Responses client output;
+its defaults and exclusions are owned by [Responses transport](transports/responses.md).
+
+Final-route summary visibility is recomputed after fallback from the original Responses preference; an earlier provider opt-in does not carry into a later provider. See [reasoning presentation](providers/chat-compat.md).
+
+## Paginated history writer boundary
+
+`src/codex/history-provider.ts` refuses external writes to paginated or migration-capable history. `src/codex/inject.ts` checks affected rows and manifest-owned restore targets before and after config/profile/journal changes, including successful journal and fallback restores, and compensates detected migration. Failed config restore stops later catalog/history work and rolls back a coordinated remove transition. See the [history writer contract](codex-home.md#paginated-history-writer-boundary) for guarantees and concurrent-writer limits.
+
+Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback and preserved affinity.
+
+Claude replay carries [Go conversation affinity](data-planes/inbound-compat.md#claude-affinity-at-final-go-dispatch)
+privately to final dispatch; preliminary route selection does not inject Go-only headers.
+
+Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
+
+Private pool credential metadata follows the [quota-history publication identity contract](providers/openai-tiers.md#quota-history-publication-identity); credential-only and account DTO projections omit it.
+
+Pool quota producers and account commands follow the [bounded raw-observation contract](providers/openai-tiers.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
+
+The account history response can include a [low-confidence effective capacity estimate](providers/openai-tiers.md#observed-effective-token-capacity); usage normalization retains local-answer provenance so local responses cannot supply samples.
+
+Account quota surfaces use [safe probe diagnostics](transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
+
+Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](transports/responses.md) documents this boundary, and native Chat removes effort only for an explicit empty declaration or no-reasoning model.
+
+Live sideband admission and its bounded upstream handshake follow the [runtime contract](runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
+
+The [explicit model-capability contract](config.md#explicit-per-model-capability-declarations) preserves operator declarations through provider storage and catalog capture; it does not infer upstream capability or change this surface's routing behavior.
+
+Exact [model input declarations](config.md#explicit-per-model-capability-declarations) now feed text-only eligibility and catalog hints; existing image-description/omission handling consumes them before the main upstream send.
+
+Provider-scoped approval reviewer settings are projected by the [catalog owner](catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior.
+
+Renamed fixed-key providers receive [missing reasoning metadata](catalog.md#renamed-destination-reasoning-metadata) during derivation; explicit per-model entries and provider defaults retain precedence.

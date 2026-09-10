@@ -175,7 +175,7 @@ export function listPendingTeardowns(): OutstandingTeardown[] {
   }
   const out: OutstandingTeardown[] = [];
   for (const name of names) {
-    // One naming rule, shared with the npm launcher: the two lanes drifting apart is
+    // One naming rule, shared with the package launcher: the two lanes drifting apart is
     // exactly how the Node updater stopped seeing receipts at all.
     if (!isPendingTeardownFileName(name)) continue;
     const nonce = pendingTeardownNonceFromFileName(name)!;

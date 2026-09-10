@@ -17,6 +17,9 @@ const USAGE = `Usage:
   ocx account main list [--json]
   ocx account main register <label> [--json]
   ocx account main add <label>
+  ocx account main reauth --device [--no-wait] [--json]
+  ocx account main reauth status --flow <id> [--json]
+  ocx account main reauth cancel --flow <id> [--json]
   ocx account main switch <profile-id-or-label> --yes [--json]
   ocx account main recover [--rollback --yes] [--json]
 
@@ -185,6 +188,83 @@ export async function cmdNativeMainAccount(args: string[], deps: AccountDeps): P
   const rollback = flag(args, "--rollback");
   const baseUrl = await resolveBaseUrl(deps);
   if (!baseUrl) return proxyUnreachable();
+
+  if (sub === "reauth") {
+    // #3898: same-identity device reauth of the native __main__ slot via the
+    // dedicated management namespace; /api/codex-auth/login stays pool-only.
+    if (confirmed || rollback) return reject(args);
+    const noWait = flag(args, "--no-wait");
+    const device = flag(args, "--device");
+    const flowIndex = args.indexOf("--flow");
+    const flowId = flowIndex >= 0 ? args.splice(flowIndex, 2)[1] : undefined;
+    const action = args.shift();
+    if (args.length > 0) return reject(args);
+
+    const printStatus = (status: Record<string, unknown>): void => {
+      if (wantsJson) { console.log(JSON.stringify(status, null, 2)); return; }
+      console.log("status: " + String(status.status ?? "unknown"));
+      if (typeof status.verificationUrl === "string" && status.verificationUrl) {
+        console.log("url: " + status.verificationUrl);
+      }
+      if (typeof status.deviceCode === "string" && status.deviceCode) {
+        console.log("deviceCode: " + status.deviceCode);
+      }
+      if (typeof status.code === "string" && status.code) {
+        console.log("failure: " + status.code);
+      }
+    };
+
+    if (action === "status" || action === "cancel") {
+      if (!flowId || device || noWait) return reject(args);
+      const query = "/api/codex-auth/main/reauth-device?flowId=" + encodeURIComponent(flowId);
+      const result = action === "status"
+        ? await apiJson(deps, baseUrl, "GET", query)
+        : await apiJson(deps, baseUrl, "DELETE", query);
+      if (result.status === 0) return proxyUnreachable(result.transportError);
+      if (result.status !== 200) return apiError(result.json, "failed to " + action + " the native main reauth", result.status);
+      printStatus(result.json);
+      return 0;
+    }
+
+    if (action !== undefined || !device) return reject(args);
+    const started = await apiJson(deps, baseUrl, "POST", "/api/codex-auth/main/reauth-device");
+    if (started.status === 0) return proxyUnreachable(started.transportError);
+    if (started.status !== 200) return apiError(started.json, "failed to start the native main device reauth", started.status);
+    const startFlowId = typeof started.json.flowId === "string" ? started.json.flowId : "";
+    if (!startFlowId) {
+      console.error("The proxy returned an invalid reauth flow.");
+      return 1;
+    }
+    // The URL and human code arrive with the usercode response, a beat after start.
+    let pending = started.json;
+    const statusQuery = "/api/codex-auth/main/reauth-device?flowId=" + encodeURIComponent(startFlowId);
+    for (let attempt = 0; attempt < 50 && !pending.deviceCode; attempt += 1) {
+      await Bun.sleep(200);
+      const polled = await apiJson(deps, baseUrl, "GET", statusQuery);
+      if (polled.status === 200) pending = polled.json;
+    }
+    if (noWait) {
+      printStatus({ flowId: startFlowId, ...pending });
+      if (!wantsJson) console.log("follow up: ocx account main reauth status --flow " + startFlowId);
+      return 0;
+    }
+    // Blocking wait bounded by the service flow expiry (15-minute grant + margin).
+    const deadline = Date.now() + 16 * 60_000;
+    for (;;) {
+      if (pending.status !== "pending" && pending.status !== "committing") break;
+      if (Date.now() >= deadline) {
+        console.error("The reauth flow did not finish within the device grant window; check status with --flow " + startFlowId + ".");
+        return 1;
+      }
+      await Bun.sleep(2_000);
+      const polled = await apiJson(deps, baseUrl, "GET", statusQuery);
+      if (polled.status === 0) return proxyUnreachable(polled.transportError);
+      if (polled.status !== 200) return apiError(polled.json, "failed to poll the native main reauth", polled.status);
+      pending = polled.json;
+    }
+    printStatus({ flowId: startFlowId, ...pending });
+    return pending.status === "succeeded" ? 0 : 1;
+  }
 
   if (sub === "doctor" || sub === "list") {
     if (args.length > 0 || confirmed || rollback) return reject(args);

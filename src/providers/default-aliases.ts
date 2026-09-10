@@ -51,7 +51,11 @@ export const DEFAULT_MODEL_ALIASES: ReadonlyArray<{ match: RegExp; alias: string
   { match: /^claude-haiku/, alias: "haiku" },
   { match: /^gemini-3(?:\.\d+)?-pro/, alias: "g3p" },
   { match: /^gemini-3(?:\.\d+)?-flash/, alias: "g3f" },
+  // Ordered before the V4 rule on purpose: `builtinRule` takes the first match, and
+  // `/^deepseek-v4/` also matches `deepseek-v4.1-flash`.
+  { match: /^deepseek-v4\.1/, alias: "ds41" },
   { match: /^deepseek-v4/, alias: "ds4" },
+  { match: /^deepseek-flash/, alias: "dsf" },
   { match: /^grok-4/, alias: "grok" },
 ];
 

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useI18n, type TFn, type Locale } from "../i18n/shared";
+import type { UsageReadMetadata } from "../usage-summary-resource";
+import { UsageIncompleteNotice } from "../components/usage-incomplete-notice";
 import { formatProviderDisplayName } from "../provider-icons";
 import { formatTokens } from "../format-tokens";
 import { formatEstimatedUsdValue as formatUsdEstimate } from "../intl-formatters";
@@ -79,7 +81,7 @@ interface UsageProvider {
 
 class UsageWindowMismatchError extends Error {}
 
-interface UsageResponse {
+interface UsageResponse extends UsageReadMetadata {
   range: Range;
   surface: UsageSurface;
   since: number | null;
@@ -989,6 +991,7 @@ export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBas
       ) : (
         <>
           {state.showError && <Notice tone="err">{t(connected ? "usage.hubOffline" : "usage.loadError")}</Notice>}
+          <UsageIncompleteNotice data={data} />
           {data?.historyTruncated && (
             // Naming the loaded window is the point: without it, `30d` and "Available history"
             // look identical on a busy installation even though both may cover far less than

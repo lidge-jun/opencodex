@@ -1,3 +1,4 @@
+import type { QuotaFailureCode } from "../../../../src/providers/quota-types";
 /**
  * provider-workspace/types.ts — shared view-model types for the Providers
  * workspace shell/rail/detail (WP080a). Data shapes only; no React.
@@ -46,6 +47,7 @@ export interface AccountQuotaReading {
   quotaMode?: AccountQuotaMode;
   quota?: AccountQuota | null;
   quotaUnavailable?: boolean;
+  quotaFailure?: QuotaFailureCode;
   /** Client-owned enrichment state, never inferred from missing quota data. */
   quotaPending?: boolean;
 }

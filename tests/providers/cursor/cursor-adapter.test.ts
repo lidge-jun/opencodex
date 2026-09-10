@@ -4,6 +4,7 @@ import {
   cursorExecDeniedMessage,
 } from "../../../src/adapters/cursor";
 import {
+  clearCursorOverflowRemintForTests,
   clearCursorThreadContinuityForTests,
   lookupCursorThreadConversation,
 } from "../../../src/adapters/cursor/thread-continuity";
@@ -815,5 +816,394 @@ describe("Cursor adapter live transport", () => {
     const done = events.find(event => event.type === "done");
     expect(done && done.type === "done" ? done.providerState?.cursor?.checkpointRef : undefined).toBeUndefined();
     clearCursorCheckpointsForTests();
+  });
+});
+const LARGE_OVERFLOW_CONTENT = "word ".repeat(100_000);
+
+function bareOverflowError(): Error {
+  return Object.assign(
+    new Error("Cursor context limit exceeded: Cursor Connect error resource_exhausted: Error"),
+    { code: "resource_exhausted" },
+  );
+}
+
+function overflowTurnBody(threadId?: string): OcxParsedRequest {
+  return {
+    modelId: "cursor/auto",
+    context: { messages: [{ role: "user", content: LARGE_OVERFLOW_CONTENT, timestamp: 1 }] },
+    stream: false,
+    options: {},
+    _cursorIdentityScope: "acct-overflow-remint",
+    ...(threadId ? { _clientThreadId: threadId } : { _cursorConversationId: "cursor_overflow_base" }),
+  };
+}
+
+describe("Cursor overflow conversation remint", () => {
+  test("first bare overflow surfaces without reminting the conversation id", async () => {
+    clearCursorOverflowRemintForTests();
+    let attempts = 0;
+    const seen: string[] = [];
+    const adapter = createCursorAdapter({
+      ...provider,
+      apiKey: "cursor-token",
+    }, {
+      createTransport: () => ({
+        async *run(request) {
+          attempts += 1;
+          seen.push(request.conversationId);
+          throw bareOverflowError();
+        },
+        writeClient() {},
+      }),
+    });
+
+    const body = overflowTurnBody("overflow-surface-first");
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => events.push(event));
+
+    expect(attempts).toBe(1);
+    expect(seen).toHaveLength(1);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "error",
+      message: expect.stringContaining("Cursor context limit exceeded"),
+    });
+  });
+
+  test("second overflow remints and persists thread override", async () => {
+    clearCursorOverflowRemintForTests();
+    clearCursorThreadContinuityForTests();
+    let attempts = 0;
+    const seen: string[] = [];
+    const adapter = createCursorAdapter({
+      ...provider,
+      apiKey: "cursor-token",
+    }, {
+      createTransport: () => ({
+        async *run(request) {
+          attempts += 1;
+          seen.push(request.conversationId);
+          if (attempts === 1) {
+            throw bareOverflowError();
+          }
+          yield { type: "done" } satisfies CursorServerMessage;
+        },
+        writeClient() {},
+      }),
+      rekeyContextUsage: () => {},
+    });
+
+    const threadId = "overflow-remint-thread";
+    const body = overflowTurnBody(threadId);
+
+    const surfaceEvents: AdapterEvent[] = [];
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => surfaceEvents.push(event));
+    expect(attempts).toBe(1);
+    expect(surfaceEvents.some(event => event.type === "error")).toBe(true);
+
+    seen.length = 0;
+    attempts = 0;
+    const remintEvents: AdapterEvent[] = [];
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => remintEvents.push(event));
+
+    expect(attempts).toBe(2);
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).not.toBe(seen[0]);
+    expect(remintEvents.some(event => event.type === "done")).toBe(true);
+    expect(lookupCursorThreadConversation(threadId, "acct-overflow-remint")).toBe(seen[1]);
+    expect(body._cursorConversationId).toBe(seen[1]);
+  });
+
+  test("fourth overflow skips remint after surface-first and three remints", async () => {
+    clearCursorOverflowRemintForTests();
+    let attempts = 0;
+    const adapter = createCursorAdapter({
+      ...provider,
+      apiKey: "cursor-token",
+    }, {
+      createTransport: () => ({
+        async *run() {
+          attempts += 1;
+          throw bareOverflowError();
+        },
+        writeClient() {},
+      }),
+    });
+
+    const body = overflowTurnBody("overflow-cap-skip");
+    await adapter.runTurn?.(body, { headers: new Headers() }, () => {});
+    expect(attempts).toBe(1);
+
+    attempts = 0;
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => events.push(event));
+
+    expect(attempts).toBe(4);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "error",
+      message: expect.stringContaining("Cursor context limit exceeded"),
+    });
+  });
+
+  test("quota-cue resource_exhausted does not remint and surfaces as rate limit", async () => {
+    clearCursorOverflowRemintForTests();
+    let attempts = 0;
+    const adapter = createCursorAdapter({
+      ...provider,
+      apiKey: "cursor-token",
+    }, {
+      createTransport: () => ({
+        async *run() {
+          attempts += 1;
+          throw Object.assign(
+            new Error("Cursor rate limit exceeded: resource_exhausted: too many requests"),
+            { code: "resource_exhausted" },
+          );
+        },
+        writeClient() {},
+      }),
+    });
+
+    const body = overflowTurnBody("overflow-quota-cue");
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => events.push(event));
+
+    expect(attempts).toBe(1);
+    expect(events[0]).toMatchObject({
+      type: "error",
+      message: expect.stringContaining("Cursor rate limit exceeded"),
+    });
+  });
+
+  test("does not overflow-remint on tool-result resumes", async () => {
+    clearCursorOverflowRemintForTests();
+    let attempts = 0;
+    const adapter = createCursorAdapter({
+      ...provider,
+      apiKey: "cursor-token",
+    }, {
+      createTransport: () => ({
+        async *run() {
+          attempts += 1;
+          throw bareOverflowError();
+        },
+        writeClient() {},
+      }),
+    });
+
+    const body: OcxParsedRequest = {
+      modelId: "cursor/auto",
+      context: {
+        messages: [
+          { role: "user", content: LARGE_OVERFLOW_CONTENT, timestamp: 1 },
+          {
+            role: "assistant",
+            model: "cursor/auto",
+            timestamp: 2,
+            content: [{ type: "toolCall", id: "call_1", name: "read_file", namespace: "mcp__fs", arguments: { path: "a.txt" } }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "read_file",
+            toolNamespace: "mcp__fs",
+            content: "FILE CONTENTS HERE",
+            isError: false,
+            timestamp: 3,
+          },
+        ],
+      },
+      stream: false,
+      options: {},
+      _cursorConversationId: "cursor_overflow_tool",
+      _clientThreadId: "overflow-tool-result",
+      _cursorIdentityScope: "acct-overflow-remint",
+    };
+
+    await adapter.runTurn?.(overflowTurnBody("overflow-tool-result"), { headers: new Headers() }, () => {});
+    attempts = 0;
+    await adapter.runTurn?.(body, { headers: new Headers() }, () => {});
+    expect(attempts).toBe(1);
+  });
+
+  test("does not overflow-remint compaction turns", async () => {
+    clearCursorOverflowRemintForTests();
+    let attempts = 0;
+    const seen: string[] = [];
+    const adapter = createCursorAdapter({
+      ...provider,
+      apiKey: "cursor-token",
+    }, {
+      createTransport: () => ({
+        async *run(request) {
+          attempts += 1;
+          seen.push(request.conversationId);
+          throw bareOverflowError();
+        },
+        writeClient() {},
+      }),
+    });
+
+    const body = overflowTurnBody("overflow-compaction");
+    await adapter.runTurn?.(body, { headers: new Headers() }, () => {});
+    attempts = 0;
+    seen.length = 0;
+    body._compactionRequest = true;
+    body._cursorIsolateConversation = true;
+    await adapter.runTurn?.(body, { headers: new Headers() }, () => {});
+
+    expect(attempts).toBe(1);
+    expect(seen).toHaveLength(1);
+  });
+
+  test("isolated non-compaction helpers preserve parent remint allowance and checkpoint", async () => {
+    clearCursorOverflowRemintForTests();
+    clearCursorThreadContinuityForTests();
+    clearCursorCheckpointsForTests();
+    let attempts = 0;
+    const adapter = createCursorAdapter({ ...provider, apiKey: "cursor-token" }, {
+      createTransport: () => ({
+        async *run() {
+          attempts += 1;
+          throw bareOverflowError();
+        },
+        writeClient() {},
+      }),
+    });
+    try {
+      const owner = "overflow-isolated-helper";
+      await adapter.runTurn?.(overflowTurnBody(owner), { headers: new Headers() }, () => {});
+      expect(attempts).toBe(1);
+      const parentRef = commitCursorCheckpoint({
+        conversationId: "cursor_parent_overflow",
+        identityScope: "acct-overflow-remint",
+        modelId: "default",
+        checkpointBytes: toBinary(ConversationStateStructureSchema, create(ConversationStateStructureSchema, {
+          pendingToolCalls: ["overflow-isolation-fixture"],
+        })),
+        coveredMessageCount: 1,
+      });
+      expect(parentRef).toBeDefined();
+      const helper = overflowTurnBody(owner);
+      helper._cursorIsolateConversation = true;
+      helper._cursorConversationId = "cursor_parent_overflow";
+      helper._providerContinuation = {
+        cursor: { conversationId: "cursor_parent_overflow", checkpointUsable: true, checkpointRef: parentRef },
+      };
+      expect(helper._compactionRequest).toBeUndefined();
+      attempts = 0;
+      const events: AdapterEvent[] = [];
+      await adapter.runTurn?.(helper, { headers: new Headers() }, event => events.push(event));
+      expect(attempts).toBe(1);
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ type: "error", message: expect.stringContaining("Cursor context limit exceeded") });
+      expect(getCursorCheckpoint(parentRef)?.ref).toBe(parentRef);
+      expect(lookupCursorThreadConversation(owner, "acct-overflow-remint")).toBeUndefined();
+
+      attempts = 0;
+      await adapter.runTurn?.(overflowTurnBody(owner), { headers: new Headers() }, () => {});
+      expect(attempts).toBe(4);
+    } finally {
+      clearCursorOverflowRemintForTests();
+      clearCursorThreadContinuityForTests();
+      clearCursorCheckpointsForTests();
+    }
+  });
+
+  test("does not overflow-remint after non-heartbeat output was emitted", async () => {
+    clearCursorOverflowRemintForTests();
+    let attempts = 0;
+    let emitPartial = false;
+    const adapter = createCursorAdapter({
+      ...provider,
+      apiKey: "cursor-token",
+    }, {
+      createTransport: () => ({
+        async *run() {
+          attempts += 1;
+          if (emitPartial) yield { type: "text", text: "partial" } satisfies CursorServerMessage;
+          throw bareOverflowError();
+        },
+        writeClient() {},
+      }),
+    });
+
+    const body = overflowTurnBody("overflow-after-output");
+    await adapter.runTurn?.(body, { headers: new Headers() }, () => {});
+    attempts = 0;
+    emitPartial = true;
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => events.push(event));
+
+    expect(attempts).toBe(1);
+    expect(events.some(event => event.type === "text_delta")).toBe(true);
+    expect(events.some(event => event.type === "error")).toBe(true);
+  });
+});
+
+
+describe("Cursor overflow accounting across requests", () => {
+  for (const ownerField of ["_clientThreadId", "_cursorClientThreadId"] as const) {
+    test(`${ownerField} retains the cap across successful remints`, async () => {
+      clearCursorOverflowRemintForTests();
+      clearCursorThreadContinuityForTests();
+      let attempts = 0;
+      let failNext = true;
+      const seen: string[] = [];
+      const adapter = createCursorAdapter({ ...provider, apiKey: "cursor-token" }, {
+        createTransport: () => ({
+          async *run(request) {
+            attempts++;
+            seen.push(request.conversationId);
+            if (failNext) { failNext = false; throw bareOverflowError(); }
+            yield { type: "done" } satisfies CursorServerMessage;
+          },
+          writeClient() {},
+        }),
+        rekeyContextUsage: () => {},
+      });
+      const body = () => {
+        const parsed = overflowTurnBody();
+        parsed._cursorConversationId = undefined;
+        parsed[ownerField] = `cross-request-${ownerField}`;
+        return parsed;
+      };
+      await adapter.runTurn?.(body(), { headers: new Headers() }, () => {});
+      expect(attempts).toBe(1);
+      for (let remint = 0; remint < 3; remint++) {
+        failNext = true;
+        const before = attempts;
+        const priorConversation = seen[seen.length - 1];
+        const events: AdapterEvent[] = [];
+        await adapter.runTurn?.(body(), { headers: new Headers() }, event => events.push(event));
+        expect(attempts - before).toBe(2);
+        expect(seen[seen.length - 2]).toBe(priorConversation);
+        expect(seen[seen.length - 1]).not.toBe(seen[seen.length - 2]);
+        expect(events.some(event => event.type === "done")).toBe(true);
+      }
+      failNext = true;
+      const before = attempts;
+      const events: AdapterEvent[] = [];
+      await adapter.runTurn?.(body(), { headers: new Headers() }, event => events.push(event));
+      expect(attempts - before).toBe(1);
+      expect(events.some(event => event.type === "error")).toBe(true);
+    });
+  }
+  test("conversation-only clients never gain an automatic remint allowance", async () => {
+    clearCursorOverflowRemintForTests();
+    let attempts = 0;
+    const adapter = createCursorAdapter({ ...provider, apiKey: "cursor-token" }, {
+      createTransport: () => ({
+        async *run() { attempts++; throw bareOverflowError(); },
+        writeClient() {},
+      }),
+    });
+    for (let turn = 0; turn < 3; turn++) {
+      const events: AdapterEvent[] = [];
+      await adapter.runTurn?.(overflowTurnBody(), { headers: new Headers() }, event => events.push(event));
+      expect(attempts).toBe(turn + 1);
+      expect(events.some(event => event.type === "error")).toBe(true);
+    }
   });
 });

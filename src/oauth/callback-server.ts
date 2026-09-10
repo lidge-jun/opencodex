@@ -37,6 +37,14 @@ function errorHtml(message: string): string {
 
 export type CallbackResult = { code: string; state: string };
 
+/** Close every response so pooled sockets cannot send the next login to a retired flow. */
+function closingResponse(body: string, status: number, contentType = "text/html"): Response {
+  return new Response(body, {
+    status,
+    headers: { "Content-Type": contentType, "Connection": "close" },
+  });
+}
+
 /**
  * The redirect URI advertised to providers must stay `localhost` (it is what the OAuth
  * apps have registered), but Windows commonly resolves `localhost` to `::1` first while
@@ -177,7 +185,7 @@ export abstract class OAuthCallbackFlow {
   #handleCallback(req: Request, expectedState: string): Response {
     const url = new URL(req.url);
     if (url.pathname !== this.callbackPath) {
-      return new Response("Not Found", { status: 404 });
+      return closingResponse("Not Found", 404, "text/plain");
     }
 
     const code = url.searchParams.get("code");
@@ -214,10 +222,7 @@ export abstract class OAuthCallbackFlow {
       });
     }
 
-    return new Response(ok ? SUCCESS_HTML : errorHtml(errMessage), {
-      status: ok ? 200 : consumeFlow ? 500 : 400,
-      headers: { "Content-Type": "text/html" },
-    });
+    return closingResponse(ok ? SUCCESS_HTML : errorHtml(errMessage), ok ? 200 : consumeFlow ? 500 : 400);
   }
 
   #waitForCallback(expectedState: string): Promise<CallbackResult> {

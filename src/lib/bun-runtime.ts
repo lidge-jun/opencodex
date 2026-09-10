@@ -176,7 +176,7 @@ export function durableBunRuntime(): DurableBunRuntime {
 /**
  * Bun path to bake into durable artifacts (launchd/systemd/Task Scheduler and
  * the Codex auto-start shim). Prefer the bundled binary — it lives under the
- * npm global prefix and survives across `ocx update` — and fall back to the
+ * manager-owned global package directory and survives across `ocx update` — and fall back to the
  * current runtime, which is Bun when launched normally.
  */
 export function durableBunPath(): string {

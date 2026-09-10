@@ -397,7 +397,7 @@ export function formatWindowsSchtasksError(error: unknown, args: string[]): stri
   const guidance = [
     "Windows access denied while running Task Scheduler.",
     `Command: schtasks ${argsText}`,
-    "Approve the Windows UAC prompt to install the background service, or run `ocx service install` from an elevated PowerShell window.",
+    "The OpenCodex task definition is scoped to the installing account and normally registers without elevation, so this denial is not fixed by approving a UAC prompt. Check `ocx service status`: if an existing `opencodex-proxy` task belongs to a different account, remove it from that account and retry `ocx service install`.",
   ].join(" ");
   if (operation === "create" && ownedCreateAccessDenied) {
     return `${guidance}\n${WINDOWS_SCHTASKS_CREATE_ACCESS_DENIED_MARKER}`;

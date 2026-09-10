@@ -144,6 +144,17 @@ Si Kiro s’arrête sans appeler l’outil d’achèvement, l’adaptateur effec
 - Envoie les niveaux ordinaires de `cursor/grok-4.5` avec les identifiants de protocole exacts issus de la découverte en direct de Cursor (`cursor-grok-4.5-low`, `-medium` ou `-high`). `cursor/grok-4.5-fast` reste sélectionnable, mais le modèle canonique `grok-4.5` est envoyé avec des paramètres distincts `effort` et `fast=true`.
 - L’exécution locale native de commandes sur le système de fichiers, le shell ou le réseau par Cursor est refusée par défaut. Les intégrations explicites `mcpServers` et `desktopExecutor` disposent d’activations distinctes ; `nativeLocalExec: "on"` active l’exécuteur intégré plus large et contourne la sémantique d’approbation et de bac à sable de Codex. L’ancien réglage `unsafeAllowNativeLocalExec: true` reste équivalent uniquement lorsque `nativeLocalExec` n’est pas défini.
 
+## `devin`
+
+**Cible :** `exa.api_server_pb.ApiServerService/GetChatMessage` de Cognition, en streaming Connect sur `server.codeium.com`.
+**Authentification :** clé d'API Devin/Cognition issue de `provider.apiKey` ou de l'en-tête authorization transmis. La connexion tente d'abord d'importer l'identifiant que le Devin CLI installé détient déjà : `devin auth login` achève la connexion PKCE propre au CLI et écrit un `devin-session-token` dans son `credentials.toml`, le même identifiant que `SeatManagementService.RegisterUser` délivre pour une connexion navigateur. Sans identifiant CLI exploitable, la connexion revient à l'authentification Auth0 dans le navigateur, puis échange le jeton collé via `RegisterUser` contre une clé durable. `devin-cli` ne subsiste que comme alias déprécié : `ocx login devin-cli` est toujours routé vers `devin`, et une configuration enregistrée sous l'ancien id est réécrite au démarrage.
+
+- Utilise `runTurn` plutôt que le chemin fetch/parse ordinaire. Les requêtes et les événements serveur passent par le cadrage protobuf manuel de `devin/cloud-direct/wire.ts`.
+- Les modèles sont découverts par compte avec `GetCascadeModelConfigs` ; ceux qui ne figurent pas dans l'offre disparaissent de la liste au lieu d'échouer au moment de la requête.
+- Cognition impose une limite de longueur sur les descriptions d'outils et une liste de phrases interdites. L'adaptateur réécrit les formulations connues et tronque les descriptions trop longues.
+- Les clés ne se renouvellent pas. Relancez `ocx login devin` lorsqu'une clé expire ou est révoquée.
+- Seul l'identifiant est local quand l'import CLI est utilisé ; le tour part vers Cognition dans les deux cas. Un ancien build livrait sous l'id `devin-cli` un second adaptateur qui exécutait le tour comme une session Agent Client Protocol contre un processus enfant local `devin acp`. Il a été retiré : une configuration qui nomme encore cet adaptateur est réécrite vers `devin` au démarrage, y compris une ligne au nom personnalisé comme `"devin-acp"`.
+
 ## `azure-openai` (alias : `azure`)
 
 **Cibles :** **Azure OpenAI**. Encapsule `openai-responses` (et utilise donc également `passthrough: true`).

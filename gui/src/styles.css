@@ -24,6 +24,7 @@
 @import "./styles-apikeys-workspace.css";
 @import "./styles-codex-set.css";
 @import "./styles-compatibility-matrix.css";
+@import "./styles-remote-workspace.css";
 
 :root {
   /* default: follow the OS; [data-theme] below pins color-scheme so light-dark() obeys it */
@@ -1797,14 +1798,8 @@ dialog.modal-overlay::backdrop {
   z-index: 1;
 }
 
-/* The action cluster is four nowrap items on one line — feedback, the Spark switch,
-   and two labelled buttons. Narrow the window and that line wants ~577px inside a
-   437px column, and because `.page-head` is a plain nowrap flex row the surplus did
-   not wrap or scroll: the trailing "Refresh quotas" button rendered ~140px past its
-   own container and was sliced by the viewport edge. Both axes wrap now — the
-   cluster drops below the title first, then breaks internally if it still does not
-   fit — so every control stays reachable at any width. Wrapping is inert while the
-   line fits, so the wide layout is byte-identical. */
+/* Let feedback wrap below the standalone page title when a translated message is
+   wider than the available row. Account actions use their own wrapping row below. */
 .codex-auth-page-head { align-items: flex-start; flex-wrap: wrap; row-gap: 8px; }
 .codex-auth-page-head__actions {
   display: flex;
@@ -1817,19 +1812,6 @@ dialog.modal-overlay::backdrop {
 /* Once the cluster owns its own line the title no longer competes for width, so it
    takes the full row rather than wrapping "Codex Auth" onto two lines. */
 .codex-auth-page-head > .page-title { flex: 1 1 auto; }
-/* Spark visibility switch: a labelled toggle, not a bare knob. An unlabelled switch sitting
-   between two labelled buttons is a guessing game, and this one changes what every card in the
-   page renders. The label carries the meaning; the toggle carries the state. */
-.codex-auth-spark-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  white-space: nowrap;
-}
-.codex-auth-spark-toggle__label {
-  font-size: 12px;
-  color: var(--muted);
-}
 /* The pause/refresh pair after it moved out of the page head. Right-aligned so it still
    reads as chrome for the account list below rather than a heading of its own, and it
    wraps because both labels grow substantially in several locales. */

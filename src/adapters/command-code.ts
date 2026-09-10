@@ -495,7 +495,6 @@ function supportedCommandCodeEffort(provider: OcxProviderConfig, modelId: string
   let wire = requested;
   const lower = canonicalId.toLowerCase();
   const needsAlias =
-    lower === "deepseek/deepseek-v4-pro" ||
     lower === "deepseek/deepseek-v4-flash" ||
     lower === "zai-org/glm-5.2";
   if (requested === "xhigh" && !supported.includes("xhigh") && supported.includes("max")) {

@@ -1,13 +1,14 @@
 /**
  * Cached "is an update available?" answer for the GUI sidebar badge.
  *
- * `/api/update/check` spawns `npm view` on every call (~1s, network-bound), so a
+ * `/api/update/check` spawns the installing manager's `view` command on every call
+ * (~1s, network-bound), so a
  * sidebar that polls it would spawn a process per tick on every page of the GUI.
  * The badge instead READS the 20h version cache the CLI update prompt already
  * maintains (`~/.opencodex/version.json`).
  *
  * This is deliberately read-only: it must never trigger a registry refresh. The GUI
- * polls it, so a refresh-on-read would let repeated polls launch repeated `npm view`
+ * polls it, so a refresh-on-read would let repeated polls launch repeated manager `view`
  * helpers with no coalescing. Cache warming stays with `ocx start`
  * (`triggerBackgroundRefreshIfStale` in `src/update/notify.ts`) and with the explicit
  * `/api/update/check` the user reaches by clicking the sidebar update button.

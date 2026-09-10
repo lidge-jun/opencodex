@@ -310,6 +310,160 @@ describe("system environment injection", () => {
   });
 });
 
+/**
+ * A launchd-started `claude` is a local client (#4236): on a hub bound to a tailnet address the
+ * only credential-free socket is the unauthenticated loopback listener, so that is the port the
+ * injected ANTHROPIC_BASE_URL must name — in the launchd domain AND in the shell env file.
+ *
+ * The tracking record keeps three separate facts because they genuinely separate here: `port` is
+ * the owning proxy's identity, `bindHost` is where its `/healthz` answers, and `clientBaseUrl` is
+ * what was injected. The first round of this change recorded only a `clientPort` and probed
+ * `127.0.0.1:<public port>` for liveness — an address that does not exist on this hub, so every
+ * probe failed, the record was reverted on every start, and the "another instance owns env" guard
+ * could never fire.
+ */
+describe("system environment local destination", () => {
+  const hubConfig = (listener?: { enabled: boolean; port?: number }): OcxConfig => ({
+    ...baseConfig,
+    // Pinned rather than detected: the bind-address branch only injects when opencodex owns
+    // authentication, so an ambient subscription on the test host would hide the case.
+    claudeCode: { systemEnv: true, authMode: "proxy" },
+    hostname: "100.76.170.81",
+    runtimeRole: "hub",
+    apiKeys: [{ id: "k1", name: "local", key: "ocx_data_this_proxy_key", createdAt: "2026-01-01T00:00:00Z" }],
+    ...(listener ? { unauthenticatedLoopbackListener: listener } : {}),
+  } as OcxConfig);
+
+  function shellEnvBody(): string {
+    const write = writeSpy.mock.calls.find(call => String(call[0]).includes("claude-env.sh"));
+    return String(write?.[1] ?? "");
+  }
+
+  test("a ported listener moves both injected destinations, not the tracked identity", async () => {
+    expect(await injectSystemEnv(4567, hubConfig({ enabled: true, port: 10104 }))).toEqual({ injected: true });
+    expect(launchctlCommands()).toContain("launchctl setenv ANTHROPIC_BASE_URL http://127.0.0.1:10104");
+    expect(shellEnvBody()).toContain("export ANTHROPIC_BASE_URL='http://127.0.0.1:10104'");
+    // port stays the proxy's identity; bindHost is its /healthz host; clientBaseUrl is what
+    // was injected. All three differ on this hub, which is why all three are recorded.
+    expect(JSON.parse(trackingFile!)).toMatchObject({
+      port: 4567,
+      bindHost: "100.76.170.81",
+      clientBaseUrl: "http://127.0.0.1:10104",
+    });
+  });
+
+  test("with the listener OFF the bind address is injected, with the credential it demands", async () => {
+    // The #4236 topology. `127.0.0.1:4567` does not exist here, so the first round's answer was
+    // a dead socket in the machine-wide launchd domain.
+    expect(await injectSystemEnv(4567, hubConfig())).toEqual({ injected: true });
+    const commands = launchctlCommands();
+    expect(commands).toContain("launchctl setenv ANTHROPIC_BASE_URL http://100.76.170.81:4567");
+    expect(commands).toContain("launchctl setenv ANTHROPIC_AUTH_TOKEN ocx_data_this_proxy_key");
+    expect(shellEnvBody()).toContain("export ANTHROPIC_BASE_URL='http://100.76.170.81:4567'");
+    expect(shellEnvBody()).toContain("export ANTHROPIC_AUTH_TOKEN='ocx_data_this_proxy_key'");
+    expect(JSON.parse(trackingFile!)).toMatchObject({
+      port: 4567,
+      bindHost: "100.76.170.81",
+      clientBaseUrl: "http://100.76.170.81:4567",
+    });
+  });
+
+  test("a destination that demands a credential nobody can supply is not injected at all", async () => {
+    // The launchd domain is machine-wide: a base URL that 401s every plain `claude` on the box
+    // is worse than no injection, so this degrades with a reason instead.
+    const noCredential = { ...hubConfig(), apiKeys: [] } as OcxConfig;
+    expect(await injectSystemEnv(4567, noCredential))
+      .toEqual({ injected: false, reason: "local inference requires a data-plane credential" });
+    expect(launchctlCommands().some(command => command.includes("setenv ANTHROPIC_BASE_URL"))).toBe(false);
+  });
+
+  test("the companion form and a plain install are unchanged", async () => {
+    expect(await injectSystemEnv(4567, hubConfig({ enabled: true }))).toEqual({ injected: true });
+    expect(launchctlCommands()).toContain("launchctl setenv ANTHROPIC_BASE_URL http://127.0.0.1:4567");
+    // clientBaseUrl is omitted when it carries nothing beyond `port`; bindHost is still recorded,
+    // because /healthz does NOT answer on loopback here.
+    expect(JSON.parse(trackingFile!).clientBaseUrl).toBeUndefined();
+    expect(JSON.parse(trackingFile!).bindHost).toBe("100.76.170.81");
+
+    execFileSpy.mockClear();
+    trackingFile = undefined;
+    expect(await injectSystemEnv(4567, baseConfig)).toEqual({ injected: true });
+    expect(launchctlCommands()).toContain("launchctl setenv ANTHROPIC_BASE_URL http://127.0.0.1:4567");
+    // A plain loopback install writes the byte-identical record it always did: no new fields.
+    const plain = JSON.parse(trackingFile!);
+    expect(plain.clientBaseUrl).toBeUndefined();
+    expect(plain.bindHost).toBeUndefined();
+  });
+
+  test("revert proves ownership against the injected base URL, not the tracked port", () => {
+    trackingFile = JSON.stringify({
+      pid: 123, port: 4567, bindHost: "100.76.170.81",
+      clientBaseUrl: "http://127.0.0.1:10104", injectedAt: "2026-07-11T00:00:00.000Z",
+    });
+    // What launchd actually holds is the listener's port: that IS ours.
+    launchctlBaseUrl = "http://127.0.0.1:10104";
+    expect(revertSystemEnv()).toEqual({ reverted: true });
+  });
+
+  test("revert recognizes a bind-address injection as ours too", () => {
+    trackingFile = JSON.stringify({
+      pid: 123, port: 4567, bindHost: "100.76.170.81",
+      clientBaseUrl: "http://100.76.170.81:4567", injectedAt: "2026-07-11T00:00:00.000Z",
+    });
+    launchctlBaseUrl = "http://100.76.170.81:4567";
+    expect(revertSystemEnv()).toEqual({ reverted: true });
+  });
+
+  test("liveness is probed on the BIND host and the public port, never on the listener", async () => {
+    // Two separate errors the first round made: the listener serves no /healthz (so probing its
+    // port 404s and reverts a LIVE proxy's env), and 127.0.0.1 is not where this proxy listens
+    // (so probing it failed every time and reverted on every start).
+    trackingFile = JSON.stringify({
+      pid: 123, port: 4567, bindHost: "100.76.170.81",
+      clientBaseUrl: "http://127.0.0.1:10104", injectedAt: "2026-07-11T00:00:00.000Z",
+    });
+    launchctlBaseUrl = "http://127.0.0.1:10104";
+    const probed: string[] = [];
+    globalThis.fetch = mock(async (input: unknown) => {
+      probed.push(String(input));
+      return new Response("ok");
+    }) as unknown as typeof fetch;
+
+    expect(await cleanStaleSystemEnv()).toEqual({ cleaned: false, reason: "proxy still alive" });
+    expect(probed).toEqual(["http://100.76.170.81:4567/healthz"]);
+    expect(unlinkSpy).not.toHaveBeenCalled();
+  });
+
+  test("a record with no bindHost still probes loopback, so old records are read unchanged", async () => {
+    trackingFile = JSON.stringify({ pid: 123, port: 4567, injectedAt: "2026-07-11T00:00:00.000Z" });
+    launchctlBaseUrl = "http://127.0.0.1:4567";
+    const probed: string[] = [];
+    globalThis.fetch = mock(async (input: unknown) => {
+      probed.push(String(input));
+      return new Response("ok");
+    }) as unknown as typeof fetch;
+
+    expect(await cleanStaleSystemEnv()).toEqual({ cleaned: false, reason: "proxy still alive" });
+    expect(probed).toEqual(["http://127.0.0.1:4567/healthz"]);
+  });
+
+  test("a tampered bindHost cannot become a probe URL", async () => {
+    // This field is interpolated into a fetch URL, so the shape is validated on read. A record
+    // carrying a path, a scheme, or whitespace falls back to loopback instead of being dialed.
+    for (const bindHost of ["evil.example.com/../x", "http://evil.example.com", "a b", ""]) {
+      trackingFile = JSON.stringify({ pid: 123, port: 4567, bindHost, injectedAt: "2026-07-11T00:00:00.000Z" });
+      launchctlBaseUrl = "http://127.0.0.1:4567";
+      const probed: string[] = [];
+      globalThis.fetch = mock(async (input: unknown) => {
+        probed.push(String(input));
+        return new Response("ok");
+      }) as unknown as typeof fetch;
+      expect(await cleanStaleSystemEnv()).toEqual({ cleaned: false, reason: "proxy still alive" });
+      expect({ bindHost, probed }).toEqual({ bindHost, probed: ["http://127.0.0.1:4567/healthz"] });
+    }
+  });
+});
+
 describe("system environment cleanup", () => {
   test("revertSystemEnv unsets owned variables and deletes the tracking file", () => {
     trackingFile = tracking();

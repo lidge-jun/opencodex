@@ -96,6 +96,85 @@ export const HEAD_CAPABILITIES: readonly HeadCapability[] = [
  */
 export const CAPABILITIES: readonly Capability[] = [
   {
+    "command": [
+      "remote-workspace",
+      "pair"
+    ],
+    "summary": "Enroll this executor with one Hub using a one-time code from stdin and locally approved roots.",
+    "routes": [],
+    "flags": [
+      {
+        "name": "--json",
+        "value": "boolean",
+        "summary": "Emit the public local executor status."
+      },
+      {
+        "name": "--pairing-code-stdin",
+        "value": "boolean",
+        "summary": "Read the one-time pairing code from stdin."
+      },
+      {
+        "name": "--root",
+        "value": "string",
+        "summary": "Approve an absolute workspace directory; repeatable."
+      },
+      {
+        "name": "--toolchain-root",
+        "value": "string",
+        "summary": "Approve a read-only toolchain directory; repeatable."
+      },
+      {
+        "name": "--executor-helper",
+        "value": "string",
+        "summary": "Select a reviewed native helper file."
+      },
+      {
+        "name": "--name",
+        "value": "string",
+        "summary": "Name this executor."
+      }
+    ],
+    "mutates": true,
+    "json": "payload",
+    "details": [
+      "Executor-local operation; Hub consent and session control stay in the dashboard."
+    ]
+  },
+  {
+    "command": [
+      "remote-workspace",
+      "agent"
+    ],
+    "summary": "Keep the paired executor connected to its Hub.",
+    "routes": [],
+    "flags": [],
+    "mutates": true,
+    "json": "none",
+    "details": [
+      "Executor-local operation; Hub consent and session control stay in the dashboard."
+    ]
+  },
+  {
+    "command": [
+      "remote-workspace",
+      "status"
+    ],
+    "summary": "Read local executor enrollment and available capabilities without printing credentials.",
+    "routes": [],
+    "flags": [
+      {
+        "name": "--json",
+        "value": "boolean",
+        "summary": "Emit the public local executor status."
+      }
+    ],
+    "mutates": false,
+    "json": "payload",
+    "details": [
+      "Executor-local operation; Hub consent and session control stay in the dashboard."
+    ]
+  },
+  {
     command: ["models", "price"],
     summary: "Read the saved manual price for an exact provider/model selector.",
     routes: [{ method: "GET", path: "/api/providers/{provider}/model-costs" }],
@@ -131,6 +210,34 @@ export const CAPABILITIES: readonly Capability[] = [
     mutates: false,
     json: "envelope",
     details: ["Reads /healthz plus local config; drives no management API route."],
+  },
+  {
+    command: ["hub", "invite"],
+    summary: "Mint a single-use pairing code on a hub and print the exact `ocx connect` line for one more machine.",
+    // Deliberately empty. The command DOES drive `POST /api/gui/pairing-grants` -- the attested
+    // local mint route `ocx gui pair` uses, authorized by a capability HMAC'd with the running
+    // proxy's own attestation secret rather than by the admin token, which is why it needs
+    // nothing exported in the shell. That route is answered in the composition root, ahead of
+    // `handleManagementAPI`, so it is not in MANAGEMENT_ROUTES; declaring it here would fail the
+    // capability/registry reconciliation rather than inform anyone. Widening the registry's scope
+    // to `src/server/index.ts` is its own change.
+    routes: [],
+    flags: [
+      { name: "--json", value: "boolean", summary: "Emit code, expiresAt, dataUrl, managementUrl, and command." },
+      { name: "--data-url", value: "string", summary: "Advertise this data origin instead of hub.dataPublicOrigin or the bind address." },
+      { name: "--management-url", value: "string", summary: "Confirm the management origin; it must equal hub.managementPublicOrigin." },
+      { name: "--clients", value: "string", summary: "Pre-select codex and/or claude in the printed connect command." },
+    ],
+    mutates: true,
+    json: "envelope",
+    details: [
+      "Hub only: refuses when runtimeRole is not hub, and requires a running attested proxy.",
+      "The code is secret, single-use and short-lived; it is bound to hub.managementPublicOrigin and to the connecting machine's loopback browser origin.",
+      "The bound browser origin is always printed; when it is not http://localhost:10100 the warning names the port the connecting machine must use.",
+      "Refuses when the advertised data origin would be loopback (a loopback or wildcard bind with no hub.dataPublicOrigin and no --data-url) rather than printing a line that dials the other machine itself.",
+      "Prints no data-plane token. Remote machines receive their own revocable per-client key from the exchange.",
+      "Mints through the attested local pairing-grant route, the same one ocx gui pair uses; no admin token is read.",
+    ],
   },
   {
     command: ["connect", "rotate"],
@@ -208,6 +315,40 @@ export const CAPABILITIES: readonly Capability[] = [
     ],
   },
   {
+    command: ["account", "history"],
+    summary: "Cached quota observations for one stored Codex pool account.",
+    routes: [{ method: "GET", path: "/api/codex-auth/quota/history" }],
+    flags: [
+      { name: "--json", value: "boolean", summary: "Emit the bounded observation history." },
+      { name: "--limit", value: "number", summary: "Return the newest 1 to 200 observations." },
+    ],
+    mutates: false,
+    json: "payload",
+    details: ["Use account history openai <pool-account-id>. Reads cached observations only; no refresh or warmup. Native main is not included."],
+  },
+  {
+    command: ["account", "main", "reauth"],
+    summary: "Reauthenticate the native main Codex login with a device code (#3898); headless hubs need no Codex App or keyring.",
+    routes: [
+      { method: "POST", path: "/api/codex-auth/main/reauth-device" },
+      { method: "GET", path: "/api/codex-auth/main/reauth-device" },
+      { method: "DELETE", path: "/api/codex-auth/main/reauth-device" },
+    ],
+    flags: [
+      { name: "--device", value: "boolean", summary: "Run the device-code flow (the only reauth mode)." },
+      { name: "--no-wait", value: "boolean", summary: "Print the flow handle and code without waiting for completion." },
+      { name: "--flow", value: "string", summary: "Flow id for status and cancel." },
+      { name: "--json", value: "boolean", summary: "Emit the flow status as JSON." },
+    ],
+    mutates: true,
+    json: "payload",
+    details: [
+      "Same-identity reauth only: the device login must complete for the ChatGPT account that already holds the native main slot, and the commit is fenced by the exclusive claim plus a path/hash/inode snapshot.",
+      "/api/codex-auth/login stays pool-only and keeps rejecting __main__; this namespace is the only device-reauth surface for the native main slot.",
+      "Payloads carry only flowId, status, the verification URL, the device code, and a closed set of failure codes -- never tokens, emails, or raw account ids.",
+    ],
+  },
+  {
     command: ["account", "list"],
     summary: "Codex OAuth accounts with pool priority and pause state.",
     routes: [{ method: "GET", path: "/api/codex-auth/accounts" }],
@@ -230,6 +371,27 @@ export const CAPABILITIES: readonly Capability[] = [
     mutates: true,
     json: "payload",
     details: ["CLI/admin-token refreshes only observe usage. After quota recovery, a human must click Refresh quotas in the dashboard to authorize model validation. Do not mint a GUI session to work around this consent boundary."],
+  },
+  {
+    command: ["account", "grok-reset-coupons"],
+    summary: "Inspect or redeem Grok billing reset coupons; redemption is journaled and idempotent.",
+    routes: [
+      { method: "GET", path: "/api/grok/reset-coupons" },
+      { method: "POST", path: "/api/grok/reset-coupons/consume" },
+    ],
+    flags: [
+      { name: "--consume", value: "boolean", summary: "Redeem one reset coupon; requires --yes." },
+      { name: "--yes", value: "boolean", summary: "Explicit confirmation required by --consume." },
+      { name: "--token-id", value: "string", summary: "Redeem a specific reset token instead of the default selection." },
+      { name: "--operation-id", value: "string", summary: "UUIDv4 making a redemption idempotent: retries replay the journaled outcome." },
+      { name: "--json", value: "boolean", summary: "Emit the coupon list or redemption result as JSON." },
+    ],
+    mutates: true,
+    json: "payload",
+    details: [
+      "Without --consume this is a read: remaining coupons and their validity windows.",
+      "The operation is journaled before the upstream call, so retrying the same --operation-id replays the recorded outcome instead of spending a second coupon.",
+    ],
   },
   {
     command: ["usage"],
@@ -288,10 +450,9 @@ export const CAPABILITIES: readonly Capability[] = [
     // Both pools, because both have the setting. The Codex pool reads its applied values
     // from the active payload; the Anthropic pool has its own GET.
     routes: [
-      { method: "GET", path: "/api/codex-auth/active" },
-      { method: "PUT", path: "/api/codex-auth/pool-strategy" },
-      { method: "GET", path: "/api/oauth/accounts/pool" },
-      { method: "PUT", path: "/api/oauth/accounts/pool" },
+      { method: "GET", path: "/api/pool/settings" },
+      { method: "PUT", path: "/api/pool/settings" },
+      { method: "PATCH", path: "/api/pool/settings" },
     ],
     flags: [{ name: "--json", value: "boolean", summary: "Emit the applied strategy and sticky limit as JSON." }],
     mutates: true,
@@ -300,23 +461,45 @@ export const CAPABILITIES: readonly Capability[] = [
       "A bare invocation reads and never writes.",
       "The APPLIED value is echoed, not the requested one, so a server-side normalization stays visible.",
       "Values are not re-validated in the CLI: the server owns the strategy names and the 1-100 sticky bound.",
-      "`anthropic` owns the full pool contract. Other OAuth providers reach the same endpoint with a generic subset (enabled/strategy/autoSwitchThreshold) whose settings persist but do not yet steer selection; `sticky` and `quotaWindow` are refused for them.",
+      "One route answers for every pool kind and declares which fields that kind honours in `supported`, so an unsupported field is a stated null rather than an absence. `anthropic` alone carries `quotaWindow`. Generic-provider settings steer selection only while `pool.kernel` is on. The legacy per-pool paths still work and are unchanged.",
     ],
   },
   {
     command: ["account", "sticky"],
     summary: "Show or set how many consecutive requests stay on one account.",
     routes: [
-      { method: "GET", path: "/api/codex-auth/active" },
-      { method: "PUT", path: "/api/codex-auth/pool-strategy" },
-      { method: "GET", path: "/api/oauth/accounts/pool" },
-      { method: "PUT", path: "/api/oauth/accounts/pool" },
+      { method: "GET", path: "/api/pool/settings" },
+      { method: "PUT", path: "/api/pool/settings" },
+      { method: "PATCH", path: "/api/pool/settings" },
     ],
     flags: [{ name: "--json", value: "boolean", summary: "Emit the applied strategy and sticky limit as JSON." }],
     mutates: true,
     json: "envelope",
     details: ["Only meaningful under the sticky-capable strategies; the pool strategy is the other half of this setting."],
   },
+  {
+    command: ["account", "auto-switch"],
+    summary: "Show or set the usage percentage at which a pool moves to another account.",
+    // Declared here rather than riding on `account strategy`, which is what it did before the
+    // unified route existed. `auto-switch` genuinely drives these three: the Codex pool reads
+    // its applied threshold from the active payload and writes through its own route, and a
+    // generic OAuth pool reads and writes the per-provider pool settings.
+    routes: [
+      { method: "GET", path: "/api/codex-auth/active" },
+      { method: "PUT", path: "/api/codex-auth/auto-switch" },
+      { method: "GET", path: "/api/oauth/accounts/pool" },
+      { method: "PUT", path: "/api/oauth/accounts/pool" },
+    ],
+    flags: [{ name: "--json", value: "boolean", summary: "Emit the stored threshold and whether it is applied." }],
+    mutates: true,
+    json: "envelope",
+    details: [
+      "A bare invocation reads and never writes.",
+      "`on` stores 80%, `off` stores 0%, and `threshold <n>` accepts 0-100.",
+      "For a generic OAuth pool, `inert: true` means the threshold is stored but not applied, `inert: false` means the pool is applying it, and an absent `inert` is an unknown capability.",
+    ],
+  },
+
   {
     command: ["logs"],
     summary: "Recent request log rows, filterable by provider, model, conversation, account, and status.",
@@ -537,6 +720,7 @@ export const CAPABILITIES: readonly Capability[] = [
     json: "payload",
     details: [
       "`sync --restart-codex` is not a substitute: it restarts only as a side effect after a catalog or cache write, so it cannot restart a healthy install on request.",
+      "Restarts the Codex desktop app as well as the app-servers, through the same module the CLI uses. When the proxy itself runs inside the Codex app it refuses instead, because restarting the app would kill the request.",
       "--yes is mandatory because this interrupts a running editor session, which must never happen because an agent guessed a subcommand.",
     ],
   },
@@ -602,8 +786,9 @@ export const CAPABILITIES: readonly Capability[] = [
     summary: "Synchronize client catalogs, including Aside profiles through the running server's mutation owner.",
     routes: [{ method: "POST", path: "/api/client-integrations/aside/sync" }],
     flags: [
-      { name: "--restart-codex", value: "boolean", summary: "Restart Codex app-servers after a catalog or cache write." },
-      { name: "--restart-desktop-app", value: "boolean", summary: "Restart the Codex desktop app after a catalog or cache write." },
+      { name: "--restart-codex", value: "boolean", summary: "Restart the Codex app-servers and fully quit and relaunch the Codex desktop app after a catalog or cache write, on macOS, Linux and Windows." },
+      { name: "--restart-app-server-only", value: "boolean", summary: "Restart only the Codex app-servers and leave the desktop app running; wins over --restart-codex when both are given." },
+      { name: "--restart-desktop-app", value: "boolean", summary: "Deprecated alias of --restart-codex." },
     ],
     mutates: true,
     json: "none",

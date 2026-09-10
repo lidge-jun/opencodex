@@ -191,6 +191,112 @@ describe("GUI/CLI Codex sync backend", () => {
     expect(errors).toEqual([refusal]);
   });
 
+  test("a stood-down relabel unit still injects the config and is reported as a warning", async () => {
+    let refreshCalls = 0;
+    const errors: string[] = [];
+
+    const result = await syncModelsToCodex(12345, config, { log: () => {}, error: line => errors.push(String(line)) }, {
+      admitCodexWrite: admittedSync,
+      refreshCodexModelCatalog: async () => {
+        refreshCalls++;
+        return {
+          added: 2,
+          path: "/tmp/opencodex-catalog.json",
+          catalogExists: true,
+          catalogWritten: true,
+          cacheSynced: true,
+          comboOmissions: [],
+          refreshOutcome: "committed" as const,
+        };
+      },
+      injectCodexConfig: async () => ({
+        success: true,
+        historyPreflightFailureReason: "history_paginated_requires_native_writer",
+        message: "Pointed Codex's built-in openai provider at the opencodex proxy.",
+      }),
+      currentExternalCodexModelProvider: () => null,
+      collectCodexHomeDiagnostic: () => homeDiagnostic(),
+    }, { catalogEvenWhenNotInjected: true });
+
+    // Paginated history retires the relabel unit only. Reporting this as a `catalog-only`
+    // success while config.toml kept no catalog path is what hid the model-picker
+    // regression: Codex offered its six native models and the sync still said synchronized.
+    expect(refreshCalls).toBe(1);
+    expect(result.status).toBe("applied");
+    expect(result.ok).toBe(true);
+    expect(result.added).toBe(2);
+    expect(result.catalogWritten).toBe(true);
+    expect(result.warning).toContain("history_paginated_requires_native_writer");
+    expect(result.warning).toContain("native writer");
+    expect(errors).toEqual([]);
+  });
+
+  test("an explicit sync no longer downgrades a surviving injector refusal to catalog-only", async () => {
+    let refreshCalls = 0;
+    const refusal = "Codex config injection refused: history_paginated_requires_native_writer.";
+
+    const result = await syncModelsToCodex(12345, config, null, {
+      admitCodexWrite: admittedSync,
+      refreshCodexModelCatalog: async () => {
+        refreshCalls++;
+        return {
+          added: 0,
+          path: "/tmp/opencodex-catalog.json",
+          catalogExists: true,
+          catalogWritten: false,
+          cacheSynced: false,
+          comboOmissions: [],
+          refreshOutcome: "refused" as const,
+        };
+      },
+      injectCodexConfig: async () => ({
+        success: false,
+        historyPreflightFailureReason: "history_paginated_requires_native_writer",
+        message: refusal,
+      }),
+      currentExternalCodexModelProvider: () => null,
+      collectCodexHomeDiagnostic: () => homeDiagnostic(),
+    }, { catalogEvenWhenNotInjected: true });
+
+    // The injector no longer refuses for this reason, so a refusal that does arrive is a
+    // real config/integrity failure and must not be dressed up as a catalog success.
+    expect(refreshCalls).toBe(0);
+    expect(result.status).toBe("applied");
+    expect(result.ok).toBe(false);
+    expect(result.catalogWritten).toBe(false);
+    expect(result.message).toBe(refusal);
+  });
+
+  // The reason matters: a paginated store no longer refuses the injection at all, so stubbing
+  // that one here would guard a shape the injector cannot produce. An operational reason still
+  // refuses, and an unattended sync must not soften it or gather a catalog first.
+  test("an unattended sync keeps the hard failure on a non-terminal history refusal", async () => {
+    let refreshCalls = 0;
+    const errors: string[] = [];
+    const refusal = "Codex config injection refused: history_injection_preflight_unavailable.";
+
+    const result = await syncModelsToCodex(12345, config, { log: () => {}, error: line => errors.push(String(line)) }, {
+      admitCodexWrite: admittedSync,
+      refreshCodexModelCatalog: async () => {
+        refreshCalls++;
+        throw new Error("catalog refresh must not run for an unattended sync");
+      },
+      injectCodexConfig: async () => ({
+        success: false,
+        historyPreflightFailureReason: "history_injection_preflight_unavailable",
+        message: refusal,
+      }),
+      currentExternalCodexModelProvider: () => null,
+      collectCodexHomeDiagnostic: () => homeDiagnostic(),
+    });
+
+    expect(refreshCalls).toBe(0);
+    expect(result.ok).toBe(false);
+    expect(result.catalogWritten).toBe(false);
+    expect(result.message).toBe(refusal);
+    expect(errors).toEqual([refusal]);
+  });
+
   test("the real successful injection preflight writes no Codex artifacts", () => {
     const configPath = join(TEST_CODEX_HOME, "config.toml");
     const profilePath = join(TEST_CODEX_HOME, "opencodex.config.toml");

@@ -26,6 +26,7 @@
 
 import {
   adapterEofIncompleteFrame,
+  type CodexSafetyBufferingFilterOptions,
   createSseTerminalOutputBoundary,
   doneFrame,
   failedTailFrame,
@@ -84,6 +85,8 @@ export type EagerRelayOptions = {
   postCancelDrainBytes?: number;
   /** Last known upstream failure to preserve when EOF would otherwise become adapter_eof. */
   upstreamError?: string;
+  /** Optional client-facing hint policy; inspection retains original frames. */
+  terminalBoundary?: CodexSafetyBufferingFilterOptions;
   /** Injectable clock for tests. */
   now?: () => number;
 };
@@ -114,7 +117,7 @@ export function relaySseEagerBounded(
   const terminalEncoder = new TextEncoder();
   const adapterEofFrame = adapterEofIncompleteFrame(terminalEncoder);
   const terminalSentinel = doneFrame(terminalEncoder);
-  const terminalBoundary = createSseTerminalOutputBoundary();
+  const terminalBoundary = createSseTerminalOutputBoundary(opts?.terminalBoundary);
   const activeRewrite: SseBlockRewrite | undefined = hooks.rewriteBlocks
     ?? (hooks.rewritePayload ? payloadRewriteAsBlockRewrite(hooks.rewritePayload) : undefined);
   const encodeFailedTail = (error: unknown): Uint8Array | null => {
@@ -463,6 +466,8 @@ export function relaySseEagerBounded(
         else hooks.onSynthetic(syntheticKind, syntheticReason);
       }
       if (cancelled && !hooks.sawTerminal()) {
+        // Finalize transport telemetry before the cancellation hook persists its usage row.
+        upstream.abort();
         hooks.onClientCancel();
       }
       if (cancelled || upstream.signal.aborted || syntheticKind === "failed" || deliveryFallbackSent) {

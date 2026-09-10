@@ -641,6 +641,47 @@ describe("registry-owned provider model discovery", () => {
     }
   });
 
+  // #4261: Antigravity is the one live-discovery row that never declared its own
+  // discovery spec, so the loop above did not cover it and the proof returned
+  // false for Antigravity's OWN canonical URL. Under a Clash/Surge/Mihomo TUN the
+  // benchmark fake-IP answer was then rejected and the model list came back empty.
+  // Pin all three halves: the declared spec is valid, the URL the adapter already
+  // sends is unchanged, and a custom base still fails the proof.
+  test("google-antigravity proves its own canonical CCA discovery RPC (#4261)", () => {
+    const entry = PROVIDER_REGISTRY.find(row => row.id === "google-antigravity");
+    if (!entry?.modelDiscovery) throw new Error("google-antigravity must declare modelDiscovery");
+    expect(providerModelDiscoverySpecError(entry.modelDiscovery)).toBeNull();
+
+    const seed = providerConfigSeed(entry);
+    const canonical = "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels";
+    expect(resolveProviderModelDiscoveryUrl(entry.id, seed, entry.baseUrl, canonical)).toBe(canonical);
+    expect(isRegistryModelDiscoveryUrl(entry.id, canonical)).toBe(true);
+    // Declaring the spec must not move the request the adapter already made.
+    expect(buildModelsRequest(seed, "agy-access-token", entry.id)).toMatchObject({
+      method: "POST",
+      url: canonical,
+    });
+
+    // allowBaseUrlOverride is set on this row, so a custom base must stay custom
+    // and must NOT inherit the fake-IP exception.
+    const custom = resolveProviderModelDiscoveryUrl(
+      entry.id,
+      { ...seed, baseUrl: "https://custom.example/proxy" },
+      "https://custom.example/proxy",
+      "https://custom.example/proxy/v1internal:fetchAvailableModels",
+    );
+    expect(custom).toBe("https://custom.example/proxy/v1internal:fetchAvailableModels");
+    expect(isRegistryModelDiscoveryUrl(entry.id, custom)).toBe(false);
+
+    for (const url of [
+      "https://evil.example/v1internal:fetchAvailableModels",
+      `${canonical}?token=1`,
+      `${canonical}#frag`,
+      canonical.replace("https:", "http:"),
+      "https://daily-cloudcode-pa.googleapis.com/v1internal:other",
+    ]) expect(isRegistryModelDiscoveryUrl(entry.id, url)).toBe(false);
+  });
+
   // The resolver accepts an effective (possibly custom) baseUrl while the proof
   // must stay registry-owned: a custom destination that merely resembles the
   // registry shape must NOT gain the benchmark-address exception. Nebius opts

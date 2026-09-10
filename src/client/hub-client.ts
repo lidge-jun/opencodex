@@ -1,4 +1,6 @@
 import { MAX_REMOTE_CATALOG_BYTES } from "../server/catalog-download";
+import { MAX_HUB_STATE_BYTES, parseHubStateBody, type HubStateDTO } from "../remote/hub-state";
+import { MAX_HUB_USAGE_BYTES, parseHubUsage, type HubUsageReport } from "../remote/hub-usage";
 import { readBoundedResponseBytes } from "../lib/bounded-body";
 import { clearableDeadline } from "../lib/abort";
 import type { Desktop3pModelEntry } from "../claude/desktop-3p";
@@ -469,6 +471,90 @@ export async function downloadClientCatalog(
   validateRemoteCatalog(parsed);
   const keyId = response.headers.get("x-opencodex-key-id")?.trim() || undefined;
   return { kind: "fresh", body, ...(keyId ? { keyId } : {}) };
+}
+
+/** Bounded own-key usage read; never falls back to a local management endpoint. */
+export async function fetchHubUsage(
+  serverUrl: string,
+  admissionToken: string,
+  query: URLSearchParams,
+  options: { timeoutMs?: number; fetchImpl?: typeof fetch } = {},
+): Promise<HubUsageReport> {
+  const origin = normalizeHubOrigin(serverUrl);
+  if (!isPairingTransportPermitted(origin)) {
+    throw new HubClientError("insecure_http_refused", "Client usage requires HTTPS or loopback HTTP");
+  }
+  const response = await fetchBounded(options.fetchImpl ?? fetch, `${origin}/v1/usage?${query}`, {
+    method: "GET",
+    cache: "no-store",
+    headers: new Headers({ Accept: "application/json", "x-opencodex-api-key": admissionToken }),
+  }, options.timeoutMs);
+  if (!response.ok) {
+    try { await response.body?.cancel(); } catch { /* best effort */ }
+    const message = response.status === 404 ? "Hub does not support client usage; upgrade the hub"
+      : response.status === 401 || response.status === 403 ? "Hub rejected this client's usage credential"
+      : `Hub usage request failed (${response.status})`;
+    throw new HubClientError(`hub_usage_http_${response.status}`, message, response.status);
+  }
+  if (!jsonCompatibleContentType(response)) {
+    try { await response.body?.cancel(); } catch { /* best effort */ }
+    throw new HubClientError("hub_usage_invalid", "Hub usage response was not JSON");
+  }
+  const text = await boundedText(response, MAX_HUB_USAGE_BYTES, { inactivityTimeoutMs: safeTimeout(options.timeoutMs) });
+  const report = parseHubUsage(parseJson(text, "hub_usage_invalid"));
+  if (!report) throw new HubClientError("hub_usage_invalid", "Hub usage response was invalid");
+  return report;
+}
+
+/**
+ * Read the hub's provider/login/roster state with the per-client DATA key (#4236).
+ *
+ * Sits beside `downloadClientCatalog` because it is the same kind of call: one bounded,
+ * schema-validated, unconditional GET on the data plane with the credential the client already
+ * holds. It deliberately has no management variant — the client has no hub management
+ * credential, and handing it one to read a list of booleans is the trade #809 already refused.
+ *
+ * A hub too old to serve the route answers 404, which surfaces as `hub_state_unsupported`. The
+ * caller must report that as "state unavailable" and MUST NOT fall back to the client's own
+ * local provider/login state: that silent fallback is the defect this route exists to fix.
+ */
+export async function fetchHubState(
+  serverUrl: string,
+  admissionToken: string,
+  options: { timeoutMs?: number; fetchImpl?: typeof fetch } = {},
+): Promise<HubStateDTO> {
+  const origin = normalizeHubOrigin(serverUrl);
+  const response = await fetchBounded(options.fetchImpl ?? fetch, `${origin}/v1/hub-state`, {
+    method: "GET",
+    headers: new Headers({ Accept: "application/json", "x-opencodex-api-key": admissionToken }),
+  }, options.timeoutMs, "headers");
+  if (response.status === 404) {
+    try { await response.body?.cancel(); } catch { /* best effort */ }
+    throw new HubClientError("hub_state_unsupported", "Hub does not serve /v1/hub-state; upgrade the hub", 404);
+  }
+  if (!response.ok) {
+    const code = response.status === 401 ? "hub_state_unauthorized" : `hub_state_http_${response.status}`;
+    try { await response.body?.cancel(); } catch { /* best effort */ }
+    throw new HubClientError(code, `Hub state request failed (${response.status})`, response.status);
+  }
+  if (!jsonCompatibleContentType(response)) {
+    try { await response.body?.cancel(); } catch { /* best effort */ }
+    throw new HubClientError("hub_state_content_type_invalid", "Hub state response was not JSON", response.status);
+  }
+  let text: string;
+  try {
+    text = await boundedText(response, MAX_HUB_STATE_BYTES, {
+      inactivityTimeoutMs: safeTimeout(options.timeoutMs),
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "TimeoutError") {
+      throw new HubClientError("unreachable", "Hub state read stalled", undefined, { cause: error });
+    }
+    throw error;
+  }
+  const parsed = parseHubStateBody(parseJson(text, "hub_state_invalid"));
+  if (!parsed) throw new HubClientError("hub_state_schema_invalid", "Hub state response was invalid", response.status);
+  return parsed;
 }
 
 function desktopSnapshotModels(value: unknown): Desktop3pModelEntry[] {

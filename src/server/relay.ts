@@ -183,7 +183,10 @@ export type SseTerminalOutputBoundary = {
  * terminal, and drops every later block/byte. A premature [DONE] is held until
  * a terminal arrives so clean EOF can synthesize one terminal and one sentinel.
  */
-export function createSseTerminalOutputBoundary(): SseTerminalOutputBoundary {
+export function createSseTerminalOutputBoundary(
+  options?: CodexSafetyBufferingFilterOptions,
+): SseTerminalOutputBoundary {
+  const dropSafetyBuffering = options?.dropCodexSafetyBuffering === true;
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
   const framer = new BoundedSseFrameBuffer(MAX_INSPECTION_SSE_FRAME_BYTES);
@@ -207,15 +210,22 @@ export function createSseTerminalOutputBoundary(): SseTerminalOutputBoundary {
       // behind EOF, so its log context cannot determine the outgoing terminal.
       const message = boundedBareUpstreamErrorMessage(parsed);
       if (message !== undefined) upstreamError = message;
+      const safetyBuffering = dropSafetyBuffering && parsed !== undefined
+        ? codexSafetyBufferingBlockAction(parsed) : "keep";
+      if (safetyBuffering === "drop") continue;
       const policyError = parsed !== undefined && isPolicyRewriteType(parsed)
         ? cyberPolicyTerminalError(parsed)
         : undefined;
-      const outboundBlock = policyError
-        ? encoder.encode(rewritePolicyTerminalBlock(
-          decoder.decode(frame.block),
-          policyFailurePayload(policyError, parsed),
-        ))
+      const policyPayload = policyError ? policyFailurePayload(policyError, parsed) : undefined;
+      let outboundBlock = policyPayload !== undefined
+        ? encoder.encode(rewritePolicyTerminalBlock(decoder.decode(frame.block), policyPayload))
         : frame.block;
+      if (safetyBuffering === "strip") {
+        outboundBlock = encoder.encode(stripCodexSafetyBufferingField(
+          decoder.decode(outboundBlock),
+          policyPayload !== undefined ? parseSsePayload(policyPayload) : parsed,
+        ));
+      }
       if (isDone) {
         done = true;
         if (responsesTerminal) {
@@ -287,11 +297,11 @@ export function relaySseWithFailedTail(
   body: ReadableStream<Uint8Array>,
   upstream: AbortController,
   onClientGone?: (reason?: unknown) => void,
-  opts?: { upstreamError?: string },
+  opts?: { upstreamError?: string; terminalBoundary?: CodexSafetyBufferingFilterOptions },
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   const encoder = new TextEncoder();
-  const terminalBoundary = createSseTerminalOutputBoundary();
+  const terminalBoundary = createSseTerminalOutputBoundary(opts?.terminalBoundary);
   let closed = false;
   const relayChunk = (
     controller: ReadableStreamDefaultController<Uint8Array>,
@@ -466,6 +476,29 @@ function parseSsePayload(payload: string): unknown | undefined {
 function isPolicyRewriteType(parsed: unknown): boolean {
   const type = asJsonRecord(parsed)?.type;
   return type === "response.failed" || type === "response.incomplete" || type === "error";
+}
+
+/**
+ * Codex emits its safety-buffering hint in the SSE body as well as in headers:
+ * a `response.metadata` event whose `metadata.type` is `safety_buffering`, or a
+ * `safety_buffering` field on another event. The metadata event is dropped whole;
+ * the field is stripped so the carrying event is otherwise relayed unchanged.
+ */
+function codexSafetyBufferingBlockAction(parsed: unknown): "keep" | "drop" | "strip" {
+  const root = asJsonRecord(parsed);
+  if (!root) return "keep";
+  if (root.type === "response.metadata") {
+    const metadata = asJsonRecord(root.metadata);
+    if (metadata?.type === "safety_buffering") return "drop";
+  }
+  return Object.hasOwn(root, "safety_buffering") ? "strip" : "keep";
+}
+
+function stripCodexSafetyBufferingField(block: string, parsed: unknown): string {
+  const root = asJsonRecord(parsed);
+  if (!root) return block;
+  const { safety_buffering: _safetyBuffering, ...rest } = root;
+  return replaceSseDataPayload(block, JSON.stringify(rest));
 }
 
 function rewritePolicyTerminalBlock(block: string, payload: string): string {
@@ -1461,7 +1494,31 @@ export function consumeForResponseLogMetadata(
  * body makes the caller (Codex) double-decode / truncate → "stream error" on every gpt passthrough.
  * Drop encoding + hop-by-hop headers; relay everything else (content-type, etc.) verbatim.
  */
-export function sanitizePassthroughHeaders(upstream: Headers): Headers {
+export const CODEX_SAFETY_BUFFERING_HEADERS = [
+  "x-codex-safety-buffering-enabled",
+  "x-codex-safety-buffering-faster-model",
+] as const;
+
+const CODEX_SAFETY_BUFFERING_HEADER_SET: ReadonlySet<string> = new Set(CODEX_SAFETY_BUFFERING_HEADERS);
+
+export interface CodexSafetyBufferingFilterOptions {
+  /**
+   * Drop Codex safety-buffering hints: the `x-codex-safety-buffering-*` response
+   * headers and the `safety_buffering` SSE metadata event / field. Absent and
+   * `false` relay everything unchanged.
+   */
+  dropCodexSafetyBuffering?: boolean;
+}
+
+/** Resolve the passthrough header policy from the loaded config (absent means "forward everything"). */
+export function codexSafetyBufferingFilterOptions(
+  config: { dropCodexSafetyBuffering?: boolean },
+): CodexSafetyBufferingFilterOptions {
+  return { dropCodexSafetyBuffering: config.dropCodexSafetyBuffering === true };
+}
+
+export function sanitizePassthroughHeaders(upstream: Headers, options?: CodexSafetyBufferingFilterOptions): Headers {
+  const dropSafetyBuffering = options?.dropCodexSafetyBuffering === true;
   const DROP = new Set([
     "content-encoding",
     "content-length",
@@ -1478,7 +1535,10 @@ export function sanitizePassthroughHeaders(upstream: Headers): Headers {
   ]);
   const out = new Headers();
   upstream.forEach((value, key) => {
-    if (!DROP.has(key.toLowerCase())) out.set(key, value);
+    const lower = key.toLowerCase();
+    if (DROP.has(lower)) return;
+    if (dropSafetyBuffering && CODEX_SAFETY_BUFFERING_HEADER_SET.has(lower)) return;
+    out.set(key, value);
   });
   return out;
 }

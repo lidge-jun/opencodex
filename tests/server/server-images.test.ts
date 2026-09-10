@@ -9,7 +9,8 @@ import { join } from "node:path";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { clearAccountNeedsReauth, clearAccountQuota } from "../../src/codex/auth-api";
 import { clearCodexUpstreamHealth, clearThreadAccountMap, getCodexUpstreamHealth } from "../../src/codex/routing";
-import { saveConfig } from "../../src/config";
+import { loadConfig, saveConfig } from "../../src/config";
+import { clearKeyCooldowns, rotateKeyOn429 } from "../../src/providers/key-failover";
 import { selectImagesProvider } from "../../src/providers/openai-sidecar";
 import { startServer } from "../../src/server";
 import { handleImages, IMAGES_RESPONSE_MAX_BYTES, readImageResponseBytes, setXaiResultPinnedDownloadForTests } from "../../src/server/images";
@@ -682,6 +683,144 @@ test("zstd-compressed request bodies are decoded before the relay", async () => 
   } finally {
     await server.stop(true);
     await upstream.stop(true);
+  }
+});
+
+
+test("a cooled committed key is replaced before the first keyed image send", async () => {
+  const captured: CapturedRequest[] = [];
+  const upstream = fakeImagesUpstream(captured);
+  clearKeyCooldowns();
+  const pooled = {
+    ...keyedProvider(upstream.url.toString().replace(/\/$/, "")),
+    apiKeyPoolStrategy: "round-robin",
+    apiKeyPool: [
+      { id: "first", key: "sk-platform-key" },
+      { id: "second", key: "sk-warm-key" },
+    ],
+  };
+  saveConfig({
+    port: 0,
+    defaultProvider: "openai-apikey",
+    openaiProviderTierVersion: 2,
+    providers: { openai: disabledOpenAiProvider, "openai-apikey": pooled },
+  } as unknown as OcxConfig);
+
+  // Cool the committed key the way a real 429 does, then point the stored selection back at it.
+  // This is the state an operator lands in after a rotation plus a restart or a config reload.
+  const live = loadConfig();
+  rotateKeyOn429(live, "openai-apikey", null, Date.now(), "sk-platform-key");
+  const restored = loadConfig();
+  restored.providers["openai-apikey"]!.apiKey = "sk-platform-key";
+  saveConfig(restored);
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}` },
+      body: JSON.stringify({ prompt: "a cat", model: "gpt-image-2" }),
+    });
+    expect(response.status).toBe(200);
+    expect(captured).toHaveLength(1);
+    // The warm key, on the FIRST send. This path builds its own Authorization header from a
+    // snapshot resolved before the pick, so a naive wiring would have sent sk-platform-key here
+    // while the picker had already committed sk-warm-key to config.
+    expect(captured[0].headers.get("authorization")).toBe("Bearer sk-warm-key");
+  } finally {
+    await server.stop(true);
+    await upstream.stop(true);
+    clearKeyCooldowns();
+  }
+});
+
+/**
+ * The pick COMMITS its choice before returning, so an unresolvable selection is not a reason to
+ * quietly reuse the previous key: that would authenticate a non-idempotent image POST with a
+ * credential the config no longer treats as active, and the previous key is the one that was
+ * cooling. Raised by CodeRabbit on #4292.
+ */
+test("an unresolvable selected key fails the keyed image send instead of reusing the old one", async () => {
+  const captured: CapturedRequest[] = [];
+  const upstream = fakeImagesUpstream(captured);
+  clearKeyCooldowns();
+  delete process.env.OCX_IMAGES_MISSING_KEY;
+  const pooled = {
+    ...keyedProvider(upstream.url.toString().replace(/\/$/, "")),
+    apiKeyPoolStrategy: "round-robin",
+    apiKeyPool: [
+      { id: "first", key: "sk-platform-key" },
+      // An env reference that is deliberately not set: a revoked keychain entry looks the same.
+      { id: "second", key: "\${OCX_IMAGES_MISSING_KEY}" },
+    ],
+  };
+  saveConfig({
+    port: 0,
+    defaultProvider: "openai-apikey",
+    openaiProviderTierVersion: 2,
+    providers: { openai: disabledOpenAiProvider, "openai-apikey": pooled },
+  } as unknown as OcxConfig);
+  const live = loadConfig();
+  rotateKeyOn429(live, "openai-apikey", null, Date.now(), "sk-platform-key");
+  const restored = loadConfig();
+  restored.providers["openai-apikey"]!.apiKey = "sk-platform-key";
+  saveConfig(restored);
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}` },
+      body: JSON.stringify({ prompt: "a cat", model: "gpt-image-2" }),
+    });
+    expect(response.status).toBe(500);
+    // Nothing was sent. Red control: restore the `?? candidates.keyed.apiKey` fallback and this
+    // becomes a 200 carrying Bearer sk-platform-key -- the cooled key the pool had left.
+    expect(captured).toHaveLength(0);
+  } finally {
+    await server.stop(true);
+    await upstream.stop(true);
+    clearKeyCooldowns();
+  }
+});
+
+test("without a configured strategy the keyed image send keeps the cooled key", async () => {
+  const captured: CapturedRequest[] = [];
+  const upstream = fakeImagesUpstream(captured);
+  clearKeyCooldowns();
+  const pooled = {
+    ...keyedProvider(upstream.url.toString().replace(/\/$/, "")),
+    apiKeyPool: [
+      { id: "first", key: "sk-platform-key" },
+      { id: "second", key: "sk-warm-key" },
+    ],
+  };
+  saveConfig({
+    port: 0,
+    defaultProvider: "openai-apikey",
+    openaiProviderTierVersion: 2,
+    providers: { openai: disabledOpenAiProvider, "openai-apikey": pooled },
+  } as unknown as OcxConfig);
+  const live = loadConfig();
+  rotateKeyOn429(live, "openai-apikey", null, Date.now(), "sk-platform-key");
+  const restored = loadConfig();
+  restored.providers["openai-apikey"]!.apiKey = "sk-platform-key";
+  saveConfig(restored);
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}` },
+      body: JSON.stringify({ prompt: "a cat", model: "gpt-image-2" }),
+    });
+    expect(response.status).toBe(200);
+    // Rotation stays reactive-only for an install that never asked for a strategy.
+    expect(captured[0].headers.get("authorization")).toBe("Bearer sk-platform-key");
+  } finally {
+    await server.stop(true);
+    await upstream.stop(true);
+    clearKeyCooldowns();
   }
 });
 

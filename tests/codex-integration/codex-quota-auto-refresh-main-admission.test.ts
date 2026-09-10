@@ -287,7 +287,7 @@ describe("quota auto-refresh native-main admission", () => {
     });
     await runCodexQuotaAutoRefresh(cfg, now, { persistCompleted: recordMarkers });
     expect(calls).toEqual([responsesUrl, responsesUrl]);
-    expect(models).toEqual(["gpt-5.4-mini", "gpt-5.5"]);
+    expect(models).toEqual(["gpt-5.6-luna", "gpt-5.5"]);
     expect(cfg.codexQuotaAutoRefresh?.[MAIN]?.lastWeeklyResetAt).toBe(RESET_MILLISECONDS);
     expect(getNativeMainProfileRequestCount()).toBe(0);
   });

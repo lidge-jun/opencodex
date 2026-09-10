@@ -1,4 +1,4 @@
-import type { OcxComboDefaultEffort, OcxComboTarget, OcxConfig } from "../types";
+import type { OcxComboDefaultEffort, OcxComboReasoningEffortMode, OcxComboTarget, OcxConfig } from "../types";
 import { resolveEffortAtOrBelow } from "../reasoning-effort";
 import { resolveComboId } from "./types";
 
@@ -59,9 +59,14 @@ export function concreteComboRequestBody(
   target: Pick<OcxComboTarget, "provider" | "model">,
   defaultEffort: OcxComboDefaultEffort | null,
   targetReasoningEfforts: readonly string[] | undefined,
+  reasoningEffortMode: OcxComboReasoningEffortMode = "strict",
 ): Record<string, unknown> {
   const clone = structuredClone(body) as Record<string, unknown>;
   clone.model = `${target.provider}/${target.model}`;
+  if (targetReasoningEfforts?.length === 0
+    || (reasoningEffortMode === "adaptive" && targetReasoningEfforts === undefined)) {
+    stripUnsupportedReasoningControls(clone);
+  }
   if (!defaultEffort) return clone;
   const reasoning = clone.reasoning;
   const needsDefault = reasoning === undefined || (
@@ -103,4 +108,17 @@ export function concreteComboRequestBody(
     clone.reasoning = { ...(reasoning as Record<string, unknown>), effort: resolvedEffort };
   }
   return clone;
+}
+
+function stripUnsupportedReasoningControls(body: Record<string, unknown>): void {
+  const reasoning = body.reasoning;
+  if (reasoning && typeof reasoning === "object" && !Array.isArray(reasoning)) {
+    const next = { ...(reasoning as Record<string, unknown>) };
+    delete next.effort;
+    if (Object.keys(next).length > 0) body.reasoning = next;
+    else delete body.reasoning;
+  }
+  delete body.reasoning_effort;
+  delete body.thinking_budget;
+  delete body.thinking;
 }

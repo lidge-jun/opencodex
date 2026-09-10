@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, jest, test } from "bun:test";
 import { loginChatGPT } from "../../src/oauth/chatgpt";
-import { loginChatGPTDevice } from "../../src/oauth/chatgpt-device";
+import { DEVICE_FETCH_TIMEOUT_MS, loginChatGPTDevice, loginChatGPTNativeDevice } from "../../src/oauth/chatgpt-device";
 import type { OAuthController } from "../../src/oauth/types";
 
 /**
@@ -242,5 +242,99 @@ describe("ChatGPT device auth", () => {
 
     expect(calls.urls[0]).toBe(USERCODE);
     expect(creds.accountId).toBe("acct_device_123");
+  });
+
+  test("loginChatGPTNativeDevice retains the id_token the pool projection drops (#3898)", async () => {
+    routeFetch();
+    const result = await loginChatGPTNativeDevice({});
+    expect(result.credential.accountId).toBe("acct_device_123");
+    expect(result.credential.refresh).toBe("refresh-value");
+    expect(result.idToken).toBe(idToken());
+  });
+
+  test("loginChatGPTNativeDevice refuses a grant without id_token", async () => {
+    routeFetch({ tokenBody: { access_token: "access-value", refresh_token: "refresh-value" } });
+    await expect(loginChatGPTNativeDevice({})).rejects.toThrow(/missing id_token/);
+  });
+
+  test("loginChatGPTNativeDevice refuses a grant without account identity", async () => {
+    routeFetch({ tokenBody: { access_token: "access-value", refresh_token: "refresh-value", id_token: "header.e30.sig" } });
+    await expect(loginChatGPTNativeDevice({})).rejects.toThrow(/missing account identity/);
+  });
+
+  test("every device fetch carries a fresh bounded signal (#3898)", async () => {
+    const signals: (AbortSignal | null | undefined)[] = [];
+    const urls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      urls.push(url);
+      signals.push(init?.signal);
+      if (url === USERCODE) {
+        return jsonResponse({ device_auth_id: "auth-id-opaque", user_code: "ABCD-EFGH" });
+      }
+      if (url === DEVICE_TOKEN) {
+        return jsonResponse({ authorization_code: "auth-code", code_verifier: "server-verifier" });
+      }
+      if (url === OAUTH_TOKEN) {
+        return jsonResponse({ access_token: "a", refresh_token: "r", id_token: idToken() });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as typeof fetch;
+    await loginChatGPTNativeDevice({});
+    expect(urls).toEqual([USERCODE, DEVICE_TOKEN, OAUTH_TOKEN]);
+    for (const signal of signals) {
+      expect(signal).toBeInstanceOf(AbortSignal);
+      expect(signal?.aborted).toBe(false);
+    }
+  });
+
+  test("the pool device login also carries the bounded per-fetch signal", async () => {
+    const signals: (AbortSignal | null | undefined)[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      signals.push(init?.signal);
+      if (url === USERCODE) {
+        return jsonResponse({ device_auth_id: "auth-id-opaque", user_code: "ABCD-EFGH" });
+      }
+      if (url === DEVICE_TOKEN) {
+        return jsonResponse({ authorization_code: "auth-code", code_verifier: "server-verifier" });
+      }
+      if (url === OAUTH_TOKEN) {
+        return jsonResponse({ access_token: "a", refresh_token: "r", id_token: idToken() });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as typeof fetch;
+    await loginChatGPTDevice({});
+    expect(signals.length).toBe(3);
+    for (const signal of signals) expect(signal).toBeInstanceOf(AbortSignal);
+  });
+
+  test("the per-fetch signal is a fresh composite whose abort fails the login (#3898)", async () => {
+    // The deadline itself is a named, bounded constant — far from the 15-minute
+    // grant TTL. bun's fake timers spin on AbortSignal.timeout in this suite,
+    // so the firing proof is the composition: a FRESH signal per fetch (never
+    // the caller's own), and its abort fails the login.
+    expect(DEVICE_FETCH_TIMEOUT_MS).toBeGreaterThan(0);
+    expect(DEVICE_FETCH_TIMEOUT_MS).toBeLessThanOrEqual(60_000);
+    // The 30s per-fetch deadline is an AbortSignal.timeout composed into every
+    // fetch; bun's fake timers drive AbortSignal.timeout (verified), but the
+    // combination spins inside this suite's fake-clock, so this test proves
+    // the composition instead: the signal the fetch receives is a FRESH
+    // composite (not the caller's own), and aborting it fails the login.
+    const caller = new AbortController();
+    const seen: (AbortSignal | null | undefined)[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      seen.push(init?.signal);
+      return await new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("The operation was aborted.", "AbortError")));
+      });
+    }) as typeof fetch;
+    const pending = loginChatGPTNativeDevice({ signal: caller.signal });
+    await Bun.sleep(10);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toBeInstanceOf(AbortSignal);
+    expect(seen[0]).not.toBe(caller.signal);
+    caller.abort();
+    await expect(pending).rejects.toThrow(/abort/i);
   });
 });

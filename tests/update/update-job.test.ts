@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import type { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -40,6 +42,142 @@ afterEach(() => {
   if (prevHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = prevHome;
   removeTreeWithRetry(dir);
+});
+
+describe("pinned-start child cleanup", () => {
+  // exitCode/signalCode are readonly on ChildProcess, but these fakes must move a child from
+  // "running" to "exited" mid-test. Redeclare them as mutable rather than widening each
+  // assignment with a cast, so the transitions stay type-checked.
+  type FakeChild = EventEmitter & Pick<ChildProcess, "pid"> & {
+    exitCode: number | null;
+    signalCode: NodeJS.Signals | null;
+  };
+
+  async function exhaustRetries(options: {
+    spawned?: (child: FakeChild) => void;
+    healthWait?: (children: FakeChild[]) => void;
+    reusePid?: boolean;
+    healthyOnLastAttempt?: boolean;
+  } = {}) {
+    let now = 0;
+    const children: FakeChild[] = [];
+    const killed: number[] = [];
+    const livenessChecks: number[] = [];
+    const job: UpdateJobState = {
+      id: "pinned-child-cleanup", status: "restarting",
+      startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      currentVersion: "2.49.0", latestVersion: "2.50.0", channel: "latest",
+      installer: "npm", restart: true, command: "", releaseNotesUrl: "", log: [],
+    };
+    writeFileSync(updateJobPath(), JSON.stringify(job));
+    await restartAfterUpdateForTests(job, { port: 19111, hostname: "127.0.0.1" }, {
+      serviceInstalledFn: () => false,
+      waitForPort: async () => true,
+      listListenPidsFn: () => [],
+      preparePortForPinnedStartFn: () => {},
+      waitForGhostListenClearFn: async () => ({ ok: true, accessDenied: false }),
+      probeProxyIdentity: async () => null,
+      probeProxy: async () => !!options.healthyOnLastAttempt && children.length === 3,
+      now: () => now,
+      sleepMs: async ms => {
+        options.healthWait?.(children);
+        now += ms;
+      },
+      isAliveFn: pid => {
+        livenessChecks.push(pid);
+        // A reused numeric PID may be live even after our own child has exited.
+        return true;
+      },
+      spawnDetachedStartFn: () => {
+        const child: FakeChild = Object.assign(new EventEmitter(), {
+          pid: options.reusePid ? 4241 : 4241 + children.length, exitCode: null, signalCode: null,
+        });
+        children.push(child);
+        options.spawned?.(child);
+        return child as ChildProcess;
+      },
+      killProxyFn: pid => { killed.push(pid); },
+    });
+    expect(children).toHaveLength(3);
+    return { killed, livenessChecks };
+  }
+
+  test.each([
+    { name: "successful exit", exitCode: 0, signalCode: null },
+    { name: "failed exit", exitCode: 1, signalCode: null },
+    { name: "signal exit", exitCode: null, signalCode: "SIGTERM" as const },
+  ])("never reuses a child PID after $name", async ({ exitCode, signalCode }) => {
+    const result = await exhaustRetries({
+      spawned: child => { child.exitCode = exitCode; child.signalCode = signalCode; },
+    });
+    expect(result.killed).toEqual([]);
+    expect(result.livenessChecks).toEqual([]);
+  });
+
+  test("retires a child when its exit event is observed during the health wait", async () => {
+    const observed = new Set<FakeChild>();
+    const result = await exhaustRetries({
+      healthWait: children => {
+        const child = children.at(-1)!;
+        if (observed.has(child)) return;
+        observed.add(child);
+        // Keep the fixture fields unset to exercise the event retirement independently.
+        child.emit("exit", 0, null);
+      },
+    });
+    expect(observed.size).toBe(3);
+    expect(result.killed).toEqual([]);
+    expect(result.livenessChecks).toEqual([]);
+  });
+
+  test("still cleans up live children before retries and after the final health timeout", async () => {
+    const result = await exhaustRetries();
+    expect(result.killed).toEqual([4241, 4242, 4243]);
+    expect(result.livenessChecks).toEqual([4241, 4242, 4243]);
+  });
+
+  test.each(["exit", "error", "close"])("a previous child's late %s does not retire the current live child", async event => {
+    const observed = new Set<FakeChild>();
+    const result = await exhaustRetries({
+      reusePid: true,
+      healthWait: children => {
+        const previous = children.at(-2);
+        if (!previous || observed.has(previous)) return;
+        observed.add(previous);
+        previous.exitCode = 0;
+        if (event === "error") previous.emit(event, new Error("late spawn error"));
+        else previous.emit(event, 0, null);
+      },
+    });
+    expect(observed.size).toBe(2);
+    expect(result.killed).toEqual([4241, 4241, 4241]);
+  });
+
+  test("failed spawns retire on error and close without an exit event", async () => {
+    const observed = new Set<FakeChild>();
+    const result = await exhaustRetries({
+      spawned: child => { Object.defineProperty(child, "pid", { value: undefined }); },
+      healthWait: children => {
+        const child = children.at(-1)!;
+        if (observed.has(child)) return;
+        observed.add(child);
+        child.emit("error", new Error("spawn ENOENT"));
+        // Retirement also releases this attempt's closure; an absent-PID check alone
+        // would pass the kill assertions while keeping the exit handler installed.
+        expect(child.listenerCount("exit")).toBe(0);
+        expect(child.listenerCount("close")).toBe(0);
+        child.emit("close", -1, null);
+      },
+    });
+    expect(observed.size).toBe(3);
+    expect(result.killed).toEqual([]);
+    expect(result.livenessChecks).toEqual([]);
+  });
+
+  test("leaves the current child running when its health probe succeeds", async () => {
+    const result = await exhaustRetries({ healthyOnLastAttempt: true });
+    expect(result.killed).toEqual([4241, 4242]);
+  });
 });
 
 describe("GUI update check", () => {
@@ -436,6 +574,55 @@ describe("GUI update execution decisions", () => {
     expect(cmd.args).toEqual(["/pkg/bin/ocx.mjs", "update", "--tag", "preview"]);
   });
 
+  test("pnpm worker uses the Node launcher update path", () => {
+    const cmd = updateExecutionCommand("pnpm", "latest", "/pkg/bin/ocx.mjs");
+    expect(cmd.bin).toMatch(/^node/);
+    expect(cmd.args).toEqual(["/pkg/bin/ocx.mjs", "update", "--tag", "latest"]);
+  });
+
+  test("pnpm GUI worker passes the verified active launcher into restart recovery", async () => {
+    const activeLauncher = "/pnpm/owner/global/v11/node_modules/@bitkyc08/opencodex/bin/ocx.mjs";
+    let restartLauncher = "";
+    let now = 0;
+    await runGuiUpdateWorker("pnpm-active-launcher", "latest", true, {
+      checkForUpdateFn: () => ({
+        currentVersion: "2.7.40",
+        latestVersion: "2.7.41",
+        channel: "latest",
+        installer: "pnpm",
+        updateAvailable: true,
+        canUpdate: true,
+        command: "node /old/bin/ocx.mjs update --tag latest",
+        releaseNotesUrl: "https://github.com/lidge-jun/opencodex/releases/latest",
+      }),
+      resolvePnpmOwnerFn: () => ({
+        ok: true as const,
+        owner: {
+          commandPath: "/pnpm/owner/bin/pnpm",
+          packagePath: "/pnpm/owner/global/v11/node_modules/@bitkyc08/opencodex",
+          globalDir: "/pnpm/owner/global",
+          globalRoot: "/pnpm/owner/global/v11",
+          globalBinDir: "/pnpm/owner/bin",
+        },
+      }),
+      resolvePnpmActiveLauncherFn: () => activeLauncher,
+      integrityFn: () => ({ ok: true as const, integrity: "sha512-testfixturevalue000000000" }),
+      runCommandFn: () => ({ status: 0, signal: null }),
+      restartIo: {
+        serviceInstalledFn: () => false,
+        restartAfterUpdateFn: async (_job, _captured, io) => {
+          restartLauncher = io?.packageLauncherPathFn?.() ?? "";
+        },
+        probeProxy: async () => true,
+        probeProxyIdentity: async () => ({ pid: 4242, version: "2.7.41" }),
+        now: () => now,
+        sleepMs: async ms => { now += ms; },
+      },
+    });
+    expect(restartLauncher).toBe(activeLauncher);
+    expect(readUpdateJob("pnpm-active-launcher")?.status).toBe("succeeded");
+  });
+
   test("restart command separates service and direct proxy modes", () => {
     expect(restartCommand(true, "npm", "/pkg/bin/ocx.mjs")).toMatchObject({
       mode: "service",
@@ -445,6 +632,55 @@ describe("GUI update execution decisions", () => {
       mode: "proxy",
       args: ["/pkg/bin/ocx.mjs", "start"],
     });
+    expect(restartCommand(true, "pnpm", "/pkg/bin/ocx.mjs")).toMatchObject({
+      mode: "service",
+      args: ["/pkg/bin/ocx.mjs", "service", "repair"],
+    });
+  });
+
+  test("restart recovery uses the verified active launcher for direct and service paths", async () => {
+    const activeLauncher = "/pnpm/owner/global/v11/node_modules/@bitkyc08/opencodex/bin/ocx.mjs";
+    const directJob: UpdateJobState = {
+      id: "restart-active-launcher-direct",
+      status: "restarting",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      currentVersion: "2.7.40",
+      latestVersion: "2.7.41",
+      channel: "latest",
+      installer: "pnpm",
+      restart: true,
+      command: "",
+      log: [],
+    };
+    writeFileSync(updateJobPath(directJob.id), JSON.stringify(directJob));
+    let directLauncher = "";
+    await restartAfterUpdateForTests(directJob, { port: 19001, hostname: "127.0.0.1" }, {
+      serviceInstalledFn: () => false,
+      packageLauncherPathFn: () => activeLauncher,
+      listListenPidsFn: () => [],
+      waitForPort: async () => true,
+      spawnStart: (_job, _installer, _port, launcher) => { directLauncher = launcher ?? ""; },
+    });
+    expect(directLauncher).toBe(activeLauncher);
+
+    const serviceJob = { ...directJob, id: "restart-active-launcher-service" };
+    writeFileSync(updateJobPath(serviceJob.id), JSON.stringify(serviceJob));
+    let serviceArgs: string[] = [];
+    await restartAfterUpdateForTests(serviceJob, { port: 19002, hostname: "127.0.0.1" }, {
+      serviceInstalledFn: () => true,
+      packageLauncherPathFn: () => activeLauncher,
+      listListenPidsFn: () => [],
+      waitForPort: async () => true,
+      runService: (_job, _bin, args) => {
+        serviceArgs = args;
+        return { status: 0 };
+      },
+      serviceViableFn: () => true,
+      probeProxy: async () => true,
+      serviceHealthTimeoutMs: 1_000,
+    });
+    expect(serviceArgs).toEqual([activeLauncher, "service", "repair"]);
   });
 
   test("service restart is not skipped when the listener scan fails", async () => {
@@ -1605,7 +1841,7 @@ describe("immutable update target (WP160)", () => {
   test("GUI worker gates integrity before spawning and fails the job on anomalous metadata", async () => {
     const source = await Bun.file(new URL("../../src/update/job.ts", import.meta.url)).text();
 
-    const gateAt = source.indexOf("const integrity = (io.integrityFn ?? checkUpdatePackageIntegrity)(check.latestVersion);");
+    const gateAt = source.indexOf("checkUpdatePackageIntegrity(check.latestVersion, spawnSync, check.installer, pnpmOwner)");
     const cacheGateAt = source.indexOf("const cachePreflight = (io.cachePreflightFn ?? runNpmCachePreflight)();");
     const trayStopAt = source.indexOf("handoffWindowsTrayForUpdate(tray");
     const failAt = source.indexOf('updateJob(job, { status: "failed", error: integrity.reason });');

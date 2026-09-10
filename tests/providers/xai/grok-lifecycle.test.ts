@@ -7,7 +7,7 @@ import { repoPath } from "../../helpers/repo-root";
 const CLI_SOURCE = readFileSync(repoPath("src", "cli", "index.ts"), "utf8");
 const ENSURE_SOURCE = readFileSync(repoPath("src", "cli", "ensure-desired-integrations.ts"), "utf8");
 const DISPATCH_SOURCE = readFileSync(repoPath("src", "cli", "dispatch.ts"), "utf8");
-const SERVICE_SOURCE = readFileSync(repoPath("src", "service.ts"), "utf8");
+const SERVICE_SOURCE = readFileSync(repoPath("src", "service", "cli.ts"), "utf8");
 const MANAGEMENT_SOURCE = readFileSync(repoPath("src", "server", "management-api.ts"), "utf8");
 const PROCESS_CONTROL_SOURCE = readFileSync(repoPath("src", "lib", "process-control.ts"), "utf8");
 
@@ -150,8 +150,14 @@ describe("Grok fence lifecycle wiring", () => {
     // shared teardown must be skipped at both call sites, exactly like the service-manager path.
     const ownershipRefusals = stopFn.match(/err instanceof ProxyOwnershipRefusedError[\s\S]{0,200}?ownershipBlocked = true;/g);
     expect(ownershipRefusals).toHaveLength(2);
-    expect(stopFn.match(/Skipping shared teardown \(native Codex restore, Grok config\): the foreign proxy is still running\./g)).toHaveLength(2);
+    expect(stopFn.match(/Skipping shared teardown \(native Codex restore, Grok config\): the refusing proxy is still running\./g)).toHaveLength(2);
     expect(PROCESS_CONTROL_SOURCE).toContain("throw new ProxyOwnershipRefusedError(");
+
+    // Both sites also print what is actually left to do. The refusal itself is written for
+    // an API client, so it recommends `ocx stop` — the command doing the printing — which
+    // is the loop #4169 reports. Echoing the server's message alone reproduces it.
+    expect(stopFn.match(/console\.error\(`   \$\{refusalNextStep\(err\.code\)\}`\);/g)).toHaveLength(2);
+    expect(PROCESS_CONTROL_SOURCE).toContain("export function refusalNextStep(");
   });
 
   test("handleStop returns its outcome while both restart surfaces share the in-place lifecycle", () => {
@@ -183,12 +189,13 @@ describe("Grok fence lifecycle wiring", () => {
 
   test("only Task Scheduler earns the respawn wait", () => {
     const stopFn = sliceFn(CLI_SOURCE, "async function handleStop(", "async function handleUninstall(");
-    const serviceSource = readFileSync(repoPath("src", "service.ts"), "utf8");
+    const serviceSource = readFileSync(repoPath("src", "service", "orchestration.ts"), "utf8");
     // schtasks /end leaves the `cmd :loop` wrapper alive to respawn its child (#764).
     // launchd, systemd and WinSW are down when they report stopped, so charging them a
     // seven-second poll on every ocx stop would be a regression in ordinary use.
     expect(serviceSource).toContain('"absent" | "stopped" | "stopped-respawnable" | "failed"');
-    expect(serviceSource).toContain('schedulerStopped ? "stopped-respawnable" : "stopped"');
+    const windowsOps = readFileSync(repoPath("src", "service", "windows-ops.ts"), "utf8");
+    expect(windowsOps).toContain('schedulerStopped ? "stopped-respawnable" : "stopped"');
     expect(stopFn).toContain("if (schedulerCanRespawn && !ownershipBlocked)");
     // The wait is gated on the scheduler flag, not on "a service stopped".
     expect(stopFn).not.toContain("if (stoppedService && !ownershipBlocked)");
@@ -398,7 +405,7 @@ describe("POST /api/stop teardown", () => {
   });
 
   test("an unreadable scheduler state gets the same diagnosis from the CLI and the API", () => {
-    const serviceSource = readFileSync(repoPath("src", "service.ts"), "utf8");
+    const serviceSource = readFileSync(repoPath("src", "service", "orchestration.ts"), "utf8");
     // A manager that refused to stop and a query that could not answer are different
     // problems: reporting the second as "did not stop" sends the operator looking for the
     // wrong thing, and `ocx stop` was the command the API told them to run (#3008).
@@ -491,7 +498,7 @@ describe("POST /api/stop teardown", () => {
   });
 
   test("direct service stop and uninstall fail when a shared teardown half fails", () => {
-    const serviceSource = readFileSync(repoPath("src", "service.ts"), "utf8");
+    const serviceSource = readFileSync(repoPath("src", "service", "cli.ts"), "utf8");
     // These paths logged the failure and exited 0, so a script could not tell a complete
     // teardown from one that left Grok aimed at a stopped proxy.
     const stopCase = serviceSource.slice(
@@ -507,10 +514,12 @@ describe("POST /api/stop teardown", () => {
   });
 
   test("a 409 does not escalate to a forced kill", () => {
-    // Escalating would run the daemon's cleanup and strip shared config while the foreign
-    // service keeps the proxy alive — the exact hole the ownership gate exists to close.
+    // Escalating would run the daemon's cleanup and strip shared config while the refusing
+    // service keeps the proxy alive — the exact hole the refusal gate exists to close.
     // The 409 branch may capture the server's reason first (#4023 added a second refusal
-    // cause), but it must still return "refused" without falling through to !res.ok.
+    // cause, #4169 the code that names it), but it must still yield "refused" without
+    // falling through to !res.ok. Matched loosely so a wrapped return (`done("refused")`)
+    // still satisfies the invariant this guards, which is ordering, not spelling.
     const stopGracefully = sliceFn(
       PROCESS_CONTROL_SOURCE,
       "export async function stopProxyGracefully(",
@@ -518,9 +527,12 @@ describe("POST /api/stop teardown", () => {
     );
     const four09At = stopGracefully.indexOf("res.status === 409");
     expect(four09At).toBeGreaterThan(-1);
-    expect(stopGracefully.slice(four09At)).toContain('return "refused"');
-    expect(stopGracefully.indexOf('return "refused"', four09At))
-      .toBeLessThan(stopGracefully.indexOf("if (!res.ok) return false;", four09At));
+    const refusedReturn = /return (?:done\()?"refused"/;
+    const okFallthrough = /if \(!res\.ok\) return (?:done\()?false/;
+    const afterFour09 = stopGracefully.slice(four09At);
+    expect(afterFour09).toMatch(refusedReturn);
+    expect(afterFour09.search(refusedReturn))
+      .toBeLessThan(afterFour09.search(okFallthrough));
 
     const stopProxyFn = sliceFn(PROCESS_CONTROL_SOURCE, "export async function stopProxy(", "export function killProxy(");
     const refusedAt = stopProxyFn.indexOf('graceful === "refused"');

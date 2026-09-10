@@ -17,11 +17,88 @@
  *   <scopeDir>/.ocx-recovery.json             double-fault marker with a one-line restore
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
+
+/**
+ * Dependency lookup confined to the candidate's OWN tree. This is the npm contract and it
+ * must stay lexical: Node's resolver walks the ancestor directory chain, so a global npm
+ * candidate at <prefix>/lib/node_modules/@scope/pkg could satisfy its bundled-Bun
+ * requirement from <prefix>/lib/node_modules/bun, which belongs to a different package.
+ * That verdict is not cosmetic — it accepts a stage that cannot start (D2), skips the
+ * post-swap rollback, and lets bootRestoreProbe reap the only known-good backup.
+ */
+function candidateTreeDependencyDir(packageDir, name) {
+  const dir = join(packageDir, "node_modules", ...name.split("/"));
+  return existsSync(join(dir, "package.json")) ? dir : undefined;
+}
+
+/**
+ * The candidate's own bun directory, whether or not it carries a readable package.json.
+ * The size gate keys on the DIRECTORY, matching the pre-carry verifier: a half-extracted
+ * node_modules/bun holding a truncated binary and no manifest is still a broken tree, and
+ * bun is not always among the sentinels, so the sentinel loop cannot be relied on to catch it.
+ */
+function ownTreeBunDir(packageDir) {
+  const dir = join(packageDir, "node_modules", "bun");
+  return existsSync(dir) ? dir : undefined;
+}
+
+/** The node_modules directory a package sits directly inside, or undefined. */
+function enclosingNodeModules(packageDir) {
+  const parent = dirname(packageDir);
+  if (basename(parent) === "node_modules") return parent;
+  // Scoped packages live one level deeper: <node_modules>/@scope/name.
+  const grandparent = dirname(parent);
+  if (basename(parent).startsWith("@") && basename(grandparent) === "node_modules") return grandparent;
+  return undefined;
+}
+
+/** pnpm's own bookkeeping at the root of a node_modules tree it manages. */
+function isPnpmManagedRoot(nodeModulesDir) {
+  if (!nodeModulesDir) return false;
+  if (nodeModulesDir.split(/[\\/]/).includes(".pnpm")) return true;
+  return existsSync(join(nodeModulesDir, ".pnpm")) || existsSync(join(nodeModulesDir, ".modules.yaml"));
+}
+
+/**
+ * Dependency roots this package INSTANCE owns. pnpm exposes dependencies in several shapes —
+ * symlinks inside the package's own node_modules, a package root that is itself a symlink into
+ * the virtual store, or a hoisted group root — so the npm rule alone rejects healthy trees.
+ * Ownership is still bounded: an enclosing node_modules counts only when pnpm's own metadata
+ * says pnpm manages it, which keeps an unrelated ancestor installation out.
+ */
+function ownedDependencyRoots(packageDir) {
+  const roots = [];
+  const add = dir => { if (dir && !roots.includes(dir)) roots.push(dir); };
+  const lexicalGroup = enclosingNodeModules(packageDir);
+  add(join(packageDir, "node_modules"));
+  let real;
+  try { real = realpathSync(packageDir); } catch { /* keep the lexical path only */ }
+  if (real && real !== packageDir) add(join(real, "node_modules"));
+  if (isPnpmManagedRoot(lexicalGroup)) add(lexicalGroup);
+  const realGroup = real ? enclosingNodeModules(real) : undefined;
+  if (isPnpmManagedRoot(realGroup)) add(realGroup);
+  return roots;
+}
+
+/**
+ * pnpm dependency lookup. Probing the owned roots directly, rather than filtering whatever
+ * Node's resolver returned, is deliberate: require.resolve reports the REALPATH of the
+ * resolved file, so a dependency reached through pnpm's own node_modules symlink comes back
+ * as a virtual-store path that no lexical ownership test can recognise. existsSync follows
+ * the symlink, which is exactly the pnpm graph edge that proves ownership.
+ */
+function pnpmOwnedDependencyDir(packageDir, name) {
+  for (const root of ownedDependencyRoots(packageDir)) {
+    const dir = join(root, ...name.split("/"));
+    if (existsSync(join(dir, "package.json"))) return dir;
+  }
+  return undefined;
+}
 
 /** Verification manifest for a staged (or live) package tree. */
-export function verifyInstallTree(packageDir, expectedVersion) {
+function verifyTreeWithDependencyLookup(packageDir, expectedVersion, dependencyDir) {
   const failures = [];
   let pkg;
   try {
@@ -42,8 +119,8 @@ export function verifyInstallTree(packageDir, expectedVersion) {
   // The bundled Bun binary is the load-bearing artifact: without it the launcher exits
   // before serving anything, and a boot probe that called this tree healthy would reap
   // the only backup (review High 3). Size-gate the real binary, not just its package.json.
-  const bunPkgDir = join(packageDir, "node_modules", "bun");
-  if (existsSync(bunPkgDir)) {
+  const bunPkgDir = dependencyDir(packageDir, "bun") ?? ownTreeBunDir(packageDir);
+  if (bunPkgDir) {
     const bunBinary = findLargestFile(bunPkgDir);
     if (!bunBinary || bunBinary.size < 10 * 1024 * 1024) {
       failures.push("bundled Bun binary missing or truncated (< 10MB)");
@@ -56,10 +133,27 @@ export function verifyInstallTree(packageDir, expectedVersion) {
     ? deps.filter(name => name === "bun" || name === "zod")
     : deps.slice(0, 2);
   for (const name of sentinels) {
-    const depPkg = join(packageDir, "node_modules", ...name.split("/"), "package.json");
-    if (!existsSync(depPkg)) failures.push("sentinel dependency missing: " + name);
+    if (!dependencyDir(packageDir, name)) failures.push("sentinel dependency missing: " + name);
   }
   return failures.length === 0 ? { ok: true, failures: [] } : { ok: false, failures };
+}
+
+/**
+ * npm (and every recovery decision): the candidate must be self-contained. Used by
+ * transactionalNpmUpdate's stage and post-swap checks and by bootRestoreProbe.
+ */
+export function verifyInstallTree(packageDir, expectedVersion) {
+  return verifyTreeWithDependencyLookup(packageDir, expectedVersion, candidateTreeDependencyDir);
+}
+
+/**
+ * Verify a package exposed through pnpm's global virtual store. pnpm 10/11 may use an
+ * isolated virtual store, a custom virtualStoreDir, global virtual-store links, or a
+ * hoisted linker, so the dependency may sit outside the package directory — but it must
+ * still be reachable through a root this package instance owns.
+ */
+export function verifyPnpmInstallTree(packageDir, expectedVersion) {
+  return verifyTreeWithDependencyLookup(packageDir, expectedVersion, pnpmOwnedDependencyDir);
 }
 
 function stampedName(prefix) {

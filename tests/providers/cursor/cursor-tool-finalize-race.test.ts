@@ -1,12 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import { create, toBinary } from "@bufbuild/protobuf";
-import { clientToolFinalizeGraceMsForRequest, createLiveCursorTransport } from "../../../src/adapters/cursor/live-transport";
+import {
+  clientToolFinalizeGraceMsForRequest,
+  createLiveCursorTransport,
+  shouldExtendForCheckpointCapture,
+} from "../../../src/adapters/cursor/live-transport";
 import { createTestTranslatorBudget } from "../../helpers/translator-budget";
 import { createCursorProtobufEventState } from "../../../src/adapters/cursor/protobuf-events";
 import type { CursorRunRequest, CursorServerMessage } from "../../../src/adapters/cursor/types";
 import {
   AgentServerMessageSchema,
   ExecServerMessageSchema,
+  ConversationStateStructureSchema,
   McpArgsSchema,
   McpToolCallSchema,
   ToolCallSchema,
@@ -95,18 +100,27 @@ function completedByCallIdFrame(callId: string) {
 }
 
 interface Harness {
-  feed(
-    frame: ReturnType<typeof startedFrame> | ReturnType<typeof completedFrame> | ReturnType<typeof completedByCallIdFrame>,
-  ): Promise<void>;
+  feed(frame: unknown): Promise<void>;
   events: CursorServerMessage[];
   closeCodes: number[];
   cancelled(): boolean;
+}
+
+/** A conversation checkpoint frame: the only thing that sets `capturedCheckpointBytes`. */
+function checkpointFrame() {
+  return create(AgentServerMessageSchema, {
+    message: {
+      case: "conversationCheckpointUpdate",
+      value: create(ConversationStateStructureSchema, { pendingToolCalls: ["suspended-fixture"] }),
+    },
+  });
 }
 
 function makeHarness(
   graceMs: number,
   clientToolNames: string[],
   freeformToolNames: string[] = [],
+  wantsCheckpointCapture = false,
 ): Harness {
   const transport = createLiveCursorTransport({
     provider: { adapter: "cursor", baseUrl: "https://api2.cursor.sh", apiKey: "test-token" },
@@ -115,8 +129,11 @@ function makeHarness(
     clientToolFinalizeGraceMs: graceMs,
   }) as unknown as {
     stream: unknown;
+    wantsCheckpointCapture: boolean;
     handleServerMessage: (m: unknown, s: unknown, p: (e: CursorServerMessage) => void) => Promise<void>;
   };
+  // Normally set from the run request; the harness drives handleServerMessage directly.
+  transport.wantsCheckpointCapture = wantsCheckpointCapture;
   const events: CursorServerMessage[] = [];
   const closeCodes: number[] = [];
   // Fake h2 stream: records RST_STREAM close codes; never touches the network.
@@ -252,6 +269,65 @@ describe("transport finalize race (hidden parallel sibling)", () => {
     await sleep(60);
     expect(h.events.map(e => e.type).filter(t => t === "done")).toHaveLength(1);
     expect(h.events.filter(e => e.type === "tool_call_end")).toHaveLength(1);
+    expect(h.closeCodes).toEqual([NGHTTP2_CANCEL]);
+  });
+});
+
+describe("checkpoint capture grace (#4245)", () => {
+  test("extends only when a checkpoint is wanted, absent, and not already extended", () => {
+    const base = {
+      terminated: false,
+      openToolCallCount: 0,
+      wantsCheckpointCapture: true,
+      hasCapturedCheckpoint: false,
+      alreadyExtended: false,
+    };
+    expect(shouldExtendForCheckpointCapture(base)).toBe(true);
+    // Mirrors finalizeAfterDrain's guards: a terminated state or a reopened sibling set
+    // must fall through to the normal path rather than spend the one extension.
+    expect(shouldExtendForCheckpointCapture({ ...base, terminated: true })).toBe(false);
+    expect(shouldExtendForCheckpointCapture({ ...base, terminated: undefined })).toBe(true);
+    expect(shouldExtendForCheckpointCapture({ ...base, openToolCallCount: 1 })).toBe(false);
+    // Nothing to wait for, or already waited once.
+    expect(shouldExtendForCheckpointCapture({ ...base, wantsCheckpointCapture: false })).toBe(false);
+    expect(shouldExtendForCheckpointCapture({ ...base, hasCapturedCheckpoint: true })).toBe(false);
+    expect(shouldExtendForCheckpointCapture({ ...base, alreadyExtended: true })).toBe(false);
+  });
+
+  test("a turn that never sends a checkpoint waits once, then still finalizes and cancels", async () => {
+    const h = makeHarness(20, ["echo_a"], [], true);
+    await h.feed(startedFrame("call_a", "echo_a"));
+    await h.feed(execFrame(1, "call_a", "echo_a", "A"));
+    // Past the 20 ms base grace the turn is deliberately still open: the extension is running.
+    await sleep(200);
+    expect(h.events.map(e => e.type)).not.toContain("done");
+    expect(h.cancelled()).toBe(false);
+    // The extension is bounded, so the stream still dies at a known deadline.
+    await sleep(1_600);
+    expect(h.events.map(e => e.type).filter(t => t === "done")).toHaveLength(1);
+    expect(h.closeCodes).toEqual([NGHTTP2_CANCEL]);
+  }, 10_000);
+
+  test("a checkpoint arriving during the extension finalizes early instead of waiting it out", async () => {
+    const h = makeHarness(20, ["echo_a"], [], true);
+    await h.feed(startedFrame("call_a", "echo_a"));
+    await h.feed(execFrame(1, "call_a", "echo_a", "A"));
+    await sleep(120);
+    expect(h.events.map(e => e.type)).not.toContain("done");
+
+    await h.feed(checkpointFrame());
+    // Early fire is deferred one tick so the checkpoint frame finishes being processed first.
+    await sleep(120);
+    expect(h.events.map(e => e.type).filter(t => t === "done")).toHaveLength(1);
+    expect(h.closeCodes).toEqual([NGHTTP2_CANCEL]);
+  }, 10_000);
+
+  test("without checkpoint capture wanted, the base grace is unchanged", async () => {
+    const h = makeHarness(20, ["echo_a"], [], false);
+    await h.feed(startedFrame("call_a", "echo_a"));
+    await h.feed(execFrame(1, "call_a", "echo_a", "A"));
+    await sleep(200);
+    expect(h.events.map(e => e.type).filter(t => t === "done")).toHaveLength(1);
     expect(h.closeCodes).toEqual([NGHTTP2_CANCEL]);
   });
 });

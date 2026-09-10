@@ -1890,8 +1890,8 @@ describe("3-state multi-agent mode", () => {
       }];
       const accountBoundEntries = [{
         ...template(),
-        slug: "team/gpt-5.4",
-        display_name: "team / GPT-5.4",
+        slug: "team/gpt-5.6-luna",
+        display_name: "team / GPT-5.6 Luna",
         opencodex_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
         service_tier: "fast",
       }];

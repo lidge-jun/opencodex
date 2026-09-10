@@ -163,7 +163,7 @@ describe("GET /api/settings", () => {
     persistEffortClamp({
       runtimePath: fakeCodex,
       runtimeVersion: "0.133.0",
-      removedEfforts: ["max", "ultra"],
+      removedEfforts: ["xhigh"],
       affectedModels: ["gpt-5.6-sol"],
     }, { configDir: TEST_DIR });
 
@@ -190,7 +190,7 @@ describe("GET /api/settings", () => {
       expect(body.codexRuntime?.source).toBe("environment");
       expect(body.codexRuntime?.catalogClamp).toEqual({
         active: true,
-        removedEfforts: ["max", "ultra"],
+        removedEfforts: ["xhigh"],
         runtimeVersion: "0.133.0",
       });
       expect(

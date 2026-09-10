@@ -120,7 +120,7 @@ describe("split config-export public facade", () => {
       ["omp", ["providers", "opencodex"], '{"providers":{"opencodex":{"baseUrl":"http://127.0.0.1:10100/v1","api":"openai-completions","apiKey":"opencodex-loopback","models":[{"id":"test/known","name":"known (test)","input":["text","image"],"contextWindow":8192,"maxTokens":8192,"reasoning":true,"thinking":{"mode":"effort","efforts":["high"]}}]}}}'],
       ["dsh", ["llm-pi-ai", "providers", "opencodex"], '{"llm-pi-ai":{"providers":{"opencodex":{"displayName":"OpenCodex","api":"openai-responses","baseURL":"http://127.0.0.1:10100/v1","headers":{"Authorization":"Bearer ocx_data_dsh"},"models":[{"id":"test/known","name":"known (test)","input":["text","image"],"contextWindow":8192,"reasoningEfforts":{"high":"high"}}]}}}}'],
       ["mcode", ["custom_provider", "opencodex"], '{"custom_provider":{"opencodex":{"name":"OpenCodex","kind":"custom","enabled":true,"api":"anthropic-messages","options":{"apiKey":"opencodex-loopback","baseURL":"http://127.0.0.1:10100","authMode":"api-key"},"models":{"test/known":{"limit":{"context":8192},"thinking":{"effortOptions":["high"]}}}}}}'],
-      ["zcode", ["provider", "opencodex"], '{"provider":{"opencodex":{"name":"OpenCodex","kind":"openai-compatible","enabled":true,"source":"custom","options":{"apiKey":"opencodex-loopback","baseURL":"http://127.0.0.1:10100/v1","apiKeyRequired":true},"models":{"test/known":{"name":"known (test)","modalities":{"input":["text","image"],"output":["text"]},"limit":{"context":8192},"reasoning":{"enabled":true,"variants":["high"]}}}}}}'],
+      ["zcode", ["provider", "opencodex"], '{"provider":{"opencodex":{"name":"OpenCodex","kind":"openai","enabled":true,"source":"custom","options":{"apiKey":"opencodex-loopback","baseURL":"http://127.0.0.1:10100/v1","apiKeyRequired":true},"models":{"test/known":{"name":"known (test)","modalities":{"input":["text","image"],"output":["text"]},"limit":{"context":8192},"reasoning":{"enabled":true,"variants":["high"]}}}}}}'],
     ] as const;
     for (const [id, path, expectedBytes] of cases) {
       const built = buildClientConfigText(id, context);
@@ -752,11 +752,16 @@ describe("hub-resolved Fast exports", () => {
       expect(block.models["z/sparse--fast"]).toEqual({ name: "z/sparse Fast (routed)" });
     }
     const expanded = opencodeProviderBlocks(BASE_URL, [eligible], cfg({ fastRows: false }));
+    // A Fast row is a second selector for the same model, so it inherits the capabilities the
+    // base row declared. Without them opencode would gate images on exactly the row a user who
+    // turned Fast on selects (#4286).
     expect(expanded.v1.models["remote/model--fast"]).toEqual({
       name: "Remote Model Fast (remote)", limit: { context: 8192, output: 8192 },
+      attachment: true, modalities: { input: ["text", "image"], output: ["text"] },
     });
     expect(expanded.v2.models["remote/model--fast"]).toEqual({
       name: "Remote Model Fast (remote)", limit: { context: 8192, output: 8192 },
+      attachment: true, modalities: { input: ["text", "image"], output: ["text"] },
       variants: [
         { id: "high", settings: { reasoningEffort: "high" } },
         { id: "ultra", settings: { reasoningEffort: "ultra" } },
@@ -767,6 +772,12 @@ describe("hub-resolved Fast exports", () => {
     const remote = opencodeProviderBlocks(BASE_URL, [eligible], cfg({ hostname: "0.0.0.0" }));
     expect(remote.v1.options).toEqual({ baseURL: BASE_URL, headers: { "x-opencodex-api-key": OPENCODE_API_KEY_ENV_REF } });
     expect(remote.v2.settings).toEqual(remote.v1.options);
+  });
+
+  test("each generation owns its modalities map, so an edit to one cannot move the other", () => {
+    const blocks = opencodeProviderBlocks(BASE_URL, [eligible], cfg({ fastRows: false }));
+    blocks.v1.models["remote/model"]!.modalities!.input.push("audio");
+    expect(blocks.v2.models["remote/model"]!.modalities!.input).toEqual(["text", "image"]);
   });
 
   test("both CLI projections retain hub true/false/absence despite conflicting local settings", () => {
@@ -805,11 +816,29 @@ describe("hub-resolved Fast exports", () => {
     expect(Object.keys(blocks.v1.models)).toEqual(["remote/model"]);
     expect(Object.keys(blocks.v2.models)).toEqual(["remote/model"]);
   });
+
+  test("a disabled duplicate cannot donate its modalities to the visible row", () => {
+    // `exportModelsFromProxyRows` used to re-join modalities from the RAW `/api/models` rows,
+    // keyed by `namespaced` with the first row winning — so a hidden or disabled duplicate
+    // could hand its modality list to the visible entry, the same donation the availability and
+    // ladder rules already refuse. The catalog entry carries them now, so the row that is
+    // exported is the row that declares.
+    const shadowed = { ...eligible, fastRowAvailable: false, inputModalities: ["text"] };
+    const rows = [
+      { ...eligible, fastRowAvailable: false, disabled: true, inputModalities: ["text", "image", "audio"] },
+      shadowed,
+    ];
+    const config = cfg({ fastRows: false });
+    expect(exportModelsFromProxyRows(rows, config)).toEqual([shadowed]);
+    const blocks = opencodeProviderBlocks(BASE_URL, opencodeCatalogFromProxyRows(rows, config), config);
+    expect(blocks.v1.models["remote/model"]!.modalities).toEqual({ input: ["text"], output: ["text"] });
+    expect(blocks.v2.models["remote/model"]!.modalities).toEqual({ input: ["text"], output: ["text"] });
+  });
 });
 
 describe("EXPORT_CLIENTS registry", () => {
-  test("covers exactly the thirteen file-toggle clients", () => {
-    expect(EXPORT_CLIENT_IDS).toEqual(["opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode", "zcode", "prime", "aside", "raycast"]);
+  test("covers exactly the fourteen file-toggle clients", () => {
+    expect(EXPORT_CLIENT_IDS).toEqual(["opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode", "zcode", "prime", "aside", "raycast", "omo", "cline"]);
     for (const id of EXPORT_CLIENT_IDS) expect(isExportClientId(id)).toBe(true);
     // The exception clients keep their own surfaces and are not export clients.
     expect(isExportClientId("claude-desktop")).toBe(false);
@@ -1075,4 +1104,44 @@ describe("EXPORT_CLIENTS registry", () => {
     expect(opencodeConfig(empty).provider.opencodex!.models).toEqual({});
     expect(piConfig(empty).providers.opencodex!.models).toEqual([]);
   });
+});
+
+
+test("renamed CommandCode gathered effort tables reach DSH and ZCode exports", async () => {
+  const { gatherRoutedModels } = await import("../../src/codex/catalog");
+  const { clearModelCache } = await import("../../src/codex/model-cache");
+  const { installIsolatedCodexHome } = await import("../helpers/isolated-codex-home");
+  const isolated = installIsolatedCodexHome("ocx-renamed-provider-export-");
+  const known = "deepseek/deepseek-v4-flash";
+  const overridden = "deepseek/deepseek-v4.1-flash";
+  const config = cfg({ defaultProvider: "CommandCode", providers: { CommandCode: {
+    adapter: "openai-chat", authMode: "key", baseUrl: "https://api.commandcode.ai/provider/v1",
+    liveModels: false, models: [known, overridden, "unknown-model"],
+    modelReasoningEfforts: { [overridden]: ["low"] },
+  } } });
+  try {
+    clearModelCache();
+    const gathered = await gatherRoutedModels(config);
+    const rows = gathered.map(row => ({ ...row, namespaced: `CommandCode/${row.id}` }));
+    const models = exportModelsFromProxyRows(rows, config);
+    const context = ctx({ models, config });
+    const dshConfig = dsh.buildDshClientConfig(context);
+    const dshModels = Object.values(dshConfig["llm-pi-ai"].providers).flatMap(provider => provider.models);
+    expect(dshModels.find(model => model.id === `CommandCode/${known}`)?.reasoningEfforts).toEqual({ high: "high", max: "max" });
+    expect(dshModels.find(model => model.id === `CommandCode/${overridden}`)?.reasoningEfforts).toEqual({ low: "low" });
+    expect(dshModels.find(model => model.id === "CommandCode/unknown-model")?.reasoningEfforts).toBeUndefined();
+    for (const id of [known, overridden, "unknown-model"]) {
+      expect(dshModels.find(model => model.id === `CommandCode/${id}`)).toBeDefined();
+    }
+    const zcodeModels = Object.assign({}, ...Object.values(zcode.buildZcodeClientConfig(context).provider).map(provider => provider.models)) as Record<string, zcode.ZcodeModelEntry>;
+    expect(zcodeModels[`CommandCode/${known}`]).toBeDefined();
+    expect(zcodeModels[`CommandCode/${known}`]!.reasoning?.variants).toEqual(["high", "max"]);
+    expect(zcodeModels[`CommandCode/${overridden}`]).toBeDefined();
+    expect(zcodeModels[`CommandCode/${overridden}`]!.reasoning?.variants).toEqual(["low"]);
+    expect(zcodeModels["CommandCode/unknown-model"]).toBeDefined();
+    expect(zcodeModels["CommandCode/unknown-model"]!.reasoning).toBeUndefined();
+  } finally {
+    clearModelCache();
+    isolated.restore();
+  }
 });

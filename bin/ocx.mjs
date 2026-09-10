@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
- * opencodex npm bin launcher.
+ * opencodex published-package bin launcher.
  *
  * The package source is TypeScript that runs on the Bun runtime. To let
- * `npm install -g @bitkyc08/opencodex` work without a separately-installed Bun,
+ * global npm and pnpm installs of `@bitkyc08/opencodex` work without a separately-installed Bun,
  * we bundle the runtime via the `bun` npm dependency and exec it from this
  * Node shim. (Dev still runs `bun run src/cli/index.ts` directly via the shebang on
- * src/cli/index.ts — only the published npm `bin` routes through here.)
+ * src/cli/index.ts — only the published npm/pnpm `bin` routes through here.)
  */
 import { spawn, spawnSync } from "node:child_process";
 import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../src/update/stop-contract.mjs";
@@ -20,6 +20,14 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isRealBunBinary } from "../src/lib/bun-binary-validator.mjs";
 import { npmInvocation } from "../src/update/npm-invocation.mjs";
+import { pnpmInvocationForPath, resolvePnpmCommands } from "../src/update/pnpm-invocation.mjs";
+import { detectInstallFromPath } from "../src/update/install-detection.mjs";
+import {
+  pnpmOwnerInvocation,
+  resolvePnpmGlobalOwner,
+  runPnpmGlobalUpdate,
+} from "../src/update/pnpm-global-install.mjs";
+import { checkRegistryPackageIntegrity } from "../src/update/registry-integrity.mjs";
 import { hasPendingTeardownIn } from "../src/config/pending-teardown-names.mjs";
 import {
   npmCachePreflightFailureMessage,
@@ -44,6 +52,7 @@ try {
 }
 const require = createRequire(import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
+const installMethod = detectInstallFromPath(here, { exists: existsSync });
 const cliPath = join(here, "..", "src", "cli", "index.ts");
 const NODE_LAUNCH_CONTEXT_ENV = "OCX_NODE_LAUNCH_CONTEXT";
 const NODE_LAUNCH_PROOF_PREFIX = "--ocx-internal-launch-proof=";
@@ -53,7 +62,7 @@ function isNodeModulesInstall() {
 }
 
 function isBunGlobalInstall() {
-  return /[\\/]\.bun[\\/]/.test(here);
+  return installMethod === "bun";
 }
 
 function currentPackageVersion() {
@@ -102,10 +111,9 @@ function historyRestoreIncomplete() {
   }
 }
 
-function repairCodexShimIfNeeded() {
+function repairCodexShimIfNeeded(launcherPath = fileURLToPath(import.meta.url)) {
   if (!shouldRepairCodexShim()) return;
-  const launcher = fileURLToPath(import.meta.url);
-  const res = spawnSync(process.execPath, [launcher, "codex-shim", "install"], {
+  const res = spawnSync(process.execPath, [launcherPath, "codex-shim", "install"], {
     stdio: "inherit",
     windowsHide: true,
   });
@@ -135,33 +143,115 @@ function runTrayLifecycle(launcher, action) {
   });
 }
 
+function shellQuote(value) {
+  if (process.platform === "win32") return `"${value.replaceAll("\"", "\\\"")}"`;
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function launcherStartHint(launcher, port) {
+  return `${shellQuote(process.execPath)} ${shellQuote(launcher)} start --port ${Math.trunc(port)}`;
+}
+
 function runNpmSelfUpdate() {
+  return runPackageManagerSelfUpdate("npm");
+}
+
+function runPnpmSelfUpdate() {
+  return runPackageManagerSelfUpdate("pnpm");
+}
+
+function runningPnpmShimPath() {
+  const invoked = process.argv[1];
+  if (!invoked) return undefined;
+  const name = invoked.replaceAll("\\", "/").split("/").at(-1)?.toLowerCase();
+  if (!new Set(["ocx", "opencodex", "ocx.cmd", "opencodex.cmd", "ocx.ps1", "opencodex.ps1"]).has(name ?? "")) {
+    return undefined;
+  }
+  return resolve(invoked);
+}
+
+function runPackageManagerSelfUpdate(manager) {
   const current = currentPackageVersion();
   const tag = updateTag(current);
-  const latestInvocation = npmInvocation(["view", `${PKG}@${tag}`, "version"]);
-  const installInvocation = npmInvocation(["install", "-g", `${PKG}@${tag}`]);
+  let owner;
+  if (manager === "pnpm") {
+    const ownerResult = resolvePnpmGlobalOwner({
+      packageName: PKG,
+      packagePath: resolve(here, ".."),
+      commandPaths: resolvePnpmCommands(),
+      runningShimPath: runningPnpmShimPath(),
+      runPnpm: (commandPath, args, capture = false) => {
+        const invocation = pnpmInvocationForPath(commandPath, args);
+        if (!invocation) return { status: 1 };
+        return spawnSync(invocation.file, invocation.args, {
+          stdio: capture ? "pipe" : "ignore",
+          encoding: "utf8",
+          timeout: 20_000,
+          windowsHide: true,
+          ...invocation.options,
+        });
+      },
+    });
+    if (!ownerResult.ok) {
+      console.error(`opencodex: ${ownerResult.reason}; aborting before stopping the proxy.`);
+      process.exit(1);
+    }
+    owner = ownerResult.owner;
+  }
+  const managerInvocation = args => manager === "pnpm"
+    ? pnpmOwnerInvocation(owner, args)
+    : npmInvocation(args);
+  const latestInvocation = managerInvocation(["view", `${PKG}@${tag}`, "version"]);
+  const installArgs = manager === "pnpm"
+    ? ["add", "-g", "--allow-build=bun", `${PKG}@${tag}`]
+    : ["install", "-g", `${PKG}@${tag}`];
+  const installInvocation = managerInvocation(installArgs);
   if (!latestInvocation || !installInvocation) {
-    console.error("opencodex: could not resolve npm from a trusted absolute PATH entry; aborting before stopping the proxy.");
+    console.error(`opencodex: could not resolve ${manager} from a trusted absolute PATH entry; aborting before stopping the proxy.`);
     process.exit(1);
   }
   const latestResult = spawnSync(latestInvocation.file, latestInvocation.args, {
     encoding: "utf8",
     timeout: 12000,
     windowsHide: true,
+    ...(latestInvocation.env ? { env: latestInvocation.env } : {}),
     ...latestInvocation.options,
   });
-  const latest = latestResult.status === 0 ? latestResult.stdout.trim() : "";
+  const latest = latestResult.status === 0 && typeof latestResult.stdout === "string" ? latestResult.stdout.trim() : "";
 
-  console.log(`opencodex v${current} (installed via npm, tag ${tag})`);
+  console.log(`opencodex v${current} (installed via ${manager}, tag ${tag})`);
   if (latest && latest === current) {
     console.log(`Already on the latest ${tag} version (v${latest}).`);
     process.exit(0);
   }
 
-  const cachePreflight = runNpmCachePreflight();
-  if (!cachePreflight.ok) {
-    console.error(`opencodex: ${npmCachePreflightFailureMessage(cachePreflight.reason)}. Aborting before stopping the proxy.`);
+  const integrity = checkRegistryPackageIntegrity(PKG, latest || null, args => {
+    const invocation = managerInvocation(args);
+    if (!invocation) return { status: 1 };
+    return spawnSync(invocation.file, invocation.args, {
+      encoding: "utf8",
+      timeout: 12000,
+      windowsHide: true,
+      ...(invocation.env ? { env: invocation.env } : {}),
+      ...invocation.options,
+    });
+  });
+  if (integrity.ok === false) {
+    console.error(`opencodex: ${integrity.reason}; aborting before stopping the proxy.`);
     process.exit(1);
+  }
+  if (integrity.ok === "skipped") {
+    console.warn(`opencodex: integrity pre-flight skipped: ${integrity.reason}. Proceeding best-effort.`);
+  } else {
+    console.log(`Verified ${PKG}@${latest} integrity metadata ${integrity.integrity.slice(0, 24)}…`);
+  }
+
+  if (manager === "npm") {
+    const cachePreflight = runNpmCachePreflight();
+    if (!cachePreflight.ok) {
+      console.error(`opencodex: ${npmCachePreflightFailureMessage(cachePreflight.reason)}. Aborting before stopping the proxy.`);
+      process.exit(1);
+    }
   }
 
   // Remember whether a background service manages the proxy BEFORE stopping — `ocx stop`
@@ -177,15 +267,15 @@ function runNpmSelfUpdate() {
    * may be re-registered and require elevation.
    */
   function serviceRefreshArgs() {
-    return [launcher, "service", "repair"];
+    return [postUpdateLauncher, "service", "repair"];
   }
   /** Register from scratch, preserving the recorded backend. Only for a genuinely absent service. */
   function serviceInstallArgs() {
     try {
       const state = JSON.parse(readFileSync(serviceStatePath, "utf8"));
-      if (state.backend === "native") return [launcher, "service", "install", "--native"];
+      if (state.backend === "native") return [postUpdateLauncher, "service", "install", "--native"];
     } catch { /* missing or corrupt — fall through to default */ }
-    return [launcher, "service", "install"];
+    return [postUpdateLauncher, "service", "install"];
   }
   /**
    * Structured "is a service actually registered?" answer.
@@ -262,16 +352,23 @@ function runNpmSelfUpdate() {
   // get it from one place.
 
   const launcher = fileURLToPath(import.meta.url);
+  // The pnpm owner preflight has verified this package tree and global group. Keep that exact
+  // package path as the recovery starting point; a path returned by the pnpm transaction
+  // replaces it only after the new tree and shims have been verified.
+  let postUpdateLauncher = manager === "pnpm" && owner
+    ? join(owner.packagePath, "bin", "ocx.mjs")
+    : launcher;
+  let postUpdateLauncherUsable = true;
 
   function startProxyDirectly() {
-    if (!existsSync(launcher)) {
+    if (!postUpdateLauncherUsable || !existsSync(postUpdateLauncher)) {
       console.error("opencodex: cannot restart the proxy because the launcher is missing; reinstall opencodex manually.");
       return;
     }
     const env = { ...process.env };
     delete env.OCX_SERVICE;
     console.log(`Attempting to restart the proxy on port ${bakePort}.`);
-    const child = spawn(process.execPath, [launcher, "start", "--port", String(bakePort)], {
+    const child = spawn(process.execPath, [postUpdateLauncher, "start", "--port", String(bakePort)], {
       detached: true,
       stdio: "ignore",
       windowsHide: true,
@@ -296,7 +393,7 @@ function runNpmSelfUpdate() {
       // diagnostic says the service is genuinely absent. Installing after ANY repair
       // failure would resurrect the elevation prompt this change exists to avoid, and
       // could re-register a service the user just uninstalled.
-      if (svc.status !== 0 && readServiceInstalledFromStatus(launcher) === false) {
+      if (svc.status !== 0 && readServiceInstalledFromStatus(postUpdateLauncher) === false) {
         console.log("No registered service found — installing it instead.");
         svc = spawnSync(process.execPath, serviceInstallArgs(), { stdio: "inherit", windowsHide: true });
       }
@@ -305,7 +402,7 @@ function runNpmSelfUpdate() {
         // Exit 0 can still leave stale/missing assets that never bring the proxy
         // back — match the GUI/CLI fallthrough so /healthz is not left dead.
         try {
-          const st = spawnSync(process.execPath, [launcher, "status", "--json"], {
+          const st = spawnSync(process.execPath, [postUpdateLauncher, "status", "--json"], {
             encoding: "utf8",
             timeout: 20_000,
             windowsHide: true,
@@ -365,6 +462,10 @@ function runNpmSelfUpdate() {
     existsSync(join(configDir(), "ocx.pid")) || existsSync(join(configDir(), "runtime-port.json"));
 
   function recoverStoppedRuntimeAfterFailure() {
+    if (!postUpdateLauncherUsable) {
+      console.error("opencodex: no verified active launcher remains for automatic recovery; reinstall opencodex manually.");
+      return;
+    }
     if (serviceWasInstalled) {
       console.warn("opencodex: update failed after stopping the proxy — restoring the previous background service.");
       refreshBackgroundServiceOrStartDirect();
@@ -423,62 +524,105 @@ function runNpmSelfUpdate() {
     }
   }
 
-  // #1942/#1849: stage -> verify -> swap -> rollback instead of installing straight
-  // into the live tree. A failure at any point leaves either the old or the new tree
-  // complete — never a file-less skeleton. Falls back to the legacy in-place install
-  // only when the transactional module cannot run at all.
-  const packageDir = resolve(here, "..");
-  console.log(`Updating${latest ? ` to v${latest}` : ""} (transactional)...`);
+  // npm keeps the existing stage -> verify -> swap -> rollback flow. pnpm owns a
+  // content-addressable store and generated global shims, so its path uses pnpm's own
+  // global update operation and verifies the active group instead of renaming files.
+  console.log(`Updating${latest ? ` to v${latest}` : ""} (${manager === "npm" ? "transactional" : "pnpm-managed"})...`);
   let res;
   try {
-    const tx = transactionalNpmUpdate({
-      packageDir,
-      pkgName: PKG,
-      targetVersion: latest || undefined,
-      tag,
-      runNpm: (args) => {
-        const invocation = npmInvocation(args);
-        if (!invocation) return { status: 1 };
-        return spawnSync(invocation.file, invocation.args, {
-          stdio: "inherit",
-          timeout: 180000,
-          windowsHide: true,
-          ...invocation.options,
-        });
-      },
-      log: (line) => console.log(line),
-    });
-    if (tx.ok) {
-      res = { status: 0 };
-    } else if (tx.phase === "stage" || tx.phase === "verify") {
-      // Live tree untouched: report and stop. Nothing to roll back.
-      console.error(`opencodex: update aborted before touching the live install (${tx.phase}): ${tx.error}`);
-      res = { status: 1 };
+    if (manager === "npm") {
+      const packageDir = resolve(here, "..");
+      const tx = transactionalNpmUpdate({
+        packageDir,
+        pkgName: PKG,
+        targetVersion: latest || undefined,
+        tag,
+        runNpm: (args) => {
+          const invocation = npmInvocation(args);
+          if (!invocation) return { status: 1 };
+          return spawnSync(invocation.file, invocation.args, {
+            stdio: "inherit",
+            timeout: 180000,
+            windowsHide: true,
+            ...invocation.options,
+          });
+        },
+        log: (line) => console.log(line),
+      });
+      postUpdateLauncherUsable = tx.ok
+        || tx.rolledBack === true
+        || ["stage", "verify", "swap-backup"].includes(tx.phase);
+      if (tx.ok) {
+        res = { status: 0 };
+      } else if (tx.phase === "stage" || tx.phase === "verify") {
+        // Live tree untouched: report and stop. Nothing to roll back.
+        console.error(`opencodex: update aborted before touching the live install (${tx.phase}): ${tx.error}`);
+        res = { status: 1 };
+      } else {
+        console.error(`opencodex: update failed (${tx.phase}): ${tx.error}${tx.rolledBack ? " — previous version restored." : ""}`);
+        res = { status: 1 };
+      }
     } else {
-      console.error(`opencodex: update failed (${tx.phase}): ${tx.error}${tx.rolledBack ? " — previous version restored." : ""}`);
-      res = { status: 1 };
+      const update = runPnpmGlobalUpdate({
+        packageName: PKG,
+        currentVersion: current,
+        targetVersion: latest || undefined,
+        tag,
+        owner,
+        runningPackagePath: resolve(here, ".."),
+        runPnpm: (args, capture = false) => {
+          const invocation = pnpmOwnerInvocation(owner, args);
+          if (!invocation) return { status: 1 };
+          return spawnSync(invocation.file, invocation.args, {
+            stdio: capture ? "pipe" : "inherit",
+            encoding: "utf8",
+            timeout: 180000,
+            windowsHide: true,
+            env: invocation.env,
+            ...invocation.options,
+          });
+        },
+        log: line => console.log(line),
+      });
+      if (update.ok) {
+        // pnpm switches the active global group and updates its shim. Continue recovery
+        // through that fresh package tree, not the old group whose launcher is still
+        // executing this update.
+        postUpdateLauncher = join(update.path, "bin", "ocx.mjs");
+        res = { status: 0 };
+      } else {
+        console.error(`opencodex: ${update.error}${update.rolledBack ? "." : " Manual recovery may be required."}`);
+        postUpdateLauncherUsable = Boolean(update.activePath);
+        if (update.activePath) postUpdateLauncher = join(update.activePath, "bin", "ocx.mjs");
+        res = { status: 1 };
+      }
     }
   } catch (error) {
     // An unexpected throw means we cannot prove the live tree is untouched, so the
     // legacy in-place install (which deletes live first) is exactly the wrong rescue —
     // it recreates the #1849 destruction path. Report and stop; the boot probe and the
     // recovery marker cover the swap-window states.
-    console.error(`opencodex: transactional update failed unexpectedly (${error?.message ?? error}). ` +
-      `The live install was not knowingly modified; run 'ocx update' again or reinstall with ` +
-      `npm install -g --allow-scripts=bun ${PKG}@${tag}.`);
+    const manual = manager === "pnpm"
+      ? `pnpm add -g --allow-build=bun ${PKG}@${tag}`
+      : `npm install -g --allow-scripts=bun ${PKG}@${tag}`;
+    // An unexpected exception leaves the active package path unproven for either manager.
+    // Do not run service/tray/proxy recovery through a possibly half-swapped tree.
+    postUpdateLauncherUsable = false;
+    console.error(`opencodex: ${manager} update failed unexpectedly (${error?.message ?? error}). ` +
+      `The live install was not knowingly modified; run 'ocx update' again or reinstall with ${manual}.`);
     res = { status: 1 };
   }
   if (res.status === 0) {
     console.log(`\nUpdated${latest ? ` to v${latest}` : ""}.`);
-    repairCodexShimIfNeeded();
+    repairCodexShimIfNeeded(postUpdateLauncher);
     if (trayBeforeUpdate.refreshAfterReplacement) {
-      const tray = spawnSync(process.execPath, [launcher, ...trayBeforeUpdate.installArgs], {
+      const tray = spawnSync(process.execPath, [postUpdateLauncher, ...trayBeforeUpdate.installArgs], {
         stdio: "inherit",
         windowsHide: true,
       });
       if (tray.status !== 0) {
         console.warn("opencodex: Windows tray refresh failed. Run: ocx tray install");
-        if (trayBeforeUpdate.restoreOnFailure) runTrayLifecycle(launcher, "start");
+        if (trayBeforeUpdate.restoreOnFailure && postUpdateLauncherUsable) runTrayLifecycle(postUpdateLauncher, "start");
       }
     }
     // The stop above unloaded any managed service; refresh via the freshly-installed
@@ -487,19 +631,22 @@ function runNpmSelfUpdate() {
       console.log("Refreshing the background service with the updated files...");
       refreshBackgroundServiceOrStartDirect();
     } else {
-      console.log("Restart the proxy:  ocx start");
+      console.log(`Restart the proxy:  ${launcherStartHint(postUpdateLauncher, bakePort)}`);
     }
     process.exit(0);
   }
-  if (trayBeforeUpdate.restoreOnFailure) runTrayLifecycle(launcher, "start");
+  if (trayBeforeUpdate.restoreOnFailure && postUpdateLauncherUsable) runTrayLifecycle(postUpdateLauncher, "start");
   recoverStoppedRuntimeAfterFailure();
-  console.error(`\nUpdate failed (npm exit ${res.status ?? "?"}). Try manually:  npm install -g --allow-scripts=bun ${PKG}@${tag}`);
+  const manual = manager === "pnpm"
+    ? `pnpm add -g --allow-build=bun ${PKG}@${tag}`
+    : `npm install -g --allow-scripts=bun ${PKG}@${tag}`;
+  console.error(`\nUpdate failed (${manager} exit ${res.status ?? "?"}). Try manually:  ${manual}`);
   process.exit(1);
 }
 
 function bunBinDir() {
   // Resolve the `bun` dependency's directory without hardcoding the platform
-  // package — npm's os/cpu/libc resolution already picked the right @oven/bun-*.
+  // package — the package manager's os/cpu/libc resolution already picked the right @oven/bun-*.
   return dirname(require.resolve("bun/package.json"));
 }
 
@@ -511,7 +658,7 @@ const BUN_RUNTIME_SOURCE_ENV = "OCX_BUN_RUNTIME_SOURCE";
 const BUN_RUNTIME_PATH_ENV = "OCX_BUN_RUNTIME_PATH";
 
 function findBunBinary(bunDir) {
-  // The npm `bun` package ships the binary as bin/bun.exe on every platform;
+  // The bundled `bun` package ships the binary as bin/bun.exe on every platform;
   // probe bin/bun too for forward compatibility.
   for (const name of ["bun.exe", "bun"]) {
     const p = join(bunDir, "bin", name);
@@ -521,12 +668,15 @@ function findBunBinary(bunDir) {
 }
 
 function fail(msg) {
+  const reinstall = installMethod === "pnpm"
+    ? "pnpm add -g --allow-build=bun @bitkyc08/opencodex"
+    : "npm install -g --allow-scripts=bun @bitkyc08/opencodex";
   console.error(
     `opencodex: ${msg}\n` +
       "The bundled Bun runtime could not be prepared. This usually means the\n" +
-      "install skipped lifecycle scripts (e.g. npm blocked bun's postinstall\n" +
-      "under allowScripts) or optional dependencies. Reinstall with:\n" +
-      "  npm install -g --allow-scripts=bun @bitkyc08/opencodex\n" +
+      "install skipped lifecycle scripts (for example npm blocked bun's postinstall\n" +
+      "or pnpm did not approve bun's build) or optional dependencies. Reinstall with:\n" +
+      `  ${reinstall}\n` +
       "(use sudo if the original install used sudo; without --ignore-scripts\n" +
       "and without --omit=optional / optional=false)"
   );
@@ -534,7 +684,7 @@ function fail(msg) {
 }
 
 function resolveBun({ allowInstall = true } = {}) {
-  // Keep direct npm-launcher starts aligned with durable service/shim installs:
+  // Keep direct package-launcher starts aligned with durable service/shim installs:
   // a valid explicit runtime must win even when the bundled dependency exists.
   const override = process.env[BUN_OVERRIDE_ENV]?.trim();
   if (override) {
@@ -566,7 +716,7 @@ function resolveBun({ allowInstall = true } = {}) {
   return { path: bin, source: "bundled" };
 }
 
-// `ocx update --help` prints usage and exits WITHOUT side effects. The npm launcher
+// `ocx update --help` prints usage and exits WITHOUT side effects. The Node launcher
 // intercepts `update` before the Bun CLI starts, so the help short-circuit must live
 // here too — otherwise --help runs the real self-update, stops the proxy, and drops
 // in-flight routed streams (issue #168).
@@ -584,13 +734,14 @@ if (codexCliUpdateInspection && typeof process.versions.bun === "string") {
 }
 
 if (process.argv[2] === "update" && isNodeModulesInstall() && !isBunGlobalInstall()) {
-  runNpmSelfUpdate();
+  if (installMethod === "npm") runNpmSelfUpdate();
+  if (installMethod === "pnpm") runPnpmSelfUpdate();
 }
 
 // #1849 boot probe: a prior update that lost power (or double-faulted) mid-swap leaves a
 // backup sibling and a broken live tree. Restore before anything tries to run from the
 // broken tree; reap stale backups once the live tree verifies healthy.
-if (!codexCliUpdateInspection && isNodeModulesInstall() && !isBunGlobalInstall()) {
+if (!codexCliUpdateInspection && installMethod === "npm" && isNodeModulesInstall() && !isBunGlobalInstall()) {
   try {
     const probe = bootRestoreProbe(resolve(here, ".."));
     if (probe.action === "restored") {

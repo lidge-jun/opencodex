@@ -61,6 +61,16 @@ function canonicalize(path: string): string {
 const REAL_HOME = process.env[REAL_HOME_ENV]?.trim() || homedir();
 const PROTECTED_HOME = canonicalize(join(REAL_HOME, ".opencodex"));
 const PROTECTED_CODEX_HOME = canonicalize(join(REAL_HOME, ".codex"));
+/**
+ * `~/Library/LaunchAgents` needs its own entry because HOME isolation does not reach it:
+ * `os.homedir()` reads the password database, not `$HOME`, so a macOS test that rewrites
+ * HOME still resolves `plistPath()` to the developer's real LaunchAgents directory. The
+ * launchd install tests were doing exactly that — replacing the live
+ * `com.opencodex.proxy.plist` with one whose token file, log path and Bun paths all point
+ * into a temp sandbox, for as long as the case ran. launchd holds its own parsed copy, so
+ * nothing broke until the job next restarted.
+ */
+const PROTECTED_LAUNCH_AGENTS = canonicalize(join(REAL_HOME, "Library", "LaunchAgents"));
 
 /** The production home this process protects. Exported for the guard's own tests. */
 export function protectedHomeForTests(): string {
@@ -74,6 +84,23 @@ export function protectedCodexHomeForTests(): string {
 
 export function isTestHomeGuardArmed(): boolean {
   return process.env[GUARD_ENV] === "1";
+}
+
+/**
+ * Whether `dir` IS the protected production home, decided with the SAME canonicalization as
+ * {@link assertNotRealHomeUnderTest}.
+ *
+ * For the caller that must FILTER the real home out of a candidate list instead of refusing
+ * one write: `serviceStatePaths()` in `src/service.ts` keeps a legacy
+ * `~/.opencodex/service-state.json` entry so an install made before OPENCODEX_HOME existed
+ * can still be found, and under an armed test process that entry is the developer's live
+ * record. Exported so that filter cannot drift onto a weaker comparison — `resolve()` alone
+ * calls `/var/folders/...` and `/private/var/folders/...` different paths, which is exactly
+ * how a macOS sandbox path slips past a string compare.
+ */
+export function isProtectedHomeUnderTest(dir: string): boolean {
+  if (!isTestHomeGuardArmed()) return false;
+  return canonicalize(dir) === PROTECTED_HOME;
 }
 
 /**
@@ -91,6 +118,28 @@ export function assertNotRealHomeUnderTest(dir: string): void {
     `refusing to write the real OpenCodex home (${PROTECTED_HOME}) from a test process. `
     + "Point OPENCODEX_HOME at a temp directory for this test, or inject persistence "
     + "instead of calling the global writer (see devlog 260730_codex_rs_upstream_v2_live_handoff/070).",
+  );
+}
+
+/** The production LaunchAgents directory this process protects. Exported for its tests. */
+export function protectedLaunchAgentsDirForTests(): string {
+  return PROTECTED_LAUNCH_AGENTS;
+}
+
+/**
+ * Throw when an armed test process is about to write the real `~/Library/LaunchAgents`.
+ *
+ * Same contract as {@link assertNotRealHomeUnderTest}: call before any mkdir/write, and
+ * pass a DIRECTORY. A launchd test gives `installLaunchd` an explicit plist path inside its
+ * own fixture directory instead.
+ */
+export function assertNotRealLaunchAgentsUnderTest(dir: string): void {
+  if (!isTestHomeGuardArmed()) return;
+  if (canonicalize(dir) !== PROTECTED_LAUNCH_AGENTS) return;
+  throw new Error(
+    `refusing to write the real LaunchAgents directory (${PROTECTED_LAUNCH_AGENTS}) from a test `
+    + "process: os.homedir() ignores HOME, so rewriting HOME does not move this path. Pass an "
+    + "explicit plist path inside the test's own fixture directory instead.",
   );
 }
 

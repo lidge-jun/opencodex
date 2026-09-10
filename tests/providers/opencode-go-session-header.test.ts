@@ -1,8 +1,11 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 import { providerConfigSeed } from "../../src/providers/derive";
 import { resolveOpenCodeGoTransport } from "../../src/providers/opencode-go-transport";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
 import { handleResponses } from "../../src/server/responses/core";
+import { handleResponsesWithPolicyFallback, rankPolicyFallbackCandidates } from "../../src/server/responses/policy-fallback";
+import { getOrAllocateRequestSessionLane } from "../../src/server/request-log-conversation";
 import { handleChatCompletions } from "../../src/server/chat-completions";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
@@ -120,6 +123,127 @@ describe("OpenCode Go session affinity (#3344)", () => {
   const originalFetch = globalThis.fetch;
   afterEach(() => { globalThis.fetch = originalFetch; });
 
+  for (const model of [CHAT_MODEL, MUSE_MODEL]) {
+    for (const preliminaryAdapter of ["openai-chat", "openai-responses"] as const) {
+    for (const strategy of ["random", "failover"] as const) {
+      for (const identity of [
+        { name: "metadata", headers: {}, metadata: "user_test_account__session_conversation-a", expected: "ocx_a89540229ef781fd5f7adf92a711b436" },
+        { name: "explicit Go header", headers: { [SESSION_HEADER]: "client-session-a" }, metadata: "other-session", expected: "ocx_516d593899f34b7baca2db37c7b0c8c5" },
+        { name: "explicit lane", headers: { session_id: "native-client-session", [SESSION_HEADER]: "client-session-a" }, metadata: "other-session", expected: "ocx_a197dbb87311c29a5fbe51140e3845ce" },
+        { name: "operator override", headers: {}, metadata: "user_test_account__session_conversation-a", operator: true, expected: "operator-session" },
+        { name: "invalid explicit lane", headers: { session_id: "invalid\tidentity", [SESSION_HEADER]: "invalid\tidentity" }, metadata: "user_test_account__session_conversation-a", expected: "ocx_a89540229ef781fd5f7adf92a711b436" },
+        { name: "invalid metadata", headers: {}, metadata: "invalid\u0000identity", expected: "isolated" },
+        { name: "shared system only", headers: {}, metadata: undefined, expected: "isolated" },
+      ]) {
+      test(`Claude ${strategy} ${preliminaryAdapter} to Go uses ${identity.name} on ${model}`, async () => {
+        // Without valid identity the final Go destination still receives a
+        // request-scoped lane (#4172): well-formed, never the shared-system or
+        // metadata-derived value, and distinct across independent requests.
+        const observed: string[] = [];
+        for (const round of [1, 2]) {
+        clearComboSelectionState();
+        clearComboTargetCooldowns();
+        const requests: Array<{ url: string; headers: Headers }> = [];
+        globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          requests.push({ url, headers: new Headers(init?.headers) });
+          if (url.startsWith("https://other.example")) {
+            return Response.json({ error: { message: "model retired", code: "model_not_found" } }, { status: 404 });
+          }
+          return upstreamResponse(url, true);
+        }) as typeof fetch;
+        const config = {
+          providers: {
+            other: { adapter: preliminaryAdapter, authMode: "key", baseUrl: "https://other.example/v1", apiKey: "test-key", models: ["other"] },
+            "renamed-go": opencodeGo(identity.operator ? { headers: { "X-OpenCode-Session": "operator-session" } } : {}),
+          },
+          combos: { affinity: { strategy, targets: [
+            { provider: "other", model: "other" }, { provider: "renamed-go", model },
+          ] } },
+        } as unknown as OcxConfig;
+        const entropy = spyOn(Math, "random").mockReturnValue(0.9);
+        // Preliminary route checks the first target; dispatch independently picks Go.
+        entropy.mockReturnValueOnce(0);
+        try {
+          const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
+            method: "POST", headers: { "content-type": "application/json", ...identity.headers } as Record<string, string>,
+            body: JSON.stringify({ model: "combo/affinity", max_tokens: 64, stream: false,
+              messages: [{ role: "user", content: "ping" }],
+              system: "Shared system prompt is not a session.",
+              metadata: { user_id: identity.metadata } }),
+          }), config, { model: "", provider: "" });
+          await response.text();
+          expect(response.status).toBe(200);
+          expect(requests.at(-1)?.url).toStartWith("https://opencode.ai/zen/go/v1/");
+          const lane = requests.at(-1)?.headers.get(SESSION_HEADER);
+          if (identity.expected === "isolated") {
+            expect(lane).toMatch(/^ocx_[0-9a-f]{32}$/);
+            expect(lane).not.toBe("ocx_a89540229ef781fd5f7adf92a711b436");
+            observed.push(lane!);
+          } else {
+            expect(lane).toBe(identity.expected);
+          }
+          if (strategy === "failover") {
+            expect(requests).toHaveLength(2);
+            expect(requests[0]?.headers.has(SESSION_HEADER)).toBe(false);
+          } else {
+            expect(requests).toHaveLength(1);
+          }
+        } finally {
+          entropy.mockRestore();
+          clearComboSelectionState();
+          clearComboTargetCooldowns();
+        }
+        if (identity.expected !== "isolated" && round === 1) break;
+        }
+        if (identity.expected === "isolated") {
+          expect(observed).toHaveLength(2);
+          expect(observed[0]).not.toBe(observed[1]);
+        }
+      });
+      }
+    }
+    }
+
+    test(`Claude random Go preflight does not leak affinity to a final non-Go Responses target (${model})`, async () => {
+      clearComboSelectionState();
+      clearComboTargetCooldowns();
+      const requests: Headers[] = [];
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        expect(String(input)).toBe("https://other.example/v1/responses");
+        requests.push(new Headers(init?.headers));
+        return upstreamResponse(String(input));
+      }) as typeof fetch;
+      const config = {
+        providers: {
+          other: { adapter: "openai-responses", authMode: "key", baseUrl: "https://other.example/v1", apiKey: "test-key", models: ["other"] },
+          "renamed-go": opencodeGo(),
+        },
+        combos: { affinity: { strategy: "random", targets: [
+          { provider: "renamed-go", model }, { provider: "other", model: "other" },
+        ] } },
+      } as unknown as OcxConfig;
+      const entropy = spyOn(Math, "random").mockReturnValue(0.9).mockReturnValueOnce(0);
+      try {
+        const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
+          method: "POST", headers: { "content-type": "application/json", [SESSION_HEADER]: "client-session-a" },
+          body: JSON.stringify({ model: "combo/affinity", max_tokens: 64, stream: false,
+            messages: [{ role: "user", content: "ping" }],
+            metadata: { user_id: "user_test_account__session_conversation-a" } }),
+        }), config, { model: "", provider: "" });
+        await response.text();
+        expect(response.status).toBe(200);
+        expect(requests).toHaveLength(1);
+        expect(requests[0]?.has(SESSION_HEADER)).toBe(false);
+        expect(requests[0]?.has("session_id")).toBe(false);
+      } finally {
+        entropy.mockRestore();
+        clearComboSelectionState();
+        clearComboTargetCooldowns();
+      }
+    });
+  }
+
   test("Claude metadata gives stable Go affinity across turns and distinct conversations", async () => {
     const input = { claude: true, model: CHAT_MODEL, metadataUserId: "user_test_account__session_conversation-a" };
     const first = await captureRequest(input);
@@ -133,12 +257,17 @@ describe("OpenCode Go session affinity (#3344)", () => {
     expect(first.headers.get(SESSION_HEADER)).not.toContain("conversation-a");
   });
 
-  test("Claude recognizes renamed canonical Go destinations and omits shared system affinity", async () => {
+  test("Claude recognizes renamed canonical Go destinations and isolates a request with no identity", async () => {
     const input = { claude: true, model: CHAT_MODEL, providerName: "renamed-go" };
     const metadata = await captureRequest({ ...input, metadataUserId: "user_test_account__session_conversation-a" });
     const desktop = await captureRequest(input);
+    const secondDesktop = await captureRequest(input);
     expect(metadata.headers.get(SESSION_HEADER)).toBe("ocx_a89540229ef781fd5f7adf92a711b436");
-    expect(desktop.headers.has(SESSION_HEADER)).toBe(false);
+    // A shared system prompt is not identity, so this request has none. It still has to carry the
+    // header — Go rejects requests without one — but under a lane of its own rather than a shared value.
+    expect(desktop.headers.get(SESSION_HEADER)).toMatch(/^ocx_[0-9a-f]{32}$/);
+    expect(desktop.headers.get(SESSION_HEADER)).not.toBe(metadata.headers.get(SESSION_HEADER));
+    expect(secondDesktop.headers.get(SESSION_HEADER)).not.toBe(desktop.headers.get(SESSION_HEADER));
   });
 
   test("Claude explicit Go header precedes metadata and matches native Chat affinity", async () => {
@@ -185,11 +314,17 @@ describe("OpenCode Go session affinity (#3344)", () => {
       }
     });
 
-    test(`Claude ${model} omits Go affinity without usable metadata identity`, async () => {
+    test(`Claude ${model} isolates each request whose metadata identity is unusable`, async () => {
+      const seen = new Set<string>();
       for (const metadataUserId of [undefined, "", " \t\n ", "invalid\u0000identity", "x".repeat(4097)]) {
         const captured = await captureRequest({ claude: true, model, metadataUserId });
         expect(captured.url).toBe(url);
-        expect(captured.headers.has(SESSION_HEADER)).toBe(false);
+        // Unusable identity is not the same as no header: the request still reaches Go, and it does
+        // so under a lane nobody else shares.
+        const lane = captured.headers.get(SESSION_HEADER);
+        expect(lane).toMatch(/^ocx_[0-9a-f]{32}$/);
+        expect(seen.has(lane!)).toBe(false);
+        seen.add(lane!);
         expect(captured.headers.has("session_id")).toBe(false);
       }
     });
@@ -365,5 +500,90 @@ describe("OpenCode Go session affinity (#3344)", () => {
       provider: opencodeGo({ baseUrl: "https://opencode.ai.evil.test/zen/go/v1" }),
     });
     expect(captured.headers.has(SESSION_HEADER)).toBe(false);
+  });
+});
+
+describe("OpenCode Go affinity across the policy fallback retry (#4172)", () => {
+  const policyTrace = {
+    version: 1,
+    decisionId: "decision-policy-go",
+    createdAt: Date.now(),
+    requestedModel: "policy/go",
+    routeKind: "policy",
+    profile: { id: "profile-go", revision: "rev-1" },
+    requirements: [],
+    candidates: [
+      { provider: "opencode-go", model: MUSE_MODEL, eligible: true, exclusions: [], score: { total: 2 } },
+      { provider: "opencode-go-2", model: MUSE_MODEL, eligible: true, exclusions: [], score: { total: 1 } },
+    ],
+    selected: { candidateIndex: 0, provider: "opencode-go", model: MUSE_MODEL, reason: "policy-test" },
+  } as unknown as Parameters<typeof rankPolicyFallbackCandidates>[0];
+
+  function sessionlessRequest(): Request {
+    return new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "policy/go", input: "ping", stream: false }),
+    });
+  }
+
+  function laneHeaderFor(req: Request): string | undefined {
+    return resolveOpenCodeGoTransport(opencodeGo(), getOrAllocateRequestSessionLane(req))
+      .headers?.[SESSION_HEADER];
+  }
+
+  async function runPolicyFallback(req: Request): Promise<Request[]> {
+    const seen: Request[] = [];
+    let attempts = 0;
+    const runCore = (async (coreReq: Request, _config: unknown, logCtx: { routeDecision?: unknown }) => {
+      seen.push(coreReq);
+      logCtx.routeDecision = policyTrace;
+      attempts += 1;
+      if (attempts === 1) {
+        return new Response(JSON.stringify({ error: { message: "upstream temporarily unavailable" } }), {
+          status: 503,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return Response.json({ id: "resp_policy_go", object: "response", status: "completed", output: [] });
+    }) as unknown as NonNullable<Parameters<typeof handleResponsesWithPolicyFallback>[4]>["runCore"];
+
+    const config = { providers: { "opencode-go": opencodeGo() } } as unknown as OcxConfig;
+    const response = await handleResponsesWithPolicyFallback(
+      req, config, { model: "", provider: "" } as never, {}, { runCore },
+    );
+    expect(response.status).toBe(200);
+    return seen;
+  }
+
+  test("a sessionless request keeps one lane when the policy hops to the next candidate", async () => {
+    const seen = await runPolicyFallback(sessionlessRequest());
+    // The retry is a different Request object built by requestWithCandidate. Without the link it
+    // would look sessionless again and be handed a second lane, splitting one turn across two Go
+    // conversations — which is exactly what the header exists to prevent.
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).not.toBe(seen[0]);
+    const first = laneHeaderFor(seen[0]!);
+    expect(first).toMatch(/^ocx_[0-9a-f]{32}$/);
+    expect(laneHeaderFor(seen[1]!)).toBe(first);
+  });
+
+  test("two independent sessionless requests do not share a lane through the same fallback", async () => {
+    const firstTurn = await runPolicyFallback(sessionlessRequest());
+    const secondTurn = await runPolicyFallback(sessionlessRequest());
+    expect(laneHeaderFor(secondTurn[0]!)).not.toBe(laneHeaderFor(firstTurn[0]!));
+    expect(laneHeaderFor(secondTurn[1]!)).toBe(laneHeaderFor(secondTurn[0]!));
+  });
+
+  test("real conversation identity still wins over the per-request allocation", async () => {
+    const req = new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: codexHeaders("child-thread-policy"),
+      body: JSON.stringify({ model: "policy/go", input: "ping", stream: false }),
+    });
+    const seen = await runPolicyFallback(req);
+    const expected = laneHeaderFor(req);
+    expect(laneHeaderFor(seen[0]!)).toBe(expected);
+    expect(laneHeaderFor(seen[1]!)).toBe(expected);
   });
 });

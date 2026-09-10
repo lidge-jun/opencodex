@@ -6,6 +6,7 @@ import { CodexPauseToggleLabel, CodexTicketBadge } from "./codex-account-pool-he
 import type { CodexAccountEntry } from "./codex-account-pool-types";
 import type { CodexAccountModeState } from "../codex-multi-state";
 import type { TFn } from "../i18n/shared";
+import type { MainDeviceReauthState } from "./use-main-device-reauth";
 import type { NoticeTone } from "../ui";
 import { navigateHash } from "../hash-routing";
 import {
@@ -37,6 +38,7 @@ export function CodexAccountPoolMainCard({
   onCopyDoctor,
   doctorCopyOutcomeFor,
   onManageMainHardLock,
+  mainReauth,
 }: {
   t: TFn;
   main: CodexAccountEntry | undefined;
@@ -62,6 +64,12 @@ export function CodexAccountPoolMainCard({
   onCopyDoctor?: (accountId: string) => void;
   doctorCopyOutcomeFor?: (accountId: string) => "copied" | "unavailable" | null;
   onManageMainHardLock?: () => void;
+  /** #3898: native-main device reauth flow state and controls (dedicated namespace). */
+  mainReauth?: {
+    state: MainDeviceReauthState;
+    start: () => Promise<void>;
+    cancel: () => Promise<void>;
+  } | undefined;
 }) {
   const mainFallbackLabel = t("codexAuth.codexApp");
   const mainId = main?.id ?? "__main__";
@@ -182,7 +190,47 @@ export function CodexAccountPoolMainCard({
         <div className="card-sub faint">{t("pws.healthCooldownHint")}</div>
       )}
       {showReauth
-        ? <div className="card-sub faint">{t("codexAuth.mainTokenExpired")}</div>
+        ? <div className="card-sub faint">
+            <p role="status">{t("codexAuth.mainTokenExpired")}</p>
+            {mainReauth && (mainReauth.state.phase === "idle" || mainReauth.state.phase === "failed") && (
+              <>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm codex-auth-action-btn"
+                  onClick={() => { void mainReauth.start(); }}
+                >
+                  {t("codexAuth.mainReauthDevice")}
+                </button>
+                {mainReauth.state.phase === "failed" && (
+                  <span className="badge badge-amber">{t("codexAuth.mainReauthFailed")}: {mainReauth.state.code}</span>
+                )}
+              </>
+            )}
+            {mainReauth && mainReauth.state.phase === "starting" && (
+              <span className="faint">{t("codexAuth.mainReauthPending")}</span>
+            )}
+            {mainReauth && (mainReauth.state.phase === "pending" || mainReauth.state.phase === "committing") && (
+              <span className="codex-main-reauth-pending">
+                {mainReauth.state.verificationUrl && (
+                  <span>{t("codexAuth.mainReauthOpen")}: {mainReauth.state.verificationUrl}</span>
+                )}
+                {mainReauth.state.deviceCode && (
+                  <strong>{t("codexAuth.mainReauthCode")}: {mainReauth.state.deviceCode}</strong>
+                )}
+                <span className="faint">{t("codexAuth.mainReauthPending")}</span>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm codex-auth-action-btn"
+                  onClick={() => { void mainReauth.cancel(); }}
+                >
+                  {t("codexAuth.mainReauthCancel")}
+                </button>
+              </span>
+            )}
+            {mainReauth && mainReauth.state.phase === "succeeded" && (
+              <span className="badge badge-primary">{t("codexAuth.mainReauthSucceeded")}</span>
+            )}
+          </div>
         : !inCooldown && <>
             <QuotaBars
               quota={main?.quota ?? null}
@@ -206,9 +254,6 @@ export function CodexAccountPoolPageHead({
   actionFeedbackTone,
   onRefresh,
   onPauseExhausted,
-  sparkVisible,
-  sparkBusy,
-  onToggleSpark,
 }: {
   t: TFn;
   embedded: boolean;
@@ -219,10 +264,6 @@ export function CodexAccountPoolPageHead({
   actionFeedbackTone?: NoticeTone | null;
   onRefresh: () => void;
   onPauseExhausted: () => void;
-  /** undefined until the preference has loaded, so the switch never renders a guessed state. */
-  sparkVisible?: boolean;
-  sparkBusy?: boolean;
-  onToggleSpark?: () => void;
 }) {
   return (
     <div
@@ -238,29 +279,8 @@ export function CodexAccountPoolPageHead({
         >
           {actionFeedback ?? ""}
         </span>
-        {sparkVisible !== undefined && onToggleSpark && (
-          <span className="codex-auth-spark-toggle">
-            <span className="codex-auth-spark-toggle__label">{t("codexAuth.sparkQuota")}</span>
-            <button
-              type="button"
-              className={`toggle ${sparkVisible ? "on" : ""}`}
-              onClick={onToggleSpark}
-              disabled={!!sparkBusy}
-              aria-pressed={sparkVisible}
-              aria-label={t("codexAuth.sparkQuota")}
-              title={t("codexAuth.sparkQuotaHint")}
-            >
-              <span className="toggle-knob" />
-            </button>
-          </span>
-        )}
-        {/*
-          The two account-scoped actions used to live here, beside the page title. On the
-          standalone page that put four controls plus a heading on one row, and the actions
-          sat far above the account cards they act on. They render in
-          CodexAccountPoolActions below instead. The embedded surface keeps them inline,
-          because there is no title row there to crowd.
-        */}
+        {/* The standalone pause/refresh row sits next to the account cards. Embedded
+            surfaces keep those actions beside feedback because there is no page title. */}
         {embedded && (
           <CodexAccountPoolActionButtons
             t={t}

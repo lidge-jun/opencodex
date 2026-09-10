@@ -1,3 +1,4 @@
+import { codexCompatibleUrl } from "../codex/context-compat";
 /**
  * /v1/live and /v1/realtime/calls relay (issue #371).
  *
@@ -34,6 +35,7 @@ import {
   cooldownErrorResponse,
   CodexAuthContextError,
   CodexMainProfileDrainingError,
+  CodexModelAvailabilityError,
   CodexPoolAuthenticationError,
   CodexThreadAffinityExpiredError,
 } from "../codex/auth-context";
@@ -47,6 +49,7 @@ import type { RequestLogContext } from "./request-log";
 import { codexLogAccountId } from "./responses";
 import type { AdmissionLease } from "../lib/admission";
 import { codexAccountSelectionForTurn } from "./lifecycle";
+import { codexModelAvailabilityErrorResponse } from "./responses/codex-auth-error";
 
 /** Voice call create can wait on SDP negotiation; bound a hung upstream. */
 const LIVE_UPSTREAM_TIMEOUT_MS = 120_000;
@@ -370,7 +373,7 @@ export function buildLiveSidebandUpstreamWsUrl(
   );
 }
 
-async function backendJsonBodyFromApiMultipart(
+export async function backendJsonBodyFromApiMultipart(
   body: ArrayBuffer,
   contentType: string,
 ): Promise<{ body: Uint8Array; contentType: string } | Response> {
@@ -423,14 +426,20 @@ export async function readBodyCapped(
   stream: ReadableStream<Uint8Array> | null,
   maxBytes: number,
   tooLargeMessage: (total: number) => string,
+  signal?: AbortSignal,
 ): Promise<ArrayBuffer | Response> {
   if (!stream) return new ArrayBuffer(0);
   const reader = stream.getReader();
+  const abortRead = () => { void reader.cancel(signal?.reason).catch(() => {}); };
+  signal?.addEventListener("abort", abortRead, { once: true });
   const chunks: Uint8Array[] = [];
   let total = 0;
   try {
+    if (signal?.aborted) abortRead();
+    signal?.throwIfAborted();
     for (;;) {
       const { done, value } = await reader.read();
+      signal?.throwIfAborted();
       if (done) break;
       if (!value || value.byteLength === 0) continue;
       total += value.byteLength;
@@ -449,6 +458,7 @@ export async function readBodyCapped(
     await reader.cancel(err).catch(() => {});
     throw err;
   } finally {
+    signal?.removeEventListener("abort", abortRead);
     try {
       // Always release: `reader.cancel()` does NOT drop the lock, and holding it would leave
       // the stream permanently locked for any later consumer (audit R-WP5-2).
@@ -557,6 +567,8 @@ export async function resolveLiveRelay(
           "authentication_error",
           "Selected Codex account needs reauthentication",
         );
+      } else if (err instanceof CodexModelAvailabilityError) {
+        forwardAuthError = codexModelAvailabilityErrorResponse(err);
       } else if (err instanceof CodexPoolAuthenticationError) {
         forwardAuthError = formatErrorResponse(401, "authentication_error", err.message);
       } else {
@@ -635,7 +647,7 @@ export async function handleLive(
     // Frameless API-shape call-create posts to `{base}/live` without the AVAS
     // query (openai/codex RealtimeCallClient, realtime_call.rs); only the
     // realtime/calls inbound shape keeps the legacy keyed AVAS endpoint.
-    url = new URL(req.url).pathname === "/v1/live"
+    url = codexCompatibleUrl(req.url).pathname === "/v1/live"
       ? forwardLiveUrl(relay.providerBaseUrl, /* usesBackendShape */ false)
       : keyedLiveUrl(relay.providerBaseUrl);
   }

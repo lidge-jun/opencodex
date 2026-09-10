@@ -2,7 +2,6 @@ import type { ProviderAdapter } from "./base";
 
 const CLINE_PASS_DEEPSEEK_V4_MODELS = new Set([
   "cline-pass/deepseek-v4-flash",
-  "cline-pass/deepseek-v4-pro",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {

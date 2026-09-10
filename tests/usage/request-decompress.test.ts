@@ -1,5 +1,6 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { deflateRawSync, deflateSync } from "node:zlib";
+import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import {
   DecompressedBodyTooLargeError,
   decodeRequestBody,
@@ -315,6 +316,77 @@ describe("configurable inbound body limit (Issue #3573)", () => {
 });
 
 describe("readJsonRequestBody", () => {
+  const accountingBodies = [
+    ["Unicode and escaped surrogates", new TextEncoder().encode('{"text":"中文😀é","escaped":"\\ud800\\udc00\\ud800x\\udc00"}')],
+    ["numeric normalization and duplicate keys", new TextEncoder().encode(' { "n": 1e20, "small": 1e-7, "zero": -0, "dup": 1, "dup": 2 } ')],
+    ["replacement decoding and BOM", Uint8Array.from([0xef, 0xbb, 0xbf, 0x22, 0xff, 0x22])],
+  ] as const;
+
+  for (const encoding of ["identity", "zstd", "gzip", "deflate"] as const) {
+    for (const [label, decoded] of accountingBodies) {
+      test(`keeps exact request-copy accounting for ${encoding}: ${label}`, async () => {
+        const wire = encoding === "identity" ? decoded
+          : encoding === "zstd" ? Bun.zstdCompressSync(decoded)
+          : encoding === "gzip" ? Bun.gzipSync(decoded)
+          : deflateSync(decoded);
+        const text = new TextDecoder().decode(decoded);
+        const expected = JSON.parse(text);
+        const textBytes = new TextEncoder().encode(text).byteLength;
+        const parsedBytes = new TextEncoder().encode(JSON.stringify(expected)).byteLength;
+        // Accepted request copies remain observed even when they exceed the translator cap.
+        const budget = createTranslatorBudget({ maxTurnBytes: 1 });
+        try {
+          const request = new Request("http://localhost/v1/responses", {
+            method: "POST",
+            headers: { "content-encoding": encoding, "content-length": String(wire.byteLength) },
+            body: wire,
+          });
+          expect(await readJsonRequestBody(request, budget)).toEqual(expected);
+          expect(budget.snapshot()).toMatchObject({
+            currentBytes: parsedBytes,
+            highWaterBytes: wire.byteLength + (encoding === "identity" ? 0 : decoded.byteLength)
+              + textBytes + parsedBytes,
+            overflows: 0,
+          });
+        } finally {
+          budget.dispose();
+        }
+        expect(budget.snapshot().currentBytes).toBe(0);
+      });
+    }
+  }
+
+  test("request-copy accounting avoids allocating UTF-8 copies of the body", async () => {
+    const text = JSON.stringify({ input: "x".repeat(256 * 1024) });
+    const wire = new TextEncoder().encode(text);
+    const request = new Request("http://localhost/v1/responses", { method: "POST", body: wire });
+    const budget = createTranslatorBudget();
+    const encode = spyOn(TextEncoder.prototype, "encode");
+    try {
+      expect(await readJsonRequestBody(request, budget)).toEqual(JSON.parse(text));
+      expect(budget.snapshot().currentBytes).toBe(wire.byteLength);
+      expect(encode).not.toHaveBeenCalled();
+    } finally {
+      encode.mockRestore();
+      budget.dispose();
+    }
+  });
+
+  test("releases observed request copies after malformed JSON and empty-body fallback", async () => {
+    for (const text of ['{"input":', "  \n"]) {
+      const budget = createTranslatorBudget();
+      const request = new Request("http://localhost/v1/responses", { method: "POST", body: text });
+      try {
+        const pending = readBoundedJsonRequestBody(request, 1024, budget, { emptyBodyFallback: null });
+        if (text.trim() === "") expect(await pending).toBeNull();
+        else await expect(pending).rejects.toBeInstanceOf(SyntaxError);
+        expect(budget.snapshot().currentBytes).toBe(0);
+      } finally {
+        budget.dispose();
+      }
+    }
+  });
+
   test("reports a compressed declaration without reading or echoing request metadata", async () => {
     const { body, stats } = trackedBodyStream([Bun.gzipSync(PAYLOAD_BYTES)]);
     const req = new Request("http://localhost/v1/responses/compact?private-query", {

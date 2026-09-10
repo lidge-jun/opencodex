@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { classifyCodexPreStreamRejection } from "../../src/codex/quota-rejection";
 import { BOUNDED_BODY_MAX_BYTES } from "../../src/lib/bounded-body";
-import { consumeComboFailure, shouldRetryCodexPoolAccountQuota } from "../../src/server/responses/core";
+import {
+  consumeComboFailure,
+  shouldRetryCodexPoolAccountQuota,
+  shouldRetryCodexPoolAccountTransient,
+} from "../../src/server/responses/core";
+import { markResponseNonReplayable } from "../../src/lib/upstream-retry";
 
 function jsonRejection(status: number, error: Record<string, unknown>): Response {
   return Response.json({ error }, { status });
@@ -89,6 +94,38 @@ describe("Codex pre-stream quota rejection classification", () => {
       request: { input: "Explain the usage limit" },
     }, { status: 502 });
     await expect(shouldRetryCodexPoolAccountQuota(response)).resolves.toBe(false);
+  });
+
+  test.each([
+    [500, true],
+    [502, true],
+    [503, true],
+    [504, true],
+    [520, true],
+    [507, false],
+    [429, false],
+    [400, false],
+    [200, false],
+  ])("selects transient pool-account retries by HTTP %i", (status, expected) => {
+    expect(shouldRetryCodexPoolAccountTransient(new Response(null, { status }))).toBe(expected);
+  });
+
+  test("a server_is_overloaded 503 moves to another account even though it carries no quota evidence", () => {
+    // The shape that wedged a live pool: the backend refuses in under a second, the body says
+    // nothing about quota, and the account keeps winning selection because nothing recorded a
+    // failure against it.
+    const response = Response.json({
+      error: { type: "server_error", code: "server_is_overloaded", message: "server is overloaded" },
+    }, { status: 503 });
+    expect(shouldRetryCodexPoolAccountTransient(response)).toBe(true);
+  });
+
+  test("a non-replayable gateway status is never sent from a second account", () => {
+    // The body already reached the origin, so a second send could duplicate a turn it may
+    // still be running. This is the one 5xx that stays put.
+    const response = new Response(null, { status: 502 });
+    markResponseNonReplayable(response);
+    expect(shouldRetryCodexPoolAccountTransient(response)).toBe(false);
   });
 
   test.each([

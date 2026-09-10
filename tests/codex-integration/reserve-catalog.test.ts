@@ -249,6 +249,32 @@ describe("Reserve catalog metadata is not permission", () => {
     expect(diagnostic.removedEfforts).toContain("xhigh");
   });
 
+  test("a Reserve row whose sole survivors would be max/ultra is kept, not spliced out", () => {
+    const rows = merge(build(config(), [actualReserve({
+      supported_reasoning_levels: [
+        { effort: "max", description: "Source max" },
+        { effort: "ultra", description: "Source ultra" },
+      ],
+      default_reasoning_level: "ultra",
+    })]));
+    const diagnostic = clampCatalogModelsToObservedCodexSupport(rows, new Set(["medium"]));
+    // max/ultra are exempt from the observed-runtime intersection, so the ladder never
+    // empties and the omission branch never fires.
+    expect(rows.map(row => row.slug)).toContain("personal/gpt-reserve");
+    expect(rows.find(isReserveCatalogProjection)).toMatchObject({
+      supported_reasoning_levels: [
+        { effort: "max", description: "Source max" },
+        { effort: "ultra", description: "Source ultra" },
+      ],
+      default_reasoning_level: "ultra",
+    });
+    // Other rows in the merged catalog legitimately lose rungs against {medium}; the point
+    // is that nothing clampable was taken from the Reserve row.
+    expect(diagnostic.removedEfforts).not.toContain("max");
+    expect(diagnostic.removedEfforts).not.toContain("ultra");
+    expect(diagnostic.affectedModels).not.toContain("personal/gpt-reserve");
+  });
+
   test("partial effort intersection keeps only source efforts and a surviving default", () => {
     const rows = merge(build(config(), [actualReserve({
       supported_reasoning_levels: [

@@ -25,6 +25,35 @@ export interface KiroOAuthMetadata {
   authType?: KiroCredentialAuthType;
 }
 
+/**
+ * Account-scoped Muse Code data that is NOT the request bearer.
+ *
+ * The Model API is authenticated by the `LLM|` key in `access`; this token authenticates
+ * the Meta ACCOUNT and exists only to mint that key and to read subscription usage
+ * (devlog/_plan/260912_muse_device_oauth/002 A). Keeping it out of `access` is what lets
+ * every request path stay unchanged.
+ *
+ * It must never be added to `OAuthAccountSummary` (src/oauth/index.ts:1803) or to
+ * `OAuthAccessSnapshot` (src/oauth/index.ts:85-100). Both are hand-built allowlists, and
+ * that construction — not a redactor — is what keeps a secret out of a response.
+ */
+export interface MuseOAuthMetadata {
+  /** Meta account access token from the device grant. Never sent to api.meta.ai/v1. */
+  oauthAccessToken: string;
+  /**
+   * The stable Meta account id. Kept HERE rather than in `accountId` on purpose (wp2
+   * audit fold W2): the store keys a slot on `accountId ?? email`, and this provider
+   * import path has always supplied email only. Promoting `user_id` to `accountId` would
+   * make a device login fail to match the row an imported login already created, giving
+   * one human two accounts.
+   */
+  userId?: string;
+  /** Epoch ms of the mint that produced the stored key. */
+  mintedAt?: number;
+  /** Subscription tier label as Meta reported it. Display only. */
+  tierName?: string;
+}
+
 export type OAuthCredentials = {
   refresh: string;
   access: string;
@@ -42,6 +71,8 @@ export type OAuthCredentials = {
   apiBaseUrl?: string;
   /** Never returned by management APIs; persisted only inside the protected auth-store boundary. */
   kiro?: KiroOAuthMetadata;
+  /** Never returned by management APIs; persisted only inside the protected auth-store boundary. */
+  muse?: MuseOAuthMetadata;
 };
 
 /** One logged-in account inside a provider's account set (multiauth). */

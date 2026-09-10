@@ -739,7 +739,7 @@ describe("#3922 translated tools carry the source strict intent", () => {
     additionalProperties: false,
   };
   const request = (tool: Record<string, unknown>) => ({
-    model: "openai/gpt-5.4",
+    model: "openai/gpt-5.6-luna",
     max_tokens: 32,
     messages: [{ role: "user", content: "Run a local agent." }],
     tools: [tool],
@@ -795,7 +795,7 @@ describe("#3922 translated tools carry the source strict intent", () => {
       [agent({ strict: false }), false],
     ] as const) {
       const expectedSchema = structuredClone(tool.input_schema);
-      const parsed = parseRequest({ ...anthropicToResponsesBody(request(tool)), model: "gpt-5.4" });
+      const parsed = parseRequest({ ...anthropicToResponsesBody(request(tool)), model: "gpt-5.6-luna" });
       expect(parsed.context.tools?.[0]?.strict).toBe(expected);
 
       const outbound = await adapter.buildRequest(parsed);

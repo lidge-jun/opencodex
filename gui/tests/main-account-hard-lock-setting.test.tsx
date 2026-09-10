@@ -294,7 +294,7 @@ test("same-page manage opens Advanced; save refreshes the one injected account c
     const url = new URL(String(input));
     if (url.pathname === "/api/settings") {
       if (init?.method === "PUT") enabled = JSON.parse(String(init.body)).codexMainAccountHardLock;
-      return response({ ok: true, ...settings(enabled, enabled ? "blocked" : "off"), showCodexSparkQuota: false, codexAccountPickerEnabled: false });
+      return response({ ok: true, ...settings(enabled, enabled ? "blocked" : "off"), codexAccountPickerEnabled: false });
     }
     if (url.pathname === "/api/codex-auth/accounts") {
       accountReads++;
@@ -335,7 +335,7 @@ test("late proxy A PUT cannot reload A or replace proxy B's parent-owned account
         expect(JSON.parse(String(init.body))).toEqual({ codexMainAccountHardLock: false });
         return pendingPut.promise;
       }
-      return response({ ...settings(enabled, state), showCodexSparkQuota: false, codexAccountPickerEnabled: false });
+      return response({ ...settings(enabled, state), codexAccountPickerEnabled: false });
     }
     if (url.pathname === "/api/codex-auth/accounts") return response({
       accounts: [{ ...mainAccount(state), email: isA ? "proxy-a@example.test" : "proxy-b@example.test" }],
@@ -374,7 +374,7 @@ test("collapsing Advanced within the same proxy still refreshes the owner after 
     const url = new URL(String(input));
     if (url.pathname === "/api/settings") {
       if (init?.method === "PUT") return pendingPut.promise;
-      return response({ ...settings(enabled, enabled ? "blocked" : "off"), showCodexSparkQuota: false, codexAccountPickerEnabled: false });
+      return response({ ...settings(enabled, enabled ? "blocked" : "off"), codexAccountPickerEnabled: false });
     }
     if (url.pathname === "/api/codex-auth/accounts") {
       accountReads++;
@@ -395,4 +395,52 @@ test("collapsing Advanced within the same proxy still refreshes the owner after 
   await act(async () => { pendingPut.resolve(response({ ok: true, ...settings(false) })); await flush(); });
   expect(accountReads).toBe(2);
   expect(host.querySelector(".codex-main-hard-lock-status")).toBeNull();
+});
+
+test.each([false, true])("retired Spark setting (legacy response: %s) cannot restore a control; account actions remain usable", async legacy => {
+  const refreshed = deferred<Response>();
+  const writes: { path: string; body: unknown }[] = [];
+  const host = await mount((async (input, init) => {
+    const url = new URL(String(input));
+    if (init?.method && init.method !== "GET") {
+      writes.push({ path: url.pathname, body: init.body ? JSON.parse(String(init.body)) : null });
+    }
+    if (url.pathname === "/api/settings") return response({
+      ...settings(false), codexAccountPickerEnabled: false, codexQuotaAutoRefresh: {},
+      ...(legacy ? { showCodexSparkQuota: true } : {}),
+    });
+    if (url.pathname === "/api/codex-auth/accounts/refresh") return refreshed.promise;
+    if (url.pathname === "/api/codex-auth/accounts/pause-exhausted") {
+      return response({ ok: true, pausedAccountIds: [], pausedCount: 0 });
+    }
+    if (url.pathname === "/api/codex-auth/accounts") return response({ accounts: [mainAccount("off")] });
+    if (url.pathname === "/api/codex-auth/active") return response({ activeCodexAccountId: "__main__", autoSwitchThreshold: 80, accountPoolStrategy: "quota", accountPoolStickyLimit: 1 });
+    if (url.pathname === "/api/config") return response({ providers: {} });
+    return response({});
+  }) as typeof fetch, <CodexSetMultiauth apiBase={`http://spark-retirement-${legacy}`} />);
+
+  expect(host.querySelector('[aria-label="Codex Spark quota"]')).toBeNull();
+  expect(host.querySelector(".codex-auth-spark-toggle")).toBeNull();
+  expect(host.textContent).not.toContain("Spark");
+  expect(host.querySelector("#codex-account-priority-__main__")).not.toBeNull();
+  expect(button(host, '[aria-label="Pause"]').disabled).toBe(false);
+  const actions = host.querySelectorAll<HTMLButtonElement>(".codex-auth-actions-row button");
+  expect(actions).toHaveLength(2);
+  expect(actions[0]!.textContent).toContain("Pause exhausted");
+  expect(actions[1]!.textContent).toContain("Refresh quotas");
+  await click(actions[1]!);
+  expect(actions[0]!.disabled).toBe(true);
+  expect(actions[1]!.disabled).toBe(true);
+  await act(async () => { refreshed.resolve(response({ accounts: [mainAccount("off")] })); await flush(); });
+  expect(actions[0]!.disabled).toBe(false);
+  expect(actions[1]!.disabled).toBe(false);
+  expect(host.querySelector(".codex-auth-page-head__feedback.is-ok")).not.toBeNull();
+  await click(actions[0]!);
+  expect(writes).toEqual([
+    { path: "/api/codex-auth/accounts/refresh", body: null },
+    { path: "/api/codex-auth/accounts/pause-exhausted", body: null },
+  ]);
+  await click(button(host, ".codex-auth-advanced__toggle"));
+  expect(toggle(host).disabled).toBe(false);
+  expect(host.textContent).not.toContain("Spark");
 });

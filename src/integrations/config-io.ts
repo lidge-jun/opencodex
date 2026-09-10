@@ -7,7 +7,7 @@
  *
  * Design of record: devlog/_fin/260802_client_toggle_api/021 §5-6.
  */
-import { mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import type { ConfigFormat } from "../clients/config-export";
 import { MAX_JSON_NESTING } from "./serialize";
 import { atomicWriteFile } from "../config";
@@ -200,6 +200,8 @@ export interface IntegrationIO {
   readText: (path: string) => ReadResult;
   /** `failed` is distinct from `missing` for the same reason. */
   statKind: (path: string) => StatKind;
+  /** Optional no-follow probe for paired-file clients. */
+  lstatKind?: (path: string) => StatKind;
   writeText: (path: string, text: string) => void;
   removeFile: (path: string) => void;
   mkdirp: (path: string) => void;
@@ -208,6 +210,16 @@ export interface IntegrationIO {
   appendJournal: (entry: JournalEntry) => void;
   putRecord: (record: OwnershipRecord) => void;
   dropRecord: (clientId: IntegrationClientId) => void;
+  beginTransaction?: (transaction: IntegrationTransaction) => void;
+  finishTransaction?: () => void;
+}
+
+export interface IntegrationTransaction {
+  entry: JournalEntry;
+  before: string | null;
+  nextText: string | null;
+  record: OwnershipRecord | null;
+  priorRecord: OwnershipRecord | null;
 }
 
 export type TargetState =
@@ -240,6 +252,14 @@ export function loadTarget(io: IntegrationIO, configPath: string): TargetState {
  */
 export function fileIO(): Omit<IntegrationIO, "appendJournal" | "putRecord" | "dropRecord"> {
   return {
+    lstatKind: path => {
+      try {
+        const stats = lstatSync(path);
+        return stats.isFile() ? "file" : stats.isDirectory() ? "dir" : "other";
+      } catch (error) {
+        return (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "failed";
+      }
+    },
     readText: path => {
       try {
         return { kind: "text", text: readFileSync(path, "utf8") };
@@ -256,7 +276,10 @@ export function fileIO(): Omit<IntegrationIO, "appendJournal" | "putRecord" | "d
         return (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "failed";
       }
     },
-    writeText: (path, text) => atomicWriteFile(path, text),
+    writeText: (path, text) => {
+      assertIntegrationWriteOwnership(path);
+      atomicWriteFile(path, text);
+    },
     removeFile: path => rmSync(path, { force: true }),
     mkdirp: path => mkdirSync(path, { recursive: true, mode: 0o700 }),
     now: () => Date.now(),
@@ -281,4 +304,53 @@ export function defaultIntegrationIO(store: {
     putRecord: record => store.putRecord(record),
     dropRecord: clientId => store.dropRecord(clientId),
   };
+}
+
+/**
+ * Refuse to replace an integration file this process does not own.
+ *
+ * `atomicWriteFile` writes a private temp file and renames it over the target. That is the right
+ * shape for a secret — the replacement is atomic and the result is owner-only `0600` — but it also
+ * means the surviving inode belongs to whoever runs opencodex. When the target is another product's
+ * configuration on a shared mount, the replace quietly takes the file away from its owner. #4197 is
+ * that case: opencodex at uid 1000 replaces a DSH `settings.yaml` owned by uid 987, and DSH dies with
+ * `EACCES` on its next read while the restore call reports success.
+ *
+ * Preserving the previous uid would need a `chown` capability we usually do not have, and relaxing
+ * `0600` would weaken every integration to fix one. So refuse before writing, and say what is wrong,
+ * rather than succeeding into a broken state.
+ *
+ * Windows has no uid model here; `hardenSecretPath` owns that platform, so the check is skipped when
+ * the runtime exposes no effective uid.
+ */
+export function assertIntegrationWriteOwnership(
+  path: string,
+  deps: {
+    effectiveUid?: () => number | undefined;
+    ownerUid?: (target: string) => number | undefined;
+  } = {},
+): void {
+  const effectiveUid = deps.effectiveUid ?? (() =>
+    typeof process.geteuid === "function" ? process.geteuid() : undefined);
+  const euid = effectiveUid();
+  if (euid === undefined) return;
+
+  const ownerUid = deps.ownerUid ?? ((target: string) => {
+    try {
+      return statSync(target).uid;
+    } catch {
+      // An absent or unreadable target has no owner to dispossess; the write itself will report
+      // any real failure.
+      return undefined;
+    }
+  });
+  const owner = ownerUid(path);
+  if (owner === undefined || owner === euid) return;
+
+  throw new Error(
+    `refusing to replace ${path}: it belongs to uid ${owner} while opencodex runs as uid ${euid}. `
+    + "An atomic replace would transfer ownership of that file and leave its owner unable to read "
+    + "its own configuration. Run both under the same user, or give each one its own copy instead "
+    + "of sharing the mount.",
+  );
 }

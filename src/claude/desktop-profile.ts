@@ -103,12 +103,10 @@ export function parseDesktopProfile(value: unknown): DesktopProfile {
   if (!isPlainObject(value.assignments)) throw new DesktopProfileError("must be an object", "profile.assignments");
   if (!isPlainObject(value.defaults)) throw new DesktopProfileError("must be an object", "profile.defaults");
   assertExactKeys(value.defaults, DESKTOP_FAMILIES, "profile.defaults");
-  if (value.appliedFingerprint !== undefined && typeof value.appliedFingerprint !== "string") {
-    throw new DesktopProfileError("must be a string", "profile.appliedFingerprint");
-  }
-  if (value.appliedAt !== undefined && typeof value.appliedAt !== "string") {
-    throw new DesktopProfileError("must be a string", "profile.appliedAt");
-  }
+  // JSON null (and any other non-string) is unset, not fatal. Older builds and several
+  // writers persisted appliedFingerprint/appliedAt as JSON null; treating those as a
+  // document-level parse failure made loadConfig replace the whole operator config with
+  // defaults (#4430). appliedMarkers() already drops non-strings when copying.
 
   const assignments: Record<string, OcxClaudeDesktopAssignment> = {};
   const aliases = new Set<string>();

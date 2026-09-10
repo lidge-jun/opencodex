@@ -1,10 +1,8 @@
 /**
  * Where the Codex Set account actions live.
  *
- * "한도 도달 계정 일시 중지" and "할당량 새로고침" used to sit in the page head beside the
- * title and the Spark toggle — four controls and a heading on one row, with the actions
- * far above the account cards they operate on. They render in their own row below the
- * account-mode banner now.
+ * Pause-exhausted and refresh render in their own row below the account-mode banner,
+ * next to the account cards they operate on. The page head retains title and feedback.
  *
  * The embedded surface is deliberately excluded: in the Providers workspace the same
  * component renders a bare `.row` with no title, so there is nothing to crowd and the
@@ -23,8 +21,8 @@ const headStart = src.indexOf("export function CodexAccountPoolPageHead");
 const head = src.slice(headStart, src.indexOf("export function CodexAccountPoolActionButtons", headStart));
 
 test("the standalone page head no longer renders the two action buttons inline", () => {
-  // The head keeps the title, the feedback region and the Spark toggle; the pause and
-  // refresh labels are reached through the shared component only.
+  // The head keeps the title and feedback region; pause and refresh labels are
+  // reached through the shared component only.
   expect(head).not.toContain('t("codexAuth.pauseExhausted")');
   expect(head).not.toContain('t("codexAuth.refreshQuota")');
 });

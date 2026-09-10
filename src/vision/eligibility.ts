@@ -26,6 +26,7 @@ import { getModelMetadataCaseInsensitive, resolveMetadataProvider } from "../gen
 import { nativeInputModalities } from "../codex/catalog/metadata";
 import { SUPPORTED_NATIVE_OPENAI_SLUGS } from "../codex/catalog/native-models";
 import { enrichProviderFromRegistry } from "../providers/derive";
+import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers-destination";
 
 /**
  * The wire protocols `planVisionSidecar` can dispatch to (#2188 roadmap 170
@@ -77,9 +78,12 @@ type EnrichedProviderCache = Map<string, OcxProviderConfig>;
  * not a text-only model and must not be widened to image through the vision sidecar.
  */
 export function isModelVisionSidecarConsumer(
-  provider: Pick<OcxProviderConfig, "noVisionModels" | "modelInputModalities">,
+  provider: Pick<OcxProviderConfig, "noVisionModels" | "modelInputModalities" | "modelCapabilities">,
   modelId: string,
 ): boolean {
+  const declared = Object.hasOwn(provider.modelCapabilities ?? {}, modelId)
+    ? provider.modelCapabilities?.[modelId]?.inputModalities : undefined;
+  if (declared !== undefined) return declared.includes("text") && !declared.includes("image");
   if (modelInList(provider.noVisionModels, modelId)) return true;
   const modalities = modelRecordValue(provider.modelInputModalities, modelId);
   return Array.isArray(modalities) && modalities.includes("text") && !modalities.includes("image");
@@ -110,7 +114,28 @@ function enrichedProviderForVision(
   if (cached) return cached;
   const configured = config.providers?.[providerName];
   if (!configured) return undefined;
-  const enriched = structuredClone(configured);
+  // Runtime providers may carry non-cloneable hooks (for example a provider-scoped fetch).
+  // Enrichment mutates top-level fields but does not mutate nested provider values in place, so
+  // a shallow copy plus private copies of the vision-capability containers is sufficient and
+  // avoids both config mutation and structuredClone(DataCloneError) on runtime functions.
+  const enriched: OcxProviderConfig = {
+    ...configured,
+    ...(configured.noVisionModels ? { noVisionModels: [...configured.noVisionModels] } : {}),
+    ...(configured.modelInputModalities ? {
+      modelInputModalities: Object.fromEntries(
+        Object.entries(configured.modelInputModalities).map(([id, modalities]) => [id, [...modalities]]),
+      ),
+    } : {}),
+    ...(configured.modelCapabilities ? {
+      modelCapabilities: Object.fromEntries(Object.entries(configured.modelCapabilities).map(([id, capability]) => [
+        id,
+        {
+          ...capability,
+          ...(capability.inputModalities ? { inputModalities: [...capability.inputModalities] } : {}),
+        },
+      ])),
+    } : {}),
+  };
   enrichProviderFromRegistry(providerName, enriched);
   cache.set(providerName, enriched);
   return enriched;
@@ -151,9 +176,28 @@ function modelAcceptsImageInputWithCache(
   candidate: VisionCandidateModel,
   cache: EnrichedProviderCache,
 ): boolean | undefined {
-  if (isVisionSidecarConsumerWithCache(config, candidate.provider, candidate.id, cache)) return false;
   if (candidate.native === true || (candidate.provider === "openai" && SUPPORTED_NATIVE_OPENAI_SLUGS.has(candidate.id))) {
+    const nativeProvider = enrichedProviderForVision(config, candidate.provider, cache);
+    if (nativeProvider && isModelVisionSidecarConsumer(nativeProvider, candidate.id)) return false;
+    const declared = Object.hasOwn(nativeProvider?.modelCapabilities ?? {}, candidate.id)
+      ? nativeProvider?.modelCapabilities?.[candidate.id]?.inputModalities : undefined;
+    if (declared !== undefined) return declared.includes("image");
     return advertisesImageInput(nativeInputModalities(candidate.id)) ?? true;
+  }
+  if (isVisionSidecarConsumerWithCache(config, candidate.provider, candidate.id, cache)) return false;
+  const provider = enrichedProviderForVision(config, candidate.provider, cache);
+  const declared = Object.hasOwn(provider?.modelCapabilities ?? {}, candidate.id)
+    ? provider?.modelCapabilities?.[candidate.id]?.inputModalities : undefined;
+  if (declared !== undefined) return declared.includes("image");
+  const configuredModalities = provider ? modelRecordValue(provider.modelInputModalities, candidate.id) : undefined;
+  const fromConfiguredModalities = advertisesImageInput(configuredModalities);
+  if (fromConfiguredModalities !== undefined) return fromConfiguredModalities;
+  const canonicalCodex = candidate.provider === "openai"
+    && provider !== undefined
+    && isCanonicalOpenAiForwardProvider(provider);
+  if (canonicalCodex) {
+    const fromCodexBackend = metadataImageInput("openai-codex", candidate.id);
+    if (fromCodexBackend !== undefined) return fromCodexBackend;
   }
   const fromRow = advertisesImageInput(candidate.inputModalities);
   if (fromRow !== undefined) return fromRow;

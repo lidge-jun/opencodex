@@ -1,0 +1,11 @@
+# Hermes identity boundary
+
+Prerequisite roadmap; independent path from Claude changes. Latest issue #3433 comment 5556427205 and controlled sample 5551855276 establish no measured inbound identity, not a dropped value. Preserve issue OPEN disposition.
+
+MODIFY tests/responses/chat-completions-endpoint.test.ts or a registered adjacent contract file: use the existing real Chat handler + mocked Responses upstream. Send synthetic session A on two growth turns and session B on a fresh turn; cross body prompt_cache_key present/absent with session_id present/absent. Assert captured outbound session_id and body key are exactly caller supplied; absent remains absent; shared key is not converted into session_id. Use fixture identity distinct from raw personal data, and compare at actual adapter fetch boundary. Existing src/chat/inbound.ts copies prompt_cache_key; Chat FORWARD_HEADERS and openai-responses adapter forward session_id. No runtime mutation unless this controlled contract reveals a specific defect.
+
+MODIFY canonical inbound contract docs to distinguish stable client conversation identity, request-scoped lane and prompt prefix. Durable scratch evidence names public comment URLs, actual test command coverage and limitations. Real Hermes same-conversation/fresh-session identifier and outbound capture from its running client are unavailable unless provided by existing public evidence; synthetic regression proves transport contract only. Do not claim actual client identity was observed, cache hits improved or #3433 solved.
+
+C hosted final tip executes the contract; local suite NOT RUN. D records exactly what is proven and remaining controlled live-client comparison.
+
+Execution refinement: NEW tests/responses/chat-conversation-affinity.test.ts and register it in both layout maps. Invoke actual Chat handler with synthetic caller JWT against canonical ChatGPT Responses config in isolated homes. Mock only outbound fetch, record Headers/body. Two header shapes (underscore session_id, hyphen session-id/thread-id), key present/absent, A/A/B growing messages; explicit request-id differs per turn. Absent identity controls prove shared key never becomes a session. This fixture establishes OCX preservation, not actual Hermes emission. No runtime patch unless evidence finds loss.

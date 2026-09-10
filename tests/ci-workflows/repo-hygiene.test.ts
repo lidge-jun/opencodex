@@ -133,6 +133,7 @@ describe("devlog is tracked, with no submodule left behind", () => {
         path.startsWith("devlog/_chase/_litellm/")
         || path.startsWith("devlog/_chase/_cca/")
         || path.startsWith("devlog/_chase/DSCodex/")
+        || path.startsWith("devlog/_chase/CLIProxyAPIPlus/")
         || path.startsWith("devlog/_fin/opencode-cursor/"),
     );
 

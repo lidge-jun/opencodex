@@ -417,3 +417,93 @@ test("a hanging fetch reaches its deadline, preserves last-good and clears probe
     else Reflect.deleteProperty(AbortSignal, "timeout");
   }
 });
+
+
+test("quota diagnostics normalize and clear on recovery or management failure", async () => {
+  let failure: string | undefined = "dns_failed";
+  let localFailure = false;
+  respond = async url => url.includes("quota=1") && localFailure ? new Response(null, { status: 503 }) : Response.json({
+    accounts: [{ id: "account", active: true, quotaMode: "probe", quota: reading,
+      ...(url.includes("quota=1") ? { quotaUnavailable: failure !== undefined, quotaFailure: failure } : {}),
+    }],
+  });
+  await act(async () => { await pools.fetchAccountSets(["oauth"], true); });
+  expect(pools.accountSets.oauth.accounts[0].quotaFailure).toBe("dns_failed");
+  failure = "private-unrecognized-error";
+  await act(async () => { await pools.fetchAccountSets(["oauth"], true); });
+  expect(pools.accountSets.oauth.accounts[0].quotaFailure).toBeUndefined();
+  failure = "rate_limited";
+  await act(async () => { await pools.fetchAccountSets(["oauth"], true); });
+  expect(pools.accountSets.oauth.accounts[0].quotaFailure).toBe("rate_limited");
+  localFailure = true;
+  await act(async () => { await pools.fetchAccountSets(["oauth"], true); });
+  expect(pools.accountSets.oauth.accounts[0]).toMatchObject({ quotaUnavailable: true, quota: reading });
+  expect(pools.accountSets.oauth.accounts[0].quotaFailure).toBeUndefined();
+  localFailure = false;
+  failure = undefined;
+  await act(async () => { expect(await pools.fetchAccountSets(["oauth"], true)).toBe(true); });
+  expect(pools.accountSets.oauth.accounts[0]).toMatchObject({ quotaUnavailable: false, quota: reading });
+  expect(pools.accountSets.oauth.accounts[0].quotaFailure).toBeUndefined();
+});
+
+test("initial roster failure clears a settled diagnosis while retaining bars", async () => {
+  await act(async () => {
+    pools.setAccountSets({ fixture: { activeAccountId: "a", accounts: [
+      { id: "a", active: true, quotaMode: "probe", quota: reading, quotaUnavailable: true, quotaFailure: "dns_failed" },
+    ] } });
+  });
+  respond = async () => new Response(null, { status: 503 });
+  await act(async () => { expect(await pools.fetchAccountSets(["fixture"], true)).toBe(false); });
+  expect(pools.accountSets.fixture.accounts[0]).toMatchObject({ quota: reading, quotaUnavailable: true });
+  expect(pools.accountSets.fixture.accounts[0].quotaFailure).toBeUndefined();
+});
+
+test("roster-only refresh retains a matching diagnosis and clears it after mode change", async () => {
+  await act(async () => {
+    pools.setAccountSets({ fixture: { activeAccountId: "a", accounts: [
+      { id: "a", active: true, quotaMode: "probe", quota: reading, quotaUnavailable: true, quotaFailure: "rate_limited" },
+    ] } });
+  });
+  let mode = "probe";
+  respond = async () => Response.json({ activeAccountId: "a", accounts: [{ id: "a", active: true, quotaMode: mode }] });
+  await act(async () => { await pools.refreshAccountRosters({ provider: "fixture", kind: "oauth" }); });
+  expect(pools.accountSets.fixture.accounts[0].quotaFailure).toBe("rate_limited");
+  mode = "passive";
+  await act(async () => { await pools.refreshAccountRosters({ provider: "fixture", kind: "oauth" }); });
+  expect(pools.accountSets.fixture.accounts[0].quotaFailure).toBeUndefined();
+  expect(requests.every(request => !request.url.includes("quota=1"))).toBe(true);
+});
+
+test.each([true, false])("late quota failure=%s preserves newer selection and matching membership", async failure => {
+  const response = deferred<Response>();
+  const started = deferred<void>();
+  const original = ["a", "b", "removed"].map(id => ({ id, active: id === "a", quotaMode: "probe" }));
+  respond = async url => {
+    if (url.includes("quota=1")) { started.resolve(); return response.promise; }
+    return Response.json({ activeAccountId: "a", accounts: original });
+  };
+  let full!: Promise<boolean>;
+  await act(async () => { full = pools.fetchAccountSets(["fixture"], true); await started.promise; });
+  const latest = original.filter(row => row.id !== "removed").map(row => ({ ...row, active: row.id === "b" }));
+  respond = async () => Response.json({ activeAccountId: "b", accounts: latest });
+  await act(async () => { await pools.refreshAccountRosters({ provider: "fixture", kind: "oauth" }); });
+  if (!failure) {
+    await act(async () => {
+      pools.setAccountSets(current => ({ ...current, fixture: { ...current.fixture, accounts: current.fixture.accounts.map(row => ({
+        ...row, quotaUnavailable: true, quotaFailure: "dns_failed",
+      })) } }));
+    });
+  }
+  await act(async () => {
+    response.resolve(Response.json({ activeAccountId: "a", accounts: original.map(row => ({
+      ...row, quota: reading, quotaUnavailable: failure, ...(failure ? { quotaFailure: "access_denied" } : {}),
+    })) }));
+    await full;
+  });
+  expect(pools.accountSets.fixture.accounts.map(row => row.id)).toEqual(["a", "b"]);
+  expect(pools.accountSets.fixture.accounts.find(row => row.active)?.id).toBe("b");
+  for (const row of pools.accountSets.fixture.accounts) {
+    expect(row.quotaFailure).toBe(failure ? "access_denied" : undefined);
+    expect(row.quotaUnavailable).toBe(failure);
+  }
+});

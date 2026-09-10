@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { gracefulStopHost, lastStopRefusalMessage, stopProxyGracefully } from "../../src/lib/process-control";
+import { gracefulStopHost, lastStopRefusalCode, lastStopRefusalMessage, ProxyOwnershipRefusedError, refusalNextStep, stopProxy, stopProxyGracefully } from "../../src/lib/process-control";
 
 function okResponse(): Response {
   return new Response(JSON.stringify({ success: true, sharedTeardown: "performed" }), { status: 200 });
@@ -197,5 +197,154 @@ describe("409 refusal reporting", () => {
     });
     expect(result).toBe("refused");
     expect(lastStopRefusalMessage()).toBeNull();
+  });
+
+  test("the refusal code is captured alongside the message", async () => {
+    // The message alone cannot drive the fallback: a refusal that arrives with an empty or
+    // unparseable body still has to name a cause, and #4169 showed what happens when the
+    // fallback guesses one — the operator re-checks CODEX_HOME for a refusal the scheduler
+    // wrapper issued.
+    await stopProxyGracefully(7, {
+      readRuntime: () => ({ port: 10100 }),
+      fetchFn: (async () => new Response(
+        JSON.stringify({ success: false, code: "respawnable_service", message: "wrapper owns it" }),
+        { status: 409, headers: { "content-type": "application/json" } },
+      )) as typeof fetch,
+      waitExit: () => true,
+      env: {},
+    });
+    expect(lastStopRefusalCode()).toBe("respawnable_service");
+
+    await stopProxyGracefully(7, {
+      readRuntime: () => ({ port: 10100 }),
+      fetchFn: (async () => new Response("not json", { status: 409 })) as typeof fetch,
+      waitExit: () => true,
+      env: {},
+    });
+    expect(lastStopRefusalCode()).toBeNull();
+  });
+
+  test("a refusal without a message falls back by code, never to an ownership claim", async () => {
+    const refusalFor = async (code: string | null): Promise<string> => {
+      const body = code === null ? "not json" : JSON.stringify({ success: false, code });
+      try {
+        await stopProxy(process.pid, {
+          readRuntime: () => ({ port: 10100 }),
+          fetchFn: (async () => new Response(body, {
+            status: 409,
+            headers: { "content-type": "application/json" },
+          })) as typeof fetch,
+          waitExit: () => { throw new Error("must not wait for a refused stop"); },
+          env: {},
+        });
+      } catch (err) {
+        if (err instanceof ProxyOwnershipRefusedError) return err.message;
+        throw err;
+      }
+      throw new Error("stopProxy must throw on a refusal");
+    };
+
+    const respawnable = await refusalFor("respawnable_service");
+    expect(respawnable).toContain("respawn");
+    // Not `ocx stop`: the only callers of stopProxy are `ocx stop` and the service
+    // manager's own cleanup, so recommending it here is the #4169 loop. The fallback names
+    // the cause and refusalNextStep names the command.
+    expect(respawnable).not.toContain("ocx stop");
+
+    const selfUnload = await refusalFor("self_unload_service");
+    expect(selfUnload).toContain("installed service itself");
+    expect(selfUnload).not.toContain("ocx stop");
+
+    const unknownState = await refusalFor("service_state_unknown");
+    expect(unknownState).toContain("could not be read");
+    expect(unknownState).not.toContain("ocx stop");
+
+    const noBody = await refusalFor(null);
+    expect(noBody).toContain("sent no reason");
+    expect(noBody).not.toContain("ocx stop");
+
+    // None of them may assert the cause that #4169 was filed for.
+    for (const message of [respawnable, selfUnload, unknownState, noBody]) {
+      expect(message).not.toContain("CODEX_HOME");
+      expect(message).not.toContain("OPENCODEX_HOME");
+    }
+  });
+
+  test("the refusal carries its code to the caller that has to report it", async () => {
+    // The reporting caller acts on the cause. Re-parsing the prose is not an option: the
+    // message is the server's, and the server's message is exactly what recommends the
+    // command that already failed.
+    let thrown: unknown;
+    try {
+      await stopProxy(process.pid, {
+        readRuntime: () => ({ port: 10100 }),
+        fetchFn: (async () => new Response(
+          JSON.stringify({ success: false, code: "respawnable_service", message: "wrapper owns it" }),
+          { status: 409, headers: { "content-type": "application/json" } },
+        )) as typeof fetch,
+        waitExit: () => { throw new Error("must not wait for a refused stop"); },
+        env: {},
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(ProxyOwnershipRefusedError);
+    expect((thrown as ProxyOwnershipRefusedError).code).toBe("respawnable_service");
+    // The server's own message still wins, unchanged.
+    expect((thrown as ProxyOwnershipRefusedError).message).toBe("wrapper owns it");
+  });
+
+  test("no next step sends the operator back to the command that just refused", () => {
+    // #4169's loop: POST /api/stop answers "the stop must be run by `ocx stop`", and
+    // `ocx stop` reprints it. Whatever the cause, the next step has to be something else,
+    // because the service manager was already asked to stop before this point.
+    for (const code of ["respawnable_service", "self_unload_service", "service_state_unknown", null]) {
+      const step = refusalNextStep(code);
+      // Naming `ocx stop` in order to rule it out is the point; recommending it is the loop.
+      expect(step).not.toMatch(/Run `ocx stop`/);
+      expect(step).toContain("ocx service status");
+    }
+    // The two service causes say why repeating the stop is not the missing step, since the
+    // server's message printed just above them recommends exactly that.
+    expect(refusalNextStep("respawnable_service")).toContain("already asked the service manager");
+    expect(refusalNextStep("self_unload_service")).toContain("already asked the service manager");
+  });
+
+  test("concurrent refusals each keep their own cause", async () => {
+    // Reading the reason from module state lets one stop publish its refusal and a second
+    // overwrite it before the first continuation consumes it. Starting both together is
+    // what actually reproduces that: verified against the pre-fix global handoff, where
+    // this schedule fails with the first call throwing the second's cause
+    // ("...it is the installed service itself..." for the respawnable_service stop).
+    // A schedule that lets one call finish entirely before resuming the other does NOT
+    // discriminate — the parked call republishes its own globals last and passes either way.
+    const refusalOf = (code: string) => async (): Promise<string> => {
+      try {
+        await stopProxy(process.pid, {
+          readRuntime: () => ({ port: 10100 }),
+          fetchFn: (async () => new Response(JSON.stringify({ success: false, code }), {
+            status: 409,
+            headers: { "content-type": "application/json" },
+          })) as typeof fetch,
+          waitExit: () => { throw new Error("must not wait for a refused stop"); },
+          env: {},
+        });
+      } catch (err) {
+        if (err instanceof ProxyOwnershipRefusedError) return err.message;
+        throw err;
+      }
+      throw new Error("stopProxy must throw on a refusal");
+    };
+
+    // Repeated because the interleaving is scheduler-dependent; the pre-fix code fails on
+    // the first iteration, but a single run would be a weak guard against reintroduction.
+    for (let i = 0; i < 20; i++) {
+      const [respawnable, selfUnload] = await Promise.all([
+        refusalOf("respawnable_service")(),
+        refusalOf("self_unload_service")(),
+      ]);
+      expect(respawnable).toContain("respawn");
+      expect(selfUnload).toContain("installed service itself");
+    }
   });
 });

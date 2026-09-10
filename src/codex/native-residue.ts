@@ -1,5 +1,6 @@
 import {
   closeSync,
+  existsSync,
   fstatSync,
   lstatSync,
   openSync,
@@ -16,7 +17,7 @@ import { Database } from "bun:sqlite";
 
 import { getConfigDir } from "../config";
 import { catalogHasRoutedEntries, parseCatalogJson } from "./catalog/parsing";
-import { codexHistoryBackupId, validateCodexHistoryBackupManifest } from "./history-manifest";
+import { codexHistoryBackupId, legacyCodexHistoryBackupId, validateCodexHistoryBackupManifest } from "./history-manifest";
 import {
   hasInjectedCodexRouting,
   OCX_SECTION_MARKER,
@@ -590,7 +591,13 @@ function classifyHistoryDatabase(path: string): NativeRoutedResidueResult {
 }
 
 function historyBackupPath(stateDatabasePath: string): string {
-  return join(getConfigDir(), `codex-history-backup-${codexHistoryBackupId(stateDatabasePath)}.json`);
+  const canonical = join(getConfigDir(), `codex-history-backup-${codexHistoryBackupId(stateDatabasePath)}.json`);
+  if (existsSync(canonical)) return canonical;
+  // A database path spelled with the Win32 extended-length prefix hashed to a different
+  // manifest name before #4442; that manifest still shadows the database (and a canonical
+  // file always wins over it, with the legacy one left in place).
+  const legacy = join(getConfigDir(), `codex-history-backup-${legacyCodexHistoryBackupId(stateDatabasePath)}.json`);
+  return legacy !== canonical && existsSync(legacy) ? legacy : canonical;
 }
 
 function classifyHistoryBackup(path: string, stateDatabasePath: string): NativeRoutedResidueResult {

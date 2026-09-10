@@ -863,7 +863,7 @@ describe("handleStart OCX_SERVICE exit guard (source-level)", () => {
   });
 
   test("service.ts teardown kills surviving wrapper processes on stop", () => {
-    const serviceSource = readFileSync(repoPath("src/service.ts"), "utf8");
+    const serviceSource = readFileSync(repoPath("src/service/orchestration.ts"), "utf8");
     expect(serviceSource).toMatch(/killWindowsServiceWrapperProcesses/);
     // The boolean `stopServiceIfInstalled` is gone — it collapsed a live manager into the
     // same false as "not installed" (#3008). The stop itself is the detailed function.
@@ -876,7 +876,7 @@ describe("handleStart OCX_SERVICE exit guard (source-level)", () => {
     // wrapper from another OpenCodex home (or any process whose command line
     // merely contains the name). The kill must target the exact canonical
     // paths windowsServiceScriptPath()/windowsLauncherVbsPath() produce.
-    const serviceSource = readFileSync(repoPath("src/service.ts"), "utf8");
+    const serviceSource = readFileSync(repoPath("src/service/windows-ops.ts"), "utf8");
     expect(serviceSource).toMatch(/windowsServiceScriptPath\(\)/);
     expect(serviceSource).toMatch(/windowsLauncherVbsPath\(\)/);
     const killBody = serviceSource.match(/function killWindowsServiceWrapperProcesses\(\)[\s\S]*?\n}/);

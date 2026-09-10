@@ -1,0 +1,9 @@
+# Put native-main device reauth on the main card
+
+Cycle reauth-ui depends on reauth-api. C4 auth UI. Existing main-card uses only expired-token text at `gui/src/components/codex-account-pool-main-card.tsx:184`. Preserve pool Add/Re-login and native profile picker.
+
+NEW `gui/src/components/use-main-device-reauth.ts`: dedicated hook with start/poll/cancel methods using native-only namespace, flowId ownership and abort/unmount cleanup. Normalize closed status/error payloads; never accept arbitrary verification URLs (only known device verification destination from backend contract), no token/account-id fields. Poll only matching active flow and stop on terminal status; late responses from replaced flow ignored.
+
+MODIFY main-card component: button Re-login with device code; after start show known verification URL, human code/copy and polite pending status, cancel action; success refreshes main account state. Keep layout consistent with current card. Do not reuse AddCodexAccountModal or reauthAccountId=__main__. Add exact locale keys for all shipped languages, update prop owners/types and backend error copy. Terminal failure is actionable and safe; do not automatically retry login or switch identity.
+
+Field chain: dedicated API DTO→hook validated state→main-card only; no persistence of device code in browser storage. Existing parent refresh callback re-fetches main status on completion. Regression source verifies correct route, code display, cancel ownership, stale poll, success refresh, no pool Add invocation, keyboard and error states. Hosted rendered screenshots required for PR; obtain built artifacts from final hosted CI instead of local product build. Sync GUI owners and headless dashboard docs. Local tests/build NOT RUN. API→UI ordinary manual chain, merge reserved to coordinator.

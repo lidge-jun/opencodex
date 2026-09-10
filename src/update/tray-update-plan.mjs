@@ -1,6 +1,6 @@
 /**
  * Shared, side-effect-free contract for preserving the Windows tray across all
- * updater entry points (npm launcher, CLI updater, and GUI worker).
+ * updater entry points (package launcher, CLI updater, and GUI worker).
  */
 export function planWindowsTrayUpdate(status) {
   const installed = status?.installed === true;

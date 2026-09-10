@@ -73,7 +73,7 @@ codex -m "ollama-cloud/glm-5.2"      "Write a SQL migration"
 ## 選擇 sub-agent 模型（可選）
 
 新設定會讓 Codex 的 sub-agent 選擇器包含五個原生模型：`gpt-5.5`、`gpt-5.6-sol`、
-`gpt-5.6-terra`、`gpt-5.6-luna` 和 `gpt-5.4-mini`。開啟 `ocx gui` 即可替換或重新排序最多五個
+`gpt-5.6-terra`、`gpt-5.6-luna` 和 `gpt-6-astra`。開啟 `ocx gui` 即可替換或重新排序最多五個
 原生或已路由模型。儀表板也可以設定一個首選 sub-agent 模型及 reasoning effort。參見
 [子代理介面](/zh-tw/guides/sub-agent-surface/) 選擇 v1/base/v2，並了解指引、原生預設與回退
 何時生效。

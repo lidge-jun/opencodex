@@ -86,7 +86,7 @@ describe("sidecar-settings remaining vision controls", () => {
     expect(unset.status).toBe(200);
     expect((await unset.json() as { vision: Record<string, unknown> }).vision).toMatchObject({
       enabled: true,
-      model: "gpt-5.4-mini",
+      model: "gpt-5.6-luna",
       reasoning: "low",
       maxDescriptionsPerTurn: resolveMaxDescriptionsPerTurn(undefined),
       timeoutMs: DEFAULT_VISION_TIMEOUT_MS,

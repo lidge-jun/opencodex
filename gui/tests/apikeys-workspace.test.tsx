@@ -135,6 +135,26 @@ function keyButton(container: HTMLElement, name: string): HTMLButtonElement {
     .find(el => el.textContent === name)!;
 }
 
+test("incomplete usage qualifies key list and detail without asserting never used", async () => {
+  const { root, container, rerender } = await mountWorkspace({
+    usageMetadata: { usageIncomplete: true, usageIncompleteReason: "oversized_rows" },
+  });
+  try {
+    expect(container.textContent).toContain("Some usage records could not be included");
+    expect(container.textContent).toContain("No use in readable records");
+    await act(async () => { keyButton(container, "beta").click(); });
+    expect(container.textContent).toContain("Some usage records could not be included");
+    expect(container.textContent).toContain("Requests in available history");
+    expect(container.textContent).toContain("No use in readable records");
+    await rerender({ attributionSince: undefined });
+    expect(container.textContent).toContain("Some usage records could not be included");
+    await rerender({ keys: [] });
+    expect(container.textContent).toContain("Some usage records could not be included");
+    await rerender({ usageMetadata: {} });
+    expect(container.textContent).not.toContain("Some usage records could not be included");
+  } finally { await act(async () => { root.unmount(); }); }
+});
+
 test("workspace overview navigation preserves pending secret and resets delete confirm", async () => {
   const { root, container } = await mountWorkspace({
     newKey: FULL_SECRET,

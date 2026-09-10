@@ -112,14 +112,15 @@ export function retainTranslatedEvent<T extends object>(
  */
 export function retainTranslatedEventBatch<T extends object>(events: T[], budget: TranslatorBudget): void {
   if (events.length === 0) return;
-  const serialized = events.map(event => JSON.stringify(event));
-  const totalBytes = Buffer.byteLength(`[${serialized.join(",")}]`);
+  // Preserve atomic batch admission without retaining serialized strings or joining a second copy.
+  const eventBytes = events.map(event => Buffer.byteLength(JSON.stringify(event)));
+  const totalBytes = eventBytes.reduce((total, bytes) => total + bytes, events.length + 1);
   budget.chargeRetained(totalBytes, { kind: "retained_collectors" });
   for (let index = 0; index < events.length; index++) {
     const delimiterBytes = index === events.length - 1 ? 2 : 1;
     retainedEventOwnership.set(events[index]!, {
       budget,
-      bytes: Buffer.byteLength(serialized[index]!) + delimiterBytes,
+      bytes: eventBytes[index]! + delimiterBytes,
     });
   }
 }

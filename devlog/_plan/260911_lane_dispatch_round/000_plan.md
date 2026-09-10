@@ -34,6 +34,10 @@ Excluded on purpose, with the decision that blocks each one:
 - #4198, #4179 — publishing an official container image changes a documented policy
   ("opencodex does not publish an official container image").
 - #4173 — the atomic update design competes with #4185 and #4203 already in flight.
+- #4204 — removed after the feasibility audit: binding the reasoning-effort clamp to the Desktop
+  runtime needs `codex/runtime.ts`, `catalog/bundled.ts`, and `catalog/sync.ts`, because the catalog
+  probes one selected runtime and no caller passes a consumer identity. Resolving a catalog per
+  consumer is a design decision.
 - Contributor feature PRs (#4183, #4100, #4111, #4193, #4033, #4042) — these need review, not
   reimplementation, and reimplementing them would discard the author's work.
 
@@ -68,4 +72,3 @@ are repeated inside every packet so a lane thread that never reads this file sti
 Merges are serialized through the orchestrator because `dev` is protected and shared. A lane PR
 merges when its exact head is green on final-head CI; the landing is proven by fetching `origin/dev`
 and checking ancestry, never by the merge command's own output.
-
