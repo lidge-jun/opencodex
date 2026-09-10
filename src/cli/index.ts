@@ -952,7 +952,7 @@ async function handleStop() {
       if (detail) console.error(`   ${detail}`);
       if (err instanceof ProxyOwnershipRefusedError) {
         ownershipBlocked = true;
-        console.error("   Skipping shared teardown (native Codex restore, Grok config): the foreign proxy is still running.");
+        console.error("   Skipping shared teardown (native Codex restore, Grok config): the refusing proxy is still running.");
       }
     }
   } else {
@@ -979,7 +979,7 @@ async function handleStop() {
         if (detail) console.error(`   ${detail}`);
         if (err instanceof ProxyOwnershipRefusedError) {
           ownershipBlocked = true;
-          console.error("   Skipping shared teardown (native Codex restore, Grok config): the foreign proxy is still running.");
+          console.error("   Skipping shared teardown (native Codex restore, Grok config): the refusing proxy is still running.");
         }
       }
     } else if (live) {

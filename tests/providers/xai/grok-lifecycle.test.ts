@@ -150,7 +150,7 @@ describe("Grok fence lifecycle wiring", () => {
     // shared teardown must be skipped at both call sites, exactly like the service-manager path.
     const ownershipRefusals = stopFn.match(/err instanceof ProxyOwnershipRefusedError[\s\S]{0,200}?ownershipBlocked = true;/g);
     expect(ownershipRefusals).toHaveLength(2);
-    expect(stopFn.match(/Skipping shared teardown \(native Codex restore, Grok config\): the foreign proxy is still running\./g)).toHaveLength(2);
+    expect(stopFn.match(/Skipping shared teardown \(native Codex restore, Grok config\): the refusing proxy is still running\./g)).toHaveLength(2);
     expect(PROCESS_CONTROL_SOURCE).toContain("throw new ProxyOwnershipRefusedError(");
   });
 

@@ -80,9 +80,47 @@ export type GracefulStopResult = boolean | "refused" | "teardown-unconfirmed";
  */
 let lastRefusalMessage: string | null = null;
 
+/**
+ * The server's machine-readable reason for the most recent 409, captured alongside the
+ * message so a refusal that arrives without a body still names the right cause. Without it
+ * the fallback has to guess, and guessing "ownership" sent operators to re-check
+ * CODEX_HOME for a refusal the scheduler wrapper had issued (#4169).
+ */
+let lastRefusalCode: string | null = null;
+
 /** The server's explanation for the most recent 409, or `null` when it sent none. */
 export function lastStopRefusalMessage(): string | null {
   return lastRefusalMessage;
+}
+
+/** The server's `code` for the most recent 409, or `null` when it sent none. */
+export function lastStopRefusalCode(): string | null {
+  return lastRefusalCode;
+}
+
+/**
+ * Wording for a refusal whose body carried no message. Each branch mirrors a refusal the
+ * management API can return from `POST /api/stop`; the default stays cause-neutral because
+ * naming the wrong cause is worse than naming none — it costs the operator the time they
+ * spend acting on it.
+ */
+function refusalFallbackMessage(code: string | null): string {
+  switch (code) {
+    case "respawnable_service":
+      return "The running proxy refused to stop: a service manager that can respawn it owns "
+        + "the process. Run `ocx stop`, which verifies the respawn window.";
+    case "self_unload_service":
+      return "The running proxy refused to stop: it is the installed service itself, so "
+        + "stopping the manager from inside it would end the process before native Codex is "
+        + "restored. Run `ocx stop`.";
+    case "service_state_unknown":
+      return "The running proxy refused to stop: the service manager state could not be read, "
+        + "so it cannot tell whether a wrapper would respawn it. Run `ocx service status` to "
+        + "see the query error.";
+    default:
+      return "The running proxy refused to stop and sent no reason. Run `ocx service status` "
+        + "to inspect the service state.";
+  }
 }
 
 /**
@@ -128,17 +166,26 @@ export async function stopProxyGracefully(pid: number, io: GracefulStopIo = {}):
       // longer than a health poll so we prefer drain over taskkill /F.
       signal: AbortSignal.timeout(io.exitTimeoutMs ? Math.min(io.exitTimeoutMs, 10_000) : 10_000),
     });
-    // 409 is the proxy REFUSING to stop (a service installed under another home owns it and
-    // would respawn it anyway). That is a policy answer, not a dead endpoint — escalating to
-    // SIGTERM here would run the daemon's cleanup and strip shared config out from under the
+    // 409 is the proxy REFUSING to stop. There is more than one reason it can say no — a
+    // respawning service manager, the proxy being the installed service itself, or an
+    // unreadable scheduler state — so both the message and the code are captured rather
+    // than assumed. That is a policy answer, not a dead endpoint — escalating to SIGTERM
+    // here would run the daemon's cleanup and strip shared config out from under the
     // still-running service. Report the refusal instead of forcing.
     if (res.status === 409) {
-      lastRefusalMessage = await res.json()
+      const refusal = await res.json()
         .then(body => {
-          const message = (body as { message?: unknown } | null)?.message;
-          return typeof message === "string" && message.trim() ? message.trim() : null;
+          const record = body as { message?: unknown; code?: unknown } | null;
+          const message = record?.message;
+          const code = record?.code;
+          return {
+            message: typeof message === "string" && message.trim() ? message.trim() : null,
+            code: typeof code === "string" && code.trim() ? code.trim() : null,
+          };
         })
-        .catch(() => null);
+        .catch(() => ({ message: null, code: null }));
+      lastRefusalMessage = refusal.message;
+      lastRefusalCode = refusal.code;
       return "refused";
     }
     if (!res.ok) return false;
@@ -174,12 +221,11 @@ export async function stopProxy(pid: number, io: GracefulStopIo = {}): Promise<b
   const runtime = io.runtimeEndpoint ?? readRuntimePort(pid);
   const graceful = await stopProxyGracefully(pid, io);
   if (graceful === "refused") {
-    // The proxy refused on purpose (foreign service owns it). Forcing would strip shared
-    // config while that service keeps the proxy alive.
+    // The proxy refused on purpose. Forcing would strip shared config while whatever owns
+    // the process keeps it alive. The server's own message is preferred; the fallback is
+    // selected from its code so an empty body still names the right cause.
     throw new ProxyOwnershipRefusedError(
-      lastRefusalMessage
-      ?? "The running proxy refused to stop: a service installed under a different "
-        + "CODEX_HOME/OPENCODEX_HOME owns it. Run the stop from that home.",
+      lastRefusalMessage ?? refusalFallbackMessage(lastRefusalCode),
     );
   }
   if (graceful === "teardown-unconfirmed") {

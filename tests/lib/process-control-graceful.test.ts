@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { gracefulStopHost, lastStopRefusalMessage, stopProxyGracefully } from "../../src/lib/process-control";
+import { gracefulStopHost, lastStopRefusalCode, lastStopRefusalMessage, ProxyOwnershipRefusedError, stopProxy, stopProxyGracefully } from "../../src/lib/process-control";
 
 function okResponse(): Response {
   return new Response(JSON.stringify({ success: true, sharedTeardown: "performed" }), { status: 200 });
@@ -197,5 +197,70 @@ describe("409 refusal reporting", () => {
     });
     expect(result).toBe("refused");
     expect(lastStopRefusalMessage()).toBeNull();
+  });
+
+  test("the refusal code is captured alongside the message", async () => {
+    // The message alone cannot drive the fallback: a refusal that arrives with an empty or
+    // unparseable body still has to name a cause, and #4169 showed what happens when the
+    // fallback guesses one — the operator re-checks CODEX_HOME for a refusal the scheduler
+    // wrapper issued.
+    await stopProxyGracefully(7, {
+      readRuntime: () => ({ port: 10100 }),
+      fetchFn: (async () => new Response(
+        JSON.stringify({ success: false, code: "respawnable_service", message: "wrapper owns it" }),
+        { status: 409, headers: { "content-type": "application/json" } },
+      )) as typeof fetch,
+      waitExit: () => true,
+      env: {},
+    });
+    expect(lastStopRefusalCode()).toBe("respawnable_service");
+
+    await stopProxyGracefully(7, {
+      readRuntime: () => ({ port: 10100 }),
+      fetchFn: (async () => new Response("not json", { status: 409 })) as typeof fetch,
+      waitExit: () => true,
+      env: {},
+    });
+    expect(lastStopRefusalCode()).toBeNull();
+  });
+
+  test("a bodyless refusal falls back to its code, never to an ownership claim", async () => {
+    const refusalFor = async (code: string | null): Promise<string> => {
+      const body = code === null ? "not json" : JSON.stringify({ success: false, code });
+      try {
+        await stopProxy(process.pid, {
+          readRuntime: () => ({ port: 10100 }),
+          fetchFn: (async () => new Response(body, {
+            status: 409,
+            headers: { "content-type": "application/json" },
+          })) as typeof fetch,
+          waitExit: () => { throw new Error("must not wait for a refused stop"); },
+          env: {},
+        });
+      } catch (err) {
+        if (err instanceof ProxyOwnershipRefusedError) return err.message;
+        throw err;
+      }
+      throw new Error("stopProxy must throw on a refusal");
+    };
+
+    const respawnable = await refusalFor("respawnable_service");
+    expect(respawnable).toContain("respawn");
+    expect(respawnable).toContain("ocx stop");
+
+    const selfUnload = await refusalFor("self_unload_service");
+    expect(selfUnload).toContain("installed service itself");
+
+    const unknownState = await refusalFor("service_state_unknown");
+    expect(unknownState).toContain("ocx service status");
+
+    const noBody = await refusalFor(null);
+    expect(noBody).toContain("sent no reason");
+
+    // None of them may assert the cause that #4169 was filed for.
+    for (const message of [respawnable, selfUnload, unknownState, noBody]) {
+      expect(message).not.toContain("CODEX_HOME");
+      expect(message).not.toContain("OPENCODEX_HOME");
+    }
   });
 });
