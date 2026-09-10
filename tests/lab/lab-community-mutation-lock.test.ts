@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -70,7 +70,7 @@ describe("community mutation lock", () => {
     expect(existsSync(lockPath)).toBe(true);
   });
 
-  test("rejects a live owner without running protected work or changing ownership", () => {
+  test("rejects a live owner after one check without running protected work or changing ownership", () => {
     const config = configDir();
     const lockPath = createLiveOwnerLock(config);
     const lockBefore = lstatSync(lockPath);
@@ -78,18 +78,27 @@ describe("community mutation lock", () => {
     let ranProtectedWork = false;
     let failure: unknown;
 
+    // Observe the real signal-zero owner check. A retry loop must not poll a
+    // live owner before eventually returning the same refusal.
+    const ownerCheck = spyOn(process, "kill");
     try {
-      withPublicEvidenceMutationLock(config, () => { ranProtectedWork = true; });
-    } catch (error) {
-      failure = error;
-    }
+      try {
+        withPublicEvidenceMutationLock(config, () => { ranProtectedWork = true; });
+      } catch (error) {
+        failure = error;
+      }
 
-    expect(failure).toBeInstanceOf(PublicEvidenceValidationError);
-    expect((failure as PublicEvidenceValidationError).code).toBe("community_cache_busy");
-    expect(ranProtectedWork).toBe(false);
-    expect(readFileSync(join(lockPath, "owner.json"))).toEqual(ownerBefore);
-    const lockAfter = lstatSync(lockPath);
-    expect([lockAfter.dev, lockAfter.ino]).toEqual([lockBefore.dev, lockBefore.ino]);
+      expect(failure).toBeInstanceOf(PublicEvidenceValidationError);
+      expect((failure as PublicEvidenceValidationError).code).toBe("community_cache_busy");
+      expect(ranProtectedWork).toBe(false);
+      expect(readFileSync(join(lockPath, "owner.json"))).toEqual(ownerBefore);
+      const lockAfter = lstatSync(lockPath);
+      expect([lockAfter.dev, lockAfter.ino]).toEqual([lockBefore.dev, lockBefore.ino]);
+      expect(ownerCheck).toHaveBeenCalledTimes(1);
+      expect(ownerCheck).toHaveBeenCalledWith(process.pid, 0);
+    } finally {
+      ownerCheck.mockRestore();
+    }
   });
 
   test("a competing reclaim claim prevents a second stale reclaimer from deleting the lock", () => {
