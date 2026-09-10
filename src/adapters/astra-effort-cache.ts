@@ -26,6 +26,10 @@ function record(value: unknown): value is RecordValue {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+export function supportsAstraEffortCache(body: unknown): boolean {
+  return record(body) && body.model === ASTRA_MODEL;
+}
+
 function effort(value: unknown): value is string {
   return typeof value === "string" && EFFORTS.has(value);
 }

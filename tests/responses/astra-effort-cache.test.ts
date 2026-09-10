@@ -14,17 +14,13 @@ import { withTestTranslatorBudget } from "../helpers/translator-budget";
 
 let directory: string;
 let oldHome: string | undefined;
-let oldFlag: string | undefined;
 beforeEach(() => {
   directory = mkdtempSync(join(tmpdir(), "astra-effort-"));
   oldHome = process.env["OPENCODEX_HOME"];
-  oldFlag = process.env["OCX_ASTRA_EFFORT_CACHE"];
   process.env["OPENCODEX_HOME"] = directory;
-  delete process.env["OCX_ASTRA_EFFORT_CACHE"];
 });
 afterEach(() => {
   if (oldHome === undefined) delete process.env["OPENCODEX_HOME"]; else process.env["OPENCODEX_HOME"] = oldHome;
-  if (oldFlag === undefined) delete process.env["OCX_ASTRA_EFFORT_CACHE"]; else process.env["OCX_ASTRA_EFFORT_CACHE"] = oldFlag;
   rmSync(directory, { recursive: true, force: true });
 });
 const user = (content: string) => ({ role: "user", content });
@@ -186,13 +182,20 @@ function adapterRequest(input: unknown[], effort = "medium", extra = {}, destina
   return adapter.buildRequest(parseRequest(body(input, effort, extra)), { headers: new Headers({ authorization: "Bearer synthetic", "chatgpt-account-id": "test-account", "thread-id": "thread-a" }) });
 }
 describe("Astra adapter integration", () => {
-  test("default remains disabled and performs no state writes", () => {
-    adapterRequest(first); const request = adapterRequest(second, "low");
+  test("default preserves the baseline and inserts effort updates", () => {
+    adapterRequest(first);
+    const request = adapterRequest(second, "low");
+    expect(JSON.parse(request.body).reasoning.effort).toBe("medium");
+    expect(JSON.parse(request.body).input.filter((i: any) => i.type === "configuration_update")).toEqual([update("low")]);
+    expect(request.reasoningLog?.effectiveEffort).toBe("low");
+  });
+  test("other native models do not activate effort state or diagnostics", () => {
+    const request = adapterRequest(first, "low", { model: "gpt-5.6-luna" });
     expect(JSON.parse(request.body).reasoning.effort).toBe("low");
+    expect(request.reasoningLog).toBeUndefined();
     expect(readdirSync(directory)).toEqual([]);
   });
   test("parser, native adapter, websocket framing and logs preserve the update", () => {
-    process.env["OCX_ASTRA_EFFORT_CACHE"] = "1";
     adapterRequest(first);
     const request = adapterRequest(second, "low");
     const output = JSON.parse(request.body);
@@ -208,14 +211,12 @@ describe("Astra adapter integration", () => {
     expect(log).toMatchObject({ requestedEffort: "low", effectiveEffort: "low", reasoningWireValue: "medium" });
   });
   test("auto truncation is detected before native parameter stripping", () => {
-    process.env["OCX_ASTRA_EFFORT_CACHE"] = "1";
     adapterRequest(first);
     const request = adapterRequest(second, "low", { truncation: "auto" });
     expect(JSON.parse(request.body).reasoning.effort).toBe("low");
     expect(JSON.parse(request.body).input.some((i: any) => i.type === "configuration_update")).toBe(false);
   });
   test("custom forward destinations never receive generated updates", () => {
-    process.env["OCX_ASTRA_EFFORT_CACHE"] = "1";
     const destination = { ...provider, baseUrl: "https://gateway.example.test" };
     adapterRequest(first, "medium", {}, destination);
     expect(JSON.parse(adapterRequest(second, "low", {}, destination).body).reasoning.effort).toBe("low");
