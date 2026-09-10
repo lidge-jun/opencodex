@@ -741,6 +741,19 @@ describe("fetchProviderQuotaReports", () => {
     expect(pickComboTarget(config, "quota-scope")?.target.provider).toBe("zai");
   });
 
+  test("routing quota scope keeps a key-bound display-only report out of model selection", async () => {
+    // MiniMax publishes its Token Plan countdown through the display-only path. The provider
+    // is single-key `key` auth, so ownership alone would resolve a routing binding; without
+    // an inference projection the exhausted row must still not rank or veto the target.
+    globalThis.fetch = (async () => Response.json({
+      success: true, data: { remains_time: 0, total_time: 1_000_000_000 },
+    })) as typeof fetch;
+    const config = quotaCombo(keyQuotaConfig("minimax", "https://api.minimax.io/v1"));
+    const reports = await fetchProviderQuotaReports(config, true);
+    expect(reports.reports[0]?.quota.customWindows?.[0]?.percent).toBe(100);
+    expect(pickComboTarget(config, "quota-scope")?.target.provider).toBe("minimax");
+  });
+
   test("routing quota scope retains the OpenRouter single-key spending cap", async () => {
     globalThis.fetch = (async () => Response.json({ data: { limit: 20, limit_remaining: 0 } })) as typeof fetch;
     const config = quotaCombo(keyQuotaConfig("openrouter", "https://openrouter.ai/api/v1"));
