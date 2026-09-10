@@ -21,6 +21,18 @@ ocx models provider openrouter on
 
 After GUI registration or OAuth login, the confirmation dialog lets you open the Models page. CLI registration and login print model-management commands; JSON includes structured next steps. `--no-wait` reports pending login, not completion. Start the proxy with `ocx start` before using live model commands.
 
+## Z.ai Coding Plan quota endpoints
+
+The Z.ai quota probe recognizes the international coding Chat base
+`https://api.z.ai/api/coding/paas/v4`, the documented
+[Claude Code Anthropic base](https://docs.z.ai/devpack/tool/claude)
+`https://api.z.ai/api/anthropic`, and the documented
+[Codex Responses base](https://docs.z.ai/devpack/tool/codex)
+`https://api.z.ai/api/v1`. All three read quota from the international monitor with
+Bearer authentication; this does not change the inference URL or imply different
+quota consumption between adapters. Existing BigModel CN monitor selection remains
+separate. Full request URLs such as `/api/v1/responses` are not provider base URLs.
+
 ## Provider-related top-level fields
 
 | Field | Type | Default | Meaning |

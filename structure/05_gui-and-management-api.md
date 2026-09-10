@@ -506,6 +506,22 @@ once it exceeds 200) with the upstream content-type, body kind (`sse / json / ot
 body sample, and the extracted usage. Off by default; the hot path is guarded so production stays
 untouched.
 
+## Z.ai quota destination ownership
+
+`src/providers/quota.ts` uses one exact normalized-base mapping for both Z.ai quota
+eligibility and monitor selection. International root, coding Chat, Anthropic and
+Responses bases use `api.z.ai` with Bearer authentication. Existing BigModel CN root,
+coding Chat and Responses bases use `open.bigmodel.cn` with the raw key. Unsupported
+bases produce no probe; redirect refusal and quota parsing/cache semantics are unchanged.
+
+[Decision Log]
+- 목적과 의도: Restore quota reads for documented international Anthropic and Responses bases without changing their inference configuration.
+- 기존 구현 및 제약 조건: Admission omitted both bases; a separate monitor ternary treated all other admitted bases as CN.
+- 검토한 주요 대안: Add the same paths to two lists, accept any path on either host, or share one exact mapping.
+- 선택한 방식: Share one base-to-monitor mapping and preserve the existing CN allowlist.
+- 다른 대안 대신 이 방식을 선택한 이유: A single mapping prevents new international admission from silently selecting the CN authentication scheme, without admitting unrelated pay-as-you-go paths.
+- 장점, 단점 및 영향: No config migration or inference change; new documented endpoints still require an explicit reviewed mapping entry. Quota-consumption differences are not inferred from adapter choice.
+
 ## Provider debug logging
 
 Provider transport diagnostics (dropped SSE frames, adapter dial/stream events, etc.) are opt-in:
