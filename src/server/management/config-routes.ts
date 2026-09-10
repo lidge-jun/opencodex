@@ -494,8 +494,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       for (const [selector, models] of Object.entries(body.codexAccountPickerModels as Record<string, string[]>)) {
         const candidates = available.get(selector);
         if (!candidates) {
-          // Deleted accounts retain their bindings; discard stale display choices on save.
-          if (Object.hasOwn(choices.codexAccountNamespaces ?? {}, selector)) continue;
+          // Discard saved display choices for deleted accounts or removed/renamed bindings.
+          if (Object.hasOwn(choices.codexAccountNamespaces ?? {}, selector)
+            || Object.hasOwn(config.codexAccountPickerModels ?? {}, selector)) continue;
           return jsonResponse({ error: "Unknown Codex account selector" }, 400);
         }
         const previous = new Set(config.codexAccountPickerModels?.[selector] ?? []);

@@ -820,3 +820,16 @@ test("an eligibility change does not let unchanged stale selections block the ne
   expect(loadConfig().codexAccountPickerModels).toEqual({ main: ["gpt-5.5", "gpt-5.6-sol"] });
   expect((await putSettings(config, { codexAccountPickerModels: { main: ["gpt-not-real"] } }, deps))!.status).toBe(400);
 });
+
+
+test("a removed namespace is pruned from saved selections but a new unknown key is rejected", async () => {
+  const config = baseConfig();
+  config.codexAccountPickerEnabled = true;
+  config.codexAccountNamespaces = { main: "@main" };
+  config.codexAccountPickerModels = { main: ["gpt-5.5"], former: ["gpt-5.5"] };
+  const deps: ManagementApiDeps = { saveConfigPreservingClaudeCode: saveConfig, createManagementConvergeCodex: catalogConvergenceFactory(() => {}) };
+  const response = await putSettings(config, { codexAccountPickerModels: { main: ["gpt-5.6-sol"], former: ["gpt-5.5"] } }, deps);
+  expect(response!.status).toBe(200);
+  expect(loadConfig().codexAccountPickerModels).toEqual({ main: ["gpt-5.6-sol"] });
+  expect((await putSettings(config, { codexAccountPickerModels: { main: ["gpt-5.6-sol"], unknown: ["gpt-5.5"] } }, deps))!.status).toBe(400);
+});

@@ -589,7 +589,7 @@ describe("CodexAccountPickerSetting", () => {
         codexAccountPickerEnabled: true,
         // "gpt-reserve" was saved earlier (e.g. codexDesktopAuthless was on) and no longer
         // appears among this selector's current options.
-        codexAccountPickerModels: { main: ["gpt-5.1", "gpt-reserve"] },
+        codexAccountPickerModels: { main: ["gpt-5.1", "gpt-reserve"], former: ["gpt-5.1"] },
         codexAccountPickerOptions: options,
       });
     }) as typeof fetch);
@@ -621,7 +621,7 @@ describe("CodexAccountPickerSetting", () => {
     ];
     // "main" still carries "gpt-reserve" from an earlier save; it is no longer among main's
     // current options. "work" is untouched aside from the checkbox click below.
-    const initialModels = { main: ["gpt-5.1", "gpt-reserve"], work: ["gpt-5.2"] };
+    const initialModels = { main: ["gpt-5.1", "gpt-reserve"], work: ["gpt-5.2"], former: ["gpt-5.1"] };
     let lastPutBody: { codexAccountPickerModels?: Record<string, string[]> } | null = null;
     const host = await mount((async (_input: RequestInfo | URL, init?: RequestInit) => {
       if (init?.method === "PUT") {

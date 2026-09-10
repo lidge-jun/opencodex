@@ -40,14 +40,14 @@ function sameModelsMap(a: ModelsMap, b: ModelsMap): boolean {
   return true;
 }
 
-/** Prune unavailable models before save or restoring customization; the server handles removed selectors. */
+/** Prune unavailable models and removed selectors before saving or restoring customization. */
 function pruneDraftToOptions(map: ModelsMap, currentOptions: AccountModelOption[]): ModelsMap {
   const bySelector = new Map(currentOptions.map(option => [option.selector, new Set(option.models)]));
   let changed = false;
   const next: ModelsMap = {};
   for (const [selector, models] of Object.entries(map)) {
     const available = bySelector.get(selector);
-    if (!available) { next[selector] = models; continue; }
+    if (!available) { changed = true; continue; }
     const kept = models.filter(model => available.has(model));
     if (kept.length !== models.length) changed = true;
     next[selector] = kept;
