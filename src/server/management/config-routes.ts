@@ -183,6 +183,7 @@ interface ClientIntegrationSyncOutcome {
 function accountPickerSettings(config: OcxConfig) {
   const choices = { ...config, codexAccountPickerEnabled: true };
   delete choices.codexAccountPickerModels;
+  // Catalog candidates are display choices, not proof of upstream account entitlement.
   return {
     codexAccountPickerModels: config.codexAccountPickerModels ?? null,
     codexAccountPickerOptions: [...accountBoundNativeOpenAiSlugsBySelector(choices)]

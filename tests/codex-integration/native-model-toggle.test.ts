@@ -1,3 +1,4 @@
+import { isCodexAccountPickerModels } from "../../src/config/codex-account-picker";
 import { accountBoundNativeOpenAiSlugsBySelector } from "../../src/codex/catalog/metadata";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
@@ -918,4 +919,14 @@ test("selective account catalog lists only chosen pairs and preserves legacy omi
   expect(accountBoundNativeOpenAiSlugsBySelector(config, []).get("main")!.length).toBeGreaterThan(1);
   config.codexAccountPickerEnabled = false;
   expect(accountBoundNativeOpenAiSlugsBySelector(config, []).size).toBe(0);
+});
+
+
+test("account picker validation accepts observed o-series catalog choices", () => {
+  const models = ["o1-mini", "o3-mini", "o4-mini"];
+  const config = makeConfig({ codexAccountPickerEnabled: true, codexAccountNamespaces: { main: "@main" } });
+  const observed = models.map(slug => ({ ...nativeTemplate(), slug, visibility: "list", supported_in_api: true }));
+  const choices = accountBoundNativeOpenAiSlugsBySelector(config, observed).get("main")!;
+  for (const model of models) expect(choices).toContain(model);
+  expect(isCodexAccountPickerModels({ main: [...choices] })).toBe(true);
 });

@@ -727,3 +727,11 @@ test("malformed stored account model preferences preserve providers and reject l
   expect(loaded.codexAccountPickerModels).toBeUndefined();
   expect(validateConfigCandidate({ ...config, codexAccountPickerModels: "invalid" })).toMatchObject({ ok: false });
 });
+
+
+test("o-series account model preferences survive config validation and persistence", () => {
+  const config = { ...baseConfig(), codexAccountPickerModels: { main: ["o1", "o3", "o1-mini", "o3-mini", "o4-mini"] } };
+  expect(validateConfigCandidate(config)).toMatchObject({ ok: true });
+  saveConfig(config);
+  expect(loadConfig().codexAccountPickerModels).toEqual(config.codexAccountPickerModels);
+});

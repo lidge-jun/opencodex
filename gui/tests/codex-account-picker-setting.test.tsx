@@ -497,4 +497,79 @@ describe("CodexAccountPickerSetting", () => {
     expect(checkbox().checked).toBe(true);
   });
 
+  test("Save sends the full multi-account map, preserving selections for accounts left untouched", async () => {
+    const options = [
+      { selector: "main", models: ["gpt-5.1", "gpt-5.1-codex"] },
+      { selector: "work", models: ["gpt-5.2", "gpt-5.2-fast"] },
+    ];
+    const initialModels = { main: ["gpt-5.1"], work: ["gpt-5.2"] };
+    let lastPutBody: { codexAccountPickerModels?: Record<string, string[]> } | null = null;
+    const host = await mount((async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        lastPutBody = JSON.parse(String(init.body)) as { codexAccountPickerModels?: Record<string, string[]> };
+        return response({ ok: true, codexAccountPickerModels: lastPutBody.codexAccountPickerModels, codexAccountPickerOptions: options });
+      }
+      return response({ codexAccountPickerEnabled: true, codexAccountPickerModels: initialModels, codexAccountPickerOptions: options });
+    }) as typeof fetch);
+
+    const rows = Array.from(host.querySelectorAll(".codex-account-picker-account-row"));
+    expect(rows).toHaveLength(2);
+    const workRow = rows.find(row => row.textContent?.includes("work"))!;
+    const workExtraCheckbox = Array.from(workRow.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'))
+      .find(box => !box.checked)!;
+    expect(workExtraCheckbox).toBeTruthy();
+
+    act(() => { workExtraCheckbox.click(); });
+    await act(async () => {
+      Array.from(host.querySelectorAll("button")).find(b => b.textContent === "Save")!.click();
+      await flush();
+    });
+
+    expect(lastPutBody).not.toBeNull();
+    expect(lastPutBody?.codexAccountPickerModels).toEqual({
+      main: ["gpt-5.1"],
+      work: ["gpt-5.2", "gpt-5.2-fast"],
+    });
+
+    const mainRow = rows.find(row => row.textContent?.includes("main"))!;
+    const mainChecked = Array.from(mainRow.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')).filter(b => b.checked);
+    expect(mainChecked).toHaveLength(1);
+    expect(mainChecked[0]?.parentElement?.textContent).toContain("gpt-5.1");
+    const workChecked = Array.from(workRow.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')).filter(b => b.checked);
+    expect(workChecked).toHaveLength(2);
+  });
+
+  test("a failed PUT while turning customize off restores the toggle and keeps the prior draft intact", async () => {
+    const options = [{ selector: "main", models: ["gpt-5.1", "gpt-5.1-codex"] }];
+    const host = await mount((async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") return response({ error: "private server path" }, 500);
+      return response({
+        codexAccountPickerEnabled: true,
+        codexAccountPickerModels: { main: ["gpt-5.1"] },
+        codexAccountPickerOptions: options,
+      });
+    }) as typeof fetch);
+
+    const customizeToggle = () => Array.from(host.querySelectorAll<HTMLButtonElement>("button.toggle"))[1]!;
+    expect(customizeToggle().getAttribute("aria-pressed")).toBe("true");
+    const checkboxBefore = host.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    expect(checkboxBefore?.checked).toBe(true);
+    act(() => { host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')[1]!.click(); });
+
+    await act(async () => {
+      customizeToggle().click();
+      await flush();
+    });
+
+    expect(customizeToggle().getAttribute("aria-pressed")).toBe("true");
+    expect(host.querySelector(".codex-account-picker-models")).not.toBeNull();
+    const checkboxAfter = host.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    expect(checkboxAfter?.checked).toBe(true);
+    expect(host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')[1]!.checked).toBe(true);
+    const errorNotice = host.querySelector<HTMLElement>(".codex-account-picker-feedback.is-err");
+    expect(errorNotice).not.toBeNull();
+    expect(errorNotice?.textContent).toContain("Could not update per-account model customization");
+    expect(errorNotice?.textContent).not.toContain("private server path");
+  });
+
 });

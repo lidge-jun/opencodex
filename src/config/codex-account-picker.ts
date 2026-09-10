@@ -7,5 +7,5 @@ export function isCodexAccountPickerModels(value: unknown): value is Record<stri
   return Object.entries(value).every(([selector, models]) =>
     isValidProviderName(selector) && Array.isArray(models)
     && models.every(model => typeof model === "string"
-      && /^(?:gpt-|codex-)[A-Za-z0-9._-]+$/.test(model)));
+      && /^(?:(?:gpt-|codex-|o[134]-)[A-Za-z0-9._-]+|o[134])$/.test(model)));
 }
