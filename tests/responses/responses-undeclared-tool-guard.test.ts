@@ -436,6 +436,54 @@ describe("undeclared tool call guard", () => {
     expect(await relay(upstream, ["linear.create_issue"])).toBe(upstream);
   });
 
+  test("accepts a bare tool call echoed with an invented default. prefix (#4176)", async () => {
+    const outbound = {
+      tools: [{ type: "function", name: "view_image" }],
+    };
+    const upstream = sse("response.output_item.added", {
+      output_index: 0,
+      item: { type: "function_call", id: "fc_1", call_id: "call_1", name: "default.view_image", arguments: "{}" },
+    });
+    expect(await relay(upstream, collectDeclaredWireToolNames(outbound))).toBe(upstream);
+  });
+
+  test("does not rewrite default.view_image to bare when default.view_image is explicitly declared (#4176)", async () => {
+    const outbound = {
+      tools: [{ type: "function", name: "view_image" }, { type: "function", name: "default.view_image" }],
+    };
+    const upstream = sse("response.output_item.added", {
+      output_index: 0,
+      item: { type: "function_call", id: "fc_1", call_id: "call_1", name: "default.view_image", arguments: "{}" },
+    });
+    expect(await relay(upstream, collectDeclaredWireToolNames(outbound))).toBe(upstream);
+  });
+
+  test("preserves namespaced default__view_image over bare normalization (#4176)", async () => {
+    const outbound = {
+      tools: [
+        { type: "function", name: "view_image" },
+        { type: "namespace", name: "default", tools: [{ type: "function", name: "view_image" }] },
+      ],
+    };
+    const upstream = sse("response.output_item.added", {
+      output_index: 0,
+      item: { type: "function_call", id: "fc_1", call_id: "call_1", name: "default.view_image", arguments: "{}" },
+    });
+    expect(await relay(upstream, collectDeclaredWireToolNames(outbound))).toBe(upstream);
+  });
+
+  test("rejects default. prefix when the bare tool was not declared (#4176)", async () => {
+    const outbound = {
+      tools: [{ type: "function", name: "list_dir" }],
+    };
+    const upstream = sse("response.output_item.added", {
+      output_index: 0,
+      item: { type: "function_call", id: "fc_1", call_id: "call_1", name: "default.view_image", arguments: "{}" },
+    });
+    const out = await relay(upstream, collectDeclaredWireToolNames(outbound));
+    expect(out).toContain("code\":\"" + UNDECLARED_TOOL_CALL_ERROR_CODE);
+  });
+
   test("never blocks apply_patch when the request really declared it", async () => {
     // `apply_patch` is exempt from the routed custom-tool rewrite, so it reaches upstream as
     // `{type:"custom"}` and comes back as a `custom_tool_call`. A request that declares it must

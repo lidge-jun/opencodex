@@ -319,6 +319,12 @@ function undeclaredNameInItem(
       dottedAliasIsUnambiguous(item.namespace, name)
       && declared.has(dottedToolName(item.namespace, name))
     ) return undefined;
+    if (
+      item.namespace === "default"
+      && declared.has(name)
+      && !declared.has(namespacedToolName(item.namespace, name))
+      && !declared.has(dottedToolName(item.namespace, name))
+    ) return undefined;
     return name;
   }
   const effectiveName = normalizeDeclaredToolName(name, declared);
