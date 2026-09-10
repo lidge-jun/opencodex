@@ -32,8 +32,8 @@ describe("pnpm installation detection", () => {
   test("requires strong evidence for legacy global/vN paths", () => {
     expect(detectInstallFromPath("/work/opencodex/src/update")).toBe("source");
     expect(detectInstallFromPath("/usr/lib/node_modules/@bitkyc08/opencodex/bin")).toBe("npm");
-    expect(detectInstallFromPath("/home/oliver/.bun/install/global/node_modules/@bitkyc08/opencodex/bin")).toBe("bun");
-    expect(detectInstallFromPath("/home/oliver/.bun/node_modules/@bitkyc08/opencodex/bin")).toBe("npm");
+    expect(detectInstallFromPath("/tmp/test-user/.bun/install/global/node_modules/@bitkyc08/opencodex/bin")).toBe("bun");
+    expect(detectInstallFromPath("/tmp/test-user/.bun/node_modules/@bitkyc08/opencodex/bin")).toBe("npm");
     expect(detectInstallFromPath("/opt/global/v11/node_modules/@bitkyc08/opencodex/bin")).toBe("npm");
     expect(detectInstallFromPath("/opt/pnpm/global/v11/node_modules/@bitkyc08/opencodex/bin", {
       exists: path => path === "/opt/pnpm/global/v11/node_modules/.pnpm",
@@ -41,10 +41,10 @@ describe("pnpm installation detection", () => {
   });
 
   test("recognises isolated, store-link, and preserved-symlink layouts", () => {
-    expect(detectInstallFromPath("/home/oliver/.local/share/pnpm/global/v11/node_modules/.pnpm/@bitkyc08+opencodex@2.49.0/node_modules/@bitkyc08/opencodex/bin")).toBe("pnpm");
-    expect(detectInstallFromPath("/home/oliver/.local/share/pnpm/store/v11/links/@bitkyc08/opencodex/2.49.0/node_modules/@bitkyc08/opencodex/bin")).toBe("pnpm");
-    expect(detectInstallFromPath("/home/oliver/.local/share/pnpm/global/11/group/node_modules/@bitkyc08/opencodex/bin", {
-      exists: path => path === "/home/oliver/.local/share/pnpm/global/11/group/node_modules/.pnpm",
+    expect(detectInstallFromPath("/tmp/test-user/.local/share/pnpm/global/v11/node_modules/.pnpm/@bitkyc08+opencodex@2.49.0/node_modules/@bitkyc08/opencodex/bin")).toBe("pnpm");
+    expect(detectInstallFromPath("/tmp/test-user/.local/share/pnpm/store/v11/links/@bitkyc08/opencodex/2.49.0/node_modules/@bitkyc08/opencodex/bin")).toBe("pnpm");
+    expect(detectInstallFromPath("/tmp/test-user/.local/share/pnpm/global/11/group/node_modules/@bitkyc08/opencodex/bin", {
+      exists: path => path === "/tmp/test-user/.local/share/pnpm/global/11/group/node_modules/.pnpm",
     })).toBe("pnpm");
     expect(detectInstallFromPath("C:\\work\\node_modules\\.pnpm\\@bitkyc08+opencodex@2.49.0\\node_modules\\@bitkyc08\\opencodex\\bin")).toBe("pnpm");
   });
