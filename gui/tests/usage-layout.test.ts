@@ -202,10 +202,13 @@ test("Russian excluded-request caption stays grammatical for common counts", () 
   }
 });
 
-test("German and French excluded-request captions remain count-neutral", () => {
+test("German captions remain count-neutral and French captions distinguish singular", () => {
   for (const count of [1, 2, 5]) {
     expect(interpolate(de["usage.cost.excluded"], { count })).toBe(`(${count} ohne Preis oder Nutzungsdaten)`);
-    expect(interpolate(fr["usage.cost.excluded"], { count })).toBe(`(${count} sans tarif ni données d’utilisation)`);
+  }
+  expect(interpolate(fr["usage.cost.excludedOne"], { count: 1 })).toBe("(1 requête exclue faute de tarif ou de données d’utilisation)");
+  for (const count of [2, 5]) {
+    expect(interpolate(fr["usage.cost.excluded"], { count })).toBe(`(${count} requêtes exclues faute de tarif ou de données d’utilisation)`);
   }
 });
 
