@@ -2145,6 +2145,7 @@ export function filterCatalogVisibleModels(
   }
   return models.filter(m => {
     if (initialModelSelectionPending(config.providers[m.provider])) return false;
+    if (config.providers[m.provider]?.disabled === true) return false;
     const nativeAlias = m.provider === COMBO_NAMESPACE && m.nativeAlias === true;
     // disabledModels may be stored raw (canonical) or encoded (legacy UI writes).
     for (const stored of disabled) {
@@ -2459,7 +2460,8 @@ async function gatherRoutedModelsUncached(
   // with the same slug below, so that row's provider capability metadata is the inheritance source.
   const replacedByRoutedSlug = new Map(all.map(model => [routedSlug(model.provider, model.id), model]));
   const customModels = (config.customModels ?? []).map(cm => {
-    const rawProvider = config.providers[cm.provider];
+    const rawProvider = config.providers[cm.provider]?.disabled !== true
+      ? config.providers[cm.provider] : undefined;
     const effectiveProvider = enrichedByName.get(cm.provider) ?? rawProvider;
     // Registry routing backfills an omitted authMode on the built-in OpenAI provider to
     // forward. Keep the catalog projection on the same contract while still failing closed
