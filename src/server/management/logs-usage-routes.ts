@@ -115,7 +115,10 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
     }
     const all = getRequestLogEntries();
     const total = filteredRequestLogCount(all, url.searchParams);
-    const logs = filterRequestLogs(all, url.searchParams).map(requestLogDto);
+    // Not point-free: requestLogDto takes an options object second, and Array.map would pass the
+    // element INDEX into it. An explicit arrow keeps the default (decode rate included) and is
+    // what /api/logs wants; /api/request-history opts out at its own call sites.
+    const logs = filterRequestLogs(all, url.searchParams).map(entry => requestLogDto(entry));
     const poll = selectRequestLogPoll(logs, url.searchParams, cursor);
     return jsonResponse({
       timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
