@@ -61,7 +61,7 @@ afterEach(() => {
 });
 
 async function send(thread: string, options: { parent?: string; account?: string; credential?: string;
-  enabled?: boolean; input?: ReturnType<typeof message>[] } = {}): Promise<Captured> {
+  enabled?: boolean; streamOptions?: Record<string, unknown>; input?: ReturnType<typeof message>[] } = {}): Promise<Captured> {
   const account = options.account ?? "fixture-account-a";
   const config: OcxConfig = { port: 0, defaultProvider: "openai", providers: { openai: {
     adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex",
@@ -69,6 +69,7 @@ async function send(thread: string, options: { parent?: string; account?: string
   } } };
   const body = { model, stream: true, store: false, instructions: "Base instructions", tools: [],
     input: options.input ?? (options.parent ? childInput : history), prompt_cache_key: thread,
+    ...(options.streamOptions === undefined ? {} : { stream_options: options.streamOptions }),
     client_metadata: { session_id: thread, thread_id: thread, turn_id: `turn-${thread}` } };
   const request = new Request("http://localhost/v1/responses", { method: "POST", headers: {
     "content-type": "application/json", authorization: `Bearer ${fakeChatGptJwt({ chatgpt_account_id: account,
@@ -130,4 +131,13 @@ describe("side-chat cache through the Responses handler", () => {
     expect(wire.body.prompt_cache_key).toBe("child");
     expect(wire.headers.get("session-id")).toBe("child");
   });
+});
+
+
+test("Responses handler retains child stream options when matching a differently streamed parent", async () => {
+  await send("parent", { enabled: true, streamOptions: { include_obfuscation: false, reasoning_summary_delivery: "sequential" } });
+  const child = await send("child", { parent: "parent", enabled: true, streamOptions: { include_obfuscation: true } });
+  expect(child.body.prompt_cache_key).toBe("parent");
+  expect(child.headers.get("session-id")).toBe("parent");
+  expect(child.body.stream_options).toEqual({ include_obfuscation: true });
 });

@@ -163,6 +163,16 @@ export class SideChatCache {
     const scope = this.tag([headers.get("authorization"), headers.get("chatgpt-account-id"), headers.get("originator"), headers.get("openai-beta"), headers.get("x-codex-beta-features")]);
     const settingsBody = { ...body };
     for (const field of ["input", "instructions", "prompt_cache_key", "client_metadata", "metadata"]) delete settingsBody[field];
+    if (record(settingsBody.stream_options)) {
+      const streamOptions = { ...settingsBody.stream_options };
+      if (typeof streamOptions.include_obfuscation === "boolean") delete streamOptions.include_obfuscation;
+      if (typeof streamOptions.reasoning_summary_delivery === "string"
+        && ["sequential", "sequential_cutoff", "concurrent", "concurrent_cutoff"].includes(streamOptions.reasoning_summary_delivery)) {
+        delete streamOptions.reasoning_summary_delivery;
+      }
+      if (Object.keys(streamOptions).length) settingsBody.stream_options = streamOptions;
+      else delete settingsBody.stream_options;
+    }
     const metadataSettings = (value: RecordValue) => Object.fromEntries(Object.entries(value).filter(([name]) => !["session_id", "thread_id", "turn_id", "parent_turn_id", "root_turn_id", "forked_from_thread_id", "forked_from_turn_id", "forked_from_turn_index", "x-codex-turn-metadata", "x-codex-turn-state", "ws_request_header_traceparent", "ws_request_header_tracestate", "x-codex-window-id"].includes(name)).sort(([a], [b]) => a.localeCompare(b)));
     const settings = this.tag([settingsBody, metadataSettings(client), metadataSettings(bodyMetadata)]);
     const threadTag = this.tag(thread);

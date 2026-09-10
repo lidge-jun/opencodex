@@ -1020,6 +1020,9 @@ chat to its parent. The selected credential, account, model, settings, tools,
 and inherited prompt prefix must be compatible before the proxy reuses the
 parent's prompt-cache key and provider session identity. Child task and turn
 identifiers remain distinct. Failed or unfinished requests do not seed reuse.
+Recognized stream obfuscation and reasoning-summary delivery options are excluded
+from cache identity checks, while each request retains its own options on the wire.
+Unknown or malformed stream options still require an exact match.
 
 The proxy recognizes exact Desktop side-conversation rule and boundary text.
 It moves recognized rules to a developer message at the side boundary, or adds

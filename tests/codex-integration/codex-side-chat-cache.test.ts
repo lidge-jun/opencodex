@@ -380,3 +380,30 @@ test("an old completion cannot seed a newly enabled runtime", () => {
   expect(JSON.parse(build(side(), headers("child", "parent")).body).prompt_cache_key).toBe("child");
   prepareSideChatCache({}, {}, false);
 });
+
+
+test("stream delivery differences preserve each wire's options while allowing parent reuse", () => {
+  const cache = new SideChatCache();
+  const parent = { ...body(), stream_options: { include_obfuscation: false, reasoning_summary_delivery: "sequential" } };
+  cache.prepare(parent, headers()).complete();
+  for (const options of [undefined, {}, { include_obfuscation: true, reasoning_summary_delivery: "concurrent" }]) {
+    const raw = { ...side(), ...(options === undefined ? {} : { stream_options: options }) };
+    const before = structuredClone(raw);
+    const result = cache.prepare(raw, headers("child", "parent"));
+    expect(result.body.prompt_cache_key).toBe("parent");
+    expect(result.body.stream_options).toEqual(options);
+    expect(raw).toEqual(before);
+  }
+  expect(parent.stream_options).toEqual({ include_obfuscation: false, reasoning_summary_delivery: "sequential" });
+});
+
+test("unknown stream settings and malformed known options still prevent parent reuse", () => {
+  const cache = seeded();
+  for (const options of [{ future_option: true }, { include_obfuscation: "false" }, { reasoning_summary_delivery: "unknown" }, { reasoning_summary_delivery: ["concurrent"] }]) {
+    const raw = { ...side(), stream_options: options };
+    const result = cache.prepare(raw, headers("child", "parent"));
+    expect(result.reason).toBe("settings-change");
+    expect(result.body.prompt_cache_key).toBe("child");
+    expect(result.body.stream_options).toEqual(options);
+  }
+});
