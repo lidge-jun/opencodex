@@ -38,13 +38,14 @@ Collision-free PRs, touching no file any other open PR touches: #4062, #4104, #4
 **L2** `codex/260911-l2-catalog-provider` — `src/providers/quota.ts`,
 `src/providers/quota-types.ts`, `src/providers/quota-wire.ts`,
 `src/providers/quota-routing-cache.ts`, `src/providers/quota-key-accounts.ts`,
-`src/providers/account-quota-disk.ts`, `src/providers/registry.ts`. Stack: #4201.
+`src/providers/account-quota-disk.ts`, `src/providers/registry.ts`, and the roster oracle
+`tests/providers/provider-registry-parity.test.ts`. Stack: #4201.
 
 **L3** `codex/260911-l3-account-pool` — `src/codex/account-usability.ts`,
 `src/codex/account-pause.ts`, `src/codex/account-store.ts`, `src/codex/account-runtime-state.ts`,
 `src/codex/plan.ts`, `src/codex/plan-from-token.ts`, `src/codex/warmup.ts`,
 `src/codex/model-entitlements.ts`, `src/server/responses/codex-auth-error.ts`,
-`src/server/management/oauth-account-routes.ts`, the single key `codexPool.excludedPlans` in
+`src/codex/auth-api.ts`, `src/codex/routing.ts`, `src/types/config.ts`, the single key `codexPool.excludedPlans` in
 `src/config.ts`, and `docs-site/src/content/docs/guides/codex-integration.md` and its seven locale copies under
 `docs-site/src/content/docs/{fr,ja,ko,ru,tr,zh-cn,zh-tw}/guides/codex-integration.md`.
 Stack: #4126 → #4212 → #4211.
@@ -53,10 +54,11 @@ Stack: #4126 → #4212 → #4211.
 `bin/ocx.mjs`, `src/cli.ts`, `src/service.ts`, `src/config/pending-teardown.ts`,
 `src/lib/bun-runtime.ts`, `src/lib/package-tree-integrity.ts`, `src/lib/process-control.ts`,
 `src/codex/catalog/effort.ts`, `src/codex/cli-install-provenance.ts`,
-`docs-site/src/content/docs/getting-started/installation.md`. Stack: #4202 → #4169 → #4204 → #4207.
+`docs-site/src/content/docs/getting-started/installation.md`. Stack: #4202 → #4169 → #4207.
 
-**L5** `codex/260911-l5-integrations-io` — directory `src/integrations/`; file
-`src/config/atomic-write.ts`. Stack: #4197 → #4214.
+**L5** `codex/260911-l5-integrations-io` — directory `src/integrations/`; files
+`src/config/atomic-write.ts`, `src/clients/config-export.ts`,
+`src/clients/config-export/contracts.ts`. Stack: #4197 → #4214.
 
 **L6** `codex/260911-l6-streaming-tools` — `src/server/responses/codex-ws-exchange.ts`,
 `src/server/responses/codex-ws-wire.ts`, directory `src/adapters/qoder/`. Stack: #4191 → #4190.
@@ -73,3 +75,10 @@ Stack: #4126 → #4212 → #4211.
 - `src/config.ts`: only L3, and only `codexPool.excludedPlans`.
 - `docs-site/src/content/docs/guides/providers.md`: L7 only. A lane whose carried PR edits it drops
   that hunk and reports the wording to the orchestrator.
+
+## Amendments from the seven-lane feasibility audit
+
+Ownership above already carries them; `130_wp4_feasibility.md` records why each was granted. In short:
+L2 gained the roster oracle it must update, L3 traded `oauth-account-routes.ts` for the Codex account
+surface `auth-api.ts` plus `routing.ts` and `types/config.ts`, L5 gained the export-client contract,
+and #4204 left the round because binding the clamp to the Desktop runtime is a design decision.

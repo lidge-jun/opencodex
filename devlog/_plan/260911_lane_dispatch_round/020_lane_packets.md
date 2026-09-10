@@ -95,7 +95,10 @@ Owned: `src/server/responses/core.ts`, `src/server/responses/compact.ts`,
 Worktree `~/.codex/worktrees/260911-l2/opencodex`, branch `codex/260911-l2-catalog-provider`.
 
 Owned: `src/providers/quota.ts`, `quota-types.ts`, `quota-wire.ts`, `quota-routing-cache.ts`,
-`quota-key-accounts.ts`, `account-quota-disk.ts`, `registry.ts` (all under `src/providers/`).
+`quota-key-accounts.ts`, `account-quota-disk.ts`, `registry.ts` (all under `src/providers/`), plus
+`tests/providers/provider-registry-parity.test.ts`, the oracle that locks the roster you are changing:
+it asserts the two-model list at `:464` and that `glm-5.3-flash` is absent at `:508`, so the catalog
+half cannot land without updating it.
 
 1. **#4201 — BigModel Responses Coding Plan: missing quota probe and GLM-5.3-Flash catalog support**
    (reporter `bluesmilery`). **Decision: do not build on #4210.** It is an open draft by `Ingwannu`
@@ -111,9 +114,9 @@ Owned: `src/providers/quota.ts`, `quota-types.ts`, `quota-wire.ts`, `quota-routi
 Worktree `~/.codex/worktrees/260911-l3/opencodex`, branch `codex/260911-l3-account-pool`.
 
 Owned: `src/codex/account-usability.ts`, `account-pause.ts`, `account-store.ts`,
-`account-runtime-state.ts`, `plan.ts`, `plan-from-token.ts`, `warmup.ts`, `model-entitlements.ts`
-(all under `src/codex/`), plus `src/server/responses/codex-auth-error.ts`,
-`src/server/management/oauth-account-routes.ts`, the single key `codexPool.excludedPlans` in
+`account-runtime-state.ts`, `plan.ts`, `plan-from-token.ts`, `warmup.ts`, `model-entitlements.ts`, `auth-api.ts`, `routing.ts`
+(all under `src/codex/`), plus `src/server/responses/codex-auth-error.ts`, `src/types/config.ts`,
+the single key `codexPool.excludedPlans` in
 `src/config.ts`, and `docs-site/src/content/docs/guides/codex-integration.md` and its seven locale copies under
 `docs-site/src/content/docs/{fr,ja,ko,ru,tr,zh-cn,zh-tw}/guides/codex-integration.md`.
 
@@ -124,10 +127,17 @@ Owned: `src/codex/account-usability.ts`, `account-pause.ts`, `account-store.ts`,
 2. **#4212 — an account stuck on a failed credential refresh silently drops its models.** The ask is
    attribution, not new routing. **Decision: this round covers the refusal string
    (`codex-auth-error.ts:35`), the account-health surface, and the management route
-   (`oauth-account-routes.ts`). It does not change the L1 refusal call sites at `core.ts:2243` and
-   `compact.ts:296`;** if review asks for those, open a follow-up issue rather than crossing into L1.
+   on the Codex account surface, which is `poolAccountDto` in `src/codex/auth-api.ts:377` under
+   `/api/codex-auth/accounts`. The feasibility audit found the earlier grant of
+   `oauth-account-routes.ts` was the wrong route: it serves the generic `/api/oauth/accounts` and
+   `src/oauth/index.ts:331` excludes ChatGPT from it. The reporter's 503 is inlined at
+   `responses/core.ts:2336` and `compact.ts:383`, which L1 owns, and the model-list drop is published
+   from `catalog/sync.ts:1777`. Both are out of scope: write `Refs #4212`, not `Closes`,** and record
+   them as follow-ups.
 3. **#4211 — keep Free-tier accounts out of pool selection.** **Decision: ship**
-   **`codexPool.excludedPlans` as an array, absent by default,** so an existing install sees no
+   **`codexPool.excludedPlans` as an array, absent by default, filtered in `getEligiblePoolAccounts`**
+   **at `src/codex/routing.ts:1248` rather than in `isCodexAccountUsable`, which is where pause already
+   lives, and explicit namespace selection at `auth-context.ts:922` keeps working,** so an existing install sees no
    behaviour change. Do not ship `minimumPlan`: ranking plans needs an ordering this repository does
    not have. **Decision: this round ships selection only.** If the dashboard or CLI display the issue
    also asks for needs `src/cli/account.ts`, a GUI component, or a locale key, stop and report; write
@@ -141,6 +151,11 @@ Owned: directories `src/update/`, `src/cli/`, `src/client/`; files `bin/ocx.mjs`
 `src/service.ts`, `src/config/pending-teardown.ts`, `src/lib/bun-runtime.ts`,
 `src/lib/package-tree-integrity.ts`, `src/lib/process-control.ts`, `src/codex/catalog/effort.ts`,
 `src/codex/cli-install-provenance.ts`, `docs-site/src/content/docs/getting-started/installation.md`.
+
+Your stack is #4202 → #4169 → #4207. **#4204 was removed from the round** by the feasibility audit:
+binding the clamp to the Desktop runtime needs `codex/runtime.ts:573`, `catalog/bundled.ts:239`, and
+`catalog/sync.ts:1945`, because the catalog probes one selected runtime and no caller passes a
+consumer identity. Resolving a catalog per consumer is a design decision this round does not make.
 
 1. **#4202 — global pnpm installations cannot self-update.** Carry PR #4203 by `oliver-mee` (open
    **draft**, `CHANGES_REQUESTED`, 36 files). **Decision: the keep-set is exactly** `bin/ocx.mjs`,
@@ -173,14 +188,20 @@ Owned: directories `src/update/`, `src/cli/`, `src/client/`; files `bin/ocx.mjs`
 
 Worktree `~/.codex/worktrees/260911-l5/opencodex`, branch `codex/260911-l5-integrations-io`.
 
-Owned: directory `src/integrations/`; file `src/config/atomic-write.ts`. No open PR touches either.
+Owned: directory `src/integrations/`; files `src/config/atomic-write.ts`,
+`src/clients/config-export.ts`, `src/clients/config-export/contracts.ts`. Note `src/clients/` (plural)
+is unrelated to L4's `src/client/` (singular). Open draft #3833 also edits the export-client surface;
+report the overlap rather than merging the two lines of work.
 
 1. **#4197 — the DSH integration's atomic replace changes file ownership and causes `EACCES` across
    UIDs.** **Decision: refuse the integration write when the target exists and its owner is not the
    process euid, with an explicit API error. Do not relax the `0600` hardening and do not attempt
    `fchown`.** A metadata-preserving replace can be proposed later as its own issue.
-2. **#4214 — add Cline as a supported client integration.** Follow the existing registry pattern in
-   `src/integrations/registry.ts`.
+2. **#4214 — add Cline as a supported client integration.** `IntegrationClientId` is an alias of
+   `ExportClientId` at `clients/config-export/contracts.ts:84`, and the writer needs `EXPORT_CLIENTS`
+   from `clients/config-export.ts:1112`, which is why both are yours. **Decision: ship the CLI and
+   registry path only. The dashboard tab needs a locale key this round forbids, so write `Refs #4214`**
+   and leave the tab as a follow-up.
 
 ## L6 — streaming and vendor tool leakage
 
