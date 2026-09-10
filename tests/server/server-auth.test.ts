@@ -245,6 +245,7 @@ async function startPoolRetryHarness(
     combos?: OcxConfig["combos"];
     modelRosterByAccount?: Record<string, string[]>;
     codexAccountPickerModels?: Record<string, string[]>;
+    codexDesktopAuthless?: boolean;
   } = {},
 ): Promise<PoolRetryHarness> {
   await removeTestDirBestEffort(TEST_DIR);
@@ -308,6 +309,7 @@ async function startPoolRetryHarness(
     activeCodexAccountId: options.activeAccountId ?? "pool-a",
     ...(options.accountNamespaces ? { codexAccountNamespaces: options.accountNamespaces } : {}),
     ...(options.codexAccountPickerModels ? { codexAccountPickerModels: options.codexAccountPickerModels } : {}),
+    ...(options.codexDesktopAuthless ? { codexDesktopAuthless: true } : {}),
     ...(options.pausedAccountIds ? { pausedCodexAccountIds: options.pausedAccountIds } : {}),
     ...(options.visionSidecarModel ? { visionSidecar: { model: options.visionSidecarModel } } : {}),
     ...(options.websockets ? { websockets: true } : {}),
@@ -4622,6 +4624,40 @@ describe("GET /v1/models Codex client-version account-picker projection", () => 
         } else {
           expect(slugs).not.toContain("side/" + selectedModel);
         }
+      } finally {
+        await stopPoolRetryHarness(harness);
+      }
+    }
+  });
+
+  test("projects Reserve only for the selected authless main selector", async () => {
+    const reserveModel = "gpt-reserve";
+    for (const [codexDesktopAuthless, codexAccountPickerModels, expected] of [
+      [true, { main: [reserveModel] }, true],
+      [true, { main: [] }, false],
+      [true, {}, false],
+      [true, { side: [reserveModel] }, false],
+      [false, { main: [reserveModel] }, false],
+    ] as const) {
+      const harness = await startPoolRetryHarness(
+        () => Response.json({ id: "unused", status: "completed", output: [] }),
+        {
+          accountNamespaces: { main: "@main", side: "pool-a" },
+          codexDesktopAuthless,
+          codexAccountPickerModels,
+        },
+      );
+      try {
+        const response = await originalGlobalFetch(
+          new URL("/v1/models?client_version=0.150.0", harness.server.url),
+          { headers: { authorization: "Bearer inbound-token" } },
+        );
+        expect(response.status).toBe(200);
+        const payload = await response.json() as { models: Array<{ slug: string }> };
+        const slugs = payload.models.map(model => model.slug);
+        expect(slugs.includes(`main/${reserveModel}`)).toBe(expected);
+        expect(slugs).not.toContain(`side/${reserveModel}`);
+        expect(slugs).not.toContain(reserveModel);
       } finally {
         await stopPoolRetryHarness(harness);
       }

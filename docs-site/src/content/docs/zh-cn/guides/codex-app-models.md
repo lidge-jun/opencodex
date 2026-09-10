@@ -9,6 +9,8 @@ allowlist，因此仍可能从选择器里删掉路由模型。
 
 OpenAI 条目有两种凭据通道：原生 Codex 登录，以及命名空间化的 `openai-apikey/<model>` API key 通道。仅在 Pool 与 Direct 之间切换 `codexAccountMode` 不会改变选择器 id。但当 `codexAccountPickerEnabled` 启用了账户限定的选择器行，且 `codexAccountNamespaces` 中有目标账户存在的 selector 时，结果取决于 `codexAccountPickerModels`。省略该映射时，系统沿用旧行为：为每个受支持模型添加独立的 `<selector>/<native-openai-model>` 行，并在选择器中隐藏裸原生行。提供该映射时，公共池原生模型仍以裸行显示，只有所选的模型和账户组合会添加限定行。Selector 名称是用户自定义的公开标签，没有内置的账户角色含义。选择带 `selector` 的行只会使用映射账户，不会更改当前 Pool 账户；目标不可用时，请求会直接失败，不会切换到其他账户。详情请参阅[精确 Codex 账户选择器](/reference/configuration/routing/#exact-codex-account-selectors)。
 
+启用、选择并保存模型以及恢复原有模式的步骤，请参阅[英文设置说明](/guides/codex-app-models/#select-only-particular-account-models)。
+
 `codexAccountNamespaces` 映射为空时，账户限定的选择器行处于关闭状态。非空映射中省略 `codexAccountPickerEnabled` 时，为保持向后兼容会视为已启用。设为 `false` 会隐藏生成的账户限定行并恢复选择器中的裸原生行，但不会删除映射，也不会禁用精确的 `<selector>/<native-openai-model>` 路由。
 
 API GPT-5.6 条目使用 1,050,000 context / 922,000 max input，而 `*-pro` 选择器 id 会解析到基础线协议模型，并在日志、用量和选择器状态中保留虚拟 id，同时带上 `reasoning.mode: "pro"`。API 目录固定为恰好八个 id：`gpt-5.5`、`gpt-5.6`、Sol/Terra/Luna，以及它们三个 Pro 虚拟 id；不存在通用的 `gpt-5.6-pro` 别名。Compact 请求会保留所选 tier，但发送基础模型且不带 reasoning 对象。

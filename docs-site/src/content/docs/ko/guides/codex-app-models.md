@@ -19,6 +19,8 @@ OpenAI 항목에는 네이티브 Codex 로그인과 네임스페이스가 붙은
 다른 계정으로 전환하지 않고 요청이 실패합니다. 자세한 내용은 [명시적 Codex 계정 selector](/reference/configuration/routing/#exact-codex-account-selectors)를
 참고하세요.
 
+활성화, 모델 선택·저장, 기존 모드로 되돌리는 방법은 [영문 설정 절차](/guides/codex-app-models/#select-only-particular-account-models)를 참고하세요.
+
 계정 한정 행에서 `gpt-daybreak-blue-latest`는 계정 카탈로그에 관측됐을 때만 보존되며 bare native
 allowlist에는 추가되지 않습니다. 이와 별개로 canonical Codex 로그인 forward provider에 다음과 같은
 명시적 `customModels` 항목을 두면 같은 wire id를 `openai/gpt-daybreak-blue-latest`로 노출할 수 있습니다.

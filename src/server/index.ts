@@ -1588,6 +1588,68 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             config.keepNativeChatGptOnV1 === true,
             config.modelPickerOrder,
           );
+          const reserveMainSelectors = accountSelectors.filter(selector =>
+            isMainCodexAccountTarget(accountTargets.get(selector) ?? ""));
+          if (reserveMainSelectors.length > 0) {
+            const { isEffectiveCodexDesktopAuthless } = await import("../codex/loopback-target");
+            if (isEffectiveCodexDesktopAuthless(config)) {
+              const { NATIVE_RESERVE_MODEL } = await import("../codex/catalog/native-models");
+              const { applyFullModelPickerOrder, buildCatalogEntriesFromObservedState, finishUpstreamNativeEntry } = await import("../codex/catalog/sync");
+              const { isMultiAgentV2Enabled } = await import("../codex/features");
+              const { createReserveCatalogProjection, isReserveCatalogProjection, RESERVE_LUNA_METADATA_SOURCE, RESERVE_SOURCE_CATALOG_FIELD } = await import("../codex/catalog/reserve");
+              const { observedReserveCatalogSource, upstreamNativeEntry } = await import("../codex/catalog/metadata");
+              const { readCurrentCodexCatalog, readCurrentCodexModelsCache } = await import("../codex/catalog/bundled");
+              const onDiskCatalog = readCurrentCodexCatalog();
+              const reserveObservations = [
+                ...(onDiskCatalog?.models ?? []),
+                ...(readCurrentCodexModelsCache()?.models ?? []),
+              ];
+              const retainedReserve = onDiskCatalog?.[RESERVE_SOURCE_CATALOG_FIELD];
+              const retainedReserveSource = retainedReserve && typeof retainedReserve === "object" && !Array.isArray(retainedReserve)
+                ? observedReserveCatalogSource([retainedReserve as Record<string, unknown>], [])
+                : null;
+              const observedReserveSource = observedReserveCatalogSource(
+                reserveObservations.filter(entry => entry.slug === NATIVE_RESERVE_MODEL
+                  && entry.opencodex_account_observed_native === undefined),
+                reserveMainSelectors,
+              ) ?? retainedReserveSource ?? observedReserveCatalogSource(reserveObservations, reserveMainSelectors);
+              const lunaSource = upstreamNativeEntry(RESERVE_LUNA_METADATA_SOURCE);
+              const reserve = createReserveCatalogProjection(
+                config,
+                reserveMainSelectors,
+                observedReserveSource,
+                lunaSource ? finishUpstreamNativeEntry(lunaSource, 9, nativeContextLimits(config)) : null,
+              );
+              if (reserve) {
+                const reserveEntries = buildCatalogEntriesFromObservedState({
+                  template: loadCatalogTemplate(),
+                  gptSlugs: [],
+                  goModels: [],
+                  featured: config.subagentModels,
+                  modelPickerOrder: config.modelPickerOrder,
+                  wsEnabled: websocketsEnabled(config),
+                  multiAgentMode: maMode as "v1" | "default" | "v2",
+                  exactComboSlugs,
+                  accountSelectors,
+                  suppressedBareNativeSlugs,
+                  disabledNativeAccountSlugs: new Set(),
+                  multiAgentV2Enabled: isMultiAgentV2Enabled(),
+                  openaiContextCap: nativeContextLimits(config),
+                  accountNativeSlugs: [],
+                  accountNativeSlugsBySelector: new Map(),
+                  keepNativeChatGptOnV1: config.keepNativeChatGptOnV1 === true,
+                  reserve,
+                }).filter(entry => {
+                  if (!isReserveCatalogProjection(entry)) return false;
+                  const selector = String(entry.slug).split("/")[0];
+                  return config.codexAccountPickerModels === undefined
+                    || config.codexAccountPickerModels[selector]?.includes(NATIVE_RESERVE_MODEL);
+                });
+                entries.push(...reserveEntries);
+                applyFullModelPickerOrder(entries, config.modelPickerOrder ?? []);
+              }
+            }
+          }
           return jsonResponse({
             models: applyNativeVisibility(
               entries,

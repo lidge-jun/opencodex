@@ -18,6 +18,8 @@ API key 傳輸。僅在 Pool 與 Direct 之間切換 `codexAccountMode` 本身�
 （fails closed），而不是切換帳號。參見
 [精確 Codex 帳號選擇器](/zh-tw/reference/configuration/routing/#精確-codex-帳號選擇器)。
 
+啟用、選擇並儲存模型及恢復原有模式的步驟，請參閱[英文設定說明](/guides/codex-app-models/#select-only-particular-account-models)。
+
 當 `codexAccountNamespaces` 對應表為空時，帳號限定選擇器列是關閉的。若省略
 `codexAccountPickerEnabled` 但對應表非空，基於向後相容會被視為啟用。將其設為 `false` 可以
 隱藏生成的限定列並恢復選擇器中的裸原生列，同時不必刪除對應或停用精確的

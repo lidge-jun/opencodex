@@ -21,6 +21,8 @@ native-строки из picker'а. Если map задана, нативные 
 и при недоступности цели завершается ошибкой без переключения на другой аккаунт. Подробнее см.
 в разделе [Точные селекторы аккаунтов Codex](/reference/configuration/routing/#exact-codex-account-selectors).
 
+Порядок включения, выбора и сохранения моделей, а также возврата к прежнему режиму описан в [инструкции на английском](/guides/codex-app-models/#select-only-particular-account-models).
+
 Если map `codexAccountNamespaces` пуста, строки picker'а с указанием аккаунта выключены. Если при
 непустой map поле `codexAccountPickerEnabled` не задано, они считаются включёнными для обратной
 совместимости. Значение `false` скрывает созданные account-qualified строки и возвращает bare

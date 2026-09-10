@@ -10,6 +10,8 @@ opencodex は Codex アプリにパッチを適用しません。Codex CLI/TUI �
 
 OpenAI エントリには、ネイティブ Codex ログインと、名前空間付きの `openai-apikey/<model>` API キーという 2 つの資格情報ルートがあります。`codexAccountMode` だけを Pool と Direct の間で変更しても、ピッカー ID は変わりません。ただし、`codexAccountPickerEnabled` によって account-qualified picker 行が有効で、`codexAccountNamespaces` に対象アカウントが存在する selector がある場合、結果は `codexAccountPickerModels` によって変わります。この map を省略すると、従来の動作として、すべての対応モデルに `<selector>/<native-openai-model>` 行が追加され、ピッカーの bare native 行は非表示になります。map が存在する場合、共通プールの native model は bare 行として表示されたままで、選択したモデルとアカウントの組み合わせだけに qualified 行が追加されます。Selector 名はユーザーが決める公開ラベルであり、組み込みのアカウント role の意味はありません。`selector` 付きの行を選択すると、対応付けられたアカウントだけが使用され、アクティブな Pool アカウントは変更されません。対象を利用できない場合、別のアカウントへ切り替えずにリクエストが失敗します。詳しくは [Codex アカウントの明示的な selector](/reference/configuration/routing/#exact-codex-account-selectors) を参照してください。
 
+有効化、モデルの選択と保存、元のモードへの戻し方は、[英語版の設定手順](/guides/codex-app-models/#select-only-particular-account-models)を参照してください。
+
 `codexAccountNamespaces` map が空の場合、account-qualified picker 行は off です。空でない map で `codexAccountPickerEnabled` を省略すると、後方互換性のため有効として扱われます。`false` にすると、mapping を削除せず、明示的な `<selector>/<native-openai-model>` routing も無効にせずに、生成された qualified 行を非表示にして picker の bare native 行を復元します。
 
 API GPT-5.6 エントリは 922,000 コンテキスト / 922,000 最大入力を使用し、`*-pro` ピッカー ID は `reasoning.mode: "pro"` のベース ワイヤ モデルに解決されますが、ログ、使用状況、およびピッカー状態は仮想 ID を保持します。 API カタログは、`gpt-5.5`、`gpt-5.6`、Sol/Terra/Luna、およびそれらの 3 つの Pro 仮想 ID の 8 つの ID に固定されています。汎用の `gpt-5.6-pro` エイリアスはありません。コンパクト リクエストは、選択された層を保持しますが、推論オブジェクトなしで基本モデルを送信します。

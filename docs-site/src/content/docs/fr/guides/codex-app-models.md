@@ -28,6 +28,8 @@ filtre les entrées mal formées ; cela ne prouve pas que l'identifiant provient
 cache appartient à l'utilisateur. Consultez les
 [sélecteurs exacts de compte Codex](/fr/reference/configuration/routing/#sélecteurs-exacts-de-comptes-codex).
 
+Pour activer cette option, choisir les modèles, enregistrer ou revenir au mode précédent, consultez les [étapes de configuration en anglais](/guides/codex-app-models/#select-only-particular-account-models).
+
 `gpt-daybreak-blue-latest` suit cette règle d'observation uniquement pour les lignes qualifiées par compte et
 n'est pas ajouté à la liste d'autorisation native non qualifiée. Une entrée `customModels` distincte et
 explicite peut exposer le même identifiant transmis comme `openai/gpt-daybreak-blue-latest` par

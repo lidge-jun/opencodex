@@ -33,6 +33,8 @@ listesine eklenmez. Satır, gerçek bir katalog satırının sahip olduğu alan
 yanıtından geldiğini kanıtlamaz. Bkz. [Tam Codex hesap
 seçicileri](/tr/reference/configuration/routing/#exact-codex-account-selectors).
 
+Etkinleştirme, model seçme ve kaydetme ile önceki moda dönme adımları için [İngilizce kurulum yönergelerine](/guides/codex-app-models/#select-only-particular-account-models) bakın.
+
 `gpt-daybreak-blue-latest`, hesap nitelikli satırlar için bu yalnızca gözlem
 kuralını takip eder ve yalın yerel izin listesine eklenmez. Ayrı, açık bir
 `customModels` girdisi, kurallı Codex girişi iletme sağlayıcısı aracılığıyla
