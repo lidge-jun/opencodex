@@ -591,8 +591,8 @@ export async function inspectCodexCliInstall(
     // absent proof-captured environment candidate does not establish that no
     // Codex CLI exists: a persisted selection is simply never consulted there.
     // Report the deferral that actually happened instead of the stronger claim
-    // that the candidate is unavailable. POSIX did observe persisted state, so
-    // its absent-candidate answer stays exact.
+    // that the candidate is unavailable. POSIX retains its existing result
+    // when no candidate is observed.
     return isWindowsPlatform(platform)
       ? unknownWindowsReport("windows_inspection_deferred")
       : unknownReport("candidate_unavailable");

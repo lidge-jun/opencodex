@@ -132,7 +132,7 @@ describe("Codex CLI install provenance", () => {
     expect(calls).toBe(0);
   });
 
-  test("a POSIX run that observed no persisted candidate still reports it as unavailable", async () => {
+  test("a POSIX run with no observed candidate retains candidate_unavailable", async () => {
     let calls = 0;
     const report = await inspectCodexCliInstall({
       ...noFilesystemDeps(() => { calls += 1; }),
@@ -140,8 +140,8 @@ describe("Codex CLI install provenance", () => {
       configDir: "relative-config-dir",
       env: { PATH: "" },
     });
-    // The deferral wording is Windows-only: POSIX actually consults persisted
-    // state, so an absent candidate there remains an exact answer.
+    // The relative configuration path is rejected without I/O. This control
+    // preserves the existing POSIX reason when no candidate is observed.
     expect(report.reason).toBe("candidate_unavailable");
     expect(report.candidateAvailable).toBe(false);
     expect(report.shim.status).toBe("not-tracked");
