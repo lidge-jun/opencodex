@@ -698,6 +698,161 @@ describe("routeModel blocked model redirect", () => {
     });
     expect(routed.routeDecision?.requestedModel).toBe("side/gpt-5.6-terra");
   });
+  test("opt-in intercepts gpt-5.6-terra and rewrites cross-provider to google-antigravity", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "openai",
+      blockedModelRedirects: {
+        "gpt-5.6-terra": "google-antigravity/gemini-3.8-flash-high",
+      },
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+        },
+        "google-antigravity": {
+          adapter: "google-antigravity",
+          baseUrl: "https://autopush-alkalimakersuite.sandbox.googleapis.com",
+          models: ["gemini-3.8-flash-high"],
+        },
+      },
+    };
+
+    const routed = routeModel(config, "gpt-5.6-terra");
+    expect(routed).toMatchObject({
+      providerName: "google-antigravity",
+      modelId: "gemini-3.8-flash-high",
+      routeKind: "explicit-provider",
+      routeReason: "blocked-model-redirect",
+    });
+    expect(routed.routeDecision?.selected).toMatchObject({
+      provider: "google-antigravity",
+      model: "gemini-3.8-flash-high",
+      reason: "blocked-model-redirect",
+    });
+    expect(routed.routeDecision?.requestedModel).toBe("gpt-5.6-terra");
+  });
+
+  test("supports multi-hop chained redirects", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "openai",
+      blockedModelRedirects: {
+        "gpt-5.6-terra": "gpt-5.6-luna",
+        "gpt-5.6-luna": "google-antigravity/gemini-3.8-flash-high",
+      },
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+        },
+        "google-antigravity": {
+          adapter: "google-antigravity",
+          baseUrl: "https://autopush-alkalimakersuite.sandbox.googleapis.com",
+          models: ["gemini-3.8-flash-high"],
+        },
+      },
+    };
+
+    const routed = routeModel(config, "gpt-5.6-terra");
+    expect(routed).toMatchObject({
+      providerName: "google-antigravity",
+      modelId: "gemini-3.8-flash-high",
+      routeReason: "blocked-model-redirect",
+    });
+  });
+
+  test("detects redirect cycles and throws error", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "openai",
+      blockedModelRedirects: {
+        "model-a": "model-b",
+        "model-b": "model-a",
+      },
+      providers: {
+        openai: { adapter: "openai-responses" },
+      },
+    };
+
+    expect(() => routeModel(config, "model-a")).toThrow(/cycle detected/i);
+  });
+
+  test("fails closed when account-namespaced request redirects cross-provider", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "openai",
+      blockedModelRedirects: {
+        "gpt-5.6-terra": "google-antigravity/gemini-3.8-flash-high",
+      },
+      providers: {
+        openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex" },
+        "google-antigravity": { adapter: "google-antigravity", models: ["gemini-3.8-flash-high"] },
+      },
+      codexAccountNamespaces: { side: "side-account-id" },
+    };
+
+    expect(() => routeModel(config, "side/gpt-5.6-terra")).toThrow(/only supports native OpenAI model ids/i);
+  });
+
+  test("rewrites qualified provider prefix model id when bare model is blocked", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "openai",
+      blockedModelRedirects: {
+        "claude-3-5-sonnet": "google-antigravity/gemini-3.8-flash-high",
+      },
+      providers: {
+        openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex" },
+        anthropic: { adapter: "anthropic", baseUrl: "https://api.anthropic.com", models: ["claude-3-5-sonnet"] },
+        "google-antigravity": {
+          adapter: "google-antigravity",
+          baseUrl: "https://autopush-alkalimakersuite.sandbox.googleapis.com",
+          models: ["gemini-3.8-flash-high"],
+        },
+      },
+    };
+
+    const routed = routeModel(config, "anthropic/claude-3-5-sonnet");
+    expect(routed).toMatchObject({
+      providerName: "google-antigravity",
+      modelId: "gemini-3.8-flash-high",
+      routeReason: "blocked-model-redirect",
+    });
+  });
+
+  test("redirects when an alias resolves to a blocked model", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "openai",
+      blockedModelRedirects: {
+        "gpt-5.6-terra": "google-antigravity/gemini-3.8-flash-high",
+      },
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          models: ["gpt-5.6-terra", "gpt-5.6-luna"],
+          modelAliases: {
+            "gpt-5.6-terra": "fast-work",
+          },
+        },
+        "google-antigravity": {
+          adapter: "google-antigravity",
+          baseUrl: "https://autopush-alkalimakersuite.sandbox.googleapis.com",
+          models: ["gemini-3.8-flash-high"],
+        },
+      },
+    };
+
+    const routed = routeModel(config, "fast-work");
+    expect(routed).toMatchObject({
+      providerName: "google-antigravity",
+      modelId: "gemini-3.8-flash-high",
+      routeReason: "blocked-model-redirect",
+    });
+  });
+
 });
 
 describe("routeCompactionModel (#2901)", () => {
