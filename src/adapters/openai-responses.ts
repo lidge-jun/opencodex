@@ -1,3 +1,4 @@
+import { applyAstraEffortCache } from "./astra-effort-cache";
 import { normalizeRoutedAgentMessages } from "./routed-agent-messages";
 import { normalizeOpenCodeGoAdditionalTools } from "./opencode-go-additional-tools";
 import { isXaiResponsesDestination } from "../providers/xai-transport";
@@ -2505,7 +2506,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         ),
         isXaiSchemaTarget(provider),
       );
-      const finalBody = stripDisabledVerbosity(
+      let finalBody = stripDisabledVerbosity(
         stripDisabledReasoningSummaries(
           normalizeConfiguredReasoningSummaryDelivery(sanitizedBody, provider, parsed.modelId),
           provider,
@@ -2514,6 +2515,16 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         provider,
         parsed.modelId,
       );
+      let astraReasoningLog: { effectiveEffort: string; wireField: "reasoning.effort"; wireValue: string } | undefined;
+      if (isCanonicalOpenAiForwardProvider(provider) && process.env["OCX_ASTRA_EFFORT_CACHE"] === "1") {
+        const effortResult = applyAstraEffortCache(finalBody, parsed._rawBody, incoming.headers, new Headers(headers));
+        finalBody = effortResult.body;
+        if (effortResult.baseline && effortResult.effective) {
+          astraReasoningLog = { effectiveEffort: effortResult.effective, wireField: "reasoning.effort", wireValue: effortResult.baseline };
+        }
+        console.info("[ocx:astra-effort-cache]", JSON.stringify({ status: effortResult.status,
+          baseline: effortResult.baseline, effective: effortResult.effective }));
+      }
       if (isCanonicalOpenAiForwardProvider(provider)) {
         // Spark closes Responses Lite streams before a terminal completion. Select compatibility
         // from the final wire model so aliases cannot leave the caller or a static header enabled.
@@ -2557,6 +2568,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         ...(convertedRoutedToolSearchNames ? { convertedRoutedToolSearchNames } : {}),
         ...(convertedRoutedNamespaceToolAliases ? { convertedRoutedNamespaceToolAliases } : {}),
         ...(tierLog ? { tierLog } : {}),
+        ...(astraReasoningLog ? { reasoningLog: astraReasoningLog } : {}),
       };
     },
 

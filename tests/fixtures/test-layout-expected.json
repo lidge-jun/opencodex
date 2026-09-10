@@ -892,6 +892,7 @@
   "responses-forward-dangling-call.test.ts": "responses",
   "responses-forward-incomplete-quota.test.ts": "responses",
   "responses-forward-posit-continuation.test.ts": "responses",
+  "astra-effort-cache.test.ts": "responses",
   "responses-forward-prompt-envelope.test.ts": "responses",
   "responses-function-tool-repair.test.ts": "responses",
   "responses-image-gen-repair.test.ts": "responses",
