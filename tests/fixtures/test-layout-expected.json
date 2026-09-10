@@ -987,6 +987,7 @@
   "settings-stream-mode.test.ts": "config",
   "shutdown-drain.test.ts": "service",
   "shutdown-launcher.test.ts": "service",
+  "side-chat-cache-integration.test.ts": "responses",
   "sidebar-routes.test.ts": "server",
   "sidebar-star-state.test.ts": "server",
   "sidecar-abort.test.ts": "vision",
