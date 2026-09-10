@@ -489,8 +489,9 @@ not proof of upstream permission; catalog entitlement checks still apply.
 
 `PUT /api/settings` accepts `codexAccountPickerModels` alone or with the existing switch.
 An object enables selective mode, `{}` selects none, and `null` removes the preference to
-restore legacy behavior. Invalid keys, non-array values, non-native model IDs, and unknown
-account selectors return 400 before writing. An atomic enable-and-select request validates
+restore legacy behavior. Invalid keys, non-array values, and non-native model IDs return 400 before writing.
+An account selector returns 400 only if it is neither a current candidate nor a retained
+`codexAccountNamespaces` binding. An atomic enable-and-select request validates
 against the newly initialized selectors and persists those same bindings. Choices for retained
 bindings whose accounts are no longer selectable are discarded on save, so stale drafts do not
 block editing remaining accounts. Saving converges the catalog when the preference
