@@ -137,7 +137,8 @@ export function clearPendingConfigObjectChildDeletions(config: OcxConfig): void 
  * Capture field replacements and deletion intent for a synchronous live-config save.
  * Restore before yielding on failure: an asynchronous rollback could overwrite a newer
  * mutation. Descriptors preserve absent versus explicitly undefined properties; the
- * private pending set must also retain its original presence, even when it was empty.
+ * private pending deletion collections must also retain their original presence, even when empty.
+ * Nested values are not cloned: callers must replace containers before mutating their children.
  * Unrelated fields and the live object's identity/baselines are left in place.
  */
 export function captureConfigTopLevelRollback(
@@ -148,6 +149,9 @@ export function captureConfigTopLevelRollback(
     .map(key => [key, Object.getOwnPropertyDescriptor(config, key)] as const));
   const pending = pendingTopLevelDeletions.get(config);
   const pendingBefore = pending === undefined ? undefined : new Set(pending);
+  const pendingChildren = pendingObjectChildDeletions.get(config);
+  const childrenBefore = pendingChildren === undefined ? undefined
+    : new Map([...pendingChildren].map(([key, children]) => [key, new Set(children)]));
   return () => {
     for (const [key, descriptor] of descriptors) {
       if (descriptor) Object.defineProperty(config, key, descriptor);
@@ -156,5 +160,8 @@ export function captureConfigTopLevelRollback(
     // The absent fields above are restoration, not new user deletion commands.
     if (pendingBefore === undefined) pendingTopLevelDeletions.delete(config);
     else pendingTopLevelDeletions.set(config, new Set(pendingBefore));
+    if (childrenBefore === undefined) pendingObjectChildDeletions.delete(config);
+    else pendingObjectChildDeletions.set(config,
+      new Map([...childrenBefore].map(([key, children]) => [key, new Set(children)])));
   };
 }

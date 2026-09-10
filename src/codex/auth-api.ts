@@ -5,6 +5,7 @@ import {
   saveConfigPreservingClaudeCode,
   withConfigMutationLockSync,
 } from "../config";
+import { captureConfigTopLevelRollback } from "../config/rebase-provenance";
 import { codexAccountLogLabel, withCodexAccountLogLabel } from "./account-label";
 import {
   getCodexAccountCredential,
@@ -2454,8 +2455,18 @@ export async function handleCodexAuthAPI(
       if (body.id !== MAIN_CODEX_ACCOUNT_ID && !configuredPoolAccount(runtimeConfig, body.id)) {
         return jsonResponse({ error: "Codex account not found" }, 404);
       }
-      setCodexAccountAutoSwitchThresholdOverride(runtimeConfig, body.id, threshold);
-      saveRuntimeConfig(config, runtimeConfig);
+      const rollback = captureConfigTopLevelRollback(runtimeConfig, ["codexAccountAutoSwitchThresholds"]);
+      try {
+        // Inheritance resets delete children in place; keep the previous map intact for rollback.
+        if (runtimeConfig.codexAccountAutoSwitchThresholds) {
+          runtimeConfig.codexAccountAutoSwitchThresholds = { ...runtimeConfig.codexAccountAutoSwitchThresholds };
+        }
+        setCodexAccountAutoSwitchThresholdOverride(runtimeConfig, body.id, threshold);
+        saveRuntimeConfig(config, runtimeConfig);
+      } catch (error) {
+        rollback();
+        throw error;
+      }
       return jsonResponse({
         ok: true,
         id: body.id,

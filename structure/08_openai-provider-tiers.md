@@ -230,6 +230,11 @@ asks whether an account is drained: unbound selection, quota-strategy bound-task
 fill-first, priority-tier headroom, main-account pin reuse, previews, and subagent quota fallback.
 Failure recovery remains separate. The stable `__main__` alias participates, deletion removes an added
 account's sidecar entry, and malformed maps degrade as a unit rather than invalidating the config.
+Zero never disables main-account hard-lock, startup policy binding, quota cooldowns, or model
+entitlement checks. Pool pin reuse and caller-owned fallback enforce the relevant cooldown when
+the bearer matches the already-observed main credential, including after an awaited entitlement
+read. This uses memory-only identity evidence; unrelated callers and explicit Direct retain their
+existing policy, and an independent model's cooldown does not block another quota scope.
 
 Preemption moves unbound requests back up when a higher tier regains headroom, and it holds the
 runtime cursor only. Under an independent quota scope it must never touch the shared active cursor,

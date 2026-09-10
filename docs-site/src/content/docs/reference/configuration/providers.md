@@ -51,6 +51,12 @@ After GUI registration or OAuth login, the confirmation dialog lets you open the
 | `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic prompt-cache policy: disabled, 5-minute ephemeral, or 1-hour extended. |
 | `tokenGuardian?` | `OcxTokenGuardianConfig` | off | Optional proactive OAuth refresh and Codex-account warmup policy. |
 
+Setting an account's switching threshold to `0` does not disable main-account hard-lock, startup
+protection, cooldowns, or model eligibility checks. In Pool mode, a pinned caller credential that
+matches the observed main account cannot bypass that account's applicable cooldown: an eligible
+Pool alternative is used, or the request is rejected. Unrelated caller credentials do not inherit
+the main account's cooldown; explicit Direct behavior is unchanged.
+
 Selector names are user-chosen public labels; opencodex assigns no account-role semantics to them.
 `codexAccountNamespaces` keys are 1–64 characters, starting and ending with an
 ASCII letter or number, with letters, numbers, `.`, `_`, or `-` inside. Reserved JavaScript object

@@ -153,7 +153,7 @@ const admit = async (
   options: Parameters<typeof resolveCodexAuthContext>[3] = {},
   policy = config,
 ) => {
-  try { const context = await resolveCodexAuthContext(headers(), policy, mode, options); return { admitted: true, kind: context.kind }; }
+  try { const context = await resolveCodexAuthContext(headers(), policy, mode, options); return { admitted: true, kind: context.kind, accountId: context.accountId }; }
   catch (error) { return { admitted: false, error: (error as Error).name }; }
 };
 const wire = async (token = fixture.bearer, id = fixture.accountId) => {
@@ -276,6 +276,7 @@ try {
   }
   console.log("POLICY_STARTUP_RESULT=" + JSON.stringify({
     scenario: fixture.scenario, before, listeners, firstServerSettled, firstAdmission, heldRecovery, laterRecovery,
+    thresholds: { global: config.autoSwitchThreshold, mainOverride: config.codexAccountAutoSwitchThresholds?.__main__ ?? null },
     retainedUnknown, validReplacement,
     settled, after, settledAdmission, response, beforePrimaryUpstreamCalls, primaryUpstreamCalls, originalResponse,
     unexpectedNetwork,

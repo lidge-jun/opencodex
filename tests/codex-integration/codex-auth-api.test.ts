@@ -68,12 +68,15 @@ import {
 } from "../../src/codex/account-lifecycle";
 import {
   ConfigMutationLockError,
+  armClaudeCodeBaseline,
   getConfigPath,
   loadConfig,
   saveConfig,
   setPersistedConfigMutationBeforeCommitForTests,
 } from "../../src/config";
 import * as configModule from "../../src/config";
+import { setCodexAccountAutoSwitchThresholdOverride } from "../../src/codex/account-auto-switch";
+import { prepareConfigObjectChildDeletionRebase } from "../../src/config/rebase-provenance";
 import type { CatalogDisposition } from "../../src/codex/convergence-types";
 import { captureConfigGeneration, registerStateStore } from "../../src/lib/state-store-sweeper";
 import {
@@ -3997,6 +4000,86 @@ describe("codex-auth API", () => {
     });
   });
 
+  test.each([
+    ["new override", undefined, 0],
+    ["replacement override", { __main__: 60, side: 35 }, 0],
+    ["last override reset", { __main__: 60 }, null],
+    ["sibling-preserving reset", { __main__: 60, side: 35 }, null],
+  ] as const)("account threshold rollback preserves live and disk state after lock contention: %s", async (_label, thresholds, threshold) => {
+    saveConfig(makeConfig({ providers: { openai: { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" } },
+      autoSwitchThreshold: 95, ...(thresholds ? { codexAccountAutoSwitchThresholds: { ...thresholds } } : {}) }));
+    const config = loadConfig();
+    armClaudeCodeBaseline(config);
+    // Established deletion provenance allows rebasing newly added disk-only fields.
+    configModule.deleteConfigTopLevelKey(config, "injectionPrompt");
+    const previousMap = config.codexAccountAutoSwitchThresholds;
+    const previousDescriptor = Object.getOwnPropertyDescriptor(config, "codexAccountAutoSwitchThresholds");
+    const diskBefore = readFileSync(getConfigPath(), "utf8");
+    const lockDatabase = new Database(join(TEST_DIR, "config-mutation.sqlite"), { create: true });
+    lockDatabase.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+    try {
+      await expect(putAccountAutoSwitch(config, { id: MAIN_CODEX_ACCOUNT_ID, threshold }))
+        .rejects.toBeInstanceOf(ConfigMutationLockError);
+      expect(readFileSync(getConfigPath(), "utf8")).toBe(diskBefore);
+      expect(config.codexAccountAutoSwitchThresholds).toBe(previousMap);
+      expect(config.codexAccountAutoSwitchThresholds).toEqual(thresholds);
+      expect(Object.getOwnPropertyDescriptor(config, "codexAccountAutoSwitchThresholds")).toEqual(previousDescriptor);
+    } finally {
+      lockDatabase.exec("ROLLBACK");
+      lockDatabase.close();
+    }
+    // A later unrelated save must not publish the rejected override/reset or erase a disk sibling.
+    writeFileSync(getConfigPath(), JSON.stringify({ ...JSON.parse(diskBefore),
+      codexAccountAutoSwitchThresholds: { ...thresholds, concurrent: 25 }, autoSwitchThreshold: 90 }));
+    config.upstreamFailoverThreshold = 4;
+    configModule.saveConfigPreservingClaudeCode(config);
+    expect(loadConfig()).toMatchObject({ autoSwitchThreshold: 90, upstreamFailoverThreshold: 4,
+      codexAccountAutoSwitchThresholds: { ...thresholds, concurrent: 25 } });
+    expect(config.codexAccountAutoSwitchThresholds).toEqual({ ...thresholds, concurrent: 25 });
+    expect(loadConfig().configRebaseProvenance).toEqual({ version: 1, deletedTopLevelKeys: ["injectionPrompt"] });
+  });
+
+  test.each(["lock contention", "save boundary failure"] as const)(
+    "account threshold rollback restores pending child deletions after %s", async failure => {
+      saveConfig(makeConfig({ providers: { openai: { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" } },
+        autoSwitchThreshold: 95, codexAccountAutoSwitchThresholds: { work: 60 } }));
+      const config = loadConfig();
+      armClaudeCodeBaseline(config);
+      // This pending, previously accepted reset must survive rollback of the next request.
+      setCodexAccountAutoSwitchThresholdOverride(config, "work", null);
+      const previousDescriptor = Object.getOwnPropertyDescriptor(config, "codexAccountAutoSwitchThresholds");
+      const diskBefore = readFileSync(getConfigPath(), "utf8");
+      const lockDatabase = failure === "lock contention"
+        ? new Database(join(TEST_DIR, "config-mutation.sqlite"), { create: true }) : undefined;
+      lockDatabase?.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+      const saveSpy = failure === "save boundary failure"
+        ? spyOn(configModule, "saveConfigPreservingClaudeCode").mockImplementation(candidate => {
+          // Real pre-save preparation can recreate the absent parent before a later failure.
+          prepareConfigObjectChildDeletionRebase(candidate);
+          throw new ConfigMutationLockError("synthetic config commit failure");
+        }) : undefined;
+      try {
+        await expect(putAccountAutoSwitch(config, { id: MAIN_CODEX_ACCOUNT_ID, threshold: null }))
+          .rejects.toBeInstanceOf(ConfigMutationLockError);
+        expect(readFileSync(getConfigPath(), "utf8")).toBe(diskBefore);
+        expect(Object.getOwnPropertyDescriptor(config, "codexAccountAutoSwitchThresholds")).toEqual(previousDescriptor);
+      } finally {
+        saveSpy?.mockRestore();
+        lockDatabase?.exec("ROLLBACK");
+        lockDatabase?.close();
+      }
+      writeFileSync(getConfigPath(), JSON.stringify({ ...JSON.parse(diskBefore),
+        codexAccountAutoSwitchThresholds: { work: 85, __main__: 70, concurrent: 25 }, autoSwitchThreshold: 90 }));
+      config.upstreamFailoverThreshold = 4;
+      configModule.saveConfigPreservingClaudeCode(config);
+      // Keep old work deletion, discard rejected main deletion, adopt concurrent additions.
+      expect(config.codexAccountAutoSwitchThresholds).toEqual({ __main__: 70, concurrent: 25 });
+      expect(loadConfig()).toMatchObject({ autoSwitchThreshold: 90, upstreamFailoverThreshold: 4,
+        codexAccountAutoSwitchThresholds: { __main__: 70, concurrent: 25 } });
+      expect(loadConfig().codexAccountAutoSwitchThresholds).not.toHaveProperty("work");
+    },
+  );
+
   test("PUT /api/codex-auth/auto-switch rejects an unknown pool account", async () => {
     const config = makeConfig({ autoSwitchThreshold: 95 });
 
@@ -4037,6 +4120,37 @@ describe("codex-auth API", () => {
     expect(accounts.find(a => a.id === "work")?.autoSwitchThresholdOverride).toBe(60);
     expect(accounts.find(a => a.id === "side")?.autoSwitchThresholdOverride).toBeNull();
     expect(accounts.find(a => a.isMain)?.autoSwitchThresholdOverride).toBe(0);
+  });
+
+  test.each([
+    [true, "p***n@example.test"],
+    [false, "person@example.test"],
+  ] as const)("account threshold DTOs preserve email masking=%s", async (maskEmails, expectedEmail) => {
+    const config = makeConfig({
+      autoSwitchThreshold: 95,
+      codexAccountAutoSwitchThresholds: { work: 0, missing: 60 },
+      privacy: { maskEmails },
+    });
+    seedPoolAccount(config, { id: "work", email: "person@example.test" });
+    seedPoolAccount(config, { id: "missing", email: "person@example.test" });
+    updateAccountQuota("work", 99);
+    removeCodexAccountCredential("missing");
+
+    const accounts = await listCodexAuthAccounts(config);
+
+    expect(accounts.find(account => account.id === "work")).toMatchObject({
+      email: expectedEmail,
+      autoSwitchThresholdOverride: 0,
+      hasCredential: true,
+    });
+    expect(accounts.find(account => account.id === "missing")).toMatchObject({
+      email: expectedEmail,
+      autoSwitchThresholdOverride: 60,
+      hasCredential: false,
+      needsReauth: true,
+    });
+    expect(JSON.stringify(accounts)).not.toContain("access-work");
+    expect(JSON.stringify(accounts)).not.toContain("refresh-work");
   });
 
   test.each([
