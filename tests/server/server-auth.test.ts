@@ -245,6 +245,7 @@ async function startPoolRetryHarness(
     combos?: OcxConfig["combos"];
     modelRosterByAccount?: Record<string, string[]>;
     codexAccountPickerModels?: Record<string, string[]>;
+    disabledModels?: string[];
     codexDesktopAuthless?: boolean;
   } = {},
 ): Promise<PoolRetryHarness> {
@@ -309,6 +310,7 @@ async function startPoolRetryHarness(
     activeCodexAccountId: options.activeAccountId ?? "pool-a",
     ...(options.accountNamespaces ? { codexAccountNamespaces: options.accountNamespaces } : {}),
     ...(options.codexAccountPickerModels ? { codexAccountPickerModels: options.codexAccountPickerModels } : {}),
+    ...(options.disabledModels ? { disabledModels: options.disabledModels } : {}),
     ...(options.codexDesktopAuthless ? { codexDesktopAuthless: true } : {}),
     ...(options.pausedAccountIds ? { pausedCodexAccountIds: options.pausedAccountIds } : {}),
     ...(options.visionSidecarModel ? { visionSidecar: { model: options.visionSidecarModel } } : {}),
@@ -4632,12 +4634,14 @@ describe("GET /v1/models Codex client-version account-picker projection", () => 
 
   test("projects Reserve only for the selected authless main selector", async () => {
     const reserveModel = "gpt-reserve";
-    for (const [codexDesktopAuthless, codexAccountPickerModels, expected] of [
-      [true, { main: [reserveModel] }, true],
-      [true, { main: [] }, false],
-      [true, {}, false],
-      [true, { side: [reserveModel] }, false],
-      [false, { main: [reserveModel] }, false],
+    for (const [codexDesktopAuthless, codexAccountPickerModels, expected, disabledModels] of [
+      [true, { main: [reserveModel] }, true, []],
+      [true, { main: [reserveModel] }, false, [reserveModel]],
+      [true, { main: [reserveModel] }, false, [`main/${reserveModel}`]],
+      [true, { main: [] }, false, []],
+      [true, {}, false, []],
+      [true, { side: [reserveModel] }, false, []],
+      [false, { main: [reserveModel] }, false, []],
     ] as const) {
       const harness = await startPoolRetryHarness(
         () => Response.json({ id: "unused", status: "completed", output: [] }),
@@ -4645,6 +4649,7 @@ describe("GET /v1/models Codex client-version account-picker projection", () => 
           accountNamespaces: { main: "@main", side: "pool-a" },
           codexDesktopAuthless,
           codexAccountPickerModels,
+          disabledModels: [...disabledModels],
         },
       );
       try {
@@ -4653,9 +4658,10 @@ describe("GET /v1/models Codex client-version account-picker projection", () => 
           { headers: { authorization: "Bearer inbound-token" } },
         );
         expect(response.status).toBe(200);
-        const payload = await response.json() as { models: Array<{ slug: string }> };
+        const payload = await response.json() as { models: Array<{ slug: string; visibility?: string }> };
         const slugs = payload.models.map(model => model.slug);
-        expect(slugs.includes(`main/${reserveModel}`)).toBe(expected);
+        const reserve = payload.models.find(model => model.slug === `main/${reserveModel}`);
+        expect(reserve !== undefined && reserve.visibility !== "hide").toBe(expected);
         expect(slugs).not.toContain(`side/${reserveModel}`);
         expect(slugs).not.toContain(reserveModel);
       } finally {

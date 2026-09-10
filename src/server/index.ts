@@ -1588,6 +1588,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             config.keepNativeChatGptOnV1 === true,
             config.modelPickerOrder,
           );
+          const liveObservedNativeSlugs = new Set(accountNativeSlugs);
           const reserveMainSelectors = accountSelectors.filter(selector =>
             isMainCodexAccountTarget(accountTargets.get(selector) ?? ""));
           if (reserveMainSelectors.length > 0) {
@@ -1646,6 +1647,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
                     || config.codexAccountPickerModels[selector]?.includes(NATIVE_RESERVE_MODEL);
                 });
                 entries.push(...reserveEntries);
+                if (reserveEntries.length > 0) liveObservedNativeSlugs.add(NATIVE_RESERVE_MODEL);
                 applyFullModelPickerOrder(entries, config.modelPickerOrder ?? []);
               }
             }
@@ -1655,7 +1657,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
               entries,
               disabledModels,
               accountSelectors.length > 0 && config.codexAccountPickerModels === undefined,
-              new Set(accountNativeSlugs),
+              liveObservedNativeSlugs,
             ),
           }, 200, req, policy);
         }
