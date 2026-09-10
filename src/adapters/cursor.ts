@@ -3,7 +3,7 @@ import type { AdapterEvent, OcxProviderConfig } from "../types";
 import type { ProviderAdapter } from "./base";
 import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
 import { cursorExecDeniedMessage, cursorRequestDeclaresFullAccess } from "./cursor/exec-policy";
-import { isCursorBenignCancelError, isCursorInvalidArgumentError, isCursorRootEnvelopeError, safeCursorErrorMessage, type CursorSizeContext } from "./cursor/cursor-errors";
+import { isCursorBenignCancelError, isCursorInvalidArgumentError, isCursorOverflowRemintCandidate, isCursorRootEnvelopeError, safeCursorErrorMessage, type CursorSizeContext } from "./cursor/cursor-errors";
 import { cursorCheckpointModelAffinityId, inferCursorContextWindow, isCursorExternalWireModel } from "./cursor/discovery";
 import { createCursorKvStore, type CursorKvStore } from "./cursor/kv-store";
 import { mapCursorServerMessage } from "./cursor/message-mapper";
@@ -29,7 +29,14 @@ import {
 import { debugProviderDiagnostic } from "../lib/debug";
 import { createAdapterTierMetadata } from "../providers/fastwire";
 import { estimateTokens } from "../lib/token-estimate";
-import { rememberCursorThreadConversation } from "./cursor/thread-continuity";
+import {
+  cursorOverflowRemintScopeKey,
+  markCursorOverflowSurfaced,
+  recordCursorOverflowRemint,
+  rememberCursorThreadConversation,
+  shouldSkipCursorOverflowRemint,
+  shouldSurfaceCursorOverflowFirst,
+} from "./cursor/thread-continuity";
 import { runCursorTurnWithRetry } from "./cursor/transport-retry";
 import { cursorRequestHasShellAlias, cursorRequestUsesCodeMode } from "./cursor/tool-definitions";
 import {
@@ -393,9 +400,35 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
           );
         };
 
-        try {
-          await runOnce(request);
-        } catch (err) {
+        const overflowRemintBaseId = _parsed._clientThreadId
+          ? undefined
+          : (previousConversationId ?? _parsed._cursorConversationId);
+
+        const remintConversationId = (failedConversationId: string) => {
+          lastTransport = undefined;
+          _parsed._cursorConversationId = undefined;
+          const next = createCursorRequest(_parsed, { forceFreshConversation: true });
+          rekeyContextUsage(failedConversationId, next.conversationId);
+          _parsed._cursorConversationId = next.conversationId;
+          // Persist recovery for store:false clients that send any stable Cursor thread owner, so
+          // the next turn does not recompute the stale deterministic thread hash. Isolated helper /
+          // compaction turns must not park their throwaway id under the parent or Desktop owner.
+          const threadOwner = cursorClientThreadOwner(_parsed);
+          if (threadOwner && _parsed._cursorIsolateConversation !== true) {
+            rememberCursorThreadConversation(
+              threadOwner,
+              next.conversationId,
+              _parsed._cursorIdentityScope,
+            );
+          }
+          return next;
+        };
+
+        for (;;) {
+          try {
+            await runOnce(request);
+            break;
+          } catch (err) {
           const outputGuardRetryText =
             err instanceof CursorToolResultEchoError
               ? CURSOR_ECHO_RETRY_CONTINUATION_TEXT
@@ -422,24 +455,39 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
               },
             );
             const echoedConversationId = request.conversationId;
-            lastTransport = undefined;
-            _parsed._cursorConversationId = undefined;
             request = {
-              ...createCursorRequest(_parsed, { forceFreshConversation: true }),
+              ...remintConversationId(echoedConversationId),
               echoRetryContinuationText: outputGuardRetryText,
             };
-            rekeyContextUsage(echoedConversationId, request.conversationId);
-            _parsed._cursorConversationId = request.conversationId;
-            const echoThreadOwner = cursorClientThreadOwner(_parsed);
-            if (echoThreadOwner && _parsed._cursorIsolateConversation !== true) {
-              rememberCursorThreadConversation(
-                echoThreadOwner,
-                request.conversationId,
-                _parsed._cursorIdentityScope,
-              );
-            }
             await runOnce(request);
+            break;
           } else {
+            const overflowRemintSafe =
+              !lastRawIsToolResult
+              && !emittedOutput
+              && !replayUnsafe
+              && request.contextUsageStoreCheckpoints !== false
+              && !incoming.abortSignal?.aborted;
+            const overflowScopeKey = cursorOverflowRemintScopeKey(
+              _parsed,
+              overflowRemintBaseId ?? request.conversationId,
+            );
+            if (
+              overflowScopeKey
+              && overflowRemintSafe
+              && isCursorOverflowRemintCandidate(err, requestSizeContext)
+            ) {
+              if (shouldSkipCursorOverflowRemint(overflowScopeKey)) throw err;
+              if (shouldSurfaceCursorOverflowFirst(overflowScopeKey)) {
+                markCursorOverflowSurfaced(overflowScopeKey);
+                throw err;
+              }
+              if (!recordCursorOverflowRemint(overflowScopeKey)) throw err;
+              if (inheritedCheckpointRef) invalidateCursorCheckpoint(inheritedCheckpointRef);
+              request = remintConversationId(request.conversationId);
+              continue;
+            }
+
             // One-shot fallback for external-model Connect invalid_argument before any
             // non-heartbeat output. Retries apply only to safe plain-user turns; tool-result
             // resumes, local exec/MCP side effects, and already-emitted output fail closed.
@@ -453,24 +501,10 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
             ) {
               throw err;
             }
-            const failedConversationId = request.conversationId;
-            lastTransport = undefined;
-            _parsed._cursorConversationId = undefined;
-            request = createCursorRequest(_parsed, { forceFreshConversation: true });
-            rekeyContextUsage(failedConversationId, request.conversationId);
-            _parsed._cursorConversationId = request.conversationId;
-            // Persist recovery for store:false clients that send any stable Cursor thread owner, so
-            // the next turn does not recompute the stale deterministic thread hash. Isolated helper /
-            // compaction turns must not park their throwaway id under the parent or Desktop owner.
-            const threadOwner = cursorClientThreadOwner(_parsed);
-            if (threadOwner && _parsed._cursorIsolateConversation !== true) {
-              rememberCursorThreadConversation(
-                threadOwner,
-                request.conversationId,
-                _parsed._cursorIdentityScope,
-              );
-            }
+            request = remintConversationId(request.conversationId);
             await runOnce(request);
+            break;
+          }
           }
         }
         if (
