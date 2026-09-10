@@ -1020,6 +1020,11 @@ chat to its parent. The selected credential, account, model, settings, tools,
 and inherited prompt prefix must be compatible before the proxy reuses the
 parent's prompt-cache key and provider session identity. Child task and turn
 identifiers remain distinct. Failed or unfinished requests do not seed reuse.
+The snapshot fingerprints the parent request input, not its response output. Only
+the common observed prefix is verified and counted as matched. A side chat can
+carry the parent’s last answer or additional inherited items after that prefix;
+those items remain its own unchanged suffix, rather than becoming verified parent
+input or being replaced by stored parent content.
 Recognized stream obfuscation and reasoning-summary delivery options are excluded
 from cache identity checks, while each request retains its own options on the wire.
 Unknown or malformed stream options still require an exact match.
