@@ -156,3 +156,68 @@ qualified statement about it stands unproven either way. No `cursor/*` extension
 method fired in either run. Whether `ask` can be escaped mid-turn, and whether
 another model behaves differently, were not tested.
 
+
+## CORRECTION (same day) -- the roster above was measured wrong
+
+The measurement in the previous section omitted a client capability, and with it
+omitted most of Cursor's model surface. Corrected by a second trace.
+
+t3code (`/Users/jun/Developer/new/700_projects/t3code`), which ships a working ACP
+provider layer, sends this at `initialize`
+(`apps/server/src/provider/Layers/CursorProvider.ts:71-75`):
+
+    export const CURSOR_PARAMETERIZED_MODEL_PICKER_CAPABILITIES = {
+      _meta: { parameterizedModelPicker: true },
+    } satisfies NonNullable<EffectAcpSchema.InitializeRequest["clientCapabilities"]>;
+
+`cli-jaw` sends the same flag, at `cursor-session.ts:64`. The first probe in this
+document sent neither. Re-running both ways, side by side:
+
+| | without the flag | with `_meta.parameterizedModelPicker: true` |
+|---|---|---|
+| models | 38 | 38 |
+| ids | `claude-opus-5[thinking=true,context=300k,effort=high,fast=false]` | `claude-opus-5` |
+| bracketed ids | 38 | **0** |
+| display names | raw slugs (`grok-4.6`) | branded (`Cursor Grok 4.6`, `Claude Opus 5`) |
+
+And the parameters are not baked in at all -- they are **per-model config options**
+that arrive dynamically after `session/set_config_option` switches the model:
+
+| model | advertised options |
+|---|---|
+| `composer-2.5` | `fast` |
+| `claude-opus-5` | `thinking`, `context` = **300k / 1m**, `effort` = low/medium/high/xhigh/**max**, `fast` |
+| `gpt-5.6-sol` | `context` = **272k / 1m**, `reasoning` = none/low/medium/high/xhigh/max, `fast` |
+| `grok-4.6` | `effort` = low/medium/high/xhigh, `fast` |
+
+Three claims in the section above are therefore **withdrawn**:
+
+1. "no advertised 1M-context variant" -- **wrong.** `claude-opus-5` and
+   `gpt-5.6-sol` both advertise `1m`.
+2. "no observed way to vary effort or context for a given model" -- **wrong.**
+   Both are `select` config options with explicit per-model allowed values.
+3. "one fixed configuration per listed model" -- **wrong.** One *row* per model,
+   but each row carries a parameter space.
+
+The root cause is worth stating plainly: the probe measured a degraded view and
+the document reported it as the surface. A capability the two existing
+implementations both send was missing from the client, so the agent answered a
+different question than the one being asked. Reading t3code is what surfaced it --
+neither the spec nor Cursor's own docs mention the flag.
+
+### Consequence: ACP is a better metadata source than the HTTP path
+
+This inverts one of the unit's conclusions. Over ACP the agent *advertises* the
+exact legal effort and context values per model. OpenCodex's HTTP Cursor adapter
+has no such channel: it carries hand-maintained `modelReasoningEfforts` and
+`modelContextWindows` tables, and prior work here had to add a default-off
+`cursorEffortRows` workaround because Cursor's reasoning controls are driven by a
+hard-coded table inside the vendor bundle rather than by anything the gateway can
+query.
+
+So there is a use for `cursor-agent acp` that avoids every blocker in 040: **run it
+as a discovery probe, not as an inference path.** Spawn it, read `configOptions`
+per model, populate the existing HTTP provider's effort/context metadata from
+vendor-authoritative data, exit. No turn is ever routed through ACP, so tool
+ownership, missing usage and unsupervised writes never arise. That is a new option
+and is recorded in 040 as ACP-D5.
