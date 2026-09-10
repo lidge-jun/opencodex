@@ -53,7 +53,8 @@ type LogUsageStatus = "reported" | "unreported" | "unsupported" | "estimated";
 type MetricUnavailableReason =
   | "usage_missing" | "usage_unsupported" | "output_missing" | "invalid_duration"
   | "price_unmatched" | "invalid_cache_breakdown"
-  | "invalid_usage" | "combo_attempt_unavailable";
+  | "invalid_usage" | "combo_attempt_unavailable"
+  | "ttft_missing" | "decode_window_too_short";
 
 type CostEstimateReason =
   | "usage_estimated"
@@ -92,6 +93,11 @@ type CostResult =
 
 interface LogDisplayMetrics {
   tokPerSecond: TokPerSecondResult;
+  /**
+   * Estimated decode throughput (#4038). Optional because a row cached by an older build has no
+   * such field; absent renders nothing rather than an empty slot.
+   */
+  decodeTokPerSecond?: TokPerSecondResult;
   cost: CostResult;
 }
 
@@ -276,6 +282,8 @@ const METRIC_REASON_KEYS = {
   invalid_cache_breakdown: "logs.detail.reason.invalid_cache_breakdown",
   invalid_usage: "logs.detail.reason.invalid_usage",
   combo_attempt_unavailable: "logs.detail.reason.combo_attempt_unavailable",
+  ttft_missing: "logs.detail.reason.ttft_missing",
+  decode_window_too_short: "logs.detail.reason.decode_window_too_short",
 } as const satisfies Record<MetricUnavailableReason, string>;
 
 const ESTIMATE_REASON_KEYS = {
@@ -814,6 +822,14 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                   </td>
                   <td className="num mono log-col-rate">
                     {formatTokPerSecond(log.displayMetrics?.tokPerSecond, localeTag)}
+                    {/* #4038: decode rate stacked under the end-to-end rate it is easy to mistake
+                        for delivery speed. Only rendered when it actually resolved — a row whose
+                        decode window was too short shows the e2e rate alone rather than a blank. */}
+                    {log.displayMetrics?.decodeTokPerSecond?.kind === "value" && (
+                      <span className="logs-stack-end muted" title={t("logs.detail.decodeTokPerSec")}>
+                        {formatTokPerSecond(log.displayMetrics.decodeTokPerSecond, localeTag)}
+                      </span>
+                    )}
                   </td>
                   <td className="num mono log-col-cost">
                     {formatEstimatedUsd(log.displayMetrics?.cost, t, localeTag)}
@@ -1033,12 +1049,20 @@ function LogDetailDialog({
           <div className="log-detail-grid">
             <span className="muted">{t("logs.col.duration")}</span><span className="mono">{detail.durationMs}ms</span>
             <span className="muted">{t("logs.col.tokPerSec")}</span><span className="mono">{formatTokPerSecond(detail.displayMetrics?.tokPerSecond, localeTag)}</span>
+            {detail.displayMetrics?.decodeTokPerSecond?.kind === "value" && (
+              <><span className="muted">{t("logs.detail.decodeTokPerSec")}</span><span className="mono">{formatTokPerSecond(detail.displayMetrics.decodeTokPerSecond, localeTag)}</span></>
+            )}
             {detail.firstOutputMs !== undefined && (
               <><span className="muted">{t("logs.detail.ttft")}</span><span className="mono">{detail.firstOutputMs}ms</span></>
             )}
           </div>
           {detail.displayMetrics?.tokPerSecond.kind === "unavailable" && (
             <p className="log-detail-notes-line muted">{t(metricReasonKey(detail.displayMetrics.tokPerSecond.reason))}</p>
+          )}
+          {detail.displayMetrics?.decodeTokPerSecond?.kind === "unavailable" && (
+            <p className="log-detail-notes-line muted">
+              {t("logs.detail.decodeTokPerSec")}: {t(metricReasonKey(detail.displayMetrics.decodeTokPerSecond.reason))}
+            </p>
           )}
         </section>
 
@@ -1124,7 +1148,17 @@ function LogDetailDialog({
                         )}
                       </td>
                       <td className="num mono">{attempt.durationMs}ms</td>
-                      <td className="num mono">{formatTokPerSecond(attempt.displayMetrics?.tokPerSecond, localeTag)}</td>
+                      <td className="num mono">
+                        {formatTokPerSecond(attempt.displayMetrics?.tokPerSecond, localeTag)}
+                        {/* #4038: the DTO already carries a per-attempt decode rate measured on
+                            that attempt's own TTFT, so the attempt table stacks it the same way
+                            the parent row and the list do. */}
+                        {attempt.displayMetrics?.decodeTokPerSecond?.kind === "value" && (
+                          <span className="logs-stack-end muted" title={t("logs.detail.decodeTokPerSec")}>
+                            {formatTokPerSecond(attempt.displayMetrics.decodeTokPerSecond, localeTag)}
+                          </span>
+                        )}
+                      </td>
                       <td className="num mono">{formatEstimatedUsd(attemptCost, t, localeTag)}</td>
                       <td className="log-detail-break">{reason}</td>
                     </tr>

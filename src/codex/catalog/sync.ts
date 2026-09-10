@@ -99,6 +99,12 @@ export const PICKER_ORDER_PRIORITY_BASE = 1_000;
 // independent of display order. It does not freeze native advertisements. Absent on unmoved rows.
 export const SPAWN_PRIORITY_FIELD = "opencodex_spawn_priority";
 
+// OpenCodex-private catalog field: this row is listed but currently unable to serve (#1711).
+// Codex ignores unknown catalog fields (same as opencodex_catalog_kind and the spawn priority
+// above) and ensureStrictCatalogFields does not strip extras, so this is invisible to the native
+// picker and cannot change what Codex offers. It never touches `visibility`.
+export const CATALOG_INACTIVE_REASON_FIELD = "opencodex_inactive_reason";
+
 export type SpawnAgentSurface = "v1" | "v2";
 
 export type SubagentRosterExclusionReason =
@@ -383,6 +389,10 @@ export function deriveEntry(
       if (model) applyCatalogMetadata(e, model.provider, model.id, model.contextCap);
       applyCatalogModelMetadata(e, model);
       if (model?.catalogKind) e.opencodex_catalog_kind = model.catalogKind;
+      // Additive only. `visibility` is untouched: an inactive row must still be OFFERED, which is
+      // the whole point of #1711 — operator disable is what removes rows, and it stays a separate
+      // path from this one.
+      if (model?.quotaInactiveReason) e[CATALOG_INACTIVE_REASON_FIELD] = model.quotaInactiveReason;
     } else {
       applyNativeOpenAiContextOverride(e, contextCap);
       if (isGpt56NativeSlug(slug)) ensureGpt56ReasoningLevels(e);
@@ -430,6 +440,10 @@ export function deriveEntry(
   if (model && isRouted) applyCatalogMetadata(entry, model.provider, model.id, model.contextCap);
   applyCatalogModelMetadata(entry, model);
   if (model?.catalogKind) entry.opencodex_catalog_kind = model.catalogKind;
+  // Same additive stamp as the templated path above. A routed row that reaches the no-template
+  // fallback is still a served row, so omitting it here would make the field depend on whether a
+  // template happened to be cached — which is exactly what the regression test caught.
+  if (model?.quotaInactiveReason) entry[CATALOG_INACTIVE_REASON_FIELD] = model.quotaInactiveReason;
   if (!isRouted) applyNativeOpenAiContextOverride(entry, contextCap);
   return ensureStrictCatalogFields(normalizeServiceTiers(entry), {
     preserveExactInputModalities: preserveExact,

@@ -60,6 +60,7 @@ import {
   comboModelId,
   getCombo,
   listComboIds,
+  quotaInactiveReason,
   targetKey,
 } from "../../combos";
 import type { NormalizedComboConfig } from "../../combos/types";
@@ -2681,7 +2682,16 @@ async function gatherRoutedModelsUncached(
   return {
     models: models.map(model => {
       const displayName = aliasDisplayNames.get(`${model.provider}/${model.id}`);
-      return displayName && !model.displayName ? { ...model, displayName } : model;
+      // #1711: one stamping point for every row this gather produces — routed, combo, and custom
+      // alike — because it is the only place that has both the finished list and the config the
+      // quota rules need. A combo votes over its own targets; anything else votes over the single
+      // provider that would serve it.
+      const targets = model.provider === COMBO_NAMESPACE
+        ? config.combos?.[model.id]?.targets ?? []
+        : [{ provider: model.provider }];
+      const inactive = quotaInactiveReason(config, targets);
+      const named = displayName && !model.displayName ? { ...model, displayName } : model;
+      return inactive ? { ...named, quotaInactiveReason: inactive } : named;
     }),
     comboOmissions: localOmissions,
     providerAuthOutcomes: localProviderAuthOutcomes,
