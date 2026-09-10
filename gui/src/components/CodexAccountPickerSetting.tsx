@@ -78,7 +78,7 @@ export default function CodexAccountPickerSetting({ apiBase }: { apiBase: string
   // Any in-flight mutation blocks every other mutating control, so a customize toggle cannot
   // race a model-list save (or vice versa) and leave the confirmed state ambiguous.
   const busy = saving || customizeSaving || modelsSaving;
-  const anyMutationInFlight = () => savingRef.current || customizeSavingRef.current || modelsSavingRef.current;
+  const anyMutationInFlight = useCallback(() => savingRef.current || customizeSavingRef.current || modelsSavingRef.current, []);
 
   // Applies the account-selector fields from any /api/settings response (GET or PUT). Live
   // selector labels are only (re)initialized on the enable-picker PUT and the customize/save
@@ -127,7 +127,7 @@ export default function CodexAccountPickerSetting({ apiBase }: { apiBase: string
     } finally {
       bounded.clear();
     }
-  }, [apiBase, applyAccountFields]);
+  }, [apiBase, applyAccountFields, anyMutationInFlight]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => { void load(); }, 0);
@@ -180,7 +180,7 @@ export default function CodexAccountPickerSetting({ apiBase }: { apiBase: string
       savingRef.current = false;
       setSaving(false);
     }
-  }, [apiBase, hydrated, applyAccountFields, t]);
+  }, [apiBase, hydrated, applyAccountFields, anyMutationInFlight, t]);
 
   const toggleCustomize = useCallback(async () => {
     if (anyMutationInFlight() || !hydrated || !customizeSupported) return;
@@ -232,7 +232,7 @@ export default function CodexAccountPickerSetting({ apiBase }: { apiBase: string
       customizeSavingRef.current = false;
       setCustomizeSaving(false);
     }
-  }, [apiBase, hydrated, customizeSupported, draft, t]);
+  }, [apiBase, hydrated, customizeSupported, draft, anyMutationInFlight, t]);
 
   const toggleModel = useCallback((selector: string, model: string) => {
     setDraft(prev => {
@@ -277,7 +277,7 @@ export default function CodexAccountPickerSetting({ apiBase }: { apiBase: string
       modelsSavingRef.current = false;
       setModelsSaving(false);
     }
-  }, [apiBase, customize, dirty, draft, t]);
+  }, [apiBase, customize, dirty, draft, anyMutationInFlight, t]);
 
   const initialLoadFailed = loadError && !hydrated;
 
