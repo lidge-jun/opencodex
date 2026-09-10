@@ -500,11 +500,11 @@ their requested effort unchanged. Confirm an `updated` diagnostic before treatin
 as supported by this opt-in path.
 
 State lives under `$OPENCODEX_HOME/astra-effort-cache/` (normally `~/.opencodex/astra-effort-cache/`).
-Files contain hashed prefixes and envelope identities, effort values, and item positions. They contain
-no conversation text, credentials, or raw account/task identifiers. State survives restart; a fork or
+A private SQLite database contains hashed prefixes and envelope identities, effort values, and item positions. It contains
+no conversation text, credentials, or raw account/task identifiers. SQLite releases locks when a process exits, including crashes. State survives restart; a fork or
 missing baseline starts a new baseline using the requested effort. Changed instructions or tools also
 start a new baseline. Each conversation/account is limited to 256 request snapshots and 2 MiB of state;
-requests exceeding those limits use their requested effort unchanged. Conflicting retries and missing
+requests exceeding those limits use their requested effort unchanged. Across conversations, the store retains at most 128 entries and 16 MiB of payload, evicting the least recently used entries. Entries expire after seven days without access; pruning runs on requests. The database is capped at 32 MiB, with a temporary rollback journal bounded by that size. The cache directory is registered once for uninstall cleanup. Conflicting retries and missing
 user boundaries reset history. A busy, corrupt, or unavailable state file causes unchanged fallback.
 
 Automatic context management, automatic truncation, multi-agent history, and compaction input disable

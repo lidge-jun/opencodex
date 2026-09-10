@@ -1,7 +1,10 @@
+import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { withAstraEffortState } from "../../src/adapters/astra-effort-state";
+import { CONFIG_UNINSTALL_MANIFEST, removeOwnedConfigState } from "../../src/lib/config-ownership";
 import { applyAstraEffortCache } from "../../src/adapters/astra-effort-cache";
 import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-responses";
 import { parseRequest } from "../../src/responses/parser";
@@ -38,7 +41,15 @@ function run(input: unknown[], effort = "medium", thread = "thread-a", extra = {
   return applyAstraEffortCache(raw, raw, new Headers({ "thread-id": thread, "session-id": "shared-cache-key" }),
     new Headers({ "chatgpt-account-id": account }), join(directory, "state"));
 }
-function statePath() { return join(directory, "state", readdirSync(join(directory, "state")).find(n => n.endsWith(".json"))!); }
+function statePath() { return join(directory, "state", "state.sqlite"); }
+function readState() {
+  const db = new Database(statePath());
+  try { return (db.query("SELECT state FROM sessions LIMIT 1").get() as { state: string }).state; } finally { db.close(); }
+}
+function writeState(state: string) {
+  const db = new Database(statePath());
+  try { db.query("UPDATE sessions SET state = ?").run(state); } finally { db.close(); }
+}
 
 describe("Astra effort history", () => {
   test("pins baseline, appends at the user boundary, and replays immutable updates", () => {
@@ -60,13 +71,13 @@ describe("Astra effort history", () => {
   });
   test("identical retries neither duplicate updates nor add state", () => {
     run(first); const low = run(second, "low");
-    const before = readFileSync(statePath(), "utf8");
+    const before = readState();
     expect(run(second, "low")).toEqual(low.status === "updated" ? { ...low, status: "replay" } : low);
-    expect(readFileSync(statePath(), "utf8")).toBe(before);
+    expect(readState()).toBe(before);
   });
   test("restart/resume reads disk state without process memory", () => {
     run(first); run(second, "low");
-    const loaded = JSON.parse(readFileSync(statePath(), "utf8"));
+    const loaded = JSON.parse(readState());
     expect(loaded.snapshots[1].updates).toEqual([{ position: 2, effort: "low" }]);
     expect((run(third, "high").body as any).reasoning.effort).toBe("medium");
   });
@@ -113,7 +124,7 @@ describe("Astra effort history", () => {
   });
   test("state contains hashes and effort positions, never prompt or account data", () => {
     run(first); run(second, "low");
-    const state = readFileSync(statePath(), "utf8");
+    const state = readState();
     for (const forbidden of ["Synthetic", "test-account", "thread-a", "shared-cache-key", "content", "authorization"]) expect(state).not.toContain(forbidden);
   });
   test("corrupt state fails transparently without overwriting it", () => {
@@ -123,21 +134,25 @@ describe("Astra effort history", () => {
   });
   test("invalid update positions fail state validation", () => {
     run(first); run(second, "low");
-    const saved = JSON.parse(readFileSync(statePath(), "utf8"));
+    const saved = JSON.parse(readState());
     saved.snapshots[1].updates[0].position = 99;
-    writeFileSync(statePath(), JSON.stringify(saved));
+    writeState(JSON.stringify(saved));
     expect(run(third, "low").status).toBe("invalid_state");
   });
   test("stored updates must still point to user messages", () => {
     run(first); run(second, "low");
-    const saved = JSON.parse(readFileSync(statePath(), "utf8"));
+    const saved = JSON.parse(readState());
     saved.snapshots[1].updates[0].position = 1;
-    writeFileSync(statePath(), JSON.stringify(saved));
+    writeState(JSON.stringify(saved));
     expect(run(third, "low")).toMatchObject({ status: "invalid_state", body: body(third, "low") });
   });
   test("a concurrent writer lock causes unchanged fallback", () => {
-    run(first); mkdirSync(statePath().replace(/\.json$/, ".lock"));
-    expect(run(second, "low")).toMatchObject({ status: "unavailable_state", body: body(second, "low") });
+    run(first);
+    const lock = new Database(statePath());
+    lock.exec("BEGIN IMMEDIATE");
+    try { expect(run(second, "low")).toMatchObject({ status: "unavailable_state", body: body(second, "low") }); }
+    finally { lock.exec("ROLLBACK"); lock.close(); }
+    expect(run(second, "low").status).toBe("updated");
   });
   test.each(["compaction", "context_compaction", "compaction_trigger"])("%s disables rewriting", type => {
     run(first); run(second, "low");
@@ -204,5 +219,52 @@ describe("Astra adapter integration", () => {
     adapterRequest(first, "medium", {}, destination);
     expect(JSON.parse(adapterRequest(second, "low", {}, destination).body).reasoning.effort).toBe("low");
     expect(readdirSync(directory)).toEqual([]);
+  });
+});
+
+describe("durable effort state lifecycle", () => {
+  test("bounds task churn and registers one removable directory", () => {
+    for (let i = 0; i < 150; i++) run(first, "medium", `task-${i}`);
+    const db = new Database(statePath());
+    try { expect((db.query("SELECT COUNT(*) AS count FROM sessions").get() as { count: number }).count).toBe(128); }
+    finally { db.close(); }
+    const manifest = JSON.parse(readFileSync(join(directory, CONFIG_UNINSTALL_MANIFEST), "utf8"));
+    expect(manifest.paths.filter((p: string) => p === "state" || p.startsWith("state/"))).toEqual(["state"]);
+    expect(removeOwnedConfigState(directory).status).toBe("removed");
+  });
+  test("bounds total payload bytes and expires abandoned conversations", () => {
+    const path = join(directory, "state");
+    const payload = "x".repeat(1_500_000);
+    for (let i = 0; i < 14; i++) withAstraEffortState(path, String(i), () => ({ value: true, state: payload }));
+    const db = new Database(statePath());
+    try {
+      expect((db.query("SELECT SUM(length(state)) AS bytes FROM sessions").get() as { bytes: number }).bytes).toBeLessThanOrEqual(16 * 1024 * 1024);
+      db.query("UPDATE sessions SET touched = 0").run();
+    } finally { db.close(); }
+    expect(statSync(statePath()).size).toBeLessThanOrEqual(32 * 1024 * 1024);
+    withAstraEffortState(path, "fresh", () => ({ value: true, state: "fresh" }));
+    const fresh = new Database(statePath());
+    try { expect(fresh.query("SELECT scope FROM sessions").all()).toEqual([{ scope: "fresh" }]); }
+    finally { fresh.close(); }
+  });
+  test("recovers after a different process dies while holding a transaction", async () => {
+    run(first);
+    const child = Bun.spawn([process.execPath, "-e", `import { Database } from "bun:sqlite";
+      const db = new Database(process.argv[1]); db.exec("BEGIN IMMEDIATE; UPDATE sessions SET state = 'uncommitted'");
+      console.log("held"); await new Promise(() => {});`, statePath()], { stdout: "pipe", stderr: "pipe" });
+    try {
+      const reader = child.stdout.getReader();
+      const ready = await reader.read(); reader.releaseLock();
+      expect(new TextDecoder().decode(ready.value)).toContain("held");
+      expect(run(second, "low").status).toBe("unavailable_state");
+    } finally { child.kill("SIGKILL"); await child.exited; }
+    expect(run(second, "low")).toMatchObject({ status: "updated", baseline: "medium", effective: "low" });
+  });
+  test("creates owner-only database and directory on POSIX", () => {
+    run(first);
+    if (process.platform !== "win32") {
+      expect(statSync(statePath()).mode & 0o777).toBe(0o600);
+      expect(statSync(join(directory, "state")).mode & 0o777).toBe(0o700);
+    }
   });
 });

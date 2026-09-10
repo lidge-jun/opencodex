@@ -1,9 +1,7 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, rmdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../config/paths";
-import { atomicWriteFile } from "../config/atomic-write";
-import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
+import { withAstraEffortState } from "./astra-effort-state";
 
 const EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
 const MAX_SNAPSHOTS = 256;
@@ -131,40 +129,27 @@ export function applyAstraEffortCache(
   const account = servingHeaders.get("chatgpt-account-id");
   if (!account) return fallback("missing_serving_identity");
   const scope = digest(JSON.stringify([thread, account]));
-  const path = join(directory, `${scope}.json`);
-  const lock = join(directory, `${scope}.lock`);
-  let locked = false;
   try {
-    assertNotRealHomeUnderTest(directory);
-    mkdirSync(directory, { recursive: true, mode: 0o700 });
-    mkdirSync(lock, { mode: 0o700 });
-    locked = true;
-    let state: State = { version: 1, snapshots: [] };
-    try {
-      if (statSync(path).size > MAX_STATE_BYTES) return fallback("state_limit");
-      const loaded: unknown = JSON.parse(readFileSync(path, "utf8"));
-      if (!validState(loaded)) return fallback("invalid_state");
-      state = loaded;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return fallback("unavailable_state");
-    }
-    const result = transform(body, state);
-    if (!result.snapshot) {
-      atomicWriteFile(path, JSON.stringify({ version: 1, snapshots: [] }));
-      return result;
-    }
-    const snapshot = result.snapshot;
-    if (!state.snapshots.some(s => JSON.stringify(s) === JSON.stringify(snapshot))) {
-      if (state.snapshots.length >= MAX_SNAPSHOTS) return fallback("state_limit");
-      state.snapshots.push(snapshot);
-      const serialized = JSON.stringify(state);
-      if (serialized.length > MAX_STATE_BYTES) return fallback("state_limit");
-      atomicWriteFile(path, serialized);
-    }
-    return { body: result.body, status: result.status, baseline: result.baseline, effective: result.effective };
+    return withAstraEffortState(directory, scope, serialized => {
+      let state: State = { version: 1, snapshots: [] };
+      if (serialized !== undefined) {
+        if (serialized.length > MAX_STATE_BYTES) return { value: fallback("state_limit") };
+        const loaded: unknown = JSON.parse(serialized);
+        if (!validState(loaded)) return { value: fallback("invalid_state") };
+        state = loaded;
+      }
+      const result = transform(body, state);
+      if (!result.snapshot) return { value: result, state: null };
+      const snapshot = result.snapshot;
+      if (!state.snapshots.some(s => JSON.stringify(s) === JSON.stringify(snapshot))) {
+        if (state.snapshots.length >= MAX_SNAPSHOTS) return { value: fallback("state_limit") };
+        state.snapshots.push(snapshot);
+      }
+      const next = JSON.stringify(state);
+      if (next.length > MAX_STATE_BYTES) return { value: fallback("state_limit") };
+      return { value: { body: result.body, status: result.status, baseline: result.baseline, effective: result.effective }, state: next };
+    });
   } catch {
     return fallback("unavailable_state");
-  } finally {
-    if (locked) { try { rmdirSync(lock); } catch {} }
   }
 }
