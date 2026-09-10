@@ -1046,7 +1046,6 @@ describe("fetchProviderQuotaReports", () => {
     "https://api.z.ai.example/api/anthropic",
     "http://api.z.ai/api/anthropic",
     "https://api.z.ai:8443/api/v1",
-    "https://user@api.z.ai/api/anthropic",
     "https://api.z.ai/api/anthropic?region=cn",
     "https://api.z.ai/api/v1#fragment",
     "https://api.z.ai/api/anthropic/v1/messages",
@@ -1061,6 +1060,21 @@ describe("fetchProviderQuotaReports", () => {
     }) as typeof fetch;
 
     expect((await fetchProviderQuotaReports(keyQuotaConfig("zai", baseUrl), true)).reports).toEqual([]);
+    expect(calls).toBe(0);
+  });
+
+  test.each(["username", "password"] as const)("Z.AI quota rejects URL %s before probing", async field => {
+    // Construct dummy userinfo instead of embedding an email-shaped fixture in source.
+    // Keep this distinct from host/path rejection: the monitor host would otherwise match.
+    const url = new URL("https://api.z.ai/api/anthropic");
+    url[field] = "fixture";
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response("unexpected", { status: 500 });
+    }) as typeof fetch;
+
+    expect((await fetchProviderQuotaReports(keyQuotaConfig("zai", url.href), true)).reports).toEqual([]);
     expect(calls).toBe(0);
   });
 
