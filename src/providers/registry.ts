@@ -615,42 +615,34 @@ const OPENCODE_ZEN_TEXT_ONLY_MODELS = [
   "deepseek-v4-flash-free",
 ];
 /*
- * DeepSeek's Codex ladder is low/high/max. With the V4 Pro GA release
- * (DeepSeek-V4-Pro-0813) the official thinking-mode table is IDENTICAL for both
- * V4 models (api-docs.deepseek.com/guides/thinking_mode, verified 2026-08-13):
+ * DeepSeek's Codex ladder exposes high/xhigh for both V4 models. The upstream
+ * thinking-mode levels are high and max (api-docs.deepseek.com/guides/thinking_mode):
  *
  *   requested  | v4-flash | v4-pro
- *   low        | low      | low
+ *   low        | high     | high
  *   medium     | high     | high
  *   high       | high     | high
- *   xhigh      | high     | high
+ *   xhigh      | max      | max
  *   max        | max      | max
  *
- * Before GA, Pro silently upgraded low->high and mapped xhigh->max (#1057-era
- * table); the page's footnote about an early-August Pro mapping update landed
- * with this GA, so Pro now advertises the same three real tiers as Flash.
- *
- * Two standing notes (#1057):
- *
- * - `xhigh` is a COMPATIBILITY ALIAS, not a native tier. It stays in the wire maps
- *   so existing requests and saved configs keep working, but it is not advertised.
- * - `medium` has no row in the vendor table — mapping it to `high` is OUR
- *   compatibility choice for clients that only speak the OpenAI ladder.
+ * Low/medium/high are compatibility requests normalized to upstream high;
+ * xhigh/max are normalized to upstream max. The picker intentionally exposes
+ * only the two Codex levels that distinguish DeepSeek's available tiers.
  */
-const DEEPSEEK_FLASH_THINKING_EFFORTS = ["low", "high", "max"];
-const DEEPSEEK_PRO_THINKING_EFFORTS = ["low", "high", "max"];
+const DEEPSEEK_FLASH_THINKING_EFFORTS = ["high", "xhigh"];
+const DEEPSEEK_PRO_THINKING_EFFORTS = ["high", "xhigh"];
 const DEEPSEEK_PRO_REASONING_MAP: Record<string, string> = {
-  low: "low",
+  low: "high",
   medium: "high",
   high: "high",
-  xhigh: "high",
+  xhigh: "max",
   max: "max",
 };
 const DEEPSEEK_FLASH_REASONING_MAP: Record<string, string> = {
-  low: "low",
+  low: "high",
   medium: "high",
   high: "high",
-  xhigh: "high",
+  xhigh: "max",
   max: "max",
 };
 /**

@@ -132,17 +132,15 @@ describe("provider registry parity", () => {
     expect(KEY_LOGIN_PROVIDERS.openrouter.modelContextWindows?.["openai/gpt-5.6-terra"]).toBe(1_050_000);
     expect(KEY_LOGIN_PROVIDERS.openrouter.modelContextWindows?.["openai/gpt-5.6-luna"]).toBe(1_050_000);
     expect(KEY_LOGIN_PROVIDERS.deepseek.models).toContain("deepseek-v4-pro");
-    // #1057: DeepSeek's ladder is low/high/max and the two V4 models resolve it
-    // differently (api-docs.deepseek.com/guides/thinking_mode, verified 2026-08-06).
-    // `xhigh` is an alias, so it stays in the wire map but is not advertised. Pro
-    // does not honor `low` (the vendor maps it to `high`), so Pro must not offer it.
-    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEfforts?.["deepseek-v4-pro"]).toEqual(["low", "high", "max"]);
-    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEfforts?.["deepseek-v4-flash"]).toEqual(["low", "high", "max"]);
-    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-pro"]?.low).toBe("low");
-    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-pro"]?.xhigh).toBe("high");
+    // DeepSeek V4 exposes two distinct upstream tiers through the compact Codex
+    // ladder: high and xhigh, mapping to upstream high and max respectively.
+    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEfforts?.["deepseek-v4-pro"]).toEqual(["high", "xhigh"]);
+    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEfforts?.["deepseek-v4-flash"]).toEqual(["high", "xhigh"]);
+    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-pro"]?.low).toBe("high");
+    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-pro"]?.xhigh).toBe("max");
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-pro"]?.max).toBe("max");
-    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-flash"]?.low).toBe("low");
-    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-flash"]?.xhigh).toBe("high");
+    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-flash"]?.low).toBe("high");
+    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-flash"]?.xhigh).toBe("max");
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-flash"]?.max).toBe("max");
     expect(KEY_LOGIN_PROVIDERS.deepseek.preserveReasoningContentModels).toEqual(["deepseek-v4-pro", "deepseek-v4-flash"]);
     // Issue #88: every DeepSeek API model is text-only input — the vision sidecar covers them.
@@ -1155,14 +1153,12 @@ describe("free-provider directory isolation", () => {
    * that actually receives the shared metadata, so a misclassification cannot land
    * silently — it fails here with the offending id named.
    *
-   * Ladders: since the V4 Pro GA (DeepSeek-V4-Pro-0813) both models get low/high/max —
-   * the vendor's updated thinking-mode table is now identical for Flash and Pro.
-   * Neither advertises `xhigh` — it is an alias, kept in the wire map only
-   * (api-docs.deepseek.com/guides/thinking_mode, verified 2026-08-13).
+   * Ladders: both V4 models expose the two distinct Codex tiers high and xhigh,
+   * which map to the vendor's high and max thinking modes.
    */
   test("every DeepSeek V4 entry advertises its own ladder and alias mapping", () => {
-    const flashLadder = ["low", "high", "max"];
-    const proLadder = ["low", "high", "max"];
+    const flashLadder = ["high", "xhigh"];
+    const proLadder = ["high", "xhigh"];
     const cases: Array<{ provider: string; model: string; flash: boolean }> = [
       { provider: "deepseek", model: "deepseek-v4-pro", flash: false },
       { provider: "deepseek", model: "deepseek-v4-flash", flash: true },
@@ -1184,13 +1180,13 @@ describe("free-provider directory isolation", () => {
       const ladder = entry?.modelReasoningEfforts?.[model];
       expect(ladder, `${provider}/${model} advertises no ladder`).toBeTruthy();
       expect(ladder, `${provider}/${model} ladder`).toEqual(flash ? flashLadder : proLadder);
-      expect(ladder, `${provider}/${model} must not advertise the xhigh alias`)
-        .not.toContain("xhigh");
+      expect(ladder, `${provider}/${model} advertises the two distinct tiers`)
+        .toEqual(["high", "xhigh"]);
 
       const map = entry?.modelReasoningEffortMap?.[model];
       expect(map, `${provider}/${model} has no effort map`).toBeTruthy();
-      expect(map?.xhigh, `${provider}/${model} xhigh alias`).toBe("high");
-      expect(map?.low, `${provider}/${model} low resolution`).toBe("low");
+      expect(map?.xhigh, `${provider}/${model} xhigh resolution`).toBe("max");
+      expect(map?.low, `${provider}/${model} low resolution`).toBe("high");
       expect(map?.max, `${provider}/${model} max`).toBe("max");
     }
   });

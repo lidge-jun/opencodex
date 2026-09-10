@@ -163,9 +163,26 @@ function healMappedTiers(provider: OcxProviderConfig, modelId: string, efforts: 
   if (efforts.length === 0) return efforts;
   const wireMap = reasoningEffortMapFor(provider, modelId);
   if (!wireMap) return efforts;
+  // DeepSeek V4 deliberately exposes a compact two-rung Codex ladder. Its xhigh
+  // label maps to upstream max, so adding a synthetic max rung would duplicate
+  // the same upstream tier in the picker. Keep this model-scoped contract intact;
+  // other providers/models with the same shape still receive normal self-healing.
+  if (isDeepSeekV4CompactLadder(modelId, efforts, wireMap)) return efforts;
   const mappedTiers = Object.values(wireMap).filter(isCodexReasoningEffort);
   if (mappedTiers.length === 0) return efforts;
   return sanitizeCodexReasoningEfforts([...efforts, ...mappedTiers]) ?? efforts;
+}
+
+function isDeepSeekV4CompactLadder(
+  modelId: string,
+  efforts: readonly string[],
+  wireMap: Record<string, string>,
+): boolean {
+  return /(?:^|\/)deepseek-v4-(?:pro|flash)(?:-free)?$/i.test(modelId)
+    && efforts.length === 2
+    && efforts[0] === "high"
+    && efforts[1] === "xhigh"
+    && wireMap.xhigh === "max";
 }
 
 function requestToCodexEffort(requested: string): string | undefined {

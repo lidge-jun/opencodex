@@ -200,6 +200,17 @@ describe("provider-specific reasoning effort mapping", () => {
     };
     const route = routeModel(config, "deepseek/deepseek-v4-pro");
 
+    expect(configuredReasoningEfforts(route.provider, route.modelId)).toEqual(["high", "xhigh"]);
+    for (const [requested, upstream] of Object.entries({
+      low: "high",
+      medium: "high",
+      high: "high",
+      xhigh: "max",
+      max: "max",
+    })) {
+      expect(mapReasoningEffort(route.provider, route.modelId, requested)).toBe(upstream);
+    }
+
     const req = createOpenAIChatAdapter(route.provider).buildRequest({
       modelId: route.modelId,
       context: {
@@ -224,9 +235,7 @@ describe("provider-specific reasoning effort mapping", () => {
     });
     const body = JSON.parse(req.body as string) as { reasoning_effort?: string; messages: Record<string, unknown>[] };
 
-    // V4 Pro GA (DeepSeek-V4-Pro-0813): the vendor thinking-mode table is now
-    // identical to Flash, so xhigh resolves to high on Pro too.
-    expect(body.reasoning_effort).toBe("high");
+    expect(body.reasoning_effort).toBe("max");
     expect(body.messages[1].reasoning_content).toBe("I need to inspect files before answering.");
     expect(body.messages[1]).toMatchObject({
       role: "assistant",
@@ -938,6 +947,15 @@ describe("stale reasoning-ladder self-heal", () => {
     expect(configuredReasoningEfforts(prov, "glm-5.2")).toEqual(["low", "medium", "high", "xhigh", "max"]);
     // A healed max request rides the wire map to "max", not a clamp down to xhigh.
     expect(mapReasoningEffort(prov, "glm-5.2", "max")).toBe("max");
+  });
+
+  test("only DeepSeek V4 keeps its compact high/xhigh ladder", () => {
+    const prov: OcxProviderConfig = {
+      ...base,
+      modelReasoningEfforts: { model: ["high", "xhigh"] },
+      modelReasoningEffortMap: { model: { xhigh: "max", max: "max" } },
+    };
+    expect(configuredReasoningEfforts(prov, "model")).toEqual(["high", "xhigh", "max"]);
   });
 
   test("thinking-toggle ladders can advertise five steps while the map emits enabled, never max", () => {

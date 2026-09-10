@@ -18,8 +18,9 @@ require reasoning history replay: `preserveReasoningContentModels`.
 
 DeepSeek V4 thinking models are marked in the provider registry with:
 
-- model-scoped Codex reasoning levels
-- `xhigh` to upstream `max` reasoning effort mapping
+- model-scoped Codex reasoning levels (`high` and `xhigh`)
+- `low`, `medium`, and `high` normalized to upstream `high`; `xhigh` and
+  `max` normalized to upstream `max`
 - `preserveReasoningContentModels`
 
 This is not enabled for every OpenAI-compatible provider or for the legacy
