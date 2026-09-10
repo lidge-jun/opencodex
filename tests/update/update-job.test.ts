@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import type { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -40,6 +42,114 @@ afterEach(() => {
   if (prevHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = prevHome;
   removeTreeWithRetry(dir);
+});
+
+describe("pinned-start child cleanup", () => {
+  type FakeChild = EventEmitter & Pick<ChildProcess, "pid" | "exitCode" | "signalCode">;
+
+  async function exhaustRetries(options: {
+    spawned?: (child: FakeChild) => void;
+    healthWait?: (children: FakeChild[]) => void;
+    reusePid?: boolean;
+    healthyOnLastAttempt?: boolean;
+  } = {}) {
+    let now = 0;
+    const children: FakeChild[] = [];
+    const killed: number[] = [];
+    const livenessChecks: number[] = [];
+    const job: UpdateJobState = {
+      id: "pinned-child-cleanup", status: "restarting",
+      startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      currentVersion: "2.49.0", latestVersion: "2.50.0", channel: "latest",
+      installer: "npm", restart: true, command: "", log: [],
+    };
+    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    await restartAfterUpdateForTests(job, { port: 19111, hostname: "127.0.0.1" }, {
+      serviceInstalledFn: () => false,
+      waitForPort: async () => true,
+      listListenPidsFn: () => [],
+      preparePortForPinnedStartFn: () => {},
+      waitForGhostListenClearFn: async () => ({ ok: true, accessDenied: false }),
+      probeProxyIdentity: async () => null,
+      probeProxy: async () => !!options.healthyOnLastAttempt && children.length === 3,
+      now: () => now,
+      sleepMs: async ms => {
+        options.healthWait?.(children);
+        now += ms;
+      },
+      isAliveFn: pid => {
+        livenessChecks.push(pid);
+        // A reused numeric PID may be live even after our own child has exited.
+        return true;
+      },
+      spawnDetachedStartFn: () => {
+        const child: FakeChild = Object.assign(new EventEmitter(), {
+          pid: options.reusePid ? 4241 : 4241 + children.length, exitCode: null, signalCode: null,
+        });
+        children.push(child);
+        options.spawned?.(child);
+        return child as ChildProcess;
+      },
+      killProxyFn: pid => { killed.push(pid); },
+    });
+    expect(children).toHaveLength(3);
+    return { killed, livenessChecks };
+  }
+
+  test.each([
+    { name: "successful exit", exitCode: 0, signalCode: null },
+    { name: "failed exit", exitCode: 1, signalCode: null },
+    { name: "signal exit", exitCode: null, signalCode: "SIGTERM" as const },
+  ])("never reuses a child PID after $name", async ({ exitCode, signalCode }) => {
+    const result = await exhaustRetries({
+      spawned: child => { child.exitCode = exitCode; child.signalCode = signalCode; },
+    });
+    expect(result.killed).toEqual([]);
+    expect(result.livenessChecks).toEqual([]);
+  });
+
+  test("retires a child when its exit event is observed during the health wait", async () => {
+    const observed = new Set<FakeChild>();
+    const result = await exhaustRetries({
+      healthWait: children => {
+        const child = children.at(-1)!;
+        if (observed.has(child)) return;
+        observed.add(child);
+        // Keep the fixture fields unset to exercise the event retirement independently.
+        child.emit("exit", 0, null);
+      },
+    });
+    expect(observed.size).toBe(3);
+    expect(result.killed).toEqual([]);
+    expect(result.livenessChecks).toEqual([]);
+  });
+
+  test("still cleans up live children before retries and after the final health timeout", async () => {
+    const result = await exhaustRetries();
+    expect(result.killed).toEqual([4241, 4242, 4243]);
+    expect(result.livenessChecks).toEqual([4241, 4242, 4243]);
+  });
+
+  test("a previous child's late exit does not retire the current live child", async () => {
+    const observed = new Set<FakeChild>();
+    const result = await exhaustRetries({
+      reusePid: true,
+      healthWait: children => {
+        const previous = children.at(-2);
+        if (!previous || observed.has(previous)) return;
+        observed.add(previous);
+        previous.exitCode = 0;
+        previous.emit("exit", 0, null);
+      },
+    });
+    expect(observed.size).toBe(2);
+    expect(result.killed).toEqual([4241, 4241, 4241]);
+  });
+
+  test("leaves the current child running when its health probe succeeds", async () => {
+    const result = await exhaustRetries({ healthyOnLastAttempt: true });
+    expect(result.killed).toEqual([4241, 4242]);
+  });
 });
 
 describe("GUI update check", () => {
