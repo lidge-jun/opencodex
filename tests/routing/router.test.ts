@@ -1134,6 +1134,53 @@ describe("routeModel blocked model redirect", () => {
     expect(() => routeModel(config, "start-model")).toThrow(/exceeded maximum redirect depth \(5\)/i);
   });
 
+  test("aligns routeDecision.selected when policy candidate is redirected across providers", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "openai",
+      blockedModelRedirects: {
+        "openai/m1": "google-antigravity/gemini-3.8-flash-high",
+      },
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          models: ["m1"],
+        },
+        "google-antigravity": {
+          adapter: "google-antigravity",
+          baseUrl: "https://autopush-alkalimakersuite.sandbox.googleapis.com",
+          models: ["gemini-3.8-flash-high"],
+        },
+      },
+      routingProfiles: {
+        fast: {
+          candidates: [{ provider: "openai", model: "m1" }],
+        },
+      },
+    };
+
+    const routed = routeModel(config, "policy/fast");
+    expect(routed).toMatchObject({
+      routeKind: "policy",
+      routeReason: "blocked-model-redirect",
+      providerName: "google-antigravity",
+      modelId: "gemini-3.8-flash-high",
+    });
+    expect(routed.routeDecision).toBeDefined();
+    expect(routed.routeDecision?.selected).toEqual({
+      candidateIndex: 0,
+      provider: "google-antigravity",
+      model: "gemini-3.8-flash-high",
+      reason: "blocked-model-redirect",
+    });
+    expect(routed.routeDecision?.candidates[0]).toMatchObject({
+      provider: "openai",
+      model: "m1",
+      eligible: true,
+    });
+  });
+
 });
 
 describe("routeCompactionModel (#2901)", () => {

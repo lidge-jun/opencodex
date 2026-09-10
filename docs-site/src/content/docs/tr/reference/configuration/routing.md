@@ -52,7 +52,7 @@ Döngü algılama ve en fazla 5 atlama derinliği ile çoklu atlamalı zincirlem
 yeniden yönlendirmeler desteklenir. Rota nedeni `blocked-model-redirect` olarak
 kaydedilir. Anahtarın atlanması yönlendirmeyi değiştirmez.
 
-Eşleştirme ayrıca bir takma addan çözümlenen yerel model için de gerçekleştirilir; bu nedenle engellenen yerel modellere çözümlenen takma adlar da uygun şekilde yeniden yönlendirilir. Hesap nitelikli sağlayıcılar arası yeniden yönlendirmeler tam bir anahtar gerektirir (ör. `side/gpt-5.6-terra`); hesap ad alanında yalın anahtarlar güvenli şekilde başarısız olur (fail closed) ve sağlayıcılar arası hedefler, kaynak hesap alanlarını (`codexAccountId`, `codexAccountNamespace`) veya kotaları devralmadan doğrudan hedef sağlayıcıyı kullanır.
+Eşleştirme ayrıca bir takma addan çözümlenen yerel model için de gerçekleştirilir; bu nedenle engellenen yerel modellere çözümlenen takma adlar da uygun şekilde yeniden yönlendirilir. Hesap nitelikli sağlayıcılar arası yeniden yönlendirmeler tam bir anahtar gerektirir (ör. `side/gpt-5.6-terra`); hesap ad alanında yalın anahtarlar güvenli şekilde başarısız olur (fail closed) ve sağlayıcılar arası hedefler, kaynak sağlayıcı kimlik bilgilerini, kimlik doğrulama materyallerini, kaynak hesap alanlarını (`codexAccountId`, `codexAccountNamespace`) veya kotaları devralmadan doğrudan hedef sağlayıcıyı kullanır.
 
 ```json
 {

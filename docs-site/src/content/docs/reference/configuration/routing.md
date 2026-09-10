@@ -43,7 +43,7 @@ target replacement model. Target models can resolve to the same provider or re-r
 a maximum depth of 5 hops with cycle detection). The route reason is recorded as
 `blocked-model-redirect`. Omitting the key leaves routing unchanged.
 
-Matching is also performed against the native model resolved from an alias, so aliases resolving to blocked native models redirect accordingly. Account-qualified cross-provider redirects require an exact key (e.g. `side/gpt-5.6-terra`); bare keys fail closed when account-namespaced, and cross-provider destinations use the target provider directly without inheriting account fields (`codexAccountId`, `codexAccountNamespace`) or quotas.
+Matching is also performed against the native model resolved from an alias, so aliases resolving to blocked native models redirect accordingly. Account-qualified cross-provider redirects require an exact key (e.g. `side/gpt-5.6-terra`); bare keys fail closed when account-namespaced, and cross-provider destinations use the target provider directly without inheriting source provider credentials, authentication material, account fields (`codexAccountId`, `codexAccountNamespace`), or quotas.
 
 ```json
 {

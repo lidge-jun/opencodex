@@ -662,11 +662,22 @@ function routeModelInternal(
     const selected = evaluation.candidates[evaluation.selectedIndex]!;
     const concrete = `${selected.provider}/${selected.model}`;
     const routed = routeModelInternal(config, concrete, true, undefined, false, sharedRedirectState);
+    const routeReason = routed.routeReason === "blocked-model-redirect"
+      ? "blocked-model-redirect"
+      : "policy-selected";
     return {
       ...routed,
       routeKind: "policy" as const,
-      routeReason: "policy-selected",
-      routeDecision: evaluation.trace,
+      routeReason,
+      routeDecision: {
+        ...evaluation.trace,
+        selected: {
+          ...evaluation.trace.selected,
+          provider: routed.providerName,
+          model: routed.modelId,
+          reason: routeReason,
+        },
+      },
     };
   }
   if (slash > 0) {
