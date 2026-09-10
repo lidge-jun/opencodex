@@ -129,12 +129,13 @@ the whole argument.
 | Can OpenCodex refuse? | yes, per case, unconditionally | only when the agent chooses a client-mediated path -- a `session/request_permission`, or a write routed through `fs/write_text_file`; both are optional for the agent |
 | Cost to integrate | ~13.9k lines | ~1/10 of that |
 
-The corrected ACP column is weaker than this document first claimed -- there *is*
-a refusal point -- but it is still discretionary on the agent's side, where the
-HTTP one is not. `cli-jaw` runs with `fs:false, terminal:false`
-(`session.ts:161`) and Cursor functions regardless, which shows client
-filesystem capability is not load-bearing; whether Cursor performs mutations
-without asking when denied was **not** tested here and must not be assumed.
+ACP defines a refusal point, but it is discretionary on the agent's side where the
+HTTP one is not -- and [070](./070_live_trace.md) shows Cursor declining to use it.
+In `agent` mode it mutated a file with no permission request and no client-mediated
+write, against a client instrumented to deny everything. `cli-jaw` likewise runs
+with `fs:false, terminal:false` (`session.ts:161`) and Cursor functions regardless.
+That is a two-run result on one version and one model, so it establishes the
+unsupervised path is reachable by default, not that no configuration mediates.
 
 The HTTP mediation point is **typed and non-optional**. Cursor's agent-ness
 arrives expressed in a protobuf schema OpenCodex parses, which is why a per-case
@@ -143,15 +144,19 @@ OpenCodex answering.
 
 ACP's mediation points are real but **discretionary**. The agent reports
 `tool_call`, MAY request permission before acting, and MAY route file writes
-through `fs/write_text_file` where the client offers it. Where it does, the
-client sees and can refuse. Where it does not, the client has no protocol-level
-view. Which of those Cursor actually does, and in which mode, was **not measured
-here** -- see residual 1.
+through `fs/write_text_file` where the client offers it.
 
-So the defensible comparison is about *guarantee*, not visibility: HTTP's refusal
-point is structural, ACP's is at the agent's discretion. An earlier draft claimed
-ACP's leak is simply "silent" and therefore worse; that overstated what was
-proven and is withdrawn.
+**This has now been measured -- see [070](./070_live_trace.md).** In `agent`
+mode, `cursor-agent` `2026.09.08` edited a scratch file having issued **zero**
+`session/request_permission` calls and **zero** `fs/write_text_file` calls,
+against a client instrumented to deny everything. The deny policy never fired
+because nothing was offered to deny. In `ask` mode the same prompt produced no
+write at all.
+
+So the comparison is about *guarantee*, and the evidence supports the stronger
+form: HTTP's refusal point is structural and per-operation; ACP's, as Cursor
+implements it, does not exist below the level of the mode setting. Containment is
+all-or-nothing -- an agent that cannot act, or an agent that acts unsupervised.
 
 The cost difference follows the same line -- **you largely pay for what must come
 through you.**
@@ -204,10 +209,13 @@ is not exposed over ACP. The same threads record later improvements, including a
 fast Composer 2.5 variant, while the 1M-context limitation persisted. Cursor's
 changelog names model and mode selection over ACP in Mar 2026.
 
-No live ACP model roster was collected on this host, so set inclusion against the
-HTTP adapter's catalogue is unproven. The defensible statement is that ACP's
-model surface has been repeatedly reported by the vendor as a subset in specific,
-dated respects -- not that it is categorically smaller today.
+A live roster has since been collected -- see [070](./070_live_trace.md). On
+2026-09-08 ACP advertised 38 models with exactly one row per model, parameters
+baked into each id (context `200k`/`272k`/`300k`, effort
+`medium`/`high`/`xhigh`), no 1M-context variant and no Max Mode. So the vendor's
+"one variant per model" statement holds, the surface is more parameterised than
+an early draft implied, and on the specific axes of 1M context and Max Mode the
+HTTP adapter does expose more.
 
 ## Options considered
 
@@ -216,7 +224,7 @@ Decision IDs from the design consult, with main's disposition.
 | ID | Option | Disposition |
 |---|---|---|
 | ACP-D1 | Do not integrate; keep the HTTP Cursor adapter | **Accepted** |
-| ACP-D2 | Clone `coding-agent` onto `runTurn` for ACP | **Rejected, but no longer on safety grounds.** The original rejection assumed the agent could not be constrained; `ask` mode refutes that. It is rejected now because a mode is a behavioral assertion rather than a structural guarantee like `--tools ""`, because cursor-agent still ignores Codex's tool list and uses its own, and because the adapter would have to answer Cursor's proprietary blocking `cursor/ask_question` on a human's behalf. A live `ask`-mode trace is the evidence that would reopen this |
+| ACP-D2 | Clone `coding-agent` onto `runTurn` for ACP | **Rejected.** The original rejection assumed the agent could not be constrained at all; `ask` mode refutes that, so the reasoning changed. It is rejected because the only observed lever is session-wide: [070](./070_live_trace.md) found no per-operation refusal point in `agent` mode, so the adapter must choose between an agent that cannot act and one that acts unsupervised. Compounding that, cursor-agent ignores Codex's tool list either way, and Cursor's proprietary blocking `cursor/*` methods must be carried and answered. Reopen if Cursor gains a tool-less mode, per-operation permissions by default, or if a broader trace contradicts 070 |
 | ACP-D3 | Widen `ProviderAdapter` with an `ownsExecution` flag so the core ends the turn without running Codex tools | **Rejected for the request path.** It is the honest way to model a delegating agent, but it teaches `src/server/responses/core.ts` a second product and nests an agent inside a Codex turn. Recorded as the only technically coherent adapter-shaped option, should the product goal ever change |
 | ACP-D4 | An optional ACP host subsystem, registered like Lab, never imported by `router.ts` / `lifecycle.ts` / `responses/core.ts` | **Deferred, not rejected.** This is where Cursor-the-agent would belong if it is ever wanted. It is a peer product, not a provider, and it needs demand evidence first |
 
@@ -257,28 +265,26 @@ recommendation rather than performed here.
 
 ## Residuals -- not proven on this host
 
-1. **The `ask`/`plan` mode behavior is untested, and it is now the decisive
-   residual.** Cursor documents these as "read-only behavior". Whether that is
-   enforced or merely intended -- and whether a session pinned to `ask` can be
-   moved out of it mid-turn -- was not tested. If `ask` mode proves to be a hard
-   read-only guarantee, ACP-D2 becomes genuinely arguable and this verdict should
-   be re-opened. This is the first thing a follow-up unit should measure.
-2. **No live handshake.** `cursor-agent` is present at
-   `~/.local/bin/cursor-agent`, but the macOS login keychain is locked
-   (`Error: Your macOS login keychain is locked`), so no version, no
-   `initialize` response and no advertised `authMethods` were observed. Every
-   ACP behavioral claim here rests on the published spec, Cursor's own docs, and
-   `cli-jaw`'s shipped client.
-3. **No claim is made about mutation-under-denial.** Whether `cursor-agent`
-   writes when every `session/request_permission` is denied was not tested, and
-   an earlier draft that treated it as established has been corrected. It is not
-   relied on anywhere in the current verdict.
-3. **Demand is unmeasured.** Whether anyone wants Cursor-the-agent inside
+1. **CLOSED by [070](./070_live_trace.md).** `ask` mode is enforced on
+   `2026.09.08`: an explicit "do it now" write instruction produced no
+   modification. Cursor's read-only modes are real, which is why this document's
+   original categorical premise was correctly retracted.
+2. **CLOSED by [070](./070_live_trace.md).** The handshake ran. `cursor_login` is
+   the advertised auth method, `protocolVersion` is 1, `loadSession` is true and
+   there is no `session/resume`.
+3. **CLOSED by [070](./070_live_trace.md), and it reverses a retraction.** In
+   `agent` mode Cursor mutated the file with no permission request and no
+   client-mediated write. The withdrawn claim was empirically right about Cursor
+   even though the reviewer was right about the spec.
+4. **Still open: `plan` mode and `cursor/create_plan` were never exercised.** No
+   `cursor/*` extension method fired in either traced run, so the blocking-method
+   cost argued above is documented but not yet observed.
+5. **Demand is unmeasured.** Whether anyone wants Cursor-the-agent inside
    OpenCodex, as opposed to Cursor-the-model, is unknown. ACP-D4 should not move
    without it.
-4. **Vendor trajectory is unknown.** If Cursor adds a tool-less or
+6. **Vendor trajectory is unknown.** If Cursor adds a tool-less or
    client-tools mode to ACP, the blocking constraint dissolves and this verdict
-   should be re-opened.
-5. **Distribution not assessed.** Shipping a spawn of the proprietary
+   should be re-opened. The traced behavior is one version only.
+7. **Distribution not assessed.** Shipping a spawn of the proprietary
    `cursor-agent` binary may carry product or licensing constraints that were
    not examined.

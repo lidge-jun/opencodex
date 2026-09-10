@@ -133,4 +133,7 @@ it. Follow-ups, in dependency order:
 1. Annotate `800_agent-fabric/110_protocol_boundaries.md` (small, unblocked).
 2. If Cursor-the-agent is ever wanted, that is ACP-D4 -- an optional subsystem,
    never a provider -- and it needs demand evidence first.
-3. Reopen only on a live `ask`-mode trace.
+3. ~~Reopen only on a live `ask`-mode trace.~~ **Done** -- see
+   [070](./070_live_trace.md). Residuals 1-3 are closed; `ask` held, and `agent`
+   mode mutated a file with no permission request. The remaining untested path is
+   `plan` mode and `cursor/create_plan`.

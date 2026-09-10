@@ -192,3 +192,33 @@ sloppy in its citations, and that both were caught only because the audit was
 dispatched on a different model family with an explicitly adversarial brief. A
 same-family reviewer had already read this material three times without noticing
 that Cursor documents a read-only mode.
+
+## Cycle 2 audit -- the live trace
+
+After the keychain was unlocked, the trace this unit could not run was run and
+recorded in [070](./070_live_trace.md). A bounded reviewer (`gpt-5.6-sol`) audited
+the **harness**, not the prose, and returned GO-WITH-FIXES with four blockers.
+All four were folded; all four were about claiming more than two runs support.
+
+| # | Finding | Fold |
+|---|---|---|
+| 1 | "no protocol-level request of any kind" overclaims: the harness counted four frame classes, not all inbound methods | 070 now says none of those four classes was observed, and adds an explicit scope note |
+| 2 | One ask run and one agent run generalized into "enforced", "all-or-nothing", "exactly two settings" | every conclusion now scoped to this version/model/prompt |
+| 3 | Unique display names do not prove one variant per underlying model; the 1M check was a string match that would miss `1024k` | roster claims softened to what was positively observed |
+| 4 | 040 still said mutation-without-asking "was not tested" and carried a stale ACP-D2 row | both rewritten |
+
+The reviewer confirmed the two things that mattered: the harness genuinely does
+detect `session/request_permission`, `fs/*` and `terminal/*` (dispatch order does
+not swallow them), and the mutation is proved because the same path is hashed and
+reread with full content captured. So the zero-permission result is a real zero,
+not an instrumentation artifact.
+
+**This cycle reversed a retraction.** Cycle 1 withdrew the claim that Cursor
+mutates without offering a refusal point, because it could not be shown. Cycle 2
+showed it. The reviewer had been right about the ACP *specification* and wrong
+about *Cursor's implementation of it* -- and the unit had been right for the
+wrong reason, then wrong to retract, then right again with evidence.
+
+That sequence is the most useful thing in this unit. A spec-grounded objection
+defeated an implementation-grounded intuition during audit, and only a live trace
+could settle which one described reality. Prose review could not have.
