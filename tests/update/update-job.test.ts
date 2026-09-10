@@ -61,9 +61,9 @@ describe("pinned-start child cleanup", () => {
       id: "pinned-child-cleanup", status: "restarting",
       startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
       currentVersion: "2.49.0", latestVersion: "2.50.0", channel: "latest",
-      installer: "npm", restart: true, command: "", log: [],
+      installer: "npm", restart: true, command: "", releaseNotesUrl: "", log: [],
     };
-    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    writeFileSync(updateJobPath(), JSON.stringify(job));
     await restartAfterUpdateForTests(job, { port: 19111, hostname: "127.0.0.1" }, {
       serviceInstalledFn: () => false,
       waitForPort: async () => true,
