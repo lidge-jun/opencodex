@@ -263,4 +263,41 @@ describe("409 refusal reporting", () => {
       expect(message).not.toContain("OPENCODEX_HOME");
     }
   });
+
+  test("overlapping refusals each keep their own cause", async () => {
+    // Reading the reason from module state would let the second stop overwrite the first
+    // one's cause before it is read, so the earlier caller reports a refusal it never got.
+    let releaseFirst: (() => void) | null = null;
+    const firstReached = new Promise<void>(resolve => { releaseFirst = resolve; });
+
+    const refusalOf = (code: string, gate?: Promise<void>) => async (): Promise<string> => {
+      try {
+        await stopProxy(process.pid, {
+          readRuntime: () => ({ port: 10100 }),
+          fetchFn: (async () => {
+            if (gate) await gate;
+            return new Response(JSON.stringify({ success: false, code }), {
+              status: 409,
+              headers: { "content-type": "application/json" },
+            });
+          }) as typeof fetch,
+          waitExit: () => { throw new Error("must not wait for a refused stop"); },
+          env: {},
+        });
+      } catch (err) {
+        if (err instanceof ProxyOwnershipRefusedError) return err.message;
+        throw err;
+      }
+      throw new Error("stopProxy must throw on a refusal");
+    };
+
+    // The first call parks inside fetch until the second has already resolved and written
+    // its own code, which is exactly the interleaving module-scoped state cannot survive.
+    const first = refusalOf("respawnable_service", firstReached)();
+    const second = await refusalOf("self_unload_service")();
+    releaseFirst?.();
+
+    expect(await first).toContain("respawn");
+    expect(second).toContain("installed service itself");
+  });
 });
