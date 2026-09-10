@@ -1,3 +1,5 @@
+import { isCodexAccountPickerModels } from "../../config/codex-account-picker";
+import { accountBoundNativeOpenAiSlugsBySelector } from "../../codex/catalog/metadata";
 import type { IntegrationClientId } from "../../integrations/registry";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -178,6 +180,16 @@ interface ClientIntegrationSyncOutcome {
  * does not fail the sync: Codex is the one that matters for routing, and a broken Grok file
  * should surface as a warning, not as a 500 on a command that did its main job.
  */
+function accountPickerSettings(config: OcxConfig) {
+  const choices = { ...config, codexAccountPickerEnabled: true };
+  delete choices.codexAccountPickerModels;
+  return {
+    codexAccountPickerModels: config.codexAccountPickerModels ?? null,
+    codexAccountPickerOptions: [...accountBoundNativeOpenAiSlugsBySelector(choices)]
+      .map(([selector, models]) => ({ selector, models })),
+  };
+}
+
 export async function syncEnabledClientIntegrations(
   port: number | undefined,
   config: OcxConfig,
@@ -315,6 +327,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       streamMode: config.streamMode ?? "auto",
       appOwnedMemoryBudgetMb: config.appOwnedMemoryBudgetMb ?? 256,
       codexAccountPickerEnabled: codexAccountPickerEnabled(config),
+      ...accountPickerSettings(config),
       codexQuotaAutoRefresh: quotaAutoRefreshSettings(config),
       // Absent means hidden, so the GUI renders the switch without having to know that
       // `undefined` and `false` mean the same thing.
@@ -415,6 +428,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       streamMode?: unknown;
       appOwnedMemoryBudgetMb?: unknown;
       codexAccountPickerEnabled?: unknown;
+      codexAccountPickerModels?: unknown;
       codexQuotaAutoRefresh?: unknown;
       oauthOpenBrowser?: unknown;
       showCodexSparkQuota?: unknown;
@@ -427,6 +441,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       && body.streamMode === undefined
       && body.appOwnedMemoryBudgetMb === undefined
       && body.codexAccountPickerEnabled === undefined
+      && body.codexAccountPickerModels === undefined
       && body.codexQuotaAutoRefresh === undefined
       && body.oauthOpenBrowser === undefined
       && body.showCodexSparkQuota === undefined
@@ -448,6 +463,15 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     if (body.codexAccountPickerEnabled !== undefined
       && typeof body.codexAccountPickerEnabled !== "boolean") {
       return jsonResponse({ error: "codexAccountPickerEnabled boolean is required" }, 400);
+    }
+    if (body.codexAccountPickerModels !== undefined && body.codexAccountPickerModels !== null && !isCodexAccountPickerModels(body.codexAccountPickerModels)) {
+      return jsonResponse({ error: "codexAccountPickerModels must map public account selectors to arrays of bare native model ids" }, 400);
+    }
+    if (body.codexAccountPickerModels !== undefined && body.codexAccountPickerModels !== null) {
+      const available = new Set(accountPickerSettings(config).codexAccountPickerOptions.map(option => option.selector));
+      if (Object.keys(body.codexAccountPickerModels as Record<string, string[]>).some(selector => !available.has(selector))) {
+        return jsonResponse({ error: "Unknown Codex account selector" }, 400);
+      }
     }
     if (body.showCodexSparkQuota !== undefined && typeof body.showCodexSparkQuota !== "boolean") {
       return jsonResponse({ error: "showCodexSparkQuota boolean is required" }, 400);
@@ -504,6 +528,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       hasCodexAccountNamespaces: Object.hasOwn(config, "codexAccountNamespaces"),
       codexAccountPickerEnabled: config.codexAccountPickerEnabled,
       hasCodexAccountPickerEnabled: Object.hasOwn(config, "codexAccountPickerEnabled"),
+      codexAccountPickerModels: config.codexAccountPickerModels,
       codexQuotaAutoRefresh: config.codexQuotaAutoRefresh,
       hasCodexQuotaAutoRefresh: Object.hasOwn(config, "codexQuotaAutoRefresh"),
       oauthOpenBrowser: config.oauthOpenBrowser,
@@ -542,6 +567,11 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         initializeDefaultCodexAccountNamespaces(config);
       } else if (body.codexAccountPickerEnabled === false) {
         config.codexAccountPickerEnabled = false;
+      }
+      if (body.codexAccountPickerModels === null) {
+        deleteConfigTopLevelKey(config, "codexAccountPickerModels");
+      } else if (body.codexAccountPickerModels !== undefined) {
+        config.codexAccountPickerModels = structuredClone(body.codexAccountPickerModels as Record<string, string[]>);
       }
       if (typeof body.oauthOpenBrowser === "boolean") {
         config.oauthOpenBrowser = body.oauthOpenBrowser;
@@ -586,6 +616,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       if (previousSettings.hasCodexAccountPickerEnabled) {
         config.codexAccountPickerEnabled = previousSettings.codexAccountPickerEnabled;
       } else deleteConfigTopLevelKey(config, "codexAccountPickerEnabled");
+      if (previousSettings.codexAccountPickerModels !== undefined) config.codexAccountPickerModels = previousSettings.codexAccountPickerModels;
+      else deleteConfigTopLevelKey(config, "codexAccountPickerModels");
       if (previousSettings.hasCodexQuotaAutoRefresh) {
         config.codexQuotaAutoRefresh = previousSettings.codexQuotaAutoRefresh;
       } else deleteConfigTopLevelKey(config, "codexQuotaAutoRefresh");
@@ -618,6 +650,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     const authlessIsEnabled = config.codexDesktopAuthless === true;
     const clientCompactionIsEnabled = config.codexClientCompaction === true;
     const catalogRefresh = pickerWasEnabled !== pickerIsEnabled
+      || JSON.stringify(previousSettings.codexAccountPickerModels) !== JSON.stringify(config.codexAccountPickerModels)
       || authlessWasEnabled !== authlessIsEnabled
       || clientCompactionWasEnabled !== clientCompactionIsEnabled
       ? await convergeCodexCatalog()
@@ -633,6 +666,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       streamMode: config.streamMode ?? "auto",
       appOwnedMemoryBudgetMb: config.appOwnedMemoryBudgetMb ?? 256,
       codexAccountPickerEnabled: pickerIsEnabled,
+      ...accountPickerSettings(config),
       codexQuotaAutoRefresh: quotaAutoRefreshSettings(config),
       oauthOpenBrowser: config.oauthOpenBrowser !== false,
       catalogRefreshPending,

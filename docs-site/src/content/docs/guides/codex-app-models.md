@@ -321,3 +321,18 @@ opencodex rewrites `models_cache.json` with a deliberately stale cache wrapper w
 visibility, priority, or metadata changes, so the next Codex model refresh reads the new catalog.
 
 After a catalog or model-cache write, OpenCodex invalidates its cached app-server observation so the next request checks process freshness again. A configuration sync also invalidates the observation when catalog contents are unchanged. This refresh does not restart Codex processes.
+
+
+## Select only particular account models
+
+In **Advanced settings**, enable **Target a specific Codex account from the model picker**, then
+**Customize models per account**. Select the models to expose for each account and save.
+Common native models remain in the picker and continue to use the configured Direct/Pool
+routing. Selected entries such as `main/gpt-daybreak-blue-latest` use only the mapped account.
+This is useful for review harnesses when model access differs between accounts; selecting a
+model does not grant upstream access or guarantee that a review will be accepted.
+
+The original switch keeps its existing behavior until customization is enabled. Turning
+customization off restores the original all-account projection. Turning the original switch
+off hides account entries without deleting the routing bindings or saved selection.
+The `main` selector follows the current main Codex login, not a permanently bound email address.

@@ -1003,3 +1003,22 @@ or expiry does not extend the history-recovery contract.
 Sender and recipient on routed Responses are context for the receiving model, not a new
 machine-readable routing protocol. Tool routing continues to use the existing collaboration
 contracts.
+
+
+### Selective account-model picker
+
+`codexAccountPickerModels?: Record<string, string[]>` selects bare native model IDs per
+public `codexAccountNamespaces` selector. With this field present, selected account entries
+are added alongside common native picker rows. An empty object adds none. Omit the field
+to retain the legacy all-account projection. `codexAccountPickerEnabled: false` still hides
+all generated entries. This preference never changes exact-account routing or entitlements.
+
+```json
+{
+  "codexAccountNamespaces": { "main": "@main" },
+  "codexAccountPickerEnabled": true,
+  "codexAccountPickerModels": { "main": ["gpt-daybreak-blue-latest"] }
+}
+```
+
+A selected gated model appears only when the existing account entitlement checks admit it.

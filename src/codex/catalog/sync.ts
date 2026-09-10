@@ -879,6 +879,7 @@ export interface ObservedCatalogMergeInput {
   readonly hasPhysicalComboProvider: boolean;
   readonly includeNativeOpenAi: boolean;
   readonly accountBoundEntries: readonly RawEntry[];
+  readonly keepBareNative?: boolean;
   readonly suppressedBareNativeSlugs?: ReadonlySet<string>;
   readonly policy: ObservedCatalogMergePolicy;
   readonly openaiContextCap?: NativeContextLimitsInput;
@@ -915,6 +916,7 @@ export function mergeCatalogEntriesFromObservedState({
   hasPhysicalComboProvider,
   includeNativeOpenAi,
   accountBoundEntries,
+  keepBareNative = false,
   suppressedBareNativeSlugs = new Set(),
   policy,
   openaiContextCap,
@@ -1273,7 +1275,7 @@ export function mergeCatalogEntriesFromObservedState({
   // clobber a hide flag back to list. Bare ids disable every account clone; qualified ids disable
   // only their generated account row.
   const versionedEntries = applyMultiAgentMode(
-    applyNativeVisibility(mergedEntries, disabledModels, alignedAccountBoundEntries.length > 0, observedNativeSlugs),
+    applyNativeVisibility(mergedEntries, disabledModels, !keepBareNative && alignedAccountBoundEntries.length > 0, observedNativeSlugs),
     multiAgentMode,
     multiAgentV2Enabled,
     { keepNativeChatGptOnV1, preserveDefaultMultiAgentVersion: isReserveCatalogProjection },
@@ -1361,6 +1363,7 @@ export function mergeCatalogEntriesForSync(
     hasPhysicalComboProvider,
     includeNativeOpenAi,
     accountBoundEntries,
+
     suppressedBareNativeSlugs,
     openaiContextCap,
     policy: {
@@ -1894,7 +1897,15 @@ function writeRetainedCatalogSync({
       accountNativeSlugs,
       accountNativeSlugsBySelector,
       reserve,
-    }).filter(entry => trustedAccountBoundNativeCatalogSlug(entry) !== undefined)
+    }).filter(entry => {
+      // Reserve is appended outside the ordinary per-selector roster above, so it also needs
+      // the display preference here. This is not an entitlement or routing gate.
+      const native = trustedAccountBoundNativeCatalogSlug(entry);
+      if (native === undefined) return false;
+      const selector = String(entry.slug).split("/")[0]!;
+      return config.codexAccountPickerModels === undefined
+        || config.codexAccountPickerModels[selector]?.includes(native);
+    })
     : [];
   catalog.models = mergeCatalogEntriesFromObservedState({
     modelPickerOrder,
@@ -1919,6 +1930,7 @@ function writeRetainedCatalogSync({
     hasPhysicalComboProvider,
     includeNativeOpenAi,
     accountBoundEntries,
+    keepBareNative: config.codexAccountPickerModels !== undefined,
     suppressedBareNativeSlugs,
     openaiContextCap,
     nativeDisplayNames: config.providers[OPENAI_CODEX_PROVIDER_ID]?.modelDisplayNames,

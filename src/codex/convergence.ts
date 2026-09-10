@@ -370,6 +370,7 @@ function prepareCatalog(
     hasPhysicalComboProvider,
     includeNativeOpenAi,
     accountBoundEntries,
+    keepBareNative: config.codexAccountPickerModels !== undefined,
     suppressedBareNativeSlugs,
     openaiContextCap,
     nativeDisplayNames: config.providers[OPENAI_CODEX_PROVIDER_ID]?.modelDisplayNames,

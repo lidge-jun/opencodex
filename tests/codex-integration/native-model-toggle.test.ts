@@ -1,3 +1,4 @@
+import { accountBoundNativeOpenAiSlugsBySelector } from "../../src/codex/catalog/metadata";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -898,4 +899,23 @@ describe("#2574 a stale on-disk row is what a subagent reads", () => {
     applyNativeOpenAiContextOverride(row as never, capped);
     expect(row.context_window).toBe(300_000);
   });
+});
+
+
+test("selective account catalog lists only chosen pairs and preserves legacy omission", () => {
+  const config: OcxConfig = makeConfig({
+    codexAccountPickerEnabled: true,
+    codexAccountNamespaces: { main: "@main", side: "stored-side" },
+    codexAccounts: [{ id: "stored-side", email: "side@example.test" }],
+    codexAccountPickerModels: { main: ["gpt-5.5"], side: ["gpt-6-astra"] },
+  });
+  const selected = accountBoundNativeOpenAiSlugsBySelector(config, []);
+  expect(selected.get("main")).toEqual(["gpt-5.5"]);
+  expect(selected.get("side")).toEqual(["gpt-6-astra"]);
+  config.codexAccountPickerModels = {};
+  expect([...accountBoundNativeOpenAiSlugsBySelector(config, []).values()].flat()).toEqual([]);
+  delete config.codexAccountPickerModels;
+  expect(accountBoundNativeOpenAiSlugsBySelector(config, []).get("main")!.length).toBeGreaterThan(1);
+  config.codexAccountPickerEnabled = false;
+  expect(accountBoundNativeOpenAiSlugsBySelector(config, []).size).toBe(0);
 });

@@ -454,7 +454,7 @@ export function shouldIncludeNativeOpenAi(config: Pick<OcxConfig, "providers">):
 
 type AccountSelectorConfig = Pick<
   OcxConfig,
-  "codexAccounts" | "codexAccountNamespaces" | "codexAccountPickerEnabled"
+  "codexAccounts" | "codexAccountNamespaces" | "codexAccountPickerEnabled" | "codexAccountPickerModels"
 >;
 
 function mainAccountSelectors(config: AccountSelectorConfig): string[] {
@@ -466,7 +466,7 @@ function mainAccountSelectors(config: AccountSelectorConfig): string[] {
 /** Native slugs exposed to Claude Desktop show/export/apply (opt-out via claudeCode.desktopNativeModels). */
 export function desktopVisibleNativeSlugs(
   config: Pick<OcxConfig, "claudeCode" | "disabledModels" | "combos" | "providers"
-    | "codexAccounts" | "codexAccountNamespaces" | "codexAccountPickerEnabled">,
+    | "codexAccounts" | "codexAccountNamespaces" | "codexAccountPickerEnabled" | "codexAccountPickerModels">,
 ): string[] {
   if (config.claudeCode?.desktopNativeModels === false) return [];
   const visible = visibleNativeSlugs(config);
@@ -821,7 +821,10 @@ export function accountBoundNativeOpenAiSlugsBySelector(
       if (rows) rows.add(slug);
     }
   }
-  return new Map([...result.entries()].map(([selector, slugs]) => [selector, [...slugs]]));
+  return new Map([...result.entries()].map(([selector, slugs]) => [selector,
+    [...slugs].filter(slug => config.codexAccountPickerModels === undefined
+      || config.codexAccountPickerModels[selector]?.includes(slug)),
+  ]));
 }
 
 /** Unknown native ids observed from Codex, excluding the static release set. */

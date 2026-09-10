@@ -204,7 +204,7 @@ Pool mode routes across main plus added Codex credentials. Key rules:
   routing-profile selector prefixes are exact-case (`src/codex/account-namespaces.ts`,
   `src/codex/account-namespace-match.ts`, `src/routing/profile-namespace.ts`).
 - **Selector labels carry no account-role semantics.** When at least one selector is advertisable,
-  the Codex catalog clones each supported native row per selector and hides the bare picker rows;
+  the legacy Codex catalog clones each supported native row per selector and hides the bare picker rows;
   bare ids remain routable and stay in raw `/v1/models` unless explicitly disabled. Missing stored
   account targets are not advertised, and private account ids never become catalog labels.
   `codexAccountPickerEnabled: false` hides generated rows without deleting exact routing bindings;
@@ -541,3 +541,13 @@ Claude ModelInfo ordering receives optional `{ modelPickerOrder, featured }` aft
 It orders routed output groups after alias deduplication, preserving the collision winner and
 base/1M/Fast siblings. Native groups and explicit Desktop profile ownership are unchanged.
 Native Codex advertisements still follow display priority; private guidance ranks do not freeze them.
+
+
+### Selective account picker
+
+An optional `codexAccountPickerModels` map filters generated account rows per public selector.
+Absent preserves legacy projection; an empty map selects none. In selective mode, catalog sync
+keeps common native rows visible, subject to existing disabled-model and provider gates.
+The Advanced settings secondary customization toggle owns this opt-in. Settings updates use
+the existing persistence rollback and catalog convergence flow. Exact routing and credential
+selection remain independent of this display preference.

@@ -3172,6 +3172,21 @@ test.each(["retained", "convergence"] as const)("%s persists and restores native
     expect((await write({ "gpt-5.6-sol": "Changed Sol" })).find(row => row.slug === "gpt-5.6-sol")?.display_name)
       .toBe("Changed Sol");
     expect(await write()).toEqual(original);
+    config.codexAccountNamespaces = { main: "@main" };
+    config.codexAccountPickerEnabled = true;
+    config.codexAccountPickerModels = { main: ["gpt-5.5"] };
+    const selective = await write();
+    expect(selective.filter(row => row.opencodex_catalog_kind === "account-selector-v1").map(row => row.slug))
+      .toEqual(["main/gpt-5.5"]);
+    expect(selective.find(row => row.slug === "gpt-5.5")?.visibility).toBe("list");
+    config.codexAccountPickerModels = {};
+    const empty = await write();
+    expect(empty.filter(row => row.opencodex_catalog_kind === "account-selector-v1")).toEqual([]);
+    expect(empty.find(row => row.slug === "gpt-5.5")?.visibility).toBe("list");
+    delete config.codexAccountPickerModels;
+    const legacy = await write();
+    expect(legacy.find(row => row.slug === "main/gpt-5.5")?.visibility).toBe("list");
+    expect(legacy.find(row => row.slug === "gpt-5.5")?.visibility).toBe("hide");
     expect(fetchCalls).toBe(0);
   } finally {
     try {
@@ -7453,4 +7468,26 @@ describe("Codex 0.151 catalog contract fields", () => {
       include_apps_usage_instructions: false,
     });
   });
+});
+
+
+test("selective account projection preserves common pool models alongside selected rows", () => {
+  const native = nativeTemplate();
+  const account = { ...native, slug: "main/gpt-5.5", opencodex_catalog_kind: "account-selector-v1" };
+  const selected = mergeObservedForTest({
+    catalogModels: [{ ...native, visibility: "hide" }], routedEntries: [],
+    accountBoundEntries: [account], keepBareNative: true,
+  });
+  expect(selected.find(row => row.slug === "gpt-5.5")?.visibility).toBe("list");
+  expect(selected.find(row => row.slug === "main/gpt-5.5")?.visibility).toBe("list");
+  const legacy = mergeObservedForTest({
+    catalogModels: [native], routedEntries: [], accountBoundEntries: [account],
+  });
+  expect(legacy.find(row => row.slug === "gpt-5.5")?.visibility).toBe("hide");
+  const disabled = mergeObservedForTest({
+    catalogModels: [native], routedEntries: [], accountBoundEntries: [account], keepBareNative: true,
+    disabledModels: new Set(["gpt-5.5"]),
+  });
+  expect(disabled.find(row => row.slug === "gpt-5.5")?.visibility).toBe("hide");
+  expect(disabled.find(row => row.slug === "main/gpt-5.5")?.visibility).toBe("hide");
 });
