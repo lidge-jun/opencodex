@@ -17,11 +17,27 @@
  *   <scopeDir>/.ocx-recovery.json             double-fault marker with a one-line restore
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 /** Verification manifest for a staged (or live) package tree. */
-export function verifyInstallTree(packageDir, expectedVersion) {
+function dependencyPackageDir(packageDir, name) {
+  const candidates = [packageDir];
+  try {
+    const resolved = realpathSync(packageDir);
+    if (!candidates.includes(resolved)) candidates.push(resolved);
+  } catch { /* keep the lexical package path */ }
+  for (const candidate of candidates) {
+    try {
+      const require = createRequire(join(candidate, "package.json"));
+      return dirname(require.resolve(`${name}/package.json`));
+    } catch { /* try the package's realpath before failing closed */ }
+  }
+  return undefined;
+}
+
+function verifyInstallTreeWithDependencyRoot(packageDir, expectedVersion) {
   const failures = [];
   let pkg;
   try {
@@ -41,9 +57,10 @@ export function verifyInstallTree(packageDir, expectedVersion) {
   }
   // The bundled Bun binary is the load-bearing artifact: without it the launcher exits
   // before serving anything, and a boot probe that called this tree healthy would reap
-  // the only backup (review High 3). Size-gate the real binary, not just its package.json.
-  const bunPkgDir = join(packageDir, "node_modules", "bun");
-  if (existsSync(bunPkgDir)) {
+  // the only backup (review High 3). Resolve the dependency exactly as the launcher does,
+  // rather than assuming npm's nested tree or pnpm's current virtual-store directory.
+  const bunPkgDir = dependencyPackageDir(packageDir, "bun");
+  if (bunPkgDir) {
     const bunBinary = findLargestFile(bunPkgDir);
     if (!bunBinary || bunBinary.size < 10 * 1024 * 1024) {
       failures.push("bundled Bun binary missing or truncated (< 10MB)");
@@ -56,10 +73,22 @@ export function verifyInstallTree(packageDir, expectedVersion) {
     ? deps.filter(name => name === "bun" || name === "zod")
     : deps.slice(0, 2);
   for (const name of sentinels) {
-    const depPkg = join(packageDir, "node_modules", ...name.split("/"), "package.json");
-    if (!existsSync(depPkg)) failures.push("sentinel dependency missing: " + name);
+    if (!dependencyPackageDir(packageDir, name)) failures.push("sentinel dependency missing: " + name);
   }
   return failures.length === 0 ? { ok: true, failures: [] } : { ok: false, failures };
+}
+
+export function verifyInstallTree(packageDir, expectedVersion) {
+  return verifyInstallTreeWithDependencyRoot(packageDir, expectedVersion);
+}
+
+/**
+ * Verify a package exposed through pnpm's global virtual store. Dependency resolution is
+ * deliberately delegated to Node's package resolver: pnpm 10/11 may use an isolated
+ * virtual store, a custom virtualStoreDir, global virtual-store links, or a hoisted linker.
+ */
+export function verifyPnpmInstallTree(packageDir, expectedVersion) {
+  return verifyInstallTreeWithDependencyRoot(packageDir, expectedVersion);
 }
 
 function stampedName(prefix) {

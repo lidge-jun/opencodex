@@ -11,6 +11,7 @@ Two commands, and every one of them runs any LLM you point it at.</p>
 
 ```bash
 npm install -g @bitkyc08/opencodex
+# Or with pnpm 10.4+: pnpm add -g --allow-build=bun @bitkyc08/opencodex
 ocx start
 ```
 
@@ -82,6 +83,7 @@ account while existing threads stay pinned to the account that started them.
 
 ```bash
 npm install -g @bitkyc08/opencodex   # Node 18+; the Bun runtime is bundled automatically
+# Or with pnpm 10.4+: pnpm add -g --allow-build=bun @bitkyc08/opencodex
 ocx start                         # proxy + dashboard on localhost:10100
 ```
 
@@ -188,6 +190,7 @@ they reach the npm package.
 
 ```bash
 npm install -g @bitkyc08/opencodex
+# Or with pnpm 10.4+: pnpm add -g --allow-build=bun @bitkyc08/opencodex
 ocx start     # or `ocx service`
 ocx init      # interactive setup: writes ~/.opencodex/config.json and wires Codex
 ```
@@ -211,9 +214,9 @@ when it is unreachable). `ocx status` / `ocx doctor` / `ocx health` report the r
 | Linux (x64 / arm64) | Fully supported | systemd (user unit) |
 | Windows (x64) | Fully supported | Task Scheduler (hidden) / opt-in native service (`--native`, WinSW) |
 
-Requires [Node](https://nodejs.org) 18+. The Bun runtime is bundled on `npm install` — no separate
-Bun install needed, no WSL needed on Windows. If npm blocked the bundled runtime's install scripts,
-see the [installation docs](https://opencodex.me/getting-started/installation/).
+Requires [Node](https://nodejs.org) 18+. The Bun runtime is bundled on npm or pnpm install — no
+separate Bun install needed, no WSL needed on Windows. If npm blocked the bundled runtime's install
+scripts, see the [installation docs](https://opencodex.me/getting-started/installation/).
 
 ## Highlights
 

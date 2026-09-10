@@ -14,6 +14,7 @@ Install the published package and confirm that `ocx` is on `PATH`:
 
 ```bash
 npm install -g @bitkyc08/opencodex
+# Or with pnpm 10.4+: pnpm add -g --allow-build=bun @bitkyc08/opencodex
 ocx --version
 ```
 

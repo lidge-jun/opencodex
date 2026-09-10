@@ -535,14 +535,17 @@ package registry or install an update.
 
 ### `ocx update [--tag latest|preview]`
 
-Self-update opencodex from npm. Stable installs use `@latest`; preview installs stay on `@preview`
+Self-update opencodex through the package manager that installed it. npm and pnpm installs use
+their native global update paths; pnpm verifies the active global group and rolls back through pnpm
+if the new package is incomplete. Stable installs use `@latest`; preview installs stay on `@preview`
 unless you pass `--tag latest|preview`. It detects a source checkout and tells you to
 `git pull && bun install` instead, and is a no-op if you are already on the newest version for that
 tag. Before stopping anything, npm installations run a bounded Unix cache ownership and access
-check. Nested symlinks are checked with `lstat` but not followed; Windows explicitly skips this
-Unix-only check. A failure aborts while the tray and proxy are still running. A running proxy is
-then stopped before files are replaced; an installed service is rebuilt and started automatically,
-while a foreground installation prints `ocx start` as the next step. Dashboard update records
+check; pnpm installations verify the active global package before mutation. Nested symlinks are
+checked with `lstat` but not followed; Windows explicitly skips this Unix-only check. A failure
+aborts while the tray and proxy are still running. A running proxy is then stopped before files
+are replaced; an installed service is rebuilt and started automatically, while a foreground
+installation prints an exact active-launcher command as the next step. Dashboard update records
 redact profile/cache paths and UID/GID values before they are persisted.
 
 ```bash

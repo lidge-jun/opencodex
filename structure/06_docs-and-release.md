@@ -69,11 +69,11 @@ Those controls still have no owner, so there is no image-publish workflow or off
 
 [Decision Log]
 - 목적과 의도: Prevent a failed npm replacement from making the Task Scheduler wrapper retry missing package files forever.
-- 기존 구현 및 제약 조건: The wrapper deliberately restarts a proxy after runtime crashes, but an absent baked Bun or CLI path cannot recover inside that process. Current updater preflight and stop-first behavior reduce replacement risk but do not provide a transactional restore of npm's package tree and global launchers.
-- 검토한 주요 대안: Keep unconditional five-second retries, add a generic crash ceiling, restore npm directories in-place, or classify only proven missing executable paths as terminal.
+- 기존 구현 및 제약 조건: The wrapper deliberately restarts a proxy after runtime crashes, but an absent baked Bun or CLI path cannot recover inside that process. npm and pnpm own different global layouts, so each updater path must preserve the manager's launcher and package-tree invariants.
+- 검토한 주요 대안: Keep unconditional five-second retries, add a generic crash ceiling, restore manager-owned directories in-place, or classify only proven missing executable paths as terminal.
 - 선택한 방식: Check the baked Bun and CLI paths before every spawn; log one actionable incomplete-install message and exit with code 3 when either is absent. Preserve the existing retry loop for a child that actually launched and then failed.
-- 다른 대안 대신 이 방식을 선택한 이유: A generic retry ceiling can stop a service after unrelated intermittent crashes, while copying a package directory without matching npm shims, ownership, and lock guarantees is not a safe rollback.
-- 장점, 단점 및 영향: File-less package skeletons no longer produce unbounded service logs or restart churn. The wrapper still recovers ordinary proxy crashes, but repairing an incomplete npm install remains an explicit reinstall plus `ocx service repair` operation until a verified staged-update design exists.
+- 다른 대안 대신 이 방식을 선택한 이유: A generic retry ceiling can stop a service after unrelated intermittent crashes, while copying a package directory without matching manager shims, ownership, and lock guarantees is not a safe rollback. npm therefore keeps its staged tree swap; pnpm changes its active global group through pnpm itself.
+- 장점, 단점 및 영향: File-less package skeletons no longer produce unbounded service logs or restart churn. The wrapper recovers ordinary proxy crashes, npm updates retain their staged rollback, and pnpm updates verify and manager-natively restore an incomplete global group.
 
 ## GitHub workflow map
 
@@ -179,21 +179,25 @@ npm dependency (esbuild-style: a tiny main package plus platform-specific `@oven
 Invariants:
 
 - `bin/ocx.mjs` resolves the bundled binary via `require.resolve("bun/package.json")` and a size gate
-  (`>= 1 MB`) that rejects the ~450-byte placeholder stub left by `--ignore-scripts`/pnpm; it then
+  (`>= 1 MB`) that rejects the ~450-byte placeholder stub left by `--ignore-scripts` or an
+  unapproved pnpm build; it then
   lazy-runs `install.js` and execs `src/cli/index.ts` under Bun, propagating exit code and signal.
 - `package.json` carries `"trustedDependencies": ["bun"]` so `bun install` runs the dependency's
   postinstall, and `"engines": { "node": ">=18" }` (Bun is no longer a user prerequisite).
 - The plain-Node launcher owns `OPENCODEX_BUN_PATH` selection before Bun can load project dotenv and
   stamps the chosen source/path pair. `src/service.ts` and `src/codex/shim.ts` bake that already-
-  selected executable (normally the bundled binary, stable under the npm global prefix) into
+  selected executable (normally the bundled binary, stable under the manager's global package
+  directory) into
   launchd/systemd/Task Scheduler and the Codex autostart shim. Bun-side code never re-selects a
   durable executable from the post-dotenv environment.
-- Public docs (root READMEs + `docs-site` installation pages, all locales) state Node 18+ as the only
-  prerequisite. Do not reintroduce "install Bun first" / "bun must be on PATH" guidance for npm users.
+- Public docs (root READMEs and the maintained English `docs-site` installation pages) state Node 18+ as the only
+  prerequisite. Do not reintroduce "install Bun first" / "bun must be on PATH" guidance for
+  published-package users.
 
 ## Release workflow
 
-Package release is npm-focused. `package.json` exposes `opencodex` and `ocx`, `prepublishOnly` runs
+Package publication is npm-focused, while the published package supports both npm and pnpm global
+installs. `package.json` exposes `opencodex` and `ocx`, `prepublishOnly` runs
 typecheck and GUI build. `scripts/release.ts` accepts either an explicit version or
 `--bump patch|minor|major`; the stable and preview channels use separate resolvers in
 `scripts/version-line.ts`. It runs local typecheck, `bun test --isolate tests`, and
