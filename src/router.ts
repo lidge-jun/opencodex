@@ -744,7 +744,10 @@ function routeModelInternal(
       // The selected target is already a concrete provider/model reference. Resolve it without
       // consulting combo aliases again, otherwise an alias that shadows the target can recurse.
       const routed = routeModelInternal(config, concrete, true, undefined, false, sharedRedirectState);
-      return { ...routed, combo, routeKind: "combo" as const, routeReason: "combo-pick" };
+      const routeReason = routed.routeReason === "blocked-model-redirect"
+        ? "blocked-model-redirect"
+        : "combo-pick";
+      return { ...routed, combo, routeKind: "combo" as const, routeReason };
     }
   }
 
@@ -899,7 +902,11 @@ function routeModelInternal(
   }
   if (aliasMatches[0]) {
     const match = aliasMatches[0];
-    const effectiveAliasRedirect = resolveBlockedModelRedirectChain(config, match.model, sharedRedirectState);
+    const providerQualifiedKey = `${match.provider}/${match.model}`;
+    const qualifiedRedirect = resolveBlockedModelRedirectChain(config, providerQualifiedKey, sharedRedirectState);
+    const effectiveAliasRedirect = qualifiedRedirect.redirected
+      ? qualifiedRedirect
+      : resolveBlockedModelRedirectChain(config, match.model, sharedRedirectState);
     if (effectiveAliasRedirect.redirected) {
       const targetRoute = routeModelInternal(
         config,

@@ -1134,6 +1134,107 @@ describe("routeModel blocked model redirect", () => {
     expect(() => routeModel(config, "start-model")).toThrow(/exceeded maximum redirect depth \(5\)/i);
   });
 
+  test("preserves blocked-model-redirect reason when combo physical target is redirected across providers", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "openai",
+      blockedModelRedirects: {
+        "openai/m1": "google-antigravity/gemini-3.8-flash-high",
+      },
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          models: ["m1"],
+        },
+        "google-antigravity": {
+          adapter: "google-antigravity",
+          baseUrl: "https://autopush-alkalimakersuite.sandbox.googleapis.com",
+          models: ["gemini-3.8-flash-high"],
+        },
+      },
+      combos: {
+        "combo-fast": {
+          alias: "combo-fast",
+          strategy: "failover",
+          targets: [{ provider: "openai", model: "m1" }],
+        },
+      },
+    };
+
+    const routed = routeModel(config, "combo-fast");
+    expect(routed).toMatchObject({
+      routeKind: "combo",
+      routeReason: "blocked-model-redirect",
+      providerName: "google-antigravity",
+      modelId: "gemini-3.8-flash-high",
+    });
+  });
+
+  test("resolves provider-qualified key before bare model when bare alias matches", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "openai",
+      blockedModelRedirects: {
+        "openai/m1": "google-antigravity/gemini-3.8-flash-high",
+      },
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          models: ["m1"],
+          modelAliases: {
+            m1: "fast-alias",
+          },
+        },
+        "google-antigravity": {
+          adapter: "google-antigravity",
+          baseUrl: "https://autopush-alkalimakersuite.sandbox.googleapis.com",
+          models: ["gemini-3.8-flash-high"],
+        },
+      },
+    };
+
+    const routed = routeModel(config, "fast-alias");
+    expect(routed).toMatchObject({
+      routeReason: "blocked-model-redirect",
+      providerName: "google-antigravity",
+      modelId: "gemini-3.8-flash-high",
+    });
+  });
+
+  test("falls back to bare model redirect when bare alias matches and no qualified key exists", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "openai",
+      blockedModelRedirects: {
+        "m1": "google-antigravity/gemini-3.8-flash-high",
+      },
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          models: ["m1"],
+          modelAliases: {
+            m1: "fast-alias",
+          },
+        },
+        "google-antigravity": {
+          adapter: "google-antigravity",
+          baseUrl: "https://autopush-alkalimakersuite.sandbox.googleapis.com",
+          models: ["gemini-3.8-flash-high"],
+        },
+      },
+    };
+
+    const routed = routeModel(config, "fast-alias");
+    expect(routed).toMatchObject({
+      routeReason: "blocked-model-redirect",
+      providerName: "google-antigravity",
+      modelId: "gemini-3.8-flash-high",
+    });
+  });
+
   test("aligns routeDecision.selected when policy candidate is redirected across providers", () => {
     const config: OcxConfig = {
       port: 10100,
