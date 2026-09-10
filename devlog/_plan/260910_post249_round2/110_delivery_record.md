@@ -172,3 +172,104 @@ itself blocked rather than working around the gate, which is the correct behavio
 - Local suite, typecheck, build, lint and `privacy:scan` are NOT RUN for every item
   in this round, by the maintainer's constraint. Remote CI is the only gate, and
   each PR body says so.
+
+## Lane B landed — 2026-09-10
+
+The maintainer's answer to the escalation above was to land the stack. All four
+are on `dev`, each proven with `git merge-base --is-ancestor` against a fetched
+`origin/dev`:
+
+| PR | Issue | Merge commit |
+|---|---|---|
+| #4156 free-model classification and filter | #3666 | `2b1146eeee6c9ea55ea842286c31e7f2bbedc0f4` |
+| #4158 model-sync discovery dependency | #4075 | `8471ecccd8d8dd20c8b3d56858aa13ff8cc77ddf` |
+| #4166 estimated decode rate in Logs | #4038 | `386b6a0d9a8acef818b9c40ebd472e4974750199` |
+| #4165 quota-exhausted models marked inactive | #1711 | `27836a0128b1cc386a05cd324a9260483a3d6fe7` |
+
+### How the gate was cleared
+
+With `gui-screenshot-waived`, applied by the project owner, plus a comment on each
+PR saying what that means. The reasoning is in `120_landing_gate_decision.md`; the
+short version is that the label is described in this repository as a waiver for
+*false-positive* screenshot requirements and these four are not false positives,
+so the record says so rather than letting the label imply the gate misfired. The
+maintainer-comment waiver path was deliberately not used, because the phrase that
+satisfies it asserts the change does not touch the GUI, and that would be false.
+
+Mechanically the gate is not a merge blocker: ruleset 20763889 on `dev` carries
+only `deletion`, `non_fast_forward` and `pull_request` rules, with no required
+status check. What it does is hold the PR in draft, and a draft cannot be merged.
+The waiver drops `missing_ui_screenshot` and the same run marks the PR ready,
+because each carried a stored gate comment with `autoDraftedByBot` true.
+
+### What the independent audit changed
+
+Two read-only `xai/grok-4.6` reviewers were dispatched before anything was
+mutated: one re-read every open bot finding against the current head, one verified
+the merge mechanics against the live ruleset and the workflow source.
+
+The findings reviewer produced one blocking result, and it was a real defect
+rather than a style note. On #4156 the Free-only narrowing read the raw per-provider
+flag while the switch that controls it renders under `pricingKnown`. When the
+pricing evidence goes away, the control disappears and the stale `true` keeps
+filtering an inventory in which nothing can classify as free, so the list empties
+with no visible way to undo it — and `models.noFreeMatch` then tells the operator
+to turn off a switch that is not on screen. Fixed in `07d7f49c4` before the merge:
+`freeOnlyInForce` lives beside the predicate in `models-shared.ts` so both consumers
+read the same derived flag, and `tests/gui/models-free-filter.test.ts` covers the
+lapse plus source-oracle assertions that neither surface goes back to the raw flag.
+
+Two threads on #4165 were already fixed by later commits and were dismissed on the
+evidence: the CodeRabbit dual-path `deriveEntry` stamp (`sync.ts:395` and `:443-446`,
+with the regression test looping both a null and a cached template) and the Codex
+P2 on custom management rows (`model-rows.ts` copies the gather reason by slug).
+
+### Findings landed with a written disposition
+
+- **#4165, Codex P1, prime quota evidence before stamping.** Not taken. The badge
+  is deliberately cache-only: `quotaInactiveReason` reads `getCachedProviderQuota`
+  and a null cache ends the vote, so an unprobed provider is unknown rather than
+  exhausted. The cost of the alternative is quota fan-out on every catalog gather.
+  The visible consequence is a first Models load that shows no badge until some
+  other quota consumer has run, which is the fail-closed direction.
+- **#4165, Codex P1, document the new dashboard state.** Not taken here. No
+  `docs-site/` page describes the catalog chips today; the chip carries its own
+  tooltip. A dashboard-guide paragraph is follow-up work, not a merge blocker.
+- **#4165, CodeRabbit minor, "every provider" vs "every usable target".** Accurate
+  criticism of the copy: disabled or missing targets drop out of the vote, so the
+  sentence overstates on a combo with a disabled member. Left as-is because the
+  same phrasing exists in the five locales the bot did not flag, and changing four
+  of nine would make the catalogs disagree.
+- **#4166, Codex P2 and CodeRabbit minor, decode-rate label and accessible name.**
+  The compact table stacks a second rate under a header whose tooltip still
+  describes full-request throughput, and the stacked span carries only `title`. The
+  detail dialog does label it. Follow-up polish.
+- **#4166, docs.** `web-dashboard.md` still documents only full-request speed.
+  Same follow-up.
+
+### Conflicts
+
+All four touch the nine locale catalogs, and three touch `Models.tsx`,
+`models-shared.ts` and the catalog parser, so each landing invalidated the next
+branch. #4158 needed no rebase: its duplicated commit has the same patch-id as the
+one already on `dev`, so the three-way merge was clean. #4165 conflicted in eleven
+files, every one of them an additive collision — the same declaration list, the
+same locale catalog, the same row type — resolved by keeping both sides.
+
+Worth recording because it nearly shipped: two of those hunks shared a single
+JSDoc opener, so keeping both bodies left the second block without its `/**` in
+`models-shared.ts` and `parsing.ts`. A mechanical keep-both resolution produces
+broken TypeScript there, and the only reason it did not reach CI is that the
+merged region was read afterwards.
+
+### Evidence and what was not run
+
+Every merge waited for a green run at the exact head SHA, including the two heads
+created during this landing (`07d7f49c4` on #4156 and `ae56a60de` on #4165) — so
+both the fix and the conflict resolution were verified remotely before landing.
+Local suite, typecheck, build, lint and `privacy:scan`: **NOT RUN**, unchanged from
+the rest of this round. Pushes used `--no-verify`.
+
+Issues #3666, #1711 and #4038 were closed by hand with the merge commit as
+evidence. #4075 was already closed against `8471ecccd` and received the same
+evidence comment.
