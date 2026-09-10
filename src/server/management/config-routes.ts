@@ -468,9 +468,14 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       return jsonResponse({ error: "codexAccountPickerModels must map public account selectors to arrays of bare native model ids" }, 400);
     }
     if (body.codexAccountPickerModels !== undefined && body.codexAccountPickerModels !== null) {
-      const available = new Set(accountPickerSettings(config).codexAccountPickerOptions.map(option => option.selector));
+      const available = new Map(accountPickerSettings(config).codexAccountPickerOptions
+        .map(option => [option.selector, new Set(option.models)]));
       if (Object.keys(body.codexAccountPickerModels as Record<string, string[]>).some(selector => !available.has(selector))) {
         return jsonResponse({ error: "Unknown Codex account selector" }, 400);
+      }
+      if (Object.entries(body.codexAccountPickerModels as Record<string, string[]>)
+        .some(([selector, models]) => models.some(model => !available.get(selector)?.has(model)))) {
+        return jsonResponse({ error: "Model is not available for this Codex account selector" }, 400);
       }
     }
     if (body.showCodexSparkQuota !== undefined && typeof body.showCodexSparkQuota !== "boolean") {

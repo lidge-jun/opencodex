@@ -1889,7 +1889,7 @@ export const ru: Record<TKey, string> = {
   "codexAuth.accountPickerRefreshFailed": "Не удалось обновить эту настройку. По-прежнему показано последнее подтверждённое значение.",
   "codexAuth.accountPickerCustomizeTitle": "Настроить модели для каждого аккаунта",
   "codexAuth.accountPickerCustomizeOffDesc": "Сейчас каждый селектор аккаунта показывает все доступные модели, как и до появления этой настройки.",
-  "codexAuth.accountPickerCustomizeOnDesc": "Выберите ниже, какие модели показывать под каждым селектором аккаунта. Модели общего пула по-прежнему видны везде.",
+  "codexAuth.accountPickerCustomizeOnDesc": "Выберите ниже, какие модели показывать под каждым селектором аккаунта. Модели общего пула по-прежнему видны в списке моделей.",
   "codexAuth.accountPickerCustomizeUpdated": "Настройка моделей для каждого аккаунта обновлена.",
   "codexAuth.accountPickerCustomizeUpdateFailed": "Не удалось обновить настройку моделей для каждого аккаунта. Показана последняя подтверждённая настройка.",
   "codexAuth.accountPickerModelsCommonNote": "Независимо от выбора ниже, модели общего пула остаются видны в списке.",

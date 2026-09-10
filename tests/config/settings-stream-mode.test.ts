@@ -679,6 +679,31 @@ describe("selective account model settings", () => {
     },
   );
 
+  test("rejects an unavailable model on a known selector before any mutation", async () => {
+    const config = baseConfig();
+    config.codexAccountNamespaces = { main: "@main" };
+    config.codexAccountPickerEnabled = true;
+    config.codexAccountPickerModels = { main: ["gpt-5.5"] };
+    saveConfig(config);
+    const stored = readFileSync(getConfigPath(), "utf-8");
+    let writes = 0;
+    let convergences = 0;
+    const response = await putSettings(config, {
+      codexAccountPickerModels: { main: ["gpt-5.5", "gpt-not-real"] },
+      codexAccountPickerEnabled: false,
+    }, {
+      saveConfigPreservingClaudeCode: () => { writes++; },
+      createManagementConvergeCodex: catalogConvergenceFactory(() => { convergences++; }),
+    });
+    expect(response!.status).toBe(400);
+    expect(await response!.json()).toEqual({ error: "Model is not available for this Codex account selector" });
+    expect(writes).toBe(0);
+    expect(convergences).toBe(0);
+    expect(config.codexAccountPickerModels).toEqual({ main: ["gpt-5.5"] });
+    expect(config.codexAccountPickerEnabled).toBe(true);
+    expect(readFileSync(getConfigPath(), "utf-8")).toBe(stored);
+  });
+
   test("failed persistence restores selection and original switch state", async () => {
     const config = baseConfig();
     const previous = { main: ["gpt-5.5"] };
