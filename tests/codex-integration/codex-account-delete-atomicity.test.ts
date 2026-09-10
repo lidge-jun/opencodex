@@ -30,6 +30,8 @@ import {
 } from "../../src/codex/quota";
 import { getConfigPath, loadConfig, saveConfig } from "../../src/config";
 import * as configModule from "../../src/config";
+import { setCodexAccountAutoSwitchThresholdOverride } from "../../src/codex/account-auto-switch";
+import { prepareConfigObjectChildDeletionRebase } from "../../src/config/rebase-provenance";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -77,6 +79,47 @@ afterEach(() => {
 });
 
 describe("Codex account delete persistence ordering", () => {
+  test.each([
+    [undefined, false], [undefined, true], [65, false], [65, true],
+  ] as const)("failed deletion preserves later threshold edits (override=%s, prior reset=%s)", (threshold, priorReset) => {
+    const seeded = seededConfig();
+    seeded.codexAccountAutoSwitchThresholds = {
+      other: 30, ...(threshold === undefined ? {} : { [ACCOUNT_ID]: threshold }),
+    };
+    saveConfig(seeded);
+    const config = loadConfig();
+    configModule.armClaudeCodeBaseline(config);
+    configModule.deleteConfigTopLevelKey(config, "injectionPrompt");
+    if (priorReset) setCodexAccountAutoSwitchThresholdOverride(config, "other", null);
+    const before = structuredClone(config);
+    const diskBefore = readFileSync(getConfigPath(), "utf8");
+    const saveSpy = spyOn(configModule, "saveConfigPreservingClaudeCode")
+      .mockImplementation(candidate => {
+        prepareConfigObjectChildDeletionRebase(candidate);
+        throw new Error("forced pre-write failure");
+      });
+    try {
+      expect(() => deleteCodexAccount(config, ACCOUNT_ID)).toThrow("forced pre-write failure");
+      expect(config).toEqual(before);
+      expect(readFileSync(getConfigPath(), "utf8")).toBe(diskBefore);
+      expect(getCodexAccountCredential(ACCOUNT_ID)).not.toBeNull();
+    } finally {
+      saveSpy.mockRestore();
+    }
+    writeFileSync(getConfigPath(), JSON.stringify({ ...JSON.parse(diskBefore),
+      codexAccountAutoSwitchThresholds: { [ACCOUNT_ID]: 70, other: 85, sibling: 25 },
+    }));
+    config.upstreamFailoverThreshold = 4;
+    configModule.saveConfigPreservingClaudeCode(config);
+    const expectedThresholds = { [ACCOUNT_ID]: 70, sibling: 25, ...(priorReset ? {} : { other: 85 }) };
+    expect(config.codexAccountAutoSwitchThresholds).toEqual(expectedThresholds);
+    const persisted = loadConfig();
+    expect(persisted.codexAccountAutoSwitchThresholds).toEqual(expectedThresholds);
+    expect(persisted.codexAccounts?.some(account => account.id === ACCOUNT_ID)).toBe(true);
+    expect(persisted.upstreamFailoverThreshold).toBe(4);
+    expect(persisted.configRebaseProvenance).toEqual({ version: 1, deletedTopLevelKeys: ["injectionPrompt"] });
+  });
+
   test("a config persistence failure leaves the account and destructive state intact", () => {
     const config = seededConfig();
     const before = structuredClone(config);

@@ -5,6 +5,7 @@ import {
   saveConfigPreservingClaudeCode,
   withConfigMutationLockSync,
 } from "../config";
+import { captureConfigTopLevelRollback } from "../config/rebase-provenance";
 import { removeCodexAccountCredential } from "./account-store";
 import { clearAccountNeedsReauth } from "./account-runtime-state";
 import { getMainChatgptAccountId, readCodexTokensResult } from "./auth-collision";
@@ -161,6 +162,7 @@ export function deleteCodexAccount(runtimeConfig: OcxConfig, accountId: string):
   let cleanupFailed = false;
   const pickerVisibilityChanged = withConfigMutationLockSync(() => {
     const previousConfig = structuredClone(runtimeConfig);
+    const restoreDeletionProvenance = captureConfigTopLevelRollback(runtimeConfig, []);
     const configPath = getConfigPath();
     const hasPersistedConfig = existsSync(configPath);
     const previousPersistedConfig = hasPersistedConfig ? readFileSync(configPath) : undefined;
@@ -192,10 +194,9 @@ export function deleteCodexAccount(runtimeConfig: OcxConfig, accountId: string):
         saveConfigPreservingClaudeCode(runtimeConfig);
       } catch (error) {
         restoreRuntimeConfig(runtimeConfig, previousConfig);
-        // Child-deletion provenance is intentionally left in its WeakMap: restoring the
-        // threshold makes that tombstone self-suppress on the next prepare pass, and the
-        // next successful writer clears it. If removal is retried first, the same intent
-        // is still correct. No failed save can leak the deletion into persisted config.
+        // The value snapshot cannot restore WeakMap-backed deletion intent. Retaining a
+        // rejected reset would erase a later disk override when this account inherited.
+        restoreDeletionProvenance();
         try {
           assertPersistedConfigUnchanged(configPath, previousPersistedConfig);
         } catch {
