@@ -8,7 +8,7 @@ opencodex は Codex アプリにパッチを適用しません。Codex CLI/TUI �
 リリースは renderer 側で追加の remote allowlist を適用し、routed row を picker から除外する
 ことがあります。明示的な `nativeAlias: true` combo が、この上流不具合向けの互換モードです。
 
-OpenAI エントリには、ネイティブ Codex ログインと、名前空間付きの `openai-apikey/<model>` API キーという 2 つの資格情報ルートがあります。`codexAccountMode` だけを Pool と Direct の間で変更しても、ピッカー ID は変わりません。ただし、`codexAccountPickerEnabled` によって account-qualified picker 行が有効で、`codexAccountNamespaces` に対象アカウントが存在する selector がある場合、opencodex は対応するアカウントごとに `<selector>/<native-openai-model>` 行を追加し、ピッカーでは bare native 行を非表示にします。Selector 名はユーザーが決める公開ラベルであり、組み込みのアカウント role の意味はありません。`selector` 付きの行を選択すると、対応付けられたアカウントだけが使用され、アクティブな Pool アカウントは変更されません。対象を利用できない場合、別のアカウントへ切り替えずにリクエストが失敗します。詳しくは [Codex アカウントの明示的な selector](/reference/configuration/routing/#exact-codex-account-selectors) を参照してください。
+OpenAI エントリには、ネイティブ Codex ログインと、名前空間付きの `openai-apikey/<model>` API キーという 2 つの資格情報ルートがあります。`codexAccountMode` だけを Pool と Direct の間で変更しても、ピッカー ID は変わりません。ただし、`codexAccountPickerEnabled` によって account-qualified picker 行が有効で、`codexAccountNamespaces` に対象アカウントが存在する selector がある場合、結果は `codexAccountPickerModels` によって変わります。この map を省略すると、従来の動作として、すべての対応モデルに `<selector>/<native-openai-model>` 行が追加され、ピッカーの bare native 行は非表示になります。map が存在する場合、共通プールの native model は bare 行として表示されたままで、選択したモデルとアカウントの組み合わせだけに qualified 行が追加されます。Selector 名はユーザーが決める公開ラベルであり、組み込みのアカウント role の意味はありません。`selector` 付きの行を選択すると、対応付けられたアカウントだけが使用され、アクティブな Pool アカウントは変更されません。対象を利用できない場合、別のアカウントへ切り替えずにリクエストが失敗します。詳しくは [Codex アカウントの明示的な selector](/reference/configuration/routing/#exact-codex-account-selectors) を参照してください。
 
 `codexAccountNamespaces` map が空の場合、account-qualified picker 行は off です。空でない map で `codexAccountPickerEnabled` を省略すると、後方互換性のため有効として扱われます。`false` にすると、mapping を削除せず、明示的な `<selector>/<native-openai-model>` routing も無効にせずに、生成された qualified 行を非表示にして picker の bare native 行を復元します。
 
@@ -53,7 +53,7 @@ visibility = "list"
 |ルート |ピッカー ID とカタログのメタデータ |
 | --- | --- |
 | Codex ログイン (account-qualified 行が無効) | `gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna` などの bare native id を表示し、`codexAccountMode` に従って Pool または Direct を使用します。GPT-5.6 行のカタログ ウィンドウは 922,000 トークンです。 |
-| Codex ログイン (account-qualified 行が有効で、有効な selector あり) | 有効な selector とサポート対象 native model の各組み合わせに `<selector>/<native-openai-model>` 行を表示します。各行は対応付けられたアカウントだけを使用し、bare native 行はピッカーで非表示になります。Native metadata と context window は保持されます。 |
+| Codex ログイン (account-qualified 行が有効で、有効な selector あり) | `codexAccountPickerModels` を省略すると、各 selector にすべての対応 native model の行が追加され、bare native 行は非表示になります。map が存在する場合、共通プールの native model は bare 行として表示されたままで、選択したモデルと selector の組み合わせだけに qualified 行が追加されます。各 qualified 行は対応付けられたアカウントだけを使用します。Native metadata と context window は保持されます。 |
 | OpenAI (API キー) |正確に 8 つの名前空間行: `gpt-5.5`、`gpt-5.6`、Sol/Terra/Luna、および 3 つの `*-pro` 仮想 ID (コンテキスト 922,000、8 つすべての最大入力 922,000) |
 |オープンルーター | `openrouter/openai/gpt-5.6-sol`、`openrouter/openai/gpt-5.6-terra`、`openrouter/openai/gpt-5.6-luna` (922,000) |
 | Cursor | 静的フォールバックには `cursor/gpt-5.6-sol`、`cursor/gpt-5.6-terra`、`cursor/gpt-5.6-luna` (1,000,000) と、Grok 4.5 / 4.6 の通常・Fast 行 (500,000) が含まれます。4.6 は `xhigh` も公開し、ライブアカウントの検出によって表示される行が決まります。 |

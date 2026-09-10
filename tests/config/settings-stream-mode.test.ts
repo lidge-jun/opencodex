@@ -307,6 +307,7 @@ describe("PUT /api/settings", () => {
     const config = baseConfig();
     const res = await putSettings(config, {});
     expect(res!.status).toBe(400);
+    expect((await res!.json()).error).toContain("codexAccountPickerModels");
   });
 
   test.each([[null], [[]], ["settings"], [42]] as const)(
@@ -778,4 +779,25 @@ test("saving after account removal prunes stale choices, including a restored dr
   }
   const response = await putSettings(config, { codexAccountPickerModels: { unknown: ["gpt-5.5"] } }, deps);
   expect(response!.status).toBe(400);
+});
+
+
+test("eligible Reserve is selectable only for main-account bindings", async () => {
+  const config = baseConfig();
+  config.codexAccountPickerEnabled = true;
+  config.codexDesktopAuthless = true;
+  config.codexAccountNamespaces = { main: "@main", side: "pool-side" };
+  config.codexAccounts = [{ id: "pool-side", email: "side@example.test" }];
+  const options = (await (await getSettings(config))!.json()).codexAccountPickerOptions;
+  expect(options.find((row: { selector: string }) => row.selector === "main").models).toContain("gpt-reserve");
+  expect(options.find((row: { selector: string }) => row.selector === "side").models).not.toContain("gpt-reserve");
+  const deps: ManagementApiDeps = { saveConfigPreservingClaudeCode: saveConfig, createManagementConvergeCodex: catalogConvergenceFactory(() => {}) };
+  expect((await putSettings(config, { codexAccountPickerModels: { main: ["gpt-reserve"] } }, deps))!.status).toBe(200);
+  expect(loadConfig().codexAccountPickerModels).toEqual({ main: ["gpt-reserve"] });
+  expect((await putSettings(config, { codexAccountPickerModels: { side: ["gpt-reserve"] } }, deps))!.status).toBe(400);
+  config.codexDesktopAuthless = false;
+  expect((await putSettings(config, { codexAccountPickerModels: { main: ["gpt-reserve"] } }, deps))!.status).toBe(400);
+  expect((await putSettings(config, { codexDesktopAuthless: true, codexAccountPickerModels: { main: ["gpt-reserve"] } }, deps))!.status).toBe(200);
+  config.runtimeRole = "client";
+  expect((await putSettings(config, { codexAccountPickerModels: { main: ["gpt-reserve"] } }, deps))!.status).toBe(400);
 });

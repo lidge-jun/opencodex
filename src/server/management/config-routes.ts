@@ -1,3 +1,6 @@
+import { isEffectiveCodexDesktopAuthless } from "../../codex/loopback-target";
+import { codexAccountNamespaceEntries, isMainCodexAccountTarget } from "../../codex/account-namespaces";
+import { NATIVE_RESERVE_MODEL } from "../../codex/catalog/native-models";
 import { isCodexAccountPickerModels } from "../../config/codex-account-picker";
 import { accountBoundNativeOpenAiSlugsBySelector } from "../../codex/catalog/metadata";
 import type { IntegrationClientId } from "../../integrations/registry";
@@ -184,10 +187,16 @@ function accountPickerSettings(config: OcxConfig) {
   const choices = { ...config, codexAccountPickerEnabled: true };
   delete choices.codexAccountPickerModels;
   // Catalog candidates are display choices, not proof of upstream account entitlement.
+  const targets = new Map(codexAccountNamespaceEntries(choices));
   return {
     codexAccountPickerModels: config.codexAccountPickerModels ?? null,
     codexAccountPickerOptions: [...accountBoundNativeOpenAiSlugsBySelector(choices)]
-      .map(([selector, models]) => ({ selector, models })),
+      .map(([selector, models]) => ({
+        selector,
+        models: isEffectiveCodexDesktopAuthless(choices) && isMainCodexAccountTarget(targets.get(selector) ?? "")
+          ? [...models, NATIVE_RESERVE_MODEL]
+          : models,
+      })),
   };
 }
 
@@ -450,7 +459,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       && body.codexMainAccountHardLock === undefined
       && body.codexDesktopAuthless === undefined
       && body.codexClientCompaction === undefined) {
-      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, showCodexSparkQuota, ultraFastTier, codexMainAccountHardLock, codexDesktopAuthless, or codexClientCompaction" }, 400);
+      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexAccountPickerModels, codexQuotaAutoRefresh, oauthOpenBrowser, showCodexSparkQuota, ultraFastTier, codexMainAccountHardLock, codexDesktopAuthless, or codexClientCompaction" }, 400);
     }
     if (body.codexAutoStart !== undefined && typeof body.codexAutoStart !== "boolean") {
       return jsonResponse({ error: "codexAutoStart boolean is required" }, 400);
@@ -472,6 +481,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     let initializedPickerNamespaces: OcxConfig["codexAccountNamespaces"];
     if (body.codexAccountPickerModels !== undefined && body.codexAccountPickerModels !== null) {
       const choices = { ...config };
+      if (typeof body.codexDesktopAuthless === "boolean") choices.codexDesktopAuthless = body.codexDesktopAuthless;
       if (body.codexAccountPickerEnabled === true) {
         choices.codexAccountPickerEnabled = true;
         if (initializeDefaultCodexAccountNamespaces(choices)) {

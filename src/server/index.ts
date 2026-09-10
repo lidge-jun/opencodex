@@ -1592,7 +1592,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             models: applyNativeVisibility(
               entries,
               disabledModels,
-              accountSelectors.length > 0,
+              accountSelectors.length > 0 && config.codexAccountPickerModels === undefined,
               new Set(accountNativeSlugs),
             ),
           }, 200, req, policy);
