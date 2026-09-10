@@ -2906,7 +2906,8 @@ function keyQuotaReaderForProvider(name: string, provider: OcxProviderConfig): K
   if (name === "deepseek" && isCanonicalDeepSeekBaseUrl(provider.baseUrl)) return fetchDeepSeekQuota;
   if (name === "cline-pass" && isCanonicalClineBaseUrl(provider.baseUrl)) return fetchClineQuota;
   if (isCanonicalOllamaCloudBaseUrl(provider.baseUrl ?? getProviderRegistryEntry(name)?.baseUrl)) return fetchOllamaCloudQuota;
-  if (["zai", "glm", "glm-cn", "zhipu-bigmodel-coding"].includes(name) && isCanonicalZaiBaseUrl(provider.baseUrl)) return fetchZaiQuota;
+  // The domestic Responses preset uses the same Coding Plan monitor, not model discovery.
+  if (["zai", "glm", "glm-cn", "zhipu-bigmodel-coding", "zhipu-bigmodel-responses"].includes(name) && isCanonicalZaiBaseUrl(provider.baseUrl)) return fetchZaiQuota;
   if (["minimax", "minimax-cn"].includes(name) && isCanonicalMinimaxBaseUrl(provider.baseUrl)) return fetchMinimaxQuota;
   if (name === "moonshot" && isCanonicalMoonshotBaseUrl(provider.baseUrl)) return fetchMoonshotQuota;
   if (name === "venice" && isCanonicalVeniceBaseUrl(provider.baseUrl)) return fetchVeniceQuota;

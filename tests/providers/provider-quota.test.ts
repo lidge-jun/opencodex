@@ -1077,12 +1077,12 @@ describe("fetchProviderQuotaReports", () => {
     expect(seen[0]?.url).toBe("https://api.z.ai/api/monitor/usage/quota/limit");
   });
 
-  test("Z.AI quota probes the BigModel Responses endpoint at /api/v1", async () => {
-    const seen: Array<{ url: string; authorization?: string }> = [];
+  test.each(["zhipu-bigmodel-coding", "zhipu-bigmodel-responses"])("Z.AI quota probes BigModel /api/v1 for %s", async name => {
+    const seen: Array<{ url: string; authorization?: string; redirect?: RequestRedirect }> = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const headers = init?.headers as Record<string, string> | undefined;
-      seen.push({ url, authorization: headers?.Authorization });
+      seen.push({ url, authorization: headers?.Authorization, redirect: init?.redirect });
       return new Response(JSON.stringify({
         success: true,
         data: {
@@ -1095,10 +1095,9 @@ describe("fetchProviderQuotaReports", () => {
       }), { status: 200 });
     }) as typeof fetch;
 
-    const result = await fetchProviderQuotaReports(
-      keyQuotaConfig("zhipu-bigmodel-coding", "https://open.bigmodel.cn/api/v1", "zai-secret"),
-      true,
-    );
+    const config = keyQuotaConfig(name, "https://open.bigmodel.cn/api/v1", "zai-secret");
+    config.providers[name]!.adapter = name === "zhipu-bigmodel-responses" ? "openai-responses" : "openai-chat";
+    const result = await fetchProviderQuotaReports(config, true);
 
     expect(result.reports).toHaveLength(1);
     expect(result.reports[0]?.source).toBe("zai:quota-limit");
@@ -1110,6 +1109,23 @@ describe("fetchProviderQuotaReports", () => {
     expect(seen).toHaveLength(1);
     expect(seen[0]?.url).toBe("https://open.bigmodel.cn/api/monitor/usage/quota/limit");
     expect(seen[0]?.authorization).toBe("zai-secret");
+    expect(seen[0]?.redirect).toBe("error");
+  });
+
+  test.each([
+    "https://gateway.example.test/api/v1",
+    "https://open.bigmodel.cn/api/paas/v4",
+  ])("BigModel Responses quota does not probe unsupported destination %s", async baseUrl => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response("unexpected", { status: 500 });
+    }) as typeof fetch;
+    const config = keyQuotaConfig("zhipu-bigmodel-responses", baseUrl);
+    config.providers["zhipu-bigmodel-responses"]!.adapter = "openai-responses";
+
+    expect((await fetchProviderQuotaReports(config, true)).reports).toEqual([]);
+    expect(calls).toBe(0);
   });
 
   test("Z.AI quota treats an unsuccessful payload as a no-report", async () => {

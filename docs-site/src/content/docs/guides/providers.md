@@ -764,6 +764,12 @@ Select **Zhipu AI — BigModel Coding Plan (Responses)** (`zhipu-bigmodel-respon
 for the `openai-responses` endpoint `https://open.bigmodel.cn/api/v1`. This is separate
 from `zhipu-bigmodel-coding`, which uses Chat Completions at `/api/coding/paas/v4`.
 
+Both Coding Plan presets use the existing domestic quota monitor with the raw API key
+in `Authorization` and refuse redirects. A custom noncanonical destination remains
+unsupported by that quota probe. Quota-reader support does not expand the Responses
+model roster or establish Flash/model-discovery support; those require separate
+endpoint-specific evidence.
+
 The preset uses a **static roster** (`liveModels: false`) taken from the
 [official BigModel Codex example](https://docs.bigmodel.cn/cn/coding-plan/tool/codex.md):
 
