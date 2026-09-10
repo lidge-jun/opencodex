@@ -7,7 +7,11 @@
 import { describe, expect, test } from "bun:test";
 import {
   collectDeclaredNamelessClientCallTypes,
+  collectDeclaredBareWireToolNames,
   collectDeclaredWireToolNames,
+  normalizeDefaultNamespaceInJson,
+  normalizeDefaultNamespaceInPayload,
+  normalizeDefaultNamespaceInResponse,
   collectProviderExecutedCallTypes,
   createUndeclaredToolCallGuardBlockRewrite,
   currentTurnWireToolCatalogBody,
@@ -63,6 +67,7 @@ async function relay(
   upstream: string,
   declared: Iterable<string>,
   declaredNamelessClientCallTypes: Iterable<string> = [],
+  declaredBare?: Iterable<string>,
 ): Promise<string> {
   const budget = createTestTranslatorBudget();
   try {
@@ -71,6 +76,8 @@ async function relay(
       createUndeclaredToolCallGuardBlockRewrite(
         new Set(declared),
         new Set(declaredNamelessClientCallTypes),
+        undefined,
+        declaredBare ? new Set(declaredBare) : undefined,
       ),
       budget,
     ));
@@ -78,6 +85,33 @@ async function relay(
     budget.dispose();
   }
 }
+
+describe("collectDeclaredBareWireToolNames", () => {
+  test("collects top-level bare tools and functions namespace, ignoring other namespaces and flattened/dotted names", () => {
+    const names = collectDeclaredBareWireToolNames({
+      tools: [
+        { type: "function", name: "view_image" },
+        { type: "custom", name: "exec" },
+        { type: "function", name: "foo__tool" },
+        { type: "function", name: "foo.tool" },
+        { type: "namespace", name: "functions", tools: [{ type: "function", name: "shell" }, { type: "function", name: "bar.baz" }] },
+        { type: "namespace", name: "linear", tools: [{ type: "function", name: "create_issue" }] },
+      ],
+      input: [
+        {
+          type: "additional_tools",
+          tools: [{ type: "function", name: "extra_tool" }, { type: "function", name: "pkg__sub" }],
+        },
+      ],
+    });
+    expect([...names].sort()).toEqual(["exec", "extra_tool", "shell", "view_image"]);
+  });
+
+  test("returns empty set for invalid or missing body", () => {
+    expect(collectDeclaredBareWireToolNames(null).size).toBe(0);
+    expect(collectDeclaredBareWireToolNames({}).size).toBe(0);
+  });
+});
 
 describe("collectDeclaredWireToolNames", () => {
   test("reads function, custom, and namespaced tools off the outbound body", () => {
@@ -436,26 +470,105 @@ describe("undeclared tool call guard", () => {
     expect(await relay(upstream, ["linear.create_issue"])).toBe(upstream);
   });
 
-  test("accepts a bare tool call echoed with an invented default. prefix (#4176)", async () => {
+  test("accepts and rewrites dotted default.view_image back to bare view_image in SSE added and done items (#4176)", async () => {
     const outbound = {
       tools: [{ type: "function", name: "view_image" }],
     };
-    const upstream = sse("response.output_item.added", {
+    const declared = collectDeclaredWireToolNames(outbound);
+    const declaredBare = collectDeclaredBareWireToolNames(outbound);
+
+    // output_item.added
+    const upstreamAdded = sse("response.output_item.added", {
       output_index: 0,
       item: { type: "function_call", id: "fc_1", call_id: "call_1", name: "default.view_image", arguments: "{}" },
     });
-    expect(await relay(upstream, collectDeclaredWireToolNames(outbound))).toBe(upstream);
+    const expectedAdded = sse("response.output_item.added", {
+      output_index: 0,
+      item: { type: "function_call", id: "fc_1", call_id: "call_1", name: "view_image", arguments: "{}" },
+    });
+    expect(await relay(upstreamAdded, declared, [], declaredBare)).toBe(expectedAdded);
+
+    // output_item.done with custom args
+    const upstreamDone = sse("response.output_item.done", {
+      output_index: 0,
+      item: { type: "function_call", id: "fc_1", call_id: "call_1", name: "default.view_image", arguments: JSON.stringify({ path: "/tmp/img.png" }) },
+    });
+    const expectedDone = sse("response.output_item.done", {
+      output_index: 0,
+      item: { type: "function_call", id: "fc_1", call_id: "call_1", name: "view_image", arguments: JSON.stringify({ path: "/tmp/img.png" }) },
+    });
+    expect(await relay(upstreamDone, declared, [], declaredBare)).toBe(expectedDone);
+  });
+
+  test("accepts and rewrites namespace: 'default' with bare name back to bare tool (#4176)", async () => {
+    const outbound = {
+      tools: [{ type: "function", name: "view_image" }],
+    };
+    const declared = collectDeclaredWireToolNames(outbound);
+    const declaredBare = collectDeclaredBareWireToolNames(outbound);
+
+    const upstreamAdded = sse("response.output_item.added", {
+      output_index: 0,
+      item: { type: "function_call", id: "fc_1", call_id: "call_1", namespace: "default", name: "view_image", arguments: JSON.stringify({ detail: "high" }) },
+    });
+    const expectedAdded = sse("response.output_item.added", {
+      output_index: 0,
+      item: { type: "function_call", id: "fc_1", call_id: "call_1", name: "view_image", arguments: JSON.stringify({ detail: "high" }) },
+    });
+    expect(await relay(upstreamAdded, declared, [], declaredBare)).toBe(expectedAdded);
+
+    const upstreamDone = sse("response.output_item.done", {
+      output_index: 0,
+      item: { type: "function_call", id: "fc_1", call_id: "call_1", namespace: "default", name: "view_image", arguments: JSON.stringify({ detail: "high" }) },
+    });
+    const expectedDone = sse("response.output_item.done", {
+      output_index: 0,
+      item: { type: "function_call", id: "fc_1", call_id: "call_1", name: "view_image", arguments: JSON.stringify({ detail: "high" }) },
+    });
+    expect(await relay(upstreamDone, declared, [], declaredBare)).toBe(expectedDone);
+  });
+
+  test("rewrites terminal snapshots (completed/incomplete) in SSE streams (#4176)", async () => {
+    const outbound = {
+      tools: [{ type: "function", name: "view_image" }],
+    };
+    const declared = collectDeclaredWireToolNames(outbound);
+    const declaredBare = collectDeclaredBareWireToolNames(outbound);
+
+    const upstreamCompleted = sse("response.completed", {
+      response: {
+        id: "resp_1",
+        status: "completed",
+        output: [
+          { type: "function_call", id: "fc_1", call_id: "call_1", name: "default.view_image", arguments: "{}" },
+          { type: "function_call", id: "fc_2", call_id: "call_2", namespace: "default", name: "view_image", arguments: "{}" },
+        ],
+      },
+    });
+    const expectedCompleted = sse("response.completed", {
+      response: {
+        id: "resp_1",
+        status: "completed",
+        output: [
+          { type: "function_call", id: "fc_1", call_id: "call_1", name: "view_image", arguments: "{}" },
+          { type: "function_call", id: "fc_2", call_id: "call_2", name: "view_image", arguments: "{}" },
+        ],
+      },
+    });
+    expect(await relay(upstreamCompleted, declared, [], declaredBare)).toBe(expectedCompleted);
   });
 
   test("does not rewrite default.view_image to bare when default.view_image is explicitly declared (#4176)", async () => {
     const outbound = {
       tools: [{ type: "function", name: "view_image" }, { type: "function", name: "default.view_image" }],
     };
+    const declared = collectDeclaredWireToolNames(outbound);
+    const declaredBare = collectDeclaredBareWireToolNames(outbound);
     const upstream = sse("response.output_item.added", {
       output_index: 0,
       item: { type: "function_call", id: "fc_1", call_id: "call_1", name: "default.view_image", arguments: "{}" },
     });
-    expect(await relay(upstream, collectDeclaredWireToolNames(outbound))).toBe(upstream);
+    expect(await relay(upstream, declared, [], declaredBare)).toBe(upstream);
   });
 
   test("preserves namespaced default__view_image over bare normalization (#4176)", async () => {
@@ -465,23 +578,101 @@ describe("undeclared tool call guard", () => {
         { type: "namespace", name: "default", tools: [{ type: "function", name: "view_image" }] },
       ],
     };
+    const declared = collectDeclaredWireToolNames(outbound);
+    const declaredBare = collectDeclaredBareWireToolNames(outbound);
     const upstream = sse("response.output_item.added", {
       output_index: 0,
       item: { type: "function_call", id: "fc_1", call_id: "call_1", name: "default.view_image", arguments: "{}" },
     });
-    expect(await relay(upstream, collectDeclaredWireToolNames(outbound))).toBe(upstream);
+    expect(await relay(upstream, declared, [], declaredBare)).toBe(upstream);
   });
 
   test("rejects default. prefix when the bare tool was not declared (#4176)", async () => {
     const outbound = {
       tools: [{ type: "function", name: "list_dir" }],
     };
+    const declared = collectDeclaredWireToolNames(outbound);
+    const declaredBare = collectDeclaredBareWireToolNames(outbound);
     const upstream = sse("response.output_item.added", {
       output_index: 0,
       item: { type: "function_call", id: "fc_1", call_id: "call_1", name: "default.view_image", arguments: "{}" },
     });
-    const out = await relay(upstream, collectDeclaredWireToolNames(outbound));
-    expect(out).toContain("code\":\"" + UNDECLARED_TOOL_CALL_ERROR_CODE);
+    const out = await relay(upstream, declared, [], declaredBare);
+    expect(out).toContain(UNDECLARED_TOOL_CALL_ERROR_CODE);
+  });
+
+  test("rejects default.view_image and namespace=default when only a different namespaced tool was declared (#4176)", async () => {
+    const outbound = {
+      tools: [
+        { type: "namespace", name: "foo", tools: [{ type: "function", name: "view_image" }] },
+      ],
+    };
+    const declared = collectDeclaredWireToolNames(outbound);
+    const declaredBare = collectDeclaredBareWireToolNames(outbound);
+
+    const upstreamDotted = sse("response.output_item.added", {
+      output_index: 0,
+      item: { type: "function_call", id: "fc_1", call_id: "call_1", name: "default.view_image", arguments: "{}" },
+    });
+    const outDotted = await relay(upstreamDotted, declared, [], declaredBare);
+    expect(outDotted).toContain(UNDECLARED_TOOL_CALL_ERROR_CODE);
+
+    const upstreamNs = sse("response.output_item.added", {
+      output_index: 0,
+      item: { type: "function_call", id: "fc_1", call_id: "call_1", namespace: "default", name: "view_image", arguments: "{}" },
+    });
+    const outNs = await relay(upstreamNs, declared, [], declaredBare);
+    expect(outNs).toContain(UNDECLARED_TOOL_CALL_ERROR_CODE);
+  });
+
+  test("normalizes default namespace in non-streaming JSON responses (#4176)", () => {
+    const outbound = {
+      tools: [{ type: "function", name: "view_image" }],
+    };
+    const declared = collectDeclaredWireToolNames(outbound);
+    const declaredBare = collectDeclaredBareWireToolNames(outbound);
+    const jsonInput = JSON.stringify({
+      id: "resp_1",
+      status: "completed",
+      output: [
+        { type: "function_call", id: "fc_1", call_id: "call_1", name: "default.view_image", arguments: JSON.stringify({ path: "img.png" }) },
+        { type: "function_call", id: "fc_2", call_id: "call_2", namespace: "default", name: "view_image", arguments: "{}" },
+      ],
+    });
+    const normalized = normalizeDefaultNamespaceInJson(jsonInput, declared, declaredBare);
+    const parsed = JSON.parse(normalized);
+    expect(parsed.output[0]).toEqual({
+      type: "function_call",
+      id: "fc_1",
+      call_id: "call_1",
+      name: "view_image",
+      arguments: JSON.stringify({ path: "img.png" }),
+    });
+    expect(parsed.output[1]).toEqual({
+      type: "function_call",
+      id: "fc_2",
+      call_id: "call_2",
+      name: "view_image",
+      arguments: "{}",
+    });
+  });
+
+  test("does not normalize non-streaming JSON when bare tool was not declared (#4176)", () => {
+    const outbound = {
+      tools: [{ type: "namespace", name: "foo", tools: [{ type: "function", name: "view_image" }] }],
+    };
+    const declared = collectDeclaredWireToolNames(outbound);
+    const declaredBare = collectDeclaredBareWireToolNames(outbound);
+    const jsonInput = JSON.stringify({
+      id: "resp_1",
+      status: "completed",
+      output: [
+        { type: "function_call", id: "fc_1", call_id: "call_1", name: "default.view_image", arguments: "{}" },
+      ],
+    });
+    const normalized = normalizeDefaultNamespaceInJson(jsonInput, declared, declaredBare);
+    expect(normalized).toBe(jsonInput);
+    expect(undeclaredToolCallNameInResponse(JSON.parse(normalized), declared, [], undefined, declaredBare)).toBe("default.view_image");
   });
 
   test("never blocks apply_patch when the request really declared it", async () => {
