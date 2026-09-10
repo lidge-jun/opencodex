@@ -22,8 +22,6 @@ description: 멀티 에이전트 표면, 위임 안내, 선호 모델, 대체 �
 | `effortCap?` | `string` | — | 자격을 갖춘 v2 메인 턴과 표시된 생성 하위 턴에 대한 하드 상한입니다. `low`부터 `ultra`까지 허용합니다. |
 | `subagentEffortCap?` | `string` | — | 생성된 하위 턴에만 적용되는 추가 상한입니다. 두 상한이 모두 적용되면 더 낮은 값이 이깁니다. |
 
-모델 effort pin이 없어도 적용 대상 native Chat Completions 요청에는 설정된 상한이 적용됩니다. 대상 v2 메인 요청에는 `effortCap`을, 생성된 자식 표지가 있는 요청에는 메인·자식 상한 중 적용 가능한 더 낮은 값을 사용합니다. 명시적 `multiAgentMode: "v1"`과 compaction 유지관리 요청은 상한 적용에서 제외됩니다. 상한은 명시된 effort를 낮추거나 제거하며, pin을 적용하거나 상한이 값을 바꾼 경우에 제공자 전송 값으로 매핑합니다. pin 적용도 상한에 의한 변경도 없는 호출자 값은 원래 표기를 유지합니다.
-
 이 표면은 대시보드나 `ocx v2 status|on|off|mode <v1|default|v2>|threads <n>`로 관리합니다. 모드 변경은 새 세션에 적용됩니다. `maxConcurrentThreadsPerSession`은 `config.json` 키가 아니라 `PUT /api/v2` 필드입니다. `ocx v2 threads <n>`는 v2가 활성화된 뒤 Codex의 `$CODEX_HOME/config.toml` 안 `[features.multi_agent_v2]` 아래에 `max_concurrent_threads_per_session`을 기록합니다.
 
 관리 API는 `GET`/`PUT /api/v2`, `/api/injection-model`, `/api/effort-caps`, `/api/subagent-models`, `/api/subagent-model-fallback`를 제공합니다. injection-model 업데이트는 부분 업데이트입니다. 사용자 지정 프롬프트는 이 API의 `prompt` 필드입니다.
@@ -88,5 +86,7 @@ opencodex는 비활성, 라우팅 불가, 비정상, 쿨다운 중, 또는 할�
 상한은 v2 협업 기능에만 적용됩니다. 메인 턴은 도구가 v2를 노출할 때 적격이 되고, 하위 턴은 leaf 도구가 더 이상 협업을 노출하지 않더라도 `x-codex-turn-metadata` 안에 codex-rs의 정확한 `x-openai-subagent: collab_spawn` 또는 `"subagent_kind": "thread_spawn"` 표시가 있으면 적격이 됩니다. V1 메인 턴, `multiAgentMode: "v1"`, compaction, review, memory-consolidation 턴은 상한을 적용받지 않습니다.
 
 상한은 노력만 낮춥니다. 모델이 광고한 단계 중 상한 이하에서 가장 높은 단계로 맞춥니다. 모델에 노력 제어가 없거나 맞는 지원 단계가 없으면, opencodex는 노력을 제거하고 제공자 기본값을 적용합니다. `max`와 `ultra`는 허용되며, 대시보드는 `low`부터 `xhigh`까지 제공합니다.
+
+모델 effort pin이 없어도 적용 대상 native Chat Completions 요청에는 설정된 상한이 적용됩니다. pin을 적용하거나 상한이 값을 바꾼 경우에 제공자 전송 값으로 매핑합니다. pin 적용도 상한에 의한 변경도 없는 호출자 값은 원래 표기를 유지합니다.
 
 v1, default, v2 동작에 대한 초보자용 설명은 [Sub-agent surfaces](/guides/sub-agent-surface/)를 참고하세요.

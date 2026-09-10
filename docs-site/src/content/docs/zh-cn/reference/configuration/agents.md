@@ -22,8 +22,6 @@ description: 多代理界面、委派引导、首选模型、回退链、原生�
 | `effortCap?` | `string` | — | 对符合条件的 v2 主轮次和标记的派生子轮次设置硬上限。接受 `low` 到 `ultra`。 |
 | `subagentEffortCap?` | `string` | — | 仅针对派生子轮次的额外上限。两个上限同时适用时，较低者生效。 |
 
-即使没有设置模型 effort pin，符合条件的原生 Chat Completions 轮次也会应用配置的上限。符合条件的 v2 主轮次使用 `effortCap`；带有派生子轮次标记的请求使用适用的主轮次和子轮次上限中的较低值。显式 `multiAgentMode: "v1"` 和 compaction 维护请求不应用上限。上限只会降低或省略显式 effort；应用 pin 或上限改变值时，才会映射为提供方的传输值。未应用 pin 且未被上限改写的原生调用方值保留原始写法。
-
 通过仪表板或 `ocx v2 status|on|off|mode <v1|default|v2>|threads <n>` 管理该界面。模式变更会应用于新会话。`maxConcurrentThreadsPerSession` 是 `PUT /api/v2` 字段，不是 `config.json` 键；`ocx v2 threads <n>` 会在启用 v2 后，将 `max_concurrent_threads_per_session` 写入 Codex 的 `$CODEX_HOME/config.toml` 中的 `[features.multi_agent_v2]` 下。
 
 管理 API 公开 `GET`/`PUT /api/v2`、`/api/injection-model`、`/api/effort-caps`、`/api/subagent-models` 和 `/api/subagent-model-fallback`。injection-model 更新是部分更新；自定义 prompt 是该 API 上的 `prompt` 字段。
@@ -87,5 +85,7 @@ opencodex 会跳过已禁用、不可路由、不健康、处于冷却中，或�
 上限只适用于 v2 协作功能：当主轮次的工具暴露 v2 时，它就符合条件；当子轮次在 `x-codex-turn-metadata` 中带有 codex-rs 的精确 `x-openai-subagent: collab_spawn` 或 `"subagent_kind": "thread_spawn"` 标记时，它也符合条件，即使叶子工具已经不再暴露协作。V1 主轮次、`multiAgentMode: "v1"`、压缩、审查以及记忆整合轮次都会绕过上限。
 
 上限只会降低 effort。它们会向下贴合到不高于上限、且模型公开的最高档位。如果模型没有 effort 控制，或者没有任何受支持的档位可用，opencodex 会移除 effort，让提供方默认值生效。`max` 和 `ultra` 都可接受，而仪表板提供 `low` 到 `xhigh`。
+
+即使没有设置模型 effort pin，符合条件的原生 Chat Completions 轮次也会应用配置的上限。应用 pin 或上限改变值时，才会映射为提供方的传输值。未应用 pin 且未被上限改写的原生调用方值保留原始写法。
 
 关于 v1、default 和 v2 行为的面向初学者说明，请参阅 [Sub-agent surfaces](/guides/sub-agent-surface/)。

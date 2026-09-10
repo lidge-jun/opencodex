@@ -25,8 +25,6 @@ kontrol eder.
 | `subagentEffortCap?` | `string` | — | Yalnızca oluşturulan çocuk turları için ek tavan. Her iki sınır da geçerli olduğunda daha düşük olan kazanır. |
 | `agentTaskRecovery?` | `object` | — | Yönlendirilen sağlayıcılara gönderilen arka uçta şifrelenmiş v2 görevleri için deneysel isteğe bağlı kurtarma. `enabled: true` olmadıkça devre dışıdır; bkz. [Şifrelenmiş v2 görev kurtarma](#sifrelenmis-v2-gorev-kurtarma). |
 
-Yapılandırılmış effort sınırları, model effort sabitlemesi olmasa da uygun yerel Chat Completions turlarına uygulanır. Uygun v2 ana turları `effortCap` değerini, işaretlenmiş çocuk turları ise geçerli ana ve çocuk sınırlarının düşük olanını kullanır. Açık `multiAgentMode: "v1"` ayarı ve compaction bakım turları bu sınırlardan muaftır. Sınır yalnızca açık effort değerini düşürür veya kaldırır; sağlayıcının iletim değerine eşleme, sabitleme uygulandığında veya sınır değeri değiştirdiğinde yapılır. Sabitleme uygulanmayan ve sınır tarafından yeniden yazılmayan yerel çağıran değerleri özgün yazımını korur.
-
 Arayüzü kontrol paneli veya `ocx v2 status|on|off|mode <v1|default|v2>|threads
 <n>|mode-hint <metin|--clear>` ile yönetin. Mod değişiklikleri yeni oturumlara
 uygulanır. `maxConcurrentThreadsPerSession`, bir `config.json` anahtarı değil,
@@ -260,6 +258,8 @@ en yüksek basamağa otururlar. Bir modelin çaba kontrolü yoksa veya desteklen
 hiçbir basamak uymuyorsa opencodex çabayı kaldırır ve sağlayıcı varsayılanının
 uygulanmasına izin verir. `max` ve `ultra` kabul edilirken kontrol paneli `low`
 ile `xhigh` arasını sunar.
+
+Yapılandırılmış effort sınırları, model effort sabitlemesi olmasa da uygun yerel Chat Completions turlarına uygulanır. Sağlayıcının iletim değerine eşleme, sabitleme uygulandığında veya sınır değeri değiştirdiğinde yapılır. Sabitleme uygulanmayan ve sınır tarafından yeniden yazılmayan yerel çağıran değerleri özgün yazımını korur.
 
 v1, varsayılan ve v2 davranışının yeni başlayanlara yönelik açıklaması için [Alt
 ajan yüzeyleri](/tr/guides/sub-agent-surface/) sayfasına bakın.
