@@ -780,6 +780,40 @@ export const CAPABILITIES: readonly Capability[] = [
     ],
   },
   {
+    command: ["system", "codex-cli-update", "plan"],
+    summary: "Dry-run a Codex CLI update and print the plan id that authorizes applying it.",
+    routes: [],
+    flags: [
+      { name: "--channel", value: "string", summary: "Registry channel to resolve. Only the stable latest channel is offered." },
+      { name: "--json", value: "boolean", summary: "Emit the plan as JSON." },
+    ],
+    mutates: false,
+    json: "envelope",
+    details: [
+      "Adds the three inputs check leaves out: an exact registry version with its sha512 integrity, a fail-closed process-table read, and a decision.",
+      "Writes nothing and installs nothing. A refusal is a normal dry-run answer and still exits 0.",
+      "The plan id is a digest of the evidence the decision rests on, not a stored job. There is no plan state on disk to expire, collide or clean up.",
+      "An unreadable process table refuses rather than reading as no live session.",
+    ],
+  },
+  {
+    command: ["system", "codex-cli-update", "apply"],
+    summary: "Install the exact Codex CLI version bound into a plan id from a dry-run.",
+    routes: [],
+    flags: [
+      { name: "--plan", value: "string", required: true, summary: "Required: the plan id printed by a dry-run the operator read." },
+      { name: "--json", value: "boolean", summary: "Emit the apply result as JSON." },
+    ],
+    mutates: true,
+    json: "envelope",
+    details: [
+      "--plan is mandatory because the operator must approve a target they have read. The plan is recomputed from live evidence and refused unless the id still matches.",
+      "Packs the exact resolved @openai/codex version, verifies the tarball sha512 against the plan-bound integrity, and installs only that verified file; never stops, restarts or signals Codex, the app-server, the desktop app or the tray.",
+      "The outcome is classified from a fresh inspection rather than the installer exit code, and is never retried or rolled back automatically.",
+      "Repairs the shim only when this installation owned a matched shim before the update.",
+    ],
+  },
+  {
     command: ["system", "codex-restart"],
     summary: "Restart the Codex desktop app and app-servers.",
     routes: [{ method: "POST", path: "/api/system/codex-restart" }],

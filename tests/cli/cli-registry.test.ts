@@ -99,10 +99,13 @@ describe("CLI command registry parity", () => {
     expect(new Set(names).size).toBe(names.length);
   });
 
-  test("system help exposes the exact Codex CLI inspection grammar", () => {
+  test("system help exposes the exact Codex CLI update grammar", () => {
     const details = findCommand("system")?.details ?? [];
     expect(details).toContain("ocx system codex-cli-update check [--json]");
-    expect(details.some(line => line.includes("dry-run"))).toBe(false);
+    expect(details).toContain("ocx system codex-cli-update plan [--channel latest] [--json]");
+    // apply must never render as an argument-free verb: the plan id IS the authorization.
+    expect(details).toContain("ocx system codex-cli-update apply --plan <id> [--json]");
+    expect(details.some(line => line.startsWith("ocx system codex-cli-update apply") && !line.includes("--plan"))).toBe(false);
   });
 
   test("GUI registry usage documents explicit-origin single-use pairing", () => {
