@@ -1177,12 +1177,13 @@ describe("routeModel blocked model redirect", () => {
       defaultProvider: "openai",
       blockedModelRedirects: {
         "openai/m1": "google-antigravity/gemini-3.8-flash-high",
+        m1: "openai/m2",
       },
       providers: {
         openai: {
           adapter: "openai-responses",
           baseUrl: "https://chatgpt.com/backend-api/codex",
-          models: ["m1"],
+          models: ["m1", "m2"],
           modelAliases: {
             m1: "fast-alias",
           },
