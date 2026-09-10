@@ -112,4 +112,16 @@ describe("code-mode helper compatibility", () => {
       expect(received).toEqual(input === "[]" ? [] : input);
     }
   });
+
+  test("view_image emits a friendly code-mode error message via text()", async () => {
+    const source = compileCodeModeHelperInput(
+      JSON.stringify({ path: "/root/banner.png" }),
+      "view_image",
+    );
+    let output: unknown;
+    const run = new AsyncFunction("tools", "text", source);
+    await run({}, (value: unknown) => { output = value; });
+    expect(output).toContain("Error: 'view_image' is not available in Code Mode for \"/root/banner.png\"");
+    expect(output).toContain("tools.exec_command");
+  });
 });

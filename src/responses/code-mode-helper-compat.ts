@@ -54,6 +54,16 @@ export function compileCodeModeHelperInput(argumentsText: unknown, toolName: str
   if (toolName === "write_stdin") {
     return `const result = await tools.write_stdin(${JSON.stringify(args)});\ntext(result);`;
   }
+  if (toolName === "view_image") {
+    let target = "";
+    if (isPlainObject(args)) {
+      if (typeof args.path === "string") target = ` for ${JSON.stringify(args.path)}`;
+      else if (typeof args.file_path === "string") target = ` for ${JSON.stringify(args.file_path)}`;
+      else if (typeof args.file === "string") target = ` for ${JSON.stringify(args.file)}`;
+    }
+    const msg = `Error: 'view_image' is not available in Code Mode${target}. Inspect files or visual assets programmatically using tools.exec_command or code.`;
+    return `text(${JSON.stringify(msg)});\n`;
+  }
   return `const result = await tools.exec_command(${JSON.stringify(args)});\ntext(result);`;
 }
 

@@ -1640,6 +1640,16 @@ describe("undeclaredToolCallNameInResponse", () => {
     expect(undeclaredToolCallNameInResponse(response, new Set())).toBe("write_stdin");
   });
 
+  test("accepts view_image through a bare unified exec declaration", () => {
+    const response = {
+      output: [{ type: "function_call", name: "view_image" }],
+    };
+
+    expect(undeclaredToolCallNameInResponse(response, new Set(["exec"]))).toBeUndefined();
+    expect(undeclaredToolCallNameInResponse(response, new Set(["view_image"]))).toBeUndefined();
+    expect(undeclaredToolCallNameInResponse(response, new Set())).toBe("view_image");
+  });
+
   test("never legacy-normalizes a namespaced shell bridge call", () => {
     // A namespaced call (e.g. an MCP server advertising its own exec_command) must be
     // matched by its full wire name only — never normalized to bare `exec`.
