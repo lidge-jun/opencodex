@@ -703,6 +703,12 @@ export function providerManagementConfigError(
   }
   if (name === "chatgpt") return "provider chatgpt is reserved for internal credential compatibility";
   if (name === "openai-multi") return "provider openai-multi is reserved for legacy config migration";
+  if (raw.experimentalCodexSideChatCache !== undefined) {
+    if (name !== "openai") return "experimentalCodexSideChatCache is valid only for provider openai";
+    if (typeof raw.experimentalCodexSideChatCache !== "boolean") {
+      return "provider openai experimentalCodexSideChatCache must be a boolean";
+    }
+  }
   if (name === "openai") {
     const entry = getProviderRegistryEntry(name);
     const seed = entry ? providerConfigSeed(entry) : undefined;
@@ -715,6 +721,7 @@ export function providerManagementConfigError(
     delete canonicalCandidate.pinnedReasoningEffort;
     delete canonicalCandidate.modelPinnedReasoningEfforts;
     delete canonicalCandidate.responsesSnapshotRepair;
+    delete canonicalCandidate.experimentalCodexSideChatCache;
     // modelCosts is a user-owned display overlay, not part of the canonical
     // forward seed; it is validated separately below (providerModelCostsConfigError).
     delete canonicalCandidate.modelCosts;
