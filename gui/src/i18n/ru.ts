@@ -814,6 +814,7 @@ export const ru: Record<TKey, string> = {
   "usage.cost.disclaimer": "Не является счётом. Расходы могут покрываться подпиской или кредитами провайдера.",
   "usage.cost.unpricedNote": "Исключено {count} запросов (нет цены или данных использования)",
   "usage.cost.excluded": "({count} исключено)",
+  "usage.cost.excludedOne": "({count} исключено)",
   "logs.detail.section.basic": "Основная информация",
   "logs.detail.route.section": "Решение о маршруте",
   "logs.detail.route.kind": "Тип маршрута",

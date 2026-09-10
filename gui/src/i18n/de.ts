@@ -797,6 +797,7 @@ export const de: Record<TKey, string> = {
   "usage.cost.disclaimer": "Kein Abrechnungsbeleg. Stattdessen können Abonnementnutzung oder Anbieter-Guthaben gelten.",
   "usage.cost.unpricedNote": "{count} Anfragen ohne Preis oder Nutzung ausgeschlossen",
   "usage.cost.excluded": "({count} ohne Preis oder Nutzungsdaten)",
+  "usage.cost.excludedOne": "({count} ohne Preis oder Nutzungsdaten)",
   "logs.detail.section.basic": "Grundinformationen",
   "logs.detail.route.section": "Route-Entscheidung",
   "logs.detail.route.kind": "Route-Typ",

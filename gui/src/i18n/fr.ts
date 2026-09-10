@@ -827,6 +827,7 @@ export const fr: Record<TKey, string> = {
   "usage.cost.disclaimer": "Ceci n’est pas un reçu de facturation. L’utilisation d’un abonnement ou les crédits du fournisseur peuvent s’appliquer à la place.",
   "usage.cost.unpricedNote": "{count} requêtes exclues (aucun tarif ni donnée d’utilisation)",
   "usage.cost.excluded": "({count} sans tarif ni données d’utilisation)",
+  "usage.cost.excludedOne": "({count} sans tarif ni données d’utilisation)",
   "logs.detail.section.basic": "Informations générales",
   "logs.detail.route.section": "Décision de routage",
   "logs.detail.route.kind": "Type de route",

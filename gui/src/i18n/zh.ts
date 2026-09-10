@@ -809,6 +809,7 @@ export const zh: Record<TKey, string> = {
   "usage.cost.disclaimer": "这不是账单或扣费凭证。实际可能计入订阅用量或消耗服务商额度。",
   "usage.cost.unpricedNote": "已排除 {count} 个无法计费的请求",
   "usage.cost.excluded": "（已排除 {count} 个请求）",
+  "usage.cost.excludedOne": "（已排除 {count} 个请求）",
   "logs.detail.section.basic": "基本信息",
   "logs.detail.route.section": "路由决策",
   "logs.detail.route.kind": "路由类型",

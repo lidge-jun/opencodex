@@ -137,12 +137,14 @@ test("Usage breakdown tables distinguish priced zero totals from excluded reques
     models: [
       { provider: "priced", model: "priced-model", requests: 1, measuredRequests: 1, reportedRequests: 1, estimatedRequests: 0, totalTokens: 100, inputTokens: 50, outputTokens: 50, estimatedCostUsd: 1.25, pricedRequests: 1, unpricedRequests: 0, shareRatio: 2 / 3 },
       { provider: "zero-priced", model: "zero-priced-model", requests: 1, measuredRequests: 1, reportedRequests: 1, estimatedRequests: 0, totalTokens: 0, inputTokens: 0, outputTokens: 0, estimatedCostUsd: 0, pricedRequests: 1, unpricedRequests: 0, shareRatio: 0 },
+      { provider: "unpriced-single", model: "unpriced-single-model", requests: 1, measuredRequests: 1, reportedRequests: 1, estimatedRequests: 0, totalTokens: 10, inputTokens: 10, outputTokens: 0, pricedRequests: 0, unpricedRequests: 1, shareRatio: 0 },
       { provider: "unpriced", model: "unpriced-model", requests: 3, measuredRequests: 3, reportedRequests: 3, estimatedRequests: 0, totalTokens: 50, inputTokens: 50, outputTokens: 0, pricedRequests: 0, unpricedRequests: 3, shareRatio: 1 / 3 },
       { provider: "coverage-without-estimate", model: "coverage-without-estimate-model", requests: 1, measuredRequests: 0, reportedRequests: 0, estimatedRequests: 0, totalTokens: 0, inputTokens: 0, outputTokens: 0, pricedRequests: 0, unpricedRequests: 0, shareRatio: 0 },
     ],
     providers: [
       { provider: "priced", requests: 1, measuredRequests: 1, reportedRequests: 1, estimatedRequests: 0, totalTokens: 100, estimatedCostUsd: 1.25, pricedRequests: 1, unpricedRequests: 0, shareRatio: 2 / 3 },
       { provider: "zero-priced", requests: 1, measuredRequests: 1, reportedRequests: 1, estimatedRequests: 0, totalTokens: 0, estimatedCostUsd: 0, pricedRequests: 1, unpricedRequests: 0, shareRatio: 0 },
+      { provider: "unpriced-single", requests: 1, measuredRequests: 1, reportedRequests: 1, estimatedRequests: 0, totalTokens: 10, pricedRequests: 0, unpricedRequests: 1, shareRatio: 0 },
       { provider: "unpriced", requests: 3, measuredRequests: 3, reportedRequests: 3, estimatedRequests: 0, totalTokens: 50, pricedRequests: 0, unpricedRequests: 3, shareRatio: 1 / 3 },
       { provider: "coverage-without-estimate", requests: 1, measuredRequests: 0, reportedRequests: 0, estimatedRequests: 0, totalTokens: 0, pricedRequests: 0, unpricedRequests: 0, shareRatio: 0 },
     ],
@@ -170,6 +172,7 @@ test("Usage breakdown tables distinguish priced zero totals from excluded reques
 
     expect(container.textContent).toContain("~$1.2500");
     expect(container.textContent).toContain("~$0.0000");
+    expect(container.textContent).toContain("— (1 request excluded)");
     expect(container.textContent).toContain("— (3 requests excluded)");
     expect([...container.querySelectorAll("th")].filter(cell => cell.textContent === "API list-price")).toHaveLength(2);
     expect(container.querySelector('th[aria-describedby="usage-models-list-price-disclaimer"]')?.textContent).toBe("API list-price");

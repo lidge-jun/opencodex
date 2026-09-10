@@ -759,6 +759,7 @@ export const ja: Record<TKey, string> = {
   "usage.cost.disclaimer": "請求明細ではありません。サブスクリプション利用量やプロバイダークレジットが代わりに適用される場合があります。",
   "usage.cost.unpricedNote": "{count} 件のリクエストを除外(価格または使用量なし)",
   "usage.cost.excluded": "({count} 件のリクエストを除外)",
+  "usage.cost.excludedOne": "({count} 件のリクエストを除外)",
   "logs.detail.section.basic": "基本情報",
   "logs.detail.route.section": "ルート決定",
   "logs.detail.route.kind": "ルート種別",

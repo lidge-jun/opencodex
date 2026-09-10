@@ -846,6 +846,7 @@ export const en = {
   "usage.cost.disclaimer": "Not a billing receipt. Subscription usage or provider credits may apply instead.",
   "usage.cost.unpricedNote": "{count} requests excluded (no price or usage)",
   "usage.cost.excluded": "({count} requests excluded)",
+  "usage.cost.excludedOne": "({count} request excluded)",
   "logs.detail.section.basic": "Basic information",
   "logs.detail.route.section": "Route decision",
   "logs.detail.route.kind": "Route kind",

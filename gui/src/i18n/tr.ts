@@ -833,6 +833,7 @@ export const tr: Record<TKey, string> = {
   "usage.cost.disclaimer": "Fatura makbuzu değildir.",
   "usage.cost.unpricedNote": "{count} istek hariç tutuldu",
   "usage.cost.excluded": "({count} istek hariç tutuldu)",
+  "usage.cost.excludedOne": "({count} istek hariç tutuldu)",
   "logs.detail.section.basic": "Temel bilgiler",
   "logs.detail.route.section": "Yönlendirme kararı",
   "logs.detail.route.kind": "Yönlendirme türü",

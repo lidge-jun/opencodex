@@ -663,6 +663,7 @@ export const zhTW: Record<TKey, string> = {
   "usage.cost.disclaimer": "這不是帳單或扣費憑證。實際可能計入訂閱用量或消耗服務商額度。",
   "usage.cost.unpricedNote": "已排除 {count} 個無法計費的請求",
   "usage.cost.excluded": "（已排除 {count} 個請求）",
+  "usage.cost.excludedOne": "（已排除 {count} 個請求）",
   "logs.detail.section.basic": "基本資訊",
   "logs.detail.section.performance": "效能",
   "logs.detail.section.cost": "API 標價折算",
