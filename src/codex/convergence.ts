@@ -44,6 +44,7 @@ import {
   buildCatalogEntriesFromObservedState,
   CANONICAL_NATIVE_CATALOG_CONTENT_POLICY,
   finalizeAutoReviewModelOverride,
+  finishUpstreamNativeEntry,
   mergeCatalogEntriesFromObservedState,
   mergeCatalogModelsWithNativeRecovery,
   orderForSubagents,
@@ -60,11 +61,19 @@ import {
   nativeContextLimits,
   shouldIncludeAccountBoundNativeOpenAi,
   shouldIncludeNativeOpenAi,
+  observedReserveCatalogSource,
+  upstreamNativeEntry,
 } from "./catalog/metadata";
 import {
   trustedAccountBoundNativeCatalogSlug,
   visibleCodexAccountSelectors,
 } from "./catalog/account-models";
+import {
+  createReserveCatalogProjection,
+  RESERVE_LUNA_METADATA_SOURCE,
+  RESERVE_SOURCE_CATALOG_FIELD,
+} from "./catalog/reserve";
+import { NATIVE_RESERVE_MODEL } from "./catalog/native-models";
 import {
   clampCatalogModelsToObservedCodexSupport,
   supportedCodexReasoningEffortsFromObservedCatalog,
@@ -300,6 +309,37 @@ function prepareCatalog(
   const observedNativeSlugs: string[] = [];
   const disabledNative = disabledNativeSlugs(config);
   const openaiContextCap = nativeContextLimits(config);
+  // Same Reserve projection writeRetainedCatalogSync applies on disk: without it, a settings PUT
+  // that selects gpt-reserve reports success but the row is missing from the in-memory candidate
+  // until the next retained sync or restart.
+  const reserveMainSelectors = accountSelectors.filter(selector =>
+    isMainCodexAccountTarget(accountTargets.get(selector) ?? ""));
+  const reserveObservations = [
+    ...(active?.models ?? []),
+    ...observedAccountNativeEntries,
+    ...(catalog.models ?? []),
+  ];
+  const retainedReserve = active?.[RESERVE_SOURCE_CATALOG_FIELD];
+  const retainedReserveSource = retainedReserve && typeof retainedReserve === "object" && !Array.isArray(retainedReserve)
+    ? observedReserveCatalogSource([retainedReserve as RawEntry], [])
+    : null;
+  const observedReserveSource = observedReserveCatalogSource(
+    // Cache invalidation carries historical bare observations alongside emitted models.
+    // Only unmarked observations are fresh enough to supersede the retained source.
+    reserveObservations.filter(entry => entry.slug === NATIVE_RESERVE_MODEL
+      && entry.opencodex_account_observed_native === undefined), reserveMainSelectors,
+  ) ?? retainedReserveSource ?? observedReserveCatalogSource(reserveObservations, reserveMainSelectors);
+  // This root is read only by OCX; retain it on the candidate so a later retained sync (or this
+  // same candidate if committed) keeps the genuine source metadata instead of falling back to Luna.
+  if (observedReserveSource) catalog[RESERVE_SOURCE_CATALOG_FIELD] = structuredClone(observedReserveSource);
+  else delete catalog[RESERVE_SOURCE_CATALOG_FIELD];
+  const lunaSource = upstreamNativeEntry(RESERVE_LUNA_METADATA_SOURCE);
+  const reserve = createReserveCatalogProjection(
+    config,
+    reserveMainSelectors,
+    observedReserveSource,
+    lunaSource ? finishUpstreamNativeEntry(lunaSource, 9, openaiContextCap) : null,
+  );
   const nativeCatalogModels = mergeCatalogModelsWithNativeRecovery(
     active?.models ?? catalog.models ?? [],
     [catalog.models ?? [], ...nativeRecoverySources],
@@ -338,7 +378,16 @@ function prepareCatalog(
       openaiContextCap,
       accountNativeSlugs,
       accountNativeSlugsBySelector,
-    }).filter(entry => trustedAccountBoundNativeCatalogSlug(entry) !== undefined);
+      reserve,
+    }).filter(entry => {
+      // Reserve is appended outside the ordinary per-selector roster above, so it also needs
+      // the selective picker filter here: the same gate writeRetainedCatalogSync applies.
+      const native = trustedAccountBoundNativeCatalogSlug(entry);
+      if (native === undefined) return false;
+      const selector = String(entry.slug).split("/")[0]!;
+      return config.codexAccountPickerModels === undefined
+        || config.codexAccountPickerModels[selector]?.includes(native);
+    });
   const gatheredProviderNames = new Set(enabledProviders.map(([name]) => name));
   const selectedModelsByProvider = new Map<string, ReadonlySet<string>>(
     enabledProviders.flatMap(([name, provider]) => (

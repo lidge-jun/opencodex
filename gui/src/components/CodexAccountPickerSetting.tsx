@@ -40,6 +40,21 @@ function sameModelsMap(a: ModelsMap, b: ModelsMap): boolean {
   return true;
 }
 
+/** Prune unavailable models before save or restoring customization; the server handles removed selectors. */
+function pruneDraftToOptions(map: ModelsMap, currentOptions: AccountModelOption[]): ModelsMap {
+  const bySelector = new Map(currentOptions.map(option => [option.selector, new Set(option.models)]));
+  let changed = false;
+  const next: ModelsMap = {};
+  for (const [selector, models] of Object.entries(map)) {
+    const available = bySelector.get(selector);
+    if (!available) { next[selector] = models; continue; }
+    const kept = models.filter(model => available.has(model));
+    if (kept.length !== models.length) changed = true;
+    next[selector] = kept;
+  }
+  return changed ? next : map;
+}
+
 /** Opt-in control for account-qualified Codex model-picker entries. */
 export default function CodexAccountPickerSetting({ apiBase }: { apiBase: string }) {
   const t = useT();
@@ -186,7 +201,7 @@ export default function CodexAccountPickerSetting({ apiBase }: { apiBase: string
     if (anyMutationInFlight() || !hydrated || !customizeSupported) return;
     const previous = customizeRef.current;
     const requested = !previous;
-    const nextModels: ModelsMap | null = requested ? draft : null;
+    const nextModels: ModelsMap | null = requested ? pruneDraftToOptions(draft, options) : null;
     customizeRef.current = requested;
     setCustomize(requested);
     customizeSavingRef.current = true;
@@ -232,7 +247,7 @@ export default function CodexAccountPickerSetting({ apiBase }: { apiBase: string
       customizeSavingRef.current = false;
       setCustomizeSaving(false);
     }
-  }, [apiBase, hydrated, customizeSupported, draft, anyMutationInFlight, t]);
+  }, [apiBase, hydrated, customizeSupported, draft, options, anyMutationInFlight, t]);
 
   const toggleModel = useCallback((selector: string, model: string) => {
     setDraft(prev => {
@@ -245,6 +260,7 @@ export default function CodexAccountPickerSetting({ apiBase }: { apiBase: string
 
   const saveModels = useCallback(async () => {
     if (anyMutationInFlight() || !customize || !dirty) return;
+    const nextModels = pruneDraftToOptions(draft, options);
     modelsSavingRef.current = true;
     loadGenerationRef.current += 1;
     setModelsSaving(true);
@@ -253,7 +269,7 @@ export default function CodexAccountPickerSetting({ apiBase }: { apiBase: string
       const response = await fetch(`${apiBase}/api/settings`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ codexAccountPickerModels: draft }),
+        body: JSON.stringify({ codexAccountPickerModels: nextModels }),
       });
       const payload = (await readJsonOrThrow<{
         ok?: unknown;
@@ -277,7 +293,7 @@ export default function CodexAccountPickerSetting({ apiBase }: { apiBase: string
       modelsSavingRef.current = false;
       setModelsSaving(false);
     }
-  }, [apiBase, customize, dirty, draft, anyMutationInFlight, t]);
+  }, [apiBase, customize, dirty, draft, options, anyMutationInFlight, t]);
 
   const initialLoadFailed = loadError && !hydrated;
 

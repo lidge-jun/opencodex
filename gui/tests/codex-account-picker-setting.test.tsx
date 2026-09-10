@@ -572,4 +572,82 @@ describe("CodexAccountPickerSetting", () => {
     expect(errorNotice?.textContent).not.toContain("private server path");
   });
 
+  test("turning customize off and back on prunes a stale unavailable model instead of resubmitting it", async () => {
+    const options = [{ selector: "main", models: ["gpt-5.1"] }];
+    const puts: unknown[] = [];
+    const host = await mount((async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { codexAccountPickerModels?: Record<string, string[]> | null };
+        puts.push(body.codexAccountPickerModels);
+        return response({
+          ok: true,
+          codexAccountPickerModels: body.codexAccountPickerModels ?? null,
+          codexAccountPickerOptions: options,
+        });
+      }
+      return response({
+        codexAccountPickerEnabled: true,
+        // "gpt-reserve" was saved earlier (e.g. codexDesktopAuthless was on) and no longer
+        // appears among this selector's current options.
+        codexAccountPickerModels: { main: ["gpt-5.1", "gpt-reserve"] },
+        codexAccountPickerOptions: options,
+      });
+    }) as typeof fetch);
+
+    const customizeToggle = () => toggles(host)[1]!;
+    expect(customizeToggle().getAttribute("aria-pressed")).toBe("true");
+
+    await act(async () => {
+      customizeToggle().click(); // off -> null deletes the persisted map
+      await flush();
+    });
+    expect(puts.at(-1)).toBeNull();
+
+    await act(async () => {
+      customizeToggle().click(); // on -> resubmits the draft, pruned to current options
+      await flush();
+    });
+    expect(customizeToggle().getAttribute("aria-pressed")).toBe("true");
+    expect(puts.at(-1)).toEqual({ main: ["gpt-5.1"] });
+    const list = host.querySelector(".codex-account-picker-models");
+    const checked = Array.from(list?.querySelectorAll<HTMLInputElement>('input[type="checkbox"]') ?? []).filter(i => i.checked);
+    expect(checked).toHaveLength(1);
+  });
+
+  test("Save prunes a stale unavailable model from an untouched selector while preserving other accounts", async () => {
+    const options = [
+      { selector: "main", models: ["gpt-5.1"] },
+      { selector: "work", models: ["gpt-5.2", "gpt-5.2-fast"] },
+    ];
+    // "main" still carries "gpt-reserve" from an earlier save; it is no longer among main's
+    // current options. "work" is untouched aside from the checkbox click below.
+    const initialModels = { main: ["gpt-5.1", "gpt-reserve"], work: ["gpt-5.2"] };
+    let lastPutBody: { codexAccountPickerModels?: Record<string, string[]> } | null = null;
+    const host = await mount((async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        lastPutBody = JSON.parse(String(init.body)) as { codexAccountPickerModels?: Record<string, string[]> };
+        return response({ ok: true, codexAccountPickerModels: lastPutBody.codexAccountPickerModels, codexAccountPickerOptions: options });
+      }
+      return response({ codexAccountPickerEnabled: true, codexAccountPickerModels: initialModels, codexAccountPickerOptions: options });
+    }) as typeof fetch);
+
+    const rows = Array.from(host.querySelectorAll(".codex-account-picker-account-row"));
+    const workRow = rows.find(row => row.textContent?.includes("work"))!;
+    const workExtraCheckbox = Array.from(workRow.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'))
+      .find(box => !box.checked)!;
+    expect(workExtraCheckbox).toBeTruthy();
+    act(() => { workExtraCheckbox.click(); });
+
+    await act(async () => {
+      Array.from(host.querySelectorAll("button")).find(b => b.textContent === "Save")!.click();
+      await flush();
+    });
+
+    expect(lastPutBody).not.toBeNull();
+    expect(lastPutBody?.codexAccountPickerModels).toEqual({
+      main: ["gpt-5.1"],
+      work: ["gpt-5.2", "gpt-5.2-fast"],
+    });
+  });
+
 });

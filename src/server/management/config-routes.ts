@@ -498,10 +498,12 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
           if (Object.hasOwn(choices.codexAccountNamespaces ?? {}, selector)) continue;
           return jsonResponse({ error: "Unknown Codex account selector" }, 400);
         }
-        if (models.some(model => !candidates.has(model))) {
+        const previous = new Set(config.codexAccountPickerModels?.[selector] ?? []);
+        if (models.some(model => !candidates.has(model) && !previous.has(model))) {
           return jsonResponse({ error: "Model is not available for this Codex account selector" }, 400);
         }
-        selectedAccountModels[selector] = models;
+        // Eligibility can change after a selection was saved; drop unchanged stale choices.
+        selectedAccountModels[selector] = models.filter(model => candidates.has(model));
       }
     }
     if (body.showCodexSparkQuota !== undefined && typeof body.showCodexSparkQuota !== "boolean") {

@@ -494,5 +494,6 @@ An account selector returns 400 only if it is neither a current candidate nor a 
 `codexAccountNamespaces` binding. An atomic enable-and-select request validates
 against the newly initialized selectors and persists those same bindings. Choices for retained
 bindings whose accounts are no longer selectable are discarded on save, so stale drafts do not
-block editing remaining accounts. Saving converges the catalog when the preference
+block editing remaining accounts. Previously saved model choices that are no longer eligible
+are also discarded on the next save; newly added unavailable model IDs still return 400. Saving converges the catalog when the preference
 changes; failure rolls the in-memory preference back. No credential fields are returned.

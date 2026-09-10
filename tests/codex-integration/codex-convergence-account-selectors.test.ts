@@ -1,3 +1,7 @@
+import { handleManagementAPI } from "../../src/server/management-api";
+import { createManagementConvergeCodex } from "../../src/codex/management-convergence";
+import { ManagementRequest } from "../helpers/management-auth";
+import { startupHealthFixture } from "../helpers/startup-health";
 import { afterEach, beforeEach, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import {
   chmodSync,
@@ -46,7 +50,8 @@ import {
 import { markModelsFetchFailure } from "../../src/codex/model-cache";
 import { legacyCustomModelCatalogSlugs } from "../../src/codex/custom-model-catalog-migration";
 import { resetCodexModelEntitlementCacheForTests } from "../../src/codex/model-entitlements";
-import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../../src/codex/catalog/native-models";
+import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS, NATIVE_RESERVE_MODEL } from "../../src/codex/catalog/native-models";
+import { RESERVE_LUNA_METADATA_SOURCE, RESERVE_METADATA_SOURCE_FIELD } from "../../src/codex/catalog/reserve";
 import { removeCodexAccountCredential, saveCodexAccountCredential } from "../../src/codex/account-store";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -1233,4 +1238,53 @@ test("both writers restore pristine native priorities after featured-model trans
   const finalModels = (JSON.parse(convergenceFirst) as RawCatalog).models ?? [];
   expect(finalModels.find(entry => entry.slug === "gpt-5.6-sol")?.priority).toBe(41);
   expect(finalModels.find(entry => entry.slug === "gpt-5.5")?.priority).toBe(57);
+});
+
+test("convergence projects a main-account Reserve row immediately, and the selective filter still gates it", async () => {
+  // Regression for the P2 finding: prepareCatalog (used by convergeCodexCatalog) lacked the
+  // same ReserveCatalogProjection logic writeRetainedCatalogSync already applies, so a settings
+  // PUT that selected gpt-reserve reported refresh success while main/gpt-reserve was actually
+  // missing from the live catalog until the next retained sync or restart.
+  writeCatalog([nativeEntry()]);
+  const selectiveConfig: OcxConfig = {
+    ...config(true),
+    codexDesktopAuthless: true,
+    codexAccountPickerModels: { desktop: [NATIVE_RESERVE_MODEL] },
+  };
+
+  const settingsConfig = { ...selectiveConfig, codexAccountPickerModels: {} };
+  saveConfig(settingsConfig);
+  const request = new ManagementRequest("http://127.0.0.1/api/settings", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ codexAccountPickerModels: selectiveConfig.codexAccountPickerModels }),
+  });
+  const response = await handleManagementAPI(request, new URL(request.url), settingsConfig, {
+    saveConfigPreservingClaudeCode: saveConfig,
+    createManagementConvergeCodex,
+    getCachedStartupHealth: async () => startupHealthFixture(),
+  });
+  expect(response!.status).toBe(200);
+  expect((await response!.json()).catalogRefreshPending).toBe(false);
+  const withReserveSelected = JSON.parse(readFileSync(catalogPath, "utf8")) as RawCatalog;
+  const reserveSlug = `desktop/${NATIVE_RESERVE_MODEL}`;
+  const reserveEntry = withReserveSelected.models?.find(entry => entry.slug === reserveSlug);
+  // The projection is present on the very first convergence pass, with no prior retained sync
+  // and no restart in between.
+  expect(reserveEntry).toBeDefined();
+  expect(reserveEntry?.opencodex_catalog_kind).toBe(CODEX_ACCOUNT_BOUND_CATALOG_KIND);
+  // No account observation of the reserve model exists yet, so the projection is built from the
+  // genuine pinned Luna source (never a fabricated row) — the same fallback writeRetainedCatalogSync uses.
+  expect(reserveEntry?.[RESERVE_METADATA_SOURCE_FIELD]).toBe(RESERVE_LUNA_METADATA_SOURCE);
+  // The side selector was never granted the main account, so it must never receive a Reserve row.
+  expect(withReserveSelected.models?.some(entry => entry.slug === `team/${NATIVE_RESERVE_MODEL}`)).toBe(false);
+  // A selected-but-unrelated bare native model stays off the projected selector row: Reserve is
+  // additive, not a blanket unlock of every account-native model for that selector.
+  expect(withReserveSelected.models?.some(entry => entry.slug === "desktop/gpt-5.6-sol")).toBe(false);
+
+  // Turning the map to an empty selection (customize on, nothing chosen yet) must still gate the
+  // final projected Reserve entry through the same selective filter as any other account row.
+  const emptySelectionConfig: OcxConfig = { ...selectiveConfig, codexAccountPickerModels: {} };
+  const withNoneSelected = await convergeCatalog(emptySelectionConfig);
+  expect(withNoneSelected.models?.some(entry => entry.slug === reserveSlug)).toBe(false);
 });

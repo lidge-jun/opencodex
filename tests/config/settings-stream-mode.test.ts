@@ -796,8 +796,27 @@ test("eligible Reserve is selectable only for main-account bindings", async () =
   expect(loadConfig().codexAccountPickerModels).toEqual({ main: ["gpt-reserve"] });
   expect((await putSettings(config, { codexAccountPickerModels: { side: ["gpt-reserve"] } }, deps))!.status).toBe(400);
   config.codexDesktopAuthless = false;
+  expect((await putSettings(config, { codexAccountPickerModels: { main: ["gpt-reserve"] } }, deps))!.status).toBe(200);
+  expect(config.codexAccountPickerModels).toEqual({ main: [] });
   expect((await putSettings(config, { codexAccountPickerModels: { main: ["gpt-reserve"] } }, deps))!.status).toBe(400);
   expect((await putSettings(config, { codexDesktopAuthless: true, codexAccountPickerModels: { main: ["gpt-reserve"] } }, deps))!.status).toBe(200);
   config.runtimeRole = "client";
+  expect((await putSettings(config, { codexAccountPickerModels: { main: ["gpt-reserve"] } }, deps))!.status).toBe(200);
+  expect(config.codexAccountPickerModels).toEqual({ main: [] });
   expect((await putSettings(config, { codexAccountPickerModels: { main: ["gpt-reserve"] } }, deps))!.status).toBe(400);
+});
+
+
+test("an eligibility change does not let unchanged stale selections block the next edit", async () => {
+  const config = baseConfig();
+  config.codexAccountPickerEnabled = true;
+  config.codexDesktopAuthless = true;
+  config.codexAccountNamespaces = { main: "@main" };
+  config.codexAccountPickerModels = { main: ["gpt-reserve", "gpt-5.5"] };
+  const deps: ManagementApiDeps = { saveConfigPreservingClaudeCode: saveConfig, createManagementConvergeCodex: catalogConvergenceFactory(() => {}) };
+  expect((await putSettings(config, { codexDesktopAuthless: false }, deps))!.status).toBe(200);
+  const response = await putSettings(config, { codexAccountPickerModels: { main: ["gpt-reserve", "gpt-5.5", "gpt-5.6-sol"] } }, deps);
+  expect(response!.status).toBe(200);
+  expect(loadConfig().codexAccountPickerModels).toEqual({ main: ["gpt-5.5", "gpt-5.6-sol"] });
+  expect((await putSettings(config, { codexAccountPickerModels: { main: ["gpt-not-real"] } }, deps))!.status).toBe(400);
 });
