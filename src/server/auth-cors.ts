@@ -804,6 +804,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   directGeminiWireRenames: "editor",
   disabled: "editor",
   codexAccountMode: "editor",
+  experimentalCodexSideChatCache: "editor",
   apiKey: "redacted",
   apiKeyTransport: "editor",
   apiKeyPool: "redacted",

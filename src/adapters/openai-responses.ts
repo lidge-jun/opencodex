@@ -2,6 +2,7 @@ import { normalizeRoutedAgentMessages } from "./routed-agent-messages";
 import { normalizeOpenCodeGoAdditionalTools } from "./opencode-go-additional-tools";
 import { isXaiResponsesDestination } from "../providers/xai-transport";
 import { createHash } from "node:crypto";
+import { attachSideChatCache, prepareSideChatCache } from "../codex/side-chat-cache";
 import type { IncomingMeta, ProviderAdapter } from "./base";
 import { namespacedToolName, type AdapterEvent, type OcxParsedRequest, type OcxProviderConfig, type OcxUsage, type TierDecision } from "../types";
 import { catalogModelSupportsReasoningSummaries } from "../codex/catalog";
@@ -2313,7 +2314,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
 
     buildRequest(parsed: OcxParsedRequest, incoming: IncomingMeta) {
       const translatorBudget = incoming.translatorBudget;
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      let headers: Record<string, string> = { "Content-Type": "application/json" };
       let url: string;
 
       if (provider.authMode === "forward") {
@@ -2505,7 +2506,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         ),
         isXaiSchemaTarget(provider),
       );
-      const finalBody = stripDisabledVerbosity(
+      let finalBody = stripDisabledVerbosity(
         stripDisabledReasoningSummaries(
           normalizeConfiguredReasoningSummaryDelivery(sanitizedBody, provider, parsed.modelId),
           provider,
@@ -2541,12 +2542,19 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         actualServiceTier === null ? null : "service-tier",
         actualServiceTier,
       );
+      const cacheDecision = isCanonicalOpenAiForwardProvider(provider)
+        && !parsed.previousResponseId && parsed._compactionRequest !== true
+        ? prepareSideChatCache(finalBody, headers, provider.experimentalCodexSideChatCache === true) : undefined;
+      if (cacheDecision) {
+        finalBody = cacheDecision.body;
+        headers = cacheDecision.headers;
+      }
       const body = JSON.stringify(finalBody);
       const releaseBodyObservation = translatorBudget.observeExternallyCapped(
         "passthrough_serialization",
         new TextEncoder().encode(body).byteLength,
       );
-      return {
+      const request = {
         url,
         method: "POST",
         headers,
@@ -2558,6 +2566,8 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         ...(convertedRoutedNamespaceToolAliases ? { convertedRoutedNamespaceToolAliases } : {}),
         ...(tierLog ? { tierLog } : {}),
       };
+      attachSideChatCache(request, cacheDecision);
+      return request;
     },
 
     // The passthrough normally relays the upstream stream verbatim and never parses.

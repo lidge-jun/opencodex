@@ -162,6 +162,7 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `modelVercelGatewayRouting?` | `Record<string, VercelGatewayRouting>` | Exact model-id overrides that replace the provider-wide Vercel AI Gateway preference. |
 | `authMode?` | `"key" \| "forward" \| "oauth" \| "local"` | Authentication mode (default `key`). OAuth/subscription credentials are stored outside `config.json`; `local` is limited to providers whose registry entry permits it. |
 | `codexAccountMode?` | `"pool" \| "direct"` | Canonical `openai` only; defaults to Pool. Direct bypasses pool state. |
+| `experimentalCodexSideChatCache?` | `boolean` | Experimental, default `false`. Canonical `openai` only. Allows eligible Desktop side chats to reuse a completed parent request’s prompt-cache identity. See [side-chat cache reuse](#experimental-desktop-side-chat-cache-reuse). |
 | `refreshPolicy?` | `"proactive" \| "lazy-only" \| "disabled"` | Override this OAuth provider's Token Guardian policy. |
 | `reasoningEfforts?` | `string[]` | Provider-wide Codex reasoning labels to advertise and send. For `google`-adapter providers, a configured ladder also asserts `thinkingLevel` capability: direct and Vertex non-image requests send the selected effort as `generationConfig.thinkingConfig.thinkingLevel`, while Cloud Code Assist uses its envelope-specific path. |
 | `modelReasoningEfforts?` | `Record<string, string[]>` | Per-model labels. An empty list hides effort control. As with `reasoningEfforts`, each configured `google`-adapter ladder asserts `thinkingLevel` capability; direct and Vertex non-image requests use the flat Gemini path, while Cloud Code Assist sends it under its request envelope. |
@@ -1003,3 +1004,37 @@ or expiry does not extend the history-recovery contract.
 Sender and recipient on routed Responses are context for the receiving model, not a new
 machine-readable routing protocol. Tool routing continues to use the existing collaboration
 contracts.
+
+
+## Experimental Desktop side-chat cache reuse
+
+Set `experimentalCodexSideChatCache: true` on the existing `providers.openai`
+configuration row, then restart the proxy. The default is disabled. Set it to
+`false` and restart to disable it and discard the process-local cache metadata.
+This option applies only to the canonical ChatGPT forward Responses provider.
+
+With this option enabled, the proxy observes completed streamed requests and
+keeps bounded fingerprints for up to 64 tasks, with a ten-minute lifetime and a
+2,048-input-item limit. It uses explicit Desktop fork metadata to match a side
+chat to its parent. The selected credential, account, model, settings, tools,
+and inherited prompt prefix must be compatible before the proxy reuses the
+parent's prompt-cache key and provider session identity. Child task and turn
+identifiers remain distinct. Failed or unfinished requests do not seed reuse.
+
+The proxy recognizes exact Desktop side-conversation rule and boundary text.
+It moves recognized rules to a developer message at the side boundary, or adds
+a developer copy of the recognized boundary when no separate rule block exists.
+It also moves a small allowlist of context-dependent `functions.exec` method
+references to a final developer message containing that request's own methods.
+Executable tool schemas remain intact. An explicitly bounded inherited history
+may reuse its proven prefix before a differing reasoning item; the child's
+reasoning and subsequent messages remain unchanged.
+
+These transformations depend on the Desktop prompt format and need validation
+when that format changes. Unknown instruction differences, incompatible inputs,
+missing parents, continuations, and compaction requests skip parent reuse.
+Nested side chats can also skip when inherited transformations no longer match.
+Account switching or credential refresh can prevent a match. Upstream cache
+retention and hits are opportunistic; enabling this option does not guarantee a
+hit. Existing provider debug diagnostics report reason codes, opaque task tags,
+and token counts without recording prompt text or credentials.

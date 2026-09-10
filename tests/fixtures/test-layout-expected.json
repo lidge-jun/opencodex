@@ -319,6 +319,7 @@
   "codex-shim-autorestore.test.ts": "codex-integration",
   "codex-shim-readiness.test.ts": "codex-integration",
   "codex-shim.test.ts": "codex-integration",
+  "codex-side-chat-cache.test.ts": "codex-integration",
   "codex-spark-visibility.test.ts": "codex-integration",
   "codex-sqlite-home.test.ts": "codex-integration",
   "codex-sync-api.test.ts": "codex-integration",

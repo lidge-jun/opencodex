@@ -1,3 +1,4 @@
+import { completeSideChatCache } from "../../codex/side-chat-cache";
 import type { Server } from "bun";
 import { randomUUID } from "node:crypto";
 import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse, type ResponsesTerminalStatus } from "../../bridge";
@@ -4934,6 +4935,7 @@ async function handleResponsesInner(
       const firstCompletion = !inspectedCompletionSeen;
       inspectedCompletionSeen = true;
       if (firstCompletion && (inspectedTerminal === null || firstTerminalAllowsRecall)) {
+        completeSideChatCache(request, response);
         // A model-less first completion permanently declines recall; later terminal
         // frames are hidden by the client boundary and cannot supply its identity.
         // Native inspection sees the pre-rewrite model. Only an actual terminal
