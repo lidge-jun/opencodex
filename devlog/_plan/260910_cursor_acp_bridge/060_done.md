@@ -137,3 +137,62 @@ it. Follow-ups, in dependency order:
    [070](./070_live_trace.md). Residuals 1-3 are closed; `ask` held, and `agent`
    mode mutated a file with no permission request. The remaining untested path is
    `plan` mode and `cursor/create_plan`.
+
+---
+
+## Addendum -- final state of this unit
+
+Two further passes happened after the summary above was written. Both changed
+conclusions, so the summary alone is no longer sufficient; this addendum is the
+current entry point.
+
+**A live trace was run** ([070](./070_live_trace.md)) once the keychain was
+unlocked. `ask` mode held against an explicit write instruction. `agent` mode
+edited the file after issuing zero permission requests and zero client-mediated
+writes. That closed residuals 1-3 and reversed a retraction: the reviewer had been
+right about the ACP specification and wrong about Cursor's implementation of it.
+
+**Then the trace itself turned out to be measured wrong.** Reading t3code, which
+ships a working ACP provider layer, surfaced a client capability
+(`_meta.parameterizedModelPicker`) that both t3code and cli-jaw send and this
+unit's probe did not. With it, Cursor returns clean base model ids, branded
+display names, and **per-model config options carrying the legal effort and
+context values, including 1m context**. Three model-surface claims were withdrawn.
+
+That second correction matters more than its size suggests. Neither the ACP spec
+nor Cursor's documentation mentions the flag. No amount of reading would have
+found it; only an existing implementation had it. When a protocol has a
+vendor-specific negotiation flag, the reference implementations are primary
+sources, not secondary ones.
+
+### Where the verdict landed
+
+Unchanged in conclusion, replaced twice in reasoning: **not an inference provider.**
+
+The strongest reason is no longer about tool ownership. It is that **OpenCodex has
+no workspace to give the agent** -- `OcxParsedRequest` has no working-directory
+field and `coding-agent/turn.ts` passes no `cwd`, so a spawned `cursor-agent` acts
+in the proxy's directory rather than the caller's project. 070 covers this and why
+prompt-sniffing and headers both fail. A required `workspaceRoot` is the only
+honest workaround and it pins the provider to one repository.
+
+### What came out of it that is worth keeping
+
+`ACP-D5` in [040](./040_feasibility_verdict.md): run `cursor-agent acp` as a
+**metadata discovery probe** rather than an inference path. It sidesteps every
+blocker because no turn crosses the ACP boundary, and it replaces hand-maintained
+`modelReasoningEfforts`/`modelContextWindows` tables -- and the default-off
+`cursorEffortRows` regex workaround -- with values the vendor itself advertises.
+Coverage is partial: 30 of 38 ACP ids match the HTTP catalogue exactly, 36 with a
+short alias table (six Claude name reorderings such as `claude-opus-4-6` versus
+`claude-4.6-opus`, plus `default` versus `auto`), against 53 configured HTTP
+models. So ACP is an authoritative source for roughly two thirds of the catalogue,
+not a replacement for it.
+
+### Status
+
+Closed as an investigation. No implementation was undertaken and none is proposed
+in this unit. `ACP-D5` is recorded as the one follow-up with a favourable
+cost/benefit; `ACP-D4` remains deferred pending demand; `ACP-D2`/`D3` stay
+rejected. The `800_agent-fabric/110_protocol_boundaries.md` annotation remains an
+open recommendation owned by that unit.

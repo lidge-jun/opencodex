@@ -124,15 +124,15 @@ This is a two-run result on one version, one model and one prompt. It is enough 
 show the unsupervised path is reachable by default; it is not enough to characterise
 every configuration.
 
-## Model surface, measured
+## Model surface, first measurement (SUPERSEDED)
 
-38 models advertised, and all 38 display names are distinct. That is consistent with **one row per
-model** and with Cursor staff's "one variant per model", but distinct display
-names do not by themselves prove the underlying set has no hidden variants.
+> **This section is wrong.** It was measured without a client capability that both
+> existing ACP implementations send, and it reports the degraded result. It is kept
+> because the correction below is the useful part of this document. Read
+> "CORRECTION (same day)" instead.
 
-Parameters are baked into each id rather than selectable, for example
-`claude-opus-5[thinking=true,context=300k,effort=high,fast=false]` and
-`gpt-5.6-sol[context=272k,reasoning=medium,fast=false]`.
+38 models advertised, all with parameters baked into the id, for example
+`claude-opus-5[thinking=true,context=300k,effort=high,fast=false]`.
 
 - context values present: `300k`, `272k`, `200k`
 - effort values present: `medium`, `high`, `xhigh`
@@ -221,3 +221,55 @@ per model, populate the existing HTTP provider's effort/context metadata from
 vendor-authoritative data, exit. No turn is ever routed through ACP, so tool
 ownership, missing usage and unsupervised writes never arise. That is a new option
 and is recorded in 040 as ACP-D5.
+
+## The constraint that actually decides this: there is no workspace
+
+Found while evaluating whether `cursor-acp/<model>` could simply be registered as
+a separate provider. It is the most practical blocker in this unit and it is not
+about protocol semantics at all.
+
+ACP requires a `cwd` at `session/new`. The agent operates on that directory.
+OpenCodex has nowhere to get one:
+
+- `OcxParsedRequest` (`src/types/request.ts`) has no working-directory field.
+- `IncomingMeta` carries no such field either.
+- `src/adapters/coding-agent/turn.ts` passes **no `cwd` at all** when it spawns.
+  The child inherits the proxy's own working directory -- for a launchd-managed
+  service, wherever the service was started, not the user's project.
+
+So a spawned `cursor-agent` would read and edit files in the **proxy's** directory,
+not the caller's. Combined with the agent-mode result above, that is worse than it
+first sounds: unsupervised writes aimed at the wrong tree.
+
+This also explains the coding-agent precedent more precisely than 030 did. That
+transport gets away with having no `cwd` because `--tools ""` empties the vendor's
+tool set, so the child never touches the filesystem and the working directory is
+irrelevant. **A workspace is exactly the thing you start needing the moment you
+attach an agent that still holds its own tools.**
+
+The same gap already exists on the HTTP path: `native-exec-fs.ts` and
+`native-exec-shell.ts` both resolve against `process.cwd()`. That is a sharper
+reason for `nativeLocalExec` defaulting to `off` than the attestation argument in
+030 -- OpenCodex does not merely lack proof of the caller's sandbox, it does not
+know the caller's directory.
+
+### Why the obvious workarounds fail
+
+**Read the cwd out of the prompt.** Rejected by precedent in this repository.
+`exec-policy.ts:7` already sniffs `CURSOR_SANDBOX_FULL_ACCESS_RE` out of
+system/developer prose, and the same file declares that request text is
+caller-controlled and never authoritative, which is why that mode is fail-closed.
+Deriving a filesystem root the same way would repeat a mistake the codebase has
+already diagnosed.
+
+**Send it as a header.** Codex CLI does not transmit its project directory, so
+there is nothing to read.
+
+**Configure it.** A required `workspaceRoot` on the provider entry is the only
+honest option. It is declarative and easy to warn about, but it pins the provider
+to one project: selecting the model while working in another repository edits the
+configured one. For single-repository dogfooding that is acceptable; as a shipped
+provider it is a footgun.
+
+Any future GO on an ACP inference path must resolve this first. It is a
+prerequisite, not a polish item.
