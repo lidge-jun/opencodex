@@ -38,6 +38,13 @@ test("every enumerated top-level deletion writer records config rebase provenanc
   }
 });
 
+test("record child deletions use field-scoped rebase provenance", () => {
+  const source = readFileSync(join(import.meta.dir, "..", "..", "src/codex/account-auto-switch.ts"), "utf8");
+  expect(source).toContain(
+    "deleteConfigObjectChildKey(config, \"codexAccountAutoSwitchThresholds\", accountId)",
+  );
+});
+
 test("live-config writers contain no untracked direct top-level deletion", () => {
   for (const path of Object.keys(writerContracts)) {
     const source = readFileSync(repoPath(path), "utf8");

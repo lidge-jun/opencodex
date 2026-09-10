@@ -764,6 +764,12 @@ export interface OcxConfig {
    */
   codexAccountPriorities?: Record<string, number>;
   /**
+   * Per-account proactive-switch threshold overrides. Missing account entry inherits
+   * `autoSwitchThreshold`; 0 disables usage-driven switching only for that account.
+   * Includes the synthetic `__main__` Desktop account. Range 0..100.
+   */
+  codexAccountAutoSwitchThresholds?: Record<string, number>;
+  /**
    * Account id the operator last selected by hand. Suppresses upward priority
    * preemption until that account crosses the auto-switch threshold. Stores the
    * id (not a flag) so a stale pin cannot outlive the selection it described.

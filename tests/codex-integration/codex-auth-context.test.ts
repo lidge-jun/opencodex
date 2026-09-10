@@ -42,6 +42,11 @@ import {
   setMainAccountPlan,
 } from "../../src/codex/main-account";
 import {
+  clearMainAccountInfoCache,
+  observeMainQuotaCredential,
+  observeMainQuotaIdentity,
+} from "../../src/codex/main-account-cache";
+import {
   clearAccountNeedsReauth,
   clearAccountQuota,
   handleCodexAuthAPI,
@@ -783,6 +788,75 @@ describe("Codex auth context", () => {
     })).rejects.toThrow("Selected Codex account does not support this model");
   });
 
+  test("a zero account threshold permits a model detour but never bypasses exact entitlement rejection", async () => {
+    const cfg = config();
+    cfg.autoSwitchThreshold = 50;
+    cfg.codexAccountAutoSwitchThresholds = { "pool-a": 0 };
+    cfg.activeCodexAccountPinned = "pool-a";
+    cfg.codexAccounts?.push({ id: "pool-b", email: "b@example.test", isMain: false });
+    for (const id of ["pool-a", "pool-b"]) {
+      saveCodexAccountCredential(id, {
+        accessToken: `${id}-token`,
+        refreshToken: `${id}-refresh`,
+        expiresAt: Date.now() + 5 * 60_000,
+        chatgptAccountId: `${id}-account`,
+      });
+    }
+    setAccountQuotaFromParsed("pool-a", { weeklyPercent: 100 });
+    setAccountQuotaFromParsed("pool-b", { weeklyPercent: 1 });
+    resetCodexRoutingForManualSelection("pool-a");
+    const headers = new Headers({ "x-codex-parent-thread-id": "zero-threshold-auth-detour" });
+    const ordinaryOptions = { modelId: "gpt-5.5", primeCodexPoolQuotas: async () => {} };
+    await expect(resolveCodexAuthContext(headers, cfg, "pool", ordinaryOptions))
+      .resolves.toMatchObject({ kind: "pool", accountId: "pool-a", accessToken: "pool-a-token" });
+
+    const entitlementSnapshot: CodexModelEntitlementSnapshot = {
+      modelsByAccount: new Map([
+        ["pool-a", new Set(["gpt-5.5"])],
+        ["pool-b", new Set(["gpt-daybreak-blue-latest"])],
+      ]),
+      confirmedAccountIds: new Set(["pool-a", "pool-b"]),
+      credentialIdentities: new Map(),
+    };
+    const gatedOptions = {
+      modelId: "gpt-daybreak-blue-latest",
+      resolveCodexModelEntitlements: async () => entitlementSnapshot,
+      primeCodexPoolQuotas: async () => {},
+    };
+    await expect(resolveCodexAuthContext(headers, cfg, "pool", {
+      ...gatedOptions,
+      accountId: "pool-a",
+    })).rejects.toThrow("Selected Codex account does not support this model");
+    await expect(resolveCodexAuthContext(headers, cfg, "pool", gatedOptions))
+      .resolves.toMatchObject({ kind: "pool", accountId: "pool-b", accessToken: "pool-b-token" });
+    expect(cfg.activeCodexAccountId).toBe("pool-a");
+    expect(cfg.activeCodexAccountPinned).toBe("pool-a");
+    await expect(resolveCodexAuthContext(headers, cfg, "pool", ordinaryOptions))
+      .resolves.toMatchObject({ kind: "pool", accountId: "pool-a" });
+  });
+
+  test("a zero account threshold rejects a gated model when no stored account is entitled", async () => {
+    const cfg = config();
+    cfg.codexAccounts = cfg.codexAccounts?.filter(account => !account.isMain);
+    cfg.autoSwitchThreshold = 50;
+    cfg.codexAccountAutoSwitchThresholds = { "pool-a": 0 };
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pool-token",
+      refreshToken: "pool-refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "pool-account",
+    });
+    setAccountQuotaFromParsed("pool-a", { weeklyPercent: 100 });
+    await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", {
+      modelId: "gpt-daybreak-blue-latest",
+      resolveCodexModelEntitlements: async () => ({
+        modelsByAccount: new Map([["pool-a", new Set(["gpt-5.5"])]]),
+        confirmedAccountIds: new Set(["pool-a"]),
+        credentialIdentities: new Map(),
+      }),
+    })).rejects.toThrow("No eligible Codex account supports this model");
+  });
+
   test("ordinary native models do not pay the entitlement discovery path", async () => {
     saveCodexAccountCredential("pool-a", {
       accessToken: "pool-token",
@@ -1156,6 +1230,12 @@ describe("Codex auth context", () => {
     mainWeeklyPercent: number;
     poolWeeklyPercent: number;
     callerEntitled: boolean;
+    mainThresholdOverride?: number;
+    poolEntitled?: boolean;
+    mainRetryAfter?: string;
+    poolUsable?: boolean;
+    duringCallerEntitlement?: (cfg: OcxConfig) => Promise<void>;
+    mode?: "pool" | "direct";
   }): Promise<{
     cfg: OcxConfig;
     context: Awaited<ReturnType<typeof resolveCodexAuthContext>>;
@@ -1166,6 +1246,12 @@ describe("Codex auth context", () => {
     cfg.autoSwitchThreshold = 90;
     cfg.activeCodexAccountId = MAIN_CODEX_ACCOUNT_ID;
     cfg.activeCodexAccountPinned = MAIN_CODEX_ACCOUNT_ID;
+    if (options.poolUsable === false) cfg.pausedCodexAccountIds = ["pool-a"];
+    if (options.mainThresholdOverride !== undefined) {
+      cfg.codexAccountAutoSwitchThresholds = {
+        [MAIN_CODEX_ACCOUNT_ID]: options.mainThresholdOverride,
+      };
+    }
     cfg.codexAccountPriorities = {
       [MAIN_CODEX_ACCOUNT_ID]: 0,
       "pool-a": 0,
@@ -1179,11 +1265,18 @@ describe("Codex auth context", () => {
     });
     setAccountQuotaFromParsed(MAIN_CODEX_ACCOUNT_ID, { weeklyPercent: options.mainWeeklyPercent });
     setAccountQuotaFromParsed("pool-a", { weeklyPercent: options.poolWeeklyPercent });
+    if (options.mainRetryAfter !== undefined) {
+      recordCodexUpstreamOutcome(cfg, MAIN_CODEX_ACCOUNT_ID, 429, {
+        retryAfter: options.mainRetryAfter,
+        fixedAccount: true,
+        now: Date.now(),
+      });
+    }
     let directEntitlementChecks = 0;
     const context = await resolveCodexAuthContext(new Headers({
       authorization: "Bearer caller-keyring-token",
       "chatgpt-account-id": "caller-keyring-account",
-    }), cfg, "pool", {
+    }), cfg, options.mode ?? "pool", {
       requestScopedMainCredential: true,
       // Uses the one model still account-gated. These #3157 cases are about how a caller
       // entitlement MISS interacts with the main pin, so they need a model whose entitlement is
@@ -1192,10 +1285,13 @@ describe("Codex auth context", () => {
       modelId: "gpt-daybreak-blue-latest",
       isDirectCallerEntitledToCodexModel: async () => {
         directEntitlementChecks += 1;
+        await options.duringCallerEntitlement?.(cfg);
         return options.callerEntitled;
       },
       resolveCodexModelEntitlements: async () => ({
-        modelsByAccount: new Map([["pool-a", new Set(["gpt-daybreak-blue-latest"])]]),
+        modelsByAccount: new Map([["pool-a", new Set(
+          options.poolEntitled === false ? [] : ["gpt-daybreak-blue-latest"],
+        )]]),
         clientVersionByAccount: new Map([["pool-a", "0.150.1"]]),
         confirmedAccountIds: new Set(["pool-a"]),
         credentialIdentities: new Map([["pool-a", "pool:1:pool-account"]]),
@@ -1216,6 +1312,219 @@ describe("Codex auth context", () => {
     expect(cfg.activeCodexAccountPinned).toBe(MAIN_CODEX_ACCOUNT_ID);
   });
 
+  test("a zero main-account threshold override preserves a request-owned main pin at full usage", async () => {
+    const { cfg, context, directEntitlementChecks } = await resolveRequestOwnedMainPinCase({
+      mainWeeklyPercent: 100,
+      poolWeeklyPercent: 16,
+      callerEntitled: true,
+      mainThresholdOverride: 0,
+    });
+    expect(context).toMatchObject({ kind: "main", accountId: null });
+    expect(directEntitlementChecks).toBe(1);
+    expect(cfg.activeCodexAccountId).toBe(MAIN_CODEX_ACCOUNT_ID);
+    expect(cfg.activeCodexAccountPinned).toBe(MAIN_CODEX_ACCOUNT_ID);
+  });
+
+  test("a zero main-account threshold does not let a request-owned main pin bypass Retry-After", async () => {
+    // Model a previously observed physical-main identity matching this caller.
+    // An unrelated caller must not inherit stored main's cooldown.
+    observeMainQuotaIdentity("caller-keyring-account");
+    observeMainQuotaCredential("caller-keyring-token", "caller-keyring-account");
+    try {
+      const { context } = await resolveRequestOwnedMainPinCase({
+        mainWeeklyPercent: 100,
+        poolWeeklyPercent: 16,
+        callerEntitled: true,
+        mainThresholdOverride: 0,
+        mainRetryAfter: "600",
+      });
+      const cooldown = getCodexQuotaHealthSnapshot(MAIN_CODEX_ACCOUNT_ID, "shared");
+      expect(cooldown).toMatchObject({ cooldownSource: "retry-after" });
+      expect(cooldown!.cooldownUntil).toBeGreaterThan(Date.now());
+      expect(context).toMatchObject({ kind: "pool", accountId: "pool-a", accessToken: "pool-token" });
+    } finally {
+      clearMainAccountInfoCache();
+    }
+  });
+
+  test.each(["caller-keyring-account", "other-main-account"])(
+    "a zero main-account threshold does not impose main cooldown on an unrelated caller in workspace %s",
+    async (observedAccountId) => {
+      observeMainQuotaIdentity(observedAccountId);
+      observeMainQuotaCredential("other-main-token", observedAccountId);
+      try {
+        const { cfg, context } = await resolveRequestOwnedMainPinCase({
+          mainWeeklyPercent: 100,
+          poolWeeklyPercent: 16,
+          callerEntitled: true,
+          mainThresholdOverride: 0,
+          mainRetryAfter: "600",
+        });
+        expect(getCodexQuotaHealthSnapshot(MAIN_CODEX_ACCOUNT_ID, "shared"))
+          .toMatchObject({ cooldownSource: "retry-after" });
+        expect(context).toMatchObject({ kind: "main", accountId: null });
+        const forwarded = headersForCodexAuthContext(new Headers({
+          authorization: "Bearer caller-keyring-token",
+          "chatgpt-account-id": "caller-keyring-account",
+        }), context);
+        expect(forwarded.get("authorization")).toBe("Bearer caller-keyring-token");
+        expect(forwarded.get("chatgpt-account-id")).toBe("caller-keyring-account");
+        expect(cfg.activeCodexAccountPinned).toBe(MAIN_CODEX_ACCOUNT_ID);
+      } finally {
+        clearMainAccountInfoCache();
+      }
+    },
+  );
+
+  test.each(["unentitled", "paused"] as const)(
+    "a zero main-account threshold rejects cooled matching caller when Pool fallback is %s",
+    async (unavailableReason) => {
+      observeMainQuotaIdentity("caller-keyring-account");
+      observeMainQuotaCredential("caller-keyring-token", "caller-keyring-account");
+      try {
+        await expect(resolveRequestOwnedMainPinCase({
+          mainWeeklyPercent: 100,
+          poolWeeklyPercent: 16,
+          callerEntitled: true,
+          mainThresholdOverride: 0,
+          mainRetryAfter: "600",
+          poolEntitled: unavailableReason !== "unentitled",
+          poolUsable: unavailableReason !== "paused",
+        })).rejects.toBeInstanceOf(CodexAccountCooldownError);
+        expect(getCodexQuotaHealthSnapshot(MAIN_CODEX_ACCOUNT_ID, "shared"))
+          .toMatchObject({ cooldownSource: "retry-after" });
+      } finally {
+        clearMainAccountInfoCache();
+      }
+    },
+  );
+
+  test.each([true, false])(
+    "a zero main-account threshold rechecks cooldown after caller entitlement resolves with Pool entitled %s",
+    async (poolEntitled) => {
+      observeMainQuotaIdentity("caller-keyring-account");
+      observeMainQuotaCredential("caller-keyring-token", "caller-keyring-account");
+      let entered!: (cfg: OcxConfig) => void;
+      const entitlementStarted = new Promise<OcxConfig>(resolve => { entered = resolve; });
+      let release!: () => void;
+      const entitlementGate = new Promise<void>(resolve => { release = resolve; });
+      const pending = resolveRequestOwnedMainPinCase({
+        mainWeeklyPercent: 100,
+        poolWeeklyPercent: 16,
+        callerEntitled: true,
+        mainThresholdOverride: 0,
+        poolEntitled,
+        duringCallerEntitlement: async cfg => {
+          entered(cfg);
+          await entitlementGate;
+        },
+      });
+      // Attach rejection handling before releasing the asynchronous dependency.
+      const outcome = pending.then(
+        result => ({ status: "resolved" as const, result }),
+        error => ({ status: "rejected" as const, error }),
+      );
+      try {
+        const cfg = await entitlementStarted;
+        expect(getCodexQuotaHealthSnapshot(MAIN_CODEX_ACCOUNT_ID, "shared")).toBeNull();
+        const now = Date.now();
+        recordCodexUpstreamOutcome(cfg, MAIN_CODEX_ACCOUNT_ID, 429, {
+          retryAfter: "600", fixedAccount: true, now,
+        });
+        release();
+        const settled = await outcome;
+        if (poolEntitled) {
+          expect(settled.status).toBe("resolved");
+          if (settled.status === "resolved") {
+            expect(settled.result.context).toMatchObject({ kind: "pool", accountId: "pool-a" });
+          }
+        } else {
+          expect(settled.status).toBe("rejected");
+          if (settled.status === "rejected") expect(settled.error).toBeInstanceOf(CodexAccountCooldownError);
+        }
+        expect(getCodexQuotaHealthSnapshot(MAIN_CODEX_ACCOUNT_ID, "shared")).toMatchObject({
+          cooldownSource: "retry-after", cooldownUntil: now + 600_000,
+        });
+      } finally {
+        release();
+        await outcome;
+        clearMainAccountInfoCache();
+      }
+    },
+  );
+
+  test.each([
+    ["spark", "gpt-5.3-codex-spark", "shared", "gpt-5.4"],
+    ["shared", "gpt-5.4", "spark", "gpt-5.3-codex-spark"],
+  ] as const)(
+    "a zero main-account threshold enforces %s cooldown without blocking the independent native scope",
+    async (cooledScope, cooledModel, healthyScope, healthyModel) => {
+      observeMainQuotaIdentity("caller-keyring-account");
+      observeMainQuotaCredential("caller-keyring-token", "caller-keyring-account");
+      try {
+        const { cfg } = await resolveRequestOwnedMainPinCase({
+          mainWeeklyPercent: 100,
+          poolWeeklyPercent: 16,
+          callerEntitled: true,
+          mainThresholdOverride: 0,
+        });
+        const now = Date.now();
+        recordCodexUpstreamOutcome(cfg, MAIN_CODEX_ACCOUNT_ID, 429, {
+          now,
+          resetAt: Math.floor((now + 600_000) / 1_000),
+          modelId: cooledModel,
+          fixedAccount: true,
+        });
+        const cooldown = getCodexQuotaHealthSnapshot(MAIN_CODEX_ACCOUNT_ID, cooledScope);
+        expect(cooldown).toMatchObject({ cooldownSource: "reset-derived", quotaScope: cooledScope });
+        expect(getCodexQuotaHealthSnapshot(MAIN_CODEX_ACCOUNT_ID, healthyScope)).toBeNull();
+        const headers = new Headers({
+          authorization: "Bearer caller-keyring-token",
+          "chatgpt-account-id": "caller-keyring-account",
+        });
+        await expect(resolveCodexAuthContext(headers, cfg, "pool", {
+          requestScopedMainCredential: true, modelId: healthyModel,
+        })).resolves.toMatchObject({ kind: "main", accountId: null });
+        expect(cfg.activeCodexAccountPinned).toBe(MAIN_CODEX_ACCOUNT_ID);
+        await expect(resolveCodexAuthContext(headers, cfg, "pool", {
+          requestScopedMainCredential: true, modelId: cooledModel,
+        })).resolves.toMatchObject({ kind: "pool", accountId: "pool-a" });
+        expect(getCodexQuotaHealthSnapshot(MAIN_CODEX_ACCOUNT_ID, cooledScope)).toEqual(cooldown);
+      } finally {
+        clearMainAccountInfoCache();
+      }
+    },
+  );
+
+  test("a zero main-account threshold leaves explicit Direct caller auth unchanged during matching main cooldown", async () => {
+    observeMainQuotaIdentity("caller-keyring-account");
+    observeMainQuotaCredential("caller-keyring-token", "caller-keyring-account");
+    try {
+      const { cfg, context, directEntitlementChecks } = await resolveRequestOwnedMainPinCase({
+        mainWeeklyPercent: 100,
+        poolWeeklyPercent: 16,
+        callerEntitled: true,
+        mainThresholdOverride: 0,
+        mainRetryAfter: "600",
+        mode: "direct",
+      });
+      expect(context).toMatchObject({ kind: "main", accountId: null });
+      expect(directEntitlementChecks).toBe(1);
+      const forwarded = headersForCodexAuthContext(new Headers({
+        authorization: "Bearer caller-keyring-token",
+        "chatgpt-account-id": "caller-keyring-account",
+      }), context);
+      expect(forwarded.get("authorization")).toBe("Bearer caller-keyring-token");
+      expect(forwarded.get("chatgpt-account-id")).toBe("caller-keyring-account");
+      expect(cfg.activeCodexAccountId).toBe(MAIN_CODEX_ACCOUNT_ID);
+      expect(cfg.activeCodexAccountPinned).toBe(MAIN_CODEX_ACCOUNT_ID);
+      expect(getCodexQuotaHealthSnapshot(MAIN_CODEX_ACCOUNT_ID, "shared"))
+        .toMatchObject({ cooldownSource: "retry-after" });
+    } finally {
+      clearMainAccountInfoCache();
+    }
+  });
+
   test("an exhausted request-owned main pin still yields to the healthy Pool account (#3157)", async () => {
     const { cfg, context, directEntitlementChecks } = await resolveRequestOwnedMainPinCase({
       mainWeeklyPercent: 100,
@@ -1226,6 +1535,29 @@ describe("Codex auth context", () => {
     expect(directEntitlementChecks).toBe(0);
     expect(cfg.activeCodexAccountId).toBe("pool-a");
     expect(cfg.activeCodexAccountPinned).toBeUndefined();
+  });
+
+  test("a zero main-account threshold still detours an unentitled caller without clearing the main pin", async () => {
+    const { cfg, context, directEntitlementChecks } = await resolveRequestOwnedMainPinCase({
+      mainWeeklyPercent: 100,
+      poolWeeklyPercent: 16,
+      callerEntitled: false,
+      mainThresholdOverride: 0,
+    });
+    expect(context).toMatchObject({ kind: "pool", accountId: "pool-a", accessToken: "pool-token" });
+    expect(directEntitlementChecks).toBe(1);
+    expect(cfg.activeCodexAccountId).toBe(MAIN_CODEX_ACCOUNT_ID);
+    expect(cfg.activeCodexAccountPinned).toBe(MAIN_CODEX_ACCOUNT_ID);
+  });
+
+  test("a zero main-account threshold rejects an unentitled caller when no Pool detour supports the model", async () => {
+    await expect(resolveRequestOwnedMainPinCase({
+      mainWeeklyPercent: 100,
+      poolWeeklyPercent: 16,
+      callerEntitled: false,
+      poolEntitled: false,
+      mainThresholdOverride: 0,
+    })).rejects.toThrow(CodexPoolAuthenticationError);
   });
 
   test("a caller entitlement miss uses a Pool model detour without clearing the healthy main pin (#3157)", async () => {
@@ -1684,6 +2016,40 @@ describe("Codex auth context", () => {
     await expect(resolveCodexAuthContext(new Headers({ authorization: "Bearer main_token" }), config(), "pool"))
       .rejects.toBeInstanceOf(CodexAccountCooldownError);
   });
+
+  test.each([undefined, "pool-a"])(
+    "a zero account threshold still enforces Retry-After with account selector %s",
+    async (accountId) => {
+      const cfg = config();
+      cfg.autoSwitchThreshold = 50;
+      cfg.codexAccountAutoSwitchThresholds = { "pool-a": 0 };
+      saveCodexAccountCredential("pool-a", {
+        accessToken: "pool-token",
+        refreshToken: "pool-refresh",
+        expiresAt: Date.now() + 5 * 60_000,
+        chatgptAccountId: "pool-account",
+      });
+      setAccountQuotaFromParsed("pool-a", { weeklyPercent: 100 });
+      const headers = new Headers({ authorization: "Bearer inbound-main-token" });
+      const options = { accountId, modelId: "gpt-5.5", primeCodexPoolQuotas: async () => {} };
+      const context = await resolveCodexAuthContext(headers, cfg, "pool", options);
+      expect(context).toMatchObject({ kind: "pool", accountId: "pool-a", accessToken: "pool-token" });
+
+      const now = Date.now();
+      recordCodexUpstreamOutcome(cfg, "pool-a", 429, {
+        retryAfter: "600",
+        fixedAccount: true,
+        now,
+      });
+      await expect(resolveCodexAuthContext(headers, cfg, "pool", options))
+        .rejects.toBeInstanceOf(CodexAccountCooldownError);
+      expect(() => assertCodexAuthContextNotCooled(context)).toThrow(CodexAccountCooldownError);
+      expect(getCodexQuotaHealthSnapshot("pool-a", "shared")).toMatchObject({
+        cooldownUntil: now + 600_000,
+        cooldownSource: "retry-after",
+      });
+    },
+  );
 
   test("reset-derived cooldown admits one probe and clears on its success (#433)", async () => {
     const originalNow = Date.now;

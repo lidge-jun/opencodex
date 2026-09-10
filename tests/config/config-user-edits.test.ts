@@ -17,6 +17,7 @@ import {
   validateConfigCandidate,
 } from "../../src/config";
 import { legacyCustomModelCatalogSlugs } from "../../src/codex/custom-model-catalog-migration";
+import { setCodexAccountAutoSwitchThresholdOverride } from "../../src/codex/account-auto-switch";
 import { rateLimitRetryPolicyFor } from "../../src/providers/key-failover";
 import {
   activeUserCostOverlays,
@@ -610,6 +611,19 @@ test("OAuth reconciliation adopts a guarded Claude edit that predates its disk s
   expect(diskConfig().claudeCode).toEqual({ authMode: "proxy" });
 });
 
+test("OAuth reconciliation preserves a cleared account threshold and adopts a disk sibling", () => {
+  const live = loadConfig();
+  live.codexAccountAutoSwitchThresholds = { work: 60 };
+  saveConfig(live);
+  const persistedBaseline = loadConfig();
+
+  writeDiskConfig({ codexAccountAutoSwitchThresholds: { work: 60, side: 70 } });
+  setCodexAccountAutoSwitchThresholdOverride(live, "work", null);
+  reconcileLiveConfigFromDisk(live, persistedBaseline);
+
+  expect(live.codexAccountAutoSwitchThresholds).toEqual({ side: 70 });
+});
+
 test("OAuth reconciliation adopts a modelCosts edit and refreshes the overlay registry", () => {
   const live = loadConfig();
   const persistedBaseline = loadConfig();
@@ -698,6 +712,20 @@ test("a live deletion of a key that only ever existed on disk is not undone by t
 
   expect(diskConfig().grokExcludedModels).toBeUndefined();
   expect(live.grokExcludedModels).toBeUndefined();
+});
+
+test("clearing an account threshold preserves a sibling override added on disk", () => {
+  const live = loadConfig();
+  live.codexAccountAutoSwitchThresholds = { work: 60 };
+  saveConfig(live);
+  armClaudeCodeBaseline(live);
+
+  writeDiskConfig({ codexAccountAutoSwitchThresholds: { work: 60, side: 70 } });
+  setCodexAccountAutoSwitchThresholdOverride(live, "work", null);
+  saveConfigPreservingClaudeCode(live);
+
+  expect(live.codexAccountAutoSwitchThresholds).toEqual({ side: 70 });
+  expect(diskConfig().codexAccountAutoSwitchThresholds).toEqual({ side: 70 });
 });
 
 test("provenance distinguishes an unseen disk key from an explicit deletion", () => {

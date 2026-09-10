@@ -69,6 +69,10 @@ function config(): OcxConfig {
   };
 }
 
+function accountZeroConfig(): OcxConfig {
+  return { ...config(), autoSwitchThreshold: 95, codexAccountAutoSwitchThresholds: { [MAIN]: 0 } };
+}
+
 function writeMain(token = bearer()): void {
   writeFileSync(join(home, "auth.json"), JSON.stringify({
     tokens: { access_token: token, refresh_token: "fixture-refresh", account_id: accountId },
@@ -170,11 +174,15 @@ describe("startup policy binding read is bounded", () => {
 });
 
 describe("main quota policy at native admission", () => {
-  test.each(["owned-99", "owned-98", "foreign", "unknown", "recovery", "second-listener",
+  test.each([...(["owned-99", "owned-98", "foreign", "unknown", "recovery", "second-listener",
     "invalid-access-token", "invalid-account-id", "invalid-id-token", "mismatched-identity", "renewed-listener",
     "stage-retry", "manual-recovery", "stale-sweep", "retained-unknown-binding",
-    "conflicting-token-identities", "conflicting-claims", "owned-opaque-99"] as const)(
-    "fresh startup restores durable main policy only after owned recovery (%s)", scenario => {
+    "conflicting-token-identities", "conflicting-claims", "owned-opaque-99"] as const)
+    .map(scenario => [scenario, "global-zero"] as const),
+    ["owned-99", "account-zero"] as const,
+    ["owned-98", "account-zero"] as const,
+    ["recovery", "account-zero"] as const])(
+    "fresh startup restores durable main policy only after owned recovery (%s, %s)", (scenario, thresholdMode) => {
       const restoredId = scenario === "recovery" ? "hard-lock-recovered-main" : accountId;
       const restoredBearer = scenario === "owned-opaque-99" ? "opaque-owned-startup-bearer" : `header.${Buffer.from(JSON.stringify({ exp: tokenExpiry,
         ...(["renewed-listener", "manual-recovery", "stale-sweep"].includes(scenario) ? { startupTokenRevision: 1 } : {}),
@@ -199,7 +207,8 @@ describe("main quota policy at native admission", () => {
         } }));
       }
       writeFileSync(join(home, "config.json"), JSON.stringify({
-        ...config(), port: 0, hostname: "127.0.0.1", codexMainAccountHardLock: scenario !== "second-listener",
+        ...(thresholdMode === "account-zero" ? accountZeroConfig() : config()),
+        port: 0, hostname: "127.0.0.1", codexMainAccountHardLock: scenario !== "second-listener",
         providers: { openai: { ...config().providers.openai, codexAccountMode: "direct" } },
       }));
       writeFileSync(join(home, "config.toml"), 'model = "gpt-5.6-sol"\n');
@@ -219,6 +228,8 @@ describe("main quota policy at native admission", () => {
       const line = child.stdout.toString().split(/\r?\n/).find(value => value.startsWith("POLICY_STARTUP_RESULT="));
       expect(line).toBeDefined();
       const result = JSON.parse(line!.slice("POLICY_STARTUP_RESULT=".length));
+      expect(result.thresholds).toEqual(thresholdMode === "account-zero"
+        ? { global: 95, mainOverride: 0 } : { global: 0, mainOverride: null });
       expect(result.before).toMatchObject({ matched: false, policy: null, tokenReads: 0 });
       expect(result.listeners[0].tokenReads).toBe(0);
       expect(result.unexpectedNetwork).toEqual([]);
@@ -251,8 +262,8 @@ describe("main quota policy at native admission", () => {
         expect(result.heldRecovery.observation).toMatchObject({ matched: false, policy: null, tokenReads: 0 });
         expect(result.heldRecovery.poolFallback).toEqual({ admitted: false, error: "CodexMainProfileDrainingError" });
         expect(result.heldRecovery.mainPin).toEqual({ admitted: false, error: "CodexMainProfileDrainingError" });
-        expect(result.heldRecovery.storedAlternative).toMatchObject({ admitted: true, kind: "pool" });
-        expect(result.heldRecovery.automaticAlternative).toMatchObject({ admitted: true, kind: "pool" });
+        expect(result.heldRecovery.storedAlternative).toMatchObject({ admitted: true, kind: "pool", accountId: "startup-pool" });
+        expect(result.heldRecovery.automaticAlternative).toMatchObject({ admitted: true, kind: "pool", accountId: "startup-pool" });
         expect(result.originalResponse.status).toBe(200);
       }
       if (scenario === "second-listener") {
@@ -295,6 +306,71 @@ describe("main quota policy at native admission", () => {
       }
     }, SPAWN_BUDGET_MS,
   );
+
+  test("per-account zero cannot bypass exact-main or main-only Pool hard-lock", async () => {
+    const cfg = accountZeroConfig();
+    quota(99);
+    const refresh = spyOn(mainAccount, "getValidMainAccountToken");
+    await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", { accountId: MAIN }))
+      .rejects.toBeInstanceOf(CodexMainAccountHardLockError);
+    await expect(resolveCodexAuthContext(new Headers(), cfg, "pool"))
+      .rejects.toBeInstanceOf(CodexMainAccountHardLockError);
+    expect(isCodexAccountUsable(cfg, MAIN, { nativeMainSelectionOnly: true })).toBe(false);
+    expect(refresh).not.toHaveBeenCalled();
+    expect(getCodexUpstreamHealth(MAIN)).toBeNull();
+    expect(isAccountNeedsReauth(MAIN)).toBe(false);
+  });
+
+  test("per-account zero keeps main below hard-lock but detours to healthy Pool at 99", async () => {
+    const cfg = accountZeroConfig();
+    addAlternative(cfg);
+    setAccountQuotaFromParsed("hard-lock-pool", { weeklyPercent: 1, shortPercent: 1 });
+    setAccountQuotaFromParsed(MAIN, { weeklyPercent: 98.99, shortPercent: 98.99 }, undefined,
+      captureMainQuotaWriter(accountId));
+    // Above global 95: ignoring the explicit zero would proactively leave main here.
+    await expect(resolveCodexAuthContext(new Headers(), cfg, "pool"))
+      .resolves.toMatchObject({ kind: "main-pool", accountId: MAIN });
+    quota(99);
+    await expect(resolveCodexAuthContext(new Headers(), cfg, "pool"))
+      .resolves.toMatchObject({ kind: "pool", accountId: "hard-lock-pool" });
+    expect(isAccountNeedsReauth(MAIN)).toBe(false);
+  });
+
+  test("per-account zero cannot bypass caller-owned Direct or exact-main hard-lock", async () => {
+    const cfg = accountZeroConfig();
+    observeMainQuotaCredential(bearer(), accountId);
+    quota(99);
+    forbidPhysicalReads();
+    await expect(resolveCodexAuthContext(caller(), cfg, "direct"))
+      .rejects.toBeInstanceOf(CodexMainAccountHardLockError);
+    await expect(resolveCodexAuthContext(caller(), cfg, "pool", {
+      requestScopedMainCredential: true, accountId: MAIN,
+    })).rejects.toBeInstanceOf(CodexMainAccountHardLockError);
+    await expect(resolveCodexAuthContext(caller(), cfg, "pool", { requestScopedMainCredential: true }))
+      .rejects.toBeInstanceOf(CodexMainAccountHardLockError);
+  });
+
+  test("per-account zero main pin detours to healthy Pool without physical main reads", async () => {
+    const cfg = accountZeroConfig();
+    addAlternative(cfg);
+    cfg.activeCodexAccountPinned = MAIN;
+    observeMainQuotaCredential(bearer(), accountId);
+    quota(99);
+    forbidPhysicalReads();
+    await expect(resolveCodexAuthContext(caller(), cfg, "pool", { requestScopedMainCredential: true }))
+      .resolves.toMatchObject({ kind: "pool", accountId: "hard-lock-pool" });
+  });
+
+  test("per-account zero cannot bypass hard-lock when selected main headers materialize", async () => {
+    const cfg = accountZeroConfig();
+    quota(98.99);
+    const context = await resolveCodexAuthContext(new Headers(), cfg, "pool", { accountId: MAIN });
+    expect(context.kind).toBe("main-pool");
+    quota(99);
+    expect(() => headersForCodexAuthContext(new Headers(), context, cfg)).toThrow(CodexMainAccountHardLockError);
+    cfg.codexMainAccountHardLock = false;
+    expect(headersForCodexAuthContext(new Headers(), context, cfg).get("authorization")).toBe(`Bearer ${bearer()}`);
+  });
 
   test("short-only 99 blocks exact main and main-only Pool without probe or reauth", async () => {
     quota(99);

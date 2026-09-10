@@ -2001,6 +2001,121 @@ describe("codex routing", () => {
     expect(config.activeCodexAccountId).toBe("a");
   });
 
+  test("an inherited fractional global threshold keeps its configured value", () => {
+    const config = makeConfig({ autoSwitchThreshold: 95.5 });
+    updateAccountQuota("a", 90);
+    updateAccountQuota("b", 5);
+
+    expect(resolveCodexAccountForThread("fractional-global-threshold", config)).toBe("a");
+  });
+
+  test("an account threshold override switches below the global threshold", () => {
+    const config = makeConfig({
+      autoSwitchThreshold: 95,
+      codexAccountAutoSwitchThresholds: { a: 50 },
+    } as Partial<OcxConfig> & { codexAccountAutoSwitchThresholds: Record<string, number> });
+    updateAccountQuota("a", 60);
+    updateAccountQuota("b", 5);
+
+    expect(resolveCodexAccountForThread("account-threshold", config)).toBe("b");
+  });
+
+  test("a zero account override disables proactive switching only for that account", () => {
+    const config = makeConfig({
+      autoSwitchThreshold: 50,
+      codexAccountAutoSwitchThresholds: { a: 0 },
+    } as Partial<OcxConfig> & { codexAccountAutoSwitchThresholds: Record<string, number> });
+    updateAccountQuota("a", 99);
+    updateAccountQuota("b", 1);
+
+    expect(resolveCodexAccountForThread("account-threshold-off", config)).toBe("a");
+  });
+
+  test("a bound task uses its account threshold override for immediate re-evaluation", () => {
+    const config = makeConfig({
+      autoSwitchThreshold: 95,
+      codexAccountAutoSwitchThresholds: { a: 50 },
+    } as Partial<OcxConfig> & { codexAccountAutoSwitchThresholds: Record<string, number> });
+    const now = 1_800_000_000_000;
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 5);
+    expect(resolveCodexAccountForThread("account-threshold-bound", config, now)).toBe("a");
+
+    updateAccountQuota("a", 60);
+    expect(resolveCodexAccountForThread("account-threshold-bound", config, now + 1)).toBe("b");
+  });
+
+  test.each(["quota", "fill-first", "round-robin"] as const)(
+    "%s zero account threshold preserves full-usage affinity but still avoids a cooled account",
+    (strategy) => {
+      const now = Date.now();
+      const threadId = `zero-threshold-cooldown-${strategy}`;
+      const config = makeConfig({
+        accountPoolStrategy: strategy,
+        accountPoolStickyLimit: 1,
+        activeCodexAccountPinned: "a",
+        autoSwitchThreshold: 50,
+        codexAccountAutoSwitchThresholds: { a: 0 },
+      });
+      updateAccountQuota("a", 10);
+      updateAccountQuota("b", 1);
+      resetCodexRoutingForManualSelection("a");
+      expect(resolveCodexAccountForThread(threadId, config, now)).toBe("a");
+
+      updateAccountQuota("a", 100);
+      const reevalAt = now + CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS + 1;
+      expect(previewCodexAccountForRequest(threadId, config, reevalAt)).toBe("a");
+      expect(resolveCodexAccountForThread(threadId, config, reevalAt)).toBe("a");
+      expect(resolveCodexAccountForThread(null, config, reevalAt)).toBe("a");
+      expect(config.activeCodexAccountPinned).toBe("a");
+
+      // Record health without rotating on the outcome: the selector itself must
+      // reject the cooled account even though proactive switching is disabled.
+      recordCodexUpstreamOutcome(config, "a", 429, {
+        fixedAccount: true,
+        retryAfter: "600",
+        now: reevalAt,
+      });
+      expect(getEffectiveActiveCodexAccountId(config)).toBe("a");
+      expect(previewCodexAccountForRequest(threadId, config, reevalAt + 1)).toBe("b");
+      expect(resolveCodexAccountForThread(threadId, config, reevalAt + 1)).toBe("b");
+      expect(getCodexAccountCooldownUntil("a", reevalAt + 1)).toBe(reevalAt + 600_000);
+    },
+  );
+
+  test.each(["quota", "fill-first", "round-robin"] as const)(
+    "%s zero account threshold allows a model-only detour without spending the pin or ordinary affinity",
+    (strategy) => {
+      const now = Date.now();
+      const threadId = `zero-threshold-model-detour-${strategy}`;
+      const modelId = "gpt-daybreak-blue-latest";
+      const config = makeConfig({
+        accountPoolStrategy: strategy,
+        accountPoolStickyLimit: 1,
+        activeCodexAccountPinned: "a",
+        autoSwitchThreshold: 50,
+        codexAccountAutoSwitchThresholds: { a: 0 },
+      });
+      updateAccountQuota("a", 100);
+      updateAccountQuota("b", 1);
+      resetCodexRoutingForManualSelection("a");
+      expect(resolveCodexAccountForThread(threadId, config, now, "shared")).toBe("a");
+
+      const selectionOptions = { modelEligibleAccountIds: new Set(["b"]) };
+      expect(previewCodexAccountForRequest(
+        threadId, config, now + 1, "shared", selectionOptions, modelId,
+      )).toBe("b");
+      expect(resolveCodexAccountForThreadDetailed(
+        threadId, config, now + 1, "shared", selectionOptions, modelId,
+      )).toEqual({ status: "selected", accountId: "b" });
+      expect(config.activeCodexAccountId).toBe("a");
+      expect(config.activeCodexAccountPinned).toBe("a");
+      expect(getEffectiveActiveCodexAccountId(config)).toBe("a");
+      expect(resolveCodexAccountForThread(threadId, config, now + 2, "shared")).toBe("a");
+      expect(resolveCodexAccountForThread(null, config, now + 2, "shared")).toBe("a");
+    },
+  );
+
   test("unknown active quota stays selected even when other candidates differ in health", () => {
     const config = makeConfig({
       codexAccounts: [

@@ -322,9 +322,11 @@ async function cmdUse(rest: string[], deps: AccountDeps): Promise<number> {
   else console.log(`${name}: active ${c.type === "api-key" ? "key" : "account"} is now ${displayId(activeId)}`);
   if (c.type === "codex") {
     console.error("Takes effect immediately; running threads move on their next request, and in-flight requests keep the account they captured.");
-    const active = await apiJson(deps, baseUrl, "GET", "/api/codex-auth/active");
-    if (active.status === 200 && typeof active.json.autoSwitchThreshold === "number" && active.json.autoSwitchThreshold > 0) {
-      console.error(`Note: auto-switch (threshold ${active.json.autoSwitchThreshold}%) may override this pin.`);
+    const state = await fetchRows(deps, baseUrl, name, "codex");
+    const selected = state.rows.find(row => row.id === activeId);
+    const threshold = selected?.autoSwitchThresholdOverride ?? state.autoSwitchThreshold;
+    if (state.status === 200 && typeof threshold === "number" && threshold > 0) {
+      console.error(`Note: auto-switch (threshold ${threshold}%) may override this pin.`);
     }
   }
   return 0;

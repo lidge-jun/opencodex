@@ -66,6 +66,7 @@ import { CODEX_RESERVE_HELPER_UNSUPPORTED_MESSAGE, isCodexReserveHelperUnsupport
 import type { DataPlaneAdmission } from "../server/auth-cors";
 import { getMainReserveAuthorization, isMainReserveAuthorizationLive, nativeUserIdClaims, type MainReserveAuthorization } from "./reserve-availability";
 import { UpstreamRetryEvidenceError } from "../lib/upstream-retry";
+import { getEffectiveCodexAutoSwitchThreshold } from "./account-auto-switch";
 
 const CODEX_AFFINITY_COMPONENT_MAX_BYTES = 512;
 const CODEX_APP_AFFINITY_KEY = randomBytes(32);
@@ -79,7 +80,7 @@ const CODEX_APP_AFFINITY_KEY = randomBytes(32);
  * request that already brought its own credential (#3157).
  */
 function requestOwnedMainPinHasQuotaHeadroom(config: OcxConfig): boolean {
-  const threshold = config.autoSwitchThreshold ?? 80;
+  const threshold = getEffectiveCodexAutoSwitchThreshold(config, MAIN_CODEX_ACCOUNT_ID);
   if (threshold <= 0) return true;
   const usage = computeCodexUsageScore(getAccountQuota(MAIN_CODEX_ACCOUNT_ID));
   return usage >= CODEX_UNKNOWN_USAGE_SCORE || usage < threshold;
@@ -662,6 +663,21 @@ export async function resolveCodexAuthContext(
     throw new CodexReserveUnavailableError();
   }
   const fixedAccountId = reserve ? MAIN_CODEX_ACCOUNT_ID : options.accountId;
+  const quotaScope = codexQuotaScopeForModel(options.modelId);
+  // Pool pins and fallback must not resurrect an observed main credential that is cooling
+  // down. Unrelated caller-owned credentials and explicit Direct keep their own policy.
+  // The identity match and scoped health read are memory-only; never probe the auth file.
+  const callerOwnedMainPoolCooldown = () => mode === "pool" && callerMatchesObservedMain(headers)
+    ? getCodexQuotaHealthSnapshot(MAIN_CODEX_ACCOUNT_ID, quotaScope)
+    : null;
+  const assertCallerOwnedMainPoolNotCooled = () => {
+    const cooldown = callerOwnedMainPoolCooldown();
+    if (cooldown?.cooldownUntil) {
+      throw new CodexAccountCooldownError(
+        MAIN_CODEX_ACCOUNT_ID, cooldown.cooldownUntil, cooldown.cooldownSource, cooldown.quotaScope,
+      );
+    }
+  };
   const requestOwnedMainPinCandidate = requestScopedMainCredential
     && fixedAccountId === undefined
     && config.activeCodexAccountPinned === MAIN_CODEX_ACCOUNT_ID
@@ -673,8 +689,9 @@ export async function resolveCodexAuthContext(
   if (policy.codexMainAccountHardLock === true && requestOwnedMainPinCandidate && isMainAccountPolicyBindingPending()) {
     throw new CodexMainProfileDrainingError();
   }
-  const preserveRequestOwnedMainPin = requestOwnedMainPinCandidate
-    && !(callerMatchesObservedMain(headers) && isMainAccountHardLocked(policy));
+  const preserveRequestOwnedMainPin = () => requestOwnedMainPinCandidate
+    && !(callerMatchesObservedMain(headers) && isMainAccountHardLocked(policy))
+    && !callerOwnedMainPoolCooldown()?.cooldownUntil;
   if (fixedAccountId !== undefined && options.excludeAccountId !== undefined) {
     throw new Error("Codex auth context cannot select and exclude an account simultaneously");
   }
@@ -688,6 +705,7 @@ export async function resolveCodexAuthContext(
         throw new CodexMainProfileDrainingError();
       }
       if (callerMatchesObservedMain(headers)) assertMainAccountPolicy(policy);
+      assertCallerOwnedMainPoolNotCooled();
       if (reserve) {
         const selected = materializeCodexUpstreamAuth(headers, { kind: "main", accountId: null }, { config: policy });
         const token = selectedCodexToken(selected);
@@ -704,6 +722,7 @@ export async function resolveCodexAuthContext(
         }
       }
       if (callerMatchesObservedMain(headers)) assertMainAccountPolicy(policy);
+      assertCallerOwnedMainPoolNotCooled();
       return { kind: "main", accountId: null };
     }
 
@@ -750,13 +769,13 @@ export async function resolveCodexAuthContext(
   // is the one exception where that exclusion is selection evidence in the opposite direction.
   // Validate the caller's own gated-model roster before using it, and fall through to a Pool model
   // detour when it lacks the grant. This branch performs no physical-main credential read.
-  if (preserveRequestOwnedMainPin) {
+  if (preserveRequestOwnedMainPin()) {
     const callerEntitled = !options.modelId
       || !ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(options.modelId)
       || await (
         options.isDirectCallerEntitledToCodexModel ?? isDirectCallerEntitledToCodexModel
       )(headers, options.modelId);
-    if (callerEntitled && !(callerMatchesObservedMain(headers) && isMainAccountHardLocked(policy))) {
+    if (callerEntitled && preserveRequestOwnedMainPin()) {
       return { kind: "main", accountId: null };
     }
   }
@@ -787,7 +806,6 @@ export async function resolveCodexAuthContext(
   const nativeMainSelectionOnly = !nativeMainTrafficBlocked
     && selectionAdmission?.mainProfileDraining === true;
   let accountId: string;
-  const quotaScope = codexQuotaScopeForModel(options.modelId);
   try {
     const excludeAccountIds = nativeMainReadsForbidden
       ? new Set([MAIN_CODEX_ACCOUNT_ID])
@@ -814,7 +832,7 @@ export async function resolveCodexAuthContext(
         // Main stays excluded from this request's model roster below. This synthetic liveness is
         // consulted only by shared-state preservation, so a caller-owned pin survives a model
         // detour without reading or selecting the physical main credential.
-        ? () => preserveRequestOwnedMainPin
+        ? preserveRequestOwnedMainPin
         : options.isMainAccountTokenLive,
       modelEligibleAccountIds,
     };

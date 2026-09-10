@@ -281,7 +281,7 @@ Codex. Ses routes sont les suivantes :
 | `PUT /api/codex-auth/accounts/pause-exhausted` | Suspendre les comptes dont le quota est épuisé | Les échecs de verrouillage de mutation deviennent 503 |
 | `POST /api/codex-auth/accounts/clear-cooldown` | Effacer le temps de recharge d'exécution pour un compte ou tous les comptes | 400 identifiant invalide |
 | `GET, PUT /api/codex-auth/active` | Lire ou sélectionner le compte actif | 400 compte invalide ou manquant ; 409 conflit avec un compte suspendu ou une ancienne ligne |
-| `PUT /api/codex-auth/auto-switch` | Définir le seuil de quota pour le changement automatique de compte | 400 seuil invalide |
+| `PUT /api/codex-auth/auto-switch` | Définir le seuil global avec `{ threshold }`, ou celui d’un compte avec `{ id, threshold }` ; `null` rétablit l’héritage global | 400 id/seuil invalide ; 404 compte absent |
 | `PUT, PATCH /api/codex-auth/pool-strategy` | Mettre à jour la stratégie de sélection du groupe de comptes Codex | 400 stratégie ou configuration invalide |
 | `PUT /api/codex-auth/failover` | Définir le seuil de basculement du compte | 400 seuil invalide |
 | `GET /api/codex-auth/quota` | Lire l'état du quota mis en cache par compte | — |

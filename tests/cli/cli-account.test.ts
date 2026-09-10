@@ -898,6 +898,15 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     expect(result.stderr).toContain("auto-switch (threshold 80%) may override this pin");
   });
 
+  test("use openai omits the pin warning when the selected account disables usage switching", async () => {
+    codexAccounts[0]!.autoSwitchThresholdOverride = 0;
+
+    const result = await run(["use", "openai", "main"]);
+
+    expect(result.code).toBe(0);
+    expect(result.stderr).not.toContain("may override this pin");
+  });
+
   test("WP2 regression: classifyAccount routes a key-overridden OAuth provider to api-key", () => {
     const config = fixtureConfig();
     (config.providers as Record<string, { authMode?: string }>).xai = { authMode: "key" };
