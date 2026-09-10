@@ -86,6 +86,8 @@ export interface PersistedCodexRuntimeState {
 
 const PERSIST_FILE = "codex-runtime.json";
 const CLAMP_PERSIST_FILE = "codex-runtime-clamp.json";
+/** Probe rejection for an absolute candidate whose file is gone. Matched when retiring a dead pin (#4035). */
+const PATH_MISSING_REASON = "path does not exist";
 
 function cloneAndDeepFreeze<T>(value: T): DeepReadonly<T> {
   const clone = (current: unknown): unknown => {
@@ -283,6 +285,31 @@ export function persistCodexRuntime(
   atomicWriteFile(codexRuntimeStatePath(configDir), `${JSON.stringify(payload, null, 2)}\n`);
 }
 
+/**
+ * Delete `codex-runtime.json`. Used to retire a pin whose path no longer exists, so a
+ * later resolve stops re-probing it (#4035).
+ *
+ * Invalidates the process resolve memo the same way `persistCodexRuntime` does: the memo
+ * folds the persisted `updatedAt` into its key, and a removed file has no stamp to fold.
+ */
+export function clearPersistedCodexRuntime(deps: ResolveCodexRuntimeDeps = {}): void {
+  const configDir = deps.configDir ?? getConfigDir();
+  clearCodexRuntimeResolveCache();
+  try {
+    unlinkSync(codexRuntimeStatePath(configDir));
+  } catch (error) {
+    // An already-missing file is the success case: the pin is gone, which is the point.
+    // Anything else means the pin SURVIVES and stays authoritative, so every later
+    // resolve re-probes the same dead path — #4035 unfixed, silently. Say so once.
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    if (code === "ENOENT") return;
+    console.warn(
+      `[opencodex] Could not remove the stale Codex runtime pin at ${displayCodexRuntimePath(codexRuntimeStatePath(configDir))}`
+      + ` (${code ?? "unknown error"}). It will be re-probed until the file is removed.`,
+    );
+  }
+}
+
 function probeVersion(
   command: string,
   deps: ResolveCodexRuntimeDeps,
@@ -290,7 +317,7 @@ function probeVersion(
   const platform = deps.platform ?? process.platform;
   if (command.includes("/") || command.includes("\\") || /^[A-Za-z]:/.test(command)) {
     const exists = deps.existsSync ?? existsSync;
-    if (!exists(command)) return { ok: false, reason: "path does not exist" };
+    if (!exists(command)) return { ok: false, reason: PATH_MISSING_REASON };
     if (!isSpawnableCodexCandidate(command, platform)) {
       return { ok: false, reason: "not a spawnable Codex launcher on this platform" };
     }
@@ -653,6 +680,23 @@ export function resolveAndPersistCodexRuntime(
       console.warn(`[opencodex] Failed to persist Codex runtime selection: ${persistError}`);
       return cloneAndDeepFreeze({ ...result, persistError });
     }
+  }
+  // A pin whose path has vanished must be RETIRED, not merely skipped. A Codex App update
+  // replaces the hashed plugin directory the pin names, the probe rejects it with
+  // "path does not exist", nothing else resolves, and the selection degrades to `fallback` —
+  // which the write guard above declines. The dead entry then survived every later resolve
+  // and each one re-probed a path that cannot exist (#4035). Bound narrowly: only when the
+  // degraded result is `fallback`, only for the persisted command, and only for the
+  // path-does-not-exist rejection, so a present-but-unusable binary is left for the operator.
+  else if (result.runtime.source === "fallback" && persistedRuntime?.command) {
+    const pinVanished = result.failures.some(
+      // Exact comparison, not `sameRuntimeCommand`: that helper lowercases, and on a
+      // case-sensitive filesystem `/plugins/Codex` and `/plugins/codex` are different
+      // files. A missing lowercase path must not retire a live uppercase pin.
+      failure => failure.command.trim() === persistedRuntime.command.trim()
+        && failure.reason === PATH_MISSING_REASON,
+    );
+    if (pinVanished) clearPersistedCodexRuntime(deps);
   }
   return result;
 }

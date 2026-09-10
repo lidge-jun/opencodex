@@ -20,6 +20,16 @@ $CODEX_HOME/.opencodex-native-main-profiles/
 Never assume macOS-only paths. Windows, service installs, and app-launched Codex can all depend on
 the resolved `CODEX_HOME`.
 
+Journal restoration compares config and profile independently against their saved originals and
+recorded injected hashes. If either changed artifact lacks its injected hash, the config/profile
+pair and journal remain untouched and the result is explicitly unverified; callers must not
+convert that refusal into successful fallback cleanup. Already-original bytes need no rewrite,
+and absence is distinct from an empty file. The injector checks a retained hashless journal against
+the same `baselineContent` it snapshots, plus the current profile, before writing or assigning a new
+injected hash. Native content can establish a fresh snapshot; routed content cannot promote an
+unverified older original. Existing hash-backed edit preservation and external-provider opt-out
+remain separate paths.
+
 The source-built Docker image explicitly keeps `CODEX_HOME=/home/bun/.codex` separate
 from `OPENCODEX_HOME=/home/bun/.opencodex`. Compose persists them in `codex-state` and
 `ocx-state` respectively, retaining a read-only root. The image creates owner-only
@@ -349,6 +359,12 @@ source, and event marker were backed up for the same state database are restored
 explicitly runs legacy OpenAI recovery. A user-owned root `openai_base_url` is preserved instead of
 overwritten, and that case also blocks managed sub-agent defaults rather than fighting the user for
 ownership.
+
+Client-compaction mode can retain that user-owned root URL alongside an injected provider table.
+Its status must distinguish ownership from destination: an unmarked user-owned line may already
+point to this proxy. Report that existing `openai` threads follow the configured root URL and new
+threads use the injected table, without inferring a foreign endpoint or prescribing URL removal.
+This diagnostic distinction does not change URL ownership, journal entries, or session history.
 
 **API auth header (non-loopback).** The built-in `openai` provider cannot carry the
 `x-opencodex-api-key` env header, so this form re-tags the root provider and appends the table:

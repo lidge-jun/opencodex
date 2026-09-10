@@ -44,14 +44,30 @@ function owned(token: Token, writer: MainQuotaWriter): boolean {
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
-function userId(token: string): string | undefined {
+/**
+ * The ChatGPT per-user identity carried by a native credential, plus whether the token's own two
+ * encodings of it disagree. Precedence stays on the RAW claims, so an empty or non-string
+ * `chatgpt_user_id` still blocks the `user_id` fallback exactly as before; `conflict` is a
+ * separate observation for callers that must fail closed on an ambiguous identity.
+ */
+export function nativeUserIdClaims(token: string): { userId: string | undefined; conflict: boolean } {
+  const none = { userId: undefined, conflict: false };
   try {
     const payload: unknown = JSON.parse(Buffer.from(token.split(".")[1] ?? "", "base64url").toString("utf8"));
     const auth = record(payload) ? payload["https://api.openai.com/auth"] : undefined;
-    if (!record(auth)) return;
-    const value = auth.chatgpt_user_id ?? auth.user_id;
-    return typeof value === "string" && value.length > 0 ? value : undefined;
-  } catch { return; }
+    if (!record(auth)) return none;
+    const named = (value: unknown): string | undefined =>
+      typeof value === "string" && value.length > 0 ? value : undefined;
+    const primary = named(auth.chatgpt_user_id);
+    const secondary = named(auth.user_id);
+    return {
+      userId: named(auth.chatgpt_user_id ?? auth.user_id),
+      conflict: primary !== undefined && secondary !== undefined && primary !== secondary,
+    };
+  } catch { return none; }
+}
+function userId(token: string): string | undefined {
+  return nativeUserIdClaims(token).userId;
 }
 function identityMatches(data: WhamUsageResponse, token: Token): boolean {
   if (data.account_id != null && data.account_id !== token.chatgptAccountId) return false;

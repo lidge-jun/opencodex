@@ -1,4 +1,6 @@
 import { NativeProfileManager } from "./native-profile-manager";
+import { loadConfig } from "../config";
+import { initializeMainAccountPolicyBinding } from "./account-lifecycle";
 import { clearAccountNeedsReauth } from "./account-runtime-state";
 import { MAIN_CODEX_ACCOUNT_ID } from "./main-account";
 import {
@@ -73,6 +75,7 @@ interface StartupEntry {
   owner: NativeMainOwnerReference;
   unsubscribe: () => void;
   recoveryStarted: boolean;
+  policyBindingPending: boolean;
   settled: Promise<NativeMainStartupGateSnapshot>;
   resolveAcquisition?: (value: NativeMainStartupGateSnapshot) => void;
   deps: NativeMainStartupGateDeps;
@@ -172,17 +175,21 @@ async function runOwnedStageSweep(entry: StartupEntry): Promise<boolean> {
 }
 
 function scheduleStageSweep(entry: StartupEntry): void {
-  if (entry.sweepStopping || entry.sweepTimer || startupEntries.get(entry.homeId) !== entry) return;
+  if (entry.sweepStopping || entry.sweepTimer || entry.sweepInFlight || entry.policyBindingPending
+    || startupEntries.get(entry.homeId) !== entry) return;
   const intervalMs = Math.max(10, entry.deps.stageSweepIntervalMs ?? NATIVE_STAGE_SWEEP_INTERVAL_MS);
   entry.sweepTimer = setTimeout(() => {
     entry.sweepTimer = undefined;
     if (entry.sweepStopping || startupEntries.get(entry.homeId) !== entry) return;
+    const sweepEpoch = entry.epoch;
     entry.sweepInFlight = (async () => {
       const safe = await runOwnedStageSweep(entry);
-      if (entry.sweepStopping || startupEntries.get(entry.homeId) !== entry) return;
+      if (entry.sweepStopping || startupEntries.get(entry.homeId) !== entry
+        || entry.epoch !== sweepEpoch || entry.policyBindingPending) return;
       if (!safe) snapshot = { status: "blocked", homeId: entry.homeId, reason: "stage-cleanup-required" };
       else if (snapshot.homeId === entry.homeId && snapshot.status === "blocked" && snapshot.reason === "stage-cleanup-required") {
-        snapshot = ready(entry.homeId);
+        if (loadConfig().codexMainAccountHardLock === true) rearmOwnedMainPolicyBinding(entry);
+        else snapshot = ready(entry.homeId);
       }
     })().finally(() => {
       entry.sweepInFlight = undefined;
@@ -218,8 +225,29 @@ function convergeOwnedStartup(entry: StartupEntry): void {
       ));
       const stageSweepSafe = recoveryState === "none" ? await runOwnedStageSweep(entry) : false;
       if (startupEntries.get(entry.homeId) === entry && entry.epoch === currentEpoch && recoveryState === "none" && stageSweepSafe) {
-        clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
-        snapshot = ready(entry.homeId);
+        if (loadConfig().codexMainAccountHardLock === true) {
+          await withNativeMainOwnerOperation(entry.manager.context, () => withNativeMainExclusiveClaim(
+            entry.manager.context,
+            async () => {
+              if (startupEntries.get(entry.homeId) !== entry || entry.epoch !== currentEpoch) return;
+              if (probe(entry.manager.context) !== "none") {
+                snapshot = { status: "blocked", homeId: entry.homeId, reason: "manual-recovery" };
+                return;
+              }
+              // The HMAC is deliberately not persisted. Bind only the pinned owned home,
+              // after recovery/cleanup, and before caller-owned admission can observe ready.
+              if (loadConfig().codexMainAccountHardLock === true) {
+                initializeMainAccountPolicyBinding(entry.manager.context.authPath);
+              }
+              clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+              snapshot = ready(entry.homeId);
+            },
+            { waitMs: 10_000 },
+          ));
+        } else {
+          clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+          snapshot = ready(entry.homeId);
+        }
       } else if (startupEntries.get(entry.homeId) === entry && entry.epoch === currentEpoch && recoveryState === "none") {
         snapshot = { status: "blocked", homeId: entry.homeId, reason: "stage-cleanup-required" };
       } else if (startupEntries.get(entry.homeId) === entry && entry.epoch === currentEpoch) {
@@ -230,10 +258,33 @@ function convergeOwnedStartup(entry: StartupEntry): void {
         snapshot = { status: "blocked", homeId: entry.homeId, reason: "manual-recovery" };
       }
     }
+    entry.policyBindingPending = false;
     if (startupEntries.get(entry.homeId) === entry && entry.epoch === currentEpoch) scheduleStageSweep(entry);
     return snapshot;
   })();
   if (acquisitionWaiter) void entry.settled.then(acquisitionWaiter);
+}
+
+/** Join an active startup, or rearm its held owner before publishing another ready transition. */
+function rearmOwnedMainPolicyBinding(entry: StartupEntry): boolean {
+  if (entry.sweepStopping || startupEntries.get(entry.homeId) !== entry) return false;
+  const owner = entry.owner.snapshot();
+  if (entry.policyBindingPending && (owner.status === "held" || owner.status === "acquiring")) {
+    snapshot = { status: "blocked", homeId: entry.homeId, reason: "recovery-pending" };
+    settled = entry.settled;
+    return true;
+  }
+  if (owner.status !== "held") {
+    snapshot = { status: "blocked", homeId: entry.homeId, reason: ownerBlockedReason(owner) };
+    return false;
+  }
+  if (entry.sweepTimer) clearTimeout(entry.sweepTimer);
+  entry.sweepTimer = undefined;
+  entry.epoch = ++epoch;
+  entry.policyBindingPending = true;
+  entry.recoveryStarted = false;
+  convergeOwnedStartup(entry);
+  return true;
 }
 
 function observeOwner(entry: StartupEntry, owner: NativeMainOwnerSnapshot): void {
@@ -283,6 +334,7 @@ export function startNativeMainStartupLifecycle(
       owner,
       unsubscribe: () => {},
       recoveryStarted: false,
+      policyBindingPending: true,
       settled: acquisition,
       resolveAcquisition,
       deps,
@@ -291,6 +343,12 @@ export function startNativeMainStartupLifecycle(
     };
     startupEntries.set(homeId, entry);
     entry.unsubscribe = owner.subscribe(ownerState => observeOwner(entry!, ownerState));
+  } else if (!entry.policyBindingPending
+    && snapshot.status === "ready" && snapshot.homeId === homeId
+    && loadConfig().codexMainAccountHardLock === true) {
+    // A new same-process listener can enable protection or follow a credential replacement.
+    // Re-read its pinned home through the held owner before admitting caller-owned main.
+    rearmOwnedMainPolicyBinding(entry);
   }
   entry.refs += 1;
   let released = false;
@@ -602,6 +660,8 @@ export function blockNativeMainRecovery(
 
 export function completeNativeMainRecovery(homeId: string): boolean {
   if (snapshot.status !== "blocked" || snapshot.homeId !== homeId) return false;
+  const entry = startupEntries.get(homeId);
+  if (entry && loadConfig().codexMainAccountHardLock === true) return rearmOwnedMainPolicyBinding(entry);
   epoch += 1;
   clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
   snapshot = ready(homeId);
@@ -613,6 +673,13 @@ export function nativeMainStartupGateSnapshot(): NativeMainStartupGateSnapshot {
   const reason = activeServiceOwnershipBlockReason();
   if (reason) return serviceOwnershipSnapshot(reason);
   return { ...snapshot };
+}
+
+/** Read-only: caller-owned credentials must not trigger physical-main ownership reprobes. */
+export function isMainAccountPolicyBindingPending(): boolean {
+  const current = nativeMainStartupGateSnapshot();
+  return current.status === "blocked" && current.reason === "recovery-pending"
+    && current.homeId !== null && startupEntries.get(current.homeId)?.policyBindingPending === true;
 }
 
 export function waitForNativeMainStartupGate(): Promise<NativeMainStartupGateSnapshot> {

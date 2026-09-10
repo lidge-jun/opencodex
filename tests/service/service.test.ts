@@ -9,7 +9,7 @@ import { saveConfig } from "../../src/config";
 import { windowsEnvIndirectBatchValue } from "../../src/lib/win-paths";
 import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, confirmServiceServing, launchdListenPort, systemdListenPort, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsSchtasksCreateArgsForXml, buildWindowsServiceScript, buildWindowsTaskXml as buildWindowsTaskXmlProduction, buildWindowsTaskXmlDocument, deriveWindowsServiceDiagnostic, deriveWindowsServiceDiagnosticForCurrentUser, expectedLaunchdCommand, installFreshWindowsSchedulerSafely, installServiceSafely, launchctlLoadFailed, launchdJobMatchesPlist, normalizeServiceSubcommand, parseServiceArgs, parseServiceInstallState, planServiceCommand, prepareServiceInstall, probeServiceInstallation, readWindowsSchedulerXmlState, registerFreshWindowsSchedulerTask, removeNativeWindowsServiceForScheduler, repairService, reportServiceServing, resolveServiceListenPort, runLaunchctl, selectServiceSubcommand, SERVICE_INSTALL_HEALTH_MS, SERVICE_INSTALL_HEALTH_WINDOWS_MS, serviceInstallHealthMs, serviceLogPath, serviceStartableFromTray, serviceStatusReport, serviceRetryCommand, serviceStatusSummary, stableLauncherEntry, systemdNeedsDaemonReload, systemdServiceInstallCleanupOps, uninstallSystemd, windowsListenPort, winswListenPort, startLaunchd, windowsTaskRegistrationHealthy as windowsTaskRegistrationHealthyProduction } from "../../src/service";
 import type { ServiceDiagnostic } from "../../src/service";
-import { definitionCarriesCredential, resolvedProxyEnv, writeServiceDefinitionFile } from "../../src/service";
+import { definitionCarriesCredential, installLaunchd, resolvedProxyEnv, writeServiceDefinitionFile } from "../../src/service";
 import { buildWinswXml } from "../../src/lib/winsw";
 import { CONFIG_OWNER_FILE, CONFIG_UNINSTALL_MANIFEST, recordOwnedConfigPath, removeOwnedConfigState } from "../../src/lib/config-ownership";
 import { serviceApiTokenFilePath } from "../../src/lib/service-secrets";
@@ -3324,6 +3324,143 @@ describe("launchctl load verification", () => {
         launchctl: failedLoad,
         matches: () => ({ loaded: false, matchesPlist: false }),
       })).toThrow(/service repair/);
+    });
+  });
+
+  /**
+   * #4141: after `ocx update` the job never came back. Repair on darwin is
+   * `installLaunchd`, which best-effort `unload`ed the plist and then threw on any
+   * `Load failed`. But `unload` does not evict a job bootstrapped into the GUI domain,
+   * and that is exactly the state modern launchd reports with "Load failed: 5:
+   * Input/output error" while exiting 0 — so a live-but-stale job was precisely the case
+   * that could not repair itself, and the thrown text carried the `bootout` recipe as a
+   * hint that nothing ever ran.
+   *
+   * These drive the injected seam. They never reach launchd: the live-service-manager
+   * guard refuses `bootout` from an armed test process, so a test on the real runner
+   * would fail closed on the guard rather than exercise anything.
+   */
+  describe("installLaunchd", () => {
+    // A runLaunchctl RESULT, not a spawnSync result.
+    function recordingLaunchctl(loadResults: Array<{ ok: boolean; stderr: string }>) {
+      const argv: string[][] = [];
+      let loads = 0;
+      const launchctl = ((args: string[]) => {
+        argv.push([...args]);
+        if (args[0] !== "load") return { ok: true, stdout: "", stderr: "", status: 0 };
+        // Exhausting the queue is a fixture bug, not a passing case. Defaulting a missing
+        // entry to success once hid a retry that never got the failure it was meant to
+        // assert, so make the fixture state its own call count or fail loudly.
+        const next = loadResults[loads++];
+        if (!next) throw new Error(`unexpected load #${loads}: the fixture queued ${loadResults.length}`);
+        return { ok: next.ok, stdout: "", stderr: next.stderr, status: next.ok ? 0 : 1 };
+      }) as typeof runLaunchctl;
+      return { argv, launchctl };
+    }
+
+    const BOOTSTRAPPED = "Load failed: 5: Input/output error";
+
+    /**
+     * installLaunchd writes the plist under `homedir()/Library/LaunchAgents`. The preload
+     * already sandboxes HOME; pinning a fresh one per case keeps these from writing into
+     * whatever another test left there.
+     */
+    function withLaunchAgentHome(run: () => void): void {
+      const previousHome = process.env.HOME;
+      const previousUserProfile = process.env.USERPROFILE;
+      const dir = mkdtempSync(join(tmpdir(), "ocx-launchd-install-"));
+      process.env.HOME = dir;
+      process.env.USERPROFILE = dir;
+      try {
+        run();
+      } finally {
+        if (previousHome === undefined) delete process.env.HOME;
+        else process.env.HOME = previousHome;
+        if (previousUserProfile === undefined) delete process.env.USERPROFILE;
+        else process.env.USERPROFILE = previousUserProfile;
+      }
+    }
+
+    const verbs = (argv: string[][]): string[] => argv.map(args => args[0] ?? "");
+
+    test("evicts a stale job, and recovers on the retried load", () => {
+      const { argv, launchctl } = recordingLaunchctl([
+        { ok: true, stderr: BOOTSTRAPPED },
+        { ok: true, stderr: "" },
+      ]);
+
+      withLaunchAgentHome(() => {
+        expect(() => installLaunchd({ launchctl })).not.toThrow();
+      });
+
+      // The whole repair, in order. Red before the fix: it threw on the first
+      // `Load failed` without ever running `bootout`.
+      expect(verbs(argv)).toEqual(["bootout", "load", "bootout", "load"]);
+      // The legacy verb is gone: it is what failed to evict the job in the first place.
+      expect(verbs(argv)).not.toContain("unload");
+      expect(argv[0]?.[1]).toMatch(/^gui\/\d+\/com\.opencodex\.proxy$/);
+      expect(argv[2]?.[1]).toBe(argv[0]?.[1]);
+      expect(argv[1]?.slice(0, 2)).toEqual(["load", "-w"]);
+      expect(argv[3]?.slice(0, 2)).toEqual(["load", "-w"]);
+    });
+
+    test("a clean load is never retried, so a healthy job is evicted once and reloaded", () => {
+      const { argv, launchctl } = recordingLaunchctl([{ ok: true, stderr: "" }]);
+
+      withLaunchAgentHome(() => {
+        expect(() => installLaunchd({ launchctl })).not.toThrow();
+      });
+
+      expect(verbs(argv)).toEqual(["bootout", "load"]);
+    });
+
+    test("still throws when the job survives both evictions", () => {
+      const { argv, launchctl } = recordingLaunchctl([
+        { ok: true, stderr: BOOTSTRAPPED },
+        { ok: true, stderr: BOOTSTRAPPED },
+      ]);
+
+      withLaunchAgentHome(() => {
+        expect(() => installLaunchd({ launchctl })).toThrow(/could not load/);
+      });
+
+      // Bounded: two evictions and two loads, then the diagnosable throw. A loop here
+      // would turn a wedged domain into a hang.
+      expect(verbs(argv)).toEqual(["bootout", "load", "bootout", "load"]);
+    });
+
+    /**
+     * `launchctlLoadFailed` matches "Bootstrap failed" as well as "Load failed", and both
+     * mean the same thing here: something is still bootstrapped in the domain. So this
+     * retries, and the regex itself is left alone — it is the 2026-08-02 silent-success
+     * guard, and the fix is to recover from the condition rather than stop detecting it.
+     */
+    test("a Bootstrap failed load takes the same eviction and retry", () => {
+      const bootstrapFailed = { ok: false, stderr: "Bootstrap failed: 37: Operation already in progress" };
+      const { argv, launchctl } = recordingLaunchctl([bootstrapFailed, bootstrapFailed]);
+
+      withLaunchAgentHome(() => {
+        expect(() => installLaunchd({ launchctl })).toThrow(/could not load/);
+      });
+
+      expect(verbs(argv)).toEqual(["bootout", "load", "bootout", "load"]);
+    });
+
+    /**
+     * The retry is scoped to that signal on purpose. A load that fails for another
+     * reason — a malformed plist, say — is not fixed by evicting a job, so retrying
+     * would only delay the real stderr reaching the operator.
+     */
+    test("a plain non-zero load with unrelated stderr throws without a second eviction", () => {
+      const { argv, launchctl } = recordingLaunchctl([
+        { ok: false, stderr: "Could not read plist: invalid XML" },
+      ]);
+
+      withLaunchAgentHome(() => {
+        expect(() => installLaunchd({ launchctl })).toThrow(/invalid XML/);
+      });
+
+      expect(verbs(argv)).toEqual(["bootout", "load"]);
     });
   });
 });

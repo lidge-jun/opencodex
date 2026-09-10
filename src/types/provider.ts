@@ -87,6 +87,57 @@ export interface RateLimitRetryPolicy {
 }
 
 /**
+ * Backend ids admitted by `providers.<name>.webSearchBridge.backend`. Only `"ollama"` has a
+ * shipped executor; every other id is explicit-only and inert, the same contract the top-level
+ * `webSearchSidecar` uses for backends whose executor has not landed. Naming one of them keeps
+ * the bridge disarmed rather than silently falling back to a different search provider — in
+ * particular it never auto-selects a paid Luna or Exa search.
+ */
+export const PROVIDER_WEB_SEARCH_BRIDGE_BACKENDS = [
+  "ollama",
+  "openai",
+  "anthropic",
+  "xai",
+  "gemini",
+  "exa",
+] as const;
+
+export type ProviderWebSearchBridgeBackend = typeof PROVIDER_WEB_SEARCH_BRIDGE_BACKENDS[number];
+
+/**
+ * Opt-in hosted-web-search bridge for a KEY-auth Responses passthrough provider
+ * (`providers.<name>.webSearchBridge`), default OFF (#3761).
+ *
+ * Codex always declares the hosted `{type:"web_search"}` tool. On the passthrough the proxy
+ * treats that as "the destination runs search itself" and relays it unchanged, which is true for
+ * the ChatGPT backend and for xAI but false for an OpenAI-shaped key gateway such as Ollama
+ * Cloud: the model answers with a `function_call` named `web_search` that nothing executes,
+ * and the undeclared-tool guard ends the turn. With this block enabled the proxy intercepts that
+ * call, runs the configured search backend itself, feeds the result back upstream, and shows
+ * Codex a hosted `web_search_call` cell.
+ *
+ * Never armed for `authMode: "forward"` (ChatGPT) or for a provider that executes hosted search
+ * upstream; see `planPassthroughWebSearchBridge` in `src/web-search/passthrough-bridge.ts`.
+ */
+export interface ProviderWebSearchBridgeConfig {
+  /** Master switch. Absent or false keeps today's relay-and-fail behavior exactly. */
+  enabled?: boolean;
+  /** Which executor runs the search. Absent disarms the bridge; there is no implicit default. */
+  backend?: ProviderWebSearchBridgeBackend;
+  /** Searches executed per turn before the bridge refuses further ones (1..10, default 3). */
+  maxSearches?: number;
+  /** Per-search deadline in milliseconds (1000..600000, default 60000). */
+  timeoutMs?: number;
+  /**
+   * Absolute search-API URL. Required to use the `ollama` backend against anything other than
+   * the canonical `https://ollama.com` origin, which is the only origin derived automatically.
+   * The bridge sends the PROVIDER's own API key to this URL, so an operator setting it is
+   * authorizing that key for this destination.
+   */
+  endpoint?: string;
+}
+
+/**
  * User-configured display price for one model (USD per 1M tokens).
  * Mirrors the `Cost4` shape used by the usage cost estimator; structurally
  * compatible so config rows can be lifted directly into price overlays.
@@ -550,6 +601,11 @@ export interface OcxProviderConfig {
    * SSE/JSON; raw inspection state remains authoritative.
    */
   responsesSnapshotRepair?: boolean;
+  /**
+   * Opt-in hosted-web-search bridge for this KEY-auth Responses passthrough provider (#3761).
+   * Absent or disabled leaves the passthrough byte-identical to today.
+   */
+  webSearchBridge?: ProviderWebSearchBridgeConfig;
   /**
    * Provider-wide mapping from Codex effort labels to upstream `reasoning_effort` values.
    * Map a label to the reserved value `"__omit__"` to send no reasoning field at all for that

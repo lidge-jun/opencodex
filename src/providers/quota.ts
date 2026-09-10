@@ -1398,6 +1398,21 @@ function parseClaudeLimit(value: unknown): { label: string; percent: number; res
 /** Claude's OAuth usage endpoint, probed with ONE account's own bearer token. */
 const anthropicUsageInflight = new Map<string, Promise<ProviderQuota | null>>();
 
+/**
+ * Anthropic per-credential usage.
+ *
+ * This endpoint reports quota only. Its body carries `five_hour`, `seven_day`, the
+ * model-scoped weekly buckets (`seven_day_fable`/`_opus`/`_sonnet`) and a `limits` array,
+ * and **no subscription or tier field** — nor does the OAuth token response, which yields only
+ * `account.uuid` and `account.email_address` (`src/oauth/anthropic.ts`). That is why
+ * `OAuthAccountSummary.plan` is `null` for Anthropic rather than populated here (#3777); it is
+ * a missing upstream field, not an unfinished mapping.
+ *
+ * A tier must not be inferred from what is here. Percentages are normalized per account, so a
+ * Max x5 seat at 50% is byte-identical to a Max x20 seat at 50%, and the presence of a
+ * model-scoped window tracks entitlement rather than seat size. Populate `plan` only when
+ * upstream returns the tier itself.
+ */
 async function fetchAnthropicUsageQuota(accessToken: string): Promise<ProviderQuota | null> {
   const joinable = anthropicUsageInflight.get(accessToken);
   if (joinable) return joinable;

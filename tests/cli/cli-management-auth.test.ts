@@ -65,7 +65,7 @@ describe("CLI management authentication", () => {
       },
       fetchFn: async (_input, init) => {
         token = new Headers(init?.headers).get("x-opencodex-api-key");
-        return new Response(null, { status: 200 });
+        return Response.json({ success: true, sharedTeardown: "performed" });
       },
     });
     expect(result).toBe(true);

@@ -259,3 +259,69 @@ are the same company, and the mainland console publishes only the wordmark.
   the same shape as the three Alibaba ids sharing `alibaba-color.svg`.
   **Not masked:** three linear gradients in Meta brand blue
   (#0064E0 -> #0278F1), and masking flattens a gradient to a single ink.
+
+## Qoder (2026-09-08)
+
+- `qoder.svg` — fetched 2026-09-08 from `https://qoder.com/favIcon.svg`, the icon
+  the site declares in its own `<link rel="icon" type="image/svg+xml">`. The
+  conventional paths are all 404s here (`/favicon.svg`, `/icon.svg`, `/logo.svg`),
+  and the lowercase spelling is one of them — the served path capitalizes the I.
+  Unmodified: no comments, no `<title>`/`<desc>`, no `data-name`, `xmlns` already
+  present, so nothing needed stripping.
+
+  Corroborated four ways rather than assumed. `qoder.cn/favIcon.svg` and
+  `qoder.com.cn/favIcon.svg` serve the same 73379 bytes (MD5 `95f4aecb…`), and so
+  does the `logo` URL Qoder declares in its own schema.org `Organization` block
+  (`img.alicdn.com/imgextra/i4/O1CN018ikLCF1sGya2c3YY4_!!6000000005740-55-tps-206-206.svg`).
+  The 105x26 lockup on the marketing site is the wordmark and is refused for the
+  usual reason.
+
+  Wired to both `qoder` and `qoder-cn`. One brand on two operators — Global is
+  BRIGHT ZENITH PRIVATE LIMITED, CN is 通义云启（杭州）信息技术有限公司 with
+  Alibaba Cloud as co-provider — which is the `meta-model`/`meta-muse` shape, not
+  a plan split. **Not masked:** an `#F3F3F3` rounded plate carrying a `#0F0D0C`
+  glyph, 94.5% opaque at 160px. Both inks are neutral, so masking would collapse
+  plate and glyph into the single filled box the plate problem above records.
+  As an image it reads on both surfaces.
+
+  Neither terms document prohibits this. Qoder's Terms of Service
+  (`qoder.com/product-service`, updated 2026-04-29) reserve rights generally in
+  §4.1 and confine §9 Intellectual Property to a complaints procedure; its only
+  trademark sentence warrants the user's own marks in User Content. The CN
+  agreement (`qoder.cn/product-service`, updated 2026-05-20) §五(a) reserves
+  商标 rights without restricting third-party use. Silence plus reserved rights
+  is the same posture under which `meta.svg` shipped.
+
+  The file is 73 KB, the largest here, all of it high-precision path
+  coordinates. `docs.qoder.com/logo.svg` is the same symbol at 39665 bytes on a
+  dark `#111113` plate and would be an acceptable swap under the same
+  docs-subdomain precedent as `together.svg`; the favicon was preferred for its
+  corroboration.
+
+### CodeBuddy: mark exists, terms forbid it
+
+`codebuddy` and `codebuddy-cn` keep the fallback tile by decision, not for lack
+of an asset. Tencent publishes a usable 40x40 square symbol — a gradient roundel
+at `codebuddy-1328495429.cos.accelerate.myqcloud.com/web/ide/logo.svg`, declared
+as the site icon, byte-identical to the one `codebuddy.cn` serves from
+`download.codebuddy.cn` — and it would render well at 19px.
+
+It is not ours to use. §9.3 "Tencent Logo" of the CodeBuddy service agreement,
+identical on `codebuddy.ai/document/term` and `codebuddy.cn/document/term`:
+"You shall not use Tencent's trademarks service marks, trade names, domain
+names, website names or other distinctive brand features of Tencent under any
+circumstances… Without the prior written consent of the Tencent, you shall not
+display, use, or otherwise dispose of the aforesaid Tencent Logos in any way,
+either alone or in combination." §6.2 adds that unauthorized use "may also
+violate applicable laws including… trademark laws." "Under any circumstances"
+and "other distinctive brand features" reach the CodeBuddy product mark, which
+is a Tencent Cloud brand.
+
+There is no brand-permission page to rely on: `codebuddy.ai/document/brand`
+returns 200 but is byte-identical to a route that does not exist, so it is the
+SPA catch-all shell; `/press` is a real 404.
+
+This one needs to stay written down. The wiring test only fires when an asset
+named after the provider id is already committed, so an absent mark produces no
+signal at all — nothing would stop a later pass from fetching that logo and
+committing it.

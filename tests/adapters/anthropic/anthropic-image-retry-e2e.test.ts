@@ -153,8 +153,13 @@ describe("anthropic 413 tightened-retry (end-to-end)", () => {
       const res = await postImageRequest(String(server.url), await realPngDataUrl(1500, 1000));
       expect(res.status).toBe(413);
       expect(seen).toHaveLength(2);
-      const errorText = await res.text();
-      expect(errorText).toContain("Provider error 413");
+      expect(res.headers.get("content-type")).toContain("application/json");
+      const errorBody = await res.json();
+      expect(errorBody.error).toEqual({
+        message: "The provider rejected this turn because its input exceeds the provider size or context limit. Reduce the current input or compact the conversation before retrying.",
+        type: "invalid_request_error",
+        code: "context_length_exceeded",
+      });
     } finally {
       await server.stop(true);
     }

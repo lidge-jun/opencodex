@@ -3,7 +3,10 @@ import { PROVIDER_REGISTRY } from "../../src/providers/registry";
 import {
   OPENCODE_ZEN_OBSERVED_RPM_HINT,
   OPENCODE_ZEN_SYNTHETIC_RETRY_AFTER_SEC,
+  enrichOpenCodeZenFreeTierMessage,
   enrichOpenCodeZenRateLimitMessage,
+  enrichOpenCodeZenUpstreamMessage,
+  isOpenCodeZenFreeTierLockIn,
   isOpenCodeZenRateLimitProvider,
 } from "../../src/providers/opencode-zen-rate-limit";
 import { resolveClientRetryAfter } from "../../src/lib/retry-after";
@@ -135,5 +138,95 @@ describe("opencode-zen rate-limit guidance (#1145)", () => {
       providerName: "opencode-zen",
       hasApiKey: true,
     })).toBe(once);
+  });
+});
+
+/**
+ * Zen closed the keyless tier to non-OpenCode clients. The gate is the mere presence of
+ * `x-opencode-session`, so opencodex could pass it by inventing a value; it does not, and the
+ * user-facing failure has to say that rather than leaking `MissingSessionID` through.
+ */
+describe("opencode-free keyless tier lock-in (#4121)", () => {
+  /** Verbatim upstream body from the issue, as the Responses wire forwards it. */
+  const RAW_UPSTREAM = String.raw`{"type":"error","error":{"type":"MissingSessionID","message":"Error from provider (Console): OpenCode's free tier can only be used in OpenCode"}}`;
+  const FREE_TIER_ROUTE = {
+    providerName: "opencode-free",
+    baseUrl: "https://opencode.ai/zen/v1",
+    adapter: "openai-chat",
+  };
+
+  test("registry note states the gate, the refusal to impersonate, and the keyed alternative", () => {
+    const note = PROVIDER_REGISTRY.find(e => e.id === "opencode-free")?.note?.toLowerCase();
+    expect(note).toBeDefined();
+    expect(note).toContain("x-opencode-session");
+    expect(note).toContain("missingsessionid");
+    expect(note).toContain("opencode-zen");
+    // The quota figures the preset already documented must survive the rewrite.
+    expect(note).toContain("200");
+    expect(note).toContain("15-20");
+  });
+
+  test("isOpenCodeZenFreeTierLockIn recognises both the raw body and the parsed error type", () => {
+    expect(isOpenCodeZenFreeTierLockIn(RAW_UPSTREAM)).toBe(true);
+    // Native Chat parses the envelope, so the marker survives only in `error.type`.
+    expect(isOpenCodeZenFreeTierLockIn(
+      "Provider error 400: Error from provider (Console)",
+      "MissingSessionID",
+    )).toBe(true);
+    expect(isOpenCodeZenFreeTierLockIn(
+      "Provider error 400: OpenCode's free tier can only be used in OpenCode",
+    )).toBe(true);
+    expect(isOpenCodeZenFreeTierLockIn("Provider error 500: boom")).toBe(false);
+    expect(isOpenCodeZenFreeTierLockIn("Provider error 500: boom", "server_error")).toBe(false);
+  });
+
+  test("the client error explains the gate and names the supported keyed route", () => {
+    const enriched = enrichOpenCodeZenFreeTierMessage(
+      `Provider error 400: ${RAW_UPSTREAM}`,
+      FREE_TIER_ROUTE,
+    );
+    expect(enriched).toContain("x-opencode-session");
+    expect(enriched).toContain("opencode-zen");
+    expect(enriched).toContain("https://opencode.ai/auth");
+    expect(enriched).toContain("https://opencode.ai/docs/zen/");
+    // The user is told opencodex declines to impersonate, not that the request merely failed.
+    expect(enriched).toContain("does not send a fabricated OpenCode session header");
+  });
+
+  test("enrichment is scoped to Zen destinations and to this error", () => {
+    expect(enrichOpenCodeZenFreeTierMessage(`Provider error 400: ${RAW_UPSTREAM}`, {
+      providerName: "openrouter",
+    })).toBe(`Provider error 400: ${RAW_UPSTREAM}`);
+    expect(enrichOpenCodeZenFreeTierMessage("Provider error 500: boom", FREE_TIER_ROUTE))
+      .toBe("Provider error 500: boom");
+    // Destination match, not just the preset id: a custom row pointed at the same gateway.
+    expect(enrichOpenCodeZenFreeTierMessage(
+      `Provider error 400: ${RAW_UPSTREAM}`,
+      { baseUrl: "https://opencode.ai/zen/v1", adapter: "openai-chat" },
+    )).toContain("opencode-zen");
+  });
+
+  test("enrichment does not double-append across layers", () => {
+    const once = enrichOpenCodeZenFreeTierMessage(
+      `Provider error 400: ${RAW_UPSTREAM}`,
+      FREE_TIER_ROUTE,
+    );
+    expect(enrichOpenCodeZenFreeTierMessage(once, FREE_TIER_ROUTE)).toBe(once);
+  });
+
+  test("enrichOpenCodeZenUpstreamMessage keeps the 429 guidance and adds the lock-in case", () => {
+    const rateLimited = enrichOpenCodeZenUpstreamMessage(
+      "Provider error 429: Rate limit exceeded.",
+      { status: 429, providerName: "opencode-zen", hasApiKey: true },
+    );
+    expect(rateLimited).toContain(OPENCODE_ZEN_OBSERVED_RPM_HINT);
+    expect(rateLimited).not.toContain("x-opencode-session");
+
+    const lockedOut = enrichOpenCodeZenUpstreamMessage(
+      `Provider error 400: ${RAW_UPSTREAM}`,
+      { status: 400, ...FREE_TIER_ROUTE },
+    );
+    expect(lockedOut).toContain("x-opencode-session");
+    expect(lockedOut).not.toContain(OPENCODE_ZEN_OBSERVED_RPM_HINT);
   });
 });

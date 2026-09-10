@@ -39,7 +39,7 @@ describe("Codex catalog restore", () => {
     if (existsSync(opencodexHome)) removeTreeWithRetry(opencodexHome);
   });
 
-  test("version-1 process journals restore, while matching client ownership is durable", () => {
+  test("version-1 process journals with injected hashes restore, while matching client ownership is durable", () => {
     const configPath = join(codexHome, "config.toml");
     const journalPath = join(codexHome, "opencodex-journal.json");
     const original = '# original\nmodel_provider = "openai"\n';
@@ -49,6 +49,8 @@ describe("Codex catalog restore", () => {
       version: 1,
       originalConfig: Buffer.from(original).toString("base64"),
       originalProfile: null,
+      injectedConfigHash: createHash("sha256").update(injected).digest("hex"),
+      injectedProfileHash: null,
       pid: 999_999,
       timestamp: new Date().toISOString(),
     }));
@@ -65,6 +67,8 @@ describe("Codex catalog restore", () => {
       version: 1,
       originalConfig: Buffer.from(original).toString("base64"),
       originalProfile: null,
+      injectedConfigHash: createHash("sha256").update(injected).digest("hex"),
+      injectedProfileHash: null,
       owner: { kind: "client", apiKeyId: "client-key-1" },
       pid: 999_999,
       timestamp: new Date().toISOString(),

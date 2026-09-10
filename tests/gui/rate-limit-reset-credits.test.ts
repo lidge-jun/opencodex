@@ -302,8 +302,8 @@ describe("rate-limit reset credits", () => {
       expect(source).toContain("className=\"card-badges\"");
       expect(source).toContain("<CodexTicketBadge t={t} account={a} onClick={() => onOpenReset(a)} />");
       // Next-session still renders BESIDE the ticket; health projection also suppresses
-      // it for projected reauth/cooldown (not only the legacy needsReauth flag).
-      expect(source).toContain("{isNext(a) && !showReauth && !inCooldown && (");
+      // it for projected reauth/cooldown and pending validation.
+      expect(source).toContain("{isNext(a) && !showReauth && !inCooldown && !validationPending && (");
       expect(source).toContain("{t(accountModeState === \"direct\" ? \"codexAuth.poolPrepared\" : \"codexAuth.nextSession\")}");
       const styles = await Bun.file("gui/src/styles.css").text();
       expect(styles).toContain(".card-badges { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }");

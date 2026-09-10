@@ -150,8 +150,8 @@ say where it is; do not add it to `devlog/`, `structure/`, or `docs-site/`.
 ## User-consent actions
 
 Some actions write to the **user's own accounts and identity** rather than to
-this repository, and an agent must never perform or auto-answer them. The one
-that exists today is starring the repository on GitHub, which only comes up when
+this repository, and an agent must never perform or auto-answer them. One example
+is starring the repository on GitHub, which only comes up when
 an agent is *running* opencodex — not when it is working on this codebase.
 
 The rule lives in [`AGENTS_INSTALL.md`](./AGENTS_INSTALL.md), which is the file

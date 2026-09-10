@@ -8,6 +8,7 @@ import { useMemo, useState } from "react";
 import { useT } from "../../i18n/shared";
 import {
   bucketPresets,
+  pinSponsors,
   filterPresets,
   type CatalogPreset,
 } from "./provider-presets";
@@ -95,7 +96,7 @@ export default function ProviderCatalog({
     });
   }, [catalog, usageRank]);
 
-  const buckets = useMemo(() => bucketPresets(ranked), [ranked]);
+  const buckets = useMemo(() => bucketPresets(pinSponsors(ranked)), [ranked]);
   const tierList = buckets[tier];
   const rows = useMemo(() => filterPresets(tierList, query), [tierList, query]);
 
@@ -112,7 +113,10 @@ export default function ProviderCatalog({
     const free = (p.freeTier || p.keyOptional) && p.auth === "key"
       ? <span className="badge badge-green">{t("modal.badge.free")}</span>
       : null;
-    return <>{free}{auth}</>;
+    const sponsor = p.sponsor
+      ? <span className="badge badge-accent provider-catalog-sponsor" title={p.sponsorUrl}>{t("modal.badge.sponsor")}</span>
+      : null;
+    return <>{sponsor}{free}{auth}</>;
   };
 
   return (

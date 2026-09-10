@@ -346,6 +346,11 @@ wire-clamps ultra/max to each model's real top rung (e.g. gpt-5.5 ultra → xhig
 (`src/server/effort-policy.ts`): they lower or preserve the requested effort rather than rejecting
 the request, and they never raise it.
 
+The `ocx effort` CLI accepts only the same canonical cap ladder before live probing or persistence.
+Its status output preserves unsupported legacy cap values and reports that those fields are ignored;
+the read does not normalize or migrate them, and an ignored subagent field does not disable a valid
+main cap. Injection-effort input remains a separate contract.
+
 Operator-owned `pinnedReasoningEffort`, `modelPinnedReasoningEfforts`, and root
 `modelPinnedEfforts` resolve before applicable effort caps at the final destination.
 Provider model pins precede provider-wide pins, then global selector/destination pins.
@@ -470,7 +475,10 @@ custom `injectionPrompt` bodies. The built-in text reports the resolved preferre
 effort, roster and fallback chain without prescribing delegation, spawn overrides or
 `fork_turns`. Custom bodies retain their placeholder behavior. The guidance switch and
 catalog-state gates still apply; stale or unknown catalog state suppresses proxy guidance.
-V1 retains its `<multi_agent_mode>` proactive text at `max` or `ultra`.
+V1 uses the shared `MULTI_AGENT_MODE_HINT_RECOMMENDATION.text` inside `<multi_agent_mode>`
+at `max` or `ultra`. Only the separate explicit delegation-request trigger changes; user,
+authority, task-scope and collaboration-tool rules remain applicable. This is guidance,
+not an enforcement mechanism or a change to native settings or tool access.
 
 Replay deduplication compares the latest exact generated developer text separately for
 each tag family, preserving built-in → custom → built-in transitions without duplicating

@@ -25,6 +25,7 @@ import { afterCatalogWriteHandleAppServers } from "../codex/app-server-processes
 import { normalizeUpdateChannel, runGuiUpdateWorker } from "../update/job";
 import { isJsonOption, takeFlag } from "./runtime-api";
 import type { ClientConnectionState } from "../client/state";
+import { OCX_NATIVE_REPLAY_RECOVERY_NOTE } from "../responses/compaction";
 
 export interface CliDispatchDeps {
   args: string[];
@@ -199,6 +200,7 @@ const commandRunners: Record<string, CommandRunner> = {
     }
     if (r.success) {
       console.log("Codex integration is OFF and plain `codex` now runs natively. Switch back with: ocx restore back");
+      console.log(`Note: ${OCX_NATIVE_REPLAY_RECOVERY_NOTE}`);
     } else {
       console.error("Plain `codex` was not fully restored. Inspect $CODEX_HOME/config.toml before using native Codex.");
     }

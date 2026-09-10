@@ -13,6 +13,7 @@ import { ProviderIcon } from "./ProviderRail";
 import { Switch } from "../../ui";
 import { IconChevron, IconTrash } from "../../icons";
 import ProviderOverview from "./ProviderOverview";
+import type { CatalogPreset } from "../provider-catalog/provider-presets";
 import type { ModelRow } from "../../pages/models-shared";
 import ProviderModels from "./ProviderModels";
 import ProviderUsage from "./ProviderUsage";
@@ -27,6 +28,7 @@ type Tab = "overview" | "models" | "usage" | "accounts" | "settings";
 
 export default function ProviderDetails({
   item,
+  preset,
   usageTotals,
   modelUsage,
   quotaReport,
@@ -63,6 +65,7 @@ export default function ProviderDetails({
   onRefreshQuota,
 }: {
   item: WorkspaceItem;
+  preset?: CatalogPreset;
   usageTotals?: ProviderUsageTotals;
   modelUsage?: ProviderModelUsageRow[];
   quotaReport?: ProviderQuotaReportView;
@@ -264,6 +267,7 @@ export default function ProviderDetails({
         {tab === "overview" && (
           <ProviderOverview
             item={item}
+            preset={preset}
             apiBase={apiBase}
             connectionIdentity={connectionIdentity}
             usageTotals={usageTotals}

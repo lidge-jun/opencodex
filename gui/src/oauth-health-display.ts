@@ -17,6 +17,7 @@ export type OAuthHealthReason =
   | "refresh_failed"
   | "refresh_conflict"
   | "metadata_mismatch"
+  | "validation_pending"
   | "stale_credentials";
 
 export type OAuthHealthView = {
@@ -79,6 +80,8 @@ export function oauthHealthLabelKey(health: OAuthHealthView | undefined): TKey |
       : "pws.healthLabel.reauthRequired";
   }
   switch (health.reason) {
+    case "validation_pending":
+      return "pws.healthLabel.validationPending";
     case "refresh_conflict":
       return "pws.healthLabel.credentialConflict";
     case "metadata_mismatch":
@@ -112,6 +115,9 @@ export function formatOAuthHealthSummary(
   }
   if (health.status === "reauth_required") {
     return t("pws.healthSummary.reauthRequired", { provider, account });
+  }
+  if (health.reason === "validation_pending") {
+    return t("pws.healthSummary.validationPending", { provider, account });
   }
   if (health.reason === "refresh_conflict") {
     return t("pws.healthSummary.credentialConflict", { provider, account });
@@ -170,4 +176,3 @@ export function doctorCopyButtonLabel(
   if (!outcome) return t("pws.copyDoctor");
   return outcome === "copied" ? t("pws.doctorCopied") : t("pws.doctorCopyUnavailable");
 }
-

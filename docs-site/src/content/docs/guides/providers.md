@@ -6,6 +6,13 @@ description: Every way opencodex authenticates and talks to an LLM provider — 
 A **provider** is one upstream LLM endpoint plus how to reach it: an adapter, a base URL, an auth
 mode, and an optional model list. Providers live under `providers` in `~/.opencodex/config.json`.
 
+The dashboard provider Overview separates connection details, account usage and editable notes.
+Notes appear once, below the connection and authentication sections. Supported sponsor presets
+also show a short introduction, a Sponsor label and links to the provider's site or console.
+These links preserve the preset's referral parameters. Sponsor information is shown only when
+the configured provider name, adapter and endpoint match the preset; it never changes routing,
+account selection or defaults.
+
 ## OpenAI account modes
 
 | Provider id | Use | Credential/account rule |
@@ -29,6 +36,9 @@ not an OpenAI API-key entitlement. Its manual stored-main selector requires effe
 Desktop mode and current credential-bound upstream permission; a catalog entry alone does not
 authorize a request. See [Luna Reserve alongside routed models](/reference/cli/providers-accounts/#luna-reserve-alongside-routed-models)
 for setup, restart order, authorization requirements, and unsupported helpers.
+
+For adding an account with exhausted quota and finishing its deferred validation, see
+[Codex account warmup](/guides/codex-integration/#codex-account-warmup).
 
 ### Providers overview pool capacity
 
@@ -333,6 +343,21 @@ preserves those requested tiers; any backend-specific normalization remains Clin
 available in the Cline IDE/CLI, not through the API; `minimax/minimax-m2.5` is the documented API
 free-experimentation model.
 
+**OrcaRouter** ([sponsor](https://github.com/lidge-jun/opencodex/blob/main/SPONSORS.md)) is an
+OpenAI-compatible gateway at `https://api.orcarouter.ai/v1` with vendor-namespaced model ids
+(`openai/gpt-5.5`, `anthropic/claude-opus-4.8`, `deepseek/deepseek-v4-pro`, ...) and an adaptive
+router, `orcarouter/auto`, that grades each prompt and picks the model. Create a key in the
+[OrcaRouter console](https://www.orcarouter.ai/console); the preset pins the row near the top of the
+Add provider picker and marks it as a sponsor, and nothing else about routing or defaults changes.
+
+**PackyCode** ([sponsor](https://github.com/lidge-jun/opencodex/blob/main/SPONSORS.md)) is an API
+relay for Claude Code, Codex, Gemini and more. The preset targets their OpenAI-compatible Chat
+Completions endpoint, `https://cf.api.fan/v1`, with live model discovery narrowed to what your
+token group allows (`gpt-5.5` and `gpt-5.1-codex` are seeded). Register at
+[packyapi.com](https://www.packyapi.com/register?aff=k5KT) and create a Codex-group token; the preset
+pins the row near the top of the Add provider picker and marks it as a sponsor, and nothing else about
+routing or defaults changes.
+
 | Provider | Base URL |
 | --- | --- |
 | **OpenAI (API key)** | `https://api.openai.com/v1` |
@@ -356,6 +381,7 @@ free-experimentation model.
 | Baseten Model APIs | `https://inference.baseten.co/v1` |
 | Command Code | `https://api.commandcode.ai/provider/v1` |
 | OrcaRouter | `https://api.orcarouter.ai/v1` |
+| PackyCode | `https://cf.api.fan/v1` |
 | Meta Model API | `https://api.meta.ai/v1` |
 | Meta Muse Code (CLI credential) | `https://api.meta.ai/v1` |
 | SambaNova Cloud | `https://api.sambanova.ai/v1` |
@@ -408,6 +434,22 @@ headers. That is separate from the keyless desktop quota OpenCode advertises
 `Retry-After` on such a 429, opencodex adds provider guidance to the client error and a
 synthetic `Retry-After`; an upstream `Retry-After` still takes precedence. Same-key
 wait-and-retry remains opt-in via [`retryOn429`](/reference/configuration/).
+
+**The keyless `opencode-free` tier is currently closed to third-party clients.** Zen refuses
+any request that arrives without an `x-opencode-session` header, answering with error type
+`MissingSessionID` and the message "OpenCode's free tier can only be used in OpenCode". Presence
+of the header is the entire gate, so a proxy could pass it by inventing a value — opencodex does
+not. Minting a session identifier and a versioned `opencode/<version>` User-Agent is a claim to
+*be* the OpenCode client, and OpenCode publishes no third-party integration contract for this
+keyless tier; an HTTP 200 obtained that way is a bypassed admission check rather than
+permission. opencodex therefore reports the restriction instead of working around it: a request
+to `opencode-free` returns an error explaining the upstream gate and pointing here.
+
+The supported route to the same models is the keyed **`opencode-zen`** provider with an OpenCode
+Zen API key from [opencode.ai/auth](https://opencode.ai/auth). If OpenCode later publishes a
+supported third-party path for the keyless tier, opencodex can follow it; until then the preset
+stays as documentation of the restriction. Upstream terms:
+[opencode.ai/docs/zen](https://opencode.ai/docs/zen/).
 
 Most use the `openai-chat` adapter with a bearer key; a few that expose only an Anthropic-compatible
 endpoint (e.g. **Xiaomi MiMo**) use the `anthropic` adapter (`x-api-key`).
@@ -617,6 +659,72 @@ Create a key in [Novita's key manager](https://novita.ai/settings/key-management
 > hosts and schemas and are not routed by this preset.
 > Live discovery for this preset is capped at a 1 MiB response and 256 raw model rows.
 
+### Official CodeBuddy Code CLI (Global & CN)
+
+OpenCodex provides official adapter support for Tencent Cloud's CodeBuddy Code CLI via the `codebuddy` (Global) and `codebuddy-cn` (China) presets.
+
+```json
+{
+  "providers": {
+    "codebuddy": {
+      "adapter": "codebuddy",
+      "baseUrl": "https://www.codebuddy.ai",
+      "apiKey": "${CODEBUDDY_API_KEY}"
+    },
+    "codebuddy-cn": {
+      "adapter": "codebuddy",
+      "baseUrl": "https://www.codebuddy.cn",
+      "apiKey": "${CODEBUDDY_CN_API_KEY}"
+    }
+  }
+}
+```
+
+- **Prerequisites:** Install the official CodeBuddy CLI globally:
+  ```bash
+  npm install -g @tencent-ai/codebuddy-code
+  ```
+- **Authentication:** Obtain your official API key from the vendor console:
+  - Global: [CodeBuddy Global API Keys](https://www.codebuddy.ai/profile/keys)
+  - CN: [CodeBuddy CN API Keys](https://copilot.tencent.com/profile/keys)
+- **Region Isolation:** `codebuddy` and `codebuddy-cn` use separate canonical endpoints (`https://www.codebuddy.ai` and `https://www.codebuddy.cn`) and isolated child environments (`CODEBUDDY_INTERNET_ENVIRONMENT=public` vs `internal`). Credentials are strictly region-scoped and never exchanged across environments. Overriding the canonical base URL fails closed.
+- **Tool Ownership:** In v1, the CLI is spawned with `--tools ""` and `--strict-mcp-config`, ensuring Codex maintains exclusive tool ownership. The provider operates in text and reasoning mode; client tool execution is not delegated to the vendor CLI.
+- **Entitlements and Billing:** The provider uses the same vendor-documented CodeBuddy account/CLI authentication surface. Availability and billing of free, promotional, trial, or subscription credits remain determined by the user's CodeBuddy account entitlement.
+
+### Official Qoder CLI (Global & CN)
+
+OpenCodex provides official adapter support for Qoder through the `qoder` (Global) and `qoder-cn` (China) presets. Both use a user-supplied Personal Access Token and the vendor's headless CLI; OpenCodex never reads Qoder Desktop sessions, browser cookies, refresh tokens, or private console APIs.
+
+```json
+{
+  "providers": {
+    "qoder": {
+      "adapter": "qoder",
+      "baseUrl": "https://qoder.com",
+      "apiKey": "${QODER_PERSONAL_ACCESS_TOKEN}"
+    },
+    "qoder-cn": {
+      "adapter": "qoder",
+      "baseUrl": "https://qoder.cn",
+      "apiKey": "${QODERCN_PERSONAL_ACCESS_TOKEN}"
+    }
+  }
+}
+```
+
+- **Prerequisites:** Install the official CLI for the region you use:
+  ```bash
+  npm install -g @qoder-ai/qodercli        # Global: qoder / qodercli
+  npm install -g @qodercn-ai/qoderclicn    # CN: qodercn / qoderclicn
+  ```
+- **Authentication:** Create a PAT in the account integrations page
+  ([Global](https://qoder.com/account/integrations), [CN](https://qoder.cn/account/integrations)) and paste it as the provider's API key. The stored key reaches the CLI only as `QODER_PERSONAL_ACCESS_TOKEN` (Global) or `QODERCN_PERSONAL_ACCESS_TOKEN` (CN) in a scoped child environment.
+- **Region Isolation:** Each preset accepts only its canonical destination (`https://qoder.com` or `https://qoder.cn`) and resolves its own executable. Credentials, model cache, usage, and health are independent; neither region falls back to the other. An older custom provider named `qoder` with a different destination keeps its existing adapter and URL.
+- **Model Discovery:** `qoder --list-models` is the authoritative entitlement roster for the current PAT. The cache is bound to an irreversible fingerprint of the token, so switching accounts never reuses another account's roster. If discovery fails, the provider degrades to a stale cache and then the documented static seed.
+- **Tool Ownership:** The CLI runs single-turn `stream-json` with `--tools ""`, `--strict-mcp-config`, setting sources disabled, and session persistence disabled, so Codex keeps exclusive tool ownership. v1 is text and reasoning only; image input fails explicitly.
+- **Quota:** No public quota API is used, so totals and reset times are unavailable. Insufficient-credit errors (vendor code 118) surface as HTTP 429 `insufficient_quota`.
+- **Operators:** Qoder Global is operated by BRIGHT ZENITH PRIVATE LIMITED under the [product service terms](https://qoder.com/product-service); Qoder CN by 通义云启（杭州）信息技术有限公司 with Alibaba Cloud. Verify `ocx provider test qoder` (or `qoder-cn`) after configuring.
+
 ### A6API credit quota
 
 A custom `openai-chat` provider using `authMode: "key"` and the canonical
@@ -697,6 +805,24 @@ Use `ocx account list`, `ocx account current`, and `ocx account use` to inspect 
 Codex, OAuth, and API-key pools without opening the dashboard. See the
 [CLI reference](/reference/cli/#ocx-account-subcommand) for commands, JSON output, and
 new-session behavior.
+
+#### Subscription tier in account listings
+
+`ocx account list <provider> --json` and `GET /api/oauth/accounts` report a `plan` field on every
+OAuth account, using the same name and placement as the OpenAI/Codex provider so a consumer can
+read one shape across providers.
+
+The field is always present. It is `null` when the tier is unknown, which is deliberate: an
+**absent** key means the proxy predates this field, while `null` means this version looked and the
+provider did not report a tier. Collapsing the two would let a consumer quietly assume a tier.
+
+For Anthropic the value is `null` today. Its usage endpoint returns quota buckets only — the
+five-hour and seven-day windows, the model-scoped weekly windows, and a `limits` array — and no
+subscription or tier field; the OAuth token response carries only the account id and email. There
+is nothing to map, so nothing is mapped. The tier is also not derivable from the quota it does
+return, because percentages are normalized per account: a Max ×5 seat at 50% is indistinguishable
+from a Max ×20 seat at 50%. If you need weighted pool capacity across mixed Anthropic tiers, keep
+that mapping outside OpenCodex until upstream reports the tier itself.
 
 ### GPT-5.6 preview paths
 

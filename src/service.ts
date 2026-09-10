@@ -16,6 +16,13 @@ import { restoreNativeCodex, restoreNativeCodexAsync } from "./codex/inject";
 import { stripGrokConfig } from "./grok/inject";
 import { isWslRuntime, resolveCodexHomeDir, type CodexHomeDeps } from "./codex/home";
 import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV, durableBunRuntime } from "./lib/bun-runtime";
+
+/**
+ * Written only by the launchd plist and the systemd unit. `OCX_SERVICE=1` cannot stand in
+ * for it: `ocx claude` and `ocx opencode` set that on the proxies they spawn to borrow its
+ * routing-preservation meaning, so a proxy carrying it is not necessarily the managed job.
+ */
+export const SERVICE_MANAGED_ENV = "OCX_SERVICE_MANAGED";
 import type { BunRuntimeSource, DurableBunRuntime } from "./lib/bun-runtime";
 import { isProcessAlive, stopProxy } from "./lib/process-control";
 import { serviceApiTokenFilePath } from "./lib/service-secrets";
@@ -508,6 +515,11 @@ export function buildPlist(
   const opencodexHome = process.env.OPENCODEX_HOME?.trim();
   const envLines = [
     `    <key>OCX_SERVICE</key><string>1</string>`,
+    // OCX_SERVICE alone cannot identify the managed job: `ocx claude` and `ocx opencode`
+    // also set it on the proxies they spawn, to borrow its routing-preservation meaning
+    // (src/cli/index.ts preserveRouting). Only the wrapper writes this second marker, so
+    // the dashboard-stop refusal below can tell a real launchd job from an ordinary child.
+    `    <key>${SERVICE_MANAGED_ENV}</key><string>1</string>`,
     ...(launcher ? [] : [
       `    <key>${BUN_RUNTIME_SOURCE_ENV}</key><string>${bunRuntimeSource}</string>`,
       `    <key>${BUN_RUNTIME_PATH_ENV}</key><string>${plistString(bun)}</string>`,
@@ -853,7 +865,49 @@ export function resolvedProxyEnv(env: NodeJS.ProcessEnv = process.env): { name: 
 }
 
 function sh(cmd: string): string {
+  assertLiveServiceManagerAllowed(cmd);
   return execSync(cmd, { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
+}
+
+/**
+ * Service-manager invocations that only observe. Everything else changes a job that
+ * launchd or the systemd user manager is running right now.
+ */
+const READ_ONLY_SERVICE_MANAGER = new RegExp(
+  "^(?:launchctl\\s+(?:list|print|print-disabled|blame|managerpid|manageruid)\\b"
+  + "|systemctl\\s+(?:--user\\s+)?(?:show|show-environment|status|is-active|is-enabled|is-failed|cat|list-units|list-unit-files|--version)\\b)",
+);
+
+const SERVICE_MANAGER_COMMAND = /^(?:launchctl|systemctl)\b/;
+
+/**
+ * Refuse to mutate a live service manager from an armed test process.
+ *
+ * The test preload isolates HOME, OPENCODEX_HOME and CODEX_HOME, and that is enough for
+ * anything addressed by path. It is not enough here. `systemctl --user stop
+ * opencodex-proxy.service` is addressed by job NAME and talks to the user manager that is
+ * already running, so it stops the proxy the developer is actually using no matter what
+ * HOME says. `launchctl bootout gui/<uid>/com.opencodex.proxy` has the same shape.
+ *
+ * Windows already had this guard: `querySchtasks` refuses every non-query call while the
+ * test-home guard is armed, after a partially-faked test replaced a real scheduled task
+ * with a launcher inside a temporary test home. macOS and Linux were left without the
+ * equivalent, which means the person most likely to run this suite - someone running
+ * opencodex on the machine they are developing it on - is the person it can disrupt.
+ *
+ * Read-only verbs stay allowed: probing what the manager reports is the whole point of
+ * the diagnostics, and observation cannot take a service down.
+ */
+export function assertLiveServiceManagerAllowed(command: string): void {
+  if (!isTestHomeGuardArmed()) return;
+  const trimmed = command.trim();
+  if (!SERVICE_MANAGER_COMMAND.test(trimmed)) return;
+  if (READ_ONLY_SERVICE_MANAGER.test(trimmed)) return;
+  throw new Error(
+    `refusing to run \`${trimmed}\` from an armed test process: launchd and the systemd user `
+    + "manager address a job by name, not by HOME, so this reaches the service the developer is "
+    + "actually running. Inject the service operation instead of calling the live manager.",
+  );
 }
 
 /**
@@ -875,6 +929,9 @@ export function runLaunchctl(
   deps: { run?: typeof spawnSync } = {},
 ): { ok: boolean; stdout: string; stderr: string; status: number | null } {
   const run = deps.run ?? spawnSync;
+  // Only the real runner is guarded. Tests that inject a spawnSync stand-in are
+  // exercising the parsing, not reaching launchd, and must keep working.
+  if (run === spawnSync) assertLiveServiceManagerAllowed(`launchctl ${args.join(" ")}`);
   const result = run("/bin/launchctl", args, { encoding: "utf8", windowsHide: true });
   // `error` is set when the spawn itself failed (ENOENT off macOS) and `status` is
   // null for a signalled child; neither may be reported as success.
@@ -2281,7 +2338,23 @@ export function readWindowsSchedulerXmlState(
 }
 
 // ── macOS (launchd) ──
-function installLaunchd(): void {
+/**
+ * Deps follow {@link startLaunchd}: `launchctl` replaces the LAYER, returning a
+ * {@link runLaunchctl} result, not a spawnSync result. It is optional so this stays
+ * assignable to `ServiceOps.install` and `RepairServiceDeps.repairLaunchd`
+ * (`() => void`), and so `platformOps` wires the same function the tests exercise.
+ *
+ * The seam is what makes the eviction below testable at all. The live-service-manager
+ * guard refuses every mutating verb from an armed test process and `bootout` is not on
+ * its read-only list, so a test reaching the real runner would fail closed on the guard
+ * instead of exercising the sequence.
+ *
+ * No `matches` dep: unlike `startLaunchd`, this function never consults
+ * {@link launchdJobMatchesPlist}. It has just rewritten the plist, so a live job is stale
+ * by construction and there is nothing to compare against.
+ */
+export function installLaunchd(deps: { launchctl?: typeof runLaunchctl } = {}): void {
+  const run = deps.launchctl ?? runLaunchctl;
   const dir = join(homedir(), "Library", "LaunchAgents");
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   recordOwnedConfigPath(getConfigDir(), serviceStatePath());
@@ -2295,17 +2368,41 @@ function installLaunchd(): void {
   // so the staleness diagnostic judges exactly what launchd runs.
   const launcher = stableLauncherEntry();
   writeServiceDefinitionFile(p, buildPlist(resolvedProxyEnv(), { launcher }), "utf8");
-  // Best-effort: an absent job is fine here, and a failed unload is caught by the
-  // load verification below with a better message than a raw unload error.
-  runLaunchctl(["unload", p]);
-  const loaded = runLaunchctl(["load", "-w", p]);
+  // `unload` is the legacy verb and it does not evict a job bootstrapped into the GUI
+  // domain — which is precisely the state that could not repair itself. Modern launchd
+  // answers `load -w` for an already-bootstrapped job with "Load failed: 5:
+  // Input/output error" AND exits 0, so `ocx update` replaced the binary, ran repair,
+  // and left launchd running the PREVIOUS job while the fresh plist sat unused (#4141).
+  //
+  // This EVICTS the running job. That is the repair being asked for, and it is why it
+  // lives here and nowhere else: `installLaunchd` has already rewritten the plist, so
+  // whatever is loaded is stale by construction. `ocx service start` must never do
+  // this, and `startLaunchd` accordingly still refuses to.
+  //
+  // Absence is fine: booting out a job that is not there is a no-op, and a real failure
+  // is reported by the load verification below with a better message than a raw
+  // eviction error would carry.
+  const bootoutTarget = `${launchdGuiDomain()}/${LABEL}`;
+  run(["bootout", bootoutTarget]);
+  let loaded = run(["load", "-w", p]);
+  if (launchctlLoadFailed(loaded.stderr)) {
+    // Still bootstrapped after an eviction: the job re-registered between the two calls,
+    // or the first `bootout` raced a job that had not finished exiting. Evict and load
+    // once more — ONCE. A bounded retry recovers the race; a loop would turn a genuinely
+    // wedged domain into a hang instead of the diagnosable throw below.
+    run(["bootout", bootoutTarget]);
+    loaded = run(["load", "-w", p]);
+  }
   if (!loaded.ok || launchctlLoadFailed(loaded.stderr)) {
     // Do NOT write install state for a load that did not take: state describing an
     // unused plist is what made this failure invisible.
     throw new Error(
       `launchctl could not load ${p}: ${loaded.stderr || "load reported failure"}\n`
-      + "A previous job may still be bootstrapped. Try:\n"
-      + `  launchctl bootout ${launchdGuiDomain()}/${LABEL}\n`
+      // The hint used to tell the operator to run `bootout` by hand. It now runs twice
+      // above, so naming it as an untried remedy would send someone to repeat what just
+      // failed. Report what was attempted instead.
+      + `A previous job is still bootstrapped after two attempts to boot it out of ${launchdGuiDomain()}.\n`
+      + `Inspect it with:\n  launchctl print ${bootoutTarget}\n`
       // macOS `service repair` delegates straight to installLaunchd, so this fires for
       // an already-installed service too; repair reloads it without re-registering.
       + `then re-run '${wasInstalled ? "ocx service repair" : "ocx service install"}'.`,
@@ -3328,6 +3425,7 @@ export function buildUnit(
   const opencodexHome = systemdEnvironmentAssignment("OPENCODEX_HOME", process.env.OPENCODEX_HOME?.trim());
   const envLines = [
     systemdEnvironmentAssignment("OCX_SERVICE", "1"),
+    systemdEnvironmentAssignment(SERVICE_MANAGED_ENV, "1"),
     ...(launcher ? [] : [
       systemdEnvironmentAssignment(BUN_RUNTIME_SOURCE_ENV, bunRuntimeSource),
       systemdEnvironmentAssignment(BUN_RUNTIME_PATH_ENV, bun),
@@ -3860,10 +3958,31 @@ export async function installFreshWindowsSchedulerSafely(
 export function installedServiceRespawnRisk(
   probe: () => WindowsSchedulerTaskProbe = probeWindowsSchedulerTask,
   platform: NodeJS.Platform = process.platform,
-): "none" | "respawnable" | "unknown" {
+  io: { env?: NodeJS.ProcessEnv; exists?: (path: string) => boolean } = {},
+): "none" | "respawnable" | "unknown" | "self-unload" {
   // launchd, systemd and WinSW are down when they report stopped; only the Task Scheduler
   // wrapper survives its task ending (#764).
-  if (platform !== "win32") return "none";
+  //
+  // "Down when they report stopped" answers the RESPAWN question but not the SELF-UNLOAD
+  // one (#4023). When the proxy is itself the managed job, `launchctl unload` /
+  // `systemctl stop` terminate this very process, so the manager stop can kill the request
+  // handler before the shared teardown restores the native Codex config keys — leaving
+  // `openai_base_url`, `experimental_realtime_ws_base_url` and `model_catalog_json`
+  // pointed at a proxy that is gone. Reordering teardown ahead of the manager stop is not
+  // available here: the #3008 contract requires the manager to be proven stopped first.
+  // So refuse, exactly as Windows does, and send the operator to `ocx stop`, which stops
+  // the proxy from the outside and owns the teardown through its receipt.
+  if (platform !== "win32") {
+    const env = io.env ?? process.env;
+    // Discriminate on the wrapper-only marker, not on OCX_SERVICE: `ocx claude` and
+    // `ocx opencode` set OCX_SERVICE=1 on the proxies they spawn (for preserveRouting),
+    // and refusing their dashboard stop would break a proxy that no manager supervises.
+    if (env[SERVICE_MANAGED_ENV] !== "1") return "none";
+    const exists = io.exists ?? existsSync;
+    if (platform === "darwin") return exists(plistPath()) ? "self-unload" : "none";
+    if (platform === "linux") return exists(unitPath()) ? "self-unload" : "none";
+    return "none";
+  }
   try {
     // `probeWindowsSchedulerTask` returns "unknown" as an ordinary value when its queries
     // fail — it does not throw — so testing for "present" let an unanswerable probe

@@ -21,7 +21,7 @@ import { MAX_COST4_RATE } from "../usage/expected-prices";
 import { isValidCost4Rate } from "../usage/user-cost-overlays";
 
 const USAGE = `Usage:
-  ocx models live [--provider <name>] [--json]
+  ocx models live [--provider <name>] [--free-only] [--json]
   ocx models price <provider/model> [--json]
   ocx models set-price <provider/model> --input N --output N [--cache-read N] [--cache-write N] [--json]
   ocx models set-price <provider/model> --auto [--json]
@@ -52,17 +52,22 @@ type ModelRow = {
   custom?: boolean;
   customId?: string;
   displayName?: string;
+  pricingStatus?: "free" | "paid";
 };
 
 async function live(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const wantsJson = takeFlag(args, "--json");
   const provider = takeOption(args, "--provider");
+  // Absent pricingStatus means the provider published no usable per-token pair, so it is
+  // excluded here for the same fail-closed reason the classifier omits it (#3666).
+  const freeOnly = takeFlag(args, "--free-only");
   rejectArgs(args, USAGE);
   const rows = await runtimeRequest<ModelRow[]>("/api/models", {}, deps);
-  const filtered = provider ? rows.filter(row => row.provider === provider) : rows;
+  const byProvider = provider ? rows.filter(row => row.provider === provider) : rows;
+  const filtered = freeOnly ? byProvider.filter(row => row.pricingStatus === "free") : byProvider;
   printData(filtered, wantsJson, filtered.map(row => {
-    const flags = [row.native ? "native" : "routed", row.custom ? "custom" : "", row.initialSelectionPending ? "initial discovery pending" : row.disabled ? "disabled" : "enabled"].filter(Boolean);
+    const flags = [row.native ? "native" : "routed", row.custom ? "custom" : "", row.pricingStatus === "free" ? "free" : "", row.initialSelectionPending ? "initial discovery pending" : row.disabled ? "disabled" : "enabled"].filter(Boolean);
     return `${row.namespaced ?? `${row.provider}/${row.id}`}  [${flags.join(", ")}]`;
   }));
 }

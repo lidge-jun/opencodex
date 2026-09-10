@@ -542,6 +542,39 @@ Replay preserves non-hidden signed blocks (including empty thinking) and opaque 
 role; `tool_result` without `tool_use_id`; `tool_use` without id/name; named `tool_choice` without
 name.
 
+### Unicode-property patterns in tool schemas
+
+A JSON Schema `pattern` written for JavaScript may use Unicode property escapes such as
+`\p{Cc}` or `\P{L}`. OpenAI-family backends validate `pattern` by compiling it with Python's
+`re`, which does not support those escapes, and a schema they cannot compile is refused whole —
+so a single such pattern on one built-in tool fails every request in the session, not just calls
+to that tool.
+
+To keep ordinary Artifact parameters working, the `openai-chat` and `openai-responses` adapter
+paths omit scalar `pattern` constraints containing Unicode property escapes in ordinary positive
+schema positions. Sibling constraints, `required`, literal data and supported regexes remain.
+A tool implementation must validate its own inputs because an omitted constraint is not enforced
+by this proxy.
+
+`patternProperties` matchers and their value schemas remain unchanged. Removing a matcher can
+change which keys are evaluated by an ancestor's `unevaluatedProperties`, so local openness is
+not enough to prove a safe transformation. Patterns under `not`, `oneOf`, `if`, `contains`,
+`$defs` and `definitions` also remain unchanged: relaxing those subtrees can change negation,
+branch selection, match counts or the meaning of a reference.
+
+The destination validates these preserved schemas. An ECMA-compatible destination can use the
+original regex; a destination that cannot compile it may reject the schema. OpenCodex does not
+silently replace that contract with one that forbids previously valid arguments.
+
+This is normalization on the selected adapter path, not a provider-wide guarantee. Provider
+configuration and authentication are untouched, and a provider on a different adapter is
+unaffected.
+
+It is a compatibility measure, not a claim that every custom OpenAI-compatible backend rejects
+these patterns. What it costs is worth knowing: an omitted regex is not preserved anywhere and is
+not enforced upstream, so a tool implementation should validate its own inputs rather than relying
+on the schema to reject a malformed argument.
+
 ## Outbound translation (Responses → Messages SSE)
 
 | Responses event | Messages SSE |

@@ -117,6 +117,14 @@ function installOpencode(): string {
   return configPath;
 }
 
+function installGajae(): string {
+  const spec = INTEGRATION_CLIENTS.gajae;
+  mkdirSync(spec.detectDir(TEST_ENV, home), { recursive: true });
+  const configPath = spec.configPath(TEST_ENV, home);
+  mkdirSync(dirname(configPath), { recursive: true });
+  return configPath;
+}
+
 function input(overrides: Partial<IntegrationWriteInput> = {}): IntegrationWriteInput {
   return {
     clientId: "hermes",
@@ -683,11 +691,11 @@ describe("apply", () => {
   });
 
   test("yaml clients still refuse a sibling edit rather than risk user comments", () => {
-    const configPath = installHermes();
-    expect(applyIntegration(input()).ok).toBe(true);
+    const configPath = installGajae();
+    expect(applyIntegration(input({ clientId: "gajae" })).ok).toBe(true);
     writeFileSync(configPath, `${readFileSync(configPath, "utf8")}unknown_top: added-later\n`);
 
-    const result = applyIntegration(input());
+    const result = applyIntegration(input({ clientId: "gajae" }));
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("conflict");
     expect(readFileSync(configPath, "utf8")).toContain("unknown_top: added-later");
@@ -992,6 +1000,40 @@ describe("DSH source preservation", () => {
   });
 });
 
+describe("Hermes source preservation", () => {
+  test("preserves defaults, providers, comments, and formatting through refresh and disable", () => {
+    const configPath = installHermes();
+    const original = [
+      "# user header",
+      "model:",
+      "  default: meituan/LongCat-2.0:free",
+      "providers:",
+      "  commandcode-oauth: # keep provider comment",
+      "    models:",
+      "      - meituan/LongCat-2.0:free",
+      "",
+    ].join("\n");
+    writeFileSync(configPath, original);
+
+    expect(applyIntegration(input({ clientId: "hermes" })).ok).toBe(true);
+    const applied = readFileSync(configPath, "utf8");
+    expect(applied).toContain("commandcode-oauth:");
+    expect(applied).toContain("opencodex:");
+    expect(applied).toContain("# keep provider comment");
+    expect(applied).toContain("default: meituan/LongCat-2.0:free");
+
+    expect(disableIntegration(input({ clientId: "hermes" })).ok).toBe(true);
+    expect(readFileSync(configPath, "utf8")).toBe(original);
+  });
+
+  test("disables a generated Hermes config without leaving its created container", () => {
+    const configPath = installHermes();
+    expect(applyIntegration(input({ clientId: "hermes" })).ok).toBe(true);
+    expect(disableIntegration(input({ clientId: "hermes" })).ok).toBe(true);
+    expect(readFileSync(configPath, "utf8")).toBe("");
+  });
+});
+
 describe("restore", () => {
   test("undoes an apply back to the exact prior bytes", () => {
     const configPath = installHermes();
@@ -1017,29 +1059,29 @@ describe("restore", () => {
   });
 
   test("refuses to replace post-operation edits without confirmation", () => {
-    const configPath = installHermes();
+    const configPath = installGajae();
     writeFileSync(configPath, "providers: {}\n");
-    expect(applyIntegration(input()).ok).toBe(true);
-    const opId = store.listOperations("hermes")[0]!.opId;
+    expect(applyIntegration(input({ clientId: "gajae" })).ok).toBe(true);
+    const opId = store.listOperations("gajae")[0]!.opId;
     writeFileSync(configPath, `${readFileSync(configPath, "utf8")}# later edit\n`);
 
-    const refused = restoreIntegration({ ...input(), opId });
+    const refused = restoreIntegration({ ...input({ clientId: "gajae" }), opId });
     expect(refused.ok).toBe(false);
     if (!refused.ok) expect(refused.reason).toBe("drift_requires_confirm");
     expect(readFileSync(configPath, "utf8")).toContain("# later edit");
   });
 
   test("a confirmed drift-restore keeps the replaced version recoverable", () => {
-    const configPath = installHermes();
+    const configPath = installGajae();
     writeFileSync(configPath, "providers: {}\n");
-    expect(applyIntegration(input()).ok).toBe(true);
-    const opId = store.listOperations("hermes")[0]!.opId;
+    expect(applyIntegration(input({ clientId: "gajae" })).ok).toBe(true);
+    const opId = store.listOperations("gajae")[0]!.opId;
     writeFileSync(configPath, `${readFileSync(configPath, "utf8")}# later edit\n`);
 
-    const restored = restoreIntegration({ ...input(), opId, confirmDrift: true });
+    const restored = restoreIntegration({ ...input({ clientId: "gajae" }), opId, confirmDrift: true });
     expect(restored.ok).toBe(true);
     // The edit we replaced is in the newest snapshot, so nothing was lost.
-    const newest = store.listOperations("hermes")[0]!;
+    const newest = store.listOperations("gajae")[0]!;
     expect(newest.kind).toBe("restore");
     const snapshot = store.readSnapshot(newest);
     expect(snapshot.kind).toBe("stored");
@@ -1047,14 +1089,14 @@ describe("restore", () => {
   });
 
   test("refuses an operation whose snapshot was collected", () => {
-    const configPath = installHermes();
+    const configPath = installGajae();
     writeFileSync(configPath, "providers: {}\n");
-    expect(applyIntegration(input()).ok).toBe(true);
-    const row = store.listOperations("hermes")[0]!;
+    expect(applyIntegration(input({ clientId: "gajae" })).ok).toBe(true);
+    const row = store.listOperations("gajae")[0]!;
     // Simulate GC having removed the bytes.
-    rmSync(join(storeRoot, "snapshots", "hermes", row.opId), { force: true });
+    rmSync(join(storeRoot, "snapshots", "gajae", row.opId), { force: true });
 
-    const result = restoreIntegration({ ...input(), opId: row.opId });
+    const result = restoreIntegration({ ...input({ clientId: "gajae" }), opId: row.opId });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("snapshot_expired");
   });
@@ -1073,7 +1115,7 @@ describe("nothing leaks", () => {
   });
 
   test("a failed record write rolls the file back and says so", () => {
-    const configPath = installHermes();
+    const configPath = installGajae();
     const original = "providers: {}\n";
     writeFileSync(configPath, original);
     const io: IntegrationIO = {
@@ -1083,7 +1125,7 @@ describe("nothing leaks", () => {
       dropRecord: clientId => store.dropRecord(clientId),
     };
 
-    const result = applyIntegration(input({ io }));
+    const result = applyIntegration(input({ clientId: "gajae", io }));
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.reason).toBe("write_failed");
@@ -1091,11 +1133,11 @@ describe("nothing leaks", () => {
     }
     // The file is back to what it was; no half-applied state survives.
     expect(readFileSync(configPath, "utf8")).toBe(original);
-    expect(store.listOperations("hermes")).toHaveLength(0);
+    expect(store.listOperations("gajae")).toHaveLength(0);
   });
 
   test("a failed journal append rolls back and leaves no phantom row", () => {
-    const configPath = installHermes();
+    const configPath = installGajae();
     const original = "providers: {}\n";
     writeFileSync(configPath, original);
     const io: IntegrationIO = {
@@ -1105,17 +1147,17 @@ describe("nothing leaks", () => {
       dropRecord: clientId => store.dropRecord(clientId),
     };
 
-    const result = applyIntegration(input({ io }));
+    const result = applyIntegration(input({ clientId: "gajae", io }));
     expect(result.ok).toBe(false);
     expect(readFileSync(configPath, "utf8")).toBe(original);
     // The row is written last precisely so this cannot leave one behind.
-    expect(store.listOperations("hermes")).toHaveLength(0);
+    expect(store.listOperations("gajae")).toHaveLength(0);
     // And the record it wrote first is gone again.
-    expect(store.readRecords().hermes).toBeUndefined();
+    expect(store.readRecords().gajae).toBeUndefined();
   });
 
   test("when compensation itself fails, the result says residual instead of claiming a rollback", () => {
-    installHermes();
+    installGajae();
     let writes = 0;
     const io: IntegrationIO = {
       ...fileIO(),
@@ -1129,10 +1171,10 @@ describe("nothing leaks", () => {
       putRecord: record => store.putRecord(record),
       dropRecord: clientId => store.dropRecord(clientId),
     };
-    const configPath = installHermes();
+    const configPath = installGajae();
     writeFileSync(configPath, "providers: {}\n");
 
-    const result = applyIntegration(input({ io }));
+    const result = applyIntegration(input({ clientId: "gajae", io }));
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.residual).toBe(true);
@@ -1193,10 +1235,10 @@ describe("nothing leaks", () => {
   test("an empty container the user wrote survives disable", () => {
     // `providers: {}` is the user's line, not ours. Pruning it because it went
     // empty would delete something we never owned.
-    const configPath = installHermes();
+    const configPath = installGajae();
     writeFileSync(configPath, "providers: {}\n");
-    expect(applyIntegration(input()).ok).toBe(true);
-    expect(disableIntegration(input()).ok).toBe(true);
+    expect(applyIntegration(input({ clientId: "gajae" })).ok).toBe(true);
+    expect(disableIntegration(input({ clientId: "gajae" })).ok).toBe(true);
 
     const doc = Bun.YAML.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
     expect(doc).toEqual({ providers: {} });

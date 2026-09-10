@@ -125,9 +125,9 @@ l'actualisation fusionne les changements autour de vos entrées et les conserve,
 comme `1e999`, un nombre qu'une réécriture arrondirait (un très grand entier ou une valeur si petite qu'elle
 deviendrait zéro), `-0`, une même clé écrite deux fois dans un objet ou une imbrication de plus de 1000
 niveaux. Dans ces cas, le commutateur est verrouillé afin que rien ne soit modifié ou supprimé silencieusement.
-**OMP** n'est pas affecté non plus par les modifications voisines, mais pour une autre raison : son outil
-d'écriture ne modifie, octet par octet, que sa propre plage `providers.opencodex` ; le reste du fichier
-n'est jamais réécrit. Pour les autres formats susceptibles de contenir des commentaires (Hermes, OpenClaw,
+**OMP, DSH et Hermes** ne sont pas affectés non plus par les modifications voisines, mais pour une autre raison : leurs outils
+d'écriture ne modifient, octet par octet, que leur propre plage `providers.opencodex` ; le reste du fichier
+n'est jamais réécrit. Pour les autres formats susceptibles de contenir des commentaires (OpenClaw,
 Kimi Code, Gajae Code, MiniMax Code et Raycast — documents YAML, JSON5 et TOML réécrits en entier), ou lorsque les propres entrées
 d'opencodex ont été modifiées, le commutateur se verrouille et la désactivation est refusée plutôt que de
 deviner quelles modifications vous appartiennent.

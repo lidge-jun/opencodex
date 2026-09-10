@@ -3,6 +3,7 @@ import { existsSync, mkdirSync} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { setFetchCursorUsableModelsForTests } from "../../src/adapters/cursor/live-models";
+import { setFetchQoderModelsForTests } from "../../src/adapters/qoder/live-models";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { saveConfig } from "../../src/config";
 import { OAUTH_PROVIDERS } from "../../src/oauth";
@@ -24,6 +25,7 @@ beforeEach(() => {
 
 afterEach(() => {
   setFetchCursorUsableModelsForTests(null);
+  setFetchQoderModelsForTests(null);
   globalThis.fetch = originalFetch;
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
@@ -54,6 +56,38 @@ async function probe(config: OcxConfig, name: string): Promise<{ status: number;
 }
 
 describe("POST /api/providers/test (WP040 connectivity probe)", () => {
+  test("Qoder probes the official CLI model list for the configured PAT", async () => {
+    const calls: Array<{ providerId: string; token: string }> = [];
+    setFetchQoderModelsForTests((profile, token) => {
+      calls.push({ providerId: profile.providerId, token });
+      return { ok: true, models: ["Qwen3.8-Max", "GLM-5.3"] };
+    });
+    const config = baseConfig({
+      qoder: { adapter: "qoder", baseUrl: "https://qoder.com", apiKey: "qoder-pat", authMode: "key", liveModels: true },
+    });
+
+    const { body } = await probe(config, "qoder");
+
+    expect(body).toMatchObject({ ok: true, models: 2, message: "Connected. 2 models." });
+    expect(calls).toEqual([{ providerId: "qoder", token: "qoder-pat" }]);
+  });
+
+  test("Qoder CN probes its own CLI profile and PAT", async () => {
+    const calls: Array<{ providerId: string; token: string }> = [];
+    setFetchQoderModelsForTests((profile, token) => {
+      calls.push({ providerId: profile.providerId, token });
+      return { ok: true, models: ["Qwen3.8-Flash"] };
+    });
+    const config = baseConfig({
+      "qoder-cn": { adapter: "qoder", baseUrl: "https://qoder.cn", apiKey: "cn-pat", authMode: "key", liveModels: true },
+    });
+
+    const { body } = await probe(config, "qoder-cn");
+
+    expect(body).toMatchObject({ ok: true, models: 1, message: "Connected. 1 models." });
+    expect(calls).toEqual([{ providerId: "qoder-cn", token: "cn-pat" }]);
+  });
+
   test("Cursor probes GetUsableModels and reports the live model count", async () => {
     const calls: { apiKey: string; baseUrl?: string }[] = [];
     setFetchCursorUsableModelsForTests(async options => {
@@ -350,11 +384,11 @@ describe("POST /api/providers/test (WP040 connectivity probe)", () => {
     expect(body).toMatchObject({ ok: true, models: 390 });
   });
 
-  test("Google's models-array response shape is accepted (x-goog-api-key path)", async () => {
+  test("Google's models-array response counts only generateContent models", async () => {
     let requestedUrl = "";
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       requestedUrl = String(input);
-      return new Response(JSON.stringify({ models: [{ name: "models/gemini-3-pro" }, { name: "models/gemini-3-flash" }, { name: "models/gemini-3-lite" }] }), {
+      return new Response(JSON.stringify({ models: [{ name: "models/gemini-3-pro", supportedGenerationMethods: ["generateContent"] }, { name: "models/gemini-3-flash", supportedGenerationMethods: ["generateContent", "countTokens"] }, { name: "models/text-embedding-004", supportedGenerationMethods: ["embedContent"] }, { name: "models/gemini-missing-methods" }] }), {
         status: 200,
         headers: { "content-type": "application/json" },
       });
@@ -365,7 +399,41 @@ describe("POST /api/providers/test (WP040 connectivity probe)", () => {
     const { body } = await probe(config, "google");
     expect(requestedUrl).toContain("/v1beta/models");
     expect(body.ok).toBe(true);
-    expect(body.models).toBe(3);
+    expect(body.models).toBe(2);
+  });
+
+  test("Google AI Studio probe skips malformed or toxic rows while counting valid models", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      models: [
+        null,
+        "invalid-row",
+        { name: "models/bad name", supportedGenerationMethods: ["generateContent"] },
+        { name: "models/ padded ", supportedGenerationMethods: ["generateContent"] },
+        { name: "models/gemini-valid", supportedGenerationMethods: ["generateContent"] },
+      ],
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+    const config = baseConfig({
+      google: { adapter: "google", baseUrl: "https://generativelanguage.googleapis.com", apiKey: "g-key" },
+    });
+    const { body } = await probe(config, "google");
+    expect(body.ok).toBe(true);
+    expect(body.models).toBe(1);
+  });
+
+  test("non-ai-studio providers preserve generic models[] connection-test fallback", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({ models: [{ id: "m-1" }, { id: "m-2" }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+    const config = baseConfig({
+      generic: { adapter: "openai-chat", baseUrl: "https://api.example.test/v1", apiKey: "sk-x" },
+    });
+    const { body } = await probe(config, "generic");
+    expect(body.ok).toBe(true);
+    expect(body.models).toBe(2);
   });
 
   test("Together-style top-level /models array is accepted (#617)", async () => {

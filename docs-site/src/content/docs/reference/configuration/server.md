@@ -27,12 +27,24 @@ runs helper features around provider requests.
 | `codexAutoStart?` | `boolean` | `true` | Let the Codex shim run `ocx ensure` before launching Codex. False makes ensure a no-op. |
 | `codexShimAutoRestore?` | `boolean` | `true` | Restore an installed shim after a completed external Codex update replaces it. Environment opt-out: `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`. |
 | `codexDesktopAuthless?` | `boolean` | `false` | Opt-in authless Codex Desktop routing on a loopback bind: inject the dedicated `opencodex` provider with `requires_openai_auth = false` so Desktop opens without a ChatGPT login. Ignored on non-loopback binds. `ocx system settings --desktop-authless on`. See [Codex integration](/guides/codex-integration/#authless-codex-desktop-opt-in). |
+| `codexClientCompaction?` | `boolean` | `false` | Opt into Codex client-side compaction on an authenticated loopback bind. Uses the dedicated `opencodex` provider identity with `requires_openai_auth = true`, preventing new routed compactions from storing OpenCodeX-owned `ocx1:` state. `codexDesktopAuthless` takes precedence when both are enabled and keeps `requires_openai_auth = false`. V2 sub-agent routing is unchanged. `ocx system settings --client-compaction on`. See [Codex integration](/guides/codex-integration/#client-side-compaction-opt-in). |
 | `resetCreditAutoRedeem?` | `{ enabled?: boolean; leadTimeMinutes?: number }` | off | Opt-in: redeem the main Codex account's soonest-expiring reset credit `leadTimeMinutes` (1–60, default 10) before it expires. Every attempt re-reads the upstream credit list first and skips when the credit is gone (for example, redeemed by hand); the `redeem_request_id` is journaled in `$OPENCODEX_HOME/reset-credit-auto-redeem.json` before the call so a crash replays the same idempotent request instead of spending a second credit. Servers sharing this configuration directory coordinate reservations and settlements so one process does not replace another's request record. Logs carry a hashed account key only. |
 | `syncResumeHistory?` | `boolean` | `true` | Reversible Codex App history compatibility. Original metadata is backed up and restored by `ocx stop` / `ocx restore`. |
 | `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | off | Redirect recognized Codex helper/shadow calls to a chosen model while preserving the request's configured reasoning effort. The default source prefix is `gpt-5.6-luna`; older clients through 0.144.x used `gpt-5.4-mini`, which `sourceModels` can restore. |
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | on when usable | Web-search sidecar options. |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | on when usable | Image-description sidecar options. |
 | `images?` | `OcxImagesConfig` | automatic OpenAI selection | Standalone Images relay options for Codex `image_gen`. |
+
+The canonical ChatGPT upstream WebSocket has a fixed 90-second response-prelude deadline,
+measured after sending the create frame. Quota and response-metadata control frames do not
+reset it; the first non-control Responses event ends it. This is not a total generation
+deadline, and neither `connectTimeoutMs` nor `stallTimeoutSec` retunes the 90 seconds
+themselves. That constant is only the WebSocket-specific upper bound: the exchange runs under
+the signal `connectTimeoutMs` (default 200s) aborts, and that abort cancels an already-sent
+create before the prelude timer can fire. A `connectTimeoutMs` below 90 seconds therefore
+ends the wait earlier, so the deadline a request actually gets is the shorter of the two. If
+either expires after sending, the stream fails without an HTTP resend, avoiding duplicate
+inference.
 
 `noProxy` accepts either a comma-separated string or an array. Both forms add entries without
 replacing an inherited `NO_PROXY`:
@@ -211,6 +223,32 @@ Plain `ssh -L` listens on your local loopback and is safe for the default unauth
 use `ssh -g -L`, broad container publishing, or forwarding modes that expose the client side on
 `0.0.0.0`. Bind explicitly with `ssh -L 127.0.0.1:20100:localhost:10100` when unsure.
 :::
+
+## Account email masking (`privacy`)
+
+Stored account emails are masked everywhere they leave the proxy — the dashboard account lists,
+`GET /api/codex-auth/accounts`, `GET /api/oauth/status`, and the `ocx status` logins section all
+show `p***n@example.com` rather than the address on file.
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `privacy.maskEmails?` | `boolean` | `true` | Set to `false` to show stored account emails in full. Absent, `true`, and any malformed value all keep masking, so only a deliberate `false` reveals an address. |
+
+Turn it off when you run many accounts on a machine you control and cannot tell them apart from
+masked forms. Read the flag as a disclosure decision rather than a display preference: management
+is not always loopback, so on a hub configured with `remoteGui` an unmasked address reaches every
+management principal that can reach the hub, not only someone sitting at the machine. The flag
+moves only the email field — tokens, refresh tokens, and account identifiers stay redacted either
+way.
+
+```json
+{ "privacy": { "maskEmails": false } }
+```
+
+`ocx config set privacy.maskEmails false` fails with `config parent path not found` until the
+block exists, because `config set` walks into existing objects and never creates them. Write the
+whole object instead — `ocx config set privacy '{"maskEmails":false}'` — or add the block to
+`config.json` by hand.
 
 ## Storage cleanup
 

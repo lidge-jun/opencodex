@@ -45,6 +45,7 @@ describe("ocx restore back", () => {
       expect(result.status).toBe(0);
       expect(JSON.parse(readFileSync(join(ocxHome, "config.json"), "utf8")).clientIntegrations.codex).toBe(false);
       expect(`${result.stdout}\n${result.stderr}`).toContain("Codex integration is OFF and plain `codex` now runs natively.");
+      expect(result.stdout).toContain("ocx recover-history --ocx-compaction <thread-id> --yes");
     } finally {
       removeTreeWithRetry(codexHome);
       removeTreeWithRetry(ocxHome);

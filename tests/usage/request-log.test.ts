@@ -32,6 +32,7 @@ import { bridgeToResponsesSSE } from "../../src/bridge";
 import type { AdapterEvent, OcxConfig, OcxUsage } from "../../src/types";
 import {
   appendUsageEntry,
+  normalizeUsageEntryForTest,
   readUsageEntries,
   resetUsageReadCacheForTests,
   type PersistedUsageEntry,
@@ -443,6 +444,31 @@ describe("request log metadata", () => {
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousHome;
       resetUsageReadCacheForTests();
+      removeTreeWithRetry(home);
+    }
+  });
+
+  test("persists transport finality evidence from the final request log", () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-finality-usage-"));
+    const previousHome = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = home;
+    try {
+      clearRequestLogsForTests();
+      resetUsageReadCacheForTests();
+      addFinalRequestLog("ocx-finality-persist", 1, {
+        model: "gpt-6-astra",
+        provider: "openai",
+        transportPhase: "mid_stream",
+        terminalSource: "synthetic",
+        upstreamError: "synthetic terminal",
+      }, 502, { terminalStatus: "failed", closeReason: "terminal" });
+      expect(getRequestLogEntries()[0]).toMatchObject({ transportPhase: "mid_stream", terminalSource: "synthetic" });
+      expect(readUsageEntries()[0]).toMatchObject({ transportPhase: "mid_stream", terminalSource: "synthetic" });
+    } finally {
+      clearRequestLogsForTests();
+      resetUsageReadCacheForTests();
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
       removeTreeWithRetry(home);
     }
   });
@@ -913,6 +939,39 @@ describe("request log metadata", () => {
     // The assertion an unfiltered implementation cannot pass.
     expect(filterRequestLogs(logs, new URLSearchParams("model=absent-model"))).toEqual([]);
     expect(filterRequestLogs(logs, new URLSearchParams("model=grok-4.6&provider=xai")).map(entry => entry.requestId)).toEqual(["b", "c"]);
+  });
+
+  /**
+   * #4057: the account label was already persisted on every row and every attempt, but nothing
+   * could select on it, so "which of my accounts served this?" could only be answered by
+   * grepping usage.jsonl. The non-matching assertion is the one that matters: an implementation
+   * that ignores `account` entirely passes the positive cases for free.
+   */
+  test("filters logs by account label, including the attempt that actually served a failover", () => {
+    const logs = [
+      log({ requestId: "a", provider: "openai", accountLogLabel: "main" }),
+      log({ requestId: "b", provider: "openai", accountLogLabel: "p3f9a1" }),
+      log({
+        requestId: "c",
+        provider: "openai",
+        accountLogLabel: "p3f9a1",
+        attempts: [
+          { ordinal: 1, provider: "openai", model: "gpt-test", adapter: "openai", status: 429, durationMs: 5, sendCount: 1, recoveryKinds: [], usageStatus: "unreported", accountLogLabel: "main" },
+          { ordinal: 2, provider: "openai", model: "gpt-test", adapter: "openai", status: 200, durationMs: 7, sendCount: 1, recoveryKinds: [], usageStatus: "reported", accountLogLabel: "p3f9a1" },
+        ],
+      }),
+      log({ requestId: "d", provider: "xai" }),
+    ];
+
+    // "c" matches on its FIRST attempt: the pool account that refused the request is part of
+    // that account's history, which is exactly what quota debugging needs to see.
+    expect(filterRequestLogs(logs, new URLSearchParams("account=main")).map(entry => entry.requestId)).toEqual(["a", "c"]);
+    expect(filterRequestLogs(logs, new URLSearchParams("account=p3f9a1")).map(entry => entry.requestId)).toEqual(["b", "c"]);
+    // The assertion an unfiltered implementation cannot pass.
+    expect(filterRequestLogs(logs, new URLSearchParams("account=p000000"))).toEqual([]);
+    // A row with no label is never swept into an account's history.
+    expect(filterRequestLogs(logs, new URLSearchParams("account=xai"))).toEqual([]);
+    expect(filterRequestLogs(logs, new URLSearchParams("account=main&provider=openai")).map(entry => entry.requestId)).toEqual(["a", "c"]);
   });
 
   test("filters logs by offset and limit", () => {
@@ -1760,6 +1819,33 @@ describe("request log metadata", () => {
 });
 
 describe("request log restart hydrate", () => {
+  test("persists and rehydrates transport finality evidence", () => {
+    const persisted = {
+      requestId: "ocx-finality-evidence",
+      timestamp: 1_800_000_000_000,
+      provider: "openai",
+      model: "gpt-6-astra",
+      status: 502,
+      durationMs: 42,
+      usageStatus: "unreported",
+      errorCode: "upstream_server_error",
+      terminalStatus: "failed",
+      closeReason: "terminal",
+      upstreamError: "upstream failed",
+      transportPhase: "mid_stream",
+      terminalSource: "synthetic",
+    } as PersistedUsageEntry;
+
+    expect(normalizeUsageEntryForTest(persisted)).toMatchObject({
+      transportPhase: "mid_stream",
+      terminalSource: "synthetic",
+    });
+    expect(requestLogEntryFromPersistedUsage(persisted)).toMatchObject({
+      transportPhase: "mid_stream",
+      terminalSource: "synthetic",
+    });
+  });
+
   test("projects persisted usage rows into /api/logs entries", () => {
     const persisted: PersistedUsageEntry = {
       requestId: "ocx-revive",

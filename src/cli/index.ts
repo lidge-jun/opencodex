@@ -1428,9 +1428,13 @@ async function handleStatus() {
     }
   }
   const { collectOAuthHealthEntriesForCli, oauthLoginSummary } = await import("../oauth");
+  const { emailMaskingEnabled } = await import("../lib/privacy");
   const { formatOAuthHealthForStatus } = await import("./status-oauth");
   console.log(`   OAuth logins:`);
-  for (const e of oauthLoginSummary()) {
+  // The operator's own `privacy.maskEmails` decision applies to the CLI too: `ocx status` is not
+  // the dashboard, but it reads the same stored addresses, and a flag that only moved one of the
+  // two would leave the operator unable to tell which surface they had configured.
+  for (const e of oauthLoginSummary(emailMaskingEnabled(loadConfig()))) {
     console.log(`     ${e.provider.padEnd(10)} ${e.loggedIn ? `✓ logged in${e.email ? ` (${e.email})` : ""}` : "✗ not logged in"}`);
   }
   const oauthHealthBlock = formatOAuthHealthForStatus(await collectOAuthHealthEntriesForCli());
@@ -1442,8 +1446,31 @@ async function handleStatus() {
 }
 
 async function handleRecoverHistory() {
+  if (args[1] === "--ocx-compaction") {
+    const threadId = args[2];
+    if (args.length !== 4 || !threadId || args[3] !== "--yes") {
+      console.error("Usage: ocx recover-history --ocx-compaction <thread-id> --yes");
+      console.error("This rewrites one rollout after saving a private byte-for-byte backup. Close that Codex thread before retrying.");
+      process.exit(1);
+    }
+    console.error("WARNING: this converts OpenCodeX-owned ocx1 compaction state into a plain summary for native Codex replay.");
+    try {
+      const { recoverOcxCompactionHistory } = await import("../codex/ocx-compaction-history");
+      const result = recoverOcxCompactionHistory({ threadId });
+      if (result.replaced === 0) {
+        console.log(`Thread ${threadId} has no repairable ocx1 compaction history; no files changed.`);
+        return;
+      }
+      console.log(`Recovered ${result.replaced} ocx1 compaction item(s) in thread ${threadId}.`);
+      console.log(`Backup: ${result.backupPath}`);
+      return;
+    } catch (error) {
+      console.error(`Recovery failed: ${error instanceof Error ? error.message : String(error)}`);
+      process.exit(1);
+    }
+  }
   if (args[1] !== "--legacy-openai") {
-    console.error("Usage: ocx recover-history --legacy-openai --yes");
+    console.error("Usage: ocx recover-history (--legacy-openai | --ocx-compaction <thread-id>) --yes");
     console.error("This force-relabels every user-message opencodex row to OpenAI, including legitimate dedicated-provider history. Back up first and use it only for pre-backup legacy recovery.");
     process.exit(1);
   }

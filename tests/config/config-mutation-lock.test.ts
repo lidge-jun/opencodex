@@ -8,6 +8,7 @@ import { nextAtomicTempSequence } from "../../src/config/atomic-write";
 import { CodexCredentialRefreshLockTimeoutError, getCodexAccountCredential, saveCodexAccountCredential } from "../../src/codex/account-store";
 import type { OcxConfig } from "../../src/types";
 import { ManagementRequest, managementHeaders } from "../helpers/management-auth";
+import { watchdogMs } from "../helpers/ci-watchdog";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath, repoRoot } from "../helpers/repo-root";
 
@@ -24,23 +25,44 @@ function config(port = 10100): OcxConfig {
   };
 }
 
-async function waitForPath(path: string): Promise<void> {
-  for (let attempt = 0; attempt < 500; attempt += 1) {
+async function waitForOwnedChildReady(child: ReturnType<typeof Bun.spawn>, path: string): Promise<void> {
+  // Readiness budget follows the predeclared platform policy: 5 s locally, 30 s on CI,
+  // 45 s on Windows CI (watchdogMs), because spawning a Bun child that imports
+  // src/config.ts takes real time on a loaded runner — a sibling child in the failing
+  // shard needed 8.3 s end to end. The deadline uses elapsed time with a final recheck,
+  // and an already-exited child fails fast with its exit code instead of polling the
+  // full budget.
+  const budgetMs = watchdogMs(5_000);
+  const deadline = performance.now() + budgetMs;
+  while (performance.now() < deadline) {
     if (existsSync(path)) return;
-    await Bun.sleep(10);
+    const exit = await Promise.race([
+      Bun.sleep(10).then(() => null),
+      child.exited.then(code => code as number | null),
+    ]);
+    if (exit !== null) {
+      const stderr = await new Response(child.stderr).text().catch(() => "");
+      throw new Error(`config-lock child exited ${exit} before writing marker ${path}\nchild stderr: ${stderr}`);
+    }
   }
-  throw new Error(`Timed out waiting for child marker ${path}`);
+  if (existsSync(path)) return;
+  throw new Error(`Timed out waiting ${budgetMs}ms for child marker ${path}`);
 }
 
 async function waitForOwnedChild(child: ReturnType<typeof Bun.spawn>): Promise<number> {
+  // The child polls for the release marker on a 10 ms sleep, so its exit is bounded by the
+  // filesystem noticing that write plus one Bun teardown; a loaded Windows runner needs
+  // real room for both. This helper's own kill() fires only after the full budget and
+  // throws, so a surfaced exit 143 is never from here — it is the readiness-timeout
+  // catch's child.kill(), and the error to read is the readiness failure, not this wait.
   const result = await Promise.race([
     child.exited.then(exitCode => ({ exitCode })),
-    Bun.sleep(5_000).then(() => null),
+    Bun.sleep(30_000).then(() => null),
   ]);
   if (result) return result.exitCode;
   child.kill();
   await child.exited;
-  throw new Error("Timed out waiting for owned config-lock child");
+  throw new Error("Timed out waiting for owned config-lock child after 30s");
 }
 
 beforeEach(() => {
@@ -76,10 +98,12 @@ test("a live cross-process holder is not stolen and runtime writers fail immedia
     stderr: "pipe",
   });
 
+  let childKilled = false;
   try {
     try {
-      await waitForPath(readyPath);
+      await waitForOwnedChildReady(child, readyPath);
     } catch (error) {
+      childKilled = true;
       child.kill();
       await child.exited;
       const stderr = await new Response(child.stderr).text().catch(() => "");
@@ -103,7 +127,11 @@ test("a live cross-process holder is not stolen and runtime writers fail immedia
     expect(getCodexAccountCredential("busy-account")).toBeNull();
   } finally {
     writeFileSync(releasePath, "release");
-    expect(await waitForOwnedChild(child)).toBe(0);
+    // The readiness-failure path already killed the child; expecting exit 0 here
+    // would mask that primary error with a bare 143.
+    if (!childKilled) {
+      expect(await waitForOwnedChild(child)).toBe(0);
+    }
   }
 
   saveConfig(config(20200));
@@ -381,8 +409,17 @@ test("management API maps config mutation lock contention to retryable 503", asy
     stderr: "pipe",
   });
 
+  let childKilled = false;
   try {
-    await waitForPath(readyPath);
+    try {
+      await waitForOwnedChildReady(child, readyPath);
+    } catch (error) {
+      childKilled = true;
+      child.kill();
+      await child.exited;
+      const stderr = await new Response(child.stderr).text().catch(() => "");
+      throw new Error(`${(error as Error).message}\nchild stderr: ${stderr}`);
+    }
     const { handleManagementAPI } = await import("../../src/server/management-api");
     const url = new URL("http://localhost/api/codex-auth/auto-switch");
     const response = await handleManagementAPI(
@@ -401,6 +438,10 @@ test("management API maps config mutation lock contention to retryable 503", asy
     });
   } finally {
     writeFileSync(releasePath, "release");
-    expect(await waitForOwnedChild(child)).toBe(0);
+    // The readiness-failure path already killed the child; expecting exit 0 here
+    // would mask that primary error with a bare 143.
+    if (!childKilled) {
+      expect(await waitForOwnedChild(child)).toBe(0);
+    }
   }
 });

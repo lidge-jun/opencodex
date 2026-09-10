@@ -566,16 +566,28 @@ function defaultReasoningEffort(provider: OcxProviderConfig, modelId: string): s
   return trimmed;
 }
 
-function usageFromAnthropic(usage: Record<string, number> | undefined): OcxUsage | undefined {
-  if (!usage) return undefined;
+function usageFromAnthropic(usage: unknown): OcxUsage | undefined {
+  if (!isAnthropicRecord(usage)) return undefined;
+  const tokens = (key: string): number | undefined => {
+    const value = usage[key];
+    if (value === undefined) return 0;
+    return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+  };
+  const input = tokens("input_tokens");
+  const output = tokens("output_tokens");
+  const read = tokens("cache_read_input_tokens");
+  const write = tokens("cache_creation_input_tokens");
+  // Invalid upstream usage is unreported, not a measured zero or a string that
+  // can pass through aggregation into a human-readable usage report.
+  if (input === undefined || output === undefined || read === undefined || write === undefined) return undefined;
   const hasCache = usage.cache_read_input_tokens !== undefined || usage.cache_creation_input_tokens !== undefined;
-  const read = usage.cache_read_input_tokens ?? 0;
-  const write = usage.cache_creation_input_tokens ?? 0;
   // Anthropic reports input_tokens EXCLUSIVE of cache read/write; normalize to the
   // canonical inclusive convention (types.ts OcxUsage / devlog 070).
+  const inputTokens = input + read + write;
+  if (!Number.isFinite(inputTokens)) return undefined;
   return {
-    inputTokens: (usage.input_tokens ?? 0) + read + write,
-    outputTokens: usage.output_tokens ?? 0,
+    inputTokens,
+    outputTokens: output,
     ...(hasCache ? {
       cachedInputTokens: read,
       cacheReadInputTokens: read,
@@ -584,15 +596,18 @@ function usageFromAnthropic(usage: Record<string, number> | undefined): OcxUsage
   };
 }
 
-function mergeAnthropicUsage(
-  base: Record<string, number> | undefined,
-  next: Record<string, number> | undefined,
-): Record<string, number> | undefined {
-  if (!next) return base;
-  if (!base) return { ...next };
+type PendingAnthropicUsage = Record<string, unknown> | null | undefined;
+
+function mergeAnthropicUsage(base: PendingAnthropicUsage, next: unknown): PendingAnthropicUsage {
+  // null remembers an invalid observation. A later partial cumulative frame
+  // cannot re-establish the missing totals, while an absent update changes nothing.
+  if (base === null) return null;
+  if (next === undefined) return base;
+  if (!isAnthropicRecord(next)) return null;
   // Anthropic `message_delta.usage` values are CUMULATIVE; adding them to the
   // message_start snapshot double-counted output tokens. Later frames win per key.
-  return { ...base, ...next };
+  const merged = { ...base, ...next };
+  return usageFromAnthropic(merged) === undefined ? null : merged;
 }
 
 function buildToolNameTransforms(provider: OcxProviderConfig): { toWire: (name: string) => string; fromWire: (name: string) => string } {
@@ -1059,7 +1074,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       let currentToolCallId = "";
       let currentToolCallName = "";
       let currentToolCallJson = "";
-      let pendingUsage: Record<string, number> | undefined;
+      let pendingUsage: PendingAnthropicUsage;
       let pendingStopReason: string | undefined;
       let emittedDone = false;
       let sawVisibleText = false;
@@ -1113,7 +1128,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
 
         switch (record.event || data.type) {
               case "message_start": {
-                const message = data.message as { usage?: Record<string, number> } | undefined;
+                const message = data.message as { usage?: unknown } | undefined;
                 pendingUsage = mergeAnthropicUsage(pendingUsage, message?.usage);
                 break;
               }
@@ -1202,7 +1217,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                 break;
               }
               case "message_delta": {
-                const usage = data.usage as Record<string, number> | undefined;
+                const usage = data.usage;
                 pendingUsage = mergeAnthropicUsage(pendingUsage, usage);
                 const delta = data.delta as { stop_reason?: unknown } | undefined;
                 if (typeof delta?.stop_reason === "string") pendingStopReason = delta.stop_reason;

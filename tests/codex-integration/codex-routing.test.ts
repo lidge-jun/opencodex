@@ -1746,8 +1746,9 @@ describe("codex routing", () => {
     });
   });
 
-  test("WHAM preserves the 5h, weekly, and Spark weekly windows", () => {
+  test("WHAM keeps general and Spark windows separate", () => {
     expect(parseUsageQuota({
+      plan_type: "pro",
       rate_limit: {
         primary_window: { used_percent: 11, reset_at: 1, limit_window_seconds: 5 * 60 * 60 },
         secondary_window: { used_percent: 22, reset_at: 2, limit_window_seconds: 7 * 24 * 60 * 60 },
@@ -1756,7 +1757,8 @@ describe("codex routing", () => {
         limit_name: "GPT-5.3-Codex-Spark",
         metered_feature: "codex_bengalfox",
         rate_limit: {
-          primary_window: { used_percent: 33, reset_at: 3, limit_window_seconds: 7 * 24 * 60 * 60 },
+          primary_window: { used_percent: 33, reset_at: 3, limit_window_seconds: 5 * 60 * 60 },
+          secondary_window: { used_percent: 44, reset_at: 4, limit_window_seconds: 7 * 24 * 60 * 60 },
         },
       }],
     })).toEqual({
@@ -1765,7 +1767,10 @@ describe("codex routing", () => {
       shortWindowSeconds: 5 * 60 * 60,
       weeklyPercent: 22,
       weeklyResetAt: 2,
-      customWindows: [{ label: "GPT-5.3-Codex-Spark Weekly", percent: 33, resetAt: 3 }],
+      customWindows: [
+        { label: "GPT-5.3-Codex-Spark 5h", percent: 33, resetAt: 3 },
+        { label: "GPT-5.3-Codex-Spark Weekly", percent: 44, resetAt: 4 },
+      ],
     });
   });
 

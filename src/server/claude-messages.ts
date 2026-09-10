@@ -34,7 +34,7 @@ import { registryEntryForProviderDestination } from "../providers/registry";
 import { evidenceFromBody } from "../routing/request-evidence";
 import { resolveWireProtocolOverride } from "./adapter-resolve";
 import type { OcxConfig } from "../types";
-import { readJsonRequestBody } from "./request-decompress";
+import { readJsonRequestBody, resolveInboundBodyLimitBytes } from "./request-decompress";
 import { addFinalRequestLog, httpStatusForRequestLogTerminal, recordFirstOutput, type RequestLogContext, type RequestLogEntry } from "./request-log";
 import { conversationIdFromClaudeMetadata, normalizeLogConversationId, sessionLaneIdFromRequest } from "./request-log-conversation";
 import { responseWithDeferredRequestLog } from "./relay";
@@ -129,9 +129,9 @@ function claudeInboundDisabled(config: OcxConfig): Response | null {
   return null;
 }
 
-async function readAnthropicBody(req: Request, budget: TranslatorBudget): Promise<unknown> {
+async function readAnthropicBody(req: Request, budget: TranslatorBudget, maxBytes: number): Promise<unknown> {
   try {
-    return await readJsonRequestBody(req, budget);
+    return await readJsonRequestBody(req, budget, maxBytes);
   } catch (err) {
     if (isTranslatorBudgetExceededError(err)) throw err;
     throw new AnthropicRequestError(err instanceof Error && err.message ? err.message : "Invalid JSON body");
@@ -603,7 +603,7 @@ export async function fetchWithHeaderDeadline(
 ): Promise<HeaderDeadlineFetchResult> {
   const deadline = makeDeadline(timeoutMs, parent);
   try {
-    const upstream = await fetchImpl(input, { ...init, signal: deadline.signal, timeout: 0 });
+    const upstream = await fetchImpl(input, { ...init, redirect: "manual", signal: deadline.signal, timeout: 0 });
     return { kind: "response", upstream };
   } catch (error) {
     if (deadline.didExpire()) return { kind: "timeout" };
@@ -655,7 +655,7 @@ async function handleClaudeMessagesWithBudget(
   let fastRow: ParsedFastRowId | null = null;
   let requestedModel = "";
   try {
-    anthropicBody = await readAnthropicBody(req, translatorBudget);
+    anthropicBody = await readAnthropicBody(req, translatorBudget, resolveInboundBodyLimitBytes(config.maxInboundBodyBytes));
     // Defensive [1m] strip (devlog 138): clients normally remove the context-variant
     // marker themselves; the 1M signal we act on is the anthropic-beta header.
     // Case-insensitive — the CLI matches /\[1m\]/i (audit 021 #7).
@@ -837,6 +837,7 @@ async function handleClaudeMessagesWithBudget(
   }
 
   const headers = new Headers({ "content-type": "application/json" });
+  let trustedClaudeMainAuth: { authorization: string; chatgptAccountId?: string } | undefined;
   for (const name of FORWARD_HEADERS) {
     // The caller's bearer is the proxy admission token (ocx claude placeholder), never a
     // ChatGPT credential — forwarding it upstream turns into {"detail":"Unauthorized"}.
@@ -852,8 +853,13 @@ async function handleClaudeMessagesWithBudget(
     const { getMainAccountToken } = await import("../codex/main-account");
     const token = getMainAccountToken();
     if (token) {
-      headers.set("authorization", `Bearer ${token.accessToken}`);
+      const authorization = `Bearer ${token.accessToken}`;
+      headers.set("authorization", authorization);
       headers.set("chatgpt-account-id", token.chatgptAccountId);
+      trustedClaudeMainAuth = {
+        authorization,
+        ...(token.chatgptAccountId ? { chatgptAccountId: token.chatgptAccountId } : {}),
+      };
     }
   }
   if (opencodeGoRoute) {
@@ -923,6 +929,10 @@ async function handleClaudeMessagesWithBudget(
     // would fire, disagreeing with the pre-flight decision above.
     inboundWire: "anthropic",
     stripClaudeMainAuthForNoncanonicalForward: true,
+    ...(trustedClaudeMainAuth ? { trustedClaudeMainAuth } : {}),
+    // Claude's internal stored-main enrichment is not an original caller credential.
+    nativeCallerAuth: null,
+    callerDirectAuth: null,
     translatorBudget,
     ...(logIds ? { onFirstOutput: () => recordFirstOutput(logCtx, logIds.start) } : {}),
     onNativePassthroughTerminal: status => finalizeNativeLog(httpStatusForRequestLogTerminal(status, logCtx), { terminalStatus: status, closeReason: "terminal" }),
@@ -1144,7 +1154,7 @@ export async function handleClaudeCountTokens(
   let body: unknown;
   const translatorBudget = createTranslatorBudget();
   try {
-    body = await readAnthropicBody(req, translatorBudget);
+    body = await readAnthropicBody(req, translatorBudget, resolveInboundBodyLimitBytes(config.maxInboundBodyBytes));
   } catch (err) {
     if (err instanceof DesktopModelMappingUnavailableError) return desktopMappingUnavailableResponse(err);
     if (err instanceof AnthropicRequestError) return anthropicErrorResponse(400, err.message);

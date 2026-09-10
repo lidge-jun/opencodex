@@ -66,12 +66,30 @@ export function gracefulStopHost(hostname: string | undefined): string {
 }
 
 /**
- * Outcome of a graceful stop attempt. `"refused"` is distinct from failure: the proxy answered
- * that it must NOT be stopped from here, so callers must not escalate to a forced kill.
+ * `"refused"` forbids forced stop. `"teardown-unconfirmed"` means the process exited,
+ * but its assigned shared teardown was not confirmed; callers must not kill it again.
  */
-export type GracefulStopResult = boolean | "refused";
+export type GracefulStopResult = boolean | "refused" | "teardown-unconfirmed";
 
-/** A proxy declined shutdown because a service under another home owns it (HTTP 409). */
+/**
+ * The server's own explanation for the most recent 409, captured so `stopProxy` can report
+ * the real reason. There is more than one: a scheduler wrapper under another home, or the
+ * proxy being the installed service itself (#4023). Module-scoped because
+ * `GracefulStopResult` is a public contract with several callers, and widening it to carry
+ * the text would change every one of them for a message only this file reports.
+ */
+let lastRefusalMessage: string | null = null;
+
+/** The server's explanation for the most recent 409, or `null` when it sent none. */
+export function lastStopRefusalMessage(): string | null {
+  return lastRefusalMessage;
+}
+
+/**
+ * A proxy declined shutdown (HTTP 409). There is more than one reason it can say no — a
+ * scheduler wrapper under another home, or the proxy being the installed service itself
+ * (#4023) — so the server's own message is carried through rather than guessed at.
+ */
 export class ProxyOwnershipRefusedError extends Error {}
 
 /**
@@ -82,6 +100,8 @@ export class ProxyOwnershipRefusedError extends Error {}
  * chance to run its shutdown handlers. Returns false when the proxy can't be reached
  * or doesn't exit in time — callers fall back to {@link killProxy}. Returns `"refused"`
  * when the proxy declines the stop (HTTP 409), which callers must NOT force past.
+ * True requires the expected shared-teardown response and an observed exit. It does not
+ * attest the process exit code or completion of every drain/shutdown hook.
  */
 export async function stopProxyGracefully(pid: number, io: GracefulStopIo = {}): Promise<GracefulStopResult> {
   const readRuntime = io.readRuntime ?? readRuntimePort;
@@ -92,6 +112,7 @@ export async function stopProxyGracefully(pid: number, io: GracefulStopIo = {}):
   const token = configuredAdminToken(env.OPENCODEX_HOME?.trim() || undefined, env as NodeJS.ProcessEnv);
   if (token) headers["x-opencodex-api-key"] = token;
   const fetchFn = io.fetchFn ?? fetch;
+  let sharedTeardownConfirmed = false;
   try {
     // `ocx stop` asks the proxy NOT to restore shared client config: it does that itself,
     // after verifying a stopped Task Scheduler did not respawn the proxy (#3008). Letting
@@ -111,8 +132,23 @@ export async function stopProxyGracefully(pid: number, io: GracefulStopIo = {}):
     // would respawn it anyway). That is a policy answer, not a dead endpoint — escalating to
     // SIGTERM here would run the daemon's cleanup and strip shared config out from under the
     // still-running service. Report the refusal instead of forcing.
-    if (res.status === 409) return "refused";
+    if (res.status === 409) {
+      lastRefusalMessage = await res.json()
+        .then(body => {
+          const message = (body as { message?: unknown } | null)?.message;
+          return typeof message === "string" && message.trim() ? message.trim() : null;
+        })
+        .catch(() => null);
+      return "refused";
+    }
     if (!res.ok) return false;
+    const body: unknown = await res.json().catch(() => null);
+    const expectedTeardown = io.deferSharedTeardownNonce ? "deferred" : "performed";
+    sharedTeardownConfirmed = body !== null
+      && typeof body === "object"
+      && !Array.isArray(body)
+      && "success" in body && body.success === true
+      && "sharedTeardown" in body && body.sharedTeardown === expectedTeardown;
   } catch {
     return false;
   }
@@ -120,7 +156,8 @@ export async function stopProxyGracefully(pid: number, io: GracefulStopIo = {}):
   // Honor the server's own drain window: /api/stop answers 200 first, then drains for
   // config.shutdownTimeoutMs. Waiting less than that hard-kills mid-drain.
   const exitTimeoutMs = io.exitTimeoutMs ?? drainDeadlineMs();
-  return waitExit(pid, exitTimeoutMs);
+  if (!waitExit(pid, exitTimeoutMs)) return false;
+  return sharedTeardownConfirmed ? true : "teardown-unconfirmed";
 }
 
 function drainDeadlineMs(): number {
@@ -140,9 +177,16 @@ export async function stopProxy(pid: number, io: GracefulStopIo = {}): Promise<b
     // The proxy refused on purpose (foreign service owns it). Forcing would strip shared
     // config while that service keeps the proxy alive.
     throw new ProxyOwnershipRefusedError(
-      "The running proxy refused to stop: a service installed under a different "
-      + "CODEX_HOME/OPENCODEX_HOME owns it. Run the stop from that home.",
+      lastRefusalMessage
+      ?? "The running proxy refused to stop: a service installed under a different "
+        + "CODEX_HOME/OPENCODEX_HOME owns it. Run the stop from that home.",
     );
+  }
+  if (graceful === "teardown-unconfirmed") {
+    // Exit was observed, so do not enter the forced-stop fallback. Returning false keeps
+    // shared restoration with `ocx stop` instead of claiming that the proxy completed it.
+    await waitForStoppedPort(runtime, pid);
+    return false;
   }
   if (graceful) {
     await waitForStoppedPort(runtime, pid);

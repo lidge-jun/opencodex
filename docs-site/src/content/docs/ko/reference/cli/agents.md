@@ -16,6 +16,27 @@ description: 멀티 에이전트, 콤보, 관측성, 접근, 통합, 시스템, 
 ocx agent subagents set ark/model-a,openai/gpt-5.5
 ```
 
+### `ocx effort [status|set|clear]`
+
+실행 중인 프록시를 통해 메인·서브에이전트의 reasoning-effort 상한을 조회하거나 변경하며,
+프록시가 없으면 로컬 설정을 사용합니다. 상한은 `low`, `medium`, `high`, `xhigh`, `max`,
+`ultra`이고, `-`는 해당 상한을 해제합니다. `none`과 `minimal`은 상한 단계가 아니므로 같은
+명령의 다른 옵션이 유효하더라도 프록시 탐색이나 설정 변경 요청 전에 거부됩니다.
+두 값은 상한이 아닌 별도의 injection effort를 설정하는 `--injection`에서는 그대로 사용할 수 있습니다.
+
+```bash
+ocx effort status --json
+ocx effort set --main high --subagent low
+ocx effort set --subagent -
+```
+
+상태 조회는 저장값 또는 런타임 상한 원문을 보존하고, 지원하지 않는 값은 `warnings`에 표시합니다
+(모두 지원되는 값이면 빈 배열). 일반 출력에도 같은 경고가 나오며, 무시되는 필드와 수정 명령을
+안내합니다. 상태 조회가 기존 값을 자동으로 복구하거나 덮어쓰지는 않습니다. 서브에이전트 필드가
+무시되더라도 유효한 메인 상한이 사라지는 것은 아닙니다. `ocx effort clear`는 별도의 injection-effort
+설정을 유지하면서 두 상한을 해제합니다. 상한이 적용되는 요청 surface는
+[Sub-agent surfaces](/ko/guides/sub-agent-surface/)를 참고하세요.
+
 ### `ocx v2 <status|on|off|mode <v1|default|v2>|threads <n>>`
 
 Codex `multi_agent_v2` 기능 플래그와 세 상태 멀티 에이전트 surface mode를 관리합니다.

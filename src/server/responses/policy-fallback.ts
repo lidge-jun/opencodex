@@ -1,11 +1,13 @@
 import { comboFailureDecision } from "../../combos/failover";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
-import { readJsonRequestBody } from "../request-decompress";
+import { readJsonRequestBody, resolveInboundBodyLimitBytes } from "../request-decompress";
 import { finishRequestAttempt, type RequestLogContext } from "../request-log";
 import type { OcxConfig } from "../../types";
 import type { RouteCandidateTrace, RouteDecisionTraceV1 } from "../../routing/trace";
 import { handleResponses as handleResponsesCore } from "./core";
 import { requestPacingOverloadResponse } from "./pacing-overload";
+import { captureExplicitOpenAiCallerAuth } from "../../providers/openai-sidecar";
+import { captureCallerDirectAuth } from "../../providers/caller-authorization";
 
 type CoreHandler = typeof handleResponsesCore;
 type CoreOptions = Parameters<CoreHandler>[3];
@@ -47,6 +49,10 @@ function requestWithCandidate(
   candidate: Pick<RouteCandidateTrace, "provider" | "model">,
 ): Request {
   const headers = new Headers(req.headers);
+  // The next candidate owns a different physical credential domain. Typed
+  // admission and any claimed Claude snapshot stay in caller-owned CoreOptions.
+  headers.delete("authorization");
+  headers.delete("chatgpt-account-id");
   headers.delete("content-encoding");
   headers.delete("content-length");
   headers.set("content-type", "application/json");
@@ -119,6 +125,12 @@ export async function handleResponsesWithPolicyFallback(
   let storedPool401ReplayDispatched = false;
   const coreOptions: CoreOptions = {
     ...options,
+    openAiSidecarAuth: options.openAiSidecarAuth === undefined
+      ? captureExplicitOpenAiCallerAuth(req.headers, config) : options.openAiSidecarAuth,
+    nativeCallerAuth: options.nativeCallerAuth === undefined
+      ? captureExplicitOpenAiCallerAuth(req.headers, config) : options.nativeCallerAuth,
+    callerDirectAuth: options.callerDirectAuth === undefined
+      ? captureCallerDirectAuth(req.headers, config) : options.callerDirectAuth,
     ...(options.onRequestBodyRead ? {
       onRequestBodyRead: () => {
         if (requestBodyReadNotified) return;
@@ -133,7 +145,11 @@ export async function handleResponsesWithPolicyFallback(
   };
   let rawBody: Record<string, unknown> | null = null;
   try {
-    const parsed = await readJsonRequestBody(req.clone());
+    const parsed = await readJsonRequestBody(
+      req.clone(),
+      undefined,
+      resolveInboundBodyLimitBytes(config.maxInboundBodyBytes),
+    );
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) rawBody = parsed as Record<string, unknown>;
   } catch {
     // Core owns the client-facing parse/decompression error.

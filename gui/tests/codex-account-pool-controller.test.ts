@@ -32,7 +32,7 @@ test("the controller is the single data owner and exposes the agreed contract", 
 
   // Observers arrive through one subscription path; load() takes no observer argument.
   expect(hook).toContain("subscribeLoadObserver");
-  expect(hook).toContain("load(refreshQuota?: boolean): Promise<boolean>");
+  expect(hook).toContain("load(refreshQuota?: boolean, options?: { validatePending?: boolean }): Promise<boolean>");
   expect(hook).not.toContain("load(refreshQuota?: boolean, observer");
 });
 

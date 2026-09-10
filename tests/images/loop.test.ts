@@ -104,6 +104,39 @@ async function runAndGetSSE(streams: AdapterEvent[][], fulfill?: ImageCallResult
 }
 
 describe("runWithImageBridge", () => {
+  test.each([307, 308])("the direct image-loop send does not follow %i", async status => {
+    let targetHits = 0;
+    let originHits = 0;
+    const target = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => {
+      targetHits++;
+      return new Response("{}");
+    } });
+    const origin = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => {
+      originHits++;
+      return new Response("redirect", { status, headers: { location: `http://127.0.0.1:${target.port}/target` } });
+    } });
+    try {
+      const response = await runWithImageBridge({
+        parsed: makeParsed(), plan,
+        adapter: {
+          ...mockAdapter,
+          fetchResponse: undefined,
+          buildRequest: async () => ({ url: `http://127.0.0.1:${origin.port}/model`, method: "POST", headers: { "x-api-key": "synthetic-key" }, body: "synthetic prompt" }),
+        },
+      });
+      const error = await response.json() as { error: { type: string; message: string } };
+      expect(targetHits).toBe(0);
+      expect(originHits).toBe(1);
+      expect(response.status).toBe(status);
+      expect(error.error.type).toBe("upstream_error");
+      expect(error.error.message).toBe(`Provider error ${status}`);
+      expect(response.headers.get("location")).toBeNull();
+    } finally {
+      await origin.stop(true);
+      await target.stop(true);
+    }
+  });
+
   test("translator overflow remains typed through the image loop and bridge", async () => {
     const sse = await runAndGetSSE([[
       {

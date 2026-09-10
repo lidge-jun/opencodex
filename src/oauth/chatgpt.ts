@@ -40,6 +40,62 @@ export function extractAccountId(idToken?: string, accessToken?: string): string
   return undefined;
 }
 
+/**
+ * Three-way answer to "is this token marked as belonging to the ChatGPT account domain".
+ * Only ChatGPT-specific claims count as markers: a top-level chatgpt_account_id or the
+ * https://api.openai.com/auth namespace claim. A generic organizations claim is NOT domain
+ * evidence. JWT claims are decoded locally as routing markers, never as authenticity proof.
+ *
+ * absent  — no JWT, a payload that is not a JSON object, or an object carrying neither
+ *           marker key: the token may be a foreign credential and legacy foreign handling
+ *           applies. This function is total; it never throws on an attacker-shaped token.
+ * invalid — a marker key is present but yields no usable account id (non-string, blank,
+ *           namespace that is not an object, namespace without the claim) or the two
+ *           markers disagree. Presence is decided by the KEY, not by its shape, so a token
+ *           that claims this domain can never fall through to foreign handling just
+ *           because its marker is malformed.
+ * valid   — one consistent, non-blank ChatGPT account id.
+ */
+export type ChatGptDomainClaim =
+  | { kind: "absent" }
+  | { kind: "invalid" }
+  | { kind: "valid"; accountId: string };
+
+const CHATGPT_AUTH_NAMESPACE = "https://api.openai.com/auth";
+
+/** A usable account id is a non-blank string; blank or non-string values are malformed. */
+function usableAccountId(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+export function inspectChatGptDomainClaim(token: string): ChatGptDomainClaim {
+  const payload: unknown = decodeJwtPayload(token);
+  // decodeJwtPayload returns whatever the payload segment parses to, which may be a
+  // primitive or an array. Those carry no marker and must not reach the key lookups,
+  // where `in`/hasOwn would throw and take the whole request down.
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return { kind: "absent" };
+  const claims = payload as Record<string, unknown>;
+  // Presence is the KEY being there, as an own key. A reserved namespace that is null, a
+  // primitive, an array, or an object without the claim is a present-but-broken marker, so
+  // it stays invalid instead of being treated as a foreign token.
+  const topPresent = Object.hasOwn(claims, "chatgpt_account_id");
+  const nsPresent = Object.hasOwn(claims, CHATGPT_AUTH_NAMESPACE);
+  if (!topPresent && !nsPresent) return { kind: "absent" };
+  const topId = topPresent ? usableAccountId(claims.chatgpt_account_id) : undefined;
+  if (topPresent && !topId) return { kind: "invalid" };
+  let nsId: string | undefined;
+  if (nsPresent) {
+    const ns = claims[CHATGPT_AUTH_NAMESPACE];
+    const nsObj = ns !== null && typeof ns === "object" && !Array.isArray(ns)
+      ? ns as Record<string, unknown> : undefined;
+    nsId = nsObj ? usableAccountId(nsObj.chatgpt_account_id) : undefined;
+    if (!nsId) return { kind: "invalid" };
+  }
+  if (topId && nsId && topId !== nsId) return { kind: "invalid" };
+  const accountId = topId ?? nsId;
+  return accountId ? { kind: "valid", accountId } : { kind: "invalid" };
+}
+
 export function extractEmail(idToken?: string, accessToken?: string): string | undefined {
   for (const token of [idToken, accessToken]) {
     if (!token) continue;
@@ -48,6 +104,33 @@ export function extractEmail(idToken?: string, accessToken?: string): string | u
     if (typeof payload.email === "string") return payload.email.toLowerCase();
   }
   return undefined;
+}
+
+/**
+ * Identity-agreement view of one token for security-sensitive bindings. `accountId` follows the
+ * existing extractAccountId precedence (top-level, then namespaced, then organizations[0]).
+ * `conflict` is true only when the two chatgpt_account_id encodings are both present and
+ * disagree — organizations entries are workspace memberships, not identity, so they never
+ * participate. Never logs token material.
+ */
+export function extractAccountIdClaims(token?: string): { accountId: string | undefined; conflict: boolean } {
+  if (!token) return { accountId: undefined, conflict: false };
+  const payload = decodeJwtPayload(token);
+  if (!payload) return { accountId: undefined, conflict: false };
+  const top = typeof payload.chatgpt_account_id === "string" ? payload.chatgpt_account_id : undefined;
+  const ns = payload["https://api.openai.com/auth"];
+  const namespaced = ns && typeof ns === "object"
+    && typeof (ns as Record<string, unknown>).chatgpt_account_id === "string"
+    ? (ns as Record<string, unknown>).chatgpt_account_id as string
+    : undefined;
+  const orgs = payload.organizations;
+  const org = Array.isArray(orgs) && orgs[0] && typeof orgs[0].id === "string"
+    ? orgs[0].id as string
+    : undefined;
+  return {
+    accountId: top ?? namespaced ?? org,
+    conflict: top !== undefined && namespaced !== undefined && top !== namespaced,
+  };
 }
 
 export function credsFromToken(data: Record<string, unknown>): OAuthCredentials {

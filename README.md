@@ -106,16 +106,19 @@ See [SPONSORS.md](./SPONSORS.md).
 
 <!-- sponsors:main — one banner, model developers only; empty until a Main sponsor signs -->
 
-<!-- sponsors:standard — one row per sponsor, in order of signing. Uncomment the table with the first row:
+<!-- sponsors:standard — one row per sponsor, in order of signing -->
 <table>
 <tbody>
 <tr>
-<td width="180"><a href="SPONSOR_URL"><img src="https://raw.githubusercontent.com/lidge-jun/opencodex/main/assets/sponsors/SPONSOR.png" alt="SPONSOR" width="150"></a></td>
-<td>Thanks to SPONSOR for sponsoring this project! BLURB</td>
+<td width="180"><a href="https://www.orcarouter.ai/?utm_source=opencodex&utm_medium=readme"><img src="assets/sponsors/orcarouter.png" alt="OrcaRouter" width="150"></a></td>
+<td>Thanks to <a href="https://www.orcarouter.ai/?utm_source=opencodex&utm_medium=readme">OrcaRouter</a> for sponsoring this project! OrcaRouter is one OpenAI-compatible AI gateway for production AI: adaptive routing that grades every prompt and sends it to the model that clears your bar, automatic failover, routing rules as code, zero-markup provider pricing with prompt caching, and guardrails, an agent firewall, and request logs on every call across 200+ models. Pick <code>OrcaRouter</code> in the Add provider picker or run <code>ocx provider add orcarouter</code>; <code>orcarouter/auto</code> is the adaptive router.</td>
+</tr>
+<tr>
+<td width="180"><a href="https://www.packyapi.com/register?aff=k5KT"><img src="assets/sponsors/packycode.png" alt="PackyCode" width="150"></a></td>
+<td>Thanks to <a href="https://www.packyapi.com/register?aff=k5KT">PackyCode</a> for sponsoring this project! PackyCode is a stable, high-performance API relay provider, offering relay services for Claude Code, Codex, Gemini, and more. With automatic failover, smart routing, and unlimited concurrency, it turns AI into a real productivity tool. <a href="https://www.packyapi.com/register?aff=k5KT">Register via this link</a> and get started! Pick <code>PackyCode</code> in the Add provider picker or run <code>ocx provider add packycode</code>.<br><sub>PackyCode 是一家稳定、高效的 API 中转服务商，提供 Claude Code、Codex、Gemini 等多种中转服务。具备自动故障转移、智能路由和无限并发等多种功能，让 AI 编程成为真正的生产力工具。<a href="https://www.packyapi.com/register?aff=k5KT">点此链接注册</a>，立即开始使用！</sub></td>
 </tr>
 </tbody>
 </table>
--->
 
 ---
 
@@ -288,7 +291,7 @@ full-slash form keeps working too. Details: [model routing docs](https://opencod
 OpenAI (ChatGPT login or API key), Anthropic, Google Gemini, xAI, Kimi, Azure OpenAI, Ollama
 (local + Cloud), Cursor (experimental), and every OpenAI-compatible endpoint — plus DeepSeek,
 Groq, OpenRouter, Together, Fireworks, Cerebras, Mistral, Hugging Face, NVIDIA NIM, MiniMax,
-Qwen Cloud, SiliconFlow, and more. Full list: `ocx init` or the
+Qwen Cloud, Qoder Global and CN (official PAT + CLI), SiliconFlow, and more. Full list: `ocx init` or the
 [provider docs](https://opencodex.me/guides/providers/).
 
 ## CLI
@@ -365,6 +368,9 @@ Maintainer source-of-truth notes live under [`structure/`](./structure), contrib
 Report undisclosed vulnerabilities privately through
 [GitHub private vulnerability reporting](https://github.com/lidge-jun/opencodex/security/advisories/new),
 not a public issue.
+That form is the only technical channel — there is no security email. Follow-ups stay in the
+private report itself; a public issue may carry coordination only, never vulnerability details.
+Acknowledging a report is not the same as triaging it, and no first-response target is promised.
 
 ## Development
 

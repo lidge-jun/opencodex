@@ -18,10 +18,16 @@ export interface AccountRow {
   id: string;
   label?: string;
   email?: string;
-  plan?: string;
+  /**
+   * Subscription tier. `null` means this version looked and the provider did not report one;
+   * an absent key means the row's surface does not carry a tier at all (#3777).
+   */
+  plan?: string | null;
   masked?: string;
   active: boolean;
   needsReauth?: boolean;
+  /** Registered credential that is still excluded from routing until validation completes. */
+  validationPending?: boolean;
   /** Codex pool selection order, higher used earlier. Absent where ordering does not apply. */
   priority?: number;
   /** Null means the account inherits the global usage-switch threshold. */
@@ -239,6 +245,7 @@ interface CodexAccountDto {
   plan?: string;
   isMain?: boolean;
   needsReauth?: boolean;
+  health?: { reason?: string };
   priority?: number;
   autoSwitchThresholdOverride?: number | null;
   quota?: CodexQuotaDto | null;
@@ -266,10 +273,12 @@ export async function fetchCodexRows(
   baseUrl: string,
   forceRefresh = false,
   includeQuota = forceRefresh,
+  options: { refreshAction?: boolean } = {},
 ): Promise<FamilyRows> {
-  const accountsPath = `/api/codex-auth/accounts${forceRefresh ? "?refresh=1" : ""}`;
+  const refreshAction = options.refreshAction === true;
+  const accountsPath = `/api/codex-auth/accounts${refreshAction ? "/refresh" : forceRefresh ? "?refresh=1" : ""}`;
   const [accountsRes, activeRes] = await Promise.all([
-    apiJson(deps, baseUrl, "GET", accountsPath),
+    apiJson(deps, baseUrl, refreshAction ? "POST" : "GET", accountsPath),
     apiJson(deps, baseUrl, "GET", "/api/codex-auth/active"),
   ]);
   if (accountsRes.status !== 0 && accountsRes.status !== 200) {
@@ -303,6 +312,7 @@ export async function fetchCodexRows(
     plan: a.plan,
     active: a.id === activeId,
     needsReauth: a.needsReauth,
+    ...(a.health?.reason === "validation_pending" ? { validationPending: true } : {}),
     priority: typeof a.priority === "number" ? a.priority : 0,
     autoSwitchThresholdOverride: typeof a.autoSwitchThresholdOverride === "number"
       ? a.autoSwitchThresholdOverride
@@ -322,6 +332,8 @@ interface OAuthAccountDto {
   email?: string;
   active?: boolean;
   needsReauth?: boolean;
+  /** Always sent by the management route; explicitly `null` when the tier is unknown. */
+  plan?: string | null;
   quota?: CodexQuotaDto | null;
   quotaUnavailable?: boolean;
 }
@@ -352,6 +364,9 @@ async function fetchOAuthRows(
     email: a.email,
     active: a.active ?? a.id === activeId,
     needsReauth: a.needsReauth,
+    // Forward the server's answer verbatim, including `null`. Collapsing null to "absent" here
+    // would destroy the one distinction this field exists to make.
+    plan: a.plan ?? null,
     ...(a.quota !== undefined ? { quota: a.quota } : {}),
     ...(a.quotaUnavailable !== undefined ? { quotaUnavailable: a.quotaUnavailable } : {}),
   }));

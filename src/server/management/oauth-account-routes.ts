@@ -25,6 +25,7 @@ import {
 } from "../../oauth";
 import { OAuthMutationBusyError, removeCredential } from "../../oauth/store";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
+import { emailMaskingEnabled } from "../../lib/privacy";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets } from "../../providers/derive";
@@ -233,7 +234,10 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   if (url.pathname === "/api/oauth/status" && req.method === "GET") {
     const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
-    const status = getLoginStatus(provider);
+    // Resolved here, at the request boundary that already holds the config, and passed down.
+    // getLoginStatus stays free of config I/O. This route does not re-mask afterwards: it
+    // consumes the already-projected status rather than redacting a second time.
+    const status = getLoginStatus(provider, emailMaskingEnabled(config));
     return jsonResponse(status);
   }
 
@@ -269,7 +273,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     } = await import("../../oauth/health");
     const projectAccounts = () => {
       const set = getAccountSet(provider);
-      const current = getLoginStatus(provider);
+      const current = getLoginStatus(provider, emailMaskingEnabled(config));
       return {
         activeAccountId: current.activeAccountId ?? null,
         accounts: (current.accounts ?? []).map(summary => {

@@ -10,6 +10,13 @@
  *
  * Import order below is load-bearing: importing the guard captures the real home at
  * module load, and that must happen BEFORE this file replaces HOME.
+ *
+ * What this file cannot do: HOME isolation only protects what is addressed by a path. A
+ * service manager is addressed by a job name — `systemctl --user stop
+ * opencodex-proxy.service` reaches the user manager that is already running, and
+ * `launchctl bootout gui/<uid>/com.opencodex.proxy` reaches launchd — so neither cares
+ * what HOME says. `assertLiveServiceManagerAllowed` in `src/service.ts` is the guard for
+ * that, armed by the same flag set below.
  */
 import { isTestHomeGuardArmed, protectedHomeForTests } from "../src/lib/test-home-guard";
 import { createIsolatedTestEnvironment } from "../scripts/test";

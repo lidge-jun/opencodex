@@ -2,6 +2,7 @@ import { loadConfig, saveConfig } from "../config";
 import {
   CODEX_REASONING_LEVELS,
   configuredReasoningEfforts,
+  isCodexReasoningEffort,
   isDeclaredReasoningEffort,
   mapReasoningEffort,
   reasoningEffortMapFor,
@@ -21,7 +22,7 @@ import {
 
 export const EFFORT_USAGE = `Usage:
   ocx effort [status] [--json]
-  ocx effort <low|medium|high|xhigh|max|ultra|none|minimal|-> [--json]
+  ocx effort <low|medium|high|xhigh|max|ultra|-> [--json]
   ocx effort set [--main <level|->] [--subagent <level|->] [--injection <level|->] [--json]
   ocx effort clear [--json]
   ocx effort model <provider/model|model> [--json]
@@ -33,13 +34,18 @@ function clearable(value: string | undefined): string | null | undefined {
   return value === "-" ? null : value;
 }
 
-function validateEffortLevel(level: string | null | undefined, label: string): string | null | undefined {
+function validateEffortLevel(
+  level: string | null | undefined,
+  label: string,
+  kind: "cap" | "injection",
+): string | null | undefined {
   if (level === undefined || level === null) return level;
   const trimmed = level.trim();
   if (trimmed === "-" || trimmed === "") return null;
-  if (!isDeclaredReasoningEffort(trimmed)) {
+  const valid = kind === "cap" ? isCodexReasoningEffort(trimmed) : isDeclaredReasoningEffort(trimmed);
+  if (!valid) {
     throw new CliUsageError(
-      `unknown reasoning effort "${trimmed}" for ${label} (allowed: ${CODEX_REASONING_LEVELS.map(l => l.effort).join(", ")}, none, minimal, -)`,
+      `unknown reasoning effort "${trimmed}" for ${label} (allowed: ${CODEX_REASONING_LEVELS.map(l => l.effort).join(", ")}${kind === "injection" ? ", none, minimal" : ""}, -)`,
       EFFORT_USAGE,
     );
   }
@@ -114,6 +120,15 @@ async function status(wantsJson: boolean, deps: RuntimeApiDeps): Promise<void> {
     data = getOfflineStatus();
   }
 
+  // Report the stored/runtime value exactly as the enforcement layer evaluates it.
+  // An ignored subagent field does not disable a valid main cap on that child.
+  const warnings = ([ ["effortCap", "--main"], ["subagentEffortCap", "--subagent"] ] as const)
+    .flatMap(([key, flag]) => {
+      const value = data[key];
+      if (value === null || isCodexReasoningEffort(value)) return [];
+      return [`${key}=${JSON.stringify(value)} is invalid and is not applied. Use: ocx effort set ${flag} <${CODEX_REASONING_LEVELS.map(l => l.effort).join("|")}|->.`];
+    });
+
   const lines = [
     `Reasoning effort status (${data.source === "runtime" ? "live proxy" : "offline config"}):`,
     `  Main agent effort cap:     ${data.effortCap ?? "(unset — no cap)"}`,
@@ -122,9 +137,10 @@ async function status(wantsJson: boolean, deps: RuntimeApiDeps): Promise<void> {
     "",
     "Supported Codex reasoning effort ladder:",
     ...CODEX_REASONING_LEVELS.map(l => `  - ${l.effort.padEnd(8)} ${l.description}`),
+    ...(warnings.length ? ["", "Warnings:", ...warnings.map(warning => `  ${warning}`)] : []),
   ];
 
-  printData(data, wantsJson, lines);
+  printData({ ...data, warnings }, wantsJson, lines);
 }
 
 async function setEffort(
@@ -136,9 +152,9 @@ async function setEffort(
   wantsJson: boolean,
   deps: RuntimeApiDeps,
 ): Promise<void> {
-  const validatedMain = validateEffortLevel(options.main, "--main");
-  const validatedSubagent = validateEffortLevel(options.subagent, "--subagent");
-  const validatedInjection = validateEffortLevel(options.injection, "--injection");
+  const validatedMain = validateEffortLevel(options.main, "--main", "cap");
+  const validatedSubagent = validateEffortLevel(options.subagent, "--subagent", "cap");
+  const validatedInjection = validateEffortLevel(options.injection, "--injection", "injection");
 
   if (validatedMain === undefined && validatedSubagent === undefined && validatedInjection === undefined) {
     throw new CliUsageError("at least one effort option (--main, --subagent, or --injection) is required", EFFORT_USAGE);

@@ -1,9 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
+import http2 from "node:http2";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
+import { clearComboTargetCooldowns } from "../../src/combos/failover";
 import { startServer } from "../../src/server";
+import { noteSubagentModelFailure, resetSubagentModelFallbackStateForTests } from "../../src/codex/subagent-model-fallback";
+import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
 import {
   acquireNativeMainProfileDrain,
   getNativeMainProfileRequestCount,
@@ -14,6 +18,8 @@ import type { NativeProfileManager } from "../../src/codex/native-profile-manage
 import type { OcxConfig } from "../../src/types";
 import { ownedServiceHomeInspection } from "../helpers/owned-service-home-inspection";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
+import { resetVisionDescriptionCache } from "../../src/vision";
 
 /**
  * Issue #2132: bearer admission must not require a stored ChatGPT credential.
@@ -34,11 +40,13 @@ const originalFetch = globalThis.fetch;
 const previousOcxHome = process.env.OPENCODEX_HOME;
 const previousCodexHome = process.env.CODEX_HOME;
 const previousDataToken = process.env.OPENCODEX_API_AUTH_TOKEN;
+const previousCursorTestToken = process.env.OPENCODEX_CURSOR_TEST_TOKEN;
 
 let ocxHome = "";
 let codexHome = "";
 let routedAuth: Array<string | null> = [];
 let nativeAuth: Array<string | null> = [];
+let nativeAccountIds: Array<string | null> = [];
 
 const ADMISSION_SECRET = "ocx_data_2132secret";
 const ROUTED_KEY = "sk-routed-provider-key";
@@ -83,7 +91,71 @@ function mixedConfig(): OcxConfig {
   } as OcxConfig;
 }
 
+function cursorForwardConfig(baseUrl: string, apiKey?: string): OcxConfig {
+  return {
+    port: 0,
+    hostname: "0.0.0.0",
+    defaultProvider: "cursorcustom",
+    providers: {
+      cursorcustom: {
+        adapter: "cursor",
+        baseUrl,
+        allowPrivateNetwork: true,
+        authMode: "forward",
+        ...(apiKey ? { apiKey } : {}),
+        liveModels: false,
+        models: ["auto"],
+        defaultModel: "auto",
+      },
+    },
+    apiKeys: [
+      { id: "env-key", name: "env_key", key: ADMISSION_SECRET, createdAt: "2026-08-20T00:00:00.000Z" },
+    ],
+  } as OcxConfig;
+}
+
+async function withCursorCaptureServer<T>(
+  run: (baseUrl: string, capturedAuth: Array<string | null>) => Promise<T>,
+): Promise<T> {
+  const capturedAuth: Array<string | null> = [];
+  const sessions = new Set<http2.ServerHttp2Session>();
+  const server = http2.createServer();
+  server.on("session", session => {
+    sessions.add(session);
+    session.once("close", () => sessions.delete(session));
+  });
+  server.on("stream", (stream, headers) => {
+    const auth = headers.authorization;
+    capturedAuth.push(typeof auth === "string" ? auth : null);
+    stream.respond({
+      ":status": typeof auth === "string" ? 200 : 401,
+      "content-type": "application/connect+proto",
+    });
+    stream.end();
+  });
+  await new Promise<void>((resolve, reject) => {
+    const onError = (error: Error) => reject(error);
+    server.once("error", onError);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", onError);
+      resolve();
+    });
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Cursor capture fixture did not bind");
+  try {
+    return await run(`http://127.0.0.1:${address.port}`, capturedAuth);
+  } finally {
+    for (const session of sessions) session.destroy();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
+}
+
 beforeEach(() => {
+  resetVisionDescriptionCache();
+  clearComboTargetCooldowns();
+  resetSubagentModelFallbackStateForTests();
+  delete process.env.OPENCODEX_CURSOR_TEST_TOKEN;
   ocxHome = mkdtempSync(join(tmpdir(), "ocx-2132-home-"));
   codexHome = mkdtempSync(join(tmpdir(), "ocx-2132-codex-"));
   process.env.OPENCODEX_HOME = ocxHome;
@@ -91,6 +163,7 @@ beforeEach(() => {
   delete process.env.OPENCODEX_API_AUTH_TOKEN;
   routedAuth = [];
   nativeAuth = [];
+  nativeAccountIds = [];
   globalThis.fetch = (async (input, init) => {
     const raw = input instanceof Request ? input.url : String(input);
     const url = new URL(raw);
@@ -107,6 +180,7 @@ beforeEach(() => {
     }
     if (url.hostname === "chatgpt.com" || url.hostname === "api.openai.com") {
       nativeAuth.push(headers.get("authorization"));
+      nativeAccountIds.push(headers.get("chatgpt-account-id"));
       return Response.json({ id: "resp_2132", object: "response", status: "completed", output: [] });
     }
     return originalFetch(input, init);
@@ -114,6 +188,12 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetVisionDescriptionCache();
+  closeRequestHistoryIndex();
+  clearComboTargetCooldowns();
+  resetSubagentModelFallbackStateForTests();
+  if (previousCursorTestToken === undefined) delete process.env.OPENCODEX_CURSOR_TEST_TOKEN;
+  else process.env.OPENCODEX_CURSOR_TEST_TOKEN = previousCursorTestToken;
   globalThis.fetch = originalFetch;
   if (previousOcxHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOcxHome;
@@ -127,12 +207,58 @@ afterEach(() => {
   codexHome = "";
 });
 
-async function postResponses(url: string | URL, model: string): Promise<Response> {
+async function postResponses(
+  url: string | URL,
+  model: string,
+  authHeaders: HeadersInit = { authorization: `Bearer ${ADMISSION_SECRET}` },
+): Promise<Response> {
+  const headers = new Headers(authHeaders);
+  headers.set("content-type", "application/json");
   return originalFetch(new URL("/v1/responses", url), {
     method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${ADMISSION_SECRET}` },
+    headers,
     body: JSON.stringify({ model, input: "hi", stream: false }),
   });
+}
+
+async function postChatCompletions(
+  url: string | URL,
+  model: string,
+  authHeaders: HeadersInit,
+): Promise<Response> {
+  const headers = new Headers(authHeaders);
+  headers.set("content-type", "application/json");
+  return originalFetch(new URL("/v1/chat/completions", url), {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ model, messages: [{ role: "user", content: "hi" }], stream: false }),
+  });
+}
+
+async function postClaudeMessages(
+  url: string | URL,
+  model: string,
+): Promise<Response> {
+  return originalFetch(new URL("/v1/messages", url), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": ADMISSION_SECRET,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 16,
+      messages: [{ role: "user", content: "hi" }],
+      stream: false,
+    }),
+  });
+}
+
+async function startOwnedServer(): Promise<ReturnType<typeof startServer>> {
+  const server = startServer(0, { inspectNativeCodexOwnership });
+  await waitForNativeMainStartupGate();
+  return server;
 }
 
 describe("#2132 bearer admission does not require a ChatGPT credential for routed providers", () => {
@@ -195,6 +321,698 @@ describe("#2132 bearer admission does not require a ChatGPT credential for route
     } finally {
       await server.stop(true);
     }
+  });
+});
+
+describe("bearer admission is not reused as a Cursor upstream credential", () => {
+  test("a bearer admission secret is stripped before Cursor token fallback", async () => {
+    await withCursorCaptureServer(async (baseUrl, capturedAuth) => {
+      saveConfig(cursorForwardConfig(baseUrl));
+      writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ tokens: {} }));
+
+      const server = startServer(0, { inspectNativeCodexOwnership });
+      try {
+        const response = await postResponses(server.url, "cursorcustom/auto");
+        // The runTurn adapter reports its pre-dispatch failure in a Responses terminal.
+        expect(await response.json()).toMatchObject({ status: "failed" });
+        expect(capturedAuth).toEqual([]);
+      } finally {
+        await server.stop(true);
+      }
+    });
+  });
+
+  test("dedicated admission preserves a separate Cursor bearer", async () => {
+    await withCursorCaptureServer(async (baseUrl, capturedAuth) => {
+      saveConfig(cursorForwardConfig(baseUrl));
+      writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ tokens: {} }));
+
+      const server = startServer(0, { inspectNativeCodexOwnership });
+      try {
+        await postResponses(server.url, "cursorcustom/auto", {
+          "x-opencodex-api-key": ADMISSION_SECRET,
+          authorization: "Bearer cursor-upstream-token",
+        });
+        expect(capturedAuth).toEqual(["Bearer cursor-upstream-token"]);
+      } finally {
+        await server.stop(true);
+      }
+    });
+  });
+
+  test("bearer admission still uses a configured Cursor credential", async () => {
+    await withCursorCaptureServer(async (baseUrl, capturedAuth) => {
+      saveConfig(cursorForwardConfig(baseUrl, "cursor-configured-token"));
+      writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ tokens: {} }));
+
+      const server = startServer(0, { inspectNativeCodexOwnership });
+      try {
+        await postResponses(server.url, "cursorcustom/auto");
+        expect(capturedAuth).toEqual(["Bearer cursor-configured-token"]);
+      } finally {
+        await server.stop(true);
+      }
+    });
+  });
+
+  test("dedicated admission refuses another proxy secret as Cursor auth", async () => {
+    await withCursorCaptureServer(async (baseUrl, capturedAuth) => {
+      saveConfig(cursorForwardConfig(baseUrl));
+      writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ tokens: {} }));
+
+      const server = startServer(0, { inspectNativeCodexOwnership });
+      try {
+        const response = await postResponses(server.url, "cursorcustom/auto", {
+          "x-opencodex-api-key": ADMISSION_SECRET,
+          authorization: `Bearer ${ADMISSION_SECRET}`,
+        });
+        expect(response.status).toBe(401);
+        expect(capturedAuth).toEqual([]);
+      } finally {
+        await server.stop(true);
+      }
+    });
+  });
+
+  test("configured Cursor auth still wins when dedicated admission carries a proxy bearer", async () => {
+    await withCursorCaptureServer(async (baseUrl, capturedAuth) => {
+      saveConfig(cursorForwardConfig(baseUrl, "cursor-configured-token"));
+      writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ tokens: {} }));
+
+      const server = startServer(0, { inspectNativeCodexOwnership });
+      try {
+        await postResponses(server.url, "cursorcustom/auto", {
+          "x-opencodex-api-key": ADMISSION_SECRET,
+          authorization: `Bearer ${ADMISSION_SECRET}`,
+        });
+        expect(capturedAuth).toEqual(["Bearer cursor-configured-token"]);
+      } finally {
+        await server.stop(true);
+      }
+    });
+  });
+
+  test("Chat dedicated admission preserves its separate Cursor bearer over stored main auth", async () => {
+    await withCursorCaptureServer(async (baseUrl, capturedAuth) => {
+      saveConfig(cursorForwardConfig(baseUrl));
+      writeFileSync(join(codexHome, "auth.json"), JSON.stringify({
+        tokens: { access_token: liveJwt(), account_id: "stored_main_acc" },
+      }));
+
+      const server = await startOwnedServer();
+      try {
+        await postChatCompletions(server.url, "cursorcustom/auto", {
+          "x-opencodex-api-key": ADMISSION_SECRET,
+          authorization: "Bearer cursor-upstream-token",
+        });
+        expect(capturedAuth).toEqual(["Bearer cursor-upstream-token"]);
+      } finally {
+        await server.stop(true);
+      }
+    });
+  });
+
+  test.each(["owned", "fenced"])("Chat Cursor keeps stored vision auth off its primary wire (%s)", async ownership => {
+    await withCursorCaptureServer(async (baseUrl, capturedAuth) => {
+      const config = cursorForwardConfig(baseUrl);
+      config.providers.cursorcustom!.noVisionModels = ["auto"];
+      config.providers.openai = {
+        adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward", codexAccountMode: "direct",
+      };
+      // Keep this auth fixture independent of the legacy sidecar model migration.
+      config.visionSidecar = { enabled: true, backend: "openai", model: "gpt-5.6-luna" };
+      saveConfig(config);
+      const stored = fakeChatGptJwt({ chatgpt_account_id: "stored_main_acc", exp: Math.floor(Date.now() / 1000) + 3600 });
+      writeFileSync(join(codexHome, "auth.json"), JSON.stringify({
+        tokens: { access_token: stored, account_id: "stored_main_acc" },
+      }));
+      const sidecar: Array<{ authorization: string | null; account: string | null; claimed: boolean }> = [];
+      globalThis.fetch = (async (input, init) => {
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        if (url.hostname === "chatgpt.com") {
+          const headers = new Headers(input instanceof Request ? input.headers : init?.headers);
+          sidecar.push({ authorization: headers.get("authorization"), account: headers.get("chatgpt-account-id"),
+            claimed: getNativeMainProfileRequestCount() > 0 });
+          return new Response(`data: ${JSON.stringify({ type: "response.output_text.delta", delta: "A red square." })}\n\ndata: [DONE]\n\n`, {
+            headers: { "content-type": "text/event-stream" },
+          });
+        }
+        return originalFetch(input, init);
+      }) as typeof fetch;
+      const server = ownership === "owned" ? await startOwnedServer() : startServer(0, {
+        inspectNativeCodexOwnership: () => ({ ownership: "foreign", reason: "fixture owned by another service" }),
+      });
+      try {
+        if (ownership === "fenced") expect(await waitForNativeMainStartupGate()).toMatchObject({ status: "blocked" });
+        const response = await originalFetch(new URL("/v1/chat/completions", server.url), {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-opencodex-api-key": ADMISSION_SECRET,
+            authorization: "Bearer cursor-upstream-token" },
+          body: JSON.stringify({ model: "cursorcustom/auto", stream: false, messages: [{ role: "user", content: [
+            { type: "text", text: "Describe this image" },
+            { type: "image_url", image_url: { url: "data:image/png;base64,aGVsbG8taW1hZ2UtYnl0ZXM=" } },
+          ] }] }),
+        });
+        await response.text();
+        // The capture-only Cursor fixture ends without a completion frame.
+        expect(response.status).toBe(502);
+        expect(sidecar).toEqual(ownership === "owned"
+          ? [{ authorization: `Bearer ${stored}`, account: "stored_main_acc", claimed: true }] : []);
+        expect(capturedAuth).toEqual(["Bearer cursor-upstream-token"]);
+      } finally {
+        await server.stop(true);
+      }
+      expect(getNativeMainProfileRequestCount()).toBe(0);
+    });
+  });
+
+  test("Chat never falls back from missing Cursor auth to stored main auth", async () => {
+    await withCursorCaptureServer(async (baseUrl, capturedAuth) => {
+      saveConfig(cursorForwardConfig(baseUrl));
+      writeFileSync(join(codexHome, "auth.json"), JSON.stringify({
+        tokens: { access_token: liveJwt(), account_id: "stored_main_acc" },
+      }));
+
+      const server = await startOwnedServer();
+      try {
+        const response = await postChatCompletions(server.url, "cursorcustom/auto", {
+          "x-opencodex-api-key": ADMISSION_SECRET,
+        });
+        expect(response.status).not.toBe(200);
+        expect(capturedAuth).toEqual([]);
+      } finally {
+        await server.stop(true);
+      }
+    });
+  });
+
+  test("Chat bearer admission is stripped before Cursor token fallback", async () => {
+    await withCursorCaptureServer(async (baseUrl, capturedAuth) => {
+      saveConfig(cursorForwardConfig(baseUrl));
+      writeFileSync(join(codexHome, "auth.json"), JSON.stringify({
+        tokens: { access_token: liveJwt(), account_id: "stored_main_acc" },
+      }));
+
+      const server = await startOwnedServer();
+      try {
+        const response = await postChatCompletions(server.url, "cursorcustom/auto", {
+          authorization: `Bearer ${ADMISSION_SECRET}`,
+        });
+        expect(response.status).not.toBe(200);
+        expect(capturedAuth).toEqual([]);
+      } finally {
+        await server.stop(true);
+      }
+    });
+  });
+
+  test.each(["Responses", "Chat"])("%s keeps an explicit OpenAI pair off an unchanged Cursor route", async surface => {
+    await withCursorCaptureServer(async (baseUrl, capturedAuth) => {
+      saveConfig(cursorForwardConfig(baseUrl));
+      writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ tokens: {} }));
+      const server = await startOwnedServer();
+      try {
+        const headers = {
+          "x-opencodex-api-key": ADMISSION_SECRET,
+          authorization: `Bearer ${fakeChatGptJwt({ chatgpt_account_id: "caller-openai" })}`,
+          "chatgpt-account-id": "caller-openai",
+        };
+        const response = surface === "Chat"
+          ? await postChatCompletions(server.url, "cursorcustom/auto", headers)
+          : await postResponses(server.url, "cursorcustom/auto", headers);
+        if (surface === "Responses") {
+          expect(await response.json()).toMatchObject({ status: "failed" });
+        } else {
+          expect(response.status).not.toBe(200);
+          await response.text();
+        }
+        expect(capturedAuth).toEqual([]);
+      } finally {
+        await server.stop(true);
+      }
+    });
+  });
+
+  test.each(["Responses", "Chat"])("%s never treats a ChatGPT-claimed or combined bearer as a Cursor token", async surface => {
+    const chatGptJwt = fakeChatGptJwt({ chatgpt_account_id: "caller-openai" });
+    const cases: Array<Record<string, string>> = [
+      // A ChatGPT JWT without the matching account header is still the ChatGPT domain.
+      { authorization: `Bearer ${chatGptJwt}` },
+      // A mismatched explicit account does not reclassify the token.
+      { authorization: `Bearer ${chatGptJwt}`, "chatgpt-account-id": "other-account" },
+      // A combined value is not a single Cursor token.
+      { authorization: `Bearer ${chatGptJwt}, Bearer other` },
+      // Conflicting ChatGPT markers are ChatGPT-marked but untrustworthy, not foreign-allowed.
+      { authorization: `Bearer ${fakeChatGptJwt({ chatgpt_account_id: "caller-openai", "https://api.openai.com/auth": { chatgpt_account_id: "other-claim" } })}` },
+      // A malformed ChatGPT marker is still ChatGPT-marked.
+      { authorization: `Bearer ${fakeChatGptJwt({ chatgpt_account_id: 123 })}` },
+      // A blank account id is not a usable id.
+      { authorization: `Bearer ${fakeChatGptJwt({ chatgpt_account_id: "   " })}` },
+      // The reserved namespace is a marker by its presence, whatever shape it carries:
+      // a primitive, null, an array, or an object without the claim all stay ChatGPT-marked.
+      { authorization: `Bearer ${fakeChatGptJwt({ "https://api.openai.com/auth": "not-an-object" })}` },
+      { authorization: `Bearer ${fakeChatGptJwt({ "https://api.openai.com/auth": null })}` },
+      { authorization: `Bearer ${fakeChatGptJwt({ "https://api.openai.com/auth": [] })}` },
+      { authorization: `Bearer ${fakeChatGptJwt({ "https://api.openai.com/auth": {} })}` },
+      { authorization: `Bearer ${fakeChatGptJwt({ "https://api.openai.com/auth": { user_id: "u_1" } })}` },
+    ];
+    for (const extra of cases) {
+      await withCursorCaptureServer(async (baseUrl, capturedAuth) => {
+        saveConfig(cursorForwardConfig(baseUrl));
+        writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ tokens: {} }));
+        const server = await startOwnedServer();
+        try {
+          const headers = { "x-opencodex-api-key": ADMISSION_SECRET, ...extra };
+          const response = surface === "Chat"
+            ? await postChatCompletions(server.url, "cursorcustom/auto", headers)
+            : await postResponses(server.url, "cursorcustom/auto", headers);
+          if (surface === "Responses") {
+            expect(await response.json()).toMatchObject({ status: "failed" });
+          } else {
+            expect(response.status).not.toBe(200);
+            await response.text();
+          }
+          expect(capturedAuth).toEqual([]);
+        } finally {
+          await server.stop(true);
+        }
+      });
+    }
+  });
+
+  test.each(["Responses", "Chat"])("%s keeps an unmarked JWT as the Cursor credential", async surface => {
+    // Neither a generic organizations claim nor a payload that is not a JSON object is
+    // ChatGPT-domain evidence: the legacy keyless Cursor contract keeps forwarding such a
+    // bearer (the account header, a ChatGPT-only header, is still dropped). The primitive
+    // payload also proves the domain inspector stays total instead of throwing.
+    const orgJwt = fakeChatGptJwt({ organizations: [{ id: "org-foreign" }] });
+    const primitivePayloadJwt = `eyJhbGciOiJub25lIn0.${Buffer.from("true").toString("base64url")}.fakesig`;
+    for (const [bearer, extra] of [
+      [orgJwt, {}],
+      [orgJwt, { "chatgpt-account-id": "org-foreign" }],
+      [primitivePayloadJwt, {}],
+    ] as Array<[string, Record<string, string>]>) {
+      await withCursorCaptureServer(async (baseUrl, capturedAuth) => {
+        saveConfig(cursorForwardConfig(baseUrl));
+        writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ tokens: {} }));
+        const server = await startOwnedServer();
+        try {
+          const headers = { "x-opencodex-api-key": ADMISSION_SECRET, authorization: `Bearer ${bearer}`, ...extra };
+          const response = surface === "Chat"
+            ? await postChatCompletions(server.url, "cursorcustom/auto", headers)
+            : await postResponses(server.url, "cursorcustom/auto", headers);
+          await response.text();
+          expect(capturedAuth).toEqual([`Bearer ${bearer}`]);
+        } finally {
+          await server.stop(true);
+        }
+      });
+    }
+  });
+
+  test.each([false, true])("Chat combos never assign caller auth to a Cursor target (OpenAI pair: %s)", async openAiPair => {
+    await withCursorCaptureServer(async (baseUrl, capturedAuth) => {
+      const config = cursorForwardConfig(baseUrl);
+      config.combos = {
+        free: { strategy: "failover", targets: [{ provider: "cursorcustom", model: "auto" }] },
+      };
+      saveConfig(config);
+      writeFileSync(join(codexHome, "auth.json"), JSON.stringify({
+        tokens: { access_token: liveJwt(), account_id: "stored_main_acc" },
+      }));
+
+      const server = await startOwnedServer();
+      try {
+        const response = await postChatCompletions(server.url, "combo/free", {
+          "x-opencodex-api-key": ADMISSION_SECRET,
+          authorization: `Bearer ${openAiPair ? fakeChatGptJwt({ chatgpt_account_id: "caller-openai" }) : "cursor-upstream-token"}`,
+          ...(openAiPair ? { "chatgpt-account-id": "caller-openai" } : {}),
+        });
+        expect(response.status).not.toBe(200);
+        expect(capturedAuth).toEqual([]);
+      } finally {
+        await server.stop(true);
+      }
+    });
+  });
+
+  test.each([false, true])("Responses combos never assign caller auth to a Cursor target (OpenAI pair: %s)", async openAiPair => {
+    await withCursorCaptureServer(async (baseUrl, capturedAuth) => {
+      const config = cursorForwardConfig(baseUrl);
+      config.combos = {
+        free: { strategy: "failover", targets: [{ provider: "cursorcustom", model: "auto" }] },
+      };
+      saveConfig(config);
+      writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ tokens: {} }));
+
+      const server = startServer(0, { inspectNativeCodexOwnership });
+      try {
+        const response = await postResponses(server.url, "combo/free", {
+          "x-opencodex-api-key": ADMISSION_SECRET,
+          authorization: `Bearer ${openAiPair ? fakeChatGptJwt({ chatgpt_account_id: "caller-openai" }) : "cursor-upstream-token"}`,
+          ...(openAiPair ? { "chatgpt-account-id": "caller-openai" } : {}),
+        });
+        expect(response.status).not.toBe(200);
+        expect(capturedAuth).toEqual([]);
+      } finally {
+        await server.stop(true);
+      }
+    });
+  });
+
+  // A present reserved namespace carries the marker whatever its shape, so every broken
+  // shape is untrustworthy rather than foreign, and is denied restore.
+  const brokenNamespaces: Record<string, unknown> = {
+    "namespace-empty-object": {},
+    "namespace-primitive": "not-an-object",
+    "namespace-null": null,
+    "namespace-array": [],
+    "namespace-without-claim": { user_id: "u_1" },
+  };
+
+  const callerBearers: Record<string, string> = {
+    "opaque-with-account": "opaque-caller-direct-token",
+    // The namespaced marker alone is a valid ChatGPT-domain claim.
+    "ns-claim-only": fakeChatGptJwt({ "https://api.openai.com/auth": { chatgpt_account_id: "caller-openai" } }),
+    // A generic organizations claim is not ChatGPT-domain evidence.
+    "org-only-jwt": fakeChatGptJwt({ organizations: [{ id: "org-foreign" }] }),
+    "conflicting-claims": fakeChatGptJwt({ chatgpt_account_id: "caller-openai", "https://api.openai.com/auth": { chatgpt_account_id: "other-claim" } }),
+    "blank-account-id": fakeChatGptJwt({ chatgpt_account_id: "   " }),
+    "numeric-account-id": fakeChatGptJwt({ chatgpt_account_id: 123 }),
+    ...Object.fromEntries(Object.entries(brokenNamespaces)
+      .map(([name, shape]) => [name, fakeChatGptJwt({ "https://api.openai.com/auth": shape })])),
+  };
+
+  test("a bearer-admitted Responses combo still substitutes stored main on its final Direct target", async () => {
+    const config = mixedConfig();
+    config.combos = {
+      native: { strategy: "failover", targets: [{ provider: "openai", model: "gpt-5.6-luna" }] },
+    };
+    const stored = liveJwt();
+    saveConfig(config);
+    writeFileSync(
+      join(codexHome, "auth.json"),
+      JSON.stringify({ tokens: { access_token: stored, account_id: "stored_main_acc" } }),
+    );
+
+    const server = await startOwnedServer();
+    try {
+      const response = await postResponses(server.url, "combo/native");
+      expect(response.status).toBe(200);
+      expect(nativeAuth).toEqual([`Bearer ${stored}`]);
+      expect(nativeAuth.join("|")).not.toContain(ADMISSION_SECRET);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test.each(["jwt-only", "jwt-with-account", "ns-claim-only", "opaque-with-account", "jwt-mismatched-account", "org-only-jwt", "conflicting-claims", "namespace-empty-object", "namespace-primitive", "namespace-null", "namespace-array", "namespace-without-claim", "blank-account-id", "numeric-account-id"])(
+    "a dedicated-admission Responses combo scopes caller auth (%s) to its final Direct target",
+    async form => {
+      const config = mixedConfig();
+      config.combos = {
+        native: { strategy: "failover", targets: [{ provider: "openai", model: "gpt-5.6-luna" }] },
+      };
+      saveConfig(config);
+      writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ tokens: {} }));
+      const callerBearer = callerBearers[form] ?? fakeChatGptJwt({ chatgpt_account_id: "caller-openai" });
+      const accountHeader = form === "jwt-only" || form === "ns-claim-only" ? undefined
+        : form === "jwt-mismatched-account" ? "other-account"
+        : form === "org-only-jwt" ? "org-foreign"
+        : "caller-openai";
+
+      const server = await startOwnedServer();
+      try {
+        const response = await postResponses(server.url, "combo/native", {
+          "x-opencodex-api-key": ADMISSION_SECRET,
+          authorization: `Bearer ${callerBearer}`,
+          ...(accountHeader ? { "chatgpt-account-id": accountHeader } : {}),
+        });
+        const body = await response.json() as { status?: string };
+        if (form === "jwt-only" || form === "jwt-with-account" || form === "ns-claim-only") {
+          expect(response.status).toBe(200);
+          expect(body).toMatchObject({ status: "completed" });
+          expect(nativeAuth).toEqual([`Bearer ${callerBearer}`]);
+          expect(nativeAccountIds).toEqual(["caller-openai"]);
+        } else {
+          expect(response.status >= 400 || body.status === "failed").toBe(true);
+          expect(nativeAuth).toEqual([]);
+          expect(nativeAccountIds).toEqual([]);
+        }
+      } finally {
+        await server.stop(true);
+      }
+    },
+  );
+
+  test("Chat thread-spawn fallback never carries the provisional Cursor bearer into Direct", async () => {
+    await withCursorCaptureServer(async (baseUrl, capturedAuth) => {
+      const config = cursorForwardConfig(baseUrl);
+      config.providers.openai = {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "direct",
+        defaultModel: "gpt-5.6-luna",
+      };
+      config.subagentModelFallback = ["gpt-5.6-luna"];
+      const stored = liveJwt();
+      saveConfig(config);
+      noteSubagentModelFailure("cursorcustom/auto", "429", config);
+      writeFileSync(
+        join(codexHome, "auth.json"),
+        JSON.stringify({ tokens: { access_token: stored, account_id: "stored_main_acc" } }),
+      );
+
+      const server = await startOwnedServer();
+      try {
+        const response = await postChatCompletions(server.url, "cursorcustom/auto", {
+          "x-opencodex-api-key": ADMISSION_SECRET,
+          authorization: "Bearer cursor-upstream-token",
+          "x-openai-subagent": "collab_spawn",
+        });
+        expect(capturedAuth).toEqual([]);
+        expect(nativeAuth).toEqual([]);
+        expect(response.status).toBe(401);
+      } finally {
+        await server.stop(true);
+      }
+    });
+  });
+
+  test("Responses thread-spawn fallback never carries the provisional Cursor bearer into Direct", async () => {
+    await withCursorCaptureServer(async (baseUrl, capturedAuth) => {
+      const config = cursorForwardConfig(baseUrl);
+      config.providers.openai = {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "direct",
+        defaultModel: "gpt-5.6-luna",
+      };
+      config.subagentModelFallback = ["gpt-5.6-luna"];
+      const stored = liveJwt();
+      saveConfig(config);
+      noteSubagentModelFailure("cursorcustom/auto", "429", config);
+      writeFileSync(
+        join(codexHome, "auth.json"),
+        JSON.stringify({ tokens: { access_token: stored, account_id: "stored_main_acc" } }),
+      );
+
+      const server = await startOwnedServer();
+      try {
+        const response = await postResponses(server.url, "cursorcustom/auto", {
+          "x-opencodex-api-key": ADMISSION_SECRET,
+          authorization: "Bearer cursor-upstream-token",
+          "x-openai-subagent": "collab_spawn",
+        });
+        expect(capturedAuth).toEqual([]);
+        expect(nativeAuth).toEqual([]);
+        expect(response.status).toBe(401);
+      } finally {
+        await server.stop(true);
+      }
+    });
+  });
+
+  test("Chat thread marker without a route rewrite preserves the caller's native credential", async () => {
+    saveConfig(mixedConfig());
+    writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ tokens: {} }));
+
+    const server = await startOwnedServer();
+    try {
+      const response = await postChatCompletions(server.url, "gpt-5.6-luna", {
+        "x-opencodex-api-key": ADMISSION_SECRET,
+        authorization: "Bearer caller-native-token",
+        "x-openai-subagent": "collab_spawn",
+      });
+      expect(response.status).toBe(200);
+      expect(nativeAuth).toEqual(["Bearer caller-native-token"]);
+      expect(routedAuth).toEqual([]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  for (const surface of ["Chat", "Responses"] as const) {
+    test(`${surface} policy routes never assign one provisional bearer to a selected provider`, async () => {
+      await withCursorCaptureServer(async (baseUrl, capturedAuth) => {
+        const config = cursorForwardConfig(baseUrl);
+        config.routingProfiles = {
+          cursor: { candidates: [{ provider: "cursorcustom", model: "auto" }] },
+        };
+        saveConfig(config);
+        writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ tokens: {} }));
+
+        const server = startServer(0, { inspectNativeCodexOwnership });
+        try {
+          const authHeaders = {
+            "x-opencodex-api-key": ADMISSION_SECRET,
+            authorization: "Bearer cursor-upstream-token",
+          };
+          const response = surface === "Chat"
+            ? await postChatCompletions(server.url, "policy/cursor", authHeaders)
+            : await postResponses(server.url, "policy/cursor", authHeaders);
+          const status = response.status;
+          await response.arrayBuffer();
+          expect(capturedAuth).toEqual([]);
+          // Chat returns a pre-stream provider failure; Responses may encode the same terminal
+          // failure inside its normal response envelope. The wire observation is authoritative.
+          expect([200, 502]).toContain(status);
+        } finally {
+          await server.stop(true);
+        }
+      });
+    });
+  }
+
+  test("Claude policy routing preserves trusted main auth only for its final Direct target", async () => {
+    const config = mixedConfig();
+    config.routingProfiles = {
+      native: { candidates: [{ provider: "openai", model: "gpt-5.6-luna" }] },
+    };
+    const stored = liveJwt();
+    saveConfig(config);
+    writeFileSync(
+      join(codexHome, "auth.json"),
+      JSON.stringify({ tokens: { access_token: stored, account_id: "stored_main_acc" } }),
+    );
+
+    const server = await startOwnedServer();
+    try {
+      const response = await postClaudeMessages(server.url, "policy/native");
+      expect(response.status).toBe(200);
+      expect(nativeAuth).toEqual([`Bearer ${stored}`]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("Claude Combo routing reconstructs trusted main auth for its final Direct target", async () => {
+    const config = mixedConfig();
+    config.combos = {
+      native: { strategy: "failover", targets: [{ provider: "openai", model: "gpt-5.6-luna" }] },
+    };
+    const stored = liveJwt();
+    saveConfig(config);
+    writeFileSync(
+      join(codexHome, "auth.json"),
+      JSON.stringify({ tokens: { access_token: stored, account_id: "stored_main_acc" } }),
+    );
+
+    const server = await startOwnedServer();
+    try {
+      const response = await postClaudeMessages(server.url, "combo/native");
+      expect(response.status).toBe(200);
+      expect(nativeAuth).toEqual([`Bearer ${stored}`]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("Claude Combo routing cannot reconstruct main auth when the profile claim was fenced", async () => {
+    const config = mixedConfig();
+    config.combos = {
+      native: { strategy: "failover", targets: [{ provider: "openai", model: "gpt-5.6-luna" }] },
+    };
+    saveConfig(config);
+    writeFileSync(
+      join(codexHome, "auth.json"),
+      JSON.stringify({ tokens: { access_token: liveJwt(), account_id: "stored_main_acc" } }),
+    );
+
+    const server = startServer(0, {
+      inspectNativeCodexOwnership: () => ({ ownership: "foreign", reason: "fixture-owned by another service" }),
+    });
+    try {
+      expect(await waitForNativeMainStartupGate()).toMatchObject({
+        status: "blocked",
+        reason: "foreign-ownership",
+      });
+      const response = await postClaudeMessages(server.url, "combo/native");
+      expect(response.status).toBe(401);
+      expect(nativeAuth).toEqual([]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  for (const surface of ["Chat", "Responses"] as const) {
+    test(`${surface} shadow-call rewrites never carry the source route bearer into Cursor`, async () => {
+      await withCursorCaptureServer(async (baseUrl, capturedAuth) => {
+        const config = cursorForwardConfig(baseUrl);
+        config.providers.openai = {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+          codexAccountMode: "direct",
+          defaultModel: "gpt-5.6-luna",
+        };
+        config.shadowCallIntercept = {
+          enabled: true,
+          model: "cursorcustom/auto",
+          sourceModels: ["gpt-5.6-luna"],
+        };
+        saveConfig(config);
+        writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ tokens: {} }));
+
+        const server = startServer(0, { inspectNativeCodexOwnership });
+        try {
+          const authHeaders = {
+            "x-opencodex-api-key": ADMISSION_SECRET,
+            authorization: "Bearer source-route-token",
+          };
+          const response = surface === "Chat"
+            ? await postChatCompletions(server.url, "gpt-5.6-luna", authHeaders)
+            : await postResponses(server.url, "gpt-5.6-luna", authHeaders);
+          const status = response.status;
+          await response.arrayBuffer();
+          expect(capturedAuth).toEqual([]);
+          expect([200, 401, 502]).toContain(status);
+        } finally {
+          await server.stop(true);
+        }
+      });
+    });
+  }
+
+  test("Claude replay never treats stored main auth as a Cursor credential", async () => {
+    await withCursorCaptureServer(async (baseUrl, capturedAuth) => {
+      saveConfig(cursorForwardConfig(baseUrl));
+      writeFileSync(join(codexHome, "auth.json"), JSON.stringify({
+        tokens: { access_token: liveJwt(), account_id: "stored_main_acc" },
+      }));
+
+      const server = await startOwnedServer();
+      try {
+        const response = await postClaudeMessages(server.url, "cursorcustom/auto");
+        expect(response.status).toBe(502);
+        expect(capturedAuth).toEqual([]);
+      } finally {
+        await server.stop(true);
+      }
+    });
   });
 });
 

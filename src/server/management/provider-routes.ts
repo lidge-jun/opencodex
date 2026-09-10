@@ -40,6 +40,8 @@ import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { ProviderOutboundPolicyError, providerOutboundGet, providerOutboundPost, providerRedirectError } from "../../lib/provider-outbound";
 import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
+import { fetchQoderModels } from "../../adapters/qoder/live-models";
+import { resolveQoderProfile } from "../../adapters/qoder/profiles";
 import { parseAntigravityAvailableModels } from "../../providers/antigravity-models";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets, providerConfigSeed } from "../../providers/derive";
@@ -52,6 +54,7 @@ import {
   readBoundedDiscoveryJson,
   resolveProviderModelDiscovery,
 } from "../../providers/model-discovery";
+import { extractGoogleAiStudioModelItems } from "../../providers/google-ai-studio-model-discovery";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
 import { clearKeyCooldowns } from "../../providers/key-failover";
@@ -1350,6 +1353,28 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         message: `Connected. ${live.models.length} models.`,
       });
     }
+    if (prov.adapter === "qoder") {
+      const started = Date.now();
+      const profile = resolveQoderProfile(prov.baseUrl);
+      if (!profile) {
+        return jsonResponse({ ok: false, latencyMs: 0, error: "qoder discovery refused a non-canonical destination" });
+      }
+      const live = await fetchQoderModels(profile, apiKey ?? "");
+      const latencyMs = Date.now() - started;
+      if (!live.ok) {
+        return jsonResponse({
+          ok: false,
+          latencyMs,
+          error: `qoder discovery ${live.error}${live.detail ? `: ${live.detail}` : ""}`,
+        });
+      }
+      return jsonResponse({
+        ok: true,
+        latencyMs,
+        models: live.models.length,
+        message: `Connected. ${live.models.length} models.`,
+      });
+    }
     const project = prov.project ?? snapshot?.projectId;
     if (antigravity && !project) {
       return jsonResponse({ ok: false, latencyMs: 0, error: "Antigravity project unavailable — re-run `ocx login google-antigravity`" });
@@ -1404,13 +1429,19 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         return jsonResponse({ ok: false, latencyMs, error: "upstream CCA model discovery returned an unexpected shape" });
       }
       // OpenAI-style lists (and Together top-level arrays) use the same validation/dedupe/filter
-      // as catalog discovery. Google's /v1beta/models uses `models[].name` and remains a
-      // connectivity-only count because it is not an authoritative catalog source.
+      // as catalog discovery. Google AI Studio parses the native `models[]` envelope and filters to
+      // `generateContent`, while other providers fall back to generic envelope rows if they return `models[]`.
       const record = bounded.value !== null && typeof bounded.value === "object" && !Array.isArray(bounded.value)
         ? bounded.value as Record<string, unknown>
         : undefined;
+      const isAiStudio = effectiveGoogleMode(name, prov) === "ai-studio";
+      const googleAiStudio = !ccaModels && isAiStudio
+        ? extractGoogleAiStudioModelItems(bounded.value, discovery.maxModels)
+        : undefined;
       const extracted = ccaModels
         ? undefined
+        : googleAiStudio?.ok
+        ? googleAiStudio
         : Array.isArray(bounded.value) || Array.isArray(record?.data)
         ? extractProviderModelItems(bounded.value, discovery)
         : extractModelEnvelopeRows(bounded.value, discovery.maxModels, ["models"]);

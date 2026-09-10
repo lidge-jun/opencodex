@@ -150,10 +150,17 @@ function blockedSkillCallIds(messages: readonly unknown[], blocked: readonly str
 
 /**
  * Claude Code (observed 2026-07-11, real CLI smoke) sends `role:"system"` entries in
- * `messages` despite the published API having no system role. Map them to Responses
- * instructions text: the native ChatGPT backend rejects system message items in
- * `input` ("System messages are not allowed", verified live), so folding into
- * `instructions` is the only shape that works on every route.
+ * `messages` despite the published API having no system role. They are emitted as
+ * chronological `role:"developer"` input items, which keeps the timeline intact and
+ * leaves `instructions` owned solely by the top-level Anthropic `system` field.
+ *
+ * The original mapping folded them into `instructions` because the native ChatGPT
+ * backend rejects `role:"system"` items in `input` ("System messages are not allowed",
+ * verified live). That constraint is real and still respected — but it only rules out
+ * `system`, not `developer`, which every Responses route accepts. Folding meant each
+ * mid-conversation reminder mutated the prompt head, invalidating the upstream KV
+ * prefix and rotating the Desktop `prompt_cache_key` fallback below on every turn
+ * (#4148).
  */
 function systemMessageText(content: unknown): string {
   if (typeof content === "string") return content;
@@ -333,7 +340,12 @@ function translateAnthropicRequest(raw: unknown, cc: OcxClaudeCodeConfig | undef
     else if (msg.role === "assistant") assistantMessageToItems(msg.content, input, budget);
     else if (msg.role === "system") {
       const text = systemMessageText(msg.content);
-      if (text.length > 0) systemParts.push(text);
+      // Keep it where the client put it. `developer` is first-class in the Responses
+      // schema and survives parseRequest as a chronological message, where `system`
+      // would be re-hoisted back onto the system prompt and defeat the point.
+      if (text.length > 0) {
+        input.push({ type: "message", role: "developer", content: [{ type: "input_text", text }] });
+      }
     }
     else throw new AnthropicRequestError(`unsupported message role: ${String(msg.role)}`);
   }

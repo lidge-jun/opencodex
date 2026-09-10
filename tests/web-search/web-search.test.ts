@@ -2649,6 +2649,6 @@ describe("connection-reset recovery parity on the web-search legs", () => {
     // The loop sets accept-encoding: identity so raw byte progress stays observable; the recovery
     // helper clones headers into a Headers instance and must not drop it.
     expect(typeof attempts[1]!.body).toBe("string");
+    expect(attempts.every(attempt => attempt.redirect === "manual")).toBe(true);
   });
 });
-

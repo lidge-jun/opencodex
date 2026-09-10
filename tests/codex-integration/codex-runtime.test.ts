@@ -970,3 +970,94 @@ describe("resolveCodexRuntime", () => {
     expect(diagnostics[0]?.affectedModels).toEqual(["openrouter/example"]);
   });
 });
+
+describe("dead configured pin recovery (#4035)", () => {
+  test("a dead configured pin is cleared when resolution degrades to fallback", () => {
+    // A Codex App update deletes the hashed plugin directory the pin names. The probe
+    // rejects the vanished absolute path ("path does not exist"), no PATH candidate
+    // exists, and resolution degrades to `fallback` — which the persist guard skipped,
+    // so the dead pin survived forever and every later resolve re-probed a path that
+    // cannot exist.
+    const configDir = tempConfigDir();
+    const dead = join(configDir, "gone", "codex");
+    persistCodexRuntime({ command: dead, version: "0.153.0", source: "configured" }, { configDir });
+    expect(loadPersistedCodexRuntime({ configDir })?.command).toBe(dead);
+
+    const result = resolveAndPersistCodexRuntime({
+      configDir,
+      env: { PATH: "" },
+      platform: "linux",
+      existsSync: (path) => !String(path).includes("gone"),
+      execFileSync: () => { throw new Error("ENOENT"); },
+    });
+
+    expect(result.runtime.source).toBe("fallback");
+    expect(existsSync(join(configDir, "codex-runtime.json"))).toBe(false);
+    expect(loadPersistedCodexRuntime({ configDir })).toBeNull();
+  });
+
+  test("a fallback resolve with no persisted pin writes nothing", () => {
+    const configDir = tempConfigDir();
+    const result = resolveAndPersistCodexRuntime({
+      configDir,
+      env: { PATH: "" },
+      platform: "linux",
+      existsSync: () => false,
+      execFileSync: () => { throw new Error("ENOENT"); },
+    });
+    expect(result.runtime.source).toBe("fallback");
+    expect(existsSync(join(configDir, "codex-runtime.json"))).toBe(false);
+  });
+
+  test("a live configured pin is NOT cleared when the resolve succeeds", () => {
+    // The clear is bound to a dead pin, not to every fallback-shaped result.
+    const configDir = tempConfigDir();
+    const live = join(configDir, "bin", "codex");
+    persistCodexRuntime({ command: live, version: "0.153.0", source: "configured" }, { configDir });
+    const result = resolveAndPersistCodexRuntime({
+      configDir,
+      env: { PATH: "" },
+      platform: "linux",
+      existsSync: () => true,
+      execFileSync: () => "codex-cli 0.153.0",
+    });
+    expect(result.runtime.source).toBe("configured");
+    expect(loadPersistedCodexRuntime({ configDir })?.command).toBe(live);
+  });
+
+  test("a pin rejected for a NON-path reason is left alone", () => {
+    // "unrecognized --version output" means the file is present but unusable; that is a
+    // different failure than a vanished path and is not this issue's recovery case.
+    const configDir = tempConfigDir();
+    const weird = join(configDir, "weird", "codex");
+    persistCodexRuntime({ command: weird, version: "0.153.0", source: "configured" }, { configDir });
+    resolveAndPersistCodexRuntime({
+      configDir,
+      env: { PATH: "" },
+      platform: "linux",
+      existsSync: () => true,
+      execFileSync: () => "not a codex binary",
+    });
+    expect(loadPersistedCodexRuntime({ configDir })?.command).toBe(weird);
+  });
+
+  test("a case-different missing path does not retire a live pin on linux", () => {
+    // sameRuntimeCommand() lowercases, so on a case-sensitive filesystem it reports
+    // /plugins/Codex and /plugins/codex as the same command. They are different files.
+    // If CODEX_CLI_PATH names the missing lowercase one, its PATH_MISSING failure must
+    // not retire the uppercase pin that is still live (review finding on #4035).
+    const configDir = tempConfigDir();
+    const live = join(configDir, "plugins", "Codex");
+    const missing = join(configDir, "plugins", "codex");
+    persistCodexRuntime({ command: live, version: "0.153.0", source: "configured" }, { configDir });
+    resolveAndPersistCodexRuntime({
+      configDir,
+      env: { PATH: "", CODEX_CLI_PATH: missing },
+      platform: "linux",
+      existsSync: (p: string) => String(p) === live,
+      execFileSync: () => "codex-cli 0.153.0",
+    });
+    expect(loadPersistedCodexRuntime({ configDir })?.command).toBe(live);
+  });
+
+});

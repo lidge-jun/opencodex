@@ -49,6 +49,7 @@ export interface ModelInfo { id: string; provider: string; namespaced: string; o
 export interface SettingsData {
   codexAutoStart: boolean;
   codexDesktopAuthless?: boolean;
+  codexClientCompaction?: boolean;
   catalogRefreshPending?: boolean;
   /** Whether a login may open a browser on the machine running the proxy. */
   oauthOpenBrowser?: boolean;

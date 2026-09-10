@@ -102,7 +102,7 @@ import {
 } from "../../lib/errors";
 import { injectionDebugLog } from "../../lib/injection-debug-log";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
-import { enrichOpenCodeZenRateLimitMessage } from "../../providers/opencode-zen-rate-limit";
+import { enrichOpenCodeZenUpstreamMessage } from "../../providers/opencode-zen-rate-limit";
 import { CODE_MODE_EXEC_TOOL_NAME, modelInList, namespacedToolName } from "../../types";
 import type {
   AdapterEvent,
@@ -150,6 +150,11 @@ import {
 } from "../../oauth/generic-account-failover";
 import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
 import { buildWebSearchTool, planWebSearch, runWithWebSearch, shouldResolveOpenAiWebSearchSidecar } from "../../web-search";
+import {
+  createOllamaBridgeExecutor,
+  createPassthroughWebSearchBridgeStream,
+  planPassthroughWebSearchBridge,
+} from "../../web-search/passthrough-bridge";
 import { buildImageTool, buildVideoTool, planImageBridge, planVideoBridge, runWithImageBridge, clampImageMaxRounds, IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME } from "../../images";
 import { describeImagesInPlace, isModelTextOnly, planVisionSidecar, resolveOpenAiVisionModel, shouldResolveOpenAiVisionSidecar, stripImagesInPlace } from "../../vision";
 import { createAdapterEventQueue, preflightAdapterEvents, type AdapterEventQueue } from "../../adapters/run-turn-queue";
@@ -210,11 +215,14 @@ import {
 import {
   ForwardAdmissionCredentialError,
   hasForwardableCodexBearer,
+  isProxyAdmissionSecret,
   validateForwardAdmissionCredential,
 } from "../auth-cors";
 import type { DataPlaneAdmission } from "../auth-cors";
 import { createTranslatorBudget, isTranslatorBudgetExceededError, type TranslatorBudget } from "../../lib/translator-budget";
-import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
+import { captureExplicitOpenAiCallerAuth, listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ExplicitOpenAiCallerAuth, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
+import { inspectChatGptDomainClaim } from "../../oauth/chatgpt";
+import { captureCallerDirectAuth, providerConsumesCallerAuthorization, type CallerDirectAuth } from "../../providers/caller-authorization";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { CODEX_RESERVE_HELPER_UNSUPPORTED_MESSAGE, isCodexReserveHelperUnsupported } from "../../codex/loopback-target";
 import { providerContextCap } from "../../providers/context-cap";
@@ -240,7 +248,13 @@ import { hasPassiveAccountQuota, recordAnthropicAccountQuotaFromHeaders, recordP
 import { captureConfigGeneration } from "../../lib/state-store-sweeper";
 import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../../providers/openai-virtual-models";
 import { isUsageDebugEnabled } from "../../usage/debug";
-import { readJsonRequestBody, DecompressedBodyTooLargeError, UnsupportedContentEncodingError } from "../request-decompress";
+import {
+  readJsonRequestBody,
+  describeInboundBodyRefusal,
+  resolveInboundBodyLimitBytes,
+  DecompressedBodyTooLargeError,
+  UnsupportedContentEncodingError,
+} from "../request-decompress";
 import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
 import {
   providerModelResponsesTerminalRepair,
@@ -421,7 +435,7 @@ import {
 } from "../responses-undeclared-tool-guard";
 import { createGithubCopilotResponsesBlockRewrite } from "../github-copilot-responses-repair";
 import { responsesJsonToSseStream } from "../responses-json-events";
-import { streamingContextOverflowResponse } from "./context-overflow";
+import { jsonContextOverflowResponse, streamingContextOverflowResponse } from "./context-overflow";
 import { guardTerminalEventStream } from "./terminal-guard";
 import {
   emptyCompletionRetryEnabled,
@@ -1009,14 +1023,14 @@ export function usesCodexForwardPoolAuth(
     && provider.authMode === "forward" && provider.adapter === "openai-responses";
 }
 
-function codexWsQuotaObserver(authCtx: CodexAuthContext, provider: OcxProviderConfig): CodexWsQuotaObserver | undefined {
+function codexWsQuotaObserver(authCtx: CodexAuthContext, provider: OcxProviderConfig, modelId?: string): CodexWsQuotaObserver | undefined {
   if (!isCanonicalOpenAiForwardProvider(provider) || !usesCodexForwardPoolAuth(authCtx, provider)) return undefined;
   const { accountId, writerGeneration } = authCtx;
   const credentialGeneration = authCtx.kind === "pool" ? authCtx.generation : undefined;
   const mainWriter = authCtx.kind === "main-pool" ? authCtx.mainQuotaWriter : undefined;
   return headers => {
     if (credentialGeneration !== undefined && !isCodexAccountGenerationLive(accountId, credentialGeneration)) return;
-    applyCapturedCodexQuota(accountId, headers, writerGeneration, mainWriter);
+    applyCapturedCodexQuota(accountId, headers, writerGeneration, mainWriter, { modelId });
   };
 }
 
@@ -1121,7 +1135,8 @@ export async function shouldRetryCodexPoolAccountQuota(
 }
 
 interface CodexPoolAccountRetryArgs {
-  req: Request;
+  /** Sanitized caller input, before any selected Pool credential was materialized. */
+  callerAuthHeaders: Headers;
   config: OcxConfig;
   route: { providerName: string; modelId: string; provider: OcxProviderConfig };
   parsed: OcxParsedRequest;
@@ -1287,7 +1302,7 @@ async function retryCodexPoolOnAlternateAccount(
   args: CodexPoolAccountRetryArgs,
 ): Promise<CodexPoolAccountRetryResult> {
   const {
-    req, config, route, parsed, logCtx, options, firstAuthCtx, firstResponse,
+    callerAuthHeaders, config, route, parsed, logCtx, options, firstAuthCtx, firstResponse,
     outcomeStatus, upstream, connectMs, passthroughEstimate, stream,
   } = args;
   const inboundWire = options.inboundWire ?? "responses";
@@ -1321,7 +1336,7 @@ async function retryCodexPoolOnAlternateAccount(
   }
   try {
     retryAuthCtx ??= await resolveCodexAuthContext(
-        req.headers,
+        callerAuthHeaders,
         config,
         "pool",
         {
@@ -1329,7 +1344,7 @@ async function retryCodexPoolOnAlternateAccount(
           admission: options.admission,
           codexAuthPolicy: options.codexAuthPolicy,
           modelId: route.modelId,
-          requestScopedMainCredential: hasForwardableCodexBearer(req.headers, config),
+          requestScopedMainCredential: hasForwardableCodexBearer(callerAuthHeaders, config),
           beginCodexAccountSelection: codexAccountSelectionForTurn(options.turnAdmissionLease),
           resolveCodexModelEntitlements: entitlementResolver,
         },
@@ -1378,6 +1393,7 @@ async function retryCodexPoolOnAlternateAccount(
       firstResponse.headers,
       firstAuthCtx.writerGeneration,
       firstAuthCtx.kind === "main-pool" ? firstAuthCtx.mainQuotaWriter : undefined,
+      { modelId: route.modelId },
     );
   }
   const deferFirstOutcome = shouldDeferCodexResetDerivedCooldown(
@@ -1399,7 +1415,7 @@ async function retryCodexPoolOnAlternateAccount(
   // Only a combo reset-derived outcome is deferred. Retry-After, defaults, and
   // ordinary requests must block the first account before the alternate send.
   if (!deferFirstOutcome) recordFirstOutcome();
-  const retryHeaders = headersForCodexAuthContext(req.headers, retryAuthCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission);
+  const retryHeaders = headersForCodexAuthContext(callerAuthHeaders, retryAuthCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission);
   const retryProvider = applyCodexAuthContextToProvider(
     stripCodexRuntimeProviderFields(route.provider),
     retryAuthCtx,
@@ -1469,7 +1485,7 @@ async function retryCodexPoolOnAlternateAccount(
           providerFetch(route.provider, options.codexWsRuntimeIdentity, {
             providerName: route.providerName,
             modelId: route.modelId,
-            onCodexWsQuota: codexWsQuotaObserver(retryAuthCtx, route.provider),
+            onCodexWsQuota: codexWsQuotaObserver(retryAuthCtx, route.provider, route.modelId),
             beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
               ? createCodexReserveDispatchGuard(retryAuthCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
           }),
@@ -1603,7 +1619,7 @@ export function decodeRequestErrorResponse(err: unknown, label: string): Respons
     return formatErrorResponse(415, "invalid_request_error", err.message);
   }
   if (err instanceof DecompressedBodyTooLargeError) {
-    return formatErrorResponse(413, "invalid_request_error", err.message);
+    return formatErrorResponse(413, "inbound_body_too_large", describeInboundBodyRefusal(err));
   }
   console.warn(`[${label}] request body decode/parse failed: ${err instanceof Error ? `${err.name}: ${err.message}` : String(err)}`);
   return formatErrorResponse(400, "invalid_request_error", "Invalid JSON body");
@@ -1703,9 +1719,17 @@ export interface HandleResponsesOptions {
   /**
    * Claude replay may add native-main auth so OpenAI sidecars remain available.
    * Strip only that internal credential when the final route is a noncanonical
-   * forward destination; final routing can differ from Claude's preflight route.
+   * forward/caller-auth destination; final routing can differ from Claude's preflight route.
    */
   stripClaudeMainAuthForNoncanonicalForward?: boolean;
+  /** In-memory credential proven by Claude's native-main turn claim; never persist or log. */
+  trustedClaudeMainAuth?: { authorization: string; chatgptAccountId?: string };
+  /** Sidecar-only auth captured before route changes; null means no usable original pair. */
+  openAiSidecarAuth?: ExplicitOpenAiCallerAuth | null;
+  /** Original caller-owned native pair; separate from any claimed sidecar enrichment. */
+  nativeCallerAuth?: ExplicitOpenAiCallerAuth | null;
+  /** Caller Direct credential under Direct\'s own predicate; restored only for the canonical OpenAI final route. */
+  callerDirectAuth?: CallerDirectAuth | null;
   /** Internal recursion guard; callers outside this module must not set it. */
   comboAttempt?: boolean;
   /** Internal combo handoff for one parent-validated continuation snapshot. */
@@ -1925,6 +1949,9 @@ export function createChildPassthroughCallbackGate(options: HandleResponsesOptio
 
 export function buildComboChildHeaders(parentHeaders: HeadersInit): Headers {
   const childHeaders = new Headers(parentHeaders);
+  // A provisional caller credential is not authoritative for a Combo child.
+  childHeaders.delete("authorization");
+  childHeaders.delete("chatgpt-account-id");
   // Combo children re-serialize already-decoded JSON. Keeping transport metadata from
   // the parent would make the child decoder treat plain JSON as compressed bytes.
   childHeaders.delete("content-length");
@@ -2009,7 +2036,7 @@ function canPassThroughEncryptedV2AgentTask(
 }
 
 type ResponsesAuthResolution =
-  | { ok: true; authCtx: CodexAuthContext; headers: Headers; substituteMainCredential: boolean }
+  | { ok: true; authCtx: CodexAuthContext; headers: Headers; callerAuthHeaders: Headers; substituteMainCredential: boolean }
   | { ok: false; response: Response };
 
 /**
@@ -2021,8 +2048,75 @@ async function resolveResponsesCodexAuth(
   config: OcxConfig,
   route: RouteResult,
   options: HandleResponsesOptions,
+  credentialDomainWasRewritten = false,
 ): Promise<ResponsesAuthResolution> {
   try {
+    const routeMayChangeCredentialDomain = options.comboAttempt === true
+      || route.routeKind === "policy"
+      || credentialDomainWasRewritten;
+    const trustedClaudeMainForFinalRoute = options.stripClaudeMainAuthForNoncanonicalForward === true
+      && isCanonicalOpenAiForwardProvider(route.provider)
+      ? options.trustedClaudeMainAuth : undefined;
+    let authInputHeaders = req.headers;
+    // Route-changing recursion retains typed admission, never an unscoped raw
+    // caller credential. Bearer admission is substituted or stripped below.
+    if (routeMayChangeCredentialDomain && options.admission?.source !== "bearer"
+      && !trustedClaudeMainForFinalRoute) {
+      authInputHeaders = new Headers(req.headers);
+      authInputHeaders.delete("authorization");
+      authInputHeaders.delete("chatgpt-account-id");
+    }
+    if (trustedClaudeMainForFinalRoute) {
+      authInputHeaders = new Headers(authInputHeaders);
+      authInputHeaders.set("authorization", trustedClaudeMainForFinalRoute.authorization);
+      if (trustedClaudeMainForFinalRoute.chatgptAccountId) {
+        authInputHeaders.set("chatgpt-account-id", trustedClaudeMainForFinalRoute.chatgptAccountId);
+      } else {
+        authInputHeaders.delete("chatgpt-account-id");
+      }
+    }
+    // A caller-auth transport that is not canonical OpenAI (keyless Cursor) consumes the
+    // caller's Authorization as its own upstream token. Keep that contract only for a clean
+    // single bearer with NO ChatGPT-domain marker. A bearer marked for the ChatGPT domain —
+    // whether its marker is valid or malformed/conflicting — a combined/malformed value, or
+    // the captured explicit OpenAI pair is never a Cursor token; a foreign JWT carrying only
+    // a generic organizations claim is not ChatGPT-marked and keeps the legacy contract.
+    // chatgpt-account-id has no meaning outside the ChatGPT domain.
+    if (!isCanonicalOpenAiForwardProvider(route.provider)
+      && providerConsumesCallerAuthorization(route.provider)) {
+      const rawAuth = authInputHeaders.get("authorization")?.trim();
+      const singleBearer = /^Bearer[\t ]+([^\s,]+)$/i.exec(rawAuth ?? "")?.[1];
+      const domainClaim = singleBearer ? inspectChatGptDomainClaim(singleBearer) : { kind: "absent" as const };
+      const dropBearer = options.nativeCallerAuth != null || domainClaim.kind !== "absent"
+        || (rawAuth !== undefined && singleBearer === undefined);
+      if (dropBearer || authInputHeaders.has("chatgpt-account-id")) {
+        const scoped = new Headers(authInputHeaders);
+        if (dropBearer) scoped.delete("authorization");
+        scoped.delete("chatgpt-account-id");
+        authInputHeaders = scoped;
+      }
+    }
+    // The caller's own Direct credential may cross an internal route change only to the
+    // canonical OpenAI transport, under a predicate deliberately STRICTER than plain
+    // unchanged-route Direct forwarding: a clean non-proxy bearer whose ChatGPT-domain
+    // marker is valid, with any explicit account header matching that marker. Unchanged
+    // routes keep their legacy rules; sidecar enrichment grants no primary authority.
+    if (options.callerDirectAuth && isCanonicalOpenAiForwardProvider(route.provider)) {
+      const directHeaders = new Headers({
+        authorization: options.callerDirectAuth.authorization,
+        ...(options.callerDirectAuth.chatgptAccountId
+          ? { "chatgpt-account-id": options.callerDirectAuth.chatgptAccountId } : {}),
+      });
+      if (captureCallerDirectAuth(directHeaders, config)) {
+        authInputHeaders = new Headers(authInputHeaders);
+        authInputHeaders.set("authorization", options.callerDirectAuth.authorization);
+        if (options.callerDirectAuth.chatgptAccountId) {
+          authInputHeaders.set("chatgpt-account-id", options.callerDirectAuth.chatgptAccountId);
+        } else {
+          authInputHeaders.delete("chatgpt-account-id");
+        }
+      }
+    }
     // #1686: a caller that proved admission with a BEARER presented one of our own secrets.
     // Refusing it here is what made the codex-cli `env_key` contract unusable against Direct.
     // Admitting it is only safe because the stored main credential is substituted below, so
@@ -2046,15 +2140,16 @@ async function resolveResponsesCodexAuth(
     // no-ChatGPT-login install keeps working.
     const substituteMainCredential = options.admission?.source === "bearer"
       && (route.codexAccountMode !== undefined || isCanonicalOpenAiForwardProvider(route.provider));
+    const stripAuthorization = options.admission?.source === "bearer" && !substituteMainCredential;
     const requestScopedMainCredential = route.codexAccountMode !== undefined
       && !substituteMainCredential
-      && hasForwardableCodexBearer(req.headers, config);
+      && hasForwardableCodexBearer(authInputHeaders, config);
     if (route.codexAccountMode === "direct" && !substituteMainCredential) {
-      validateForwardAdmissionCredential(req.headers, config);
+      validateForwardAdmissionCredential(authInputHeaders, config);
     }
     let authCtx: CodexAuthContext;
     if (route.codexAccountMode) {
-      authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode, {
+      authCtx = await resolveCodexAuthContext(authInputHeaders, config, route.codexAccountMode, {
         admission: options.admission,
         codexAuthPolicy: options.codexAuthPolicy,
         accountId: route.codexAccountId,
@@ -2090,7 +2185,7 @@ async function resolveResponsesCodexAuth(
     // (custom-named canonical-forward providers must retain the same protection).
     const mainPolicyConfig = isCanonicalOpenAiForwardProvider(route.provider)
       ? options.codexAuthPolicy ?? config : undefined;
-    const headers = await materializeCodexUpstreamAuthAsync(req.headers, authCtx, {
+    const headers = await materializeCodexUpstreamAuthAsync(authInputHeaders, authCtx, {
       admission: options.admission,
       config: mainPolicyConfig,
       modelId: route.modelId,
@@ -2109,10 +2204,27 @@ async function resolveResponsesCodexAuth(
         response: formatErrorResponse(401, "authentication_error", "Selected Codex account needs reauthentication"),
       };
     }
+    if (stripAuthorization) {
+      headers.delete("authorization");
+      headers.delete("chatgpt-account-id");
+    }
+    if (providerConsumesCallerAuthorization(route.provider) && options.admission?.source !== undefined
+      && options.admission.source !== "loopback") {
+      validateForwardAdmissionCredential(headers, config);
+    } else {
+      // Even adapters that ignore caller auth must not retain a proxy secret for
+      // a later internal hop or a future transport change.
+      const bearer = headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
+      if (bearer && isProxyAdmissionSecret(bearer, config)) {
+        headers.delete("authorization");
+        headers.delete("chatgpt-account-id");
+      }
+    }
     return {
       ok: true,
       authCtx,
       headers,
+      callerAuthHeaders: new Headers(authInputHeaders),
       substituteMainCredential,
     };
   } catch (err) {
@@ -2679,6 +2791,10 @@ export async function handleComboResponses(
   logCtx.routeDecision = comboRouteDecisionTrace(config, comboId, pick, requestedModel);
 
   let lastFailure: Response | null = null;
+  // The exhausted-combo mapping below runs outside the loop, where `failure.upstreamCode`
+  // is gone, so carry the loop's own classification decision instead of re-deriving a
+  // weaker one from the status alone (#4149).
+  let lastFailureClassifiesOverflow = false;
   while (pick) {
     if (options.abortSignal?.aborted) return clientCancelledResponse();
     const childLog: RequestLogContext = {
@@ -2886,6 +3002,12 @@ export async function handleComboResponses(
     const failureDecision = comboFailureDecision(failure.response.status, failure.classificationText, {
       code: failure.upstreamCode,
     });
+    const wantsStream = (rawBody as { stream?: unknown } | null)?.stream === true;
+    // Local byte admission has its own diagnostic; do not relabel it as an upstream refusal.
+    const classifyOverflow = failure.response.status === 413
+      && (wantsStream || (failure.upstreamCode !== "outbound_body_too_large"
+        && failure.upstreamCode !== "translation_buffer_limit"));
+    lastFailureClassifiesOverflow = classifyOverflow;
     if (storedPool401ReplayDispatched) {
       if (failureDecision === "hop" && unreadableEncryptedAgentTask && !comboPayloadReadable) {
         const recoveredTarget = await pickWithWait({
@@ -2910,15 +3032,19 @@ export async function handleComboResponses(
       // Keep the spent Pool budget sticky even after a recovered routed child:
       // no later failure may reopen ordinary combo/native account hopping.
       adoptFailedChildLog(childLog);
+      if (classifyOverflow && failureDecision === "stop") {
+        return wantsStream
+          ? streamingContextOverflowResponse(requestedModel, options.translatorBudget)
+          : jsonContextOverflowResponse();
+      }
       return lastFailure;
     }
     if (failureDecision === "stop") {
       adoptFailedChildLog(childLog);
-      if (
-        failure.response.status === 413
-        && (rawBody as { stream?: unknown } | null)?.stream === true
-      ) {
-        return streamingContextOverflowResponse(requestedModel, options.translatorBudget);
+      if (classifyOverflow) {
+        return wantsStream
+          ? streamingContextOverflowResponse(requestedModel, options.translatorBudget)
+          : jsonContextOverflowResponse();
       }
       return lastFailure;
     }
@@ -2968,9 +3094,11 @@ export async function handleComboResponses(
   }
   if (
     lastFailure?.status === 413
-    && (rawBody as { stream?: unknown } | null)?.stream === true
+    && lastFailureClassifiesOverflow
   ) {
-    return streamingContextOverflowResponse(requestedModel, options.translatorBudget);
+    return (rawBody as { stream?: unknown } | null)?.stream === true
+      ? streamingContextOverflowResponse(requestedModel, options.translatorBudget)
+      : jsonContextOverflowResponse();
   }
   return lastFailure!;
 }
@@ -3084,6 +3212,12 @@ export async function handleResponses(
   try {
     const response = await handleResponsesInner(req, config, logCtx, {
       ...options,
+      openAiSidecarAuth: options.openAiSidecarAuth === undefined
+        ? captureExplicitOpenAiCallerAuth(req.headers, config) : options.openAiSidecarAuth,
+      nativeCallerAuth: options.nativeCallerAuth === undefined
+        ? captureExplicitOpenAiCallerAuth(req.headers, config) : options.nativeCallerAuth,
+      callerDirectAuth: options.callerDirectAuth === undefined
+        ? captureCallerDirectAuth(req.headers, config) : options.callerDirectAuth,
       // Capture before combo replay rebuilds the Request headers; children carry options.
       visionDescribeTerminal: options.visionDescribeTerminal === true
         || req.headers.get("x-opencodex-vision-describe") === "1",
@@ -3116,7 +3250,7 @@ async function handleResponsesInner(
   const agentTaskRecovery = agentTaskRecoveryConfig(config);
   let body: unknown;
   try {
-    body = await readJsonRequestBody(req, translatorBudget);
+    body = await readJsonRequestBody(req, translatorBudget, resolveInboundBodyLimitBytes(config.maxInboundBodyBytes));
   } catch (err) {
     if (options.abortSignal?.aborted || req.signal.aborted) {
       return clientCancelledResponse();
@@ -3166,6 +3300,30 @@ async function handleResponsesInner(
       const recalledComboId = recallComboForLane(config, sessionLaneIdFromRequest(req.headers), rawModel);
       if (recalledComboId) {
         (body as Record<string, unknown>).model = `combo/${recalledComboId}`;
+      }
+    }
+  }
+  // A shadow-call replacement that names a COMBO is routing policy, not the identity of any
+  // one pick. The late intercept site below resolves it through routeModel/tryPickComboModel,
+  // which collapses the table to a single target while still tagging `routeKind: "combo"`, so
+  // the combo gate on the next line never fires, handleComboResponses never runs, and 429/5xx
+  // hops — which only exist inside that loop — are unreachable (#4129). Rewrite the selector
+  // here instead, before comboIdFromRawBody reads `model`, and identify the combo by CONFIG
+  // LOOKUP so the check can never observe a one-candidate collapse.
+  if (!options.comboAttempt && body && typeof body === "object" && !Array.isArray(body)) {
+    const shadowIntercept = config.shadowCallIntercept;
+    const rawShadowModel = (body as { model?: unknown }).model;
+    if (shadowIntercept?.enabled && shadowIntercept.model && typeof rawShadowModel === "string"
+      && isShadowSourceModel(rawShadowModel, shadowIntercept.sourceModels)) {
+      const shadowComboId = resolveComboId(config, shadowIntercept.model);
+      if (shadowComboId && Object.hasOwn(config.combos ?? {}, shadowComboId)) {
+        (body as Record<string, unknown>).model = shadowIntercept.model;
+        // Same rule as the late intercept site: record the operator-configured prefix that
+        // matched, never the caller's raw model string. Matching is by prefix, so the raw
+        // value is caller-controlled and reaches usage.jsonl and /api/logs.
+        logCtx.shadowCallRewrittenFrom = sanitizeLogMetadataString(
+          shadowSourceModelPrefix(rawShadowModel, shadowIntercept.sourceModels),
+        );
       }
     }
   }
@@ -3332,6 +3490,7 @@ async function handleResponsesInner(
   logCtx.configuredSpeedLabel = requestLogSpeedLabel(logCtx.configuredServiceTier);
 
   let route: RouteResult;
+  let credentialDomainWasRewritten = false;
   try {
     // A `compaction_trigger` turn may name a bare native model the operator has
     // no canonical OpenAI route for (#2901). Only the initial compaction route
@@ -3353,6 +3512,7 @@ async function handleResponsesInner(
       } catch { /* Native Codex helper calls remain OpenAI-owned without an enabled OpenAI route. */ }
       const targetRoute = resolveRoute(_sci.model);
       if (shouldInterceptShadowCall(parsed.modelId, _sci.sourceModels, sourceIdentity, targetRoute)) {
+        credentialDomainWasRewritten = true;
         const _sciOriginal = parsed.modelId;
         parsed.modelId = _sci.model;
         if (parsed._rawBody && typeof parsed._rawBody === "object") {
@@ -3484,6 +3644,7 @@ async function handleResponsesInner(
     if (fallback?.to && !slugsEquivalent(fallback.to, route.modelId)) {
       try {
         route = routeModel(config, fallback.to, evidenceFromBody(parsed._rawBody));
+        credentialDomainWasRewritten = true;
         logCtx.routeDecision = route.routeDecision;
       } catch (err) {
         if (err instanceof NoAvailableComboTargetsError) {
@@ -3503,10 +3664,19 @@ async function handleResponsesInner(
   let recoveryFailureReason: AgentTaskRecoveryFailureReason | undefined;
   // Native fallback and explicitly trusted direct Responses routes can consume ciphertext,
   // so recover only after final route selection.
+  //
+  // Deliberately NOT gated on `threadSpawn` (#4089). Switching a live thread from a native
+  // ChatGPT model to a routed provider replays a backend-minted encrypted agent message on every
+  // later turn, and a model switch is not a spawn, so the spawn requirement failed the thread
+  // closed permanently without ever attempting recovery. The trust boundary is
+  // `recoveryAdmission()` in ./agent-task-recovery -- Codex originator, live native ChatGPT
+  // bearer, matching chatgpt-account-id, no inbound API key, no proxy-admission secret -- which
+  // admits only the owner of the session that would be spent. `threadSpawn` narrowed which of
+  // that owner's own requests could use their own session; it kept nobody else out. The combo
+  // gate above keeps its spawn requirement: that path has its own native-target filtering and
+  // per-attempt failover, and the reported defect is on this path.
   if (
     inboundWire === "responses"
-    &&
-    threadSpawn
     && agentTaskRecovery
     && !isCanonicalOpenAiForwardProvider(route.provider)
     && !options.comboAttempt
@@ -3620,6 +3790,7 @@ async function handleResponsesInner(
           if (fallback?.to && !slugsEquivalent(fallback.to, route.modelId)) {
             try {
               route = routeModel(config, fallback.to, evidenceFromBody(parsed._rawBody));
+              credentialDomainWasRewritten = true;
               logCtx.routeDecision = route.routeDecision;
             } catch (err) {
               if (err instanceof NoAvailableComboTargetsError) {
@@ -3742,11 +3913,13 @@ async function handleResponsesInner(
   }
 
   let substituteMainCredential = false;
+  let callerAuthHeaders: Headers;
   {
-    const finalAuth = await resolveResponsesCodexAuth(req, config, route, options);
+    const finalAuth = await resolveResponsesCodexAuth(req, config, route, options, credentialDomainWasRewritten);
     if (!finalAuth.ok) return finalAuth.response;
     authCtx = finalAuth.authCtx;
     selectedForwardHeaders = finalAuth.headers;
+    callerAuthHeaders = finalAuth.callerAuthHeaders;
     substituteMainCredential = finalAuth.substituteMainCredential;
   }
 
@@ -4036,7 +4209,8 @@ async function handleResponsesInner(
           const ownsBearer = snapshot !== undefined
             && sentHeaders?.get("authorization") === `Bearer ${snapshot.accessToken}`
             && !sentHeaders?.has("x-api-key");
-          const response = await fetchImpl(destination, dispatchInit);
+          // Reselection can choose a provider override instead of the supplied executor.
+          const response = await fetchImpl(destination, { ...dispatchInit, redirect: "manual" });
           // Observe each physical response before retries replace it. The binding belongs to
           // this dispatch, so a manual switch cannot file A's headers against B. Header
           // overrides and credential replacement make ownership unprovable: skip those writes.
@@ -4223,9 +4397,9 @@ async function handleResponsesInner(
   );
   let adapterProvider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire);
   const stripClaudeMainAuth = options.stripClaudeMainAuthForNoncanonicalForward === true
-    && adapterProvider.adapter === "openai-responses"
-    && adapterProvider.authMode === "forward"
-    && !isCanonicalOpenAiForwardProvider(adapterProvider);
+    && !isCanonicalOpenAiForwardProvider(adapterProvider)
+    && ((adapterProvider.adapter === "openai-responses" && adapterProvider.authMode === "forward")
+      || providerConsumesCallerAuthorization(adapterProvider));
   if (stripClaudeMainAuth) {
     releaseCodexAuthContextProbeLease(authCtx);
     authCtx = { kind: "main", accountId: null };
@@ -4313,9 +4487,18 @@ async function handleResponsesInner(
   const needsOpenAiSearch = shouldResolveOpenAiWebSearchSidecar(config, parsed, isPassthrough);
   if (needsOpenAiVision || needsOpenAiSearch) {
     try {
+      // Preserve explicit OpenAI helper auth across route changes without returning it to
+      // primary-provider headers or alternate-main retry. The resolver revalidates scope.
+      const sidecarHeaders = new Headers(req.headers);
+      sidecarHeaders.delete("authorization");
+      sidecarHeaders.delete("chatgpt-account-id");
+      if (options.openAiSidecarAuth) {
+        sidecarHeaders.set("authorization", options.openAiSidecarAuth.authorization);
+        sidecarHeaders.set("chatgpt-account-id", options.openAiSidecarAuth.chatgptAccountId);
+      }
       openAiSidecar = await resolveFirstUsableOpenAiSidecar(
         listOpenAiForwardSidecarCandidates(config),
-        req.headers,
+        sidecarHeaders,
         config,
         {
           admission: options.admission,
@@ -4928,7 +5111,7 @@ async function handleResponsesInner(
               dispatchOverride: oauthDispatch(request),
               providerName: route.providerName,
               modelId: route.modelId,
-              onCodexWsQuota: codexWsQuotaObserver(authCtx, route.provider),
+              onCodexWsQuota: codexWsQuotaObserver(authCtx, route.provider, route.modelId),
               beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
                 ? createCodexReserveDispatchGuard(authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
             }),
@@ -5006,7 +5189,7 @@ async function handleResponsesInner(
               dispatchOverride: oauthDispatch(request),
                 providerName: route.providerName,
                 modelId: route.modelId,
-                onCodexWsQuota: codexWsQuotaObserver(authCtx, route.provider),
+                onCodexWsQuota: codexWsQuotaObserver(authCtx, route.provider, route.modelId),
                 beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
                   ? createCodexReserveDispatchGuard(authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
               }),
@@ -5112,7 +5295,7 @@ async function handleResponsesInner(
               dispatchOverride: oauthDispatch(request),
               providerName: route.providerName,
               modelId: route.modelId,
-              onCodexWsQuota: codexWsQuotaObserver(authCtx, route.provider),
+              onCodexWsQuota: codexWsQuotaObserver(authCtx, route.provider, route.modelId),
               beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
                 ? createCodexReserveDispatchGuard(authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
             }),
@@ -5232,7 +5415,7 @@ async function handleResponsesInner(
               dispatchOverride: oauthDispatch(request),
                 providerName: route.providerName,
                 modelId: route.modelId,
-                onCodexWsQuota: codexWsQuotaObserver(authCtx, route.provider),
+                onCodexWsQuota: codexWsQuotaObserver(authCtx, route.provider, route.modelId),
                 beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
                   ? createCodexReserveDispatchGuard(authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
               }),
@@ -5332,7 +5515,7 @@ async function handleResponsesInner(
               dispatchOverride: oauthDispatch(request),
                 providerName: route.providerName,
                 modelId: route.modelId,
-                onCodexWsQuota: codexWsQuotaObserver(authCtx, route.provider),
+                onCodexWsQuota: codexWsQuotaObserver(authCtx, route.provider, route.modelId),
                 beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
                   ? createCodexReserveDispatchGuard(authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
               }),
@@ -5400,7 +5583,7 @@ async function handleResponsesInner(
         // justify because this flag already produced the identical result.
         const storedReplaySpent = codex401ReplayKind === "stored";
         const retry = await retryCodexPoolOnAlternateAccount({
-          req,
+          callerAuthHeaders,
           config,
           route,
           parsed,
@@ -5536,7 +5719,8 @@ async function handleResponsesInner(
       const { applyAccountQuotaFromUpstreamHeaders } = await import("../../codex/auth-api");
       if (!isCodexWsQuotaObservedResponse(upstreamResponse)) {
         applyAccountQuotaFromUpstreamHeaders(authCtx.accountId, upstreamResponse.headers,
-          authCtx.writerGeneration, authCtx.kind === "main-pool" ? authCtx.mainQuotaWriter : undefined);
+          authCtx.writerGeneration, authCtx.kind === "main-pool" ? authCtx.mainQuotaWriter : undefined,
+          { modelId: route.modelId });
       }
       if (terminalBodyWillRecord) {
         options.setTerminalOutcomeRecorder?.((status, httpStatusOverride) => {
@@ -5577,7 +5761,8 @@ async function handleResponsesInner(
 
     // Non-2xx passthrough failures must never reach Codex as an empty body —
     // Codex renders that as the opaque "Unknown error" (#452). Combo attempts
-    // keep their typed failure envelope. Non-empty bodies are relayed verbatim
+    // keep their typed failure envelope. Except for the classified 413 below,
+    // non-empty bodies are relayed verbatim
     // (headers included) so pool-retry Activation B/D and client diagnostics stay intact.
     // Manual-redirect policy (#914): a 3xx is relayed as-is (Location preserved
     // through sanitizePassthroughHeaders) so a redirect to a dead host can never
@@ -5605,11 +5790,10 @@ async function handleResponsesInner(
       // The bounded reader owns the original body, deadline, abort settlement, and lock.
       // Unsafe partial data falls back to #452's non-empty status-only JSON.
       const errorText = await readDisplaySafeErrorText(upstreamResponse, upstream.signal, "");
-      if (upstreamResponse.status === 413 && clientRequestedStream) {
-        return streamingContextOverflowResponse(
-          parsed._responseModelId ?? parsed.modelId,
-          translatorBudget,
-        );
+      if (upstreamResponse.status === 413) {
+        return clientRequestedStream
+          ? streamingContextOverflowResponse(parsed._responseModelId ?? parsed.modelId, translatorBudget)
+          : jsonContextOverflowResponse();
       }
       return formatPassthroughUpstreamError(upstreamResponse.status, errorText, {
         statusText: upstreamResponse.statusText,
@@ -5638,15 +5822,60 @@ async function handleResponsesInner(
         route.provider,
         route.modelId,
       );
+      // #3761: opt-in hosted-web-search bridge. Codex always declares the hosted web_search tool,
+      // and this branch relays that declaration on the assumption the destination executes it.
+      // A KEY-auth gateway that does not (Ollama Cloud GLM) answers with a function_call named
+      // web_search that nothing runs, and the undeclared-tool guard below ends the turn. When the
+      // provider opts in, the bridge intercepts that one call, runs the search, continues the
+      // conversation upstream, and hands back ordinary Responses SSE — so every rewrite below,
+      // including the guard itself, still inspects the client-facing stream. Default OFF: without
+      // the opt-in this is one planner call and the relay is byte-identical to before.
+      const webSearchBridgePlan = planPassthroughWebSearchBridge(parsed, route.provider, {
+        isPassthrough: true,
+        stream: parsed.stream === true,
+      });
+      // The bridge wraps the RAW upstream body, so terminal repair below still owns the single
+      // client-facing terminal — the bridge drops the terminal of every intercepted leg.
+      const upstreamSseBody = webSearchBridgePlan
+        ? createPassthroughWebSearchBridgeStream({
+          plan: webSearchBridgePlan,
+          firstLeg: upstreamResponse.body,
+          requestBody: request.body,
+          // Continuation legs replay the same built request with the executed search appended.
+          // The first leg already passed the recovery ladder, the outbound size ceiling, and the
+          // host circuit; a KEY-auth destination has no OAuth refresh to replay on a later leg.
+          send: (continuationBody: string) => fetchWithHeaderTimeout(
+            request.url,
+            { method: request.method, headers: request.headers, body: continuationBody },
+            upstream.signal,
+            connectMs,
+            true,
+            providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              dispatchOverride: oauthDispatch(request),
+              providerName: route.providerName,
+              modelId: route.modelId,
+            }),
+            false,
+          ),
+          execute: createOllamaBridgeExecutor(webSearchBridgePlan, route.provider.apiKey ?? ""),
+          // Appending a search result can push the continuation past the ceiling the first leg
+          // was admitted under, so the same limit is re-applied before every later send.
+          checkOutboundBody: (continuationBody: string) => {
+            const result = checkOutboundBodySize(continuationBody, config.maxUpstreamBodyBytes);
+            return result.admitted ? undefined : describeOutboundBodyRefusal(result);
+          },
+          signal: upstream.signal,
+        })
+        : upstreamResponse.body;
       const passthroughSseBody = terminalRepairPolicy
         ? relayResponsesSseWithTerminalRepair(
-          upstreamResponse.body,
+          upstreamSseBody,
           upstream,
           terminalRepairPolicy,
           translatorBudget,
           options.responsesTerminalRepairScheduler,
         )
-        : upstreamResponse.body;
+        : upstreamSseBody;
       const repairConfig = route.provider.responsesItemIdRepair;
       // Grok Build renders deltas live but reconstructs its durable assistant
       // turn from the completed response snapshot. Native Responses streams
@@ -7341,11 +7570,10 @@ async function handleResponsesInner(
       } finally {
         cleanupUpstreamAbort();
       }
-      if (upstreamResponse.status === 413 && clientRequestedStream && !options.comboAttempt) {
-        return streamingContextOverflowResponse(
-          parsed._responseModelId ?? parsed.modelId,
-          translatorBudget,
-        );
+      if (upstreamResponse.status === 413) {
+        return clientRequestedStream
+          ? streamingContextOverflowResponse(parsed._responseModelId ?? parsed.modelId, translatorBudget)
+          : jsonContextOverflowResponse();
       }
       if (!isFixedCodexAccount(authCtx)) {
         recordSubagentQuotaFailureForThreadSpawn(
@@ -7365,7 +7593,7 @@ async function handleResponsesInner(
       const message = normalized.cyberPolicy
         ? normalized.message
           ?? (isCyberPolicyCode(normalized.code) ? CYBER_POLICY_FALLBACK_MESSAGE : normalized.safeText)
-        : enrichOpenCodeZenRateLimitMessage(
+        : enrichOpenCodeZenUpstreamMessage(
           `Provider error ${upstreamResponse.status}: ${normalized.safeText}`,
           {
             status: upstreamResponse.status,
@@ -7376,7 +7604,7 @@ async function handleResponsesInner(
             hasApiKey: Boolean(route.provider.apiKey?.trim()),
             upstreamRetryAfter,
             // This recovery path is the HTTP Responses wire; custom runTurn transports
-            // never reach enrichOpenCodeZenRateLimitMessage here.
+            // never reach enrichOpenCodeZenUpstreamMessage here.
             supportsHttpSameKeyRetry: true,
           },
         );

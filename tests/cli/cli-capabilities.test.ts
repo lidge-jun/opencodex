@@ -240,7 +240,6 @@ const UNDECLARED_ROUTES_2026_08_28: readonly string[] = [
   "GET /api/oauth/status",
   "GET /api/provider-context-caps",
   "GET /api/provider-presets",
-  "GET /api/provider-quotas",
   "GET /api/providers",
   "GET /api/providers/keys",
   "GET /api/request-history",

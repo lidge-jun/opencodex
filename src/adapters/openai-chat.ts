@@ -27,7 +27,7 @@ import {
   type ResolvedFastPolicy,
 } from "../providers/fastwire";
 import { openaiChatCompletionsUrl } from "./openai-chat-url";
-import { stripResponsesOnlyEncryptedMarker } from "./responses-tool-schema";
+import { stripResponsesOnlyEncryptedMarker, stripUnicodePropertyPatterns } from "./responses-tool-schema";
 import { agentRouterDefaultHeaders, frameAgentRouterMessages } from "./agentrouter";
 import {
   isXaiSchemaTarget,
@@ -1331,7 +1331,7 @@ function toolsToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderConfig
       : moonshotTarget
         ? normalizeMoonshotToolParameters(t.parameters)
         : ensureRootObjectType(t.parameters);
-    const parameters = stripResponsesOnlyEncryptedMarker(normalized);
+    const parameters = stripUnicodePropertyPatterns(stripResponsesOnlyEncryptedMarker(normalized));
 
     if (parameters === undefined) return [];
     return [{

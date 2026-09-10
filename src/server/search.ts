@@ -33,7 +33,7 @@ import {
   type ExactOpenAiSidecarAccount,
 } from "../providers/openai-sidecar";
 import { routeModel } from "../router";
-import { readJsonRequestBody } from "./request-decompress";
+import { readJsonRequestBody, resolveInboundBodyLimitBytes } from "./request-decompress";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "./auth-cors";
 import type { RequestLogContext } from "./request-log";
 import { codexLogAccountId, decodeRequestErrorResponse } from "./responses";
@@ -64,7 +64,7 @@ export async function handleSearch(
   }
   let body: unknown;
   try {
-    body = await readJsonRequestBody(req);
+    body = await readJsonRequestBody(req, undefined, resolveInboundBodyLimitBytes(config.maxInboundBodyBytes));
   } catch (err) {
     return decodeRequestErrorResponse(err, "search");
   }

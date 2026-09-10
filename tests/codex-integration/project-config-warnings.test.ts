@@ -129,6 +129,49 @@ describe("parseTomlDocument", () => {
       const valid = parseTomlDocument('model_provider = "provider\\\\name"');
       expect(valid.root.model_provider).toBe("provider\\name");
     }, 2_000);
+
+    for (const scenario of [
+      { name: "root override", sameLine: false, tail: ['model_provider = "custom"'],
+        code: "model_provider_root", via: "root", profileName: null },
+      { name: "same-line string", sameLine: true, tail: ['model_provider = "custom"'],
+        code: "model_provider_root", via: "root", profileName: null },
+      { name: "selected profile", sameLine: false,
+        tail: ['profile = "work"', '[profiles.work]', 'model_provider = "custom"'],
+        code: "profile_selector", via: "profile", profileName: "work" },
+      { name: "selected provider table", sameLine: false,
+        tail: ['model_provider = "custom"', '[model_providers.custom]', 'name = "Custom"'],
+        code: "model_providers_table", via: "root", profileName: null },
+    ] as const) {
+      test(`overlapping multiline terminator preserves ${scenario.name} diagnostics`, () => {
+        const text = ['developer_instructions = """' + (scenario.sameLine ? "" : "\n")
+          + "foo" + "\\" + '"'.repeat(4), ...scenario.tail].join("\n");
+        // Independent TOML parsing proves the escaped quote is followed by a real terminator.
+        expect(Bun.TOML.parse(text).developer_instructions).toBe('foo"');
+        expect(resolveEffectiveProjectModelProvider(text)).toEqual({
+          provider: "custom", profileName: scenario.profileName, via: scenario.via,
+        });
+        const warnings = analyzeProjectCodexConfig(text, "fixture/.codex/config.toml");
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toMatchObject({ code: scenario.code, detail: "custom" });
+        expect(warnings[0]!.profileName).toBe(scenario.profileName ?? undefined);
+        if (scenario.code === "model_providers_table") {
+          expect(parseTomlDocument(text).sections.get("model_providers.custom")?.name).toBe("Custom");
+        }
+      });
+    }
+
+    test("escaped three quotes keep fake routing inside the multiline body", () => {
+      const text = ['developer_instructions = """', "foo" + "\\" + '"'.repeat(3),
+        'model_provider = "custom"', '[model_providers.custom]', 'name = "Custom"',
+        '"""', 'model_provider = "openai"'].join("\n");
+      const parsedByBun = Bun.TOML.parse(text);
+      expect(parsedByBun.model_provider).toBe("openai");
+      expect(parsedByBun.developer_instructions).toContain('[model_providers.custom]');
+      const parsed = parseTomlDocument(text);
+      expect(parsed.root.model_provider).toBe("openai");
+      expect(parsed.sections.has("model_providers.custom")).toBe(false);
+      expect(analyzeProjectCodexConfig(text, "fixture/.codex/config.toml")).toEqual([]);
+    });
   });
 
   describe("parseTrustedProjectPathsFromCodexConfig", () => {

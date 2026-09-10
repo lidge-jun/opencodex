@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleResponses, handleResponsesCompact } from "../../src/server/responses";
 import { OPAQUE_COMPACTION_NOTE, SUMMARY_PREFIX } from "../../src/responses/compaction";
+import { externalTaskInputContent } from "../../src/responses/task-input";
 import { looksLikeBackendCiphertext } from "../../src/server/responses/encrypted-payload";
 import * as adapterResolveModule from "../../src/server/adapter-resolve";
 import * as visionModule from "../../src/vision";
@@ -2391,9 +2392,27 @@ describe("external task-input envelopes (#3735)", () => {
     expect(captured[0]!.messages).toEqual([{ role: "user", content: "plaintext task" }]);
   });
 
+  test("an empty or null call_id is task input, not a rejection (#3807 supersedes)", async () => {
+    // These two shapes were in the invalid list above until #3807 showed they are the same
+    // seed as the absent-field form: neither value can pair with a `function_call`, and a
+    // Codex desktop sub-agent seed emitted with an explicit `call_id: null` was answered
+    // 400 for a turn that is really external task input. A wrong-TYPED key stays rejected.
+    const captured: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      captured.push(JSON.parse(String(init?.body)));
+      return jsonResponse({ id: "chat_seed", choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
+    }) as typeof fetch;
+    for (const callId of [null, ""]) {
+      captured.length = 0;
+      const res = await handleResponses(compactionRequest(body({ ...external("seeded task"), call_id: callId })),
+        keyProviderConfig({ adapter: "openai-chat" }), { model: "", provider: "" });
+      expect(res.status).toBe(200);
+      await res.text();
+      expect(captured[0]!.messages).toEqual([{ role: "user", content: "seeded task" }]);
+    }
+  });
+
   const invalid: Array<[string, Record<string, unknown>]> = [
-    ["empty call id", { ...external(), call_id: "" }],
-    ["null call id", { ...external(), call_id: null }],
     ["numeric call id", { ...external(), call_id: 42 }],
     ["incomplete metadata", { ...external(), namespace: "" }],
     ["custom output", { ...external(), type: "custom_tool_call_output" }],
@@ -2666,5 +2685,51 @@ describe("unpaired tool result boundary (#3259)", () => {
     expect(bodies.length).toBe(1);
     expect(bodies[0]).toContain("[tool output for unknown call]");
     expect(bodies[0]).not.toContain("undefined");
+  });
+});
+
+describe("unusable-call_id task-input seed (#3807)", () => {
+  const seed = (extra: Record<string, unknown>) => ({
+    type: "function_call_output", id: "fc_seed", name: "create_thread", namespace: "codex",
+    output: "<codex_delegation>continue</codex_delegation>", ...extra,
+  });
+
+  test("a seed carrying call_id: null is admitted as task input", () => {
+    // `null` is not a pairing key, so the item is the same external seed the absent-field
+    // form already carries. Rejecting it produced the reported 400 on clients that emit
+    // the field explicitly.
+    expect(externalTaskInputContent(seed({ call_id: null }))).toBe("<codex_delegation>continue</codex_delegation>");
+  });
+
+  test("a seed carrying an empty-string call_id is admitted identically", () => {
+    expect(externalTaskInputContent(seed({ call_id: "" }))).toBe("<codex_delegation>continue</codex_delegation>");
+    expect(externalTaskInputContent(seed({ call_id: "   " }))).toBe("<codex_delegation>continue</codex_delegation>");
+  });
+
+  test("the absent-field form still works (no regression on a73bb160f)", () => {
+    expect(externalTaskInputContent(seed({}))).toBe("<codex_delegation>continue</codex_delegation>");
+  });
+
+  test("a REAL call_id is still a paired tool result, never task input", () => {
+    // The pairing key is what separates a tool result from a seed. Admitting a paired
+    // result as user text would silently drop a real tool round-trip.
+    expect(externalTaskInputContent(seed({ call_id: "call_1" }))).toBeUndefined();
+  });
+
+  test("a non-string, non-null call_id stays rejected", () => {
+    // A numeric id is malformed input, not the absent-pairing seed shape; it keeps the
+    // #3259 rejection so a wrong-typed key cannot reach a translating adapter.
+    expect(externalTaskInputContent(seed({ call_id: 42 }))).toBeUndefined();
+    expect(externalTaskInputContent(seed({ call_id: {} }))).toBeUndefined();
+  });
+
+  test("every other #3735 validation still holds with an unusable call_id", () => {
+    // The relaxation is ONLY about the pairing key. Envelope completeness, blank output,
+    // and opaque ciphertext keep their existing rejections.
+    expect(externalTaskInputContent({ type: "function_call_output", call_id: null, output: "x" })).toBeUndefined();
+    expect(externalTaskInputContent(seed({ call_id: null, namespace: "" }))).toBeUndefined();
+    expect(externalTaskInputContent(seed({ call_id: null, output: "   " }))).toBeUndefined();
+    expect(externalTaskInputContent(seed({ call_id: null, output: [] }))).toBeUndefined();
+    expect(externalTaskInputContent(seed({ call_id: null, output: [{ type: "input_image", image_url: 42 }] }))).toBeUndefined();
   });
 });

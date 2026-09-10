@@ -162,6 +162,7 @@ for (const kind of ["oauth", "key", "codex"] as const) {
   test(`the real Providers page refresh selects ${kind} and awaits account plus report`, async () => {
     const name = kind === "codex" ? "openai" : `${kind}-fixture`;
     const seen: string[] = [];
+    const methods = new Map<string, string>();
     let finishReport!: (response: Response) => void;
     let finishAccounts!: (response: Response) => void;
     let reportStarted!: () => void;
@@ -171,9 +172,10 @@ for (const kind of ["oauth", "key", "codex"] as const) {
       : kind === "oauth"
         ? { activeAccountId: "account", accounts: [{ id: "account", active: true, quotaMode: "probe" }] }
         : { keys: [{ id: "key", masked: "masked", active: true, quotaMode: "probe" }] };
-    Object.defineProperty(globalThis, "fetch", { configurable: true, value: async (input: RequestInfo | URL) => {
+    Object.defineProperty(globalThis, "fetch", { configurable: true, value: async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input), "http://localhost");
       seen.push(url.pathname + url.search);
+      methods.set(url.pathname + url.search, init?.method ?? "GET");
       if (url.pathname === "/api/config") return Response.json({ port: 10100, defaultProvider: name, providers: {
         [name]: kind === "codex"
           ? { adapter: "openai-responses", authMode: "forward", codexAccountMode: "pool", baseUrl: "https://chatgpt.com/backend-api/codex" }
@@ -188,8 +190,8 @@ for (const kind of ["oauth", "key", "codex"] as const) {
         return result;
       }
       if (url.pathname === "/api/oauth/accounts" || url.pathname === "/api/providers/keys"
-        || (kind === "codex" && url.pathname === "/api/codex-auth/accounts")) {
-        return url.searchParams.has("refresh")
+        || (kind === "codex" && (url.pathname === "/api/codex-auth/accounts" || url.pathname === "/api/codex-auth/accounts/refresh"))) {
+        return url.searchParams.has("refresh") || url.pathname.endsWith("/accounts/refresh")
           ? new Promise<Response>(resolve => { finishAccounts = resolve; }) : Response.json(accountBody);
       }
       if (url.pathname === "/api/codex-auth/accounts") return Response.json({ accounts: [] });
@@ -209,10 +211,11 @@ for (const kind of ["oauth", "key", "codex"] as const) {
     seen.length = 0;
     await act(async () => { refresh!.click(); });
     await act(async () => { await reportReady; });
-    const expected = kind === "codex" ? "/api/codex-auth/accounts?refresh=1"
+    const expected = kind === "codex" ? "/api/codex-auth/accounts/refresh"
       : kind === "oauth" ? `/api/oauth/accounts?provider=${name}&quota=1&refresh=1`
         : `/api/providers/keys?name=${name}&quota=1&refresh=1`;
     expect(seen).toContain(expected);
+    expect(methods.get(expected)).toBe(kind === "codex" ? "POST" : "GET");
     if (kind !== "oauth") expect(seen.some(path => path.startsWith("/api/oauth/accounts"))).toBe(false);
     if (kind === "oauth") expect(seen.some(path => path.startsWith("/api/providers/keys"))).toBe(false);
     expect(container.textContent).toContain("Refreshing...");

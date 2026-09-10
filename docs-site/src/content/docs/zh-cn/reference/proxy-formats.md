@@ -19,6 +19,10 @@ Responses 表示是这座桥的中心。原生兼容的路由可以跳过部分�
 [Configuration](/reference/configuration/) 中配置监听器和准入密钥；当一个公开模型 ID
 需要在多个目标之间选择时，请使用 [Combos](/guides/combos/)。
 
+## 上游重定向
+
+携带凭据的模型、图像、视频和搜索请求不会自动跟随 HTTP 重定向，包括同源重定向。请配置最终上游 API URL，而不是会重定向的别名。服务器不会向重定向目标重新发送凭据或请求正文。各响应处理路径保留原有的错误处理或转发行为；原生 Responses 和 compact 路径仍可向客户端返回原始 3xx 和 `Location`。客户端的重定向行为与此服务器传输策略是不同的边界。
+
 ## 端点总览
 
 | 客户端表面 | 端点 | 成功的非流式结果 | 成功的流式或套接字结果 |
@@ -247,15 +251,18 @@ Compaction 会为需要缩短长 Responses 会话的客户端返回替换历史�
 
 | 表面 | Dedicated | Bearer | `x-api-key` |
 | --- | --- | --- | --- |
-| `/v1/responses` HTTP 和 WebSocket | 必需 | 被代理准入拒绝 | 被拒绝 |
-| `/v1/responses/compact` | 必需 | 被代理准入拒绝 | 被拒绝 |
-| `/v1/chat/completions` | 必需 | 被代理准入拒绝 | 被拒绝 |
+| `/v1/responses` HTTP 和 WebSocket | 接受 | 接受 | 被拒绝 |
+| `/v1/responses/compact` | 接受 | 接受 | 被拒绝 |
+| `/v1/chat/completions` | 接受 | 接受 | 被拒绝 |
 | `/v1/messages` 和 `/v1/messages/count_tokens` | 接受 | 接受 | 接受 |
 | `/v1/models` | 接受 | 接受 | 接受 |
 | `/v1/live`、`/v1/realtime/calls` 和 sideband join | 接受 | 接受 | 接受 |
 
-Responses 家族和 Chat 请求会把 `Authorization` 留给提供方或 Codex Direct
-透传，因此远程代理密钥必须使用专用头。Messages 和 Realtime 表面需要更广泛的客户端兼容性，因此接受这三种形式。
+Responses 系列和 Chat 请求接受专用标头或 Bearer 字段中的代理密钥。在原生路由上，所选的已保存 Codex 凭据会替换 admission bearer；其他路由会移除该 bearer。代理密钥绝不会用作 upstream 凭据。如果还要提供独立的 provider bearer，请将代理密钥放在专用标头中。
+
+没有密钥且不使用 OAuth 的 Cursor 路由可以使用调用方单独提供的 bearer，但不能使用代理 secret 或自动补充的 ChatGPT main 凭据。Combo/policy 选择以及实际发生的 shadow/thread-spawn 路由改写不会将调用方的原始凭据传递给新目标。规范 OpenAI 路由仅在 JWT 包含 ChatGPT 账户声明，且任何显式账户标头都与该声明匹配时，才可在内部路由变更后恢复调用方的单个非代理密钥 bearer。 向可选的 OpenAI sidecar 转发调用方认证时，需要单个 JWT 以及显式提供且匹配的 `chatgpt-account-id`。即使提供了显式账户标头，opaque bearer 也不会跨路由变更恢复。 除此之外，最终目标必须拥有自己的配置、OAuth 或已保存凭据，否则请求会在本地失败。只有 thread-spawn 标记而没有路由变化时，不会移除凭据。
+
+Claude replay 只会以当前 turn 已取得所有权的内存 snapshot 保留 main 凭据，并且仅在最终目标为规范 ChatGPT 路由时恢复它。
 
 :::caution
 数据平面密钥不是管理凭证。管理 API 使用单独的 admin secret；

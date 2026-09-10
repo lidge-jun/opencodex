@@ -223,6 +223,10 @@ Cline IDE/CLI 中提供，不能通过 API 使用；`minimax/minimax-m2.5` 是�
 **OpenCode Zen**（`opencode-zen`）与免密钥的 **OpenCode Free** 预设共用
 `https://opencode.ai/zen/v1`。该网关上的免费模型常会触发约每分钟 15–20 次请求的短窗口限流（社区观测；OpenCode 未公布 RPM）。Zen 可能返回不带 `Retry-After` / `X-RateLimit-*` 的通用 429。这与免密钥桌面配额（`opencode-free` 上约每 5 小时 200 次 Big Pickle/免费模型请求）是分开的。当这类 429 省略 `Retry-After` 时，opencodex 会在客户端错误中补充说明并附带合成的 `Retry-After`；若上游已提供 `Retry-After`，则仍以它为准。同密钥等待重试仍可通过 [`retryOn429`](/zh-cn/reference/configuration/) 选择开启。
 
+**免密钥的 `opencode-free` 层级目前对第三方客户端关闭。** Zen 会拒绝任何不带 `x-opencode-session` 头的请求，返回错误类型 `MissingSessionID` 和消息 "OpenCode's free tier can only be used in OpenCode"。这道关卡只检查该头是否存在，因此代理完全可以编一个值蒙混过去，但 opencodex 不这么做。伪造会话标识并附上带版本号的 `opencode/<version>` User-Agent，等于声称自己就是 OpenCode 客户端，而 OpenCode 并未公布这一免密钥层级的第三方集成约定；用这种方式换来的 HTTP 200 是绕过了准入检查，而不是获得了许可。因此 opencodex 选择如实报告限制：发往 `opencode-free` 的请求会返回一条解释上游关卡的错误。
+
+通往同一批模型的受支持路径，是使用 [opencode.ai/auth](https://opencode.ai/auth) 获取的 OpenCode Zen API 密钥、走带密钥的 **`opencode-zen`** 预设。若 OpenCode 之后公布了免密钥层级的第三方接入方式，opencodex 可以跟进；在此之前，这个预设的作用是记录该限制。上游条款：[opencode.ai/docs/zen](https://opencode.ai/docs/zen/)。
+
 大多数使用带 bearer 密钥的 `openai-chat` adapter；少数仅暴露 Anthropic 兼容端点的提供商（例如 **Xiaomi MiMo**）使用 `anthropic` adapter（`x-api-key`）。
 火山方舟 Agent Plan 通过 `openai-responses` adapter 使用原生 Responses 端点。
 内置 DeepSeek preset 同样会让 `deepseek-v4-flash` 使用原生 Responses 端点，并保留上游 SSE

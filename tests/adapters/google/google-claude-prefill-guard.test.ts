@@ -78,14 +78,39 @@ describe("google claude prefill guard", () => {
     expect(JSON.stringify(contents.at(-1))).not.toContain("(continue)");
   });
 
-  test("does not append nudge for non-Claude models on Antigravity", async () => {
+  test("appends a user continue nudge when Gemini context ends with model turn", async () => {
     const contents = await envelopeContents(parsed([
       { role: "user", content: "start", timestamp: 0 },
       { role: "assistant", content: [{ type: "text", text: "answer" }], model: "gemini", timestamp: 0 },
     ], "gemini-3.7-flash"));
 
-    // Gemini natively accepts model-tail; no nudge
-    expect(contents.at(-1)!.role).toBe("model");
-    expect(JSON.stringify(contents)).not.toContain("(continue)");
+    // Google Gemini strictly rejects requests ending with a model turn with HTTP 400
+    // "Requests ending with a model turn are not supported." A user continue nudge is required.
+    expect(contents.at(-1)).toEqual({ role: "user", parts: [{ text: "(continue)" }] });
+  });
+
+  test("appends a user continue nudge for Gemini 3.8 Flash on Antigravity", async () => {
+    const contents = await envelopeContents(parsed([
+      { role: "user", content: "start", timestamp: 0 },
+      { role: "assistant", content: [{ type: "text", text: "answer" }], model: "gemini", timestamp: 0 },
+    ], "gemini-3.8-flash"));
+
+    expect(contents.at(-1)).toEqual({ role: "user", parts: [{ text: "(continue)" }] });
+  });
+
+  test("appends a user continue nudge in AI Studio mode", async () => {
+    const aiStudioProvider = {
+      adapter: "google",
+      baseUrl: "https://generativelanguage.googleapis.com",
+      apiKey: "key-123",
+    } as OcxProviderConfig;
+
+    const { body } = await createGoogleAdapter(aiStudioProvider).buildRequest(parsed([
+      { role: "user", content: "hello", timestamp: 0 },
+      { role: "assistant", content: [{ type: "text", text: "assistant reply" }], model: "gemini", timestamp: 0 },
+    ], "gemini-2.5-flash"));
+
+    const payload = JSON.parse(body);
+    expect(payload.contents.at(-1)).toEqual({ role: "user", parts: [{ text: "(continue)" }] });
   });
 });

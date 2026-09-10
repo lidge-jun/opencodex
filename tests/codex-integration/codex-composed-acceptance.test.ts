@@ -484,9 +484,11 @@ describe("WP13 composed toggle acceptance", () => {
       // The CLI's own output is the assertion message: a bare "expected 0, got 1" sent two
       // Windows CI rounds chasing a timeout that was never the cause.
       expect(`exit=${back.exitCode}\nstderr: ${back.stderr}\nstdout: ${back.stdout}`).toContain("exit=0");
-      expect((await fx.request(server.runtime, "/api/native-integrations/codex", {
+      const disabledAgain = await fx.request(server.runtime, "/api/native-integrations/codex", {
         method: "PUT", body: JSON.stringify({ enabled: false }),
-      })).body).toMatchObject({ desiredEnabled: false });
+      });
+      expect(disabledAgain.body).toMatchObject({ desiredEnabled: false });
+      expect(String(disabledAgain.body.message)).toContain("ocx recover-history --ocx-compaction <thread-id> --yes");
     } finally {
       await fx.stop(server);
     }
