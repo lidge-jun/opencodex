@@ -19,6 +19,7 @@ import {
   exceedsLiveSidebandFrameByteLimit,
   exceedsLiveSidebandPendingByteLimit,
   MAX_WS_FRAME_BYTES,
+  openLiveSidebandUpstream,
   startServer,
 } from "../../src/server";
 import { beginShutdownDrain, isDraining, resetLifecycleDrainStateForTests } from "../../src/server/lifecycle";
@@ -1739,3 +1740,166 @@ describe("GET /readyz while draining", () => {
     }
   });
 });
+
+/**
+ * A sideband join must not report 101 unless the upstream handshake actually
+ * succeeded. A 101 followed by a close is read by codex-rs as `TransportLost`,
+ * which it recovers from by rejoining the same call id indefinitely; a failed
+ * upgrade is a connect error instead, and that is the only outcome that ends the
+ * loop. These cases pin the handshake result and its client-visible consequence.
+ */
+class FakeUpstreamSocket {
+  private readonly listeners = new Map<string, Array<(event: { code?: number; data?: unknown }) => void>>();
+  closed = false;
+
+  addEventListener(type: string, listener: (event: { code?: number; data?: unknown }) => void): void {
+    const bucket = this.listeners.get(type) ?? [];
+    bucket.push(listener);
+    this.listeners.set(type, bucket);
+  }
+
+  emit(type: string, event: { code?: number; data?: unknown } = {}): void {
+    for (const listener of this.listeners.get(type) ?? []) listener(event);
+  }
+
+  close(): void {
+    this.closed = true;
+  }
+}
+
+describe("openLiveSidebandUpstream", () => {
+  test("drains the preamble captured before the client socket exists", async () => {
+    const socket = new FakeUpstreamSocket();
+    const pending = openLiveSidebandUpstream("ws://upstream/v1/live/x", {}, () => socket as unknown as WebSocket, 1_000);
+    // The session preamble arrives the moment the upstream opens, before the client.
+    socket.emit("message", { data: "session.created" });
+    socket.emit("message", { data: new Uint8Array([1, 2, 3]) });
+    socket.emit("open", {});
+
+    const result = await pending;
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected an open upstream");
+    expect(result.socket).toBe(socket);
+    const drained = result.drain();
+    expect(drained[0]).toBe("session.created");
+    expect(Buffer.isBuffer(drained[1])).toBe(true);
+    // Drain is one-shot: the relay owns capture from here on.
+    expect(result.drain()).toEqual([]);
+    socket.emit("message", { data: "after-drain" });
+    expect(result.drain()).toEqual([]);
+  });
+
+  test("reports failure when the upstream rejects the handshake", async () => {
+    const socket = new FakeUpstreamSocket();
+    const pending = openLiveSidebandUpstream("ws://upstream/v1/live/x", {}, () => socket as unknown as WebSocket, 1_000);
+    socket.emit("error", {});
+
+    const result = await pending;
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected a failed handshake");
+    expect(result.status).toBe(502);
+  });
+
+  test("reports failure when the upstream closes before opening", async () => {
+    const socket = new FakeUpstreamSocket();
+    const pending = openLiveSidebandUpstream("ws://upstream/v1/live/x", {}, () => socket as unknown as WebSocket, 1_000);
+    socket.emit("close", { code: 1006 });
+
+    const result = await pending;
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected a failed handshake");
+    expect(result.status).toBe(502);
+  });
+
+  test("times out and drops the socket when the upstream never opens", async () => {
+    const socket = new FakeUpstreamSocket();
+    const result = await openLiveSidebandUpstream("ws://upstream/v1/live/x", {}, () => socket as unknown as WebSocket, 20);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected a timeout");
+    expect(result.status).toBe(504);
+    expect(socket.closed).toBe(true);
+  });
+
+  test("reports failure when the upstream socket cannot be constructed", async () => {
+    const result = await openLiveSidebandUpstream("ws://upstream/v1/live/x", {}, () => {
+      throw new Error("connect refused");
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected a failed handshake");
+    expect(result.status).toBe(502);
+  });
+});
+
+test("a sideband join whose upstream handshake fails never opens the client socket", async () => {
+  // An upstream that refuses the upgrade: the shape OpenAI returns for a call id it
+  // no longer knows (`404 call_id_not_found`).
+  const upstream = Bun.serve({
+    port: 0,
+    fetch(req) {
+      if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
+        return new Response(JSON.stringify({ error: { code: "call_id_not_found" } }), {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    },
+  });
+
+  saveConfig(forwardConfig());
+
+  const RealWebSocket = globalThis.WebSocket;
+  const upstreamPort = upstream.port;
+  globalThis.WebSocket = class extends RealWebSocket {
+    constructor(url: string | URL, protocols?: string | string[] | Record<string, unknown>) {
+      const parsed = new URL(String(url));
+      const target = parsed.hostname === "api.openai.com"
+        ? `ws://127.0.0.1:${upstreamPort}${parsed.pathname}${parsed.search}`
+        : String(url);
+      super(target, protocols as string[]);
+    }
+  } as typeof WebSocket;
+
+  const server = startServer(0);
+  try {
+    const wsUrl = new URL(`/v1/realtime?call_id=rtc_dead_call`, server.url);
+    wsUrl.protocol = "ws:";
+    const events: string[] = [];
+    const client = new RealWebSocket(wsUrl.toString(), {
+      headers: {
+        authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
+        "chatgpt-account-id": "acct-123",
+        "openai-alpha": "quicksilver=v2",
+        "x-session-id": "rts_dead",
+      },
+    } as unknown as string[]);
+
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("client never settled")), 15_000);
+      const settle = (): void => {
+        clearTimeout(timer);
+        resolve();
+      };
+      client.addEventListener("open", () => {
+        events.push("open");
+        settle();
+      });
+      client.addEventListener("error", () => {
+        events.push("error");
+        settle();
+      });
+      client.addEventListener("close", () => {
+        events.push("close");
+        settle();
+      });
+    });
+
+    // The relay never became live, so the client must not have been told it did.
+    expect(events).not.toContain("open");
+    expect(events.length).toBeGreaterThan(0);
+  } finally {
+    globalThis.WebSocket = RealWebSocket;
+    await server.stop(true);
+    await upstream.stop(true);
+  }
+}, { timeout: 20_000 });
