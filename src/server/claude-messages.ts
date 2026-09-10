@@ -638,6 +638,12 @@ export async function handleClaudeMessages(
   }
 }
 
+/**
+ * Translate a Claude Messages request, route it through the Responses pipeline,
+ * and translate the reply back. Runs under a translator budget owned by the
+ * caller; Go session affinity is derived here and handed to the final Go
+ * transport out of band rather than through replay headers.
+ */
 async function handleClaudeMessagesWithBudget(
   req: Request,
   config: OcxConfig,
