@@ -587,8 +587,14 @@ export async function inspectCodexCliInstall(
   const platform = deps.platform ?? process.platform;
   const candidate = observeCodexRuntimeCandidateReadOnly(deps);
   if (!candidate) {
+    // This slice reads no candidate or configuration file on Windows, so an
+    // absent proof-captured environment candidate does not establish that no
+    // Codex CLI exists: a persisted selection is simply never consulted there.
+    // Report the deferral that actually happened instead of the stronger claim
+    // that the candidate is unavailable. POSIX did observe persisted state, so
+    // its absent-candidate answer stays exact.
     return isWindowsPlatform(platform)
-      ? unknownWindowsReport("candidate_unavailable")
+      ? unknownWindowsReport("windows_inspection_deferred")
       : unknownReport("candidate_unavailable");
   }
 
