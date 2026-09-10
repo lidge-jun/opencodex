@@ -3,6 +3,8 @@ import { join } from "node:path";
 import { getConfigDir } from "../config/paths";
 import { withAstraEffortState } from "./astra-effort-state";
 
+// Explicit protocol gate; keep aligned with PROVIDER_REGISTRY openai-apikey.models/modelReasoningEfforts["gpt-6-astra"].
+const ASTRA_MODEL = "gpt-6-astra";
 const EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
 const MAX_SNAPSHOTS = 256;
 const MAX_ITEMS = 20_000;
@@ -45,7 +47,7 @@ function validState(value: unknown): value is State {
 }
 
 function unsupported(body: RecordValue, original: unknown, headers: Headers): string | undefined {
-  if (body.model !== "gpt-6-astra") return "unsupported_model";
+  if (body.model !== ASTRA_MODEL) return "unsupported_model";
   if (!record(body.reasoning) || !effort(body.reasoning.effort)) return "unsupported_effort";
   if (body.reasoning.mode !== undefined && body.reasoning.mode !== "standard") return "unsupported_mode";
   if (headers.has("x-openai-subagent") || body.multi_agent !== undefined || body.agents !== undefined) return "multi_agent";

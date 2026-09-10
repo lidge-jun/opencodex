@@ -516,7 +516,9 @@ If clients supply updates themselves, that endpoint rejects them. OpenAI documen
 as an alternative, with a fresh update after compaction; automatic post-compaction rewriting is not
 implemented by this opt-in path.
 
-Diagnostics tagged `[ocx:astra-effort-cache]` report a fixed status code, baseline, and effective effort.
+Enable provider diagnostics with `ocx debug provider on` or `OCX_DEBUG=1`. Diagnostics tagged
+`[ocx:openai-responses:astra-effort-cache]` report a fixed status code, baseline, and effective effort
+through the shared debug buffer and stderr output.
 Request and usage logs preserve requested effort and record effective effort separately from the
 request-level wire value. The upstream response's `reasoning.effort` still reports the baseline, as
 specified by OpenAI. `baseline_reset`, `missing_thread_identity`, `compaction`, and `unavailable_state`

@@ -71,8 +71,9 @@ describe("Astra effort history", () => {
   });
   test("identical retries neither duplicate updates nor add state", () => {
     run(first); const low = run(second, "low");
+    expect(low.status).toBe("updated");
     const before = readState();
-    expect(run(second, "low")).toEqual(low.status === "updated" ? { ...low, status: "replay" } : low);
+    expect(run(second, "low")).toEqual({ ...low, status: "replay" });
     expect(readState()).toBe(before);
   });
   test("restart/resume reads disk state without process memory", () => {
@@ -234,11 +235,11 @@ describe("durable effort state lifecycle", () => {
   });
   test("bounds total payload bytes and expires abandoned conversations", () => {
     const path = join(directory, "state");
-    const payload = "x".repeat(1_500_000);
+    const payload = "é".repeat(750_000);
     for (let i = 0; i < 14; i++) withAstraEffortState(path, String(i), () => ({ value: true, state: payload }));
     const db = new Database(statePath());
     try {
-      expect((db.query("SELECT SUM(length(state)) AS bytes FROM sessions").get() as { bytes: number }).bytes).toBeLessThanOrEqual(16 * 1024 * 1024);
+      expect((db.query("SELECT SUM(length(CAST(state AS BLOB))) AS bytes FROM sessions").get() as { bytes: number }).bytes).toBeLessThanOrEqual(16 * 1024 * 1024);
       db.query("UPDATE sessions SET touched = 0").run();
     } finally { db.close(); }
     expect(statSync(statePath()).size).toBeLessThanOrEqual(32 * 1024 * 1024);
@@ -254,8 +255,15 @@ describe("durable effort state lifecycle", () => {
       console.log("held"); await new Promise(() => {});`, statePath()], { stdout: "pipe", stderr: "pipe" });
     try {
       const reader = child.stdout.getReader();
-      const ready = await reader.read(); reader.releaseLock();
-      expect(new TextDecoder().decode(ready.value)).toContain("held");
+      const decoder = new TextDecoder();
+      let output = "";
+      try {
+        while (!output.includes("held")) {
+          const chunk = await reader.read();
+          if (chunk.done) throw new Error("Child exited before acquiring its transaction");
+          output += decoder.decode(chunk.value, { stream: true });
+        }
+      } finally { reader.releaseLock(); }
       expect(run(second, "low").status).toBe("unavailable_state");
     } finally { child.kill("SIGKILL"); await child.exited; }
     expect(run(second, "low")).toMatchObject({ status: "updated", baseline: "medium", effective: "low" });
