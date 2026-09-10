@@ -2,6 +2,8 @@ import { expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act, createElement } from "react";
 import { clearClientResourceStoresForTests } from "../src/client-resource";
+import { de } from "../src/i18n/de";
+import { fr } from "../src/i18n/fr";
 import { LanguageProvider } from "../src/i18n/provider";
 import { interpolate } from "../src/i18n/shared";
 import { ru } from "../src/i18n/ru";
@@ -93,8 +95,8 @@ test("usage workspace i18n keys exist in every locale", async () => {
 
 test("Usage breakdown tables distinguish priced zero totals from excluded requests", async () => {
   const globalKeys = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT", "ResizeObserver"] as const;
-  const previous = Object.fromEntries(globalKeys.map(key => [key, Reflect.get(globalThis, key)]));
-  const originalFetch = globalThis.fetch;
+  const previous = new Map(globalKeys.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  const originalFetch = Object.getOwnPropertyDescriptor(globalThis, "fetch");
   const testWindow = new Window({ url: "http://localhost/" });
   Object.defineProperties(globalThis, {
     document: { configurable: true, value: testWindow.document },
@@ -179,11 +181,14 @@ test("Usage breakdown tables distinguish priced zero totals from excluded reques
   } finally {
     await act(async () => { root.unmount(); });
     container.remove();
-    globalThis.fetch = originalFetch;
+    if (originalFetch) Object.defineProperty(globalThis, "fetch", originalFetch);
+    else Reflect.deleteProperty(globalThis, "fetch");
     clearClientResourceStoresForTests();
     testWindow.close();
     for (const key of globalKeys) {
-      Object.defineProperty(globalThis, key, { configurable: true, value: previous[key] });
+      const descriptor = previous.get(key);
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else Reflect.deleteProperty(globalThis, key);
     }
   }
 });
@@ -191,6 +196,13 @@ test("Usage breakdown tables distinguish priced zero totals from excluded reques
 test("Russian excluded-request caption stays grammatical for common counts", () => {
   for (const count of [1, 2, 5, 21]) {
     expect(interpolate(ru["usage.cost.excluded"], { count })).toBe(`(${count} исключено)`);
+  }
+});
+
+test("German and French excluded-request captions remain count-neutral", () => {
+  for (const count of [1, 2, 5]) {
+    expect(interpolate(de["usage.cost.excluded"], { count })).toBe(`(${count} ohne Preis oder Nutzungsdaten)`);
+    expect(interpolate(fr["usage.cost.excluded"], { count })).toBe(`(${count} sans tarif ni données d’utilisation)`);
   }
 });
 
