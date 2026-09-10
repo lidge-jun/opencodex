@@ -33,6 +33,8 @@ opencodex 依此順序解析請求的模型：
 
 `blockedModelRedirects` 是選用的頂層 `Record<string, string>`，用於定義模型 ID 的替換規則，預設不設定。當傳入的模型符合鍵值時，將重新導向至目標替代模型。目標模型可維持在相同供應商或重新路由至其他供應商（例如 `google-antigravity/gemini-3.8-flash-high`），並支援多跳鏈式重新導向（具備循環偵測與最多 5 次跳轉深度限制）。路由原因將記錄為 `blocked-model-redirect`。省略此鍵時，路由維持不變。
 
+比對亦會針對別名解析出的原生模型進行，因此解析為受封鎖原生模型的別名也會依規則重新導向。帳號限定的跨供應商重新導向需要精確鍵值（例如 `side/gpt-5.6-terra`）；在帳號命名空間下裸鍵會 fail closed，且跨供應商目標直接使用目標供應商，不繼承來源帳號欄位（`codexAccountId`、`codexAccountNamespace`）或配額。
+
 ```json
 {
   "blockedModelRedirects": {

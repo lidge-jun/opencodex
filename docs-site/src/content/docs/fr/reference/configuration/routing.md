@@ -33,6 +33,8 @@ Les fournisseurs désactivés sont exclus. Un espace de noms explicite qui dési
 
 `blockedModelRedirects` est un `Record<string, string>` facultatif de premier niveau définissant les remplacements d'identifiants de modèle, non défini par défaut. Lorsqu'un modèle entrant correspond à une clé, il est redirigé vers le modèle de substitution cible. Les modèles cibles peuvent être résolus au sein du même fournisseur ou réacheminés vers un autre fournisseur (par exemple `google-antigravity/gemini-3.8-flash-high`), avec prise en charge des redirections en chaîne multi-sauts (jusqu'à une profondeur maximale de 5 sauts avec détection de boucle). Le motif de routage est enregistré sous `blocked-model-redirect`. L'omission de la clé ne modifie pas le routage.
 
+La correspondance est également effectuée sur le modèle natif résolu à partir d'un alias ; les alias menant à des modèles natifs bloqués sont donc redirigés en conséquence. Les redirections inter-fournisseurs qualifiées par un compte nécessitent une clé exacte (par exemple `side/gpt-5.6-terra`) ; les clés non qualifiées échouent de manière sécurisée (fail closed) sous un espace de noms de compte, et les destinations inter-fournisseurs utilisent directement le fournisseur cible sans hériter des champs de compte (`codexAccountId`, `codexAccountNamespace`) ni des quotas.
+
 ```json
 {
   "blockedModelRedirects": {

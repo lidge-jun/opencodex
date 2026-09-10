@@ -1003,6 +1003,9 @@ describe("routeModel blocked model redirect", () => {
       modelId: "gemini-3.8-flash-high",
       routeReason: "blocked-model-redirect",
     });
+    expect(routed.provider.baseUrl).toBe("https://autopush-alkalimakersuite.sandbox.googleapis.com");
+    expect(routed.codexAccountId).toBeUndefined();
+    expect(routed.codexAccountNamespace).toBeUndefined();
   });
 
   test("redirects provider-qualified alias when resolved native model is blocked", () => {
@@ -1038,26 +1041,97 @@ describe("routeModel blocked model redirect", () => {
     });
   });
 
-  test("detects cross-layer recursion between aliases and blocked redirects exceeding depth 5", () => {
+  test("ignores inherited object prototype properties in blockedModelRedirects", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "openai",
+      blockedModelRedirects: {},
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          models: ["toString", "constructor", "valueOf"],
+        },
+      },
+    };
+
+    const routedToString = routeModel(config, "toString");
+    expect(routedToString.routeReason).not.toBe("blocked-model-redirect");
+    expect(routedToString.modelId).toBe("toString");
+
+    const routedConstructor = routeModel(config, "constructor");
+    expect(routedConstructor.routeReason).not.toBe("blocked-model-redirect");
+    expect(routedConstructor.modelId).toBe("constructor");
+  });
+
+  test("shares redirect budget across alias boundary: exactly 5 edges succeed", () => {
+    // 3 edges before alias boundary + 2 edges after alias boundary = 5 edges
     const config: OcxConfig = {
       port: 10100,
       defaultProvider: "openai",
       blockedModelRedirects: {
-        "m-native": "m-alias",
+        "start-model": "step-1",
+        "step-1": "step-2",
+        "step-2": "alias-model",
+        "native-target": "step-4",
+        "step-4": "google-antigravity/gemini-3.8-flash-high",
       },
       providers: {
         openai: {
           adapter: "openai-responses",
           baseUrl: "https://chatgpt.com/backend-api/codex",
-          models: ["m-native"],
+          models: ["native-target"],
           modelAliases: {
-            "m-native": "m-alias",
+            "native-target": "alias-model",
           },
+        },
+        "google-antigravity": {
+          adapter: "google-antigravity",
+          baseUrl: "https://autopush-alkalimakersuite.sandbox.googleapis.com",
+          models: ["gemini-3.8-flash-high"],
         },
       },
     };
 
-    expect(() => routeModel(config, "m-alias")).toThrow("routeModel exceeded maximum redirect depth (5)");
+    const routed = routeModel(config, "start-model");
+    expect(routed).toMatchObject({
+      providerName: "google-antigravity",
+      modelId: "gemini-3.8-flash-high",
+      routeReason: "blocked-model-redirect",
+    });
+  });
+
+  test("shares redirect budget across alias boundary: 6 edges throw maximum redirect depth", () => {
+    // 3 edges before alias boundary + 3 edges after alias boundary = 6 edges
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "openai",
+      blockedModelRedirects: {
+        "start-model": "step-1",
+        "step-1": "step-2",
+        "step-2": "alias-model",
+        "native-target": "step-4",
+        "step-4": "step-5",
+        "step-5": "google-antigravity/gemini-3.8-flash-high",
+      },
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          models: ["native-target"],
+          modelAliases: {
+            "native-target": "alias-model",
+          },
+        },
+        "google-antigravity": {
+          adapter: "google-antigravity",
+          baseUrl: "https://autopush-alkalimakersuite.sandbox.googleapis.com",
+          models: ["gemini-3.8-flash-high"],
+        },
+      },
+    };
+
+    expect(() => routeModel(config, "start-model")).toThrow(/exceeded maximum redirect depth \(5\)/i);
   });
 
 });

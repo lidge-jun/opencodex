@@ -23,7 +23,19 @@ export function resolveBlockedModelRedirect(
   if (!config?.blockedModelRedirects || typeof config.blockedModelRedirects !== "object") {
     return undefined;
   }
-  return config.blockedModelRedirects[modelId];
+  if (!Object.prototype.hasOwnProperty.call(config.blockedModelRedirects, modelId)) {
+    return undefined;
+  }
+  const target = config.blockedModelRedirects[modelId];
+  return typeof target === "string" && target.length > 0 ? target : undefined;
+}
+
+/**
+ * Resolves blocked model redirects recursively with cycle and depth detection.
+ */
+export interface BlockedModelRedirectState {
+  visited: Set<string>;
+  edges: number;
 }
 
 /**
@@ -32,11 +44,13 @@ export function resolveBlockedModelRedirect(
 export function resolveBlockedModelRedirectChain(
   config: { blockedModelRedirects?: Record<string, string> } | undefined,
   modelId: string,
+  state?: BlockedModelRedirectState,
 ): { targetModel: string; redirected: boolean } {
   if (!config?.blockedModelRedirects || typeof config.blockedModelRedirects !== "object") {
     return { targetModel: modelId, redirected: false };
   }
-  const visited = new Set<string>();
+  const redirectState = state ?? { visited: new Set<string>(), edges: 0 };
+  const { visited } = redirectState;
   let current = modelId;
   let redirected = false;
 
@@ -49,7 +63,8 @@ export function resolveBlockedModelRedirectChain(
       throw new Error(`Blocked model redirect cycle detected: ${[...visited, current].join(" -> ")}`);
     }
     visited.add(current);
-    if (visited.size > 5) {
+    redirectState.edges += 1;
+    if (redirectState.edges > 5) {
       throw new Error(`Blocked model redirect exceeded maximum redirect depth (5): ${[...visited, next].join(" -> ")}`);
     }
     current = next;
