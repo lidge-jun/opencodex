@@ -2383,7 +2383,9 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       // tier write so a force-fast/default decision can never mutate parsed._rawBody.
       outBody = applyTierDecisionToResponsesBody(outBody, parsed.options?.tierDecision);
       if (provider.modelSuffixBracketStrip && isPlainObject(outBody) && typeof (outBody as { model?: unknown }).model === "string") {
-        (outBody as { model: string }).model = stripBracketedModelSuffix((outBody as { model: string }).model);
+        // Detach before the write: upstream helpers may return parsed._rawBody itself on a
+        // no-op chain, and the caller still owns it.
+        outBody = { ...outBody, model: stripBracketedModelSuffix((outBody as { model: string }).model) };
       }
       const stateless = provider.statelessResponses === true;
       if (stateless) outBody = stripStatefulResponsesParams(outBody);

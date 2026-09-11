@@ -17,7 +17,7 @@ K3（kimi provider, openai-chat adapter, api.kimi.com/coding/v1）当前已具�
 
 ## Phase 1：K3 Codex compatibility benchmark
 
-新增 tests/adapters/openai/k3-compat.test.ts（14 用例，全部通过）。覆盖：
+新增 tests/adapters/openai/openai-chat-compat.test.ts（16 用例，全部通过）。覆盖：
 
 - registry/路由层：kimi provider parallelToolCalls 传播、stale persisted config 继承；
 - 指令面：appendix 追加在原始 instructions 与 tool-catalog nudge 之后、非 K3 模型/非 kimi host 不注入、k3[1m] selector 覆盖、token 预算 <800；
@@ -39,7 +39,7 @@ K3（kimi provider, openai-chat adapter, api.kimi.com/coding/v1）当前已具�
 ## Phase 2：K3 Enhanced Model Profile（最小 diff，未伪造 OpenAI 私有协议）
 
 - src/providers/registry.ts：kimi provider 增加 parallelToolCalls: true（带 260908 live-canary 注释与 devlog 证据指针）。未启用 use_responses_lite、code_mode_only 变更、multi_agent_v2 stamping 或 collaboration namespace——这些 GPT 专属行为按任务要求保持关闭。
-- scripts/model-metadata.source.json + src/generated/model-metadata.ts：moonshot bundle 增加 kimi-k3（contextWindow 262144、maxTokens 262144、input text+image、reasoning、按 KIMI 定价 3/15/0.3）。走标准 generate:model-metadata 流程，model-metadata-sync guard 通过。注意：这是 moonshot PAYG bundle 的 k3 行；kimi coding 的 k3/k3[1m] 行继续由 registry 的 KIMI_CODING_* 常量权威供给（两者并存是既有设计，jawcodeBundle: moonshot 别名只影响缺行时的 metadata 补全）。
+- scripts/model-metadata.source.json + src/generated/model-metadata.ts：moonshot bundle 增加 kimi-k3（contextWindow 1048576、maxTokens 131072、input text+image、reasoning、按 KIMI 定价 3/15/0.3）。走标准 generate:model-metadata 流程，model-metadata-sync guard 通过。注意：这是 moonshot PAYG bundle 的 k3 行；kimi coding 的 k3/k3[1m] 行继续由 registry 的 KIMI_CODING_* 常量权威供给（两者并存是既有设计，jawcodeBundle: moonshot 别名只影响缺行时的 metadata 补全）。
 
 ## Phase 3：K3 Instruction Adapter
 
@@ -52,7 +52,7 @@ src/adapters/openai-chat.ts：
 ## 验证
 
 - bun run typecheck：exit 0。
-- 新增 k3-compat.test.ts：14/14 通过。
+- 新增 openai-chat-compat.test.ts：16/16 通过。
 - 受影响域聚焦测试：parallel-tool-calls-optin、openai-chat-hardening、openai-chat-eof、openai-chat-parallel-stream、tool-catalog-nudge：174/174；model-metadata-sync：1/1；selected-models + multi-agent-compat：68/68；codex-catalog：308/308。共 565 通过 / 0 失败。
 - 完整 read->edit->test 工具循环与 MCP/plugin/node_repl 工作流为运行时行为，需在装有 K3 凭据的 OpenCodex 实例上做 live canary（本环境无凭据，未获取）。
 

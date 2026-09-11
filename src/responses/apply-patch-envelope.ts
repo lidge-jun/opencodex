@@ -22,7 +22,7 @@ const PATCH_BEGIN = "*** Begin Patch";
 const PATCH_END = "*** End Patch";
 const TOP_LEVEL_PATCH_ENVELOPE = /^(\*\*\* Begin Patch(?: \*\*\*)?)(\r?\n)([\s\S]*)(\r?\n)(\*\*\* End Patch(?: \*\*\*)?)(\r?\n)?$/;
 const PATCH_OPERATION_LINE = /^\*\*\* (?:Add|Update|Delete) File: .+$/m;
-const OUTER_MARKDOWN_CODE_FENCE = /^```(?:[a-zA-Z0-9_-]+)?\r?\n([\s\S]*?)\r?\n```$/;
+const OUTER_MARKDOWN_CODE_FENCE = /^```[^\r\n]*\r?\n([\s\S]*?)\r?\n```$/;
 
 function stripMarkdownCodeFence(text: string): string {
   const trimmed = text.trim();

@@ -41,6 +41,9 @@ describe("apply_patch envelope repair", () => {
     expect(repairFreeformToolInput(JSON.stringify({ command: "ls -la" }), "shell")).toBe("ls -la");
     expect(repairFreeformToolInput("```js\nconst y = 3;\n```", "exec")).toBe("const y = 3;");
     expect(repairFreeformToolInput("```diff\n" + DECORATED_PATCH + "\n```", "apply_patch")).toBe(CANONICAL_PATCH);
+    // Annotated fences (language plus filename or other info strings) unwrap the same way
+    expect(repairFreeformToolInput("```js example.ts\nconst y = 3;\n```", "exec")).toBe("const y = 3;");
+    expect(repairFreeformToolInput("```diff patch\n" + DECORATED_PATCH + "\n```", "apply_patch")).toBe(CANONICAL_PATCH);
     // Multiple candidate keys: explicit `input` always takes strict precedence over fallback keys
     expect(repairFreeformToolInput(JSON.stringify({ input: "const a = 1;", code: "const b = 2;" }), "exec")).toBe("const a = 1;");
     // Candidate key precedence order: code beats command
