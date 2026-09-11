@@ -412,6 +412,14 @@ function applyProviderPatchFields(
     next.liveModels = rawBody.liveModels;
     touched = true;
   }
+  if (Object.hasOwn(rawBody, "experimentalCodexSideChatCache")) {
+    if (name !== "openai") return { error: "experimentalCodexSideChatCache is valid only for provider openai" };
+    const value = rawBody.experimentalCodexSideChatCache;
+    if (value === null) delete next.experimentalCodexSideChatCache;
+    else if (typeof value === "boolean") next.experimentalCodexSideChatCache = value;
+    else return { error: "experimentalCodexSideChatCache must be a boolean or null" };
+    touched = true;
+  }
   if (Object.hasOwn(rawBody, "annotateEmptyToolOutputs")) {
     const value = rawBody.annotateEmptyToolOutputs;
     if (value === null) {

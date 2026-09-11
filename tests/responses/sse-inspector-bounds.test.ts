@@ -481,3 +481,38 @@ describe("client-facing SSE wrapper bounds", () => {
     expect(getInspectionCounters().frameCapOverflows).toBe(1);
   });
 });
+
+
+test("completion-sensitive logs can observe the accepted completion before terminal notification", () => {
+  for (const enabled of [false, true]) {
+    const order: string[] = [];
+    const inspector = createSseInspector({ completeBeforeTerminal: enabled,
+      onTerminal: () => order.push("terminal"), onCompletedResponse: () => order.push("completed") });
+    inspector.feed(frame(completedEvent("fixture")));
+    expect(order).toEqual(enabled ? ["completed", "terminal"] : ["terminal", "completed"]);
+    expect(inspector.reported()).toBe(true);
+    inspector.dispose();
+  }
+});
+
+test("deferred terminal notification survives a throwing completion callback", () => {
+  const terminals: string[] = [];
+  const inspector = createSseInspector({ completeBeforeTerminal: true,
+    onTerminal: status => terminals.push(status), onCompletedResponse: () => { throw new Error("fixture"); } });
+  expect(() => inspector.feed(frame(completedEvent("fixture")))).toThrow("fixture");
+  expect(terminals).toEqual(["completed"]);
+  expect(inspector.reported()).toBe(true);
+  inspector.dispose();
+});
+
+test("tainted reconstruction still refuses completion before a deferred terminal notification", () => {
+  let completed = 0;
+  const terminals: string[] = [];
+  const inspector = createSseInspector({ completeBeforeTerminal: true,
+    onTerminal: status => terminals.push(status), onCompletedResponse: () => { completed++; } });
+  for (let i = 0; i <= MAX_COMPLETED_OUTPUT_ITEMS; i++) inspector.feed(frame(doneItemEvent(i, { type: "message", id: `fixture-${i}`, content: [] })));
+  inspector.feed(frame(completedEvent("fixture")));
+  expect(completed).toBe(0);
+  expect(terminals).toEqual(["completed"]);
+  inspector.dispose();
+});

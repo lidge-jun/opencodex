@@ -852,6 +852,7 @@ export type SseInspector = {
 };
 
 export type SseInspectorHandlers = {
+  completeBeforeTerminal?: boolean;
   onTerminal?: (status: ResponsesTerminalStatus, httpStatusOverride?: number) => void;
   logCtx?: RequestLogContext;
   onCompletedResponse?: (response: { id?: unknown; output?: unknown; status?: unknown }) => void;
@@ -1056,6 +1057,7 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
       && isPolicyRewriteType(parsed)
       && cyberPolicyTerminalError(parsed) !== undefined;
     if (status) sawTerminal = true;
+    let deferredTerminal: (() => void) | undefined;
     if (!reported && handlers.onTerminal && status) {
       try {
         reported = true;
@@ -1063,75 +1065,78 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
           handlers.logCtx.transportPhase = "terminal_sse";
           handlers.logCtx.terminalSource = "upstream";
         }
-        handlers.onTerminal(status, policyTerminal ? 400 : undefined);
+        if (handlers.completeBeforeTerminal) deferredTerminal = () => handlers.onTerminal!(status, policyTerminal ? 400 : undefined);
+        else handlers.onTerminal(status, policyTerminal ? 400 : undefined);
       } finally {
         if (status === "failed" || status === "incomplete") clearCompletedItems();
       }
     } else if (status === "failed" || status === "incomplete") {
       clearCompletedItems();
     }
-    if (handlers.onCompletedResponse) {
-      type ParsedSseEvent = { type?: unknown; output_index?: unknown; item?: unknown; response?: unknown };
-      const parsedEvent = parsed && typeof parsed === "object" && !Array.isArray(parsed)
-        ? parsed as ParsedSseEvent
-        : null;
-      const responseRecord = parsedEvent
-        && typeof parsedEvent.response === "object"
-        && parsedEvent.response !== null
-        && !Array.isArray(parsedEvent.response)
-        ? parsedEvent.response as { id?: unknown }
-        : null;
-      if (handlers.pinCompletedResponseIdToFirstSeen
-        && responseRecord
-        && typeof responseRecord.id === "string") {
-        firstResponseId ??= responseRecord.id;
-      }
-      const doneItem = parsedEvent?.type === "response.output_item.done" ? parsedEvent.item : undefined;
-      if (parsedEvent
-        && doneItem !== undefined
-        && Number.isInteger(parsedEvent.output_index)
-        && (parsedEvent.output_index as number) >= 0
-        && typeof doneItem === "object"
-        && doneItem !== null
-        && !Array.isArray(doneItem)
-        && typeof (doneItem as { type?: unknown }).type === "string") {
-        retainCompletedItem(parsedEvent.output_index as number, doneItem, sourceBytes);
-      }
-
-      let response = completedResponseFromParsedEvent(parsedEvent);
-      if (response) {
+    try {
+      if (handlers.onCompletedResponse) {
+        type ParsedSseEvent = { type?: unknown; output_index?: unknown; item?: unknown; response?: unknown };
+        const parsedEvent = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+          ? parsed as ParsedSseEvent
+          : null;
+        const responseRecord = parsedEvent
+          && typeof parsedEvent.response === "object"
+          && parsedEvent.response !== null
+          && !Array.isArray(parsedEvent.response)
+          ? parsedEvent.response as { id?: unknown }
+          : null;
         if (handlers.pinCompletedResponseIdToFirstSeen
-          && firstResponseId !== undefined
-          && response.id !== firstResponseId) {
-          response = { ...response, id: firstResponseId };
+          && responseRecord
+          && typeof responseRecord.id === "string") {
+          firstResponseId ??= responseRecord.id;
         }
-        // Authoritative output is a NON-EMPTY ARRAY only. Anything else
-        // (missing, null, scalar, object) keeps the historical backfill
-        // behavior so a malformed terminal cannot reach rememberResponseState
-        // and destroy continuation state (review C1-2).
-        const hasAuthoritativeOutput = Array.isArray(response.output)
-          && response.output.length > 0;
-        if (!hasAuthoritativeOutput && reconstructionTainted) {
+        const doneItem = parsedEvent?.type === "response.output_item.done" ? parsedEvent.item : undefined;
+        if (parsedEvent
+          && doneItem !== undefined
+          && Number.isInteger(parsedEvent.output_index)
+          && (parsedEvent.output_index as number) >= 0
+          && typeof doneItem === "object"
+          && doneItem !== null
+          && !Array.isArray(doneItem)
+          && typeof (doneItem as { type?: unknown }).type === "string") {
+          retainCompletedItem(parsedEvent.output_index as number, doneItem, sourceBytes);
+        }
+
+        let response = completedResponseFromParsedEvent(parsedEvent);
+        if (response) {
+          if (handlers.pinCompletedResponseIdToFirstSeen
+            && firstResponseId !== undefined
+            && response.id !== firstResponseId) {
+            response = { ...response, id: firstResponseId };
+          }
+          // Authoritative output is a NON-EMPTY ARRAY only. Anything else
+          // (missing, null, scalar, object) keeps the historical backfill
+          // behavior so a malformed terminal cannot reach rememberResponseState
+          // and destroy continuation state (review C1-2).
+          const hasAuthoritativeOutput = Array.isArray(response.output)
+            && response.output.length > 0;
+          if (!hasAuthoritativeOutput && reconstructionTainted) {
+            clearCompletedItems();
+            return;
+          }
+          if (!hasAuthoritativeOutput && completedItemsByOutputIndex!.size > 0) {
+            response = {
+              ...response,
+              output: [...completedItemsByOutputIndex!.entries()]
+                .sort(([left], [right]) => left - right)
+                .map(([, retained]) => retained.item),
+            };
+          }
+          try {
+            handlers.onCompletedResponse(response);
+          } finally {
+            clearCompletedItems();
+          }
+        } else if (parsedEvent?.type === "response.completed") {
           clearCompletedItems();
-          return;
         }
-        if (!hasAuthoritativeOutput && completedItemsByOutputIndex!.size > 0) {
-          response = {
-            ...response,
-            output: [...completedItemsByOutputIndex!.entries()]
-              .sort(([left], [right]) => left - right)
-              .map(([, retained]) => retained.item),
-          };
-        }
-        try {
-          handlers.onCompletedResponse(response);
-        } finally {
-          clearCompletedItems();
-        }
-      } else if (parsedEvent?.type === "response.completed") {
-        clearCompletedItems();
       }
-    }
+    } finally { deferredTerminal?.(); }
   };
 
   const completeCandidate = (): void => {
@@ -1214,6 +1219,7 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
 export type InspectionDrainBounds = { ms: number; bytes: number };
 
 export type InspectionConsumerOptions = {
+  completeBeforeTerminal?: boolean;
   clientGoneSignal?: AbortSignal;
   drainBounds?: Partial<InspectionDrainBounds>;
   upstream?: AbortController;
@@ -1396,6 +1402,7 @@ export function consumeForInspection(
     },
     onFirstOutput,
     pinCompletedResponseIdToFirstSeen: options?.pinCompletedResponseIdToFirstSeen,
+    completeBeforeTerminal: options?.completeBeforeTerminal,
   });
   startBoundedInspectionPump({
     ...options,
@@ -1451,6 +1458,7 @@ export function consumeForResponseLogMetadata(
     onParsedPayload: options?.onParsedPayload,
     onFirstOutput,
     pinCompletedResponseIdToFirstSeen: options?.pinCompletedResponseIdToFirstSeen,
+    completeBeforeTerminal: options?.completeBeforeTerminal,
   });
   startBoundedInspectionPump({ ...options, reader, inspector, signal, onDone });
 }

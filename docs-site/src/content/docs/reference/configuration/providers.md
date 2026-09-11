@@ -162,6 +162,7 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `modelVercelGatewayRouting?` | `Record<string, VercelGatewayRouting>` | Exact model-id overrides that replace the provider-wide Vercel AI Gateway preference. |
 | `authMode?` | `"key" \| "forward" \| "oauth" \| "local"` | Authentication mode (default `key`). OAuth/subscription credentials are stored outside `config.json`; `local` is limited to providers whose registry entry permits it. |
 | `codexAccountMode?` | `"pool" \| "direct"` | Canonical `openai` only; defaults to Pool. Direct bypasses pool state. |
+| `experimentalCodexSideChatCache?` | `boolean` | Experimental, default `false`. Canonical `openai` only. Allows eligible Desktop side chats to reuse a completed parent request’s prompt-cache identity. See [side-chat cache reuse](#experimental-desktop-side-chat-cache-reuse). |
 | `refreshPolicy?` | `"proactive" \| "lazy-only" \| "disabled"` | Override this OAuth provider's Token Guardian policy. |
 | `reasoningEfforts?` | `string[]` | Provider-wide Codex reasoning labels to advertise and send. For `google`-adapter providers, a configured ladder also asserts `thinkingLevel` capability: direct and Vertex non-image requests send the selected effort as `generationConfig.thinkingConfig.thinkingLevel`, while Cloud Code Assist uses its envelope-specific path. |
 | `modelReasoningEfforts?` | `Record<string, string[]>` | Per-model labels. An empty list hides effort control. As with `reasoningEfforts`, each configured `google`-adapter ladder asserts `thinkingLevel` capability; direct and Vertex non-image requests use the flat Gemini path, while Cloud Code Assist sends it under its request envelope. |
@@ -1024,3 +1025,101 @@ or expiry does not extend the history-recovery contract.
 Sender and recipient on routed Responses are context for the receiving model, not a new
 machine-readable routing protocol. Tool routing continues to use the existing collaboration
 contracts.
+
+
+## Experimental Desktop side-chat cache reuse
+
+Set `experimentalCodexSideChatCache: true` on the existing `providers.openai`
+configuration row, then restart the proxy. The default is disabled. Set it to
+`false` and restart to disable it and discard the process-local cache metadata.
+This option applies only to the canonical ChatGPT forward Responses provider.
+
+With this option enabled, the proxy observes completed streamed requests and
+keeps bounded fingerprints for up to 64 tasks, with a ten-minute lifetime and a
+2,048-input-item limit. It uses explicit Desktop fork metadata to match a side
+chat to its parent. The selected credential, account, model, settings, tools,
+and inherited prompt prefix must be compatible before the proxy reuses the
+parent's prompt-cache key and provider session identity. Child task and turn
+identifiers remain distinct. Failed or unfinished requests do not seed reuse.
+The snapshot fingerprints the parent request input, not its response output. Only
+the common observed prefix is verified and counted as matched. A side chat can
+carry the parent’s last answer or additional inherited items after that prefix;
+those items remain its own unchanged suffix, rather than becoming verified parent
+input or being replaced by stored parent content.
+Recognized stream obfuscation and reasoning-summary delivery options are excluded
+from cache identity checks, while each request retains its own options on the wire.
+Unknown or malformed stream options still require an exact match.
+
+The proxy recognizes exact Desktop side-conversation rule and boundary text.
+It moves recognized rules to a developer message at the side boundary, or adds
+a developer copy of the recognized boundary when no separate rule block exists.
+It also moves a small allowlist of context-dependent `functions.exec` method
+references to a final developer message containing that request's own methods.
+Executable tool schemas remain intact. An explicitly bounded inherited history
+may reuse its proven prefix before a differing reasoning item; the child's
+reasoning and subsequent messages remain unchanged.
+
+These transformations depend on the Desktop prompt format and need validation
+when that format changes. Unknown instruction differences, incompatible inputs,
+missing parents, continuations, and compaction requests skip parent reuse.
+Nested side chats can also skip when inherited transformations no longer match.
+Account switching or credential refresh can prevent a match. Upstream cache
+retention and hits are opportunistic; enabling this option does not guarantee a
+hit. Existing provider debug diagnostics report reason codes, opaque task tags,
+and token counts without recording prompt text or credentials.
+
+
+### Monitor side-chat cache reuse
+
+When the experimental setting is enabled, eligible adapter preparations include `sideChatCache`
+in the existing local `usage.jsonl` request and attempt records. No additional database or telemetry
+service is created. Missing metadata can mean an uninstrumented version, a disabled feature, or an
+adapter path that does not prepare side-chat reuse; it is not a measured miss.
+
+The fixed `reason` describes the reuse decision. `phase` distinguishes parent observations, side
+requests with no binding yet (`unbound-side`), and requests with an existing binding (`bound-side`).
+An unbound request is not necessarily the first-ever side request: restarts, expiry, eviction, and
+failed requests can remove or prevent a binding. `matchedItems` counts the verified inherited prefix.
+
+`snapshotOutcome` records whether a completed response stored the snapshot, or whether it expired,
+was superseded by a newer completion, or belonged to a disabled cache. `not-observed` means no accepted
+successful completion was recorded; it must not be interpreted as a stored parent. A reused prefix
+and a stored snapshot do not prove that the upstream returned cached tokens.
+
+`prepareMs` measures preparation including instrumentation. `normalizeMs` covers execution-reference
+normalization, `hashMs` accumulates fingerprint work, and `matchMs` covers candidate matching and
+prefix rewriting. **Hash time overlaps match time**, so do not add the phases. `completionMs` measures
+snapshot publication and pruning. Each attempt holds its last preparation and observed completion;
+multiple sends or rebuilds are not a cumulative timing trace.
+
+Retention fields count unique retained snapshots and bindings, plus estimated retained UTF-8 payload
+bytes. They exclude JavaScript object overhead and in-flight requests, and are not process heap usage.
+Expiry and eviction counts describe map entries removed during the recorded operations. Snapshots
+come from those operations, not a live memory query. `observedAt` timestamps the measurement;
+retention reports use it rather than request start time when completions arrive out of order. The optional child `threadIdHash` uses the same
+SHA-256 prefix convention as log conversation IDs and permits exact child correlation without storing
+a raw thread ID. No prompts, tool descriptions, credentials, or raw account identifiers are added.
+
+Summarize the newest usage rows from a source checkout:
+
+```bash
+bun scripts/side-chat-cache-report.ts 1000
+```
+
+An optional second argument selects an exact request ID within the bounded window. `OPENCODEX_HOME`
+selects another installation. The report counts attempts once, separates reported cache reads from
+unknown/estimated usage, and groups results by parent/unbound/bound phase. Cached-token ratios and
+first-output latency are observations; they do not establish which feature caused a cache hit.
+
+Run isolated synthetic control/treatment measurements without model API calls:
+
+```bash
+bun scripts/side-chat-cache-eval.ts .tmp/side-cache-eval 20 4
+```
+
+The harness compares the existing setting off/on with concurrent HTTP and WebSocket clients, 1 KiB,
+64 KiB, and 1 MiB inherited text, plus direct large-history and reordered-tool-catalog workloads.
+It writes `report.json` and `samples.jsonl`, recording the source commit, dirty status, full Bun build
+identity, and observed upstream transports. Fixture WebSocket availability does not imply its use:
+runtime gates can select HTTP fallback. Synthetic usage counters are fixtures, never measured cache
+savings. Run on the target operating system and validate actual Desktop behavior with ordinary usage.

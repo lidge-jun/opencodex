@@ -1,3 +1,4 @@
+import { completeSideChatCache } from "../../codex/side-chat-cache";
 import type { Server } from "bun";
 import { randomUUID } from "node:crypto";
 import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse, type ResponsesTerminalStatus } from "../../bridge";
@@ -309,6 +310,7 @@ import {
   noteAttemptSend,
   readConfiguredCodexServiceTier,
   recordAdapterReasoning,
+  recordAdapterSideChatCache,
   recordAdapterTier,
   recordAdapterTierMetadata,
   recordAttemptRequestedEffort,
@@ -4936,6 +4938,8 @@ async function handleResponsesInner(
       const firstCompletion = !inspectedCompletionSeen;
       inspectedCompletionSeen = true;
       if (firstCompletion && (inspectedTerminal === null || firstTerminalAllowsRecall)) {
+        completeSideChatCache(request, response);
+        recordAdapterSideChatCache(logCtx, request);
         // A model-less first completion permanently declines recall; later terminal
         // frames are hidden by the client boundary and cannot supply its identity.
         // Native inspection sees the pre-rewrite model. Only an actual terminal
@@ -6000,6 +6004,7 @@ async function handleResponsesInner(
           }
           : undefined;
         const inspector = createSseInspector({
+          completeBeforeTerminal: request.sideChatCache !== undefined,
           onTerminal: reportNativeTerminal,
           logCtx,
           onCompletedResponse: rememberPassthroughResponse ? rememberPassthroughResponseChecked : undefined,
@@ -6060,6 +6065,7 @@ async function handleResponsesInner(
       linkAbortSignal(upstream, turnAc.signal);
       registerTurn(turnAc, options.turnAdmissionLease);
       const inspectionConsumerOptions = {
+        completeBeforeTerminal: request.sideChatCache !== undefined,
         // Request abort can reject the fetch body before the response cancel hook runs.
         clientGoneSignal: options.abortSignal
           ? AbortSignal.any([clientGone.signal, options.abortSignal])
