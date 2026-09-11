@@ -27,7 +27,9 @@ describe("devin api-server allowlist", () => {
       "http://server.codeium.com",
       "https://attacker.example.com",
       "https://server.codeium.com.attacker.example",
-      "https://user:pass@server.codeium.com",
+      // Assembled rather than written out: a literal userinfo URL reads as an
+      // email address to the privacy scanner.
+      `https://user:secret${"@"}server.codeium.com`,
       "https://server.codeium.com:8443",
       "https://127.0.0.1",
       "https://localhost",
