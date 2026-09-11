@@ -278,7 +278,7 @@ export default function AddProviderModal({
           />
         ) : form && (
           preset.id === "zcode" ? (
-            <ZcodeDesktopPane apiBase={apiBase} error={error} onConnected={() => { void submit(); }} onBack={() => dispatch({ type: "back" })} />
+            <ZcodeDesktopPane apiBase={apiBase} onConnected={onAdded} onBack={() => dispatch({ type: "back" })} />
           ) : preset.auth === "oauth" && form.authMode === "oauth" ? (
             <AddProviderOAuthPane
               preset={preset}

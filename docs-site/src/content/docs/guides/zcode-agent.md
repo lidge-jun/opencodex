@@ -35,12 +35,12 @@ or subscription terms; those remain the vendor's policy.
 4. Choose a **workspace folder** with the folder browser. The default is a private disposable
    folder. Do not select your entire home or a credentials/configuration directory.
 5. Review the native file/command execution notice, check the consent box and click
-   **Connect Desktop**. OpenCodex constructs the Bubblewrap launcher and persists the connection;
+   **Connect Desktop**. OpenCodex constructs the Bubblewrap launcher, verifies the protocol, enables the ZCode provider and updates the Codex catalog;
    no environment variables, API-key entry, token import or separate CLI login is required.
 6. Optionally select a model and click **Test with one request**. This sends one brief prompt
    through the official ZCode runtime and consumes account quota. Connecting alone checks the
    local protocol and catalog, **not** account entitlement or inference.
-7. Click **Use this provider**, then select a `zcode/builtin:zai-coding-plan/...` model in your
+7. The provider is now available immediately. Select a ZCode model in your
    calling client. Only configured, enabled built-in Z.AI profiles are exposed by this workflow;
    custom Desktop providers and routes back to OpenCodex are not imported.
 
@@ -273,3 +273,22 @@ The quota reader launches Desktop's own Electron executable with
 ELECTRON_RUN_AS_NODE, not the external Node selected from PATH. Managed account
 settings still pass the same Desktop prerequisites; advanced quota reads do not
 use this external Node selection.
+
+
+### One-step activation and recovery
+
+**Connect Desktop** includes protocol verification, idempotent provider registration
+and the normal Codex catalog convergence. No separate **Use this provider** action is
+required. It does not change default provider/model selections or execute inference.
+Reconnection enables the existing ZCode provider without replacing custom options,
+aliases, model filters or pricing; conflicting provider registrations are not overwritten.
+
+Success is shown only when the provider is enabled and the connected models are visible
+in the actual Codex catalog. A protocol-only connection, failed config write or failed,
+skipped or incomplete catalog refresh remains a partial state. **Retry activation**
+finishes registration/catalog publication without sending a prompt or reconnecting the
+runtime. Review the activation consent again before retrying. Existing visibility filters
+are preserved; if they hide the connected models, the catalog state remains incomplete.
+
+If a running Codex instance does not pick up the models, restart it after its tasks
+finish. OpenCodex does not terminate or restart Codex processes automatically.

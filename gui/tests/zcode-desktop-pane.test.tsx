@@ -36,7 +36,7 @@ beforeEach(() => {
       const url = new URL(String(input), "http://localhost");
       requests.push({ path: url.pathname, body: options?.body ? JSON.parse(String(options.body)) : undefined });
       if (url.pathname.endsWith("/test")) return Response.json({ ok: true });
-      return Response.json({ connected: url.pathname.endsWith("/connect"), runtimes: ["/installed/ZCode"], runtime: "/installed/ZCode", workspace: "/project", models: [{ id: "builtin:zai/model", label: "Model" }] });
+      return Response.json({ connected: url.pathname.endsWith("/connect"), activation: url.pathname.endsWith("/connect") ? "ready" : "disconnected", providerName: "zcode", runtimes: ["/installed/ZCode"], runtime: "/installed/ZCode", workspace: "/project", models: [{ id: "builtin:zai/model", label: "Model" }] });
     },
   });
 
@@ -81,9 +81,9 @@ test("Desktop connect requires explicit consent and does not automatically spend
   await click(button("Connect Desktop"));
   expect(requests.find(r => r.path.endsWith("/connect"))?.body).toEqual({ runtime: "/installed/ZCode", workspace: "/project", consent: true });
   expect(requests.some(r => r.path.endsWith("/test"))).toBe(false);
-  expect(closeCalls).toBe(0);
-  await click(button("Use this provider"));
   expect(closeCalls).toBe(1);
+  expect(host.textContent).not.toContain("Use this provider");
+  expect(requests.some(r => r.path === "/api/providers")).toBe(false);
 });
 test("one-request test is a separate explicit quota-spending action", async () => {
   await mountPane(); await click(host.querySelector<HTMLInputElement>('input[type="checkbox"]')!);
@@ -106,4 +106,23 @@ test("incompatible Node preflight shows safe actionable guidance without connect
   expect(alert.textContent).not.toContain("runtime_failed");
   expect(host.querySelector<HTMLInputElement>('input[type="checkbox"]')!.checked).toBe(false);
   expect(button("Connect Desktop").disabled).toBe(true);
+});
+
+test("partial activation remains visible and retries without a second protocol connection", async () => {
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: async (input: RequestInfo | URL, options?: RequestInit) => {
+    const path = new URL(String(input), "http://localhost").pathname;
+    requests.push({ path, body: options?.body ? JSON.parse(String(options.body)) : undefined });
+    return Response.json({ connected: true, activation: path.endsWith("/activate") ? "ready" : "catalog_pending",
+      ...(path.endsWith("/activate") ? {} : { error: "catalog_update_failed" }), providerName: "zcode",
+      runtimes: ["/installed/ZCode"], runtime: "/installed/ZCode", workspace: "/project", models: [] });
+  } });
+  await mountPane();
+  expect(host.textContent).toContain("catalog is not ready");
+  expect(closeCalls).toBe(0);
+  expect(button("Retry activation").disabled).toBe(true);
+  await click(host.querySelector<HTMLInputElement>('input[type="checkbox"]')!);
+  await click(button("Retry activation"));
+  expect(closeCalls).toBe(1);
+  expect(requests.filter(r => r.path.endsWith("/connect") || r.path.endsWith("/test"))).toHaveLength(0);
+  expect(host.textContent).toContain("No processes will be restarted automatically");
 });

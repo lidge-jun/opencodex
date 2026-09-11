@@ -3,12 +3,13 @@ import { useT } from "../i18n/shared";
 
 interface Status {
   connected: boolean; issue?: string; runtimes: string[]; runtime: string; workspace: string;
+  activation?: string; providerName?: string; error?: string;
   models: Array<{ id: string; label: string }>;
 }
 interface Folders { current: string; parent: string | null; folders: Array<{ name: string; path: string }> }
 
 export default function ZcodeDesktopPane({ apiBase, onConnected, onBack, error: parentError }: {
-  apiBase: string; onConnected?: () => void; onBack?: () => void; error?: string;
+  apiBase: string; onConnected?: (name: string) => void; onBack?: () => void; error?: string;
 }) {
   const t = useT();
   const [status, setStatus] = useState<Status | null>(null);
@@ -22,7 +23,7 @@ export default function ZcodeDesktopPane({ apiBase, onConnected, onBack, error: 
   const [folders, setFolders] = useState<Folders | null>(null);
   const applyStatus = (next: Status) => {
     setStatus(next); setRuntime(next.runtime); setWorkspace(next.workspace);
-    setModel(next.models[0]?.id ?? ""); setError(next.issue ?? "");
+    setModel(next.models[0]?.id ?? ""); setError(next.error ?? next.issue ?? "");
   };
   useEffect(() => {
     const controller = new AbortController();
@@ -34,17 +35,20 @@ export default function ZcodeDesktopPane({ apiBase, onConnected, onBack, error: 
     return () => controller.abort();
   }, [apiBase]);
 
-  const perform = async (action: "refresh" | "connect" | "disconnect" | "test") => {
+  const perform = async (action: "refresh" | "connect" | "activate" | "disconnect" | "test") => {
     setBusy(true); setError(""); setTested(false);
     try {
       const response = await fetch(`${apiBase}/api/zcode-desktop${action === "refresh" ? "" : `/${action}`}`, action === "refresh" ? {} : {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify(action === "connect" ? { runtime, workspace, consent } : action === "test" ? { model, consent: true } : {}),
+        body: JSON.stringify(action === "connect" || action === "activate" ? { runtime, workspace, consent } : action === "test" ? { model, consent: true } : {}),
       });
       const result = await response.json();
-      if (!response.ok || result.error) { setError(result.error ?? "runtime_failed"); return; }
+      if (!response.ok) { setError(result.error ?? "runtime_failed"); return; }
       if (action === "test") setTested(result.ok === true);
-      else { applyStatus(result as Status); setConsent(false); }
+      else {
+        applyStatus(result as Status); setConsent(false);
+        if ((action === "connect" || action === "activate") && result.activation === "ready" && result.providerName) onConnected?.(result.providerName);
+      }
     } catch { setError("runtime_failed"); }
     finally { setBusy(false); }
   };
@@ -63,12 +67,18 @@ export default function ZcodeDesktopPane({ apiBase, onConnected, onBack, error: 
     : error === "profile_missing" || error === "models_missing" ? t("zcodeDesktop.loginNeeded")
     : error === "workspace_invalid" ? t("zcodeDesktop.workspaceInvalid")
     : error === "inference_failed" ? t("zcodeDesktop.inferenceFailed")
+    : error === "provider_registration_failed" ? t("zcodeDesktop.providerPending")
+    : error === "catalog_update_failed" ? t("zcodeDesktop.catalogPending")
     : error ? t("zcodeDesktop.failed") : "";
   const changed = runtime !== status?.runtime || workspace !== status?.workspace;
+  const partial = status?.connected && status.activation !== "ready";
   return <section className="setup-guide" style={{ padding: 16, display: "grid", gap: 12 }} aria-label="ZCode Desktop">
     <strong>ZCode Desktop</strong>
     <p className="muted text-label">{t("zcodeDesktop.intro")}</p>
-    <div role="status">{status?.connected ? t("zcodeDesktop.connected") : t("zcodeDesktop.notConnected")}</div>
+    <div role="status">{status?.connected ? status.activation === "ready" ? t("zcodeDesktop.connected")
+      : status.activation === "provider_pending" ? t("zcodeDesktop.providerPending") : t("zcodeDesktop.catalogPending")
+      : t("zcodeDesktop.notConnected")}</div>
+    <p className="muted text-label">{t("zcodeDesktop.restartNotice")}</p>
     <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
       <a className="btn btn-ghost" href="zcode://">{t("zcodeDesktop.open")}</a>
       <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => void perform("refresh")}>{t("zcodeDesktop.detect")}</button>
@@ -94,7 +104,7 @@ export default function ZcodeDesktopPane({ apiBase, onConnected, onBack, error: 
         <button type="button" className="btn" onClick={() => { setWorkspace(folder.path); setFolders(null); setConsent(false); }}>{t("zcodeDesktop.select")}</button>
       </div>)}
     </div>}
-    {(!status?.connected || changed) && <label style={{ display: "flex", gap: 8, alignItems: "start" }}>
+    {(!status?.connected || changed || partial) && <label style={{ display: "flex", gap: 8, alignItems: "start" }}>
       <input type="checkbox" checked={consent} disabled={busy} onChange={e => setConsent(e.target.checked)} />
       <span className="text-label">{t("zcodeDesktop.consent")}</span>
     </label>}
@@ -104,7 +114,7 @@ export default function ZcodeDesktopPane({ apiBase, onConnected, onBack, error: 
       {onBack && <button type="button" className="btn btn-ghost" disabled={busy} onClick={onBack}>{t("zcodeDesktop.back")}</button>}
       {(!status?.connected || changed) && <button type="button" className="btn btn-primary" disabled={busy || !consent || !runtime || !workspace} onClick={() => void perform("connect")}>{t("zcodeDesktop.connect")}</button>}
       {status?.connected && <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => void perform("disconnect")}>{t("zcodeDesktop.disconnect")}</button>}
-      {status?.connected && !changed && onConnected && <button type="button" className="btn btn-primary" disabled={busy} onClick={onConnected}>{t("zcodeDesktop.use")}</button>}
+      {partial && !changed && <button type="button" className="btn btn-primary" disabled={busy || !consent} onClick={() => void perform("activate")}>{t("zcodeDesktop.retryActivation")}</button>}
     </div>
     {status?.connected && !changed && <>
       <p className="muted text-label">{t("zcodeDesktop.testHint")}</p>
