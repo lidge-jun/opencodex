@@ -24,13 +24,30 @@ Admin token 只能执行普通管理，永远不能创建用户同意会话。�
 ```bash
 ocx config set runtimeRole hub
 ocx config set hostname 100.64.0.10
-ocx config set hub.managementPublicOrigin '"https://hub-name.tailnet-name.ts.net"'
 ocx config set corsAllowOrigins '["http://localhost:10100"]'
+
+# 全新的 standalone 配置没有 `hub` 或 `remoteGui` 对象，而 `ocx config set` 不会
+# 自动创建缺失的父对象：直接写嵌套路径会以 `config parent path not found: hub` 失败。
+# 设置 `runtimeRole` 同样不会创建它。请先建对象，再设置字段。
+ocx config set hub '{}'
+ocx config set remoteGui '{}'
+ocx config set hub.managementPublicOrigin '"https://hub-name.tailnet-name.ts.net"'
 ocx config set hub.managementIngress '{"enabled":true,"port":10101}'
 ocx config set remoteGui.allowedTailscaleUsers '["operator@example.com"]'
 export OPENCODEX_API_AUTH_TOKEN="$(openssl rand -hex 32)"
 ocx service install
 ```
+
+如果配置确实还是空的，也可以一次性写入整个对象：
+
+```bash
+ocx config set hub '{"managementPublicOrigin":"https://hub-name.tailnet-name.ts.net","managementIngress":{"enabled":true,"port":10101}}'
+ocx config set remoteGui '{"allowedTailscaleUsers":["operator@example.com"]}'
+```
+
+只有在对象尚不存在时才用这种写法。整对象赋值是**替换**而不是合并：对已经含有 `hub.managementIngress` 的配置执行上面这行，该入口会被悄悄丢掉。调整既有配置时父对象已经存在，用嵌套路径逐个字段设置即可，不会动到其他值。
+
+有两点决定一行命令能否被接受。值先按 JSON 解析，失败才回退为原始字符串——这就是 URL 要写成 `'"https://…"'` 的原因，对象、数组、布尔值和数字都必须是合法 JSON。另外 `hub` 和 `remoteGui` 采用严格模式：键名写错或取值不合规，都会在写入时以 `schema_invalid` 错误被拒绝，而不会变成一个永远不生效的设置。`managementPublicOrigin` 必须是不带路径、查询和片段的纯 origin。
 
 systemd/launchd 从受保护的 `service-api-token` 读取密钥，plist 和 unit 不包含明文密钥。
 
@@ -42,6 +59,39 @@ tailscale serve status
 ```
 
 `/healthz` 只证明进程存活。还必须验证 `/readyz`、经过身份验证的 `GET /v1/catalog` 和一次真实模型响应。管理端口只能监听 `127.0.0.1`。自建 TLS 代理应使用 `tailscale cert hub-name.tailnet-name.ts.net`，并仅代理到 `127.0.0.1:10101`。不要伪造 `Tailscale-User-*`；没有可信身份时请使用一次性配对。
+
+### 为数据监听器提供 TLS
+
+上面的 Serve 映射只发布**管理**入口。该入口从不提供 `/v1/*`、`/healthz` 或 `/readyz`，因此仅凭它并不能让远程客户端获得可用的数据平面。opencodex 自身也不终结 TLS：监听器是明文 HTTP，HTTPS 始终由运维方自建的前端负责。
+
+数据平面同样可以交给 Serve，只需再用一个 HTTPS 端口。在 macOS 上还要多一跳，因为 Tailscale Serve 只能代理到 `127.0.0.1`，无法指向你绑定在节点自身 tailnet 地址上的监听器，而 App Store 版 macOS 客户端会直接拒绝远程目标。请在 hub 上运行一个回环转发器，再让 Serve 指向它：
+
+```bash
+# 任何回环 TCP 转发器都可以，socat 只是其中之一。请选一个 hub 尚未占用的端口：
+# 启用回环 companion 后，127.0.0.1:10100 属于 opencodex 自己。
+socat TCP-LISTEN:10110,bind=127.0.0.1,fork,reuseaddr TCP:100.64.0.10:10100 &
+
+tailscale serve --bg --https=8443 http://127.0.0.1:10110
+tailscale serve status   # 应同时出现 443 -> 10101 和 8443 -> 10110
+```
+
+Serve 只接受有限的几个 HTTPS 端口。请用 `tailscale serve status` 确认映射确实建立，而不要假定端口被允许。转发器应与 hub 拥有相同的生命周期：后台 shell 作业会在重启时消失而服务会自行恢复，于是 hub 在运行却无法经 TLS 访问。请随 `ocx service install` 一起，用 launchd 或 systemd 托管它。
+
+连接时把两个 origin 分开写。位置参数 URL 是**数据** origin，`/readyz` 和 `/v1/catalog` 都从这里获取；`--management-url` 是用于配对和密钥签发的控制台 origin。两者不必共用端口：
+
+```bash
+ocx connect https://hub-name.tailnet-name.ts.net:8443 \
+  --management-url https://hub-name.tailnet-name.ts.net \
+  --admin-token-stdin
+```
+
+省略 `--management-url` 时，它取自 `/readyz` 响应，而该响应报告的正是 `hub.managementPublicOrigin`。两个 origin 不同时，显式写出更清楚。
+
+**不要为图省事把数据监听器绑到 `127.0.0.1`。** 回环绑定正是 opencodex 判定“纯本地部署”的依据：它会不再要求数据凭据，转而要求请求的 `Host` 头也是回环地址。TLS 前端会原样转发 `Host: hub-name.tailnet-name.ts.net`，于是 `/v1/catalog` 返回 `403 origin_rejected`，而不做这项检查的 `/readyz` 仍然返回 `200`。部署看起来健康，却无法提供模型。请求路径中没有任何代码读取 `X-Forwarded-Host`，所以前端也无法修正。请把监听器留在 tailnet 地址上：凭据准入保持开启，而 `Host` 检查不会生效。
+
+绑定 `0.0.0.0` 同样可行，而且因为回环也能访问，就不再需要转发器。但它会把数据端口发布到所有接口，所以只在你不在意其他网络的主机上这么做。
+
+Serve 就绪后，请针对 HTTPS 数据 origin 重新执行验收检查：`/readyz`、经过身份验证的 `GET /v1/catalog` 和一次真实模型响应。
 
 ## OAuth、密钥轮换与断开
 
@@ -101,6 +151,7 @@ docker compose up -d
 - `.prev` 恢复：保留两个文件，使用临时权限重新运行轮换。
 - `hub-too-new`/`hub-too-old` 会指出需要升级的一端，并在本地写入前失败。
 - 配对码一次性使用，失败次数会触发 429；丢失后请重新创建。
-- 非回环 HTTP 配对必须显式使用 `--allow-insecure-http`；Admin token 绝不通过 HTTP 发送。
+- 非回环 HTTP 配对会被直接拒绝，且没有任何开关可以豁免。请把管理 origin 放到 HTTPS 之后，或改在回环上配对；Admin token 绝不通过 HTTP 发送。
+- `/readyz` 返回 `200` 而 `/v1/catalog` 返回 `403 origin_rejected`：说明数据监听器绑在回环地址上却位于 TLS 前端之后，参见上文“为数据监听器提供 TLS”。
 - 浏览器 logout/expiry 只影响会话，不会吊销数据密钥。
 - `tailscale serve reset` 会删除节点上的所有映射，请先查看 `tailscale serve status`。

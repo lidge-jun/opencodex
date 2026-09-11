@@ -375,13 +375,31 @@ délégation v1/base/v2 et de ses mécanismes de repli.
 
 ## Préchauffage des comptes Codex
 
-L’ajout ou la réauthentification vérifie normalement le compte avant son enregistrement par une petite requête attendant `response.completed`. Le modèle par défaut est `gpt-5.4-mini`, avec un essai sur `gpt-5.5` en cas de HTTP 400. Les erreurs publiques contiennent des catégories fixes, sans corps de réponse brut.
+L’ajout ou la réauthentification vérifie normalement le compte avant son enregistrement par une petite requête attendant `response.completed`. Le modèle par défaut est `gpt-5.4-mini`, avec un essai sur `gpt-5.5` et `gpt-5.6-luna` en cas de HTTP 400 ou HTTP 404. Les erreurs publiques contiennent des catégories fixes, sans corps de réponse brut.
 
 Si la lecture authentifiée des quotas avec le nouveau jeton OAuth confirme un quota de 5 heures, hebdomadaire ou mensuel épuisé, le compte est enregistré sans appel au modèle et affiche **Validation en attente**. Il reste exclu du routage après un redémarrage ou un renouvellement du jeton. Après récupération du quota, actualisez les quotas : une lecture récente et complète avec de la capacité disponible permet une petite requête de validation. Seule sa réussite active le compte. Tout échec conserve la restriction. Les lectures passives ne déclenchent pas cette requête. Un quota inconnu à l’inscription conserve la vérification habituelle.
 
 `ocx account refresh openai` et `ocx account list openai --quota --refresh` consultent uniquement les quotas. La validation du modèle consomme du quota et nécessite une session humaine du tableau de bord : après récupération, ouvrez `ocx gui` et cliquez sur **Refresh quotas**. Sur un hôte sans interface graphique, accédez à son tableau de bord depuis votre navigateur ; le jeton administrateur seul n’autorise pas la validation. Un compte en pause peut être validé sans être repris ni sélectionné. Les erreurs d’autorisation restent visibles jusqu’à une validation ou une réauthentification réussie.
 
 La revalidation en arrière-plan est distincte et désactivée par défaut. Elle nécessite Token Guardian, la politique `proactive` du fournisseur `openai` et `tokenGuardian.codexWarmupEnabled`, et ignore les comptes dont la validation d’inscription est en attente.
+
+### Pourquoi un compte a cessé de servir les requêtes
+
+Lorsqu'un compte quitte la sélection du pool, la raison accompagne la décision au lieu d'être recalculée pour l'affichage : une interface ne peut donc pas présenter un compte comme sain pendant que le routage l'écarte. `GET /api/codex-auth/accounts` expose `reauthReason` à côté de `needsReauth` pour chaque compte : `missing_credential` si aucun identifiant n'a été enregistré, `refresh_failed` si le renouvellement échoue de façon répétée, et `quota_unauthorized` si la lecture des quotas elle-même a été refusée.
+
+Un renouvellement du compte principal qui n'aboutit pas répond toujours `503` avec `Retry-After`, car une nouvelle tentative peut réussir. Le message précise désormais qu'un échec persistant signifie que le compte principal doit être réauthentifié, au lieu de demander seulement de réessayer.
+
+### Écarter de la rotation un compte rétrogradé
+
+`codexPool.excludedPlans` liste les clés de forfait que la sélection automatique du pool ignore, comparées sans tenir compte de la casse au forfait enregistré sur chaque compte. Absent par défaut : une installation existante effectue exactement la même rotation qu'avant.
+
+```bash
+ocx config set codexPool '{"excludedPlans":["free"]}'
+```
+
+C'est une politique de sélection, pas un blocage. Un compte écarté conserve ses identifiants, son historique de quota et son affinité de thread, reste visible dans la liste des comptes et demeure joignable par sélection explicite comme `work/gpt-5.4`. Seule la rotation automatique cesse de le choisir, y compris lorsqu'il est déjà le compte actif ou déjà lié à un thread — l'état exact que laisse un abonnement expiré.
+
+Deux limites volontaires. Le compte Codex principal n'est jamais écarté par forfait, car le routage en mode sélection seule ne lit pas son forfait dans les identifiants natifs protégés ; une règle le couvrant se contredirait. Et lorsqu'il ne reste aucun compte non écarté, le compte écarté répond quand même au lieu d'échouer : mettre tous les comptes en pause reste le moyen d'arrêter complètement le service. Il n'existe pas de `minimumPlan`, car classer les forfaits ChatGPT entre eux exige un ordre total qui n'existe pas ici.
 
 ## Restauration de Codex natif
 

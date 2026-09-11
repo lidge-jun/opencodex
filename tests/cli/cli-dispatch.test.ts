@@ -1,7 +1,8 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { CLI_COMMANDS } from "../../src/cli/registry";
-import { DISPATCH_ALIASES, DISPATCH_COMMANDS, dispatchCommand, resolveDispatchCommand, decideStartWithLiveOwner } from "../../src/cli/dispatch";
+import { DISPATCH_ALIASES, DISPATCH_COMMANDS, dispatchCommand, resolveDispatchCommand, decideStartWithLiveOwner, selectDefaultGuiUrl } from "../../src/cli/dispatch";
 import type { CliDispatchDeps } from "../../src/cli/dispatch";
+import type { OcxConfig } from "../../src/types";
 import { runGuiCommand } from "../../src/cli/gui";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -651,6 +652,26 @@ describe("GUI command delegation", () => {
     providers: {},
     defaultProvider: "openai",
   };
+
+  test("opens the loopback management ingress from the hub", () => {
+    const hubConfig = {
+      port: 10100,
+      hostname: "100.76.170.81",
+      runtimeRole: "hub" as const,
+      hub: {
+        managementPublicOrigin: "https://hub.example.test",
+        managementIngress: { enabled: true as const, port: 10102 },
+      },
+    } as Pick<OcxConfig, "port" | "hostname" | "runtimeRole" | "hub">;
+    const live = { hostname: "100.76.170.81", port: 10100 };
+
+    expect(selectDefaultGuiUrl(hubConfig, live, hostname => hostname ?? "127.0.0.1"))
+      .toBe("http://localhost:10102");
+
+    const withoutIngress = { ...hubConfig, hub: { managementPublicOrigin: "https://hub.example.test" } };
+    expect(selectDefaultGuiUrl(withoutIngress, live, hostname => hostname ?? "127.0.0.1"))
+      .toBe("http://100.76.170.81:10100");
+  });
 
   test("keeps the default open behavior and requires an explicit pairing origin", async () => {
     let opens = 0;

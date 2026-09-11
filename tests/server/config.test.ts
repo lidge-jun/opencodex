@@ -435,6 +435,35 @@ describe("opencodex config defaults", () => {
     }).ok).toBe(true);
   });
 
+  test("hub.dataPublicOrigin normalizes like the management origin and rejects the same shapes", () => {
+    // The advertised DATA origin is a separate socket from management on a real deployment
+    // (tailnet bind behind its own TLS port), so it is its own field rather than a derivation.
+    expect(validateConfigCandidate({
+      ...getDefaultConfig(),
+      runtimeRole: "hub",
+      hub: {
+        managementPublicOrigin: "https://hub.example.test",
+        dataPublicOrigin: "https://hub.example.test:8443",
+      },
+    })).toMatchObject({
+      ok: true,
+      config: { hub: { dataPublicOrigin: "https://hub.example.test:8443" } },
+    });
+    // NOT `.catch`ed: silently dropping a typo would make `ocx hub invite` fall back to
+    // http://<hostname>:<port>, which is the value the operator set the field to replace.
+    for (const dataPublicOrigin of [
+      "ftp://hub.example.test",
+      "https://user@hub.example.test",
+      "https://hub.example.test:8443/path",
+      "https://hub.example.test:8443/?query=1",
+      "https://hub.example.test:8443/#fragment",
+    ]) {
+      const result = validateConfigCandidate({ ...getDefaultConfig(), hub: { dataPublicOrigin } });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toContain("hub.dataPublicOrigin");
+    }
+  });
+
   test("remote GUI live candidates reject unsafe origins and malformed identity allowlists", () => {
     for (const managementPublicOrigin of [
       "ftp://hub.example.test",

@@ -5,7 +5,8 @@ import { CODEX_RESPONSES_HTTP_URL, type PreparedCodexWsRequest } from "./codex-w
 import { CodexWsCorrelation } from "./codex-ws-correlation";
 import type { CodexWsSession } from "./codex-ws-session";
 import { UPGRADE_DEADLINE_MS, CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS, MAX_CODEX_WS_FRAME_BYTES,
-  MAX_CODEX_WS_QUEUE_BYTES, markCodexWsResponse, normalizeResponsesWsRelayEvent, closedBeforeTerminalMessage } from "./codex-ws-wire";
+  MAX_CODEX_WS_QUEUE_BYTES, markCodexWsResponse, normalizeResponsesWsRelayEvent, closedBeforeTerminalMessage,
+  codexWsFailureDetail, type CodexWsFailureStage } from "./codex-ws-wire";
 
 interface ExchangeOptions {
   session: CodexWsSession;
@@ -94,6 +95,14 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
     let received = false;
     let responseCommitted = false;
     let terminal = false;
+    // #4191: the counters behind the failure classification. A user whose long
+    // thread died here could not tell an unanswered socket from one that carried
+    // only quota frames, because both arrived as the same one-line message.
+    let upstreamFrames = 0;
+    let controlFrames = 0;
+    let relayedEvents = 0;
+    let sentAt: number | null = null;
+    let firstFrameAt: number | null = null;
     let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
     const encoder = new TextEncoder();
     const metadata = url === CODEX_RESPONSES_HTTP_URL ? new CodexWsMetadata(onQuota) : null;
@@ -122,6 +131,21 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
       ws.removeEventListener("close", onClose);
       ws.removeEventListener("error", onError);
     };
+
+    /**
+     * Snapshot the stage for a failure message. Measuring the frame is deferred
+     * to here so the happy path never pays for it: a full-replay thread's frame
+     * runs to megabytes, and this is the only place its size is worth knowing.
+     */
+    const failureStage = (): CodexWsFailureStage => ({
+      requestBytes: Buffer.byteLength(frameText, "utf8"),
+      sent,
+      upstreamFrames,
+      controlFrames,
+      relayedEvents,
+      firstFrameMs: sentAt !== null && firstFrameAt !== null ? Math.max(0, firstFrameAt - sentAt) : null,
+      elapsedMs: sentAt !== null ? Math.max(0, Date.now() - sentAt) : null,
+    });
 
     const commitResponse = () => {
       if (responseCommitted) return;
@@ -192,6 +216,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
       sent = true;
       try {
         ws.send(frameText);
+        sentAt = Date.now();
       } catch {
         if (received || responseCommitted) {
           if (terminal) session.dispose();
@@ -211,13 +236,18 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
       }
       if (!metadata) commitResponse();
       else if (!responseCommitted && !terminal) {
-        preludeTimer = setTimeout(() => failStream("codex websocket response prelude timed out"), CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS);
+        preludeTimer = setTimeout(
+          () => failStream(`codex websocket response prelude timed out${codexWsFailureDetail(failureStage())}`),
+          CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS,
+        );
       }
     };
 
     const onMessage = (event: MessageEvent) => {
       if (!controller || terminal) return;
       received = true;
+      upstreamFrames += 1;
+      if (firstFrameAt === null) firstFrameAt = Date.now();
       const text = typeof event.data === "string" ? event.data : "";
       if (!text) return;
       // UTF-8 byte length is always at least the JS string length. Reject this
@@ -243,6 +273,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
           if (sanitized !== null) {
             relayText = sanitized;
             controlFrame = true;
+            controlFrames += 1;
           }
         } catch (error) {
           failStream(error);
@@ -296,6 +327,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
         failStream("codex websocket response stream closed while enqueueing");
         return;
       }
+      if (!controlFrame) relayedEvents += 1;
       if (type === "response.completed" || type === "response.failed" || type === "response.incomplete" || type === "error") {
         const completedId = correlation?.completed(normalized.payload) ?? null;
         terminal = true;
@@ -316,7 +348,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
         resolve(sseFallback(url, init));
         return;
       }
-      if (sent && !terminal) failStream(closedBeforeTerminalMessage(event));
+      if (sent && !terminal) failStream(closedBeforeTerminalMessage(event, failureStage()));
     };
 
     const onError = () => {
@@ -327,7 +359,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
         cleanup();
         session.dispose();
         resolve(sseFallback(url, init));
-      } else failStream("codex websocket transport error");
+      } else failStream(`codex websocket transport error${codexWsFailureDetail(failureStage())}`);
     };
     detachOwner = session.bindOwner(reason => cancelExchange(reason));
     ws.addEventListener("open", onOpen);

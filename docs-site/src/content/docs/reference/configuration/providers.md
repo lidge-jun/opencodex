@@ -21,6 +21,18 @@ ocx models provider openrouter on
 
 After GUI registration or OAuth login, the confirmation dialog lets you open the Models page. CLI registration and login print model-management commands; JSON includes structured next steps. `--no-wait` reports pending login, not completion. Start the proxy with `ocx start` before using live model commands.
 
+## Z.ai Coding Plan quota endpoints
+
+The Z.ai quota probe recognizes the international coding Chat base
+`https://api.z.ai/api/coding/paas/v4`, the documented
+[Claude Code Anthropic base](https://docs.z.ai/devpack/tool/claude)
+`https://api.z.ai/api/anthropic`, and the documented
+[Codex Responses base](https://docs.z.ai/devpack/tool/codex)
+`https://api.z.ai/api/v1`. All three read quota from the international monitor with
+Bearer authentication; this does not change the inference URL or imply different
+quota consumption between adapters. Existing BigModel CN monitor selection remains
+separate. Full request URLs such as `/api/v1/responses` are not provider base URLs.
+
 ## Provider-related top-level fields
 
 | Field | Type | Default | Meaning |
@@ -845,7 +857,7 @@ container usually has no unlocked keychain session, so requests would fail close
 `${ENV_VAR}` reference in the service environment there instead. Env references are left untouched
 by `store`.
 
-The `zhipu-bigmodel-responses` preset seeds `glm-5.3` and `glm-5-turbo` with
+The `zhipu-bigmodel-responses` preset seeds `glm-5.3`, `glm-5.3-flash` and `glm-5-turbo` with
 `liveModels: false` for `https://open.bigmodel.cn/api/v1`. Its static roster and
 per-model context, effort, and summary metadata come from the
 [BigModel Responses guide](/guides/providers/#bigmodel-coding-plan-over-responses).
@@ -957,6 +969,27 @@ An explicit `statelessResponses: false` is preserved. Existing canonical preset 
 receive the default only when the setting is absent; custom renamed entries keep their configured
 value and do not acquire this default by destination matching. Chat model routes keep their
 existing protocol. The stateless flag does not force Responses streaming into JSON.
+
+## OpenCode Go session affinity
+
+Every request opencodex routes to an OpenCode Go destination carries an `x-opencode-session` header.
+The upstream began rejecting requests without it on 2026-09-06, so the header is not an optimization.
+
+The value depends on what the request already knows about itself:
+
+- An operator-configured `x-opencode-session` on the provider is preserved exactly as written.
+- A request that carries conversation identity — Codex thread headers, a Claude `metadata.user_id`,
+  a `session_id`, or an inbound `x-opencode-session` — is hashed into a stable per-conversation value,
+  so every turn of one conversation reaches Go under the same session.
+- A request with no identity at all, such as a model-availability probe or a first request before any
+  conversation metadata exists, receives a value allocated once for that request. It is isolated from
+  other requests rather than shared, and it survives the places opencodex rebuilds the request: the
+  translation to the internal Responses shape, compaction, combo children, and the policy-fallback
+  retry that hands the turn to the next candidate.
+
+Non-Go destinations are unaffected: opencodex never derives or adds the session header for them. A
+header an operator configured on such a provider is still sent, because opencodex leaves that
+configuration alone.
 
 ## OpenCode Go reasoning efforts
 

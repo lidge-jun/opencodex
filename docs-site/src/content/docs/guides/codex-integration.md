@@ -706,13 +706,31 @@ Catalog sync makes the selected sub-agent models available to Codex; see [Codex 
 
 ## Codex account warmup
 
-When a ChatGPT account is added or reauthenticated, OpenCodex normally verifies it before saving with a small streaming request to the Codex Responses backend. It waits for `response.completed`, defaults to `gpt-5.4-mini`, and retries with `gpt-5.5` on HTTP 400. Public errors contain fixed failure categories rather than raw upstream response bodies.
+When a ChatGPT account is added or reauthenticated, OpenCodex normally verifies it before saving with a small streaming request to the Codex Responses backend. It waits for `response.completed`, defaults to `gpt-5.4-mini`, and retries with `gpt-5.5` and `gpt-5.6-luna` on HTTP 400 or HTTP 404. Public errors contain fixed failure categories rather than raw upstream response bodies.
 
 If the new OAuth credential's authenticated usage lookup confirms an exhausted 5-hour, weekly, or monthly quota, the account is saved without this model request and shows **Validation pending**. It cannot serve pool requests, even after a restart or token refresh. Once quota recovers, **Refresh quotas** finishes validation: a fresh, complete usage reading with headroom permits one small model request, and only a completed response enables the account. Failed or incomplete readings and failed validation preserve the restriction. Passive account polling does not trigger deferred validation. Unknown usage during initial registration retains the normal warmup gate.
 
 `ocx account refresh openai` and `ocx account list openai --quota --refresh` only read usage. Model validation spends quota and requires a human dashboard session: open `ocx gui` and click **Refresh quotas** after recovery. For a headless host, access its dashboard from your browser; an admin token alone does not authorize validation. Validation can complete while an account is paused without resuming or selecting it. Model authorization failures remain visible until successful validation or reauthentication clears them.
 
 Background revalidation is separate and off by default. It requires Token Guardian, the `openai` provider's `proactive` refresh policy, and `tokenGuardian.codexWarmupEnabled`. It skips accounts awaiting deferred registration validation.
+
+### Why an account stopped serving requests
+
+When an account leaves pool selection, the reason travels with the decision instead of being recomputed for display, so a surface can never report an account healthy while routing is dropping it. `GET /api/codex-auth/accounts` carries `reauthReason` next to `needsReauth` on each account: `missing_credential` for a credential that was never stored, `refresh_failed` for a credential refresh that keeps failing, and `quota_unauthorized` when the usage lookup itself was rejected.
+
+A main-account refresh that does not complete still answers `503` with `Retry-After`, because a retry may still succeed. The message now adds that a failure which persists means the main account needs reauthentication, rather than only asking for another attempt.
+
+### Keeping a downgraded account out of rotation
+
+`codexPool.excludedPlans` lists plan keys that automatic pool selection skips, matched case-insensitively against the plan stored on each account. It is absent by default, so an existing install rotates exactly as before.
+
+```bash
+ocx config set codexPool '{"excludedPlans":["free"]}'
+```
+
+This is a selection policy, not a block. An excluded account keeps its credential, quota history, and thread affinity, stays visible on the account surface, and is still reachable by explicit account selection such as `work/gpt-5.4`. What changes is that automatic rotation stops choosing it, including when it is already the active account or already bound to a thread — which is the state a lapsed subscription leaves behind.
+
+Two deliberate limits. The main Codex account is never excluded by plan, because selection-only routing withholds its plan rather than reading the fenced native credential, so a rule covering it would disagree with itself. And when no unexcluded account remains, the excluded one still answers rather than failing closed; pausing every account is still the way to stop serving entirely. There is no `minimumPlan` counterpart, because ranking ChatGPT plans against each other needs a total ordering that does not exist here.
 
 ## Restoring native Codex
 

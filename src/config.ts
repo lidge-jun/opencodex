@@ -50,6 +50,7 @@ import {
   isCodexAccountAutoSwitchThresholdKey,
   parseCodexAutoSwitchThreshold,
 } from "./codex/account-auto-switch";
+import { loopbackCompanionAllowed } from "./codex/loopback-target";
 import { UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD } from "./codex/upstream-host-health";
 import {
   adoptCustomModelCatalogMigration,
@@ -1075,6 +1076,18 @@ const hubConfigSchema = z.object({
     }
     return origin;
   }).optional(),
+  // Same canonical-origin rule as managementPublicOrigin, and deliberately NOT `.catch`ed:
+  // a mistyped data origin must be rejected at write time, because silently dropping it
+  // makes `ocx hub invite` print the `http://<hostname>:<port>` fallback that the operator
+  // set this field precisely to replace.
+  dataPublicOrigin: z.string().transform((value, ctx) => {
+    const origin = canonicalHttpOrigin(value);
+    if (!origin) {
+      ctx.addIssue({ code: "custom", message: "must be a canonical http(s) origin without credentials, path, query, or fragment" });
+      return z.NEVER;
+    }
+    return origin;
+  }).optional(),
   // A malformed hand edit disables only the optional ingress. Live writes are rejected by
   // managementIngressConfigError before this load-time degradation can hide the mistake.
   managementIngress: z.union([
@@ -1148,6 +1161,17 @@ const clientConnectionSchema = z.object({
       ctx.addIssue({ code: "custom", path: ["oldKeyBackupPath"], message: `must equal ${expected}` });
     }
   }).optional(),
+}).strict();
+
+/**
+ * Codex pool selection policy section.
+ *
+ * `.strict()` like its neighbour: a typo in an optional feature section should surface as a
+ * rejected write rather than a silently ignored key that leaves the operator believing they
+ * excluded something.
+ */
+const codexPoolSchema = z.object({
+  excludedPlans: z.array(z.string().trim().min(1)).optional(),
 }).strict();
 
 /**
@@ -1227,13 +1251,16 @@ const configSchema = z.object({
   // is safe: startServer() already falls back to 127.0.0.1 for a missing hostname. Write-time
   // rejection lives in validateConfigCandidate() so bad values still surface to the caller.
   hostname: z.string().trim().min(1).optional().catch(undefined),
-  // Discriminated on `enabled` so a disabled entry cannot be forced to carry a port, and an
-  // enabled one cannot omit it (#1102). A malformed value degrades to undefined rather than
-  // failing the whole parse: this is an opt-in convenience surface, and a hand-edit typo here
-  // must never reset providers/apiKeys through the backup-and-defaults repair path.
+  // Discriminated on `enabled` so a disabled entry cannot be forced to carry a port (#1102).
+  // An enabled one MAY omit it: that is the companion form, which binds 127.0.0.1 on the proxy
+  // port and is legal only off a loopback/wildcard bind — a relationship between two fields, so
+  // it is enforced in validateConfigCandidate() and again at startup, not here (#4236).
+  // A malformed value degrades to undefined rather than failing the whole parse: this is an
+  // opt-in convenience surface, and a hand-edit typo here must never reset providers/apiKeys
+  // through the backup-and-defaults repair path.
   unauthenticatedLoopbackListener: z.union([
     z.object({ enabled: z.literal(false) }),
-    z.object({ enabled: z.literal(true), port: z.number().int().min(1).max(65535) }),
+    z.object({ enabled: z.literal(true), port: z.number().int().min(1).max(65535).optional() }),
   ]).optional().catch(undefined),
   providers: z.record(z.string(), providerConfigSchema),
   modelPinnedEfforts: modelPinnedEffortsSchema.optional(),
@@ -1288,6 +1315,10 @@ const configSchema = z.object({
   codexDesktopAuthless: z.boolean().optional().catch(undefined),
   codexClientCompaction: z.boolean().optional().catch(undefined),
   pausedCodexAccountIds: z.array(z.string().regex(/^[a-zA-Z0-9._-]{1,64}$/)).optional(),
+  // A malformed policy degrades to "no policy" rather than failing the parse, so a hand-edited
+  // typo cannot trip the backup-and-defaults repair path and wipe providers or pool accounts.
+  // Silently ignoring it would be its own trap, so the write path rejects it and loadConfig warns.
+  codexPool: codexPoolSchema.optional().catch(undefined),
   codexQuotaAutoRefresh: codexQuotaAutoRefreshSchema.optional().catch(undefined),
   codexAccountNamespaces: codexAccountNamespacesSchema.optional(),
   // Selection order is a preference, not a safety control like pause: a malformed
@@ -2207,6 +2238,20 @@ function malformedQuotaResetNotifyWarning(rawParsed: unknown): string | null {
 }
 
 /**
+ * Same silent-in-the-wrong-direction failure as the notification block: a dropped pool policy means
+ * the accounts the operator meant to exclude keep taking traffic, and the only visible symptom is
+ * traffic going somewhere it was supposed to stop going.
+ */
+function malformedCodexPoolWarning(rawParsed: unknown): string | null {
+  const raw = rawConfigRecord(rawParsed);
+  if (!raw || !Object.hasOwn(raw, "codexPool")) return null;
+  const result = codexPoolSchema.safeParse(raw.codexPool);
+  if (result.success) return null;
+  const field = result.error.issues[0]?.path.join(".");
+  return `codexPool${field ? `.${field}` : ""} ignored: invalid Codex pool selection policy`;
+}
+
+/**
  * Warn once per load that the section was dropped.
  *
  * This matters more than a usual degradation notice: the failure is SILENT in the direction
@@ -2215,6 +2260,18 @@ function malformedQuotaResetNotifyWarning(rawParsed: unknown): string | null {
  */
 function warnDegradedQuotaResetNotify(rawParsed: unknown): void {
   const warning = malformedQuotaResetNotifyWarning(rawParsed);
+  if (warning) console.warn(`⚠️  config.json ${warning}. Other settings were preserved.`);
+}
+
+/**
+ * Warn once per load that the pool policy was dropped.
+ *
+ * `.catch(undefined)` turns a malformed policy into a SUCCESSFUL parse, so without this the proxy
+ * starts, rotates onto the accounts the operator meant to exclude, and prints nothing. The visible
+ * symptom would be traffic going exactly where it was told not to go.
+ */
+function warnDegradedCodexPool(rawParsed: unknown): void {
+  const warning = malformedCodexPoolWarning(rawParsed);
   if (warning) console.warn(`⚠️  config.json ${warning}. Other settings were preserved.`);
 }
 
@@ -2377,6 +2434,7 @@ export function loadConfig(): OcxConfig {
       warnDegradedRuntimeRole(parsed);
       warnDegradedOptionalRemoteBlocks(parsed);
       warnDegradedQuotaResetNotify(parsed);
+      warnDegradedCodexPool(parsed);
       return withRefreshedCostOverlays(normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed));
     }
     // Schema validation failed — merge defaults into the raw object instead of
@@ -2405,6 +2463,7 @@ export function loadConfig(): OcxConfig {
       warnDegradedRuntimeRole(parsed);
       warnDegradedOptionalRemoteBlocks(parsed);
       warnDegradedQuotaResetNotify(parsed);
+      warnDegradedCodexPool(parsed);
       return withRefreshedCostOverlays(normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed));
     }
     // Still failing, but if every complaint is about one or more named entries
@@ -2429,6 +2488,7 @@ export function loadConfig(): OcxConfig {
         warnDegradedRuntimeRole(parsed);
         warnDegradedOptionalRemoteBlocks(parsed);
         warnDegradedQuotaResetNotify(parsed);
+        warnDegradedCodexPool(parsed);
         return withRefreshedCostOverlays(normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed));
       }
     }
@@ -2573,6 +2633,8 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   if (clientWarning) warnings.push(clientWarning);
   const notifyWarning = malformedQuotaResetNotifyWarning(rawParsed);
   if (notifyWarning) warnings.push(notifyWarning);
+  const codexPoolWarning = malformedCodexPoolWarning(rawParsed);
+  if (codexPoolWarning) warnings.push(codexPoolWarning);
   if (syncDisabledReason) {
     warnings.push(`syncCodexSubagentDefaults ignored: ${syncDisabledReason}`);
   }
@@ -2722,6 +2784,21 @@ function quotaResetNotifyError(value: unknown): string | null {
 }
 
 /**
+ * The read path degrades a malformed pool policy to undefined, which for an exclusion policy means
+ * the excluded accounts quietly keep serving traffic. Reject it on write so `ocx config set` cannot
+ * create a policy that looks applied and is not.
+ */
+function codexPoolError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "codexPool") || raw.codexPool === undefined) return null;
+  const result = codexPoolSchema.safeParse(raw.codexPool);
+  if (result.success) return null;
+  const issue = result.error.issues[0];
+  const field = issue?.path.join(".");
+  return `schema_invalid: codexPool${field ? `.${field}` : ""}: ${issue?.message ?? "invalid configuration"}`;
+}
+
+/**
  * Same reasoning as {@link blankHostnameError}, and more urgent: the read path degrades a
  * malformed selection-order map to undefined, which on a write would drop every entry the
  * user had accumulated and still report success. A load-time degrade leaves the raw map in
@@ -2812,15 +2889,22 @@ function oauthOpenBrowserError(value: unknown): string | null {
 
 /** Validate an in-memory config candidate without touching disk. Used by headless CLI import/set. */
 /**
- * Reject a loopback-listener port that collides with the proxy port (#1102).
+ * Reject a loopback-listener port that collides with the proxy port (#1102), and a port-less
+ * companion listener on a bind address that already owns 127.0.0.1 (#4236).
  *
- * The schema can only check the shape of each field on its own; the two ports being distinct
- * is a relationship between them. Letting the pair through would surface as a startup failure
- * after the public listener already bound, which reads like an unrelated port conflict.
+ * The schema can only check the shape of each field on its own; the two ports being distinct —
+ * and the port-less form being compatible with `hostname` — are relationships between fields.
+ * Letting either through would surface as a startup failure after the public listener already
+ * bound, which reads like an unrelated port conflict.
+ *
+ * Both keys are read from the same candidate, so `ocx config set hostname 127.0.0.1` on a host
+ * whose listener is already the companion form is refused by this same check, with the same
+ * message, rather than breaking the next start.
  *
  * This is write-time only, matching `blankHostnameError`: a live caller can be told the value
  * is wrong, whereas a hand-edited config on the read path degrades to undefined rather than
- * resetting the whole file.
+ * resetting the whole file. `assertLoopbackListenerBindable` repeats the decision at startup so
+ * a hand edit that skipped this boundary fails with the same sentence instead of EADDRINUSE.
  */
 function loopbackListenerPortError(value: unknown): string | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -2838,15 +2922,44 @@ function loopbackListenerPortError(value: unknown): string | null {
     return "schema_invalid: unauthenticatedLoopbackListener.enabled: must be a boolean";
   }
   if (entry.enabled !== true) return null;
-  const listenerPort = entry.port;
-  if (typeof listenerPort !== "number" || !Number.isInteger(listenerPort) || listenerPort < 1 || listenerPort > 65535) {
-    return "schema_invalid: unauthenticatedLoopbackListener.port: must be an integer port when enabled";
-  }
+  const hostname = typeof (value as Record<string, unknown>).hostname === "string"
+    ? (value as Record<string, unknown>).hostname as string
+    : undefined;
   const proxyPort = (value as Record<string, unknown>).port;
+  const listenerPort = entry.port;
+  // The companion form. `port` omitted means "same port as the public listener, on 127.0.0.1",
+  // which only exists as a free address when the public listener is bound somewhere else.
+  if (listenerPort === undefined) {
+    return loopbackCompanionBindError(
+      hostname,
+      typeof proxyPort === "number" ? proxyPort : 10100,
+    );
+  }
+  if (typeof listenerPort !== "number" || !Number.isInteger(listenerPort) || listenerPort < 1 || listenerPort > 65535) {
+    return "schema_invalid: unauthenticatedLoopbackListener.port: must be an integer port when enabled, or omitted to share the proxy port";
+  }
   if (typeof proxyPort === "number" && proxyPort === listenerPort) {
     return "schema_invalid: unauthenticatedLoopbackListener.port: must differ from the proxy port";
   }
   return null;
+}
+
+/**
+ * The one sentence both the write boundary and startup use for an impossible companion bind.
+ *
+ * Exported so `startServer` can fail with the identical text: an operator who hand-edited the
+ * file past `validateConfigCandidate` must read the same diagnosis, not EADDRINUSE.
+ */
+export function loopbackCompanionBindError(
+  hostname: string | undefined,
+  proxyPort: number,
+): string | null {
+  if (loopbackCompanionAllowed(hostname)) return null;
+  const bind = (hostname ?? "").trim() || "127.0.0.1";
+  return "schema_invalid: unauthenticatedLoopbackListener: a port-less listener binds "
+    + `127.0.0.1:${proxyPort}, which the public listener on hostname "${bind}" already holds. `
+    + "Either set a distinct unauthenticatedLoopbackListener.port, or remove the listener — a "
+    + "loopback bind already admits local callers without a credential.";
 }
 
 /**
@@ -2903,6 +3016,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? upstreamHostCircuitThresholdError(value)
     ?? agentTaskRecoveryError(value)
     ?? quotaResetNotifyError(value)
+    ?? codexPoolError(value)
     ?? googleAntigravityStaticCatalogVersionError(value)
     ?? codexAccountPrioritiesError(value)
     ?? codexQuotaAutoRefreshError(value)

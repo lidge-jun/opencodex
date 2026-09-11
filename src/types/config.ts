@@ -260,6 +260,21 @@ export interface OcxHubConfig {
   /** Canonical browser-reachable management origin advertised by a hub. */
   managementPublicOrigin?: string;
   /**
+   * Canonical client-reachable DATA origin of this hub — what a remote machine passes as the
+   * positional URL to `ocx connect`, and what `ocx hub invite` prints.
+   *
+   * Separate from `managementPublicOrigin` because the two are genuinely different sockets on a
+   * real deployment: management is a loopback-only ingress published by an HTTPS frontend, while
+   * the data listener is bound to the hub's tailnet/LAN address and fronted on its own port
+   * (`https://hub.tailnet.ts.net:8443`). Deriving one from the other produced an origin that
+   * answered `/readyz` and nothing else.
+   *
+   * Advisory only: it is the origin the hub ADVERTISES, never a bind address. When omitted,
+   * `ocx hub invite` falls back to `http://<hostname>:<port>`, which is correct for a plain
+   * tailnet bind with no TLS frontend.
+   */
+  dataPublicOrigin?: string;
+  /**
    * Optional management-only listener for a local HTTPS frontend such as Tailscale Serve.
    * The hostname is deliberately not configurable: when enabled the socket is always bound
    * to 127.0.0.1, and only GUI, session-bootstrap, and management API routes are admitted.
@@ -661,13 +676,24 @@ export interface OcxConfig {
    * surface: every process on the machine can reach it, spend account quota, and consume paid
    * provider credentials. Off by default; not for multi-tenant hosts.
    *
-   * The port is required when enabled and must differ from the proxy port. An OS-assigned port
-   * would change across restarts, which would break already-running app-servers holding the
-   * previous `base_url` — the exact symptom #1102 reported and we disproved for token rotation.
+   * Two enabled forms:
+   *
+   *  - `{ enabled: true, port: N }` — a distinct port (the #1102 form). N must differ from the
+   *    proxy port.
+   *  - `{ enabled: true }` — the "companion" form: bind `127.0.0.1:<proxy port>`. Legal only
+   *    when `hostname` is a specific non-loopback, non-wildcard address (a tailnet or LAN IP),
+   *    because otherwise the public socket already owns that loopback address. This is the
+   *    one-port hub shape: remote clients dial `hostname:port`, local processes dial
+   *    `127.0.0.1:port`, and every integration that hardcodes `http://127.0.0.1:<proxy port>`
+   *    keeps working on a hub whose public bind they cannot reach (#4236).
+   *
+   * Neither form is OS-assigned. A changing port would break already-running app-servers
+   * holding the previous `base_url` — the exact symptom #1102 reported and we disproved for
+   * token rotation.
    */
   unauthenticatedLoopbackListener?:
     | { enabled: false }
-    | { enabled: true; port: number };
+    | { enabled: true; port?: number };
   /**
    * Outbound HTTP(S) proxy URL for provider requests (e.g. "http://user:pass@proxy:8080", or
    * "${HTTPS_PROXY}"-style env reference). Mirrored into HTTP_PROXY/HTTPS_PROXY at startup when
@@ -746,6 +772,14 @@ export interface OcxConfig {
   codexAccounts?: CodexAccount[];
   /** Account ids administratively excluded from future pool selection until resumed. */
   pausedCodexAccountIds?: string[];
+  /**
+   * Codex pool selection policy. Absent means no policy, so an existing install rotates exactly
+   * as before.
+   *
+   * Not in `getDefaultConfig()` on purpose — that function carries no optional-feature keys, so
+   * absence is the only default state this policy has.
+   */
+  codexPool?: OcxCodexPoolConfig;
   /** Opt-in per-account activation of newly reset Codex quota windows. */
   codexQuotaAutoRefresh?: Record<string, {
     fiveHour?: boolean;
@@ -1179,6 +1213,25 @@ export interface OcxWebSearchSidecarConfig {
    * answer. Default: false (buffered, previous behavior).
   */
   streamRoutedModelOutput?: boolean;
+}
+
+/**
+ * Codex account-pool selection policy.
+ *
+ * This is a selection policy, not a block. An excluded account keeps its credential, quota
+ * history, and thread affinity, stays visible on the account surface, and remains reachable by
+ * explicit account selection. Only automatic rotation skips it.
+ */
+export interface OcxCodexPoolConfig {
+  /**
+   * Plan keys ordinary rotation skips, matched case-insensitively against the plan stored on each
+   * account. Absent or empty means no policy.
+   *
+   * There is no `minimumPlan` counterpart: ranking ChatGPT plans against each other needs a total
+   * ordering this repository does not have, and inventing one would silently drain a tier the
+   * operator never meant to exclude.
+   */
+  excludedPlans?: string[];
 }
 
 /**

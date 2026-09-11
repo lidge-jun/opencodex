@@ -121,7 +121,8 @@ are left in place.
 
 Status and `ocx doctor` compare this CLI's version with the running proxy. If the CLI is newer,
 restart the proxy using the intended current installation; for a background service, run
-`ocx service repair` (`ocx service restart` is an alias). If the proxy is newer, upgrade the CLI
+`ocx service restart` — a version skew leaves the service definition byte-identical, so
+`ocx service repair` would reload nothing and keep the old process serving. If the proxy is newer, upgrade the CLI
 or resolve `PATH` to the intended installation. These diagnostics do not repair the service or
 change whether requests are allowed.
 
@@ -310,16 +311,17 @@ Definitions installed before this change still carry the old versioned paths and
 themselves — once the old executable is deleted, no opencodex code runs to fix it. Run
 `ocx service repair` once after upgrading; after that, each service start follows the launcher.
 An already-running proxy is not replaced by an external upgrade: when the installed CLI is newer
-than the running proxy, restart the service (or run `ocx service repair`) so the new build serves.
+than the running proxy, run `ocx service restart` so the new build serves. `repair` is not enough
+there: the definition did not change, and a repair that changes nothing reloads nothing.
 If the proxy is newer instead, check the CLI installation and `PATH` as described under
 [`ocx status`](#ocx-status---json).
 
 | Subcommand | Action |
 | --- | --- |
-| none | Install and start when absent; otherwise refresh and restart the existing service. A healthy Windows scheduler definition is reused; a stale definition may be re-registered and require elevation. |
+| none | Install and start when absent; otherwise `repair` the existing service. A healthy Windows scheduler definition is reused; a stale definition may be re-registered and require elevation. |
 | `install` | Create and start the service. Registers it, which on Windows needs elevation. |
-| `repair` | Refresh an installed service in place and restart it. A healthy Windows scheduler definition is reused; a stale definition may be re-registered and require elevation. |
-| `restart` | Alias of `repair`. |
+| `repair` | Refresh an installed service in place, reloading the manager only when something changed — so on macOS a healthy, unchanged job keeps running and the repair is not an outage. A healthy Windows scheduler definition is reused; a stale definition may be re-registered and require elevation. |
+| `restart` | The same refresh, but it always restarts. On macOS an unchanged, already-loaded job is kickstarted in place. Not an alias of `repair`. |
 | `start` | Start an installed service. |
 | `stop` | Stop the service and restore native Codex. |
 | `status` | Report service and proxy diagnostics plus log paths. |

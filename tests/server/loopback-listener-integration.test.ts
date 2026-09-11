@@ -290,9 +290,11 @@ describe("unauthenticated loopback listener", () => {
         { method: "GET", path: "/" },
         { method: "GET", path: "/healthz" },
         { method: "GET", path: "/readyz" },
-        { method: "POST", path: "/v1/chat/completions", body: '{"model":"x","messages":[]}' },
-        { method: "POST", path: "/v1/messages", body: '{"model":"x","messages":[]}' },
         { method: "GET", path: "/v1/opencodex/artifacts/x" },
+        // The inference wires are admitted as POST only (see the dedicated test below).
+        { method: "GET", path: "/v1/messages" },
+        { method: "GET", path: "/v1/chat/completions" },
+        { method: "GET", path: "/v1/messages/count_tokens" },
         // Voice call-create is admitted only as POST; the keyed sideband join only as an upgrade.
         { method: "GET", path: "/v1/live/rtc_x" },
         { method: "GET", path: "/v1/realtime/calls/rtc_x" },
@@ -316,6 +318,33 @@ describe("unauthenticated loopback listener", () => {
       // And an allowlisted route is genuinely reachable, so the rejections above are not
       // passing merely because nothing works on this listener.
       expect((await fetch(`${base}/v1/models`)).status).toBe(200);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("a hub's /v1/hub-state stays off this listener (#4236)", async () => {
+    // The route is reachable with a data key on the PUBLIC listener, by design. It must not be
+    // reachable with no credential at all: it names the hub's providers and which of them are
+    // logged in, and the unauthenticated listener exists for the inference wires a directly
+    // spawned `codex app-server` speaks — not for discovery. A hub reads its own config.
+    const loopbackPort = await freePort();
+    saveConfig({ ...baseConfig(loopbackPort), runtimeRole: "hub" } as OcxConfig);
+    const server = await startLoopbackTestServer(loopbackPort);
+    try {
+      const viaLoopback = await fetch(`http://127.0.0.1:${loopbackPort}/v1/hub-state`);
+      expect(viaLoopback.status).toBe(404);
+      // The LISTENER's 404, not the route's. `hub_state_not_a_hub` would prove the request
+      // reached the handler and was merely turned away for the role; `not_found` proves the
+      // allowlist refused it first — and this host IS a hub, so the role gate would have passed.
+      expect(await viaLoopback.json()).toMatchObject({ error: { code: "not_found" } });
+      // And the route genuinely exists on this build and on this host, so the 404 above is the
+      // allowlist rather than a missing route passing vacuously.
+      const viaPublic = await fetch(`http://127.0.0.1:${server.port}/v1/hub-state`, {
+        headers: { "x-opencodex-api-key": "public-secret" },
+      });
+      expect(viaPublic.status).toBe(200);
+      expect(await viaPublic.json()).toMatchObject({ runtimeRole: "hub" });
     } finally {
       await server.stop(true);
     }
@@ -458,6 +487,55 @@ describe("unauthenticated loopback listener", () => {
         const res = await fetch(`${base}${path}`, { headers: upgradeHeaders });
         expect({ path, status: res.status }).toEqual({ path, status: 404 });
         expect(res.headers.get("content-type")).toContain("application/json");
+      }
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("admits the local client inference wires, and still refuses /api/* (#4236)", async () => {
+    // The hub's own local clients do not speak Responses: `ocx claude`, the system-env
+    // injection and Claude Desktop speak the Anthropic wire, Cursor / the vision helper /
+    // aside speak OpenAI chat. On a tailnet-bound hub this listener is their only local
+    // socket, so a 404 here is the whole "Codex works but nothing else does" defect.
+    //
+    // `count_tokens` completes the Anthropic wire. It spends no provider quota and reaches no
+    // stored credential, so withholding it bought no confinement — the same caller may POST the
+    // entire conversation to `/v1/messages` on this socket — while costing Claude Code its
+    // server-side count.
+    const loopbackPort = await freePort();
+    saveConfig(baseConfig(loopbackPort));
+    const server = await startLoopbackTestServer(loopbackPort);
+    const base = `http://127.0.0.1:${loopbackPort}`;
+    const publicBase = `http://127.0.0.1:${server.port}`;
+    try {
+      for (const path of ["/v1/messages", "/v1/messages/count_tokens", "/v1/chat/completions"]) {
+        const viaPublic = await fetch(`${publicBase}${path}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        });
+        // The public listener is unchanged: a wildcard bind still demands a credential.
+        expect({ path, status: viaPublic.status }).toEqual({ path, status: 401 });
+
+        // Deliberately malformed so it fails INSIDE the handler. Neither 401 (not admitted)
+        // nor 404 (not on the allowlist) may come back.
+        const viaLoopback = await fetch(`${base}${path}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        });
+        expect({ path, status: viaLoopback.status }).not.toEqual({ path, status: 401 });
+        expect({ path, status: viaLoopback.status }).not.toEqual({ path, status: 404 });
+      }
+
+      // Management discovery is the OTHER destination contract and must not ride along: the
+      // CLI resolves `/api/*` through the authenticated surface with a management credential.
+      for (const path of ["/api/claude-code", "/api/config"]) {
+        const response = await fetch(`${base}${path}`, {
+          headers: { "x-opencodex-api-key": "admin-secret" },
+        });
+        expect({ path, status: response.status }).toEqual({ path, status: 404 });
       }
     } finally {
       await server.stop(true);
@@ -864,4 +942,103 @@ describe("Codex injection targets the loopback listener", () => {
       removeTreeWithRetry(root);
     }
   });
+});
+
+/**
+ * The companion form: `{ enabled: true }` with no port, on a hub bound to a tailnet/LAN
+ * address (#4236). One port, two sockets — remote clients reach `hostname:port` with a
+ * credential, local processes reach `127.0.0.1:port` without one.
+ */
+describe("loopback companion listener", () => {
+  function companionConfig(hostname: string): OcxConfig {
+    const config = baseConfig(null) as Record<string, unknown>;
+    config.hostname = hostname;
+    config.unauthenticatedLoopbackListener = { enabled: true };
+    return config as unknown as OcxConfig;
+  }
+
+  test("binds 127.0.0.1 on the public port, and only loopback is credential-free", async () => {
+    const address = firstNonLoopbackIPv4();
+    if (!address) {
+      // Without a second address there is no way to distinguish the two sockets, and a silent
+      // pass would hide exactly the regression this test exists for.
+      console.warn("[loopback-companion] no non-loopback IPv4 interface; same-port check not run");
+      return;
+    }
+    const port = await freePort();
+    saveConfig(companionConfig(address));
+    const logs: string[] = [];
+    const log = console.log;
+    const warn = console.warn;
+    console.log = (...values: unknown[]) => { logs.push(values.join(" ")); };
+    console.warn = (...values: unknown[]) => { logs.push(values.join(" ")); };
+    let server: ReturnType<typeof startServer> | null = null;
+    try {
+      server = startServer(port);
+    } finally {
+      console.log = log;
+      console.warn = warn;
+    }
+    try {
+      expect(server!.port).toBe(port);
+      // The same port, two answers: that is the whole feature.
+      expect((await fetch(`http://127.0.0.1:${port}/v1/models`)).status).toBe(200);
+      expect((await fetch(`http://${address}:${port}/v1/models`)).status).toBe(401);
+
+      // The startup line has to say "companion" rather than warn about a surprise second
+      // port: the operator chose this topology, and the ported form's warning misdescribes it.
+      const startup = logs.join("\n");
+      expect(startup).toContain(`Loopback companion active on http://127.0.0.1:${port}`);
+      expect(startup).toContain("same port as the public listener; local processes need no credential");
+      expect(startup).not.toContain("Unauthenticated loopback listener active");
+    } finally {
+      await server!.stop(true);
+    }
+  }, SERVER_BUDGET_MS);
+
+  test("the route allowlist is unchanged: sharing a port widens no surface", async () => {
+    const address = firstNonLoopbackIPv4();
+    if (!address) {
+      console.warn("[loopback-companion] no non-loopback IPv4 interface; allowlist check not run");
+      return;
+    }
+    const port = await freePort();
+    saveConfig(companionConfig(address));
+    const server = startServer(port);
+    try {
+      // Same socket semantics as the ported form, same default-deny. A companion is a bind
+      // address change, never an admission change — `/api/*`, health and the GUI stay
+      // unreachable here no matter which port the listener shares.
+      for (const path of ["/api/config", "/api/claude-code", "/healthz", "/readyz", "/"]) {
+        const response = await fetch(`http://127.0.0.1:${port}${path}`);
+        expect({ path, status: response.status }).toEqual({ path, status: 404 });
+      }
+      // The inference wires the hub's own clients speak ARE served (#4236); malformed bodies,
+      // so a non-404 proves admission rather than an upstream call.
+      for (const path of ["/v1/messages", "/v1/chat/completions"]) {
+        const response = await fetch(`http://127.0.0.1:${port}${path}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        });
+        expect({ path, status: response.status }).not.toEqual({ path, status: 404 });
+        expect({ path, status: response.status }).not.toEqual({ path, status: 401 });
+      }
+      expect((await fetch(`http://127.0.0.1:${port}/v1/models`)).status).toBe(200);
+    } finally {
+      await server.stop(true);
+    }
+  }, SERVER_BUDGET_MS);
+
+  test("an impossible companion fails before any socket opens", async () => {
+    // A hand edit that skipped validateConfigCandidate must read the same sentence the write
+    // boundary gives, not EADDRINUSE from a rolled-back startup that looks like a foreign
+    // process holding the port.
+    const port = await freePort();
+    saveConfig(companionConfig("127.0.0.1"));
+    expect(() => startServer(port)).toThrow(/a port-less listener binds 127\.0\.0\.1/);
+    // Nothing was bound: the refusal lands before the public listener opens.
+    const rebound = Bun.serve({ port, hostname: "127.0.0.1", fetch: () => new Response("ok") });
+    await rebound.stop(true);
+  }, SERVER_BUDGET_MS);
 });

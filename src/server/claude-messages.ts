@@ -36,7 +36,12 @@ import { resolveWireProtocolOverride } from "./adapter-resolve";
 import type { OcxConfig } from "../types";
 import { readJsonRequestBody, resolveInboundBodyLimitBytes } from "./request-decompress";
 import { addFinalRequestLog, httpStatusForRequestLogTerminal, recordFirstOutput, type RequestLogContext, type RequestLogEntry } from "./request-log";
-import { conversationIdFromClaudeMetadata, normalizeLogConversationId, sessionLaneIdFromRequest } from "./request-log-conversation";
+import {
+  conversationIdFromClaudeMetadata,
+  linkRequestSessionLane,
+  normalizeLogConversationId,
+  sessionLaneIdFromRequest,
+} from "./request-log-conversation";
 import { responseWithDeferredRequestLog } from "./relay";
 import { handleResponses } from "./responses";
 import {
@@ -897,6 +902,7 @@ async function handleClaudeMessagesWithBudget(
         headers,
         body: JSON.stringify(internalBody),
       });
+      linkRequestSessionLane(req, internalReq);
     } finally {
       reservation.release();
     }

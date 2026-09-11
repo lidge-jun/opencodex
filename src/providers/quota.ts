@@ -345,14 +345,26 @@ function isCanonicalOllamaCloudBaseUrl(baseUrl?: string): boolean {
   }
 }
 
+function zaiQuotaMonitorHost(baseUrl: string): string | null {
+  // Admission and destination selection must share one mapping: admitting a new
+  // international wire must never fall through to the CN host/authentication scheme.
+  switch (normalizedBaseUrl(baseUrl)) {
+    case ZAI_BASE_URL:
+    case `${ZAI_BASE_URL}/api/coding/paas/v4`:
+    case `${ZAI_BASE_URL}/api/anthropic`:
+    case `${ZAI_BASE_URL}/api/v1`:
+      return ZAI_BASE_URL;
+    case ZAI_CN_BASE_URL:
+    case `${ZAI_CN_BASE_URL}/api/coding/paas/v4`:
+    case `${ZAI_CN_BASE_URL}/api/v1`:
+      return ZAI_CN_BASE_URL;
+    default:
+      return null;
+  }
+}
+
 function isCanonicalZaiBaseUrl(baseUrl: string): boolean {
-  const normalized = normalizedBaseUrl(baseUrl);
-  return normalized === ZAI_BASE_URL
-    || normalized === `${ZAI_BASE_URL}/api/coding/paas/v4`
-    || normalized === ZAI_CN_BASE_URL
-    || normalized === `${ZAI_CN_BASE_URL}/api/coding/paas/v4`
-    // BigModel serves the same GLM Coding Plan on the OpenAI Responses wire at /api/v1.
-    || normalized === `${ZAI_CN_BASE_URL}/api/v1`;
+  return zaiQuotaMonitorHost(baseUrl) !== null;
 }
 
 function isCanonicalMinimaxBaseUrl(baseUrl: string): boolean {
@@ -851,13 +863,10 @@ function parseZaiQuotaLegacyFields(data: Record<string, unknown> | null): Provid
  * host or follow a redirect off-origin.
  */
 async function fetchZaiQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
-  if (!isCanonicalZaiBaseUrl(config.baseUrl)) return null;
+  const monitorHost = zaiQuotaMonitorHost(config.baseUrl);
+  if (!monitorHost) return null;
   const apiKey = resolveProviderApiKey(config.apiKey)?.trim();
   if (!apiKey) return null;
-  const normalized = normalizedBaseUrl(config.baseUrl);
-  const monitorHost = normalized === ZAI_BASE_URL || normalized === `${ZAI_BASE_URL}/api/coding/paas/v4`
-    ? ZAI_BASE_URL
-    : ZAI_CN_BASE_URL;
   const authorization = monitorHost === ZAI_CN_BASE_URL ? apiKey : `Bearer ${apiKey}`;
   const response = await fetch(`${monitorHost}/api/monitor/usage/quota/limit`, {
     headers: { Accept: "application/json", Authorization: authorization },
@@ -2906,7 +2915,11 @@ function keyQuotaReaderForProvider(name: string, provider: OcxProviderConfig): K
   if (name === "deepseek" && isCanonicalDeepSeekBaseUrl(provider.baseUrl)) return fetchDeepSeekQuota;
   if (name === "cline-pass" && isCanonicalClineBaseUrl(provider.baseUrl)) return fetchClineQuota;
   if (isCanonicalOllamaCloudBaseUrl(provider.baseUrl ?? getProviderRegistryEntry(name)?.baseUrl)) return fetchOllamaCloudQuota;
-  if (["zai", "glm", "glm-cn", "zhipu-bigmodel-coding"].includes(name) && isCanonicalZaiBaseUrl(provider.baseUrl)) return fetchZaiQuota;
+  // #4201: the Responses preset is the same domestic GLM Coding Plan subscription on the OpenAI
+  // Responses wire, so it reads the same monitor endpoint. Eligibility stays a name list AND the
+  // canonical-URL guard: the guard is what keeps BigModel's bare-key Authorization from reaching a
+  // lookalike host, so a same-named custom destination still dispatches nothing.
+  if (["zai", "glm", "glm-cn", "zhipu-bigmodel-coding", "zhipu-bigmodel-responses"].includes(name) && isCanonicalZaiBaseUrl(provider.baseUrl)) return fetchZaiQuota;
   if (["minimax", "minimax-cn"].includes(name) && isCanonicalMinimaxBaseUrl(provider.baseUrl)) return fetchMinimaxQuota;
   if (name === "moonshot" && isCanonicalMoonshotBaseUrl(provider.baseUrl)) return fetchMoonshotQuota;
   if (name === "venice" && isCanonicalVeniceBaseUrl(provider.baseUrl)) return fetchVeniceQuota;

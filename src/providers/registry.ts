@@ -2640,6 +2640,23 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   // Narrowed carry of #3641: the official Codex example declares a local static catalog,
   // not an HTTP /models contract. Keep Responses separate from the Chat endpoint above.
   // Source: https://docs.bigmodel.cn/cn/coding-plan/tool/codex.md (checked 2026-09-07).
+  //
+  // #4201 completes the roster. The `models.json` example on that Codex page is a *starter
+  // catalog*, not the set of models the endpoint serves, and reading it as the latter is what
+  // left Flash off a subscription that sells it. Three upstream pages say so directly, all
+  // checked 2026-09-11:
+  //   - coding-plan/latest-model.md pins Codex to THIS baseUrl
+  //     (`Codex：https://open.bigmodel.cn/api/v1`) and opens with GLM Coding Plan supporting
+  //     GLM-5.3 and GLM-5.3-Flash for every tier (Max & Pro & Lite), then treats
+  //     `glm-5.3-flash` as an already-callable id in that same tool.
+  //   - coding-plan/overview.md: every plan supports GLM-5.3 and GLM-5.3-Flash, and calls to
+  //     GLM-5-Turbo are auto-switched to GLM-5.3-Flash. Turbo below is therefore an alias of
+  //     the very model this row omitted, which is the clearest statement that the endpoint
+  //     serves Flash: it was already serving it under another name.
+  //   - guide/models/vlm/glm-5.3-flash.md: native multimodal input, 1M context, and text
+  //     parameters explicitly "consistent with GLM-5.3".
+  // No authenticated /models probe is implied by any of this, so `liveModels` and
+  // `apiKeyValidation` below are deliberately unchanged.
   {
     id: "zhipu-bigmodel-responses",
     label: "Zhipu AI — BigModel Coding Plan (Responses)",
@@ -2648,22 +2665,34 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     authKind: "key",
     dashboardUrl: "https://bigmodel.cn/console/usercenter/apikeys",
     defaultModel: "glm-5.3",
-    models: ["glm-5.3", "glm-5-turbo"],
+    models: ["glm-5.3", "glm-5.3-flash", "glm-5-turbo"],
     liveModels: false,
     // The local Codex catalog does not establish an authenticated HTTP /models contract.
     apiKeyValidation: "unknown",
     jawcodeBundle: "zai",
     // A pre-existing same-named custom provider must retain its destination and key boundary.
     preserveCustomDestination: true,
-    modelContextWindows: { "glm-5.3": 1_048_576, "glm-5-turbo": 204_800 },
-    modelInputModalities: { "glm-5.3": ["text"], "glm-5-turbo": ["text"] },
+    // Flash tracks its 5.3 sibling on this row rather than the Chat row's 1_000_000. Both
+    // models are documented as "1M", and this preset expresses that family's 1M the way
+    // BigModel's own Codex declaration does. Splitting the two would leave one preset
+    // claiming two different sizes for one documented window.
+    modelContextWindows: { "glm-5.3": 1_048_576, "glm-5.3-flash": 1_048_576, "glm-5-turbo": 204_800 },
+    // Flash is the only row here that can actually see an image. Its siblings are declared
+    // text-only and get `image` back from the vision sidecar at catalog-build time; declaring
+    // Flash text-only would route a native VLM's pictures through a describe-it-first detour
+    // and hand the model prose about an image it could have read (same defect
+    // ZAI_GLM_5X_SIDECAR_VISION_MODELS exists to prevent on the Chat rows).
+    modelInputModalities: { "glm-5.3": ["text"], "glm-5.3-flash": ["text", "image"], "glm-5-turbo": ["text"] },
     modelReasoningEfforts: {
       "glm-5.3": ZAI_GLM_53_REASONING_EFFORTS,
+      // Same three effective tiers: upstream documents Flash's text parameters as identical
+      // to GLM-5.3, and the Codex effort table folds every inbound value into low/high/max.
+      "glm-5.3-flash": ZAI_GLM_53_REASONING_EFFORTS,
       // Explicitly empty: Turbo must not inherit the generic selectable effort ladder.
       "glm-5-turbo": [],
     },
-    modelDefaultReasoningEfforts: { "glm-5.3": "max", "glm-5-turbo": "max" },
-    modelSupportsReasoningSummaries: { "glm-5.3": true, "glm-5-turbo": true },
+    modelDefaultReasoningEfforts: { "glm-5.3": "max", "glm-5.3-flash": "max", "glm-5-turbo": "max" },
+    modelSupportsReasoningSummaries: { "glm-5.3": true, "glm-5.3-flash": true, "glm-5-turbo": true },
     // Responses replay uses this provider-level flag, not the Chat-path model list.
     preserveResponsesReasoningContent: true,
     note: "Domestic BigModel Coding Plan Responses endpoint; static model roster",

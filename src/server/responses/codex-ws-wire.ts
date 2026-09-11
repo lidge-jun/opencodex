@@ -50,6 +50,72 @@ export function markCodexWsResponse(response: Response, observed: boolean): void
 
 const CLOSED_BEFORE_TERMINAL = "codex websocket closed before a Responses terminal event";
 
+/**
+ * Content-free stage record for an exchange that ended without a Responses
+ * terminal event (#4191).
+ *
+ * The field report that drove this could not be told apart from a network
+ * outage, because every such failure reached the user as one of two bare
+ * sentences. Both are true of a socket that was never answered, a socket that
+ * carried only quota control frames, and a socket that died mid-response —
+ * three different upstream stories with three different owners. These counters
+ * are the smallest set that separates them, and every one of them is a size, a
+ * count, or a duration: no request body, no header, no account identifier, and
+ * no conversation text can reach a message built from this record.
+ */
+export type CodexWsFailureStage = {
+  /** UTF-8 size of the `response.create` frame this exchange dialled with. */
+  requestBytes: number;
+  /** True once `ws.send()` returned, so the turn may be executing upstream. */
+  sent: boolean;
+  /** Frames the socket delivered, of any kind, including ones that did not parse. */
+  upstreamFrames: number;
+  /** Frames the metadata channel claimed (quota, response metadata). */
+  controlFrames: number;
+  /** Responses events actually written to the downstream SSE body. */
+  relayedEvents: number;
+  /** Milliseconds from send to the first upstream frame; null when none arrived. */
+  firstFrameMs: number | null;
+  /** Milliseconds from send to this failure; null when the failure predates the send. */
+  elapsedMs: number | null;
+};
+
+/**
+ * Which upstream story the counters tell. Ordered by how much the upstream had
+ * committed to, because that is what decides who owns the failure — and, for a
+ * future maintainer reading #4191, it is deliberately NOT a fallback-eligibility
+ * signal. `no-upstream-frame` does not mean the frame was not accepted; the
+ * no-replay-after-send contract in `codex-ws-exchange.ts` stands regardless of
+ * what this classifier says.
+ */
+export type CodexWsFailureCause =
+  | "before-send"
+  | "no-upstream-frame"
+  | "no-response-event"
+  | "after-response-started";
+
+export function classifyCodexWsFailure(stage: CodexWsFailureStage): CodexWsFailureCause {
+  if (!stage.sent) return "before-send";
+  if (stage.relayedEvents > 0) return "after-response-started";
+  if (stage.upstreamFrames === 0) return "no-upstream-frame";
+  return "no-response-event";
+}
+
+/**
+ * Render the stage as a suffix appended to an existing failure message.
+ *
+ * It is a suffix, not an interpolation, on purpose: the close-code tail these
+ * messages already carry is matched as a contiguous substring by the callers
+ * and tests that read it, so nothing may be inserted ahead of it.
+ */
+export function codexWsFailureDetail(stage: CodexWsFailureStage): string {
+  const duration = (value: number | null): string => (value === null ? "n/a" : `${value}ms`);
+  return ` [cause=${classifyCodexWsFailure(stage)} request=${stage.requestBytes}B`
+    + ` sent=${stage.sent ? "yes" : "no"} frames=${stage.upstreamFrames}`
+    + ` control=${stage.controlFrames} relayed=${stage.relayedEvents}`
+    + ` first-frame=${duration(stage.firstFrameMs)} elapsed=${duration(stage.elapsedMs)}]`;
+}
+
 export type ResponsesWsRelayEvent = {
   type: string;
   text: string;
@@ -111,18 +177,23 @@ export function normalizeResponsesWsRelayEvent(text: string): ResponsesWsRelayEv
  * inspector, so `/api/logs` keeps neither this message nor a specific code —
  * only `streamAborted`. Machine-readable typing would mean changing the error
  * taxonomy, which is deliberately out of scope for this transport fix.
+ *
+ * When a stage is supplied its detail is appended last, after the close-code
+ * tail, so the code and reason stay one contiguous substring.
  */
-export function closedBeforeTerminalMessage(event: unknown): string {
+export function closedBeforeTerminalMessage(event: unknown, stage?: CodexWsFailureStage): string {
   const detail = event as { code?: unknown; reason?: unknown } | null | undefined;
   const code = typeof detail?.code === "number" ? detail.code : null;
   const reason = typeof detail?.reason === "string" ? detail.reason.trim() : "";
-  if (code === null) return CLOSED_BEFORE_TERMINAL;
+  const stageDetail = stage ? codexWsFailureDetail(stage) : "";
+  if (code === null) return `${CLOSED_BEFORE_TERMINAL}${stageDetail}`;
   const suffix = reason ? ` ${code} ${reason}` : ` ${code}`;
   if (code === WS_CLOSE_MESSAGE_TOO_BIG) {
     return `codex websocket rejected the request frame as too large (close${suffix});`
-      + ` requests at or above ${MAX_CODEX_WS_CREATE_FRAME_BYTES} bytes must use the HTTP SSE transport`;
+      + ` requests at or above ${MAX_CODEX_WS_CREATE_FRAME_BYTES} bytes must use the HTTP SSE transport`
+      + stageDetail;
   }
-  return `${CLOSED_BEFORE_TERMINAL} (close${suffix})`;
+  return `${CLOSED_BEFORE_TERMINAL} (close${suffix})${stageDetail}`;
 }
 
 /**

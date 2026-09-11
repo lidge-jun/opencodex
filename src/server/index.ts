@@ -17,6 +17,7 @@ import {
   loadConfig,
   saveConfig,
   getConfigDir,
+  loopbackCompanionBindError,
   websocketsEnabled,
 } from "../config";
 import { grokDefaultReasoningEffort } from "../grok/effort";
@@ -28,6 +29,7 @@ import { withCatalogWriteSerialization } from "../codex/catalog-write-serializat
 import { invalidateCodexModelsCacheWithPermit } from "../codex/catalog/sync";
 import { currentServiceHomes, serviceStatePathsForOpenCodexHome } from "../service";
 import { shouldSyncCodexOnStart } from "../codex/desired-state";
+import { effectiveLoopbackListenerPort } from "../codex/loopback-target";
 import {
   createWindowsTaskListingCache,
   inspectNativeCodexOwnership,
@@ -773,8 +775,16 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   const bindHost = !configuredHost || /^localhost$/i.test(configuredHost) ? "127.0.0.1" : configuredHost;
 
   // Unauthenticated loopback listener (#1102). Off unless explicitly enabled.
+  // A port-less enabled entry is the companion form: same port as the public listener, on
+  // 127.0.0.1 (#4236). Refuse an impossible pair here, before any bind, so a hand edit that
+  // bypassed validateConfigCandidate reports the collision rather than EADDRINUSE from a
+  // rollback that looks like a foreign process holding the port.
   const loopbackListener = config.unauthenticatedLoopbackListener;
-  const loopbackListenerPort = loopbackListener?.enabled ? loopbackListener.port : null;
+  if (loopbackListener?.enabled === true && loopbackListener.port === undefined) {
+    const companionError = loopbackCompanionBindError(config.hostname, listenPort);
+    if (companionError) throw new Error(companionError);
+  }
+  const loopbackListenerPort = effectiveLoopbackListenerPort(config, listenPort);
   // Hub management ingress is a third, management-only listener. Its address is intentionally
   // fixed: the kernel loopback bind is the trust boundary that permits Tailscale identity headers.
   const managementIngress = config.runtimeRole === "hub" ? config.hub?.managementIngress : undefined;
@@ -812,6 +822,25 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
    * keeps the paid upstream behind its own admission and forward-credential checks, so admit only
    * the exact methods and paths it serves (#3428).
    *
+   * `POST /v1/messages` (Anthropic wire) and `POST /v1/chat/completions` (OpenAI chat wire)
+   * are the inference endpoints the hub's OWN local clients speak: `ocx claude` and the
+   * `system-env` injection and Claude Desktop 3P dial the first, Cursor Private Inference, the
+   * vision `routed-describe` helper and aside/opencode the second (#4236). On a hub whose
+   * public listener binds a tailnet address there is no other local socket for them, so
+   * leaving them off this list left every non-Codex local client pointed at a closed port.
+   * Both handlers resolve their own admission from the RECEIVING listener's policy view — the
+   * same resolver and the same loopback short-circuit `/v1/responses` already uses — so this
+   * adds a wire, not a trust level. `/api/*` is deliberately still absent: local management
+   * discovery goes to the authenticated management surface, never to this listener.
+   *
+   * `POST /v1/messages/count_tokens` completes that Anthropic wire. It is admitted on a
+   * narrower argument than the other two rather than on symmetry: it spends no provider quota,
+   * reaches no stored credential, and returns a token count computed from the request body the
+   * caller already holds. Withholding it bought no confinement — the same caller may POST the
+   * whole conversation to `/v1/messages` on this socket — and cost Claude Code its server-side
+   * count, which it then silently replaces with a local estimate. `/api/*`, `/healthz`,
+   * `/readyz` and the GUI remain 404 here, which is the boundary that actually matters.
+   *
    * `GET /v1/models` is on the list for a reason that is easy to miss. When catalog
    * materialization fails or finds no source, `syncCodex` warns and injects with
    * `catalogPath: null`; Codex then builds an ONLINE model manager and `model/list` refreshes
@@ -824,6 +853,8 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
       return req.method === "POST" || req.headers.get("upgrade")?.toLowerCase() === "websocket";
     }
     if (path === "/v1/responses/compact") return req.method === "POST";
+    if (path === "/v1/messages" || path === "/v1/chat/completions") return req.method === "POST";
+    if (path === "/v1/messages/count_tokens") return req.method === "POST";
     if (path === "/v1/alpha/search") return req.method === "POST";
     if (path === "/v1/images/generations" || path === "/v1/images/edits") {
       return req.method === "POST";
@@ -1367,6 +1398,83 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             policy,
           ),
           admission,
+        );
+      }
+
+      if (url.pathname === "/v1/hub-state" && (req.method === "GET" || req.method === "HEAD")) {
+        // #4236: a connected client had no way to learn which providers this hub can actually
+        // serve, so `ocx status` on the client reported the CLIENT's empty credential store as
+        // if it were the truth — "xai ✗ not logged in" on a machine whose hub has xAI logged
+        // in. The fix is one least-privilege data-plane read, in the /v1/catalog (#809)
+        // tradition: same admission resolver, same origin check, no parameters, no caller
+        // credential forwarded upstream, and a body of booleans plus model ids. Widening
+        // `/api/*` or handing the client an admin token to read `GET /api/providers` would
+        // have traded a reporting defect for a credential one.
+        //
+        // What it discloses beyond /v1/catalog and /v1/models, exactly: `hasCredential`,
+        // `loggedIn`, `authMode`, the featured roster, and the NAME and adapter of an ENABLED
+        // provider those routes omit for want of a usable credential — which is the point of
+        // the route. A `disabled` provider is NOT exported (`buildHubState` drops it), because
+        // the catalog filters it out too and naming it here would be the only place a data key
+        // learns of it.
+        //
+        // Placed between /v1/catalog and /v1/models so all three least-privilege client reads
+        // stay in sight of each other.
+        const admission = resolveApiAuth(req, policy);
+        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
+        if (!isAllowedRequestOrigin(req, policy)) {
+          return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, policy);
+        }
+        // Role gate AFTER admission, deliberately: answering an unauthenticated caller would
+        // turn this into a free "is that machine a hub?" probe. A standalone or client install
+        // gains no surface at all — the route simply does not exist there.
+        //
+        // Built, not formatErrorResponse'd, for the same reason /v1/catalog builds its 404: the
+        // code has to distinguish "this route exists and this host is not a hub" from "this
+        // build has no such route", which is the difference between admission proof and a
+        // vacuous pass in tests/server/api-key-attribution.test.ts.
+        if (config.runtimeRole !== "hub") {
+          return withCors(
+            new Response(JSON.stringify({
+              error: {
+                type: "invalid_request_error",
+                code: "hub_state_not_a_hub",
+                message: "hub state is served only by a host whose runtimeRole is hub",
+              },
+            }), { status: 404, headers: { "content-type": "application/json" } }),
+            req,
+            policy,
+          );
+        }
+        const { buildHubState } = await import("./hub-state");
+        const { MAX_HUB_STATE_BYTES } = await import("../remote/hub-state");
+        const { oauthLoginSummary } = await import("../oauth");
+        // `true` masks emails, but the projection drops the field entirely; passing the mask
+        // anyway means a future refactor that starts copying fields cannot leak a raw address.
+        const body = JSON.stringify(buildHubState(config, oauthLoginSummary(true), VERSION));
+        const bytes = Buffer.byteLength(body);
+        if (bytes > MAX_HUB_STATE_BYTES) {
+          return withCors(
+            new Response(JSON.stringify({
+              error: { type: "server_error", code: "hub_state_too_large", message: "hub state exceeds the maximum served size" },
+            }), { status: 507, headers: { "content-type": "application/json" } }),
+            req,
+            policy,
+          );
+        }
+        return withCors(
+          new Response(req.method === "HEAD" ? null : body, {
+            status: 200,
+            headers: {
+              "content-type": "application/json",
+              // Varies by credential-bearing identity and by live login state: never cached,
+              // and no validator to revalidate with (same rule as /v1/catalog).
+              "cache-control": "no-store",
+              "content-length": String(bytes),
+            },
+          }),
+          req,
+          policy,
         );
       }
 
@@ -2004,10 +2112,13 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           ...admissionFields(admission),
           inboundProtocol: "chat",
         };
+        // `policy`, not `config`: this route is now served on the unauthenticated loopback
+        // listener too (#4236), and only the receiving listener's view produces CORS headers
+        // that match the admission decision made above.
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => withCors(
           await handleChatCompletions(req, config, logCtx, { requestId, start, turnAdmissionLease, admission }),
           req,
-          config,
+          policy,
         ));
       }
 
@@ -2511,10 +2622,17 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     // who forgot, has to be able to see that an unauthenticated surface is live without
     // reading the file.
     const loopbackPort = loopbackServer.port ?? loopbackListenerPort;
-    console.warn(`⚠️  Unauthenticated loopback listener active on http://127.0.0.1:${loopbackPort}`);
-    console.warn(`   Any local process can use it without a credential — it spends account`);
-    console.warn(`   quota and paid provider credentials, and can starve authenticated`);
-    console.warn(`   remote clients. Not for shared or multi-tenant hosts.`);
+    if (loopbackListener?.enabled === true && loopbackListener.port === undefined) {
+      // The companion form is the intended one-port hub topology, not a surprise surface: the
+      // public listener is already on a non-loopback address, so this line states where local
+      // processes go rather than warning about a second port nobody asked for.
+      console.log(`🔁 Loopback companion active on http://127.0.0.1:${loopbackPort} — same port as the public listener; local processes need no credential`);
+    } else {
+      console.warn(`⚠️  Unauthenticated loopback listener active on http://127.0.0.1:${loopbackPort}`);
+      console.warn(`   Any local process can use it without a credential — it spends account`);
+      console.warn(`   quota and paid provider credentials, and can starve authenticated`);
+      console.warn(`   remote clients. Not for shared or multi-tenant hosts.`);
+    }
   }
 
   if (managementIngressServer) {

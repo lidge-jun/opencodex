@@ -320,6 +320,8 @@ import {
 } from "../request-log";
 import {
   conversationIdFromResponsesRequest,
+  getOrAllocateRequestSessionLane,
+  linkRequestSessionLane,
   normalizeLogConversationId,
   reasoningReplayConversationIdFromResponsesRequest,
   sessionLaneIdFromRequest,
@@ -2261,6 +2263,50 @@ function isTerminalPoolRefreshFailure(error: unknown): boolean {
 }
 
 /**
+ * The refusal an operator meets when a stored pool credential's forced refresh does not complete.
+ *
+ * A bare "retry this request" reads as a transient fault in the proxy, which is how #4212's
+ * reporter spent an afternoon concluding OpenCodex had broken while one of their own accounts was
+ * the thing that needed them. It stays a retryable 503 and stays non-quarantining, because the
+ * refresh genuinely may succeed and a token-endpoint 5xx must not retire a healthy account
+ * (#2887). What it adds is the account and the exit: when retrying stops helping, that account
+ * has to be signed in again.
+ *
+ * The label is a public account selector when the request carried one, otherwise the durable
+ * `p`-prefixed log label — never the raw pool id and never the email. Those are the identifiers
+ * `responses-compaction-routing.test.ts` and `codex-auth-context.test.ts` already assert must not
+ * reach an operator-facing surface, and an error body travels further than a log line, not less.
+ * When neither is resolvable the sentence degrades to "the selected Codex pool account" rather
+ * than naming something opaque, because a wrong name is worse than no name.
+ *
+ * The wording says "sign in to that account again" and deliberately does NOT say
+ * "reauthentication". `classifyError` runs `isAuthenticationMessage` before it reaches the
+ * `status === 503` arm, and that check is status-blind on the bare substring "authentication",
+ * which "reauthentication" contains. A body carrying that word is reclassified to
+ * `authentication_error` / `invalid_api_key` even though the HTTP status stays 503 — and Codex
+ * applies retry-after backoff only for `server_is_overloaded`, so the friendlier sentence would
+ * have quietly disabled the retry this refusal exists to ask for. `options.code` cannot buy the
+ * classification back; only the wording can.
+ */
+export function poolCredentialRefreshIncompleteResponse(args: {
+  authCtx: CodexAuthContext;
+  config: Pick<OcxConfig, "codexAccounts">;
+  accountSelector?: string;
+}): Response {
+  const label = args.accountSelector ?? codexAuthContextLogLabel(args.authCtx, args.config);
+  const account = label ? `Codex pool account ${label}` : "the selected Codex pool account";
+  const response = formatErrorResponse(
+    503,
+    "server_busy",
+    `Codex credential refresh did not complete for ${account}; retry this request. `
+      + "If it keeps failing, sign in to that account again.",
+  );
+  const headers = new Headers(response.headers);
+  headers.set("Retry-After", "1");
+  return new Response(response.body, { status: response.status, headers });
+}
+
+/**
  * One forced refresh and one same-account rebuild for a stored pool credential that
  * upstream rejected with a pre-stream 401. `quarantine` distinguishes a dead grant,
  * which must retire the account, from a transient failure, which must not.
@@ -2330,14 +2376,15 @@ async function refreshPoolForwardAuth(args: {
         response: formatErrorResponse(401, "authentication_error", "Selected Codex account needs reauthentication"),
       };
     }
-    const response = formatErrorResponse(
-      503,
-      "server_busy",
-      "Codex credential refresh did not complete; retry this request",
-    );
-    const headers = new Headers(response.headers);
-    headers.set("Retry-After", "1");
-    return { ok: false, quarantine: false, response: new Response(response.body, { status: response.status, headers }) };
+    return {
+      ok: false,
+      quarantine: false,
+      response: poolCredentialRefreshIncompleteResponse({
+        authCtx,
+        config,
+        accountSelector: route.codexAccountNamespace,
+      }),
+    };
   }
 }
 
@@ -2451,8 +2498,7 @@ async function applyFinalRouteRequestNormalization(args: {
 
   // Settle the wire once so logging, fast-mode, auth, and sidecars read the adapter
   // this request will actually use (#404).
-  route.provider = resolveOpenCodeGoTransport(route.provider,
-    sessionLaneIdFromRequest(req.headers) ?? normalizeLogConversationId(req.headers.get("x-opencode-session")));
+  route.provider = resolveOpenCodeGoTransport(route.provider, getOrAllocateRequestSessionLane(req));
   route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire);
   if (preserveAnthropicResponseModel) parsed._responseModelId = responseModelId;
   logCtx.model = route.modelId;
@@ -2816,6 +2862,7 @@ export async function handleComboResponses(
       headers: childHeaders,
       body: JSON.stringify(childBody),
     });
+    linkRequestSessionLane(req, childRequest);
     let resolvedAuth: CodexAuthContext | undefined;
     let terminalRecorder: ((status: ResponsesTerminalStatus, httpStatusOverride?: number) => void) | undefined;
     const started = Date.now();

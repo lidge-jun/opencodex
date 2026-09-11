@@ -9,7 +9,11 @@ import {
   withConfigMutationLockSync,
 } from "../config";
 import { CodexWriteLockSkipped, withCodexWriteLock } from "./codex-write-lock";
-import { shouldSyncCodexOnStart } from "./desired-state";
+import {
+  localClientSkipMessage,
+  localClientSkipReason,
+  shouldSyncCodexOnStart,
+} from "./desired-state";
 import { resolveCodexHistoryTransition } from "./history-transition";
 import {
   buildInjectWitness,
@@ -79,9 +83,9 @@ import {
   type ManagedSubagentDefaults,
 } from "./subagent-defaults";
 import type { OcxConfig } from "../types";
-import { isLoopbackHostname, shouldInjectApiAuthHeader } from "./loopback-target";
+import { effectiveLoopbackListenerPort, isLoopbackHostname, shouldInjectApiAuthHeader } from "./loopback-target";
 
-export { isLoopbackHostname, shouldInjectApiAuthHeader } from "./loopback-target";
+export { effectiveLoopbackListenerPort, isLoopbackHostname, shouldInjectApiAuthHeader } from "./loopback-target";
 
 // Ownership predicates live in `./injected-marker` so `journal.ts` can reach them
 // without importing this module back. Re-exported for existing external callers.
@@ -214,8 +218,11 @@ export function standaloneCodexRoutingTarget(
     "hostname" | "unauthenticatedLoopbackListener" | "codexDesktopAuthless" | "codexClientCompaction"
   >,
 ): CodexRoutingTarget {
+  // An enabled listener with no `port` is the companion form: it answers on `port` itself,
+  // bound to 127.0.0.1 (#4236). Resolving it through the shared helper is what makes the
+  // one-port hub work without every writer repeating `?? port`.
   const loopback = config?.unauthenticatedLoopbackListener;
-  const effectivePort = loopback?.enabled ? loopback.port : port;
+  const effectivePort = effectiveLoopbackListenerPort(config, port) ?? port;
   const hostname = loopback?.enabled ? undefined : config?.hostname;
   const requiresAdmissionToken = loopback?.enabled ? false : shouldInjectApiAuthHeader(config);
   return {
@@ -887,7 +894,8 @@ export interface CodexInjectResult {
   success: boolean;
   message: string;
   status?: "skipped";
-  skippedReason?: "desired_disabled" | "desired_enabled";
+  /** `hub-gated` is the hub-role gate (#4236), distinct from the user's own OFF switch. */
+  skippedReason?: "desired_disabled" | "desired_enabled" | "hub-gated";
   nativeSubagentDefaultsWarning?: string;
 }
 
@@ -1261,12 +1269,17 @@ export async function injectCodexConfig(
 
   if (eligibility.kind === "legacy-uncoordinated") {
     const applyLegacy = (): CodexInjectResult | undefined => {
-      if (!shouldSyncCodexOnStart(loadConfig())) {
+      const legacyGateSnapshot = loadConfig();
+      if (!shouldSyncCodexOnStart(legacyGateSnapshot)) {
         return {
           success: true,
           status: "skipped",
-          skippedReason: "desired_disabled",
-          message: "Codex integration is OFF; no Codex config, catalog, cache, or history was changed.",
+          skippedReason: localClientSkipReason(legacyGateSnapshot),
+          message: localClientSkipMessage(
+            legacyGateSnapshot,
+            "Codex integration is OFF; no Codex config, catalog, cache, or history was changed.",
+            "No Codex config, catalog, cache, or history was changed.",
+          ),
         };
       }
       runClientWriteGuard(options.beforeClientWrite);
@@ -1295,8 +1308,11 @@ export async function injectCodexConfig(
         }),
       },
       (ctx) => {
-        if (!shouldSyncCodexOnStart(loadConfig())) {
-          throw new CodexWriteLockSkipped("desired_disabled");
+        const gateSnapshot = loadConfig();
+        if (!shouldSyncCodexOnStart(gateSnapshot)) {
+          // Carry WHY under the lock: "the hub does not write its own clients" and "the user
+          // turned Codex off" produce the same no-write and must not produce the same sentence.
+          throw new CodexWriteLockSkipped(localClientSkipReason(gateSnapshot));
         }
         // N and C are held here. Reject stale client work before publishing a
         // transition or capturing preimages; rejection must not compensate over

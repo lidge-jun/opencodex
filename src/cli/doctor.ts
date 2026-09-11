@@ -56,6 +56,8 @@ import {
 import { collectStartupHealth, formatStartupRoutingDetail, startupHealthSummary } from "../codex/autostart-health";
 import {
   displayCodexRuntimePath,
+  effortClampAppliesToRuntime,
+  liveRemovedEfforts,
   loadLastEffortClamp,
   persistCodexRuntime,
   resolveAndPersistCodexRuntime,
@@ -1177,9 +1179,14 @@ export async function runDoctor(args: string[] = []): Promise<void> {
       console.log("       Suggested: set CODEX_CLI_PATH to the desired binary and run ocx sync.");
       console.log("       Optional: ocx doctor --fix-codex-runtime");
     }
+    // Doctor used to warn on any non-empty `removedEfforts`, while `ocx status` asked
+    // `effortClampAppliesToRuntime` — so the two could disagree about the same file, and doctor
+    // would tell an operator to install a newer Codex while the resolved runtime was already
+    // newer than the one the diagnostic described. Both surfaces now read the same predicate.
     const lastClamp = loadLastEffortClamp();
-    if (lastClamp && lastClamp.removedEfforts.length > 0) {
-      console.log(`  !!  ${lastClamp.removedEfforts.join(" and ")} were removed during catalog sync.`);
+    if (effortClampAppliesToRuntime(lastClamp, resolved.runtime)) {
+      const live = liveRemovedEfforts(lastClamp);
+      console.log(`  !!  ${live.join(" and ")} were removed during catalog sync.`);
       console.log("       Suggested: set CODEX_CLI_PATH to a newer Codex binary and run ocx sync.");
     }
   }
