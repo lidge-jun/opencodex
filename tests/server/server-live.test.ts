@@ -15,6 +15,7 @@ import {
   type ReadinessGate,
 } from "../../src/server/readiness";
 import {
+  attachLiveSidebandUpstream,
   enqueueLiveSidebandPendingFrame,
   exceedsLiveSidebandFrameByteLimit,
   exceedsLiveSidebandPendingByteLimit,
@@ -1756,6 +1757,8 @@ describe("GET /readyz while draining", () => {
 class FakeUpstreamSocket {
   private readonly listeners = new Map<string, Array<(event: { code?: number; data?: unknown; reason?: string }) => void>>();
   closed = false;
+  closeCalls = 0;
+  closeMode: "closed" | "closing" | "closing-then-close" = "closed";
   readyState = WebSocket.CONNECTING;
 
   addEventListener(type: string, listener: (event: { code?: number; data?: unknown; reason?: string }) => void): void {
@@ -1772,10 +1775,91 @@ class FakeUpstreamSocket {
 
   close(code = 1000, reason = ""): void {
     this.closed = true;
-    this.readyState = WebSocket.CLOSED;
+    this.closeCalls += 1;
+    if (this.closeMode === "closing") {
+      this.readyState = WebSocket.CLOSING;
+      return;
+    }
+    if (this.closeMode === "closing-then-close") this.readyState = WebSocket.CLOSING;
     this.emit("close", { code, reason });
   }
 }
+
+function fakeSidebandClient(
+  upstream: FakeUpstreamSocket,
+  handoff: {
+    failure(): undefined;
+    take(): { ok: true; frames: Array<string | Buffer> } | {
+      ok: false;
+      failure: { status: number; code: string; message: string; closeCode?: number; closeReason?: string };
+    };
+  },
+  send: (frame: string | Buffer) => void = () => {},
+) {
+  let releases = 0;
+  const ws = {
+    data: {
+      kind: "live-sideband" as const,
+      liveUpstream: upstream as unknown as WebSocket,
+      liveUpstreamHandoff: handoff,
+      liveOpened: true,
+      liveTurnAdmissionLease: {
+        release: () => { releases += 1; },
+      },
+    },
+    readyState: WebSocket.OPEN,
+    close: () => {},
+    send,
+  };
+  return { ws, releases: () => releases };
+}
+
+describe("attachLiveSidebandUpstream ownership", () => {
+  test("retains admission through a failed takeover until a CLOSING upstream actually closes", async () => {
+    const upstream = new FakeUpstreamSocket();
+    upstream.readyState = WebSocket.OPEN;
+    upstream.closeMode = "closing";
+    const client = fakeSidebandClient(upstream, {
+      failure: () => undefined,
+      take: () => ({
+        ok: false,
+        failure: { status: 502, code: "upstream_error", message: "closed", closeCode: 1008 },
+      }),
+    });
+
+    attachLiveSidebandUpstream(client.ws as never);
+
+    expect(upstream.readyState).toBe(WebSocket.CLOSING);
+    expect(client.releases()).toBe(0);
+    await Bun.sleep(1_100);
+    expect(upstream.closeCalls).toBe(2);
+    expect(client.releases()).toBe(0);
+    upstream.emit("close", { code: 1008, reason: "call ended" });
+    expect(client.releases()).toBe(1);
+    upstream.emit("close", { code: 1008, reason: "duplicate close" });
+    expect(client.releases()).toBe(1);
+  });
+
+  test("registers close ownership before forwarding a pre-opened preamble", () => {
+    const upstream = new FakeUpstreamSocket();
+    upstream.readyState = WebSocket.OPEN;
+    upstream.closeMode = "closing-then-close";
+    const client = fakeSidebandClient(
+      upstream,
+      {
+        failure: () => undefined,
+        take: () => ({ ok: true, frames: ["session.created"] }),
+      },
+      () => { throw new Error("downstream send failed"); },
+    );
+
+    attachLiveSidebandUpstream(client.ws as never);
+
+    expect(upstream.closeCalls).toBe(1);
+    expect(upstream.readyState).toBe(WebSocket.CLOSED);
+    expect(client.releases()).toBe(1);
+  });
+});
 
 describe("openLiveSidebandUpstream", () => {
   test("drains the preamble captured before the client socket exists", async () => {
@@ -1847,6 +1931,7 @@ describe("openLiveSidebandUpstream", () => {
 
   test("reports failure when the upstream rejects the handshake", async () => {
     const socket = new FakeUpstreamSocket();
+    socket.closeMode = "closing";
     const pending = openLiveSidebandUpstream("ws://upstream/v1/live/x", {}, () => socket as unknown as WebSocket, 1_000);
     socket.emit("error", {});
 
@@ -1854,6 +1939,8 @@ describe("openLiveSidebandUpstream", () => {
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("expected a failed handshake");
     expect(result.status).toBe(502);
+    expect(result.socket).toBe(socket);
+    expect(socket.readyState).toBe(WebSocket.CLOSING);
   });
 
   test("reports failure when the upstream closes before opening", async () => {
@@ -1884,6 +1971,7 @@ describe("openLiveSidebandUpstream", () => {
     if (result.ok) throw new Error("expected a cancelled handshake");
     expect(result.code).toBe("request_cancelled");
     expect(socket.closed).toBe(true);
+    expect(result.socket).toBe(socket);
   });
 
   test("times out and drops the socket when the upstream never opens", async () => {
@@ -1902,8 +1990,100 @@ describe("openLiveSidebandUpstream", () => {
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("expected a failed handshake");
     expect(result.status).toBe(502);
+    expect(result.socket).toBeUndefined();
   });
 });
+
+test("a failed pre-upgrade handshake retains admission until its CLOSING upstream closes", async () => {
+  saveConfig(forwardConfig());
+  const upstream = new FakeUpstreamSocket();
+  upstream.closeMode = "closing";
+  const server = startServer(0, {
+    liveSidebandWebSocketFactory: () => {
+      queueMicrotask(() => upstream.emit("error", {}));
+      return upstream as unknown as WebSocket;
+    },
+  });
+  const activeTurnsBefore = activeRegistryMetrics().activeTurns.active;
+  try {
+    const wsUrl = new URL("/v1/realtime?call_id=rtc_failed_handshake_closing", server.url);
+    wsUrl.protocol = "ws:";
+    const client = new WebSocket(wsUrl.toString(), {
+      headers: {
+        authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
+        "chatgpt-account-id": "acct-123",
+        "openai-alpha": "quicksilver=v2",
+        "x-session-id": "rts_failed_handshake_closing",
+      },
+    } as unknown as string[]);
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("client never observed failed upgrade")), 5_000);
+      const settle = (): void => {
+        clearTimeout(timer);
+        resolve();
+      };
+      client.addEventListener("error", settle, { once: true });
+      client.addEventListener("close", settle, { once: true });
+    });
+
+    expect(upstream.readyState).toBe(WebSocket.CLOSING);
+    expect(activeRegistryMetrics().activeTurns.active).toBe(activeTurnsBefore + 1);
+    upstream.emit("close", { code: 1006, reason: "closed after handshake failure" });
+    await Bun.sleep(0);
+    expect(activeRegistryMetrics().activeTurns.active).toBe(activeTurnsBefore);
+    upstream.emit("close", { code: 1006, reason: "duplicate close" });
+    expect(activeRegistryMetrics().activeTurns.active).toBe(activeTurnsBefore);
+  } finally {
+    await server.stop(true);
+  }
+}, { timeout: 10_000 });
+
+test("a failed pre-upgrade handoff retains admission until its CLOSING upstream closes", async () => {
+  saveConfig(forwardConfig());
+  const upstream = new FakeUpstreamSocket();
+  upstream.closeMode = "closing";
+  const server = startServer(0, {
+    liveSidebandWebSocketFactory: () => {
+      queueMicrotask(() => {
+        upstream.emit("open", {});
+        upstream.emit("error", {});
+      });
+      return upstream as unknown as WebSocket;
+    },
+  });
+  const activeTurnsBefore = activeRegistryMetrics().activeTurns.active;
+  try {
+    const wsUrl = new URL("/v1/realtime?call_id=rtc_failed_handoff_closing", server.url);
+    wsUrl.protocol = "ws:";
+    const client = new WebSocket(wsUrl.toString(), {
+      headers: {
+        authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
+        "chatgpt-account-id": "acct-123",
+        "openai-alpha": "quicksilver=v2",
+        "x-session-id": "rts_failed_handoff_closing",
+      },
+    } as unknown as string[]);
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("client never observed failed handoff")), 5_000);
+      const settle = (): void => {
+        clearTimeout(timer);
+        resolve();
+      };
+      client.addEventListener("error", settle, { once: true });
+      client.addEventListener("close", settle, { once: true });
+    });
+
+    expect(upstream.readyState).toBe(WebSocket.CLOSING);
+    expect(activeRegistryMetrics().activeTurns.active).toBe(activeTurnsBefore + 1);
+    upstream.emit("close", { code: 1008, reason: "closed after failed handoff" });
+    await Bun.sleep(0);
+    expect(activeRegistryMetrics().activeTurns.active).toBe(activeTurnsBefore);
+    upstream.emit("close", { code: 1008, reason: "duplicate close" });
+    expect(activeRegistryMetrics().activeTurns.active).toBe(activeTurnsBefore);
+  } finally {
+    await server.stop(true);
+  }
+}, { timeout: 10_000 });
 
 test("a sideband join whose upstream handshake fails never opens the client socket", async () => {
   // An upstream that refuses the upgrade: the shape OpenAI returns for a call id it

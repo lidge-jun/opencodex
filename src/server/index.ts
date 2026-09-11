@@ -339,7 +339,7 @@ export type LiveSidebandUpstreamOpenResult =
       /** Owns capture and terminal events until the downstream relay attaches. */
       handoff: LiveSidebandUpstreamHandoff;
     }
-  | { ok: false; status: number; code: string; message: string };
+  | { ok: false; status: number; code: string; message: string; socket?: WebSocket };
 
 export function exceedsLiveSidebandFrameByteLimit(frameBytes: number): boolean {
   return frameBytes > MAX_WS_FRAME_BYTES;
@@ -437,6 +437,48 @@ function armLiveSidebandCloseFallback(ws: ServerWebSocket<WsData>, upstream: Web
   }, LIVE_SIDEBAND_CLOSE_FALLBACK_MS);
 }
 
+function closeLiveSidebandBeforeUpgrade(
+  upstream: WebSocket,
+  release: () => void,
+  code = 1000,
+  reason = "",
+): void {
+  // There is no downstream socket to own this transport yet. Mirror
+  // closeLiveSideband's bounded close contract directly: release only after a
+  // close event or an observed CLOSED state, never merely after requesting close.
+  let released = false;
+  let fallback: ReturnType<typeof setTimeout> | undefined;
+  const releaseOnce = (): void => {
+    if (released) return;
+    released = true;
+    if (fallback !== undefined) clearTimeout(fallback);
+    release();
+  };
+  upstream.addEventListener("close", releaseOnce, { once: true });
+  if (upstream.readyState === WebSocket.CLOSED) {
+    releaseOnce();
+    return;
+  }
+  fallback = setTimeout(() => {
+    if (upstream.readyState === WebSocket.CLOSED) {
+      releaseOnce();
+      return;
+    }
+    try {
+      upstream.close(1000, "upstream close timeout");
+    } catch {
+      /* retain ownership until CLOSED is observed */
+    }
+    if ((upstream.readyState as number) === 3) releaseOnce();
+  }, LIVE_SIDEBAND_CLOSE_FALLBACK_MS);
+  try {
+    upstream.close(code, reason);
+  } catch {
+    /* the bounded fallback retries without releasing ownership */
+  }
+  if ((upstream.readyState as number) === 3) releaseOnce();
+}
+
 function closeLiveSideband(ws: ServerWebSocket<WsData>, code = 1000, reason = ""): void {
   if (ws.data.liveClosing) return;
   ws.data.liveClosing = true;
@@ -517,7 +559,7 @@ export function openLiveSidebandUpstream(
       capturing = false;
       buffered.length = 0;
       bufferedBytes = 0;
-      finish({ ok: false, ...failure });
+      finish({ ok: false, ...failure, socket });
       try {
         socket.close();
       } catch {
@@ -531,7 +573,7 @@ export function openLiveSidebandUpstream(
       capturing = false;
       buffered.length = 0;
       bufferedBytes = 0;
-      finish({ ok: false, ...failure });
+      finish({ ok: false, ...failure, socket });
       try {
         socket.close(1009, "sideband preamble overflow");
       } catch {
@@ -585,7 +627,7 @@ export function openLiveSidebandUpstream(
       capturing = false;
       buffered.length = 0;
       bufferedBytes = 0;
-      finish({ ok: false, ...terminalFailure });
+      finish({ ok: false, ...terminalFailure, socket });
       try {
         socket.close();
       } catch {
@@ -604,7 +646,7 @@ export function openLiveSidebandUpstream(
       capturing = false;
       buffered.length = 0;
       bufferedBytes = 0;
-      finish({ ok: false, ...terminalFailure });
+      finish({ ok: false, ...terminalFailure, socket });
     });
     const abortOpen = (): void => {
       const failure = { status: 499, code: "request_cancelled", message: "voice sideband join was cancelled" };
@@ -612,7 +654,7 @@ export function openLiveSidebandUpstream(
       capturing = false;
       buffered.length = 0;
       bufferedBytes = 0;
-      finish({ ok: false, ...terminalFailure });
+      finish({ ok: false, ...terminalFailure, socket });
       try {
         socket.close();
       } catch {
@@ -627,7 +669,7 @@ export function openLiveSidebandUpstream(
   });
 }
 
-function attachLiveSidebandUpstream(
+export function attachLiveSidebandUpstream(
   ws: ServerWebSocket<WsData>,
   createWebSocket: LiveSidebandWebSocketFactory = (url, headers) => (
     new WebSocket(url, { headers } as unknown as string[])
@@ -657,6 +699,21 @@ function attachLiveSidebandUpstream(
   ws.data.liveClosing = false;
   ws.data.cancel = () => closeLiveSideband(ws, 1000, "client closed");
 
+  upstream.addEventListener("close", (event) => {
+    if (ws.data.liveUpstream !== upstream) return;
+    ws.data.liveClosing = true;
+    finalizeLiveSideband(ws, upstream);
+    try {
+      ws.close(event.code || 1000, event.reason || "");
+    } catch {
+      /* ignore */
+    }
+  });
+  upstream.addEventListener("error", () => {
+    if (ws.data.liveUpstream !== upstream) return;
+    closeLiveSideband(ws, 1011, "upstream error");
+  });
+
   if (preOpened) {
     // The upstream opened before this socket existed, so its `open` event has already
     // fired and the listener below will never run. Its early frames were captured for
@@ -665,19 +722,12 @@ function attachLiveSidebandUpstream(
     ws.data.liveUpstreamHandoff = undefined;
     const takeover = handoff?.take();
     if (!takeover?.ok || preOpened.readyState !== WebSocket.OPEN) {
-      ws.data.liveClosing = true;
-      try {
-        if (preOpened.readyState !== WebSocket.CLOSED) preOpened.close();
-      } catch {
-        /* upstream is already terminal */
-      }
-      finalizeLiveSideband(ws, preOpened);
       const failure = takeover && !takeover.ok ? takeover.failure : undefined;
-      try {
-        ws.close(failure?.closeCode ?? 1011, failure?.closeReason ?? "upstream closed before relay attachment");
-      } catch {
-        /* client already gone */
-      }
+      closeLiveSideband(
+        ws,
+        failure?.closeCode ?? 1011,
+        failure?.closeReason ?? "upstream closed before relay attachment",
+      );
       return;
     }
     ws.data.liveOpened = true;
@@ -729,20 +779,6 @@ function attachLiveSidebandUpstream(
     } catch {
       closeLiveSideband(ws, 1011, "client send failed");
     }
-  });
-  upstream.addEventListener("close", (event) => {
-    if (ws.data.liveUpstream !== upstream) return;
-    ws.data.liveClosing = true;
-    finalizeLiveSideband(ws, upstream);
-    try {
-      ws.close(event.code || 1000, event.reason || "");
-    } catch {
-      /* ignore */
-    }
-  });
-  upstream.addEventListener("error", () => {
-    if (ws.data.liveUpstream !== upstream) return;
-    closeLiveSideband(ws, 1011, "upstream error");
   });
 }
 
@@ -2329,7 +2365,11 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           req.signal,
         );
         if (!upstreamHandshake.ok) {
-          turnAdmissionLease.release();
+          if (upstreamHandshake.socket) {
+            closeLiveSidebandBeforeUpgrade(upstreamHandshake.socket, () => turnAdmissionLease.release());
+          } else {
+            turnAdmissionLease.release();
+          }
           addFinalRequestLog(requestId, start, logCtx, upstreamHandshake.status);
           console.error(`[live] sideband upstream handshake failed: ${upstreamHandshake.message}`);
           return withCors(
@@ -2340,12 +2380,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         }
         const handoffFailure = upstreamHandshake.handoff.failure();
         if (handoffFailure || upstreamHandshake.socket.readyState !== WebSocket.OPEN) {
-          try {
-            upstreamHandshake.socket.close();
-          } catch {
-            /* upstream is already terminal */
-          }
-          turnAdmissionLease.release();
+          closeLiveSidebandBeforeUpgrade(upstreamHandshake.socket, () => turnAdmissionLease.release());
           const failure = handoffFailure ?? {
             status: 502,
             code: "upstream_error",
@@ -2371,11 +2406,10 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         // The upgrade was refused after the upstream had already opened; drop it.
         try {
           upstreamHandshake.handoff.take();
-          upstreamHandshake.socket.close();
         } catch {
           /* ignore */
         }
-        turnAdmissionLease.release();
+        closeLiveSidebandBeforeUpgrade(upstreamHandshake.socket, () => turnAdmissionLease.release());
         return withCors(formatErrorResponse(426, "upgrade_required", "WebSocket upgrade failed"), req, policy);
       }
 
