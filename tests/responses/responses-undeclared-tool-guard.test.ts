@@ -12,10 +12,13 @@ import {
   createUndeclaredToolCallGuardBlockRewrite,
   currentTurnWireToolCatalogBody,
   hasExplicitWireToolCatalog,
+  normalizeDefaultNamespacePrefixInJson,
+  undeclaredToolCallName,
   undeclaredToolCallNameInResponse,
   UNDECLARED_TOOL_CALL_ERROR_CODE,
   type ProviderExecutedCallType,
 } from "../../src/server/responses-undeclared-tool-guard";
+import { normalizeDeclaredToolName } from "../../src/types/tools";
 import { relaySseWithBlockRewrite } from "../../src/server/sse-payload-rewrite";
 import { handleResponses } from "../../src/server/responses";
 import { expandPreviousResponseInput } from "../../src/responses/state";
@@ -1838,5 +1841,102 @@ describe("xAI hosted-call authorization through handleResponses", () => {
     expect(response.status).toBe(502);
     const body = await response.json() as { error: { message: string } };
     expect(body.error.message).toContain('undeclared client tool "x_keyword_search"');
+  });
+});
+
+describe("provider-added default namespace prefix", () => {
+  const viewImageCatalog = {
+    tools: [{ type: "function", name: "view_image" }],
+  };
+
+  function declaredBareViewImage(): Set<string> {
+    return collectDeclaredWireToolNames(viewImageCatalog);
+  }
+
+  test("dotted default prefix resolves to the declared bare tool", () => {
+    const declared = declaredBareViewImage();
+    expect(declared.has("view_image")).toBe(true);
+    expect(
+      undeclaredToolCallName(
+        {
+          type: "response.output_item.added",
+          item: { type: "function_call", name: "default.view_image", call_id: "call_1" },
+        },
+        declared,
+      ),
+    ).toBeUndefined();
+    expect(normalizeDeclaredToolName("default.view_image", declared)).toBe("view_image");
+    expect(normalizeDeclaredToolName("default__view_image", declared)).toBe("view_image");
+  });
+
+  test("namespaced default shape resolves to the declared bare tool", () => {
+    const declared = declaredBareViewImage();
+    expect(
+      undeclaredToolCallName(
+        {
+          type: "response.output_item.added",
+          item: { type: "function_call", name: "view_image", namespace: "default", call_id: "call_2" },
+        },
+        declared,
+      ),
+    ).toBeUndefined();
+  });
+
+  test("genuinely undeclared default-prefixed tools still fail closed", () => {
+    const declared = declaredBareViewImage();
+    expect(
+      undeclaredToolCallName(
+        {
+          type: "response.output_item.added",
+          item: { type: "function_call", name: "default.apply_patch", call_id: "call_3" },
+        },
+        declared,
+      ),
+    ).toBe("default.apply_patch");
+    expect(
+      normalizeDefaultNamespacePrefixInJson(JSON.stringify({ name: "default.apply_patch" }), declared),
+    ).toBe(JSON.stringify({ name: "default.apply_patch" }));
+  });
+
+  test("no fold while the default namespace is genuinely declared", () => {
+    const declared = collectDeclaredWireToolNames({
+      tools: [{ type: "namespace", name: "default", tools: [{ type: "function", name: "view_image" }] }],
+    });
+    expect(declared.has("default__view_image")).toBe(true);
+    expect(normalizeDeclaredToolName("default.other", declared)).toBe("default.other");
+  });
+
+  test("payload rewrite restores the bare name before relay", () => {
+    const declared = declaredBareViewImage();
+    const rewritten = normalizeDefaultNamespacePrefixInJson(
+      JSON.stringify({
+        type: "response.output_item.added",
+        item: { type: "function_call", name: "default.view_image", call_id: "call_1" },
+      }),
+      declared,
+    );
+    const parsed = JSON.parse(rewritten) as { item: { name: string } };
+    expect(parsed.item.name).toBe("view_image");
+  });
+
+  test("guard block rewrite relays the folded call without failing", () => {
+    const declared = declaredBareViewImage();
+    const guard = createUndeclaredToolCallGuardBlockRewrite(declared);
+    const blocks = guard(
+      frame("response.output_item.added", {
+        output_index: 0,
+        item: {
+          type: "function_call",
+          id: "fc_1",
+          call_id: "call_1",
+          name: "default.view_image",
+          arguments: "{}",
+          status: "in_progress",
+        },
+      }),
+    );
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toContain("response.output_item.added");
+    expect(blocks[0]).not.toContain("response.failed");
   });
 });
