@@ -70,7 +70,7 @@ route-specific results rather than repeating this table.
 
 | Method and path | Purpose | Notable errors |
 | --- | --- | --- |
-| `GET, PUT /api/v2` | Read or change native multi-agent v2 mode and thread settings | 400 invalid settings; 502 transition or persistence failure |
+| `GET, PUT /api/v2` | Read or change native multi-agent v2 mode, thread settings, and the optional routed delegation bridge | 400 invalid settings; 502 transition or persistence failure |
 | `GET, PUT /api/injection-model` | Read or set the injected sub-agent model, effort, prompt, and guidance settings | 400 invalid model, effort, or body |
 | `GET, PUT /api/effort-caps` | Read or set global and sub-agent reasoning-effort ceilings | 400 invalid ladder value |
 | `GET, PUT /api/subagent-models` | Read or order the models advertised to sub-agents | 400 invalid list or more than five models |

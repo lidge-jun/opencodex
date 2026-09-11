@@ -31,6 +31,7 @@ still depends on upstream support for your account.
 | `injectionEffort?` | `string` | — | Preferred effort (`low` through `ultra`), meaningful only with `injectionModel`. |
 | `injectionPrompt?` | `string` | — | Replaces the built-in v2 guidance body. Supports `{{model}}`, `{{effort}}`, `{{roster}}`, and `{{fallback}}`. A configured `injectionModel` is sufficient to render the custom prompt. |
 | `multiAgentGuidanceEnabled?` | `boolean` | `true` | Controls only opencodex-authored v1/v2 developer guidance; it does not change native agent defaults, tools, routing, rosters, or effort caps. |
+| `v2RoutedDelegationBridge?` | `boolean` | `false` | Experimental opt-in for canonical OpenAI Responses V2 routes. Mirrors the collaboration message operations for routed delegation and restores returned calls to native collaboration calls. It stays inactive for maintenance, compaction, shadow, non-native, conflicting, or malformed request shapes. |
 | `syncCodexSubagentDefaults?` | `boolean` | `false` | Opt into writing `injectionModel` and optional `injectionEffort` as Codex's native defaults during sync/restart. Requires `injectionModel`. |
 | `subagentModelFallback?` | `string[]` | `[]` | Priority-ordered global fallback models for spawned child turns. |
 | `subagentModelFallbackByModel?` | `Record<string, string[]>` | `{}` | Per-primary-model fallback chains, keyed by the requested primary model id. This is the supported home for per-role fallback metadata; `model_fallback` inside Codex agent TOML makes Codex 0.146+ skip the role (#1190). |
