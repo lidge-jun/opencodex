@@ -4,6 +4,8 @@ import { parseDevinAuthPaste, refreshDevinToken } from "../../src/oauth/devin";
 import { DEVIN_DEFAULT_API_SERVER, resolveDevinApiBaseUrl, validateDevinApiBaseUrl } from "../../src/oauth/devin/api-base";
 import { registerUser } from "../../src/oauth/devin/register-user";
 import { anySignal } from "../../src/lib/abort";
+import { buildGetChatMessageRequestForTests } from "../../src/adapters/devin/cloud-direct/chat";
+import { iterFields } from "../../src/adapters/devin/cloud-direct/wire";
 
 const FAKE_TOKEN = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEifQ.c2lnbmF0dXJl";
 
@@ -185,5 +187,63 @@ describe("anySignal", () => {
     b.abort(new Error("stop"));
     expect(composed.signal.aborted).toBe(true);
     composed.cleanup();
+  });
+});
+
+describe("devin cloud request shape", () => {
+  // The bug this guards: #2 and #3 were swapped, so a caller asking for 32
+  // output tokens wrote 32 into the context-window field and Cognition answered
+  // every single turn with an opaque "an internal error occurred" - on free and
+  // paid accounts alike. Verified on 2026-09-12 by building the same turn with a
+  // working client and diffing the encoded messages field by field.
+  function fields(buf: Buffer) {
+    const out: Record<number, { wire: number; value: unknown }> = {};
+    for (const f of iterFields(buf)) out[f.num] = { wire: f.wire, value: f.value };
+    return out;
+  }
+  const build = (completionOpts?: Record<string, number>) =>
+    buildGetChatMessageRequestForTests({
+      apiKey: "devin-session-token$test",
+      sessionId: "11111111-1111-1111-1111-111111111111",
+      requestId: 1n,
+      triggerId: "22222222-2222-2222-2222-222222222222",
+      cascadeId: "33333333-3333-3333-3333-333333333333",
+      modelUid: "swe-2-high",
+      messages: [{ role: "user", content: "hi" }],
+      ...(completionOpts ? { completionOpts } : {}),
+    } as never);
+
+  test("the output cap lands in #2 and the context window in #3", () => {
+    const outer = fields(build({ maxOutputTokens: 64, maxInputTokens: 200_000 }));
+    const completion = outer[8]?.value as Buffer;
+    const inner = fields(completion);
+    expect(inner[2]).toEqual({ wire: 0, value: 64n });
+    expect(inner[3]).toEqual({ wire: 0, value: 200_000n });
+    // #6 and #11 are not part of the message the service accepts.
+    expect(inner[6]).toBeUndefined();
+    expect(inner[11]).toBeUndefined();
+  });
+
+  test("temperature zero is clamped, because the service refuses exactly zero", () => {
+    const inner = fields(fields(build({ temperature: 0 }))[8]?.value as Buffer);
+    const raw = inner[5]?.value as Buffer;
+    const temperature = Buffer.from(raw).readDoubleLE(0);
+    expect(temperature).toBeGreaterThan(0);
+    expect(temperature).toBeLessThan(0.01);
+  });
+
+  test("the outer request carries the verified tag set", () => {
+    const outer = fields(build());
+    // Present: metadata, system prompt, one prompt, request type, completion
+    // config, session model config, session id, the #20 marker and the model.
+    for (const tag of [1, 2, 3, 7, 8, 15, 16, 20, 21]) expect(outer[tag], `#${tag}`).toBeDefined();
+    // #22 only appears from the second turn onward and is reused across that
+    // turn's tool loop, so a fresh per-request uuid matches neither shape.
+    expect(outer[22]).toBeUndefined();
+  });
+
+  test("metadata carries the fingerprint the service checks the length of", () => {
+    const metadata = fields(fields(build())[1]?.value as Buffer);
+    expect((metadata[31]?.value as Buffer).length).toBe(732);
   });
 });

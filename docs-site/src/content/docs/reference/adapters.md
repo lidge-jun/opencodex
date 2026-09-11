@@ -424,12 +424,6 @@ declarations do not grant approval or change execution policy.
 
 ## `devin`
 
-> **Chat is unverified.** On a measured free-tier account (2026-09-12) `RegisterUser` and
-> `GetCascadeModelConfigs` succeed, but every `GetChatMessage` returns an opaque
-> `invalid_argument` and no turn completes. Client version, request framing, metadata and request
-> fields were each ruled out by live probing; entitlement is the leading explanation. Paid-account
-> chat has not been tested. Use [`devin-cli`](#devin-cli) for a Devin path that completes turns.
-
 **Targets:** Cognition's `exa.api_server_pb.ApiServerService/GetChatMessage` over HTTPS Connect
 streaming at `server.codeium.com`.
 **Auth:** Devin/Cognition API key from `provider.apiKey` or the forwarded authorization header.
@@ -447,6 +441,13 @@ Login opens Auth0 browser sign-in, then exchanges the Firebase ID token via
   encoding.
 - Devin/Cognition API keys do not refresh. Run `ocx login devin` again when the key expires or is
   revoked.
+- The chat request is calibrated, not guessed. Three things gate it together: the credential is the
+  session token doubled and dash-joined in an `Authorization: Basic` header while the protobuf body
+  keeps one copy, the request envelope goes up uncompressed, and `Metadata` #31 carries a
+  732-character device fingerprint whose length — not value — the service checks. Inside
+  `CompletionConfiguration`, #2 is the output cap and #3 is the context window; swapping those two
+  makes every turn fail with an opaque `invalid_argument`. A temperature of exactly 0 is refused, so
+  it is clamped to the smallest accepted value.
 - Experimental unofficial bridge; not shown in the dashboard preset by default. See the
   [provider guide](/guides/providers/) for login instructions.
 

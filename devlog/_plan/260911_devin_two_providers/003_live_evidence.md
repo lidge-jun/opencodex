@@ -101,3 +101,70 @@ was reverted; only the wp1 hardening and the MIT notice remain.
 Confirming this needs a paid account or a captured working request. Neither is
 available in this session, so the cloud provider is not merge-ready and the
 adapter's own model gate is what stops a user hitting this blindly.
+
+## The chat path works. What was actually wrong.
+
+A paid account was obtained on 2026-09-12 and the entitlement hypothesis died
+immediately: all 229 catalogue models came back enabled, and `GetChatMessage`
+failed exactly as it had on the free account. The failure was never about the
+plan.
+
+Isolating it took one decisive move. The most actively maintained reference
+(`dwgx/WindsurfAPI`) is zero-dependency ESM, so its request builder can simply be
+imported. Building a turn with the reference builder and sending it through our
+own transport returned **HTTP 200** and a real Connect stream — which proved the
+transport, the headers and the credential were all fine, and put the fault in our
+request encoder. Diffing the two encoded messages field by field left exactly one
+difference: `CompletionConfiguration` (#8).
+
+    reference  #1=1 #2=8192 #3=128000 #5=double #7=40 #8=double
+    ours       #1=1 #2=64000 #3=32    #5=double #6=double #7=50 #8=double #11=double
+
+**#2 is the output cap and #3 is the context window; we had them swapped.** A
+caller asking for 32 output tokens wrote 32 into the context-window field, and
+Cognition answered with an opaque `invalid_argument: an internal error occurred`.
+That is why every account failed identically and why no amount of probing the
+transport helped. The reference's own comments record the same mis-tagging and
+the same re-calibration.
+
+A second, independent trap sat behind it: **a temperature of exactly 0 is
+refused** with the same opaque error. Deterministic output is the common case for
+coding clients, so it is clamped to the smallest accepted value rather than
+silently replaced with the service default.
+
+Three transport facts also had to be right together, and testing them one at a
+time is why they looked useless earlier:
+
+- the credential is the session token doubled and dash-joined in
+  `Authorization: Basic`, while the protobuf body keeps a single copy;
+- the request envelope is uncompressed;
+- `Metadata` #31 carries 732 hex characters, whose length the service checks and
+  whose value it does not.
+
+The metadata identity is also its own shape — seven fields, the optional
+`user_jwt`, and the fingerprint — not the desktop client's fuller telemetry set.
+
+### Verified
+
+Six combinations, two hosts by three models, all returning `PONG` with a finish
+reason and usage:
+
+| host | model | result |
+|---|---|---|
+| `server.codeium.com` | `swe-2-high` | PONG, stop, 476/36 |
+| `server.codeium.com` | `claude-sonnet-5-medium` | PONG, stop, 576/5 |
+| `server.codeium.com` | `gpt-5-6-sol-medium` | PONG, 394/6 |
+| `server.self-serve.windsurf.com` | `swe-2-high` | PONG, stop, 1/36 |
+| `server.self-serve.windsurf.com` | `claude-sonnet-5-medium` | PONG, stop, 576/5 |
+| `server.self-serve.windsurf.com` | `gpt-5-6-sol-medium` | PONG, 394/6 |
+
+The tag map is now pinned by a regression test that builds a request and asserts
+the field layout, so the swap cannot come back silently.
+
+### What this retracts
+
+The earlier conclusion in this document — that entitlement was the leading
+explanation and that the request shape had been ruled out — was wrong. The
+request shape was the whole problem; the probing that "ruled it out" changed one
+variable at a time against a broken `CompletionConfiguration` that no single
+variable could rescue.

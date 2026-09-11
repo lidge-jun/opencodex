@@ -212,7 +212,7 @@ typed values into quoted strings. This includes values inside arrays and inline
 tables. Quoted date strings remain supported; an unquoted date must be preserved
 by editing the configuration manually.
 
-**Pi, Kimi Code, gjc, MiniMax Code, Prime Agent and the managed DSH integration only work against a loopback bind.**
+**Pi, Kimi Code, gjc, MiniMax Code, Prime Agent, Aside, Raycast, omo and the managed DSH integration only work against a loopback bind.**
 The first four have no config field for the `x-opencodex-api-key` header a non-loopback bind
 requires. DSH has a generic headers map, but rc.6 does not document that dedicated admission
 header as a supported integration contract, so the managed writer fails closed instead of

@@ -159,10 +159,10 @@ function encodeChatMessagePrompt(
   const imageParts = content.filter((p): p is { type: 'image'; mimeType: string; base64Data: string; caption?: string } => p.type === 'image');
   const joined = textParts.map((p) => p.text).join('\n');
   const parts: Buffer[] = [
+    // #1 message_id. The verified turn-1 capture stamps one on every prompt.
+    encodeString(1, crypto.randomUUID()),
     encodeVarintField(2, source),
     encodeString(3, joined),
-    encodeVarintField(4, Math.max(1, Math.floor(joined.length / 4))),
-    encodeVarintField(5, 1),
   ];
   // Tool-result message: attach the id of the call this result answers.
   // Without it, the model can't pair multi-tool conversations.
@@ -259,6 +259,25 @@ function collapseSystemIntoUser(messages: ChatHistoryItem[]): ChatHistoryItem[] 
  * CompletionConfiguration — mirrors the LS-shipped defaults, lets the caller
  * override the obvious knobs.
  */
+/** Output cap when the caller named none. */
+const DEFAULT_MAX_OUTPUT_TOKENS = 8192;
+/** Context window when the caller named none. */
+const DEFAULT_CONTEXT_WINDOW = 128_000;
+
+/**
+ * Cognition rejects a temperature of exactly 0 with the same opaque internal
+ * error it uses for a malformed request, so a client asking for deterministic
+ * output would fail every turn. Clamp to the smallest value the wire accepts
+ * rather than silently substituting the service default, which would be a
+ * different answer than the caller asked for.
+ */
+const MIN_TEMPERATURE = 0.0001;
+
+function safeTemperature(value: number | undefined): number {
+  if (value === undefined) return 0.7;
+  return value <= 0 ? MIN_TEMPERATURE : value;
+}
+
 function encodeCompletionConfiguration(opts: {
   maxOutputTokens?: number;
   maxInputTokens?: number;
@@ -271,19 +290,20 @@ function encodeCompletionConfiguration(opts: {
     b.writeDoubleLE(n, 0);
     return Buffer.concat([Buffer.from([(fieldNum << 3) | 1]), b]);
   };
+  // Tag map, verified by building the same turn with a working client and
+  // diffing the encoded messages field by field: #2 is the OUTPUT cap and #3 is
+  // the context window. This layout had those two swapped, so a caller asking
+  // for 32 output tokens put 32 into the context-window field and the request
+  // came back as an opaque "an internal error occurred" — for every turn, on
+  // every account, which is why free and paid failed identically. #6 and #11
+  // are not part of the message the service accepts.
   return Buffer.concat([
     encodeVarintField(1, 1),
-    encodeVarintField(2, opts.maxInputTokens ?? 64000),
-    // Default to the catalog's most permissive `maxOutputTokens` (128K).
-    // The cloud clamps to the per-model limit anyway. The old 4096 default
-    // would silently truncate any callers (tests, CLI users of
-    // streamChatEvents directly) who didn't override.
-    encodeVarintField(3, opts.maxOutputTokens ?? 128_000),
-    enc64(5, opts.temperature ?? 0.7),
-    enc64(6, opts.topP ?? 0.95),
-    encodeVarintField(7, opts.topK ?? 50),
-    enc64(8, 1.0),
-    enc64(11, 1.0),
+    encodeVarintField(2, opts.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS),
+    encodeVarintField(3, opts.maxInputTokens ?? DEFAULT_CONTEXT_WINDOW),
+    enc64(5, safeTemperature(opts.temperature)),
+    encodeVarintField(7, opts.topK ?? 40),
+    enc64(8, opts.topP ?? 1.0),
   ]);
 }
 
@@ -418,7 +438,7 @@ export type CloudChatEvent =
 
 interface BuildArgs {
   apiKey: string;
-  userJwt: string;
+  userJwt?: string;
   modelUid: string;
   messages: ChatHistoryItem[];
   cascadeId: string;
@@ -512,6 +532,10 @@ function encodeToolDef(tool: ToolDef): Buffer {
   ]);
 }
 
+export function buildGetChatMessageRequestForTests(args: BuildArgs): Buffer {
+  return buildGetChatMessageRequest(args);
+}
+
 function buildGetChatMessageRequest(args: BuildArgs): Buffer {
   const metadata = buildMetadata({
     apiKey: args.apiKey,
@@ -519,6 +543,8 @@ function buildGetChatMessageRequest(args: BuildArgs): Buffer {
     sessionId: args.sessionId,
     requestId: args.requestId,
     triggerId: args.triggerId,
+    // GetChatMessage accepts only the calibrated identity shape.
+    cloudChatShape: true,
   });
 
   // System messages must be inlined into the user turn (Cognition cloud
@@ -559,13 +585,27 @@ function buildGetChatMessageRequest(args: BuildArgs): Buffer {
   //   #22 prompt_id (string)
   return Buffer.concat([
     encodeMessage(1, metadata),
+    // #2 system_prompt is always written, empty when the caller had none. The
+    // system turn is separately collapsed into the first user message because
+    // source=SYSTEM is refused; this field is the one the wire expects here.
+    encodeString(2, ''),
     ...promptParts,
     encodeVarintField(7, args.requestType ?? 5),
     encodeMessage(8, completion),
     ...toolParts,
+    // #15 session model config: { id, turn, 4 }. Present on every verified
+    // request.
+    encodeMessage(15, Buffer.concat([
+      encodeString(1, crypto.randomUUID()),
+      encodeVarintField(2, 1),
+      encodeVarintField(3, 4),
+    ])),
     encodeString(16, args.cascadeId),
+    encodeVarintField(20, 1),
     encodeString(21, args.modelUid),
-    encodeString(22, args.promptId),
+    // #22 is deliberately omitted. It is a user-exchange id that only appears
+    // from the second turn onward and is reused across that turn's tool loop; a
+    // fresh per-request uuid matches neither shape.
   ]);
 }
 
@@ -815,7 +855,12 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
   // Validate it here too: this request body carries the api_key, so an
   // unallowlisted host is credential exfiltration rather than a wrong endpoint.
   const host = resolveDevinApiBaseUrl(req.apiServerUrl);
-  const userJwt = await getCachedUserJwt(req.apiKey, host, req.signal);
+  // The hosted chat path does not require the short-lived user_jwt; the working
+  // reference omits it by default. Minting it is opt-in so a mint failure or a
+  // JWT the chat service does not accept cannot break every turn.
+  const userJwt = process.env.OPENCODEX_DEVIN_SEND_USER_JWT === "1"
+    ? await getCachedUserJwt(req.apiKey, host, req.signal)
+    : undefined;
 
   // Pre-flight: consult the per-account model catalog. Cognition's cloud
   // returns an opaque `permission_denied: "an internal error occurred (trace
@@ -860,7 +905,12 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
     requestType: req.requestType,
     completionOpts: req.completionOpts,
   });
-  const framed = frameConnectStream(proto, true);
+  // The request envelope goes up uncompressed. A gzipped GetChatMessage frame is
+  // rejected with the same opaque `invalid_argument: an internal error occurred`
+  // the short fingerprint produces, and it is one of three things that have to be
+  // right together — the other two are the doubled Basic credential and the
+  // 732-character Metadata #31.
+  const framed = frameConnectStream(proto, false);
   const body = new Blob([new Uint8Array(framed)], { type: "application/connect+proto" });
 
   // Compose caller signal with a TTFB timeout. If the cloud takes longer
@@ -885,8 +935,13 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
       headers: {
         'Content-Type': 'application/connect+proto',
         'Connect-Protocol-Version': '1',
-        'Connect-Content-Encoding': 'gzip',
         'Connect-Accept-Encoding': 'gzip',
+        // The credential is the session token doubled and dash-joined. A single
+        // copy is refused with permission_denied. The protobuf body keeps one
+        // copy, in Metadata #3.
+        Authorization: `Basic ${req.apiKey}-${req.apiKey}`,
+        'User-Agent': 'connect-es/2.0.0',
+        Accept: '*/*',
       },
       body,
       redirect: 'error',

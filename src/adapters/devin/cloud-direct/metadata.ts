@@ -21,6 +21,7 @@ import {
   encodeTimestampBody,
   encodeVarintField,
 } from './wire.js';
+import { randomBytes } from 'node:crypto';
 
 /**
  * extension_version + ide_version sent to the cloud. It MUST be a string the
@@ -35,6 +36,24 @@ import {
  * Cognition retires a version before this constant is updated.
  */
 const WINDSURF_VERSION_STRING = process.env.OPENCODEX_DEVIN_CLIENT_VERSION?.trim() || '3.9.19';
+
+/**
+ * Identity the hosted chat RPC expects, which is not the desktop client's.
+ * GetChatMessage is calibrated against a different client name and version, and
+ * sending the IDE's own strings is one of the ways the request comes back as an
+ * opaque "an internal error occurred".
+ */
+const CLOUD_CHAT_CLIENT_NAME = 'chisel';
+const CLOUD_CHAT_CLIENT_VERSION = process.env.OPENCODEX_DEVIN_CHAT_CLIENT_VERSION?.trim() || '2026.8.18';
+const CLOUD_CHAT_OS = 'windows';
+
+/**
+ * Metadata #31 is a device fingerprint, and the server checks its shape rather
+ * than its value: 732 hex characters (366 bytes). Anything shorter — including
+ * absent — is rejected with the same opaque internal error, and a fresh random
+ * value per request is accepted, so nothing here identifies the machine.
+ */
+const DEVICE_FINGERPRINT_BYTES = 366;
 
 export interface MetadataInput {
   /** Persistent api_key from OAuth (`devin-session-token$<JWT>`). */
@@ -51,6 +70,19 @@ export interface MetadataInput {
   windsurfVersion?: string;
   /** Optional override for the host OS string. */
   osName?: string;
+  /**
+   * Emit the exact field set the hosted chat RPC accepts.
+   *
+   * GetChatMessage validates this message far more strictly than
+   * GetCascadeModelConfigs does, which is why the catalog has always worked
+   * while chat did not. The shape is seven identity fields, the optional
+   * user_jwt, and the fingerprint — the telemetry fields this module otherwise
+   * sends (request_id, session_id, ls_timestamp, trigger_id, plan_name,
+   * ide_type) are not part of it.
+   */
+  cloudChatShape?: boolean;
+  /** Override for Metadata #31; a random fingerprint is generated when absent. */
+  deviceHex?: string;
 }
 
 function osString(): string {
@@ -65,6 +97,20 @@ function osString(): string {
 export function buildMetadata(input: MetadataInput): Buffer {
   const version = input.windsurfVersion ?? WINDSURF_VERSION_STRING;
   const os = input.osName ?? osString();
+  if (input.cloudChatShape) {
+    const clientVersion = input.windsurfVersion ?? CLOUD_CHAT_CLIENT_VERSION;
+    return Buffer.concat([
+      encodeString(1, CLOUD_CHAT_CLIENT_NAME),
+      encodeString(2, clientVersion),
+      encodeString(3, input.apiKey),
+      encodeString(4, 'en'),
+      encodeString(5, input.osName ?? CLOUD_CHAT_OS),
+      encodeString(7, clientVersion),
+      encodeString(12, CLOUD_CHAT_CLIENT_NAME),
+      ...(input.userJwt ? [encodeString(21, input.userJwt)] : []),
+      encodeString(31, input.deviceHex ?? randomBytes(DEVICE_FINGERPRINT_BYTES).toString('hex')),
+    ]);
+  }
   const parts: Buffer[] = [
     encodeString(1, 'windsurf'),                     // ide_name
     encodeString(2, version),                         // extension_version

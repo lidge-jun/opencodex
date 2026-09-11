@@ -107,7 +107,7 @@ ocx logout <provider>
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | 通过 Cloud Code Assist 协议使用 Google OAuth。实时发现调用已认证的 CCA `v1internal:fetchAvailableModels` 端点，并仅发布当前登录账户可用的 agent 模型；维护中的目录仍作为回退。 |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 实验性 PKCE 登录、带可选 HTTP/1.1 兼容路径的 HTTP/2 传输，以及按账号筛选的模型发现。 |
 | `orcarouter-oauth` | `openai-chat` | `https://api.orcarouter.ai/v1` | 浏览器授权与密钥交换走 `https://www.orcarouter.ai` + S256 PKCE。交换结果是用户自己的普通 `sk-orca-…` API key，保存在现有凭据库中并持续复用，直到被撤销。 |
-| `devin` | `devin` | `https://server.codeium.com` | **对话未经验证。在实测的免费账号上，登录和模型列表都能成功，但每次 `GetChatMessage` 都返回不透明的 `invalid_argument`，一轮对话无法完成。付费账号尚未测试。需要能跑完一轮的 Devin 路径请使用 `devin-cli`。** 实验性的非官方 Cognition/Devin 桥接。登录会打开 Auth0 浏览器页面，再用 `RegisterUser` 把令牌换成长期 API 密钥。模型列表按账号通过 `GetCascadeModelConfigs` 实时获取，流式仅走 Connect-RPC 上的 `runTurn` 路径。默认不在仪表盘预设中，需要手动启用。 |
+| `devin` | `devin` | `https://server.codeium.com` | 实验性的非官方 Cognition/Devin 桥接。登录会打开 Auth0 浏览器页面，再用 `RegisterUser` 把令牌换成长期 API 密钥。模型列表按账号通过 `GetCascadeModelConfigs` 实时获取，流式仅走 Connect-RPC 上的 `runTurn` 路径。默认不在仪表盘预设中，需要手动启用。 |
 | `devin-cli` | `devin-cli` | `https://cli.devin.ai` | 通过 Agent Client Protocol（`devin acp`，stdio 上的 JSON-RPC）驱动本地安装的 Devin CLI。凭据由 CLI 自己通过 `devin auth login` 持有，opencodex 不保存密钥。可用 `OPENCODEX_DEVIN_CLI_BIN` 指定可执行文件；要允许 CLI 读写文件，必须显式设置 `OPENCODEX_DEVIN_CLI_ALLOW_TOOLS=1`，默认拒绝。 |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 实验性。GitHub 设备流 + `copilot_internal` 交换（VS Code OAuth 客户端）。需要有效的 Copilot 订阅；不是官方第三方 API。 |
 
