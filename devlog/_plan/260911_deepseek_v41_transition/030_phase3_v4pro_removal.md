@@ -16,10 +16,13 @@
 | `orcarouter` | `registry.ts:1180-1190` |
 | `codebuddy` / `qoder` | `codebuddy-models.ts:38,124,145`, `qoder-models.ts:13` |
 | `router.ts:686` | 잔여 참조 |
+| 주석 (감사 추가) | `registry.ts:631, 719, 2038, 2305` — 코드에서 사라진 뒤에도 주석이 남으면 수용기준 1이 성립하지 않는다 |
 
 **커밋 B — 벤더 호스팅 (근거 약함, 분리)**
 
 `alibaba-token-plan`/`-intl`, `volcengine` ark/coding/agent (`deepseek-v4-pro-260425` 포함), `ollama`, `nvidia-nim`, `baseten`.
+
+**`volcengine-agent-plan`의 `defaultModel`이 `deepseek-v4-pro`다(`registry.ts:2832`).** 제거하면 기본 모델이 비므로 같은 커밋에서 대체 기본값을 정해야 한다. 이 프리셋의 나머지 로스터에서 고른다.
 
 이 벤더들은 자체 스냅샷과 일정으로 배포한다. DeepSeek 1st-party 퇴역 공지가 그들의 로스터를 끝내지 않는다. 지시는 전부 제거였으므로 실행하되, PR 본문에 이 구분과 되돌리는 방법을 명시한다.
 
@@ -32,7 +35,8 @@
 1. `rg "deepseek-v4-pro" src`가 생성 파일을 제외하고 0건이다.
 2. 레지스트리 멤버십을 고정하던 테스트가 갱신되고 통과한다.
 3. 반대 증거: `deepseek-v4-flash` 별칭은 남는다 — DeepSeek이 이름을 유지한다고 명시했고, 그걸 지우면 기존 사용자 config가 깨진다.
-4. `deepseek` 프리셋의 `defaultModel`이 퇴역 id를 가리키지 않는다.
+4. **어느 프리셋의 `defaultModel`도** 퇴역 id를 가리키지 않는다. `deepseek`뿐 아니라 `volcengine-agent-plan`(2832)을 포함한다.
+5. 주석에도 `deepseek-v4-pro`가 남지 않는다.
 
 ## 검증
 
@@ -45,4 +49,6 @@ rg "deepseek-v4-pro" src --glob "!src/generated/**"
 
 ## 리스크
 
-영향 파일이 62개다. 전체 스위트를 로컬에서 돌리지 않으므로(사용자 지시) 놓친 참조는 CI가 잡는다. CI 실패 시 해당 파일만 좁혀 고친다.
+영향 파일이 62개이고, 레지스트리 멤버십을 고정하는 테스트만 24개다(002 정정). 전체 스위트를 로컬에서 돌리지 않으므로(사용자 지시) 놓친 참조는 CI가 잡는다. CI 실패 시 해당 파일만 좁혀 고친다.
+
+사다리 자체는 바뀌지 않는다는 점도 기록해 둔다: `DEEPSEEK_PRO_THINKING_EFFORTS`와 `DEEPSEEK_FLASH_THINKING_EFFORTS`는 값이 같다(`registry.ts:701-715`). 퇴역으로 실제로 어긋나는 건 컨텍스트 창과 가격이다.

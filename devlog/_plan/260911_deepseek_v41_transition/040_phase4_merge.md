@@ -1,5 +1,11 @@
 # 040 — wp5: PR 게시와 머지
 
+## docs-site 동기화 (감사 추가)
+
+`deepseek-v4-pro`는 9개 로케일의 `guides/providers.md`, `guides/sidecars.md`, `guides/model-ordering.md`, `reference/configuration/providers.md`와 `docs-site/src/data/frontier-benchmarks.json`에 등장한다. 코드에서 모델을 지우면서 문서가 그대로면 영문 원문과 로케일이 동시에 거짓이 된다.
+
+범위: 제거된 모델을 **사용 가능한 모델로 제시하는** 문장만 고친다. 벤치마크 데이터(`frontier-benchmarks.json`)는 과거 측정 기록이므로 손대지 않는다 — 생성 메타데이터를 남기는 것과 같은 이유다.
+
 ## 순서
 
 1. #4258 머지 (wp2에서 완료) → `dev` fetch → 내 브랜치 리베이스

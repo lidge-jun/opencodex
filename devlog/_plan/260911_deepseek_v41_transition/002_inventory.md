@@ -7,6 +7,20 @@
 | `deepseek-v4-pro` | 62 | 293 |
 | `deepseek-v4-flash` | 99 | 585 |
 
+## `DEEPSEEK_THINKING_MODELS` 소비처 (감사 정정)
+
+이 상수(`registry.ts:619`)는 Zen 3종만 먹이는 게 아니다. **6개 프리셋 21곳**이 소비하며, 그중에는 `deepseek` 1st-party 프리셋의 `models:` 배열 자체가 포함된다.
+
+| 프리셋 | 앵커 |
+| --- | --- |
+| `opencode-go` | 1760, 1768, 1776, 1803, 1813 |
+| `deepseek` 1st-party | **2045 (`models:` spread)**, 2114-2121 |
+| `alibaba-token-plan` | 2813-2818 |
+| `opencode-zen` | 3047-3064 |
+| `opencode-free` | 3108 |
+
+이것 때문에 "공유 상수에 V4.1을 추가" 설계는 성립하지 않는다. 020이 상수 분리로 다시 설계됐다.
+
 ## v4-pro를 선언하는 프로바이더 (registry.ts)
 
 | 프로바이더 | 성격 | 앵커 |
@@ -32,4 +46,4 @@
 
 ## 테스트 영향 예상
 
-레지스트리 멤버십을 직접 고정하는 곳: `tests/providers/provider-registry-parity.test.ts` (v4-pro 23건, v4-flash 24건), `tests/codex-integration/codex-catalog.test.ts` (34건/47건), `tests/codex-integration/codex-catalog-model-picker-order.test.ts` (15건), `tests/gui/volcengine-providers.test.ts` (15건), `tests/providers/baseten-provider.test.ts` (14건).
+감사 정정: 영향 파일은 5개가 아니라 **24개**다. 위 다섯 외에 `tests/routing/router.test.ts:450`(정확 목록), `tests/providers/orcarouter-provider.test.ts:139`, `tests/gui/alibaba-intl-token-plan.test.ts:31`, `tests/routing/fastwire-policy.test.ts`, `tests/codex-integration/slug-codec.test.ts`, `tests/server/adapter-resolve.test.ts` 등이 포함된다.
