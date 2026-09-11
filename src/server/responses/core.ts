@@ -6002,6 +6002,7 @@ async function handleResponsesInner(
           }
           : undefined;
         const inspector = createSseInspector({
+          completeBeforeTerminal: request.sideChatCache !== undefined,
           onTerminal: reportNativeTerminal,
           logCtx,
           onCompletedResponse: rememberPassthroughResponse ? rememberPassthroughResponseChecked : undefined,
@@ -6062,6 +6063,7 @@ async function handleResponsesInner(
       linkAbortSignal(upstream, turnAc.signal);
       registerTurn(turnAc, options.turnAdmissionLease);
       const inspectionConsumerOptions = {
+        completeBeforeTerminal: request.sideChatCache !== undefined,
         // Request abort can reject the fetch body before the response cancel hook runs.
         clientGoneSignal: options.abortSignal
           ? AbortSignal.any([clientGone.signal, options.abortSignal])
