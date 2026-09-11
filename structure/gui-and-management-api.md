@@ -504,3 +504,7 @@ converge the Codex catalog once and return its disposition. The Models UI owns a
 picker data resource so failure cannot erase the ordinary model inventory; Apply publishes through
 the resource's generation fence, and Most used reads usage only on explicit Apply. Stored mode
 survives availability drift, while complete/native custom orders await explicit replacement.
+
+## Paginated history writer boundary
+
+Settings convergence must surface paginated-history refusal rather than claim history was migrated. See [Codex Home](codex-home.md#paginated-history-writer-boundary).

@@ -261,3 +261,7 @@ provider wire mapping; unpinned native requests retain their existing pass-throu
 > Decision record: [ADR-0025](decisions/ADR-0025-ultra-reasoning-level.md)
 
 > Decision record: [ADR-0026](decisions/ADR-0026-ultra-reasoning-level.md)
+
+## Paginated history writer boundary
+
+Catalog convergence can include a provider-history transition. Paginated history refusal is an explicit incomplete transition, not successful migration; see [Codex Home](codex-home.md#paginated-history-writer-boundary).

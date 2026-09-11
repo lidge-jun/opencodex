@@ -368,3 +368,7 @@ model settings, and noncanonical `openai` rows never receive that recovery path.
 `GET /api/codex-auth/accounts?refresh=1` treats missing main credentials, HTTP 401, and allowlisted
 terminal 403 codes as `needsReauth`; generic permission failures remain non-terminal, and a
 successful main usage refresh clears the runtime mark.
+
+## Paginated history writer boundary
+
+Provider account selection does not authorize relabeling paginated Codex records; the [history writer boundary](../codex-home.md#paginated-history-writer-boundary) applies independently of account mode.

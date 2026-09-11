@@ -195,3 +195,7 @@ Claude ModelInfo ordering receives optional `{ modelPickerOrder, featured }` aft
 It orders routed output groups after alias deduplication, preserving the collision winner and
 base/1M/Fast siblings. Native groups and explicit Desktop profile ownership are unchanged.
 Native Codex advertisements still follow display priority; private guidance ranks do not freeze them.
+
+## Paginated history writer boundary
+
+History metadata for parent or child threads follows the same [paginated writer boundary](codex-home.md#paginated-history-writer-boundary); a child source does not authorize external ordinal allocation.

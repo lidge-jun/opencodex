@@ -75,6 +75,11 @@ function openStateDb(stateDbPath: string): Database {
  * rollout's updated_at), and forcing it backwards could hide a real edit from list ordering.
  */
 function appendRolloutLine(path: string, line: string): Buffer {
+  assertLegacyHistoryWritable(path);
+  const record = JSON.parse(line) as { ordinal?: unknown; payload?: { history_mode?: unknown } };
+  if (Object.hasOwn(record, "ordinal") || record.payload?.history_mode === "paginated") {
+    throw new CodexHistoryIntegrityError("history_paginated_requires_native_writer");
+  }
   const fd = openSync(path, "a");
   const buf = Buffer.from(line.endsWith("\n") ? line : `${line}\n`, "utf8");
   try {
@@ -218,6 +223,25 @@ class CodexHistoryIntegrityError extends Error {
   ) {
     super(code);
     this.name = "CodexHistoryIntegrityError";
+  }
+}
+
+/** Paginated ordinals and projection offsets belong to Codex's live writer.
+ * O_APPEND does not allocate an ordinal or update that writer's in-memory cursor.
+ * Refuse before changing the DB, manifest, or first-line provider; never guess N+1.
+ */
+function assertLegacyHistoryWritable(path: string): void {
+  if (!path || !existsSync(path)) return;
+  const fd = openSync(path, "r");
+  try {
+    const first = readFirstRolloutLine(fd);
+    if (!first) return;
+    const record = JSON.parse(first) as { ordinal?: unknown; payload?: { history_mode?: unknown } };
+    if (Object.hasOwn(record, "ordinal") || record.payload?.history_mode === "paginated") {
+      throw new CodexHistoryIntegrityError("history_paginated_requires_native_writer");
+    }
+  } finally {
+    closeSync(fd);
   }
 }
 
@@ -1040,6 +1064,11 @@ function updateSessionMeta(
   if (!latest) return { changed: false, durableProvider: false };
   const record = latest.record;
 
+  assertLegacyHistoryWritable(path);
+  if (Object.hasOwn(record, "ordinal") || record.payload.history_mode === "paginated") {
+    throw new CodexHistoryIntegrityError("history_paginated_requires_native_writer");
+  }
+
   const latestProvider = typeof record.payload.model_provider === "string" && record.payload.model_provider
     ? record.payload.model_provider
     : "openai";
@@ -1151,6 +1180,7 @@ function relabelAllRoutedHistoryToOpenai(db: Database): { rows: number; files: n
     `)
     .all();
 
+  for (const row of rows) assertLegacyHistoryWritable(row.rollout_path);
   let files = 0;
   for (const row of rows) {
     try {
@@ -1302,6 +1332,7 @@ function syncCodexHistoryProviderUnsafe(provider: CodexHistoryProvider, stateDbP
       `)
       .all();
 
+    for (const row of [...openaiRows, ...execRows]) assertLegacyHistoryWritable(row.rollout_path);
     const manifest = readBackup(backupPath, stateDbPath).manifest;
     for (const row of [...openaiRows, ...execRows]) rememberOriginal(manifest, row);
     writeBackup(backupPath, manifest, stateDbPath);
@@ -1408,6 +1439,8 @@ function restoreCodexHistoryProvider(stateDbPath: string, backupPath: string): C
   const backup = readBackup(backupPath, stateDbPath);
   const manifest = backup.manifest;
   const entries = Object.values(manifest.entries);
+
+  for (const entry of entries) assertLegacyHistoryWritable(entry.rolloutPath);
 
   const db = openStateDb(stateDbPath);
   try {
@@ -1547,6 +1580,7 @@ function restoreCodexHistoryProvider(stateDbPath: string, backupPath: string): C
 
 export function restoreLegacyOpenaiHistory(stateDbPath = resolveCodexStateDbPath()): CodexHistorySyncResult {
   if (!existsSync(stateDbPath)) return { rows: 0, files: 0 };
+  try {
   const retried = withHistoryRetryResult(() => {
     const db = openStateDb(stateDbPath);
     try {
@@ -1556,6 +1590,10 @@ export function restoreLegacyOpenaiHistory(stateDbPath = resolveCodexStateDbPath
     }
   });
   return retried.ok ? retried.value : { rows: 0, files: 0, failed: true, failureReason: retried.reason };
+  } catch (error) {
+    if (error instanceof CodexHistoryIntegrityError) return integrityFailureResult(error);
+    throw error;
+  }
 }
 
 /**

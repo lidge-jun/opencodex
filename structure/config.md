@@ -192,3 +192,7 @@ the residual directory for manual review; there is no recursive-delete fallback.
 ## Remote client key files
 
 Client connection metadata stores a stable `apiKeyId` and a non-secret rotation `pendingOperation`. The current data secret remains only in `service-api-token`; a bounded rotation temporarily keeps the old secret in owner-only `service-api-token.prev`. Commit or recovery clears the marker before orphan cleanup. `ocx disconnect` is local-only and leaves remote revocation to the hub's **Integrations → API Keys** page. Hub and local usage stores are not mirrored.
+
+## Paginated history writer boundary
+
+Authless routing cannot relabel paginated history through the legacy file writer. A refused history transition must be reported; provider-definition retention during that refusal remains an integration concern. See [Codex Home](codex-home.md#paginated-history-writer-boundary).
