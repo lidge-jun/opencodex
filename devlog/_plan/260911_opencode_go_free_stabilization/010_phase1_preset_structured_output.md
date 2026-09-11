@@ -78,9 +78,14 @@ noJsonSchemaModels: [...OPENCODE_FREE_DEEPSEEK_MODELS],
 4. 시드된 모델 + `json_object` 요청은 그대로 `json_object`다 — 낮추기가 json_object를 건드리지 않는다는 반대 증거.
 5. 같은 모델이 `noStructuredOutputModels`에도 있으면 `response_format`이 아예 없다 — 킬스위치 우선순위.
 
-### 분기 순서 (감사 지적 반영)
+### 분기 순서와 누락 지점 (wp2 감사 반영)
 
-네이티브 패스스루(`src/adapters/openai-chat.ts:142`)는 킬스위치가 `delete body.response_format`을 먼저 실행한다. 낮추기 분기는 반드시 **else-if**로 붙여, 지워진 필드를 다시 넣지 않게 한다. 번역 경로(`1580`)는 킬스위치가 블록 전체를 건너뛰므로 그 안에서 json_schema만 json_object로 바꾸면 된다. 수용 기준 5가 이 순서를 직접 관측한다.
+- 패스스루(`142`): 킬스위치가 `delete body.response_format`을 먼저 실행하므로, 그 뒤의 낮추기는 `body.response_format?.type === "json_schema"`를 조건으로 두면 자동으로 발화하지 않는다. 감사 지적대로 `else if`는 맞지만 실질적으로 무의미하므로, 조건에 타입 검사를 넣고 킬스위치 우선임을 주석으로 남긴다. `.includes` 정확 일치는 유지한다.
+- 번역 경로(`1580`): 킬스위치 게이트가 json_object/json_schema 두 분기를 함께 감싸므로, 낮추기는 json_schema 분기 **안**에 둔다.
+- **config 검증은 선택이 아니다**: provider 스키마는 `.passthrough()`다. zod 검증을 빼면 사용자가 배열 대신 문자열을 넣어도 통과하고, `.includes()`가 부분 일치로 오작동한다.
+- **관리 API 왕복 누락**(감사가 새로 찾음): `src/server/auth-cors.ts`의 검증기(`711` 패턴)와 `PROVIDER_CONFIG_FIELD_POLICY`(`868` 부근), `src/server/management/provider-routes.ts`의 PATCH 처리(`563` 패턴)와 DTO(`732` 부근)에 필드를 넣지 않으면, 대시보드 raw 에디터 왕복에서 값이 거부되거나 사라진다. `noStructuredOutputModels`와 동일하게 네 지점을 모두 추가한다.
+- **처분 보류**: 스키마 계약이 조용히 free-form JSON으로 강등되는 것을 debug 로그로 남기라는 권고는 이번 범위에서 채택하지 않는다. 요청 본문 로깅 금지 규칙과 인접해 별도 판단이 필요하고, 필드 계약 주석과 PR 본문에 명시하는 것으로 대체한다. 후속 후보로 남긴다.
+- **건드리지 말 것**: parity 테스트가 opencode-go `noVisionModels`를 리터럴 배열로 고정한다. 이번 슬라이스는 그 필드를 수정하지 않는다.
 
 ## 검증
 
