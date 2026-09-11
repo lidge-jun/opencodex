@@ -413,6 +413,13 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     ...(provider.preserveResponsesReasoningContent === undefined && registryEntry.preserveResponsesReasoningContent !== undefined
       ? { preserveResponsesReasoningContent: registryEntry.preserveResponsesReasoningContent }
       : {}),
+    // The request path resolves through routedProviderConfig() and never calls
+    // enrichProviderFromRegistry(), so a saved provider row written before the
+    // registry learned this flag must be backfilled here or route.provider never
+    // carries it and the showThinkingSummary opt-in stays dead.
+    ...(provider.showThinkingSummary === undefined && registryEntry.showThinkingSummary !== undefined
+      ? { showThinkingSummary: registryEntry.showThinkingSummary }
+      : {}),
     // Registry-only client-facing repair policy (#938): fill only when the
     // saved provider has no explicit policy; clone so runtime never aliases
     // the registry constant.

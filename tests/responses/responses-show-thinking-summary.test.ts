@@ -132,6 +132,10 @@ describe("showThinkingSummary provider option", () => {
         liveModels: false,
         models: ["gemini-3.8-flash"],
       } as OcxProviderConfig;
+      // Simulate a saved provider row written before the registry learned the flag:
+      // the request path must backfill it from the registry entry (routedProviderConfig),
+      // enrichProviderFromRegistry never runs there.
+      delete (seed as Record<string, unknown>).showThinkingSummary;
       const config = { providers: { "google-antigravity": seed } } as unknown as OcxConfig;
       const response = await handleResponses(
         new Request("http://localhost/v1/responses", {
