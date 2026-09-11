@@ -194,7 +194,7 @@ export function CodexAccountPoolCards({
                 />
               )}
               <AccountAutoSwitchControl
-                key={`${a.id}:${a.autoSwitchThresholdOverride ?? "global"}`}
+                key={a.id}
                 accountLabel={a.alias ?? a.email}
                 globalThreshold={threshold}
                 override={a.autoSwitchThresholdOverride}

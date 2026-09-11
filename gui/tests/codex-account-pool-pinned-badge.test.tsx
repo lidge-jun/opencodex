@@ -3,6 +3,7 @@ import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import CodexAccountPool from "../src/components/CodexAccountPool";
+import { useCodexAccountPool } from "../src/hooks/useCodexAccountPool";
 import type {
   CodexAccountEntry,
   CodexAccountLoadObserver,
@@ -419,3 +420,389 @@ test("account threshold override cannot persist the seed before global threshold
   });
   expect(writes).toBe(0);
 });
+
+// Keep the cards, pool and controller real. Only the HTTP boundary is replaced: writes
+// remain pending until the test answers them, and subsequent reads return persisted data.
+let thresholdHarnessId = 0;
+async function mountThresholdPool(entry = account, initial: number | null = 50) {
+  const apiBase = `/threshold-focus-${++thresholdHarnessId}`;
+  let persisted = initial;
+  let globalThreshold = 95;
+  let controller: CodexAccountPoolController;
+  const writes: Array<{ id: string; threshold: number | null }> = [];
+  let respond: ((response: Response) => void) | undefined;
+  let nextAccountsGate: Promise<void> | undefined;
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async (url: string, init?: RequestInit) => {
+      const path = String(url).split("/api/")[1];
+      if (path === "codex-auth/auto-switch" && init?.method === "PUT") {
+        writes.push(JSON.parse(String(init.body)));
+        return new Promise<Response>((resolve) => { respond = resolve; });
+      }
+      if (path?.startsWith("codex-auth/accounts")) {
+        // Capture when the request starts, not when its delayed response is released.
+        const response = Response.json({ accounts: [{ ...entry, autoSwitchThresholdOverride: persisted }] });
+        const gate = nextAccountsGate;
+        nextAccountsGate = undefined;
+        if (gate) await gate;
+        return response;
+      }
+      if (path === "codex-auth/active") {
+        return Response.json({ activeCodexAccountId: null, autoSwitchThreshold: globalThreshold, pinnedAccountId: null });
+      }
+      if (path?.startsWith("usage?")) return Response.json({ accounts: [] });
+      if (path === "settings") return Response.json({ showCodexSparkQuota: false, codexQuotaAutoRefresh: {} });
+      throw new Error(`Unexpected threshold test request: ${url}`);
+    },
+  });
+  function Pool() {
+    controller = useCodexAccountPool(apiBase);
+    return <CodexAccountPool apiBase={apiBase} controller={controller} />;
+  }
+  const { createRoot } = await import("react-dom/client");
+  await act(async () => {
+    root = createRoot(host);
+    root.render(<LanguageProvider><Pool /></LanguageProvider>);
+  });
+  const control = () => cardFor(entry.email).querySelector<HTMLElement>(".codex-account-auto-switch")!;
+  return {
+    writes,
+    control,
+    input: () => control().querySelector<HTMLInputElement>("input")!,
+    toggle: () => control().querySelector<HTMLButtonElement>(".toggle")!,
+    steppers: () => [...control().querySelectorAll<HTMLButtonElement>(".ocx-stepper__btn")],
+    storedOverride: () => controller!.accounts.find(row => row.id === entry.id)!.autoSwitchThresholdOverride,
+    async startSlowRefresh() {
+      let release!: () => void;
+      nextAccountsGate = new Promise<void>(resolve => { release = resolve; });
+      let refresh!: Promise<boolean>;
+      await act(async () => { refresh = controller!.load(); });
+      expect(nextAccountsGate).toBeUndefined();
+      return async () => {
+        await act(async () => { release(); await refresh; });
+      };
+    },
+    async settle(ok = true, stored = writes.at(-1)!.threshold) {
+      expect(respond).toBeDefined();
+      await act(async () => {
+        if (ok) persisted = stored;
+        respond!(ok
+          ? Response.json({ ok: true, autoSwitchThresholdOverride: stored })
+          : new Response(null, { status: 500 }));
+        respond = undefined;
+      });
+    },
+    async refresh(nextGlobal: number, nextOverride = persisted) {
+      globalThreshold = nextGlobal;
+      persisted = nextOverride;
+      await act(async () => { await controller!.load(); });
+    },
+  };
+}
+
+async function editThreshold(input: HTMLInputElement, draft: string) {
+  await act(async () => {
+    input.focus();
+    Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!.set!.call(input, draft);
+    input.dispatchEvent(new win.Event("input", { bubbles: true }));
+  });
+}
+
+async function pressEnter(element: HTMLElement) {
+  await act(async () => {
+    element.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    // happy-dom does not synthesize native keyboard button activation.
+    if (element.tagName === "BUTTON") element.click();
+  });
+}
+
+async function tabWithinThreshold(from: HTMLElement, to: HTMLElement) {
+  await act(async () => {
+    from.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }));
+    to.focus(); // Native focus()/focusout, including relatedTarget; no fabricated blur.
+  });
+  expect(win.document.activeElement === to).toBe(true);
+}
+
+for (const entry of [account, mainAccount]) {
+  test(`${entry.id}: Enter save preserves input identity and focus after controller acceptance`, async () => {
+    const pool = await mountThresholdPool(entry);
+    const input = pool.input();
+    await editThreshold(input, "60");
+    await pressEnter(input);
+    expect(pool.writes).toEqual([{ id: entry.isMain ? "__main__" : entry.id, threshold: 60 }]);
+    await pool.settle();
+    expect(pool.input() === input).toBe(true);
+    expect(win.document.activeElement === input).toBe(true);
+    expect(input.value).toBe("60");
+  });
+
+  test(`${entry.id}: pending Enter write keeps focusable read-only input and blocks duplicate writes`, async () => {
+    const pool = await mountThresholdPool(entry);
+    const input = pool.input();
+    await editThreshold(input, "60");
+    await pressEnter(input);
+    expect(input.disabled).toBe(false);
+    expect(input.readOnly).toBe(true);
+    expect(win.document.activeElement === input).toBe(true);
+    await pressEnter(input);
+    await act(async () => { pool.steppers()[0]!.click(); });
+    expect(input.value).toBe("60");
+    expect(pool.writes).toHaveLength(1);
+    await pool.settle();
+    expect(input.readOnly).toBe(false);
+    expect(win.document.activeElement === input).toBe(true);
+    await editThreshold(input, "61");
+    await pressEnter(input);
+    await pool.settle();
+    expect(pool.writes.map(write => write.threshold)).toEqual([60, 61]);
+  });
+}
+
+test("dirty input can Tab through both steppers to toggle off without blur-saving", async () => {
+  const pool = await mountThresholdPool();
+  const input = pool.input();
+  const [up, down] = pool.steppers();
+  const toggle = pool.toggle();
+  await editThreshold(input, "60");
+  for (const button of [up!, down!, toggle]) expect(button.tabIndex).toBe(0);
+  await tabWithinThreshold(input, up!);
+  expect(pool.writes).toEqual([]);
+  await tabWithinThreshold(up!, down!);
+  await tabWithinThreshold(down!, toggle);
+  expect(pool.writes).toEqual([]);
+  await pressEnter(toggle);
+  expect(pool.writes.map(write => write.threshold)).toEqual([null]);
+  expect(toggle.disabled).toBe(false);
+  expect(win.document.activeElement === toggle).toBe(true);
+  await pool.settle();
+  expect(pool.input()).toBeNull();
+  expect(pool.toggle() === toggle).toBe(true);
+  expect(win.document.activeElement === toggle).toBe(true);
+});
+
+test("keyboard stepper retains focus across pending and repeated accepted writes", async () => {
+  const pool = await mountThresholdPool();
+  const input = pool.input();
+  const up = pool.steppers()[0]!;
+  await editThreshold(input, "60");
+  await tabWithinThreshold(input, up);
+  await pressEnter(up);
+  expect(pool.writes.map(write => write.threshold)).toEqual([61]);
+  expect(up.disabled).toBe(false);
+  expect(win.document.activeElement === up).toBe(true);
+  await pressEnter(up);
+  expect(pool.writes).toHaveLength(1);
+  await pool.settle();
+  expect(pool.steppers()[0] === up).toBe(true);
+  expect(win.document.activeElement === up).toBe(true);
+  await pressEnter(up);
+  await pool.settle();
+  expect(pool.writes.map(write => write.threshold)).toEqual([61, 62]);
+  expect(pool.input() === input).toBe(true);
+  expect(input.value).toBe("62");
+  expect(win.document.activeElement === up).toBe(true);
+});
+
+test("leaving the group from a stepper commits the unsaved draft once", async () => {
+  const pool = await mountThresholdPool();
+  const input = pool.input();
+  const up = pool.steppers()[0]!;
+  await editThreshold(input, "60");
+  await tabWithinThreshold(input, up);
+  expect(pool.writes).toEqual([]);
+  const outside = win.document.createElement("button");
+  win.document.body.appendChild(outside);
+  await act(async () => { outside.focus(); });
+  expect(pool.writes.map(write => write.threshold)).toEqual([60]);
+  await pool.settle();
+  expect(win.document.activeElement === outside).toBe(true);
+  expect(pool.writes).toHaveLength(1);
+});
+
+for (const initial of [50, 0]) {
+  test(`failed pointer toggle-off restores persisted ${initial}, not dirty draft or global 95`, async () => {
+    const pool = await mountThresholdPool(account, initial);
+    const input = pool.input();
+    const toggle = pool.toggle();
+    await editThreshold(input, "60");
+    await act(async () => {
+      toggle.dispatchEvent(new win.Event("pointerdown", { bubbles: true }));
+      toggle.focus();
+      toggle.dispatchEvent(new win.Event("pointerup", { bubbles: true }));
+      toggle.click();
+    });
+    expect(pool.writes.map(write => write.threshold)).toEqual([null]);
+    await pool.settle(false);
+    expect(pool.toggle().getAttribute("aria-pressed")).toBe("true");
+    expect(pool.input().value).toBe(String(initial));
+    expect(pool.input() === input).toBe(true);
+    expect(win.document.activeElement === toggle).toBe(true);
+    expect(host.textContent).toContain(en["accountPool.autoSwitchUpdateFailed"].split("{")[0]!);
+  });
+}
+
+test("global refresh preserves dirty draft; changed override syncs without replacing focused input", async () => {
+  const pool = await mountThresholdPool();
+  const input = pool.input();
+  await editThreshold(input, "60");
+  await pool.refresh(80);
+  expect(pool.input() === input).toBe(true);
+  expect(input.value).toBe("60");
+  await pool.refresh(80, 0);
+  expect(pool.input() === input).toBe(true);
+  expect(input.value).toBe("0");
+  expect(win.document.activeElement === input).toBe(true);
+  expect(pool.writes).toEqual([]);
+});
+
+test("accepted server-normalized override replaces the draft without remounting", async () => {
+  const pool = await mountThresholdPool();
+  const input = pool.input();
+  await editThreshold(input, "60");
+  await pressEnter(input);
+  await pool.settle(true, 55);
+  expect(pool.input() === input).toBe(true);
+  expect(input.value).toBe("55");
+  expect(win.document.activeElement === input).toBe(true);
+});
+
+test("pointer steppers keep input focus and commit each accepted step once", async () => {
+  const pool = await mountThresholdPool();
+  const input = pool.input();
+  await editThreshold(input, "60");
+  for (const index of [0, 0, 1]) {
+    const button = pool.steppers()[index]!;
+    await act(async () => {
+      button.dispatchEvent(new win.Event("pointerdown", { bubbles: true }));
+      const mouseDown = new win.MouseEvent("mousedown", { bubbles: true, cancelable: true });
+      if (button.dispatchEvent(mouseDown)) button.focus();
+      button.dispatchEvent(new win.Event("pointerup", { bubbles: true }));
+      button.click();
+    });
+    expect(input.disabled).toBe(false);
+    expect(input.readOnly).toBe(true);
+    expect(win.document.activeElement === input).toBe(true);
+    await pool.settle();
+    expect(pool.input() === input).toBe(true);
+    expect(win.document.activeElement === input).toBe(true);
+  }
+  expect(pool.writes.map(write => write.threshold)).toEqual([61, 62, 61]);
+  expect(input.value).toBe("61");
+});
+
+test("failed Enter restores persisted value and permits another edit without duplicate blur write", async () => {
+  const pool = await mountThresholdPool();
+  const input = pool.input();
+  await editThreshold(input, "60");
+  await pressEnter(input);
+  await pool.settle(false);
+  expect(pool.input() === input).toBe(true);
+  expect(win.document.activeElement === input).toBe(true);
+  expect(input.value).toBe("50");
+  expect(input.readOnly).toBe(false);
+  await editThreshold(input, "65");
+  await pressEnter(input);
+  await act(async () => { input.blur(); });
+  await pool.settle();
+  expect(pool.writes.map(write => write.threshold)).toEqual([60, 65]);
+  expect(input.value).toBe("65");
+  expect(win.document.activeElement === input).toBe(false);
+});
+
+test("external input blur commits zero and leaves override enabled", async () => {
+  const pool = await mountThresholdPool();
+  await editThreshold(pool.input(), "0");
+  await act(async () => { pool.input().blur(); });
+  expect(pool.writes.map(write => write.threshold)).toEqual([0]);
+  await pool.settle();
+  expect(pool.input().value).toBe("0");
+  expect(pool.toggle().getAttribute("aria-pressed")).toBe("true");
+});
+
+test("inherited override follows latest global seed including zero and preserves toggle identity", async () => {
+  const pool = await mountThresholdPool(account, null);
+  const toggle = pool.toggle();
+  expect(pool.input()).toBeNull();
+  await pool.refresh(0);
+  await act(async () => { toggle.focus(); });
+  await pressEnter(toggle);
+  expect(pool.writes.map(write => write.threshold)).toEqual([0]);
+  await pool.settle();
+  expect(pool.input().value).toBe("0");
+  expect(pool.toggle() === toggle).toBe(true);
+  expect(win.document.activeElement === toggle).toBe(true);
+  await pressEnter(toggle);
+  await pool.settle();
+  expect(pool.writes.map(write => write.threshold)).toEqual([0, null]);
+  expect(pool.input()).toBeNull();
+  expect(pool.toggle().getAttribute("aria-pressed")).toBe("false");
+  expect(win.document.activeElement === toggle).toBe(true);
+});
+
+test("invalid draft and Escape restore persisted override without a write", async () => {
+  const pool = await mountThresholdPool(account, 0);
+  const input = pool.input();
+  for (const invalid of ["", "-1", "101", "50.5"]) {
+    await editThreshold(input, invalid);
+    await pressEnter(input);
+    expect(input.value).toBe("0");
+  }
+  await editThreshold(input, "60");
+  await act(async () => {
+    input.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  });
+  expect(input.value).toBe("0");
+  expect(pool.writes).toEqual([]);
+});
+
+for (const timing of ["during", "after"] as const) {
+  for (const outcome of ["accepted Enter", "rejected Enter", "rejected toggle"] as const) {
+    test(`pre-write accounts snapshot resolving ${timing} ${outcome} preserves draft, stored override and focus`, async () => {
+      const pool = await mountThresholdPool();
+      const input = pool.input();
+      const toggle = pool.toggle();
+      const finishRefresh = await pool.startSlowRefresh(); // Snapshot contains persisted 50.
+      await editThreshold(input, "60");
+      const toggling = outcome === "rejected toggle";
+      if (toggling) {
+        await tabWithinThreshold(input, pool.steppers()[0]!);
+        await tabWithinThreshold(pool.steppers()[0]!, pool.steppers()[1]!);
+        await tabWithinThreshold(pool.steppers()[1]!, toggle);
+        await pressEnter(toggle);
+      } else {
+        await pressEnter(input);
+      }
+      const focused = toggling ? toggle : input;
+      expect(pool.writes.map(write => write.threshold)).toEqual([toggling ? null : 60]);
+      if (timing === "during") await finishRefresh();
+      expect(pool.input() === input).toBe(true);
+      expect(input.value).toBe("60");
+      expect(input.readOnly).toBe(true);
+      expect(pool.storedOverride()).toBe(50);
+      expect(win.document.activeElement === focused).toBe(true);
+
+      const accepted = outcome === "accepted Enter";
+      await pool.settle(accepted);
+      expect(pool.input() === input).toBe(true);
+      expect(input.value).toBe(accepted ? "60" : "50");
+      expect(input.readOnly).toBe(false);
+      expect(pool.storedOverride()).toBe(accepted ? 60 : 50);
+      expect(pool.toggle().getAttribute("aria-pressed")).toBe("true");
+      expect(win.document.activeElement === focused).toBe(true);
+
+      if (timing === "after") {
+        // A late pre-write snapshot must neither roll back acceptance nor erase a
+        // fresh unsaved edit made after the success/error response was handled.
+        await editThreshold(input, "65");
+        await finishRefresh();
+        expect(pool.input() === input).toBe(true);
+        expect(input.value).toBe("65");
+        expect(pool.storedOverride()).toBe(accepted ? 60 : 50);
+        expect(win.document.activeElement === input).toBe(true);
+      }
+      expect(pool.writes).toHaveLength(1);
+    });
+  }
+}

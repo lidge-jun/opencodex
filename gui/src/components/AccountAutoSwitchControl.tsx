@@ -23,35 +23,77 @@ export default function AccountAutoSwitchControl({
 }: AccountAutoSwitchControlProps) {
   const t = useT();
   const togglePointerIntentRef = useRef(false);
+  const pendingRef = useRef(false);
+  const [saving, setSaving] = useState(false);
   const enabled = override !== null;
-  const [draft, setDraft] = useState(String(override ?? globalThreshold));
+  const [editor, setEditor] = useState({ override, draft: String(override ?? globalThreshold) });
+  // Only an account override change replaces the draft. Global refreshes must not
+  // erase an unfinished custom edit, and neither update should replace focused DOM.
+  if (editor.override !== override) {
+    setEditor({ override, draft: String(override ?? globalThreshold) });
+  }
+  const { draft } = editor;
+  const setDraft = (value: string) => setEditor(current => ({ ...current, draft: value }));
+  const resetDraft = () => setEditor(current => ({
+    ...current,
+    draft: String(current.override ?? globalThreshold),
+  }));
+  const blocked = disabled || saving;
   const hint = t("accountPool.autoSwitchHint");
   const hintId = useId();
 
+  const write = async (next: number | null) => {
+    if (disabled || pendingRef.current) return;
+    pendingRef.current = true;
+    setSaving(true);
+    try {
+      await onChange(next);
+    } finally {
+      // The controller owns acceptance. Reconcile even when a rejected toggle
+      // leaves the override unchanged (including zero), without falling back to global.
+      resetDraft();
+      pendingRef.current = false;
+      setSaving(false);
+    }
+  };
+
   const commit = async () => {
+    if (!enabled || disabled || pendingRef.current) return;
     const trimmed = draft.trim();
     const parsed = trimmed === "" ? Number.NaN : Number(trimmed);
     if (!Number.isInteger(parsed) || parsed < 0 || parsed > 100) {
-      setDraft(String(override ?? globalThreshold));
+      resetDraft();
       return;
     }
     if (parsed === override) return;
-    if (!await onChange(parsed)) setDraft(String(override));
+    await write(parsed);
   };
 
   const step = (delta: -1 | 1) => {
+    if (disabled || pendingRef.current) return;
     const nextDraft = clampNumberDraft(draft, delta, 0, 100);
     setDraft(nextDraft);
     const next = Number(nextDraft);
     if (next !== override) {
-      void onChange(next).then(accepted => {
-        if (!accepted) setDraft(String(override));
-      });
+      void write(next);
     }
   };
 
   return (
-    <div className="codex-account-auto-switch" title={hint}>
+    <div
+      className="codex-account-auto-switch"
+      title={hint}
+      aria-busy={saving}
+      aria-disabled={blocked}
+      onBlur={(event) => {
+        if (event.currentTarget.contains(event.relatedTarget)) return;
+        if (togglePointerIntentRef.current) {
+          togglePointerIntentRef.current = false;
+          return;
+        }
+        void commit();
+      }}
+    >
       <label className="codex-account-auto-switch-label" htmlFor={enabled ? inputId : undefined}>
         {t("accountPool.autoSwitchThreshold")}
       </label>
@@ -66,31 +108,25 @@ export default function AccountAutoSwitchControl({
             step={1}
             inputMode="numeric"
             value={draft}
-            disabled={disabled}
+            readOnly={blocked}
+            aria-disabled={blocked}
             aria-label={t("accountPool.autoSwitchThresholdAria", { email: accountLabel })}
             aria-describedby={hintId}
-            onChange={(event) => setDraft(event.target.value)}
-            onBlur={() => {
-              if (togglePointerIntentRef.current) {
-                togglePointerIntentRef.current = false;
-                return;
-              }
-              void commit();
-            }}
+            onChange={(event) => { if (!blocked) setDraft(event.target.value); }}
             onKeyDown={(event) => {
-              if (event.nativeEvent.isComposing || disabled) return;
+              if (event.nativeEvent.isComposing || blocked) return;
               if (event.key === "Enter") {
                 event.preventDefault();
                 void commit();
               } else if (event.key === "Escape") {
                 event.preventDefault();
-                setDraft(String(override));
+                resetDraft();
               }
             }}
           />
           <span className="codex-account-auto-switch-unit" aria-hidden="true">%</span>
           <NumberStepper
-            disabled={disabled}
+            disabled={disabled && !saving}
             incrementLabel={t("codexAuth.autoSwitchThresholdInc")}
             decrementLabel={t("codexAuth.autoSwitchThresholdDec")}
             onIncrement={() => step(1)}
@@ -101,7 +137,8 @@ export default function AccountAutoSwitchControl({
       <button
         type="button"
         className={`toggle codex-account-auto-switch-toggle ${enabled ? "on" : ""}`}
-        disabled={disabled}
+        disabled={disabled && !saving}
+        aria-disabled={blocked}
         aria-pressed={enabled}
         aria-label={t("accountPool.autoSwitchOverrideAria", { email: accountLabel })}
         aria-describedby={hintId}
@@ -116,7 +153,7 @@ export default function AccountAutoSwitchControl({
         }}
         onClick={() => {
           togglePointerIntentRef.current = false;
-          void onChange(enabled ? null : globalThreshold);
+          void write(enabled ? null : globalThreshold);
         }}
       >
         <span className="toggle-knob" />
