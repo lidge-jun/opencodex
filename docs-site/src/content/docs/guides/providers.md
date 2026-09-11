@@ -384,7 +384,7 @@ selectors, then retry. Signing in from a machine with no existing `kiro-cli` ses
 
 ## 3. API-key catalog
 
-opencodex ships 79 built-in presets: 67 key-based, eight OAuth, three local, and one default
+opencodex ships 80 built-in presets: 68 key-based, eight OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -445,6 +445,7 @@ routing or defaults changes.
 | Meta Muse Code (CLI credential) | `https://api.meta.ai/v1` |
 | SambaNova Cloud | `https://api.sambanova.ai/v1` |
 | Nebius Token Factory | `https://api.tokenfactory.nebius.com/v1` |
+| Crusoe | `https://api.inference.crusoecloud.com/v1` |
 | DigitalOcean Serverless Inference | `https://inference.do-ai.run/v1` |
 | Scaleway Generative APIs | `https://api.scaleway.ai/v1` |
 | Featherless AI | `https://api.featherless.ai/v1` |
@@ -690,6 +691,19 @@ keeps only rows whose architecture produces text, excluding embedding and image-
 It preserves slash-containing native ids plus reported context and input-modality metadata, and caps
 discovery at 512 KiB and 512 raw rows. Dedicated deployment hosts are out of scope. Create keys in
 [Nebius Token Factory](https://tokenfactory.nebius.com).
+
+**Crusoe discovery.** The key-based preset uses the `openai-chat` adapter and sends its Bearer key
+only to Crusoe's fixed Serverless Inference host. `/v1/models` rejects unauthenticated requests with
+401, so a successful list response counts as key validation. Discovery preserves slash-delimited
+native ids such as `zai-org/GLM-5.3` and `moonshotai/Kimi-K2.6` exactly as Crusoe returns them and is
+capped at 256 KiB and 256 raw rows. Rows are kept only when they report `is_public: true` and a text or multimodal `architecture.modality`, which excludes account-private deployments and any embedding or media rows. Reasoning models return their thinking in the Chat Completions
+`reasoning` field, which the adapter reads. Only `openai/gpt-oss-120b` accepts a `reasoning_effort`
+ladder (`low`, `medium`, `high`); the other reasoning models treat the field as an on/off toggle, so
+the preset declares no provider-wide effort ladder and no provider-wide parallel tool calls. Rate
+limits apply per project and per model (429 when exceeded, 503 while a shared deployment scales), and
+new accounts start with $5 of free credits. Create a key in the
+[Crusoe Cloud console](https://console.crusoecloud.com) under Intelligence Foundry, Inference.
+
 **DigitalOcean discovery.** The preset uses a model access key against the fixed shared Serverless
 Inference host and intersects the authenticated `/v1/models` response with DigitalOcean's
 docs-backed Chat Completions allowlist. Unknown, Responses-only, embedding, and media-generation

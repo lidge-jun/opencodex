@@ -2497,6 +2497,71 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     note: "Shared Token Factory text-output inference only; live discovery excludes embedding and image-generation rows.",
   },
   {
+    // Primary sources checked 2026-09-11:
+    // - https://docs.crusoecloud.com/quickstart/getting-started-with-serverless-inference documents
+    //   the fixed OpenAI-compatible host https://api.inference.crusoecloud.com/v1, Bearer API keys
+    //   created in the Cloud console (Intelligence Foundry > Inference > Create API Key), and an
+    //   OpenAI SDK chat.completions example against meta-llama/Llama-3.3-70B-Instruct.
+    // - https://docs.crusoecloud.com/serverless-inference/available-models lists the served models
+    //   with slash-delimited ids; https://docs.crusoecloud.com/serverless-inference/rate-limits
+    //   documents per-project, per-model TPM/RPM limits (429 when exceeded, 503 under shared load).
+    // - GET /v1/models rejects unauthenticated requests with 401 {"errors":["Authentication failed"]},
+    //   so a successful authenticated list response is evidence that the supplied key is valid.
+    //   An authenticated capture on 2026-09-12 returned 18 rows shaped like OpenRouter's catalog
+    //   (`is_public`, `type`, `context_length`, `architecture.modality` of "text" or "multimodal",
+    //   `tags`, `pricing`, `supported_parameters`); 17 were public serverless models and one was an
+    //   account-private dedicated deployment with empty `type`/`modality`. `type` is blank on one
+    //   public model, so the filter keys on `is_public` plus `architecture.modality` instead.
+    // - https://legal.crusoe.ai/ hosts the Crusoe Cloud Platform Terms of Service v1.10 (effective
+    //   2026-08-10), which name Crusoe Technologies LLC as the contracting entity, and the Service
+    //   Specific Terms v5.0 (effective 2026-07-14), whose Crusoe Intelligence Foundry Terms cover the
+    //   Managed Inference Service reached through the Crusoe API.
+    // - https://models.dev/api.json (provider "crusoe") records openai/gpt-oss-120b as the one served
+    //   model with a low/medium/high reasoning_effort ladder; the other reasoning models expose an
+    //   on/off toggle only.
+    // Maintainer: @acheamponge, who works at Crusoe (affiliation disclosed) and also maintains the
+    // models.dev crusoe entry.
+    id: "crusoe",
+    label: "Crusoe",
+    baseUrl: "https://api.inference.crusoecloud.com/v1",
+    adapter: "openai-chat",
+    authKind: "key",
+    dashboardUrl: "https://console.crusoecloud.com",
+    liveModels: true,
+    preserveCustomDestination: true,
+    // The getting-started guide documents tools through the OpenAI SDK but no provider-wide
+    // parallel tool-call contract.
+    parallelToolCalls: false,
+    // Only gpt-oss-120b has a real effort ladder; toggle-style reasoning models must not be promoted
+    // to Codex's full fallback ladder.
+    reasoningEfforts: [],
+    modelReasoningEfforts: { "openai/gpt-oss-120b": ["low", "medium", "high"] },
+    directReasoningEffortModels: ["openai/gpt-oss-120b"],
+    // The catalog reports `architecture.modality: "multimodal"` without an input list, so the
+    // image-capable rows (tagged "image text to text" in the same capture) are classified here.
+    modelInputModalities: {
+      "google/gemma-4-31b-it": ["text", "image"],
+      "moonshotai/Kimi-K2.6": ["text", "image"],
+      "nvidia/Nemotron-3-Nano-Omni-Reasoning-30B-A3B": ["text", "image"],
+      "yutori/n2": ["text", "image"],
+      "zai-org/GLM-5.3-Flash": ["text", "image"],
+    },
+    modelDiscovery: {
+      path: "models",
+      maxResponseBytes: 256 * 1024,
+      maxModels: 256,
+      filter: {
+        // Keep public serverless rows whose architecture produces text; account-private
+        // deployments (blank modality) and any embedding or media rows fail closed.
+        allOf: [
+          { path: ["is_public"], equalsAny: [true] },
+          { path: ["architecture", "modality"], equalsAny: ["text", "multimodal"] },
+        ],
+      },
+    },
+    note: "Public Serverless Inference chat models on the shared OpenAI-compatible host; account-private and self-serve dedicated deployments are excluded from discovery and out of scope.",
+  },
+  {
     id: "digitalocean",
     label: "DigitalOcean Serverless Inference",
     baseUrl: "https://inference.do-ai.run/v1",

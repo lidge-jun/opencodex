@@ -265,7 +265,7 @@ existante n'est pas concernée.
 
 ## 3. Catalogue des clés API
 
-opencodex fournit 79 préréglages intégrés : 67 à clé, huit OAuth, trois locaux et un préréglage par défaut de
+opencodex fournit 80 préréglages intégrés : 68 à clé, huit OAuth, trois locaux et un préréglage par défaut de
 transfert ChatGPT. Dans le tableau de bord, le sélecteur **Ajouter un fournisseur** ouvre le tableau de bord du
 fournisseur à clé, valide la clé et l'enregistre ; la validation dépend du fournisseur. Parmi les entrées notables :
 
@@ -308,6 +308,7 @@ promotionnels de Cline ne sont accessibles que dans l'IDE ou la CLI Cline, pas p
 | Command Code | `https://api.commandcode.ai/provider/v1` |
 | SambaNova Cloud | `https://api.sambanova.ai/v1` |
 | Nebius Token Factory | `https://api.tokenfactory.nebius.com/v1` |
+| Crusoe | `https://api.inference.crusoecloud.com/v1` |
 | DigitalOcean Serverless Inference | `https://inference.do-ai.run/v1` |
 | Scaleway Generative APIs | `https://api.scaleway.ai/v1` |
 | Featherless AI | `https://api.featherless.ai/v1` |
@@ -444,6 +445,19 @@ génération d'images. Il préserve les identifiants natifs contenant des barres
 de contexte et de modalités d'entrée signalées, et limite la découverte à 512 KiB et 512 lignes brutes. Les
 hôtes de déploiement dédiés sont hors périmètre. Créez des clés dans
 [Nebius Token Factory](https://tokenfactory.nebius.com).
+
+**Découverte Crusoe.** Le préréglage à clé utilise l'adaptateur `openai-chat` et n'envoie sa clé Bearer
+qu'à l'hôte fixe Serverless Inference de Crusoe. `/v1/models` rejette les requêtes non authentifiées
+avec un 401, de sorte qu'une liste réussie vaut validation de la clé. La découverte conserve les
+identifiants natifs à barre oblique tels que `zai-org/GLM-5.3` et `moonshotai/Kimi-K2.6` exactement comme
+Crusoe les renvoie, et est limitée à 256 KiB et 256 lignes brutes. Seules les lignes qui déclarent `is_public: true` et une `architecture.modality` text ou multimodal sont conservées, ce qui exclut les déploiements privés du compte ainsi que les lignes embedding ou média. Les modèles de raisonnement
+renvoient leur réflexion dans le champ `reasoning` de Chat Completions, que l'adaptateur lit. Seul
+`openai/gpt-oss-120b` accepte une échelle `reasoning_effort` (`low`, `medium`, `high`) ; les autres
+modèles de raisonnement traitent ce champ comme un interrupteur, si bien que le préréglage n'annonce
+ni échelle d'effort ni appels d'outils parallèles à l'échelle du fournisseur. Les limites de débit
+s'appliquent par projet et par modèle (429 en cas de dépassement, 503 pendant la montée en charge d'un
+déploiement partagé) et les nouveaux comptes démarrent avec 5 $ de crédits gratuits. Créez une clé dans
+la [console Crusoe Cloud](https://console.crusoecloud.com), sous Intelligence Foundry, Inference.
 
 **Découverte DigitalOcean.** Le préréglage utilise une clé d'accès aux modèles avec l'hôte Serverless Inference
 partagé et fixe, puis croise la réponse `/v1/models` authentifiée avec la liste d'autorisation Chat Completions

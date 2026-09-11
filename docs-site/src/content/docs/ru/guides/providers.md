@@ -180,7 +180,7 @@ Inline JSON и лишние позиционные аргументы откло
 
 ## 3. Каталог API-ключей
 
-opencodex поставляется с 79 встроенными пресетами: 67 на основе ключей, восемь OAuth, три локальных и
+opencodex поставляется с 80 встроенными пресетами: 68 на основе ключей, восемь OAuth, три локальных и
 один пресет ChatGPT-форварда по умолчанию. Селектор **Add provider** в дашборде открывает страницу
 выдачи ключей провайдера, проверяет ключ и сохраняет его; проверка зависит от провайдера.
 Наиболее заметные записи:
@@ -223,6 +223,7 @@ opencodex поставляется с 79 встроенными пресетам
 | Command Code | `https://api.commandcode.ai/provider/v1` |
 | SambaNova Cloud | `https://api.sambanova.ai/v1` |
 | Nebius Token Factory | `https://api.tokenfactory.nebius.com/v1` |
+| Crusoe | `https://api.inference.crusoecloud.com/v1` |
 | DigitalOcean Serverless Inference | `https://inference.do-ai.run/v1` |
 | Scaleway Generative APIs | `https://api.scaleway.ai/v1` |
 | Featherless AI | `https://api.featherless.ai/v1` |
@@ -336,6 +337,19 @@ SambaStudio не входят в область пресета. Ключи со�
 Он сохраняет нативные id со знаком `/`, а также заявленные context и input-modality metadata, и
 ограничивает discovery размером 512 KiB и 512 исходными строками. Хосты dedicated deployment не
 входят в область пресета. Ключи создаются в [Nebius Token Factory](https://tokenfactory.nebius.com).
+
+**Discovery для Crusoe.** Пресет с ключом использует adapter `openai-chat` и отправляет Bearer key
+только на фиксированный host Serverless Inference Crusoe. `/v1/models` отвечает 401 на запросы без
+ключа, поэтому успешный список считается проверкой ключа. Discovery сохраняет нативные id с косой
+чертой, такие как `zai-org/GLM-5.3` и `moonshotai/Kimi-K2.6`, ровно в том виде, в каком их возвращает
+Crusoe, и ограничен 256 KiB и 256 исходными строками. Остаются только строки с `is_public: true` и `architecture.modality` text или multimodal, так что приватные для аккаунта развёртывания, а также embedding- и медиа-строки исключаются. Reasoning-модели возвращают рассуждения в поле
+`reasoning` Chat Completions, которое adapter читает. Лестницу `reasoning_effort` (`low`, `medium`,
+`high`) принимает только `openai/gpt-oss-120b`; остальные reasoning-модели трактуют это поле как
+переключатель вкл/выкл, поэтому пресет не заявляет ни provider-wide лестницу effort, ни provider-wide
+parallel tool calls. Лимиты действуют на project и model (429 при превышении, 503 пока общий deployment
+масштабируется); новые аккаунты получают $5 бесплатных кредитов. Ключ создаётся в
+[консоли Crusoe Cloud](https://console.crusoecloud.com) в разделе Intelligence Foundry, Inference.
+
 **Discovery для DigitalOcean.** Пресет использует model access key на фиксированном общем хосте
 Serverless Inference и публикует только пересечение аутентифицированного ответа `/v1/models` с
 подтверждённым документацией allowlist для Chat Completions. Неизвестные, Responses-only,

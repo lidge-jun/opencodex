@@ -160,7 +160,7 @@ Kiro 登录需要 Kiro CLI：Unix 使用 `curl -fsSL https://cli.kiro.dev/instal
 
 ## 3. API 密钥目录
 
-opencodex 内置 79 个预设：67 个密钥预设、8 个 OAuth 预设、3 个本地预设，以及 1 个默认的
+opencodex 内置 80 个预设：68 个密钥预设、8 个 OAuth 预设、3 个本地预设，以及 1 个默认的
 ChatGPT 转发预设。仪表盘的 **Add provider** 选择器会打开密钥提供商的控制台，验证并保存密钥。
 验证因提供商而异。主要条目包括：
 
@@ -201,6 +201,7 @@ Cline IDE/CLI 中提供，不能通过 API 使用；`minimax/minimax-m2.5` 是�
 | Command Code | `https://api.commandcode.ai/provider/v1` |
 | SambaNova Cloud | `https://api.sambanova.ai/v1` |
 | Nebius Token Factory | `https://api.tokenfactory.nebius.com/v1` |
+| Crusoe | `https://api.inference.crusoecloud.com/v1` |
 | DigitalOcean Serverless Inference | `https://inference.do-ai.run/v1` |
 | Scaleway Generative APIs | `https://api.scaleway.ai/v1` |
 | Featherless AI | `https://api.featherless.ai/v1` |
@@ -326,6 +327,16 @@ ORCAROUTER_BASE_URL=https://router.example ocx login orcarouter-oauth
 的记录，从而排除 embedding 和 image-generation 模型。它保留含 `/` 的原生模型 id、上游报告的 context
 和 input modality metadata，并将发现限制为 512 KiB 和 512 条原始记录。dedicated deployment 主机不在
 范围内。密钥可在 [Nebius Token Factory](https://tokenfactory.nebius.com) 创建。
+
+**Crusoe 发现：**密钥预设使用 `openai-chat` adapter，并只向 Crusoe 固定的 Serverless Inference 主机发送
+Bearer key。`/v1/models` 会以 401 拒绝未认证请求，因此成功列出模型即视为密钥验证通过。发现会按 Crusoe
+返回的原样保留 `zai-org/GLM-5.3`、`moonshotai/Kimi-K2.6` 这类带斜杠的原生 id，上限为 256 KiB 和 256 条原始记录。只保留 `is_public: true` 且 `architecture.modality` 为 text 或 multimodal 的记录，因此账户私有部署以及 embedding、媒体类记录会被排除。
+推理模型通过 Chat Completions 的 `reasoning` 字段返回思考内容，adapter 会读取该字段。只有
+`openai/gpt-oss-120b` 接受 `reasoning_effort` 档位（`low`、`medium`、`high`），其他推理模型把该字段当作
+开关，因此预设不声明 provider-wide effort 档位，也不声明 provider-wide parallel tool calls。速率限制按
+project 和 model 生效（超限返回 429，共享部署扩容时返回 503），新账户可获得 $5 免费额度。密钥可在
+[Crusoe Cloud 控制台](https://console.crusoecloud.com) 的 Intelligence Foundry > Inference 中创建。
+
 **DigitalOcean 发现：**该预设使用 model access key 访问固定的共享 Serverless Inference 主机，只公开
 已鉴权 `/v1/models` 响应与 DigitalOcean 官方文档确认的 Chat Completions allowlist 的交集。未知、
 Responses-only、embedding 和 media-generation 模型 id 会按 fail closed 原则排除。发现上限为 256 KiB

@@ -11,7 +11,7 @@
   "domains": {
     "providers": {
       "match": [
-        "^(?:aside(?!-profile)|auto|azure|baseten|chutes|cline(?!-(?:client|writer))|command|commandcode|context(?!-compat|-history)|cyber|deepinfra|deepseek|digitalocean|exa|featherless|forward|hyperbolic|kimi|meta|mimo|minimax|moonshot|muse|new|nous|novita|nscale|nvidia|opencode|openrouter|qwen38|sambanova|umans|vercel|zcode|zhipu)-"
+        "^(?:aside(?!-profile)|auto|azure|baseten|chutes|cline(?!-(?:client|writer))|command|commandcode|context(?!-compat|-history)|crusoe|cyber|deepinfra|deepseek|digitalocean|exa|featherless|forward|hyperbolic|kimi|meta|mimo|minimax|moonshot|muse|new|nous|novita|nscale|nvidia|opencode|openrouter|qwen38|sambanova|umans|vercel|zcode|zhipu)-"
       ],
       "children": {
         "cursor": [
@@ -554,6 +554,7 @@
     "cost-scoring.test.ts": "usage",
     "crash-guard.test.ts": "service",
     "credential-redirect-guard.test.ts": "lib",
+    "crusoe-provider.test.ts": "providers",
     "cursor-adapter.test.ts": "providers/cursor",
     "cursor-continuity-retention.test.ts": "providers/cursor",
     "cursor-arg-normalize.test.ts": "providers/cursor",

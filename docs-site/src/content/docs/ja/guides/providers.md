@@ -169,7 +169,7 @@ Kiro のログインには Kiro CLI が必要です。Unix では `curl -fsSL ht
 
 ## 3. API キーカタログ
 
-opencodex には組み込みプリセットが 79 個含まれています。キー方式 67、OAuth 8、ローカル 3、
+opencodex には組み込みプリセットが 80 個含まれています。キー方式 68、OAuth 8、ローカル 3、
 デフォルト ChatGPT 転送プリセット 1 です。ダッシュボードの **Add provider** ピッカーはキー発行ページを開き、
 入力したキーを検証した後保存します(検証はプロバイダー固有です)。主な項目は以下のとおりです:
 
@@ -210,6 +210,7 @@ Cline IDE/CLI のみで API からは使えません。`minimax/minimax-m2.5` �
 | Command Code | `https://api.commandcode.ai/provider/v1` |
 | SambaNova Cloud | `https://api.sambanova.ai/v1` |
 | Nebius Token Factory | `https://api.tokenfactory.nebius.com/v1` |
+| Crusoe | `https://api.inference.crusoecloud.com/v1` |
 | DigitalOcean Serverless Inference | `https://inference.do-ai.run/v1` |
 | Scaleway Generative APIs | `https://api.scaleway.ai/v1` |
 | Featherless AI | `https://api.featherless.ai/v1` |
@@ -302,6 +303,19 @@ CLI の login flow は公開レスポンスをキーの有効性の証拠にせ�
 ネイティブ ID と、報告された context / input modality metadata を保持し、discovery を 512 KiB と raw
 512 行に制限します。dedicated deployment のホストは対象外です。キーは
 [Nebius Token Factory](https://tokenfactory.nebius.com) で作成します。
+
+**Crusoe の discovery:** キー方式のプリセットは `openai-chat` adapter を使用し、Bearer key は
+Crusoe の固定 Serverless Inference host にだけ送信します。`/v1/models` は未認証リクエストを 401 で
+拒否するため、list の成功を key の検証として扱います。discovery は `zai-org/GLM-5.3` や
+`moonshotai/Kimi-K2.6` のようなスラッシュ区切りのネイティブ id を Crusoe が返すままに保持し、256 KiB と
+raw 256 行に制限します。`is_public: true` かつ `architecture.modality` が text または multimodal の row だけを残すため、アカウント専用のデプロイや embedding・メディア系の row は除外されます。reasoning model は思考内容を Chat Completions の `reasoning` field で返し、
+adapter はこれを読み取ります。`reasoning_effort` のラダー（`low`、`medium`、`high`）を受け付けるのは
+`openai/gpt-oss-120b` のみで、他の reasoning model はこの field をオン/オフの切り替えとして扱うため、
+provider 全体の effort ラダーと parallel tool call は宣伝しません。レート制限は project と model ごとに
+適用され（超過時は 429、共有 deployment のスケール中は 503）、新規アカウントには $5 の無料クレジットが
+付与されます。キーは [Crusoe Cloud console](https://console.crusoecloud.com) の
+Intelligence Foundry > Inference で作成します。
+
 **DigitalOcean の discovery:** preset は model access key を固定の共有 Serverless Inference ホストで使い、
 認証済み `/v1/models` の応答と DigitalOcean の公式ドキュメントで確認した Chat Completions allowlist の
 積集合だけを公開します。未知、Responses 専用、embedding、media generation の id は fail closed で除外し、

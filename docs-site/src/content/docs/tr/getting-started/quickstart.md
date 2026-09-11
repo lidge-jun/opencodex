@@ -14,7 +14,7 @@ ocx init
 
 `ocx init` adım adım size rehberlik eder:
 
-1. **Bir sağlayıcı seçin** — yerleşik kayıt defterindeki 79 önayardan birini
+1. **Bir sağlayıcı seçin** — yerleşik kayıt defterindeki 80 önayardan birini
    veya bir temel URL ile adaptör yazmak için `custom` seçeneğini belirleyin.
 2. **API anahtarı** — bir anahtar yapıştırın veya `${ANTHROPIC_API_KEY}` gibi
    bir ortam değişkenine başvurun.
