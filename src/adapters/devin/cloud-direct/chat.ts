@@ -1,3 +1,7 @@
+/*
+ * Derived from rsvedant/opencode-windsurf-auth (src/cloud-direct/), MIT licensed,
+ * Copyright (c) 2026 Vedant. The full notice is in ./index.ts.
+ */
 /**
  * Cloud-direct streaming chat. Talks to
  * `server.codeium.com/exa.api_server_pb.ApiServerService/GetChatMessage`

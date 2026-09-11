@@ -1,3 +1,7 @@
+/*
+ * Derived from rsvedant/opencode-windsurf-auth (src/cloud-direct/), MIT licensed,
+ * Copyright (c) 2026 Vedant. The full notice is in ./index.ts.
+ */
 /**
  * Mint the short-lived `user_jwt` that every chat RPC needs alongside the
  * persistent OAuth-issued `api_key`.
