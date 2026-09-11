@@ -323,6 +323,7 @@
     "claude-system-env-auto.test.ts": "claude-integration",
     "cleanup-orphaned-workflows.test.ts": "ci-workflows",
     "clearable-deadline.test.ts": "lib",
+    "cli-account-plan-exclusion.test.ts": "cli",
     "cli-account-pool-verbs.test.ts": "cli",
     "cli-account.test.ts": "cli",
     "cli-capabilities.test.ts": "cli",

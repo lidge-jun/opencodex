@@ -1,5 +1,6 @@
 /** `ocx account` — list and switch provider credentials (issue #180). */
 import { loadConfig } from "../config";
+import { codexPlanKey } from "../codex/plan";
 import { providerCodexAccountMode } from "../providers/registry";
 import type { OcxConfig } from "../types";
 import {
@@ -25,6 +26,15 @@ type TargetProvenance = "live-oauth-list" | "config" | "codex";
 
 const MAIN_ALIAS = "main";
 const MAIN_CODEX_ID = "__main__";
+
+/**
+ * A row with the operator's plan policy applied (#4211).
+ *
+ * Kept local rather than added to the wire DTO: the server does not send an eligibility verdict,
+ * and the policy it would encode is already decided per request by routing. What the operator
+ * lacks is the *display*, which this file can derive from the same two inputs routing uses.
+ */
+export type AccountListRow = AccountRow & { planExcluded?: boolean };
 /**
  * Replacement-style single-slot OAuth (no stable identity; not HTTP-derivable).
  *
@@ -91,12 +101,36 @@ function displayId(id: string): string {
   return id === MAIN_CODEX_ID ? MAIN_ALIAS : id;
 }
 
-function statusText(row: AccountRow): string {
+/**
+ * Whether the operator's plan policy keeps this account out of automatic rotation.
+ *
+ * This mirrors `isCodexAccountPlanExcluded` in src/codex/routing.ts, including the `__main__`
+ * exemption: the main account's plan is withheld during a selection-only drain, so a rule that
+ * covered it would disagree with itself between drain and ordinary routing. The mirror exists
+ * because routing keeps the predicate private and the row on the wire carries no eligibility
+ * verdict — both inputs it needs, the stored plan and `codexPool.excludedPlans`, are already
+ * here. If the policy grows a second rule, these two have to move together.
+ */
+export function planExcludedFromRotation(config: OcxConfig, row: AccountRow): boolean {
+  if (row.type !== "codex" || row.id === MAIN_CODEX_ID) return false;
+  const configured = config.codexPool?.excludedPlans;
+  if (!configured?.length) return false;
+  // Compared through codexPlanKey because the stored plan is an unrestricted provider string
+  // whose casing and padding this repository does not control.
+  const plan = codexPlanKey(row.plan);
+  return plan !== undefined && configured.some(value => codexPlanKey(value) === plan);
+}
+
+function statusText(row: AccountListRow): string {
   const parts: string[] = [];
   // `paused` leads, and does NOT replace `selected`. A paused-but-selected account is the
   // state an operator most needs named -- requests route to it while the pool believes it is
   // held out -- so printing only one of the two would hide exactly the confusing case (#2703).
   if (row.paused) parts.push("paused");
+  // Same reasoning, same column: a downgraded account is held out of rotation by policy rather
+  // than by hand, and the plan is printed inside the token because "not selected" without the
+  // tier is the diagnosis the operator already had to do themselves (#4211).
+  if (row.planExcluded) parts.push(`plan-excluded(${row.plan ?? "unknown"})`);
   if (row.active) parts.push(row.type === "codex" ? "selected" : "active");
   if (row.needsReauth) parts.push("needs-reauth");
   if (row.validationPending) parts.push("validation-pending");
@@ -129,7 +163,7 @@ function quotaText(row: AccountRow): string {
   return parts.length > 0 ? parts.join(" ") : "-";
 }
 
-export function formatAccountTable(rows: AccountRow[], withQuota = false): string {
+export function formatAccountTable(rows: AccountListRow[], withQuota = false): string {
   const header = ["PROVIDER", "TYPE", "ID", "PLAN/LABEL", "PRIORITY", "STATUS"];
   if (withQuota) header.push("QUOTA");
   const data = rows.map(r => {
@@ -197,7 +231,7 @@ async function cmdList(rest: string[], deps: AccountDeps): Promise<number> {
     for (const n of Object.keys(config.providers ?? {})) push(n, "config");
   }
 
-  const rows: AccountRow[] = [];
+  const rows: AccountListRow[] = [];
   const notes: string[] = [];
   for (const t of targets) {
     const r = await fetchRows(deps, baseUrl, t.name, t.type, wantsQuota ? { refresh: refreshQuota } : undefined);
@@ -220,8 +254,22 @@ async function cmdList(rest: string[], deps: AccountDeps): Promise<number> {
       if (showAll) notes.push(`${t.name}: no stored accounts or keys`);
       continue;
     }
-    rows.push(...r.rows);
+    const projected: AccountListRow[] = t.type === "codex"
+      ? r.rows.map(row => planExcludedFromRotation(config, row) ? { ...row, planExcluded: true } : row)
+      : r.rows;
+    rows.push(...projected);
     if (t.type === "codex") {
+      // Named once, for the whole family: the STATUS token says which accounts are out, this
+      // says which setting put them there and that the account is still reachable on purpose.
+      // Without it the operator sees a new token and no way to act on it (#4211).
+      const excluded = projected.filter(row => row.planExcluded);
+      if (excluded.length > 0) {
+        const plans = [...new Set(excluded.map(row => row.plan ?? "unknown"))].join(", ");
+        notes.push(
+          `${t.name}: ${excluded.length} account(s) held out of rotation by codexPool.excludedPlans (plan ${plans}) `
+          + "— explicit selection still routes to them",
+        );
+      }
       if (r.activeId === null) notes.push("openai: auto (no pin — lowest-usage account is selected per request)");
       if (providerCodexAccountMode("openai", config.providers?.openai) === "direct") {
         notes.push("openai is in direct mode — the selection takes effect when pool mode is enabled");
