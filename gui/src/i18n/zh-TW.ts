@@ -2,6 +2,7 @@ import type { TKey } from "./en";
 
 /** Traditional Chinese (Taiwan) UI strings — keys must match `en.ts` 1:1. */
 export const zhTW: Record<TKey, string> = {
+  "quota.remainingPercent": "剩餘 {pct}%",
   "zcodeUsage.title": "GLM Coding Plan · 時段優惠",
   "zcodeUsage.zone": "時間顯示為 {zone}。時段基準：新加坡（UTC+8）。",
   "zcodeUsage.peak": "尖峰時段：截至 {until} 按標準模型點數費率計費。",

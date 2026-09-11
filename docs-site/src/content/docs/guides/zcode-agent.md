@@ -214,3 +214,38 @@ conservatively stops advertising it at midnight ending September 20 Singapore.
 Source links and this boundary caveat are visible in the notice. Exact Z.AI
 Coding Plan HTTP endpoints also show peak/off-peak notices, but never the
 ZCode-only free-window alert; ordinary pay-as-you-go endpoints are excluded.
+
+## Remaining subscription quota
+
+The provider overview and Usage tab reuse the same quota-bar component as OpenAI.
+For ZCode, the fill and label show **remaining** model credits in the 5-hour and
+weekly windows, with localized reset times. Warning colors still reflect high
+consumption. Unknown or failed readings do not appear as a full balance.
+
+Quota comes from the **official ZCode Desktop host service**, not from locally
+counted tokens or a proxy-made Z.AI API request. OpenCodex starts the trusted
+Desktop executable in its Node runtime mode and calls its existing read-only
+entitlement RPC. Native ZCode owns authentication and network requests. This
+separate short-lived Bubblewrap sandbox has no writable project folder: Desktop
+configuration is mounted read-only and copied only into disposable tmpfs so the
+native service can perform its normal configuration normalization. Credential
+material never leaves that sandbox. No model prompt, quota-reset action, or
+purchase is requested. Tested with Desktop 3.10.2 on Linux; other private host
+protocol versions can return unavailable instead of a fabricated quota.
+
+Managed Desktop connections need no extra quota configuration. For the advanced
+operator-launcher setup, explicitly set `OCX_ZCODE_DESKTOP_RUNTIME` to the trusted
+installed/extracted Desktop directory (the directory containing `resources/`).
+The native quota host then uses the Z.AI key from the **same isolated CLI config**,
+not the user's unrelated Desktop login. The source provider is the configured
+default model's provider prefix, or `zai` when none is set; an absent key or
+unsupported profile is reported as unavailable. This opt-in does not change
+inference routing or migrate your model IDs.
+
+The dashboard's existing quota cache and Refresh quotas controls apply. Concurrent
+reads share one native probe. Account/configuration changes invalidate snapshots;
+errors clear the ZCode report rather than leaving a misleading full balance.
+These bars are informational and do not enable quota-based automatic rerouting.
+The native session app-server's token accounting remains unavailable; subscription
+quota is a distinct measurement. See [ZCode Usage Stats](https://zcode.z.ai/en/docs/usage-stats)
+for the distinction between App Usage and Coding Plan statistics.

@@ -5,6 +5,7 @@ import type { TKey } from "./en";
  * Turkish i18n catalog. Must match the `TKey` set (compile-checked).
  */
 export const tr: Record<TKey, string> = {
+  "quota.remainingPercent": "%{pct} kaldı",
   "zcodeUsage.title": "GLM Coding Plan · saat bazlı avantajlar",
   "zcodeUsage.zone": "Saatler {zone} diliminde gösterilir. Referans: Singapur (UTC+8).",
   "zcodeUsage.peak": "Yoğun saatler: {until} tarihine kadar standart model kredi tarifesi.",

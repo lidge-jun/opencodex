@@ -4,6 +4,7 @@ import type { TKey } from "./en";
  * Chinese i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const zh: Record<TKey, string> = {
+  "quota.remainingPercent": "剩余 {pct}%",
   "zcodeUsage.title": "GLM Coding Plan · 时段优惠",
   "zcodeUsage.zone": "时间显示为 {zone}。时段基准：新加坡（UTC+8）。",
   "zcodeUsage.peak": "高峰时段：截至 {until} 按标准模型积分费率计费。",

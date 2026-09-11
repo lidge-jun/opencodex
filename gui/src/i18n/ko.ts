@@ -4,6 +4,7 @@ import type { TKey } from "./en";
  * Korean i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const ko: Record<TKey, string> = {
+  "quota.remainingPercent": "{pct}% 남음",
   "zcodeUsage.title": "GLM Coding Plan · 시간대별 혜택",
   "zcodeUsage.zone": "{zone} 시간으로 표시합니다. 기준: 싱가포르(UTC+8).",
   "zcodeUsage.peak": "피크 시간: {until}까지 표준 모델 크레딧 요금입니다.",

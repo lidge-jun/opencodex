@@ -29,6 +29,10 @@ failover candidates. Launcher authority comes from either the operator environme
 GUI-consented Desktop connection. Data-plane requests and ordinary provider configuration cannot
 set command/workspace paths. The managed Desktop bootstrap keeps credential-bearing runtime
 descriptors inside its OS sandbox; the parent sees public model identities only.
+Subscription quota is separately read through the official Desktop host entitlement RPC in a
+short-lived tmpfs sandbox. Only numeric quota windows leave that process. An advanced launcher
+requires explicit `OCX_ZCODE_DESKTOP_RUNTIME` authority and reuses its own isolated model key;
+quota discovery must not silently import another Desktop account or affect routing policy.
 
 Adding a production adapter requires:
 

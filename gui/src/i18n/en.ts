@@ -6,6 +6,7 @@
  * `{var}` are plain interpolations.
  */
 export const en = {
+  "quota.remainingPercent": "{pct}% remaining",
   "zcodeUsage.title": "GLM Coding Plan · time-based benefits",
   "zcodeUsage.zone": "Times shown in {zone}. Schedule reference: Singapore (UTC+8).",
   "zcodeUsage.peak": "Peak hours: standard model credit rate until {until}.",

@@ -4,6 +4,7 @@ import type { TKey } from "./en";
  * Japanese i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const ja: Record<TKey, string> = {
+  "quota.remainingPercent": "残り {pct}%",
   "zcodeUsage.title": "GLM Coding Plan · 時間帯別特典",
   "zcodeUsage.zone": "表示時刻：{zone}。基準：シンガポール（UTC+8）。",
   "zcodeUsage.peak": "ピーク時間：{until}まで通常のモデルクレジット料金。",

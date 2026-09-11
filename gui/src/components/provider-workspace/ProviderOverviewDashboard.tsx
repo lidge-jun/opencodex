@@ -206,7 +206,6 @@ export default function ProviderOverviewDashboard({
           aria-busy={quotasLoading || undefined}
         >
           <h3 className="pws-dashboard-section-title">{t("pws.dashboard.rateLimits")}</h3>
-          {allItems.some(item => zcodeUsageScope(item)) && <ZcodeUsageNotices viaZcode={allItems.some(item => zcodeUsageScope(item) === "zcode")} />}
           {quotaProviders.length > 0 ? (
             <div className="pws-dashboard-rows">
               {quotaProviders.map(({ item, report }) => (
@@ -248,6 +247,7 @@ export default function ProviderOverviewDashboard({
           ) : (
             <p className="muted pws-dashboard-empty">{t("pws.dashboard.noRateLimits")}</p>
           )}
+          {allItems.some(item => zcodeUsageScope(item)) && <ZcodeUsageNotices viaZcode={allItems.some(item => zcodeUsageScope(item) === "zcode")} />}
         </section>
 
         <section

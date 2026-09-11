@@ -49,7 +49,7 @@ export default function ProviderCurrentQuota({ report, reading, onRefreshQuota, 
         </button>
       </div>}
     </div>
-    <ProviderAccountQuota {...effective} />
+    <ProviderAccountQuota {...effective} source={current?.source} />
     {item && zcodeUsageScope(item) && <ZcodeUsageNotices viaZcode={zcodeUsageScope(item) === "zcode"} />}
     {quota && !effective.quotaUnavailable && effective.quotaMode !== "unsupported" && <dl className="pws-kv pws-usage-meta">
       {!rowOwnsReading && current?.source?.trim() && <div className="pws-kv-row">

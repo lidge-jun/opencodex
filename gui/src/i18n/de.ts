@@ -5,6 +5,7 @@ import type { TKey } from "./en";
  * German i18n catalog, generated from en.ts. Must match the `TKey` set (compile-checked).
  */
 export const de: Record<TKey, string> = {
+  "quota.remainingPercent": "{pct}% verbleibend",
   "zcodeUsage.title": "GLM Coding Plan · zeitabhängige Vorteile",
   "zcodeUsage.zone": "Zeiten in {zone}. Referenz: Singapur (UTC+8).",
   "zcodeUsage.peak": "Spitzenzeit: regulärer Modell-Credittarif bis {until}.",

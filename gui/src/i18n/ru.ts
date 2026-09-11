@@ -4,6 +4,7 @@ import type { TKey } from "./en";
  * Russian i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const ru: Record<TKey, string> = {
+  "quota.remainingPercent": "Осталось {pct}%",
   "zcodeUsage.title": "GLM Coding Plan · льготы по времени",
   "zcodeUsage.zone": "Время в {zone}. Основа расписания: Сингапур (UTC+8).",
   "zcodeUsage.peak": "Пиковые часы: стандартная ставка кредитов модели до {until}.",
