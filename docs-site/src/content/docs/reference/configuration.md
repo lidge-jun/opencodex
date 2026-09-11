@@ -29,6 +29,55 @@ uses the fresh-install default: one `openai` forward provider.
 
 ## Precedence and defaults
 
+### Request transforms (pending)
+
+`requestTransforms` is an opt-in extension hook that runs after routing and before input admission
+and adapter request construction. It is disabled when the lists are absent or empty. Global handlers
+run first, followed by the selected provider's handlers. Configure these lists only by editing the
+local `config.json` while the proxy is stopped, then restart it. Management API writes cannot add
+or change handlers; unrelated provider edits preserve locally configured handlers:
+
+```jsonc
+{
+  "requestTransforms": ["./transforms/common.ts"],
+  "providers": {
+    "my-provider": {
+      "adapter": "openai-chat",
+      "baseUrl": "https://example.com/v1",
+      "requestTransforms": ["./transforms/provider.ts"]
+    }
+  }
+}
+```
+
+A handler exports a default function or a named `transform` function. It receives the normalized
+request and `{ providerName, modelId, providerConfig, config, acceptsImageInput }`. It may mutate
+the request in place and return nothing, or return a complete replacement request; async handlers
+are supported. The configuration objects in the handler context are deeply read-only snapshots;
+only the request is mutable. Model-specific behavior belongs inside the handler, using `modelId`:
+
+```ts
+export default function transform(parsed, { modelId, acceptsImageInput }) {
+  if (modelId !== "my-vision-model" || !acceptsImageInput) return;
+  // Apply your text-to-image or compression implementation to parsed.context.messages.
+}
+```
+
+Paths resolve against `OPENCODEX_HOME` first, then the working directory; absolute paths and module
+package specifiers are also supported. Handlers execute as trusted code with the proxy process's
+permissions and access to its configuration. Only configure code you trust. Imports are cached;
+restart the proxy after changing a handler. Load, execution, validation and native synchronization
+failures warn and processing continues with the last valid request. Failed handlers' request
+mutations are discarded; external side effects performed by trusted handler code cannot be undone.
+
+The returned request is marked to avoid applying the pipeline again when an internal retry reuses
+that parsed request. A new inbound request runs the pipeline again, even if it replays earlier history;
+handlers that edit historical messages should recognize their own output to avoid transforming it twice.
+Canonical message, tool, system-prompt and generation-option changes are synchronized into native
+Responses requests. Unchanged native items and provider-specific fields are retained; a no-op handler
+does not rebuild the native input or tool catalog. Complete replacements retain proxy-owned metadata
+needed for authentication and continuation handling.
+
 ### Provider and model aliases
 
 Aliases are optional short request names. They never change the native model id sent upstream, and omitting every alias field preserves existing routing exactly.

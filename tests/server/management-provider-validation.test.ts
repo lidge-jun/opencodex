@@ -137,6 +137,75 @@ afterEach(() => {
 });
 
 describe("provider management validation", () => {
+  test("requestTransforms remain local-only across management writes and provider copies", async () => {
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    const live: OcxConfig = {
+      port: 0,
+      defaultProvider: "custom",
+      requestTransforms: ["./trusted-global.ts"],
+      providers: {
+        custom: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.example.test/v1",
+          liveModels: false,
+          requestTransforms: ["./trusted-provider.ts"],
+        },
+      },
+    };
+    saveConfig(live);
+    const request = async (path: string, method: string, body: unknown) => {
+      const url = new URL(path, "http://127.0.0.1");
+      return (await handleManagementAPI(new Request(url, {
+        method, headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+      }), url, live, { createManagementConvergeCodex: catalogConvergenceFactory() }))!;
+    };
+    const resolved = spyOn(destinationPolicy, "providerDestinationResolvedError").mockResolvedValue(null);
+    try {
+      expect(providerEditorConfigDTO(live).providers.custom).not.toHaveProperty("requestTransforms");
+      expect((safeConfigDTO(live) as { providers: Record<string, unknown> }).providers.custom)
+        .not.toHaveProperty("requestTransforms");
+      for (const requestTransforms of [["./remote.ts"], ["./trusted-provider.ts"], [], null]) {
+        expect(providerManagementConfigError("custom", { ...live.providers.custom, requestTransforms }))
+          .toContain("local config file");
+        const before = readFileSync(join(TEST_DIR, "config.json"));
+        for (const name of ["custom", "imported"]) {
+          const response = await request("/api/providers", "POST", {
+            name, provider: { ...live.providers.custom, requestTransforms },
+          });
+          expect(response.status).toBe(400);
+          expect(await response.json()).toMatchObject({ error: expect.stringContaining("local config file") });
+        }
+        expect((await request("/api/providers?name=custom", "PATCH", { requestTransforms })).status).toBe(400);
+        const baseline = providerEditorConfigDTO(loadConfig());
+        const next = structuredClone(baseline);
+        next.providers.custom!.requestTransforms = requestTransforms;
+        expect((await request("/api/providers", "PUT", { baseline, next })).status).toBe(400);
+        expect(readFileSync(join(TEST_DIR, "config.json"))).toEqual(before);
+      }
+      // Whole-config import is disabled; generic settings cannot install global modules.
+      expect((await request("/api/config", "PUT", { ...live, requestTransforms: ["./remote.ts"] })).status).toBe(405);
+      expect((await request("/api/settings", "PUT", { requestTransforms: ["./remote.ts"] })).status).toBe(400);
+
+      expect((await request("/api/providers", "POST", {
+        name: "custom", provider: providerEditorConfigDTO(live).providers.custom,
+      })).status).toBe(200);
+      expect((await request("/api/providers?name=custom", "PATCH", { defaultModel: "updated" })).status).toBe(200);
+      const baseline = providerEditorConfigDTO(loadConfig());
+      const next = structuredClone(baseline);
+      next.providers.custom!.defaultModel = "edited";
+      next.providers.copy = structuredClone(next.providers.custom!);
+      expect((await request("/api/providers", "PUT", { baseline, next })).status).toBe(200);
+      for (const snapshot of [live, loadConfig()]) {
+        expect(snapshot.requestTransforms).toEqual(["./trusted-global.ts"]);
+        expect(snapshot.providers.custom!.requestTransforms).toEqual(["./trusted-provider.ts"]);
+        expect(snapshot.providers.copy!.requestTransforms).toBeUndefined();
+      }
+    } finally {
+      resolved.mockRestore();
+    }
+  });
+
   test("provider reload adopts only the validated disk row without rewriting config", async () => {
     if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
@@ -164,6 +233,7 @@ describe("provider management validation", () => {
       ...diskConfig.providers.xai!,
       apiKey: "new-disk-key",
       headers: { "x-operator-header": "operator-owned" },
+      requestTransforms: ["./trusted-local.ts"],
     };
     saveConfig(diskConfig);
     const diskBefore = readFileSync(join(TEST_DIR, "config.json"));

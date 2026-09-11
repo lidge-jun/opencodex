@@ -588,6 +588,9 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
     return "provider must be a plain object";
   }
   const raw = provider as Record<string, unknown>;
+  if (Object.hasOwn(raw, "requestTransforms")) {
+    return "requestTransforms may only be configured in the local config file";
+  }
   const pinsError = providerReasoningPinsConfigError(raw);
   if (pinsError) return pinsError;
   for (const field of FORBIDDEN_PROVIDER_RUNTIME_FIELDS) {
@@ -772,7 +775,7 @@ export function copyIfDefined<K extends keyof OcxProviderConfig>(
  * admission. `satisfies Record<keyof OcxProviderConfig, ...>` makes a newly added
  * provider field fail typecheck until it is deliberately classified.
  *
- * `editor` fields are user-authored, `redacted` fields may contain credentials,
+ * `editor` fields are user-authored, `redacted` fields contain credentials or local-only authority,
  * and `runtime` fields are observations/limits that must never become editor write
  * authority. MCP and desktop executor blocks are redacted as a whole because both
  * contain arbitrary environment variables and/or headers.
@@ -866,6 +869,8 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   noTopPModels: "editor",
   noPenaltyModels: "editor",
   noStructuredOutputModels: "editor",
+  // Executable local module paths are neither public DTO data nor editor authority.
+  requestTransforms: "redacted",
   omitReasoningEffortWithToolsModels: "editor",
   parallelToolCalls: "editor",
   pinParallelToolCallsFalse: "editor",

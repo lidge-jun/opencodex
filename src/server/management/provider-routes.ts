@@ -167,10 +167,13 @@ function providerAliasOverlayOwnershipError(
   return null;
 }
 
-/** Remove only alias overlays whose ownership has already been established by the caller. */
+/** Project transport fields after establishing ownership of alias and local-only overlays. */
 function providerTransportValidationCandidate(provider: Record<string, unknown>): Record<string, unknown> {
   const candidate = { ...provider };
   for (const field of PROVIDER_ALIAS_OVERLAY_FIELDS) delete candidate[field];
+  // This is a transport-only projection of already-owned fields. POST must reject
+  // client-supplied transforms before using it; PATCH/PUT can only preserve disk values.
+  delete candidate.requestTransforms;
   return candidate;
 }
 
@@ -929,6 +932,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     const name = typeof body.name === "string" ? body.name.trim() : "";
     if (!isPlainRecord(body.provider)) return jsonResponse({ error: "provider must be a plain object" }, 400);
+    if (Object.hasOwn(body.provider, "requestTransforms")) {
+      return jsonResponse({ error: "requestTransforms may only be configured in the local config file" }, 400);
+    }
     const existing = config.providers[name];
     const aliasOwnershipError = providerAliasOverlayOwnershipError(body.provider, existing);
     if (aliasOwnershipError) return jsonResponse({ error: aliasOwnershipError }, 400);
@@ -1050,6 +1056,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // completed during that wait remains authoritative instead of being overwritten by the
     // older ownership snapshot used to admit this POST.
     restorePersistedAliasOverlays(prov, config.providers[name]);
+    // A full remote edit cannot install, replace, or erase locally trusted modules.
+    // Bind preservation to this exact provider name; a copied/new row gets no authority.
+    const existingTransforms = config.providers[name]?.requestTransforms;
+    if (existingTransforms !== undefined) prov.requestTransforms = [...existingTransforms];
     // The add/edit form omits wire choices. Read after DNS so a concurrent switch
     // remains authoritative, including the marker that protects it on the next boot.
     if (name === "xai") {
@@ -1121,6 +1131,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     let rawBody: unknown;
     try { rawBody = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     if (!isPlainRecord(rawBody)) return jsonResponse({ error: "provider patch body must be a plain object" }, 400);
+    if (Object.hasOwn(rawBody, "requestTransforms")) {
+      return jsonResponse({ error: "requestTransforms may only be configured in the local config file" }, 400);
+    }
     const keys = Object.keys(rawBody);
     const aliasField = PROVIDER_ALIAS_OVERLAY_FIELDS.find(field => Object.hasOwn(rawBody, field));
     if (aliasField) return jsonResponse({ error: `${aliasField} is managed by the dedicated alias API` }, 400);

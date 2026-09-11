@@ -512,3 +512,13 @@ the residual directory for manual review; there is no recursive-delete fallback.
 ## Remote client key files
 
 Client connection metadata stores a stable `apiKeyId` and a non-secret rotation `pendingOperation`. The current data secret remains only in `service-api-token`; a bounded rotation temporarily keeps the old secret in owner-only `service-api-token.prev`. Commit or recovery clears the marker before orphan cleanup. `ocx disconnect` is local-only and leaves remote revocation to the hub's **Integrations → API Keys** page. Hub and local usage stores are not mirrored.
+
+## Request transforms
+
+`requestTransforms` can be configured globally in `config.json` or scoped under individual providers in `providers.<name>.requestTransforms`. Handlers are loaded dynamically and executed sequentially on `OcxParsedRequest` in `src/server/responses/core.ts` before provider adapters construct wire requests.
+
+- Specifiers are resolved relative to `OPENCODEX_HOME` (`~/.opencodex`), current working directory, or treated as module specifiers.
+- Handlers receive `{ providerName, modelId, providerConfig, config, acceptsImageInput }` to facilitate optimizations like `pxpipe` (text-to-image for vision models) and `headroom` (context compression).
+- Transform lists are local-file configuration only; management API writes cannot add or change executable handlers.
+- Configuration context is a deeply read-only snapshot. Each handler's request changes are committed only after validation and native synchronization succeed; failures retain the last valid request.
+- Execution is guarded by `_requestTransformsApplied` for internal retries reusing a parsed request. New inbound requests, including history replays, run the pipeline again.

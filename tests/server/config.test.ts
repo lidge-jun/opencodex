@@ -47,6 +47,27 @@ import { providerManagementConfigError } from "../../src/server/auth-cors";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 let testDir = "";
 
+test("requestTransforms paths reject whitespace-only values and trim local paths", () => {
+  const base = getDefaultConfig();
+  const provider = base.providers.openai!;
+  for (const path of ["", " ", "\t\r\n"]) {
+    expect(validateConfigCandidate({ ...base, requestTransforms: [path] }).ok).toBe(false);
+    expect(validateConfigCandidate({
+      ...base, providers: { ...base.providers, openai: { ...provider, requestTransforms: [path] } },
+    }).ok).toBe(false);
+  }
+  const result = validateConfigCandidate({
+    ...base,
+    requestTransforms: ["  ./global-transform.ts  "],
+    providers: { ...base.providers, openai: { ...provider, requestTransforms: ["\t./provider-transform.ts\n"] } },
+  });
+  expect(result.ok).toBe(true);
+  if (result.ok) {
+    expect(result.config.requestTransforms).toEqual(["./global-transform.ts"]);
+    expect(result.config.providers.openai!.requestTransforms).toEqual(["./provider-transform.ts"]);
+  }
+});
+
 /**
  * Windows without Developer Mode or admin cannot create a file symlink (EPERM).
  * Detect once so the dotfiles cases below report a visible skip there rather than

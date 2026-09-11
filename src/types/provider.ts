@@ -236,6 +236,11 @@ export interface OcxProviderConfig {
   modelDisplayNames?: Record<string, string>;
   /** Override the global built-in model-alias switch for this provider. */
   defaultAliases?: boolean;
+  /**
+   * Optional provider-scoped request transform handler paths or package specifiers,
+   * executed after global requestTransforms. Local config-file only, not management-writable.
+   */
+  requestTransforms?: string[];
   adapter: string;
   /**
    * Codex tool calling mode for routed models.
