@@ -421,6 +421,38 @@ describe("ocx opencode proxy model catalog", () => {
     expect(Object.keys(blocks.v1.models)).not.toContain("opencode-go/hidden");
   });
 
+  test("carries /api/models modalities into the blocks the launcher injects", () => {
+    // Same failure mode as the ladder above, one field over: the management API reports
+    // image input for these rows and opencode gates attachments client-side, so dropping the
+    // field here leaves the image blocked before any request reaches the proxy (#4286).
+    const rows = [
+      { namespaced: "gpt-5.6-luna", native: true, provider: "openai", id: "gpt-5.6-luna", inputModalities: ["text", "image"] },
+      { namespaced: "opencode-go/glm-5.3", provider: "opencode-go", id: "glm-5.3", inputModalities: ["text", "image"] },
+      { namespaced: "opencode-go/text-only", provider: "opencode-go", id: "text-only", inputModalities: ["text"] },
+      { namespaced: "opencode-go/undeclared", provider: "opencode-go", id: "undeclared" },
+      { namespaced: "opencode-go/hidden", provider: "opencode-go", id: "hidden", disabled: true, inputModalities: ["text", "image"] },
+    ];
+    const catalog = opencodeCatalogFromProxyRows(rows, cfg());
+    const blocks = buildOpencodeProviderBlocksFromCatalog(10100, catalog, undefined, cfg());
+
+    for (const block of [blocks.v1, blocks.v2]) {
+      expect(block.models["gpt-5.6-luna"]).toMatchObject({
+        attachment: true, modalities: { input: ["text", "image"], output: ["text"] },
+      });
+      expect(block.models["opencode-go/glm-5.3"]).toMatchObject({
+        attachment: true, modalities: { input: ["text", "image"], output: ["text"] },
+      });
+      expect(block.models["opencode-go/text-only"]).toMatchObject({
+        attachment: false, modalities: { input: ["text"], output: ["text"] },
+      });
+      // A row that declares nothing keeps the exact entry shape opencode already reads as
+      // text-only — the pre-#4286 bytes, not a synthesized capability list.
+      expect(block.models["opencode-go/undeclared"]).not.toHaveProperty("attachment");
+      expect(block.models["opencode-go/undeclared"]).not.toHaveProperty("modalities");
+      expect(Object.keys(block.models)).not.toContain("opencode-go/hidden");
+    }
+  });
+
   test("the launcher's V1 and V2 blocks share one connection", () => {
     const blocks = buildOpencodeProviderBlocksFromCatalog(
       10100,
