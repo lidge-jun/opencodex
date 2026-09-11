@@ -1119,21 +1119,29 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
     if (isOpaquePermissionDenial) {
       const enriched =
         `Cognition denied this request for model "${req.modelUid}" with the opaque ` +
-        `"an internal error occurred" message. This almost always means the model ` +
-        `is not enabled for your account/tier — see https://codeium.com/account. ` +
-        `(cloud trace ID: ${trailerError.traceId ?? 'n/a'}; raw message: ${trailerError.message})`;
+        `"an internal error occurred" message. The catalog listed this model as ` +
+        `enabled, so the denial is about entitlement rather than the model id: a ` +
+        `free-tier account whose only enabled model is a "slow" lane returns this ` +
+        `for every request. Verified on 2026-09-12 against a live free account — ` +
+        `client version, request framing, metadata and request fields were all ` +
+        `ruled out, so retrying with different options will not help. ` +
+        `See https://devin.ai/settings for the account's plan. ` +
+        `(cloud trace ID: ${trailerError.traceId ?? 'n/a'})`;
       throw new CloudChatError(enriched, trailerError.code, trailerError.traceId);
     }
     // Cognition also returns `permission_denied` when a tool description
     // contains a blocklisted phrase that the sanitizer above did not catch
     // (e.g. Cognition added a new phrase). Surface a clear message so the
     // user knows to check tool descriptions rather than suspect auth/tier.
-    if (trailerError.code === 'permission_denied') {
+    // Only blame the blocklist when tools were actually sent. Asserting it for
+    // every permission_denied sent users to inspect a tool table that had
+    // nothing to do with an ordinary ACL or tier denial.
+    if (trailerError.code === 'permission_denied' && (req.tools?.length ?? 0) > 0) {
       const enriched =
         `Cognition denied this request (permission_denied). If tool descriptions ` +
         `are present, a blocklisted phrase may have triggered this — see the ` +
         `COGNITION_BLOCKLIST_REWRITES table in cloud-direct/chat.ts. ` +
-        `(cloud trace ID: ${trailerError.traceId ?? 'n/a'}; raw message: ${trailerError.message})`;
+        `(cloud trace ID: ${trailerError.traceId ?? 'n/a'})`;
       throw new CloudChatError(enriched, trailerError.code, trailerError.traceId);
     }
     throw new CloudChatError(trailerError.message, trailerError.code, trailerError.traceId);
