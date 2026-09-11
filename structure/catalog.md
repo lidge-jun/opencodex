@@ -251,8 +251,10 @@ Provider model pins precede provider-wide pins, then global selector/destination
 A pin can raise the effective caller effort; the later cap can still lower or omit it.
 `none` means explicit-effort omission (provider default), not guaranteed reasoning disablement.
 Compaction maintenance is exempt. Pins are user overlays and do not alter registry seeds,
-model discovery or advertised ladders. Native Chat normalizes newly pinned values through
-provider wire mapping; unpinned native requests retain their existing pass-through contract.
+model discovery or advertised ladders. Native Chat applies qualifying caps even without a
+pin, and normalizes pinned values and values rewritten by a cap through provider wire
+mapping. Without a pin or a cap rewrite, native caller values retain their original wire
+spelling; the V1 and compaction cap exemptions are preserved.
 
 > Decision record: [ADR-0023](decisions/ADR-0023-ultra-reasoning-level.md)
 
