@@ -253,6 +253,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       // max_depth is V1-only upstream; this is the global-flag statement, derived
       // server-side so no client can present it as an effective V2 limit.
       agentsMaxDepthAppliesWhenV2Disabled: !enabled,
+      v2RoutedDelegationBridge: config.v2RoutedDelegationBridge === true,
     });
   }
   if (url.pathname === "/api/v2" && req.method === "PUT") {
@@ -265,6 +266,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       agentsMaxDepth?: unknown;
       subagentDeveloperInstructions?: unknown;
       multiAgentModeHintText?: unknown;
+      v2RoutedDelegationBridge?: unknown;
     };
     try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     const wantsFlag = body.enabled !== undefined;
@@ -275,8 +277,9 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     const wantsMaxDepth = body.agentsMaxDepth !== undefined;
     const wantsSubagentInstructions = body.subagentDeveloperInstructions !== undefined;
     const wantsModeHintText = body.multiAgentModeHintText !== undefined;
-    if (!wantsFlag && !wantsThreads && !wantsMode && !wantsKeepNative && !wantsAgentsEnabled && !wantsMaxDepth && !wantsSubagentInstructions && !wantsModeHintText) {
-      return jsonResponse({ error: "body must set enabled, multiAgentMode, keepNativeChatGptOnV1, maxConcurrentThreadsPerSession, agentsEnabled, agentsMaxDepth, subagentDeveloperInstructions, and/or multiAgentModeHintText" }, 400);
+    const wantsV2RoutedDelegationBridge = body.v2RoutedDelegationBridge !== undefined;
+    if (!wantsFlag && !wantsThreads && !wantsMode && !wantsKeepNative && !wantsAgentsEnabled && !wantsMaxDepth && !wantsSubagentInstructions && !wantsModeHintText && !wantsV2RoutedDelegationBridge) {
+      return jsonResponse({ error: "body must set enabled, multiAgentMode, keepNativeChatGptOnV1, maxConcurrentThreadsPerSession, agentsEnabled, agentsMaxDepth, subagentDeveloperInstructions, multiAgentModeHintText, and/or v2RoutedDelegationBridge" }, 400);
     }
     if (wantsFlag && typeof body.enabled !== "boolean") return jsonResponse({ error: "body.enabled must be a boolean" }, 400);
     if (wantsMode && body.multiAgentMode !== "v1" && body.multiAgentMode !== "default" && body.multiAgentMode !== "v2") {
@@ -284,6 +287,9 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     }
     if (wantsKeepNative && typeof body.keepNativeChatGptOnV1 !== "boolean") {
       return jsonResponse({ error: "body.keepNativeChatGptOnV1 must be a boolean" }, 400);
+    }
+    if (wantsV2RoutedDelegationBridge && typeof body.v2RoutedDelegationBridge !== "boolean") {
+      return jsonResponse({ error: "body.v2RoutedDelegationBridge must be a boolean" }, 400);
     }
     if (wantsThreads && (typeof body.maxConcurrentThreadsPerSession !== "number" || !Number.isInteger(body.maxConcurrentThreadsPerSession) || body.maxConcurrentThreadsPerSession < 1)) {
       return jsonResponse({ error: "body.maxConcurrentThreadsPerSession must be an integer >= 1" }, 400);
@@ -386,6 +392,19 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     // asserts this route file contains no direct write primitive, and matches on the
     // symbol name even inside a comment.
     const scalarWrites: Array<{ field: string; run: () => { ok: true; changed: boolean } | { ok: false; error: string } }> = [];
+    if (wantsV2RoutedDelegationBridge) scalarWrites.push({
+      field: "v2RoutedDelegationBridge",
+      run: () => {
+        try {
+          if (body.v2RoutedDelegationBridge === false) deleteConfigTopLevelKey(config, "v2RoutedDelegationBridge");
+          else config.v2RoutedDelegationBridge = true;
+          saveConfigPreservingClaudeCode(config);
+          return { ok: true, changed: true };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      },
+    });
     if (wantsAgentsEnabled) scalarWrites.push({ field: "agentsEnabled", run: () => setAgentsEnabled(body.agentsEnabled as boolean | null) });
     if (wantsMaxDepth) scalarWrites.push({ field: "agentsMaxDepth", run: () => setAgentsMaxDepth(body.agentsMaxDepth as number | null) });
     if (wantsSubagentInstructions) scalarWrites.push({ field: "subagentDeveloperInstructions", run: () => setSubagentDeveloperInstructions(body.subagentDeveloperInstructions as string | null) });
@@ -425,6 +444,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       multiAgentModeHintText: getMultiAgentModeHintText(),
       multiAgentModeHintRecommendation: MULTI_AGENT_MODE_HINT_RECOMMENDATION,
       agentsMaxDepthAppliesWhenV2Disabled: !enabled,
+      v2RoutedDelegationBridge: config.v2RoutedDelegationBridge === true,
       warnings,
       catalogRefresh,
     });
