@@ -261,3 +261,16 @@ provider wire mapping; unpinned native requests retain their existing pass-throu
 > Decision record: [ADR-0025](decisions/ADR-0025-ultra-reasoning-level.md)
 
 > Decision record: [ADR-0026](decisions/ADR-0026-ultra-reasoning-level.md)
+
+ZCode saved accounts use explicit provider bindings, separate from native OpenAI pools and
+client integration exports. Their profile, catalog and transport contract is maintained in
+[ZCode saved accounts](adapters/registry.md#zcode-saved-accounts); adding one never changes defaults or runs inference.
+
+For ZCode, input-image description is the explicit exception to native-agent helper exclusion;
+see [ZCode vision input adaptation](adapters/registry.md#zcode-vision-input-adaptation). The configured
+vision provider may consume its own quota; main inference remains in official ZCode.
+
+The hardened ZCode boundary accepts only exact active-session events, canonicalizes protected paths in
+optional sandbox mode, distinguishes unavailable quota probes from valid empty entitlements, requires
+unique provider bindings and GUI-session-only Desktop metadata, and disables caller-tool capability
+for every combo containing a ZCode target.

@@ -237,6 +237,7 @@ export default function QuotaBars({
   incompleteWindowKeys,
   incompleteCustomWindowLabels,
   observedAt,
+  showRemaining = false,
 }: {
   quota: AccountQuota | null;
   plan?: string | null;
@@ -262,6 +263,8 @@ export default function QuotaBars({
    * look live.
    */
   observedAt?: number;
+  /** Display remaining balance for native subscription snapshots; consumption stays canonical. */
+  showRemaining?: boolean;
 }) {
   const { locale } = useI18n();
   const rows = buildQuotaRows(quota, plan, t);
@@ -320,6 +323,7 @@ export default function QuotaBars({
         {observedLine}
         {rows.map(row => (
           <StackedQuotaRow
+            showRemaining={showRemaining}
             key={row.limitLabel}
             row={row}
             threshold={threshold}
@@ -389,7 +393,8 @@ function QuotaRow({ credits, label, percent, resetAt, threshold, t, locale }: {
   );
 }
 
-function StackedQuotaRow({ row, threshold, t, locale, incomplete }: {
+function StackedQuotaRow({ row, threshold, t, locale, incomplete, showRemaining = false }: {
+  showRemaining?: boolean;
   row: QuotaBarRow;
   threshold: number;
   t: TFn;
@@ -400,6 +405,8 @@ function StackedQuotaRow({ row, threshold, t, locale, incomplete }: {
   const warn = isQuotaWarn(row.percent, threshold);
   const color = quotaBarTone(row.percent, threshold);
   const resetText = formatResetFuture(row.resetAt, t, locale);
+  const displayPercent = showRemaining ? 100 - row.percent : row.percent;
+  const remainingText = t("quota.remainingPercent", { pct: new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(displayPercent) });
   return (
     <div className={`quota-stacked-row${warn ? " quota-stacked-row--warn" : ""}${exhausted ? " quota-stacked-row--exhausted" : ""}`}>
       <div className="quota-stacked-head">
@@ -419,11 +426,12 @@ function StackedQuotaRow({ row, threshold, t, locale, incomplete }: {
         <span className="quota-stacked-reset muted">{resetText}</span>
       </div>
       <div className="quota-stacked-bar-row">
-        <div className="bar quota-stacked-bar">
-          <div className={`bar-fill ${color}`} style={barFillStyle(row.percent)} />
+        <div className="bar quota-stacked-bar" role="progressbar" aria-label={row.limitLabel} aria-valuemin={0} aria-valuemax={100} aria-valuenow={displayPercent}
+          aria-valuetext={showRemaining ? remainingText : t("quota.usedPercent", { pct: Math.round(row.percent) })}>
+          <div className={`bar-fill ${color}`} style={barFillStyle(displayPercent)} />
         </div>
         <span className={`quota-stacked-used${warn ? " quota-stacked-used--warn" : ""}`}>
-          {t("quota.usedPercent", { pct: Math.round(row.percent) })}
+          {showRemaining ? remainingText : t("quota.usedPercent", { pct: Math.round(row.percent) })}
         </span>
       </div>
       {exhausted && (

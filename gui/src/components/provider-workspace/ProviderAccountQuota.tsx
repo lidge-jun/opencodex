@@ -5,7 +5,7 @@ import { ProviderCapacityQuota } from "./ProviderCapacityQuota";
 import type { AccountQuotaReading } from "./types";
 
 /** The same reading states and credit/window renderer for current and all-account views. */
-export default function ProviderAccountQuota({ quota: rawQuota, quotaMode, quotaUnavailable, quotaPending }: AccountQuotaReading) {
+export default function ProviderAccountQuota({ quota: rawQuota, quotaMode, quotaUnavailable, quotaPending, source }: AccountQuotaReading & { source?: string }) {
   const t = useT();
   const quota = accountQuotaFromReport({ quota: rawQuota });
   if (quotaMode === "unsupported") {
@@ -17,7 +17,7 @@ export default function ProviderAccountQuota({ quota: rawQuota, quotaMode, quota
     {quotaUnavailable && <p className="muted pwi-auth-acct-quota-stale">{t("pws.accountQuotaUnavailable")}</p>}
     {quota || pending ? (
       <ProviderCapacityQuota
-        report={{ quota, updatedAt: quota?.updatedAt, ...(quotaMode === "passive" ? { observed: true } : {}) }}
+        report={{ source, quota, updatedAt: quota?.updatedAt, ...(quotaMode === "passive" ? { observed: true } : {}) }}
         pending={pending && !quota}
       />
     ) : !quotaUnavailable && (

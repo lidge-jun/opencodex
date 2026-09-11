@@ -77,9 +77,12 @@ type EnrichedProviderCache = Map<string, OcxProviderConfig>;
  * not a text-only model and must not be widened to image through the vision sidecar.
  */
 export function isModelVisionSidecarConsumer(
-  provider: Pick<OcxProviderConfig, "noVisionModels" | "modelInputModalities">,
+  provider: Pick<OcxProviderConfig, "adapter" | "noVisionModels" | "modelInputModalities">,
   modelId: string,
 ): boolean {
+  // This transport accepts text only, regardless of a vendor model's native capability.
+  // Keep catalog, input adaptation and describer eligibility aligned for every account/alias.
+  if (provider.adapter === "zcode") return true;
   if (modelInList(provider.noVisionModels, modelId)) return true;
   const modalities = modelRecordValue(provider.modelInputModalities, modelId);
   return Array.isArray(modalities) && modalities.includes("text") && !modalities.includes("image");

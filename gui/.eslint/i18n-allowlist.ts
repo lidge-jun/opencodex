@@ -10,6 +10,7 @@ const BRAND_LITERALS = new Set([
   "Anthropic",
   "GitHub",
   "Codex",
+  "ZCode Desktop",
   "OpenRouter",
   "Ollama",
   "xAI",

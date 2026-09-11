@@ -10,6 +10,7 @@ import type { OcxParsedRequest, OcxProviderConfig } from "../../src/types";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
 
 const EXPECTED_ADAPTER_NAMES = {
+  zcode: "zcode",
   codebuddy: "codebuddy",
   "command-code": "command-code",
   "openai-chat": "openai-chat",

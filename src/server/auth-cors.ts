@@ -588,6 +588,10 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
     return "provider must be a plain object";
   }
   const raw = provider as Record<string, unknown>;
+  if (raw.zcodeAccountId !== undefined && (raw.adapter !== "zcode" || typeof raw.zcodeAccountId !== "string"
+    || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(raw.zcodeAccountId))) {
+    return "zcodeAccountId must identify a saved ZCode account.";
+  }
   const pinsError = providerReasoningPinsConfigError(raw);
   if (pinsError) return pinsError;
   for (const field of FORBIDDEN_PROVIDER_RUNTIME_FIELDS) {
@@ -785,7 +789,8 @@ export function copyIfDefined<K extends keyof OcxProviderConfig>(
 type ProviderConfigFieldPolicy = "editor" | "redacted" | "runtime";
 
 const PROVIDER_CONFIG_FIELD_POLICY = {
-  alias: "editor",
+  zcodeAccountId: "editor",
+    alias: "editor",
   modelAliases: "editor",
   modelDisplayNames: "editor",
   defaultAliases: "editor",

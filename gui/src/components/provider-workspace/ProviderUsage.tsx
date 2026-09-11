@@ -138,7 +138,7 @@ export default function ProviderUsage({ item, usageTotals, quotaReport, currentQ
         </div>
       )}
 
-      <ProviderCurrentQuota key={`${item.name}:${quotaIdentity ?? ""}`} report={quotaReport} reading={currentQuotaReading} onRefreshQuota={onRefreshQuota} />
+      <ProviderCurrentQuota item={item} key={`${item.name}:${quotaIdentity ?? ""}`} report={quotaReport} reading={currentQuotaReading} onRefreshQuota={onRefreshQuota} />
     </div>
   );
 }

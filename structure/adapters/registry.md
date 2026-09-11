@@ -32,6 +32,18 @@ The registry records those relationships with `contractParent`. A parent relatio
 
 ## Extension policy
 
+`zcode` uses the direct `zcode` wire and `agent-owned-with-explicit-opt-in` mutation contract.
+Unlike routed function tools, native ZCode actions are informational output only. Its `runTurn`
+sets `replaySafe: false`; accepted failures terminate incomplete rather than becoming automatic
+failover candidates. Launcher authority comes from either the operator environment or a separately persisted,
+GUI-consented Desktop connection. Data-plane requests and ordinary provider configuration cannot
+set command/workspace paths. The managed Desktop bootstrap keeps credential-bearing runtime
+descriptors inside the official child process; the parent sees public model identities only.
+Subscription quota is separately read through the official Desktop host entitlement RPC in a
+short-lived private profile copy, optionally inside Bubblewrap when enabled. Only numeric quota windows leave that process. An advanced launcher
+requires explicit `OCX_ZCODE_DESKTOP_RUNTIME` authority and reuses its own isolated model key;
+quota discovery must not silently import another Desktop account or affect routing policy.
+
 Adding a production adapter requires:
 
 1. one `ADAPTER_REGISTRY` entry with its factory;
@@ -52,3 +64,39 @@ request when a node carries both. Codex's own deferred tool catalog emits exactl
 so the schema is not something a user can fix from configuration (issue #2673).
 
 > Decision record: [ADR-0093](../decisions/ADR-0093-moonshot-ref-with-siblings-normalization.md)
+
+ZCode native tool execution in `src/adapters/zcode/desktop.ts` uses host user permissions by default,
+not client-side tool dispatch. `OCX_ZCODE_SANDBOX=1` explicitly enables the optional
+Bubblewrap workspace boundary; harness restrictions apply where the native process runs.
+
+## ZCode saved accounts
+
+`src/adapters/zcode/accounts.ts` stores private UUID-scoped metadata and official profiles.
+`src/adapters/zcode/native-oauth.ts` and `src/adapters/zcode/oauth-bootstrap.cjs` invoke only
+ZCode's installed host OAuth/credential services; authorization URLs and safe stage codes are
+projected to the browser, never tokens. The official cached-session restore and Coding Plan
+refresh run before account use. Disabled/unavailable vendor profiles remain unavailable.
+
+The provider's `zcodeAccountId` is an exact binding through routing, catalog discovery,
+app-server settings, session/DB scope and quota reads. An invalid or revoked binding fails
+closed, never to the legacy Desktop profile or another account. Legacy unbound `zcode`
+retains its previous profile. Account providers do not participate in an implicit pool.
+Native tools still run on the host by default; optional OS sandboxing is independent of
+profile separation and does not turn the latter into a security boundary.
+
+## ZCode vision input adaptation
+
+`src/adapters/base.ts` exposes a vision-only exception to the native-agent sidecar gate.
+ZCode sets `allowVisionSidecar: true` while retaining `allowExternalSidecars: false`.
+`src/server/responses/core.ts` resolves the configured vision helper and rewrites images before
+calling the official agent; search/image/video generation remain native-agent-owned.
+`src/vision/eligibility.ts` classifies every ZCode transport model as a sidecar consumer,
+including renamed/account-bound providers and Flash. The shared catalog predicate advertises
+sidecar-backed image input and excludes these models from describer selection. Disabled or
+unavailable vision uses explicit omission markers; recursion protection and quota/cancellation
+bounds remain in the shared vision path. This does not implement native image support in ZCode.
+
+The hardened ZCode boundary accepts only exact active-session events, canonicalizes protected paths in
+optional sandbox mode, distinguishes unavailable quota probes from valid empty entitlements, requires
+unique provider bindings and GUI-session-only Desktop metadata, and disables caller-tool capability
+for every combo containing a ZCode target.

@@ -42,3 +42,9 @@ describe("isModelTextOnly (#1024)", () => {
     expect(isModelTextOnly(provider({ modelInputModalities: { "base-model": ["text"] } }), "base-model:extended")).toBe(true);
   });
 });
+
+test("ZCode transport requires vision adaptation for every model even with native image metadata", () => {
+  for (const id of ["builtin:zai-coding-plan/GLM-5.3", "builtin:zai-coding-plan/GLM-5.3-Flash", "future-model"]) {
+    expect(isModelTextOnly(provider({adapter:"zcode",modelInputModalities:{[id]:["text","image"]}}),id)).toBe(true);
+  }
+});

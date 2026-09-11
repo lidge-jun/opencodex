@@ -1,3 +1,4 @@
+import { discoverZcodeModels } from "../../adapters/zcode/settings";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
@@ -704,6 +705,14 @@ function canonicalOpenAiBudgetPatchError(
 
 export async function handleProviderRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, principal, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
+  if (url.pathname === "/api/zcode-accounts" || url.pathname.startsWith("/api/zcode-accounts/")) {
+    const { handleZcodeAccountRoutes } = await import("./zcode-account-routes");
+    return handleZcodeAccountRoutes(ctx);
+  }
+  if (url.pathname === "/api/zcode-desktop" || url.pathname.startsWith("/api/zcode-desktop/")) {
+    const { handleZcodeDesktopRoutes } = await import("./zcode-desktop-routes");
+    return handleZcodeDesktopRoutes(ctx);
+  }
 
   if (url.pathname === "/api/provider-quotas" && req.method === "GET") {
     const forceRefresh = url.searchParams.get("refresh") === "1" || url.searchParams.get("refresh") === "true";
@@ -1373,6 +1382,16 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         models: live.models.length,
         message: `Connected. ${live.models.length} models.`,
       });
+    }
+    if (prov.adapter === "zcode") {
+      try {
+        const models = discoverZcodeModels(prov.zcodeAccountId);
+        return jsonResponse({ ok: models.length > 0, models: models.length, latencyMs: 0,
+          message: "Local catalog loaded. Account inference is validated only by an explicit agent turn." });
+      } catch {
+        return jsonResponse({ ok: false, latencyMs: 0,
+          error: "ZCode isolated launcher, opt-in or model settings are unavailable. See the ZCode provider setup guide." });
+      }
     }
     if (prov.adapter === "qoder") {
       const started = Date.now();

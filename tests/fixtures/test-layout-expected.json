@@ -1183,10 +1183,16 @@
   "yaml-fragment-source.test.ts": "config",
   "z-fulfill.test.ts": "images",
   "z-handler-activation.test.ts": "images",
+  "zcode-adapter.test.ts": "providers",
   "zcode-client.test.ts": "providers",
+  "zcode-desktop-routes.test.ts": "providers",
+  "zcode-desktop.test.ts": "providers",
+  "zcode-routing.test.ts": "providers",
+  "zcode-transport.test.ts": "providers",
   "zhipu-bigmodel-provider.test.ts": "providers",
   "zhipu-bigmodel-responses-quota.test.ts": "providers",
   "zz-ci-api-usage-isolation.test.ts": "ci-workflows",
   "zz-ci-storage-policy-isolation.test.ts": "ci-workflows",
-  "zz-pr-coderabbit-readiness-revalidation.test.ts": "ci-workflows"
+  "zz-pr-coderabbit-readiness-revalidation.test.ts": "ci-workflows",
+  "zcode-quota.test.ts": "providers"
 }

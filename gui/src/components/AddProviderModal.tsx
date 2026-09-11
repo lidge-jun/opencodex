@@ -18,6 +18,7 @@ import type { CatalogLoginHint } from "./provider-catalog/login-hint-visibility"
 import { baseUrlForChoice, matchChoiceId, resolvedBaseUrlForChoice } from "../base-url-choice";
 import { AddProviderOAuthPane } from "./add-provider-oauth-pane";
 import { AddProviderFormPane } from "./add-provider-form-pane";
+import ZcodeDesktopPane from "./ZcodeDesktopPane";
 import { useAddProviderOAuth } from "./use-add-provider-oauth";
 import {
   addProviderModalReducer,
@@ -276,7 +277,9 @@ export default function AddProviderModal({
             }}
           />
         ) : form && (
-          preset.auth === "oauth" && form.authMode === "oauth" ? (
+          preset.id === "zcode" ? (
+            <ZcodeDesktopPane apiBase={apiBase} onConnected={onAdded} onBack={() => dispatch({ type: "back" })} />
+          ) : preset.auth === "oauth" && form.authMode === "oauth" ? (
             <AddProviderOAuthPane
               preset={preset}
               oauthSupported={oauthSupported}
