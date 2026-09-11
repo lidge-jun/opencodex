@@ -244,8 +244,12 @@ export function isTransientConsoleGoUploadRejection(opts: {
   } catch {
     return false;
   }
-  const error = (payload as { error?: unknown } | null)?.error;
-  if (!error || typeof error !== "object" || Array.isArray(error)) return false;
-  const message = (error as { message?: unknown }).message;
-  return typeof message === "string" && CONSOLE_UPLOAD_REFUSAL_RE.test(message.trim());
+ const error = (payload as { error?: unknown } | null)?.error;
+ if (!error || typeof error !== "object" || Array.isArray(error)) return false;
+  // The whole envelope, not just the sentence: Console always answers this refusal as
+  // invalid_request_error with a null param, so a partial envelope is a different error.
+  const envelope = error as { param?: unknown; type?: unknown; message?: unknown };
+  if (envelope.type !== "invalid_request_error" || envelope.param !== null) return false;
+  // Matched without trimming: padding means the gateway wrapped or appended something.
+  return typeof envelope.message === "string" && CONSOLE_UPLOAD_REFUSAL_RE.test(envelope.message);
 }

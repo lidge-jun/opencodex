@@ -275,5 +275,20 @@ describe("Console Go transient upload refusal", () => {
       ...GO_ROUTE,
     })).toBe(false);
   });
+
+  test("rejects partial envelopes and padded messages", () => {
+    const withError = (error: unknown) => JSON.stringify({ model: "muse-spark-1.3-contributor", error });
+    // type carries the refusal identity; a partial envelope is a different error.
+    expect(isTransientConsoleGoUploadRejection({ status: 400, errorBody: withError({ param: null, message: GO_MESSAGE }), ...GO_ROUTE })).toBe(false);
+    expect(isTransientConsoleGoUploadRejection({ status: 400, errorBody: withError({ param: null, type: "server_error", message: GO_MESSAGE }), ...GO_ROUTE })).toBe(false);
+    // param must be present and null.
+    expect(isTransientConsoleGoUploadRejection({ status: 400, errorBody: withError({ type: "invalid_request_error", message: GO_MESSAGE }), ...GO_ROUTE })).toBe(false);
+    expect(isTransientConsoleGoUploadRejection({ status: 400, errorBody: withError({ param: "input", type: "invalid_request_error", message: GO_MESSAGE }), ...GO_ROUTE })).toBe(false);
+    // Padding means the gateway wrapped or appended something.
+    expect(isTransientConsoleGoUploadRejection({ status: 400, errorBody: withError({ param: null, type: "invalid_request_error", message: " " + GO_MESSAGE }), ...GO_ROUTE })).toBe(false);
+    expect(isTransientConsoleGoUploadRejection({ status: 400, errorBody: withError({ param: null, type: "invalid_request_error", message: GO_MESSAGE + "\n" }), ...GO_ROUTE })).toBe(false);
+    // The exact canonical envelope still matches.
+    expect(isTransientConsoleGoUploadRejection({ status: 400, errorBody: envelope(GO_MESSAGE), ...GO_ROUTE })).toBe(true);
+  });
 });
 
