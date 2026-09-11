@@ -233,3 +233,11 @@ test("saved account routing and settings are explicit and never fall back to Des
   expect(desktopRoutingModelIds(a.id)).toEqual([]);
   expect(desktopRoutingModelIds(b.id)).toEqual(["builtin:zai/work-model"]);
 });
+
+test("ZCode catalog advertises sidecar-backed attachments for legacy and account providers", async () => {
+  const {applyProviderConfigHints} = await import("../../src/codex/catalog/provider-fetch");
+  for(const name of ["zcode","work-account"]) {
+    const result = applyProviderConfigHints(name,{adapter:"zcode",authMode:"local",baseUrl:"https://zcode.z.ai"},{provider:name,id:"builtin:zai-coding-plan/GLM-5.3-Flash",inputModalities:["text"]});
+    expect(result.inputModalities).toContain("image");
+  }
+});

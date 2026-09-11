@@ -73,3 +73,15 @@ closed, never to the legacy Desktop profile or another account. Legacy unbound `
 retains its previous profile. Account providers do not participate in an implicit pool.
 Native tools still run on the host by default; optional OS sandboxing is independent of
 profile separation and does not turn the latter into a security boundary.
+
+## ZCode vision input adaptation
+
+`src/adapters/base.ts` exposes a vision-only exception to the native-agent sidecar gate.
+ZCode sets `allowVisionSidecar: true` while retaining `allowExternalSidecars: false`.
+`src/server/responses/core.ts` resolves the configured vision helper and rewrites images before
+calling the official agent; search/image/video generation remain native-agent-owned.
+`src/vision/eligibility.ts` classifies every ZCode transport model as a sidecar consumer,
+including renamed/account-bound providers and Flash. The shared catalog predicate advertises
+sidecar-backed image input and excludes these models from describer selection. Disabled or
+unavailable vision uses explicit omission markers; recursion protection and quota/cancellation
+bounds remain in the shared vision path. This does not implement native image support in ZCode.

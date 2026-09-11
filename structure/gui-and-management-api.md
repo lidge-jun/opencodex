@@ -517,3 +517,7 @@ part of this flow. Reconnect retains custom provider settings and rejects a diff
 Rename changes only generated labels; removal refuses busy/referenced accounts. In-progress
 OAuth jobs expire and do not survive restart; saved account profiles and bindings do.
 See [the ZCode account runtime contract](adapters/registry.md#zcode-saved-accounts).
+
+For ZCode, input-image description is the explicit exception to native-agent helper exclusion;
+see [ZCode vision input adaptation](adapters/registry.md#zcode-vision-input-adaptation). The configured
+vision provider may consume its own quota; main inference remains in official ZCode.

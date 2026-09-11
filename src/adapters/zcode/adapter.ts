@@ -65,6 +65,7 @@ export function createZcodeAdapter(provider: OcxProviderConfig, deps: ZcodeAdapt
     name: "zcode",
     replaySafe: false,
     allowExternalSidecars: false,
+    allowVisionSidecar: true,
     buildRequest() { throw new Error("ZCode uses its local app-server transport, not HTTP."); },
     async *parseStream() { yield { type: "error", message: "ZCode requires runTurn.", retryable: false }; },
     async runTurn(parsed, incoming, emit) {

@@ -11,7 +11,7 @@ exports OpenCodex models into ZCode Desktop. Enabling one does not enable the ot
 
 ZCode executes its own file and command tools. OpenCodex streams text, reasoning and
 informational tool progress; it never sends those native actions back to the calling client
-as executable function calls. Client tool catalogs, tool-result input, images and explicit
+as executable function calls. Client tool catalogs, tool-result input and explicit
 `tool_choice` constraints are not supported by this first version.
 
 This is an optional local transport, not a hosted API or a subscription-token bridge.
@@ -19,9 +19,20 @@ Only the official ZCode runtime communicates with Z.AI. Protocol compatibility w
 with ZCode CLI **0.16.5**, shipped in ZCode Desktop **3.10.2** on Linux. The app-server
 protocol is private and may change; unsupported framing fails closed.
 
-OpenCodex's vision, search, image and video sidecars are not used for this provider: they must
-not replace an unsupported native operation with a direct API call. There is no direct-API
-fallback. This describes the technical path, not a guarantee of promotion eligibility, billing
+Attached images are described by the **vision sidecar configured in OpenCodex** before the
+main request reaches ZCode. This helper can consume quota on its own configured provider;
+the main GLM request still runs through official ZCode, never a direct Z.AI API fallback.
+Search, image-generation and video-generation sidecars remain disabled for this native agent.
+
+The ZCode bridge itself accepts text, including for GLM-5.3-Flash: selecting Flash does not
+make this transport image-capable. Neither model is offered as its own vision describer.
+Configure an image-capable helper under **Dashboard → Vision sidecar**; existing backend/model
+selection is respected. If vision is disabled, unavailable, capped or fails, images are replaced
+with explicit unavailable-description markers rather than being silently passed to GLM or
+presented as successfully analyzed. Unsupported video input and client tool results are not
+converted into fabricated descriptions.
+
+ This describes the technical path, not a guarantee of promotion eligibility, billing
 or subscription terms; those remain the vendor's policy.
 
 ## Connect from the dashboard (Linux)

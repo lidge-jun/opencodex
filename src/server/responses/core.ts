@@ -4538,10 +4538,11 @@ async function handleResponsesInner(
   }
 
   let openAiSidecar: ResolvedOpenAiForwardSidecar | undefined;
-  // Opt-in native agents own the entire execution path. Do not turn an unsupported attachment
-  // into a separate direct-API inference (or resolve helper credentials) before their adapter.
+  // Native agents retain tool execution. An explicit vision-only capability allows the
+  // configured describer to turn input images into text, without enabling other helper tools.
   const nativeAgentOwnsExecution = adapter.allowExternalSidecars === false;
-  const needsOpenAiVision = !nativeAgentOwnsExecution && shouldResolveOpenAiVisionSidecar(config, route.provider, route.modelId, parsed);
+  const allowsVisionSidecar = !nativeAgentOwnsExecution || adapter.allowVisionSidecar === true;
+  const needsOpenAiVision = allowsVisionSidecar && shouldResolveOpenAiVisionSidecar(config, route.provider, route.modelId, parsed);
   const needsOpenAiSearch = !nativeAgentOwnsExecution && shouldResolveOpenAiWebSearchSidecar(config, parsed, isPassthrough);
   if (needsOpenAiVision || needsOpenAiSearch) {
     try {
@@ -4591,7 +4592,7 @@ async function handleResponsesInner(
   // surface (whose bridge rebuilds headers) or as the raw header for native
   // Responses callers. Marked + text-only routed model → strip, depth cap 1.
   const visionDescribeTerminal = options.visionDescribeTerminal === true;
-  const visionPlan = visionDescribeTerminal || nativeAgentOwnsExecution
+  const visionPlan = visionDescribeTerminal || !allowsVisionSidecar
     ? undefined
     : planVisionSidecar(config, route.provider, route.modelId, parsed, openAiSidecar, {
       admission: options.admission, codexAuthPolicy: options.codexAuthPolicy,
@@ -4606,7 +4607,7 @@ async function handleResponsesInner(
       recordSidecarOutcome,
       translatorBudget,
     );
-  } else if (!nativeAgentOwnsExecution && isModelTextOnly(route.provider, route.modelId)) {
+  } else if (allowsVisionSidecar && isModelTextOnly(route.provider, route.modelId)) {
     // Sidecar-covered model but NO plan (no forward provider / missing forwarded auth / sidecar
     // disabled): fail closed — never forward raw images to a text-only upstream.
     stripImagesInPlace(parsed, translatorBudget);

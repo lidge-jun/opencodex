@@ -86,6 +86,7 @@ describe("ZCode local agent", () => {
     expect(adapter.fetchResponse).toBeUndefined();
     expect(adapter.replaySafe).toBe(false);
     expect(adapter.allowExternalSidecars).toBe(false);
+    expect(adapter.allowVisionSidecar).toBe(true);
     expect(() => adapter.buildRequest(request(), { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }))
       .toThrow("not HTTP");
     expect(modelCapabilityFields({ supportsToolUse: false }).capabilities.supports_tool_use).toBe(false);
