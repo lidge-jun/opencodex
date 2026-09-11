@@ -157,7 +157,7 @@ describe("opencode-go DeepSeek json_schema downgrade", () => {
 
   test("the preset reaches the routed provider", () => {
     expect(buildWith("deepseek-v4-flash").provider.noJsonSchemaModels)
-      .toEqual(["deepseek-v4-pro", "deepseek-v4-flash"]);
+      .toEqual(["deepseek-v4.1-flash", "deepseek-v4-pro", "deepseek-v4-flash"]);
   });
 
   test("a listed DeepSeek route is downgraded to json_object", () => {

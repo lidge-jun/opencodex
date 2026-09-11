@@ -73,7 +73,7 @@ describe("provider registry parity", () => {
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].noVisionModels).toEqual([
       "glm-5.3",
       "glm-5.2", "glm-5", "glm-5.1",
-      "deepseek-v4-flash", "deepseek-v4-pro",
+      "deepseek-v4.1-flash", "deepseek-v4-flash", "deepseek-v4-pro",
       "mimo-v2-pro", "mimo-v2.5-pro",
       "minimax-m2.5", "minimax-m2.7",
       "qwen3.7-max",
@@ -84,13 +84,52 @@ describe("provider registry parity", () => {
     // an operator no longer has to disable structured output by hand. Registry-only means
     // it is asserted here against the raw entry, not the derived key-login map.
     const zenDeepseekJsonSchema: Record<string, string[]> = {
-      "opencode-go": ["deepseek-v4-pro", "deepseek-v4-flash"],
-      "opencode-zen": ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4-flash-free"],
-      "opencode-free": ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4-flash-free"],
+      "opencode-go": ["deepseek-v4.1-flash", "deepseek-v4-pro", "deepseek-v4-flash"],
+      "opencode-zen": ["deepseek-v4.1-flash", "deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4-flash-free"],
+      "opencode-free": ["deepseek-v4.1-flash", "deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4-flash-free"],
     };
     for (const [id, expected] of Object.entries(zenDeepseekJsonSchema)) {
       expect(PROVIDER_REGISTRY.find(entry => entry.id === id)?.noJsonSchemaModels).toEqual(expected);
     }
+    /*
+     * DeepSeek's V4.1 transition (2026-09-10) split the spelling by who serves the route:
+     * the first-party API answers to `deepseek-flash`, the Zen gateway exposes
+     * `deepseek-v4.1-flash`. A single shared list cannot express that, and the earlier
+     * draft that tried it would have leaked the gateway spelling into the native preset.
+     * Pin both directions, including the negatives — a future edit that collapses the two
+     * constants back together fails here rather than in a user's request.
+     */
+    const nativeDeepseek = PROVIDER_REGISTRY.find(entry => entry.id === "deepseek");
+    expect(nativeDeepseek?.defaultModel).toBe("deepseek-flash");
+    expect(nativeDeepseek?.models).toContain("deepseek-flash");
+    for (const map of [
+      nativeDeepseek?.modelReasoningEfforts,
+      nativeDeepseek?.modelReasoningEffortMap,
+      nativeDeepseek?.modelSupportsReasoningSummaries,
+      nativeDeepseek?.modelContextWindows,
+    ]) {
+      expect(Object.keys(map ?? {})).toContain("deepseek-flash");
+    }
+    expect(nativeDeepseek?.preserveReasoningContentModels).toContain("deepseek-flash");
+    expect(nativeDeepseek?.noVisionModels).toContain("deepseek-flash");
+    // The new id keeps the Flash ladder, not the Pro one, through isDeepseekFlashModel.
+    expect(nativeDeepseek?.modelReasoningEfforts?.["deepseek-flash"])
+      .toEqual(nativeDeepseek?.modelReasoningEfforts?.["deepseek-v4-flash"]);
+
+    const zenGo = PROVIDER_REGISTRY.find(entry => entry.id === "opencode-go");
+    expect(zenGo?.preserveReasoningContentModels).toContain("deepseek-v4.1-flash");
+    expect(zenGo?.noVisionModels).toContain("deepseek-v4.1-flash");
+    expect(Object.keys(zenGo?.modelReasoningEfforts ?? {})).toContain("deepseek-v4.1-flash");
+
+    // Negatives: neither spelling crosses into the other side.
+    expect(JSON.stringify(nativeDeepseek)).not.toContain("deepseek-v4.1-flash");
+    for (const id of ["opencode-go", "opencode-zen", "opencode-free"]) {
+      expect(JSON.stringify(PROVIDER_REGISTRY.find(entry => entry.id === id)))
+        .not.toContain("\"deepseek-flash\"");
+    }
+    // Vendor-hosted rosters publish on their own schedule and keep the legacy set.
+    expect(PROVIDER_REGISTRY.find(entry => entry.id === "volcengine-coding-plan")?.preserveReasoningContentModels)
+      .toEqual(["deepseek-v4-pro", "deepseek-v4-flash"]);
     // A model can only be gated onto the thinking-budget or thinking-toggle wire if the same
     // preset also gives it an effort ladder — otherwise the adapter translates effort into a
     // wire field for a model whose picker is empty. opencode-go carried the shared budget list
@@ -194,10 +233,11 @@ describe("provider registry parity", () => {
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-flash"]?.low).toBe("low");
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-flash"]?.xhigh).toBe("high");
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-flash"]?.max).toBe("max");
-    expect(KEY_LOGIN_PROVIDERS.deepseek.preserveReasoningContentModels).toEqual(["deepseek-v4-pro", "deepseek-v4-flash"]);
+    expect(KEY_LOGIN_PROVIDERS.deepseek.preserveReasoningContentModels)
+      .toEqual(["deepseek-flash", "deepseek-v4-pro", "deepseek-v4-flash"]);
     // Issue #88: every DeepSeek API model is text-only input — the vision sidecar covers them.
     expect(KEY_LOGIN_PROVIDERS.deepseek.noVisionModels).toEqual([
-      "deepseek-chat", "deepseek-reasoner", "deepseek-v4-pro", "deepseek-v4-flash",
+      "deepseek-chat", "deepseek-reasoner", "deepseek-flash", "deepseek-v4-pro", "deepseek-v4-flash",
     ]);
   });
 
@@ -306,7 +346,7 @@ describe("provider registry parity", () => {
     expect(deepseek).toMatchObject({
       adapter: "openai-chat",
       baseUrl: "https://api.deepseek.com",
-      defaultModel: "deepseek-v4-flash",
+      defaultModel: "deepseek-flash",
       modelContextWindows: {
         "deepseek-v4-flash": 1_048_576,
         "deepseek-v4-pro": 1_048_576,
