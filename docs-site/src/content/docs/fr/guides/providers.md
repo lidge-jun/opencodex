@@ -370,7 +370,7 @@ modèle ; les flux mal formés ou partiels sont fermés comme incomplets, et non
 > des ressources d'embedding, d'image, de vidéo et de 3D, la passerelle Coding renvoie le même catalogue étendu,
 > et la passerelle Agent Plan ne possède aucune ressource `/models`. Le modèle par défaut de la route facturée à
 > l'usage est `doubao-seed-2-1-pro-260628` ; son catalogue sélectionné comprend également les modèles de texte
-> DeepSeek et GLM actuels. Coding Plan utilise `ark-code-latest` par défaut, et Agent Plan `deepseek-v4-pro`.
+> DeepSeek et GLM actuels. Coding Plan utilise `ark-code-latest` par défaut, et Agent Plan `deepseek-v4-flash`.
 
 > **Restriction d'utilisation des forfaits Volcengine :** selon la documentation de Volcengine, les quotas
 > Coding Plan et Agent Plan ne sont valables que dans les outils de programmation par IA pris en charge. Elle
@@ -604,7 +604,7 @@ native d'Ollama (`POST /api/chat`) plutôt que via la surface compatible OpenAI,
 liste des modèles auprès du fournisseur : les nouveaux modèles Ollama Cloud apparaissent sans
 modifier la configuration. opencodex classe les modèles cloud selon leurs
 capacités visuelles, afin que le [service auxiliaire de vision](/fr/guides/sidecars/) n'intervienne que pour les modèles
-exclusivement textuels. Ces derniers, par exemple `glm-5.2`, `deepseek-v4-pro`, `gpt-oss`, `qwen3-coder`,
+exclusivement textuels. Ces derniers, par exemple `glm-5.2`, `deepseek-v4-flash`, `gpt-oss`, `qwen3-coder`,
 `minimax-m2.x` et `nemotron-3-*`, figurent dans `noVisionModels` ; les modèles à vision native, comme
 `kimi-k2.6`, `minimax-m3`, `gemma4`, `qwen3.5` et `gemini-3-flash-preview`, n'y figurent pas. La correspondance
 tolère les balises `:size` d'Ollama : `gpt-oss` couvre donc `gpt-oss:120b` et `gpt-oss:20b`.

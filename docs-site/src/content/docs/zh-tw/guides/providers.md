@@ -320,7 +320,7 @@ incomplete 關閉，不會被誤報為成功。
 > pay-as-you-go 費用。preset 使用 curated static model catalog，因為 Ark `/models` 也包含 embedding、
 > image、video 與 3D resource，Coding gateway 會回傳相同 broad catalog，而 Agent Plan gateway 沒有
 > `/models` resource。Pay-as-you-go 預設 `doubao-seed-2-1-pro-260628`，curated catalog 也包含目前的
-> DeepSeek 與 GLM text model。Coding Plan 預設 `ark-code-latest`；Agent Plan 預設 `deepseek-v4-pro`。
+> DeepSeek 與 GLM text model。Coding Plan 預設 `ark-code-latest`；Agent Plan 預設 `deepseek-v4-flash`。
 
 > **Volcengine Plan 使用限制：** Volcengine 文件指出 Coding Plan 與 Agent Plan quota 只能在受支援的
 > AI coding tool 內使用，並警告把 plan key 用於一般 API call 可能導致訂閱停權或帳號封鎖。透過
@@ -507,7 +507,7 @@ key 來自 [ollama.com/settings/keys](https://ollama.com/settings/keys)。openco
 REST API（`POST /api/chat`）連線，而非 OpenAI-compatible 介面，並向 provider 動態探索模型清單，
 因此新的 Ollama Cloud 模型不需改設定就會出現。opencodex 依 vision capability 分類其
 cloud lineup，讓 [vision sidecar](/zh-tw/guides/sidecars/) 只對純文字模型生效。純文字模型，例如
-`glm-5.2`、`deepseek-v4-pro`、`gpt-oss`、`qwen3-coder`、`minimax-m2.x`、`nemotron-3-*`，會列在
+`glm-5.2`、`deepseek-v4-flash`、`gpt-oss`、`qwen3-coder`、`minimax-m2.x`、`nemotron-3-*`，會列在
 `noVisionModels`；原生 vision 模型，例如 `kimi-k2.6`、`minimax-m3`、`gemma4`、`qwen3.5`、
 `gemini-3-flash-preview`，不會列入。matching 可容忍 Ollama 的 `:size` tag，因此 `gpt-oss` 同時涵蓋
 `gpt-oss:120b` 與 `gpt-oss:20b`。

@@ -241,7 +241,7 @@ Cline IDE/CLI 中提供，不能通过 API 使用；`minimax/minimax-m2.5` 是�
 > 视频和 3D 资源，Coding 网关也会返回这份宽泛目录，Agent Plan 网关没有 `/models` 资源。
 > 按量付费默认使用 `doubao-seed-2-1-pro-260628`，静态目录还包含当前 DeepSeek 和 GLM
 > 文本模型。Coding Plan 默认使用 `ark-code-latest`，Agent Plan 默认使用
-> `deepseek-v4-pro`。
+> `deepseek-v4-flash`。
 
 **Chutes 发现：**`chutes` 预设使用 Chutes 固定的共享 OpenAI 兼容 LLM gateway。它读取公开的
 `/v1/models` 目录，仅保留 `supported_features` 包含 `tools` 的记录，保留含 `/` 的原生 model id 与
@@ -438,7 +438,7 @@ Cursor OAuth 和 live model discovery 已在这个实验性 adapter 中启用；
 
 ### Ollama Cloud
 
-Ollama Cloud 是托管（而非本地）的 Ollama，配置地址为 `https://ollama.com/v1`，密钥来自 [ollama.com/settings/keys](https://ollama.com/settings/keys)。opencodex 通过 Ollama 自身的 REST API（`POST /api/chat`）连接，而不是 OpenAI 兼容接口，并从提供方动态发现模型列表，因此新的 Ollama Cloud 模型无需改动配置即可出现。opencodex 按视觉能力对其云端阵容进行分类，使 [vision sidecar](/zh-cn/guides/sidecars/) 仅对纯文本模型生效。纯文本模型（例如 `glm-5.2`、`deepseek-v4-pro`、`gpt-oss`、`qwen3-coder`、`minimax-m2.x`、`nemotron-3-*`）列在 `noVisionModels` 中；原生支持视觉的模型（例如 `kimi-k2.6`、`minimax-m3`、`gemma4`、`qwen3.5`、`gemini-3-flash-preview`）则不在其中。匹配能容忍 Ollama 的 `:size` 标签，因此 `gpt-oss` 涵盖 `gpt-oss:120b` 和 `gpt-oss:20b`。
+Ollama Cloud 是托管（而非本地）的 Ollama，配置地址为 `https://ollama.com/v1`，密钥来自 [ollama.com/settings/keys](https://ollama.com/settings/keys)。opencodex 通过 Ollama 自身的 REST API（`POST /api/chat`）连接，而不是 OpenAI 兼容接口，并从提供方动态发现模型列表，因此新的 Ollama Cloud 模型无需改动配置即可出现。opencodex 按视觉能力对其云端阵容进行分类，使 [vision sidecar](/zh-cn/guides/sidecars/) 仅对纯文本模型生效。纯文本模型（例如 `glm-5.2`、`deepseek-v4-flash`、`gpt-oss`、`qwen3-coder`、`minimax-m2.x`、`nemotron-3-*`）列在 `noVisionModels` 中；原生支持视觉的模型（例如 `kimi-k2.6`、`minimax-m3`、`gemma4`、`qwen3.5`、`gemini-3-flash-preview`）则不在其中。匹配能容忍 Ollama 的 `:size` 标签，因此 `gpt-oss` 涵盖 `gpt-oss:120b` 和 `gpt-oss:20b`。
 
 Ollama 目前在文档中说明结构化输出在 Ollama Cloud 上不受支持。因此对正典 `ollama-cloud`，
 opencodex 会以明确的错误拒绝结构化输出请求（`text.format`），而不是悄悄返回不受约束的自由

@@ -250,7 +250,7 @@ Volcengine Agent Plan は `openai-responses` アダプターでネイティブ R
 > Agent Plan ゲートウェイには `/models` リソースがありません。従量課金のデフォルトは
 > `doubao-seed-2-1-pro-260628` で、静的カタログには現在の DeepSeek と GLM のテキストモデルも
 > 含まれます。Coding Plan のデフォルトは `ark-code-latest`、Agent Plan は
-> `deepseek-v4-pro` です。
+> `deepseek-v4-flash` です。
 
 **Chutes の discovery:** `chutes` preset は Chutes の固定された共有 OpenAI 互換 LLM gateway を使います。
 公開 `/v1/models` catalog から `supported_features` が `tools` を示す行だけを残し、スラッシュを含む
@@ -427,7 +427,7 @@ Ollama Cloud はホステッド型(ローカルではない)Ollama です。`htt
 サーフェスではなく Ollama 自身の REST API(`POST /api/chat`)で接続し、モデル一覧はプロバイダーから
 動的に取得するため、新しい Ollama Cloud モデルは設定変更なしで現れます。opencodex はクラウド
 ラインナップをビジョン機能で分類し、[ビジョンサイドカー](/ja/guides/sidecars/)がテキスト専用モデルにのみ
-動作するようにします。テキスト専用モデル(例: `glm-5.2`、`deepseek-v4-pro`、`gpt-oss`、`qwen3-coder`、
+動作するようにします。テキスト専用モデル(例: `glm-5.2`、`deepseek-v4-flash`、`gpt-oss`、`qwen3-coder`、
 `minimax-m2.x`、`nemotron-3-*`)は `noVisionModels` に列挙され、ビジョンネイティブモデル(例:
 `kimi-k2.6`、`minimax-m3`、`gemma4`、`qwen3.5`、`gemini-3-flash-preview`)は含まれません。マッチングは
 Ollama の `:size` タグに寛容なので `gpt-oss` は `gpt-oss:120b` と `gpt-oss:20b` の両方を含みます。

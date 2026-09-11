@@ -409,7 +409,7 @@ bitirir ancak son Responses olayını atlarsa opencodex beş saniyelik model
 kapsamlı bir yetkisiz kullanım onarımı uygular; hatalı biçimlendirilmiş veya
 kısmi akışlar başarılı olarak bildirilmek yerine tamamlanmamış olarak kapanır.
 
-> **Üç Volcengine faturalandırma rotası:** `volcengine` kullandıkça öde Ark API'sidir, `volcengine-coding-plan` Coding Plan kotasını tüketir ve `volcengine-agent-plan` Agent Plan kotasını tüketir. Aynı ürün için verilen anahtarı ve uç noktayı kullanın; sıradan `/api/v3` uç noktası bir Plan aboneliği mevcut olduğunda bile kullandıkça öde ücretlerine neden olabilir. Önayarlar özenle seçilmiş statik model katalogları kullanır çünkü Ark'ın `/models` yanıtı yerleştirme, görsel, video ve 3D kaynaklarını da içerir, Coding ağ geçidi aynı geniş kataloğu döndürür ve Agent Plan ağ geçidinin `/models` kaynağı yoktur. Kullandıkça öde varsayılan olarak `doubao-seed-2-1-pro-260628`'dir; seçilmiş kataloğu güncel DeepSeek ve GLM metin modellerini de içerir. Coding Plan varsayılan olarak `ark-code-latest`, Agent Plan ise varsayılan olarak `deepseek-v4-pro`'dur.
+> **Üç Volcengine faturalandırma rotası:** `volcengine` kullandıkça öde Ark API'sidir, `volcengine-coding-plan` Coding Plan kotasını tüketir ve `volcengine-agent-plan` Agent Plan kotasını tüketir. Aynı ürün için verilen anahtarı ve uç noktayı kullanın; sıradan `/api/v3` uç noktası bir Plan aboneliği mevcut olduğunda bile kullandıkça öde ücretlerine neden olabilir. Önayarlar özenle seçilmiş statik model katalogları kullanır çünkü Ark'ın `/models` yanıtı yerleştirme, görsel, video ve 3D kaynaklarını da içerir, Coding ağ geçidi aynı geniş kataloğu döndürür ve Agent Plan ağ geçidinin `/models` kaynağı yoktur. Kullandıkça öde varsayılan olarak `doubao-seed-2-1-pro-260628`'dir; seçilmiş kataloğu güncel DeepSeek ve GLM metin modellerini de içerir. Coding Plan varsayılan olarak `ark-code-latest`, Agent Plan ise varsayılan olarak `deepseek-v4-flash`'dur.
 
 > **Volcengine Plan kullanım kısıtlaması:** Volcengine, Coding Plan ve Agent Plan kotasını yalnızca desteklenen yapay zeka kodlama araçları içinde geçerli olarak belgeler ve genel API çağrıları için bir plan anahtarı kullanmanın aboneliği askıya alabileceği veya hesabı yasaklayabileceği konusunda uyarır. Codex veya Claude Code'u opencodex üzerinden yönlendirmek belgelenmiş kullanımdır; diğer otomasyonları bir plan anahtarına yönlendirmek değildir. Kullandıkça öde `volcengine` rotası böyle bir kısıtlama taşımaz.
 
@@ -652,7 +652,7 @@ listesini sağlayıcıdan keşfeder; böylece yeni Ollama Cloud modelleri yapıl
 değişikliği olmadan görünür. opencodex, bulut serisini vizyon
 yeteneğine göre sınıflandırır, böylece [vizyon sidecar'ı](/tr/guides/sidecars/)
 yalnızca salt metin modeller için devreye girer. Salt metin modeller (örneğin
-`glm-5.2`, `deepseek-v4-pro`, `gpt-oss`, `qwen3-coder`, `minimax-m2.x`,
+`glm-5.2`, `deepseek-v4-flash`, `gpt-oss`, `qwen3-coder`, `minimax-m2.x`,
 `nemotron-3-*`) `noVisionModels` içinde listelenir; vizyon yerel modeller
 (örneğin `kimi-k2.6`, `minimax-m3`, `gemma4`, `qwen3.5`,
 `gemini-3-flash-preview`) listelenmez. Eşleştirme Ollama'nın `:size`

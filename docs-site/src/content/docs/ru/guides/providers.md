@@ -280,7 +280,7 @@ Volcengine Agent Plan использует нативную конечную т�
 > каталог. У шлюза Agent Plan ресурса `/models` нет. Для pay-as-you-go модель по умолчанию —
 > `doubao-seed-2-1-pro-260628`; его статический каталог также включает актуальные текстовые модели
 > DeepSeek и GLM. Для Coding Plan модель по умолчанию — `ark-code-latest`, для Agent Plan —
-> `deepseek-v4-pro`.
+> `deepseek-v4-flash`.
 
 **Discovery для Chutes.** Пресет `chutes` использует фиксированный общий OpenAI-совместимый LLM
 gateway Chutes. Из публичного каталога `/v1/models` он оставляет только строки, где
@@ -474,7 +474,7 @@ Ollama Cloud — это размещённая в облаке (не локал�
 получает список моделей от провайдера, поэтому новые модели Ollama Cloud появляются без
 изменения конфигурации. opencodex классифицирует её облачную
 линейку по поддержке изображений, чтобы [vision-сайдкар](/ru/guides/sidecars/) включался
-только для текстовых моделей. Текстовые модели (например, `glm-5.2`, `deepseek-v4-pro`, `gpt-oss`,
+только для текстовых моделей. Текстовые модели (например, `glm-5.2`, `deepseek-v4-flash`, `gpt-oss`,
 `qwen3-coder`, `minimax-m2.x`, `nemotron-3-*`) перечислены в `noVisionModels`; модели с нативной
 поддержкой изображений (например, `kimi-k2.6`, `minimax-m3`, `gemma4`, `qwen3.5`,
 `gemini-3-flash-preview`) — нет. Сопоставление терпимо к тегам Ollama вида `:size`, поэтому
