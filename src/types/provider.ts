@@ -774,6 +774,15 @@ export interface OcxProviderConfig {
    */
   requiresReasoningPlaceholderModels?: string[];
   /**
+   * Opt-in: surface upstream thinking as visible reasoning summaries even when the
+   * client did not send `reasoning.summary`. parseRequest hides thinking by default
+   * (Codex omits the field), which strands genuine reasoning — e.g. Gemini `thought`
+   * parts on the google-antigravity (Cloud Code Assist) wire — in hidden replay
+   * envelopes. An explicit client `reasoning.summary: "none"` still wins. Set `false`
+   * to opt a seeded preset back out.
+   */
+  showThinkingSummary?: boolean;
+  /**
    * Opt-in same-target 429 retry policy. Codex itself never retries 429 (it retries 5xx only,
    * openai/codex#30471), and single-key pools have no failover, so the proxy waits and replays
    * the identical request on the same key before any failover. Pre-stream only: a 429 arrives

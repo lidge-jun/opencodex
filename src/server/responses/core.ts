@@ -2514,6 +2514,17 @@ async function applyFinalRouteRequestNormalization(args: {
   // this request will actually use (#404).
   route.provider = resolveOpenCodeGoTransport(route.provider, getOrAllocateRequestSessionLane(req));
   route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire);
+  // Provider-opted visible thinking (e.g. google-antigravity): parseRequest hides thinking
+  // whenever the client omits reasoning.summary, which is the Codex default. A provider that
+  // serves genuine user-facing reasoning opts back into the summary channel here, so thought
+  // parts (Gemini thought, content-channel reasoning_text) reach the client instead of only
+  // the hidden replay envelopes. An explicit client reasoning.summary "none" still wins.
+  if (route.provider.showThinkingSummary === true && parsed.options.hideThinkingSummary === true) {
+    const rawReasoning = (parsed._rawBody as { reasoning?: { summary?: unknown } } | undefined)?.reasoning;
+    const explicitNone = typeof rawReasoning === "object" && rawReasoning !== null
+      && (rawReasoning as { summary?: unknown }).summary === "none";
+    if (!explicitNone) parsed.options.hideThinkingSummary = false;
+  }
   if (preserveAnthropicResponseModel) parsed._responseModelId = responseModelId;
   logCtx.model = route.modelId;
   logCtx.provider = route.providerName;

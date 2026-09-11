@@ -208,6 +208,7 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `preserveReasoningContentModels?` | `string[]` | Models requiring prior assistant `reasoning_content` in chat history. |
 | `reasoningDetailsModels?` | `string[]` | Models whose endpoint returns thinking as a structured `reasoning_details` array (MiniMax M-series with `reasoning_split`); stream deltas are cumulative snapshots that are prefix-diffed, and preserved reasoning replays as a `reasoning_details` array instead of a `reasoning_content` string. |
 | `requiresReasoningPlaceholderModels?` | `string[]` | Models whose upstream rejects a tool_call continuation missing `reasoning_content` (DeepSeek thinking mode); a minimal placeholder is injected when the replay cache misses. Defaults to `preserveReasoningContentModels`; set `[]` to opt out. |
+| `showThinkingSummary?` | `boolean` | Opt-in: surface upstream thinking as visible reasoning summaries even when the client omits `reasoning.summary` (the Codex default, which otherwise keeps thinking in hidden replay envelopes). An explicit client `reasoning.summary: "none"` still wins. Seeded `true` for `google-antigravity`; set `false` to opt back out. |
 | `thinkingToggleModels?` | `string[]` | Chat models using `thinking.enabled` rather than an effort ladder. |
 | `thinkingBudgetModels?` | `string[]` | Chat models using integer `thinking_budget`; effort maps to a budget fraction. |
 | `noVisionModels?` | `string[]` | Text-only models sent through the vision sidecar; matching tolerates an Ollama `:size` tag. |

@@ -887,6 +887,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   autoToolChoiceOnlyModels: "editor",
   preserveReasoningContentModels: "editor",
   requiresReasoningPlaceholderModels: "editor",
+  showThinkingSummary: "editor",
   retryOn429: "editor",
   transientRetryOn5xx: "editor",
   reasoningSplitModels: "editor",

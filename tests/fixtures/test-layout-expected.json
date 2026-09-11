@@ -936,6 +936,7 @@
   "responses-routed-web-search-fields.test.ts": "responses",
   "responses-self-named-namespace-scrub.test.ts": "responses",
   "responses-shadow-intercept.test.ts": "responses",
+  "responses-show-thinking-summary.test.ts": "responses",
   "responses-snapshot-repair-server.test.ts": "responses",
   "responses-snapshot-repair.test.ts": "responses",
   "responses-state-write-amplification.test.ts": "responses",
