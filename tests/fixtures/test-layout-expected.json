@@ -1015,6 +1015,7 @@
   "sidecar-settings-web-search-stream.test.ts": "vision",
   "sidecar-tracker.test.ts": "vision",
   "skill-ocx.test.ts": "ci-workflows",
+  "structure-ssot.test.ts": "ci-workflows",
   "slug-codec.test.ts": "codex-integration",
   "sponsor-presets.test.ts": "providers",
   "sse-client-frame-bounds.test.ts": "responses",

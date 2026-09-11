@@ -424,10 +424,13 @@ import {
   type RoutedNamespaceToolAliases,
 } from "../../responses/namespace-tool-compat";
 import {
+  collectDeclaredBareWireToolNames,
   collectDeclaredNamelessClientCallTypes,
   collectDeclaredWireToolNames,
   collectProviderExecutedCallTypes,
   createUndeclaredToolCallGuardBlockRewrite,
+  normalizeDefaultNamespaceInJson,
+  normalizeDefaultNamespaceInResponse,
   currentTurnWireToolCatalogBody,
   hasExplicitWireToolCatalog,
   undeclaredToolCallMessage,
@@ -4714,6 +4717,7 @@ async function handleResponsesInner(
     );
     const clientExplicitWireToolCatalog = hasExplicitWireToolCatalog(clientToolAuthorizationBody);
     const clientDeclaredWireToolNames = collectDeclaredWireToolNames(clientToolAuthorizationBody);
+    const clientDeclaredBareWireToolNames = collectDeclaredBareWireToolNames(clientToolAuthorizationBody);
     const clientDeclaredNamelessCallTypes = collectDeclaredNamelessClientCallTypes(
       clientToolAuthorizationBody,
     );
@@ -4789,6 +4793,7 @@ async function handleResponsesInner(
     };
     let outboundRequestBody: Record<string, unknown> | undefined;
     const declaredWireToolNames = new Set<string>();
+    const declaredBareWireToolNames = new Set<string>();
     const declaredNamelessClientCallTypes = new Set<string>();
     // `buildToolBridgeMaps` creates a bare alias only when the caller selected exactly one
     // namespaced tool through a bare tool_choice. Restore that request-bounded identity before
@@ -4838,12 +4843,17 @@ async function handleResponsesInner(
       // aliases are authoritative. A continuation's outbound body still contains historical
       // catalogs (and may promote historical tool-search definitions), so it can never widen the
       // current caller snapshot captured above.
+      declaredBareWireToolNames.clear();
       if (replayedInputPrefixLength === 0) {
         for (const name of collectDeclaredWireToolNames(outboundRequestBody)) {
           declaredWireToolNames.add(name);
         }
+        for (const name of collectDeclaredBareWireToolNames(outboundRequestBody)) {
+          declaredBareWireToolNames.add(name);
+        }
       }
       for (const name of clientDeclaredWireToolNames) declaredWireToolNames.add(name);
+      for (const name of clientDeclaredBareWireToolNames) declaredBareWireToolNames.add(name);
       declaredNamelessClientCallTypes.clear();
       if (replayedInputPrefixLength === 0) {
         for (const callType of collectDeclaredNamelessClientCallTypes(outboundRequestBody)) {
@@ -4936,6 +4946,7 @@ async function handleResponsesInner(
         declaredWireToolNames,
         declaredNamelessClientCallTypes,
         providerExecutedCallTypes,
+        declaredBareWireToolNames,
       ) !== undefined) {
         inspectionSawUndeclaredTool = true;
       }
@@ -4973,11 +4984,19 @@ async function handleResponsesInner(
           declaredWireToolNames,
           declaredNamelessClientCallTypes,
           providerExecutedCallTypes,
+          declaredBareWireToolNames,
         ) !== undefined
       ) {
         return;
       }
-      rememberPassthroughResponse?.(replayResponse);
+      const normalizedReplayResponse = (undeclaredToolGuardActive
+        ? normalizeDefaultNamespaceInResponse(
+            replayResponse,
+            declaredWireToolNames,
+            declaredBareWireToolNames,
+          ).value
+        : replayResponse) as typeof replayResponse;
+      rememberPassthroughResponse?.(normalizedReplayResponse);
       const firstCompletion = !inspectedCompletionSeen;
       inspectedCompletionSeen = true;
       if (firstCompletion && (inspectedTerminal === null || firstTerminalAllowsRecall)) {
@@ -5998,6 +6017,7 @@ async function handleResponsesInner(
             declaredWireToolNames,
             declaredNamelessClientCallTypes,
             providerExecutedCallTypes,
+            declaredBareWireToolNames,
           )
           : undefined,
       ].filter((rewrite): rewrite is NonNullable<typeof rewrite> => rewrite !== undefined);
@@ -6198,7 +6218,7 @@ async function handleResponsesInner(
       }
       const text = bounded.text;
       inspectResponseLogJson(logCtx, text);
-      const clientJson = (() => {
+      let clientJson = (() => {
         const restoredNamespace = restoreRoutedNamespaceCallsInJson(
           scrubSelfNamedToolCallNamespaceInJson(
             restoreImageGenCallsInJson(text, imageGenCallAliases),
@@ -6244,6 +6264,7 @@ async function handleResponsesInner(
               declaredWireToolNames,
               declaredNamelessClientCallTypes,
               providerExecutedCallTypes,
+              declaredBareWireToolNames,
             );
           } catch {
             return undefined;
@@ -6252,6 +6273,11 @@ async function handleResponsesInner(
         if (undeclared !== undefined) {
           return formatErrorResponse(502, "upstream_error", undeclaredToolCallMessage(undeclared));
         }
+        clientJson = normalizeDefaultNamespaceInJson(
+          clientJson,
+          declaredWireToolNames,
+          declaredBareWireToolNames,
+        );
       }
       commitReasoningReplayServingRoute();
       try {

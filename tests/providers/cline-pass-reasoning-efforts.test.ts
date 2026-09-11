@@ -9,7 +9,6 @@ const CLINE_PASS_MODELS = [
   "cline-pass/kimi-k3",
   "cline-pass/kimi-k2.7-code",
   "cline-pass/kimi-k2.6",
-  "cline-pass/deepseek-v4-pro",
   "cline-pass/deepseek-v4-flash",
   "cline-pass/mimo-v2.5",
   "cline-pass/mimo-v2.5-pro",

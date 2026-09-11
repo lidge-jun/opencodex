@@ -96,8 +96,10 @@ currently accepted OAuth and API-key provider ids when the name is missing or un
 
 Use the same command to **reauthenticate** after `ocx status` / `ocx doctor` reports
 reauthentication required or a terminal refresh failure (or use Reauthenticate in the dashboard).
-Codex pool accounts are not a public `ocx login` provider — reauthenticate via the dashboard Codex
-account pool (Reauthenticate) or the headless `ocx account reauth` flow instead.
+Codex pool accounts are not one of those OAuth or API-key providers, but `ocx login codex` reaches
+them anyway: it routes to the account-pool login, so `ocx login codex --reauth` is the same thing as
+`ocx account reauth codex`. The dashboard Codex account pool (Reauthenticate) does it too. That route
+runs inside the proxy, so it needs a running one.
 
 ```bash
 ocx login xai

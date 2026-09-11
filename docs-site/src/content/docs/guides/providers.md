@@ -161,8 +161,10 @@ The ChatGPT passthrough catalog also layers in the bare GPT-5.6 Sol/Terra/Luna s
 Provider presets can use account login — including GitHub Copilot via an experimental unofficial
 device-flow bridge. opencodex stores their credentials in
 `~/.opencodex/auth.json`; refreshable tokens are refreshed automatically, while durable keys are
-reused until the provider revokes them. `chatgpt` is also accepted by the login
-CLI; it acquires a ChatGPT credential while creating a `forward`-mode provider entry.
+reused until the provider revokes them. `ocx login codex` is accepted as well, but it is not one of
+these providers: it routes to the Codex account pool — the same flow as `ocx account login codex`,
+which keeps its own account ledger and needs a running proxy. `chatgpt` and `openai` are aliases of
+that route.
 
 ```bash
 ocx login xai          # xAI Grok
@@ -175,7 +177,7 @@ ocx login cursor       # standalone Cursor PKCE login
 ocx login command-code # Command Code browser OAuth (or import ~/.commandcode/auth.json)
 ocx login orcarouter-oauth # OrcaRouter browser consent + PKCE
 ocx login github-copilot  # GitHub device flow → Copilot token (Copilot Pro/Business)
-ocx login chatgpt      # standalone ChatGPT OAuth login
+ocx login codex        # Codex account pool (aliases: chatgpt, openai; needs a running proxy)
 ocx logout <provider>
 ```
 
@@ -336,8 +338,9 @@ does not strip metadata, retry a request, switch accounts, reset a thread, or ot
 **Diagnostics and reauth.** Human `ocx status` prints an OAuth health block (redacted account ids,
 no tokens). `ocx doctor` adds an OAuth reliability section with writable-store / single-flight checks
 and WARN rows that include a recovery Action. When an OAuth provider account needs reauthentication, run
-`ocx login <provider>` (or use Reauthenticate in the dashboard). Codex pool accounts are not an
-`ocx login` provider — reauthenticate via the dashboard Codex account pool. See
+`ocx login <provider>` (or use Reauthenticate in the dashboard). Codex pool accounts are not one of
+those providers, but `ocx login codex --reauth` routes to their account-pool reauthentication, which
+the dashboard Codex account pool also performs. See
 [`ocx status` / `ocx doctor`](/reference/cli/) in the CLI reference.
 
 ### Kiro credential import
@@ -398,7 +401,7 @@ free-experimentation model.
 
 **OrcaRouter** ([sponsor](https://github.com/lidge-jun/opencodex/blob/main/SPONSORS.md)) is an
 OpenAI-compatible gateway at `https://api.orcarouter.ai/v1` with vendor-namespaced model ids
-(`openai/gpt-5.5`, `anthropic/claude-opus-4.8`, `deepseek/deepseek-v4-pro`, ...) and an adaptive
+(`openai/gpt-5.5`, `anthropic/claude-opus-4.8`, `deepseek/deepseek-v4-flash`, ...) and an adaptive
 router, `orcarouter/auto`, that grades each prompt and picks the model. Create a key in the
 [OrcaRouter console](https://www.orcarouter.ai/console); the preset pins the row near the top of the
 Add provider picker and marks it as a sponsor, and nothing else about routing or defaults changes.
@@ -521,7 +524,7 @@ streams close as incomplete rather than being reported as successful.
 > and the Agent Plan gateway has no `/models` resource. Pay-as-you-go defaults to
 > `doubao-seed-2-1-pro-260628`; its curated catalog also includes current DeepSeek and GLM text
 > models. Coding Plan defaults to `ark-code-latest`, while Agent Plan defaults to
-> `deepseek-v4-pro`.
+> `deepseek-v4-flash`.
 
 > **Volcengine Plan usage restriction:** Volcengine documents Coding Plan and Agent Plan quota as
 > valid only inside supported AI coding tools, and warns that using a plan key for general API
@@ -958,7 +961,7 @@ Ollama's own REST API (`POST /api/chat`) rather than the OpenAI-compatible surfa
 the live model roster from the provider, so new Ollama Cloud models appear without a config
 change. opencodex classifies its cloud
 lineup by vision capability so the [vision sidecar](/guides/sidecars/) only kicks in for
-text-only models. Text-only models (e.g. `glm-5.2`, `deepseek-v4-pro`, `gpt-oss`, `qwen3-coder`,
+text-only models. Text-only models (e.g. `glm-5.2`, `deepseek-v4-flash`, `gpt-oss`, `qwen3-coder`,
 `minimax-m2.x`, `nemotron-3-*`) are listed in `noVisionModels`; vision-native models (e.g.
 `kimi-k2.6`, `minimax-m3`, `gemma4`, `qwen3.5`, `gemini-3-flash-preview`) are not. Matching is
 tolerant of Ollama's `:size` tags, so `gpt-oss` covers `gpt-oss:120b` and `gpt-oss:20b`.

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveCredential } from "../../src/oauth/store";
 import { getConfigPath } from "../../src/config";
+import { flushConfigDirHardening } from "../../src/config/paths";
 import { markCodexAccountValidated, readCodexAccountRecord, saveCodexAccountCredential } from "../../src/codex/account-store";
 import { __resetGuardianState, guardianSweep } from "../../src/oauth/token-guardian";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
@@ -46,7 +47,9 @@ beforeEach(() => {
   __resetGuardianState();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // Optional Windows ACL work can outlive credential writes and keep this home open.
+  await flushConfigDirHardening(join(tmp, "ocx"));
   resetLifecycleDrainStateForTests();
   if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
   if (origOcxHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = origOcxHome;

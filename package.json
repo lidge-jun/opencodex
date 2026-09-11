@@ -48,6 +48,8 @@
     "privacy:scan": "bun scripts/privacy-scan.ts",
     "skill:surface": "bun scripts/generate-ocx-skill-surface.ts",
     "skill:surface:check": "bun scripts/generate-ocx-skill-surface.ts --check",
+    "structure:index": "bun scripts/structure-ssot.ts --fix",
+    "structure:check": "bun scripts/structure-ssot.ts",
     "generate:model-metadata": "bun scripts/generate-model-metadata.ts",
     "build:gui": "cd gui && bun install --frozen-lockfile && bun run build && cd .. && bun run prepare:package",
     "prepare:package": "bun scripts/prepare-package.ts",

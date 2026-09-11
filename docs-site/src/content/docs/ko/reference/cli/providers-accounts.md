@@ -61,7 +61,7 @@ ocx models live --provider ark --json
 
 제공자에 등록된 로그인 흐름을 시작합니다. OAuth 제공자는 브라우저를 열고 자동 갱신되는 자격 증명을 `~/.opencodex/` 아래에 저장합니다. API 키 로그인 제공자는 키 대시보드를 열고, 키 입력을 요청한 뒤, 가능한 경우 검증하고, 그 결과 나온 제공자 설정을 저장합니다. 이름이 없거나 알 수 없으면 현재 허용되는 OAuth 및 API 키 제공자 id를 출력합니다.
 
-`ocx status` / `ocx doctor`가 재인증 필요 또는 터미널 새로고침 실패를 보고한 뒤에는 같은 명령으로 **재인증**하면 됩니다(대시보드의 Reauthenticate를 써도 됩니다). Codex 풀 계정은 공개 `ocx login` 제공자가 아닙니다. 대신 대시보드의 Codex 계정 풀(Reauthenticate)이나 헤드리스 `ocx account reauth` 흐름으로 재인증해야 합니다.
+`ocx status` / `ocx doctor`가 재인증 필요 또는 터미널 새로고침 실패를 보고한 뒤에는 같은 명령으로 **재인증**하면 됩니다(대시보드의 Reauthenticate를 써도 됩니다). Codex 풀 계정은 위 OAuth·API 키 제공자 중 하나가 아니지만 `ocx login codex`로 닿습니다. 이 명령은 계정 풀 로그인으로 연결되므로 `ocx login codex --reauth`는 `ocx account reauth codex`와 같습니다. 대시보드의 Codex 계정 풀(Reauthenticate)로도 됩니다. 이 경로는 프록시 안에서 돌기 때문에 프록시가 실행 중이어야 합니다.
 
 ```bash
 ocx login xai

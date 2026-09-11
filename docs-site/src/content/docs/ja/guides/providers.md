@@ -86,8 +86,10 @@ ChatGPT パススルーカタログには GPT-5.6 Sol/Terra/Luna の名前空間
 
 OAuth ログインを使うプロバイダープリセットは 8 つで、これに実験的な非公式デバイスフロー
 ブリッジ経由の GitHub Copilot が加わります。認証情報は `~/.opencodex/auth.json` に保存され、
-自動更新されます。ログイン CLI は `chatgpt` も受け付けます。このコマンドは ChatGPT 認証情報を
-発行し `forward` モードのプロバイダーエントリを作成します。
+自動更新されます。`ocx login codex` も受け付けますが、これは上記のプロバイダーではありません。
+Codex アカウントプールのログイン (`ocx account login codex` と同じフロー) に転送されます。
+プールは独自の台帳を持ち、この経路はプロキシの起動を必要とします。`chatgpt` と `openai` は
+同じ経路の別名です。
 
 ```bash
 ocx login xai          # xAI Grok
@@ -99,7 +101,7 @@ ocx login google-antigravity
 ocx login cursor       # Cursor 専用 PKCE ログイン
 ocx login command-code # Command Code のブラウザ OAuth (または ~/.commandcode/auth.json を取り込み)
 ocx login github-copilot  # GitHub デバイスフロー → Copilot トークン (Copilot Pro/Business)
-ocx login chatgpt      # 別途 ChatGPT OAuth ログイン
+ocx login codex        # Codex アカウントプール (別名: chatgpt, openai / プロキシの起動が必要)
 ocx logout <provider>
 ```
 
@@ -248,7 +250,7 @@ Volcengine Agent Plan は `openai-responses` アダプターでネイティブ R
 > Agent Plan ゲートウェイには `/models` リソースがありません。従量課金のデフォルトは
 > `doubao-seed-2-1-pro-260628` で、静的カタログには現在の DeepSeek と GLM のテキストモデルも
 > 含まれます。Coding Plan のデフォルトは `ark-code-latest`、Agent Plan は
-> `deepseek-v4-pro` です。
+> `deepseek-v4-flash` です。
 
 **Chutes の discovery:** `chutes` preset は Chutes の固定された共有 OpenAI 互換 LLM gateway を使います。
 公開 `/v1/models` catalog から `supported_features` が `tools` を示す行だけを残し、スラッシュを含む
@@ -425,7 +427,7 @@ Ollama Cloud はホステッド型(ローカルではない)Ollama です。`htt
 サーフェスではなく Ollama 自身の REST API(`POST /api/chat`)で接続し、モデル一覧はプロバイダーから
 動的に取得するため、新しい Ollama Cloud モデルは設定変更なしで現れます。opencodex はクラウド
 ラインナップをビジョン機能で分類し、[ビジョンサイドカー](/ja/guides/sidecars/)がテキスト専用モデルにのみ
-動作するようにします。テキスト専用モデル(例: `glm-5.2`、`deepseek-v4-pro`、`gpt-oss`、`qwen3-coder`、
+動作するようにします。テキスト専用モデル(例: `glm-5.2`、`deepseek-v4-flash`、`gpt-oss`、`qwen3-coder`、
 `minimax-m2.x`、`nemotron-3-*`)は `noVisionModels` に列挙され、ビジョンネイティブモデル(例:
 `kimi-k2.6`、`minimax-m3`、`gemma4`、`qwen3.5`、`gemini-3-flash-preview`)は含まれません。マッチングは
 Ollama の `:size` タグに寛容なので `gpt-oss` は `gpt-oss:120b` と `gpt-oss:20b` の両方を含みます。
