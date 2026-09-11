@@ -1348,7 +1348,7 @@ describe("Codex auth context", () => {
   });
 
   test.each(["caller-keyring-account", "other-main-account"])(
-    "a zero main-account threshold does not impose main cooldown on an unrelated caller in workspace %s",
+    "a zero main-account threshold does not impose main cooldown on an unrelated caller credential in workspace %s",
     async (observedAccountId) => {
       observeMainQuotaIdentity(observedAccountId);
       observeMainQuotaCredential("other-main-token", observedAccountId);

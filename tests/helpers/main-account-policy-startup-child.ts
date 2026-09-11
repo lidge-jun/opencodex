@@ -1,6 +1,7 @@
 import { spyOn } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/account-id";
 
 interface Fixture {
   scenario: "owned-99" | "owned-98" | "foreign" | "unknown" | "recovery" | "second-listener"
@@ -276,7 +277,7 @@ try {
   }
   console.log("POLICY_STARTUP_RESULT=" + JSON.stringify({
     scenario: fixture.scenario, before, listeners, firstServerSettled, firstAdmission, heldRecovery, laterRecovery,
-    thresholds: { global: config.autoSwitchThreshold, mainOverride: config.codexAccountAutoSwitchThresholds?.__main__ ?? null },
+    thresholds: { global: config.autoSwitchThreshold, mainOverride: config.codexAccountAutoSwitchThresholds?.[MAIN_CODEX_ACCOUNT_ID] ?? null },
     retainedUnknown, validReplacement,
     settled, after, settledAdmission, response, beforePrimaryUpstreamCalls, primaryUpstreamCalls, originalResponse,
     unexpectedNetwork,
