@@ -410,6 +410,10 @@ export function undeclaredToolCallName(
   if (payload.type === "response.output_item.added" || payload.type === "response.output_item.done") {
     return undeclaredNameInItem(payload.item, declared, declaredNamelessClientCallTypes, providerExecutedCallTypes, declaredBare);
   }
+  if (payload.type === "response.function_call_arguments.done" && typeof payload.name === "string") {
+    const fakeItem = { type: "function_call", name: payload.name, namespace: payload.namespace };
+    return undeclaredNameInItem(fakeItem, declared, declaredNamelessClientCallTypes, providerExecutedCallTypes, declaredBare);
+  }
   // Sparse gateways skip incremental items and only ever ship the terminal snapshot.
   if (payload.type === "response.completed" || payload.type === "response.incomplete") {
     return undeclaredToolCallNameInResponse(payload.response, declared, declaredNamelessClientCallTypes, providerExecutedCallTypes, declaredBare);
@@ -552,6 +556,18 @@ export function normalizeDefaultNamespaceInPayload(
     const res = normalizeDefaultNamespaceInItem(payload.item, declared, declaredBare);
     if (!res.changed) return { value: payload, changed: false };
     return { value: { ...payload, item: res.value }, changed: true };
+  }
+  if (payload.type === "response.function_call_arguments.done" && typeof payload.name === "string") {
+    const fakeItem = { type: "function_call", name: payload.name, namespace: payload.namespace };
+    const res = normalizeDefaultNamespaceInItem(fakeItem, declared, declaredBare);
+    if (res.changed) {
+      const normalizedItem = res.value as Record<string, unknown>;
+      const next: Record<string, unknown> = { ...payload, name: normalizedItem.name };
+      if ("namespace" in next && !("namespace" in normalizedItem)) {
+        delete next.namespace;
+      }
+      return { value: next, changed: true };
+    }
   }
   if (payload.type === "response.completed" || payload.type === "response.incomplete") {
     const res = normalizeDefaultNamespaceInResponse(payload.response, declared, declaredBare);
