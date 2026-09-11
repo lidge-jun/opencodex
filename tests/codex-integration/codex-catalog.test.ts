@@ -2224,16 +2224,16 @@ describe("configured CatalogModel displayName -> catalog display_name", () => {
   test("Command Code routed models relabel the picker row with distinguishable slugs", () => {
     const entries = buildCatalogEntries(nativeTemplate(), [], [
       { provider: "command-code", id: "deepseek/deepseek-v4-flash", owned_by: "command-code" },
-      { provider: "commandcode", id: "deepseek/deepseek-v4-pro", owned_by: "commandcode" },
+      { provider: "commandcode", id: "deepseek/deepseek-v4.1-flash", owned_by: "commandcode" },
     ]);
     const auth = entries.find(e => e.slug === "command-code/deepseek-deepseek-v4-flash");
-    const api = entries.find(e => e.slug === "commandcode/deepseek-deepseek-v4-pro");
+    const api = entries.find(e => e.slug === "commandcode/deepseek-deepseek-v4.1-flash");
 
     // Display-only relabel + redundant vendor-prefix drop: routing slugs stay untouched.
     expect(auth?.display_name).toBe("commandcode-auth/deepseek-v4-flash");
     expect(auth?.slug).toBe("command-code/deepseek-deepseek-v4-flash");
-    expect(api?.display_name).toBe("commandcode-api/deepseek-v4-pro");
-    expect(api?.slug).toBe("commandcode/deepseek-deepseek-v4-pro");
+    expect(api?.display_name).toBe("commandcode-api/deepseek-deepseek-v4.1-flash");
+    expect(api?.slug).toBe("commandcode/deepseek-deepseek-v4.1-flash");
   });
 
   test("Google Antigravity routed models relabel the picker row with compact agy prefix", () => {
@@ -5987,9 +5987,9 @@ describe("Codex catalog routed normalization", () => {
   test("built-in DeepSeek and GLM effort models opt into Codex reasoning propagation (#1100)", async () => {
     const expected = [
       { slug: "deepseek/deepseek-v4-flash", efforts: ["low", "high", "max", "ultra"] },
-      { slug: "deepseek/deepseek-v4-pro", efforts: ["low", "high", "max", "ultra"] },
+      { slug: "deepseek/deepseek-flash", efforts: ["low", "high", "max", "ultra"] },
       { slug: "opencode-go/deepseek-v4-flash", efforts: ["low", "high", "max"] },
-      { slug: "opencode-go/deepseek-v4-pro", efforts: ["low", "high", "max"] },
+      { slug: "opencode-go/deepseek-v4.1-flash", efforts: ["low", "high", "max"] },
       { slug: "opencode-go/glm-5.2", efforts: ["low", "medium", "high", "xhigh", "max"] },
       { slug: "opencode-go/glm-5.1", efforts: ["low", "medium", "high", "xhigh", "max"] },
       { slug: "opencode-go/glm-5", efforts: ["low", "medium", "high", "xhigh", "max"] },
@@ -6008,7 +6008,7 @@ describe("Codex catalog routed normalization", () => {
           authMode: "key",
           apiKey: "sk-test",
           liveModels: false,
-          models: ["deepseek-v4-flash", "deepseek-v4-pro"],
+          models: ["deepseek-v4-flash", "deepseek-flash"],
         },
         "opencode-go": {
           adapter: "openai-chat",
@@ -6016,7 +6016,7 @@ describe("Codex catalog routed normalization", () => {
           authMode: "key",
           apiKey: "sk-test",
           liveModels: false,
-          models: ["deepseek-v4-flash", "deepseek-v4-pro", "glm-5.2", "glm-5.1", "glm-5"],
+          models: ["deepseek-v4-flash", "deepseek-v4.1-flash", "glm-5.2", "glm-5.1", "glm-5"],
         },
         zai: {
           adapter: "openai-chat",
@@ -6174,7 +6174,7 @@ describe("Codex catalog routed normalization", () => {
 
     expect(provider.modelSupportsReasoningSummaries).toEqual({
       "deepseek-v4-flash": false,
-      "deepseek-v4-pro": true,
+      "deepseek-flash": true,
     });
   });
 

@@ -136,7 +136,7 @@ describe("OrcaRouter dual authentication", () => {
       expect(entry.models).toContain("orcarouter/auto");
       expect(entry.modelReasoningEfforts?.["openai/gpt-5.5"])
         .toEqual(["low", "medium", "high", "xhigh"]);
-      expect(entry.modelReasoningEfforts?.["deepseek/deepseek-v4-pro"]).toBeArray();
+      expect(entry.modelReasoningEfforts?.["openai/gpt-5.5"]).toBeArray();
     }
     expect(KEY_LOGIN_PROVIDERS.orcarouter).toBeDefined();
     expect(OAUTH_PROVIDERS["orcarouter-oauth"]).toBeDefined();

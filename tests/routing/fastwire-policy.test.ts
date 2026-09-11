@@ -320,7 +320,7 @@ describe("resolveFastPolicy matrix", () => {
       {
         name: "DeepSeek V4 defaults",
         providerName: "deepseek",
-        modelIds: ["deepseek-v4-flash", "deepseek-v4-pro"],
+        modelIds: ["deepseek-flash", "deepseek-v4-flash"],
         provider: {
           adapter: "openai-chat",
           baseUrl: "https://api.deepseek.com",
