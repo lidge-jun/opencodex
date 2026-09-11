@@ -1,3 +1,4 @@
+import type { AstraEffortCacheMetrics } from "../usage/astra-effort-cache";
 import type { AdapterEvent, OcxParsedRequest } from "../types";
 import type { TranslatorBudget } from "../lib/translator-budget";
 import type { AdapterTierMetadata } from "../providers/fastwire";
@@ -79,6 +80,7 @@ export interface ProviderAdapter {
 }
 
 export interface AdapterRequest {
+    astraEffortCache?: AstraEffortCacheMetrics;
     url: string;
     method: string;
     headers: Record<string, string>;

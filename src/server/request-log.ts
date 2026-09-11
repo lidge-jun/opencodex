@@ -1,3 +1,4 @@
+import { normalizeAstraEffortCacheMetrics, type AstraEffortCacheMetrics } from "../usage/astra-effort-cache";
 import { existsSync, readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import type { ResponsesTerminalStatus } from "../bridge";
@@ -90,6 +91,7 @@ export interface RequestLogContext {
   effectiveEffort?: string;
   reasoningWireField?: string;
   reasoningWireValue?: string | number | boolean;
+  astraEffortCache?: AstraEffortCacheMetrics;
   callerServiceTier?: string;
   requestedServiceTier?: string;
   requestedSpeedLabel?: string;
@@ -182,6 +184,7 @@ export interface RequestLogEntry {
   effectiveEffort?: string;
   reasoningWireField?: string;
   reasoningWireValue?: string | number | boolean;
+  astraEffortCache?: AstraEffortCacheMetrics;
   callerServiceTier?: string;
   requestedServiceTier?: string;
   requestedSpeedLabel?: string;
@@ -301,6 +304,7 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
     ...(entry.effectiveEffort ? { effectiveEffort: entry.effectiveEffort } : {}),
     ...(entry.reasoningWireField ? { reasoningWireField: entry.reasoningWireField } : {}),
     ...(entry.reasoningWireValue !== undefined ? { reasoningWireValue: entry.reasoningWireValue } : {}),
+    ...(normalizeAstraEffortCacheMetrics(entry.astraEffortCache) ? { astraEffortCache: normalizeAstraEffortCacheMetrics(entry.astraEffortCache) } : {}),
     ...(entry.callerServiceTier ? { callerServiceTier: entry.callerServiceTier } : {}),
     ...(entry.requestedServiceTier ? { requestedServiceTier: entry.requestedServiceTier } : {}),
     ...(entry.requestedSpeedLabel ? { requestedSpeedLabel: entry.requestedSpeedLabel } : {}),
@@ -382,10 +386,13 @@ export function addRequestLog(entry: RequestLogEntry) {
   // sanitization bug because the safe surface is the one you check.
   const shadowCallRewrittenFrom = sanitizeLogMetadataString(entry.shadowCallRewrittenFrom);
   const claudeCompatibility = normalizeClaudeCompatibilityUsageLog(entry.claudeCompatibility);
-  const retained: RequestLogEntry = shadowCallRewrittenFrom === entry.shadowCallRewrittenFrom && entry.claudeCompatibility === undefined
+  const retained: RequestLogEntry = shadowCallRewrittenFrom === entry.shadowCallRewrittenFrom && entry.claudeCompatibility === undefined && entry.astraEffortCache === undefined
     ? entry
     : { ...entry, ...(shadowCallRewrittenFrom ? { shadowCallRewrittenFrom } : {}) };
   if (!shadowCallRewrittenFrom && retained !== entry) delete retained.shadowCallRewrittenFrom;
+  const astraMetrics = normalizeAstraEffortCacheMetrics(entry.astraEffortCache);
+  if (astraMetrics) retained.astraEffortCache = astraMetrics;
+  else if (retained !== entry) delete retained.astraEffortCache;
   if (claudeCompatibility) retained.claudeCompatibility = claudeCompatibility;
   else if (retained !== entry) delete retained.claudeCompatibility;
   entry = retained;
@@ -428,6 +435,7 @@ export function addRequestLog(entry: RequestLogEntry) {
       ...(entry.effectiveEffort ? { effectiveEffort: entry.effectiveEffort } : {}),
       ...(entry.reasoningWireField ? { reasoningWireField: entry.reasoningWireField } : {}),
       ...(entry.reasoningWireValue !== undefined ? { reasoningWireValue: entry.reasoningWireValue } : {}),
+      ...(normalizeAstraEffortCacheMetrics(entry.astraEffortCache) ? { astraEffortCache: normalizeAstraEffortCacheMetrics(entry.astraEffortCache) } : {}),
       ...(entry.callerServiceTier ? { callerServiceTier: entry.callerServiceTier } : {}),
       ...(entry.requestedServiceTier ? { requestedServiceTier: entry.requestedServiceTier } : {}),
       ...(entry.requestedSpeedLabel ? { requestedSpeedLabel: entry.requestedSpeedLabel } : {}),
@@ -508,12 +516,19 @@ export function recordAdapterReasoning(
     delete attempt.reasoningWireField;
     delete attempt.reasoningWireValue;
   }
+  delete logCtx.astraEffortCache;
+  if (attempt) delete attempt.astraEffortCache;
   recordAttemptRequestedEffort(logCtx);
 
   // Diagnostics must never make an otherwise valid upstream request fail. Config files
   // written by older versions (or edited by hand) can contain values that violate the
   // current TypeScript shape, so validate the runtime object before redacting strings.
   try {
+    const astraMetrics = normalizeAstraEffortCacheMetrics(request.astraEffortCache);
+    if (astraMetrics) {
+      logCtx.astraEffortCache = astraMetrics;
+      if (attempt) attempt.astraEffortCache = astraMetrics;
+    }
     const raw: unknown = request.reasoningLog;
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return;
     const reasoning = raw as Record<string, unknown>;
@@ -1056,6 +1071,7 @@ export function addFinalRequestLog(
     ...(logCtx.effectiveEffort ? { effectiveEffort: logCtx.effectiveEffort } : {}),
     ...(logCtx.reasoningWireField ? { reasoningWireField: logCtx.reasoningWireField } : {}),
     ...(logCtx.reasoningWireValue !== undefined ? { reasoningWireValue: logCtx.reasoningWireValue } : {}),
+    ...(normalizeAstraEffortCacheMetrics(logCtx.astraEffortCache) ? { astraEffortCache: normalizeAstraEffortCacheMetrics(logCtx.astraEffortCache) } : {}),
     ...(logCtx.callerServiceTier ? { callerServiceTier: logCtx.callerServiceTier } : {}),
     ...(logCtx.requestedServiceTier ? { requestedServiceTier: logCtx.requestedServiceTier } : {}),
     ...(logCtx.requestedSpeedLabel ? { requestedSpeedLabel: logCtx.requestedSpeedLabel } : {}),

@@ -898,6 +898,7 @@
   "responses-forward-dangling-call.test.ts": "responses",
   "responses-forward-incomplete-quota.test.ts": "responses",
   "responses-forward-posit-continuation.test.ts": "responses",
+  "astra-effort-cache.test.ts": "responses",
   "responses-forward-prompt-envelope.test.ts": "responses",
   "responses-function-tool-repair.test.ts": "responses",
   "responses-image-gen-repair.test.ts": "responses",
@@ -1166,5 +1167,7 @@
   "zhipu-bigmodel-responses-quota.test.ts": "providers",
   "zz-ci-api-usage-isolation.test.ts": "ci-workflows",
   "zz-ci-storage-policy-isolation.test.ts": "ci-workflows",
-  "zz-pr-coderabbit-readiness-revalidation.test.ts": "ci-workflows"
+  "zz-pr-coderabbit-readiness-revalidation.test.ts": "ci-workflows",
+  "astra-effort-cache-metrics.test.ts": "usage",
+  "astra-effort-cache-proxy.test.ts": "responses"
 }

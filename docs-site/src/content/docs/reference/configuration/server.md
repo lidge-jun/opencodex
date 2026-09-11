@@ -480,3 +480,104 @@ A hub that is reachable from a browser needs `hub.managementPublicOrigin` and at
 in `remoteGui.allowedTailscaleUsers`. Setting the origin without the user list produces a hub that
 advertises itself correctly and then refuses every session; setting the user list without the
 origin produces sessions pointed at whichever origin the request happened to use.
+
+## Astra effort cache preservation
+
+Effort cache preservation runs automatically for supported requests. There is no enable/disable
+setting and no configuration is required.
+This applies only to `gpt-6-astra` on the canonical ChatGPT Codex forward destination in standard,
+single-agent mode. It does not enable the feature for Luna, Pro, public API destinations, or custom gateways.
+
+For a known conversation prefix, OpenCodex keeps the original request-level `reasoning.effort`
+and inserts a `configuration_update` before the next user message when the requested effort changes.
+It replays earlier updates in their original positions. Repeating an effort or retrying the same
+request does not add another update. Switching back appends another update.
+This preserves the earlier prefix structure; cache reuse still depends on backend caching and is not guaranteed.
+
+The caller must supply a distinct conversation identity through `thread-id` or
+`client_metadata.thread_id`. A parent task ID, session ID, or shared prompt-cache key alone is
+insufficient: side chats can share those values. Clients without a distinct identity continue with
+their requested effort unchanged. Confirm an `updated` diagnostic before treating a Desktop client
+as supported by this path.
+
+State lives under `$OPENCODEX_HOME/astra-effort-cache/` (normally `~/.opencodex/astra-effort-cache/`).
+A private SQLite database contains hashed prefixes and envelope identities, effort values, and item positions. It contains
+no conversation text, credentials, or raw account/task identifiers. SQLite releases locks when a process exits, including crashes. State survives restart; a fork or
+missing baseline starts a new baseline using the requested effort. Changed instructions or tools also
+start a new baseline. Each conversation/account is limited to 256 request snapshots and 2 MiB of state;
+requests exceeding those limits use their requested effort unchanged. Across conversations, the store retains at most 128 entries and 16 MiB of payload, evicting the least recently used entries. Entries expire after seven days without access; pruning runs on requests. The database is capped at 32 MiB, with a temporary rollback journal bounded by that size. The cache directory is registered once for uninstall cleanup. Conflicting retries and missing
+user boundaries reset history. A busy, corrupt, or unavailable state file causes unchanged fallback.
+
+Automatic context management, automatic truncation, multi-agent history, and compaction input disable
+automatic rewriting. This includes `compaction_trigger` requests and histories containing compaction
+items. OpenCodex does not change compaction settings to obtain cache hits. Explicit client-supplied
+configuration updates remain client-managed and pass through unchanged.
+The standalone `/responses/compact` path receives the client's history, without proxy-injected updates.
+If clients supply updates themselves, that endpoint rejects them. OpenAI documents `compaction_trigger`
+as an alternative, with a fresh update after compaction; automatic post-compaction rewriting is not
+implemented by this path.
+
+Enable provider diagnostics with `ocx debug provider on` or `OCX_DEBUG=1`. Diagnostics tagged
+`[ocx:openai-responses:astra-effort-cache]` report a fixed status code, baseline, and effective effort
+through the shared debug buffer and stderr output.
+Request and usage logs preserve requested effort and record effective effort separately from the
+request-level wire value. The upstream response's `reasoning.effort` still reports the baseline, as
+specified by OpenAI. `baseline_reset`, `missing_thread_identity`, `compaction`, and `unavailable_state`
+indicate that the optimization was not applied to that request.
+
+Retained state files may be removed while the proxy is stopped. The next request establishes a new
+baseline. Do not share one thread identity across independent conversations.
+
+See OpenAI's [reasoning update compatibility](https://developers.openai.com/api/docs/guides/reasoning#change-reasoning-mid-conversation)
+and [prompt caching guidance](https://developers.openai.com/api/docs/guides/prompt-caching#change-reasoning-effort-without-rewriting-the-prefix).
+
+
+### Measure Astra effort-cache overhead
+
+Eligible Astra requests include `astraEffortCache` in the existing local `usage.jsonl` log,
+including per-attempt records. No separate telemetry service or Lab activation is required.
+The fields contain fixed status codes, counters, and durations, never prompts or account identifiers.
+
+`durationMs` measures the synchronous cache hook, including ownership checks, database setup,
+history processing, and close. `setupMs`, `transactionMs`, `historyMs`, and `closeMs` expose those
+phases. **History time is inside transaction time**, so do not add all phase durations together.
+Measurements describe the last adapter preparation in each attempt, not cumulative retry work.
+`stateOutcome` distinguishes skipped, committed, busy, and error paths; committed means the
+transaction completed, not that the upstream accepted the request or returned cached tokens.
+`inputItems` and `updateCount` count input items and outgoing configuration updates.
+
+From a source checkout, summarize the newest 1,000 usage rows:
+
+```bash
+bun scripts/astra-effort-cache-report.ts 1000
+```
+
+Set `OPENCODEX_HOME` to inspect another installation. An optional second argument filters by exact
+request ID within the bounded recent window. The report prints aggregate counts, phase p50/p95/p99,
+and cached-token totals from **reported** usage. Estimated or missing usage stays unknown, and
+invalid token counts are excluded. Attempts replace their mirrored request summary when present.
+Older installations have no timing samples; an empty report is not proof of zero overhead.
+The existing Logs interface continues to show request duration, first output, and token usage.
+
+For a reproducible local benchmark with synthetic data and no model API calls:
+
+```bash
+bun scripts/astra-effort-cache-eval.ts .tmp/astra-effort-eval 40 4 /path/to/clean-dev-worktree
+```
+
+The final argument is optional. When supplied, it runs the same HTTP/WebSocket fixture against
+that checkout as a control. Use the same upstream `dev` commit on which the feature branch is based,
+and install that checkout's dependencies first. The control does not disable the feature in production.
+
+The harness writes `report.json` and raw `samples.jsonl`. It records platform, Bun version, source
+commit, and dirty-patch digest. Separate processes exercise a shared store with 1 KiB, 64 KiB, and
+1 MiB synthetic user text; each fresh store's first call includes database creation. Subsequent calls
+cover new conversations, effort switches, and replay. Concurrent writers can intentionally fall back
+when SQLite is busy. Real proxy cells use concurrent HTTP and WebSocket clients with both HTTP/SSE
+and WebSocket upstream fixtures. Client latency includes the whole local request; timer delay measures
+blocking in that fixture process. These are local costs, not production latency or upstream cache-hit
+proof. Synthetic token counts must never be interpreted as observed model cache savings.
+
+Run several trials on the target operating system, including Windows, before drawing rollout
+conclusions. Local fixtures test routing and wire preservation; they cannot establish upstream
+acceptance or Codex Desktop behavior. Use actual reported usage during normal work for that evidence.
