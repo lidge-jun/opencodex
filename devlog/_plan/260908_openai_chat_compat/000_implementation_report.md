@@ -1,6 +1,6 @@
 # K3 Codex 适配 Phase 0–3 Implementation Report
 
-日期：2026-09-08 · 仓库：/Users/earan/work/opencodex-k3-adapt · 分支 k3-codex-compat · 基线 upstream dev @ b3dec89
+日期：2026-09-08 · 仓库：opencodex · 分支 k3-codex-compat · 基线 upstream dev @ b3dec89
 
 ## Phase 0 审计结论（数据流 Codex -> OpenCodex -> K3 -> OpenCodex -> Codex）
 
