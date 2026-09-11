@@ -54,7 +54,7 @@ function buildToolCallBody(modelId: string, reasoning: string): {
 
 describe("opencode-go DeepSeek V4 thinking mode", () => {
   test("normalizes Desktop-style root composition schemas for Console Go", () => {
-    const route = routeModel(configFor("deepseek-v4-pro"), "opencode-go/deepseek-v4-pro");
+    const route = routeModel(configFor("deepseek-v4.1-flash"), "opencode-go/deepseek-v4.1-flash");
     const req = createOpenAIChatAdapter(route.provider).buildRequest({
       modelId: route.modelId,
       context: {
@@ -99,7 +99,7 @@ describe("opencode-go DeepSeek V4 thinking mode", () => {
     });
   });
 
-  test.each(["deepseek-v4-flash", "deepseek-v4-pro"])(
+  test.each(["deepseek-v4-flash", "deepseek-v4.1-flash"])(
     "%s replays tool-call reasoning and maps Codex efforts",
     modelId => {
       const xhighBody = buildToolCallBody(modelId, "xhigh");
@@ -157,12 +157,12 @@ describe("opencode-go DeepSeek json_schema downgrade", () => {
 
   test("the preset reaches the routed provider", () => {
     expect(buildWith("deepseek-v4-flash").provider.noJsonSchemaModels)
-      .toEqual(["deepseek-v4.1-flash", "deepseek-v4-pro", "deepseek-v4-flash"]);
+      .toEqual(["deepseek-v4.1-flash", "deepseek-v4-flash"]);
   });
 
   test("a listed DeepSeek route is downgraded to json_object", () => {
     expect(buildWith("deepseek-v4-flash").body.response_format).toEqual({ type: "json_object" });
-    expect(buildWith("deepseek-v4-pro").body.response_format).toEqual({ type: "json_object" });
+    expect(buildWith("deepseek-v4.1-flash").body.response_format).toEqual({ type: "json_object" });
   });
 
   test("an unlisted sibling on the same gateway keeps its schema", () => {

@@ -73,7 +73,7 @@ describe("provider registry parity", () => {
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].noVisionModels).toEqual([
       "glm-5.3",
       "glm-5.2", "glm-5", "glm-5.1",
-      "deepseek-v4.1-flash", "deepseek-v4-flash", "deepseek-v4-pro",
+      "deepseek-v4.1-flash", "deepseek-v4-flash",
       "mimo-v2-pro", "mimo-v2.5-pro",
       "minimax-m2.5", "minimax-m2.7",
       "qwen3.7-max",
@@ -84,9 +84,9 @@ describe("provider registry parity", () => {
     // an operator no longer has to disable structured output by hand. Registry-only means
     // it is asserted here against the raw entry, not the derived key-login map.
     const zenDeepseekJsonSchema: Record<string, string[]> = {
-      "opencode-go": ["deepseek-v4.1-flash", "deepseek-v4-pro", "deepseek-v4-flash"],
-      "opencode-zen": ["deepseek-v4.1-flash", "deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4-flash-free"],
-      "opencode-free": ["deepseek-v4.1-flash", "deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4-flash-free"],
+      "opencode-go": ["deepseek-v4.1-flash", "deepseek-v4-flash"],
+      "opencode-zen": ["deepseek-v4.1-flash", "deepseek-v4-flash", "deepseek-v4-flash-free"],
+      "opencode-free": ["deepseek-v4.1-flash", "deepseek-v4-flash", "deepseek-v4-flash-free"],
     };
     for (const [id, expected] of Object.entries(zenDeepseekJsonSchema)) {
       expect(PROVIDER_REGISTRY.find(entry => entry.id === id)?.noJsonSchemaModels).toEqual(expected);
@@ -220,24 +220,26 @@ describe("provider registry parity", () => {
     expect(KEY_LOGIN_PROVIDERS.openrouter.modelContextWindows?.["openai/gpt-5.6-sol"]).toBe(1_050_000);
     expect(KEY_LOGIN_PROVIDERS.openrouter.modelContextWindows?.["openai/gpt-5.6-terra"]).toBe(1_050_000);
     expect(KEY_LOGIN_PROVIDERS.openrouter.modelContextWindows?.["openai/gpt-5.6-luna"]).toBe(1_050_000);
-    expect(KEY_LOGIN_PROVIDERS.deepseek.models).toContain("deepseek-v4-pro");
+    // Retired from the first-party API on 2026-09-14; the vendor-hosted rosters keep it.
+    expect(KEY_LOGIN_PROVIDERS.deepseek.models).not.toContain("deepseek-v4-pro");
+    expect(KEY_LOGIN_PROVIDERS.deepseek.models).toContain("deepseek-flash");
     // #1057: DeepSeek's ladder is low/high/max and the two V4 models resolve it
     // differently (api-docs.deepseek.com/guides/thinking_mode, verified 2026-08-06).
     // `xhigh` is an alias, so it stays in the wire map but is not advertised. Pro
     // does not honor `low` (the vendor maps it to `high`), so Pro must not offer it.
-    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEfforts?.["deepseek-v4-pro"]).toEqual(["low", "high", "max"]);
+    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEfforts?.["deepseek-flash"]).toEqual(["low", "high", "max"]);
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEfforts?.["deepseek-v4-flash"]).toEqual(["low", "high", "max"]);
-    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-pro"]?.low).toBe("low");
-    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-pro"]?.xhigh).toBe("high");
-    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-pro"]?.max).toBe("max");
+    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-flash"]?.low).toBe("low");
+    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-flash"]?.xhigh).toBe("high");
+    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-flash"]?.max).toBe("max");
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-flash"]?.low).toBe("low");
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-flash"]?.xhigh).toBe("high");
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-flash"]?.max).toBe("max");
     expect(KEY_LOGIN_PROVIDERS.deepseek.preserveReasoningContentModels)
-      .toEqual(["deepseek-flash", "deepseek-v4-pro", "deepseek-v4-flash"]);
+      .toEqual(["deepseek-flash", "deepseek-v4-flash"]);
     // Issue #88: every DeepSeek API model is text-only input — the vision sidecar covers them.
     expect(KEY_LOGIN_PROVIDERS.deepseek.noVisionModels).toEqual([
-      "deepseek-chat", "deepseek-reasoner", "deepseek-flash", "deepseek-v4-pro", "deepseek-v4-flash",
+      "deepseek-chat", "deepseek-reasoner", "deepseek-flash", "deepseek-v4-flash",
     ]);
   });
 
@@ -349,7 +351,6 @@ describe("provider registry parity", () => {
       defaultModel: "deepseek-flash",
       modelContextWindows: {
         "deepseek-v4-flash": 1_048_576,
-        "deepseek-v4-pro": 1_048_576,
       },
     });
 
@@ -1462,9 +1463,9 @@ describe("free-provider directory isolation", () => {
     const flashLadder = ["low", "high", "max"];
     const proLadder = ["low", "high", "max"];
     const cases: Array<{ provider: string; model: string; flash: boolean }> = [
-      { provider: "deepseek", model: "deepseek-v4-pro", flash: false },
+      { provider: "deepseek", model: "deepseek-flash", flash: true },
       { provider: "deepseek", model: "deepseek-v4-flash", flash: true },
-      { provider: "opencode-go", model: "deepseek-v4-pro", flash: false },
+      { provider: "opencode-go", model: "deepseek-v4.1-flash", flash: true },
       { provider: "opencode-go", model: "deepseek-v4-flash", flash: true },
       { provider: "orcarouter", model: "deepseek/deepseek-v4-pro", flash: false },
       { provider: "volcengine-coding-plan", model: "deepseek-v4-pro", flash: false },

@@ -629,8 +629,15 @@ const OPENCODE_GO_THINKING_BUDGET_MODELS = ["qwen3.5-plus", "qwen3.6-plus", "qwe
  * otherwise - a first-party retirement notice does not end their deployment.
  */
 const DEEPSEEK_V4_LEGACY_MODELS = ["deepseek-v4-pro", "deepseek-v4-flash"];
-const DEEPSEEK_NATIVE_THINKING_MODELS = ["deepseek-flash", ...DEEPSEEK_V4_LEGACY_MODELS];
-const DEEPSEEK_GATEWAY_THINKING_MODELS = ["deepseek-v4.1-flash", ...DEEPSEEK_V4_LEGACY_MODELS];
+/*
+ * `deepseek-v4-pro` is deliberately absent from both live sets. DeepSeek retires it from
+ * 2026-09-14 04:00 UTC and routes its requests to V4.1-Flash until a V4.1 Pro exists, so a
+ * row here would advertise a Pro context window and Pro pricing for a route that serves
+ * Flash. `DEEPSEEK_V4_LEGACY_MODELS` above keeps it for vendor-hosted rosters that pin
+ * their own snapshots and publish on their own schedule.
+ */
+const DEEPSEEK_NATIVE_THINKING_MODELS = ["deepseek-flash", "deepseek-v4-flash"];
+const DEEPSEEK_GATEWAY_THINKING_MODELS = ["deepseek-v4.1-flash", "deepseek-v4-flash"];
 /*
  * DeepSeek's experimental vision preview (released 2026-08-21, api-docs.deepseek.com):
  * text+image input on the V4 Flash base. DeepSeek positions it as a preview id;
@@ -1804,7 +1811,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // Kimi K2.7 Code accepts text+image+video: do NOT list it here.
     noVisionModels: [
       "glm-5.3", "glm-5.2", "glm-5", "glm-5.1",
-      "deepseek-v4.1-flash", "deepseek-v4-flash", "deepseek-v4-pro",
+      "deepseek-v4.1-flash", "deepseek-v4-flash",
       "mimo-v2-pro", "mimo-v2.5-pro",
       "minimax-m2.5", "minimax-m2.7",
       "qwen3.7-max",
@@ -2069,7 +2076,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     defaultModel: "deepseek-flash",
     // Official DeepSeek Codex setup (codex-deepseek-setup.sh) advertises 1,048,576
     // for both V4 models; the older 1,000,000 figure was a rounded approximation.
-    modelContextWindows: { "deepseek-flash": 1_048_576, "deepseek-v4-flash": 1_048_576, "deepseek-v4-pro": 1_048_576, [DEEPSEEK_VISION_PREVIEW_MODEL]: 1_048_576 },
+    modelContextWindows: { "deepseek-flash": 1_048_576, "deepseek-v4-flash": 1_048_576, [DEEPSEEK_VISION_PREVIEW_MODEL]: 1_048_576 },
     modelInputModalities: { [DEEPSEEK_VISION_PREVIEW_MODEL]: ["text", "image"] },
     // DeepSeek documents both V4 models as native Responses API models adapted for Codex
     // (model table marks Responses API ✓ for flash and pro; the /responses reference lists
@@ -2083,7 +2090,6 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       // translating them into Responses would add a hop onto our newest upstream path
       // for no gain.
       "deepseek-v4-flash": { wire: "openai-responses", inbound: ["responses"] },
-      "deepseek-v4-pro": { wire: "openai-responses", inbound: ["responses"] },
       // Same Responses contract as the V4 ids it succeeds; without this row the new
       // default would fall back to the provider-wide Chat wire.
       "deepseek-flash": { wire: "openai-responses", inbound: ["responses"] },
@@ -2101,7 +2107,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // devlog/_fin/260807_deepseek_responses_streaming/000_plan.md.
     // Current official streams normally carry a real terminal; retain a narrow grace
     // repair for the historical shape that closes after a complete graph without one.
-    modelResponsesTerminalRepair: { "deepseek-flash": { graceMs: 5_000 }, "deepseek-v4-flash": { graceMs: 5_000 }, "deepseek-v4-pro": { graceMs: 5_000 } },
+    modelResponsesTerminalRepair: { "deepseek-flash": { graceMs: 5_000 }, "deepseek-v4-flash": { graceMs: 5_000 } },
     // DeepSeek's Responses route emits bare UUID item ids, which leave Codex
     // clients stuck on an uncommitted turn (#938). Client-facing only — raw
     // continuation snapshots keep the upstream ids.
