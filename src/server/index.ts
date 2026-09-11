@@ -8,6 +8,8 @@ import {
   buildResponsesWsData,
   sendResponseToWebSocket,
   sendTextFrame,
+  type LiveSidebandUpstreamFailure,
+  type LiveSidebandUpstreamHandoff,
   type WsData,
 } from "./ws-bridge";
 import type { Server, ServerWebSocket } from "bun";
@@ -334,8 +336,8 @@ export type LiveSidebandUpstreamOpenResult =
   | {
       ok: true;
       socket: WebSocket;
-      /** Stops capture and returns the upstream frames seen before the client existed. */
-      drain: () => Array<string | Buffer>;
+      /** Owns capture and terminal events until the downstream relay attaches. */
+      handoff: LiveSidebandUpstreamHandoff;
     }
   | { ok: false; status: number; code: string; message: string };
 
@@ -484,6 +486,7 @@ export function openLiveSidebandUpstream(
     new WebSocket(socketUrl, { headers: socketHeaders } as unknown as string[])
   ),
   timeoutMs: number = LIVE_SIDEBAND_UPSTREAM_OPEN_TIMEOUT_MS,
+  signal?: AbortSignal,
 ): Promise<LiveSidebandUpstreamOpenResult> {
   return new Promise(resolve => {
     let socket: WebSocket;
@@ -495,17 +498,26 @@ export function openLiveSidebandUpstream(
     }
 
     const buffered: Array<string | Buffer> = [];
+    let bufferedBytes = 0;
     let capturing = true;
     let settled = false;
+    let terminalFailure: LiveSidebandUpstreamFailure | undefined;
+    let removeAbortListener = (): void => {};
 
     const finish = (result: LiveSidebandUpstreamOpenResult): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      removeAbortListener();
       resolve(result);
     };
     const timer = setTimeout(() => {
-      finish({ ok: false, status: 504, code: "upstream_timeout", message: "voice upstream did not open in time" });
+      const failure = { status: 504, code: "upstream_timeout", message: "voice upstream did not open in time" };
+      terminalFailure = failure;
+      capturing = false;
+      buffered.length = 0;
+      bufferedBytes = 0;
+      finish({ ok: false, ...failure });
       try {
         socket.close();
       } catch {
@@ -513,35 +525,105 @@ export function openLiveSidebandUpstream(
       }
     }, timeoutMs);
 
+    const failCapture = (failure: LiveSidebandUpstreamFailure): void => {
+      if (!capturing || terminalFailure) return;
+      terminalFailure = failure;
+      capturing = false;
+      buffered.length = 0;
+      bufferedBytes = 0;
+      finish({ ok: false, ...failure });
+      try {
+        socket.close(1009, "sideband preamble overflow");
+      } catch {
+        /* the terminal failure is already retained for the downstream handoff */
+      }
+    };
+    const handoff: LiveSidebandUpstreamHandoff = {
+      failure: () => terminalFailure,
+      take: () => {
+        capturing = false;
+        if (terminalFailure) return { ok: false, failure: terminalFailure };
+        const frames = buffered.slice();
+        buffered.length = 0;
+        bufferedBytes = 0;
+        return { ok: true, frames };
+      },
+    };
+
     socket.addEventListener("message", event => {
-      if (!capturing || buffered.length >= LIVE_SIDEBAND_PENDING_MAX) return;
+      if (!capturing) return;
+      const frameBytes = webSocketFrameBytes(event.data);
+      if (exceedsLiveSidebandFrameByteLimit(frameBytes)) {
+        failCapture({ status: 502, code: "upstream_overflow", message: "voice upstream preamble frame is too large" });
+        return;
+      }
+      if (buffered.length >= LIVE_SIDEBAND_PENDING_MAX) {
+        failCapture({ status: 502, code: "upstream_overflow", message: "voice upstream sent too many preamble frames" });
+        return;
+      }
+      if (exceedsLiveSidebandPendingByteLimit(bufferedBytes, frameBytes)) {
+        failCapture({ status: 502, code: "upstream_overflow", message: "voice upstream preamble is too large" });
+        return;
+      }
       if (typeof event.data === "string") buffered.push(event.data);
       else if (event.data instanceof ArrayBuffer) buffered.push(Buffer.from(new Uint8Array(event.data)));
-      else if (ArrayBuffer.isView(event.data)) buffered.push(Buffer.from(event.data as Uint8Array));
+      else if (ArrayBuffer.isView(event.data)) {
+        buffered.push(Buffer.from(new Uint8Array(event.data.buffer, event.data.byteOffset, event.data.byteLength)));
+      } else return;
+      bufferedBytes += frameBytes;
     });
     socket.addEventListener("open", () => {
       finish({
         ok: true,
         socket,
-        drain: () => {
-          capturing = false;
-          const frames = buffered.slice();
-          buffered.length = 0;
-          return frames;
-        },
+        handoff,
       });
     });
     socket.addEventListener("error", () => {
-      finish({ ok: false, status: 502, code: "upstream_error", message: "voice upstream rejected the sideband join" });
+      const failure = { status: 502, code: "upstream_error", message: "voice upstream rejected the sideband join" };
+      terminalFailure ??= failure;
+      capturing = false;
+      buffered.length = 0;
+      bufferedBytes = 0;
+      finish({ ok: false, ...terminalFailure });
+      try {
+        socket.close();
+      } catch {
+        /* the terminal failure is already retained */
+      }
     });
     socket.addEventListener("close", event => {
-      finish({
-        ok: false,
+      const failure = {
         status: 502,
         code: "upstream_error",
         message: `voice upstream closed before opening (code ${event.code})`,
-      });
+        closeCode: event.code,
+        closeReason: event.reason,
+      };
+      terminalFailure ??= failure;
+      capturing = false;
+      buffered.length = 0;
+      bufferedBytes = 0;
+      finish({ ok: false, ...terminalFailure });
     });
+    const abortOpen = (): void => {
+      const failure = { status: 499, code: "request_cancelled", message: "voice sideband join was cancelled" };
+      terminalFailure ??= failure;
+      capturing = false;
+      buffered.length = 0;
+      bufferedBytes = 0;
+      finish({ ok: false, ...terminalFailure });
+      try {
+        socket.close();
+      } catch {
+        /* the cancelled join no longer owns the socket */
+      }
+    };
+    if (signal) {
+      signal.addEventListener("abort", abortOpen, { once: true });
+      removeAbortListener = () => signal.removeEventListener("abort", abortOpen);
+      if (signal.aborted) abortOpen();
+    }
   });
 }
 
@@ -579,10 +661,27 @@ function attachLiveSidebandUpstream(
     // The upstream opened before this socket existed, so its `open` event has already
     // fired and the listener below will never run. Its early frames were captured for
     // us; forward the capture now rather than dropping the session preamble.
+    const handoff = ws.data.liveUpstreamHandoff;
+    ws.data.liveUpstreamHandoff = undefined;
+    const takeover = handoff?.take();
+    if (!takeover?.ok || preOpened.readyState !== WebSocket.OPEN) {
+      ws.data.liveClosing = true;
+      try {
+        if (preOpened.readyState !== WebSocket.CLOSED) preOpened.close();
+      } catch {
+        /* upstream is already terminal */
+      }
+      finalizeLiveSideband(ws, preOpened);
+      const failure = takeover && !takeover.ok ? takeover.failure : undefined;
+      try {
+        ws.close(failure?.closeCode ?? 1011, failure?.closeReason ?? "upstream closed before relay attachment");
+      } catch {
+        /* client already gone */
+      }
+      return;
+    }
     ws.data.liveOpened = true;
-    const drain = ws.data.liveUpstreamDrain;
-    ws.data.liveUpstreamDrain = undefined;
-    for (const frame of drain ? drain() : []) {
+    for (const frame of takeover.frames) {
       try {
         // Mirror the live message listener exactly: same ceiling, same diagnostic
         // record. These frames are upstream-to-client like any other.
@@ -2226,6 +2325,8 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           resolved.upstreamWsUrl,
           resolved.headers,
           deps.liveSidebandWebSocketFactory,
+          LIVE_SIDEBAND_UPSTREAM_OPEN_TIMEOUT_MS,
+          req.signal,
         );
         if (!upstreamHandshake.ok) {
           turnAdmissionLease.release();
@@ -2237,6 +2338,22 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             policy,
           );
         }
+        const handoffFailure = upstreamHandshake.handoff.failure();
+        if (handoffFailure || upstreamHandshake.socket.readyState !== WebSocket.OPEN) {
+          try {
+            upstreamHandshake.socket.close();
+          } catch {
+            /* upstream is already terminal */
+          }
+          turnAdmissionLease.release();
+          const failure = handoffFailure ?? {
+            status: 502,
+            code: "upstream_error",
+            message: "voice upstream closed before client upgrade",
+          };
+          addFinalRequestLog(requestId, start, logCtx, failure.status);
+          return withCors(formatErrorResponse(failure.status, failure.code, failure.message), req, policy);
+        }
         addFinalRequestLog(requestId, start, logCtx, 101);
         if (requestServer.upgrade(req, {
           data: {
@@ -2244,7 +2361,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             liveUpstream: upstreamHandshake.socket,
             liveUpstreamUrl: resolved.upstreamWsUrl,
             liveUpstreamHeaders: resolved.headers,
-            liveUpstreamDrain: upstreamHandshake.drain,
+            liveUpstreamHandoff: upstreamHandshake.handoff,
             livePending: [],
             livePendingBytes: 0,
             liveOpened: true,
@@ -2253,7 +2370,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         })) return undefined as unknown as Response;
         // The upgrade was refused after the upstream had already opened; drop it.
         try {
-          upstreamHandshake.drain();
+          upstreamHandshake.handoff.take();
           upstreamHandshake.socket.close();
         } catch {
           /* ignore */

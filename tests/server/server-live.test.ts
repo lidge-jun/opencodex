@@ -22,7 +22,12 @@ import {
   openLiveSidebandUpstream,
   startServer,
 } from "../../src/server";
-import { beginShutdownDrain, isDraining, resetLifecycleDrainStateForTests } from "../../src/server/lifecycle";
+import {
+  activeRegistryMetrics,
+  beginShutdownDrain,
+  isDraining,
+  resetLifecycleDrainStateForTests,
+} from "../../src/server/lifecycle";
 import type { OcxConfig } from "../../src/types";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -1749,21 +1754,26 @@ describe("GET /readyz while draining", () => {
  * loop. These cases pin the handshake result and its client-visible consequence.
  */
 class FakeUpstreamSocket {
-  private readonly listeners = new Map<string, Array<(event: { code?: number; data?: unknown }) => void>>();
+  private readonly listeners = new Map<string, Array<(event: { code?: number; data?: unknown; reason?: string }) => void>>();
   closed = false;
+  readyState = WebSocket.CONNECTING;
 
-  addEventListener(type: string, listener: (event: { code?: number; data?: unknown }) => void): void {
+  addEventListener(type: string, listener: (event: { code?: number; data?: unknown; reason?: string }) => void): void {
     const bucket = this.listeners.get(type) ?? [];
     bucket.push(listener);
     this.listeners.set(type, bucket);
   }
 
-  emit(type: string, event: { code?: number; data?: unknown } = {}): void {
+  emit(type: string, event: { code?: number; data?: unknown; reason?: string } = {}): void {
+    if (type === "open") this.readyState = WebSocket.OPEN;
+    if (type === "close") this.readyState = WebSocket.CLOSED;
     for (const listener of this.listeners.get(type) ?? []) listener(event);
   }
 
-  close(): void {
+  close(code = 1000, reason = ""): void {
     this.closed = true;
+    this.readyState = WebSocket.CLOSED;
+    this.emit("close", { code, reason });
   }
 }
 
@@ -1780,13 +1790,59 @@ describe("openLiveSidebandUpstream", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("expected an open upstream");
     expect(result.socket).toBe(socket);
-    const drained = result.drain();
+    const takeover = result.handoff.take();
+    expect(takeover.ok).toBe(true);
+    if (!takeover.ok) throw new Error("expected a successful handoff");
+    const drained = takeover.frames;
     expect(drained[0]).toBe("session.created");
     expect(Buffer.isBuffer(drained[1])).toBe(true);
+    expect(drained[1]).toEqual(Buffer.from([1, 2, 3]));
     // Drain is one-shot: the relay owns capture from here on.
-    expect(result.drain()).toEqual([]);
+    expect(result.handoff.take()).toEqual({ ok: true, frames: [] });
     socket.emit("message", { data: "after-drain" });
-    expect(result.drain()).toEqual([]);
+    expect(result.handoff.take()).toEqual({ ok: true, frames: [] });
+  });
+
+  test("fails explicitly before copying an aggregate preamble overflow", async () => {
+    const socket = new FakeUpstreamSocket();
+    const pending = openLiveSidebandUpstream("ws://upstream/v1/live/x", {}, () => socket as unknown as WebSocket, 1_000);
+    const retained = new Uint8Array(1024 * 1024);
+    socket.emit("message", { data: retained });
+    const rejectedView = new Uint8Array(retained.buffer, 0, 1);
+    socket.emit("message", { data: rejectedView });
+
+    const result = await pending;
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected an overflow failure");
+    expect(result.code).toBe("upstream_overflow");
+    expect(socket.closed).toBe(true);
+  });
+
+  test("fails explicitly when the preamble frame-count limit is exceeded", async () => {
+    const socket = new FakeUpstreamSocket();
+    const pending = openLiveSidebandUpstream("ws://upstream/v1/live/x", {}, () => socket as unknown as WebSocket, 1_000);
+    for (let index = 0; index < 33; index += 1) socket.emit("message", { data: String(index) });
+
+    const result = await pending;
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected an overflow failure");
+    expect(result.code).toBe("upstream_overflow");
+    expect(socket.closed).toBe(true);
+  });
+
+  test("preserves an open-then-close terminal event until relay handoff", async () => {
+    const socket = new FakeUpstreamSocket();
+    const pending = openLiveSidebandUpstream("ws://upstream/v1/live/x", {}, () => socket as unknown as WebSocket, 1_000);
+    socket.emit("open", {});
+    socket.emit("close", { code: 1008 });
+
+    const result = await pending;
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected the completed opening handshake");
+    const takeover = result.handoff.take();
+    expect(takeover.ok).toBe(false);
+    if (takeover.ok) throw new Error("expected the terminal handoff");
+    expect(takeover.failure.closeCode).toBe(1008);
   });
 
   test("reports failure when the upstream rejects the handshake", async () => {
@@ -1809,6 +1865,25 @@ describe("openLiveSidebandUpstream", () => {
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("expected a failed handshake");
     expect(result.status).toBe(502);
+  });
+
+  test("cancels a pending join and closes its upstream socket", async () => {
+    const socket = new FakeUpstreamSocket();
+    const controller = new AbortController();
+    const pending = openLiveSidebandUpstream(
+      "ws://upstream/v1/live/x",
+      {},
+      () => socket as unknown as WebSocket,
+      1_000,
+      controller.signal,
+    );
+    controller.abort();
+
+    const result = await pending;
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected a cancelled handshake");
+    expect(result.code).toBe("request_cancelled");
+    expect(socket.closed).toBe(true);
   });
 
   test("times out and drops the socket when the upstream never opens", async () => {
@@ -1861,6 +1936,7 @@ test("a sideband join whose upstream handshake fails never opens the client sock
   } as typeof WebSocket;
 
   const server = startServer(0);
+  const activeTurnsBefore = activeRegistryMetrics().activeTurns.active;
   try {
     const wsUrl = new URL(`/v1/realtime?call_id=rtc_dead_call`, server.url);
     wsUrl.protocol = "ws:";
@@ -1897,9 +1973,63 @@ test("a sideband join whose upstream handshake fails never opens the client sock
     // The relay never became live, so the client must not have been told it did.
     expect(events).not.toContain("open");
     expect(events.length).toBeGreaterThan(0);
+    expect(activeRegistryMetrics().activeTurns.active).toBe(activeTurnsBefore);
   } finally {
     globalThis.WebSocket = RealWebSocket;
     await server.stop(true);
     await upstream.stop(true);
   }
 }, { timeout: 20_000 });
+
+test("an upstream that opens then closes before relay attachment refuses the client and releases admission", async () => {
+  saveConfig(forwardConfig());
+  const upstream = new FakeUpstreamSocket();
+  const server = startServer(0, {
+    liveSidebandWebSocketFactory: () => {
+      queueMicrotask(() => {
+        upstream.emit("open", {});
+        upstream.emit("close", { code: 1008, reason: "call ended" });
+      });
+      return upstream as unknown as WebSocket;
+    },
+  });
+  const activeTurnsBefore = activeRegistryMetrics().activeTurns.active;
+  try {
+    const wsUrl = new URL("/v1/realtime?call_id=rtc_closed_handoff", server.url);
+    wsUrl.protocol = "ws:";
+    const events: string[] = [];
+    const client = new WebSocket(wsUrl.toString(), {
+      headers: {
+        authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
+        "chatgpt-account-id": "acct-123",
+        "openai-alpha": "quicksilver=v2",
+        "x-session-id": "rts_closed_handoff",
+      },
+    } as unknown as string[]);
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("client never settled")), 5_000);
+      const settle = (): void => {
+        clearTimeout(timer);
+        resolve();
+      };
+      client.addEventListener("open", () => {
+        events.push("open");
+        settle();
+      });
+      client.addEventListener("error", () => {
+        events.push("error");
+        settle();
+      });
+      client.addEventListener("close", () => {
+        events.push("close");
+        settle();
+      });
+    });
+
+    expect(events).not.toContain("open");
+    expect(events.length).toBeGreaterThan(0);
+    expect(activeRegistryMetrics().activeTurns.active).toBe(activeTurnsBefore);
+  } finally {
+    await server.stop(true);
+  }
+}, { timeout: 10_000 });

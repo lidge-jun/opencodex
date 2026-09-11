@@ -39,13 +39,8 @@ export interface WsData {
   /** Total encoded bytes retained in livePending while the upstream connects. */
   livePendingBytes?: number;
   liveOpened?: boolean;
-  /**
-   * Upstream frames captured while the pre-upgrade handshake completed, before the
-   * client socket existed. Drained exactly once when the relay attaches; capture
-   * stays live until then, so nothing is lost in the gap between the upstream
-   * opening and this socket registering its own upstream listener.
-   */
-  liveUpstreamDrain?: () => Array<string | Buffer>;
+  /** Owns captured frames and terminal state until the downstream relay attaches. */
+  liveUpstreamHandoff?: LiveSidebandUpstreamHandoff;
   /** Once teardown starts, ignore new client frames until the upstream closes. */
   liveClosing?: boolean;
   /** Schedules one bounded close retry without surrendering native-main ownership. */
@@ -53,6 +48,25 @@ export interface WsData {
   /** Turn/account ownership retained for the complete sideband socket lifetime. */
   liveTurnAdmissionLease?: AdmissionLease;
   admissionLease?: AdmissionReservation<ServerWebSocket<WsData>>;
+}
+
+export interface LiveSidebandUpstreamFailure {
+  status: number;
+  code: string;
+  message: string;
+  closeCode?: number;
+  closeReason?: string;
+}
+
+export type LiveSidebandUpstreamTakeover =
+  | { ok: true; frames: Array<string | Buffer> }
+  | { ok: false; failure: LiveSidebandUpstreamFailure };
+
+export interface LiveSidebandUpstreamHandoff {
+  /** Observe failure before the downstream upgrade without ending capture. */
+  failure(): LiveSidebandUpstreamFailure | undefined;
+  /** Atomically ends capture and transfers buffered frames or terminal state. */
+  take(): LiveSidebandUpstreamTakeover;
 }
 
 /**
