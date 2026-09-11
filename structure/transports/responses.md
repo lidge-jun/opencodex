@@ -417,15 +417,15 @@ final outgoing model/tier. No caller identity is synthesized. Noncanonical
 opt-in gateways keep their own metadata policy. Oversized/unsupported-runtime
 HTTP fallback preserves the original HTTP body and Lite header.
 
-For the final wire model `gpt-5.3-codex-spark`, the canonical forward adapter sets the
-Lite header to `false`, overriding caller/configured headers and stale native WS Lite
-metadata, but only when the outgoing body does not deliver tools through the Lite shape.
-A body still carrying an `additional_tools` input item keeps Lite metadata, because that
-item IS the Lite tool-delivery format and the non-Lite wire shape expects top-level
-`tools`; advertising non-Lite over it would hide the client tool surface. A changed Lite
-identity retires the previous socket; subsequent eligible Spark requests with the same
-disabled identity can reuse the new socket. Malformed native metadata retains HTTP
-fallback eligibility without rewriting its body.
+For the final wire model `gpt-5.3-codex-spark`, the canonical forward adapter normalizes the
+Lite header from the BODY, overriding caller/configured headers and stale native WS Lite
+metadata in both directions. A body carrying a nonempty `additional_tools` input item is
+pinned to `true`: that item IS the Lite tool-delivery format and the non-Lite wire shape
+expects top-level `tools`, so an inherited `false` would advertise non-Lite while the tools
+exist only in the Lite shape and hide the client tool surface. Any other Spark body is set to
+`false`, which is the stream-close fix. A changed Lite identity retires the previous socket;
+subsequent eligible Spark requests with the same identity can reuse the new socket. Malformed
+native metadata retains HTTP fallback eligibility without rewriting its body.
 
 Canonical WS quota and response metadata preceding the first Responses event
 are projected into bounded, allowlisted HTTP headers before the response is

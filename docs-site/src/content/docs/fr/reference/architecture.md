@@ -91,7 +91,9 @@ Indépendamment de ce réglage côté client, les requêtes canoniques transmise
 
 Pour le modèle sortant final `gpt-5.3-codex-spark`, la transmission canonique à ChatGPT
 désactive explicitement Responses Lite dans l’en-tête HTTP et les métadonnées natives des
-trames WS, même lorsqu’un alias sélectionne Spark. Un changement d’identité Lite retire
+trames WS, même lorsqu’un alias sélectionne Spark — uniquement si le corps sortant ne porte pas
+de groupe `additional_tools`. Ce groupe EST la forme Lite de livraison des outils : un corps Spark
+qui l’utilise conserve Lite ACTIF même si un en-tête appelant ou configuré disait l’inverse. Un changement d’identité Lite retire
 l’ancien socket ; les requêtes admissibles suivantes ayant la même identité peuvent réutiliser
 le nouveau socket. Les autres modèles et passerelles conservent leur politique Lite.
 Des métadonnées natives mal formées entraînent toujours un repli HTTP, sans modifier le corps.

@@ -135,7 +135,9 @@ session 中回退到 HTTP。设置 `"websockets": true` 后，同一 endpoint �
 WebSocket bridge。
 
 当最终发送的模型为 `gpt-5.3-codex-spark` 时，canonical ChatGPT 转发会在 HTTP 请求头和
-原生 WS 帧元数据中明确关闭 Responses Lite，通过别名选择 Spark 时也一样。Lite 标识变化时，
+原生 WS 帧元数据中明确关闭 Responses Lite，通过别名选择 Spark 时也一样；但这仅适用于发送正文
+不含 `additional_tools` 分组的情况。该分组本身就是 Lite 的工具投递形态，因此仍使用它的 Spark
+正文会保持 Lite 开启，无论调用方或配置的请求头如何。Lite 标识变化时，
 旧 socket 会退出使用；后续标识相同且满足复用条件的请求可以复用新 socket。其他模型和网关
 保留原有 Lite 策略。原生元数据格式不合法时，仍会回退到 HTTP，并保持请求正文不变。
 

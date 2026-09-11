@@ -2541,21 +2541,22 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         parsed.modelId,
       );
       if (isCanonicalOpenAiForwardProvider(provider)) {
-        // Select Spark's Lite compatibility from the final wire model, including aliases.
-        // Explicit false also overrides native WS metadata; deleting the header leaves it enabled.
+        // Select Spark's Lite compatibility from the final wire model, including aliases, and
+        // let the BODY decide it. The header also overrides native WS metadata downstream, so a
+        // forwarded or statically configured value must never contradict the shape being sent.
         //
-        // Only turns that do NOT carry the Lite tool shape may be downgraded. The synchronized
-        // catalog keeps `use_responses_lite: true` for Spark precisely because it selects tool
-        // delivery (`input[].additional_tools` instead of top-level `tools`), and
-        // stripSparkCompatibility filters that group in place rather than promoting it. Advertising
-        // non-Lite while the body still carries `additional_tools` would leave Spark unable to see
-        // the client tools, so the Lite stream fix stays scoped to tool-less turns.
-        if (isPlainObject(finalBody) && finalBody.model === "gpt-5.3-codex-spark"
-          && !bodyCarriesLiteToolShape(finalBody)) {
+        // The synchronized catalog keeps `use_responses_lite: true` for Spark precisely because
+        // it selects tool delivery (`input[].additional_tools` instead of top-level `tools`), and
+        // stripSparkCompatibility filters that group in place rather than promoting it. So a
+        // Lite-shaped body is pinned back ON — otherwise an inherited `false` advertises non-Lite
+        // while the tools exist only in the Lite shape, and Spark loses the tool surface. Only a
+        // body with no Lite tool group is downgraded, which is what the stream fix needs.
+        if (isPlainObject(finalBody) && finalBody.model === "gpt-5.3-codex-spark") {
+          const liteShaped = bodyCarriesLiteToolShape(finalBody);
           for (const name of Object.keys(headers)) {
             if (name.toLowerCase() === CODEX_RESPONSES_LITE_HEADER) delete headers[name];
           }
-          headers[CODEX_RESPONSES_LITE_HEADER] = "false";
+          headers[CODEX_RESPONSES_LITE_HEADER] = liteShaped ? "true" : "false";
         }
         const routingHeaders = new Headers(headers);
         applyCodexRoutingHint(routingHeaders, finalBody);

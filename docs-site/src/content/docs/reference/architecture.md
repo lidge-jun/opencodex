@@ -159,7 +159,10 @@ closes the upstream and emits a terminal downstream `response.failed` event foll
 
 For the final outgoing model `gpt-5.3-codex-spark`, canonical ChatGPT forwarding explicitly
 disables Responses Lite in both the HTTP header and native WS frame metadata, including when
-an alias selects Spark. A changed Lite identity retires the old socket; subsequent eligible
+an alias selects Spark — but only when the outgoing body carries no `additional_tools` group.
+That group IS the Lite tool-delivery shape, so a Spark body that still uses it keeps Lite ON even
+if a caller or configured header said otherwise; otherwise the frame would advertise non-Lite
+while the tools exist only in the Lite shape. A changed Lite identity retires the old socket; subsequent eligible
 requests with the same identity can reuse the new socket. Other models and gateways keep
 their existing Lite policy. Malformed native metadata still falls back to HTTP with its body unchanged.
 

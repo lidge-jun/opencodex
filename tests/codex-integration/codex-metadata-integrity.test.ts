@@ -257,6 +257,45 @@ describe("Codex request transport metadata", () => {
     expect(new Headers(otherWireModel.headers).get(liteHeader)).toBe("true");
   });
 
+  test("a Lite-shaped Spark body pins Lite back on, whatever the inherited header said", async () => {
+    const { prepareCodexWsRequest } = await import("../../src/server/responses/codex-ws-request");
+    // The catalog keeps use_responses_lite: true for Spark because it selects tool DELIVERY:
+    // the client catalog rides `input[].additional_tools`, not top-level `tools`. A forwarded or
+    // configured `false` must not survive on such a body, or the frame advertises non-Lite while
+    // the tools exist only in the Lite shape and Spark loses them.
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex",
+      headers: { "X-OpenAI-Internal-Codex-Responses-Lite": "false" },
+    });
+    const liteShapedInput = [
+      { type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
+      { type: "additional_tools", tools: [{ type: "function", name: "shell", parameters: {} }] },
+    ];
+
+    for (const incomingLite of ["false", "true", undefined] as const) {
+      const parsed = minimalParsed();
+      parsed.modelId = "gpt-5.3-codex-spark";
+      parsed._rawBody = { model: "gpt-5.3-codex-spark", input: liteShapedInput, stream: true,
+        client_metadata: { [liteKey]: "false", other: "preserved" } };
+      const incoming = new Headers();
+      if (incomingLite !== undefined) incoming.set(liteHeader, incomingLite);
+      const request = await adapter.buildRequest(parsed, { headers: incoming });
+      expect(new Headers(request.headers).get(liteHeader)).toBe("true");
+      const prepared = prepareCodexWsRequest(url, { body: request.body, headers: request.headers })!;
+      expect(JSON.parse(prepared.frameText).client_metadata).toEqual({
+        [liteKey]: "true", other: "preserved",
+      });
+    }
+
+    // An empty group is not a Lite tool surface, so the stream fix still applies.
+    const toolless = minimalParsed();
+    toolless.modelId = "gpt-5.3-codex-spark";
+    toolless._rawBody = { model: "gpt-5.3-codex-spark", stream: true,
+      input: [{ type: "additional_tools", tools: [] }] };
+    const downgraded = await adapter.buildRequest(toolless, { headers: new Headers() });
+    expect(new Headers(downgraded.headers).get(liteHeader)).toBe("false");
+  });
+
   test("Spark disables Lite without configured headers and retains malformed-metadata HTTP fallback", async () => {
     const { prepareCodexWsRequest } = await import("../../src/server/responses/codex-ws-request");
     const adapter = createResponsesPassthroughAdapter({
