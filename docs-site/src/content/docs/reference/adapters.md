@@ -445,6 +445,27 @@ this provider stores no key and asks for none.
 - Binary discovery prefers `OPENCODEX_DEVIN_CLI_BIN`, then the paths the official installer and the
   Homebrew cask use, then `PATH`. Install with `curl -fsSL https://cli.devin.ai/install.sh | bash`
   or `brew install --cask devin-cli`.
+## `devin`
+
+**Targets:** Cognition's `exa.api_server_pb.ApiServerService/GetChatMessage` over HTTPS Connect
+streaming at `server.codeium.com`.
+**Auth:** Devin/Cognition API key from `provider.apiKey` or the forwarded authorization header.
+Login opens Auth0 browser sign-in, then exchanges the Firebase ID token via
+`SeatManagementService.RegisterUser` for a long-lived API key.
+
+- Uses `runTurn` rather than the ordinary fetch/parse path. Requests and server events are encoded
+  with manual protobuf framing in `devin/cloud-direct/wire.ts`; the ordinary `buildRequest` /
+  `parseStream` path is disabled.
+- Live model discovery via `GetCascadeModelConfigs`; the static seed is filtered against the
+  account's live roster so models not on the plan drop out instead of failing at request time.
+- Tool definitions are encoded in the request and tool-call events are decoded from the response
+  stream. Cognition enforces a per-tool-description length limit (6,998 chars) and an exact-phrase
+  blocklist; the adapter sanitizes known triggers and truncates over-long descriptions before
+  encoding.
+- Devin/Cognition API keys do not refresh. Run `ocx login devin` again when the key expires or is
+  revoked.
+- Experimental unofficial bridge; not shown in the dashboard preset by default. See the
+  [provider guide](/guides/providers/) for login instructions.
 
 ## `azure-openai` (alias: `azure`)
 

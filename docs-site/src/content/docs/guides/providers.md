@@ -175,6 +175,7 @@ ocx login kiro         # import kiro-cli credentials (or token fallback)
 ocx login google-antigravity
 ocx login cursor       # standalone Cursor PKCE login
 ocx login command-code # Command Code browser OAuth (or import ~/.commandcode/auth.json)
+ocx login devin       # Cognition/Devin Auth0 browser sign-in
 ocx login orcarouter-oauth # OrcaRouter browser consent + PKCE
 ocx login github-copilot  # GitHub device flow → Copilot token (Copilot Pro/Business)
 ocx login codex        # Codex account pool (aliases: chatgpt, openai; needs a running proxy)
@@ -190,6 +191,7 @@ ocx logout <provider>
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | Initial login imports the installed, signed-in `kiro-cli` session (on Unix, install with `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`; on Windows PowerShell, use `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`; then run `kiro-cli login`). **Add account** logs `kiro-cli` out, starts a fresh browser login that switches the account used by `kiro-cli`, and stores account-scoped profile metadata. Existing OpenCodex accounts are preserved, and cancellation or failure restores the previous `kiro-cli` session. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth over the Cloud Code Assist wire. Live discovery uses CCA's authenticated `v1internal:fetchAvailableModels` endpoint and publishes the agent models available to the signed-in account; the maintained catalog remains the fallback. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | Experimental PKCE login, live HTTP/2 transport with an opt-in HTTP/1.1 compatibility path, and account-filtered model discovery. |
+| `devin` | `devin` | `https://server.codeium.com` | Experimental unofficial Cognition/Devin bridge. Login opens Auth0 browser sign-in, then exchanges the token via Cognition's `RegisterUser` for a long-lived API key. Live model discovery via `GetCascadeModelConfigs`; `runTurn`-only streaming over Connect-RPC. Not shown in the dashboard preset by default — enable manually. |
 | `orcarouter-oauth` | `openai-chat` | `https://api.orcarouter.ai/v1` | Browser consent and key exchange use `https://www.orcarouter.ai` with S256 PKCE. The returned user-owned `sk-orca-…` API key is stored in the existing credential store and reused until revoked. |
 | `devin-cli` | `devin-cli` | `https://cli.devin.ai` | Drives the locally installed Devin CLI over the Agent Client Protocol (`devin acp`, newline-delimited JSON-RPC on stdio). The CLI holds its own credentials from `devin auth login`, so opencodex stores no key for it. Point `OPENCODEX_DEVIN_CLI_BIN` at a specific build; letting the CLI read and write files requires setting `OPENCODEX_DEVIN_CLI_ALLOW_TOOLS=1` explicitly, because the default is to refuse. |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | Experimental. GitHub device flow + `copilot_internal` exchange (VS Code OAuth client). Requires an active Copilot subscription; not an official third-party API. |

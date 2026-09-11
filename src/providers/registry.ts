@@ -2,6 +2,7 @@ import type { CodexAccountMode, FastWire, OcxProviderConfig } from "../types";
 import { fastWireDeclarationError } from "./fastwire";
 import { KIRO_MODELS, KIRO_MODEL_CONTEXT_WINDOWS, KIRO_MODEL_REASONING_EFFORTS } from "./kiro-models";
 import { DEVIN_CLI_DEFAULT_MODEL, DEVIN_CLI_MODELS } from "../adapters/devin-cli/models";
+import { DEVIN_MODEL_CONTEXT_WINDOWS } from "../adapters/devin/live-models";
 import { ANTIGRAVITY_MODELS, ANTIGRAVITY_MODEL_CONTEXT_WINDOWS, ANTIGRAVITY_MODEL_EFFORTS, ANTIGRAVITY_MODEL_INPUT_MODALITIES } from "./antigravity-models";
 import type { ProviderBaseUrlChoice } from "./base-url-choices";
 import {
@@ -1297,6 +1298,20 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     note: "Drives the locally installed Devin CLI over the Agent Client Protocol (`devin acp`, newline-delimited JSON-RPC on stdio). Requires the CLI on PATH and a completed `devin auth login`; no API key is stored by opencodex. Set OPENCODEX_DEVIN_CLI_BIN to point at a specific build, and OPENCODEX_DEVIN_CLI_ALLOW_TOOLS=1 to let the CLI read and write files — the default is to refuse.",
     models: [...DEVIN_CLI_MODELS],
     defaultModel: DEVIN_CLI_DEFAULT_MODEL,
+  },
+  {
+    id: "devin",
+    label: "Cognition (Devin/Windsurf)",
+    adapter: "devin",
+    baseUrl: "https://server.codeium.com",
+    authKind: "oauth",
+    featured: false,
+    dashboardPreset: false,
+    note: "Experimental unofficial Cognition/Devin bridge. ocx login devin opens Auth0 browser sign-in, then exchanges the token via Cognition's RegisterUser for a long-lived API key.",
+    models: ["swe-1-7", "swe-1-7-lightning", "gpt-5-6-sol", "gpt-5-6-luna", "gpt-5-6-terra", "claude-opus-4-8", "claude-fable-5-1", "claude-sonnet-5", "glm-5-2", "kimi-k2-7", "grok-4-5"],
+    liveModels: true,
+    defaultModel: "swe-1-7",
+    modelContextWindows: DEVIN_MODEL_CONTEXT_WINDOWS,
   },
   {
     id: "xai",
