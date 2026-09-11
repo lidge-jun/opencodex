@@ -15,6 +15,7 @@ import {
   assertClientCatalogCompatible,
   assessClientCatalogCompatibility,
   ClientCatalogIncompatibleError,
+  inspectClientCatalogReadiness,
 } from "../../src/client/catalog-compatibility";
 import { repoPath } from "../helpers/repo-root";
 
@@ -135,5 +136,65 @@ describe("#4207 client catalog gate", () => {
     // may since have changed — that would strand the client with no catalog at all.
     expect(source).toContain("atomicWriteFile(DEFAULT_CATALOG_PATH, snapshot.body)");
     expect(source.match(/assertClientCatalogCompatible\(/g)).toHaveLength(2);
+  });
+});
+
+describe("#4207 installed catalog readiness", () => {
+  test("a catalog the local runtime accepts is ready", () => {
+    expect(inspectClientCatalogReadiness("present", catalogBody(["low", "max"]), { supportedEfforts: () => NEW_CLI }))
+      .toEqual({ kind: "ready" });
+  });
+
+  test("a catalog already on disk that the runtime rejects is an established incompatibility", () => {
+    // The write-time gate never saw this file: it may predate the gate, or have been written
+    // while the ladder was unverified. Readiness is a question about the bytes that are there.
+    const readiness = inspectClientCatalogReadiness(
+      "present",
+      catalogBody(["low", "medium", "high", "xhigh", "max"]),
+      { supportedEfforts: () => OLD_CLI },
+    );
+
+    expect(readiness.kind).toBe("incompatible");
+    if (readiness.kind !== "incompatible") throw new Error("unreachable");
+    expect(readiness.unsupportedEfforts).toEqual(["max"]);
+    expect(readiness.affectedModels).toEqual(["gpt-5.6-sol"]);
+    expect(readiness.reason).toContain("max");
+    expect(readiness.reason).toContain("CODEX_CLI_PATH");
+    // The gate's wording promises the previous catalog survived. Nothing survived here, so
+    // reusing that message would tell the operator the opposite of what happened.
+    expect(readiness.reason).not.toContain("The previous catalog was kept");
+  });
+
+  test("an unobservable runtime ladder is unverified, not incompatible", () => {
+    const readiness = inspectClientCatalogReadiness("present", catalogBody(["max"]), { supportedEfforts: () => null });
+
+    expect(readiness.kind).toBe("unverified");
+  });
+
+  test("an unreadable body is unverified", () => {
+    expect(inspectClientCatalogReadiness("present", "not json", { supportedEfforts: () => OLD_CLI }).kind)
+      .toBe("unverified");
+  });
+
+  test("bytes that could not be read at all are unverified", () => {
+    expect(inspectClientCatalogReadiness("present", null, { supportedEfforts: () => OLD_CLI }).kind)
+      .toBe("unverified");
+  });
+
+  test("an absent or non-regular catalog is a different fault, never an incompatibility", () => {
+    // Claiming an incompatibility here would name a cause nothing established -- the same
+    // mistake #4169 was filed for.
+    for (const file of ["missing", "unsafe"] as const) {
+      const readiness = inspectClientCatalogReadiness(file, null, { supportedEfforts: () => OLD_CLI });
+      expect(readiness.kind).toBe("unverified");
+    }
+  });
+
+  test("the runtime is not observed for a file state that was never read", () => {
+    // Only 'present' has bytes worth an opinion. Probing the local Codex CLI for a missing file
+    // would spend a process on a question its answer cannot change.
+    const probe = () => { throw new Error("the runtime was observed for a catalog that was not read"); };
+    expect(inspectClientCatalogReadiness("missing", null, { supportedEfforts: probe }).kind).toBe("unverified");
+    expect(inspectClientCatalogReadiness("unsafe", null, { supportedEfforts: probe }).kind).toBe("unverified");
   });
 });

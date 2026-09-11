@@ -321,6 +321,12 @@ export interface ProviderRegistryEntry {
   noTemperatureModels?: string[];
   noTopPModels?: string[];
   noPenaltyModels?: string[];
+  /**
+   * Registry-only seed for `OcxProviderConfig.noJsonSchemaModels`. Merged into the
+   * resolved provider at route time rather than persisted as user config, the same way
+   * `directReasoningEffortModels` above is registry-owned.
+   */
+  noJsonSchemaModels?: string[];
   /** Opt this provider into parallel tool calls (see OcxProviderConfig.parallelToolCalls). */
   parallelToolCalls?: boolean;
   /** Opt this provider into forwarding prompt_cache_key (OpenAI-specific; strict backends reject it). */
@@ -1770,7 +1776,14 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       ...Object.fromEntries(DEEPSEEK_THINKING_MODELS.map(id => [id, true])),
     },
     thinkingToggleModels: OPENCODE_GO_THINKING_TOGGLE_MODELS,
-    thinkingBudgetModels: THINKING_BUDGET_MODELS,
+    /*
+     * The Go-specific list, not the shared one. The shared `THINKING_BUDGET_MODELS` also
+     * carries Neuralwatt-only ids (`qwen3.5-397b`, `qwen3.6-35b`) that this preset never
+     * gives a ladder to, so a live roster serving one of them armed the thinking-budget
+     * wire path with nothing to advertise: the catalog showed no effort control while the
+     * adapter still translated effort into `thinking_budget`.
+     */
+    thinkingBudgetModels: OPENCODE_GO_THINKING_BUDGET_MODELS,
     noReasoningModels: ["kimi-k2.7-code", "kimi-k2.7-code-highspeed"],
     // Text-only Zen Go models (jawcode metadata) — the vision sidecar describes images for
     // every model listed here (and the catalog advertises image input on their behalf).
@@ -1788,6 +1801,16 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     autoToolChoiceOnlyModels: ["kimi-k2.7-code", "kimi-k2.7-code-highspeed"],
     // Issue #78: DeepSeek V4 thinking mode requires reasoning_content replay on tool-call turns.
     preserveReasoningContentModels: ["glm-5.3", "glm-5.3-flash", "glm-5.2", "kimi-k3", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", ...DEEPSEEK_THINKING_MODELS],
+    /*
+     * Issues #1338 / #1415: this gateway answers a `response_format` of type
+     * `json_schema` with HTTP 400 `This response_format type is unavailable now`
+     * (quoted from the upstream body as `Error from provider (Console Go)`), which
+     * breaks every Codex auto-review turn on a DeepSeek route. #1424 shipped the
+     * operator-side opt-out; operators have been applying it by hand ever since.
+     * The reported rejection is type-specific, so this narrower list downgrades the
+     * request to `json_object` instead of claiming the whole field is unavailable.
+     */
+    noJsonSchemaModels: [...DEEPSEEK_THINKING_MODELS],
   },
   {
     id: "neuralwatt",
@@ -1994,7 +2017,14 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   // 2026-07-10: defaultModel is frozen pending Vertex-specific Tier-2 evidence; Gemini API
   // evidence from ai.google.dev does not establish Vertex publisher availability.
   { id: "google-vertex", label: "Google Vertex AI", adapter: "google", baseUrl: "https://aiplatform.googleapis.com", authKind: "key", dashboardUrl: "https://console.cloud.google.com/vertex-ai", defaultModel: "gemini-3-pro", googleMode: "vertex", jawcodeBundle: "google", extraMetadataAliases: ["gemini-vertex"] },
-  { id: "google-antigravity", alias: "agy", label: "Google Antigravity", adapter: "google", baseUrl: "https://daily-cloudcode-pa.googleapis.com", authKind: "oauth", allowBaseUrlOverride: true, dashboardUrl: "https://antigravity.google", models: ANTIGRAVITY_MODELS, liveModels: true, defaultModel: "gemini-3.8-flash", modelContextWindows: ANTIGRAVITY_MODEL_CONTEXT_WINDOWS, modelInputModalities: ANTIGRAVITY_MODEL_INPUT_MODALITIES, modelReasoningEfforts: ANTIGRAVITY_MODEL_EFFORTS, googleMode: "cloud-code-assist", jawcodeBundle: "google", extraMetadataAliases: ["antigravity", "gemini-antigravity"] },
+  // Antigravity discovers models with a POST to the CCA `:fetchAvailableModels` RPC, which
+  // `buildModelsRequest` already built by hand. Declaring it here changes no request URL — the
+  // relative path resolves to the same destination — but it lets `isRegistryModelDiscoveryUrl`
+  // prove that URL, which is what admits a Clash/Surge/Mihomo TUN fake-IP answer (#4261). The
+  // path must stay RELATIVE: this row sets `allowBaseUrlOverride`, and an absolute `url` would
+  // retarget a user's custom base back to Google. A leading `./` is required because a bare
+  // `v1internal:` reads as a URL scheme and `providerModelDiscoverySpecError` rejects it.
+  { id: "google-antigravity", alias: "agy", label: "Google Antigravity", adapter: "google", baseUrl: "https://daily-cloudcode-pa.googleapis.com", authKind: "oauth", allowBaseUrlOverride: true, dashboardUrl: "https://antigravity.google", models: ANTIGRAVITY_MODELS, liveModels: true, defaultModel: "gemini-3.8-flash", modelContextWindows: ANTIGRAVITY_MODEL_CONTEXT_WINDOWS, modelInputModalities: ANTIGRAVITY_MODEL_INPUT_MODALITIES, modelReasoningEfforts: ANTIGRAVITY_MODEL_EFFORTS, googleMode: "cloud-code-assist", jawcodeBundle: "google", extraMetadataAliases: ["antigravity", "gemini-antigravity"], modelDiscovery: { path: "./v1internal:fetchAvailableModels" } },
   { id: "azure-openai", label: "Azure OpenAI", adapter: "azure-openai", baseUrl: "https://{resource}.openai.azure.com/openai", authKind: "key", featured: true, dashboardUrl: "https://portal.azure.com" },
   { id: "ollama", label: "Ollama (local)", adapter: "openai-chat", baseUrl: "http://localhost:11434/v1", authKind: "local", allowPrivateNetworkByDefault: true, allowBaseUrlOverride: true, featured: true, note: "Local — key usually blank" },
   { id: "vllm", label: "vLLM (local)", adapter: "openai-chat", baseUrl: "http://localhost:8000/v1", authKind: "local", allowPrivateNetworkByDefault: true, allowBaseUrlOverride: true, featured: true, note: "Local — key usually blank" },
@@ -2640,6 +2670,23 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   // Narrowed carry of #3641: the official Codex example declares a local static catalog,
   // not an HTTP /models contract. Keep Responses separate from the Chat endpoint above.
   // Source: https://docs.bigmodel.cn/cn/coding-plan/tool/codex.md (checked 2026-09-07).
+  //
+  // #4201 completes the roster. The `models.json` example on that Codex page is a *starter
+  // catalog*, not the set of models the endpoint serves, and reading it as the latter is what
+  // left Flash off a subscription that sells it. Three upstream pages say so directly, all
+  // checked 2026-09-11:
+  //   - coding-plan/latest-model.md pins Codex to THIS baseUrl
+  //     (`Codex：https://open.bigmodel.cn/api/v1`) and opens with GLM Coding Plan supporting
+  //     GLM-5.3 and GLM-5.3-Flash for every tier (Max & Pro & Lite), then treats
+  //     `glm-5.3-flash` as an already-callable id in that same tool.
+  //   - coding-plan/overview.md: every plan supports GLM-5.3 and GLM-5.3-Flash, and calls to
+  //     GLM-5-Turbo are auto-switched to GLM-5.3-Flash. Turbo below is therefore an alias of
+  //     the very model this row omitted, which is the clearest statement that the endpoint
+  //     serves Flash: it was already serving it under another name.
+  //   - guide/models/vlm/glm-5.3-flash.md: native multimodal input, 1M context, and text
+  //     parameters explicitly "consistent with GLM-5.3".
+  // No authenticated /models probe is implied by any of this, so `liveModels` and
+  // `apiKeyValidation` below are deliberately unchanged.
   {
     id: "zhipu-bigmodel-responses",
     label: "Zhipu AI — BigModel Coding Plan (Responses)",
@@ -2648,22 +2695,34 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     authKind: "key",
     dashboardUrl: "https://bigmodel.cn/console/usercenter/apikeys",
     defaultModel: "glm-5.3",
-    models: ["glm-5.3", "glm-5-turbo"],
+    models: ["glm-5.3", "glm-5.3-flash", "glm-5-turbo"],
     liveModels: false,
     // The local Codex catalog does not establish an authenticated HTTP /models contract.
     apiKeyValidation: "unknown",
     jawcodeBundle: "zai",
     // A pre-existing same-named custom provider must retain its destination and key boundary.
     preserveCustomDestination: true,
-    modelContextWindows: { "glm-5.3": 1_048_576, "glm-5-turbo": 204_800 },
-    modelInputModalities: { "glm-5.3": ["text"], "glm-5-turbo": ["text"] },
+    // Flash tracks its 5.3 sibling on this row rather than the Chat row's 1_000_000. Both
+    // models are documented as "1M", and this preset expresses that family's 1M the way
+    // BigModel's own Codex declaration does. Splitting the two would leave one preset
+    // claiming two different sizes for one documented window.
+    modelContextWindows: { "glm-5.3": 1_048_576, "glm-5.3-flash": 1_048_576, "glm-5-turbo": 204_800 },
+    // Flash is the only row here that can actually see an image. Its siblings are declared
+    // text-only and get `image` back from the vision sidecar at catalog-build time; declaring
+    // Flash text-only would route a native VLM's pictures through a describe-it-first detour
+    // and hand the model prose about an image it could have read (same defect
+    // ZAI_GLM_5X_SIDECAR_VISION_MODELS exists to prevent on the Chat rows).
+    modelInputModalities: { "glm-5.3": ["text"], "glm-5.3-flash": ["text", "image"], "glm-5-turbo": ["text"] },
     modelReasoningEfforts: {
       "glm-5.3": ZAI_GLM_53_REASONING_EFFORTS,
+      // Same three effective tiers: upstream documents Flash's text parameters as identical
+      // to GLM-5.3, and the Codex effort table folds every inbound value into low/high/max.
+      "glm-5.3-flash": ZAI_GLM_53_REASONING_EFFORTS,
       // Explicitly empty: Turbo must not inherit the generic selectable effort ladder.
       "glm-5-turbo": [],
     },
-    modelDefaultReasoningEfforts: { "glm-5.3": "max", "glm-5-turbo": "max" },
-    modelSupportsReasoningSummaries: { "glm-5.3": true, "glm-5-turbo": true },
+    modelDefaultReasoningEfforts: { "glm-5.3": "max", "glm-5.3-flash": "max", "glm-5-turbo": "max" },
+    modelSupportsReasoningSummaries: { "glm-5.3": true, "glm-5.3-flash": true, "glm-5-turbo": true },
     // Responses replay uses this provider-level flag, not the Chat-path model list.
     preserveResponsesReasoningContent: true,
     note: "Domestic BigModel Coding Plan Responses endpoint; static model roster",
@@ -3007,6 +3066,9 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       [DEEPSEEK_VISION_PREVIEW_MODEL]: ["text", "image"],
     },
     noVisionModels: [...OPENCODE_ZEN_TEXT_ONLY_MODELS, ...DEEPSEEK_THINKING_MODELS],
+    // Same DeepSeek routes as the Go preset above, behind the same vendor, so they carry
+    // the same json_schema rejection (#1338 / #1415).
+    noJsonSchemaModels: [...DEEPSEEK_THINKING_MODELS, ...OPENCODE_FREE_DEEPSEEK_MODELS],
   },
   { id: "vercel-ai-gateway", label: "Vercel AI Gateway", baseUrl: "https://ai-gateway.vercel.sh/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://vercel.com/dashboard" },
   {
@@ -3047,6 +3109,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // Same Zen roster behind the same base URL, so it carries the same measured
     // text-only list rather than only its DeepSeek member (#1043).
     noVisionModels: OPENCODE_ZEN_TEXT_ONLY_MODELS,
+    // Same reasoning: the free tier is the same Zen roster, so its DeepSeek members get
+    // the keyed tier's json_schema treatment and its reasoning contract rather than a
+    // narrower table that silently falls behind whenever the keyed one is updated.
+    noJsonSchemaModels: [...DEEPSEEK_THINKING_MODELS, ...OPENCODE_FREE_DEEPSEEK_MODELS],
   },
   { id: "xiaomi", label: "Xiaomi MiMo", baseUrl: "https://api.xiaomimimo.com/anthropic", adapter: "anthropic", authKind: "key", dashboardUrl: "https://xiaomimimo.com", defaultModel: "mimo-v2.5-pro" },
   // Xiaomi's public OpenAI-compatible endpoint is a distinct transport from both the Anthropic

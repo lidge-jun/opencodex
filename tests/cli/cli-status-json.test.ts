@@ -363,6 +363,11 @@ describe("CLI status JSON", () => {
         state: "disconnected",
         credentialFile: "missing",
       });
+      // #4207 gave a connected client a local-runtime readiness verdict. Observing that runtime
+      // spawns a Codex process, so a machine with no client connection must not carry the field
+      // at all; its absence is what keeps every ordinary `ocx status` off that probe.
+      expect(parsed.connection).not.toHaveProperty("readiness");
+      expect(parsed.connection).not.toHaveProperty("readinessReason");
 
       const serialized = JSON.stringify(parsed).toLowerCase();
       for (const forbidden of ["apikey", "sk-test-secret", "token", "refreshtoken", "authorization", "email"]) {

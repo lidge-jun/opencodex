@@ -63,9 +63,10 @@ ocx models live --provider ark --json
 打印当前可接受的 OAuth 和 API 密钥提供方 id。
 
 在 `ocx status` / `ocx doctor` 报告需要重新认证或终端刷新失败后，也可用同一条
-命令执行**重新认证**（或者在仪表盘中使用 Reauthenticate）。Codex 池账号不是一个
-公开的 `ocx login` 提供方 - 请通过仪表盘里的 Codex 账号池（Reauthenticate）或
-无头模式的 `ocx account reauth` 流程重新认证。
+命令执行**重新认证**（或者在仪表盘中使用 Reauthenticate）。Codex 池账号不是上面
+那些 OAuth / API key 提供方，但 `ocx login codex` 可以到达：它会转到账号池登录，
+因此 `ocx login codex --reauth` 与 `ocx account reauth codex` 等价。仪表盘里的
+Codex 账号池（Reauthenticate）同样可以。这条路径跑在代理内部，需要代理正在运行。
 
 ```bash
 ocx login xai

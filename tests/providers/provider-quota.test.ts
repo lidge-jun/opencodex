@@ -1014,6 +1014,70 @@ describe("fetchProviderQuotaReports", () => {
     expect(seen[0]?.redirect).toBe("error");
   });
 
+  test.each([
+    ["https://api.z.ai/api/anthropic", "anthropic"],
+    ["https://api.z.ai/api/v1", "openai-responses"],
+    ["https://API.Z.AI/api/anthropic/", "anthropic"],
+    ["https://api.z.ai/api/v1/", "openai-responses"],
+  ] as const)("Z.AI quota uses the international monitor for %s (%s)", async (baseUrl, adapter) => {
+    const seen: Array<{ url: string; authorization: string | null; redirect?: RequestRedirect }> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      seen.push({ url: String(input), authorization: new Headers(init?.headers).get("authorization"), redirect: init?.redirect });
+      return Response.json({ success: true, data: { limits: [
+        { type: "TOKENS_LIMIT", unit: 3, number: 5, percentage: 25 },
+      ] } });
+    }) as typeof fetch;
+    const config = keyQuotaConfig("zai", baseUrl);
+    config.providers.zai!.adapter = adapter;
+
+    const result = await fetchProviderQuotaReports(config, true);
+
+    expect(result.reports).toHaveLength(1);
+    expect(result.reports[0]?.source).toBe("zai:quota-limit");
+    expect(result.reports[0]?.quota.fiveHourPercent).toBe(25);
+    expect(seen).toEqual([{
+      url: "https://api.z.ai/api/monitor/usage/quota/limit",
+      authorization: "Bearer zai-secret",
+      redirect: "error",
+    }]);
+  });
+
+  test.each([
+    "https://api.z.ai.example/api/anthropic",
+    "http://api.z.ai/api/anthropic",
+    "https://api.z.ai:8443/api/v1",
+    "https://api.z.ai/api/anthropic?region=cn",
+    "https://api.z.ai/api/v1#fragment",
+    "https://api.z.ai/api/anthropic/v1/messages",
+    "https://api.z.ai/api/v1/responses",
+    "https://api.z.ai/api/paas/v4",
+    "https://open.bigmodel.cn/api/anthropic",
+  ])("Z.AI quota does not probe unsupported base %s", async baseUrl => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response("unexpected", { status: 500 });
+    }) as typeof fetch;
+
+    expect((await fetchProviderQuotaReports(keyQuotaConfig("zai", baseUrl), true)).reports).toEqual([]);
+    expect(calls).toBe(0);
+  });
+
+  test.each(["username", "password"] as const)("Z.AI quota rejects URL %s before probing", async field => {
+    // Construct dummy userinfo instead of embedding an email-shaped fixture in source.
+    // Keep this distinct from host/path rejection: the monitor host would otherwise match.
+    const url = new URL("https://api.z.ai/api/anthropic");
+    url[field] = "fixture";
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response("unexpected", { status: 500 });
+    }) as typeof fetch;
+
+    expect((await fetchProviderQuotaReports(keyQuotaConfig("zai", url.href), true)).reports).toEqual([]);
+    expect(calls).toBe(0);
+  });
+
   test("Z.AI quota probes the BigModel region from the provider's own host", async () => {
     const seen: Array<{ url: string; authorization?: string; redirect?: RequestRedirect }> = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {

@@ -241,7 +241,10 @@ describe("ocx status end to end on a connected client", () => {
       expect(parsed.remoteHub.origin).toBe("https://hub.example.test:8443");
       expect(parsed.remoteHub.subagentModels).toEqual(["xai/grok-4.6", "gpt-5.6-sol"]);
       expect(parsed.remoteHub.oauth).toEqual([{ provider: "xai", loggedIn: true }, { provider: "anthropic", loggedIn: false }]);
-      // The connection block is untouched; remoteHub describes the other end of the link.
+      // `remoteHub` describes the other end of the link, so it does not disturb the link's own
+      // state. `connection` itself is no longer untouched — a connected client also reports a
+      // local `readiness` verdict — so this asserts the one field `remoteHub` must not perturb
+      // rather than claiming the whole block is unchanged.
       expect(parsed.connection.state).toBe("connected");
 
       const human = await runStatus(home, codexHome, false);

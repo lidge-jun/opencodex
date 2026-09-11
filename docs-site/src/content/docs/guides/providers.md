@@ -161,8 +161,10 @@ The ChatGPT passthrough catalog also layers in the bare GPT-5.6 Sol/Terra/Luna s
 Provider presets can use account login — including GitHub Copilot via an experimental unofficial
 device-flow bridge. opencodex stores their credentials in
 `~/.opencodex/auth.json`; refreshable tokens are refreshed automatically, while durable keys are
-reused until the provider revokes them. `chatgpt` is also accepted by the login
-CLI; it acquires a ChatGPT credential while creating a `forward`-mode provider entry.
+reused until the provider revokes them. `ocx login codex` is accepted as well, but it is not one of
+these providers: it routes to the Codex account pool — the same flow as `ocx account login codex`,
+which keeps its own account ledger and needs a running proxy. `chatgpt` and `openai` are aliases of
+that route.
 
 ```bash
 ocx login xai          # xAI Grok
@@ -175,7 +177,7 @@ ocx login cursor       # standalone Cursor PKCE login
 ocx login command-code # Command Code browser OAuth (or import ~/.commandcode/auth.json)
 ocx login orcarouter-oauth # OrcaRouter browser consent + PKCE
 ocx login github-copilot  # GitHub device flow → Copilot token (Copilot Pro/Business)
-ocx login chatgpt      # standalone ChatGPT OAuth login
+ocx login codex        # Codex account pool (aliases: chatgpt, openai; needs a running proxy)
 ocx logout <provider>
 ```
 
@@ -336,8 +338,9 @@ does not strip metadata, retry a request, switch accounts, reset a thread, or ot
 **Diagnostics and reauth.** Human `ocx status` prints an OAuth health block (redacted account ids,
 no tokens). `ocx doctor` adds an OAuth reliability section with writable-store / single-flight checks
 and WARN rows that include a recovery Action. When an OAuth provider account needs reauthentication, run
-`ocx login <provider>` (or use Reauthenticate in the dashboard). Codex pool accounts are not an
-`ocx login` provider — reauthenticate via the dashboard Codex account pool. See
+`ocx login <provider>` (or use Reauthenticate in the dashboard). Codex pool accounts are not one of
+those providers, but `ocx login codex --reauth` routes to their account-pool reauthentication, which
+the dashboard Codex account pool also performs. See
 [`ocx status` / `ocx doctor`](/reference/cli/) in the CLI reference.
 
 ### Kiro credential import
@@ -817,18 +820,23 @@ Select **Zhipu AI — BigModel Coding Plan (Responses)** (`zhipu-bigmodel-respon
 for the `openai-responses` endpoint `https://open.bigmodel.cn/api/v1`. This is separate
 from `zhipu-bigmodel-coding`, which uses Chat Completions at `/api/coding/paas/v4`.
 
-The preset uses a **static roster** (`liveModels: false`) taken from the
-[official BigModel Codex example](https://docs.bigmodel.cn/cn/coding-plan/tool/codex.md):
+The preset uses a **static roster** (`liveModels: false`) taken from the published
+[GLM Coding Plan documentation](https://docs.bigmodel.cn/cn/coding-plan/tool/codex.md):
 
 | Model | Context tokens | Upstream selectable effort | Default effort | Reasoning summaries |
 | --- | ---: | --- | --- | --- |
 | `glm-5.3` | 1,048,576 | `low`, `high`, `max` | `max` | Supported |
+| `glm-5.3-flash` | 1,048,576 | `low`, `high`, `max` | `max` | Supported |
 | `glm-5-turbo` | 204,800 | None (empty list) | `max` | Supported |
 
-Both entries declare upstream text-only input. The Codex catalog advertises text and
-image because opencodex's existing vision sidecar can describe images for text-only
-models. Image handling requires an available, enabled vision sidecar; this does not
-declare native BigModel image support.
+`glm-5.3` and `glm-5-turbo` declare upstream text-only input. The Codex catalog
+advertises text and image for them because opencodex's existing vision sidecar can
+describe images for text-only models; that path requires an available, enabled vision
+sidecar and does not claim native BigModel image support.
+
+`glm-5.3-flash` is the exception: it declares native `text` and `image` input, because
+upstream documents it as a natively multimodal model. It therefore reads pictures
+directly instead of being routed through the describe-it-first sidecar detour.
 
 The default model is `glm-5.3`; Responses reasoning content is preserved on replay.
 The existing Codex export adds its compatibility
@@ -839,9 +847,11 @@ For Turbo, outgoing Responses requests omit `reasoning.effort`, including a call
 selection to the upstream default; opencodex does not inject a selectable or wire `max`.
 
 The example's `models.json` is a local catalog file, not a documented HTTP model-list
-response. This preset does not perform live model discovery. `glm-5.3-flash` is not
-seeded here because its exact Responses metadata is not verified. An existing custom
-provider with the same name keeps its configured destination and metadata.
+response, and not the set of models the endpoint serves — the Coding Plan pages state
+that every plan tier reaches GLM-5.3 and GLM-5.3-Flash, and that GLM-5-Turbo calls are
+auto-switched to Flash, so this endpoint was already serving Flash under the Turbo id.
+This preset still does not perform live model discovery. An existing custom provider
+with the same name keeps its configured destination and metadata.
 CLI key login also skips the undocumented `/models` probe and reports validation as
 unknown; successful key authentication is established by a subsequent inference request.
 

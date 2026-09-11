@@ -349,6 +349,7 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
   const noTemperatureModels = mergeStringArray(registryEntry.noTemperatureModels, provider.noTemperatureModels);
   const noTopPModels = mergeStringArray(registryEntry.noTopPModels, provider.noTopPModels);
   const noPenaltyModels = mergeStringArray(registryEntry.noPenaltyModels, provider.noPenaltyModels);
+  const noJsonSchemaModels = mergeStringArray(registryEntry.noJsonSchemaModels, provider.noJsonSchemaModels);
   const autoToolChoiceOnlyModels = mergeStringArray(registryEntry.autoToolChoiceOnlyModels, provider.autoToolChoiceOnlyModels);
   const preserveReasoningContentModels = mergeStringArray(registryEntry.preserveReasoningContentModels, provider.preserveReasoningContentModels);
   const requiresReasoningPlaceholderModels = mergeStringArray(registryEntry.requiresReasoningPlaceholderModels, provider.requiresReasoningPlaceholderModels);
@@ -473,6 +474,7 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     ...(noTemperatureModels ? { noTemperatureModels } : {}),
     ...(noTopPModels ? { noTopPModels } : {}),
     ...(noPenaltyModels ? { noPenaltyModels } : {}),
+    ...(noJsonSchemaModels ? { noJsonSchemaModels } : {}),
     ...(autoToolChoiceOnlyModels ? { autoToolChoiceOnlyModels } : {}),
     ...(preserveReasoningContentModels ? { preserveReasoningContentModels } : {}),
     ...(requiresReasoningPlaceholderModels ? { requiresReasoningPlaceholderModels } : {}),

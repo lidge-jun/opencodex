@@ -21,6 +21,18 @@ ocx models provider openrouter on
 
 After GUI registration or OAuth login, the confirmation dialog lets you open the Models page. CLI registration and login print model-management commands; JSON includes structured next steps. `--no-wait` reports pending login, not completion. Start the proxy with `ocx start` before using live model commands.
 
+## Z.ai Coding Plan quota endpoints
+
+The Z.ai quota probe recognizes the international coding Chat base
+`https://api.z.ai/api/coding/paas/v4`, the documented
+[Claude Code Anthropic base](https://docs.z.ai/devpack/tool/claude)
+`https://api.z.ai/api/anthropic`, and the documented
+[Codex Responses base](https://docs.z.ai/devpack/tool/codex)
+`https://api.z.ai/api/v1`. All three read quota from the international monitor with
+Bearer authentication; this does not change the inference URL or imply different
+quota consumption between adapters. Existing BigModel CN monitor selection remains
+separate. Full request URLs such as `/api/v1/responses` are not provider base URLs.
+
 ## Provider-related top-level fields
 
 | Field | Type | Default | Meaning |
@@ -180,6 +192,7 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `noTopPModels?` | `string[]` | Models that reject caller-specified `top_p`. |
 | `noPenaltyModels?` | `string[]` | Models that reject presence/frequency penalties. |
 | `noStructuredOutputModels?` | `string[]` | Exact model IDs whose `openai-chat` endpoint rejects `response_format`. Only an exact requested-model match omits the field; structured-output translation stays enabled for every other `openai-chat` model. |
+| `noJsonSchemaModels?` | `string[]` | Exact model IDs whose `openai-chat` endpoint rejects a `json_schema` `response_format` but still accepts `json_object`. Such a request is downgraded to `json_object` instead of being dropped, so a caller asking for JSON still gets JSON. `noStructuredOutputModels` wins when a model is on both lists. The `opencode go`, `opencode zen`, and `opencode free` presets ship this for their DeepSeek routes. |
 | `omitReasoningEffortWithToolsModels?` | `string[]` | Exact `openai-chat` model IDs that accept a reasoning-effort field on an ordinary turn but reject it once function tools are present. The model keeps its advertised effort ladder; OpenCodex omits the wire field for tool-bearing requests only and the upstream default applies. Narrower than `noReasoningModels`, which strips reasoning from every request and costs the model its picker entirely. |
 | `parallelToolCalls?` | `boolean` | Toggle parallel tool calls. OpenAI Chat defaults on; non-chat adapters advertise only on explicit `true`. |
 | `terminalContinuationGuard?` | `boolean` | Opt in an `openai-chat` provider to one bounded internal re-ask when an actionable turn announces work, then cleanly stops without a tool call. Defaults to `false`; explicit `false` behaves like omission. Combo attempts and routed compaction turns are excluded, and non-`openai-chat` adapters ignore this option. |
@@ -836,7 +849,7 @@ container usually has no unlocked keychain session, so requests would fail close
 `${ENV_VAR}` reference in the service environment there instead. Env references are left untouched
 by `store`.
 
-The `zhipu-bigmodel-responses` preset seeds `glm-5.3` and `glm-5-turbo` with
+The `zhipu-bigmodel-responses` preset seeds `glm-5.3`, `glm-5.3-flash` and `glm-5-turbo` with
 `liveModels: false` for `https://open.bigmodel.cn/api/v1`. Its static roster and
 per-model context, effort, and summary metadata come from the
 [BigModel Responses guide](/guides/providers/#bigmodel-coding-plan-over-responses).

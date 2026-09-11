@@ -77,8 +77,9 @@ ChatGPT 透传目录也会加入 GPT-5.6 Sol/Terra/Luna 的裸 slug（`gpt-5.6-s
 
 有九个提供商预设使用 OAuth 登录，另加通过实验性非官方设备流桥接的 GitHub Copilot。
 opencodex 会把凭据存入 `~/.opencodex/auth.json`：可刷新的令牌会自动轮换；OrcaRouter
-这类持久密钥会复用到提供商撤销为止。登录 CLI 也接受 `chatgpt`：
-它会获取一份 ChatGPT 凭据，并创建一个 `forward` 模式的提供商条目。
+这类持久密钥会复用到提供商撤销为止。登录 CLI 也接受 `ocx login codex`，但它并不是上面这些提供商：
+它会转到 Codex 账号池登录（与 `ocx account login codex` 相同的流程）。该账号池有独立的账号台账，
+这条路径需要代理正在运行。`chatgpt` 和 `openai` 是同一条路径的别名。
 
 ```bash
 ocx login xai          # xAI Grok
@@ -91,7 +92,7 @@ ocx login cursor       # 独立的 Cursor PKCE 登录
 ocx login command-code # Command Code 浏览器 OAuth（或导入 ~/.commandcode/auth.json）
 ocx login orcarouter-oauth # OrcaRouter 浏览器授权 + PKCE
 ocx login github-copilot  # GitHub 设备流 → Copilot 令牌（Copilot Pro/Business）
-ocx login chatgpt      # 独立的 ChatGPT OAuth 登录
+ocx login codex        # Codex 账号池（别名：chatgpt、openai；需要代理正在运行）
 ocx logout <provider>
 ```
 

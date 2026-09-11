@@ -86,8 +86,10 @@ ChatGPT パススルーカタログには GPT-5.6 Sol/Terra/Luna の名前空間
 
 OAuth ログインを使うプロバイダープリセットは 8 つで、これに実験的な非公式デバイスフロー
 ブリッジ経由の GitHub Copilot が加わります。認証情報は `~/.opencodex/auth.json` に保存され、
-自動更新されます。ログイン CLI は `chatgpt` も受け付けます。このコマンドは ChatGPT 認証情報を
-発行し `forward` モードのプロバイダーエントリを作成します。
+自動更新されます。`ocx login codex` も受け付けますが、これは上記のプロバイダーではありません。
+Codex アカウントプールのログイン (`ocx account login codex` と同じフロー) に転送されます。
+プールは独自の台帳を持ち、この経路はプロキシの起動を必要とします。`chatgpt` と `openai` は
+同じ経路の別名です。
 
 ```bash
 ocx login xai          # xAI Grok
@@ -99,7 +101,7 @@ ocx login google-antigravity
 ocx login cursor       # Cursor 専用 PKCE ログイン
 ocx login command-code # Command Code のブラウザ OAuth (または ~/.commandcode/auth.json を取り込み)
 ocx login github-copilot  # GitHub デバイスフロー → Copilot トークン (Copilot Pro/Business)
-ocx login chatgpt      # 別途 ChatGPT OAuth ログイン
+ocx login codex        # Codex アカウントプール (別名: chatgpt, openai / プロキシの起動が必要)
 ocx logout <provider>
 ```
 

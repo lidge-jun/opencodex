@@ -49,7 +49,19 @@ visible to anyone who can run ps:
   pbpaste | ocx account code <provider> --flow <flow-id>
   ocx account login <provider> --code -   (same, for the login flow)`;
 
+/**
+ * The Codex account pool answers to three spellings, and a user reaches for whichever
+ * one they already have a word for. `ocx login codex` routes here as well (dispatch.ts):
+ * the pool is deliberately not an `ocx login` provider -- it keeps its own account
+ * ledger and runs its browser flow inside the proxy -- but that is an implementation
+ * boundary, not something a user should have to know before they can log in.
+ */
 const CODEX_NAMES = new Set(["openai", "codex", "chatgpt"]);
+
+/** True for every spelling that means "the Codex account pool" rather than an OAuth provider. */
+export function isCodexAccountLoginName(name: string): boolean {
+  return CODEX_NAMES.has(name.trim().toLowerCase());
+}
 
 interface LoginStart {
   url?: string;
@@ -100,7 +112,12 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const id = takeOption(args, "--id");
   const suppliedCode = takeOptionWithSyntax(args, "--code");
   if (!provider) throw new CliUsageError("provider is required", USAGE);
-  rejectArgs(args, USAGE);
+  // A bare leftover here is plausibly the authorization code itself: this flow takes one
+  // through --code, and a user who pastes it as a positional would otherwise see it echoed
+  // back in the usage error. `ocx login codex` reaches this parser too, so the paste lands
+  // one word away from a command people run constantly. Flag-shaped leftovers stay visible,
+  // because a mistyped flag is exactly what the message has to name.
+  rejectArgs(args, USAGE, { redactValues: true });
   // kimi, nous, and github-copilot are already device flows, so --device is a
   // true statement about them and is accepted as a no-op rather than an error.
   // Anything else has no device grant at all and must fail loudly.

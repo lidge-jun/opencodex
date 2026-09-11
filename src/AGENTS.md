@@ -8,7 +8,7 @@ This file applies to `src/` and inherits the repository-wide rules in `/AGENTS.m
 - Do not assume a separate server compilation step.
 - Prefer Bun and Web-platform APIs. Introduce a Node-only runtime dependency only when the task explicitly requires compatibility code and the owning module already has that role.
 - Preserve existing public exports and configuration compatibility unless the task explicitly changes them.
-- Read the applicable documents in `structure/` before changing shared routing, adapters, transports, sidecars, authentication, configuration, or server architecture.
+- Read the applicable documents in `structure/` before changing shared routing, adapters, transports, sidecars, authentication, configuration, or server architecture. [`structure/INDEX.md`](../structure/INDEX.md) maps each source area to its owning doc, and that doc is updated in the same change that changes the area.
 
 ## Implementation rules
 

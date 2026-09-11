@@ -110,8 +110,10 @@ GPT-5.6 Sol/Terra/Luna slug'larını (`gpt-5.6-sol`, `gpt-5.6-terra`,
 Sekiz sağlayıcı önayarı OAuth girişini kullanır — artı deneysel resmi olmayan
 bir cihaz akışı köprüsü aracılığıyla GitHub Copilot. opencodex bunların kimlik
 bilgilerini `~/.opencodex/auth.json` içinde saklar ve otomatik olarak yeniler.
-`chatgpt` ayrıca oturum açma CLI'sı tarafından kabul edilir; bir `forward` modu
-sağlayıcı girdisi oluştururken bir ChatGPT kimlik bilgisi alır.
+Oturum açma CLI'sı `ocx login codex` komutunu da kabul eder; bu yukarıdaki sağlayıcılardan biri
+değildir: komut Codex hesap havuzu girişine yönlendirilir (`ocx account login codex` ile aynı akış).
+Havuzun kendi hesap defteri vardır, bu nedenle bu yol çalışan bir proxy gerektirir. `chatgpt` ve
+`openai` aynı yolun takma adlarıdır.
 
 ```bash
 ocx login xai          # xAI Grok
@@ -123,7 +125,7 @@ ocx login google-antigravity
 ocx login cursor       # bağımsız Cursor PKCE girişi
 ocx login command-code # Command Code tarayıcı OAuth (veya ~/.commandcode/auth.json içe aktarma)
 ocx login github-copilot  # GitHub cihaz akışı → Copilot belirteci (Copilot Pro/Business)
-ocx login chatgpt      # bağımsız ChatGPT OAuth girişi
+ocx login codex        # Codex hesap havuzu (takma adlar: chatgpt, openai; çalışan bir proxy gerekir)
 ocx logout <saglayici>
 ```
 

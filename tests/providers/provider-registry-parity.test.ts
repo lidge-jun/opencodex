@@ -79,6 +79,42 @@ describe("provider registry parity", () => {
       "qwen3.7-max",
     ]);
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].noVisionModels).not.toContain("kimi-k2.7-code");
+    // #1338 / #1415: the Zen gateway rejects json_schema on its DeepSeek routes. The three
+    // presets that share that gateway carry the narrow opt-out as a registry-only seed, so
+    // an operator no longer has to disable structured output by hand. Registry-only means
+    // it is asserted here against the raw entry, not the derived key-login map.
+    const zenDeepseekJsonSchema: Record<string, string[]> = {
+      "opencode-go": ["deepseek-v4-pro", "deepseek-v4-flash"],
+      "opencode-zen": ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4-flash-free"],
+      "opencode-free": ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4-flash-free"],
+    };
+    for (const [id, expected] of Object.entries(zenDeepseekJsonSchema)) {
+      expect(PROVIDER_REGISTRY.find(entry => entry.id === id)?.noJsonSchemaModels).toEqual(expected);
+    }
+    // A model can only be gated onto the thinking-budget or thinking-toggle wire if the same
+    // preset also gives it an effort ladder — otherwise the adapter translates effort into a
+    // wire field for a model whose picker is empty. opencode-go carried the shared budget list
+    // while seeding only its own four ladders, so a live roster serving qwen3.5-397b armed the
+    // budget path with nothing to advertise.
+    for (const id of ["opencode-go", "opencode-zen", "opencode-free"]) {
+      const entry = PROVIDER_REGISTRY.find(candidate => candidate.id === id);
+      const ladders = Object.keys(entry?.modelReasoningEfforts ?? {});
+      const gated = [...entry?.thinkingBudgetModels ?? [], ...entry?.thinkingToggleModels ?? []];
+      expect({ id, ungated: gated.filter(model => !ladders.includes(model)) })
+        .toEqual({ id, ungated: [] });
+    }
+    // Issue #78 / #950: a DeepSeek route that advertises a thinking ladder must also replay
+    // reasoning_content on tool-call continuations, or the gateway answers 400 on the second
+    // turn. The three Zen presets seed those two tables by hand, so this pins the pairing
+    // instead of trusting that whoever adds the next route remembers both.
+    for (const id of ["opencode-go", "opencode-zen", "opencode-free"]) {
+      const entry = PROVIDER_REGISTRY.find(candidate => candidate.id === id);
+      const replayed = entry?.preserveReasoningContentModels ?? [];
+      const thinkingDeepseek = Object.keys(entry?.modelReasoningEfforts ?? {})
+        .filter(model => model.startsWith("deepseek-"));
+      expect({ id, unreplayed: thinkingDeepseek.filter(model => !replayed.includes(model)) })
+        .toEqual({ id, unreplayed: [] });
+    }
     expect(KEY_LOGIN_PROVIDERS.mimo.noVisionModels).toEqual(["mimo-v2.5-pro"]);
     expect(KEY_LOGIN_PROVIDERS.mimo.noVisionModels).not.toContain("mimo-v2.5");
     expect(KEY_LOGIN_PROVIDERS["opencode-go"]).toMatchObject({
@@ -451,9 +487,20 @@ describe("provider registry parity", () => {
     expect(glm53Entry?.default_reasoning_level).toBe("max");
   });
 
-  test("BigModel Responses exports only the officially documented static Codex models", () => {
-    // Independent oracle: https://docs.bigmodel.cn/cn/coding-plan/tool/codex.md,
-    // local models.json example checked 2026-09-07; not an authenticated /models response.
+  test("BigModel Responses exports the documented Coding Plan roster for the Codex endpoint", () => {
+    // Independent oracle, all checked 2026-09-11 and none of them an authenticated /models
+    // response. The earlier version of this test read the models.json sample on
+    // https://docs.bigmodel.cn/cn/coding-plan/tool/codex.md as the endpoint's whole roster and
+    // hard-locked two models. It is a starter catalog, and three other upstream pages contradict
+    // that reading (#4201):
+    //   - coding-plan/latest-model.md binds Codex to https://open.bigmodel.cn/api/v1 and states
+    //     GLM-5.3 and GLM-5.3-Flash are available to every plan tier.
+    //   - coding-plan/overview.md states GLM-5-Turbo calls are auto-switched to GLM-5.3-Flash,
+    //     so this preset was already reaching Flash through the Turbo id it does list.
+    //   - guide/models/vlm/glm-5.3-flash.md gives native multimodal input, a 1M window, and text
+    //     parameters "consistent with GLM-5.3".
+    // What stays locked is the part no document supports: there is still no HTTP /models
+    // contract here, so liveModels and apiKeyValidation must not drift.
     const id = "zhipu-bigmodel-responses";
     const registry = PROVIDER_REGISTRY.find(entry => entry.id === id)!;
     expect(registry).toMatchObject({
@@ -461,17 +508,24 @@ describe("provider registry parity", () => {
       baseUrl: "https://open.bigmodel.cn/api/v1",
       authKind: "key",
       defaultModel: "glm-5.3",
-      models: ["glm-5.3", "glm-5-turbo"],
+      models: ["glm-5.3", "glm-5.3-flash", "glm-5-turbo"],
       liveModels: false,
       preserveCustomDestination: true,
       preserveResponsesReasoningContent: true,
     });
     expect(registry.modelDiscovery).toBeUndefined();
     expect(registry.preserveReasoningContentModels).toBeUndefined();
-    const upstreamModalities = { "glm-5.3": ["text"], "glm-5-turbo": ["text"] };
+    // Flash is the one row upstream documents as natively multimodal; the other two are text.
+    // Pinned separately from the global VLM rule above so that copying glm-5.3's ["text"] onto
+    // Flash fails here, naming this preset, rather than only in a loop over every provider.
+    const upstreamModalities = {
+      "glm-5.3": ["text"], "glm-5.3-flash": ["text", "image"], "glm-5-turbo": ["text"],
+    };
     expect(registry.modelInputModalities).toEqual(upstreamModalities);
+    expect(registry.modelInputModalities?.["glm-5.3-flash"]).toContain("image");
+    expect(registry.noVisionModels ?? []).not.toContain("glm-5.3-flash");
     expect(KEY_LOGIN_PROVIDERS[id]).toMatchObject({
-      models: ["glm-5.3", "glm-5-turbo"], liveModels: false, apiKeyValidation: "unknown",
+      models: ["glm-5.3", "glm-5.3-flash", "glm-5-turbo"], liveModels: false, apiKeyValidation: "unknown",
     });
     const provider = providerConfigSeed(registry);
     enrichProviderFromRegistry(id, provider);
@@ -480,11 +534,15 @@ describe("provider registry parity", () => {
     const models = provider.models!.map(modelId => applyProviderConfigHints(id, provider, {
       provider: id, id: modelId,
     }));
-    // The official upstream declaration stays text-only. Catalog hints add image for the
-    // existing vision sidecar (vision/eligibility.ts), not native BigModel image support.
+    // glm-5.3 and glm-5-turbo stay text-only upstream and get image back from the existing
+    // vision sidecar (vision/eligibility.ts). Flash already declares image, so its catalog
+    // modality is the model's own capability rather than a sidecar detour — the rows look
+    // alike below, and this assertion is what keeps the reason for them different.
     expect(provider.modelInputModalities).toEqual(upstreamModalities);
     expect(models).toMatchObject([
       { id: "glm-5.3", contextWindow: 1_048_576, reasoningEfforts: ["low", "high", "max"],
+        defaultReasoningEffort: "max", supportsReasoningSummaries: true, inputModalities: ["text", "image"] },
+      { id: "glm-5.3-flash", contextWindow: 1_048_576, reasoningEfforts: ["low", "high", "max"],
         defaultReasoningEffort: "max", supportsReasoningSummaries: true, inputModalities: ["text", "image"] },
       { id: "glm-5-turbo", contextWindow: 204_800, reasoningEfforts: [],
         defaultReasoningEffort: "max", supportsReasoningSummaries: true, inputModalities: ["text", "image"] },
@@ -492,6 +550,7 @@ describe("provider registry parity", () => {
     const entries = buildCatalogEntries(nativeTemplate(), [], models);
     for (const [modelId, window, efforts] of [
       ["glm-5.3", 1_048_576, ["low", "high", "max", "ultra"]],
+      ["glm-5.3-flash", 1_048_576, ["low", "high", "max", "ultra"]],
       ["glm-5-turbo", 204_800, []],
     ] as const) {
       const entry = entries.find(row => row.slug === `${id}/${modelId}`);
@@ -505,7 +564,9 @@ describe("provider registry parity", () => {
       expect((entry?.supported_reasoning_levels as Array<{ effort: string }>).map(row => row.effort))
         .toEqual([...efforts]);
     }
-    expect(entries.some(entry => String(entry.slug).includes("glm-5.3-flash"))).toBe(false);
+    // The reported gap: Flash reaches the exported catalog for this preset, once, under its
+    // own slug rather than only as the Turbo alias upstream silently redirects.
+    expect(entries.filter(entry => String(entry.slug) === `${id}/glm-5.3-flash`)).toHaveLength(1);
   });
 
   test("BigModel Responses key login does not probe an undocumented models endpoint", async () => {

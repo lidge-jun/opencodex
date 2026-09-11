@@ -19,12 +19,23 @@
  * `export OPENCODEX_API_AUTH_TOKEN=…` step is the one that has to stay gone: it is how the
  * maintainer's hub ended up with a management admin token in the data-plane variable, and the
  * service now provisions its own token, so re-adding the line would re-teach the incident.
+ *
+ * Round one fixed the English source only, and the seven translated copies kept telling their
+ * readers to run the line that fails (#4200). That drift was unenforced because this oracle read
+ * one file. The locale-wide block below is the part that keeps the next English edit from
+ * silently leaving the translations behind; the markers it pins are commands and literal error
+ * codes, which survive translation, rather than prose a translator is supposed to rewrite.
  */
 import { describe, expect, test } from "bun:test";
 import { repoPath } from "../helpers/repo-root";
 
 const GUIDE = repoPath("docs-site/src/content/docs/guides/remote-hub.md");
 const KO_GUIDE = repoPath("docs-site/src/content/docs/ko/guides/remote-hub.md");
+const TRANSLATED = ["ko", "ja", "zh-cn", "zh-tw", "fr", "ru", "tr"] as const;
+const LOCALE_GUIDES: ReadonlyArray<readonly [string, string]> = [
+  ["en", GUIDE],
+  ...TRANSLATED.map(locale => [locale, repoPath(`docs-site/src/content/docs/${locale}/guides/remote-hub.md`)] as const),
+];
 
 describe("remote hub guide", () => {
   test("no nested config set runs before its parent object exists", async () => {
@@ -159,4 +170,95 @@ describe("the one-port hub recipe", () => {
     const source = await Bun.file(GUIDE).text();
     expect(source).toContain("Do not point Serve at the loopback companion listener");
   });
+});
+
+describe("remote hub guide translations", () => {
+  // Every locale is checked against the SAME expectations as the source, including "en" itself.
+  // Putting English in the list is deliberate: it means a future English edit that drops one of
+  // these markers fails here too, instead of quietly redefining what the locales owe.
+  for (const [locale, path] of LOCALE_GUIDES) {
+    describe(locale, () => {
+      test("no nested config set runs before its parent object exists", async () => {
+        const source = await Bun.file(path).text();
+
+        // Ordering is the whole fix. A guide that sets the field first and shows `{}` further
+        // down still fails verbatim on the fresh standalone config it told the reader to build.
+        for (const parent of ["hub", "remoteGui"] as const) {
+          const initializer = source.indexOf(`ocx config set ${parent} '{}'`);
+          const nested = source.indexOf(`ocx config set ${parent}.`);
+          expect(initializer, `${locale} no longer initializes an empty ${parent} object`).toBeGreaterThanOrEqual(0);
+          expect(nested, `${locale} no longer sets any ${parent} field`).toBeGreaterThanOrEqual(0);
+          expect(
+            initializer,
+            `${locale} sets a ${parent}.<field> before creating ${parent}, which fails on a fresh config`,
+          ).toBeLessThan(nested);
+        }
+
+        // The error text is terminal output, so it stays literal in every language: it is how a
+        // reader who already hit the failure recognizes their own screen.
+        expect(source, `${locale} no longer names the error a reader actually sees`)
+          .toContain("config parent path not found: hub");
+      });
+
+      test("the whole-object alternative carries its replace-not-merge warning", async () => {
+        // `setPath` assigns the leaf, so the one-call form drops a pre-existing managementIngress.
+        // Each locale words the warning natively, so this pins shape: the alternative exists, and
+        // an emphasized caveat follows it before the section ends. Without the second half a
+        // locale could keep the convenient line and lose the reason it is dangerous.
+        const source = await Bun.file(path).text();
+        const wholeObject = source.indexOf(`ocx config set hub '{"managementPublicOrigin"`);
+        expect(wholeObject, `${locale} lost the whole-object alternative`).toBeGreaterThanOrEqual(0);
+
+        // Stop at the next heading of ANY level, not just `##`. Bounding on `##` alone let the
+        // bold text inside the following `###` data-plane subsection satisfy this check, so
+        // deleting the warning itself still passed -- the assertion was decorative in five of the
+        // eight files. Two or more hashes also keeps a `# comment` line inside a bash fence from
+        // closing the window early.
+        const nextHeading = source.slice(wholeObject).search(/\n#{2,6} /);
+        const section = source.slice(wholeObject, nextHeading < 0 ? undefined : wholeObject + nextHeading);
+        expect(section, `${locale} offers the whole-object form with no emphasized warning`).toContain("**");
+
+        // Emphasis alone is content-free -- any unrelated bold in the window would satisfy it.
+        // The warning's actual subject is the setting that silently disappears, and its name is
+        // a config path, so it survives translation. A locale that keeps the convenient one-call
+        // line and drops the reason it is dangerous fails here.
+        expect(
+          section,
+          `${locale} does not name hub.managementIngress as what a whole-object set drops`,
+        ).toContain("hub.managementIngress");
+      });
+
+      test("the data plane is given TLS on its own origin", async () => {
+        // The management ingress serves no /v1/*, /healthz or /readyz, so a guide that publishes
+        // only that ingress leaves a hub that pairs and then cannot answer a request. These are
+        // commands, so a translation that dropped the section fails rather than reading fine.
+        const source = await Bun.file(path).text();
+        expect(source, `${locale} lost the loopback forwarder macOS Serve requires`)
+          .toContain("socat TCP-LISTEN:10110,bind=127.0.0.1");
+        expect(source, `${locale} lost the second HTTPS mapping for the data listener`)
+          .toContain("tailscale serve --bg --https=8443 http://127.0.0.1:10110");
+        expect(source, `${locale} lost the data origin on ocx connect`)
+          .toContain("ocx connect https://hub-name.tailnet-name.ts.net:8443");
+        expect(source, `${locale} lost the separate management origin`)
+          .toContain("--management-url https://hub-name.tailnet-name.ts.net");
+      });
+
+      test("the quiet loopback-bind trap is documented", async () => {
+        // This is the failure the section exists for: a loopback-bound data listener behind a TLS
+        // frontend answers 403 on /v1/catalog while /readyz still returns 200, so the deployment
+        // looks healthy and serves no model. Both tokens are literal wire values in every locale.
+        const source = await Bun.file(path).text();
+        expect(source, `${locale} lost the error code the operator actually sees`).toContain("403 origin_rejected");
+        expect(source, `${locale} no longer says the frontend cannot repair this`).toContain("X-Forwarded-Host");
+      });
+
+      test("the retired --allow-insecure-http flag is not offered", async () => {
+        // `rejectArgs` throws "Unexpected argument(s)" on it, pairing refuses non-loopback HTTP
+        // with no opt-out, and remoteGui.allowInsecureHttp is a retired no-op kept only so old
+        // configs still load. Offering it in any language sends that reader to an error.
+        const source = await Bun.file(path).text();
+        expect(source, `${locale} still offers the retired flag`).not.toContain("--allow-insecure-http");
+      });
+    });
+  }
 });

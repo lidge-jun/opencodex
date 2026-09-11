@@ -122,6 +122,7 @@ managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정
 | `noTopPModels?` | `string[]` | 호출자가 지정한 `top_p`를 거부하는 모델입니다. |
 | `noPenaltyModels?` | `string[]` | presence/frequency penalty를 허용하지 않는 모델입니다. |
 | `noStructuredOutputModels?` | `string[]` | `openai-chat` 엔드포인트가 `response_format`을 거부하는 정확한 모델 ID입니다. 요청 모델이 항목과 정확히 일치할 때만 필드를 생략하며, 그 외 `openai-chat` 모델에서는 structured-output 변환을 유지합니다. |
+| `noJsonSchemaModels?` | `string[]` | `openai-chat` 엔드포인트가 `json_schema` 형식은 거부하지만 `json_object`는 받는 정확한 모델 ID입니다. 이런 요청은 필드를 지우는 대신 `json_object`로 낮춰 보내므로, JSON을 요청한 클라이언트가 산문 대신 JSON을 받습니다. 한 모델이 두 목록에 모두 있으면 `noStructuredOutputModels`가 우선합니다. `opencode go`, `opencode zen`, `opencode free` 프리셋이 DeepSeek 경로에 기본으로 싣습니다. |
 | `parallelToolCalls?` | `boolean` | 병렬 도구 호출을 켜거나 끕니다. OpenAI Chat은 기본으로 켜져 있고, 비-chat 어댑터는 명시적으로 `true`일 때만 이를 노출합니다. |
 | `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean; repairInvalidIds?: boolean }` | 기본값이 꺼진 downstream SSE 복구입니다. 정확한 자리표시자 id, 누락된 종료 id, 그리고(`repairInvalidIds`) 정규 `msg_`/`rs_` 접두사가 없는 message/reasoning id를 복구합니다. function-call id는 다시 쓰지 않습니다. 내장 DeepSeek은 마지막 두 가지를 기본으로 켭니다. |
 | `responsesSnapshotRepair?` | `boolean` | 기본값이 꺼진 클라이언트용 복구입니다. SSE와 JSON의 Responses 수명 주기에서 누락된 status, output, 도구 메타데이터를 채우며 raw 검사와 영속화는 변경하지 않습니다. |

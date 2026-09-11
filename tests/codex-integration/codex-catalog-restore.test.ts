@@ -1,3 +1,4 @@
+// Holds INV-RESTORE-01 from structure/overview.md; keep the id here if this file is split or renamed.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";

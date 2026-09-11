@@ -24,13 +24,31 @@ Admin token разрешает обычное управление, но ник�
 ```bash
 ocx config set runtimeRole hub
 ocx config set hostname 100.64.0.10
-ocx config set hub.managementPublicOrigin '"https://hub-name.tailnet-name.ts.net"'
 ocx config set corsAllowOrigins '["http://localhost:10100"]'
+
+# В новой standalone-конфигурации нет объектов `hub` и `remoteGui`, а `ocx config set`
+# не создаёт отсутствующего родителя: вложенный путь завершится ошибкой
+# `config parent path not found: hub`. Установка `runtimeRole` его тоже не создаёт.
+# Сначала создайте каждый объект, затем задавайте его поля.
+ocx config set hub '{}'
+ocx config set remoteGui '{}'
+ocx config set hub.managementPublicOrigin '"https://hub-name.tailnet-name.ts.net"'
 ocx config set hub.managementIngress '{"enabled":true,"port":10101}'
 ocx config set remoteGui.allowedTailscaleUsers '["operator@example.com"]'
 export OPENCODEX_API_AUTH_TOKEN="$(openssl rand -hex 32)"
 ocx service install
 ```
+
+Если конфигурация действительно пуста, каждый объект можно задать одним вызовом:
+
+```bash
+ocx config set hub '{"managementPublicOrigin":"https://hub-name.tailnet-name.ts.net","managementIngress":{"enabled":true,"port":10101}}'
+ocx config set remoteGui '{"allowedTailscaleUsers":["operator@example.com"]}'
+```
+
+Эта форма годится, только пока объекта нет. Присваивание объекта целиком **заменяет** его, а не сливает с прежним: выполнив строку выше над конфигурацией, где уже был `hub.managementIngress`, вы молча потеряете этот ingress. Когда вы правите существующую конфигурацию, родитель уже на месте — задавайте по одному полю вложенным путём, и остальное останется нетронутым.
+
+Принятие строки решают две детали. Значение сначала разбирается как JSON и лишь затем трактуется как обычная строка — поэтому URL пишется как `'"https://…"'`, а объекты, массивы, булевы значения и числа обязаны быть корректным JSON. Кроме того, `hub` и `remoteGui` строгие: и опечатка в ключе, и несоответствующее значение отклоняются прямо при записи ошибкой `schema_invalid`, а не превращаются в настройку, которая никогда не сработает. `managementPublicOrigin` должен быть чистым origin без пути, запроса и фрагмента.
 
 systemd/launchd читает секрет из `service-api-token`; plist и unit не содержат его значения.
 
@@ -42,6 +60,39 @@ tailscale serve status
 ```
 
 `/healthz` подтверждает только работу процесса. Проверьте также `/readyz`, авторизованный `GET /v1/catalog` и реальный ответ модели. Собственный TLS-прокси должен использовать `tailscale cert hub-name.tailnet-name.ts.net` и проксировать только на `127.0.0.1:10101`. Не подделывайте `Tailscale-User-*`; без доверенной идентификации используйте одноразовое pairing.
+
+### TLS для слушателя данных
+
+Показанное выше сопоставление Serve публикует только **управляющий** вход. Он никогда не отдаёт `/v1/*`, `/healthz` и `/readyz`, поэтому сам по себе не даёт удалённому клиенту работоспособного плана данных. opencodex к тому же не терминирует TLS: слушатель работает по открытому HTTP, а HTTPS всегда обеспечивает фронтенд на стороне оператора.
+
+Serve может стать таким фронтендом и для плана данных — на втором HTTPS-порту. В macOS нужен ещё один переход: Tailscale Serve проксирует только на `127.0.0.1` и не может указывать на слушателя, привязанного к собственному tailnet-адресу узла, а сборка macOS-клиента из App Store прямо отказывает удалённому назначению. Запустите на hub локальный форвардер и направьте Serve на него:
+
+```bash
+# Подойдёт любой loopback-форвардер TCP; socat — один из них. Выберите порт, который хаб
+# ещё не занял: при включённом loopback-companion 127.0.0.1:10100 принадлежит самому opencodex.
+socat TCP-LISTEN:10110,bind=127.0.0.1,fork,reuseaddr TCP:100.64.0.10:10100 &
+
+tailscale serve --bg --https=8443 http://127.0.0.1:10110
+tailscale serve status   # ожидаются оба сопоставления: 443 -> 10101 и 8443 -> 10110
+```
+
+Serve принимает ограниченный набор HTTPS-портов; убедитесь через `tailscale serve status`, что сопоставление действительно создано, вместо того чтобы считать порт разрешённым. Дайте форвардеру тот же срок жизни, что и hub: фоновая задача оболочки умирает при перезагрузке, а служба возвращается, и остаётся работающий hub, недоступный по TLS. Запускайте форвардер из launchd или systemd рядом с `ocx service install`.
+
+Затем подключайтесь, указывая оба origin по отдельности. Позиционный URL — это origin **данных**, именно оттуда берутся `/readyz` и `/v1/catalog`; `--management-url` — origin панели, который используется для pairing и выдачи ключа. Совпадение портов не требуется:
+
+```bash
+ocx connect https://hub-name.tailnet-name.ts.net:8443 \
+  --management-url https://hub-name.tailnet-name.ts.net \
+  --admin-token-stdin
+```
+
+Если `--management-url` опущен, он берётся из ответа `/readyz`, который сообщает `hub.managementPublicOrigin`. Когда origin различаются, указать его явно понятнее.
+
+**Не сокращайте путь, привязывая слушатель данных к `127.0.0.1`.** Именно по loopback-привязке opencodex распознаёт сугубо локальное развёртывание: он перестаёт требовать ключ данных и начинает требовать, чтобы заголовок `Host` тоже был loopback. TLS-фронтенд передаёт `Host: hub-name.tailnet-name.ts.net`, поэтому `/v1/catalog` отвечает `403 origin_rejected`, а `/readyz`, где этой проверки нет, по-прежнему возвращает `200`. Развёртывание выглядит здоровым и не может отдать модель. Ничто в тракте запроса не читает `X-Forwarded-Host`, так что фронтенд это не исправит. Оставьте слушатель на tailnet-адресе: проверка ключа останется включённой, а проверка `Host` не применяется.
+
+Привязка к `0.0.0.0` тоже работает и снимает нужду в форвардере, так как слушатель становится доступен и по loopback. Она публикует порт данных на всех интерфейсах, поэтому выбирайте её только там, где другие сети вас не волнуют.
+
+Когда Serve поднят, повторите приёмочные проверки для HTTPS-origin данных: `/readyz`, авторизованный `GET /v1/catalog` и один реальный маршрутизированный ответ.
 
 ## OAuth, ротация и отключение
 
@@ -106,6 +157,7 @@ docker compose up -d
 - Для `.prev` сохраните оба файла и повторите ротацию с временными полномочиями.
 - `hub-too-new`/`hub-too-old` указывает, какую сторону обновить; локальные записи ещё не сделаны.
 - Pairing одноразовый, попытки ограничены 429; потерянный код создайте заново.
-- Для не-loopback HTTP нужен `--allow-insecure-http`; admin token по HTTP не отправляется.
+- Pairing по не-loopback HTTP отклоняется сразу, и флага-исключения нет. Поставьте управляющий origin за HTTPS или выполняйте pairing по loopback; admin token по HTTP не отправляется.
+- `/readyz` отвечает `200`, а `/v1/catalog` — `403 origin_rejected`: слушатель данных привязан к loopback за TLS-фронтендом, см. «TLS для слушателя данных» выше.
 - Logout/expiry браузерной сессии не отзывает ключ данных.
 - Перед `tailscale serve reset` просмотрите все mappings через `tailscale serve status`.
