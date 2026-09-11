@@ -1,3 +1,5 @@
+import { normalizeSideChatCacheMetrics, type SideChatCacheMetrics } from "../usage/side-chat-cache";
+import { normalizeLogConversationId } from "../server/request-log-conversation";
 import { createHmac, randomBytes } from "node:crypto";
 import type { AdapterRequest } from "../adapters/base";
 import { debugProviderDiagnostic } from "../lib/debug";
@@ -25,7 +27,8 @@ type Decision = {
   headers: Record<string, string>;
   reason: string;
   matchedItems: number;
-  complete: () => void;
+  complete: () => SideChatCacheMetrics["snapshotOutcome"];
+  metrics: SideChatCacheMetrics;
 };
 
 function record(value: unknown): value is RecordValue {
@@ -97,14 +100,21 @@ export class SideChatCache {
   private readonly snapshots = new Map<string, Snapshot[]>();
   private readonly bindings = new Map<string, Binding>();
   private sequence = 0;
+  private preparing?: SideChatCacheMetrics;
+  private expiredEntries = 0;
+  private evictedEntries = 0;
+  private readonly snapshotBytes = new WeakMap<Snapshot, number>();
   constructor(private readonly now = Date.now, private readonly capacity = 64, private readonly ttlMs = 600_000) {}
 
   clear(): void { this.snapshots.clear(); this.bindings.clear(); }
   get size(): number { this.prune(); return this.snapshots.size; }
   tag(value: unknown): string {
-    const json = JSON.stringify(value, (_key, item) => record(item)
-      ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
-    return createHmac("sha256", this.secret).update(json ?? "undefined").digest("hex");
+    const started = this.preparing ? performance.now() : 0;
+    try {
+      const json = JSON.stringify(value, (_key, item) => record(item)
+        ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
+      return createHmac("sha256", this.secret).update(json ?? "undefined").digest("hex");
+    } finally { if (this.preparing) this.preparing.hashMs = (this.preparing.hashMs ?? 0) + performance.now() - started; }
   }
 
   private catalog(item: unknown): Catalog | undefined {
@@ -116,24 +126,69 @@ export class SideChatCache {
     }) };
   }
 
+  private retention() {
+    const snapshots = new Set([...this.snapshots.values()].flat());
+    for (const binding of this.bindings.values()) snapshots.add(binding.snapshot);
+    let bytes = 64 * this.snapshots.size + 128 * this.bindings.size;
+    for (const snapshot of snapshots) bytes += this.snapshotBytes.get(snapshot) ?? 0;
+    return { retainedSnapshots: snapshots.size, retainedBindings: this.bindings.size, estimatedRetainedBytes: bytes };
+  }
+
   private prune(): void {
     const now = this.now();
     for (const [thread, entries] of this.snapshots) {
       const live = entries.filter(entry => entry.expires > now);
+      this.expiredEntries += entries.length - live.length;
       if (live.length) this.snapshots.set(thread, live); else this.snapshots.delete(thread);
     }
-    for (const [thread, binding] of this.bindings) if (binding.snapshot.expires <= now) this.bindings.delete(thread);
+    for (const [thread, binding] of this.bindings) if (binding.snapshot.expires <= now) { this.bindings.delete(thread); this.expiredEntries++; }
     for (const map of [this.snapshots, this.bindings]) {
-      while (map.size > this.capacity) map.delete(map.keys().next().value!);
+      while (map.size > this.capacity) { map.delete(map.keys().next().value!); this.evictedEntries++; }
     }
   }
 
   prepare(body: RecordValue, sourceHeaders: Record<string, string>): Decision {
+    const started = performance.now();
+    const expired = this.expiredEntries;
+    const evicted = this.evictedEntries;
+    const metrics: SideChatCacheMetrics = { reason: "ineligible", phase: "unknown", snapshotOutcome: "ineligible", prepareMs: 0,
+      inputItems: Array.isArray(body.input) ? body.input.length : 0, matchedItems: 0, parentCandidates: 0,
+      retainedSnapshots: 0, retainedBindings: 0, estimatedRetainedBytes: 0, expiredEntries: 0, evictedEntries: 0 };
+    metrics.hashMs = 0;
+    const previous = this.preparing;
+    this.preparing = metrics;
+    let result: Decision;
+    try { result = this.prepareInner(body, sourceHeaders, metrics); }
+    catch { result = { body, headers: sourceHeaders, reason: "error", matchedItems: 0, metrics, complete: () => "error" }; metrics.snapshotOutcome = "error"; }
+    finally { this.preparing = previous; }
+    Object.assign(metrics, this.retention(), { reason: result.reason, matchedItems: result.matchedItems,
+      expiredEntries: this.expiredEntries - expired, evictedEntries: this.evictedEntries - evicted });
+    metrics.prepareMs = performance.now() - started;
+    metrics.observedAt = performance.timeOrigin + started + metrics.prepareMs;
+    const complete = result.complete;
+    result.complete = () => {
+      const started = performance.now();
+      const expired = this.expiredEntries;
+      const evicted = this.evictedEntries;
+      try { metrics.snapshotOutcome = complete(); }
+      catch { metrics.snapshotOutcome = "error"; }
+      Object.assign(metrics, this.retention());
+      metrics.expiredEntries += this.expiredEntries - expired;
+      metrics.evictedEntries += this.evictedEntries - evicted;
+      metrics.completionMs = performance.now() - started;
+      metrics.observedAt = performance.timeOrigin + started + metrics.completionMs;
+      return metrics.snapshotOutcome;
+    };
+    return result;
+  }
+
+  private prepareInner(body: RecordValue, sourceHeaders: Record<string, string>, metrics: SideChatCacheMetrics): Decision {
     this.prune();
-    const original = (): Decision => ({ body, headers: sourceHeaders, reason: "ineligible", matchedItems: 0, complete: () => {} });
+    const original = (): Decision => ({ body, headers: sourceHeaders, reason: "ineligible", matchedItems: 0, metrics, complete: () => "ineligible" });
     const result = original();
     const headers = new Headers(sourceHeaders);
     const thread = headers.get("thread-id");
+    metrics.threadIdHash = normalizeLogConversationId(thread);
     const session = headers.get("session-id") ?? headers.get("session_id");
     const key = body.prompt_cache_key;
     const client = record(body.client_metadata) ? body.client_metadata : {};
@@ -157,7 +212,9 @@ export class SideChatCache {
     }
     const parent = parents[0];
     if (parents.some(value => !identifier(value) || value !== parent) || parent === thread) return result;
+    const normalizeStarted = performance.now();
     const execReference = normalizeExecCacheReference(body);
+    metrics.normalizeMs = performance.now() - normalizeStarted;
     body = execReference.body;
     result.body = body;
     const scope = this.tag([headers.get("authorization"), headers.get("chatgpt-account-id"), headers.get("originator"), headers.get("openai-beta"), headers.get("x-codex-beta-features")]);
@@ -177,11 +234,14 @@ export class SideChatCache {
     const settings = this.tag([settingsBody, metadataSettings(client), metadataSettings(bodyMetadata)]);
     const threadTag = this.tag(thread);
     const binding = this.bindings.get(threadTag);
+    metrics.phase = identifier(parent) ? (binding ? "bound-side" : "unbound-side") : "parent";
     let selected: Snapshot | undefined;
     let matchedItems = 0;
+    const matchStarted = performance.now();
     if (identifier(parent)) {
       const parentTag = this.tag(parent);
       const candidates = binding ? (binding.parent === parentTag ? [binding.snapshot] : []) : (this.snapshots.get(parentTag) ?? []);
+      metrics.parentCandidates = candidates.length;
       result.reason = candidates.length ? "incompatible-prefix" : "missing-parent";
       for (const candidate of candidates) {
         if (candidate.scope !== scope) { result.reason = "account-or-header-change"; continue; }
@@ -254,23 +314,28 @@ export class SideChatCache {
         break;
       }
     } else result.reason = "parent-observed";
+    metrics.matchMs = performance.now() - matchStarted;
     const wire = result.body;
     const snapshot: Snapshot = {
       sequence: ++this.sequence, expires: this.now() + this.ttlMs, scope, settings, catalog: this.catalog((wire.input as unknown[])[0]), instructions: this.tag(wire.instructions),
       items: (wire.input as unknown[]).map(item => this.tag(item)), session: selected?.session ?? session, key: selected?.key ?? key,
     };
+    this.snapshotBytes.set(snapshot, Buffer.byteLength(JSON.stringify(snapshot)));
+    metrics.snapshotOutcome = "not-observed";
     if (execReference.reference) result.body = { ...wire, input: [...wire.input as unknown[], execReference.reference] };
     if (selected) result.matchedItems = matchedItems;
     let completed = false;
     result.complete = () => {
-      if (completed || snapshot.expires <= this.now()) return;
+      if (completed) return metrics.snapshotOutcome;
+      if (snapshot.expires <= this.now()) return "expired";
       completed = true;
-      if ((this.snapshots.get(threadTag)?.[0]?.sequence ?? 0) > snapshot.sequence) return;
+      if ((this.snapshots.get(threadTag)?.[0]?.sequence ?? 0) > snapshot.sequence) return "superseded";
       this.snapshots.delete(threadTag);
       this.snapshots.set(threadTag, [snapshot]);
       if (selected && identifier(parent)) this.bindings.set(threadTag, { parent: this.tag(parent), snapshot: selected });
       else this.bindings.delete(threadTag);
       this.prune();
+      return "stored";
     };
     return result;
   }
@@ -290,6 +355,7 @@ export function attachSideChatCache(request: AdapterRequest, decision: Decision 
   if (!decision || !runtime) return;
   const tag = runtime.tag(new Headers(request.headers).get("thread-id")).slice(0, 12);
   pending.set(request, { decision, cache: runtime, tag });
+  request.sideChatCache = normalizeSideChatCacheMetrics(decision.metrics);
   debugProviderDiagnostic("codex", "side-chat-cache", { thread: tag, reason: decision.reason, matchedItems: decision.matchedItems });
 }
 
@@ -297,8 +363,9 @@ export function completeSideChatCache(request: AdapterRequest, response: unknown
   const entry = pending.get(request);
   if (!entry || !record(response) || response.status !== "completed") return;
   pending.delete(request);
-  if (entry.cache !== runtime) return;
-  entry.decision.complete();
+  if (entry.cache !== runtime) entry.decision.metrics.snapshotOutcome = "disabled";
+  else entry.decision.complete();
+  request.sideChatCache = normalizeSideChatCacheMetrics(entry.decision.metrics);
   const usage = record(response.usage) ? response.usage : {};
   const details = record(usage.input_tokens_details) ? usage.input_tokens_details : {};
   const count = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;

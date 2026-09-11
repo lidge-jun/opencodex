@@ -1277,18 +1277,7 @@
   "zz-ci-api-usage-isolation.test.ts": "ci-workflows",
   "zz-ci-storage-policy-isolation.test.ts": "ci-workflows",
   "zz-pr-coderabbit-readiness-revalidation.test.ts": "ci-workflows",
-  "devin-cli-authmode-migration.test.ts": "providers",
-  "devin-login.test.ts": "providers",
-  "devin-provider-merge-migration.test.ts": "providers",
-  "google-structured-output.test.ts": "adapters/google",
-  "usage-log-ws-stage.test.ts": "usage",
-  "main-device-reauth.test.ts": "codex-integration",
-  "main-device-reauth-api.test.ts": "codex-integration",
-  "main-device-reauth-ui.test.ts": "gui",
-  "adapter-input-media-guard.test.ts": "adapters",
-  "chat-media-translation.test.ts": "responses",
-  "execution-budget-permits.test.ts": "lib",
-  "spend-instrumentation-log.test.ts": "server",
-  "codex-pool-refresh-backoff.test.ts": "codex-integration",
-  "responses-account-change-scrub.test.ts": "responses"
+  "responses-account-change-scrub.test.ts": "responses",
+  "side-chat-cache-metrics.test.ts": "usage",
+  "side-chat-cache-proxy.test.ts": "responses"
 }

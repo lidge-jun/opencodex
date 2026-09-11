@@ -1,3 +1,5 @@
+import { readRecentUsageEntries } from "../../src/usage/log";
+import { normalizeLogConversationId } from "../../src/server/request-log-conversation";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -5,13 +7,14 @@ import { join } from "node:path";
 import { prepareSideChatCache, SIDE_CHAT_BOUNDARY, SIDE_CHAT_RULES } from "../../src/codex/side-chat-cache";
 import { clearCodexUpstreamHealth, clearThreadAccountMap } from "../../src/codex/routing";
 import { handleResponses } from "../../src/server/responses";
-import type { RequestLogContext } from "../../src/server/request-log";
+import { addFinalRequestLog, type RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const originalFetch = globalThis.fetch;
+const originalWebSocket = globalThis.WebSocket;
 const message = (role: string, text: string) => ({ type: "message", role, content: [{ type: "input_text", text }] });
 const history = [message("developer", "Parent rules"), message("user", "Parent question")];
 const childInput = [...history, message("user", SIDE_CHAT_BOUNDARY), message("user", "Child question")];
@@ -32,6 +35,7 @@ beforeEach(() => {
   clearCodexUpstreamHealth();
   clearThreadAccountMap();
   captured = [];
+  globalThis.WebSocket = new Proxy(originalWebSocket, { construct() { throw new Error("Synthetic HTTP-only upstream"); } });
   terminal = "completed";
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
@@ -51,6 +55,7 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  globalThis.WebSocket = originalWebSocket;
   prepareSideChatCache({}, {}, false);
   clearCodexUpstreamHealth();
   clearThreadAccountMap();
@@ -79,8 +84,11 @@ async function send(thread: string, options: { parent?: string; account?: string
       ...(options.parent ? { forked_from_thread_id: options.parent } : {}) }),
   }, body: JSON.stringify(body) });
   const count = captured.length;
-  const response = await handleResponses(request, config, { model: "", provider: "" } as RequestLogContext);
+  const logCtx: RequestLogContext = { model: "", provider: "" };
+  const started = Date.now();
+  const response = await handleResponses(request, config, logCtx);
   const text = await response.text();
+  addFinalRequestLog(`request-${thread}`, started, logCtx, terminal === "completed" ? response.status : 502);
   expect(response.status).toBe(200);
   expect(text).toContain(`response.${terminal}`);
   expect(captured.length).toBe(count + 1);
@@ -140,4 +148,19 @@ test("Responses handler retains child stream options when matching a differently
   expect(child.body.prompt_cache_key).toBe("parent");
   expect(child.headers.get("session-id")).toBe("parent");
   expect(child.body.stream_options).toEqual({ include_obfuscation: true });
+});
+
+
+test("side diagnostics persist completion and retain exact child identity despite grouped logs", async () => {
+  await send("parent", { enabled: true });
+  await send("child-a", { parent: "parent", enabled: true });
+  const rows = readRecentUsageEntries(20, home);
+  const child = rows.find(row => row.sideChatCache?.threadIdHash === normalizeLogConversationId("child-a"));
+  expect(child?.sideChatCache).toMatchObject({ phase: "unbound-side", snapshotOutcome: "stored", matchedItems: 2 });
+  expect(child?.sideChatCache?.completionMs).toBeGreaterThanOrEqual(0);
+  expect(child?.attempts?.some(attempt => attempt.sideChatCache?.snapshotOutcome === "stored")).toBe(true);
+  terminal = "failed";
+  await send("failed-child", { parent: "parent", enabled: true });
+  const failed = readRecentUsageEntries(20, home).find(row => row.sideChatCache?.threadIdHash === normalizeLogConversationId("failed-child"));
+  expect(failed?.sideChatCache?.snapshotOutcome).toBe("not-observed");
 });
