@@ -1,3 +1,4 @@
+import { normalizeAstraEffortCacheMetrics, type AstraEffortCacheMetrics, type AstraEffortStoreMeasurement } from "../usage/astra-effort-cache";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { getConfigDir } from "../config/paths";
@@ -20,6 +21,7 @@ export interface AstraEffortResult {
   status: string;
   baseline?: string;
   effective?: string;
+  metrics?: AstraEffortCacheMetrics;
 }
 
 function record(value: unknown): value is RecordValue {
@@ -113,12 +115,13 @@ function transform(body: RecordValue, state: State): AstraEffortResult & { snaps
     status, baseline, effective: requested, snapshot };
 }
 
-export function applyAstraEffortCache(
+function applyAstraEffortCacheInner(
   body: unknown,
   original: unknown,
   headers: Headers,
   servingHeaders: Headers,
-  directory = join(getConfigDir(), "astra-effort-cache"),
+  directory: string,
+  measurement: AstraEffortStoreMeasurement & { historyMs?: number },
 ): AstraEffortResult {
   if (!record(body)) return { body, status: "unsupported_input" };
   const requested = record(body.reasoning) && effort(body.reasoning.effort) ? body.reasoning.effort : undefined;
@@ -137,25 +140,51 @@ export function applyAstraEffortCache(
   const scope = digest(JSON.stringify([thread, account]));
   try {
     return withAstraEffortState(directory, scope, serialized => {
-      let state: State = { version: 1, snapshots: [] };
-      if (serialized !== undefined) {
-        if (serialized.length > MAX_STATE_BYTES) return { value: fallback("state_limit") };
-        const loaded: unknown = JSON.parse(serialized);
-        if (!validState(loaded)) return { value: fallback("invalid_state") };
-        state = loaded;
-      }
-      const result = transform(body, state);
-      if (!result.snapshot) return { value: result, state: null };
-      const snapshot = result.snapshot;
-      if (!state.snapshots.some(s => JSON.stringify(s) === JSON.stringify(snapshot))) {
-        if (state.snapshots.length >= MAX_SNAPSHOTS) return { value: fallback("state_limit") };
-        state.snapshots.push(snapshot);
-      }
-      const next = JSON.stringify(state);
-      if (next.length > MAX_STATE_BYTES) return { value: fallback("state_limit") };
-      return { value: { body: result.body, status: result.status, baseline: result.baseline, effective: result.effective }, state: next };
-    });
+      const started = performance.now();
+      try {
+        let state: State = { version: 1, snapshots: [] };
+        if (serialized !== undefined) {
+          if (serialized.length > MAX_STATE_BYTES) return { value: fallback("state_limit") };
+          const loaded: unknown = JSON.parse(serialized);
+          if (!validState(loaded)) return { value: fallback("invalid_state") };
+          state = loaded;
+        }
+        const result = transform(body, state);
+        if (!result.snapshot) return { value: result, state: null };
+        const snapshot = result.snapshot;
+        if (!state.snapshots.some(s => JSON.stringify(s) === JSON.stringify(snapshot))) {
+          if (state.snapshots.length >= MAX_SNAPSHOTS) return { value: fallback("state_limit") };
+          state.snapshots.push(snapshot);
+        }
+        const next = JSON.stringify(state);
+        if (next.length > MAX_STATE_BYTES) return { value: fallback("state_limit") };
+        return { value: { body: result.body, status: result.status, baseline: result.baseline, effective: result.effective }, state: next };
+      } finally { measurement.historyMs = performance.now() - started; }
+    }, measurement);
   } catch {
     return fallback("unavailable_state");
   }
+}
+
+export function applyAstraEffortCache(
+  body: unknown,
+  original: unknown,
+  headers: Headers,
+  servingHeaders: Headers,
+  directory = join(getConfigDir(), "astra-effort-cache"),
+): AstraEffortResult {
+  const started = performance.now();
+  const measurement: AstraEffortStoreMeasurement & { historyMs?: number } = { outcome: "skipped" };
+  const result = applyAstraEffortCacheInner(body, original, headers, servingHeaders, directory, measurement);
+  const input = record(body) && Array.isArray(body.input) ? body.input : [];
+  const output = record(result.body) && Array.isArray(result.body.input) ? result.body.input : [];
+  let updateCount = 0;
+  for (const item of output) if (record(item) && item.type === "configuration_update") updateCount++;
+  const metrics = normalizeAstraEffortCacheMetrics({
+    status: result.status, stateOutcome: measurement.outcome, durationMs: performance.now() - started,
+    setupMs: measurement.setupMs, transactionMs: measurement.transactionMs, historyMs: measurement.historyMs,
+    closeMs: measurement.closeMs, inputItems: input.length,
+    updateCount,
+  });
+  return { ...result, ...(metrics ? { metrics } : {}) };
 }

@@ -69,7 +69,8 @@ describe("Astra effort history", () => {
     run(first); const low = run(second, "low");
     expect(low.status).toBe("updated");
     const before = readState();
-    expect(run(second, "low")).toEqual({ ...low, status: "replay" });
+    const { metrics: _metrics, ...lowResult } = low;
+    expect(run(second, "low")).toMatchObject({ ...lowResult, status: "replay" });
     expect(readState()).toBe(before);
   });
   test("restart/resume reads disk state without process memory", () => {
@@ -126,7 +127,7 @@ describe("Astra effort history", () => {
   });
   test("corrupt state fails transparently without overwriting it", () => {
     run(first); writeFileSync(statePath(), "invalid");
-    expect(run(second, "low")).toMatchObject({ status: "unavailable_state", body: body(second, "low") });
+    expect(run(second, "low")).toMatchObject({ status: "unavailable_state", body: body(second, "low"), metrics: { stateOutcome: "error" } });
     expect(readFileSync(statePath(), "utf8")).toBe("invalid");
   });
   test("invalid update positions fail state validation", () => {
@@ -147,7 +148,7 @@ describe("Astra effort history", () => {
     run(first);
     const lock = new Database(statePath());
     lock.exec("BEGIN IMMEDIATE");
-    try { expect(run(second, "low")).toMatchObject({ status: "unavailable_state", body: body(second, "low") }); }
+    try { expect(run(second, "low")).toMatchObject({ status: "unavailable_state", body: body(second, "low"), metrics: { stateOutcome: "busy" } }); }
     finally { lock.exec("ROLLBACK"); lock.close(); }
     expect(run(second, "low").status).toBe("updated");
   });

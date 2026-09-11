@@ -1,3 +1,4 @@
+import type { AstraEffortCacheMetrics } from "../usage/astra-effort-cache";
 import { applyAstraEffortCache, supportsAstraEffortCache } from "./astra-effort-cache";
 import { normalizeRoutedAgentMessages } from "./routed-agent-messages";
 import { normalizeOpenCodeGoAdditionalTools } from "./opencode-go-additional-tools";
@@ -2515,15 +2516,17 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         provider,
         parsed.modelId,
       );
+      let astraEffortCache: AstraEffortCacheMetrics | undefined;
       let astraReasoningLog: { effectiveEffort: string; wireField: "reasoning.effort"; wireValue: string } | undefined;
       if (isCanonicalOpenAiForwardProvider(provider) && supportsAstraEffortCache(finalBody)) {
         const effortResult = applyAstraEffortCache(finalBody, parsed._rawBody, incoming.headers, new Headers(headers));
         finalBody = effortResult.body;
+        astraEffortCache = effortResult.metrics;
         if (effortResult.baseline && effortResult.effective) {
           astraReasoningLog = { effectiveEffort: effortResult.effective, wireField: "reasoning.effort", wireValue: effortResult.baseline };
         }
         debugProviderDiagnostic("openai-responses", "astra-effort-cache", { status: effortResult.status,
-          baseline: effortResult.baseline, effective: effortResult.effective });
+          baseline: effortResult.baseline, effective: effortResult.effective, metrics: astraEffortCache });
       }
       if (isCanonicalOpenAiForwardProvider(provider)) {
         // Spark closes Responses Lite streams before a terminal completion. Select compatibility
@@ -2569,6 +2572,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         ...(convertedRoutedNamespaceToolAliases ? { convertedRoutedNamespaceToolAliases } : {}),
         ...(tierLog ? { tierLog } : {}),
         ...(astraReasoningLog ? { reasoningLog: astraReasoningLog } : {}),
+        ...(astraEffortCache ? { astraEffortCache } : {}),
       };
     },
 
