@@ -4,6 +4,21 @@
 
 `noStructuredOutputModels`는 #1424로 들어왔지만 사용자 config / management API 전용이다. `ProviderRegistryEntry`에 필드 자체가 없어서(`src/providers/registry.ts:160-353`) 어떤 프리셋도 "이 게이트웨이의 이 모델은 `response_format`을 거절한다"를 표현할 수 없다. 그래서 Zen Go에서 DeepSeek를 쓰는 운영자는 매번 손으로 config를 고친다(#1338, #1415, 2026-09-11 커뮤니티 제보).
 
+## wp2 P 재검증 (2026-09-11, 사이클 진입 시)
+
+문서가 지목한 편집 지점을 현재 트리에서 전부 다시 확인했다. 드리프트 없음.
+
+| 지점 | 현재 내용 |
+| --- | --- |
+| `src/types/provider.ts:643` | `noStructuredOutputModels?: string[];` 선언과 계약 주석 |
+| `src/providers/registry.ts:319-323` | `noVisionModels`…`noPenaltyModels` 선언 블록 |
+| `src/router.ts:351` | `const noPenaltyModels = mergeStringArray(registryEntry.noPenaltyModels, provider.noPenaltyModels);` |
+| `src/router.ts:475` | `...(noPenaltyModels ? { noPenaltyModels } : {}),` |
+| `src/adapters/openai-chat.ts:142` | `if (provider.noStructuredOutputModels?.includes(modelId)) delete body.response_format;` |
+| `src/adapters/openai-chat.ts:1580` | 번역 경로의 `if (!provider.noStructuredOutputModels?.includes(parsed.modelId)) { … }` |
+
+추가로 발견한 선례: `registry.ts:315`의 `directReasoningEffortModels`가 `registry-only and is never persisted as user config`라고 명시한다. 즉 레지스트리 전용 필드는 이 저장소에 이미 있는 범주다. 새 필드도 같은 범주로 두되, 사용자가 config에 직접 적어도 검증을 통과하도록 zod 스키마에는 넣는다.
+
 ## 선례
 
 `noPenaltyModels`가 같은 배선을 이미 완결해 두었다: 선언 `src/providers/registry.ts:323` → 병합 `src/router.ts:351` → emit `src/router.ts:475` → 소비 `src/adapters/openai-chat.ts:134`. 새 필드는 이 네 지점을 그대로 따른다. 아래 "배선 경로" 표가 확정 파일 지도다.
