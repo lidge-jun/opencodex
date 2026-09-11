@@ -79,7 +79,6 @@ describe("Command Code provider", () => {
     // rejected with `unsupported_model`.
     expect(apiKey?.modelReasoningEfforts).toEqual(oauth?.modelReasoningEfforts);
     expect(apiKey?.modelReasoningEfforts).toMatchObject({
-      "deepseek/deepseek-v4-pro": ["high", "max"],
       "zai-org/GLM-5": ["high", "max"],
       "zai-org/GLM-5.1": ["high", "max"],
       "zai-org/GLM-5.2-Fast": ["high", "max"],
@@ -161,7 +160,6 @@ describe("Command Code provider", () => {
     ];
     const verifiedTextOnlyModels = [
       "deepseek/deepseek-v4-flash",
-      "deepseek/deepseek-v4-pro",
       "zai-org/GLM-5.2",
       "zai-org/GLM-5.3",
       "xai/grok-4.6",

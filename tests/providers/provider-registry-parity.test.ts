@@ -129,7 +129,7 @@ describe("provider registry parity", () => {
     }
     // Vendor-hosted rosters publish on their own schedule and keep the legacy set.
     expect(PROVIDER_REGISTRY.find(entry => entry.id === "volcengine-coding-plan")?.preserveReasoningContentModels)
-      .toEqual(["deepseek-v4-pro", "deepseek-v4-flash"]);
+      .toEqual(["deepseek-v4-flash"]);
     // A model can only be gated onto the thinking-budget or thinking-toggle wire if the same
     // preset also gives it an effort ladder — otherwise the adapter translates effort into a
     // wire field for a model whose picker is empty. opencode-go carried the shared budget list
@@ -399,7 +399,7 @@ describe("provider registry parity", () => {
       liveModels: false,
       models: [
         "qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
-        "glm-5.3", "glm-5.3-flash", "glm-5.2", "deepseek-v4-pro",
+        "glm-5.3", "glm-5.3-flash", "glm-5.2",
       ],
       modelInputModalities: {
         "qwen3.8-max": ["text", "image"],
@@ -412,9 +412,8 @@ describe("provider registry parity", () => {
       modelContextWindows: {
         "qwen3.8-max": 983_616,
         "qwen3.7-max": 1_000_000,
-        "deepseek-v4-pro": 1_000_000,
       },
-      noVisionModels: ["glm-5.3", "glm-5.2", "deepseek-v4-pro"],
+      noVisionModels: ["glm-5.3", "glm-5.2"],
       preserveReasoningContentModels: expect.arrayContaining(["qwen3.8-max", "qwen3.7-max", "qwen3.7-plus"]),
     });
     expect(PROVIDER_REGISTRY.find(entry => entry.id === "alibaba-token-plan")?.directReasoningEffortModels)
@@ -859,7 +858,7 @@ describe("provider registry parity", () => {
     const ollamaCloud = PROVIDER_REGISTRY.find(entry => entry.id === "ollama-cloud");
 
     expect(ollamaCloud?.models).toEqual([
-      "glm-5.3", "glm-5.3-flash", "glm-5.2", "deepseek-v4-pro", "qwen3-coder:480b", "gpt-oss:120b",
+      "glm-5.3", "glm-5.3-flash", "glm-5.2", "qwen3-coder:480b", "gpt-oss:120b",
       "kimi-k2.6", "minimax-m3", "qwen3.5:397b", "gemma4:31b",
     ]);
     expect(ollamaCloud?.models).not.toContain("qwen3-coder");
@@ -1467,11 +1466,7 @@ describe("free-provider directory isolation", () => {
       { provider: "deepseek", model: "deepseek-v4-flash", flash: true },
       { provider: "opencode-go", model: "deepseek-v4.1-flash", flash: true },
       { provider: "opencode-go", model: "deepseek-v4-flash", flash: true },
-      { provider: "orcarouter", model: "deepseek/deepseek-v4-pro", flash: false },
-      { provider: "volcengine-coding-plan", model: "deepseek-v4-pro", flash: false },
       { provider: "volcengine-coding-plan", model: "deepseek-v4-flash", flash: true },
-      { provider: "alibaba-token-plan", model: "deepseek-v4-pro", flash: false },
-      { provider: "alibaba-token-plan-intl", model: "deepseek-v4-pro", flash: false },
       { provider: "alibaba-token-plan-intl", model: "deepseek-v4-flash", flash: true },
       { provider: "opencode-free", model: "deepseek-v4-flash-free", flash: true },
     ];

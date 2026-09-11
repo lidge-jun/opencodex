@@ -628,13 +628,15 @@ const OPENCODE_GO_THINKING_BUDGET_MODELS = ["qwen3.5-plus", "qwen3.6-plus", "qwe
  * snapshots, Alibaba) publish on their own schedule and keep the legacy set until they say
  * otherwise - a first-party retirement notice does not end their deployment.
  */
-const DEEPSEEK_V4_LEGACY_MODELS = ["deepseek-v4-pro", "deepseek-v4-flash"];
+const DEEPSEEK_V4_LEGACY_MODELS = ["deepseek-v4-flash"];
 /*
  * `deepseek-v4-pro` is deliberately absent from both live sets. DeepSeek retires it from
  * 2026-09-14 04:00 UTC and routes its requests to V4.1-Flash until a V4.1 Pro exists, so a
  * row here would advertise a Pro context window and Pro pricing for a route that serves
- * Flash. `DEEPSEEK_V4_LEGACY_MODELS` above keeps it for vendor-hosted rosters that pin
- * their own snapshots and publish on their own schedule.
+ * Flash. The retirement is followed through every roster in this file, including the
+ * vendor-hosted ones; providers that discover their models live are handled by
+ * `ROUTED_MODEL_COMPATIBILITY_EXCLUSIONS` because deleting a row there removes the
+ * model's capabilities rather than the model.
  */
 const DEEPSEEK_NATIVE_THINKING_MODELS = ["deepseek-flash", "deepseek-v4-flash"];
 const DEEPSEEK_GATEWAY_THINKING_MODELS = ["deepseek-v4.1-flash", "deepseek-v4-flash"];
@@ -649,7 +651,7 @@ const DEEPSEEK_VISION_PREVIEW_MODEL = "deepseek-v4-flash-vision-exp";
  * CommandCode routes verified to accept image input end-to-end (#2406).
  *
  * Verified-negative and therefore deliberately ABSENT: deepseek/deepseek-v4-flash,
- * deepseek/deepseek-v4-pro, zai-org/GLM-5.2, zai-org/GLM-5.3, xai/grok-4.6. Those
+ * zai-org/GLM-5.2, zai-org/GLM-5.3, xai/grok-4.6. Those
  * routes accept the request and drop the image, which is worse than declining it — the
  * model answers about an image it never saw. Do not add an id here on family resemblance;
  * capability intersection trusts this map.
@@ -737,7 +739,7 @@ const DEEPSEEK_FLASH_REASONING_MAP: Record<string, string> = {
 };
 /**
  * Flash-versus-Pro classification for DeepSeek V4 model ids, including prefixed
- * (`deepseek/deepseek-v4-pro`) and suffixed (`deepseek-v4-flash-free`) forms.
+ * (`deepseek/deepseek-v4.1-flash`) and suffixed (`deepseek-v4-flash-free`) forms.
  * `tests/providers/provider-registry-parity.test.ts` enumerates every id the registry
  * actually passes here, so a future id this substring test would misread cannot
  * land silently.
@@ -754,7 +756,7 @@ const deepseekReasoningMapFor = (modelId: string): Record<string, string> =>
 //           https://help.aliyun.com/en/model-studio/token-plan-quickstart
 const ALIBABA_TOKEN_PLAN_MODELS = [
   "qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
-  "glm-5.3", "glm-5.3-flash", "glm-5.2", "deepseek-v4-pro",
+  "glm-5.3", "glm-5.3-flash", "glm-5.2", 
 ];
 const ALIBABA_TOKEN_PLAN_QWEN_MODELS = [
   "qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
@@ -767,7 +769,6 @@ const ALIBABA_TOKEN_PLAN_INPUT_MODALITIES: Record<string, string[]> = {
   "glm-5.3": ["text"],
   "glm-5.3-flash": ["text", "image"],
   "glm-5.2": ["text"],
-  "deepseek-v4-pro": ["text"],
 };
 
 // 260721 Alibaba Token Plan International (ap-southeast-1 / Singapore, hardened 260721).
@@ -776,7 +777,7 @@ const ALIBABA_TOKEN_PLAN_INPUT_MODALITIES: Record<string, string[]> = {
 //           https://qwencloud.com/pricing/token-plan (qwen3.8 metadata)
 const ALIBABA_INTL_TOKEN_PLAN_MODELS = [
   "qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.6-flash",
-  "deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v3.2",
+  "deepseek-v4-flash", "deepseek-v3.2",
   "kimi-k2.7-code", "kimi-k2.6", "kimi-k2.5",
   "glm-5.3", "glm-5.3-flash", "glm-5.2", "glm-5.1", "glm-5",
   "MiniMax-M2.5",
@@ -809,7 +810,6 @@ const VOLCENGINE_ARK_MODELS = [
   "doubao-seed-2-1-pro-260628",
   "doubao-seed-2-1-turbo-260628",
   "doubao-seed-evolving",
-  "deepseek-v4-pro-260425",
   "deepseek-v4-flash-260425",
   "deepseek-v3-2-251201",
   // No glm-5-3 row: Ark pins date-stamped snapshot ids (glm-5-2-260617) that cannot be
@@ -825,7 +825,6 @@ const VOLCENGINE_DOUBAO_THINKING_MODELS = [
 const VOLCENGINE_CODING_PLAN_MODELS = [
   "ark-code-latest",
   "doubao-seed-2.0-code",
-  "deepseek-v4-pro",
   "deepseek-v4-flash",
   "glm-5.3",
   "glm-5.3-flash",
@@ -834,7 +833,6 @@ const VOLCENGINE_CODING_PLAN_MODELS = [
   "minimax-m3",
 ];
 const VOLCENGINE_AGENT_PLAN_MODELS = [
-  "deepseek-v4-pro",
   "deepseek-v4-flash",
   "glm-5.3",
   "glm-5.3-flash",
@@ -856,7 +854,6 @@ const VOLCENGINE_PLAN_INPUT_MODALITIES: Record<string, string[]> = {
 const VOLCENGINE_PLAN_TEXT_ONLY_MODELS = [
   "ark-code-latest",
   "doubao-seed-2.0-code",
-  "deepseek-v4-pro",
   "deepseek-v4-flash",
   "glm-5.3",
   "glm-5.2",
@@ -868,7 +865,6 @@ const ALIBABA_INTL_TOKEN_PLAN_INPUT_MODALITIES: Record<string, string[]> = {
   "qwen3.7-plus": ["text", "image"],
   "qwen3.6-plus": ["text", "image"],
   "qwen3.6-flash": ["text", "image"],
-  "deepseek-v4-pro": ["text"],
   "deepseek-v4-flash": ["text"],
   "deepseek-v3.2": ["text"],
   "kimi-k2.7-code": ["text", "image"],
@@ -987,7 +983,7 @@ const NVIDIA_NIM_VISION_INPUT_MODALITIES: Record<string, string[]> = Object.from
  * reasoning suppression regardless of which list they appear in here.
  */
 const NVIDIA_NIM_NO_VISION_MODELS = [
-  "deepseek-ai/deepseek-v4-flash", "deepseek-ai/deepseek-v4-pro",
+  "deepseek-ai/deepseek-v4-flash",
   "google/codegemma-7b",
   "meta/llama-3.1-70b-instruct", "meta/llama-3.1-8b-instruct",
   "meta/llama-3.2-1b-instruct", "meta/llama-3.2-3b-instruct",
@@ -1028,7 +1024,6 @@ const NEURALWATT_REASONING_HISTORY_MODELS = [
 //           https://docs.baseten.co/inference/model-apis/vision
 const BASETEN_FULL_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 const BASETEN_MODEL_REASONING_EFFORTS: Record<string, string[]> = {
-  "deepseek-ai/DeepSeek-V4-Pro": BASETEN_FULL_REASONING_EFFORTS,
   "thinkingmachines/inkling": BASETEN_FULL_REASONING_EFFORTS,
   "openai/gpt-oss-120b": BASETEN_FULL_REASONING_EFFORTS,
   "moonshotai/Kimi-K3": ["low", "high", "max"],
@@ -1039,7 +1034,6 @@ const BASETEN_MODEL_REASONING_EFFORTS: Record<string, string[]> = {
   "zai-org/GLM-5.2-Fast": ["high", "max"],
 };
 const BASETEN_MODEL_REASONING_EFFORT_MAP: Record<string, Record<string, string>> = {
-  "deepseek-ai/DeepSeek-V4-Pro": { none: "none", minimal: "minimal" },
   "thinkingmachines/inkling": { none: "none", minimal: "minimal" },
   "openai/gpt-oss-120b": { none: "none", minimal: "minimal" },
   "moonshotai/Kimi-K3": { none: "none" },
@@ -1049,7 +1043,6 @@ const BASETEN_MODEL_REASONING_EFFORT_MAP: Record<string, Record<string, string>>
   "zai-org/GLM-5.2-Fast": { none: "none" },
 };
 const BASETEN_MODEL_DEFAULT_REASONING_EFFORTS: Record<string, string> = {
-  "deepseek-ai/DeepSeek-V4-Pro": "medium",
   "thinkingmachines/inkling": "high",
   "openai/gpt-oss-120b": "medium",
   "moonshotai/Kimi-K3": "max",
@@ -1077,7 +1070,6 @@ const DIGITALOCEAN_CHAT_COMPLETION_MODELS = [
   "openai-gpt-5.6-luna",
   "qwen3-coder-flash",
   "qwen3.5-397b-a17b",
-  "deepseek-v4-pro",
   "deepseek-4-flash",
   "deepseek-3.2",
   "gemma-4-31B-it",
@@ -1162,7 +1154,6 @@ const CLINE_PASS_MODELS = [
   "cline-pass/kimi-k3",
   "cline-pass/kimi-k2.7-code",
   "cline-pass/kimi-k2.6",
-  "cline-pass/deepseek-v4-pro",
   "cline-pass/deepseek-v4-flash",
   "cline-pass/mimo-v2.5",
   "cline-pass/mimo-v2.5-pro",
@@ -1198,17 +1189,11 @@ const ORCAROUTER_MODELS = [
   "openai/gpt-5.5",
   "anthropic/claude-opus-4.8",
   "google/gemini-3.5-flash",
-  "deepseek/deepseek-v4-pro",
   "orcarouter/auto",
 ];
-const ORCAROUTER_TEXT_ONLY_MODELS = ["deepseek/deepseek-v4-pro"];
 const ORCAROUTER_MODEL_REASONING_EFFORTS = {
   // Live /models currently exposes ids and modalities, not the accepted reasoning ladder.
   "openai/gpt-5.5": ["low", "medium", "high", "xhigh"],
-  "deepseek/deepseek-v4-pro": deepseekThinkingEffortsFor("deepseek/deepseek-v4-pro"),
-};
-const ORCAROUTER_MODEL_REASONING_EFFORT_MAP = {
-  "deepseek/deepseek-v4-pro": deepseekReasoningMapFor("deepseek/deepseek-v4-pro"),
 };
 const CLINE_PASS_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "cline-pass/glm-5.3": 1_048_576,
@@ -1217,7 +1202,6 @@ const CLINE_PASS_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "cline-pass/kimi-k3": 1_048_576,
   "cline-pass/kimi-k2.7-code": 262_144,
   "cline-pass/kimi-k2.6": 262_144,
-  "cline-pass/deepseek-v4-pro": 1_048_576,
   "cline-pass/deepseek-v4-flash": 1_048_576,
   "cline-pass/mimo-v2.5": 1_050_000,
   "cline-pass/mimo-v2.5-pro": 1_050_000,
@@ -1461,10 +1445,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     models: ORCAROUTER_MODELS,
     liveModels: true,
     modelDiscovery: ORCAROUTER_MODEL_DISCOVERY,
-    noVisionModels: ORCAROUTER_TEXT_ONLY_MODELS,
     modelReasoningEfforts: ORCAROUTER_MODEL_REASONING_EFFORTS,
-    modelReasoningEffortMap: ORCAROUTER_MODEL_REASONING_EFFORT_MAP,
-    preserveReasoningContentModels: ORCAROUTER_TEXT_ONLY_MODELS,
     note: "Connect your OrcaRouter account with OAuth 2.0 + PKCE; the issued API key is stored in OpenCodex's existing credential store.",
   },
   {
@@ -1978,10 +1959,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelDiscovery: ORCAROUTER_MODEL_DISCOVERY,
     // Catalog discovery owns WHICH models exist. These entries only retain verified
     // request-shaping facts that the upstream catalog does not currently publish.
-    noVisionModels: ORCAROUTER_TEXT_ONLY_MODELS,
     modelReasoningEfforts: ORCAROUTER_MODEL_REASONING_EFFORTS,
-    modelReasoningEffortMap: ORCAROUTER_MODEL_REASONING_EFFORT_MAP,
-    preserveReasoningContentModels: ORCAROUTER_TEXT_ONLY_MODELS,
     note: "OpenAI-compatible adaptive router. Models and multimodal capabilities are discovered live from the public chat catalog. Use the OrcaRouter account entry for PKCE login.",
   },
   {
@@ -2063,7 +2041,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // verified 2026-08-08).
     jawcodeBundle: "deepseek",
     // deepseek-chat/deepseek-reasoner were deprecated upstream on 2026-07-24 15:59 UTC;
-    // official identifiers are now deepseek-v4-flash / deepseek-v4-pro. They stay in
+    // the current official identifier is deepseek-flash. They stay in
     // the list only as compatibility aliases so existing saved configs and requests
     // keep validating and routing (they previously mapped to v4-flash; devlog
     // _fin/260710_provider_hardening/002_research_cn.md). The current offerings are
@@ -2334,7 +2312,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // Official Command Code model-profile reasoning facts (shared with the OAuth
     // `command-code` entry). Without them the API-key preset never advertises a
     // reasoning picker, and the router's known-ids decode source misses the native
-    // slash ids — so a Codex-facing slug like `commandcode/deepseek-deepseek-v4-pro`
+    // slash ids — so a Codex-facing slug like `commandcode/deepseek-deepseek-v4-flash`
     // is sent upstream verbatim and rejected with `unsupported_model`.
     modelReasoningEfforts: COMMAND_CODE_MODEL_REASONING_EFFORTS,
     // The DeepSeek vision preview id is preemptive for when the catalog serves it
@@ -2814,13 +2792,11 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     ),
     thinkingToggleModels: VOLCENGINE_DOUBAO_THINKING_MODELS,
     preserveReasoningContentModels: [
-      "deepseek-v4-pro-260425",
       "deepseek-v4-flash-260425",
       "glm-5-2-260617",
       "glm-4-7-251222",
     ],
     noVisionModels: [
-      "deepseek-v4-pro-260425",
       "deepseek-v4-flash-260425",
       "deepseek-v3-2-251201",
       "glm-5-2-260617",
@@ -2861,7 +2837,9 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     supportsServiceTier: false,
     preserveCustomDestination: true,
     dashboardUrl: "https://console.volcengine.com/ark/region:ark+cn-beijing/overview",
-    defaultModel: "deepseek-v4-pro",
+    // Was `deepseek-v4-pro` until DeepSeek retired it; the plan roster's other DeepSeek
+    // entry takes over so a fresh install still lands on a working default.
+    defaultModel: "deepseek-v4-flash",
     models: VOLCENGINE_AGENT_PLAN_MODELS,
     liveModels: false,
     modelInputModalities: VOLCENGINE_PLAN_INPUT_MODALITIES,
@@ -2886,7 +2864,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelInputModalities: ALIBABA_TOKEN_PLAN_INPUT_MODALITIES,
     modelContextWindows: {
       "qwen3.8-max": 983_616, "qwen3.7-max": 1_000_000, "qwen3.7-plus": 1_000_000,
-      "qwen3.6-flash": 1_000_000, "glm-5.3": 1_000_000, "glm-5.3-flash": 1_000_000, "glm-5.2": 1_000_000, "deepseek-v4-pro": 1_000_000,
+      "qwen3.6-flash": 1_000_000, "glm-5.3": 1_000_000, "glm-5.3-flash": 1_000_000, "glm-5.2": 1_000_000, 
     },
     modelReasoningEfforts: {
       ...Object.fromEntries(ALIBABA_TOKEN_PLAN_QWEN_MODELS.map(id => [id, THINKING_BUDGET_EFFORTS])),
@@ -2894,14 +2872,12 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       "glm-5.3": ZAI_GLM_53_REASONING_EFFORTS,
       "glm-5.3-flash": ZAI_GLM_53_REASONING_EFFORTS,
       "glm-5.2": ZAI_GLM_52_REASONING_EFFORTS,
-      "deepseek-v4-pro": deepseekThinkingEffortsFor("deepseek-v4-pro"),
     },
     modelDefaultReasoningEfforts: { "qwen3.8-max": "xhigh" },
-    modelReasoningEffortMap: { "deepseek-v4-pro": deepseekReasoningMapFor("deepseek-v4-pro") },
     directReasoningEffortModels: ["qwen3.8-max"],
     thinkingBudgetModels: ALIBABA_TOKEN_PLAN_QWEN_MODELS.filter(id => id !== "qwen3.8-max"),
-    preserveReasoningContentModels: ["glm-5.3", "glm-5.3-flash", "glm-5.2", "deepseek-v4-pro", "qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash"],
-    noVisionModels: ["glm-5.3", "glm-5.2", "deepseek-v4-pro"],
+    preserveReasoningContentModels: ["glm-5.3", "glm-5.3-flash", "glm-5.2", "qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash"],
+    noVisionModels: ["glm-5.3", "glm-5.2"],
   },
   {
     id: "alibaba-token-plan-intl",
@@ -2921,7 +2897,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelContextWindows: {
       "qwen3.8-max": 983_616,
       "qwen3.7-max": 1_000_000, "qwen3.7-plus": 1_000_000, "qwen3.6-plus": 1_000_000, "qwen3.6-flash": 1_000_000,
-      "deepseek-v4-pro": 1_000_000, "deepseek-v4-flash": 1_000_000, "deepseek-v3.2": 131_072,
+      "deepseek-v4-flash": 1_000_000, "deepseek-v3.2": 131_072,
       "kimi-k2.7-code": 262_144, "kimi-k2.6": 262_144, "kimi-k2.5": 262_144,
       "glm-5.3": 1_000_000, "glm-5.3-flash": 1_000_000, "glm-5.2": 1_000_000, "glm-5.1": 1_000_000, "glm-5": 1_000_000,
       "MiniMax-M2.5": 204_800,
@@ -2932,17 +2908,15 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       "glm-5.3": ZAI_GLM_53_REASONING_EFFORTS,
       "glm-5.3-flash": ZAI_GLM_53_REASONING_EFFORTS,
       "glm-5.2": ZAI_GLM_52_REASONING_EFFORTS,
-      "deepseek-v4-pro": deepseekThinkingEffortsFor("deepseek-v4-pro"),
       "deepseek-v4-flash": deepseekThinkingEffortsFor("deepseek-v4-flash"),
     },
     modelReasoningEffortMap: {
-      "deepseek-v4-pro": deepseekReasoningMapFor("deepseek-v4-pro"),
       "deepseek-v4-flash": deepseekReasoningMapFor("deepseek-v4-flash"),
     },
     directReasoningEffortModels: ["qwen3.8-max"],
     thinkingBudgetModels: ALIBABA_INTL_TOKEN_PLAN_QWEN_MODELS.filter(id => id !== "qwen3.8-max"),
-    preserveReasoningContentModels: ["glm-5.3", "glm-5.3-flash", "glm-5.2", "deepseek-v4-pro", "deepseek-v4-flash", "qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.6-flash"],
-    noVisionModels: ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v3.2", "glm-5.3", "glm-5.2", "glm-5.1", "glm-5", "MiniMax-M2.5"],
+    preserveReasoningContentModels: ["glm-5.3", "glm-5.3-flash", "glm-5.2", "deepseek-v4-flash", "qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.6-flash"],
+    noVisionModels: ["deepseek-v4-flash", "deepseek-v3.2", "glm-5.3", "glm-5.2", "glm-5.1", "glm-5", "MiniMax-M2.5"],
     noReasoningModels: ["kimi-k2.7-code", "kimi-k2.6", "kimi-k2.5", "deepseek-v3.2", "glm-5.1", "glm-5", "MiniMax-M2.5"],
     modelDefaultReasoningEfforts: { "qwen3.8-max": "xhigh" },
   },
@@ -2980,7 +2954,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     authKind: "key",
     dashboardUrl: "https://ollama.com/settings/keys",
     // Live IDs verified 2026-07-10; qwen3-coder:480b retires 2026-07-15.
-    models: ["glm-5.3", "glm-5.3-flash", "glm-5.2", "deepseek-v4-pro", "qwen3-coder:480b", "gpt-oss:120b", "kimi-k2.6", "minimax-m3", "qwen3.5:397b", "gemma4:31b"],
+    models: ["glm-5.3", "glm-5.3-flash", "glm-5.2", "qwen3-coder:480b", "gpt-oss:120b", "kimi-k2.6", "minimax-m3", "qwen3.5:397b", "gemma4:31b"],
     defaultModel: "glm-5.3",
     // Owner-audited exact outage fallback: these current Ollama Cloud GLM-5.3 rows have
     // 1,048,576-token context windows. Live discovery and successful /api/show enrichment keep
@@ -2992,7 +2966,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       "glm-5.3", "glm-5.2", "glm-5.1", "glm-5", "glm-4.7",
       "minimax-m2.7", "minimax-m2.5", "minimax-m2.1",
       "nemotron-3-ultra", "nemotron-3-super",
-      "deepseek-v4-pro", "deepseek-v4-flash",
+      "deepseek-v4-flash",
       "gpt-oss", "qwen3-coder:480b",
     ],
     // Ollama's native chat API has no `text.verbosity` equivalent and the ollama-native adapter

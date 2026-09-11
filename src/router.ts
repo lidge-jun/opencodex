@@ -683,7 +683,7 @@ function routeModelInternal(
     }
   }
 
-  // 0. Explicit "<provider>/<model>" namespace (e.g. "opencode-go/deepseek-v4-pro").
+  // 0. Explicit "<provider>/<model>" namespace (e.g. "opencode-go/deepseek-v4.1-flash").
   //    Only triggers when the prefix matches a CONFIGURED provider, so genuine
   //    slash-containing model ids (e.g. "anthropic/claude-...") fall through when
   //    no such provider exists.

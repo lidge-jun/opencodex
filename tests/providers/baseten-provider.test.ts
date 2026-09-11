@@ -79,7 +79,6 @@ describe("Baseten Model APIs provider", () => {
       },
     });
     expect(basetenEntry().modelReasoningEfforts).toEqual({
-      "deepseek-ai/DeepSeek-V4-Pro": ["low", "medium", "high", "xhigh", "max"],
       "thinkingmachines/inkling": ["low", "medium", "high", "xhigh", "max"],
       "openai/gpt-oss-120b": ["low", "medium", "high", "xhigh", "max"],
       "moonshotai/Kimi-K3": ["low", "high", "max"],
@@ -89,7 +88,6 @@ describe("Baseten Model APIs provider", () => {
       "zai-org/GLM-5.2-Fast": ["high", "max"],
     });
     expect(basetenEntry().modelReasoningEffortMap).toEqual({
-      "deepseek-ai/DeepSeek-V4-Pro": { none: "none", minimal: "minimal" },
       "thinkingmachines/inkling": { none: "none", minimal: "minimal" },
       "openai/gpt-oss-120b": { none: "none", minimal: "minimal" },
       "moonshotai/Kimi-K3": { none: "none" },
@@ -99,7 +97,6 @@ describe("Baseten Model APIs provider", () => {
       "zai-org/GLM-5.2-Fast": { none: "none" },
     });
     expect(basetenEntry().modelDefaultReasoningEfforts).toEqual({
-      "deepseek-ai/DeepSeek-V4-Pro": "medium",
       "thinkingmachines/inkling": "high",
       "openai/gpt-oss-120b": "medium",
       "moonshotai/Kimi-K3": "max",
@@ -137,7 +134,7 @@ describe("Baseten Model APIs provider", () => {
       parallelToolCalls: true,
       reasoningEfforts: [],
     });
-    expect(seed.modelReasoningEfforts?.["deepseek-ai/DeepSeek-V4-Pro"])
+    expect(seed.modelReasoningEfforts?.["thinkingmachines/inkling"])
       .toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(seed.modelInputModalities?.["moonshotai/Kimi-K2.6"])
       .toEqual(["text", "image"]);
@@ -178,10 +175,10 @@ describe("Baseten Model APIs provider", () => {
   test("routes chat completions to the shared inference host with documented tool parallelism", () => {
     const route = routeModel(
       basetenConfig(),
-      "baseten/deepseek-ai/DeepSeek-V4-Pro",
+      "baseten/thinkingmachines/inkling",
     );
     expect(route.provider.parallelToolCalls).toBe(true);
-    expect(route.modelId).toBe("deepseek-ai/DeepSeek-V4-Pro");
+    expect(route.modelId).toBe("thinkingmachines/inkling");
 
     const request = createOpenAIChatAdapter(route.provider).buildRequest({
       modelId: route.modelId,
@@ -196,12 +193,12 @@ describe("Baseten Model APIs provider", () => {
 
     expect(request.url).toBe("https://inference.baseten.co/v1/chat/completions");
     expect(request.headers.Authorization).toBe("Bearer bt-test-key");
-    expect(body.model).toBe("deepseek-ai/DeepSeek-V4-Pro");
+    expect(body.model).toBe("thinkingmachines/inkling");
     expect(body.parallel_tool_calls).toBe(true);
   });
 
   test("forwards only the documented per-model reasoning effort ladders", () => {
-    const deepseekRoute = routeModel(basetenConfig(), "baseten/deepseek-ai/DeepSeek-V4-Pro");
+    const deepseekRoute = routeModel(basetenConfig(), "baseten/thinkingmachines/inkling");
     const deepseekBody = JSON.parse(String(createOpenAIChatAdapter(deepseekRoute.provider).buildRequest({
       modelId: deepseekRoute.modelId,
       context: { messages: [{ role: "user", content: "ping", timestamp: 0 }] },
@@ -245,25 +242,25 @@ describe("Baseten Model APIs provider", () => {
     const config = withStubbedProviderFetch(basetenConfig());
     const models = (await gatherRoutedModels(config)).filter(row => row.provider === "baseten");
     expect(models.map(row => row.id)).toEqual([
-      "deepseek-ai/DeepSeek-V4-Pro",
       "moonshotai/Kimi-K2.6",
+      "thinkingmachines/inkling",
     ]);
     expect(models[0]).toMatchObject({
-      reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
-      defaultReasoningEffort: "medium",
-      parallelToolCalls: true,
-    });
-    expect(models[1]).toMatchObject({
       inputModalities: ["text", "image"],
       reasoningEfforts: [],
       parallelToolCalls: true,
     });
-    expect(routedSlug("baseten", models[0]!.id)).toBe("baseten/deepseek-ai-DeepSeek-V4-Pro");
+    expect(models[1]).toMatchObject({
+      reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+      defaultReasoningEffort: "high",
+      parallelToolCalls: true,
+    });
+    expect(routedSlug("baseten", models[1]!.id)).toBe("baseten/thinkingmachines-inkling");
 
-    expect(routeModel(config, "baseten/deepseek-ai/DeepSeek-V4-Pro").modelId)
-      .toBe("deepseek-ai/DeepSeek-V4-Pro");
-    expect(routeModel(config, "baseten/deepseek-ai-DeepSeek-V4-Pro").modelId)
-      .toBe("deepseek-ai/DeepSeek-V4-Pro");
+    expect(routeModel(config, "baseten/thinkingmachines/inkling").modelId)
+      .toBe("thinkingmachines/inkling");
+    expect(routeModel(config, "baseten/thinkingmachines-inkling").modelId)
+      .toBe("thinkingmachines/inkling");
   });
 
   test("does not retarget an older same-named custom provider", () => {

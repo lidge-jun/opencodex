@@ -1,10 +1,6 @@
 import { readBoundedResponseBody } from "../lib/bounded-body";
 
 const COMMAND_CODE_MODEL_EFFORTS = {
-  "deepseek/deepseek-v4-pro": {
-    efforts: ["high", "max"],
-    profileUrl: "https://commandcode.ai/models/deepseek-v4-pro",
-  },
   "deepseek/deepseek-v4-flash": {
     efforts: ["high", "max"],
     profileUrl: "https://commandcode.ai/models/deepseek-v4-flash",
