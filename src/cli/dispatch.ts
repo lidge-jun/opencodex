@@ -309,6 +309,8 @@ const commandRunners: Record<string, CommandRunner> = {
     // a second noun. Everything else stays on the local OAuth/API-key path.
     const { isCodexAccountLoginName, handleAccountAuthCommand } = await import("./account-auth");
     if (isCodexAccountLoginName(loginArgs[0] ?? "")) {
+      // null means "unknown subcommand", which "login" never is; the coalesce exists because
+      // the shared signature serves callers that do pass an unknown one.
       const code = await handleAccountAuthCommand("login", loginArgs, { findLiveProxy: deps.findLiveProxy });
       return code ?? 1;
     }

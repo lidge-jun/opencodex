@@ -95,8 +95,10 @@ account id, OpenAI beta/originator/session — см. [Адаптеры](/ru/refe
 
 Восемь пресетов провайдеров используют вход через OAuth — плюс GitHub Copilot через
 экспериментальный неофициальный мост device flow. opencodex хранит их учётные данные в
-`~/.opencodex/auth.json` и обновляет их автоматически. CLI входа также принимает `chatgpt`: эта
-команда получает учётные данные ChatGPT и одновременно создаёт запись провайдера в режиме `forward`.
+`~/.opencodex/auth.json` и обновляет их автоматически. CLI входа принимает и `ocx login codex`, но это
+не один из провайдеров выше: команда направляется во вход пула аккаунтов Codex (тот же поток, что и
+`ocx account login codex`). У пула отдельный реестр аккаунтов, поэтому такому входу нужен запущенный
+прокси. `chatgpt` и `openai` — псевдонимы того же маршрута.
 
 ```bash
 ocx login xai          # xAI Grok
@@ -108,7 +110,7 @@ ocx login google-antigravity
 ocx login cursor       # отдельный PKCE-вход Cursor
 ocx login command-code # браузерный OAuth Command Code (или импорт ~/.commandcode/auth.json)
 ocx login github-copilot  # device flow GitHub → токен Copilot (Copilot Pro/Business)
-ocx login chatgpt      # отдельный OAuth-вход ChatGPT
+ocx login codex        # пул аккаунтов Codex (псевдонимы: chatgpt, openai; нужен запущенный прокси)
 ocx logout <provider>
 ```
 

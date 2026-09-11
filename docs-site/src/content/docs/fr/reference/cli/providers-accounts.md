@@ -70,9 +70,11 @@ de fournisseurs OAuth et à clé API actuellement acceptés.
 
 Utilisez la même commande pour **réauthentifier** après `ocx status` / `ocx doctor` rapports
 réauthentification requise ou échec de l'actualisation du terminal (ou utilisez Réauthentifier dans le tableau de bord).
-Les comptes du groupe Codex ne constituent pas un fournisseur public pour `ocx login` : réauthentifiez-vous
-plutôt depuis le groupe de comptes Codex du tableau de bord (**Réauthentifier**) ou avec le flux non
-interactif `ocx account reauth`.
+Les comptes du pool Codex ne font pas partie des fournisseurs OAuth ou API-key ci-dessus, mais
+`ocx login codex` les atteint : la commande est routée vers la connexion au pool de comptes, si bien que
+`ocx login codex --reauth` équivaut à `ocx account reauth codex`. Le pool de comptes Codex du tableau de
+bord (**Réauthentifier**) fait de même. Cette route s'exécute dans le proxy, elle en exige donc un en
+cours d'exécution.
 
 ```bash
 ocx login xai

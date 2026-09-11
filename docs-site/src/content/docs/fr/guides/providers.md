@@ -96,8 +96,11 @@ Le catalogue du transfert ChatGPT ajoute également les identifiants non qualifi
 
 Huit préréglages de fournisseurs utilisent une connexion OAuth. GitHub Copilot s'y ajoute au moyen d'un pont
 expérimental et non officiel reposant sur un flux d'autorisation d'appareil. opencodex enregistre leurs identifiants dans
-`~/.opencodex/auth.json` et les actualise automatiquement. La CLI de connexion accepte également `chatgpt` ;
-elle obtient un identifiant ChatGPT tout en créant une entrée de fournisseur en mode `forward`.
+`~/.opencodex/auth.json` et les actualise automatiquement. La CLI de connexion accepte également
+`ocx login codex`, qui n'est pas l'un des fournisseurs ci-dessus : la commande est routée vers la
+connexion au pool de comptes Codex (le même flux que `ocx account login codex`). Ce pool tient son
+propre registre de comptes, donc cette route nécessite un proxy en cours d'exécution. `chatgpt` et
+`openai` sont des alias de la même route.
 
 ```bash
 ocx login xai          # xAI Grok
@@ -109,7 +112,7 @@ ocx login google-antigravity
 ocx login cursor       # standalone Cursor PKCE login
 ocx login command-code # Command Code browser OAuth (or import ~/.commandcode/auth.json)
 ocx login github-copilot  # GitHub device flow → Copilot token (Copilot Pro/Business)
-ocx login chatgpt      # standalone ChatGPT OAuth login
+ocx login codex        # pool de comptes Codex (alias : chatgpt, openai ; nécessite un proxy en cours d'exécution)
 ocx logout <provider>
 ```
 
@@ -213,7 +216,8 @@ identifiants de compte expurgés, aucun jeton. `ocx doctor` ajoute une section s
 contrôles du magasin accessible en écriture et de l'appel unique, ainsi que des lignes WARN qui indiquent une
 action de récupération. Lorsqu'un compte de fournisseur OAuth doit être réauthentifié, exécutez
 `ocx login <provider>` ou utilisez **Réauthentifier** dans le tableau de bord. Les comptes du pool Codex ne
-constituent pas un fournisseur `ocx login` : réauthentifiez-les dans le groupe de comptes Codex du tableau de bord. Consultez
+font pas partie de ces fournisseurs, mais `ocx login codex --reauth` est routé vers leur réauthentification
+dans le pool de comptes, ce que fait aussi le pool de comptes Codex du tableau de bord. Consultez
 [`ocx status` / `ocx doctor`](/fr/reference/cli/) dans la référence CLI.
 
 ### Importation des identifiants Kiro

@@ -70,10 +70,15 @@ export function warnIfLiveReloadSkipped(result: LocalProviderReloadResult | null
  * route before the ~90 provider ids. 'codex' is not in either list on purpose: it is
  * routed to the account-pool login in dispatch.ts, and 'chatgpt' stays off the public
  * OAuth surface (isPublicOAuthProvider) because the pool owns that credential.
+ *
+ * It names 'openai-apikey' for the same reason it exists at all: 'openai' now routes to
+ * the pool, so someone who typed it looking for a platform key no longer sees the list
+ * that used to be their only pointer to it.
  */
 export function loginUsageMessage(): string {
   return `Usage: ocx login <provider>\n`
-    + `  Codex / ChatGPT: ocx login codex   (Codex account pool; the proxy must be running)\n`
+    + `  Codex / ChatGPT: ocx login codex   (account pool, needs a running proxy; 'chatgpt' and\n`
+    + `                   'openai' are the same route. An OpenAI platform key is 'openai-apikey'.)\n`
     + `  OAuth login:   ${listOAuthProviders().join(", ")}\n`
     + `  API-key login: ${Object.keys(KEY_LOGIN_PROVIDERS).join(", ")}`;
 }

@@ -159,6 +159,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     details: [
       "Codex/ChatGPT: ocx login codex runs the Codex account-pool login (same flow as ocx account login codex).",
       "That one needs a running proxy; the OAuth and API-key providers log in locally.",
+      "'chatgpt' and 'openai' are the same route; an OpenAI platform API key is 'ocx login openai-apikey'.",
     ],
   },
   { name: "logout", usage: "ocx logout <provider>", summary: "Remove a stored provider login." },

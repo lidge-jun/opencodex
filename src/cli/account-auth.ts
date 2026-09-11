@@ -112,7 +112,12 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const id = takeOption(args, "--id");
   const suppliedCode = takeOptionWithSyntax(args, "--code");
   if (!provider) throw new CliUsageError("provider is required", USAGE);
-  rejectArgs(args, USAGE);
+  // A bare leftover here is plausibly the authorization code itself: this flow takes one
+  // through --code, and a user who pastes it as a positional would otherwise see it echoed
+  // back in the usage error. `ocx login codex` reaches this parser too, so the paste lands
+  // one word away from a command people run constantly. Flag-shaped leftovers stay visible,
+  // because a mistyped flag is exactly what the message has to name.
+  rejectArgs(args, USAGE, { redactValues: true });
   // kimi, nous, and github-copilot are already device flows, so --device is a
   // true statement about them and is accepted as a no-op rather than an error.
   // Anything else has no device grant at all and must fail loudly.
